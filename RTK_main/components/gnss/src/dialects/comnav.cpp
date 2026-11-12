@@ -19,7 +19,8 @@ constexpr uint8_t kCr = static_cast<uint8_t>('\r');
 constexpr uint8_t kLf = static_cast<uint8_t>('\n');
 constexpr std::string_view kVersionTag = "#VERSIONA,";
 
-constexpr std::array<const demux::Decoder *, 1> kDecoders{&kPromptDecoder};
+// <OK 提示符应答（match_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器。
+constexpr std::array<const demux::Decoder *, 2> kDecoders{&kPromptDecoder, &demux::unicore_hash::kDecoder};
 
 bool is_printable(uint8_t c) noexcept
 {

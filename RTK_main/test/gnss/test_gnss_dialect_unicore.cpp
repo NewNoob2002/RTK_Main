@@ -7,6 +7,8 @@
 #include <string_view>
 
 #include "demux/decoders/nmea.hpp"
+#include "demux/decoders/rtcm3.hpp"
+#include "demux/demux.hpp"
 #include "demux/decoders/unicore_hash.hpp"
 #include "demux/static_demux.hpp"
 #include "gnss/dialects/unicore.hpp"
@@ -220,6 +222,65 @@ static void test_coexists_with_nmea()
     TEST_ASSERT_EQUAL_UINT32(0, splitter.stats().unknown_bytes);
 }
 
+/** 按 GnssModule::init 的方式（NMEA、RTCM3 + 方言 decoders）组分流器，把帧交给方言判定。 */
+class DialectSink final : public demux::Sink {
+public:
+    bool probe_hit = false;
+    gnss::ProbeResult probe{};
+    uint32_t acks = 0;
+    uint32_t nmea = 0;
+
+    void on_frame(const demux::Decoder &dec, uint8_t, std::span<const uint8_t> frame) noexcept override
+    {
+        if (&dec == &demux::nmea::kDecoder) {
+            ++nmea;
+        }
+        gnss::ProbeResult r{};
+        if (gnss::unicore::kDialect.match_probe(dec, frame, r)) {
+            probe_hit = true;
+            probe = r;
+        }
+        static constexpr std::string_view kSent = "VERSIONA\r\n";
+        const std::span<const uint8_t> sent{reinterpret_cast<const uint8_t *>(kSent.data()), kSent.size()};
+        if (gnss::unicore::kDialect.match_reply(dec, frame, sent) == gnss::Reply::kAck) {
+            ++acks;
+        }
+    }
+};
+
+/** 回归：UM980 实机抓包（2026-11-12，COM2@115200）经模块同款解码器表后必须命中探测与 ACK。 */
+static void test_real_um980_capture_through_dialect_decoders()
+{
+    const std::string capture = "$devicename,COM2*64\r\n"
+                                "$command,VERSIONA,response: OK*45\r\n"
+                                "#VERSIONA,0,GPS,UNKNOWN,0,0,0,0,0,249;\"UM980\",\"R4.10Build11833\",\"HRPT00-S10C-P\","
+                                "\"2310415000001-MD22A2244202679\",\"ff3b7c6f3c5fd90b\",\"2023/11/24\"*3f55fb4d\r\n"
+                                "$GNRMC,,V,,,,,,,,,,N,V*37\r\n";
+
+    std::array<const demux::Decoder *, demux::kMaxDecoders> decoders{};
+    size_t count = 0;
+    decoders[count++] = &demux::nmea::kDecoder;
+    decoders[count++] = &demux::rtcm3::kDecoder;
+    for (const demux::Decoder *dec : gnss::unicore::kDialect.decoders) {
+        decoders[count++] = dec;
+    }
+    static std::array<uint8_t, 4096> buf{};
+    demux::Demux splitter;
+    DialectSink sink;
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(demux::Error::kOk),
+        static_cast<int>(splitter.init(std::span<const demux::Decoder *const>{decoders.data(), count}, buf, sink)));
+    TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk), static_cast<int>(splitter.feed(bytes_of(capture))));
+
+    TEST_ASSERT_TRUE(sink.probe_hit);
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Model::kUm980), static_cast<int>(sink.probe.model));
+    TEST_ASSERT_EQUAL_STRING("R4.10Build11833", sink.probe.fw_version.data());
+    TEST_ASSERT_EQUAL_UINT32(1, sink.acks);
+    TEST_ASSERT_EQUAL_UINT32(1, sink.nmea); // 只有 $GNRMC；小写 $devicename/$command 不归 NMEA
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(sizeof("$devicename,COM2*64\r\n") - 1U),
+                             splitter.stats().unknown_bytes);
+}
+
 void test_caps()
 {
     TEST_ASSERT_BITS(gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kHeading | gnss::cap::kRate20Hz,
@@ -239,6 +300,7 @@ int main(int, char **)
     RUN_TEST(test_rover_script);
     RUN_TEST(test_match_reply);
     RUN_TEST(test_coexists_with_nmea);
+    RUN_TEST(test_real_um980_capture_through_dialect_decoders);
     RUN_TEST(test_caps);
     return UNITY_END();
 }

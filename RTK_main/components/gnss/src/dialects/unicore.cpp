@@ -23,7 +23,8 @@ constexpr std::string_view kCommandPrefix = "$command,";
 constexpr std::string_view kResponseTag = ",response: ";
 constexpr std::string_view kVersionTag = "#VERSIONA,";
 
-constexpr std::array<const demux::Decoder *, 1> kDecoders{&kResponseDecoder};
+// $command 应答（match_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器，缺一则对应帧落入 unknown。
+constexpr std::array<const demux::Decoder *, 2> kDecoders{&kResponseDecoder, &demux::unicore_hash::kDecoder};
 
 bool is_hex(uint8_t c) noexcept
 {
@@ -182,7 +183,11 @@ demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noe
             checksum = static_cast<uint8_t>(checksum ^ frame[i]);
         }
         const uint8_t expected = static_cast<uint8_t>((hex_value(frame[size - 4]) << 4) | hex_value(frame[size - 3]));
-        return checksum == expected ? demux::Step::kFrame : demux::Step::kReject;
+        // UM980 R4.10Build11833 实测把 '$' 也算进 $command 校验（"$command,VERSIONA,response: OK*45"，
+        // 标准 XOR 为 0x61）；SparkFun Unicore 库对旧固件有同样的兼容（Unicore/src 内 "improperly adding the '$'"）。
+        const bool standard = checksum == expected;
+        const bool with_dollar = static_cast<uint8_t>(checksum ^ kDollar) == expected;
+        return (standard || with_dollar) ? demux::Step::kFrame : demux::Step::kReject;
     }
 
     // 尚未收到 '\n'：在最后 5 字节窗口里找 '*'，据此判定还差多少字节。

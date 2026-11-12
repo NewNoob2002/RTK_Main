@@ -258,6 +258,10 @@ uint32_t caps(Model model) noexcept
     return cap::kRtcmIn | cap::kBase;
 }
 
-const Dialect kDialect{"u-blox", Family::kUblox, {}, &build_probe, &match_probe, &rover_step, &match_reply, &caps};
+// MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（match_probe / match_reply 均按 ubx 解码器判定）。
+constexpr std::array<const demux::Decoder *, 1> kDecoders{&demux::ubx::kDecoder};
+
+const Dialect kDialect{"u-blox",     Family::kUblox, kDecoders,    &build_probe,
+                       &match_probe, &rover_step,    &match_reply, &caps};
 
 } // namespace gnss::ublox
