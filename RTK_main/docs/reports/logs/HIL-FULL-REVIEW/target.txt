@@ -1,0 +1,8 @@
+Target observed by esptool v5.6.0
+Port: /dev/ttyACM0
+Chip: ESP32-D0WD-V3 revision v3.1
+Crystal: 40 MHz
+MAC: f8:b3:b7:25:d8:b0
+Flash manufacturer: a1, device: 4017, detected size: 8MB
+Security query: get-security-info returned FF00 Command not implemented; no protection changes performed.
+Prior serial owner: esp_idf_monitor for RTK_main/build; stopped with SIGTERM after SIGINT did not release port.

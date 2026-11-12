@@ -1,0 +1,5 @@
+{
+  "chip": "ESP32",
+  "secure_boot_enabled": false,
+  "flash_encryption_enabled": false
+}

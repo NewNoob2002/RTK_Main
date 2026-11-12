@@ -1,0 +1,65 @@
+[
+  {
+    "queries": 393,
+    "max_latency_ms": 752.62,
+    "over_100ms": 1,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 2\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=722 replies_tx=424 write_errors=2 pushes_tx=283 disconnects=1 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=295 battery=80 state=0\r\nheap: free=165336 min=159008 link_stack_hwm=4432 snapshot_ms=356396\r\nrtk>  "
+  },
+  {
+    "queries": 388,
+    "max_latency_ms": 1349.24,
+    "over_100ms": 1,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 2\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=1164 replies_tx=812 write_errors=2 pushes_tx=333 disconnects=1 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=349 battery=80 state=0\r\nheap: free=165336 min=159008 link_stack_hwm=4432 snapshot_ms=410365\r\nrtk>  "
+  },
+  {
+    "queries": 444,
+    "max_latency_ms": 700.25,
+    "over_100ms": 1,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 2\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=1671 replies_tx=1256 write_errors=2 pushes_tx=392 disconnects=1 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=412 battery=80 state=0\r\nheap: free=165336 min=159008 link_stack_hwm=4432 snapshot_ms=473979\r\nrtk>  "
+  },
+  {
+    "queries": 444,
+    "max_latency_ms": 703.07,
+    "over_100ms": 1,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 2\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=2184 replies_tx=1700 write_errors=2 pushes_tx=456 disconnects=1 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=481 battery=80 state=0\r\nheap: free=165336 min=159008 link_stack_hwm=4432 snapshot_ms=543477\r\nrtk>  "
+  },
+  {
+    "queries": 443,
+    "max_latency_ms": 769.87,
+    "over_100ms": 1,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 2\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=2727 replies_tx=2143 write_errors=2 pushes_tx=551 disconnects=1 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=581 battery=80 state=0\r\nheap: free=165240 min=159008 link_stack_hwm=4432 snapshot_ms=644385\r\nrtk>  "
+  },
+  {
+    "queries": 493,
+    "max_latency_ms": 755.58,
+    "over_100ms": 1,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 2\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=3300 replies_tx=2636 write_errors=2 pushes_tx=626 disconnects=1 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=661 battery=80 state=0\r\nheap: free=165240 min=159008 link_stack_hwm=4432 snapshot_ms=725376\r\nrtk>  "
+  },
+  {
+    "queries": 495,
+    "max_latency_ms": 580.84,
+    "over_100ms": 1,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 2\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=3870 replies_tx=3131 write_errors=2 pushes_tx=696 disconnects=1 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=736 battery=80 state=0\r\nheap: free=165336 min=159008 link_stack_hwm=4432 snapshot_ms=801085\r\nrtk>  "
+  },
+  {
+    "queries": 194,
+    "max_latency_ms": 701.25,
+    "over_100ms": 1,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 2\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=4105 replies_tx=3325 write_errors=2 pushes_tx=734 disconnects=1 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=777 battery=80 state=0\r\nheap: free=165336 min=159008 link_stack_hwm=4432 snapshot_ms=841457\r\nrtk>  "
+  },
+  {
+    "queries": 200,
+    "max_latency_ms": 98.88,
+    "over_100ms": 0,
+    "failures": [],
+    "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: PHONE_PREEMPT\r\nsessions: 1\r\n  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=255 level=0 override=no\r\nstats: frames_rx=249 replies_tx=200 write_errors=0 pushes_tx=46 disconnects=9 rx_dropped=0\r\nparser: crc_errors=0 length_errors=0\r\nheartbeat: seq=933 battery=80 state=0\r\nheap: free=168332 min=159776 link_stack_hwm=4880 snapshot_ms=71022\r\nrtk>  "
+  }
+]

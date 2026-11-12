@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "port": "/dev/ttyUSB0",
+  "mac": "08:d1:f9:dd:3e:e4",
+  "bytes": 8388608,
+  "sha256": "1fe69cde53298a1bfc7930cfdfd31a446a0725c1dd0d5247026411ae78dd44d8",
+  "baud": 921600,
+  "secure_boot_enabled": false,
+  "flash_encryption_enabled": false
+}

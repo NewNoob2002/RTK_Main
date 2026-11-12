@@ -1,0 +1,1 @@
+FAIL: esptool read-flash 0 ALL at 460800 baud exited 2 after 86.59s: Packet content transfer stopped at approximately 0x0030e000. No flash write performed.
