@@ -561,7 +561,7 @@ class SerialConsole:
         self._drain_input()
         self.ser.write(b"rtcm reset\r")
         self.ser.flush()
-        _ = self._read_until(lambda t: "rtk>" in t, timeout_s=1.5)
+        _ = self._read_until(lambda t: "console>" in t, timeout_s=1.5)
 
     def read_status(self) -> ConsoleSnapshot:
         """发送 `status\\r` 并解析 `rtcm:` 与 `stats:` 行。"""
@@ -569,7 +569,7 @@ class SerialConsole:
         self.ser.write(b"status\r")
         self.ser.flush()
         text = self._read_until(
-            lambda t: bool(RTCM_LINE_RE.search(t) and STATS_LINE_RE.search(t) and ("rtk>" in t)),
+            lambda t: bool(RTCM_LINE_RE.search(t) and STATS_LINE_RE.search(t) and ("console>" in t)),
             timeout_s=2.5,
         )
         return parse_console_status(text)
@@ -1004,7 +1004,7 @@ def run_selftest() -> int:
         "stats: frames_rx=120 replies_tx=120 write_errors=0 pushes_tx=0 disconnects=0 rx_dropped=0\r\n"
         "rtcm: frames=60 bytes=10630 crc32=0x0ABC1234 last_msg=1230 rejected_role=0 "
         "unknown_bytes=0 product_rejects=0 rtcm_rejects=0\r\n"
-        "rtk> "
+        "console> "
     )
     snap = parse_console_status(sample_console)
     _check(snap.rtcm.frames == 60 and snap.rtcm.bytes == 10630, "rtcm frames/bytes 解析错误")

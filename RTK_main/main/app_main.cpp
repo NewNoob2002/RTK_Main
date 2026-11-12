@@ -125,7 +125,7 @@ void start_link() noexcept
 
 void start_console() noexcept
 {
-    constexpr const char *kConsolePrompt = "rtk> ";
+    constexpr const char *kConsolePrompt = "console> ";
     const std::array<std::span<const cli::Cmd>, 4> cmd_tables{{
         app::system_cmds(),
         app::link_cmds(),
