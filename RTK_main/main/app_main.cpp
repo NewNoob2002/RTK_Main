@@ -1,12 +1,11 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
-#include "app_data.hpp"
-#include "app_cmds.hpp"
-#include "app_version.hpp"
-#include "bt_link_module.hpp"
-#include "rtcm_module.hpp"
-#include "storage_module.hpp"
-#include "system_module.hpp"
+#include "app_config.hpp"
+#include "data/app_data.hpp"
+#include "modules/bt_link/bt_link_module.hpp"
+#include "modules/rtcm/rtcm_module.hpp"
+#include "modules/storage/storage_module.hpp"
+#include "modules/system/system_module.hpp"
 
 #include <array>
 #include <span>

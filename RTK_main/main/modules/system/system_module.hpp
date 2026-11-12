@@ -1,7 +1,10 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
 #pragma once
-#include "app_data.hpp"
+#include <span>
+
+#include "data/app_data.hpp"
+#include "rtk/console/console.hpp"
 namespace rtk::app {
 struct SystemModule {
     os::Executor *executor = nullptr;
@@ -19,4 +22,5 @@ inline constexpr ::app::ModuleOps kSystemOps{nullptr, nullptr, system_poll, null
 [[nodiscard]] bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out) noexcept;
 // 控制台唯一调用者使用，非 ISR；执行器生命周期为整个固件运行期。
 [[nodiscard]] os::Executor &link_executor() noexcept;
+[[nodiscard]] std::span<const rtk::console::Cmd> system_cmds() noexcept;
 } // namespace rtk::app

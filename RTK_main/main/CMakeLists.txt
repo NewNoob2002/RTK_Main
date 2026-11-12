@@ -4,10 +4,19 @@
 # esp_hw_support：esp_read_mac；esp_system：复位原因/堆/TWDT；console：UART0 REPL。
 # esp_driver_gpio：用户授权的 GPIO26 电源保持。
 idf_component_register(
-    SRCS "app_main.cpp" "console_support.cpp"
-         "cmds_link.cpp" "cmds_storage.cpp" "cmds_rtcm.cpp" "cmds_system.cpp"
-         "app_rtcm.cpp" "system_module.cpp"
-         "app_data.cpp" "storage_module.cpp" "bt_link_module.cpp" "rtcm_module.cpp" "async_tx.cpp"
+    SRCS "app_main.cpp"
+         "data/app_data.cpp"
+         "support/console_support.cpp"
+         "modules/bt_link/bt_link_module.cpp"
+         "modules/bt_link/bt_link_cmds.cpp"
+         "modules/bt_link/async_tx.cpp"
+         "modules/rtcm/rtcm_module.cpp"
+         "modules/rtcm/rtcm_cmds.cpp"
+         "modules/rtcm/rtcm_forwarder.cpp"
+         "modules/storage/storage_module.cpp"
+         "modules/storage/storage_cmds.cpp"
+         "modules/system/system_module.cpp"
+         "modules/system/system_cmds.cpp"
     INCLUDE_DIRS "."
     REQUIRES app_fw rtk_proto rtk_core rtk_os rtk_bt rtk_store rtk_console stream_demux console esp_system esp_hw_support esp_driver_gpio freertos log)
 

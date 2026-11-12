@@ -1,7 +1,7 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
 #include "rtk/os/spin_lock.hpp"
-#include "app_data.hpp"
+#include "data/app_data.hpp"
 
 namespace rtk::app::data {
 namespace {

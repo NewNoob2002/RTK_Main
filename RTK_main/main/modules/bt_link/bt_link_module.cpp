@@ -1,10 +1,10 @@
 // 链路单一所有者；RX 调度保持 256 B / 20 ms / 每轮一个产品帧与 64 B 跨轮预读。
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
-#include "bt_link_module.hpp"
-#include "storage_module.hpp"
-#include "app_version.hpp"
-#include "async_tx.hpp"
+#include "modules/bt_link/bt_link_module.hpp"
+#include "modules/storage/storage_module.hpp"
+#include "app_config.hpp"
+#include "modules/bt_link/async_tx.hpp"
 
 #include <algorithm>
 #include <cinttypes>

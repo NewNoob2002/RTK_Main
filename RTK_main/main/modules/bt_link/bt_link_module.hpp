@@ -1,7 +1,10 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
 #pragma once
-#include "app_data.hpp"
+#include <span>
+
+#include "data/app_data.hpp"
+#include "rtk/console/console.hpp"
 #include "rtk/status.hpp"
 namespace rtk::app {
 struct BtLinkModule {
@@ -18,5 +21,6 @@ void bt_link_command(void *self, const ::app::Command &cmd, ::app::CommandResult
 void bt_link_wait(void *ctx, uint32_t max_ms) noexcept;
 // 启动异步发送任务；须在链路执行器 start 之前由 app_main 调用一次。失败时回复退回同步发送。
 [[nodiscard]] rtk::Status bt_link_start_tx() noexcept;
+[[nodiscard]] std::span<const rtk::console::Cmd> link_cmds() noexcept;
 inline constexpr ::app::ModuleOps kBtLinkOps{bt_link_init, nullptr, bt_link_poll, bt_link_command};
 } // namespace rtk::app

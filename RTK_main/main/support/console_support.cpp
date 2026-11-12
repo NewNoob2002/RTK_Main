@@ -3,14 +3,14 @@
 // Generated-by: pi + antigravity/gemini-3.8-flash
 // 人工负责人：UNKNOWN（待人工审查签字）
 
-#include "console_support.hpp"
+#include "support/console_support.hpp"
 
 #include <cstddef>
 #include <cstdio>
 
 #include "esp_err.h"
 
-#include "system_module.hpp"
+#include "modules/system/system_module.hpp"
 
 namespace rtk::app {
 

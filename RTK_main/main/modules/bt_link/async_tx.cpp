@@ -1,7 +1,7 @@
 // 异步发送装饰器实现，见 async_tx.hpp。
 // Generated-by: Claude Opus 5.5
 // 人工负责人：UNKNOWN（待人工审查签字）
-#include "async_tx.hpp"
+#include "modules/bt_link/async_tx.hpp"
 
 #include <algorithm>
 
@@ -65,8 +65,8 @@ bool AsyncTxTransport::pump(uint32_t wait_ms) noexcept
         return false;
     }
     depth_.fetch_sub(1U, std::memory_order_relaxed);
-    const Status status =
-        inner_.write(rx_item_.handle, std::span<const uint8_t>{rx_item_.bytes}.first(rx_item_.size), rx_item_.timeout_ms);
+    const Status status = inner_.write(rx_item_.handle, std::span<const uint8_t>{rx_item_.bytes}.first(rx_item_.size),
+                                       rx_item_.timeout_ms);
     if (is_ok(status)) {
         sent_.fetch_add(1U, std::memory_order_relaxed);
     } else {

@@ -1,6 +1,6 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
-#include "storage_module.hpp"
+#include "modules/storage/storage_module.hpp"
 #include <algorithm>
 #include <cstring>
 #include "esp_log.h"

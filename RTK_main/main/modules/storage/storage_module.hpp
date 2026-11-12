@@ -1,8 +1,11 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
 #pragma once
-#include "app_data.hpp"
+#include <span>
+
+#include "data/app_data.hpp"
 #include "app/store_key.hpp"
+#include "rtk/console/console.hpp"
 
 namespace rtk::app {
 inline constexpr uint32_t kStoreRetryInitialMs = 1000;
@@ -27,5 +30,6 @@ void mark_whitelist_dirty(std::span<const core::BtAddr> list, uint32_t now_ms) n
 // 仅 kLink 调用，非 ISR。
 [[nodiscard]] bool storage_poll(void *self, uint32_t now_ms) noexcept;
 void storage_command(void *self, const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
+[[nodiscard]] std::span<const rtk::console::Cmd> storage_cmds() noexcept;
 inline constexpr ::app::ModuleOps kStorageOps{storage_init, nullptr, storage_poll, storage_command};
 } // namespace rtk::app

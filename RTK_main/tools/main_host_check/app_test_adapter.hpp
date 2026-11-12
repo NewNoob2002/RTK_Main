@@ -4,9 +4,9 @@
 #pragma once
 // 保留基线白盒场景对会话/预读状态的检查；不额外编译此 cpp，避免重复定义。
 // NOLINTNEXTLINE(bugprone-suspicious-include)
-#include "../../main/bt_link_module.cpp"
-#include "../../main/rtcm_module.hpp"
-#include "../../main/storage_module.hpp"
+#include "../../main/modules/bt_link/bt_link_module.cpp"
+#include "../../main/modules/rtcm/rtcm_module.hpp"
+#include "../../main/modules/storage/storage_module.hpp"
 #include "rtk/os/static_queue.hpp"
 
 namespace rtk::app {

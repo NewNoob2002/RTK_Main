@@ -36,12 +36,14 @@ target_compile_options(main_pure PRIVATE -Wall -Wextra -Werror -Wshadow)
 enable_testing()
 # 同一真实组合根分别编译两种 Kconfig 分支，产品不增加测试开关或可替换调度框架。
 foreach(policy concurrent preempt)
-    add_executable(main_${policy} main_host_check.cpp ${RTK_ROOT}/main/app_rtcm.cpp
-        ${RTK_ROOT}/main/app_data.cpp ${RTK_ROOT}/main/storage_module.cpp ${RTK_ROOT}/main/rtcm_module.cpp
-        ${RTK_ROOT}/main/async_tx.cpp ${RTK_ROOT}/components/rtk_bt/spp_transport.cpp)
+    add_executable(main_${policy} main_host_check.cpp ${RTK_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
+        ${RTK_ROOT}/main/data/app_data.cpp ${RTK_ROOT}/main/modules/storage/storage_module.cpp
+        ${RTK_ROOT}/main/modules/rtcm/rtcm_module.cpp ${RTK_ROOT}/main/modules/bt_link/async_tx.cpp
+        ${RTK_ROOT}/components/rtk_bt/spp_transport.cpp)
     target_include_directories(main_${policy} BEFORE PRIVATE shim)
     target_include_directories(main_${policy} PRIVATE
         ${RTK_ROOT}/main ${RTK_ROOT}/components/rtk_bt/include
+        ${RTK_ROOT}/components/rtk_console/include
         ${RTK_ROOT}/components/rtk_store/include ${RTK_ROOT}/components/rtk_os/include
         ${RTK_ROOT}/components/app_fw/include)
     target_compile_options(main_${policy} PRIVATE -fno-exceptions -fno-rtti
