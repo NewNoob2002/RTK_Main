@@ -1,0 +1,3 @@
+# 纯逻辑测试与产品保持相同的 C++ 运行时约束。
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
+CONFIG_COMPILER_CXX_RTTI=n
