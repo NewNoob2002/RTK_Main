@@ -1,22 +1,24 @@
-#!/usr/bin/env python3
-"""G7b C++ 运行时门禁：自有目标文件零符号 + 全 ELF 精确白名单。
-
-Generated-by: Claude Opus 5.5（Claude Code）
-人工负责人：UNKNOWN（待人工审查签字）
+# 检查自有目标文件的堆使用白名单与全 ELF 的异常/RTTI 门禁。
+# 由构建/验收进程调用，可阻塞等待 nm；不适用于任务回调或 ISR。
+"""G7b C++ 运行时门禁：自有目标文件分级堆规则 + 全 ELF 精确白名单。
 
 背景：IDF nvs_flash 的 nvs_encrypted_partition.cpp 无条件编译，引用
 operator new[](size_t, const std::nothrow_t&)，链接器因此从 libstdc++ 拉入
 new_opvnt.o → eh_catch.o（2 个异常符号）与 new_opv.o → new_op.o → bad_alloc.o
 （4 个 RTTI 符号）。证据见 docs/reports/T14-REVIEW.md「G7b 根因」。
 本门禁只放行这 6 个符号，且要求 map 中的拉入链与上述一致；其他任何异常/RTTI
-符号、链路变化、自有目标文件中的异常/RTTI/堆符号都判 FAIL。
+符号、链路变化、自有目标文件中的异常/RTTI 符号都判 FAIL。
+自有目标文件中的堆符号按源文件白名单放行，未登记或无法映射源文件时判 FAIL。
 
 用法：python3 -I tools/g7b_check/g7b_check.py [--build build] [--nm xtensa-esp32-elf-nm]
+      [--allowlist tools/g7b_check/heap_allowlist.txt]
 退出码：0 PASS；1 FAIL；2 工具或输入错误。
 """
 
 import argparse
+import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -50,7 +52,57 @@ REQUIRED_EDGES = {
     "libstdc++.a(eh_exception.o)": ("libstdc++.a(bad_alloc.o)", "_ZNSt9exceptionD2Ev"),
 }
 
-OWN_COMPONENT_DIRS = ("main", "rtk_proto", "rtk_core", "rtk_os", "rtk_bt", "rtk_store")
+ROOT = Path(__file__).resolve().parents[2]
+OWN_COMPONENT_DIRS = ("main", "rtk_proto", "rtk_core", "rtk_os", "rtk_bt", "rtk_store",
+                      "app_fw", "stream_demux", "bt_reconnect", "rtk_console")
+
+
+def read_heap_allowlist(path):
+    """读取仓库相对源文件路径与档位/理由，拒绝通配、越界和无说明条目。"""
+    allowed = {}
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        source, marker, reason = line.partition("#")
+        source = source.strip()
+        if not source:
+            continue
+        source_path = Path(source)
+        if (not marker or not reason.strip() or source_path.is_absolute()
+                or source_path.as_posix() != source or ".." in source_path.parts or not source_path.parts
+                or source_path.parts[0] not in ("main", "components")
+                or source_path.suffix not in (".c", ".cpp", ".cc", ".cxx")
+                or not (ROOT / source_path).resolve().is_relative_to(ROOT)
+                or not (ROOT / source_path).is_file() or source in allowed):
+            raise ValueError(f"{path}:{number}: 需要唯一的仓库相对源文件路径 + # 档位与理由")
+        allowed[source] = reason.strip()
+    return allowed
+
+
+def object_sources(build):
+    """按 CMake 编译数据库关联目标文件与源文件，避免同名源文件误放行。"""
+    sources = {}
+    try:
+        entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"无法读取编译数据库 {build / 'compile_commands.json'}：{exc}") from exc
+    for entry in entries:
+        directory = Path(entry["directory"])
+        source = (directory / entry["file"]).resolve()
+        if not source.is_relative_to(ROOT):
+            continue
+        output = entry.get("output")
+        if output is None:
+            command = entry.get("arguments")
+            if command is None:
+                command = shlex.split(entry["command"])
+            if "-o" not in command or command.index("-o") + 1 >= len(command):
+                raise ValueError(f"编译数据库缺少 -o 输出路径：{source}")
+            output = command[command.index("-o") + 1]
+        obj = (directory / output).resolve()
+        relative_source = source.relative_to(ROOT).as_posix()
+        if obj in sources and sources[obj] != relative_source:
+            raise ValueError(f"编译数据库中目标文件对应多个源文件：{obj}")
+        sources[obj] = relative_source
+    return sources
 
 
 def run_nm(nm, args):
@@ -107,6 +159,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--build", default="build", help="idf.py 构建目录（默认 build）")
     ap.add_argument("--nm", default="xtensa-esp32-elf-nm", help="nm 可执行文件")
+    ap.add_argument("--allowlist", type=Path, default=ROOT / "tools/g7b_check/heap_allowlist.txt",
+                    help="堆白名单文件（条目均相对仓库根目录）")
     args = ap.parse_args()
 
     build = Path(args.build)
@@ -117,8 +171,11 @@ def main():
         return 2
 
     failures = []
+    allowed_heap_hits = []
     try:
-        # 1. 自有目标文件：异常/RTTI 与堆符号（定义或引用）一律为 0。
+        allowlist = read_heap_allowlist(args.allowlist)
+        sources = None
+        # 1. 自有目标文件：异常/RTTI 为 0；堆符号仅按精确源文件路径放行。
         own_objs = sorted(p for d in OWN_COMPONENT_DIRS for p in (build / "esp-idf" / d).rglob("*.obj"))
         if not own_objs:
             print(f"ERROR: {build}/esp-idf 下没有自有目标文件", file=sys.stderr)
@@ -127,9 +184,18 @@ def main():
             for _, name in run_nm(nm, ["-C", str(obj)]):
                 if is_runtime(name):
                     failures.append(f"自有目标文件含异常/RTTI 符号：{obj.relative_to(build)}: {name}")
-            for _, name in run_nm(nm, [str(obj)]):
-                if HEAP_RAW_RE.match(name):
-                    failures.append(f"自有目标文件含堆符号：{obj.relative_to(build)}: {name}")
+            heap_hits = sorted({name for _, name in run_nm(nm, [str(obj)]) if HEAP_RAW_RE.match(name)})
+            if not heap_hits:
+                continue
+            if sources is None:
+                sources = object_sources(build)
+            source = sources.get(obj.resolve())
+            for name in heap_hits:
+                if source in allowlist:
+                    allowed_heap_hits.append(f"{source}: {name} # {allowlist[source]}")
+                else:
+                    failures.append(f"自有目标文件含堆符号：{obj.relative_to(build)}: {name}"
+                                    f"（源文件：{source or 'UNKNOWN'}，未登记白名单）")
 
         # 2. 全 ELF：异常/RTTI 符号必须是白名单子集。
         elf_hits = {name for _, name in run_nm(nm, ["-C", "--defined-only", str(elf)]) if is_runtime(name)}
@@ -144,11 +210,14 @@ def main():
                 got = edges.get(member)
                 if got != (want_ref, want_sym):
                     failures.append(f"拉入链不符：{member} 期望由 {want_ref} ({want_sym}) 引入，实际 {got}")
-    except RuntimeError as exc:
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
     print(f"自有目标文件：{len(own_objs)} 个")
+    print(f"堆白名单：{len(allowlist)} 个源文件，放行 {len(allowed_heap_hits)} 个堆符号")
+    for hit in allowed_heap_hits:
+        print(f"  allowed heap: {hit}")
     print(f"ELF 异常/RTTI 符号（白名单内）：{len(elf_hits & ALLOWED_ELF_SYMBOLS)}/{len(ALLOWED_ELF_SYMBOLS)}")
     for name in sorted(elf_hits & ALLOWED_ELF_SYMBOLS):
         print(f"  allowed: {name}")

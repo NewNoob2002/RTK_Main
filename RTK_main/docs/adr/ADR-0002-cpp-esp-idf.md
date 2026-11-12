@@ -33,12 +33,12 @@ ESP32：8 MB Flash，520 KB SRAM，双核，归入 **T2**。本工程自有代�
 | --- | --- |
 | 标准 | C++20 子集（IDF 以 gnu++26 编译，不使用 C++23 及以后才有的库特性） |
 | 异常 / RTTI | 禁用（CPP-001/002） |
-| 堆 | 自有代码**不分配**（无 `new`/`malloc`，placement new 除外）。IDF 蓝牙栈自身用堆，不在约束内 |
-| 容器 | 只用 `std::array`、`std::span`、`std::optional`、`std::string_view`、`FixedStr<N>`；不引入 ETL（需要联网下载组件，且本阶段不需要） |
+| 堆 | 按 `docs/CODING-STYLE.md` 分级：ISR、蓝牙回调、链路任务每轮路径、发送任务禁止分配；启动期一次性分配允许；非实时路径允许限量分配并处理失败。使用堆的源文件须登记 G7b 白名单且文件头标档位；C 文件保留 `malloc`/`free` 禁令，placement new 不分配堆。IDF 蓝牙栈自身用堆，不在自有代码约束内。**2026-11-12 由 ADR-0008 §8 修订** |
+| 容器 | 优先用 `std::array`、`std::span`、`std::optional`、`std::string_view`、`FixedStr<N>`；`std::vector`/`std::string` 仅按上述堆分级与白名单使用（关闭异常时分配失败会 abort；`reserve` 自身也可能失败，需恢复时使用 nothrow 存储）。不引入 ETL（需要联网下载组件，且本阶段不需要）；2026-11-12 随 ADR-0008 §8 同步 |
 | 多态 | 只有 `Transport` 一处运行期边界：受保护非虚析构 + `final` 实现（CPP-011） |
 | 全局对象 | `constinit` 或 `constexpr` 构造（CPP-020）；构造函数不访问硬件、RTOS 或日志（CPP-010） |
 | 函数局部静态 | 只允许常量初始化的 `static constinit`，不生成 guard（CPP-009） |
-| 禁止 | `std::function`、`<vector>`/`<string>`/`<map>` 等会分配的容器、iostream、`shared_ptr`、`<thread>` |
+| 禁止 | `std::function`、`<map>`/`<list>`/`<deque>`/`<unordered_*>`、iostream、`shared_ptr`、`<thread>`/`<mutex>`；`<vector>`/`<string>` 改按上述堆分级使用（2026-11-12 由 ADR-0008 §8 修订） |
 
 ## 4. 组件划分
 
@@ -69,7 +69,7 @@ ESP32：8 MB Flash，520 KB SRAM，双核，归入 **T2**。本工程自有代�
 | 纯逻辑 | `test/host`：Unity（IDF 自带副本）+ C++20 + `-fno-exceptions -fno-rtti` + 严格告警，另跑一遍 ASan/UBSan。74 个用例在实现前冻结 |
 | 双架构编译（ESP-008） | 完整固件只能构建 `esp32`（经典蓝牙）。`test_apps/rtk_pure` 只链接 `rtk_proto`、`rtk_core`，分别为 `esp32`（Xtensa）和 `esp32c3`（RISC-V，非 preview）构建，作为 RISC-V 门禁 |
 | 上板 | `test_apps/rtk_pure` 用 pytest-embedded 运行，固件做 HIL；需要开发板，未授权时记 `NOT_RUN` |
-| C++ 运行时 | `tools/g7b_check/g7b_check.py`：自有目标文件中异常、RTTI、`operator new`/`malloc` 符号为 0；全 ELF 的异常/RTTI 符号只允许 IDF NVS 经 libstdc++ 引入的 6 个白名单符号且拉入链固定（2026-11-11 修订，见 `docs/acceptance.md` G7b）；`cpp_cost.py check --tier T2` 只报告；heap 类来自 IDF 蓝牙栈，只报告 |
+| C++ 运行时 | `tools/g7b_check/g7b_check.py`：自有目标文件中异常、RTTI 符号为 0；堆符号按 `tools/g7b_check/heap_allowlist.txt` 的精确源文件路径分级放行并列出，未登记则 FAIL（**2026-11-12 由 ADR-0008 §8 修订**，规范见 `docs/CODING-STYLE.md`）。全 ELF 的异常/RTTI 符号仍只允许 IDF NVS 经 libstdc++ 引入的 6 个白名单符号且拉入链固定（2026-11-11 修订，见 `docs/acceptance.md` G7b）；`cpp_cost.py check --tier T2` 只报告；IDF 蓝牙栈的 heap 类只报告 |
 
 ## 7. 对 ESP-008 的偏离
 
