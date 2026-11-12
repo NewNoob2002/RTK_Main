@@ -141,3 +141,27 @@ RTK_main/
 | 非实时路径：控制台、配置导入导出、OTA、文件解析 | 允许，须限定上限并处理失败 |
 
 注意：工程关闭了异常，`std::vector`/`std::string` 分配失败会直接 `abort` 重启；因此需要处理失败的地方用 `new (std::nothrow)` 或预先 `reserve`，并在 `g7b_check` 增加按文件的白名单。
+
+## 9. 补充：组件按用途命名，去掉 `rtk` 命名空间（R7，2026-11-12 用户确认）
+
+`rtk` 是产品名，不说明组件用途；通用组件（分流器、重连、控制台、模块框架）带 `rtk_` 前缀反而误导。所有符号都套一层 `rtk::` 也不提供信息。
+
+| 现在 | 组件目录 | C++ 命名空间 / include 根 | C 前缀 |
+| --- | --- | --- | --- |
+| `rtk_bt` | `spp_server` | `spp::` / `include/spp/` | `spp_server_*` / `SPP_SERVER_*` |
+| `rtk_proto` | `device_proto` | `proto::` / `include/proto/` | `dev_proto_*` / `DEV_PROTO_*` |
+| `rtk_store` | `nvs_store` | — | `nvs_store_*` / `NVS_STORE_*` |
+| `rtk_os` | `rtos` | `rtos::` / `include/rtos/` | — |
+| `rtk_core` | `link_core` | `core::` / `include/core/` | — |
+| `rtk_console` | `cli` | `cli::` / `include/cli/` | — |
+| `app_fw` | 不变 | `fw::` / `include/fw/` | — |
+| `stream_demux` | 不变 | `demux::` / `include/demux/` | — |
+| `bt_reconnect` | 不变 | `reconnect::` / `include/reconnect/` | — |
+| `main` | — | `app::` | — |
+
+约束：
+1. 不使用 ESP-IDF 已有组件名（`bt`、`console`、`log` 等），否则会覆盖 IDF 组件。
+2. 顶层命名空间不与 POSIX 函数同名（`alarm`、`link`、`sync` 等）；嵌套使用（`proto::alarm`）可以。
+3. C 前缀用完整组件名，不用裸 `spp_`（Bluedroid 已有 `spp_*`/`btc_spp_*`）。
+4. **不改**：NVS 命名空间 `"rtk"` 与键 `"sn"`、`"alarm_wl"`；蓝牙名 `E1-Lite-xxxx`；协议字节；Kconfig 选项名 `CONFIG_RTK_*`（改名会让现有 sdkconfig 失效，菜单标题可改）。
+5. 分两步：R7a 组件目录 + 命名空间 + include 根；R7b C 标识符前缀 + 日志 tag + 任务名。每步固件尺寸除符号字符串外一致，全部主机测试通过，冻结清单重算。
