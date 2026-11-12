@@ -1,0 +1,434 @@
+/* 发送路径：发送任务（唯一调用 esp_spp_write/esp_spp_disconnect 的地方）、按会话分块提交、
+ * WRITE_EVT 结算，以及 rtk_bt_spp_write / rtk_bt_spp_disconnect 公共接口。
+ * rtk_bt_spp_worker/worker_submit/disconnect_process 只在发送任务里运行；rtk_bt_spp_handle_write
+ * 在 BTC 回调线程运行（临界区内只改会话状态，临界区外非阻塞唤醒）；
+ * rtk_bt_spp_write/disconnect 只允许链路任务调用，等待范围由调用方的 timeout_ms 收敛。 */
+
+#include <inttypes.h>
+#include <stdint.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "freertos/task.h"
+
+#include "esp_log.h"
+#include "esp_spp_api.h"
+
+#include "rtk_bt_spp_priv.h"
+
+/* 整次 write 的剩余预算；预算耗尽返回 false。认领、复制、排队与等待都复用它。 */
+static bool rtk_bt_spp_budget_left(TickType_t start, uint32_t timeout_ms)
+{
+    return (xTaskGetTickCount() - start) < pdMS_TO_TICKS(timeout_ms);
+}
+
+/* 等本会话状态变化；返回 false 表示本次等待后预算仍不够（由调用方判定超时）。 */
+static bool rtk_bt_spp_wait_change(uint8_t idx, TickType_t start, uint32_t timeout_ms)
+{
+    TickType_t elapsed = 0U;
+    TickType_t budget = 0U;
+
+    if ((timeout_ms == 0U) || (s_spp.rtos.evt_group == NULL)) {
+        return false;
+    }
+
+    budget = pdMS_TO_TICKS(timeout_ms);
+    elapsed = xTaskGetTickCount() - start;
+    if (elapsed >= budget) {
+        return false;
+    }
+    (void)xEventGroupWaitBits(s_spp.rtos.evt_group, RTK_BT_SPP_BIT_WAKE(idx), pdFALSE, pdFALSE, budget - elapsed);
+    return true;
+}
+
+/* 发送任务：取一个已排队的请求提交给 IDF。这是全工程唯一调用 esp_spp_write 的位置。 */
+static void rtk_bt_spp_worker_submit(rtk_bt_spp_session_t *session)
+{
+    uint32_t seq = 0U;
+    uint16_t len = 0U;
+    uint32_t handle = 0U;
+    uint8_t idx = 0U;
+    esp_err_t err = ESP_OK;
+    bool wake_worker = false;
+
+    /* 取任务：在临界区内取走长度与序号，避免与写者复制 tx_buf 交错。
+     * 全驱动只允许一个未完成提交：owner 已占用时本任务保持排队，等完成回调通知后再来。 */
+    taskENTER_CRITICAL(&s_spp_mux);
+    if (session->in_use && (session->tx_state == RTK_BT_SPP_TX_QUEUED) && (s_spp_tx_inflight < 0)) {
+        len = session->tx_len;
+        seq = session->tx_seq;
+        handle = session->handle;
+        idx = session->idx;
+        session->tx_state = RTK_BT_SPP_TX_SUBMITTED;
+        session->tx_submitting = true;
+        /* idx < RTK_BT_SPP_MAX_SESSIONS(=2)，int 窄化安全 */
+        s_spp_tx_inflight = (int)idx;
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+
+    if (len == 0U) {
+        return;
+    }
+
+    /* esp_spp_write 先深拷贝参数，再经 btc_transfer_context 投递（可能阻塞在 BTC 队列上）。
+     * 那次阻塞发生在本任务里，调用方只按自己的剩余预算等待完成事件，因此不会无限阻塞在
+     * 调用方的上下文。len ≤ RTK_BT_SPP_TX_CHUNK，扩宽到 int 无损。 */
+    err = esp_spp_write(handle, (int)len, session->tx_buf);
+
+    taskENTER_CRITICAL(&s_spp_mux);
+    /* tx_submitting 一定要清（否则槽永远无法复用）；结果只写回仍是本次请求的会话，
+     * 避免一次被阻塞很久的提交在会话关闭/复用后污染新会话。 */
+    session->tx_submitting = false;
+    if (err != ESP_OK) {
+        /* 提交失败不会有 WRITE_EVT：释放 owner 并结案，让等待方立刻返回该错误。 */
+        if (s_spp_tx_inflight == (int)idx) {
+            s_spp_tx_inflight = -1;
+            s_spp.tx_inflight_cancelled = false;
+            wake_worker = true;
+        }
+        if (session->in_use && (session->tx_state == RTK_BT_SPP_TX_SUBMITTED) && (session->tx_seq == seq)) {
+            session->tx_result = err;
+            session->tx_done_len = -1;
+            session->tx_done_seq = seq;
+            session->tx_state = RTK_BT_SPP_TX_IDLE;
+        }
+    } else if ((s_spp_tx_inflight == (int)idx) && s_spp.tx_inflight_cancelled) {
+        /* CLOSE 在本调用期间取消了该提交。API 已返回（深拷贝/投递完成），静态 tx_buf 可再用，
+         * 现在释放 owner；旧消息之后若入队失败只会报匿名 NO_CONNECTION，按取消事件忽略。 */
+        s_spp_tx_inflight = -1;
+        s_spp.tx_inflight_cancelled = false;
+        wake_worker = true;
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(RTK_BT_SPP_TAG, "submit handle=%" PRIu32 " len=%u: %s", handle, (unsigned)len, esp_err_to_name(err));
+    }
+    if (s_spp.rtos.evt_group != NULL) {
+        (void)xEventGroupSetBits(s_spp.rtos.evt_group, RTK_BT_SPP_BIT_WAKE(idx));
+    }
+    /* 重新扫描一次，保证低于当前下标的排队请求也能被提交。 */
+    if (wake_worker && (s_spp.rtos.worker != NULL)) {
+        (void)xTaskNotifyGive(s_spp.rtos.worker);
+    }
+}
+
+/* 普通断开有独立的每槽状态。失败每 100 ms 重试，成功只等真实 CLOSE；不伪造关闭。
+ * 提交期间禁止槽复用，即使 CLOSE 与 SDK 阻塞调用交错也不会把返回结果写入新会话。 */
+static void rtk_bt_spp_disconnect_process(void)
+{
+    for (uint32_t idx = 0U; idx < RTK_BT_SPP_MAX_SESSIONS; idx++) {
+        uint32_t handle = 0U;
+        bool submit = false;
+        const TickType_t now = xTaskGetTickCount();
+        taskENTER_CRITICAL(&s_spp_mux);
+        rtk_bt_spp_session_t *session = &s_spp.sessions[idx];
+        submit = session->in_use && session->disconnect_pending && !session->disconnect_submitted &&
+                 (!session->disconnect_attempted ||
+                  ((now - session->disconnect_attempt) >= pdMS_TO_TICKS(RTK_BT_SPP_CTRL_RETRY_MS)));
+        if (submit) {
+            handle = session->handle;
+            session->disconnect_submitting = true;
+            session->disconnect_attempted = true;
+            session->disconnect_attempt = now;
+        }
+        taskEXIT_CRITICAL(&s_spp_mux);
+        if (!submit) {
+            continue;
+        }
+        const esp_err_t err = esp_spp_disconnect(handle);
+        taskENTER_CRITICAL(&s_spp_mux);
+        session->disconnect_submitting = false;
+        session->disconnect_submitted = (err == ESP_OK);
+        taskEXIT_CRITICAL(&s_spp_mux);
+        if (err != ESP_OK) {
+            ESP_LOGW(RTK_BT_SPP_TAG, "disconnect handle=%" PRIu32 ": %s; retry pending", handle, esp_err_to_name(err));
+        }
+    }
+}
+
+/* 发送任务：串行提交各会话的排队请求，并执行控制表里的 GAP 应答/拒绝断开。
+ * 绑核理由见 RTK_BT_SPP_WORKER_CORE。 */
+void rtk_bt_spp_worker(void *arg)
+{
+    (void)arg;
+
+    for (;;) {
+        for (uint32_t idx = 0U; idx < RTK_BT_SPP_MAX_SESSIONS; idx++) {
+            bool queued = false;
+
+            taskENTER_CRITICAL(&s_spp_mux);
+            queued = s_spp.sessions[idx].in_use && (s_spp.sessions[idx].tx_state == RTK_BT_SPP_TX_QUEUED);
+            taskEXIT_CRITICAL(&s_spp_mux);
+
+            if (queued) {
+                rtk_bt_spp_worker_submit(&s_spp.sessions[idx]);
+            }
+        }
+        rtk_bt_spp_ctrl_process();
+        rtk_bt_spp_disconnect_process();
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(RTK_BT_SPP_CTRL_RETRY_MS));
+    }
+}
+
+/* WRITE_EVT 结论：status 非成功、回报长度与提交长度不一致（短写）都按失败返回。
+ * 成功路径的 len 是 RFCOMM 实际接受的字节数（bta_jv_act.c:2413-2420 → btc_spp.c:1136），
+ * 因此 len != tx_len 不能当成功。只允许在临界区内调用：不访问 RTOS/日志。 */
+static esp_err_t rtk_bt_spp_settle_write(rtk_bt_spp_session_t *session, esp_spp_status_t status, int done_len)
+{
+    const bool failed =
+        (status != ESP_SPP_SUCCESS) || (done_len < 0) || ((uint32_t)done_len != (uint32_t)session->tx_len);
+    const esp_err_t result = failed ? ESP_FAIL : ESP_OK;
+
+    session->tx_done_len = done_len;
+    session->tx_result = result;
+    session->tx_done_seq = session->tx_seq;
+    session->tx_state = RTK_BT_SPP_TX_IDLE;
+    return result;
+}
+
+/* 写完成：把真实 status/len/cong 写回会话并唤醒等待方（QA-E-REVIEW 第 3 项）。 */
+void rtk_bt_spp_handle_write(esp_spp_cb_param_t *param)
+{
+    bool matched = false;
+    bool wake_worker = false;
+    bool ignore_stale = false;
+    EventBits_t wake_bits = 0U;
+    esp_err_t result = ESP_OK;
+
+    taskENTER_CRITICAL(&s_spp_mux);
+    for (uint32_t slot = 0U; slot < RTK_BT_SPP_MAX_SESSIONS; slot++) {
+        if (!s_spp.sessions[slot].in_use || (s_spp.sessions[slot].handle != param->write.handle)) {
+            continue;
+        }
+        if (s_spp.sessions[slot].tx_state != RTK_BT_SPP_TX_SUBMITTED) {
+            continue;
+        }
+        matched = true;
+        result = rtk_bt_spp_settle_write(&s_spp.sessions[slot], param->write.status, param->write.len);
+        s_spp.sessions[slot].congested = param->write.cong;
+        wake_bits |= RTK_BT_SPP_BIT_WAKE(s_spp.sessions[slot].idx);
+        if (s_spp_tx_inflight == (int)slot) {
+            s_spp_tx_inflight = -1;
+            s_spp.tx_inflight_cancelled = false;
+            wake_worker = true;
+        }
+        break;
+    }
+
+    if ((!matched) && (param->write.handle == 0U) && (param->write.status != ESP_SPP_SUCCESS)) {
+        /* IDF 提交阶段失败时以 handle=0/len=-1 报告（btc_spp.c:925-943）。
+         * NO_CONNECTION 表示槽已消失/未连接：那是 CLOSE 取消（或即将到来的 CLOSE）负责的，
+         * 迟到旧请求的匿名 NO_CONNECTION 绝不能结算当前 owner。NO_RESOURCE 等是当前
+         * 唯一在途提交的真实提交失败，归属 owner。 */
+        if (param->write.status == ESP_SPP_NO_CONNECTION) {
+            ignore_stale = true;
+        } else if (s_spp_tx_inflight >= 0) {
+            rtk_bt_spp_session_t *owner = &s_spp.sessions[s_spp_tx_inflight];
+
+            result = ESP_FAIL;
+            matched = true;
+            if (owner->in_use && (owner->tx_state == RTK_BT_SPP_TX_SUBMITTED)) {
+                (void)rtk_bt_spp_settle_write(owner, param->write.status, param->write.len);
+                wake_bits |= RTK_BT_SPP_BIT_WAKE(owner->idx);
+            }
+            s_spp_tx_inflight = -1;
+            s_spp.tx_inflight_cancelled = false;
+            wake_worker = true;
+        }
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+
+    if (ignore_stale) {
+        /* 旧请求在 CLOSE 后才被 BTC 处理：没有新会话的完成可结算，忽略。 */
+        ESP_LOGD(RTK_BT_SPP_TAG, "stale anonymous write evt ignored: len=%d status=%d", param->write.len,
+                 (int)param->write.status);
+        return;
+    }
+    if (!matched) {
+        /* 带有效句柄但不属于当前在途请求的迟到事件（成功或失败）：一律忽略，
+         * 绝不能结算到别的会话。 */
+        ESP_LOGW(RTK_BT_SPP_TAG, "write evt unmatched: handle=%" PRIu32 " len=%d status=%d", param->write.handle,
+                 param->write.len, (int)param->write.status);
+        return;
+    }
+    if (result != ESP_OK) {
+        ESP_LOGW(RTK_BT_SPP_TAG, "write failed: handle=%" PRIu32 " len=%d status=%d", param->write.handle,
+                 param->write.len, (int)param->write.status);
+    }
+    if (s_spp.rtos.evt_group != NULL) {
+        (void)xEventGroupSetBits(s_spp.rtos.evt_group, wake_bits);
+    }
+    /* 完成回调可能来自 BTC：只做非阻塞任务通知，让发送任务提交其他会话的排队请求。 */
+    if (wake_worker && (s_spp.rtos.worker != NULL)) {
+        (void)xTaskNotifyGive(s_spp.rtos.worker);
+    }
+}
+
+/* 提交一个分块并等它的真实完成。start/timeout_ms 由调用方在整次 write 内共享。 */
+static esp_err_t rtk_bt_spp_write_chunk(rtk_bt_spp_session_t *session, const uint8_t *data, size_t len,
+                                        TickType_t start, uint32_t timeout_ms)
+{
+    uint32_t seq = 0U;
+
+    if ((s_spp.rtos.worker == NULL) || (s_spp.rtos.evt_group == NULL)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* 0) 认领/复制/排队与等待共用整次 write 的预算：预算已在块间耗尽时不得再提交下一块。 */
+    if (!rtk_bt_spp_budget_left(start, timeout_ms)) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    /* 1) 原子地认领发送槽：同一会话一次只有一个在途请求，连续 write 不会堆进 IDF 的 10 深 TX
+     *    队列；拥塞时按剩余预算等 ESP_SPP_CONG_EVT 解除。认领成功后本调用独占 tx_buf，
+     *    并发写者只能等它交还给发送任务。 */
+    for (;;) {
+        bool alive = false;
+        bool claimed = false;
+
+        (void)xEventGroupClearBits(s_spp.rtos.evt_group, RTK_BT_SPP_BIT_WAKE(session->idx));
+        taskENTER_CRITICAL(&s_spp_mux);
+        alive = session->in_use;
+        if (alive && (session->tx_state == RTK_BT_SPP_TX_IDLE) && (!session->tx_submitting) && (!session->congested)) {
+            session->tx_state = RTK_BT_SPP_TX_RESERVED;
+            claimed = true;
+        }
+        taskEXIT_CRITICAL(&s_spp_mux);
+
+        if (claimed) {
+            break;
+        }
+        if (!alive) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (!rtk_bt_spp_wait_change(session->idx, start, timeout_ms)) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+
+    /* 复制前再核对预算；已过预算则把认领交还 IDLE，不能留下永久 RESERVED 的槽。 */
+    if (!rtk_bt_spp_budget_left(start, timeout_ms)) {
+        taskENTER_CRITICAL(&s_spp_mux);
+        if (session->in_use && (session->tx_state == RTK_BT_SPP_TX_RESERVED)) {
+            session->tx_state = RTK_BT_SPP_TX_IDLE;
+        }
+        taskEXIT_CRITICAL(&s_spp_mux);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    /* 2) 复制到静态提交缓冲：已认领 RESERVED，其它写者进不来，发送任务也不会取走它。 */
+    for (size_t idx = 0U; idx < len; idx++) {
+        session->tx_buf[idx] = data[idx];
+    }
+
+    taskENTER_CRITICAL(&s_spp_mux);
+    /* 复制期间会话可能被关闭：此时槽已交还给 IDLE，不得再排入请求。 */
+    if (session->in_use) {
+        /* len ≤ RTK_BT_SPP_TX_CHUNK(512)，uint16_t 窄化安全 */
+        session->tx_len = (uint16_t)len;
+        session->tx_seq++;
+        seq = session->tx_seq;
+        session->tx_state = RTK_BT_SPP_TX_QUEUED;
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+
+    if (seq == 0U) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    (void)xTaskNotifyGive(s_spp.rtos.worker);
+
+    /* 3) 等真实 WRITE_EVT：status/len/cong 由回调写回，超时按剩余预算收敛。 */
+    for (;;) {
+        bool alive = false;
+        bool done = false;
+        esp_err_t result = ESP_OK;
+
+        (void)xEventGroupClearBits(s_spp.rtos.evt_group, RTK_BT_SPP_BIT_WAKE(session->idx));
+        taskENTER_CRITICAL(&s_spp_mux);
+        alive = session->in_use;
+        done = (session->tx_done_seq == seq);
+        result = session->tx_result;
+        taskEXIT_CRITICAL(&s_spp_mux);
+
+        if (done) {
+            return result;
+        }
+        if (!alive) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (!rtk_bt_spp_wait_change(session->idx, start, timeout_ms)) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+}
+
+esp_err_t rtk_bt_spp_write(uint32_t handle, const uint8_t *data, size_t len, uint32_t timeout_ms)
+{
+    rtk_bt_spp_session_t *session = NULL;
+    TickType_t start = 0U;
+    size_t offset = 0U;
+    esp_err_t err = ESP_OK;
+
+    if ((data == NULL) || (len == 0U)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((s_spp.rtos.worker == NULL) || (!s_spp.initialized)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* 合法参数之后先确认会话：未知句柄必须返回 NOT_FOUND，不能被 0 预算的 TIMEOUT 抢先。
+     * 发送是异步的，0 预算无法确认任何完成，对已知会话按超时返回且不提交。 */
+    start = xTaskGetTickCount();
+    session = rtk_bt_spp_session_acquire(handle);
+    if (session == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (timeout_ms == 0U) {
+        rtk_bt_spp_session_release(session);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    /* 分块：每块 ≤ RTK_BT_SPP_TX_CHUNK，整次调用共享同一份 timeout 预算。 */
+    while (offset < len) {
+        size_t chunk = len - offset;
+
+        if (!rtk_bt_spp_budget_left(start, timeout_ms)) {
+            err = ESP_ERR_TIMEOUT;
+            break;
+        }
+        if (chunk > (size_t)RTK_BT_SPP_TX_CHUNK) {
+            chunk = (size_t)RTK_BT_SPP_TX_CHUNK;
+        }
+        err = rtk_bt_spp_write_chunk(session, data + offset, chunk, start, timeout_ms);
+        if (err != ESP_OK) {
+            break;
+        }
+        offset += chunk;
+    }
+
+    rtk_bt_spp_session_release(session);
+    return err;
+}
+
+esp_err_t rtk_bt_spp_disconnect(uint32_t handle)
+{
+    bool found = false;
+
+    /* 只登记；独立于 GAP/拒绝控制表，重复请求幂等且不会挤掉拒绝命令。 */
+    taskENTER_CRITICAL(&s_spp_mux);
+    for (uint32_t idx = 0U; idx < RTK_BT_SPP_MAX_SESSIONS; idx++) {
+        if (s_spp.sessions[idx].in_use && (s_spp.sessions[idx].handle == handle)) {
+            s_spp.sessions[idx].disconnect_pending = true;
+            found = true;
+            break;
+        }
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+    if (!found) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    (void)xTaskNotifyGive(s_spp.rtos.worker);
+    return ESP_OK;
+}

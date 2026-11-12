@@ -10,8 +10,10 @@ if(DEFINED CONFIG_SOC_BT_CLASSIC_SUPPORTED AND NOT CONFIG_SOC_BT_CLASSIC_SUPPORT
     message(WARNING "rtk_bt: CONFIG_SOC_BT_CLASSIC_SUPPORTED=0，SPP 驱动与适配器未编译")
 else()
     idf_component_register(
-        SRCS "rtk_bt_spp.c" "spp_transport.cpp"
+        SRCS "rtk_bt_spp_init.c" "rtk_bt_spp_session.c" "rtk_bt_spp_rx.c" "rtk_bt_spp_tx.c" "rtk_bt_spp_gap.c"
+             "spp_transport.cpp"
         INCLUDE_DIRS "include"
+        PRIV_INCLUDE_DIRS "private_include"
         REQUIRES rtk_core rtk_os bt)
 
     if(NOT CMAKE_BUILD_EARLY_EXPANSION)
