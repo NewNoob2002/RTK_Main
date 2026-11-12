@@ -1,0 +1,12 @@
+menu "RTK Bluetooth SPP (ADR-0006)"
+
+    config RTK_BT_SPP_RX_BUF_SIZE
+        int "Per-session RX stream buffer size (bytes)"
+        range 1024 16384
+        default 4096
+        help
+            Each SPP session owns one static receive StreamBuffer of this size. Bytes arriving while it is
+            full are dropped and counted as rx_dropped. NTRIP corrections relayed by the phone arrive in
+            bursts of several KB, so the default is 4096. Total static RAM = this value x RTK_BT_SPP_MAX_SESSIONS.
+
+endmenu
