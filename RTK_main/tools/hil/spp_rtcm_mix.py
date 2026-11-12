@@ -514,9 +514,9 @@ def parse_console_status(text: str) -> ConsoleSnapshot:
 
 
 class SerialConsole:
-    """ESP-IDF UART0 控制台接口（115200 bps）。"""
+    """ESP-IDF UART0 控制台接口（2 Mbaud，ADR-0009 §2.6）。"""
 
-    def __init__(self, port: str, baud: int = 115200) -> None:
+    def __init__(self, port: str, baud: int = 2000000) -> None:
         if serial is None:
             raise RuntimeError(
                 "未安装 pyserial；请使用 ESP-IDF Python 环境运行（如 ~/.espressif/python_env/idf*_env/bin/python）"
@@ -1164,7 +1164,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--addr", default="F8:B3:B7:25:D8:B2", help="目标板经典蓝牙 MAC 地址（默认 F8:B3:B7:25:D8:B2）")
     ap.add_argument("--channel", type=int, default=1, help="RFCOMM 通道号（默认 1）")
     ap.add_argument("--serial", default="/dev/ttyACM0", help="控制台串口设备（默认 /dev/ttyACM0；传 none 跳过串口）")
-    ap.add_argument("--baud", type=int, default=115200, help="控制台波特率（默认 115200）")
+    ap.add_argument("--baud", type=int, default=2000000, help="控制台波特率（默认 2000000）")
     ap.add_argument("--duration", type=float, default=10.0, help="单轮发送持续秒数（默认 10.0）")
     ap.add_argument(
         "--tail-wait",

@@ -22,7 +22,8 @@ constexpr size_t kMinEventsInRing = 2U;
 std::atomic<TraceSinkFn> s_sink{nullptr};
 void *s_sink_ctx = nullptr;
 TraceClockFn s_clock = nullptr;
-constinit std::atomic<uint32_t> s_mask{kTraceAllMask};
+// 默认全关（T3：全开时空闲也每秒刷心跳/推送行）；需要时 debug on <类别> 打开，debug save 持久化。
+constinit std::atomic<uint32_t> s_mask{0U};
 
 } // namespace
 

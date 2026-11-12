@@ -86,6 +86,9 @@ sys    info | heap | tasks | reboot
 
 off 构建 ELF 中无 TraceRing/DebugModule/trace_out/fw::trace 符号。
 
+运行时默认掩码为 0（全关；NVS `dbg/mask` 有保存值时以保存值为准）。T3 实测：7 类全开 + 29 KB/s RTCM 负载，
+trace_out 整行 `uart_write_bytes` 输出约 3.4 KB/s，环 max_depth 45/256、0 丢；数据通路 0 丢。
+
 ## 3. 冻结接口（T0 由 Claude 写入）
 
 - `components/app_fw/include/fw/trace.hpp`（新）

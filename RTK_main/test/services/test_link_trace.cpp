@@ -120,6 +120,8 @@ extern "C" void setUp(void)
 {
     s_count = 0U;
     s_events.fill(fw::TraceEvent{});
+    // 运行时默认掩码为 0（ADR-0009 §2.7），本组用例要观察全部类别。
+    fw::trace_set_mask(fw::kTraceAllMask);
 }
 
 extern "C" void tearDown(void) {}
