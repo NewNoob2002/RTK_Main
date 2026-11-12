@@ -7,3 +7,7 @@ idf_component_register(
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -Wshadow -Wimplicit-fallthrough -Wstrict-prototypes>)
+
+# 调试阶段告警即错误（cmake/strict_warnings.cmake，开关 CONFIG_RTK_STRICT_WARNINGS）
+include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/strict_warnings.cmake)
+rtk_strict_warnings(${COMPONENT_LIB})

@@ -14,4 +14,13 @@ menu "RTK_main"
             bool "PHONE_PREEMPT: phone disconnects alarm"
     endchoice
 
+    config RTK_STRICT_WARNINGS
+        bool "Treat all warnings in project code as errors (debug phase)"
+        default y
+        help
+            调试阶段默认开启：本工程组件、main 与 test_apps 的所有编译告警都按错误处理，
+            包括 IDF 默认降级为告警的 unused-*/deprecated-declarations/extra，
+            以及 IDF 默认关闭的 unused-parameter、sign-compare（见 cmake/strict_warnings.cmake）。
+            只影响本工程代码，不影响 IDF 自身组件。
+
 endmenu

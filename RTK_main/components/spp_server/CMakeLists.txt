@@ -21,5 +21,7 @@ else()
             $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -Wshadow -Wimplicit-fallthrough -Wstrict-prototypes>
             $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
                 -Wimplicit-fallthrough>)
+        include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/strict_warnings.cmake)
+        rtk_strict_warnings(${COMPONENT_LIB})
     endif()
 endif()

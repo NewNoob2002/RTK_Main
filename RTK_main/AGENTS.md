@@ -59,6 +59,7 @@ ADR-0007 新增的纯组件（app_fw、bt_reconnect）与 link_core 的 `service
 - IDF 依赖的 C（spp_server、nvs_store 的 .c）：`-Wall -Wextra -Werror -Wshadow -Wimplicit-fallthrough -Wstrict-prototypes`
 - 纯组件：`-Wall -Wextra -Werror -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough -Wswitch-default -Wundef`
 - IDF 依赖组件与 main：`-Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough`。IDF 宏会触发 `-Wold-style-cast`、`-Wconversion`、`-Wundef`，这三项不开，并在 CMakeLists 注释中写明原因。
+- **调试阶段告警即错误**：每个自有组件、`main`、`test_apps/*/main` 的 CMakeLists 在上述选项之后调用 `rtk_strict_warnings(<target>)`（`cmake/strict_warnings.cmake`，开关 `CONFIG_RTK_STRICT_WARNINGS`，默认 y）。它把 IDF 默认降级的 `unused-function/unused-variable/unused-but-set-variable/deprecated-declarations/extra` 改回错误，并重新打开 `-Wunused-parameter`、`-Wsign-compare`。新增组件必须调用它。`.clangd` 的 ESP 段追加同一组选项，`.clang-tidy`/`.clang-tidy-c` 为 `WarningsAsErrors: '*'`，LSP 中出现的告警与构建同等对待。不得用 `-Wno-error`、`#pragma GCC diagnostic` 或关掉该开关来通过构建；确需豁免时用具名 `NOLINT(<check>)` 或 `[[maybe_unused]]` 并写明理由。
 
 ## 4. 冻结输入（不得修改）
 

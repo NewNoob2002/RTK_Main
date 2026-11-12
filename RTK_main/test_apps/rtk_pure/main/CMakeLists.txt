@@ -10,3 +10,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=c11 -Wall -Wextra -Werror -Wshadow -Wimplicit-fallthrough -Wstrict-prototypes>
     $<$<COMPILE_LANGUAGE:CXX>:-std=c++20 -Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
         -Wimplicit-fallthrough>)
+
+# 调试阶段告警即错误（cmake/strict_warnings.cmake）
+include(${CMAKE_CURRENT_LIST_DIR}/../../../cmake/strict_warnings.cmake)
+rtk_strict_warnings(${COMPONENT_LIB})

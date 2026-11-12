@@ -72,6 +72,17 @@ CompileFlags:
     - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include
     - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include-fixed
     - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/xtensa-esp-elf/include
+    # 调试阶段告警即错误（与 cmake/strict_warnings.cmake 同一组）：编译数据库里 IDF 的
+    # -Wno-error=unused-* / -Wno-unused-parameter 等排在前面，这里追加的同名项在后面生效，
+    # 即使编译数据库是旧构建目录生成的，LSP 也按错误显示。
+    - -Werror
+    - -Werror=unused-function
+    - -Werror=unused-variable
+    - -Werror=unused-but-set-variable
+    - -Werror=deprecated-declarations
+    - -Werror=extra
+    - -Wunused-parameter
+    - -Wsign-compare
 # IDF 头里的 do-while/union/vararg 宏会触发项目 C++ 规则；正式门禁只对 host 纯组件执行
 # clang-tidy，ESP 侧由编译告警把关，故在 LSP 中静音这四类来自 IDF 展开的诊断。
 Diagnostics:

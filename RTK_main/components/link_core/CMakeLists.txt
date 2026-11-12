@@ -13,3 +13,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wall -Wextra -Werror -Wshadow -Wconversion -Wsign-conversion
     -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual
     -Wimplicit-fallthrough -Wswitch-default -Wundef)
+
+# 调试阶段告警即错误（cmake/strict_warnings.cmake，开关 CONFIG_RTK_STRICT_WARNINGS）
+include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/strict_warnings.cmake)
+rtk_strict_warnings(${COMPONENT_LIB})
