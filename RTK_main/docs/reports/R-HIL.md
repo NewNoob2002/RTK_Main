@@ -46,3 +46,19 @@
 
 - 板端：write_errors 0、disconnects 0、tx queue_full 0 max_depth 2、exec overruns 0 max_round 2 ms、heap min 137,068、link 栈余量 4,748。
 - 结论：PASS，与 J5 双会话基线（约 30 KB/s、p50 约 190 ms）一致；R2 当时缺的双会话一并覆盖。
+
+## R7（7a4e6eb，组件改名 + C 前缀/日志 tag）回归，2026-11-12
+
+固件 `builds/v-r7b` 烧录 ACM0（peer 固件未变，USB0 作为报警器自动重连）。
+- 启动：`I (464) app: RTK_main 6.1.0-dev boot`；`system: sn=D8B2 bt_name=E1-Lite-D8B2 policy=CONCURRENT`（NVS 无 sn，按 MAC 派生，与改前一致）；`whitelist: 1 pending=no store=ESP_OK 08:D1:F9:DD:3E:E6` —— NVS 命名空间 "rtk" 读取正常；报警器上电自动连上 role=ALARM。
+- 双会话（主机 PHONE + 报警器 ALARM）：
+
+| 场景 | 实发 | RTCM 帧/字节/crc | rx_dropped | 产品 | p50/p99 ms |
+| --- | ---: | --- | ---: | --- | --- |
+| 5k + 产品 | 5.8 KB/s | 286/50142 一致 | 0 | 200/200 | 27/59 |
+| 20k + 产品 | 20.8 KB/s | 1107/200286 一致 | 0 | 201/201 | 33/76 |
+| 40k + 产品 | 40.8 KB/s | 2297/400252 一致 | 0 | 200/200 | 39/117 |
+| 30k 仅 RTCM | 30.0 KB/s | 1695/300071 一致 | 0 | — | — |
+
+- 结束时：disconnects=0，write_errors=0，tx failed=0 queue_full=0，exec overruns=0 max_round_ms=2，heap min 136,952，link stack free 4748。
+- 本轮 40k 双会话未被 RFCOMM 限到 ~29 KB/s（前几轮如此），推测为射频环境差异，未深究。
