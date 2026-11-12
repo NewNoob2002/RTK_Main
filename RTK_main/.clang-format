@@ -1,0 +1,40 @@
+# 近似 ESP-IDF Astyle 规则（tools/ci/astyle-rules.yml：--style=otbs --attach-namespaces
+# --attach-classes --indent=spaces=4 --pad-header --pad-oper --unpad-paren，120 列）。
+# 权威格式门禁仍是 astyle_py 3.4.7（见 AGENTS.md §5）；本文件用于日常检查与编辑器。
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true        # otbs：函数定义花括号换行
+  AfterClass: false          # --attach-classes
+  AfterNamespace: false      # --attach-namespaces
+  AfterStruct: false
+  AfterEnum: false
+  AfterUnion: false
+  AfterControlStatement: Never
+  BeforeElse: false
+  BeforeCatch: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+InsertBraces: true           # otbs：控制语句总加花括号
+NamespaceIndentation: None
+AccessModifierOffset: -4
+IndentCaseLabels: false     # astyle 未开 --indent-switches
+PointerAlignment: Right      # IDF 风格：char *p
+ReferenceAlignment: Right
+SpaceBeforeParens: ControlStatements
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+SortIncludes: Never
+FixNamespaceComments: true
+InsertNewlineAtEOF: true
+LineEnding: LF
+MaxEmptyLinesToKeep: 1
+AlignConsecutiveMacros: Consecutive  # IDF 头文件常见的宏值对齐；Astyle 不改动

@@ -1,0 +1,23 @@
+# C 文件的 clang-tidy 配置（ADR-0003）。命名按 ESP-IDF Style（组件前缀、s_ 静态），不套用 C++ 命名规则。
+# 用法：clang-tidy -p builds/host --config-file=.clang-tidy-c <file.c>
+# 关闭项：bugprone-easily-swappable-parameters（字节/长度类接口噪声大）；
+#         readability-magic-numbers 只忽略 0/1/2/8/16/32/0xFF 与 2 的幂（协议常量须命名）。
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-*,
+  clang-analyzer-*,
+  misc-redundant-expression,
+  misc-unused-parameters,
+  readability-braces-around-statements,
+  readability-function-size,
+  readability-magic-numbers,
+  readability-misleading-indentation,
+  readability-non-const-parameter
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/RTK_main/(components|main|test)/.*'
+CheckOptions:
+  readability-function-size.LineThreshold: 100
+  readability-magic-numbers.IgnoredIntegerValues: '0;1;2;8;16;32;255'
+  readability-magic-numbers.IgnorePowersOf2IntegerValues: true

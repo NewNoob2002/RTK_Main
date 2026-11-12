@@ -1,0 +1,90 @@
+# clangd 配置：按文件所属平台选择编译数据库和系统头，避免 host 测试与 ESP-IDF 目标互相污染。
+# 构建目录不存在时先运行 AGENTS.md §5 的对应命令：
+#   host: cmake -S test/host -B builds/host
+#   ESP : . ~/esp/esp-idf/export.sh && idf.py build
+# 修改本文件后 clangd 会立即重载，无需重启编辑器。
+#
+# 系统头：esp-clangd 不带内置头；下面按文件路径分别补齐 host 与 xtensa 工具链的 include 路径，
+# 因此不传 --query-driver 也能解析。若工具链升级或希望自动提取，可给 clangd 传：
+#   --query-driver=/usr/bin/cc,/usr/bin/c++,$HOME/.espressif/tools/xtensa-esp-elf/*/xtensa-esp-elf/bin/xtensa-esp32-elf-g*
+# （$HOME 按编辑器支持的展开方式填写；gcc 与 g++ 都要匹配，C/C++ 文件各用其一）
+
+CompileFlags:
+  CompilationDatabase: builds/host
+  BuiltinHeaders: QueryDriver
+
+---
+# host 侧：test/host 与可在 host 编译的纯组件 rtk_proto/rtk_core。
+If:
+  PathMatch: (test|components/rtk_proto|components/rtk_core)/.*
+CompileFlags:
+  # esp-clangd 的默认 target 是 riscv32-esp，host 文件显式指定 x86_64 并补齐本机 GCC 16 的系统头
+  # （与当前工作站一致，升级 GCC 时同步修改）。
+  Add:
+    - --target=x86_64-unknown-linux-gnu
+    - -isystem/usr/include/c++/16
+    - -isystem/usr/include/c++/16/x86_64-pc-linux-gnu
+    - -isystem/usr/include/c++/16/backward
+    - -isystem/usr/lib/gcc/x86_64-pc-linux-gnu/16/include
+    - -isystem/usr/local/include
+    - -isystem/usr/include
+
+---
+# ESP-IDF 目标侧：main 与依赖 esp_*/freertos/nvs 的组件。
+If:
+  PathMatch: (main|test_apps|components/rtk_bt|components/rtk_os|components/rtk_store)/.*
+CompileFlags:
+  CompilationDatabase: build
+  # esp-clangd 不带内置头；由 xtensa GCC 提供。
+  BuiltinHeaders: QueryDriver
+  # xtensa GCC 专有、clang 不认识的目标选项；不影响真实构建，仅从 LSP 解析命令中移除。
+  Remove:
+    - -mno-target-align
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -fzero-init-padding-bits=*
+    - -fno-malloc-dce
+    # 以下来自 IDF 的 @toolchain/{c,cxx}flags 响应文件与组件选项；clangd 展开响应文件后同样需要移除。
+    - -mlongcalls
+    - -freorder-blocks
+    - -fno-shrink-wrap
+    - -specs=*
+  # xtensa GCC 15.2 的系统头搜索路径（工具链升级时同步修改）。
+  # 已传 --query-driver 时这些路径重复出现，clang 会去重，无副作用。
+  Add:
+    - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include
+    - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/xtensa-esp-elf/include/c++/15.2.0
+    - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/xtensa-esp-elf/include/c++/15.2.0/xtensa-esp-elf/esp32
+    - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/xtensa-esp-elf/include/c++/15.2.0/backward
+    - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include
+    - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include-fixed
+    - -isystem/home/gtc/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/xtensa-esp-elf/include
+# IDF 头里的 do-while/union/vararg 宏会触发项目 C++ 规则；正式门禁只对 host 纯组件执行
+# clang-tidy，ESP 侧由编译告警把关，故在 LSP 中静音这四类来自 IDF 展开的诊断。
+Diagnostics:
+  Suppress:
+    - cppcoreguidelines-avoid-do-while
+    - cppcoreguidelines-pro-type-union-access
+    - cppcoreguidelines-pro-type-vararg
+    - hicpp-signed-bitwise
+    # LLVM 23 起该检查以 bugprone-signed-bitwise 报告，旧名单独屏蔽无效。
+    - bugprone-signed-bitwise
+
+---
+# C 文件与 C 公共头（.h）的静态检查由 .clang-tidy-c 在命令行执行；clangd 只会读取 .clang-tidy
+# （C++ 规则），直接套用会产生 modernize-use-nullptr、C++ 命名等伪发现。本工程 C++ 头均为 .hpp，
+# 因此这里按扩展名关闭 C 侧 clang-tidy 诊断。
+If:
+  PathMatch: .*\.(c|h)$
+Diagnostics:
+  ClangTidy:
+    Remove: '*'
+
+---
+# reference/ 是只读参考实现，不参与构建；不建索引，避免与正式代码符号混淆。
+If:
+  PathMatch: reference/.*
+CompileFlags:
+  CompilationDatabase: None
+Index:
+  Background: Skip

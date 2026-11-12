@@ -1,0 +1,16 @@
+# host 测试的 C++ clang-tidy 配置：继承根 .clang-tidy，只放宽测试代码固有的写法（2026-11-11 用户授权）。
+# C 测试（*.c）由 tools/tidy_check/tidy_check.py 对 .clang-tidy-c 追加同样的排除项。
+#   readability-magic-numbers                        测试向量、期望值本身就是字面量，命名反而降低可读性
+#   cppcoreguidelines-pro-bounds-pointer-arithmetic  测试逐字节构造/篡改帧缓冲区
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+#                                                    要求 C11 Annex K（memset_s），picolibc/glibc 均不提供
+#   bugprone/hicpp-signed-bitwise                    测试按小端从 uint8_t 组装期望值（整型提升为 int），被测代码已覆盖该规则
+#   misc-const-correctness                           冻结测试中的局部结果变量；不影响被测代码，被测代码仍执行该规则
+InheritParentConfig: true
+Checks: >
+  -readability-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -bugprone-signed-bitwise,
+  -hicpp-signed-bitwise,
+  -misc-const-correctness

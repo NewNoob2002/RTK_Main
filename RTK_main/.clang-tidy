@@ -1,0 +1,84 @@
+# C++ 文件的 clang-tidy 配置（embedded-engineering，方案 A）。
+# RTK_main：取自 embedded-engineering assets/cpp/.clang-tidy，按 esp-idf profile 调整：
+#   - 文件作用域静态变量用 s_ 前缀（ESP-006）；HeaderFilterRegex 只覆盖本工程 C++ 头
+#     （.hpp/.hh/.hxx）；C 公共头交给 .clang-tidy-c，避免 C++ 命名规则误报。
+#   - 门禁只对纯 C++ 组件（rtk_proto、rtk_core）与 host 测试执行：本机 clang 无 Xtensa target，
+#     依赖 IDF 的翻译单元无法完整解析，改由编译告警 + 人工审查把关。
+#
+# 关闭项及原因：
+#   bugprone-easily-swappable-parameters       寄存器/地址类接口大量同类型参数，噪声过大
+#   cppcoreguidelines-avoid-magic-numbers      与 readability-magic-numbers 重复
+#   cppcoreguidelines-avoid-non-const-global-variables
+#                                              静态分配要求全局对象；只允许出现在 app/ 组合根，由审查把关
+#   cppcoreguidelines-owning-memory            依赖 GSL owner<>，嵌入式不引入 GSL
+#   cppcoreguidelines-pro-bounds-constant-array-index
+#                                              要求 gsl::at，嵌入式不引入 GSL；越界由断言/掩码保证
+#   cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
+#                                              同上：嵌入式容器的 .at() 会抛异常或 abort；索引由掩码/断言保证
+#   cppcoreguidelines-pro-type-reinterpret-cast / pro-bounds-pointer-arithmetic
+#                                              仅在 platform/ 豁免（MMIO、DMA 描述符），见 clang-tidy-platform.yaml
+---
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  performance-*,
+  modernize-deprecated-headers,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-using,
+  modernize-use-equals-default,
+  modernize-use-equals-delete,
+  misc-const-correctness,
+  misc-redundant-expression,
+  misc-static-assert,
+  misc-unused-parameters,
+  misc-unused-using-decls,
+  hicpp-signed-bitwise,
+  bugprone-signed-bitwise,
+  readability-braces-around-statements,
+  readability-function-size,
+  readability-identifier-naming,
+  readability-magic-numbers
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/RTK_main/(components|main|test)/.*\.(hpp|hh|hxx)$'
+CheckOptions:
+  cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted: true
+  # span 是“指针 + 长度”，按值传递是惯用法（Core Guidelines F.16），不要改成 const 引用。
+  performance-unnecessary-value-param.AllowedTypes: 'etl::span;std::span;pw::span;std::string_view;etl::string_view'
+  readability-function-size.LineThreshold: 100
+  readability-magic-numbers.IgnoredIntegerValues: '0;1;2;8;16;32;64'
+  readability-magic-numbers.IgnorePowersOf2IntegerValues: true
+  # 命名（方案 A）：类型 CamelCase；函数/变量 lower_case；私有/受保护成员后缀 _；
+  # 常量 k 前缀；可变全局/文件作用域变量 s_ 前缀（AGENTS.md §2：放进匿名命名空间，不用 g_）；宏全大写。
+  # clang-tidy 把匿名命名空间中的变量归为 GlobalVariable，因此 GlobalVariablePrefix 也必须是 s_
+  # （2026-11-11 修订：原值 g_ 与 AGENTS.md 冲突，所有 s_ 变量均被误报）。
+  readability-identifier-naming.NamespaceCase: lower_case
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.StructCase: CamelCase
+  readability-identifier-naming.UnionCase: CamelCase
+  readability-identifier-naming.EnumCase: CamelCase
+  readability-identifier-naming.TypeAliasCase: CamelCase
+  readability-identifier-naming.TypedefCase: CamelCase
+  readability-identifier-naming.ConceptCase: CamelCase
+  readability-identifier-naming.TemplateParameterCase: CamelCase
+  readability-identifier-naming.FunctionCase: lower_case
+  readability-identifier-naming.MethodCase: lower_case
+  readability-identifier-naming.VariableCase: lower_case
+  readability-identifier-naming.ParameterCase: lower_case
+  readability-identifier-naming.PrivateMemberSuffix: _
+  readability-identifier-naming.ProtectedMemberSuffix: _
+  readability-identifier-naming.EnumConstantCase: CamelCase
+  readability-identifier-naming.EnumConstantPrefix: k
+  readability-identifier-naming.ConstexprVariableCase: CamelCase
+  readability-identifier-naming.ConstexprVariablePrefix: k
+  readability-identifier-naming.GlobalVariablePrefix: s_
+  # StaticVariable 只匹配函数内 static（文件作用域 static 归入 GlobalVariable）；AGENTS.md 只要求文件作用域 s_，
+  # 函数内静态缓冲区不强制前缀（2026-11-11 修订，删除原 StaticVariablePrefix: s_）。
+  readability-identifier-naming.MacroDefinitionCase: UPPER_CASE

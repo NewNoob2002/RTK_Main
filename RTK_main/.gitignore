@@ -1,0 +1,48 @@
+# ESP-IDF 构建产物
+build/
+build-*/
+# 除 idf.py 默认的 build/ 外，所有构建目录统一放在 builds/<名称>/
+builds/
+/sdkconfig
+/sdkconfig.old
+# 组件管理器下载的依赖（dependencies.lock 需要提交，不在此忽略）
+managed_components/
+
+# 编辑器 / 语言服务器缓存
+.cache/
+.clangd/
+.vscode/
+.idea/
+compile_commands.json
+
+# Python / pytest-embedded
+__pycache__/
+*.pyc
+.pytest_cache/
+pytest_embedded_log/
+
+# 其他
+*.log
+*.bak
+*~
+.DS_Store
+
+# 板上整片/分区读出的备份含 NVS（蓝牙绑定信息等），只留在本地
+docs/reports/logs/**/*.bin
+# 主机/交叉编译中间产物与可执行文件（开发探针目录）
+*.o
+*.su
+reference/c-demux-v1/test/demux_dev/g1/*
+!reference/c-demux-v1/test/demux_dev/g1/*.c
+!reference/c-demux-v1/test/demux_dev/g1/*.h
+!reference/c-demux-v1/test/demux_dev/g1/*.md
+!reference/c-demux-v1/test/demux_dev/g1/*.txt
+test/stream_demux_dev/h1/*
+!test/stream_demux_dev/h1/*.c
+!test/stream_demux_dev/h1/*.h
+!test/stream_demux_dev/h1/*.cpp
+!test/stream_demux_dev/h1/*.md
+!test/stream_demux_dev/h1/*.txt
+# 测试工程由 sdkconfig.defaults 生成
+test_apps/*/sdkconfig
+test_apps/*/sdkconfig.old

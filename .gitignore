@@ -1,0 +1,4 @@
+# 工具缓存
+.codegraph/
+.ruff_cache/
+.cache/

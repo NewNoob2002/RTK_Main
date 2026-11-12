@@ -1,0 +1,11 @@
+# ESP-IDF 依赖代码的 C++ clang-tidy 配置：继承根 .clang-tidy（2026-11-11 用户授权纳入 G5b）。
+# 以下四类几乎全部来自 IDF 宏展开（ESP_LOGx/ESP_RETURN_ON_ERROR 的 vararg 与 do-while、
+# portMUX/队列宏中的 union 访问、BIT()/事件组宏中的有符号位运算），与 .clangd 中的 LSP 屏蔽保持一致。
+# 代价：自有代码中的同类写法也不再报告，由编译告警（-Wall -Wextra）与人工审查 G8 把关。
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-pro-type-vararg,
+  -hicpp-signed-bitwise,
+  -bugprone-signed-bitwise
