@@ -294,6 +294,37 @@ void LinkManager::whitelist_clear() noexcept
     trace_link(LinkTrace::kWhitelistClear, 0);
 }
 
+WhitelistEdit LinkManager::whitelist_add(const BtAddr &addr) noexcept
+{
+    if (contains_addr(std::span<const BtAddr>(alarms_.data(), alarm_count_), addr)) {
+        return WhitelistEdit::kUnchanged;
+    }
+    if (alarm_count_ >= kMaxAlarms) {
+        return WhitelistEdit::kFull;
+    }
+    alarms_[alarm_count_] = addr;
+    ++alarm_count_;
+    trace_link(LinkTrace::kWhitelistAdd, 0, static_cast<uint32_t>(alarm_count_));
+    return WhitelistEdit::kDone;
+}
+
+WhitelistEdit LinkManager::whitelist_remove(const BtAddr &addr) noexcept
+{
+    for (size_t i = 0; i < alarm_count_; ++i) {
+        if (alarms_[i] == addr) {
+            // 后续条目前移，保持持久化顺序稳定。
+            for (size_t j = i + 1U; j < alarm_count_; ++j) {
+                alarms_[j - 1U] = alarms_[j];
+            }
+            --alarm_count_;
+            alarms_[alarm_count_] = BtAddr{};
+            trace_link(LinkTrace::kWhitelistRemove, 0, static_cast<uint32_t>(alarm_count_));
+            return WhitelistEdit::kDone;
+        }
+    }
+    return WhitelistEdit::kUnchanged;
+}
+
 std::span<const BtAddr> LinkManager::whitelist() const noexcept
 {
     return {alarms_.data(), alarm_count_};

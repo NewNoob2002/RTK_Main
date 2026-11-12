@@ -118,6 +118,8 @@ private:
     void apply_rtcm_reset() noexcept;
     void set_alarm(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     void clear_whitelist(fw::CommandResult &result) noexcept;
+    void edit_whitelist(const fw::Command &cmd, bool add, fw::CommandResult &result) noexcept;
+    void persist_whitelist(fw::CommandResult &result) noexcept;
 
     AppContext &context_;
     uint32_t last_tick_ms_ = 0;

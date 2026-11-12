@@ -232,10 +232,48 @@ static void test_handles_and_clear_keeps_roles()
     TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.role(kAlarm));
 }
 
+static void test_whitelist_add_remove_single()
+{
+    using core::WhitelistEdit;
+    init_with_alarm(Policy::kConcurrent);
+    TEST_ASSERT_TRUE(WhitelistEdit::kUnchanged == s_mgr.whitelist_add(kAlarmAddr)); // 已存在
+    TEST_ASSERT_TRUE(WhitelistEdit::kDone == s_mgr.whitelist_add(kOtherAddr));
+    TEST_ASSERT_EQUAL_UINT(2, s_mgr.whitelist().size());
+    TEST_ASSERT_TRUE(s_mgr.whitelist()[1] == kOtherAddr);
+    // 手动加入的地址连接后直接是 ALARM。
+    TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.on_open(kOther, kOtherAddr, 0, s_act));
+    // 删除首条：后续条目前移，已连接会话角色不变。
+    static_cast<void>(s_mgr.on_open(kAlarm, kAlarmAddr, 0, s_act));
+    TEST_ASSERT_TRUE(WhitelistEdit::kDone == s_mgr.whitelist_remove(kAlarmAddr));
+    TEST_ASSERT_EQUAL_UINT(1, s_mgr.whitelist().size());
+    TEST_ASSERT_TRUE(s_mgr.whitelist()[0] == kOtherAddr);
+    TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.role(kAlarm));
+    TEST_ASSERT_TRUE(WhitelistEdit::kUnchanged == s_mgr.whitelist_remove(kAlarmAddr)); // 不存在
+    // 重连按新白名单判定：已有 ALARM 占位但无 PHONE → 未知地址成为 PHONE。
+    s_mgr.on_close(kAlarm);
+    TEST_ASSERT_TRUE(Role::kPhone == s_mgr.on_open(kAlarm, kAlarmAddr, 10, s_act));
+}
+
+static void test_whitelist_add_full()
+{
+    std::array<BtAddr, core::kMaxAlarms> full{};
+    for (size_t i = 0; i < full.size(); ++i) {
+        full[i].bytes.fill(static_cast<uint8_t>(0xC0U + i));
+    }
+    s_mgr.init(Policy::kConcurrent, full);
+    TEST_ASSERT_TRUE(core::WhitelistEdit::kFull == s_mgr.whitelist_add(kOtherAddr));
+    TEST_ASSERT_TRUE(core::WhitelistEdit::kDone == s_mgr.whitelist_remove(full[1]));
+    TEST_ASSERT_TRUE(s_mgr.whitelist()[1] == full[2]);
+    TEST_ASSERT_TRUE(core::WhitelistEdit::kDone == s_mgr.whitelist_add(kOtherAddr));
+    TEST_ASSERT_TRUE(s_mgr.whitelist()[core::kMaxAlarms - 1U] == kOtherAddr);
+}
+
 int main()
 {
     UNITY_BEGIN();
     RUN_TEST(test_whitelisted_is_alarm_unknown_is_phone);
+    RUN_TEST(test_whitelist_add_remove_single);
+    RUN_TEST(test_whitelist_add_full);
     RUN_TEST(test_second_phone_rejected_without_pairing);
     RUN_TEST(test_duplicate_handle_and_full_table_rejected);
     RUN_TEST(test_preempt_phone_kicks_alarm);

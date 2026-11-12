@@ -18,6 +18,13 @@ inline constexpr uint32_t kPairWindowMs = 60000;    // 配对窗口（>= 阈值�
 inline constexpr uint16_t kHelloMsgId = 0x0041;
 inline constexpr uint8_t kHelloSender = 0x03;
 
+/** 单条白名单编辑结果。 */
+enum class WhitelistEdit : uint8_t {
+    kDone = 0,  // 已加入 / 已移除
+    kUnchanged, // add：地址已存在；remove：地址不在白名单
+    kFull,      // add：白名单已满（kMaxAlarms）
+};
+
 // 一次调用要求调用方断开的句柄（按产生顺序）。每个修改型调用开始时先清空。
 /** 一次状态转移要求传输层执行的动作（待断开句柄）；由调用方逐条执行，自身不持有传输层。 */
 struct Actions {
@@ -86,6 +93,10 @@ public:
     [[nodiscard]] bool is_pairing() const noexcept;
 
     void whitelist_clear() noexcept; // 不影响已连接会话的角色
+    /** 手动加入一条报警器地址（追加到末尾）；不影响已连接会话的角色。 */
+    [[nodiscard]] WhitelistEdit whitelist_add(const BtAddr &addr) noexcept;
+    /** 移除一条地址，其后条目前移保持顺序；不影响已连接会话的角色（断开后重连按新白名单判定）。 */
+    [[nodiscard]] WhitelistEdit whitelist_remove(const BtAddr &addr) noexcept;
     [[nodiscard]] std::span<const BtAddr> whitelist() const noexcept;
 
     [[nodiscard]] Policy policy() const noexcept;

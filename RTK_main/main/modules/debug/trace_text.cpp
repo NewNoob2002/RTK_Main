@@ -30,6 +30,7 @@ constexpr std::array<TraceField, 1U> kLinkPairOpen = {{{"window_ms", TraceValue:
 constexpr std::array<TraceField, 1U> kLinkPairClose = {{{"timeout", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 1U> kLinkWhitelistAdd = {{{"count", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 0U> kLinkWhitelistClear = {{}};
+constexpr std::array<TraceField, 1U> kLinkWhitelistRemove = {{{"count", TraceValue::kDecA}}};
 
 constexpr std::array<TraceField, 3U> kProtoFrame = {
     {{"h", TraceValue::kSession}, {"id", TraceValue::kHexA}, {"len", TraceValue::kDecB}}};
@@ -73,7 +74,7 @@ constexpr std::array<TraceField, 1U> kSppAuth = {{{"status", TraceValue::kDecA}}
 constexpr std::array<TraceField, 2U> kSppEvtDrop = {{{"type", TraceValue::kDecA}, {"total", TraceValue::kDecB}}};
 
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
-constexpr std::array<TraceText, 37U> kTable = {{
+constexpr std::array<TraceText, 38U> kTable = {{
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen), "open", std::span<const TraceField>(kLinkOpen)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kClose), "close",
      std::span<const TraceField>(kLinkClose)},
@@ -92,6 +93,8 @@ constexpr std::array<TraceText, 37U> kTable = {{
      std::span<const TraceField>(kLinkWhitelistAdd)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kWhitelistClear), "wl-clear",
      std::span<const TraceField>(kLinkWhitelistClear)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kWhitelistRemove), "wl-del",
+     std::span<const TraceField>(kLinkWhitelistRemove)},
     {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kFrame), "frame",
      std::span<const TraceField>(kProtoFrame)},
     {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kReply), "reply",

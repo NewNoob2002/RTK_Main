@@ -23,6 +23,7 @@ enum class LinkTrace : uint8_t {
     kPairClose,      // 配对窗口关闭：a = 1 超时 / 0 主动
     kWhitelistAdd,   // a = 白名单当前数量
     kWhitelistClear,
+    kWhitelistRemove, // a = 白名单当前数量
 };
 
 /** kOpen/kKick 的判定依据。 */

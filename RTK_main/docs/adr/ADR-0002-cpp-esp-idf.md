@@ -78,3 +78,7 @@ ESP32：8 MB Flash，520 KB SRAM，双核，归入 **T2**。本工程自有代�
 ## 8. 迁移
 
 C 版实现（BATCH-A 已通过独立验收；BATCH-B 只有实现方自报的结果）移入 `reference/c-v1/`，只读，不参与构建。移植时以 C 版的行为和 IDF 核实结论为参考，以冻结的 C++ 头文件和测试为准。
+
+## 9. 修订记录
+
+- **2026-11-12 冻结接口演进（追加，不改原有语义）**：`core::LinkManager` 新增 `whitelist_add(const BtAddr&)` / `whitelist_remove(const BtAddr&)`，返回 `core::WhitelistEdit{kDone,kUnchanged,kFull}`；remove 删除后条目前移保持顺序；两者与 `whitelist_clear()` 一致，不影响已连接会话的角色（断开重连后按新白名单判定）。`core::LinkTrace` 追加 `kWhitelistRemove`（a = 白名单数量）；手动 add 复用 `kWhitelistAdd`（handle = 0）。用途：控制台 `wl add/del <MAC>`（`LinkVerb::kWhitelistAdd/kWhitelistDel`，args = 6 字节 MAC，改动立即落 NVS）。用例：`test/host/test_link_manager.cpp` `test_whitelist_add_remove_single`、`test_whitelist_add_full`。

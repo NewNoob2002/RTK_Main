@@ -3,6 +3,7 @@
 
 #include "modules/bt_link/bt_link_module.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <cstddef>
@@ -118,8 +119,9 @@ int cmd_wl_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-int wl_single_entry_stub(const char *op, int argc, char **argv) noexcept
+int wl_edit(bool add, int argc, char **argv) noexcept
 {
+    const char *const op = add ? "add" : "del";
     if ((argc != static_cast<int>(kTwoArgs)) || (argv == nullptr)) {
         return cli::fail("usage: wl %s <MAC>", op);
     }
@@ -128,18 +130,37 @@ int wl_single_entry_stub(const char *op, int argc, char **argv) noexcept
     if (!cli::parse_mac(args[1], mac)) {
         return cli::fail("bad MAC");
     }
-    // 冻结的 LinkManager 尚未提供单条白名单增删接口（T2 任务卡列为后续项）。
-    return cli::fail("not supported");
+    static_assert(cli::kMacLen == core::kAddrLen, "MAC length mismatch");
+    fw::Command command{};
+    command.target = id(ModuleKind::kBtLink);
+    command.verb = verb(add ? LinkVerb::kWhitelistAdd : LinkVerb::kWhitelistDel);
+    std::copy(mac.begin(), mac.end(), command.args.begin());
+    command.arg_len = static_cast<uint8_t>(core::kAddrLen);
+    fw::CommandResult result{};
+    if (!submit_raw(command, result)) {
+        return cli::kCmdFail;
+    }
+    switch (result.status) {
+    case fw::Result::kInvalidState:
+        return cli::fail("already in whitelist");
+    case fw::Result::kNotFound:
+        return cli::fail("not in whitelist");
+    case fw::Result::kNoSpace:
+        return cli::fail("whitelist full (%u)", static_cast<unsigned>(kMaxAlarms));
+    default:
+        break;
+    }
+    return report(add ? "wl add" : "wl del", result) ? 0 : cli::kCmdFail;
 }
 
 int cmd_wl_add(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    return wl_single_entry_stub("add", argc, argv);
+    return wl_edit(true, argc, argv);
 }
 
 int cmd_wl_del(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    return wl_single_entry_stub("del", argc, argv);
+    return wl_edit(false, argc, argv);
 }
 
 int cmd_wl_clear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
@@ -219,8 +240,8 @@ constexpr std::array<cli::Verb, 3U> kBtVerbs{{
 
 constexpr std::array<cli::Verb, 4U> kWlVerbs{{
     {"list", nullptr, "list paired alarm whitelist", cmd_wl_list},
-    {"add", "<MAC>", "add alarm MAC (not supported yet)", cmd_wl_add},
-    {"del", "<MAC>", "remove alarm MAC (not supported yet)", cmd_wl_del},
+    {"add", "<MAC>", "add alarm MAC (persisted)", cmd_wl_add},
+    {"del", "<MAC>", "remove alarm MAC (persisted)", cmd_wl_del},
     {"clear", nullptr, "clear alarm whitelist", cmd_wl_clear},
 }};
 

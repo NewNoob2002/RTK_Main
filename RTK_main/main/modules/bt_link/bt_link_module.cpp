@@ -439,10 +439,43 @@ void BtLinkModule::clear_whitelist(fw::CommandResult &result) noexcept
 {
     /* 清除内存白名单并同步持久化，回执携带原后端错误码。 */
     link_manager_.whitelist_clear();
+    persist_whitelist(result);
+}
+
+void BtLinkModule::persist_whitelist(fw::CommandResult &result) noexcept
+{
+    /* 控制台改动立即落盘（不走 HELLO 学习的延迟合并），回执携带原后端错误码。 */
     context_.storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
     result.detail = context_.storage.flush_whitelist(rtos::now_ms());
     if (result.detail != ESP_OK) {
         result.status = fw::Result::kIoError;
+    }
+}
+
+void BtLinkModule::edit_whitelist(const fw::Command &cmd, bool add, fw::CommandResult &result) noexcept
+{
+    /* args = 6 字节 MAC；仅在白名单实际变化时持久化。 */
+    if (cmd.arg_len != core::kAddrLen) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    core::BtAddr addr{};
+    std::copy_n(cmd.args.begin(), core::kAddrLen, addr.bytes.begin());
+    const core::WhitelistEdit edit = add ? link_manager_.whitelist_add(addr) : link_manager_.whitelist_remove(addr);
+    switch (edit) {
+    case core::WhitelistEdit::kDone:
+        persist_whitelist(result);
+        break;
+    case core::WhitelistEdit::kUnchanged:
+        // add：已存在；del：不存在。由 CLI 按动词翻译成可读错误。
+        result.status = add ? fw::Result::kInvalidState : fw::Result::kNotFound;
+        break;
+    case core::WhitelistEdit::kFull:
+        result.status = fw::Result::kNoSpace;
+        break;
+    default:
+        result.status = fw::Result::kInvalidArg;
+        break;
     }
 }
 
@@ -471,6 +504,12 @@ void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result)
         break;
     case LinkVerb::kWhitelistClear:
         clear_whitelist(result);
+        break;
+    case LinkVerb::kWhitelistAdd:
+        edit_whitelist(cmd, true, result);
+        break;
+    case LinkVerb::kWhitelistDel:
+        edit_whitelist(cmd, false, result);
         break;
     default:
         result.status = fw::Result::kInvalidArg;
