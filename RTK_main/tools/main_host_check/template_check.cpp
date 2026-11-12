@@ -1,0 +1,374 @@
+// 模块模板主机回归：验证 TemplateModule 接入 Executor 生命周期、CommandBus 路由与控制台命令表。
+#include "app_context.hpp"
+#include "modules/_template/template_module.hpp"
+#include "rtk/fw/module.hpp"
+#include "rtk/os/esp_status.hpp"
+#include "rtk_bt_spp.h"
+#include "rtk_store.h"
+
+#include <array>
+#include <csetjmp>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+namespace rtk::app {
+namespace {
+constinit AppContext s_test_app{};
+}
+AppContext &app_context() noexcept
+{
+    return s_test_app;
+}
+} // namespace rtk::app
+
+namespace {
+namespace app = rtk::app;
+namespace fw = rtk::fw;
+constexpr fw::ModuleId kTemplateId = 10U;
+constexpr size_t kBitsPerByte = 8U;
+uint32_t s_clock = 100U;
+int s_failures = 0;
+int s_critical = 0;
+TaskHandle_t s_current = nullptr;
+TaskHandle_t s_created = nullptr;
+uint32_t s_round_limit = 1U;
+uint32_t s_rounds = 0U;
+bool s_pump_receive = false;
+std::jmp_buf s_return{};
+#define CHECK(value)                                                                                                   \
+    do {                                                                                                               \
+        if (!(value)) {                                                                                                \
+            std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #value);                                                   \
+            ++s_failures;                                                                                              \
+        }                                                                                                              \
+    } while (false)
+
+void pump()
+{
+    const TaskHandle_t previous = s_current;
+    s_current = s_created;
+    s_rounds = 0U;
+    if (setjmp(s_return) == 0) {
+        s_created->fn(s_created->arg);
+    }
+    s_current = previous;
+}
+
+fw::Result bt_stub_init(void *) noexcept
+{
+    return fw::Result::kOk;
+}
+constexpr fw::ModuleOps kBtStubOps{bt_stub_init, nullptr, nullptr, nullptr};
+
+void wait_advance(void *, uint32_t max_ms) noexcept
+{
+    s_clock += max_ms;
+}
+
+fw::Command make_limit_cmd(fw::ModuleId target, uint32_t limit_ms) noexcept
+{
+    fw::Command cmd{};
+    cmd.target = target;
+    cmd.verb = app::verb(app::TemplateVerb::kSetLimit);
+    cmd.arg_len = static_cast<uint8_t>(sizeof(uint32_t));
+    for (size_t i = 0U; i < sizeof(uint32_t); ++i) {
+        cmd.args[i] = static_cast<uint8_t>(limit_ms >> (i * kBitsPerByte));
+    }
+    return cmd;
+}
+
+void test_lifecycle()
+{
+    auto &ctx = app::app_context();
+    ctx.data.init();
+    app::TemplateModule tmpl{ctx};
+
+    const auto ops = fw::make_ops<app::TemplateModule>();
+    CHECK(ops.init != nullptr && ops.start == nullptr && ops.poll != nullptr && ops.on_command != nullptr);
+
+    // 未 init 前的保护分支。
+    CHECK(!tmpl.poll(s_clock));
+    fw::CommandResult pre_res{};
+    tmpl.on_command(fw::Command{.verb = app::verb(app::TemplateVerb::kReset)}, pre_res);
+    CHECK(pre_res.status == fw::Result::kInvalidState);
+
+    static constinit std::array<fw::Module, 2> modules{{
+        {"bt_stub", app::id(app::ModuleKind::kBtLink), app::id(app::ExecKind::kLink), 0U, nullptr, &kBtStubOps},
+        {"template", kTemplateId, app::id(app::ExecKind::kLink), 0U, nullptr, nullptr},
+    }};
+    modules[1].self = &tmpl;
+    modules[1].ops = &ops;
+
+    const rtk::os::ExecutorConfig cfg{
+        .name = "tmpl_exec", .priority = 5U, .core = 1, .wait = wait_advance, .wait_ctx = nullptr};
+    CHECK(ctx.link_executor.init(cfg, modules, rtk::os::view_of(ctx.link_storage)) == rtk::Status::kOk);
+    CHECK(tmpl.state().initialized && tmpl.state().limit_ms == 1000U && tmpl.state().ticks == 0U);
+    CHECK(ctx.link_executor.start() == rtk::Status::kOk);
+
+    // 第 1 轮：ticks=1；第 2 轮只过 100 ms（< 1000 ms）不变；推进到 >= 1000 ms 后 ticks=2。
+    s_round_limit = 2U;
+    pump();
+    CHECK(tmpl.state().ticks == 1U);
+    s_clock += 1000U;
+    s_round_limit = 1U;
+    pump();
+    CHECK(tmpl.state().ticks == 2U);
+
+    // 通过 Executor CommandBus 验证合法/非法命令。
+    s_pump_receive = true;
+    fw::CommandResult res{};
+    CHECK(ctx.link_executor.call(make_limit_cmd(kTemplateId, 2500U), res, 100U) == fw::Result::kOk);
+    CHECK(res.status == fw::Result::kOk && tmpl.state().limit_ms == 2500U);
+
+    CHECK(ctx.link_executor.call(make_limit_cmd(kTemplateId, 0U), res, 100U) == fw::Result::kOk);
+    CHECK(res.status == fw::Result::kInvalidArg);
+    CHECK(ctx.link_executor.call(make_limit_cmd(kTemplateId, 60001U), res, 100U) == fw::Result::kOk);
+    CHECK(res.status == fw::Result::kInvalidArg);
+
+    fw::Command bad_len = make_limit_cmd(kTemplateId, 500U);
+    bad_len.arg_len = 2U;
+    CHECK(ctx.link_executor.call(bad_len, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+
+    fw::Command reset_bad{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 1U};
+    CHECK(ctx.link_executor.call(reset_bad, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+
+    fw::Command reset_ok{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 0U};
+    CHECK(ctx.link_executor.call(reset_ok, res, 100U) == fw::Result::kOk && res.status == fw::Result::kOk);
+    CHECK(tmpl.state().ticks == 0U);
+
+    fw::Command bad_verb{.target = kTemplateId, .verb = 99U};
+    CHECK(ctx.link_executor.call(bad_verb, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+}
+
+void test_commands_before_exec()
+{
+    auto &ctx = app::app_context();
+    ctx.data.init();
+    app::SystemStatus sys{};
+    sys.bt_ready = true;
+    ctx.data.system_status.write(sys);
+    rtk::os::ExecStats exec{};
+    exec.rounds = 42U;
+    ctx.data.exec_stats.write(exec);
+
+    const auto cmds = app::template_cmds();
+    CHECK(cmds.size() == 1U && std::strcmp(cmds[0].name, "tmpl") == 0 && cmds[0].handler != nullptr);
+    const auto fn = cmds[0].handler;
+
+    char prog[] = "tmpl";
+    char sub_status[] = "status";
+    char sub_limit[] = "limit";
+    char sub_bad[] = "bogus";
+    char arg_zero[] = "0";
+    char arg_over[] = "60001";
+    char arg_nan[] = "abc";
+    char arg_ok[] = "2500";
+
+    std::array<char *, 1> only_prog{prog};
+    std::array<char *, 2> status_ok{prog, sub_status};
+    std::array<char *, 3> status_extra{prog, sub_status, arg_ok};
+    std::array<char *, 2> bad_sub{prog, sub_bad};
+    std::array<char *, 2> limit_missing{prog, sub_limit};
+    std::array<char *, 3> limit_zero{prog, sub_limit, arg_zero};
+    std::array<char *, 3> limit_over{prog, sub_limit, arg_over};
+    std::array<char *, 3> limit_nan{prog, sub_limit, arg_nan};
+    std::array<char *, 3> limit_ok{prog, sub_limit, arg_ok};
+
+    CHECK(fn(nullptr, -1, status_ok.data()) == 1);
+    CHECK(fn(nullptr, 2, nullptr) == 1);
+    CHECK(fn(nullptr, 1, only_prog.data()) == 1);
+    CHECK(fn(nullptr, 2, status_ok.data()) == 0);
+    CHECK(fn(nullptr, 3, status_extra.data()) == 1);
+    CHECK(fn(nullptr, 2, bad_sub.data()) == 1);
+    CHECK(fn(nullptr, 2, limit_missing.data()) == 1);
+    CHECK(fn(nullptr, 3, limit_zero.data()) == 1);
+    CHECK(fn(nullptr, 3, limit_over.data()) == 1);
+    CHECK(fn(nullptr, 3, limit_nan.data()) == 1);
+    // 执行器未运行且目标为占位符时应安全拒绝并返回非 0。
+    CHECK(fn(nullptr, 3, limit_ok.data()) == 1);
+}
+
+void test_commands_after_exec()
+{
+    const auto cmds = app::template_cmds();
+    const auto fn = cmds[0].handler;
+    char prog[] = "tmpl";
+    char sub_status[] = "status";
+    char sub_limit[] = "limit";
+    char arg_ok[] = "2500";
+    std::array<char *, 2> status_ok{prog, sub_status};
+    std::array<char *, 3> limit_ok{prog, sub_limit, arg_ok};
+
+    // 执行器运行中：status 读取真实 DataCenter；占位目标 0xFF 经 submit() 安全返回 kNotFound -> 1。
+    CHECK(fn(nullptr, 2, status_ok.data()) == 0);
+    s_pump_receive = true;
+    CHECK(fn(nullptr, 3, limit_ok.data()) == 1);
+}
+} // namespace
+
+namespace rtk::os {
+uint32_t now_ms() noexcept
+{
+    CHECK(s_critical == 0);
+    return s_clock;
+}
+Status from_esp_err(esp_err_t err) noexcept
+{
+    return (err == ESP_OK) ? Status::kOk : Status::kTimeout;
+}
+} // namespace rtk::os
+
+extern "C" {
+void fake_crit_enter(void)
+{
+    CHECK(s_critical == 0);
+    ++s_critical;
+}
+void fake_crit_exit(void)
+{
+    --s_critical;
+    CHECK(s_critical == 0);
+}
+void fake_log(const char *, const char *, const char *, ...)
+{
+    CHECK(s_critical == 0);
+}
+const char *esp_err_to_name(esp_err_t)
+{
+    return "test";
+}
+uint32_t esp_get_free_heap_size(void)
+{
+    return 0U;
+}
+uint32_t esp_get_minimum_free_heap_size(void)
+{
+    return 0U;
+}
+TaskHandle_t xTaskGetCurrentTaskHandle(void)
+{
+    CHECK(s_critical == 0);
+    return s_current;
+}
+TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *, uint32_t, void *arg, UBaseType_t,
+                                           StackType_t *, StaticTask_t *tcb, BaseType_t)
+{
+    CHECK(s_critical == 0);
+    tcb->fn = fn;
+    tcb->arg = arg;
+    s_created = tcb;
+    return tcb;
+}
+QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item, uint8_t *area, StaticQueue_t *queue)
+{
+    CHECK(s_critical == 0);
+    queue->buf = area;
+    queue->capacity = length;
+    queue->item_size = item;
+    queue->head = queue->count = 0U;
+    return queue;
+}
+BaseType_t xQueueSend(QueueHandle_t queue, const void *item, TickType_t)
+{
+    CHECK(s_critical == 0);
+    if (queue->count == queue->capacity) {
+        return pdFALSE;
+    }
+    const size_t tail = (queue->head + queue->count) % queue->capacity;
+    std::memcpy(queue->buf + tail * queue->item_size, item, queue->item_size);
+    ++queue->count;
+    return pdTRUE;
+}
+BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t ticks)
+{
+    CHECK(s_critical == 0);
+    if ((queue->count == 0U) && s_pump_receive && (s_current == nullptr) && (ticks != 0U)) {
+        pump();
+    }
+    if (queue->count == 0U) {
+        s_clock += ticks;
+        return pdFALSE;
+    }
+    std::memcpy(item, queue->buf + queue->head * queue->item_size, queue->item_size);
+    queue->head = (queue->head + 1U) % queue->capacity;
+    --queue->count;
+    return pdTRUE;
+}
+void vQueueDelete(QueueHandle_t)
+{
+    CHECK(s_critical == 0);
+}
+void vTaskDelay(TickType_t ticks)
+{
+    CHECK(s_critical == 0);
+    s_clock += ticks;
+    if (++s_rounds == s_round_limit) {
+        std::longjmp(s_return, 1);
+    }
+}
+UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t)
+{
+    CHECK(s_critical == 0);
+    return 2048U;
+}
+esp_err_t esp_task_wdt_add(TaskHandle_t)
+{
+    CHECK(s_critical == 0);
+    return ESP_OK;
+}
+esp_err_t esp_task_wdt_reset(void)
+{
+    CHECK(s_critical == 0);
+    return ESP_OK;
+}
+bool rtk_bt_spp_poll_event(rtk_bt_spp_evt_t *, uint32_t)
+{
+    return false;
+}
+size_t rtk_bt_spp_read(uint32_t, uint8_t *, size_t)
+{
+    return 0U;
+}
+esp_err_t rtk_bt_spp_write(uint32_t, const uint8_t *, size_t, uint32_t)
+{
+    return ESP_OK;
+}
+esp_err_t rtk_bt_spp_disconnect(uint32_t)
+{
+    return ESP_OK;
+}
+esp_err_t rtk_store_init(void)
+{
+    return ESP_OK;
+}
+esp_err_t rtk_store_get_sn(char *, size_t)
+{
+    return ESP_OK;
+}
+esp_err_t rtk_store_set_sn(const char *)
+{
+    return ESP_OK;
+}
+esp_err_t rtk_store_set_alarms(const uint8_t (*)[RTK_STORE_ADDR_LEN], size_t)
+{
+    return ESP_OK;
+}
+esp_err_t rtk_store_get_alarms(uint8_t (*)[RTK_STORE_ADDR_LEN], size_t, size_t *count)
+{
+    *count = 0U;
+    return ESP_OK;
+}
+}
+
+int main(int argc, char **argv)
+{
+    if ((argc != 2) || (std::strcmp(argv[1], "template_module") != 0)) {
+        return 2;
+    }
+    test_commands_before_exec();
+    test_lifecycle();
+    test_commands_after_exec();
+    std::printf("%s %s\n", (s_failures == 0) ? "PASS" : "FAIL", argv[1]);
+    return (s_failures == 0) ? 0 : 1;
+}

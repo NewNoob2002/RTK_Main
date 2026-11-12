@@ -4,6 +4,8 @@
 # 模块源码按目录发现；IDF 的依赖扫描以脚本模式运行，不能使用 CONFIGURE_DEPENDS。
 if(NOT CMAKE_SCRIPT_MODE_FILE)
     file(GLOB_RECURSE module_sources CONFIGURE_DEPENDS "modules/*.cpp")
+    # 模板仅作新增模块参考并由主机测试持续编译，不编入固件。
+    list(FILTER module_sources EXCLUDE REGEX "(^|/)modules/_template/")
 endif()
 idf_component_register(
     SRCS "app_main.cpp"

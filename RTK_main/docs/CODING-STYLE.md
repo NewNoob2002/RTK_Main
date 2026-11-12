@@ -61,7 +61,7 @@ void run_bt_tx_forever();
 
 ### 1.3 注册集中，新增模块从模板开始
 
-新增模块复制 `main/modules/_template/`（R6 提供），实现必需操作，再在 `module_list.inc` 注册一行。
+新增模块复制 `main/modules/_template/`（详见 [`main/modules/_template/README.md`](../main/modules/_template/README.md)），实现必需操作，再在 `app_config.hpp`、`module_list.inc` 及有命令时的 `app_main.cpp` 完成注册。
 不要在入口、多个命令文件中各维护一份模块列表。
 
 ```cpp

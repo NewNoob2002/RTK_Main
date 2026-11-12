@@ -1,4 +1,4 @@
-// 系统模块（kSystem 执行器）：SN/设备名准备、系统与执行器状态发布，以及 `status` 命令用的纯函数辅助。
+// 系统模块（kLink 执行器）：SN/设备名准备、系统与执行器状态发布，以及 `status` 命令用的纯函数辅助。
 #pragma once
 #include <span>
 

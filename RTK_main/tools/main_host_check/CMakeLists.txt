@@ -67,3 +67,27 @@ target_compile_options(executor_check PRIVATE -fno-exceptions -fno-rtti -Wall -W
 foreach(scenario lifecycle calls invalid)
     add_test(NAME executor_${scenario} COMMAND executor_check ${scenario})
 endforeach()
+
+add_executable(template_check template_check.cpp
+    ${RTK_ROOT}/main/modules/_template/template_module.cpp
+    ${RTK_ROOT}/main/modules/_template/template_cmds.cpp
+    ${RTK_ROOT}/main/data/app_data.cpp
+    ${RTK_ROOT}/main/support/console_support.cpp
+    ${RTK_ROOT}/components/rtk_console/src/parse.cpp
+    ${RTK_ROOT}/components/rtk_os/executor.cpp
+    ${RTK_ROOT}/main/modules/bt_link/bt_link_module.cpp
+    ${RTK_ROOT}/main/modules/bt_link/async_tx.cpp
+    ${RTK_ROOT}/main/modules/rtcm/rtcm_module.cpp
+    ${RTK_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
+    ${RTK_ROOT}/main/modules/storage/storage_module.cpp
+    ${RTK_ROOT}/components/rtk_bt/spp_transport.cpp)
+target_include_directories(template_check BEFORE PRIVATE shim)
+target_include_directories(template_check PRIVATE ../t13_host_check/shim/inc
+    ${RTK_ROOT}/main ${RTK_ROOT}/components/rtk_bt/include
+    ${RTK_ROOT}/components/rtk_console/include
+    ${RTK_ROOT}/components/rtk_store/include ${RTK_ROOT}/components/rtk_os/include
+    ${RTK_ROOT}/components/app_fw/include)
+target_compile_options(template_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
+    -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+target_link_libraries(template_check PRIVATE main_pure)
+add_test(NAME template_module COMMAND template_check template_module)
