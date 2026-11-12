@@ -1,6 +1,6 @@
 // 产品 SPP 帧（AA 44 18）的分流器 C++ 解码器与线路帧 → 字段视图（ADR-0004 §4 / ADR-0005 §1）。
-// 判定规则与 rtk_proto_parser_feed（components/device_proto/rtk_proto_frame.c）完全一致：AA 44 18、
-// 头长字节 == 0x14、payload_len（偏移 12，u16 LE）≤ RTK_PROTO_MAX_PAYLOAD、CRC-32 正确；
+// 判定规则与 dev_proto_parser_feed（components/device_proto/dev_proto_frame.c）完全一致：AA 44 18、
+// 头长字节 == 0x14、payload_len（偏移 12，u16 LE）≤ DEV_PROTO_MAX_PAYLOAD、CRC-32 正确；
 // CRC 复用 proto::crc32（zlib 兼容，不另建实现）。
 // 早拒绝点：第 2 字节（44）、第 3 字节（18，与 Unicore 二进制 AA 44 B5 分开）、头长字节、payload 长度字段。
 // 长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
@@ -14,7 +14,7 @@
 
 #include "demux/decoder.hpp"
 #include "proto/frame.hpp"
-#include "rtk_proto_frame.h"
+#include "dev_proto_frame.h"
 
 namespace proto::demux_frame {
 

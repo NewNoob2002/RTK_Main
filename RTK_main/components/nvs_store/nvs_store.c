@@ -10,52 +10,52 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
-#include "rtk_store.h"
+#include "nvs_store.h"
 
-#define RTK_STORE_TAG     "rtk_store"
-#define RTK_STORE_NS      "rtk"
-#define RTK_STORE_KEY_SN  "sn"
-#define RTK_STORE_KEY_ALM "alarm_wl"
+#define NVS_STORE_TAG     "nvs_store"
+#define NVS_STORE_NS      "rtk"
+#define NVS_STORE_KEY_SN  "sn"
+#define NVS_STORE_KEY_ALM "alarm_wl"
 
-esp_err_t rtk_store_init(void)
+esp_err_t nvs_store_init(void)
 {
     esp_err_t err = nvs_flash_init();
 
     if ((err == ESP_ERR_NVS_NO_FREE_PAGES) || (err == ESP_ERR_NVS_NEW_VERSION_FOUND)) {
-        ESP_LOGW(RTK_STORE_TAG, "nvs init 0x%x, erase nvs partition and retry", err);
+        ESP_LOGW(NVS_STORE_TAG, "nvs init 0x%x, erase nvs partition and retry", err);
         err = nvs_flash_erase();
         if (err != ESP_OK) {
-            ESP_LOGE(RTK_STORE_TAG, "nvs erase failed: %s", esp_err_to_name(err));
+            ESP_LOGE(NVS_STORE_TAG, "nvs erase failed: %s", esp_err_to_name(err));
             return err;
         }
         err = nvs_flash_init();
     }
 
     if (err != ESP_OK) {
-        ESP_LOGE(RTK_STORE_TAG, "nvs init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(NVS_STORE_TAG, "nvs init failed: %s", esp_err_to_name(err));
     }
     return err;
 }
 
-esp_err_t rtk_store_get_sn(char *out, size_t out_size)
+esp_err_t nvs_store_get_sn(char *out, size_t out_size)
 {
     nvs_handle_t handle = 0;
     esp_err_t err = ESP_OK;
     size_t len = 0U;
 
-    if ((out == NULL) || (out_size < (RTK_STORE_SN_MAX + 1U))) {
+    if ((out == NULL) || (out_size < (NVS_STORE_SN_MAX + 1U))) {
         return ESP_ERR_INVALID_ARG;
     }
     out[0] = '\0';
 
-    err = nvs_open(RTK_STORE_NS, NVS_READONLY, &handle);
+    err = nvs_open(NVS_STORE_NS, NVS_READONLY, &handle);
     if (err != ESP_OK) {
         /* 命名空间不存在同样返回 ESP_ERR_NVS_NOT_FOUND（冻结头契约）。 */
         return err;
     }
 
     len = out_size;
-    err = nvs_get_str(handle, RTK_STORE_KEY_SN, out, &len);
+    err = nvs_get_str(handle, NVS_STORE_KEY_SN, out, &len);
     nvs_close(handle);
 
     if (err == ESP_ERR_NVS_INVALID_LENGTH) {
@@ -67,14 +67,14 @@ esp_err_t rtk_store_get_sn(char *out, size_t out_size)
         return err;
     }
     /* nvs_get_str 的 len 含结尾 0；空串或超过 16 字节都按损坏处理。 */
-    if ((len <= 1U) || ((len - 1U) > RTK_STORE_SN_MAX)) {
+    if ((len <= 1U) || ((len - 1U) > NVS_STORE_SN_MAX)) {
         out[0] = '\0';
         return ESP_ERR_INVALID_SIZE;
     }
     return ESP_OK;
 }
 
-esp_err_t rtk_store_set_sn(const char *sn)
+esp_err_t nvs_store_set_sn(const char *sn)
 {
     nvs_handle_t handle = 0;
     esp_err_t err = ESP_OK;
@@ -84,16 +84,16 @@ esp_err_t rtk_store_set_sn(const char *sn)
         return ESP_ERR_INVALID_ARG;
     }
     len = strlen(sn);
-    if ((len == 0U) || (len > RTK_STORE_SN_MAX)) {
+    if ((len == 0U) || (len > NVS_STORE_SN_MAX)) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    err = nvs_open(RTK_STORE_NS, NVS_READWRITE, &handle);
+    err = nvs_open(NVS_STORE_NS, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         return err;
     }
 
-    err = nvs_set_str(handle, RTK_STORE_KEY_SN, sn);
+    err = nvs_set_str(handle, NVS_STORE_KEY_SN, sn);
     if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
@@ -101,12 +101,12 @@ esp_err_t rtk_store_set_sn(const char *sn)
     return err;
 }
 
-esp_err_t rtk_store_get_alarms(uint8_t (*addrs)[RTK_STORE_ADDR_LEN], size_t max, size_t *count)
+esp_err_t nvs_store_get_alarms(uint8_t (*addrs)[NVS_STORE_ADDR_LEN], size_t max, size_t *count)
 {
     nvs_handle_t handle = 0;
     esp_err_t err = ESP_OK;
     size_t len = 0U;
-    uint8_t blob[RTK_STORE_ALARM_MAX * RTK_STORE_ADDR_LEN];
+    uint8_t blob[NVS_STORE_ALARM_MAX * NVS_STORE_ADDR_LEN];
     size_t entries = 0U;
     size_t copy = 0U;
 
@@ -115,7 +115,7 @@ esp_err_t rtk_store_get_alarms(uint8_t (*addrs)[RTK_STORE_ADDR_LEN], size_t max,
     }
     *count = 0U;
 
-    err = nvs_open(RTK_STORE_NS, NVS_READONLY, &handle);
+    err = nvs_open(NVS_STORE_NS, NVS_READONLY, &handle);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         /* 命名空间尚未创建：空白名单。 */
         return ESP_OK;
@@ -124,7 +124,7 @@ esp_err_t rtk_store_get_alarms(uint8_t (*addrs)[RTK_STORE_ADDR_LEN], size_t max,
         return err;
     }
 
-    err = nvs_get_blob(handle, RTK_STORE_KEY_ALM, NULL, &len);
+    err = nvs_get_blob(handle, NVS_STORE_KEY_ALM, NULL, &len);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         nvs_close(handle);
         return ESP_OK;
@@ -133,7 +133,7 @@ esp_err_t rtk_store_get_alarms(uint8_t (*addrs)[RTK_STORE_ADDR_LEN], size_t max,
         nvs_close(handle);
         return err;
     }
-    if ((len % RTK_STORE_ADDR_LEN) != 0U) {
+    if ((len % NVS_STORE_ADDR_LEN) != 0U) {
         nvs_close(handle);
         return ESP_ERR_INVALID_SIZE;
     }
@@ -146,49 +146,49 @@ esp_err_t rtk_store_get_alarms(uint8_t (*addrs)[RTK_STORE_ADDR_LEN], size_t max,
         return ESP_OK;
     }
 
-    err = nvs_get_blob(handle, RTK_STORE_KEY_ALM, blob, &len);
+    err = nvs_get_blob(handle, NVS_STORE_KEY_ALM, blob, &len);
     nvs_close(handle);
     if (err != ESP_OK) {
         return err;
     }
 
     /* len ≤ 24，entries ≤ 4，result 缩放安全。 */
-    entries = len / RTK_STORE_ADDR_LEN;
+    entries = len / NVS_STORE_ADDR_LEN;
     copy = (entries < max) ? entries : max;
     for (size_t idx = 0U; idx < copy; idx++) {
-        for (size_t byte = 0U; byte < RTK_STORE_ADDR_LEN; byte++) {
-            addrs[idx][byte] = blob[(idx * RTK_STORE_ADDR_LEN) + byte];
+        for (size_t byte = 0U; byte < NVS_STORE_ADDR_LEN; byte++) {
+            addrs[idx][byte] = blob[(idx * NVS_STORE_ADDR_LEN) + byte];
         }
     }
     *count = copy;
     return ESP_OK;
 }
 
-esp_err_t rtk_store_set_alarms(const uint8_t (*addrs)[RTK_STORE_ADDR_LEN], size_t count)
+esp_err_t nvs_store_set_alarms(const uint8_t (*addrs)[NVS_STORE_ADDR_LEN], size_t count)
 {
     nvs_handle_t handle = 0;
     esp_err_t err = ESP_OK;
 
-    if (count > RTK_STORE_ALARM_MAX) {
+    if (count > NVS_STORE_ALARM_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
     if ((addrs == NULL) && (count != 0U)) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    err = nvs_open(RTK_STORE_NS, NVS_READWRITE, &handle);
+    err = nvs_open(NVS_STORE_NS, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         return err;
     }
 
     if (count == 0U) {
-        err = nvs_erase_key(handle, RTK_STORE_KEY_ALM);
+        err = nvs_erase_key(handle, NVS_STORE_KEY_ALM);
         if (err == ESP_ERR_NVS_NOT_FOUND) {
             err = ESP_OK;
         }
     } else {
         /* count ≤ 4，count×6 ≤ 24；长度扩宽到 size_t 无损。 */
-        err = nvs_set_blob(handle, RTK_STORE_KEY_ALM, addrs, count * RTK_STORE_ADDR_LEN);
+        err = nvs_set_blob(handle, NVS_STORE_KEY_ALM, addrs, count * NVS_STORE_ADDR_LEN);
     }
 
     if (err == ESP_OK) {

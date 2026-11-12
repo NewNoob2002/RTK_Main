@@ -2,7 +2,7 @@
 """H2 自测向量生成器（不交付、不参与构建；任务卡允许放 test/stream_demux_dev/h2/）。
 
 独立性：本脚本只用移位/异或/加法逐位实现 CRC 与校验，不调用被测 C++ 代码；产品帧的 CRC-32 用
-Python 标准库 zlib（与 rtk_proto_frame.c 声称的 zlib 等价性互相核对）。
+Python 标准库 zlib（与 dev_proto_frame.c 声称的 zlib 等价性互相核对）。
 
 输出：
   * h2_vectors.h —— h2_check.cpp 使用的帧向量；

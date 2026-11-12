@@ -7,6 +7,6 @@ menu "RTK Bluetooth SPP (ADR-0006)"
         help
             Each SPP session owns one static receive StreamBuffer of this size. Bytes arriving while it is
             full are dropped and counted as rx_dropped. NTRIP corrections relayed by the phone arrive in
-            bursts of several KB, so the default is 4096. Total static RAM = this value x RTK_BT_SPP_MAX_SESSIONS.
+            bursts of several KB, so the default is 4096. Total static RAM = this value x SPP_SERVER_MAX_SESSIONS.
 
 endmenu

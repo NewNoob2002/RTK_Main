@@ -3,8 +3,8 @@
 #include "modules/_template/template_module.hpp"
 #include "fw/module.hpp"
 #include "rtos/esp_status.hpp"
-#include "rtk_bt_spp.h"
-#include "rtk_store.h"
+#include "spp_server.h"
+#include "nvs_store.h"
 
 #include <array>
 #include <csetjmp>
@@ -320,39 +320,39 @@ esp_err_t esp_task_wdt_reset(void)
     CHECK(s_critical == 0);
     return ESP_OK;
 }
-bool rtk_bt_spp_poll_event(rtk_bt_spp_evt_t *, uint32_t)
+bool spp_server_poll_event(spp_server_evt_t *, uint32_t)
 {
     return false;
 }
-size_t rtk_bt_spp_read(uint32_t, uint8_t *, size_t)
+size_t spp_server_read(uint32_t, uint8_t *, size_t)
 {
     return 0U;
 }
-esp_err_t rtk_bt_spp_write(uint32_t, const uint8_t *, size_t, uint32_t)
+esp_err_t spp_server_write(uint32_t, const uint8_t *, size_t, uint32_t)
 {
     return ESP_OK;
 }
-esp_err_t rtk_bt_spp_disconnect(uint32_t)
+esp_err_t spp_server_disconnect(uint32_t)
 {
     return ESP_OK;
 }
-esp_err_t rtk_store_init(void)
+esp_err_t nvs_store_init(void)
 {
     return ESP_OK;
 }
-esp_err_t rtk_store_get_sn(char *, size_t)
+esp_err_t nvs_store_get_sn(char *, size_t)
 {
     return ESP_OK;
 }
-esp_err_t rtk_store_set_sn(const char *)
+esp_err_t nvs_store_set_sn(const char *)
 {
     return ESP_OK;
 }
-esp_err_t rtk_store_set_alarms(const uint8_t (*)[RTK_STORE_ADDR_LEN], size_t)
+esp_err_t nvs_store_set_alarms(const uint8_t (*)[NVS_STORE_ADDR_LEN], size_t)
 {
     return ESP_OK;
 }
-esp_err_t rtk_store_get_alarms(uint8_t (*)[RTK_STORE_ADDR_LEN], size_t, size_t *count)
+esp_err_t nvs_store_get_alarms(uint8_t (*)[NVS_STORE_ADDR_LEN], size_t, size_t *count)
 {
     *count = 0U;
     return ESP_OK;

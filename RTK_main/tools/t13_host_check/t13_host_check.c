@@ -1,4 +1,4 @@
-/* T13 驱动级回归：直接链接真实的 components/spp_server/rtk_bt_spp.c，用真实阻塞语义的
+/* T13 驱动级回归：直接链接真实的 components/spp_server/spp_server_*.c，用真实阻塞语义的
  * FreeRTOS 替身和可编排的假 IDF（BTC 线程投递回调）覆盖 QA-E-REVIEW 第 1–4 项与复审反馈。
  * 每个场景独立进程运行（驱动只有 init、没有 deinit 公共接口），用法：t13_host_check <场景名>。
  *
@@ -13,7 +13,7 @@
 
 #include "freertos/FreeRTOS.h" /* 确定性读暂停钩子（fake_read_pause_*） */
 #include "fake_idf.h"
-#include "rtk_bt_spp.h"
+#include "spp_server.h"
 
 static int s_fail;
 
@@ -25,7 +25,7 @@ static int s_fail;
         }                                                                                                              \
     } while (0)
 
-static const uint8_t s_bda[RTK_BT_SPP_ADDR_LEN] = {0xAAU, 0xBBU, 0xCCU, 0xDDU, 0xEEU, 0xFFU};
+static const uint8_t s_bda[SPP_SERVER_ADDR_LEN] = {0xAAU, 0xBBU, 0xCCU, 0xDDU, 0xEEU, 0xFFU};
 
 static uint32_t now_ms(void)
 {
@@ -38,20 +38,20 @@ static uint32_t now_ms(void)
 static void bring_up(void)
 {
     fake_reset();
-    CHECK(rtk_bt_spp_init("RTK_T13") == ESP_OK);
+    CHECK(spp_server_init("RTK_T13") == ESP_OK);
 }
 
 /* 轮询事件队列，跳过其它类型，直到拿到指定事件或超时。 */
-static bool wait_event(rtk_bt_spp_evt_type_t type, uint32_t handle, uint32_t timeout_ms)
+static bool wait_event(spp_server_evt_type_t type, uint32_t handle, uint32_t timeout_ms)
 {
     const uint32_t deadline = now_ms() + timeout_ms;
 
     for (;;) {
-        rtk_bt_spp_evt_t evt;
+        spp_server_evt_t evt;
         const uint32_t now = now_ms();
         const uint32_t left = (now < deadline) ? (deadline - now) : 0U;
 
-        if (!rtk_bt_spp_poll_event(&evt, left)) {
+        if (!spp_server_poll_event(&evt, left)) {
             return false;
         }
         if ((evt.type == type) && (evt.handle == handle)) {
@@ -63,7 +63,7 @@ static bool wait_event(rtk_bt_spp_evt_type_t type, uint32_t handle, uint32_t tim
 static void open_session(uint32_t handle)
 {
     fake_emit_srv_open(handle, s_bda);
-    CHECK(wait_event(RTK_BT_SPP_EVT_OPEN, handle, 1000U));
+    CHECK(wait_event(SPP_SERVER_EVT_OPEN, handle, 1000U));
 }
 
 /* ---------------- 线程参数 ---------------- */
@@ -78,7 +78,7 @@ static void *init_main(void *arg)
 {
     init_arg_t *ia = (init_arg_t *)arg;
 
-    ia->err = rtk_bt_spp_init(ia->name);
+    ia->err = spp_server_init(ia->name);
     atomic_store_explicit(&ia->done, true, memory_order_release);
     return NULL;
 }
@@ -98,7 +98,7 @@ static void *writer_main(void *arg)
     writer_arg_t *wa = (writer_arg_t *)arg;
     const uint32_t start = now_ms();
 
-    wa->err = rtk_bt_spp_write(wa->handle, wa->data, wa->len, wa->timeout_ms);
+    wa->err = spp_server_write(wa->handle, wa->data, wa->len, wa->timeout_ms);
     wa->elapsed_ms = now_ms() - start;
     atomic_store_explicit(&wa->done, true, memory_order_release);
     return NULL;
@@ -115,7 +115,7 @@ static void *reader_main(void *arg)
 {
     reader_arg_t *ra = (reader_arg_t *)arg;
 
-    ra->got = rtk_bt_spp_read(ra->handle, ra->buf, sizeof(ra->buf));
+    ra->got = spp_server_read(ra->handle, ra->buf, sizeof(ra->buf));
     atomic_store_explicit(&ra->done, true, memory_order_release);
     return NULL;
 }
@@ -176,7 +176,7 @@ static void sc_init_waits_stages(void)
     CHECK(idx_start_srv < idx_name);
     CHECK(idx_name < idx_scan);
     /* 重复 init 返回 INVALID_STATE。 */
-    CHECK(rtk_bt_spp_init("RTK_T13") == ESP_ERR_INVALID_STATE);
+    CHECK(spp_server_init("RTK_T13") == ESP_ERR_INVALID_STATE);
 }
 
 /* #2：同步完成顺序——回调在发起 API 内就执行完，等待方看到的位已置位。 */
@@ -184,7 +184,7 @@ static void sc_init_sync_stage_order(void)
 {
     fake_reset();
     fake_set_stage_sync(true);
-    CHECK(rtk_bt_spp_init("RTK_T13") == ESP_OK);
+    CHECK(spp_server_init("RTK_T13") == ESP_OK);
     CHECK(!fake_blocking_api_from_btc());
 }
 
@@ -202,12 +202,12 @@ static void sc_init_failure_rollback(void)
 
     fake_reset();
     fake_set_init_mode(FAKE_STAGE_FAIL);
-    CHECK(rtk_bt_spp_init("RTK_T13") == ESP_FAIL);
+    CHECK(spp_server_init("RTK_T13") == ESP_FAIL);
     CHECK(fake_trace_count() == (int)(sizeof(expected) / sizeof(expected[0])));
     for (int i = 0; i < (int)(sizeof(expected) / sizeof(expected[0])); i++) {
         CHECK(strcmp(fake_trace_at(i), expected[i]) == 0);
     }
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_INVALID_STATE);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_INVALID_STATE);
 }
 
 /* #2：INIT 成功但 START 阶段异步失败 → init 必须返回 ESP_FAIL 并回滚。 */
@@ -217,7 +217,7 @@ static void sc_init_start_status_fail(void)
 
     fake_reset();
     fake_set_start_mode(FAKE_STAGE_FAIL);
-    CHECK(rtk_bt_spp_init("RTK_T13") == ESP_FAIL);
+    CHECK(spp_server_init("RTK_T13") == ESP_FAIL);
     for (int i = 0; i < fake_trace_count(); i++) {
         if (strcmp(fake_trace_at(i), "spp_deinit") == 0) {
             saw_deinit = true;
@@ -236,7 +236,7 @@ static void sc_init_start_timeout(void)
     fake_reset();
     fake_set_start_mode(FAKE_STAGE_SILENT);
     start = now_ms();
-    CHECK(rtk_bt_spp_init("RTK_T13") == ESP_ERR_TIMEOUT);
+    CHECK(spp_server_init("RTK_T13") == ESP_ERR_TIMEOUT);
     CHECK((now_ms() - start) >= 4900U);
     CHECK(fake_trace_count() > 0);
     CHECK(strcmp(fake_trace_at(fake_trace_count() - 1), "controller_deinit") == 0);
@@ -258,13 +258,13 @@ static void sc_open_no_slot_rejects_from_task(void)
     CHECK(fake_disconnect_count() == 1);
     CHECK(fake_disconnect_handle(0) == 0x33U);
     CHECK(!fake_blocking_api_from_btc());
-    CHECK(!wait_event(RTK_BT_SPP_EVT_OPEN, 0x33U, 0U));
+    CHECK(!wait_event(SPP_SERVER_EVT_OPEN, 0x33U, 0U));
     /* 被拒绝的连接不会在旧槽空出后被重新接纳：0x33 没有会话。 */
-    CHECK(rtk_bt_spp_write(0x33U, payload, sizeof(payload), 100U) == ESP_ERR_NOT_FOUND);
+    CHECK(spp_server_write(0x33U, payload, sizeof(payload), 100U) == ESP_ERR_NOT_FOUND);
     CHECK(fake_write_call_count() == 0);
 }
 
-/* #1：旧读者未退出前槽不得 reset/复用。用真实 rtk_bt_spp_read 停在 shim 的确定性暂停点，
+/* #1：旧读者未退出前槽不得 reset/复用。用真实 spp_server_read 停在 shim 的确定性暂停点，
  * CLOSE 释放 in_use 但 users>0，新连接必须被拒绝；读者继续读到原数据（证明没有 reset），
  * 且拒绝之后不会出现延后接纳。 */
 static void sc_slot_held_rejects_new_connect(void)
@@ -292,7 +292,7 @@ static void sc_slot_held_rejects_new_connect(void)
     CHECK(fake_wait_disconnect_calls(1, 2000U));
     CHECK(fake_disconnect_handle(0) == 0x33U);
     CHECK(!fake_blocking_api_from_btc());
-    CHECK(!wait_event(RTK_BT_SPP_EVT_OPEN, 0x33U, 0U));
+    CHECK(!wait_event(SPP_SERVER_EVT_OPEN, 0x33U, 0U));
 
     fake_read_pause_release();
     CHECK(pthread_join(thread, NULL) == 0);
@@ -301,8 +301,8 @@ static void sc_slot_held_rejects_new_connect(void)
     CHECK(memcmp(ra.buf, rx_data, sizeof(rx_data)) == 0); /* 缓冲未被 reset */
 
     /* 旧读者退出后也不得把已拒绝的 0x33 重新发布为会话。 */
-    CHECK(!wait_event(RTK_BT_SPP_EVT_OPEN, 0x33U, 200U));
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_NOT_FOUND);
+    CHECK(!wait_event(SPP_SERVER_EVT_OPEN, 0x33U, 200U));
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_NOT_FOUND);
     CHECK(fake_write_call_count() == 0);
 }
 
@@ -344,7 +344,7 @@ static void sc_write_chunks_large_payload(void)
     for (size_t i = 0U; i < sizeof(payload); i++) {
         payload[i] = (uint8_t)(i * 7U);
     }
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 3000U) == ESP_OK);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 3000U) == ESP_OK);
     CHECK(fake_write_call_count() == 3);
     CHECK(fake_write_call_len(0) == 512);
     CHECK(fake_write_call_len(1) == 512);
@@ -366,7 +366,7 @@ static void sc_write_timeout_budget(void)
     fake_set_write_mode(FAKE_WRITE_BLOCK);
     fake_set_write_block_ms(400U);
     start = now_ms();
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_TIMEOUT);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_TIMEOUT);
     CHECK((now_ms() - start) >= 90U);
     CHECK((now_ms() - start) <= 350U);
     /* 提交发生在发送任务里：等它真正进入 esp_spp_write，不能靠调度时序猜。 */
@@ -374,7 +374,7 @@ static void sc_write_timeout_budget(void)
     /* 等提交线程退出阻塞并投递迟到的完成；之后同一会话还能继续用。 */
     fake_sleep_ms(500U);
     fake_set_write_mode(FAKE_WRITE_OK);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
 }
 
 /* #3：WRITE_EVT 的 status 和回报长度都必须校验。 */
@@ -386,13 +386,13 @@ static void sc_write_status_propagation(void)
     open_session(0x11U);
     memset(payload, 0x11, sizeof(payload));
     fake_set_write_mode(FAKE_WRITE_FAIL);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
     fake_set_write_mode(FAKE_WRITE_NO_RESOURCE);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
     fake_set_write_mode(FAKE_WRITE_SHORT);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
     fake_set_write_mode(FAKE_WRITE_OK);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
 }
 
 /* #3：提交阶段直接失败时把错误返回给调用方，且不需要等完成事件。 */
@@ -404,9 +404,9 @@ static void sc_write_submit_error(void)
     open_session(0x11U);
     memset(payload, 0x22, sizeof(payload));
     fake_set_write_mode(FAKE_WRITE_SUBMIT_ERROR);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_ERR_INVALID_STATE);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_ERR_INVALID_STATE);
     fake_set_write_mode(FAKE_WRITE_OK);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
 }
 
 /* #3：拥塞时按预算等待解除，不在拥塞期间提交。 */
@@ -418,10 +418,10 @@ static void sc_write_congestion(void)
     open_session(0x11U);
     memset(payload, 0x33, sizeof(payload));
     fake_emit_cong(0x11U, true);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_TIMEOUT);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_TIMEOUT);
     CHECK(fake_write_call_count() == 0);
     fake_emit_cong(0x11U, false);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
     CHECK(fake_write_call_count() == 1);
 }
 
@@ -483,14 +483,14 @@ static void sc_write_cancel_by_close(void)
     CHECK(wa.elapsed_ms < 800U);
 
     fake_set_write_mode(FAKE_WRITE_OK);
-    CHECK(rtk_bt_spp_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
-    CHECK(wait_event(RTK_BT_SPP_EVT_CLOSE, 0x11U, 100U));
+    CHECK(spp_server_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(wait_event(SPP_SERVER_EVT_CLOSE, 0x11U, 100U));
     /* CLOSE 已交付，旧槽可被新连接复用。 */
     open_session(0x33U);
-    CHECK(rtk_bt_spp_write(0x33U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x33U, payload, sizeof(payload), 1000U) == ESP_OK);
     /* 迟到的旧句柄事件不得影响其他会话。 */
     fake_emit_write(0x11U, (int)sizeof(payload), ESP_SPP_SUCCESS, false);
-    CHECK(rtk_bt_spp_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
     CHECK(fake_write_call_count() == 4);
 }
 
@@ -558,15 +558,15 @@ static void sc_stale_completion_after_reopen(void)
     open_session(0x11U);
     memset(payload, 0x55, sizeof(payload));
     fake_set_write_mode(FAKE_WRITE_HOLD);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_TIMEOUT);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_TIMEOUT);
     fake_emit_close(0x11U);
     open_session(0x22U); /* CLOSE 已释放 owner，旧槽可复用 */
     fake_set_write_mode(FAKE_WRITE_OK);
-    CHECK(rtk_bt_spp_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
     /* 旧句柄的迟到成功/失败都应被忽略。 */
     fake_emit_write(0x11U, (int)sizeof(payload), ESP_SPP_SUCCESS, false);
     fake_emit_write(0x11U, (int)sizeof(payload), ESP_SPP_FAILURE, false);
-    CHECK(rtk_bt_spp_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
     CHECK(fake_write_call_count() == 3);
 }
 
@@ -619,7 +619,7 @@ static void sc_write_unmatched_no_resource(void)
     CHECK(fake_write_call_count() == 2);
 
     fake_set_write_mode(FAKE_WRITE_OK);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
 }
 
 /* #3/D：旧句柄关闭后，它的迟到失败事件不得结算新句柄的在途请求。
@@ -689,20 +689,20 @@ static void sc_write_chunk_budget_shared(void)
 static void sc_unknown_handle_errors(void)
 {
     uint8_t payload[4] = {0U, 1U, 2U, 3U};
-    uint8_t local[RTK_BT_SPP_ADDR_LEN];
-    static const uint8_t expected[RTK_BT_SPP_ADDR_LEN] = {0x24U, 0x0AU, 0xC4U, 0x01U, 0x02U, 0x03U};
+    uint8_t local[SPP_SERVER_ADDR_LEN];
+    static const uint8_t expected[SPP_SERVER_ADDR_LEN] = {0x24U, 0x0AU, 0xC4U, 0x01U, 0x02U, 0x03U};
 
     bring_up();
-    CHECK(rtk_bt_spp_write(0x99U, payload, sizeof(payload), 100U) == ESP_ERR_NOT_FOUND);
-    CHECK(rtk_bt_spp_write(0x99U, NULL, 0U, 100U) == ESP_ERR_INVALID_ARG);
-    CHECK(rtk_bt_spp_write(0x99U, payload, sizeof(payload), 0U) == ESP_ERR_NOT_FOUND);
-    CHECK(rtk_bt_spp_disconnect(0x99U) == ESP_ERR_NOT_FOUND);
-    CHECK(rtk_bt_spp_get_local_addr(local) == ESP_OK);
+    CHECK(spp_server_write(0x99U, payload, sizeof(payload), 100U) == ESP_ERR_NOT_FOUND);
+    CHECK(spp_server_write(0x99U, NULL, 0U, 100U) == ESP_ERR_INVALID_ARG);
+    CHECK(spp_server_write(0x99U, payload, sizeof(payload), 0U) == ESP_ERR_NOT_FOUND);
+    CHECK(spp_server_disconnect(0x99U) == ESP_ERR_NOT_FOUND);
+    CHECK(spp_server_get_local_addr(local) == ESP_OK);
     CHECK(memcmp(local, expected, sizeof(expected)) == 0);
-    CHECK(rtk_bt_spp_dropped_events() == 0U);
+    CHECK(spp_server_dropped_events() == 0U);
 
     open_session(0x11U);
-    CHECK(rtk_bt_spp_write(0x11U, payload, sizeof(payload), 0U) == ESP_ERR_TIMEOUT);
+    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 0U) == ESP_ERR_TIMEOUT);
     CHECK(fake_write_call_count() == 0);
 }
 
@@ -713,7 +713,7 @@ static void sc_gap_replies_from_task(void)
     fake_emit_gap_pin_req(s_bda);
     CHECK(fake_wait_pin_reply(1, 2000U));
     CHECK(fake_pin_reply_count() == 1);
-    CHECK(memcmp(fake_last_gap_reply_bda(), s_bda, RTK_BT_SPP_ADDR_LEN) == 0);
+    CHECK(memcmp(fake_last_gap_reply_bda(), s_bda, SPP_SERVER_ADDR_LEN) == 0);
     CHECK(!fake_blocking_api_from_btc());
 
     fake_emit_gap_cfm_req(s_bda);
@@ -726,10 +726,10 @@ static void sc_gap_replies_from_task(void)
 static void sc_lifecycle_burst_churn(void)
 {
     uint8_t bytes[1024] = {0};
-    rtk_bt_spp_evt_t evt;
-    const rtk_bt_spp_evt_type_t types[] = {RTK_BT_SPP_EVT_OPEN,    RTK_BT_SPP_EVT_OPEN, RTK_BT_SPP_EVT_DATA,
-                                           RTK_BT_SPP_EVT_RX_DROP, RTK_BT_SPP_EVT_DATA, RTK_BT_SPP_EVT_RX_DROP,
-                                           RTK_BT_SPP_EVT_CLOSE,   RTK_BT_SPP_EVT_CLOSE};
+    spp_server_evt_t evt;
+    const spp_server_evt_type_t types[] = {SPP_SERVER_EVT_OPEN,    SPP_SERVER_EVT_OPEN, SPP_SERVER_EVT_DATA,
+                                           SPP_SERVER_EVT_RX_DROP, SPP_SERVER_EVT_DATA, SPP_SERVER_EVT_RX_DROP,
+                                           SPP_SERVER_EVT_CLOSE,   SPP_SERVER_EVT_CLOSE};
     const uint32_t handles[] = {0x11U, 0x22U, 0x11U, 0x11U, 0x22U, 0x22U, 0x22U, 0x11U};
     bring_up();
     fake_emit_srv_open(0x11U, s_bda);
@@ -748,24 +748,24 @@ static void sc_lifecycle_burst_churn(void)
         fake_emit_close(0x33U);
     }
     for (size_t idx = 0U; idx < sizeof(types) / sizeof(types[0]); ++idx) {
-        CHECK(rtk_bt_spp_poll_event(&evt, 0U));
+        CHECK(spp_server_poll_event(&evt, 0U));
         CHECK(evt.type == types[idx]);
         CHECK(evt.handle == handles[idx]);
     }
-    CHECK(!rtk_bt_spp_poll_event(&evt, 0U));
-    CHECK(rtk_bt_spp_dropped_events() == 0U);
+    CHECK(!spp_server_poll_event(&evt, 0U));
+    CHECK(spp_server_dropped_events() == 0U);
     /* CLOSE 已交付后同数字句柄可以重新接纳，旧 CLOSE 不会在它之后出现。 */
     open_session(0x11U);
     fake_emit_data(0x11U, bytes, 1U);
-    CHECK(wait_event(RTK_BT_SPP_EVT_DATA, 0x11U, 100U));
-    CHECK(rtk_bt_spp_read(0x11U, bytes, sizeof(bytes)) == 1U);
-    CHECK(!rtk_bt_spp_poll_event(&evt, 0U));
+    CHECK(wait_event(SPP_SERVER_EVT_DATA, 0x11U, 100U));
+    CHECK(spp_server_read(0x11U, bytes, sizeof(bytes)) == 1U);
+    CHECK(!spp_server_poll_event(&evt, 0U));
 }
 
 static void sc_drop_counts_by_handle(void)
 {
-    uint8_t bytes[RTK_BT_SPP_RX_BUF_SIZE] = {0};
-    rtk_bt_spp_evt_t evt;
+    uint8_t bytes[SPP_SERVER_RX_BUF_SIZE] = {0};
+    spp_server_evt_t evt;
     uint32_t drops_a = 0U;
     uint32_t drops_b = 0U;
     bring_up();
@@ -773,8 +773,8 @@ static void sc_drop_counts_by_handle(void)
     open_session(0x22U);
     fake_emit_data(0x11U, bytes, sizeof(bytes));
     fake_emit_data(0x22U, bytes, sizeof(bytes));
-    const size_t accepted_a = rtk_bt_spp_read(0x11U, bytes, sizeof(bytes));
-    const size_t accepted_b = rtk_bt_spp_read(0x22U, bytes, sizeof(bytes));
+    const size_t accepted_a = spp_server_read(0x11U, bytes, sizeof(bytes));
+    const size_t accepted_b = spp_server_read(0x22U, bytes, sizeof(bytes));
     fake_emit_data(0x11U, bytes, sizeof(bytes));
     fake_emit_data(0x22U, bytes, sizeof(bytes));
     fake_emit_data(0x11U, bytes, 17U);
@@ -782,8 +782,8 @@ static void sc_drop_counts_by_handle(void)
     fake_emit_data(0x11U, bytes, 19U);
     fake_emit_close(0x11U);
     fake_emit_close(0x22U);
-    while (rtk_bt_spp_poll_event(&evt, 0U)) {
-        if (evt.type == RTK_BT_SPP_EVT_RX_DROP) {
+    while (spp_server_poll_event(&evt, 0U)) {
+        if (evt.type == SPP_SERVER_EVT_RX_DROP) {
             if (evt.handle == 0x11U) {
                 CHECK(drops_a == 0U);
                 drops_a = evt.dropped;
@@ -796,7 +796,7 @@ static void sc_drop_counts_by_handle(void)
     }
     CHECK(drops_a == (2U * sizeof(bytes) - 2U * accepted_a + 36U));
     CHECK(drops_b == (2U * sizeof(bytes) - 2U * accepted_b + 31U));
-    CHECK(rtk_bt_spp_dropped_events() == 0U);
+    CHECK(spp_server_dropped_events() == 0U);
 }
 
 /* SDK 可无限等投递，但调用者只登记；普通请求不会占用拒绝控制表。 */
@@ -808,16 +808,16 @@ static void sc_disconnect_async_and_reject(void)
     open_session(0x22U);
     fake_gate_arm(FAKE_GATE_DISCONNECT);
     const uint32_t start = now_ms();
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     CHECK((now_ms() - start) < 100U);
     CHECK(fake_gate_wait_entered(FAKE_GATE_DISCONNECT, 1000U));
     for (int idx = 0; idx < 20; ++idx) {
-        CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+        CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     }
     fake_emit_srv_open(0x33U, s_bda);
     fake_emit_data(0x22U, &byte, 1U);
-    CHECK(wait_event(RTK_BT_SPP_EVT_DATA, 0x22U, 100U));
-    CHECK(rtk_bt_spp_read(0x22U, &byte, 1U) == 1U);
+    CHECK(wait_event(SPP_SERVER_EVT_DATA, 0x22U, 100U));
+    CHECK(spp_server_read(0x22U, &byte, 1U) == 1U);
     CHECK(fake_disconnect_count() == 1);
     fake_gate_release(FAKE_GATE_DISCONNECT);
     CHECK(fake_wait_disconnect_returns(2, 1000U));
@@ -825,8 +825,8 @@ static void sc_disconnect_async_and_reject(void)
     CHECK(!fake_wait_disconnect_calls(3, 150U));
     CHECK(!fake_blocking_api_from_btc());
     fake_emit_close(0x11U);
-    CHECK(wait_event(RTK_BT_SPP_EVT_CLOSE, 0x11U, 100U));
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_ERR_NOT_FOUND);
+    CHECK(wait_event(SPP_SERVER_EVT_CLOSE, 0x11U, 100U));
+    CHECK(spp_server_disconnect(0x11U) == ESP_ERR_NOT_FOUND);
 }
 
 static void sc_disconnect_retry(void)
@@ -835,41 +835,41 @@ static void sc_disconnect_retry(void)
     open_session(0x11U);
     fake_set_disconnect_result(ESP_FAIL);
     const uint32_t start = now_ms();
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     CHECK(fake_wait_disconnect_returns(1, 1000U));
-    CHECK(!wait_event(RTK_BT_SPP_EVT_CLOSE, 0x11U, 0U));
+    CHECK(!wait_event(SPP_SERVER_EVT_CLOSE, 0x11U, 0U));
     fake_set_disconnect_result(ESP_OK);
     CHECK(fake_wait_disconnect_returns(2, 1000U));
     CHECK((now_ms() - start) >= 90U);
     CHECK((now_ms() - start) < 1000U);
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     CHECK(!fake_wait_disconnect_calls(3, 150U));
     fake_emit_close(0x11U);
-    CHECK(wait_event(RTK_BT_SPP_EVT_CLOSE, 0x11U, 100U));
+    CHECK(wait_event(SPP_SERVER_EVT_CLOSE, 0x11U, 100U));
     open_session(0x11U);
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     CHECK(fake_wait_disconnect_returns(3, 1000U));
 }
 
 /* CLOSE 已被消费而 SDK 仍阻塞时，也不能在另一空槽接纳相同 handle。 */
 static void sc_disconnect_reuse_across_slots(void)
 {
-    rtk_bt_spp_evt_t evt;
+    spp_server_evt_t evt;
     bring_up();
     open_session(0x11U); /* 第二槽刻意空闲 */
     fake_gate_arm(FAKE_GATE_DISCONNECT);
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     CHECK(fake_gate_wait_entered(FAKE_GATE_DISCONNECT, 1000U));
     fake_emit_close(0x11U);
-    CHECK(wait_event(RTK_BT_SPP_EVT_CLOSE, 0x11U, 100U));
+    CHECK(wait_event(SPP_SERVER_EVT_CLOSE, 0x11U, 100U));
     fake_emit_srv_open(0x11U, s_bda);
-    CHECK(!rtk_bt_spp_poll_event(&evt, 0U));
+    CHECK(!spp_server_poll_event(&evt, 0U));
     fake_gate_release(FAKE_GATE_DISCONNECT);
     CHECK(fake_wait_disconnect_returns(2, 1000U));
     fake_emit_close(0x11U); /* 拒绝连接不发布 CLOSE */
-    CHECK(!rtk_bt_spp_poll_event(&evt, 0U));
+    CHECK(!spp_server_poll_event(&evt, 0U));
     open_session(0x11U);
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     CHECK(fake_wait_disconnect_returns(3, 1000U));
 }
 
@@ -880,7 +880,7 @@ static void sc_reject_dedup_hole(void)
     open_session(0x11U);
     open_session(0x22U);
     fake_gate_arm(FAKE_GATE_DISCONNECT);
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     CHECK(fake_gate_wait_entered(FAKE_GATE_DISCONNECT, 1000U));
     fake_emit_srv_open(0x33U, s_bda);
     fake_emit_srv_open(0x44U, s_bda);
@@ -908,7 +908,7 @@ static void sc_reject_dedup_hole(void)
 /* 旧拒绝正在 SDK 中返回失败，CLOSE 后出现的新 OPEN 必须保留后继拒绝。 */
 static void sc_reject_rearm_after_close(void)
 {
-    rtk_bt_spp_evt_t evt;
+    spp_server_evt_t evt;
     bring_up();
     open_session(0x11U);
     open_session(0x22U);
@@ -919,15 +919,15 @@ static void sc_reject_rearm_after_close(void)
     fake_emit_close(0x33U);
     fake_emit_srv_open(0x33U, s_bda);
     fake_emit_srv_open(0x33U, s_bda);
-    CHECK(!rtk_bt_spp_poll_event(&evt, 0U));
+    CHECK(!spp_server_poll_event(&evt, 0U));
     fake_set_disconnect_result(ESP_OK);
     fake_gate_release(FAKE_GATE_DISCONNECT);
     CHECK(fake_wait_disconnect_returns(2, 1000U));
     CHECK(fake_disconnect_handle(0) == 0x33U && fake_disconnect_handle(1) == 0x33U);
     CHECK(!fake_wait_disconnect_calls(3, 150U));
     fake_emit_close(0x33U);
-    CHECK(!rtk_bt_spp_poll_event(&evt, 0U));
-    CHECK(rtk_bt_spp_disconnect(0x11U) == ESP_OK);
+    CHECK(!spp_server_poll_event(&evt, 0U));
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
     CHECK(fake_wait_disconnect_returns(3, 1000U));
 }
 

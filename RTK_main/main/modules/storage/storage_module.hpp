@@ -5,7 +5,7 @@
 #include "data/app_data.hpp"
 #include "fw/store_key.hpp"
 #include "cli/console.hpp"
-#include "rtk_store.h"
+#include "nvs_store.h"
 
 namespace app {
 struct AppContext;
@@ -50,7 +50,7 @@ private:
     uint32_t retry_ms_ = kRetryInitialMs;
     StoreStatus status_{};
     LinkStatus whitelist_{};
-    std::array<char, RTK_STORE_SN_MAX + 1U> sn_{};
+    std::array<char, NVS_STORE_SN_MAX + 1U> sn_{};
 };
 /** 存储模块的控制台命令表；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const cli::Cmd> storage_cmds() noexcept;

@@ -8,25 +8,25 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(RTK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
-set(DEMUX_INC ${RTK_ROOT}/components/stream_demux/include)
-set(PROTO_INC ${RTK_ROOT}/components/device_proto/include)
+set(PROJ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+set(DEMUX_INC ${PROJ_ROOT}/components/stream_demux/include)
+set(PROTO_INC ${PROJ_ROOT}/components/device_proto/include)
 
 add_executable(h2_check
     h2_check.cpp
-    ${RTK_ROOT}/components/stream_demux/src/crc.cpp
-    ${RTK_ROOT}/components/stream_demux/src/decoders/rtcm3.cpp
-    ${RTK_ROOT}/components/stream_demux/src/decoders/nmea.cpp
-    ${RTK_ROOT}/components/stream_demux/src/decoders/ubx.cpp
-    ${RTK_ROOT}/components/stream_demux/src/decoders/unicore_bin.cpp
-    ${RTK_ROOT}/components/stream_demux/src/decoders/unicore_hash.cpp
-    ${RTK_ROOT}/components/device_proto/demux_frame.cpp
-    ${RTK_ROOT}/components/device_proto/frame.cpp
-    ${RTK_ROOT}/components/app_fw/src/status.cpp
-    ${RTK_ROOT}/components/device_proto/rtk_proto_frame.c)
+    ${PROJ_ROOT}/components/stream_demux/src/crc.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/rtcm3.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/nmea.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/ubx.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/unicore_bin.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/unicore_hash.cpp
+    ${PROJ_ROOT}/components/device_proto/demux_frame.cpp
+    ${PROJ_ROOT}/components/device_proto/frame.cpp
+    ${PROJ_ROOT}/components/app_fw/src/status.cpp
+    ${PROJ_ROOT}/components/device_proto/dev_proto_frame.c)
 
 target_include_directories(h2_check PRIVATE
-    ${DEMUX_INC} ${PROTO_INC} ${RTK_ROOT}/components/app_fw/include)
+    ${DEMUX_INC} ${PROTO_INC} ${PROJ_ROOT}/components/app_fw/include)
 target_compile_options(h2_check PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion
         -Wsign-conversion -Wold-style-cast -Wnon-virtual-dtor -Woverloaded-virtual -Wcast-align

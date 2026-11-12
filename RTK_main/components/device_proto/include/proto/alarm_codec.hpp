@@ -1,4 +1,4 @@
-// 报警器扩展消息 0x40/0x41 编解码的 C++ 外观，实现委托给 C 接口 rtk_proto_alarm.h。线路格式见
+// 报警器扩展消息 0x40/0x41 编解码的 C++ 外观，实现委托给 C 接口 dev_proto_alarm.h。线路格式见
 // docs/protocol/phone_protocol.md §5。 本头文件同时供报警器固件复用。线程安全：是（无状态函数）。ISR 安全：是。
 // 冻结接口（ADR-0003）。实现方不得修改。
 #pragma once
@@ -8,7 +8,7 @@
 #include <optional>
 #include <span>
 
-#include "rtk_proto_alarm.h"
+#include "dev_proto_alarm.h"
 
 namespace proto::alarm {
 
@@ -62,10 +62,10 @@ struct Heartbeat {
 /** 报警器侧复用：解码 0x40 状态；data 不足 16 字节返回 nullopt。 */
 [[nodiscard]] std::optional<Status> decode_status(std::span<const uint8_t> data) noexcept;
 
-static_assert(kStatusLen == RTK_PROTO_ALARM_STATUS_LEN);
-static_assert(kHeartbeatLen == RTK_PROTO_ALARM_HEARTBEAT_LEN);
-static_assert(kMsgStatus == RTK_PROTO_ALARM_MSG_STATUS);
-static_assert(kMsgHeartbeat == RTK_PROTO_ALARM_MSG_HEARTBEAT);
-static_assert(kPushPeriodMs == RTK_PROTO_ALARM_PUSH_PERIOD_MS);
+static_assert(kStatusLen == DEV_PROTO_ALARM_STATUS_LEN);
+static_assert(kHeartbeatLen == DEV_PROTO_ALARM_HEARTBEAT_LEN);
+static_assert(kMsgStatus == DEV_PROTO_ALARM_MSG_STATUS);
+static_assert(kMsgHeartbeat == DEV_PROTO_ALARM_MSG_HEARTBEAT);
+static_assert(kPushPeriodMs == DEV_PROTO_ALARM_PUSH_PERIOD_MS);
 
 } // namespace proto::alarm

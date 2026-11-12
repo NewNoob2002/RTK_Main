@@ -11,7 +11,7 @@
 #include "cli/console.hpp"
 
 namespace {
-constexpr const char *kTag = "rtk";
+constexpr const char *kTag = "app";
 constinit app::AppContext s_app{};
 
 template <typename T> constexpr auto kModuleOps = fw::make_ops<T>();
@@ -28,7 +28,7 @@ constinit const fw::Module kModules[]{
 };
 // 链路绑 core1，BT worker/控制台在 core0；每轮至少让出 1 tick 给 IDLE1。
 constexpr rtos::ExecutorConfig kLinkConfig{
-    .name = "rtk_link",
+    .name = "link",
     .id = app::id(app::ExecKind::kLink),
     .priority = 10,
     .core = 1,

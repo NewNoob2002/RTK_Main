@@ -21,9 +21,9 @@ if(NOT EXISTS ${UNITY_DIR}/unity.c)
     message(FATAL_ERROR "Unity not found at ${UNITY_DIR}")
 endif()
 
-set(RTK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+set(PROJ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
-set(RTK_CXX_STRICT
+set(PROJ_CXX_STRICT
     -fno-exceptions -fno-rtti
     -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast
     -Wnon-virtual-dtor -Woverloaded-virtual -Wcast-align -Wdouble-promotion -Wnull-dereference
@@ -32,15 +32,15 @@ set(RTK_CXX_STRICT
 add_library(unity STATIC ${UNITY_DIR}/unity.c)
 target_include_directories(unity SYSTEM PUBLIC ${UNITY_DIR})
 
-add_library(cli_parse STATIC ${RTK_ROOT}/components/cli/src/parse.cpp)
+add_library(cli_parse STATIC ${PROJ_ROOT}/components/cli/src/parse.cpp)
 target_include_directories(cli_parse BEFORE PUBLIC shim)
-target_include_directories(cli_parse PUBLIC ${RTK_ROOT}/components/cli/include)
+target_include_directories(cli_parse PUBLIC ${PROJ_ROOT}/components/cli/include)
 target_compile_features(cli_parse PUBLIC cxx_std_20)
-target_compile_options(cli_parse PRIVATE ${RTK_CXX_STRICT})
+target_compile_options(cli_parse PRIVATE ${PROJ_CXX_STRICT})
 
 enable_testing()
 
 add_executable(test_parse test_parse.cpp)
 target_link_libraries(test_parse cli_parse unity)
-target_compile_options(test_parse PRIVATE ${RTK_CXX_STRICT})
+target_compile_options(test_parse PRIVATE ${PROJ_CXX_STRICT})
 add_test(NAME test_parse COMMAND test_parse)

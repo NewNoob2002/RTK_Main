@@ -7,10 +7,10 @@ if(DEFINED CONFIG_SOC_BT_CLASSIC_SUPPORTED AND NOT CONFIG_SOC_BT_CLASSIC_SUPPORT
     idf_component_register(
         INCLUDE_DIRS "include"
         REQUIRES link_core rtos app_fw bt)
-    message(WARNING "rtk_bt: CONFIG_SOC_BT_CLASSIC_SUPPORTED=0，SPP 驱动与适配器未编译")
+    message(WARNING "spp_server: CONFIG_SOC_BT_CLASSIC_SUPPORTED=0，SPP 驱动与适配器未编译")
 else()
     idf_component_register(
-        SRCS "rtk_bt_spp_init.c" "rtk_bt_spp_session.c" "rtk_bt_spp_rx.c" "rtk_bt_spp_tx.c" "rtk_bt_spp_gap.c"
+        SRCS "spp_server_init.c" "spp_server_session.c" "spp_server_rx.c" "spp_server_tx.c" "spp_server_gap.c"
              "spp_transport.cpp"
         INCLUDE_DIRS "include"
         PRIV_INCLUDE_DIRS "private_include"

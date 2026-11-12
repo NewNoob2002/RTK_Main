@@ -1,4 +1,4 @@
-/* 主机回归用的 FreeRTOS 最小替身：只覆盖 components/spp_server/rtk_bt_spp.c 用到的 API。
+/* 主机回归用的 FreeRTOS 最小替身：只覆盖 components/spp_server/spp_server.c 用到的 API。
  * 语义按目标板配置（CONFIG_FREERTOS_HZ=1000、32 位 tick/EventBits_t、静态对象）实现：
  * 事件组/队列/流缓冲/任务通知都是真的阻塞原语（pthread 条件变量），临界区是全局互斥量，
  * 因此被测驱动里的跨任务竞态是真实发生的，而不是单线程模拟。

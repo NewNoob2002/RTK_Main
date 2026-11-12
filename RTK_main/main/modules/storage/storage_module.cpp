@@ -11,7 +11,7 @@ namespace {
 constexpr uint32_t kDebounceMs = 500;
 constexpr uint32_t kRetryMaxMs = 30000;
 using WhitelistRaw = std::array<std::array<uint8_t, core::kAddrLen>, kMaxAlarms>;
-static_assert(sizeof(WhitelistRaw) == kMaxAlarms * RTK_STORE_ADDR_LEN);
+static_assert(sizeof(WhitelistRaw) == kMaxAlarms * NVS_STORE_ADDR_LEN);
 } // namespace
 
 fw::Result StorageModule::whitelist_load(std::span<const uint8_t> in) noexcept
@@ -40,7 +40,7 @@ fw::Result StorageModule::whitelist_save(std::span<uint8_t> out, size_t &len) co
 
 fw::Result StorageModule::sn_load(std::span<const uint8_t> in) noexcept
 {
-    if (in.empty() || in.size() > RTK_STORE_SN_MAX ||
+    if (in.empty() || in.size() > NVS_STORE_SN_MAX ||
         std::find_if(in.begin(), in.end(), [](uint8_t c) { return c == 0U || c == '\r' || c == '\n'; }) != in.end()) {
         return fw::Result::kInvalidArg;
     }
@@ -65,8 +65,8 @@ void StorageModule::load_whitelist() noexcept
     size_t count = 0;
     // 冻结 C API 使用指向 6 B 行的指针；std::array 布局由 static_assert 保证。
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
-    auto *rows = reinterpret_cast<uint8_t (*)[RTK_STORE_ADDR_LEN]>(raw.data());
-    const esp_err_t error = rtk_store_get_alarms(rows, kMaxAlarms, &count);
+    auto *rows = reinterpret_cast<uint8_t (*)[NVS_STORE_ADDR_LEN]>(raw.data());
+    const esp_err_t error = nvs_store_get_alarms(rows, kMaxAlarms, &count);
     if (error != ESP_OK || count > kMaxAlarms) {
         ESP_LOGW("storage", "load whitelist failed: %s", esp_err_to_name(error));
         return;
@@ -82,14 +82,14 @@ void StorageModule::load_whitelist() noexcept
 
 void StorageModule::load_sn() noexcept
 {
-    std::array<char, RTK_STORE_SN_MAX + 1U> sn{};
-    const esp_err_t sn_error = rtk_store_get_sn(sn.data(), sn.size());
+    std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
+    const esp_err_t sn_error = nvs_store_get_sn(sn.data(), sn.size());
     if (sn_error != ESP_OK) {
         ESP_LOGI("storage", "sn unavailable: %s; derive from BT MAC", esp_err_to_name(sn_error));
         return;
     }
     /* 验证 SN 后保存到模块，供后续 BT 名称初始化使用。 */
-    std::array<uint8_t, RTK_STORE_SN_MAX + 1U> bytes{};
+    std::array<uint8_t, NVS_STORE_SN_MAX + 1U> bytes{};
     std::memcpy(bytes.data(), sn.data(), sn.size());
     const auto status = sn_load(std::span{bytes}.first(std::strlen(sn.data())));
     if (!fw::is_ok(status)) {
@@ -103,7 +103,7 @@ fw::Result StorageModule::init() noexcept
         return fw::Result::kOk;
     }
     /* 初始化后端，失败仍按原策略尝试加载并使用缺省值。 */
-    const esp_err_t init = rtk_store_init();
+    const esp_err_t init = nvs_store_init();
     if (init != ESP_OK) {
         ESP_LOGE("storage", "store init failed: %s; use defaults", esp_err_to_name(init));
     }
@@ -149,7 +149,7 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
     // 冻结 C API 的连续 6 B 行布局与 raw 相同。
     // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
     const esp_err_t error =
-        rtk_store_set_alarms(reinterpret_cast<const uint8_t (*)[RTK_STORE_ADDR_LEN]>(raw.data()), len / core::kAddrLen);
+        nvs_store_set_alarms(reinterpret_cast<const uint8_t (*)[NVS_STORE_ADDR_LEN]>(raw.data()), len / core::kAddrLen);
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
     /* 使用写入完成时间计算重试，保持失败倍增和状态发布顺序。 */
     attempt_ms_ = rtos::now_ms();
@@ -188,7 +188,7 @@ void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) n
         return;
     }
     /* 先验证并编码，失败时还原模块内的原 SN。 */
-    std::array<uint8_t, RTK_STORE_SN_MAX + 1U> encoded{};
+    std::array<uint8_t, NVS_STORE_SN_MAX + 1U> encoded{};
     size_t len = 0;
     result.status = sn_save(encoded, len);
     if (!fw::is_ok(result.status)) {
@@ -196,9 +196,9 @@ void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) n
         return;
     }
     /* 同步写入后端，回执和 StoreStatus 保留相同错误码。 */
-    std::array<char, RTK_STORE_SN_MAX + 1U> sn{};
+    std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
     std::memcpy(sn.data(), encoded.data(), len);
-    const esp_err_t error = rtk_store_set_sn(sn.data());
+    const esp_err_t error = nvs_store_set_sn(sn.data());
     status_.sn_error = error;
     result.detail = error;
     result.status = error == ESP_OK ? fw::Result::kOk : fw::Result::kIoError;

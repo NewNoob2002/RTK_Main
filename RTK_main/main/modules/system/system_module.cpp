@@ -5,7 +5,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_system.h"
-#include "rtk_bt_spp.h"
+#include "spp_server.h"
 
 namespace app {
 namespace {
@@ -17,7 +17,7 @@ constexpr unsigned kNibbleShift = 4;
 constexpr size_t kDeviceNameMax = kDeviceNameBuf - 1U;
 } // namespace
 bool derive_sn_from_mac(std::span<const uint8_t, core::kAddrLen> mac,
-                        std::span<char, RTK_STORE_SN_MAX + 1U> out) noexcept
+                        std::span<char, NVS_STORE_SN_MAX + 1U> out) noexcept
 {
     const std::array nibbles{mac[kMacSnHighByte] >> kNibbleShift, mac[kMacSnHighByte] & kNibbleMask,
                              mac[kMacSnLowByte] >> kNibbleShift, mac[kMacSnLowByte] & kNibbleMask};
@@ -30,7 +30,7 @@ bool derive_sn_from_mac(std::span<const uint8_t, core::kAddrLen> mac,
 }
 bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out) noexcept
 {
-    if (sn.empty() || sn.size() > RTK_STORE_SN_MAX || sn.find_first_of("\r\n") != std::string_view::npos) {
+    if (sn.empty() || sn.size() > NVS_STORE_SN_MAX || sn.find_first_of("\r\n") != std::string_view::npos) {
         return false;
     }
     // SN 最多 16 B，精度转换到 int 无损。
@@ -66,7 +66,7 @@ void SystemModule::prepare() noexcept
     }
     ESP_LOGI("system", "sn=%s bt_name=%s policy=%s", status_.sn.data(), status_.device_name.data(),
              policy_name(policy_from_config()));
-    const esp_err_t error = rtk_bt_spp_init(status_.device_name.data());
+    const esp_err_t error = spp_server_init(status_.device_name.data());
     status_.bt_ready = error == ESP_OK;
     if (error != ESP_OK) {
         ESP_LOGE("system", "bt_spp init failed: %s; console only", esp_err_to_name(error));

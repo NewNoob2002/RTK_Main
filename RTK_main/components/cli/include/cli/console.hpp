@@ -1,5 +1,5 @@
 // 控制台组件：esp_console REPL + 分组命令表注册 + 参数解析辅助。
-// 只依赖 IDF（console、esp_system），不依赖任何 rtk_* 业务组件，报警器固件也可复用。
+// 只依赖 IDF（console、esp_system），不依赖任何自有业务组件，报警器固件也可复用。
 // 用法：各模块提供 `inline constexpr cli::Cmd kCmds[] = {...}`；main 在 start 前逐表 add，
 //       然后 start 一次。命令回调在 console 任务中执行：只读命令直接读 DataCenter，
 //       改状态命令经 Executor::call 投递到所属执行器（ADR-0007 §4.3），不得直接改模块状态。

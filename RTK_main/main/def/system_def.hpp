@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "app_config.hpp"
-#include "rtk_store.h"
+#include "nvs_store.h"
 
 namespace app {
 
@@ -22,7 +22,7 @@ enum class SystemVerb : uint8_t { kPublish };
 struct SystemStatus {
     bool bt_ready = false;
     bool link_running = false;
-    std::array<char, RTK_STORE_SN_MAX + 1U> sn{};
+    std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
     std::array<char, kDeviceNameBuf> device_name{};
     uint32_t free_heap = 0;
     uint32_t min_free_heap = 0;

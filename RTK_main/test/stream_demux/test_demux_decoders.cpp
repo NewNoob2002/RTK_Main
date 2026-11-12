@@ -242,7 +242,7 @@ static void test_decoder_descriptors_and_first_bytes()
 #endif
 
     TEST_ASSERT_NOT_NULL(proto::demux_frame::kDecoder.name);
-    TEST_ASSERT_EQUAL_UINT(RTK_PROTO_MAX_FRAME, proto::demux_frame::kDecoder.max_frame);
+    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_MAX_FRAME, proto::demux_frame::kDecoder.max_frame);
     TEST_ASSERT_EQUAL_UINT(proto::demux_frame::kMaxFrame, proto::demux_frame::kDecoder.max_frame);
     assert_only_first_byte(proto::demux_frame::kDecoder, proto::kSyncA);
 }

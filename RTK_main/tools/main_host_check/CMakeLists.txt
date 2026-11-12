@@ -5,47 +5,47 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-get_filename_component(RTK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+get_filename_component(PROJ_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 find_package(Threads REQUIRED)
 add_library(main_rtos STATIC ../t13_host_check/shim/fake_rtos.c)
 target_include_directories(main_rtos PUBLIC ../t13_host_check/shim/inc)
 target_link_libraries(main_rtos PUBLIC Threads::Threads)
-add_subdirectory(${RTK_ROOT}/components/stream_demux stream_demux_build)
+add_subdirectory(${PROJ_ROOT}/components/stream_demux stream_demux_build)
 add_library(main_pure STATIC
-    ${RTK_ROOT}/components/device_proto/rtk_proto_frame.c
-    ${RTK_ROOT}/components/device_proto/rtk_proto_alarm.c
-    ${RTK_ROOT}/components/device_proto/frame.cpp
-    ${RTK_ROOT}/components/device_proto/demux_frame.cpp
-    ${RTK_ROOT}/components/device_proto/alarm_codec.cpp
-    ${RTK_ROOT}/components/device_proto/bytes.cpp
-    ${RTK_ROOT}/components/app_fw/src/status.cpp
-    ${RTK_ROOT}/components/link_core/alarm_source.cpp
-    ${RTK_ROOT}/components/link_core/link_manager.cpp
-    ${RTK_ROOT}/components/link_core/command_router.cpp
-    ${RTK_ROOT}/components/link_core/services/device_service.cpp
-    ${RTK_ROOT}/components/link_core/services/config_service.cpp
-    ${RTK_ROOT}/components/link_core/services/alarm_service.cpp
-    ${RTK_ROOT}/components/link_core/services/pair_service.cpp
-    ${RTK_ROOT}/components/link_core/link_service.cpp)
+    ${PROJ_ROOT}/components/device_proto/dev_proto_frame.c
+    ${PROJ_ROOT}/components/device_proto/dev_proto_alarm.c
+    ${PROJ_ROOT}/components/device_proto/frame.cpp
+    ${PROJ_ROOT}/components/device_proto/demux_frame.cpp
+    ${PROJ_ROOT}/components/device_proto/alarm_codec.cpp
+    ${PROJ_ROOT}/components/device_proto/bytes.cpp
+    ${PROJ_ROOT}/components/app_fw/src/status.cpp
+    ${PROJ_ROOT}/components/link_core/alarm_source.cpp
+    ${PROJ_ROOT}/components/link_core/link_manager.cpp
+    ${PROJ_ROOT}/components/link_core/command_router.cpp
+    ${PROJ_ROOT}/components/link_core/services/device_service.cpp
+    ${PROJ_ROOT}/components/link_core/services/config_service.cpp
+    ${PROJ_ROOT}/components/link_core/services/alarm_service.cpp
+    ${PROJ_ROOT}/components/link_core/services/pair_service.cpp
+    ${PROJ_ROOT}/components/link_core/link_service.cpp)
 target_include_directories(main_pure PUBLIC
-    ${RTK_ROOT}/components/app_fw/include
-    ${RTK_ROOT}/components/device_proto/include ${RTK_ROOT}/components/link_core/include)
-target_include_directories(main_pure PRIVATE ${RTK_ROOT}/components/link_core/private_include)
+    ${PROJ_ROOT}/components/app_fw/include
+    ${PROJ_ROOT}/components/device_proto/include ${PROJ_ROOT}/components/link_core/include)
+target_include_directories(main_pure PRIVATE ${PROJ_ROOT}/components/link_core/private_include)
 target_link_libraries(main_pure PUBLIC stream_demux)
 target_compile_options(main_pure PRIVATE -Wall -Wextra -Werror -Wshadow)
 enable_testing()
 # 同一真实组合根分别编译两种 Kconfig 分支，产品不增加测试开关或可替换调度框架。
 foreach(policy concurrent preempt)
-    add_executable(main_${policy} main_host_check.cpp ${RTK_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
-        ${RTK_ROOT}/main/data/app_data.cpp ${RTK_ROOT}/main/modules/storage/storage_module.cpp
-        ${RTK_ROOT}/main/modules/rtcm/rtcm_module.cpp ${RTK_ROOT}/main/modules/bt_link/async_tx.cpp
-        ${RTK_ROOT}/components/spp_server/spp_transport.cpp)
+    add_executable(main_${policy} main_host_check.cpp ${PROJ_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
+        ${PROJ_ROOT}/main/data/app_data.cpp ${PROJ_ROOT}/main/modules/storage/storage_module.cpp
+        ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp ${PROJ_ROOT}/main/modules/bt_link/async_tx.cpp
+        ${PROJ_ROOT}/components/spp_server/spp_transport.cpp)
     target_include_directories(main_${policy} BEFORE PRIVATE shim)
     target_include_directories(main_${policy} PRIVATE
-        ${RTK_ROOT}/main ${RTK_ROOT}/components/spp_server/include
-        ${RTK_ROOT}/components/cli/include
-        ${RTK_ROOT}/components/nvs_store/include ${RTK_ROOT}/components/rtos/include
-        ${RTK_ROOT}/components/app_fw/include)
+        ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
+        ${PROJ_ROOT}/components/cli/include
+        ${PROJ_ROOT}/components/nvs_store/include ${PROJ_ROOT}/components/rtos/include
+        ${PROJ_ROOT}/components/app_fw/include)
     target_compile_options(main_${policy} PRIVATE -fno-exceptions -fno-rtti
         -Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
     target_link_libraries(main_${policy} PRIVATE main_pure main_rtos)
@@ -58,11 +58,11 @@ foreach(policy concurrent preempt)
     endforeach()
 endforeach()
 
-add_executable(executor_check executor_check.cpp ${RTK_ROOT}/components/rtos/executor.cpp)
+add_executable(executor_check executor_check.cpp ${PROJ_ROOT}/components/rtos/executor.cpp)
 target_include_directories(executor_check BEFORE PRIVATE shim)
 target_include_directories(executor_check PRIVATE ../t13_host_check/shim/inc
-    ${RTK_ROOT}/components/rtos/include ${RTK_ROOT}/components/device_proto/include
-    ${RTK_ROOT}/components/app_fw/include)
+    ${PROJ_ROOT}/components/rtos/include ${PROJ_ROOT}/components/device_proto/include
+    ${PROJ_ROOT}/components/app_fw/include)
 target_compile_options(executor_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 foreach(scenario lifecycle calls invalid)
@@ -70,24 +70,24 @@ foreach(scenario lifecycle calls invalid)
 endforeach()
 
 add_executable(template_check template_check.cpp
-    ${RTK_ROOT}/main/modules/_template/template_module.cpp
-    ${RTK_ROOT}/main/modules/_template/template_cmds.cpp
-    ${RTK_ROOT}/main/data/app_data.cpp
-    ${RTK_ROOT}/main/support/console_support.cpp
-    ${RTK_ROOT}/components/cli/src/parse.cpp
-    ${RTK_ROOT}/components/rtos/executor.cpp
-    ${RTK_ROOT}/main/modules/bt_link/bt_link_module.cpp
-    ${RTK_ROOT}/main/modules/bt_link/async_tx.cpp
-    ${RTK_ROOT}/main/modules/rtcm/rtcm_module.cpp
-    ${RTK_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
-    ${RTK_ROOT}/main/modules/storage/storage_module.cpp
-    ${RTK_ROOT}/components/spp_server/spp_transport.cpp)
+    ${PROJ_ROOT}/main/modules/_template/template_module.cpp
+    ${PROJ_ROOT}/main/modules/_template/template_cmds.cpp
+    ${PROJ_ROOT}/main/data/app_data.cpp
+    ${PROJ_ROOT}/main/support/console_support.cpp
+    ${PROJ_ROOT}/components/cli/src/parse.cpp
+    ${PROJ_ROOT}/components/rtos/executor.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/bt_link_module.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/async_tx.cpp
+    ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp
+    ${PROJ_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
+    ${PROJ_ROOT}/main/modules/storage/storage_module.cpp
+    ${PROJ_ROOT}/components/spp_server/spp_transport.cpp)
 target_include_directories(template_check BEFORE PRIVATE shim)
 target_include_directories(template_check PRIVATE ../t13_host_check/shim/inc
-    ${RTK_ROOT}/main ${RTK_ROOT}/components/spp_server/include
-    ${RTK_ROOT}/components/cli/include
-    ${RTK_ROOT}/components/nvs_store/include ${RTK_ROOT}/components/rtos/include
-    ${RTK_ROOT}/components/app_fw/include)
+    ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
+    ${PROJ_ROOT}/components/cli/include
+    ${PROJ_ROOT}/components/nvs_store/include ${PROJ_ROOT}/components/rtos/include
+    ${PROJ_ROOT}/components/app_fw/include)
 target_compile_options(template_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 target_link_libraries(template_check PRIVATE main_pure)

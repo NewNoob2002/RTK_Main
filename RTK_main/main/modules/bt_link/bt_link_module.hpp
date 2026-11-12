@@ -22,7 +22,7 @@
 #include "core/services/device_service.hpp"
 #include "core/services/pair_service.hpp"
 #include "proto/demux_frame.hpp"
-#include "rtk_bt_spp.h"
+#include "spp_server.h"
 
 namespace app {
 struct AppContext;
@@ -103,8 +103,8 @@ private:
     void session_record(core::SessionHandle handle, const core::BtAddr &addr) noexcept;
     [[nodiscard]] core::LinkService &link_service() noexcept;
     void collect_whitelist_dirty() noexcept;
-    void handle_event(const rtk_bt_spp_evt_t &evt, uint32_t now_ms) noexcept;
-    void handle_open(const rtk_bt_spp_evt_t &evt, uint32_t now_ms) noexcept;
+    void handle_event(const spp_server_evt_t &evt, uint32_t now_ms) noexcept;
+    void handle_open(const spp_server_evt_t &evt, uint32_t now_ms) noexcept;
     void handle_close(core::SessionHandle handle) noexcept;
     void handle_data(core::SessionHandle handle) noexcept;
     void drain_rx(uint32_t round_start_ms) noexcept;

@@ -10,7 +10,7 @@
 #include <cstring>
 #include <span>
 
-#include "rtk_store.h"
+#include "nvs_store.h"
 
 namespace app {
 
@@ -26,8 +26,8 @@ int cmd_sn(void * /*ctx*/, int argc, char **argv) noexcept
         return 1;
     }
     const size_t len = strlen(args[1]);
-    if ((len == 0U) || (len > RTK_STORE_SN_MAX) || (strpbrk(args[1], "\r\n") != nullptr)) {
-        printf("invalid sn (1..%u bytes, no newline)\n", static_cast<unsigned>(RTK_STORE_SN_MAX));
+    if ((len == 0U) || (len > NVS_STORE_SN_MAX) || (strpbrk(args[1], "\r\n") != nullptr)) {
+        printf("invalid sn (1..%u bytes, no newline)\n", static_cast<unsigned>(NVS_STORE_SN_MAX));
         return 1;
     }
 

@@ -46,7 +46,7 @@ struct ModuleTestAccess {
     {
         return app_context().storage.attempt_ms_;
     }
-    static void handle_event(const rtk_bt_spp_evt_t &evt, uint32_t now_ms) noexcept
+    static void handle_event(const spp_server_evt_t &evt, uint32_t now_ms) noexcept
     {
         app_context().bt_link.handle_event(evt, now_ms);
     }
@@ -88,7 +88,7 @@ struct LinkServiceProbe {
 };
 constinit LinkServiceProbe s_service{};
 auto &s_sessions = ModuleTestAccess::sessions();
-void handle_event(const rtk_bt_spp_evt_t &evt, uint32_t now_ms) noexcept
+void handle_event(const spp_server_evt_t &evt, uint32_t now_ms) noexcept
 {
     ModuleTestAccess::handle_event(evt, now_ms);
 }

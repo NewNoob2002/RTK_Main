@@ -58,7 +58,7 @@ struct LinkStats : core::LinkStats {
     uint32_t tx_failed = 0;     // 异步发送任务底层 write 失败
     uint32_t tx_queue_full = 0; // 发送队列满被丢弃的回复
     uint32_t tx_max_depth = 0;  // 发送队列最大深度
-    uint32_t tx_stack_free = 0; // rtk_tx 栈剩余字节（未启动为 0）
+    uint32_t tx_stack_free = 0; // async_tx 栈剩余字节（未启动为 0）
 };
 
 } // namespace app

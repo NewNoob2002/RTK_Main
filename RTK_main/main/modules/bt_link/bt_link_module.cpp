@@ -12,7 +12,7 @@
 
 namespace app {
 namespace {
-constexpr const char *kTag = "rtk_app";
+constexpr const char *kTag = "bt_link";
 constexpr size_t kRxBudgetBytes = 256;
 constexpr uint32_t kRoundBudgetMs = 20;
 constexpr size_t kAlarmArgBytes = 2;
@@ -145,7 +145,7 @@ void BtLinkModule::collect_whitelist_dirty() noexcept
     }
 }
 
-void BtLinkModule::handle_open(const rtk_bt_spp_evt_t &evt, uint32_t now_ms) noexcept
+void BtLinkModule::handle_open(const spp_server_evt_t &evt, uint32_t now_ms) noexcept
 {
     core::BtAddr addr{};
     for (size_t i = 0; i < core::kAddrLen; ++i) {
@@ -169,19 +169,19 @@ void BtLinkModule::handle_data(core::SessionHandle handle) noexcept
     }
 }
 
-void BtLinkModule::handle_event(const rtk_bt_spp_evt_t &evt, uint32_t now_ms) noexcept
+void BtLinkModule::handle_event(const spp_server_evt_t &evt, uint32_t now_ms) noexcept
 {
     switch (evt.type) {
-    case RTK_BT_SPP_EVT_OPEN:
+    case SPP_SERVER_EVT_OPEN:
         handle_open(evt, now_ms);
         break;
-    case RTK_BT_SPP_EVT_CLOSE:
+    case SPP_SERVER_EVT_CLOSE:
         handle_close(evt.handle);
         break;
-    case RTK_BT_SPP_EVT_DATA:
+    case SPP_SERVER_EVT_DATA:
         handle_data(evt.handle);
         break;
-    case RTK_BT_SPP_EVT_RX_DROP:
+    case SPP_SERVER_EVT_RX_DROP:
         link_service().on_rx_dropped(evt.dropped);
         break;
     default:
@@ -193,7 +193,7 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
 {
     /* 只在预读耗尽时读取，空读结束此会话本轮处理。 */
     if (entry.rx_offset == entry.rx_size) {
-        entry.rx_size = rtk_bt_spp_read(entry.handle, entry.rx.data(), entry.rx.size());
+        entry.rx_size = spp_server_read(entry.handle, entry.rx.data(), entry.rx.size());
         entry.rx_offset = 0;
         if (entry.rx_size == 0U) {
             entry.drain_pending = false;
@@ -368,11 +368,11 @@ void BtLinkModule::wait(uint32_t max_ms) noexcept
         return;
     }
     /* 先等首个事件，再按原队列上限处理已排队的事件。 */
-    rtk_bt_spp_evt_t evt{};
-    if (rtk_bt_spp_poll_event(&evt, max_ms)) {
+    spp_server_evt_t evt{};
+    if (spp_server_poll_event(&evt, max_ms)) {
         handle_event(evt, rtos::now_ms());
-        for (size_t i = 1; i < RTK_BT_SPP_EVENT_QUEUE_LEN; ++i) {
-            if (!rtk_bt_spp_poll_event(&evt, 0)) {
+        for (size_t i = 1; i < SPP_SERVER_EVENT_QUEUE_LEN; ++i) {
+            if (!spp_server_poll_event(&evt, 0)) {
                 break;
             }
             handle_event(evt, rtos::now_ms());

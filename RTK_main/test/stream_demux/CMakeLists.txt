@@ -1,7 +1,7 @@
 # 通用多协议字节流分流器 C++20 黑盒测试工程（ADR-0005，H3 交付）。
 # 独立 host CMake 工程，不修改冻结的 test/host/ 与 components/stream_demux/CMakeLists.txt。
 cmake_minimum_required(VERSION 3.22)
-project(rtk_stream_demux_tests C CXX)
+project(stream_demux_tests C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -21,17 +21,17 @@ if(NOT EXISTS ${UNITY_DIR}/unity.c)
     message(FATAL_ERROR "Unity not found at ${UNITY_DIR}")
 endif()
 
-set(RTK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+set(PROJ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
 # 纯 C++ 组件的严格告警组（参照 test/host/CMakeLists.txt），对被测产品帧适配与测试同样生效。
-set(RTK_CXX_STRICT
+set(PROJ_CXX_STRICT
     -fno-exceptions -fno-rtti
     -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast
     -Wnon-virtual-dtor -Woverloaded-virtual -Wcast-align -Wdouble-promotion -Wnull-dereference
     -Wimplicit-fallthrough -Wundef -Wswitch-default)
 
-# C 源文件严格告警（rtk_proto_frame.c）。
-set(RTK_C_STRICT
+# C 源文件严格告警（dev_proto_frame.c）。
+set(PROJ_C_STRICT
     -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion -Wsign-conversion -Wcast-align
     -Wimplicit-fallthrough -Wundef -Wswitch-default -Wvla -Wstrict-prototypes -Wmissing-prototypes
     -Wfloat-equal -Werror=implicit-function-declaration)
@@ -40,26 +40,26 @@ add_library(unity STATIC ${UNITY_DIR}/unity.c)
 target_include_directories(unity SYSTEM PUBLIC ${UNITY_DIR})
 
 # 独立复用组件 stream_demux（在独立 CMake 下自动定义 STREAM_DEMUX_<协议> 开关）。
-add_subdirectory(${RTK_ROOT}/components/stream_demux stream_demux_build)
+add_subdirectory(${PROJ_ROOT}/components/stream_demux stream_demux_build)
 # 与目标固件一致的运行时约束（CPP-001/002）：与测试侧保持同为 -fno-exceptions -fno-rtti，
 # 避免被测 Sink 基类与测试子类 RTTI 开关不一致导致 UBSan vptr 误报。
 target_compile_options(stream_demux PRIVATE -fno-exceptions -fno-rtti)
 
 # 产品帧解码器直接编译 components/device_proto/demux_frame.cpp 及其依赖的 device_proto 源文件。
-add_library(rtk_proto_c_demux STATIC
-    ${RTK_ROOT}/components/device_proto/rtk_proto_frame.c)
-target_include_directories(rtk_proto_c_demux PUBLIC ${RTK_ROOT}/components/device_proto/include)
-target_compile_options(rtk_proto_c_demux PRIVATE ${RTK_C_STRICT})
+add_library(dev_proto_c_demux STATIC
+    ${PROJ_ROOT}/components/device_proto/dev_proto_frame.c)
+target_include_directories(dev_proto_c_demux PUBLIC ${PROJ_ROOT}/components/device_proto/include)
+target_compile_options(dev_proto_c_demux PRIVATE ${PROJ_C_STRICT})
 
-add_library(rtk_proto_demux STATIC
-    ${RTK_ROOT}/components/app_fw/src/status.cpp
-    ${RTK_ROOT}/components/device_proto/bytes.cpp
-    ${RTK_ROOT}/components/device_proto/frame.cpp
-    ${RTK_ROOT}/components/device_proto/demux_frame.cpp)
-target_include_directories(rtk_proto_demux PUBLIC
-    ${RTK_ROOT}/components/app_fw/include ${RTK_ROOT}/components/device_proto/include)
-target_link_libraries(rtk_proto_demux PUBLIC rtk_proto_c_demux stream_demux)
-target_compile_options(rtk_proto_demux PRIVATE ${RTK_CXX_STRICT})
+add_library(dev_proto_demux STATIC
+    ${PROJ_ROOT}/components/app_fw/src/status.cpp
+    ${PROJ_ROOT}/components/device_proto/bytes.cpp
+    ${PROJ_ROOT}/components/device_proto/frame.cpp
+    ${PROJ_ROOT}/components/device_proto/demux_frame.cpp)
+target_include_directories(dev_proto_demux PUBLIC
+    ${PROJ_ROOT}/components/app_fw/include ${PROJ_ROOT}/components/device_proto/include)
+target_link_libraries(dev_proto_demux PUBLIC dev_proto_c_demux stream_demux)
+target_compile_options(dev_proto_demux PRIVATE ${PROJ_CXX_STRICT})
 
 # 将 CMake 开关 STREAM_DEMUX_<协议> 显式转换为 0/1 编译定义，供测试按开关裁剪且不触发 -Wundef。
 set(_demux_test_defs)
@@ -74,15 +74,15 @@ endforeach()
 
 add_library(demux_gen STATIC demux_gen.cpp)
 target_include_directories(demux_gen PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(demux_gen PUBLIC rtk_proto_demux)
-target_compile_options(demux_gen PRIVATE ${RTK_CXX_STRICT})
+target_link_libraries(demux_gen PUBLIC dev_proto_demux)
+target_compile_options(demux_gen PRIVATE ${PROJ_CXX_STRICT})
 
 enable_testing()
 
 foreach(name test_demux_gen test_demux_engine test_demux_decoders test_demux_stream)
     add_executable(${name} ${name}.cpp)
-    target_link_libraries(${name} stream_demux rtk_proto_demux demux_gen unity)
+    target_link_libraries(${name} stream_demux dev_proto_demux demux_gen unity)
     target_compile_definitions(${name} PRIVATE ${_demux_test_defs})
-    target_compile_options(${name} PRIVATE ${RTK_CXX_STRICT})
+    target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})
     add_test(NAME ${name} COMMAND ${name})
 endforeach()

@@ -1,4 +1,4 @@
-// 通用 SPP 客户端重连策略状态机：纯 C++20，无 IDF/FreeRTOS/rtk_* 依赖（ExternalSpeak 报警器以后复用）。
+// 通用 SPP 客户端重连策略状态机：纯 C++20，无 IDF/FreeRTOS/自有组件依赖（ExternalSpeak 报警器以后复用）。
 // 只产生“动作”，由调用方执行（esp_spp_start_discovery / esp_spp_connect / 定时），因此可在 host 上全覆盖测试。
 // 线程模型：单线程；所有方法只能由同一任务调用。时间单位 ms，u32 回绕由无符号差值处理。
 // 冻结接口（ADR-0007 §5）。

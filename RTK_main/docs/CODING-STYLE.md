@@ -127,7 +127,7 @@ void PublishLink(uint32_t nowMs);
 
 ADR-0008 §9 的对照如下。组件按用途命名，统一名称不改变职责与可复用性。
 公共基础错误码位于 `app_fw` 的 `fw/status.hpp`，使用 `fw::Status`、`fw::is_ok`、`fw::to_string`，枚举值及字符串映射不变。
-C 头文件名和符号前缀保持现有契约（包括 `rtk_store.h`），留待 R7b 处理。
+C 头文件名与符号前缀取组件前缀（`dev_proto_*`、`spp_server_*`、`nvs_store_*`）；NVS 命名空间 `"rtk"`、键值、蓝牙名与 `RTK_*` Kconfig 选项保持不变。
 
 | 组件目录 | 命名空间 | C++ include 根 |
 | --- | --- | --- |
@@ -454,7 +454,7 @@ main/modules/storage/* # 任意文件与任意调用路径
 
 ### 8.1 命名与 C/C++ 边界
 
-C11 子集；公共符号/宏带组件前缀（`rtk_proto_*`、`RTK_PROTO_*`、`rtk_bt_spp_*`、`rtk_store_*`）；
+C11 子集；公共符号/宏带组件前缀（`dev_proto_*`、`DEV_PROTO_*`、`spp_server_*`、`nvs_store_*`）；
 文件静态变量 `s_`，类型 `_t`；不用 `p_`/`g_`/`b_`。
 头文件 `#pragma once`，用 `__cplusplus` 保护 `extern "C"`，只含 C 构造；C 不调用 C++。
 布局、错误检查与并发规则同样适用；C 中不用 `malloc`/`free`、不用 `goto`，内部函数 `static`。
@@ -465,7 +465,7 @@ C11 子集；公共符号/宏带组件前缀（`rtk_proto_*`、`RTK_PROTO_*`、`
 #ifdef __cplusplus
 extern "C" {
 #endif
-rtk_proto_err_t rtk_proto_decode(const uint8_t *data, size_t len);
+dev_proto_err_t dev_proto_decode(const uint8_t *data, size_t len);
 #ifdef __cplusplus
 }
 #endif

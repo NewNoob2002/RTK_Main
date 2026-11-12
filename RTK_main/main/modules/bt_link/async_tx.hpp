@@ -13,7 +13,7 @@
 #include "core/transport.hpp"
 #include "rtos/static_queue.hpp"
 #include "rtos/static_task.hpp"
-#include "rtk_proto_frame.h"
+#include "dev_proto_frame.h"
 
 namespace app {
 
@@ -30,7 +30,7 @@ struct AsyncTxStats {
 class AsyncTxTransport final : public core::Transport {
 public:
     static constexpr size_t kDepth = 8;
-    static constexpr size_t kMaxBytes = RTK_PROTO_MAX_FRAME;
+    static constexpr size_t kMaxBytes = DEV_PROTO_MAX_FRAME;
     static constexpr size_t kStackBytes = 3072;
 
     constexpr explicit AsyncTxTransport(core::Transport &inner) noexcept : inner_(inner) {}

@@ -2,7 +2,7 @@
 # 不依赖任何 IDF/FreeRTOS 头文件，必须能被 test/host/CMakeLists.txt 用 host gcc/g++ 编译。
 # 告警组按 AGENTS.md §3，用生成器表达式区分 C/C++。
 idf_component_register(
-    SRCS "rtk_proto_frame.c" "rtk_proto_alarm.c"
+    SRCS "dev_proto_frame.c" "dev_proto_alarm.c"
          "bytes.cpp" "frame.cpp" "alarm_codec.cpp"
          "demux_frame.cpp"
     INCLUDE_DIRS "include"

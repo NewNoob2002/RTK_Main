@@ -16,7 +16,7 @@ namespace cli {
 
 namespace {
 
-constexpr const char *kTag = "rtk_console";
+constexpr const char *kTag = "cli";
 
 // 只保存调用方静态表的 span（pointer + length），不拷贝 Cmd 结构体以节省静态 DRAM。
 // 每个非空表至少含 1 条命令，因此非空表数不会超过 kMaxCmds。

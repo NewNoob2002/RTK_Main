@@ -4,7 +4,7 @@
 #include "spp/spp_transport.hpp"
 
 #include "rtos/esp_status.hpp"
-#include "rtk_bt_spp.h"
+#include "spp_server.h"
 
 namespace spp {
 
@@ -14,12 +14,12 @@ fw::Status SppTransport::write(core::SessionHandle handle, std::span<const uint8
     if (data.empty()) {
         return fw::Status::kInvalidArg;
     }
-    return rtos::from_esp_err(rtk_bt_spp_write(handle, data.data(), data.size(), timeout_ms));
+    return rtos::from_esp_err(spp_server_write(handle, data.data(), data.size(), timeout_ms));
 }
 
 fw::Status SppTransport::disconnect(core::SessionHandle handle) noexcept
 {
-    return rtos::from_esp_err(rtk_bt_spp_disconnect(handle));
+    return rtos::from_esp_err(spp_server_disconnect(handle));
 }
 
 } // namespace spp

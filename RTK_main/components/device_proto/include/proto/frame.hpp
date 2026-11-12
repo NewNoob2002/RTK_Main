@@ -1,4 +1,4 @@
-// 手机/报警器 SPP 帧编解码的 C++ 外观：实现全部委托给 C 接口 rtk_proto_frame.h（报警器固件直接用 C 接口）。
+// 手机/报警器 SPP 帧编解码的 C++ 外观：实现全部委托给 C 接口 dev_proto_frame.h（报警器固件直接用 C 接口）。
 // 本头只做类型安全包装（span、fw::Status、FrameView），不重复实现协议逻辑。线路格式见 docs/protocol/phone_protocol.md
 // §1–§3。 线程安全：否（FrameParser 每会话一个实例，只由链路任务使用）。ISR 安全：是。
 // 冻结接口（ADR-0003）。实现方不得修改。
@@ -10,7 +10,7 @@
 #include <span>
 
 #include "fw/status.hpp"
-#include "rtk_proto_frame.h"
+#include "dev_proto_frame.h"
 
 namespace proto {
 
@@ -111,15 +111,15 @@ public:
     }
 
 private:
-    rtk_proto_parser_t parser_{}; // 全零即初始状态（C 头文件契约）
+    dev_proto_parser_t parser_{}; // 全零即初始状态（C 头文件契约）
 };
 
 // C++ 常量必须与 C 宏一致（两端共用同一线路格式）。
-static_assert(kHeaderLen == RTK_PROTO_HEADER_LEN);
-static_assert(kCrcLen == RTK_PROTO_CRC_LEN);
-static_assert(kMaxPayload == RTK_PROTO_MAX_PAYLOAD);
-static_assert(kMaxFrame == RTK_PROTO_MAX_FRAME);
-static_assert(sender::kAlarm == RTK_PROTO_SENDER_ALARM);
-static_assert(msg_type::kPush == RTK_PROTO_TYPE_PUSH);
+static_assert(kHeaderLen == DEV_PROTO_HEADER_LEN);
+static_assert(kCrcLen == DEV_PROTO_CRC_LEN);
+static_assert(kMaxPayload == DEV_PROTO_MAX_PAYLOAD);
+static_assert(kMaxFrame == DEV_PROTO_MAX_FRAME);
+static_assert(sender::kAlarm == DEV_PROTO_SENDER_ALARM);
+static_assert(msg_type::kPush == DEV_PROTO_TYPE_PUSH);
 
 } // namespace proto

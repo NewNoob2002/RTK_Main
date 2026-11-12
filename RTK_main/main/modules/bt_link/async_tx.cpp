@@ -18,7 +18,7 @@ fw::Status AsyncTxTransport::start(uint32_t priority, BaseType_t core) noexcept
     if (!is_ok(queue_status)) {
         return queue_status;
     }
-    const fw::Status task_status = task_.start("rtk_tx", priority, core, &AsyncTxTransport::task_entry, this);
+    const fw::Status task_status = task_.start("async_tx", priority, core, &AsyncTxTransport::task_entry, this);
     if (!is_ok(task_status)) {
         queue_.deinit();
         return task_status;

@@ -20,8 +20,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "reconnect_bridge.h"
-#include "rtk_proto_alarm.h"
-#include "rtk_proto_frame.h"
+#include "dev_proto_alarm.h"
+#include "dev_proto_frame.h"
 
 #define PEER_QUEUE              24U
 #define PEER_STACK              6144U
@@ -45,7 +45,7 @@ typedef struct {
     uint32_t handle;
     int status;
     size_t length;
-    uint8_t data[RTK_PROTO_MAX_FRAME];
+    uint8_t data[DEV_PROTO_MAX_FRAME];
 } peer_event_t;
 static StaticQueue_t s_queue_control;
 static uint8_t s_queue_storage[PEER_QUEUE * sizeof(peer_event_t)];
@@ -59,7 +59,7 @@ static bool s_alarm;
 static bool s_heartbeat = true;
 static uint32_t s_last_heartbeat;
 static uint16_t s_sequence;
-static rtk_proto_parser_t s_parser;
+static dev_proto_parser_t s_parser;
 static uint32_t s_frames;
 static uint32_t s_pushes;
 static uint32_t s_replies;
@@ -236,13 +236,13 @@ static void start_reconnect_now(void)
 
 static void send_frame(uint16_t id, uint8_t sender, uint8_t type, const uint8_t *payload, size_t length)
 {
-    uint8_t bytes[RTK_PROTO_MAX_FRAME] = {0};
+    uint8_t bytes[DEV_PROTO_MAX_FRAME] = {0};
     size_t count = 0;
     if (s_handle == 0U) {
         ESP_LOGW(s_tag, "not connected");
         return;
     }
-    if (rtk_proto_frame_build(bytes, sizeof(bytes), id, sender, type, payload, length, &count) != RTK_PROTO_OK) {
+    if (dev_proto_frame_build(bytes, sizeof(bytes), id, sender, type, payload, length, &count) != DEV_PROTO_OK) {
         ESP_LOGE(s_tag, "frame build failed");
         return;
     }
@@ -254,10 +254,10 @@ static void send_frame(uint16_t id, uint8_t sender, uint8_t type, const uint8_t 
 
 static void heartbeat(void)
 {
-    const rtk_proto_alarm_heartbeat_t hb = {.seq = s_sequence++, .battery_pct = 80U, .local_state = 0U};
-    uint8_t payload[RTK_PROTO_ALARM_HEARTBEAT_LEN] = {0};
-    const size_t count = rtk_proto_alarm_encode_heartbeat(&hb, payload, sizeof(payload));
-    send_frame(0x41U, RTK_PROTO_SENDER_ALARM, RTK_PROTO_TYPE_PUSH, payload, count);
+    const dev_proto_alarm_heartbeat_t hb = {.seq = s_sequence++, .battery_pct = 80U, .local_state = 0U};
+    uint8_t payload[DEV_PROTO_ALARM_HEARTBEAT_LEN] = {0};
+    const size_t count = dev_proto_alarm_encode_heartbeat(&hb, payload, sizeof(payload));
+    send_frame(0x41U, DEV_PROTO_SENDER_ALARM, DEV_PROTO_TYPE_PUSH, payload, count);
     s_last_heartbeat = now_ms();
 }
 
@@ -267,12 +267,12 @@ static void receive_data(const peer_event_t *event)
         return;
     }
     for (size_t i = 0; i < event->length; i++) {
-        rtk_proto_frame_t frame = {0};
-        const rtk_proto_parse_result_t result = rtk_proto_parser_feed(&s_parser, event->data[i], &frame);
-        if (result == RTK_PROTO_PARSE_FRAME) {
+        dev_proto_frame_t frame = {0};
+        const dev_proto_parse_result_t result = dev_proto_parser_feed(&s_parser, event->data[i], &frame);
+        if (result == DEV_PROTO_PARSE_FRAME) {
             s_frames++;
             const uint32_t now = now_ms();
-            if ((frame.msg_id == 0x40U) && (frame.type == RTK_PROTO_TYPE_PUSH) && (frame.payload_len >= 16U)) {
+            if ((frame.msg_id == 0x40U) && (frame.type == DEV_PROTO_TYPE_PUSH) && (frame.payload_len >= 16U)) {
                 const uint16_t seq = (uint16_t)((uint16_t)frame.payload[0] | ((uint16_t)frame.payload[1] << 8U));
                 s_pushes++;
                 ESP_LOGI(s_tag, "PUSH seq=%u state=%u level=%u gap_ms=%" PRIu32, seq, frame.payload[2],
@@ -282,7 +282,7 @@ static void receive_data(const peer_event_t *event)
                 s_replies++;
                 ESP_LOGI(s_tag, "RX id=%04x type=%u payload=%u", frame.msg_id, frame.type, frame.payload_len);
             }
-        } else if ((result == RTK_PROTO_PARSE_CRC_ERR) || (result == RTK_PROTO_PARSE_LEN_ERR)) {
+        } else if ((result == DEV_PROTO_PARSE_CRC_ERR) || (result == DEV_PROTO_PARSE_LEN_ERR)) {
             s_errors++;
         }
     }
@@ -310,7 +310,7 @@ static void process_event(const peer_event_t *event)
         if (event->status == ESP_SPP_SUCCESS) {
             peer_rc_status_t st = {0};
             s_handle = event->handle;
-            rtk_proto_parser_init(&s_parser);
+            dev_proto_parser_init(&s_parser);
             s_last_push = 0U;
             ESP_LOGI(s_tag, "OPEN handle=%" PRIu32, s_handle);
             (void)peer_rc_on_open(now_ms());
@@ -456,7 +456,7 @@ static void command(char *line)
         char *end = NULL;
         unsigned long id = strtoul(line + PEER_QUERY_PREFIX_LEN, &end, 16);
         if ((end != (line + PEER_QUERY_PREFIX_LEN)) && (*end == '\0') && (id <= UINT16_MAX)) {
-            send_frame((uint16_t)id, s_alarm ? RTK_PROTO_SENDER_ALARM : RTK_PROTO_SENDER_APP, RTK_PROTO_TYPE_QUERY,
+            send_frame((uint16_t)id, s_alarm ? DEV_PROTO_SENDER_ALARM : DEV_PROTO_SENDER_APP, DEV_PROTO_TYPE_QUERY,
                        NULL, 0U); // 已检验 uint16_t 范围。
         }
     } else if (strcmp(line, "stats") == 0) {

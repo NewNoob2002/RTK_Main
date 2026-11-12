@@ -35,7 +35,7 @@ app::WhitelistRaw s_saved{};
 std::array<std::array<uint8_t, 4096>, 2> s_input{};
 std::array<size_t, 2> s_input_size{};
 std::array<size_t, 2> s_input_offset{};
-std::array<rtk_bt_spp_evt_t, 32> s_events{};
+std::array<spp_server_evt_t, 32> s_events{};
 size_t s_event_size = 0U;
 size_t s_event_offset = 0U;
 uint32_t s_read_delay = 0U;
@@ -69,9 +69,9 @@ void setup(std::span<const core::BtAddr> whitelist = {}, core::Policy policy = c
     CHECK(s_result_queue.init() == fw::Status::kOk);
 }
 
-void event(rtk_bt_spp_evt_type_t type, uint32_t handle, const core::BtAddr &addr = {})
+void event(spp_server_evt_type_t type, uint32_t handle, const core::BtAddr &addr = {})
 {
-    rtk_bt_spp_evt_t evt{};
+    spp_server_evt_t evt{};
     evt.type = type;
     evt.handle = handle;
     for (size_t idx = 0U; idx < addr.bytes.size(); ++idx) {
@@ -82,8 +82,8 @@ void event(rtk_bt_spp_evt_type_t type, uint32_t handle, const core::BtAddr &addr
 
 void open(uint32_t handle, const core::BtAddr &addr)
 {
-    rtk_bt_spp_evt_t evt{};
-    evt.type = RTK_BT_SPP_EVT_OPEN;
+    spp_server_evt_t evt{};
+    evt.type = SPP_SERVER_EVT_OPEN;
     evt.handle = handle;
     for (size_t idx = 0U; idx < addr.bytes.size(); ++idx) {
         evt.addr[idx] = addr.bytes[idx];
@@ -103,8 +103,8 @@ void append(size_t session, uint16_t msg, uint8_t sender, uint8_t type, std::spa
 
 void dirty(size_t session)
 {
-    rtk_bt_spp_evt_t evt{};
-    evt.type = RTK_BT_SPP_EVT_DATA;
+    spp_server_evt_t evt{};
+    evt.type = SPP_SERVER_EVT_DATA;
     evt.handle = session + 1U;
     app::handle_event(evt, s_clock);
 }
@@ -418,7 +418,7 @@ void rtcm_mix()
     constexpr std::array<uint8_t, 4> kGarbage{0, 0x7F, 0xFF, 0x55};
     append_bytes(0, kGarbage);
     append(0, 2, 0, proto::msg_type::kQuery);
-    event(RTK_BT_SPP_EVT_DATA, 1);
+    event(SPP_SERVER_EVT_DATA, 1);
     uint32_t tick = s_clock;
     link_round(tick);
     CHECK(s_write_calls == 1 && s_service->stats().frames_rx == 1);
@@ -446,8 +446,8 @@ void rtcm_roles()
     dirty(0);
     drain_rx(s_clock);
     CHECK(s_rtcm.stats().rejected_role == 1 && s_rtcm.stats().frames == 0);
-    rtk_bt_spp_evt_t close{};
-    close.type = RTK_BT_SPP_EVT_CLOSE;
+    spp_server_evt_t close{};
+    close.type = SPP_SERVER_EVT_CLOSE;
     close.handle = 1;
     handle_event(close, s_clock);
     open(1, kPhone);
@@ -547,8 +547,8 @@ void rtcm_reset_lifecycle()
     dirty(0);
     drain_rx(s_clock);
     CHECK(s_sessions[0].demux.busy());
-    rtk_bt_spp_evt_t close{};
-    close.type = RTK_BT_SPP_EVT_CLOSE;
+    spp_server_evt_t close{};
+    close.type = SPP_SERVER_EVT_CLOSE;
     close.handle = 1;
     handle_event(close, s_clock);
     handle_event(close, s_clock); // 重复 CLOSE 不得重复累计。
@@ -600,10 +600,10 @@ void lifecycle_application()
 {
     using namespace app;
     setup();
-    event(RTK_BT_SPP_EVT_OPEN, 1U, kPhone);
-    event(RTK_BT_SPP_EVT_CLOSE, 1U);
-    event(RTK_BT_SPP_EVT_OPEN, 1U, kAlarm);
-    event(RTK_BT_SPP_EVT_DATA, 1U);
+    event(SPP_SERVER_EVT_OPEN, 1U, kPhone);
+    event(SPP_SERVER_EVT_CLOSE, 1U);
+    event(SPP_SERVER_EVT_OPEN, 1U, kAlarm);
+    event(SPP_SERVER_EVT_DATA, 1U);
     append(0U, 1U, 0U, proto::msg_type::kQuery);
     uint32_t tick = s_clock;
     link_round(tick);
@@ -654,7 +654,7 @@ UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t)
 {
     return 0U;
 }
-bool rtk_bt_spp_poll_event(rtk_bt_spp_evt_t *evt, uint32_t timeout)
+bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout)
 {
     if (s_event_offset < s_event_size) {
         *evt = s_events[s_event_offset++];
@@ -664,7 +664,7 @@ bool rtk_bt_spp_poll_event(rtk_bt_spp_evt_t *evt, uint32_t timeout)
     s_clock += timeout;
     return false;
 }
-size_t rtk_bt_spp_read(uint32_t handle, uint8_t *bytes, size_t capacity)
+size_t spp_server_read(uint32_t handle, uint8_t *bytes, size_t capacity)
 {
     const size_t idx = handle - 1U;
     const size_t available = s_input_size[idx] - s_input_offset[idx];
@@ -674,7 +674,7 @@ size_t rtk_bt_spp_read(uint32_t handle, uint8_t *bytes, size_t capacity)
     s_clock += s_read_delay;
     return count;
 }
-esp_err_t rtk_bt_spp_write(uint32_t handle, const uint8_t *bytes, size_t size, uint32_t timeout)
+esp_err_t spp_server_write(uint32_t handle, const uint8_t *bytes, size_t size, uint32_t timeout)
 {
     CHECK(s_write_calls < s_write_bytes.size() && size <= s_write_bytes[0].size());
     if (s_write_calls >= s_write_bytes.size() || size > s_write_bytes[0].size()) {
@@ -689,35 +689,35 @@ esp_err_t rtk_bt_spp_write(uint32_t handle, const uint8_t *bytes, size_t size, u
     s_clock += s_write_delay;
     return s_write_delay ? ESP_ERR_TIMEOUT : ESP_OK;
 }
-esp_err_t rtk_bt_spp_disconnect(uint32_t)
+esp_err_t spp_server_disconnect(uint32_t)
 {
     return ESP_OK;
 }
-esp_err_t rtk_store_init(void)
+esp_err_t nvs_store_init(void)
 {
     return ESP_OK;
 }
-esp_err_t rtk_store_get_sn(char *out, size_t size)
+esp_err_t nvs_store_get_sn(char *out, size_t size)
 {
     std::snprintf(out, size, "%s", "TEST");
     return ESP_OK;
 }
-esp_err_t rtk_store_set_sn(const char *)
+esp_err_t nvs_store_set_sn(const char *)
 {
     return ESP_OK;
 }
-esp_err_t rtk_store_set_alarms(const uint8_t (*alarms)[RTK_STORE_ADDR_LEN], size_t count)
+esp_err_t nvs_store_set_alarms(const uint8_t (*alarms)[NVS_STORE_ADDR_LEN], size_t count)
 {
     ++s_store_calls;
     if (s_store_result == ESP_OK) {
         s_saved_count = count;
         for (size_t idx = 0U; idx < count; ++idx) {
-            std::memcpy(s_saved[idx].data(), alarms[idx], RTK_STORE_ADDR_LEN);
+            std::memcpy(s_saved[idx].data(), alarms[idx], NVS_STORE_ADDR_LEN);
         }
     }
     return s_store_result;
 }
-esp_err_t rtk_store_get_alarms(uint8_t (*)[RTK_STORE_ADDR_LEN], size_t, size_t *count)
+esp_err_t nvs_store_get_alarms(uint8_t (*)[NVS_STORE_ADDR_LEN], size_t, size_t *count)
 {
     *count = 0U;
     return ESP_OK;
