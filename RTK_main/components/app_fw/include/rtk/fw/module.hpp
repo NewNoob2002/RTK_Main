@@ -10,10 +10,10 @@
 #include <cstdint>
 #include <string_view>
 
-#include "app/command.hpp"
-#include "app/result.hpp"
+#include "rtk/fw/command.hpp"
+#include "rtk/fw/result.hpp"
 
-namespace app {
+namespace rtk::fw {
 
 using ModuleId = uint8_t;   // 产品在 main/app_ids.hpp 用 enum class 定义具体值，再转换为 ModuleId
 using ExecutorId = uint8_t; // 同上
@@ -84,4 +84,4 @@ struct Module {
     const ModuleOps *ops = nullptr;
 };
 
-} // namespace app
+} // namespace rtk::fw

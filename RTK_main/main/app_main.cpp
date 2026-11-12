@@ -14,10 +14,10 @@ namespace {
 constexpr const char *kTag = "rtk";
 constinit rtk::app::AppContext s_app{};
 
-template <typename T> constexpr auto kModuleOps = ::app::make_ops<T>();
+template <typename T> constexpr auto kModuleOps = rtk::fw::make_ops<T>();
 // 编号由 id() 保证无窄化；对象与操作表同为静态存储。
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, readability-identifier-naming)
-constinit const ::app::Module kModules[]{
+constinit const rtk::fw::Module kModules[]{
 // X-macro 生成异构对象的注册项，constexpr 函数无法替代清单展开。
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define MODULE_DEF(type, member, name, kind, executor, period)                                                         \
@@ -170,7 +170,7 @@ extern "C" void app_main(void)
     s_app.data.init();
     /* NVS/SN 必须先于 BT 初始化，执行器再次 init 存储模块时为幂等。 */
     const auto loaded = s_app.storage.init();
-    if (!::app::is_ok(loaded)) {
+    if (!rtk::fw::is_ok(loaded)) {
         ESP_LOGE(kTag, "storage module init failed");
     }
     s_app.system.prepare();

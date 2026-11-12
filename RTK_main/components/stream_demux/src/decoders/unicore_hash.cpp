@@ -8,16 +8,16 @@
 // Generated-by: pi + workbuddy/deepseek-v4.1-flash
 // 人工负责人：UNKNOWN（待人工审查签字）
 
-#include "demux/decoders/unicore_hash.hpp"
+#include "rtk/demux/decoders/unicore_hash.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "demux/crc.hpp"
-#include "demux/decoder.hpp"
+#include "rtk/demux/crc.hpp"
+#include "rtk/demux/decoder.hpp"
 
-namespace demux::unicore_hash {
+namespace rtk::demux::unicore_hash {
 
 namespace {
 
@@ -256,4 +256,4 @@ Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
     return Step::kNeedMore;
 }
 
-} // namespace demux::unicore_hash
+} // namespace rtk::demux::unicore_hash

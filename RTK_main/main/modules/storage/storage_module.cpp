@@ -15,49 +15,49 @@ using WhitelistRaw = std::array<std::array<uint8_t, core::kAddrLen>, kMaxAlarms>
 static_assert(sizeof(WhitelistRaw) == kMaxAlarms * RTK_STORE_ADDR_LEN);
 } // namespace
 
-::app::Result StorageModule::whitelist_load(std::span<const uint8_t> in) noexcept
+fw::Result StorageModule::whitelist_load(std::span<const uint8_t> in) noexcept
 {
     if (in.size() > kMaxAlarms * core::kAddrLen || in.size() % core::kAddrLen != 0U) {
-        return ::app::Result::kInvalidArg;
+        return fw::Result::kInvalidArg;
     }
     whitelist_.whitelist_count = in.size() / core::kAddrLen;
     for (size_t i = 0; i < whitelist_.whitelist_count; ++i) {
         std::memcpy(whitelist_.whitelist[i].bytes.data(), in.subspan(i * core::kAddrLen).data(), core::kAddrLen);
     }
-    return ::app::Result::kOk;
+    return fw::Result::kOk;
 }
 
-::app::Result StorageModule::whitelist_save(std::span<uint8_t> out, size_t &len) const noexcept
+fw::Result StorageModule::whitelist_save(std::span<uint8_t> out, size_t &len) const noexcept
 {
     len = whitelist_.whitelist_count * core::kAddrLen;
     if (out.size() < len) {
-        return ::app::Result::kNoSpace;
+        return fw::Result::kNoSpace;
     }
     for (size_t i = 0; i < whitelist_.whitelist_count; ++i) {
         std::memcpy(out.subspan(i * core::kAddrLen).data(), whitelist_.whitelist[i].bytes.data(), core::kAddrLen);
     }
-    return ::app::Result::kOk;
+    return fw::Result::kOk;
 }
 
-::app::Result StorageModule::sn_load(std::span<const uint8_t> in) noexcept
+fw::Result StorageModule::sn_load(std::span<const uint8_t> in) noexcept
 {
     if (in.empty() || in.size() > RTK_STORE_SN_MAX ||
         std::find_if(in.begin(), in.end(), [](uint8_t c) { return c == 0U || c == '\r' || c == '\n'; }) != in.end()) {
-        return ::app::Result::kInvalidArg;
+        return fw::Result::kInvalidArg;
     }
     sn_.fill('\0');
     std::memcpy(sn_.data(), in.data(), in.size());
-    return ::app::Result::kOk;
+    return fw::Result::kOk;
 }
 
-::app::Result StorageModule::sn_save(std::span<uint8_t> out, size_t &len) const noexcept
+fw::Result StorageModule::sn_save(std::span<uint8_t> out, size_t &len) const noexcept
 {
     len = std::strlen(sn_.data());
     if (out.size() < len) {
-        return ::app::Result::kNoSpace;
+        return fw::Result::kNoSpace;
     }
     std::memcpy(out.data(), sn_.data(), len);
-    return ::app::Result::kOk;
+    return fw::Result::kOk;
 }
 
 void StorageModule::load_whitelist() noexcept
@@ -76,7 +76,7 @@ void StorageModule::load_whitelist() noexcept
     std::array<uint8_t, sizeof(raw)> bytes{};
     std::memcpy(bytes.data(), raw.data(), count * core::kAddrLen);
     const auto loaded = whitelist_load(std::span{bytes}.first(count * core::kAddrLen));
-    if (!::app::is_ok(loaded)) {
+    if (!fw::is_ok(loaded)) {
         ESP_LOGW("storage", "invalid whitelist; use empty list");
     }
 }
@@ -93,15 +93,15 @@ void StorageModule::load_sn() noexcept
     std::array<uint8_t, RTK_STORE_SN_MAX + 1U> bytes{};
     std::memcpy(bytes.data(), sn.data(), sn.size());
     const auto status = sn_load(std::span{bytes}.first(std::strlen(sn.data())));
-    if (!::app::is_ok(status)) {
+    if (!fw::is_ok(status)) {
         ESP_LOGW("storage", "invalid sn; derive from BT MAC");
     }
 }
 
-::app::Result StorageModule::init() noexcept
+fw::Result StorageModule::init() noexcept
 {
     if (initialized_) {
-        return ::app::Result::kOk;
+        return fw::Result::kOk;
     }
     /* 初始化后端，失败仍按原策略尝试加载并使用缺省值。 */
     const esp_err_t init = rtk_store_init();
@@ -117,7 +117,7 @@ void StorageModule::load_sn() noexcept
     context_.data.system_status.write(system);
     initialized_ = true;
     context_.data.store_status.write(status_);
-    return ::app::Result::kOk;
+    return fw::Result::kOk;
 }
 
 void StorageModule::mark_whitelist_dirty(std::span<const core::BtAddr> list, uint32_t now_ms) noexcept
@@ -142,7 +142,7 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
     size_t len = 0;
     std::array<uint8_t, kMaxAlarms * core::kAddrLen> out{};
     const auto serialized = whitelist_save(out, len);
-    if (!::app::is_ok(serialized)) {
+    if (!fw::is_ok(serialized)) {
         ESP_LOGE("storage", "serialize whitelist failed");
         return false;
     }
@@ -181,18 +181,18 @@ esp_err_t StorageModule::flush_whitelist(uint32_t now_ms) noexcept
     return status_.whitelist_error;
 }
 
-void StorageModule::save_sn(const ::app::Command &cmd, ::app::CommandResult &result) noexcept
+void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     const auto previous = sn_;
     result.status = sn_load(std::span{cmd.args}.first(cmd.arg_len));
-    if (!::app::is_ok(result.status)) {
+    if (!fw::is_ok(result.status)) {
         return;
     }
     /* 先验证并编码，失败时还原模块内的原 SN。 */
     std::array<uint8_t, RTK_STORE_SN_MAX + 1U> encoded{};
     size_t len = 0;
     result.status = sn_save(encoded, len);
-    if (!::app::is_ok(result.status)) {
+    if (!fw::is_ok(result.status)) {
         sn_ = previous;
         return;
     }
@@ -202,7 +202,7 @@ void StorageModule::save_sn(const ::app::Command &cmd, ::app::CommandResult &res
     const esp_err_t error = rtk_store_set_sn(sn.data());
     status_.sn_error = error;
     result.detail = error;
-    result.status = error == ESP_OK ? ::app::Result::kOk : ::app::Result::kIoError;
+    result.status = error == ESP_OK ? fw::Result::kOk : fw::Result::kIoError;
     if (error != ESP_OK) {
         sn_ = previous;
         ESP_LOGE("storage", "save sn failed: %s", esp_err_to_name(error));
@@ -210,10 +210,10 @@ void StorageModule::save_sn(const ::app::Command &cmd, ::app::CommandResult &res
     context_.data.store_status.write(status_);
 }
 
-void StorageModule::on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept
+void StorageModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (cmd.verb != verb(StorageVerb::kSaveSn) || cmd.arg_len > cmd.args.size()) {
-        result.status = ::app::Result::kInvalidArg;
+        result.status = fw::Result::kInvalidArg;
         return;
     }
     /* 校验信封后交给 SN 保存流程。 */

@@ -19,19 +19,19 @@ TickType_t wait_ticks(uint32_t ms) noexcept
     const TickType_t ticks = pdMS_TO_TICKS(ms);
     return ms != 0U && ticks == 0U ? 1U : ticks;
 }
-app::CommandResult dispatch_command(std::span<const app::Module> modules, app::ExecutorId executor,
-                                    std::span<const bool> available, const app::Command &command) noexcept
+fw::CommandResult dispatch_command(std::span<const fw::Module> modules, fw::ExecutorId executor,
+                                   std::span<const bool> available, const fw::Command &command) noexcept
 {
-    app::CommandResult result{command.seq, app::Result::kNotFound, 0};
+    fw::CommandResult result{command.seq, fw::Result::kNotFound, 0};
     for (size_t i = 0; i < modules.size(); ++i) {
         const auto &module = modules[i];
         if (module.executor != executor || module.id != command.target) {
             continue;
         }
-        result.status = !available[i]                       ? app::Result::kInvalidState
-                        : module.ops->on_command == nullptr ? app::Result::kNotSupported
-                                                            : app::Result::kOk;
-        if (result.status == app::Result::kOk) {
+        result.status = !available[i]                       ? fw::Result::kInvalidState
+                        : module.ops->on_command == nullptr ? fw::Result::kNotSupported
+                                                            : fw::Result::kOk;
+        if (result.status == fw::Result::kOk) {
             module.ops->on_command(module.self, command, result);
         }
         break;
@@ -42,7 +42,7 @@ app::CommandResult dispatch_command(std::span<const app::Module> modules, app::E
 }
 } // namespace
 
-Status Executor::init(const ExecutorConfig &cfg, std::span<const app::Module> modules,
+Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module> modules,
                       const ExecutorStorageView &storage) noexcept
 {
     if (inited_) {
@@ -53,8 +53,8 @@ Status Executor::init(const ExecutorConfig &cfg, std::span<const app::Module> mo
         storage.stack.size_bytes() > std::numeric_limits<uint32_t>::max() || storage.tcb == nullptr ||
         storage.cmd_queue == nullptr || storage.result_queue == nullptr || storage.cmd_queue == storage.result_queue ||
         storage.queue_depth == 0U || storage.queue_depth > std::numeric_limits<UBaseType_t>::max() ||
-        storage.queue_depth > storage.cmd_area.size() / sizeof(app::Command) ||
-        storage.queue_depth > storage.result_area.size() / sizeof(app::CommandResult)) {
+        storage.queue_depth > storage.cmd_area.size() / sizeof(fw::Command) ||
+        storage.queue_depth > storage.result_area.size() / sizeof(fw::CommandResult)) {
         return Status::kInvalidArg;
     }
     for (size_t i = 0; i < modules.size(); ++i) {
@@ -71,13 +71,13 @@ Status Executor::init(const ExecutorConfig &cfg, std::span<const app::Module> mo
         }
     }
     // 长度已限制在 UBaseType_t 范围内；定长命令/结果的大小远小于该上限。
-    cmd_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queue_depth), sizeof(app::Command),
+    cmd_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queue_depth), sizeof(fw::Command),
                                 storage.cmd_area.data(), storage.cmd_queue);
     if (cmd_q_ == nullptr) {
         return Status::kNoSpace;
     }
     // 同上，队列深度已经过范围检查。
-    result_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queue_depth), sizeof(app::CommandResult),
+    result_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queue_depth), sizeof(fw::CommandResult),
                                    storage.result_area.data(), storage.result_queue);
     if (result_q_ == nullptr) {
         vQueueDelete(cmd_q_);
@@ -92,8 +92,8 @@ Status Executor::init(const ExecutorConfig &cfg, std::span<const app::Module> mo
         if (module.executor != cfg_.id) {
             continue;
         }
-        const app::Result status = module.ops->init == nullptr ? app::Result::kOk : module.ops->init(module.self);
-        ok_[i] = app::is_ok(status);
+        const fw::Result status = module.ops->init == nullptr ? fw::Result::kOk : module.ops->init(module.self);
+        ok_[i] = fw::is_ok(status);
         if (!ok_[i]) {
             // Result 的底层类型为 uint8_t，扩展为 unsigned 无损。
             ESP_LOGE(kTag, "module init failed: id=%u status=%u", module.id, static_cast<unsigned>(status));
@@ -138,7 +138,7 @@ ExecStats Executor::stats() const noexcept
     return stats_;
 }
 
-bool Executor::module_ok(app::ModuleId id) const noexcept
+bool Executor::module_ok(fw::ModuleId id) const noexcept
 {
     const CriticalSection guard(stats_mux_);
     for (size_t i = 0; i < modules_.size(); ++i) {
@@ -149,7 +149,7 @@ bool Executor::module_ok(app::ModuleId id) const noexcept
     return false;
 }
 
-app::Result Executor::call(const app::Command &cmd, app::CommandResult &result, uint32_t timeout_ms) noexcept
+fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result, uint32_t timeout_ms) noexcept
 {
     TaskHandle_t owner = nullptr;
     {
@@ -157,40 +157,40 @@ app::Result Executor::call(const app::Command &cmd, app::CommandResult &result, 
         owner = task_;
     }
     if (owner == nullptr || owner == xTaskGetCurrentTaskHandle()) {
-        return app::Result::kInvalidState;
+        return fw::Result::kInvalidState;
     }
     bool found = false;
     for (const auto &module : modules_) {
         found = found || (module.executor == cfg_.id && module.id == cmd.target);
     }
     if (!found) {
-        return app::Result::kNotFound;
+        return fw::Result::kNotFound;
     }
-    app::CommandResult stale{};
+    fw::CommandResult stale{};
     while (xQueueReceive(result_q_, &stale, 0) == pdTRUE) {
     }
-    app::Command queued = cmd;
+    fw::Command queued = cmd;
     queued.seq = next_seq_++;
     if (next_seq_ == 0U) {
         next_seq_ = 1U;
     }
     const uint32_t begin = now_ms();
     if (xQueueSend(cmd_q_, &queued, 0) != pdTRUE) {
-        return app::Result::kBusy;
+        return fw::Result::kBusy;
     }
     for (;;) {
         const uint32_t elapsed = now_ms() - begin;
-        app::CommandResult received{};
+        fw::CommandResult received{};
         if (xQueueReceive(result_q_, &received, wait_ticks(elapsed < timeout_ms ? timeout_ms - elapsed : 0U)) !=
             pdTRUE) {
-            return app::Result::kTimeout;
+            return fw::Result::kTimeout;
         }
         if (received.seq == queued.seq) {
             result = received;
-            return app::Result::kOk;
+            return fw::Result::kOk;
         }
         if ((now_ms() - begin) >= timeout_ms) {
-            return app::Result::kTimeout;
+            return fw::Result::kTimeout;
         }
     }
 }
@@ -209,8 +209,8 @@ void Executor::task_entry(void *arg) noexcept
         if (module.executor != self.cfg_.id || !self.module_ok(module.id) || module.ops->start == nullptr) {
             continue;
         }
-        const app::Result status = module.ops->start(module.self);
-        if (!app::is_ok(status)) {
+        const fw::Result status = module.ops->start(module.self);
+        if (!fw::is_ok(status)) {
             {
                 const CriticalSection guard(self.stats_mux_);
                 self.ok_[i] = false;
@@ -234,7 +234,7 @@ void Executor::run() noexcept
     }
     bool pending = false;
     for (;;) {
-        app::Command command{};
+        fw::Command command{};
         bool received = false;
         const uint32_t max_wait = pending ? 0U : cfg_.idle_wait_ms;
         if (cfg_.wait != nullptr) {
@@ -250,7 +250,7 @@ void Executor::run() noexcept
             // available 只由本任务在 start 阶段修改；运行中为只读，不存在并发写者。
             const auto result = dispatch_command(modules_, cfg_.id, ok_, command);
             if (xQueueSend(result_q_, &result, 0) != pdTRUE) {
-                app::CommandResult old{};
+                fw::CommandResult old{};
                 if (xQueueReceive(result_q_, &old, 0) == pdTRUE) {
                     ++drops;
                 }

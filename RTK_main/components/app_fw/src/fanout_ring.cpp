@@ -3,7 +3,7 @@
 // Generated-by: pi + antigravity/gemini-3.8-flash
 // 人工负责人：UNKNOWN（待人工审查签字）
 
-#include "app/fanout_ring.hpp"
+#include "rtk/fw/fanout_ring.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,7 +11,7 @@
 #include <limits>
 #include <span>
 
-namespace app {
+namespace rtk::fw {
 
 namespace {
 
@@ -280,4 +280,4 @@ FanoutWriterStats FanoutRing::writer_stats() const noexcept
     return wstats_;
 }
 
-} // namespace app
+} // namespace rtk::fw

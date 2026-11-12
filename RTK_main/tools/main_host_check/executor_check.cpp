@@ -11,6 +11,7 @@
 #include <cstring>
 
 namespace {
+namespace fw = rtk::fw;
 uint32_t s_clock = 100;
 int s_failures = 0;
 int s_critical = 0;
@@ -52,17 +53,17 @@ struct Probe {
     std::array<uint32_t, 8> waits{};
     size_t wait_count = 0;
 };
-::app::Result init(void *self) noexcept
+fw::Result init(void *self) noexcept
 {
     auto &probe = *static_cast<Probe *>(self); // 表只绑定 Probe 指针。
     ++probe.init;
-    return probe.fail_init ? ::app::Result::kIoError : ::app::Result::kOk;
+    return probe.fail_init ? fw::Result::kIoError : fw::Result::kOk;
 }
-::app::Result start(void *self) noexcept
+fw::Result start(void *self) noexcept
 {
     auto &probe = *static_cast<Probe *>(self); // 同上。
     ++probe.start;
-    return probe.fail_start ? ::app::Result::kIoError : ::app::Result::kOk;
+    return probe.fail_start ? fw::Result::kIoError : fw::Result::kOk;
 }
 bool poll(void *self, uint32_t now) noexcept
 {
@@ -74,12 +75,12 @@ bool poll(void *self, uint32_t now) noexcept
     }
     return probe.backlog && probe.poll == 1U;
 }
-void command(void *self, const ::app::Command &cmd, ::app::CommandResult &result) noexcept
+void command(void *self, const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     auto &probe = *static_cast<Probe *>(self); // 同上。
     ++probe.command;
-    ::app::CommandResult nested{};
-    CHECK(probe.executor->call(cmd, nested, 1) == ::app::Result::kInvalidState);
+    fw::CommandResult nested{};
+    CHECK(probe.executor->call(cmd, nested, 1) == fw::Result::kInvalidState);
     result.detail = cmd.args[0];
     result.seq = 0xBAD; // 故意覆盖，执行器必须恢复正确的请求序号。
 }
@@ -90,9 +91,9 @@ void wait(void *self, uint32_t max_ms) noexcept
     probe.waits[probe.wait_count++] = max_ms;
     s_clock += max_ms;
 }
-constexpr ::app::ModuleOps kOps{init, start, poll, command};
-constexpr ::app::ModuleOps kNoStartOps{init, nullptr, nullptr, command};
-constexpr ::app::ModuleOps kUnsupportedOps{nullptr, nullptr, nullptr, nullptr};
+constexpr fw::ModuleOps kOps{init, start, poll, command};
+constexpr fw::ModuleOps kNoStartOps{init, nullptr, nullptr, command};
+constexpr fw::ModuleOps kUnsupportedOps{nullptr, nullptr, nullptr, nullptr};
 
 void lifecycle()
 {
@@ -102,7 +103,7 @@ void lifecycle()
     static constinit Probe bad_init{.executor = &executor, .fail_init = true};
     static constinit Probe bad_start{.executor = &executor, .fail_start = true};
     static constinit Probe periodic{.executor = &executor};
-    static constinit std::array<::app::Module, 6> modules{{
+    static constinit std::array<fw::Module, 6> modules{{
         {"healthy", 1, 0, 0, &healthy, &kOps},
         {"init fail", 2, 0, 0, &bad_init, &kOps},
         {"start fail", 3, 0, 0, &bad_start, &kOps},
@@ -118,11 +119,11 @@ void lifecycle()
     CHECK(!executor.module_ok(2) && executor.module_ok(3));
     CHECK(executor.start() == rtk::Status::kOk && s_created_bytes == 6144);
     CHECK(executor.start() == rtk::Status::kBusy);
-    ::app::Command a{.target = 2, .seq = 7};
-    ::app::Command b{.target = 5, .seq = 8};
+    fw::Command a{.target = 2, .seq = 7};
+    fw::Command b{.target = 5, .seq = 8};
     CHECK(xQueueSend(&storage.cmd_queue, &a, 0) == pdTRUE);
     CHECK(xQueueSend(&storage.cmd_queue, &b, 0) == pdTRUE);
-    ::app::CommandResult stale{};
+    fw::CommandResult stale{};
     CHECK(xQueueSend(&storage.result_queue, &stale, 0) == pdTRUE);
     CHECK(xQueueSend(&storage.result_queue, &stale, 0) == pdTRUE);
     s_round_limit = 3;
@@ -135,45 +136,45 @@ void lifecycle()
     CHECK(stats.rounds == 3 && stats.overruns == 3 && stats.max_round_ms == 21);
     CHECK(stats.commands == 2 && stats.result_drops == 2 && stats.stack_free == 2048);
     CHECK(xQueueReceive(&storage.result_queue, &stale, 0) == pdTRUE);
-    CHECK(stale.seq == 7 && stale.status == ::app::Result::kInvalidState);
+    CHECK(stale.seq == 7 && stale.status == fw::Result::kInvalidState);
     CHECK(xQueueReceive(&storage.result_queue, &stale, 0) == pdTRUE);
-    CHECK(stale.seq == 8 && stale.status == ::app::Result::kNotSupported);
+    CHECK(stale.seq == 8 && stale.status == fw::Result::kNotSupported);
 }
 void calls()
 {
     static constinit rtk::os::Executor executor{};
     static constinit rtk::os::ExecutorStorage<6144, 2> storage{};
     static constinit Probe probe{.executor = &executor};
-    static constinit std::array<::app::Module, 1> modules{{{"command", 1, 0, 0, &probe, &kNoStartOps}}};
+    static constinit std::array<fw::Module, 1> modules{{{"command", 1, 0, 0, &probe, &kNoStartOps}}};
     const rtk::os::ExecutorConfig cfg{.name = "call", .core = 1};
-    ::app::Command cmd{.target = 1};
-    ::app::CommandResult result{};
-    CHECK(executor.call(cmd, result, 10) == ::app::Result::kInvalidState);
+    fw::Command cmd{.target = 1};
+    fw::CommandResult result{};
+    CHECK(executor.call(cmd, result, 10) == fw::Result::kInvalidState);
     CHECK(executor.init(cfg, modules, rtk::os::view_of(storage)) == rtk::Status::kOk);
     CHECK(executor.start() == rtk::Status::kOk);
     cmd.target = 9;
-    CHECK(executor.call(cmd, result, 10) == ::app::Result::kNotFound);
+    CHECK(executor.call(cmd, result, 10) == fw::Result::kNotFound);
     cmd.target = 1;
     CHECK(xQueueSend(&storage.cmd_queue, &cmd, 0) == pdTRUE);
     CHECK(xQueueSend(&storage.cmd_queue, &cmd, 0) == pdTRUE);
-    CHECK(executor.call(cmd, result, 10) == ::app::Result::kBusy);
+    CHECK(executor.call(cmd, result, 10) == fw::Result::kBusy);
     CHECK(xQueueReceive(&storage.cmd_queue, &cmd, 0) == pdTRUE);
     CHECK(xQueueReceive(&storage.cmd_queue, &cmd, 0) == pdTRUE);
     cmd.args[0] = 11;
-    CHECK(executor.call(cmd, result, 10) == ::app::Result::kTimeout);
+    CHECK(executor.call(cmd, result, 10) == fw::Result::kTimeout);
     cmd.args[0] = 22;
     s_pump_receive = true;
-    CHECK(executor.call(cmd, result, 100) == ::app::Result::kOk);
+    CHECK(executor.call(cmd, result, 100) == fw::Result::kOk);
     CHECK(result.detail == 22 && result.seq != 0xBAD && probe.command == 2);
     CHECK(executor.stats().commands == 2);
     s_pump_receive = false;
     cmd.args[0] = 33;
-    CHECK(executor.call(cmd, result, 0) == ::app::Result::kTimeout);
+    CHECK(executor.call(cmd, result, 0) == fw::Result::kTimeout);
     pump(); // 超时命令仍会执行；它的结果留在队列中。
     CHECK(probe.command == 3);
     s_pump_receive = true;
     cmd.args[0] = 44;
-    CHECK(executor.call(cmd, result, 100) == ::app::Result::kOk && result.detail == 44);
+    CHECK(executor.call(cmd, result, 100) == fw::Result::kOk && result.detail == 44);
 }
 void invalid()
 {
@@ -185,7 +186,7 @@ void invalid()
     auto view = rtk::os::view_of(storage);
     view.cmd_area = {};
     CHECK(executor.init(cfg, {}, view) == rtk::Status::kInvalidArg);
-    std::array<::app::Module, 2> modules{
+    std::array<fw::Module, 2> modules{
         {{"a", 1, 0, 0, nullptr, &kUnsupportedOps}, {"b", 1, 0, 0, nullptr, &kUnsupportedOps}}};
     CHECK(executor.init(cfg, modules, rtk::os::view_of(storage)) == rtk::Status::kInvalidArg);
     modules[1].id = 2;

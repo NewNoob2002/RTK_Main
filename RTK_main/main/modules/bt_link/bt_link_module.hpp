@@ -9,8 +9,8 @@
 #include "app_config.hpp"
 #include "def/rtcm_def.hpp"
 #include "modules/bt_link/async_tx.hpp"
-#include "demux/decoders/rtcm3.hpp"
-#include "demux/static_demux.hpp"
+#include "rtk/demux/decoders/rtcm3.hpp"
+#include "rtk/demux/static_demux.hpp"
 #include "rtk/bt/spp_transport.hpp"
 #include "rtk/console/console.hpp"
 #include "rtk/core/alarm_source.hpp"
@@ -36,11 +36,11 @@ public:
     BtLinkModule(BtLinkModule &&) = delete;
     BtLinkModule &operator=(BtLinkModule &&) = delete;
     /** 启动前单线程，非 ISR；构造服务且不分配堆，失败返回 kInvalidState。 */
-    [[nodiscard]] ::app::Result init() noexcept;
+    [[nodiscard]] fw::Result init() noexcept;
     /** init 成功后仅 kLink 调用，非 ISR、非阻塞；发布快照，返回是否仍有 RX 积压。 */
     [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
     /** init 成功后仅 kLink 调用，非 ISR；白名单清除可同步写 NVS，结果写入 result。 */
-    void on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
+    void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /** 仅 kLink，非 ISR；至多等待 max_ms，先处理生命周期事件。 */
     void wait(uint32_t max_ms) noexcept;
     /** app_main 在执行器 start 前调用，非 ISR；静态创建 TX 任务并返回状态。 */
@@ -112,8 +112,8 @@ private:
     [[nodiscard]] bool feed_one(SessionEntry &entry, size_t &budget, uint32_t round_start_ms) noexcept;
     void publish_link(uint32_t now_ms) noexcept;
     void apply_rtcm_reset() noexcept;
-    void set_alarm(const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
-    void clear_whitelist(::app::CommandResult &result) noexcept;
+    void set_alarm(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    void clear_whitelist(fw::CommandResult &result) noexcept;
 
     AppContext &context_;
     uint32_t last_tick_ms_ = 0;

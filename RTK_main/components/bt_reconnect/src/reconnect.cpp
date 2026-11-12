@@ -3,12 +3,12 @@
 // Generated-by: pi + antigravity/gemini-3.8-flash
 // 人工负责人：UNKNOWN（待人工审查签字）
 
-#include "bt_reconnect/reconnect.hpp"
+#include "rtk/reconnect/reconnect.hpp"
 
 #include <algorithm>
 #include <cstdint>
 
-namespace btrc {
+namespace rtk::reconnect {
 
 namespace {
 
@@ -321,4 +321,4 @@ uint32_t Reconnector::next_attempt_in(uint32_t now_ms) const noexcept
     return stats_.last_delay_ms - elapsed;
 }
 
-} // namespace btrc
+} // namespace rtk::reconnect

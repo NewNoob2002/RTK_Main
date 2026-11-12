@@ -9,7 +9,7 @@
 #   bugprone-easily-swappable-parameters       寄存器/地址类接口大量同类型参数，噪声过大
 #   cppcoreguidelines-avoid-magic-numbers      与 readability-magic-numbers 重复
 #   cppcoreguidelines-avoid-non-const-global-variables
-#                                              静态分配要求全局对象；只允许出现在 app/ 组合根，由审查把关
+#                                              静态分配要求全局对象；只允许出现在 main/ 组合根，由审查把关
 #   cppcoreguidelines-owning-memory            依赖 GSL owner<>，嵌入式不引入 GSL
 #   cppcoreguidelines-pro-bounds-constant-array-index
 #                                              要求 gsl::at，嵌入式不引入 GSL；越界由断言/掩码保证

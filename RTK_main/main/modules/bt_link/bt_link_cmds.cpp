@@ -29,7 +29,7 @@ constexpr size_t kAlarmLevelArg = 3U;
 // NOLINTNEXTLINE(misc-const-correctness)
 int cmd_alarm(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    ::app::Command command{};
+    fw::Command command{};
     command.target = id(ModuleKind::kBtLink);
 
     /* argc 由 esp_console 统计且 >= 0；缩窄到 size_t 安全。args 长度即参数个数（含命令名）。 */
@@ -64,7 +64,7 @@ int cmd_pair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
         printf("usage: pair\n");
         return 1;
     }
-    ::app::Command command{};
+    fw::Command command{};
     command.target = id(ModuleKind::kBtLink);
     command.verb = verb(LinkVerb::kPair);
     return submit(command, "pair") ? 0 : 1;
@@ -79,7 +79,7 @@ int cmd_wl(void * /*ctx*/, int argc, char **argv) noexcept
         printf("usage: wl clear\n");
         return 1;
     }
-    ::app::Command command{};
+    fw::Command command{};
     command.target = id(ModuleKind::kBtLink);
     command.verb = verb(LinkVerb::kWhitelistClear);
     return submit(command, "wl clear") ? 0 : 1;

@@ -25,7 +25,7 @@ int cmd_rtcm(void * /*ctx*/, int argc, char **argv) noexcept
         printf("usage: rtcm reset\n");
         return 1;
     }
-    ::app::Command command{};
+    fw::Command command{};
     command.target = id(ModuleKind::kRtcm);
     command.verb = verb(RtcmVerb::kReset);
     return submit(command, "rtcm reset") ? 0 : 1;

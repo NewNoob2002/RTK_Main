@@ -6,15 +6,15 @@
 // Generated-by: pi + workbuddy/deepseek-v4.1-flash
 // 人工负责人：UNKNOWN（待人工审查签字）
 
-#include "demux/decoders/ubx.hpp"
+#include "rtk/demux/decoders/ubx.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "demux/decoder.hpp"
+#include "rtk/demux/decoder.hpp"
 
-namespace demux::ubx {
+namespace rtk::demux::ubx {
 
 namespace {
 
@@ -88,4 +88,4 @@ Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
     return Step::kFrame;
 }
 
-} // namespace demux::ubx
+} // namespace rtk::demux::ubx

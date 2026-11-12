@@ -34,7 +34,7 @@ int cmd_sn(void * /*ctx*/, int argc, char **argv) noexcept
         return 1;
     }
 
-    ::app::Command command{};
+    fw::Command command{};
     command.target = id(ModuleKind::kStorage);
     command.verb = verb(StorageVerb::kSaveSn);
     // len 已验证为 1..16，收窄到 uint8_t 无损。

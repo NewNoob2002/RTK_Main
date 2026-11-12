@@ -1,12 +1,12 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
 // 平台无关的分流引擎；原地回放与输入累积共用调用方提供的缓冲区。
-#include "demux/demux.hpp"
+#include "rtk/demux/demux.hpp"
 
 #include <algorithm>
 #include <cstring>
 
-namespace demux {
+namespace rtk::demux {
 
 struct Engine {
     static bool config_valid(std::span<const Decoder *const> decoders, std::span<uint8_t> buf) noexcept
@@ -246,4 +246,4 @@ Error Demux::abort() noexcept
     return Error::kOk;
 }
 
-} // namespace demux
+} // namespace rtk::demux

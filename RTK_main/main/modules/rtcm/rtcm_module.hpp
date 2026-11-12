@@ -18,7 +18,7 @@ public:
     /** 仅 kLink，非 ISR、非阻塞；读取本轮批次，返回 false（无跨轮积压）。 */
     [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
     /** 仅 kLink，非 ISR、非阻塞；校验并处理统计复位，状态写入 result。 */
-    void on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
+    void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /** 仅 kLink 或启动前读取，非 ISR；返回当前转发统计的只读引用。 */
     [[nodiscard]] const RtcmStats &stats() const noexcept;
 

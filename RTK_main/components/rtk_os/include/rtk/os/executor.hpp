@@ -13,9 +13,9 @@
 #include <cstdint>
 #include <span>
 
-#include "app/command.hpp"
-#include "app/module.hpp"
-#include "app/result.hpp"
+#include "rtk/fw/command.hpp"
+#include "rtk/fw/module.hpp"
+#include "rtk/fw/result.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -27,7 +27,7 @@ inline constexpr size_t kExecMaxModules = 8;
 
 struct ExecutorConfig {
     const char *name = nullptr;
-    app::ExecutorId id = 0;
+    fw::ExecutorId id = 0;
     uint32_t priority = 1;
     BaseType_t core = 0;
     uint32_t idle_wait_ms = 20;    // 无积压时每轮最长等待
@@ -46,9 +46,9 @@ struct ExecStats {
     uint32_t rounds = 0;
     uint32_t overruns = 0;
     uint32_t max_round_ms = 0;
-    uint32_t commands = 0;       // 已分派的命令数
-    uint32_t result_drops = 0;   // 结果队列满时丢弃的最旧结果数
-    uint32_t stack_free = 0;     // 栈高水位（字节），每轮更新
+    uint32_t commands = 0;     // 已分派的命令数
+    uint32_t result_drops = 0; // 结果队列满时丢弃的最旧结果数
+    uint32_t stack_free = 0;   // 栈高水位（字节），每轮更新
 };
 
 /** 执行器所需的全部静态存储；由调用方定义为 constinit 全局并交给 Executor::init。 */
@@ -57,9 +57,9 @@ template <size_t StackBytes, size_t QueueDepth> struct ExecutorStorage {
     static_assert(QueueDepth > 0U, "queue depth must be > 0");
     std::array<StackType_t, StackBytes / sizeof(StackType_t)> stack{};
     StaticTask_t tcb{};
-    std::array<uint8_t, QueueDepth * sizeof(app::Command)> cmd_area{};
+    std::array<uint8_t, QueueDepth * sizeof(fw::Command)> cmd_area{};
     StaticQueue_t cmd_queue{};
-    std::array<uint8_t, QueueDepth * sizeof(app::CommandResult)> result_area{};
+    std::array<uint8_t, QueueDepth * sizeof(fw::CommandResult)> result_area{};
     StaticQueue_t result_queue{};
 };
 
@@ -89,15 +89,16 @@ public:
     ~Executor() = default;
 
     /**
-     * 启动前（单线程，app_main）调用：保存配置，创建两个静态队列，并对每个 module.executor == cfg.id 的模块调用 ops->init。
-     * 模块 init 失败：记录日志并把该模块标记为不可用（不 start、不 poll，命令返回 kInvalidState），整体仍返回 kOk。
-     * 参数非法（name 为空、模块数 > kExecMaxModules、同执行器内 ModuleId 重复、ops 为空）→ kInvalidArg；重复调用 → kBusy。
-     * modules 必须指向静态存储（执行器保存该 span）。
+     * 启动前（单线程，app_main）调用：保存配置，创建两个静态队列，并对每个 module.executor == cfg.id 的模块调用
+     * ops->init。 模块 init 失败：记录日志并把该模块标记为不可用（不 start、不 poll，命令返回
+     * kInvalidState），整体仍返回 kOk。 参数非法（name 为空、模块数 > kExecMaxModules、同执行器内 ModuleId 重复、ops
+     * 为空）→ kInvalidArg；重复调用 → kBusy。 modules 必须指向静态存储（执行器保存该 span）。
      */
-    [[nodiscard]] Status init(const ExecutorConfig &cfg, std::span<const app::Module> modules,
+    [[nodiscard]] Status init(const ExecutorConfig &cfg, std::span<const fw::Module> modules,
                               const ExecutorStorageView &storage) noexcept;
 
-    /** 创建任务。任务首先对可用模块依次调用 ops->start（失败同样标记为不可用），然后进入轮询。未 init → kInvalidState。 */
+    /** 创建任务。任务首先对可用模块依次调用 ops->start（失败同样标记为不可用），然后进入轮询。未 init → kInvalidState。
+     */
     [[nodiscard]] Status start() noexcept;
 
     /**
@@ -107,20 +108,20 @@ public:
      *       kBusy（命令队列满）、kInvalidState（未运行，或从本执行器任务自身调用——会死锁）、
      *       kNotFound（目标模块不存在）。
      */
-    [[nodiscard]] app::Result call(const app::Command &cmd, app::CommandResult &result, uint32_t timeout_ms) noexcept;
+    [[nodiscard]] fw::Result call(const fw::Command &cmd, fw::CommandResult &result, uint32_t timeout_ms) noexcept;
 
     [[nodiscard]] bool running() const noexcept;
     /** 任意任务可调用（内部临界区拷贝）。 */
     [[nodiscard]] ExecStats stats() const noexcept;
     /** 模块是否可用（init/start 成功）。任意任务可调用。 */
-    [[nodiscard]] bool module_ok(app::ModuleId id) const noexcept;
+    [[nodiscard]] bool module_ok(fw::ModuleId id) const noexcept;
 
 private:
     static void task_entry(void *arg) noexcept;
     void run() noexcept;
 
     ExecutorConfig cfg_{};
-    std::span<const app::Module> modules_{};
+    std::span<const fw::Module> modules_{};
     std::array<bool, kExecMaxModules> ok_{};
     std::array<uint32_t, kExecMaxModules> last_poll_ms_{};
     ExecutorStorageView storage_{};

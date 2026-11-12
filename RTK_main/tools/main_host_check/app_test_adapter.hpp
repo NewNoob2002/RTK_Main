@@ -202,9 +202,9 @@ void process_commands(uint32_t /*now_ms*/)
 {
     Command queued{};
     while (s_command_queue.receive(queued, 0)) {
-        ::app::Command command{};
+        fw::Command command{};
         command.seq = queued.seq;
-        ::app::CommandResult result{};
+        fw::CommandResult result{};
         if (queued.id == CommandId::kRtcmReset) {
             command.verb = verb(RtcmVerb::kReset);
             app_context().rtcm.on_command(command, result);
@@ -232,10 +232,9 @@ void process_commands(uint32_t /*now_ms*/)
             }
             app_context().bt_link.on_command(command, result);
         }
-        const CommandResult response{queued.seq, result.status == ::app::Result::kOk ? CommandStatus::kOk
-                                                 : result.status == ::app::Result::kIoError
-                                                     ? CommandStatus::kStoreError
-                                                     : CommandStatus::kInvalidArg};
+        const CommandResult response{queued.seq, result.status == fw::Result::kOk        ? CommandStatus::kOk
+                                                 : result.status == fw::Result::kIoError ? CommandStatus::kStoreError
+                                                                                         : CommandStatus::kInvalidArg};
         if (!s_result_queue.send(response, 0)) {
             CommandResult stale{};
             static_cast<void>(s_result_queue.receive(stale, 0));

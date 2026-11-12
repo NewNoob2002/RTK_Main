@@ -1,10 +1,10 @@
-// app::Result 文字描述（ADR-0007 §3.5）。
+// rtk::fw::Result 文字描述（ADR-0007 §3.5）。
 //
 // Generated-by: Claude Code + claude-opus-5-5
 // Owner: UNKNOWN（待人工审查签字）
-#include "app/result.hpp"
+#include "rtk/fw/result.hpp"
 
-namespace app {
+namespace rtk::fw {
 
 const char *to_string(Result r) noexcept
 {
@@ -32,4 +32,4 @@ const char *to_string(Result r) noexcept
     }
 }
 
-} // namespace app
+} // namespace rtk::fw

@@ -12,7 +12,7 @@
 #include <optional>
 #include <span>
 
-#include "demux/decoder.hpp"
+#include "rtk/demux/decoder.hpp"
 #include "rtk/proto/frame.hpp"
 #include "rtk_proto_frame.h"
 
@@ -23,7 +23,7 @@ inline constexpr std::size_t kMaxFrame = RTK_PROTO_MAX_FRAME;
 /** 线程/ISR 安全：是（纯函数）。 */
 [[nodiscard]] bool first_byte(uint8_t byte) noexcept;
 
-/** 线程/ISR 安全：是（纯函数）。契约见 demux/decoder.hpp。 */
+/** 线程/ISR 安全：是（纯函数）。契约见 rtk/demux/decoder.hpp。 */
 [[nodiscard]] demux::Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
 
 inline constexpr demux::Decoder kDecoder{"RtkFrame", kMaxFrame, &first_byte, &step};

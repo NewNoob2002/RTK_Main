@@ -4,7 +4,7 @@
 #include <span>
 
 #include "data/app_data.hpp"
-#include "app/store_key.hpp"
+#include "rtk/fw/store_key.hpp"
 #include "rtk/console/console.hpp"
 #include "rtk_store.h"
 
@@ -20,11 +20,11 @@ public:
     StorageModule(StorageModule &&) = delete;
     StorageModule &operator=(StorageModule &&) = delete;
     /** 启动前单线程，非 ISR；同步读取 NVS，幂等且加载失败时使用缺省值。 */
-    [[nodiscard]] ::app::Result init() noexcept;
+    [[nodiscard]] fw::Result init() noexcept;
     /** 仅 kLink，非 ISR；可同步写 NVS，返回 false（重试由时钟驱动）。 */
     [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
     /** 仅 kLink，非 ISR；同步保存 SN，结果写入 result。 */
-    void on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
+    void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /** 仅 kLink，非 ISR、非阻塞；登记白名单变化并重启去抖。 */
     void mark_whitelist_dirty(std::span<const core::BtAddr> list, uint32_t now_ms) noexcept;
     /** 仅 kLink，非 ISR；跳过去抖同步写 NVS，返回后端错误。 */
@@ -34,11 +34,11 @@ private:
     friend struct ModuleTestAccess;
     void load_whitelist() noexcept;
     void load_sn() noexcept;
-    [[nodiscard]] ::app::Result whitelist_load(std::span<const uint8_t> in) noexcept;
-    [[nodiscard]] ::app::Result whitelist_save(std::span<uint8_t> out, size_t &len) const noexcept;
-    [[nodiscard]] ::app::Result sn_load(std::span<const uint8_t> in) noexcept;
-    [[nodiscard]] ::app::Result sn_save(std::span<uint8_t> out, size_t &len) const noexcept;
-    void save_sn(const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
+    [[nodiscard]] fw::Result whitelist_load(std::span<const uint8_t> in) noexcept;
+    [[nodiscard]] fw::Result whitelist_save(std::span<uint8_t> out, size_t &len) const noexcept;
+    [[nodiscard]] fw::Result sn_load(std::span<const uint8_t> in) noexcept;
+    [[nodiscard]] fw::Result sn_save(std::span<uint8_t> out, size_t &len) const noexcept;
+    void save_sn(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
     static constexpr uint32_t kRetryInitialMs = 1000;
     AppContext &context_;

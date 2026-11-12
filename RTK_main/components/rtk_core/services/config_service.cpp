@@ -14,11 +14,51 @@
 #include "rtk/core/command_router.hpp"
 #include "rtk/core/reply.hpp"
 #include "rtk/proto/frame.hpp"
-#include "service_support.hpp"
 
 namespace rtk::core::services {
 
 namespace {
+
+// 通用结果码（phone_protocol.md §3；沿用旧 CommandDispatcher 的取值）。
+inline constexpr uint8_t kResultOk = 0x01;
+inline constexpr uint8_t kResultFail = 0x02;
+
+/**
+ * 组应答帧：sender 固定为 DEV，type 经 response_type 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ * 组帧失败时把 reply.len 置 0 并返回 kNoReply（与旧 dispatcher 一致）。
+ */
+inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_type,
+                                  std::span<const uint8_t> payload) noexcept
+{
+    size_t len = 0;
+    const Status status =
+        proto::build_frame(reply.buf, msg_id, proto::sender::kDevice, proto::response_type(req_type), payload, len);
+    if (!is_ok(status)) {
+        reply.len = 0;
+        return DispatchResult::kNoReply;
+    }
+    reply.len = len;
+    return DispatchResult::kReply;
+}
+
+/** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
+inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type, uint8_t value) noexcept
+{
+    const std::array<uint8_t, 2> payload = {value, value};
+    return reply_build(reply, msg_id, req_type, payload);
+}
+
+/** 成功应答（0x01 0x01）。 */
+inline DispatchResult reply_ok(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+{
+    return reply_result(reply, msg_id, req_type, kResultOk);
+}
+
+/** 失败应答（0x02 0x02）。 */
+inline DispatchResult reply_fail(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+{
+    return reply_result(reply, msg_id, req_type, kResultFail);
+}
 
 namespace msg_type = rtk::proto::msg_type;
 
@@ -31,44 +71,44 @@ DispatchResult handle_work_mode(std::span<uint8_t> cfg, const rtk::proto::FrameV
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kWorkModeSetLen) {
-            return detail::reply_fail(reply, frame.msg_id, frame.type);
+            return reply_fail(reply, frame.msg_id, frame.type);
         }
         for (size_t i = 0; i < kWorkModeSetLen; ++i) {
             cfg[i] = frame.payload[i];
         }
-        return detail::reply_ok(reply, frame.msg_id, frame.type);
+        return reply_ok(reply, frame.msg_id, frame.type);
     }
-    return detail::reply_build(reply, frame.msg_id, frame.type, cfg);
+    return reply_build(reply, frame.msg_id, frame.type, cfg);
 }
 
 DispatchResult handle_radio(std::span<uint8_t> cfg, const rtk::proto::FrameView &frame, Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kRadioSetMinLen) {
-            return detail::reply_fail(reply, frame.msg_id, frame.type);
+            return reply_fail(reply, frame.msg_id, frame.type);
         }
         const size_t count = (frame.payload.size() < kRadioLen) ? frame.payload.size() : kRadioLen;
         for (size_t i = 0; i < count; ++i) {
             cfg[i] = frame.payload[i];
         }
         // payload 未覆盖 [17] 时保持原值（§4）。
-        return detail::reply_ok(reply, frame.msg_id, frame.type);
+        return reply_ok(reply, frame.msg_id, frame.type);
     }
-    return detail::reply_build(reply, frame.msg_id, frame.type, cfg);
+    return reply_build(reply, frame.msg_id, frame.type, cfg);
 }
 
 DispatchResult handle_log(std::span<uint8_t> cfg, const rtk::proto::FrameView &frame, Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kLogLen) {
-            return detail::reply_fail(reply, frame.msg_id, frame.type);
+            return reply_fail(reply, frame.msg_id, frame.type);
         }
         for (size_t i = 0; i < kLogLen; ++i) {
             cfg[i] = frame.payload[i];
         }
-        return detail::reply_ok(reply, frame.msg_id, frame.type);
+        return reply_ok(reply, frame.msg_id, frame.type);
     }
-    return detail::reply_build(reply, frame.msg_id, frame.type, cfg);
+    return reply_build(reply, frame.msg_id, frame.type, cfg);
 }
 
 } // namespace

@@ -41,17 +41,17 @@ bool RtcmModule::poll(uint32_t /*now_ms*/) noexcept
     context_.data.rtcm_stats.write(forwarder_.stats());
     return false;
 }
-void RtcmModule::on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept
+void RtcmModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (cmd.verb != verb(RtcmVerb::kReset) || cmd.arg_len != 0U) {
-        result.status = ::app::Result::kInvalidArg;
+        result.status = fw::Result::kInvalidArg;
         return;
     }
     /* 不清除分流器半帧；先清统计，再通知 bt_link 复位统计世代。 */
     forwarder_.reset();
     context_.data.rtcm_stats.write(forwarder_.stats());
     context_.data.rtcm_reset.write(context_.data.rtcm_reset.read() + 1U);
-    result.status = ::app::Result::kOk;
+    result.status = fw::Result::kOk;
 }
 const RtcmStats &RtcmModule::stats() const noexcept
 {

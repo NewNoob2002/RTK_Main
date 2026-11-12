@@ -11,7 +11,7 @@ namespace rtk::app {
 
 [[nodiscard]] const char *role_name(core::Role role) noexcept;
 void print_mac(const core::BtAddr &addr) noexcept;
-[[nodiscard]] bool report(const char *what, const ::app::CommandResult &result) noexcept;
-[[nodiscard]] bool submit(const ::app::Command &command, const char *what) noexcept;
+[[nodiscard]] bool report(const char *what, const fw::CommandResult &result) noexcept;
+[[nodiscard]] bool submit(const fw::Command &command, const char *what) noexcept;
 
 } // namespace rtk::app

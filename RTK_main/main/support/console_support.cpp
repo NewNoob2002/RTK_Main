@@ -37,22 +37,22 @@ void print_mac(const core::BtAddr &addr) noexcept
     }
 }
 
-bool report(const char *what, const ::app::CommandResult &result) noexcept
+bool report(const char *what, const fw::CommandResult &result) noexcept
 {
     switch (result.status) {
-    case ::app::Result::kOk:
+    case fw::Result::kOk:
         printf("%s: ok\n", what);
         return true;
-    case ::app::Result::kInvalidArg:
+    case fw::Result::kInvalidArg:
         printf("%s: invalid argument\n", what);
         return false;
-    case ::app::Result::kInvalidState:
+    case fw::Result::kInvalidState:
         printf("%s: link not running; NOT executed\n", what);
         return false;
-    case ::app::Result::kBusy:
+    case fw::Result::kBusy:
         printf("%s: link busy; NOT executed\n", what);
         return false;
-    case ::app::Result::kIoError:
+    case fw::Result::kIoError:
         printf("%s: store error: %s\n", what, esp_err_to_name(result.detail));
         return false;
     default:
@@ -61,15 +61,15 @@ bool report(const char *what, const ::app::CommandResult &result) noexcept
     }
 }
 
-bool submit(const ::app::Command &command, const char *what) noexcept
+bool submit(const fw::Command &command, const char *what) noexcept
 {
-    ::app::CommandResult result{};
+    fw::CommandResult result{};
     auto &executor = app_context().link_executor;
     if (!executor.running() || !executor.module_ok(id(ModuleKind::kBtLink))) {
         printf("%s: link not running; NOT executed\n", what);
         return false;
     }
-    if (executor.call(command, result, kCommandTimeoutMs) != ::app::Result::kOk) {
+    if (executor.call(command, result, kCommandTimeoutMs) != fw::Result::kOk) {
         printf("%s: no response; execution result unknown\n", what);
         return false;
     }

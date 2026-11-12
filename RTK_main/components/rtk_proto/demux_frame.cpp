@@ -15,7 +15,7 @@
 #include <optional>
 #include <span>
 
-#include "demux/decoder.hpp"
+#include "rtk/demux/decoder.hpp"
 #include "rtk/proto/frame.hpp"
 #include "rtk_proto_frame.h"
 

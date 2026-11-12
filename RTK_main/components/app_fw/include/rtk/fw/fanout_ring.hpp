@@ -16,10 +16,10 @@
 #include <cstdint>
 #include <span>
 
-#include "app/lock.hpp"
-#include "app/result.hpp"
+#include "rtk/fw/lock.hpp"
+#include "rtk/fw/result.hpp"
 
-namespace app {
+namespace rtk::fw {
 
 inline constexpr size_t kFanoutMaxReaders = 4;
 inline constexpr size_t kFanoutHeaderBytes = 2;
@@ -48,8 +48,8 @@ public:
 
     /**
      * 启动前（单线程）调用。storage 由调用方提供且生命周期覆盖本对象；
-     * 要求 max_record ≥ 1、max_record ≤ 65535、storage.size() ≥ 2 × (max_record + kFanoutHeaderBytes)，否则 kInvalidArg。
-     * 重复 init → kInvalidState。
+     * 要求 max_record ≥ 1、max_record ≤ 65535、storage.size() ≥ 2 × (max_record + kFanoutHeaderBytes)，否则
+     * kInvalidArg。 重复 init → kInvalidState。
      */
     [[nodiscard]] Result init(std::span<uint8_t> storage, size_t max_record, const LockOps &lock) noexcept;
 
@@ -95,4 +95,4 @@ private:
     bool inited_ = false;
 };
 
-} // namespace app
+} // namespace rtk::fw

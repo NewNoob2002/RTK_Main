@@ -325,11 +325,11 @@ core::LinkService &BtLinkModule::link_service() noexcept
     return *service_;
 }
 
-::app::Result BtLinkModule::init() noexcept
+fw::Result BtLinkModule::init() noexcept
 {
     const auto system = context_.data.system_status.read();
     if (!system.bt_ready) {
-        return ::app::Result::kInvalidState;
+        return fw::Result::kInvalidState;
     }
     /* 从持久化快照恢复策略，再按依赖顺序原地构造服务。 */
     const auto link = context_.data.link_status.read();
@@ -346,10 +346,10 @@ core::LinkService &BtLinkModule::link_service() noexcept
     const Status route_status = router_.init(tables);
     if (!is_ok(route_status)) {
         ESP_LOGE(kTag, "command router init failed: %s", to_string(route_status));
-        return ::app::Result::kInvalidState;
+        return fw::Result::kInvalidState;
     }
     service_.emplace(async_tx_, link_manager_, router_, *alarm_service_);
-    return ::app::Result::kOk;
+    return fw::Result::kOk;
 }
 
 Status BtLinkModule::start_tx() noexcept
@@ -406,29 +406,29 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
     return pending;
 }
 
-void BtLinkModule::set_alarm(const ::app::Command &cmd, ::app::CommandResult &result) noexcept
+void BtLinkModule::set_alarm(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (cmd.arg_len != kAlarmArgBytes || !alarm_.set_override(cmd.args[0], cmd.args[1])) {
-        result.status = ::app::Result::kInvalidArg;
+        result.status = fw::Result::kInvalidArg;
     }
 }
 
-void BtLinkModule::clear_whitelist(::app::CommandResult &result) noexcept
+void BtLinkModule::clear_whitelist(fw::CommandResult &result) noexcept
 {
     /* 清除内存白名单并同步持久化，回执携带原后端错误码。 */
     link_manager_.whitelist_clear();
     context_.storage.mark_whitelist_dirty(link_manager_.whitelist(), os::now_ms());
     result.detail = context_.storage.flush_whitelist(os::now_ms());
     if (result.detail != ESP_OK) {
-        result.status = ::app::Result::kIoError;
+        result.status = fw::Result::kIoError;
     }
 }
 
-void BtLinkModule::on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept
+void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
-    result.status = ::app::Result::kOk;
+    result.status = fw::Result::kOk;
     if (cmd.arg_len > cmd.args.size()) {
-        result.status = ::app::Result::kInvalidArg;
+        result.status = fw::Result::kInvalidArg;
         return;
     }
     /* 校验长度后按动词调用具名处理函数。 */
@@ -447,7 +447,7 @@ void BtLinkModule::on_command(const ::app::Command &cmd, ::app::CommandResult &r
         clear_whitelist(result);
         break;
     default:
-        result.status = ::app::Result::kInvalidArg;
+        result.status = fw::Result::kInvalidArg;
         break;
     }
 }

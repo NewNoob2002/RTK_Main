@@ -18,12 +18,12 @@
 
 ## 2. 语言与规范（profile：esp-idf；C++ 等级 T2）
 
-- **规范入口**：编码规范以 `docs/CODING-STYLE.md` 为准；本文件只保留硬性门禁与授权边界。ADR-0008 §4 的命名空间/include 统一是 R3 目标，落地前沿用现有接口；不放宽下述依赖隔离。
+- **规范入口**：编码规范以 `docs/CODING-STYLE.md` 为准；本文件只保留硬性门禁与授权边界。命名空间/include 根遵循 ADR-0008 §4；统一前缀不放宽下述依赖隔离。
 - **语言分工（ADR-0003）**：`rtk_proto` 的协议核心、`rtk_bt` 的 SPP 驱动、`rtk_store` 用 **C（C11 子集）**；`rtk_proto` 的 C++ 外观、`rtk_core`、`rtk_os`、`rtk_bt` 的 `SppTransport` 适配器、`main` 用 **C++20 子集**。不引入 Arduino、ETL 或任何 managed component。
 - **C 文件规则**：布局同下（ESP-006）；公共符号/宏带组件前缀（`rtk_proto_*`、`RTK_PROTO_*`、`rtk_bt_spp_*`、`rtk_store_*`），文件作用域静态 `s_`，类型 `_t`；不用 `p_`/`g_`/`b_` 前缀。遵守 BARR-C 安全核心：`switch` 必有 `default`、不混用有/无符号、窄化转换写注释、变量使用前初始化、不把缓冲区强转为结构体指针、多字节字段逐字节小端读写、内部函数 `static`、不用 `malloc`/`free`、不用 `goto`。C 头文件 `#pragma once` + `extern "C"`，只含 C 构造。C 代码不调用 C++。
 - **以下各条针对 C++ 文件**（C 文件只适用其中的布局、错误检查与并发条款）：
 - **布局（ESP-006）**：ESP-IDF Astyle 风格：函数定义花括号换行，控制语句、类、命名空间花括号同行；4 空格；120 列；`#pragma once`。日常用 `clang-format --style=file` 检查（`.clang-format` 是近似规则）。
-- **组件命名（ADR-0005）**：直接绑定 ESP-IDF 或产品的组件用 `rtk_` 前缀、命名空间 `rtk::<组件>`；与平台、产品都无关、可被其他工程复用的组件按功能命名（如 `stream_demux` → `demux`、`app_fw` → `app`、`bt_reconnect` → `btrc`），不得依赖任何 `rtk_*` 组件或 IDF/FreeRTOS 头。
+- **组件命名（ADR-0008 §4）**：直接绑定 ESP-IDF 或产品的组件用 `rtk_` 前缀；与平台、产品都无关的组件按功能命名（`stream_demux`、`app_fw`、`bt_reconnect`），不得依赖任何 `rtk_*` 组件或 IDF/FreeRTOS 头。C++ 命名空间与 include 根统一为 `rtk::<组件>` / `rtk/<组件>/`，上述三个组件分别用 `rtk::demux` / `rtk/demux/`、`rtk::fw` / `rtk/fw/`、`rtk::reconnect` / `rtk/reconnect/`。
 - **命名（cpp/coding.md）**：命名空间见上条；类型 `CamelCase`；函数、变量、参数 `lower_case`；私有成员后缀 `_`；常量与枚举值 `kCamelCase`；文件作用域可变静态加 `s_` 前缀并放进匿名命名空间；宏全大写。不用 `p_`/`b_` 这类类型前缀。
 - **禁止**：异常、RTTI、`dynamic_cast`、`typeid`；`std::function`；`<map>`、`<list>`、`<deque>`、`<unordered_*>`；iostream；`shared_ptr`；`<thread>`/`<mutex>`；`volatile` 用于同步；位域映射寄存器；`ESP_ERROR_CHECK` 用于可恢复错误；`(void)` 丢弃 `esp_err_t`。
 - **堆内存门禁**：`new`/`delete`/`malloc`/`free`、`<vector>`、`<string>` 按 `docs/CODING-STYLE.md` 的堆内存分级使用，须登记 `tools/g7b_check/heap_allowlist.txt`；placement new 不分配堆。ISR、蓝牙回调、链路任务每轮路径、发送任务禁止分配；只允许启动期一次性分配或非实时路径限量分配，并遵守失败处理要求。C 文件仍沿用上面的 `malloc`/`free` 禁令。

@@ -10,9 +10,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "app/result.hpp"
+#include "rtk/fw/result.hpp"
 
-namespace app {
+namespace rtk::fw {
 
 inline constexpr size_t kCommandArgBytes = 32; // ≥ SN 最大 16 字节 + 0；以后更大的参数走 StoreKey/Pipe
 
@@ -20,7 +20,7 @@ struct Command {
     uint8_t target = 0; // ModuleId
     uint8_t verb = 0;   // 模块内定义的动词
     uint8_t arg_len = 0;
-    uint32_t seq = 0;   // 由 Executor::call 分配，调用方不用填
+    uint32_t seq = 0; // 由 Executor::call 分配，调用方不用填
     std::array<uint8_t, kCommandArgBytes> args{};
 };
 
@@ -30,4 +30,4 @@ struct CommandResult {
     int32_t detail = 0; // 模块自定义附加码（例如 esp_err_t），0 = 无
 };
 
-} // namespace app
+} // namespace rtk::fw

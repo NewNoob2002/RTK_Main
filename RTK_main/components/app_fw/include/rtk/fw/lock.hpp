@@ -7,7 +7,7 @@
 // Owner: UNKNOWN（待人工审查签字）
 #pragma once
 
-namespace app {
+namespace rtk::fw {
 
 struct LockOps {
     void (*lock)(void *ctx) noexcept = nullptr;
@@ -42,4 +42,4 @@ private:
     const LockOps &ops_;
 };
 
-} // namespace app
+} // namespace rtk::fw

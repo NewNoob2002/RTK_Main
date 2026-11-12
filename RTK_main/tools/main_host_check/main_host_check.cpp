@@ -66,7 +66,7 @@ void setup(std::span<const rtk::core::BtAddr> whitelist = {}, rtk::core::Policy 
     SystemStatus system{};
     system.bt_ready = true;
     app_context().data.system_status.write(system);
-    CHECK(app_context().bt_link.init() == ::app::Result::kOk);
+    CHECK(app_context().bt_link.init() == rtk::fw::Result::kOk);
     CHECK(s_command_queue.init() == rtk::Status::kOk);
     CHECK(s_result_queue.init() == rtk::Status::kOk);
 }

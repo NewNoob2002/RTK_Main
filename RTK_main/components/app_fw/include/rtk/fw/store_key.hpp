@@ -12,9 +12,9 @@
 #include <span>
 #include <string_view>
 
-#include "app/result.hpp"
+#include "rtk/fw/result.hpp"
 
-namespace app {
+namespace rtk::fw {
 
 inline constexpr size_t kStoreNameMax = 15; // NVS 命名空间与键名上限（不含结尾 0）
 
@@ -38,8 +38,8 @@ inline constexpr uint32_t kAllProducts = 0xFFFFFFFFU;
 
 /**
  * 绑定到所属对象的序列化函数（在所属模块的执行器任务中调用）。
- * load：storage 从后端读到 in 后调用，所属对象校验并接收；数据非法返回 kInvalidArg（storage 只记录错误，不改所属对象）。
- * save：storage 写盘前调用，所属对象把当前值序列化到 out，len 填实际长度（≤ out.size()）。
+ * load：storage 从后端读到 in 后调用，所属对象校验并接收；数据非法返回 kInvalidArg（storage
+ * 只记录错误，不改所属对象）。 save：storage 写盘前调用，所属对象把当前值序列化到 out，len 填实际长度（≤ out.size()）。
  */
 struct StoreBinding {
     void *obj = nullptr;
@@ -48,8 +48,8 @@ struct StoreBinding {
 };
 
 struct StoreKey {
-    std::string_view ns;   // NVS 命名空间，按模块
-    std::string_view key;  // NVS 键名
+    std::string_view ns;  // NVS 命名空间，按模块
+    std::string_view key; // NVS 键名
     StoreType type = StoreType::kBlob;
     uint16_t max_size = 0; // kStr/kBlob 的最大字节数；数值类型填 sizeof
     uint8_t flags = 0;     // store_flag 位或
@@ -60,7 +60,7 @@ struct StoreKey {
     StoreBinding binding{};
 };
 
-/** 编译期校验：命名长度、max_size 与类型一致、范围有序。用法：static_assert(app::valid(kKeys[0]))。 */
+/** 编译期校验：命名长度、max_size 与类型一致、范围有序。用法：static_assert(rtk::fw::valid(kKeys[0]))。 */
 [[nodiscard]] constexpr bool valid(const StoreKey &k) noexcept
 {
     if (k.ns.empty() || (k.ns.size() > kStoreNameMax) || k.key.empty() || (k.key.size() > kStoreNameMax)) {
@@ -82,7 +82,7 @@ struct StoreKey {
     }
 }
 
-/** 同一张表内 (ns, key) 不重复。用法：static_assert(app::unique_keys(kKeys))。 */
+/** 同一张表内 (ns, key) 不重复。用法：static_assert(rtk::fw::unique_keys(kKeys))。 */
 [[nodiscard]] constexpr bool unique_keys(std::span<const StoreKey> keys) noexcept
 {
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -95,4 +95,4 @@ struct StoreKey {
     return true;
 }
 
-} // namespace app
+} // namespace rtk::fw

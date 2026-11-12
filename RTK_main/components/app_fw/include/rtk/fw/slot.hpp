@@ -11,9 +11,9 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "app/lock.hpp"
+#include "rtk/fw/lock.hpp"
 
-namespace app {
+namespace rtk::fw {
 
 inline constexpr size_t kMaxSlotBytes = 512;
 
@@ -59,4 +59,4 @@ private:
     uint32_t version_ = 0;
 };
 
-} // namespace app
+} // namespace rtk::fw

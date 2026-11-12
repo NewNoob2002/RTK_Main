@@ -128,18 +128,18 @@ void PublishLink(uint32_t nowMs);
 ADR-0008 §4 的目标对照如下。统一名称不改变组件职责与可复用性；`rtk/status.hpp` 等公共基础头保留其契约。
 C 头保持平铺的 `rtk_<组件>_*.h` 命名（现有 `rtk_store.h` 保持接口契约），不强加 C++ 目录规则。
 
-| 组件目录 | 当前命名空间 | R3 目标命名空间 | R3 目标 C++ include 根 |
-| --- | --- | --- | --- |
-| `rtk_os` | `rtk::os` | `rtk::os` | `rtk/os/` |
-| `app_fw` | `::app` | `rtk::fw` | `rtk/fw/` |
-| `rtk_console` | `rtk::console` | `rtk::console` | `rtk/console/` |
-| `rtk_bt` | `rtk::bt` | `rtk::bt` | `rtk/bt/` |
-| `rtk_store` | C 接口 | `rtk::store`（若有 C++ 接口） | `rtk/store/`（若有 C++ 接口） |
-| `rtk_proto` | `rtk::proto` | `rtk::proto` | `rtk/proto/` |
-| `stream_demux` | `demux` | `rtk::demux` | `rtk/demux/` |
-| `rtk_core` | `rtk::core` | `rtk::core` | `rtk/core/` |
-| `bt_reconnect` | `btrc` | `rtk::reconnect` | `rtk/reconnect/` |
-| `main` | `rtk::app` | `rtk::app` | `rtk/app/`（对外 C++ 头） |
+| 组件目录 | 命名空间 | C++ include 根 |
+| --- | --- | --- |
+| `rtk_os` | `rtk::os` | `rtk/os/` |
+| `app_fw` | `rtk::fw` | `rtk/fw/` |
+| `rtk_console` | `rtk::console` | `rtk/console/` |
+| `rtk_bt` | `rtk::bt` | `rtk/bt/` |
+| `rtk_store` | `rtk::store`（若有 C++ 接口） | `rtk/store/`（若有 C++ 接口） |
+| `rtk_proto` | `rtk::proto` | `rtk/proto/` |
+| `stream_demux` | `rtk::demux` | `rtk/demux/` |
+| `rtk_core` | `rtk::core` | `rtk/core/` |
+| `bt_reconnect` | `rtk::reconnect` | `rtk/reconnect/` |
+| `main` | `rtk::app` | `rtk/app/`（对外 C++ 头） |
 
 ```cpp
 // 这样写（R3 目标）
@@ -147,15 +147,15 @@ C 头保持平铺的 `rtk_<组件>_*.h` 命名（现有 `rtk_store.h` 保持接�
 namespace rtk::app {
 // 应用模块
 }
-// 不要这样写（新增目标接口时混用旧根）
-#include "app/module.hpp"
+// 不要这样写（新增接口缺少组件根）
+#include "module.hpp"
 namespace unrelated_app {
 }
 ```
 
 ### 3.3 命名空间：按组件划分，层次服务于可读性
 
-- 每个组件有自己的 `rtk::<组件>` 命名空间（`::app`、`demux`、`btrc` 这类不带前缀的在 R3 统一）。
+- 每个组件有自己的 `rtk::<组件>` 命名空间，例如 `rtk::fw`、`rtk::demux`、`rtk::reconnect`。
 - 子命名空间可以用，前提是读调用点时更清楚：协议常量表 `proto::msg_type::kQuery`、一个解码器一个子空间、`detail`。总深度不超过 `rtk::a::b` 三层。
 - 同一组常量如果本来就是“取值集合”，优先 `enum class`；如果是协议里的一张号码表、需要当整数用，放进命名空间也可以。
 - `.cpp` 中为跨组件长名写的 `namespace x = …` 别名允许，但只在 `.cpp` 局部使用，头文件不写；同一个别名在多个文件反复出现，说明命名空间该调整了。

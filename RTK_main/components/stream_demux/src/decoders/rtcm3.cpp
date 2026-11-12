@@ -6,16 +6,16 @@
 // Generated-by: pi + workbuddy/deepseek-v4.1-flash
 // 人工负责人：UNKNOWN（待人工审查签字）
 
-#include "demux/decoders/rtcm3.hpp"
+#include "rtk/demux/decoders/rtcm3.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "demux/crc.hpp"
-#include "demux/decoder.hpp"
+#include "rtk/demux/crc.hpp"
+#include "rtk/demux/decoder.hpp"
 
-namespace demux::rtcm3 {
+namespace rtk::demux::rtcm3 {
 
 namespace {
 
@@ -73,4 +73,4 @@ Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
     return (crc_calc == crc_rx) ? Step::kFrame : Step::kReject;
 }
 
-} // namespace demux::rtcm3
+} // namespace rtk::demux::rtcm3

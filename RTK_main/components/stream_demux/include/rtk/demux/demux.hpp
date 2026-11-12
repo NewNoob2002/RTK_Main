@@ -13,9 +13,9 @@
 #include <cstdint>
 #include <span>
 
-#include "demux/decoder.hpp"
+#include "rtk/demux/decoder.hpp"
 
-namespace demux {
+namespace rtk::demux {
 
 /** 一个实例最多挂载的解码器数（首字节表用 uint8_t 位图）。 */
 inline constexpr std::size_t kMaxDecoders = 8;
@@ -131,4 +131,4 @@ private:
     friend struct Engine;
 };
 
-} // namespace demux
+} // namespace rtk::demux

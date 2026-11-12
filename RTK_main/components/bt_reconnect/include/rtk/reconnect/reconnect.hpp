@@ -11,7 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace btrc {
+namespace rtk::reconnect {
 
 inline constexpr size_t kAddrLen = 6;
 using Addr = std::array<uint8_t, kAddrLen>;
@@ -48,13 +48,13 @@ struct Action {
 };
 
 struct Config {
-    uint32_t fast_window_ms = kDefFastWindowMs;    // 从 start 或掉线起算的快速重试窗口
-    uint32_t fast_retry_ms = kDefFastRetryMs;      // 快速窗口内的固定间隔
-    uint32_t backoff_min_ms = kDefBackoffMinMs;     // 窗口外退避起点
-    uint32_t backoff_max_ms = kDefBackoffMaxMs;    // 退避上限（翻倍直到上限）
-    uint8_t jitter_pct = kDefJitterPct;            // 抖动 ±jitter_pct%，0 = 不抖动；> kMaxJitterPct 视为非法
-    uint32_t stable_online_ms = kDefStableOnlineMs;  // 在线满该时长才复位退避
-    uint8_t sdp_after_failures = kDefSdpAfterFailures;     // 有缓存 SCN 时，连续 connect 失败达到该次数才重新 SDP；0 非法
+    uint32_t fast_window_ms = kDefFastWindowMs;         // 从 start 或掉线起算的快速重试窗口
+    uint32_t fast_retry_ms = kDefFastRetryMs;           // 快速窗口内的固定间隔
+    uint32_t backoff_min_ms = kDefBackoffMinMs;         // 窗口外退避起点
+    uint32_t backoff_max_ms = kDefBackoffMaxMs;         // 退避上限（翻倍直到上限）
+    uint8_t jitter_pct = kDefJitterPct;                 // 抖动 ±jitter_pct%，0 = 不抖动；> kMaxJitterPct 视为非法
+    uint32_t stable_online_ms = kDefStableOnlineMs;     // 在线满该时长才复位退避
+    uint8_t sdp_after_failures = kDefSdpAfterFailures;  // 有缓存 SCN 时，连续 connect 失败达到该次数才重新 SDP；0 非法
     uint32_t attempt_timeout_ms = kDefAttemptTimeoutMs; // SDP 或 connect 发出后无结果的超时，按失败处理
 };
 
@@ -85,13 +85,20 @@ class Reconnector final {
 public:
     constexpr Reconnector() noexcept = default;
 
-    /** 配置非法（jitter_pct > kMaxJitterPct、sdp_after_failures == 0、backoff_min > backoff_max、任一时长为 0）→ false 且不改状态。 */
+    /** 配置非法（jitter_pct > kMaxJitterPct、sdp_after_failures == 0、backoff_min > backoff_max、任一时长为 0）→ false
+     * 且不改状态。 */
     [[nodiscard]] bool configure(const Config &cfg, uint32_t seed) noexcept;
     /** 设置目标；改变目标会清除 SCN 缓存并回到 kIdle（若已在线，调用方负责断开）。 */
     void set_target(const Addr &addr) noexcept;
     void clear_target() noexcept;
-    [[nodiscard]] bool has_target() const noexcept { return has_target_; }
-    [[nodiscard]] const Addr &target() const noexcept { return addr_; }
+    [[nodiscard]] bool has_target() const noexcept
+    {
+        return has_target_;
+    }
+    [[nodiscard]] const Addr &target() const noexcept
+    {
+        return addr_;
+    }
 
     [[nodiscard]] bool start(uint32_t now_ms, Action &out) noexcept;
     void stop() noexcept;
@@ -102,10 +109,16 @@ public:
     [[nodiscard]] Action on_connect_failed(uint32_t now_ms) noexcept;
     [[nodiscard]] Action on_close(uint32_t now_ms) noexcept;
 
-    [[nodiscard]] State state() const noexcept { return state_; }
+    [[nodiscard]] State state() const noexcept
+    {
+        return state_;
+    }
     /** kBackoff 时距离下一次尝试的剩余 ms（已到期为 0）；其它状态返回 0。 */
     [[nodiscard]] uint32_t next_attempt_in(uint32_t now_ms) const noexcept;
-    [[nodiscard]] const Stats &stats() const noexcept { return stats_; }
+    [[nodiscard]] const Stats &stats() const noexcept
+    {
+        return stats_;
+    }
 
 private:
     Config cfg_{};
@@ -123,4 +136,4 @@ private:
     State state_ = State::kIdle;
 };
 
-} // namespace btrc
+} // namespace rtk::reconnect

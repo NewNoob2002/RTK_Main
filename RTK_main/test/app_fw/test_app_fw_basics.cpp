@@ -10,11 +10,11 @@
 #include <span>
 #include <string_view>
 
-#include "app/lock.hpp"
-#include "app/module.hpp"
-#include "app/result.hpp"
-#include "app/slot.hpp"
-#include "app/store_key.hpp"
+#include "rtk/fw/lock.hpp"
+#include "rtk/fw/module.hpp"
+#include "rtk/fw/result.hpp"
+#include "rtk/fw/slot.hpp"
+#include "rtk/fw/store_key.hpp"
 #include "unity.h"
 
 void setUp(void) {}
@@ -28,27 +28,27 @@ struct FullModule {
     unsigned init_calls = 0;
     unsigned start_calls = 0;
     uint32_t poll_now_ms = 0;
-    const app::Command *command = nullptr;
-    app::Result init() noexcept
+    const rtk::fw::Command *command = nullptr;
+    rtk::fw::Result init() noexcept
     {
         ++init_calls;
-        return app::Result::kIoError;
+        return rtk::fw::Result::kIoError;
     }
-    app::Result start() noexcept
+    rtk::fw::Result start() noexcept
     {
         ++start_calls;
-        return app::Result::kBusy;
+        return rtk::fw::Result::kBusy;
     }
     bool poll(uint32_t now_ms) noexcept
     {
         poll_now_ms = now_ms;
         return now_ms == kPollNowMs;
     }
-    void on_command(const app::Command &cmd, app::CommandResult &result) noexcept
+    void on_command(const rtk::fw::Command &cmd, rtk::fw::CommandResult &result) noexcept
     {
         command = &cmd;
         result.seq = cmd.seq;
-        result.status = app::Result::kTimeout;
+        result.status = rtk::fw::Result::kTimeout;
     }
 };
 struct PollOnlyModule {
@@ -60,10 +60,10 @@ struct PollOnlyModule {
     }
 };
 struct EmptyModule {};
-constexpr auto kFullOps = app::make_ops<FullModule>();
-constexpr auto kPartialOps = app::make_ops<PollOnlyModule>();
-constexpr auto kEmptyOps = app::make_ops<EmptyModule>();
-consteval bool has_all_callbacks(const app::ModuleOps &ops) noexcept
+constexpr auto kFullOps = rtk::fw::make_ops<FullModule>();
+constexpr auto kPartialOps = rtk::fw::make_ops<PollOnlyModule>();
+constexpr auto kEmptyOps = rtk::fw::make_ops<EmptyModule>();
+consteval bool has_all_callbacks(const rtk::fw::ModuleOps &ops) noexcept
 {
     return ops.init != nullptr && ops.start != nullptr && ops.poll != nullptr && ops.on_command != nullptr;
 }
@@ -75,21 +75,21 @@ static_assert(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr && kEmptyO
 void test_make_ops_full_forwarding()
 {
     FullModule module{};
-    TEST_ASSERT_TRUE(kFullOps.init(&module) == app::Result::kIoError);
-    TEST_ASSERT_TRUE(kFullOps.start(&module) == app::Result::kBusy);
+    TEST_ASSERT_TRUE(kFullOps.init(&module) == rtk::fw::Result::kIoError);
+    TEST_ASSERT_TRUE(kFullOps.start(&module) == rtk::fw::Result::kBusy);
     TEST_ASSERT_EQUAL_UINT32(1U, module.init_calls);
     TEST_ASSERT_EQUAL_UINT32(1U, module.start_calls);
     TEST_ASSERT_TRUE(kFullOps.poll(&module, kPollNowMs));
     TEST_ASSERT_EQUAL_UINT32(kPollNowMs, module.poll_now_ms);
     TEST_ASSERT_FALSE(kFullOps.poll(&module, 0));
     TEST_ASSERT_EQUAL_UINT32(0U, module.poll_now_ms);
-    app::Command command{};
+    rtk::fw::Command command{};
     command.seq = kCommandSequence;
-    app::CommandResult result{};
+    rtk::fw::CommandResult result{};
     kFullOps.on_command(&module, command, result);
     TEST_ASSERT_EQUAL_PTR(&command, module.command);
     TEST_ASSERT_EQUAL_UINT32(kCommandSequence, result.seq);
-    TEST_ASSERT_TRUE(result.status == app::Result::kTimeout);
+    TEST_ASSERT_TRUE(result.status == rtk::fw::Result::kTimeout);
 }
 
 void test_make_ops_partial_forwarding()
@@ -109,15 +109,15 @@ void test_make_ops_empty_table()
 // --------------------------------------------------------------------------
 // Result 编译期 + 运行期检查
 // --------------------------------------------------------------------------
-static_assert(app::is_ok(app::Result::kOk));
-static_assert(!app::is_ok(app::Result::kInvalidArg));
-static_assert(!app::is_ok(app::Result::kNoSpace));
-static_assert(!app::is_ok(app::Result::kTimeout));
-static_assert(!app::is_ok(app::Result::kNotFound));
-static_assert(!app::is_ok(app::Result::kIoError));
-static_assert(!app::is_ok(app::Result::kNotSupported));
-static_assert(!app::is_ok(app::Result::kBusy));
-static_assert(!app::is_ok(app::Result::kInvalidState));
+static_assert(rtk::fw::is_ok(rtk::fw::Result::kOk));
+static_assert(!rtk::fw::is_ok(rtk::fw::Result::kInvalidArg));
+static_assert(!rtk::fw::is_ok(rtk::fw::Result::kNoSpace));
+static_assert(!rtk::fw::is_ok(rtk::fw::Result::kTimeout));
+static_assert(!rtk::fw::is_ok(rtk::fw::Result::kNotFound));
+static_assert(!rtk::fw::is_ok(rtk::fw::Result::kIoError));
+static_assert(!rtk::fw::is_ok(rtk::fw::Result::kNotSupported));
+static_assert(!rtk::fw::is_ok(rtk::fw::Result::kBusy));
+static_assert(!rtk::fw::is_ok(rtk::fw::Result::kInvalidState));
 
 // --------------------------------------------------------------------------
 // StoreKey::valid / unique_keys 编译期 static_assert 用例
@@ -131,69 +131,72 @@ constexpr int32_t kBaudMax = 1000000;
 constexpr uint8_t kUnknownResultRaw = 250U;
 constexpr uint8_t kUnknownStoreTypeRaw = 99U;
 
-consteval app::StoreKey make_key(std::string_view ns, std::string_view key, app::StoreType type, uint16_t max_size,
-                                 uint8_t flags = 0U, int32_t min = 0, int32_t max = 0) noexcept
+consteval rtk::fw::StoreKey make_key(std::string_view ns, std::string_view key, rtk::fw::StoreType type,
+                                     uint16_t max_size, uint8_t flags = 0U, int32_t min = 0, int32_t max = 0) noexcept
 {
-    return app::StoreKey{ns, key, type, max_size, flags, min, max, app::kAllProducts, "", app::StoreBinding{}};
+    return rtk::fw::StoreKey{
+        ns, key, type, max_size, flags, min, max, rtk::fw::kAllProducts, "", rtk::fw::StoreBinding{}};
 }
 
-constexpr app::StoreKey kValidU8 = make_key("mod_a", "flag", app::StoreType::kU8, 1U, app::store_flag::kConsole, 0, 1);
-constexpr app::StoreKey kValidU16 = make_key("mod_a", "port", app::StoreType::kU16, 2U, 0U, 1, kU16MaxVal);
-constexpr app::StoreKey kValidU32 = make_key("mod_a", "baud", app::StoreType::kU32, 4U, 0U, 0, kBaudMax);
-constexpr app::StoreKey kValidI32 = make_key("mod_a", "offs", app::StoreType::kI32, 4U, 0U, kSignedMin, kSignedMax);
-constexpr app::StoreKey kValidStr =
-    make_key("mod_b", "sn_key_12345678", app::StoreType::kStr, kTestStrSize, app::store_flag::kReadOnly);
-constexpr app::StoreKey kValidBlob =
-    make_key("123456789012345", "blob", app::StoreType::kBlob, kTestBlobSize, app::store_flag::kExport);
+constexpr rtk::fw::StoreKey kValidU8 =
+    make_key("mod_a", "flag", rtk::fw::StoreType::kU8, 1U, rtk::fw::store_flag::kConsole, 0, 1);
+constexpr rtk::fw::StoreKey kValidU16 = make_key("mod_a", "port", rtk::fw::StoreType::kU16, 2U, 0U, 1, kU16MaxVal);
+constexpr rtk::fw::StoreKey kValidU32 = make_key("mod_a", "baud", rtk::fw::StoreType::kU32, 4U, 0U, 0, kBaudMax);
+constexpr rtk::fw::StoreKey kValidI32 =
+    make_key("mod_a", "offs", rtk::fw::StoreType::kI32, 4U, 0U, kSignedMin, kSignedMax);
+constexpr rtk::fw::StoreKey kValidStr =
+    make_key("mod_b", "sn_key_12345678", rtk::fw::StoreType::kStr, kTestStrSize, rtk::fw::store_flag::kReadOnly);
+constexpr rtk::fw::StoreKey kValidBlob =
+    make_key("123456789012345", "blob", rtk::fw::StoreType::kBlob, kTestBlobSize, rtk::fw::store_flag::kExport);
 
-static_assert(app::valid(kValidU8));
-static_assert(app::valid(kValidU16));
-static_assert(app::valid(kValidU32));
-static_assert(app::valid(kValidI32));
-static_assert(app::valid(kValidStr));
-static_assert(app::valid(kValidBlob));
+static_assert(rtk::fw::valid(kValidU8));
+static_assert(rtk::fw::valid(kValidU16));
+static_assert(rtk::fw::valid(kValidU32));
+static_assert(rtk::fw::valid(kValidI32));
+static_assert(rtk::fw::valid(kValidStr));
+static_assert(rtk::fw::valid(kValidBlob));
 
 // 非法用例：空 ns/key、超长 (> 15)、数值 max_size 不匹配、min > max、串/块 max_size == 0、未知类型
-constexpr app::StoreKey kBadEmptyNs = make_key("", "k", app::StoreType::kU8, 1U);
-constexpr app::StoreKey kBadEmptyKey = make_key("ns", "", app::StoreType::kU8, 1U);
-constexpr app::StoreKey kBadLongNs = make_key("1234567890123456", "k", app::StoreType::kU8, 1U);
-constexpr app::StoreKey kBadLongKey = make_key("ns", "1234567890123456", app::StoreType::kU8, 1U);
-constexpr app::StoreKey kBadU8Size = make_key("ns", "k", app::StoreType::kU8, 2U, 0U, 0, 1);
-constexpr app::StoreKey kBadU16Size = make_key("ns", "k", app::StoreType::kU16, 1U, 0U, 0, 1);
-constexpr app::StoreKey kBadU32Size = make_key("ns", "k", app::StoreType::kU32, 2U, 0U, 0, 1);
-constexpr app::StoreKey kBadI32Size = make_key("ns", "k", app::StoreType::kI32, 8U, 0U, 0, 1);
-constexpr app::StoreKey kBadRange = make_key("ns", "k", app::StoreType::kI32, 4U, 0U, 10, -10);
-constexpr app::StoreKey kBadStrZero = make_key("ns", "k", app::StoreType::kStr, 0U);
-constexpr app::StoreKey kBadBlobZero = make_key("ns", "k", app::StoreType::kBlob, 0U);
-constexpr app::StoreKey kBadType = make_key("ns", "k", static_cast<app::StoreType>(kUnknownStoreTypeRaw), 4U);
+constexpr rtk::fw::StoreKey kBadEmptyNs = make_key("", "k", rtk::fw::StoreType::kU8, 1U);
+constexpr rtk::fw::StoreKey kBadEmptyKey = make_key("ns", "", rtk::fw::StoreType::kU8, 1U);
+constexpr rtk::fw::StoreKey kBadLongNs = make_key("1234567890123456", "k", rtk::fw::StoreType::kU8, 1U);
+constexpr rtk::fw::StoreKey kBadLongKey = make_key("ns", "1234567890123456", rtk::fw::StoreType::kU8, 1U);
+constexpr rtk::fw::StoreKey kBadU8Size = make_key("ns", "k", rtk::fw::StoreType::kU8, 2U, 0U, 0, 1);
+constexpr rtk::fw::StoreKey kBadU16Size = make_key("ns", "k", rtk::fw::StoreType::kU16, 1U, 0U, 0, 1);
+constexpr rtk::fw::StoreKey kBadU32Size = make_key("ns", "k", rtk::fw::StoreType::kU32, 2U, 0U, 0, 1);
+constexpr rtk::fw::StoreKey kBadI32Size = make_key("ns", "k", rtk::fw::StoreType::kI32, 8U, 0U, 0, 1);
+constexpr rtk::fw::StoreKey kBadRange = make_key("ns", "k", rtk::fw::StoreType::kI32, 4U, 0U, 10, -10);
+constexpr rtk::fw::StoreKey kBadStrZero = make_key("ns", "k", rtk::fw::StoreType::kStr, 0U);
+constexpr rtk::fw::StoreKey kBadBlobZero = make_key("ns", "k", rtk::fw::StoreType::kBlob, 0U);
+constexpr rtk::fw::StoreKey kBadType = make_key("ns", "k", static_cast<rtk::fw::StoreType>(kUnknownStoreTypeRaw), 4U);
 
-static_assert(!app::valid(kBadEmptyNs));
-static_assert(!app::valid(kBadEmptyKey));
-static_assert(!app::valid(kBadLongNs));
-static_assert(!app::valid(kBadLongKey));
-static_assert(!app::valid(kBadU8Size));
-static_assert(!app::valid(kBadU16Size));
-static_assert(!app::valid(kBadU32Size));
-static_assert(!app::valid(kBadI32Size));
-static_assert(!app::valid(kBadRange));
-static_assert(!app::valid(kBadStrZero));
-static_assert(!app::valid(kBadBlobZero));
-static_assert(!app::valid(kBadType));
+static_assert(!rtk::fw::valid(kBadEmptyNs));
+static_assert(!rtk::fw::valid(kBadEmptyKey));
+static_assert(!rtk::fw::valid(kBadLongNs));
+static_assert(!rtk::fw::valid(kBadLongKey));
+static_assert(!rtk::fw::valid(kBadU8Size));
+static_assert(!rtk::fw::valid(kBadU16Size));
+static_assert(!rtk::fw::valid(kBadU32Size));
+static_assert(!rtk::fw::valid(kBadI32Size));
+static_assert(!rtk::fw::valid(kBadRange));
+static_assert(!rtk::fw::valid(kBadStrZero));
+static_assert(!rtk::fw::valid(kBadBlobZero));
+static_assert(!rtk::fw::valid(kBadType));
 
 // unique_keys 编译期检查
-constexpr std::array<app::StoreKey, 3> kUniqueTable{{
-    make_key("ns1", "same_key", app::StoreType::kU8, 1U),
-    make_key("ns2", "same_key", app::StoreType::kU8, 1U),
-    make_key("ns1", "other_key", app::StoreType::kU16, 2U),
+constexpr std::array<rtk::fw::StoreKey, 3> kUniqueTable{{
+    make_key("ns1", "same_key", rtk::fw::StoreType::kU8, 1U),
+    make_key("ns2", "same_key", rtk::fw::StoreType::kU8, 1U),
+    make_key("ns1", "other_key", rtk::fw::StoreType::kU16, 2U),
 }};
-constexpr std::array<app::StoreKey, 3> kDupTable{{
-    make_key("ns1", "k1", app::StoreType::kU8, 1U),
-    make_key("ns2", "k2", app::StoreType::kU8, 1U),
-    make_key("ns1", "k1", app::StoreType::kU32, 4U),
+constexpr std::array<rtk::fw::StoreKey, 3> kDupTable{{
+    make_key("ns1", "k1", rtk::fw::StoreType::kU8, 1U),
+    make_key("ns2", "k2", rtk::fw::StoreType::kU8, 1U),
+    make_key("ns1", "k1", rtk::fw::StoreType::kU32, 4U),
 }};
-static_assert(app::unique_keys(std::span<const app::StoreKey>{}));
-static_assert(app::unique_keys(kUniqueTable));
-static_assert(!app::unique_keys(kDupTable));
+static_assert(rtk::fw::unique_keys(std::span<const rtk::fw::StoreKey>{}));
+static_assert(rtk::fw::unique_keys(kUniqueTable));
+static_assert(!rtk::fw::unique_keys(kDupTable));
 
 // --------------------------------------------------------------------------
 // LockOps 间谍
@@ -226,9 +229,9 @@ void spy_unlock(void *ctx) noexcept
     }
 }
 
-app::LockOps make_spy_lock(LockSpy &spy) noexcept
+rtk::fw::LockOps make_spy_lock(LockSpy &spy) noexcept
 {
-    return app::LockOps{&spy_lock, &spy_unlock, &spy};
+    return rtk::fw::LockOps{&spy_lock, &spy_unlock, &spy};
 }
 
 // --------------------------------------------------------------------------
@@ -245,35 +248,35 @@ struct SamplePayload {
 };
 
 struct MaxSlotPayload {
-    std::array<uint8_t, app::kMaxSlotBytes> data{};
+    std::array<uint8_t, rtk::fw::kMaxSlotBytes> data{};
 };
 
-constinit app::Slot<SamplePayload> s_static_slot{};
+constinit rtk::fw::Slot<SamplePayload> s_static_slot{};
 
 void test_result_strings()
 {
-    TEST_ASSERT_EQUAL_STRING("ok", app::to_string(app::Result::kOk));
-    TEST_ASSERT_EQUAL_STRING("invalid_arg", app::to_string(app::Result::kInvalidArg));
-    TEST_ASSERT_EQUAL_STRING("no_space", app::to_string(app::Result::kNoSpace));
-    TEST_ASSERT_EQUAL_STRING("timeout", app::to_string(app::Result::kTimeout));
-    TEST_ASSERT_EQUAL_STRING("not_found", app::to_string(app::Result::kNotFound));
-    TEST_ASSERT_EQUAL_STRING("io_error", app::to_string(app::Result::kIoError));
-    TEST_ASSERT_EQUAL_STRING("not_supported", app::to_string(app::Result::kNotSupported));
-    TEST_ASSERT_EQUAL_STRING("busy", app::to_string(app::Result::kBusy));
-    TEST_ASSERT_EQUAL_STRING("invalid_state", app::to_string(app::Result::kInvalidState));
-    TEST_ASSERT_EQUAL_STRING("unknown", app::to_string(static_cast<app::Result>(kUnknownResultRaw)));
+    TEST_ASSERT_EQUAL_STRING("ok", rtk::fw::to_string(rtk::fw::Result::kOk));
+    TEST_ASSERT_EQUAL_STRING("invalid_arg", rtk::fw::to_string(rtk::fw::Result::kInvalidArg));
+    TEST_ASSERT_EQUAL_STRING("no_space", rtk::fw::to_string(rtk::fw::Result::kNoSpace));
+    TEST_ASSERT_EQUAL_STRING("timeout", rtk::fw::to_string(rtk::fw::Result::kTimeout));
+    TEST_ASSERT_EQUAL_STRING("not_found", rtk::fw::to_string(rtk::fw::Result::kNotFound));
+    TEST_ASSERT_EQUAL_STRING("io_error", rtk::fw::to_string(rtk::fw::Result::kIoError));
+    TEST_ASSERT_EQUAL_STRING("not_supported", rtk::fw::to_string(rtk::fw::Result::kNotSupported));
+    TEST_ASSERT_EQUAL_STRING("busy", rtk::fw::to_string(rtk::fw::Result::kBusy));
+    TEST_ASSERT_EQUAL_STRING("invalid_state", rtk::fw::to_string(rtk::fw::Result::kInvalidState));
+    TEST_ASSERT_EQUAL_STRING("unknown", rtk::fw::to_string(static_cast<rtk::fw::Result>(kUnknownResultRaw)));
 }
 
 void test_lock_guard_pairing_and_nolock()
 {
     {
-        const app::LockGuard noop(app::kNoLock);
+        const rtk::fw::LockGuard noop(rtk::fw::kNoLock);
     }
 
     LockSpy spy{};
-    const app::LockOps ops = make_spy_lock(spy);
+    const rtk::fw::LockOps ops = make_spy_lock(spy);
     {
-        const app::LockGuard outer(ops);
+        const rtk::fw::LockGuard outer(ops);
         TEST_ASSERT_EQUAL_UINT32(1U, spy.lock_calls);
         TEST_ASSERT_EQUAL_UINT32(0U, spy.unlock_calls);
         TEST_ASSERT_EQUAL_INT32(1, spy.depth);
@@ -334,69 +337,69 @@ void test_slot_read_write_version_and_lock_pairing()
     TEST_ASSERT_FALSE(spy.underflow);
 
     // 最大允许尺寸 Slot<MaxSlotPayload>（512 B）读写正确
-    app::Slot<MaxSlotPayload> big_slot;
-    big_slot.bind_lock(app::kNoLock);
+    rtk::fw::Slot<MaxSlotPayload> big_slot;
+    big_slot.bind_lock(rtk::fw::kNoLock);
     MaxSlotPayload in_big{};
     constexpr uint8_t kBigFill = 0x5CU;
     constexpr uint8_t kBigHead = 0x11U;
     constexpr uint8_t kBigTail = 0x99U;
     in_big.data.fill(kBigFill);
     in_big.data[0] = kBigHead;
-    in_big.data[app::kMaxSlotBytes - 1U] = kBigTail;
+    in_big.data[rtk::fw::kMaxSlotBytes - 1U] = kBigTail;
     big_slot.write(in_big);
     uint32_t big_ver = 0U;
     const MaxSlotPayload out_big = big_slot.read(big_ver);
     TEST_ASSERT_EQUAL_UINT32(1U, big_ver);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(in_big.data.data(), out_big.data.data(), app::kMaxSlotBytes);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(in_big.data.data(), out_big.data.data(), rtk::fw::kMaxSlotBytes);
 }
 
 void test_store_key_runtime_and_binding()
 {
-    TEST_ASSERT_TRUE(app::valid(kValidU8));
-    TEST_ASSERT_TRUE(app::valid(kValidBlob));
-    TEST_ASSERT_FALSE(app::valid(kBadLongKey));
-    TEST_ASSERT_FALSE(app::valid(kBadRange));
-    TEST_ASSERT_TRUE(app::unique_keys(kUniqueTable));
-    TEST_ASSERT_FALSE(app::unique_keys(kDupTable));
+    TEST_ASSERT_TRUE(rtk::fw::valid(kValidU8));
+    TEST_ASSERT_TRUE(rtk::fw::valid(kValidBlob));
+    TEST_ASSERT_FALSE(rtk::fw::valid(kBadLongKey));
+    TEST_ASSERT_FALSE(rtk::fw::valid(kBadRange));
+    TEST_ASSERT_TRUE(rtk::fw::unique_keys(kUniqueTable));
+    TEST_ASSERT_FALSE(rtk::fw::unique_keys(kDupTable));
 
     // StoreBinding 绑定示例
     constexpr uint32_t kInitialCounter = 42U;
     constexpr int32_t kCounterMax = 1000;
     uint32_t stored_val = kInitialCounter;
-    const app::StoreBinding binding{
+    const rtk::fw::StoreBinding binding{
         &stored_val,
-        [](void *obj, std::span<const uint8_t> in) noexcept -> app::Result {
+        [](void *obj, std::span<const uint8_t> in) noexcept -> rtk::fw::Result {
             if (in.size() != sizeof(uint32_t)) {
-                return app::Result::kInvalidArg;
+                return rtk::fw::Result::kInvalidArg;
             }
             uint32_t v = 0U;
             std::memcpy(&v, in.data(), sizeof(v));
             *static_cast<uint32_t *>(obj) = v;
-            return app::Result::kOk;
+            return rtk::fw::Result::kOk;
         },
-        [](const void *obj, std::span<uint8_t> out, size_t &len) noexcept -> app::Result {
+        [](const void *obj, std::span<uint8_t> out, size_t &len) noexcept -> rtk::fw::Result {
             if (out.size() < sizeof(uint32_t)) {
-                return app::Result::kNoSpace;
+                return rtk::fw::Result::kNoSpace;
             }
             const uint32_t v = *static_cast<const uint32_t *>(obj);
             std::memcpy(out.data(), &v, sizeof(v));
             len = sizeof(v);
-            return app::Result::kOk;
+            return rtk::fw::Result::kOk;
         },
     };
-    const app::StoreKey key_with_bind{
-        "app", "counter",   app::StoreType::kU32, sizeof(uint32_t), app::store_flag::kConsole,
-        0,     kCounterMax, app::kAllProducts,    "counter",        binding};
-    TEST_ASSERT_TRUE(app::valid(key_with_bind));
+    const rtk::fw::StoreKey key_with_bind{
+        "app", "counter",   rtk::fw::StoreType::kU32, sizeof(uint32_t), rtk::fw::store_flag::kConsole,
+        0,     kCounterMax, rtk::fw::kAllProducts,    "counter",        binding};
+    TEST_ASSERT_TRUE(rtk::fw::valid(key_with_bind));
 
     std::array<uint8_t, sizeof(uint32_t)> buf{};
     size_t len = 0U;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(app::Result::kOk),
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::fw::Result::kOk),
                             static_cast<uint8_t>(key_with_bind.binding.save(key_with_bind.binding.obj, buf, len)));
     TEST_ASSERT_EQUAL_size_t(sizeof(uint32_t), len);
 
     stored_val = 0U;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(app::Result::kOk),
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::fw::Result::kOk),
                             static_cast<uint8_t>(key_with_bind.binding.load(key_with_bind.binding.obj, buf)));
     TEST_ASSERT_EQUAL_UINT32(kInitialCounter, stored_val);
 }

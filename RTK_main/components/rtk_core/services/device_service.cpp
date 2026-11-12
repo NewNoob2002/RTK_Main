@@ -15,13 +15,45 @@
 #include "rtk/core/reply.hpp"
 #include "rtk/proto/bytes.hpp"
 #include "rtk/proto/frame.hpp"
-#include "service_support.hpp"
 
 namespace rtk::core::services {
 
 namespace {
 
-namespace proto = rtk::proto;
+// 通用结果码（phone_protocol.md §3；沿用旧 CommandDispatcher 的取值）。
+inline constexpr uint8_t kResultOk = 0x01;
+
+/**
+ * 组应答帧：sender 固定为 DEV，type 经 response_type 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ * 组帧失败时把 reply.len 置 0 并返回 kNoReply（与旧 dispatcher 一致）。
+ */
+inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_type,
+                                  std::span<const uint8_t> payload) noexcept
+{
+    size_t len = 0;
+    const Status status =
+        proto::build_frame(reply.buf, msg_id, proto::sender::kDevice, proto::response_type(req_type), payload, len);
+    if (!is_ok(status)) {
+        reply.len = 0;
+        return DispatchResult::kNoReply;
+    }
+    reply.len = len;
+    return DispatchResult::kReply;
+}
+
+/** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
+inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type, uint8_t value) noexcept
+{
+    const std::array<uint8_t, 2> payload = {value, value};
+    return reply_build(reply, msg_id, req_type, payload);
+}
+
+/** 成功应答（0x01 0x01）。 */
+inline DispatchResult reply_ok(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+{
+    return reply_result(reply, msg_id, req_type, kResultOk);
+}
+
 namespace msg_type = rtk::proto::msg_type;
 
 // §4 命令 ID（本服务登记的 7 条）。
@@ -65,12 +97,12 @@ DispatchResult handle_dev_info(const DeviceInfo &info, const proto::FrameView &f
     writer.fixed_str(info.radio_type.view(), info.radio_type.capacity());
     writer.fixed_str(info.radio_fw.view(), info.radio_fw.capacity());
     // 字段总宽 120 B，剩余 16 B 保持 0（§4）。
-    return detail::reply_build(reply, frame.msg_id, frame.type, payload);
+    return reply_build(reply, frame.msg_id, frame.type, payload);
 }
 
 DispatchResult handle_dev_state(const proto::FrameView &frame, Reply &reply) noexcept
 {
-    return detail::reply_build(reply, frame.msg_id, frame.type, kDevStatePayload);
+    return reply_build(reply, frame.msg_id, frame.type, kDevStatePayload);
 }
 
 DispatchResult handle_battery(const DeviceInfo &info, const proto::FrameView &frame, Reply &reply) noexcept
@@ -84,22 +116,22 @@ DispatchResult handle_battery(const DeviceInfo &info, const proto::FrameView &fr
     // int8_t 的补码位模式按协议直接写入（-5 → 0xFB）。
     writer.u8(static_cast<uint8_t>(info.battery_temp_c));
     writer.zeros(kBatteryLen - writer.size());
-    return detail::reply_build(reply, frame.msg_id, frame.type, payload);
+    return reply_build(reply, frame.msg_id, frame.type, payload);
 }
 
 /** 0x04 GGA 与 0x05 卫星：本阶段占位，直接回成功。 */
 DispatchResult handle_ok(const proto::FrameView &frame, Reply &reply) noexcept
 {
-    return detail::reply_ok(reply, frame.msg_id, frame.type);
+    return reply_ok(reply, frame.msg_id, frame.type);
 }
 
 DispatchResult handle_sat_track(const proto::FrameView &frame, Reply &reply) noexcept
 {
     if (frame.type != msg_type::kQuery) {
-        return detail::reply_ok(reply, frame.msg_id, frame.type);
+        return reply_ok(reply, frame.msg_id, frame.type);
     }
     const std::array<uint8_t, kSatTrackLen> payload{};
-    return detail::reply_build(reply, frame.msg_id, frame.type, payload);
+    return reply_build(reply, frame.msg_id, frame.type, payload);
 }
 
 DispatchResult handle_com(const DeviceInfo &info, const proto::FrameView &frame, Reply &reply) noexcept
@@ -111,16 +143,16 @@ DispatchResult handle_com(const DeviceInfo &info, const proto::FrameView &frame,
 
     std::array<uint8_t, kComLen> payload{};
     proto::ByteWriter writer(payload);
-    writer.u8(detail::kResultOk);
-    writer.u8(detail::kResultOk);
+    writer.u8(kResultOk);
+    writer.u8(kResultOk);
     writer.zeros(kComOfsBaud - writer.size());
     writer.u32(info.com_baud);
-    writer.u8(detail::kResultOk);
+    writer.u8(kResultOk);
     writer.zeros(kComOfsFlagHigh - writer.size());
-    writer.u8(detail::kResultOk);
+    writer.u8(kResultOk);
     writer.u16(kComParam218);
     writer.zeros(kComLen - writer.size());
-    return detail::reply_build(reply, frame.msg_id, frame.type, payload);
+    return reply_build(reply, frame.msg_id, frame.type, payload);
 }
 
 } // namespace

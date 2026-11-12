@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <span>
 
-namespace demux {
+namespace rtk::demux {
 
 /** 解码器 step 的结论。 */
 enum class Step : uint8_t {
@@ -20,7 +20,7 @@ enum class Step : uint8_t {
 
 /**
  * 解码器描述符。以 `inline constexpr` 变量定义在各解码器头文件中，可被多个实例共享；解码器无可变状态。
- * 对象地址即身份：回调里用 `&decoder == &demux::rtcm3::kDecoder` 判断协议（inline 变量全程序唯一地址）。
+ * 对象地址即身份：回调里用 `&decoder == &rtk::demux::rtcm3::kDecoder` 判断协议（inline 变量全程序唯一地址）。
  *
  * step 契约（引擎依赖这些性质保证回放重扫正确，见 ADR-0005 §3 / ADR-0004 §3）：
  * - 纯函数：结论只取决于 frame 的内容，不依赖之前的调用；可对同一前缀重复调用。
@@ -41,4 +41,4 @@ struct Decoder {
     StepFn step;
 };
 
-} // namespace demux
+} // namespace rtk::demux
