@@ -1,0 +1,45 @@
+// 冻结接口（ADR-0007 §3.3）。实现方不得修改。
+// 报警相关指令：0x40 状态查询（ALARM，type 必须为 QUERY）、0x41 心跳（ALARM，type 必须为 PUSH，结果放 reply.heartbeat）、
+// 0x42 测试报警（PHONE）、0x43 电子围栏（PHONE）；以及 0x40 主动推送帧的组帧。
+// 行为与 CommandDispatcher 对应分支、build_status_push 逐字节一致。线程安全：否（链路任务独占）。
+//
+// Generated-by: Claude Code + claude-opus-5-5
+// Owner: UNKNOWN（待人工审查签字）
+#pragma once
+
+#include <cstdint>
+#include <span>
+
+#include "rtk/core/alarm_source.hpp"
+#include "rtk/core/command_router.hpp"
+#include "rtk/core/link_manager.hpp"
+#include "rtk/core/reply.hpp"
+
+namespace rtk::core::services {
+
+class AlarmService {
+public:
+    /** 只保存引用。info 用于状态帧中的电池等字段（由 DeviceService 持有）。 */
+    AlarmService(AlarmSource &alarm, const LinkManager &link, const DeviceInfo &info) noexcept;
+    AlarmService(const AlarmService &) = delete;
+    AlarmService &operator=(const AlarmService &) = delete;
+    AlarmService(AlarmService &&) = delete;
+    AlarmService &operator=(AlarmService &&) = delete;
+    ~AlarmService() = default;
+
+    /** 组 0x40 主动上报帧（type=PUSH，sender=DEV）；语义同 CommandDispatcher::build_status_push。 */
+    [[nodiscard]] bool build_status_push(uint16_t seq, uint32_t now_ms, Reply &reply) const noexcept;
+
+    [[nodiscard]] static std::span<const Route> routes() noexcept;
+    [[nodiscard]] RouteTable table() noexcept
+    {
+        return RouteTable{this, routes()};
+    }
+
+private:
+    AlarmSource &alarm_;
+    const LinkManager &link_;
+    const DeviceInfo &info_;
+};
+
+} // namespace rtk::core::services
