@@ -14,6 +14,14 @@ menu "RTK_main"
             bool "PHONE_PREEMPT: phone disconnects alarm"
     endchoice
 
+    config RTK_TRACE_ENABLE
+        bool "Enable runtime debug trace (trace ring, debug module and commands)"
+        default y
+        help
+            ADR-0009 运行时追踪。关闭后：fw::trace()/trace_on() 编译为空内联（各组件调用点被优化掉），
+            spp_server 不再调用追踪钩子，main 不编译 debug 模块（追踪环、trace_out 任务、debug 命令组、
+            NVS "dbg" 键表）。调试阶段保持开启。
+
     config RTK_STRICT_WARNINGS
         bool "Treat all warnings in project code as errors (debug phase)"
         default y

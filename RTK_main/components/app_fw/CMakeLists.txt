@@ -6,6 +6,11 @@ set(_app_fw_srcs "src/status.cpp" "src/result.cpp" "src/fanout_ring.cpp" "src/tr
 if(ESP_PLATFORM)
     idf_component_register(SRCS ${_app_fw_srcs} INCLUDE_DIRS "include")
     set(_app_fw_target ${COMPONENT_LIB})
+    # ADR-0009 §2.6：追踪总开关（Kconfig 在 main/Kconfig.projbuild）。PUBLIC 传给所有 REQUIRES app_fw 的组件，
+    # 使 fw/trace.hpp 中 trace()/trace_on() 在关闭时变为空内联。未定义（早期展开阶段）按开启处理。
+    if(DEFINED CONFIG_RTK_TRACE_ENABLE AND NOT CONFIG_RTK_TRACE_ENABLE)
+        target_compile_definitions(${COMPONENT_LIB} PUBLIC FW_TRACE_ENABLED=0)
+    endif()
 else()
     cmake_minimum_required(VERSION 3.16)
     add_library(app_fw STATIC ${_app_fw_srcs})

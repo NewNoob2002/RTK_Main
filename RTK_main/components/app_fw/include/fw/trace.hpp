@@ -12,6 +12,13 @@
 #include "fw/lock.hpp"
 #include "fw/result.hpp"
 
+// 编译期总开关（ADR-0009 §2.6）：0 时 trace()/trace_on() 变为空内联，调用点整体被优化掉，
+// 调用方无需 #if。ESP-IDF 构建由 app_fw 的 CMake 依据 CONFIG_RTK_TRACE_ENABLE 以 PUBLIC 宏传给所有依赖方；
+// 其他构建（host 测试、外部工程）未定义时默认开启。
+#ifndef FW_TRACE_ENABLED
+#define FW_TRACE_ENABLED 1
+#endif
+
 namespace fw {
 
 /** 追踪类别；数值即掩码位号。新增类别只能追加在 kCount 之前，并同步 main 的名称/文本表。 */
@@ -58,11 +65,21 @@ using TraceClockFn = uint32_t (*)() noexcept;
 void trace_set_mask(uint32_t mask) noexcept;
 [[nodiscard]] uint32_t trace_mask() noexcept;
 
+#if FW_TRACE_ENABLED
 /** 该类别是否打开（原子 relaxed 读）；调用方可先判断再准备昂贵的参数。 */
 [[nodiscard]] bool trace_on(TraceCat cat) noexcept;
 
 /** 记录一条事件：类别关闭或未安装 sink 时立即返回。非阻塞，不可在 ISR 中调用。 */
 void trace(TraceCat cat, uint8_t code, uint16_t session, uint32_t a, uint32_t b) noexcept;
+#else
+// 关闭时恒为 false / 空操作；参数仍做类型检查，调用点不必改动。
+[[nodiscard]] inline bool trace_on(TraceCat /*cat*/) noexcept
+{
+    return false;
+}
+
+inline void trace(TraceCat /*cat*/, uint8_t /*code*/, uint16_t /*session*/, uint32_t /*a*/, uint32_t /*b*/) noexcept {}
+#endif
 
 /** TraceRing 统计；init() 后清零。 */
 struct TraceRingStats {

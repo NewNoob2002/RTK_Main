@@ -52,6 +52,7 @@ uint32_t trace_mask() noexcept
     return s_mask.load(std::memory_order_relaxed);
 }
 
+#if FW_TRACE_ENABLED
 bool trace_on(TraceCat cat) noexcept
 {
     const uint32_t bit = static_cast<uint32_t>(cat);
@@ -79,6 +80,7 @@ void trace(TraceCat cat, uint8_t code, uint16_t session, uint32_t a, uint32_t b)
     ev.b = b;
     fn(s_sink_ctx, ev);
 }
+#endif // FW_TRACE_ENABLED
 
 Result TraceRing::init(std::span<TraceEvent> storage, const LockOps &lock) noexcept
 {

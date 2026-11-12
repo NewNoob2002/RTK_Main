@@ -190,6 +190,7 @@ extern spp_server_trace_fn s_spp_trace;
 /* 非空才调用：先在本临界区取出函数指针，出临界区后再调用，避免钩子实现里再进临界区。 */
 static inline void spp_server_trace(spp_server_trace_code_t code, uint32_t handle, uint32_t a, uint32_t b)
 {
+#if defined(CONFIG_RTK_TRACE_ENABLE)
     spp_server_trace_fn fn = NULL;
 
     taskENTER_CRITICAL(&s_spp_mux);
@@ -199,6 +200,13 @@ static inline void spp_server_trace(spp_server_trace_code_t code, uint32_t handl
     if (fn != NULL) {
         fn(code, handle, a, b);
     }
+#else
+    /* CONFIG_RTK_TRACE_ENABLE=n（ADR-0009 §2.6）：不进临界区、不调用钩子，调用点被优化掉。 */
+    (void)code;
+    (void)handle;
+    (void)a;
+    (void)b;
+#endif
 }
 
 /* ---- 跨文件内部函数（每个注明了允许的调用上下文） ---- */

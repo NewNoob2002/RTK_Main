@@ -6,6 +6,10 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
     file(GLOB_RECURSE module_sources CONFIGURE_DEPENDS "modules/*.cpp")
     # 模板仅作新增模块参考并由主机测试持续编译，不编入固件。
     list(FILTER module_sources EXCLUDE REGEX "(^|/)modules/_template/")
+    # ADR-0009 §2.6：追踪关闭时整个 debug 模块不编译（module_list.inc 与 app_main 同步按 FW_TRACE_ENABLED 排除）。
+    if(DEFINED CONFIG_RTK_TRACE_ENABLE AND NOT CONFIG_RTK_TRACE_ENABLE)
+        list(FILTER module_sources EXCLUDE REGEX "(^|/)modules/debug/")
+    endif()
 endif()
 idf_component_register(
     SRCS "app_main.cpp"

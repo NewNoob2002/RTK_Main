@@ -72,6 +72,20 @@ sys    info | heap | tasks | reboot
 - 波特率默认 **2 000 000**：`CONFIG_ESP_CONSOLE_UART_BAUDRATE=2000000`（bootloader 与 app 日志、`idf.py monitor` 默认值都随之变化），`CONFIG_RTK_CONSOLE_UART_BAUD` 默认跟随它。80 MHz APB / 2 M = 40 整除，无分频误差。ROM 一级引导的几行仍是 115200（硬件固定，monitor 中会显示乱码，属预期）。
 - 实测依据：ACM0 的 CH343（1a86 USB Single Serial）用 esptool 在 921600/1.5M/2M/3M 读 512 KB 结果全部一致（2026-11-12）。USB0 板（报警器测试固件）不改。
 
+### 2.7 编译期开关 `CONFIG_RTK_TRACE_ENABLE`（默认 y）
+
+为 n 时：`app_fw` 对所有使用者 PUBLIC 定义 `FW_TRACE_ENABLED=0`，`fw/trace.hpp` 中 `trace()`/`trace_on()` 变为空内联（调用点不加 `#if`，整体编译消除）；
+`main/CMakeLists.txt` 不收 `modules/debug/`，`module_list.inc`、`app_main.cpp`（debug 命令/动词/早期 init）、storage 的 `kKeyTables` 同步去掉；
+`spp_server_priv.h` 的钩子调用编译为空。实测（IDF v6.1，esp32）：
+
+| 构建 | DRAM | Flash Code | Flash Data | 镜像 |
+|---|---|---|---|---|
+| on | 92,869 | 422,944 | 122,640 | 681,540 |
+| off | 84,405 | 417,060 | 119,344 | 663,912 |
+| 差值 | −8,464 | −5,884 | −3,296 | −17,628 |
+
+off 构建 ELF 中无 TraceRing/DebugModule/trace_out/fw::trace 符号。
+
 ## 3. 冻结接口（T0 由 Claude 写入）
 
 - `components/app_fw/include/fw/trace.hpp`（新）
