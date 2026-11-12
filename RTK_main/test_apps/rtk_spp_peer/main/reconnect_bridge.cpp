@@ -1,7 +1,4 @@
 // rtk_spp_peer 重连状态机 C/C++ 桥接实现（封装 rtk::reconnect::Reconnector，仅由 worker 任务单线程调用）。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "reconnect_bridge.h"
 

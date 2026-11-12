@@ -1,7 +1,7 @@
-// 冻结接口（ADR-0003）。实现方不得修改。
 // NVS 持久化：设备 SN、报警器白名单（其余配置预留）。C 实现。
 // 命名空间 "rtk"；键 "sn"（字符串）、"alarm_wl"（blob，n×6 字节）。每次操作 nvs_open→操作→nvs_close，写后 nvs_commit。
 // 线程安全：否（只由启动流程与链路任务调用，二者不并发）。
+// 冻结接口（ADR-0003）。实现方不得修改。
 #pragma once
 
 #include <stddef.h>

@@ -5,9 +5,6 @@
 //   3. 合法帧在整段长度上给出 kFrame；破坏末尾字节后不再给出 kFrame；
 //   4. 每个早拒绝点；长度超限时在 len + 1 > max_frame 处拒绝；
 //   5. crc.hpp 的核对值、分段累计；产品帧 frame_view 的字段与拒绝条件。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include <array>
 #include <cstddef>

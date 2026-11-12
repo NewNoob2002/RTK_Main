@@ -1,9 +1,7 @@
-// 冻结接口（ADR-0005）。实现方不得修改；变更须先修订 ADR-0005。
-// Generated-by: Claude Opus 5.5（架构/接口），人工负责人：UNKNOWN（待人工审查签字）
-//
 // 编译期装配的分流器：解码器集合作为模板参数，缓冲区按最大 max_frame 自动定长，数量越界编译报错。
 //   constinit rtk::demux::StaticDemux<rtk::proto::demux_frame::kDecoder, rtk::demux::rtcm3::kDecoder> s_bt_demux;
 //   if (s_bt_demux.init(sink) != rtk::demux::Error::kOk) { ... }
+// 冻结接口（ADR-0005）。实现方不得修改；变更须先修订 ADR-0005。
 #pragma once
 
 #include <algorithm>

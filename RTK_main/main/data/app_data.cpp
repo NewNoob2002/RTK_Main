@@ -1,5 +1,5 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// DataCenter 主题槽的锁绑定：全部 Slot 共用上下文持有的同一把 spin lock。
+// 启动前单线程调用一次（init()），之后只被读写者经注入的锁访问。
 #include "data/app_data.hpp"
 
 namespace rtk::app::data {

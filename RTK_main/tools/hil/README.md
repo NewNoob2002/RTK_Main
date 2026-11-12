@@ -1,7 +1,5 @@
 # `tools/hil/spp_rtcm_mix.py` 使用说明（ADR-0006）
 
-> Generated-by: pi + antigravity/gemini-3.8-flash；人工负责人：UNKNOWN（待人工审查签字）
-
 用于验证 ESP32 经典蓝牙 SPP 单条字节流同时承载 **裸 RTCM3 帧** 与 **产品协议帧（`AA 44 18`）** 时的正确性、抗溢出能力与产品往返时延（RTT）。主机以 BlueZ RFCOMM 扮演 `PHONE` 角色连接设备，并通过 UART0 控制台（115200 bps）在测试前后核对板端 `rtcm:` 与 `stats:` 计数。
 
 ## 1. 环境与前置条件

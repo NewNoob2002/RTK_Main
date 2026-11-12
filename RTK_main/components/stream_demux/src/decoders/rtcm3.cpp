@@ -2,9 +2,6 @@
 // 长度 10 bit、CRC-24Q 覆盖头 3 B + 载荷（3 B 大端）。长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。
 // 早拒绝点：第 2 字节保留位（这是与其它 0xD3 数据分开的唯一可靠信号）。
 // 纯函数、可重入、无静态可变状态；ISR 安全。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "rtk/demux/decoders/rtcm3.hpp"
 

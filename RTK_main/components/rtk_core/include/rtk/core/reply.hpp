@@ -1,6 +1,6 @@
-// 冻结接口（ADR-0007 §3.5；内容自 ADR-0002 的 command_dispatcher.hpp 原样迁出，供 CommandRouter/services 与旧 dispatcher 共用）。
-// 实现方不得修改。
 // 线程安全：纯数据类型，无共享状态。
+// 冻结接口（ADR-0007 §3.5；内容自 ADR-0002 的 command_dispatcher.hpp 原样迁出，供 CommandRouter/services 与旧
+// dispatcher 共用）。 实现方不得修改。
 #pragma once
 
 #include <array>
@@ -48,6 +48,7 @@ private:
 inline constexpr uint32_t kDefaultComBaud = 115200; // 0x0D 应答中的默认波特率（5.4 实际值 UNKNOWN）
 
 // 设备信息（app 层填写；GNSS/电台/电池字段本阶段为预留占位）。
+/** 设备信息字段（SN、固件版本、设备名等）的唯一副本；由 DeviceService 持有，链路任务读写。 */
 struct DeviceInfo {
     FixedStr<8> product;
     FixedStr<16> sn;
@@ -77,12 +78,14 @@ inline constexpr size_t kBatteryLen = 16;
 inline constexpr size_t kComLen = 32;
 inline constexpr size_t kSatTrackLen = 12;
 
+/** 路由处理结果的分类；只用于决定是否回包以及是否上报错误。 */
 enum class DispatchResult : uint8_t {
     kReply = 0, // reply 中有应答帧，发回同一会话
     kNoReply,   // 已处理或按协议不回复
     kDenied,    // 该角色无权执行此命令，不回复
 };
 
+/** 复用的应答缓冲与副作用结果（白名单变更、心跳）；链路任务独占，不跨任务共享。 */
 struct Reply {
     std::array<uint8_t, proto::kMaxFrame> buf{};
     size_t len = 0;

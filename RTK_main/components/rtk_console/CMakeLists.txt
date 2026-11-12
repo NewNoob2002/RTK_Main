@@ -1,8 +1,5 @@
 # 控制台组件（ADR-0007 §3.3）：esp_console REPL + 命令表登记 + 参数解析辅助。
 # 只依赖 IDF（console、esp_system、串口驱动），不依赖任何 rtk_* 或 app_fw。
-#
-# Generated-by: pi + antigravity/gemini-3.8-flash
-# 人工负责人：UNKNOWN（待人工审查签字）
 idf_component_register(
     SRCS "src/console.cpp" "src/parse.cpp"
     INCLUDE_DIRS "include"

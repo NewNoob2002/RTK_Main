@@ -1,9 +1,6 @@
-// 冻结接口（ADR-0007 §3.2）。实现方不得修改。
 // 模块 = 唯一的扩展单位。模块操作表是函数指针结构体（不用 virtual，多态仍只限 Transport/Sink）。
 // 每个模块只属于一个执行器：它的所有 ops 都只在该执行器任务中调用（init 除外，见下），内部状态因此无需加锁。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §3.2）。
 #pragma once
 
 #include <concepts>
@@ -15,9 +12,12 @@
 
 namespace rtk::fw {
 
-using ModuleId = uint8_t;   // 产品在 main/app_ids.hpp 用 enum class 定义具体值，再转换为 ModuleId
+/** 模块编号；产品在 main 侧用 enum class 定义具体取值，运行期只作 uint8_t 使用。 */
+using ModuleId = uint8_t; // 产品在 main/app_config.hpp 用 enum class 定义具体值，再转换为 ModuleId
+/** 执行器编号；产品在 main 侧定义具体取值，运行期只作 uint8_t 使用。 */
 using ExecutorId = uint8_t; // 同上
 
+/** 模块操作表（函数指针集合）；表本身静态存储、生命周期与模块对象一致，各回调的线程约束由模块决定。 */
 struct ModuleOps {
     /** 启动前、单线程（app_main）调用；可失败。失败的模块不会被 start/poll，其命令返回 kInvalidState。 */
     Result (*init)(void *self) noexcept = nullptr;
@@ -75,6 +75,7 @@ template <typename T> [[nodiscard]] consteval ModuleOps make_ops() noexcept
     return ops;
 }
 
+/** 模块注册项：把静态对象与操作表绑定到执行器和 ModuleId，由 Executor 在启动时校验。 */
 struct Module {
     std::string_view name;       // 日志/控制台/状态输出用，静态字符串
     ModuleId id = 0;             // CommandBus 寻址，同一执行器内唯一

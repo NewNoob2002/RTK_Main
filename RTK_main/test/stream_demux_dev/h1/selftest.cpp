@@ -1,5 +1,3 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
 // H1 可选自测；整流 oracle 直接按协议字节规则分类，不复用引擎的回放算法。
 #include "rtk/demux/demux.hpp"
 #include "rtk/demux/static_demux.hpp"

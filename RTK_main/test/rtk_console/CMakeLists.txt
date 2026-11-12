@@ -1,8 +1,5 @@
 # rtk_console 参数解析辅助 host 单元测试工程（ADR-0007，J3 交付）。
 # 支持普通构建与 ASan/UBSan 构建。
-#
-# Generated-by: pi + antigravity/gemini-3.8-flash
-# 人工负责人：UNKNOWN（待人工审查签字）
 cmake_minimum_required(VERSION 3.22)
 project(rtk_console_tests C CXX)
 

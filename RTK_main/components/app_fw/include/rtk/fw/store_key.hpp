@@ -1,10 +1,8 @@
-// 冻结接口（ADR-0007 §3.3、§3.6-2）。实现方不得修改。
 // 存储键描述：每个模块用 `inline constexpr StoreKey kKeys[]` 登记自己的持久化项。
 // 同一张表以后驱动 NVS 持久化、控制台 cfg get/set、App 配置与导入导出（借鉴 SparkFun rtkSettingsEntries[]，
 // 但静态、类型化、按模块分表）。本轮 storage 模块只用 ns/key/type/max_size/binding，其余元数据先登记、后使用。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 纯数据定义，无状态；表本身应为 constexpr，校验在编译期完成。
+// 冻结接口（ADR-0007 §3.3、§3.6-2）。
 #pragma once
 
 #include <cstddef>
@@ -18,6 +16,7 @@ namespace rtk::fw {
 
 inline constexpr size_t kStoreNameMax = 15; // NVS 命名空间与键名上限（不含结尾 0）
 
+/** 持久化项的值类型；决定 max_size 的合法取值与 NVS 存取方式。 */
 enum class StoreType : uint8_t {
     kU8 = 0,
     kU16,
@@ -47,6 +46,7 @@ struct StoreBinding {
     Result (*save)(const void *obj, std::span<uint8_t> out, size_t &len) noexcept = nullptr;
 };
 
+/** 一条持久化项的描述；binding 指向所属对象及其 load/save 函数（可为空表示暂未绑定）。 */
 struct StoreKey {
     std::string_view ns;  // NVS 命名空间，按模块
     std::string_view key; // NVS 键名

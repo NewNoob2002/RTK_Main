@@ -4,9 +4,6 @@
 // CRC 复用 rtk::proto::crc32（zlib 兼容，不另建实现）。
 // 早拒绝点：第 2 字节（44）、第 3 字节（18，与 Unicore 二进制 AA 44 B5 分开）、头长字节、payload 长度字段。
 // 长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "rtk/proto/demux_frame.hpp"
 

@@ -1,7 +1,4 @@
 // 存储模块控制台命令表：sn。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "support/console_support.hpp"
 #include "modules/storage/storage_module.hpp"

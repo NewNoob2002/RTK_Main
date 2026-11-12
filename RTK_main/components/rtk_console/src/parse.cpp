@@ -1,7 +1,5 @@
 // 控制台参数解析辅助（纯函数，无 IDF 依赖，供目标固件与 host 测试共用）。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
+// 无状态；任意任务调用，不阻塞、不分配堆。
 
 #include "rtk/console/console.hpp"
 

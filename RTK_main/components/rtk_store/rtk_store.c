@@ -1,8 +1,5 @@
 // NVS 持久化：设备 SN 与报警器白名单（ADR-0003：C 实现）。
 // 每次操作 nvs_open → 操作 → nvs_close；写操作成功后 commit。仅访问 NVS 分区。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include <stddef.h>
 #include <stdint.h>

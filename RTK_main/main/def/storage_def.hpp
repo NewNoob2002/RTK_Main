@@ -8,6 +8,7 @@
 
 namespace rtk::app {
 
+/** 存储模块命令动词。 */
 enum class StorageVerb : uint8_t { kSaveSn };
 
 // 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。
@@ -16,6 +17,7 @@ enum class StorageVerb : uint8_t { kSaveSn };
     return static_cast<uint8_t>(value);
 }
 
+/** NVS 写入状态快照（白名单去抖与 SN 错误码）。 */
 struct StoreStatus {
     bool whitelist_pending = false;
     esp_err_t whitelist_error = ESP_OK;

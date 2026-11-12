@@ -1,8 +1,5 @@
 // 静态队列包装：存储与队列控制块都在对象内部，init() 后不分配堆。
 // 构造 constexpr、不访问 RTOS；线程安全：FreeRTOS 队列本身可多任务使用。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 #pragma once
 
 #include <array>

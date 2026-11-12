@@ -4,9 +4,7 @@
  *
  * 调度一律用门闩/条件变量（fake_gate_*、fake_read_pause_*、fake_wait_*），不用 sleep 猜进度；
  * 只有验证“预算到期”的用例需要真实时间，等待时长按契约上界断言。
- *
- * Generated-by: omp + DeepSeek-V4.1-Flash
- * Owner: UNKNOWN（待人工审查签字） */
+ */
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>

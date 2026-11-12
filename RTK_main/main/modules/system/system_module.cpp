@@ -1,5 +1,4 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// 系统模块实现：prepare() 解析 SN、生成设备名并初始化蓝牙，poll() 发布系统/执行器状态（启动前或 kSystem 任务）。
 #include "modules/system/system_module.hpp"
 #include "app_context.hpp"
 #include <cstdio>

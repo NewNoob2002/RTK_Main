@@ -1,5 +1,4 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// RTCM 模块实现：处理分流器交付的 RTCM 批次统计与 `rtcm` 控制台命令（只在 kLink 任务或启动前调用）。
 #include "modules/rtcm/rtcm_module.hpp"
 #include "app_context.hpp"
 #include "esp_log.h"

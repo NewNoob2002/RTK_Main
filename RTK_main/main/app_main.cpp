@@ -1,5 +1,5 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// 固件入口与组合根：装配静态模块表、执行器与控制台命令表，初始化 GPIO26 电源保持并按顺序启动链路/发送任务。
+// 只在 app_main 启动任务中运行，启动期一次性完成；之后本文件不再执行。
 #include "app_context.hpp"
 
 #include <array>

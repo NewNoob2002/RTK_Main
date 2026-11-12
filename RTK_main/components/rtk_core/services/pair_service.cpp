@@ -1,8 +1,5 @@
 // PairService 实现（ADR-0007 §3.3）：配对/白名单指令 0x44（设置/查询/清除）。
 // 各分支自 command_dispatcher.cpp 逐字节搬迁，应答内容与旧 CommandDispatcher 一致。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/core/services/pair_service.hpp"
 

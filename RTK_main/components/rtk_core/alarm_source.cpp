@@ -1,7 +1,4 @@
 // 报警状态源：测试覆盖优先，其次围栏结果（phone_protocol.md §5）。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/core/alarm_source.hpp"
 

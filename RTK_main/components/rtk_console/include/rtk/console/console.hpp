@@ -1,12 +1,9 @@
-// 冻结接口（ADR-0007 §3.3）。实现方不得修改。
 // 控制台组件：esp_console REPL + 分组命令表注册 + 参数解析辅助。
 // 只依赖 IDF（console、esp_system），不依赖任何 rtk_* 业务组件，报警器固件也可复用。
 // 用法：各模块提供 `inline constexpr rtk::console::Cmd kCmds[] = {...}`；main 在 start 前逐表 add，
 //       然后 start 一次。命令回调在 console 任务中执行：只读命令直接读 DataCenter，
 //       改状态命令经 Executor::call 投递到所属执行器（ADR-0007 §4.3），不得直接改模块状态。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §3.3）。
 #pragma once
 
 #include <cstddef>
@@ -20,6 +17,7 @@ namespace rtk::console {
 /** 返回值即 esp_console 的命令返回码：0 成功，非 0 由 REPL 打印 "Command returned non-zero error code"。 */
 using Handler = int (*)(void *ctx, int argc, char **argv) noexcept;
 
+/** 一条控制台命令的定义；name/help/hint 必须指向静态存储（命令表只保存指针）。 */
 struct Cmd {
     const char *name = nullptr; // 命令名（分组名），例如 "status"、"alarm"、"wl"；静态字符串
     const char *help = nullptr; // 多行帮助，静态字符串
@@ -45,7 +43,9 @@ inline constexpr size_t kMacLen = 6;
 [[nodiscard]] esp_err_t start(const char *prompt) noexcept;
 
 /* ---- 参数解析辅助（纯函数，失败返回 false 且不改 out） ---- */
-[[nodiscard]] bool parse_u32(const char *s, uint32_t &out) noexcept; // 十进制或 0x 前缀十六进制
+/** 十进制或 0x 前缀十六进制 → u32；空串/非法字符/溢出 → false。 */
+[[nodiscard]] bool parse_u32(const char *s, uint32_t &out) noexcept;
+/** 同上，但超出 0..255 → false。 */
 [[nodiscard]] bool parse_u8(const char *s, uint8_t &out) noexcept;
 /** "AA:BB:CC:DD:EE:FF"（大小写均可）。 */
 [[nodiscard]] bool parse_mac(const char *s, std::span<uint8_t, kMacLen> out) noexcept;

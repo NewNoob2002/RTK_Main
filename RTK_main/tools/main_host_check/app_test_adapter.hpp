@@ -1,6 +1,4 @@
 // 原有场景的接线适配：调用真实模块，旧测试的断言字段只在此处由主题装配。
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
 #pragma once
 // 保留基线白盒场景对会话/预读状态的检查；不额外编译此 cpp，避免重复定义。
 // NOLINTNEXTLINE(bugprone-suspicious-include)

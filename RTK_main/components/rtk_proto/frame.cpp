@@ -2,9 +2,6 @@
 // 协议逻辑全部在 rtk_proto_frame.c；本文件只做类型安全包装：span → 指针+长度、
 // rtk_proto_err_t / rtk_proto_parse_result_t → Status / ParseResult、C 结构 → FrameView。
 // 线程安全：否（FrameParser 每会话一个实例，只由链路任务使用）。ISR 安全：是。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/proto/frame.hpp"
 

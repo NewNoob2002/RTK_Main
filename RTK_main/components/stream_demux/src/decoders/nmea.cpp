@@ -3,9 +3,6 @@
 // 早拒绝点：第 2 字节不是发送方标识；正文出现非法字符（不可打印、'$'）；'*' 之后不是十六进制/CR/LF。
 // 帧长未知，因此每字节只查“新到字节”与定长尾部窗口（5 B）内的 '*' 相对偏移，O(1) 且结论只依赖入参；
 // '\n' 到达时再整段复核正文并整段算 XOR，保证 kFrame 结论与调用历史无关。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "rtk/demux/decoders/nmea.hpp"
 

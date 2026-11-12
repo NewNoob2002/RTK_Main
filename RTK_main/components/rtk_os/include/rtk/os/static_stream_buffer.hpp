@@ -1,8 +1,5 @@
 // 静态 StreamBuffer 包装：存储与控制块都在对象内部，init() 后不分配堆。
 // 回调中可用 timeout_ms=0 的非阻塞读写；构造 constexpr、不访问 RTOS。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 #pragma once
 
 #include <array>

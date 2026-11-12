@@ -1,9 +1,6 @@
-// 冻结接口（ADR-0007 §3.3）。实现方不得修改。
 // 配对/白名单指令（PHONE）：0x44（设置/查询/清除，成功修改时 reply.whitelist_changed = true）。
 // 行为与 CommandDispatcher 对应分支逐字节一致。线程安全：否（链路任务独占）。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §3.3）。实现方不得修改。
 #pragma once
 
 #include <span>
@@ -14,6 +11,7 @@
 
 namespace rtk::core::services {
 
+/** 配对/白名单指令服务（0x44）：改写 LinkManager 的白名单；仅链路任务调用。 */
 class PairService {
 public:
     explicit PairService(LinkManager &link) noexcept;

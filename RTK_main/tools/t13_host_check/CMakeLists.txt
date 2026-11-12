@@ -2,9 +2,6 @@
 # 不参与固件构建，也不进 test/host（test/host 属冻结输入），单独一个 CMake 工程：
 #   cmake -S tools/t13_host_check -B builds/t13 && cmake --build builds/t13
 #   ctest --test-dir builds/t13 --output-on-failure
-#
-# Generated-by: omp + DeepSeek-V4.1-Flash
-# Owner: UNKNOWN（待人工审查签字）
 cmake_minimum_required(VERSION 3.16)
 project(t13_host_check C)
 

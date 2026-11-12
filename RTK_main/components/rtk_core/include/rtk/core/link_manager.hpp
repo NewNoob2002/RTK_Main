@@ -1,6 +1,6 @@
-// 冻结接口（ADR-0002）。实现方不得修改。
 // SPP 会话角色与策略管理（纯逻辑，无 IDF 依赖）。不调用传输层，只通过 Actions 返回要断开的句柄。
 // 时间以 now_ms 传入，所有时间比较用无符号差值以容忍 32 位回绕。线程安全：否（链路任务独占）。
+// 冻结接口（ADR-0002）。实现方不得修改。
 #pragma once
 
 #include <array>
@@ -19,6 +19,7 @@ inline constexpr uint16_t kHelloMsgId = 0x0041;
 inline constexpr uint8_t kHelloSender = 0x03;
 
 // 一次调用要求调用方断开的句柄（按产生顺序）。每个修改型调用开始时先清空。
+/** 一次状态转移要求传输层执行的动作（待断开句柄）；由调用方逐条执行，自身不持有传输层。 */
 struct Actions {
     std::array<SessionHandle, kMaxSessions + 1> handles{};
     uint8_t count = 0;
@@ -33,6 +34,7 @@ struct Actions {
     }
 };
 
+/** 会话角色、策略、配对窗口与白名单的状态机（纯逻辑）；仅链路任务使用，时间由参数传入。 */
 class LinkManager {
 public:
     constexpr LinkManager() noexcept = default;

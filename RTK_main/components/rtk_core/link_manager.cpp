@@ -1,9 +1,6 @@
 // SPP 会话角色与策略管理（phone_protocol.md §2/§5，link_manager.hpp 规则 1–4）。
 // 不调用传输层；需要断开的句柄经 Actions 返回给 LinkService。
 // 所有时间比较用无符号差值，容忍 32 位毫秒回绕。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/core/link_manager.hpp"
 

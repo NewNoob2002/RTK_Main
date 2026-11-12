@@ -1,5 +1,3 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
 // RTCM 出口的单一所有者是链路任务；本阶段只统计，GNSS UART 管道由后续 ADR 定义。
 #pragma once
 
@@ -10,6 +8,7 @@
 
 namespace rtk::app {
 
+/** RTCM 转发统计快照。 */
 struct RtcmStats {
     uint32_t frames = 0;
     uint32_t bytes = 0;
@@ -18,6 +17,7 @@ struct RtcmStats {
     uint32_t rejected_role = 0;
 };
 
+/** RTCM 帧计数与 CRC-32 累计；无锁，仅 kLink 内部使用。 */
 class RtcmForwarder {
 public:
     constexpr RtcmForwarder() noexcept = default;

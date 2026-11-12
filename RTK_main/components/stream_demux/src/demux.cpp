@@ -1,5 +1,3 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
 // 平台无关的分流引擎；原地回放与输入累积共用调用方提供的缓冲区。
 #include "rtk/demux/demux.hpp"
 

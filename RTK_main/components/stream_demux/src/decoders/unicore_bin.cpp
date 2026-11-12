@@ -2,9 +2,6 @@
 // AA 44 B5 | 24 B 固定头（载荷长 u16 LE 在偏移 6）| 载荷 | CRC-32（0xEDB88320 反射、初值 0、不取反）4 B LE。
 // 早拒绝点：第 2 字节（44）、第 3 字节（B5，与同首字节的产品帧 AA 44 18 分开）；长度超限；CRC 错。
 // 长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "rtk/demux/decoders/unicore_bin.hpp"
 

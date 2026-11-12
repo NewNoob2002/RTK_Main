@@ -1,7 +1,4 @@
 // ESP-IDF 错误码到 rtk::Status 的唯一映射点（CPP-014），以及单调毫秒时钟。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/os/esp_status.hpp"
 

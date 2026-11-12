@@ -1,8 +1,5 @@
 // 静态任务包装：栈与 TCB 都在对象内部，启动后不分配堆。
 // 构造 constexpr、不访问 RTOS；硬件/RTOS 初始化放在 start()（CPP-010）。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 #pragma once
 
 #include <array>

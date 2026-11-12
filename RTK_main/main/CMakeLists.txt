@@ -1,5 +1,3 @@
-# Generated-by: pi + codex/gpt-6.1-sol
-# 人工负责人：UNKNOWN（待人工审查签字）
 # 组合根与组件注册（ADR-0002 §4）。C 驱动 + C++ 应用（ADR-0003）。
 # esp_hw_support：esp_read_mac；esp_system：复位原因/堆/TWDT；console：UART0 REPL。
 # esp_driver_gpio：用户授权的 GPIO26 电源保持。

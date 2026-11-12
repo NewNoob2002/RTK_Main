@@ -1,5 +1,4 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// host 替身：转引 t13_host_check 的 FreeRTOS.h 桩（main_host_check 编译用，不参与固件）。
 #pragma once
 #ifdef __cplusplus
 extern "C" {

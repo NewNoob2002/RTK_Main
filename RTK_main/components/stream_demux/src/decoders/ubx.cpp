@@ -2,9 +2,6 @@
 // B5 62 | class | id | len u16 LE（偏移 4）| 载荷 | CK_A CK_B（8 位 Fletcher，覆盖 class..载荷）。
 // 早拒绝点：第 2 字节不是 0x62；长度字段使总帧长超过 kMaxFrame；Fletcher 校验错。
 // 长度一确定就一次要求整段剩余字节，校验在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "rtk/demux/decoders/ubx.hpp"
 

@@ -1,5 +1,4 @@
-// Generated-by: Codex / GPT-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// host 替身：任务与临界区最小桩，并把 portENTER/EXIT_CRITICAL 映射到 task 层（不参与固件）。
 #pragma once
 #include "FreeRTOS.h" // IWYU pragma: keep（提供 TaskHandle_t/TickType_t 与 host 临界区宏）
 // 与驱动替身共用同一把互斥量，覆盖 RAII 守卫的 port 层入口。

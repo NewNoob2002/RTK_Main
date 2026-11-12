@@ -1,11 +1,8 @@
-// 冻结接口（ADR-0007 §3.2、§3.5）。实现方不得修改。
 // 执行器 = 一个静态 FreeRTOS 任务 + 一组模块 + CommandBus（命令队列/结果队列）。
 // 每轮：wait（钩子或命令队列，最长 idle_wait_ms；上一轮有模块报告积压则为 0）→ 取出全部待处理命令并分派给目标模块
 //       → 按周期调用各模块 poll() → 统计本轮耗时（> round_budget_ms 计 overrun）→ 喂狗 → vTaskDelay(yield_ticks)。
 // 模块的所有回调（init 除外）只在本执行器任务中调用。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §3.2、§3.5）。实现方不得修改。
 #pragma once
 
 #include <array>
@@ -25,6 +22,7 @@ namespace rtk::os {
 
 inline constexpr size_t kExecMaxModules = 8;
 
+/** 执行器构造参数；init 前设定，运行期只读。 */
 struct ExecutorConfig {
     const char *name = nullptr;
     fw::ExecutorId id = 0;
@@ -42,6 +40,7 @@ struct ExecutorConfig {
     void *wait_ctx = nullptr;
 };
 
+/** 执行器运行统计（临界区内累加），由 stats() 拷贝出快照。 */
 struct ExecStats {
     uint32_t rounds = 0;
     uint32_t overruns = 0;
@@ -79,6 +78,7 @@ template <size_t S, size_t D> [[nodiscard]] ExecutorStorageView view_of(Executor
     return ExecutorStorageView{st.stack, &st.tcb, st.cmd_area, &st.cmd_queue, st.result_area, &st.result_queue, D};
 }
 
+/** 静态任务 + 模块表 + 命令/结果队列的执行器；init 后由本任务独占运行，外部只经 call()/stats() 交互。 */
 class Executor {
 public:
     constexpr Executor() noexcept = default;

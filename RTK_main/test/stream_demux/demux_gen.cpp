@@ -1,6 +1,4 @@
 // 分流器测试帧生成辅助实现（独立位运算 CRC，不共享被测组件查找表）。
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "demux_gen.hpp"
 

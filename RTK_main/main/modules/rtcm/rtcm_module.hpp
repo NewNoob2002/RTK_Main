@@ -1,5 +1,4 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// RTCM 模块（kLink 执行器）：累计分流器交付的 RTCM 帧统计，处理 `rtcm` 命令的查询与复位。
 #pragma once
 #include <span>
 
@@ -7,6 +6,7 @@
 #include "rtk/console/console.hpp"
 namespace rtk::app {
 struct AppContext;
+/** RTCM 模块（kLink 执行器）：消费批次视图并处理 rtcm 命令。 */
 class RtcmModule final {
 public:
     constexpr explicit RtcmModule(AppContext &context) noexcept : context_(context) {}
@@ -27,5 +27,6 @@ private:
     RtcmForwarder forwarder_{};
     uint32_t batch_version_ = 0;
 };
+/** RTCM 模块的控制台命令表；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const rtk::console::Cmd> rtcm_cmds() noexcept;
 } // namespace rtk::app

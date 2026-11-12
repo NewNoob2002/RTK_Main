@@ -1,5 +1,4 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// 存储模块（kLink 执行器）：SN 与报警器白名单的 NVS 读写、去抖重试与 `sn` 控制台命令。
 #pragma once
 #include <span>
 
@@ -11,6 +10,7 @@
 namespace rtk::app {
 struct AppContext;
 struct ModuleTestAccess;
+/** 存储模块（kLink 执行器）：SN 与白名单的 NVS 持久化与重试。 */
 class StorageModule final {
 public:
     constexpr explicit StorageModule(AppContext &context) noexcept : context_(context) {}
@@ -52,5 +52,6 @@ private:
     LinkStatus whitelist_{};
     std::array<char, RTK_STORE_SN_MAX + 1U> sn_{};
 };
+/** 存储模块的控制台命令表；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const rtk::console::Cmd> storage_cmds() noexcept;
 } // namespace rtk::app

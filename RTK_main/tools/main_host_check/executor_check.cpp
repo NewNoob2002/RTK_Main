@@ -1,6 +1,4 @@
 // 确定性执行器回归：只替换 RTOS 边界，运行真实 Executor；每轮末才退出模拟任务。
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
 #include "rtk/os/executor.hpp"
 #include "rtk/os/esp_status.hpp"
 #include "esp_task_wdt.h"

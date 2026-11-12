@@ -1,9 +1,6 @@
 // 协议指令路由实现（ADR-0007 §3.5）：启动时把各服务登记的 Route 表展开到固定容量索引，
 // 链路任务按 msg_id 查找后调用对应 handler，替代旧 CommandDispatcher 的大 switch。
 // 判定顺序与旧 dispatcher 一致：未登记 → kNoReply（先于角色检查）→ 角色不在 RoleMask → kDenied → handler。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/core/command_router.hpp"
 

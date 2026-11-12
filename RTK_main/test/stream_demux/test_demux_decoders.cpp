@@ -1,6 +1,4 @@
 // 内置解码器黑盒测试（ADR-0005 / ADR-0004 §4，覆盖 5 个通用 GNSS 解码器 + 产品帧解码器与视图）。
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #ifndef STREAM_DEMUX_RTCM3
 #define STREAM_DEMUX_RTCM3 1

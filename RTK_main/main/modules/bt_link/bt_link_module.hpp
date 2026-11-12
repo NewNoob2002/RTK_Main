@@ -27,6 +27,7 @@
 namespace rtk::app {
 struct AppContext;
 struct ModuleTestAccess;
+/** 链路模块（kLink 执行器）：SPP 事件、分流器、路由与统计的唯一所有者；仅链路任务使用。 */
 class BtLinkModule final {
 public:
     constexpr explicit BtLinkModule(AppContext &context) noexcept : context_(context) {}
@@ -137,5 +138,6 @@ private:
     size_t rtcm_size_ = 0;
     uint32_t rtcm_rejected_ = 0;
 };
+/** 链路模块的控制台命令表（alarm/pair/wl/policy）；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const rtk::console::Cmd> link_cmds() noexcept;
 } // namespace rtk::app

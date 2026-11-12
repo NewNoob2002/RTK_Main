@@ -1,4 +1,3 @@
-// 冻结接口（ADR-0003）。实现方不得修改。
 // ESP-IDF Bluedroid 经典蓝牙 SPP 多会话服务端，C 实现（仅 SOC_BT_CLASSIC_SUPPORTED 目标）。
 // 线程模型：
 // - Bluedroid GAP/SPP 回调（BTC 任务）中只做：把数据拷进该会话的静态 StreamBuffer、更新拥塞标志、
@@ -6,6 +5,7 @@
 // - poll_event/read/write/disconnect 只允许同一个链路任务调用（单一所有者）。
 // IDF v6.1 已核实（reference/c-v1/docs/reports/T04.md）：esp_spp_write 深拷贝；SRV_OPEN 后服务端继续监听，
 // 最多 ESP_SPP_MAX_SESSION(=2) 个会话；对端地址在 srv_open.rem_bda。
+// 冻结接口（ADR-0003）。实现方不得修改。
 #pragma once
 
 #include <stdbool.h>

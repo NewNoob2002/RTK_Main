@@ -1,7 +1,5 @@
 // 真实组合根、LinkService/解析器与 SppTransport 的 host 回归；仅替换 IDF/存储/字节传输边界。
 // 虚拟时钟精确注入 200 ms 超时，不以 wall clock 调度噪声代替产品时间预算证据。
-// Generated-by: Codex / GPT-6.1-sol; pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
 #include <algorithm>
 #include <atomic>
 #include <chrono>

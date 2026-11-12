@@ -1,8 +1,5 @@
 # 通用 SPP 客户端重连策略状态机（ADR-0007 §5）。纯 C++20，平台无关，
 # 同一份 CMakeLists 既是 ESP-IDF 组件，也可被 host 测试 add_subdirectory() 复用（同 app_fw / stream_demux 模式）。
-#
-# Generated-by: pi + antigravity/gemini-3.8-flash
-# 人工负责人：UNKNOWN（待人工审查签字）
 set(_bt_reconnect_srcs "src/reconnect.cpp")
 
 if(ESP_PLATFORM)

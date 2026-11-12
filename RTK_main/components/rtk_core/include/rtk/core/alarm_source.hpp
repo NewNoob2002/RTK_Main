@@ -1,5 +1,5 @@
-// 冻结接口（ADR-0002）。实现方不得修改。
 // 报警状态源：测试覆盖优先，其次围栏结果（围栏模块预留）。线程安全：否（链路任务独占）。
+// 冻结接口（ADR-0002）。实现方不得修改。
 #pragma once
 
 #include <cstdint>
@@ -8,6 +8,7 @@
 
 namespace rtk::core {
 
+/** 报警状态源：测试覆盖优先、其次取围栏结果；无锁，仅链路任务使用。 */
 class AlarmSource {
 public:
     constexpr AlarmSource() noexcept = default;

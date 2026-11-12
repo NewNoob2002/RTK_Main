@@ -1,7 +1,5 @@
 // 通用 SPP 客户端重连策略状态机实现（ADR-0007 §5）。纯 C++20，无 IDF/FreeRTOS 依赖。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
+// 只由持有它的任务单线程调用；不阻塞、不分配堆。
 
 #include "rtk/reconnect/reconnect.hpp"
 

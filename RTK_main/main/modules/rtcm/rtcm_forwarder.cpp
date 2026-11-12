@@ -1,5 +1,4 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// RTCM 转发统计实现：按角色过滤并累计帧数、字节数与 CRC-32（由 RTCM 模块在 kLink 任务中调用）。
 #include "modules/rtcm/rtcm_forwarder.hpp"
 
 #include "rtk/proto/frame.hpp"

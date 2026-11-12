@@ -3,9 +3,6 @@
 // ESP-IDF Style，去掉 BARR-C 的 p_ 前缀；新增 rtk_proto_parser_reset()。
 // 多字节字段逐字节小端读写，不对缓冲区做强转。CRC-32 使用逐位反射算法（与 zlib 等价）：
 // 单帧上限 280 B，开销可忽略，且比 1 KB 查表更省 Flash；已与 Python zlib.crc32 核对。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk_proto_frame.h"
 

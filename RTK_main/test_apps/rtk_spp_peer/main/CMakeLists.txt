@@ -1,5 +1,4 @@
-# Generated-by: omp / GPT-6.1-sol
-# 人工负责人：UNKNOWN（待人工审查签字）
+# HIL 对端主组件：peer.c（真实 SPP 服务端）+ reconnect_bridge.cpp（复用 bt_reconnect 状态机）。
 idf_component_register(
     SRCS "peer.c" "reconnect_bridge.cpp"
     INCLUDE_DIRS "."

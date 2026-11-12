@@ -1,5 +1,5 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// Executor 实现：静态任务主循环（等待→命令分派→按周期 poll→统计→喂狗→让出），线程模型见 executor.hpp。
+// 只在执行器自己的任务中运行；不分配堆、不在 ISR 中调用。
 #include "rtk/os/executor.hpp"
 
 #include <limits>

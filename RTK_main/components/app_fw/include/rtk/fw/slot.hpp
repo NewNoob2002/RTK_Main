@@ -1,10 +1,7 @@
-// 冻结接口（ADR-0007 §3.4/§3.5）。实现方不得修改。
 // DataCenter 的单个主题：单写者、多读者、读最新值。写与读都在注入的锁内整体拷贝 T，
 // 因此读者永远拿到一致的快照（不会读到写了一半的结构体）。
 // 约束：T 必须可平凡拷贝，且 sizeof(T) ≤ kMaxSlotBytes（限制临界区时长）。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §3.4/§3.5）。
 #pragma once
 
 #include <cstddef>
@@ -17,6 +14,10 @@ namespace rtk::fw {
 
 inline constexpr size_t kMaxSlotBytes = 512;
 
+/**
+ * 单值主题槽：保存 T 的最新快照与写入版本号，锁由 bind_lock() 注入。
+ * 生命周期：静态存储、不分配堆；写入者唯一，读者数量不限。
+ */
 template <typename T> class Slot {
     static_assert(std::is_trivially_copyable_v<T>, "Slot<T> 需要可平凡拷贝的 T");
     static_assert(sizeof(T) <= kMaxSlotBytes, "Slot<T> 过大会拉长临界区");

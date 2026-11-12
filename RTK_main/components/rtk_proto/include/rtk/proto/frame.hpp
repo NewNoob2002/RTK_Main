@@ -1,7 +1,7 @@
-// 冻结接口（ADR-0003）。实现方不得修改。
 // 手机/报警器 SPP 帧编解码的 C++ 外观：实现全部委托给 C 接口 rtk_proto_frame.h（报警器固件直接用 C 接口）。
 // 本头只做类型安全包装（span、Status、FrameView），不重复实现协议逻辑。线路格式见 docs/protocol/phone_protocol.md
 // §1–§3。 线程安全：否（FrameParser 每会话一个实例，只由链路任务使用）。ISR 安全：是。
+// 冻结接口（ADR-0003）。实现方不得修改。
 #pragma once
 
 #include <array>
@@ -50,6 +50,7 @@ inline constexpr uint8_t kErrReport = 0x05;
 } // namespace msg_type
 
 // 解析出的一帧。payload 指向解析器内部缓冲区，只在下一次 feed() 前有效。
+/** 一次解析成功的帧视图；payload 指向解析器内部缓冲，有效期到下次 feed 或栈帧结束。 */
 struct FrameView {
     uint16_t msg_id = 0;
     uint8_t sender = 0;
@@ -76,6 +77,7 @@ struct FrameView {
 [[nodiscard]] Status build_frame(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender, uint8_t type,
                                  std::span<const uint8_t> payload, size_t &out_len) noexcept;
 
+/** 一次解析调用的结果：找到完整帧 / 需要更多字节 / 出错。 */
 enum class ParseResult : uint8_t {
     kNone = 0,    // 需要更多字节
     kFrame,       // 一帧完整且 CRC 正确
@@ -89,6 +91,7 @@ enum class ParseResult : uint8_t {
 // - 头长字节 != 0x14 或 payload 长度 > kMaxPayload：返回 kLengthError，length_errors()+1，
 //   回到寻找 0xAA（不回扫已收字节）。
 // - 一帧收完：CRC 正确返回 kFrame 并填 frame；否则 kCrcError，crc_errors()+1。两者都回到寻找 0xAA。
+/** 每会话独立的帧解析器（内部委托 C 实现）；只由链路任务使用。 */
 class FrameParser {
 public:
     constexpr FrameParser() noexcept = default;

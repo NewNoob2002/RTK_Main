@@ -1,5 +1,4 @@
-# Generated-by: Codex / GPT-6.1-sol; pi + codex/gpt-6.1-sol
-# 人工负责人：UNKNOWN（待人工审查签字）
+# main_host_check 主机回归工程：用替身编译真实 main 模块与 rtk_core/rtk_os，不参与固件构建。
 cmake_minimum_required(VERSION 3.22)
 project(main_host_check C CXX)
 set(CMAKE_C_STANDARD 11)

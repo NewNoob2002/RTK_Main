@@ -1,9 +1,6 @@
 // 报警器扩展消息 0x40/0x41 的 C++ 外观（ADR-0003）。
 // 协议逻辑全部在 rtk_proto_alarm.c；本文件只做结构体逐字段转换与 span 包装。
 // 线程安全：是（无状态函数）。ISR 安全：是。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/proto/alarm_codec.hpp"
 

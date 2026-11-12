@@ -1,7 +1,7 @@
-// 冻结接口（ADR-0002）。实现方不得修改。
 // 有界的小端字节读写器。所有协议编码都必须经由它们，不直接对缓冲区做下标拼装，
 // 从而在类型层面排除 C 版 copy_field 那类越界读写（QA-A 发现 1）。
 // 线程安全：否（每个实例只由一个任务使用）。ISR 安全：是（无阻塞、无分配）。
+// 冻结接口（ADR-0002）。实现方不得修改。
 #pragma once
 
 #include <cstddef>
@@ -13,6 +13,7 @@ namespace rtk::proto {
 
 // 写入器采用“粘滞错误”：任何一次写入越界后 ok() 永久为 false，之后的写入全部忽略，
 // 已写入的字节保持不变。调用方在一串写入后只需检查一次 ok()。
+/** 有界小端写指针；越界后置 !ok() 且不再写，实例单任务使用。 */
 class ByteWriter {
 public:
     explicit ByteWriter(std::span<uint8_t> buf) noexcept;
@@ -36,6 +37,7 @@ private:
 };
 
 // 读取器同样采用粘滞错误：越界读返回 0 并使 ok() 为 false。
+/** 有界小端读指针；越界后置 !ok() 并返回默认值，实例单任务使用。 */
 class ByteReader {
 public:
     explicit ByteReader(std::span<const uint8_t> buf) noexcept;

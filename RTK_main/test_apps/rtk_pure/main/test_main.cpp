@@ -1,6 +1,4 @@
 // T15：C++20 纯逻辑冒烟测试；各用例独占栈上状态，无硬件或堆依赖。
-// Generated-by: omp + codex/gpt-6.1-sol
-// Owner: UNKNOWN（待人工审查签字）
 #include <cstdint>
 #include <array>
 #include <span>

@@ -1,8 +1,5 @@
 // AlarmService 实现（ADR-0007 §3.3）：报警相关指令 0x40/0x41/0x42/0x43 与 0x40 主动推送帧。
 // 各分支自 command_dispatcher.cpp 逐字节搬迁，应答内容与旧 CommandDispatcher 一致。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/core/services/alarm_service.hpp"
 

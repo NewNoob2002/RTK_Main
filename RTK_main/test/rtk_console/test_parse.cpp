@@ -1,7 +1,4 @@
 // rtk::console 参数解析辅助 host 单元测试（parse_u32 / parse_u8 / parse_mac / parse_hex）。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include <array>
 #include <cstddef>

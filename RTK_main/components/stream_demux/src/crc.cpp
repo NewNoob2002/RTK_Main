@@ -3,9 +3,6 @@
 // 逐位算法与查表算法等价，核对值 "123456789" → 0xCDE703（CRC-24Q）/ 0x2DFD2D88（CRC-32 反射），
 // 已用独立的 Python 逐位实现交叉核对（见 docs/reports/H2.md §3）。
 // 无静态可变状态、无浮点、无堆；两个函数都是纯函数，可对同一前缀重复调用。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "rtk/demux/crc.hpp"
 

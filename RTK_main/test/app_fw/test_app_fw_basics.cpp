@@ -1,7 +1,4 @@
 // app_fw 基础组件 host 单元测试：Result、LockGuard、Slot<T>、StoreKey（含 constexpr static_assert）。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include <array>
 #include <cstddef>

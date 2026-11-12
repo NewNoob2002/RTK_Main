@@ -3,9 +3,6 @@
 // 布局改为 ESP-IDF Style，去掉 BARR-C 的 p_ 前缀；新增 rtk_proto_alarm_decode_status() 与
 // rtk_proto_alarm_encode_heartbeat()。alarm_src_* 不移植（已由 C++ AlarmSource 承担）。
 // 多字节字段逐字节小端读写，不对结构体做强转。布局见 docs/protocol/phone_protocol.md §5。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk_proto_alarm.h"
 

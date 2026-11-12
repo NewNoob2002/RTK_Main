@@ -1,8 +1,6 @@
 // 通用字节流分流器属性与场景流测试（ADR-0005 / ADR-0004 §3、§4）。
 // 覆盖：I1 分块无关（>=1000 轮随机切分）、I2 字节守恒、假前导混合流恢复、蓝牙/GNSS 场景与 AA 冲突。
 // 随 STREAM_DEMUX_<协议> 编译定义自动裁剪对应解码器及场景。
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #ifndef STREAM_DEMUX_RTCM3
 #define STREAM_DEMUX_RTCM3 1

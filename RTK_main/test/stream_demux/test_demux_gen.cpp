@@ -1,6 +1,4 @@
 // 测试辅助 demux_gen 及 rtk::demux::crc 已知向量与边界测试（ADR-0005）。
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include <array>
 #include <cstddef>

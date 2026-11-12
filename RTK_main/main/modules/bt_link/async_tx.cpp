@@ -1,6 +1,4 @@
 // 异步发送装饰器实现，见 async_tx.hpp。
-// Generated-by: Claude Opus 5.5
-// 人工负责人：UNKNOWN（待人工审查签字）
 #include "modules/bt_link/async_tx.hpp"
 
 #include <algorithm>

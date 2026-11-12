@@ -1,8 +1,5 @@
 // ConfigService 实现（ADR-0007 §3.3）：配置类指令 0x07 工作模式、0x14 电台、0x15 日志。
 // 各分支自 command_dispatcher.cpp 逐字节搬迁，读写语义与旧 CommandDispatcher 一致。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/core/services/config_service.hpp"
 

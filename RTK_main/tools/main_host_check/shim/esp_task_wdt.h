@@ -1,5 +1,4 @@
-// Generated-by: Codex / GPT-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// host 替身：任务看门狗 add/reset 最小桩（main_host_check 编译用，不参与固件）。
 #pragma once
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"

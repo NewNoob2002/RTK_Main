@@ -15,7 +15,6 @@ CRC24Q_POLY = 0x1864CFB
 CRC24Q_MASK = 0xFFFFFF
 CRC32_POLY = 0xEDB88320
 
-
 def crc24q_bit(data: bytes) -> int:
     crc = 0
     for byte in data:
@@ -125,7 +124,6 @@ def main() -> None:
 
     lines = [
         "// H2 自测向量（由 test/stream_demux_dev/h2/gen_vectors.py 生成，不交付、不参与构建）。",
-        "// Generated-by: pi + workbuddy/deepseek-v4.1-flash",
         "#pragma once",
         "",
         "#include <cstdint>",

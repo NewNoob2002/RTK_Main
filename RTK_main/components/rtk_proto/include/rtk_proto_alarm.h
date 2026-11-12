@@ -1,6 +1,6 @@
-// 冻结接口（ADR-0003）。实现方不得修改。
 // 报警器扩展消息 0x40（状态）/0x41（心跳）的 C 编解码，RTK 与报警器两端共用。
 // 线路格式见 docs/protocol/phone_protocol.md §5。线程安全：是（无状态）。ISR 安全：是。
+// 冻结接口（ADR-0003）。实现方不得修改。
 #pragma once
 
 #include <stdbool.h>

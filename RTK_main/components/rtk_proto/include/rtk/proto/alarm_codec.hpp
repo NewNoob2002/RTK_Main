@@ -1,6 +1,6 @@
-// 冻结接口（ADR-0003）。实现方不得修改。
 // 报警器扩展消息 0x40/0x41 编解码的 C++ 外观，实现委托给 C 接口 rtk_proto_alarm.h。线路格式见
 // docs/protocol/phone_protocol.md §5。 本头文件同时供报警器固件复用。线程安全：是（无状态函数）。ISR 安全：是。
+// 冻结接口（ADR-0003）。实现方不得修改。
 #pragma once
 
 #include <cstddef>
@@ -32,6 +32,7 @@ inline constexpr uint8_t kValueUnknown = 0xFF;
 inline constexpr uint8_t kFlagPhoneOnline = 0x01;
 inline constexpr uint8_t kFlagTestOverride = 0x02;
 
+/** 0x40 报警状态字段（小端）；纯数据，可平凡拷贝。 */
 struct Status {
     uint16_t seq = 0;
     uint8_t state = kStateUnknown;
@@ -42,6 +43,7 @@ struct Status {
     uint32_t uptime_ms = 0;
 };
 
+/** 0x41 心跳字段；纯数据，可平凡拷贝。 */
 struct Heartbeat {
     uint16_t seq = 0;
     uint8_t battery_pct = kValueUnknown;

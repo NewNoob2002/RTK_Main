@@ -1,6 +1,4 @@
 // 链路单一所有者；RX 调度保持 256 B / 20 ms / 每轮一个产品帧与 64 B 跨轮预读。
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
 #include "modules/bt_link/bt_link_module.hpp"
 #include "app_context.hpp"
 

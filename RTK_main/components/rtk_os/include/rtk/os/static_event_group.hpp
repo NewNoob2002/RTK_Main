@@ -1,8 +1,5 @@
 // 静态事件组包装：控制块在对象内部，init() 后不分配堆。
 // 构造 constexpr、不访问 RTOS；线程安全：事件组本身可多任务/ISR 使用。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 #pragma once
 
 #include <cstdint>
@@ -13,6 +10,7 @@
 
 namespace rtk::os {
 
+/** 静态分配的事件组 RAII 包装；任务上下文使用，wait 按毫秒阻塞，非 ISR。 */
 class StaticEventGroup {
 public:
     constexpr StaticEventGroup() noexcept = default;

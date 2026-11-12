@@ -5,8 +5,6 @@
 并可选交错发送产品协议请求（0x07 设置/查询回显 + 0x01 查询）；测试前后经串口控制台读取
 `rtcm:` 与 `stats:` 行并输出人类可读表格与 JSON 摘要。
 """
-# Generated-by: pi + antigravity/gemini-3.8-flash
-# 人工负责人：UNKNOWN（待人工审查签字）
 
 from __future__ import annotations
 

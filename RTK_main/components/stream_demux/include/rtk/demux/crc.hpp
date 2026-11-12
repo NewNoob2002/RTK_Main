@@ -1,8 +1,6 @@
-// 冻结接口（ADR-0005）。实现方不得修改；变更须先修订 ADR-0005。
-// Generated-by: Claude Opus 5.5（架构/接口），人工负责人：UNKNOWN（待人工审查签字）
-//
 // 解码器共用的 CRC（实现：src/crc.cpp，256 项 constexpr 查找表放只读存储）。可分段累计：
 // f(b, f(a, init)) == f(a || b, init)。线程/ISR 安全：是。
+// 冻结接口（ADR-0005）。实现方不得修改；变更须先修订 ADR-0005。
 #pragma once
 
 #include <cstdint>

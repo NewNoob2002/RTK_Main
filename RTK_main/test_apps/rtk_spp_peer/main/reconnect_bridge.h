@@ -1,7 +1,4 @@
 // rtk_spp_peer 重连状态机 C 桥接接口（供 peer.c 调用 rtk::reconnect::Reconnector）。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 #pragma once
 
 #include <stdbool.h>

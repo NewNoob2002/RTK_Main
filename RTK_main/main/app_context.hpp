@@ -7,6 +7,7 @@
 #include "module_list.inc"
 
 namespace rtk::app {
+/** 固件唯一上下文：拥有 DataCenter、全部模块实例与链路执行器；仅 app_main 创建，非 ISR。 */
 struct AppContext {
     static constexpr size_t kLinkStackBytes = 6144;
     static constexpr size_t kModuleCount = 0

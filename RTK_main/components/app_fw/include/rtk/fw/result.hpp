@@ -1,15 +1,13 @@
-// 冻结接口（ADR-0007）。实现方不得修改。
 // app_fw 自带的结果码：app_fw 是通用组件（不依赖 rtk_*），不能用 rtk::Status；
 // 产品侧在 main 中做一次映射（rtk::Status ↔ rtk::fw::Result）。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007）。
 #pragma once
 
 #include <cstdint>
 
 namespace rtk::fw {
 
+/** 可恢复错误码；无状态、可平凡拷贝。 */
 enum class Result : uint8_t {
     kOk = 0,
     kInvalidArg,

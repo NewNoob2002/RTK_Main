@@ -1,5 +1,4 @@
 // H2 自测向量（由 test/stream_demux_dev/h2/gen_vectors.py 生成，不交付、不参与构建）。
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
 #pragma once
 
 #include <cstdint>

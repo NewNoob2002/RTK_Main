@@ -1,6 +1,4 @@
 // 通用字节流分流器引擎黑盒单元测试（ADR-0005 / ADR-0004 §3，状态机、StaticDemux、constinit 与边界）。
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include <algorithm>
 #include <array>

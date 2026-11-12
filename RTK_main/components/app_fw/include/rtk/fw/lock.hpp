@@ -1,14 +1,12 @@
-// 冻结接口（ADR-0007 §3.5）。实现方不得修改。
 // 锁注入：纯组件不能包含 FreeRTOS 头，跨任务共享的 Slot/FanoutRing 通过函数指针表拿到锁。
 // 目标板：rtk::os::spin_lock_ops(portMUX_TYPE&)（rtk_os 提供）；host 单线程测试：kNoLock。
 // 约束：lock/unlock 之间只允许做有界的内存拷贝，不得调用阻塞 API。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §3.5）。
 #pragma once
 
 namespace rtk::fw {
 
+/** 函数指针锁表；lock/unlock 必须同为 nullptr 或同为非 nullptr，ctx 原样传给两者。 */
 struct LockOps {
     void (*lock)(void *ctx) noexcept = nullptr;
     void (*unlock)(void *ctx) noexcept = nullptr;

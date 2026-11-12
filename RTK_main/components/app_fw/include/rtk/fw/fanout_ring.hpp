@@ -1,4 +1,3 @@
-// 冻结接口（ADR-0007 §3.6-1）。实现方不得修改。
 // 一写多读记录环（借鉴 SparkFun 的 GNSS 输出环形缓冲，改为单写者永不阻塞）：
 // - 记录 = 2 字节小端长度前缀 + 负载，在环内可以跨越末尾回绕；负载长度 1..max_record。
 // - 写满时覆盖最旧记录；落后读者下次 read() 时整条跳过被覆盖的记录并累计该读者的 dropped（按记录计）。
@@ -6,9 +5,7 @@
 // - 位置用单调递增的 u32 字节计数（回绕安全：只比较差值，差值 < 2^31）。
 // 线程模型：write() 只由一个写者任务调用；每个 reader id 只由一个读者任务调用；不同任务之间由注入的锁保护。
 // 临界区内只做索引运算与一条记录的 memcpy（≤ max_record）。不可在 ISR 中调用。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §3.6-1）。
 #pragma once
 
 #include <array>
@@ -24,12 +21,14 @@ namespace rtk::fw {
 inline constexpr size_t kFanoutMaxReaders = 4;
 inline constexpr size_t kFanoutHeaderBytes = 2;
 
+/** 单个读者的累计统计；读者 detach 时清零，重新 attach 从零开始。 */
 struct FanoutReaderStats {
     uint32_t records = 0; // 成功读出的记录数
     uint32_t bytes = 0;   // 成功读出的负载字节数
     uint32_t dropped = 0; // 因被覆盖而跳过的记录数
 };
 
+/** 写者累计统计；init() 后清零。 */
 struct FanoutWriterStats {
     uint32_t records = 0;     // 成功写入的记录数
     uint32_t bytes = 0;       // 成功写入的负载字节数
@@ -37,6 +36,10 @@ struct FanoutWriterStats {
     uint32_t rejected = 0;    // 长度为 0 或超过 max_record 的写入
 };
 
+/**
+ * 固定容量、单写多读、写者永不阻塞的记录环；存储由调用方提供（不分配堆）。
+ * 生命周期：init() 前不持有存储，init() 后存储必须覆盖本对象生命周期；不可拷贝/移动。
+ */
 class FanoutRing {
 public:
     constexpr FanoutRing() noexcept = default;

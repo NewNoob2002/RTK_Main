@@ -1,6 +1,6 @@
-// 冻结接口（ADR-0002）。实现方不得修改。
 // 会话传输抽象：SPP 驱动实现它；将来 BLE/UART/ESP-NOW 通道可复用 LinkService。
 // 运行期选择的边界，按 CPP-011 使用受保护非虚析构 + final 实现。
+// 冻结接口（ADR-0002）。实现方不得修改。
 #pragma once
 
 #include <cstdint>
@@ -11,6 +11,7 @@
 
 namespace rtk::core {
 
+/** 逻辑会话的字节传输抽象；线程约束由实现方声明，调用方是链路任务。 */
 class Transport {
 public:
     Transport(const Transport &) = delete;

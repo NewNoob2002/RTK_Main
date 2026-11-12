@@ -4,9 +4,6 @@
 // 早拒绝点：第 2 字节不是大写字母；正文出现非法字符；'*' 之后的偏移不是该位置的十六进制/CR。
 // 帧长未知，因此每字节只查“新到字节”与定长尾部窗口（11 B）内的 '*' 相对偏移，O(1) 且结论只依赖入参；
 // '\n' 到达时按 '*' 的偏移（4 = XOR 形式 / 10 = CRC 形式）二选一，整段复核正文并整段算校验。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include "rtk/demux/decoders/unicore_hash.hpp"
 

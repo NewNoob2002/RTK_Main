@@ -1,10 +1,7 @@
-// 冻结接口（ADR-0007 §5）。实现方不得修改。
 // 通用 SPP 客户端重连策略状态机：纯 C++20，无 IDF/FreeRTOS/rtk_* 依赖（ExternalSpeak 报警器以后复用）。
 // 只产生“动作”，由调用方执行（esp_spp_start_discovery / esp_spp_connect / 定时），因此可在 host 上全覆盖测试。
 // 线程模型：单线程；所有方法只能由同一任务调用。时间单位 ms，u32 回绕由无符号差值处理。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §5）。
 #pragma once
 
 #include <array>
@@ -14,6 +11,7 @@
 namespace rtk::reconnect {
 
 inline constexpr size_t kAddrLen = 6;
+/** 经典蓝牙对端地址（6 字节，大端线序，直接来自 rem_bda）。 */
 using Addr = std::array<uint8_t, kAddrLen>;
 
 inline constexpr uint32_t kDefFastWindowMs = 30000U;
@@ -27,6 +25,7 @@ inline constexpr uint8_t kDefSdpAfterFailures = 2U;
 inline constexpr uint32_t kDefAttemptTimeoutMs = 8000U;
 inline constexpr uint32_t kDefaultSeed = 0x2545F491U;
 
+/** 状态机的当前状态；转移规则见 Reconnector 类注释。 */
 enum class State : uint8_t {
     kIdle = 0,    // 未设置目标或尚未 start
     kDiscovering, // 已发出 SDP，等待 on_sdp_result
@@ -36,17 +35,20 @@ enum class State : uint8_t {
     kStopped,     // 调用方显式 stop，直到再次 start
 };
 
+/** 调用方需要执行的动作类型；状态机自身不调用蓝牙 API。 */
 enum class ActionType : uint8_t {
     kNone = 0,
     kStartSdp, // 调用方发起 SDP 查询目标
     kConnect,  // 调用方以 scn 发起连接
 };
 
+/** 一次状态转移输出的动作；type 为 kNone 时 scn 无意义。 */
 struct Action {
     ActionType type = ActionType::kNone;
     uint8_t scn = 0; // kConnect 时有效
 };
 
+/** 重连参数；configure() 会校验范围，非法值整组拒绝。 */
 struct Config {
     uint32_t fast_window_ms = kDefFastWindowMs;         // 从 start 或掉线起算的快速重试窗口
     uint32_t fast_retry_ms = kDefFastRetryMs;           // 快速窗口内的固定间隔
@@ -58,6 +60,7 @@ struct Config {
     uint32_t attempt_timeout_ms = kDefAttemptTimeoutMs; // SDP 或 connect 发出后无结果的超时，按失败处理
 };
 
+/** 累计统计；configure() 不清零，重新 start() 也不清零。 */
 struct Stats {
     uint32_t attempts = 0;      // 发出的 connect 次数
     uint32_t sdp_queries = 0;   // 发出的 SDP 次数

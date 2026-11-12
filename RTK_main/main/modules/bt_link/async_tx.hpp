@@ -17,6 +17,7 @@
 
 namespace rtk::app {
 
+/** 异步发送统计；atomic 字段可跨任务读取。 */
 struct AsyncTxStats {
     uint32_t sent = 0;       // 底层 write 成功
     uint32_t failed = 0;     // 底层 write 失败（含会话已关闭）
@@ -25,6 +26,7 @@ struct AsyncTxStats {
     uint32_t stack_free = 0; // 发送任务栈剩余字节
 };
 
+/** 把 Transport::write 搬进静态发送任务的装饰器；链路任务只入队，发送任务执行写操作。 */
 class AsyncTxTransport final : public core::Transport {
 public:
     static constexpr size_t kDepth = 8;

@@ -1,5 +1,3 @@
-// Generated-by: omp / GPT-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
 // HIL 专用经典 SPP 对端：不驱动功放/板级 GPIO，所有 SDK 投递由单任务执行。
 #include <inttypes.h>
 #include <stdbool.h>

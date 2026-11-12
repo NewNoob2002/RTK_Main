@@ -1,8 +1,5 @@
 // rtk::core::Transport 的 SPP 适配器（ADR-0003）：无状态，只转调 C 驱动并映射错误码。
 // 线程安全：与底层驱动相同，只允许链路任务调用。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/bt/spp_transport.hpp"
 

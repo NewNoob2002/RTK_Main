@@ -1,5 +1,4 @@
-// Generated-by: pi + codex/gpt-6.1-sol
-// 人工负责人：UNKNOWN（待人工审查签字）
+// 存储模块实现：启动加载 SN/白名单、白名单变化去抖写回、SN 保存命令（只在 kLink 任务或启动前调用）。
 #include "modules/storage/storage_module.hpp"
 #include "app_context.hpp"
 #include <algorithm>

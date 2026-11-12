@@ -1,11 +1,12 @@
-// 冻结接口（ADR-0002）。实现方不得修改。
 // 全工程统一的可恢复错误码；SDK 错误码（esp_err_t）只在 rtk_os 中映射到这里（CPP-014）。
+// 冻结接口（ADR-0002）。实现方不得修改。
 #pragma once
 
 #include <cstdint>
 
 namespace rtk {
 
+/** 全工程统一的可恢复错误码；无状态、可平凡拷贝。 */
 enum class Status : uint8_t {
     kOk = 0,
     kInvalidArg,   // 参数非法（空 span、越界长度等）

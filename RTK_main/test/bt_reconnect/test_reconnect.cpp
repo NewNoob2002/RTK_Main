@@ -1,7 +1,4 @@
 // bt_reconnect 重连状态机 host 单元测试（ADR-0007 §5，覆盖 reconnect.hpp 全部语义）。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
 
 #include <array>
 #include <cstdint>

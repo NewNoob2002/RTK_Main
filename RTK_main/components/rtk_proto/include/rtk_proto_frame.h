@@ -1,7 +1,7 @@
-// 冻结接口（ADR-0003）。实现方不得修改。
 // 手机/报警器 SPP 帧编解码，C 接口。RTK 固件（经 C++ 外观 rtk/proto/frame.hpp）与报警器固件（C）共用。
 // 线路格式见 docs/protocol/phone_protocol.md §1–§3。
 // 线程安全：否（解析器每会话一个实例，单一所有者）。ISR 安全：是（无阻塞、无分配）。
+// 冻结接口（ADR-0003）。实现方不得修改。
 #pragma once
 
 #include <stdbool.h>

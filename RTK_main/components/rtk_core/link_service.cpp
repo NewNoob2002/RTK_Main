@@ -2,9 +2,6 @@
 // 纯逻辑，经 Transport 接口访问硬件；所有方法只由链路任务调用。
 // ADR-0007 J2b：分发改由 CommandRouter（服务路由表）完成，0x40 推送帧由 AlarmService 组帧；
 // 白名单脏标志、心跳记录、断开动作与错误计数逻辑与 J2a 之前逐行一致。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/core/link_service.hpp"
 

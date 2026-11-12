@@ -1,6 +1,4 @@
 /* T15：纯 C 公共接口冒烟测试；全部状态由当前用例独占，无堆分配。
- * Generated-by: omp + codex/gpt-6.1-sol
- * Owner: UNKNOWN（待人工审查签字）
  */
 #include "rtk_proto_frame.h"
 #include "rtk_proto_alarm.h"

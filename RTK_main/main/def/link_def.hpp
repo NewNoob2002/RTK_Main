@@ -10,6 +10,7 @@
 
 namespace rtk::app {
 
+/** 链路模块命令动词（由 fw::Command 的 arg 携带）。 */
 enum class LinkVerb : uint8_t { kAlarmSet, kAlarmClear, kPair, kWhitelistClear };
 
 // 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。
@@ -18,12 +19,14 @@ enum class LinkVerb : uint8_t { kAlarmSet, kAlarmClear, kPair, kWhitelistClear }
     return static_cast<uint8_t>(value);
 }
 
+/** 单个会话的快照，供 status 展示；纯数据。 */
 struct SessionSnapshot {
     bool used = false;
     core::SessionHandle handle = 0;
     core::Role role = core::Role::kNone;
     core::BtAddr addr{};
 };
+/** 链路策略、配对状态与白名单的快照；经 DataCenter 共享。 */
 struct LinkStatus {
     core::Policy policy = policy_from_config();
     bool pairing = false;
@@ -31,19 +34,23 @@ struct LinkStatus {
     std::array<core::BtAddr, kMaxAlarms> whitelist{};
     uint32_t snapshot_ms = 0;
 };
+/** 当前会话表的快照。 */
 struct Sessions {
     size_t count = 0;
     std::array<SessionSnapshot, kMaxSessions> entries{};
 };
+/** 报警状态快照（测试覆盖优先）。 */
 struct AlarmState {
     uint8_t state = 0;
     uint8_t level = 0;
     bool override = false;
 };
+/** 最近一次收到的心跳；present=false 表示尚无。 */
 struct Heartbeat {
     bool present = false;
     proto::alarm::Heartbeat value{};
 };
+/** 链路服务统计 + 异步发送统计；纯数据快照。 */
 struct LinkStats : core::LinkStats {
     uint32_t parser_crc_errors = 0;
     uint32_t parser_length_errors = 0;

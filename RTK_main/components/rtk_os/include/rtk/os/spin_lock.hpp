@@ -1,9 +1,6 @@
-// 冻结接口（ADR-0007 §3.5）。实现方不得修改。
 // 把 portMUX_TYPE 包装成 fw::LockOps，供 fw::Slot / fw::FanoutRing 在目标板上使用。
 // 任务上下文专用（不可在 ISR 中使用）；临界区内只允许有界 memcpy。
-//
-// Generated-by: Claude Code + claude-opus-5-5
-// Owner: UNKNOWN（待人工审查签字）
+// 冻结接口（ADR-0007 §3.5）。实现方不得修改。
 #pragma once
 
 #include "rtk/fw/lock.hpp"

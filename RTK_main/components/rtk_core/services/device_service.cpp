@@ -1,8 +1,5 @@
 // DeviceService 实现（ADR-0007 §3.3）：设备信息类指令 0x01/0x02/0x03/0x04/0x05/0x06/0x0D。
 // 各分支自 command_dispatcher.cpp 逐字节搬迁，应答内容与旧 CommandDispatcher 一致。
-//
-// Generated-by: pi + workbuddy/deepseek-v4.1-flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/core/services/device_service.hpp"
 

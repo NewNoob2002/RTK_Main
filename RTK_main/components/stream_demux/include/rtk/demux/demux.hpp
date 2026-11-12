@@ -1,11 +1,9 @@
-// 冻结接口（ADR-0005）。实现方不得修改；变更须先修订 ADR-0005。
-// Generated-by: Claude Opus 5.5（架构/接口），人工负责人：UNKNOWN（待人工审查签字）
-//
 // 通用多协议字节流分流器（stream demultiplexer），C++20 子集，平台无关：
 // - 只依赖 <array> <cstddef> <cstdint> <span>（实现可用 <cstring> <algorithm>）；无 OS/SDK、无堆、无异常/RTTI、无浮点。
 // - 一个实例对应一条字节流（蓝牙会话、GNSS UART、TCP 连接……）；帧缓冲区由调用方提供，或用 StaticDemux 编译期自动定长。
 // - 协议由 Decoder 描述符插入；引擎负责找帧起点、累积、失败回放重扫、回调分发与统计（语义见 ADR-0004 §3）。
 // 线程安全：否（一个实例只能由一个任务使用）。ISR 安全：是（无阻塞、无 OS 调用），回调在 feed/abort 内同步执行。
+// 冻结接口（ADR-0005）。实现方不得修改；变更须先修订 ADR-0005。
 #pragma once
 
 #include <array>
@@ -48,18 +46,21 @@ protected:
     ~Sink() = default;
 };
 
+/** init/feed/abort 的返回码。 */
 enum class Error : uint8_t {
     kOk = 0,
     kInvalidArg, // 解码器表为空/超过 kMaxDecoders/含空指针或无效描述符、缓冲区小于最大 max_frame、尚未 init 成功
     kReentry,    // 在本实例回调中调用了 init/feed/abort
 };
 
+/** 单个解码器的累计统计。 */
 struct DecoderStats {
     uint32_t frames = 0;  // 成功帧数
     uint32_t rejects = 0; // 已认领后 kReject 的次数（含 step 契约违规）
     uint32_t bytes = 0;   // 成功帧总字节数
 };
 
+/** 分流器整体统计（含未知字节与重扫次数）。 */
 struct Stats {
     std::array<DecoderStats, kMaxDecoders> decoder{};
     uint32_t unknown_bytes = 0; // 交给 on_unknown 的字节数

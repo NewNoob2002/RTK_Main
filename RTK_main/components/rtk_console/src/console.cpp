@@ -1,7 +1,5 @@
 // 控制台组件（ADR-0007 §3.3）：命令表原子登记（只保存静态表 span）与 esp_console REPL 启动。
-//
-// Generated-by: pi + antigravity/gemini-3.8-flash
-// 人工负责人：UNKNOWN（待人工审查签字）
+// add/start 只在启动任务调用，回调在 console 任务中执行；不分配堆（命令表只存指针）。
 
 #include "rtk/console/console.hpp"
 

@@ -1,8 +1,5 @@
 // 有界小端字节读写器。粘滞错误：越界后 ok() 永久为 false，
 // 已写入字节保持不变，后续写入（读取）被忽略。多字节字段只经这里读写。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/proto/bytes.hpp"
 

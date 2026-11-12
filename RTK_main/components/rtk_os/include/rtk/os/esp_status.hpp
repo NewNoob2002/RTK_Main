@@ -1,6 +1,6 @@
-// 冻结接口（ADR-0002）。实现方不得修改。
 // esp_err_t → rtk::Status 的唯一映射点（CPP-014）。其余 RAII 包装（静态任务、队列、
 // StreamBuffer、事件组、portMUX 临界区守卫）由实现方在 rtk_os 中按 T06 任务卡设计，经验收审查。
+// 冻结接口（ADR-0002）。实现方不得修改。
 #pragma once
 
 #include <cstdint>

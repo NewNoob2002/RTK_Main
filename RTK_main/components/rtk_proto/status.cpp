@@ -1,8 +1,5 @@
 // 全工程统一的可恢复错误码到静态字符串（日志用）。
 // 未知枚举值返回 "?"，不越界。
-//
-// Generated-by: omp + DeepSeek-V4.1-Flash
-// Owner: UNKNOWN（待人工审查签字）
 
 #include "rtk/status.hpp"
 

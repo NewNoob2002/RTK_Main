@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """G5b clang-tidy 门禁：覆盖纯组件、host 测试与 ESP-IDF 依赖代码。
 
-Generated-by: Claude Opus 5.5（Claude Code）
-人工负责人：UNKNOWN（待人工审查签字）
-
 规则来源（2026-11-11 用户授权修订）：
 - C++ 文件：根 .clang-tidy，按目录继承 main/、components/rtk_bt|rtk_os/、test/host/ 下的 .clang-tidy；
 - C 文件：.clang-tidy-c（--config-file 会屏蔽目录配置，因此 C 侧的分区排除项在本脚本 C_EXTRA_CHECKS 中给出，

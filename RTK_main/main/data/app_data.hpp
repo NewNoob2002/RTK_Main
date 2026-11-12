@@ -12,6 +12,7 @@
 #include "rtk/os/spin_lock.hpp"
 
 namespace rtk::app::data {
+/** 跨任务共享的主题集合；init() 绑定同一把锁后各 Slot 支持跨任务读写，非 ISR。 */
 struct DataCenter {
     /** 启动前单线程绑定全部主题的共享锁；不阻塞，非 ISR，无错误返回。 */
     void init() noexcept;

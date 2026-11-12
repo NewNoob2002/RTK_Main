@@ -19,7 +19,9 @@ inline constexpr size_t kMaxSessions = core::kMaxSessions;
 inline constexpr size_t kMaxAlarms = core::kMaxAlarms;
 inline constexpr size_t kDeviceNameBuf = 32;
 
+/** 模块编号（注册清单使用）；枚举顺序即 ID，勿插入或重排。 */
 enum class ModuleKind : uint8_t { kBtLink, kRtcm, kStorage, kSystem, kSystemMode };
+/** 执行器编号；本轮只有一个链路执行器。 */
 enum class ExecKind : uint8_t { kLink };
 
 // 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。
