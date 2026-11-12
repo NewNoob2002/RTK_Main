@@ -6,6 +6,7 @@
 // Owner: UNKNOWN（待人工审查签字）
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <string_view>
 
@@ -27,14 +28,57 @@ struct ModuleOps {
      * 返回 true 表示仍有待处理工作（例如 RX 积压），执行器下一轮等待时间取 0。可为 nullptr。
      */
     bool (*poll)(void *self, uint32_t now_ms) noexcept = nullptr;
-    /** 处理 CommandBus 命令（执行器任务中）。result.seq 由执行器填写，模块只填 status/detail。可为 nullptr（→ kNotSupported）。 */
+    /** 处理 CommandBus 命令（执行器任务中）。result.seq 由执行器填写，模块只填 status/detail。可为 nullptr（→
+     * kNotSupported）。 */
     void (*on_command)(void *self, const Command &cmd, CommandResult &result) noexcept = nullptr;
 };
 
+/**
+ * 编译期生成模块操作表；线程/ISR 安全，无运行期分配。
+ * T 仅提供所需的 noexcept 成员；self 必须绑定到同一个 T 对象，调用上下文遵守 ModuleOps 契约。
+ */
+template <typename T> [[nodiscard]] consteval ModuleOps make_ops() noexcept
+{
+    ModuleOps ops{};
+    if constexpr (requires(T &module) {
+                      { module.init() } noexcept -> std::same_as<Result>;
+                  }) {
+        ops.init = [](void *self) noexcept {
+            // 注册表将 T 对象地址与本操作表成对绑定，恢复原类型安全。
+            return static_cast<T *>(self)->init();
+        };
+    }
+    if constexpr (requires(T &module) {
+                      { module.start() } noexcept -> std::same_as<Result>;
+                  }) {
+        ops.start = [](void *self) noexcept {
+            // self 的类型约束同 init 跳板。
+            return static_cast<T *>(self)->start();
+        };
+    }
+    if constexpr (requires(T &module, uint32_t now_ms) {
+                      { module.poll(now_ms) } noexcept -> std::same_as<bool>;
+                  }) {
+        ops.poll = [](void *self, uint32_t now_ms) noexcept {
+            // self 的类型约束同 init 跳板。
+            return static_cast<T *>(self)->poll(now_ms);
+        };
+    }
+    if constexpr (requires(T &module, const Command &cmd, CommandResult &result) {
+                      { module.on_command(cmd, result) } noexcept -> std::same_as<void>;
+                  }) {
+        ops.on_command = [](void *self, const Command &cmd, CommandResult &result) noexcept {
+            // self 的类型约束同 init 跳板。
+            static_cast<T *>(self)->on_command(cmd, result);
+        };
+    }
+    return ops;
+}
+
 struct Module {
-    std::string_view name;      // 日志/控制台/状态输出用，静态字符串
-    ModuleId id = 0;            // CommandBus 寻址，同一执行器内唯一
-    ExecutorId executor = 0;    // 所属执行器
+    std::string_view name;       // 日志/控制台/状态输出用，静态字符串
+    ModuleId id = 0;             // CommandBus 寻址，同一执行器内唯一
+    ExecutorId executor = 0;     // 所属执行器
     uint16_t poll_period_ms = 0; // 0 = 每轮都调用；>0 = 距上次调用 ≥ 该值才调用
     void *self = nullptr;
     const ModuleOps *ops = nullptr;

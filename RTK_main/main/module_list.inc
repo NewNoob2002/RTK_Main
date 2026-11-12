@@ -1,0 +1,14 @@
+// 模块声明与注册清单；类型、成员、名称、编号、执行器、周期在此保持同一顺序。
+#ifndef MODULE_DEF
+#include "modules/bt_link/bt_link_module.hpp"
+#include "modules/rtcm/rtcm_module.hpp"
+#include "modules/storage/storage_module.hpp"
+#include "modules/system/system_module.hpp"
+#else
+// MODULE_DEF(类型, 成员, 名称, ModuleKind, ExecKind, poll_period_ms)
+MODULE_DEF(BtLinkModule, bt_link, "bt_link", kBtLink, kLink, 0)
+MODULE_DEF(RtcmModule, rtcm, "rtcm", kRtcm, kLink, 0)
+// storage.init 必须在 system.prepare（BT 初始化）之前单独调用；执行器再次 init 时为幂等。
+MODULE_DEF(StorageModule, storage, "storage", kStorage, kLink, 0)
+MODULE_DEF(SystemModule, system, "system", kSystem, kLink, 0)
+#endif

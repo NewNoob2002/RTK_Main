@@ -10,7 +10,7 @@
 
 #include "esp_err.h"
 
-#include "modules/system/system_module.hpp"
+#include "app_context.hpp"
 
 namespace rtk::app {
 
@@ -64,7 +64,7 @@ bool report(const char *what, const ::app::CommandResult &result) noexcept
 bool submit(const ::app::Command &command, const char *what) noexcept
 {
     ::app::CommandResult result{};
-    auto &executor = link_executor();
+    auto &executor = app_context().link_executor;
     if (!executor.running() || !executor.module_ok(id(ModuleKind::kBtLink))) {
         printf("%s: link not running; NOT executed\n", what);
         return false;

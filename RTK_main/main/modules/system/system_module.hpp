@@ -6,21 +6,27 @@
 #include "data/app_data.hpp"
 #include "rtk/console/console.hpp"
 namespace rtk::app {
-struct SystemModule {
-    os::Executor *executor = nullptr;
-    SystemStatus status{};
+struct AppContext;
+class SystemModule final {
+public:
+    constexpr explicit SystemModule(AppContext &context) noexcept : context_(context) {}
+    ~SystemModule() = default;
+    SystemModule(const SystemModule &) = delete;
+    SystemModule &operator=(const SystemModule &) = delete;
+    SystemModule(SystemModule &&) = delete;
+    SystemModule &operator=(SystemModule &&) = delete;
+    /** 启动前单线程，非 ISR；解析 SN、生成设备名并同步初始化 BT，失败仍发布状态。 */
+    void prepare() noexcept;
+    /** 仅 kLink，非 ISR、非阻塞；发布系统和执行器状态，返回 false。 */
+    [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
+
+private:
+    AppContext &context_;
+    SystemStatus status_{};
 };
-extern SystemModule s_system_module;
-// 只在启动前单线程调用：解析 SN、生成设备名、初始化 BT，失败仍保留状态供控制台读取。非 ISR。
-void system_prepare(os::Executor &executor) noexcept;
-// ModuleOps 仅 kLink 调用；非 ISR。
-[[nodiscard]] bool system_poll(void *self, uint32_t now_ms) noexcept;
-inline constexpr ::app::ModuleOps kSystemOps{nullptr, nullptr, system_poll, nullptr};
 // 纯函数，线程/ISR 安全。
 [[nodiscard]] bool derive_sn_from_mac(std::span<const uint8_t, core::kAddrLen> mac,
                                       std::span<char, RTK_STORE_SN_MAX + 1U> out) noexcept;
 [[nodiscard]] bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out) noexcept;
-// 控制台唯一调用者使用，非 ISR；执行器生命周期为整个固件运行期。
-[[nodiscard]] os::Executor &link_executor() noexcept;
 [[nodiscard]] std::span<const rtk::console::Cmd> system_cmds() noexcept;
 } // namespace rtk::app

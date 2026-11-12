@@ -5,6 +5,7 @@
 
 #include "support/console_support.hpp"
 #include "modules/system/system_module.hpp"
+#include "app_context.hpp"
 
 #include <array>
 #include <cinttypes>
@@ -18,23 +19,8 @@ namespace rtk::app {
 
 namespace {
 
-int cmd_status(void * /*ctx*/, int /*argc*/, char ** /*argv*/) noexcept
+void print_sessions(const Sessions &sessions) noexcept
 {
-    const auto system = data::kSystemStatus.read();
-    const auto link = data::kLinkStatus.read();
-    const auto sessions = data::kSessions.read();
-    const auto store = data::kStoreStatus.read();
-    const auto alarm = data::kAlarmState.read();
-    const auto stats = data::kLinkStats.read();
-    const auto rtcm = data::kRtcmStats.read();
-    const auto demux = data::kDemuxStats.read();
-    const auto heartbeat = data::kHeartbeat.read();
-    const auto exec = data::kExecStats.read();
-
-    printf("link: %s\n", system.link_running ? "running" : "not running");
-    printf("bt: %s\n", system.bt_ready ? "ready" : "init failed");
-    printf("policy: %s\n", policy_name(link.policy));
-
     // 会话数由发布者限制为 kMaxSessions，转换到 unsigned 无损。
     printf("sessions: %u\n", static_cast<unsigned>(sessions.count));
     for (size_t idx = 0U; idx < sessions.count; idx++) {
@@ -43,7 +29,10 @@ int cmd_status(void * /*ctx*/, int /*argc*/, char ** /*argv*/) noexcept
         print_mac(session.addr);
         printf("\n");
     }
+}
 
+void print_whitelist(const LinkStatus &link, const StoreStatus &store) noexcept
+{
     // 白名单数量不超过 kMaxAlarms，转换到 unsigned 无损。
     printf("whitelist: %u pending=%s store=%s\n", static_cast<unsigned>(link.whitelist_count),
            store.whitelist_pending ? "yes" : "no", esp_err_to_name(store.whitelist_error));
@@ -52,6 +41,29 @@ int cmd_status(void * /*ctx*/, int /*argc*/, char ** /*argv*/) noexcept
         print_mac(link.whitelist[idx]);
         printf("\n");
     }
+}
+
+int cmd_status(void * /*ctx*/, int /*argc*/, char ** /*argv*/) noexcept
+{
+    /* 保持各主题的读取次序，再按原顺序输出。 */
+    const auto &data = app_context().data;
+    const auto system = data.system_status.read();
+    const auto link = data.link_status.read();
+    const auto sessions = data.sessions.read();
+    const auto store = data.store_status.read();
+    const auto alarm = data.alarm_state.read();
+    const auto stats = data.link_stats.read();
+    const auto rtcm = data.rtcm_stats.read();
+    const auto demux = data.demux_stats.read();
+    const auto heartbeat = data.heartbeat.read();
+    const auto exec = data.exec_stats.read();
+
+    printf("link: %s\n", system.link_running ? "running" : "not running");
+    printf("bt: %s\n", system.bt_ready ? "ready" : "init failed");
+    printf("policy: %s\n", policy_name(link.policy));
+
+    print_sessions(sessions);
+    print_whitelist(link, store);
 
     printf("pairing: %s\n", link.pairing ? "open" : "closed");
     // 报警字段均为 uint8_t，扩展为 unsigned 无损。

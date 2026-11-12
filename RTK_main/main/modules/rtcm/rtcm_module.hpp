@@ -6,14 +6,26 @@
 #include "data/app_data.hpp"
 #include "rtk/console/console.hpp"
 namespace rtk::app {
-struct RtcmModule {
-    RtcmForwarder forwarder{};
-    uint32_t batch_version = 0;
+struct AppContext;
+class RtcmModule final {
+public:
+    constexpr explicit RtcmModule(AppContext &context) noexcept : context_(context) {}
+    ~RtcmModule() = default;
+    RtcmModule(const RtcmModule &) = delete;
+    RtcmModule &operator=(const RtcmModule &) = delete;
+    RtcmModule(RtcmModule &&) = delete;
+    RtcmModule &operator=(RtcmModule &&) = delete;
+    /** 仅 kLink，非 ISR、非阻塞；读取本轮批次，返回 false（无跨轮积压）。 */
+    [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
+    /** 仅 kLink，非 ISR、非阻塞；校验并处理统计复位，状态写入 result。 */
+    void on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
+    /** 仅 kLink 或启动前读取，非 ISR；返回当前转发统计的只读引用。 */
+    [[nodiscard]] const RtcmStats &stats() const noexcept;
+
+private:
+    AppContext &context_;
+    RtcmForwarder forwarder_{};
+    uint32_t batch_version_ = 0;
 };
-extern RtcmModule s_rtcm_module;
-// 仅 kLink 调用，非 ISR；读取 bt_link 已发布且本轮保持有效的批次 Slot。
-[[nodiscard]] bool rtcm_poll(void *self, uint32_t now_ms) noexcept;
-void rtcm_command(void *self, const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
 [[nodiscard]] std::span<const rtk::console::Cmd> rtcm_cmds() noexcept;
-inline constexpr ::app::ModuleOps kRtcmOps{nullptr, nullptr, rtcm_poll, rtcm_command};
 } // namespace rtk::app

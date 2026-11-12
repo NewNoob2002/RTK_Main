@@ -1,11 +1,6 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
-#include "app_config.hpp"
-#include "data/app_data.hpp"
-#include "modules/bt_link/bt_link_module.hpp"
-#include "modules/rtcm/rtcm_module.hpp"
-#include "modules/storage/storage_module.hpp"
-#include "modules/system/system_module.hpp"
+#include "app_context.hpp"
 
 #include <array>
 #include <span>
@@ -17,21 +12,23 @@
 
 namespace {
 constexpr const char *kTag = "rtk";
-constexpr size_t kLinkStackBytes = 6144;
-constinit rtk::os::Executor s_link_executor{};
-constinit rtk::os::ExecutorStorage<kLinkStackBytes, 4> s_link_storage{};
-// 编号为 uint8_t 底层枚举，由 id() 保证无窄化；所有实例与表均为静态存储。
-// 任务卡明确规定 constinit kModules[]；静态数组由 span 带长度传入执行器。
+constinit rtk::app::AppContext s_app{};
+
+template <typename T> constexpr auto kModuleOps = ::app::make_ops<T>();
+// 编号由 id() 保证无窄化；对象与操作表同为静态存储。
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, readability-identifier-naming)
 constinit const ::app::Module kModules[]{
-    {"bt_link", rtk::app::id(rtk::app::ModuleKind::kBtLink), rtk::app::id(rtk::app::ExecKind::kLink), 0,
-     &rtk::app::s_bt_link_module, &rtk::app::kBtLinkOps},
-    {"rtcm", rtk::app::id(rtk::app::ModuleKind::kRtcm), rtk::app::id(rtk::app::ExecKind::kLink), 0,
-     &rtk::app::s_rtcm_module, &rtk::app::kRtcmOps},
-    {"storage", rtk::app::id(rtk::app::ModuleKind::kStorage), rtk::app::id(rtk::app::ExecKind::kLink), 0,
-     &rtk::app::s_storage_module, &rtk::app::kStorageOps},
-    {"system", rtk::app::id(rtk::app::ModuleKind::kSystem), rtk::app::id(rtk::app::ExecKind::kLink), 0,
-     &rtk::app::s_system_module, &rtk::app::kSystemOps},
+// X-macro 生成异构对象的注册项，constexpr 函数无法替代清单展开。
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define MODULE_DEF(type, member, name, kind, executor, period)                                                         \
+    {name,                                                                                                             \
+     rtk::app::id(rtk::app::ModuleKind::kind),                                                                         \
+     rtk::app::id(rtk::app::ExecKind::executor),                                                                       \
+     period,                                                                                                           \
+     &s_app.member,                                                                                                    \
+     &kModuleOps<rtk::app::type>},
+#include "module_list.inc"
+#undef MODULE_DEF
 };
 // 链路绑 core1，BT worker/控制台在 core0；每轮至少让出 1 tick 给 IDLE1。
 constexpr rtk::os::ExecutorConfig kLinkConfig{
@@ -43,7 +40,7 @@ constexpr rtk::os::ExecutorConfig kLinkConfig{
     .round_budget_ms = 20,
     .yield_ticks = 1,
     .watchdog = true,
-    .wait = rtk::app::bt_link_wait,
+    .wait = [](void * /*ctx*/, uint32_t max_ms) noexcept { s_app.bt_link.wait(max_ms); },
     .wait_ctx = nullptr,
 };
 
@@ -86,15 +83,14 @@ const char *reset_reason_name(esp_reset_reason_t reason) noexcept
         return "unknown";
     }
 }
-} // namespace
 
-extern "C" void app_main(void)
+bool enable_power_hold() noexcept
 {
-    // 保留基线电源保持初始化（原 app_main.cpp，GPIO26 高有效）；本任务不执行硬件动作。
+    // 保留基线 GPIO26 高有效的电源保持逻辑；本任务不执行硬件动作。
     const esp_err_t level_err = gpio_set_level(GPIO_NUM_26, 1U);
     if (level_err != ESP_OK) {
         ESP_LOGE(kTag, "power hold level failed: %s", esp_err_to_name(level_err));
-        return;
+        return false;
     }
     gpio_config_t power_hold{};
     power_hold.pin_bit_mask = 1ULL << GPIO_NUM_26;
@@ -105,31 +101,34 @@ extern "C" void app_main(void)
     const esp_err_t power_err = gpio_config(&power_hold);
     if (power_err != ESP_OK) {
         ESP_LOGE(kTag, "power hold init failed: %s", esp_err_to_name(power_err));
-        return;
+        return false;
     }
-    // 固件版本字符串短于 int 上限，日志精度转换安全。
-    ESP_LOGI(kTag, "RTK_main %.*s boot", static_cast<int>(rtk::app::kAppVersion.size()), rtk::app::kAppVersion.data());
-    ESP_LOGI(kTag, "reset reason: %s", reset_reason_name(esp_reset_reason()));
-    rtk::app::data::init();
-    // NVS/SN 必须先于 BT 初始化；Executor.init 再次调用时为幂等，不重复访问后端。
-    const auto loaded = rtk::app::storage_init(&rtk::app::s_storage_module);
-    if (!::app::is_ok(loaded)) {
-        ESP_LOGE(kTag, "storage module init failed");
-    }
-    rtk::app::system_prepare(s_link_executor);
-    const auto initialized = s_link_executor.init(kLinkConfig, kModules, rtk::os::view_of(s_link_storage));
+    return true;
+}
+
+void start_link() noexcept
+{
+    /* 所有模块完成 init 后才允许启动 TX 和链路任务。 */
+    const auto initialized = s_app.link_executor.init(kLinkConfig, kModules, rtk::os::view_of(s_app.link_storage));
     if (initialized != rtk::Status::kOk) {
         ESP_LOGE(kTag, "executor init failed: %s", rtk::to_string(initialized));
-    } else if (rtk::app::data::kSystemStatus.read().bt_ready) {
-        const auto tx_started = rtk::app::bt_link_start_tx();
-        if (tx_started != rtk::Status::kOk) {
-            ESP_LOGE(kTag, "tx task start failed (%s); replies fall back to sync write", rtk::to_string(tx_started));
-        }
-        const auto started = s_link_executor.start();
-        if (started != rtk::Status::kOk) {
-            ESP_LOGE(kTag, "link task start failed; console only");
-        }
+        return;
     }
+    if (!s_app.data.system_status.read().bt_ready) {
+        return;
+    }
+    const auto tx_started = s_app.bt_link.start_tx();
+    if (tx_started != rtk::Status::kOk) {
+        ESP_LOGE(kTag, "tx task start failed (%s); replies fall back to sync write", rtk::to_string(tx_started));
+    }
+    const auto started = s_app.link_executor.start();
+    if (started != rtk::Status::kOk) {
+        ESP_LOGE(kTag, "link task start failed; console only");
+    }
+}
+
+void start_console() noexcept
+{
     constexpr const char *kConsolePrompt = "rtk> ";
     const std::array<std::span<const rtk::console::Cmd>, 4> cmd_tables{{
         rtk::app::system_cmds(),
@@ -137,18 +136,45 @@ extern "C" void app_main(void)
         rtk::app::storage_cmds(),
         rtk::app::rtcm_cmds(),
     }};
-    esp_err_t console_err = ESP_OK;
+    /* 按原顺序注册命令，任一失败即停止控制台初始化。 */
     for (const auto table : cmd_tables) {
-        console_err = rtk::console::add(table);
+        const esp_err_t console_err = rtk::console::add(table);
         if (console_err != ESP_OK) {
             ESP_LOGE(kTag, "console add failed: %s", esp_err_to_name(console_err));
-            break;
+            return;
         }
     }
-    if (console_err == ESP_OK) {
-        console_err = rtk::console::start(kConsolePrompt);
-        if (console_err != ESP_OK) {
-            ESP_LOGE(kTag, "console start failed: %s", esp_err_to_name(console_err));
-        }
+    const esp_err_t console_err = rtk::console::start(kConsolePrompt);
+    if (console_err != ESP_OK) {
+        ESP_LOGE(kTag, "console start failed: %s", esp_err_to_name(console_err));
     }
+}
+} // namespace
+
+namespace rtk::app {
+AppContext &app_context() noexcept
+{
+    return s_app;
+}
+} // namespace rtk::app
+
+extern "C" void app_main(void)
+{
+    if (!enable_power_hold()) {
+        return;
+    }
+    /* 输出启动原因并绑定数据主题的共享锁。 */
+    // 固件版本字符串短于 int 上限，日志精度转换安全。
+    ESP_LOGI(kTag, "RTK_main %.*s boot", static_cast<int>(rtk::app::kAppVersion.size()), rtk::app::kAppVersion.data());
+    ESP_LOGI(kTag, "reset reason: %s", reset_reason_name(esp_reset_reason()));
+    s_app.data.init();
+    /* NVS/SN 必须先于 BT 初始化，执行器再次 init 存储模块时为幂等。 */
+    const auto loaded = s_app.storage.init();
+    if (!::app::is_ok(loaded)) {
+        ESP_LOGE(kTag, "storage module init failed");
+    }
+    s_app.system.prepare();
+    /* 先启动链路，再启动始终可用的控制台。 */
+    start_link();
+    start_console();
 }

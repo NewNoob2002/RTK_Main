@@ -6,30 +6,51 @@
 #include "data/app_data.hpp"
 #include "app/store_key.hpp"
 #include "rtk/console/console.hpp"
+#include "rtk_store.h"
 
 namespace rtk::app {
-inline constexpr uint32_t kStoreRetryInitialMs = 1000;
-struct StorageModule {
-    bool initialized = false;
-    bool pending = false;
-    bool attempted = false;
-    uint32_t changed_ms = 0;
-    uint32_t attempt_ms = 0;
-    uint32_t retry_ms = kStoreRetryInitialMs;
-    StoreStatus status{};
-    LinkStatus whitelist{};
-    std::array<char, RTK_STORE_SN_MAX + 1U> sn{};
+struct AppContext;
+struct ModuleTestAccess;
+class StorageModule final {
+public:
+    constexpr explicit StorageModule(AppContext &context) noexcept : context_(context) {}
+    ~StorageModule() = default;
+    StorageModule(const StorageModule &) = delete;
+    StorageModule &operator=(const StorageModule &) = delete;
+    StorageModule(StorageModule &&) = delete;
+    StorageModule &operator=(StorageModule &&) = delete;
+    /** 启动前单线程，非 ISR；同步读取 NVS，幂等且加载失败时使用缺省值。 */
+    [[nodiscard]] ::app::Result init() noexcept;
+    /** 仅 kLink，非 ISR；可同步写 NVS，返回 false（重试由时钟驱动）。 */
+    [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
+    /** 仅 kLink，非 ISR；同步保存 SN，结果写入 result。 */
+    void on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
+    /** 仅 kLink，非 ISR、非阻塞；登记白名单变化并重启去抖。 */
+    void mark_whitelist_dirty(std::span<const core::BtAddr> list, uint32_t now_ms) noexcept;
+    /** 仅 kLink，非 ISR；跳过去抖同步写 NVS，返回后端错误。 */
+    [[nodiscard]] esp_err_t flush_whitelist(uint32_t now_ms) noexcept;
+
+private:
+    friend struct ModuleTestAccess;
+    void load_whitelist() noexcept;
+    void load_sn() noexcept;
+    [[nodiscard]] ::app::Result whitelist_load(std::span<const uint8_t> in) noexcept;
+    [[nodiscard]] ::app::Result whitelist_save(std::span<uint8_t> out, size_t &len) const noexcept;
+    [[nodiscard]] ::app::Result sn_load(std::span<const uint8_t> in) noexcept;
+    [[nodiscard]] ::app::Result sn_save(std::span<uint8_t> out, size_t &len) const noexcept;
+    void save_sn(const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
+
+    static constexpr uint32_t kRetryInitialMs = 1000;
+    AppContext &context_;
+    bool initialized_ = false;
+    bool pending_ = false;
+    bool attempted_ = false;
+    uint32_t changed_ms_ = 0;
+    uint32_t attempt_ms_ = 0;
+    uint32_t retry_ms_ = kRetryInitialMs;
+    StoreStatus status_{};
+    LinkStatus whitelist_{};
+    std::array<char, RTK_STORE_SN_MAX + 1U> sn_{};
 };
-extern StorageModule s_storage_module;
-// 启动前单线程读取 NVS；重复调用保持已加载状态。非 ISR。
-[[nodiscard]] ::app::Result storage_init(void *self) noexcept;
-// 仅 kLink 调用。bt_link → storage 的单向通知：复制最新白名单并启动 500 ms 去抖；无反向调用。
-void mark_whitelist_dirty(std::span<const core::BtAddr> list, uint32_t now_ms) noexcept;
-// 仅 kLink 的 bt_link 单向调用；显式 wl clear 保留基线同步落盘/错误回执，后台变更仍去抖。
-[[nodiscard]] esp_err_t flush_whitelist(uint32_t now_ms) noexcept;
-// 仅 kLink 调用，非 ISR。
-[[nodiscard]] bool storage_poll(void *self, uint32_t now_ms) noexcept;
-void storage_command(void *self, const ::app::Command &cmd, ::app::CommandResult &result) noexcept;
 [[nodiscard]] std::span<const rtk::console::Cmd> storage_cmds() noexcept;
-inline constexpr ::app::ModuleOps kStorageOps{storage_init, nullptr, storage_poll, storage_command};
 } // namespace rtk::app

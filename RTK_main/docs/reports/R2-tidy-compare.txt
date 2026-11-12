@@ -1,0 +1,70 @@
+BEFORE main/app_main.cpp findings= 2 exit= 1
+BEFORE main/data/app_data.cpp findings= 2 exit= 1
+BEFORE main/modules/bt_link/async_tx.cpp findings= 0 exit= 0
+BEFORE main/modules/bt_link/bt_link_cmds.cpp findings= 2 exit= 1
+BEFORE main/modules/bt_link/bt_link_module.cpp findings= 5 exit= 1
+BEFORE main/modules/rtcm/rtcm_cmds.cpp findings= 2 exit= 1
+BEFORE main/modules/rtcm/rtcm_forwarder.cpp findings= 0 exit= 0
+BEFORE main/modules/rtcm/rtcm_module.cpp findings= 2 exit= 1
+BEFORE main/modules/storage/storage_cmds.cpp findings= 2 exit= 1
+BEFORE main/modules/storage/storage_module.cpp findings= 2 exit= 1
+BEFORE main/modules/system/system_cmds.cpp findings= 2 exit= 1
+BEFORE main/modules/system/system_module.cpp findings= 2 exit= 1
+BEFORE main/support/console_support.cpp findings= 2 exit= 1
+BEFORE tools/main_host_check/main_host_check.cpp findings= 337 exit= 1
+AFTER main/app_main.cpp findings= 5 exit= 1
+AFTER main/data/app_data.cpp findings= 2 exit= 1
+AFTER main/modules/bt_link/async_tx.cpp findings= 0 exit= 0
+AFTER main/modules/bt_link/bt_link_cmds.cpp findings= 5 exit= 1
+AFTER main/modules/bt_link/bt_link_module.cpp findings= 5 exit= 1
+AFTER main/modules/rtcm/rtcm_cmds.cpp findings= 2 exit= 1
+AFTER main/modules/rtcm/rtcm_forwarder.cpp findings= 0 exit= 0
+AFTER main/modules/rtcm/rtcm_module.cpp findings= 5 exit= 1
+AFTER main/modules/storage/storage_cmds.cpp findings= 2 exit= 1
+AFTER main/modules/storage/storage_module.cpp findings= 5 exit= 1
+AFTER main/modules/system/system_cmds.cpp findings= 5 exit= 1
+AFTER main/modules/system/system_module.cpp findings= 5 exit= 1
+AFTER main/support/console_support.cpp findings= 5 exit= 1
+AFTER tools/main_host_check/main_host_check.cpp findings= 337 exit= 1
+BEFORE UNIQUE= 39
+AFTER UNIQUE= 39
+NEW_UNIQUE= 0
+EXISTING ('components/rtk_os/include/rtk/os/executor.hpp', '20 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('components/stream_demux/include/demux/demux.hpp', "class 'Demux' defines a copy constructor and a copy assignment operator but does not define a destructor [cppcoreguidelines-special-member-functions,-warnings-as-errors]")
+EXISTING ('components/stream_demux/include/demux/static_demux.hpp', '65535U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('components/stream_demux/include/demux/static_demux.hpp', "class 'StaticDemux' defines a copy constructor and a copy assignment operator but does not define a destructor [cppcoreguidelines-special-member-functions,-warnings-as-errors]")
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0x11 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0x1864CFBU is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0x44 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0xD3 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0xDEADU is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0xEDB88320U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0xFFFFFFU is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0xFFU is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '0xFU is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '1005 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '100U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '1077 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '10U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '11U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '17 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '2000 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '200U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '20U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '3 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '30000U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '499U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '5 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '500U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '5U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '6 is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '7U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', '999U is a magic number; consider replacing it with a named constant [readability-magic-numbers,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', 'avoid do-while loops [cppcoreguidelines-avoid-do-while,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', 'do not call c-style vararg functions [cppcoreguidelines-pro-type-vararg,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', 'do not implicitly decay an array into a pointer; consider using gsl::array_view or an explicit cast instead [cppcoreguidelines-pro-bounds-array-to-pointer-decay,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', 'do not use pointer arithmetic [cppcoreguidelines-pro-bounds-pointer-arithmetic,-warnings-as-errors]')
+EXISTING ('tools/main_host_check/main_host_check.cpp', "pointee of variable 'argv' of type 'char **' can be declared 'const' [misc-const-correctness,-warnings-as-errors]")
+EXISTING ('tools/main_host_check/main_host_check.cpp', "variable 'bad_crc' of type 'span<element_type, dynamic_extent>' (aka 'span<unsigned char, dynamic_extent>') can be declared 'const' [misc-const-correctness,-warnings-as-errors]")
+EXISTING ('tools/main_host_check/main_host_check.cpp', "variable 'byte' of type 'uint8_t' (aka 'unsigned char') can be declared 'const' [misc-const-correctness,-warnings-as-errors]")
+EXISTING ('tools/main_host_check/main_host_check.cpp', "variable 'wire' of type 'span<element_type, dynamic_extent>' (aka 'span<unsigned char, dynamic_extent>') can be declared 'const' [misc-const-correctness,-warnings-as-errors]")

@@ -3,20 +3,15 @@
 # 组合根与组件注册（ADR-0002 §4）。C 驱动 + C++ 应用（ADR-0003）。
 # esp_hw_support：esp_read_mac；esp_system：复位原因/堆/TWDT；console：UART0 REPL。
 # esp_driver_gpio：用户授权的 GPIO26 电源保持。
+# 模块源码按目录发现；IDF 的依赖扫描以脚本模式运行，不能使用 CONFIGURE_DEPENDS。
+if(NOT CMAKE_SCRIPT_MODE_FILE)
+    file(GLOB_RECURSE module_sources CONFIGURE_DEPENDS "modules/*.cpp")
+endif()
 idf_component_register(
     SRCS "app_main.cpp"
          "data/app_data.cpp"
          "support/console_support.cpp"
-         "modules/bt_link/bt_link_module.cpp"
-         "modules/bt_link/bt_link_cmds.cpp"
-         "modules/bt_link/async_tx.cpp"
-         "modules/rtcm/rtcm_module.cpp"
-         "modules/rtcm/rtcm_cmds.cpp"
-         "modules/rtcm/rtcm_forwarder.cpp"
-         "modules/storage/storage_module.cpp"
-         "modules/storage/storage_cmds.cpp"
-         "modules/system/system_module.cpp"
-         "modules/system/system_cmds.cpp"
+         ${module_sources}
     INCLUDE_DIRS "."
     REQUIRES app_fw rtk_proto rtk_core rtk_os rtk_bt rtk_store rtk_console stream_demux console esp_system esp_hw_support esp_driver_gpio freertos log)
 

@@ -1,6 +1,7 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
 #include "modules/system/system_module.hpp"
+#include "app_context.hpp"
 #include <cstdio>
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -8,7 +9,6 @@
 #include "rtk_bt_spp.h"
 
 namespace rtk::app {
-constinit SystemModule s_system_module{};
 namespace {
 constexpr std::string_view kHexDigits = "0123456789ABCDEF";
 constexpr size_t kMacSnHighByte = 4;
@@ -43,50 +43,46 @@ bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out)
     }
     return true;
 }
-void system_prepare(os::Executor &executor) noexcept
+void SystemModule::prepare() noexcept
 {
-    auto &module = s_system_module;
-    module.executor = &executor;
-    module.status = data::kSystemStatus.read();
-    module.status.free_heap = esp_get_free_heap_size();
-    module.status.min_free_heap = esp_get_minimum_free_heap_size();
-    if (module.status.sn[0] == '\0') {
+    /* 读取持久化 SN 和启动期堆状态。 */
+    status_ = context_.data.system_status.read();
+    status_.free_heap = esp_get_free_heap_size();
+    status_.min_free_heap = esp_get_minimum_free_heap_size();
+    if (status_.sn[0] == '\0') {
         std::array<uint8_t, core::kAddrLen> mac{};
         const esp_err_t error = esp_read_mac(mac.data(), ESP_MAC_BT);
-        if (error != ESP_OK || !derive_sn_from_mac(mac, module.status.sn)) {
-            const int written = snprintf(module.status.sn.data(), module.status.sn.size(), "%s", "0000");
+        if (error != ESP_OK || !derive_sn_from_mac(mac, status_.sn)) {
+            const int written = snprintf(status_.sn.data(), status_.sn.size(), "%s", "0000");
             if (written < 0) {
                 ESP_LOGE("system", "fallback SN formatting failed");
             }
         }
     }
-    if (!build_device_name(module.status.sn.data(), module.status.device_name)) {
+    /* 名称校验通过后才启动 BT，失败仍发布状态供控制台读取。 */
+    if (!build_device_name(status_.sn.data(), status_.device_name)) {
         ESP_LOGE("system", "invalid SN for BT name");
-        data::kSystemStatus.write(module.status);
+        context_.data.system_status.write(status_);
         return;
     }
-    ESP_LOGI("system", "sn=%s bt_name=%s policy=%s", module.status.sn.data(), module.status.device_name.data(),
+    ESP_LOGI("system", "sn=%s bt_name=%s policy=%s", status_.sn.data(), status_.device_name.data(),
              policy_name(policy_from_config()));
-    const esp_err_t error = rtk_bt_spp_init(module.status.device_name.data());
-    module.status.bt_ready = error == ESP_OK;
+    const esp_err_t error = rtk_bt_spp_init(status_.device_name.data());
+    status_.bt_ready = error == ESP_OK;
     if (error != ESP_OK) {
         ESP_LOGE("system", "bt_spp init failed: %s; console only", esp_err_to_name(error));
     }
-    data::kSystemStatus.write(module.status);
+    context_.data.system_status.write(status_);
 }
-bool system_poll(void *self, uint32_t /*now_ms*/) noexcept
+bool SystemModule::poll(uint32_t /*now_ms*/) noexcept
 {
-    // ModuleOps 固定绑定 SystemModule，只在 kLink 访问。
-    auto &module = *static_cast<SystemModule *>(self);
-    module.status.link_running = module.executor->running() && module.executor->module_ok(id(ModuleKind::kBtLink));
-    module.status.free_heap = esp_get_free_heap_size();
-    module.status.min_free_heap = esp_get_minimum_free_heap_size();
-    data::kSystemStatus.write(module.status);
-    data::kExecStats.write(module.executor->stats());
+    /* 先更新系统状态，再发布执行器统计，保持原主题写入顺序。 */
+    status_.link_running =
+        context_.link_executor.running() && context_.link_executor.module_ok(id(ModuleKind::kBtLink));
+    status_.free_heap = esp_get_free_heap_size();
+    status_.min_free_heap = esp_get_minimum_free_heap_size();
+    context_.data.system_status.write(status_);
+    context_.data.exec_stats.write(context_.link_executor.stats());
     return false;
-}
-os::Executor &link_executor() noexcept
-{
-    return *s_system_module.executor;
 }
 } // namespace rtk::app

@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "app/lock.hpp"
+#include "app/module.hpp"
 #include "app/result.hpp"
 #include "app/slot.hpp"
 #include "app/store_key.hpp"
@@ -20,6 +21,90 @@ void setUp(void) {}
 void tearDown(void) {}
 
 namespace {
+
+constexpr uint32_t kPollNowMs = 1234;
+constexpr uint32_t kCommandSequence = 42;
+struct FullModule {
+    unsigned init_calls = 0;
+    unsigned start_calls = 0;
+    uint32_t poll_now_ms = 0;
+    const app::Command *command = nullptr;
+    app::Result init() noexcept
+    {
+        ++init_calls;
+        return app::Result::kIoError;
+    }
+    app::Result start() noexcept
+    {
+        ++start_calls;
+        return app::Result::kBusy;
+    }
+    bool poll(uint32_t now_ms) noexcept
+    {
+        poll_now_ms = now_ms;
+        return now_ms == kPollNowMs;
+    }
+    void on_command(const app::Command &cmd, app::CommandResult &result) noexcept
+    {
+        command = &cmd;
+        result.seq = cmd.seq;
+        result.status = app::Result::kTimeout;
+    }
+};
+struct PollOnlyModule {
+    uint32_t now_ms = 0;
+    bool poll(uint32_t now) noexcept
+    {
+        now_ms = now;
+        return false;
+    }
+};
+struct EmptyModule {};
+constexpr auto kFullOps = app::make_ops<FullModule>();
+constexpr auto kPartialOps = app::make_ops<PollOnlyModule>();
+constexpr auto kEmptyOps = app::make_ops<EmptyModule>();
+consteval bool has_all_callbacks(const app::ModuleOps &ops) noexcept
+{
+    return ops.init != nullptr && ops.start != nullptr && ops.poll != nullptr && ops.on_command != nullptr;
+}
+static_assert(has_all_callbacks(kFullOps));
+static_assert(kPartialOps.init == nullptr && kPartialOps.start == nullptr && kPartialOps.on_command == nullptr);
+static_assert(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr && kEmptyOps.poll == nullptr &&
+              kEmptyOps.on_command == nullptr);
+
+void test_make_ops_full_forwarding()
+{
+    FullModule module{};
+    TEST_ASSERT_TRUE(kFullOps.init(&module) == app::Result::kIoError);
+    TEST_ASSERT_TRUE(kFullOps.start(&module) == app::Result::kBusy);
+    TEST_ASSERT_EQUAL_UINT32(1U, module.init_calls);
+    TEST_ASSERT_EQUAL_UINT32(1U, module.start_calls);
+    TEST_ASSERT_TRUE(kFullOps.poll(&module, kPollNowMs));
+    TEST_ASSERT_EQUAL_UINT32(kPollNowMs, module.poll_now_ms);
+    TEST_ASSERT_FALSE(kFullOps.poll(&module, 0));
+    TEST_ASSERT_EQUAL_UINT32(0U, module.poll_now_ms);
+    app::Command command{};
+    command.seq = kCommandSequence;
+    app::CommandResult result{};
+    kFullOps.on_command(&module, command, result);
+    TEST_ASSERT_EQUAL_PTR(&command, module.command);
+    TEST_ASSERT_EQUAL_UINT32(kCommandSequence, result.seq);
+    TEST_ASSERT_TRUE(result.status == app::Result::kTimeout);
+}
+
+void test_make_ops_partial_forwarding()
+{
+    PollOnlyModule module{};
+    TEST_ASSERT_FALSE(kPartialOps.poll(&module, kPollNowMs));
+    TEST_ASSERT_EQUAL_UINT32(kPollNowMs, module.now_ms);
+    TEST_ASSERT_TRUE(kPartialOps.init == nullptr && kPartialOps.start == nullptr && kPartialOps.on_command == nullptr);
+}
+
+void test_make_ops_empty_table()
+{
+    TEST_ASSERT_TRUE(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr && kEmptyOps.poll == nullptr &&
+                     kEmptyOps.on_command == nullptr);
+}
 
 // --------------------------------------------------------------------------
 // Result 编译期 + 运行期检查
@@ -321,6 +406,9 @@ void test_store_key_runtime_and_binding()
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_make_ops_full_forwarding);
+    RUN_TEST(test_make_ops_partial_forwarding);
+    RUN_TEST(test_make_ops_empty_table);
     RUN_TEST(test_result_strings);
     RUN_TEST(test_lock_guard_pairing_and_nolock);
     RUN_TEST(test_slot_read_write_version_and_lock_pairing);

@@ -1,56 +1,60 @@
 // Generated-by: pi + codex/gpt-6.1-sol
 // 人工负责人：UNKNOWN（待人工审查签字）
 #include "modules/rtcm/rtcm_module.hpp"
+#include "app_context.hpp"
 #include "esp_log.h"
 
 namespace rtk::app {
-constinit RtcmModule s_rtcm_module{};
 namespace {
 constexpr size_t kRtcmHeaderBytes = 3;
 constexpr size_t kRtcmOverheadBytes = 6;
 constexpr uint8_t kLengthHighMask = 3;
+constexpr unsigned kLengthHighShift = 8;
 } // namespace
-bool rtcm_poll(void *self, uint32_t /*now_ms*/) noexcept
+bool RtcmModule::poll(uint32_t /*now_ms*/) noexcept
 {
-    // ModuleOps 固定绑定 RtcmModule，所有访问同属 kLink。
-    auto &module = *static_cast<RtcmModule *>(self);
     uint32_t version = 0;
-    const auto batch = data::kRtcmBatch.read(version);
-    if (version == module.batch_version) {
+    const auto batch = context_.data.rtcm_batch.read(version);
+    if (version == batch_version_) {
         return false;
     }
-    module.batch_version = version;
+    /* 只消费新批次，仍按原头部长度逐帧转发。 */
+    batch_version_ = version;
     auto wire = batch.wire;
     while (!wire.empty()) {
         if (wire.size() < kRtcmHeaderBytes) {
             ESP_LOGE("rtcm", "truncated batch header");
             break;
         }
-        const size_t len = ((wire[1] & kLengthHighMask) << 8U) + wire[2] + kRtcmOverheadBytes;
+        const size_t len = ((wire[1] & kLengthHighMask) << kLengthHighShift) + wire[2] + kRtcmOverheadBytes;
         if (len > wire.size()) {
             ESP_LOGE("rtcm", "truncated batch frame");
             break;
         }
-        module.forwarder.forward(core::Role::kPhone, wire.first(len));
+        forwarder_.forward(core::Role::kPhone, wire.first(len));
         wire = wire.subspan(len);
     }
+    /* 先累计角色拒绝，再发布该批次的完整统计。 */
     for (uint32_t i = 0; i < batch.rejected; ++i) {
-        module.forwarder.forward(core::Role::kNone, {});
+        forwarder_.forward(core::Role::kNone, {});
     }
-    data::kRtcmStats.write(module.forwarder.stats());
+    context_.data.rtcm_stats.write(forwarder_.stats());
     return false;
 }
-void rtcm_command(void *self, const ::app::Command &cmd, ::app::CommandResult &result) noexcept
+void RtcmModule::on_command(const ::app::Command &cmd, ::app::CommandResult &result) noexcept
 {
     if (cmd.verb != verb(RtcmVerb::kReset) || cmd.arg_len != 0U) {
         result.status = ::app::Result::kInvalidArg;
         return;
     }
-    // 固定绑定 RtcmModule；reset 不清除分流器半帧，只通知 bt_link 清统计。
-    auto &module = *static_cast<RtcmModule *>(self);
-    module.forwarder.reset();
-    data::kRtcmStats.write(module.forwarder.stats());
-    data::kRtcmReset.write(data::kRtcmReset.read() + 1U);
+    /* 不清除分流器半帧；先清统计，再通知 bt_link 复位统计世代。 */
+    forwarder_.reset();
+    context_.data.rtcm_stats.write(forwarder_.stats());
+    context_.data.rtcm_reset.write(context_.data.rtcm_reset.read() + 1U);
     result.status = ::app::Result::kOk;
+}
+const RtcmStats &RtcmModule::stats() const noexcept
+{
+    return forwarder_.stats();
 }
 } // namespace rtk::app

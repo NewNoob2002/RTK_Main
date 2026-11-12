@@ -57,16 +57,16 @@ constexpr rtk::core::BtAddr kOtherAlarm{{13, 14, 15, 16, 17, 18}};
 void setup(std::span<const rtk::core::BtAddr> whitelist = {}, rtk::core::Policy policy = rtk::core::Policy::kConcurrent)
 {
     using namespace rtk::app;
-    data::init();
+    app_context().data.init();
     LinkStatus link{};
     link.policy = policy;
     link.whitelist_count = whitelist.size();
     std::copy(whitelist.begin(), whitelist.end(), link.whitelist.begin());
-    data::kLinkStatus.write(link);
+    app_context().data.link_status.write(link);
     SystemStatus system{};
     system.bt_ready = true;
-    data::kSystemStatus.write(system);
-    CHECK(bt_link_init(&s_bt_link_module) == ::app::Result::kOk);
+    app_context().data.system_status.write(system);
+    CHECK(app_context().bt_link.init() == ::app::Result::kOk);
     CHECK(s_command_queue.init() == rtk::Status::kOk);
     CHECK(s_result_queue.init() == rtk::Status::kOk);
 }
@@ -211,7 +211,7 @@ void storage_backoff()
     CHECK(s_store_calls == 1U);
     const std::array<uint32_t, 7> delays{1000, 2000, 4000, 8000, 16000, 30000, 30000};
     for (const auto delay : delays) {
-        CHECK(data::kStoreStatus.read().retry_ms == delay);
+        CHECK(app_context().data.store_status.read().retry_ms == delay);
         const size_t attempts = s_store_calls;
         s_clock = s_whitelist_attempt_ms + 5U;
         mark_whitelist_dirty({}, s_clock); // 重试仍保存最新 RAM 值，变化不缩短退避。
@@ -226,7 +226,8 @@ void storage_backoff()
     s_clock += 30000U;
     persist_whitelist(s_clock);
     CHECK(!s_whitelist_pending && s_saved_count == 0U);
-    CHECK(data::kStoreStatus.read().failures == 8U && data::kStoreStatus.read().retry_ms == 0U);
+    CHECK(app_context().data.store_status.read().failures == 8U &&
+          app_context().data.store_status.read().retry_ms == 0U);
 }
 
 void rx_fairness()
@@ -728,7 +729,8 @@ esp_err_t rtk_store_get_alarms(uint8_t (*)[RTK_STORE_ADDR_LEN], size_t, size_t *
 // 异步发送装饰器：未启动时同步直通；启动后入队即返回、FIFO、满队列 kBusy、底层失败计数。
 class GateTransport final : public rtk::core::Transport {
 public:
-    rtk::Status write(rtk::core::SessionHandle handle, std::span<const uint8_t> data, uint32_t timeout_ms) noexcept override
+    rtk::Status write(rtk::core::SessionHandle handle, std::span<const uint8_t> data,
+                      uint32_t timeout_ms) noexcept override
     {
         entered.store(true);
         while (!open.load()) {
@@ -782,7 +784,8 @@ void async_tx()
         CHECK(inner.order[i] == i);
     }
     const auto st = tx.stats();
-    CHECK(st.sent == total - 2U && st.failed == 1U && st.queue_full == 1U && st.max_depth >= rtk::app::AsyncTxTransport::kDepth);
+    CHECK(st.sent == total - 2U && st.failed == 1U && st.queue_full == 1U &&
+          st.max_depth >= rtk::app::AsyncTxTransport::kDepth);
 }
 
 int main(int argc, char **argv)
