@@ -4,6 +4,9 @@
 
 #include "fw/slot.hpp"
 #include "app_config.hpp"
+#if RTK_GNSS_ENABLED
+#include "def/gnss_def.hpp"
+#endif
 #include "def/link_def.hpp"
 #include "def/rtcm_def.hpp"
 #include "def/storage_def.hpp"
@@ -30,6 +33,12 @@ struct DataCenter {
     fw::Slot<SystemMode> system_mode{};
     fw::Slot<RtcmBatch> rtcm_batch{};
     fw::Slot<uint32_t> rtcm_reset{};
+#if RTK_GNSS_ENABLED
+    fw::Slot<rtos::ExecStats> io_exec_stats{};
+    fw::Slot<GnssStatus> gnss_status{};
+    fw::Slot<gnss::Fix> gnss_fix{};
+    fw::Slot<gnss::SatTable> gnss_sats{};
+#endif
 
     portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 };

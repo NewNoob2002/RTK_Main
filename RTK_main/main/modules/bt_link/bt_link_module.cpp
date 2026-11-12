@@ -15,6 +15,10 @@ namespace {
 constexpr const char *kTag = "bt_link";
 constexpr size_t kRxBudgetBytes = 256;
 constexpr uint32_t kRoundBudgetMs = 20;
+#if RTK_GNSS_ENABLED
+constexpr uint32_t kGnssFixStaleMs = 3000U;
+constexpr uint32_t kGnssClockJitterMs = 10U;
+#endif
 constexpr size_t kAlarmArgBytes = 2;
 // RTCM3 线路帧：1 B 前导 + 2 B 长度，载荷首 12 bit 为消息号。
 constexpr size_t kRtcmPayloadOffset = 3;
@@ -338,6 +342,37 @@ void BtLinkModule::apply_rtcm_reset() noexcept
     static_cast<void>(reset);
 }
 
+#if RTK_GNSS_ENABLED
+void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
+{
+    uint32_t fix_ver = 0;
+    const auto fix = context_.data.gnss_fix.read(fix_ver);
+    if (fix_ver != gnss_fix_version_) {
+        gnss_fix_version_ = fix_ver;
+        cached_gnss_fix_ = fix;
+    }
+    const bool within_window = (now_ms - cached_gnss_fix_.update_ms <= kGnssFixStaleMs) ||
+                               (cached_gnss_fix_.update_ms - now_ms <= kGnssClockJitterMs);
+    const bool fix_fresh = cached_gnss_fix_.valid && (cached_gnss_fix_.update_ms != 0U) && within_window;
+    const uint8_t fix_q = (fix_fresh && (cached_gnss_fix_.quality != ::gnss::FixQuality::kUnknown))
+                              ? static_cast<uint8_t>(cached_gnss_fix_.quality)
+                              : proto::alarm::kValueUnknown;
+    device_service_->info().fix_quality = fix_q;
+
+    uint32_t status_ver = 0;
+    const auto gnss_st = context_.data.gnss_status.read(status_ver);
+    if (status_ver != gnss_status_version_) {
+        gnss_status_version_ = status_ver;
+        if (gnss_st.model != ::gnss::Model::kUnknown) {
+            device_service_->info().board.assign(::gnss::model_name(gnss_st.model));
+        }
+        if (gnss_st.fw_version[0] != '\0') {
+            device_service_->info().board_fw.assign(std::string_view{gnss_st.fw_version.data()});
+        }
+    }
+}
+#endif
+
 core::LinkService &BtLinkModule::link_service() noexcept
 {
     // 执行器只在 init 成功后调用业务回调；SessionSink 同样仅在该生命周期内分发。
@@ -411,6 +446,9 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
     apply_rtcm_reset();
     collect_whitelist_dirty();
     const uint32_t now = rtos::now_ms();
+#if RTK_GNSS_ENABLED
+    sync_gnss_info(now);
+#endif
     if (now - last_tick_ms_ >= kTickPeriodMs) {
         last_tick_ms_ = now;
         link_service().tick(now);

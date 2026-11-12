@@ -37,7 +37,12 @@ bool RtcmModule::poll(uint32_t now_ms) noexcept
                 ESP_LOGE("rtcm", "truncated batch frame");
                 break;
             }
-            forwarder_.forward(core::Role::kPhone, wire.first(len));
+            const auto frame = wire.first(len);
+            forwarder_.forward(core::Role::kPhone, frame);
+#if RTK_GNSS_ENABLED
+            // 管道满时 RtcmPipe::push 内部已计数并打 kPipeDrop 追踪，此处尽力投递即可。
+            static_cast<void>(context_.rtcm_pipe.push(frame));
+#endif
             wire = wire.subspan(len);
         }
         /* 先累计角色拒绝，再发布该批次的完整统计。 */

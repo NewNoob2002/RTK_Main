@@ -82,6 +82,9 @@ bool SystemModule::poll(uint32_t /*now_ms*/) noexcept
     status_.min_free_heap = esp_get_minimum_free_heap_size();
     context_.data.system_status.write(status_);
     context_.data.exec_stats.write(context_.link_executor.stats());
+#if RTK_GNSS_ENABLED
+    context_.data.io_exec_stats.write(context_.io_executor.stats());
+#endif
     return false;
 }
 } // namespace app

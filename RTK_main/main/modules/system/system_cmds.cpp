@@ -163,6 +163,15 @@ void print_sys_section() noexcept
     cli::print_kv("exec_cmds", "%" PRIu32, exec.commands);
     cli::print_kv("exec_drops", "%" PRIu32, exec.result_drops);
     cli::print_kv("link_stk_hwm", "%" PRIu32 " B", exec.stack_free);
+#if RTK_GNSS_ENABLED
+    const auto io_exec = data.io_exec_stats.read();
+    cli::print_kv("io_rounds", "%" PRIu32, io_exec.rounds);
+    cli::print_kv("io_overruns", "%" PRIu32, io_exec.overruns);
+    cli::print_kv("io_max_rnd", "%" PRIu32 " ms", io_exec.max_round_ms);
+    cli::print_kv("io_cmds", "%" PRIu32, io_exec.commands);
+    cli::print_kv("io_drops", "%" PRIu32, io_exec.result_drops);
+    cli::print_kv("io_stk_hwm", "%" PRIu32 " B", io_exec.stack_free);
+#endif
 }
 
 int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
@@ -209,6 +218,17 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
                   static_cast<unsigned long long>(min_kib % kTenthsPerUnit));
     cli::print_kv("exec", "rounds=%" PRIu32 "  overruns=%" PRIu32 "  max_rnd=%" PRIu32 " ms  link_stk=%" PRIu32 " B",
                   exec.rounds, exec.overruns, exec.max_round_ms, exec.stack_free);
+#if RTK_GNSS_ENABLED
+    const auto io_exec = data.io_exec_stats.read();
+    const auto gnss = data.gnss_status.read();
+    cli::print_kv("io_exec", "rounds=%" PRIu32 "  overruns=%" PRIu32 "  max_rnd=%" PRIu32 " ms  io_stk=%" PRIu32 " B",
+                  io_exec.rounds, io_exec.overruns, io_exec.max_round_ms, io_exec.stack_free);
+    cli::print_section("gnss");
+    cli::print_kv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::state_name(gnss.state),
+                  ::gnss::model_name(gnss.model), gnss.host_baud);
+    cli::print_kv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B", gnss.pipe.pushed_frames,
+                  gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
+#endif
     return 0;
 }
 
@@ -378,6 +398,9 @@ int cmd_sys_tasks(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     cli::print_section("tasks");
     print_task_row("link", xTaskGetHandle("link"));
+#if RTK_GNSS_ENABLED
+    print_task_row("io", xTaskGetHandle("io"));
+#endif
     print_task_row("async_tx", xTaskGetHandle("async_tx"));
     print_task_row("spp_worker", xTaskGetHandle("spp_worker"));
 #if FW_TRACE_ENABLED

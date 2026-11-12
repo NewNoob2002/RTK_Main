@@ -4,12 +4,18 @@
 
 #include "app_config.hpp"
 #include "data/app_data.hpp"
+#if RTK_GNSS_ENABLED
+#include "modules/gnss/rtcm_pipe.hpp"
+#endif
 #include "module_list.inc"
 
 namespace app {
-/** 固件唯一上下文：拥有 DataCenter、全部模块实例与链路执行器；仅 app_main 创建，非 ISR。 */
+/** 固件唯一上下文：拥有 DataCenter、全部模块实例与链路/IO 执行器；仅 app_main 创建，非 ISR。 */
 struct AppContext {
     static constexpr size_t kLinkStackBytes = 6144;
+#if RTK_GNSS_ENABLED
+    static constexpr size_t kIoStackBytes = 4096;
+#endif
     static constexpr size_t kModuleCount = 0
 // X-macro 生成计数表达式，函数无法展开注册清单；前导 + 不可单独加括号。
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage, bugprone-macro-parentheses)
@@ -26,6 +32,11 @@ struct AppContext {
 #undef MODULE_DEF
     rtos::Executor link_executor{};
     rtos::ExecutorStorage<kLinkStackBytes, kModuleCount> link_storage{};
+#if RTK_GNSS_ENABLED
+    rtos::Executor io_executor{};
+    rtos::ExecutorStorage<kIoStackBytes, kModuleCount> io_storage{};
+    RtcmPipe rtcm_pipe{};
+#endif
 };
 
 /** 返回固件全生命周期的上下文；无阻塞、无分配，非 ISR；成员访问遵守各模块契约。 */

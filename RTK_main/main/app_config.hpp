@@ -19,10 +19,17 @@ inline constexpr size_t kMaxSessions = core::kMaxSessions;
 inline constexpr size_t kMaxAlarms = core::kMaxAlarms;
 inline constexpr size_t kDeviceNameBuf = 32;
 
+// 统一宏（host 与 CONFIG_RTK_GNSS_ENABLE=n 下均为 0），避免各处重复判断 defined。
+#if defined(CONFIG_RTK_GNSS_ENABLE) && CONFIG_RTK_GNSS_ENABLE
+#define RTK_GNSS_ENABLED 1
+#else
+#define RTK_GNSS_ENABLED 0
+#endif
+
 /** 模块编号（注册清单使用）；枚举顺序即 ID，勿插入或重排。 */
-enum class ModuleKind : uint8_t { kBtLink, kRtcm, kStorage, kSystem, kSystemMode, kDebug };
-/** 执行器编号；本轮只有一个链路执行器。 */
-enum class ExecKind : uint8_t { kLink };
+enum class ModuleKind : uint8_t { kBtLink, kRtcm, kStorage, kSystem, kSystemMode, kDebug, kGnss };
+/** 执行器编号；链路与 GNSS IO 分别绑核运行。 */
+enum class ExecKind : uint8_t { kLink, kIo };
 
 // 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。
 [[nodiscard]] constexpr uint8_t id(ModuleKind value) noexcept

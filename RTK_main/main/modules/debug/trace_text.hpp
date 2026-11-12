@@ -13,18 +13,22 @@ namespace app::debug {
 
 /** 字段取值的渲染方式；决定 a/b/session 如何变成文本。 */
 enum class TraceValue : uint8_t {
-    kDecA = 0, // a 十进制
-    kHexA,     // a 十六进制
-    kDecB,     // b 十进制
-    kHexB,     // b 十六进制
-    kRoleA,    // a 作为 core::Role
-    kRoleB,    // b 作为 core::Role
-    kReasonA,  // a 作为 core::LinkReason
-    kReasonB,  // b 作为 core::LinkReason
-    kResultA,  // a 作为 fw::Result
-    kResultB,  // b 作为 fw::Result
-    kSession,  // 事件会话号（4 位十六进制）
-    kNoValue,  // 只打印键名
+    kDecA = 0,    // a 十进制
+    kHexA,        // a 十六进制
+    kDecB,        // b 十进制
+    kHexB,        // b 十六进制
+    kRoleA,       // a 作为 core::Role
+    kRoleB,       // b 作为 core::Role
+    kReasonA,     // a 作为 core::LinkReason
+    kReasonB,     // b 作为 core::LinkReason
+    kResultA,     // a 作为 fw::Result
+    kResultB,     // b 作为 fw::Result
+    kGnssStateA,  // a 作为 gnss::State
+    kGnssStateB,  // b 作为 gnss::State
+    kGnssFamilyA, // a 作为 gnss::Family
+    kGnssModelA,  // a 作为 gnss::Model
+    kSession,     // 事件会话号（4 位十六进制）
+    kNoValue,     // 只打印键名
 };
 
 /** 一个 `键=值` 字段。 */

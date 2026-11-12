@@ -82,11 +82,11 @@ bool report(const char * /*what*/, const fw::CommandResult &result) noexcept
     }
 }
 
-bool submit_raw(const fw::Command &command, fw::CommandResult &out) noexcept
+bool submit_raw_to(rtos::Executor &executor, ModuleKind module, const char *down_msg, const fw::Command &command,
+                   fw::CommandResult &out) noexcept
 {
-    auto &executor = app_context().link_executor;
-    if (!executor.running() || !executor.module_ok(id(ModuleKind::kBtLink))) {
-        (void)cli::fail("link not running");
+    if (!executor.running() || !executor.module_ok(id(module))) {
+        (void)cli::fail("%s", down_msg != nullptr ? down_msg : "executor not running");
         return false;
     }
     if (executor.call(command, out, kCommandTimeoutMs) != fw::Result::kOk) {
@@ -94,6 +94,11 @@ bool submit_raw(const fw::Command &command, fw::CommandResult &out) noexcept
         return false;
     }
     return true;
+}
+
+bool submit_raw(const fw::Command &command, fw::CommandResult &out) noexcept
+{
+    return submit_raw_to(app_context().link_executor, ModuleKind::kBtLink, "link not running", command, out);
 }
 
 bool submit(const fw::Command &command, const char *what) noexcept

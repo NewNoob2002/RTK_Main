@@ -7,7 +7,13 @@
 #include <cstdarg>
 #include <cstdio>
 
+#include "app_config.hpp" // RTK_GNSS_ENABLED
 #include "core/trace_codes.hpp"
+#if RTK_GNSS_ENABLED
+#include "def/gnss_def.hpp"
+#include "gnss/controller.hpp"
+#include "gnss/types.hpp"
+#endif
 #include "def/rtcm_def.hpp"
 #include "def/storage_def.hpp"
 #include "def/system_def.hpp"
@@ -73,8 +79,26 @@ constexpr std::array<TraceField, 3U> kSppRxDrop = {
 constexpr std::array<TraceField, 1U> kSppAuth = {{{"status", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 2U> kSppEvtDrop = {{{"type", TraceValue::kDecA}, {"total", TraceValue::kDecB}}};
 
+#if RTK_GNSS_ENABLED
+constexpr std::array<TraceField, 2U> kGnssState = {
+    {{"state", TraceValue::kGnssStateA}, {"from", TraceValue::kGnssStateB}}};
+constexpr std::array<TraceField, 2U> kGnssProbeSend = {
+    {{"family", TraceValue::kGnssFamilyA}, {"baud", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssProbeHit = {
+    {{"model", TraceValue::kGnssModelA}, {"baud", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssStepRetry = {{{"step", TraceValue::kDecA}, {"retry", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 1U> kGnssStep = {{{"step", TraceValue::kDecA}}};
+constexpr std::array<TraceField, 1U> kGnssSilence = {{{"ms", TraceValue::kDecA}}};
+constexpr std::array<TraceField, 2U> kGnssPipeDrop = {{{"len", TraceValue::kDecA}, {"space", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssBaud = {{{"baud", TraceValue::kDecA}, {"from", TraceValue::kDecB}}};
+#endif
+
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
+#if RTK_GNSS_ENABLED
+constexpr std::array<TraceText, 48U> kTable = {{
+#else
 constexpr std::array<TraceText, 38U> kTable = {{
+#endif
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen), "open", std::span<const TraceField>(kLinkOpen)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kClose), "close",
      std::span<const TraceField>(kLinkClose)},
@@ -141,6 +165,26 @@ constexpr std::array<TraceText, 38U> kTable = {{
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_AUTH), "auth", std::span<const TraceField>(kSppAuth)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_EVT_DROP), "evt-drop",
      std::span<const TraceField>(kSppEvtDrop)},
+#if RTK_GNSS_ENABLED
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kState), "state", std::span<const TraceField>(kGnssState)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kProbeSend), "probe-send",
+     std::span<const TraceField>(kGnssProbeSend)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kProbeHit), "probe-hit",
+     std::span<const TraceField>(kGnssProbeHit)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepSend), "step-send",
+     std::span<const TraceField>(kGnssStepRetry)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepAck), "step-ack",
+     std::span<const TraceField>(kGnssStep)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepNack), "step-nack",
+     std::span<const TraceField>(kGnssStep)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepTimeout), "step-timeout",
+     std::span<const TraceField>(kGnssStepRetry)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kSilence), "silence",
+     std::span<const TraceField>(kGnssSilence)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kPipeDrop), "pipe-drop",
+     std::span<const TraceField>(kGnssPipeDrop)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kBaud), "baud", std::span<const TraceField>(kGnssBaud)},
+#endif
 }};
 
 constexpr std::array<const char *, 8U> kCatNames = {{"link", "spp", "rtcm", "proto", "alarm", "store", "exec", "gnss"}};
@@ -238,6 +282,24 @@ const char *result_text(uint32_t value) noexcept
     }
 }
 
+#if RTK_GNSS_ENABLED
+const char *gnss_family_text(uint32_t value) noexcept
+{
+    switch (static_cast<::gnss::Family>(value)) {
+    case ::gnss::Family::kUnknown:
+        return "unknown";
+    case ::gnss::Family::kUnicore:
+        return "unicore";
+    case ::gnss::Family::kUblox:
+        return "ublox";
+    case ::gnss::Family::kComnav:
+        return "comnav";
+    default:
+        return "?";
+    }
+}
+#endif
+
 void append_value(char *out, size_t cap, size_t &pos, TraceValue value, const fw::TraceEvent &ev) noexcept
 {
     switch (value) {
@@ -271,6 +333,20 @@ void append_value(char *out, size_t cap, size_t &pos, TraceValue value, const fw
     case TraceValue::kResultB:
         append(out, cap, pos, "%s", result_text(ev.b));
         break;
+#if RTK_GNSS_ENABLED
+    case TraceValue::kGnssStateA:
+        append(out, cap, pos, "%s", ::gnss::state_name(static_cast<::gnss::State>(ev.a)));
+        break;
+    case TraceValue::kGnssStateB:
+        append(out, cap, pos, "%s", ::gnss::state_name(static_cast<::gnss::State>(ev.b)));
+        break;
+    case TraceValue::kGnssFamilyA:
+        append(out, cap, pos, "%s", gnss_family_text(ev.a));
+        break;
+    case TraceValue::kGnssModelA:
+        append(out, cap, pos, "%s", ::gnss::model_name(static_cast<::gnss::Model>(ev.a)));
+        break;
+#endif
     case TraceValue::kSession:
         append(out, cap, pos, "%04lx", static_cast<unsigned long>(ev.session));
         break;

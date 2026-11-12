@@ -26,6 +26,24 @@ constinit const fw::Module kModules[]{
 #include "module_list.inc"
 #undef MODULE_DEF
 };
+#if RTK_GNSS_ENABLED
+#if defined(CONFIG_ESP_CONSOLE_UART_NUM)
+static_assert(CONFIG_RTK_GNSS_UART_NUM != CONFIG_ESP_CONSOLE_UART_NUM, "GNSS UART must not conflict with console UART");
+#endif
+// IO 执行器绑 core0（prio 9，低于 link 的 prio 10），不抢占蓝牙链路实时性；阻塞于 GNSS UART 读。
+constexpr rtos::ExecutorConfig kIoConfig{
+    .name = "io",
+    .id = app::id(app::ExecKind::kIo),
+    .priority = 9,
+    .core = 0,
+    .idle_wait_ms = 20,
+    .round_budget_ms = 20,
+    .yield_ticks = 1,
+    .watchdog = true,
+    .wait = [](void * /*ctx*/, uint32_t max_ms) noexcept { s_app.gnss.wait(max_ms); },
+    .wait_ctx = nullptr,
+};
+#endif
 // 链路绑 core1，BT worker/控制台在 core0；每轮至少让出 1 tick 给 IDLE1。
 constexpr rtos::ExecutorConfig kLinkConfig{
     .name = "link",
@@ -123,11 +141,29 @@ void start_link() noexcept
     }
 }
 
+#if RTK_GNSS_ENABLED
+void start_io() noexcept
+{
+    const auto initialized = s_app.io_executor.init(kIoConfig, kModules, rtos::view_of(s_app.io_storage));
+    if (initialized != fw::Status::kOk) {
+        ESP_LOGE(kTag, "io executor init failed: %s", to_string(initialized));
+        return;
+    }
+    const auto started = s_app.io_executor.start();
+    if (started != fw::Status::kOk) {
+        ESP_LOGE(kTag, "io task start failed");
+    }
+}
+#endif
+
 void start_console() noexcept
 {
     constexpr const char *kConsolePrompt = "console> ";
     const std::array cmd_tables{
         app::system_cmds(), app::link_cmds(), app::storage_cmds(), app::rtcm_cmds(),
+#if RTK_GNSS_ENABLED
+        app::gnss_cmds(),
+#endif
 #if FW_TRACE_ENABLED
         app::debug_cmds(),
 #endif
@@ -154,6 +190,9 @@ void start_console() noexcept
         VerbGroupDef{"alarm", "alarm state and override", app::alarm_verbs()},
         VerbGroupDef{"store", "NVS SN and persistence status", app::store_verbs()},
         VerbGroupDef{"rtcm", "RTCM forwarding stats and reset", app::rtcm_verbs()},
+#if RTK_GNSS_ENABLED
+        VerbGroupDef{"gnss", "GNSS receiver control and telemetry", app::gnss_verbs()},
+#endif
 #if FW_TRACE_ENABLED
         VerbGroupDef{"debug", "trace categories, report and NVS", app::debug_verbs()},
 #endif
@@ -203,7 +242,10 @@ extern "C" void app_main(void)
         ESP_LOGE(kTag, "storage module init failed");
     }
     s_app.system.prepare();
-    /* 先启动链路，再启动始终可用的控制台。 */
+    /* 先启动链路与 IO 执行器，再启动始终可用的控制台。 */
     start_link();
+#if RTK_GNSS_ENABLED
+    start_io();
+#endif
     start_console();
 }

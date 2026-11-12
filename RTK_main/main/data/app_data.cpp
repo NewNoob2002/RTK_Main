@@ -20,5 +20,11 @@ void DataCenter::init() noexcept
     system_mode.bind_lock(lock);
     rtcm_batch.bind_lock(lock);
     rtcm_reset.bind_lock(lock);
+#if RTK_GNSS_ENABLED
+    io_exec_stats.bind_lock(lock);
+    gnss_status.bind_lock(lock);
+    gnss_fix.bind_lock(lock);
+    gnss_sats.bind_lock(lock);
+#endif
 }
 } // namespace app::data

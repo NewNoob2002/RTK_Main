@@ -10,6 +10,10 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
     if(DEFINED CONFIG_RTK_TRACE_ENABLE AND NOT CONFIG_RTK_TRACE_ENABLE)
         list(FILTER module_sources EXCLUDE REGEX "(^|/)modules/debug/")
     endif()
+    # ADR-0010 §2.7：GNSS 关闭时整个 gnss 模块不编译。
+    if(DEFINED CONFIG_RTK_GNSS_ENABLE AND NOT CONFIG_RTK_GNSS_ENABLE)
+        list(FILTER module_sources EXCLUDE REGEX "(^|/)modules/gnss/")
+    endif()
 endif()
 idf_component_register(
     SRCS "app_main.cpp"
@@ -17,7 +21,7 @@ idf_component_register(
          "support/console_support.cpp"
          ${module_sources}
     INCLUDE_DIRS "."
-    REQUIRES app_fw device_proto link_core rtos spp_server nvs_store cli stream_demux console esp_system esp_hw_support esp_driver_gpio esp_driver_uart freertos log)
+    REQUIRES app_fw device_proto link_core rtos spp_server nvs_store cli stream_demux gnss console esp_system esp_hw_support esp_driver_gpio esp_driver_uart freertos log)
 
 # IDF 宏会触发 -Wold-style-cast/-Wconversion/-Wundef，本项目对其他依赖 IDF 的组件
 # 同样不开启这三项；其余告警按 AGENTS.md 全开。

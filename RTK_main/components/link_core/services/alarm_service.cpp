@@ -78,7 +78,7 @@ alarm::Status make_status(const AlarmSource &alarm_source, const LinkManager &li
     status.seq = seq;
     status.state = alarm_source.state();
     status.level = alarm_source.level();
-    status.fix_quality = alarm::kValueUnknown;
+    status.fix_quality = info.fix_quality;
     status.battery_pct = info.battery_pct;
 
     uint8_t flags = 0;

@@ -8,6 +8,9 @@
 
 #include "app_config.hpp"
 #include "def/rtcm_def.hpp"
+#if RTK_GNSS_ENABLED
+#include "gnss/types.hpp"
+#endif
 #include "modules/bt_link/async_tx.hpp"
 #include "demux/decoders/rtcm3.hpp"
 #include "demux/static_demux.hpp"
@@ -116,6 +119,9 @@ private:
     [[nodiscard]] bool feed_one(SessionEntry &entry, size_t &budget, uint32_t round_start_ms) noexcept;
     void publish_link(uint32_t now_ms) noexcept;
     void apply_rtcm_reset() noexcept;
+#if RTK_GNSS_ENABLED
+    void sync_gnss_info(uint32_t now_ms) noexcept;
+#endif
     void set_alarm(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     void clear_whitelist(fw::CommandResult &result) noexcept;
     void edit_whitelist(const fw::Command &cmd, bool add, fw::CommandResult &result) noexcept;
@@ -142,6 +148,11 @@ private:
     std::array<uint8_t, kRtcmBatchBytes> rtcm_batch_{};
     size_t rtcm_size_ = 0;
     uint32_t rtcm_rejected_ = 0;
+#if RTK_GNSS_ENABLED
+    uint32_t gnss_fix_version_ = 0;
+    uint32_t gnss_status_version_ = 0;
+    ::gnss::Fix cached_gnss_fix_{};
+#endif
 };
 /** 链路模块的控制台命令表（bt/wl/alarm）；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const cli::Cmd> link_cmds() noexcept;

@@ -10,6 +10,9 @@
 #if FW_TRACE_ENABLED
 #include "modules/debug/debug_keys.hpp"
 #endif
+#if RTK_GNSS_ENABLED
+#include "modules/gnss/gnss_keys.hpp"
+#endif
 /* 通用键表要读写整数键；nvs_store.h（冻结）没有对应 API，按任务卡直接使用 nvs.h。
  * 替身头不带 C++ 链接守卫，因此这里显式声明 C 链接；IDF 的 nvs.h 自带 extern "C"，嵌套无害。 */
 extern "C" {
@@ -28,10 +31,19 @@ constexpr size_t kMaxKeyWidth = 4U;   // 支持的最高键宽（u32）
 constexpr uint32_t kByteMask = 0xFFU; // 按字节拆整数时使用的掩码
 
 /* ADR-0009 §2.4：通用键表的登记处。新模块把 kKeys 加到这里即被启动流程加载。 */
-// 追踪关闭时 debug 模块不编译，键表为空（ADR-0009 §2.6）。
-#if FW_TRACE_ENABLED
+// 按 FW_TRACE_ENABLED 与 RTK_GNSS_ENABLED 条件登记键表。
+#if FW_TRACE_ENABLED && RTK_GNSS_ENABLED
+constexpr std::array<std::span<const fw::StoreKey>, 2U> kKeyTables{{
+    std::span<const fw::StoreKey>(debug::kKeys),
+    std::span<const fw::StoreKey>(gnss_store::kKeys),
+}};
+#elif FW_TRACE_ENABLED
 constexpr std::array<std::span<const fw::StoreKey>, 1U> kKeyTables{{
     std::span<const fw::StoreKey>(debug::kKeys),
+}};
+#elif RTK_GNSS_ENABLED
+constexpr std::array<std::span<const fw::StoreKey>, 1U> kKeyTables{{
+    std::span<const fw::StoreKey>(gnss_store::kKeys),
 }};
 #else
 constexpr std::array<std::span<const fw::StoreKey>, 0U> kKeyTables{};

@@ -97,7 +97,7 @@ target_link_libraries(link_svc PUBLIC dev_proto_c)
 target_compile_options(link_svc PRIVATE ${PROJ_CXX_STRICT})
 
 enable_testing()
-foreach(name test_command_router test_services_golden test_link_trace)
+foreach(name test_command_router test_services_golden test_link_trace test_alarm_fix_quality)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} link_svc unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})
