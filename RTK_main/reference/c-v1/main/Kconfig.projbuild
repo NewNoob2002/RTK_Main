@@ -1,0 +1,17 @@
+menu "RTK_main"
+
+    choice RTK_LINK_POLICY
+        prompt "SPP link policy"
+        default RTK_LINK_POLICY_CONCURRENT
+        help
+            选择手机与报警器同时在线（CONCURRENT）或手机优先（PHONE_PREEMPT）。
+            PHONE_PREEMPT 下手机接入会断开报警器，手机在线时拒绝新的报警器。
+
+        config RTK_LINK_POLICY_CONCURRENT
+            bool "CONCURRENT: phone and alarm online together"
+
+        config RTK_LINK_POLICY_PHONE_PREEMPT
+            bool "PHONE_PREEMPT: phone disconnects alarm"
+    endchoice
+
+endmenu
