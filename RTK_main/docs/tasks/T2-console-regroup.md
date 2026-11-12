@@ -11,7 +11,8 @@
    - 旧顶层命令 `pair`、`policy`、`sn` 删除（不留别名）；`help` 由 cli 自定义实现。
 2. `tools/hil/spp_rtcm_mix.py`：`read_status` 发 `status rtcm`；`reset_rtcm` 等待 `OK`；`--selftest` 样例同步。全仓搜索其他发送旧命令的脚本（`tools/`、`scratchpad` 不在仓库内不管）并同步。
 3. `main/modules/_template/template_cmds.cpp` 改为 Verb + dispatch 写法，`tools/main_host_check` 的 template 用例同步。
-4. `tools/main_host_check` 中引用旧命令输出的断言同步，用例数不减。
+4. `help`/`help <组>` 目前不经 trampoline，结尾没有 `OK`；改为与其他命令一致（结尾 `OK`，未知组 `ERR unknown group`）。
+5. `tools/main_host_check` 中引用旧命令输出的断言同步，用例数不减。
 
 ## 门槛（写入 `docs/reports/T2.md`）
 
