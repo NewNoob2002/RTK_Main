@@ -140,14 +140,32 @@ void start_console() noexcept
             return;
         }
     }
+    struct VerbGroupDef {
+        const char *name;
+        const char *summary;
+        std::span<const cli::Verb> verbs;
+    };
+    const std::array verb_groups{
+        VerbGroupDef{"status", "system and link status (default overview)", app::status_verbs()},
+        VerbGroupDef{"log", "runtime IDF log level", app::log_verbs()},
+        VerbGroupDef{"sys", "system info, heap, tasks and reboot", app::sys_verbs()},
+        VerbGroupDef{"bt", "BT sessions, pairing and policy", app::bt_verbs()},
+        VerbGroupDef{"wl", "alarm whitelist management", app::wl_verbs()},
+        VerbGroupDef{"alarm", "alarm state and override", app::alarm_verbs()},
+        VerbGroupDef{"store", "NVS SN and persistence status", app::store_verbs()},
+        VerbGroupDef{"rtcm", "RTCM forwarding stats and reset", app::rtcm_verbs()},
 #if FW_TRACE_ENABLED
-    /* debug 用动词表分派；必须在 start 之前登记。 */
-    const esp_err_t verbs_err = cli::add_verbs("debug", "追踪类别、周期报告与持久化", app::debug_verbs());
-    if (verbs_err != ESP_OK) {
-        ESP_LOGE(kTag, "console verbs failed: %s", esp_err_to_name(verbs_err));
-        return;
-    }
+        VerbGroupDef{"debug", "trace categories, report and NVS", app::debug_verbs()},
 #endif
+    };
+    /* 必须在 start 之前登记所有动词表，供 help / help <group> 展示。 */
+    for (const auto &group : verb_groups) {
+        const esp_err_t verbs_err = cli::add_verbs(group.name, group.summary, group.verbs);
+        if (verbs_err != ESP_OK) {
+            ESP_LOGE(kTag, "console verbs failed: %s", esp_err_to_name(verbs_err));
+            return;
+        }
+    }
     const esp_err_t console_err = cli::start(kConsolePrompt);
     if (console_err != ESP_OK) {
         ESP_LOGE(kTag, "console start failed: %s", esp_err_to_name(console_err));

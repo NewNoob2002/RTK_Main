@@ -61,8 +61,8 @@
 
 ## 4. 核对与判定规则
 
-1. **测试前**：若启用串口，先发送 `rtcm reset\r` 清零板端 RTCM 统计，再发送 `status\r` 读取基线 `rtcm:` 与 `stats:` 行。若启用 `--product cycle`，在清零前先发送一次 `0x01` 验证 `PHONE` 角色并学习定值应答。
-2. **测试后**：无论是否启用串口或产品负载，发送结束后均至少等待 `--tail-wait`（默认 `1.5 s`）让主机蓝牙发送队列与板端接收缓冲区充分排空，再执行串口 `status\r` 采集或关闭蓝牙会话（关闭时先 `shutdown(SHUT_WR)` 短暂等待再完全关闭）；若启用串口，解析板端：
+1. **测试前**：若启用串口，先发送 `rtcm reset\r`（等待 `OK`）清零板端 RTCM 统计，再发送 `status rtcm\r` 读取基线 `rtcm:` 与 `stats:` 行。若启用 `--product cycle`，在清零前先发送一次 `0x01` 验证 `PHONE` 角色并学习定值应答。
+2. **测试后**：无论是否启用串口或产品负载，发送结束后均至少等待 `--tail-wait`（默认 `1.5 s`）让主机蓝牙发送队列与板端接收缓冲区充分排空，再执行串口 `status rtcm\r` 采集或关闭蓝牙会话（关闭时先 `shutdown(SHUT_WR)` 短暂等待再完全关闭）；若启用串口，解析板端：
    - `rtcm: frames=.. bytes=.. crc32=0x........ last_msg=.. rejected_role=.. unknown_bytes=.. product_rejects=.. rtcm_rejects=..`
    - `stats: frames_rx=.. replies_tx=.. write_errors=.. pushes_tx=.. disconnects=.. rx_dropped=..`
 3. **判定（`verdict`）**：

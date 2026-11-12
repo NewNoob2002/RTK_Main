@@ -54,4 +54,6 @@ private:
 };
 /** 模板模块控制台命令表；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const cli::Cmd> template_cmds() noexcept;
+/** 模板子命令动词表，供 cli::add_verbs 登记。 */
+[[nodiscard]] std::span<const cli::Verb> template_verbs() noexcept;
 } // namespace app

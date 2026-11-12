@@ -151,7 +151,9 @@ void test_commands_before_exec()
     ctx.data.exec_stats.write(exec);
 
     const auto cmds = app::template_cmds();
+    const auto verbs = app::template_verbs();
     CHECK(cmds.size() == 1U && std::strcmp(cmds[0].name, "tmpl") == 0 && cmds[0].handler != nullptr);
+    CHECK(verbs.size() == 2U && std::strcmp(verbs[0].name, "status") == 0 && std::strcmp(verbs[1].name, "limit") == 0);
     const auto fn = cmds[0].handler;
 
     char prog[] = "tmpl";
@@ -172,6 +174,7 @@ void test_commands_before_exec()
     std::array<char *, 3> limit_over{prog, sub_limit, arg_over};
     std::array<char *, 3> limit_nan{prog, sub_limit, arg_nan};
     std::array<char *, 3> limit_ok{prog, sub_limit, arg_ok};
+    std::array<char *, 4> limit_extra{prog, sub_limit, arg_ok, arg_ok};
 
     CHECK(fn(nullptr, -1, status_ok.data()) == 1);
     CHECK(fn(nullptr, 2, nullptr) == 1);
@@ -183,6 +186,7 @@ void test_commands_before_exec()
     CHECK(fn(nullptr, 3, limit_zero.data()) == 1);
     CHECK(fn(nullptr, 3, limit_over.data()) == 1);
     CHECK(fn(nullptr, 3, limit_nan.data()) == 1);
+    CHECK(fn(nullptr, 4, limit_extra.data()) == 1);
     // 执行器未运行且目标为占位符时应安全拒绝并返回非 0。
     CHECK(fn(nullptr, 3, limit_ok.data()) == 1);
 }

@@ -463,7 +463,11 @@ void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result)
         alarm_.clear_override();
         break;
     case LinkVerb::kPair:
-        link_manager_.pair_open(rtos::now_ms());
+        if (link_manager_.is_pairing()) {
+            result.status = fw::Result::kBusy;
+        } else {
+            link_manager_.pair_open(rtos::now_ms());
+        }
         break;
     case LinkVerb::kWhitelistClear:
         clear_whitelist(result);

@@ -1,42 +1,101 @@
-// RTCM 模块控制台命令表：rtcm。
+// RTCM 模块控制台命令表（ADR-0009 §2.5）：rtcm stats / rtcm reset。
+// 线程：仅在 console REPL 任务调用，非 ISR；stats 只读 DataCenter，reset 经 Executor::call 投递。
 
-#include "support/console_support.hpp"
 #include "modules/rtcm/rtcm_module.hpp"
 
 #include <array>
-#include <cstddef>
+#include <cinttypes>
+#include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <span>
+
+#include "app_context.hpp"
+#include "support/console_support.hpp"
 
 namespace app {
 
 namespace {
 
-// NOLINTNEXTLINE(misc-const-correctness)
-int cmd_rtcm(void * /*ctx*/, int argc, char **argv) noexcept
+constexpr uint64_t kBytesPerKib = 1024ULL;
+constexpr uint64_t kTenthsPerUnit = 10ULL;
+
+int cmd_rtcm_stats(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
-    // argc 由 esp_console 统计且 >= 0，转换为 size_t 无损。
-    const std::span<char *> args(argv, static_cast<size_t>(argc));
-    if ((args.size() != 2U) || (strcmp(args[1], "reset") != 0)) {
-        printf("usage: rtcm reset\n");
-        return 1;
+    if (argc != 1) {
+        return cli::fail("usage: rtcm stats");
+    }
+    print_rtcm_status();
+    return 0;
+}
+
+int cmd_rtcm_reset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+{
+    if (argc != 1) {
+        return cli::fail("usage: rtcm reset");
     }
     fw::Command command{};
     command.target = id(ModuleKind::kRtcm);
     command.verb = verb(RtcmVerb::kReset);
-    return submit(command, "rtcm reset") ? 0 : 1;
+    return submit(command, "rtcm reset") ? 0 : cli::kCmdFail;
 }
 
-constexpr std::array<cli::Cmd, 1> kRtcmCmds{{
-    {"rtcm", "rtcm reset: clear RTCM and demux statistics", nullptr, cmd_rtcm, nullptr},
+constexpr std::array<cli::Verb, 2U> kRtcmVerbs{{
+    {"stats", nullptr, "show RTCM forwarding and demux counters", cmd_rtcm_stats},
+    {"reset", nullptr, "clear RTCM and demux statistics", cmd_rtcm_reset},
+}};
+
+int cmd_rtcm(void *ctx, int argc, char **argv) noexcept
+{
+    return cli::dispatch(kRtcmVerbs, ctx, argc, argv);
+}
+
+constexpr std::array<cli::Cmd, 1U> kRtcmCmds{{
+    {"rtcm", "rtcm <stats|reset>: RTCM forwarding statistics", "<stats|reset>", cmd_rtcm, nullptr},
 }};
 
 } // namespace
 
+void print_rtcm_status() noexcept
+{
+    const auto &data = app_context().data;
+    const auto rtcm = data.rtcm_stats.read();
+    const auto demux = data.demux_stats.read();
+    const auto stats = data.link_stats.read();
+
+    const uint64_t kib_tenths = (static_cast<uint64_t>(rtcm.bytes) * kTenthsPerUnit) / kBytesPerKib;
+    cli::print_section("rtcm");
+    cli::print_kv("frames", "%" PRIu32, rtcm.frames);
+    cli::print_kv("bytes", "%" PRIu32 " B (%llu.%llu KB)", rtcm.bytes,
+                  static_cast<unsigned long long>(kib_tenths / kTenthsPerUnit),
+                  static_cast<unsigned long long>(kib_tenths % kTenthsPerUnit));
+    cli::print_kv("rate", "%" PRIu32 " B/s", rtcm.bytes_per_sec);
+    cli::print_kv("crc32", "0x%08" PRIX32, rtcm.crc32);
+    cli::print_kv("last_msg", "%" PRIu16, rtcm.last_msg);
+    cli::print_kv("rejected_role", "%" PRIu32, rtcm.rejected_role);
+    cli::print_kv("unknown_bytes", "%" PRIu32 " B", demux.unknown_bytes);
+    cli::print_kv("prod_rejects", "%" PRIu32, demux.product_rejects);
+    cli::print_kv("rtcm_rejects", "%" PRIu32, demux.rtcm_rejects);
+
+    // 保留 ADR-0006 §2 逐字格式行，供 tools/hil/spp_rtcm_mix.py 正则匹配。
+    std::printf("rtcm: frames=%" PRIu32 " bytes=%" PRIu32 " crc32=0x%08" PRIX32 " last_msg=%" PRIu16
+                " rejected_role=%" PRIu32 " unknown_bytes=%" PRIu32 " product_rejects=%" PRIu32 " rtcm_rejects=%" PRIu32
+                "\n",
+                rtcm.frames, rtcm.bytes, rtcm.crc32, rtcm.last_msg, rtcm.rejected_role, demux.unknown_bytes,
+                demux.product_rejects, demux.rtcm_rejects);
+    std::printf("stats: frames_rx=%" PRIu32 " replies_tx=%" PRIu32 " write_errors=%" PRIu32 " pushes_tx=%" PRIu32
+                " disconnects=%" PRIu32 " rx_dropped=%" PRIu32 "\n",
+                stats.frames_rx, stats.replies_tx, stats.write_errors, stats.pushes_tx, stats.disconnects,
+                stats.rx_dropped);
+}
+
 std::span<const cli::Cmd> rtcm_cmds() noexcept
 {
     return kRtcmCmds;
+}
+
+std::span<const cli::Verb> rtcm_verbs() noexcept
+{
+    return kRtcmVerbs;
 }
 
 } // namespace app

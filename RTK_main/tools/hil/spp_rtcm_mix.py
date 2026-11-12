@@ -557,16 +557,21 @@ class SerialConsole:
         return strip_ansi(buf.decode("utf-8", errors="replace"))
 
     def reset_rtcm(self) -> None:
-        """发送 `rtcm reset\\r` 并等待控制台回到提示符。"""
+        """发送 `rtcm reset\\r` 并等待 `OK` 与控制台回到提示符。"""
         self._drain_input()
         self.ser.write(b"rtcm reset\r")
         self.ser.flush()
-        _ = self._read_until(lambda t: "console>" in t, timeout_s=1.5)
+        text = self._read_until(
+            lambda t: bool(re.search(r"(?m)^(?:OK|ERR\b[^\r\n]*)\r?$", t) and ("console>" in t)),
+            timeout_s=1.5,
+        )
+        if not re.search(r"(?m)^OK\r?$", text):
+            raise RuntimeError(f"rtcm reset 未收到 OK: {text!r}")
 
     def read_status(self) -> ConsoleSnapshot:
-        """发送 `status\\r` 并解析 `rtcm:` 与 `stats:` 行。"""
+        """发送 `status rtcm\\r` 并解析 `rtcm:` 与 `stats:` 行。"""
         self._drain_input()
-        self.ser.write(b"status\r")
+        self.ser.write(b"status rtcm\r")
         self.ser.flush()
         text = self._read_until(
             lambda t: bool(RTCM_LINE_RE.search(t) and STATS_LINE_RE.search(t) and ("console>" in t)),
@@ -993,23 +998,79 @@ def run_selftest() -> int:
     ev_drop = evaluate_product_replies(reqs, sent_t, parser.frames[:1] + parser.frames[2:], ref01)
     _check(ev_drop["ok"] == 5 and ev_drop["lost"] == 1 and ev_drop["content_err"] == 0, "产品应答丢帧检出失败")
 
-    # 4. 控制台 status 正则解析（含 ANSI 颜色码、异步 IDF 日志穿插与 rtcm/stats 行）
+    # 4. 控制台 status rtcm 正则解析与 reset_rtcm 回执检查（含 ANSI、异步日志、kv 节与 OK）
     sample_console = (
         "\x1b[0;32mI (12345) BT_HCI: hcif mode change\x1b[0m\r\n"
-        "status\r\n"
-        "link: running\r\n"
-        "bt: ready\r\n"
-        "sessions: 1\r\n"
-        "  handle=0x00000181 role=PHONE mac=2C:9C:58:C4:65:92\r\n"
-        "stats: frames_rx=120 replies_tx=120 write_errors=0 pushes_tx=0 disconnects=0 rx_dropped=0\r\n"
+        "status rtcm\r\n"
+        "[rtcm]\r\n"
+        "  frames         60\r\n"
+        "  bytes          10630 B (10.3 KB)\r\n"
+        "  rate           5315 B/s\r\n"
+        "  crc32          0x0ABC1234\r\n"
+        "  last_msg       1230\r\n"
+        "  rejected_role  0\r\n"
+        "  unknown_bytes  0 B\r\n"
+        "  prod_rejects   0\r\n"
+        "  rtcm_rejects   0\r\n"
         "rtcm: frames=60 bytes=10630 crc32=0x0ABC1234 last_msg=1230 rejected_role=0 "
         "unknown_bytes=0 product_rejects=0 rtcm_rejects=0\r\n"
+        "stats: frames_rx=120 replies_tx=120 write_errors=0 pushes_tx=0 disconnects=0 rx_dropped=0\r\n"
+        "OK\r\n"
         "console> "
     )
     snap = parse_console_status(sample_console)
     _check(snap.rtcm.frames == 60 and snap.rtcm.bytes == 10630, "rtcm frames/bytes 解析错误")
     _check(snap.rtcm.crc32 == 0x0ABC1234 and snap.rtcm.last_msg == 1230, "rtcm crc32/last_msg 解析错误")
     _check(snap.stats.frames_rx == 120 and snap.stats.replies_tx == 120 and snap.stats.rx_dropped == 0, "stats 解析错误")
+
+    class _DummySer:
+        def __init__(self, reply_map: dict[bytes, bytes]) -> None:
+            self._reply_map = reply_map
+            self._rx = bytearray()
+            self.written = bytearray()
+
+        @property
+        def in_waiting(self) -> int:
+            return len(self._rx)
+
+        def reset_input_buffer(self) -> None:
+            self._rx.clear()
+
+        def write(self, data: bytes) -> int:
+            self.written.extend(data)
+            self._rx.extend(self._reply_map.get(bytes(data), b""))
+            return len(data)
+
+        def flush(self) -> None:
+            pass
+
+        def read(self, size: int) -> bytes:
+            chunk = bytes(self._rx[:size])
+            del self._rx[:size]
+            return chunk
+
+    dummy_ser = _DummySer({
+        b"rtcm reset\r": b"rtcm reset\r\nOK\r\nconsole> ",
+        b"status rtcm\r": sample_console.encode("utf-8"),
+    })
+    dummy_con = SerialConsole.__new__(SerialConsole)
+    dummy_con.port = "dummy"
+    dummy_con.ser = dummy_ser  # type: ignore[assignment]
+    dummy_con.reset_rtcm()
+    _check(bytes(dummy_ser.written) == b"rtcm reset\r", "reset_rtcm 发送命令不符")
+
+    snap2 = dummy_con.read_status()
+    _check(bytes(dummy_ser.written) == b"rtcm reset\rstatus rtcm\r", "read_status 发送命令不符")
+    _check(snap2.rtcm.frames == 60 and snap2.stats.frames_rx == 120, "read_status 解析异常")
+
+    dummy_ser_err = _DummySer({b"rtcm reset\r": b"rtcm reset\r\nERR link not running\r\nconsole> "})
+    dummy_con.ser = dummy_ser_err  # type: ignore[assignment]
+    got_err = False
+    try:
+        dummy_con.reset_rtcm()
+    except RuntimeError:
+        got_err = True
+    _check(got_err, "reset_rtcm 收到 ERR 时应抛出 RuntimeError")
 
     # 5. 判定逻辑（无丢弃匹配 PASS / 无丢弃不匹配 FAIL / 有丢弃 OVERFLOW_DROPPED）
     before0 = ConsoleSnapshot(

@@ -62,4 +62,6 @@ private:
 };
 /** 存储模块的控制台命令表；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const cli::Cmd> storage_cmds() noexcept;
+/** store 子命令动词表，供 cli::add_verbs 登记。 */
+[[nodiscard]] std::span<const cli::Verb> store_verbs() noexcept;
 } // namespace app

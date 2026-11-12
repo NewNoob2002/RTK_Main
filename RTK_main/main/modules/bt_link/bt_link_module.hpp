@@ -141,6 +141,10 @@ private:
     size_t rtcm_size_ = 0;
     uint32_t rtcm_rejected_ = 0;
 };
-/** 链路模块的控制台命令表（alarm/pair/wl/policy）；静态存储，进程期有效。 */
+/** 链路模块的控制台命令表（bt/wl/alarm）；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const cli::Cmd> link_cmds() noexcept;
+/** bt/wl/alarm 子命令动词表，供 cli::add_verbs 登记。 */
+[[nodiscard]] std::span<const cli::Verb> bt_verbs() noexcept;
+[[nodiscard]] std::span<const cli::Verb> wl_verbs() noexcept;
+[[nodiscard]] std::span<const cli::Verb> alarm_verbs() noexcept;
 } // namespace app

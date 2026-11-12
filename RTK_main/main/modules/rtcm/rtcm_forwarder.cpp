@@ -33,6 +33,11 @@ void RtcmForwarder::reset() noexcept
     stats_ = RtcmStats{};
 }
 
+void RtcmForwarder::set_bytes_per_sec(uint32_t bps) noexcept
+{
+    stats_.bytes_per_sec = bps;
+}
+
 const RtcmStats &RtcmForwarder::stats() const noexcept
 {
     return stats_;

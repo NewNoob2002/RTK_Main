@@ -26,7 +26,14 @@ private:
     AppContext &context_;
     RtcmForwarder forwarder_{};
     uint32_t batch_version_ = 0;
+    uint32_t rate_window_ms_ = 0;
+    uint32_t rate_window_bytes_ = 0;
+    bool rate_started_ = false;
 };
+/** 打印 [rtcm] 分节及 ADR-0006 兼容的 rtcm/stats 两行；仅 console REPL 任务读取 DataCenter。 */
+void print_rtcm_status() noexcept;
 /** RTCM 模块的控制台命令表；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const cli::Cmd> rtcm_cmds() noexcept;
+/** rtcm 子命令动词表，供 cli::add_verbs 登记。 */
+[[nodiscard]] std::span<const cli::Verb> rtcm_verbs() noexcept;
 } // namespace app

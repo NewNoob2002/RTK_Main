@@ -53,6 +53,7 @@ struct Entry {
 
 std::array<Entry, kMaxCmds> s_entries{};
 size_t s_entry_count = 0U;
+Entry s_help_entry{};
 bool s_started = false;
 
 bool is_empty_text(const char *text) noexcept
@@ -164,7 +165,7 @@ int cmd_help(void * /*ctx*/, int argc, char **argv) noexcept
         std::printf("%s\n", (cmd->help != nullptr) ? cmd->help : "");
         return 0;
     }
-    return fail("unknown group: %s", target);
+    return fail("unknown group");
 }
 
 // 每条命令的入口：先复位回执状态，再按 handler 返回值统一打印 OK / ERR（ADR-0009 §2.5）。
@@ -189,12 +190,13 @@ int trampoline(void *ctx, int argc, char **argv) noexcept
 
 esp_err_t register_help() noexcept
 {
+    s_help_entry = Entry{cmd_help, nullptr};
     esp_console_cmd_t command{};
     command.command = kHelpName;
     command.help = kHelpSummary;
     command.hint = "<group>";
-    command.func_w_context = cmd_help;
-    command.context = nullptr;
+    command.func_w_context = trampoline;
+    command.context = &s_help_entry;
     // 必须先注销 IDF 自带的 help：IDF v6.1 commands.c:156-160 同名覆盖时不清空旧的 func，
     // 结果 func 与 func_w_context 都会被调用（:257-260），help 输出两遍。
     const esp_err_t err = esp_console_cmd_deregister(kHelpName);
