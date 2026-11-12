@@ -10,6 +10,7 @@
 
 #include "core/command_router.hpp"
 #include "core/reply.hpp"
+#include "core/trace_codes.hpp"
 #include "proto/alarm_codec.hpp"
 #include "proto/frame.hpp"
 
@@ -89,6 +90,8 @@ alarm::Status make_status(const AlarmSource &alarm_source, const LinkManager &li
     }
     status.flags = flags;
     status.uptime_ms = now_ms;
+    // 每次组帧都报告当前报警状态，事件里的 session 无意义（应答/推送由调用方打）。
+    trace_alarm(AlarmTrace::kState, 0, static_cast<uint32_t>(status.state), static_cast<uint32_t>(status.level));
     return status;
 }
 
@@ -124,10 +127,13 @@ DispatchResult handle_test_override(AlarmSource &alarm_source, const proto::Fram
         if (!alarm_source.set_override(frame.payload[1], frame.payload[2])) {
             return reply_fail(reply, frame.msg_id, frame.type);
         }
+        trace_alarm(AlarmTrace::kOverride, 0, 1,
+                    (static_cast<uint32_t>(frame.payload[1]) << 8U) | static_cast<uint32_t>(frame.payload[2]));
         return reply_ok(reply, frame.msg_id, frame.type);
     }
     if (action == kTestActionClear) {
         alarm_source.clear_override();
+        trace_alarm(AlarmTrace::kOverride, 0, 0);
         return reply_ok(reply, frame.msg_id, frame.type);
     }
     return reply_fail(reply, frame.msg_id, frame.type);
@@ -151,6 +157,7 @@ bool AlarmService::build_status_push(uint16_t seq, uint32_t now_ms, Reply &reply
     const alarm::Status status = make_status(alarm_, link_, info_, seq, now_ms);
     std::array<uint8_t, alarm::kStatusLen> payload{};
     if (alarm::encode_status(status, payload) != payload.size()) {
+        trace_alarm(AlarmTrace::kPushFail, 0, static_cast<uint32_t>(fw::Status::kInvalidArg));
         return false;
     }
 
@@ -158,9 +165,12 @@ bool AlarmService::build_status_push(uint16_t seq, uint32_t now_ms, Reply &reply
     const fw::Status result =
         proto::build_frame(reply.buf, alarm::kMsgStatus, proto::sender::kDevice, msg_type::kPush, payload, len);
     if (!is_ok(result)) {
+        trace_alarm(AlarmTrace::kPushFail, 0, static_cast<uint32_t>(result));
         return false;
     }
     reply.len = len;
+    // 目标会话在写成功处由 LinkService 记录（session 0 表示“已组帧待发送”）。
+    trace_alarm(AlarmTrace::kPush, 0, static_cast<uint32_t>(status.state), static_cast<uint32_t>(status.level));
     return true;
 }
 

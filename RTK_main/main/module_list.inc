@@ -1,6 +1,7 @@
 // 模块声明与注册清单；类型、成员、名称、编号、执行器、周期在此保持同一顺序。
 #ifndef MODULE_DEF
 #include "modules/bt_link/bt_link_module.hpp"
+#include "modules/debug/debug_module.hpp"
 #include "modules/rtcm/rtcm_module.hpp"
 #include "modules/storage/storage_module.hpp"
 #include "modules/system/system_module.hpp"
@@ -11,4 +12,6 @@ MODULE_DEF(RtcmModule, rtcm, "rtcm", kRtcm, kLink, 0)
 // storage.init 必须在 system.prepare（BT 初始化）之前单独调用；执行器再次 init 时为幂等。
 MODULE_DEF(StorageModule, storage, "storage", kStorage, kLink, 0)
 MODULE_DEF(SystemModule, system, "system", kSystem, kLink, 0)
+// debug 必须在 link 执行器内：追踪环由它的输出任务独占读取，命令也在这里改状态。
+MODULE_DEF(DebugModule, debug, "debug", kDebug, kLink, 0)
 #endif

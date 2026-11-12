@@ -19,7 +19,9 @@
 #define pdPASS  1
 
 #define pdMS_TO_TICKS(ms) ((TickType_t)(ms))
-#define portMAX_DELAY     ((TickType_t)0xFFFFFFFFUL)
+/* tick 率 1000 Hz，tick 与 ms 一一对应（与目标板配置一致）。 */
+#define pdTICKS_TO_MS(t) ((uint32_t)(t))
+#define portMAX_DELAY    ((TickType_t)0xFFFFFFFFUL)
 
 typedef uint32_t TickType_t;
 typedef uint32_t EventBits_t;
@@ -105,6 +107,7 @@ StreamBufferHandle_t xStreamBufferCreateStatic(size_t buffer_size, size_t trigge
                                                StaticStreamBuffer_t *stream_buffer);
 size_t xStreamBufferSend(StreamBufferHandle_t stream_buffer, const void *data, size_t len, TickType_t ticks_to_wait);
 size_t xStreamBufferReceive(StreamBufferHandle_t stream_buffer, void *data, size_t len, TickType_t ticks_to_wait);
+size_t xStreamBufferBytesAvailable(StreamBufferHandle_t stream_buffer);
 BaseType_t xStreamBufferReset(StreamBufferHandle_t stream_buffer);
 void vStreamBufferDelete(StreamBufferHandle_t stream_buffer);
 

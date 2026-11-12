@@ -441,3 +441,14 @@ esp_err_t spp_server_get_local_addr(uint8_t addr[SPP_SERVER_ADDR_LEN])
     }
     return ESP_OK;
 }
+
+/* 追踪钩子存储：NULL 表示未安装（初始化前的静态零值）。 */
+spp_server_trace_fn s_spp_trace;
+
+void spp_server_set_trace_hook(spp_server_trace_fn fn)
+{
+    /* 临界区内只写一个指针，不调 FreeRTOS API；读侧在同一临界区里拷贝后调用。 */
+    taskENTER_CRITICAL(&s_spp_mux);
+    s_spp_trace = fn;
+    taskEXIT_CRITICAL(&s_spp_mux);
+}

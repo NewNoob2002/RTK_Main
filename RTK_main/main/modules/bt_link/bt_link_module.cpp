@@ -16,6 +16,9 @@ constexpr const char *kTag = "bt_link";
 constexpr size_t kRxBudgetBytes = 256;
 constexpr uint32_t kRoundBudgetMs = 20;
 constexpr size_t kAlarmArgBytes = 2;
+// RTCM3 线路帧：1 B 前导 + 2 B 长度，载荷首 12 bit 为消息号。
+constexpr size_t kRtcmPayloadOffset = 3;
+constexpr uint32_t kRtcmMsgShiftBits = 4;
 } // namespace
 
 void BtLinkModule::SessionSink::bind(BtLinkModule &owner, core::SessionHandle handle) noexcept
@@ -59,12 +62,23 @@ bool BtLinkModule::SessionSink::dispatch_one() noexcept
     }
     if (owner_->link_manager_.role(handle_) != core::Role::kPhone) {
         ++owner_->rtcm_rejected_;
+        trace_rtcm(RtcmTrace::kReject, handle_, static_cast<uint32_t>(RtcmReject::kRole),
+                   static_cast<uint32_t>(wire.size()));
     } else if (wire.size() <= owner_->rtcm_batch_.size() - owner_->rtcm_size_) {
         std::memcpy(std::span{owner_->rtcm_batch_}.subspan(owner_->rtcm_size_).data(), wire.data(), wire.size());
         owner_->rtcm_size_ += wire.size();
+        /* RTCM3：1 B 前导 + 10 bit 长度，首个载荷的 12 bit 是消息号；分流器保证至少 6 B，仍留防护。 */
+        uint32_t msg = 0;
+        if (wire.size() >= kMinWireBytes) {
+            msg = (static_cast<uint32_t>(wire[kRtcmPayloadOffset]) << kRtcmMsgShiftBits) |
+                  (static_cast<uint32_t>(wire[kRtcmPayloadOffset + 1U]) >> kRtcmMsgShiftBits);
+        }
+        trace_rtcm(RtcmTrace::kFrame, handle_, msg, static_cast<uint32_t>(wire.size()));
     } else {
         // 两会话遗留帧 + 每轮 256 B 的界限被破坏；不允许静默覆盖。
         ESP_LOGE(kTag, "RTCM batch capacity violated");
+        trace_rtcm(RtcmTrace::kReject, handle_, static_cast<uint32_t>(RtcmReject::kCapacity),
+                   static_cast<uint32_t>(wire.size()));
         healthy_ = false;
     }
     return false;
@@ -286,12 +300,22 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
     const auto heartbeat = link_service().last_heartbeat();
     context_.data.heartbeat.write({heartbeat.has_value(), heartbeat.value_or(proto::alarm::Heartbeat{})});
     DemuxStats demux = retired_demux_;
-    for (const auto &entry : sessions_) {
+    for (auto &entry : sessions_) {
         if (entry.used) {
             const auto &counts = entry.demux.stats();
             demux.unknown_bytes += counts.unknown_bytes;
             demux.product_rejects += counts.decoder[kProductIndex].rejects;
             demux.rtcm_rejects += counts.decoder[kRtcmIndex].rejects;
+            /* 重同步与未知字节只在分流器内部累计；这里每轮取一次增量上报，
+             * 避免在逐字节 feed 路径上读统计。 */
+            if (counts.resyncs > entry.seen_resyncs) {
+                trace_rtcm(RtcmTrace::kResync, entry.handle, counts.resyncs - entry.seen_resyncs);
+                entry.seen_resyncs = counts.resyncs;
+            }
+            if (counts.unknown_bytes > entry.seen_unknown) {
+                trace_rtcm(RtcmTrace::kUnknown, entry.handle, counts.unknown_bytes - entry.seen_unknown);
+                entry.seen_unknown = counts.unknown_bytes;
+            }
         }
     }
     context_.data.demux_stats.write(demux);

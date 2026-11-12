@@ -32,6 +32,7 @@
 #error "spp_server 需要 32 位 tick（configUSE_16_BIT_TICKS 必须为 0）"
 #endif
 
+#include <assert.h> /* C11 static_assert 宏来源 */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -63,7 +64,7 @@
 
 /* 每槽至多 OPEN/DATA/RX_DROP/CLOSE 各一个；CLOSE 交付前禁止复用。
  * 上界来自接纳背压，不依赖应用持续 poll 或物理连接数限制重连次数。 */
-_Static_assert(SPP_SERVER_EVENT_QUEUE_LEN >= (4U * SPP_SERVER_MAX_SESSIONS), "事件队列不足");
+static_assert(SPP_SERVER_EVENT_QUEUE_LEN >= (4U * SPP_SERVER_MAX_SESSIONS), "事件队列不足");
 
 /* 事件位：低 2 位为每会话唤醒位，其余为初始化阶段完成位。 */
 #define SPP_SERVER_BIT_WAKE(idx)   ((EventBits_t)(1UL << (idx)))
@@ -71,9 +72,9 @@ _Static_assert(SPP_SERVER_EVENT_QUEUE_LEN >= (4U * SPP_SERVER_MAX_SESSIONS), "�
 #define SPP_SERVER_BIT_START_DONE  ((EventBits_t)(1UL << 9))
 #define SPP_SERVER_BIT_UNINIT_DONE ((EventBits_t)(1UL << 10))
 
-_Static_assert(sizeof(TickType_t) == 4U, "spp_server 假定 32 位 TickType_t");
-_Static_assert(SPP_SERVER_TX_CHUNK <= UINT16_MAX, "tx_len 以 uint16_t 保存分块长度");
-_Static_assert(SPP_SERVER_MAX_SESSIONS <= 8U, "唤醒位只有低 8 位可用");
+static_assert(sizeof(TickType_t) == 4U, "spp_server 假定 32 位 TickType_t");
+static_assert(SPP_SERVER_TX_CHUNK <= UINT16_MAX, "tx_len 以 uint16_t 保存分块长度");
+static_assert(SPP_SERVER_MAX_SESSIONS <= 8U, "唤醒位只有低 8 位可用");
 
 typedef enum {
     SPP_SERVER_TX_IDLE = 0,  /* 无在途请求，可接受下一次提交 */
@@ -102,11 +103,12 @@ typedef struct {
     uint32_t users;
     bool tx_submitting; /* 发送任务正处于 esp_spp_write 调用中 */
     spp_server_tx_state_t tx_state;
-    uint32_t tx_seq;      /* 每提交一次 +1，用于匹配完成事件 */
-    uint32_t tx_done_seq; /* 最近一次完成的序号 */
-    esp_err_t tx_result;  /* 最近一次完成的错误码 */
-    uint16_t tx_len;      /* 本次提交长度（≤ SPP_SERVER_TX_CHUNK） */
-    int tx_done_len;      /* WRITE_EVT 回报长度（诊断用） */
+    uint32_t tx_seq;           /* 每提交一次 +1，用于匹配完成事件 */
+    uint32_t tx_done_seq;      /* 最近一次完成的序号 */
+    esp_err_t tx_result;       /* 最近一次完成的错误码 */
+    uint16_t tx_len;           /* 本次提交长度（≤ SPP_SERVER_TX_CHUNK） */
+    int tx_done_len;           /* WRITE_EVT 回报长度（诊断用） */
+    TickType_t tx_submit_tick; /* esp_spp_write 提交时刻，仅用于追踪耗时 */
     uint8_t tx_buf[SPP_SERVER_TX_CHUNK];
     StreamBufferHandle_t rx;
     StaticStreamBuffer_t rx_struct;
@@ -175,6 +177,29 @@ extern portMUX_TYPE s_spp_mux;
  * s_spp.tx_inflight_cancelled=true 表示该提交期间会话被 CLOSE 取消；要等 worker 从 esp_spp_write 返回
  * （静态 tx_buf 不再被 API 使用）后才释放 owner，避免取消后仍复用缓冲/误归属。 */
 extern int s_spp_tx_inflight;
+
+/* ---- 追踪钩子（ADR-0009；spp_server.h 冻结接口 spp_server_set_trace_hook 的存储） ---- */
+
+/* 钩子函数指针：写侧在任务上下文安装，读侧在 BTC 回调/发送任务/链路任务里读取。
+ * 用 s_spp_mux 临界区保护而不用 _Atomic：临界区只做一次指针读取（不阻塞、不调 FreeRTOS API），
+ * 开销与原子读相当，而 C11 _Atomic 在本工程的两套主机前端（clang C11 / clangd 的 C++ 回退）上
+ * 诊断不一致。所有调用点都必须在临界区之外（本文件的调用点已满足），否则 portENTER_CRITICAL
+ * 在同一核上不可重入。 */
+extern spp_server_trace_fn s_spp_trace;
+
+/* 非空才调用：先在本临界区取出函数指针，出临界区后再调用，避免钩子实现里再进临界区。 */
+static inline void spp_server_trace(spp_server_trace_code_t code, uint32_t handle, uint32_t a, uint32_t b)
+{
+    spp_server_trace_fn fn = NULL;
+
+    taskENTER_CRITICAL(&s_spp_mux);
+    fn = s_spp_trace;
+    taskEXIT_CRITICAL(&s_spp_mux);
+
+    if (fn != NULL) {
+        fn(code, handle, a, b);
+    }
+}
 
 /* ---- 跨文件内部函数（每个注明了允许的调用上下文） ---- */
 

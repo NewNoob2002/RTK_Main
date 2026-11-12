@@ -9,6 +9,7 @@
 #include "esp_task_wdt.h"
 #include "rtos/critical_section.hpp"
 #include "rtos/esp_status.hpp"
+#include "rtos/exec_trace.hpp"
 
 namespace rtos {
 namespace {
@@ -176,6 +177,8 @@ fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result, uin
     }
     const uint32_t begin = now_ms();
     if (xQueueSend(cmd_q_, &queued, 0) != pdTRUE) {
+        // 队列满：调用方任务上下文，记事件后立即返回 kBusy（不阻塞、不重试）。
+        trace_exec(ExecTrace::kCallDrop, static_cast<uint32_t>(cmd.target), timeout_ms);
         return fw::Result::kBusy;
     }
     for (;;) {
@@ -273,6 +276,10 @@ void Executor::run() noexcept
             }
         }
         const uint32_t duration = now_ms() - begin;
+        // 超轮预算即记事件：此处是本任务上下文，写环不阻塞；格式化留给 DebugModule。
+        if (duration > cfg_.round_budget_ms) {
+            trace_exec(ExecTrace::kRoundOverrun, duration, cfg_.round_budget_ms);
+        }
         // IDF 高水位返回字节；本工程 ESP32 StackType_t 为 uint8_t，结果在 u32 范围内。
         const uint32_t stack_free = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
         {

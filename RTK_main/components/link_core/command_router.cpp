@@ -3,6 +3,7 @@
 // 判定顺序与旧 dispatcher 一致：未登记 → kNoReply（先于角色检查）→ 角色不在 RoleMask → kDenied → handler。
 
 #include "core/command_router.hpp"
+#include "core/trace_codes.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -81,11 +82,14 @@ DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, u
             continue;
         }
         if ((entry.roles & mask) == 0) {
+            // 无路由：路由器不知道会话句柄，session 记 0。
+            trace_proto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msg_id), static_cast<uint32_t>(role));
             return DispatchResult::kDenied;
         }
         return entry.handler(entry.self, frame, now_ms, reply);
     }
     // 未登记 ID（含 5.4 保留 ID）不回复，先于角色检查。
+    trace_proto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msg_id), static_cast<uint32_t>(role));
     return DispatchResult::kNoReply;
 }
 

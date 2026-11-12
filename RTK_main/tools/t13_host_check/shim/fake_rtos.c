@@ -168,8 +168,7 @@ BaseType_t xQueueSend(QueueHandle_t queue, const void *item, TickType_t ticks_to
             return pdFALSE;
         }
     }
-    memcpy(queue->buf + (((queue->head + queue->count) % queue->capacity) * queue->item_size), item,
-           queue->item_size);
+    memcpy(queue->buf + (((queue->head + queue->count) % queue->capacity) * queue->item_size), item, queue->item_size);
     queue->count++;
     pthread_cond_signal(&queue->cond);
     pthread_mutex_unlock(&queue->lock);
@@ -331,6 +330,19 @@ size_t xStreamBufferSend(StreamBufferHandle_t stream_buffer, const void *data, s
     pthread_cond_broadcast(&stream_buffer->cond);
     pthread_mutex_unlock(&stream_buffer->lock);
     return written;
+}
+
+size_t xStreamBufferBytesAvailable(StreamBufferHandle_t stream_buffer)
+{
+    size_t available = 0U;
+
+    if ((stream_buffer == NULL) || (!stream_buffer->created)) {
+        return 0U;
+    }
+    pthread_mutex_lock(&stream_buffer->lock);
+    available = stream_buffer->count;
+    pthread_mutex_unlock(&stream_buffer->lock);
+    return available;
 }
 
 /* ---------------- 确定性读暂停 ---------------- */

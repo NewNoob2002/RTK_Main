@@ -96,6 +96,9 @@ private:
         SessionSink sink{};
         SessionDemux demux{};
         bool demux_ready = false;
+        // 分流器累计统计的上报基线，仅 kLink 读写；会话复用时归零。
+        uint32_t seen_resyncs = 0;
+        uint32_t seen_unknown = 0;
     };
 
     [[nodiscard]] SessionEntry *session_find(core::SessionHandle handle) noexcept;

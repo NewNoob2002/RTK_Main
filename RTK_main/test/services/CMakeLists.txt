@@ -72,6 +72,8 @@ target_compile_options(dev_proto_c PRIVATE ${PROJ_C_STRICT})
 # 被测代码：device_proto 的 C++ 外观 + link_core（旧 dispatcher 保留作为 golden 基准）。
 add_library(link_svc STATIC
     ${PROJ_ROOT}/components/app_fw/src/status.cpp
+    # link_core 的事件点经 fw::trace 上报（ADR-0009），测试要链上实现。
+    ${PROJ_ROOT}/components/app_fw/src/trace.cpp
     ${DEV_PROTO_DIR}/bytes.cpp
     ${DEV_PROTO_DIR}/frame.cpp
     ${DEV_PROTO_DIR}/alarm_codec.cpp
@@ -95,7 +97,7 @@ target_link_libraries(link_svc PUBLIC dev_proto_c)
 target_compile_options(link_svc PRIVATE ${PROJ_CXX_STRICT})
 
 enable_testing()
-foreach(name test_command_router test_services_golden)
+foreach(name test_command_router test_services_golden test_link_trace)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} link_svc unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})

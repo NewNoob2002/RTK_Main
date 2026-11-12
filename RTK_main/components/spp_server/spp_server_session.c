@@ -196,11 +196,13 @@ bool spp_server_session_free(uint32_t handle)
 void spp_server_session_set_congested(uint32_t handle, bool congested)
 {
     bool found = false;
+    bool changed = false;
     uint8_t idx = 0U;
 
     taskENTER_CRITICAL(&s_spp_mux);
     for (idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
         if (s_spp.sessions[idx].in_use && (s_spp.sessions[idx].handle == handle)) {
+            changed = (s_spp.sessions[idx].congested != congested);
             s_spp.sessions[idx].congested = congested;
             found = true;
             break;
@@ -208,6 +210,10 @@ void spp_server_session_set_congested(uint32_t handle, bool congested)
     }
     taskEXIT_CRITICAL(&s_spp_mux);
 
+    /* 只记真实变化（a = 1 拥塞 / 0 解除），重复的 CONG_EVT 不刷屏。 */
+    if (found && changed) {
+        spp_server_trace(SPP_SERVER_TRACE_CONG, handle, congested ? 1U : 0U, 0U);
+    }
     if (found && (s_spp.rtos.evt_group != NULL)) {
         (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_WAKE(idx));
     }

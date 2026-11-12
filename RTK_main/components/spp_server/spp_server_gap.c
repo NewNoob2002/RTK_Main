@@ -36,6 +36,8 @@ static void spp_server_handle_start(esp_spp_cb_param_t *param)
 
     if (param->start.status == ESP_SPP_SUCCESS) {
         ESP_LOGI(SPP_SERVER_TAG, "server started, scn=%u", (unsigned)param->start.scn);
+        /* a = scn */
+        spp_server_trace(SPP_SERVER_TRACE_SRV_START, 0U, (uint32_t)param->start.scn, 0U);
     } else {
         ESP_LOGE(SPP_SERVER_TAG, "server start failed: %d", (int)param->start.status);
     }
@@ -139,6 +141,8 @@ void spp_server_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param
         } else {
             ESP_LOGW(SPP_SERVER_TAG, "auth failed: %d", (int)param->auth_cmpl.stat);
         }
+        /* 认证完成（成功与失败都记）：a = 状态码。 */
+        spp_server_trace(SPP_SERVER_TRACE_AUTH, 0U, (uint32_t)param->auth_cmpl.stat, 0U);
         break;
 
     case ESP_BT_GAP_PIN_REQ_EVT:

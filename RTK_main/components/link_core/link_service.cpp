@@ -4,6 +4,7 @@
 // 白名单脏标志、心跳记录、断开动作与错误计数逻辑与 J2a 之前逐行一致。
 
 #include "core/link_service.hpp"
+#include "core/trace_codes.hpp"
 
 #include <array>
 #include <cstddef>
@@ -106,11 +107,26 @@ void LinkService::on_data(SessionHandle handle, std::span<const uint8_t> data, u
 
     proto::FrameView frame{};
     for (const uint8_t byte : data) {
-        if (slot->parser.feed(byte, frame) != proto::ParseResult::kFrame) {
+        const proto::ParseResult parsed = slot->parser.feed(byte, frame);
+        if (parsed == proto::ParseResult::kCrcError) {
+            // FrameParser 不暴露丢弃字节数，用会话累计 CRC 错误数代替（报告已记录偏离）。
+            trace_proto(ProtoTrace::kBadCrc, handle, slot->parser.crc_errors());
+            continue;
+        }
+        if (parsed == proto::ParseResult::kLengthError) {
+            // 同上：声明长度不可得，用累计长度错误数代替（报告已记录偏离）。
+            trace_proto(ProtoTrace::kBadLength, handle, slot->parser.length_errors());
+            continue;
+        }
+        if (parsed != proto::ParseResult::kFrame) {
             continue;
         }
 
         ++stats_.frames_rx;
+        // 帧摘要：高位 msg_id，低位 type；b 为负载长度。
+        trace_proto(ProtoTrace::kFrame, handle,
+                    (static_cast<uint32_t>(frame.msg_id) << 8U) | static_cast<uint32_t>(frame.type),
+                    static_cast<uint32_t>(frame.payload.size()));
         const Role role_before = link_.role(handle);
         Actions act;
         const Role role_after = link_.on_frame(handle, frame.sender, frame.msg_id, now_ms, act);
@@ -126,8 +142,12 @@ void LinkService::on_data(SessionHandle handle, std::span<const uint8_t> data, u
             const fw::Status status = transport_.write(handle, reply_.bytes(), kWriteTimeoutMs);
             if (is_ok(status)) {
                 ++stats_.replies_tx;
+                trace_proto(ProtoTrace::kReply, handle, static_cast<uint32_t>(frame.msg_id),
+                            static_cast<uint32_t>(status));
             } else {
                 ++stats_.write_errors;
+                trace_proto(ProtoTrace::kReplyError, handle, static_cast<uint32_t>(status),
+                            static_cast<uint32_t>(frame.msg_id));
             }
         }
 
@@ -167,6 +187,7 @@ void LinkService::tick(uint32_t now_ms) noexcept
 
     for (size_t i = 0; i < count; ++i) {
         if (!alarm_.build_status_push(push_seq_, now_ms, reply_)) {
+            trace_alarm(AlarmTrace::kPushFail, handles[i], 0);
             continue;
         }
         const fw::Status status = transport_.write(handles[i], reply_.bytes(), kWriteTimeoutMs);
@@ -174,6 +195,7 @@ void LinkService::tick(uint32_t now_ms) noexcept
             ++stats_.pushes_tx;
         } else {
             ++stats_.write_errors;
+            trace_alarm(AlarmTrace::kPushFail, handles[i], static_cast<uint32_t>(status));
         }
     }
     ++push_seq_;

@@ -30,10 +30,18 @@ public:
     /** 仅 kLink，非 ISR；跳过去抖同步写 NVS，返回后端错误。 */
     [[nodiscard]] esp_err_t flush_whitelist(uint32_t now_ms) noexcept;
 
+    /** 按 fw::StoreKey 表读 NVS（启动前或仅 kLink，非 ISR）；缺键返回 kNotFound。 */
+    [[nodiscard]] fw::Result load_keys(std::span<const fw::StoreKey> keys) noexcept;
+    /** 按 fw::StoreKey 表同步写 NVS（仅 kLink，非 ISR）；任一键失败即返回该错误。 */
+    [[nodiscard]] fw::Result save_keys(std::span<const fw::StoreKey> keys) noexcept;
+    /** 已登记的键表（当前只有 debug）；init() 会逐个加载。 */
+    [[nodiscard]] static std::span<const std::span<const fw::StoreKey>> key_tables() noexcept;
+
 private:
     friend struct ModuleTestAccess;
     void load_whitelist() noexcept;
     void load_sn() noexcept;
+    void load_key_tables() noexcept;
     [[nodiscard]] fw::Result whitelist_load(std::span<const uint8_t> in) noexcept;
     [[nodiscard]] fw::Result whitelist_save(std::span<uint8_t> out, size_t &len) const noexcept;
     [[nodiscard]] fw::Result sn_load(std::span<const uint8_t> in) noexcept;

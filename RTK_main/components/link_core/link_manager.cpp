@@ -3,10 +3,22 @@
 // 所有时间比较用无符号差值，容忍 32 位毫秒回绕。
 
 #include "core/link_manager.hpp"
+#include "core/trace_codes.hpp"
 
 namespace core {
 
 namespace {
+
+// 事件参数统一用 uint32_t；底层类型为 uint8_t 的枚举转宽不收窄。
+constexpr uint32_t role_value(Role role) noexcept
+{
+    return static_cast<uint32_t>(role);
+}
+
+constexpr uint32_t reason_value(LinkReason reason) noexcept
+{
+    return static_cast<uint32_t>(reason);
+}
 
 void action_add(Actions &act, SessionHandle handle) noexcept
 {
@@ -94,20 +106,26 @@ Role LinkManager::on_open(SessionHandle handle, const BtAddr &addr, uint32_t now
             return Role::kNone;
         }
         role = Role::kAlarm;
+        trace_link(LinkTrace::kOpen, handle, role_value(role), reason_value(LinkReason::kWhitelisted));
     } else if (!phone_online) {
         // 规则 4 第一支：无 PHONE 时未知设备作为 PHONE。
         role = Role::kPhone;
+        trace_link(LinkTrace::kOpen, handle, role_value(role), reason_value(LinkReason::kFirstPhone));
         if (policy_ == Policy::kPhonePreempt) {
             for (Session &session : sessions_) {
                 if (session.in_use && (session.role == Role::kAlarm)) {
+                    const uint32_t victim = session.handle;
                     action_add(act, session.handle);
                     session.in_use = false;
+                    trace_link(LinkTrace::kKick, victim, role_value(Role::kAlarm),
+                               reason_value(LinkReason::kPolicyPreempt));
                 }
             }
         }
     } else if (pairing_) {
         // 规则 4 第二支：手机在线且配对窗口打开，等待 HELLO。
         role = Role::kPending;
+        trace_link(LinkTrace::kOpen, handle, role_value(role), reason_value(LinkReason::kPendingHello));
     } else {
         action_add(act, handle);
         return Role::kNone;
@@ -127,6 +145,7 @@ void LinkManager::on_close(SessionHandle handle) noexcept
 {
     for (Session &session : sessions_) {
         if (session.in_use && (session.handle == handle)) {
+            trace_link(LinkTrace::kClose, handle, role_value(session.role));
             session.in_use = false;
             return;
         }
@@ -159,20 +178,26 @@ Role LinkManager::on_frame(SessionHandle handle, uint8_t sender, uint16_t msg_id
             // 配对窗口外的 HELLO：未授权报警器，断开。
             action_add(act, handle);
             found->in_use = false;
+            trace_link(LinkTrace::kClose, handle, role_value(found->role), reason_value(LinkReason::kOther));
             return Role::kNone;
         }
         if (!contains_addr(std::span<const BtAddr>(alarms_.data(), alarm_count_), found->addr)) {
             // 白名单已满：拒绝并断开。
             if (alarm_count_ >= kMaxAlarms) {
                 action_add(act, handle);
+                const Role rejected = found->role;
                 found->in_use = false;
+                trace_link(LinkTrace::kClose, handle, role_value(rejected), reason_value(LinkReason::kNoSlot));
                 return Role::kNone;
             }
             alarms_[alarm_count_] = found->addr;
             ++alarm_count_;
+            trace_link(LinkTrace::kWhitelistAdd, handle, static_cast<uint32_t>(alarm_count_));
         }
+        const uint32_t previous = role_value(found->role);
         found->role = Role::kAlarm;
         found->since_ms = now_ms;
+        trace_link(LinkTrace::kRoleChange, handle, previous, role_value(found->role));
         return Role::kAlarm;
     }
 
@@ -196,11 +221,15 @@ void LinkManager::tick(uint32_t now_ms, Actions &act) noexcept
         }
         if (session.role == Role::kAlarm) {
             if (elapsed_exceeds(now_ms, session.last_rx_ms, kAlarmRxTimeoutMs)) {
+                trace_link(LinkTrace::kAlarmRxTimeout, session.handle,
+                           static_cast<uint32_t>(now_ms - session.last_rx_ms));
                 action_add(act, session.handle);
                 session.in_use = false;
             }
         } else if (session.role == Role::kPending) {
             if (elapsed_exceeds(now_ms, session.since_ms, kPendingTimeoutMs)) {
+                trace_link(LinkTrace::kPendingTimeout, session.handle,
+                           static_cast<uint32_t>(now_ms - session.since_ms));
                 action_add(act, session.handle);
                 session.in_use = false;
             }
@@ -211,6 +240,7 @@ void LinkManager::tick(uint32_t now_ms, Actions &act) noexcept
 
     if (pairing_ && elapsed_reaches(now_ms, pair_start_ms_, kPairWindowMs)) {
         pairing_ = false;
+        trace_link(LinkTrace::kPairClose, 0, 1);
     }
 }
 
@@ -250,6 +280,7 @@ void LinkManager::pair_open(uint32_t now_ms) noexcept
 {
     pairing_ = true;
     pair_start_ms_ = now_ms;
+    trace_link(LinkTrace::kPairOpen, 0, static_cast<uint32_t>(kPairWindowMs));
 }
 
 bool LinkManager::is_pairing() const noexcept
@@ -260,6 +291,7 @@ bool LinkManager::is_pairing() const noexcept
 void LinkManager::whitelist_clear() noexcept
 {
     alarm_count_ = 0;
+    trace_link(LinkTrace::kWhitelistClear, 0);
 }
 
 std::span<const BtAddr> LinkManager::whitelist() const noexcept

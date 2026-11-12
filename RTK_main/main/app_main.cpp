@@ -126,11 +126,12 @@ void start_link() noexcept
 void start_console() noexcept
 {
     constexpr const char *kConsolePrompt = "console> ";
-    const std::array<std::span<const cli::Cmd>, 4> cmd_tables{{
+    const std::array<std::span<const cli::Cmd>, 5> cmd_tables{{
         app::system_cmds(),
         app::link_cmds(),
         app::storage_cmds(),
         app::rtcm_cmds(),
+        app::debug_cmds(),
     }};
     /* 按原顺序注册命令，任一失败即停止控制台初始化。 */
     for (const auto table : cmd_tables) {
@@ -139,6 +140,12 @@ void start_console() noexcept
             ESP_LOGE(kTag, "console add failed: %s", esp_err_to_name(console_err));
             return;
         }
+    }
+    /* debug 用动词表分派；必须在 start 之前登记。 */
+    const esp_err_t verbs_err = cli::add_verbs("debug", "追踪类别、周期报告与持久化", app::debug_verbs());
+    if (verbs_err != ESP_OK) {
+        ESP_LOGE(kTag, "console verbs failed: %s", esp_err_to_name(verbs_err));
+        return;
     }
     const esp_err_t console_err = cli::start(kConsolePrompt);
     if (console_err != ESP_OK) {
@@ -164,6 +171,11 @@ extern "C" void app_main(void)
     ESP_LOGI(kTag, "RTK_main %.*s boot", static_cast<int>(app::kAppVersion.size()), app::kAppVersion.data());
     ESP_LOGI(kTag, "reset reason: %s", reset_reason_name(esp_reset_reason()));
     s_app.data.init();
+    /* ADR-0009：追踪环要最早装上，否则启动期的 NVS/存储事件会丢失（执行器稍后再 init 一次，幂等）。 */
+    const auto traced = s_app.debug.init();
+    if (!fw::is_ok(traced)) {
+        ESP_LOGE(kTag, "debug module init failed");
+    }
     /* NVS/SN 必须先于 BT 初始化，执行器再次 init 存储模块时为幂等。 */
     const auto loaded = s_app.storage.init();
     if (!fw::is_ok(loaded)) {

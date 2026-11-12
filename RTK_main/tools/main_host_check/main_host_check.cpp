@@ -646,6 +646,10 @@ esp_err_t esp_task_wdt_reset(void)
 {
     return ESP_OK;
 }
+void vTaskDelete(TaskHandle_t)
+{
+    /* host 替身：pthread 入口返回即结束线程；追踪任务不在 host 场景启动，这里只是链接占位。 */
+}
 void vTaskDelay(TickType_t ticks)
 {
     s_clock += ticks;
@@ -693,6 +697,8 @@ esp_err_t spp_server_disconnect(uint32_t)
 {
     return ESP_OK;
 }
+/* host 无 SPP 驱动：追踪钩子登记接受即返回（DebugModule::init 会调用）。 */
+void spp_server_set_trace_hook(spp_server_trace_fn) {}
 esp_err_t nvs_store_init(void)
 {
     return ESP_OK;

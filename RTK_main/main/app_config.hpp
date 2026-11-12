@@ -20,7 +20,7 @@ inline constexpr size_t kMaxAlarms = core::kMaxAlarms;
 inline constexpr size_t kDeviceNameBuf = 32;
 
 /** 模块编号（注册清单使用）；枚举顺序即 ID，勿插入或重排。 */
-enum class ModuleKind : uint8_t { kBtLink, kRtcm, kStorage, kSystem, kSystemMode };
+enum class ModuleKind : uint8_t { kBtLink, kRtcm, kStorage, kSystem, kSystemMode, kDebug };
 /** 执行器编号；本轮只有一个链路执行器。 */
 enum class ExecKind : uint8_t { kLink };
 

@@ -6,8 +6,16 @@
 
 #include "app_config.hpp"
 #include "nvs_store.h"
+#include "rtos/exec_trace.hpp"
 
 namespace app {
+
+/** kExec 追踪事件码：事件由 rtos 执行器发出，码值定义在 rtos/exec_trace.hpp（组件依赖方向）。 */
+using ExecTrace = rtos::ExecTrace;
+
+// 码值是对外可观测契约：两边不一致会让控制台文本表解释错位，故编译期锁定。
+static_assert(static_cast<uint8_t>(ExecTrace::kRoundOverrun) == 0U, "kExec 码值与 rtos/exec_trace.hpp 不一致");
+static_assert(static_cast<uint8_t>(ExecTrace::kCallDrop) == 1U, "kExec 码值与 rtos/exec_trace.hpp 不一致");
 
 /** 系统模块命令动词。 */
 enum class SystemVerb : uint8_t { kPublish };

@@ -50,6 +50,8 @@ static void spp_server_worker_submit(spp_server_session_t *session)
     uint8_t idx = 0U;
     esp_err_t err = ESP_OK;
     bool wake_worker = false;
+    /* 提交时刻在临界区外读取：临界区内不调用任何 FreeRTOS API。 */
+    const TickType_t submit_tick = xTaskGetTickCount();
 
     /* 取任务：在临界区内取走长度与序号，避免与写者复制 tx_buf 交错。
      * 全驱动只允许一个未完成提交：owner 已占用时本任务保持排队，等完成回调通知后再来。 */
@@ -61,6 +63,8 @@ static void spp_server_worker_submit(spp_server_session_t *session)
         idx = session->idx;
         session->tx_state = SPP_SERVER_TX_SUBMITTED;
         session->tx_submitting = true;
+        /* 记录提交时刻：写完成事件用它与当前 tick 的差值报告耗时（ms）。 */
+        session->tx_submit_tick = submit_tick;
         /* idx < SPP_SERVER_MAX_SESSIONS(=2)，int 窄化安全 */
         s_spp_tx_inflight = (int)idx;
     }
@@ -102,6 +106,8 @@ static void spp_server_worker_submit(spp_server_session_t *session)
     taskEXIT_CRITICAL(&s_spp_mux);
 
     if (err != ESP_OK) {
+        /* esp_err_t → uint32_t 只是位模式搬移，追踪只做展示用。 */
+        spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, handle, (uint32_t)err, (uint32_t)len);
         ESP_LOGE(SPP_SERVER_TAG, "submit handle=%" PRIu32 " len=%u: %s", handle, (unsigned)len, esp_err_to_name(err));
     }
     if (s_spp.rtos.evt_group != NULL) {
@@ -195,6 +201,11 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
     bool ignore_stale = false;
     EventBits_t wake_bits = 0U;
     esp_err_t result = ESP_OK;
+    /* 追踪数据先在临界区内取出，调用 trace 钩子时必须在临界区之外。 */
+    uint32_t traced_handle = param->write.handle;
+    uint32_t traced_bytes = (param->write.len > 0) ? (uint32_t)param->write.len : 0U;
+    TickType_t traced_submit = 0;
+    bool traced = false;
 
     taskENTER_CRITICAL(&s_spp_mux);
     for (uint32_t slot = 0U; slot < SPP_SERVER_MAX_SESSIONS; slot++) {
@@ -205,6 +216,9 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
             continue;
         }
         matched = true;
+        traced = true;
+        traced_bytes = (uint32_t)s_spp.sessions[slot].tx_len;
+        traced_submit = s_spp.sessions[slot].tx_submit_tick;
         result = spp_server_settle_write(&s_spp.sessions[slot], param->write.status, param->write.len);
         s_spp.sessions[slot].congested = param->write.cong;
         wake_bits |= SPP_SERVER_BIT_WAKE(s_spp.sessions[slot].idx);
@@ -228,6 +242,9 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
 
             result = ESP_FAIL;
             matched = true;
+            traced = true;
+            traced_bytes = (uint32_t)owner->tx_len;
+            traced_submit = owner->tx_submit_tick;
             if (owner->in_use && (owner->tx_state == SPP_SERVER_TX_SUBMITTED)) {
                 (void)spp_server_settle_write(owner, param->write.status, param->write.len);
                 wake_bits |= SPP_SERVER_BIT_WAKE(owner->idx);
@@ -251,6 +268,15 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
         ESP_LOGW(SPP_SERVER_TAG, "write evt unmatched: handle=%" PRIu32 " len=%d status=%d", param->write.handle,
                  param->write.len, (int)param->write.status);
         return;
+    }
+    if (traced) {
+        if (result == ESP_OK) {
+            /* 耗时来自提交时刻与本回调时刻的 tick 差；转换只用于展示。 */
+            const uint32_t elapsed_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount() - traced_submit);
+            spp_server_trace(SPP_SERVER_TRACE_WRITE_DONE, traced_handle, traced_bytes, elapsed_ms);
+        } else {
+            spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, traced_handle, (uint32_t)ESP_FAIL, traced_bytes);
+        }
     }
     if (result != ESP_OK) {
         ESP_LOGW(SPP_SERVER_TAG, "write failed: handle=%" PRIu32 " len=%d status=%d", param->write.handle,

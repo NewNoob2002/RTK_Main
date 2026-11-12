@@ -9,6 +9,7 @@ extern "C" {
 #endif
 TaskHandle_t xTaskGetCurrentTaskHandle(void);
 void vTaskDelay(TickType_t ticks);
+void vTaskDelete(TaskHandle_t task);
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t task);
 #ifdef __cplusplus
 }
