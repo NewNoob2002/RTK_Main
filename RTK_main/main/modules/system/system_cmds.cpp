@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 
 #include "app_context.hpp"
+#include "cli/out.hpp"
 #include "fw/trace.hpp"
 #include "modules/rtcm/rtcm_module.hpp"
 #include "support/console_support.hpp"
@@ -395,9 +396,8 @@ int cmd_sys_reboot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     if (argc != 1) {
         return cli::fail("usage: sys reboot");
     }
-    // 立即输出 OK 并冲刷缓冲，等待 100 ms 让 UART 中断发完再复位；esp_restart 不返回，trampoline 不会重复打印。
-    std::printf("OK\n");
-    (void)std::fflush(stdout);
+    // 立即输出 OK（进 UART TX 环形缓冲），等待 100 ms 让中断发完再复位；esp_restart 不返回，trampoline 不会重复打印。
+    cli::out_printf("OK\n");
     vTaskDelay(pdMS_TO_TICKS(kRebootDelayMs));
     esp_restart();
     return 0;

@@ -14,6 +14,7 @@
 #include "esp_err.h"
 
 #include "app_context.hpp"
+#include "cli/out.hpp"
 #include "support/console_support.hpp"
 
 namespace app {
@@ -65,7 +66,7 @@ int cmd_store_sn(void * /*ctx*/, int argc, char **argv) noexcept
     if (!submit(command, "store sn")) {
         return cli::kCmdFail;
     }
-    std::printf("sn saved; reboot to apply\n");
+    cli::out_printf("sn saved; reboot to apply\n");
     return 0;
 }
 

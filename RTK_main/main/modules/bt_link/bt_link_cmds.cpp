@@ -13,6 +13,7 @@
 #include "esp_err.h"
 
 #include "app_context.hpp"
+#include "cli/out.hpp"
 #include "support/console_support.hpp"
 
 namespace app {
@@ -81,7 +82,7 @@ int cmd_bt_pair(void * /*ctx*/, int argc, char **argv) noexcept
     if (!report("bt pair", result)) {
         return cli::kCmdFail;
     }
-    std::printf("pairing window: %u s\n", static_cast<unsigned>(kPairSeconds));
+    cli::out_printf("pairing window: %u s\n", static_cast<unsigned>(kPairSeconds));
     return 0;
 }
 

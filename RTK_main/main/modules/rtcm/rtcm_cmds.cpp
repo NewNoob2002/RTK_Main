@@ -10,6 +10,7 @@
 #include <span>
 
 #include "app_context.hpp"
+#include "cli/out.hpp"
 #include "support/console_support.hpp"
 
 namespace app {
@@ -77,12 +78,12 @@ void print_rtcm_status() noexcept
     cli::print_kv("rtcm_rejects", "%" PRIu32, demux.rtcm_rejects);
 
     // 保留 ADR-0006 §2 逐字格式行，供 tools/hil/spp_rtcm_mix.py 正则匹配。
-    std::printf("rtcm: frames=%" PRIu32 " bytes=%" PRIu32 " crc32=0x%08" PRIX32 " last_msg=%" PRIu16
+    cli::out_printf("rtcm: frames=%" PRIu32 " bytes=%" PRIu32 " crc32=0x%08" PRIX32 " last_msg=%" PRIu16
                 " rejected_role=%" PRIu32 " unknown_bytes=%" PRIu32 " product_rejects=%" PRIu32 " rtcm_rejects=%" PRIu32
                 "\n",
                 rtcm.frames, rtcm.bytes, rtcm.crc32, rtcm.last_msg, rtcm.rejected_role, demux.unknown_bytes,
                 demux.product_rejects, demux.rtcm_rejects);
-    std::printf("stats: frames_rx=%" PRIu32 " replies_tx=%" PRIu32 " write_errors=%" PRIu32 " pushes_tx=%" PRIu32
+    cli::out_printf("stats: frames_rx=%" PRIu32 " replies_tx=%" PRIu32 " write_errors=%" PRIu32 " pushes_tx=%" PRIu32
                 " disconnects=%" PRIu32 " rx_dropped=%" PRIu32 "\n",
                 stats.frames_rx, stats.replies_tx, stats.write_errors, stats.pushes_tx, stats.disconnects,
                 stats.rx_dropped);

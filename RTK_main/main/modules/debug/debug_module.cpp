@@ -1,22 +1,13 @@
 // 调试模块实现（ADR-0009）：追踪环安装、唯一格式化输出任务、周期报告与持久化绑定。
 // 线程：init() 启动前单线程；start() 执行器启动阶段；on_command 仅 kLink；输出任务 trace_out 独立运行。
-// 均非 ISR；不分配堆。事件行经 write_line() 整行写 UART，周期报告仍用 printf。
+// 均非 ISR；不分配堆。事件行与周期报告都经 cli 统一出口整行写出。
 
 #include "modules/debug/debug_module.hpp"
 
 #include <cstdio>
 
-#include "sdkconfig.h"
-// 只有真正走 UART 控制台且装了 TX 环形驱动时才直接写 UART（见 write_line）；主机检查与 USB 控制台走 stdout。
-#if (defined(CONFIG_ESP_CONSOLE_UART_DEFAULT) || defined(CONFIG_ESP_CONSOLE_UART_CUSTOM)) &&                           \
-    (CONFIG_RTK_CONSOLE_UART_TX_BUF > 0)
-#define RTK_DEBUG_DIRECT_UART 1
-#include "driver/uart.h"
-#else
-#define RTK_DEBUG_DIRECT_UART 0
-#endif
-
 #include "app_context.hpp"
+#include "cli/out.hpp"
 #include "data/app_data.hpp"
 #include "def/debug_def.hpp"
 #include "fw/lock.hpp"
@@ -41,21 +32,10 @@ constexpr uint32_t kBytesPerUnit = 1024U;
 /* 事件行 = "[ssss.mmm] " 前缀 + 正文 + "\r\n"；前缀最长 "[4294967.295] " 14 字节，取 24 留余量。 */
 constexpr size_t kLinePrefixBytes = 24U;
 
-/**
- * 整行写控制台。IDF v6.1 的 UART VFS（esp_driver_uart/src/uart_vfs.c:227 uart_write）对每个字符
- * 调一次 uart_write_bytes，实测 printf 在 2 Mbaud 下只有约 15 KB/s，追踪负载高时环会溢出；
- * 这里绕过 VFS，一次 uart_write_bytes 写完整行（自带 \r\n），吞吐由波特率决定。
- * 控制台任务优先级高于 trace_out 且同在核 0，回复输出期间不会被本任务插入；
- * 未装 TX 环形驱动时退回 fwrite(stdout)。
- */
+/** 整行写控制台：经 cli 统一出口一次写出（ADR-0009 §2.8），与命令回复、ESP_LOG 共用一把锁，不会穿插。 */
 void write_line(const char *text, size_t len) noexcept
 {
-#if RTK_DEBUG_DIRECT_UART
-    (void)uart_write_bytes(static_cast<uart_port_t>(CONFIG_RTK_CONSOLE_UART_NUM), text, len);
-#else
-    (void)std::fwrite(text, 1U, len, stdout);
-    (void)std::fflush(stdout);
-#endif
+    cli::out_write(text, len);
 }
 
 /** snprintf 结果截断到缓冲区内的实际长度（负值视为 0）。 */
@@ -312,7 +292,7 @@ void DebugModule::pump_report(uint32_t now_ms) noexcept
     const uint32_t kbps10 = (bytes / (elapsed / kMsPerSecond + 1U)) * kTenthsPerUnit / kBytesPerUnit;
     const uint32_t fps = frames / (elapsed / kMsPerSecond + 1U);
     const uint32_t prod_fps = prod / (elapsed / kMsPerSecond + 1U);
-    printf("[report] rtcm %lu.%luKB/s %luf/s drop+%lu | prod %lu/s | heap %luK min %luK | "
+    cli::out_printf("[report] rtcm %lu.%luKB/s %luf/s drop+%lu | prod %lu/s | heap %luK min %luK | "
            "stk link %lu.%luK tx %lu.%luK | trace drop %lu\n",
            static_cast<unsigned long>(kbps10 / kTenthsPerUnit), static_cast<unsigned long>(kbps10 % kTenthsPerUnit),
            static_cast<unsigned long>(fps), static_cast<unsigned long>(dropped), static_cast<unsigned long>(prod_fps),

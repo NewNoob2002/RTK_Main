@@ -1,5 +1,5 @@
 // 控制台回执与子命令分派实现（ADR-0009 §2.5）：fail()、dispatch()、print_usage()、分节输出。
-// 只依赖 C 标准库，不含 IDF 头，便于 host 测试直接编译 src/reply.cpp。
+// 只依赖 C 标准库，不含 IDF 头，便于 host 测试直接编译 src/reply.cpp；输出全部经 cli/out.hpp 整行写出。
 // 线程：只在 console REPL 任务（命令串行执行）或 host 测试主线程调用；非 ISR 安全；不分配堆。
 
 #include <algorithm>
@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "cli/console.hpp"
+#include "cli/out.hpp"
 #include "reply_state.hpp"
 
 namespace cli {
@@ -21,6 +22,7 @@ constexpr int kNameWidth = 10;       // 动词名左对齐宽度
 constexpr int kUsageWidth = 14;      // 参数用法列左对齐宽度
 constexpr int kKeyWidth = 14;        // print_kv 的键列宽度
 constexpr size_t kVerbNameMax = 24U; // 默认动词复制到栈上的名称缓冲（含结尾 NUL）
+constexpr size_t kValueMax = 160U;   // fail 原因 / print_kv 值先格式化到栈上，再与前缀拼成一行输出
 
 bool s_failed = false;
 
@@ -81,27 +83,27 @@ int fail(const char *fmt, ...) noexcept
 {
     // 先置位再打印：handler 若在打印途中被观测，也应视为“已给出原因”。
     s_failed = true;
-    std::printf("ERR ");
+    std::array<char, kValueMax> reason{};
     if (fmt != nullptr) {
         va_list args;
         va_start(args, fmt);
-        std::vprintf(fmt, args);
+        (void)std::vsnprintf(reason.data(), reason.size(), fmt, args); // 超长截断：原因只是一行诊断
         va_end(args);
     }
-    std::printf("\n");
+    out_printf("ERR %s\n", reason.data());
     return kCmdFail;
 }
 
 void print_usage(const char *group, std::span<const Verb> verbs) noexcept
 {
-    std::printf("usage: %s <verb> [args]\n", (group != nullptr) ? group : "");
+    out_printf("usage: %s <verb> [args]\n", (group != nullptr) ? group : "");
     for (const Verb &verb : verbs) {
         const char *name = (verb.name != nullptr) ? verb.name : "?";
         const char *usage = (verb.usage != nullptr) ? verb.usage : "-";
         if (verb.help != nullptr) {
-            std::printf("  %-*s %-*s %s\n", kNameWidth, name, kUsageWidth, usage, verb.help);
+            out_printf("  %-*s %-*s %s\n", kNameWidth, name, kUsageWidth, usage, verb.help);
         } else {
-            std::printf("  %-*s %s\n", kNameWidth, name, usage);
+            out_printf("  %-*s %s\n", kNameWidth, name, usage);
         }
     }
 }
@@ -143,19 +145,19 @@ int dispatch(std::span<const Verb> verbs, void *ctx, int argc, char **argv, cons
 
 void print_section(const char *title) noexcept
 {
-    std::printf("[%s]\n", (title != nullptr) ? title : "");
+    out_printf("[%s]\n", (title != nullptr) ? title : "");
 }
 
 void print_kv(const char *key, const char *fmt, ...) noexcept
 {
-    std::printf("  %-*s ", kKeyWidth, (key != nullptr) ? key : "");
+    std::array<char, kValueMax> value{};
     if (fmt != nullptr) {
         va_list args;
         va_start(args, fmt);
-        std::vprintf(fmt, args);
+        (void)std::vsnprintf(value.data(), value.size(), fmt, args); // 超长截断：一行一个值
         va_end(args);
     }
-    std::printf("\n");
+    out_printf("  %-*s %s\n", kKeyWidth, (key != nullptr) ? key : "", value.data());
 }
 
 } // namespace cli

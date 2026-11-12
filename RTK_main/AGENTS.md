@@ -33,7 +33,7 @@
 - **并发（ESP-001/003）**：SMP 临界区用 `portMUX_TYPE` + `taskENTER_CRITICAL(&mux)`，临界区内不调用 FreeRTOS API、不阻塞。IDF 任务栈单位是**字节**。任务一律静态创建、显式绑核，并在注释中写明理由。蓝牙回调中不阻塞、不解析、不打印数据内容。
 - **窄化转换**：每处 `static_cast` 都在注释中说明为什么数值范围安全；不用 C 风格转换（`-Wold-style-cast`）。
 - **注释**：用中文，必要的英文术语保留；解释原因、约束和副作用；每个公共函数注明线程/ISR 安全性。不注释掉代码。
-- **调试输出（ADR-0009）**：链路任务、发送任务、蓝牙回调中禁止新增 `ESP_LOG`/`printf`；运行时诊断一律经 `fw::trace()`（C 驱动经 `spp_server_set_trace_hook`），由 main 的 DebugModule 低优先级任务格式化输出。控制台命令最后一行固定 `OK` 或 `ERR …`（`cli::fail`），子命令用 `cli::Verb` + `cli::dispatch`。
+- **调试输出（ADR-0009）**：链路任务、发送任务、蓝牙回调中禁止新增 `ESP_LOG`/`printf`；运行时诊断一律经 `fw::trace()`（C 驱动经 `spp_server_set_trace_hook`），由 main 的 DebugModule 低优先级任务格式化输出。控制台命令最后一行固定 `OK` 或 `ERR …`（`cli::fail`），子命令用 `cli::Verb` + `cli::dispatch`。控制台文本输出一律经 `cli::out_printf`/`cli::out_write`（ADR-0009 §2.8，整行写 UART），不直接 `printf`/`puts`。
 - **溯源**：按 `docs/CODING-STYLE.md`，源文件第一行说明用途，第二行起说明线程/调用约束（谁调用、可否阻塞、是否 ISR 安全）；使用堆的文件另注明档位。文件头不写 `Generated-by` 或人工负责人；生成来源由提交者记录在 git 提交 trailer：`Generated-by: pi + <模型>`（模型以任务卡为准）。不得添加 `Signed-off-by`；该规则不授予 git commit/push 权限。
 
 ## 3. 组件与依赖

@@ -39,7 +39,7 @@ target_compile_features(cli_parse PUBLIC cxx_std_20)
 target_compile_options(cli_parse PRIVATE ${PROJ_CXX_STRICT})
 
 # reply.cpp 只用 C 标准库；它引用的 reply_state.hpp 与自身同目录，因此只需 cli 公共头与 esp_err shim。
-add_library(cli_reply STATIC ${PROJ_ROOT}/components/cli/src/reply.cpp)
+add_library(cli_reply STATIC ${PROJ_ROOT}/components/cli/src/reply.cpp ${PROJ_ROOT}/components/cli/src/out.cpp)
 target_include_directories(cli_reply BEFORE PUBLIC shim)
 target_include_directories(cli_reply PUBLIC ${PROJ_ROOT}/components/cli/include)
 target_include_directories(cli_reply PRIVATE ${PROJ_ROOT}/components/cli/src)
@@ -58,3 +58,8 @@ target_link_libraries(test_reply cli_reply unity)
 target_include_directories(test_reply PRIVATE ${PROJ_ROOT}/components/cli/src)
 target_compile_options(test_reply PRIVATE ${PROJ_CXX_STRICT})
 add_test(NAME test_reply COMMAND test_reply)
+
+add_executable(test_out test_out.cpp)
+target_link_libraries(test_out cli_reply unity)
+target_compile_options(test_out PRIVATE ${PROJ_CXX_STRICT})
+add_test(NAME test_out COMMAND test_out)

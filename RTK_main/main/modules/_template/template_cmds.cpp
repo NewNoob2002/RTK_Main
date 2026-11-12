@@ -9,6 +9,7 @@
 #include <span>
 
 #include "app_context.hpp"
+#include "cli/out.hpp"
 #include "support/console_support.hpp"
 
 namespace app {
@@ -25,7 +26,7 @@ int cmd_tmpl_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     const auto sys = app_context().data.system_status.read();
     const auto exec = app_context().data.exec_stats.read();
-    std::printf("tmpl: bt=%s exec_rounds=%" PRIu32 "\n", sys.bt_ready ? "ready" : "down", exec.rounds);
+    cli::out_printf("tmpl: bt=%s exec_rounds=%" PRIu32 "\n", sys.bt_ready ? "ready" : "down", exec.rounds);
     return 0;
 }
 

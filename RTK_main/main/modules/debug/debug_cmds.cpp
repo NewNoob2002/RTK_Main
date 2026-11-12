@@ -10,6 +10,7 @@
 
 #include "app_context.hpp"
 #include "cli/console.hpp"
+#include "cli/out.hpp"
 #include "def/debug_def.hpp"
 #include "modules/debug/debug_module.hpp"
 #include "modules/debug/trace_text.hpp"
@@ -32,18 +33,18 @@ int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     const DebugModule &module = app_context().debug;
     const fw::TraceRingStats ring = module.ring_stats();
-    printf("ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
+    cli::out_printf("ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
            static_cast<unsigned>(DebugModule::kRingEvents), static_cast<unsigned>(module.ring_depth()),
            static_cast<unsigned long>(ring.pushed), static_cast<unsigned long>(ring.dropped),
            static_cast<unsigned>(ring.max_depth));
-    printf("report period=%us%s\n", static_cast<unsigned>(module.report_period_s()),
+    cli::out_printf("report period=%us%s\n", static_cast<unsigned>(module.report_period_s()),
            (module.report_period_s() == 0U) ? " (off)" : "");
     const uint32_t mask = fw::trace_mask();
     constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
     for (uint32_t index = 0U; index < kCount; ++index) {
         const auto cat = static_cast<fw::TraceCat>(index);
         const bool on = (mask & fw::trace_bit(cat)) != 0U;
-        printf("%-5s %-3s %s\n", debug::trace_cat_name(cat), on ? "on" : "off", debug::trace_cat_summary(cat));
+        cli::out_printf("%-5s %-3s %s\n", debug::trace_cat_name(cat), on ? "on" : "off", debug::trace_cat_summary(cat));
     }
     return 0;
 }

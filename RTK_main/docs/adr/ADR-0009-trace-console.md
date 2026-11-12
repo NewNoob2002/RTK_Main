@@ -89,6 +89,24 @@ off 构建 ELF 中无 TraceRing/DebugModule/trace_out/fw::trace 符号。
 运行时默认掩码为 0（全关；NVS `dbg/mask` 有保存值时以保存值为准）。T3 实测：7 类全开 + 29 KB/s RTCM 负载，
 trace_out 整行 `uart_write_bytes` 输出约 3.4 KB/s，环 max_depth 45/256、0 丢；数据通路 0 丢。
 
+### 2.8 控制台统一输出出口 `cli/out.hpp`（2026-11-12 补充）
+
+IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符调用一次 `uart_write_bytes(…, 1)`，
+`printf` 在 2 Mbaud / 240 MHz 下只有约 24.6 KB/s。决策：
+
+- 命令回复（`cli::fail/print_*`、trampoline 的 `OK`/`ERR`、help）、各模块命令里的输出、trace 事件行与周期报告，
+  一律经 `cli::out_printf/out_write`：在 256 B 静态缓冲里整行格式化，再一次交给输出端。业务代码不再直接 `printf`。
+- 输出端由 `console start()` 在装好 UART TX 环形驱动后安装（`uart_write_bytes` 直写）；未安装（host 测试、USB 控制台、
+  TX 环形=0）时写 stdout。绕过 VFS 后 `\n → \r\n` 由 out 模块负责（跨调用记住上一个字符，不重复补 `\r`）。
+- `ESP_LOG` 经 `esp_log_set_vprintf` 接到同一出口、同一把锁，日志、回复、trace 互不穿插；ISR、调度器未运行、
+  同任务重入（输出端里又打日志）时回落原 vprintf。超过 256 B 的单条输出整条走 stdout（慢但不截断）。
+- 锁：目标板用静态 FreeRTOS 递归互斥（`std::recursive_mutex` 会拉入 `system_error`/`format.o`/`__cxa_atexit`，违反 g7b）；
+  host 用 `std::recursive_mutex`。持锁期间可能阻塞在 TX 环形上，禁止在 ISR 调用。
+- linenoise 的提示符与回显仍走 stdout；出口每次写前 `fflush(stdout)` 保证顺序。
+
+实测（`help`/`debug list`/`sys tasks`/`status all` 各 100 次连发）：控制台回复 24.6 KB/s → 87–145 KB/s，
+`status all` 每条 ~51 ms → 8.6 ms。trace 全开 + 蓝牙 28 KB/s 负载：环 0 丢、无穿插行，数据路径无损。
+
 ## 3. 冻结接口（T0 由 Claude 写入）
 
 - `components/app_fw/include/fw/trace.hpp`（新）

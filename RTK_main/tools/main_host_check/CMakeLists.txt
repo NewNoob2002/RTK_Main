@@ -24,6 +24,7 @@ add_library(main_pure STATIC
     ${PROJ_ROOT}/components/device_proto/bytes.cpp
     ${PROJ_ROOT}/components/app_fw/src/status.cpp
     ${PROJ_ROOT}/components/app_fw/src/trace.cpp
+    ${PROJ_ROOT}/components/cli/src/out.cpp
     ${PROJ_ROOT}/components/link_core/alarm_source.cpp
     ${PROJ_ROOT}/components/link_core/link_manager.cpp
     ${PROJ_ROOT}/components/link_core/command_router.cpp
@@ -35,7 +36,8 @@ add_library(main_pure STATIC
 target_include_directories(main_pure PUBLIC
     ${PROJ_ROOT}/components/app_fw/include
     ${PROJ_ROOT}/components/device_proto/include ${PROJ_ROOT}/components/link_core/include)
-target_include_directories(main_pure PRIVATE ${PROJ_ROOT}/components/link_core/private_include)
+target_include_directories(main_pure PRIVATE ${PROJ_ROOT}/components/link_core/private_include
+    ${PROJ_ROOT}/components/cli/include)
 target_link_libraries(main_pure PUBLIC stream_demux)
 target_compile_options(main_pure PRIVATE -Wall -Wextra -Werror -Wshadow)
 enable_testing()

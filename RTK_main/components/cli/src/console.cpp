@@ -3,6 +3,7 @@
 // 任务中串行执行，可阻塞，非 ISR 安全。本组件自身不做堆分配（命令表只保存指针），REPL 的堆由 IDF 分配。
 
 #include "cli/console.hpp"
+#include "cli/out.hpp"
 
 #include <array>
 #include <cstddef>
@@ -15,6 +16,8 @@
 #include "esp_console.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "reply_state.hpp"
 #include "sdkconfig.h"
 
@@ -129,10 +132,10 @@ void print_group_list() noexcept
         for (const Cmd &cmd : s_tables[t]) {
             const VerbGroup *group = find_verb_group(cmd.name);
             const char *summary = (group != nullptr) ? group->summary : cmd.help;
-            std::printf("  %-*s %s\n", kGroupWidth, cmd.name, (summary != nullptr) ? summary : "");
+            out_printf("  %-*s %s\n", kGroupWidth, cmd.name, (summary != nullptr) ? summary : "");
         }
     }
-    std::printf("  %-*s %s\n", kGroupWidth, kHelpName, kHelpSummary);
+    out_printf("  %-*s %s\n", kGroupWidth, kHelpName, kHelpSummary);
 }
 
 // help 由本组件实现：无参列出各组，带参显示该组用法。
@@ -162,7 +165,7 @@ int cmd_help(void * /*ctx*/, int argc, char **argv) noexcept
     }
     const Cmd *cmd = find_cmd(target);
     if (cmd != nullptr) {
-        std::printf("%s\n", (cmd->help != nullptr) ? cmd->help : "");
+        out_printf("%s\n", (cmd->help != nullptr) ? cmd->help : "");
         return 0;
     }
     return fail("unknown group");
@@ -174,19 +177,56 @@ int trampoline(void *ctx, int argc, char **argv) noexcept
 {
     const auto *entry = static_cast<const Entry *>(ctx);
     if ((entry == nullptr) || (entry->handler == nullptr)) {
-        std::printf("ERR internal: command entry missing\n");
+        out_printf("ERR internal: command entry missing\n");
         return 0;
     }
     detail::reply_reset();
     const int rc = entry->handler(entry->ctx, argc, argv);
     if (rc == 0) {
-        std::printf("OK\n");
+        out_printf("OK\n");
     } else if (!detail::reply_failed()) {
         // handler 没解释原因时只报返回码，保证每条命令最后一行都是 OK / ERR。
-        std::printf("ERR %d\n", rc);
+        out_printf("ERR %d\n", rc);
     }
     return 0;
 }
+
+#if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT) || defined(CONFIG_ESP_CONSOLE_UART_CUSTOM)
+#if CONFIG_RTK_CONSOLE_UART_TX_BUF > 0
+/**
+ * 输出端：一次 uart_write_bytes 写完整段（ADR-0009 §2.8）。只有装了 TX 环形驱动才安装它；
+ * 环形满时阻塞到有空间，调用方都是任务上下文。
+ */
+void uart_sink(const char *text, size_t len) noexcept
+{
+    (void)uart_write_bytes(static_cast<uart_port_t>(CONFIG_RTK_CONSOLE_UART_NUM), text, len);
+}
+
+vprintf_like_t s_orig_log_vprintf = nullptr;
+
+/**
+ * ESP_LOG 钩子：日志与命令回复走同一出口和同一把锁，整行写出、互不穿插。
+ * ISR、调度器未运行或同任务重入时回落到原 vprintf（IDF 的 VFS 路径）。
+ */
+int log_vprintf(const char *fmt, va_list args)
+{
+    if ((xPortInIsrContext() == 0) && (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)) {
+        const int n = out_log_vprintf(fmt, args);
+        if (n >= 0) {
+            return n;
+        }
+    }
+    return (s_orig_log_vprintf != nullptr) ? s_orig_log_vprintf(fmt, args) : std::vprintf(fmt, args);
+}
+
+void install_uart_sink() noexcept
+{
+    // 绕过 VFS 后由 out 模块负责 "\n" → "\r\n"，与 VFS 的 TX 行尾设置（CRLF）一致。
+    set_out_sink(uart_sink, true);
+    s_orig_log_vprintf = esp_log_set_vprintf(log_vprintf);
+}
+#endif
+#endif
 
 esp_err_t register_help() noexcept
 {
@@ -366,6 +406,9 @@ esp_err_t start(const char *prompt) noexcept
         cleanup_repl(repl);
         return err;
     }
+#if CONFIG_RTK_CONSOLE_UART_TX_BUF > 0
+    install_uart_sink();
+#endif
 #elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
     esp_console_dev_usb_cdc_config_t cdc_cfg = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
     err = esp_console_new_repl_usb_cdc(&cdc_cfg, &repl_cfg, &repl);

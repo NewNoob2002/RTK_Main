@@ -3,6 +3,7 @@
 
 #include "support/console_support.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdio>
 
@@ -10,6 +11,7 @@
 
 #include "app_context.hpp"
 #include "cli/console.hpp"
+#include "cli/out.hpp"
 
 namespace app {
 
@@ -26,13 +28,6 @@ const char *role_name(core::Role role) noexcept
         return "PENDING";
     default:
         return "?";
-    }
-}
-
-void print_mac(const core::BtAddr &addr) noexcept
-{
-    for (size_t idx = 0U; idx < core::kAddrLen; idx++) {
-        printf("%s%02X", (idx == 0U) ? "" : ":", static_cast<unsigned>(addr.bytes[idx]));
     }
 }
 
@@ -55,6 +50,13 @@ void format_mac(const core::BtAddr &addr, std::span<char, kMacStrBuf> out) noexc
         ++pos;
     }
     out[pos] = '\0';
+}
+
+void print_mac(const core::BtAddr &addr) noexcept
+{
+    std::array<char, kMacStrBuf> text{};
+    format_mac(addr, text);
+    cli::out_printf("%s", text.data());
 }
 
 bool report(const char * /*what*/, const fw::CommandResult &result) noexcept
