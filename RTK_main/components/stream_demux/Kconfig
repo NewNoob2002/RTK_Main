@@ -1,0 +1,23 @@
+menu "Stream demux (ADR-0005)"
+
+    config STREAM_DEMUX_RTCM3
+        bool "RTCM3 decoder"
+        default y
+
+    config STREAM_DEMUX_NMEA
+        bool "NMEA 0183 decoder"
+        default y
+
+    config STREAM_DEMUX_UBX
+        bool "u-blox UBX decoder"
+        default y
+
+    config STREAM_DEMUX_UNICORE_BIN
+        bool "Unicore binary (AA 44 B5) decoder"
+        default y
+
+    config STREAM_DEMUX_UNICORE_HASH
+        bool "Unicore hash (#...*) sentence decoder"
+        default y
+
+endmenu
