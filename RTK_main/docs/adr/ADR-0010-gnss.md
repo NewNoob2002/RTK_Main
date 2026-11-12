@@ -92,7 +92,7 @@ kOff --start--> kPowerUp(断电 power_off_ms → 上电 → 等 boot_ms)
 - **RTCM 输入管道**（ADR-0006 §4 预留项落地）：`rtcm` 模块（kLink）对每个 PHONE 的完整 RTCM 帧调用 `RtcmPipe::push(frame)`：空间不足整帧丢弃并计数（不写半帧，避免模块收到截断帧）；`gnss` 模块每轮 `pop` 写 UART（`uart_write_bytes`，TX 环 1024 B，写不进的留到下一轮）。管道 = `rtos::StaticStreamBuffer<4096>`（单写单读），为整帧丢弃新增 `space()` 查询。模块未在 `kRunning` 时也写入（UM980 上电即可接收 RTCM），但掉电/探测中清空。
 - **数据主题**（DataCenter 新增）：`gnss_status`（`GnssStatus`：state、family、model、fw_version、host_baud、caps、ControllerStats、NmeaStats、uart rx/tx 字节、rtcm 管道 push/drop/written）、`gnss_fix`（`gnss::Fix`）、`gnss_sats`（`gnss::SatTable`，约 520 B，只在成轮时写）。
 - **链路**：`DeviceInfo` 新增 `fix_quality`（默认 0xFF；修订 ADR-0007 冻结头），`bt_link` 每轮比较 `gnss_fix` 版本，更新 `fix_quality`、`board`（型号名）、`board_fw`（固件版本）；`AlarmService::make_status` 改用 `info.fix_quality`（0x40 字节 4 不再固定 0xFF；GGA 超过 3 s 未更新视为 0xFF）。
-- **0x04/0x05**：手机协议目前没有定义载荷格式（5.4 也是占位），第一阶段**保持占位不变**，待用户确认格式后另开任务（见 §5 开放问题）。
+- **0x04/0x05 等 GNSS 报文**：见 §2.9（G-C 落地；G-B 阶段保持占位）。
 - **追踪**：`fw::TraceCat` 追加 `kGnss`（修订 ADR-0009 冻结头，追加在 `kCount` 前）；事件：state 变化、probe 发送/命中、step 发送/ack/nack/timeout、静默重探、管道丢帧、baud 切换。
 - **NVS**（ns `"gnss"`）：`family` u8、`model` u8、`baud` u32（探测成功后若与已存不同则写，去抖由 storage 模块现有机制保证）；`rate` u8（1/2/5/10/20，控制台可改，默认 Kconfig）、`gsv` u8（0/1）。
 - **控制台** `gnss`：`status`、`fix`、`sats`、`probe`（重新探测）、`reset`（电源复位）、`rate <hz>`（写 NVS 并重配）、`send <text>`（原样追加 `\r\n` 发给模块，调试用；只在 kRunning/kFailed 下允许，避免打乱脚本）。全部用 `cli::out_*`，成功以 `OK` 结尾。
@@ -111,6 +111,34 @@ kOff --start--> kPowerUp(断电 power_off_ms → 上电 → 等 boot_ms)
 | `RTK_GNSS_RATE_HZ` | 1 | NVS 无记录时的定位频率 |
 | `RTK_GNSS_DIALECT_UNICORE` / `_UBLOX` / `_COMNAV` | y / y / n | 编译哪些方言（gnss 组件 Kconfig） |
 
+### 2.9 手机订阅与原始报文透传（《测量软件控制协议-0530》，用户 2026-11-12 确认）
+
+协议约定（PDF 原文要点）：手机以 Type=0 查询某报文 ID；头部第 19 字节 `MSG Interval`（signed char）≠0 时，接收机**主动周期发送标准报文本体**
+（无 AA 44 18 头与 CRC 二次封装）；v<0 → 周期 |v| 秒，v>0 → 周期 1/v 秒，0 = 关闭自动输出、只回一次封装应答。PDF 后续可能小改，
+所以 ID→语句映射集中在一张 constexpr 表里。
+
+| MSG ID | 报文 | 模块侧来源 | 协议默认 |
+| --- | --- | --- | --- |
+| 0x04 | GPGGA | NMEA GGA | 1 Hz |
+| 0x05 | SATSINFOA（Unicore） | `#SATSINFOA` ASCII | 5 s |
+| 0x1F | HEADING | UM982 `HEADINGA`（无能力位则不支持） | 1 Hz |
+| 0x21 | GPGST | NMEA GST | 1 Hz |
+| 0x22 | GPRMC | NMEA RMC | 1 Hz |
+| 0x23 | GPGSA | NMEA GSA | 3 s |
+
+决策：
+1. **模块固定输出超集**：Unicore 流动站脚本在现有 GGA/RMC/GSA/GSV 之外追加 `GPGST COMx <rate>` 与 `SATSINFOA COMx 1`；ESP32 按订阅**降采样**转发，
+   不为每个订阅改模块配置。订阅周期短于模块周期时按模块周期发送（应答照常成功，`gnss status` 显示有效周期）；20 Hz 需求经 `gnss rate` 改模块频率。
+2. **订阅表**：单份（同一时刻只有一个 PHONE 会话，ADR-0007 CONCURRENT 策略下 PHONE ≤1），`msg_id → period_ms, last_sent_ms`，
+   PHONE 断开时清空（手机重连须重新订阅，与“上电默认不自动输出”一致）。
+3. **跨任务路径**：kIo 收到完整语句 → 查订阅位图（原子读，kLink 写）→ 命中且到期 → 整句写入 `NmeaOut`（`rtos::StaticStreamBuffer<4096>`，
+   kIo 单写 / kLink 单读，前置 2 B 长度；空间不足整句丢弃计数）→ `bt_link` 每轮取出经现有 async_tx 发给 PHONE 会话。降采样在 kIo 侧做，避免无用拷贝。
+4. **查询应答**（Interval=0）：回封装帧，载荷 = 最近一条该语句原文（kIo 保存在每 ID 一个最近句缓冲的 Slot 中；无数据时回结果码失败 0x02 0x02）。
+5. **0x01/0x02**：0x01 板卡型号/板卡固件来自探测结果（G-B 已写 DeviceInfo）；0x02 GNSS 功能字节 bit7 = 控制器 kRunning，低 7 位 = 1；IMU 字节在接 UM981 惯导前保持现值。
+6. **demux 容量**：`#SATSINFOA` 在多星时可达 3–4 KB，`unicore_hash::kMaxFrame` 1024 不够；修订 stream_demux 冻结头把它提到 4096
+  （StaticDemux 缓冲按最大 max_frame，已有 UnicoreBin 4096，故 GNSS 分流器 RAM 不变）。
+7. **后续**（不在本节）：自定义 Hash 报文与惯导报文（GPINS/GPFPD/INSPVAXA 等，PDF 0x0D 中已有 ID 972–974）作为新表项接入同一机制；K803 暂不支持。
+
 ## 3. 冻结接口（实现方不得修改）
 
 - `components/gnss/include/gnss/{types,dialect,nmea_parser,controller}.hpp`
@@ -126,7 +154,8 @@ kOff --start--> kPowerUp(断电 power_off_ms → 上电 → 等 boot_ms)
 
 ## 5. 开放问题
 
-1. 0x04 GGA / 0x05 卫星 / 0x06 卫星追踪的手机载荷格式——需要手机 App 的协议定义（或 5.4 后续版本）。
-2. 是否把原始 NMEA 透传到手机 SPP（很多测绘 App 直接吃 NMEA）？会与产品帧/RTCM 共用一条流，需修订 ADR-0004 的方向约定。
-3. 司南 K803 官方命令手册。
+1. ~~手机载荷格式~~ → §2.9（PDF《测量软件控制协议-0530》）；PDF 后续修改时只改映射表与 phone_protocol.md。
+2. ~~原始 NMEA 透传~~ → 需要，§2.9。
+3. ~~司南 K803~~ → 用户 2026-11-12：暂不考虑，COMNAV 方言保持默认关闭、不做 HIL。
 4. 基站模式（第二阶段）：survey-in / 固定坐标 / RTCM 输出 → 经 FanoutRing 发往手机与报警器。
+5. 自定义 Hash 报文与惯导报文：格式待用户给出。
