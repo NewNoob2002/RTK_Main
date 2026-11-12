@@ -139,6 +139,23 @@ kOff --start--> kPowerUp(断电 power_off_ms → 上电 → 等 boot_ms)
   （StaticDemux 缓冲按最大 max_frame，已有 UnicoreBin 4096，故 GNSS 分流器 RAM 不变）。
 7. **后续**（不在本节）：自定义 Hash 报文与惯导报文（GPINS/GPFPD/INSPVAXA 等，PDF 0x0D 中已有 ID 972–974）作为新表项接入同一机制；K803 暂不支持。
 
+### 2.10 NVS 存储目录（2026-11-12 补充）
+
+命名空间与键名保持不变（旧数据可直接读出）。整数键由 `main/modules/storage/store_catalog.cpp` 按分组登记，
+`store_keys.cpp` 提供按类型的通用读写；功能关闭时该组为空表，不再用 `#if` 阶梯。SN 与白名单仍走冻结的 `nvs_store`（ADR-0003）。
+
+| 分组 | 命名空间/键 | 类型 | 内容 | 写入方 |
+|---|---|---|---|---|
+| identity | `rtk/sn` | str ≤16 | 设备 SN | `factory sn` |
+| link | `rtk/alarm_wl` | blob n×6 | 报警器白名单 | 配对 / 手机 0x44 / `factory wl-*`（去抖保存） |
+| gnss.config | `gnss/rate` | u8 | 定位输出频率 Hz | `gnss rate`（G-C 起：`gnss set`、手机 0x0D） |
+| gnss.config | `gnss/gsv` | u8 | 是否输出 GSV | 同上 |
+| gnss.cache | `gnss/family` `gnss/model` | u8 | 上次识别的模块，用于加快下次探测 | 探测成功后 |
+| gnss.cache | `gnss/baud` | u32 | 上次通信波特率 | 同上 |
+| debug | `dbg/mask` `dbg/report` | u32 / u16 | trace 类别掩码、周期报告间隔 | `debug save` |
+
+G-C 将新增 `gnss/out`（blob，逐报文输出表，手机 0x0D 设置后永久保存）。
+
 ## 3. 冻结接口（实现方不得修改）
 
 - `components/gnss/include/gnss/{types,dialect,nmea_parser,controller}.hpp`

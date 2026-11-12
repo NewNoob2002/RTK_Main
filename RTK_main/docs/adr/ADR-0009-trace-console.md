@@ -110,6 +110,20 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 实测（`help`/`debug list`/`sys tasks`/`status all` 各 100 次连发）：控制台回复 24.6 KB/s → 87–145 KB/s，
 `status all` 每条 ~51 ms → 8.6 ms。trace 全开 + 蓝牙 28 KB/s 负载：环 0 丢、无穿插行，数据路径无损。
 
+### 2.10 面向客户的控制台：只读状态 + 隐藏 factory 命令集（2026-11-12 补充）
+
+控制台交付给客户后，误改生产配置（SN、白名单）或强制报警状态的风险大于调试便利。决策：
+
+- `cli::Cmd` 增加 `bool hidden = false`（冻结头修订）：隐藏命令照常注册、可执行，`help` 列表不显示；`help <name>` 仍可查。
+- 可见命令只读：`bt`（协议栈/链路状态、设备名、当前会话的角色/MAC/句柄，配对窗口打开时提示）、`alarm`（状态、级别、覆盖、
+  最近心跳）、`config [identity|link|gnss|debug|build]`（取代 `store`：按分组只读显示 SN、设备名、链路策略、白名单、
+  NVS 存储目录中的各键与编译期配置）。移除 `bt pair/policy`、`wl`、`alarm set/clear`、`store sn`。
+- 改状态的动作集中到隐藏的 `factory`：`status`（默认）、`unlock <key>`、`lock`、`sn <value>`、`wl-add/wl-del <MAC>`、
+  `wl-clear`、`pair`、`alarm-set <state> <level>`、`alarm-clear`。除 status/unlock/lock 外需先 `factory unlock <key>`
+  （Kconfig `CONFIG_RTK_FACTORY_KEY`，默认 `rtk-factory`）；解锁状态只在内存，重启或 `factory lock` 恢复锁定。
+  这只防误操作，不是安全边界（固件里能读到密钥）。
+- 策略 `CONCURRENT/PHONE_PREEMPT` 是编译期配置，只在 `config link` 中显示。
+
 ## 3. 冻结接口（T0 由 Claude 写入）
 
 - `components/app_fw/include/fw/trace.hpp`（新）

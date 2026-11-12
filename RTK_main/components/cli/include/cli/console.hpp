@@ -24,6 +24,7 @@ struct Cmd {
     const char *hint = nullptr; // 参数提示，可为 nullptr
     Handler handler = nullptr;
     void *ctx = nullptr; // 传给 handler，通常是模块实例
+    bool hidden = false; // true：不在 `help` 列表中出现（工厂命令等），`help <name>` 仍可查看
 };
 
 inline constexpr size_t kMaxCmds = 24; // 全部表合计上限

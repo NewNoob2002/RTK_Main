@@ -31,6 +31,14 @@ menu "RTK_main"
             以及 IDF 默认关闭的 unused-parameter、sign-compare（见 cmake/strict_warnings.cmake）。
             只影响本工程代码，不影响 IDF 自身组件。
 
+    config RTK_FACTORY_KEY
+        string "Factory console unlock key"
+        default "rtk-factory"
+        help
+            Key for the hidden `factory unlock <key>` console command (ADR-0009 §2.10).
+            Factory commands write production settings (SN, alarm whitelist) or force
+            alarm state; keep the key out of customer documentation.
+
     menu "GNSS (ADR-0010)"
 
         config RTK_GNSS_ENABLE

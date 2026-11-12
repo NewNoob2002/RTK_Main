@@ -121,11 +121,11 @@ int cmd_save(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 }
 
 constexpr std::array<cli::Verb, 5U> kVerbs{{
-    {"list", nullptr, "列出追踪类别、掩码与环统计", cmd_list},
-    {"on", "<category...|all>", "打开类别追踪", cmd_on},
-    {"off", "<category...|all>", "关闭类别追踪", cmd_off},
-    {"report", "<1..3600|off>", "设置周期报告间隔（秒）", cmd_report},
-    {"save", nullptr, "把掩码与报告周期写入 NVS", cmd_save},
+    {"list", nullptr, "list trace categories, mask and ring stats", cmd_list},
+    {"on", "<category...|all>", "enable trace categories", cmd_on},
+    {"off", "<category...|all>", "disable trace categories", cmd_off},
+    {"report", "<1..3600|off>", "set periodic report interval (s)", cmd_report},
+    {"save", nullptr, "save mask and report interval", cmd_save},
 }};
 
 int cmd_debug(void *ctx, int argc, char **argv) noexcept

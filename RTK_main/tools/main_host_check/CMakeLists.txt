@@ -44,7 +44,7 @@ enable_testing()
 # 同一真实组合根分别编译两种 Kconfig 分支，产品不增加测试开关或可替换调度框架。
 foreach(policy concurrent preempt)
     add_executable(main_${policy} main_host_check.cpp ${PROJ_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
-        ${PROJ_ROOT}/main/data/app_data.cpp ${PROJ_ROOT}/main/modules/storage/storage_module.cpp
+        ${PROJ_ROOT}/main/data/app_data.cpp ${PROJ_ROOT}/main/modules/storage/storage_module.cpp ${PROJ_ROOT}/main/modules/storage/store_keys.cpp ${PROJ_ROOT}/main/modules/storage/store_catalog.cpp
         ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp ${PROJ_ROOT}/main/modules/bt_link/async_tx.cpp
         # storage 的通用键表引用 DebugModule 的绑定函数，因此链接真实的 debug 模块。
         ${PROJ_ROOT}/main/modules/debug/debug_module.cpp ${PROJ_ROOT}/main/modules/debug/trace_text.cpp
@@ -93,7 +93,7 @@ add_executable(template_check template_check.cpp
     ${PROJ_ROOT}/main/modules/bt_link/async_tx.cpp
     ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp
     ${PROJ_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
-    ${PROJ_ROOT}/main/modules/storage/storage_module.cpp
+    ${PROJ_ROOT}/main/modules/storage/storage_module.cpp ${PROJ_ROOT}/main/modules/storage/store_keys.cpp ${PROJ_ROOT}/main/modules/storage/store_catalog.cpp
     ${PROJ_ROOT}/main/modules/debug/debug_module.cpp ${PROJ_ROOT}/main/modules/debug/trace_text.cpp
     ${PROJ_ROOT}/main/modules/debug/debug_cmds.cpp
     ${PROJ_ROOT}/components/spp_server/spp_transport.cpp)

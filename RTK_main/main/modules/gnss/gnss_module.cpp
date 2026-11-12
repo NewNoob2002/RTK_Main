@@ -331,7 +331,7 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
         }
         rover_cfg_.rate_hz = cmd.args[0];
         const fw::Result save_res =
-            context_.storage.save_keys(std::span<const fw::StoreKey>{gnss_store::kKeys}.subspan(3U, 1U));
+            context_.storage.save_keys(gnss_store::kConfigKeys);
         if (!fw::is_ok(save_res)) {
             result.status = save_res;
             return;
@@ -546,7 +546,7 @@ void GnssModule::persist_detected_hint() noexcept
     hint_.family = det_family;
     hint_.model = det_model;
     hint_.baud = det_baud;
-    const fw::Result save_res = context_.storage.save_keys(std::span<const fw::StoreKey>{gnss_store::kKeys}.first(3U));
+    const fw::Result save_res = context_.storage.save_keys(gnss_store::kCacheKeys);
     if (!fw::is_ok(save_res)) {
         // StorageModule::save_keys 内部已发 kStore trace；此处保留 hint_ 内存值避免每轮重复写盘。
     }
@@ -578,11 +578,6 @@ fw::Result GnssModule::apply_baud(uint32_t baud) noexcept
     }
     host_baud_ = baud;
     return fw::Result::kOk;
-}
-
-std::span<const fw::StoreKey> GnssModule::keys() noexcept
-{
-    return gnss_store::kKeys;
 }
 
 fw::Result GnssModule::load_family(void * /*obj*/, std::span<const uint8_t> in) noexcept

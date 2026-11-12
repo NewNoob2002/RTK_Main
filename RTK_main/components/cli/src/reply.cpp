@@ -18,8 +18,9 @@ namespace cli {
 
 namespace {
 
-constexpr int kNameWidth = 10;       // 动词名左对齐宽度
-constexpr int kUsageWidth = 14;      // 参数用法列左对齐宽度
+constexpr int kNameWidth = 10;       // 动词名列最小宽度（表内更长时按最长项加宽）
+constexpr int kUsageWidth = 14;      // 参数用法列最小宽度（同上）
+constexpr size_t kColumnMax = 32U;   // 列宽上限，防止异常长的用法撑坏排版
 constexpr int kKeyWidth = 14;        // print_kv 的键列宽度
 constexpr size_t kVerbNameMax = 24U; // 默认动词复制到栈上的名称缓冲（含结尾 NUL）
 constexpr size_t kValueMax = 160U;   // fail 原因 / print_kv 值先格式化到栈上，再与前缀拼成一行输出
@@ -96,14 +97,28 @@ int fail(const char *fmt, ...) noexcept
 
 void print_usage(const char *group, std::span<const Verb> verbs) noexcept
 {
+    // 按本表最长项定列宽，保证说明列对齐（例如 factory 的 "alarm-set <state> <level>"）。
+    size_t name_width = static_cast<size_t>(kNameWidth);
+    size_t usage_width = static_cast<size_t>(kUsageWidth);
+    for (const Verb &verb : verbs) {
+        if (verb.name != nullptr) {
+            name_width = std::max(name_width, std::string_view{verb.name}.size());
+        }
+        if (verb.usage != nullptr) {
+            usage_width = std::max(usage_width, std::string_view{verb.usage}.size());
+        }
+    }
+    // 上限 kColumnMax(32)，转换为 int 无损。
+    const int name_col = static_cast<int>(std::min(name_width, kColumnMax));
+    const int usage_col = static_cast<int>(std::min(usage_width, kColumnMax));
     out_printf("usage: %s <verb> [args]\n", (group != nullptr) ? group : "");
     for (const Verb &verb : verbs) {
         const char *name = (verb.name != nullptr) ? verb.name : "?";
         const char *usage = (verb.usage != nullptr) ? verb.usage : "-";
         if (verb.help != nullptr) {
-            out_printf("  %-*s %-*s %s\n", kNameWidth, name, kUsageWidth, usage, verb.help);
+            out_printf("  %-*s %-*s %s\n", name_col, name, usage_col, usage, verb.help);
         } else {
-            out_printf("  %-*s %s\n", kNameWidth, name, usage);
+            out_printf("  %-*s %s\n", name_col, name, usage);
         }
     }
 }

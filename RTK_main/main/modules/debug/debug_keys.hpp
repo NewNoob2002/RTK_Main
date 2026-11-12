@@ -18,7 +18,7 @@ inline constexpr std::array<fw::StoreKey, 2U> kKeys = {{
      .flags = fw::store_flag::kConsole,
      .min = 0,
      .max = static_cast<int32_t>(fw::kTraceAllMask),
-     .help = "启用的追踪类别掩码",
+     .help = "enabled trace category mask",
      .binding = {.obj = nullptr, .load = &DebugModule::load_mask, .save = &DebugModule::save_mask}},
     {.ns = "dbg",
      .key = "report",
@@ -27,7 +27,7 @@ inline constexpr std::array<fw::StoreKey, 2U> kKeys = {{
      .flags = fw::store_flag::kConsole,
      .min = 0,
      .max = 3600,
-     .help = "周期报告间隔（秒，0=关闭）",
+     .help = "periodic report interval (s, 0 = off)",
      .binding = {.obj = nullptr, .load = &DebugModule::load_report, .save = &DebugModule::save_report}},
 }};
 

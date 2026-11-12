@@ -1,4 +1,4 @@
-// 存储模块（kLink 执行器）：SN 与报警器白名单的 NVS 读写、去抖重试与 `sn` 控制台命令。
+// 存储模块（kLink 执行器）：SN 与报警器白名单的 NVS 读写、去抖重试、目录键表加载与 `config` 查看命令。
 #pragma once
 #include <span>
 
@@ -34,8 +34,6 @@ public:
     [[nodiscard]] fw::Result load_keys(std::span<const fw::StoreKey> keys) noexcept;
     /** 按 fw::StoreKey 表同步写 NVS（仅 kLink，非 ISR）；任一键失败即返回该错误。 */
     [[nodiscard]] fw::Result save_keys(std::span<const fw::StoreKey> keys) noexcept;
-    /** 已登记的键表（当前只有 debug）；init() 会逐个加载。 */
-    [[nodiscard]] static std::span<const std::span<const fw::StoreKey>> key_tables() noexcept;
 
 private:
     friend struct ModuleTestAccess;
@@ -60,8 +58,6 @@ private:
     LinkStatus whitelist_{};
     std::array<char, NVS_STORE_SN_MAX + 1U> sn_{};
 };
-/** 存储模块的控制台命令表；静态存储，进程期有效。 */
-[[nodiscard]] std::span<const cli::Cmd> storage_cmds() noexcept;
-/** store 子命令动词表，供 cli::add_verbs 登记。 */
-[[nodiscard]] std::span<const cli::Verb> store_verbs() noexcept;
+/** `config` 只读查看命令表；静态存储，进程期有效。 */
+[[nodiscard]] std::span<const cli::Cmd> config_cmds() noexcept;
 } // namespace app

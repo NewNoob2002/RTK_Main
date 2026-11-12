@@ -160,13 +160,14 @@ void start_console() noexcept
 {
     constexpr const char *kConsolePrompt = "console> ";
     const std::array cmd_tables{
-        app::system_cmds(), app::link_cmds(), app::storage_cmds(), app::rtcm_cmds(),
+        app::system_cmds(), app::link_cmds(), app::config_cmds(), app::rtcm_cmds(),
 #if RTK_GNSS_ENABLED
         app::gnss_cmds(),
 #endif
 #if FW_TRACE_ENABLED
         app::debug_cmds(),
 #endif
+        app::factory_cmds(),
     };
     /* 按原顺序注册命令，任一失败即停止控制台初始化。 */
     for (const auto table : cmd_tables) {
@@ -185,10 +186,6 @@ void start_console() noexcept
         VerbGroupDef{"status", "system and link status (default overview)", app::status_verbs()},
         VerbGroupDef{"log", "runtime IDF log level", app::log_verbs()},
         VerbGroupDef{"sys", "system info, heap, tasks and reboot", app::sys_verbs()},
-        VerbGroupDef{"bt", "BT sessions, pairing and policy", app::bt_verbs()},
-        VerbGroupDef{"wl", "alarm whitelist management", app::wl_verbs()},
-        VerbGroupDef{"alarm", "alarm state and override", app::alarm_verbs()},
-        VerbGroupDef{"store", "NVS SN and persistence status", app::store_verbs()},
         VerbGroupDef{"rtcm", "RTCM forwarding stats and reset", app::rtcm_verbs()},
 #if RTK_GNSS_ENABLED
         VerbGroupDef{"gnss", "GNSS receiver control and telemetry", app::gnss_verbs()},
@@ -196,6 +193,7 @@ void start_console() noexcept
 #if FW_TRACE_ENABLED
         VerbGroupDef{"debug", "trace categories, report and NVS", app::debug_verbs()},
 #endif
+        VerbGroupDef{"factory", "production settings (hidden, needs unlock)", app::factory_verbs()},
     };
     /* 必须在 start 之前登记所有动词表，供 help / help <group> 展示。 */
     for (const auto &group : verb_groups) {

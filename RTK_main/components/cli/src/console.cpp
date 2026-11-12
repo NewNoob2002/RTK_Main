@@ -130,6 +130,9 @@ void print_group_list() noexcept
     // 按登记顺序输出；已登记动词表的组用摘要，否则回落到该命令的单行 help。
     for (size_t t = 0U; t < s_table_count; ++t) {
         for (const Cmd &cmd : s_tables[t]) {
+            if (cmd.hidden) {
+                continue; // 隐藏命令只在知道名字时使用（ADR-0009 §2.10）
+            }
             const VerbGroup *group = find_verb_group(cmd.name);
             const char *summary = (group != nullptr) ? group->summary : cmd.help;
             out_printf("  %-*s %s\n", kGroupWidth, cmd.name, (summary != nullptr) ? summary : "");

@@ -35,4 +35,7 @@ private:
 [[nodiscard]] std::span<const cli::Verb> status_verbs() noexcept;
 [[nodiscard]] std::span<const cli::Verb> log_verbs() noexcept;
 [[nodiscard]] std::span<const cli::Verb> sys_verbs() noexcept;
+/** 隐藏的 factory 命令表与动词表（ADR-0009 §2.10）；help 列表不显示。 */
+[[nodiscard]] std::span<const cli::Cmd> factory_cmds() noexcept;
+[[nodiscard]] std::span<const cli::Verb> factory_verbs() noexcept;
 } // namespace app

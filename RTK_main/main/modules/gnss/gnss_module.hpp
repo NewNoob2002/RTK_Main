@@ -57,9 +57,6 @@ public:
     /** 仅 kIo 调用：处理 gnss probe/reset/rate/send 命令。 */
     void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
-    /** 本模块登记的持久化键（ns "gnss"），由 storage 模块在启动时加载。 */
-    [[nodiscard]] static std::span<const fw::StoreKey> keys() noexcept;
-
     // 适配 fw::StoreBinding：表为 constexpr，通过 app_context().gnss 定位单例实例。
     static fw::Result load_family(void *obj, std::span<const uint8_t> in) noexcept;
     static fw::Result save_family(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
