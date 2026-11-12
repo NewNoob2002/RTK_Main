@@ -29,8 +29,8 @@ public:
     static constexpr uint32_t kPollPeriodMs = 20;
     /** 单行事件文本上限，超长由 format_event 截断。 */
     static constexpr size_t kLineBytes = 192;
-    /** 输出任务栈；实测占用约 2 KB，余量 ≥ 1 KB（printf + 文本表）。 */
-    static constexpr size_t kTaskStackBytes = 4096;
+    /** 输出任务栈；T3 上板 7 类全开、40 KB/s 负载下实测占用约 1.7 KB（HWM 2412/4096），取 3 KB 留约 1.3 KB 余量。 */
+    static constexpr size_t kTaskStackBytes = 3072;
 
     constexpr explicit DebugModule(AppContext &context) noexcept : context_(context) {}
     ~DebugModule() = default;
