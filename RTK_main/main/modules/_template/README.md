@@ -85,6 +85,11 @@
 2. 在初始化列表追加 `app::<name>_cmds(),`。
 3. 确认全部命令表条目总数不超过 `cli::kMaxCmds`（`24`，见 `components/cli/include/cli/console.hpp`）。
 
+命令主体请用 `cli::Verb` 描述子命令并交给 `cli::dispatch` 分派，失败统一 `return cli::fail("<原因>")`：
+`start()` 的 trampoline 会补上最后一行 `OK` / `ERR …`，命令 handler 不要自己打印这两个状态行，
+也不要返回非 0 码（那会让 REPL 再打印一遍错误）。组级说明用 `cli::add_verbs(group, summary, verbs)` 登记，
+`help` 与 `help <组>` 据此生成用法。
+
 （若新模块需要在执行器 `init()` 前做一次性前置准备，再在 `app_main()` 中按顺序调用；普通模块无需改 `app_main()`。）
 
 ### 8. 发布数据到 `DataCenter`（Topic / Slot）

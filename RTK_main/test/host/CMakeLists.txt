@@ -49,6 +49,7 @@ target_compile_options(dev_proto_c PRIVATE ${PROJ_C_STRICT})
 
 add_library(host_pure STATIC
     ${PROJ_ROOT}/components/app_fw/src/status.cpp
+    ${PROJ_ROOT}/components/app_fw/src/trace.cpp
     ${PROJ_ROOT}/components/device_proto/bytes.cpp
     ${PROJ_ROOT}/components/device_proto/frame.cpp
     ${PROJ_ROOT}/components/device_proto/alarm_codec.cpp

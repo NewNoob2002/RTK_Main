@@ -1,5 +1,5 @@
 # app_fw 纯 C++20 组件 host 单元测试工程（ADR-0007，J4 交付）。
-# 覆盖 Result、LockGuard、Slot、StoreKey、FanoutRing；支持普通构建与 ASan/UBSan 构建。
+# 覆盖 Result、LockGuard、Slot、StoreKey、FanoutRing、trace/TraceRing；支持普通构建与 ASan/UBSan 构建。
 cmake_minimum_required(VERSION 3.22)
 project(app_fw_tests C CXX)
 
@@ -37,7 +37,7 @@ target_compile_options(app_fw PRIVATE -fno-exceptions -fno-rtti)
 
 enable_testing()
 
-foreach(name test_app_fw_basics test_fanout_ring)
+foreach(name test_app_fw_basics test_fanout_ring test_trace)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} app_fw unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})

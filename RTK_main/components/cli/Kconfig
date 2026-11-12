@@ -7,8 +7,20 @@ menu "RTK console (ADR-0007)"
 
     config RTK_CONSOLE_UART_BAUD
         int "Console UART baud rate"
-        default 115200
+        default ESP_CONSOLE_UART_BAUDRATE
         range 9600 4000000
+        help
+            默认跟随 ESP_CONSOLE_UART_BAUDRATE（IDF 控制台波特率），避免两个配置不一致导致乱码。
+            本工程 sdkconfig.defaults 把两者都设为 2000000；>1 MHz 时 UART 驱动改用 APB 时钟。
+
+    config RTK_CONSOLE_UART_TX_BUF
+        int "Console UART TX ring buffer size (bytes)"
+        default 8192
+        range 0 32768
+        help
+            经典 ESP32 没有 UHCI/UART DMA，长输出只能靠 TX 环形缓冲 + 中断搬运。
+            0 = 保留 IDF 的同步阻塞发送（TX 缓冲为 0）；大于 0 时在 esp_console_new_repl_uart()
+            之后重装带 TX 环形的驱动（ADR-0009 §2.4）。占用静态 DRAM，按需调整。
 
     config RTK_CONSOLE_CMDLINE_MAX
         int "Console max command line length (bytes)"
