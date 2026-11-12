@@ -135,7 +135,7 @@ void print_group_list() noexcept
 }
 
 // help 由本组件实现：无参列出各组，带参显示该组用法。
-// esp_console_common_init() 已注册 IDF 自带的 help，这里同名覆盖（esp_console_cmd_register 复用同一条目）。
+// esp_console_common_init() 已注册 IDF 自带的 help，register_help() 先注销再登记本实现。
 int cmd_help(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 0) || (argv == nullptr)) {
@@ -195,6 +195,12 @@ esp_err_t register_help() noexcept
     command.hint = "<group>";
     command.func_w_context = cmd_help;
     command.context = nullptr;
+    // 必须先注销 IDF 自带的 help：IDF v6.1 commands.c:156-160 同名覆盖时不清空旧的 func，
+    // 结果 func 与 func_w_context 都会被调用（:257-260），help 输出两遍。
+    const esp_err_t err = esp_console_cmd_deregister(kHelpName);
+    if ((err != ESP_OK) && (err != ESP_ERR_INVALID_ARG)) {
+        return err;
+    }
     return esp_console_cmd_register(&command);
 }
 
