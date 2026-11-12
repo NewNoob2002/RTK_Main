@@ -52,4 +52,46 @@ inline constexpr size_t kMacLen = 6;
 /** 偶数个十六进制字符 → 字节，长度超过 out.size() → false；written 为写入字节数。 */
 [[nodiscard]] bool parse_hex(const char *s, std::span<uint8_t> out, size_t &written) noexcept;
 
+/* ---- 统一回执与子命令（ADR-0009 §2.5）----
+ * start() 为每条命令注册一个 trampoline：handler 返回 0 → 打印 "OK"；返回非 0 且本次调用过 fail() →
+ * fail() 已打印 "ERR <原因>"；返回非 0 但没调用 fail() → 打印 "ERR <返回值>"。trampoline 总是向 esp_console
+ * 返回 0。回执状态是 console 任务私有的（命令只在 REPL 任务中串行执行）。
+ */
+
+inline constexpr int kCmdFail = 1; // fail() 的返回值，handler 直接 return
+
+/** 打印 "ERR <fmt…>" 并标记本次命令已给出原因；返回 kCmdFail。只在命令 handler 中调用。 */
+int fail(const char *fmt, ...) noexcept __attribute__((format(printf, 1, 2)));
+
+/** 一个子命令（动词）；name/usage/help 指向静态存储。 */
+struct Verb {
+    const char *name = nullptr;  // 动词，例如 "list"
+    const char *usage = nullptr; // 参数用法，例如 "<MAC>"；无参数为 nullptr
+    const char *help = nullptr;  // 一行说明
+    Handler handler = nullptr;   // argv[0] 是动词本身
+};
+
+/**
+ * 子命令分派：argv[0] 为组名，argv[1] 为动词。找到 → 以 (argc-1, argv+1) 调用该动词的 handler；
+ * 没有动词且 default_verb 非空 → 按 default_verb 执行；否则打印本组用法并返回 fail("usage")。
+ */
+int dispatch(std::span<const Verb> verbs, void *ctx, int argc, char **argv,
+             const char *default_verb = nullptr) noexcept;
+
+/** 打印一组的用法（`help <组>` 与 dispatch 失败时使用）。 */
+void print_usage(const char *group, std::span<const Verb> verbs) noexcept;
+
+/**
+ * 登记一组的动词表，供 `help` 与 `help <组>` 显示（组名必须已经或将要经 add() 登记）。
+ * 只保存指针；必须在 start 之前调用；超过 kMaxCmds → ESP_ERR_NO_MEM。
+ */
+[[nodiscard]] esp_err_t add_verbs(const char *group, const char *summary, std::span<const Verb> verbs) noexcept;
+
+/* ---- 分节输出辅助（status、sys 等使用，统一对齐与单位）---- */
+
+/** 打印节标题，例如 "[link]"。 */
+void print_section(const char *title) noexcept;
+/** 打印一行键值：键左对齐到固定宽度，值按 fmt 格式化。 */
+void print_kv(const char *key, const char *fmt, ...) noexcept __attribute__((format(printf, 2, 3)));
+
 } // namespace cli

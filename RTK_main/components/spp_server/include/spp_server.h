@@ -80,6 +80,28 @@ esp_err_t spp_server_get_local_addr(uint8_t addr[SPP_SERVER_ADDR_LEN]);
 /** 事件队列满被丢弃的事件数（诊断）。 */
 uint32_t spp_server_dropped_events(void);
 
+/* ---- 调试追踪钩子（ADR-0009 §2.2，类别 spp）---- */
+
+/** 驱动事件码；参数含义写在每个码后面。新增码只能追加在末尾。 */
+typedef enum {
+    SPP_SERVER_TRACE_SRV_START = 0, /* 服务端启动：a = scn */
+    SPP_SERVER_TRACE_CONG,          /* 拥塞状态变化：a = 1 拥塞 / 0 解除 */
+    SPP_SERVER_TRACE_WRITE_DONE,    /* 一块写完成：a = 字节数，b = 耗时 ms */
+    SPP_SERVER_TRACE_WRITE_ERR,     /* 写失败/超时：a = esp_err_t，b = 字节数 */
+    SPP_SERVER_TRACE_RX_DROP,       /* RX 缓冲满丢弃：a = 本次丢弃字节，b = 缓冲已用字节 */
+    SPP_SERVER_TRACE_AUTH,          /* GAP 认证完成：a = 状态码 */
+    SPP_SERVER_TRACE_EVT_DROP,      /* 事件队列满丢事件：a = 事件类型 */
+} spp_server_trace_code_t;
+
+/**
+ * 追踪钩子：在 BT 回调任务、worker 任务或调用 write 的任务中被同步调用，必须非阻塞且不做 I/O。
+ * handle 为会话句柄（无关时为 0）。
+ */
+typedef void (*spp_server_trace_fn)(spp_server_trace_code_t code, uint32_t handle, uint32_t a, uint32_t b);
+
+/** 安装/清除（NULL）钩子；任意时刻可调用（原子指针写）。未安装时驱动不产生任何追踪开销以外的工作。 */
+void spp_server_set_trace_hook(spp_server_trace_fn fn);
+
 #ifdef __cplusplus
 }
 #endif
