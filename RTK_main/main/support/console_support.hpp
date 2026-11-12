@@ -4,7 +4,7 @@
 
 #include "data/app_data.hpp"
 
-namespace rtk::app {
+namespace app {
 
 /** 角色的可读名（NONE/PHONE/ALARM/PENDING）。 */
 [[nodiscard]] const char *role_name(core::Role role) noexcept;
@@ -15,4 +15,4 @@ void print_mac(const core::BtAddr &addr) noexcept;
 /** 把命令投递给链路执行器并等待结果；仅 console REPL 任务调用，非 ISR。 */
 [[nodiscard]] bool submit(const fw::Command &command, const char *what) noexcept;
 
-} // namespace rtk::app
+} // namespace app

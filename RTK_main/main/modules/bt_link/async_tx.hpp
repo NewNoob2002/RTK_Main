@@ -10,12 +10,12 @@
 #include <cstdint>
 #include <span>
 
-#include "rtk/core/transport.hpp"
-#include "rtk/os/static_queue.hpp"
-#include "rtk/os/static_task.hpp"
+#include "core/transport.hpp"
+#include "rtos/static_queue.hpp"
+#include "rtos/static_task.hpp"
 #include "rtk_proto_frame.h"
 
-namespace rtk::app {
+namespace app {
 
 /** 异步发送统计；atomic 字段可跨任务读取。 */
 struct AsyncTxStats {
@@ -36,13 +36,13 @@ public:
     constexpr explicit AsyncTxTransport(core::Transport &inner) noexcept : inner_(inner) {}
 
     /** 初始化队列并启动发送任务。重复调用返回 kBusy。 */
-    [[nodiscard]] Status start(uint32_t priority, BaseType_t core) noexcept;
+    [[nodiscard]] fw::Status start(uint32_t priority, BaseType_t core) noexcept;
 
     /** 已启动：拷贝入队，满则返回 kBusy；未启动：同步转调底层。timeout_ms 用作发送任务里底层 write 的超时。 */
-    [[nodiscard]] Status write(core::SessionHandle handle, std::span<const uint8_t> data,
-                               uint32_t timeout_ms) noexcept override;
+    [[nodiscard]] fw::Status write(core::SessionHandle handle, std::span<const uint8_t> data,
+                                   uint32_t timeout_ms) noexcept override;
     /** 直接转调底层；该句柄已排队的回复会在发送时以失败计数。 */
-    [[nodiscard]] Status disconnect(core::SessionHandle handle) noexcept override;
+    [[nodiscard]] fw::Status disconnect(core::SessionHandle handle) noexcept override;
 
     /** 发送任务主体的一步：等待最多 wait_ms 取一条并同步发出。返回是否处理了一条。 */
     bool pump(uint32_t wait_ms) noexcept;
@@ -60,8 +60,8 @@ private:
     static void task_entry(void *arg) noexcept;
 
     core::Transport &inner_;
-    os::StaticQueue<Item, kDepth> queue_{};
-    os::StaticTask<kStackBytes> task_{};
+    rtos::StaticQueue<Item, kDepth> queue_{};
+    rtos::StaticTask<kStackBytes> task_{};
     Item tx_item_{}; // 只由链路任务（write）使用，避免 ~290 B 压栈
     Item rx_item_{}; // 只由发送任务（pump）使用
     std::atomic<uint32_t> depth_{0};
@@ -72,4 +72,4 @@ private:
     bool started_ = false;
 };
 
-} // namespace rtk::app
+} // namespace app

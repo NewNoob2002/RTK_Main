@@ -4,11 +4,11 @@
 
 #include <cstdint>
 #include <span>
-#include "rtk/console/console.hpp"
-#include "rtk/fw/command.hpp"
-#include "rtk/fw/result.hpp"
+#include "cli/console.hpp"
+#include "fw/command.hpp"
+#include "fw/result.hpp"
 
-namespace rtk::app {
+namespace app {
 struct AppContext;
 
 /** 模板模块命令动词（跨模块共享时移至 main/def/<name>_def.hpp）。 */
@@ -53,5 +53,5 @@ private:
     uint32_t last_tick_ms_ = 0U;
 };
 /** 模板模块控制台命令表；静态存储，进程期有效。 */
-[[nodiscard]] std::span<const rtk::console::Cmd> template_cmds() noexcept;
-} // namespace rtk::app
+[[nodiscard]] std::span<const cli::Cmd> template_cmds() noexcept;
+} // namespace app

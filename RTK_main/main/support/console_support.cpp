@@ -9,7 +9,7 @@
 
 #include "app_context.hpp"
 
-namespace rtk::app {
+namespace app {
 
 const char *role_name(core::Role role) noexcept
 {
@@ -73,4 +73,4 @@ bool submit(const fw::Command &command, const char *what) noexcept
     return report(what, result);
 }
 
-} // namespace rtk::app
+} // namespace app

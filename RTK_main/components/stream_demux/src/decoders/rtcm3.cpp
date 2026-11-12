@@ -3,16 +3,16 @@
 // 早拒绝点：第 2 字节保留位（这是与其它 0xD3 数据分开的唯一可靠信号）。
 // 纯函数、可重入、无静态可变状态；ISR 安全。
 
-#include "rtk/demux/decoders/rtcm3.hpp"
+#include "demux/decoders/rtcm3.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "rtk/demux/crc.hpp"
-#include "rtk/demux/decoder.hpp"
+#include "demux/crc.hpp"
+#include "demux/decoder.hpp"
 
-namespace rtk::demux::rtcm3 {
+namespace demux::rtcm3 {
 
 namespace {
 
@@ -70,4 +70,4 @@ Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
     return (crc_calc == crc_rx) ? Step::kFrame : Step::kReject;
 }
 
-} // namespace rtk::demux::rtcm3
+} // namespace demux::rtcm3

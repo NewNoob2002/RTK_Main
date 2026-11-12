@@ -4,24 +4,23 @@
 #include <cstdint>
 #include <span>
 
-#include "rtk/core/command_router.hpp"
-#include "rtk/core/reply.hpp"
-#include "rtk/proto/frame.hpp"
+#include "core/command_router.hpp"
+#include "core/reply.hpp"
+#include "proto/frame.hpp"
 #include "unity.h"
 
 namespace {
 
-namespace proto = rtk::proto;
-using rtk::core::CommandRouter;
-using rtk::core::DispatchResult;
-using rtk::core::kMaxRoutes;
-using rtk::core::kRoleAlarm;
-using rtk::core::kRolePhone;
-using rtk::core::Reply;
-using rtk::core::Role;
-using rtk::core::role_bit;
-using rtk::core::Route;
-using rtk::core::RouteTable;
+using core::CommandRouter;
+using core::DispatchResult;
+using core::kMaxRoutes;
+using core::kRoleAlarm;
+using core::kRolePhone;
+using core::Reply;
+using core::Role;
+using core::role_bit;
+using core::Route;
+using core::RouteTable;
 
 // Reply 哨兵值：确认 handle 先 clear()（长度与内容都必须被清掉）。
 constexpr uint8_t kSentinelByte = 0x5A;
@@ -90,7 +89,7 @@ void test_init_and_route_count()
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, routes}};
     CommandRouter router;
     TEST_ASSERT_EQUAL_UINT8(0, router.route_count());
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kOk), static_cast<uint8_t>(router.init(tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk), static_cast<uint8_t>(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(2, router.route_count());
 }
 
@@ -107,27 +106,27 @@ void test_init_rejects_bad_tables()
     {
         CommandRouter router;
         const std::array<RouteTable, 1> tables = {RouteTable{nullptr, routes}};
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kInvalidArg),
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kInvalidArg),
                                 static_cast<uint8_t>(router.init(tables)));
         TEST_ASSERT_EQUAL_UINT(0, router.route_count());
     }
     {
         CommandRouter router;
         const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, null_handler}};
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kInvalidArg),
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kInvalidArg),
                                 static_cast<uint8_t>(router.init(tables)));
         TEST_ASSERT_EQUAL_UINT(0, router.route_count());
     }
     {
         CommandRouter router;
         const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, zero_roles}};
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kInvalidArg),
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kInvalidArg),
                                 static_cast<uint8_t>(router.init(tables)));
     }
     {
         CommandRouter router;
         const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, duplicated}};
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kInvalidArg),
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kInvalidArg),
                                 static_cast<uint8_t>(router.init(tables)));
         TEST_ASSERT_EQUAL_UINT(0, router.route_count());
     }
@@ -144,7 +143,7 @@ void test_failed_init_leaves_router_unusable()
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, too_many}};
 
     CommandRouter router;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kNoSpace), static_cast<uint8_t>(router.init(tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kNoSpace), static_cast<uint8_t>(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(0, router.route_count());
 
     Fixture f;
@@ -164,7 +163,7 @@ void test_capacity_limits()
     }
     const std::array<RouteTable, 1> ok_tables = {RouteTable{&s_calls, exact}};
     CommandRouter full;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kOk), static_cast<uint8_t>(full.init(ok_tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk), static_cast<uint8_t>(full.init(ok_tables)));
     TEST_ASSERT_EQUAL_UINT(kMaxRoutes, full.route_count());
 
     std::array<Route, kMaxRoutes + 1> overflow{};
@@ -173,7 +172,7 @@ void test_capacity_limits()
     }
     const std::array<RouteTable, 1> bad_tables = {RouteTable{&s_calls, overflow}};
     CommandRouter over;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kNoSpace), static_cast<uint8_t>(over.init(bad_tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kNoSpace), static_cast<uint8_t>(over.init(bad_tables)));
 }
 
 void test_duplicate_init_returns_busy()
@@ -181,8 +180,8 @@ void test_duplicate_init_returns_busy()
     const std::array<Route, 1> routes = {Route{kMsgHeartbeat, kRoleAlarm, &handle_reply}};
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, routes}};
     CommandRouter router;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kOk), static_cast<uint8_t>(router.init(tables)));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kBusy), static_cast<uint8_t>(router.init(tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk), static_cast<uint8_t>(router.init(tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kBusy), static_cast<uint8_t>(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(1, router.route_count());
 
     // 第一次登记仍然有效。
@@ -198,7 +197,7 @@ void test_dispatch_and_arguments()
     const std::array<Route, 1> routes = {Route{kMsgHeartbeat, kRoleAlarm, &handle_reply}};
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, routes}};
     CommandRouter router;
-    TEST_ASSERT_TRUE(rtk::is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(is_ok(router.init(tables)));
 
     Fixture f;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
@@ -222,7 +221,7 @@ void test_role_check_and_unknown_order()
         RouteTable{&s_calls, alarm_route},
     };
     CommandRouter router;
-    TEST_ASSERT_TRUE(rtk::is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(is_ok(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(2, router.route_count());
 
     Fixture f;
@@ -256,7 +255,7 @@ void test_handler_result_is_passed_through()
     const std::array<Route, 1> routes = {Route{kMsgHeartbeat, kRoleAlarm, &handle_silent}};
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, routes}};
     CommandRouter router;
-    TEST_ASSERT_TRUE(rtk::is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(is_ok(router.init(tables)));
 
     Fixture f;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kNoReply),

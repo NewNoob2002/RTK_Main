@@ -7,7 +7,7 @@
 
 #include "app_config.hpp"
 
-namespace rtk::app {
+namespace app {
 
 /** RTCM 模块命令动词。 */
 enum class RtcmVerb : uint8_t { kReset };
@@ -35,4 +35,4 @@ struct RtcmBatch {
     uint32_t rejected = 0;
 };
 
-} // namespace rtk::app
+} // namespace app

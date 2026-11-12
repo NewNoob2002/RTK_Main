@@ -1,12 +1,12 @@
 // 通用 SPP 客户端重连策略状态机实现（ADR-0007 §5）。纯 C++20，无 IDF/FreeRTOS 依赖。
 // 只由持有它的任务单线程调用；不阻塞、不分配堆。
 
-#include "rtk/reconnect/reconnect.hpp"
+#include "reconnect/reconnect.hpp"
 
 #include <algorithm>
 #include <cstdint>
 
-namespace rtk::reconnect {
+namespace reconnect {
 
 namespace {
 
@@ -319,4 +319,4 @@ uint32_t Reconnector::next_attempt_in(uint32_t now_ms) const noexcept
     return stats_.last_delay_ms - elapsed;
 }
 
-} // namespace rtk::reconnect
+} // namespace reconnect

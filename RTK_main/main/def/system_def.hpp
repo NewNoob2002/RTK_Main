@@ -7,7 +7,7 @@
 #include "app_config.hpp"
 #include "rtk_store.h"
 
-namespace rtk::app {
+namespace app {
 
 /** 系统模块命令动词。 */
 enum class SystemVerb : uint8_t { kPublish };
@@ -35,4 +35,4 @@ struct SystemMode {
     uint32_t since_ms = 0;
 };
 
-} // namespace rtk::app
+} // namespace app

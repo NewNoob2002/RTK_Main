@@ -3,7 +3,7 @@
 #include "modules/_template/template_module.hpp"
 #include "app_context.hpp"
 
-namespace rtk::app {
+namespace app {
 namespace {
 constexpr uint32_t kDefaultLimitMs = 1000U; // 默认步进周期（ms）
 constexpr size_t kBitsPerByte = 8U;
@@ -79,4 +79,4 @@ TemplateState TemplateModule::state() const noexcept
 {
     return state_;
 }
-} // namespace rtk::app
+} // namespace app

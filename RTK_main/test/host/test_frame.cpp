@@ -3,11 +3,9 @@
 #include <cstdint>
 #include <cstring>
 
-#include "rtk/proto/frame.hpp"
+#include "proto/frame.hpp"
 #include "test_support.hpp"
 #include "unity.h"
-
-namespace proto = rtk::proto;
 
 // App 查询 0x0001，无 payload
 static constexpr std::array<uint8_t, 24> kFrameA = {0xAA, 0x44, 0x18, 0x14, 0x01, 0x00, 0x00, 0x00,
@@ -43,8 +41,7 @@ static void test_build_query_frame()
 {
     std::array<uint8_t, 64> out{};
     size_t len = 0;
-    TEST_ASSERT_TRUE(
-        rtk::is_ok(proto::build_frame(out, 0x0001, proto::sender::kApp, proto::msg_type::kQuery, {}, len)));
+    TEST_ASSERT_TRUE(is_ok(proto::build_frame(out, 0x0001, proto::sender::kApp, proto::msg_type::kQuery, {}, len)));
     TEST_ASSERT_EQUAL_UINT(kFrameA.size(), len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kFrameA.data(), out.data(), kFrameA.size());
 }
@@ -55,7 +52,7 @@ static void test_build_set_response()
     std::array<uint8_t, 64> out{};
     size_t len = 0;
     TEST_ASSERT_TRUE(
-        rtk::is_ok(proto::build_frame(out, 0x0004, proto::sender::kDevice, proto::msg_type::kSetRes, payload, len)));
+        is_ok(proto::build_frame(out, 0x0004, proto::sender::kDevice, proto::msg_type::kSetRes, payload, len)));
     TEST_ASSERT_EQUAL_UINT(kFrameB.size(), len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kFrameB.data(), out.data(), kFrameB.size());
 }
@@ -65,12 +62,12 @@ static void test_build_rejects_bad_args()
     static std::array<uint8_t, proto::kMaxPayload + 1> big{};
     static std::array<uint8_t, proto::kMaxFrame + 8> out{};
     size_t len = 0xABCD;
-    TEST_ASSERT_EQUAL(rtk::Status::kNoSpace,
+    TEST_ASSERT_EQUAL(fw::Status::kNoSpace,
                       proto::build_frame(std::span<uint8_t>(out.data(), kFrameB.size() - 1), 0x0004, 1, 3,
                                          std::span<const uint8_t>(big.data(), 2), len));
-    TEST_ASSERT_EQUAL(rtk::Status::kInvalidArg, proto::build_frame(out, 0x0004, 1, 3, big, len));
+    TEST_ASSERT_EQUAL(fw::Status::kInvalidArg, proto::build_frame(out, 0x0004, 1, 3, big, len));
     TEST_ASSERT_EQUAL_UINT(0xABCD, len);
-    TEST_ASSERT_EQUAL(rtk::Status::kOk,
+    TEST_ASSERT_EQUAL(fw::Status::kOk,
                       proto::build_frame(std::span<uint8_t>(out.data(), proto::kMaxFrame), 0x0004, 1, 3,
                                          std::span<const uint8_t>(big.data(), proto::kMaxPayload), len));
     TEST_ASSERT_EQUAL_UINT(proto::kMaxFrame, len);
@@ -165,7 +162,7 @@ static void test_parse_max_payload()
         payload[i] = static_cast<uint8_t>(i); // i < 256
     }
     size_t len = 0;
-    TEST_ASSERT_TRUE(rtk::is_ok(proto::build_frame(out, 0x0007, 0, 2, payload, len)));
+    TEST_ASSERT_TRUE(is_ok(proto::build_frame(out, 0x0007, 0, 2, payload, len)));
     auto r = test::feed_all(s_parser, std::span<const uint8_t>(out.data(), len));
     TEST_ASSERT_EQUAL_INT(1, r.frames);
     TEST_ASSERT_EQUAL_UINT(proto::kMaxPayload, r.last.payload.size());

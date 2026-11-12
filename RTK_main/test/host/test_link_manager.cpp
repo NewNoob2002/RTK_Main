@@ -2,15 +2,15 @@
 #include <array>
 #include <cstdint>
 
-#include "rtk/core/link_manager.hpp"
+#include "core/link_manager.hpp"
 #include "unity.h"
 
-using rtk::core::Actions;
-using rtk::core::BtAddr;
-using rtk::core::LinkManager;
-using rtk::core::Policy;
-using rtk::core::Role;
-using rtk::core::SessionHandle;
+using core::Actions;
+using core::BtAddr;
+using core::LinkManager;
+using core::Policy;
+using core::Role;
+using core::SessionHandle;
 
 static constexpr SessionHandle kPhone = 0x81;
 static constexpr SessionHandle kAlarm = 0x82;
@@ -109,9 +109,9 @@ static void test_alarm_rx_timeout_with_wrap()
     init_with_alarm(Policy::kConcurrent);
     static_cast<void>(s_mgr.on_open(kAlarm, kAlarmAddr, t0, s_act));
     TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.on_frame(kAlarm, 0x03, 0x0041, t0 + 1000U, s_act));
-    s_mgr.tick(t0 + 1000U + rtk::core::kAlarmRxTimeoutMs, s_act);
+    s_mgr.tick(t0 + 1000U + core::kAlarmRxTimeoutMs, s_act);
     TEST_ASSERT_EQUAL_UINT8(0, s_act.count); // 等于阈值不断开
-    s_mgr.tick(t0 + 1001U + rtk::core::kAlarmRxTimeoutMs, s_act);
+    s_mgr.tick(t0 + 1001U + core::kAlarmRxTimeoutMs, s_act);
     TEST_ASSERT_EQUAL_UINT8(1, s_act.count);
     TEST_ASSERT_EQUAL_UINT32(kAlarm, s_act.handles[0]);
     TEST_ASSERT_TRUE(Role::kNone == s_mgr.role(kAlarm));
@@ -132,12 +132,11 @@ static void test_pairing_promotes_phone_role_to_alarm()
     static_cast<void>(s_mgr.on_open(kAlarm, kAlarmAddr, 0, s_act));
     s_mgr.pair_open(10);
     TEST_ASSERT_TRUE(s_mgr.is_pairing());
-    TEST_ASSERT_TRUE(Role::kAlarm ==
-                     s_mgr.on_frame(kAlarm, rtk::core::kHelloSender, rtk::core::kHelloMsgId, 20, s_act));
+    TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 20, s_act));
     TEST_ASSERT_EQUAL_UINT8(0, s_act.count);
     TEST_ASSERT_EQUAL_UINT(1, s_mgr.whitelist().size());
     TEST_ASSERT_TRUE(s_mgr.whitelist()[0] == kAlarmAddr);
-    static_cast<void>(s_mgr.on_frame(kAlarm, rtk::core::kHelloSender, rtk::core::kHelloMsgId, 30, s_act));
+    static_cast<void>(s_mgr.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 30, s_act));
     TEST_ASSERT_EQUAL_UINT(1, s_mgr.whitelist().size()); // 不重复加入
 }
 
@@ -147,8 +146,7 @@ static void test_pending_when_phone_online_and_pairing()
     static_cast<void>(s_mgr.on_open(kPhone, kPhoneAddr, 0, s_act));
     s_mgr.pair_open(0);
     TEST_ASSERT_TRUE(Role::kPending == s_mgr.on_open(kAlarm, kAlarmAddr, 100, s_act));
-    TEST_ASSERT_TRUE(Role::kAlarm ==
-                     s_mgr.on_frame(kAlarm, rtk::core::kHelloSender, rtk::core::kHelloMsgId, 200, s_act));
+    TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 200, s_act));
 }
 
 static void test_pending_non_hello_is_disconnected()
@@ -169,9 +167,9 @@ static void test_pending_timeout()
     static_cast<void>(s_mgr.on_open(kPhone, kPhoneAddr, 0, s_act));
     s_mgr.pair_open(0);
     static_cast<void>(s_mgr.on_open(kOther, kOtherAddr, 1000, s_act));
-    s_mgr.tick(1000U + rtk::core::kPendingTimeoutMs, s_act);
+    s_mgr.tick(1000U + core::kPendingTimeoutMs, s_act);
     TEST_ASSERT_EQUAL_UINT8(0, s_act.count);
-    s_mgr.tick(1001U + rtk::core::kPendingTimeoutMs, s_act);
+    s_mgr.tick(1001U + core::kPendingTimeoutMs, s_act);
     TEST_ASSERT_EQUAL_UINT8(1, s_act.count);
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }
@@ -180,7 +178,7 @@ static void test_hello_without_pairing_is_unauthorized()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.on_open(kOther, kOtherAddr, 0, s_act));
-    TEST_ASSERT_TRUE(Role::kNone == s_mgr.on_frame(kOther, rtk::core::kHelloSender, rtk::core::kHelloMsgId, 10, s_act));
+    TEST_ASSERT_TRUE(Role::kNone == s_mgr.on_frame(kOther, core::kHelloSender, core::kHelloMsgId, 10, s_act));
     TEST_ASSERT_EQUAL_UINT8(1, s_act.count);
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }
@@ -189,34 +187,34 @@ static void test_pair_window_expires()
 {
     s_mgr.init(Policy::kConcurrent, {});
     s_mgr.pair_open(500);
-    s_mgr.tick(500U + rtk::core::kPairWindowMs - 1U, s_act);
+    s_mgr.tick(500U + core::kPairWindowMs - 1U, s_act);
     TEST_ASSERT_TRUE(s_mgr.is_pairing());
-    s_mgr.tick(500U + rtk::core::kPairWindowMs, s_act);
+    s_mgr.tick(500U + core::kPairWindowMs, s_act);
     TEST_ASSERT_FALSE(s_mgr.is_pairing());
 }
 
 static void test_whitelist_full_rejects_new_alarm()
 {
-    std::array<BtAddr, rtk::core::kMaxAlarms> full{};
+    std::array<BtAddr, core::kMaxAlarms> full{};
     for (size_t i = 0; i < full.size(); ++i) {
         full[i].bytes.fill(static_cast<uint8_t>(0xC0U + i)); // i < 4
     }
     s_mgr.init(Policy::kConcurrent, full);
     static_cast<void>(s_mgr.on_open(kOther, kOtherAddr, 0, s_act));
     s_mgr.pair_open(0);
-    TEST_ASSERT_TRUE(Role::kNone == s_mgr.on_frame(kOther, rtk::core::kHelloSender, rtk::core::kHelloMsgId, 10, s_act));
+    TEST_ASSERT_TRUE(Role::kNone == s_mgr.on_frame(kOther, core::kHelloSender, core::kHelloMsgId, 10, s_act));
     TEST_ASSERT_EQUAL_UINT8(1, s_act.count);
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }
 
 static void test_init_truncates_and_clear()
 {
-    std::array<BtAddr, rtk::core::kMaxAlarms + 2> many{};
+    std::array<BtAddr, core::kMaxAlarms + 2> many{};
     for (size_t i = 0; i < many.size(); ++i) {
         many[i].bytes.fill(static_cast<uint8_t>(i + 1U));
     }
     s_mgr.init(Policy::kConcurrent, many);
-    TEST_ASSERT_EQUAL_UINT(rtk::core::kMaxAlarms, s_mgr.whitelist().size());
+    TEST_ASSERT_EQUAL_UINT(core::kMaxAlarms, s_mgr.whitelist().size());
     s_mgr.whitelist_clear();
     TEST_ASSERT_EQUAL_UINT(0, s_mgr.whitelist().size());
 }
@@ -226,7 +224,7 @@ static void test_handles_and_clear_keeps_roles()
     init_with_alarm(Policy::kConcurrent);
     static_cast<void>(s_mgr.on_open(kPhone, kPhoneAddr, 0, s_act));
     static_cast<void>(s_mgr.on_open(kAlarm, kAlarmAddr, 0, s_act));
-    std::array<SessionHandle, rtk::core::kMaxSessions> out{};
+    std::array<SessionHandle, core::kMaxSessions> out{};
     TEST_ASSERT_EQUAL_UINT(1, s_mgr.handles(Role::kAlarm, out));
     TEST_ASSERT_EQUAL_UINT32(kAlarm, out[0]);
     TEST_ASSERT_EQUAL_UINT(0, s_mgr.handles(Role::kAlarm, std::span<SessionHandle>(out.data(), 0)));

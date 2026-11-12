@@ -7,10 +7,10 @@
 #include <cinttypes>
 #include <cstring>
 #include "esp_log.h"
-#include "rtk/core/link_service.hpp"
-#include "rtk/os/esp_status.hpp"
+#include "core/link_service.hpp"
+#include "rtos/esp_status.hpp"
 
-namespace rtk::app {
+namespace app {
 namespace {
 constexpr const char *kTag = "rtk_app";
 constexpr size_t kRxBudgetBytes = 256;
@@ -54,7 +54,7 @@ bool BtLinkModule::SessionSink::dispatch_one() noexcept
     }
     /* 产品帧消耗本轮唯一预算，RTCM 仅收集手机角色的帧。 */
     if (info.index == kProductIndex) {
-        owner_->link_service().on_data(handle_, wire, os::now_ms());
+        owner_->link_service().on_data(handle_, wire, rtos::now_ms());
         return true;
     }
     if (owner_->link_manager_.role(handle_) != core::Role::kPhone) {
@@ -141,7 +141,7 @@ void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr
 void BtLinkModule::collect_whitelist_dirty() noexcept
 {
     if (link_service().consume_whitelist_dirty()) {
-        context_.storage.mark_whitelist_dirty(link_manager_.whitelist(), os::now_ms());
+        context_.storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
     }
 }
 
@@ -201,7 +201,7 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
         }
     }
     // 非阻塞 read 也可能被抢占，过期时保留整个预读结果。
-    if (os::now_ms() - round_start_ms >= kRoundBudgetMs) {
+    if (rtos::now_ms() - round_start_ms >= kRoundBudgetMs) {
         return true;
     }
     /* 逐字节 feed 保留基线的帧投递和预算边界。 */
@@ -220,7 +220,7 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
 bool BtLinkModule::drain_session(SessionEntry &entry, size_t index, size_t &budget, uint32_t round_start_ms) noexcept
 {
     while (entry.used && entry.demux_ready && (entry.drain_pending || entry.sink.pending()) && budget > 0U) {
-        if (os::now_ms() - round_start_ms >= kRoundBudgetMs) {
+        if (rtos::now_ms() - round_start_ms >= kRoundBudgetMs) {
             return true;
         }
         // 时间耗尽前不推进起点，避免跳过上轮让出的会话。
@@ -341,7 +341,7 @@ fw::Result BtLinkModule::init() noexcept
     /* 路由表校验成功后才构造 LinkService，失败由执行器隔离。 */
     const std::array<core::RouteTable, 4> tables = {device_service_->table(), config_service_->table(),
                                                     alarm_service_->table(), pair_service_->table()};
-    const Status route_status = router_.init(tables);
+    const fw::Status route_status = router_.init(tables);
     if (!is_ok(route_status)) {
         ESP_LOGE(kTag, "command router init failed: %s", to_string(route_status));
         return fw::Result::kInvalidState;
@@ -350,7 +350,7 @@ fw::Result BtLinkModule::init() noexcept
     return fw::Result::kOk;
 }
 
-Status BtLinkModule::start_tx() noexcept
+fw::Status BtLinkModule::start_tx() noexcept
 {
     // 与 BT 驱动发送任务同核同优先级：两者都是“等事件 → 短暂处理”，不抢链路核。
     constexpr uint32_t kTxPriority = 5;
@@ -363,22 +363,22 @@ void BtLinkModule::wait(uint32_t max_ms) noexcept
     /* 上轮 RTCM 已由 rtcm.poll 消费，此时才复用批次。 */
     rtcm_size_ = 0;
     rtcm_rejected_ = 0;
-    round_start_ms_ = os::now_ms();
+    round_start_ms_ = rtos::now_ms();
     if (!service_.has_value()) {
         return;
     }
     /* 先等首个事件，再按原队列上限处理已排队的事件。 */
     rtk_bt_spp_evt_t evt{};
     if (rtk_bt_spp_poll_event(&evt, max_ms)) {
-        handle_event(evt, os::now_ms());
+        handle_event(evt, rtos::now_ms());
         for (size_t i = 1; i < RTK_BT_SPP_EVENT_QUEUE_LEN; ++i) {
             if (!rtk_bt_spp_poll_event(&evt, 0)) {
                 break;
             }
-            handle_event(evt, os::now_ms());
+            handle_event(evt, rtos::now_ms());
         }
     }
-    round_start_ms_ = os::now_ms();
+    round_start_ms_ = rtos::now_ms();
 }
 
 bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
@@ -386,7 +386,7 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
     /* 先消费复位和白名单变化，再按真实时钟推进 tick。 */
     apply_rtcm_reset();
     collect_whitelist_dirty();
-    const uint32_t now = os::now_ms();
+    const uint32_t now = rtos::now_ms();
     if (now - last_tick_ms_ >= kTickPeriodMs) {
         last_tick_ms_ = now;
         link_service().tick(now);
@@ -394,7 +394,7 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
     /* 按预算接收并保留原快照、RTCM 批次的发布顺序。 */
     drain_rx(round_start_ms_);
     collect_whitelist_dirty();
-    publish_link(os::now_ms());
+    publish_link(rtos::now_ms());
     context_.data.rtcm_batch.write({std::span<const uint8_t>{rtcm_batch_}.first(rtcm_size_), rtcm_rejected_});
     bool pending = false;
     for (const auto &entry : sessions_) {
@@ -415,8 +415,8 @@ void BtLinkModule::clear_whitelist(fw::CommandResult &result) noexcept
 {
     /* 清除内存白名单并同步持久化，回执携带原后端错误码。 */
     link_manager_.whitelist_clear();
-    context_.storage.mark_whitelist_dirty(link_manager_.whitelist(), os::now_ms());
-    result.detail = context_.storage.flush_whitelist(os::now_ms());
+    context_.storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
+    result.detail = context_.storage.flush_whitelist(rtos::now_ms());
     if (result.detail != ESP_OK) {
         result.status = fw::Result::kIoError;
     }
@@ -439,7 +439,7 @@ void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result)
         alarm_.clear_override();
         break;
     case LinkVerb::kPair:
-        link_manager_.pair_open(os::now_ms());
+        link_manager_.pair_open(rtos::now_ms());
         break;
     case LinkVerb::kWhitelistClear:
         clear_whitelist(result);
@@ -449,4 +449,4 @@ void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result)
         break;
     }
 }
-} // namespace rtk::app
+} // namespace app

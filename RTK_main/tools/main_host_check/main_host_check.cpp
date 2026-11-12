@@ -25,13 +25,13 @@ uint32_t s_write_delay = 0U;
 size_t s_write_calls = 0U;
 std::array<uint32_t, 64> s_write_handles{};
 std::array<uint32_t, 64> s_write_timeouts{};
-std::array<std::array<uint8_t, rtk::proto::kMaxFrame>, 64> s_write_bytes{};
+std::array<std::array<uint8_t, proto::kMaxFrame>, 64> s_write_bytes{};
 std::array<size_t, 64> s_write_sizes{};
 std::array<size_t, 64> s_store_at_write{};
 size_t s_store_calls = 0U;
 esp_err_t s_store_result = ESP_OK;
 size_t s_saved_count = 0U;
-rtk::app::WhitelistRaw s_saved{};
+app::WhitelistRaw s_saved{};
 std::array<std::array<uint8_t, 4096>, 2> s_input{};
 std::array<size_t, 2> s_input_size{};
 std::array<size_t, 2> s_input_offset{};
@@ -41,9 +41,9 @@ size_t s_event_offset = 0U;
 uint32_t s_read_delay = 0U;
 uint32_t s_poll_wait = 0U;
 int s_failures = 0;
-constexpr rtk::core::BtAddr kPhone{{1, 2, 3, 4, 5, 6}};
-constexpr rtk::core::BtAddr kAlarm{{7, 8, 9, 10, 11, 12}};
-constexpr rtk::core::BtAddr kOtherAlarm{{13, 14, 15, 16, 17, 18}};
+constexpr core::BtAddr kPhone{{1, 2, 3, 4, 5, 6}};
+constexpr core::BtAddr kAlarm{{7, 8, 9, 10, 11, 12}};
+constexpr core::BtAddr kOtherAlarm{{13, 14, 15, 16, 17, 18}};
 #define CHECK(value)                                                                                                   \
     do {                                                                                                               \
         if (!(value)) {                                                                                                \
@@ -52,9 +52,9 @@ constexpr rtk::core::BtAddr kOtherAlarm{{13, 14, 15, 16, 17, 18}};
         }                                                                                                              \
     } while (false)
 
-void setup(std::span<const rtk::core::BtAddr> whitelist = {}, rtk::core::Policy policy = rtk::core::Policy::kConcurrent)
+void setup(std::span<const core::BtAddr> whitelist = {}, core::Policy policy = core::Policy::kConcurrent)
 {
-    using namespace rtk::app;
+    using namespace app;
     app_context().data.init();
     LinkStatus link{};
     link.policy = policy;
@@ -64,12 +64,12 @@ void setup(std::span<const rtk::core::BtAddr> whitelist = {}, rtk::core::Policy 
     SystemStatus system{};
     system.bt_ready = true;
     app_context().data.system_status.write(system);
-    CHECK(app_context().bt_link.init() == rtk::fw::Result::kOk);
-    CHECK(s_command_queue.init() == rtk::Status::kOk);
-    CHECK(s_result_queue.init() == rtk::Status::kOk);
+    CHECK(app_context().bt_link.init() == fw::Result::kOk);
+    CHECK(s_command_queue.init() == fw::Status::kOk);
+    CHECK(s_result_queue.init() == fw::Status::kOk);
 }
 
-void event(rtk_bt_spp_evt_type_t type, uint32_t handle, const rtk::core::BtAddr &addr = {})
+void event(rtk_bt_spp_evt_type_t type, uint32_t handle, const core::BtAddr &addr = {})
 {
     rtk_bt_spp_evt_t evt{};
     evt.type = type;
@@ -80,7 +80,7 @@ void event(rtk_bt_spp_evt_type_t type, uint32_t handle, const rtk::core::BtAddr 
     s_events[s_event_size++] = evt;
 }
 
-void open(uint32_t handle, const rtk::core::BtAddr &addr)
+void open(uint32_t handle, const core::BtAddr &addr)
 {
     rtk_bt_spp_evt_t evt{};
     evt.type = RTK_BT_SPP_EVT_OPEN;
@@ -88,16 +88,16 @@ void open(uint32_t handle, const rtk::core::BtAddr &addr)
     for (size_t idx = 0U; idx < addr.bytes.size(); ++idx) {
         evt.addr[idx] = addr.bytes[idx];
     }
-    rtk::app::handle_event(evt, s_clock);
+    app::handle_event(evt, s_clock);
 }
 
 void append(size_t session, uint16_t msg, uint8_t sender, uint8_t type, std::span<const uint8_t> payload = {})
 {
     size_t count = 0U;
     auto &bytes = s_input[session];
-    CHECK(rtk::proto::build_frame(
+    CHECK(proto::build_frame(
               std::span<uint8_t>(bytes.data() + s_input_size[session], bytes.size() - s_input_size[session]), msg,
-              sender, type, payload, count) == rtk::Status::kOk);
+              sender, type, payload, count) == fw::Status::kOk);
     s_input_size[session] += count;
 }
 
@@ -106,17 +106,17 @@ void dirty(size_t session)
     rtk_bt_spp_evt_t evt{};
     evt.type = RTK_BT_SPP_EVT_DATA;
     evt.handle = session + 1U;
-    rtk::app::handle_event(evt, s_clock);
+    app::handle_event(evt, s_clock);
 }
 
 void save_recovery()
 {
-    using namespace rtk::app;
+    using namespace app;
     const std::array whitelist{kAlarm};
     setup(whitelist);
     open(1U, kPhone);
     const std::array<uint8_t, 1> clear{0};
-    append(0U, 0x44, 0, rtk::proto::msg_type::kSet, clear);
+    append(0U, 0x44, 0, proto::msg_type::kSet, clear);
     dirty(0U);
     s_store_result = ESP_FAIL;
     uint32_t tick = s_clock;
@@ -144,7 +144,7 @@ void save_recovery()
     s_link_manager.pair_open(s_clock);
     open(2U, kAlarm);
     const std::array<uint8_t, 8> hello{1, 0, 80, 0, 0, 0, 0, 0};
-    append(1U, rtk::core::kHelloMsgId, rtk::proto::sender::kAlarm, rtk::proto::msg_type::kPush, hello);
+    append(1U, core::kHelloMsgId, proto::sender::kAlarm, proto::msg_type::kPush, hello);
     dirty(1U);
     drain_rx(s_clock);
     collect_whitelist_dirty();
@@ -196,7 +196,7 @@ void save_recovery()
 
 void storage_backoff()
 {
-    using namespace rtk::app;
+    using namespace app;
     setup();
     const std::array whitelist{kAlarm};
     mark_whitelist_dirty(whitelist, s_clock);
@@ -230,16 +230,16 @@ void storage_backoff()
 
 void rx_fairness()
 {
-    using namespace rtk::app;
+    using namespace app;
     const std::array whitelist{kAlarm};
     setup(whitelist);
     open(1U, kPhone);
     open(2U, kAlarm);
     for (size_t idx = 0U; idx < 10U; ++idx) {
-        append(0U, 1U, 0U, rtk::proto::msg_type::kQuery);
+        append(0U, 1U, 0U, proto::msg_type::kQuery);
     }
     const std::array<uint8_t, 8> heartbeat{5, 0, 80, 0, 0, 0, 0, 0};
-    append(1U, rtk::proto::alarm::kMsgHeartbeat, rtk::proto::sender::kAlarm, rtk::proto::msg_type::kPush, heartbeat);
+    append(1U, proto::alarm::kMsgHeartbeat, proto::sender::kAlarm, proto::msg_type::kPush, heartbeat);
     dirty(0U);
     dirty(1U);
     s_write_delay = 200U;
@@ -270,16 +270,16 @@ void rx_fairness()
         CHECK(s_service->stats().frames_rx <= frames + 1U);
     }
     CHECK(s_service->stats().frames_rx == 11U);
-    CHECK(s_write_timeouts[0] == rtk::core::kWriteTimeoutMs);
+    CHECK(s_write_timeouts[0] == core::kWriteTimeoutMs);
 }
 
 void rx_fast_partial()
 {
-    using namespace rtk::app;
+    using namespace app;
     setup();
     open(1U, kPhone);
     for (size_t idx = 0U; idx < 10U; ++idx) {
-        append(0U, 1U, 0U, rtk::proto::msg_type::kQuery);
+        append(0U, 1U, 0U, proto::msg_type::kQuery);
     }
     dirty(0U);
     uint32_t tick = s_clock;
@@ -291,7 +291,7 @@ void rx_fast_partial()
     link_round(tick); // 非空标志直到 read=0 才清除。
     CHECK(!s_sessions[0].drain_pending);
 
-    append(0U, 1U, 0U, rtk::proto::msg_type::kQuery);
+    append(0U, 1U, 0U, proto::msg_type::kQuery);
     const size_t full = s_input_size[0];
     s_input_size[0] -= 5U;
     dirty(0U);
@@ -302,7 +302,7 @@ void rx_fast_partial()
     link_round(tick);
     CHECK(s_service->stats().frames_rx == 11U);
 
-    append(0U, 1U, 0U, rtk::proto::msg_type::kQuery);
+    append(0U, 1U, 0U, proto::msg_type::kQuery);
     dirty(0U);
     s_read_delay = 20U; // 完成一次非阻塞读前发生抢占，整轮预算已耗尽。
     const uint32_t frames = s_service->stats().frames_rx;
@@ -318,13 +318,13 @@ void rx_fast_partial()
 
 void rx_tick_budget()
 {
-    using namespace rtk::app;
+    using namespace app;
     const std::array whitelist{kAlarm, kOtherAlarm};
     setup(whitelist);
     open(1U, kAlarm);
     open(2U, kOtherAlarm);
     const std::array<uint8_t, 8> heartbeat{5, 0, 80, 0, 0, 0, 0, 0};
-    append(0U, rtk::proto::alarm::kMsgHeartbeat, rtk::proto::sender::kAlarm, rtk::proto::msg_type::kPush, heartbeat);
+    append(0U, proto::alarm::kMsgHeartbeat, proto::sender::kAlarm, proto::msg_type::kPush, heartbeat);
     dirty(0U);
     s_write_delay = 200U;
     uint32_t tick = 0U;
@@ -392,14 +392,14 @@ void append_bytes(size_t session, std::span<const uint8_t> bytes)
 void check_reply(size_t index, uint16_t message)
 {
     CHECK(index < s_write_calls);
-    rtk::proto::FrameParser parser;
-    rtk::proto::FrameView frame;
+    proto::FrameParser parser;
+    proto::FrameView frame;
     size_t frames = 0;
     for (uint8_t byte : std::span{s_write_bytes[index]}.first(s_write_sizes[index])) {
-        if (parser.feed(byte, frame) == rtk::proto::ParseResult::kFrame) {
+        if (parser.feed(byte, frame) == proto::ParseResult::kFrame) {
             ++frames;
             CHECK(frame.msg_id == message);
-            CHECK(frame.sender == rtk::proto::sender::kDevice && frame.type == rtk::proto::msg_type::kQueryRes);
+            CHECK(frame.sender == proto::sender::kDevice && frame.type == proto::msg_type::kQueryRes);
         }
     }
     CHECK(frames == 1 && parser.crc_errors() == 0 && parser.length_errors() == 0);
@@ -408,16 +408,16 @@ void check_reply(size_t index, uint16_t message)
 
 void rtcm_mix()
 {
-    using namespace rtk::app;
+    using namespace app;
     setup({}, policy_from_config());
     open(1, kPhone);
-    append(0, 1, 0, rtk::proto::msg_type::kQuery);
+    append(0, 1, 0, proto::msg_type::kQuery);
     const auto first = append_rtcm(0, 1005);
     const auto second = append_rtcm(0, 1077, 11);
     const uint32_t expected_crc = crc32_reference(second, crc32_reference(first));
     constexpr std::array<uint8_t, 4> kGarbage{0, 0x7F, 0xFF, 0x55};
     append_bytes(0, kGarbage);
-    append(0, 2, 0, rtk::proto::msg_type::kQuery);
+    append(0, 2, 0, proto::msg_type::kQuery);
     event(RTK_BT_SPP_EVT_DATA, 1);
     uint32_t tick = s_clock;
     link_round(tick);
@@ -437,11 +437,11 @@ void rtcm_mix()
 
 void rtcm_roles()
 {
-    using namespace rtk::app;
+    using namespace app;
     const std::array whitelist{kAlarm};
     setup(whitelist, policy_from_config());
     open(1, kAlarm);
-    CHECK(s_link_manager.role(1) == rtk::core::Role::kAlarm);
+    CHECK(s_link_manager.role(1) == core::Role::kAlarm);
     append_rtcm(0, 1005);
     dirty(0);
     drain_rx(s_clock);
@@ -453,7 +453,7 @@ void rtcm_roles()
     open(1, kPhone);
     s_link_manager.pair_open(s_clock);
     open(2, kOtherAlarm);
-    CHECK(s_link_manager.role(2) == rtk::core::Role::kPending);
+    CHECK(s_link_manager.role(2) == core::Role::kPending);
     append_rtcm(1, 1077);
     dirty(1);
     drain_rx(s_clock);
@@ -471,15 +471,15 @@ void rtcm_roles()
 
 void rtcm_replay_budget()
 {
-    using namespace rtk::app;
+    using namespace app;
     setup({}, policy_from_config());
     open(1, kPhone);
     constexpr std::array<uint8_t, 3> kHeader{0xD3, 0, 0};
     append_bytes(0, kHeader);
-    append(0, 1, 0, rtk::proto::msg_type::kQuery);
+    append(0, 1, 0, proto::msg_type::kQuery);
     const auto rtcm = append_rtcm(0, 1005);
     const uint32_t expected_crc = crc32_reference(rtcm);
-    append(0, 2, 0, rtk::proto::msg_type::kQuery);
+    append(0, 2, 0, proto::msg_type::kQuery);
     // 外层假 RTCM 把两条产品帧暂时认作载荷；长度为 62，转换到 uint8_t 无损。
     CHECK(s_input_size[0] - 3 < 256);
     s_input[0][2] = static_cast<uint8_t>(s_input_size[0] - 3);
@@ -502,16 +502,16 @@ void rtcm_replay_budget()
 
 void rtcm_reset_lifecycle()
 {
-    using namespace rtk::app;
+    using namespace app;
     setup({}, policy_from_config());
     open(1, kPhone);
     constexpr std::array<uint8_t, 10> kInvalid{0xAA, 0x44, 0x18, 0x19, 0xD3, 0xFC, 0, 0x7F, 0xFF, 0x55};
     append_bytes(0, kInvalid);
     const size_t bad_begin = s_input_size[0];
-    append(0, 1, 0, rtk::proto::msg_type::kQuery);
+    append(0, 1, 0, proto::msg_type::kQuery);
     const size_t bad_size = s_input_size[0] - bad_begin;
-    CHECK(crc32_reference(std::span{s_input[0]}.subspan(bad_begin, bad_size - rtk::proto::kCrcLen)) != 0);
-    auto bad_crc = std::span{s_input[0]}.subspan(s_input_size[0] - rtk::proto::kCrcLen, rtk::proto::kCrcLen);
+    CHECK(crc32_reference(std::span{s_input[0]}.subspan(bad_begin, bad_size - proto::kCrcLen)) != 0);
+    auto bad_crc = std::span{s_input[0]}.subspan(s_input_size[0] - proto::kCrcLen, proto::kCrcLen);
     std::fill(bad_crc.begin(), bad_crc.end(), 0);
     const auto wire = append_rtcm(0, 1005);
     const size_t full = s_input_size[0];
@@ -573,7 +573,7 @@ void rtcm_reset_lifecycle()
 
 void rtcm_byte_budget()
 {
-    using namespace rtk::app;
+    using namespace app;
     setup({}, policy_from_config());
     open(1, kPhone);
     const auto first = append_rtcm(0, 1005, 1023);
@@ -598,31 +598,31 @@ void rtcm_byte_budget()
 
 void lifecycle_application()
 {
-    using namespace rtk::app;
+    using namespace app;
     setup();
     event(RTK_BT_SPP_EVT_OPEN, 1U, kPhone);
     event(RTK_BT_SPP_EVT_CLOSE, 1U);
     event(RTK_BT_SPP_EVT_OPEN, 1U, kAlarm);
     event(RTK_BT_SPP_EVT_DATA, 1U);
-    append(0U, 1U, 0U, rtk::proto::msg_type::kQuery);
+    append(0U, 1U, 0U, proto::msg_type::kQuery);
     uint32_t tick = s_clock;
     link_round(tick);
-    CHECK(s_link_manager.role(1U) == rtk::core::Role::kPhone);
+    CHECK(s_link_manager.role(1U) == core::Role::kPhone);
     CHECK(s_snapshot.session_count == 1U && s_snapshot.sessions[0].addr == kAlarm);
     CHECK(s_service->stats().frames_rx == 1U && s_write_calls == 1U);
 }
 } // namespace
 
-namespace rtk::os {
+namespace rtos {
 uint32_t now_ms() noexcept
 {
     return s_clock;
 }
-Status from_esp_err(esp_err_t err) noexcept
+fw::Status from_esp_err(esp_err_t err) noexcept
 {
-    return (err == ESP_OK) ? Status::kOk : Status::kTimeout;
+    return (err == ESP_OK) ? fw::Status::kOk : fw::Status::kTimeout;
 }
-} // namespace rtk::os
+} // namespace rtos
 
 extern "C" {
 void fake_log(const char *, const char *, const char *, ...) {}
@@ -725,10 +725,9 @@ esp_err_t rtk_store_get_alarms(uint8_t (*)[RTK_STORE_ADDR_LEN], size_t, size_t *
 }
 
 // 异步发送装饰器：未启动时同步直通；启动后入队即返回、FIFO、满队列 kBusy、底层失败计数。
-class GateTransport final : public rtk::core::Transport {
+class GateTransport final : public core::Transport {
 public:
-    rtk::Status write(rtk::core::SessionHandle handle, std::span<const uint8_t> data,
-                      uint32_t timeout_ms) noexcept override
+    fw::Status write(core::SessionHandle handle, std::span<const uint8_t> data, uint32_t timeout_ms) noexcept override
     {
         entered.store(true);
         while (!open.load()) {
@@ -737,11 +736,11 @@ public:
         CHECK(timeout_ms == 200U && data.size() == 1U);
         order[count.load()] = data[0];
         count.fetch_add(1U);
-        return (handle == 0xDEADU) ? rtk::Status::kTimeout : rtk::Status::kOk;
+        return (handle == 0xDEADU) ? fw::Status::kTimeout : fw::Status::kOk;
     }
-    rtk::Status disconnect(rtk::core::SessionHandle) noexcept override
+    fw::Status disconnect(core::SessionHandle) noexcept override
     {
-        return rtk::Status::kOk;
+        return fw::Status::kOk;
     }
     std::atomic<bool> entered{false};
     std::atomic<bool> open{true};
@@ -752,27 +751,27 @@ public:
 void async_tx()
 {
     static GateTransport inner;
-    static rtk::app::AsyncTxTransport tx{inner};
+    static app::AsyncTxTransport tx{inner};
     const std::array<uint8_t, 1> first{0};
-    CHECK(tx.write(1U, first, 200U) == rtk::Status::kOk && inner.count.load() == 1U); // 未启动：同步
+    CHECK(tx.write(1U, first, 200U) == fw::Status::kOk && inner.count.load() == 1U); // 未启动：同步
     inner.open.store(false);
     inner.entered.store(false);
-    CHECK(tx.start(1U, 0) == rtk::Status::kOk && tx.start(1U, 0) == rtk::Status::kBusy);
+    CHECK(tx.start(1U, 0) == fw::Status::kOk && tx.start(1U, 0) == fw::Status::kBusy);
     const std::array<uint8_t, 1> one{1};
-    CHECK(tx.write(1U, one, 200U) == rtk::Status::kOk);
+    CHECK(tx.write(1U, one, 200U) == fw::Status::kOk);
     while (!inner.entered.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     // 发送任务卡在底层 write 内：再入 kDepth 条成功，下一条满。
-    for (uint8_t i = 0; i < rtk::app::AsyncTxTransport::kDepth; ++i) {
+    for (uint8_t i = 0; i < app::AsyncTxTransport::kDepth; ++i) {
         const std::array<uint8_t, 1> b{static_cast<uint8_t>(2U + i)};
-        CHECK(tx.write((i == 0U) ? 0xDEADU : 1U, b, 200U) == rtk::Status::kOk);
+        CHECK(tx.write((i == 0U) ? 0xDEADU : 1U, b, 200U) == fw::Status::kOk);
     }
     const std::array<uint8_t, 1> overflow{99};
-    CHECK(tx.write(1U, overflow, 200U) == rtk::Status::kBusy);
-    CHECK(tx.write(1U, std::span<const uint8_t>{}, 200U) == rtk::Status::kInvalidArg);
+    CHECK(tx.write(1U, overflow, 200U) == fw::Status::kBusy);
+    CHECK(tx.write(1U, std::span<const uint8_t>{}, 200U) == fw::Status::kInvalidArg);
     inner.open.store(true);
-    const uint32_t total = 2U + rtk::app::AsyncTxTransport::kDepth;
+    const uint32_t total = 2U + app::AsyncTxTransport::kDepth;
     for (int spin = 0; spin < 2000 && inner.count.load() < total; ++spin) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -783,7 +782,7 @@ void async_tx()
     }
     const auto st = tx.stats();
     CHECK(st.sent == total - 2U && st.failed == 1U && st.queue_full == 1U &&
-          st.max_depth >= rtk::app::AsyncTxTransport::kDepth);
+          st.max_depth >= app::AsyncTxTransport::kDepth);
 }
 
 int main(int argc, char **argv)
@@ -792,13 +791,13 @@ int main(int argc, char **argv)
         return 2;
     }
     if (std::strcmp(argv[1], "policy_failure") == 0) {
-        rtk::app::note_bt_failure();
-        rtk::app::StatusSnapshot snap{};
-        rtk::app::read_snapshot(snap);
+        app::note_bt_failure();
+        app::StatusSnapshot snap{};
+        app::read_snapshot(snap);
 #if defined(CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT)
-        CHECK(snap.policy == rtk::core::Policy::kPhonePreempt);
+        CHECK(snap.policy == core::Policy::kPhonePreempt);
 #else
-        CHECK(snap.policy == rtk::core::Policy::kConcurrent);
+        CHECK(snap.policy == core::Policy::kConcurrent);
 #endif
         CHECK(!snap.bt_ready && !snap.link_running);
     } else if (std::strcmp(argv[1], "save_recovery") == 0) {

@@ -2,16 +2,16 @@
 // init 仅启动前调用；绑定后各 Slot 支持跨任务读写，非 ISR。
 #pragma once
 
-#include "rtk/fw/slot.hpp"
+#include "fw/slot.hpp"
 #include "app_config.hpp"
 #include "def/link_def.hpp"
 #include "def/rtcm_def.hpp"
 #include "def/storage_def.hpp"
 #include "def/system_def.hpp"
 #include "modules/rtcm/rtcm_forwarder.hpp"
-#include "rtk/os/spin_lock.hpp"
+#include "rtos/spin_lock.hpp"
 
-namespace rtk::app::data {
+namespace app::data {
 /** 跨任务共享的主题集合；init() 绑定同一把锁后各 Slot 支持跨任务读写，非 ISR。 */
 struct DataCenter {
     /** 启动前单线程绑定全部主题的共享锁；不阻塞，非 ISR，无错误返回。 */
@@ -25,7 +25,7 @@ struct DataCenter {
     fw::Slot<RtcmStats> rtcm_stats{};
     fw::Slot<DemuxStats> demux_stats{};
     fw::Slot<StoreStatus> store_status{};
-    fw::Slot<os::ExecStats> exec_stats{};
+    fw::Slot<rtos::ExecStats> exec_stats{};
     fw::Slot<SystemStatus> system_status{};
     fw::Slot<SystemMode> system_mode{};
     fw::Slot<RtcmBatch> rtcm_batch{};
@@ -33,4 +33,4 @@ struct DataCenter {
 
     portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 };
-} // namespace rtk::app::data
+} // namespace app::data

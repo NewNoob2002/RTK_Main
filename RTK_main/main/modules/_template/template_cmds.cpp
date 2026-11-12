@@ -11,7 +11,7 @@
 #include <span>
 #include <string_view>
 
-namespace rtk::app {
+namespace app {
 namespace {
 constexpr size_t kMinArgs = 2U;
 constexpr size_t kLimitArgs = 3U;
@@ -26,7 +26,7 @@ int handle_limit(std::span<char *const> args) noexcept
         return 1;
     }
     uint32_t limit_ms = 0U;
-    if (!rtk::console::parse_u32(args[2], limit_ms) || (limit_ms == 0U) || (limit_ms > kTemplateMaxLimitMs)) {
+    if (!cli::parse_u32(args[2], limit_ms) || (limit_ms == 0U) || (limit_ms > kTemplateMaxLimitMs)) {
         printf("invalid limit (1..%u ms)\n", static_cast<unsigned>(kTemplateMaxLimitMs)); // 1..60000 转 unsigned 安全
         return 1;
     }
@@ -68,12 +68,12 @@ int cmd_tmpl(void * /*ctx*/, int argc, char **argv) noexcept
     printf("unknown subcommand: %s\n", args[1]);
     return 1;
 }
-constexpr std::array<rtk::console::Cmd, 1> kTemplateCmds{{
+constexpr std::array<cli::Cmd, 1> kTemplateCmds{{
     {"tmpl", "tmpl <status|limit <ms>>: template module demo", nullptr, cmd_tmpl, nullptr},
 }};
 } // namespace
-std::span<const rtk::console::Cmd> template_cmds() noexcept
+std::span<const cli::Cmd> template_cmds() noexcept
 {
     return kTemplateCmds;
 }
-} // namespace rtk::app
+} // namespace app

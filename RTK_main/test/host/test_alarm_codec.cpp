@@ -2,17 +2,17 @@
 #include <array>
 #include <cstdint>
 
-#include "rtk/core/alarm_source.hpp"
-#include "rtk/proto/alarm_codec.hpp"
+#include "core/alarm_source.hpp"
+#include "proto/alarm_codec.hpp"
 #include "unity.h"
 
-namespace ac = rtk::proto::alarm; // 不用 alarm 作别名：避免与 POSIX alarm() 冲突
+namespace ac = proto::alarm; // 不用 alarm 作别名：避免与 POSIX alarm() 冲突
 
-static rtk::core::AlarmSource s_src;
+static core::AlarmSource s_src;
 
 extern "C" void setUp(void)
 {
-    s_src = rtk::core::AlarmSource{};
+    s_src = core::AlarmSource{};
 }
 extern "C" void tearDown(void) {}
 

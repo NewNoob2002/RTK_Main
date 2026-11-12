@@ -1,6 +1,6 @@
 # RTK_main 编码规范
 
-本规范面向读代码和新增功能的人，依据 ADR-0008 §3、§4、§6–§8；C/C++ 分工沿用 ADR-0003。
+本规范面向读代码和新增功能的人，依据 ADR-0008 §3、§4、§6–§9；C/C++ 分工沿用 ADR-0003。
 硬性门禁、依赖允许表、冻结范围和操作授权见 `AGENTS.md`，告警与格式配置仍由工具维护。
 R0 只建立规范：目录迁移由 R1 完成，模块类/跳板由 R2 实现，命名空间与 include 统一由 R3 完成，
 文件头清理由 R4 完成，驱动拆分由 R5 完成，模板由 R6 提供。下面的目标示例不表示现有接口已改动。
@@ -29,10 +29,10 @@ main/
     system/
   support/                      # 与具体模块无关的控制台辅助等胶水
 components/
-  app_fw/  rtk_os/  rtk_console/ # 框架层
-  rtk_bt/  rtk_store/            # 驱动层
-  rtk_proto/  stream_demux/      # 逻辑层，支持 host 测试
-  rtk_core/  bt_reconnect/
+  app_fw/  rtos/  cli/            # 框架层
+  spp_server/  nvs_store/         # 驱动层
+  device_proto/  stream_demux/    # 逻辑层，支持 host 测试
+  link_core/  bt_reconnect/
 ```
 
 不要这样写：
@@ -125,26 +125,27 @@ void PublishLink(uint32_t nowMs);
 
 ### 3.2 统一命名空间与 include 根
 
-ADR-0008 §4 的目标对照如下。统一名称不改变组件职责与可复用性；`rtk/status.hpp` 等公共基础头保留其契约。
-C 头保持平铺的 `rtk_<组件>_*.h` 命名（现有 `rtk_store.h` 保持接口契约），不强加 C++ 目录规则。
+ADR-0008 §9 的对照如下。组件按用途命名，统一名称不改变职责与可复用性。
+公共基础错误码位于 `app_fw` 的 `fw/status.hpp`，使用 `fw::Status`、`fw::is_ok`、`fw::to_string`，枚举值及字符串映射不变。
+C 头文件名和符号前缀保持现有契约（包括 `rtk_store.h`），留待 R7b 处理。
 
 | 组件目录 | 命名空间 | C++ include 根 |
 | --- | --- | --- |
-| `rtk_os` | `rtk::os` | `rtk/os/` |
-| `app_fw` | `rtk::fw` | `rtk/fw/` |
-| `rtk_console` | `rtk::console` | `rtk/console/` |
-| `rtk_bt` | `rtk::bt` | `rtk/bt/` |
-| `rtk_store` | `rtk::store`（若有 C++ 接口） | `rtk/store/`（若有 C++ 接口） |
-| `rtk_proto` | `rtk::proto` | `rtk/proto/` |
-| `stream_demux` | `rtk::demux` | `rtk/demux/` |
-| `rtk_core` | `rtk::core` | `rtk/core/` |
-| `bt_reconnect` | `rtk::reconnect` | `rtk/reconnect/` |
-| `main` | `rtk::app` | `rtk/app/`（对外 C++ 头） |
+| `rtos` | `rtos` | `rtos/` |
+| `app_fw` | `fw` | `fw/` |
+| `cli` | `cli` | `cli/` |
+| `spp_server` | `spp` | `spp/` |
+| `nvs_store` | —（仅 C 接口） | —（C 头平铺） |
+| `device_proto` | `proto` | `proto/` |
+| `stream_demux` | `demux` | `demux/` |
+| `link_core` | `core` | `core/` |
+| `bt_reconnect` | `reconnect` | `reconnect/` |
+| `main` | `app` | `app/`（对外 C++ 头） |
 
 ```cpp
 // 这样写（R3 目标）
-#include "rtk/fw/module.hpp"
-namespace rtk::app {
+#include "fw/module.hpp"
+namespace app {
 // 应用模块
 }
 // 不要这样写（新增接口缺少组件根）
@@ -155,8 +156,9 @@ namespace unrelated_app {
 
 ### 3.3 命名空间：按组件划分，层次服务于可读性
 
-- 每个组件有自己的 `rtk::<组件>` 命名空间，例如 `rtk::fw`、`rtk::demux`、`rtk::reconnect`。
-- 子命名空间可以用，前提是读调用点时更清楚：协议常量表 `proto::msg_type::kQuery`、一个解码器一个子空间、`detail`。总深度不超过 `rtk::a::b` 三层。
+- 每个组件有自己的命名空间，按上表映射，例如 `fw`、`demux`、`reconnect`。
+- 不得引入顶层 `alarm`、`link`、`sync`，避免与 POSIX 函数冲突。
+- 子命名空间可以用，前提是读调用点时更清楚：协议常量表 `proto::msg_type::kQuery`、一个解码器一个子空间、`detail`。总深度不超过 `a::b::c` 三层。
 - 同一组常量如果本来就是“取值集合”，优先 `enum class`；如果是协议里的一张号码表、需要当整数用，放进命名空间也可以。
 - `.cpp` 中为跨组件长名写的 `namespace x = …` 别名允许，但只在 `.cpp` 局部使用，头文件不写；同一个别名在多个文件反复出现，说明命名空间该调整了。
 - 头文件不写 `using namespace`。
@@ -199,10 +201,10 @@ public:
 ```cpp
 // 这样写
 if (!ready_) {
-    return Status::kInvalidState;
+    return fw::Status::kInvalidState;
 }
 if (payload.empty()) {
-    return Status::kInvalidArg;
+    return fw::Status::kInvalidArg;
 }
 return send_payload(payload);
 // 不要这样写
@@ -239,9 +241,9 @@ if (verb == LinkVerb::kReset) {
 
 ### 4.4 可恢复错误返回错误码，同一错误只记一次日志
 
-可失败函数返回 `Status`/`Result` 并加 `[[nodiscard]]`。错误在发生处记一次日志，上层只传错误码；
+可失败函数返回 `fw::Status`/`Result` 并加 `[[nodiscard]]`。错误在发生处记一次日志，上层只传错误码；
 纯逻辑层不依赖日志平台，由第一个有日志能力的适配边界记录一次。
-IDF 返回值必须检查，`esp_err_t` 只在 `rtk::os::from_esp_err` 映射；
+IDF 返回值必须检查，`esp_err_t` 只在 `rtos::from_esp_err` 映射；
 禁止用 `ESP_ERROR_CHECK` 处理可恢复错误或用 `(void)` 丢弃 `esp_err_t`。
 ISR、C 回调蹦床、析构和移动操作标 `noexcept`。失败路径释放已获得的资源，避免部分更新。
 
@@ -266,11 +268,11 @@ if (!is_ok(status)) {
 
 ```cpp
 // 这样写
-[[nodiscard]] Status decode(std::span<const uint8_t> wire, Reply &reply) noexcept;
-[[nodiscard]] Status apply(const Settings &settings) noexcept;
+[[nodiscard]] fw::Status decode(std::span<const uint8_t> wire, Reply &reply) noexcept;
+[[nodiscard]] fw::Status apply(const Settings &settings) noexcept;
 // 不要这样写：长度和类型都不明确，输出在前
-Status decode(Reply *reply, void *data);
-Status apply(Settings settings); // 复制大对象
+fw::Status decode(Reply *reply, void *data);
+fw::Status apply(Settings settings); // 复制大对象
 ```
 
 ## 5. 日志、常量与并发
@@ -312,7 +314,7 @@ IDF 栈大小单位为字节。蓝牙回调不阻塞、不解析、不打印数�
 ```cpp
 // 这样写：只在短临界区更新共享计数
 {
-    const os::CriticalSection guard(stats_mux_);
+    const rtos::CriticalSection guard(stats_mux_);
     ++stats_.events;
 }
 // 不要这样写
@@ -348,7 +350,7 @@ volatile bool ready = false; // 不能建立跨核同步关系
 以下是目标形态示意，R0 不实现尚未存在的 `make_ops` 接口。
 
 ```cpp
-// 这样写：命名空间 rtk::app 中，fw 指 rtk::fw
+// 这样写：命名空间 app 中，fw 指通用 app_fw 组件
 class BtLinkModule final {
 public:
     constexpr BtLinkModule() noexcept = default;
@@ -377,12 +379,12 @@ const fw::ModuleOps kOps{init_trampoline, nullptr, poll_trampoline, bt_link_comm
 /** 初始化链路；仅启动任务调用一次，不阻塞，非线程/ISR 安全。
  * @return kOk 成功；kBusy 已初始化；kInvalidArg 配置非法。
  */
-[[nodiscard]] Status init() noexcept;
+[[nodiscard]] fw::Status init() noexcept;
 // 队列仅存值副本，调用结束后不持有调用者缓冲区。
 
 // 不要这样写
 // 初始化
-Status init();
+fw::Status init();
 // count 加一
 // ++old_count;  // 历史代码应交给版本控制
 ```
@@ -420,11 +422,11 @@ placement new 只构造于已有存储，不分配堆，仍须保证容量、对
 ```cpp
 // 这样写：仅用于已登记的非实时限量路径；kImportMaxBytes 为固定上限
 if (size > kImportMaxBytes) {
-    return Status::kInvalidArg;
+    return fw::Status::kInvalidArg;
 }
 auto *buffer = new (std::nothrow) uint8_t[size];
 if (buffer == nullptr) {
-    return Status::kNoSpace;
+    return fw::Status::kNoSpace;
 }
 const auto status = load_and_parse_import({buffer, size});
 delete[] buffer;

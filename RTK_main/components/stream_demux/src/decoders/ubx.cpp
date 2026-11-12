@@ -3,15 +3,15 @@
 // 早拒绝点：第 2 字节不是 0x62；长度字段使总帧长超过 kMaxFrame；Fletcher 校验错。
 // 长度一确定就一次要求整段剩余字节，校验在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
 
-#include "rtk/demux/decoders/ubx.hpp"
+#include "demux/decoders/ubx.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "rtk/demux/decoder.hpp"
+#include "demux/decoder.hpp"
 
-namespace rtk::demux::ubx {
+namespace demux::ubx {
 
 namespace {
 
@@ -85,4 +85,4 @@ Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
     return Step::kFrame;
 }
 
-} // namespace rtk::demux::ubx
+} // namespace demux::ubx

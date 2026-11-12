@@ -4,9 +4,9 @@
 #include <algorithm>
 #include <cstring>
 #include "esp_log.h"
-#include "rtk/os/esp_status.hpp"
+#include "rtos/esp_status.hpp"
 
-namespace rtk::app {
+namespace app {
 namespace {
 constexpr uint32_t kDebounceMs = 500;
 constexpr uint32_t kRetryMaxMs = 30000;
@@ -132,7 +132,7 @@ void StorageModule::mark_whitelist_dirty(std::span<const core::BtAddr> list, uin
 
 bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
 {
-    const uint32_t now = os::now_ms();
+    const uint32_t now = rtos::now_ms();
     if (!pending_ || now - changed_ms_ < kDebounceMs || (attempted_ && now - attempt_ms_ < retry_ms_)) {
         return false;
     }
@@ -152,7 +152,7 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
         rtk_store_set_alarms(reinterpret_cast<const uint8_t (*)[RTK_STORE_ADDR_LEN]>(raw.data()), len / core::kAddrLen);
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
     /* 使用写入完成时间计算重试，保持失败倍增和状态发布顺序。 */
-    attempt_ms_ = os::now_ms();
+    attempt_ms_ = rtos::now_ms();
     status_.whitelist_error = error;
     if (error == ESP_OK) {
         pending_ = false;
@@ -218,4 +218,4 @@ void StorageModule::on_command(const fw::Command &cmd, fw::CommandResult &result
     /* 校验信封后交给 SN 保存流程。 */
     save_sn(cmd, result);
 }
-} // namespace rtk::app
+} // namespace app

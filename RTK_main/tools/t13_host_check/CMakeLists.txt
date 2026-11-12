@@ -1,17 +1,19 @@
-# T13 驱动级回归：用 host 替身（FreeRTOS + IDF）编译真实的 components/rtk_bt/rtk_bt_spp_*.c。
+# T13 驱动级回归：用 host 替身（FreeRTOS + IDF）编译真实的 components/spp_server/rtk_bt_spp_*.c。
 # 不参与固件构建，也不进 test/host（test/host 属冻结输入），单独一个 CMake 工程：
 #   cmake -S tools/t13_host_check -B builds/t13 && cmake --build builds/t13
 #   ctest --test-dir builds/t13 --output-on-failure
 cmake_minimum_required(VERSION 3.16)
 project(t13_host_check C)
 
+# 为 .clangd 提供包含 FreeRTOS/IDF shim 的主机编译命令。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
 get_filename_component(RTK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(RTK_BT_INC "${RTK_ROOT}/components/rtk_bt/include")
-set(RTK_BT_PRIV_INC "${RTK_ROOT}/components/rtk_bt/private_include")
+set(RTK_BT_INC "${RTK_ROOT}/components/spp_server/include")
+set(RTK_BT_PRIV_INC "${RTK_ROOT}/components/spp_server/private_include")
 # 替身头文件目录必须放在 IDF 之前；host 环境没有 IDF。
 set(SHIM_INC "${CMAKE_CURRENT_SOURCE_DIR}/shim/inc")
 
@@ -28,11 +30,11 @@ target_link_libraries(fake_idf PUBLIC fake_rtos)
 # 被检查的真实源码：与固件同一份文件（ADR-0008 R5 拆成 5 个职责文件），按 AGENTS.md 对
 # IDF 依赖组件的 C 告警集编译。
 add_library(rtk_bt_spp_driver STATIC
-    "${RTK_ROOT}/components/rtk_bt/rtk_bt_spp_init.c"
-    "${RTK_ROOT}/components/rtk_bt/rtk_bt_spp_session.c"
-    "${RTK_ROOT}/components/rtk_bt/rtk_bt_spp_rx.c"
-    "${RTK_ROOT}/components/rtk_bt/rtk_bt_spp_tx.c"
-    "${RTK_ROOT}/components/rtk_bt/rtk_bt_spp_gap.c")
+    "${RTK_ROOT}/components/spp_server/rtk_bt_spp_init.c"
+    "${RTK_ROOT}/components/spp_server/rtk_bt_spp_session.c"
+    "${RTK_ROOT}/components/spp_server/rtk_bt_spp_rx.c"
+    "${RTK_ROOT}/components/spp_server/rtk_bt_spp_tx.c"
+    "${RTK_ROOT}/components/spp_server/rtk_bt_spp_gap.c")
 target_include_directories(rtk_bt_spp_driver PUBLIC "${SHIM_INC}" "${RTK_BT_INC}")
 target_include_directories(rtk_bt_spp_driver PRIVATE "${RTK_BT_PRIV_INC}")
 target_link_libraries(rtk_bt_spp_driver PUBLIC fake_idf)

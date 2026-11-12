@@ -9,22 +9,22 @@
 #include "app_config.hpp"
 #include "def/rtcm_def.hpp"
 #include "modules/bt_link/async_tx.hpp"
-#include "rtk/demux/decoders/rtcm3.hpp"
-#include "rtk/demux/static_demux.hpp"
-#include "rtk/bt/spp_transport.hpp"
-#include "rtk/console/console.hpp"
-#include "rtk/core/alarm_source.hpp"
-#include "rtk/core/command_router.hpp"
-#include "rtk/core/link_manager.hpp"
-#include "rtk/core/link_service.hpp"
-#include "rtk/core/services/alarm_service.hpp"
-#include "rtk/core/services/config_service.hpp"
-#include "rtk/core/services/device_service.hpp"
-#include "rtk/core/services/pair_service.hpp"
-#include "rtk/proto/demux_frame.hpp"
+#include "demux/decoders/rtcm3.hpp"
+#include "demux/static_demux.hpp"
+#include "spp/spp_transport.hpp"
+#include "cli/console.hpp"
+#include "core/alarm_source.hpp"
+#include "core/command_router.hpp"
+#include "core/link_manager.hpp"
+#include "core/link_service.hpp"
+#include "core/services/alarm_service.hpp"
+#include "core/services/config_service.hpp"
+#include "core/services/device_service.hpp"
+#include "core/services/pair_service.hpp"
+#include "proto/demux_frame.hpp"
 #include "rtk_bt_spp.h"
 
-namespace rtk::app {
+namespace app {
 struct AppContext;
 struct ModuleTestAccess;
 /** 链路模块（kLink 执行器）：SPP 事件、分流器、路由与统计的唯一所有者；仅链路任务使用。 */
@@ -45,7 +45,7 @@ public:
     /** 仅 kLink，非 ISR；至多等待 max_ms，先处理生命周期事件。 */
     void wait(uint32_t max_ms) noexcept;
     /** app_main 在执行器 start 前调用，非 ISR；静态创建 TX 任务并返回状态。 */
-    [[nodiscard]] Status start_tx() noexcept;
+    [[nodiscard]] fw::Status start_tx() noexcept;
 
 private:
     friend struct ModuleTestAccess;
@@ -123,7 +123,7 @@ private:
     DemuxStats retired_demux_{};
     core::LinkManager link_manager_{};
     core::AlarmSource alarm_{};
-    bt::SppTransport transport_{};
+    spp::SppTransport transport_{};
     AsyncTxTransport async_tx_{transport_};
     // optional 在 init 按依赖次序原地构造，生命周期覆盖整个运行期，不分配堆。
     std::optional<core::services::DeviceService> device_service_{};
@@ -139,5 +139,5 @@ private:
     uint32_t rtcm_rejected_ = 0;
 };
 /** 链路模块的控制台命令表（alarm/pair/wl/policy）；静态存储，进程期有效。 */
-[[nodiscard]] std::span<const rtk::console::Cmd> link_cmds() noexcept;
-} // namespace rtk::app
+[[nodiscard]] std::span<const cli::Cmd> link_cmds() noexcept;
+} // namespace app

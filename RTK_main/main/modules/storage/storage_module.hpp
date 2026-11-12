@@ -3,11 +3,11 @@
 #include <span>
 
 #include "data/app_data.hpp"
-#include "rtk/fw/store_key.hpp"
-#include "rtk/console/console.hpp"
+#include "fw/store_key.hpp"
+#include "cli/console.hpp"
 #include "rtk_store.h"
 
-namespace rtk::app {
+namespace app {
 struct AppContext;
 struct ModuleTestAccess;
 /** 存储模块（kLink 执行器）：SN 与白名单的 NVS 持久化与重试。 */
@@ -53,5 +53,5 @@ private:
     std::array<char, RTK_STORE_SN_MAX + 1U> sn_{};
 };
 /** 存储模块的控制台命令表；静态存储，进程期有效。 */
-[[nodiscard]] std::span<const rtk::console::Cmd> storage_cmds() noexcept;
-} // namespace rtk::app
+[[nodiscard]] std::span<const cli::Cmd> storage_cmds() noexcept;
+} // namespace app

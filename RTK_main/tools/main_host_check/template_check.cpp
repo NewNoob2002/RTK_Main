@@ -1,8 +1,8 @@
 // 模块模板主机回归：验证 TemplateModule 接入 Executor 生命周期、CommandBus 路由与控制台命令表。
 #include "app_context.hpp"
 #include "modules/_template/template_module.hpp"
-#include "rtk/fw/module.hpp"
-#include "rtk/os/esp_status.hpp"
+#include "fw/module.hpp"
+#include "rtos/esp_status.hpp"
 #include "rtk_bt_spp.h"
 #include "rtk_store.h"
 
@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace rtk::app {
+namespace app {
 namespace {
 constinit AppContext s_test_app{};
 }
@@ -20,11 +20,9 @@ AppContext &app_context() noexcept
 {
     return s_test_app;
 }
-} // namespace rtk::app
+} // namespace app
 
 namespace {
-namespace app = rtk::app;
-namespace fw = rtk::fw;
 constexpr fw::ModuleId kTemplateId = 10U;
 constexpr size_t kBitsPerByte = 8U;
 uint32_t s_clock = 100U;
@@ -100,11 +98,11 @@ void test_lifecycle()
     modules[1].self = &tmpl;
     modules[1].ops = &ops;
 
-    const rtk::os::ExecutorConfig cfg{
+    const rtos::ExecutorConfig cfg{
         .name = "tmpl_exec", .priority = 5U, .core = 1, .wait = wait_advance, .wait_ctx = nullptr};
-    CHECK(ctx.link_executor.init(cfg, modules, rtk::os::view_of(ctx.link_storage)) == rtk::Status::kOk);
+    CHECK(ctx.link_executor.init(cfg, modules, rtos::view_of(ctx.link_storage)) == fw::Status::kOk);
     CHECK(tmpl.state().initialized && tmpl.state().limit_ms == 1000U && tmpl.state().ticks == 0U);
-    CHECK(ctx.link_executor.start() == rtk::Status::kOk);
+    CHECK(ctx.link_executor.start() == fw::Status::kOk);
 
     // 第 1 轮：ticks=1；第 2 轮只过 100 ms（< 1000 ms）不变；推进到 >= 1000 ms 后 ticks=2。
     s_round_limit = 2U;
@@ -148,7 +146,7 @@ void test_commands_before_exec()
     app::SystemStatus sys{};
     sys.bt_ready = true;
     ctx.data.system_status.write(sys);
-    rtk::os::ExecStats exec{};
+    rtos::ExecStats exec{};
     exec.rounds = 42U;
     ctx.data.exec_stats.write(exec);
 
@@ -207,17 +205,17 @@ void test_commands_after_exec()
 }
 } // namespace
 
-namespace rtk::os {
+namespace rtos {
 uint32_t now_ms() noexcept
 {
     CHECK(s_critical == 0);
     return s_clock;
 }
-Status from_esp_err(esp_err_t err) noexcept
+fw::Status from_esp_err(esp_err_t err) noexcept
 {
-    return (err == ESP_OK) ? Status::kOk : Status::kTimeout;
+    return (err == ESP_OK) ? fw::Status::kOk : fw::Status::kTimeout;
 }
-} // namespace rtk::os
+} // namespace rtos
 
 extern "C" {
 void fake_crit_enter(void)

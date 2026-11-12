@@ -3,7 +3,7 @@
 #include "app_context.hpp"
 #include "esp_log.h"
 
-namespace rtk::app {
+namespace app {
 namespace {
 constexpr size_t kRtcmHeaderBytes = 3;
 constexpr size_t kRtcmOverheadBytes = 6;
@@ -56,4 +56,4 @@ const RtcmStats &RtcmModule::stats() const noexcept
 {
     return forwarder_.stats();
 }
-} // namespace rtk::app
+} // namespace app

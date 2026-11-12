@@ -2,7 +2,8 @@
 cmake_minimum_required(VERSION 3.22)
 set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/../../components/stream_demux"
-    "${CMAKE_CURRENT_LIST_DIR}/../../components/rtk_proto"
+    "${CMAKE_CURRENT_LIST_DIR}/../../components/app_fw"
+    "${CMAKE_CURRENT_LIST_DIR}/../../components/device_proto"
     "${CMAKE_CURRENT_LIST_DIR}/../../components/bt_reconnect")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(rtk_spp_peer)

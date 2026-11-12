@@ -10,7 +10,7 @@
 #include <cstring>
 #include <span>
 
-namespace rtk::app {
+namespace app {
 
 namespace {
 
@@ -43,8 +43,8 @@ int cmd_alarm(void * /*ctx*/, int argc, char **argv) noexcept
 
     uint8_t state = 0U;
     uint8_t level = 0U;
-    if ((!rtk::console::parse_u8(args[kAlarmStateArg], state)) || (state > kAlarmStateMax) ||
-        (!rtk::console::parse_u8(args[kAlarmLevelArg], level)) || (level > kAlarmLevelMax)) {
+    if ((!cli::parse_u8(args[kAlarmStateArg], state)) || (state > kAlarmStateMax) ||
+        (!cli::parse_u8(args[kAlarmLevelArg], level)) || (level > kAlarmLevelMax)) {
         printf("invalid state/level\n");
         return 1;
     }
@@ -88,7 +88,7 @@ int cmd_policy(void * /*ctx*/, int /*argc*/, char ** /*argv*/) noexcept
     return 0;
 }
 
-constexpr std::array<rtk::console::Cmd, 4> kLinkCmds{{
+constexpr std::array<cli::Cmd, 4> kLinkCmds{{
     {"alarm", "alarm set <state 0-2> <level 0-3> | alarm clear", nullptr, cmd_alarm, nullptr},
     {"pair", "open 60 s pairing window", nullptr, cmd_pair, nullptr},
     {"wl", "wl clear", nullptr, cmd_wl, nullptr},
@@ -97,9 +97,9 @@ constexpr std::array<rtk::console::Cmd, 4> kLinkCmds{{
 
 } // namespace
 
-std::span<const rtk::console::Cmd> link_cmds() noexcept
+std::span<const cli::Cmd> link_cmds() noexcept
 {
     return kLinkCmds;
 }
 
-} // namespace rtk::app
+} // namespace app

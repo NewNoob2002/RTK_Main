@@ -1,4 +1,4 @@
-/* 验收测试：rtk_proto C 接口（报警消息 0x40/0x41）。布局来自 phone_protocol.md §5。冻结输入。 */
+/* 验收测试：device_proto C 接口（报警消息 0x40/0x41）。布局来自 phone_protocol.md §5。冻结输入。 */
 #include <string.h>
 
 #include "rtk_proto_alarm.h"

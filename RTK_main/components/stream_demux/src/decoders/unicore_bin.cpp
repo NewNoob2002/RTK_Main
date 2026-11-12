@@ -3,16 +3,16 @@
 // 早拒绝点：第 2 字节（44）、第 3 字节（B5，与同首字节的产品帧 AA 44 18 分开）；长度超限；CRC 错。
 // 长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
 
-#include "rtk/demux/decoders/unicore_bin.hpp"
+#include "demux/decoders/unicore_bin.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "rtk/demux/crc.hpp"
-#include "rtk/demux/decoder.hpp"
+#include "demux/crc.hpp"
+#include "demux/decoder.hpp"
 
-namespace rtk::demux::unicore_bin {
+namespace demux::unicore_bin {
 
 namespace {
 
@@ -100,4 +100,4 @@ Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
     return (crc_calc == crc_rx) ? Step::kFrame : Step::kReject;
 }
 
-} // namespace rtk::demux::unicore_bin
+} // namespace demux::unicore_bin

@@ -1,4 +1,4 @@
-/* 验收测试：rtk_proto C 接口（帧）。由 QA-A 通过的 reference/c-v1 测试机械移植；
+/* 验收测试：device_proto C 接口（帧）。由 QA-A 通过的 reference/c-v1 测试机械移植；
  * 期望值来自 phone_protocol.md 与 Python zlib.crc32。冻结输入。 */
 #include <string.h>
 

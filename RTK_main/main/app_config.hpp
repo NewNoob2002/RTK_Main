@@ -5,11 +5,11 @@
 #include <cstdint>
 #include <string_view>
 
-#include "rtk/core/types.hpp"
-#include "rtk/os/executor.hpp"  // IWYU pragma: keep（冻结头中的 app 名称须在产品命名空间出现前解析）
-#include "rtk/os/spin_lock.hpp" // IWYU pragma: keep
+#include "core/types.hpp"
+#include "rtos/executor.hpp"  // IWYU pragma: keep（冻结头中的 app 名称须在产品命名空间出现前解析）
+#include "rtos/spin_lock.hpp" // IWYU pragma: keep
 
-namespace rtk::app {
+namespace app {
 
 inline constexpr std::string_view kAppVersion = "6.1.0-dev";
 
@@ -48,4 +48,4 @@ enum class ExecKind : uint8_t { kLink };
     return policy == core::Policy::kPhonePreempt ? "PHONE_PREEMPT" : "CONCURRENT";
 }
 
-} // namespace rtk::app
+} // namespace app

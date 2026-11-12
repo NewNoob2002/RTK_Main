@@ -6,7 +6,7 @@
 #include "data/app_data.hpp"
 #include "module_list.inc"
 
-namespace rtk::app {
+namespace app {
 /** 固件唯一上下文：拥有 DataCenter、全部模块实例与链路执行器；仅 app_main 创建，非 ISR。 */
 struct AppContext {
     static constexpr size_t kLinkStackBytes = 6144;
@@ -24,10 +24,10 @@ struct AppContext {
 #define MODULE_DEF(type, member, name, kind, executor, period) type member{*this};
 #include "module_list.inc"
 #undef MODULE_DEF
-    os::Executor link_executor{};
-    os::ExecutorStorage<kLinkStackBytes, kModuleCount> link_storage{};
+    rtos::Executor link_executor{};
+    rtos::ExecutorStorage<kLinkStackBytes, kModuleCount> link_storage{};
 };
 
 /** 返回固件全生命周期的上下文；无阻塞、无分配，非 ISR；成员访问遵守各模块契约。 */
 [[nodiscard]] AppContext &app_context() noexcept;
-} // namespace rtk::app
+} // namespace app

@@ -4,19 +4,19 @@
 #include <cstdint>
 #include <cstring>
 
-#include "rtk/core/link_service.hpp"
-#include "rtk/core/services/config_service.hpp"
-#include "rtk/core/services/device_service.hpp"
-#include "rtk/core/services/pair_service.hpp"
+#include "core/link_service.hpp"
+#include "core/services/config_service.hpp"
+#include "core/services/device_service.hpp"
+#include "core/services/pair_service.hpp"
 #include "test_support.hpp"
 #include "unity.h"
 
-namespace ac = rtk::proto::alarm;
-namespace mt = rtk::proto::msg_type;
-using rtk::core::BtAddr;
-using rtk::core::Policy;
-using rtk::core::Role;
-using rtk::core::SessionHandle;
+namespace ac = proto::alarm;
+namespace mt = proto::msg_type;
+using core::BtAddr;
+using core::Policy;
+using core::Role;
+using core::SessionHandle;
 
 static constexpr SessionHandle kPhone = 0x81;
 static constexpr SessionHandle kAlarm = 0x82;
@@ -36,24 +36,24 @@ struct Fixture {
         const std::array<BtAddr, 1> wl = {kAlarmAddr};
         link.init(policy, alarm_whitelisted ? std::span<const BtAddr>(wl) : std::span<const BtAddr>());
         // J2b：原来的 CommandDispatcher 换成 4 个服务 + CommandRouter（组装方式与 main 一致）。
-        const std::array<rtk::core::RouteTable, 4> tables = {device.table(), config.table(), alarm_service.table(),
-                                                             pair.table()};
-        TEST_ASSERT_TRUE(rtk::is_ok(router.init(tables)));
+        const std::array<core::RouteTable, 4> tables = {device.table(), config.table(), alarm_service.table(),
+                                                        pair.table()};
+        TEST_ASSERT_TRUE(is_ok(router.init(tables)));
     }
     test::FakeTransport transport;
-    rtk::core::AlarmSource alarm;
-    rtk::core::LinkManager link;
-    rtk::core::services::DeviceService device;
-    rtk::core::services::ConfigService config;
+    core::AlarmSource alarm;
+    core::LinkManager link;
+    core::services::DeviceService device;
+    core::services::ConfigService config;
     // AlarmService 持有 DeviceService::info() 的引用，声明顺序必须在其后。
-    rtk::core::services::AlarmService alarm_service{alarm, link, device.info()};
-    rtk::core::services::PairService pair{link};
-    rtk::core::CommandRouter router;
-    rtk::core::LinkService svc{transport, link, router, alarm_service};
+    core::services::AlarmService alarm_service{alarm, link, device.info()};
+    core::services::PairService pair{link};
+    core::CommandRouter router;
+    core::LinkService svc{transport, link, router, alarm_service};
 };
 
 struct Bytes {
-    std::array<uint8_t, rtk::proto::kMaxFrame * 2> data{};
+    std::array<uint8_t, proto::kMaxFrame * 2> data{};
     size_t len = 0;
     std::span<const uint8_t> view() const
     {
@@ -62,8 +62,8 @@ struct Bytes {
     void append(uint16_t msg_id, uint8_t sender, uint8_t type, std::span<const uint8_t> payload = {})
     {
         size_t n = 0;
-        TEST_ASSERT_TRUE(rtk::is_ok(rtk::proto::build_frame(std::span<uint8_t>(data.data() + len, data.size() - len),
-                                                            msg_id, sender, type, payload, n)));
+        TEST_ASSERT_TRUE(is_ok(proto::build_frame(std::span<uint8_t>(data.data() + len, data.size() - len), msg_id,
+                                                  sender, type, payload, n)));
         len += n;
     }
 };
@@ -80,7 +80,7 @@ constexpr std::array<uint8_t, 8> kHeartbeat = {0x05, 0x00, 0x50, 0x00, 0, 0, 0, 
 // 解析 FakeTransport 第 idx 次写入，返回 msg_id 与 type。
 test::FeedResult written(const test::FakeTransport &t, size_t idx)
 {
-    rtk::proto::FrameParser parser;
+    proto::FrameParser parser;
     return test::feed_all(parser, std::span<const uint8_t>(t.writes[idx].data.data(), t.writes[idx].len));
 }
 
@@ -94,7 +94,7 @@ static void test_phone_query_gets_reply()
     f.svc.on_data(kPhone, q.view(), 10);
     TEST_ASSERT_EQUAL_UINT(1, f.transport.write_count);
     TEST_ASSERT_EQUAL_UINT32(kPhone, f.transport.writes[0].handle);
-    TEST_ASSERT_EQUAL_UINT32(rtk::core::kWriteTimeoutMs, f.transport.last_timeout_ms);
+    TEST_ASSERT_EQUAL_UINT32(core::kWriteTimeoutMs, f.transport.last_timeout_ms);
     auto r = written(f.transport, 0);
     TEST_ASSERT_EQUAL_INT(1, r.frames);
     TEST_ASSERT_EQUAL_HEX16(0x0001, r.last.msg_id);
@@ -179,11 +179,11 @@ static void test_alarm_timeout_disconnects()
 {
     Fixture f(Policy::kConcurrent, true);
     f.svc.on_open(kAlarm, kAlarmAddr, 0);
-    f.svc.tick(rtk::core::kAlarmRxTimeoutMs + 1U);
+    f.svc.tick(core::kAlarmRxTimeoutMs + 1U);
     TEST_ASSERT_EQUAL_UINT(1, f.transport.disconnect_count);
     TEST_ASSERT_EQUAL_UINT32(kAlarm, f.transport.disconnects[0]);
     f.transport.clear();
-    f.svc.tick(rtk::core::kAlarmRxTimeoutMs + 2000U);
+    f.svc.tick(core::kAlarmRxTimeoutMs + 2000U);
     TEST_ASSERT_EQUAL_UINT(0, f.transport.write_count); // 已移除，不再推送
 }
 

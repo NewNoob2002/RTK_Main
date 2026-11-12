@@ -3,19 +3,19 @@
 #include <array>
 #include <span>
 
-#include "rtk/core/link_manager.hpp"
-#include "rtk/proto/bytes.hpp"
+#include "core/link_manager.hpp"
+#include "proto/bytes.hpp"
 #include "unity.h"
 
 namespace {
 
-using rtk::core::Actions;
-using rtk::core::BtAddr;
-using rtk::core::LinkManager;
-using rtk::core::Policy;
-using rtk::core::Role;
-using rtk::core::SessionHandle;
-using rtk::proto::ByteWriter;
+using core::Actions;
+using core::BtAddr;
+using core::LinkManager;
+using core::Policy;
+using core::Role;
+using core::SessionHandle;
+using proto::ByteWriter;
 
 // 地址和句柄沿用冻结的 test/host/test_link_manager.cpp，仅作逻辑身份，不连接蓝牙。
 constexpr SessionHandle kPhone = 0x81;
@@ -73,14 +73,12 @@ TEST_CASE("C++ LinkManager pairs initial phone role and remembers alarm", "[rtk_
     TEST_ASSERT_TRUE(Role::kPhone == manager.on_open(kAlarm, kAlarmAddr, 0, actions));
     manager.pair_open(10);
     TEST_ASSERT_TRUE(manager.is_pairing());
-    TEST_ASSERT_TRUE(Role::kAlarm ==
-                     manager.on_frame(kAlarm, rtk::core::kHelloSender, rtk::core::kHelloMsgId, 20, actions));
+    TEST_ASSERT_TRUE(Role::kAlarm == manager.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 20, actions));
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
     TEST_ASSERT_TRUE(Role::kAlarm == manager.role(kAlarm));
     TEST_ASSERT_EQUAL_UINT(1, manager.whitelist().size());
     TEST_ASSERT_TRUE(kAlarmAddr == manager.whitelist()[0]);
-    TEST_ASSERT_TRUE(Role::kAlarm ==
-                     manager.on_frame(kAlarm, rtk::core::kHelloSender, rtk::core::kHelloMsgId, 30, actions));
+    TEST_ASSERT_TRUE(Role::kAlarm == manager.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 30, actions));
     TEST_ASSERT_EQUAL_UINT(1, manager.whitelist().size());
     manager.on_close(kAlarm);
     TEST_ASSERT_TRUE(Role::kNone == manager.role(kAlarm));
@@ -99,8 +97,7 @@ TEST_CASE("C++ LinkManager pairs pending alarm while phone remains online", "[rt
     TEST_ASSERT_TRUE(manager.is_pairing());
     TEST_ASSERT_TRUE(Role::kPending == manager.on_open(kAlarm, kAlarmAddr, 100, actions));
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
-    TEST_ASSERT_TRUE(Role::kAlarm ==
-                     manager.on_frame(kAlarm, rtk::core::kHelloSender, rtk::core::kHelloMsgId, 200, actions));
+    TEST_ASSERT_TRUE(Role::kAlarm == manager.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 200, actions));
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
     TEST_ASSERT_TRUE(Role::kPhone == manager.role(kPhone));
     TEST_ASSERT_EQUAL_UINT(1, manager.whitelist().size());
@@ -119,13 +116,13 @@ TEST_CASE("C++ LinkManager rejects hello at expired pairing window", "[rtk_pure]
     Actions actions{};
     manager.init(Policy::kConcurrent, {});
     manager.pair_open(500);
-    manager.tick(500U + rtk::core::kPairWindowMs - 1U, actions);
+    manager.tick(500U + core::kPairWindowMs - 1U, actions);
     TEST_ASSERT_TRUE(manager.is_pairing());
-    manager.tick(500U + rtk::core::kPairWindowMs, actions);
+    manager.tick(500U + core::kPairWindowMs, actions);
     TEST_ASSERT_FALSE(manager.is_pairing());
-    TEST_ASSERT_TRUE(Role::kPhone == manager.on_open(kAlarm, kAlarmAddr, 500U + rtk::core::kPairWindowMs, actions));
-    TEST_ASSERT_TRUE(Role::kNone == manager.on_frame(kAlarm, rtk::core::kHelloSender, rtk::core::kHelloMsgId,
-                                                     501U + rtk::core::kPairWindowMs, actions));
+    TEST_ASSERT_TRUE(Role::kPhone == manager.on_open(kAlarm, kAlarmAddr, 500U + core::kPairWindowMs, actions));
+    TEST_ASSERT_TRUE(Role::kNone == manager.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId,
+                                                     501U + core::kPairWindowMs, actions));
     TEST_ASSERT_EQUAL_UINT8(1, actions.count);
     TEST_ASSERT_EQUAL_UINT32(kAlarm, actions.view()[0]);
     TEST_ASSERT_TRUE(Role::kNone == manager.role(kAlarm));

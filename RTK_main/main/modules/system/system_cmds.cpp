@@ -12,7 +12,7 @@
 
 #include "esp_err.h"
 
-namespace rtk::app {
+namespace app {
 
 namespace {
 
@@ -94,15 +94,15 @@ int cmd_status(void * /*ctx*/, int /*argc*/, char ** /*argv*/) noexcept
     return 0;
 }
 
-constexpr std::array<rtk::console::Cmd, 1> kSystemCmds{{
+constexpr std::array<cli::Cmd, 1> kSystemCmds{{
     {"status", "print sessions, whitelist, alarm, stats, heap and stack", nullptr, cmd_status, nullptr},
 }};
 
 } // namespace
 
-std::span<const rtk::console::Cmd> system_cmds() noexcept
+std::span<const cli::Cmd> system_cmds() noexcept
 {
     return kSystemCmds;
 }
 
-} // namespace rtk::app
+} // namespace app

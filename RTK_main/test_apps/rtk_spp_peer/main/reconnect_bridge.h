@@ -1,4 +1,4 @@
-// rtk_spp_peer 重连状态机 C 桥接接口（供 peer.c 调用 rtk::reconnect::Reconnector）。
+// rtk_spp_peer 重连状态机 C 桥接接口（供 peer.c 调用 reconnect::Reconnector）。
 #pragma once
 
 #include <stdbool.h>

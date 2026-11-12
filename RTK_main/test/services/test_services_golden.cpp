@@ -10,33 +10,32 @@
 #include <string_view>
 
 // 旧实现已于 J2b 退役：下面这行经 -I reference/cpp-v3-dispatcher 指向 reference/ 里的只读基准（内容未改）。
-#include "rtk/core/command_dispatcher.hpp"
-#include "rtk/core/command_router.hpp"
-#include "rtk/core/services/alarm_service.hpp"
-#include "rtk/core/services/config_service.hpp"
-#include "rtk/core/services/device_service.hpp"
-#include "rtk/core/services/pair_service.hpp"
-#include "rtk/proto/alarm_codec.hpp"
-#include "rtk/proto/frame.hpp"
+#include "core/command_dispatcher.hpp"
+#include "core/command_router.hpp"
+#include "core/services/alarm_service.hpp"
+#include "core/services/config_service.hpp"
+#include "core/services/device_service.hpp"
+#include "core/services/pair_service.hpp"
+#include "proto/alarm_codec.hpp"
+#include "proto/frame.hpp"
 #include "unity.h"
 
-namespace ac = rtk::proto::alarm;
-namespace mt = rtk::proto::msg_type;
-namespace proto = rtk::proto;
-namespace svc = rtk::core::services;
+namespace ac = proto::alarm;
+namespace mt = proto::msg_type;
+namespace svc = core::services;
 
-using rtk::core::Actions;
-using rtk::core::AlarmSource;
-using rtk::core::BtAddr;
-using rtk::core::CommandDispatcher;
-using rtk::core::CommandRouter;
-using rtk::core::DispatchResult;
-using rtk::core::LinkManager;
-using rtk::core::Policy;
-using rtk::core::Reply;
-using rtk::core::Role;
-using rtk::core::RouteTable;
-using rtk::core::SessionHandle;
+using core::Actions;
+using core::AlarmSource;
+using core::BtAddr;
+using core::CommandDispatcher;
+using core::CommandRouter;
+using core::DispatchResult;
+using core::LinkManager;
+using core::Policy;
+using core::Reply;
+using core::Role;
+using core::RouteTable;
+using core::SessionHandle;
 
 namespace {
 
@@ -191,7 +190,7 @@ struct Harness {
     }
 
     /** 组装根：4 张路由表 → 1 个路由器（与 main 的组装方式一致）。 */
-    rtk::Status init_router() noexcept
+    fw::Status init_router() noexcept
     {
         const std::array<RouteTable, 4> tables = {dev.table(), cfg.table(), alarm_svc.table(), pair_svc.table()};
         return router.init(tables);
@@ -294,7 +293,7 @@ constexpr std::array<PayloadShape, 9> kShapes = {{
     {"test_set3", 3, 3, kTestSet, kStateAlert, kTestLevel},
     {"test_clear3", 3, 3, kTestClear, kStateAlert, kTestLevel},
     {"short2", 2, 1, kPairOpen, 0, 0},
-    {"wm44", rtk::core::kWorkModeSetLen, 0, 0, 0, 0},
+    {"wm44", core::kWorkModeSetLen, 0, 0, 0, 0},
     {"typical50", kTypicalLen, 1, kTestSet, 0, 0},
     {"full256", proto::kMaxPayload, 1, kTestSet, 0, 0},
 }};
@@ -322,7 +321,7 @@ void test_msg_id_sweep()
     constexpr std::array<Role, 4> kRoles = {Role::kPhone, Role::kAlarm, Role::kNone, Role::kPending};
 
     Harness harness;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(rtk::Status::kOk), static_cast<uint8_t>(harness.init_router()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk), static_cast<uint8_t>(harness.init_router()));
     TEST_ASSERT_EQUAL_UINT(kRouteCount, harness.router.route_count());
 
     uint32_t now_ms = kFirstNowMs;
@@ -350,7 +349,7 @@ void test_msg_id_sweep()
 void test_device_sequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(rtk::is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
 
     uint32_t now_ms = kDeviceNowMs;
     constexpr std::array<uint16_t, 7> kIds = {kMsgDevInfo, kMsgDevState, kMsgBattery, kMsgGga,
@@ -391,14 +390,14 @@ void test_device_sequence()
     run_case(harness, Role::kPhone, kMsgSatTrack, mt::kSet, s_payload.data(), 0, now_ms,
              describe(Role::kPhone, kMsgSatTrack, mt::kSet, "none"));
     now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgCom, mt::kSet, s_payload.data(), rtk::core::kComLen, now_ms,
+    run_case(harness, Role::kPhone, kMsgCom, mt::kSet, s_payload.data(), core::kComLen, now_ms,
              describe(Role::kPhone, kMsgCom, mt::kSet, "32B"));
 }
 
 void test_config_sequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(rtk::is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
 
     uint32_t now_ms = kConfigNowMs;
     for (size_t i = 0; i < s_payload.size(); ++i) {
@@ -406,13 +405,13 @@ void test_config_sequence()
     }
 
     // 0x07：SET 恰好 44 字节成功，QUERY 回读 48 字节，短包失败且不回滚。
-    run_case(harness, Role::kPhone, kMsgWorkMode, mt::kSet, s_payload.data(), rtk::core::kWorkModeSetLen, now_ms,
+    run_case(harness, Role::kPhone, kMsgWorkMode, mt::kSet, s_payload.data(), core::kWorkModeSetLen, now_ms,
              describe(Role::kPhone, kMsgWorkMode, mt::kSet, "44B"));
     now_ms += kNowStep;
     run_case(harness, Role::kPhone, kMsgWorkMode, mt::kQuery, s_payload.data(), 0, now_ms,
              describe(Role::kPhone, kMsgWorkMode, mt::kQuery, "readback"));
     now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgWorkMode, mt::kSet, s_payload.data(), rtk::core::kWorkModeSetLen - 1U, now_ms,
+    run_case(harness, Role::kPhone, kMsgWorkMode, mt::kSet, s_payload.data(), core::kWorkModeSetLen - 1U, now_ms,
              describe(Role::kPhone, kMsgWorkMode, mt::kSet, "43B"));
     now_ms += kNowStep;
     run_case(harness, Role::kPhone, kMsgWorkMode, mt::kQuery, s_payload.data(), 0, now_ms,
@@ -420,16 +419,16 @@ void test_config_sequence()
     now_ms += kNowStep;
 
     // 0x14：SET 15 字节成功（第 17 字节保持默认 0x05），满 28 字节覆盖全部字段。
-    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), rtk::core::kRadioSetMinLen, now_ms,
+    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), core::kRadioSetMinLen, now_ms,
              describe(Role::kPhone, kMsgRadio, mt::kSet, "15B"));
     now_ms += kNowStep;
     run_case(harness, Role::kPhone, kMsgRadio, mt::kQuery, s_payload.data(), 0, now_ms,
              describe(Role::kPhone, kMsgRadio, mt::kQuery, "readback"));
     now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), rtk::core::kRadioSetMinLen - 1U, now_ms,
+    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), core::kRadioSetMinLen - 1U, now_ms,
              describe(Role::kPhone, kMsgRadio, mt::kSet, "14B"));
     now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), rtk::core::kRadioLen, now_ms,
+    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), core::kRadioLen, now_ms,
              describe(Role::kPhone, kMsgRadio, mt::kSet, "28B"));
     now_ms += kNowStep;
     run_case(harness, Role::kPhone, kMsgRadio, mt::kQuery, s_payload.data(), 0, now_ms,
@@ -437,13 +436,13 @@ void test_config_sequence()
     now_ms += kNowStep;
 
     // 0x15：SET 50 字节成功，49 字节失败；非 QUERY/SET 的 type 走只读分支。
-    run_case(harness, Role::kPhone, kMsgLog, mt::kSet, s_payload.data(), rtk::core::kLogLen, now_ms,
+    run_case(harness, Role::kPhone, kMsgLog, mt::kSet, s_payload.data(), core::kLogLen, now_ms,
              describe(Role::kPhone, kMsgLog, mt::kSet, "50B"));
     now_ms += kNowStep;
     run_case(harness, Role::kPhone, kMsgLog, mt::kQuery, s_payload.data(), 0, now_ms,
              describe(Role::kPhone, kMsgLog, mt::kQuery, "readback"));
     now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgLog, mt::kSet, s_payload.data(), rtk::core::kLogLen - 1U, now_ms,
+    run_case(harness, Role::kPhone, kMsgLog, mt::kSet, s_payload.data(), core::kLogLen - 1U, now_ms,
              describe(Role::kPhone, kMsgLog, mt::kSet, "49B"));
     now_ms += kNowStep;
     run_case(harness, Role::kPhone, kMsgLog, mt::kPush, s_payload.data(), 0, now_ms,
@@ -453,7 +452,7 @@ void test_config_sequence()
 void test_pair_sequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(rtk::is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
 
     Actions act;
     uint32_t now_ms = kPairNowMs;
@@ -472,7 +471,7 @@ void test_pair_sequence()
                             static_cast<uint8_t>(harness.link.on_open(kAlarmHandle, kAlarmAddr, now_ms, act)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Role::kAlarm),
                             static_cast<uint8_t>(harness.link.on_frame(kAlarmHandle, proto::sender::kAlarm,
-                                                                       rtk::core::kHelloMsgId, now_ms, act)));
+                                                                       core::kHelloMsgId, now_ms, act)));
     TEST_ASSERT_EQUAL_UINT(1, harness.link.whitelist().size());
     now_ms += kNowStep;
 
@@ -501,7 +500,7 @@ void test_pair_sequence()
 void test_alarm_sequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(rtk::is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
 
     Actions act;
     uint32_t now_ms = kAlarmNowMs;

@@ -1,7 +1,7 @@
 # WHOLE_ARCHIVE 保留 C/C++ TEST_CASE 的静态注册，避免未直接引用的用例被链接器丢弃。
 idf_component_register(
     SRCS "test_main.cpp" "test_proto_c.c"
-    PRIV_REQUIRES rtk_proto rtk_core unity
+    PRIV_REQUIRES device_proto link_core unity
     WHOLE_ARCHIVE)
 
 # 显式追加方言选项：IDF 在全局编译选项中指定默认标准，仅设置 CMake STANDARD 属性不会覆盖它。

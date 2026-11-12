@@ -45,18 +45,19 @@ add_subdirectory(${RTK_ROOT}/components/stream_demux stream_demux_build)
 # 避免被测 Sink 基类与测试子类 RTTI 开关不一致导致 UBSan vptr 误报。
 target_compile_options(stream_demux PRIVATE -fno-exceptions -fno-rtti)
 
-# 产品帧解码器直接编译 components/rtk_proto/demux_frame.cpp 及其依赖的 rtk_proto 源文件。
+# 产品帧解码器直接编译 components/device_proto/demux_frame.cpp 及其依赖的 device_proto 源文件。
 add_library(rtk_proto_c_demux STATIC
-    ${RTK_ROOT}/components/rtk_proto/rtk_proto_frame.c)
-target_include_directories(rtk_proto_c_demux PUBLIC ${RTK_ROOT}/components/rtk_proto/include)
+    ${RTK_ROOT}/components/device_proto/rtk_proto_frame.c)
+target_include_directories(rtk_proto_c_demux PUBLIC ${RTK_ROOT}/components/device_proto/include)
 target_compile_options(rtk_proto_c_demux PRIVATE ${RTK_C_STRICT})
 
 add_library(rtk_proto_demux STATIC
-    ${RTK_ROOT}/components/rtk_proto/status.cpp
-    ${RTK_ROOT}/components/rtk_proto/bytes.cpp
-    ${RTK_ROOT}/components/rtk_proto/frame.cpp
-    ${RTK_ROOT}/components/rtk_proto/demux_frame.cpp)
-target_include_directories(rtk_proto_demux PUBLIC ${RTK_ROOT}/components/rtk_proto/include)
+    ${RTK_ROOT}/components/app_fw/src/status.cpp
+    ${RTK_ROOT}/components/device_proto/bytes.cpp
+    ${RTK_ROOT}/components/device_proto/frame.cpp
+    ${RTK_ROOT}/components/device_proto/demux_frame.cpp)
+target_include_directories(rtk_proto_demux PUBLIC
+    ${RTK_ROOT}/components/app_fw/include ${RTK_ROOT}/components/device_proto/include)
 target_link_libraries(rtk_proto_demux PUBLIC rtk_proto_c_demux stream_demux)
 target_compile_options(rtk_proto_demux PRIVATE ${RTK_CXX_STRICT})
 

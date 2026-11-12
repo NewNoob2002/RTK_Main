@@ -2,7 +2,7 @@
 """G5b clang-tidy 门禁：覆盖纯组件、host 测试与 ESP-IDF 依赖代码。
 
 规则来源（2026-11-11 用户授权修订）：
-- C++ 文件：根 .clang-tidy，按目录继承 main/、components/rtk_bt|rtk_os/、test/host/ 下的 .clang-tidy；
+- C++ 文件：根 .clang-tidy，按目录继承 main/、components/spp_server|rtos/、test/host/ 下的 .clang-tidy；
 - C 文件：.clang-tidy-c（--config-file 会屏蔽目录配置，因此 C 侧的分区排除项在本脚本 C_EXTRA_CHECKS 中给出，
   与对应目录 .clang-tidy 的理由一致）。
 ESP 侧翻译单元用 idf.py 生成的 compile_commands.json，按 .clangd 的做法去掉 clang 不认识的 xtensa GCC
@@ -153,15 +153,15 @@ def main():
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
 
-        for p in sources("components/rtk_proto/*.cpp", "components/rtk_core/*.cpp", "test/host/*.cpp"):
+        for p in sources("components/device_proto/*.cpp", "components/link_core/*.cpp", "test/host/*.cpp"):
             jobs.append((p, host_db, False, None, ()))
-        for p in sources("components/rtk_proto/*.c"):
+        for p in sources("components/device_proto/*.c"):
             jobs.append((p, host_db, True, None, ()))
         for p in sources("test/host/*.c"):
             jobs.append((p, host_db, True, C_EXTRA_CHECKS["host_test"], ()))
-        for p in sources("main/*.cpp", "components/rtk_bt/*.cpp", "components/rtk_os/*.cpp"):
+        for p in sources("main/*.cpp", "components/spp_server/*.cpp", "components/rtos/*.cpp"):
             jobs.append((p, esp_db, False, None, ESP_EXTRA_ARGS))
-        for p in sources("components/rtk_bt/*.c", "components/rtk_store/*.c"):
+        for p in sources("components/spp_server/*.c", "components/nvs_store/*.c"):
             jobs.append((p, esp_db, True, C_EXTRA_CHECKS["esp"], ESP_EXTRA_ARGS))
         if app_db is not None:
             for p in sources("test_apps/rtk_pure/main/*.cpp"):

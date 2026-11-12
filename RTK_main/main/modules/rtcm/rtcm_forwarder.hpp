@@ -4,9 +4,9 @@
 #include <cstdint>
 #include <span>
 
-#include "rtk/core/types.hpp"
+#include "core/types.hpp"
 
-namespace rtk::app {
+namespace app {
 
 /** RTCM 转发统计快照。 */
 struct RtcmStats {
@@ -38,4 +38,4 @@ private:
     RtcmStats stats_{};
 };
 
-} // namespace rtk::app
+} // namespace app

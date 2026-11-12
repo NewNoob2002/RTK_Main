@@ -3,10 +3,10 @@
 
 #include <cstdint>
 
-#include "app_config.hpp" // IWYU pragma: keep（保证冻结头中的 ::app 命名空间先于 rtk::app 解析）
+#include "app_config.hpp" // IWYU pragma: keep（保留模块共享配置入口）
 #include "esp_err.h"
 
-namespace rtk::app {
+namespace app {
 
 /** 存储模块命令动词。 */
 enum class StorageVerb : uint8_t { kSaveSn };
@@ -26,4 +26,4 @@ struct StoreStatus {
     esp_err_t sn_error = ESP_OK;
 };
 
-} // namespace rtk::app
+} // namespace app

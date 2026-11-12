@@ -1,14 +1,14 @@
-// 验收测试：ByteWriter / ByteReader / Status（冻结输入）。期望值来自 bytes.hpp 契约。
+// 验收测试：ByteWriter / ByteReader / fw::Status（冻结输入）。期望值来自 bytes.hpp 契约。
 #include <array>
 #include <cstdint>
 #include <cstring>
 
-#include "rtk/proto/bytes.hpp"
-#include "rtk/status.hpp"
+#include "proto/bytes.hpp"
+#include "fw/status.hpp"
 #include "unity.h"
 
-using rtk::proto::ByteReader;
-using rtk::proto::ByteWriter;
+using proto::ByteReader;
+using proto::ByteWriter;
 
 extern "C" void setUp(void) {}
 extern "C" void tearDown(void) {}
@@ -101,11 +101,11 @@ static void test_reader_take_and_skip()
 
 static void test_status_strings()
 {
-    TEST_ASSERT_TRUE(rtk::is_ok(rtk::Status::kOk));
-    TEST_ASSERT_FALSE(rtk::is_ok(rtk::Status::kTimeout));
-    TEST_ASSERT_NOT_NULL(rtk::to_string(rtk::Status::kCorrupt));
-    TEST_ASSERT_TRUE(std::strlen(rtk::to_string(rtk::Status::kOk)) > 0U);
-    TEST_ASSERT_EQUAL_STRING("?", rtk::to_string(static_cast<rtk::Status>(0xEE)));
+    TEST_ASSERT_TRUE(is_ok(fw::Status::kOk));
+    TEST_ASSERT_FALSE(is_ok(fw::Status::kTimeout));
+    TEST_ASSERT_NOT_NULL(to_string(fw::Status::kCorrupt));
+    TEST_ASSERT_TRUE(std::strlen(to_string(fw::Status::kOk)) > 0U);
+    TEST_ASSERT_EQUAL_STRING("?", to_string(static_cast<fw::Status>(0xEE)));
 }
 
 int main()

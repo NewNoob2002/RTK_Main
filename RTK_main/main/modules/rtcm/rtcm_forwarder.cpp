@@ -1,9 +1,9 @@
 // RTCM 转发统计实现：按角色过滤并累计帧数、字节数与 CRC-32（由 RTCM 模块在 kLink 任务中调用）。
 #include "modules/rtcm/rtcm_forwarder.hpp"
 
-#include "rtk/proto/frame.hpp"
+#include "proto/frame.hpp"
 
-namespace rtk::app {
+namespace app {
 
 void RtcmForwarder::forward(core::Role role, std::span<const uint8_t> wire) noexcept
 {
@@ -38,4 +38,4 @@ const RtcmStats &RtcmForwarder::stats() const noexcept
     return stats_;
 }
 
-} // namespace rtk::app
+} // namespace app

@@ -1,8 +1,8 @@
-// rtk::fw::Result 文字描述（ADR-0007 §3.5）。
+// fw::Result 文字描述（ADR-0007 §3.5）。
 // 纯函数，无状态；可在任意任务/ISR 中调用，不分配、不阻塞。
-#include "rtk/fw/result.hpp"
+#include "fw/result.hpp"
 
-namespace rtk::fw {
+namespace fw {
 
 const char *to_string(Result r) noexcept
 {
@@ -30,4 +30,4 @@ const char *to_string(Result r) noexcept
     }
 }
 
-} // namespace rtk::fw
+} // namespace fw

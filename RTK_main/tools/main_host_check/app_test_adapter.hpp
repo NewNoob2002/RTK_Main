@@ -5,9 +5,9 @@
 #include "../../main/modules/bt_link/bt_link_module.cpp"
 #include "../../main/modules/rtcm/rtcm_module.hpp"
 #include "../../main/modules/storage/storage_module.hpp"
-#include "rtk/os/static_queue.hpp"
+#include "rtos/static_queue.hpp"
 
-namespace rtk::app {
+namespace app {
 namespace {
 constinit AppContext s_test_app{};
 }
@@ -71,7 +71,7 @@ struct ModuleTestAccess {
         auto &bt = app_context().bt_link;
         app_context().data.rtcm_batch.write(
             {std::span<const uint8_t>{bt.rtcm_batch_}.first(bt.rtcm_size_), bt.rtcm_rejected_});
-        static_cast<void>(app_context().rtcm.poll(os::now_ms()));
+        static_cast<void>(app_context().rtcm.poll(rtos::now_ms()));
         bt.rtcm_size_ = 0;
         bt.rtcm_rejected_ = 0;
     }
@@ -118,8 +118,8 @@ struct CommandResult {
     uint32_t seq = 0;
     CommandStatus status{};
 };
-os::StaticQueue<Command, 4> s_command_queue{};
-os::StaticQueue<CommandResult, 1> s_result_queue{};
+rtos::StaticQueue<Command, 4> s_command_queue{};
+rtos::StaticQueue<CommandResult, 1> s_result_queue{};
 bool &s_whitelist_pending = ModuleTestAccess::whitelist_pending();
 uint32_t &s_whitelist_attempt_ms = ModuleTestAccess::whitelist_attempt_ms();
 struct StatusSnapshot {
@@ -248,14 +248,14 @@ void link_round(uint32_t &last_tick_ms)
                               (entry.drain_pending || entry.sink.pending() || entry.rx_offset < entry.rx_size));
     }
     app_context().bt_link.wait(pending ? 0U : 20U);
-    const uint32_t begin = os::now_ms();
+    const uint32_t begin = rtos::now_ms();
     process_commands(begin);
     ModuleTestAccess::last_tick_ms() = last_tick_ms;
     static_cast<void>(app_context().bt_link.poll(begin));
     last_tick_ms = ModuleTestAccess::last_tick_ms();
     flush_rtcm();
-    static_cast<void>(app_context().storage.poll(os::now_ms()));
-    publish_snapshot(os::now_ms());
+    static_cast<void>(app_context().storage.poll(rtos::now_ms()));
+    publish_snapshot(rtos::now_ms());
 }
 } // namespace
-} // namespace rtk::app
+} // namespace app

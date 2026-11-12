@@ -3,8 +3,8 @@
 #include <span>
 
 #include "data/app_data.hpp"
-#include "rtk/console/console.hpp"
-namespace rtk::app {
+#include "cli/console.hpp"
+namespace app {
 struct AppContext;
 /** RTCM 模块（kLink 执行器）：消费批次视图并处理 rtcm 命令。 */
 class RtcmModule final {
@@ -28,5 +28,5 @@ private:
     uint32_t batch_version_ = 0;
 };
 /** RTCM 模块的控制台命令表；静态存储，进程期有效。 */
-[[nodiscard]] std::span<const rtk::console::Cmd> rtcm_cmds() noexcept;
-} // namespace rtk::app
+[[nodiscard]] std::span<const cli::Cmd> rtcm_cmds() noexcept;
+} // namespace app

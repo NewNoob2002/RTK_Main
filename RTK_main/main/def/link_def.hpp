@@ -6,9 +6,9 @@
 #include <cstdint>
 
 #include "app_config.hpp"
-#include "rtk/core/link_service.hpp"
+#include "core/link_service.hpp"
 
-namespace rtk::app {
+namespace app {
 
 /** 链路模块命令动词（由 fw::Command 的 arg 携带）。 */
 enum class LinkVerb : uint8_t { kAlarmSet, kAlarmClear, kPair, kWhitelistClear };
@@ -61,4 +61,4 @@ struct LinkStats : core::LinkStats {
     uint32_t tx_stack_free = 0; // rtk_tx 栈剩余字节（未启动为 0）
 };
 
-} // namespace rtk::app
+} // namespace app

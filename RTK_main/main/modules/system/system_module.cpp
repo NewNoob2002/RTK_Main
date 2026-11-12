@@ -7,7 +7,7 @@
 #include "esp_system.h"
 #include "rtk_bt_spp.h"
 
-namespace rtk::app {
+namespace app {
 namespace {
 constexpr std::string_view kHexDigits = "0123456789ABCDEF";
 constexpr size_t kMacSnHighByte = 4;
@@ -84,4 +84,4 @@ bool SystemModule::poll(uint32_t /*now_ms*/) noexcept
     context_.data.exec_stats.write(context_.link_executor.stats());
     return false;
 }
-} // namespace rtk::app
+} // namespace app

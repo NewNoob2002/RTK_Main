@@ -1,7 +1,7 @@
 # clangd 配置：按文件所属平台选择编译数据库和系统头，避免 host 测试与 ESP-IDF 目标互相污染。
 # 构建目录不存在时先运行 AGENTS.md §5 的对应命令：
-#   host: cmake -S test/host -B builds/host
-#   ESP : . ~/esp/esp-idf/export.sh && idf.py build
+#   host: cmake -S test/host -B builds/r7a-host
+#   ESP : . ~/esp/esp-idf/export.sh && IDF_COMPONENT_MANAGER=0 idf.py -B builds/r7a build
 # 修改本文件后 clangd 会立即重载，无需重启编辑器。
 #
 # 系统头：esp-clangd 不带内置头；下面按文件路径分别补齐 host 与 xtensa 工具链的 include 路径，
@@ -10,13 +10,13 @@
 # （$HOME 按编辑器支持的展开方式填写；gcc 与 g++ 都要匹配，C/C++ 文件各用其一）
 
 CompileFlags:
-  CompilationDatabase: builds/host
+  CompilationDatabase: builds/r7a-host
   BuiltinHeaders: QueryDriver
 
 ---
-# host 侧：test/host 与可在 host 编译的纯组件 rtk_proto/rtk_core。
+# host 侧：test/host 与可在 host 编译的纯组件 app_fw/device_proto/link_core。
 If:
-  PathMatch: (test|components/rtk_proto|components/rtk_core)/.*
+  PathMatch: (test|tools/(main_host_check|t13_host_check)|components/app_fw|components/device_proto|components/link_core)/.*
 CompileFlags:
   # esp-clangd 的默认 target 是 riscv32-esp，host 文件显式指定 x86_64 并补齐本机 GCC 16 的系统头
   # （与当前工作站一致，升级 GCC 时同步修改）。
@@ -30,11 +30,24 @@ CompileFlags:
     - -isystem/usr/include
 
 ---
+# 两组主机工具依赖各自的 IDF/FreeRTOS shim，必须使用本组数据库。
+If:
+  PathMatch: tools/main_host_check/.*
+CompileFlags:
+  CompilationDatabase: builds/r7a-main
+
+---
+If:
+  PathMatch: tools/t13_host_check/.*
+CompileFlags:
+  CompilationDatabase: builds/r7a-t13
+
+---
 # ESP-IDF 目标侧：main 与依赖 esp_*/freertos/nvs 的组件。
 If:
-  PathMatch: (main|test_apps|components/rtk_bt|components/rtk_os|components/rtk_store)/.*
+  PathMatch: (main|test_apps|components/spp_server|components/rtos|components/nvs_store|components/cli)/.*
 CompileFlags:
-  CompilationDatabase: build
+  CompilationDatabase: builds/r7a
   # esp-clangd 不带内置头；由 xtensa GCC 提供。
   BuiltinHeaders: QueryDriver
   # xtensa GCC 专有、clang 不认识的目标选项；不影响真实构建，仅从 LSP 解析命令中移除。

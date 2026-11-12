@@ -62,7 +62,7 @@ struct UbxChecksum {
 [[nodiscard]] bool gen_unicore_hash_xor(std::span<uint8_t> out, std::string_view body, bool lowercase_hex,
                                         std::size_t &out_len) noexcept;
 
-/** 生成合法产品 SPP 帧（内部调用 rtk::proto::build_frame）。线程/ISR 安全：是。 */
+/** 生成合法产品 SPP 帧（内部调用 proto::build_frame）。线程/ISR 安全：是。 */
 [[nodiscard]] bool gen_product(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender, uint8_t type,
                                std::span<const uint8_t> payload, std::size_t &out_len) noexcept;
 

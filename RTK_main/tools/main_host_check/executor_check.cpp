@@ -1,6 +1,6 @@
 // 确定性执行器回归：只替换 RTOS 边界，运行真实 Executor；每轮末才退出模拟任务。
-#include "rtk/os/executor.hpp"
-#include "rtk/os/esp_status.hpp"
+#include "rtos/executor.hpp"
+#include "rtos/esp_status.hpp"
 #include "esp_task_wdt.h"
 #include <array>
 #include <csetjmp>
@@ -9,7 +9,6 @@
 #include <cstring>
 
 namespace {
-namespace fw = rtk::fw;
 uint32_t s_clock = 100;
 int s_failures = 0;
 int s_critical = 0;
@@ -39,7 +38,7 @@ void pump()
     s_current = previous;
 }
 struct Probe {
-    rtk::os::Executor *executor = nullptr;
+    rtos::Executor *executor = nullptr;
     uint32_t init = 0;
     uint32_t start = 0;
     uint32_t poll = 0;
@@ -95,8 +94,8 @@ constexpr fw::ModuleOps kUnsupportedOps{nullptr, nullptr, nullptr, nullptr};
 
 void lifecycle()
 {
-    static constinit rtk::os::Executor executor{};
-    static constinit rtk::os::ExecutorStorage<6144, 2> storage{};
+    static constinit rtos::Executor executor{};
+    static constinit rtos::ExecutorStorage<6144, 2> storage{};
     static constinit Probe healthy{.executor = &executor, .backlog = true, .slow = true};
     static constinit Probe bad_init{.executor = &executor, .fail_init = true};
     static constinit Probe bad_start{.executor = &executor, .fail_start = true};
@@ -109,14 +108,14 @@ void lifecycle()
         {"periodic", 4, 0, 50, &periodic, &kOps},
         {"unsupported", 5, 0, 0, nullptr, &kUnsupportedOps},
     }};
-    rtk::os::ExecutorConfig cfg{.name = "test", .priority = 10, .core = 1, .wait = wait, .wait_ctx = &healthy};
-    CHECK(executor.start() == rtk::Status::kInvalidState);
-    CHECK(executor.init(cfg, modules, rtk::os::view_of(storage)) == rtk::Status::kOk);
-    CHECK(executor.init(cfg, modules, rtk::os::view_of(storage)) == rtk::Status::kBusy);
+    rtos::ExecutorConfig cfg{.name = "test", .priority = 10, .core = 1, .wait = wait, .wait_ctx = &healthy};
+    CHECK(executor.start() == fw::Status::kInvalidState);
+    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kOk);
+    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kBusy);
     CHECK(healthy.init == 1 && bad_init.init == 1 && bad_start.init == 1);
     CHECK(!executor.module_ok(2) && executor.module_ok(3));
-    CHECK(executor.start() == rtk::Status::kOk && s_created_bytes == 6144);
-    CHECK(executor.start() == rtk::Status::kBusy);
+    CHECK(executor.start() == fw::Status::kOk && s_created_bytes == 6144);
+    CHECK(executor.start() == fw::Status::kBusy);
     fw::Command a{.target = 2, .seq = 7};
     fw::Command b{.target = 5, .seq = 8};
     CHECK(xQueueSend(&storage.cmd_queue, &a, 0) == pdTRUE);
@@ -140,16 +139,16 @@ void lifecycle()
 }
 void calls()
 {
-    static constinit rtk::os::Executor executor{};
-    static constinit rtk::os::ExecutorStorage<6144, 2> storage{};
+    static constinit rtos::Executor executor{};
+    static constinit rtos::ExecutorStorage<6144, 2> storage{};
     static constinit Probe probe{.executor = &executor};
     static constinit std::array<fw::Module, 1> modules{{{"command", 1, 0, 0, &probe, &kNoStartOps}}};
-    const rtk::os::ExecutorConfig cfg{.name = "call", .core = 1};
+    const rtos::ExecutorConfig cfg{.name = "call", .core = 1};
     fw::Command cmd{.target = 1};
     fw::CommandResult result{};
     CHECK(executor.call(cmd, result, 10) == fw::Result::kInvalidState);
-    CHECK(executor.init(cfg, modules, rtk::os::view_of(storage)) == rtk::Status::kOk);
-    CHECK(executor.start() == rtk::Status::kOk);
+    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kOk);
+    CHECK(executor.start() == fw::Status::kOk);
     cmd.target = 9;
     CHECK(executor.call(cmd, result, 10) == fw::Result::kNotFound);
     cmd.target = 1;
@@ -176,32 +175,32 @@ void calls()
 }
 void invalid()
 {
-    static constinit rtk::os::Executor executor{};
-    static constinit rtk::os::ExecutorStorage<6144, 2> storage{};
-    rtk::os::ExecutorConfig cfg{};
-    CHECK(executor.init(cfg, {}, rtk::os::view_of(storage)) == rtk::Status::kInvalidArg);
+    static constinit rtos::Executor executor{};
+    static constinit rtos::ExecutorStorage<6144, 2> storage{};
+    rtos::ExecutorConfig cfg{};
+    CHECK(executor.init(cfg, {}, rtos::view_of(storage)) == fw::Status::kInvalidArg);
     cfg.name = "invalid";
-    auto view = rtk::os::view_of(storage);
+    auto view = rtos::view_of(storage);
     view.cmd_area = {};
-    CHECK(executor.init(cfg, {}, view) == rtk::Status::kInvalidArg);
+    CHECK(executor.init(cfg, {}, view) == fw::Status::kInvalidArg);
     std::array<fw::Module, 2> modules{
         {{"a", 1, 0, 0, nullptr, &kUnsupportedOps}, {"b", 1, 0, 0, nullptr, &kUnsupportedOps}}};
-    CHECK(executor.init(cfg, modules, rtk::os::view_of(storage)) == rtk::Status::kInvalidArg);
+    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kInvalidArg);
     modules[1].id = 2;
     modules[1].ops = nullptr;
-    CHECK(executor.init(cfg, modules, rtk::os::view_of(storage)) == rtk::Status::kInvalidArg);
+    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kInvalidArg);
     cfg.core = configNUMBER_OF_CORES;
-    CHECK(executor.init(cfg, {}, rtk::os::view_of(storage)) == rtk::Status::kInvalidArg);
+    CHECK(executor.init(cfg, {}, rtos::view_of(storage)) == fw::Status::kInvalidArg);
 }
 } // namespace
 
-namespace rtk::os {
+namespace rtos {
 uint32_t now_ms() noexcept
 {
     CHECK(s_critical == 0);
     return s_clock;
 }
-} // namespace rtk::os
+} // namespace rtos
 extern "C" {
 void fake_crit_enter(void)
 {

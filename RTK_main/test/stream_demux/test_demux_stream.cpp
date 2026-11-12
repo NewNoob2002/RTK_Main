@@ -27,27 +27,27 @@
 #include <span>
 #include <string_view>
 
-#include "rtk/demux/decoder.hpp"
-#include "rtk/demux/demux.hpp"
-#include "rtk/demux/static_demux.hpp"
+#include "demux/decoder.hpp"
+#include "demux/demux.hpp"
+#include "demux/static_demux.hpp"
 #if STREAM_DEMUX_NMEA
-#include "rtk/demux/decoders/nmea.hpp"
+#include "demux/decoders/nmea.hpp"
 #endif
 #if STREAM_DEMUX_RTCM3
-#include "rtk/demux/decoders/rtcm3.hpp"
+#include "demux/decoders/rtcm3.hpp"
 #endif
 #if STREAM_DEMUX_UBX
-#include "rtk/demux/decoders/ubx.hpp"
+#include "demux/decoders/ubx.hpp"
 #endif
 #if STREAM_DEMUX_UNICORE_BIN
-#include "rtk/demux/decoders/unicore_bin.hpp"
+#include "demux/decoders/unicore_bin.hpp"
 #endif
 #if STREAM_DEMUX_UNICORE_HASH
-#include "rtk/demux/decoders/unicore_hash.hpp"
+#include "demux/decoders/unicore_hash.hpp"
 #endif
 #include "demux_gen.hpp"
-#include "rtk/proto/demux_frame.hpp"
-#include "rtk/proto/frame.hpp"
+#include "proto/demux_frame.hpp"
+#include "proto/frame.hpp"
 #include "unity.h"
 
 namespace {
@@ -72,11 +72,11 @@ enum class ProtoKind : uint8_t {
 
 struct ActiveProtoEntry {
     ProtoKind kind = ProtoKind::kProduct;
-    const rtk::demux::Decoder *decoder = nullptr;
+    const demux::Decoder *decoder = nullptr;
 };
 
 struct FrameMeta {
-    const rtk::demux::Decoder *decoder = nullptr;
+    const demux::Decoder *decoder = nullptr;
     uint8_t decoder_index = 0U;
     std::size_t offset = 0U;
     std::size_t len = 0U;
@@ -100,11 +100,11 @@ struct StreamCapture {
     bool overflowed = false;
 };
 
-class CaptureSink final : public rtk::demux::Sink {
+class CaptureSink final : public demux::Sink {
 public:
     explicit CaptureSink(StreamCapture &cap) noexcept : cap_(&cap) {}
 
-    void on_frame(const rtk::demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> frame) noexcept override
+    void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> frame) noexcept override
     {
         if ((cap_->frame_count >= kMaxFramesRec) || ((cap_->frame_blob_used + frame.size()) > kBlobCap)) {
             cap_->overflowed = true;
@@ -141,7 +141,7 @@ private:
 };
 
 std::array<uint8_t, kDemuxBufSize> s_demux_buf{};
-rtk::demux::Demux s_dmx;
+demux::Demux s_dmx;
 StreamCapture s_ref_cap;
 StreamCapture s_cur_cap;
 StreamCapture s_truth_cap;
@@ -149,21 +149,21 @@ std::array<uint8_t, kStreamCap> s_stream_buf{};
 
 // 当前构建开启的协议列表（产品帧优先于 Unicore 二进制）
 constexpr std::array kActiveProtos{
-    ActiveProtoEntry{ProtoKind::kProduct, &rtk::proto::demux_frame::kDecoder},
+    ActiveProtoEntry{ProtoKind::kProduct, &proto::demux_frame::kDecoder},
 #if STREAM_DEMUX_UNICORE_BIN
-    ActiveProtoEntry{ProtoKind::kUnicoreBin, &rtk::demux::unicore_bin::kDecoder},
+    ActiveProtoEntry{ProtoKind::kUnicoreBin, &demux::unicore_bin::kDecoder},
 #endif
 #if STREAM_DEMUX_RTCM3
-    ActiveProtoEntry{ProtoKind::kRtcm3, &rtk::demux::rtcm3::kDecoder},
+    ActiveProtoEntry{ProtoKind::kRtcm3, &demux::rtcm3::kDecoder},
 #endif
 #if STREAM_DEMUX_NMEA
-    ActiveProtoEntry{ProtoKind::kNmea, &rtk::demux::nmea::kDecoder},
+    ActiveProtoEntry{ProtoKind::kNmea, &demux::nmea::kDecoder},
 #endif
 #if STREAM_DEMUX_UNICORE_HASH
-    ActiveProtoEntry{ProtoKind::kUnicoreHash, &rtk::demux::unicore_hash::kDecoder},
+    ActiveProtoEntry{ProtoKind::kUnicoreHash, &demux::unicore_hash::kDecoder},
 #endif
 #if STREAM_DEMUX_UBX
-    ActiveProtoEntry{ProtoKind::kUbx, &rtk::demux::ubx::kDecoder},
+    ActiveProtoEntry{ProtoKind::kUbx, &demux::ubx::kDecoder},
 #endif
 };
 
@@ -182,7 +182,7 @@ uint32_t xorshift32(uint32_t &state) noexcept
     return x;
 }
 
-void run_chunked(std::span<const rtk::demux::Decoder *const> decs, std::span<const uint8_t> data, StreamCapture &cap,
+void run_chunked(std::span<const demux::Decoder *const> decs, std::span<const uint8_t> data, StreamCapture &cap,
                  std::size_t fixed_chunk, uint32_t *rng_or_null, const char *ctx_msg)
 {
     CaptureSink sink(cap);
@@ -190,7 +190,7 @@ void run_chunked(std::span<const rtk::demux::Decoder *const> decs, std::span<con
     std::size_t total_frame_bytes = 0U;
 
     cap.clear();
-    TEST_ASSERT_EQUAL_MESSAGE(rtk::demux::Error::kOk, s_dmx.init(decs, s_demux_buf, sink), ctx_msg);
+    TEST_ASSERT_EQUAL_MESSAGE(demux::Error::kOk, s_dmx.init(decs, s_demux_buf, sink), ctx_msg);
 
     while (pos < data.size()) {
         const std::size_t remain = data.size() - pos;
@@ -217,16 +217,16 @@ void run_chunked(std::span<const rtk::demux::Decoder *const> decs, std::span<con
             // 整块喂入
         }
 
-        TEST_ASSERT_EQUAL_MESSAGE(rtk::demux::Error::kOk, s_dmx.feed(data.subspan(pos, chunk)), ctx_msg);
+        TEST_ASSERT_EQUAL_MESSAGE(demux::Error::kOk, s_dmx.feed(data.subspan(pos, chunk)), ctx_msg);
         pos += chunk;
     }
 
-    TEST_ASSERT_EQUAL_MESSAGE(rtk::demux::Error::kOk, s_dmx.abort(), ctx_msg);
+    TEST_ASSERT_EQUAL_MESSAGE(demux::Error::kOk, s_dmx.abort(), ctx_msg);
     TEST_ASSERT_FALSE_MESSAGE(s_dmx.busy(), ctx_msg);
     TEST_ASSERT_FALSE_MESSAGE(cap.overflowed, ctx_msg);
 
     // I2 字节守恒：帧总字节数 + 未知字节数 == 输入总字节数
-    const rtk::demux::Stats &st = s_dmx.stats();
+    const demux::Stats &st = s_dmx.stats();
     for (std::size_t i = 0U; i < decs.size(); ++i) {
         total_frame_bytes += st.decoder[i].bytes;
     }
@@ -299,7 +299,7 @@ std::size_t append_fake_garbage(std::span<uint8_t> dst, uint32_t &rng) noexcept
 }
 
 // 按协议类型生成随机真帧并记录到 truth
-std::size_t append_random_proto_frame(ProtoKind kind, const rtk::demux::Decoder *decoder_ptr, uint8_t dec_idx,
+std::size_t append_random_proto_frame(ProtoKind kind, const demux::Decoder *decoder_ptr, uint8_t dec_idx,
                                       std::span<uint8_t> dst, uint32_t &rng, StreamCapture *truth)
 {
     std::array<uint8_t, 260> payload{};
@@ -366,7 +366,7 @@ std::size_t append_random_proto_frame(ProtoKind kind, const rtk::demux::Decoder 
             payload[i] = static_cast<uint8_t>(xorshift32(rng) & 0xFFU); // 掩码后 0..255
         }
         const auto msg_id = static_cast<uint16_t>(xorshift32(rng) & 0xFFFFU); // 掩码后 0..65535
-        ok = demux_test::gen_product(dst, msg_id, rtk::proto::sender::kApp, rtk::proto::msg_type::kSet,
+        ok = demux_test::gen_product(dst, msg_id, proto::sender::kApp, proto::msg_type::kSet,
                                      std::span<const uint8_t>(payload.data(), plen), flen);
         break;
     }
@@ -412,9 +412,9 @@ std::size_t build_all_proto_mixed_stream(uint32_t seed, std::span<uint8_t> buf, 
     return pos;
 }
 
-std::array<const rtk::demux::Decoder *, kActiveProtoCount> get_active_decoders() noexcept
+std::array<const demux::Decoder *, kActiveProtoCount> get_active_decoders() noexcept
 {
-    std::array<const rtk::demux::Decoder *, kActiveProtoCount> out{};
+    std::array<const demux::Decoder *, kActiveProtoCount> out{};
     for (std::size_t i = 0U; i < kActiveProtoCount; ++i) {
         out[i] = kActiveProtos[i].decoder;
     }
@@ -493,14 +493,14 @@ static void test_property_mixed_stream_false_preambles_recovery()
 #if STREAM_DEMUX_RTCM3
 static void test_scenario_bluetooth_product_and_rtcm3()
 {
-    static constexpr std::array<const rtk::demux::Decoder *, 2> kBtDecs{
-        &rtk::proto::demux_frame::kDecoder,
-        &rtk::demux::rtcm3::kDecoder,
+    static constexpr std::array<const demux::Decoder *, 2> kBtDecs{
+        &proto::demux_frame::kDecoder,
+        &demux::rtcm3::kDecoder,
     };
-    using BtStaticDemux = rtk::demux::StaticDemux<rtk::proto::demux_frame::kDecoder, rtk::demux::rtcm3::kDecoder>;
-    static_assert(BtStaticDemux::kBufSize == rtk::demux::rtcm3::kMaxFrame);
-    static_assert(BtStaticDemux::index_of<rtk::proto::demux_frame::kDecoder>() == 0U);
-    static_assert(BtStaticDemux::index_of<rtk::demux::rtcm3::kDecoder>() == 1U);
+    using BtStaticDemux = demux::StaticDemux<proto::demux_frame::kDecoder, demux::rtcm3::kDecoder>;
+    static_assert(BtStaticDemux::kBufSize == demux::rtcm3::kMaxFrame);
+    static_assert(BtStaticDemux::index_of<proto::demux_frame::kDecoder>() == 0U);
+    static_assert(BtStaticDemux::index_of<demux::rtcm3::kDecoder>() == 1U);
 
     uint32_t rng = 0x20261111U;
     std::size_t pos = 0U;
@@ -513,9 +513,9 @@ static void test_scenario_bluetooth_product_and_rtcm3()
             pos += append_fake_garbage(stream.subspan(pos), rng);
         }
         pos += append_random_proto_frame(is_rtcm ? ProtoKind::kRtcm3 : ProtoKind::kProduct,
-                                         is_rtcm ? &rtk::demux::rtcm3::kDecoder : &rtk::proto::demux_frame::kDecoder,
-                                         is_rtcm ? BtStaticDemux::index_of<rtk::demux::rtcm3::kDecoder>()
-                                                 : BtStaticDemux::index_of<rtk::proto::demux_frame::kDecoder>(),
+                                         is_rtcm ? &demux::rtcm3::kDecoder : &proto::demux_frame::kDecoder,
+                                         is_rtcm ? BtStaticDemux::index_of<demux::rtcm3::kDecoder>()
+                                                 : BtStaticDemux::index_of<proto::demux_frame::kDecoder>(),
                                          stream.subspan(pos), rng, &s_truth_cap);
     }
 
@@ -528,18 +528,17 @@ static void test_scenario_bluetooth_product_and_rtcm3()
     BtStaticDemux bt_sd;
     CaptureSink sink(s_cur_cap);
     s_cur_cap.clear();
-    TEST_ASSERT_EQUAL(rtk::demux::Error::kOk, bt_sd.init(sink));
-    TEST_ASSERT_EQUAL(rtk::demux::Error::kOk, bt_sd.feed(stream.subspan(0, pos)));
-    TEST_ASSERT_EQUAL(rtk::demux::Error::kOk, bt_sd.abort());
+    TEST_ASSERT_EQUAL(demux::Error::kOk, bt_sd.init(sink));
+    TEST_ASSERT_EQUAL(demux::Error::kOk, bt_sd.feed(stream.subspan(0, pos)));
+    TEST_ASSERT_EQUAL(demux::Error::kOk, bt_sd.abort());
     assert_captures_equal(s_ref_cap, s_cur_cap, "bt-static-demux");
 
     for (std::size_t i = 0U; i < s_cur_cap.frame_count; ++i) {
-        if (s_cur_cap.meta[i].decoder == &rtk::proto::demux_frame::kDecoder) {
+        if (s_cur_cap.meta[i].decoder == &proto::demux_frame::kDecoder) {
             const std::span<const uint8_t> wire(&s_cur_cap.frame_blob[s_cur_cap.meta[i].offset], s_cur_cap.meta[i].len);
-            const std::optional<rtk::proto::FrameView> fv = rtk::proto::demux_frame::view(wire);
+            const std::optional<proto::FrameView> fv = proto::demux_frame::view(wire);
             TEST_ASSERT_TRUE(fv.has_value());
-            TEST_ASSERT_EQUAL_UINT(rtk::proto::kHeaderLen + fv->payload.size() + rtk::proto::kCrcLen,
-                                   s_cur_cap.meta[i].len);
+            TEST_ASSERT_EQUAL_UINT(proto::kHeaderLen + fv->payload.size() + proto::kCrcLen, s_cur_cap.meta[i].len);
         }
     }
 }
@@ -552,11 +551,11 @@ static void test_scenario_gnss_unicore_and_ublox_sets()
 #if STREAM_DEMUX_NMEA && STREAM_DEMUX_RTCM3 && STREAM_DEMUX_UNICORE_BIN && STREAM_DEMUX_UNICORE_HASH
     // GNSS 场景 A（Unicore UM980）：{nmea, rtcm3, unicore_bin, unicore_hash}
     {
-        static constexpr std::array<const rtk::demux::Decoder *, 4> kUm980Decs{
-            &rtk::demux::nmea::kDecoder,
-            &rtk::demux::rtcm3::kDecoder,
-            &rtk::demux::unicore_bin::kDecoder,
-            &rtk::demux::unicore_hash::kDecoder,
+        static constexpr std::array<const demux::Decoder *, 4> kUm980Decs{
+            &demux::nmea::kDecoder,
+            &demux::rtcm3::kDecoder,
+            &demux::unicore_bin::kDecoder,
+            &demux::unicore_hash::kDecoder,
         };
         static constexpr std::array<ProtoKind, 4> kPicks{
             ProtoKind::kNmea,
@@ -585,10 +584,10 @@ static void test_scenario_gnss_unicore_and_ublox_sets()
 #if STREAM_DEMUX_NMEA && STREAM_DEMUX_RTCM3 && STREAM_DEMUX_UBX
     // GNSS 场景 B（u-blox F9P）：{nmea, rtcm3, ubx}
     {
-        static constexpr std::array<const rtk::demux::Decoder *, 3> kF9pDecs{
-            &rtk::demux::nmea::kDecoder,
-            &rtk::demux::rtcm3::kDecoder,
-            &rtk::demux::ubx::kDecoder,
+        static constexpr std::array<const demux::Decoder *, 3> kF9pDecs{
+            &demux::nmea::kDecoder,
+            &demux::rtcm3::kDecoder,
+            &demux::ubx::kDecoder,
         };
         static constexpr std::array<ProtoKind, 3> kPicks{
             ProtoKind::kNmea,
@@ -617,13 +616,13 @@ static void test_scenario_gnss_unicore_and_ublox_sets()
 #if STREAM_DEMUX_UNICORE_BIN
 static void test_scenario_product_vs_unicore_bin_conflict()
 {
-    static constexpr std::array<const rtk::demux::Decoder *, 2> kOrderAb{
-        &rtk::proto::demux_frame::kDecoder,
-        &rtk::demux::unicore_bin::kDecoder,
+    static constexpr std::array<const demux::Decoder *, 2> kOrderAb{
+        &proto::demux_frame::kDecoder,
+        &demux::unicore_bin::kDecoder,
     };
-    static constexpr std::array<const rtk::demux::Decoder *, 2> kOrderBa{
-        &rtk::demux::unicore_bin::kDecoder,
-        &rtk::proto::demux_frame::kDecoder,
+    static constexpr std::array<const demux::Decoder *, 2> kOrderBa{
+        &demux::unicore_bin::kDecoder,
+        &proto::demux_frame::kDecoder,
     };
     uint32_t rng = 0xAA4418B5U;
     std::size_t pos = 0U;
@@ -633,8 +632,7 @@ static void test_scenario_product_vs_unicore_bin_conflict()
     for (std::size_t i = 0U; i < 16U; ++i) {
         const bool is_unicore = (i % 2U) != 0U;
         pos += append_random_proto_frame(is_unicore ? ProtoKind::kUnicoreBin : ProtoKind::kProduct,
-                                         is_unicore ? &rtk::demux::unicore_bin::kDecoder
-                                                    : &rtk::proto::demux_frame::kDecoder,
+                                         is_unicore ? &demux::unicore_bin::kDecoder : &proto::demux_frame::kDecoder,
                                          is_unicore ? 1U : 0U, stream.subspan(pos), rng, &s_truth_cap);
     }
 
@@ -651,8 +649,7 @@ static void test_scenario_product_vs_unicore_bin_conflict()
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
     for (std::size_t i = 0U; i < s_cur_cap.frame_count; ++i) {
         const bool is_unicore = (i % 2U) != 0U;
-        const rtk::demux::Decoder *exp_dec =
-            is_unicore ? &rtk::demux::unicore_bin::kDecoder : &rtk::proto::demux_frame::kDecoder;
+        const demux::Decoder *exp_dec = is_unicore ? &demux::unicore_bin::kDecoder : &proto::demux_frame::kDecoder;
         const uint8_t exp_idx = is_unicore ? 0U : 1U;
         TEST_ASSERT_EQUAL_PTR(exp_dec, s_cur_cap.meta[i].decoder);
         TEST_ASSERT_EQUAL_UINT8(exp_idx, s_cur_cap.meta[i].decoder_index);
@@ -669,17 +666,17 @@ static void test_scenario_product_vs_unicore_bin_conflict()
         s_truth_cap.clear();
         std::copy(kFakeAa1.begin(), kFakeAa1.end(), stream.subspan(pos).begin());
         pos += kFakeAa1.size();
-        pos += append_random_proto_frame(ProtoKind::kProduct, &rtk::proto::demux_frame::kDecoder, 0U,
-                                         stream.subspan(pos), rng, &s_truth_cap);
+        pos += append_random_proto_frame(ProtoKind::kProduct, &proto::demux_frame::kDecoder, 0U, stream.subspan(pos),
+                                         rng, &s_truth_cap);
         std::copy(kFakeAa2.begin(), kFakeAa2.end(), stream.subspan(pos).begin());
         pos += kFakeAa2.size();
-        pos += append_random_proto_frame(ProtoKind::kUnicoreBin, &rtk::demux::unicore_bin::kDecoder, 1U,
-                                         stream.subspan(pos), rng, &s_truth_cap);
+        pos += append_random_proto_frame(ProtoKind::kUnicoreBin, &demux::unicore_bin::kDecoder, 1U, stream.subspan(pos),
+                                         rng, &s_truth_cap);
         std::copy(kFakeAa3.begin(), kFakeAa3.end(), stream.subspan(pos).begin());
         pos += kFakeAa3.size();
-        TEST_ASSERT_TRUE(demux_test::gen_product(stream.subspan(pos), 0x0042U, rtk::proto::sender::kApp,
-                                                 rtk::proto::msg_type::kSet, {}, flen));
-        s_truth_cap.meta[s_truth_cap.frame_count].decoder = &rtk::proto::demux_frame::kDecoder;
+        TEST_ASSERT_TRUE(demux_test::gen_product(stream.subspan(pos), 0x0042U, proto::sender::kApp,
+                                                 proto::msg_type::kSet, {}, flen));
+        s_truth_cap.meta[s_truth_cap.frame_count].decoder = &proto::demux_frame::kDecoder;
         s_truth_cap.meta[s_truth_cap.frame_count].decoder_index = 0U;
         s_truth_cap.meta[s_truth_cap.frame_count].offset = s_truth_cap.frame_blob_used;
         s_truth_cap.meta[s_truth_cap.frame_count].len = flen;

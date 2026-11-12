@@ -12,7 +12,7 @@
 
 #include "rtk_store.h"
 
-namespace rtk::app {
+namespace app {
 
 namespace {
 
@@ -44,15 +44,15 @@ int cmd_sn(void * /*ctx*/, int argc, char **argv) noexcept
     return 0;
 }
 
-constexpr std::array<rtk::console::Cmd, 1> kStorageCmds{{
+constexpr std::array<cli::Cmd, 1> kStorageCmds{{
     {"sn", "sn <string>: save SN (reboot to apply)", nullptr, cmd_sn, nullptr},
 }};
 
 } // namespace
 
-std::span<const rtk::console::Cmd> storage_cmds() noexcept
+std::span<const cli::Cmd> storage_cmds() noexcept
 {
     return kStorageCmds;
 }
 
-} // namespace rtk::app
+} // namespace app

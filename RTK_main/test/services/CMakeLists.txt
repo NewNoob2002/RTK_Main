@@ -26,10 +26,26 @@ if(NOT EXISTS ${UNITY_DIR}/unity.c)
 endif()
 
 set(RTK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
-set(RTK_CORE ${RTK_ROOT}/components/rtk_core)
-set(RTK_PROTO ${RTK_ROOT}/components/rtk_proto)
-# J2b：旧 CommandDispatcher 已退役，golden 基准改为从 reference/ 只读编译（内容不改）。
-set(RTK_REF_DISPATCHER ${RTK_ROOT}/reference/cpp-v3-dispatcher)
+set(RTK_CORE ${RTK_ROOT}/components/link_core)
+set(RTK_PROTO ${RTK_ROOT}/components/device_proto)
+# J2b：旧 CommandDispatcher 已退役；R7a 只在构建目录适配其命名空间/include，reference 原件不改。
+set(RTK_REF_SOURCE ${RTK_ROOT}/reference/cpp-v3-dispatcher)
+set(RTK_REF_DISPATCHER ${CMAKE_CURRENT_BINARY_DIR}/golden)
+set(RTK_LEGACY_PREFIX "rtk")
+foreach(relative command_dispatcher.cpp ${RTK_LEGACY_PREFIX}/core/command_dispatcher.hpp)
+    set(source ${RTK_REF_SOURCE}/${relative})
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${source})
+    file(READ ${source} content)
+    string(REPLACE "${RTK_LEGACY_PREFIX}::" "" content "${content}")
+    string(REPLACE "${RTK_LEGACY_PREFIX}/" "" content "${content}")
+    string(REPLACE "namespace proto = proto;\n" "" content "${content}")
+    # 仅适配基础错误码；alarm::Status 仍为协议状态结构，golden 逻辑不变。
+    string(REPLACE "const Status " "const fw::Status " content "${content}")
+    string(REPLACE "${RTK_LEGACY_PREFIX}/" "" output "${relative}")
+    get_filename_component(output_dir ${RTK_REF_DISPATCHER}/${output} DIRECTORY)
+    file(MAKE_DIRECTORY ${output_dir})
+    file(WRITE ${RTK_REF_DISPATCHER}/${output} "${content}")
+endforeach()
 
 # 纯 C++ 组件的严格告警组（与 test/host/CMakeLists.txt 一致）。
 set(RTK_CXX_STRICT
@@ -53,9 +69,9 @@ add_library(rtk_proto_c STATIC
 target_include_directories(rtk_proto_c PUBLIC ${RTK_PROTO}/include)
 target_compile_options(rtk_proto_c PRIVATE ${RTK_C_STRICT})
 
-# 被测代码：rtk_proto 的 C++ 外观 + rtk_core（旧 dispatcher 保留作为 golden 基准）。
+# 被测代码：device_proto 的 C++ 外观 + link_core（旧 dispatcher 保留作为 golden 基准）。
 add_library(rtk_svc STATIC
-    ${RTK_PROTO}/status.cpp
+    ${RTK_ROOT}/components/app_fw/src/status.cpp
     ${RTK_PROTO}/bytes.cpp
     ${RTK_PROTO}/frame.cpp
     ${RTK_PROTO}/alarm_codec.cpp
@@ -68,11 +84,12 @@ add_library(rtk_svc STATIC
     ${RTK_CORE}/services/alarm_service.cpp
     ${RTK_CORE}/services/pair_service.cpp)
 target_include_directories(rtk_svc PUBLIC
+    ${RTK_ROOT}/components/app_fw/include
     ${RTK_PROTO}/include
     ${RTK_CORE}/include)
 target_include_directories(rtk_svc PRIVATE
     ${RTK_CORE}/private_include
-    # reference 头保持原 include 路径 rtk/core/command_dispatcher.hpp，源文件不得修改。
+    # 仅使用构建目录中适配后的 golden 头。
     ${RTK_REF_DISPATCHER})
 target_link_libraries(rtk_svc PUBLIC rtk_proto_c)
 target_compile_options(rtk_svc PRIVATE ${RTK_CXX_STRICT})
@@ -85,5 +102,5 @@ foreach(name test_command_router test_services_golden)
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
 
-# golden 测试本身包含退役 dispatcher 的头（reference 目录，只读引用）。
+# golden 测试包含构建目录中的退役 dispatcher 头。
 target_include_directories(test_services_golden PRIVATE ${RTK_REF_DISPATCHER})

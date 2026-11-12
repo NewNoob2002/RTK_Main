@@ -1,10 +1,10 @@
 // 平台无关的分流引擎；原地回放与输入累积共用调用方提供的缓冲区。
-#include "rtk/demux/demux.hpp"
+#include "demux/demux.hpp"
 
 #include <algorithm>
 #include <cstring>
 
-namespace rtk::demux {
+namespace demux {
 
 struct Engine {
     static bool config_valid(std::span<const Decoder *const> decoders, std::span<uint8_t> buf) noexcept
@@ -244,4 +244,4 @@ Error Demux::abort() noexcept
     return Error::kOk;
 }
 
-} // namespace rtk::demux
+} // namespace demux

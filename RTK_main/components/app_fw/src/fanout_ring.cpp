@@ -1,7 +1,7 @@
 // 一写多读记录环实现（ADR-0007 §3.6-1）。纯 C++20，无 IDF/FreeRTOS 依赖。
 // 只由 FanoutRing 的调用者在任务上下文调用；不阻塞、不分配堆；临界区由注入的锁界定。
 
-#include "rtk/fw/fanout_ring.hpp"
+#include "fw/fanout_ring.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +9,7 @@
 #include <limits>
 #include <span>
 
-namespace rtk::fw {
+namespace fw {
 
 namespace {
 
@@ -278,4 +278,4 @@ FanoutWriterStats FanoutRing::writer_stats() const noexcept
     return wstats_;
 }
 
-} // namespace rtk::fw
+} // namespace fw

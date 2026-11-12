@@ -9,7 +9,7 @@
 #include <cstring>
 #include <span>
 
-namespace rtk::app {
+namespace app {
 
 namespace {
 
@@ -28,15 +28,15 @@ int cmd_rtcm(void * /*ctx*/, int argc, char **argv) noexcept
     return submit(command, "rtcm reset") ? 0 : 1;
 }
 
-constexpr std::array<rtk::console::Cmd, 1> kRtcmCmds{{
+constexpr std::array<cli::Cmd, 1> kRtcmCmds{{
     {"rtcm", "rtcm reset: clear RTCM and demux statistics", nullptr, cmd_rtcm, nullptr},
 }};
 
 } // namespace
 
-std::span<const rtk::console::Cmd> rtcm_cmds() noexcept
+std::span<const cli::Cmd> rtcm_cmds() noexcept
 {
     return kRtcmCmds;
 }
 
-} // namespace rtk::app
+} // namespace app

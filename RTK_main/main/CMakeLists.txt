@@ -13,7 +13,7 @@ idf_component_register(
          "support/console_support.cpp"
          ${module_sources}
     INCLUDE_DIRS "."
-    REQUIRES app_fw rtk_proto rtk_core rtk_os rtk_bt rtk_store rtk_console stream_demux console esp_system esp_hw_support esp_driver_gpio freertos log)
+    REQUIRES app_fw device_proto link_core rtos spp_server nvs_store cli stream_demux console esp_system esp_hw_support esp_driver_gpio freertos log)
 
 # IDF 宏会触发 -Wold-style-cast/-Wconversion/-Wundef，本项目对其他依赖 IDF 的组件
 # 同样不开启这三项；其余告警按 AGENTS.md 全开。

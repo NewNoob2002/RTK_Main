@@ -1,16 +1,16 @@
-// rtk/demux/crc.hpp 的实现（ADR-0005 §1）：解码器共用的 CRC-24Q 与 NovAtel/Unicore 风格 CRC-32。
+// demux/crc.hpp 的实现（ADR-0005 §1）：解码器共用的 CRC-24Q 与 NovAtel/Unicore 风格 CRC-32。
 // 两张 256 项表由 constexpr 函数在编译期生成（任务卡要求不得手抄），放只读存储：各 1 KB。
 // 逐位算法与查表算法等价，核对值 "123456789" → 0xCDE703（CRC-24Q）/ 0x2DFD2D88（CRC-32 反射），
 // 已用独立的 Python 逐位实现交叉核对（见 docs/reports/H2.md §3）。
 // 无静态可变状态、无浮点、无堆；两个函数都是纯函数，可对同一前缀重复调用。
 
-#include "rtk/demux/crc.hpp"
+#include "demux/crc.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 
-namespace rtk::demux::crc {
+namespace demux::crc {
 
 namespace {
 
@@ -110,4 +110,4 @@ uint32_t crc32_novatel(std::span<const uint8_t> data, uint32_t crc) noexcept
     return value;
 }
 
-} // namespace rtk::demux::crc
+} // namespace demux::crc

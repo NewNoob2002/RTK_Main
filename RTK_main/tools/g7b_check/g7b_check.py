@@ -53,8 +53,8 @@ REQUIRED_EDGES = {
 }
 
 ROOT = Path(__file__).resolve().parents[2]
-OWN_COMPONENT_DIRS = ("main", "rtk_proto", "rtk_core", "rtk_os", "rtk_bt", "rtk_store",
-                      "app_fw", "stream_demux", "bt_reconnect", "rtk_console")
+OWN_COMPONENT_DIRS = ("main", "device_proto", "link_core", "rtos", "spp_server", "nvs_store",
+                      "app_fw", "stream_demux", "bt_reconnect", "cli")
 
 
 def read_heap_allowlist(path):

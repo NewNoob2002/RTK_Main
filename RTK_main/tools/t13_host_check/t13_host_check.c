@@ -1,4 +1,4 @@
-/* T13 驱动级回归：直接链接真实的 components/rtk_bt/rtk_bt_spp.c，用真实阻塞语义的
+/* T13 驱动级回归：直接链接真实的 components/spp_server/rtk_bt_spp.c，用真实阻塞语义的
  * FreeRTOS 替身和可编排的假 IDF（BTC 线程投递回调）覆盖 QA-E-REVIEW 第 1–4 项与复审反馈。
  * 每个场景独立进程运行（驱动只有 init、没有 deinit 公共接口），用法：t13_host_check <场景名>。
  *

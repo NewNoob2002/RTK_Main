@@ -5,16 +5,16 @@
 // 帧长未知，因此每字节只查“新到字节”与定长尾部窗口（11 B）内的 '*' 相对偏移，O(1) 且结论只依赖入参；
 // '\n' 到达时按 '*' 的偏移（4 = XOR 形式 / 10 = CRC 形式）二选一，整段复核正文并整段算校验。
 
-#include "rtk/demux/decoders/unicore_hash.hpp"
+#include "demux/decoders/unicore_hash.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "rtk/demux/crc.hpp"
-#include "rtk/demux/decoder.hpp"
+#include "demux/crc.hpp"
+#include "demux/decoder.hpp"
 
-namespace rtk::demux::unicore_hash {
+namespace demux::unicore_hash {
 
 namespace {
 
@@ -253,4 +253,4 @@ Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
     return Step::kNeedMore;
 }
 
-} // namespace rtk::demux::unicore_hash
+} // namespace demux::unicore_hash

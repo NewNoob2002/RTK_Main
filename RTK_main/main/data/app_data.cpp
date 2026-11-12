@@ -2,11 +2,11 @@
 // 启动前单线程调用一次（init()），之后只被读写者经注入的锁访问。
 #include "data/app_data.hpp"
 
-namespace rtk::app::data {
+namespace app::data {
 void DataCenter::init() noexcept
 {
     /* 启动前将所有主题绑定到上下文持有的同一把锁。 */
-    const auto lock = os::spin_lock_ops(mux);
+    const auto lock = rtos::spin_lock_ops(mux);
     link_status.bind_lock(lock);
     sessions.bind_lock(lock);
     alarm_state.bind_lock(lock);
@@ -21,4 +21,4 @@ void DataCenter::init() noexcept
     rtcm_batch.bind_lock(lock);
     rtcm_reset.bind_lock(lock);
 }
-} // namespace rtk::app::data
+} // namespace app::data
