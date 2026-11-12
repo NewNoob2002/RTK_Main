@@ -103,6 +103,9 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 - 锁：目标板用静态 FreeRTOS 递归互斥（`std::recursive_mutex` 会拉入 `system_error`/`format.o`/`__cxa_atexit`，违反 g7b）；
   host 用 `std::recursive_mutex`。持锁期间可能阻塞在 TX 环形上，禁止在 ISR 调用。
 - linenoise 的提示符与回显仍走 stdout；出口每次写前 `fflush(stdout)` 保证顺序。
+- 未知命令：IDF REPL 循环（`console/esp_console_common.c:93-94`）对 `ESP_ERR_NOT_FOUND` 硬编码打印 `Unrecognized command`，
+  无回调。`cli` 以 `-Wl,--wrap=esp_console_run` 包装：未找到时输出 `ERR unknown command` 并返回 `ESP_ERR_INVALID_ARG`
+  （REPL 视作空行不再输出），保证“每条命令最后一行是 OK/ERR”无例外。升级 IDF 时需复核该循环的分支是否变化。
 
 实测（`help`/`debug list`/`sys tasks`/`status all` 各 100 次连发）：控制台回复 24.6 KB/s → 87–145 KB/s，
 `status all` 每条 ~51 ms → 8.6 ms。trace 全开 + 蓝牙 28 KB/s 负载：环 0 丢、无穿插行，数据路径无损。

@@ -15,3 +15,6 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
 # 调试阶段告警即错误（cmake/strict_warnings.cmake，开关 CONFIG_RTK_STRICT_WARNINGS）
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/strict_warnings.cmake)
 rtk_strict_warnings(${COMPONENT_LIB})
+
+# 未知命令输出 ERR：包装 esp_console_run（实现与原因见 src/console.cpp 末尾 __wrap_esp_console_run）。
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_console_run")

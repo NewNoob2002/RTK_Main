@@ -462,3 +462,20 @@ esp_err_t start(const char *prompt) noexcept
 }
 
 } // namespace cli
+
+// 未知命令也要以 ERR 结尾（ADR-0009 §2.5）：IDF v6.1 REPL 循环（console/esp_console_common.c:93-94）
+// 对 ESP_ERR_NOT_FOUND 硬编码打印 "Unrecognized command"，没有回调可挂。CMakeLists 用
+// -Wl,--wrap=esp_console_run 把 REPL 的调用引到这里：未找到时自己输出 "ERR unknown command"，
+// 并返回 ESP_ERR_INVALID_ARG（REPL 按“空行”处理，不再追加输出）。其余结果原样透传。
+extern "C" esp_err_t __real_esp_console_run(const char *cmdline, int *cmd_ret);
+extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmd_ret);
+
+extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmd_ret)
+{
+    const esp_err_t err = __real_esp_console_run(cmdline, cmd_ret);
+    if (err == ESP_ERR_NOT_FOUND) {
+        cli::out_printf("ERR unknown command\n");
+        return ESP_ERR_INVALID_ARG;
+    }
+    return err;
+}
