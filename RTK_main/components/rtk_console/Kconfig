@@ -1,0 +1,33 @@
+menu "RTK console (ADR-0007)"
+
+    config RTK_CONSOLE_UART_NUM
+        int "Console UART port number"
+        default 0
+        range 0 2
+
+    config RTK_CONSOLE_UART_BAUD
+        int "Console UART baud rate"
+        default 115200
+        range 9600 4000000
+
+    config RTK_CONSOLE_CMDLINE_MAX
+        int "Console max command line length (bytes)"
+        default 256
+        range 64 4096
+
+    config RTK_CONSOLE_STACK_SIZE
+        int "Console REPL task stack size (bytes)"
+        default 4096
+        range 2048 16384
+
+    config RTK_CONSOLE_TASK_PRIO
+        int "Console REPL task priority"
+        default 2
+        range 1 24
+
+    config RTK_CONSOLE_TASK_CORE
+        int "Console REPL task core affinity"
+        default 0
+        range 0 1
+
+endmenu
