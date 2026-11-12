@@ -1,0 +1,26 @@
+# ESP-IDF 构建产物
+build/
+build-*/
+/sdkconfig
+/sdkconfig.old
+# 组件管理器下载的依赖（dependencies.lock 需要提交，不在此忽略）
+managed_components/
+
+# 编辑器 / 语言服务器缓存
+.cache/
+.clangd/
+.vscode/
+.idea/
+compile_commands.json
+
+# Python / pytest-embedded
+__pycache__/
+*.pyc
+.pytest_cache/
+pytest_embedded_log/
+
+# 其他
+*.log
+*.bak
+*~
+.DS_Store
