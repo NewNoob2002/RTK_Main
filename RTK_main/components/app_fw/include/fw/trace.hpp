@@ -30,6 +30,7 @@ enum class TraceCat : uint8_t {
     kAlarm,    // 报警状态与推送
     kStore,    // NVS 读写、去抖、重试
     kExec,     // 执行器轮次超时、投递失败
+    kGnss,     // GNSS 状态机、探测/配置命令、管道丢帧（ADR-0010 §2.7）
     kCount,
 };
 

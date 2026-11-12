@@ -1,0 +1,17 @@
+menu "GNSS dialects (ADR-0010)"
+
+    config RTK_GNSS_DIALECT_UNICORE
+        bool "Unicore N4 (UM980/UM981/UM982)"
+        default y
+
+    config RTK_GNSS_DIALECT_UBLOX
+        bool "u-blox F9 (ZED-F9P), not hardware-verified"
+        default y
+
+    config RTK_GNSS_DIALECT_COMNAV
+        bool "ComNav K8 (K803), experimental"
+        default n
+        help
+            未取得官方命令手册，按 NovAtel 风格语法实现，未经实物验证。
+
+endmenu

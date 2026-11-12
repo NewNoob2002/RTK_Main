@@ -143,8 +143,8 @@ constexpr std::array<TraceText, 38U> kTable = {{
      std::span<const TraceField>(kSppEvtDrop)},
 }};
 
-constexpr std::array<const char *, 7U> kCatNames = {{"link", "spp", "rtcm", "proto", "alarm", "store", "exec"}};
-constexpr std::array<const char *, 7U> kCatSummaries = {{
+constexpr std::array<const char *, 8U> kCatNames = {{"link", "spp", "rtcm", "proto", "alarm", "store", "exec", "gnss"}};
+constexpr std::array<const char *, 8U> kCatSummaries = {{
     "会话打开/关闭、角色判定、白名单、配对窗口",
     "经典蓝牙 SPP 事件、写入耗时、接收丢弃",
     "RTCM 帧计数、角色拒绝、重同步、未知字节",
@@ -152,6 +152,7 @@ constexpr std::array<const char *, 7U> kCatSummaries = {{
     "报警状态、测试 override、状态推送",
     "NVS 读写结果、去抖触发、重试间隔",
     "执行器轮次超时、命令投递失败",
+    "GNSS 状态机、探测/配置命令、RTCM 管道丢帧",
 }};
 
 // 追加一段文本；写满时停在末尾并保持 0 结尾。

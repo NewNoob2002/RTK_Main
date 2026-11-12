@@ -31,4 +31,61 @@ menu "RTK_main"
             以及 IDF 默认关闭的 unused-parameter、sign-compare（见 cmake/strict_warnings.cmake）。
             只影响本工程代码，不影响 IDF 自身组件。
 
+    menu "GNSS (ADR-0010)"
+
+        config RTK_GNSS_ENABLE
+            bool "Enable GNSS module (UART, probe/config, RTCM input pipe)"
+            default y
+            help
+                关闭则不编译 gnss 模块、kIo 执行器与 RTCM 输入管道；rtcm 模块只做统计。
+
+        config RTK_GNSS_UART_NUM
+            int "UART port connected to GNSS module"
+            depends on RTK_GNSS_ENABLE
+            range 1 2
+            default 2
+
+        config RTK_GNSS_RX_GPIO
+            int "ESP32 RX GPIO (module TX)"
+            depends on RTK_GNSS_ENABLE
+            range 0 39
+            default 16
+
+        config RTK_GNSS_TX_GPIO
+            int "ESP32 TX GPIO (module RX)"
+            depends on RTK_GNSS_ENABLE
+            range 0 33
+            default 17
+
+        config RTK_GNSS_POWER_GPIO
+            int "Module power control GPIO (-1 = none)"
+            depends on RTK_GNSS_ENABLE
+            range -1 33
+            default 25
+
+        config RTK_GNSS_POWER_ACTIVE_HIGH
+            bool "Power GPIO active high"
+            depends on RTK_GNSS_ENABLE
+            default y
+
+        config RTK_GNSS_DEFAULT_BAUD
+            int "Default module baud rate (first probe, no NVS record)"
+            depends on RTK_GNSS_ENABLE
+            range 9600 921600
+            default 115200
+
+        config RTK_GNSS_PORT
+            int "Module-side port number wired to ESP32 (UM980 COM2 = 2)"
+            depends on RTK_GNSS_ENABLE
+            range 1 3
+            default 2
+
+        config RTK_GNSS_RATE_HZ
+            int "Default fix rate in Hz (1/2/5/10/20)"
+            depends on RTK_GNSS_ENABLE
+            range 1 20
+            default 1
+
+    endmenu
+
 endmenu

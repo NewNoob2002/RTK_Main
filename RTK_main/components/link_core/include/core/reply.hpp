@@ -63,6 +63,7 @@ struct DeviceInfo {
     uint8_t battery_pct = proto::alarm::kValueUnknown;
     int8_t battery_temp_c = 0;
     uint32_t com_baud = kDefaultComBaud;
+    uint8_t fix_quality = proto::alarm::kValueUnknown; // GGA 质量（ADR-0010 §2.7），0x40 字节 4；0xFF 未知
 };
 
 inline constexpr size_t kWorkModeLen = 48;

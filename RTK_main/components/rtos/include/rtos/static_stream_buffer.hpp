@@ -64,6 +64,18 @@ public:
         return xStreamBufferReceive(handle_, out.data(), out.size(), pdMS_TO_TICKS(timeout_ms));
     }
 
+    /** 当前可写入的字节数（单写者据此整帧写入或整帧丢弃）；未初始化返回 0。 */
+    [[nodiscard]] size_t space() const noexcept
+    {
+        return (handle_ != nullptr) ? xStreamBufferSpacesAvailable(handle_) : 0U;
+    }
+
+    /** 当前可读取的字节数；未初始化返回 0。 */
+    [[nodiscard]] size_t available() const noexcept
+    {
+        return (handle_ != nullptr) ? xStreamBufferBytesAvailable(handle_) : 0U;
+    }
+
     void reset() noexcept
     {
         if (handle_ != nullptr) {
