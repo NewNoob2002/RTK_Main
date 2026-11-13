@@ -16,7 +16,7 @@ inline constexpr std::size_t kUbxMaxFrame = 4096U;
 inline constexpr std::size_t kUbxMaxPayload = 4088U;
 inline constexpr std::size_t kUnicoreBinMaxFrame = 4096U;
 inline constexpr std::size_t kUnicoreBinMaxPayload = 4068U;
-inline constexpr std::size_t kUnicoreHashMaxFrame = 1024U;
+inline constexpr std::size_t kUnicoreHashMaxFrame = 4096U;
 
 struct UbxChecksum {
     uint8_t ck_a = 0;

@@ -9,20 +9,20 @@
 
 ## 要做
 
-1. **映射表** `main/def/gnss_sub_def.hpp`（新建，本任务内可改，验收后冻结）：`struct SubMsg { uint16_t msg_id; std::string_view prefix; uint16_t default_period_ms; uint32_t need_caps; }`，
+> 架构修订注（ADR-0011 / K4）：跨任务数据路径改用 `fw::FanoutRing`（typed 模式，4096 B 独立 App 环，`RTK_GNSS_APP_RING_BYTES`）与 PHONE 4096 B `TX.stream` + `GnssLatestCache`（6144 B），替代原 §3/§4 中的 `NmeaOut` `StaticStreamBuffer` 方案；并由 `gnss/out` NVS blob 统一管理控制台默认输出配置。协议层行为（6 条报文 ID、interval 换算、>256 B 查询返回 `02 02`、断连清零无回放、`0x0D` 保持不变）完全保留。
+
+1. **映射表** `main/def/gnss_sub_def.hpp` + `main/data/gnss_output.{hpp,cpp}`：
    表项按 §2.9：0x04 GGA、0x05 `#SATSINFOA`、0x1F `#HEADINGA`（需 heading 能力位）、0x21 GST、0x22 RMC、0x23 GSA。NMEA 匹配忽略 talker（GP/GN/...），按第 4–6 字符的语句类型；Unicore 匹配 `#` 后的报文名。
-   `period_from_interval(int8_t v)`：v<0 → |v|*1000 ms；v>0 → 1000/v ms（下限 50 ms）；0 → 关闭。
-2. **模块输出超集**：Unicore 流动站脚本追加 `GPGST COM<port> <1/rate>` 与 `SATSINFOA COM<port> 1`（按 `components/gnss/src/dialects` 现有写法，更新 test/gnss 字节级期望）。u-blox 方言：GST 用 `CFG-MSGOUT-NMEA_ID_GST_UARTx`，无 SATSINFOA（0x05 回不支持）。
-3. **订阅表**（kLink 写、kIo 读）：`std::atomic<uint32_t>` 每表项一个周期（0=关）+ kIo 私有 `last_sent_ms`。PHONE 会话断开（bt_link 已有事件）清零全部。
-4. **kIo 侧**：gnss 模块帧回调对 NMEA / UnicoreHash 帧匹配映射表 → 记“最近一句”（每表项一个定长缓冲，NMEA 256 B，SATSINFOA 4096 B——放在 gnss 模块静态区，说明 RAM）→ 若订阅到期则整句写入 `NmeaOut` 管道
-   （`rtos::StaticStreamBuffer<4096>`，2 B 小端长度 + 原文；空间不足整句丢弃并计数 + 追踪 `kOutDrop`（在 gnss_def.hpp 追加码前先在报告提出））。
-5. **kLink 侧**：`bt_link` 每轮从 `NmeaOut` 取完整句，经现有 async_tx 发给 PHONE 会话（无 PHONE 时丢弃并计数）；不得跨句截断，发送队列满时留到下一轮。
-6. **路由**：新增 `GnssService`（`components/link_core/services/gnss_service.cpp` + 头，ADR-0007 服务写法，替换 DeviceService 的 0x04/0x05 占位路由——DeviceService 冻结头若需改须先在报告提出）：
-   Type=0 且 interval≠0 → 写订阅、回结果码成功；interval=0 → 回封装帧（载荷 = 最近一句原文，无数据回 0x02 0x02）；不支持的表项（缺能力位）→ 0x02 0x02。
-   “最近一句”跨任务读取方案自定（Slot 拷贝或 seqlock），写进报告。
-7. **0x02**：GNSS 功能字节 = `kRunning ? 0x81 : 0x01`（bit7 工作，低 7 位数量 1），其余字节不变。
-8. **demux**：`unicore_hash::kMaxFrame` 1024 → 4096（该头已列入冻结表，Claude 授权本任务修改此一项并更新 `docs/frozen.sha256` 对应行），补 test/stream_demux 长句用例。
-9. **控制台**：`gnss status` 增加订阅表（ID、周期、发送数、丢弃数）与 NmeaOut 统计。
+   `GnssService::interval_to_period_ms(int8_t v)`：v<0 → `|int16(v)| * 1000 ms`（`-128` 为 `128000 ms`）；v>0 → `max(50, 1000/v) ms`；0 → 关闭。
+2. **模块输出超集**：Unicore 流动站脚本追加 `GPGST COM<port> <1/rate>`、`SATSINFOA COM<port> 1` 及 `HEADINGA COM<port> 1`（仅 `cap::kHeading` 型号）；u-blox 方言追加 `CFG-MSGOUT-NMEA_ID_GST_UART1`（`0x209100D4`），无 SATSINFOA（0x05 无缓存回 `02 02`）。
+3. **订阅表**（kLink 写、kIo 读）：`GnssAppSubState`（`portMUX_TYPE` 保护）保存 `mask`、每类型有效周期与发送/跳过统计；PHONE 会话断开（bt_link 已有事件）清零全部（重连后不自动吐流、不回放）。
+4. **kIo 侧**：gnss 模块帧回调对 NMEA / UnicoreHash 帧匹配映射表 → 更新 `GnssLatestCache`（4×256 B NMEA + 1024 B HEADINGA + 4096 B SATSINFOA = 6144 B）→ 若订阅命中且降采样到期，整句写入 4096 B `gnss_app_ring`（`FanoutRing` typed 模式，单条上限 4093 B；≥4094 B 写侧丢弃计数 `oversize_drop`）。
+5. **kLink 侧**：`bt_link` 每轮从 `gnss_app_ring` `peek` 完整句，经 `spp_server_stream_reserve` / `spp_server_tx_commit` 直接写入 PHONE 4096 B `TX.stream`（满时 `cancel` 留待下一轮）；无 PHONE 订阅时写侧不入环并计 `no_subscriber`。
+6. **路由**：新增 `GnssService`（`components/link_core/include/core/services/gnss_service.hpp` + `services/gnss_service.cpp`，替换 DeviceService 的 0x04/0x05 占位路由）：
+   Type=0 且 interval≠0 → 写订阅、回 `01 01`；interval=0 → 停止订阅并经 ≤256 B 有界查询拷贝回封装帧（无数据、无能力位或原文 >256 B 回 `02 02`）。
+7. **0x02**：GNSS 功能字节约定 `kRunning ? 0x81 : 0x01`（若冻结头 `reply.hpp`/`device_service.hpp` 未修订则在 K4 报告列出所需字段并申请批准）。
+8. **demux**：`unicore_hash::kMaxFrame` 1024 → 4096（已授权修改并更新 `docs/frozen.sha256` 对应行），补 test/stream_demux 4096/4097 用例。
+9. **控制台**：`gnss status` / `status gnss` 增加 App 环、reader、订阅、最新句超限统计与 `obs` 预留占位行；`gnss out` 支持查看与设置持久化的 `gnss/out`。
 
 ## 门槛（`docs/reports/G-C.md`）
 

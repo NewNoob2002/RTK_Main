@@ -85,7 +85,8 @@ add_library(link_svc STATIC
     ${LINK_CORE_DIR}/services/device_service.cpp
     ${LINK_CORE_DIR}/services/config_service.cpp
     ${LINK_CORE_DIR}/services/alarm_service.cpp
-    ${LINK_CORE_DIR}/services/pair_service.cpp)
+    ${LINK_CORE_DIR}/services/pair_service.cpp
+    ${LINK_CORE_DIR}/services/gnss_service.cpp)
 target_include_directories(link_svc PUBLIC
     ${PROJ_ROOT}/components/app_fw/include
     ${DEV_PROTO_DIR}/include
@@ -98,7 +99,8 @@ target_link_libraries(link_svc PUBLIC dev_proto_c)
 target_compile_options(link_svc PRIVATE ${PROJ_CXX_STRICT})
 
 enable_testing()
-foreach(name test_command_router test_services_golden test_link_trace test_alarm_fix_quality test_link_credit)
+foreach(name test_command_router test_services_golden test_gnss_service test_link_trace test_alarm_fix_quality
+             test_link_credit)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} link_svc unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})

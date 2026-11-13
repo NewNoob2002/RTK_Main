@@ -24,6 +24,11 @@ void DataCenter::init() noexcept
     gnss_status.bind_lock(lock);
     gnss_fix.bind_lock(lock);
     gnss_sats.bind_lock(lock);
+    gnss_out_cfg.bind_lock(lock);
+    // App typed FanoutRing 最大载荷 = 容量 - 3 B 记录头（ADR-0011 §5.3）。
+    (void)gnss_app_ring.init_typed(gnss_app_ring_buf, kGnssAppRingBytes - fw::kFanoutTypedHeaderBytes, lock);
+    gnss_latest.bind_lock(lock);
+    gnss_app_sub.bind_lock(lock);
 #endif
 }
 } // namespace app::data

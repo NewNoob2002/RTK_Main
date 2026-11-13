@@ -13,7 +13,7 @@
 
 namespace demux::unicore_hash {
 
-inline constexpr std::size_t kMaxFrame = 1024;
+inline constexpr std::size_t kMaxFrame = 4096;
 
 /** 线程/ISR 安全：是（纯函数）。 */
 [[nodiscard]] bool first_byte(uint8_t byte) noexcept;

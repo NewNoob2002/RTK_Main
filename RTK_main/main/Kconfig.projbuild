@@ -112,6 +112,21 @@ menu "RTK_main"
             range 1 20
             default 1
 
+        config RTK_GNSS_APP_RING_BYTES
+            int "GNSS App typed ring size (bytes, ADR-0011)"
+            depends on RTK_GNSS_ENABLE
+            range 1024 16384
+            default 4096
+            help
+                fw::FanoutRing（typed 模式）静态环形缓冲大小；记录头 3 B，最大单条载荷为容量减 3 B。
+
+        config RTK_GNSS_STATIC_OBS_ENABLE
+            bool "Reserve static GNSS observation path (K6 placeholder)"
+            depends on RTK_GNSS_ENABLE
+            default n
+            help
+                K4 仅作配置占位（固定关闭），不分配 obs 观测环，不创建 SD/SPI/文件任务。
+
     endmenu
 
 endmenu

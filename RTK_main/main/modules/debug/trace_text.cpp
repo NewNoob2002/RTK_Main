@@ -12,6 +12,7 @@
 #include "core/trace_codes.hpp"
 #if RTK_GNSS_ENABLED
 #include "def/gnss_def.hpp"
+#include "def/gnss_sub_def.hpp"
 #include "gnss/controller.hpp"
 #include "gnss/types.hpp"
 #endif
@@ -106,11 +107,14 @@ constexpr std::array<TraceField, 1U> kGnssStep = {{{"step", TraceValue::kDecA}}}
 constexpr std::array<TraceField, 1U> kGnssSilence = {{{"ms", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 2U> kGnssPipeDrop = {{{"len", TraceValue::kDecA}, {"space", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 2U> kGnssBaud = {{{"baud", TraceValue::kDecA}, {"from", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssAppMask = {{{"mask", TraceValue::kHexA}, {"disc", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssAppDrop = {{{"kind", TraceValue::kDecA}, {"type", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssOutCfg = {{{"mask", TraceValue::kHexA}, {"saved", TraceValue::kDecB}}};
 #endif
 
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
 #if RTK_GNSS_ENABLED
-constexpr std::array<TraceText, 57U> kTable = {{
+constexpr std::array<TraceText, 60U> kTable = {{
 #else
 constexpr std::array<TraceText, 47U> kTable = {{
 #endif
@@ -233,6 +237,12 @@ constexpr std::array<TraceText, 47U> kTable = {{
      "RTCM pipe dropped {len} bytes, {space} bytes free", std::span<const TraceField>(kGnssPipeDrop)},
     {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kBaud), "baud {baud} (was {from})",
      std::span<const TraceField>(kGnssBaud)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppMask), "app sub mask {mask} (disc={disc})",
+     std::span<const TraceField>(kGnssAppMask)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppDrop), "app drop kind={kind} type={type}",
+     std::span<const TraceField>(kGnssAppDrop)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kOutCfg), "gnss out mask={mask} saved={saved}",
+     std::span<const TraceField>(kGnssOutCfg)},
 #endif
 }};
 

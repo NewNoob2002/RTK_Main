@@ -22,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "app_config.hpp"
 #include "app_context.hpp"
 #include "cli/out.hpp"
 #include "fw/trace.hpp"
@@ -40,6 +41,9 @@ constexpr uint16_t kChipRevDivisor = 100U;
 constexpr uint32_t kRebootDelayMs = 100U;
 constexpr size_t kLogLevelArgs = 3U;
 constexpr size_t kCoreTextLen = 16U;
+#if RTK_GNSS_ENABLED
+constexpr uint32_t kStaticObsReservedBytes = 16384U;
+#endif
 
 uint64_t kib_tenths(uint64_t bytes) noexcept
 {
@@ -231,6 +235,9 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 #if RTK_GNSS_ENABLED
     const auto io_exec = data.io_exec_stats.read();
     const auto gnss = data.gnss_status.read();
+    const auto r_wr = data.gnss_app_ring.typed_writer_stats();
+    const auto r_rd = data.gnss_app_ring.typed_reader_stats(0U);
+    const auto sub = data.gnss_app_sub.snapshot();
     cli::print_kv("io_exec", "rounds=%" PRIu32 "  overruns=%" PRIu32 "  max_rnd=%" PRIu32 " ms  io_stk=%" PRIu32 " B",
                   io_exec.rounds, io_exec.overruns, io_exec.max_round_ms, io_exec.stack_free);
     cli::print_section("gnss");
@@ -238,8 +245,43 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
                   ::gnss::model_name(gnss.model), gnss.host_baud);
     cli::print_kv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B", gnss.pipe.pushed_frames,
                   gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
+    cli::print_kv("app_ring",
+                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 " rd=%" PRIu32 " drop=%" PRIu32 " qovsz=%" PRIu32,
+                  static_cast<unsigned>(kGnssAppRingBytes), r_wr.high_water_bytes, sub.active_mask, r_wr.base.records,
+                  r_rd.base.records, r_rd.base.dropped + r_wr.oversize_drop + r_wr.pinned_drop,
+                  sub.query_oversize_total);
+    cli::print_kv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
 #endif
     return 0;
+}
+
+void print_gnss_section() noexcept
+{
+#if RTK_GNSS_ENABLED
+    const auto &data = app_context().data;
+    const auto gnss = data.gnss_status.read();
+    const auto r_wr = data.gnss_app_ring.typed_writer_stats();
+    const auto r_rd = data.gnss_app_ring.typed_reader_stats(0U);
+    const auto sub = data.gnss_app_sub.snapshot();
+    cli::print_section("gnss");
+    cli::print_kv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::state_name(gnss.state),
+                  ::gnss::model_name(gnss.model), gnss.host_baud);
+    cli::print_kv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B", gnss.pipe.pushed_frames,
+                  gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
+    cli::print_kv("app_ring",
+                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 "/%" PRIu32 "B overwr=%" PRIu32 " nosub=%" PRIu32
+                  " ovsz=%" PRIu32 " pin=%" PRIu32,
+                  static_cast<unsigned>(kGnssAppRingBytes), r_wr.high_water_bytes, sub.active_mask, r_wr.base.records,
+                  r_wr.base.bytes, r_wr.base.overwritten, r_wr.no_subscriber, r_wr.oversize_drop, r_wr.pinned_drop);
+    cli::print_kv("app_reader",
+                  "rec=%" PRIu32 "/%" PRIu32 "B drop=%" PRIu32 " filt=%" PRIu32 " pin=%" PRIu32 " qovsz=%" PRIu32,
+                  r_rd.base.records, r_rd.base.bytes, r_rd.base.dropped, r_rd.filtered, r_rd.pinned_drop,
+                  sub.query_oversize_total);
+    cli::print_kv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
+#else
+    cli::print_section("gnss");
+    cli::print_kv("state", "disabled");
+#endif
 }
 
 int cmd_status_link(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
@@ -260,6 +302,15 @@ int cmd_status_rtcm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+int cmd_status_gnss(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+{
+    if (argc != 1) {
+        return cli::fail("usage: status gnss");
+    }
+    print_gnss_section();
+    return 0;
+}
+
 int cmd_status_sys(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -276,6 +327,7 @@ int cmd_status_all(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     print_link_section();
     print_rtcm_status();
+    print_gnss_section();
     print_sys_section();
     return 0;
 }
@@ -435,10 +487,11 @@ int cmd_sys_reboot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-constexpr std::array<cli::Verb, 5U> kStatusVerbs{{
+constexpr std::array<cli::Verb, 6U> kStatusVerbs{{
     {"overview", nullptr, "one-screen overview (default)", cmd_status_overview},
     {"link", nullptr, "link, BT sessions, whitelist and alarm", cmd_status_link},
     {"rtcm", nullptr, "RTCM forwarding and demux counters", cmd_status_rtcm},
+    {"gnss", nullptr, "GNSS state, pipe, app ring and obs", cmd_status_gnss},
     {"sys", nullptr, "heap, uptime and executor stats", cmd_status_sys},
     {"all", nullptr, "full status of all sections", cmd_status_all},
 }};
@@ -470,7 +523,8 @@ int cmd_sys(void *ctx, int argc, char **argv) noexcept
 }
 
 constexpr std::array<cli::Cmd, 3U> kSystemCmds{{
-    {"status", "status [link|rtcm|sys|all]: system and link status", "[link|rtcm|sys|all]", cmd_status, nullptr},
+    {"status", "status [link|rtcm|gnss|sys|all]: system and link status", "[link|rtcm|gnss|sys|all]", cmd_status,
+     nullptr},
     {"log", "log level <tag|*> <E|W|I|N>: set IDF log level", "level <tag|*> <E|W|I|N>", cmd_log, nullptr},
     {"sys", "sys <info|heap|tasks|reboot>: system diagnostics and reboot", "<info|heap|tasks|reboot>", cmd_sys,
      nullptr},

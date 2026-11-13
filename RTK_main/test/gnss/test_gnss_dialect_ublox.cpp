@@ -156,6 +156,7 @@ static void test_rover_script()
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100BBU, 1U, 1));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100ACU, 1U, 1));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100BFU, 1U, 1));
+    TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100D4U, 1U, 1));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100C3U, 1U, 1));
     TEST_ASSERT_TRUE(valid_fletcher(Bytes(step.cmd.view().begin(), step.cmd.view().end())));
 

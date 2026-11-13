@@ -9,6 +9,7 @@
 #include <span>
 
 #include "cli/console.hpp"
+#include "data/gnss_output.hpp"
 #include "def/gnss_def.hpp"
 #include "demux/demux.hpp"
 #include "fw/command.hpp"
@@ -68,6 +69,8 @@ public:
     static fw::Result save_rate(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
     static fw::Result load_gsv(void *obj, std::span<const uint8_t> in) noexcept;
     static fw::Result save_gsv(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    static fw::Result load_out(void *obj, std::span<const uint8_t> in) noexcept;
+    static fw::Result save_out(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
 
 private:
     class DemuxSink final : public demux::Sink {
@@ -88,6 +91,7 @@ private:
     [[nodiscard]] bool pump_rtcm_pipe() noexcept;
     void publish_status(uint32_t now_ms) noexcept;
     void persist_detected_hint() noexcept;
+    void apply_out_to_receiver() noexcept;
     [[nodiscard]] fw::Result apply_power(bool on) noexcept;
     [[nodiscard]] fw::Result apply_baud(uint32_t baud) noexcept;
 
@@ -107,6 +111,8 @@ private:
         .port = static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT),
         .port_baud = 0U,
     };
+    data::GnssOutConfig out_cfg_ = data::GnssOutConfig::defaults();
+    std::array<data::GnssPushGate, data::kGnssAppMsgCount> push_gates_{};
     std::array<const demux::Decoder *, demux::kMaxDecoders> decoders_{};
     size_t decoder_count_ = 0U;
     std::array<uint8_t, kDemuxBufBytes> demux_buf_{};

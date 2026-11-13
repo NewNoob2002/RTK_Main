@@ -37,6 +37,7 @@ constexpr uint32_t kKeyMsgoutGgaUart1 = 0x209100BBU;    // CFG-MSGOUT-NMEA_ID_GG
 constexpr uint32_t kKeyMsgoutRmcUart1 = 0x209100ACU;    // CFG-MSGOUT-NMEA_ID_RMC_UART1, U1
 constexpr uint32_t kKeyMsgoutGsaUart1 = 0x209100BFU;    // CFG-MSGOUT-NMEA_ID_GSA_UART1, U1
 constexpr uint32_t kKeyMsgoutGsvUart1 = 0x209100C3U;    // CFG-MSGOUT-NMEA_ID_GSV_UART1, U1
+constexpr uint32_t kKeyMsgoutGstUart1 = 0x209100D4U;    // CFG-MSGOUT-NMEA_ID_GST_UART1, U1
 constexpr uint32_t kKeyUart1Baudrate = 0x40520001U;     // CFG-UART1-BAUDRATE, U4
 
 void put_u16(uint8_t *p, uint16_t v) noexcept
@@ -203,6 +204,7 @@ bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &o
         pos = add_u1_item(payload.data(), pos, kKeyMsgoutGgaUart1, 1);
         pos = add_u1_item(payload.data(), pos, kKeyMsgoutRmcUart1, 1);
         pos = add_u1_item(payload.data(), pos, kKeyMsgoutGsaUart1, 1);
+        pos = add_u1_item(payload.data(), pos, kKeyMsgoutGstUart1, 1);
         pos = add_u1_item(payload.data(), pos, kKeyMsgoutGsvUart1, cfg.gsv ? 1 : 0);
     } else if (index == 2) {
         if (cfg.port_baud == 0) {

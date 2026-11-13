@@ -6,6 +6,7 @@ idf_component_register(
          "command_router.cpp"
          "services/device_service.cpp" "services/config_service.cpp"
          "services/alarm_service.cpp" "services/pair_service.cpp"
+         "services/gnss_service.cpp"
     INCLUDE_DIRS "include"
     REQUIRES device_proto app_fw)
 

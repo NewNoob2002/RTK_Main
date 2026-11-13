@@ -2,9 +2,11 @@
 // init 仅启动前调用；绑定后各 Slot 支持跨任务读写，非 ISR。
 #pragma once
 
+#include "fw/fanout_ring.hpp"
 #include "fw/slot.hpp"
 #include "app_config.hpp"
 #if RTK_GNSS_ENABLED
+#include "data/gnss_output.hpp"
 #include "def/gnss_def.hpp"
 #endif
 #include "def/link_def.hpp"
@@ -37,6 +39,11 @@ struct DataCenter {
     fw::Slot<GnssStatus> gnss_status{};
     fw::Slot<gnss::Fix> gnss_fix{};
     fw::Slot<gnss::SatTable> gnss_sats{};
+    fw::Slot<GnssOutConfig> gnss_out_cfg{};
+    std::array<uint8_t, kGnssAppRingBytes> gnss_app_ring_buf{};
+    fw::FanoutRing gnss_app_ring{};
+    GnssLatestCache gnss_latest{};
+    GnssAppSubState gnss_app_sub{};
 #endif
 
     portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;

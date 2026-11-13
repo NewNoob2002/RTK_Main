@@ -111,32 +111,28 @@ kOff --start--> kPowerUp(断电 power_off_ms → 上电 → 等 boot_ms)
 | `RTK_GNSS_RATE_HZ` | 1 | NVS 无记录时的定位频率 |
 | `RTK_GNSS_DIALECT_UNICORE` / `_UBLOX` / `_COMNAV` | y / y / n | 编译哪些方言（gnss 组件 Kconfig） |
 
-### 2.9 手机订阅与原始报文透传（《测量软件控制协议-0530》，用户 2026-11-12 确认）
+### 2.9 手机订阅与原始报文透传（《测量软件控制协议-0530》，ADR-0011 修订）
 
 协议约定（PDF 原文要点）：手机以 Type=0 查询某报文 ID；头部第 19 字节 `MSG Interval`（signed char）≠0 时，接收机**主动周期发送标准报文本体**
-（无 AA 44 18 头与 CRC 二次封装）；v<0 → 周期 |v| 秒，v>0 → 周期 1/v 秒，0 = 关闭自动输出、只回一次封装应答。PDF 后续可能小改，
-所以 ID→语句映射集中在一张 constexpr 表里。
+（无 AA 44 18 头与 CRC 二次封装）；v<0 → 周期 |v| 秒（如 `-128` → `128000 ms`），v>0 → 周期 `max(50, 1000/v) ms`，0 = 关闭自动输出并回一次封装应答。PDF 后续可能小改，
+所以 ID→语句映射集中在一张 `constexpr` 表里。
 
-| MSG ID | 报文 | 模块侧来源 | 协议默认 |
-| --- | --- | --- | --- |
-| 0x04 | GPGGA | NMEA GGA | 1 Hz |
-| 0x05 | SATSINFOA（Unicore） | `#SATSINFOA` ASCII | 5 s |
-| 0x1F | HEADING | UM982 `HEADINGA`（无能力位则不支持） | 1 Hz |
-| 0x21 | GPGST | NMEA GST | 1 Hz |
-| 0x22 | GPRMC | NMEA RMC | 1 Hz |
-| 0x23 | GPGSA | NMEA GSA | 3 s |
+| MSG ID | 报文 | 模块侧来源 | 协议默认 | 缓存上限 |
+| --- | --- | --- | --- | --- |
+| 0x04 | GPGGA | NMEA GGA | 1 Hz | 256 B |
+| 0x05 | SATSINFOA（Unicore） | `#SATSINFOA` ASCII | 5 s | 4096 B |
+| 0x1F | HEADING | UM982 `HEADINGA`（无能力位则不支持） | 1 Hz | 1024 B |
+| 0x21 | GPGST | NMEA GST | 1 Hz | 256 B |
+| 0x22 | GPRMC | NMEA RMC | 1 Hz | 256 B |
+| 0x23 | GPGSA | NMEA GSA | 3 s | 256 B |
 
-决策：
-1. **模块固定输出超集**：Unicore 流动站脚本在现有 GGA/RMC/GSA/GSV 之外追加 `GPGST COMx <rate>` 与 `SATSINFOA COMx 1`；ESP32 按订阅**降采样**转发，
-   不为每个订阅改模块配置。订阅周期短于模块周期时按模块周期发送（应答照常成功，`gnss status` 显示有效周期）；20 Hz 需求经 `gnss rate` 改模块频率。
-2. **订阅表**：单份（同一时刻只有一个 PHONE 会话，ADR-0007 CONCURRENT 策略下 PHONE ≤1），`msg_id → period_ms, last_sent_ms`，
-   PHONE 断开时清空（手机重连须重新订阅，与“上电默认不自动输出”一致）。
-3. **跨任务路径**：kIo 收到完整语句 → 查订阅位图（原子读，kLink 写）→ 命中且到期 → 整句写入 `NmeaOut`（`rtos::StaticStreamBuffer<4096>`，
-   kIo 单写 / kLink 单读，前置 2 B 长度；空间不足整句丢弃计数）→ `bt_link` 每轮取出经现有 async_tx 发给 PHONE 会话。降采样在 kIo 侧做，避免无用拷贝。
-4. **查询应答**（Interval=0）：回封装帧，载荷 = 最近一条该语句原文（kIo 保存在每 ID 一个最近句缓冲的 Slot 中；无数据时回结果码失败 0x02 0x02）。
-5. **0x01/0x02**：0x01 板卡型号/板卡固件来自探测结果（G-B 已写 DeviceInfo）；0x02 GNSS 功能字节 bit7 = 控制器 kRunning，低 7 位 = 1；IMU 字节在接 UM981 惯导前保持现值。
-6. **demux 容量**：`#SATSINFOA` 在多星时可达 3–4 KB，`unicore_hash::kMaxFrame` 1024 不够；修订 stream_demux 冻结头把它提到 4096
-  （StaticDemux 缓冲按最大 max_frame，已有 UnicoreBin 4096，故 GNSS 分流器 RAM 不变）。
+决策（数据路径与内存语义以 ADR-0011 为准）：
+1. **模块输出与控制台持久化**：Unicore 流动站脚本在现有 GGA/RMC/GSA/GSV 之外追加 `GPGST COM<port> <rate>` 与 `SATSINFOA COM<port> 1`（双天线型号追加 `HEADINGA COM<port> 1`）；u-blox 方言追加 `CFG-MSGOUT-NMEA_ID_GST_UART1`（无 `SATSINFOA`）。控制台 `gnss out` 与 NVS `gnss/out` blob 管理模块默认输出表；App 每报文 `interval` 只做本次会话订阅与降采样，不改 NVS。
+2. **订阅表**：单份（同一时刻只有一个 PHONE 会话，ADR-0007 CONCURRENT 策略下 PHONE ≤1），`mask` + 每类型周期/统计（`GnssAppSubState`）；PHONE 断开或重连后全清 `mask=0`，无自动吐流、无历史回放。
+3. **跨任务路径（typed FanoutRing + SPP TX.stream）**：kIo 收到完整语句 → 分类并更新最新句缓存（总计 6144 B）→ 查订阅掩码与降采样到期 → 整句写入 4096 B `gnss_app_ring`（typed `FanoutRing`，单条最大有效载荷 4093 B；≥4094 B 写侧整帧丢弃并计数 `oversize_drop`）→ `bt_link` 每轮 `peek` 完整句经 `spp_server_stream_reserve` / `spp_server_tx_commit` 写入 PHONE 4096 B `TX.stream`（满时 `cancel` 留待下一轮）。
+4. **查询应答（Interval=0）**：从最新句缓存通过 ≤256 B 有界查询拷贝回封装帧（载荷 = 最近一条原文）；无数据、缺少能力位或原文 >256 B 时，不截断、回结果码失败 `0x02 0x02`（>256 B 递增 `query_oversize`）。
+5. **0x01/0x02/0x0D**：0x01 板卡型号/板卡固件来自探测结果（G-B 已写 DeviceInfo）；0x02 GNSS 功能字节按 ADR-0010 §2.9 约定应为 `kRunning ? 0x81 : 0x01`（注意：`reply.hpp` 与 `device_service.hpp` 属冻结头，K4 若未获授权修订则在报告列出字段请求）；`0x0D` 保持 `DeviceService` 32 B COM 查询 / SET 不回，与 `gnss/out` 解耦。
+6. **demux 容量**：`#SATSINFOA` 在多星时可达 3–4 KB，`unicore_hash::kMaxFrame` 由 1024 扩到 4096 并更新 `docs/frozen.sha256` 对应条目（与 `unicore_bin` 同为 4096 B，GNSS 分流器 RAM 不变）。
 7. **后续**（不在本节）：自定义 Hash 报文与惯导报文（GPINS/GPFPD/INSPVAXA 等，PDF 0x0D 中已有 ID 972–974）作为新表项接入同一机制；K803 暂不支持。
 
 ### 2.10 NVS 存储目录（2026-11-12 补充）

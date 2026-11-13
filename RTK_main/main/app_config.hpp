@@ -31,6 +31,19 @@ inline constexpr size_t kLinkRxBufBytes = 512U;
 #define RTK_GNSS_ENABLED 0
 #endif
 
+#if defined(CONFIG_RTK_GNSS_APP_RING_BYTES)
+inline constexpr size_t kGnssAppRingBytes = static_cast<size_t>(CONFIG_RTK_GNSS_APP_RING_BYTES);
+#else
+inline constexpr size_t kGnssAppRingBytes = 4096U;
+#endif
+
+#if defined(CONFIG_RTK_GNSS_STATIC_OBS_ENABLE) && CONFIG_RTK_GNSS_STATIC_OBS_ENABLE
+inline constexpr bool kGnssStaticObsEnabled = true;
+#else
+inline constexpr bool kGnssStaticObsEnabled = false;
+#endif
+inline constexpr size_t kGnssObsReservedBytes = 16384U;
+
 /** 模块编号（注册清单使用）；枚举顺序即 ID，勿插入或重排。 */
 enum class ModuleKind : uint8_t { kBtLink, kRtcm, kStorage, kSystem, kSystemMode, kDebug, kGnss };
 /** 执行器编号；链路与 GNSS IO 分别绑核运行。 */

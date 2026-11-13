@@ -155,9 +155,10 @@ static void test_rover_script()
     cfg.port = 2;
     cfg.port_baud = 921600;
 
-    const char *expected[] = {"UNLOG COM2\r\n",   "GPGGA COM2 1\r\n", "GPRMC COM2 1\r\n",      "GPGSA COM2 1\r\n",
-                              "GPGSV COM2 1\r\n", "MODE ROVER\r\n",   "CONFIG COM2 921600\r\n"};
-    for (size_t i = 0; i < 6; ++i) {
+    const char *expected[] = {"UNLOG COM2\r\n",   "GPGGA COM2 1\r\n",      "GPRMC COM2 1\r\n", "GPGSA COM2 1\r\n",
+                              "GPGST COM2 1\r\n", "SATSINFOA COM2 1\r\n",  "GPGSV COM2 1\r\n", "HEADINGA COM2 1\r\n",
+                              "MODE ROVER\r\n",   "CONFIG COM2 921600\r\n"};
+    for (size_t i = 0; i < 9; ++i) {
         gnss::ConfigStep step{};
         TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(i, gnss::Model::kUm982, cfg, step));
         TEST_ASSERT_TRUE(text_equals(step.cmd.view(), expected[i]));
@@ -165,20 +166,24 @@ static void test_rover_script()
         TEST_ASSERT_EQUAL_UINT32(0, step.switch_baud);
     }
     gnss::ConfigStep last{};
-    TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(6, gnss::Model::kUm982, cfg, last));
+    TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(9, gnss::Model::kUm982, cfg, last));
     TEST_ASSERT_FALSE(last.expect_reply);
     TEST_ASSERT_EQUAL_UINT32(921600, last.switch_baud);
 
     gnss::ConfigStep none{};
-    TEST_ASSERT_FALSE(gnss::unicore::kDialect.rover_step(7, gnss::Model::kUm982, cfg, none));
+    TEST_ASSERT_FALSE(gnss::unicore::kDialect.rover_step(10, gnss::Model::kUm982, cfg, none));
 
-    // 20 Hz → 0.05；关掉 GSV 后脚本少一步。
+    // 单天线型号（UM980）不开启 HEADINGA；20 Hz → 0.05；关掉 GSV 后再少一步。
     cfg.rate_hz = 20;
     cfg.gsv = false;
     gnss::ConfigStep fast{};
-    TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(1, gnss::Model::kUm982, cfg, fast));
+    TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(1, gnss::Model::kUm980, cfg, fast));
     TEST_ASSERT_TRUE(text_equals(fast.cmd.view(), "GPGGA COM2 0.05\r\n"));
-    TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(4, gnss::Model::kUm982, cfg, fast));
+    TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(4, gnss::Model::kUm980, cfg, fast));
+    TEST_ASSERT_TRUE(text_equals(fast.cmd.view(), "GPGST COM2 0.05\r\n"));
+    TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(5, gnss::Model::kUm980, cfg, fast));
+    TEST_ASSERT_TRUE(text_equals(fast.cmd.view(), "SATSINFOA COM2 1\r\n"));
+    TEST_ASSERT_TRUE(gnss::unicore::kDialect.rover_step(6, gnss::Model::kUm980, cfg, fast));
     TEST_ASSERT_TRUE(text_equals(fast.cmd.view(), "MODE ROVER\r\n"));
 }
 

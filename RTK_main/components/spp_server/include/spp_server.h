@@ -107,6 +107,10 @@ typedef struct {
  */
 esp_err_t spp_server_reply_reserve(uint32_t handle, spp_server_tx_token_t *token);
 esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t len);
+/** 两段视图拼成一条记录提交（源环跨尾时免中转缓冲）；alen+blen ≤ 预留容量，两段均须非空。
+ * 语义同 tx_commit：成功即整条发布；失败时预留仍在，由调用者 cancel。 */
+esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen, const uint8_t *b,
+                                size_t blen);
 void spp_server_tx_cancel(const spp_server_tx_token_t *token);
 /** PHONE 绑定由角色所有者维护；仅一个句柄可拥有唯一 stream；解绑等待当前 API/copy 退出。
  * reserve 按整条句长接纳，最大4096；不足时零接纳，调用者不能消费源句。

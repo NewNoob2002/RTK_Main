@@ -4,11 +4,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 #include "esp_err.h"
 #include "fw/store_key.hpp"
 
 namespace app::store {
+
+inline constexpr size_t kMaxBlobKeyBytes = 64U;
 
 /** 键的值宽度（字节）：u8/u16/u32 → 1/2/4；本轮不支持的类型返回 0。 */
 [[nodiscard]] size_t value_width(fw::StoreType type) noexcept;
@@ -18,5 +21,11 @@ namespace app::store {
 
 /** 写一个整数键并提交；value 超出该键宽度的高位被忽略。错误同 read_value，另含后端写错误。 */
 [[nodiscard]] esp_err_t write_value(const fw::StoreKey &key, uint32_t value) noexcept;
+
+/** 读一个 Blob 键到 out（len 返回实际读取字节数）。 */
+[[nodiscard]] esp_err_t read_blob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len) noexcept;
+
+/** 写一个 Blob 键并提交。 */
+[[nodiscard]] esp_err_t write_blob(const fw::StoreKey &key, std::span<const uint8_t> data) noexcept;
 
 } // namespace app::store

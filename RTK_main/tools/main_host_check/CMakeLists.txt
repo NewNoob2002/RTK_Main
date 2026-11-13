@@ -24,6 +24,7 @@ add_library(main_pure STATIC
     ${PROJ_ROOT}/components/device_proto/bytes.cpp
     ${PROJ_ROOT}/components/app_fw/src/status.cpp
     ${PROJ_ROOT}/components/app_fw/src/result.cpp
+    ${PROJ_ROOT}/components/app_fw/src/fanout_ring.cpp
     ${PROJ_ROOT}/components/app_fw/src/trace.cpp
     ${PROJ_ROOT}/components/app_fw/src/tlog.cpp
     ${PROJ_ROOT}/components/cli/src/out.cpp
@@ -34,6 +35,7 @@ add_library(main_pure STATIC
     ${PROJ_ROOT}/components/link_core/services/config_service.cpp
     ${PROJ_ROOT}/components/link_core/services/alarm_service.cpp
     ${PROJ_ROOT}/components/link_core/services/pair_service.cpp
+    ${PROJ_ROOT}/components/link_core/services/gnss_service.cpp
     ${PROJ_ROOT}/components/link_core/link_service.cpp)
 target_include_directories(main_pure PUBLIC
     ${PROJ_ROOT}/components/app_fw/include
@@ -112,3 +114,21 @@ target_compile_options(template_check PRIVATE -fno-exceptions -fno-rtti -Wall -W
 target_compile_definitions(template_check PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096)
 target_link_libraries(template_check PRIVATE main_pure main_nvs_shim)
 add_test(NAME template_module COMMAND template_check template_module)
+
+add_executable(gnss_output_check gnss_output_check.cpp
+    ${PROJ_ROOT}/main/data/gnss_output.cpp
+    ${PROJ_ROOT}/main/modules/storage/store_keys.cpp)
+target_include_directories(gnss_output_check BEFORE PRIVATE shim)
+target_include_directories(gnss_output_check PRIVATE ../t13_host_check/shim/inc
+    ${PROJ_ROOT}/main ${PROJ_ROOT}/components/rtos/include
+    ${PROJ_ROOT}/components/cli/include
+    ${PROJ_ROOT}/components/bt_reconnect/include
+    ${PROJ_ROOT}/components/nvs_store/include
+    ${PROJ_ROOT}/components/app_fw/include
+    ${PROJ_ROOT}/components/gnss/include
+    ${PROJ_ROOT}/components/stream_demux/include
+    ${PROJ_ROOT}/components/link_core/include)
+target_compile_options(gnss_output_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
+    -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim)
+add_test(NAME gnss_output COMMAND gnss_output_check)

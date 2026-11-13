@@ -9,6 +9,9 @@
 #include "esp_log.h"
 #include "fw/tlog.hpp"
 #include "core/link_service.hpp"
+#if RTK_GNSS_ENABLED
+#include "def/gnss_sub_def.hpp"
+#endif
 #include "proto/frame.hpp"
 #include "rtos/esp_status.hpp"
 
@@ -24,6 +27,8 @@ constexpr uint32_t kRoundBudgetMs = 20;
 #if RTK_GNSS_ENABLED
 constexpr uint32_t kGnssFixStaleMs = 3000U;
 constexpr uint32_t kGnssClockJitterMs = 10U;
+constexpr size_t kMaxGnssStreamRecordsPerPoll = 16U;
+constexpr size_t kMaxGnssFlushRecords = 64U;
 #endif
 constexpr size_t kAlarmArgBytes = 2;
 // RTCM3 线路帧：1 B 前导 + 2 B 长度，载荷首 12 bit 为消息号，尾 3 B 为 CRC24Q。
@@ -281,6 +286,9 @@ void BtLinkModule::drain_rx(uint32_t round_start_ms) noexcept
 void BtLinkModule::sync_stream() noexcept
 {
     if (stream_handle_ != 0 && link_manager_.role(stream_handle_) != core::Role::kPhone) {
+#if RTK_GNSS_ENABLED
+        reset_gnss_stream_session();
+#endif
         const esp_err_t status = spp_server_stream_bind(stream_handle_, false);
         // CLOSE 已回收时 NOT_FOUND 等价于已解绑；其余失败保留句柄下轮重查。
         if (status != ESP_OK && status != ESP_ERR_NOT_FOUND) {
@@ -417,13 +425,110 @@ void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
     const auto gnss_st = context_.data.gnss_status.read(status_ver);
     if (status_ver != gnss_status_version_) {
         gnss_status_version_ = status_ver;
+        device_info.gnss_running = gnss_st.enabled && (gnss_st.state == ::gnss::State::kRunning);
         if (gnss_st.model != ::gnss::Model::kUnknown) {
             device_info.board.assign(::gnss::model_name(gnss_st.model));
         }
         if (gnss_st.fw_version[0] != '\0') {
             device_info.board_fw.assign(std::string_view{gnss_st.fw_version.data()});
         }
+        if (gnss_service_.has_value()) {
+            gnss_service_->set_heading_supported((gnss_st.caps & ::gnss::cap::kHeading) != 0U);
+        }
     }
+}
+
+core::services::GnssQueryResult BtLinkModule::on_gnss_query(void *ctx, uint16_t msg_id, std::span<uint8_t> dst) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    const auto idx = core::services::GnssService::type_index_of(msg_id);
+    if ((self == nullptr) || !idx.has_value()) {
+        return {};
+    }
+    const auto type_idx = static_cast<uint8_t>(*idx);
+    const auto res = self->context_.data.gnss_latest.query(type_idx, dst);
+    if (res.oversize) {
+        // query_oversize 在 GnssService 内于本回调返回后自增，先累加 1 再写快照避免少计当前次。
+        const uint32_t cur = self->gnss_service_.has_value() ? (self->gnss_service_->query_oversize_count() + 1U) : 1U;
+        self->context_.data.gnss_app_sub.set_query_oversize_total(cur);
+        fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppDrop), 0U, 1U, type_idx);
+    }
+    return res;
+}
+
+void BtLinkModule::on_gnss_mask(void *ctx, uint32_t mask) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if (self == nullptr) {
+        return;
+    }
+    if (self->gnss_reader_attached_) {
+        static_cast<void>(self->context_.data.gnss_app_ring.set_mask(self->gnss_reader_id_, mask));
+    }
+    std::array<uint32_t, core::services::kGnssMsgCount> periods_ms{};
+    if (self->gnss_service_.has_value()) {
+        for (size_t i = 0U; i < core::services::kGnssMsgCount; ++i) {
+            periods_ms[i] = self->gnss_service_->period_ms(i);
+        }
+    }
+    self->context_.data.gnss_app_sub.set_subscription(mask, periods_ms);
+    fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppMask), 0U, mask, (mask == 0U) ? 1U : 0U);
+}
+
+void BtLinkModule::reset_gnss_stream_session() noexcept
+{
+    if (gnss_service_.has_value()) {
+        gnss_service_->reset_session();
+    }
+    if (!gnss_reader_attached_) {
+        return;
+    }
+    // 断连或切会话时清空旧读者的残余记录，避免重连后重放上一会话的句子（ADR-0011 §6.2）。
+    for (size_t i = 0U; i < kMaxGnssFlushRecords; ++i) {
+        fw::FanoutView view{};
+        if (!fw::is_ok(context_.data.gnss_app_ring.peek(gnss_reader_id_, view))) {
+            break;
+        }
+        static_cast<void>(context_.data.gnss_app_ring.commit(view.lease));
+    }
+}
+
+bool BtLinkModule::drain_gnss_stream() noexcept
+{
+    if (!gnss_reader_attached_ || (stream_handle_ == 0U) ||
+        (link_manager_.role(stream_handle_) != core::Role::kPhone)) {
+        return false;
+    }
+    size_t sent_count = 0U;
+    for (; sent_count < kMaxGnssStreamRecordsPerPoll; ++sent_count) {
+        fw::FanoutView view{};
+        if (!fw::is_ok(context_.data.gnss_app_ring.peek(gnss_reader_id_, view))) {
+            break;
+        }
+        const size_t total = view.first.size() + view.second.size();
+        if ((total == 0U) || (total > kGnssStreamMaxRecord)) {
+            static_cast<void>(context_.data.gnss_app_ring.commit(view.lease));
+            continue;
+        }
+        spp_server_tx_token_t token{};
+        if (spp_server_stream_reserve(stream_handle_, total, &token) != ESP_OK) {
+            static_cast<void>(context_.data.gnss_app_ring.cancel(view.lease));
+            return false;
+        }
+        // 源记录跨环尾时两段直接拼进 TX.stream，无需中转缓冲。
+        const esp_err_t committed = view.second.empty()
+                                        ? spp_server_tx_commit(&token, view.first.data(), total)
+                                        : spp_server_tx_commit2(&token, view.first.data(), view.first.size(),
+                                                                view.second.data(), view.second.size());
+        if (committed != ESP_OK) {
+            spp_server_tx_cancel(&token);
+            static_cast<void>(context_.data.gnss_app_ring.cancel(view.lease));
+            return false;
+        }
+        static_cast<void>(context_.data.gnss_app_ring.commit(view.lease));
+        context_.data.gnss_app_sub.add_tx_sent(view.type);
+    }
+    return sent_count == kMaxGnssStreamRecordsPerPoll;
 }
 #endif
 
@@ -451,9 +556,24 @@ fw::Result BtLinkModule::init() noexcept
     config_service_.emplace();
     alarm_service_.emplace(alarm_, link_manager_, device_service_->info());
     pair_service_.emplace(link_manager_);
+#if RTK_GNSS_ENABLED
+    gnss_service_.emplace();
+    gnss_service_->set_query_hook(&BtLinkModule::on_gnss_query, this);
+    gnss_service_->set_mask_hook(&BtLinkModule::on_gnss_mask, this);
+    gnss_reader_attached_ = fw::is_ok(context_.data.gnss_app_ring.attach(0U, gnss_reader_id_));
+    if (!gnss_reader_attached_) {
+        ESP_LOGE(kTag, "gnss app ring attach failed");
+        return fw::Result::kInvalidState;
+    }
+    /* 路由表校验成功后才构造 LinkService，失败由执行器隔离。 */
+    const std::array<core::RouteTable, 5> tables = {device_service_->table(), config_service_->table(),
+                                                    alarm_service_->table(), pair_service_->table(),
+                                                    gnss_service_->table()};
+#else
     /* 路由表校验成功后才构造 LinkService，失败由执行器隔离。 */
     const std::array<core::RouteTable, 4> tables = {device_service_->table(), config_service_->table(),
                                                     alarm_service_->table(), pair_service_->table()};
+#endif
     const fw::Status route_status = router_.init(tables);
     if (!is_ok(route_status)) {
         ESP_LOGE(kTag, "command router init failed: %s", to_string(route_status));
@@ -549,12 +669,17 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
             link_service().resume(entry.handle, now);
         }
     }
-    /* 按预算接收并直推 RTCM，再发布链路统计。 */
+    /* 按预算接收并直推 RTCM，再绑定并排空 PHONE GNSS 流，最后发布链路统计。 */
     drain_rx(round_start_ms_);
     sync_stream();
+#if RTK_GNSS_ENABLED
+    const bool gnss_more = drain_gnss_stream();
+#else
+    const bool gnss_more = false;
+#endif
     collect_whitelist_dirty();
     publish_link(rtos::now_ms());
-    bool pending = false;
+    bool pending = gnss_more;
     for (const auto &entry : sessions_) {
         pending = pending || (entry.used && entry.demux_ready && !link_service().paused(entry.handle) &&
                               (entry.drain_pending || entry.rx_offset < entry.rx_size));

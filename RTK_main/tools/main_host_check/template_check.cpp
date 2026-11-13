@@ -359,6 +359,10 @@ esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *, const uint8_t *, s
 {
     return ESP_OK;
 }
+esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *, const uint8_t *, size_t, const uint8_t *, size_t)
+{
+    return ESP_OK;
+}
 void spp_server_tx_cancel(const spp_server_tx_token_t *) {}
 bool spp_server_reply_ready(uint32_t)
 {
@@ -370,6 +374,11 @@ esp_err_t spp_server_push_latest(uint32_t, const uint8_t *, size_t)
 }
 esp_err_t spp_server_stream_bind(uint32_t, bool)
 {
+    return ESP_OK;
+}
+esp_err_t spp_server_stream_reserve(uint32_t, size_t, spp_server_tx_token_t *token)
+{
+    *token = {};
     return ESP_OK;
 }
 void spp_server_tx_stats(spp_server_tx_stats_t *stats)

@@ -174,13 +174,25 @@ void spp_server_tx_cancel(const spp_server_tx_token_t *token)
     spp_server_tx_wake();
 }
 
-/* copy 的区间先固定，锁外 scatter copy，最后一次发布；CLOSE 期间不再接纳新 owner。 */
-esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t len)
+/* 把 n 字节复制到环 pos 处（可跨环尾），返回下一写位置。 */
+static size_t spp_server_ring_copy(uint8_t *storage, size_t capacity, size_t pos, const uint8_t *src, size_t n)
+{
+    const size_t first = (n <= (capacity - pos)) ? n : (capacity - pos);
+    memcpy(storage + pos, src, first);
+    memcpy(storage, src + first, n - first);
+    return (pos + n) % capacity;
+}
+
+/* copy 的区间先固定，锁外 scatter copy，最后一次发布；CLOSE 期间不再接纳新 owner。
+ * 两段按序拼成一条记录，句末位只标在第二段末尾，worker 不会在两段之间插入 reply。 */
+static esp_err_t spp_server_tx_commit_spans(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen,
+                                            const uint8_t *b, size_t blen)
 {
     uint8_t *storage = NULL;
     size_t capacity = 0U;
     size_t tail = 0U;
-    if ((token == NULL) || (data == NULL) || (len == 0U) || (len > token->capacity)) {
+    const size_t len = alen + blen;
+    if ((token == NULL) || (a == NULL) || (alen == 0U) || ((blen != 0U) && (b == NULL)) || (len > token->capacity)) {
         return ESP_ERR_INVALID_ARG;
     }
     taskENTER_CRITICAL(&s_spp_mux);
@@ -197,9 +209,10 @@ esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t
     tail = ((size_t)ring->head + ring->used) % capacity;
     taskEXIT_CRITICAL(&s_spp_mux);
 
-    const size_t first = (len <= (capacity - tail)) ? len : (capacity - tail);
-    memcpy(storage + tail, data, first);
-    memcpy(storage, data + first, len - first);
+    const size_t mid = spp_server_ring_copy(storage, capacity, tail, a, alen);
+    if (blen != 0U) {
+        (void)spp_server_ring_copy(storage, capacity, mid, b, blen);
+    }
 
     esp_err_t result = ESP_ERR_INVALID_STATE;
     taskENTER_CRITICAL(&s_spp_mux);
@@ -231,6 +244,20 @@ esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t
     spp_server_session_release(session);
     spp_server_tx_wake();
     return result;
+}
+
+esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t len)
+{
+    return spp_server_tx_commit_spans(token, data, len, NULL, 0U);
+}
+
+esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen, const uint8_t *b,
+                                size_t blen)
+{
+    if ((token == NULL) || (a == NULL) || (alen == 0U) || (b == NULL) || (blen == 0U)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return spp_server_tx_commit_spans(token, a, alen, b, blen);
 }
 
 esp_err_t spp_server_stream_bind(uint32_t handle, bool phone)

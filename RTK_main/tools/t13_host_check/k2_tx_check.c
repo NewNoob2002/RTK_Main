@@ -211,6 +211,17 @@ static void stream_order(void)
         fake_emit_write(0x11U, 1024, ESP_SPP_SUCCESS, false);
     }
     CHECK(settled(0U));
+    /* 两段提交：源环跨尾的记录按序拼成一条，目标环同样跨尾（head=37）。 */
+    CHECK(spp_server_stream_reserve(0x11U, sizeof(stream), &token) == ESP_OK);
+    CHECK(spp_server_tx_commit2(&token, stream, 1000U, stream + 1000U, 0U) == ESP_ERR_INVALID_ARG);
+    CHECK(spp_server_tx_commit2(&token, stream, 1000U, stream + 1000U, sizeof(stream)) == ESP_ERR_INVALID_ARG);
+    CHECK(spp_server_tx_commit2(&token, stream, 1000U, stream + 1000U, sizeof(stream) - 1000U) == ESP_OK);
+    for (int call = 11; call < 15; ++call) {
+        CHECK(fake_wait_write_calls(call + 1, 1000U));
+        CHECK(memcmp(fake_write_call_data(call), stream + (size_t)(call - 11) * 1024U, 1024U) == 0);
+        fake_emit_write(0x11U, 1024, ESP_SPP_SUCCESS, false);
+    }
+    CHECK(settled(0U));
 }
 
 static void early_close(void)

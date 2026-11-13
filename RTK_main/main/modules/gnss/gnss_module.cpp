@@ -15,9 +15,12 @@
 #include "freertos/task.h"
 
 #include "app_context.hpp"
+#include "def/gnss_sub_def.hpp"
 #include "demux/decoders/nmea.hpp"
-#include "fw/tlog.hpp"
 #include "demux/decoders/rtcm3.hpp"
+#include "demux/decoders/unicore_hash.hpp"
+#include "fw/status.hpp"
+#include "fw/tlog.hpp"
 #include "gnss/dialect.hpp"
 #include "modules/gnss/gnss_keys.hpp"
 #include "modules/storage/storage_module.hpp"
@@ -31,6 +34,34 @@ constexpr uint32_t kByteMask = 0xFFU;
 constexpr size_t kMaxActionsPerPoll = 16U;
 constexpr uint32_t kBaudMin = 1200U;
 constexpr uint32_t kBaudMax = 2000000U;
+constexpr uint32_t kMsPerSec = 1000U;
+constexpr uint32_t kCentiDiv = 10U;
+constexpr size_t kOutCmdLineBytes = 64U;
+constexpr size_t kOutPeriodTextBytes = 16U;
+
+void trace_gnss_sub(GnssSubTrace ev, uint32_t v0, uint32_t v1) noexcept
+{
+    fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(ev), 0U, v0, v1);
+}
+
+void format_period_sec(int8_t interval, std::span<char> out) noexcept
+{
+    const uint32_t period_ms = core::services::GnssService::interval_to_period_ms(interval);
+    if ((period_ms % kMsPerSec) == 0U) {
+        (void)std::snprintf(out.data(), out.size(), "%lu", static_cast<unsigned long>(period_ms / kMsPerSec));
+    } else {
+        const uint32_t whole = period_ms / kMsPerSec;
+        const uint32_t centi = (period_ms % kMsPerSec) / kCentiDiv;
+        (void)std::snprintf(out.data(), out.size(), "%lu.%02lu", static_cast<unsigned long>(whole),
+                            static_cast<unsigned long>(centi));
+    }
+}
+
+bool out_cfg_differs_from_default(const data::GnssOutConfig &cfg) noexcept
+{
+    const auto def = data::GnssOutConfig::defaults();
+    return (cfg.mask != def.mask) || (cfg.intervals != def.intervals);
+}
 
 /** 拒绝原因在文本日志中的短名（explain 为空时的兜底，§2.11）。 */
 const char *reject_cause_name(demux::RejectCause cause) noexcept
@@ -330,6 +361,8 @@ fw::Result GnssModule::init() noexcept
     last_state_ = controller_.state();
     last_published_state_ = last_state_;
     prev_ctrl_stats_ = controller_.stats();
+    context_.data.gnss_out_cfg.write(out_cfg_);
+    trace_gnss_sub(GnssSubTrace::kOutCfg, out_cfg_.mask, 0U);
     initialized_ = true;
     return fw::Result::kOk;
 }
@@ -477,9 +510,31 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
         return;
     }
 
-    default:
+    default: {
+        if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetOut) {
+            data::GnssOutConfig next{};
+            if ((cmd.arg_len != data::GnssOutConfig::kBlobBytes) ||
+                !fw::is_ok(data::GnssOutConfig::decode(std::span<const uint8_t>{cmd.args.data(), cmd.arg_len}, next))) {
+                result.status = fw::Result::kInvalidArg;
+                return;
+            }
+            out_cfg_ = next;
+            context_.data.gnss_out_cfg.write(out_cfg_);
+            const fw::Result save_res = context_.storage.save_keys(gnss_store::kConfigKeys);
+            if (!fw::is_ok(save_res)) {
+                result.status = save_res;
+                return;
+            }
+            if (controller_.state() == ::gnss::State::kRunning) {
+                apply_out_to_receiver();
+            }
+            trace_gnss_sub(GnssSubTrace::kOutCfg, out_cfg_.mask, 0U);
+            result.status = fw::Result::kOk;
+            return;
+        }
         result.status = fw::Result::kNotSupported;
         return;
+    }
     }
 }
 
@@ -501,6 +556,39 @@ void GnssModule::handle_frame(const demux::Decoder &decoder, std::span<const uin
             // GGA 触发卫星轮发布时已在同一次 feed() 中更新 fix_（G-A §4.1），须同步刷新定位槽。
             context_.data.gnss_fix.write(parser_.fix());
             context_.data.gnss_sats.write(parser_.sats());
+        }
+    }
+
+    // ADR-0011 §5：6 类可订阅语句同步更新 6 KiB 最新帧缓存，并按会话掩码与周期写入 App typed FanoutRing。
+    if ((&decoder == &demux::nmea::kDecoder) || (&decoder == &demux::unicore_hash::kDecoder)) {
+        const auto type_opt = data::classify_gnss_sentence(frame);
+        if (type_opt.has_value()) {
+            const uint8_t type_idx = *type_opt;
+            if (!context_.data.gnss_latest.update(type_idx, frame)) {
+                trace_gnss_sub(GnssSubTrace::kAppDrop, 2U, type_idx);
+            }
+            uint32_t active_mask = 0U;
+            std::array<uint32_t, data::kGnssAppMsgCount> periods_ms{};
+            context_.data.gnss_app_sub.read_subscription(active_mask, periods_ms);
+            if ((active_mask & (1U << type_idx)) == 0U) {
+                // 无订阅者：FanoutRing::write 只计 no_subscriber，不写入环形缓冲；闸门复位，重新订阅后首句立即推送。
+                static_cast<void>(context_.data.gnss_app_ring.write(type_idx, frame));
+                push_gates_[type_idx].reset();
+            } else {
+                const uint32_t period = periods_ms[type_idx];
+                auto &gate = push_gates_[type_idx];
+                if (!gate.due(now, period)) {
+                    context_.data.gnss_app_sub.add_skipped(type_idx);
+                } else {
+                    const fw::Result wres = context_.data.gnss_app_ring.write(type_idx, frame);
+                    if (fw::is_ok(wres)) {
+                        gate.on_pushed(now, period);
+                    } else if (wres == fw::Result::kInvalidArg) {
+                        context_.data.gnss_app_sub.add_ring_oversize(type_idx);
+                        trace_gnss_sub(GnssSubTrace::kAppDrop, 0U, type_idx);
+                    }
+                }
+            }
         }
     }
 }
@@ -611,6 +699,9 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
                 trace_gnss(GnssTrace::kStepAck, step_idx_, 0U);
             }
             persist_detected_hint();
+            if (out_cfg_differs_from_default(out_cfg_)) {
+                apply_out_to_receiver();
+            }
         } else if ((last_state_ == ::gnss::State::kRunning) && (cur_state == ::gnss::State::kProbing)) {
             if (!manual_reprobe_ && (cur_stats.reprobes > prev_ctrl_stats_.reprobes)) {
                 trace_gnss(GnssTrace::kSilence, timing_.silence_ms, 0U);
@@ -719,6 +810,60 @@ void GnssModule::persist_detected_hint() noexcept
     const fw::Result save_res = context_.storage.save_keys(gnss_store::kCacheKeys);
     if (!fw::is_ok(save_res)) {
         // StorageModule::save_keys 内部已发 kStore trace；此处保留 hint_ 内存值避免每轮重复写盘。
+    }
+}
+
+void GnssModule::apply_out_to_receiver() noexcept
+{
+    const auto &det = controller_.detected();
+    if (det.dialect == nullptr) {
+        return;
+    }
+    const auto fam = det.dialect->family;
+    if ((fam != ::gnss::Family::kUnicore) && (fam != ::gnss::Family::kComnav)) {
+        return;
+    }
+    static constexpr std::array<const char *, data::kGnssAppMsgCount> kUnicoreCmdNames = {
+        "GPGGA", "SATSINFOA", "HEADINGA", "GPGST", "GPRMC", "GPGSA",
+    };
+    const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
+    for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
+        if ((i == 2U) && ((det.caps & ::gnss::cap::kHeading) == 0U)) {
+            continue;
+        }
+        if ((fam == ::gnss::Family::kComnav) && ((i == 1U) || (i == 2U))) {
+            continue;
+        }
+        std::array<char, kOutCmdLineBytes> line{};
+        int len = 0;
+        const bool enabled = (out_cfg_.mask & (1U << i)) != 0U;
+        if (fam == ::gnss::Family::kUnicore) {
+            if (!enabled) {
+                len = std::snprintf(line.data(), line.size(), "UNLOG COM%d %s\r\n", CONFIG_RTK_GNSS_PORT,
+                                    kUnicoreCmdNames[i]);
+            } else {
+                std::array<char, kOutPeriodTextBytes> period{};
+                format_period_sec(out_cfg_.intervals[i], period);
+                len = std::snprintf(line.data(), line.size(), "%s COM%d %s\r\n", kUnicoreCmdNames[i],
+                                    CONFIG_RTK_GNSS_PORT, period.data());
+            }
+        } else {
+            if (!enabled) {
+                len = std::snprintf(line.data(), line.size(), "UNLOG COM%d %s\r\n", CONFIG_RTK_GNSS_PORT,
+                                    kUnicoreCmdNames[i]);
+            } else {
+                std::array<char, kOutPeriodTextBytes> period{};
+                format_period_sec(out_cfg_.intervals[i], period);
+                len = std::snprintf(line.data(), line.size(), "LOG COM%d %s ONTIME %s\r\n", CONFIG_RTK_GNSS_PORT,
+                                    kUnicoreCmdNames[i], period.data());
+            }
+        }
+        if (len > 0) {
+            const int written = uart_write_bytes(port, line.data(), static_cast<size_t>(len));
+            if (written > 0) {
+                uart_tx_bytes_ += static_cast<uint32_t>(written);
+            }
+        }
     }
 }
 
@@ -853,6 +998,22 @@ fw::Result GnssModule::save_gsv(const void * /*obj*/, std::span<uint8_t> out, si
     out[0] = app_context().gnss.rover_cfg_.gsv ? 1U : 0U;
     len = 1U;
     return fw::Result::kOk;
+}
+
+fw::Result GnssModule::load_out(void * /*obj*/, std::span<const uint8_t> in) noexcept
+{
+    data::GnssOutConfig parsed{};
+    if (!fw::is_ok(data::GnssOutConfig::decode(in, parsed))) {
+        trace_gnss_sub(GnssSubTrace::kOutCfg, app_context().gnss.out_cfg_.mask, 1U);
+        return fw::Result::kInvalidArg;
+    }
+    app_context().gnss.out_cfg_ = parsed;
+    return fw::Result::kOk;
+}
+
+fw::Result GnssModule::save_out(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
+{
+    return app_context().gnss.out_cfg_.encode(out, len);
 }
 
 } // namespace app

@@ -236,7 +236,7 @@ static void test_decoder_descriptors_and_first_bytes()
 
 #if STREAM_DEMUX_UNICORE_HASH
     TEST_ASSERT_NOT_NULL(demux::unicore_hash::kDecoder.name);
-    TEST_ASSERT_EQUAL_UINT(1024U, demux::unicore_hash::kDecoder.max_frame);
+    TEST_ASSERT_EQUAL_UINT(4096U, demux::unicore_hash::kDecoder.max_frame);
     TEST_ASSERT_EQUAL_UINT(demux::unicore_hash::kMaxFrame, demux::unicore_hash::kDecoder.max_frame);
     assert_only_first_byte(demux::unicore_hash::kDecoder, static_cast<uint8_t>('#'));
 #endif
@@ -652,24 +652,30 @@ static void test_unicore_hash_valid_early_reject_chars_case_and_len()
         TEST_ASSERT_EQUAL_PTR(&demux::unicore_hash::kDecoder, s_sink.frames_[0].decoder);
     }
 
-    // 最大长度 1024（XOR 与 CRC-32 两种模式）
+    // 最大长度 4096（XOR 与 CRC-32 两种模式，覆盖 #SATSINFOA 长帧）
     max_body.fill('A');
-    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_xor(work, std::string_view(max_body.data(), 1018U), false, flen));
-    TEST_ASSERT_EQUAL_UINT(1024U, flen);
+    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_xor(work, std::string_view(max_body.data(), 4090U), false, flen));
+    TEST_ASSERT_EQUAL_UINT(4096U, flen);
     TEST_ASSERT_EQUAL(demux::Step::kFrame,
                       step_by_need(demux::unicore_hash::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    run_demux_feed_and_abort(kDecs, work.subspan(0, flen));
+    TEST_ASSERT_EQUAL_UINT(1U, s_sink.frame_count_);
+    TEST_ASSERT_EQUAL_UINT(4096U, s_sink.frames_[0].len);
 
-    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_crc32(work, std::string_view(max_body.data(), 1012U), false, flen));
-    TEST_ASSERT_EQUAL_UINT(1024U, flen);
+    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_crc32(work, std::string_view(max_body.data(), 4084U), false, flen));
+    TEST_ASSERT_EQUAL_UINT(4096U, flen);
     TEST_ASSERT_EQUAL(demux::Step::kFrame,
                       step_by_need(demux::unicore_hash::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    run_demux_feed_and_abort(kDecs, work.subspan(0, flen));
+    TEST_ASSERT_EQUAL_UINT(1U, s_sink.frame_count_);
+    TEST_ASSERT_EQUAL_UINT(4096U, s_sink.frames_[0].len);
 
-    // 长度超限 1025 字节
+    // 长度超限 4097 字节
     s_work_buf[0] = static_cast<uint8_t>('#');
-    std::fill_n(work.subspan(1U).begin(), 1019U, static_cast<uint8_t>('A'));
-    copy_sv_to_span("*00\r\n", work.subspan(1020U, 5U));
+    std::fill_n(work.subspan(1U).begin(), 4091U, static_cast<uint8_t>('A'));
+    copy_sv_to_span("*00\r\n", work.subspan(4092U, 5U));
     TEST_ASSERT_EQUAL(demux::Step::kReject,
-                      step_by_need(demux::unicore_hash::kDecoder, work.subspan(0, 1025U), &end_pos, nullptr));
+                      step_by_need(demux::unicore_hash::kDecoder, work.subspan(0, 4097U), &end_pos, nullptr));
 
     // 早拒绝：第 2 字节非 'A'..'Z'（包含数字 '0'..'9'）
     for (const uint8_t b1 : kBadB1) {

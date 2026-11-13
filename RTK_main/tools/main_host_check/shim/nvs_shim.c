@@ -8,10 +8,14 @@
 #define SHIM_NVS_MAX_ENTRIES 16
 #define SHIM_NVS_MAX_NS      4
 #define SHIM_NVS_NAME_MAX    16
+#define SHIM_NVS_BLOB_MAX    64
 
 typedef struct {
     char key[SHIM_NVS_NAME_MAX];
     uint32_t value;
+    uint8_t blob[SHIM_NVS_BLOB_MAX];
+    size_t blob_len;
+    int is_blob;
     int used;
 } shim_nvs_entry_t;
 
@@ -171,4 +175,56 @@ esp_err_t nvs_set_u16(nvs_handle_t handle, const char *key, uint16_t value)
 esp_err_t nvs_set_u32(nvs_handle_t handle, const char *key, uint32_t value)
 {
     return write_value(handle, key, value);
+}
+
+esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *out_value, size_t *length)
+{
+    if (length == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const shim_nvs_entry_t *entry = find_entry(handle, key);
+    if ((entry == NULL) || (entry->is_blob == 0)) {
+        return ESP_ERR_NVS_NOT_FOUND;
+    }
+    if (out_value == NULL) {
+        *length = entry->blob_len;
+        return ESP_OK;
+    }
+    if (*length < entry->blob_len) {
+        *length = entry->blob_len;
+        return ESP_ERR_INVALID_SIZE;
+    }
+    memcpy(out_value, entry->blob, entry->blob_len);
+    *length = entry->blob_len;
+    return ESP_OK;
+}
+
+esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *value, size_t length)
+{
+    const int index = ns_index(handle);
+    if ((index < 0) || (key == NULL) || (value == NULL) || (length > SHIM_NVS_BLOB_MAX)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    shim_nvs_entry_t *entry = find_entry(handle, key);
+    if (entry == NULL) {
+        for (int i = 0; i < SHIM_NVS_MAX_ENTRIES; ++i) {
+            if (s_entries[index][i].used == 0) {
+                entry = &s_entries[index][i];
+                if (!copy_name(entry->key, key)) {
+                    return ESP_ERR_INVALID_ARG;
+                }
+                entry->used = 1;
+                break;
+            }
+        }
+    }
+    if (entry == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    entry->is_blob = 1;
+    entry->blob_len = length;
+    if (length > 0U) {
+        memcpy(entry->blob, value, length);
+    }
+    return ESP_OK;
 }

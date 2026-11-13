@@ -12,6 +12,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #if RTK_GNSS_ENABLED
+#include "core/services/gnss_service.hpp"
+#include "fw/fanout_ring.hpp"
 #include "gnss/types.hpp"
 #endif
 #include "demux/decoders/rtcm3.hpp"
@@ -115,6 +117,10 @@ private:
     void apply_rtcm_reset() noexcept;
 #if RTK_GNSS_ENABLED
     void sync_gnss_info(uint32_t now_ms) noexcept;
+    void reset_gnss_stream_session() noexcept;
+    [[nodiscard]] bool drain_gnss_stream() noexcept;
+    static core::services::GnssQueryResult on_gnss_query(void *ctx, uint16_t msg_id, std::span<uint8_t> dst) noexcept;
+    static void on_gnss_mask(void *ctx, uint32_t mask) noexcept;
 #endif
     void set_alarm(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     void clear_whitelist(fw::CommandResult &result) noexcept;
@@ -135,6 +141,13 @@ private:
     std::optional<core::services::ConfigService> config_service_{};
     std::optional<core::services::AlarmService> alarm_service_{};
     std::optional<core::services::PairService> pair_service_{};
+#if RTK_GNSS_ENABLED
+    std::optional<core::services::GnssService> gnss_service_{};
+    uint8_t gnss_reader_id_ = 0U;
+    bool gnss_reader_attached_ = false;
+    // App 环单条记录上限；跨环尾记录经 spp_server_tx_commit2 两段提交。
+    static constexpr size_t kGnssStreamMaxRecord = kGnssAppRingBytes - fw::kFanoutTypedHeaderBytes;
+#endif
     core::CommandRouter router_{};
     std::optional<core::LinkService> service_{};
     std::array<SessionEntry, kMaxSessions> sessions_{};

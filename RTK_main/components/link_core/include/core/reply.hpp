@@ -64,6 +64,7 @@ struct DeviceInfo {
     int8_t battery_temp_c = 0;
     uint32_t com_baud = kDefaultComBaud;
     uint8_t fix_quality = proto::alarm::kValueUnknown; // GGA 质量（ADR-0010 §2.7），0x40 字节 4；0xFF 未知
+    bool gnss_running = false;                         // 0x02 字节 2：Controller kRunning 为 0x81，否则 0x01（G-C §7）
 };
 
 inline constexpr size_t kWorkModeLen = 48;

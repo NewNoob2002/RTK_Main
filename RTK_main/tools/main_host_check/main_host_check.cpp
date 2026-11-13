@@ -730,6 +730,16 @@ esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t
     s_tx_used[token->slot] += s_tx_hold ? size : 0U;
     return spp_server_write(token->slot + 1U, data, size, 0U);
 }
+esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen, const uint8_t *b,
+                                size_t blen)
+{
+    // 替身按真实语义拼成一条记录后走单段路径，便于逐字节断言。
+    static std::array<uint8_t, SPP_SERVER_STREAM_CAPACITY> joined{};
+    CHECK(alen != 0U && blen != 0U && alen + blen <= joined.size());
+    std::memcpy(joined.data(), a, alen);
+    std::memcpy(joined.data() + alen, b, blen);
+    return spp_server_tx_commit(token, joined.data(), alen + blen);
+}
 void spp_server_tx_cancel(const spp_server_tx_token_t *token)
 {
     CHECK(s_tx_reserved[token->slot]);
@@ -747,6 +757,19 @@ esp_err_t spp_server_push_latest(uint32_t handle, const uint8_t *data, size_t si
 }
 esp_err_t spp_server_stream_bind(uint32_t, bool)
 {
+    return ESP_OK;
+}
+esp_err_t spp_server_stream_reserve(uint32_t handle, size_t len, spp_server_tx_token_t *token)
+{
+    if ((handle < 1U) || (handle > 2U) || (len == 0U) || (len > SPP_SERVER_STREAM_CAPACITY) || (token == nullptr)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const auto index = handle - 1U;
+    if (s_tx_reserved[index]) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_tx_reserved[index] = true;
+    *token = {1U, ++s_tx_serial, static_cast<uint16_t>(len), static_cast<uint8_t>(index), 1U};
     return ESP_OK;
 }
 void spp_server_tx_stats(spp_server_tx_stats_t *stats)
@@ -831,7 +854,7 @@ void credit_window()
     open(2U, kAlarm);
     s_tx_hold = true;
     ModuleTestAccess::last_tick_ms() = s_clock; // 本场景固定时钟，推送时序由其它场景覆盖。
-    constexpr uint16_t kSmallQuery = 4U;        // GGA 占位应答26B，16条连同最坏预留仍小于2048B。
+    constexpr uint16_t kSmallQuery = 6U;        // 卫星跟踪占位应答26B，16条连同最坏预留仍小于2048B。
     for (size_t index = 0; index < 16U; ++index) {
         append(0U, kSmallQuery, proto::sender::kApp, proto::msg_type::kQuery);
     }

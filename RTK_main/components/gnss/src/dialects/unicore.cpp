@@ -413,9 +413,10 @@ bool finish_step(CmdBuf &cmd, bool expect_reply, uint32_t switch_baud, ConfigSte
     return true;
 }
 
+uint32_t caps(Model model) noexcept;
+
 bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
 {
-    (void)model; // Unicore 配置脚本与型号无关
     const char *period = period_for(cfg.rate_hz);
     CmdBuf cmd;
     size_t next = 0;
@@ -437,10 +438,27 @@ bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &o
         return append_message(cmd, "GPGSA", cfg.port, period) && finish_step(cmd, true, 0, out);
     }
     ++next;
+    if (index == next) {
+        // ADR-0010 §2.9：GPGST 与定位同频输出，供 App 0x21 订阅与查询。
+        return append_message(cmd, "GPGST", cfg.port, period) && finish_step(cmd, true, 0, out);
+    }
+    ++next;
+    if (index == next) {
+        // ADR-0010 §2.9：SATSINFOA 固定 1 Hz，避免高速率下长 ASCII 帧占满串口带宽。
+        return append_message(cmd, "SATSINFOA", cfg.port, "1") && finish_step(cmd, true, 0, out);
+    }
+    ++next;
     if (cfg.gsv) {
         if (index == next) {
             // GSV 与定位同频，但至少 1 Hz，避免高速率时刷爆串口。
             return append_message(cmd, "GPGSV", cfg.port, "1") && finish_step(cmd, true, 0, out);
+        }
+        ++next;
+    }
+    if ((caps(model) & cap::kHeading) != 0U) {
+        if (index == next) {
+            // 仅双天线型号（UM982）开启 HEADINGA，不在单天线型号上强开。
+            return append_message(cmd, "HEADINGA", cfg.port, "1") && finish_step(cmd, true, 0, out);
         }
         ++next;
     }

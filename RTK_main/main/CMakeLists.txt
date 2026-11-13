@@ -18,6 +18,7 @@ endif()
 idf_component_register(
     SRCS "app_main.cpp"
          "data/app_data.cpp"
+         "data/gnss_output.cpp"
          "support/console_support.cpp"
          ${module_sources}
     INCLUDE_DIRS "."

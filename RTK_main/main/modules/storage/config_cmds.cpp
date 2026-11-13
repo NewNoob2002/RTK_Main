@@ -76,15 +76,29 @@ void show_group(const StoreGroup &group) noexcept
         return;
     }
     for (const fw::StoreKey &key : group.keys) {
-        uint32_t value = 0U;
-        const esp_err_t err = store::read_value(key, value);
-        std::array<char, 16U> text{};
-        if (err == ESP_OK) {
-            (void)std::snprintf(text.data(), text.size(), "%" PRIu32, value);
-        } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-            (void)std::snprintf(text.data(), text.size(), "default");
+        constexpr size_t kTextBufBytes = 24U;
+        std::array<char, kTextBufBytes> text{};
+        if (key.type == fw::StoreType::kBlob) {
+            std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
+            size_t len = 0U;
+            const esp_err_t err = store::read_blob(key, blob, len);
+            if (err == ESP_OK) {
+                (void)std::snprintf(text.data(), text.size(), "blob(%uB)", static_cast<unsigned>(len));
+            } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+                (void)std::snprintf(text.data(), text.size(), "default");
+            } else {
+                (void)std::snprintf(text.data(), text.size(), "error");
+            }
         } else {
-            (void)std::snprintf(text.data(), text.size(), "error");
+            uint32_t value = 0U;
+            const esp_err_t err = store::read_value(key, value);
+            if (err == ESP_OK) {
+                (void)std::snprintf(text.data(), text.size(), "%" PRIu32, value);
+            } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+                (void)std::snprintf(text.data(), text.size(), "default");
+            } else {
+                (void)std::snprintf(text.data(), text.size(), "error");
+            }
         }
         cli::out_printf("  %-*.*s %-10s  %.*s\n", kNameWidth, static_cast<int>(key.key.size()), key.key.data(),
                         text.data(), static_cast<int>(key.help.size()), key.help.data());
@@ -106,8 +120,8 @@ void show_build() noexcept
     cli::print_kv("console", "UART%d %d baud", CONFIG_RTK_CONSOLE_UART_NUM, CONFIG_RTK_CONSOLE_UART_BAUD);
     cli::print_kv("trace", "%s", FW_TRACE_ENABLED ? "compiled in" : "compiled out");
 #if RTK_GNSS_ENABLED
-    cli::print_kv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", CONFIG_RTK_GNSS_UART_NUM,
-                  CONFIG_RTK_GNSS_RX_GPIO, CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_DEFAULT_BAUD);
+    cli::print_kv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", CONFIG_RTK_GNSS_UART_NUM, CONFIG_RTK_GNSS_RX_GPIO,
+                  CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_DEFAULT_BAUD);
     cli::print_kv("gnss_power", "GPIO%d active %s", CONFIG_RTK_GNSS_POWER_GPIO,
                   (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0) ? "high" : "low");
     cli::print_kv("gnss_port", "COM%d", CONFIG_RTK_GNSS_PORT);

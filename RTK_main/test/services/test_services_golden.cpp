@@ -59,8 +59,8 @@ constexpr uint32_t kDeviceNowMs = 2000;
 constexpr uint32_t kConfigNowMs = 3000;
 constexpr uint32_t kAlarmNowMs = 4000;
 
-// 4 张表合计 15 条路由（设备 7 + 配置 3 + 报警 4 + 配对 1），与旧 is_known_id 的集合一致。
-constexpr size_t kRouteCount = 15;
+// 4 张表合计 13 条路由（设备 5 + 配置 3 + 报警 4 + 配对 1）；0x04/0x05 在 K4 移交 GnssService。
+constexpr size_t kRouteCount = 13;
 
 constexpr SessionHandle kPhoneHandle = 0x81;
 constexpr SessionHandle kAlarmHandle = 0x82;
@@ -192,6 +192,8 @@ struct Harness {
     /** 组装根：4 张路由表 → 1 个路由器（与 main 的组装方式一致）。 */
     fw::Status init_router() noexcept
     {
+        // 旧 dispatcher 的 0x02 固定 GNSS=0x81，对照时按 GNSS 运行态比较。
+        dev.info().gnss_running = true;
         const std::array<RouteTable, 4> tables = {dev.table(), cfg.table(), alarm_svc.table(), pair_svc.table()};
         return router.init(tables);
     }
@@ -333,8 +335,21 @@ void test_msg_id_sweep()
             for (const uint8_t type : kTypes) {
                 for (const PayloadShape &shape : kShapes) {
                     fill_payload(shape);
-                    run_case(harness, role, msg_id, type, s_payload.data(), shape.len, now_ms,
-                             describe(role, msg_id, type, shape.name));
+                    if ((msg_id == kMsgGga) || (msg_id == kMsgSat)) {
+                        proto::FrameView frame{};
+                        frame.msg_id = msg_id;
+                        frame.type = type;
+                        frame.sender = proto::sender::kApp;
+                        frame.payload = std::span<const uint8_t>(s_payload.data(), shape.len);
+                        arm_reply(harness.new_reply);
+                        const DispatchResult res = harness.router.handle(role, frame, now_ms, harness.new_reply);
+                        TEST_ASSERT_EQUAL_UINT8_MESSAGE(static_cast<uint8_t>(DispatchResult::kNoReply),
+                                                        static_cast<uint8_t>(res),
+                                                        describe(role, msg_id, type, shape.name));
+                    } else {
+                        run_case(harness, role, msg_id, type, s_payload.data(), shape.len, now_ms,
+                                 describe(role, msg_id, type, shape.name));
+                    }
                     now_ms += kNowStep;
                     ++cases;
                 }
@@ -352,8 +367,7 @@ void test_device_sequence()
     TEST_ASSERT_TRUE(is_ok(harness.init_router()));
 
     uint32_t now_ms = kDeviceNowMs;
-    constexpr std::array<uint16_t, 7> kIds = {kMsgDevInfo, kMsgDevState, kMsgBattery, kMsgGga,
-                                              kMsgSat,     kMsgSatTrack, kMsgCom};
+    constexpr std::array<uint16_t, 5> kIds = {kMsgDevInfo, kMsgDevState, kMsgBattery, kMsgSatTrack, kMsgCom};
     // 1. 默认值（构造函数默认值必须与旧 dispatcher 相同）。
     for (const uint16_t id : kIds) {
         run_case(harness, Role::kPhone, id, mt::kQuery, s_payload.data(), 0, now_ms,
@@ -585,11 +599,41 @@ extern "C" void setUp(void) {}
 
 extern "C" void tearDown(void) {}
 
+/** 0x02 GNSS 字节随运行态变化：kRunning→0x81，其它→0x01；其余字节与旧 dispatcher 一致。 */
+void test_dev_state_gnss_byte()
+{
+    Harness harness;
+    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
+    proto::FrameView frame{};
+    frame.msg_id = kMsgDevState;
+    frame.type = mt::kQuery;
+    frame.sender = proto::sender::kApp;
+    constexpr size_t kGnssByte = proto::kHeaderLen + 2U;
+    for (const bool running : {true, false}) {
+        harness.dev.info().gnss_running = running;
+        arm_reply(harness.old_reply);
+        const Outcome old_out =
+            observe(harness.old_reply, harness.old_disp.handle(Role::kPhone, frame, kDeviceNowMs, harness.old_reply));
+        arm_reply(harness.new_reply);
+        const Outcome new_out =
+            observe(harness.new_reply, harness.router.handle(Role::kPhone, frame, kDeviceNowMs, harness.new_reply));
+        TEST_ASSERT_EQUAL_UINT(old_out.len, new_out.len);
+        TEST_ASSERT_EQUAL_HEX8(running ? 0x81U : 0x01U, new_out.bytes[kGnssByte]);
+        // 只比较 header+payload，CRC 随 GNSS 字节变化。
+        for (size_t i = 0; i + proto::kCrcLen < new_out.len; ++i) {
+            if (i != kGnssByte) {
+                TEST_ASSERT_EQUAL_HEX8(old_out.bytes[i], new_out.bytes[i]);
+            }
+        }
+    }
+}
+
 int main()
 {
     UNITY_BEGIN();
     RUN_TEST(test_msg_id_sweep);
     RUN_TEST(test_device_sequence);
+    RUN_TEST(test_dev_state_gnss_byte);
     RUN_TEST(test_config_sequence);
     RUN_TEST(test_pair_sequence);
     RUN_TEST(test_alarm_sequence);

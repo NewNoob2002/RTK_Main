@@ -53,12 +53,10 @@ inline DispatchResult reply_ok(Reply &reply, uint16_t msg_id, uint8_t req_type) 
 
 namespace msg_type = proto::msg_type;
 
-// §4 命令 ID（本服务登记的 7 条）。
+// §4 命令 ID（本服务登记的 5 条；0x04/0x05 已移交 GnssService）。
 constexpr uint16_t kIdDevInfo = 0x0001;
 constexpr uint16_t kIdDevState = 0x0002;
 constexpr uint16_t kIdBattery = 0x0003;
-constexpr uint16_t kIdGga = 0x0004;
-constexpr uint16_t kIdSat = 0x0005;
 constexpr uint16_t kIdSatTrack = 0x0006;
 constexpr uint16_t kIdCom = 0x000D;
 
@@ -97,9 +95,16 @@ DispatchResult handle_dev_info(const DeviceInfo &info, const proto::FrameView &f
     return reply_build(reply, frame.msg_id, frame.type, payload);
 }
 
-DispatchResult handle_dev_state(const proto::FrameView &frame, Reply &reply) noexcept
+// 0x02 GNSS 板卡字节偏移与取值（survey_protocol_0530 功能信息 offset 2）。
+constexpr size_t kDevStateGnssOfs = 2;
+constexpr uint8_t kDevStateGnssRunning = 0x81;
+constexpr uint8_t kDevStateGnssPresent = 0x01;
+
+DispatchResult handle_dev_state(const DeviceInfo &info, const proto::FrameView &frame, Reply &reply) noexcept
 {
-    return reply_build(reply, frame.msg_id, frame.type, kDevStatePayload);
+    auto payload = kDevStatePayload;
+    payload[kDevStateGnssOfs] = info.gnss_running ? kDevStateGnssRunning : kDevStateGnssPresent;
+    return reply_build(reply, frame.msg_id, frame.type, payload);
 }
 
 DispatchResult handle_battery(const DeviceInfo &info, const proto::FrameView &frame, Reply &reply) noexcept
@@ -114,12 +119,6 @@ DispatchResult handle_battery(const DeviceInfo &info, const proto::FrameView &fr
     writer.u8(static_cast<uint8_t>(info.battery_temp_c));
     writer.zeros(kBatteryLen - writer.size());
     return reply_build(reply, frame.msg_id, frame.type, payload);
-}
-
-/** 0x04 GGA 与 0x05 卫星：本阶段占位，直接回成功。 */
-DispatchResult handle_ok(const proto::FrameView &frame, Reply &reply) noexcept
-{
-    return reply_ok(reply, frame.msg_id, frame.type);
 }
 
 DispatchResult handle_sat_track(const proto::FrameView &frame, Reply &reply) noexcept
@@ -185,20 +184,16 @@ std::span<const Route> DeviceService::routes() noexcept
             static_cast<void>(now_ms);
             return handle_dev_info(static_cast<DeviceService *>(self)->info(), frame, reply);
         }
-        static DispatchResult dev_state(void *, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult dev_state(void *self, const proto::FrameView &frame, uint32_t now_ms,
+                                        Reply &reply) noexcept
         {
             static_cast<void>(now_ms);
-            return handle_dev_state(frame, reply);
+            return handle_dev_state(static_cast<DeviceService *>(self)->info(), frame, reply);
         }
         static DispatchResult battery(void *self, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
         {
             static_cast<void>(now_ms);
             return handle_battery(static_cast<DeviceService *>(self)->info(), frame, reply);
-        }
-        static DispatchResult placeholder(void *, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
-        {
-            static_cast<void>(now_ms);
-            return handle_ok(frame, reply);
         }
         static DispatchResult sat_track(void *, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
         {
@@ -212,12 +207,10 @@ std::span<const Route> DeviceService::routes() noexcept
         }
     };
 
-    static constexpr std::array<Route, 7> kRoutes = {{
+    static constexpr std::array<Route, 5> kRoutes = {{
         {kIdDevInfo, kRolePhone, &Handlers::dev_info},
         {kIdDevState, kRolePhone, &Handlers::dev_state},
         {kIdBattery, kRolePhone, &Handlers::battery},
-        {kIdGga, kRolePhone, &Handlers::placeholder},
-        {kIdSat, kRolePhone, &Handlers::placeholder},
         {kIdSatTrack, kRolePhone, &Handlers::sat_track},
         {kIdCom, kRolePhone, &Handlers::com},
     }};
