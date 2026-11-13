@@ -55,7 +55,7 @@
 #define SPP_SERVER_TX_CHUNK (512U)
 
 /* 发送任务：静态栈与 TCB。栈单位与 IDF task.h 一致（字节）。 */
-#define SPP_SERVER_WORKER_STACK (4096U)
+#define SPP_SERVER_WORKER_STACK (2560U)
 
 /* 控制表：GAP 应答/无空槽拒绝只登记请求，由发送任务在任务上下文执行可能阻塞投递的 API。
  * 深度只需覆盖同时在途的认证请求；满了只能丢弃并记录（回调里不能等待）。 */

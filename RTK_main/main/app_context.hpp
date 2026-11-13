@@ -12,7 +12,7 @@
 namespace app {
 /** 固件唯一上下文：拥有 DataCenter、全部模块实例与链路/IO 执行器；仅 app_main 创建，非 ISR。 */
 struct AppContext {
-    static constexpr size_t kLinkStackBytes = 6144;
+    static constexpr size_t kLinkStackBytes = 4096;
 #if RTK_GNSS_ENABLED
     static constexpr size_t kIoStackBytes = 4096;
 #endif

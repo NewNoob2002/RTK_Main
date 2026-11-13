@@ -31,7 +31,7 @@ class AsyncTxTransport final : public core::Transport {
 public:
     static constexpr size_t kDepth = 8;
     static constexpr size_t kMaxBytes = DEV_PROTO_MAX_FRAME;
-    static constexpr size_t kStackBytes = 3072;
+    static constexpr size_t kStackBytes = 2048;
 
     constexpr explicit AsyncTxTransport(core::Transport &inner) noexcept : inner_(inner) {}
 

@@ -74,7 +74,7 @@
 `AppContext::kModuleCount` 与成员 `type member{*this};` 均通过 `#include "module_list.inc"` 由 `MODULE_DEF` 自动展开，**常规模块无需改动 `main/app_context.hpp`**。
 
 需要手改 `main/app_context.hpp` 的例外情况：
-- 新模块使链路任务栈需求增大时，调整 `AppContext::kLinkStackBytes`（当前 `6144` 字节）。
+- 新模块使链路任务栈需求增大时，调整 `AppContext::kLinkStackBytes`（当前 `4096` 字节）。
 - 新建了另一个 `ExecKind` 执行器时，需在 `AppContext` 手动添加对应的 `rtos::Executor` 和 `rtos::ExecutorStorage<...>` 成员，并在 `main/app_main.cpp` 中执行其 `init`/`start`。
 
 ### 7. 控制台命令表接入 `main/app_main.cpp`
