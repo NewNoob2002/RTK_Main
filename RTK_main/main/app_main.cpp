@@ -122,7 +122,7 @@ bool enable_power_hold() noexcept
 
 void start_link() noexcept
 {
-    /* 所有模块完成 init 后才允许启动 TX 和链路任务。 */
+    /* 模块 init 已验证 credit 能力；驱动 worker 由 spp_server_init 创建。 */
     const auto initialized = s_app.link_executor.init(kLinkConfig, kModules, rtos::view_of(s_app.link_storage));
     if (initialized != fw::Status::kOk) {
         ESP_LOGE(kTag, "executor init failed: %s", to_string(initialized));
@@ -130,10 +130,6 @@ void start_link() noexcept
     }
     if (!s_app.data.system_status.read().bt_ready) {
         return;
-    }
-    const auto tx_started = s_app.bt_link.start_tx();
-    if (tx_started != fw::Status::kOk) {
-        ESP_LOGE(kTag, "tx task start failed (%s); replies fall back to sync write", to_string(tx_started));
     }
     const auto started = s_app.link_executor.start();
     if (started != fw::Status::kOk) {

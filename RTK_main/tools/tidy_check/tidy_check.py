@@ -50,6 +50,13 @@ C_EXTRA_CHECKS = {
 
 FINDING_RE = re.compile(r"^(.+?):(\d+):(\d+): (warning|error): (.*)$")
 
+# 冻结的 test/host/CMakeLists.txt 不编译 device_proto/demux_frame.cpp（该文件由 t13_host_check 目标链接），
+# 因此它在 host 编译数据库里没有条目，clang-tidy 会退化成无参数解析并误报 demux/decoder.hpp 找不到。
+# 这里按 host_pure 的实际包含路径与语言标准补齐；用绝对路径，因为数据库的 directory 是构建目录。
+HOST_FALLBACK_INCLUDES = ("app_fw", "device_proto", "link_core", "stream_demux")
+HOST_FALLBACK_ARGS = ("-std=gnu++20",
+                     *(f"-I{ROOT / 'components' / name / 'include'}" for name in HOST_FALLBACK_INCLUDES))
+
 
 def sources(*globs):
     out = []
@@ -133,9 +140,11 @@ def main():
         print("ERROR: 找不到 clang-tidy", file=sys.stderr)
         return 2
     host_db = ROOT / args.host_build
-    if not (host_db / "compile_commands.json").is_file():
+    host_cc = host_db / "compile_commands.json"
+    if not host_cc.is_file():
         print(f"ERROR: 缺少 {host_db}/compile_commands.json", file=sys.stderr)
         return 2
+    host_files = {str(Path(e["file"]).resolve()) for e in json.loads(host_cc.read_text())}
 
     jobs = []
     with tempfile.TemporaryDirectory(prefix="rtk-tidy-") as tmp:
@@ -154,7 +163,8 @@ def main():
             return 2
 
         for p in sources("components/device_proto/*.cpp", "components/link_core/*.cpp", "test/host/*.cpp"):
-            jobs.append((p, host_db, False, None, ()))
+            fallback = () if str(p.resolve()) in host_files else HOST_FALLBACK_ARGS
+            jobs.append((p, host_db, False, None, fallback))
         for p in sources("components/device_proto/*.c"):
             jobs.append((p, host_db, True, None, ()))
         for p in sources("test/host/*.c"):

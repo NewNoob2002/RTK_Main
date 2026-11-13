@@ -20,9 +20,11 @@ public:
     static constexpr std::size_t kCount = sizeof...(Ds);
     static_assert(kCount >= 1 && kCount <= kMaxDecoders, "StaticDemux: 解码器数量必须在 1..kMaxDecoders");
     static constexpr std::size_t kBufSize = std::max({Ds.max_frame...});
-    static_assert(kBufSize >= 1 && kBufSize <= 65535U, "StaticDemux: max_frame 必须在 1..65535");
+    static constexpr std::size_t kBufSizeMax = 65535U; // 单缓冲区上限（uint16 长度字段）
+    static_assert(kBufSize >= 1 && kBufSize <= kBufSizeMax, "StaticDemux: max_frame 必须在 1..65535");
 
     constexpr StaticDemux() noexcept = default;
+    ~StaticDemux() = default;
     StaticDemux(const StaticDemux &) = delete;
     StaticDemux &operator=(const StaticDemux &) = delete;
 

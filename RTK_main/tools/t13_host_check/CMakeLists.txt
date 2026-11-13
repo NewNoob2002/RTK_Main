@@ -39,6 +39,7 @@ target_include_directories(spp_server_driver PUBLIC "${SHIM_INC}" "${SPP_SERVER_
 target_include_directories(spp_server_driver PRIVATE "${SPP_SERVER_PRIV_INC}")
 target_link_libraries(spp_server_driver PUBLIC fake_idf)
 target_compile_options(spp_server_driver PRIVATE
+    -fno-builtin-memcpy # 仅 host：K2 通过 --wrap=memcpy 给复制窗口加确定性门闩。
     -Wall -Wextra -Werror -Wshadow -Wimplicit-fallthrough -Wstrict-prototypes)
 
 add_executable(t13_host_check t13_host_check.c)
@@ -84,4 +85,14 @@ set(T13_SCENARIOS
 foreach(scenario IN LISTS T13_SCENARIOS)
     add_test(NAME "t13_${scenario}" COMMAND t13_host_check "${scenario}")
     set_tests_properties("t13_${scenario}" PROPERTIES TIMEOUT 30)
+endforeach()
+
+add_executable(k2_tx_check k2_tx_check.c)
+target_include_directories(k2_tx_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shim" "${SPP_SERVER_PRIV_INC}")
+target_link_libraries(k2_tx_check PRIVATE spp_server_driver)
+target_link_options(k2_tx_check PRIVATE "-Wl,--wrap=memcpy")
+target_compile_options(k2_tx_check PRIVATE -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes)
+foreach(scenario capacity stream_order early_close anonymous short submit_error failure copy_close copy_unbind)
+    add_test(NAME "k2_tx_${scenario}" COMMAND k2_tx_check "${scenario}")
+    set_tests_properties("k2_tx_${scenario}" PROPERTIES TIMEOUT 30)
 endforeach()

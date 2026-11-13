@@ -1,9 +1,7 @@
 // 真实组合根、LinkService/解析器与 SppTransport 的 host 回归；仅替换 IDF/存储/字节传输边界。
-// 虚拟时钟精确注入 200 ms 超时，不以 wall clock 调度噪声代替产品时间预算证据。
+// 虚拟时钟验证非阻塞提交与 RX 预算；驱动事件/并发在 t13 检查真实实现。
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <thread>
+#include <charconv>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -11,18 +9,23 @@
 
 extern "C" {
 #include "esp_err.h"
-#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "freertos/task.h"
 }
 
 #include "app_test_adapter.hpp"
 #include "modules/debug/trace_text.hpp"
 
+// 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
+// NOLINTBEGIN(readability-magic-numbers)
 namespace {
 uint32_t s_clock = 100U;
 uint32_t s_write_delay = 0U;
+std::array<size_t, 2> s_tx_used{};
+std::array<bool, 2> s_tx_reserved{};
+bool s_tx_hold = false;
+uint32_t s_tx_serial = 0;
+uint32_t s_tx_cancels = 0;
 size_t s_write_calls = 0U;
 std::array<uint32_t, 64> s_write_handles{};
 std::array<uint32_t, 64> s_write_timeouts{};
@@ -45,13 +48,21 @@ int s_failures = 0;
 constexpr core::BtAddr kPhone{{1, 2, 3, 4, 5, 6}};
 constexpr core::BtAddr kAlarm{{7, 8, 9, 10, 11, 12}};
 constexpr core::BtAddr kOtherAlarm{{13, 14, 15, 16, 17, 18}};
-#define CHECK(value)                                                                                                   \
-    do {                                                                                                               \
-        if (!(value)) {                                                                                                \
-            std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #value);                                       \
-            ++s_failures;                                                                                              \
-        }                                                                                                              \
-    } while (false)
+void check(bool value, const char *expression, int line)
+{
+    if (!value) {
+        std::array<char, 16> text{};
+        const auto converted = std::to_chars(text.data(), &text.back(), line);
+        *converted.ptr = '\0';
+        std::fputs("FAIL ", stderr);
+        std::fputs(text.data(), stderr);
+        std::fputs(": ", stderr);
+        std::fputs(expression, stderr);
+        std::fputc('\n', stderr);
+        ++s_failures;
+    }
+}
+#define CHECK(value) check((value), #value, __LINE__)
 
 void setup(std::span<const core::BtAddr> whitelist = {}, core::Policy policy = core::Policy::kConcurrent)
 {
@@ -96,9 +107,8 @@ void append(size_t session, uint16_t msg, uint8_t sender, uint8_t type, std::spa
 {
     size_t count = 0U;
     auto &bytes = s_input[session];
-    CHECK(proto::build_frame(
-              std::span<uint8_t>(bytes.data() + s_input_size[session], bytes.size() - s_input_size[session]), msg,
-              sender, type, payload, count) == fw::Status::kOk);
+    CHECK(proto::build_frame(std::span<uint8_t>{bytes}.subspan(s_input_size[session]), msg, sender, type, payload,
+                             count) == fw::Status::kOk);
     s_input_size[session] += count;
 }
 
@@ -247,14 +257,15 @@ void rx_fairness()
     uint32_t tick = s_clock;
     const uint32_t start = s_clock;
     link_round(tick);
-    CHECK(s_write_calls == 1U && s_clock - start == 200U);
+    CHECK(s_write_calls == 1U && s_clock == start);
     CHECK(s_sessions[0].drain_pending && s_sessions[0].rx_offset < s_sessions[0].rx_size);
     Command cmd{};
     cmd.id = CommandId::kAlarmSet;
     cmd.state = 1U;
     cmd.level = 2U;
     CHECK(s_command_queue.send(cmd, 0U));
-    link_round(tick); // tick 优先，ALARM 推送耗尽预算，因此 RX 留在下一轮。
+    s_clock += app::kTickPeriodMs;
+    link_round(tick); // tick 和 ALARM 心跳不再因推送阻塞而推迟。
     CHECK(s_alarm.is_override());
     CHECK(s_write_calls == 2U && s_write_handles[1] == 2U);
     link_round(tick);
@@ -262,7 +273,7 @@ void rx_fairness()
     if (s_service->last_heartbeat().has_value()) {
         CHECK(s_service->last_heartbeat()->seq == 5U);
     }
-    CHECK(s_service->stats().frames_rx == 2U);
+    CHECK(s_service->stats().frames_rx == 3U); // 非阻塞 tick 后下一轮已继续服务 PHONE。
     for (size_t idx = 0U; idx < 16U && s_service->stats().frames_rx < 11U; ++idx) {
         const uint32_t before = s_clock;
         const uint32_t frames = s_service->stats().frames_rx;
@@ -271,7 +282,7 @@ void rx_fairness()
         CHECK(s_service->stats().frames_rx <= frames + 1U);
     }
     CHECK(s_service->stats().frames_rx == 11U);
-    CHECK(s_write_timeouts[0] == core::kWriteTimeoutMs);
+    CHECK(s_write_timeouts[0] == 0U);
 }
 
 void rx_fast_partial()
@@ -331,16 +342,16 @@ void rx_tick_budget()
     uint32_t tick = 0U;
     const uint32_t before = s_clock;
     link_round(tick);
-    CHECK(s_write_calls == 2U && s_clock - before == 400U);
-    CHECK(s_service->stats().frames_rx == 0U && s_sessions[0].drain_pending);
-    CHECK(s_write_timeouts[0] == 200U && s_write_timeouts[1] == 200U);
+    CHECK(s_write_calls == 2U && s_clock == before);
+    CHECK(s_service->stats().frames_rx == 1U && s_service->last_heartbeat().has_value());
+    CHECK(s_write_timeouts[0] == 0U && s_write_timeouts[1] == 0U);
 }
 
 // 自测 oracle 用逐位 CRC，独立于产品的 CRC 查表实现。
 uint32_t crc24_reference(std::span<const uint8_t> wire)
 {
     uint32_t crc = 0;
-    for (uint8_t byte : wire) {
+    for (const uint8_t byte : wire) {
         crc ^= static_cast<uint32_t>(byte) << 16U; // uint8_t 扩展到 uint32_t 无损。
         for (unsigned bit = 0; bit < 8; ++bit) {
             crc = (crc << 1U) ^ ((crc & 0x800000U) != 0U ? 0x1864CFBU : 0U);
@@ -352,7 +363,7 @@ uint32_t crc24_reference(std::span<const uint8_t> wire)
 uint32_t crc32_reference(std::span<const uint8_t> wire, uint32_t initial = 0)
 {
     uint32_t crc = initial ^ UINT32_MAX;
-    for (uint8_t byte : wire) {
+    for (const uint8_t byte : wire) {
         crc ^= byte;
         for (unsigned bit = 0; bit < 8; ++bit) {
             crc = (crc >> 1U) ^ ((crc & 1U) != 0U ? 0xEDB88320U : 0U);
@@ -364,7 +375,7 @@ uint32_t crc32_reference(std::span<const uint8_t> wire, uint32_t initial = 0)
 std::span<const uint8_t> append_rtcm(size_t session, uint16_t message, size_t payload_size = 8)
 {
     CHECK(payload_size >= 2 && payload_size <= 1023);
-    auto wire = std::span{s_input[session]}.subspan(s_input_size[session], payload_size + 6);
+    const auto wire = std::span{s_input[session]}.subspan(s_input_size[session], payload_size + 6);
     wire[0] = 0xD3;
     // 载荷长度 <= 1023，上半部分 <= 3，掩码后的下半部分 <= 255，收窄安全。
     wire[1] = static_cast<uint8_t>(payload_size >> 8U);
@@ -396,7 +407,7 @@ void check_reply(size_t index, uint16_t message)
     proto::FrameParser parser;
     proto::FrameView frame;
     size_t frames = 0;
-    for (uint8_t byte : std::span{s_write_bytes[index]}.first(s_write_sizes[index])) {
+    for (const uint8_t byte : std::span{s_write_bytes[index]}.first(s_write_sizes[index])) {
         if (parser.feed(byte, frame) == proto::ParseResult::kFrame) {
             ++frames;
             CHECK(frame.msg_id == message);
@@ -512,7 +523,7 @@ void rtcm_reset_lifecycle()
     append(0, 1, 0, proto::msg_type::kQuery);
     const size_t bad_size = s_input_size[0] - bad_begin;
     CHECK(crc32_reference(std::span{s_input[0]}.subspan(bad_begin, bad_size - proto::kCrcLen)) != 0);
-    auto bad_crc = std::span{s_input[0]}.subspan(s_input_size[0] - proto::kCrcLen, proto::kCrcLen);
+    const auto bad_crc = std::span{s_input[0]}.subspan(s_input_size[0] - proto::kCrcLen, proto::kCrcLen);
     std::fill(bad_crc.begin(), bad_crc.end(), 0);
     const auto wire = append_rtcm(0, 1005);
     const size_t full = s_input_size[0];
@@ -674,7 +685,7 @@ size_t spp_server_read(uint32_t handle, uint8_t *bytes, size_t capacity)
     const size_t idx = handle - 1U;
     const size_t available = s_input_size[idx] - s_input_offset[idx];
     const size_t count = (available < capacity) ? available : capacity;
-    std::memcpy(bytes, s_input[idx].data() + s_input_offset[idx], count);
+    std::memcpy(bytes, std::span<const uint8_t>{s_input[idx]}.subspan(s_input_offset[idx]).data(), count);
     s_input_offset[idx] += count;
     s_clock += s_read_delay;
     return count;
@@ -690,9 +701,53 @@ esp_err_t spp_server_write(uint32_t handle, const uint8_t *bytes, size_t size, u
     s_write_handles[s_write_calls] = handle;
     s_store_at_write[s_write_calls] = s_store_calls;
     s_write_timeouts[s_write_calls++] = timeout;
-    CHECK(timeout == 200U);
-    s_clock += s_write_delay;
-    return s_write_delay ? ESP_ERR_TIMEOUT : ESP_OK;
+    CHECK(timeout == 0U || timeout == 200U);
+    s_clock += (timeout == 0U) ? 0U : s_write_delay;
+    return (timeout != 0U && s_write_delay != 0U) ? ESP_ERR_TIMEOUT : ESP_OK;
+}
+esp_err_t spp_server_reply_reserve(uint32_t handle, spp_server_tx_token_t *token)
+{
+    if (handle < 1U || handle > 2U) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    const auto index = handle - 1U;
+    if (s_tx_reserved[index] || s_tx_used[index] + SPP_SERVER_REPLY_RESERVE > SPP_SERVER_REPLY_CAPACITY) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_tx_reserved[index] = true;
+    // 两槽索引<=1，收窄安全。
+    *token = {1U, ++s_tx_serial, SPP_SERVER_REPLY_RESERVE, static_cast<uint8_t>(index), 0U};
+    return ESP_OK;
+}
+esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t size)
+{
+    CHECK(s_tx_reserved[token->slot] && size <= token->capacity);
+    s_tx_reserved[token->slot] = false;
+    s_tx_used[token->slot] += s_tx_hold ? size : 0U;
+    return spp_server_write(token->slot + 1U, data, size, 0U);
+}
+void spp_server_tx_cancel(const spp_server_tx_token_t *token)
+{
+    CHECK(s_tx_reserved[token->slot]);
+    s_tx_reserved[token->slot] = false;
+    ++s_tx_cancels;
+}
+bool spp_server_reply_ready(uint32_t handle)
+{
+    return handle >= 1U && handle <= 2U && !s_tx_reserved[handle - 1U] &&
+           s_tx_used[handle - 1U] + SPP_SERVER_REPLY_RESERVE <= SPP_SERVER_REPLY_CAPACITY;
+}
+esp_err_t spp_server_push_latest(uint32_t handle, const uint8_t *data, size_t size)
+{
+    return spp_server_write(handle, data, size, 0U);
+}
+esp_err_t spp_server_stream_bind(uint32_t, bool)
+{
+    return ESP_OK;
+}
+void spp_server_tx_stats(spp_server_tx_stats_t *stats)
+{
+    *stats = {};
 }
 esp_err_t spp_server_disconnect(uint32_t)
 {
@@ -706,7 +761,11 @@ esp_err_t nvs_store_init(void)
 }
 esp_err_t nvs_store_get_sn(char *out, size_t size)
 {
-    std::snprintf(out, size, "%s", "TEST");
+    constexpr char kSerial[] = "TEST";
+    if (size < sizeof(kSerial)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    std::memcpy(out, std::data(kSerial), sizeof(kSerial));
     return ESP_OK;
 }
 esp_err_t nvs_store_set_sn(const char *)
@@ -718,8 +777,11 @@ esp_err_t nvs_store_set_alarms(const uint8_t (*alarms)[NVS_STORE_ADDR_LEN], size
     ++s_store_calls;
     if (s_store_result == ESP_OK) {
         s_saved_count = count;
+        const std::span rows{alarms, count};
         for (size_t idx = 0U; idx < count; ++idx) {
-            std::memcpy(s_saved[idx].data(), alarms[idx], NVS_STORE_ADDR_LEN);
+            // C ABI 二维数组行交给 memcpy，长度固定为 NVS_STORE_ADDR_LEN。
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+            std::memcpy(s_saved[idx].data(), rows[idx], NVS_STORE_ADDR_LEN);
         }
     }
     return s_store_result;
@@ -731,69 +793,70 @@ esp_err_t nvs_store_get_alarms(uint8_t (*)[NVS_STORE_ADDR_LEN], size_t, size_t *
 }
 }
 
-// 异步发送装饰器：未启动时同步直通；启动后入队即返回、FIFO、满队列 kBusy、底层失败计数。
-class GateTransport final : public core::Transport {
-public:
-    fw::Status write(core::SessionHandle handle, std::span<const uint8_t> data, uint32_t timeout_ms) noexcept override
-    {
-        entered.store(true);
-        while (!open.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        CHECK(timeout_ms == 200U && data.size() == 1U);
-        order[count.load()] = data[0];
-        count.fetch_add(1U);
-        return (handle == 0xDEADU) ? fw::Status::kTimeout : fw::Status::kOk;
-    }
-    fw::Status disconnect(core::SessionHandle) noexcept override
-    {
-        return fw::Status::kOk;
-    }
-    std::atomic<bool> entered{false};
-    std::atomic<bool> open{true};
-    std::atomic<uint32_t> count{0};
-    std::array<uint8_t, 32> order{};
-};
-
-void async_tx()
+// 真实 LinkService + SppTransport：16 请求跨过旧8项队列，满时保留尾帧并只暂停 PHONE。
+void credit_window()
 {
-    static GateTransport inner;
-    static app::AsyncTxTransport tx{inner};
-    const std::array<uint8_t, 1> first{0};
-    CHECK(tx.write(1U, first, 200U) == fw::Status::kOk && inner.count.load() == 1U); // 未启动：同步
-    inner.open.store(false);
-    inner.entered.store(false);
-    CHECK(tx.start(1U, 0) == fw::Status::kOk && tx.start(1U, 0) == fw::Status::kBusy);
-    const std::array<uint8_t, 1> one{1};
-    CHECK(tx.write(1U, one, 200U) == fw::Status::kOk);
-    while (!inner.entered.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    using namespace app;
+    const std::array whitelist{kAlarm};
+    setup(whitelist);
+    open(1U, kPhone);
+    open(2U, kAlarm);
+    s_tx_hold = true;
+    ModuleTestAccess::last_tick_ms() = s_clock; // 本场景固定时钟，推送时序由其它场景覆盖。
+    constexpr uint16_t kSmallQuery = 4U;        // GGA 占位应答26B，16条连同最坏预留仍小于2048B。
+    for (size_t index = 0; index < 16U; ++index) {
+        append(0U, kSmallQuery, proto::sender::kApp, proto::msg_type::kQuery);
     }
-    // 发送任务卡在底层 write 内：再入 kDepth 条成功，下一条满。
-    for (uint8_t i = 0; i < app::AsyncTxTransport::kDepth; ++i) {
-        const std::array<uint8_t, 1> b{static_cast<uint8_t>(2U + i)};
-        CHECK(tx.write((i == 0U) ? 0xDEADU : 1U, b, 200U) == fw::Status::kOk);
+    dirty(0U);
+    const auto round = [] {
+        app_context().bt_link.wait(0U); // 交付生命周期/接收通知，不推进假时钟。
+        static_cast<void>(app_context().bt_link.poll(s_clock));
+    };
+    const uint32_t start = s_clock;
+    for (size_t index = 0; index < 20U; ++index) {
+        round();
     }
-    const std::array<uint8_t, 1> overflow{99};
-    CHECK(tx.write(1U, overflow, 200U) == fw::Status::kBusy);
-    CHECK(tx.write(1U, std::span<const uint8_t>{}, 200U) == fw::Status::kInvalidArg);
-    inner.open.store(true);
-    const uint32_t total = 2U + app::AsyncTxTransport::kDepth;
-    for (int spin = 0; spin < 2000 && inner.count.load() < total; ++spin) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CHECK(s_clock == start && s_write_calls == 16U && s_service->stats().frames_rx == 16U);
+    CHECK(s_tx_used[0] < SPP_SERVER_REPLY_CAPACITY && !s_service->paused(1U));
+    // 模拟另一生产者已占满容量；不得消费后续 RX 或重复路由完整 pending 帧。
+    s_tx_used[0] = SPP_SERVER_REPLY_CAPACITY;
+    append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    const std::array<uint8_t, 8> heartbeat{5, 0, 80, 0, 0, 0, 0, 0};
+    append(1U, proto::alarm::kMsgHeartbeat, proto::sender::kAlarm, proto::msg_type::kPush, heartbeat);
+    dirty(0U);
+    dirty(1U);
+    round();
+    round(); // 全局每轮只分发一条产品帧：先服务 ALARM 后再触达 PHONE 的满窗口。
+    CHECK(s_service->paused(1U) && s_write_calls == 16U);
+    const size_t offset = s_input_offset[0];
+    round();
+    CHECK(s_service->last_heartbeat().has_value() && !s_tx_reserved[1] && s_tx_cancels == 1U);
+    CHECK(s_input_offset[0] == offset && s_service->paused(1U));
+    for (size_t index = 0; index < 3U; ++index) {
+        round();
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    CHECK(inner.count.load() == total);
-    for (uint32_t i = 0; i < total; ++i) {
-        CHECK(inner.order[i] == i);
-    }
-    const auto st = tx.stats();
-    CHECK(st.sent == total - 2U && st.failed == 1U && st.queue_full == 1U &&
-          st.max_depth >= app::AsyncTxTransport::kDepth);
+    CHECK(s_write_calls == 16U && s_input_offset[0] == offset);
+    // 即使不发送 TX_SPACE，睡眠前重查 level 仍会恢复，且每个请求恰好一次。
+    s_tx_used[0] = 0;
+    round();
+    round();
+    CHECK(!s_service->paused(1U) && s_write_calls == 18U);
+    s_tx_used[0] = SPP_SERVER_REPLY_CAPACITY;
+    append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    dirty(0U);
+    round();
+    CHECK(s_service->paused(1U));
+    event(SPP_SERVER_EVT_CLOSE, 1U);
+    s_tx_used[0] = 0;
+    round();
+    CHECK(!s_service->paused(1U) && s_write_calls == 18U && s_service->stats().dispatch_cancelled == 1U);
 }
 
-int main(int argc, char **argv)
+int main(int argc, const char **raw_args)
 {
+    const std::span<const char *> argv{raw_args, static_cast<size_t>(argc)}; // argc>=0，转换不丢失。
     if (argc != 2) {
         return 2;
     }
@@ -818,8 +881,8 @@ int main(int argc, char **argv)
         save_recovery();
     } else if (std::strcmp(argv[1], "storage_backoff") == 0) {
         storage_backoff();
-    } else if (std::strcmp(argv[1], "async_tx") == 0) {
-        async_tx();
+    } else if (std::strcmp(argv[1], "credit_window") == 0) {
+        credit_window();
     } else if (std::strcmp(argv[1], "rx_fairness") == 0) {
         rx_fairness();
     } else if (std::strcmp(argv[1], "rx_fast_partial") == 0) {
@@ -841,6 +904,8 @@ int main(int argc, char **argv)
     } else {
         return 2;
     }
-    std::printf("%s %s\n", s_failures ? "FAIL" : "PASS", argv[1]);
+    std::fputs(s_failures ? "FAIL " : "PASS ", stdout);
+    std::puts(argv[1]);
     return s_failures ? 1 : 0;
 }
+// NOLINTEND(readability-magic-numbers)

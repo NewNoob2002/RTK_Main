@@ -6,11 +6,8 @@
  *   不调用任何可能阻塞投递的 API。esp_spp_write / esp_spp_disconnect / esp_spp_start_srv 都经
  *   btc_transfer_context → btc_task_post(OSI_THREAD_MAX_TIMEOUT)（IDF btc_task.c:366），
  *   后者阻塞在 xQueueSend(portMAX_DELAY)，在回调里调用会把 BTC 任务自己锁死。
- * - 发送任务 spp_server_worker（静态创建、绑核 0）：进程内唯一调用 esp_spp_write 的位置，
- *   每次只提交一个分块并等待该分块的真实 WRITE_EVT，因此相邻两次 spp_server_write 不会把
- *   请求堆进 IDF 每会话深度 10 的 TX 队列；提交动作在任务里做，调用方只会阻塞在有界等待上。
- *   全驱动同一时刻至多一个未完成的 IDF 提交（s_spp_tx_inflight），因此 handle=0/len=-1 的匿名
- *   提交错误可以唯一归属；完成事件会非阻塞唤醒该任务继续提交其他会话的排队请求。
+ * - 发送任务是唯一 SDK write/disconnect 调用者；最多4个在途块，跨会话轮转。
+ *   API 前绑定描述符，API 返回前由 users 固定源区。匿名失败只请求候选会话断开。
  *   该任务还处理静态控制表：GAP 的 PIN/CFM 应答与“无安全空槽”的断开请求都从任务上下文执行
  *   （这些 API 经 btc_transfer_context 投递，回调里调用会阻塞 BTC 任务）。
  * - 链路任务（poll_event/read/write/disconnect 的调用者）：单一所有者；read/write 期间登记
@@ -32,7 +29,8 @@
 #error "spp_server 需要 32 位 tick（configUSE_16_BIT_TICKS 必须为 0）"
 #endif
 
-#include <assert.h> /* C11 static_assert 宏来源 */
+/* C11 的 static_assert 由此头定义；clangd 把私有 .h 视为 C++ 时也须保留。 */
+#include <assert.h> // IWYU pragma: keep
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -50,9 +48,17 @@
 
 #define SPP_SERVER_TAG "spp_server"
 
-/* 单次交给 esp_spp_write 的最大字节数。公共接口不限制 len，write() 按此值分块，
- * 因此固定提交缓冲不会无声缩小可接受长度。 */
+/* 同步兼容 write 的分块预算；worker 的聚合块另为1024B。 */
 #define SPP_SERVER_TX_CHUNK (512U)
+/* IDF v6.1 components/bt/host/bluedroid/btc/profile/std/spp/btc_spp.c:37，升级需复核。 */
+#define SPP_SERVER_SDK_QUEUE_SIZE    (10U)
+#define SPP_SERVER_TX_PAYLOAD_BUDGET (9216U)
+static_assert(SPP_SERVER_INFLIGHT_MAX <= 4U, "全局/每会话至多4个在途");
+static_assert(SPP_SERVER_INFLIGHT_MAX < SPP_SERVER_SDK_QUEUE_SIZE, "不得填满 SDK slot 队列");
+static_assert(SPP_SERVER_REPLY_CAPACITY * SPP_SERVER_MAX_SESSIONS + SPP_SERVER_STREAM_CAPACITY +
+                      SPP_SERVER_MERGE_CAPACITY ==
+                  SPP_SERVER_TX_PAYLOAD_BUDGET,
+              "TX payload 预算");
 
 /* 发送任务：静态栈与 TCB。栈单位与 IDF task.h 一致（字节）。 */
 #define SPP_SERVER_WORKER_STACK (2560U)
@@ -62,9 +68,9 @@
 #define SPP_SERVER_CTRL_MAX      (4U)
 #define SPP_SERVER_CTRL_RETRY_MS (100U)
 
-/* 每槽至多 OPEN/DATA/RX_DROP/CLOSE 各一个；CLOSE 交付前禁止复用。
- * 上界来自接纳背压，不依赖应用持续 poll 或物理连接数限制重连次数。 */
-static_assert(SPP_SERVER_EVENT_QUEUE_LEN >= (4U * SPP_SERVER_MAX_SESSIONS), "事件队列不足");
+/* OPEN/CLOSE/DATA/RX_DROP/TX_SPACE 五类通知；队列满时 TX level 仍由 poll_event 重查。 */
+#define SPP_SERVER_NOTICES_PER_SESSION (5U)
+static_assert(SPP_SERVER_EVENT_QUEUE_LEN >= (SPP_SERVER_NOTICES_PER_SESSION * SPP_SERVER_MAX_SESSIONS), "事件队列不足");
 
 /* 事件位：低 2 位为每会话唤醒位，其余为初始化阶段完成位。 */
 #define SPP_SERVER_BIT_WAKE(idx)   ((EventBits_t)(1UL << (idx)))
@@ -76,12 +82,28 @@ static_assert(sizeof(TickType_t) == 4U, "spp_server 假定 32 位 TickType_t");
 static_assert(SPP_SERVER_TX_CHUNK <= UINT16_MAX, "tx_len 以 uint16_t 保存分块长度");
 static_assert(SPP_SERVER_MAX_SESSIONS <= 8U, "唤醒位只有低 8 位可用");
 
-typedef enum {
-    SPP_SERVER_TX_IDLE = 0,  /* 无在途请求，可接受下一次提交 */
-    SPP_SERVER_TX_RESERVED,  /* 写者已认领 tx_buf，正在复制数据 */
-    SPP_SERVER_TX_QUEUED,    /* 写者已填好 tx_buf，等发送任务提交 */
-    SPP_SERVER_TX_SUBMITTED, /* 发送任务已调用 esp_spp_write，等 WRITE_EVT */
-} spp_server_tx_state_t;
+typedef struct {
+    uint16_t head;
+    uint16_t used;
+    uint16_t issued;
+    uint16_t reserved;
+    uint32_t serial;
+    bool copying;
+} spp_server_ring_t;
+
+typedef struct {
+    bool active;
+    bool submitting;
+    bool done;
+    uint8_t slot;
+    uint8_t channel; /* 0 reply、1 stream、2 push */
+    uint16_t len;
+    uint32_t generation;
+    uint32_t handle;
+    uint32_t order;
+    esp_err_t result;
+    TickType_t tick;
+} spp_server_inflight_t;
 
 typedef struct {
     bool in_use;
@@ -101,15 +123,16 @@ typedef struct {
     uint8_t idx;
     /* 已登记到该槽的读者/写者数量；>0 时禁止复用槽，也禁止 xStreamBufferReset。 */
     uint32_t users;
-    bool tx_submitting; /* 发送任务正处于 esp_spp_write 调用中 */
-    spp_server_tx_state_t tx_state;
-    uint32_t tx_seq;           /* 每提交一次 +1，用于匹配完成事件 */
-    uint32_t tx_done_seq;      /* 最近一次完成的序号 */
-    esp_err_t tx_result;       /* 最近一次完成的错误码 */
-    uint16_t tx_len;           /* 本次提交长度（≤ SPP_SERVER_TX_CHUNK） */
-    int tx_done_len;           /* WRITE_EVT 回报长度（诊断用） */
-    TickType_t tx_submit_tick; /* esp_spp_write 提交时刻，仅用于追踪耗时 */
-    uint8_t tx_buf[SPP_SERVER_TX_CHUNK];
+    uint32_t generation;
+    spp_server_ring_t reply;
+    uint8_t reply_buf[SPP_SERVER_REPLY_CAPACITY];
+    uint8_t push[SPP_SERVER_PUSH_CAPACITY];
+    uint16_t push_len;
+    bool tx_space; /* level 改变通知，poll_event 原子取走 */
+    uint32_t tx_total;
+    uint32_t tx_done;
+    uint32_t tx_errors;
+    esp_err_t tx_result;
     StreamBufferHandle_t rx;
     StaticStreamBuffer_t rx_struct;
     uint8_t rx_storage[SPP_SERVER_RX_BUF_SIZE];
@@ -168,20 +191,25 @@ typedef struct {
     esp_spp_status_t init_status;
     esp_spp_status_t start_status;
     bool initialized;
-    bool tx_inflight_cancelled; /* 当前在途提交期间会话被 CLOSE 取消，含义见 s_spp_tx_inflight */
+    spp_server_inflight_t inflight[SPP_SERVER_INFLIGHT_MAX];
+    spp_server_ring_t stream;
+    uint8_t stream_buf[SPP_SERVER_STREAM_CAPACITY];
+    uint8_t stream_ends[SPP_SERVER_STREAM_CAPACITY / 8U]; /* 每字节一个句末位，无记录数隐藏上限 */
+    uint8_t merge[SPP_SERVER_MERGE_CAPACITY];
+    uint8_t stream_owner; /* slot+1；0 为无 owner，避免非零初值搬到 .data */
+    bool stream_unbind;
+    bool stream_active;
+    uint8_t tx_cursor;
+    uint32_t tx_order;
+    spp_server_tx_stats_t tx_stats;
+    /* 回调无阻塞唤醒 poll_event，level 另由每槽 tx_space 保存。 */
+    bool tx_wake_pending;
 } spp_server_state_t;
 
 extern spp_server_state_t s_spp;
 
-/* 以下两项初值非零，单独定义：放进 s_spp 会让整个 14 KB 结构落入 .data，镜像多一份初值拷贝。 */
-/* 保护 s_spp 的可变字段与 s_spp_tx_inflight；不可重入，临界区内不调用 FreeRTOS API。
- * IDF 的“未加锁”值不是全零（spinlock.h SPINLOCK_FREE），必须用初始化宏。 */
+/* 保护所有驱动状态；临界区内不调用 RTOS/SDK。 */
 extern portMUX_TYPE s_spp_mux;
-/* 全驱动至多一个未完成的 IDF 提交：值为会话下标，-1 表示空闲。
- * 这样 handle=0/len=-1 的匿名提交错误只有唯一归属。
- * s_spp.tx_inflight_cancelled=true 表示该提交期间会话被 CLOSE 取消；要等 worker 从 esp_spp_write 返回
- * （静态 tx_buf 不再被 API 使用）后才释放 owner，避免取消后仍复用缓冲/误归属。 */
-extern int s_spp_tx_inflight;
 
 /* ---- 追踪钩子（ADR-0009；spp_server.h 冻结接口 spp_server_set_trace_hook 的存储） ---- */
 
@@ -236,6 +264,11 @@ void spp_server_handle_data(esp_spp_cb_param_t *param);
 /* spp_server_tx.c：发送任务的入口与 WRITE_EVT 结算（后者在 BTC 回调线程）。 */
 void spp_server_worker(void *arg);
 void spp_server_handle_write(esp_spp_cb_param_t *param);
+/* 以下 locked 仅在 mux 内调用；reclaim 在 users 归零后解绑唯一 stream。 */
+void spp_server_tx_close_locked(spp_server_session_t *session);
+void spp_server_tx_reclaim_locked(spp_server_session_t *session);
+/* 任意任务/BTC、非 ISR；锁外合并投递 TX_SPACE 并唤醒 worker。 */
+void spp_server_tx_wake(void);
 
 /* spp_server_gap.c：两个 Bluedroid 回调的注册入口（BTC 回调线程调用）。 */
 void spp_server_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);

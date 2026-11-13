@@ -14,10 +14,9 @@
 
 #define SPP_SERVER_PIN_LEN (4U)
 
-/* 全部跨文件共享状态的唯一定义点。s_spp 零初始化（.bss）；初值非零的两项单独定义。 */
+/* 全部跨文件共享状态的唯一定义点；payload 留在 .bss。 */
 spp_server_state_t s_spp;
 portMUX_TYPE s_spp_mux = portMUX_INITIALIZER_UNLOCKED;
-int s_spp_tx_inflight = -1;
 
 /* 回调上下文使用：只查表，不登记 users（BTC 是 StreamBuffer 的唯一写者）。 */
 spp_server_session_t *spp_server_session_find(uint32_t handle)
@@ -63,6 +62,7 @@ void spp_server_session_release(spp_server_session_t *session)
     if (session->users > 0U) {
         session->users--;
     }
+    spp_server_tx_reclaim_locked(session);
     taskEXIT_CRITICAL(&s_spp_mux);
 }
 
@@ -83,19 +83,18 @@ spp_server_session_t *spp_server_session_alloc(uint32_t handle, const uint8_t *a
         }
     }
     for (idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-        if ((s_spp.sessions[idx].lifecycle_pending || s_spp.sessions[idx].disconnect_submitting) &&
+        if ((s_spp.sessions[idx].lifecycle_pending || s_spp.sessions[idx].disconnect_submitting ||
+             (s_spp.sessions[idx].users != 0U)) &&
             (s_spp.sessions[idx].handle == handle)) {
             taskEXIT_CRITICAL(&s_spp_mux);
             return NULL;
         }
     }
     for (idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-        /* 该槽还有 IDF 在途提交（含 CLOSE 取消、等 worker 从 API 返回）时不可复用，
-         * 避免静态 tx_buf/迟到事件污染新会话。 */
+        /* CLOSE 取消在途，API/copy 尚未返回时 users 保留源区。 */
         if ((!s_spp.sessions[idx].in_use) && (!s_spp.sessions[idx].reserving) &&
             (!s_spp.sessions[idx].lifecycle_pending) && (!s_spp.sessions[idx].disconnect_submitting) &&
-            (s_spp.sessions[idx].users == 0U) && (!s_spp.sessions[idx].tx_submitting) &&
-            (s_spp.sessions[idx].tx_state == SPP_SERVER_TX_IDLE) && (s_spp_tx_inflight != (int)idx)) {
+            (s_spp.sessions[idx].users == 0U)) {
             s_spp.sessions[idx].reserving = true;
             slot = &s_spp.sessions[idx];
             break;
@@ -121,13 +120,14 @@ spp_server_session_t *spp_server_session_alloc(uint32_t handle, const uint8_t *a
         slot->addr[byte] = addr[byte];
     }
     slot->congested = false;
-    slot->tx_submitting = false;
-    slot->tx_state = SPP_SERVER_TX_IDLE;
-    slot->tx_seq = 0U;
-    slot->tx_done_seq = 0U;
+    slot->generation++;
+    memset(&slot->reply, 0, sizeof(slot->reply));
+    slot->push_len = 0U;
+    slot->tx_space = false;
+    slot->tx_total = 0U;
+    slot->tx_done = 0U;
+    slot->tx_errors = 0U;
     slot->tx_result = ESP_OK;
-    slot->tx_len = 0U;
-    slot->tx_done_len = 0;
     slot->users = 0U;
     /* idx < SPP_SERVER_MAX_SESSIONS(=2)，uint8_t 窄化安全 */
     slot->idx = (uint8_t)idx;
@@ -149,7 +149,6 @@ spp_server_session_t *spp_server_session_alloc(uint32_t handle, const uint8_t *a
 bool spp_server_session_free(uint32_t handle)
 {
     bool found = false;
-    bool release_owner = false;
     uint8_t idx = 0U;
 
     taskENTER_CRITICAL(&s_spp_mux);
@@ -158,23 +157,7 @@ bool spp_server_session_free(uint32_t handle)
             s_spp.sessions[idx].in_use = false;
             s_spp.sessions[idx].disconnect_pending = false;
             s_spp.sessions[idx].congested = false;
-            /* 让还在等的写者立刻拿到 INVALID_STATE。 */
-            s_spp.sessions[idx].tx_state = SPP_SERVER_TX_IDLE;
-            s_spp.sessions[idx].tx_result = ESP_ERR_INVALID_STATE;
-            s_spp.sessions[idx].tx_done_seq = s_spp.sessions[idx].tx_seq;
-            /* CLOSE 就是取消完成：IDF 在 CB 模式 CLOSE 时清空未完成 TX，不逐条合成 WRITE
-             * （btc_spp.c:1188-1204 → spp_free_slot → :277-298 → :121-124）。
-             * worker 已不在 esp_spp_write 内时立即释放 owner；仍在调用中则只标记取消，
-             * 等该调用返回（静态 tx_buf 不再被使用）再由 worker 释放。 */
-            if (s_spp_tx_inflight == (int)idx) {
-                if (s_spp.sessions[idx].tx_submitting) {
-                    s_spp.tx_inflight_cancelled = true;
-                } else {
-                    s_spp_tx_inflight = -1;
-                    s_spp.tx_inflight_cancelled = false;
-                    release_owner = true;
-                }
-            }
+            spp_server_tx_close_locked(&s_spp.sessions[idx]);
             found = true;
             break;
         }
@@ -184,9 +167,8 @@ bool spp_server_session_free(uint32_t handle)
     if (found && (s_spp.rtos.evt_group != NULL)) {
         (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_WAKE(idx));
     }
-    /* owner 释放后唤醒 worker，提交其他会话的排队请求（循环只按通知重新扫描）。 */
-    if (release_owner && (s_spp.rtos.worker != NULL)) {
-        (void)xTaskNotifyGive(s_spp.rtos.worker);
+    if (found) {
+        spp_server_tx_wake();
     }
     return found;
 }
@@ -202,6 +184,10 @@ void spp_server_session_set_congested(uint32_t handle, bool congested)
         if (s_spp.sessions[idx].in_use && (s_spp.sessions[idx].handle == handle)) {
             changed = (s_spp.sessions[idx].congested != congested);
             s_spp.sessions[idx].congested = congested;
+            s_spp.sessions[idx].tx_space = true;
+            if (changed && congested) {
+                s_spp.tx_stats.cong++;
+            }
             found = true;
             break;
         }
@@ -212,8 +198,8 @@ void spp_server_session_set_congested(uint32_t handle, bool congested)
     if (found && changed) {
         spp_server_trace(SPP_SERVER_TRACE_CONG, handle, congested ? 1U : 0U, 0U);
     }
-    if (found && (s_spp.rtos.evt_group != NULL)) {
-        (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_WAKE(idx));
+    if (found) {
+        spp_server_tx_wake();
     }
 }
 

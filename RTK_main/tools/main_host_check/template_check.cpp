@@ -22,6 +22,8 @@ AppContext &app_context() noexcept
 }
 } // namespace app
 
+// 测试向量直接表达时刻、指令号与预期值，便于对照生命周期断言。
+// NOLINTBEGIN(readability-magic-numbers)
 namespace {
 constexpr fw::ModuleId kTemplateId = 10U;
 constexpr size_t kBitsPerByte = 8U;
@@ -34,20 +36,24 @@ uint32_t s_round_limit = 1U;
 uint32_t s_rounds = 0U;
 bool s_pump_receive = false;
 std::jmp_buf s_return{};
-#define CHECK(value)                                                                                                   \
-    do {                                                                                                               \
-        if (!(value)) {                                                                                                \
-            std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #value);                                                   \
-            ++s_failures;                                                                                              \
-        }                                                                                                              \
-    } while (false)
+void check(bool value, const char *expression)
+{
+    if (!value) {
+        std::fputs("FAIL ", stderr);
+        std::fputs(expression, stderr);
+        std::fputc('\n', stderr);
+        ++s_failures;
+    }
+}
+#define CHECK(value) check((value), #value)
 
 void pump()
 {
     const TaskHandle_t previous = s_current;
     s_current = s_created;
     s_rounds = 0U;
-    if (setjmp(s_return) == 0) {
+    if (setjmp(s_return) == 0) { // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay) -- setjmp C
+        // ABI，测试用来结束执行器无限循环。
         s_created->fn(s_created->arg);
     }
     s_current = previous;
@@ -128,14 +134,14 @@ void test_lifecycle()
     bad_len.arg_len = 2U;
     CHECK(ctx.link_executor.call(bad_len, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
 
-    fw::Command reset_bad{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 1U};
+    const fw::Command reset_bad{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 1U};
     CHECK(ctx.link_executor.call(reset_bad, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
 
-    fw::Command reset_ok{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 0U};
+    const fw::Command reset_ok{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 0U};
     CHECK(ctx.link_executor.call(reset_ok, res, 100U) == fw::Result::kOk && res.status == fw::Result::kOk);
     CHECK(tmpl.state().ticks == 0U);
 
-    fw::Command bad_verb{.target = kTemplateId, .verb = 99U};
+    const fw::Command bad_verb{.target = kTemplateId, .verb = 99U};
     CHECK(ctx.link_executor.call(bad_verb, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
 }
 
@@ -156,25 +162,25 @@ void test_commands_before_exec()
     CHECK(verbs.size() == 2U && std::strcmp(verbs[0].name, "status") == 0 && std::strcmp(verbs[1].name, "limit") == 0);
     const auto fn = cmds[0].handler;
 
-    char prog[] = "tmpl";
-    char sub_status[] = "status";
-    char sub_limit[] = "limit";
-    char sub_bad[] = "bogus";
-    char arg_zero[] = "0";
-    char arg_over[] = "60001";
-    char arg_nan[] = "abc";
-    char arg_ok[] = "2500";
+    auto prog = std::to_array("tmpl");
+    auto sub_status = std::to_array("status");
+    auto sub_limit = std::to_array("limit");
+    auto sub_bad = std::to_array("bogus");
+    auto arg_zero = std::to_array("0");
+    auto arg_over = std::to_array("60001");
+    auto arg_nan = std::to_array("abc");
+    auto arg_ok = std::to_array("2500");
 
-    std::array<char *, 1> only_prog{prog};
-    std::array<char *, 2> status_ok{prog, sub_status};
-    std::array<char *, 3> status_extra{prog, sub_status, arg_ok};
-    std::array<char *, 2> bad_sub{prog, sub_bad};
-    std::array<char *, 2> limit_missing{prog, sub_limit};
-    std::array<char *, 3> limit_zero{prog, sub_limit, arg_zero};
-    std::array<char *, 3> limit_over{prog, sub_limit, arg_over};
-    std::array<char *, 3> limit_nan{prog, sub_limit, arg_nan};
-    std::array<char *, 3> limit_ok{prog, sub_limit, arg_ok};
-    std::array<char *, 4> limit_extra{prog, sub_limit, arg_ok, arg_ok};
+    std::array<char *, 1> only_prog{prog.data()};
+    std::array<char *, 2> status_ok{prog.data(), sub_status.data()};
+    std::array<char *, 3> status_extra{prog.data(), sub_status.data(), arg_ok.data()};
+    std::array<char *, 2> bad_sub{prog.data(), sub_bad.data()};
+    std::array<char *, 2> limit_missing{prog.data(), sub_limit.data()};
+    std::array<char *, 3> limit_zero{prog.data(), sub_limit.data(), arg_zero.data()};
+    std::array<char *, 3> limit_over{prog.data(), sub_limit.data(), arg_over.data()};
+    std::array<char *, 3> limit_nan{prog.data(), sub_limit.data(), arg_nan.data()};
+    std::array<char *, 3> limit_ok{prog.data(), sub_limit.data(), arg_ok.data()};
+    std::array<char *, 4> limit_extra{prog.data(), sub_limit.data(), arg_ok.data(), arg_ok.data()};
 
     CHECK(fn(nullptr, -1, status_ok.data()) == 1);
     CHECK(fn(nullptr, 2, nullptr) == 1);
@@ -195,12 +201,12 @@ void test_commands_after_exec()
 {
     const auto cmds = app::template_cmds();
     const auto fn = cmds[0].handler;
-    char prog[] = "tmpl";
-    char sub_status[] = "status";
-    char sub_limit[] = "limit";
-    char arg_ok[] = "2500";
-    std::array<char *, 2> status_ok{prog, sub_status};
-    std::array<char *, 3> limit_ok{prog, sub_limit, arg_ok};
+    auto prog = std::to_array("tmpl");
+    auto sub_status = std::to_array("status");
+    auto sub_limit = std::to_array("limit");
+    auto arg_ok = std::to_array("2500");
+    std::array<char *, 2> status_ok{prog.data(), sub_status.data()};
+    std::array<char *, 3> limit_ok{prog.data(), sub_limit.data(), arg_ok.data()};
 
     // 执行器运行中：status 读取真实 DataCenter；占位目标 0xFF 经 submit() 安全返回 kNotFound -> 1。
     CHECK(fn(nullptr, 2, status_ok.data()) == 0);
@@ -278,7 +284,8 @@ BaseType_t xQueueSend(QueueHandle_t queue, const void *item, TickType_t)
         return pdFALSE;
     }
     const size_t tail = (queue->head + queue->count) % queue->capacity;
-    std::memcpy(queue->buf + tail * queue->item_size, item, queue->item_size);
+    const std::span bytes{queue->buf, queue->capacity * queue->item_size};
+    std::memcpy(bytes.subspan(tail * queue->item_size).data(), item, queue->item_size);
     ++queue->count;
     return pdTRUE;
 }
@@ -292,7 +299,8 @@ BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t ticks)
         s_clock += ticks;
         return pdFALSE;
     }
-    std::memcpy(item, queue->buf + queue->head * queue->item_size, queue->item_size);
+    const std::span bytes{queue->buf, queue->capacity * queue->item_size};
+    std::memcpy(item, bytes.subspan(queue->head * queue->item_size).data(), queue->item_size);
     queue->head = (queue->head + 1U) % queue->capacity;
     --queue->count;
     return pdTRUE;
@@ -310,6 +318,8 @@ void vTaskDelay(TickType_t ticks)
     CHECK(s_critical == 0);
     s_clock += ticks;
     if (++s_rounds == s_round_limit) {
+        // C ABI：配对 pump() 的 setjmp，测试用来结束执行器无限循环。
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
         std::longjmp(s_return, 1);
     }
 }
@@ -340,6 +350,32 @@ esp_err_t spp_server_write(uint32_t, const uint8_t *, size_t, uint32_t)
 {
     return ESP_OK;
 }
+esp_err_t spp_server_reply_reserve(uint32_t, spp_server_tx_token_t *token)
+{
+    *token = {};
+    return ESP_OK;
+}
+esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *, const uint8_t *, size_t)
+{
+    return ESP_OK;
+}
+void spp_server_tx_cancel(const spp_server_tx_token_t *) {}
+bool spp_server_reply_ready(uint32_t)
+{
+    return true;
+}
+esp_err_t spp_server_push_latest(uint32_t, const uint8_t *, size_t)
+{
+    return ESP_OK;
+}
+esp_err_t spp_server_stream_bind(uint32_t, bool)
+{
+    return ESP_OK;
+}
+void spp_server_tx_stats(spp_server_tx_stats_t *stats)
+{
+    *stats = {};
+}
 esp_err_t spp_server_disconnect(uint32_t)
 {
     return ESP_OK;
@@ -369,14 +405,17 @@ esp_err_t nvs_store_get_alarms(uint8_t (*)[NVS_STORE_ADDR_LEN], size_t, size_t *
 }
 }
 
-int main(int argc, char **argv)
+int main(int argc, const char **raw_args)
 {
+    const std::span<const char *> argv{raw_args, static_cast<size_t>(argc)}; // argc>=0，无符号转换安全。
     if ((argc != 2) || (std::strcmp(argv[1], "template_module") != 0)) {
         return 2;
     }
     test_commands_before_exec();
     test_lifecycle();
     test_commands_after_exec();
-    std::printf("%s %s\n", (s_failures == 0) ? "PASS" : "FAIL", argv[1]);
+    std::fputs((s_failures == 0) ? "PASS " : "FAIL ", stdout);
+    std::puts(argv[1]);
     return (s_failures == 0) ? 0 : 1;
 }
+// NOLINTEND(readability-magic-numbers)

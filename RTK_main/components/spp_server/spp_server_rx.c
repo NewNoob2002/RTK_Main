@@ -98,32 +98,67 @@ void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint
     }
 }
 
+/* TX_SPACE 不占会话生命周期顺序；通知丢失时 level 仍可在阻塞前取出。 */
+static bool spp_server_poll_tx_space(spp_server_evt_t *evt)
+{
+    bool found = false;
+    taskENTER_CRITICAL(&s_spp_mux);
+    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; ++idx) {
+        spp_server_session_t *session = &s_spp.sessions[idx];
+        if (session->in_use && session->tx_space) {
+            session->tx_space = false;
+            *evt = (spp_server_evt_t){.type = SPP_SERVER_EVT_TX_SPACE, .handle = session->handle};
+            found = true;
+            break;
+        }
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+    return found;
+}
+
 bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout_ms)
 {
     if ((evt == NULL) || (!s_spp.initialized) || (s_spp.rtos.evt_queue == NULL)) {
         return false;
     }
 
-    if (xQueueReceive(s_spp.rtos.evt_queue, evt, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
-        return false;
-    }
-    taskENTER_CRITICAL(&s_spp_mux);
-    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-        if (s_spp.sessions[idx].lifecycle_pending && (s_spp.sessions[idx].handle == evt->handle)) {
-            if (evt->type == SPP_SERVER_EVT_CLOSE) {
-                s_spp.sessions[idx].lifecycle_pending = false;
-            } else if (evt->type == SPP_SERVER_EVT_DATA) {
-                s_spp.sessions[idx].data_pending = false;
-            } else if (evt->type == SPP_SERVER_EVT_RX_DROP) {
-                evt->dropped = s_spp.sessions[idx].rx_dropped;
-                s_spp.sessions[idx].rx_dropped = 0U;
-                s_spp.sessions[idx].drop_pending = false;
+    const TickType_t start = xTaskGetTickCount();
+    const TickType_t budget = pdMS_TO_TICKS(timeout_ms);
+    for (;;) {
+        /* 先交付生命周期。空哨兵可能排在 CLOSE 前，须跳过而非提前报告超时。 */
+        if (xQueueReceive(s_spp.rtos.evt_queue, evt, 0) != pdTRUE) {
+            if (spp_server_poll_tx_space(evt)) {
+                return true;
             }
-            break;
+            const TickType_t elapsed = xTaskGetTickCount() - start;
+            if ((elapsed >= budget) || (xQueueReceive(s_spp.rtos.evt_queue, evt, budget - elapsed) != pdTRUE)) {
+                return spp_server_poll_tx_space(evt);
+            }
         }
+        if (evt->type == SPP_SERVER_EVT_TX_SPACE) {
+            taskENTER_CRITICAL(&s_spp_mux);
+            s_spp.tx_wake_pending = false;
+            taskEXIT_CRITICAL(&s_spp_mux);
+            continue;
+        }
+        taskENTER_CRITICAL(&s_spp_mux);
+        for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
+            if (s_spp.sessions[idx].lifecycle_pending && (s_spp.sessions[idx].handle == evt->handle)) {
+                if (evt->type == SPP_SERVER_EVT_CLOSE) {
+                    s_spp.sessions[idx].lifecycle_pending = false;
+                } else if (evt->type == SPP_SERVER_EVT_DATA) {
+                    s_spp.sessions[idx].data_pending = false;
+                } else if (evt->type == SPP_SERVER_EVT_RX_DROP) {
+                    evt->dropped = s_spp.sessions[idx].rx_dropped;
+                    s_spp.sessions[idx].rx_dropped = 0U;
+                    s_spp.sessions[idx].drop_pending = false;
+                }
+                break;
+            }
+        }
+        taskEXIT_CRITICAL(&s_spp_mux);
+        return true;
     }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    return true;
 }
 
 size_t spp_server_read(uint32_t handle, uint8_t *buf, size_t size)

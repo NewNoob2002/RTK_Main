@@ -87,6 +87,8 @@ constexpr std::array<TraceField, 2U> kSppCtrlFull = {{{"h", TraceValue::kSession
 constexpr std::array<TraceField, 3U> kSppCtrlErr = {
     {{"h", TraceValue::kSession}, {"ctrl", TraceValue::kSppCtrlA}, {"err", TraceValue::kHexB}}};
 constexpr std::array<TraceField, 2U> kSppReject = {{{"h", TraceValue::kSession}, {"sent", TraceValue::kDecA}}};
+constexpr std::array<TraceField, 2U> kSppWriteAnon = {
+    {{"status", TraceValue::kDecA}, {"candidates", TraceValue::kHexB}}};
 constexpr std::array<TraceField, 3U> kSppWriteStray = {
     {{"h", TraceValue::kSession}, {"bytes", TraceValue::kDecA}, {"status", TraceValue::kDecB}}};
 
@@ -106,9 +108,9 @@ constexpr std::array<TraceField, 2U> kGnssBaud = {{{"baud", TraceValue::kDecA}, 
 
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
 #if RTK_GNSS_ENABLED
-constexpr std::array<TraceText, 55U> kTable = {{
+constexpr std::array<TraceText, 56U> kTable = {{
 #else
-constexpr std::array<TraceText, 45U> kTable = {{
+constexpr std::array<TraceText, 46U> kTable = {{
 #endif
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen), "session {h} opened as {role} ({why})",
      std::span<const TraceField>(kLinkOpen)},
@@ -168,7 +170,8 @@ constexpr std::array<TraceText, 45U> kTable = {{
      "result of command {seq} lost, result queue still full after dropping {old} old results",
      std::span<const TraceField>(kExecResultDrop)},
     {fw::TraceCat::kExec, static_cast<uint8_t>(ExecTrace::kWdtResetFail),
-     "task watchdog reset failed with error {err}, watchdog feeding stopped", std::span<const TraceField>(kExecWdtFail)},
+     "task watchdog reset failed with error {err}, watchdog feeding stopped",
+     std::span<const TraceField>(kExecWdtFail)},
     {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kFrame), "session {h} frame {msg}, {len} bytes",
      std::span<const TraceField>(kRtcmFrame)},
     {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kReject), "frame rejected, reason {why}, {len} bytes",
@@ -191,17 +194,20 @@ constexpr std::array<TraceText, 45U> kTable = {{
      std::span<const TraceField>(kSppAuth)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_EVT_DROP), "event {type} dropped, total {total}",
      std::span<const TraceField>(kSppEvtDrop)},
-    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_STAGE), "{stage} finished with status {status} (session {h})",
-     std::span<const TraceField>(kSppStage)},
+    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_STAGE),
+     "{stage} finished with status {status} (session {h})", std::span<const TraceField>(kSppStage)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_CTRL_FULL),
      "control queue full, {ctrl} reply lost (session {h})", std::span<const TraceField>(kSppCtrlFull)},
-    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_CTRL_ERR), "{ctrl} request failed with error {err} (session {h})",
-     std::span<const TraceField>(kSppCtrlErr)},
+    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_CTRL_ERR),
+     "{ctrl} request failed with error {err} (session {h})", std::span<const TraceField>(kSppCtrlErr)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_REJECT),
      "session {h} rejected, no free secure slot (disconnect sent {sent})", std::span<const TraceField>(kSppReject)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_WRITE_STRAY),
      "stray write completion ignored, {bytes} bytes, status {status} (session {h})",
      std::span<const TraceField>(kSppWriteStray)},
+    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_WRITE_ANON),
+     "anonymous write failure {status}, disconnect candidates {candidates}",
+     std::span<const TraceField>(kSppWriteAnon)},
 #if RTK_GNSS_ENABLED
     {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kState), "state {state} (from {from})",
      std::span<const TraceField>(kGnssState)},

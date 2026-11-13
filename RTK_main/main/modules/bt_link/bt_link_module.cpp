@@ -9,7 +9,12 @@
 #include "esp_log.h"
 #include "fw/tlog.hpp"
 #include "core/link_service.hpp"
+#include "proto/frame.hpp"
 #include "rtos/esp_status.hpp"
+
+// 回复信用按整帧预留；协议帧长一旦超过预留量，commit 会拒绝并永久占住该会话的预留，
+// 使会话再也不能恢复。在此处绑定两者，避免只改一侧。
+static_assert(proto::kMaxFrame <= SPP_SERVER_REPLY_RESERVE, "reply reserve must cover a full protocol frame");
 
 namespace app {
 namespace {
@@ -24,6 +29,7 @@ constexpr size_t kAlarmArgBytes = 2;
 // RTCM3 线路帧：1 B 前导 + 2 B 长度，载荷首 12 bit 为消息号。
 constexpr size_t kRtcmPayloadOffset = 3;
 constexpr uint32_t kRtcmMsgShiftBits = 4;
+constexpr uint32_t kHandleDisplayMask = 0xFFFFU;
 } // namespace
 
 void BtLinkModule::SessionSink::bind(BtLinkModule &owner, core::SessionHandle handle) noexcept
@@ -41,7 +47,9 @@ void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t 
                        (index == kRtcmIndex && &decoder == &demux::rtcm3::kDecoder);
     if (!known || count_ == frames_.size() || wire.size() > bytes_.size() - size_) {
         healthy_ = false;
-        fw::tlog(fw::TraceCat::kProto, "session 0x%04" PRIx32 " delivery queue invalid (decoder index %u, %u bytes), stream reset", handle_ & 0xFFFFU, static_cast<unsigned>(index), static_cast<unsigned>(wire.size()));
+        fw::tlog(fw::TraceCat::kProto,
+                 "session 0x%04" PRIx32 " delivery queue invalid (decoder index %u, %u bytes), stream reset",
+                 handle_ & kHandleDisplayMask, static_cast<unsigned>(index), static_cast<unsigned>(wire.size()));
         return;
     }
     /* 保存当前 feed 的完整帧，交给轮次预算逐个投递。 */
@@ -53,16 +61,19 @@ void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t 
 
 bool BtLinkModule::SessionSink::dispatch_one() noexcept
 {
-    /* 先取出帧并推进游标，全部消费后立即复用队列。 */
-    const PendingFrame info = frames_[cursor_++];
+    /* 先交付，再推进游标。暂停时完整请求归 LinkService；未消费的队列帧继续保留。 */
+    const PendingFrame info = frames_[cursor_];
     const auto wire = std::span<const uint8_t>{bytes_}.subspan(offset_, info.size);
+    if (info.index == kProductIndex && owner_->link_service().on_data(handle_, wire, rtos::now_ms()) != wire.size()) {
+        return true;
+    }
+    ++cursor_;
     offset_ += info.size;
     if (cursor_ == count_) {
         count_ = cursor_ = size_ = offset_ = 0;
     }
     /* 产品帧消耗本轮唯一预算，RTCM 仅收集手机角色的帧。 */
     if (info.index == kProductIndex) {
-        owner_->link_service().on_data(handle_, wire, rtos::now_ms());
         return true;
     }
     if (owner_->link_manager_.role(handle_) != core::Role::kPhone) {
@@ -81,7 +92,8 @@ bool BtLinkModule::SessionSink::dispatch_one() noexcept
         trace_rtcm(RtcmTrace::kFrame, handle_, msg, static_cast<uint32_t>(wire.size()));
     } else {
         // 两会话遗留帧 + 每轮 256 B 的界限被破坏；不允许静默覆盖。
-        fw::tlog(fw::TraceCat::kRtcm, "session 0x%04" PRIx32 " RTCM batch full, %u-byte frame not forwarded", handle_ & 0xFFFFU, static_cast<unsigned>(wire.size()));
+        fw::tlog(fw::TraceCat::kRtcm, "session 0x%04" PRIx32 " RTCM batch full, %u-byte frame not forwarded",
+                 handle_ & kHandleDisplayMask, static_cast<unsigned>(wire.size()));
         trace_rtcm(RtcmTrace::kReject, handle_, static_cast<uint32_t>(RtcmReject::kCapacity),
                    static_cast<uint32_t>(wire.size()));
         healthy_ = false;
@@ -105,17 +117,11 @@ void BtLinkModule::session_forget(core::SessionHandle handle) noexcept
     if (entry == nullptr) {
         return;
     }
-    /* CLOSE 后完成统计；不再占用正常 RX 的产品帧预算。 */
-    while (entry->sink.pending()) {
-        static_cast<void>(entry->sink.dispatch_one());
-    }
+    /* CLOSE 取消所有尚未路由的帧。abort 只补统计，其产出的尾帧也必须丢弃。 */
     if (entry->demux_ready) {
         const auto error = entry->demux.abort();
         if (error != demux::Error::kOk) {
             fw::tlog(fw::TraceCat::kProto, "stream demux abort failed (reentry)");
-        }
-        while (entry->sink.pending()) {
-            static_cast<void>(entry->sink.dispatch_one());
         }
     }
     /* 累计退役统计后复位会话，避免重用句柄携带半帧。 */
@@ -150,11 +156,12 @@ void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr
         entry.sink.bind(*this, handle);
         entry.demux_ready = entry.demux.init(entry.sink) == demux::Error::kOk;
         if (!entry.demux_ready) {
-            fw::tlog(fw::TraceCat::kProto, "stream demux init failed, session 0x%04" PRIx32 " gets no parsing", handle & 0xFFFFU);
+            fw::tlog(fw::TraceCat::kProto, "stream demux init failed, session 0x%04" PRIx32 " gets no parsing",
+                     handle & kHandleDisplayMask);
         }
         return;
     }
-    fw::tlog(fw::TraceCat::kLink, "session map full, 0x%04" PRIx32 " not tracked", handle & 0xFFFFU);
+    fw::tlog(fw::TraceCat::kLink, "session map full, 0x%04" PRIx32 " not tracked", handle & kHandleDisplayMask);
 }
 
 void BtLinkModule::collect_whitelist_dirty() noexcept
@@ -200,6 +207,9 @@ void BtLinkModule::handle_event(const spp_server_evt_t &evt, uint32_t now_ms) no
     case SPP_SERVER_EVT_DATA:
         handle_data(evt.handle);
         break;
+    case SPP_SERVER_EVT_TX_SPACE:
+        link_service().resume(evt.handle, now_ms);
+        break;
     case SPP_SERVER_EVT_RX_DROP:
         link_service().on_rx_dropped(evt.dropped);
         break;
@@ -230,7 +240,8 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
     if (error != demux::Error::kOk || !entry.sink.healthy()) {
         entry.demux_ready = false;
         entry.drain_pending = false;
-        fw::tlog(fw::TraceCat::kProto, "stream demux stopped (%s), further bytes on this session ignored", error != demux::Error::kOk ? "feed error" : "delivery queue invalid");
+        fw::tlog(fw::TraceCat::kProto, "stream demux stopped (%s), further bytes on this session ignored",
+                 error != demux::Error::kOk ? "feed error" : "delivery queue invalid");
         return true;
     }
     return false;
@@ -238,7 +249,8 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
 
 bool BtLinkModule::drain_session(SessionEntry &entry, size_t index, size_t &budget, uint32_t round_start_ms) noexcept
 {
-    while (entry.used && entry.demux_ready && (entry.drain_pending || entry.sink.pending()) && budget > 0U) {
+    while (entry.used && entry.demux_ready && !link_service().paused(entry.handle) &&
+           (entry.drain_pending || entry.sink.pending()) && budget > 0U) {
         if (rtos::now_ms() - round_start_ms >= kRoundBudgetMs) {
             return true;
         }
@@ -270,6 +282,30 @@ void BtLinkModule::drain_rx(uint32_t round_start_ms) noexcept
     }
 }
 
+void BtLinkModule::sync_stream() noexcept
+{
+    if (stream_handle_ != 0 && link_manager_.role(stream_handle_) != core::Role::kPhone) {
+        const esp_err_t status = spp_server_stream_bind(stream_handle_, false);
+        // CLOSE 已回收时 NOT_FOUND 等价于已解绑；其余失败保留句柄下轮重查。
+        if (status != ESP_OK && status != ESP_ERR_NOT_FOUND) {
+            return;
+        }
+        stream_handle_ = 0;
+    }
+    if (stream_handle_ == 0) {
+        for (const auto &entry : sessions_) {
+            if (entry.used && link_manager_.role(entry.handle) == core::Role::kPhone) {
+                const esp_err_t status = spp_server_stream_bind(entry.handle, true);
+                if (status == ESP_OK) {
+                    stream_handle_ = entry.handle;
+                }
+                // 旧 generation 的 copy/API 未退出时容量不可用，下轮重查，不另建 stream 或同步回退。
+                return;
+            }
+        }
+    }
+}
+
 void BtLinkModule::publish_link(uint32_t now_ms) noexcept
 {
     /* 按基线顺序发布链路、会话与报警状态。 */
@@ -295,12 +331,18 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
     static_cast<core::LinkStats &>(stats) = link_service().stats(); // 派生结构的基类赋值，无窄化。
     stats.parser_crc_errors = link_service().parser_crc_errors();
     stats.parser_length_errors = link_service().parser_length_errors();
-    const AsyncTxStats tx = async_tx_.stats();
-    stats.tx_sent = tx.sent;
-    stats.tx_failed = tx.failed;
-    stats.tx_queue_full = tx.queue_full;
-    stats.tx_max_depth = tx.max_depth;
-    stats.tx_stack_free = tx.stack_free;
+    spp_server_tx_stats_t tx{};
+    spp_server_tx_stats(&tx);
+    stats.tx_accepted = tx.accepted;
+    stats.tx_completed = tx.completed;
+    stats.tx_cancelled = tx.cancelled;
+    stats.tx_errors = tx.errors;
+    stats.tx_cong = tx.cong;
+    stats.tx_high_water = tx.high_water;
+    stats.tx_paused = tx.paused;
+    stats.tx_anon_write_fail = tx.anon_write_fail;
+    stats.tx_stray_write = tx.stray_write;
+    stats.tx_inflight = tx.inflight;
     context_.data.link_stats.write(stats);
     const auto heartbeat = link_service().last_heartbeat();
     context_.data.heartbeat.write({heartbeat.has_value(), heartbeat.value_or(proto::alarm::Heartbeat{})});
@@ -346,6 +388,10 @@ void BtLinkModule::apply_rtcm_reset() noexcept
 #if RTK_GNSS_ENABLED
 void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
 {
+    if (!device_service_.has_value()) {
+        return;
+    }
+    auto &device_info = device_service_->info();
     uint32_t fix_ver = 0;
     const auto fix = context_.data.gnss_fix.read(fix_ver);
     if (fix_ver != gnss_fix_version_) {
@@ -358,17 +404,17 @@ void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
     const uint8_t fix_q = (fix_fresh && (cached_gnss_fix_.quality != ::gnss::FixQuality::kUnknown))
                               ? static_cast<uint8_t>(cached_gnss_fix_.quality)
                               : proto::alarm::kValueUnknown;
-    device_service_->info().fix_quality = fix_q;
+    device_info.fix_quality = fix_q;
 
     uint32_t status_ver = 0;
     const auto gnss_st = context_.data.gnss_status.read(status_ver);
     if (status_ver != gnss_status_version_) {
         gnss_status_version_ = status_ver;
         if (gnss_st.model != ::gnss::Model::kUnknown) {
-            device_service_->info().board.assign(::gnss::model_name(gnss_st.model));
+            device_info.board.assign(::gnss::model_name(gnss_st.model));
         }
         if (gnss_st.fw_version[0] != '\0') {
-            device_service_->info().board_fw.assign(std::string_view{gnss_st.fw_version.data()});
+            device_info.board_fw.assign(std::string_view{gnss_st.fw_version.data()});
         }
     }
 }
@@ -406,16 +452,11 @@ fw::Result BtLinkModule::init() noexcept
         ESP_LOGE(kTag, "command router init failed: %s", to_string(route_status));
         return fw::Result::kInvalidState;
     }
-    service_.emplace(async_tx_, link_manager_, router_, *alarm_service_);
+    if (!transport_.supports_credit()) {
+        return fw::Result::kInvalidState;
+    }
+    service_.emplace(transport_, link_manager_, router_, *alarm_service_);
     return fw::Result::kOk;
-}
-
-fw::Status BtLinkModule::start_tx() noexcept
-{
-    // 与 BT 驱动发送任务同核同优先级：两者都是“等事件 → 短暂处理”，不抢链路核。
-    constexpr uint32_t kTxPriority = 5;
-    constexpr BaseType_t kTxCore = 0;
-    return async_tx_.start(kTxPriority, kTxCore);
 }
 
 void BtLinkModule::wait(uint32_t max_ms) noexcept
@@ -426,6 +467,12 @@ void BtLinkModule::wait(uint32_t max_ms) noexcept
     round_start_ms_ = rtos::now_ms();
     if (!service_.has_value()) {
         return;
+    }
+    // 睡眠前重查 reply level；通知可以合并，但容量恢复不会丢失。
+    for (const auto &entry : sessions_) {
+        if (entry.used && link_service().paused(entry.handle) && transport_.reply_ready(entry.handle)) {
+            max_ms = 0;
+        }
     }
     /* 先等首个事件，再按原队列上限处理已排队的事件。 */
     spp_server_evt_t evt{};
@@ -454,14 +501,20 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
         last_tick_ms_ = now;
         link_service().tick(now);
     }
+    for (const auto &entry : sessions_) {
+        if (entry.used) {
+            link_service().resume(entry.handle, now);
+        }
+    }
     /* 按预算接收并保留原快照、RTCM 批次的发布顺序。 */
     drain_rx(round_start_ms_);
+    sync_stream();
     collect_whitelist_dirty();
     publish_link(rtos::now_ms());
     context_.data.rtcm_batch.write({std::span<const uint8_t>{rtcm_batch_}.first(rtcm_size_), rtcm_rejected_});
     bool pending = false;
     for (const auto &entry : sessions_) {
-        pending = pending || (entry.used && entry.demux_ready &&
+        pending = pending || (entry.used && entry.demux_ready && !link_service().paused(entry.handle) &&
                               (entry.drain_pending || entry.sink.pending() || entry.rx_offset < entry.rx_size));
     }
     return pending;

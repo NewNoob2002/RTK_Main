@@ -41,6 +41,7 @@ typedef enum {
     SPP_SERVER_EVT_CLOSE,    /* 会话关闭 */
     SPP_SERVER_EVT_DATA,     /* 该会话 StreamBuffer 有新数据 */
     SPP_SERVER_EVT_RX_DROP,  /* 回调中缓冲满，丢弃 dropped 字节 */
+    SPP_SERVER_EVT_TX_SPACE, /* TX level 有变化；调用者必须重新查询容量，通知可以合并 */
 } spp_server_evt_type_t;
 
 typedef struct {
@@ -65,11 +66,60 @@ bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout_ms);
 /** 从会话 StreamBuffer 非阻塞读取，返回字节数；未知句柄或参数非法返回 0。 */
 size_t spp_server_read(uint32_t handle, uint8_t *buf, size_t size);
 
-/**
- * 发送。拥塞时等待 ESP_SPP_CONG_EVT 解除，总等待不超过 timeout_ms，超时返回 ESP_ERR_TIMEOUT。
- * 未知句柄 → ESP_ERR_NOT_FOUND；data 为 NULL 或 len 为 0 → ESP_ERR_INVALID_ARG。
+/** 同步兼容发送：等真实 WRITE_EVT；全次共享 timeout_ms，超时不撤回已提交字节。
+ * 只允许链路任务、非 ISR。未知句柄返回 NOT_FOUND；0 预算不提交，返回 TIMEOUT。
  */
 esp_err_t spp_server_write(uint32_t handle, const uint8_t *data, size_t len, uint32_t timeout_ms);
+
+#define SPP_SERVER_REPLY_CAPACITY  (2048U)
+#define SPP_SERVER_REPLY_RESERVE   (280U)
+#define SPP_SERVER_STREAM_CAPACITY (4096U)
+#define SPP_SERVER_MERGE_CAPACITY  (1024U)
+#define SPP_SERVER_INFLIGHT_MAX    (4U)
+#define SPP_SERVER_PUSH_CAPACITY   (40U)
+
+/** 不透明预留凭证；同一链路任务持有至 commit/cancel，不得跨会话重用。 */
+typedef struct {
+    uint32_t generation;
+    uint32_t serial;
+    uint16_t capacity;
+    uint8_t slot;
+    uint8_t channel;
+} spp_server_tx_token_t;
+
+/** TX 累计字节与状态快照；completed 指 WRITE_EVT 成功，不代表应用 ACK。 */
+typedef struct {
+    uint32_t accepted;
+    uint32_t completed;
+    uint32_t cancelled;
+    uint32_t errors;
+    uint32_t cong;
+    uint32_t high_water;
+    uint32_t paused;
+    uint32_t anon_write_fail;
+    uint32_t stray_write;
+    uint32_t inflight;
+} spp_server_tx_stats_t;
+
+/** 以下接口只允许链路任务、非 ISR；均不等待。reserve 满返回 TIMEOUT，失败零接纳。
+ * reply 预留固定 280B，在 Router 之前调用；commit 只使用原预留，未用容量归还。
+ * CLOSE 使凭证失效；commit 在锁外复制后原子发布，期间 users 阻止 CLOSE 后复用。
+ */
+esp_err_t spp_server_reply_reserve(uint32_t handle, spp_server_tx_token_t *token);
+esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t len);
+void spp_server_tx_cancel(const spp_server_tx_token_t *token);
+/** PHONE 绑定由角色所有者维护；仅一个句柄可拥有唯一 stream；解绑等待当前 API/copy 退出。
+ * reserve 按整条句长接纳，最大4096；不足时零接纳，调用者不能消费源句。
+ * 复制可能跨环尾，锁外最多4096B；worker 仅在整句边界插入 reply。
+ */
+esp_err_t spp_server_stream_bind(uint32_t handle, bool phone);
+esp_err_t spp_server_stream_reserve(uint32_t handle, size_t len, spp_server_tx_token_t *token);
+/** 最新推送至多40B，覆盖尚未提交的旧推送；不会覆盖 reply reservation。 */
+esp_err_t spp_server_push_latest(uint32_t handle, const uint8_t *data, size_t len);
+/** reply 可预留的 level；TX_SPACE 只是合并通知，睡眠前必须重查此状态。 */
+bool spp_server_reply_ready(uint32_t handle);
+/** 任意任务可读、非 ISR；锁内只拷贝小快照。 */
+void spp_server_tx_stats(spp_server_tx_stats_t *stats);
 
 /** 请求断开；结果以 SPP_SERVER_EVT_CLOSE 事件返回。未知句柄 → ESP_ERR_NOT_FOUND。 */
 esp_err_t spp_server_disconnect(uint32_t handle);
@@ -96,6 +146,7 @@ typedef enum {
     SPP_SERVER_TRACE_CTRL_ERR,      /* 控制命令/断开提交失败：a = spp_server_trace_ctrl_t，b = esp_err_t */
     SPP_SERVER_TRACE_REJECT,        /* 无安全槽拒绝连接：a = 1 已发断开 / 0 跳过（同句柄已被新会话接纳） */
     SPP_SERVER_TRACE_WRITE_STRAY,   /* 不属于在途请求的写完成事件（被忽略）：a = 写长度，b = esp_spp_status_t */
+    SPP_SERVER_TRACE_WRITE_ANON,    /* 匿名写失败：a = status，b = 受影响会话位图，不猜 owner */
 } spp_server_trace_code_t;
 
 /** SPP_SERVER_TRACE_STAGE 的 a。 */
@@ -108,9 +159,9 @@ typedef enum {
 
 /** SPP_SERVER_TRACE_CTRL_FULL / CTRL_ERR 的 a。 */
 typedef enum {
-    SPP_SERVER_TRACE_CTRL_PIN = 0,   /* GAP PIN 应答 */
-    SPP_SERVER_TRACE_CTRL_CONFIRM,   /* GAP SSP 确认应答 */
-    SPP_SERVER_TRACE_CTRL_REJECT,    /* 无安全槽时断开新连接 */
+    SPP_SERVER_TRACE_CTRL_PIN = 0,    /* GAP PIN 应答 */
+    SPP_SERVER_TRACE_CTRL_CONFIRM,    /* GAP SSP 确认应答 */
+    SPP_SERVER_TRACE_CTRL_REJECT,     /* 无安全槽时断开新连接 */
     SPP_SERVER_TRACE_CTRL_DISCONNECT, /* 本地请求的断开 */
 } spp_server_trace_ctrl_t;
 

@@ -70,12 +70,15 @@ struct RoverConfig {
     uint32_t port_baud = 0; // 0 = 不改波特率；否则配置末尾切换到此波特率
 };
 
+/** 配置步骤默认等待应答时限。 */
+inline constexpr uint16_t kStepTimeoutMs = 500;
+
 /** 配置脚本中的一步。 */
 struct ConfigStep {
     CmdBuf cmd{};
-    bool expect_reply = true;  // false：发送后不等待应答，直接进入下一步
-    uint16_t timeout_ms = 500; // 等待应答时限
-    uint32_t switch_baud = 0;  // 非 0：本步确认（或无需确认时发送）后，主机 UART 改到此波特率
+    bool expect_reply = true;             // false：发送后不等待应答，直接进入下一步
+    uint16_t timeout_ms = kStepTimeoutMs; // 等待应答时限
+    uint32_t switch_baud = 0;             // 非 0：本步确认（或无需确认时发送）后，主机 UART 改到此波特率
 };
 
 /** 应答判定。 */

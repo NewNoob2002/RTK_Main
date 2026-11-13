@@ -51,15 +51,20 @@ struct Heartbeat {
     bool present = false;
     proto::alarm::Heartbeat value{};
 };
-/** 链路服务统计 + 异步发送统计；纯数据快照。 */
+/** 链路服务统计 + 驱动异步字节发送统计；纯数据快照。 */
 struct LinkStats : core::LinkStats {
     uint32_t parser_crc_errors = 0;
     uint32_t parser_length_errors = 0;
-    uint32_t tx_sent = 0;       // 异步发送任务底层 write 成功
-    uint32_t tx_failed = 0;     // 异步发送任务底层 write 失败
-    uint32_t tx_queue_full = 0; // 发送队列满被丢弃的回复
-    uint32_t tx_max_depth = 0;  // 发送队列最大深度
-    uint32_t tx_stack_free = 0; // async_tx 栈剩余字节（未启动为 0）
+    uint32_t tx_accepted = 0;  // 字节，接纳到驱动环
+    uint32_t tx_completed = 0; // 字节，真实 WRITE_EVT 成功
+    uint32_t tx_cancelled = 0; // 字节，关闭/取消
+    uint32_t tx_errors = 0;
+    uint32_t tx_cong = 0;
+    uint32_t tx_high_water = 0; // 字节
+    uint32_t tx_paused = 0;
+    uint32_t tx_anon_write_fail = 0;
+    uint32_t tx_stray_write = 0;
+    uint32_t tx_inflight = 0;
 };
 
 } // namespace app

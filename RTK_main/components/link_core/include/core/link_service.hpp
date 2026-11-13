@@ -31,6 +31,8 @@ struct LinkStats {
     uint32_t pushes_tx = 0;
     uint32_t disconnects = 0; // 本服务主动请求的断开次数
     uint32_t rx_dropped = 0;  // 由 on_rx_dropped() 累计
+    uint32_t dispatch_pauses = 0;
+    uint32_t dispatch_cancelled = 0;
 };
 
 /** 传输事件 → 解析 → LinkManager → 路由 → 写回的编排者；仅链路任务使用，非 ISR。 */
@@ -56,16 +58,16 @@ public:
     /** 连接关闭：LinkManager::on_close 并释放解析器槽。 */
     void on_close(SessionHandle handle) noexcept;
 
-    /**
-     * 收到数据：逐字节喂给该句柄的解析器。对每个完整帧：
-     * 1. LinkManager::on_frame，执行断开动作；若当前句柄因此被断开，丢弃本次剩余字节并返回。
-     * 2. 角色非 kNone 时 CommandRouter::handle（结果与旧 CommandDispatcher::handle 逐字节一致）；kReply 时
-     * transport.write(handle, bytes, kWriteTimeoutMs)， 失败计入 write_errors。
-     * 3. reply.whitelist_changed 或角色由非 ALARM 变为 ALARM 时置白名单脏标志。
-     * 4. reply.heartbeat 有值时记录为 last_heartbeat()。
-     * 未分配解析器的句柄：数据丢弃。
+    /** 只允许链路任务、非 ISR。返回已消费字节；调用者必须保留未消费尾部。
+     * 完整请求先取得280B reply credit，再执行 LinkManager/Router，满则保留 parser 中的完整帧。
+     * paused 为 true 时不能继续 feed/read 本会话；TX_SPACE 后 resume，CLOSE 取消且不执行尾帧。
+     * 无 reply 的路由取消 credit；commit 不重新争抢。旧同步 host Transport 保留 write 兼容行为。
      */
-    void on_data(SessionHandle handle, std::span<const uint8_t> data, uint32_t now_ms) noexcept;
+    size_t on_data(SessionHandle handle, std::span<const uint8_t> data, uint32_t now_ms) noexcept;
+    /** 链路任务/非 ISR/不等待；重查 level 后尝试一次 pending dispatch，不重跑已执行请求。 */
+    void resume(SessionHandle handle, uint32_t now_ms) noexcept;
+    /** 链路任务/非 ISR；true 时上层停止本会话 RX，不应以积压为由忙轮询。 */
+    [[nodiscard]] bool paused(SessionHandle handle) const noexcept;
 
     /** 传输层报告接收缓冲溢出丢弃的字节数。 */
     void on_rx_dropped(uint32_t count) noexcept;
@@ -91,10 +93,14 @@ private:
         bool in_use = false;
         SessionHandle handle = 0;
         proto::FrameParser parser{};
+        proto::FrameView frame{}; // payload 指向 parser，pending 期间不再 feed
+        bool pending = false;
     };
 
     void apply(const Actions &act) noexcept;
     Slot *find_slot(SessionHandle handle) noexcept;
+    bool dispatch_pending(Slot &slot, uint32_t now_ms) noexcept;
+    void send_reply(SessionHandle handle, const ReplyCredit &credit, uint16_t msg_id) noexcept;
 
     Transport &transport_;
     LinkManager &link_;

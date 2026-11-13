@@ -37,6 +37,7 @@ struct NmeaStats {
 class NmeaParser {
 public:
     constexpr NmeaParser() noexcept = default;
+    ~NmeaParser() = default;
     NmeaParser(const NmeaParser &) = delete;
     NmeaParser &operator=(const NmeaParser &) = delete;
 

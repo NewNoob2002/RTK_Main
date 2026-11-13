@@ -47,15 +47,24 @@ struct Hint {
     uint32_t baud = 0;
 };
 
+/** Timing 默认值（ADR-0010 §2.6）；单独命名以便控制台/测试引用同一组数字。 */
+inline constexpr uint32_t kTimingPowerOffMs = 200;
+inline constexpr uint32_t kTimingBootMs = 1500;
+inline constexpr uint32_t kTimingProbeTimeoutMs = 400;
+inline constexpr uint8_t kTimingProbeRounds = 3;
+inline constexpr uint8_t kTimingStepRetries = 2;
+inline constexpr uint32_t kTimingSilenceMs = 5000;
+inline constexpr uint32_t kTimingRetryBackoffMs = 10000;
+
 /** 时序参数（默认值见 ADR-0010 §2.6；主机测试可缩短）。 */
 struct Timing {
-    uint32_t power_off_ms = 200;       // 电源复位时断电保持时间
-    uint32_t boot_ms = 1500;           // 上电后等待模块启动
-    uint32_t probe_timeout_ms = 400;   // 每个（方言,波特率）组合等待版本应答
-    uint8_t probe_rounds = 3;          // 全部组合轮询几遍后判失败
-    uint8_t step_retries = 2;          // 配置步骤超时/NACK 后的重发次数
-    uint32_t silence_ms = 5000;        // kRunning 下多久收不到任何帧判模块失联 → 重新探测
-    uint32_t retry_backoff_ms = 10000; // kFailed 后多久重来
+    uint32_t power_off_ms = kTimingPowerOffMs;
+    uint32_t boot_ms = kTimingBootMs;
+    uint32_t probe_timeout_ms = kTimingProbeTimeoutMs;
+    uint8_t probe_rounds = kTimingProbeRounds;
+    uint8_t step_retries = kTimingStepRetries;
+    uint32_t silence_ms = kTimingSilenceMs;
+    uint32_t retry_backoff_ms = kTimingRetryBackoffMs;
 };
 
 /** 控制器统计（控制台 gnss status 打印）。 */
@@ -79,6 +88,7 @@ struct Detected {
 class Controller {
 public:
     constexpr Controller() noexcept = default;
+    ~Controller() = default;
     Controller(const Controller &) = delete;
     Controller &operator=(const Controller &) = delete;
 

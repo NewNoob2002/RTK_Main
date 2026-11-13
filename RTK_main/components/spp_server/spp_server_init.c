@@ -70,8 +70,8 @@ static void spp_server_objects_delete(void)
         s_spp.sessions[idx].in_use = false;
         s_spp.sessions[idx].reserving = false;
         s_spp.sessions[idx].users = 0U;
-        s_spp.sessions[idx].tx_submitting = false;
-        s_spp.sessions[idx].tx_state = SPP_SERVER_TX_IDLE;
+        s_spp.sessions[idx].reply.used = 0U;
+        s_spp.sessions[idx].reply.reserved = 0U;
         s_spp.sessions[idx].handle = 0U;
         if (s_spp.sessions[idx].rx != NULL) {
             vStreamBufferDelete(s_spp.sessions[idx].rx);
@@ -83,8 +83,9 @@ static void spp_server_objects_delete(void)
         s_spp.ctrl[slot].handle = 0U;
     }
     taskENTER_CRITICAL(&s_spp_mux);
-    s_spp_tx_inflight = -1;
-    s_spp.tx_inflight_cancelled = false;
+    memset(s_spp.inflight, 0, sizeof(s_spp.inflight));
+    s_spp.stream_owner = 0U;
+    s_spp.tx_stats.inflight = 0U;
     taskEXIT_CRITICAL(&s_spp_mux);
     if (s_spp.rtos.evt_queue != NULL) {
         vQueueDelete(s_spp.rtos.evt_queue);
@@ -105,8 +106,13 @@ static esp_err_t spp_server_objects_create(void)
     memset(s_spp.sessions, 0, sizeof(s_spp.sessions));
     memset(s_spp.ctrl, 0, sizeof(s_spp.ctrl));
     s_spp.evt_dropped = 0U;
-    s_spp_tx_inflight = -1;
-    s_spp.tx_inflight_cancelled = false;
+    memset(s_spp.inflight, 0, sizeof(s_spp.inflight));
+    memset(&s_spp.stream, 0, sizeof(s_spp.stream));
+    memset(&s_spp.tx_stats, 0, sizeof(s_spp.tx_stats));
+    s_spp.stream_owner = 0U;
+    s_spp.stream_unbind = false;
+    s_spp.stream_active = false;
+    s_spp.tx_wake_pending = false;
     taskEXIT_CRITICAL(&s_spp_mux);
 
     s_spp.rtos.evt_queue = xQueueCreateStatic(SPP_SERVER_EVENT_QUEUE_LEN, sizeof(spp_server_evt_t),
@@ -124,10 +130,10 @@ static esp_err_t spp_server_objects_create(void)
         return ESP_ERR_NO_MEM;
     }
 
-    /* 只等任务通知/读会话表的常驻任务，栈 4096 字节（调用 esp_spp_write 与日志）。 */
+    /* 静态 worker 栈2560字节；绑核0以贴近 BTC，避免跨核投递延迟。 */
     if (s_spp.rtos.worker == NULL) {
         /* IDF 静态创建接口的栈单位是字节（task.h:519），因此直接给栈字节数。 */
-        const uint32_t stack_bytes = (uint32_t)(sizeof(s_spp.worker_stack) / sizeof(StackType_t));
+        const uint32_t stack_bytes = sizeof(s_spp.worker_stack);
 
         s_spp.rtos.worker = xTaskCreateStaticPinnedToCore(spp_server_worker, "spp_worker", stack_bytes, NULL,
                                                           SPP_SERVER_WORKER_PRIORITY, s_spp.worker_stack,

@@ -43,6 +43,8 @@ void LinkService::apply(const Actions &act) noexcept
         if (slot != nullptr) {
             retired_crc_errors_ += slot->parser.crc_errors();
             retired_length_errors_ += slot->parser.length_errors();
+            stats_.dispatch_cancelled += slot->pending ? 1U : 0U;
+            slot->pending = false;
             slot->in_use = false;
             slot->handle = 0;
         }
@@ -94,70 +96,123 @@ void LinkService::on_close(SessionHandle handle) noexcept
     }
     retired_crc_errors_ += slot->parser.crc_errors();
     retired_length_errors_ += slot->parser.length_errors();
+    stats_.dispatch_cancelled += slot->pending ? 1U : 0U;
+    slot->pending = false;
     slot->in_use = false;
     slot->handle = 0;
 }
 
-void LinkService::on_data(SessionHandle handle, std::span<const uint8_t> data, uint32_t now_ms) noexcept
+void LinkService::send_reply(SessionHandle handle, const ReplyCredit &credit, uint16_t msg_id) noexcept
+{
+    const fw::Status status = transport_.supports_credit() ? transport_.commit_reply(credit, reply_.bytes())
+                                                           : transport_.write(handle, reply_.bytes(), kWriteTimeoutMs);
+    if (is_ok(status)) {
+        ++stats_.replies_tx; // 接纳，不表示 WRITE_EVT 或应用 ACK
+        trace_proto(ProtoTrace::kReply, handle, msg_id, static_cast<uint32_t>(status)); // 枚举范围<=255
+    } else {
+        ++stats_.write_errors;
+        trace_proto(ProtoTrace::kReplyError, handle, static_cast<uint32_t>(status), msg_id); // 枚举范围<=255
+    }
+}
+
+bool LinkService::dispatch_pending(Slot &slot, uint32_t now_ms) noexcept
+{
+    ReplyCredit credit{};
+    const SessionHandle handle = slot.handle;
+    if (transport_.supports_credit()) {
+        const fw::Status status = transport_.reserve_reply(handle, credit);
+        if (!is_ok(status)) {
+            if ((status == fw::Status::kTimeout) || (status == fw::Status::kNoSpace) || (status == fw::Status::kBusy)) {
+                return false;
+            }
+            ++stats_.write_errors;
+            ++stats_.disconnects;
+            const auto disconnected = transport_.disconnect(handle);
+            static_cast<void>(disconnected);
+            on_close(handle);
+            return true;
+        }
+    }
+    // 只有容量已固定才推进角色/路由；清 pending 后绝不因提交失败重跑副作用。
+    slot.pending = false;
+    const Role role_before = link_.role(handle);
+    Actions act;
+    const Role role_after = link_.on_frame(handle, slot.frame.sender, slot.frame.msg_id, now_ms, act);
+    const bool current_disconnected = actions_contain(act, handle);
+    apply(act);
+    if (current_disconnected || (role_after == Role::kNone)) {
+        if (transport_.supports_credit()) {
+            transport_.cancel_reply(credit);
+        }
+        return true;
+    }
+    const DispatchResult result = router_.handle(role_after, slot.frame, now_ms, reply_);
+    if (result == DispatchResult::kReply) {
+        send_reply(handle, credit, slot.frame.msg_id);
+    } else if (transport_.supports_credit()) {
+        transport_.cancel_reply(credit);
+    }
+    if (reply_.heartbeat.has_value()) {
+        last_hb_ = reply_.heartbeat;
+    }
+    if (reply_.whitelist_changed || ((role_after == Role::kAlarm) && (role_before != Role::kAlarm))) {
+        whitelist_dirty_ = true;
+    }
+    return true;
+}
+
+bool LinkService::paused(SessionHandle handle) const noexcept
+{
+    for (const auto &slot : slots_) {
+        if (slot.in_use && (slot.handle == handle)) {
+            return slot.pending;
+        }
+    }
+    return false;
+}
+
+void LinkService::resume(SessionHandle handle, uint32_t now_ms) noexcept
+{
+    Slot *slot = find_slot(handle);
+    if ((slot != nullptr) && slot->pending && transport_.reply_ready(handle)) {
+        static_cast<void>(dispatch_pending(*slot, now_ms));
+    }
+}
+
+size_t LinkService::on_data(SessionHandle handle, std::span<const uint8_t> data, uint32_t now_ms) noexcept
 {
     Slot *slot = find_slot(handle);
     if (slot == nullptr) {
-        return;
+        return data.size(); // 未知/已断开的尾部按契约丢弃
     }
-
-    proto::FrameView frame{};
+    if (slot->pending) {
+        return 0;
+    }
+    size_t consumed = 0;
     for (const uint8_t byte : data) {
-        const proto::ParseResult parsed = slot->parser.feed(byte, frame);
+        ++consumed;
+        const proto::ParseResult parsed = slot->parser.feed(byte, slot->frame);
         if (parsed == proto::ParseResult::kCrcError) {
-            // FrameParser 不暴露丢弃字节数，用会话累计 CRC 错误数代替（报告已记录偏离）。
             trace_proto(ProtoTrace::kBadCrc, handle, slot->parser.crc_errors());
-            continue;
-        }
-        if (parsed == proto::ParseResult::kLengthError) {
-            // 同上：声明长度不可得，用累计长度错误数代替（报告已记录偏离）。
+        } else if (parsed == proto::ParseResult::kLengthError) {
             trace_proto(ProtoTrace::kBadLength, handle, slot->parser.length_errors());
-            continue;
-        }
-        if (parsed != proto::ParseResult::kFrame) {
-            continue;
-        }
-
-        ++stats_.frames_rx;
-        // 帧摘要：高位 msg_id，低位 type；b 为负载长度。
-        trace_proto(ProtoTrace::kFrame, handle,
-                    (static_cast<uint32_t>(frame.msg_id) << 8U) | static_cast<uint32_t>(frame.type),
-                    static_cast<uint32_t>(frame.payload.size()));
-        const Role role_before = link_.role(handle);
-        Actions act;
-        const Role role_after = link_.on_frame(handle, frame.sender, frame.msg_id, now_ms, act);
-        const bool current_disconnected = actions_contain(act, handle);
-        apply(act);
-        if (current_disconnected || (role_after == Role::kNone)) {
-            // 当前句柄被断开：丢弃本缓冲区剩余字节。
-            return;
-        }
-
-        const DispatchResult result = router_.handle(role_after, frame, now_ms, reply_);
-        if (result == DispatchResult::kReply) {
-            const fw::Status status = transport_.write(handle, reply_.bytes(), kWriteTimeoutMs);
-            if (is_ok(status)) {
-                ++stats_.replies_tx;
-                trace_proto(ProtoTrace::kReply, handle, static_cast<uint32_t>(frame.msg_id),
-                            static_cast<uint32_t>(status));
-            } else {
-                ++stats_.write_errors;
-                trace_proto(ProtoTrace::kReplyError, handle, static_cast<uint32_t>(status),
-                            static_cast<uint32_t>(frame.msg_id));
+        } else if (parsed == proto::ParseResult::kFrame) {
+            ++stats_.frames_rx;
+            // msg_id/type 扩宽无损，payload<=256；仅用于追踪摘要。
+            trace_proto(ProtoTrace::kFrame, handle,
+                        (static_cast<uint32_t>(slot->frame.msg_id) << 8U) | slot->frame.type,
+                        static_cast<uint32_t>(slot->frame.payload.size()));
+            slot->pending = true;
+            if (!dispatch_pending(*slot, now_ms)) {
+                ++stats_.dispatch_pauses;
+                return consumed;
+            }
+            if (!slot->in_use) {
+                return data.size();
             }
         }
-
-        if (reply_.heartbeat.has_value()) {
-            last_hb_ = reply_.heartbeat;
-        }
-        if (reply_.whitelist_changed || ((role_after == Role::kAlarm) && (role_before != Role::kAlarm))) {
-            whitelist_dirty_ = true;
-        }
     }
+    return consumed;
 }
 
 void LinkService::on_rx_dropped(uint32_t count) noexcept
@@ -190,7 +245,7 @@ void LinkService::tick(uint32_t now_ms) noexcept
             trace_alarm(AlarmTrace::kPushFail, handles[i], 0);
             continue;
         }
-        const fw::Status status = transport_.write(handles[i], reply_.bytes(), kWriteTimeoutMs);
+        const fw::Status status = transport_.push_latest(handles[i], reply_.bytes());
         if (is_ok(status)) {
             ++stats_.pushes_tx;
         } else {

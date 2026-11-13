@@ -21,6 +21,8 @@
 namespace rtos {
 
 inline constexpr size_t kExecMaxModules = 8;
+inline constexpr uint32_t kExecIdleWaitMs = 20;
+inline constexpr uint32_t kExecRoundBudgetMs = 20;
 
 /** 执行器构造参数；init 前设定，运行期只读。 */
 struct ExecutorConfig {
@@ -28,10 +30,10 @@ struct ExecutorConfig {
     fw::ExecutorId id = 0;
     uint32_t priority = 1;
     BaseType_t core = 0;
-    uint32_t idle_wait_ms = 20;    // 无积压时每轮最长等待
-    uint32_t round_budget_ms = 20; // 单轮（不含 wait 与 yield）超过此值计 overrun
-    uint32_t yield_ticks = 1;      // 每轮末 vTaskDelay；0 = 不让出（不建议）
-    bool watchdog = true;          // 任务启动后 esp_task_wdt_add 自己，每轮 reset
+    uint32_t idle_wait_ms = kExecIdleWaitMs;       // 无积压时每轮最长等待
+    uint32_t round_budget_ms = kExecRoundBudgetMs; // 单轮（不含 wait 与 yield）超过此值计 overrun
+    uint32_t yield_ticks = 1;                      // 每轮末 vTaskDelay；0 = 不让出（不建议）
+    bool watchdog = true;                          // 任务启动后 esp_task_wdt_add 自己，每轮 reset
     /**
      * 可选等待钩子（执行器任务中调用）：最长阻塞 max_ms，可以顺带处理它等到的事件（例如 BT 事件）。
      * 为 nullptr 时执行器阻塞在命令队列上（命令到达立即唤醒）。

@@ -377,35 +377,48 @@ static void sc_write_timeout_budget(void)
     CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
 }
 
-/* #3：WRITE_EVT 的 status 和回报长度都必须校验。 */
+/* #3/K2：WRITE_EVT 的 status 与回报长度错误必须返回失败，并请求断开受影响会话而不影响对端。 */
 static void sc_write_status_propagation(void)
 {
+    static const fake_write_mode_t modes[] = {FAKE_WRITE_FAIL, FAKE_WRITE_NO_RESOURCE, FAKE_WRITE_SHORT};
     uint8_t payload[8];
 
     bring_up();
     open_session(0x11U);
+    open_session(0x22U);
     memset(payload, 0x11, sizeof(payload));
-    fake_set_write_mode(FAKE_WRITE_FAIL);
-    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
-    fake_set_write_mode(FAKE_WRITE_NO_RESOURCE);
-    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
-    fake_set_write_mode(FAKE_WRITE_SHORT);
-    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
-    fake_set_write_mode(FAKE_WRITE_OK);
-    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
+    for (size_t idx = 0U; idx < sizeof(modes) / sizeof(modes[0]); ++idx) {
+        fake_set_write_mode(modes[idx]);
+        CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_FAIL);
+        CHECK(fake_wait_disconnect_calls((int)idx + 1, 1000U));
+        CHECK(fake_disconnect_handle((int)idx) == 0x11U);
+        fake_emit_close(0x11U);
+        CHECK(wait_event(SPP_SERVER_EVT_CLOSE, 0x11U, 1000U));
+        fake_set_write_mode(FAKE_WRITE_OK);
+        CHECK(spp_server_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
+        open_session(0x11U);
+        CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
+    }
 }
 
-/* #3：提交阶段直接失败时把错误返回给调用方，且不需要等完成事件。 */
+/* #3/K2：提交阶段直接失败时把错误返回给调用方、不等待完成事件，并断开受影响会话。 */
 static void sc_write_submit_error(void)
 {
     uint8_t payload[8];
 
     bring_up();
     open_session(0x11U);
+    open_session(0x22U);
     memset(payload, 0x22, sizeof(payload));
     fake_set_write_mode(FAKE_WRITE_SUBMIT_ERROR);
     CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_ERR_INVALID_STATE);
+    CHECK(fake_wait_disconnect_calls(1, 1000U));
+    CHECK(fake_disconnect_handle(0) == 0x11U);
+    fake_emit_close(0x11U);
+    CHECK(wait_event(SPP_SERVER_EVT_CLOSE, 0x11U, 1000U));
     fake_set_write_mode(FAKE_WRITE_OK);
+    CHECK(spp_server_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
+    open_session(0x11U);
     CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
 }
 
@@ -538,8 +551,8 @@ static void sc_write_cancel_during_submit(void)
     CHECK(fake_wait_write_calls(2, 2000U));
     CHECK(fake_write_call_handle(1) == 0x22U);
 
-    /* 旧请求在 CLOSE 后才入队的匿名 NO_CONNECTION：忽略，不能结算 B。 */
-    fake_emit_write(0U, -1, ESP_SPP_NO_CONNECTION, false);
+    /* 有明确旧句柄的迟到失败只计 stray，不得结算 B；匿名失败另测候选断开。 */
+    fake_emit_write(0x11U, (int)sizeof(payload), ESP_SPP_NO_CONNECTION, false);
     fake_emit_write(0x22U, (int)sizeof(payload), ESP_SPP_SUCCESS, false);
 
     CHECK(pthread_join(thread_a, NULL) == 0);
@@ -559,8 +572,10 @@ static void sc_stale_completion_after_reopen(void)
     memset(payload, 0x55, sizeof(payload));
     fake_set_write_mode(FAKE_WRITE_HOLD);
     CHECK(spp_server_write(0x11U, payload, sizeof(payload), 100U) == ESP_ERR_TIMEOUT);
+    CHECK(fake_wait_write_returns(1, 1000U));
     fake_emit_close(0x11U);
-    open_session(0x22U); /* CLOSE 已释放 owner，旧槽可复用 */
+    CHECK(wait_event(SPP_SERVER_EVT_CLOSE, 0x11U, 1000U));
+    open_session(0x22U); /* API 已返回且 CLOSE 已消费，允许复用。 */
     fake_set_write_mode(FAKE_WRITE_OK);
     CHECK(spp_server_write(0x22U, payload, sizeof(payload), 1000U) == ESP_OK);
     /* 旧句柄的迟到成功/失败都应被忽略。 */
@@ -570,56 +585,49 @@ static void sc_stale_completion_after_reopen(void)
     CHECK(fake_write_call_count() == 3);
 }
 
-/* #3：IDF 提交失败时以 handle=0/len=-1 报告。全驱动只有一个未完成提交：
- * 匿名错误只能结算它，另一个排队请求仍要等自己的真实完成。 */
+/* 匿名 NO_RESOURCE 不能归因到任意一笔：保留在途信用，断开所有在途候选，CLOSE 清理。 */
 static void sc_write_unmatched_no_resource(void)
 {
     pthread_t thread_a;
     pthread_t thread_b;
-    writer_arg_t wa;
-    writer_arg_t wb;
+    writer_arg_t wa = {0};
+    writer_arg_t wb = {0};
     uint8_t payload[8];
-    uint32_t second_handle = 0U;
+    spp_server_tx_stats_t stats = {0};
 
     bring_up();
     open_session(0x11U);
     open_session(0x22U);
     memset(payload, 0x66, sizeof(payload));
     fake_set_write_mode(FAKE_WRITE_HOLD);
-    memset(&wa, 0, sizeof(wa));
     atomic_init(&wa.done, false);
-    wa.handle = 0x11U;
-    wa.data = payload;
-    wa.len = sizeof(payload);
-    wa.timeout_ms = 1500U;
-    memset(&wb, 0, sizeof(wb));
     atomic_init(&wb.done, false);
+    wa.handle = 0x11U;
     wb.handle = 0x22U;
+    wa.data = payload;
     wb.data = payload;
+    wa.len = sizeof(payload);
     wb.len = sizeof(payload);
+    wa.timeout_ms = 1500U;
     wb.timeout_ms = 1500U;
     CHECK(pthread_create(&thread_a, NULL, writer_main, &wa) == 0);
     CHECK(pthread_create(&thread_b, NULL, writer_main, &wb) == 0);
-
-    /* 全局串行：先只有一个请求进入 IDF。 */
-    CHECK(fake_wait_write_calls(1, 1000U));
-    CHECK(fake_write_call_handle(0) == 0x11U);
-    fake_emit_write(0U, -1, ESP_SPP_NO_RESOURCE, false);
-    /* 匿名错误结算第一个请求后，发送任务必须处理第二个排队请求。 */
     CHECK(fake_wait_write_calls(2, 1000U));
-    second_handle = fake_write_call_handle(1);
-    fake_emit_write(second_handle, (int)sizeof(payload), ESP_SPP_SUCCESS, false);
-
+    CHECK(fake_wait_write_returns(2, 1000U));
+    fake_emit_write(0U, -1, ESP_SPP_NO_RESOURCE, false);
+    CHECK(fake_wait_disconnect_calls(2, 1000U));
+    spp_server_tx_stats(&stats);
+    CHECK(stats.anon_write_fail == 1U && stats.inflight == 2U);
+    CHECK(!atomic_load(&wa.done) && !atomic_load(&wb.done));
+    CHECK((fake_disconnect_handle(0) == 0x11U && fake_disconnect_handle(1) == 0x22U) ||
+          (fake_disconnect_handle(0) == 0x22U && fake_disconnect_handle(1) == 0x11U));
+    fake_emit_close(0x11U);
+    fake_emit_close(0x22U);
     CHECK(pthread_join(thread_a, NULL) == 0);
     CHECK(pthread_join(thread_b, NULL) == 0);
-    CHECK(wa.err == ESP_FAIL);
-    CHECK(wb.err == ESP_OK);
-    CHECK(wa.elapsed_ms < 800U);
-    CHECK(wb.elapsed_ms < 800U);
-    CHECK(fake_write_call_count() == 2);
-
-    fake_set_write_mode(FAKE_WRITE_OK);
-    CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
+    CHECK(wa.err == ESP_ERR_INVALID_STATE && wb.err == ESP_ERR_INVALID_STATE);
+    spp_server_tx_stats(&stats);
+    CHECK(stats.inflight == 0U && stats.completed == 0U);
 }
 
 /* #3/D：旧句柄关闭后，它的迟到失败事件不得结算新句柄的在途请求。

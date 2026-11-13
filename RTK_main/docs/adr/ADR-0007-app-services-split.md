@@ -180,15 +180,31 @@ kLink 每轮：
   bt_link_module.poll()
     └─ drain_rx（每轮 256 B / 20 ms 预算，最多一个产品帧）
          └─ StaticDemux
-              ├─ 产品帧 → LinkService.on_data → FrameParser → LinkManager 角色检查
-              │            → CommandRouter.dispatch(msg_id, role)
-              │                 └─ services/xxx handler → Reply → Transport.write（同步，200 ms 超时）
+              ├─ 产品帧 → LinkService.on_data → FrameParser → 预留280B reply信用
+              │            → LinkManager角色检查 → CommandRouter.dispatch(msg_id, role)
+              │                 └─ services/xxx handler → Reply → commit_reply（非阻塞，消耗既有信用）
+              │            信用不足：保留完整帧与未消费尾部，只暂停该会话RX；TX_SPACE/睡眠前level重查恢复
               ├─ RTCM（仅 PHONE）→ rtcm_module：统计 + crc32 → [以后] Pipe → kIo GNSS UART
               └─ 未知字节 → 计数
   rtcm_module.poll() / storage_module.poll() / system_module.poll()
   每 100 ms：LinkService.tick → 超时断开、配对窗口、报警推送
   每轮末尾：各模块把状态写入 DataCenter（单写者）
 ```
+
+### 4.2.1 K2 发送与反压契约（ADR-0011）
+
+- 生产装配必须使用信用接口；旧 `Transport::write` 仅保留同步兼容语义，成功表示真实完成，不能把入队当完成。
+- 每会话 reply 2048B、唯一 PHONE stream 4096B、worker merge 1024B，共9216B主发送payload；push为独立40B最新值邮箱。
+  reply预留280B在路由前取得；无回复取消，commit不得二次抢容量。满时完整pending帧不进入路由，CLOSE取消pending及RX尾部。
+- stream reserve/commit/cancel按整条句子接纳；总量≤4096B的复制在锁外，保留区间与users阻止CLOSE/解绑期间复用；发布前不可见半条记录。
+  单条stream内不插reply；句子边界优先reply，两会话ready时轮转；ALARM不占stream。
+- 唯一`spp_worker`调用SDK write/disconnect；全局与单会话在途上限均4，小于本地SDK队列10。
+  描述符先绑定再调用API，早到WRITE也须等API返回才回收merge与users；短写/失败不重试。
+- `TX_SPACE`是level加通知，睡眠前复查level；仅拥塞会话停读，另一会话与执行器命令继续运行。
+- `handle=0,len=-1`匿名失败计数/追踪，并请求断开所有有在途的候选会话，不猜owner、不补未知信用、不置全局fault；CLOSE统一清理。
+  generation仅保护本地token和槽复用，SDK回调没有请求id，不能宣称能识别同数值句柄上的任意旧回调。
+- `replies_tx`/accepted表示接纳字节或帧；completed表示真实完整WRITE完成，均不代表应用ACK。控制台分别输出accepted/completed/cancelled/errors、
+  CONG/high-water/paused/inflight、匿名失败/stray计数；取消旧async_tx队列、任务与栈统计。RTCM路径保持到K3。
 
 ### 4.3 控制台命令
 

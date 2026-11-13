@@ -21,7 +21,7 @@ inline constexpr size_t kDeviceNameBuf = 32;
 
 // 统一宏（host 与 CONFIG_RTK_GNSS_ENABLE=n 下均为 0），避免各处重复判断 defined。
 #if defined(CONFIG_RTK_GNSS_ENABLE) && CONFIG_RTK_GNSS_ENABLE
-#define RTK_GNSS_ENABLED 1
+#define RTK_GNSS_ENABLED 1 // NOLINT(cppcoreguidelines-macro-usage): 全仓以 #if 条件编译使用，constexpr 不能参与预处理
 #else
 #define RTK_GNSS_ENABLED 0
 #endif

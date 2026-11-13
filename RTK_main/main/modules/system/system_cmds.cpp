@@ -132,8 +132,13 @@ void print_link_section() noexcept
         stats.frames_rx, stats.replies_tx, stats.pushes_tx, stats.write_errors, stats.disconnects, stats.rx_dropped);
     cli::print_kv("parser", "crc_err=%" PRIu32 " len_err=%" PRIu32, stats.parser_crc_errors,
                   stats.parser_length_errors);
-    cli::print_kv("async_tx", "sent=%" PRIu32 " fail=%" PRIu32 " qfull=%" PRIu32 " max_q=%" PRIu32 " stk=%" PRIu32 " B",
-                  stats.tx_sent, stats.tx_failed, stats.tx_queue_full, stats.tx_max_depth, stats.tx_stack_free);
+    cli::print_kv("spp_tx", "accepted=%" PRIu32 " completed=%" PRIu32 " cancelled=%" PRIu32 " B errors=%" PRIu32,
+                  stats.tx_accepted, stats.tx_completed, stats.tx_cancelled, stats.tx_errors);
+    cli::print_kv("spp_flow", "cong=%" PRIu32 " high_water=%" PRIu32 " B paused=%" PRIu32 " inflight=%" PRIu32,
+                  stats.tx_cong, stats.tx_high_water, stats.tx_paused, stats.tx_inflight);
+    cli::print_kv("spp_events",
+                  "anon_write_fail=%" PRIu32 " stray=%" PRIu32 " dispatch_pauses=%" PRIu32 " cancelled=%" PRIu32,
+                  stats.tx_anon_write_fail, stats.tx_stray_write, stats.dispatch_pauses, stats.dispatch_cancelled);
 }
 
 void print_sys_section() noexcept
@@ -401,7 +406,6 @@ int cmd_sys_tasks(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 #if RTK_GNSS_ENABLED
     print_task_row("io", xTaskGetHandle("io"));
 #endif
-    print_task_row("async_tx", xTaskGetHandle("async_tx"));
     print_task_row("spp_worker", xTaskGetHandle("spp_worker"));
 #if FW_TRACE_ENABLED
     print_task_row("trace_out", xTaskGetHandle("trace_out"));

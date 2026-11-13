@@ -1,5 +1,5 @@
 // 链路模块独占会话、协议服务与 RX 调度状态。
-// init 仅启动前；其余操作仅 kLink，start_tx 仅 app_main；均非 ISR。
+// init 仅启动前；其余操作仅 kLink；均非 ISR。
 #pragma once
 
 #include <array>
@@ -11,7 +11,6 @@
 #if RTK_GNSS_ENABLED
 #include "gnss/types.hpp"
 #endif
-#include "modules/bt_link/async_tx.hpp"
 #include "demux/decoders/rtcm3.hpp"
 #include "demux/static_demux.hpp"
 #include "spp/spp_transport.hpp"
@@ -47,8 +46,6 @@ public:
     void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /** 仅 kLink，非 ISR；至多等待 max_ms，先处理生命周期事件。 */
     void wait(uint32_t max_ms) noexcept;
-    /** app_main 在执行器 start 前调用，非 ISR；静态创建 TX 任务并返回状态。 */
-    [[nodiscard]] fw::Status start_tx() noexcept;
 
 private:
     friend struct ModuleTestAccess;
@@ -117,6 +114,7 @@ private:
     [[nodiscard]] bool drain_session(SessionEntry &entry, size_t index, size_t &budget,
                                      uint32_t round_start_ms) noexcept;
     [[nodiscard]] bool feed_one(SessionEntry &entry, size_t &budget, uint32_t round_start_ms) noexcept;
+    void sync_stream() noexcept;
     void publish_link(uint32_t now_ms) noexcept;
     void apply_rtcm_reset() noexcept;
 #if RTK_GNSS_ENABLED
@@ -135,7 +133,7 @@ private:
     core::LinkManager link_manager_{};
     core::AlarmSource alarm_{};
     spp::SppTransport transport_{};
-    AsyncTxTransport async_tx_{transport_};
+    core::SessionHandle stream_handle_ = 0;
     // optional 在 init 按依赖次序原地构造，生命周期覆盖整个运行期，不分配堆。
     std::optional<core::services::DeviceService> device_service_{};
     std::optional<core::services::ConfigService> config_service_{};

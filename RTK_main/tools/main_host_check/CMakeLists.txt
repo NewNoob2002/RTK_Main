@@ -47,7 +47,7 @@ enable_testing()
 foreach(policy concurrent preempt)
     add_executable(main_${policy} main_host_check.cpp ${PROJ_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
         ${PROJ_ROOT}/main/data/app_data.cpp ${PROJ_ROOT}/main/modules/storage/storage_module.cpp ${PROJ_ROOT}/main/modules/storage/store_keys.cpp ${PROJ_ROOT}/main/modules/storage/store_catalog.cpp
-        ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp ${PROJ_ROOT}/main/modules/bt_link/async_tx.cpp
+        ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp
         # storage 的通用键表引用 DebugModule 的绑定函数，因此链接真实的 debug 模块。
         ${PROJ_ROOT}/main/modules/debug/debug_module.cpp ${PROJ_ROOT}/main/modules/debug/trace_text.cpp
         ${PROJ_ROOT}/components/spp_server/spp_transport.cpp)
@@ -65,7 +65,7 @@ foreach(policy concurrent preempt)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
-    foreach(scenario policy_failure debug_cat_names async_tx save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget lifecycle_application
+    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget lifecycle_application
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget)
         add_test(NAME main_${policy}_${scenario} COMMAND main_${policy} ${scenario})
     endforeach()
@@ -94,7 +94,6 @@ add_executable(template_check template_check.cpp
     ${PROJ_ROOT}/components/cli/src/reply.cpp
     ${PROJ_ROOT}/components/rtos/executor.cpp
     ${PROJ_ROOT}/main/modules/bt_link/bt_link_module.cpp
-    ${PROJ_ROOT}/main/modules/bt_link/async_tx.cpp
     ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp
     ${PROJ_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
     ${PROJ_ROOT}/main/modules/storage/storage_module.cpp ${PROJ_ROOT}/main/modules/storage/store_keys.cpp ${PROJ_ROOT}/main/modules/storage/store_catalog.cpp

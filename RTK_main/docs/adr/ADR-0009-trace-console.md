@@ -16,7 +16,7 @@
 
 - `app_fw` 新增 `fw/trace.hpp`：类别位掩码（原子读，关闭时一次比较即返回）、16 字节定长事件 `fw::TraceEvent`、多写者单读者的定长环 `fw::TraceRing`（注入 `LockOps`，临界区只拷 16 B；满了丢**新**事件并计数，不阻塞）。
 - 全局唯一入口 `fw::trace(cat, code, session, a, b)`：检查掩码 → 取时间 → 调用安装的 sink（main 安装为“压入 TraceRing”）。未安装 sink 时什么也不做（host 测试与报警器复用不受影响）。
-- 允许在 link 任务、async_tx 任务、BT 回调任务（spp_server C 驱动经 C 钩子）中调用；**禁止在 ISR 中调用**。
+- 允许在 link 任务、spp_worker 任务、BT 回调任务（spp_server C 驱动经 C 钩子）中调用；**禁止在 ISR 中调用**。K2 删除 async_tx 任务。
 - 格式化与输出由 main 的 `DebugModule` 的低优先级任务完成（prio 1，core 0）：取事件 → 查 (cat, code) 文本表 → printf。环有丢弃时先补一行 `[trace] dropped N`。
 - 打开全部 trace 只会让 trace 自己丢，不能影响蓝牙收发：门槛见 §4。
 
@@ -36,7 +36,10 @@
 
 ### 2.3 周期报告
 
-`debug report <秒|off>`：每 N 秒一行速率摘要（RTCM B/s 与帧/s、rx_dropped 增量、产品 RTT p50 近似、heap free/min、link/async_tx 栈余量、trace 丢弃数）。高负载时用它，逐帧 trace 只在低速排查时开。
+`debug report <秒|off>`：每 N 秒一行速率摘要（RTCM B/s 与帧/s、rx_dropped 增量、产品 RTT p50 近似、heap free/min、link 栈余量、SPP accepted/completed 字节、trace 丢弃数）。高负载时用它，逐帧 trace 只在低速排查时开。
+
+K2（ADR-0011）删除 async_tx 队列/任务/栈统计，控制台发送统计改为驱动的 accepted/completed/cancelled/errors、CONG/high-water/paused/inflight、匿名失败/stray。
+accepted及`LinkService::replies_tx`只表示接纳，completed才表示完整WRITE完成，均不代表应用ACK。新增匿名失败事件只携status与候选会话位图；实时回调/worker仍只记事件。
 
 ### 2.4 持久化：调试掩码是 `StoreKey` 的第一个使用者
 

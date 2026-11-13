@@ -17,7 +17,7 @@
 #include "esp_spp_api.h"
 
 #define FAKE_CALLS_MAX  32
-#define FAKE_CALL_BYTES 512
+#define FAKE_CALL_BYTES 1024 /* K2 merge 上限，必须保存整块才能逐字节检查 stream。 */
 #define FAKE_ALL_BYTES  8192
 #define FAKE_JOBS_MAX   64
 #define FAKE_TRACE_MAX  32

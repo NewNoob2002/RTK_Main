@@ -20,6 +20,16 @@ public:
 
     [[nodiscard]] fw::Status write(core::SessionHandle handle, std::span<const uint8_t> data,
                                    uint32_t timeout_ms) noexcept override;
+    [[nodiscard]] bool supports_credit() const noexcept override
+    {
+        return true;
+    }
+    [[nodiscard]] fw::Status reserve_reply(core::SessionHandle handle, core::ReplyCredit &credit) noexcept override;
+    [[nodiscard]] fw::Status commit_reply(const core::ReplyCredit &credit,
+                                          std::span<const uint8_t> data) noexcept override;
+    void cancel_reply(const core::ReplyCredit &credit) noexcept override;
+    [[nodiscard]] bool reply_ready(core::SessionHandle handle) const noexcept override;
+    [[nodiscard]] fw::Status push_latest(core::SessionHandle handle, std::span<const uint8_t> data) noexcept override;
     [[nodiscard]] fw::Status disconnect(core::SessionHandle handle) noexcept override;
 };
 

@@ -19,6 +19,10 @@ import threading
 import time
 import zlib
 
+# 实测（Python 3.14 + BlueZ RFCOMM，2026-11-13）：主线程单次长 Condition.wait 期间接收线程收不到数据，
+# 应答恰在 wait 超时返回时才到达，伪造出“idle 2s / 断开”；切成短片轮询后 win16×3000 0 丢失。
+WAIT_SLICE_S = 0.05
+
 HDR = b"\xAA\x44\x18\x14"
 
 
@@ -117,7 +121,7 @@ class Session:
                 left = end - time.perf_counter()
                 if left <= 0:
                     break
-                self.rx.cv.wait(left)
+                self.rx.cv.wait(min(left, WAIT_SLICE_S))
             return len(self.rx.frames)
 
     def learn_ref(self):
@@ -219,8 +223,9 @@ def pipeline(s, n, window, set_len=44, name=None):
             up += len(f)
             continue
         with s.rx.cv:
-            if len(s.rx.frames) - start_idx == got:
-                s.rx.cv.wait(2.0)
+            idle_t0 = time.perf_counter()
+            while len(s.rx.frames) - start_idx == got and not s.rx.closed and time.perf_counter() - idle_t0 < 2.0:
+                s.rx.cv.wait(WAIT_SLICE_S)
             if len(s.rx.frames) - start_idx == got:
                 print(f"!! idle 2s with {len(sent_t) - got} outstanding; stop")
                 break

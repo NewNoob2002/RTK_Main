@@ -433,7 +433,7 @@ void DebugModule::pump_report(uint32_t now_ms) noexcept
     const uint32_t fps = frames / (elapsed / kMsPerSecond + 1U);
     const uint32_t prod_fps = prod / (elapsed / kMsPerSecond + 1U);
     cli::out_printf("[report] rtcm %lu.%luKB/s %luf/s drop+%lu | prod %lu/s | heap %luK min %luK | "
-                    "stk link %lu.%luK tx %lu.%luK | trace drop %lu\n",
+                    "stk link %lu.%luK | tx accepted %luB completed %luB | trace drop %lu\n",
                     static_cast<unsigned long>(kbps10 / kTenthsPerUnit),
                     static_cast<unsigned long>(kbps10 % kTenthsPerUnit), static_cast<unsigned long>(fps),
                     static_cast<unsigned long>(dropped), static_cast<unsigned long>(prod_fps),
@@ -441,9 +441,8 @@ void DebugModule::pump_report(uint32_t now_ms) noexcept
                     static_cast<unsigned long>(system.min_free_heap / kBytesPerUnit),
                     static_cast<unsigned long>((exec.stack_free * kTenthsPerUnit / kBytesPerUnit) / kTenthsPerUnit),
                     static_cast<unsigned long>((exec.stack_free * kTenthsPerUnit / kBytesPerUnit) % kTenthsPerUnit),
-                    static_cast<unsigned long>((stats.tx_stack_free * kTenthsPerUnit / kBytesPerUnit) / kTenthsPerUnit),
-                    static_cast<unsigned long>((stats.tx_stack_free * kTenthsPerUnit / kBytesPerUnit) % kTenthsPerUnit),
-                    static_cast<unsigned long>(ring_stats.dropped));
+                    static_cast<unsigned long>(stats.tx_accepted), // uint32_t→unsigned long 不窄化
+                    static_cast<unsigned long>(stats.tx_completed), static_cast<unsigned long>(ring_stats.dropped));
 }
 
 } // namespace app
