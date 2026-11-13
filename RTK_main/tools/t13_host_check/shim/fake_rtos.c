@@ -345,6 +345,19 @@ size_t xStreamBufferBytesAvailable(StreamBufferHandle_t stream_buffer)
     return available;
 }
 
+size_t xStreamBufferSpacesAvailable(StreamBufferHandle_t stream_buffer)
+{
+    size_t spaces = 0U;
+
+    if ((stream_buffer == NULL) || (!stream_buffer->created)) {
+        return 0U;
+    }
+    pthread_mutex_lock(&stream_buffer->lock);
+    spaces = stream_buffer->capacity - stream_buffer->count;
+    pthread_mutex_unlock(&stream_buffer->lock);
+    return spaces;
+}
+
 /* ---------------- 确定性读暂停 ---------------- */
 
 static pthread_mutex_t s_read_pause_lock = PTHREAD_MUTEX_INITIALIZER;

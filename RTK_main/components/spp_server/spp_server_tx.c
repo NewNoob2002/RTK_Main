@@ -46,6 +46,9 @@ void spp_server_tx_wake(void)
     if (s_spp.rtos.evt_group != NULL) {
         (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_WAKE(0) | SPP_SERVER_BIT_WAKE(1));
     }
+    if (post) {
+        spp_server_notify_rx_wake();
+    }
 }
 
 void spp_server_tx_reclaim_locked(spp_server_session_t *session)

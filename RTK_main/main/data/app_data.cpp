@@ -18,7 +18,6 @@ void DataCenter::init() noexcept
     exec_stats.bind_lock(lock);
     system_status.bind_lock(lock);
     system_mode.bind_lock(lock);
-    rtcm_batch.bind_lock(lock);
     rtcm_reset.bind_lock(lock);
 #if RTK_GNSS_ENABLED
     io_exec_stats.bind_lock(lock);

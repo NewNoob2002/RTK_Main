@@ -11,6 +11,7 @@
 #include <span>
 
 #include "def/gnss_def.hpp"
+#include "def/rtcm_def.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "rtos/static_stream_buffer.hpp"
@@ -88,8 +89,45 @@ public:
             return;
         }
         std::array<uint8_t, kDiscardChunkBytes> scratch{};
-        while (buf_.receive(scratch, 0U) > 0U) {
+        size_t dropped = 0U;
+        while (true) {
+            const size_t n = buf_.receive(scratch, 0U);
+            if (n == 0U) {
+                break;
+            }
+            dropped += n;
         }
+        const CriticalGuard guard(mux_);
+        io_stats_.discarded_bytes += static_cast<uint32_t>(dropped);
+        io_stats_.pending_bytes = 0U;
+        io_stats_.paused = false;
+    }
+
+    /** 仅 kIo 调用，非 ISR、非阻塞；记录因断电/失效显式丢弃的挂起块字节数。 */
+    void note_discarded(size_t bytes) noexcept
+    {
+        const CriticalGuard guard(mux_);
+        io_stats_.discarded_bytes += static_cast<uint32_t>(bytes);
+        io_stats_.pending_bytes = 0U;
+        io_stats_.paused = false;
+    }
+
+    /** 仅 kIo 调用，非 ISR、非阻塞；记录不可恢复 UART 写错误及被丢弃的挂起字节数。 */
+    void note_write_error(size_t dropped_bytes) noexcept
+    {
+        const CriticalGuard guard(mux_);
+        ++io_stats_.uart_write_errors;
+        io_stats_.discarded_bytes += static_cast<uint32_t>(dropped_bytes);
+        io_stats_.pending_bytes = 0U;
+        io_stats_.paused = false;
+    }
+
+    /** 仅 kIo 调用，非 ISR、非阻塞；更新 kIo 待写块剩余字节与暂停状态。 */
+    void set_pending(size_t pending_bytes, bool paused) noexcept
+    {
+        const CriticalGuard guard(mux_);
+        io_stats_.pending_bytes = static_cast<uint32_t>(pending_bytes);
+        io_stats_.paused = paused;
     }
 
     /** 仅 kIo 调用，非 ISR；当前管道内可读字节数。 */
@@ -103,6 +141,13 @@ public:
     {
         const CriticalGuard guard(mux_);
         return stats_;
+    }
+
+    /** 跨任务安全（kIo/kLink/console），非 ISR；返回 kIo 消费与写回状态快照。 */
+    [[nodiscard]] RtcmPipeIoStats io_stats() const noexcept
+    {
+        const CriticalGuard guard(mux_);
+        return io_stats_;
     }
 
 private:
@@ -128,6 +173,7 @@ private:
     rtos::StaticStreamBuffer<kRtcmPipeBytes> buf_{};
     mutable portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
     RtcmPipeStats stats_{};
+    RtcmPipeIoStats io_stats_{};
 };
 
 } // namespace app

@@ -172,20 +172,20 @@ app_main
   └─ rtk_console.start(合并后的 kCmds)
 ```
 
-### 4.2 蓝牙入站帧（与基线时序一致）
+### 4.2 蓝牙入站帧（K3 直通与公平调度修订）
 
 ```
-BTC 回调 ── 拷贝到会话 RX StreamBuffer ── 事件队列 ── 唤醒 kLink
-kLink 每轮：
-  bt_link_module.poll()
-    └─ drain_rx（每轮 256 B / 20 ms 预算，最多一个产品帧）
-         └─ StaticDemux
-              ├─ 产品帧 → LinkService.on_data → FrameParser → 预留280B reply信用
-              │            → LinkManager角色检查 → CommandRouter.dispatch(msg_id, role)
-              │                 └─ services/xxx handler → Reply → commit_reply（非阻塞，消耗既有信用）
-              │            信用不足：保留完整帧与未消费尾部，只暂停该会话RX；TX_SPACE/睡眠前level重查恢复
-              ├─ RTCM（仅 PHONE）→ rtcm_module：统计 + crc32 → [以后] Pipe → kIo GNSS UART
-              └─ 未知字节 → 计数
+BTC 回调 ── 拷贝到会话 RX StreamBuffer ── 非阻塞投递事件队列 + portMUX 外唤醒 kLink
+kLink 每轮（从上次下一会话轮转，受字节与 20 ms 时间预算约束）：
+  drain_rx（每会话单次 read 默认 512 B，保留未消费尾部）
+    └─ StaticDemux（逐字节/逐帧 feed，产品帧 pending 或回复无 credit 时暂停）
+         ├─ 产品帧 → LinkService.on_data → FrameParser → 预留280B reply信用
+         │            → LinkManager角色检查 → CommandRouter.dispatch(msg_id, role)
+         │                 └─ services/xxx handler → Reply → commit_reply（非阻塞，消耗既有信用）
+         │            信用不足：保留完整 pending 帧与未消费尾部，只暂停该会话 RX；TX_SPACE/睡眠前 level 重查恢复
+         ├─ RTCM（仅 PHONE）→ Demux 回调直接校验角色并整帧推入 RtcmPipe（≤1029B，满则整帧丢弃）
+         │                      → 通路小快照累计；rtcm_module 只计算速率差量与管理 reset epoch
+         └─ 未知字节 → 计数
   rtcm_module.poll() / storage_module.poll() / system_module.poll()
   每 100 ms：LinkService.tick → 超时断开、配对窗口、报警推送
   每轮末尾：各模块把状态写入 DataCenter（单写者）
@@ -233,7 +233,7 @@ LinkManager 白名单变化（配对成功 / wl clear）
 1. 新建 main/gnss_module.{hpp,cpp}（纯逻辑放进新的纯组件）
 2. app_main：kModules[] 加一行 {name="gnss", id=kGnss, executor=kIo, ...}；首次使用 kIo 时启用该执行器
 3. 需要哪些就登记哪些：kRoutes[]（协议指令）、kCmds[]（控制台）、kKeys[]（存储）、Topic::kGnss
-4. 与其他模块通信：rtcm_module 的 Pipe → gnss_module 读取后写 UART
+4. 与其他模块通信：`bt_link`（kLink）在 Demux 回调中直接把 PHONE RTCM 整帧推入 `RtcmPipe` → `gnss_module`（kIo）读取并保留 pending chunk/offset 写 UART；`rtcm_module` 仅统计通路快照速率与处理 `rtcm reset` epoch
 → 不修改 app_fw、执行器、CommandRouter、rtk_console、DataCenter 的代码
 ```
 

@@ -137,7 +137,12 @@ spp_server_session_t *spp_server_session_alloc(uint32_t handle, const uint8_t *a
     slot->lifecycle_pending = true;
     slot->data_pending = false;
     slot->drop_pending = false;
+    slot->rx_data_missed = false;
     slot->rx_dropped = 0U;
+    slot->rx_dropped_total = 0U;
+    slot->rx_high_water = 0U;
+    slot->rx_events = 0U;
+    slot->drop_events = 0U;
     slot->disconnect_pending = false;
     slot->disconnect_submitted = false;
     slot->disconnect_attempted = false;

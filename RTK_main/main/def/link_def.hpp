@@ -65,6 +65,13 @@ struct LinkStats : core::LinkStats {
     uint32_t tx_anon_write_fail = 0;
     uint32_t tx_stray_write = 0;
     uint32_t tx_inflight = 0;
+    uint32_t evt_dropped = 0;
+    uint32_t rx_wake_calls = 0;
+    std::array<uint32_t, kMaxSessions> rx_used{};
+    std::array<uint32_t, kMaxSessions> rx_high_water{};
+    std::array<uint32_t, kMaxSessions> rx_dropped_bytes{};
+    std::array<uint32_t, kMaxSessions> rx_events{};
+    std::array<uint32_t, kMaxSessions> rx_drop_events{};
 };
 
 } // namespace app

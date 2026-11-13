@@ -380,8 +380,28 @@ esp_err_t spp_server_disconnect(uint32_t)
 {
     return ESP_OK;
 }
-/* host 无 SPP 驱动：追踪钩子登记接受即返回（DebugModule::init 会调用）。 */
+/* host 无 SPP 驱动：追踪钩子与 RX 查询替身（DebugModule/BtLinkModule::init 会调用）。 */
 void spp_server_set_trace_hook(spp_server_trace_fn) {}
+void spp_server_set_rx_wake_hook(spp_server_rx_wake_fn, void *) {}
+bool spp_server_rx_ready(uint32_t)
+{
+    return false;
+}
+bool spp_server_any_rx_ready(void)
+{
+    return false;
+}
+void spp_server_rx_stats(spp_server_rx_stats_t *stats)
+{
+    if (stats != nullptr) {
+        *stats = {};
+    }
+}
+void xTaskNotifyGive(TaskHandle_t) {}
+uint32_t ulTaskNotifyTake(BaseType_t, TickType_t)
+{
+    return 0U;
+}
 esp_err_t nvs_store_init(void)
 {
     return ESP_OK;

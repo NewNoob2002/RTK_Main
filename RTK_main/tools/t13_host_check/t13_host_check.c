@@ -944,7 +944,67 @@ typedef struct {
     void (*run)(void);
 } scenario_t;
 
+static void sc_rx_wake_cb(void *ctx)
+{
+    atomic_int *calls = (atomic_int *)ctx;
+    /* 故意查询 rx_ready（内部会拿 s_spp_mux），验证回调确在 portMUX 外执行、不会自锁。 */
+    (void)spp_server_any_rx_ready();
+    atomic_fetch_add(calls, 1);
+}
+
+/* K3：验证 RX 唤醒钩子在 portMUX 外触发、level/stats 统计准确、且队列满时不丢数据与掉包状态。 */
+static void sc_rx_wake_level_and_stats(void)
+{
+    atomic_int hook_calls = 0;
+    spp_server_set_rx_wake_hook(sc_rx_wake_cb, &hook_calls);
+    bring_up();
+    open_session(0x11U);
+    CHECK(atomic_load(&hook_calls) >= 1); /* OPEN 也立即唤醒 */
+
+    const int before_data = atomic_load(&hook_calls);
+    uint8_t payload[600];
+    memset(payload, 0x5AU, sizeof(payload));
+    fake_emit_data(0x11U, payload, sizeof(payload));
+    CHECK(atomic_load(&hook_calls) == before_data + 1);
+    CHECK(spp_server_rx_ready(0x11U));
+    CHECK(spp_server_any_rx_ready());
+
+    spp_server_rx_stats_t rxs;
+    spp_server_rx_stats(&rxs);
+    CHECK(rxs.sessions[0].used == sizeof(payload));
+    CHECK(rxs.sessions[0].high_water == sizeof(payload));
+    CHECK(rxs.sessions[0].dropped_bytes == 0U);
+    CHECK(rxs.sessions[0].rx_events == 1U);
+    CHECK(rxs.sessions[0].drop_events == 0U);
+
+    /* 读走后 level 归零，但高水位保留 */
+    uint8_t rx_buf[600];
+    CHECK(spp_server_read(0x11U, rx_buf, sizeof(rx_buf)) == sizeof(payload));
+    spp_server_evt_t evt;
+    while (spp_server_poll_event(&evt, 0U)) {
+    }
+    CHECK(!spp_server_rx_ready(0x11U));
+    CHECK(!spp_server_any_rx_ready());
+    spp_server_rx_stats(&rxs);
+    CHECK(rxs.sessions[0].used == 0U);
+    CHECK(rxs.sessions[0].high_water == sizeof(payload));
+
+    /* 灌满 rx StreamBuffer 触发 RX_DROP，验证累计丢字节与 drop_events。 */
+    uint8_t big[SPP_SERVER_RX_BUF_SIZE];
+    memset(big, 0xA5U, sizeof(big));
+    fake_emit_data(0x11U, big, sizeof(big));
+    fake_emit_data(0x11U, payload, 128U);
+    CHECK(spp_server_rx_ready(0x11U));
+    spp_server_rx_stats(&rxs);
+    CHECK(rxs.sessions[0].dropped_bytes == 128U);
+    CHECK(rxs.sessions[0].drop_events == 1U);
+    CHECK(rxs.sessions[0].high_water == SPP_SERVER_RX_BUF_SIZE);
+    CHECK(wait_event(SPP_SERVER_EVT_RX_DROP, 0x11U, 1000U));
+    spp_server_set_rx_wake_hook(NULL, NULL);
+}
+
 static const scenario_t s_scenarios[] = {
+    {"rx_wake_level_and_stats", sc_rx_wake_level_and_stats},
     {"reject_rearm_after_close", sc_reject_rearm_after_close},
     {"lifecycle_burst_churn", sc_lifecycle_burst_churn},
     {"drop_counts_by_handle", sc_drop_counts_by_handle},

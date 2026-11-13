@@ -139,6 +139,11 @@ void print_link_section() noexcept
     cli::print_kv("spp_events",
                   "anon_write_fail=%" PRIu32 " stray=%" PRIu32 " dispatch_pauses=%" PRIu32 " cancelled=%" PRIu32,
                   stats.tx_anon_write_fail, stats.tx_stray_write, stats.dispatch_pauses, stats.dispatch_cancelled);
+    cli::print_kv("spp_rx",
+                  "evt_drop=%" PRIu32 " wakes=%" PRIu32 " s0=%" PRIu32 "/%" PRIu32 "(drop=%" PRIu32 ") "
+                  "s1=%" PRIu32 "/%" PRIu32 "(drop=%" PRIu32 ")",
+                  stats.evt_dropped, stats.rx_wake_calls, stats.rx_used[0], stats.rx_high_water[0],
+                  stats.rx_dropped_bytes[0], stats.rx_used[1], stats.rx_high_water[1], stats.rx_dropped_bytes[1]);
 }
 
 void print_sys_section() noexcept

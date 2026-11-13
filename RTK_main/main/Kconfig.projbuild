@@ -14,6 +14,14 @@ menu "RTK_main"
             bool "PHONE_PREEMPT: phone disconnects alarm"
     endchoice
 
+    config RTK_LINK_RX_BUF_BYTES
+        int "kLink per-session RX staging buffer size (bytes)"
+        range 256 1024
+        default 512
+        help
+            kLink 每会话从 spp_server 一次拉取并跨轮保留未消费尾字节的暂存缓冲大小。
+            默认 512 B；可回退到 256 B 以观察对吞吐的影响。
+
     config RTK_TRACE_ENABLE
         bool "Enable runtime debug trace (trace ring, debug module and commands)"
         default y

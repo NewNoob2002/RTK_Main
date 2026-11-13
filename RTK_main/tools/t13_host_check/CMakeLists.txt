@@ -52,6 +52,7 @@ enable_testing()
 
 # 每个场景独立进程：驱动只有 init、没有 deinit 公共接口，静态对象在进程内不复用。
 set(T13_SCENARIOS
+    rx_wake_level_and_stats
     reject_rearm_after_close
     lifecycle_burst_churn
     drop_counts_by_handle

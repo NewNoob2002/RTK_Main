@@ -18,6 +18,7 @@ AppContext &app_context() noexcept
 
 // 仅测试接线可访问模块私有状态，保留原场景的逐字段断言。
 struct ModuleTestAccess {
+    static constexpr size_t kRxBudgetBytes = BtLinkModule::kRxBudgetBytes;
     static auto &manager() noexcept
     {
         return app_context().bt_link.link_manager_;
@@ -68,15 +69,11 @@ struct ModuleTestAccess {
     }
     static void flush_rtcm() noexcept
     {
-        auto &bt = app_context().bt_link;
-        app_context().data.rtcm_batch.write(
-            {std::span<const uint8_t>{bt.rtcm_batch_}.first(bt.rtcm_size_), bt.rtcm_rejected_});
         static_cast<void>(app_context().rtcm.poll(rtos::now_ms()));
-        bt.rtcm_size_ = 0;
-        bt.rtcm_rejected_ = 0;
     }
 };
 namespace {
+constexpr size_t kRxBudgetBytes = ModuleTestAccess::kRxBudgetBytes;
 // 旧白盒断言的名字仅限本测试 TU，产品没有这些二次暴露。
 auto &s_link_manager = ModuleTestAccess::manager();
 auto &s_alarm = ModuleTestAccess::alarm();
@@ -244,8 +241,8 @@ void link_round(uint32_t &last_tick_ms)
 {
     bool pending = false;
     for (const auto &entry : s_sessions) {
-        pending = pending || (entry.used && entry.demux_ready &&
-                              (entry.drain_pending || entry.sink.pending() || entry.rx_offset < entry.rx_size));
+        pending =
+            pending || (entry.used && entry.demux_ready && (entry.drain_pending || entry.rx_offset < entry.rx_size));
     }
     app_context().bt_link.wait(pending ? 0U : 20U);
     const uint32_t begin = rtos::now_ms();

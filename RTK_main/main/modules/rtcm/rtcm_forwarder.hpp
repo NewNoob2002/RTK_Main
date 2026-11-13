@@ -16,6 +16,11 @@ struct RtcmStats {
     uint16_t last_msg = 0;
     uint32_t rejected_role = 0;
     uint32_t bytes_per_sec = 0;
+    uint32_t pipe_accepted_frames = 0;
+    uint32_t pipe_accepted_bytes = 0;
+    uint32_t pipe_dropped_frames = 0;
+    uint32_t pipe_dropped_bytes = 0;
+    uint32_t reset_epoch = 0;
 };
 
 /** RTCM 帧计数与 CRC-32 累计；无锁，仅 kLink 内部使用。 */

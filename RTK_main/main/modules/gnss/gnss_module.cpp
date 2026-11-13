@@ -380,7 +380,7 @@ bool GnssModule::poll(uint32_t now_ms) noexcept
         return false;
     }
     poll_controller(now_ms);
-    pump_rtcm_pipe();
+    const bool tx_progress = pump_rtcm_pipe();
 
     const auto cur_state = controller_.state();
     if ((cur_state != last_published_state_) || ((now_ms - last_status_ms_) >= kStatusPeriodMs)) {
@@ -391,7 +391,8 @@ bool GnssModule::poll(uint32_t now_ms) noexcept
     last_rx_bytes_ = 0U;
     const bool allow_tx = (cur_state == ::gnss::State::kRunning) || (cur_state == ::gnss::State::kConfiguring) ||
                           (cur_state == ::gnss::State::kProbing);
-    return had_full_rx || (allow_tx && (context_.rtcm_pipe.available() > 0U));
+    const bool has_more_tx = (rtcm_tx_len_ > rtcm_tx_off_) || (context_.rtcm_pipe.available() > 0U);
+    return had_full_rx || (allow_tx && tx_progress && has_more_tx);
 }
 
 void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
@@ -514,8 +515,8 @@ void GnssModule::handle_reject(const demux::Decoder &decoder, std::span<const ui
     std::array<char, kRejectReasonBytes> reason{};
     const std::size_t len = (decoder.explain != nullptr) ? decoder.explain(prefix, reason) : 0U;
     const char *text = (len != 0U) ? reason.data() : reject_cause_name(cause);
-    fw::tlog(fw::TraceCat::kGnss, "%s rejected %lu bytes: %s", decoder.name,
-             static_cast<unsigned long>(prefix.size()), text);
+    fw::tlog(fw::TraceCat::kGnss, "%s rejected %lu bytes: %s", decoder.name, static_cast<unsigned long>(prefix.size()),
+             text);
     fw::tlog_hex(fw::TraceCat::kGnss, prefix);
 }
 
@@ -595,8 +596,7 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
     const auto cur_state = controller_.state();
     if (cur_state != last_state_) {
         trace_gnss(GnssTrace::kState, static_cast<uint32_t>(cur_state), static_cast<uint32_t>(last_state_));
-        fw::tlog(fw::TraceCat::kGnss, "state %s -> %s", ::gnss::state_name(last_state_),
-                 ::gnss::state_name(cur_state));
+        fw::tlog(fw::TraceCat::kGnss, "state %s -> %s", ::gnss::state_name(last_state_), ::gnss::state_name(cur_state));
         if ((last_state_ == ::gnss::State::kProbing) && (cur_state == ::gnss::State::kConfiguring)) {
             const auto det = controller_.detected();
             const uint32_t baud = (det.baud != 0U) ? det.baud : host_baud_;
@@ -622,27 +622,56 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
     prev_ctrl_stats_ = cur_stats;
 }
 
-void GnssModule::pump_rtcm_pipe() noexcept
+bool GnssModule::pump_rtcm_pipe() noexcept
 {
     const auto st = controller_.state();
     const bool allow_tx =
         (st == ::gnss::State::kRunning) || (st == ::gnss::State::kConfiguring) || (st == ::gnss::State::kProbing);
     if (!allow_tx) {
+        if (rtcm_tx_len_ > rtcm_tx_off_) {
+            context_.rtcm_pipe.note_discarded(rtcm_tx_len_ - rtcm_tx_off_);
+            rtcm_tx_len_ = 0U;
+            rtcm_tx_off_ = 0U;
+        }
         context_.rtcm_pipe.discard();
-        return;
+        return false;
     }
-    std::array<uint8_t, kRtcmTxChunkBytes> chunk{};
-    const size_t n = context_.rtcm_pipe.read(chunk);
-    if (n == 0U) {
-        return;
+    if (rtcm_tx_off_ >= rtcm_tx_len_) {
+        rtcm_tx_len_ = context_.rtcm_pipe.read(rtcm_tx_buf_);
+        rtcm_tx_off_ = 0U;
+    }
+    if (rtcm_tx_off_ >= rtcm_tx_len_) {
+        context_.rtcm_pipe.set_pending(0U, false);
+        return false;
     }
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
-    const int written = uart_write_bytes(port, chunk.data(), n);
+    const auto pending = std::span<const uint8_t>{rtcm_tx_buf_}.subspan(rtcm_tx_off_, rtcm_tx_len_ - rtcm_tx_off_);
+    const int written = uart_write_bytes(port, pending.data(), pending.size());
     if (written > 0) {
-        const auto bytes = static_cast<uint32_t>(written);
-        uart_tx_bytes_ += bytes;
+        const auto bytes = static_cast<size_t>(written);
+        rtcm_tx_off_ += bytes;
+        if (rtcm_tx_off_ >= rtcm_tx_len_) {
+            rtcm_tx_off_ = 0U;
+            rtcm_tx_len_ = 0U;
+        }
+        uart_tx_bytes_ += static_cast<uint32_t>(bytes);
         context_.rtcm_pipe.note_written(bytes);
+        context_.rtcm_pipe.set_pending(rtcm_tx_len_ - rtcm_tx_off_, false);
+        return true;
     }
+    if (written == 0) {
+        // 驱动 TX 环暂满：保留块与偏移，下轮继续，不丢块也不重读管道。
+        context_.rtcm_pipe.set_pending(rtcm_tx_len_ - rtcm_tx_off_, true);
+        return false;
+    }
+    const size_t lost = rtcm_tx_len_ - rtcm_tx_off_;
+    rtcm_tx_off_ = 0U;
+    rtcm_tx_len_ = 0U;
+    context_.rtcm_pipe.note_write_error(lost);
+    trace_gnss(GnssTrace::kState, static_cast<uint32_t>(st), static_cast<uint32_t>(fw::Result::kIoError));
+    fw::tlog(fw::TraceCat::kGnss, "RTCM UART write error (%d), dropped %lu pending bytes", written,
+             static_cast<unsigned long>(lost));
+    return false;
 }
 
 void GnssModule::publish_status(uint32_t now_ms) noexcept

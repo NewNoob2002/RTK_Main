@@ -24,6 +24,7 @@ enum class LinkTrace : uint8_t {
     kWhitelistAdd,   // a = 白名单当前数量
     kWhitelistClear,
     kWhitelistRemove, // a = 白名单当前数量
+    kCloseCancel,     // CLOSE 清理在途挂起帧与 RX 尾部：a = 取消挂起帧数(0/1)，b = 丢弃 RX 尾部字节
 };
 
 /** kOpen/kKick 的判定依据。 */

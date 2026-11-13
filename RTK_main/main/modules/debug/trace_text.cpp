@@ -38,6 +38,8 @@ constexpr std::array<TraceField, 1U> kLinkPairClose = {{{"timeout", TraceValue::
 constexpr std::array<TraceField, 1U> kLinkWhitelistAdd = {{{"count", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 0U> kLinkWhitelistClear = {{}};
 constexpr std::array<TraceField, 1U> kLinkWhitelistRemove = {{{"count", TraceValue::kDecA}}};
+constexpr std::array<TraceField, 3U> kLinkCloseCancel = {
+    {{"h", TraceValue::kSession}, {"rx", TraceValue::kDecA}, {"paused", TraceValue::kDecB}}};
 
 constexpr std::array<TraceField, 3U> kProtoFrame = {
     {{"h", TraceValue::kSession}, {"id", TraceValue::kHexA}, {"len", TraceValue::kDecB}}};
@@ -108,9 +110,9 @@ constexpr std::array<TraceField, 2U> kGnssBaud = {{{"baud", TraceValue::kDecA}, 
 
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
 #if RTK_GNSS_ENABLED
-constexpr std::array<TraceText, 56U> kTable = {{
+constexpr std::array<TraceText, 57U> kTable = {{
 #else
-constexpr std::array<TraceText, 46U> kTable = {{
+constexpr std::array<TraceText, 47U> kTable = {{
 #endif
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen), "session {h} opened as {role} ({why})",
      std::span<const TraceField>(kLinkOpen)},
@@ -134,6 +136,8 @@ constexpr std::array<TraceText, 46U> kTable = {{
      std::span<const TraceField>(kLinkWhitelistClear)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kWhitelistRemove),
      "whitelist remove, {count} entries left", std::span<const TraceField>(kLinkWhitelistRemove)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kCloseCancel),
+     "session {h} close cancelled {rx} rx bytes (paused={paused})", std::span<const TraceField>(kLinkCloseCancel)},
     {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kFrame), "session {h} frame {id}, {len} bytes",
      std::span<const TraceField>(kProtoFrame)},
     {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kReply), "session {h} reply to {msg}: {result}",

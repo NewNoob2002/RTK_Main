@@ -85,7 +85,7 @@ private:
     void handle_reject(const demux::Decoder &decoder, std::span<const uint8_t> prefix, demux::RejectCause cause,
                        bool last) noexcept;
     void poll_controller(uint32_t now_ms) noexcept;
-    void pump_rtcm_pipe() noexcept;
+    [[nodiscard]] bool pump_rtcm_pipe() noexcept;
     void publish_status(uint32_t now_ms) noexcept;
     void persist_detected_hint() noexcept;
     [[nodiscard]] fw::Result apply_power(bool on) noexcept;
@@ -110,6 +110,9 @@ private:
     std::array<const demux::Decoder *, demux::kMaxDecoders> decoders_{};
     size_t decoder_count_ = 0U;
     std::array<uint8_t, kDemuxBufBytes> demux_buf_{};
+    std::array<uint8_t, kRtcmTxChunkBytes> rtcm_tx_buf_{};
+    size_t rtcm_tx_len_ = 0U;
+    size_t rtcm_tx_off_ = 0U;
     std::array<uint32_t, kMaxBaudCandidates> bauds_{};
     size_t baud_count_ = 0U;
 

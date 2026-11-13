@@ -24,8 +24,9 @@ public:
 
 private:
     AppContext &context_;
-    RtcmForwarder forwarder_{};
-    uint32_t batch_version_ = 0;
+    RtcmStats stats_{};
+    RtcmLinkSnapshot baseline_{};
+    uint32_t reset_epoch_ = 0;
     uint32_t rate_window_ms_ = 0;
     uint32_t rate_window_bytes_ = 0;
     bool rate_started_ = false;

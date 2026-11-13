@@ -9,6 +9,7 @@
   rtt   窗口 1 串行，测往返时延分布
   win   窗口 W 流水线，测应答速率、上下行吞吐、丢失与内容错误
   up    上行洪泛：连续发 0x07 设置(payload 256B，帧 280B)不等应答，测上行极限与 rx_dropped
+  upwin 按线上帧字节窗口流控发 0x07 设置(payload 256B，帧 280B)：仅完整有效应答释放字节窗口，绝不重发
   bad   好帧之间混入坏 CRC/垃圾字节，验证解析器重同步且好帧应答不丢
 """
 import argparse
@@ -18,6 +19,7 @@ import struct
 import threading
 import time
 import zlib
+from collections import deque
 
 # 实测（Python 3.14 + BlueZ RFCOMM，2026-11-13）：主线程单次长 Condition.wait 期间接收线程收不到数据，
 # 应答恰在 wait 超时返回时才到达，伪造出“idle 2s / 断开”；切成短片轮询后 win16×3000 0 丢失。
@@ -97,11 +99,15 @@ class Rx(threading.Thread):
 
 
 class Session:
-    def __init__(self, addr, ch):
-        self.sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-        t = time.perf_counter()
-        self.sock.connect((addr, ch))
-        self.connect_ms = (time.perf_counter() - t) * 1e3
+    def __init__(self, addr, ch, sock=None):
+        if sock is None:
+            self.sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+            t = time.perf_counter()
+            self.sock.connect((addr, ch))
+            self.connect_ms = (time.perf_counter() - t) * 1e3
+        else:
+            self.sock = sock
+            self.connect_ms = 0.0
         self.sock.settimeout(0.2)
         self.rx = Rx(self.sock)
         self.rx.start()
@@ -233,6 +239,98 @@ def pipeline(s, n, window, set_len=44, name=None):
     return report(name or f"win{window}", s, reqs, sent_t, t0, t1, up, s.rx.bytes - rx0, start_idx)
 
 
+def up_window(s, n, window_bytes=3072, payload_len=256, idle_timeout_s=2.0, name="upwin"):
+    """按线上字节窗口流控发送 256B payload（280B 线上帧）0x07 设置命令；仅完整有效应答释放窗口，绝不重发。"""
+    sample_frame = build(0x07, 0x02, b"\0" * payload_len)
+    frame_len = len(sample_frame)
+    if window_bytes < frame_len:
+        raise SystemExit(f"window_bytes={window_bytes} < wire frame_len={frame_len}")
+
+    start_idx = len(s.rx.frames)
+    rx0 = s.rx.bytes
+    t0 = time.perf_counter()
+    inflight = deque()  # (wire_bytes, sent_t)
+    inflight_bytes = 0
+    max_inflight_bytes = 0
+    max_inflight_frames = 0
+    sent_count = 0
+    ok = 0
+    bad = 0
+    lat = []
+    up = 0
+    last = None
+    scan_idx = start_idx
+
+    while sent_count < n or inflight:
+        with s.rx.cv:
+            frames_len = len(s.rx.frames)
+            closed = s.rx.closed
+        while scan_idx < frames_len:
+            fr = s.rx.frames[scan_idx]
+            scan_idx += 1
+            if fr[1] == 0x07 and fr[2] == 0x01 and fr[3] == 0x03 and fr[4] == b"\x01\x01" and inflight:
+                wlen, sent_t = inflight.popleft()
+                inflight_bytes -= wlen
+                ok += 1
+                lat.append((fr[0] - sent_t) * 1e3)
+            else:
+                bad += 1
+        if closed:
+            print("!! link closed by peer")
+            break
+        if sent_count < n and inflight_bytes + frame_len <= window_bytes:
+            pl = struct.pack("<I", sent_count) + os.urandom(payload_len - 4)
+            last = pl[:44]
+            f = build(0x07, 0x02, pl)
+            assert len(f) == frame_len
+            t_send = time.perf_counter()
+            s.sock.sendall(f)
+            up += len(f)
+            sent_count += 1
+            inflight.append((len(f), t_send))
+            inflight_bytes += len(f)
+            max_inflight_bytes = max(max_inflight_bytes, inflight_bytes)
+            max_inflight_frames = max(max_inflight_frames, len(inflight))
+            continue
+        if not inflight:
+            continue
+        with s.rx.cv:
+            idle_t0 = time.perf_counter()
+            while len(s.rx.frames) == scan_idx and not s.rx.closed and time.perf_counter() - idle_t0 < idle_timeout_s:
+                s.rx.cv.wait(WAIT_SLICE_S)
+            if len(s.rx.frames) == scan_idx and not s.rx.closed:
+                print(f"!! upwin idle {idle_timeout_s:.2f}s with {len(inflight)} frames ({inflight_bytes} B) in flight; stop")
+                break
+
+    lost = len(inflight)
+    echo_ok = True
+    if last is not None and not s.rx.closed:
+        q_start = len(s.rx.frames)
+        s.sock.sendall(build(0x07, 0x00))
+        s.wait_frames(q_start + 1, min(2.0, max(idle_timeout_s, 0.5)))
+        q = [fr for fr in s.rx.frames[q_start:] if fr[1] == 0x07 and fr[3] == 0x01]
+        echo_ok = bool(q) and q[-1][4][:44] == last
+    t1 = time.perf_counter()
+    dt = max(t1 - t0, 1e-6)
+    down = s.rx.bytes - rx0
+    print(f"[{name}] sent={sent_count} frame_len={frame_len} win_bytes={window_bytes} max_inflight={max_inflight_frames}/{max_inflight_bytes}B "
+          f"ok={ok} lost={lost} content_err={bad} final_echo_ok={echo_ok} dur={dt:.2f}s rate={ok / dt:.1f} rep/s "
+          f"up={up / dt / 1024:.2f} KiB/s down={down / dt / 1024:.2f} KiB/s "
+          f"lat_ms p50={pct(lat, .5):.1f} p95={pct(lat, .95):.1f} p99={pct(lat, .99):.1f} max={max(lat) if lat else 0:.1f} "
+          f"host_crc_bad={s.rx.crc_bad}")
+    if last is not None and not echo_ok:
+        bad += 1
+    return {
+        "ok": ok,
+        "lost": lost,
+        "bad": bad,
+        "sent": sent_count,
+        "max_inflight_frames": max_inflight_frames,
+        "max_inflight_bytes": max_inflight_bytes,
+        "final_echo_ok": echo_ok,
+    }
+
+
 def up_flood(s, n, payload_len=256):
     """不等应答连续发送大帧；设置命令都回 01 01，最后发一个 0x07 查询验证最后一次设置值。"""
     start_idx = len(s.rx.frames)
@@ -284,16 +382,113 @@ def bad_mix(s, n):
     return good - okc
 
 
+def run_selftest():
+    """离线自检 upwin 窗口流控（正常满窗 0 丢、坏应答/超时不释放窗口也不重发、duration 模式隔离）。"""
+    def build_reply(cmd, typ, payload=b""):
+        h = HDR + struct.pack("<H", cmd) + b"\0" * 6 + struct.pack("<H", len(payload)) + b"\0\0"
+        h += bytes([0x01, typ, 0, 0]) + payload
+        crc = zlib.crc32(h) & 0xFFFFFFFF
+        return h + struct.pack("<I", crc)
+
+    def spawn_fake_peer(sock_peer, mode="ok"):
+        received = []
+
+        def peer():
+            buf = bytearray()
+            last_pl = b""
+            sock_peer.settimeout(0.05)
+            while True:
+                try:
+                    d = sock_peer.recv(4096)
+                except TimeoutError:
+                    continue
+                except OSError:
+                    break
+                if not d:
+                    break
+                buf += d
+                while True:
+                    i = buf.find(HDR)
+                    if i < 0:
+                        del buf[: max(0, len(buf) - 3)]
+                        break
+                    if i:
+                        del buf[:i]
+                    if len(buf) < 20:
+                        break
+                    n = struct.unpack_from("<H", buf, 12)[0]
+                    if len(buf) < 24 + n:
+                        break
+                    cmd = struct.unpack_from("<H", buf, 4)[0]
+                    typ = buf[17]
+                    pl = bytes(buf[20 : 20 + n])
+                    del buf[: 24 + n]
+                    received.append((cmd, typ, len(pl)))
+                    if cmd == 0x07 and typ == 0x02:
+                        last_pl = pl[:44]
+                        if mode == "ok":
+                            sock_peer.sendall(build_reply(0x07, 0x03, b"\x01\x01"))
+                        elif mode == "bad_then_stall" and len(received) == 1:
+                            sock_peer.sendall(build_reply(0x07, 0x03, b"\x00\x00"))
+                    elif cmd == 0x07 and typ == 0x00:
+                        sock_peer.sendall(build_reply(0x07, 0x01, last_pl + b"\0\0\0\0"))
+            sock_peer.close()
+
+        t = threading.Thread(target=peer, daemon=True)
+        t.start()
+        return t, received
+
+    # 1) 正常 30 帧：3072B 窗口内 280B 帧最多 10 帧在途，0 丢 0 错，最终 echo 校验通过
+    s_cli, s_srv = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    t1, rx1 = spawn_fake_peer(s_srv, "ok")
+    sess1 = Session(None, 0, sock=s_cli)
+    r1 = up_window(sess1, 30, window_bytes=3072, payload_len=256, idle_timeout_s=0.5, name="selftest_ok")
+    sess1.close()
+    t1.join(timeout=1.0)
+    assert r1["sent"] == 30 and r1["ok"] == 30 and r1["lost"] == 0 and r1["bad"] == 0, r1
+    assert r1["max_inflight_frames"] <= 10 and r1["max_inflight_bytes"] <= 2800, r1
+    assert r1["final_echo_ok"] is True, r1
+    assert len([x for x in rx1 if x[0] == 0x07 and x[1] == 0x02]) == 30, rx1
+
+    # 2) 坏应答 + 超时：仅收到错误回复不释放窗口，窗口占满 10 帧后停止发送且绝不重发
+    s_cli2, s_srv2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    t2, rx2 = spawn_fake_peer(s_srv2, "bad_then_stall")
+    sess2 = Session(None, 0, sock=s_cli2)
+    r2 = up_window(sess2, 20, window_bytes=3072, payload_len=256, idle_timeout_s=0.25, name="selftest_stall")
+    sess2.close()
+    t2.join(timeout=1.0)
+    assert r2["sent"] == 10 and r2["ok"] == 0 and r2["lost"] == 10 and r2["bad"] >= 1, r2
+    assert len([x for x in rx2 if x[0] == 0x07 and x[1] == 0x02]) == 10, rx2
+
+    # 3) duration 调度隔离：upwin + duration 只扩展 upwin，不得触发 win8 soak
+    assert duration_target("upwin") == "upwin"
+    assert duration_target("win") == "win8"
+    assert duration_target("all") == "win8"
+    print("spp_stress selftest PASS")
+
+
+def duration_target(mode):
+    return "upwin" if mode == "upwin" else "win8"
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("addr")
+    ap.add_argument("addr", nargs="?")
     ap.add_argument("--ch", type=int, default=1)
-    ap.add_argument("--mode", default="all")
+    ap.add_argument("--mode", default="all", choices=["all", "rtt", "win", "up", "upwin", "bad"])
     ap.add_argument("-n", type=int, default=600)
     ap.add_argument("--windows", default="1,2,4,8,16")
     ap.add_argument("--flood", type=int, default=200)
-    ap.add_argument("--duration", type=float, default=0, help="soak: repeat win8 until this many seconds")
+    ap.add_argument("--window-bytes", type=int, default=3072, help="upwin 线上字节窗口上限（默认 3072B）")
+    ap.add_argument("--duration", type=float, default=0, help="soak: upwin 下重复 upwin，其余模式重复 win8")
+    ap.add_argument("--selftest", action="store_true", help="离线自检 upwin 流控与错误语义")
     a = ap.parse_args()
+
+    if a.selftest:
+        run_selftest()
+        return
+    if not a.addr:
+        ap.error("addr is required unless --selftest is given")
 
     s = Session(a.addr, a.ch)
     print(f"connected in {s.connect_ms:.0f} ms")
@@ -307,6 +502,10 @@ def main():
         for w in map(int, a.windows.split(",")):
             r = pipeline(s, a.n, w)
             total_lost += r["lost"]; total_bad += r["bad"]
+    if a.mode in ("all", "upwin"):
+        r = up_window(s, a.flood, window_bytes=a.window_bytes, payload_len=256)
+        total_lost += r["lost"]
+        total_bad += r["bad"]
     if a.mode in ("all", "up"):
         total_lost += up_flood(s, a.flood, 256)
     if a.mode in ("all", "bad"):
@@ -315,7 +514,10 @@ def main():
         end = time.time() + a.duration
         k = 0
         while time.time() < end:
-            r = pipeline(s, 900, 8, name=f"soak{k}")
+            if duration_target(a.mode) == "upwin":
+                r = up_window(s, a.flood, window_bytes=a.window_bytes, payload_len=256, name=f"upwin_soak{k}")
+            else:
+                r = pipeline(s, 900, 8, name=f"soak{k}")
             total_lost += r["lost"]; total_bad += r["bad"]; k += 1
     print(f"TOTAL lost={total_lost} content_err={total_bad} host_crc_bad={s.rx.crc_bad}")
     s.close()

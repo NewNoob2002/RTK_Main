@@ -3,11 +3,14 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <optional>
 #include <span>
 
 #include "app_config.hpp"
 #include "def/rtcm_def.hpp"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #if RTK_GNSS_ENABLED
 #include "gnss/types.hpp"
 #endif
@@ -46,43 +49,33 @@ public:
     void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /** 仅 kLink，非 ISR；至多等待 max_ms，先处理生命周期事件。 */
     void wait(uint32_t max_ms) noexcept;
+    /** 仅 kLink 或启动前，非 ISR；返回直推 RTCM 累计统计快照。 */
+    [[nodiscard]] const RtcmLinkSnapshot &rtcm_snapshot() const noexcept
+    {
+        return rtcm_snapshot_;
+    }
 
 private:
     friend struct ModuleTestAccess;
     using SessionDemux = demux::StaticDemux<proto::demux_frame::kDecoder, demux::rtcm3::kDecoder>;
     static constexpr uint8_t kProductIndex = SessionDemux::index_of<proto::demux_frame::kDecoder>();
     static constexpr uint8_t kRtcmIndex = SessionDemux::index_of<demux::rtcm3::kDecoder>();
-    static constexpr size_t kRxChunkBytes = 64;
+    static constexpr size_t kRxChunkBytes = kLinkRxBufBytes;
+    static constexpr size_t kRxBudgetBytes = kLinkRxBufBytes;
     class SessionSink final : public demux::Sink {
     public:
         constexpr SessionSink() noexcept = default;
         // 仅 kLink，非 ISR；OPEN/CLOSE 时复位元数据，owner 覆盖本会话生命周期。
         void bind(BtLinkModule &owner, core::SessionHandle handle) noexcept;
         void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> wire) noexcept override;
-        [[nodiscard]] bool dispatch_one() noexcept;
-        [[nodiscard]] bool pending() const noexcept
-        {
-            return cursor_ < count_;
-        }
         [[nodiscard]] bool healthy() const noexcept
         {
             return healthy_;
         }
 
     private:
-        struct PendingFrame {
-            uint16_t size = 0;
-            uint8_t index = 0;
-        };
-        static constexpr size_t kMinWireBytes = 6;
-        std::array<uint8_t, SessionDemux::kBufSize> bytes_{};
-        std::array<PendingFrame, SessionDemux::kBufSize / kMinWireBytes> frames_{};
         BtLinkModule *owner_ = nullptr;
         core::SessionHandle handle_ = 0;
-        size_t count_ = 0;
-        size_t cursor_ = 0;
-        size_t size_ = 0;
-        size_t offset_ = 0;
         bool healthy_ = true;
     };
     struct SessionEntry {
@@ -110,6 +103,9 @@ private:
     void handle_open(const spp_server_evt_t &evt, uint32_t now_ms) noexcept;
     void handle_close(core::SessionHandle handle) noexcept;
     void handle_data(core::SessionHandle handle) noexcept;
+    void handle_rtcm_frame(core::SessionHandle handle, std::span<const uint8_t> wire) noexcept;
+    [[nodiscard]] bool poll_and_check_ready(uint32_t now_ms) noexcept;
+    static void on_rx_wake(void *ctx) noexcept;
     void drain_rx(uint32_t round_start_ms) noexcept;
     [[nodiscard]] bool drain_session(SessionEntry &entry, size_t index, size_t &budget,
                                      uint32_t round_start_ms) noexcept;
@@ -143,9 +139,8 @@ private:
     std::optional<core::LinkService> service_{};
     std::array<SessionEntry, kMaxSessions> sessions_{};
     size_t rx_cursor_ = 0;
-    std::array<uint8_t, kRtcmBatchBytes> rtcm_batch_{};
-    size_t rtcm_size_ = 0;
-    uint32_t rtcm_rejected_ = 0;
+    RtcmLinkSnapshot rtcm_snapshot_{};
+    std::atomic<TaskHandle_t> wake_task_{nullptr};
 #if RTK_GNSS_ENABLED
     uint32_t gnss_fix_version_ = 0;
     uint32_t gnss_status_version_ = 0;

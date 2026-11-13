@@ -55,6 +55,7 @@ foreach(policy concurrent preempt)
     target_include_directories(main_${policy} PRIVATE
         ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
         ${PROJ_ROOT}/components/cli/include
+        ${PROJ_ROOT}/components/gnss/include
         ${PROJ_ROOT}/components/nvs_store/include ${PROJ_ROOT}/components/rtos/include
         ${PROJ_ROOT}/components/app_fw/include)
     target_compile_options(main_${policy} PRIVATE -fno-exceptions -fno-rtti
@@ -65,7 +66,7 @@ foreach(policy concurrent preempt)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
-    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget lifecycle_application
+    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget)
         add_test(NAME main_${policy}_${scenario} COMMAND main_${policy} ${scenario})
     endforeach()

@@ -108,6 +108,7 @@ StreamBufferHandle_t xStreamBufferCreateStatic(size_t buffer_size, size_t trigge
 size_t xStreamBufferSend(StreamBufferHandle_t stream_buffer, const void *data, size_t len, TickType_t ticks_to_wait);
 size_t xStreamBufferReceive(StreamBufferHandle_t stream_buffer, void *data, size_t len, TickType_t ticks_to_wait);
 size_t xStreamBufferBytesAvailable(StreamBufferHandle_t stream_buffer);
+size_t xStreamBufferSpacesAvailable(StreamBufferHandle_t stream_buffer);
 BaseType_t xStreamBufferReset(StreamBufferHandle_t stream_buffer);
 void vStreamBufferDelete(StreamBufferHandle_t stream_buffer);
 

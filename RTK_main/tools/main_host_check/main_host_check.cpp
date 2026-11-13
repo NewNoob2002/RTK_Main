@@ -2,10 +2,12 @@
 // 虚拟时钟验证非阻塞提交与 RX 预算；驱动事件/并发在 t13 检查真实实现。
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 extern "C" {
 #include "esp_err.h"
@@ -15,6 +17,7 @@ extern "C" {
 
 #include "app_test_adapter.hpp"
 #include "modules/debug/trace_text.hpp"
+#include "modules/gnss/rtcm_pipe.hpp"
 
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
 // NOLINTBEGIN(readability-magic-numbers)
@@ -42,8 +45,17 @@ std::array<size_t, 2> s_input_offset{};
 std::array<spp_server_evt_t, 32> s_events{};
 size_t s_event_size = 0U;
 size_t s_event_offset = 0U;
+extern "C" {
+extern __thread StaticTask_t *fake_current_task;
+}
+
 uint32_t s_read_delay = 0U;
 uint32_t s_poll_wait = 0U;
+spp_server_rx_wake_fn s_rx_wake_fn = nullptr;
+void *s_rx_wake_ctx = nullptr;
+uint32_t s_rx_wake_calls = 0U;
+StaticTask_t s_host_task{};
+bool s_use_host_task = false;
 int s_failures = 0;
 constexpr core::BtAddr kPhone{{1, 2, 3, 4, 5, 6}};
 constexpr core::BtAddr kAlarm{{7, 8, 9, 10, 11, 12}};
@@ -246,42 +258,37 @@ void rx_fairness()
     setup(whitelist);
     open(1U, kPhone);
     open(2U, kAlarm);
-    for (size_t idx = 0U; idx < 10U; ++idx) {
-        append(0U, 1U, 0U, proto::msg_type::kQuery);
+    // 30 条查询 (>512B 轮次字节预算) + ALARM 心跳：验证多帧连续 feed 与跨轮起点轮换公平性。
+    for (size_t idx = 0U; idx < 30U; ++idx) {
+        append(0U, static_cast<uint16_t>(idx + 1U), 0U, proto::msg_type::kQuery);
     }
     const std::array<uint8_t, 8> heartbeat{5, 0, 80, 0, 0, 0, 0, 0};
     append(1U, proto::alarm::kMsgHeartbeat, proto::sender::kAlarm, proto::msg_type::kPush, heartbeat);
     dirty(0U);
     dirty(1U);
-    s_write_delay = 200U;
     uint32_t tick = s_clock;
     const uint32_t start = s_clock;
     link_round(tick);
-    CHECK(s_write_calls == 1U && s_clock == start);
-    CHECK(s_sessions[0].drain_pending && s_sessions[0].rx_offset < s_sessions[0].rx_size);
+    // K3 支持单轮多帧连续消费，受 512B 字节预算限制而不是 1 帧上限。
+    CHECK(s_write_calls > 1U && s_clock == start);
+    CHECK(s_sessions[0].drain_pending && s_input_offset[0] < s_input_size[0]);
     Command cmd{};
     cmd.id = CommandId::kAlarmSet;
     cmd.state = 1U;
     cmd.level = 2U;
     CHECK(s_command_queue.send(cmd, 0U));
     s_clock += app::kTickPeriodMs;
-    link_round(tick); // tick 和 ALARM 心跳不再因推送阻塞而推迟。
-    CHECK(s_alarm.is_override());
-    CHECK(s_write_calls == 2U && s_write_handles[1] == 2U);
+    // 第 2 轮起点轮换到 ALARM，优先投递心跳并响应命令，不让 PHONE 高频流饿死 ALARM。
     link_round(tick);
+    CHECK(s_alarm.is_override());
     CHECK(s_service->last_heartbeat().has_value());
     if (s_service->last_heartbeat().has_value()) {
         CHECK(s_service->last_heartbeat()->seq == 5U);
     }
-    CHECK(s_service->stats().frames_rx == 3U); // 非阻塞 tick 后下一轮已继续服务 PHONE。
-    for (size_t idx = 0U; idx < 16U && s_service->stats().frames_rx < 11U; ++idx) {
-        const uint32_t before = s_clock;
-        const uint32_t frames = s_service->stats().frames_rx;
+    for (size_t idx = 0U; idx < 6U && s_service->stats().frames_rx < 31U; ++idx) {
         link_round(tick);
-        CHECK(s_clock - before <= 200U);
-        CHECK(s_service->stats().frames_rx <= frames + 1U);
     }
-    CHECK(s_service->stats().frames_rx == 11U);
+    CHECK(s_service->stats().frames_rx == 31U);
     CHECK(s_write_timeouts[0] == 0U);
 }
 
@@ -295,9 +302,8 @@ void rx_fast_partial()
     }
     dirty(0U);
     uint32_t tick = s_clock;
-    for (size_t idx = 0U; idx < 10U; ++idx) {
-        link_round(tick);
-    }
+    // 多帧连续 feed：10 条小查询 (<=512B) 在首轮即可全部完成，无需等 10 轮。
+    link_round(tick);
     CHECK(s_write_calls == 10U && s_poll_wait == 0U);
     CHECK(s_service->stats().frames_rx == 10U);
     link_round(tick); // 非空标志直到 read=0 才清除。
@@ -433,10 +439,7 @@ void rtcm_mix()
     event(SPP_SERVER_EVT_DATA, 1);
     uint32_t tick = s_clock;
     link_round(tick);
-    CHECK(s_write_calls == 1 && s_service->stats().frames_rx == 1);
-    CHECK(s_snapshot.rtcm_frames == 0);
-    CHECK(s_sessions[0].rx_offset < s_sessions[0].rx_size);
-    link_round(tick);
+    // K3 支持单轮多帧连续 feed（<=512B）：混杂的 2 条产品帧与 2 条 RTCM 帧在同一轮直推完成。
     CHECK(s_write_calls == 2 && s_service->stats().frames_rx == 2);
     check_reply(0, 1);
     check_reply(1, 2);
@@ -500,9 +503,6 @@ void rtcm_replay_budget()
     append_bytes(0, kBadCrc);
     dirty(0);
     uint32_t tick = s_clock;
-    link_round(tick);
-    CHECK(s_service->stats().frames_rx == 1 && s_write_calls == 1);
-    CHECK(s_sessions[0].sink.pending() && s_snapshot.rtcm_frames == 0);
     link_round(tick);
     CHECK(s_service->stats().frames_rx == 2 && s_write_calls == 2);
     CHECK(s_snapshot.rtcm_frames == 1 && s_snapshot.rtcm_crc32 == expected_crc);
@@ -666,6 +666,10 @@ void vTaskDelay(TickType_t ticks)
 {
     s_clock += ticks;
 }
+TaskHandle_t xTaskGetCurrentTaskHandle(void)
+{
+    return s_use_host_task ? &s_host_task : nullptr;
+}
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t)
 {
     return 0U;
@@ -753,8 +757,32 @@ esp_err_t spp_server_disconnect(uint32_t)
 {
     return ESP_OK;
 }
-/* host 无 SPP 驱动：追踪钩子登记接受即返回（DebugModule::init 会调用）。 */
+/* host 无 SPP 驱动：追踪钩子与 RX 查询/唤醒替身。 */
 void spp_server_set_trace_hook(spp_server_trace_fn) {}
+void spp_server_set_rx_wake_hook(spp_server_rx_wake_fn fn, void *ctx)
+{
+    s_rx_wake_fn = fn;
+    s_rx_wake_ctx = ctx;
+}
+bool spp_server_rx_ready(uint32_t handle)
+{
+    if (handle < 1U || handle > 2U) {
+        return false;
+    }
+    const size_t idx = handle - 1U;
+    return s_input_offset[idx] < s_input_size[idx];
+}
+bool spp_server_any_rx_ready(void)
+{
+    return spp_server_rx_ready(1U) || spp_server_rx_ready(2U);
+}
+void spp_server_rx_stats(spp_server_rx_stats_t *stats)
+{
+    if (stats != nullptr) {
+        *stats = {};
+        stats->wake_calls = s_rx_wake_calls;
+    }
+}
 esp_err_t nvs_store_init(void)
 {
     return ESP_OK;
@@ -854,6 +882,156 @@ void credit_window()
     CHECK(!s_service->paused(1U) && s_write_calls == 18U && s_service->stats().dispatch_cancelled == 1U);
 }
 
+// K3：验证 RX level 兜底、paused reply_ready 复查与 BTC 通知唤醒（不依赖轮询睡死）。
+void rx_wake_level_recheck()
+{
+    using namespace app;
+    setup();
+    open(1U, kPhone);
+    // 1) 模拟 evt_queue 满丢掉 DATA 事件：仅缓冲可读，wait(20) 仍须立即醒来并标记 drain_pending。
+    append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    app_context().bt_link.wait(20U);
+    CHECK(s_poll_wait == 0U && s_sessions[0].drain_pending);
+    static_cast<void>(app_context().bt_link.poll(s_clock));
+    CHECK(s_service->stats().frames_rx == 1U && s_write_calls == 1U);
+
+    // 2) 模拟 TX_SPACE 丢失：paused 下 reply_ready 恢复时 wait(20) 立即返回。
+    s_tx_hold = true;
+    s_tx_used[0] = SPP_SERVER_REPLY_CAPACITY;
+    append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    dirty(0U);
+    app_context().bt_link.wait(0U);
+    static_cast<void>(app_context().bt_link.poll(s_clock));
+    CHECK(s_service->paused(1U) && s_write_calls == 1U);
+    s_tx_used[0] = 0U;
+    app_context().bt_link.wait(20U);
+    static_cast<void>(app_context().bt_link.poll(s_clock));
+    CHECK(!s_service->paused(1U) && s_write_calls == 2U);
+
+    // 3) 真实任务通知唤醒：空等 wait(500)，后台线程注入帧并调用 rx_wake_fn 应立刻唤醒。
+    s_tx_hold = false;
+    // 清空上一帧残留的 drain_pending，确保真正进入阻塞等待分支。
+    app_context().bt_link.wait(0U);
+    static_cast<void>(app_context().bt_link.poll(s_clock));
+    CHECK(!s_sessions[0].drain_pending);
+    pthread_mutex_init(&s_host_task.lock, nullptr);
+    pthread_condattr_t cond_attr{};
+    pthread_condattr_init(&cond_attr);
+    pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+    pthread_cond_init(&s_host_task.cond, &cond_attr);
+    pthread_condattr_destroy(&cond_attr);
+    s_host_task.notif = 0U;
+    s_host_task.started = true;
+    fake_current_task = &s_host_task;
+    s_use_host_task = true;
+    CHECK(s_rx_wake_fn != nullptr);
+
+    std::thread waker([] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+        ++s_rx_wake_calls;
+        s_rx_wake_fn(s_rx_wake_ctx);
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    app_context().bt_link.wait(500U);
+    const auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    waker.join();
+    s_use_host_task = false;
+    fake_current_task = nullptr;
+    CHECK(elapsed_ms < 250);
+    static_cast<void>(app_context().bt_link.poll(s_clock));
+    CHECK(s_service->stats().frames_rx == 3U && s_write_calls == 3U);
+}
+
+// K3：验证 512B 读缓冲尾切片保留、单会话暂停不阻塞另一会话、以及 CLOSE 清理。
+void rx_512_partial_and_pause_isolation()
+{
+    using namespace app;
+    const std::array whitelist{kAlarm};
+    setup(whitelist);
+    open(1U, kPhone);
+    open(2U, kAlarm);
+    s_tx_hold = true;
+    // 预留空间只够 1 条回复，确保第 1 帧成功、第 2 帧在 512B 读缓冲中触发 pause。
+    s_tx_used[0] = SPP_SERVER_REPLY_CAPACITY - SPP_SERVER_REPLY_RESERVE;
+    for (size_t i = 0U; i < 20U; ++i) {
+        append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    }
+    const std::array<uint8_t, 8> heartbeat{9, 0, 85, 0, 0, 0, 0, 0};
+    append(1U, proto::alarm::kMsgHeartbeat, proto::sender::kAlarm, proto::msg_type::kPush, heartbeat);
+    dirty(0U);
+    dirty(1U);
+    uint32_t tick = s_clock;
+    // 第 1 轮：单次 spp_server_read 读入 <=512B；PHONE 发 1 帧后第 2 帧 pause，同轮仍服务 ALARM 心跳。
+    link_round(tick);
+    CHECK(s_sessions[0].rx_size > 256U && s_sessions[0].rx_offset < s_sessions[0].rx_size);
+    CHECK(s_service->paused(1U) && s_write_calls == 1U);
+    CHECK(s_service->last_heartbeat().has_value() && s_service->last_heartbeat()->seq == 9U);
+    const size_t paused_offset = s_sessions[0].rx_offset;
+
+    // 再次从 ALARM 发送心跳，不得被 PHONE 暂停阻塞。
+    const std::array<uint8_t, 8> heartbeat2{10, 0, 86, 0, 0, 0, 0, 0};
+    append(1U, proto::alarm::kMsgHeartbeat, proto::sender::kAlarm, proto::msg_type::kPush, heartbeat2);
+    dirty(1U);
+    link_round(tick);
+    CHECK(s_service->last_heartbeat()->seq == 10U && s_write_calls == 1U);
+    CHECK(s_sessions[0].rx_offset == paused_offset);
+
+    // 释放 PHONE 回复信用后，保留在 512B 缓冲里的尾切片继续逐帧无损投递。
+    s_tx_hold = false;
+    s_tx_used[0] = 0U;
+    for (size_t i = 0U; i < 6U && s_service->stats().frames_rx < 22U; ++i) {
+        link_round(tick);
+    }
+    CHECK(!s_service->paused(1U) && s_service->stats().frames_rx == 22U && s_write_calls == 20U);
+
+    // CLOSE 时取消在途挂起请求并丢弃未消费尾部。
+    s_tx_used[0] = SPP_SERVER_REPLY_CAPACITY;
+    append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
+    dirty(0U);
+    link_round(tick);
+    CHECK(s_service->paused(1U) && s_sessions[0].rx_offset < s_sessions[0].rx_size);
+    event(SPP_SERVER_EVT_CLOSE, 1U);
+    s_tx_used[0] = 0U;
+    link_round(tick);
+    CHECK(!s_service->paused(1U) && s_write_calls == 20U && s_service->stats().dispatch_cancelled == 1U);
+}
+
+// K3：验证 RtcmPipe 4096B 直推满帧整帧丢弃与 kIo 写状态统计契约。
+void rtcm_pipe_direct_and_io_stats()
+{
+    app::RtcmPipe pipe;
+    CHECK(pipe.init() == fw::Status::kOk);
+    std::array<uint8_t, 1029> frame{};
+    frame[0] = 0xD3U;
+    CHECK(pipe.push(frame));
+    CHECK(pipe.push(frame));
+    CHECK(pipe.push(frame));
+    // 已占 3087 B，剩余 1009 B < 1029 B，第 4 帧整帧丢弃且不破坏已入队字节。
+    CHECK(!pipe.push(frame));
+    auto stats = pipe.stats();
+    CHECK(stats.pushed_frames == 3U && stats.pushed_bytes == 3087U);
+    CHECK(stats.dropped_frames == 1U && stats.dropped_bytes == 1029U);
+    CHECK(pipe.available() == 3087U);
+
+    std::array<uint8_t, 512> chunk{};
+    CHECK(pipe.read(chunk) == 512U);
+    pipe.note_written(256U);
+    pipe.set_pending(256U, true);
+    auto io = pipe.io_stats();
+    CHECK(io.pending_bytes == 256U && io.paused);
+    pipe.note_write_error(256U);
+    pipe.note_discarded(128U);
+    pipe.discard();
+    io = pipe.io_stats();
+    stats = pipe.stats();
+    CHECK(pipe.available() == 0U && stats.written_bytes == 256U);
+    CHECK(io.uart_write_errors == 1U && !io.paused && io.pending_bytes == 0U);
+    CHECK(io.discarded_bytes == (256U + 128U + (3087U - 512U)));
+}
+
 int main(int argc, const char **raw_args)
 {
     const std::span<const char *> argv{raw_args, static_cast<size_t>(argc)}; // argc>=0，转换不丢失。
@@ -889,6 +1067,12 @@ int main(int argc, const char **raw_args)
         rx_fast_partial();
     } else if (std::strcmp(argv[1], "rx_tick_budget") == 0) {
         rx_tick_budget();
+    } else if (std::strcmp(argv[1], "rx_wake_level_recheck") == 0) {
+        rx_wake_level_recheck();
+    } else if (std::strcmp(argv[1], "rx_512_partial_and_pause_isolation") == 0) {
+        rx_512_partial_and_pause_isolation();
+    } else if (std::strcmp(argv[1], "rtcm_pipe_direct_and_io_stats") == 0) {
+        rtcm_pipe_direct_and_io_stats();
     } else if (std::strcmp(argv[1], "rtcm_mix") == 0) {
         rtcm_mix();
     } else if (std::strcmp(argv[1], "rtcm_roles") == 0) {

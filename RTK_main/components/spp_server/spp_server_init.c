@@ -113,6 +113,7 @@ static esp_err_t spp_server_objects_create(void)
     s_spp.stream_unbind = false;
     s_spp.stream_active = false;
     s_spp.tx_wake_pending = false;
+    s_spp.rx_wake_calls = 0U;
     taskEXIT_CRITICAL(&s_spp_mux);
 
     s_spp.rtos.evt_queue = xQueueCreateStatic(SPP_SERVER_EVENT_QUEUE_LEN, sizeof(spp_server_evt_t),

@@ -25,7 +25,7 @@ enum class RtcmTrace : uint8_t {
 /** RTCM 帧被丢弃的原因。 */
 enum class RtcmReject : uint8_t {
     kRole = 0,     // 会话不是手机角色，不转发 RTCM
-    kCapacity = 1, // 本轮批次容量越界（分流器交付队列被破坏）
+    kCapacity = 1, // 预留兼容值（K3 直推管道后不再使用批次缓存）
 };
 
 // 事件码是 uint8_t 负载；会话号按 core::kTraceSessionMask 截到低 16 位。线程安全：只写 trace 环。
@@ -48,14 +48,26 @@ struct DemuxStats {
     uint32_t rtcm_rejects = 0;
 };
 
-// 仅 kLink 内部传递完整 RTCM 批次。view 指向 bt_link 的静态存储，
-// 在 rtcm.poll 消费后、下一轮 wait 前才复用；其他任务只读取 kRtcmStats。
-// 每会话遗留数据最多 1029 B，新输入每轮最多 256 B，故 2×1029+256 B 足够。
-inline constexpr size_t kRtcmBatchBytes = kMaxSessions * 1029U + 256U;
-/** 一轮交付给 RTCM 模块的批次视图；wire 指向 bt_link 的静态存储，仅 kLink 内部使用。 */
-struct RtcmBatch {
-    std::span<const uint8_t> wire{};
-    uint32_t rejected = 0;
+/** bt_link 直推路径维护的 RTCM 累计快照（纯数据；RtcmModule 仅读取并管理 reset_epoch）。 */
+struct RtcmLinkSnapshot {
+    uint32_t frames = 0;
+    uint32_t bytes = 0;
+    uint32_t crc32 = 0;
+    uint16_t last_msg = 0;
+    uint32_t rejected_role = 0;
+    uint32_t pipe_accepted_frames = 0;
+    uint32_t pipe_accepted_bytes = 0;
+    uint32_t pipe_dropped_frames = 0;
+    uint32_t pipe_dropped_bytes = 0;
+    uint32_t reset_epoch = 0;
+};
+
+/** kIo 侧 RTCM 管道消费与 UART 写回状态快照（spinlock 保护跨任务读）。 */
+struct RtcmPipeIoStats {
+    uint32_t pending_bytes = 0;
+    uint32_t uart_write_errors = 0;
+    uint32_t discarded_bytes = 0;
+    bool paused = false;
 };
 
 } // namespace app

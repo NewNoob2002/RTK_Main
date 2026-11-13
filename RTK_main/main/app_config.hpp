@@ -18,6 +18,11 @@ inline constexpr uint32_t kTickPeriodMs = 100;
 inline constexpr size_t kMaxSessions = core::kMaxSessions;
 inline constexpr size_t kMaxAlarms = core::kMaxAlarms;
 inline constexpr size_t kDeviceNameBuf = 32;
+#if defined(CONFIG_RTK_LINK_RX_BUF_BYTES)
+inline constexpr size_t kLinkRxBufBytes = static_cast<size_t>(CONFIG_RTK_LINK_RX_BUF_BYTES);
+#else
+inline constexpr size_t kLinkRxBufBytes = 512U;
+#endif
 
 // 统一宏（host 与 CONFIG_RTK_GNSS_ENABLE=n 下均为 0），避免各处重复判断 defined。
 #if defined(CONFIG_RTK_GNSS_ENABLE) && CONFIG_RTK_GNSS_ENABLE

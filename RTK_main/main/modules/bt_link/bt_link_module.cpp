@@ -1,4 +1,4 @@
-// 链路单一所有者；RX 调度保持 256 B / 20 ms / 每轮一个产品帧与 64 B 跨轮预读。
+// 链路单一所有者；RX 调度保持 512 B 默认读缓冲、字节/20 ms 预算、每轮一个产品帧，RTCM 直推管道。
 #include "modules/bt_link/bt_link_module.hpp"
 #include "app_context.hpp"
 
@@ -15,18 +15,19 @@
 // 回复信用按整帧预留；协议帧长一旦超过预留量，commit 会拒绝并永久占住该会话的预留，
 // 使会话再也不能恢复。在此处绑定两者，避免只改一侧。
 static_assert(proto::kMaxFrame <= SPP_SERVER_REPLY_RESERVE, "reply reserve must cover a full protocol frame");
+static_assert(std::atomic<TaskHandle_t>::is_always_lock_free, "wake_task_ must be lock-free");
 
 namespace app {
 namespace {
 constexpr const char *kTag = "bt_link";
-constexpr size_t kRxBudgetBytes = 256;
 constexpr uint32_t kRoundBudgetMs = 20;
 #if RTK_GNSS_ENABLED
 constexpr uint32_t kGnssFixStaleMs = 3000U;
 constexpr uint32_t kGnssClockJitterMs = 10U;
 #endif
 constexpr size_t kAlarmArgBytes = 2;
-// RTCM3 线路帧：1 B 前导 + 2 B 长度，载荷首 12 bit 为消息号。
+// RTCM3 线路帧：1 B 前导 + 2 B 长度，载荷首 12 bit 为消息号，尾 3 B 为 CRC24Q。
+constexpr size_t kMinRtcmMessageBytes = 8;
 constexpr size_t kRtcmPayloadOffset = 3;
 constexpr uint32_t kRtcmMsgShiftBits = 4;
 constexpr uint32_t kHandleDisplayMask = 0xFFFFU;
@@ -36,7 +37,6 @@ void BtLinkModule::SessionSink::bind(BtLinkModule &owner, core::SessionHandle ha
 {
     owner_ = &owner;
     handle_ = handle;
-    count_ = cursor_ = size_ = offset_ = 0;
     healthy_ = true;
 }
 
@@ -45,60 +45,54 @@ void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t 
 {
     const bool known = (index == kProductIndex && &decoder == &proto::demux_frame::kDecoder) ||
                        (index == kRtcmIndex && &decoder == &demux::rtcm3::kDecoder);
-    if (!known || count_ == frames_.size() || wire.size() > bytes_.size() - size_) {
+    if (!known || (owner_ == nullptr)) {
         healthy_ = false;
         fw::tlog(fw::TraceCat::kProto,
-                 "session 0x%04" PRIx32 " delivery queue invalid (decoder index %u, %u bytes), stream reset",
+                 "session 0x%04" PRIx32 " delivery callback invalid (decoder index %u, %u bytes), stream reset",
                  handle_ & kHandleDisplayMask, static_cast<unsigned>(index), static_cast<unsigned>(wire.size()));
         return;
     }
-    /* 保存当前 feed 的完整帧，交给轮次预算逐个投递。 */
-    std::memcpy(std::span{bytes_}.subspan(size_).data(), wire.data(), wire.size());
-    // 已校验线路帧不超过 1029 B，收窄无损。
-    frames_[count_++] = PendingFrame{static_cast<uint16_t>(wire.size()), index};
-    size_ += wire.size();
+    if (index == kProductIndex) {
+        if (owner_->link_service().on_data(handle_, wire, rtos::now_ms()) == 0U) {
+            core::trace_proto(core::ProtoTrace::kReplyError, handle_, static_cast<uint32_t>(fw::Result::kBusy), 0U);
+        }
+        return;
+    }
+    owner_->handle_rtcm_frame(handle_, wire);
 }
 
-bool BtLinkModule::SessionSink::dispatch_one() noexcept
+void BtLinkModule::handle_rtcm_frame(core::SessionHandle handle, std::span<const uint8_t> wire) noexcept
 {
-    /* 先交付，再推进游标。暂停时完整请求归 LinkService；未消费的队列帧继续保留。 */
-    const PendingFrame info = frames_[cursor_];
-    const auto wire = std::span<const uint8_t>{bytes_}.subspan(offset_, info.size);
-    if (info.index == kProductIndex && owner_->link_service().on_data(handle_, wire, rtos::now_ms()) != wire.size()) {
-        return true;
-    }
-    ++cursor_;
-    offset_ += info.size;
-    if (cursor_ == count_) {
-        count_ = cursor_ = size_ = offset_ = 0;
-    }
-    /* 产品帧消耗本轮唯一预算，RTCM 仅收集手机角色的帧。 */
-    if (info.index == kProductIndex) {
-        return true;
-    }
-    if (owner_->link_manager_.role(handle_) != core::Role::kPhone) {
-        ++owner_->rtcm_rejected_;
-        trace_rtcm(RtcmTrace::kReject, handle_, static_cast<uint32_t>(RtcmReject::kRole),
+    if (link_manager_.role(handle) != core::Role::kPhone) {
+        ++rtcm_snapshot_.rejected_role;
+        trace_rtcm(RtcmTrace::kReject, handle, static_cast<uint32_t>(RtcmReject::kRole),
                    static_cast<uint32_t>(wire.size()));
-    } else if (wire.size() <= owner_->rtcm_batch_.size() - owner_->rtcm_size_) {
-        std::memcpy(std::span{owner_->rtcm_batch_}.subspan(owner_->rtcm_size_).data(), wire.data(), wire.size());
-        owner_->rtcm_size_ += wire.size();
-        /* RTCM3：1 B 前导 + 10 bit 长度，首个载荷的 12 bit 是消息号；分流器保证至少 6 B，仍留防护。 */
-        uint32_t msg = 0;
-        if (wire.size() >= kMinWireBytes) {
-            msg = (static_cast<uint32_t>(wire[kRtcmPayloadOffset]) << kRtcmMsgShiftBits) |
-                  (static_cast<uint32_t>(wire[kRtcmPayloadOffset + 1U]) >> kRtcmMsgShiftBits);
-        }
-        trace_rtcm(RtcmTrace::kFrame, handle_, msg, static_cast<uint32_t>(wire.size()));
+        return;
+    }
+    ++rtcm_snapshot_.frames;
+    // wire 已由 RTCM 解码器校验，长度 <= 1029 B，转换到 uint32_t 无损。
+    rtcm_snapshot_.bytes += static_cast<uint32_t>(wire.size());
+    rtcm_snapshot_.crc32 = proto::crc32(wire, rtcm_snapshot_.crc32);
+    uint32_t msg = 0U;
+    if (wire.size() >= kMinRtcmMessageBytes) {
+        msg = (static_cast<uint32_t>(wire[kRtcmPayloadOffset]) << kRtcmMsgShiftBits) |
+              (static_cast<uint32_t>(wire[kRtcmPayloadOffset + 1U]) >> kRtcmMsgShiftBits);
+    }
+    // 12-bit 消息号范围为 0..4095，转换到 uint16_t 无损。
+    rtcm_snapshot_.last_msg = static_cast<uint16_t>(msg);
+    trace_rtcm(RtcmTrace::kFrame, handle, msg, static_cast<uint32_t>(wire.size()));
+#if RTK_GNSS_ENABLED
+    if (context_.rtcm_pipe.push(wire)) {
+        ++rtcm_snapshot_.pipe_accepted_frames;
+        rtcm_snapshot_.pipe_accepted_bytes += static_cast<uint32_t>(wire.size());
     } else {
-        // 两会话遗留帧 + 每轮 256 B 的界限被破坏；不允许静默覆盖。
-        fw::tlog(fw::TraceCat::kRtcm, "session 0x%04" PRIx32 " RTCM batch full, %u-byte frame not forwarded",
-                 handle_ & kHandleDisplayMask, static_cast<unsigned>(wire.size()));
-        trace_rtcm(RtcmTrace::kReject, handle_, static_cast<uint32_t>(RtcmReject::kCapacity),
-                   static_cast<uint32_t>(wire.size()));
-        healthy_ = false;
+        ++rtcm_snapshot_.pipe_dropped_frames;
+        rtcm_snapshot_.pipe_dropped_bytes += static_cast<uint32_t>(wire.size());
     }
-    return false;
+#else
+    ++rtcm_snapshot_.pipe_accepted_frames;
+    rtcm_snapshot_.pipe_accepted_bytes += static_cast<uint32_t>(wire.size());
+#endif
 }
 
 BtLinkModule::SessionEntry *BtLinkModule::session_find(core::SessionHandle handle) noexcept
@@ -184,6 +178,14 @@ void BtLinkModule::handle_open(const spp_server_evt_t &evt, uint32_t now_ms) noe
 
 void BtLinkModule::handle_close(core::SessionHandle handle) noexcept
 {
+    auto *entry = session_find(handle);
+    const size_t unconsumed =
+        (entry != nullptr && entry->rx_offset < entry->rx_size) ? (entry->rx_size - entry->rx_offset) : 0U;
+    const bool was_paused = link_service().paused(handle);
+    if (was_paused || (unconsumed > 0U)) {
+        core::trace_link(core::LinkTrace::kCloseCancel, handle, static_cast<uint32_t>(unconsumed),
+                         was_paused ? 1U : 0U);
+    }
     link_service().on_close(handle);
     session_forget(handle);
 }
@@ -250,18 +252,12 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
 bool BtLinkModule::drain_session(SessionEntry &entry, size_t index, size_t &budget, uint32_t round_start_ms) noexcept
 {
     while (entry.used && entry.demux_ready && !link_service().paused(entry.handle) &&
-           (entry.drain_pending || entry.sink.pending()) && budget > 0U) {
+           (entry.drain_pending || entry.rx_offset < entry.rx_size) && budget > 0U) {
         if (rtos::now_ms() - round_start_ms >= kRoundBudgetMs) {
             return true;
         }
         // 时间耗尽前不推进起点，避免跳过上轮让出的会话。
         rx_cursor_ = (index + 1U) % kMaxSessions;
-        if (entry.sink.pending()) {
-            if (entry.sink.dispatch_one()) {
-                return true;
-            }
-            continue;
-        }
         if (feed_one(entry, budget, round_start_ms)) {
             return true;
         }
@@ -343,6 +339,17 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
     stats.tx_anon_write_fail = tx.anon_write_fail;
     stats.tx_stray_write = tx.stray_write;
     stats.tx_inflight = tx.inflight;
+    spp_server_rx_stats_t rx{};
+    spp_server_rx_stats(&rx);
+    stats.evt_dropped = rx.evt_dropped;
+    stats.rx_wake_calls = rx.wake_calls;
+    for (size_t idx = 0U; idx < kMaxSessions; ++idx) {
+        stats.rx_used[idx] = rx.sessions[idx].used;
+        stats.rx_high_water[idx] = rx.sessions[idx].high_water;
+        stats.rx_dropped_bytes[idx] = rx.sessions[idx].dropped_bytes;
+        stats.rx_events[idx] = rx.sessions[idx].rx_events;
+        stats.rx_drop_events[idx] = rx.sessions[idx].drop_events;
+    }
     context_.data.link_stats.write(stats);
     const auto heartbeat = link_service().last_heartbeat();
     context_.data.heartbeat.write({heartbeat.has_value(), heartbeat.value_or(proto::alarm::Heartbeat{})});
@@ -375,14 +382,14 @@ void BtLinkModule::apply_rtcm_reset() noexcept
     if (reset_version != reset_version_) {
         reset_version_ = reset_version;
         retired_demux_ = {};
-        rtcm_size_ = 0;
-        rtcm_rejected_ = 0;
+        rtcm_snapshot_ = {};
+        rtcm_snapshot_.reset_epoch = reset;
         for (auto &entry : sessions_) {
             entry.demux.reset_stats();
+            entry.seen_resyncs = 0U;
+            entry.seen_unknown = 0U;
         }
     }
-    // 载荷仅登记世代；实际变化由 Slot version 判定。
-    static_cast<void>(reset);
 }
 
 #if RTK_GNSS_ENABLED
@@ -456,33 +463,69 @@ fw::Result BtLinkModule::init() noexcept
         return fw::Result::kInvalidState;
     }
     service_.emplace(transport_, link_manager_, router_, *alarm_service_);
+    spp_server_set_rx_wake_hook(&BtLinkModule::on_rx_wake, this);
     return fw::Result::kOk;
+}
+
+void BtLinkModule::on_rx_wake(void *ctx) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if (self == nullptr) {
+        return;
+    }
+    const TaskHandle_t task = self->wake_task_.load(std::memory_order_acquire);
+    if (task != nullptr) {
+        static_cast<void>(xTaskNotifyGive(task));
+    }
+}
+
+bool BtLinkModule::poll_and_check_ready(uint32_t now_ms) noexcept
+{
+    spp_server_evt_t evt{};
+    for (size_t i = 0; i < SPP_SERVER_EVENT_QUEUE_LEN; ++i) {
+        if (!spp_server_poll_event(&evt, 0)) {
+            break;
+        }
+        handle_event(evt, now_ms);
+    }
+    bool ready = false;
+    for (auto &entry : sessions_) {
+        if (!entry.used) {
+            continue;
+        }
+        if (link_service().paused(entry.handle)) {
+            if (transport_.reply_ready(entry.handle)) {
+                ready = true;
+            }
+            continue;
+        }
+        if (entry.demux_ready) {
+            if (spp_server_rx_ready(entry.handle)) {
+                entry.drain_pending = true;
+            }
+            if (entry.drain_pending || (entry.rx_offset < entry.rx_size)) {
+                ready = true;
+            }
+        }
+    }
+    return ready;
 }
 
 void BtLinkModule::wait(uint32_t max_ms) noexcept
 {
-    /* 上轮 RTCM 已由 rtcm.poll 消费，此时才复用批次。 */
-    rtcm_size_ = 0;
-    rtcm_rejected_ = 0;
     round_start_ms_ = rtos::now_ms();
     if (!service_.has_value()) {
         return;
     }
-    // 睡眠前重查 reply level；通知可以合并，但容量恢复不会丢失。
-    for (const auto &entry : sessions_) {
-        if (entry.used && link_service().paused(entry.handle) && transport_.reply_ready(entry.handle)) {
-            max_ms = 0;
-        }
-    }
-    /* 先等首个事件，再按原队列上限处理已排队的事件。 */
-    spp_server_evt_t evt{};
-    if (spp_server_poll_event(&evt, max_ms)) {
-        handle_event(evt, rtos::now_ms());
-        for (size_t i = 1; i < SPP_SERVER_EVENT_QUEUE_LEN; ++i) {
-            if (!spp_server_poll_event(&evt, 0)) {
-                break;
-            }
-            handle_event(evt, rtos::now_ms());
+    wake_task_.store(xTaskGetCurrentTaskHandle(), std::memory_order_release);
+    // 先清旧边缘通知，再查队列与水平状态；若仍空闲则复查后阻塞。
+    static_cast<void>(ulTaskNotifyTake(pdTRUE, 0U));
+    if (!poll_and_check_ready(rtos::now_ms()) && (max_ms > 0U)) {
+        if (!poll_and_check_ready(rtos::now_ms())) {
+            const TickType_t ticks = pdMS_TO_TICKS(max_ms);
+            const TickType_t wait_ticks = (ticks == 0U) ? 1U : ticks;
+            static_cast<void>(ulTaskNotifyTake(pdTRUE, wait_ticks));
+            static_cast<void>(poll_and_check_ready(rtos::now_ms()));
         }
     }
     round_start_ms_ = rtos::now_ms();
@@ -506,16 +549,15 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
             link_service().resume(entry.handle, now);
         }
     }
-    /* 按预算接收并保留原快照、RTCM 批次的发布顺序。 */
+    /* 按预算接收并直推 RTCM，再发布链路统计。 */
     drain_rx(round_start_ms_);
     sync_stream();
     collect_whitelist_dirty();
     publish_link(rtos::now_ms());
-    context_.data.rtcm_batch.write({std::span<const uint8_t>{rtcm_batch_}.first(rtcm_size_), rtcm_rejected_});
     bool pending = false;
     for (const auto &entry : sessions_) {
         pending = pending || (entry.used && entry.demux_ready && !link_service().paused(entry.handle) &&
-                              (entry.drain_pending || entry.sink.pending() || entry.rx_offset < entry.rx_size));
+                              (entry.drain_pending || entry.rx_offset < entry.rx_size));
     }
     return pending;
 }

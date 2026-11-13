@@ -31,7 +31,6 @@ struct DataCenter {
     fw::Slot<rtos::ExecStats> exec_stats{};
     fw::Slot<SystemStatus> system_status{};
     fw::Slot<SystemMode> system_mode{};
-    fw::Slot<RtcmBatch> rtcm_batch{};
     fw::Slot<uint32_t> rtcm_reset{};
 #if RTK_GNSS_ENABLED
     fw::Slot<rtos::ExecStats> io_exec_stats{};

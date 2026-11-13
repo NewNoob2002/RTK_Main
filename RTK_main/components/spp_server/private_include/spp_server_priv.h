@@ -110,7 +110,12 @@ typedef struct {
     bool lifecycle_pending; /* OPEN 已发布，CLOSE 未交付：禁止复用 */
     bool data_pending;
     bool drop_pending;
+    bool rx_data_missed;
     uint32_t rx_dropped;
+    uint32_t rx_dropped_total;
+    uint32_t rx_high_water;
+    uint32_t rx_events;
+    uint32_t drop_events;
     bool disconnect_pending;
     bool disconnect_submitted;
     bool disconnect_submitting;
@@ -204,6 +209,7 @@ typedef struct {
     spp_server_tx_stats_t tx_stats;
     /* 回调无阻塞唤醒 poll_event，level 另由每槽 tx_space 保存。 */
     bool tx_wake_pending;
+    uint32_t rx_wake_calls;
 } spp_server_state_t;
 
 extern spp_server_state_t s_spp;
@@ -260,6 +266,7 @@ void spp_server_ctrl_process(void);
 /* spp_server_rx.c：BTC 回调线程的接收与事件投递。 */
 void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint8_t *addr, uint32_t dropped);
 void spp_server_handle_data(esp_spp_cb_param_t *param);
+void spp_server_notify_rx_wake(void);
 
 /* spp_server_tx.c：发送任务的入口与 WRITE_EVT 结算（后者在 BTC 回调线程）。 */
 void spp_server_worker(void *arg);

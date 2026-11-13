@@ -121,6 +121,34 @@ bool spp_server_reply_ready(uint32_t handle);
 /** 任意任务可读、非 ISR；锁内只拷贝小快照。 */
 void spp_server_tx_stats(spp_server_tx_stats_t *stats);
 
+/** RX 累计与高水位快照；dropped_bytes 为会话生命期内累计丢字节。 */
+typedef struct {
+    uint32_t used;
+    uint32_t high_water;
+    uint32_t dropped_bytes;
+    uint32_t rx_events;
+    uint32_t drop_events;
+} spp_server_rx_session_stats_t;
+
+typedef struct {
+    uint32_t evt_dropped;
+    uint32_t wake_calls;
+    spp_server_rx_session_stats_t sessions[SPP_SERVER_MAX_SESSIONS];
+} spp_server_rx_stats_t;
+
+/** RX 唤醒钩子：BTC DATA_IND 在离开 portMUX 后触发，只允许非阻塞唤醒（如任务通知）。 */
+typedef void (*spp_server_rx_wake_fn)(void *ctx);
+
+/** 安装/清除（NULL）RX 唤醒钩子；任意时刻可调用。 */
+void spp_server_set_rx_wake_hook(spp_server_rx_wake_fn fn, void *ctx);
+
+/** 查询指定或任意会话的 RX 水平状态（有待读数据或未消费的 RX_DROP/DATA 漏投递状态）；阻塞等待前须复查。 */
+bool spp_server_rx_ready(uint32_t handle);
+bool spp_server_any_rx_ready(void);
+
+/** 任意任务可读、非 ISR；锁内只拷贝小快照。 */
+void spp_server_rx_stats(spp_server_rx_stats_t *stats);
+
 /** 请求断开；结果以 SPP_SERVER_EVT_CLOSE 事件返回。未知句柄 → ESP_ERR_NOT_FOUND。 */
 esp_err_t spp_server_disconnect(uint32_t handle);
 
