@@ -111,6 +111,9 @@ public:
     /** 弹出最旧事件；空或未 init → false。 */
     [[nodiscard]] bool pop(TraceEvent &out) noexcept;
 
+    /** 最旧事件的时间戳；空或未 init → false。读者据此与 LogRing 按时间合并（ADR-0009 §2.11）。 */
+    [[nodiscard]] bool peek_time(uint32_t &t_ms) const noexcept;
+
     /** 取走自上次调用以来新增的丢弃数（读者用来打印 "[trace] dropped N"）。 */
     [[nodiscard]] uint32_t take_dropped() noexcept;
 

@@ -24,6 +24,14 @@ inline constexpr std::size_t kMaxDecoders = 8;
  * 两个回调都在 feed()/abort() 内同步执行；数据 span 只在回调返回前有效。回调中对同一实例调用
  * init/feed/abort 返回 Error::kReentry 且不改变状态。
  */
+/** on_reject 的拒绝来源。 */
+enum class RejectCause : uint8_t {
+    kStep = 0, // step() 返回 kReject（同步/长度/校验/非法字符；细节由 Decoder::explain 给出）
+    kTooLong,  // step() 要求的长度超过 max_frame 或缓冲区容量（overflows 计数的那种）
+    kContract, // step() 违反契约（need == 0、未知枚举值）
+    kAbort,    // abort() 时丢弃的半帧
+};
+
 class Sink {
 public:
     Sink(const Sink &) = delete;
@@ -39,6 +47,22 @@ public:
     virtual void on_unknown(std::span<const uint8_t> bytes) noexcept
     {
         static_cast<void>(bytes);
+    }
+
+    /**
+     * 候选解码器放弃当前起点（ADR-0005 §5，可选观察钩子，默认空操作）。prefix 是被拒绝的那段前缀（以起点为首字节），
+     * 只在回调期间有效；cause 说明拒绝来源；last = 该起点已没有其他候选（随后起点前移一字节重扫，resyncs+1）。
+     * 与 on_frame/on_unknown 相同的重入约束：回调中不得调用本实例的 init/feed/abort。实时路径的 Sink 应保持空操作
+     * 或只记 trace() 事件。
+     */
+    virtual void on_reject(const Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix, RejectCause cause,
+                           bool last) noexcept
+    {
+        static_cast<void>(decoder);
+        static_cast<void>(index);
+        static_cast<void>(prefix);
+        static_cast<void>(cause);
+        static_cast<void>(last);
     }
 
 protected:

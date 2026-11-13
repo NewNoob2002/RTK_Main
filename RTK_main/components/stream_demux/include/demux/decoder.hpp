@@ -32,11 +32,18 @@ enum class Step : uint8_t {
 struct Decoder {
     using FirstByteFn = bool (*)(uint8_t byte) noexcept;
     using StepFn = Step (*)(std::span<const uint8_t> frame, std::size_t &need) noexcept;
+    /**
+     * 诊断（可选，ADR-0005 §5 / ADR-0009 §2.11）：对一段刚被 step 判为 kReject 的前缀，写出一句简短的英文原因
+     * （例如 "bad checksum, received 0x23, computed 0x07"、"illegal byte 0x01 at offset 17"、"no CR before LF"），
+     * 0 结尾，返回写入长度（不含 0）；out 不够时截断。纯函数，只依赖入参；引擎从不调用，只由 Sink 的诊断代码调用。
+     */
+    using ExplainFn = std::size_t (*)(std::span<const uint8_t> prefix, std::span<char> out) noexcept;
 
     const char *name;       // 诊断用，非空
     std::size_t max_frame;  // 本协议允许的最大帧长（字节），1..65535；超长的长度字段应在 step 中 kReject
     FirstByteFn first_byte; // 该字节能否作为本协议帧的第一个字节；只在 Demux::init 时对 0..255 各调用一次
     StepFn step;
+    ExplainFn explain = nullptr; // 可为 nullptr：诊断代码退化为 "rejected"
 };
 
 } // namespace demux

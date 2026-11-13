@@ -124,12 +124,47 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
   这只防误操作，不是安全边界（固件里能读到密钥）。
 - 策略 `CONCURRENT/PHONE_PREEMPT` 是编译期配置，只在 `config link` 中显示。
 
+### 2.11 文本日志通道、分流器拒绝钩子与句子格式（2026-11-13 补充）
+
+背景：GNSS 模块、分流器（stream_demux）与各解码器没有任何可读日志；trace 事件只有 16 B 数值，输出是
+`key=value`，说不清“解析了哪条语句、哪条为什么失败”。用户要求：打开日志后能看到成功解析的语句、失败原因，
+可附原始十六进制；格式参考 SparkFun RTK 固件的句子式日志，不要全是 `key=value`。决策：
+
+- **两条通道，一个读者。** 实时路径（BT 回调、spp 发送、link 执行器逐帧路径）继续只用 `fw::trace()`（§2.1 不变）。
+  非实时任务（io 执行器上的 GNSS、控制台任务，以及 link 执行器上的**错误/拒绝分支**——不是逐帧成功分支）可用新的
+  `fw::tlog(cat, fmt, ...)` 在自己栈上格式化一行句子，`fw::tlog_hex(cat, bytes)` 附原始字节（≤ 256 B）。两者写入变长记录环
+  `fw::LogRing`（新冻结头 `fw/tlog.hpp`，存储大小 Kconfig `CONFIG_RTK_LOG_RING_BYTES`，默认 4096）。`trace_out` 任务同时读
+  TraceRing 与 LogRing，按时间戳合并输出（新增 `TraceRing::peek_time`），仍经 `cli::out_write` 整行写出，不穿插。
+- **两级开关。** 类别掩码（`debug on/off`，与 trace 共用）控制事件与文本行；新增十六进制掩码 `log_set_hex_mask`
+  控制 `tlog_hex`。控制台：`debug on <cat...|all> [hex]` 打开类别，带 `hex` 同时打开这些类别的十六进制转储、不带则关闭；
+  `debug off <cat...|all>` 两者都关；`debug list` 显示每类 `off / on / on+hex`；`debug save` 同时保存十六进制掩码
+  （NVS 命名空间 `dbg` 新键 `hex`，u32）。`CONFIG_RTK_TRACE_ENABLE=n` 时 `tlog/tlog_hex/log_hex_on` 为空内联。
+- **分流器拒绝钩子。** `demux::Sink` 新增虚函数 `on_reject(decoder, index, prefix, cause, last)`（默认空操作，已有 Sink 不受影响），
+  `RejectCause{kStep, kTooLong, kContract, kAbort}`；`demux::Decoder` 新增可选成员 `explain(prefix, out)`：对被拒绝的前缀给出一句英文原因
+  （纯函数，引擎从不调用）。各解码器（NMEA、RTCM3、UBX、UnicoreBin、UnicoreHash、RtkFrame、UnicoreResp、ComnavPrompt）都要实现 explain。
+- **句子格式（参考 SparkFun）。** 每行：`[  秒.毫秒] 类别 句子`，类别用大写短名（`LINK SPP RTCM PROTO ALARM STORE EXEC GNSS`），
+  句子以对象开头、说清发生了什么，数字带单位，必要时括号补充；只有确实是“名字=值”清单时才用 `k=v`。十六进制转储每行 16 字节，
+  带偏移和 ASCII 列，缩进 4 格。示例：
+  ```
+  [  12.345] GNSS NMEA GNGGA, 72 bytes
+  [  12.346] GNSS UnicoreHash rejected 41 bytes: bad checksum, received 0x23, computed 0x07
+  [  12.346]     0000: 24 43 4f 4e 46 49 47 2c 43 4f 4d 32 2c 43 4f 4e  $CONFIG,COM2,CON
+  [  12.400] GNSS 37 unknown bytes dropped (resync 18)
+  [  13.001] GNSS UM980 <- "GPGGA COM2 1"
+  [  13.013] GNSS UM980 -> OK (12 ms)
+  [  20.100] LINK session 0x0081 opened as ALARM (whitelisted)
+  [  20.200] PROTO session 0x0081 frame 0x04 rejected: bad CRC
+  ```
+  既有 trace 事件的文本表（`main/modules/debug/trace_text.cpp`）同步改成句子格式；事件码与字段含义不变。
+- **覆盖面。** 每个组件/应用模块都要能在打开对应类别后说清成功与失败；审计结果与补齐清单写入 `docs/reports/T4-log-audit.md`。
+
 ## 3. 冻结接口（T0 由 Claude 写入）
 
 - `components/app_fw/include/fw/trace.hpp`（新）
 - `components/link_core/include/core/trace_codes.hpp`（新，link/proto/alarm 事件码）
 - `components/cli/include/cli/console.hpp`（追加 `fail`、`Verb`、`dispatch`、`println_kv` 等；原接口不变）
 - `components/spp_server/include/spp_server.h`（追加 trace 钩子与事件码；原接口不变）
+- §2.11：`components/app_fw/include/fw/tlog.hpp`（新）、`fw/trace.hpp` 追加 `TraceRing::peek_time`、`components/stream_demux/include/demux/demux.hpp` 追加 `RejectCause`/`Sink::on_reject`、`demux/decoder.hpp` 追加 `Decoder::explain`
 
 ## 4. 门槛
 
