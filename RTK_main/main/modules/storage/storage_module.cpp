@@ -7,6 +7,7 @@
 #include <string_view>
 #include "def/storage_def.hpp"
 #include "esp_log.h"
+#include "fw/tlog.hpp"
 #include "modules/storage/store_catalog.hpp"
 #include "rtos/esp_status.hpp"
 
@@ -159,7 +160,7 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
     std::array<uint8_t, kMaxAlarms * core::kAddrLen> out{};
     const auto serialized = whitelist_save(out, len);
     if (!fw::is_ok(serialized)) {
-        ESP_LOGE("storage", "serialize whitelist failed");
+        fw::tlog(fw::TraceCat::kStore, "whitelist not saved, serialization failed (%s)", fw::to_string(serialized));
         return false;
     }
     std::memcpy(raw.data(), out.data(), len);
@@ -185,7 +186,7 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
         status_.retry_ms = retry_ms_;
         trace_store(StoreTrace::kSave, static_cast<uint32_t>(fw::Result::kIoError), static_cast<uint32_t>(error));
         trace_store(StoreTrace::kRetry, retry_ms_, status_.failures);
-        ESP_LOGE("storage", "persist whitelist failed: %s; retry pending", esp_err_to_name(error));
+        fw::tlog(fw::TraceCat::kStore, "whitelist save failed (%s), retry in %u ms", esp_err_to_name(error), static_cast<unsigned>(retry_ms_));
     }
     status_.whitelist_pending = pending_;
     context_.data.store_status.write(status_);
@@ -225,7 +226,7 @@ void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) n
     result.status = error == ESP_OK ? fw::Result::kOk : fw::Result::kIoError;
     if (error != ESP_OK) {
         sn_ = previous;
-        ESP_LOGE("storage", "save sn failed: %s", esp_err_to_name(error));
+        fw::tlog(fw::TraceCat::kStore, "serial number save failed (%s), previous value kept", esp_err_to_name(error));
     }
     context_.data.store_status.write(status_);
 }

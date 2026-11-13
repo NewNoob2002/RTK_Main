@@ -23,7 +23,9 @@ add_library(main_pure STATIC
     ${PROJ_ROOT}/components/device_proto/alarm_codec.cpp
     ${PROJ_ROOT}/components/device_proto/bytes.cpp
     ${PROJ_ROOT}/components/app_fw/src/status.cpp
+    ${PROJ_ROOT}/components/app_fw/src/result.cpp
     ${PROJ_ROOT}/components/app_fw/src/trace.cpp
+    ${PROJ_ROOT}/components/app_fw/src/tlog.cpp
     ${PROJ_ROOT}/components/cli/src/out.cpp
     ${PROJ_ROOT}/components/link_core/alarm_source.cpp
     ${PROJ_ROOT}/components/link_core/link_manager.cpp
@@ -57,11 +59,13 @@ foreach(policy concurrent preempt)
         ${PROJ_ROOT}/components/app_fw/include)
     target_compile_options(main_${policy} PRIVATE -fno-exceptions -fno-rtti
         -Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+    # host 检查不跑 Kconfig：给出与 main/Kconfig.projbuild 默认值一致的文本日志环容量（ADR-0009 §2.11）。
+    target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096)
     target_link_libraries(main_${policy} PRIVATE main_pure main_rtos main_nvs_shim)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
-    foreach(scenario policy_failure async_tx save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget lifecycle_application
+    foreach(scenario policy_failure debug_cat_names async_tx save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget lifecycle_application
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget)
         add_test(NAME main_${policy}_${scenario} COMMAND main_${policy} ${scenario})
     endforeach()
@@ -105,5 +109,6 @@ target_include_directories(template_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/components/app_fw/include)
 target_compile_options(template_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+target_compile_definitions(template_check PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096)
 target_link_libraries(template_check PRIVATE main_pure main_nvs_shim)
 add_test(NAME template_module COMMAND template_check template_module)

@@ -1,7 +1,7 @@
 // RTCM 模块实现：处理分流器交付的 RTCM 批次统计与 `rtcm` 控制台命令（只在 kLink 任务或启动前调用）。
 #include "modules/rtcm/rtcm_module.hpp"
 #include "app_context.hpp"
-#include "esp_log.h"
+#include "fw/tlog.hpp"
 
 namespace app {
 namespace {
@@ -29,12 +29,12 @@ bool RtcmModule::poll(uint32_t now_ms) noexcept
         auto wire = batch.wire;
         while (!wire.empty()) {
             if (wire.size() < kRtcmHeaderBytes) {
-                ESP_LOGE("rtcm", "truncated batch header");
+                fw::tlog(fw::TraceCat::kRtcm, "batch truncated, %u bytes left is shorter than an RTCM header", static_cast<unsigned>(wire.size()));
                 break;
             }
             const size_t len = ((wire[1] & kLengthHighMask) << kLengthHighShift) + wire[2] + kRtcmOverheadBytes;
             if (len > wire.size()) {
-                ESP_LOGE("rtcm", "truncated batch frame");
+                fw::tlog(fw::TraceCat::kRtcm, "batch truncated, frame needs %u bytes but %u remain", static_cast<unsigned>(len), static_cast<unsigned>(wire.size()));
                 break;
             }
             const auto frame = wire.first(len);

@@ -121,6 +121,11 @@ typedef enum {
     SPP_SERVER_CTRL_REJECT,      /* SRV_OPEN 无安全空槽：断开该句柄 */
 } spp_server_ctrl_type_t;
 
+/* CTRL_ERR 追踪直接把 ctrl_type 作为 spp_server_trace_ctrl_t 上报，两者取值必须一致。 */
+_Static_assert((int)SPP_SERVER_CTRL_PIN_REQ == (int)SPP_SERVER_TRACE_CTRL_PIN, "ctrl/trace mapping");
+_Static_assert((int)SPP_SERVER_CTRL_CFM_REQ == (int)SPP_SERVER_TRACE_CTRL_CONFIRM, "ctrl/trace mapping");
+_Static_assert((int)SPP_SERVER_CTRL_REJECT == (int)SPP_SERVER_TRACE_CTRL_REJECT, "ctrl/trace mapping");
+
 typedef struct {
     bool in_use;
     bool submitting;

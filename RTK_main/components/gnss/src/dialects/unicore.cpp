@@ -10,6 +10,7 @@
 #include <span>
 #include <string_view>
 
+#include "demux/text_writer.hpp"
 #include "demux/decoders/unicore_hash.hpp"
 
 namespace gnss::unicore {
@@ -22,6 +23,19 @@ constexpr uint8_t kCr = static_cast<uint8_t>('\r');
 constexpr std::string_view kCommandPrefix = "$command,";
 constexpr std::string_view kResponseTag = ",response: ";
 constexpr std::string_view kVersionTag = "#VERSIONA,";
+// 文本协议常量：可打印区间、十进制与十六进制的基数/位数、应答尾 "*hh\r\n" 的长度等，避免散落魔法数字。
+constexpr uint8_t kPrintableMin = 0x20U;
+constexpr uint8_t kPrintableMax = 0x7EU;
+constexpr uint8_t kDecimalBase = 10U;
+constexpr uint8_t kUintDigits = 10U;
+constexpr uint8_t kHexDigitOffset = 10U; // 'A' 的数值
+constexpr uint8_t kHexShift = 4U;
+constexpr std::size_t kMinReplyBytes = 6U; // 最短应答 ",OK*" 一类
+constexpr std::size_t kTailBytes = 5U;     // "*hh\r\n"
+constexpr uint8_t kRate20Hz = 20U;
+constexpr uint8_t kRate10Hz = 10U;
+constexpr uint8_t kRate5Hz = 5U;
+constexpr uint32_t kConfigTimeoutMs = 500U;
 
 // $command 应答（match_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器，缺一则对应帧落入 unknown。
 constexpr std::array<const demux::Decoder *, 2> kDecoders{&kResponseDecoder, &demux::unicore_hash::kDecoder};
@@ -39,25 +53,25 @@ uint8_t hex_value(uint8_t c) noexcept
         return static_cast<uint8_t>(c - static_cast<uint8_t>('0'));
     }
     if (c >= static_cast<uint8_t>('A') && c <= static_cast<uint8_t>('F')) {
-        return static_cast<uint8_t>(c - static_cast<uint8_t>('A') + 10U);
+        return static_cast<uint8_t>(c - static_cast<uint8_t>('A') + kHexDigitOffset);
     }
-    return static_cast<uint8_t>(c - static_cast<uint8_t>('a') + 10U);
+    return static_cast<uint8_t>(c - static_cast<uint8_t>('a') + kHexDigitOffset);
 }
 
 bool is_body_char(uint8_t c) noexcept
 {
-    return c >= 0x20U && c <= 0x7EU && c != kDollar && c != kStar;
+    return c >= kPrintableMin && c <= kPrintableMax && c != kDollar && c != kStar;
 }
 
 bool append_uint(CmdBuf &out, uint32_t value) noexcept
 {
-    std::array<uint8_t, 10> digits{};
+    std::array<uint8_t, kUintDigits> digits{};
     size_t count = 0;
-    do {
-        digits[count] = static_cast<uint8_t>(static_cast<uint32_t>('0') + (value % 10U));
+    while (value != 0 && count < digits.size()) {
+        digits[count] = static_cast<uint8_t>(static_cast<uint32_t>('0') + (value % kDecimalBase));
         ++count;
-        value /= 10U;
-    } while (value != 0);
+        value /= kDecimalBase;
+    }
     for (size_t i = count; i > 0; --i) {
         if (!out.append(std::span<const uint8_t>(&digits[i - 1], 1))) {
             return false;
@@ -69,13 +83,13 @@ bool append_uint(CmdBuf &out, uint32_t value) noexcept
 // 频率参数按手册：1/2/5/10/20 Hz → "1"/"0.5"/"0.2"/"0.1"/"0.05"；不支持的值向下取到最近的频点。
 const char *period_for(uint8_t rate_hz) noexcept
 {
-    if (rate_hz >= 20U) {
+    if (rate_hz >= kRate20Hz) {
         return "0.05";
     }
-    if (rate_hz >= 10U) {
+    if (rate_hz >= kRate10Hz) {
         return "0.1";
     }
-    if (rate_hz >= 5U) {
+    if (rate_hz >= kRate5Hz) {
         return "0.2";
     }
     if (rate_hz >= 2U) {
@@ -141,6 +155,178 @@ bool quoted_starts_with(std::span<const uint8_t> field, std::string_view text) n
     return true;
 }
 
+/** 应答帧的判定原因，explain 与 step 共用同一份判定逻辑。 */
+enum class ResponseReason : uint8_t {
+    kNone = 0,
+    kEmpty,
+    kPrefix,
+    kTail,
+    kBody,
+    kChecksum,
+    kStarField,
+    kStarByte,
+    kNoRoom,
+};
+
+struct ResponseVerdict {
+    demux::Step step = demux::Step::kReject;
+    ResponseReason reason = ResponseReason::kNone;
+    std::size_t need = 0;
+    std::size_t offset = 0;
+    uint8_t received = 0;
+    uint8_t computed = 0;
+};
+
+ResponseVerdict reject(ResponseReason reason, std::size_t offset = 0, uint8_t received = 0,
+                       uint8_t computed = 0) noexcept
+{
+    ResponseVerdict verdict{};
+    verdict.reason = reason;
+    verdict.offset = offset;
+    verdict.received = received;
+    verdict.computed = computed;
+    return verdict;
+}
+
+ResponseVerdict judge(std::span<const uint8_t> frame) noexcept
+{
+    const size_t size = frame.size();
+    if (size == 0) {
+        return reject(ResponseReason::kEmpty);
+    }
+    const size_t prefix_len = kCommandPrefix.size();
+    const size_t compared = size < prefix_len ? size : prefix_len;
+    for (size_t i = 0; i < compared; ++i) {
+        if (frame[i] != static_cast<uint8_t>(kCommandPrefix[i])) {
+            return reject(ResponseReason::kPrefix, i, frame[i]);
+        }
+    }
+    if (size < prefix_len) {
+        ResponseVerdict verdict{};
+        verdict.step = demux::Step::kNeedMore;
+        verdict.need = prefix_len - size;
+        return verdict;
+    }
+    if (size < prefix_len + kMinReplyBytes) { // 至少还要 ",OK*" 一类的最小应答
+        ResponseVerdict verdict{};
+        verdict.step = demux::Step::kNeedMore;
+        verdict.need = (prefix_len + kMinReplyBytes) - size;
+        return verdict;
+    }
+
+    if (frame[size - 1] == kLf) {
+        const size_t tail = size - kTailBytes; // '*' 的位置
+        if (size < prefix_len + kMinReplyBytes || frame[tail] != kStar || !is_hex(frame[tail + 1U]) ||
+            !is_hex(frame[tail + 2U]) || frame[size - 2U] != kCr) {
+            return reject(ResponseReason::kTail, size - 1, frame[size - 1]);
+        }
+        uint8_t checksum = 0;
+        for (size_t i = 1; i < tail; ++i) {
+            if (!is_body_char(frame[i])) {
+                return reject(ResponseReason::kBody, i, frame[i]);
+            }
+            checksum = static_cast<uint8_t>(checksum ^ frame[i]);
+        }
+        const uint8_t expected =
+            static_cast<uint8_t>((hex_value(frame[tail + 1U]) << kHexShift) | hex_value(frame[tail + 2U]));
+        // UM980 R4.10Build11833 实测把 '$' 也算进 $command 校验（"$command,VERSIONA,response: OK*45"，
+        // 标准 XOR 为 0x61）；SparkFun Unicore 库对旧固件有同样的兼容（Unicore/src 内 "improperly adding the '$'"）。
+        const bool standard = checksum == expected;
+        const bool with_dollar = static_cast<uint8_t>(checksum ^ kDollar) == expected;
+        if (!standard && !with_dollar) {
+            return reject(ResponseReason::kChecksum, tail, expected, checksum);
+        }
+        ResponseVerdict verdict{};
+        verdict.step = demux::Step::kFrame;
+        return verdict;
+    }
+
+    // 尚未收到 '\n'：在最后 5 字节窗口里找 '*'，据此判定还差多少字节。
+    size_t star_pos = size;
+    const size_t window = size < kTailBytes ? size : kTailBytes;
+    for (size_t k = 0; k < window; ++k) {
+        if (frame[size - 1 - k] == kStar) {
+            star_pos = size - 1 - k;
+            break;
+        }
+    }
+    if (star_pos != size) {
+        const size_t after = size - star_pos - 1;
+        if (after + 1U > kTailBytes) {
+            return reject(ResponseReason::kStarField, star_pos);
+        }
+        for (size_t i = star_pos + 1; i < size; ++i) {
+            const uint8_t c = frame[i];
+            if (!is_hex(c) && c != kCr && c != kLf) {
+                return reject(ResponseReason::kStarByte, i, c);
+            }
+        }
+        const size_t missing = kTailBytes - (size - star_pos);
+        if (missing == 0) {
+            return reject(ResponseReason::kNoRoom, star_pos);
+        }
+        ResponseVerdict verdict{};
+        verdict.step = demux::Step::kNeedMore;
+        verdict.need = missing;
+        return verdict;
+    }
+
+    if (!is_body_char(frame[size - 1])) {
+        return reject(ResponseReason::kBody, size - 1, frame[size - 1]);
+    }
+    ResponseVerdict verdict{};
+    verdict.step = demux::Step::kNeedMore;
+    verdict.need = 1;
+    return verdict;
+}
+
+/** 把判定原因写成一句英文（explain 契约）。 */
+void explain_verdict(const ResponseVerdict &verdict, demux::text_writer::TextWriter &text) noexcept
+{
+    switch (verdict.reason) {
+    case ResponseReason::kEmpty:
+        text.literal("empty prefix");
+        break;
+    case ResponseReason::kPrefix:
+        text.literal("byte ").decimal(verdict.offset).literal(" is ");
+        text.byte_value(verdict.received).literal(", expected ");
+        text.byte_value(static_cast<uint8_t>(kCommandPrefix[verdict.offset]));
+        break;
+    case ResponseReason::kTail:
+        text.literal("missing \"*hh\\r\\n\" tail before byte ").decimal(verdict.offset).literal(" (");
+        text.byte_value(verdict.received).literal(")");
+        break;
+    case ResponseReason::kBody:
+        text.literal("illegal byte ")
+            .hex(static_cast<uint32_t>(verdict.received), 2U)
+            .literal(" at offset ")
+            .decimal(verdict.offset);
+        break;
+    case ResponseReason::kChecksum:
+        text.literal("bad checksum, received ")
+            .hex(static_cast<uint32_t>(verdict.received), 2U)
+            .literal(", computed ")
+            .hex(static_cast<uint32_t>(verdict.computed), 2U);
+        break;
+    case ResponseReason::kStarField:
+        text.literal("'*' at offset ").decimal(verdict.offset).literal(" but fewer than two checksum digits");
+        break;
+    case ResponseReason::kStarByte:
+        text.literal("illegal byte ")
+            .hex(static_cast<uint32_t>(verdict.received), 2U)
+            .literal(" in checksum field at offset ")
+            .decimal(verdict.offset);
+        break;
+    case ResponseReason::kNoRoom:
+        text.literal("no room for CR LF after checksum at offset ").decimal(verdict.offset);
+        break;
+    case ResponseReason::kNone:
+    default:
+        text.literal("rejected");
+        break;
+    }
+}
+
 } // namespace
 
 bool response_first_byte(uint8_t byte) noexcept
@@ -150,78 +336,23 @@ bool response_first_byte(uint8_t byte) noexcept
 
 demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    const size_t size = frame.size();
-    if (size == 0) {
-        return demux::Step::kReject;
-    }
-    const size_t prefix_len = kCommandPrefix.size();
-    const size_t compared = size < prefix_len ? size : prefix_len;
-    for (size_t i = 0; i < compared; ++i) {
-        if (frame[i] != static_cast<uint8_t>(kCommandPrefix[i])) {
-            return demux::Step::kReject;
-        }
-    }
-    if (size < prefix_len) {
-        need = prefix_len - size;
-        return demux::Step::kNeedMore;
-    }
-    if (size < prefix_len + 6) { // 至少还要 ",OK*" 一类的最小应答
-        need = (prefix_len + 6) - size;
-        return demux::Step::kNeedMore;
-    }
+    const ResponseVerdict verdict = judge(frame);
+    need = verdict.need;
+    return verdict.step;
+}
 
-    if (frame[size - 1] == kLf) {
-        if (size < prefix_len + 6 || frame[size - 2] != kCr || frame[size - 5] != kStar || !is_hex(frame[size - 3]) ||
-            !is_hex(frame[size - 4])) {
-            return demux::Step::kReject;
-        }
-        uint8_t checksum = 0;
-        for (size_t i = 1; i < size - 5; ++i) {
-            if (!is_body_char(frame[i])) {
-                return demux::Step::kReject;
-            }
-            checksum = static_cast<uint8_t>(checksum ^ frame[i]);
-        }
-        const uint8_t expected = static_cast<uint8_t>((hex_value(frame[size - 4]) << 4) | hex_value(frame[size - 3]));
-        // UM980 R4.10Build11833 实测把 '$' 也算进 $command 校验（"$command,VERSIONA,response: OK*45"，
-        // 标准 XOR 为 0x61）；SparkFun Unicore 库对旧固件有同样的兼容（Unicore/src 内 "improperly adding the '$'"）。
-        const bool standard = checksum == expected;
-        const bool with_dollar = static_cast<uint8_t>(checksum ^ kDollar) == expected;
-        return (standard || with_dollar) ? demux::Step::kFrame : demux::Step::kReject;
+std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out) noexcept
+{
+    demux::text_writer::TextWriter text(out);
+    if (frame.empty()) {
+        return text.literal("empty prefix").finish();
     }
-
-    // 尚未收到 '\n'：在最后 5 字节窗口里找 '*'，据此判定还差多少字节。
-    size_t star_pos = size;
-    const size_t window = size < 5 ? size : 5;
-    for (size_t k = 0; k < window; ++k) {
-        if (frame[size - 1 - k] == kStar) {
-            star_pos = size - 1 - k;
-            break;
-        }
+    const ResponseVerdict verdict = judge(frame);
+    if (verdict.step == demux::Step::kFrame) {
+        return text.literal("not rejected").finish();
     }
-    if (star_pos != size) {
-        const size_t after = size - star_pos - 1;
-        if (after > 4) {
-            return demux::Step::kReject;
-        }
-        for (size_t i = star_pos + 1; i < size; ++i) {
-            const uint8_t c = frame[i];
-            if (!is_hex(c) && c != kCr && c != kLf) {
-                return demux::Step::kReject;
-            }
-        }
-        need = 5 - (size - star_pos);
-        if (need == 0) {
-            return demux::Step::kReject;
-        }
-        return demux::Step::kNeedMore;
-    }
-
-    if (!is_body_char(frame[size - 1])) {
-        return demux::Step::kReject;
-    }
-    need = 1;
-    return demux::Step::kNeedMore;
+    explain_verdict(verdict, text);
+    return text.finish();
 }
 
 bool build_probe(CmdBuf &out) noexcept
@@ -277,7 +408,7 @@ bool finish_step(CmdBuf &cmd, bool expect_reply, uint32_t switch_baud, ConfigSte
 {
     out.cmd = cmd;
     out.expect_reply = expect_reply;
-    out.timeout_ms = 500;
+    out.timeout_ms = kConfigTimeoutMs;
     out.switch_baud = switch_baud;
     return true;
 }

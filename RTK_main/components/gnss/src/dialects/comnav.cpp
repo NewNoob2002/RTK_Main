@@ -9,6 +9,7 @@
 #include <span>
 #include <string_view>
 
+#include "demux/text_writer.hpp"
 #include "demux/decoders/unicore_hash.hpp"
 
 namespace gnss::comnav {
@@ -18,24 +19,34 @@ constexpr uint8_t kPrompt = static_cast<uint8_t>('<');
 constexpr uint8_t kCr = static_cast<uint8_t>('\r');
 constexpr uint8_t kLf = static_cast<uint8_t>('\n');
 constexpr std::string_view kVersionTag = "#VERSIONA,";
+// 文本协议常量（与 unicore.cpp 同名同义，见那里的说明）。
+constexpr uint8_t kPrintableMin = 0x20U;
+constexpr uint8_t kPrintableMax = 0x7EU;
+constexpr uint8_t kDecimalBase = 10U;
+constexpr uint8_t kUintDigits = 10U;
+constexpr uint8_t kRate20Hz = 20U;
+constexpr uint8_t kRate10Hz = 10U;
+constexpr uint8_t kRate5Hz = 5U;
+constexpr std::size_t kMinPromptBytes = 4U; // 最短有效应答 "<x\r\n"
+constexpr uint32_t kConfigTimeoutMs = 500U;
 
 // <OK 提示符应答（match_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器。
 constexpr std::array<const demux::Decoder *, 2> kDecoders{&kPromptDecoder, &demux::unicore_hash::kDecoder};
 
 bool is_printable(uint8_t c) noexcept
 {
-    return c >= 0x20U && c <= 0x7EU;
+    return c >= kPrintableMin && c <= kPrintableMax;
 }
 
 bool append_uint(CmdBuf &out, uint32_t value) noexcept
 {
-    std::array<uint8_t, 10> digits{};
+    std::array<uint8_t, kUintDigits> digits{};
     size_t count = 0;
-    do {
-        digits[count] = static_cast<uint8_t>(static_cast<uint32_t>('0') + (value % 10U));
+    while (value != 0 && count < digits.size()) {
+        digits[count] = static_cast<uint8_t>(static_cast<uint32_t>('0') + (value % kDecimalBase));
         ++count;
-        value /= 10U;
-    } while (value != 0);
+        value /= kDecimalBase;
+    }
     for (size_t i = count; i > 0; --i) {
         if (!out.append(std::span<const uint8_t>(&digits[i - 1], 1))) {
             return false;
@@ -46,13 +57,13 @@ bool append_uint(CmdBuf &out, uint32_t value) noexcept
 
 const char *period_for(uint8_t rate_hz) noexcept
 {
-    if (rate_hz >= 20U) {
+    if (rate_hz >= kRate20Hz) {
         return "0.05";
     }
-    if (rate_hz >= 10U) {
+    if (rate_hz >= kRate10Hz) {
         return "0.1";
     }
-    if (rate_hz >= 5U) {
+    if (rate_hz >= kRate5Hz) {
         return "0.2";
     }
     if (rate_hz >= 2U) {
@@ -105,6 +116,87 @@ bool next_quoted(std::span<const uint8_t> frame, size_t &pos, std::span<const ui
     return true;
 }
 
+/** 应答行的判定原因，explain 与 step 共用同一份判定逻辑。 */
+enum class PromptReason : uint8_t {
+    kNone = 0,
+    kEmpty,
+    kNoCr,
+    kBody,
+};
+
+struct PromptVerdict {
+    demux::Step step = demux::Step::kReject;
+    PromptReason reason = PromptReason::kNone;
+    std::size_t need = 0;
+    std::size_t offset = 0;
+    uint8_t byte = 0;
+};
+
+PromptVerdict judge(std::span<const uint8_t> frame) noexcept
+{
+    const size_t size = frame.size();
+    if (size == 0) {
+        PromptVerdict verdict{};
+        verdict.reason = PromptReason::kEmpty;
+        return verdict;
+    }
+    if (frame[size - 1] == kLf) {
+        if (size < kMinPromptBytes || frame[size - 2] != kCr) {
+            PromptVerdict verdict{};
+            verdict.reason = PromptReason::kNoCr;
+            verdict.offset = size - 1;
+            verdict.byte = frame[size - 1];
+            return verdict;
+        }
+        for (size_t i = 1; i + 2 < size; ++i) {
+            if (!is_printable(frame[i])) {
+                PromptVerdict verdict{};
+                verdict.reason = PromptReason::kBody;
+                verdict.offset = i;
+                verdict.byte = frame[i];
+                return verdict;
+            }
+        }
+        PromptVerdict verdict{};
+        verdict.step = demux::Step::kFrame;
+        return verdict;
+    }
+    // 末字节是 '\r' 时只差 '\n'（分块读取常在 CR 后断开），仍属有效前缀。
+    if (!is_printable(frame[size - 1]) && frame[size - 1] != kCr) {
+        PromptVerdict verdict{};
+        verdict.reason = PromptReason::kBody;
+        verdict.offset = size - 1;
+        verdict.byte = frame[size - 1];
+        return verdict;
+    }
+    PromptVerdict verdict{};
+    verdict.step = demux::Step::kNeedMore;
+    verdict.need = 1;
+    return verdict;
+}
+
+void explain_verdict(const PromptVerdict &verdict, demux::text_writer::TextWriter &text) noexcept
+{
+    switch (verdict.reason) {
+    case PromptReason::kEmpty:
+        text.literal("empty prefix");
+        break;
+    case PromptReason::kNoCr:
+        text.literal("no CR before LF at offset ").decimal(verdict.offset);
+        break;
+    case PromptReason::kBody:
+        text.literal("illegal byte ")
+            .hex(static_cast<uint32_t>(verdict.byte), 2U)
+            .literal(" at offset ")
+            .decimal(verdict.offset);
+        break;
+    case PromptReason::kNone:
+    default:
+        text.literal("rejected");
+        break;
+    }
+}
+
 } // namespace
 
 bool prompt_first_byte(uint8_t byte) noexcept
@@ -114,27 +206,23 @@ bool prompt_first_byte(uint8_t byte) noexcept
 
 demux::Step prompt_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    const size_t size = frame.size();
-    if (size == 0) {
-        return demux::Step::kReject;
+    const PromptVerdict verdict = judge(frame);
+    need = verdict.need;
+    return verdict.step;
+}
+
+std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) noexcept
+{
+    demux::text_writer::TextWriter text(out);
+    if (frame.empty()) {
+        return text.literal("empty prefix").finish();
     }
-    if (frame[size - 1] == kLf) {
-        if (size < 4 || frame[size - 2] != kCr) {
-            return demux::Step::kReject;
-        }
-        for (size_t i = 1; i + 2 < size; ++i) {
-            if (!is_printable(frame[i])) {
-                return demux::Step::kReject;
-            }
-        }
-        return demux::Step::kFrame;
+    const PromptVerdict verdict = judge(frame);
+    if (verdict.step == demux::Step::kFrame) {
+        return text.literal("not rejected").finish();
     }
-    // 末字节是 '\r' 时只差 '\n'（分块读取常在 CR 后断开），仍属有效前缀。
-    if (!is_printable(frame[size - 1]) && frame[size - 1] != kCr) {
-        return demux::Step::kReject;
-    }
-    need = 1;
-    return demux::Step::kNeedMore;
+    explain_verdict(verdict, text);
+    return text.finish();
 }
 
 bool build_probe(CmdBuf &out) noexcept
@@ -168,7 +256,7 @@ bool finish_step(CmdBuf &cmd, bool expect_reply, uint32_t switch_baud, ConfigSte
 {
     out.cmd = cmd;
     out.expect_reply = expect_reply;
-    out.timeout_ms = 500;
+    out.timeout_ms = kConfigTimeoutMs;
     out.switch_baud = switch_baud;
     return true;
 }

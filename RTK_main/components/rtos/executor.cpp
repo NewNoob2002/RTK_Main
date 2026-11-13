@@ -258,7 +258,7 @@ void Executor::run() noexcept
                     ++drops;
                 }
                 if (xQueueSend(result_q_, &result, 0) != pdTRUE) {
-                    ESP_LOGE(kTag, "result enqueue failed");
+                    trace_exec(ExecTrace::kResultDrop, result.seq, drops);
                 }
             }
             ++commands;
@@ -296,7 +296,7 @@ void Executor::run() noexcept
         if (watchdog) {
             const esp_err_t error = esp_task_wdt_reset();
             if (error != ESP_OK) {
-                ESP_LOGW(kTag, "task wdt reset failed: %s", esp_err_to_name(error));
+                trace_exec(ExecTrace::kWdtResetFail, static_cast<uint32_t>(error), 0U);
                 watchdog = false;
             }
         }

@@ -4,14 +4,12 @@
  * 在 BTC 回调线程运行（临界区内只改会话状态，临界区外非阻塞唤醒）；
  * spp_server_write/disconnect 只允许链路任务调用，等待范围由调用方的 timeout_ms 收敛。 */
 
-#include <inttypes.h>
 #include <stdint.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 
-#include "esp_log.h"
 #include "esp_spp_api.h"
 
 #include "spp_server_priv.h"
@@ -108,7 +106,6 @@ static void spp_server_worker_submit(spp_server_session_t *session)
     if (err != ESP_OK) {
         /* esp_err_t → uint32_t 只是位模式搬移，追踪只做展示用。 */
         spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, handle, (uint32_t)err, (uint32_t)len);
-        ESP_LOGE(SPP_SERVER_TAG, "submit handle=%" PRIu32 " len=%u: %s", handle, (unsigned)len, esp_err_to_name(err));
     }
     if (s_spp.rtos.evt_group != NULL) {
         (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_WAKE(idx));
@@ -148,7 +145,8 @@ static void spp_server_disconnect_process(void)
         session->disconnect_submitted = (err == ESP_OK);
         taskEXIT_CRITICAL(&s_spp_mux);
         if (err != ESP_OK) {
-            ESP_LOGW(SPP_SERVER_TAG, "disconnect handle=%" PRIu32 ": %s; retry pending", handle, esp_err_to_name(err));
+            /* 断开标志保留，下一轮重试。 */
+            spp_server_trace(SPP_SERVER_TRACE_CTRL_ERR, handle, (uint32_t)SPP_SERVER_TRACE_CTRL_DISCONNECT, (uint32_t)err);
         }
     }
 }
@@ -257,16 +255,14 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
     taskEXIT_CRITICAL(&s_spp_mux);
 
     if (ignore_stale) {
-        /* 旧请求在 CLOSE 后才被 BTC 处理：没有新会话的完成可结算，忽略。 */
-        ESP_LOGD(SPP_SERVER_TAG, "stale anonymous write evt ignored: len=%d status=%d", param->write.len,
-                 (int)param->write.status);
+        /* 旧请求在 CLOSE 后才被 BTC 处理：没有新会话的完成可结算，忽略（正常竞态，不记）。 */
         return;
     }
     if (!matched) {
         /* 带有效句柄但不属于当前在途请求的迟到事件（成功或失败）：一律忽略，
          * 绝不能结算到别的会话。 */
-        ESP_LOGW(SPP_SERVER_TAG, "write evt unmatched: handle=%" PRIu32 " len=%d status=%d", param->write.handle,
-                 param->write.len, (int)param->write.status);
+        spp_server_trace(SPP_SERVER_TRACE_WRITE_STRAY, param->write.handle,
+                         (param->write.len > 0) ? (uint32_t)param->write.len : 0U, (uint32_t)param->write.status);
         return;
     }
     if (traced) {
@@ -277,10 +273,6 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
         } else {
             spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, traced_handle, (uint32_t)ESP_FAIL, traced_bytes);
         }
-    }
-    if (result != ESP_OK) {
-        ESP_LOGW(SPP_SERVER_TAG, "write failed: handle=%" PRIu32 " len=%d status=%d", param->write.handle,
-                 param->write.len, (int)param->write.status);
     }
     if (s_spp.rtos.evt_group != NULL) {
         (void)xEventGroupSetBits(s_spp.rtos.evt_group, wake_bits);

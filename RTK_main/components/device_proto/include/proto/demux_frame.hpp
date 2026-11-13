@@ -24,7 +24,10 @@ inline constexpr std::size_t kMaxFrame = DEV_PROTO_MAX_FRAME;
 /** 线程/ISR 安全：是（纯函数）。契约见 demux/decoder.hpp。 */
 [[nodiscard]] demux::Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
 
-inline constexpr demux::Decoder kDecoder{"RtkFrame", kMaxFrame, &first_byte, &step};
+/** 线程/ISR 安全：是（纯函数）。对被 step 判为 kReject 的前缀写一句英文原因，见 demux/decoder.hpp ExplainFn。 */
+[[nodiscard]] std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcept;
+
+inline constexpr demux::Decoder kDecoder{"RtkFrame", kMaxFrame, &first_byte, &step, &explain};
 
 /**
  * 把一条已被 kDecoder 判定为 kFrame 的线路帧解成字段视图（payload 指向 wire 内部，生命周期同 wire）。

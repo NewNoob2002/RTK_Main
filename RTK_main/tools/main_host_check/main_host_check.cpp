@@ -18,6 +18,7 @@ extern "C" {
 }
 
 #include "app_test_adapter.hpp"
+#include "modules/debug/trace_text.hpp"
 
 namespace {
 uint32_t s_clock = 100U;
@@ -806,6 +807,13 @@ int main(int argc, char **argv)
         CHECK(snap.policy == core::Policy::kConcurrent);
 #endif
         CHECK(!snap.bt_ready && !snap.link_running);
+    } else if (std::strcmp(argv[1], "debug_cat_names") == 0) {
+        // 控制台习惯输小写，表里是大写短名：两种写法都必须解析（T4 上板发现小写被拒）。
+        fw::TraceCat cat = fw::TraceCat::kLink;
+        CHECK(app::debug::parse_cat("gnss", cat) && cat == fw::TraceCat::kGnss);
+        CHECK(app::debug::parse_cat("GNSS", cat) && cat == fw::TraceCat::kGnss);
+        CHECK(app::debug::parse_cat("Spp", cat) && cat == fw::TraceCat::kSpp);
+        CHECK(!app::debug::parse_cat("gns", cat) && !app::debug::parse_cat("gnssx", cat));
     } else if (std::strcmp(argv[1], "save_recovery") == 0) {
         save_recovery();
     } else if (std::strcmp(argv[1], "storage_backoff") == 0) {

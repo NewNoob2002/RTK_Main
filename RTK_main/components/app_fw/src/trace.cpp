@@ -10,17 +10,18 @@
 #include <limits>
 
 #include "fw/lock.hpp"
+#include "trace_internal.hpp"
 
 namespace fw {
 
 namespace {
 
-constexpr uint32_t kCatCount = static_cast<uint32_t>(TraceCat::kCount);
+[[maybe_unused]] constexpr uint32_t kCatCount = static_cast<uint32_t>(TraceCat::kCount); // 关闭追踪时不用
 constexpr size_t kMinEventsInRing = 2U;
 
 // sink 用 release 发布、trace() 用 acquire 读取：保证 install 写入的 ctx 与 clock 先于 sink 可见。
 std::atomic<TraceSinkFn> s_sink{nullptr};
-void *s_sink_ctx = nullptr;
+[[maybe_unused]] void *s_sink_ctx = nullptr; // 关闭追踪时只写不读
 TraceClockFn s_clock = nullptr;
 // 默认全关（T3：全开时空闲也每秒刷心跳/推送行）；需要时 debug on <类别> 打开，debug save 持久化。
 constinit std::atomic<uint32_t> s_mask{0U};
@@ -175,6 +176,20 @@ size_t TraceRing::depth() const noexcept
     return count_;
 }
 
+bool TraceRing::peek_time(uint32_t &t_ms) const noexcept
+{
+    if (!ready_) {
+        return false;
+    }
+    // 与 pop 使用同一把锁：读者任务要先比较两个环的最旧时间，必须拿到一致快照。
+    const LockGuard guard(lock_);
+    if (count_ == 0U) {
+        return false;
+    }
+    t_ms = buf_[head_].t_ms;
+    return true;
+}
+
 void TraceRing::sink(void *ctx, const TraceEvent &ev) noexcept
 {
     auto *ring = static_cast<TraceRing *>(ctx);
@@ -183,5 +198,15 @@ void TraceRing::sink(void *ctx, const TraceEvent &ev) noexcept
     }
     ring->push(ev);
 }
+
+namespace detail {
+
+TraceClockFn installed_clock() noexcept
+{
+    // 只在启动阶段由 trace_install 写入一次；log_install 在 install 之后读取，无需原子。
+    return s_clock;
+}
+
+} // namespace detail
 
 } // namespace fw

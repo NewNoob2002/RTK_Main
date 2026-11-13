@@ -20,6 +20,9 @@ inline constexpr std::size_t kMaxFrame = 4096;
 /** 线程/ISR 安全：是（纯函数）。契约见 demux/decoder.hpp。 */
 [[nodiscard]] Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
 
-inline constexpr Decoder kDecoder{"UnicoreBin", kMaxFrame, &first_byte, &step};
+/** 线程/ISR 安全：是（纯函数）。对被 step 判为 kReject 的前缀写一句英文原因，见 demux/decoder.hpp ExplainFn。 */
+[[nodiscard]] std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcept;
+
+inline constexpr Decoder kDecoder{"UnicoreBin", kMaxFrame, &first_byte, &step, &explain};
 
 } // namespace demux::unicore_bin

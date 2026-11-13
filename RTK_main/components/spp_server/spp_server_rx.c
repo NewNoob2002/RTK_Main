@@ -2,7 +2,6 @@
  * spp_server_handle_data / spp_server_evt_post 在 BTC 回调线程调用：只拷贝、非阻塞投递；
  * spp_server_poll_event / spp_server_read / spp_server_dropped_events 只允许链路任务（单一所有者）调用。 */
 
-#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -10,7 +9,6 @@
 #include "freertos/queue.h"
 #include "freertos/stream_buffer.h"
 
-#include "esp_log.h"
 #include "esp_spp_api.h"
 
 #include "spp_server_priv.h"
@@ -44,7 +42,6 @@ void spp_server_handle_data(esp_spp_cb_param_t *param)
         const uint32_t dropped = (uint32_t)(len - written);
 
         spp_server_evt_post(SPP_SERVER_EVT_RX_DROP, param->data_ind.handle, NULL, dropped);
-        ESP_LOGW(SPP_SERVER_TAG, "rx overflow handle=%" PRIu32 " dropped=%" PRIu32, param->data_ind.handle, dropped);
         /* a = 本次丢弃字节，b = 缓冲已用字节。 */
         spp_server_trace(SPP_SERVER_TRACE_RX_DROP, param->data_ind.handle, dropped,
                          (uint32_t)xStreamBufferBytesAvailable(session->rx));
@@ -96,7 +93,6 @@ void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint
         s_spp.evt_dropped++;
         total_dropped = s_spp.evt_dropped;
         taskEXIT_CRITICAL(&s_spp_mux);
-        ESP_LOGW(SPP_SERVER_TAG, "event queue full, total dropped=%" PRIu32, total_dropped);
         /* a = 被丢弃的事件类型，b = 累计丢弃数（只在临界区内读）。 */
         spp_server_trace(SPP_SERVER_TRACE_EVT_DROP, handle, (uint32_t)type, total_dropped);
     }

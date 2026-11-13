@@ -7,6 +7,7 @@
 #include <cinttypes>
 #include <cstring>
 #include "esp_log.h"
+#include "fw/tlog.hpp"
 #include "core/link_service.hpp"
 #include "rtos/esp_status.hpp"
 
@@ -40,7 +41,7 @@ void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t 
                        (index == kRtcmIndex && &decoder == &demux::rtcm3::kDecoder);
     if (!known || count_ == frames_.size() || wire.size() > bytes_.size() - size_) {
         healthy_ = false;
-        ESP_LOGE(kTag, "demux delivery queue invalid, handle=0x%08" PRIx32, handle_);
+        fw::tlog(fw::TraceCat::kProto, "session 0x%04" PRIx32 " delivery queue invalid (decoder index %u, %u bytes), stream reset", handle_ & 0xFFFFU, static_cast<unsigned>(index), static_cast<unsigned>(wire.size()));
         return;
     }
     /* 保存当前 feed 的完整帧，交给轮次预算逐个投递。 */
@@ -80,7 +81,7 @@ bool BtLinkModule::SessionSink::dispatch_one() noexcept
         trace_rtcm(RtcmTrace::kFrame, handle_, msg, static_cast<uint32_t>(wire.size()));
     } else {
         // 两会话遗留帧 + 每轮 256 B 的界限被破坏；不允许静默覆盖。
-        ESP_LOGE(kTag, "RTCM batch capacity violated");
+        fw::tlog(fw::TraceCat::kRtcm, "session 0x%04" PRIx32 " RTCM batch full, %u-byte frame not forwarded", handle_ & 0xFFFFU, static_cast<unsigned>(wire.size()));
         trace_rtcm(RtcmTrace::kReject, handle_, static_cast<uint32_t>(RtcmReject::kCapacity),
                    static_cast<uint32_t>(wire.size()));
         healthy_ = false;
@@ -111,7 +112,7 @@ void BtLinkModule::session_forget(core::SessionHandle handle) noexcept
     if (entry->demux_ready) {
         const auto error = entry->demux.abort();
         if (error != demux::Error::kOk) {
-            ESP_LOGE(kTag, "demux abort failed");
+            fw::tlog(fw::TraceCat::kProto, "stream demux abort failed (reentry)");
         }
         while (entry->sink.pending()) {
             static_cast<void>(entry->sink.dispatch_one());
@@ -149,11 +150,11 @@ void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr
         entry.sink.bind(*this, handle);
         entry.demux_ready = entry.demux.init(entry.sink) == demux::Error::kOk;
         if (!entry.demux_ready) {
-            ESP_LOGE(kTag, "demux init failed");
+            fw::tlog(fw::TraceCat::kProto, "stream demux init failed, session 0x%04" PRIx32 " gets no parsing", handle & 0xFFFFU);
         }
         return;
     }
-    ESP_LOGE(kTag, "session map full");
+    fw::tlog(fw::TraceCat::kLink, "session map full, 0x%04" PRIx32 " not tracked", handle & 0xFFFFU);
 }
 
 void BtLinkModule::collect_whitelist_dirty() noexcept
@@ -229,7 +230,7 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
     if (error != demux::Error::kOk || !entry.sink.healthy()) {
         entry.demux_ready = false;
         entry.drain_pending = false;
-        ESP_LOGE(kTag, "demux feed failed");
+        fw::tlog(fw::TraceCat::kProto, "stream demux stopped (%s), further bytes on this session ignored", error != demux::Error::kOk ? "feed error" : "delivery queue invalid");
         return true;
     }
     return false;

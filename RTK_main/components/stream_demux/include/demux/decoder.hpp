@@ -39,11 +39,11 @@ struct Decoder {
      */
     using ExplainFn = std::size_t (*)(std::span<const uint8_t> prefix, std::span<char> out) noexcept;
 
-    const char *name;       // 诊断用，非空
-    std::size_t max_frame;  // 本协议允许的最大帧长（字节），1..65535；超长的长度字段应在 step 中 kReject
-    FirstByteFn first_byte; // 该字节能否作为本协议帧的第一个字节；只在 Demux::init 时对 0..255 各调用一次
-    StepFn step;
-    ExplainFn explain = nullptr; // 可为 nullptr：诊断代码退化为 "rejected"
+    const char *name = nullptr;       // 诊断用，非空
+    std::size_t max_frame = 0;        // 本协议允许的最大帧长（字节），1..65535；超长的长度字段应在 step 中 kReject
+    FirstByteFn first_byte = nullptr; // 该字节能否作为本协议帧的第一个字节；只在 Demux::init 时对 0..255 各调用一次
+    StepFn step = nullptr;
+    ExplainFn explain = nullptr;      // 可为 nullptr：诊断代码退化为 "rejected"
 };
 
 } // namespace demux

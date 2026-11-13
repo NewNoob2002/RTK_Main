@@ -3,6 +3,7 @@
 // 早拒绝点：第 2 字节不是发送方标识；正文出现非法字符（不可打印、'$'）；'*' 之后不是十六进制/CR/LF。
 // 帧长未知，因此每字节只查“新到字节”与定长尾部窗口（5 B）内的 '*' 相对偏移，O(1) 且结论只依赖入参；
 // '\n' 到达时再整段复核正文并整段算 XOR，保证 kFrame 结论与调用历史无关。
+// step 与 explain 共用同一个 judge()，避免诊断文本与判定结论漂移。
 
 #include "demux/decoders/nmea.hpp"
 
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <span>
 
+#include "demux/text_writer.hpp"
 #include "demux/decoder.hpp"
 
 namespace demux::nmea {
@@ -34,10 +36,36 @@ constexpr uint8_t kHexAlphaBase = 10U;
 // 尾部以 '\n' 为参照的固定偏移：'\n' 0 | '\r' 1 | 低位十六进制 2 | 高位十六进制 3 | '*' 4。
 constexpr std::size_t kStarOffset = 4U;
 constexpr std::size_t kHexHiOffset = 3U;
+constexpr std::size_t kHexLoOffset = 2U;
 constexpr std::size_t kStarWindow = kStarOffset;
 // "$" + 发送方标识 + "*hh\r\n" 的最短长度。
 constexpr std::size_t kMinLen = 7U;
 constexpr uint32_t kNibbleBits = 4U;
+
+/** 拒绝原因；explain 据此生成一句话，step 只看 verdict.step。 */
+enum class Reason : uint8_t {
+    kNone,
+    kSync,
+    kSecond,
+    kShort,
+    kMissingStar,
+    kBody,
+    kNoCrByte,
+    kHexByte,
+    kChecksum,
+    kUnexpected,
+    kTooLong,
+};
+
+/** judge() 的完整结论：判定、原因与诊断所需的数值。 */
+struct Verdict {
+    Step step = Step::kNeedMore;
+    Reason reason = Reason::kNone;
+    std::size_t need = 1U;   // 仅 kNeedMore 有意义
+    std::size_t offset = 0U; // 出错字节下标
+    uint8_t received = 0U;   // 校验类原因：收到的值
+    uint8_t computed = 0U;   // 校验类原因：算出的值
+};
 
 bool is_printable(uint8_t byte) noexcept
 {
@@ -105,24 +133,42 @@ bool find_star_reverse(std::span<const uint8_t> frame, std::size_t last, std::si
     return false;
 }
 
+Verdict reject(Reason reason, std::size_t offset, uint8_t byte = 0U) noexcept
+{
+    Verdict verdict{};
+    verdict.step = Step::kReject;
+    verdict.reason = reason;
+    verdict.offset = offset;
+    verdict.received = byte;
+    return verdict;
+}
+
 /** '\n' 到达时的整段复核：尾部结构、正文合法性、XOR 校验。 */
-Step finish(std::span<const uint8_t> frame) noexcept
+Verdict finish(std::span<const uint8_t> frame) noexcept
 {
     const std::size_t len = frame.size();
     const std::size_t last = len - 1U;
 
     if (len < kMinLen) {
-        return Step::kReject;
+        return reject(Reason::kShort, last);
     }
     const std::size_t star = last - kStarOffset; // len ≥ kMinLen 保证 star ≥ 2，不越界
-    if ((frame[last - 1U] != kCr) || (!is_hex_digit(frame[last - 2U])) || (!is_hex_digit(frame[last - kHexHiOffset])) ||
-        (frame[star] != kStar)) {
-        return Step::kReject;
+    if (frame[last - 1U] != kCr) {
+        return reject(Reason::kNoCrByte, last - 1U, frame[last - 1U]);
+    }
+    if (!is_hex_digit(frame[last - kHexLoOffset])) {
+        return reject(Reason::kHexByte, last - kHexLoOffset, frame[last - kHexLoOffset]);
+    }
+    if (!is_hex_digit(frame[last - kHexHiOffset])) {
+        return reject(Reason::kHexByte, last - kHexHiOffset, frame[last - kHexHiOffset]);
+    }
+    if (frame[star] != kStar) {
+        return reject(Reason::kMissingStar, star, frame[star]);
     }
     // 正文（'$' 与 '*' 之间）必须可打印且既不含 '$' 也不含 '*'（'*' 只能出现在校验字段起点）。
     for (std::size_t idx = 1U; idx < star; ++idx) {
         if ((!is_body(frame[idx])) || (frame[idx] == kStar)) {
-            return Step::kReject;
+            return reject(Reason::kBody, idx, frame[idx]);
         }
     }
 
@@ -132,7 +178,129 @@ Step finish(std::span<const uint8_t> frame) noexcept
         static_cast<uint8_t>((static_cast<uint32_t>(hex_value(frame[star + 1U])) << kNibbleBits) |
                              static_cast<uint32_t>(hex_value(frame[star + 2U])));
 
-    return (checksum_calc == checksum_rx) ? Step::kFrame : Step::kReject;
+    if (checksum_calc != checksum_rx) {
+        Verdict verdict = reject(Reason::kChecksum, star + 1U, checksum_rx);
+        verdict.computed = checksum_calc;
+        return verdict;
+    }
+    return Verdict{}; // step = kNeedMore 占位，由调用方改写
+}
+
+/** 判定：step 与 explain 的唯一事实来源。 */
+Verdict judge(std::span<const uint8_t> frame) noexcept
+{
+    Verdict verdict{};
+    const std::size_t last = frame.size() - 1U;
+    const uint8_t new_byte = frame[last];
+
+    if (frame[0] != kSyncByte) {
+        return reject(Reason::kSync, 0U, frame[0]);
+    }
+    if (frame.size() < 2U) {
+        verdict.need = 2U - frame.size();
+        return verdict;
+    }
+    if (!is_upper_alnum(frame[1])) {
+        // 第 2 字节必须是发送方标识（大写字母或数字）：与同样以 '$' 开头的其他语法早分开。
+        return reject(Reason::kSecond, 1U, frame[1]);
+    }
+    if (new_byte == kLf) {
+        Verdict finished = finish(frame);
+        if (finished.reason == Reason::kNone) {
+            finished.step = Step::kFrame;
+        }
+        return finished;
+    }
+
+    std::size_t star_ofs = 0U;
+    if (find_star_reverse(frame, last, kStarWindow, star_ofs)) {
+        if (star_ofs == 0U) {
+            // 当前字节就是 '*'：校验字段从这里开始。
+        } else if (star_ofs < kHexHiOffset) {
+            // 偏移 1、2：两位十六进制校验位。
+            if (!is_hex_digit(new_byte)) {
+                return reject(Reason::kHexByte, last, new_byte);
+            }
+        } else if (star_ofs == kHexHiOffset) {
+            // 偏移 3：只能是 '\r'。
+            if (new_byte != kCr) {
+                return reject(Reason::kNoCrByte, last, new_byte);
+            }
+        } else {
+            // 偏移 4 只可能以 '\n' 结束（上面已处理），其余情况非法。
+            return reject(Reason::kUnexpected, last, new_byte);
+        }
+    } else if (!is_body(new_byte)) {
+        return reject(Reason::kBody, last, new_byte);
+    } else {
+        // 正文字节合法，继续累积。
+    }
+
+    if ((frame.size() + 1U) > kMaxFrame) {
+        // 超过 max_frame 仍未结束：need 契约禁止要求超限字节，只能拒绝。
+        return reject(Reason::kTooLong, last);
+    }
+    verdict.need = 1U;
+    return verdict;
+}
+
+void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+{
+    switch (verdict.reason) {
+    case Reason::kSync:
+        text.literal("sync byte 1 is ").hex(static_cast<uint32_t>(verdict.received), 2U).literal(", expected '$'");
+        break;
+    case Reason::kSecond:
+        text.literal("byte 1 is ").byte_value(verdict.received).literal(", not an upper-case sender id");
+        break;
+    case Reason::kShort:
+        text.literal("shorter than ").decimal(kMinLen).literal(" bytes");
+        break;
+    case Reason::kMissingStar:
+        text.literal("byte ")
+            .decimal(verdict.offset)
+            .literal(" is ")
+            .byte_value(verdict.received)
+            .literal(", expected '*'");
+        break;
+    case Reason::kBody:
+        text.literal("illegal byte ").byte_value(verdict.received).literal(" at offset ").decimal(verdict.offset);
+        break;
+    case Reason::kNoCrByte:
+        text.literal("byte ")
+            .decimal(verdict.offset)
+            .literal(" is ")
+            .byte_value(verdict.received)
+            .literal(", expected CR");
+        break;
+    case Reason::kHexByte:
+        text.literal("byte ")
+            .decimal(verdict.offset)
+            .literal(" is ")
+            .byte_value(verdict.received)
+            .literal(", not a hex digit");
+        break;
+    case Reason::kChecksum:
+        text.literal("bad checksum, received ")
+            .hex(static_cast<uint32_t>(verdict.received), 2U)
+            .literal(", computed ")
+            .hex(static_cast<uint32_t>(verdict.computed), 2U);
+        break;
+    case Reason::kUnexpected:
+        text.literal("byte ")
+            .decimal(verdict.offset)
+            .literal(" is ")
+            .byte_value(verdict.received)
+            .literal(" after the checksum");
+        break;
+    case Reason::kTooLong:
+        text.literal("frame longer than ").decimal(kMaxFrame).literal(" bytes");
+        break;
+    case Reason::kNone:
+    default:
+        text.literal("rejected");
+        break;
+    }
 }
 
 } // namespace
@@ -145,51 +313,20 @@ bool first_byte(uint8_t byte) noexcept
 Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
     // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 first_byte。
-    const std::size_t last = frame.size() - 1U;
-    const uint8_t new_byte = frame[last];
+    const Verdict verdict = judge(frame);
+    need = verdict.need;
+    return verdict.step;
+}
 
-    if (frame.size() < 2U) {
-        need = 2U - frame.size();
-        return Step::kNeedMore;
+std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcept
+{
+    demux::text_writer::TextWriter text(out);
+    if (frame.empty()) {
+        return text.literal("empty prefix").finish();
     }
-    if (!is_upper_alnum(frame[1])) {
-        // 第 2 字节必须是发送方标识（大写字母或数字）：与同样以 '$' 开头的其他语法早分开。
-        return Step::kReject;
-    }
-    if (new_byte == kLf) {
-        return finish(frame);
-    }
-
-    std::size_t star_ofs = 0U;
-    if (find_star_reverse(frame, last, kStarWindow, star_ofs)) {
-        if (star_ofs == 0U) {
-            // 当前字节就是 '*'：校验字段从这里开始。
-        } else if (star_ofs < kHexHiOffset) {
-            // 偏移 1、2：两位十六进制校验位。
-            if (!is_hex_digit(new_byte)) {
-                return Step::kReject;
-            }
-        } else if (star_ofs == kHexHiOffset) {
-            // 偏移 3：只能是 '\r'。
-            if (new_byte != kCr) {
-                return Step::kReject;
-            }
-        } else {
-            // 偏移 4 只可能以 '\n' 结束（上面已处理），其余情况非法。
-            return Step::kReject;
-        }
-    } else if (!is_body(new_byte)) {
-        return Step::kReject;
-    } else {
-        // 正文字节合法，继续累积。
-    }
-
-    if ((frame.size() + 1U) > kMaxFrame) {
-        // 超过 max_frame 仍未结束：need 契约禁止要求超限字节，只能拒绝。
-        return Step::kReject;
-    }
-    need = 1U;
-    return Step::kNeedMore;
+    const Verdict verdict = judge(frame);
+    explain_verdict((verdict.step == Step::kReject) ? verdict : reject(Reason::kNone, 0U), text);
+    return text.finish();
 }
 
 } // namespace demux::nmea

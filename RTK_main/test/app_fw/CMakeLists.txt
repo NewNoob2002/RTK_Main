@@ -1,5 +1,6 @@
 # app_fw 纯 C++20 组件 host 单元测试工程（ADR-0007，J4 交付）。
-# 覆盖 Result、LockGuard、Slot、StoreKey、FanoutRing、trace/TraceRing；支持普通构建与 ASan/UBSan 构建。
+# 覆盖 Result、LockGuard、Slot、StoreKey、FanoutRing、trace/TraceRing、tlog/LogRing；
+# 另建 app_fw_off（FW_TRACE_ENABLED=0）验证追踪关闭时 tlog 编译路径；支持普通构建与 ASan/UBSan 构建。
 cmake_minimum_required(VERSION 3.22)
 project(app_fw_tests C CXX)
 
@@ -37,9 +38,27 @@ target_compile_options(app_fw PRIVATE -fno-exceptions -fno-rtti)
 
 enable_testing()
 
-foreach(name test_app_fw_basics test_fanout_ring test_trace)
+foreach(name test_app_fw_basics test_fanout_ring test_trace test_tlog)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} app_fw unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
+
+# FW_TRACE_ENABLED=0 编译路径（ADR-0009 §2.6）：同一批源文件按“追踪关闭”再编一份库，
+# 确认 tlog/tlog_hex 退化为空内联后 app_fw 仍能编译，且 tlog 不再写环。
+add_library(app_fw_off STATIC
+    ${PROJ_ROOT}/components/app_fw/src/status.cpp
+    ${PROJ_ROOT}/components/app_fw/src/result.cpp
+    ${PROJ_ROOT}/components/app_fw/src/fanout_ring.cpp
+    ${PROJ_ROOT}/components/app_fw/src/trace.cpp
+    ${PROJ_ROOT}/components/app_fw/src/tlog.cpp)
+target_include_directories(app_fw_off PUBLIC ${PROJ_ROOT}/components/app_fw/include)
+target_compile_features(app_fw_off PUBLIC cxx_std_20)
+target_compile_definitions(app_fw_off PUBLIC FW_TRACE_ENABLED=0)
+target_compile_options(app_fw_off PRIVATE -fno-exceptions -fno-rtti ${PROJ_CXX_STRICT})
+
+add_executable(test_tlog_off test_tlog_off.cpp)
+target_link_libraries(test_tlog_off app_fw_off unity)
+target_compile_options(test_tlog_off PRIVATE ${PROJ_CXX_STRICT})
+add_test(NAME test_tlog_off COMMAND test_tlog_off)

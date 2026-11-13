@@ -880,6 +880,101 @@ static void test_dollar_conflict_with_custom_decoder()
 }
 #endif
 
+// --------------------------------------------------------------------------
+// explain：拒绝原因文本（ADR-0009 §2.11）。每个解码器至少两个原因。
+// --------------------------------------------------------------------------
+
+namespace {
+
+bool text_contains(std::string_view text, std::string_view needle) noexcept
+{
+    return text.find(needle) != std::string_view::npos;
+}
+
+std::string_view explain_text(const demux::Decoder &decoder, std::span<const uint8_t> prefix,
+                              std::array<char, 96> &buf) noexcept
+{
+    if (decoder.explain == nullptr) {
+        return {};
+    }
+    const std::size_t len = decoder.explain(prefix, buf);
+    return std::string_view(buf.data(), len);
+}
+
+void assert_explain(const demux::Decoder &decoder, std::span<const uint8_t> prefix, std::string_view needle) noexcept
+{
+    std::array<char, 96> buf{};
+    const std::string_view text = explain_text(decoder, prefix, buf);
+    if (!text_contains(text, needle)) {
+        TEST_FAIL_MESSAGE("explain text mismatch");
+    }
+}
+
+} // namespace
+
+static void test_explain_nmea()
+{
+#if STREAM_DEMUX_NMEA
+    static constexpr std::array<uint8_t, 13> kBadChecksum{'$', 'G', 'P', 'G', 'G',  'A', ',',
+                                                          '1', '*', '0', '0', '\r', '\n'};
+    assert_explain(demux::nmea::kDecoder, kBadChecksum, "bad checksum, received 0x00, computed 0x4B");
+    static constexpr std::array<uint8_t, 10> kIllegal{'$', 'G', 'P', 0x01U, 'X', '*', '0', '7', '\r', '\n'};
+    assert_explain(demux::nmea::kDecoder, kIllegal, "illegal byte 0x01 at offset 3");
+#endif
+}
+
+static void test_explain_rtcm3()
+{
+#if STREAM_DEMUX_RTCM3
+    static constexpr std::array<uint8_t, 7> kReserved{0xD3U, 0x40U, 0x01U, 0x3CU, 0x00U, 0x00U, 0x00U};
+    assert_explain(demux::rtcm3::kDecoder, kReserved, "reserved bits set in byte 1: 0x40");
+    static constexpr std::array<uint8_t, 7> kBadCrc{0xD3U, 0x00U, 0x01U, 0x3CU, 0x00U, 0x00U, 0x00U};
+    assert_explain(demux::rtcm3::kDecoder, kBadCrc, "bad CRC-24Q, received 0x000000");
+#endif
+}
+
+static void test_explain_ubx()
+{
+#if STREAM_DEMUX_UBX
+    static constexpr std::array<uint8_t, 2> kBadSync{0xB5U, 0x00U};
+    assert_explain(demux::ubx::kDecoder, kBadSync, "sync byte 2 is 0x00, expected 0x62");
+    static constexpr std::array<uint8_t, 8> kBadCk{0xB5U, 0x62U, 0x01U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
+    assert_explain(demux::ubx::kDecoder, kBadCk, "bad checksum, received 0x0000");
+#endif
+}
+
+static void test_explain_unicore_bin()
+{
+#if STREAM_DEMUX_UNICORE_BIN
+    static constexpr std::array<uint8_t, 3> kBadSync{0xAAU, 0x44U, 0x00U};
+    assert_explain(demux::unicore_bin::kDecoder, kBadSync, "sync byte 3 is 0x00, expected 0xB5");
+    std::array<uint8_t, 28> frame{};
+    frame[0] = 0xAAU;
+    frame[1] = 0x44U;
+    frame[2] = 0xB5U;
+    // 24 B 头 + 0 B 载荷 + 4 B CRC，CRC 全 0 必然不符。
+    assert_explain(demux::unicore_bin::kDecoder, frame, "bad CRC32, received 0x00000000");
+#endif
+}
+
+static void test_explain_unicore_hash()
+{
+#if STREAM_DEMUX_UNICORE_HASH
+    static constexpr std::array<uint8_t, 13> kNoStar{'#', 'V', 'E', 'R', 'S', 'I', 'O', 'N', 'A', ',', 'x', '\r', '\n'};
+    assert_explain(demux::unicore_hash::kDecoder, kNoStar, "no '*' before LF");
+    static constexpr std::array<uint8_t, 8> kBadXor{'#', 'A', 'B', '*', '0', '0', '\r', '\n'};
+    assert_explain(demux::unicore_hash::kDecoder, kBadXor, "bad XOR checksum, received 0x00, computed 0x03");
+#endif
+}
+
+static void test_explain_product_frame()
+{
+    static constexpr std::array<uint8_t, 2> kBadSync{0xAAU, 0x00U};
+    assert_explain(proto::demux_frame::kDecoder, kBadSync, "sync byte 2 is 0x00, expected 0x44");
+    static constexpr std::array<uint8_t, 4> kBadHdr{0xAAU, 0x44U, 0x18U, 0x10U};
+    assert_explain(proto::demux_frame::kDecoder, kBadHdr, "header length is 0x10, expected 0x14");
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -902,6 +997,12 @@ int main()
     RUN_TEST(test_product_demux_and_frame_view);
 #if STREAM_DEMUX_NMEA
     RUN_TEST(test_dollar_conflict_with_custom_decoder);
+    RUN_TEST(test_explain_nmea);
+    RUN_TEST(test_explain_rtcm3);
+    RUN_TEST(test_explain_ubx);
+    RUN_TEST(test_explain_unicore_bin);
+    RUN_TEST(test_explain_unicore_hash);
+    RUN_TEST(test_explain_product_frame);
 #endif
     return UNITY_END();
 }

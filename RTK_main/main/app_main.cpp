@@ -160,7 +160,7 @@ void start_console() noexcept
 {
     constexpr const char *kConsolePrompt = "console> ";
     const std::array cmd_tables{
-        app::system_cmds(), app::link_cmds(), app::config_cmds(), app::rtcm_cmds(),
+        app::system_cmds(),  app::link_cmds(), app::config_cmds(), app::rtcm_cmds(),
 #if RTK_GNSS_ENABLED
         app::gnss_cmds(),
 #endif

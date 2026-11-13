@@ -2,12 +2,10 @@
  * 全部在 BTC 回调线程执行：只拷贝数据、记录状态、置事件位、非阻塞投递；
  * 不解析协议、不打印数据内容、不调用任何可能阻塞投递的 API。 */
 
-#include <inttypes.h>
 #include <stdint.h>
 
 #include "esp_bt.h"
 #include "esp_gap_bt_api.h"
-#include "esp_log.h"
 #include "esp_spp_api.h"
 
 #include "spp_server_priv.h"
@@ -20,9 +18,8 @@ static void spp_server_handle_init(esp_spp_cb_param_t *param)
     s_spp.init_status = param->init.status;
     taskEXIT_CRITICAL(&s_spp_mux);
 
-    if (param->init.status != ESP_SPP_SUCCESS) {
-        ESP_LOGE(SPP_SERVER_TAG, "SPP init failed: %d", (int)param->init.status);
-    }
+    /* 失败原因由 init 任务在 spp_server_wait_stage 中打印（任务上下文）；回调里只记追踪。 */
+    spp_server_trace(SPP_SERVER_TRACE_STAGE, 0U, (uint32_t)SPP_SERVER_TRACE_STAGE_INIT, (uint32_t)param->init.status);
     if (s_spp.rtos.evt_group != NULL) {
         (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_INIT_DONE);
     }
@@ -35,11 +32,11 @@ static void spp_server_handle_start(esp_spp_cb_param_t *param)
     taskEXIT_CRITICAL(&s_spp_mux);
 
     if (param->start.status == ESP_SPP_SUCCESS) {
-        ESP_LOGI(SPP_SERVER_TAG, "server started, scn=%u", (unsigned)param->start.scn);
         /* a = scn */
         spp_server_trace(SPP_SERVER_TRACE_SRV_START, 0U, (uint32_t)param->start.scn, 0U);
     } else {
-        ESP_LOGE(SPP_SERVER_TAG, "server start failed: %d", (int)param->start.status);
+        spp_server_trace(SPP_SERVER_TRACE_STAGE, 0U, (uint32_t)SPP_SERVER_TRACE_STAGE_START,
+                         (uint32_t)param->start.status);
     }
     if (s_spp.rtos.evt_group != NULL) {
         (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_START_DONE);
@@ -51,7 +48,8 @@ static void spp_server_handle_srv_open(esp_spp_cb_param_t *param)
     const uint32_t handle = param->srv_open.handle;
 
     if (param->srv_open.status != ESP_SPP_SUCCESS) {
-        ESP_LOGE(SPP_SERVER_TAG, "srv open failed: %d", (int)param->srv_open.status);
+        spp_server_trace(SPP_SERVER_TRACE_STAGE, param->srv_open.handle, (uint32_t)SPP_SERVER_TRACE_STAGE_SRV_OPEN,
+                         (uint32_t)param->srv_open.status);
         return;
     }
 
@@ -64,7 +62,7 @@ static void spp_server_handle_srv_open(esp_spp_cb_param_t *param)
      * 不在回调里调用 esp_spp_disconnect（btc_transfer_context 可能无限阻塞），登记拒绝命令，
      * 由发送任务断开。不做延后接纳，避免 CLOSE 后把已死的连接重新发布为会话。 */
     if (!spp_server_ctrl_add(SPP_SERVER_CTRL_REJECT, handle, NULL)) {
-        ESP_LOGE(SPP_SERVER_TAG, "no slot and ctrl table full, handle=%" PRIu32, handle);
+        spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, handle, (uint32_t)SPP_SERVER_TRACE_CTRL_REJECT, 0U);
     }
 }
 
@@ -115,7 +113,7 @@ void spp_server_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
 
     case ESP_SPP_UNINIT_EVT:
-        ESP_LOGI(SPP_SERVER_TAG, "SPP uninitialized");
+        spp_server_trace(SPP_SERVER_TRACE_STAGE, 0U, (uint32_t)SPP_SERVER_TRACE_STAGE_UNINIT, 0U);
         if (s_spp.rtos.evt_group != NULL) {
             (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_UNINIT_DONE);
         }
@@ -136,24 +134,19 @@ void spp_server_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param
 
     switch (event) {
     case ESP_BT_GAP_AUTH_CMPL_EVT:
-        if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
-            ESP_LOGI(SPP_SERVER_TAG, "auth success: %s", param->auth_cmpl.device_name);
-        } else {
-            ESP_LOGW(SPP_SERVER_TAG, "auth failed: %d", (int)param->auth_cmpl.stat);
-        }
         /* 认证完成（成功与失败都记）：a = 状态码。 */
         spp_server_trace(SPP_SERVER_TRACE_AUTH, 0U, (uint32_t)param->auth_cmpl.stat, 0U);
         break;
 
     case ESP_BT_GAP_PIN_REQ_EVT:
         if (!spp_server_ctrl_add(SPP_SERVER_CTRL_PIN_REQ, 0U, param->pin_req.bda)) {
-            ESP_LOGE(SPP_SERVER_TAG, "pin req dropped: ctrl table full");
+            spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, 0U, (uint32_t)SPP_SERVER_TRACE_CTRL_PIN, 0U);
         }
         break;
 
     case ESP_BT_GAP_CFM_REQ_EVT:
         if (!spp_server_ctrl_add(SPP_SERVER_CTRL_CFM_REQ, 0U, param->cfm_req.bda)) {
-            ESP_LOGE(SPP_SERVER_TAG, "ssp confirm dropped: ctrl table full");
+            spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, 0U, (uint32_t)SPP_SERVER_TRACE_CTRL_CONFIRM, 0U);
         }
         break;
 

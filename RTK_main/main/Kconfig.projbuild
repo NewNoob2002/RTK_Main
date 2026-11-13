@@ -22,6 +22,16 @@ menu "RTK_main"
             spp_server 不再调用追踪钩子，main 不编译 debug 模块（追踪环、trace_out 任务、debug 命令组、
             NVS "dbg" 键表）。调试阶段保持开启。
 
+    config RTK_LOG_RING_BYTES
+        int "Text log ring size (bytes, ADR-0009 §2.11)"
+        depends on RTK_TRACE_ENABLE
+        range 1024 16384
+        default 4096
+        help
+            fw::LogRing 的字节容量：变长记录环，容纳 fw::tlog()/tlog_hex() 写出的句子与原始字节。
+            整条记录放不下就丢弃并计数（不做拆段），因此容量至少要能装下最长的一条
+            （12 B 记录头 + 256 B 十六进制载荷）。静态存储，不占堆。
+
     config RTK_STRICT_WARNINGS
         bool "Treat all warnings in project code as errors (debug phase)"
         default y

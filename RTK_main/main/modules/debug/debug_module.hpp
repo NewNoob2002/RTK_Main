@@ -8,9 +8,12 @@
 #include <cstdint>
 #include <span>
 
+#include "sdkconfig.h"
+
 #include "cli/console.hpp"
 #include "fw/command.hpp"
 #include "fw/store_key.hpp"
+#include "fw/tlog.hpp"
 #include "fw/trace.hpp"
 #include "rtos/static_task.hpp"
 
@@ -31,6 +34,15 @@ public:
     static constexpr size_t kLineBytes = 192;
     /** 输出任务栈；T3 上板 7 类全开、40 KB/s 负载下实测占用约 1.7 KB（HWM 2412/4096），取 3 KB 留约 1.3 KB 余量。 */
     static constexpr size_t kTaskStackBytes = 3072;
+    /**
+     * 文本日志环容量（字节，Kconfig 默认 4096）：变长记录，容纳 GNSS 句子与十六进制转储。
+     * 静态存储，不占堆；容量不足时整条丢弃并计数（ADR-0009 §2.11）。
+     */
+    static constexpr size_t kLogRingBytes = CONFIG_RTK_LOG_RING_BYTES;
+    /** 十六进制转储每行字节数（ADR-0009 §2.11：16 字节一行）。 */
+    static constexpr size_t kHexBytesPerLine = 16;
+    /** 十六进制转储正文缓冲：4 位偏移 + 冒号 + 16×3 + 间隔 + 16 字节 ASCII，取 128 留余量。 */
+    static constexpr size_t kHexLineBytes = 128;
 
     constexpr explicit DebugModule(AppContext &context) noexcept : context_(context) {}
     ~DebugModule() = default;
@@ -57,6 +69,8 @@ public:
     static fw::Result save_mask(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
     static fw::Result load_report(void *obj, std::span<const uint8_t> in) noexcept;
     static fw::Result save_report(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    static fw::Result load_hex(void *obj, std::span<const uint8_t> in) noexcept;
+    static fw::Result save_hex(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
 
     /** 报告周期（秒，0 = 关闭）。跨任务读，非 ISR。 */
     [[nodiscard]] uint16_t report_period_s() const noexcept
@@ -77,12 +91,30 @@ public:
         return ring_.depth();
     }
 
+    /** 文本日志环统计快照（console 任务读取，内部已加锁，非 ISR）。 */
+    [[nodiscard]] fw::LogRingStats log_ring_stats() const noexcept
+    {
+        return log_ring_.stats();
+    }
+
+    /** 文本日志环已用字节数（console 任务读取，内部已加锁，非 ISR）。 */
+    [[nodiscard]] size_t log_ring_used() const noexcept
+    {
+        return log_ring_.used();
+    }
+
 private:
     static void task_entry(void *arg) noexcept;
     /** 输出任务主循环：取事件、打印丢弃计数、按周期报告。 */
     void run() noexcept;
-    /** 一次性取空环，非空返回 true 表示本轮打印过事件。 */
+    /** 按时间戳合并输出两个环，非空返回 true 表示本轮打印过事件。 */
     bool pump_events(char *line, size_t cap) noexcept;
+    /** 打印两个环的丢弃计数（有增量时），返回是否有输出。 */
+    bool pump_drops(char *out, size_t cap) noexcept;
+    /** 输出一条文本日志记录：`[ts] CAT 句子`。 */
+    void print_log_text(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out, size_t cap) noexcept;
+    /** 输出一条十六进制日志记录：标题行 + 若干转储行。 */
+    void print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out, size_t cap) noexcept;
     /** 到点输出一行周期报告。 */
     void pump_report(uint32_t now_ms) noexcept;
 
@@ -90,6 +122,8 @@ private:
     fw::TraceRing ring_{};
     std::array<fw::TraceEvent, kRingEvents> ring_storage_{};
     portMUX_TYPE ring_mux_ = portMUX_INITIALIZER_UNLOCKED;
+    fw::LogRing log_ring_{};
+    std::array<uint8_t, kLogRingBytes> log_storage_{};
     rtos::StaticTask<kTaskStackBytes> task_{};
     bool installed_ = false;
     uint16_t report_s_ = 0;

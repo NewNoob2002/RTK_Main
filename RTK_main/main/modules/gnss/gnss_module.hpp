@@ -74,12 +74,16 @@ private:
     public:
         constexpr explicit DemuxSink(GnssModule *owner) noexcept : owner_(owner) {}
         void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> frame) noexcept override;
+        void on_reject(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix,
+                       demux::RejectCause cause, bool last) noexcept override;
 
     private:
         GnssModule *owner_ = nullptr;
     };
 
     void handle_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept;
+    void handle_reject(const demux::Decoder &decoder, std::span<const uint8_t> prefix, demux::RejectCause cause,
+                       bool last) noexcept;
     void poll_controller(uint32_t now_ms) noexcept;
     void pump_rtcm_pipe() noexcept;
     void publish_status(uint32_t now_ms) noexcept;
@@ -93,6 +97,8 @@ private:
     ::gnss::NmeaParser parser_{};
     ::gnss::Controller controller_{};
     ::gnss::ControllerStats prev_ctrl_stats_{};
+    /** 上一次已上报的未知字节计数，用于按增量输出 `GNSS N unknown bytes dropped`（§2.11）。 */
+    uint32_t prev_unknown_bytes_ = 0U;
     ::gnss::Hint hint_{};
     ::gnss::Timing timing_{};
     ::gnss::RoverConfig rover_cfg_{

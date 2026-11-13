@@ -69,6 +69,18 @@ struct Engine {
         dmx.in_callback_ = false;
     }
 
+    // 拒绝钩子：回调期间置 in_callback_，与 on_frame/on_unknown 的重入约束一致。
+    static void reject(Demux &dmx, uint8_t index, std::span<const uint8_t> prefix, RejectCause cause,
+                       bool last) noexcept
+    {
+        if (prefix.empty()) {
+            return;
+        }
+        dmx.in_callback_ = true;
+        dmx.sink_->on_reject(*dmx.decoders_[index], index, prefix, cause, last);
+        dmx.in_callback_ = false;
+    }
+
     static void consume(Demux &dmx, std::size_t count) noexcept
     {
         const std::span<const uint8_t> buffered{dmx.buf_, dmx.len_};
@@ -100,8 +112,9 @@ struct Engine {
             }
 
             const Decoder &decoder = *dmx.decoders_[dmx.active_];
+            const bool forced = reject_current;
             std::size_t need = 0;
-            const Step step = reject_current ? Step::kReject : decoder.step(buffered.subspan(start, prefix), need);
+            const Step step = forced ? Step::kReject : decoder.step(buffered.subspan(start, prefix), need);
             reject_current = false;
             if (step == Step::kFrame) {
                 // 两次回调结束后才移动 buf，保证未知字节与帧的内容及输出顺序稳定。
@@ -111,9 +124,10 @@ struct Engine {
                 idle(dmx);
                 start = 0;
             } else {
+                bool overflow = false;
                 if (step == Step::kNeedMore) {
                     // prefix 已受此前 need 校验约束；用减法避免恶意 need == SIZE_MAX 时加法回绕。
-                    const bool overflow = need > dmx.buf_size_ - prefix;
+                    overflow = need > dmx.buf_size_ - prefix;
                     if (overflow) {
                         ++dmx.stats_.overflows;
                     }
@@ -133,10 +147,28 @@ struct Engine {
                 }
 
                 // 未知 step 枚举值及 NEED_MORE 契约违规也按拒绝处理，候选集合严格缩小。
-                ++dmx.stats_.decoder[dmx.active_].rejects;
-                dmx.tried_mask_ |= decoder_bit(dmx.active_);
+                const uint8_t rejected = dmx.active_;
+                RejectCause cause = RejectCause::kStep;
+                if (forced) {
+                    cause = RejectCause::kAbort;
+                } else if (step == Step::kNeedMore) {
+                    // 三种来源：超出缓冲区容量（overflows 计数）、契约违规、abort() 时数据不足。
+                    if (overflow) {
+                        cause = RejectCause::kTooLong;
+                    } else if ((need == 0) || (need > decoder.max_frame - prefix)) {
+                        cause = RejectCause::kContract;
+                    } else {
+                        cause = RejectCause::kAbort;
+                    }
+                } else if (step != Step::kReject) {
+                    cause = RejectCause::kContract;
+                }
+                ++dmx.stats_.decoder[rejected].rejects;
+                dmx.tried_mask_ |= decoder_bit(rejected);
                 dmx.active_ = next_decoder(dmx, buffered[start]);
-                if (dmx.active_ == Demux::kNoCandidate) {
+                const bool last = dmx.active_ == Demux::kNoCandidate;
+                reject(dmx, rejected, buffered.subspan(start, prefix), cause, last);
+                if (last) {
                     idle(dmx);
                     ++dmx.stats_.resyncs;
                     ++start;

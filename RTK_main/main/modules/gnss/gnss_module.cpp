@@ -1,11 +1,13 @@
 // GNSS 模块实现（ADR-0010 §2.7）：UART 收发、StreamDemux 分流、NMEA 解析、控制器轮询、RTCM 下发与 NVS 绑定。
 // 线程：init() 启动前单线程；start()/wait()/poll()/on_command 仅 kIo 任务；keys/load/save 由 storage 与 kIo 调用。
-// 均非 ISR；不分配堆。不使用 ESP_LOG/printf，诊断经 GnssTrace 上报（ADR-0009）。
+// 均非 ISR；不分配堆。实时路径只用 GnssTrace；文本诊断经 fw::tlog()（ADR-0009 §2.11）。
 
 #include "modules/gnss/gnss_module.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <string_view>
 
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -14,6 +16,7 @@
 
 #include "app_context.hpp"
 #include "demux/decoders/nmea.hpp"
+#include "fw/tlog.hpp"
 #include "demux/decoders/rtcm3.hpp"
 #include "gnss/dialect.hpp"
 #include "modules/gnss/gnss_keys.hpp"
@@ -28,6 +31,97 @@ constexpr uint32_t kByteMask = 0xFFU;
 constexpr size_t kMaxActionsPerPoll = 16U;
 constexpr uint32_t kBaudMin = 1200U;
 constexpr uint32_t kBaudMax = 2000000U;
+
+/** 拒绝原因在文本日志中的短名（explain 为空时的兜底，§2.11）。 */
+const char *reject_cause_name(demux::RejectCause cause) noexcept
+{
+    switch (cause) {
+    case demux::RejectCause::kTooLong:
+        return "frame too long";
+    case demux::RejectCause::kContract:
+        return "invalid length field";
+    case demux::RejectCause::kAbort:
+        return "aborted";
+    case demux::RejectCause::kStep:
+    default:
+        return "rejected";
+    }
+}
+
+/** 文本日志里可打印 ASCII 的下限（跳过空格，避免把分隔符带进名字）。 */
+constexpr uint8_t kTagPrintableMin = 0x21U;
+/** 文本日志里可打印 ASCII 的上限。 */
+constexpr uint8_t kTagPrintableMax = 0x7EU;
+constexpr uint8_t kCommaByte = static_cast<uint8_t>(',');
+/** 帧标识缓冲区：`UNICORE_CMD ` + 命令名足够，24 字节。 */
+constexpr size_t kFrameTagBytes = 24U;
+/** `GNSS ` + 帧标识 + 长度文本的整行缓冲。 */
+constexpr size_t kLogTagBytes = 48U;
+/** 拒绝原因文本缓冲（explain 输出在此缓冲内截断）。 */
+constexpr size_t kRejectReasonBytes = 96U;
+/** NMEA 五位消息名（如 GNGGA）在 '$' 与 talker 之后。 */
+constexpr size_t kNmeaTagOffset = 1U;
+constexpr size_t kNmeaTagLen = 6U;
+/** `$command,` 之后的命令名起点。 */
+constexpr size_t kCommandTagOffset = 9U;
+/** RTCM3 消息号占 12 位，起点为长度字段第 1 字节。 */
+constexpr size_t kRtcmTagOffset = 3U;
+constexpr uint32_t kByteLowNibbleBits = 4U;
+constexpr uint32_t kRtcmMsgMask = 0x0FFFU;
+/** UBX class/id 位于同步字之后。 */
+constexpr size_t kUbxClassOffset = 2U;
+
+/** 把 frame[start, size) 的 ASCII 名字拷进 out（最多 out.size()-1 字节），返回写入长度。 */
+size_t copy_word(const std::span<const uint8_t> frame, size_t start, std::span<char> out) noexcept
+{
+    size_t len = 0U;
+    for (size_t i = start; (i < frame.size()) && (len + 1U < out.size()); ++i) {
+        const uint8_t byte = frame[i];
+        if ((byte == kCommaByte) || (byte < kTagPrintableMin) || (byte > kTagPrintableMax)) {
+            break;
+        }
+        out[len] = static_cast<char>(byte);
+        ++len;
+    }
+    out[len] = '\0';
+    return len;
+}
+
+/** 生成一句帧标识，如 `NMEA GNGGA`、`UNICORE VERSIONA`、`RTCM3 1005`、`UBX 0x01/0x07`（§2.11）。 */
+void describe_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame, std::span<char> out) noexcept
+{
+    const std::string_view name{decoder.name};
+    std::array<char, kFrameTagBytes> word{};
+    if ((name == "NMEA") && (frame.size() > kNmeaTagLen)) {
+        // GGA/GSA/... 五位消息名紧跟 '$' 与两位 talker，可直接展示。
+        (void)copy_word(frame, kNmeaTagOffset, word);
+        std::snprintf(out.data(), out.size(), "NMEA %s", word.data());
+        return;
+    }
+    if ((name == "UnicoreHash") && (frame.size() > 2U)) {
+        (void)copy_word(frame, 1U, word);
+        std::snprintf(out.data(), out.size(), "UNICORE %s", word.data());
+        return;
+    }
+    if ((name == "UnicoreResp") && (frame.size() > kCommandTagOffset)) {
+        // "$command,<cmd>,response: ..."：命令名在第二个逗号之前。
+        (void)copy_word(frame, kCommandTagOffset, word);
+        std::snprintf(out.data(), out.size(), "UNICORE_CMD %s", word.data());
+        return;
+    }
+    if ((name == "RTCM3") && (frame.size() > kRtcmTagOffset + 1U)) {
+        const uint32_t msg = (static_cast<uint32_t>(frame[kRtcmTagOffset]) << kByteLowNibbleBits) |
+                             (static_cast<uint32_t>(frame[kRtcmTagOffset + 1U]) >> kByteLowNibbleBits);
+        std::snprintf(out.data(), out.size(), "RTCM3 %lu", static_cast<unsigned long>(msg & kRtcmMsgMask));
+        return;
+    }
+    if ((name == "UBX") && (frame.size() > kUbxClassOffset + 1U)) {
+        std::snprintf(out.data(), out.size(), "UBX 0x%02x/0x%02x", static_cast<unsigned>(frame[kUbxClassOffset]),
+                      static_cast<unsigned>(frame[kUbxClassOffset + 1U]));
+        return;
+    }
+    std::snprintf(out.data(), out.size(), "%s", decoder.name);
+}
 
 bool is_valid_rate_hz(uint8_t hz) noexcept
 {
@@ -114,6 +208,14 @@ void GnssModule::DemuxSink::on_frame(const demux::Decoder &decoder, uint8_t /*in
 {
     if (owner_ != nullptr) {
         owner_->handle_frame(decoder, frame);
+    }
+}
+
+void GnssModule::DemuxSink::on_reject(const demux::Decoder &decoder, uint8_t /*index*/, std::span<const uint8_t> prefix,
+                                      demux::RejectCause cause, bool last) noexcept
+{
+    if (owner_ != nullptr) {
+        owner_->handle_reject(decoder, prefix, cause, last);
     }
 }
 
@@ -264,6 +366,12 @@ void GnssModule::wait(uint32_t max_ms) noexcept
     if (err != demux::Error::kOk) {
         trace_gnss(GnssTrace::kState, static_cast<uint32_t>(controller_.state()), static_cast<uint32_t>(err));
     }
+    const auto &dstats = demux_.stats();
+    if (dstats.unknown_bytes > prev_unknown_bytes_) {
+        fw::tlog(fw::TraceCat::kGnss, "%lu unknown bytes dropped",
+                 static_cast<unsigned long>(dstats.unknown_bytes - prev_unknown_bytes_));
+        prev_unknown_bytes_ = dstats.unknown_bytes;
+    }
 }
 
 bool GnssModule::poll(uint32_t now_ms) noexcept
@@ -330,8 +438,7 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
             return;
         }
         rover_cfg_.rate_hz = cmd.args[0];
-        const fw::Result save_res =
-            context_.storage.save_keys(gnss_store::kConfigKeys);
+        const fw::Result save_res = context_.storage.save_keys(gnss_store::kConfigKeys);
         if (!fw::is_ok(save_res)) {
             result.status = save_res;
             return;
@@ -377,6 +484,12 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
 
 void GnssModule::handle_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept
 {
+    // 文本日志不经中断路径：本函数只由 kIo 任务的 feed() 调用（ADR-0009 §2.11）。
+    std::array<char, kLogTagBytes> tag{};
+    describe_frame(decoder, frame, tag);
+    fw::tlog(fw::TraceCat::kGnss, "%s, %lu bytes", tag.data(), static_cast<unsigned long>(frame.size()));
+    fw::tlog_hex(fw::TraceCat::kGnss, frame);
+
     const uint32_t now = rtos::now_ms();
     controller_.on_frame(decoder, frame, now);
     if (&decoder == &demux::nmea::kDecoder) {
@@ -389,6 +502,21 @@ void GnssModule::handle_frame(const demux::Decoder &decoder, std::span<const uin
             context_.data.gnss_sats.write(parser_.sats());
         }
     }
+}
+
+void GnssModule::handle_reject(const demux::Decoder &decoder, std::span<const uint8_t> prefix, demux::RejectCause cause,
+                               bool last) noexcept
+{
+    // 只在“该起点已无其它候选”时输出一行，避免多解码器并行尝试时刷屏（ADR-0009 §2.11）。
+    if (!last || prefix.empty()) {
+        return;
+    }
+    std::array<char, kRejectReasonBytes> reason{};
+    const std::size_t len = (decoder.explain != nullptr) ? decoder.explain(prefix, reason) : 0U;
+    const char *text = (len != 0U) ? reason.data() : reject_cause_name(cause);
+    fw::tlog(fw::TraceCat::kGnss, "%s rejected %lu bytes: %s", decoder.name,
+             static_cast<unsigned long>(prefix.size()), text);
+    fw::tlog_hex(fw::TraceCat::kGnss, prefix);
 }
 
 void GnssModule::poll_controller(uint32_t now_ms) noexcept
@@ -412,6 +540,8 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
             const fw::Result err = apply_baud(act.baud);
             if (fw::is_ok(err)) {
                 trace_gnss(GnssTrace::kBaud, act.baud, old_baud);
+                fw::tlog(fw::TraceCat::kGnss, "baud %lu (was %lu)", static_cast<unsigned long>(act.baud),
+                         static_cast<unsigned long>(old_baud));
             }
             break;
         }
@@ -420,6 +550,13 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
             if (written > 0) {
                 uart_tx_bytes_ += static_cast<uint32_t>(written);
             }
+            // 控制器下发的命令原文（去掉行尾 CR/LF），模型名用于区分探测/配置阶段（§2.11）。
+            std::size_t cmd_len = act.bytes.size();
+            while ((cmd_len > 0U) && ((act.bytes[cmd_len - 1U] == '\r') || (act.bytes[cmd_len - 1U] == '\n'))) {
+                --cmd_len;
+            }
+            fw::tlog(fw::TraceCat::kGnss, "%s <- \"%.*s\"", ::gnss::model_name(controller_.detected().probe.model),
+                     static_cast<int>(cmd_len), reinterpret_cast<const char *>(act.bytes.data()));
             const auto st = controller_.state();
             const auto cur_stats = controller_.stats();
             if ((st == ::gnss::State::kProbing) && (cur_stats.probes_sent > prev_ctrl_stats_.probes_sent)) {
@@ -458,10 +595,14 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
     const auto cur_state = controller_.state();
     if (cur_state != last_state_) {
         trace_gnss(GnssTrace::kState, static_cast<uint32_t>(cur_state), static_cast<uint32_t>(last_state_));
+        fw::tlog(fw::TraceCat::kGnss, "state %s -> %s", ::gnss::state_name(last_state_),
+                 ::gnss::state_name(cur_state));
         if ((last_state_ == ::gnss::State::kProbing) && (cur_state == ::gnss::State::kConfiguring)) {
             const auto det = controller_.detected();
             const uint32_t baud = (det.baud != 0U) ? det.baud : host_baud_;
             trace_gnss(GnssTrace::kProbeHit, static_cast<uint32_t>(det.probe.model), baud);
+            fw::tlog(fw::TraceCat::kGnss, "detected %s at %lu", ::gnss::model_name(det.probe.model),
+                     static_cast<unsigned long>(baud));
             step_idx_ = 0U;
             step_retry_ = 0U;
             step_sent_once_ = false;

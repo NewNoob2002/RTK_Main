@@ -18,7 +18,9 @@ namespace gnss::comnav {
 inline constexpr std::size_t kPromptMaxFrame = 128;
 [[nodiscard]] bool prompt_first_byte(uint8_t byte) noexcept;
 [[nodiscard]] demux::Step prompt_step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
-inline constexpr demux::Decoder kPromptDecoder{"ComnavPrompt", kPromptMaxFrame, &prompt_first_byte, &prompt_step};
+[[nodiscard]] std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) noexcept;
+inline constexpr demux::Decoder kPromptDecoder{"ComnavPrompt", kPromptMaxFrame, &prompt_first_byte, &prompt_step,
+                                               &explain_prompt};
 
 /** ComNav 方言描述符（定义在 src/dialects/comnav.cpp）。 */
 extern const Dialect kDialect;

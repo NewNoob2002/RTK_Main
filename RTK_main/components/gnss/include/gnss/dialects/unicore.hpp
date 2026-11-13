@@ -22,8 +22,9 @@ namespace gnss::unicore {
 inline constexpr std::size_t kResponseMaxFrame = 256;
 [[nodiscard]] bool response_first_byte(uint8_t byte) noexcept;
 [[nodiscard]] demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
-inline constexpr demux::Decoder kResponseDecoder{"UnicoreResp", kResponseMaxFrame, &response_first_byte,
-                                                 &response_step};
+[[nodiscard]] std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out) noexcept;
+inline constexpr demux::Decoder kResponseDecoder{"UnicoreResp", kResponseMaxFrame, &response_first_byte, &response_step,
+                                                 &explain_response};
 
 /** Unicore 方言描述符（定义在 src/dialects/unicore.cpp）。 */
 extern const Dialect kDialect;

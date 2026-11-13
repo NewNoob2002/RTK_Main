@@ -102,6 +102,9 @@ public:
     constexpr Demux() noexcept = default;
     Demux(const Demux &) = delete;
     Demux &operator=(const Demux &) = delete;
+    Demux(Demux &&) = delete;
+    Demux &operator=(Demux &&) = delete;
+    ~Demux() = default;
 
     /**
      * 初始化（或重新初始化）：校验参数、建立 256 项首字节位图、清空状态与统计。

@@ -3,13 +3,11 @@
  * find/alloc/free/set_congested/ctrl_add/ctrl_drop_reject 允许 BTC 回调线程调用：只改静态表，
  * 临界区外只做非阻塞唤醒；ctrl_process 只在发送任务上下文执行可能阻塞投递的 GAP 应答与断开。 */
 
-#include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "esp_bt.h"
 #include "esp_gap_bt_api.h"
-#include "esp_log.h"
 #include "esp_spp_api.h"
 
 #include "spp_server_priv.h"
@@ -332,14 +330,12 @@ void spp_server_ctrl_process(void)
         case SPP_SERVER_CTRL_REJECT:
             /* 取走后、断开前若同句柄已被新会话接纳（IDF 复用了句柄），放弃这次断开。 */
             if (spp_server_session_find(handle) != NULL) {
-                ESP_LOGW(SPP_SERVER_TAG, "reject handle=%" PRIu32 " skipped: session already active", handle);
+                spp_server_trace(SPP_SERVER_TRACE_REJECT, handle, 0U, 0U);
                 break;
             }
             err = esp_spp_disconnect(handle);
-            if (err != ESP_OK) {
-                ESP_LOGW(SPP_SERVER_TAG, "reject handle=%" PRIu32 ": %s", handle, esp_err_to_name(err));
-            } else {
-                ESP_LOGW(SPP_SERVER_TAG, "reject handle=%" PRIu32 " (no safe session slot)", handle);
+            if (err == ESP_OK) {
+                spp_server_trace(SPP_SERVER_TRACE_REJECT, handle, 1U, 0U);
             }
             break;
         default:
@@ -363,7 +359,8 @@ void spp_server_ctrl_process(void)
             taskEXIT_CRITICAL(&s_spp_mux);
         }
         if (err != ESP_OK) {
-            ESP_LOGW(SPP_SERVER_TAG, "ctrl type=%d: %s", (int)type, esp_err_to_name(err));
+            /* 控制类型与追踪枚举一一对应（PIN/CONFIRM/REJECT），见 spp_server_trace_ctrl_t。 */
+            spp_server_trace(SPP_SERVER_TRACE_CTRL_ERR, handle, (uint32_t)type, (uint32_t)err);
         }
     }
 }

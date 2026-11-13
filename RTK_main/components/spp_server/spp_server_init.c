@@ -288,6 +288,10 @@ static esp_err_t spp_server_wait_stage(spp_server_stage_t stage, uint32_t timeou
     taskENTER_CRITICAL(&s_spp_mux);
     status = (stage == SPP_SERVER_STAGE_INIT) ? s_spp.init_status : s_spp.start_status;
     taskEXIT_CRITICAL(&s_spp_mux);
+    if (status != ESP_SPP_SUCCESS) {
+        /* 回调里只记追踪；失败原因在这里（init 任务上下文）打印。 */
+        ESP_LOGE(SPP_SERVER_TAG, "stage 0x%" PRIx32 " failed, status %d", (uint32_t)bit, (int)status);
+    }
     return (status == ESP_SPP_SUCCESS) ? ESP_OK : ESP_FAIL;
 }
 

@@ -91,7 +91,28 @@ typedef enum {
     SPP_SERVER_TRACE_RX_DROP,       /* RX 缓冲满丢弃：a = 本次丢弃字节，b = 缓冲已用字节 */
     SPP_SERVER_TRACE_AUTH,          /* GAP 认证完成：a = 状态码 */
     SPP_SERVER_TRACE_EVT_DROP,      /* 事件队列满丢事件：a = 事件类型 */
+    SPP_SERVER_TRACE_STAGE,         /* SPP 回调阶段结果：a = spp_server_trace_stage_t，b = esp_spp_status_t（0 成功） */
+    SPP_SERVER_TRACE_CTRL_FULL,     /* 控制表满，GAP 应答/拒绝断开命令丢失：a = spp_server_trace_ctrl_t */
+    SPP_SERVER_TRACE_CTRL_ERR,      /* 控制命令/断开提交失败：a = spp_server_trace_ctrl_t，b = esp_err_t */
+    SPP_SERVER_TRACE_REJECT,        /* 无安全槽拒绝连接：a = 1 已发断开 / 0 跳过（同句柄已被新会话接纳） */
+    SPP_SERVER_TRACE_WRITE_STRAY,   /* 不属于在途请求的写完成事件（被忽略）：a = 写长度，b = esp_spp_status_t */
 } spp_server_trace_code_t;
+
+/** SPP_SERVER_TRACE_STAGE 的 a。 */
+typedef enum {
+    SPP_SERVER_TRACE_STAGE_INIT = 0, /* ESP_SPP_INIT_EVT */
+    SPP_SERVER_TRACE_STAGE_START,    /* ESP_SPP_START_EVT */
+    SPP_SERVER_TRACE_STAGE_UNINIT,   /* ESP_SPP_UNINIT_EVT */
+    SPP_SERVER_TRACE_STAGE_SRV_OPEN, /* ESP_SPP_SRV_OPEN_EVT */
+} spp_server_trace_stage_t;
+
+/** SPP_SERVER_TRACE_CTRL_FULL / CTRL_ERR 的 a。 */
+typedef enum {
+    SPP_SERVER_TRACE_CTRL_PIN = 0,   /* GAP PIN 应答 */
+    SPP_SERVER_TRACE_CTRL_CONFIRM,   /* GAP SSP 确认应答 */
+    SPP_SERVER_TRACE_CTRL_REJECT,    /* 无安全槽时断开新连接 */
+    SPP_SERVER_TRACE_CTRL_DISCONNECT, /* 本地请求的断开 */
+} spp_server_trace_ctrl_t;
 
 /**
  * 追踪钩子：在 BT 回调任务、worker 任务或调用 write 的任务中被同步调用，必须非阻塞且不做 I/O。

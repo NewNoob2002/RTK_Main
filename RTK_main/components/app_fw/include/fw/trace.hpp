@@ -16,6 +16,8 @@
 // 调用方无需 #if。ESP-IDF 构建由 app_fw 的 CMake 依据 CONFIG_RTK_TRACE_ENABLE 以 PUBLIC 宏传给所有依赖方；
 // 其他构建（host 测试、外部工程）未定义时默认开启。
 #ifndef FW_TRACE_ENABLED
+// 必须是宏：CMake 以 -D 传入，且 tlog.hpp 等需在预处理阶段据此选择内联空实现。
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define FW_TRACE_ENABLED 1
 #endif
 
