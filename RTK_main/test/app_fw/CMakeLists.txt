@@ -38,12 +38,16 @@ target_compile_options(app_fw PRIVATE -fno-exceptions -fno-rtti)
 
 enable_testing()
 
-foreach(name test_app_fw_basics test_fanout_ring test_trace test_tlog)
+find_package(Threads REQUIRED)
+
+foreach(name test_app_fw_basics test_fanout_ring test_fanout_typed test_trace test_tlog)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} app_fw unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
+target_link_libraries(test_fanout_typed Threads::Threads)
+set_tests_properties(test_fanout_typed PROPERTIES TIMEOUT 30)
 
 # FW_TRACE_ENABLED=0 编译路径（ADR-0009 §2.6）：同一批源文件按“追踪关闭”再编一份库，
 # 确认 tlog/tlog_hex 退化为空内联后 app_fw 仍能编译，且 tlog 不再写环。

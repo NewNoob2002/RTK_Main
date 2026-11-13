@@ -16,6 +16,7 @@ namespace {
 constexpr size_t kByteMask = 0xFFU;
 constexpr size_t kBitsPerByte = 8U;
 constexpr size_t kMinRecordsInRing = 2U;
+constexpr uint32_t kTypedHeaderBytes = kFanoutTypedHeaderBytes; // 固定为 3，索引加法必须按 u32 回绕。
 
 void reverse_span(std::span<uint8_t> buf, size_t first, size_t last) noexcept
 {
@@ -136,6 +137,9 @@ Result FanoutRing::attach(uint8_t &reader_id) noexcept
     if (!inited_) {
         return Result::kInvalidState;
     }
+    if (typed_) {
+        return Result::kNotSupported;
+    }
     const LockGuard guard(lock_);
     for (size_t i = 0U; i < kFanoutMaxReaders; ++i) {
         if (!readers_[i].attached) {
@@ -161,6 +165,9 @@ Result FanoutRing::detach(uint8_t reader_id) noexcept
     if (!readers_[reader_id].attached) {
         return Result::kInvalidArg;
     }
+    if (readers_[reader_id].pinned) {
+        return Result::kBusy;
+    }
     readers_[reader_id].attached = false;
     readers_[reader_id].tail = 0U;
     return Result::kOk;
@@ -170,6 +177,9 @@ Result FanoutRing::write(std::span<const uint8_t> record) noexcept
 {
     if (!inited_) {
         return Result::kInvalidState;
+    }
+    if (typed_) {
+        return Result::kNotSupported;
     }
     const LockGuard guard(lock_);
 
@@ -227,6 +237,9 @@ Result FanoutRing::read(uint8_t reader_id, std::span<uint8_t> out, size_t &len) 
     if (!inited_) {
         return Result::kInvalidState;
     }
+    if (typed_) {
+        return Result::kNotSupported;
+    }
     if (reader_id >= kFanoutMaxReaders) {
         return Result::kInvalidArg;
     }
@@ -276,6 +289,290 @@ FanoutWriterStats FanoutRing::writer_stats() const noexcept
     }
     const LockGuard guard(lock_);
     return wstats_;
+}
+
+Result FanoutRing::init_typed(std::span<uint8_t> storage, size_t max_record, const LockOps &lock) noexcept
+{
+    if (inited_) {
+        return Result::kInvalidState;
+    }
+    if ((storage.data() == nullptr) || (max_record == 0U) || (max_record > std::numeric_limits<uint16_t>::max()) ||
+        (storage.size() < max_record + kFanoutTypedHeaderBytes) ||
+        (storage.size() > std::numeric_limits<int32_t>::max()) || ((storage.size() & (storage.size() - 1U)) != 0U) ||
+        ((lock.lock == nullptr) != (lock.unlock == nullptr))) {
+        return Result::kInvalidArg;
+    }
+    lock_ = lock;
+    buf_ = storage.data();
+    cap_ = storage.size();
+    max_record_ = max_record;
+    typed_ = true;
+    inited_ = true;
+    return Result::kOk;
+}
+
+Result FanoutRing::attach(FanoutMask mask, uint8_t &reader_id) noexcept
+{
+    if (!inited_) {
+        return Result::kInvalidState;
+    }
+    if (!typed_) {
+        return Result::kNotSupported;
+    }
+    const LockGuard guard(lock_);
+    bool retired = false;
+    for (size_t i = 0U; i < readers_.size(); ++i) {
+        Reader &reader = readers_[i];
+        if (reader.attached) {
+            continue;
+        }
+        if (reader.generation == std::numeric_limits<uint32_t>::max()) {
+            retired = true;
+            continue;
+        }
+        const uint32_t generation = reader.generation + 1U;
+        reader = Reader{};
+        reader.attached = true;
+        reader.tail = head_;
+        reader.mask = mask;
+        reader.generation = generation;
+        reader_id = static_cast<uint8_t>(i); // i < 4，收窄安全。
+        return Result::kOk;
+    }
+    return retired ? Result::kInvalidState : Result::kNoSpace;
+}
+
+Result FanoutRing::set_mask(uint8_t reader_id, FanoutMask mask) noexcept
+{
+    if (!inited_) {
+        return Result::kInvalidState;
+    }
+    if (!typed_) {
+        return Result::kNotSupported;
+    }
+    const LockGuard guard(lock_);
+    if ((reader_id >= readers_.size()) || !readers_[reader_id].attached) {
+        return Result::kInvalidArg;
+    }
+    Reader &reader = readers_[reader_id];
+    if (reader.pinned) {
+        return Result::kBusy;
+    }
+    reader.mask = mask;
+    reader.tail = head_;
+    return Result::kOk;
+}
+
+uint16_t FanoutRing::typed_length(uint32_t pos) const noexcept
+{
+    return read_header_len({buf_, cap_}, 0U, pos);
+}
+
+uint8_t FanoutRing::typed_type(uint32_t pos) const noexcept
+{
+    // cap 是 2 的幂且 <2^31；低位掩码在 u32 回绕前后保持同一物理位置。
+    return std::span<const uint8_t>(buf_, cap_)[(size_t{pos} + kFanoutHeaderBytes) & (cap_ - 1U)];
+}
+
+void FanoutRing::evict_typed() noexcept
+{
+    const uint32_t next = oldest_ + kTypedHeaderBytes + typed_length(oldest_);
+    const FanoutMask bit = FanoutMask{1U} << typed_type(oldest_);
+    for (Reader &reader : readers_) {
+        if (reader.attached && (reader.tail == oldest_)) {
+            if ((reader.mask & bit) != 0U) {
+                ++reader.stats.dropped;
+            } else {
+                ++reader.filtered;
+            }
+            reader.tail = next;
+        }
+    }
+    oldest_ = next;
+    ++wstats_.overwritten;
+}
+
+Result FanoutRing::begin_typed_write(uint8_t type, size_t size) noexcept
+{
+    const LockGuard guard(lock_);
+    if ((type >= std::numeric_limits<FanoutMask>::digits) || (size == 0U) || (size > max_record_)) {
+        ++wstats_.rejected;
+        if ((size > max_record_) || (size > cap_ - kFanoutTypedHeaderBytes)) {
+            ++typed_wstats_.oversize_drop;
+        }
+        return Result::kInvalidArg;
+    }
+    const FanoutMask bit = FanoutMask{1U} << type;
+    bool subscribed = false;
+    for (const Reader &reader : readers_) {
+        subscribed = subscribed || (reader.attached && ((reader.mask & bit) != 0U));
+    }
+    if (!subscribed) {
+        ++typed_wstats_.no_subscriber;
+        return Result::kNotFound; // 内部哨兵，公开 write 返回 kOk。
+    }
+    const size_t need = size + kFanoutTypedHeaderBytes;
+    for (const Reader &reader : readers_) {
+        // 减法差值 <=cap；改写区间若触及任一 pin，保留前即整条拒绝，不淘汰旧记录。
+        if (reader.pinned && (need > cap_ - (head_ - reader.tail))) {
+            ++typed_wstats_.pinned_drop;
+            for (Reader &matching : readers_) {
+                if (matching.attached && ((matching.mask & bit) != 0U)) {
+                    ++matching.pinned_drop;
+                }
+            }
+            return Result::kBusy;
+        }
+    }
+    reserved_bytes_ = need;
+    return Result::kOk;
+}
+
+Result FanoutRing::write(uint8_t type, std::span<const uint8_t> payload) noexcept
+{
+    if (!inited_) {
+        return Result::kInvalidState;
+    }
+    if (!typed_) {
+        return Result::kNotSupported;
+    }
+    const Result result = begin_typed_write(type, payload.size());
+    if (result != Result::kOk) {
+        return (result == Result::kNotFound) ? Result::kOk : result;
+    }
+    // reservation 阻止 peek 在待淘汰区新建 pin；逐条释放锁，避免长记录淘汰许多小记录时长持锁。
+    for (;;) {
+        const LockGuard guard(lock_);
+        if (reserved_bytes_ <= cap_ - (head_ - oldest_)) {
+            break;
+        }
+        evict_typed();
+    }
+    // 单写者拥有保留区，head 未发布；读者只能看到旧记录，且无 pin/读者再能引用保留区。
+    const std::span<uint8_t> ring(buf_, cap_);
+    write_header_len(ring, 0U, head_, static_cast<uint16_t>(payload.size())); // 已验证 <=65535。
+    ring[(size_t{head_} + kFanoutHeaderBytes) & (cap_ - 1U)] = type;
+    ring_write(ring, 0U, head_ + kTypedHeaderBytes, payload);
+    {
+        const LockGuard guard(lock_);
+        head_ += static_cast<uint32_t>(reserved_bytes_); // <=65535+3，收窄安全。
+        reserved_bytes_ = 0U;
+        ++wstats_.records;
+        wstats_.bytes += static_cast<uint32_t>(payload.size()); // <=65535，收窄安全。
+        typed_wstats_.high_water_bytes = std::max(typed_wstats_.high_water_bytes, size_t{head_ - oldest_});
+    }
+    return Result::kOk;
+}
+
+Result FanoutRing::peek(uint8_t reader_id, FanoutView &view) noexcept
+{
+    view = FanoutView{};
+    if (!inited_) {
+        return Result::kInvalidState;
+    }
+    if (!typed_) {
+        return Result::kNotSupported;
+    }
+    for (;;) {
+        const LockGuard guard(lock_);
+        if ((reader_id >= readers_.size()) || !readers_[reader_id].attached) {
+            return Result::kInvalidArg;
+        }
+        Reader &reader = readers_[reader_id];
+        if (reader.pinned) {
+            return Result::kBusy;
+        }
+        if (reader.tail == head_) {
+            return Result::kNotFound;
+        }
+        if (reserved_bytes_ > cap_ - (head_ - reader.tail)) {
+            // 协助淘汰 reservation 已声明将覆盖的前缀；不允许新 pin 抢占写者的保留区。
+            evict_typed();
+            continue;
+        }
+        const size_t length = typed_length(reader.tail);
+        const uint8_t type = typed_type(reader.tail);
+        if ((reader.mask & (FanoutMask{1U} << type)) == 0U) {
+            reader.tail += static_cast<uint32_t>(length + kFanoutTypedHeaderBytes); // <=65538。
+            ++reader.filtered;
+            continue;
+        }
+        if (reader.serial == std::numeric_limits<uint32_t>::max()) {
+            return Result::kInvalidState;
+        }
+        ++reader.serial;
+        reader.pinned = true;
+        const uint32_t pos = reader.tail + kTypedHeaderBytes;
+        const size_t idx = size_t{pos} & (cap_ - 1U);
+        const size_t first = std::min(length, cap_ - idx);
+        const std::span<const uint8_t> storage(buf_, cap_);
+        view = {{reader.generation, reader.serial, reader_id},
+                type,
+                storage.subspan(idx, first),
+                storage.first(length - first)};
+        return Result::kOk;
+    }
+}
+
+Result FanoutRing::finish_lease(const FanoutLease &lease, bool consume) noexcept
+{
+    if (!inited_) {
+        return Result::kInvalidState;
+    }
+    if (!typed_) {
+        return Result::kNotSupported;
+    }
+    const LockGuard guard(lock_);
+    if (lease.reader_id >= readers_.size()) {
+        return Result::kInvalidArg;
+    }
+    Reader &reader = readers_[lease.reader_id];
+    if (!reader.attached || !reader.pinned || (reader.generation != lease.generation) ||
+        (reader.serial != lease.serial)) {
+        return Result::kInvalidArg;
+    }
+    if (consume) {
+        const uint32_t length = typed_length(reader.tail);
+        reader.tail += length + kTypedHeaderBytes;
+        ++reader.stats.records;
+        reader.stats.bytes += length;
+    }
+    reader.pinned = false;
+    return Result::kOk;
+}
+
+Result FanoutRing::commit(const FanoutLease &lease) noexcept
+{
+    return finish_lease(lease, true);
+}
+
+Result FanoutRing::cancel(const FanoutLease &lease) noexcept
+{
+    return finish_lease(lease, false);
+}
+
+FanoutTypedReaderStats FanoutRing::typed_reader_stats(uint8_t reader_id) const noexcept
+{
+    if (!inited_ || !typed_) {
+        return {};
+    }
+    const LockGuard guard(lock_);
+    if ((reader_id >= readers_.size()) || !readers_[reader_id].attached) {
+        return {};
+    }
+    const Reader &reader = readers_[reader_id];
+    return {reader.stats, reader.filtered, reader.pinned_drop};
+}
+
+FanoutTypedWriterStats FanoutRing::typed_writer_stats() const noexcept
+{
+    if (!inited_ || !typed_) {
+        return {};
+    }
+    const LockGuard guard(lock_);
+    FanoutTypedWriterStats stats = typed_wstats_;
+    stats.base = wstats_;
+    return stats;
 }
 
 } // namespace fw

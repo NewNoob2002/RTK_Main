@@ -140,9 +140,17 @@ struct Module {
 
 ### 3.6 借鉴 SparkFun 的三项预留（v3 新增）
 
-1. **FanoutRing（app_fw，一写多读）**：GNSS 输出这类“一路数据发往多个出口”的场景。按记录（长度前缀）存储，单写者永不阻塞；
-   写满时覆盖最旧记录，落后读者在下一次 `read()` 时整条跳过被覆盖的记录并累计 `dropped`；每个读者独立尾指针，最多 `kMaxReaders=4`。
-   存储由调用方提供（静态数组），本轮实现 + host 测试（J4），不接入业务。
+1. **FanoutRing（app_fw，一写多读）**：GNSS 输出这类“一路数据发往多个出口”的场景；存储由调用方提供，不分配堆，最多 `kFanoutMaxReaders=4`。
+   legacy 保留 2B 小端长度头、`init/attach/write/read`、至少容纳两条最大记录的容量规则与原统计语义；写满整条覆盖，落后读者整条跳过并累计 `dropped`。
+   K1 按 ADR-0011 §5 新增 typed mode：`init_typed` 使用二次幂容量（小于 2^31），容量至少为 `max_record+3`；记录头为 2B 小端长度 + 1B type（0..31）。
+   `attach(mask,id)` 支持 32bit 订阅掩码（含 0）；无匹配在线读者时不发布，返回 `kOk` 并计 `no_subscriber`。`set_mask` 无租约时可用，从当前 head 开始。
+   `peek` 返回只含整条负载的至多两段只读 span 和 `{generation,serial,reader_id}` 租约；每读者最多一份，`commit` 消费整条，`cancel` 释放而不消费。
+   租约期间 span 不覆盖、不搬动；阻挡写入时立即整条拒新 `kBusy`，计 writer 与匹配读者 `pinned_drop`，不计覆盖。无 pin 时仍整条覆盖；筛除计 `filtered`，覆盖订阅记录计 `dropped`。
+   写者先在锁内检查全部 pin 并保留区间，逐条淘汰时逐次释放锁；读者不得在待覆盖前缀新建 pin，可逐条协助淘汰。长负载仅在保留空闲区锁外复制，最后锁内发布，读者不可见半条记录；typed 每段临界区只处理一条 3B 头和至多 4 个读者，低于 1KiB 复制上限。
+   typed u32 位置回绕不旋转存储；generation/serial 永不复用：serial 达 UINT32_MAX 后 `peek` 返回 `kInvalidState`，须 detach/attach 换 generation；generation 达 UINT32_MAX 的槽在 detach 后永久退役，空闲槽均退役时 attach 返回 `kInvalidState`。
+   有租约时 detach/set_mask 返回 `kBusy`；无效、过期、重复 token 返回 `kInvalidArg`，不改变当前租约。销毁前须任务与租约静止并丢弃全部 token，禁止携旧 token 重建对象。
+   legacy/typed 专用接口混用返回 `kNotSupported`，detach/base stats 共用；typed 新统计独立扩展。单写者、每 id 单读者；锁由 `fw::LockOps` 注入，非 ISR 安全。BT 调用方的租约只覆盖一次总量 ≤4096B 的锁外有界复制，不跨 IO/等待。
+   K1 仅实现原语与 host 回归，不接入业务；类布局变更要求重编译，不承诺二进制 ABI 兼容。
 2. **StoreKey 元数据**：在存储描述之外加 `flags`（控制台可见 / 参与导入导出 / 只读 / 需重启生效）、`min/max`、`product_mask`、`help`，
    使同一张表以后驱动 NVS、控制台 `cfg get/set` 和 App 配置（对应 SparkFun `rtkSettingsEntries[]`，但静态、类型化、按模块分表）。
    本轮只迁移白名单与 SN 两个键；`cfg` 命令不做。
