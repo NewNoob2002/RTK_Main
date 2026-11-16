@@ -5,6 +5,8 @@
 
 #include "fw/Tlog.hpp"
 
+#include "fw/Log.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -14,7 +16,6 @@
 #include <cstddef>
 #include <limits>
 #include <span>
-#include <cstddef>
 
 #include "fw/Lock.hpp"
 #include "TraceInternal.hpp"
@@ -28,7 +29,7 @@ constexpr size_t kMinLogBytes = kLogHeaderBytes + kLogTextMax;
 
 // sink 用 release 发布、tlog() 用 acquire 读取：保证 install 写入的 ctx 先于 sink 可见。
 std::atomic<LogSinkFn> s_log_sink{nullptr};
-[[maybe_unused]] void *s_log_ctx = nullptr; // 关闭追踪时只写不读
+void *s_log_ctx = nullptr;
 // 默认全关：即使类别打开，也要显式 debug on <cat> hex 才转储原始字节。
 constinit std::atomic<uint32_t> s_hex_mask{0U};
 
@@ -107,14 +108,8 @@ uint32_t log_hex_mask() noexcept
 
 namespace {
 
-// 仅 tlog()/tlog_hex() 使用；放在开关内，关闭追踪时不留下未用常量。
+// 仅 tlog_hex() 使用；放在开关内，关闭追踪时不留下未用常量。
 constexpr uint16_t kMaxPayloadLen = std::numeric_limits<uint16_t>::max();
-// 截断标记 "..." 的长度：text 记录超长时覆盖末尾三字节。
-constexpr size_t kEllipsisLen = 3U;
-constexpr uint8_t kEndOfText = 0U;
-constexpr uint8_t kLf = static_cast<uint8_t>('\n');
-constexpr uint8_t kCr = static_cast<uint8_t>('\r');
-constexpr uint8_t kDot = static_cast<uint8_t>('.');
 
 } // namespace
 bool log_hex_on(TraceCat cat) noexcept
@@ -129,52 +124,13 @@ bool log_hex_on(TraceCat cat) noexcept
 
 void tlog(TraceCat cat, const char *fmt, ...) noexcept
 {
-    if (!trace_on(cat)) {
-        return;
-    }
-    const LogSinkFn fn = s_log_sink.load(std::memory_order_acquire);
-    if ((fn == nullptr) || (fmt == nullptr)) {
-        return;
-    }
-    std::array<uint8_t, kLogTextMax + 1U> buf{};
-    // 冻结接口就是 printf 风格（ADR-0009 §3），这里只能用 C vararg，无法改成模板。
+    // 冻结接口保留给已有调用点：语义等同 FW_LOGI（ADR-0009 §2.12），格式化与通路选择统一在 Log.cpp。
     // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     va_list ap;
     va_start(ap, fmt);
-    // vsnprintf 只接 char*；缓冲是按字节存放的文本，读到结尾 0 之前不会再当字符处理。
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    const int n = std::vsnprintf(reinterpret_cast<char *>(buf.data()), buf.size(), fmt, ap);
+    vlog_line(LogLevel::kInfo, cat, fmt, ap);
     va_end(ap);
     // NOLINTEND(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-
-    size_t len = 0U;
-    if (n < 0) {
-        // 格式化失败也留一条记录，便于看出调用点有问题，而不是静默丢日志。
-        buf[0] = kEndOfText;
-    } else if (static_cast<size_t>(n) <= kLogTextMax) {
-        // n 只可能来自上面的 vsnprintf，已判 ≤ kLogTextMax，转换不会丢位。
-        len = static_cast<size_t>(n);
-        // 记录不带换行（读者统一补 CRLF），调用点习惯写 "\n" 时在这里统一削掉。
-        while ((len > 0U) && ((buf[len - 1U] == kLf) || (buf[len - 1U] == kCr))) {
-            --len;
-        }
-    } else {
-        // 超长：vsnprintf 已写入 kLogTextMax 个字符 + 结尾 0，用 "..." 标明被截断。
-        len = kLogTextMax;
-        for (size_t i = 0U; i < kEllipsisLen; ++i) {
-            buf[len - kEllipsisLen + i] = kDot;
-        }
-    }
-    buf[len] = kEndOfText;
-
-    LogHeader hdr{};
-    hdr.t_ms = detail::installed_clock()();
-    hdr.cat = cat;
-    hdr.kind = LogKind::kText;
-    // len ≤ kLogTextMax（160）远小于 uint16 上限，窄化安全。
-    hdr.len = static_cast<uint16_t>(len);
-    hdr.total = static_cast<uint32_t>(len);
-    fn(s_log_ctx, hdr, std::span<const uint8_t>(buf.data(), len));
 }
 
 void tlog_hex(TraceCat cat, std::span<const uint8_t> bytes) noexcept
@@ -193,7 +149,7 @@ void tlog_hex(TraceCat cat, std::span<const uint8_t> bytes) noexcept
     hdr.kind = LogKind::kHex;
     // len ≤ kLogHexMax（256）；total 是原始长度，帧长上限 1029，同样远小于 uint16 上限。
     hdr.len = static_cast<uint16_t>(len);
-    hdr.total = static_cast<uint32_t>(std::min(bytes.size(), static_cast<size_t>(kMaxPayloadLen)));
+    hdr.total = static_cast<uint16_t>(std::min(bytes.size(), static_cast<size_t>(kMaxPayloadLen)));
     fn(s_log_ctx, hdr, bytes.first(len));
 }
 #endif // FW_TRACE_ENABLED
@@ -327,5 +283,18 @@ void LogRing::sink(void *ctx, const LogHeader &hdr, std::span<const uint8_t> pay
     }
     ring->push(hdr, payload);
 }
+
+namespace detail {
+
+LogSinkFn installed_log_sink(void *&ctx) noexcept
+{
+    const LogSinkFn fn = s_log_sink.load(std::memory_order_acquire);
+    if (fn != nullptr) {
+        ctx = s_log_ctx;
+    }
+    return fn;
+}
+
+} // namespace detail
 
 } // namespace fw

@@ -11,6 +11,7 @@
 #include "AppContext.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
+#include "fw/Log.hpp"
 #include "def/DebugDef.hpp"
 #include "modules/debug/DebugModule.hpp"
 #include "modules/debug/TraceText.hpp"
@@ -27,6 +28,11 @@ constexpr uint32_t kBitsPerByte = 8U;
 constexpr const char *kAllCats = "all";
 constexpr const char *kHexSuffix = "hex";
 
+/**
+ * @brief  `debug list`：打印两个环的统计、日志级别、报告周期与各类别开关
+ * @param  argc: 参数个数（不接受额外参数）
+ * @retval 0 成功；非 0 参数错误
+ */
 int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -43,6 +49,8 @@ int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
                     static_cast<unsigned>(DebugModule::kLogRingBytes), static_cast<unsigned>(module.log_ring_used()),
                     static_cast<unsigned long>(log.pushed), static_cast<unsigned long>(log.dropped),
                     static_cast<unsigned>(log.max_used));
+    cli::out_printf("log level=%c (E/W always shown; I/D need category on) lost=%lu\n",
+                    fw::log_level_char(fw::log_level()), static_cast<unsigned long>(fw::log_stats().lost));
     cli::out_printf("report period=%us%s\n", static_cast<unsigned>(module.report_period_s()),
                     (module.report_period_s() == 0U) ? " (off)" : "");
     const uint32_t mask = fw::trace_mask();
@@ -99,6 +107,31 @@ int toggle_cats(bool enable, int argc, char **argv) noexcept
     return 0;
 }
 
+/**
+ * @brief  `debug level [e|w|i|d]`：查看或设置组件日志运行期级别（不写 NVS，重启恢复 I）
+ * @param  ctx: 未用
+ * @param  argc: 参数个数（含 "level"）
+ * @param  argv: 参数表
+ * @retval 0 成功；非 0 参数错误
+ */
+int cmd_level(void *ctx, int argc, char **argv) noexcept
+{
+    static_cast<void>(ctx);
+    if ((argc < 0) || (argv == nullptr)) {
+        return cli::fail("usage: debug level [e|w|i|d]");
+    }
+    const std::span<char *const> args(argv, static_cast<size_t>(argc));
+    if (args.size() >= 2U) {
+        fw::LogLevel level{};
+        if (!fw::log_parse_level(args[1], level)) {
+            return cli::fail("unknown level: %s (use e|w|i|d)", args[1]);
+        }
+        fw::log_set_level(level);
+    }
+    cli::out_printf("log level=%c\n", fw::log_level_char(fw::log_level()));
+    return 0;
+}
+
 int cmd_on(void * /*ctx*/, int argc, char **argv) noexcept
 {
     return toggle_cats(true, argc, argv);
@@ -145,26 +178,34 @@ int cmd_save(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return submit(command, "debug save") ? 0 : cli::kCmdFail;
 }
 
-constexpr std::array<cli::Verb, 5U> kVerbs{{
+constexpr std::array<cli::Verb, 6U> kVerbs{{
     {"list", nullptr, "list trace categories, masks and ring stats", cmd_list},
     {"on", "<category...|all> [hex]", "enable trace categories, optionally with hex dumps", cmd_on},
     {"off", "<category...|all>", "disable trace categories and hex dumps", cmd_off},
+    {"level", "[e|w|i|d]", "show or set component log level (runtime only)", cmd_level},
     {"report", "<1..3600|off>", "set periodic report interval (s)", cmd_report},
     {"save", nullptr, "save masks and report interval", cmd_save},
 }};
 
+/**
+ * @brief  `debug` 命令组入口：按动词分发
+ * @param  ctx: 透传给动词处理函数
+ * @param  argc: 参数个数（含 "debug"）
+ * @param  argv: 参数表
+ * @retval 动词处理函数的返回值；参数错误非 0
+ */
 int cmd_debug(void *ctx, int argc, char **argv) noexcept
 {
     if ((argc < 0) || (argv == nullptr)) {
-        return cli::fail("usage: debug <list|on|off|report|save>");
+        return cli::fail("usage: debug <list|on|off|level|report|save>");
     }
     // argc 由 esp_console 统计且 ≥ 0，转 size_t 无损。
     return cli::dispatch(kVerbs, ctx, argc, argv);
 }
 
 constexpr std::array<cli::Cmd, 1U> kCmds{{
-    {"debug", "debug <list|on|off|report|save>: trace ring and report control", "<list|on|off|report|save>", cmd_debug,
-     nullptr},
+    {"debug", "debug <list|on|off|level|report|save>: trace ring, log level and report control",
+     "<list|on|off|level|report|save>", cmd_debug, nullptr},
 }};
 
 } // namespace

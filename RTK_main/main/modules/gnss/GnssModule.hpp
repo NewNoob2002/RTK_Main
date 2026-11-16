@@ -138,6 +138,12 @@ private:
     void handle_reject(const demux::Decoder &decoder, std::span<const uint8_t> prefix, demux::RejectCause cause,
                        bool last) noexcept;
     void poll_controller(uint32_t now_ms) noexcept;
+    /**
+     * @brief  把 RTCM 管道中的待发字节写到 GNSS UART
+     * @retval true 管道仍有积压
+     * @retval false 已排空或写失败（失败时丢弃积压并记 W 级日志）
+     * @note   仅 kIo 调用，非阻塞。
+     */
     [[nodiscard]] bool pump_rtcm_pipe() noexcept;
     void publish_status(uint32_t now_ms) noexcept;
     void persist_detected_hint() noexcept;

@@ -27,6 +27,7 @@ add_library(main_pure STATIC
     ${PROJ_ROOT}/components/app_fw/src/FanoutRing.cpp
     ${PROJ_ROOT}/components/app_fw/src/Trace.cpp
     ${PROJ_ROOT}/components/app_fw/src/Tlog.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Log.cpp
     ${PROJ_ROOT}/components/cli/src/Out.cpp
     ${PROJ_ROOT}/components/link_core/AlarmSource.cpp
     ${PROJ_ROOT}/components/link_core/LinkManager.cpp

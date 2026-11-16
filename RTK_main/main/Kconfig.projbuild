@@ -30,6 +30,15 @@ menu "RTK_main"
             spp_server 不再调用追踪钩子，main 不编译 debug 模块（追踪环、trace_out 任务、debug 命令组、
             NVS "dbg" 键表）。调试阶段保持开启。
 
+    config RTK_LOG_LEVEL
+        int "Compile-time max component log level (0=E 1=W 2=I 3=D, ADR-0009 §2.12)"
+        range 0 3
+        default 3
+        help
+            fw/Log.hpp 的 FW_LOGE/W/I/D 编译期上限：高于它的调用连同参数求值一起编译掉。
+            运行期 E/W 总是输出；I/D 还需 `debug on <类别>` 且不高于 `debug level`。
+            关闭 RTK_TRACE_ENABLE 时 I/D 无法打开，上限自动按 W 处理。
+
     config RTK_LOG_RING_BYTES
         int "Text log ring size (bytes, ADR-0009 §2.11)"
         depends on RTK_TRACE_ENABLE
@@ -38,7 +47,7 @@ menu "RTK_main"
         help
             fw::LogRing 的字节容量：变长记录环，容纳 fw::tlog()/tlog_hex() 写出的句子与原始字节。
             整条记录放不下就丢弃并计数（不做拆段），因此容量至少要能装下最长的一条
-            （12 B 记录头 + 256 B 十六进制载荷）。静态存储，不占堆。
+            （12 B 记录头 + 256 B 十六进制载荷）。fw/Log.hpp 的 FW_LOG* 也写入此环。静态存储，不占堆。
 
     config RTK_BOOT_VERBOSE
         bool "Print the boot step table after boot (R8a)"

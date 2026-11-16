@@ -7,6 +7,7 @@
 #include <string_view>
 #include "def/StorageDef.hpp"
 #include "esp_log.h"
+#include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
 #include "nvs.h" // ESP_ERR_NVS_NOT_FOUND：区分“未设置 SN”与真正的读取错误
 #include "modules/storage/StoreCatalog.hpp"
@@ -167,7 +168,7 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
     std::array<uint8_t, kMaxAlarms * core::kAddrLen> out{};
     const auto serialized = whitelist_save(out, len);
     if (!fw::is_ok(serialized)) {
-        fw::tlog(fw::TraceCat::kStore, "whitelist not saved, serialization failed (%s)", fw::to_string(serialized));
+        FW_LOGE(fw::TraceCat::kStore, "whitelist not saved, serialization failed (%s)", fw::to_string(serialized));
         return false;
     }
     std::memcpy(raw.data(), out.data(), len);
@@ -193,8 +194,8 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
         status_.retry_ms = retry_ms_;
         trace_store(StoreTrace::kSave, static_cast<uint32_t>(fw::Result::kIoError), static_cast<uint32_t>(error));
         trace_store(StoreTrace::kRetry, retry_ms_, status_.failures);
-        fw::tlog(fw::TraceCat::kStore, "whitelist save failed (%s), retry in %u ms", esp_err_to_name(error),
-                 static_cast<unsigned>(retry_ms_));
+        FW_LOGW(fw::TraceCat::kStore, "whitelist save failed (%s), retry in %u ms", esp_err_to_name(error),
+                static_cast<unsigned>(retry_ms_));
     }
     status_.whitelist_pending = pending_;
     ctx().data.store_status.write(status_);
@@ -234,7 +235,7 @@ void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) n
     result.status = error == ESP_OK ? fw::Result::kOk : fw::Result::kIoError;
     if (error != ESP_OK) {
         sn_ = previous;
-        fw::tlog(fw::TraceCat::kStore, "serial number save failed (%s), previous value kept", esp_err_to_name(error));
+        FW_LOGE(fw::TraceCat::kStore, "serial number save failed (%s), previous value kept", esp_err_to_name(error));
     }
     ctx().data.store_status.write(status_);
 }

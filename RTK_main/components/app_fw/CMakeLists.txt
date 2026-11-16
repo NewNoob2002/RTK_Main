@@ -1,7 +1,7 @@
 # 应用框架（ADR-0007）：模块契约、Slot、LockOps、StoreKey、FanoutRing。纯 C++20，平台无关，
 # 同一份 CMakeLists 既是 ESP-IDF 组件，也可被 host 测试 add_subdirectory() 复用（同 stream_demux 模式）。
-# J4 在 _app_fw_srcs 中追加 src/FanoutRing.cpp；J7-b 追加 src/Trace.cpp；T4 追加 src/Tlog.cpp。
-set(_app_fw_srcs "src/Status.cpp" "src/Result.cpp" "src/FanoutRing.cpp" "src/Trace.cpp" "src/Tlog.cpp")
+# J4 在 _app_fw_srcs 中追加 src/FanoutRing.cpp；J7-b 追加 src/Trace.cpp；T4 追加 src/Tlog.cpp；L0 追加 src/Log.cpp。
+set(_app_fw_srcs "src/Status.cpp" "src/Result.cpp" "src/FanoutRing.cpp" "src/Trace.cpp" "src/Tlog.cpp" "src/Log.cpp")
 
 if(ESP_PLATFORM)
     idf_component_register(SRCS ${_app_fw_srcs} INCLUDE_DIRS "include")
@@ -10,6 +10,10 @@ if(ESP_PLATFORM)
     # 使 fw/Trace.hpp 中 trace()/trace_on() 在关闭时变为空内联。未定义（早期展开阶段）按开启处理。
     if(DEFINED CONFIG_RTK_TRACE_ENABLE AND NOT CONFIG_RTK_TRACE_ENABLE)
         target_compile_definitions(${COMPONENT_LIB} PUBLIC FW_TRACE_ENABLED=0)
+    endif()
+    # ADR-0009 §2.12：日志编译期上限（0=E 1=W 2=I 3=D），高于它的 FW_LOG* 调用连同参数一起编译掉。
+    if(DEFINED CONFIG_RTK_LOG_LEVEL)
+        target_compile_definitions(${COMPONENT_LIB} PUBLIC FW_LOG_MAX_LEVEL=${CONFIG_RTK_LOG_LEVEL})
     endif()
 else()
     cmake_minimum_required(VERSION 3.16)

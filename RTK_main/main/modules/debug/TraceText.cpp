@@ -247,8 +247,11 @@ constexpr std::array<TraceText, 47U> kTable = {{
 }};
 
 // 类别短名必须大写（ADR-0009 §2.11）；顺序与 fw::TraceCat 枚举一致。
-constexpr std::array<const char *, 8U> kCatNames = {{"LINK", "SPP", "RTCM", "PROTO", "ALARM", "STORE", "EXEC", "GNSS"}};
-constexpr std::array<const char *, 8U> kCatSummaries = {{
+constexpr size_t kCatCount = static_cast<size_t>(fw::TraceCat::kCount);
+// 名称与 fw::log_cat_name 一致（日志行与 trace 行同一套类别名）；数组长度跟随 kCount，漏加类别会编译失败。
+constexpr std::array<const char *, kCatCount> kCatNames = {
+    {"LINK", "SPP", "RTCM", "PROTO", "ALARM", "STORE", "EXEC", "GNSS", "SYS"}};
+constexpr std::array<const char *, kCatCount> kCatSummaries = {{
     "session open/close, role decisions, whitelist, pairing window",
     "classic SPP events, write timing, rx drops",
     "RTCM frame counts, role rejects, resync, unknown bytes",
@@ -257,6 +260,7 @@ constexpr std::array<const char *, 8U> kCatSummaries = {{
     "NVS load/save results, debounce, retry delay",
     "executor round overrun, command delivery failure",
     "GNSS state machine, probe/config commands, RTCM pipe drops",
+    "boot, console and system service logs",
 }};
 
 // 追加一段文本；写满时停在末尾并保持 0 结尾。

@@ -26,7 +26,12 @@ public:
     StorageModule &operator=(StorageModule &&) = delete;
     /** 启动前单线程，非 ISR；同步读取 NVS，幂等且加载失败时使用缺省值。 */
     [[nodiscard]] fw::Result init() noexcept;
-    /** 仅 kLink，非 ISR；可同步写 NVS，返回 false（重试由时钟驱动）。 */
+    /**
+     * @brief  处理挂起的白名单保存（去抖与失败重试）
+     * @param  now_ms: 当前时间（ms）
+     * @retval false 总是（重试由时钟驱动，不需要立即再轮询）
+     * @note   仅 kLink，非 ISR；可同步写 NVS；失败记 W/E 级日志。
+     */
     [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
     /** 仅 kLink，非 ISR；同步保存 SN，结果写入 result。 */
     void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
@@ -49,6 +54,11 @@ private:
     [[nodiscard]] fw::Result whitelist_save(std::span<uint8_t> out, size_t &len) const noexcept;
     [[nodiscard]] fw::Result sn_load(std::span<const uint8_t> in) noexcept;
     [[nodiscard]] fw::Result sn_save(std::span<uint8_t> out, size_t &len) const noexcept;
+    /**
+     * @brief  执行 SN 写入命令：校验后写 NVS，失败保留旧值
+     * @param  cmd: 命令（载荷为 SN 文本）
+     * @param[out] result: 执行结果
+     */
     void save_sn(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
     [[nodiscard]] AppContext &ctx() noexcept

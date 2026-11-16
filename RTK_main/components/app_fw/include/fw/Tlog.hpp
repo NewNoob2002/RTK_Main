@@ -4,7 +4,8 @@
 // （main 的 DebugModule::trace_out）按时间与 TraceRing 合并输出，保证日志、事件、命令回复互不穿插。
 // 两级开关：类别掩码（trace_set_mask，与 trace() 共用）控制文本行；十六进制掩码（log_set_hex_mask）
 // 额外控制 tlog_hex() 的原始字节转储。禁止在 ISR 中调用；不分配堆。纯 C++20，不依赖 IDF/FreeRTOS。
-// 冻结接口（ADR-0009 §3）。
+// 冻结接口（ADR-0009 §3；§2.12 增加 LogLevel 与记录头 level 字段）。新代码用 fw/Log.hpp 的 FW_LOG* 宏，
+// tlog() 等价于 kInfo 级别，保留给已有调用点。
 #pragma once
 
 #include <cstddef>
@@ -28,12 +29,25 @@ enum class LogKind : uint8_t {
 };
 
 /** 变长记录头；payload 紧随其后存放在环中。 */
+/**
+ * 日志级别（ADR-0009 §2.12）；数值越小越严重。kError/kWarn 不受类别掩码限制，总是记录；
+ * kInfo/kDebug 只在类别打开且不高于运行期级别（log_set_level）时记录。
+ */
+enum class LogLevel : uint8_t {
+    kError = 0,
+    kWarn = 1,
+    kInfo = 2,
+    kDebug = 3,
+};
+
 struct LogHeader {
-    uint32_t t_ms = 0; // 记录时间（ms，时钟来自 trace_install）
+    uint32_t t_ms = 0; // 记录时间（ms，环通路用 trace_install 的时钟，直写通路用 log_install_direct 的时钟）
     TraceCat cat = TraceCat::kLink;
     LogKind kind = LogKind::kText;
-    uint16_t len = 0;   // payload 字节数
-    uint32_t total = 0; // kHex：原始字节总数（≥ len）；kText：等于 len
+    LogLevel level = LogLevel::kInfo; // kHex 记录沿用 kInfo（与同一调用点的文本句子配对）
+    uint8_t reserved = 0;             // 保持 12 B 布局，写 0
+    uint16_t len = 0;                 // payload 字节数
+    uint16_t total = 0;               // kHex：原始字节总数（≥ len，超过 65535 记 65535）；kText：等于 len
 };
 inline constexpr std::size_t kLogHeaderBytes = 12U; // 环内每条记录的固定开销
 static_assert(sizeof(LogHeader) == kLogHeaderBytes, "LogHeader must stay 12 bytes");
@@ -56,13 +70,20 @@ void log_set_hex_mask(uint32_t mask) noexcept;
 [[nodiscard]] bool log_hex_on(TraceCat cat) noexcept;
 
 /**
- * 记录一行文本（句子形式，见 ADR-0009 §2.11 格式规则）：类别关闭或未安装时立即返回，不做格式化。
- * 在调用方栈上 vsnprintf 到 kLogTextMax 缓冲（约需 0.8 KB 栈余量）。非阻塞（环满丢弃并计数）。
- * 只能在非实时任务调用：禁止在 BT 回调任务、spp 发送路径、link 执行器的逐帧热路径中调用。
+ * @brief  记录一行 kInfo 级文本（句子形式，ADR-0009 §2.11）；等价 FW_LOGI，新代码用 fw/Log.hpp
+ * @param  cat: 类别；关闭时立即返回，不做格式化
+ * @param  fmt: printf 格式
+ * @note   在调用方栈上格式化到 kLogTextMax 缓冲（约需 0.8 KB 栈余量）；非阻塞（环满丢弃并计数）。
+ *         只能在非实时任务调用：禁止 BT 回调任务、spp 发送路径、link 执行器逐帧热路径。
  */
 void tlog(TraceCat cat, const char *fmt, ...) noexcept __attribute__((format(printf, 2, 3)));
 
-/** 记录原始字节的十六进制转储：log_hex_on(cat) 为假时立即返回；只复制前 kLogHexMax 字节。约束同 tlog。 */
+/**
+ * @brief  记录原始字节的十六进制转储
+ * @param  cat: 类别；log_hex_on(cat) 为假时立即返回
+ * @param  bytes: 原始字节；只复制前 kLogHexMax 字节，记录头 total 保留原长
+ * @note   约束同 tlog。
+ */
 void tlog_hex(TraceCat cat, std::span<const uint8_t> bytes) noexcept;
 #else
 [[nodiscard]] inline bool log_hex_on(TraceCat /*cat*/) noexcept

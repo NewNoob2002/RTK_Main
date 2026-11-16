@@ -305,14 +305,28 @@ fw::Status apply(Settings settings); // 复制大对象
 
 ### 5.1 日志记录状态变化、错误与周期统计
 
-格式统一为 `模块: 事件 key=value`，不逐次打印函数进入/退出，不打印蓝牙数据内容。
-统计要有周期，避免在实时每轮路径制造日志负担。
+组件与应用模块统一用 `fw/Log.hpp`（ADR-0009 §2.12）：每个组件在私有头定义一行自己的宏，正文写 `事件 key=value`，
+类别名（`GNSS`、`LINK`…）由输出端加在行首，正文不再重复组件名。级别：
+
+- `E`：功能失效，需要人工处理（保存失败、初始化失败、不可恢复的协议错误）；
+- `W`：异常但已自动恢复或降级（重试、丢弃、回退）；
+- `I`：状态变化与周期统计（连接/断开、探测结果、配置生效）；
+- `D`：定位问题时才需要的细节（单条命令收发、解析中间值）。
+
+E/W 总是输出；I/D 需 `debug on <类别>`。实时每轮路径、ISR、BT 回调任务只用 `fw::trace()`（16 B 事件，不格式化），
+不写日志。不逐次打印函数进入/退出，不打印蓝牙数据内容（需要时用 `tlog_hex`，受 hex 掩码控制）。
+启动阶段一次性的 IDF 适配代码（`main/app`、驱动 init）仍可用 `ESP_LOG*`。
 
 ```cpp
+// 组件私有头，例如 components/gnss/src/GnssLog.hpp
+#define GNSS_LOGW(...) FW_LOGW(fw::TraceCat::kGnss, __VA_ARGS__)
+#define GNSS_LOGI(...) FW_LOGI(fw::TraceCat::kGnss, __VA_ARGS__)
+
 // 这样写
-ESP_LOGI("link", "link: connected handle=%" PRIu32, handle);
+GNSS_LOGI("detected model=%s baud=%lu", model_name(m), baud);
+GNSS_LOGW("config step %u nack, retry=%u", step, retry);
 // 不要这样写
-ESP_LOGI("link", "begin poll"); // 每轮噪声
+GNSS_LOGI("GNSS: begin poll"); // 每轮噪声，且重复类别名
 ```
 
 ### 5.2 常量按用途分组并注明单位

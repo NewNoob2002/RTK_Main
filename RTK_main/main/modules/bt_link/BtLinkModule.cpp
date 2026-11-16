@@ -7,6 +7,7 @@
 #include <cinttypes>
 #include <cstring>
 #include "esp_log.h"
+#include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
 #include "core/LinkService.hpp"
 #if RTK_GNSS_ENABLED
@@ -120,7 +121,7 @@ void BtLinkModule::session_forget(core::SessionHandle handle) noexcept
     if (entry->demux_ready && entry->demux.has_value()) {
         const auto error = entry->demux->abort();
         if (error != demux::Error::kOk) {
-            fw::tlog(fw::TraceCat::kProto, "stream demux abort failed (reentry)");
+            FW_LOGE(fw::TraceCat::kProto, "stream demux abort failed (reentry)");
         }
     }
     /* 累计退役统计后复位会话，避免重用句柄携带半帧。 */
@@ -165,12 +166,12 @@ void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr
         entry.sink->bind(*this, handle);
         entry.demux_ready = entry.demux->init(*entry.sink) == demux::Error::kOk;
         if (!entry.demux_ready) {
-            fw::tlog(fw::TraceCat::kProto, "stream demux init failed, session 0x%04" PRIx32 " gets no parsing",
-                     handle & kHandleDisplayMask);
+            FW_LOGW(fw::TraceCat::kProto, "stream demux init failed, session 0x%04" PRIx32 " gets no parsing",
+                    handle & kHandleDisplayMask);
         }
         return;
     }
-    fw::tlog(fw::TraceCat::kLink, "session map full, 0x%04" PRIx32 " not tracked", handle & kHandleDisplayMask);
+    FW_LOGW(fw::TraceCat::kLink, "session map full, 0x%04" PRIx32 " not tracked", handle & kHandleDisplayMask);
 }
 
 void BtLinkModule::collect_whitelist_dirty() noexcept
@@ -264,8 +265,8 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
     if (error != demux::Error::kOk || !session_sink.healthy()) {
         entry.demux_ready = false;
         entry.drain_pending = false;
-        fw::tlog(fw::TraceCat::kProto, "stream demux stopped (%s), further bytes on this session ignored",
-                 error != demux::Error::kOk ? "feed error" : "delivery queue invalid");
+        FW_LOGW(fw::TraceCat::kProto, "stream demux stopped (%s), further bytes on this session ignored",
+                error != demux::Error::kOk ? "feed error" : "delivery queue invalid");
         return true;
     }
     return false;

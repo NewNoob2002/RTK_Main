@@ -10,6 +10,9 @@
 #include "esp_log.h"
 
 #include "AppContext.hpp"
+#include "cli/Out.hpp"
+#include "fw/Log.hpp"
+#include "rtos/EspStatus.hpp"
 
 namespace {
 
@@ -18,6 +21,21 @@ constexpr const char *kTag = "app";
 #if defined(ESP_PLATFORM)
 constinit std::array<app::GatedCommand, cli::kMaxCmds> s_command_gates{};
 constinit std::array<cli::Cmd, cli::kMaxCmds> s_gated_commands{};
+
+/**
+ * @brief  组件日志直写 sink（ADR-0009 §2.12）：文本环未安装时（启动早期、追踪关闭的固件）同步写控制台
+ * @param  ctx: 未用
+ * @param  hdr: 记录头
+ * @param  payload: 文本（不含换行）
+ * @note   任意任务调用；格式化缓冲在调用方栈上（kLogLineMax 字节），cli::out_write 内部加锁。
+ */
+void direct_log_sink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
+{
+    static_cast<void>(ctx);
+    std::array<char, fw::kLogLineMax> line{};
+    const size_t len = fw::log_format_line(line, hdr, payload);
+    cli::out_write(line.data(), len);
+}
 #endif
 
 } // namespace
@@ -110,6 +128,10 @@ bool init_console() noexcept
     if (console_err != ESP_OK) {
         ESP_LOGE(kTag, "console init failed: %s", esp_err_to_name(console_err));
         return false;
+    }
+    // 控制台输出通道已建立：此后组件日志（FW_LOG*）在文本环安装前直写控制台，不再丢失。
+    if (fw::log_install_direct(&direct_log_sink, nullptr, &rtos::now_ms) != fw::Result::kOk) {
+        ESP_LOGW(kTag, "component log direct sink not installed");
     }
     // 蓝牙控制器与 PHY 的 IDF 启动 INFO 已由 "Bluetooth online" 摘要行覆盖；需要时可用 `log` 命令调回。
     esp_log_level_set("BTDM_INIT", ESP_LOG_WARN);

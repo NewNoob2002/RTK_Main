@@ -12,6 +12,7 @@
 #include "data/AppData.hpp"
 #include "def/DebugDef.hpp"
 #include "fw/Lock.hpp"
+#include "fw/Log.hpp"
 #include "modules/debug/DebugKeys.hpp"
 #include "modules/debug/TraceText.hpp"
 #include "modules/rtcm/RtcmForwarder.hpp"
@@ -325,17 +326,10 @@ bool DebugModule::pump_drops(char *out, size_t cap) noexcept
 void DebugModule::print_log_text(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
                                  size_t cap) noexcept
 {
-    // 载荷已在 tlog() 里截断并保证 ≤ kLogTextMax，这里再夹一次以防外部写入的畸形记录。
-    const size_t len = (payload.size() < fw::kLogTextMax) ? payload.size() : fw::kLogTextMax;
-    std::array<char, fw::kLogTextMax + 1U> text{};
-    for (size_t i = 0U; i < len; ++i) {
-        text[i] = static_cast<char>(payload[i]);
-    }
-    text[len] = '\0';
-    const int n = std::snprintf(out, cap, "[%4lu.%03lu] %s %s\r\n", static_cast<unsigned long>(hdr.t_ms / kMsPerSecond),
-                                static_cast<unsigned long>(hdr.t_ms % kMsPerSecond),
-                                debug::trace_cat_name(static_cast<fw::TraceCat>(hdr.cat)), text.data());
-    write_line(out, clamp_len(n, cap));
+    static_assert(kLineBytes + kLinePrefixBytes >= fw::kLogLineMax, "log line buffer too small");
+    // 与直写通路共用 fw::log_format_line，两条通路的行格式（时间、类别、级别前缀）完全一致。
+    const size_t len = fw::log_format_line(std::span<char>(out, cap), hdr, payload);
+    write_line(out, len);
 }
 
 void DebugModule::print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,

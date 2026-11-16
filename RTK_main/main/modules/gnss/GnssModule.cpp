@@ -21,6 +21,7 @@
 #include "demux/decoders/Rtcm3.hpp"
 #include "demux/decoders/UnicoreHash.hpp"
 #include "fw/Status.hpp"
+#include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
 #include "gnss/Receiver.hpp"
 #include "modules/gnss/GnssKeys.hpp"
@@ -808,8 +809,8 @@ bool GnssModule::pump_rtcm_pipe() noexcept
     rtcm_tx_len_ = 0U;
     ctx().rtcm_pipe.note_write_error(lost);
     trace_gnss(GnssTrace::kState, static_cast<uint32_t>(st), static_cast<uint32_t>(fw::Result::kIoError));
-    fw::tlog(fw::TraceCat::kGnss, "RTCM UART write error (%d), dropped %lu pending bytes", written,
-             static_cast<unsigned long>(lost));
+    FW_LOGW(fw::TraceCat::kGnss, "RTCM UART write error (%d), dropped %lu pending bytes", written,
+            static_cast<unsigned long>(lost));
     return false;
 }
 

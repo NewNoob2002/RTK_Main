@@ -1,5 +1,5 @@
 # app_fw 纯 C++20 组件 host 单元测试工程（ADR-0007，J4 交付）。
-# 覆盖 Result、LockGuard、Slot、StoreKey、FanoutRing、trace/TraceRing、tlog/LogRing；
+# 覆盖 Result、LockGuard、Slot、StoreKey、FanoutRing、trace/TraceRing、tlog/LogRing、Log（分级日志）；
 # 另建 app_fw_off（FW_TRACE_ENABLED=0）验证追踪关闭时 tlog 编译路径；支持普通构建与 ASan/UBSan 构建。
 cmake_minimum_required(VERSION 3.22)
 project(app_fw_tests C CXX)
@@ -41,7 +41,7 @@ enable_testing()
 find_package(Threads REQUIRED)
 
 include(${PROJ_ROOT}/cmake/pascal_case.cmake)
-foreach(name test_app_fw_basics test_fanout_ring test_fanout_typed test_trace test_tlog)
+foreach(name test_app_fw_basics test_fanout_ring test_fanout_typed test_trace test_tlog test_log)
     rtk_pascal_case(_f "${name}")
     add_executable(${name} ${_f}.cpp)
     target_link_libraries(${name} app_fw unity)
@@ -58,7 +58,8 @@ add_library(app_fw_off STATIC
     ${PROJ_ROOT}/components/app_fw/src/Result.cpp
     ${PROJ_ROOT}/components/app_fw/src/FanoutRing.cpp
     ${PROJ_ROOT}/components/app_fw/src/Trace.cpp
-    ${PROJ_ROOT}/components/app_fw/src/Tlog.cpp)
+    ${PROJ_ROOT}/components/app_fw/src/Tlog.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Log.cpp)
 target_include_directories(app_fw_off PUBLIC ${PROJ_ROOT}/components/app_fw/include)
 target_compile_features(app_fw_off PUBLIC cxx_std_20)
 target_compile_definitions(app_fw_off PUBLIC FW_TRACE_ENABLED=0)
@@ -68,3 +69,8 @@ add_executable(test_tlog_off TestTlogOff.cpp)
 target_link_libraries(test_tlog_off app_fw_off unity)
 target_compile_options(test_tlog_off PRIVATE ${PROJ_CXX_STRICT})
 add_test(NAME test_tlog_off COMMAND test_tlog_off)
+
+add_executable(test_log_off TestLogOff.cpp)
+target_link_libraries(test_log_off app_fw_off unity)
+target_compile_options(test_log_off PRIVATE ${PROJ_CXX_STRICT})
+add_test(NAME test_log_off COMMAND test_log_off)

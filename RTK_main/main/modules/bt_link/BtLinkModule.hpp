@@ -106,7 +106,18 @@ private:
     static_assert(std::is_trivially_destructible_v<spp::SppTransport>, "SppTransport must be trivially destructible");
 
     [[nodiscard]] SessionEntry *session_find(core::SessionHandle handle) noexcept;
+    /**
+     * @brief  会话关闭：中止该会话的分流器并清除记录
+     * @param  handle: 会话句柄；未记录时只忽略
+     * @note   仅 kLink 调用。
+     */
     void session_forget(core::SessionHandle handle) noexcept;
+    /**
+     * @brief  会话打开：分配表项、记录对端地址并初始化分流器
+     * @param  handle: 会话句柄
+     * @param  addr: 对端蓝牙地址
+     * @note   仅 kLink 调用；表满或分流器初始化失败记 W 级日志，该会话不解析。
+     */
     void session_record(core::SessionHandle handle, const core::BtAddr &addr) noexcept;
     [[nodiscard]] core::LinkService &link_service() noexcept;
     void collect_whitelist_dirty() noexcept;
@@ -120,6 +131,14 @@ private:
     void drain_rx(uint32_t round_start_ms) noexcept;
     [[nodiscard]] bool drain_session(SessionEntry &entry, size_t index, size_t &budget,
                                      uint32_t round_start_ms) noexcept;
+    /**
+     * @brief  从会话 RX 取一块字节喂给分流器
+     * @param  entry: 会话表项
+     * @param[in,out] budget: 本轮剩余字节预算，按实际消费扣减
+     * @param  round_start_ms: 本轮开始时间（ms），用于超时判断
+     * @retval true 还有积压可继续读
+     * @retval false 已读空或分流器已停止
+     */
     [[nodiscard]] bool feed_one(SessionEntry &entry, size_t &budget, uint32_t round_start_ms) noexcept;
     void sync_stream() noexcept;
     void publish_link(uint32_t now_ms) noexcept;
