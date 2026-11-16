@@ -4,6 +4,10 @@
 #include "modules/system/system_module.hpp"
 #include "modules/system/system_memory.hpp"
 
+#include "app/app.hpp"
+#include "app/boot_report.hpp"
+#include "support/reset_reason.hpp"
+
 #include <array>
 #include <cinttypes>
 #include <cstddef>
@@ -58,46 +62,6 @@ constexpr uint32_t kStaticObsReservedBytes = 16384U;
 uint64_t kib_tenths(uint64_t bytes) noexcept
 {
     return (bytes * kTenthsPerUnit) / kBytesPerKib;
-}
-
-const char *reset_reason_str(esp_reset_reason_t reason) noexcept
-{
-    switch (reason) {
-    case ESP_RST_UNKNOWN:
-        return "unknown";
-    case ESP_RST_POWERON:
-        return "power-on";
-    case ESP_RST_EXT:
-        return "external-pin";
-    case ESP_RST_SW:
-        return "software";
-    case ESP_RST_PANIC:
-        return "panic";
-    case ESP_RST_INT_WDT:
-        return "interrupt-wdt";
-    case ESP_RST_TASK_WDT:
-        return "task-wdt";
-    case ESP_RST_WDT:
-        return "other-wdt";
-    case ESP_RST_DEEPSLEEP:
-        return "deep-sleep";
-    case ESP_RST_BROWNOUT:
-        return "brownout";
-    case ESP_RST_SDIO:
-        return "sdio";
-    case ESP_RST_USB:
-        return "usb";
-    case ESP_RST_JTAG:
-        return "jtag";
-    case ESP_RST_EFUSE:
-        return "efuse";
-    case ESP_RST_PWR_GLITCH:
-        return "power-glitch";
-    case ESP_RST_CPU_LOCKUP:
-        return "cpu-lockup";
-    default:
-        return "unknown";
-    }
 }
 
 void print_link_section() noexcept
@@ -414,7 +378,7 @@ int cmd_sys_info(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::print_kv("sn", "%s", sys.sn.data());
     cli::print_kv("bt_name", "%s", sys.device_name.data());
     cli::print_kv("uptime", "%" PRIu64 " ms (%" PRIu64 " s)", uptime_ms, uptime_s);
-    cli::print_kv("reset_reason", "%s", reset_reason_str(esp_reset_reason()));
+    cli::print_kv("reset_reason", "%s", app::reset_reason_name(esp_reset_reason()));
     return 0;
 }
 
@@ -517,6 +481,16 @@ int cmd_sys_tasks(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+int cmd_sys_boot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+{
+    if (argc != 1) {
+        return cli::fail("usage: sys boot");
+    }
+    // 只读启动记录：boot() 返回后不再变化，console-only 阶段也可用。
+    app::print_boot_table(app::boot_records());
+    return 0;
+}
+
 int cmd_sys_reboot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -542,10 +516,11 @@ constexpr std::array<cli::Verb, 1U> kLogVerbs{{
     {"level", "<tag|*> <E|W|I|N>", "set IDF log level (max INFO)", cmd_log_level},
 }};
 
-constexpr std::array<cli::Verb, 5U> kSysVerbs{{
+constexpr std::array<cli::Verb, 6U> kSysVerbs{{
     {"info", nullptr, "firmware, IDF, chip, MAC, SN and uptime", cmd_sys_info},
     {"heap", nullptr, "internal RAM free, min and largest block", cmd_sys_heap},
     {"mem", nullptr, "static DRAM, BootArena and heap_caps breakdown", cmd_sys_mem},
+    {"boot", nullptr, "boot step table: result, timing and heap", cmd_sys_boot},
     {"tasks", nullptr, "known task cores, priorities and stack HWM", cmd_sys_tasks},
     {"reboot", nullptr, "print OK, wait 100 ms and restart", cmd_sys_reboot},
 }};
@@ -569,8 +544,8 @@ constexpr std::array<cli::Cmd, 3U> kSystemCmds{{
     {"status", "status [link|rtcm|gnss|sys|all]: system and link status", "[link|rtcm|gnss|sys|all]", cmd_status,
      nullptr},
     {"log", "log level <tag|*> <E|W|I|N>: set IDF log level", "level <tag|*> <E|W|I|N>", cmd_log, nullptr},
-    {"sys", "sys <info|heap|mem|tasks|reboot>: system diagnostics and reboot", "<info|heap|mem|tasks|reboot>", cmd_sys,
-     nullptr},
+    {"sys", "sys <info|heap|mem|boot|tasks|reboot>: system diagnostics and reboot", "<info|heap|mem|boot|tasks|reboot>",
+     cmd_sys, nullptr},
 }};
 
 } // namespace

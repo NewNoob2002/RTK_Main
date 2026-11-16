@@ -17,9 +17,16 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
 endif()
 idf_component_register(
     SRCS "app_main.cpp"
+         "app/app.cpp"
+         "app/boot_buffers.cpp"
+         "app/boot_flow.cpp"
+         "app/boot_steps.cpp"
+         "app/console_setup.cpp"
+         "app/executors.cpp"
          "data/app_data.cpp"
          "data/gnss_output.cpp"
          "support/console_support.cpp"
+         "support/reset_reason.cpp"
          ${module_sources}
     INCLUDE_DIRS "."
     REQUIRES app_fw device_proto link_core rtos spp_server nvs_store cli stream_demux gnss console esp_system esp_hw_support esp_driver_gpio esp_driver_uart freertos log)

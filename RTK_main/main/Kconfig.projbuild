@@ -40,6 +40,21 @@ menu "RTK_main"
             整条记录放不下就丢弃并计数（不做拆段），因此容量至少要能装下最长的一条
             （12 B 记录头 + 256 B 十六进制载荷）。静态存储，不占堆。
 
+    config RTK_BOOT_VERBOSE
+        bool "Print the boot step table after boot (R8a)"
+        default n
+        help
+            启动成功后除了单行摘要，再打印 `sys boot` 的同一张步骤表（步骤、结果、耗时、堆水位、
+            降级原因）。仅影响输出，不影响启动顺序或内存布局。
+
+    config RTK_BOOT_FAULT_STEP
+        string "Force a boot step to fail (HIL only, R8a)"
+        default ""
+        help
+            仅用于台架验证启动降级路径：填步骤名（power/banner/contexts/console/alloc/bind/seal/
+            debug/storage/system/link/io/started）时该步不执行并返回失败，原因记为 ``fault:<step>``。
+            留空即正常启动。不得在产品固件中填写。
+
     config RTK_STRICT_WARNINGS
         bool "Treat all warnings in project code as errors (debug phase)"
         default y

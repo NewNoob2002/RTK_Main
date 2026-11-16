@@ -57,6 +57,12 @@ struct AppContext {
 
     /** 启动任务门控：执行器/trace 任务等待组合根放行；失败返回前退订 TWDT 并确认停稳，非 ISR。 */
     [[nodiscard]] bool await_boot(uint32_t task_bit, bool watchdog) noexcept;
+
+    /**
+     * 固件入口（R8a）：按有序步骤表完成启动，失败时按步骤语义降级/回滚/停机。
+     * 仅 app_main 的启动任务调用一次，可阻塞；返回后控制台可用。
+     */
+    void boot() noexcept;
     data::DataCenter data{};
 // X-macro 生成异构成员声明（全零默认初值落 .bss），constexpr 函数不能替代。
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)

@@ -24,10 +24,11 @@
 #include "rtos/boot_task.hpp"
 #include "rtos/esp_status.hpp"
 #include "spp_server.h"
+#include "spp_server_storage.h"
 
-// 同一组合根的真实 owner 计划与绑定/回滚逻辑；ESP_PLATFORM 分支仅含 SDK 硬件装配入口。
-// NOLINTNEXTLINE(bugprone-suspicious-include): 直接检查真实组合根的私有启动逻辑。
-#include "../../main/app_main.cpp"
+// 同一组合根的真实 owner 计划与绑定/回滚逻辑（R8a 拆分为 app/ 下的 TU 后直接链接，不再整文件包含）。
+#include "app/app.hpp"
+#include "app/boot_buffers.hpp"
 
 namespace {
 bool s_task_create_fail = false;
@@ -251,17 +252,17 @@ void test_arena_max_entries_and_fault_injection() noexcept
 void reset_test_arena() noexcept
 {
     // 测试没有创建消费者；仅在所有引用已撤销、块已回收后重建台账。
-    std::destroy_at(&s_app.boot_arena);
-    std::construct_at(&s_app.boot_arena);
+    std::destroy_at(&app::s_app.boot_arena);
+    std::construct_at(&app::s_app.boot_arena);
 }
 
 void test_production_allocation_plan() noexcept
 {
     FaultAllocCtx probe{};
     auto ops = make_ops(probe);
-    BootBuffers buffers{};
-    CHECK(allocate_boot_buffers(buffers, &ops));
-    const auto entries = s_app.boot_arena.entries();
+    app::BootBuffers buffers{};
+    CHECK(app::allocate_boot_buffers(buffers, &ops));
+    const auto entries = app::s_app.boot_arena.entries();
     const size_t owners = entries.size();
     std::array<const char *, rtos::BootArena::kMaxEntries> names{};
     size_t requested = 0U;
@@ -293,11 +294,11 @@ void test_production_allocation_plan() noexcept
     CHECK(stream_count == 1U);
     CHECK(has_gnss == bool(RTK_GNSS_ENABLED));
     CHECK(has_trace == bool(FW_TRACE_ENABLED));
-    CHECK(requested == s_app.boot_arena.total_bytes());
+    CHECK(requested == app::s_app.boot_arena.total_bytes());
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): host 计划结果使用固定格式报告。
     std::printf("boot plan: owners=%zu requested=%zu actual=%zu gnss=%d trace=%d\n", owners, requested,
-                s_app.boot_arena.total_actual_bytes(), RTK_GNSS_ENABLED, FW_TRACE_ENABLED);
-    rollback_boot_bindings(buffers, "test:probe");
+                app::s_app.boot_arena.total_actual_bytes(), RTK_GNSS_ENABLED, FW_TRACE_ENABLED);
+    app::rollback_boot_bindings(buffers, "test:probe");
     CHECK(probe.live_allocs == 0U);
     reset_test_arena();
 
@@ -305,15 +306,15 @@ void test_production_allocation_plan() noexcept
     for (size_t fail = 0; fail < owners; ++fail) {
         FaultAllocCtx ctx{.fail_on_call = fail};
         ops = make_ops(ctx);
-        CHECK(!allocate_boot_buffers(buffers, &ops));
+        CHECK(!app::allocate_boot_buffers(buffers, &ops));
         CHECK(buffers.link_stack.empty() && buffers.spp_rx_0.empty() && buffers.spp_stream.empty());
         CHECK(ctx.live_allocs == 0U && ctx.free_calls == fail);
-        CHECK(s_app.boot_arena.state() == rtos::ArenaState::kAborted);
-        CHECK(s_app.boot_arena.entries().empty());
+        CHECK(app::s_app.boot_arena.state() == rtos::ArenaState::kAborted);
+        CHECK(app::s_app.boot_arena.entries().empty());
         std::array<char, rtos::BootArena::kMaxReasonBytes> expected{};
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): 构造受限长的预期错误文本。
         std::snprintf(expected.data(), expected.size(), "boot_alloc:%s", names[fail]);
-        CHECK(std::string_view{s_app.boot_arena.reason()} == expected.data());
+        CHECK(std::string_view{app::s_app.boot_arena.reason()} == expected.data());
         reset_test_arena();
     }
 }
@@ -324,8 +325,8 @@ void test_binding_rollback_and_sealed_lifetime() noexcept
     for (size_t stage = 0; stage < kStages; ++stage) {
         FaultAllocCtx ctx{};
         const auto ops = make_ops(ctx);
-        BootBuffers buffers{};
-        CHECK(allocate_boot_buffers(buffers, &ops));
+        app::BootBuffers buffers{};
+        CHECK(app::allocate_boot_buffers(buffers, &ops));
         auto invalid = buffers;
         size_t index = 0U;
         if (stage == index++) {
@@ -347,38 +348,38 @@ void test_binding_rollback_and_sealed_lifetime() noexcept
             invalid.gnss_demux = {};
         }
 #endif
-        const char *failure = bind_boot_buffers(invalid);
+        const char *failure = app::bind_boot_buffers(invalid);
         CHECK(failure != nullptr);
-        rollback_boot_bindings(buffers, failure);
-        CHECK(s_app.boot_arena.state() == rtos::ArenaState::kAborted);
+        app::rollback_boot_bindings(buffers, failure);
+        CHECK(app::s_app.boot_arena.state() == rtos::ArenaState::kAborted);
         CHECK(ctx.live_allocs == 0U);
         CHECK(spp_server_unbind_storage() == ESP_OK);
 #if RTK_GNSS_ENABLED
-        CHECK(s_app.rtcm_pipe.init() == fw::Status::kInvalidState);
+        CHECK(app::s_app.rtcm_pipe.init() == fw::Status::kInvalidState);
         uint8_t reader = 0U;
-        CHECK(s_app.data.gnss_app_ring.attach(1U, reader) == fw::Result::kInvalidState);
+        CHECK(app::s_app.data.gnss_app_ring.attach(1U, reader) == fw::Result::kInvalidState);
 #endif
 #if FW_TRACE_ENABLED
-        CHECK(s_app.debug.init() == fw::Result::kInvalidState);
+        CHECK(app::s_app.debug.init() == fw::Result::kInvalidState);
 #endif
         reset_test_arena();
     }
     FaultAllocCtx ctx{};
     const auto ops = make_ops(ctx);
-    BootBuffers buffers{};
-    CHECK(allocate_boot_buffers(buffers, &ops));
-    CHECK(bind_boot_buffers(buffers) == nullptr);
-    CHECK(s_app.boot_arena.seal() == fw::Status::kOk);
-    CHECK(s_app.boot_arena.abort("callback_alive") == fw::Status::kInvalidState);
+    app::BootBuffers buffers{};
+    CHECK(app::allocate_boot_buffers(buffers, &ops));
+    CHECK(app::bind_boot_buffers(buffers) == nullptr);
+    CHECK(app::s_app.boot_arena.seal() == fw::Status::kOk);
+    CHECK(app::s_app.boot_arena.abort("callback_alive") == fw::Status::kInvalidState);
     CHECK(ctx.free_calls == 0U);
     const uint8_t value = 0xA5U;
     buffers.spp_stream.back() = value;
     CHECK(buffers.spp_stream.back() == value);
-    s_app.boot_arena.set_degraded_reason("task:create_failed");
+    app::s_app.boot_arena.set_degraded_reason("task:create_failed");
     // 停机后块仍封存；host 不创建回调，撤销 view 后手动释放模拟重启。
-    rollback_boot_bindings(buffers, "task:create_failed");
+    app::rollback_boot_bindings(buffers, "task:create_failed");
     CHECK(ctx.free_calls == 0U);
-    for (const auto &entry : s_app.boot_arena.entries()) {
+    for (const auto &entry : app::s_app.boot_arena.entries()) {
         fault_free(entry.ptr, &ctx);
     }
     CHECK(ctx.live_allocs == 0U);
@@ -394,21 +395,21 @@ int safe_command(void *ctx, int, char **) noexcept
 void test_console_gate_and_task_admission() noexcept
 {
     unsigned calls = 0U;
-    GatedCommand safe{&safe_command, &calls, true};
-    GatedCommand business{&safe_command, &calls, false};
-    s_app.boot_phase.store(app::BootPhase::kStarting);
-    CHECK(gated_command(&safe, 0, nullptr) == cli::kCmdFail);
-    set_console_only();
-    CHECK(gated_command(&business, 0, nullptr) == cli::kCmdFail);
-    CHECK(gated_command(&safe, 0, nullptr) == 0 && calls == 1U);
-    CHECK(!s_app.await_boot(1U, true));
-    CHECK((s_app.boot_stopped.load() & 1U) != 0U);
-    s_app.boot_phase.store(app::BootPhase::kRunning);
-    CHECK(gated_command(&business, 0, nullptr) == 0 && calls == 2U);
-    CHECK(s_app.await_boot(2U, true));
-    s_app.boot_phase.store(app::BootPhase::kStopping);
-    CHECK(!s_app.await_boot(4U, false));
-    CHECK((s_app.boot_stopped.load() & 4U) != 0U);
+    app::GatedCommand safe{&safe_command, &calls, true};
+    app::GatedCommand business{&safe_command, &calls, false};
+    app::s_app.boot_phase.store(app::BootPhase::kStarting);
+    CHECK(app::gated_command(&safe, 0, nullptr) == cli::kCmdFail);
+    app::set_console_only();
+    CHECK(app::gated_command(&business, 0, nullptr) == cli::kCmdFail);
+    CHECK(app::gated_command(&safe, 0, nullptr) == 0 && calls == 1U);
+    CHECK(!app::s_app.await_boot(1U, true));
+    CHECK((app::s_app.boot_stopped.load() & 1U) != 0U);
+    app::s_app.boot_phase.store(app::BootPhase::kRunning);
+    CHECK(app::gated_command(&business, 0, nullptr) == 0 && calls == 2U);
+    CHECK(app::s_app.await_boot(2U, true));
+    app::s_app.boot_phase.store(app::BootPhase::kStopping);
+    CHECK(!app::s_app.await_boot(4U, false));
+    CHECK((app::s_app.boot_stopped.load() & 4U) != 0U);
 }
 
 std::array<char, 8192U> s_memory_output{};

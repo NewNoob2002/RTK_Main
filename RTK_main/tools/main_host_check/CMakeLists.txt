@@ -137,6 +137,10 @@ add_test(NAME gnss_output COMMAND gnss_output_check)
 foreach(features on gnss_off trace_off all_off)
     set(boot_target boot_alloc_check_${features})
     add_executable(${boot_target} boot_alloc_check.cpp
+        ${PROJ_ROOT}/main/app/app.cpp
+        ${PROJ_ROOT}/main/app/boot_buffers.cpp
+        ${PROJ_ROOT}/main/app/boot_steps.cpp
+        ${PROJ_ROOT}/main/app/console_setup.cpp
         ${PROJ_ROOT}/components/rtos/boot_alloc.cpp
         ${PROJ_ROOT}/main/data/app_data.cpp
         ${PROJ_ROOT}/main/data/gnss_output.cpp
@@ -168,3 +172,10 @@ foreach(features on gnss_off trace_off all_off)
     target_link_libraries(${boot_target} PRIVATE main_pure main_rtos main_nvs_shim)
     add_test(NAME boot_alloc_${features} COMMAND ${boot_target})
 endforeach()
+
+# 启动步骤执行器（R8a）：纯 C++ 表驱动逻辑，用注入的计时/堆/降级钩子验证四种结果分类。
+add_executable(boot_steps_check boot_steps_check.cpp ${PROJ_ROOT}/main/app/boot_steps.cpp)
+target_include_directories(boot_steps_check PRIVATE ${PROJ_ROOT}/main)
+target_compile_options(boot_steps_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
+    -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+add_test(NAME boot_steps COMMAND boot_steps_check)
