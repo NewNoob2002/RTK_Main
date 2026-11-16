@@ -91,6 +91,8 @@ clang-tidy -p builds/host --config-file=.clang-tidy-c <device_proto 的 .c>
 
 构建目录约定：`idf.py` 主工程用默认 `build/`；其余所有构建（host、ASan、测试工程、并行任务）一律放 `builds/<名称>/`，不得在仓库根或源码目录下新建 `build-*`。
 
+函数注释以 `docs/CODING-STYLE.md` §6.2 为准：每个函数（含 static、私有方法）写 `/** @brief ... @param name: ... @retval ... */`，标签英文、正文中文。门禁 `python3 -I tools/doc_check/doc_check.py --base <任务基线提交>`：本次新增或改动的函数必须全部合格（该工具用本机缓存的 lizard，不联网）。
+
 格式以 `clang-format --style=file`（仓库 `.clang-format`）为唯一门禁（用户 2026-11-13 决定）。IDF 的 astyle 规则与 `.clang-format` 冲突（续行缩进、`T {x}` 空格），**不得用 astyle 改写本仓库文件**，仅可作参考。
 
 ## 6. 授权边界

@@ -410,26 +410,47 @@ void bt_link_command(void *self, const fw::Command &cmd, fw::CommandResult &out)
 const fw::ModuleOps kOps{init_trampoline, nullptr, poll_trampoline, bt_link_command};
 ```
 
-### 6.2 公开 API 用 doxygen 写契约，实现内解释原因
+### 6.2 每个函数都写 doxygen 注释（2026-11-16 用户要求，门禁 `tools/doc_check`）
 
-每个公开函数用 `/** */` 说明做什么、谁调用、可否阻塞、线程/ISR 安全性及错误返回。
-返回 `void` 或 `bool` 也解释结果含义。注释用中文，保留必要英文术语；实现内只解释为什么、约束与副作用，
-不复述语句，不保留注释掉的代码。上面的片段省略重复契约，实际公开头必须补齐。
+**范围**：每个函数，包括公开 API、类的私有方法、`static`/匿名命名空间里的内部函数、构造/析构函数。
+豁免只有：lambda；`= default`/`= delete`；覆写函数（`override`）在契约与基类声明一致时可不写，
+由基类声明处的注释覆盖，行为有差异时必须写。
+
+**位置**：公开函数写在头文件声明处，`.cpp` 定义处不重复；只在 `.cpp` 里出现的函数写在定义处。
+同一函数只写一份，避免两处说法不一致。
+
+**格式**：标签用英文，正文用中文（保留必要英文术语）。
 
 ```cpp
-// 这样写
-/** 初始化链路；仅启动任务调用一次，不阻塞，非线程/ISR 安全。
- * @return kOk 成功；kBusy 已初始化；kInvalidArg 配置非法。
+/**
+ * @brief  在列表中查找节点
+ * @param  vec: 列表指针
+ * @param  id:  节点 ID
+ * @retval 找到时返回节点指针；找不到返回 nullptr
+ * @note   只在 io 执行器任务调用；不可在 ISR 中调用
  */
-[[nodiscard]] fw::Status init() noexcept;
-// 队列仅存值副本，调用结束后不持有调用者缓冲区。
+DataNode *search_node(std::span<DataNode *> vec, NodeId id) noexcept;
+```
 
+- `@brief`：必填，一句话说明做什么（不是怎么做）。
+- `@param name: 说明`：每个具名参数一条；输出参数写 `@param[out]`，写明调用失败时它的内容。
+- `@retval`：返回值不是 `void` 时必填。返回 `bool`、`fw::Status`、`fw::Result`、`esp_err_t` 时
+  每种结果各写一条（如 `@retval kOk 成功`、`@retval kBusy 上次请求未完成`）。
+- `@note`：有约束时写——调用线程/任务、是否可在 ISR 中调用、是否阻塞、只能在启动阶段调用、持锁要求。
+
+**实现内注释**只解释为什么、约束与副作用，不复述语句，不保留注释掉的代码。
+
+```cpp
 // 不要这样写
 // 初始化
 fw::Status init();
 // count 加一
 // ++old_count;  // 历史代码应交给版本控制
 ```
+
+**门禁**：`python3 -I tools/doc_check/doc_check.py --base <基线提交>` 检查相对基线新增或改动的函数，
+不合格即失败；`--report` 按组件统计覆盖率，`--list <路径前缀>` 列出某个组件的全部不合格函数。
+存量函数按组件分批补齐（Q1–Q5 任务卡），补齐前不要求一次改完，但改动到的函数必须补齐。
 
 ## 7. 堆内存分级（ADR-0008 §8，2026-11-12 任务卡确认采用）
 
@@ -560,7 +581,7 @@ clang-tidy -p builds/host --config-file=.clang-tidy-c path/to/pure.c
 | `onEvent` + switch + 长度检查 | 采用统一入口与先校验后解码，每分支调用具名函数 |
 | 类 + 静态回调跳转 | 采用模块类与 `fw::make_ops<T>()`，业务方法隐藏 `void *` |
 | 固定分层 | 保留允许依赖表与 host 可测的纯组件边界 |
-| 成组常量/单位、公开 API doxygen | 采用；实现内注释解释原因 |
+| 成组常量/单位、doxygen 注释 | 采用并扩大到每个函数（§6.2，`tools/doc_check` 门禁）；实现内注释解释原因 |
 | lowerCamel/PascalCase 方法、前缀私有成员 | 改为 snake_case 方法、`name_` 私有成员 |
 | 字符串 ID 订阅、通用堆容器 | 用枚举/constexpr 表、静态存储；堆仅在允许档位按文件登记 |
 | 单线程无锁 DataBroker | 保留 Slot/FanoutRing/Executor 和双核同步契约 |
