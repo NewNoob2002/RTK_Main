@@ -2,7 +2,7 @@
 // trace() 面向实时路径（只记 16 B 事件，不格式化）；tlog() 面向非实时任务（io 执行器、kLink 上的非热路径、
 // 控制台任务），由调用方在自己的栈上格式化一行文本，再整条压入变长记录环 LogRing，由同一个读者任务
 // （main 的 DebugModule::trace_out）按时间与 TraceRing 合并输出，保证日志、事件、命令回复互不穿插。
-// 两级开关：类别掩码（trace_set_mask，与 trace() 共用）控制文本行；十六进制掩码（log_set_hex_mask）
+// 开关（ADR-0009 §2.12）：文本行按类别日志级别过滤（fw/Log.hpp）；十六进制掩码（log_set_hex_mask）在 D 级之上
 // 额外控制 tlog_hex() 的原始字节转储。禁止在 ISR 中调用；不分配堆。纯 C++20，不依赖 IDF/FreeRTOS。
 // 冻结接口（ADR-0009 §3；§2.12 增加 LogLevel 与记录头 level 字段）。新代码用 fw/Log.hpp 的 FW_LOG* 宏，
 // tlog() 等价于 kInfo 级别，保留给已有调用点。
@@ -66,12 +66,12 @@ void log_set_hex_mask(uint32_t mask) noexcept;
 [[nodiscard]] uint32_t log_hex_mask() noexcept;
 
 #if FW_TRACE_ENABLED
-/** 该类别的十六进制转储是否打开（类别掩码与十六进制掩码同时置位）。 */
+/** 该类别的十六进制转储是否打开（十六进制掩码置位且该类别日志级别为 D，ADR-0009 §2.12）。 */
 [[nodiscard]] bool log_hex_on(TraceCat cat) noexcept;
 
 /**
- * @brief  记录一行 kInfo 级文本（句子形式，ADR-0009 §2.11）；等价 FW_LOGI，新代码用 fw/Log.hpp
- * @param  cat: 类别；关闭时立即返回，不做格式化
+ * @brief  记录一行 kInfo 级文本（ADR-0009 §2.11）；等价 FW_LOGI，但追踪关闭时为空。已废弃，新代码用 fw/Log.hpp
+ * @param  cat: 类别；该类别日志级别低于 I 时立即返回，不做格式化
  * @param  fmt: printf 格式
  * @note   在调用方栈上格式化到 kLogTextMax 缓冲（约需 0.8 KB 栈余量）；非阻塞（环满丢弃并计数）。
  *         只能在非实时任务调用：禁止 BT 回调任务、spp 发送路径、link 执行器逐帧热路径。

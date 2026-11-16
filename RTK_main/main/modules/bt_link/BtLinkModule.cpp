@@ -6,7 +6,6 @@
 #include <cstdlib>
 #include <cinttypes>
 #include <cstring>
-#include "esp_log.h"
 #include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
 #include "core/LinkService.hpp"
@@ -23,7 +22,6 @@ static_assert(std::atomic<TaskHandle_t>::is_always_lock_free, "wake_task_ must b
 
 namespace app {
 namespace {
-constexpr const char *kTag = "bt_link";
 constexpr uint32_t kRoundBudgetMs = 20;
 #if RTK_GNSS_ENABLED
 constexpr uint32_t kGnssFixStaleMs = 3000U;
@@ -53,9 +51,9 @@ void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t 
                        (index == kRtcmIndex && &decoder == &demux::rtcm3::kDecoder);
     if (!known || (owner_ == nullptr)) {
         unhealthy_ = true;
-        fw::tlog(fw::TraceCat::kProto,
-                 "session 0x%04" PRIx32 " delivery callback invalid (decoder index %u, %u bytes), stream reset",
-                 handle_ & kHandleDisplayMask, static_cast<unsigned>(index), static_cast<unsigned>(wire.size()));
+        FW_LOGE(fw::TraceCat::kProto,
+                "session 0x%04" PRIx32 " delivery callback invalid (decoder index %u, %u bytes), stream reset",
+                handle_ & kHandleDisplayMask, static_cast<unsigned>(index), static_cast<unsigned>(wire.size()));
         return;
     }
     if (index == kProductIndex) {
@@ -570,6 +568,11 @@ core::LinkService &BtLinkModule::link_service() noexcept
     return *service_;
 }
 
+/**
+ * @brief  构造链路服务并启动 SPP 服务端
+ * @retval fw::Result::kOk 成功；其他为失败原因（已记 E 级日志）
+ * @note   启动前单线程，非 ISR，不分配堆。
+ */
 fw::Result BtLinkModule::init() noexcept
 {
     if (context_ == nullptr) {
@@ -596,7 +599,7 @@ fw::Result BtLinkModule::init() noexcept
     gnss_service.set_mask_hook(&BtLinkModule::on_gnss_mask, this);
     gnss_reader_attached_ = fw::is_ok(ctx().data.gnss_app_ring.attach(0U, gnss_reader_id_));
     if (!gnss_reader_attached_) {
-        ESP_LOGE(kTag, "gnss app ring attach failed");
+        FW_LOGE(fw::TraceCat::kLink, "gnss app ring attach failed");
         return fw::Result::kInvalidState;
     }
     /* 路由表校验成功后才构造 LinkService，失败由执行器隔离。 */
@@ -609,7 +612,7 @@ fw::Result BtLinkModule::init() noexcept
 #endif
     const fw::Status route_status = router_.init(tables);
     if (!is_ok(route_status)) {
-        ESP_LOGE(kTag, "command router init failed: %s", to_string(route_status));
+        FW_LOGE(fw::TraceCat::kLink, "command router init failed: %s", to_string(route_status));
         return fw::Result::kInvalidState;
     }
     transport_.emplace();

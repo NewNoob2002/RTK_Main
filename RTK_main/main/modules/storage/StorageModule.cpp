@@ -6,7 +6,6 @@
 #include <cstring>
 #include <string_view>
 #include "def/StorageDef.hpp"
-#include "esp_log.h"
 #include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
 #include "nvs.h" // ESP_ERR_NVS_NOT_FOUND：区分“未设置 SN”与真正的读取错误
@@ -66,6 +65,9 @@ fw::Result StorageModule::sn_save(std::span<uint8_t> out, size_t &len) const noe
     return fw::Result::kOk;
 }
 
+/**
+ * @brief  从 NVS 读白名单；缺失或损坏时使用空表并记 W 级日志
+ */
 void StorageModule::load_whitelist() noexcept
 {
     WhitelistRaw raw{};
@@ -75,7 +77,7 @@ void StorageModule::load_whitelist() noexcept
     auto *rows = reinterpret_cast<uint8_t (*)[NVS_STORE_ADDR_LEN]>(raw.data());
     const esp_err_t error = nvs_store_get_alarms(rows, kMaxAlarms, &count);
     if (error != ESP_OK || count > kMaxAlarms) {
-        ESP_LOGW("storage", "load whitelist failed: %s", esp_err_to_name(error));
+        FW_LOGW(fw::TraceCat::kStore, "load whitelist failed: %s", esp_err_to_name(error));
         return;
     }
     /* 按冻结的逐行字节布局反序列化，失败保持空表。 */
@@ -83,10 +85,13 @@ void StorageModule::load_whitelist() noexcept
     std::memcpy(bytes.data(), raw.data(), count * core::kAddrLen);
     const auto loaded = whitelist_load(std::span{bytes}.first(count * core::kAddrLen));
     if (!fw::is_ok(loaded)) {
-        ESP_LOGW("storage", "invalid whitelist; use empty list");
+        FW_LOGW(fw::TraceCat::kStore, "invalid whitelist; use empty list");
     }
 }
 
+/**
+ * @brief  从 NVS 读 SN；缺失时由 BT MAC 派生设备名
+ */
 void StorageModule::load_sn() noexcept
 {
     std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
@@ -94,9 +99,9 @@ void StorageModule::load_sn() noexcept
     if (sn_error != ESP_OK) {
         if (sn_error == ESP_ERR_NVS_NOT_FOUND) {
             // 未写入 SN 是出厂前的正常状态，不当作错误呈现。
-            ESP_LOGI("storage", "no SN set; name derived from BT MAC");
+            FW_LOGI(fw::TraceCat::kStore, "no SN set; name derived from BT MAC");
         } else {
-            ESP_LOGW("storage", "SN read failed: %s; name derived from BT MAC", esp_err_to_name(sn_error));
+            FW_LOGW(fw::TraceCat::kStore, "SN read failed: %s; name derived from BT MAC", esp_err_to_name(sn_error));
         }
         return;
     }
@@ -105,7 +110,7 @@ void StorageModule::load_sn() noexcept
     std::memcpy(bytes.data(), sn.data(), sn.size());
     const auto status = sn_load(std::span{bytes}.first(std::strlen(sn.data())));
     if (!fw::is_ok(status)) {
-        ESP_LOGW("storage", "invalid sn; derive from BT MAC");
+        FW_LOGW(fw::TraceCat::kStore, "invalid sn; derive from BT MAC");
     }
 }
 
@@ -119,6 +124,11 @@ void StorageModule::load_key_tables() noexcept
     }
 }
 
+/**
+ * @brief  初始化 NVS 并加载 SN、白名单与各模块键表
+ * @retval fw::Result::kOk 总是（加载失败使用缺省值）
+ * @note   启动前单线程，非 ISR；同步读 NVS，幂等。
+ */
 fw::Result StorageModule::init() noexcept
 {
     if (initialized_) {
@@ -128,7 +138,7 @@ fw::Result StorageModule::init() noexcept
     /* 初始化后端，失败仍按原策略尝试加载并使用缺省值。 */
     const esp_err_t init = nvs_store_init();
     if (init != ESP_OK) {
-        ESP_LOGE("storage", "store init failed: %s; use defaults", esp_err_to_name(init));
+        FW_LOGE(fw::TraceCat::kStore, "store init failed: %s; use defaults", esp_err_to_name(init));
     }
     load_whitelist();
     load_sn();

@@ -3,7 +3,7 @@
 idf_component_register(
     SRCS "NvsStore.c"
     INCLUDE_DIRS "include"
-    REQUIRES nvs_flash log)
+    REQUIRES nvs_flash log app_fw)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -Wshadow -Wimplicit-fallthrough -Wstrict-prototypes>)

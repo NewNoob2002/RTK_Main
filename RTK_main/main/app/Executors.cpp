@@ -8,14 +8,11 @@
 #include <span>
 
 #include "esp_err.h"
-#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "SppServerStorage.h"
 
 namespace {
-
-constexpr const char *kTag = "app";
 
 template <typename T> constexpr auto kModuleOps = fw::make_ops<T>();
 // 编号由 id() 保证无窄化；对象与操作表同为静态存储。

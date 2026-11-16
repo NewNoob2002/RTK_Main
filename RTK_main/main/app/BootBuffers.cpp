@@ -6,7 +6,7 @@
 #include <array>
 #include <cstdio>
 
-#include "esp_log.h"
+#include "fw/Log.hpp"
 
 #include "AppContext.hpp"
 #if FW_TRACE_ENABLED
@@ -22,8 +22,6 @@ namespace app {
 
 namespace {
 
-constexpr const char *kTag = "app";
-
 /** 组合根单例；本文件只在启动期访问，避免把 s_app 暴露到其他翻译单元。 */
 AppContext &self() noexcept
 {
@@ -32,6 +30,12 @@ AppContext &self() noexcept
 
 } // namespace
 
+/**
+ * @brief  从启动分配器一次性申请各模块的运行缓冲
+ * @param[out] out: 申请到的缓冲
+ * @param  ops: 分配器操作表（host 测试可注入）
+ * @retval true 全部成功；false 任一失败（已回滚并记录原因）
+ */
 bool allocate_boot_buffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) noexcept
 {
     if (!fw::is_ok(self().boot_arena.open(ops))) {
@@ -43,7 +47,7 @@ bool allocate_boot_buffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) 
         std::array<char, rtos::BootArena::kMaxReasonBytes> reason{};
         (void)std::snprintf(reason.data(), reason.size(), "boot_alloc:%s", name);
         (void)self().boot_arena.abort(reason.data());
-        ESP_LOGE(kTag, "boot_alloc failed (%s); entering console-only mode", name);
+        FW_LOGE(fw::TraceCat::kSys, "boot_alloc failed (%s); entering console-only mode", name);
         return false;
     };
 

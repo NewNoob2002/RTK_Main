@@ -2,7 +2,7 @@
 #include "modules/system/SystemModule.hpp"
 #include "AppContext.hpp"
 #include <cstdio>
-#include "esp_log.h"
+#include "fw/Log.hpp"
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "SppServer.h"
@@ -42,6 +42,10 @@ bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out)
     }
     return true;
 }
+
+/**
+ * @brief  计算设备名与身份信息并发布到 DataCenter（BT 启动前调用）
+ */
 void SystemModule::prepare() noexcept
 {
     /* 读取持久化 SN 和启动期堆状态。 */
@@ -54,22 +58,22 @@ void SystemModule::prepare() noexcept
         if (error != ESP_OK || !derive_sn_from_mac(mac, status_.sn)) {
             const int written = snprintf(status_.sn.data(), status_.sn.size(), "%s", "0000");
             if (written < 0) {
-                ESP_LOGE("system", "fallback SN formatting failed");
+                FW_LOGE(fw::TraceCat::kSys, "fallback SN formatting failed");
             }
         }
     }
     /* 名称校验通过后才启动 BT，失败仍发布状态供控制台读取。 */
     if (!build_device_name(status_.sn.data(), status_.device_name)) {
-        ESP_LOGE("system", "invalid SN for BT name");
+        FW_LOGE(fw::TraceCat::kSys, "invalid SN for BT name");
         ctx().data.system_status.write(status_);
         return;
     }
-    ESP_LOGI("system", "sn=%s bt_name=%s policy=%s", status_.sn.data(), status_.device_name.data(),
-             policy_name(policy_from_config()));
+    FW_LOGI(fw::TraceCat::kSys, "sn=%s bt_name=%s policy=%s", status_.sn.data(), status_.device_name.data(),
+            policy_name(policy_from_config()));
     const esp_err_t error = spp_server_init(status_.device_name.data());
     status_.bt_ready = error == ESP_OK;
     if (error != ESP_OK) {
-        ESP_LOGE("system", "bt_spp init failed: %s; console only", esp_err_to_name(error));
+        FW_LOGE(fw::TraceCat::kSys, "bt_spp init failed: %s; console only", esp_err_to_name(error));
     }
     ctx().data.system_status.write(status_);
 }

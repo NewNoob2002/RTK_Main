@@ -112,14 +112,20 @@ namespace {
 constexpr uint16_t kMaxPayloadLen = std::numeric_limits<uint16_t>::max();
 
 } // namespace
+
+/**
+ * @brief  该类别的十六进制转储是否打开
+ * @param  cat: 类别
+ * @retval true hex 掩码置位且该类别日志级别为 D
+ */
 bool log_hex_on(TraceCat cat) noexcept
 {
     const uint32_t bit = static_cast<uint32_t>(cat);
     if (bit >= static_cast<uint32_t>(TraceCat::kCount)) {
         return false;
     }
-    // 两级开关：类别掩码控制文本行，十六进制掩码在其之上再收一层。
-    return ((s_hex_mask.load(std::memory_order_relaxed) & trace_bit(cat)) != 0U) && trace_on(cat);
+    // 两级开关（ADR-0009 §2.12）：转储与同一调用点的 D 级句子配对，需该类别日志级别为 D，十六进制掩码再收一层。
+    return ((s_hex_mask.load(std::memory_order_relaxed) & trace_bit(cat)) != 0U) && log_enabled(LogLevel::kDebug, cat);
 }
 
 void tlog(TraceCat cat, const char *fmt, ...) noexcept

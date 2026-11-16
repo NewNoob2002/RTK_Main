@@ -1,6 +1,6 @@
 // 组件分级日志实现（ADR-0009 §2.12）：级别过滤、格式化、在文本环与直写 sink 之间选择通路。
-// 线程：log_install_direct 只在启动阶段单线程调用一次；其余函数任意任务可调用（禁止 ISR）。
-// 堆档位：无（格式化缓冲约 0.2 KB 在调用方栈上）。
+// 线程：log_install_direct 只在启动阶段单线程调用一次；类别级别表为原子 u32（CAS 更新）；其余函数任意任务可调用（禁止
+// ISR）。 堆档位：无（格式化缓冲约 0.2 KB 在调用方栈上）。
 
 #include "fw/Log.hpp"
 
@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "TraceInternal.hpp"
+#include "fw/LogC.h"
 
 namespace fw {
 
@@ -27,7 +28,7 @@ std::atomic<LogSinkFn> s_direct_fn{nullptr};
 void *s_direct_ctx = nullptr;
 TraceClockFn s_direct_clock = nullptr;
 
-constinit std::atomic<uint8_t> s_level{static_cast<uint8_t>(LogLevel::kInfo)};
+constinit std::atomic<uint32_t> s_levels{kLogLevelsDefault};
 constinit std::atomic<uint32_t> s_lost{0U};
 
 constexpr std::array<std::string_view, static_cast<std::size_t>(TraceCat::kCount)> kCatNames = {
@@ -90,14 +91,44 @@ Result log_install_direct(LogSinkFn fn, void *ctx, TraceClockFn clock) noexcept
     return Result::kOk;
 }
 
-void log_set_level(LogLevel level) noexcept
+void log_set_cat_level(TraceCat cat, LogLevel level) noexcept
 {
-    s_level.store(static_cast<uint8_t>(clamp_level(level)), std::memory_order_relaxed);
+    const auto index = static_cast<uint32_t>(cat);
+    if (index >= static_cast<uint32_t>(TraceCat::kCount)) {
+        return;
+    }
+    const uint32_t shift = index * kLogLevelBits;
+    const uint32_t field = (static_cast<uint32_t>(clamp_level(level)) & kLogLevelFieldMask) << shift;
+    uint32_t cur = s_levels.load(std::memory_order_relaxed);
+    // CAS 循环：多个任务同时改不同类别时互不覆盖。
+    while (!s_levels.compare_exchange_weak(cur, (cur & ~(kLogLevelFieldMask << shift)) | field,
+                                           std::memory_order_relaxed)) {
+    }
 }
 
-LogLevel log_level() noexcept
+LogLevel log_cat_level(TraceCat cat) noexcept
 {
-    return static_cast<LogLevel>(s_level.load(std::memory_order_relaxed));
+    const auto index = static_cast<uint32_t>(cat);
+    if (index >= static_cast<uint32_t>(TraceCat::kCount)) {
+        return LogLevel::kError;
+    }
+    const uint32_t field = (s_levels.load(std::memory_order_relaxed) >> (index * kLogLevelBits)) & kLogLevelFieldMask;
+    return static_cast<LogLevel>(field);
+}
+
+void log_set_levels(uint32_t packed) noexcept
+{
+    uint32_t clamped = 0U;
+    for (uint32_t i = 0U; i < static_cast<uint32_t>(TraceCat::kCount); ++i) {
+        const auto level = static_cast<LogLevel>((packed >> (i * kLogLevelBits)) & kLogLevelFieldMask);
+        clamped |= static_cast<uint32_t>(clamp_level(level)) << (i * kLogLevelBits);
+    }
+    s_levels.store(clamped, std::memory_order_relaxed);
+}
+
+uint32_t log_levels() noexcept
+{
+    return s_levels.load(std::memory_order_relaxed);
 }
 
 bool log_enabled(LogLevel level, TraceCat cat) noexcept
@@ -105,11 +136,8 @@ bool log_enabled(LogLevel level, TraceCat cat) noexcept
     if ((level > kLogMaxLevel) || (static_cast<uint32_t>(cat) >= static_cast<uint32_t>(TraceCat::kCount))) {
         return false;
     }
-    // 错误与警告不受类别开关约束：现场排查时最需要它们，而类别默认全关。
-    if (level <= LogLevel::kWarn) {
-        return true;
-    }
-    return (level <= log_level()) && trace_on(cat);
+    // 与追踪掩码无关：只看该类别的日志级别（kError 是最低可设级别，因此错误总会记录）。
+    return level <= log_cat_level(cat);
 }
 
 void log_line(LogLevel level, TraceCat cat, const char *fmt, ...) noexcept
@@ -242,6 +270,12 @@ std::size_t log_format_line(std::span<char> out, const LogHeader &hdr, std::span
     return pos;
 }
 
+static_assert(FW_LOG_CAT_SYS == static_cast<int>(TraceCat::kSys), "LogC.h category values must match TraceCat");
+static_assert(FW_LOG_CAT_GNSS == static_cast<int>(TraceCat::kGnss), "LogC.h category values must match TraceCat");
+static_assert(FW_LOG_CAT_LINK == static_cast<int>(TraceCat::kLink), "LogC.h category values must match TraceCat");
+static_assert(FW_LOG_LEVEL_DEBUG == static_cast<int>(LogLevel::kDebug), "LogC.h level values must match LogLevel");
+static_assert(FW_LOG_LEVEL_ERROR == static_cast<int>(LogLevel::kError), "LogC.h level values must match LogLevel");
+
 LogStats log_stats() noexcept
 {
     LogStats st{};
@@ -250,3 +284,17 @@ LogStats log_stats() noexcept
 }
 
 } // namespace fw
+
+extern "C" void fw_log_c(int level, int cat, const char *fmt, ...)
+{
+    if ((level < 0) || (level > static_cast<int>(fw::LogLevel::kDebug)) || (cat < 0) ||
+        (cat >= static_cast<int>(fw::TraceCat::kCount))) {
+        return;
+    }
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    va_list ap;
+    va_start(ap, fmt);
+    fw::vlog_line(static_cast<fw::LogLevel>(level), static_cast<fw::TraceCat>(cat), fmt, ap);
+    va_end(ap);
+    // NOLINTEND(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+}

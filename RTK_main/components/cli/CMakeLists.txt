@@ -4,7 +4,7 @@
 idf_component_register(
     SRCS "src/Console.cpp" "src/Parse.cpp" "src/Reply.cpp" "src/Out.cpp"
     INCLUDE_DIRS "include"
-    REQUIRES console esp_system esp_driver_uart
+    REQUIRES console esp_system esp_driver_uart app_fw
     PRIV_REQUIRES log freertos pthread)
 
 # IDF 宏会触发 -Wold-style-cast/-Wconversion/-Wundef，按 AGENTS.md §3 不开启这三项。

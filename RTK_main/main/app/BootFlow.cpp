@@ -13,7 +13,7 @@
 #include "esp_bt_device.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
-#include "esp_log.h"
+#include "fw/Log.hpp"
 #include "esp_system.h"
 #include "esp_timer.h"
 
@@ -25,8 +25,6 @@
 #include "support/ResetReason.hpp"
 
 namespace {
-
-constexpr const char *kTag = "app";
 
 #if defined(CONFIG_RTK_BOOT_VERBOSE) && CONFIG_RTK_BOOT_VERBOSE
 constexpr bool kBootVerbose = true;
@@ -62,12 +60,16 @@ app::BootHeap heap_hook() noexcept
     return heap;
 }
 
+/**
+ * @brief  拉高电源保持脚，松开按键后仍保持供电
+ * @retval true 成功；false GPIO 配置失败（已记 E 级日志）
+ */
 bool enable_power_hold() noexcept
 {
     // 保留基线 GPIO26 高有效的电源保持逻辑；本任务不执行硬件动作。
     const esp_err_t level_err = gpio_set_level(GPIO_NUM_26, 1U);
     if (level_err != ESP_OK) {
-        ESP_LOGE(kTag, "power hold level failed: %s", esp_err_to_name(level_err));
+        FW_LOGE(fw::TraceCat::kSys, "power hold level failed: %s", esp_err_to_name(level_err));
         return false;
     }
     gpio_config_t power_hold{};
@@ -78,33 +80,42 @@ bool enable_power_hold() noexcept
     power_hold.intr_type = GPIO_INTR_DISABLE;
     const esp_err_t power_err = gpio_config(&power_hold);
     if (power_err != ESP_OK) {
-        ESP_LOGE(kTag, "power hold init failed: %s", esp_err_to_name(power_err));
+        FW_LOGE(fw::TraceCat::kSys, "power hold init failed: %s", esp_err_to_name(power_err));
         return false;
     }
     return true;
 }
 
-/** 步骤 1：电源保持；失败时控制台尚未启动，只记录。 */
+/**
+ * @brief  启动步骤 1：安装日志直写通道（此后启动日志带时间戳与类别），再做电源保持
+ * @param  ctx: 启动上下文（未用）
+ * @retval kOk 成功；kFail 电源保持失败
+ */
 app::BootResult step_power(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
+    (void)app::install_direct_log(); // 只会因重复安装失败，此时已有通道可用
     return enable_power_hold() ? app::BootResult::kOk : app::BootResult::kFail;
 }
 
-/** 步骤 2：横幅与复位原因；PANIC/看门狗/欠压额外给一行警告。 */
+/**
+ * @brief  启动步骤 2：横幅与复位原因；PANIC/看门狗/欠压用 W 级
+ * @param  ctx: 启动上下文（未用）
+ * @retval kOk 总是
+ */
 app::BootResult step_banner(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
     const esp_reset_reason_t reason = esp_reset_reason();
     const char *name = app::reset_reason_name(reason);
-    cli::out_printf("=================================\r\n");
     // 版本串短于 int 上限，精度转换安全。
-    cli::out_printf(" E1-Lite RTK_main %.*s\r\n", static_cast<int>(app::kAppVersion.size()), app::kAppVersion.data());
-    cli::out_printf("=================================\r\n");
-    cli::out_printf("Reset: %s\r\n", name);
+    FW_LOGI(fw::TraceCat::kSys, "E1-Lite RTK_main %.*s", static_cast<int>(app::kAppVersion.size()),
+            app::kAppVersion.data());
     if ((reason == ESP_RST_PANIC) || (reason == ESP_RST_INT_WDT) || (reason == ESP_RST_TASK_WDT) ||
         (reason == ESP_RST_BROWNOUT)) {
-        cli::out_printf("Warning: last reset was %s\r\n", name);
+        FW_LOGW(fw::TraceCat::kSys, "reset reason %s", name);
+    } else {
+        FW_LOGI(fw::TraceCat::kSys, "reset reason %s", name);
     }
     return app::BootResult::kOk;
 }
@@ -310,15 +321,32 @@ void handle_degrade(app::BootCtx &ctx, const char *reason) noexcept
 
 constexpr app::BootHooks kBootHooks{&now_ms_hook, &heap_hook, &handle_degrade};
 
-/** 成功路径的单行摘要；数据全部来自 DataCenter，不额外探测硬件。 */
+/**
+ * @brief  启动日志之后把组件日志切到文本环（由 trace_out 与 trace 事件按时间合并输出）
+ * @note   放在 REPL 放行前：此后的日志异步输出，不阻塞调用任务；debug 未就绪时继续直写。
+ */
+void attach_debug_log() noexcept
+{
+#if FW_TRACE_ENABLED
+    app::DebugModule &debug = app::app_context().debug;
+    if (debug.task_running()) {
+        (void)debug.attach_log(); // 失败只意味着继续走直写通道
+    }
+#endif
+}
+
+/**
+ * @brief  成功路径的启动摘要（SYS I 级日志）；数据全部来自 DataCenter，不额外探测硬件
+ * @param  records: 已执行的启动步骤记录（用于总耗时）
+ */
 void print_boot_summary(std::span<const app::BootRecord> records) noexcept
 {
     app::AppContext &self = app::app_context();
     const auto system = self.data.system_status.read();
     const auto sessions = self.data.sessions.read();
     const auto link = self.data.link_status.read();
-    cli::out_printf("Storage online, SN %s, whitelist %u\r\n", system.sn.data(),
-                    static_cast<unsigned>(link.whitelist_count));
+    FW_LOGI(fw::TraceCat::kSys, "storage online, SN %s, whitelist %u", system.sn.data(),
+            static_cast<unsigned>(link.whitelist_count));
     core::BtAddr address{};
     // 蓝牙已在链路执行器 init 中启用，此处取控制器地址；未启用时保持全零。
     if (const uint8_t *raw = esp_bt_dev_get_address(); raw != nullptr) {
@@ -327,20 +355,20 @@ void print_boot_summary(std::span<const app::BootRecord> records) noexcept
     }
     std::array<char, app::kMacStrBuf> mac{};
     app::format_mac(address, mac);
-    cli::out_printf("Bluetooth online, %s %s, %u/%u sessions\r\n", system.device_name.data(), mac.data(),
-                    static_cast<unsigned>(sessions.count), static_cast<unsigned>(app::kMaxSessions));
+    FW_LOGI(fw::TraceCat::kSys, "bluetooth online, %s %s, %u/%u sessions", system.device_name.data(), mac.data(),
+            static_cast<unsigned>(sessions.count), static_cast<unsigned>(app::kMaxSessions));
 #if RTK_GNSS_ENABLED
     const auto gnss = self.data.gnss_status.read();
     // 状态槽尚未被 GNSS 模块 poll 刷新时回落到 Kconfig 默认波特率。
     const uint32_t baud = gnss.host_baud != 0U ? gnss.host_baud : static_cast<uint32_t>(CONFIG_RTK_GNSS_DEFAULT_BAUD);
-    cli::out_printf("GNSS UART%d started, %u baud\r\n", CONFIG_RTK_GNSS_UART_NUM, static_cast<unsigned>(baud));
+    FW_LOGI(fw::TraceCat::kSys, "GNSS UART%d started, %u baud", CONFIG_RTK_GNSS_UART_NUM, static_cast<unsigned>(baud));
 #endif
     const uint32_t total_ms = (records.back().start_ms + records.back().took_ms) - records.front().start_ms;
     const uint32_t free_heap = esp_get_free_heap_size();
     // 千位字节转 KB 十位小数；上限远小于 uint32。
-    cli::out_printf("Boot %u ms, heap %u.%u KB free\r\n", static_cast<unsigned>(total_ms),
-                    static_cast<unsigned>(free_heap / kBytesPerKb),
-                    static_cast<unsigned>((free_heap % kBytesPerKb) * kTenthsPerKb / kBytesPerKb));
+    FW_LOGI(fw::TraceCat::kSys, "boot done in %u ms, heap %u.%u KB free", static_cast<unsigned>(total_ms),
+            static_cast<unsigned>(free_heap / kBytesPerKb),
+            static_cast<unsigned>((free_heap % kBytesPerKb) * kTenthsPerKb / kBytesPerKb));
 }
 
 } // namespace
@@ -352,6 +380,10 @@ std::span<const BootRecord> boot_records() noexcept
     return std::span{s_boot_records}.first(s_boot_executed);
 }
 
+/**
+ * @brief  按步骤表完成启动；任一步失败则回滚并降级为 console-only，最后启动 REPL
+ * @note   只在 app_main 任务调用一次。
+ */
 void AppContext::boot() noexcept
 {
     BootBuffers bufs{};
@@ -368,10 +400,11 @@ void AppContext::boot() noexcept
             continue;
         }
         if (record.reason != nullptr) {
-            cli::out_printf("%s failed: %s, console-only\r\n", record.name, record.reason);
+            FW_LOGE(fw::TraceCat::kSys, "boot step %s failed: %s, console-only", record.name, record.reason);
         } else {
-            cli::out_printf("%s failed, console-only\r\n", record.name);
+            FW_LOGE(fw::TraceCat::kSys, "boot step %s failed, console-only", record.name);
         }
+        attach_debug_log();
         run_console(); // 降级同样放行 REPL：console-only 阶段仍可用诊断命令
         return;
     }
@@ -379,6 +412,7 @@ void AppContext::boot() noexcept
     if (kBootVerbose) {
         print_boot_table(executed);
     }
+    attach_debug_log();
     run_console(); // 最后一步：摘要之后才出现提示符
 }
 

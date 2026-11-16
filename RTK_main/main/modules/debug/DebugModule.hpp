@@ -73,8 +73,18 @@ public:
         storage_bound_ = false;
     }
 
-    /** 启动前单线程：初始化环并安装 sink 与 SPP 钩子。幂等，重复调用返回 kOk；未绑定存储返回 kInvalidState。 */
+    /** 启动前单线程：初始化两个环、安装 trace sink 与 SPP 钩子。幂等，重复调用返回 kOk；未绑定存储返回 kInvalidState。
+     */
     [[nodiscard]] fw::Result init() noexcept;
+
+    /**
+     * @brief  把组件日志从直写通路切到文本环（ADR-0009 §2.12）
+     * @retval kOk 已切换（重复调用也返回 kOk）
+     * @retval kInvalidState init 未成功
+     * @note   启动任务在启动摘要之后、REPL 之前调用：启动期日志同步直写、按序出现在提示符之前，
+     *         运行期日志再交给 trace_out 与 trace 事件按时间合并。
+     */
+    [[nodiscard]] fw::Result attach_log() noexcept;
 
     /** 创建静态输出任务；重复调用返回 kBusy。仅执行器启动阶段调用。 */
     [[nodiscard]] fw::Result start() noexcept;
@@ -99,6 +109,21 @@ public:
     static fw::Result save_report(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
     static fw::Result load_hex(void *obj, std::span<const uint8_t> in) noexcept;
     static fw::Result save_hex(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    /**
+     * @brief  NVS dbg/loglv → 各类别日志级别（打包表，每类别 2 bit）
+     * @param  obj: 未用（单例）
+     * @param  in: 4 字节小端 u32
+     * @retval kOk 已应用；kInvalidArg 长度不对
+     */
+    static fw::Result load_loglv(void *obj, std::span<const uint8_t> in) noexcept;
+    /**
+     * @brief  各类别日志级别 → NVS dbg/loglv
+     * @param  obj: 未用（单例）
+     * @param  out: 输出缓冲（≥ 4 字节）
+     * @param[out] len: 写入字节数
+     * @retval kOk 成功；kNoSpace 缓冲不足
+     */
+    static fw::Result save_loglv(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
 
     /** 报告周期（秒，0 = 关闭）。跨任务读，非 ISR。 */
     [[nodiscard]] uint16_t report_period_s() const noexcept
@@ -164,6 +189,7 @@ private:
     fw::LogRing log_ring_{};
     rtos::BootTask task_{};
     bool installed_ = false;
+    bool log_attached_ = false;
     uint16_t report_s_ = 0;
     uint32_t last_report_ms_ = 0;
     bool report_started_ = false;

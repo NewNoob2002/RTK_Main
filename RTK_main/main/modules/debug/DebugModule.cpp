@@ -113,6 +113,10 @@ fw::Status DebugModule::bind_storage(const StorageView &storage) noexcept
     return fw::Status::kOk;
 }
 
+/**
+ * @brief  安装 trace 环与 spp 钩子，从 NVS 恢复 trace 掩码、日志级别与报告周期
+ * @retval fw::Result::kOk 成功；kInvalidState 存储未绑定
+ */
 fw::Result DebugModule::init() noexcept
 {
     // 幂等：app_main 在 storage.init() 之前先装环（要接住启动期的 kStore 事件），
@@ -137,15 +141,27 @@ fw::Result DebugModule::init() noexcept
     if (log_result != fw::Result::kOk) {
         return log_result;
     }
-    // 文本日志通道（ADR-0009 §2.11）与追踪环共用 trace_out 任务，安装顺序不影响。
-    const fw::Result log_install_result = fw::log_install(&fw::LogRing::sink, &log_ring_);
-    if (log_install_result != fw::Result::kOk) {
-        return log_install_result;
-    }
+    // 文本环此处只初始化；启动结束时 attach_log() 才安装（ADR-0009 §2.12），启动期日志走直写。
     // storage 在启动早期就把 NVS 掩码写进全局原子量；这里不覆盖，避免丢掉已加载的设置。
     fw::trace_set_mask(fw::trace_mask());
     spp_server_set_trace_hook(&spp_trace_forward);
     installed_ = true;
+    return fw::Result::kOk;
+}
+
+fw::Result DebugModule::attach_log() noexcept
+{
+    if (log_attached_) {
+        return fw::Result::kOk;
+    }
+    if (!installed_) {
+        return fw::Result::kInvalidState;
+    }
+    const fw::Result result = fw::log_install(&fw::LogRing::sink, &log_ring_);
+    if (result != fw::Result::kOk) {
+        return result;
+    }
+    log_attached_ = true;
     return fw::Result::kOk;
 }
 
@@ -274,6 +290,26 @@ fw::Result DebugModule::save_hex(const void * /*obj*/, std::span<uint8_t> out, s
         return fw::Result::kNoSpace;
     }
     write_u32(fw::log_hex_mask(), out);
+    len = 4U;
+    return fw::Result::kOk;
+}
+
+fw::Result DebugModule::load_loglv(void * /*obj*/, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != 4U) {
+        return fw::Result::kInvalidArg;
+    }
+    // log_set_levels 按编译期上限截断每个字段并忽略未用高位。
+    fw::log_set_levels(read_u32(in));
+    return fw::Result::kOk;
+}
+
+fw::Result DebugModule::save_loglv(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
+{
+    if (out.size() < 4U) {
+        return fw::Result::kNoSpace;
+    }
+    write_u32(fw::log_levels(), out);
     len = 4U;
     return fw::Result::kOk;
 }

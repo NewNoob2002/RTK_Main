@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "esp_err.h"
-#include "esp_log.h"
+#include "fw/LogC.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -17,22 +17,26 @@
 #define NVS_STORE_KEY_SN  "sn"
 #define NVS_STORE_KEY_ALM "alarm_wl"
 
+/**
+ * @brief  初始化 NVS 分区；分区已满或版本不符时擦除后重试一次
+ * @retval ESP_OK 成功；其他为 nvs_flash 错误码（已记 E 级日志）
+ */
 esp_err_t nvs_store_init(void)
 {
     esp_err_t err = nvs_flash_init();
 
     if ((err == ESP_ERR_NVS_NO_FREE_PAGES) || (err == ESP_ERR_NVS_NEW_VERSION_FOUND)) {
-        ESP_LOGW(NVS_STORE_TAG, "nvs init 0x%x, erase nvs partition and retry", err);
+        FW_CLOGW(FW_LOG_CAT_STORE, "nvs init 0x%x, erase nvs partition and retry", err);
         err = nvs_flash_erase();
         if (err != ESP_OK) {
-            ESP_LOGE(NVS_STORE_TAG, "nvs erase failed: %s", esp_err_to_name(err));
+            FW_CLOGE(FW_LOG_CAT_STORE, "nvs erase failed: %s", esp_err_to_name(err));
             return err;
         }
         err = nvs_flash_init();
     }
 
     if (err != ESP_OK) {
-        ESP_LOGE(NVS_STORE_TAG, "nvs init failed: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_STORE, "nvs init failed: %s", esp_err_to_name(err));
     }
     return err;
 }

@@ -11,6 +11,7 @@
 
 #include "fw/Lock.hpp"
 #include "fw/Result.hpp"
+#include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
 #include "fw/Trace.hpp"
 #include "unity.h"
@@ -124,14 +125,14 @@ void test_log_install_validation_and_once()
 
 void test_tlog_respects_category_mask()
 {
-    // 未打开类别时 tlog 连格式化都不做，环里不应出现记录。
-    TEST_ASSERT_FALSE(fw::trace_on(fw::TraceCat::kGnss));
+    // 类别日志级别低于 I 时 tlog 连格式化都不做，环里不应出现记录（ADR-0009 §2.12：与追踪掩码无关）。
+    fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kWarn);
     // tlog 是冻结的 printf 风格接口（ADR-0009 §3），无法改成模板 vararg。
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     fw::tlog(fw::TraceCat::kGnss, "should be dropped");
     TEST_ASSERT_EQUAL_UINT32(0U, s_ring.stats().pushed);
 
-    fw::trace_set_mask(fw::trace_bit(fw::TraceCat::kGnss));
+    fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kDebug);
     // 类别关闭时不应触碰时钟：时间戳只在真正要写记录时才取。
     TEST_ASSERT_EQUAL_UINT32(0U, s_clock_value);
 }
@@ -186,8 +187,8 @@ void test_tlog_hex_two_level_mask()
     for (size_t i = 0U; i < bytes.size(); ++i) {
         bytes[i] = static_cast<uint8_t>(i);
     }
-    // 级别一：类别开、十六进制关 → 不写记录。
-    TEST_ASSERT_TRUE(fw::trace_on(fw::TraceCat::kGnss));
+    // 级别一：类别 D 级、十六进制关 → 不写记录。
+    TEST_ASSERT_TRUE(fw::log_enabled(fw::LogLevel::kDebug, fw::TraceCat::kGnss));
     TEST_ASSERT_FALSE(fw::log_hex_on(fw::TraceCat::kGnss));
     const uint32_t pushed_before = s_ring.stats().pushed;
     fw::tlog_hex(fw::TraceCat::kGnss, bytes);
@@ -211,8 +212,8 @@ void test_tlog_hex_two_level_mask()
     TEST_ASSERT_EQUAL_UINT8(0U, out[0]);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::kLogHexMax - 1U), out[copied - 1U]);
 
-    // 类别关掉后即使十六进制掩码还在，也不再转储。
-    fw::trace_set_mask(0U);
+    // 类别降到 I 级后即使十六进制掩码还在，也不再转储。
+    fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kInfo);
     fw::tlog_hex(fw::TraceCat::kGnss, bytes);
     TEST_ASSERT_EQUAL_UINT32(pushed_before + 1U, s_ring.stats().pushed);
     // 越界类别不得崩溃。

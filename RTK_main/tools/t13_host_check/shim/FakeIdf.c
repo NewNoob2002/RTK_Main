@@ -14,6 +14,7 @@
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
 #include "esp_log.h"
+#include "fw/LogC.h"
 #include "esp_spp_api.h"
 #include "freertos/task.h"
 
@@ -795,6 +796,19 @@ void fake_log(const char *level, const char *tag, const char *fmt, ...)
     va_list ap;
 
     fprintf(stderr, "%s (%s) ", level, tag);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+}
+
+/* fw/LogC.h 替身：host 上没有 app_fw 的 C++ 实现，级别字母 + 类别号写 stderr，回归不看日志文本。 */
+void fw_log_c(int level, int cat, const char *fmt, ...)
+{
+    static const char kLevels[] = "EWID";
+    va_list ap;
+
+    fprintf(stderr, "%c (cat%d) ", ((level >= 0) && (level < 4)) ? kLevels[level] : '?', cat);
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);

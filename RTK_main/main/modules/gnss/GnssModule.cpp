@@ -1,6 +1,6 @@
 // GNSS 模块实现（ADR-0010 §2.7）：UART 收发、StreamDemux 分流、NMEA 解析、控制器轮询、RTCM 下发与 NVS 绑定。
 // 线程：init() 启动前单线程；start()/wait()/poll()/on_command 仅 kIo 任务；keys/load/save 由 storage 与 kIo 调用。
-// 均非 ISR；不分配堆。实时路径只用 GnssTrace；文本诊断经 fw::tlog()（ADR-0009 §2.11）。
+// 均非 ISR；不分配堆。实时路径只用 GnssTrace；文本诊断经 FW_LOG*（ADR-0009 §2.12）：状态变化 I，逐帧/逐句 D。
 
 #include "modules/gnss/GnssModule.hpp"
 
@@ -361,6 +361,10 @@ fw::Result GnssModule::start() noexcept
     return fw::Result::kOk;
 }
 
+/**
+ * @brief  等 UART 数据或命令事件，最长 max_ms
+ * @param  max_ms: 最长等待（ms）
+ */
 void GnssModule::wait(uint32_t max_ms) noexcept
 {
     if (!initialized_) {
@@ -383,8 +387,8 @@ void GnssModule::wait(uint32_t max_ms) noexcept
     }
     const auto &dstats = stream_demux().stats();
     if (dstats.unknown_bytes > prev_unknown_bytes_) {
-        fw::tlog(fw::TraceCat::kGnss, "%lu unknown bytes dropped",
-                 static_cast<unsigned long>(dstats.unknown_bytes - prev_unknown_bytes_));
+        FW_LOGD(fw::TraceCat::kGnss, "%lu unknown bytes dropped",
+                static_cast<unsigned long>(dstats.unknown_bytes - prev_unknown_bytes_));
         prev_unknown_bytes_ = dstats.unknown_bytes;
     }
 }
@@ -572,12 +576,17 @@ void GnssModule::send_raw(const fw::Command &cmd, fw::CommandResult &result) noe
     result.status = fw::Result::kOk;
 }
 
+/**
+ * @brief  处理分流器交付的一帧：喂控制器、应用输出，并记 D 级帧日志
+ * @param  decoder: 识别出该帧的解码器
+ * @param  frame: 完整帧字节
+ */
 void GnssModule::handle_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept
 {
     // 文本日志不经中断路径：本函数只由 kIo 任务的 feed() 调用（ADR-0009 §2.11）。
     std::array<char, kLogTagBytes> tag{};
     controller().receiver().frame_tag(decoder, frame, tag);
-    fw::tlog(fw::TraceCat::kGnss, "%s, %lu bytes", tag.data(), static_cast<unsigned long>(frame.size()));
+    FW_LOGD(fw::TraceCat::kGnss, "%s, %lu bytes", tag.data(), static_cast<unsigned long>(frame.size()));
     fw::tlog_hex(fw::TraceCat::kGnss, frame);
 
     const uint32_t now = rtos::now_ms();
@@ -629,6 +638,13 @@ void GnssModule::handle_frame(const demux::Decoder &decoder, std::span<const uin
     }
 }
 
+/**
+ * @brief  分流器拒收字节：记 D 级日志与可选 hex 转储
+ * @param  decoder: 拒收的解码器
+ * @param  prefix: 被拒收的字节
+ * @param  cause: 拒收原因
+ * @param  last: 是否为本次重同步的最后一个拒收
+ */
 void GnssModule::handle_reject(const demux::Decoder &decoder, std::span<const uint8_t> prefix, demux::RejectCause cause,
                                bool last) noexcept
 {
@@ -639,11 +655,15 @@ void GnssModule::handle_reject(const demux::Decoder &decoder, std::span<const ui
     std::array<char, kRejectReasonBytes> reason{};
     const std::size_t len = (decoder.explain != nullptr) ? decoder.explain(prefix, reason) : 0U;
     const char *text = (len != 0U) ? reason.data() : reject_cause_name(cause);
-    fw::tlog(fw::TraceCat::kGnss, "%s rejected %lu bytes: %s", decoder.name, static_cast<unsigned long>(prefix.size()),
-             text);
+    FW_LOGD(fw::TraceCat::kGnss, "%s rejected %lu bytes: %s", decoder.name, static_cast<unsigned long>(prefix.size()),
+            text);
     fw::tlog_hex(fw::TraceCat::kGnss, prefix);
 }
 
+/**
+ * @brief  推进 GNSS 控制器状态机并执行其动作（发命令、改波特率、上电）
+ * @param  now_ms: 当前时间（ms）
+ */
 void GnssModule::poll_controller(uint32_t now_ms) noexcept
 {
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
@@ -665,8 +685,8 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
             const fw::Result err = apply_baud(act.baud);
             if (fw::is_ok(err)) {
                 trace_gnss(GnssTrace::kBaud, act.baud, old_baud);
-                fw::tlog(fw::TraceCat::kGnss, "baud %lu (was %lu)", static_cast<unsigned long>(act.baud),
-                         static_cast<unsigned long>(old_baud));
+                FW_LOGI(fw::TraceCat::kGnss, "baud %lu (was %lu)", static_cast<unsigned long>(act.baud),
+                        static_cast<unsigned long>(old_baud));
             }
             break;
         }
@@ -687,8 +707,8 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
                 cmd_text[i] = std::bit_cast<char>(act.bytes[i]);
             }
             // text_len 不超过固定命令数组，远小于 INT_MAX。
-            fw::tlog(fw::TraceCat::kGnss, "%s <- \"%.*s\"", ::gnss::model_name(controller().detected().probe.model),
-                     static_cast<int>(text_len), cmd_text.data());
+            FW_LOGI(fw::TraceCat::kGnss, "%s <- \"%.*s\"", ::gnss::model_name(controller().detected().probe.model),
+                    static_cast<int>(text_len), cmd_text.data());
             const auto st = controller().state();
             const auto cur_stats = controller().stats();
             if ((st == ::gnss::State::kProbing) && (cur_stats.probes_sent > prev_ctrl_stats_.probes_sent)) {
@@ -720,6 +740,9 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
     update_controller_status();
 }
 
+/**
+ * @brief  把控制器状态变化与探测结果记为 I 级日志并更新快照
+ */
 void GnssModule::update_controller_status() noexcept
 {
     const auto cur_stats = controller().stats();
@@ -733,13 +756,13 @@ void GnssModule::update_controller_status() noexcept
     const auto cur_state = controller().state();
     if (cur_state != last_state_) {
         trace_gnss(GnssTrace::kState, static_cast<uint32_t>(cur_state), static_cast<uint32_t>(last_state_));
-        fw::tlog(fw::TraceCat::kGnss, "state %s -> %s", ::gnss::state_name(last_state_), ::gnss::state_name(cur_state));
+        FW_LOGI(fw::TraceCat::kGnss, "state %s -> %s", ::gnss::state_name(last_state_), ::gnss::state_name(cur_state));
         if ((last_state_ == ::gnss::State::kProbing) && (cur_state == ::gnss::State::kConfiguring)) {
             const auto det = controller().detected();
             const uint32_t baud = (det.baud != 0U) ? det.baud : host_baud_;
             trace_gnss(GnssTrace::kProbeHit, static_cast<uint32_t>(det.probe.model), baud);
-            fw::tlog(fw::TraceCat::kGnss, "detected %s at %lu", ::gnss::model_name(det.probe.model),
-                     static_cast<unsigned long>(baud));
+            FW_LOGI(fw::TraceCat::kGnss, "detected %s at %lu", ::gnss::model_name(det.probe.model),
+                    static_cast<unsigned long>(baud));
             step_idx_ = 0U;
             step_retry_ = 0U;
             step_sent_once_ = false;

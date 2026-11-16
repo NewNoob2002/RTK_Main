@@ -62,7 +62,7 @@ add_library(app_fw_off STATIC
     ${PROJ_ROOT}/components/app_fw/src/Log.cpp)
 target_include_directories(app_fw_off PUBLIC ${PROJ_ROOT}/components/app_fw/include)
 target_compile_features(app_fw_off PUBLIC cxx_std_20)
-target_compile_definitions(app_fw_off PUBLIC FW_TRACE_ENABLED=0)
+target_compile_definitions(app_fw_off PUBLIC FW_TRACE_ENABLED=0 FW_LOG_MAX_LEVEL=2)
 target_compile_options(app_fw_off PRIVATE -fno-exceptions -fno-rtti ${PROJ_CXX_STRICT})
 
 add_executable(test_tlog_off TestTlogOff.cpp)

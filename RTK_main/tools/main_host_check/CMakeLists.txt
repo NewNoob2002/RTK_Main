@@ -75,9 +75,10 @@ foreach(policy concurrent preempt)
     endforeach()
 endforeach()
 
-# Executor.cpp 通过 fw::trace 报告轮次超时/投递失败，因此要链 Trace.cpp。
+# Executor.cpp 通过 fw::trace 报告轮次超时/投递失败、经 FW_LOG* 报启动错误，因此要链 Trace.cpp、Tlog.cpp（文本环）与 Log.cpp。
 add_executable(executor_check ExecutorCheck.cpp ${PROJ_ROOT}/components/rtos/Executor.cpp
-    ${PROJ_ROOT}/components/app_fw/src/Trace.cpp)
+    ${PROJ_ROOT}/components/app_fw/src/Trace.cpp ${PROJ_ROOT}/components/app_fw/src/Tlog.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Log.cpp)
 target_include_directories(executor_check BEFORE PRIVATE shim)
 target_include_directories(executor_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/components/rtos/include ${PROJ_ROOT}/components/device_proto/include

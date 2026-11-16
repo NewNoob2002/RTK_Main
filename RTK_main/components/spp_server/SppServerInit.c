@@ -11,7 +11,7 @@
 #include "esp_bt_device.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
-#include "esp_log.h"
+#include "fw/LogC.h"
 #include "esp_spp_api.h"
 
 #include "SppServerPriv.h"
@@ -30,7 +30,13 @@
 #define SPP_SERVER_INIT_TIMEOUT_MS   (5000U)
 #define SPP_SERVER_UNINIT_TIMEOUT_MS (2000U)
 
-/* 逆序释放：Bluedroid 先于控制器。 */
+/**
+ * @brief  逆序释放蓝牙栈：Bluedroid 先于控制器
+ * @param  bluedroid_enabled: Bluedroid 已使能
+ * @param  bluedroid_inited: Bluedroid 已初始化
+ * @param  controller_enabled: 控制器已使能
+ * @param  controller_inited: 控制器已初始化
+ */
 static void spp_server_unwind(bool bluedroid_enabled, bool bluedroid_inited, bool controller_enabled,
                               bool controller_inited)
 {
@@ -39,25 +45,25 @@ static void spp_server_unwind(bool bluedroid_enabled, bool bluedroid_inited, boo
     if (bluedroid_enabled) {
         err = esp_bluedroid_disable();
         if (err != ESP_OK) {
-            ESP_LOGW(SPP_SERVER_TAG, "bluedroid disable: %s", esp_err_to_name(err));
+            FW_CLOGW(FW_LOG_CAT_SPP, "bluedroid disable: %s", esp_err_to_name(err));
         }
     }
     if (bluedroid_inited) {
         err = esp_bluedroid_deinit();
         if (err != ESP_OK) {
-            ESP_LOGW(SPP_SERVER_TAG, "bluedroid deinit: %s", esp_err_to_name(err));
+            FW_CLOGW(FW_LOG_CAT_SPP, "bluedroid deinit: %s", esp_err_to_name(err));
         }
     }
     if (controller_enabled) {
         err = esp_bt_controller_disable();
         if (err != ESP_OK) {
-            ESP_LOGW(SPP_SERVER_TAG, "controller disable: %s", esp_err_to_name(err));
+            FW_CLOGW(FW_LOG_CAT_SPP, "controller disable: %s", esp_err_to_name(err));
         }
     }
     if (controller_inited) {
         err = esp_bt_controller_deinit();
         if (err != ESP_OK) {
-            ESP_LOGW(SPP_SERVER_TAG, "controller deinit: %s", esp_err_to_name(err));
+            FW_CLOGW(FW_LOG_CAT_SPP, "controller deinit: %s", esp_err_to_name(err));
         }
     }
 }
@@ -160,7 +166,11 @@ static void spp_server_hw_state_clear(spp_server_hw_state_t *state)
     state->bluedroid_enabled = false;
 }
 
-/* 控制器 + Bluedroid。失败时在内部完成逆序释放。 */
+/**
+ * @brief  初始化并使能控制器与 Bluedroid；失败时在内部逆序释放
+ * @param[out] state: 各阶段完成标志
+ * @retval ESP_OK 成功；其他为 IDF 错误码
+ */
 static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
 {
     esp_err_t err = ESP_OK;
@@ -169,20 +179,20 @@ static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
 
     err = esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "mem release: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "mem release: %s", esp_err_to_name(err));
         return err;
     }
 
     err = esp_bt_controller_init(&bt_cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "controller init: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "controller init: %s", esp_err_to_name(err));
         return err;
     }
     state->controller_inited = true;
 
     err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "controller enable: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "controller enable: %s", esp_err_to_name(err));
         spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited, state->controller_enabled,
                           state->controller_inited);
         spp_server_hw_state_clear(state);
@@ -192,7 +202,7 @@ static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
 
     err = esp_bluedroid_init_with_cfg(&bd_cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "bluedroid init: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "bluedroid init: %s", esp_err_to_name(err));
         spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited, state->controller_enabled,
                           state->controller_inited);
         spp_server_hw_state_clear(state);
@@ -202,7 +212,7 @@ static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
 
     err = esp_bluedroid_enable();
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "bluedroid enable: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "bluedroid enable: %s", esp_err_to_name(err));
         spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited, state->controller_enabled,
                           state->controller_inited);
         spp_server_hw_state_clear(state);
@@ -213,7 +223,10 @@ static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
     return ESP_OK;
 }
 
-/* GAP/SPP 回调、SSP 参数与 SPP 初始化。失败时由调用方统一 unwind。 */
+/**
+ * @brief  注册 GAP/SPP 回调、设置 SSP 参数并发起 SPP 初始化
+ * @retval ESP_OK 成功；其他为 IDF 错误码（由调用方统一 unwind）
+ */
 static esp_err_t spp_server_profile_init(void)
 {
     esp_err_t err = ESP_OK;
@@ -223,25 +236,25 @@ static esp_err_t spp_server_profile_init(void)
 
     err = esp_bt_gap_register_callback(spp_server_gap_cb);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "gap callback: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "gap callback: %s", esp_err_to_name(err));
         return err;
     }
 
     err = esp_spp_register_callback(spp_server_cb);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "spp callback: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "spp callback: %s", esp_err_to_name(err));
         return err;
     }
 
     err = esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(iocap));
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "set iocap: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "set iocap: %s", esp_err_to_name(err));
         return err;
     }
 
     err = esp_bt_gap_set_pin(ESP_BT_PIN_TYPE_VARIABLE, 0, pin_code);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "set pin: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "set pin: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -250,7 +263,7 @@ static esp_err_t spp_server_profile_init(void)
     spp_cfg.tx_buffer_size = 0U;
     err = esp_spp_enhanced_init(&spp_cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "spp init: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "spp init: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -270,8 +283,13 @@ static EventBits_t spp_server_stage_bit(spp_server_stage_t stage)
     }
 }
 
-/* 等一个异步阶段完成：完成位未到 → ESP_ERR_TIMEOUT；否则在同一把锁下读取该阶段的实际状态
- * （回调先写状态、再置位），因此事件早于/晚于等待返回都能得到真实结果，不能用调用前的快照。 */
+/**
+ * @brief  等一个异步阶段完成并读取该阶段的实际状态
+ * @param  stage: 要等待的阶段
+ * @param  timeout_ms: 等待上限（ms）
+ * @retval ESP_OK 阶段成功；ESP_ERR_TIMEOUT 完成位未到；ESP_FAIL 阶段失败
+ * @note   回调先写状态再置位，在同一把锁下读取，事件早于或晚于等待返回都能得到真实结果。
+ */
 static esp_err_t spp_server_wait_stage(spp_server_stage_t stage, uint32_t timeout_ms)
 {
     const EventBits_t bit = spp_server_stage_bit(stage);
@@ -284,7 +302,7 @@ static esp_err_t spp_server_wait_stage(spp_server_stage_t stage, uint32_t timeou
 
     bits = xEventGroupWaitBits(s_spp.rtos.evt_group, bit, pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     if ((bits & bit) == 0U) {
-        ESP_LOGE(SPP_SERVER_TAG, "stage 0x%" PRIx32 " timeout", (uint32_t)bit);
+        FW_CLOGE(FW_LOG_CAT_SPP, "stage 0x%" PRIx32 " timeout", (uint32_t)bit);
         return ESP_ERR_TIMEOUT;
     }
     if (stage == SPP_SERVER_STAGE_UNINIT) {
@@ -296,13 +314,16 @@ static esp_err_t spp_server_wait_stage(spp_server_stage_t stage, uint32_t timeou
     taskEXIT_CRITICAL(&s_spp_mux);
     if (status != ESP_SPP_SUCCESS) {
         /* 回调里只记追踪；失败原因在这里（init 任务上下文）打印。 */
-        ESP_LOGE(SPP_SERVER_TAG, "stage 0x%" PRIx32 " failed, status %d", (uint32_t)bit, (int)status);
+        FW_CLOGE(FW_LOG_CAT_SPP, "stage 0x%" PRIx32 " failed, status %d", (uint32_t)bit, (int)status);
     }
     return (status == ESP_SPP_SUCCESS) ? ESP_OK : ESP_FAIL;
 }
 
-/* 任务上下文完成启动阶段：等 INIT、启动服务端、等 START、设置设备名与可发现模式。
- * 这些 API 都可能阻塞在 btc_transfer_context 上，因此绝不能放到回调里（QA-E-REVIEW 第 2 项）。 */
+/**
+ * @brief  任务上下文完成启动：等 INIT、启动服务端、等 START、设置设备名与可发现模式
+ * @retval ESP_OK 成功；其他为 IDF 错误码
+ * @note   这些 API 可能阻塞在 btc_transfer_context 上，绝不能放到回调里（QA-E-REVIEW 第 2 项）。
+ */
 static esp_err_t spp_server_bringup(void)
 {
     esp_err_t err = ESP_OK;
@@ -321,7 +342,7 @@ static esp_err_t spp_server_bringup(void)
 
     err = esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_SLAVE, 0, SPP_SERVER_SERVER_NAME);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "start srv: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "start srv: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -332,19 +353,21 @@ static esp_err_t spp_server_bringup(void)
 
     err = esp_bt_gap_set_device_name(s_spp.device_name);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "set name: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "set name: %s", esp_err_to_name(err));
         return err;
     }
 
     err = esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "set scan mode: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "set scan mode: %s", esp_err_to_name(err));
         return err;
     }
     return ESP_OK;
 }
 
-/* SPP 反初始化同样异步：发起后等 UNINIT_EVT，超时只告警（没有回滚手段）。 */
+/**
+ * @brief  发起 SPP 反初始化并等 UNINIT_EVT；超时只告警（没有回滚手段）
+ */
 static void spp_server_spp_deinit(void)
 {
     esp_err_t err = ESP_OK;
@@ -355,11 +378,11 @@ static void spp_server_spp_deinit(void)
     }
     err = esp_spp_deinit();
     if (err != ESP_OK) {
-        ESP_LOGW(SPP_SERVER_TAG, "spp deinit: %s", esp_err_to_name(err));
+        FW_CLOGW(FW_LOG_CAT_SPP, "spp deinit: %s", esp_err_to_name(err));
         return;
     }
     if (spp_server_wait_stage(SPP_SERVER_STAGE_UNINIT, SPP_SERVER_UNINIT_TIMEOUT_MS) != ESP_OK) {
-        ESP_LOGW(SPP_SERVER_TAG, "spp deinit ack missing");
+        FW_CLOGW(FW_LOG_CAT_SPP, "spp deinit ack missing");
     }
 }
 
@@ -473,6 +496,11 @@ esp_err_t spp_server_stop_boot(void)
     return err;
 }
 
+/**
+ * @brief  启动 SPP 服务端：蓝牙栈、协议、服务端与可发现模式
+ * @param  name: 蓝牙设备名
+ * @retval ESP_OK 成功；其他为失败阶段的 IDF 错误码（已回滚，之后只允许重启）
+ */
 esp_err_t spp_server_init(const char *name)
 {
     esp_err_t err = ESP_OK;
@@ -497,7 +525,7 @@ esp_err_t spp_server_init(const char *name)
 
     err = spp_server_objects_create();
     if (err != ESP_OK) {
-        ESP_LOGE(SPP_SERVER_TAG, "objects create: %s", esp_err_to_name(err));
+        FW_CLOGE(FW_LOG_CAT_SPP, "objects create: %s", esp_err_to_name(err));
         spp_server_objects_delete();
         return err;
     }

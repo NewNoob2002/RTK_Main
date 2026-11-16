@@ -1,4 +1,4 @@
-// fw/Log.hpp host 单元测试（ADR-0009 §2.12）：级别过滤（E/W 不受类别掩码、I 需类别、D 需运行期级别）、
+// fw/Log.hpp host 单元测试（ADR-0009 §2.12）：按类别级别过滤（默认 I、与追踪掩码无关）、C 接口、
 // 无 sink 时丢失计数、直写 sink 与文本环的通路选择（环优先）、记录头 level 字段、tlog 等价 kInfo、
 // 行格式（kInfo 无前缀、其他级别带 "X:"）、级别名解析与截断。
 // 全局 sink 只能安装一次，因此用例按顺序执行、相互依赖，顺序见 main()。
@@ -13,6 +13,7 @@
 
 #include "fw/Lock.hpp"
 #include "fw/Log.hpp"
+#include "fw/LogC.h"
 #include "fw/Result.hpp"
 #include "fw/Tlog.hpp"
 #include "fw/Trace.hpp"
@@ -96,12 +97,12 @@ std::string format(const fw::LogHeader &hdr, std::string_view text)
 
 } // namespace
 
-/** 什么都没装：E 级别计入丢失，I 级别（类别关）根本不进入通路、不计数。 */
+/** 什么都没装：E 级别计入丢失，D 级别（默认 I 级过滤）根本不进入通路、不计数。 */
 void test_lost_without_sink(void)
 {
     const uint32_t before = fw::log_stats().lost;
     FW_LOGE(fw::TraceCat::kGnss, "boom %d", 1);
-    FW_LOGI(fw::TraceCat::kGnss, "quiet");
+    FW_LOGD(fw::TraceCat::kGnss, "quiet");
     TEST_ASSERT_EQUAL_UINT32(before + 1U, fw::log_stats().lost);
 }
 
@@ -113,10 +114,12 @@ void test_install_direct_validation(void)
     TEST_ASSERT_EQUAL(fw::Result::kInvalidState, fw::log_install_direct(&direct_sink, &s_direct, &direct_clock));
 }
 
-/** 类别全关：E/W 照常输出，I/D 被过滤。 */
-void test_error_warn_ignore_category_mask(void)
+/** 默认所有类别 I：E/W/I 输出、D 过滤；与追踪掩码无关。 */
+void test_default_info_independent_of_trace(void)
 {
     fw::trace_set_mask(0U);
+    TEST_ASSERT_EQUAL_UINT32(fw::kLogLevelsDefault, fw::log_levels());
+    TEST_ASSERT_EQUAL(fw::LogLevel::kInfo, fw::log_cat_level(fw::TraceCat::kSys));
     s_direct = {};
     FW_LOGW(fw::TraceCat::kLink, "peer lost id=%u\n", 3U);
     TEST_ASSERT_EQUAL_UINT32(1U, s_direct.calls);
@@ -126,30 +129,51 @@ void test_error_warn_ignore_category_mask(void)
     TEST_ASSERT_EQUAL_STRING("peer lost id=3", s_direct.text.c_str()); // 结尾换行被削掉
     TEST_ASSERT_EQUAL_UINT16(s_direct.hdr.len, s_direct.hdr.total);
     FW_LOGI(fw::TraceCat::kLink, "info");
+    TEST_ASSERT_EQUAL_UINT32(2U, s_direct.calls);
     FW_LOGD(fw::TraceCat::kLink, "debug");
-    TEST_ASSERT_EQUAL_UINT32(1U, s_direct.calls);
+    TEST_ASSERT_EQUAL_UINT32(2U, s_direct.calls);
     TEST_ASSERT_TRUE(fw::log_enabled(fw::LogLevel::kError, fw::TraceCat::kSys));
     TEST_ASSERT_FALSE(fw::log_enabled(fw::LogLevel::kWarn, fw::TraceCat::kCount));
 }
 
-/** I 需要类别打开；D 还需要运行期级别 ≥ kDebug。 */
-void test_info_debug_need_category_and_level(void)
+/** 按类别设级别：只影响该类别；E 总是记录；整表读写与截断。 */
+void test_per_category_levels(void)
 {
     s_direct = {};
-    fw::trace_set_mask(fw::trace_bit(fw::TraceCat::kGnss));
-    TEST_ASSERT_EQUAL(fw::LogLevel::kInfo, fw::log_level()); // 默认
-    FW_LOGI(fw::TraceCat::kGnss, "probe ok");
-    FW_LOGI(fw::TraceCat::kLink, "other cat");
+    fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kDebug);
+    fw::log_set_cat_level(fw::TraceCat::kSpp, fw::LogLevel::kError);
     FW_LOGD(fw::TraceCat::kGnss, "detail");
     TEST_ASSERT_EQUAL_UINT32(1U, s_direct.calls);
-    fw::log_set_level(fw::LogLevel::kDebug);
-    FW_LOGD(fw::TraceCat::kGnss, "detail");
-    TEST_ASSERT_EQUAL_UINT32(2U, s_direct.calls);
     TEST_ASSERT_EQUAL(fw::LogLevel::kDebug, s_direct.hdr.level);
-    fw::log_set_level(fw::LogLevel::kWarn);
-    FW_LOGI(fw::TraceCat::kGnss, "suppressed");
+    FW_LOGD(fw::TraceCat::kLink, "other cat");
+    FW_LOGW(fw::TraceCat::kSpp, "suppressed");
+    TEST_ASSERT_EQUAL_UINT32(1U, s_direct.calls);
+    FW_LOGE(fw::TraceCat::kSpp, "always");
     TEST_ASSERT_EQUAL_UINT32(2U, s_direct.calls);
-    fw::log_set_level(fw::LogLevel::kInfo);
+    const uint32_t packed = fw::log_levels();
+    fw::log_set_levels(fw::log_levels_all(fw::LogLevel::kWarn));
+    TEST_ASSERT_EQUAL(fw::LogLevel::kWarn, fw::log_cat_level(fw::TraceCat::kGnss));
+    fw::log_set_levels(packed);
+    TEST_ASSERT_EQUAL(fw::LogLevel::kDebug, fw::log_cat_level(fw::TraceCat::kGnss));
+    TEST_ASSERT_EQUAL(fw::LogLevel::kError, fw::log_cat_level(fw::TraceCat::kSpp));
+    TEST_ASSERT_EQUAL(fw::LogLevel::kError, fw::log_cat_level(fw::TraceCat::kCount));
+    fw::log_set_cat_level(fw::TraceCat::kCount, fw::LogLevel::kDebug); // 越界忽略
+    TEST_ASSERT_EQUAL_UINT32(packed, fw::log_levels());
+    fw::log_set_levels(fw::kLogLevelsDefault);
+}
+
+/** C 接口与 C++ 宏走同一通路。 */
+void test_c_api(void)
+{
+    s_direct = {};
+    FW_CLOGW(FW_LOG_CAT_SPP, "c side %d", 5);
+    TEST_ASSERT_EQUAL_UINT32(1U, s_direct.calls);
+    TEST_ASSERT_EQUAL(fw::TraceCat::kSpp, s_direct.hdr.cat);
+    TEST_ASSERT_EQUAL(fw::LogLevel::kWarn, s_direct.hdr.level);
+    TEST_ASSERT_EQUAL_STRING("c side 5", s_direct.text.c_str());
+    fw_log_c(FW_LOG_LEVEL_ERROR, FW_LOG_CAT_SYS + 1, "bad cat");
+    fw_log_c(FW_LOG_LEVEL_DEBUG + 1, FW_LOG_CAT_SYS, "bad level");
+    TEST_ASSERT_EQUAL_UINT32(1U, s_direct.calls);
 }
 
 /** 超长文本截断并以 "..." 结尾。 */
@@ -170,7 +194,7 @@ void test_ring_takes_precedence(void)
     TEST_ASSERT_EQUAL(fw::Result::kOk, fw::log_install(&fw::LogRing::sink, &s_ring));
     s_direct = {};
     FW_LOGW(fw::TraceCat::kStore, "save failed key=%s", "sn");
-    fw::tlog(fw::TraceCat::kGnss, "legacy %d", 7); // kGnss 仍打开
+    fw::tlog(fw::TraceCat::kGnss, "legacy %d", 7); // 默认 I 级
     TEST_ASSERT_EQUAL_UINT32(0U, s_direct.calls);
 
     std::array<uint8_t, fw::kLogTextMax> out{};
@@ -227,8 +251,9 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_lost_without_sink);
     RUN_TEST(test_install_direct_validation);
-    RUN_TEST(test_error_warn_ignore_category_mask);
-    RUN_TEST(test_info_debug_need_category_and_level);
+    RUN_TEST(test_default_info_independent_of_trace);
+    RUN_TEST(test_per_category_levels);
+    RUN_TEST(test_c_api);
     RUN_TEST(test_truncation);
     RUN_TEST(test_ring_takes_precedence);
     RUN_TEST(test_format_line);

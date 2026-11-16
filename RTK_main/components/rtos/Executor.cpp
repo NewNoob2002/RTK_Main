@@ -5,7 +5,7 @@
 #include <limits>
 #include <string_view>
 
-#include "esp_log.h"
+#include "fw/Log.hpp"
 #include "esp_task_wdt.h"
 #include "rtos/CriticalSection.hpp"
 #include "rtos/EspStatus.hpp"
@@ -13,7 +13,6 @@
 
 namespace rtos {
 namespace {
-constexpr const char *kTag = "executor";
 
 TickType_t wait_ticks(uint32_t ms) noexcept
 {
@@ -43,6 +42,13 @@ fw::CommandResult dispatch_command(std::span<const fw::Module> modules, fw::Exec
 }
 } // namespace
 
+/**
+ * @brief  绑定模块表与静态存储并创建执行器任务
+ * @param  cfg: 任务名、优先级、核、周期等配置
+ * @param  modules: 本执行器轮询的模块表
+ * @param  storage: 队列、栈与 TCB 的静态存储
+ * @retval fw::Status::kOk 成功；参数或任务创建失败返回对应状态（已记 E 级日志）
+ */
 fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module> modules,
                           const ExecutorStorageView &storage) noexcept
 {
@@ -97,7 +103,8 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
         ok_[i] = fw::is_ok(status);
         if (!ok_[i]) {
             // Result 的底层类型为 uint8_t，扩展为 unsigned 无损。
-            ESP_LOGE(kTag, "module init failed: id=%u status=%u", module.id, static_cast<unsigned>(status));
+            FW_LOGE(fw::TraceCat::kExec, "module init failed: id=%u status=%u", module.id,
+                    static_cast<unsigned>(status));
         }
     }
     inited_ = true;
@@ -198,6 +205,10 @@ fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result, uin
     }
 }
 
+/**
+ * @brief  FreeRTOS 任务入口：等启动放行后进入主循环
+ * @param  arg: 指向本 Executor 的指针
+ */
 void Executor::task_entry(void *arg) noexcept
 {
     // RTOS 原样返回 start 传入的 Executor 指针，类型恢复安全。
@@ -219,12 +230,16 @@ void Executor::task_entry(void *arg) noexcept
                 self.ok_[i] = false;
             }
             // Result 为 uint8_t 枚举，转换为 unsigned 无损。
-            ESP_LOGE(kTag, "module start failed: id=%u status=%u", module.id, static_cast<unsigned>(status));
+            FW_LOGE(fw::TraceCat::kExec, "module start failed: id=%u status=%u", module.id,
+                    static_cast<unsigned>(status));
         }
     }
     self.run();
 }
 
+/**
+ * @brief  执行器主循环：轮询模块、投递命令、喂看门狗，收到停止请求后退出
+ */
 void Executor::run() noexcept
 {
     bool watchdog = false;
@@ -232,7 +247,7 @@ void Executor::run() noexcept
         const esp_err_t error = esp_task_wdt_add(nullptr);
         watchdog = error == ESP_OK;
         if (!watchdog) {
-            ESP_LOGW(kTag, "task wdt subscribe failed: %s", esp_err_to_name(error));
+            FW_LOGW(fw::TraceCat::kExec, "task wdt subscribe failed: %s", esp_err_to_name(error));
         }
     }
     bool pending = false;

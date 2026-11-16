@@ -16,8 +16,6 @@
 
 namespace {
 
-constexpr const char *kTag = "app";
-
 #if defined(ESP_PLATFORM)
 constinit std::array<app::GatedCommand, cli::kMaxCmds> s_command_gates{};
 constinit std::array<cli::Cmd, cli::kMaxCmds> s_gated_commands{};
@@ -62,6 +60,12 @@ void set_console_only() noexcept
 }
 
 #if defined(ESP_PLATFORM)
+bool install_direct_log() noexcept
+{
+    // 早于控制台 UART 重装：此前 cli::out_write 走 stdout（IDF 默认 UART0 VFS），之后走 UART 驱动，行格式不变。
+    return fw::log_install_direct(&direct_log_sink, nullptr, &rtos::now_ms) == fw::Result::kOk;
+}
+
 bool init_console() noexcept
 {
     constexpr const char *kConsolePrompt = "console> ";
@@ -98,7 +102,7 @@ bool init_console() noexcept
         }
     }
     if (cli::add(std::span{s_gated_commands}.first(used)) != ESP_OK) {
-        ESP_LOGE(kTag, "console add failed");
+        FW_LOGE(fw::TraceCat::kSys, "console add failed");
         return false;
     }
     // 动词表与命令表不是一一对应（system 命令表提供 status/log/sys 三组，link/config 没有动词组），
@@ -120,18 +124,14 @@ bool init_console() noexcept
     for (const auto &group : verb_groups) {
         const esp_err_t verbs_err = cli::add_verbs(group.name, group.summary, group.verbs);
         if (verbs_err != ESP_OK) {
-            ESP_LOGE(kTag, "console verbs failed: %s", esp_err_to_name(verbs_err));
+            FW_LOGE(fw::TraceCat::kSys, "console verbs failed: %s", esp_err_to_name(verbs_err));
             return false;
         }
     }
     const esp_err_t console_err = cli::init(kConsolePrompt);
     if (console_err != ESP_OK) {
-        ESP_LOGE(kTag, "console init failed: %s", esp_err_to_name(console_err));
+        FW_LOGE(fw::TraceCat::kSys, "console init failed: %s", esp_err_to_name(console_err));
         return false;
-    }
-    // 控制台输出通道已建立：此后组件日志（FW_LOG*）在文本环安装前直写控制台，不再丢失。
-    if (fw::log_install_direct(&direct_log_sink, nullptr, &rtos::now_ms) != fw::Result::kOk) {
-        ESP_LOGW(kTag, "component log direct sink not installed");
     }
     // 蓝牙控制器与 PHY 的 IDF 启动 INFO 已由 "Bluetooth online" 摘要行覆盖；需要时可用 `log` 命令调回。
     esp_log_level_set("BTDM_INIT", ESP_LOG_WARN);
@@ -146,7 +146,7 @@ void run_console() noexcept
     // init 失败（降级路径）时 run 返回 INVALID_STATE：没有可用控制台，只能记录。
     const esp_err_t err = cli::run();
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "console run failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "console run failed: %s", esp_err_to_name(err));
     }
 }
 #endif // ESP_PLATFORM

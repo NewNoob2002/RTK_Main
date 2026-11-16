@@ -40,6 +40,13 @@ void set_console_only() noexcept;
 void bind_executors() noexcept;
 
 /**
+ * @brief  安装组件日志直写 sink（ADR-0009 §2.12），使启动第一步起的 FW_LOG* 带时间戳与类别输出到控制台
+ * @retval false 已安装或参数无效（只可能是重复调用）
+ * @note   启动任务第一步调用；文本环由 DebugModule::attach_log 在 REPL 放行前接管。
+ */
+[[nodiscard]] bool install_direct_log() noexcept;
+
+/**
  * @brief  建立控制台输出通道并登记全部命令表（来自各模块清单），REPL 任务创建但不放行。
  * @retval false 失败（由 console 步骤降级）
  * @note   启动任务调用，须早于任何业务任务（会重装 UART0 驱动）。

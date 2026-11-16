@@ -29,7 +29,25 @@ constexpr const char *kAllCats = "all";
 constexpr const char *kHexSuffix = "hex";
 
 /**
- * @brief  `debug list`：打印两个环的统计、日志级别、报告周期与各类别开关
+ * @brief  打印各类别的追踪开关与日志级别（`debug list` 与 `debug log` 共用）
+ */
+void print_cat_table() noexcept
+{
+    const uint32_t mask = fw::trace_mask();
+    const uint32_t hex_mask = fw::log_hex_mask();
+    cli::out_printf("cat   trace log  summary\n");
+    constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
+    for (uint32_t index = 0U; index < kCount; ++index) {
+        const auto cat = static_cast<fw::TraceCat>(index);
+        const bool on = (mask & fw::trace_bit(cat)) != 0U;
+        const bool hex = (hex_mask & fw::trace_bit(cat)) != 0U;
+        cli::out_printf("%-5s %-5s %c%-3s %s\n", debug::trace_cat_name(cat), on ? "on" : "off",
+                        fw::log_level_char(fw::log_cat_level(cat)), hex ? "+hx" : "", debug::trace_cat_summary(cat));
+    }
+}
+
+/**
+ * @brief  `debug list`：打印两个环的统计、报告周期与各类别的追踪开关/日志级别
  * @param  argc: 参数个数（不接受额外参数）
  * @retval 0 成功；非 0 参数错误
  */
@@ -40,106 +58,139 @@ int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     const DebugModule &module = app_context().debug;
     const fw::TraceRingStats ring = module.ring_stats();
-    cli::out_printf("ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
+    cli::out_printf("trace ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
                     static_cast<unsigned>(DebugModule::kRingEvents), static_cast<unsigned>(module.ring_depth()),
                     static_cast<unsigned long>(ring.pushed), static_cast<unsigned long>(ring.dropped),
                     static_cast<unsigned>(ring.max_depth));
     const fw::LogRingStats log = module.log_ring_stats();
-    cli::out_printf("log ring bytes=%u used=%u pushed=%lu dropped=%lu max_used=%u\n",
+    cli::out_printf("log ring bytes=%u used=%u pushed=%lu dropped=%lu max_used=%u lost=%lu\n",
                     static_cast<unsigned>(DebugModule::kLogRingBytes), static_cast<unsigned>(module.log_ring_used()),
                     static_cast<unsigned long>(log.pushed), static_cast<unsigned long>(log.dropped),
-                    static_cast<unsigned>(log.max_used));
-    cli::out_printf("log level=%c (E/W always shown; I/D need category on) lost=%lu\n",
-                    fw::log_level_char(fw::log_level()), static_cast<unsigned long>(fw::log_stats().lost));
+                    static_cast<unsigned>(log.max_used), static_cast<unsigned long>(fw::log_stats().lost));
     cli::out_printf("report period=%us%s\n", static_cast<unsigned>(module.report_period_s()),
                     (module.report_period_s() == 0U) ? " (off)" : "");
-    const uint32_t mask = fw::trace_mask();
-    const uint32_t hex_mask = fw::log_hex_mask();
-    constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
-    for (uint32_t index = 0U; index < kCount; ++index) {
-        const auto cat = static_cast<fw::TraceCat>(index);
-        const bool on = (mask & fw::trace_bit(cat)) != 0U;
-        const bool hex = (hex_mask & fw::trace_bit(cat)) != 0U;
-        const char *state = !on ? "off" : (hex ? "on+hex" : "on");
-        cli::out_printf("%-5s %-6s %s\n", debug::trace_cat_name(cat), state, debug::trace_cat_summary(cat));
-    }
+    print_cat_table();
     return 0;
 }
 
 /**
- * 批量开关类别。`debug on <cat...|all> [hex]`：带尾部 `hex` 时同时打开这些类别的十六进制转储，
- * 不带则关闭（§2.11 两级开关）；`debug off` 两者都关。
+ * @brief  解析类别列表（名称或 all）为位掩码
+ * @param  args: 类别名
+ * @param[out] bits: 选中类别的位掩码
+ * @retval true 全部认识
+ * @retval false 有不认识的名字（已打印 ERR）
  */
-int toggle_cats(bool enable, int argc, char **argv) noexcept
+bool parse_cat_list(std::span<char *const> args, uint32_t &bits) noexcept
 {
-    constexpr int kMinArgs = 2;
-    if ((argc < 0) || (argv == nullptr) || (argc < kMinArgs)) {
-        return cli::fail("usage: debug %s <category...|all>%s", enable ? "on" : "off", enable ? " [hex]" : "");
-    }
-    // argc ≥ 2 已校验，转 size_t 无损；用 span 索引避免裸指针算术。
-    const std::span<char *const> args(argv, static_cast<size_t>(argc));
-    size_t end = args.size();
-    bool want_hex = false;
-    if (enable && (end > static_cast<size_t>(kMinArgs)) && (std::string_view(args[end - 1U]) == kHexSuffix)) {
-        want_hex = true;
-        --end;
-    }
-    uint32_t mask = fw::trace_mask();
-    uint32_t hex_mask = fw::log_hex_mask();
-    for (size_t index = 1U; index < end; ++index) {
-        const std::string_view name{args[index]};
+    bits = 0U;
+    for (char *const arg : args) {
+        const std::string_view name{arg};
         if (name == kAllCats) {
-            mask = enable ? fw::kTraceAllMask : 0U;
-            hex_mask = (enable && want_hex) ? fw::kTraceAllMask : 0U;
+            bits = fw::kTraceAllMask;
             continue;
         }
         fw::TraceCat cat{};
         if (!debug::parse_cat(name, cat)) {
-            return cli::fail("unknown category: %s", args[index]);
+            static_cast<void>(cli::fail("unknown category: %s", arg));
+            return false;
         }
-        const uint32_t bit = fw::trace_bit(cat);
-        mask = enable ? (mask | bit) : (mask & ~bit);
-        const bool hex_on = enable && want_hex;
-        hex_mask = hex_on ? (hex_mask | bit) : (hex_mask & ~bit);
+        bits |= fw::trace_bit(cat);
     }
-    fw::trace_set_mask(mask);
-    fw::log_set_hex_mask(hex_mask);
+    return true;
+}
+
+/**
+ * @brief  开关追踪类别：args = {"on"|"off", <cat...|all>}
+ * @param  args: 参数（不含 "debug"/"trace"）
+ * @retval 0 成功；非 0 参数错误
+ */
+int toggle_trace(std::span<char *const> args) noexcept
+{
+    if (args.size() < 2U) {
+        return cli::fail("usage: debug trace <on|off> <category...|all>");
+    }
+    const std::string_view action{args[0]};
+    if ((action != "on") && (action != "off")) {
+        return cli::fail("usage: debug trace <on|off> <category...|all>");
+    }
+    uint32_t bits = 0U;
+    if (!parse_cat_list(args.subspan(1U), bits)) {
+        return cli::kCmdFail;
+    }
+    const uint32_t mask = fw::trace_mask();
+    fw::trace_set_mask((action == "on") ? (mask | bits) : (mask & ~bits));
     return 0;
 }
 
 /**
- * @brief  `debug level [e|w|i|d]`：查看或设置组件日志运行期级别（不写 NVS，重启恢复 I）
- * @param  ctx: 未用
- * @param  argc: 参数个数（含 "level"）
+ * @brief  `debug trace <on|off> <cat...|all>`：开关实时追踪事件（与日志级别无关）
+ * @param  argc: 参数个数（含 "trace"）
  * @param  argv: 参数表
  * @retval 0 成功；非 0 参数错误
  */
-int cmd_level(void *ctx, int argc, char **argv) noexcept
+int cmd_trace(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    static_cast<void>(ctx);
-    if ((argc < 0) || (argv == nullptr)) {
-        return cli::fail("usage: debug level [e|w|i|d]");
+    if ((argc < 1) || (argv == nullptr)) {
+        return cli::fail("usage: debug trace <on|off> <category...|all>");
     }
     const std::span<char *const> args(argv, static_cast<size_t>(argc));
-    if (args.size() >= 2U) {
-        fw::LogLevel level{};
-        if (!fw::log_parse_level(args[1], level)) {
-            return cli::fail("unknown level: %s (use e|w|i|d)", args[1]);
-        }
-        fw::log_set_level(level);
+    return toggle_trace(args.subspan(1U));
+}
+
+/**
+ * @brief  `debug on|off <cat...|all>`：`debug trace on|off` 的简写
+ * @param  argc: 参数个数（含 "on"/"off"）
+ * @param  argv: 参数表
+ * @retval 0 成功；非 0 参数错误
+ */
+int cmd_on_off(void * /*ctx*/, int argc, char **argv) noexcept
+{
+    if ((argc < 1) || (argv == nullptr)) {
+        return cli::fail("usage: debug <on|off> <category...|all>");
     }
-    cli::out_printf("log level=%c\n", fw::log_level_char(fw::log_level()));
+    return toggle_trace(std::span<char *const>(argv, static_cast<size_t>(argc)));
+}
+
+/**
+ * @brief  `debug log [<cat...|all> <e|w|i|d> [hex]]`：查看或设置各类别日志级别
+ * @param  argc: 参数个数（含 "log"）
+ * @param  argv: 参数表
+ * @retval 0 成功；非 0 参数错误
+ * @note   hex 打开这些类别的原始字节转储（只在 D 级生效），不带 hex 则关闭；`debug save` 写 NVS。
+ */
+int cmd_log(void * /*ctx*/, int argc, char **argv) noexcept
+{
+    if ((argc < 1) || (argv == nullptr)) {
+        return cli::fail("usage: debug log [<category...|all> <e|w|i|d> [hex]]");
+    }
+    std::span<char *const> args = std::span<char *const>(argv, static_cast<size_t>(argc)).subspan(1U);
+    if (args.empty()) {
+        print_cat_table();
+        return 0;
+    }
+    bool want_hex = false;
+    if (std::string_view(args.back()) == kHexSuffix) {
+        want_hex = true;
+        args = args.first(args.size() - 1U);
+    }
+    fw::LogLevel level{};
+    if ((args.size() < 2U) || !fw::log_parse_level(args.back(), level)) {
+        return cli::fail("usage: debug log [<category...|all> <e|w|i|d> [hex]]");
+    }
+    uint32_t bits = 0U;
+    if (!parse_cat_list(args.first(args.size() - 1U), bits)) {
+        return cli::kCmdFail;
+    }
+    constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
+    for (uint32_t index = 0U; index < kCount; ++index) {
+        const auto cat = static_cast<fw::TraceCat>(index);
+        if ((bits & fw::trace_bit(cat)) != 0U) {
+            fw::log_set_cat_level(cat, level);
+        }
+    }
+    const uint32_t hex_mask = fw::log_hex_mask();
+    fw::log_set_hex_mask(want_hex ? (hex_mask | bits) : (hex_mask & ~bits));
     return 0;
-}
-
-int cmd_on(void * /*ctx*/, int argc, char **argv) noexcept
-{
-    return toggle_cats(true, argc, argv);
-}
-
-int cmd_off(void * /*ctx*/, int argc, char **argv) noexcept
-{
-    return toggle_cats(false, argc, argv);
 }
 
 int cmd_report(void * /*ctx*/, int argc, char **argv) noexcept
@@ -178,13 +229,14 @@ int cmd_save(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return submit(command, "debug save") ? 0 : cli::kCmdFail;
 }
 
-constexpr std::array<cli::Verb, 6U> kVerbs{{
-    {"list", nullptr, "list trace categories, masks and ring stats", cmd_list},
-    {"on", "<category...|all> [hex]", "enable trace categories, optionally with hex dumps", cmd_on},
-    {"off", "<category...|all>", "disable trace categories and hex dumps", cmd_off},
-    {"level", "[e|w|i|d]", "show or set component log level (runtime only)", cmd_level},
+constexpr std::array<cli::Verb, 7U> kVerbs{{
+    {"list", nullptr, "ring stats, trace switches and log levels per category", cmd_list},
+    {"trace", "<on|off> <category...|all>", "enable/disable real-time trace events", cmd_trace},
+    {"log", "[<category...|all> <e|w|i|d> [hex]]", "show or set per-category log level", cmd_log},
+    {"on", "<category...|all>", "short for: debug trace on", cmd_on_off},
+    {"off", "<category...|all>", "short for: debug trace off", cmd_on_off},
     {"report", "<1..3600|off>", "set periodic report interval (s)", cmd_report},
-    {"save", nullptr, "save masks and report interval", cmd_save},
+    {"save", nullptr, "save trace mask, log levels, hex mask and report interval", cmd_save},
 }};
 
 /**
@@ -197,7 +249,7 @@ constexpr std::array<cli::Verb, 6U> kVerbs{{
 int cmd_debug(void *ctx, int argc, char **argv) noexcept
 {
     if ((argc < 0) || (argv == nullptr)) {
-        return cli::fail("usage: debug <list|on|off|level|report|save>");
+        return cli::fail("usage: debug <list|trace|log|on|off|report|save>");
     }
     // argc 由 esp_console 统计且 ≥ 0，转 size_t 无损。
     return cli::dispatch(kVerbs, ctx, argc, argv);

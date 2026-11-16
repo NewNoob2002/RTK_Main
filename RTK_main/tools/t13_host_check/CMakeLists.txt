@@ -17,6 +17,8 @@ set(SPP_SERVER_BOOT_INC "${PROJ_ROOT}/components/spp_server/boot_include")
 set(SPP_SERVER_PRIV_INC "${PROJ_ROOT}/components/spp_server/private_include")
 # 替身头文件目录必须放在 IDF 之前；host 环境没有 IDF。
 set(SHIM_INC "${CMAKE_CURRENT_SOURCE_DIR}/shim/inc")
+# fw/LogC.h（组件日志 C 接口）；实现由 shim/FakeIdf.c 的 fw_log_c 替身提供，写 stderr。
+set(APP_FW_INC "${PROJ_ROOT}/components/app_fw/include")
 
 find_package(Threads REQUIRED)
 
@@ -25,7 +27,7 @@ target_include_directories(fake_rtos PUBLIC "${SHIM_INC}")
 target_link_libraries(fake_rtos PUBLIC Threads::Threads)
 
 add_library(fake_idf STATIC shim/FakeIdf.c)
-target_include_directories(fake_idf PUBLIC "${SHIM_INC}")
+target_include_directories(fake_idf PUBLIC "${SHIM_INC}" "${APP_FW_INC}")
 target_link_libraries(fake_idf PUBLIC fake_rtos)
 
 # 被检查的真实源码：与固件同一份文件（ADR-0008 R5 拆成 5 个职责文件），按 AGENTS.md 对

@@ -305,7 +305,7 @@ fw::Status apply(Settings settings); // 复制大对象
 
 ### 5.1 日志记录状态变化、错误与周期统计
 
-组件与应用模块统一用 `fw/Log.hpp`（ADR-0009 §2.12）：每个组件在私有头定义一行自己的宏，正文写 `事件 key=value`，
+组件与应用模块统一用 `fw/Log.hpp`（C 组件用 `fw/LogC.h` 的 `FW_CLOG*`，ADR-0009 §2.12）：每个组件在私有头定义一行自己的宏，正文写 `事件 key=value`，
 类别名（`GNSS`、`LINK`…）由输出端加在行首，正文不再重复组件名。级别：
 
 - `E`：功能失效，需要人工处理（保存失败、初始化失败、不可恢复的协议错误）；
@@ -313,9 +313,10 @@ fw::Status apply(Settings settings); // 复制大对象
 - `I`：状态变化与周期统计（连接/断开、探测结果、配置生效）；
 - `D`：定位问题时才需要的细节（单条命令收发、解析中间值）。
 
-E/W 总是输出；I/D 需 `debug on <类别>`。实时每轮路径、ISR、BT 回调任务只用 `fw::trace()`（16 B 事件，不格式化），
+每个类别单独设级别，默认 I（`debug log <类别|all> <e|w|i|d>`），与 trace 开关无关；因此默认就能看到的 I 级只写状态变化，
+逐帧/逐句内容用 D。实时每轮路径、ISR、BT 回调任务只用 `fw::trace()`（16 B 事件，不格式化），
 不写日志。不逐次打印函数进入/退出，不打印蓝牙数据内容（需要时用 `tlog_hex`，受 hex 掩码控制）。
-启动阶段一次性的 IDF 适配代码（`main/app`、驱动 init）仍可用 `ESP_LOG*`。
+禁止在固件自有代码中调用 `ESP_LOG*`/`printf` 输出日志；只允许 `esp_log_level_set`/`esp_log_set_vprintf` 控制 IDF 自身日志。
 
 ```cpp
 // 组件私有头，例如 components/gnss/src/GnssLog.hpp

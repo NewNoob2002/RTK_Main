@@ -35,7 +35,7 @@
 - **注释**：用中文，必要的英文术语保留；解释原因、约束和副作用；每个公共函数注明线程/ISR 安全性。不注释掉代码。
 - **调试输出（ADR-0009）**：分三条通道，不得混用。
   - **实时路径**（链路任务、发送任务、蓝牙回调、ISR、执行器每轮）：只用 `fw::trace()`（C 驱动经 `spp_server_set_trace_hook`），不格式化、不产出文本；禁止新增 `ESP_LOG`/`printf`。
-  - **组件/模块日志**：用 `fw/Log.hpp` 的分级宏，每个组件在私有头定义一行自己的宏（如 `GNSS_LOGW`）；级别与内容规则见 CODING-STYLE §5.1、ADR-0009 §2.12。`fw::tlog` 只保留给已有调用点，新代码不用。启动期 IDF 适配代码（`main/app`、驱动 `init`）可用 `ESP_LOG*`。
+  - **组件/模块日志**：C++ 用 `fw/Log.hpp` 的 `FW_LOGE/W/I/D`，C 用 `fw/LogC.h` 的 `FW_CLOG*`；每个组件可在私有头定义一行自己的宏（如 `GNSS_LOGW`）；级别与内容规则见 CODING-STYLE §5.1、ADR-0009 §2.12。每类别日志级别默认 I，与 trace 开关（`debug trace`）分开设置（`debug log`）。`fw::tlog` 只保留给已有调用点，新代码不用。**禁止 `ESP_LOG*`**（含启动代码），只允许 `esp_log_level_set`/`esp_log_set_vprintf` 控制 IDF 自身日志。
   - **控制台输出**：一律经 `cli::out_printf`/`cli::out_write`（ADR-0009 §2.8），不直接 `printf`/`puts`；命令最后一行固定 `OK` 或 `ERR …`（`cli::fail`），子命令用 `cli::Verb` + `cli::dispatch`。
 - **溯源**：按 `docs/CODING-STYLE.md`，源文件第一行说明用途，第二行起说明线程/调用约束（谁调用、可否阻塞、是否 ISR 安全）；使用堆的文件另注明档位。文件头不写 `Generated-by` 或人工负责人；生成来源由提交者记录在 git 提交 trailer：`Generated-by: pi + <模型>`（模型以任务卡为准）。不得添加 `Signed-off-by`；该规则不授予 git commit/push 权限。
 

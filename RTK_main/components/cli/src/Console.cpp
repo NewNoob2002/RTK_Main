@@ -16,7 +16,7 @@
 #include "driver/uart_vfs.h"
 #include "esp_console.h"
 #include "esp_err.h"
-#include "esp_log.h"
+#include "fw/Log.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ReplyState.hpp"
@@ -26,7 +26,6 @@ namespace cli {
 
 namespace {
 
-constexpr const char *kTag = "cli";
 constexpr int kGroupWidth = 12;             // help 列表里组名左对齐宽度
 constexpr size_t kConsoleRxBufBytes = 256U; // 与 IDF uart_vfs_dev_port_init 的内部选择保持一致
 constexpr uint32_t kTxDrainTimeoutMs = 50U; // 128 B 硬件 FIFO 在 2 Mbaud 下约 0.64 ms 发完，留足余量
@@ -113,6 +112,10 @@ const VerbGroup *find_verb_group(const char *group) noexcept
     return nullptr;
 }
 
+/**
+ * @brief  释放 REPL 失败路径上已创建的对象
+ * @param  repl: esp_console REPL 句柄；nullptr 时忽略
+ */
 void cleanup_repl(esp_console_repl_t *repl) noexcept
 {
     if (repl == nullptr) {
@@ -120,7 +123,7 @@ void cleanup_repl(esp_console_repl_t *repl) noexcept
     }
     const esp_err_t cleanup_err = repl->del(repl);
     if (cleanup_err != ESP_OK) {
-        ESP_LOGW(kTag, "console cleanup failed: %s", esp_err_to_name(cleanup_err));
+        FW_LOGW(fw::TraceCat::kSys, "console cleanup failed: %s", esp_err_to_name(cleanup_err));
     }
 }
 
@@ -255,9 +258,10 @@ esp_err_t register_help() noexcept
 
 #if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT) || defined(CONFIG_ESP_CONSOLE_UART_CUSTOM)
 /**
- * 用带 TX 环形的 UART 驱动替换 esp_console 装的 0 字节 TX 驱动（ADR-0009 §2.4）。
- * 经典 ESP32 没有 UHCI/UART DMA，长输出只能靠大 TX 环形缓冲 + 中断搬运，避免命令任务阻塞在 FIFO 上。
- * 调用点：esp_console_new_repl_uart() 之后、esp_console_start_repl() 之前，console 任务还在等通知，不会读写 UART。
+ * @brief  用带 TX 环形的 UART 驱动替换 esp_console 装的 0 字节 TX 驱动（ADR-0009 §2.4）
+ * @retval ESP_OK 成功；其他为 UART 驱动删除/安装失败码
+ * @note   经典 ESP32 没有 UART DMA，长输出靠大 TX 环形 + 中断搬运，避免命令任务阻塞在 FIFO 上。
+ *       调用点：esp_console_new_repl_uart() 之后、esp_console_start_repl() 之前，console 任务尚未读写 UART。
  */
 esp_err_t enable_uart_tx_buffer() noexcept
 {
@@ -269,11 +273,11 @@ esp_err_t enable_uart_tx_buffer() noexcept
     esp_err_t err = uart_wait_tx_done(port, pdMS_TO_TICKS(kTxDrainTimeoutMs));
     if (err != ESP_OK) {
         // 超时只意味着可能丢少量启动日志，不影响控制台功能，继续切换。
-        ESP_LOGW(kTag, "uart_wait_tx_done: %s", esp_err_to_name(err));
+        FW_LOGW(fw::TraceCat::kSys, "uart_wait_tx_done: %s", esp_err_to_name(err));
     }
     err = uart_driver_delete(port);
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "uart_driver_delete failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "uart_driver_delete failed: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -291,32 +295,32 @@ esp_err_t enable_uart_tx_buffer() noexcept
 #endif
     err = uart_param_config(port, &cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "uart_param_config failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "uart_param_config failed: %s", esp_err_to_name(err));
         return err;
     }
 
     // 控制台使用默认 UART 引脚（IOMUX 直连），这里不重路由：重路由反而会覆盖 ROM/console 的既有配置。
     err = uart_set_pin(port, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "uart_set_pin failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "uart_set_pin failed: %s", esp_err_to_name(err));
         return err;
     }
 
     err =
         uart_driver_install(port, static_cast<int>(kConsoleRxBufBytes), CONFIG_RTK_CONSOLE_UART_TX_BUF, 0, nullptr, 0);
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "uart_driver_install failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "uart_driver_install failed: %s", esp_err_to_name(err));
         return err;
     }
 
     // VFS 仍走驱动，行尾转换重新声明一遍，保证换驱动后行为不变（两处调用都是幂等的）。
     uart_vfs_dev_use_driver(port);
     if (uart_vfs_dev_port_set_rx_line_endings(port, ESP_LINE_ENDINGS_CR) != 0) {
-        ESP_LOGE(kTag, "set rx line endings failed");
+        FW_LOGE(fw::TraceCat::kSys, "set rx line endings failed");
         return ESP_FAIL;
     }
     if (uart_vfs_dev_port_set_tx_line_endings(port, ESP_LINE_ENDINGS_CRLF) != 0) {
-        ESP_LOGE(kTag, "set tx line endings failed");
+        FW_LOGE(fw::TraceCat::kSys, "set tx line endings failed");
         return ESP_FAIL;
     }
 #endif
@@ -414,7 +418,7 @@ esp_err_t init(const char *prompt) noexcept
     uart_cfg.rx_gpio_num = -1;
     err = esp_console_new_repl_uart(&uart_cfg, &repl_cfg, &repl);
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "console init failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "console init failed: %s", esp_err_to_name(err));
         return err;
     }
     // 此处 UART 驱动已由 uart_vfs_dev_port_init() 以 0 字节 TX 缓冲装好，且 console 任务尚未启动。
@@ -436,13 +440,13 @@ esp_err_t init(const char *prompt) noexcept
     err = esp_console_new_repl_stdio(&repl_cfg, &repl);
 #endif
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "console init failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "console init failed: %s", esp_err_to_name(err));
         return err;
     }
 
     err = register_help();
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "register help failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "register help failed: %s", esp_err_to_name(err));
         cleanup_repl(repl);
         return err;
     }
@@ -460,7 +464,7 @@ esp_err_t init(const char *prompt) noexcept
             ++s_entry_count;
             err = esp_console_cmd_register(&command);
             if (err != ESP_OK) {
-                ESP_LOGE(kTag, "register %s failed: %s", entry.name, esp_err_to_name(err));
+                FW_LOGE(fw::TraceCat::kSys, "register %s failed: %s", entry.name, esp_err_to_name(err));
                 cleanup_repl(repl);
                 return err;
             }
@@ -480,7 +484,7 @@ esp_err_t run() noexcept
     // 只是通知 init() 创建的 REPL 任务开始：此后它打印 IDF 提示语与 prompt 并读取输入。
     const esp_err_t err = esp_console_start_repl(s_repl);
     if (err != ESP_OK) {
-        ESP_LOGE(kTag, "console start failed: %s", esp_err_to_name(err));
+        FW_LOGE(fw::TraceCat::kSys, "console start failed: %s", esp_err_to_name(err));
         return err;
     }
     s_running = true;
