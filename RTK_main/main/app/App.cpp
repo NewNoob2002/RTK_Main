@@ -12,8 +12,11 @@
 
 namespace {
 
-/** 看门狗超时判定用的高位标记：boot_stopped 中仅 bit0/1/2 表示执行器/追踪任务。 */
+/** 看门狗超时判定用的高位标记：boot_stopped 中低位为 BootTask 任务位。 */
 constexpr uint32_t kWatchdogStopBit = 0x80000000U;
+static_assert((kWatchdogStopBit & (app::task_bit(app::BootTask::kLink) | app::task_bit(app::BootTask::kIo) |
+                                   app::task_bit(app::BootTask::kTrace))) == 0U,
+              "看门狗诊断位不得与任务位重叠");
 
 } // namespace
 
@@ -24,12 +27,13 @@ AppContext &app_context() noexcept
     return s_app;
 }
 
-bool AppContext::await_boot(uint32_t task_bit, bool watchdog) noexcept
+bool AppContext::await_boot(BootTask task, bool watchdog) noexcept
 {
+    const uint32_t bit = task_bit(task);
     if (boot_phase.load(std::memory_order_acquire) == BootPhase::kRunning) {
         return true;
     }
-    boot_arrived.fetch_or(task_bit, std::memory_order_release);
+    boot_arrived.fetch_or(bit, std::memory_order_release);
     while (boot_phase.load(std::memory_order_acquire) == BootPhase::kStarting) {
         if (watchdog && (esp_task_wdt_status(nullptr) == ESP_OK)) {
             if (esp_task_wdt_reset() != ESP_OK) {
@@ -48,7 +52,7 @@ bool AppContext::await_boot(uint32_t task_bit, bool watchdog) noexcept
             boot_stopped.fetch_or(kWatchdogStopBit, std::memory_order_release);
         }
     }
-    boot_stopped.fetch_or(task_bit, std::memory_order_release);
+    boot_stopped.fetch_or(bit, std::memory_order_release);
     return false;
 }
 

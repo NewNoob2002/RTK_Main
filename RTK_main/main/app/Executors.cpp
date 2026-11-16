@@ -2,6 +2,7 @@
 // 线程：start_link/start_io/wait_started/stop_boot_tasks 只在启动任务调用，可阻塞；
 //       kModules 与配置表为静态存储，启动完成后只读。不分配堆。
 #include "app/App.hpp"
+#include "app/BootReasons.hpp"
 
 #include <cstdint>
 #include <span>
@@ -51,7 +52,7 @@ constexpr rtos::ExecutorConfig kIoConfig{
     .watchdog = true,
     .wait =
         [](void * /*ctx*/, uint32_t max_ms) noexcept {
-            if (!app::s_app.await_boot(2U, true)) {
+            if (!app::s_app.await_boot(app::BootTask::kIo, true)) {
                 vTaskDelete(nullptr);
                 return;
             }
@@ -72,7 +73,7 @@ constexpr rtos::ExecutorConfig kLinkConfig{
     .watchdog = true,
     .wait =
         [](void * /*ctx*/, uint32_t max_ms) noexcept {
-            if (!app::s_app.await_boot(1U, true)) {
+            if (!app::s_app.await_boot(app::BootTask::kLink, true)) {
                 vTaskDelete(nullptr);
                 return;
             }
@@ -121,14 +122,14 @@ const char *start_link(std::span<StackType_t> link_stack, uint32_t &launched) no
         s_app.link_executor->init(kLinkConfig, kModules, app::view_of(s_app.link_storage, link_stack));
     if (!fw::is_ok(initialized) || !modules_ready(*s_app.link_executor, kLinkConfig.id) ||
         !s_app.data.system_status.read().bt_ready) {
-        return "link_init";
+        return boot_reason::kLinkInit;
     }
     if (!fw::is_ok(s_app.link_executor->start())) {
-        return "link_task_start";
+        return boot_reason::kLinkTaskStart;
     }
-    launched |= 1U;
+    launched |= task_bit(BootTask::kLink);
     if (!wait_started(1U) || !modules_ready(*s_app.link_executor, kLinkConfig.id)) {
-        return "link_module_start";
+        return boot_reason::kLinkModuleStart;
     }
     return nullptr;
 }
@@ -138,14 +139,14 @@ const char *start_io(std::span<StackType_t> io_stack, uint32_t &launched) noexce
 {
     const auto initialized = s_app.io_executor->init(kIoConfig, kModules, app::view_of(s_app.io_storage, io_stack));
     if (!fw::is_ok(initialized) || !modules_ready(*s_app.io_executor, kIoConfig.id)) {
-        return "io_init";
+        return boot_reason::kIoInit;
     }
     if (!fw::is_ok(s_app.io_executor->start())) {
-        return "io_task_start";
+        return boot_reason::kIoTaskStart;
     }
-    launched |= 2U;
+    launched |= task_bit(BootTask::kIo);
     if (!wait_started(2U) || !modules_ready(*s_app.io_executor, kIoConfig.id)) {
-        return "io_module_start";
+        return boot_reason::kIoModuleStart;
     }
     return nullptr;
 }
@@ -157,7 +158,7 @@ void stop_boot_tasks(uint32_t launched) noexcept
     const TickType_t begin = xTaskGetTickCount();
     while ((s_app.boot_stopped.load(std::memory_order_acquire) & launched) != launched) {
         if ((xTaskGetTickCount() - begin) >= pdMS_TO_TICKS(5000U)) {
-            s_app.boot_arena.set_degraded_reason("stop:task_timeout");
+            s_app.boot_arena.set_degraded_reason(boot_reason::kStopTaskTimeout);
             // 消费者未确认停稳：不撤销驱动、回调或任何封存块，诊断控制台仍可用。
             set_console_only();
             return;
@@ -166,11 +167,11 @@ void stop_boot_tasks(uint32_t launched) noexcept
     }
 #if RTK_GNSS_ENABLED
     if (!fw::is_ok(s_app.gnss.stop_boot())) {
-        s_app.boot_arena.set_degraded_reason("stop:gnss");
+        s_app.boot_arena.set_degraded_reason(boot_reason::kStopGnss);
     }
 #endif
     if (spp_server_stop_boot() != ESP_OK) {
-        s_app.boot_arena.set_degraded_reason("stop:spp");
+        s_app.boot_arena.set_degraded_reason(boot_reason::kStopSpp);
     }
     // SEALED 块始终保留至重启；SDK 停机失败或迟到回调也不回收其存储。
     set_console_only();

@@ -2,14 +2,14 @@
 // 线程：仅启动任务调用一次，非 ISR；不分配堆、不阻塞、不打印（日志由调用方统一输出）。
 #include "app/BootSteps.hpp"
 
+#include "app/BootReasons.hpp"
+
 #include <cstdio>
 #include <string_view>
 
 namespace app {
 
 namespace {
-
-constexpr const char *kFaultReasonFallback = "fault:step";
 
 uint32_t sample_now_ms(const BootHooks *hooks) noexcept
 {
@@ -35,8 +35,9 @@ const char *fault_reason_for(BootCtx &ctx, const char *name) noexcept
         return nullptr;
     }
     // "fault:" 加步骤名短于缓冲上限；写失败时退回常量，避免返回空原因。
-    const int written = std::snprintf(ctx.fault_reason.data(), ctx.fault_reason.size(), "fault:%s", name);
-    return (written > 0) ? ctx.fault_reason.data() : kFaultReasonFallback;
+    const int written =
+        std::snprintf(ctx.fault_reason.data(), ctx.fault_reason.size(), "%s%s", boot_reason::kFaultPrefix, name);
+    return (written > 0) ? ctx.fault_reason.data() : boot_reason::kFaultFallback;
 }
 
 } // namespace

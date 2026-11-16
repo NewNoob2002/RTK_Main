@@ -19,6 +19,7 @@
 
 #include "app/BootBuffers.hpp"
 #include "app/BootReport.hpp"
+#include "app/BootReasons.hpp"
 #include "core/Types.hpp"
 #include "support/ConsoleSupport.hpp"
 #include "support/ResetReason.hpp"
@@ -161,8 +162,8 @@ app::BootResult step_seal(app::BootCtx &ctx) noexcept
     if (fw::is_ok(app::app_context().boot_arena.seal())) {
         return app::BootResult::kOk;
     }
-    app::rollback_boot_bindings(bufs, "boot_alloc:seal");
-    ctx.reason = "boot_alloc:seal";
+    app::rollback_boot_bindings(bufs, app::boot_reason::kAllocSeal);
+    ctx.reason = app::boot_reason::kAllocSeal;
     return app::BootResult::kFail;
 }
 
@@ -175,7 +176,7 @@ app::BootResult step_debug(app::BootCtx &ctx) noexcept
     if (fw::is_ok(app::app_context().debug.init())) {
         return app::BootResult::kOk;
     }
-    ctx.reason = "debug_init";
+    ctx.reason = app::boot_reason::kDebugInit;
     return app::BootResult::kFail;
 #else
     return app::BootResult::kSkipped;
@@ -188,7 +189,7 @@ app::BootResult step_storage(app::BootCtx &ctx) noexcept
     if (fw::is_ok(app::app_context().storage.init())) {
         return app::BootResult::kOk;
     }
-    ctx.reason = "storage_init";
+    ctx.reason = app::boot_reason::kStorageInit;
     return app::BootResult::kFail;
 }
 
@@ -205,7 +206,7 @@ void mark_trace_launched(app::BootCtx &ctx) noexcept
 {
 #if FW_TRACE_ENABLED
     if (app::app_context().debug.task_running()) {
-        ctx.launched |= 4U;
+        ctx.launched |= app::task_bit(app::BootTask::kTrace);
     }
 #else
     (void)ctx;
@@ -252,7 +253,7 @@ app::BootResult step_started(app::BootCtx &ctx) noexcept
     mark_trace_launched(ctx);
     if (!app::wait_started(ctx.launched)) {
         ctx.stop_required = true;
-        ctx.reason = "task_start_timeout";
+        ctx.reason = app::boot_reason::kTaskStartTimeout;
         return app::BootResult::kFail;
     }
     if (self.boot_phase.load(std::memory_order_acquire) != app::BootPhase::kStarting) {
@@ -298,7 +299,7 @@ void handle_degrade(app::BootCtx &ctx, const char *reason) noexcept
     if ((self.boot_arena.state() == rtos::ArenaState::kOpen) && (ctx.user != nullptr)) {
         // 故障注入跳过 bind/seal 步骤体时分配器仍为 OPEN：与 K5 一致先解绑再 abort，不留下半绑定的块。
         app::rollback_boot_bindings(*static_cast<app::BootBuffers *>(ctx.user),
-                                    (reason != nullptr) ? reason : "boot_alloc:abort");
+                                    (reason != nullptr) ? reason : app::boot_reason::kAllocAbort);
     }
     app::set_console_only();
 }

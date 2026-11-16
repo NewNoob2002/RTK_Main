@@ -1,6 +1,7 @@
 // 启动期外供缓冲的分配、绑定与回滚实现（R8a，自 AppMain.cpp 原样迁入）：owner 顺序、对齐与容量按 K5。
 // 线程：仅启动任务调用一次，非 ISR；分配走 BootArena 的内部 8-bit 堆，失败路径必须释放已申请块。
 #include "app/BootBuffers.hpp"
+#include "app/BootReasons.hpp"
 
 #include <array>
 #include <cstdio>
@@ -34,7 +35,7 @@ AppContext &self() noexcept
 bool allocate_boot_buffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) noexcept
 {
     if (!fw::is_ok(self().boot_arena.open(ops))) {
-        (void)self().boot_arena.abort("boot_alloc:open");
+        (void)self().boot_arena.abort(boot_reason::kAllocOpen);
         return false;
     }
     const auto fail_alloc = [&out](const char *name) noexcept -> bool {
@@ -130,7 +131,7 @@ const char *bind_boot_buffers(const BootBuffers &bufs) noexcept
 {
 #if FW_TRACE_ENABLED
     if (!fw::is_ok(self().debug.bind_storage({bufs.trace_ring, bufs.log_ring, bufs.trace_task_stack}))) {
-        return "bind:debug";
+        return boot_reason::kBindDebug;
     }
 #endif
     const spp_server_storage_t storage{
@@ -146,13 +147,13 @@ const char *bind_boot_buffers(const BootBuffers &bufs) noexcept
         .worker_stack_bytes = bufs.spp_worker_stack.size_bytes(),
     };
     if (spp_server_bind_storage(&storage) != ESP_OK) {
-        return "bind:spp";
+        return boot_reason::kBindSpp;
     }
 #if RTK_GNSS_ENABLED
     if (!fw::is_ok(self().data.init_gnss_buffers(bufs.gnss_app_ring, bufs.gnss_latest)) ||
         !fw::is_ok(self().rtcm_pipe.bind_storage(bufs.rtcm_pipe)) ||
         !fw::is_ok(self().gnss.bind_storage(bufs.gnss_demux))) {
-        return "bind:gnss";
+        return boot_reason::kBindGnss;
     }
 #endif
     return nullptr;
@@ -172,7 +173,7 @@ void rollback_boot_bindings(BootBuffers &bufs, const char *reason) noexcept
     bufs = {};
     if (unbound != ESP_OK) {
         // 若约束被破坏、C worker 已存在，保留全部块，绝不释放它可能使用的栈/缓冲。
-        self().boot_arena.set_degraded_reason("rollback:spp_in_use");
+        self().boot_arena.set_degraded_reason(boot_reason::kRollbackSppInUse);
         return;
     }
     if (!fw::is_ok(self().boot_arena.abort(reason))) {

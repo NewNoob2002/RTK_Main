@@ -173,6 +173,9 @@ namespace unrelated_app {
 - 同一组常量如果本来就是“取值集合”，优先 `enum class`；如果是协议里的一张号码表、需要当整数用，放进命名空间也可以。
 - `.cpp` 中为跨组件长名写的 `namespace x = …` 别名允许，但只在 `.cpp` 局部使用，头文件不写；同一个别名在多个文件反复出现，说明命名空间该调整了。
 - 头文件不写 `using namespace`。
+- **类型名不跨组件重名（2026-11-16 规则 4）**：不同组件里语义不同的类型不用同一个名字（现存 `gnss::Reply` 与
+  `core::Reply`），否则调用点必须写 `::gnss::` 全限定、读者也分不清是哪个。新增类型先在全工程查重；存量
+  `gnss::Reply` 在 GNSS 驱动重构（P3，修订 ADR-0010）中改名。
 
 ## 4. 类与函数内容
 
@@ -271,6 +274,18 @@ if (!is_ok(status)) {
 (void)esp_some_fallible_call();
 ```
 
+**失败返回类型（2026-11-16 规则 1）**：一个函数只用一种方式表达失败，按所在层选择：
+
+| 返回类型 | 用途 |
+| --- | --- |
+| `bool` | 只用于谓词（`is_*`/`has_*`/`can_*`、`poll()` 是否还有工作），`false` 不代表“出错” |
+| `fw::Status` | 组件内部与组件之间的可恢复错误（驱动、管道、存储绑定、`bind_storage`） |
+| `fw::Result` | `app_fw` 模块接口：`fw::Module` 生命周期、`StoreBinding` 编解码、命令处理结果 |
+| `esp_err_t` | 只出现在 IDF/C 接口边界，进入 C++ 前立即用 `rtos::from_esp_err` 映射 |
+
+- 不用 `const char *` 返回失败原因、`nullptr` 表示成功；需要诊断文本时返回错误码，原因字符串由常量表提供（规则 2）。
+- 新代码强制执行；存量代码改动到哪个函数就顺带迁移哪个，不做一次性全量改动（GNSS 部分在 P3 迁移）。
+
 ### 4.5 参数表达所有权与长度，输出放最后
 
 只读大对象传 `const T &`，连续数据传 `std::span<const T>`（轻量视图按值传递）；输出参数放最后。
@@ -314,6 +329,22 @@ constexpr size_t kTxCapacityBytes = 512; // B
 if (now_ms - last_ms > 5000) {
     retry_after(1000);
 }
+```
+
+**诊断字符串集中成表（2026-11-16 规则 2）**：会被保存、比较或对外显示的原因字符串（降级原因、停机原因、
+故障注入原因）放在一个常量表里，调用点只引用常量，例如 `main/app/BootReasons.hpp` 的
+`app::boot_reason::kLinkInit`。这样同一原因不会写出两种拼法，也能一眼看全所有可能取值。
+一次性日志文本不受此限。
+
+**位掩码使用具名位（2026-11-16 规则 3）**：每一位都有名字，不写 `mask |= 1U`、`2U`、`4U`。
+位集合用 `enum class X : uint32_t` 定义，需要原子运算的掩码保持 `uint32_t`，经 `constexpr` 转换函数取位：
+
+```cpp
+// 这样写（main/AppContext.hpp）
+enum class BootTask : uint32_t { kLink = 1U << 0U, kIo = 1U << 1U, kTrace = 1U << 2U };
+launched |= task_bit(BootTask::kLink);
+// 不要这样写
+launched |= 1U; // 哪个任务？
 ```
 
 ### 5.3 明确线程所有权与实时边界

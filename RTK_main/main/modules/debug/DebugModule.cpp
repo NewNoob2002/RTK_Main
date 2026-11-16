@@ -284,7 +284,7 @@ void DebugModule::task_entry(void *arg) noexcept
         vTaskDelete(nullptr);
         return;
     }
-    if (!self->ctx().await_boot(4U, false)) {
+    if (!self->ctx().await_boot(BootTask::kTrace, false)) {
         vTaskDelete(nullptr);
         return;
     }

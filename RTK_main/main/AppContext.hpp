@@ -36,6 +36,19 @@ template <size_t D>
 
 enum class BootPhase : uint8_t { kStarting = 0, kRunning, kConsoleOnly, kStopping };
 
+/** 启动屏障任务位（CODING-STYLE 规则 3）：boot_arrived/boot_stopped/launched 掩码的各位；bit31 保留给看门狗诊断。 */
+enum class BootTask : uint8_t {
+    kLink = 1U << 0U,  ///< link 执行器任务
+    kIo = 1U << 1U,    ///< io 执行器任务（GNSS）
+    kTrace = 1U << 2U, ///< trace_out 任务
+};
+
+/** BootTask → 掩码位；掩码仍为 uint32_t 以便原子 fetch_or。 */
+[[nodiscard]] constexpr uint32_t task_bit(BootTask task) noexcept
+{
+    return static_cast<uint32_t>(task);
+}
+
 /** 固件唯一上下文：拥有 BootArena、DataCenter、全部模块实例与执行器控制存储；全零静态初值落入 .bss。 */
 struct AppContext {
     static constexpr size_t kLinkStackBytes = 4096;
@@ -56,7 +69,7 @@ struct AppContext {
     std::atomic<uint32_t> boot_stopped{};
 
     /** 启动任务门控：执行器/trace 任务等待组合根放行；失败返回前退订 TWDT 并确认停稳，非 ISR。 */
-    [[nodiscard]] bool await_boot(uint32_t task_bit, bool watchdog) noexcept;
+    [[nodiscard]] bool await_boot(BootTask task, bool watchdog) noexcept;
 
     /**
      * 固件入口（R8a）：按有序步骤表完成启动，失败时按步骤语义降级/回滚/停机。

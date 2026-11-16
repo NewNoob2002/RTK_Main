@@ -22,7 +22,7 @@ AppContext &app_context() noexcept
 }
 
 // 原有模块场景直接从运行态接线；真实启动门控由 boot_alloc_check 测试。
-bool AppContext::await_boot(uint32_t, bool) noexcept
+bool AppContext::await_boot(BootTask, bool) noexcept
 {
     return true;
 }

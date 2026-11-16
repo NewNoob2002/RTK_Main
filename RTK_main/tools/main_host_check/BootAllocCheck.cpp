@@ -402,13 +402,13 @@ void test_console_gate_and_task_admission() noexcept
     app::set_console_only();
     CHECK(app::gated_command(&business, 0, nullptr) == cli::kCmdFail);
     CHECK(app::gated_command(&safe, 0, nullptr) == 0 && calls == 1U);
-    CHECK(!app::s_app.await_boot(1U, true));
+    CHECK(!app::s_app.await_boot(app::BootTask::kLink, true));
     CHECK((app::s_app.boot_stopped.load() & 1U) != 0U);
     app::s_app.boot_phase.store(app::BootPhase::kRunning);
     CHECK(app::gated_command(&business, 0, nullptr) == 0 && calls == 2U);
-    CHECK(app::s_app.await_boot(2U, true));
+    CHECK(app::s_app.await_boot(app::BootTask::kIo, true));
     app::s_app.boot_phase.store(app::BootPhase::kStopping);
-    CHECK(!app::s_app.await_boot(4U, false));
+    CHECK(!app::s_app.await_boot(app::BootTask::kTrace, false));
     CHECK((app::s_app.boot_stopped.load() & 4U) != 0U);
 }
 

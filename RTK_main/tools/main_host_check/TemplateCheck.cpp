@@ -21,7 +21,7 @@ AppContext &app_context() noexcept
     return s_test_app;
 }
 // 原有执行器场景已完成启动；组合根启动门控在 boot_alloc_check 单独验证。
-bool AppContext::await_boot(uint32_t, bool) noexcept
+bool AppContext::await_boot(BootTask, bool) noexcept
 {
     return true;
 }
