@@ -9,7 +9,7 @@
 
 namespace cli {
 
-/** 输出端：把 len 字节原样写出（可阻塞）。由 console start() 安装；未安装时写 stdout。 */
+/** 输出端：把 len 字节原样写出（可阻塞）。由 console init() 安装；未安装时写 stdout。 */
 using OutSink = void (*)(const char *text, size_t len) noexcept;
 
 /** 单次格式化的整行缓冲长度；超过时整条改走 stdout（慢但不截断）。 */

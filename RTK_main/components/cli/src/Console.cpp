@@ -59,7 +59,9 @@ struct Entry {
 std::array<Entry, kMaxCmds> s_entries{};
 size_t s_entry_count = 0U;
 Entry s_help_entry{};
-bool s_started = false;
+bool s_started = false;               // init() 成功后置位：命令表封存，add/add_verbs 不再接受
+esp_console_repl_t *s_repl = nullptr; // init() 创建、run() 启动；REPL 任务在 run 之前阻塞在任务通知上
+bool s_running = false;
 
 bool is_empty_text(const char *text) noexcept
 {
@@ -382,7 +384,7 @@ esp_err_t add_verbs(const char *group, const char *summary, std::span<const Verb
     return ESP_OK;
 }
 
-esp_err_t start(const char *prompt) noexcept
+esp_err_t init(const char *prompt) noexcept
 {
     if (s_started) {
         return ESP_ERR_INVALID_STATE;
@@ -465,15 +467,30 @@ esp_err_t start(const char *prompt) noexcept
         }
     }
 
-    err = esp_console_start_repl(repl);
-    if (err != ESP_OK) {
-        ESP_LOGE(kTag, "console start failed: %s", esp_err_to_name(err));
-        cleanup_repl(repl);
-        return err;
-    }
-
+    s_repl = repl;
     s_started = true;
     return ESP_OK;
+}
+
+esp_err_t run() noexcept
+{
+    if ((s_repl == nullptr) || s_running) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    // 只是通知 init() 创建的 REPL 任务开始：此后它打印 IDF 提示语与 prompt 并读取输入。
+    const esp_err_t err = esp_console_start_repl(s_repl);
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "console start failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    s_running = true;
+    return ESP_OK;
+}
+
+esp_err_t start(const char *prompt) noexcept
+{
+    const esp_err_t err = init(prompt);
+    return (err != ESP_OK) ? err : run();
 }
 
 } // namespace cli

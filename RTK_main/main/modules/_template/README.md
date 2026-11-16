@@ -79,7 +79,7 @@
 
 ### 7. 控制台命令表接入 `main/AppMain.cpp`
 
-`main/AppMain.cpp` 的 `start_console()` 当前以定长数组集中注册控制台命令表。若新模块提供 `<name>_cmds()`，需修改 `main/AppMain.cpp`（无需重复 `#include`，`AppContext.hpp` 已通过 `module_list.inc` 间接引入各模块头文件）：
+`main/app/ConsoleSetup.cpp` 的 `init_console()` 当前以定长数组集中注册控制台命令表。若新模块提供 `<name>_cmds()`，需修改 `main/app/ConsoleSetup.cpp`（无需重复 `#include`，`AppContext.hpp` 已通过 `module_list.inc` 间接引入各模块头文件）：
 
 1. 将 `cmd_tables` 的 `std::array<std::span<const cli::Cmd>, N>` 元素个数 `N` 加 `1`（当前为 `4`）。
 2. 在初始化列表追加 `app::<name>_cmds(),`。

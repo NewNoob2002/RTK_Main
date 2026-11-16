@@ -8,6 +8,7 @@
 #include "def/StorageDef.hpp"
 #include "esp_log.h"
 #include "fw/Tlog.hpp"
+#include "nvs.h" // ESP_ERR_NVS_NOT_FOUND：区分“未设置 SN”与真正的读取错误
 #include "modules/storage/StoreCatalog.hpp"
 #include "rtos/EspStatus.hpp"
 
@@ -90,7 +91,12 @@ void StorageModule::load_sn() noexcept
     std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
     const esp_err_t sn_error = nvs_store_get_sn(sn.data(), sn.size());
     if (sn_error != ESP_OK) {
-        ESP_LOGI("storage", "sn unavailable: %s; derive from BT MAC", esp_err_to_name(sn_error));
+        if (sn_error == ESP_ERR_NVS_NOT_FOUND) {
+            // 未写入 SN 是出厂前的正常状态，不当作错误呈现。
+            ESP_LOGI("storage", "no SN set; name derived from BT MAC");
+        } else {
+            ESP_LOGW("storage", "SN read failed: %s; name derived from BT MAC", esp_err_to_name(sn_error));
+        }
         return;
     }
     /* 验证 SN 后保存到模块，供后续 BT 名称初始化使用。 */

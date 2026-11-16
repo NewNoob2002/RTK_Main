@@ -39,8 +39,18 @@ void set_console_only() noexcept;
 /** 把静态执行器实例绑定到组合根（contexts 步骤调用，先于任何执行器使用）。 */
 void bind_executors() noexcept;
 
-/** 装配并启动 UART0 REPL；命令表来自各模块的 X-macro 清单。失败返回 false（由启动步骤降级）。 */
-[[nodiscard]] bool start_console() noexcept;
+/**
+ * @brief  建立控制台输出通道并登记全部命令表（来自各模块清单），REPL 任务创建但不放行。
+ * @retval false 失败（由 console 步骤降级）
+ * @note   启动任务调用，须早于任何业务任务（会重装 UART0 驱动）。
+ */
+[[nodiscard]] bool init_console() noexcept;
+
+/**
+ * @brief  放行 REPL：打印提示符、开始接收命令。启动流程最后调用，成功与降级路径都会走到。
+ * @note   init_console 失败时只记录错误。
+ */
+void run_console() noexcept;
 
 /** 启动链路执行器并等待首批模块就绪；成功返回 nullptr，失败返回降级原因字符串。 */
 [[nodiscard]] const char *start_link(std::span<StackType_t> link_stack, uint32_t &launched) noexcept;

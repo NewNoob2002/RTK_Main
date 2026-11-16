@@ -123,11 +123,15 @@ app::BootResult step_contexts(app::BootCtx &ctx) noexcept
     return app::BootResult::kOk;
 }
 
-/** 步骤 4：控制台先于业务堆分配建立，REPL 立即可诊断后续步骤。 */
+/**
+ * 步骤 4：只建立控制台输出通道并登记命令，不放行 REPL。
+ * REPL 到 boot() 末尾才 run：此前提示符/IDF 提示语若先出现，会与后续各步骤日志交错。
+ * UART 驱动重装必须在业务任务启动前完成，所以 init 留在这里而不是挪到末尾。
+ */
 app::BootResult step_console(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
-    return app::start_console() ? app::BootResult::kOk : app::BootResult::kFail;
+    return app::init_console() ? app::BootResult::kOk : app::BootResult::kFail;
 }
 
 /** 步骤 5：按固定 owner 顺序一次性分配数据通路与栈缓冲。 */
@@ -331,7 +335,6 @@ void print_boot_summary(std::span<const app::BootRecord> records) noexcept
     const uint32_t baud = gnss.host_baud != 0U ? gnss.host_baud : static_cast<uint32_t>(CONFIG_RTK_GNSS_DEFAULT_BAUD);
     cli::out_printf("GNSS UART%d started, %u baud\r\n", CONFIG_RTK_GNSS_UART_NUM, static_cast<unsigned>(baud));
 #endif
-    cli::out_printf("Console ready\r\n");
     const uint32_t total_ms = (records.back().start_ms + records.back().took_ms) - records.front().start_ms;
     const uint32_t free_heap = esp_get_free_heap_size();
     // 千位字节转 KB 十位小数；上限远小于 uint32。
@@ -369,12 +372,14 @@ void AppContext::boot() noexcept
         } else {
             cli::out_printf("%s failed, console-only\r\n", record.name);
         }
+        run_console(); // 降级同样放行 REPL：console-only 阶段仍可用诊断命令
         return;
     }
     print_boot_summary(executed);
     if (kBootVerbose) {
         print_boot_table(executed);
     }
+    run_console(); // 最后一步：摘要之后才出现提示符
 }
 
 } // namespace app
