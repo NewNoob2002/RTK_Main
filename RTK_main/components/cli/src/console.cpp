@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <span>
@@ -28,6 +29,7 @@ namespace {
 constexpr const char *kTag = "cli";
 constexpr int kGroupWidth = 12;             // help 列表里组名左对齐宽度
 constexpr size_t kConsoleRxBufBytes = 256U; // 与 IDF uart_vfs_dev_port_init 的内部选择保持一致
+constexpr uint32_t kTxDrainTimeoutMs = 50U; // 128 B 硬件 FIFO 在 2 Mbaud 下约 0.64 ms 发完，留足余量
 constexpr size_t kHelpMaxArgs = 2U;         // help [<group>]
 constexpr const char *kHelpName = "help";
 constexpr const char *kHelpSummary = "show command list, or usage of one group";
@@ -260,7 +262,14 @@ esp_err_t enable_uart_tx_buffer() noexcept
 #if CONFIG_RTK_CONSOLE_UART_TX_BUF > 0
     // Kconfig range 0..2 保证端口号合法；uart_port_t 是枚举，转 static_cast 不改变数值。
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_CONSOLE_UART_NUM);
-    esp_err_t err = uart_driver_delete(port);
+    // uart_param_config() 会复位 TX FIFO（uart_hal_txfifo_rst）：先等已写入 FIFO 的启动日志发完，
+    // 否则切换瞬间尚未移出的字节被丢弃，表现为启动日志行被截断（R8a HIL 观察到 "W (260) uart_vfs: light slee"）。
+    esp_err_t err = uart_wait_tx_done(port, pdMS_TO_TICKS(kTxDrainTimeoutMs));
+    if (err != ESP_OK) {
+        // 超时只意味着可能丢少量启动日志，不影响控制台功能，继续切换。
+        ESP_LOGW(kTag, "uart_wait_tx_done: %s", esp_err_to_name(err));
+    }
+    err = uart_driver_delete(port);
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "uart_driver_delete failed: %s", esp_err_to_name(err));
         return err;
@@ -393,6 +402,9 @@ esp_err_t start(const char *prompt) noexcept
 
     esp_err_t err = ESP_OK;
 #if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT) || defined(CONFIG_ESP_CONSOLE_UART_CUSTOM)
+    // 控制台固定 2 Mbaud（> 1 MHz 只能用 APB 时钟）；本固件不用 UART light-sleep 唤醒，
+    // uart_vfs 每次启动打印的 "light sleep UART wakeup might not work" 告警无意义，只保留其错误级日志。
+    esp_log_level_set("uart_vfs", ESP_LOG_ERROR);
     esp_console_dev_uart_config_t uart_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
     uart_cfg.channel = CONFIG_RTK_CONSOLE_UART_NUM;
     uart_cfg.baud_rate = CONFIG_RTK_CONSOLE_UART_BAUD;
