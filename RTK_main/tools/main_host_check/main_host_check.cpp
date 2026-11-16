@@ -531,7 +531,7 @@ void rtcm_reset_lifecycle()
     dirty(0);
     drain_rx(s_clock);
     publish_snapshot(s_clock);
-    CHECK(s_sessions[0].demux.busy());
+    CHECK(s_sessions[0].demux->busy());
     CHECK(s_snapshot.demux_unknown_bytes == kInvalid.size() + bad_size);
     CHECK(s_snapshot.demux_product_rejects == 2 && s_snapshot.demux_rtcm_rejects == 1);
     CHECK(s_snapshot.parser_crc_errors == 0 && s_snapshot.parser_length_errors == 0);
@@ -544,7 +544,7 @@ void rtcm_reset_lifecycle()
     CHECK(s_result_queue.receive(result, 0));
     CHECK(result.seq == 17 && result.status == CommandStatus::kOk);
     publish_snapshot(s_clock);
-    CHECK(s_sessions[0].demux.busy());
+    CHECK(s_sessions[0].demux->busy());
     CHECK(s_snapshot.rtcm_frames == 0 && s_snapshot.rtcm_bytes == 0 && s_snapshot.rtcm_crc32 == 0);
     CHECK(s_snapshot.rtcm_last_msg == 0 && s_snapshot.rtcm_rejected_role == 0);
     CHECK(s_snapshot.demux_unknown_bytes == 0 && s_snapshot.demux_product_rejects == 0 &&
@@ -558,7 +558,7 @@ void rtcm_reset_lifecycle()
     append_bytes(0, kPartial);
     dirty(0);
     drain_rx(s_clock);
-    CHECK(s_sessions[0].demux.busy());
+    CHECK(s_sessions[0].demux->busy());
     spp_server_evt_t close{};
     close.type = SPP_SERVER_EVT_CLOSE;
     close.handle = 1;
@@ -566,7 +566,7 @@ void rtcm_reset_lifecycle()
     handle_event(close, s_clock); // 重复 CLOSE 不得重复累计。
     publish_snapshot(s_clock);
     CHECK(s_snapshot.demux_unknown_bytes == 3 && s_snapshot.demux_rtcm_rejects == 1);
-    CHECK(!s_sessions[0].used && !s_sessions[0].demux.busy());
+    CHECK(!s_sessions[0].used && !s_sessions[0].demux->busy());
     open(1, kPhone);
     const auto next = append_rtcm(0, 1077);
     dirty(0);
@@ -1026,6 +1026,9 @@ void rx_512_partial_and_pause_isolation()
 void rtcm_pipe_direct_and_io_stats()
 {
     app::RtcmPipe pipe;
+    pipe.init_lock();
+    std::array<uint8_t, app::kRtcmPipeBytes> pipe_buf{};
+    CHECK(pipe.bind_storage(pipe_buf) == fw::Status::kOk);
     CHECK(pipe.init() == fw::Status::kOk);
     std::array<uint8_t, 1029> frame{};
     frame[0] = 0xD3U;

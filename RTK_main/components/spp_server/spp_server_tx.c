@@ -205,7 +205,8 @@ static esp_err_t spp_server_tx_commit_spans(const spp_server_tx_token_t *token, 
     ring->copying = true;
     session->users++;
     capacity = (token->channel == SPP_SERVER_CHANNEL_STREAM) ? SPP_SERVER_STREAM_CAPACITY : SPP_SERVER_REPLY_CAPACITY;
-    storage = (token->channel == SPP_SERVER_CHANNEL_STREAM) ? s_spp.stream_buf : session->reply_buf;
+    storage =
+        (token->channel == SPP_SERVER_CHANNEL_STREAM) ? s_spp.storage.stream_buf : s_spp.storage.reply_buf[token->slot];
     tail = ((size_t)ring->head + ring->used) % capacity;
     taskEXIT_CRITICAL(&s_spp_mux);
 
@@ -427,13 +428,13 @@ static bool spp_server_worker_submit(void)
             spp_server_ring_t *ring = &candidate->reply;
             uint8_t channel = SPP_SERVER_CHANNEL_REPLY;
             capacity = SPP_SERVER_REPLY_CAPACITY;
-            storage = candidate->reply_buf;
+            storage = s_spp.storage.reply_buf[idx];
             const bool stream =
                 (s_spp.stream_owner == (idx + 1U)) && !s_spp.stream_unbind && (s_spp.stream.used > s_spp.stream.issued);
             if (stream && (s_spp.stream_active || ((ring->used == ring->issued) && (candidate->push_len == 0U)))) {
                 ring = &s_spp.stream;
                 capacity = SPP_SERVER_STREAM_CAPACITY;
-                storage = s_spp.stream_buf;
+                storage = s_spp.storage.stream_buf;
                 channel = SPP_SERVER_CHANNEL_STREAM;
             }
             size_t len = ring->used - ring->issued;
@@ -444,7 +445,7 @@ static bool spp_server_worker_submit(void)
                 }
                 len = candidate->push_len;
                 channel = SPP_SERVER_CHANNEL_PUSH;
-                memcpy(s_spp.merge, candidate->push, len); /* <=40B */
+                memcpy(s_spp.storage.merge_buf, candidate->push, len); /* <=40B */
                 candidate->push_len = 0U;
                 storage = NULL;
             } else if (channel == SPP_SERVER_CHANNEL_STREAM) {
@@ -478,11 +479,11 @@ static bool spp_server_worker_submit(void)
     }
     if (storage != NULL) {
         const size_t first = (submitted.len <= (capacity - offset)) ? submitted.len : (capacity - offset);
-        memcpy(s_spp.merge, storage + offset, first);
-        memcpy(s_spp.merge + first, storage, submitted.len - first);
+        memcpy(s_spp.storage.merge_buf, storage + offset, first);
+        memcpy(s_spp.storage.merge_buf + first, storage, submitted.len - first);
     }
     /* 唯一 SDK write 调用；len<=1024，转 int 安全。SDK 深拷贝并可能阻塞 BTC 投递。 */
-    const esp_err_t result = esp_spp_write(submitted.handle, (int)submitted.len, s_spp.merge);
+    const esp_err_t result = esp_spp_write(submitted.handle, (int)submitted.len, s_spp.storage.merge_buf);
     taskENTER_CRITICAL(&s_spp_mux);
     item->submitting = false;
     if (result != ESP_OK) {
@@ -543,6 +544,18 @@ void spp_server_worker(void *arg)
 {
     (void)arg;
     for (;;) {
+        bool stopped = false;
+        taskENTER_CRITICAL(&s_spp_mux);
+        stopped = s_spp.boot_stop_requested;
+        if (stopped) {
+            s_spp.boot_worker_stopped = true;
+        }
+        taskEXIT_CRITICAL(&s_spp_mux);
+        if (stopped) {
+            /* 启动失败后永久停泊；TCB/栈与回调存储保留至重启，不再提交 SDK 调用。 */
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
         /* 每轮至多四次，控制请求不能被持续生产的数据饿死。满/CONG 时由通知唤醒，无忙轮询。 */
         for (uint32_t count = 0U; count < SPP_SERVER_INFLIGHT_MAX; ++count) {
             if (!spp_server_worker_submit()) {

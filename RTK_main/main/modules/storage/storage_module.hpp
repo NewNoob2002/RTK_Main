@@ -13,7 +13,12 @@ struct ModuleTestAccess;
 /** 存储模块（kLink 执行器）：SN 与白名单的 NVS 持久化与重试。 */
 class StorageModule final {
 public:
-    constexpr explicit StorageModule(AppContext &context) noexcept : context_(context) {}
+    constexpr StorageModule() noexcept = default;
+    constexpr explicit StorageModule(AppContext &context) noexcept : context_(&context) {}
+    void bind_context(AppContext &context) noexcept
+    {
+        context_ = &context;
+    }
     ~StorageModule() = default;
     StorageModule(const StorageModule &) = delete;
     StorageModule &operator=(const StorageModule &) = delete;
@@ -46,14 +51,19 @@ private:
     [[nodiscard]] fw::Result sn_save(std::span<uint8_t> out, size_t &len) const noexcept;
     void save_sn(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
+    [[nodiscard]] AppContext &ctx() noexcept
+    {
+        return *context_;
+    }
+
     static constexpr uint32_t kRetryInitialMs = 1000;
-    AppContext &context_;
+    AppContext *context_ = nullptr;
     bool initialized_ = false;
     bool pending_ = false;
     bool attempted_ = false;
     uint32_t changed_ms_ = 0;
     uint32_t attempt_ms_ = 0;
-    uint32_t retry_ms_ = kRetryInitialMs;
+    uint32_t retry_ms_ = 0U;
     StoreStatus status_{};
     LinkStatus whitelist_{};
     std::array<char, NVS_STORE_SN_MAX + 1U> sn_{};

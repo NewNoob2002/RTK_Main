@@ -77,6 +77,7 @@ typedef struct {
     int unused;
 } portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED {0}
+#define portMUX_INITIALIZE(mux)      ((void)(mux))
 
 void fake_crit_enter(void);
 void fake_crit_exit(void);

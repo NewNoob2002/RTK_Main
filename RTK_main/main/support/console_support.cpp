@@ -98,7 +98,11 @@ bool submit_raw_to(rtos::Executor &executor, ModuleKind module, const char *down
 
 bool submit_raw(const fw::Command &command, fw::CommandResult &out) noexcept
 {
-    return submit_raw_to(app_context().link_executor, ModuleKind::kBtLink, "link not running", command, out);
+    if (app_context().link_executor == nullptr) {
+        (void)cli::fail("link not running");
+        return false;
+    }
+    return submit_raw_to(*app_context().link_executor, ModuleKind::kBtLink, "link not running", command, out);
 }
 
 bool submit(const fw::Command &command, const char *what) noexcept

@@ -13,6 +13,7 @@ set(CMAKE_C_EXTENSIONS ON)
 
 get_filename_component(PROJ_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(SPP_SERVER_INC "${PROJ_ROOT}/components/spp_server/include")
+set(SPP_SERVER_BOOT_INC "${PROJ_ROOT}/components/spp_server/boot_include")
 set(SPP_SERVER_PRIV_INC "${PROJ_ROOT}/components/spp_server/private_include")
 # 替身头文件目录必须放在 IDF 之前；host 环境没有 IDF。
 set(SHIM_INC "${CMAKE_CURRENT_SOURCE_DIR}/shim/inc")
@@ -35,7 +36,7 @@ add_library(spp_server_driver STATIC
     "${PROJ_ROOT}/components/spp_server/spp_server_rx.c"
     "${PROJ_ROOT}/components/spp_server/spp_server_tx.c"
     "${PROJ_ROOT}/components/spp_server/spp_server_gap.c")
-target_include_directories(spp_server_driver PUBLIC "${SHIM_INC}" "${SPP_SERVER_INC}")
+target_include_directories(spp_server_driver PUBLIC "${SHIM_INC}" "${SPP_SERVER_INC}" "${SPP_SERVER_BOOT_INC}")
 target_include_directories(spp_server_driver PRIVATE "${SPP_SERVER_PRIV_INC}")
 target_link_libraries(spp_server_driver PUBLIC fake_idf)
 target_compile_options(spp_server_driver PRIVATE
@@ -52,6 +53,10 @@ enable_testing()
 
 # 每个场景独立进程：驱动只有 init、没有 deinit 公共接口，静态对象在进程内不复用。
 set(T13_SCENARIOS
+    boot_stop
+    boot_stop_failure
+    boot_stop_after_init_failure
+    storage_binding
     rx_wake_level_and_stats
     reject_rearm_after_close
     lifecycle_burst_churn

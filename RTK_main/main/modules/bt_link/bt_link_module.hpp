@@ -6,6 +6,7 @@
 #include <atomic>
 #include <optional>
 #include <span>
+#include <type_traits>
 
 #include "app_config.hpp"
 #include "def/rtcm_def.hpp"
@@ -37,7 +38,12 @@ struct ModuleTestAccess;
 /** 链路模块（kLink 执行器）：SPP 事件、分流器、路由与统计的唯一所有者；仅链路任务使用。 */
 class BtLinkModule final {
 public:
-    constexpr explicit BtLinkModule(AppContext &context) noexcept : context_(context) {}
+    constexpr BtLinkModule() noexcept = default;
+    constexpr explicit BtLinkModule(AppContext &context) noexcept : context_(&context) {}
+    void bind_context(AppContext &context) noexcept
+    {
+        context_ = &context;
+    }
     ~BtLinkModule() = default;
     BtLinkModule(const BtLinkModule &) = delete;
     BtLinkModule &operator=(const BtLinkModule &) = delete;
@@ -72,13 +78,13 @@ private:
         void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> wire) noexcept override;
         [[nodiscard]] bool healthy() const noexcept
         {
-            return healthy_;
+            return !unhealthy_;
         }
 
     private:
         BtLinkModule *owner_ = nullptr;
         core::SessionHandle handle_ = 0;
-        bool healthy_ = true;
+        bool unhealthy_ = false;
     };
     struct SessionEntry {
         bool used = false;
@@ -88,13 +94,16 @@ private:
         std::array<uint8_t, kRxChunkBytes> rx{};
         size_t rx_offset = 0;
         size_t rx_size = 0;
-        SessionSink sink{};
-        SessionDemux demux{};
+        std::optional<SessionSink> sink{};
+        std::optional<SessionDemux> demux{};
         bool demux_ready = false;
         // 分流器累计统计的上报基线，仅 kLink 读写；会话复用时归零。
         uint32_t seen_resyncs = 0;
         uint32_t seen_unknown = 0;
     };
+    static_assert(std::is_trivially_destructible_v<SessionSink>, "SessionSink must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<SessionDemux>, "SessionDemux must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<spp::SppTransport>, "SppTransport must be trivially destructible");
 
     [[nodiscard]] SessionEntry *session_find(core::SessionHandle handle) noexcept;
     void session_forget(core::SessionHandle handle) noexcept;
@@ -127,14 +136,21 @@ private:
     void edit_whitelist(const fw::Command &cmd, bool add, fw::CommandResult &result) noexcept;
     void persist_whitelist(fw::CommandResult &result) noexcept;
 
-    AppContext &context_;
+    static_assert(std::is_trivially_destructible_v<core::AlarmSource>, "AlarmSource must be trivially destructible");
+
+    [[nodiscard]] AppContext &ctx() noexcept
+    {
+        return *context_;
+    }
+
+    AppContext *context_ = nullptr;
     uint32_t last_tick_ms_ = 0;
     uint32_t reset_version_ = 0;
     uint32_t round_start_ms_ = 0;
     DemuxStats retired_demux_{};
     core::LinkManager link_manager_{};
-    core::AlarmSource alarm_{};
-    spp::SppTransport transport_{};
+    std::optional<core::AlarmSource> alarm_{};
+    std::optional<spp::SppTransport> transport_{};
     core::SessionHandle stream_handle_ = 0;
     // optional 在 init 按依赖次序原地构造，生命周期覆盖整个运行期，不分配堆。
     std::optional<core::services::DeviceService> device_service_{};
@@ -155,9 +171,10 @@ private:
     RtcmLinkSnapshot rtcm_snapshot_{};
     std::atomic<TaskHandle_t> wake_task_{nullptr};
 #if RTK_GNSS_ENABLED
+    static_assert(std::is_trivially_destructible_v<::gnss::Fix>, "gnss::Fix must be trivially destructible");
     uint32_t gnss_fix_version_ = 0;
     uint32_t gnss_status_version_ = 0;
-    ::gnss::Fix cached_gnss_fix_{};
+    std::optional<::gnss::Fix> cached_gnss_fix_{};
 #endif
 };
 /** 链路模块的只读控制台命令表（bt/alarm）；静态存储，进程期有效。 */

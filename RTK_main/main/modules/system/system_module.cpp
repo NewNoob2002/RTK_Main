@@ -45,7 +45,7 @@ bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out)
 void SystemModule::prepare() noexcept
 {
     /* 读取持久化 SN 和启动期堆状态。 */
-    status_ = context_.data.system_status.read();
+    status_ = ctx().data.system_status.read();
     status_.free_heap = esp_get_free_heap_size();
     status_.min_free_heap = esp_get_minimum_free_heap_size();
     if (status_.sn[0] == '\0') {
@@ -61,7 +61,7 @@ void SystemModule::prepare() noexcept
     /* 名称校验通过后才启动 BT，失败仍发布状态供控制台读取。 */
     if (!build_device_name(status_.sn.data(), status_.device_name)) {
         ESP_LOGE("system", "invalid SN for BT name");
-        context_.data.system_status.write(status_);
+        ctx().data.system_status.write(status_);
         return;
     }
     ESP_LOGI("system", "sn=%s bt_name=%s policy=%s", status_.sn.data(), status_.device_name.data(),
@@ -71,19 +71,23 @@ void SystemModule::prepare() noexcept
     if (error != ESP_OK) {
         ESP_LOGE("system", "bt_spp init failed: %s; console only", esp_err_to_name(error));
     }
-    context_.data.system_status.write(status_);
+    ctx().data.system_status.write(status_);
 }
 bool SystemModule::poll(uint32_t /*now_ms*/) noexcept
 {
     /* 先更新系统状态，再发布执行器统计，保持原主题写入顺序。 */
-    status_.link_running =
-        context_.link_executor.running() && context_.link_executor.module_ok(id(ModuleKind::kBtLink));
+    status_.link_running = (ctx().link_executor != nullptr) && ctx().link_executor->running() &&
+                           ctx().link_executor->module_ok(id(ModuleKind::kBtLink));
     status_.free_heap = esp_get_free_heap_size();
     status_.min_free_heap = esp_get_minimum_free_heap_size();
-    context_.data.system_status.write(status_);
-    context_.data.exec_stats.write(context_.link_executor.stats());
+    ctx().data.system_status.write(status_);
+    if (ctx().link_executor != nullptr) {
+        ctx().data.exec_stats.write(ctx().link_executor->stats());
+    }
 #if RTK_GNSS_ENABLED
-    context_.data.io_exec_stats.write(context_.io_executor.stats());
+    if (ctx().io_executor != nullptr) {
+        ctx().data.io_exec_stats.write(ctx().io_executor->stats());
+    }
 #endif
     return false;
 }

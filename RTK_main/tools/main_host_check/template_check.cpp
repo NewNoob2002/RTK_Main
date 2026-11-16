@@ -20,6 +20,11 @@ AppContext &app_context() noexcept
 {
     return s_test_app;
 }
+// 原有执行器场景已完成启动；组合根启动门控在 boot_alloc_check 单独验证。
+bool AppContext::await_boot(uint32_t, bool) noexcept
+{
+    return true;
+}
 } // namespace app
 
 // 测试向量直接表达时刻、指令号与预期值，便于对照生命周期断言。
@@ -85,6 +90,7 @@ fw::Command make_limit_cmd(fw::ModuleId target, uint32_t limit_ms) noexcept
 void test_lifecycle()
 {
     auto &ctx = app::app_context();
+    ctx.bind_contexts();
     ctx.data.init();
     app::TemplateModule tmpl{ctx};
 
@@ -104,11 +110,15 @@ void test_lifecycle()
     modules[1].self = &tmpl;
     modules[1].ops = &ops;
 
+    static rtos::Executor s_exec{};
+    static std::array<StackType_t, app::AppContext::kLinkStackBytes / sizeof(StackType_t)> s_link_stack{};
+    ctx.link_executor = &s_exec;
+
     const rtos::ExecutorConfig cfg{
         .name = "tmpl_exec", .priority = 5U, .core = 1, .wait = wait_advance, .wait_ctx = nullptr};
-    CHECK(ctx.link_executor.init(cfg, modules, rtos::view_of(ctx.link_storage)) == fw::Status::kOk);
+    CHECK(ctx.link_executor->init(cfg, modules, app::view_of(ctx.link_storage, s_link_stack)) == fw::Status::kOk);
     CHECK(tmpl.state().initialized && tmpl.state().limit_ms == 1000U && tmpl.state().ticks == 0U);
-    CHECK(ctx.link_executor.start() == fw::Status::kOk);
+    CHECK(ctx.link_executor->start() == fw::Status::kOk);
 
     // 第 1 轮：ticks=1；第 2 轮只过 100 ms（< 1000 ms）不变；推进到 >= 1000 ms 后 ticks=2。
     s_round_limit = 2U;
@@ -122,27 +132,27 @@ void test_lifecycle()
     // 通过 Executor CommandBus 验证合法/非法命令。
     s_pump_receive = true;
     fw::CommandResult res{};
-    CHECK(ctx.link_executor.call(make_limit_cmd(kTemplateId, 2500U), res, 100U) == fw::Result::kOk);
+    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 2500U), res, 100U) == fw::Result::kOk);
     CHECK(res.status == fw::Result::kOk && tmpl.state().limit_ms == 2500U);
 
-    CHECK(ctx.link_executor.call(make_limit_cmd(kTemplateId, 0U), res, 100U) == fw::Result::kOk);
+    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 0U), res, 100U) == fw::Result::kOk);
     CHECK(res.status == fw::Result::kInvalidArg);
-    CHECK(ctx.link_executor.call(make_limit_cmd(kTemplateId, 60001U), res, 100U) == fw::Result::kOk);
+    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 60001U), res, 100U) == fw::Result::kOk);
     CHECK(res.status == fw::Result::kInvalidArg);
 
     fw::Command bad_len = make_limit_cmd(kTemplateId, 500U);
     bad_len.arg_len = 2U;
-    CHECK(ctx.link_executor.call(bad_len, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+    CHECK(ctx.link_executor->call(bad_len, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
 
     const fw::Command reset_bad{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 1U};
-    CHECK(ctx.link_executor.call(reset_bad, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+    CHECK(ctx.link_executor->call(reset_bad, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
 
     const fw::Command reset_ok{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 0U};
-    CHECK(ctx.link_executor.call(reset_ok, res, 100U) == fw::Result::kOk && res.status == fw::Result::kOk);
+    CHECK(ctx.link_executor->call(reset_ok, res, 100U) == fw::Result::kOk && res.status == fw::Result::kOk);
     CHECK(tmpl.state().ticks == 0U);
 
     const fw::Command bad_verb{.target = kTemplateId, .verb = 99U};
-    CHECK(ctx.link_executor.call(bad_verb, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+    CHECK(ctx.link_executor->call(bad_verb, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
 }
 
 void test_commands_before_exec()

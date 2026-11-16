@@ -9,7 +9,12 @@ struct AppContext;
 /** 系统模块（kLink 执行器）：周期发布状态快照并处理 system 命令。 */
 class SystemModule final {
 public:
-    constexpr explicit SystemModule(AppContext &context) noexcept : context_(context) {}
+    constexpr SystemModule() noexcept = default;
+    constexpr explicit SystemModule(AppContext &context) noexcept : context_(&context) {}
+    void bind_context(AppContext &context) noexcept
+    {
+        context_ = &context;
+    }
     ~SystemModule() = default;
     SystemModule(const SystemModule &) = delete;
     SystemModule &operator=(const SystemModule &) = delete;
@@ -21,7 +26,12 @@ public:
     [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
 
 private:
-    AppContext &context_;
+    [[nodiscard]] AppContext &ctx() noexcept
+    {
+        return *context_;
+    }
+
+    AppContext *context_ = nullptr;
     SystemStatus status_{};
 };
 // 纯函数，线程/ISR 安全。

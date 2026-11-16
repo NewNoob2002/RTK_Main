@@ -9,6 +9,7 @@
 
 #include "fake_idf.h"
 #include "spp_server_priv.h"
+#include "spp_server_storage.h"
 
 static int s_failures;
 #define CHECK(expr)                                                                                                    \
@@ -63,9 +64,31 @@ static void open_session(uint32_t handle)
     CHECK(event(SPP_SERVER_EVT_OPEN, handle));
 }
 
+static uint8_t s_rx_buf[SPP_SERVER_MAX_SESSIONS][SPP_SERVER_RX_BUF_SIZE];
+static uint8_t s_reply_buf[SPP_SERVER_MAX_SESSIONS][SPP_SERVER_REPLY_CAPACITY];
+static uint8_t s_stream_buf[SPP_SERVER_STREAM_CAPACITY];
+static uint8_t s_merge_buf[SPP_SERVER_MERGE_CAPACITY];
+static _Alignas(uint32_t) StackType_t s_worker_stack[SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t)];
+
 static void init(void)
 {
+    spp_server_storage_t st;
+    memset(&st, 0, sizeof(st));
+    for (uint32_t i = 0U; i < SPP_SERVER_MAX_SESSIONS; i++) {
+        st.rx_buf[i] = s_rx_buf[i];
+        st.rx_buf_bytes[i] = sizeof(s_rx_buf[i]);
+        st.reply_buf[i] = s_reply_buf[i];
+        st.reply_buf_bytes[i] = sizeof(s_reply_buf[i]);
+    }
+    st.stream_buf = s_stream_buf;
+    st.stream_buf_bytes = sizeof(s_stream_buf);
+    st.merge_buf = s_merge_buf;
+    st.merge_buf_bytes = sizeof(s_merge_buf);
+    st.worker_stack = s_worker_stack;
+    st.worker_stack_bytes = sizeof(s_worker_stack);
+
     fake_reset();
+    CHECK(spp_server_bind_storage(&st) == ESP_OK);
     CHECK(spp_server_init("K2") == ESP_OK);
     open_session(0x11U);
     open_session(0x22U);

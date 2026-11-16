@@ -200,8 +200,12 @@ bool report_gnss_result(const fw::CommandResult &res) noexcept
 
 bool submit_gnss(const fw::Command &cmd) noexcept
 {
+    if (app_context().io_executor == nullptr) {
+        (void)cli::fail("gnss not running");
+        return false;
+    }
     fw::CommandResult res{};
-    if (!submit_raw_to(app_context().io_executor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
+    if (!submit_raw_to(*app_context().io_executor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
         return false;
     }
     return report_gnss_result(res);
@@ -364,12 +368,13 @@ int cmd_gnss_reset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 
 int cmd_gnss_rate(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    if (argc != 2) {
+    if ((argc != 2) || (argv == nullptr)) {
         return cli::fail("usage: gnss rate <1|2|5|10|20>");
     }
+    const std::span<char *const> args{argv, 2U};
     uint8_t hz = 0U;
-    if (!cli::parse_u8(argv[1], hz)) {
-        return cli::fail("invalid rate: %s", argv[1]);
+    if (!cli::parse_u8(args[1], hz)) {
+        return cli::fail("invalid rate: %s", args[1]);
     }
     fw::Command cmd{};
     cmd.target = id(ModuleKind::kGnss);
@@ -381,15 +386,17 @@ int cmd_gnss_rate(void * /*ctx*/, int argc, char **argv) noexcept
 
 int cmd_gnss_send(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    if (argc < 2) {
+    if ((argc < 2) || (argv == nullptr)) {
         return cli::fail("usage: gnss send <text>");
     }
+    // argc 已验证为正；转换为 size_t 不改变数值。
+    const std::span<char *const> args{argv, static_cast<size_t>(argc)};
     fw::Command cmd{};
     cmd.target = id(ModuleKind::kGnss);
     cmd.verb = static_cast<uint8_t>(GnssVerb::kSend);
     size_t pos = 0U;
-    for (int i = 1; i < argc; ++i) {
-        const size_t part_len = std::strlen(argv[i]);
+    for (size_t i = 1U; i < args.size(); ++i) {
+        const size_t part_len = std::strlen(args[i]);
         const size_t need = (i > 1) ? (part_len + 1U) : part_len;
         if (need > (cmd.args.size() - pos)) {
             return cli::fail("command too long (max %u)", static_cast<unsigned>(cmd.args.size()));
@@ -398,7 +405,7 @@ int cmd_gnss_send(void * /*ctx*/, int argc, char **argv) noexcept
             cmd.args[pos] = static_cast<uint8_t>(' ');
             ++pos;
         }
-        std::memcpy(cmd.args.data() + pos, argv[i], part_len);
+        std::memcpy(std::span{cmd.args}.subspan(pos, part_len).data(), args[i], part_len);
         pos += part_len;
     }
     if (pos == 0U) {

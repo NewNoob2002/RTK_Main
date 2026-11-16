@@ -2,6 +2,7 @@
 // 线程：仅在 console REPL 任务调用，非 ISR；只读 DataCenter 或调用 IDF 系统/任务/日志查询接口。
 
 #include "modules/system/system_module.hpp"
+#include "modules/system/system_memory.hpp"
 
 #include <array>
 #include <cinttypes>
@@ -15,11 +16,10 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
-#include "esp_log.h"
+#include "esp_log_level.h"
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "app_config.hpp"
@@ -28,6 +28,16 @@
 #include "fw/trace.hpp"
 #include "modules/rtcm/rtcm_module.hpp"
 #include "support/console_support.hpp"
+
+extern "C" {
+// 链接脚本提供的静态段起止符号，命名由 ESP-IDF 链接脚本固定，须在全局作用域声明 C 链接。
+// NOLINTBEGIN(readability-identifier-naming)
+extern const char _data_start;
+extern const char _data_end;
+extern const char _bss_start;
+extern const char _bss_end;
+// NOLINTEND(readability-identifier-naming)
+}
 
 namespace app {
 
@@ -434,6 +444,38 @@ int cmd_sys_heap(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+int cmd_sys_mem(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+{
+    if (argc != 1) {
+        return cli::fail("usage: sys mem");
+    }
+    // 链接脚本符号是边界地址，不是同一 C++ 数组；先转 uintptr_t 再计算字节差。
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast): 链接脚本边界符号必须转换为地址数值。
+    const auto data_begin = reinterpret_cast<uintptr_t>(&_data_start);
+    const auto data_end = reinterpret_cast<uintptr_t>(&_data_end);
+    const auto bss_begin = reinterpret_cast<uintptr_t>(&_bss_start);
+    const auto bss_end = reinterpret_cast<uintptr_t>(&_bss_end);
+    // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
+    // ESP32 uintptr_t/size_t 同宽；边界顺序检查保证差值非负。
+    const size_t static_data_bytes = (data_end >= data_begin) ? static_cast<size_t>(data_end - data_begin) : 0U;
+    const size_t static_bss_bytes = (bss_end >= bss_begin) ? static_cast<size_t>(bss_end - bss_begin) : 0U;
+
+    std::array<MemoryHeapView, 4U> heaps{{
+        {"internal_8bit", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, 0U, 0U, 0U, 0U},
+        {"8bit", MALLOC_CAP_8BIT, 0U, 0U, 0U, 0U},
+        {"dma", MALLOC_CAP_DMA, 0U, 0U, 0U, 0U},
+        {"default", MALLOC_CAP_DEFAULT, 0U, 0U, 0U, 0U},
+    }};
+    for (auto &view : heaps) {
+        view.total = heap_caps_get_total_size(view.caps);
+        view.free = heap_caps_get_free_size(view.caps);
+        view.minimum = heap_caps_get_minimum_free_size(view.caps);
+        view.largest = heap_caps_get_largest_free_block(view.caps);
+    }
+    print_memory_report(app_context().boot_arena, static_data_bytes, static_bss_bytes, heaps);
+    return 0;
+}
+
 void print_task_row(const char *label, TaskHandle_t handle) noexcept
 {
     if (handle == nullptr) {
@@ -442,8 +484,8 @@ void print_task_row(const char *label, TaskHandle_t handle) noexcept
     }
     const BaseType_t core = xTaskGetCoreID(handle);
     const unsigned prio = static_cast<unsigned>(uxTaskPriorityGet(handle));
-    const unsigned long hwm_bytes = static_cast<unsigned long>(uxTaskGetStackHighWaterMark(handle)) *
-                                    static_cast<unsigned long>(sizeof(StackType_t));
+    // ESP-IDF 的 high-water mark 原始单位已经是字节（task.h），unsigned long 足以表示 UBaseType_t。
+    const unsigned long hwm_bytes = static_cast<unsigned long>(uxTaskGetStackHighWaterMark(handle));
     std::array<char, kCoreTextLen> core_buf{};
     if (core == tskNO_AFFINITY) {
         (void)std::snprintf(core_buf.data(), core_buf.size(), "any");
@@ -500,9 +542,10 @@ constexpr std::array<cli::Verb, 1U> kLogVerbs{{
     {"level", "<tag|*> <E|W|I|N>", "set IDF log level (max INFO)", cmd_log_level},
 }};
 
-constexpr std::array<cli::Verb, 4U> kSysVerbs{{
+constexpr std::array<cli::Verb, 5U> kSysVerbs{{
     {"info", nullptr, "firmware, IDF, chip, MAC, SN and uptime", cmd_sys_info},
     {"heap", nullptr, "internal RAM free, min and largest block", cmd_sys_heap},
+    {"mem", nullptr, "static DRAM, BootArena and heap_caps breakdown", cmd_sys_mem},
     {"tasks", nullptr, "known task cores, priorities and stack HWM", cmd_sys_tasks},
     {"reboot", nullptr, "print OK, wait 100 ms and restart", cmd_sys_reboot},
 }};
@@ -526,7 +569,7 @@ constexpr std::array<cli::Cmd, 3U> kSystemCmds{{
     {"status", "status [link|rtcm|gnss|sys|all]: system and link status", "[link|rtcm|gnss|sys|all]", cmd_status,
      nullptr},
     {"log", "log level <tag|*> <E|W|I|N>: set IDF log level", "level <tag|*> <E|W|I|N>", cmd_log, nullptr},
-    {"sys", "sys <info|heap|tasks|reboot>: system diagnostics and reboot", "<info|heap|tasks|reboot>", cmd_sys,
+    {"sys", "sys <info|heap|mem|tasks|reboot>: system diagnostics and reboot", "<info|heap|mem|tasks|reboot>", cmd_sys,
      nullptr},
 }};
 

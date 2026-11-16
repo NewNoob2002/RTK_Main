@@ -190,6 +190,20 @@ fw::Result GnssOutConfig::decode(std::span<const uint8_t> in, GnssOutConfig &out
     return fw::Result::kOk;
 }
 
+fw::Status GnssLatestCache::init(std::span<uint8_t> buf) noexcept
+{
+    if ((buf.data() == nullptr) || (buf.size() < kGnssLatestTotalBytes)) {
+        return fw::Status::kInvalidArg;
+    }
+    const fw::LockGuard guard(lock_);
+    buf_ = buf.first(kGnssLatestTotalBytes);
+    lengths_.fill(0U);
+    updates_.fill(0U);
+    oversize_drops_.fill(0U);
+    query_oversize_.fill(0U);
+    return fw::Status::kOk;
+}
+
 bool GnssLatestCache::update(uint8_t type_idx, std::span<const uint8_t> frame) noexcept
 {
     if ((type_idx >= kGnssAppMsgCount) || frame.empty()) {
@@ -198,11 +212,14 @@ bool GnssLatestCache::update(uint8_t type_idx, std::span<const uint8_t> frame) n
     const size_t cap = kGnssLatestCaps[type_idx];
     const size_t ofs = kGnssLatestOffsets[type_idx];
     const fw::LockGuard guard(lock_);
+    if (buf_.size() < kGnssLatestTotalBytes) {
+        return false;
+    }
     if (frame.size() > cap) {
         ++oversize_drops_[type_idx];
         return false;
     }
-    const auto slot_dst = std::span<uint8_t>{buf_}.subspan(ofs, frame.size());
+    const auto slot_dst = buf_.subspan(ofs, frame.size());
     std::memcpy(slot_dst.data(), frame.data(), frame.size());
     lengths_[type_idx] = static_cast<uint16_t>(frame.size());
     ++updates_[type_idx];
@@ -216,6 +233,9 @@ core::services::GnssQueryResult GnssLatestCache::query(uint8_t type_idx, std::sp
     }
     const size_t ofs = kGnssLatestOffsets[type_idx];
     const fw::LockGuard guard(lock_);
+    if (buf_.size() < kGnssLatestTotalBytes) {
+        return {};
+    }
     const size_t len = lengths_[type_idx];
     if (len == 0U) {
         return {};
@@ -224,7 +244,7 @@ core::services::GnssQueryResult GnssLatestCache::query(uint8_t type_idx, std::sp
         ++query_oversize_[type_idx];
         return {.ok = false, .oversize = true, .len = 0U};
     }
-    const auto slot_src = std::span<const uint8_t>{buf_}.subspan(ofs, len);
+    const auto slot_src = buf_.subspan(ofs, len);
     std::memcpy(dst.data(), slot_src.data(), len);
     return {.ok = true, .oversize = false, .len = len};
 }

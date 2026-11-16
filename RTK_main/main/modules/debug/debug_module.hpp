@@ -15,7 +15,7 @@
 #include "fw/store_key.hpp"
 #include "fw/tlog.hpp"
 #include "fw/trace.hpp"
-#include "rtos/static_task.hpp"
+#include "rtos/boot_task.hpp"
 
 namespace app {
 struct AppContext;
@@ -26,6 +26,13 @@ struct AppContext;
  */
 class DebugModule final {
 public:
+    /** 启动期外供存储视图（trace 环 + 文本日志环 + trace_out 栈）。 */
+    struct StorageView {
+        std::span<fw::TraceEvent> trace_ring{};
+        std::span<uint8_t> log_ring{};
+        std::span<StackType_t> task_stack{};
+    };
+
     /** 环容量：256 条 × 16 字节 = 4 KB 静态存储，够覆盖 20 ms 输出间隔的突发。 */
     static constexpr size_t kRingEvents = 256;
     /** 输出任务轮询周期；有事件时立即输出，不必等满一个周期。 */
@@ -36,7 +43,7 @@ public:
     static constexpr size_t kTaskStackBytes = 3072;
     /**
      * 文本日志环容量（字节，Kconfig 默认 4096）：变长记录，容纳 GNSS 句子与十六进制转储。
-     * 静态存储，不占堆；容量不足时整条丢弃并计数（ADR-0009 §2.11）。
+     * 由启动期 boot_alloc 分配；容量不足时整条丢弃并计数（ADR-0009 §2.11）。
      */
     static constexpr size_t kLogRingBytes = CONFIG_RTK_LOG_RING_BYTES;
     /** 十六进制转储每行字节数（ADR-0009 §2.11：16 字节一行）。 */
@@ -44,18 +51,39 @@ public:
     /** 十六进制转储正文缓冲：4 位偏移 + 冒号 + 16×3 + 间隔 + 16 字节 ASCII，取 128 留余量。 */
     static constexpr size_t kHexLineBytes = 128;
 
-    constexpr explicit DebugModule(AppContext &context) noexcept : context_(context) {}
+    constexpr DebugModule() noexcept = default;
+    constexpr explicit DebugModule(AppContext &context) noexcept : context_(&context) {}
+    void bind_context(AppContext &context) noexcept
+    {
+        context_ = &context;
+    }
     ~DebugModule() = default;
     DebugModule(const DebugModule &) = delete;
     DebugModule &operator=(const DebugModule &) = delete;
     DebugModule(DebugModule &&) = delete;
     DebugModule &operator=(DebugModule &&) = delete;
 
-    /** 启动前单线程：初始化环并安装 sink 与 SPP 钩子。幂等，重复调用返回 kOk。 */
+    /** 启动前单线程：绑定启动期外供存储视图；未满足容量要求返回 kInvalidArg。 */
+    [[nodiscard]] fw::Status bind_storage(const StorageView &storage) noexcept;
+
+    /** 仅启动绑定回滚、消费者尚未启动时调用；清除全部外供引用，非 ISR。 */
+    void unbind_storage() noexcept
+    {
+        storage_ = {};
+        storage_bound_ = false;
+    }
+
+    /** 启动前单线程：初始化环并安装 sink 与 SPP 钩子。幂等，重复调用返回 kOk；未绑定存储返回 kInvalidState。 */
     [[nodiscard]] fw::Result init() noexcept;
 
     /** 创建静态输出任务；重复调用返回 kBusy。仅执行器启动阶段调用。 */
     [[nodiscard]] fw::Result start() noexcept;
+
+    /** 组合根单线程在 link 启动确认后读取，非 ISR。 */
+    [[nodiscard]] bool task_running() const noexcept
+    {
+        return task_.running();
+    }
 
     /** 仅 kLink：debug report/save 动词。 */
     void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
@@ -117,14 +145,18 @@ private:
     void print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out, size_t cap) noexcept;
     /** 到点输出一行周期报告。 */
     void pump_report(uint32_t now_ms) noexcept;
+    [[nodiscard]] AppContext &ctx() noexcept
+    {
+        return *context_;
+    }
 
-    AppContext &context_;
+    AppContext *context_ = nullptr;
+    StorageView storage_{};
+    bool storage_bound_ = false;
     fw::TraceRing ring_{};
-    std::array<fw::TraceEvent, kRingEvents> ring_storage_{};
-    portMUX_TYPE ring_mux_ = portMUX_INITIALIZER_UNLOCKED;
+    portMUX_TYPE ring_mux_{};
     fw::LogRing log_ring_{};
-    std::array<uint8_t, kLogRingBytes> log_storage_{};
-    rtos::StaticTask<kTaskStackBytes> task_{};
+    rtos::BootTask task_{};
     bool installed_ = false;
     uint16_t report_s_ = 0;
     uint32_t last_report_ms_ = 0;

@@ -7,6 +7,8 @@ extern "C" {
 #endif
 esp_err_t esp_task_wdt_add(TaskHandle_t task);
 esp_err_t esp_task_wdt_reset(void);
+esp_err_t esp_task_wdt_status(TaskHandle_t task);
+esp_err_t esp_task_wdt_delete(TaskHandle_t task);
 #ifdef __cplusplus
 }
 #endif

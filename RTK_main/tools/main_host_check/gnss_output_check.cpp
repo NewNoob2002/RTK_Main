@@ -113,6 +113,8 @@ void test_latest_cache_and_query_caps() noexcept
 {
     app::data::GnssLatestCache cache{};
     cache.bind_lock(fw::kNoLock);
+    std::array<uint8_t, app::data::kGnssLatestTotalBytes> cache_buf{};
+    CHECK(fw::is_ok(cache.init(cache_buf)));
 
     std::array<uint8_t, 256U> query_buf{};
     // 无缓存时不命中且不计 oversize。

@@ -13,7 +13,18 @@ constinit AppContext s_test_app{};
 }
 AppContext &app_context() noexcept
 {
+    static bool s_bound = false;
+    if (!s_bound) {
+        s_bound = true;
+        s_test_app.bind_contexts();
+    }
     return s_test_app;
+}
+
+// 原有模块场景直接从运行态接线；真实启动门控由 boot_alloc_check 测试。
+bool AppContext::await_boot(uint32_t, bool) noexcept
+{
+    return true;
 }
 
 // 仅测试接线可访问模块私有状态，保留原场景的逐字段断言。
@@ -25,7 +36,10 @@ struct ModuleTestAccess {
     }
     static auto &alarm() noexcept
     {
-        return app_context().bt_link.alarm_;
+        if (!app_context().bt_link.alarm_.has_value()) {
+            app_context().bt_link.alarm_.emplace();
+        }
+        return *app_context().bt_link.alarm_;
     }
     static auto &service() noexcept
     {

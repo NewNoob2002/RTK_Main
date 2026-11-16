@@ -122,22 +122,21 @@ static esp_err_t spp_server_objects_create(void)
     for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
         /* idx < 2，uint8_t 窄化安全 */
         s_spp.sessions[idx].idx = (uint8_t)idx;
-        s_spp.sessions[idx].rx =
-            xStreamBufferCreateStatic(SPP_SERVER_RX_BUF_SIZE, SPP_SERVER_STREAM_TRIGGER, s_spp.sessions[idx].rx_storage,
-                                      &s_spp.sessions[idx].rx_struct);
+        s_spp.sessions[idx].rx = xStreamBufferCreateStatic(SPP_SERVER_RX_BUF_SIZE, SPP_SERVER_STREAM_TRIGGER,
+                                                           s_spp.storage.rx_buf[idx], &s_spp.sessions[idx].rx_struct);
     }
     if ((s_spp.rtos.evt_queue == NULL) || (s_spp.rtos.evt_group == NULL) || (s_spp.sessions[0].rx == NULL) ||
         (s_spp.sessions[1].rx == NULL)) {
         return ESP_ERR_NO_MEM;
     }
 
-    /* 静态 worker 栈2560字节；绑核0以贴近 BTC，避免跨核投递延迟。 */
+    /* 外供 worker 栈≥2560字节；绑核0以贴近 BTC，避免跨核投递延迟。 */
     if (s_spp.rtos.worker == NULL) {
-        /* IDF 静态创建接口的栈单位是字节（task.h:519），因此直接给栈字节数。 */
-        const uint32_t stack_bytes = sizeof(s_spp.worker_stack);
+        /* bind_storage 已校验 worker_stack_bytes <= UINT32_MAX 且对齐，窄化无截断。 */
+        const uint32_t stack_bytes = (uint32_t)s_spp.storage.worker_stack_bytes;
 
         s_spp.rtos.worker = xTaskCreateStaticPinnedToCore(spp_server_worker, "spp_worker", stack_bytes, NULL,
-                                                          SPP_SERVER_WORKER_PRIORITY, s_spp.worker_stack,
+                                                          SPP_SERVER_WORKER_PRIORITY, s_spp.storage.worker_stack,
                                                           &s_spp.worker_tcb, SPP_SERVER_WORKER_CORE);
         if (s_spp.rtos.worker == NULL) {
             return ESP_ERR_NO_MEM;
@@ -364,6 +363,116 @@ static void spp_server_spp_deinit(void)
     }
 }
 
+esp_err_t spp_server_bind_storage(const spp_server_storage_t *storage)
+{
+    if (storage == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
+        if ((storage->rx_buf[idx] == NULL) || (storage->rx_buf_bytes[idx] < SPP_SERVER_RX_BUF_SIZE) ||
+            (storage->reply_buf[idx] == NULL) || (storage->reply_buf_bytes[idx] < SPP_SERVER_REPLY_CAPACITY)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    if ((storage->stream_buf == NULL) || (storage->stream_buf_bytes < SPP_SERVER_STREAM_CAPACITY) ||
+        (storage->merge_buf == NULL) || (storage->merge_buf_bytes < SPP_SERVER_MERGE_CAPACITY) ||
+        (storage->worker_stack == NULL) || (storage->worker_stack_bytes < SPP_SERVER_WORKER_STACK_BYTES) ||
+        (storage->worker_stack_bytes > (size_t)UINT32_MAX) ||
+        ((storage->worker_stack_bytes % sizeof(StackType_t)) != 0U) ||
+        ((((uintptr_t)storage->worker_stack) % _Alignof(uint32_t)) != 0U)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    taskENTER_CRITICAL(&s_spp_mux);
+    if (s_spp.initialized || s_spp.boot_stop_requested ||
+        ((s_spp.rtos.worker != NULL) &&
+         ((s_spp.storage.worker_stack != storage->worker_stack) ||
+          (s_spp.storage.worker_stack_bytes != storage->worker_stack_bytes) ||
+          (s_spp.storage.stream_buf != storage->stream_buf) || (s_spp.storage.merge_buf != storage->merge_buf) ||
+          (s_spp.storage.rx_buf[0] != storage->rx_buf[0]) || (s_spp.storage.rx_buf[1] != storage->rx_buf[1]) ||
+          (s_spp.storage.reply_buf[0] != storage->reply_buf[0]) ||
+          (s_spp.storage.reply_buf[1] != storage->reply_buf[1])))) {
+        taskEXIT_CRITICAL(&s_spp_mux);
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_spp.storage = *storage;
+    s_spp.storage_bound = true;
+    taskEXIT_CRITICAL(&s_spp_mux);
+    return ESP_OK;
+}
+
+esp_err_t spp_server_unbind_storage(void)
+{
+    taskENTER_CRITICAL(&s_spp_mux);
+    if (s_spp.initialized || (s_spp.rtos.worker != NULL) || s_spp.boot_stop_requested) {
+        taskEXIT_CRITICAL(&s_spp_mux);
+        return ESP_ERR_INVALID_STATE;
+    }
+    memset(&s_spp.storage, 0, sizeof(s_spp.storage));
+    s_spp.storage_bound = false;
+    taskEXIT_CRITICAL(&s_spp_mux);
+    return ESP_OK;
+}
+
+esp_err_t spp_server_stop_boot(void)
+{
+    const TickType_t start = xTaskGetTickCount();
+    TaskHandle_t worker = NULL;
+    bool initialized = false;
+    taskENTER_CRITICAL(&s_spp_mux);
+    s_spp.boot_stop_requested = true;
+    worker = s_spp.rtos.worker;
+    initialized = s_spp.initialized;
+    taskEXIT_CRITICAL(&s_spp_mux);
+    if (worker != NULL) {
+        xTaskNotifyGive(worker);
+        bool stopped = false;
+        do {
+            taskENTER_CRITICAL(&s_spp_mux);
+            stopped = s_spp.boot_worker_stopped;
+            taskEXIT_CRITICAL(&s_spp_mux);
+            if (!stopped) {
+                vTaskDelay(1U);
+            }
+        } while (!stopped && ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(SPP_SERVER_UNINIT_TIMEOUT_MS)));
+        if (!stopped) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    if (!initialized) {
+        return ESP_OK;
+    }
+    (void)xEventGroupClearBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_UNINIT_DONE);
+    esp_err_t err = esp_spp_deinit();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = spp_server_wait_stage(SPP_SERVER_STAGE_UNINIT, SPP_SERVER_UNINIT_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_bluedroid_disable();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_bluedroid_deinit();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_bt_controller_disable();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_bt_controller_deinit();
+    if (err == ESP_OK) {
+        taskENTER_CRITICAL(&s_spp_mux);
+        s_spp.initialized = false;
+        taskEXIT_CRITICAL(&s_spp_mux);
+    }
+    /* 不删除事件/会话对象：失败或迟到回调仍有稳定地址；本接口之后仅允许重启。 */
+    return err;
+}
+
 esp_err_t spp_server_init(const char *name)
 {
     esp_err_t err = ESP_OK;
@@ -382,7 +491,7 @@ esp_err_t spp_server_init(const char *name)
             return ESP_ERR_INVALID_ARG;
         }
     }
-    if (s_spp.initialized) {
+    if (s_spp.initialized || !s_spp.storage_bound || s_spp.boot_stop_requested) {
         return ESP_ERR_INVALID_STATE;
     }
 

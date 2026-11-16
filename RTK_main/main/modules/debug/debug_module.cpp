@@ -92,6 +92,26 @@ void write_u32(uint32_t value, std::span<uint8_t> out) noexcept
 
 } // namespace
 
+fw::Status DebugModule::bind_storage(const StorageView &storage) noexcept
+{
+    if (installed_ || task_.running()) {
+        return fw::Status::kInvalidState;
+    }
+    if ((storage.trace_ring.data() == nullptr) || (storage.trace_ring.size() < kRingEvents) ||
+        (storage.log_ring.data() == nullptr) || (storage.log_ring.size() < kLogRingBytes) ||
+        (storage.task_stack.data() == nullptr) ||
+        ((storage.task_stack.size() * sizeof(StackType_t)) < kTaskStackBytes)) {
+        return fw::Status::kInvalidArg;
+    }
+    storage_ = {
+        .trace_ring = storage.trace_ring.first(kRingEvents),
+        .log_ring = storage.log_ring.first(kLogRingBytes),
+        .task_stack = storage.task_stack.first(kTaskStackBytes / sizeof(StackType_t)),
+    };
+    storage_bound_ = true;
+    return fw::Status::kOk;
+}
+
 fw::Result DebugModule::init() noexcept
 {
     // 幂等：app_main 在 storage.init() 之前先装环（要接住启动期的 kStore 事件），
@@ -99,8 +119,12 @@ fw::Result DebugModule::init() noexcept
     if (installed_) {
         return fw::Result::kOk;
     }
+    if (!storage_bound_) {
+        return fw::Result::kInvalidState;
+    }
+    portMUX_INITIALIZE(&ring_mux_);
     const fw::LockOps ops = rtos::spin_lock_ops(ring_mux_);
-    const fw::Result ring_result = ring_.init(ring_storage_, ops);
+    const fw::Result ring_result = ring_.init(storage_.trace_ring, ops);
     if (ring_result != fw::Result::kOk) {
         return ring_result;
     }
@@ -108,7 +132,7 @@ fw::Result DebugModule::init() noexcept
     if (install_result != fw::Result::kOk) {
         return install_result;
     }
-    const fw::Result log_result = log_ring_.init(log_storage_, ops);
+    const fw::Result log_result = log_ring_.init(storage_.log_ring, ops);
     if (log_result != fw::Result::kOk) {
         return log_result;
     }
@@ -126,11 +150,14 @@ fw::Result DebugModule::init() noexcept
 
 fw::Result DebugModule::start() noexcept
 {
+    if (!installed_ || !storage_bound_) {
+        return fw::Result::kInvalidState;
+    }
     if (task_.running()) {
         return fw::Result::kBusy;
     }
     // 最低优先级、控制台核：只在没有其它工作时占用 CPU。
-    const fw::Status status = task_.start("trace_out", 1U, 0, &DebugModule::task_entry, this);
+    const fw::Status status = task_.start(storage_.task_stack, "trace_out", 1U, 0, &DebugModule::task_entry, this);
     if (status == fw::Status::kOk) {
         return fw::Result::kOk;
     }
@@ -163,7 +190,7 @@ void DebugModule::on_command(const fw::Command &cmd, fw::CommandResult &result) 
             result.status = fw::Result::kInvalidArg;
             return;
         }
-        const fw::Result saved = context_.storage.save_keys(keys());
+        const fw::Result saved = ctx().storage.save_keys(keys());
         result.status = saved;
         return;
     }
@@ -209,8 +236,10 @@ fw::Result DebugModule::load_report(void * /*obj*/, std::span<const uint8_t> in)
         // 越界值视为损坏：保持关闭，调用方据此决定是否覆盖。
         return fw::Result::kInvalidArg;
     }
+#if FW_TRACE_ENABLED
     app_context().debug.report_s_ = seconds;
     app_context().debug.report_started_ = false;
+#endif
     return fw::Result::kOk;
 }
 
@@ -219,7 +248,11 @@ fw::Result DebugModule::save_report(const void * /*obj*/, std::span<uint8_t> out
     if (out.size() < 2U) {
         return fw::Result::kNoSpace;
     }
+#if FW_TRACE_ENABLED
     write_u16(app_context().debug.report_s_, out);
+#else
+    write_u16(0U, out);
+#endif
     len = 2U;
     return fw::Result::kOk;
 }
@@ -248,6 +281,10 @@ void DebugModule::task_entry(void *arg) noexcept
 {
     auto *self = static_cast<DebugModule *>(arg);
     if (self == nullptr) {
+        vTaskDelete(nullptr);
+        return;
+    }
+    if (!self->ctx().await_boot(4U, false)) {
         vTaskDelete(nullptr);
         return;
     }
@@ -413,10 +450,10 @@ void DebugModule::pump_report(uint32_t now_ms) noexcept
     }
     last_report_ms_ = now_ms;
 
-    const RtcmStats rtcm = context_.data.rtcm_stats.read();
-    const LinkStats stats = context_.data.link_stats.read();
-    const SystemStatus system = context_.data.system_status.read();
-    const rtos::ExecStats exec = context_.data.exec_stats.read();
+    const RtcmStats rtcm = ctx().data.rtcm_stats.read();
+    const LinkStats stats = ctx().data.link_stats.read();
+    const SystemStatus system = ctx().data.system_status.read();
+    const rtos::ExecStats exec = ctx().data.exec_stats.read();
     const fw::TraceRingStats ring_stats = ring_.stats();
 
     const uint32_t frames = rtcm.frames - last_rtcm_frames_;

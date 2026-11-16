@@ -45,6 +45,7 @@
 #include "esp_spp_api.h"
 
 #include "spp_server.h"
+#include "spp_server_storage.h"
 
 #define SPP_SERVER_TAG "spp_server"
 
@@ -60,8 +61,8 @@ static_assert(SPP_SERVER_REPLY_CAPACITY * SPP_SERVER_MAX_SESSIONS + SPP_SERVER_S
                   SPP_SERVER_TX_PAYLOAD_BUDGET,
               "TX payload 预算");
 
-/* 发送任务：静态栈与 TCB。栈单位与 IDF task.h 一致（字节）。 */
-#define SPP_SERVER_WORKER_STACK (2560U)
+/* 发送任务：静态栈字节数（与 spp_server_storage.h 一致）；栈存储由组合根经 bind_storage 注入。 */
+#define SPP_SERVER_WORKER_STACK SPP_SERVER_WORKER_STACK_BYTES
 
 /* 控制表：GAP 应答/无空槽拒绝只登记请求，由发送任务在任务上下文执行可能阻塞投递的 API。
  * 深度只需覆盖同时在途的认证请求；满了只能丢弃并记录（回调里不能等待）。 */
@@ -130,7 +131,6 @@ typedef struct {
     uint32_t users;
     uint32_t generation;
     spp_server_ring_t reply;
-    uint8_t reply_buf[SPP_SERVER_REPLY_CAPACITY];
     uint8_t push[SPP_SERVER_PUSH_CAPACITY];
     uint16_t push_len;
     bool tx_space; /* level 改变通知，poll_event 原子取走 */
@@ -140,7 +140,6 @@ typedef struct {
     esp_err_t tx_result;
     StreamBufferHandle_t rx;
     StaticStreamBuffer_t rx_struct;
-    uint8_t rx_storage[SPP_SERVER_RX_BUF_SIZE];
 } spp_server_session_t;
 
 typedef enum {
@@ -180,7 +179,7 @@ typedef struct {
 } spp_server_rtos_t;
 
 /* 全部跨文件共享的可变状态（ADR-0008 R5）：唯一实例 s_spp，唯一定义点在 spp_server_session.c。
- * 所有 RTOS 对象都指向本结构里的静态存储，初始化后不分配堆。 */
+ * 7 块大负载缓冲由组合根通过 spp_server_bind_storage() 外供注入，控制块留在 .bss。 */
 typedef struct {
     spp_server_session_t sessions[SPP_SERVER_MAX_SESSIONS];
     StaticQueue_t evt_queue_struct;
@@ -188,8 +187,11 @@ typedef struct {
     StaticEventGroup_t evt_group_struct;
     spp_server_rtos_t rtos;
     spp_server_ctrl_t ctrl[SPP_SERVER_CTRL_MAX];
-    StackType_t worker_stack[SPP_SERVER_WORKER_STACK / sizeof(StackType_t)];
     StaticTask_t worker_tcb;
+    spp_server_storage_t storage;
+    bool storage_bound;
+    bool boot_stop_requested;
+    bool boot_worker_stopped;
     char device_name[SPP_SERVER_NAME_MAX + 1U];
     uint32_t evt_dropped;
     /* 回调写入、init 任务在等到对应事件位后读取。 */
@@ -198,10 +200,8 @@ typedef struct {
     bool initialized;
     spp_server_inflight_t inflight[SPP_SERVER_INFLIGHT_MAX];
     spp_server_ring_t stream;
-    uint8_t stream_buf[SPP_SERVER_STREAM_CAPACITY];
     uint8_t stream_ends[SPP_SERVER_STREAM_CAPACITY / 8U]; /* 每字节一个句末位，无记录数隐藏上限 */
-    uint8_t merge[SPP_SERVER_MERGE_CAPACITY];
-    uint8_t stream_owner; /* slot+1；0 为无 owner，避免非零初值搬到 .data */
+    uint8_t stream_owner;                                 /* slot+1；0 为无 owner，避免非零初值搬到 .data */
     bool stream_unbind;
     bool stream_active;
     uint8_t tx_cursor;

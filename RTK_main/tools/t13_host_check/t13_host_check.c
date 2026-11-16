@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h" /* 确定性读暂停钩子（fake_read_pause_*） */
 #include "fake_idf.h"
 #include "spp_server.h"
+#include "spp_server_storage.h"
 
 static int s_fail;
 
@@ -35,9 +36,41 @@ static uint32_t now_ms(void)
     return (uint32_t)(((uint64_t)ts.tv_sec * 1000ULL) + ((uint64_t)ts.tv_nsec / 1000000ULL));
 }
 
+static uint8_t s_rx_buf[SPP_SERVER_MAX_SESSIONS][SPP_SERVER_RX_BUF_SIZE];
+static uint8_t s_reply_buf[SPP_SERVER_MAX_SESSIONS][SPP_SERVER_REPLY_CAPACITY];
+static uint8_t s_stream_buf[SPP_SERVER_STREAM_CAPACITY];
+static uint8_t s_merge_buf[SPP_SERVER_MERGE_CAPACITY];
+static _Alignas(uint32_t) StackType_t s_worker_stack[SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t)];
+
+static spp_server_storage_t make_storage(void)
+{
+    spp_server_storage_t st;
+    memset(&st, 0, sizeof(st));
+    for (uint32_t i = 0U; i < SPP_SERVER_MAX_SESSIONS; i++) {
+        st.rx_buf[i] = s_rx_buf[i];
+        st.rx_buf_bytes[i] = sizeof(s_rx_buf[i]);
+        st.reply_buf[i] = s_reply_buf[i];
+        st.reply_buf_bytes[i] = sizeof(s_reply_buf[i]);
+    }
+    st.stream_buf = s_stream_buf;
+    st.stream_buf_bytes = sizeof(s_stream_buf);
+    st.merge_buf = s_merge_buf;
+    st.merge_buf_bytes = sizeof(s_merge_buf);
+    st.worker_stack = s_worker_stack;
+    st.worker_stack_bytes = sizeof(s_worker_stack);
+    return st;
+}
+
+static void bind_test_storage(void)
+{
+    const spp_server_storage_t st = make_storage();
+    CHECK(spp_server_bind_storage(&st) == ESP_OK);
+}
+
 static void bring_up(void)
 {
     fake_reset();
+    bind_test_storage();
     CHECK(spp_server_init("RTK_T13") == ESP_OK);
 }
 
@@ -134,6 +167,7 @@ static void sc_init_waits_stages(void)
     int idx_scan = -1;
 
     fake_reset();
+    bind_test_storage();
     memset(&ia, 0, sizeof(ia));
     atomic_init(&ia.done, false);
     ia.name = "RTK_T13";
@@ -183,6 +217,7 @@ static void sc_init_waits_stages(void)
 static void sc_init_sync_stage_order(void)
 {
     fake_reset();
+    bind_test_storage();
     fake_set_stage_sync(true);
     CHECK(spp_server_init("RTK_T13") == ESP_OK);
     CHECK(!fake_blocking_api_from_btc());
@@ -201,6 +236,7 @@ static void sc_init_failure_rollback(void)
     const uint8_t payload[4] = {1U, 2U, 3U, 4U};
 
     fake_reset();
+    bind_test_storage();
     fake_set_init_mode(FAKE_STAGE_FAIL);
     CHECK(spp_server_init("RTK_T13") == ESP_FAIL);
     CHECK(fake_trace_count() == (int)(sizeof(expected) / sizeof(expected[0])));
@@ -216,6 +252,7 @@ static void sc_init_start_status_fail(void)
     bool saw_deinit = false;
 
     fake_reset();
+    bind_test_storage();
     fake_set_start_mode(FAKE_STAGE_FAIL);
     CHECK(spp_server_init("RTK_T13") == ESP_FAIL);
     for (int i = 0; i < fake_trace_count(); i++) {
@@ -234,6 +271,7 @@ static void sc_init_start_timeout(void)
     uint32_t start = 0U;
 
     fake_reset();
+    bind_test_storage();
     fake_set_start_mode(FAKE_STAGE_SILENT);
     start = now_ms();
     CHECK(spp_server_init("RTK_T13") == ESP_ERR_TIMEOUT);
@@ -1003,7 +1041,90 @@ static void sc_rx_wake_level_and_stats(void)
     spp_server_set_rx_wake_hook(NULL, NULL);
 }
 
+static void sc_storage_binding(void)
+{
+    spp_server_storage_t bad = make_storage();
+
+    fake_reset();
+    /* 未绑定存储时禁止 init */
+    CHECK(spp_server_init("RTK_T13") == ESP_ERR_INVALID_STATE);
+    CHECK(spp_server_bind_storage(NULL) == ESP_ERR_INVALID_ARG);
+
+    bad.rx_buf[0] = NULL;
+    CHECK(spp_server_bind_storage(&bad) == ESP_ERR_INVALID_ARG);
+
+    bad = make_storage();
+    bad.rx_buf_bytes[1] = SPP_SERVER_RX_BUF_SIZE - 1U;
+    CHECK(spp_server_bind_storage(&bad) == ESP_ERR_INVALID_ARG);
+
+    bad = make_storage();
+    bad.reply_buf[0] = NULL;
+    CHECK(spp_server_bind_storage(&bad) == ESP_ERR_INVALID_ARG);
+
+    bad = make_storage();
+    bad.stream_buf_bytes = SPP_SERVER_STREAM_CAPACITY - 1U;
+    CHECK(spp_server_bind_storage(&bad) == ESP_ERR_INVALID_ARG);
+
+    bad = make_storage();
+    bad.merge_buf_bytes = SPP_SERVER_MERGE_CAPACITY - 1U;
+    CHECK(spp_server_bind_storage(&bad) == ESP_ERR_INVALID_ARG);
+
+    bad = make_storage();
+    bad.worker_stack_bytes = SPP_SERVER_WORKER_STACK_BYTES - 1U;
+    CHECK(spp_server_bind_storage(&bad) == ESP_ERR_INVALID_ARG);
+
+    /* 正常绑定并启动，启动后禁止重复绑定 */
+    bind_test_storage();
+    CHECK(spp_server_init("RTK_T13") == ESP_OK);
+    bad = make_storage();
+    CHECK(spp_server_bind_storage(&bad) == ESP_ERR_INVALID_STATE);
+}
+
+static void sc_boot_stop(void)
+{
+    bring_up();
+    open_session(0x11U);
+    CHECK(spp_server_unbind_storage() == ESP_ERR_INVALID_STATE);
+    CHECK(spp_server_stop_boot() == ESP_OK);
+    CHECK(strcmp(fake_trace_at(fake_trace_count() - 1), "controller_deinit") == 0);
+    CHECK(spp_server_unbind_storage() == ESP_ERR_INVALID_STATE);
+    CHECK(spp_server_init("RTK_T13") == ESP_ERR_INVALID_STATE);
+    const spp_server_storage_t storage = make_storage();
+    CHECK(spp_server_bind_storage(&storage) == ESP_ERR_INVALID_STATE);
+}
+
+static void sc_boot_stop_failure(void)
+{
+    const uint8_t payload[] = {1U, 2U, 3U};
+    uint8_t out[sizeof(payload)] = {0U};
+    bring_up();
+    open_session(0x11U);
+    fake_set_deinit_return(ESP_FAIL);
+    CHECK(spp_server_stop_boot() == ESP_FAIL);
+    CHECK(spp_server_unbind_storage() == ESP_ERR_INVALID_STATE);
+    /* SDK 停机失败后回调仍活跃；外供块和 RTOS 对象保持有效，不回收或复用。 */
+    fake_emit_data(0x11U, payload, sizeof(payload));
+    CHECK(wait_event(SPP_SERVER_EVT_DATA, 0x11U, 1000U));
+    CHECK(spp_server_read(0x11U, out, sizeof(out)) == sizeof(payload));
+    CHECK(memcmp(out, payload, sizeof(payload)) == 0);
+    CHECK(spp_server_init("RTK_T13") == ESP_ERR_INVALID_STATE);
+}
+
+static void sc_boot_stop_after_init_failure(void)
+{
+    fake_reset();
+    bind_test_storage();
+    fake_set_start_mode(FAKE_STAGE_FAIL);
+    CHECK(spp_server_init("RTK_T13") == ESP_FAIL);
+    CHECK(spp_server_stop_boot() == ESP_OK);
+    CHECK(spp_server_unbind_storage() == ESP_ERR_INVALID_STATE);
+}
+
 static const scenario_t s_scenarios[] = {
+    {"boot_stop", sc_boot_stop},
+    {"boot_stop_failure", sc_boot_stop_failure},
+    {"boot_stop_after_init_failure", sc_boot_stop_after_init_failure},
+    {"storage_binding", sc_storage_binding},
     {"rx_wake_level_and_stats", sc_rx_wake_level_and_stats},
     {"reject_rearm_after_close", sc_reject_rearm_after_close},
     {"lifecycle_burst_churn", sc_lifecycle_burst_churn},

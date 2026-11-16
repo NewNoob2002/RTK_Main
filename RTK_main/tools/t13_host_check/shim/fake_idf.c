@@ -15,6 +15,7 @@
 #include "esp_gap_bt_api.h"
 #include "esp_log.h"
 #include "esp_spp_api.h"
+#include "freertos/task.h"
 
 #define FAKE_CALLS_MAX  32
 #define FAKE_CALL_BYTES 1024 /* K2 merge 上限，必须保存整块才能逐字节检查 stream。 */
@@ -140,6 +141,12 @@ void fake_sleep_ms(uint32_t ms)
     ts.tv_sec = (time_t)(ms / 1000U);
     ts.tv_nsec = (long)((ms % 1000U) * 1000000U);
     (void)nanosleep(&ts, NULL);
+}
+
+/* 本替身固定 1000 Hz；仅 T13 的假 IDF 库提供真实让出 CPU 的延时，main 检查仍使用自己的时钟桩。 */
+void vTaskDelay(TickType_t ticks)
+{
+    fake_sleep_ms(ticks);
 }
 
 /* ---------------- 假 BTC 线程：所有回调都在这里执行 ---------------- */

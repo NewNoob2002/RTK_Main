@@ -117,6 +117,7 @@ fw::Result StorageModule::init() noexcept
     if (initialized_) {
         return fw::Result::kOk;
     }
+    retry_ms_ = kRetryInitialMs;
     /* 初始化后端，失败仍按原策略尝试加载并使用缺省值。 */
     const esp_err_t init = nvs_store_init();
     if (init != ESP_OK) {
@@ -127,12 +128,12 @@ fw::Result StorageModule::init() noexcept
     /* ADR-0009 §2.4 / ADR-0010 §2.10：启动时按目录加载所有类别的键表。 */
     load_key_tables();
     /* 保持 LinkStatus、SystemStatus、初始化标记、StoreStatus 的写入顺序。 */
-    context_.data.link_status.write(whitelist_);
+    ctx().data.link_status.write(whitelist_);
     SystemStatus system{};
     system.sn = sn_;
-    context_.data.system_status.write(system);
+    ctx().data.system_status.write(system);
     initialized_ = true;
-    context_.data.store_status.write(status_);
+    ctx().data.store_status.write(status_);
     return fw::Result::kOk;
 }
 
@@ -145,7 +146,7 @@ void StorageModule::mark_whitelist_dirty(std::span<const core::BtAddr> list, uin
     changed_ms_ = now_ms;
     status_.whitelist_pending = true;
     trace_store(StoreTrace::kDebounce, kDebounceMs, whitelist_.whitelist_count);
-    context_.data.store_status.write(status_);
+    ctx().data.store_status.write(status_);
 }
 
 bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
@@ -186,10 +187,11 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
         status_.retry_ms = retry_ms_;
         trace_store(StoreTrace::kSave, static_cast<uint32_t>(fw::Result::kIoError), static_cast<uint32_t>(error));
         trace_store(StoreTrace::kRetry, retry_ms_, status_.failures);
-        fw::tlog(fw::TraceCat::kStore, "whitelist save failed (%s), retry in %u ms", esp_err_to_name(error), static_cast<unsigned>(retry_ms_));
+        fw::tlog(fw::TraceCat::kStore, "whitelist save failed (%s), retry in %u ms", esp_err_to_name(error),
+                 static_cast<unsigned>(retry_ms_));
     }
     status_.whitelist_pending = pending_;
-    context_.data.store_status.write(status_);
+    ctx().data.store_status.write(status_);
     return false;
 }
 
@@ -228,7 +230,7 @@ void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) n
         sn_ = previous;
         fw::tlog(fw::TraceCat::kStore, "serial number save failed (%s), previous value kept", esp_err_to_name(error));
     }
-    context_.data.store_status.write(status_);
+    ctx().data.store_status.write(status_);
 }
 
 void StorageModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept

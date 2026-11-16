@@ -15,7 +15,7 @@ bool RtcmModule::poll(uint32_t now_ms) noexcept
         rate_window_bytes_ = stats_.bytes;
     }
 
-    const RtcmLinkSnapshot snap = context_.bt_link.rtcm_snapshot();
+    const RtcmLinkSnapshot snap = ctx().bt_link.rtcm_snapshot();
     RtcmStats next = stats_;
     if (snap.reset_epoch == reset_epoch_) {
         next.frames = snap.frames;
@@ -73,7 +73,7 @@ bool RtcmModule::poll(uint32_t now_ms) noexcept
 
     if (dirty) {
         stats_ = next;
-        context_.data.rtcm_stats.write(stats_);
+        ctx().data.rtcm_stats.write(stats_);
     }
     return false;
 }
@@ -85,15 +85,15 @@ void RtcmModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
     }
     /* 不清除分流器半帧；先清统计与速率窗口，再递增 reset_epoch 并通知 bt_link 复位统计世代。 */
     ++reset_epoch_;
-    baseline_ = context_.bt_link.rtcm_snapshot();
+    baseline_ = ctx().bt_link.rtcm_snapshot();
     stats_ = RtcmStats{};
     stats_.reset_epoch = reset_epoch_;
     rate_started_ = false;
     rate_window_ms_ = 0U;
     rate_window_bytes_ = 0U;
-    context_.data.rtcm_stats.write(stats_);
-    context_.data.demux_stats.write(DemuxStats{});
-    context_.data.rtcm_reset.write(reset_epoch_);
+    ctx().data.rtcm_stats.write(stats_);
+    ctx().data.demux_stats.write(DemuxStats{});
+    ctx().data.rtcm_reset.write(reset_epoch_);
     result.status = fw::Result::kOk;
 }
 const RtcmStats &RtcmModule::stats() const noexcept

@@ -14,7 +14,7 @@
 #include "def/rtcm_def.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "rtos/static_stream_buffer.hpp"
+#include "rtos/boot_stream_buffer.hpp"
 
 namespace app {
 
@@ -28,10 +28,39 @@ public:
     RtcmPipe(RtcmPipe &&) = delete;
     RtcmPipe &operator=(RtcmPipe &&) = delete;
 
-    /** 启动前单线程初始化静态 StreamBuffer；trigger_level=1，失败返回 kInvalidState。 */
+    /** 启动前单线程初始化自旋锁（支持降级模式下安全读 stats/io_stats）。 */
+    void init_lock() noexcept
+    {
+        portMUX_INITIALIZE(&mux_);
+    }
+
+    /** 启动前单线程绑定外供管道存储；非空且 >= kRtcmPipeBytes 才返回 kOk。 */
+    [[nodiscard]] fw::Status bind_storage(std::span<uint8_t> storage) noexcept
+    {
+        if (buf_.valid()) {
+            return fw::Status::kInvalidState;
+        }
+        if ((storage.data() == nullptr) || (storage.size() < kRtcmPipeBytes)) {
+            return fw::Status::kInvalidArg;
+        }
+        storage_ = storage.first(kRtcmPipeBytes);
+        return fw::Status::kOk;
+    }
+
+    /** 仅启动绑定回滚、尚未 init 时调用；清除外供引用，非 ISR。 */
+    void unbind_storage() noexcept
+    {
+        storage_ = {};
+    }
+
+    /** 启动前单线程初始化静态 StreamBuffer；trigger_level=1，未绑定存储或失败返回 kInvalidState。 */
     [[nodiscard]] fw::Status init() noexcept
     {
-        return buf_.init(1U);
+        portMUX_INITIALIZE(&mux_);
+        if (storage_.size() < kRtcmPipeBytes) {
+            return fw::Status::kInvalidState;
+        }
+        return buf_.init(storage_, 1U);
     }
 
     /** 仅 kLink 调用，非 ISR、非阻塞；剩余空间不足整帧时整帧丢弃、计数并上报 kPipeDrop。 */
@@ -170,8 +199,9 @@ private:
 
     static constexpr size_t kDiscardChunkBytes = 128U;
 
-    rtos::StaticStreamBuffer<kRtcmPipeBytes> buf_{};
-    mutable portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
+    std::span<uint8_t> storage_{};
+    rtos::BootStreamBuffer buf_{};
+    mutable portMUX_TYPE mux_{};
     RtcmPipeStats stats_{};
     RtcmPipeIoStats io_stats_{};
 };

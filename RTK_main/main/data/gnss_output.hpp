@@ -69,13 +69,17 @@ struct GnssOutConfig {
     static constexpr uint8_t kCurrentVersion = 1U;
     static constexpr size_t kBlobBytes = 8U;
 
-    uint8_t version = kCurrentVersion;
-    uint8_t mask = kGnssOutMaskAll;
-    std::array<int8_t, kGnssAppMsgCount> intervals = {1, kDefaultSatsRate, 1, 1, 1, kDefaultGsaRate};
+    uint8_t version = 0U;
+    uint8_t mask = 0U;
+    std::array<int8_t, kGnssAppMsgCount> intervals{};
 
     [[nodiscard]] static constexpr GnssOutConfig defaults() noexcept
     {
-        return GnssOutConfig{};
+        return {
+            .version = kCurrentVersion,
+            .mask = kGnssOutMaskAll,
+            .intervals = {1, kDefaultSatsRate, 1, 1, 1, kDefaultGsaRate},
+        };
     }
 
     /** 校验版本、保留掩码位与已启用语句的 interval 合法性。线程/ISR 安全：是。 */
@@ -113,6 +117,9 @@ public:
         lock_ = lock;
     }
 
+    /** 绑定外供 6 KiB 缓冲并清零长度与统计；buf 须非空且 ≥ kGnssLatestTotalBytes。线程安全：仅启动前。 */
+    [[nodiscard]] fw::Status init(std::span<uint8_t> buf) noexcept;
+
     /** 写入最新一条帧；超每类上限时丢弃并计 oversize_drops，返回 false。线程安全：是（非 ISR）。 */
     [[nodiscard]] bool update(uint8_t type_idx, std::span<const uint8_t> frame) noexcept;
 
@@ -124,7 +131,7 @@ public:
 
 private:
     fw::LockOps lock_{};
-    std::array<uint8_t, kGnssLatestTotalBytes> buf_{};
+    std::span<uint8_t> buf_{};
     std::array<uint16_t, kGnssAppMsgCount> lengths_{};
     std::array<uint32_t, kGnssAppMsgCount> updates_{};
     std::array<uint32_t, kGnssAppMsgCount> oversize_drops_{};

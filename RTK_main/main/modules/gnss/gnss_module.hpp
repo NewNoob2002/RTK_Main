@@ -6,18 +6,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <type_traits>
 
 #include "cli/console.hpp"
 #include "data/gnss_output.hpp"
-#include "def/gnss_def.hpp"
 #include "demux/demux.hpp"
 #include "fw/command.hpp"
 #include "fw/result.hpp"
-#include "fw/store_key.hpp"
 #include "gnss/controller.hpp"
 #include "gnss/nmea_parser.hpp"
-#include "gnss/types.hpp"
 
 namespace app {
 struct AppContext;
@@ -36,15 +35,42 @@ public:
     static constexpr size_t kMaxBaudCandidates = 7U;
     static constexpr uint32_t kStatusPeriodMs = 500U;
 
-    constexpr explicit GnssModule(AppContext &context) noexcept : context_(context) {}
+    constexpr GnssModule() noexcept = default;
+    constexpr explicit GnssModule(AppContext &context) noexcept : context_(&context) {}
+    void bind_context(AppContext &context) noexcept
+    {
+        context_ = &context;
+    }
     ~GnssModule() = default;
     GnssModule(const GnssModule &) = delete;
     GnssModule &operator=(const GnssModule &) = delete;
     GnssModule(GnssModule &&) = delete;
     GnssModule &operator=(GnssModule &&) = delete;
 
+    /** 仅启动绑定回滚、消费者尚未启动时调用；清除 demux 外供引用，非 ISR。 */
+    void unbind_storage() noexcept
+    {
+        demux_buf_ = {};
+    }
+
+    /** 启动前单线程：绑定外供 4 KiB demux 环缓冲。 */
+    [[nodiscard]] fw::Status bind_storage(std::span<uint8_t> demux_buf) noexcept
+    {
+        if (initialized_) {
+            return fw::Status::kInvalidState;
+        }
+        if ((demux_buf.data() == nullptr) || (demux_buf.size() < kDemuxBufBytes)) {
+            return fw::Status::kInvalidArg;
+        }
+        demux_buf_ = demux_buf.first(kDemuxBufBytes);
+        return fw::Status::kOk;
+    }
+
     /** 启动前单线程：安装 UART 驱动、配置电源 GPIO、初始化 RTCM 管道、Demux 与控制器。幂等。 */
     [[nodiscard]] fw::Result init() noexcept;
+
+    /** 启动失败且 IO 已确认停稳后调用；检查 UART 删除结果，封存存储保留至重启，非 ISR。 */
+    [[nodiscard]] fw::Status stop_boot() noexcept;
 
     /** kIo 任务首次 poll 前调用一次：启动 GNSS 上电探测流程并发布初始状态。 */
     [[nodiscard]] fw::Result start() noexcept;
@@ -75,7 +101,12 @@ public:
 private:
     class DemuxSink final : public demux::Sink {
     public:
+        constexpr DemuxSink() noexcept = default;
         constexpr explicit DemuxSink(GnssModule *owner) noexcept : owner_(owner) {}
+        void bind(GnssModule *owner) noexcept
+        {
+            owner_ = owner;
+        }
         void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> frame) noexcept override;
         void on_reject(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix,
                        demux::RejectCause cause, bool last) noexcept override;
@@ -83,6 +114,24 @@ private:
     private:
         GnssModule *owner_ = nullptr;
     };
+    static_assert(std::is_trivially_destructible_v<DemuxSink>, "DemuxSink must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<demux::Demux>, "Demux must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<::gnss::NmeaParser>, "NmeaParser must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<::gnss::Controller>, "Controller must be trivially destructible");
+
+    static_assert(std::is_trivially_destructible_v<::gnss::RoverConfig>, "RoverConfig must be trivially destructible");
+    ::gnss::RoverConfig &ensure_rover_cfg() noexcept
+    {
+        if (!rover_cfg_.has_value()) {
+            rover_cfg_.emplace();
+        }
+        return *rover_cfg_;
+    }
+
+    [[nodiscard]] AppContext &ctx() noexcept
+    {
+        return *context_;
+    }
 
     void handle_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept;
     void handle_reject(const demux::Decoder &decoder, std::span<const uint8_t> prefix, demux::RejectCause cause,
@@ -95,34 +144,37 @@ private:
     [[nodiscard]] fw::Result apply_power(bool on) noexcept;
     [[nodiscard]] fw::Result apply_baud(uint32_t baud) noexcept;
 
-    AppContext &context_;
-    DemuxSink sink_{this};
-    demux::Demux demux_{};
-    ::gnss::NmeaParser parser_{};
-    ::gnss::Controller controller_{};
+    // 仅 init 已原地构造后使用；运行期不 reset，缺失表示内部生命周期约束被破坏。
+    [[nodiscard]] ::gnss::Controller &controller() noexcept;
+    [[nodiscard]] ::gnss::NmeaParser &parser() noexcept;
+    [[nodiscard]] demux::Demux &stream_demux() noexcept;
+    [[nodiscard]] fw::Result init_uart() noexcept;
+    void send_raw(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    void update_controller_status() noexcept;
+    [[nodiscard]] fw::Result init_failed(fw::Result original) noexcept;
+    AppContext *context_ = nullptr;
+    std::optional<DemuxSink> sink_{};
+    std::optional<demux::Demux> demux_{};
+    std::optional<::gnss::NmeaParser> parser_{};
+    std::optional<::gnss::Controller> controller_{};
     ::gnss::ControllerStats prev_ctrl_stats_{};
     /** 上一次已上报的未知字节计数，用于按增量输出 `GNSS N unknown bytes dropped`（§2.11）。 */
     uint32_t prev_unknown_bytes_ = 0U;
     ::gnss::Hint hint_{};
-    ::gnss::Timing timing_{};
-    ::gnss::RoverConfig rover_cfg_{
-        .rate_hz = static_cast<uint8_t>(CONFIG_RTK_GNSS_RATE_HZ),
-        .gsv = true,
-        .port = static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT),
-        .port_baud = 0U,
-    };
-    data::GnssOutConfig out_cfg_ = data::GnssOutConfig::defaults();
+    std::optional<::gnss::Timing> timing_{};
+    std::optional<::gnss::RoverConfig> rover_cfg_{};
+    data::GnssOutConfig out_cfg_{};
     std::array<data::GnssPushGate, data::kGnssAppMsgCount> push_gates_{};
     std::array<const demux::Decoder *, demux::kMaxDecoders> decoders_{};
     size_t decoder_count_ = 0U;
-    std::array<uint8_t, kDemuxBufBytes> demux_buf_{};
+    std::span<uint8_t> demux_buf_{};
     std::array<uint8_t, kRtcmTxChunkBytes> rtcm_tx_buf_{};
     size_t rtcm_tx_len_ = 0U;
     size_t rtcm_tx_off_ = 0U;
     std::array<uint32_t, kMaxBaudCandidates> bauds_{};
     size_t baud_count_ = 0U;
 
-    uint32_t host_baud_ = CONFIG_RTK_GNSS_DEFAULT_BAUD;
+    uint32_t host_baud_ = 0U;
     uint32_t uart_rx_bytes_ = 0U;
     uint32_t uart_tx_bytes_ = 0U;
     size_t last_rx_bytes_ = 0U;
@@ -133,7 +185,10 @@ private:
     uint32_t step_retry_ = 0U;
     bool step_sent_once_ = false;
     bool manual_reprobe_ = false;
+    bool rate_loaded_ = false;
+    bool gsv_loaded_ = false;
     bool initialized_ = false;
+    bool uart_installed_ = false;
 };
 
 /** 返回 gnss 顶层命令表（仅在 app_main 启动控制台时调用）。 */

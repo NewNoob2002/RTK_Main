@@ -132,3 +132,39 @@ target_compile_options(gnss_output_check PRIVATE -fno-exceptions -fno-rtti -Wall
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim)
 add_test(NAME gnss_output COMMAND gnss_output_check)
+
+# 编译真实组合根的内存计划；函数分节仅裁去 host 无法运行的硬件入口，不替换待测绑定/回滚逻辑。
+foreach(features on gnss_off trace_off all_off)
+    set(boot_target boot_alloc_check_${features})
+    add_executable(${boot_target} boot_alloc_check.cpp
+        ${PROJ_ROOT}/components/rtos/boot_alloc.cpp
+        ${PROJ_ROOT}/main/data/app_data.cpp
+        ${PROJ_ROOT}/main/data/gnss_output.cpp
+        ${PROJ_ROOT}/main/modules/debug/debug_module.cpp
+        ${PROJ_ROOT}/main/modules/debug/trace_text.cpp
+        ${PROJ_ROOT}/components/spp_server/spp_server_init.c
+        ${PROJ_ROOT}/components/spp_server/spp_server_session.c
+        ${PROJ_ROOT}/components/cli/src/reply.cpp)
+    target_include_directories(${boot_target} BEFORE PRIVATE shim)
+    target_include_directories(${boot_target} PRIVATE ../t13_host_check/shim/inc
+        ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
+        ${PROJ_ROOT}/components/spp_server/boot_include ${PROJ_ROOT}/components/spp_server/private_include
+        ${PROJ_ROOT}/components/cli/include
+        ${PROJ_ROOT}/components/nvs_store/include ${PROJ_ROOT}/components/rtos/include
+        ${PROJ_ROOT}/components/app_fw/include ${PROJ_ROOT}/components/gnss/include
+        ${PROJ_ROOT}/components/bt_reconnect/include)
+    target_compile_options(${boot_target} PRIVATE -ffunction-sections -fdata-sections
+        -Wall -Wextra -Werror -Wshadow -Wimplicit-fallthrough
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti;-Wnon-virtual-dtor;-Woverloaded-virtual>)
+    target_link_options(${boot_target} PRIVATE -Wl,--gc-sections -Wl,--wrap=xTaskCreateStaticPinnedToCore)
+    # 与产品 Kconfig 默认值一致；公共 C 头在未跑 Kconfig 时的兼容回退为 2 KiB，不能冒充产品的 4 KiB RX。
+    target_compile_definitions(${boot_target} PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096 CONFIG_RTK_BT_SPP_RX_BUF_SIZE=4096)
+    if(features STREQUAL "on" OR features STREQUAL "trace_off")
+        target_compile_definitions(${boot_target} PRIVATE CONFIG_RTK_GNSS_ENABLE=1)
+    endif()
+    if(features STREQUAL "trace_off" OR features STREQUAL "all_off")
+        target_compile_definitions(${boot_target} PRIVATE FW_TRACE_ENABLED=0)
+    endif()
+    target_link_libraries(${boot_target} PRIVATE main_pure main_rtos main_nvs_shim)
+    add_test(NAME boot_alloc_${features} COMMAND ${boot_target})
+endforeach()

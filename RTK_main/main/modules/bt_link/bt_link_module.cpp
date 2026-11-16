@@ -42,7 +42,7 @@ void BtLinkModule::SessionSink::bind(BtLinkModule &owner, core::SessionHandle ha
 {
     owner_ = &owner;
     handle_ = handle;
-    healthy_ = true;
+    unhealthy_ = false;
 }
 
 void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t index,
@@ -51,7 +51,7 @@ void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t 
     const bool known = (index == kProductIndex && &decoder == &proto::demux_frame::kDecoder) ||
                        (index == kRtcmIndex && &decoder == &demux::rtcm3::kDecoder);
     if (!known || (owner_ == nullptr)) {
-        healthy_ = false;
+        unhealthy_ = true;
         fw::tlog(fw::TraceCat::kProto,
                  "session 0x%04" PRIx32 " delivery callback invalid (decoder index %u, %u bytes), stream reset",
                  handle_ & kHandleDisplayMask, static_cast<unsigned>(index), static_cast<unsigned>(wire.size()));
@@ -87,7 +87,7 @@ void BtLinkModule::handle_rtcm_frame(core::SessionHandle handle, std::span<const
     rtcm_snapshot_.last_msg = static_cast<uint16_t>(msg);
     trace_rtcm(RtcmTrace::kFrame, handle, msg, static_cast<uint32_t>(wire.size()));
 #if RTK_GNSS_ENABLED
-    if (context_.rtcm_pipe.push(wire)) {
+    if (ctx().rtcm_pipe.push(wire)) {
         ++rtcm_snapshot_.pipe_accepted_frames;
         rtcm_snapshot_.pipe_accepted_bytes += static_cast<uint32_t>(wire.size());
     } else {
@@ -117,24 +117,28 @@ void BtLinkModule::session_forget(core::SessionHandle handle) noexcept
         return;
     }
     /* CLOSE 取消所有尚未路由的帧。abort 只补统计，其产出的尾帧也必须丢弃。 */
-    if (entry->demux_ready) {
-        const auto error = entry->demux.abort();
+    if (entry->demux_ready && entry->demux.has_value()) {
+        const auto error = entry->demux->abort();
         if (error != demux::Error::kOk) {
             fw::tlog(fw::TraceCat::kProto, "stream demux abort failed (reentry)");
         }
     }
     /* 累计退役统计后复位会话，避免重用句柄携带半帧。 */
-    const auto &stats = entry->demux.stats();
-    retired_demux_.unknown_bytes += stats.unknown_bytes;
-    retired_demux_.product_rejects += stats.decoder[kProductIndex].rejects;
-    retired_demux_.rtcm_rejects += stats.decoder[kRtcmIndex].rejects;
+    if (entry->demux.has_value()) {
+        const auto &stats = entry->demux->stats();
+        retired_demux_.unknown_bytes += stats.unknown_bytes;
+        retired_demux_.product_rejects += stats.decoder[kProductIndex].rejects;
+        retired_demux_.rtcm_rejects += stats.decoder[kRtcmIndex].rejects;
+    }
     entry->used = false;
     entry->handle = 0;
     entry->addr = {};
     entry->drain_pending = false;
     entry->rx_offset = entry->rx_size = 0;
     entry->demux_ready = false;
-    entry->sink.bind(*this, 0);
+    if (entry->sink.has_value()) {
+        entry->sink->bind(*this, 0);
+    }
 }
 
 void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr &addr) noexcept
@@ -152,8 +156,14 @@ void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr
         entry.addr = addr;
         entry.drain_pending = false;
         entry.rx_offset = entry.rx_size = 0;
-        entry.sink.bind(*this, handle);
-        entry.demux_ready = entry.demux.init(entry.sink) == demux::Error::kOk;
+        if (!entry.sink.has_value()) {
+            entry.sink.emplace();
+        }
+        if (!entry.demux.has_value()) {
+            entry.demux.emplace();
+        }
+        entry.sink->bind(*this, handle);
+        entry.demux_ready = entry.demux->init(*entry.sink) == demux::Error::kOk;
         if (!entry.demux_ready) {
             fw::tlog(fw::TraceCat::kProto, "stream demux init failed, session 0x%04" PRIx32 " gets no parsing",
                      handle & kHandleDisplayMask);
@@ -166,7 +176,7 @@ void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr
 void BtLinkModule::collect_whitelist_dirty() noexcept
 {
     if (link_service().consume_whitelist_dirty()) {
-        context_.storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
+        ctx().storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
     }
 }
 
@@ -183,7 +193,7 @@ void BtLinkModule::handle_open(const spp_server_evt_t &evt, uint32_t now_ms) noe
 
 void BtLinkModule::handle_close(core::SessionHandle handle) noexcept
 {
-    auto *entry = session_find(handle);
+    const auto *entry = session_find(handle);
     const size_t unconsumed =
         (entry != nullptr && entry->rx_offset < entry->rx_size) ? (entry->rx_size - entry->rx_offset) : 0U;
     const bool was_paused = link_service().paused(handle);
@@ -227,6 +237,13 @@ void BtLinkModule::handle_event(const spp_server_evt_t &evt, uint32_t now_ms) no
 
 bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_start_ms) noexcept
 {
+    if (!entry.demux.has_value() || !entry.sink.has_value()) {
+        entry.demux_ready = false;
+        entry.drain_pending = false;
+        return true;
+    }
+    auto &session_demux = *entry.demux;
+    const auto &session_sink = *entry.sink;
     /* 只在预读耗尽时读取，空读结束此会话本轮处理。 */
     if (entry.rx_offset == entry.rx_size) {
         entry.rx_size = spp_server_read(entry.handle, entry.rx.data(), entry.rx.size());
@@ -241,10 +258,10 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
         return true;
     }
     /* 逐字节 feed 保留基线的帧投递和预算边界。 */
-    const auto error = entry.demux.feed(std::span<const uint8_t>{entry.rx}.subspan(entry.rx_offset, 1));
+    const auto error = session_demux.feed(std::span<const uint8_t>{entry.rx}.subspan(entry.rx_offset, 1));
     ++entry.rx_offset;
     --budget;
-    if (error != demux::Error::kOk || !entry.sink.healthy()) {
+    if (error != demux::Error::kOk || !session_sink.healthy()) {
         entry.demux_ready = false;
         entry.drain_pending = false;
         fw::tlog(fw::TraceCat::kProto, "stream demux stopped (%s), further bytes on this session ignored",
@@ -320,7 +337,7 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
     const auto list = link_manager_.whitelist();
     link.whitelist_count = std::min(list.size(), kMaxAlarms);
     std::copy_n(list.begin(), link.whitelist_count, link.whitelist.begin());
-    context_.data.link_status.write(link);
+    ctx().data.link_status.write(link);
     Sessions sessions{};
     for (const auto &entry : sessions_) {
         const auto role = link_manager_.role(entry.handle);
@@ -328,8 +345,13 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
             sessions.entries[sessions.count++] = {true, entry.handle, role, entry.addr};
         }
     }
-    context_.data.sessions.write(sessions);
-    context_.data.alarm_state.write({alarm_.state(), alarm_.level(), alarm_.is_override()});
+    ctx().data.sessions.write(sessions);
+    if (alarm_.has_value()) {
+        const AlarmState snapshot{alarm_->state(), alarm_->level(), alarm_->is_override()};
+        ctx().data.alarm_state.write(snapshot);
+    } else {
+        ctx().data.alarm_state.write({});
+    }
     /* 继续发布发送、心跳与分流统计，顺序不变。 */
     LinkStats stats{};
     static_cast<core::LinkStats &>(stats) = link_service().stats(); // 派生结构的基类赋值，无窄化。
@@ -358,13 +380,13 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
         stats.rx_events[idx] = rx.sessions[idx].rx_events;
         stats.rx_drop_events[idx] = rx.sessions[idx].drop_events;
     }
-    context_.data.link_stats.write(stats);
+    ctx().data.link_stats.write(stats);
     const auto heartbeat = link_service().last_heartbeat();
-    context_.data.heartbeat.write({heartbeat.has_value(), heartbeat.value_or(proto::alarm::Heartbeat{})});
+    ctx().data.heartbeat.write({heartbeat.has_value(), heartbeat.value_or(proto::alarm::Heartbeat{})});
     DemuxStats demux = retired_demux_;
     for (auto &entry : sessions_) {
-        if (entry.used) {
-            const auto &counts = entry.demux.stats();
+        if (entry.used && entry.demux.has_value()) {
+            const auto &counts = entry.demux->stats();
             demux.unknown_bytes += counts.unknown_bytes;
             demux.product_rejects += counts.decoder[kProductIndex].rejects;
             demux.rtcm_rejects += counts.decoder[kRtcmIndex].rejects;
@@ -380,20 +402,22 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
             }
         }
     }
-    context_.data.demux_stats.write(demux);
+    ctx().data.demux_stats.write(demux);
 }
 
 void BtLinkModule::apply_rtcm_reset() noexcept
 {
     uint32_t reset_version = 0;
-    const uint32_t reset = context_.data.rtcm_reset.read(reset_version);
+    const uint32_t reset = ctx().data.rtcm_reset.read(reset_version);
     if (reset_version != reset_version_) {
         reset_version_ = reset_version;
         retired_demux_ = {};
         rtcm_snapshot_ = {};
         rtcm_snapshot_.reset_epoch = reset;
         for (auto &entry : sessions_) {
-            entry.demux.reset_stats();
+            if (entry.demux.has_value()) {
+                entry.demux->reset_stats();
+            }
             entry.seen_resyncs = 0U;
             entry.seen_unknown = 0U;
         }
@@ -407,22 +431,26 @@ void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
         return;
     }
     auto &device_info = device_service_->info();
+    if (!cached_gnss_fix_.has_value()) {
+        cached_gnss_fix_.emplace();
+    }
+    auto &cached_fix = *cached_gnss_fix_;
     uint32_t fix_ver = 0;
-    const auto fix = context_.data.gnss_fix.read(fix_ver);
+    const auto fix = ctx().data.gnss_fix.read(fix_ver);
     if (fix_ver != gnss_fix_version_) {
         gnss_fix_version_ = fix_ver;
-        cached_gnss_fix_ = fix;
+        cached_fix = fix;
     }
-    const bool within_window = (now_ms - cached_gnss_fix_.update_ms <= kGnssFixStaleMs) ||
-                               (cached_gnss_fix_.update_ms - now_ms <= kGnssClockJitterMs);
-    const bool fix_fresh = cached_gnss_fix_.valid && (cached_gnss_fix_.update_ms != 0U) && within_window;
-    const uint8_t fix_q = (fix_fresh && (cached_gnss_fix_.quality != ::gnss::FixQuality::kUnknown))
-                              ? static_cast<uint8_t>(cached_gnss_fix_.quality)
+    const bool within_window =
+        (now_ms - cached_fix.update_ms <= kGnssFixStaleMs) || (cached_fix.update_ms - now_ms <= kGnssClockJitterMs);
+    const bool fix_fresh = cached_fix.valid && (cached_fix.update_ms != 0U) && within_window;
+    const uint8_t fix_q = (fix_fresh && (cached_fix.quality != ::gnss::FixQuality::kUnknown))
+                              ? static_cast<uint8_t>(cached_fix.quality)
                               : proto::alarm::kValueUnknown;
     device_info.fix_quality = fix_q;
 
     uint32_t status_ver = 0;
-    const auto gnss_st = context_.data.gnss_status.read(status_ver);
+    const auto gnss_st = ctx().data.gnss_status.read(status_ver);
     if (status_ver != gnss_status_version_) {
         gnss_status_version_ = status_ver;
         device_info.gnss_running = gnss_st.enabled && (gnss_st.state == ::gnss::State::kRunning);
@@ -446,11 +474,11 @@ core::services::GnssQueryResult BtLinkModule::on_gnss_query(void *ctx, uint16_t 
         return {};
     }
     const auto type_idx = static_cast<uint8_t>(*idx);
-    const auto res = self->context_.data.gnss_latest.query(type_idx, dst);
+    const auto res = self->ctx().data.gnss_latest.query(type_idx, dst);
     if (res.oversize) {
         // query_oversize 在 GnssService 内于本回调返回后自增，先累加 1 再写快照避免少计当前次。
         const uint32_t cur = self->gnss_service_.has_value() ? (self->gnss_service_->query_oversize_count() + 1U) : 1U;
-        self->context_.data.gnss_app_sub.set_query_oversize_total(cur);
+        self->ctx().data.gnss_app_sub.set_query_oversize_total(cur);
         fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppDrop), 0U, 1U, type_idx);
     }
     return res;
@@ -463,7 +491,7 @@ void BtLinkModule::on_gnss_mask(void *ctx, uint32_t mask) noexcept
         return;
     }
     if (self->gnss_reader_attached_) {
-        static_cast<void>(self->context_.data.gnss_app_ring.set_mask(self->gnss_reader_id_, mask));
+        static_cast<void>(self->ctx().data.gnss_app_ring.set_mask(self->gnss_reader_id_, mask));
     }
     std::array<uint32_t, core::services::kGnssMsgCount> periods_ms{};
     if (self->gnss_service_.has_value()) {
@@ -471,7 +499,7 @@ void BtLinkModule::on_gnss_mask(void *ctx, uint32_t mask) noexcept
             periods_ms[i] = self->gnss_service_->period_ms(i);
         }
     }
-    self->context_.data.gnss_app_sub.set_subscription(mask, periods_ms);
+    self->ctx().data.gnss_app_sub.set_subscription(mask, periods_ms);
     fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppMask), 0U, mask, (mask == 0U) ? 1U : 0U);
 }
 
@@ -486,10 +514,10 @@ void BtLinkModule::reset_gnss_stream_session() noexcept
     // 断连或切会话时清空旧读者的残余记录，避免重连后重放上一会话的句子（ADR-0011 §6.2）。
     for (size_t i = 0U; i < kMaxGnssFlushRecords; ++i) {
         fw::FanoutView view{};
-        if (!fw::is_ok(context_.data.gnss_app_ring.peek(gnss_reader_id_, view))) {
+        if (!fw::is_ok(ctx().data.gnss_app_ring.peek(gnss_reader_id_, view))) {
             break;
         }
-        static_cast<void>(context_.data.gnss_app_ring.commit(view.lease));
+        static_cast<void>(ctx().data.gnss_app_ring.commit(view.lease));
     }
 }
 
@@ -502,17 +530,17 @@ bool BtLinkModule::drain_gnss_stream() noexcept
     size_t sent_count = 0U;
     for (; sent_count < kMaxGnssStreamRecordsPerPoll; ++sent_count) {
         fw::FanoutView view{};
-        if (!fw::is_ok(context_.data.gnss_app_ring.peek(gnss_reader_id_, view))) {
+        if (!fw::is_ok(ctx().data.gnss_app_ring.peek(gnss_reader_id_, view))) {
             break;
         }
         const size_t total = view.first.size() + view.second.size();
         if ((total == 0U) || (total > kGnssStreamMaxRecord)) {
-            static_cast<void>(context_.data.gnss_app_ring.commit(view.lease));
+            static_cast<void>(ctx().data.gnss_app_ring.commit(view.lease));
             continue;
         }
         spp_server_tx_token_t token{};
         if (spp_server_stream_reserve(stream_handle_, total, &token) != ESP_OK) {
-            static_cast<void>(context_.data.gnss_app_ring.cancel(view.lease));
+            static_cast<void>(ctx().data.gnss_app_ring.cancel(view.lease));
             return false;
         }
         // 源记录跨环尾时两段直接拼进 TX.stream，无需中转缓冲。
@@ -522,11 +550,11 @@ bool BtLinkModule::drain_gnss_stream() noexcept
                                                                 view.second.data(), view.second.size());
         if (committed != ESP_OK) {
             spp_server_tx_cancel(&token);
-            static_cast<void>(context_.data.gnss_app_ring.cancel(view.lease));
+            static_cast<void>(ctx().data.gnss_app_ring.cancel(view.lease));
             return false;
         }
-        static_cast<void>(context_.data.gnss_app_ring.commit(view.lease));
-        context_.data.gnss_app_sub.add_tx_sent(view.type);
+        static_cast<void>(ctx().data.gnss_app_ring.commit(view.lease));
+        ctx().data.gnss_app_sub.add_tx_sent(view.type);
     }
     return sent_count == kMaxGnssStreamRecordsPerPoll;
 }
@@ -543,53 +571,58 @@ core::LinkService &BtLinkModule::link_service() noexcept
 
 fw::Result BtLinkModule::init() noexcept
 {
-    const auto system = context_.data.system_status.read();
+    if (context_ == nullptr) {
+        return fw::Result::kInvalidState;
+    }
+    const auto system = ctx().data.system_status.read();
     if (!system.bt_ready) {
         return fw::Result::kInvalidState;
     }
     /* 从持久化快照恢复策略，再按依赖顺序原地构造服务。 */
-    const auto link = context_.data.link_status.read();
+    const auto link = ctx().data.link_status.read();
     link_manager_.init(link.policy, std::span{link.whitelist}.first(link.whitelist_count));
-    device_service_.emplace();
-    device_service_->info().sn.assign(system.sn.data());
-    device_service_->info().fw_ver.assign(kAppVersion);
-    config_service_.emplace();
-    alarm_service_.emplace(alarm_, link_manager_, device_service_->info());
-    pair_service_.emplace(link_manager_);
+    auto &alarm = alarm_.emplace();
+    auto &device_service = device_service_.emplace();
+    device_service.info().sn.assign(system.sn.data());
+    device_service.info().fw_ver.assign(kAppVersion);
+    auto &config_service = config_service_.emplace();
+    auto &alarm_service = alarm_service_.emplace(alarm, link_manager_, device_service.info());
+    auto &pair_service = pair_service_.emplace(link_manager_);
 #if RTK_GNSS_ENABLED
-    gnss_service_.emplace();
-    gnss_service_->set_query_hook(&BtLinkModule::on_gnss_query, this);
-    gnss_service_->set_mask_hook(&BtLinkModule::on_gnss_mask, this);
-    gnss_reader_attached_ = fw::is_ok(context_.data.gnss_app_ring.attach(0U, gnss_reader_id_));
+    cached_gnss_fix_.emplace();
+    auto &gnss_service = gnss_service_.emplace();
+    gnss_service.set_query_hook(&BtLinkModule::on_gnss_query, this);
+    gnss_service.set_mask_hook(&BtLinkModule::on_gnss_mask, this);
+    gnss_reader_attached_ = fw::is_ok(ctx().data.gnss_app_ring.attach(0U, gnss_reader_id_));
     if (!gnss_reader_attached_) {
         ESP_LOGE(kTag, "gnss app ring attach failed");
         return fw::Result::kInvalidState;
     }
     /* 路由表校验成功后才构造 LinkService，失败由执行器隔离。 */
-    const std::array<core::RouteTable, 5> tables = {device_service_->table(), config_service_->table(),
-                                                    alarm_service_->table(), pair_service_->table(),
-                                                    gnss_service_->table()};
+    const std::array<core::RouteTable, 5> tables = {device_service.table(), config_service.table(),
+                                                    alarm_service.table(), pair_service.table(), gnss_service.table()};
 #else
     /* 路由表校验成功后才构造 LinkService，失败由执行器隔离。 */
-    const std::array<core::RouteTable, 4> tables = {device_service_->table(), config_service_->table(),
-                                                    alarm_service_->table(), pair_service_->table()};
+    const std::array<core::RouteTable, 4> tables = {device_service.table(), config_service.table(),
+                                                    alarm_service.table(), pair_service.table()};
 #endif
     const fw::Status route_status = router_.init(tables);
     if (!is_ok(route_status)) {
         ESP_LOGE(kTag, "command router init failed: %s", to_string(route_status));
         return fw::Result::kInvalidState;
     }
-    if (!transport_.supports_credit()) {
+    transport_.emplace();
+    if (!transport_->supports_credit()) {
         return fw::Result::kInvalidState;
     }
-    service_.emplace(transport_, link_manager_, router_, *alarm_service_);
+    service_.emplace(*transport_, link_manager_, router_, alarm_service);
     spp_server_set_rx_wake_hook(&BtLinkModule::on_rx_wake, this);
     return fw::Result::kOk;
 }
 
 void BtLinkModule::on_rx_wake(void *ctx) noexcept
 {
-    auto *self = static_cast<BtLinkModule *>(ctx);
+    const auto *self = static_cast<BtLinkModule *>(ctx);
     if (self == nullptr) {
         return;
     }
@@ -614,7 +647,7 @@ bool BtLinkModule::poll_and_check_ready(uint32_t now_ms) noexcept
             continue;
         }
         if (link_service().paused(entry.handle)) {
-            if (transport_.reply_ready(entry.handle)) {
+            if (transport_.has_value() && transport_->reply_ready(entry.handle)) {
                 ready = true;
             }
             continue;
@@ -689,7 +722,10 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
 
 void BtLinkModule::set_alarm(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
-    if (cmd.arg_len != kAlarmArgBytes || !alarm_.set_override(cmd.args[0], cmd.args[1])) {
+    if (!alarm_.has_value()) {
+        alarm_.emplace();
+    }
+    if (cmd.arg_len != kAlarmArgBytes || !alarm_->set_override(cmd.args[0], cmd.args[1])) {
         result.status = fw::Result::kInvalidArg;
     }
 }
@@ -704,8 +740,8 @@ void BtLinkModule::clear_whitelist(fw::CommandResult &result) noexcept
 void BtLinkModule::persist_whitelist(fw::CommandResult &result) noexcept
 {
     /* 控制台改动立即落盘（不走 HELLO 学习的延迟合并），回执携带原后端错误码。 */
-    context_.storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
-    result.detail = context_.storage.flush_whitelist(rtos::now_ms());
+    ctx().storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
+    result.detail = ctx().storage.flush_whitelist(rtos::now_ms());
     if (result.detail != ESP_OK) {
         result.status = fw::Result::kIoError;
     }
@@ -752,7 +788,10 @@ void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result)
         set_alarm(cmd, result);
         break;
     case LinkVerb::kAlarmClear:
-        alarm_.clear_override();
+        if (!alarm_.has_value()) {
+            alarm_.emplace();
+        }
+        alarm_->clear_override();
         break;
     case LinkVerb::kPair:
         if (link_manager_.is_pairing()) {

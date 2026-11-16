@@ -9,7 +9,12 @@ struct AppContext;
 /** RTCM 模块（kLink 执行器）：消费批次视图并处理 rtcm 命令。 */
 class RtcmModule final {
 public:
-    constexpr explicit RtcmModule(AppContext &context) noexcept : context_(context) {}
+    constexpr RtcmModule() noexcept = default;
+    constexpr explicit RtcmModule(AppContext &context) noexcept : context_(&context) {}
+    void bind_context(AppContext &context) noexcept
+    {
+        context_ = &context;
+    }
     ~RtcmModule() = default;
     RtcmModule(const RtcmModule &) = delete;
     RtcmModule &operator=(const RtcmModule &) = delete;
@@ -23,7 +28,12 @@ public:
     [[nodiscard]] const RtcmStats &stats() const noexcept;
 
 private:
-    AppContext &context_;
+    [[nodiscard]] AppContext &ctx() noexcept
+    {
+        return *context_;
+    }
+
+    AppContext *context_ = nullptr;
     RtcmStats stats_{};
     RtcmLinkSnapshot baseline_{};
     uint32_t reset_epoch_ = 0;
