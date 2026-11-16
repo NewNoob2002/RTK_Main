@@ -1,16 +1,19 @@
 // GNSS 控制器 host 测试：上电/探测/配置/运行/静默重探/失败退避/波特率切换/提示优先（ADR-0010 §2.6）。
-// 用测试本地的假方言与假解码器驱动状态机，不依赖真实模块。
+// 用测试本地的假驱动（gnss::Receiver 子类）与假解码器驱动状态机，不依赖真实模块。
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
 
+#include <string_view>
+
 #include "gnss/Controller.hpp"
 #include "unity.h"
 
 namespace {
 
+using gnss::Ack;
 using gnss::Action;
 using gnss::CmdBuf;
 using gnss::ConfigStep;
@@ -18,7 +21,6 @@ using gnss::Controller;
 using gnss::Family;
 using gnss::Model;
 using gnss::ProbeResult;
-using gnss::Reply;
 using gnss::RoverConfig;
 
 bool fake_first(uint8_t byte) noexcept
@@ -108,25 +110,78 @@ bool step_switch(size_t index, Model, const RoverConfig &, ConfigStep &out) noex
     return false;
 }
 
-Reply match_reply(const demux::Decoder &, std::span<const uint8_t> frame, std::span<const uint8_t>) noexcept
+Ack fake_reply(std::span<const uint8_t> frame) noexcept
 {
     if (frame.size() == 2 && frame[0] == static_cast<uint8_t>('O') && frame[1] == static_cast<uint8_t>('K')) {
-        return Reply::kAck;
+        return Ack::kAck;
     }
     if (frame.size() == 2 && frame[0] == static_cast<uint8_t>('N') && frame[1] == static_cast<uint8_t>('O')) {
-        return Reply::kNack;
+        return Ack::kNack;
     }
-    return Reply::kNone;
+    return Ack::kNone;
 }
 
-uint32_t caps_none(Model) noexcept
-{
-    return 0;
-}
+/**
+ * 假驱动：把上面的自由函数包成 gnss::Receiver 子类，其余成员走基类默认实现。
+ * 只用于验证控制器的时序与状态迁移，不验证任何协议字节。
+ */
+class FakeReceiver final : public gnss::Receiver {
+public:
+    using ProbeFn = bool (*)(CmdBuf &);
+    using MatchFn = bool (*)(const demux::Decoder &, std::span<const uint8_t>, ProbeResult &);
+    using StepFn = bool (*)(size_t, Model, const RoverConfig &, ConfigStep &);
 
-constexpr gnss::Dialect kDialectA{"A", Family::kUnicore, {}, &probe_a, &match_a, &step_a, &match_reply, &caps_none};
-constexpr gnss::Dialect kDialectB{"B", Family::kUblox, {}, &probe_b, &match_b, &step_b, &match_reply, &caps_none};
-constexpr gnss::Dialect kDialectS{"S", Family::kComnav, {}, &probe_b, &match_b, &step_switch, &match_reply, &caps_none};
+    constexpr FakeReceiver(Family family, const char *name, ProbeFn probe, MatchFn match, StepFn step) noexcept
+        : family_(family), name_(name), probe_(probe), match_(match), step_(step)
+    {}
+
+    [[nodiscard]] Family family() const noexcept override
+    {
+        return family_;
+    }
+    [[nodiscard]] std::string_view name() const noexcept override
+    {
+        return name_;
+    }
+    [[nodiscard]] std::span<const demux::Decoder *const> decoders() const noexcept override
+    {
+        return {};
+    }
+    [[nodiscard]] uint32_t caps(Model) const noexcept override
+    {
+        return 0U;
+    }
+    [[nodiscard]] bool build_probe(CmdBuf &out) const noexcept override
+    {
+        return probe_(out);
+    }
+    [[nodiscard]] bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                   ProbeResult &out) const noexcept override
+    {
+        return match_(dec, frame, out);
+    }
+    [[nodiscard]] bool rover_step(size_t index, Model model, const RoverConfig &cfg,
+                                  ConfigStep &out) const noexcept override
+    {
+        return step_(index, model, cfg, out);
+    }
+    [[nodiscard]] Ack classify_reply(const demux::Decoder &, std::span<const uint8_t> frame,
+                                     std::span<const uint8_t>) const noexcept override
+    {
+        return fake_reply(frame);
+    }
+
+private:
+    Family family_;
+    const char *name_;
+    ProbeFn probe_;
+    MatchFn match_;
+    StepFn step_;
+};
+
+constinit const FakeReceiver kReceiverA{Family::kUnicore, "A", &probe_a, &match_a, &step_a};
+constinit const FakeReceiver kReceiverB{Family::kUblox, "B", &probe_b, &match_b, &step_b};
+constinit const FakeReceiver kReceiverS{Family::kComnav, "S", &probe_b, &match_b, &step_switch};
 
 bool bytes_equal(std::span<const uint8_t> data, const char *text)
 {
@@ -197,26 +252,26 @@ static void test_init_rejects_bad_arguments()
     Controller controller;
     RoverConfig cfg{};
     gnss::Timing timing{};
-    const std::array<const gnss::Dialect *, 1> dialects{&kDialectA};
+    const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    const std::array<const gnss::Dialect *, 1> with_null{nullptr};
+    const std::array<const gnss::Receiver *, 1> with_null{nullptr};
     const std::array<uint32_t, 1> zero{0};
 
     TEST_ASSERT_FALSE(controller.init({}, bauds, cfg, {}, timing));
-    TEST_ASSERT_FALSE(controller.init(dialects, {}, cfg, {}, timing));
+    TEST_ASSERT_FALSE(controller.init(receivers, {}, cfg, {}, timing));
     TEST_ASSERT_FALSE(controller.init(with_null, bauds, cfg, {}, timing));
-    TEST_ASSERT_FALSE(controller.init(dialects, zero, cfg, {}, timing));
-    TEST_ASSERT_TRUE(controller.init(dialects, bauds, cfg, {}, timing));
+    TEST_ASSERT_FALSE(controller.init(receivers, zero, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
 }
 
 static void test_full_flow_probe_configure_run_reprobe()
 {
     Controller controller;
     RoverConfig cfg = rover_config();
-    const std::array<const gnss::Dialect *, 1> dialects{&kDialectA};
+    const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(dialects, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
 
     uint32_t now = 0;
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kOff), static_cast<int>(controller.state()));
@@ -261,10 +316,10 @@ static void test_probe_timeout_exhausts_rounds()
 {
     Controller controller;
     RoverConfig cfg = rover_config();
-    const std::array<const gnss::Dialect *, 1> dialects{&kDialectA};
+    const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(dialects, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -288,10 +343,10 @@ static void test_nack_retries_then_fails()
 {
     Controller controller;
     RoverConfig cfg = rover_config();
-    const std::array<const gnss::Dialect *, 1> dialects{&kDialectA};
+    const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(dialects, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -317,10 +372,10 @@ static void test_step_timeout_retries()
 {
     Controller controller;
     RoverConfig cfg = rover_config();
-    const std::array<const gnss::Dialect *, 1> dialects{&kDialectA};
+    const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(dialects, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -338,10 +393,10 @@ static void test_baud_switch_step()
 {
     Controller controller;
     RoverConfig cfg = rover_config();
-    const std::array<const gnss::Dialect *, 1> dialects{&kDialectS};
+    const std::array<const gnss::Receiver *, 1> receivers{&kReceiverS};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(dialects, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -367,13 +422,13 @@ static void test_hint_is_probed_first()
 {
     Controller controller;
     RoverConfig cfg = rover_config();
-    const std::array<const gnss::Dialect *, 2> dialects{&kDialectA, &kDialectB};
+    const std::array<const gnss::Receiver *, 2> receivers{&kReceiverA, &kReceiverB};
     const std::array<uint32_t, 2> bauds{115200, 9600};
     const gnss::Timing timing = fast_timing();
     gnss::Hint hint{};
     hint.family = Family::kUblox;
     hint.baud = 9600;
-    TEST_ASSERT_TRUE(controller.init(dialects, bauds, cfg, hint, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, hint, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -387,9 +442,9 @@ static void test_request_reconfigure()
 {
     Controller controller;
     RoverConfig cfg = rover_config();
-    const std::array<const gnss::Dialect *, 1> dialects{&kDialectA};
+    const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    TEST_ASSERT_TRUE(controller.init(dialects, bauds, cfg, {}, fast_timing()));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, fast_timing()));
 
     uint32_t now = 0;
     controller.request_reconfigure(now); // 尚未探测 → 等同 request_reprobe

@@ -385,18 +385,11 @@ const char *result_text(uint32_t value) noexcept
 #if RTK_GNSS_ENABLED
 const char *gnss_family_text(uint32_t value) noexcept
 {
-    switch (static_cast<::gnss::Family>(value)) {
-    case ::gnss::Family::kUnknown:
-        return "unknown";
-    case ::gnss::Family::kUnicore:
-        return "unicore";
-    case ::gnss::Family::kUblox:
-        return "ublox";
-    case ::gnss::Family::kComnav:
-        return "comnav";
-    default:
+    // 家族名集中在 gnss 组件（ADR-0012 §2.2），这里只做越界保护。
+    if (value > static_cast<uint32_t>(::gnss::Family::kComnav)) {
         return "?";
     }
+    return ::gnss::family_name(static_cast<::gnss::Family>(value));
 }
 #endif
 

@@ -23,7 +23,6 @@
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
 #include "gnss/Controller.hpp"
-#include "gnss/Dialect.hpp"
 #include "gnss/Types.hpp"
 #include "rtos/EspStatus.hpp"
 #include "support/ConsoleSupport.hpp"
@@ -76,22 +75,6 @@ bool parse_i8_range(const char *text, int8_t &out_val) noexcept
     }
     out_val = static_cast<int8_t>(val);
     return true;
-}
-
-const char *family_name(::gnss::Family family) noexcept
-{
-    switch (family) {
-    case ::gnss::Family::kUnknown:
-        return "unknown";
-    case ::gnss::Family::kUnicore:
-        return "unicore";
-    case ::gnss::Family::kUblox:
-        return "ublox";
-    case ::gnss::Family::kComnav:
-        return "comnav";
-    default:
-        return "unknown";
-    }
 }
 
 const char *fix_quality_name(::gnss::FixQuality q) noexcept
@@ -220,7 +203,7 @@ int cmd_gnss_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::print_section("gnss");
     cli::print_kv("enabled", "%s", st.enabled ? "yes" : "no");
     cli::print_kv("state", "%s", ::gnss::state_name(st.state));
-    cli::print_kv("family", "%s", family_name(st.family));
+    cli::print_kv("family", "%s", ::gnss::family_name(st.family));
     cli::print_kv("model", "%s", ::gnss::model_name(st.model));
     cli::print_kv("fw", "%s", (st.fw_version[0] != '\0') ? st.fw_version.data() : "-");
     cli::print_kv("baud", "%" PRIu32, st.host_baud);

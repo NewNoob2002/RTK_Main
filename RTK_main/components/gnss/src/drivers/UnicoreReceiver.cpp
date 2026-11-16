@@ -1,8 +1,8 @@
-// Unicore N4（UM980/UM981/UM982）方言实现：$command 应答解码、VERSIONA 探测、流动站配置脚本（ADR-0010 §2.2/§2.4）。
+// Unicore N4（UM980/UM981/UM982）驱动实现：$command 应答解码、VERSIONA 探测、流动站配置脚本（ADR-0010 §2.2/§2.4）。
 // 线程/调用约束：全部为纯函数（无全局可变状态），可从任意任务调用，不可阻塞；应答解码器亦可用于 ISR 安全的
 // demux 引擎（first_byte/step 只读入参）。
 // 堆：不使用。浮点：不使用（频率参数按手册写死为文本）。
-#include "gnss/dialects/Unicore.hpp"
+#include "gnss/drivers/UnicoreReceiver.hpp"
 
 #include <array>
 #include <cstddef>
@@ -12,6 +12,7 @@
 
 #include "demux/TextWriter.hpp"
 #include "demux/decoders/UnicoreHash.hpp"
+#include "../FrameTag.hpp"
 
 namespace gnss::unicore {
 namespace {
@@ -355,13 +356,13 @@ std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out
     return text.finish();
 }
 
-bool build_probe(CmdBuf &out) noexcept
+bool probe_cmd(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append("VERSIONA\r\n");
 }
 
-bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
+bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
 {
     if (&dec != &demux::unicore_hash::kDecoder || frame.size() < kVersionTag.size()) {
         return false;
@@ -413,9 +414,9 @@ bool finish_step(CmdBuf &cmd, bool expect_reply, uint32_t switch_baud, ConfigSte
     return true;
 }
 
-uint32_t caps(Model model) noexcept;
+uint32_t model_caps(Model model) noexcept;
 
-bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
+bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
 {
     const char *period = period_for(cfg.rate_hz);
     CmdBuf cmd;
@@ -455,7 +456,7 @@ bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &o
         }
         ++next;
     }
-    if ((caps(model) & cap::kHeading) != 0U) {
+    if ((model_caps(model) & cap::kHeading) != 0U) {
         if (index == next) {
             // 仅双天线型号（UM982）开启 HEADINGA，不在单天线型号上强开。
             return append_message(cmd, "HEADINGA", cfg.port, "1") && finish_step(cmd, true, 0, out);
@@ -474,16 +475,16 @@ bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &o
     return false; // 脚本结束
 }
 
-Reply match_reply(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t> sent) noexcept
+Ack reply_ack(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t> sent) noexcept
 {
     if (&dec != &kResponseDecoder) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
     const size_t size = frame.size();
     const size_t prefix_len = kCommandPrefix.size();
     if (size < prefix_len + kResponseTag.size() + 3 || frame[size - 1] != kLf || frame[size - 2] != kCr ||
         frame[size - 5] != kStar) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
 
     size_t sep = size;
@@ -501,7 +502,7 @@ Reply match_reply(const demux::Decoder &dec, std::span<const uint8_t> frame, std
         }
     }
     if (sep == size) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
 
     size_t sent_len = sent.size();
@@ -510,11 +511,11 @@ Reply match_reply(const demux::Decoder &dec, std::span<const uint8_t> frame, std
     }
     const size_t echo_len = sep - prefix_len;
     if (echo_len != sent_len) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
     for (size_t i = 0; i < sent_len; ++i) {
         if (frame[prefix_len + i] != sent[i]) {
-            return Reply::kNone; // 不是本步命令的应答
+            return Ack::kNone; // 不是本步命令的应答
         }
     }
 
@@ -524,10 +525,10 @@ Reply match_reply(const demux::Decoder &dec, std::span<const uint8_t> frame, std
         --text_end;
     }
     const std::span<const uint8_t> text = frame.subspan(text_begin, text_end - text_begin);
-    return quoted_equals(text, "OK") ? Reply::kAck : Reply::kNack;
+    return quoted_equals(text, "OK") ? Ack::kAck : Ack::kNack;
 }
 
-uint32_t caps(Model model) noexcept
+uint32_t model_caps(Model model) noexcept
 {
     switch (model) {
     case Model::kUm982:
@@ -541,7 +542,99 @@ uint32_t caps(Model model) noexcept
     }
 }
 
-const Dialect kDialect{"Unicore",    Family::kUnicore, kDecoders,    &build_probe,
-                       &match_probe, &rover_step,      &match_reply, &caps};
-
 } // namespace gnss::unicore
+
+namespace gnss {
+
+namespace {
+constinit const UnicoreReceiver kUnicoreReceiver{};
+}
+
+Family UnicoreReceiver::family() const noexcept
+{
+    return Family::kUnicore;
+}
+
+std::string_view UnicoreReceiver::name() const noexcept
+{
+    return "unicore";
+}
+
+std::span<const demux::Decoder *const> UnicoreReceiver::decoders() const noexcept
+{
+    return unicore::kDecoders;
+}
+
+uint32_t UnicoreReceiver::caps(Model model) const noexcept
+{
+    return unicore::model_caps(model);
+}
+
+bool UnicoreReceiver::build_probe(CmdBuf &out) const noexcept
+{
+    return unicore::probe_cmd(out);
+}
+
+bool UnicoreReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                  ProbeResult &out) const noexcept
+{
+    return unicore::probe_match(dec, frame, out);
+}
+
+bool UnicoreReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
+{
+    return unicore::script_step(index, model, cfg, out);
+}
+
+Ack UnicoreReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                    std::span<const uint8_t> sent) const noexcept
+{
+    return unicore::reply_ack(dec, frame, sent);
+}
+
+OutputMsg UnicoreReceiver::classify_frame(const demux::Decoder &dec, std::span<const uint8_t> frame) const noexcept
+{
+    // 厂家私有帧：其余（NMEA 等）交回基类，保持与 main 原 classify_gnss_sentence() 一致。
+    if (detail::starts_with(frame, "#SATSINFOA,")) {
+        return OutputMsg::kSatsInfo;
+    }
+    if (detail::starts_with(frame, "#HEADINGA,")) {
+        return OutputMsg::kHeading;
+    }
+    return Receiver::classify_frame(dec, frame);
+}
+
+size_t UnicoreReceiver::frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                  std::span<char> out) const noexcept
+{
+    const std::string_view name{dec.name};
+    std::array<char, detail::kFrameTagBytes> word{};
+    if (name == "UnicoreHash" && frame.size() > 2U) {
+        (void)detail::copy_word(frame, 1U, word); // 跳过 '#'
+        return detail::format_tag(out, "UNICORE %s", word.data());
+    }
+    if (name == "UnicoreResp" && frame.size() > detail::kCommandTagOffset) {
+        // "$command,<cmd>,response: ..."：命令名在第二个逗号之前。
+        (void)detail::copy_word(frame, detail::kCommandTagOffset, word);
+        return detail::format_tag(out, "UNICORE_CMD %s", word.data());
+    }
+    return Receiver::frame_tag(dec, frame, out);
+}
+
+uint32_t UnicoreReceiver::output_mask(Model model) const noexcept
+{
+    constexpr uint32_t kSatsInfoBit = 1U << static_cast<uint32_t>(OutputMsg::kSatsInfo);
+    constexpr uint32_t kHeadingBit = 1U << static_cast<uint32_t>(OutputMsg::kHeading);
+    uint32_t mask = Receiver::output_mask(model) | kSatsInfoBit;
+    if ((unicore::model_caps(model) & cap::kHeading) != 0U) {
+        mask |= kHeadingBit; // 仅双天线型号（UM982）有 HEADINGA
+    }
+    return mask;
+}
+
+const Receiver &unicore_receiver() noexcept
+{
+    return kUnicoreReceiver;
+}
+
+} // namespace gnss

@@ -1,14 +1,14 @@
-menu "GNSS dialects (ADR-0010)"
+menu "GNSS drivers (ADR-0012)"
 
-    config RTK_GNSS_DIALECT_UNICORE
+    config RTK_GNSS_DRV_UNICORE
         bool "Unicore N4 (UM980/UM981/UM982)"
         default y
 
-    config RTK_GNSS_DIALECT_UBLOX
+    config RTK_GNSS_DRV_UBLOX
         bool "u-blox F9 (ZED-F9P), not hardware-verified"
         default y
 
-    config RTK_GNSS_DIALECT_COMNAV
+    config RTK_GNSS_DRV_COMNAV
         bool "ComNav K8 (K803), experimental"
         default n
         help

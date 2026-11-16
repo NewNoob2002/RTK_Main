@@ -2,7 +2,7 @@
 // 纯逻辑、非阻塞、不做 IO：poll() 返回一个 Action，由 main 侧 gnss 模块执行（写 UART、改波特率、电源复位）；
 // 分流器识别出的帧经 on_frame() 送入。时间全部由调用方传入 now_ms（uint32 回绕安全）。
 // 线程安全：否（一个实例由一个任务使用）。无堆、无 OS 依赖。
-// 冻结接口（ADR-0010 §3）。实现方不得修改；变更须先修订 ADR-0010。
+// 冻结接口（ADR-0010 §3，ADR-0012 §3 修订：方言表由驱动接口取代）。变更须先修订 ADR-0012。
 #pragma once
 
 #include <array>
@@ -11,7 +11,7 @@
 #include <span>
 
 #include "demux/Decoder.hpp"
-#include "gnss/Dialect.hpp"
+#include "gnss/Receiver.hpp"
 #include "gnss/Types.hpp"
 
 namespace gnss {
@@ -79,7 +79,7 @@ struct ControllerStats {
 
 /** 探测成功后的结论（供 main 写 NVS 与 DeviceInfo）。 */
 struct Detected {
-    const Dialect *dialect = nullptr;
+    const Receiver *receiver = nullptr;
     ProbeResult probe{};
     uint32_t baud = 0; // 当前主机 UART 波特率（配置可能已改为 RoverConfig::port_baud）
     uint32_t caps = 0;
@@ -93,11 +93,11 @@ public:
     Controller &operator=(const Controller &) = delete;
 
     /**
-     * 配置（不启动）。dialects 为候选方言（通常是 enabled_dialects()），bauds 为探测波特率候选；
+     * 配置（不启动）。receivers 为候选驱动（通常是 enabled_receivers()），bauds 为探测波特率候选；
      * 两个表与 cfg 必须在实例生命周期内有效。hint 有效时先探测提示的（方言,波特率）。
-     * 返回 false：dialects 或 bauds 为空、含 nullptr。
+     * 返回 false：receivers 或 bauds 为空、含 nullptr。
      */
-    [[nodiscard]] bool init(std::span<const Dialect *const> dialects, std::span<const uint32_t> bauds,
+    [[nodiscard]] bool init(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds,
                             const RoverConfig &cfg, const Hint &hint, const Timing &timing) noexcept;
 
     /** 从 kOff 开始：先断电 power_off_ms 再上电（电源复位），然后探测。 */
@@ -119,11 +119,17 @@ public:
     {
         return state_;
     }
-    /** 探测成功后有效（dialect 非空）；否则 dialect 为 nullptr。 */
+    /** 探测成功后有效（receiver 非空）；否则 receiver 为 nullptr。 */
     [[nodiscard]] const Detected &detected() const noexcept
     {
         return detected_;
     }
+    /**
+     * 当前驱动（ADR-0012 §2.2）：探测成功后为对应驱动，未探测到（或探测中被清空）时为 null_receiver()。
+     * 永不返回 nullptr，调用方无需判空。
+     */
+    [[nodiscard]] const Receiver &receiver() const noexcept;
+
     [[nodiscard]] const ControllerStats &stats() const noexcept
     {
         return stats_;
@@ -135,7 +141,7 @@ public:
     }
 
 private:
-    std::span<const Dialect *const> dialects_{};
+    std::span<const Receiver *const> receivers_{};
     std::span<const uint32_t> bauds_{};
     const RoverConfig *cfg_ = nullptr;
     Hint hint_{};
@@ -156,7 +162,7 @@ private:
     bool probe_hit_ = false;
     ConfigStep step_{};  // 当前配置步骤（bytes 来源）
     CmdBuf probe_cmd_{}; // 当前探测命令（bytes 来源）
-    const Dialect *probe_dialect_ = nullptr;
+    const Receiver *probe_receiver_ = nullptr;
     Detected detected_{};
     ControllerStats stats_{};
 

@@ -1,4 +1,4 @@
-// u-blox 方言 host 测试：UBX-MON-VER 探测、CFG-VALSET 脚本字节、Fletcher 校验、ACK/NAK（ADR-0010 §2.2/§2.4）。
+// u-blox 驱动 host 测试：UBX-MON-VER 探测、CFG-VALSET 脚本字节、Fletcher 校验、ACK/NAK（ADR-0010 §2.2/§2.4）。
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "demux/decoders/Ubx.hpp"
-#include "gnss/dialects/Ublox.hpp"
+#include "gnss/drivers/UbloxReceiver.hpp"
 #include "unity.h"
 
 namespace {
@@ -120,7 +120,7 @@ void tearDown() {}
 static void test_build_probe()
 {
     gnss::CmdBuf cmd;
-    TEST_ASSERT_TRUE(gnss::ublox::kDialect.build_probe(cmd));
+    TEST_ASSERT_TRUE(gnss::ublox_receiver().build_probe(cmd));
     TEST_ASSERT_TRUE(cmd_equals(cmd, Bytes{0xB5, 0x62, 0x0A, 0x04, 0x00, 0x00, 0x0E, 0x34}));
 }
 
@@ -129,13 +129,13 @@ static void test_match_probe()
     const Bytes frame = mon_ver("ZED-F9P", "HPG 1.32");
     std::span<const uint8_t> span(frame.data(), frame.size());
     gnss::ProbeResult result{};
-    TEST_ASSERT_TRUE(gnss::ublox::kDialect.match_probe(demux::ubx::kDecoder, span, result));
+    TEST_ASSERT_TRUE(gnss::ublox_receiver().match_probe(demux::ubx::kDecoder, span, result));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Model::kZedF9p), static_cast<int>(result.model));
     TEST_ASSERT_EQUAL_STRING("HPG 1.32", result.fw_version.data());
 
     const Bytes other = mon_ver("ZED-F9R", "HPG 1.32");
     std::span<const uint8_t> other_span(other.data(), other.size());
-    TEST_ASSERT_FALSE(gnss::ublox::kDialect.match_probe(demux::ubx::kDecoder, other_span, result));
+    TEST_ASSERT_FALSE(gnss::ublox_receiver().match_probe(demux::ubx::kDecoder, other_span, result));
 }
 
 static void test_rover_script()
@@ -146,13 +146,13 @@ static void test_rover_script()
     cfg.port_baud = 921600;
 
     gnss::ConfigStep step{};
-    TEST_ASSERT_TRUE(gnss::ublox::kDialect.rover_step(0, gnss::Model::kZedF9p, cfg, step));
+    TEST_ASSERT_TRUE(gnss::ublox_receiver().rover_step(0, gnss::Model::kZedF9p, cfg, step));
     TEST_ASSERT_TRUE(step.expect_reply);
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x30210001U, 200U, 2));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x10730004U, 1U, 1));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x10740002U, 1U, 1));
 
-    TEST_ASSERT_TRUE(gnss::ublox::kDialect.rover_step(1, gnss::Model::kZedF9p, cfg, step));
+    TEST_ASSERT_TRUE(gnss::ublox_receiver().rover_step(1, gnss::Model::kZedF9p, cfg, step));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100BBU, 1U, 1));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100ACU, 1U, 1));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100BFU, 1U, 1));
@@ -160,59 +160,97 @@ static void test_rover_script()
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100C3U, 1U, 1));
     TEST_ASSERT_TRUE(valid_fletcher(Bytes(step.cmd.view().begin(), step.cmd.view().end())));
 
-    TEST_ASSERT_TRUE(gnss::ublox::kDialect.rover_step(2, gnss::Model::kZedF9p, cfg, step));
+    TEST_ASSERT_TRUE(gnss::ublox_receiver().rover_step(2, gnss::Model::kZedF9p, cfg, step));
     TEST_ASSERT_FALSE(step.expect_reply);
     TEST_ASSERT_EQUAL_UINT32(921600, step.switch_baud);
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x40520001U, 921600U, 4));
 
     gnss::ConfigStep none{};
-    TEST_ASSERT_FALSE(gnss::ublox::kDialect.rover_step(3, gnss::Model::kZedF9p, cfg, none));
+    TEST_ASSERT_FALSE(gnss::ublox_receiver().rover_step(3, gnss::Model::kZedF9p, cfg, none));
 
     cfg.gsv = false;
     cfg.port_baud = 0;
-    TEST_ASSERT_TRUE(gnss::ublox::kDialect.rover_step(1, gnss::Model::kZedF9p, cfg, step));
+    TEST_ASSERT_TRUE(gnss::ublox_receiver().rover_step(1, gnss::Model::kZedF9p, cfg, step));
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100C3U, 0U, 1));
-    TEST_ASSERT_FALSE(gnss::ublox::kDialect.rover_step(2, gnss::Model::kZedF9p, cfg, step));
+    TEST_ASSERT_FALSE(gnss::ublox_receiver().rover_step(2, gnss::Model::kZedF9p, cfg, step));
 }
 
 static void test_match_reply()
 {
     const Bytes ack = make_frame(0x05, 0x01, Bytes{0x06, 0x8A});
     std::span<const uint8_t> ack_span(ack.data(), ack.size());
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Reply::kAck),
-                      static_cast<int>(gnss::ublox::kDialect.match_reply(demux::ubx::kDecoder, ack_span,
-                                                                         std::span<const uint8_t>())));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kAck),
+                      static_cast<int>(gnss::ublox_receiver().classify_reply(demux::ubx::kDecoder, ack_span,
+                                                                             std::span<const uint8_t>())));
 
     const Bytes nak = make_frame(0x05, 0x00, Bytes{0x06, 0x8A});
     std::span<const uint8_t> nak_span(nak.data(), nak.size());
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Reply::kNack),
-                      static_cast<int>(gnss::ublox::kDialect.match_reply(demux::ubx::kDecoder, nak_span,
-                                                                         std::span<const uint8_t>())));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNack),
+                      static_cast<int>(gnss::ublox_receiver().classify_reply(demux::ubx::kDecoder, nak_span,
+                                                                             std::span<const uint8_t>())));
 
     const Bytes other = make_frame(0x05, 0x01, Bytes{0x06, 0x01});
     std::span<const uint8_t> other_span(other.data(), other.size());
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Reply::kNone),
-                      static_cast<int>(gnss::ublox::kDialect.match_reply(demux::ubx::kDecoder, other_span,
-                                                                         std::span<const uint8_t>())));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNone),
+                      static_cast<int>(gnss::ublox_receiver().classify_reply(demux::ubx::kDecoder, other_span,
+                                                                             std::span<const uint8_t>())));
 
     const Bytes nmea{0x24, 0x47, 0x4E, 0x47, 0x47, 0x41};
     std::span<const uint8_t> nmea_span(nmea.data(), nmea.size());
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Reply::kNone),
-                      static_cast<int>(gnss::ublox::kDialect.match_reply(demux::ubx::kDecoder, nmea_span,
-                                                                         std::span<const uint8_t>())));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNone),
+                      static_cast<int>(gnss::ublox_receiver().classify_reply(demux::ubx::kDecoder, nmea_span,
+                                                                             std::span<const uint8_t>())));
 }
 
 static void test_caps()
 {
     TEST_ASSERT_BITS(gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz,
                      gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz,
-                     gnss::ublox::kDialect.caps(gnss::Model::kZedF9p));
-    TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, gnss::ublox::kDialect.caps(gnss::Model::kZedF9p));
+                     gnss::ublox_receiver().caps(gnss::Model::kZedF9p));
+    TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, gnss::ublox_receiver().caps(gnss::Model::kZedF9p));
+}
+
+// ---- 黄金向量比对（ADR-0012 P3a 第 3 步）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----
+#include "GoldenCheck.hpp"
+#include "GoldenUblox.inc"
+
+static void test_golden_probe()
+{
+    TEST_ASSERT_TRUE(golden_check::probe_matches(gnss::ublox_receiver(), golden_Ublox::kProbe));
+}
+
+static void test_golden_rover_steps()
+{
+    const size_t bad = golden_check::steps_mismatch(gnss::ublox_receiver(), golden_Ublox::kRover, golden_Ublox::kSteps);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch), static_cast<uint32_t>(bad));
+}
+
+static void test_golden_probe_match()
+{
+    const size_t bad = golden_check::probe_match_mismatch(gnss::ublox_receiver(), golden_Ublox::kProbeMatch, nullptr);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch), static_cast<uint32_t>(bad));
+}
+
+static void test_golden_replies()
+{
+    const size_t bad = golden_check::reply_mismatch(gnss::ublox_receiver(), golden_Ublox::kReply, nullptr);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch), static_cast<uint32_t>(bad));
+}
+
+static void test_golden_caps()
+{
+    const size_t bad = golden_check::caps_mismatch(gnss::ublox_receiver(), golden_Ublox::kCaps);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch), static_cast<uint32_t>(bad));
 }
 
 int main(int, char **)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_golden_probe);
+    RUN_TEST(test_golden_rover_steps);
+    RUN_TEST(test_golden_probe_match);
+    RUN_TEST(test_golden_replies);
+    RUN_TEST(test_golden_caps);
     RUN_TEST(test_build_probe);
     RUN_TEST(test_match_probe);
     RUN_TEST(test_rover_script);

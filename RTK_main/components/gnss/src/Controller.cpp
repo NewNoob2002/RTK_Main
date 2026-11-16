@@ -1,5 +1,5 @@
-// GNSS 探测/配置/运行状态机实现（ADR-0010 §2.6）。纯逻辑：不读写 UART、不改波特率、不操作电源，
-// 只通过 poll() 返回 Action 让 main 侧执行；所有时间由调用方传入 now_ms。
+// GNSS 探测/配置/运行状态机实现（ADR-0010 §2.6，驱动接口见 ADR-0012 §2.2）。纯逻辑：不读写
+// UART、不改波特率、不操作电源， 只通过 poll() 返回 Action 让 main 侧执行；所有时间由调用方传入 now_ms。
 // 线程/调用约束：非线程安全，单任务顺序调用；不可阻塞、不可在 ISR 中使用。
 // 堆：不使用。时间比较统一用 int32 差值，支持 uint32 回绕。
 #include "gnss/Controller.hpp"
@@ -8,55 +8,57 @@
 #include <cstdint>
 #include <span>
 
+#include "gnss/NullReceiver.hpp"
+
 namespace gnss {
 namespace {
 
 struct Candidate {
-    const Dialect *dialect = nullptr;
+    const Receiver *receiver = nullptr;
     uint32_t baud = 0;
 };
 
-const Dialect *hint_dialect(std::span<const Dialect *const> dialects, const Hint &hint) noexcept
+const Receiver *hint_receiver(std::span<const Receiver *const> receivers, const Hint &hint) noexcept
 {
     if (hint.family == Family::kUnknown) {
         return nullptr;
     }
-    for (const Dialect *dialect : dialects) {
-        if (dialect != nullptr && dialect->family == hint.family) {
-            return dialect;
+    for (const Receiver *receiver : receivers) {
+        if (receiver != nullptr && receiver->family() == hint.family) {
+            return receiver;
         }
     }
     return nullptr;
 }
 
-size_t candidate_count(std::span<const Dialect *const> dialects, std::span<const uint32_t> bauds,
+size_t candidate_count(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds,
                        const Hint &hint) noexcept
 {
-    size_t count = dialects.size() * bauds.size();
-    if (hint_dialect(dialects, hint) != nullptr) {
+    size_t count = receivers.size() * bauds.size();
+    if (hint_receiver(receivers, hint) != nullptr) {
         ++count; // 提示组合排在最前，优先探测
     }
     return count;
 }
 
 // 探测顺序：提示的（方言, 波特率）→ 启用方言 × 波特率全表（方言为外层循环）。
-bool candidate_at(std::span<const Dialect *const> dialects, std::span<const uint32_t> bauds, const Hint &hint,
+bool candidate_at(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds, const Hint &hint,
                   size_t index, Candidate &out) noexcept
 {
-    const Dialect *hinted = hint_dialect(dialects, hint);
+    const Receiver *hinted = hint_receiver(receivers, hint);
     if (hinted != nullptr) {
         if (index == 0) {
-            out.dialect = hinted;
+            out.receiver = hinted;
             out.baud = hint.baud != 0 ? hint.baud : bauds.front();
             return true;
         }
         --index;
     }
     const size_t baud_count = bauds.size();
-    if (baud_count == 0 || index >= dialects.size() * baud_count) {
+    if (baud_count == 0 || index >= receivers.size() * baud_count) {
         return false;
     }
-    out.dialect = dialects[index / baud_count];
+    out.receiver = receivers[index / baud_count];
     out.baud = bauds[index % baud_count];
     return true;
 }
@@ -68,14 +70,14 @@ bool reached(uint32_t now_ms, uint32_t deadline_ms_ms) noexcept
 
 } // namespace
 
-bool Controller::init(std::span<const Dialect *const> dialects, std::span<const uint32_t> bauds, const RoverConfig &cfg,
-                      const Hint &hint, const Timing &timing) noexcept
+bool Controller::init(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds,
+                      const RoverConfig &cfg, const Hint &hint, const Timing &timing) noexcept
 {
-    if (dialects.empty() || bauds.empty()) {
+    if (receivers.empty() || bauds.empty()) {
         return false;
     }
-    for (const Dialect *dialect : dialects) {
-        if (dialect == nullptr) {
+    for (const Receiver *receiver : receivers) {
+        if (receiver == nullptr) {
             return false;
         }
     }
@@ -84,7 +86,7 @@ bool Controller::init(std::span<const Dialect *const> dialects, std::span<const 
             return false;
         }
     }
-    dialects_ = dialects;
+    receivers_ = receivers;
     bauds_ = bauds;
     cfg_ = &cfg;
     hint_ = hint;
@@ -143,7 +145,7 @@ void Controller::request_reprobe(uint32_t now_ms) noexcept
 
 void Controller::request_reconfigure(uint32_t now_ms) noexcept
 {
-    if (detected_.dialect == nullptr) {
+    if (detected_.receiver == nullptr) {
         request_reprobe(now_ms);
         return;
     }
@@ -207,7 +209,7 @@ Action Controller::poll(uint32_t now_ms) noexcept
 
         case State::kProbing:
             if (phase_ == 0) {
-                const size_t total = candidate_count(dialects_, bauds_, hint_);
+                const size_t total = candidate_count(receivers_, bauds_, hint_);
                 if (total == 0) {
                     state_ = State::kFailed;
                     ++stats_.failures;
@@ -225,7 +227,7 @@ Action Controller::poll(uint32_t now_ms) noexcept
                     }
                 }
                 Candidate candidate{};
-                if (!candidate_at(dialects_, bauds_, hint_, probe_index_, candidate)) {
+                if (!candidate_at(receivers_, bauds_, hint_, probe_index_, candidate)) {
                     state_ = State::kFailed;
                     ++stats_.failures;
                     deadline_ms_ = now_ms + timing_.retry_backoff_ms;
@@ -238,10 +240,10 @@ Action Controller::poll(uint32_t now_ms) noexcept
                     action.baud = candidate.baud;
                     return action;
                 }
-                probe_dialect_ = candidate.dialect;
+                probe_receiver_ = candidate.receiver;
                 probe_cmd_.clear();
-                if (!candidate.dialect->build_probe(probe_cmd_)) {
-                    ++probe_index_; // 方言自身无法生成查询命令：跳过该组合
+                if (!candidate.receiver->build_probe(probe_cmd_)) {
+                    ++probe_index_; // 驱动自身无法生成查询命令：跳过该组合
                     continue;
                 }
                 ++stats_.probes_sent;
@@ -255,9 +257,9 @@ Action Controller::poll(uint32_t now_ms) noexcept
                 return action;
             }
             if (probe_hit_) {
-                detected_.dialect = probe_dialect_;
+                detected_.receiver = probe_receiver_;
                 detected_.baud = host_baud_;
-                detected_.caps = probe_dialect_ != nullptr ? probe_dialect_->caps(detected_.probe.model) : 0U;
+                detected_.caps = probe_receiver_ != nullptr ? probe_receiver_->caps(detected_.probe.model) : 0U;
                 state_ = State::kConfiguring;
                 phase_ = 0;
                 step_index_ = 0;
@@ -277,7 +279,7 @@ Action Controller::poll(uint32_t now_ms) noexcept
             continue;
 
         case State::kConfiguring:
-            if (cfg_ == nullptr || detected_.dialect == nullptr) {
+            if (cfg_ == nullptr || detected_.receiver == nullptr) {
                 state_ = State::kFailed;
                 ++stats_.failures;
                 deadline_ms_ = now_ms + timing_.retry_backoff_ms;
@@ -285,7 +287,7 @@ Action Controller::poll(uint32_t now_ms) noexcept
             }
             if (phase_ == 0) {
                 ConfigStep step{};
-                if (!detected_.dialect->rover_step(step_index_, detected_.probe.model, *cfg_, step)) {
+                if (!detected_.receiver->rover_step(step_index_, detected_.probe.model, *cfg_, step)) {
                     state_ = State::kRunning;
                     last_frame_ms_ = now_ms;
                     phase_ = 0;
@@ -399,24 +401,29 @@ Action Controller::poll(uint32_t now_ms) noexcept
 void Controller::on_frame(const demux::Decoder &dec, std::span<const uint8_t> frame, uint32_t now_ms) noexcept
 {
     last_frame_ms_ = now_ms; // 任意协议帧都算“模块还在说话”
-    if (state_ == State::kProbing && phase_ == 1 && probe_dialect_ != nullptr) {
+    if (state_ == State::kProbing && phase_ == 1 && probe_receiver_ != nullptr) {
         ProbeResult result{};
-        if (probe_dialect_->match_probe(dec, frame, result)) {
+        if (probe_receiver_->match_probe(dec, frame, result)) {
             detected_.probe = result;
-            detected_.dialect = probe_dialect_;
+            detected_.receiver = probe_receiver_;
             detected_.baud = host_baud_;
             probe_hit_ = true;
         }
         return;
     }
-    if (state_ == State::kConfiguring && phase_ == 1 && waiting_reply_ && detected_.dialect != nullptr) {
-        const Reply reply = detected_.dialect->match_reply(dec, frame, step_.cmd.view());
-        if (reply == Reply::kAck) {
+    if (state_ == State::kConfiguring && phase_ == 1 && waiting_reply_ && detected_.receiver != nullptr) {
+        const Ack reply = detected_.receiver->classify_reply(dec, frame, step_.cmd.view());
+        if (reply == Ack::kAck) {
             reply_ok_ = true;
-        } else if (reply == Reply::kNack) {
+        } else if (reply == Ack::kNack) {
             reply_nack_ = true;
         }
     }
+}
+
+const Receiver &Controller::receiver() const noexcept
+{
+    return detected_.receiver != nullptr ? *detected_.receiver : null_receiver();
 }
 
 const char *state_name(State state) noexcept

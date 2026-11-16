@@ -1,32 +1,40 @@
-// 方言注册与型号元数据：按构建开关生成 enabled_dialects()（ADR-0010 §3）。
+// 驱动注册与型号元数据：按构建开关从 DriverList.inc 生成 enabled_receivers()（ADR-0012 §2.2/§2.3）。
 // 线程安全：是（返回静态常量表，编译期生成，无运行期状态）。
-// 堆：不使用。构建开关：IDF 下 CONFIG_RTK_GNSS_DIALECT_<D>，host 下 RTK_GNSS_DIALECT_<D>（CMake 转为同名宏）。
-#include "gnss/Dialect.hpp"
-
+// 堆：不使用。构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 RTK_GNSS_DRV_<D>（CMake 转为同名宏）。
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <span>
 
-#include "gnss/dialects/Comnav.hpp"
-#include "gnss/dialects/Ublox.hpp"
-#include "gnss/dialects/Unicore.hpp"
+#include "gnss/Receiver.hpp"
 
-#if defined(RTK_GNSS_DIALECT_UNICORE) && RTK_GNSS_DIALECT_UNICORE
+#if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
 #define GNSS_ENABLE_UNICORE 1
 #else
 #define GNSS_ENABLE_UNICORE 0
 #endif
 
-#if defined(RTK_GNSS_DIALECT_UBLOX) && RTK_GNSS_DIALECT_UBLOX
+#if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
 #define GNSS_ENABLE_UBLOX 1
 #else
 #define GNSS_ENABLE_UBLOX 0
 #endif
 
-#if defined(RTK_GNSS_DIALECT_COMNAV) && RTK_GNSS_DIALECT_COMNAV
+#if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
 #define GNSS_ENABLE_COMNAV 1
 #else
 #define GNSS_ENABLE_COMNAV 0
+#endif
+
+// 只包含已启用驱动的头（未启用驱动的 .cpp 不参与构建，其 accessor 也就不存在）。
+#if GNSS_ENABLE_UNICORE
+#include "gnss/drivers/UnicoreReceiver.hpp"
+#endif
+#if GNSS_ENABLE_UBLOX
+#include "gnss/drivers/UbloxReceiver.hpp"
+#endif
+#if GNSS_ENABLE_COMNAV
+#include "gnss/drivers/ComnavReceiver.hpp"
 #endif
 
 namespace gnss {
@@ -36,28 +44,22 @@ constexpr size_t kEnabledCount = GNSS_ENABLE_UNICORE + GNSS_ENABLE_UBLOX + GNSS_
 
 } // namespace
 
-std::span<const Dialect *const> enabled_dialects() noexcept
+std::span<const Receiver *const> enabled_receivers() noexcept
 {
-    // 顺序即探测优先级：Unicore → u-blox → ComNav（实测优先，实验性方言最后）。
-    static constexpr std::array<const Dialect *, kEnabledCount> kList{
-#if GNSS_ENABLE_UNICORE
-        &unicore::kDialect,
-#endif
-#if GNSS_ENABLE_UBLOX
-        &ublox::kDialect,
-#endif
-#if GNSS_ENABLE_COMNAV
-        &comnav::kDialect,
-#endif
+    // 地址表：accessor 不是 constexpr 函数，故用 const 静态表（地址为常量，仍是常量初始化）。
+    static const std::array<const Receiver *, kEnabledCount> kList{
+#define GNSS_DRIVER(suffix, family_, type, accessor) &accessor(),
+#include "gnss/DriverList.inc"
+#undef GNSS_DRIVER
     };
     return kList;
 }
 
-const Dialect *dialect_for(Family family) noexcept
+const Receiver *receiver_for(Family family) noexcept
 {
-    for (const Dialect *dialect : enabled_dialects()) {
-        if (dialect != nullptr && dialect->family == family) {
-            return dialect;
+    for (const Receiver *receiver : enabled_receivers()) {
+        if (receiver->family() == family) {
+            return receiver;
         }
     }
     return nullptr;
@@ -96,6 +98,58 @@ Family family_of(Model model) noexcept
     case Model::kUnknown:
     default:
         return Family::kUnknown;
+    }
+}
+
+const char *family_name(Family family) noexcept
+{
+    switch (family) {
+    case Family::kUnicore:
+        return "unicore";
+    case Family::kUblox:
+        return "ublox";
+    case Family::kComnav:
+        return "comnav";
+    case Family::kUnknown:
+    default:
+        return "unknown";
+    }
+}
+
+std::optional<Family> family_from_u8(uint8_t value) noexcept
+{
+    // NVS 里的家族号只可能来自本固件写入；越界值（旧格式/损坏）返回 nullopt，由调用方决定回落策略。
+    switch (value) {
+    case static_cast<uint8_t>(Family::kUnicore):
+        return Family::kUnicore;
+    case static_cast<uint8_t>(Family::kUblox):
+        return Family::kUblox;
+    case static_cast<uint8_t>(Family::kComnav):
+        return Family::kComnav;
+    case static_cast<uint8_t>(Family::kUnknown):
+        return Family::kUnknown;
+    default:
+        return std::nullopt;
+    }
+}
+
+std::optional<Model> model_from_u8(uint8_t value) noexcept
+{
+    switch (value) {
+    case static_cast<uint8_t>(Model::kUm980):
+        return Model::kUm980;
+    case static_cast<uint8_t>(Model::kUm981):
+        return Model::kUm981;
+    case static_cast<uint8_t>(Model::kUm982):
+        return Model::kUm982;
+    case static_cast<uint8_t>(Model::kZedF9p):
+        return Model::kZedF9p;
+    case static_cast<uint8_t>(Model::kK803):
+        return Model::kK803;
+    case static_cast<uint8_t>(Model::kUnknown):
+        return Model::kUnknown;
+    default:
+        return std::nullopt;
     }
 }
 

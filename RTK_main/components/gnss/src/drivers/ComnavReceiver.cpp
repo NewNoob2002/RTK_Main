@@ -1,7 +1,7 @@
-// ComNav K8（K803）方言实现：NovAtel 风格命令与 "<OK/<ERROR" 应答（ADR-0010 §2.2，实验性、未经实物验证）。
+// ComNav K8（K803）驱动实现：NovAtel 风格命令与 "<OK/<ERROR" 应答（ADR-0010 §2.2，实验性、未经实物验证）。
 // 线程/调用约束：纯函数，无全局可变状态，可重入、不阻塞。
 // 堆：不使用。注意：未取得官方手册，语法按公开的 NovAtel 兼容资料实现；改动前须先修订 ADR-0010 §2.2。
-#include "gnss/dialects/Comnav.hpp"
+#include "gnss/drivers/ComnavReceiver.hpp"
 
 #include <array>
 #include <cstddef>
@@ -225,13 +225,13 @@ std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) 
     return text.finish();
 }
 
-bool build_probe(CmdBuf &out) noexcept
+bool probe_cmd(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append("LOG VERSIONA ONCE\r\n");
 }
 
-bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
+bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
 {
     if (&dec != &demux::unicore_hash::kDecoder || frame.size() < kVersionTag.size()) {
         return false;
@@ -261,7 +261,7 @@ bool finish_step(CmdBuf &cmd, bool expect_reply, uint32_t switch_baud, ConfigSte
     return true;
 }
 
-bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
+bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
 {
     (void)model; // 目前只覆盖 K803
     const char *period = period_for(cfg.rate_hz);
@@ -303,21 +303,21 @@ bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &o
     return false; // 脚本结束
 }
 
-Reply match_reply(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t>) noexcept
+Ack reply_ack(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t>) noexcept
 {
     if (&dec != &kPromptDecoder) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
     if (starts_with(frame, "<OK")) {
-        return Reply::kAck;
+        return Ack::kAck;
     }
     if (starts_with(frame, "<ERROR")) {
-        return Reply::kNack;
+        return Ack::kNack;
     }
-    return Reply::kNone;
+    return Ack::kNone;
 }
 
-uint32_t caps(Model model) noexcept
+uint32_t model_caps(Model model) noexcept
 {
     if (model == Model::kK803) {
         return cap::kRtcmIn | cap::kBase;
@@ -325,7 +325,59 @@ uint32_t caps(Model model) noexcept
     return cap::kRtcmIn | cap::kBase;
 }
 
-const Dialect kDialect{"ComNav",     Family::kComnav, kDecoders,    &build_probe,
-                       &match_probe, &rover_step,     &match_reply, &caps};
-
 } // namespace gnss::comnav
+
+namespace gnss {
+
+namespace {
+constinit const ComnavReceiver kComnavReceiver{};
+}
+
+Family ComnavReceiver::family() const noexcept
+{
+    return Family::kComnav;
+}
+
+std::string_view ComnavReceiver::name() const noexcept
+{
+    return "comnav";
+}
+
+std::span<const demux::Decoder *const> ComnavReceiver::decoders() const noexcept
+{
+    return comnav::kDecoders;
+}
+
+uint32_t ComnavReceiver::caps(Model model) const noexcept
+{
+    return comnav::model_caps(model);
+}
+
+bool ComnavReceiver::build_probe(CmdBuf &out) const noexcept
+{
+    return comnav::probe_cmd(out);
+}
+
+bool ComnavReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                 ProbeResult &out) const noexcept
+{
+    return comnav::probe_match(dec, frame, out);
+}
+
+bool ComnavReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
+{
+    return comnav::script_step(index, model, cfg, out);
+}
+
+Ack ComnavReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                   std::span<const uint8_t> sent) const noexcept
+{
+    return comnav::reply_ack(dec, frame, sent);
+}
+
+const Receiver &comnav_receiver() noexcept
+{
+    return kComnavReceiver;
+}
+
+} // namespace gnss

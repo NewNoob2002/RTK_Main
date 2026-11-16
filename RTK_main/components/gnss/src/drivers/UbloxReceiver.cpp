@@ -1,9 +1,9 @@
-// u-blox F9（ZED-F9P）方言实现：UBX-MON-VER 探测、CFG-VALSET 配置、ACK/NAK 匹配（ADR-0010 §2.2/§2.4）。
+// u-blox F9（ZED-F9P）驱动实现：UBX-MON-VER 探测、CFG-VALSET 配置、ACK/NAK 匹配（ADR-0010 §2.2/§2.4）。
 // 线程/调用约束：纯函数，无全局可变状态，可重入、不阻塞。
 // 堆：不使用（命令在 CmdBuf 定长缓冲内构造）。
 // 键 ID 出处：u-blox F9 HPG 1.32 Interface Description，CFG-* 配置项键值表（MSGOUT NMEA 段、RATE 段、
 // UART1 段）；本仓库无该手册副本，ID 未经实物验证（仅 UM980 有 HIL）。
-#include "gnss/dialects/Ublox.hpp"
+#include "gnss/drivers/UbloxReceiver.hpp"
 
 #include <array>
 #include <cstddef>
@@ -11,6 +11,7 @@
 #include <span>
 
 #include "demux/decoders/Ubx.hpp"
+#include "../FrameTag.hpp"
 
 namespace gnss::ublox {
 namespace {
@@ -143,13 +144,13 @@ void copy_text(std::span<const uint8_t> text, std::array<char, kVersionLen> &out
 
 } // namespace
 
-bool build_probe(CmdBuf &out) noexcept
+bool probe_cmd(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append(std::array<uint8_t, 8>{kSync1, kSync2, kClsMon, kIdMonVer, 0x00, 0x00, 0x0E, 0x34});
 }
 
-bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
+bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
 {
     if (&dec != &demux::ubx::kDecoder || frame.size() < 8) {
         return false;
@@ -184,7 +185,7 @@ bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame, Prob
     return true;
 }
 
-bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
+bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
 {
     (void)model; // ZED-F9P 单型号，脚本与型号无关
     const uint8_t rate = cfg.rate_hz == 0 ? 1 : (cfg.rate_hz > 20 ? 20 : cfg.rate_hz);
@@ -229,30 +230,30 @@ bool rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &o
     return true;
 }
 
-Reply match_reply(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t>) noexcept
+Ack reply_ack(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t>) noexcept
 {
     if (&dec != &demux::ubx::kDecoder || frame.size() < 10) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
     if (frame[2] != kClsAck) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
     const uint8_t id = frame[3];
     if (id != kIdAck && id != kIdNak) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
     const size_t len = static_cast<size_t>(frame[4]) | (static_cast<size_t>(frame[5]) << 8);
     if (len != 2 || frame.size() != 8 + len) { // 6 字节头 + 载荷 + 2 字节校验
-        return Reply::kNone;
+        return Ack::kNone;
     }
     // ACK/NAK 载荷是被应答帧的 class/id；只认 CFG-VALSET（06 8A）。
     if (frame[6] != kClsCfg || frame[7] != kIdCfgValset) {
-        return Reply::kNone;
+        return Ack::kNone;
     }
-    return id == kIdAck ? Reply::kAck : Reply::kNack;
+    return id == kIdAck ? Ack::kAck : Ack::kNack;
 }
 
-uint32_t caps(Model model) noexcept
+uint32_t model_caps(Model model) noexcept
 {
     if (model == Model::kZedF9p) {
         return cap::kRtcmIn | cap::kBase | cap::kRate20Hz;
@@ -260,10 +261,71 @@ uint32_t caps(Model model) noexcept
     return cap::kRtcmIn | cap::kBase;
 }
 
-// MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（match_probe / match_reply 均按 ubx 解码器判定）。
-constexpr std::array<const demux::Decoder *, 1> kDecoders{&demux::ubx::kDecoder};
-
-const Dialect kDialect{"u-blox",     Family::kUblox, kDecoders,    &build_probe,
-                       &match_probe, &rover_step,    &match_reply, &caps};
-
 } // namespace gnss::ublox
+
+namespace gnss {
+
+namespace {
+// MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（match_probe / reply_ack 均按 ubx 解码器判定）。
+constexpr std::array<const demux::Decoder *, 1> kDecoders{&demux::ubx::kDecoder};
+constinit const UbloxReceiver kUbloxReceiver{};
+} // namespace
+
+Family UbloxReceiver::family() const noexcept
+{
+    return Family::kUblox;
+}
+
+std::string_view UbloxReceiver::name() const noexcept
+{
+    return "ublox";
+}
+
+std::span<const demux::Decoder *const> UbloxReceiver::decoders() const noexcept
+{
+    return kDecoders;
+}
+
+uint32_t UbloxReceiver::caps(Model model) const noexcept
+{
+    return ublox::model_caps(model);
+}
+
+bool UbloxReceiver::build_probe(CmdBuf &out) const noexcept
+{
+    return ublox::probe_cmd(out);
+}
+
+bool UbloxReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                ProbeResult &out) const noexcept
+{
+    return ublox::probe_match(dec, frame, out);
+}
+
+bool UbloxReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
+{
+    return ublox::script_step(index, model, cfg, out);
+}
+
+Ack UbloxReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                  std::span<const uint8_t> sent) const noexcept
+{
+    return ublox::reply_ack(dec, frame, sent);
+}
+
+size_t UbloxReceiver::frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                std::span<char> out) const noexcept
+{
+    if (std::string_view{dec.name} == "UBX" && frame.size() > detail::kUbxClassOffset + 1U) {
+        return detail::format_tag(out, "UBX 0x%02x/0x%02x", static_cast<unsigned>(frame[detail::kUbxClassOffset]),
+                                  static_cast<unsigned>(frame[detail::kUbxClassOffset + 1U]));
+    }
+    return Receiver::frame_tag(dec, frame, out);
+}
+
+const Receiver &ublox_receiver() noexcept
+{
+    return kUbloxReceiver;
+}
+
+} // namespace gnss

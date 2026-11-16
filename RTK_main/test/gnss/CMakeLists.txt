@@ -1,6 +1,6 @@
-# GNSS 纯逻辑组件 host 测试工程（ADR-0010，G-A 交付）。
+# GNSS 纯逻辑组件 host 测试工程（ADR-0010/ADR-0012，G-A 与 P3a 交付）。
 # 独立 CMake 工程，不修改冻结的 test/host/ 与 components/gnss/CMakeLists.txt。
-# 方言开关与组件同名（RTK_GNSS_DIALECT_<D>），并在测试侧转成 0/1 宏，便于按开关裁剪用例。
+# 驱动开关与组件同名（RTK_GNSS_DRV_<D>），并在测试侧转成 0/1 宏，便于按开关裁剪用例。
 cmake_minimum_required(VERSION 3.22)
 project(gnss_tests C CXX)
 
@@ -25,9 +25,9 @@ endif()
 
 set(PROJ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
-option(RTK_GNSS_DIALECT_UNICORE "编译 Unicore 方言" ON)
-option(RTK_GNSS_DIALECT_UBLOX "编译 u-blox 方言" ON)
-option(RTK_GNSS_DIALECT_COMNAV "编译 ComNav 方言" OFF)
+option(RTK_GNSS_DRV_UNICORE "编译 Unicore 驱动" ON)
+option(RTK_GNSS_DRV_UBLOX "编译 u-blox 驱动" ON)
+option(RTK_GNSS_DRV_COMNAV "编译 ComNav 驱动" OFF)
 option(SANITIZE "启用 ASan/UBSan" OFF)
 
 set(PROJ_CXX_STRICT
@@ -45,36 +45,49 @@ add_library(unity STATIC ${UNITY_DIR}/unity.c)
 target_include_directories(unity SYSTEM PUBLIC ${UNITY_DIR})
 
 add_subdirectory(${PROJ_ROOT}/components/stream_demux stream_demux_build)
+add_subdirectory(${PROJ_ROOT}/components/app_fw app_fw_build)
 add_subdirectory(${PROJ_ROOT}/components/gnss gnss_build)
 target_compile_options(gnss PRIVATE -fno-exceptions -fno-rtti)
 
 # 把 CMake 开关显式转成 0/1 宏，测试与组件看到同一份编译配置（-Wundef 下安全）。
 set(_gnss_test_defs)
 foreach(_d IN ITEMS UNICORE UBLOX COMNAV)
-    if(RTK_GNSS_DIALECT_${_d})
-        list(APPEND _gnss_test_defs "RTK_GNSS_DIALECT_${_d}=1")
+    if(RTK_GNSS_DRV_${_d})
+        list(APPEND _gnss_test_defs "RTK_GNSS_DRV_${_d}=1")
     else()
-        list(APPEND _gnss_test_defs "RTK_GNSS_DIALECT_${_d}=0")
+        list(APPEND _gnss_test_defs "RTK_GNSS_DRV_${_d}=0")
     endif()
 endforeach()
 
 enable_testing()
-# 方言用例随开关裁剪：关闭的方言不编进 gnss，测试也不能引用其 kDialect 符号。
-set(_gnss_tests test_gnss_nmea test_gnss_controller test_gnss_registry)
-if(RTK_GNSS_DIALECT_UNICORE)
-    list(APPEND _gnss_tests test_gnss_dialect_unicore)
+# 驱动用例随开关裁剪：关闭的驱动不编进 gnss，测试也不能引用其 x_receiver() 符号。
+set(_gnss_tests test_gnss_nmea test_gnss_controller test_gnss_registry test_gnss_null_receiver
+    test_gnss_classify)
+if(RTK_GNSS_DRV_UNICORE)
+    list(APPEND _gnss_tests test_gnss_unicore_receiver)
 endif()
-if(RTK_GNSS_DIALECT_UBLOX)
-    list(APPEND _gnss_tests test_gnss_dialect_ublox)
+if(RTK_GNSS_DRV_UBLOX)
+    list(APPEND _gnss_tests test_gnss_ublox_receiver)
 endif()
-if(RTK_GNSS_DIALECT_COMNAV)
-    list(APPEND _gnss_tests test_gnss_dialect_comnav)
+if(RTK_GNSS_DRV_COMNAV)
+    list(APPEND _gnss_tests test_gnss_comnav_receiver)
 endif()
 include(${PROJ_ROOT}/cmake/pascal_case.cmake)
+# 黄金向量生成器（ADR-0012 P3a 第 1 步）：在基线 4cf1320 的 ADR-0010 Dialect 接口上运行一次，导出
+# golden/Golden<Family>.inc。ADR-0012 删除 Dialect 后本目标不再构建，保留产物为唯一事实来源。
+if(EXISTS ${PROJ_ROOT}/components/gnss/include/gnss/Dialect.hpp)
+    add_executable(golden_gen golden/GoldenGen.cpp)
+    target_link_libraries(golden_gen gnss)
+    target_include_directories(golden_gen PRIVATE golden)
+    target_compile_definitions(golden_gen PRIVATE ${_gnss_test_defs})
+    target_compile_options(golden_gen PRIVATE ${PROJ_CXX_STRICT})
+endif()
+
 foreach(name IN LISTS _gnss_tests)
     rtk_pascal_case(_f "${name}")
     add_executable(${name} ${_f}.cpp)
     target_link_libraries(${name} gnss unity)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/golden)
     target_compile_definitions(${name} PRIVATE ${_gnss_test_defs})
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})
     add_test(NAME ${name} COMMAND ${name})

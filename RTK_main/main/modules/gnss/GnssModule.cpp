@@ -23,7 +23,7 @@
 #include "demux/decoders/UnicoreHash.hpp"
 #include "fw/Status.hpp"
 #include "fw/Tlog.hpp"
-#include "gnss/Dialect.hpp"
+#include "gnss/Receiver.hpp"
 #include "modules/gnss/GnssKeys.hpp"
 #include "modules/storage/StorageModule.hpp"
 #include "rtos/EspStatus.hpp"
@@ -319,12 +319,13 @@ fw::Result GnssModule::init() noexcept
     decoder_count_ = 0U;
     add_unique_decoder(decoders_, decoder_count_, &demux::nmea::kDecoder);
     add_unique_decoder(decoders_, decoder_count_, &demux::rtcm3::kDecoder);
-    const auto dialects = ::gnss::enabled_dialects();
-    for (const ::gnss::Dialect *dialect : dialects) {
-        if (dialect == nullptr) {
+    // 驱动私有解码器（UBX、Unicore # 帧、$command 应答等）由各驱动自己声明，顺序即探测优先级。
+    const std::span<const ::gnss::Receiver *const> receivers = ::gnss::enabled_receivers();
+    for (const ::gnss::Receiver *receiver : receivers) {
+        if (receiver == nullptr) {
             continue;
         }
-        for (const demux::Decoder *dec : dialect->decoders) {
+        for (const demux::Decoder *dec : receiver->decoders()) {
             add_unique_decoder(decoders_, decoder_count_, dec);
         }
     }
@@ -353,7 +354,7 @@ fw::Result GnssModule::init() noexcept
         }
     }
 
-    if (!controller().init(dialects, std::span<const uint32_t>{bauds_.data(), baud_count_}, cfg, hint_, timing)) {
+    if (!controller().init(receivers, std::span<const uint32_t>{bauds_.data(), baud_count_}, cfg, hint_, timing)) {
         return init_failed(fw::Result::kInvalidState);
     }
 
@@ -865,8 +866,8 @@ void GnssModule::publish_status(uint32_t now_ms) noexcept
     st.enabled = initialized_;
     st.state = controller().state();
     const auto &det = controller().detected();
-    if (det.dialect != nullptr) {
-        st.family = det.dialect->family;
+    if (det.receiver != nullptr) {
+        st.family = det.receiver->family();
         st.model = det.probe.model;
         st.fw_version = det.probe.fw_version;
         st.caps = det.caps;
@@ -889,10 +890,10 @@ void GnssModule::publish_status(uint32_t now_ms) noexcept
 void GnssModule::persist_detected_hint() noexcept
 {
     const auto &det = controller().detected();
-    if (det.dialect == nullptr) {
+    if (det.receiver == nullptr) {
         return;
     }
-    const ::gnss::Family det_family = det.dialect->family;
+    const ::gnss::Family det_family = det.receiver->family();
     const ::gnss::Model det_model = det.probe.model;
     const uint32_t det_baud = (det.baud != 0U) ? det.baud : host_baud_;
     if ((det_family == hint_.family) && (det_model == hint_.model) && (det_baud == hint_.baud)) {
@@ -910,10 +911,10 @@ void GnssModule::persist_detected_hint() noexcept
 void GnssModule::apply_out_to_receiver() noexcept
 {
     const auto &det = controller().detected();
-    if (det.dialect == nullptr) {
+    if (det.receiver == nullptr) {
         return;
     }
-    const auto fam = det.dialect->family;
+    const auto fam = det.receiver->family();
     if ((fam != ::gnss::Family::kUnicore) && (fam != ::gnss::Family::kComnav)) {
         return;
     }
@@ -994,10 +995,12 @@ fw::Result GnssModule::load_family(void * /*obj*/, std::span<const uint8_t> in) 
     if (in.empty()) {
         return fw::Result::kInvalidArg;
     }
-    if (in[0] > static_cast<uint8_t>(::gnss::Family::kComnav)) {
+    // 家族号越界（旧格式或损坏）由 family_from_u8() 报告，避免手工维护上限。
+    const std::optional<::gnss::Family> family = ::gnss::family_from_u8(in[0]);
+    if (!family.has_value()) {
         return fw::Result::kInvalidArg;
     }
-    app_context().gnss.hint_.family = static_cast<::gnss::Family>(in[0]);
+    app_context().gnss.hint_.family = *family;
     return fw::Result::kOk;
 }
 
@@ -1016,10 +1019,11 @@ fw::Result GnssModule::load_model(void * /*obj*/, std::span<const uint8_t> in) n
     if (in.empty()) {
         return fw::Result::kInvalidArg;
     }
-    if (in[0] > static_cast<uint8_t>(::gnss::Model::kK803)) {
+    const std::optional<::gnss::Model> model = ::gnss::model_from_u8(in[0]);
+    if (!model.has_value()) {
         return fw::Result::kInvalidArg;
     }
-    app_context().gnss.hint_.model = static_cast<::gnss::Model>(in[0]);
+    app_context().gnss.hint_.model = *model;
     return fw::Result::kOk;
 }
 

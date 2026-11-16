@@ -1,12 +1,13 @@
-// GNSS 公共数据类型：型号/家族枚举、能力位、定位解与卫星表（纯数据，无 IDF 依赖）。
+// GNSS 公共数据类型：型号/家族枚举、能力位、输出报文类型、定位解与卫星表（纯数据，无 IDF 依赖）。
 // 坐标用整数定点避免 ESP32 双精度软浮点：纬经度单位 1e-9 度（int64，≈0.1 mm），高度 mm。
 // 线程安全：纯数据，拷贝由调用方保护（main 侧经 fw::Slot 跨任务发布）。
-// 冻结接口（ADR-0010 §3）。实现方不得修改；变更须先修订 ADR-0010。
+// 冻结接口（ADR-0010 §3，ADR-0012 §3 修订）。实现方不得修改；变更须先修订 ADR-0012。
 #pragma once
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace gnss {
 
@@ -28,7 +29,26 @@ enum class Model : uint8_t {
     kK803,
 };
 
-/** 型号能力位（ADR-0010 §2.3）。由方言的 caps() 按型号给出。 */
+/**
+ * App 可订阅的报文类型（ADR-0012 §2.2）：值即 OutputPlan 的下标，前 6 项顺序与 main 的 type_idx
+ * （协议 msg_id 0x04/0x05/0x1F/0x21/0x22/0x23）一致。只能追加，不得插队或改值。
+ */
+enum class OutputMsg : uint8_t {
+    kNone = 0xFF, // 非 App 报文
+    kGga = 0,     // $..GGA
+    kSatsInfo,    // Unicore #SATSINFOA
+    kHeading,     // Unicore #HEADINGA
+    kGst,         // $..GST
+    kRmc,         // $..RMC
+    kGsa,         // $..GSA
+    kGsv,         // $..GSV（卫星表来源；App 不直接订阅）
+    kCount,
+};
+
+/** OutputMsg 的个数（不含 kNone），即 OutputPlan::period_ms 的长度。 */
+inline constexpr size_t kOutputMsgCount = static_cast<size_t>(OutputMsg::kCount);
+
+/** 型号能力位（ADR-0010 §2.3）。由驱动的 caps() 按型号给出。 */
 namespace cap {
 inline constexpr uint32_t kRtcmIn = 1U << 0;   // 接受 RTCM3 差分输入（流动站 RTK）
 inline constexpr uint32_t kBase = 1U << 1;     // 支持基准站模式（第二阶段）
@@ -105,5 +125,19 @@ struct SatTable {
     uint8_t count = 0;
     uint32_t update_ms = 0;
 };
+
+/** 型号的显示名（"UM980"、"ZED-F9P"……）；未知返回 "unknown"。线程/ISR 安全：是。 */
+[[nodiscard]] const char *model_name(Model model) noexcept;
+/** 型号所属家族。线程/ISR 安全：是。 */
+[[nodiscard]] Family family_of(Model model) noexcept;
+/** 家族的短名（"unicore"/"ublox"/"comnav"）；未知返回 "unknown"。线程/ISR 安全：是。 */
+[[nodiscard]] const char *family_name(Family family) noexcept;
+/**
+ * NVS 读回的范围校验：等价于 `value <= static_cast<uint8_t>(Family::kComnav)`，
+ * 但不把最后一个枚举值写死在调用方（ADR-0012 §2.3）。线程/ISR 安全：是。
+ */
+[[nodiscard]] std::optional<Family> family_from_u8(uint8_t value) noexcept;
+/** 同上，用于 Model。线程/ISR 安全：是。 */
+[[nodiscard]] std::optional<Model> model_from_u8(uint8_t value) noexcept;
 
 } // namespace gnss
