@@ -5,7 +5,6 @@
 // 冻结接口（ADR-0010 §3，ADR-0012 §3 修订：方言表由驱动接口取代）。变更须先修订 ADR-0012。
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -24,6 +23,7 @@ enum class State : uint8_t {
     kConfiguring, // 执行流动站配置脚本
     kRunning,     // 配置完成，正常接收 NMEA
     kFailed,      // 探测/配置用尽重试，等待 retry_backoff_ms 后从 kPowerUp 重来
+    kOutput,      // 基础脚本完成后逐项下发/关闭报文输出（ADR-0012 §2.4）
 };
 
 /** poll() 要求调用方执行的动作。 */
@@ -75,6 +75,12 @@ struct ControllerStats {
     uint32_t step_timeouts = 0;
     uint32_t reprobes = 0; // kRunning 静默或外部 request_reprobe 引起的重新探测
     uint32_t failures = 0; // 进入 kFailed 的次数
+    // 最近一次输出阶段（ADR-0012 §2.4）的结果，位 = OutputMsg。
+    uint32_t applied_mask = 0;     // 已确认生效的报文
+    uint32_t unsupported_mask = 0; // 型号不支持、已跳过（不是错误）
+    uint32_t failed_mask = 0;      // 参数非法或重试用尽
+    uint32_t output_runs = 0;      // 输出阶段次数
+    uint32_t output_seq = 0;       // 每次输出阶段结束时 +1；main 用它匹配请求与完成
 };
 
 /** 探测成功后的结论（供 main 写 NVS 与 DeviceInfo）。 */
@@ -95,10 +101,12 @@ public:
     /**
      * 配置（不启动）。receivers 为候选驱动（通常是 enabled_receivers()），bauds 为探测波特率候选；
      * 两个表与 cfg 必须在实例生命周期内有效。hint 有效时先探测提示的（方言,波特率）。
+     * plan 为初始输出计划（ADR-0012 §2.4），调用方可在运行期用 set_output_plan()/request_output() 更新。
      * 返回 false：receivers 或 bauds 为空、含 nullptr。
      */
     [[nodiscard]] bool init(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds,
-                            const RoverConfig &cfg, const Hint &hint, const Timing &timing) noexcept;
+                            const RoverConfig &cfg, const OutputPlan &plan, const Hint &hint,
+                            const Timing &timing) noexcept;
 
     /** 从 kOff 开始：先断电 power_off_ms 再上电（电源复位），然后探测。 */
     void start(uint32_t now_ms) noexcept;
@@ -108,6 +116,21 @@ public:
     void request_reprobe(uint32_t now_ms) noexcept;
     /** 已探测到模块时重跑配置脚本，例如修改 RoverConfig 后；否则等同 request_reprobe。 */
     void request_reconfigure(uint32_t now_ms) noexcept;
+    /**
+     * 运行中修改报文输出（ADR-0012 §2.4）：只重跑输出阶段，不重新探测、不复位模块。
+     * 仅 kRunning 接受，其它状态返回 false（调用方应改用 request_reconfigure 或稍后重试）。
+     */
+    [[nodiscard]] bool request_output(const OutputPlan &plan, uint32_t now_ms) noexcept;
+    /** 更新输出计划（探测到型号后 caps 才确定，main 每轮按最新配置重算）；不触发任何动作。 */
+    void set_output_plan(const OutputPlan &plan) noexcept
+    {
+        plan_ = plan;
+    }
+    /** 当前输出计划（诊断/测试用）。 */
+    [[nodiscard]] const OutputPlan &output_plan() const noexcept
+    {
+        return plan_;
+    }
 
     /** 推进状态机，返回下一个要执行的动作（kNone 表示本轮无事）。调用方应循环 poll 直到 kNone。 */
     [[nodiscard]] Action poll(uint32_t now_ms) noexcept;
@@ -129,6 +152,11 @@ public:
      * 永不返回 nullptr，调用方无需判空。
      */
     [[nodiscard]] const Receiver &receiver() const noexcept;
+    /**
+     * 最近一次探测发送所用的驱动（kProbeSend 追踪日志用）；未在探测中时为 null_receiver()。
+     * 与 detected() 不同：探测失败也会保留最后一个候选项，因此可用来区分“发的是哪家的查询”。
+     */
+    [[nodiscard]] const Receiver &probe_receiver() const noexcept;
 
     [[nodiscard]] const ControllerStats &stats() const noexcept
     {
@@ -144,6 +172,7 @@ private:
     std::span<const Receiver *const> receivers_{};
     std::span<const uint32_t> bauds_{};
     const RoverConfig *cfg_ = nullptr;
+    OutputPlan plan_{};
     Hint hint_{};
     Timing timing_{};
 
@@ -160,8 +189,12 @@ private:
     bool reply_ok_ = false;
     bool reply_nack_ = false;
     bool probe_hit_ = false;
-    ConfigStep step_{};  // 当前配置步骤（bytes 来源）
-    CmdBuf probe_cmd_{}; // 当前探测命令（bytes 来源）
+    size_t output_index_ = 0; // 输出阶段游标（OutputMsg 数值）
+    // 只有运行时改配置才需要给"关闭"的语句下发 UNLOG；开机首轮跳过它们，与基线脚本逐字节一致。
+    bool output_rerun_ = false;
+    ConfigStep step_{};   // 当前配置步骤（bytes 来源）
+    CmdBuf probe_cmd_{};  // 当前探测命令（bytes 来源）
+    CmdBuf output_cmd_{}; // 当前输出命令（bytes 来源）
     const Receiver *probe_receiver_ = nullptr;
     Detected detected_{};
     ControllerStats stats_{};

@@ -385,11 +385,12 @@ const char *result_text(uint32_t value) noexcept
 #if RTK_GNSS_ENABLED
 const char *gnss_family_text(uint32_t value) noexcept
 {
-    // 家族名集中在 gnss 组件（ADR-0012 §2.2），这里只做越界保护。
-    if (value > static_cast<uint32_t>(::gnss::Family::kComnav)) {
+    // 家族名集中在 gnss 组件（ADR-0012 §2.2），越界保护也用它自己的取值范围。
+    const auto family = ::gnss::family_from_u8(static_cast<uint8_t>(value));
+    if (!family.has_value()) {
         return "?";
     }
-    return ::gnss::family_name(static_cast<::gnss::Family>(value));
+    return ::gnss::family_name(*family);
 }
 #endif
 

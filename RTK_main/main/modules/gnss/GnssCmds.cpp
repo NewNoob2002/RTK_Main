@@ -14,6 +14,9 @@
 
 #include "esp_err.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
 #include "cli/Console.hpp"
@@ -38,6 +41,9 @@ constexpr uint32_t kTenthsBase = 10U;
 constexpr int32_t kMinSignedInterval = -128;
 constexpr int32_t kMaxSignedInterval = 127;
 constexpr uint32_t kStaticObsReservedBytes = 16384U;
+/** 等待变更判定的轮询间隔与上限：须长于 GnssModule 的 kApplyTimeoutMs（5 s，频率重配含基础脚本）。 */
+constexpr uint32_t kApplyPollMs = 50U;
+constexpr uint32_t kApplyPollRounds = 120U;
 constexpr size_t kLatLonBufBytes = 24U;
 constexpr size_t kMetersBufBytes = 20U;
 constexpr size_t kDopBufBytes = 16U;
@@ -181,6 +187,59 @@ bool report_gnss_result(const fw::CommandResult &res) noexcept
     }
 }
 
+bool submit_gnss(const fw::Command &cmd) noexcept;
+
+/** 打印本轮输出计划的逐项结果；成功返回 true。 */
+bool report_output_plan(const GnssStatus &before, const GnssStatus &after) noexcept
+{
+    bool ok = true;
+    for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
+        const uint32_t bit = 1U << i;
+        const char *state = "off";
+        if ((after.unsupported_mask & bit) != 0U) {
+            state = "unsupported";
+        } else if ((after.failed_mask & bit) != 0U) {
+            state = "failed";
+            ok = false;
+        } else if ((((after.applied_mask | before.applied_mask) & bit) != 0U) && (after.rx_period_ms[i] != 0U)) {
+            // applied 位也包含已 ACK 的关闭命令（UNLOG），是否在输出看计划周期。
+            cli::out_printf("  %-8s on %" PRIu32 "ms\n", kAppMsgNames[i], after.rx_period_ms[i]);
+            continue;
+        }
+        cli::out_printf("  %-8s %s\n", kAppMsgNames[i], state);
+    }
+    return ok;
+}
+
+/**
+ * 提交命令并等待两阶段提交判定（apply_seq 前进），再按 last_apply 给 OK/ERR。
+ * 仅在 console REPL 任务调用；阻塞轮询，最长 6 s（不阻塞 kIo）。
+ */
+bool submit_gnss_and_wait(const fw::Command &cmd) noexcept
+{
+    const GnssStatus before = app_context().data.gnss_status.read();
+    if (!submit_gnss(cmd)) {
+        return false;
+    }
+    for (uint32_t round = 0U; round < kApplyPollRounds; ++round) {
+        const GnssStatus after = app_context().data.gnss_status.read();
+        if (after.apply_seq != before.apply_seq) {
+            if (after.last_apply == GnssApply::kRestored) {
+                (void)cli::fail("receiver rejected output change, reverted");
+                return false;
+            }
+            if (after.last_apply != GnssApply::kOk) {
+                (void)cli::fail("output applied but settings save failed");
+                return false;
+            }
+            return report_output_plan(before, after);
+        }
+        vTaskDelay(pdMS_TO_TICKS(kApplyPollMs));
+    }
+    (void)cli::fail("gnss output apply timeout");
+    return false;
+}
+
 bool submit_gnss(const fw::Command &cmd) noexcept
 {
     if (app_context().io_executor == nullptr) {
@@ -218,6 +277,14 @@ int cmd_gnss_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
                   st.nmea.gga, st.nmea.rmc, st.nmea.gsa, st.nmea.gsv, st.nmea.ignored, st.nmea.malformed);
     cli::print_kv("uart", "rx=%" PRIu32 " tx=%" PRIu32, st.uart_rx_bytes, st.uart_tx_bytes);
     cli::print_kv("demux", "unknown=%" PRIu32 " resyncs=%" PRIu32, st.demux_unknown, st.demux_resyncs);
+    cli::print_kv("output",
+                  "seq=%" PRIu32 " applied=0x%02" PRIX32 " unsupported=0x%02" PRIX32 " failed=0x%02" PRIX32
+                  " supported=0x%02" PRIX32 " last=%s",
+                  st.output_seq, st.applied_mask, st.unsupported_mask, st.failed_mask, st.supported_mask,
+                  (st.last_apply == GnssApply::kOk)         ? "ok"
+                  : (st.last_apply == GnssApply::kFailed)   ? "save-failed"
+                  : (st.last_apply == GnssApply::kRestored) ? "reverted"
+                                                            : "-");
     cli::print_kv("pipe", "pushed=%" PRIu32 "/%" PRIu32 "B drop=%" PRIu32 "/%" PRIu32 "B written=%" PRIu32 "B",
                   st.pipe.pushed_frames, st.pipe.pushed_bytes, st.pipe.dropped_frames, st.pipe.dropped_bytes,
                   st.pipe.written_bytes);
@@ -364,7 +431,7 @@ int cmd_gnss_rate(void * /*ctx*/, int argc, char **argv) noexcept
     cmd.verb = static_cast<uint8_t>(GnssVerb::kSetRate);
     cmd.arg_len = 1U;
     cmd.args[0] = hz;
-    return submit_gnss(cmd) ? 0 : cli::kCmdFail;
+    return submit_gnss_and_wait(cmd) ? 0 : cli::kCmdFail;
 }
 
 int cmd_gnss_send(void * /*ctx*/, int argc, char **argv) noexcept
@@ -406,11 +473,19 @@ int cmd_gnss_out(void * /*ctx*/, int argc, char **argv) noexcept
     if ((args.size() <= 1U) || ((args.size() == 2U) && (std::string_view{args[1]} == "show"))) {
         cli::print_section("gnss_out");
         cli::print_kv("mask", "0x%02X", static_cast<unsigned>(cfg.mask));
+        const GnssStatus st = app_context().data.gnss_status.read();
         for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
             const bool en = (cfg.mask & (1U << i)) != 0U;
             const uint32_t period = core::services::GnssService::interval_to_period_ms(cfg.intervals[i]);
-            cli::out_printf("  %-8s %s interval=%d (%" PRIu32 " ms)\n", kAppMsgNames[i], en ? "on" : "off",
-                            static_cast<int>(cfg.intervals[i]), period);
+            const uint32_t bit = 1U << i;
+            const char *applied = (st.applied_mask & bit) != 0U ? "on" : "-";
+            if ((st.unsupported_mask & bit) != 0U) {
+                applied = "unsupported";
+            } else if ((st.failed_mask & bit) != 0U) {
+                applied = "failed";
+            }
+            cli::out_printf("  %-8s %s interval=%d push=%" PRIu32 "ms rx=%" PRIu32 "ms receiver=%s\n", kAppMsgNames[i],
+                            en ? "on" : "off", static_cast<int>(cfg.intervals[i]), period, st.rx_period_ms[i], applied);
         }
         return 0;
     }
@@ -450,7 +525,7 @@ int cmd_gnss_out(void * /*ctx*/, int argc, char **argv) noexcept
     static_assert(data::GnssOutConfig::kBlobBytes <= fw::kCommandArgBytes);
     std::memcpy(cmd.args.data(), blob.data(), blob_len);
     cmd.arg_len = static_cast<uint8_t>(blob_len);
-    return submit_gnss(cmd) ? 0 : cli::kCmdFail;
+    return submit_gnss_and_wait(cmd) ? 0 : cli::kCmdFail;
 }
 
 // clang-format off

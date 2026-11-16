@@ -44,6 +44,11 @@ public:
                                   ConfigStep &out) const noexcept override;
     [[nodiscard]] Ack classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                      std::span<const uint8_t> sent) const noexcept override;
+    /** K803 只能输出 GGA/RMC/GSA/GSV；SATSINFOA/HEADINGA/GST 不支持。 */
+    [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
+    /** "LOG COMn <name> ONTIME <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）。 */
+    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+                                          CmdBuf &out) const noexcept override;
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */

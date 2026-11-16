@@ -72,21 +72,22 @@ size_t Receiver::frame_tag(const demux::Decoder &dec, std::span<const uint8_t> f
 {
     // 与 main 原 describe_frame() 文本一致（P3b 替换后日志不变）。
     const std::string_view name{dec.name};
-    std::array<char, detail::kFrameTagBytes> word{};
     if (name == "NMEA" && frame.size() > detail::kNmeaTagLen) {
-        (void)detail::copy_word(frame, detail::kNmeaTagOffset, word);
-        return detail::format_tag(out, "NMEA %s", word.data());
+        return detail::tag_with_word(out, "NMEA ", frame, detail::kNmeaTagOffset);
     }
     if (name == "RTCM3" && frame.size() > detail::kRtcmTagOffset + 1U) {
         const uint32_t msg = (static_cast<uint32_t>(frame[detail::kRtcmTagOffset]) << detail::kRtcmMsgShift) |
                              (static_cast<uint32_t>(frame[detail::kRtcmTagOffset + 1U]) >> detail::kRtcmMsgShift);
-        return detail::format_tag(out, "RTCM3 %lu", static_cast<unsigned long>(msg & detail::kRtcmMsgMask));
+        const size_t pos = detail::append_text(out, 0U, "RTCM3 ");
+        return detail::append_uint(out, pos, msg & detail::kRtcmMsgMask);
     }
     if (name == "UBX" && frame.size() > detail::kUbxClassOffset + 1U) {
-        return detail::format_tag(out, "UBX 0x%02x/0x%02x", static_cast<unsigned>(frame[detail::kUbxClassOffset]),
-                                  static_cast<unsigned>(frame[detail::kUbxClassOffset + 1U]));
+        size_t pos = detail::append_text(out, 0U, "UBX 0x");
+        pos = detail::append_hex2(out, pos, frame[detail::kUbxClassOffset]);
+        pos = detail::append_text(out, pos, "/0x");
+        return detail::append_hex2(out, pos, frame[detail::kUbxClassOffset + 1U]);
     }
-    return detail::format_tag(out, "%s", dec.name);
+    return detail::append_text(out, 0U, name);
 }
 
 bool Receiver::build_readback(CmdBuf &) const noexcept

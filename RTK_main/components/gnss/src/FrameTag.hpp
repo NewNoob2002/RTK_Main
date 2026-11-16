@@ -1,13 +1,13 @@
-// 帧标签（frame_tag）的公共小工具：把帧里的可打印词拷进缓冲、按 printf 格式写回。
+// 帧标签（frame_tag）的公共小工具：把帧里的可打印词与文本/数字拼进缓冲。
+// 不用 printf 族：帧标签在链路任务里生成，vsnprintf 代价高且触发 vararg 规范告警。
 // 仅组件内部使用（src/ 私有头），不参与公共接口。
 // 线程/ISR 安全：是（纯函数，不阻塞、不分配）。
 #pragma once
 
-#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <span>
+#include <string_view>
 
 namespace gnss::detail {
 
@@ -46,22 +46,66 @@ inline size_t copy_word(std::span<const uint8_t> frame, size_t start, std::span<
     return len;
 }
 
-/** snprintf 到 out，返回不含 NUL 的长度（截断时返回 out.size()-1）。 */
-[[gnu::format(printf, 2, 3)]] inline size_t format_tag(std::span<char> out, const char *fmt, ...) noexcept
+/** 把 text 追加到 out[pos..]，返回新的写入长度（缓冲不足时截断）。 */
+inline size_t append_text(std::span<char> out, size_t pos, std::string_view text) noexcept
 {
-    if (out.empty()) {
-        return 0U;
+    for (const char ch : text) {
+        if ((pos + 1U) >= out.size()) {
+            return pos;
+        }
+        out[pos] = ch;
+        ++pos;
     }
-    va_list args;
-    va_start(args, fmt);
-    const int written = std::vsnprintf(out.data(), out.size(), fmt, args);
-    va_end(args);
-    if (written <= 0) {
-        out[0] = '\0';
-        return 0U;
+    out[pos] = '\0';
+    return pos;
+}
+
+/** 以十进制追加 value，返回新的写入长度。 */
+inline size_t append_uint(std::span<char> out, size_t pos, uint32_t value) noexcept
+{
+    char digits[10]{};
+    size_t len = 0U;
+    do {
+        digits[len] = static_cast<char>('0' + static_cast<char>(value % 10U));
+        value /= 10U;
+        ++len;
+    } while (value != 0U);
+    while (len > 0U) {
+        --len;
+        if ((pos + 1U) >= out.size()) {
+            return pos;
+        }
+        out[pos] = digits[len];
+        ++pos;
     }
-    const size_t len = static_cast<size_t>(written);
-    return len < out.size() ? len : (out.size() - 1U);
+    out[pos] = '\0';
+    return pos;
+}
+
+/** 以两位小写十六进制追加 value（0x00..0xFF），返回新的写入长度。 */
+inline size_t append_hex2(std::span<char> out, size_t pos, uint8_t value) noexcept
+{
+    constexpr std::string_view kDigits = "0123456789abcdef";
+    const auto high = static_cast<size_t>((value >> kRtcmMsgShift) & 0x0FU);
+    const auto low = static_cast<size_t>(value & 0x0FU);
+    if ((pos + 2U) >= out.size()) {
+        return pos;
+    }
+    out[pos] = kDigits[high];
+    out[pos + 1U] = kDigits[low];
+    out[pos + 2U] = '\0';
+    return pos + 2U;
+}
+
+/** 组成 "<prefix><frame[start..] 的可打印词>"，返回写入长度。 */
+inline size_t tag_with_word(std::span<char> out, std::string_view prefix, std::span<const uint8_t> frame,
+                            size_t start) noexcept
+{
+    const size_t pos = append_text(out, 0U, prefix);
+    if ((pos == 0U) || (pos + 1U) >= out.size()) {
+        return pos;
+    }
+    return pos + copy_word(frame, start, out.subspan(pos));
 }
 
 /** frame 是否以 prefix 开头（含前缀本身）。 */

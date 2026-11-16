@@ -257,11 +257,11 @@ static void test_init_rejects_bad_arguments()
     const std::array<const gnss::Receiver *, 1> with_null{nullptr};
     const std::array<uint32_t, 1> zero{0};
 
-    TEST_ASSERT_FALSE(controller.init({}, bauds, cfg, {}, timing));
-    TEST_ASSERT_FALSE(controller.init(receivers, {}, cfg, {}, timing));
-    TEST_ASSERT_FALSE(controller.init(with_null, bauds, cfg, {}, timing));
-    TEST_ASSERT_FALSE(controller.init(receivers, zero, cfg, {}, timing));
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
+    TEST_ASSERT_FALSE(controller.init({}, bauds, cfg, gnss::OutputPlan{}, {}, timing));
+    TEST_ASSERT_FALSE(controller.init(receivers, {}, cfg, gnss::OutputPlan{}, {}, timing));
+    TEST_ASSERT_FALSE(controller.init(with_null, bauds, cfg, gnss::OutputPlan{}, {}, timing));
+    TEST_ASSERT_FALSE(controller.init(receivers, zero, cfg, gnss::OutputPlan{}, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 }
 
 static void test_full_flow_probe_configure_run_reprobe()
@@ -271,7 +271,7 @@ static void test_full_flow_probe_configure_run_reprobe()
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kOff), static_cast<int>(controller.state()));
@@ -319,7 +319,7 @@ static void test_probe_timeout_exhausts_rounds()
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -346,7 +346,7 @@ static void test_nack_retries_then_fails()
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -375,7 +375,7 @@ static void test_step_timeout_retries()
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -396,7 +396,7 @@ static void test_baud_switch_step()
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverS};
     const std::array<uint32_t, 1> bauds{115200};
     const gnss::Timing timing = fast_timing();
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -428,7 +428,7 @@ static void test_hint_is_probed_first()
     gnss::Hint hint{};
     hint.family = Family::kUblox;
     hint.baud = 9600;
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, hint, timing));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, hint, timing));
 
     uint32_t now = 0;
     power_up(controller, now);
@@ -444,7 +444,7 @@ static void test_request_reconfigure()
     RoverConfig cfg = rover_config();
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, {}, fast_timing()));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, fast_timing()));
 
     uint32_t now = 0;
     controller.request_reconfigure(now); // 尚未探测 → 等同 request_reprobe

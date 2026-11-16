@@ -62,6 +62,11 @@ void fletcher(uint8_t byte, uint8_t &ck_a, uint8_t &ck_b) noexcept
 }
 
 // 组装一帧 UBX：B5 62 | class | id | len(LE) | payload | CK_A CK_B（覆盖 class..payload）。
+/** CFG-MSGOUT 的 U1 值上限（每历元次数）。 */
+inline constexpr uint32_t kMaxEpochsPerEpoch = 255U;
+/** 1 秒的毫秒数。 */
+inline constexpr uint32_t kMsPerSecond = 1000U;
+
 bool build_frame(CmdBuf &out, uint8_t cls, uint8_t id, std::span<const uint8_t> payload) noexcept
 {
     if (payload.size() > 0xFFFFU) {
@@ -201,13 +206,7 @@ bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &
         pos = add_u1_item(payload.data(), pos, kKeyUart1InprotRtcm3x, 1);
         pos = add_u1_item(payload.data(), pos, kKeyUart1OutprotNmea, 1);
     } else if (index == 1) {
-        pos = begin_valset(payload.data());
-        pos = add_u1_item(payload.data(), pos, kKeyMsgoutGgaUart1, 1);
-        pos = add_u1_item(payload.data(), pos, kKeyMsgoutRmcUart1, 1);
-        pos = add_u1_item(payload.data(), pos, kKeyMsgoutGsaUart1, 1);
-        pos = add_u1_item(payload.data(), pos, kKeyMsgoutGstUart1, 1);
-        pos = add_u1_item(payload.data(), pos, kKeyMsgoutGsvUart1, cfg.gsv ? 1 : 0);
-    } else if (index == 2) {
+        // 报文输出不再写进基础脚本（ADR-0012 §2.4）：由输出阶段逐条 CFG-MSGOUT VALSET 下发。
         if (cfg.port_baud == 0) {
             return false; // 未要求改波特率，脚本结束
         }
@@ -268,7 +267,7 @@ namespace gnss {
 namespace {
 // MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（match_probe / reply_ack 均按 ubx 解码器判定）。
 constexpr std::array<const demux::Decoder *, 1> kDecoders{&demux::ubx::kDecoder};
-constinit const UbloxReceiver kUbloxReceiver{};
+constinit const UbloxReceiver s_ubloxReceiver{};
 } // namespace
 
 Family UbloxReceiver::family() const noexcept
@@ -317,15 +316,86 @@ size_t UbloxReceiver::frame_tag(const demux::Decoder &dec, std::span<const uint8
                                 std::span<char> out) const noexcept
 {
     if (std::string_view{dec.name} == "UBX" && frame.size() > detail::kUbxClassOffset + 1U) {
-        return detail::format_tag(out, "UBX 0x%02x/0x%02x", static_cast<unsigned>(frame[detail::kUbxClassOffset]),
-                                  static_cast<unsigned>(frame[detail::kUbxClassOffset + 1U]));
+        size_t pos = detail::append_text(out, 0U, "UBX 0x");
+        pos = detail::append_hex2(out, pos, frame[detail::kUbxClassOffset]);
+        pos = detail::append_text(out, pos, "/0x");
+        return detail::append_hex2(out, pos, frame[detail::kUbxClassOffset + 1U]);
     }
     return Receiver::frame_tag(dec, frame, out);
 }
 
+uint32_t UbloxReceiver::output_mask(Model model) const noexcept
+{
+    // ZED-F9P 能输出这 5 类；SATSINFOA/HEADINGA 是 Unicore 私有帧，返回 kNotSupported。
+    constexpr uint32_t kGgaBit = 1U << static_cast<uint32_t>(OutputMsg::kGga);
+    constexpr uint32_t kGstBit = 1U << static_cast<uint32_t>(OutputMsg::kGst);
+    constexpr uint32_t kRmcBit = 1U << static_cast<uint32_t>(OutputMsg::kRmc);
+    constexpr uint32_t kGsaBit = 1U << static_cast<uint32_t>(OutputMsg::kGsa);
+    constexpr uint32_t kGsvBit = 1U << static_cast<uint32_t>(OutputMsg::kGsv);
+    static_cast<void>(model); // 单型号
+    return kGgaBit | kGstBit | kRmcBit | kGsaBit | kGsvBit;
+}
+
+fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+                                       CmdBuf &out) const noexcept
+{
+    static_cast<void>(model);
+    // 只有 CFG-MSGOUT-*_UART1 的键值是已核实的；plan.port 不参与选择（旧脚本同样只配 UART1）。
+    uint32_t key = 0U;
+    switch (msg) {
+    case OutputMsg::kGga:
+        key = ublox::kKeyMsgoutGgaUart1;
+        break;
+    case OutputMsg::kRmc:
+        key = ublox::kKeyMsgoutRmcUart1;
+        break;
+    case OutputMsg::kGsa:
+        key = ublox::kKeyMsgoutGsaUart1;
+        break;
+    case OutputMsg::kGst:
+        key = ublox::kKeyMsgoutGstUart1;
+        break;
+    case OutputMsg::kGsv:
+        key = ublox::kKeyMsgoutGsvUart1;
+        break;
+    case OutputMsg::kSatsInfo:
+    case OutputMsg::kHeading:
+        return fw::Status::kNotSupported;
+    case OutputMsg::kNone:
+    case OutputMsg::kCount:
+    default:
+        return fw::Status::kInvalidArg;
+    }
+
+    // 值 = 每历元次数：round(period_ms * rate_hz / 1000)，0 关闭；不能整除导致 0 时按 1（最慢 1 历元一次）。
+    uint32_t epochs = 0U;
+    if (period_ms != 0U) {
+        const uint32_t rate = (plan.rate_hz == 0U) ? 1U : static_cast<uint32_t>(plan.rate_hz);
+        // period_ms 最大 128000、rate 最大 20，乘积 2.56e6 在 uint32_t 内，无需 64 位。
+        const uint32_t scaled = (period_ms * rate) + (ublox::kMsPerSecond / 2U);
+        epochs = scaled / ublox::kMsPerSecond;
+        if (epochs == 0U) {
+            epochs = 1U;
+        }
+        if (epochs > ublox::kMaxEpochsPerEpoch) {
+            // 键类型是 U1：超出可表示范围视为不可实现参数（UNKNOWN 语义不下发）。
+            return fw::Status::kInvalidArg;
+        }
+    }
+
+    std::array<uint8_t, 16> payload{};
+    size_t pos = ublox::begin_valset(payload.data());
+    pos = ublox::add_u1_item(payload.data(), pos, key, static_cast<uint8_t>(epochs));
+    out.clear();
+    if (!ublox::build_frame(out, ublox::kClsCfg, ublox::kIdCfgValset, std::span<const uint8_t>{payload.data(), pos})) {
+        return fw::Status::kInvalidArg;
+    }
+    return fw::Status::kOk;
+}
+
 const Receiver &ublox_receiver() noexcept
 {
-    return kUbloxReceiver;
+    return s_ubloxReceiver;
 }
 
 } // namespace gnss

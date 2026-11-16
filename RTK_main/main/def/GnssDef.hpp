@@ -53,6 +53,14 @@ struct RtcmPipeStats {
     uint32_t written_bytes = 0; // gnss 模块已写入 UART 的字节
 };
 
+/** 最近一次输出/频率变更的落地结果（ADR-0012 §2.4；控制台据此决定 OK/ERR 与 NVS 回滚）。 */
+enum class GnssApply : uint8_t {
+    kNone = 0,     // 没有进行中的变更
+    kOk = 1,       // 全部支持的语句已 ACK，NVS 已写入
+    kFailed = 2,   // 有语句失败，NVS 保持旧值
+    kRestored = 3, // 失败后已回滚到旧配置
+};
+
 /** GNSS 状态快照（data::DataCenter::gnss_status）。 */
 struct GnssStatus {
     bool enabled = false; // RTK_GNSS_ENABLE 且 UART 初始化成功
@@ -69,6 +77,19 @@ struct GnssStatus {
     uint32_t demux_unknown = 0;
     uint32_t demux_resyncs = 0;
     RtcmPipeStats pipe{};
+    // 输出计划状态（ADR-0012 §2.4/§2.5）：每次输出阶段/频率重配递增 output_seq，供控制台等待落地。
+    uint32_t output_seq = 0;
+    uint32_t applied_mask = 0;     // 本轮所有输出项 ACK 的位
+    uint32_t unsupported_mask = 0; // 接收机不支持（驱动返回 kNotSupported）的位
+    uint32_t failed_mask = 0;      // 下发失败/ACK 超时的位
+    uint32_t supported_mask = 0;   // 接收机当前支持的 App 语句位（App 索引，供 GnssService 拒订阅）
+    GnssApply last_apply = GnssApply::kNone;
+    // 每次 gnss out/rate 变更有了结论（写入 NVS / 回滚 / 写入失败）时 +1；控制台等它变化后再读 last_apply，
+    // 避免 output_seq 已前进但两阶段提交尚未判定时读到上一次的 last_apply。
+    uint32_t apply_seq = 0;
+    // 当前输出计划里 App 6 类语句下发给接收机的周期（ms，0 = 不下发）；与 gnss/out 的 App 推送间隔不同，
+    // 默认项沿用流动站脚本（GGA/RMC/GSA/GST 跟频率，SATSINFOA 1 s）。
+    std::array<uint32_t, 6U> rx_period_ms{};
 };
 
 } // namespace app

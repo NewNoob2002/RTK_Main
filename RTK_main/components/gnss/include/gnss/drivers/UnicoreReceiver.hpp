@@ -54,8 +54,11 @@ public:
     /** 基类默认 + "#VERSIONA"/"$command" 专用标签，与 main 原 describe_frame() 文本一致。 */
     size_t frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
                      std::span<char> out) const noexcept override;
-    /** 基类默认 + SATSINFOA，双天线型号（UM982）另加 HEADINGA。 */
+    /** 基类默认 + SATSINFOA/GST，双天线型号（UM982）另加 HEADINGA。 */
     [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
+    /** "<name> COMn <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）；10 ms 以上且可表示为秒时成功。 */
+    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+                                          CmdBuf &out) const noexcept override;
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */

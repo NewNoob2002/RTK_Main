@@ -12,6 +12,7 @@
 
 #include "cli/Console.hpp"
 #include "data/GnssOutput.hpp"
+#include "def/GnssDef.hpp"
 #include "demux/Demux.hpp"
 #include "fw/Command.hpp"
 #include "fw/Result.hpp"
@@ -140,7 +141,6 @@ private:
     [[nodiscard]] bool pump_rtcm_pipe() noexcept;
     void publish_status(uint32_t now_ms) noexcept;
     void persist_detected_hint() noexcept;
-    void apply_out_to_receiver() noexcept;
     [[nodiscard]] fw::Result apply_power(bool on) noexcept;
     [[nodiscard]] fw::Result apply_baud(uint32_t baud) noexcept;
 
@@ -150,6 +150,10 @@ private:
     [[nodiscard]] demux::Demux &stream_demux() noexcept;
     [[nodiscard]] fw::Result init_uart() noexcept;
     void send_raw(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /** 由当前配置与接收机能力生成输出计划（纯计算，不碰串口）。 */
+    [[nodiscard]] ::gnss::OutputPlan make_plan() noexcept;
+    /** 输出/频率变更的落地检查：成功写 NVS，失败回滚并重下发旧计划（ADR-0012 §2.4）。 */
+    void tick_pending_apply(uint32_t now_ms) noexcept;
     void update_controller_status() noexcept;
     [[nodiscard]] fw::Result init_failed(fw::Result original) noexcept;
     AppContext *context_ = nullptr;
@@ -164,6 +168,19 @@ private:
     std::optional<::gnss::Timing> timing_{};
     std::optional<::gnss::RoverConfig> rover_cfg_{};
     data::GnssOutConfig out_cfg_{};
+    /** 待落地的变更：等控制器 output_seq 前进后再决定写 NVS 还是回滚。 */
+    enum class PendingApply : uint8_t {
+        kNone = 0,
+        kOut = 1,
+        kRate = 2,
+    };
+    PendingApply pending_apply_ = PendingApply::kNone;
+    GnssApply last_apply_ = GnssApply::kNone;
+    uint32_t apply_seq_ = 0U;
+    data::GnssOutConfig pending_prev_out_{};
+    uint8_t pending_prev_rate_ = 0U;
+    uint32_t pending_seq_ = 0U;
+    uint32_t pending_deadline_ms_ = 0U;
     std::array<data::GnssPushGate, data::kGnssAppMsgCount> push_gates_{};
     std::array<const demux::Decoder *, demux::kMaxDecoders> decoders_{};
     size_t decoder_count_ = 0U;

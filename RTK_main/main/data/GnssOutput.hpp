@@ -1,4 +1,4 @@
-// GNSS App 数据通路（K4 / ADR-0011）：6 类语句识别、6 KiB 最新帧缓存、统一输出配置与跨任务订阅状态。
+// GNSS App 数据通路（K4 / ADR-0011）：6 KiB 最新帧缓存、统一输出配置与输出计划、跨任务订阅状态。
 // 线程安全：GnssLatestCache 与 GnssAppSubState 通过注入的 LockOps 保护（DataCenter::mux）；classify/GnssOutConfig
 // 为纯函数/值对象。ISR 安全：否。
 #pragma once
@@ -10,9 +10,10 @@
 #include <span>
 
 #include "core/services/GnssService.hpp"
-#include "fw/FanoutRing.hpp"
 #include "fw/Lock.hpp"
+#include "fw/Result.hpp"
 #include "fw/Status.hpp"
+#include "gnss/Receiver.hpp"
 
 namespace app::data {
 
@@ -29,12 +30,6 @@ inline constexpr std::array<size_t, kGnssAppMsgCount> kGnssLatestOffsets = {0U, 
 
 /** 返回协议 msg_id 对应的 type_idx（0..5）；未知返回 std::nullopt。线程/ISR 安全：是。 */
 [[nodiscard]] std::optional<uint8_t> gnss_type_from_msg_id(uint16_t msg_id) noexcept;
-
-/**
- * 识别 GNSS 原始帧是否属于 6 类 App 可订阅语句（NMEA 忽略 talker；Unicore Hash 匹配 #SATSINFOA, / #HEADINGA,）。
- * 线程/ISR 安全：是（纯函数）。
- */
-[[nodiscard]] std::optional<uint8_t> classify_gnss_sentence(std::span<const uint8_t> frame) noexcept;
 
 /**
  * 订阅降采样闸门（每类语句一份，单写者：GNSS 模块 kIo 任务）。
@@ -94,6 +89,20 @@ struct GnssOutConfig {
     /** 从字节串反序列化并校验；非法返回 kInvalidArg 且不改 out。线程/ISR 安全：是。 */
     [[nodiscard]] static fw::Result decode(std::span<const uint8_t> in, GnssOutConfig &out) noexcept;
 };
+
+/**
+ * 由 NVS 输出配置生成一次输出计划（ADR-0012 §2.4，单一来源）。
+ *
+ * 逐项规则（下标即 gnss::OutputMsg = App type_idx）：
+ *  - mask 位关 → 0（驱动据此下发 UNLOG / VALSET 0）；
+ *  - interval 等于 GnssOutConfig::defaults() 的同项值 → 沿用 P3a 流动站脚本（与黄金向量等价）：
+ *    GGA/RMC/GSA/GST = 1000/rate_hz，SATSINFOA = 1000，HEADINGA = 1000（无 cap::kHeading 时为 0）；
+ *  - 否则 → GnssService::interval_to_period_ms(interval)，按用户设置生效；
+ *  - GSV = gsv ? 1000 : 0。
+ * 线程/ISR 安全：是（纯函数）。
+ */
+[[nodiscard]] gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, bool gsv, uint8_t port,
+                                                uint32_t caps) noexcept;
 
 struct GnssLatestSlotStats {
     uint16_t len = 0;

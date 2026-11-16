@@ -461,7 +461,7 @@ void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
             device_info.board_fw.assign(std::string_view{gnss_st.fw_version.data()});
         }
         if (gnss_service_.has_value()) {
-            gnss_service_->set_heading_supported((gnss_st.caps & ::gnss::cap::kHeading) != 0U);
+            gnss_service_->set_supported_mask(gnss_st.supported_mask);
         }
     }
 }

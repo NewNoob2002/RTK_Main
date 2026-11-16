@@ -71,7 +71,7 @@ bool reached(uint32_t now_ms, uint32_t deadline_ms_ms) noexcept
 } // namespace
 
 bool Controller::init(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds,
-                      const RoverConfig &cfg, const Hint &hint, const Timing &timing) noexcept
+                      const RoverConfig &cfg, const OutputPlan &plan, const Hint &hint, const Timing &timing) noexcept
 {
     if (receivers.empty() || bauds.empty()) {
         return false;
@@ -89,6 +89,7 @@ bool Controller::init(std::span<const Receiver *const> receivers, std::span<cons
     receivers_ = receivers;
     bauds_ = bauds;
     cfg_ = &cfg;
+    plan_ = plan;
     hint_ = hint;
     timing_ = timing;
     host_baud_ = bauds.front();
@@ -98,6 +99,7 @@ bool Controller::init(std::span<const Receiver *const> receivers, std::span<cons
     probe_round_ = 0;
     step_index_ = 0;
     step_tries_ = 0;
+    output_index_ = 0;
     waiting_reply_ = false;
     reply_ok_ = false;
     reply_nack_ = false;
@@ -153,9 +155,33 @@ void Controller::request_reconfigure(uint32_t now_ms) noexcept
     phase_ = 0;
     step_index_ = 0;
     step_tries_ = 0;
+    output_index_ = 0;
     waiting_reply_ = false;
     reply_ok_ = false;
     reply_nack_ = false;
+}
+
+// 只重跑输出阶段：探测/基础脚本已经成功的事实不变，因此不动 detected_，也不改状态机之外的东西。
+// output_seq 每完成一轮 kOutput 自增一次，main 侧用它判断“这次提交是否落地”（ADR-0012 §2.4）。
+bool Controller::request_output(const OutputPlan &plan, uint32_t now_ms) noexcept
+{
+    static_cast<void>(now_ms);
+    if (state_ != State::kRunning || detected_.receiver == nullptr) {
+        return false;
+    }
+    plan_ = plan;
+    state_ = State::kOutput;
+    phase_ = 0;
+    output_index_ = 0;
+    step_tries_ = 0;
+    waiting_reply_ = false;
+    reply_ok_ = false;
+    reply_nack_ = false;
+    stats_.applied_mask = 0U;
+    stats_.unsupported_mask = 0U;
+    stats_.failed_mask = 0U;
+    output_rerun_ = true; // 运行时改动：关闭项要显式下发 UNLOG
+    return true;
 }
 
 Action Controller::poll(uint32_t now_ms) noexcept
@@ -288,9 +314,18 @@ Action Controller::poll(uint32_t now_ms) noexcept
             if (phase_ == 0) {
                 ConfigStep step{};
                 if (!detected_.receiver->rover_step(step_index_, detected_.probe.model, *cfg_, step)) {
-                    state_ = State::kRunning;
-                    last_frame_ms_ = now_ms;
+                    // 基础脚本结束：进入报文输出阶段（ADR-0012 §2.4），结束后才到 kRunning。
+                    state_ = State::kOutput;
                     phase_ = 0;
+                    output_index_ = 0;
+                    output_rerun_ = false;
+                    step_tries_ = 0;
+                    waiting_reply_ = false;
+                    reply_ok_ = false;
+                    reply_nack_ = false;
+                    stats_.applied_mask = 0U;
+                    stats_.unsupported_mask = 0U;
+                    stats_.failed_mask = 0U;
                     continue;
                 }
                 step_ = step; // 命令字节必须在应答到达前一直有效
@@ -369,6 +404,95 @@ Action Controller::poll(uint32_t now_ms) noexcept
             }
             return Action{};
 
+        case State::kOutput:
+            if (detected_.receiver == nullptr) {
+                state_ = State::kFailed;
+                ++stats_.failures;
+                deadline_ms_ = now_ms + timing_.retry_backoff_ms;
+                continue;
+            }
+            if (phase_ == 0) {
+                if (output_index_ >= kOutputMsgCount) {
+                    // 输出阶段完成：结果掩码留在 stats_，seq 自增供 main 判断“我请求的那次完成了”。
+                    state_ = State::kRunning;
+                    last_frame_ms_ = now_ms;
+                    phase_ = 0;
+                    ++stats_.output_runs;
+                    ++stats_.output_seq;
+                    continue;
+                }
+                const auto msg = static_cast<OutputMsg>(static_cast<uint8_t>(output_index_));
+                const uint32_t bit = 1U << static_cast<uint32_t>(output_index_);
+                if ((plan_.period_ms[output_index_] == 0U) && !output_rerun_) {
+                    // 开机首轮：关闭的语句本来就没开，不发命令（与 P3a 黄金脚本一致）。
+                    ++output_index_;
+                    continue;
+                }
+                output_cmd_.clear();
+                const fw::Status built = detected_.receiver->build_output(msg, plan_.period_ms[output_index_],
+                                                                          detected_.probe.model, plan_, output_cmd_);
+                if (built == fw::Status::kNotSupported) {
+                    // 型号不支持不是错误（ADR-0012 §2.5）：跳过并记入 unsupported_mask。
+                    stats_.unsupported_mask |= bit;
+                    ++output_index_;
+                    continue;
+                }
+                if (!fw::is_ok(built) || output_cmd_.len == 0U) {
+                    stats_.failed_mask |= bit;
+                    ++output_index_;
+                    continue;
+                }
+                ++stats_.steps_sent;
+                waiting_reply_ = true;
+                reply_ok_ = false;
+                reply_nack_ = false;
+                deadline_ms_ = now_ms + kStepTimeoutMs;
+                phase_ = 1;
+                Action action{};
+                action.kind = Action::Kind::kWrite;
+                action.bytes = output_cmd_.view();
+                return action;
+            }
+            if (phase_ == 1) {
+                if (reply_ok_ || reply_nack_) {
+                    const bool ok = reply_ok_ && !reply_nack_;
+                    waiting_reply_ = false;
+                    if (!ok) {
+                        ++stats_.step_nacks;
+                    }
+                    if (ok) {
+                        stats_.applied_mask |= (1U << static_cast<uint32_t>(output_index_));
+                    } else if (step_tries_ < timing_.step_retries) {
+                        ++step_tries_;
+                        phase_ = 0;
+                        continue;
+                    } else {
+                        // 单项失败只记 failed_mask，不把整个模块判定为 kFailed。
+                        stats_.failed_mask |= (1U << static_cast<uint32_t>(output_index_));
+                    }
+                    ++output_index_;
+                    step_tries_ = 0;
+                    phase_ = 0;
+                    continue;
+                }
+                if (!reached(now_ms, deadline_ms_)) {
+                    return Action{};
+                }
+                ++stats_.step_timeouts;
+                waiting_reply_ = false;
+                if (step_tries_ < timing_.step_retries) {
+                    ++step_tries_;
+                    phase_ = 0;
+                    continue;
+                }
+                stats_.failed_mask |= (1U << static_cast<uint32_t>(output_index_));
+                ++output_index_;
+                step_tries_ = 0;
+                phase_ = 0;
+                continue;
+            }
+            return Action{};
+
         case State::kRunning:
             if (static_cast<int32_t>(now_ms - last_frame_ms_) > static_cast<int32_t>(timing_.silence_ms)) {
                 ++stats_.reprobes;
@@ -418,12 +542,26 @@ void Controller::on_frame(const demux::Decoder &dec, std::span<const uint8_t> fr
         } else if (reply == Ack::kNack) {
             reply_nack_ = true;
         }
+        return;
+    }
+    if (state_ == State::kOutput && phase_ == 1 && waiting_reply_ && detected_.receiver != nullptr) {
+        const Ack reply = detected_.receiver->classify_reply(dec, frame, output_cmd_.view());
+        if (reply == Ack::kAck) {
+            reply_ok_ = true;
+        } else if (reply == Ack::kNack) {
+            reply_nack_ = true;
+        }
     }
 }
 
 const Receiver &Controller::receiver() const noexcept
 {
     return detected_.receiver != nullptr ? *detected_.receiver : null_receiver();
+}
+
+const Receiver &Controller::probe_receiver() const noexcept
+{
+    return probe_receiver_ != nullptr ? *probe_receiver_ : null_receiver();
 }
 
 const char *state_name(State state) noexcept
@@ -441,6 +579,8 @@ const char *state_name(State state) noexcept
         return "running";
     case State::kFailed:
         return "failed";
+    case State::kOutput:
+        return "output";
     default:
         return "unknown";
     }

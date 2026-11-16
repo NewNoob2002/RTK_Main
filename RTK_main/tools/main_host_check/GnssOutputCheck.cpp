@@ -1,4 +1,4 @@
-// host 验证：K4 GNSS 输出配置（gnss/out blob）、语句分类（含多 talker）、最新句缓存与超限查询、订阅降采样与断连清空。
+// host 验证：K4 GNSS 输出配置（gnss/out blob）、输出计划推导、最新句缓存与超限查询、订阅降采样与断连清空。
 // 线程：仅主机单线程测试运行，不依赖 FreeRTOS 或硬件。
 
 #include <array>
@@ -25,34 +25,49 @@ void check_impl(bool cond, const char *expr, int line) noexcept
 
 #define CHECK(expr) check_impl((expr), #expr, __LINE__)
 
-std::span<const uint8_t> as_bytes(std::string_view sv) noexcept
+/** P3b：输出计划由面板配置 + 频率推导（ADR-0012 §2.4）；语句分类改由驱动 classify_frame() 负责。 */
+void test_output_plan() noexcept
 {
-    return std::span<const uint8_t>{reinterpret_cast<const uint8_t *>(sv.data()), sv.size()};
-}
+    using app::data::GnssOutConfig;
+    namespace gn = ::gnss;
 
-void test_sentence_classification() noexcept
-{
-    using app::data::classify_gnss_sentence;
+    const auto idx = [](gn::OutputMsg msg) { return static_cast<size_t>(static_cast<uint8_t>(msg)); };
+    const GnssOutConfig def = GnssOutConfig::defaults();
 
-    // 所有 5 种 NMEA talker（GP/GN/BD/GL/GA）映射到对应类型下标。
-    CHECK(classify_gnss_sentence(as_bytes("$GPGGA,123519,4807.038,N*47\r\n")) == 0U);
-    CHECK(classify_gnss_sentence(as_bytes("$GNGGA,123519*00\r\n")) == 0U);
-    CHECK(classify_gnss_sentence(as_bytes("$BDGGA,123519*00\r\n")) == 0U);
-    CHECK(classify_gnss_sentence(as_bytes("$GNGST,024603.00*00\r\n")) == 3U);
-    CHECK(classify_gnss_sentence(as_bytes("$GPRMC,123519,A*00\r\n")) == 4U);
-    CHECK(classify_gnss_sentence(as_bytes("$GNRMC,123519,A*00\r\n")) == 4U);
-    CHECK(classify_gnss_sentence(as_bytes("$GPGSA,A,3*00\r\n")) == 5U);
-    CHECK(classify_gnss_sentence(as_bytes("$GLGSA,A,3*00\r\n")) == 5U);
+    // 默认配置、10 Hz、无 HEADINGA 能力：GGA/RMC/GSA/GST 跟频率，SATSINFOA 1 s，HEADINGA 不下发（与 P3a 脚本一致）。
+    const gn::OutputPlan plan = app::data::make_output_plan(def, 10U, true, 2U, 0U);
+    CHECK(plan.period_ms[idx(gn::OutputMsg::kGga)] == 100U);
+    CHECK(plan.period_ms[idx(gn::OutputMsg::kSatsInfo)] == 1000U);
+    CHECK(plan.period_ms[idx(gn::OutputMsg::kHeading)] == 0U);
+    CHECK(plan.period_ms[idx(gn::OutputMsg::kGst)] == 100U);
+    CHECK(plan.period_ms[idx(gn::OutputMsg::kRmc)] == 100U);
+    CHECK(plan.period_ms[idx(gn::OutputMsg::kGsa)] == 100U);
+    CHECK(plan.period_ms[idx(gn::OutputMsg::kGsv)] == 1000U);
+    CHECK(plan.port == 2U);
+    CHECK(plan.rate_hz == 10U);
 
-    // GSV 与无效前缀必须忽略。
-    CHECK(!classify_gnss_sentence(as_bytes("$GPGSV,1,1,00*79\r\n")).has_value());
-    CHECK(!classify_gnss_sentence(as_bytes("$GP\r\n")).has_value());
+    // 有双天线能力时 HEADINGA 才下发。
+    CHECK(app::data::make_output_plan(def, 10U, true, 2U, gn::cap::kHeading).period_ms[idx(gn::OutputMsg::kHeading)] ==
+          1000U);
 
-    // Unicore Hash 报文。
-    CHECK(classify_gnss_sentence(as_bytes("#SATSINFOA,98,0,GPS*00\r\n")) == 1U);
-    CHECK(classify_gnss_sentence(as_bytes("#HEADINGA,COM1,0*00\r\n")) == 2U);
-    CHECK(!classify_gnss_sentence(as_bytes("#VERSIONA,COM1*00\r\n")).has_value());
-    CHECK(!classify_gnss_sentence(as_bytes("")).has_value());
+    // 关掉 GSV 就是不下发（周期 0）。
+    CHECK(app::data::make_output_plan(def, 1U, false, 1U, 0U).period_ms[idx(gn::OutputMsg::kGsv)] == 0U);
+
+    // 掩码清零的语句不下发。
+    GnssOutConfig no_gga = def;
+    no_gga.mask = static_cast<uint8_t>(def.mask & ~0x01U);
+    CHECK(app::data::make_output_plan(no_gga, 1U, true, 2U, 0U).period_ms[idx(gn::OutputMsg::kGga)] == 0U);
+
+    // 自定义间隔：正数是频率（>=50 ms），负数是周期秒，0 是关闭。
+    GnssOutConfig custom = def;
+    custom.intervals = {2, -2, 1, 4, 0, -5};
+    const gn::OutputPlan out = app::data::make_output_plan(custom, 1U, true, 2U, gn::cap::kHeading);
+    CHECK(out.period_ms[idx(gn::OutputMsg::kGga)] == 500U);
+    CHECK(out.period_ms[idx(gn::OutputMsg::kSatsInfo)] == 2000U);
+    CHECK(out.period_ms[idx(gn::OutputMsg::kHeading)] == 1000U);
+    CHECK(out.period_ms[idx(gn::OutputMsg::kGst)] == 250U);
+    CHECK(out.period_ms[idx(gn::OutputMsg::kRmc)] == 0U);
+    CHECK(out.period_ms[idx(gn::OutputMsg::kGsa)] == 5000U);
 }
 
 void test_out_config_and_nvs_blob() noexcept
@@ -264,7 +279,7 @@ void test_push_gate() noexcept
 
 int main()
 {
-    test_sentence_classification();
+    test_output_plan();
     test_out_config_and_nvs_blob();
     test_latest_cache_and_query_caps();
     test_subscription_and_app_ring();

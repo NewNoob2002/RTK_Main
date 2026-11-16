@@ -1,12 +1,10 @@
-// GNSS App 数据通路辅助实现（K4 / ADR-0011）：语句分类、6 KiB 最新帧缓存、GnssOutConfig 编解码、订阅统计。
+// GNSS App 数据通路辅助实现（K4 / ADR-0011）：6 KiB 最新帧缓存、GnssOutConfig 编解码、输出计划、订阅统计。
 // 线程安全：GnssLatestCache 与 GnssAppSubState 使用注入锁；其余为纯函数。ISR 安全：否（带锁路径不可入 ISR）。
 
 #include "data/GnssOutput.hpp"
 
 #include <algorithm>
-
 #include <cstring>
-#include <string_view>
 
 namespace app::data {
 
@@ -20,37 +18,8 @@ constexpr std::array<uint16_t, kGnssAppMsgCount> kTypeMsgIds = {
     0x0004U, 0x0005U, 0x001FU, 0x0021U, 0x0022U, 0x0023U,
 };
 
-constexpr size_t kNmeaHeaderLen = 7U; // "$xxYYY,"
-constexpr size_t kNmeaTalkerEnd = 3U; // "$xx"
-constexpr size_t kNmeaTagLen = 3U;    // "GGA"/"GST"/"RMC"/"GSA"
-constexpr size_t kNmeaCommaPos = 6U;
-
-enum class SentenceType : uint8_t {
-    kGga = 0,
-    kSatsinfoa = 1,
-    kHeadinga = 2,
-    kGst = 3,
-    kRmc = 4,
-    kGsa = 5,
-};
-
-bool starts_with(std::span<const uint8_t> frame, std::string_view prefix) noexcept
-{
-    if (frame.size() < prefix.size()) {
-        return false;
-    }
-    return std::memcmp(frame.data(), prefix.data(), prefix.size()) == 0;
-}
-
-bool nmea_sentence_is(std::span<const uint8_t> frame, std::string_view tag3) noexcept
-{
-    if ((frame.size() < kNmeaHeaderLen) || (frame[0] != static_cast<uint8_t>('$')) ||
-        (frame[kNmeaCommaPos] != static_cast<uint8_t>(','))) {
-        return false;
-    }
-    const auto tag_span = frame.subspan(kNmeaTalkerEnd, kNmeaTagLen);
-    return std::memcmp(tag_span.data(), tag3.data(), kNmeaTagLen) == 0;
-}
+// 输出周期的基本单位（ADR-0012 §2.4：GGA/RMC/GSA/GST 跟 rate，SATSINFOA/HEADINGA/GSV 默认 1 s）。
+inline constexpr uint32_t kOneSecondMs = 1000U;
 
 } // namespace
 
@@ -92,37 +61,6 @@ void GnssPushGate::on_pushed(uint32_t now_ms, uint32_t period_ms) noexcept
         anchor_ms = now_ms;
     }
     armed = true;
-}
-
-std::optional<uint8_t> classify_gnss_sentence(std::span<const uint8_t> frame) noexcept
-{
-    if (frame.empty()) {
-        return std::nullopt;
-    }
-    if (frame[0] == static_cast<uint8_t>('$')) {
-        if (nmea_sentence_is(frame, "GGA")) {
-            return static_cast<uint8_t>(SentenceType::kGga);
-        }
-        if (nmea_sentence_is(frame, "GST")) {
-            return static_cast<uint8_t>(SentenceType::kGst);
-        }
-        if (nmea_sentence_is(frame, "RMC")) {
-            return static_cast<uint8_t>(SentenceType::kRmc);
-        }
-        if (nmea_sentence_is(frame, "GSA")) {
-            return static_cast<uint8_t>(SentenceType::kGsa);
-        }
-        return std::nullopt;
-    }
-    if (frame[0] == static_cast<uint8_t>('#')) {
-        if (starts_with(frame, "#SATSINFOA,")) {
-            return static_cast<uint8_t>(SentenceType::kSatsinfoa);
-        }
-        if (starts_with(frame, "#HEADINGA,")) {
-            return static_cast<uint8_t>(SentenceType::kHeadinga);
-        }
-    }
-    return std::nullopt;
 }
 
 bool GnssOutConfig::is_valid() const noexcept
@@ -188,6 +126,43 @@ fw::Result GnssOutConfig::decode(std::span<const uint8_t> in, GnssOutConfig &out
     }
     out = parsed;
     return fw::Result::kOk;
+}
+
+gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, bool gsv, uint8_t port,
+                                  uint32_t caps) noexcept
+{
+    gnss::OutputPlan plan{};
+    const uint8_t hz = (rate_hz == 0U) ? 1U : rate_hz;
+    const uint32_t locate_period_ms = kOneSecondMs / static_cast<uint32_t>(hz);
+    const GnssOutConfig dflt = GnssOutConfig::defaults();
+
+    // 下标与 gnss::OutputMsg 一致（kGga=0 … kGsa=5），App 侧 6 项与驱动 7 项共用前缀。
+    for (size_t i = 0; i < kGnssAppMsgCount; ++i) {
+        if ((out.mask & (1U << i)) == 0U) {
+            plan.period_ms[i] = 0U;
+            continue;
+        }
+        if (out.intervals[i] != dflt.intervals[i]) {
+            plan.period_ms[i] = core::services::GnssService::interval_to_period_ms(out.intervals[i]);
+            continue;
+        }
+        // 默认值沿用 P3a 流动站脚本（与黄金向量等价）：GGA/RMC/GSA/GST 跟定位频率，SATSINFOA 1 s，
+        // HEADINGA 1 s 且仅双天线型号下发。
+        const bool locate =
+            (i == static_cast<size_t>(gnss::OutputMsg::kGga)) || (i == static_cast<size_t>(gnss::OutputMsg::kRmc)) ||
+            (i == static_cast<size_t>(gnss::OutputMsg::kGsa)) || (i == static_cast<size_t>(gnss::OutputMsg::kGst));
+        if (locate) {
+            plan.period_ms[i] = locate_period_ms;
+        } else if (i == static_cast<size_t>(gnss::OutputMsg::kHeading)) {
+            plan.period_ms[i] = ((caps & gnss::cap::kHeading) != 0U) ? kOneSecondMs : 0U;
+        } else {
+            plan.period_ms[i] = kOneSecondMs;
+        }
+    }
+    plan.period_ms[static_cast<size_t>(gnss::OutputMsg::kGsv)] = gsv ? kOneSecondMs : 0U;
+    plan.port = port;
+    plan.rate_hz = hz;
+    return plan;
 }
 
 fw::Status GnssLatestCache::init(std::span<uint8_t> buf) noexcept

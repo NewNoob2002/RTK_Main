@@ -1,5 +1,6 @@
 // ComNav K803 驱动 host 测试：<OK/<ERROR 行解码、LOG VERSIONA ONCE 探测、NovAtel 风格脚本、应答匹配。
 // 实验性驱动：按 ADR-0010 §2.2 与公开的 NovAtel 兼容资料断言，未经实物验证。
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -11,20 +12,25 @@
 
 namespace {
 
-bool text_equals(std::span<const uint8_t> data, const char *text)
+constexpr uint32_t kTestBaud = 921600U;
+
+bool text_equals(std::span<const uint8_t> data, std::string_view text)
 {
-    size_t len = 0;
-    while (text[len] != '\0') {
-        if (len >= data.size() || data[len] != static_cast<uint8_t>(text[len])) {
+    if (data.size() != text.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (data[i] != static_cast<uint8_t>(text[i])) {
             return false;
         }
-        ++len;
     }
-    return len == data.size();
+    return true;
 }
 
-std::span<const uint8_t> bytes_of(const std::string &text)
+/** 测试里把字符串当只读字节看；span 无法引用字符数据，必须做一次重解释。 */
+std::span<const uint8_t> bytes_of(std::string_view text)
 {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) 只读视图，不写入
     return std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size());
 }
 
@@ -77,13 +83,11 @@ void test_rover_script()
     cfg.rate_hz = 1;
     cfg.gsv = true;
     cfg.port = 2;
-    cfg.port_baud = 921600;
+    cfg.port_baud = kTestBaud;
 
-    const char *expected[] = {"UNLOGALL COM2\r\n",           "LOG COM2 GPGGA ONTIME 1\r\n",
-                              "LOG COM2 GPRMC ONTIME 1\r\n", "LOG COM2 GPGSA ONTIME 1\r\n",
-                              "LOG COM2 GPGSV ONTIME 1\r\n", "MODE ROVER\r\n",
-                              "COM COM2 921600\r\n"};
-    for (size_t i = 0; i < 6; ++i) {
+    // P3b 之后基础脚本只剩三步：语句输出改由 build_output 逐项下发（ADR-0012 §2.4）。
+    const std::array<std::string_view, 3> expected{"UNLOGALL COM2\r\n", "MODE ROVER\r\n", "COM COM2 921600\r\n"};
+    for (size_t i = 0; i < 2; ++i) {
         gnss::ConfigStep step{};
         TEST_ASSERT_TRUE(gnss::comnav_receiver().rover_step(i, gnss::Model::kK803, cfg, step));
         TEST_ASSERT_TRUE(text_equals(step.cmd.view(), expected[i]));
@@ -91,22 +95,49 @@ void test_rover_script()
         TEST_ASSERT_EQUAL_UINT32(0, step.switch_baud);
     }
     gnss::ConfigStep last{};
-    TEST_ASSERT_TRUE(gnss::comnav_receiver().rover_step(6, gnss::Model::kK803, cfg, last));
-    TEST_ASSERT_TRUE(text_equals(last.cmd.view(), expected[6]));
+    TEST_ASSERT_TRUE(gnss::comnav_receiver().rover_step(2, gnss::Model::kK803, cfg, last));
+    TEST_ASSERT_TRUE(text_equals(last.cmd.view(), expected[2]));
     TEST_ASSERT_FALSE(last.expect_reply);
-    TEST_ASSERT_EQUAL_UINT32(921600, last.switch_baud);
+    TEST_ASSERT_EQUAL_UINT32(kTestBaud, last.switch_baud);
 
     gnss::ConfigStep none{};
-    TEST_ASSERT_FALSE(gnss::comnav_receiver().rover_step(7, gnss::Model::kK803, cfg, none));
+    TEST_ASSERT_FALSE(gnss::comnav_receiver().rover_step(3, gnss::Model::kK803, cfg, none));
 
-    // 20 Hz → 0.05；GSV 关闭后脚本少一步。
-    cfg.rate_hz = 20;
-    cfg.gsv = false;
-    gnss::ConfigStep fast{};
-    TEST_ASSERT_TRUE(gnss::comnav_receiver().rover_step(1, gnss::Model::kK803, cfg, fast));
-    TEST_ASSERT_TRUE(text_equals(fast.cmd.view(), "LOG COM2 GPGGA ONTIME 0.05\r\n"));
-    TEST_ASSERT_TRUE(gnss::comnav_receiver().rover_step(4, gnss::Model::kK803, cfg, fast));
-    TEST_ASSERT_TRUE(text_equals(fast.cmd.view(), "MODE ROVER\r\n"));
+    // 不改波特率时脚本只有两步。
+    cfg.port_baud = 0;
+    TEST_ASSERT_FALSE(gnss::comnav_receiver().rover_step(2, gnss::Model::kK803, cfg, none));
+}
+
+/** build_output：LOG/UNLOG 两种写法，周期 10 ms 粒度。 */
+void test_build_output()
+{
+    const gnss::Receiver &r = gnss::comnav_receiver();
+    gnss::OutputPlan plan{};
+    plan.port = 2;
+    gnss::CmdBuf cmd;
+
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kGga, 1000, gnss::Model::kK803, plan, cmd)));
+    TEST_ASSERT_TRUE(text_equals(cmd.view(), "LOG COM2 GPGGA ONTIME 1\r\n"));
+
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kGga, 200, gnss::Model::kK803, plan, cmd)));
+    TEST_ASSERT_TRUE(text_equals(cmd.view(), "LOG COM2 GPGGA ONTIME 0.2\r\n"));
+
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kGga, 0, gnss::Model::kK803, plan, cmd)));
+    TEST_ASSERT_TRUE(text_equals(cmd.view(), "UNLOG COM2 GPGGA\r\n"));
+
+    // 该型号不下发 SATSINFOA/HEADINGA。
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(fw::Status::kNotSupported),
+        static_cast<int>(r.build_output(gnss::OutputMsg::kSatsInfo, 1000, gnss::Model::kK803, plan, cmd)));
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kNotSupported),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kHeading, 1000, gnss::Model::kK803, plan, cmd)));
+
+    // 非 10 ms 倍数的周期无法表示。
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kInvalidArg),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kGga, 33, gnss::Model::kK803, plan, cmd)));
 }
 
 void test_match_reply()
@@ -143,16 +174,17 @@ void tearDown() {}
 // ---- 黄金向量比对（ADR-0012 P3a 第 3 步）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----
 #include "GoldenCheck.hpp"
 #include "GoldenComnav.inc"
+#include "PlanCheck.hpp"
 
 static void test_golden_probe()
 {
     TEST_ASSERT_TRUE(golden_check::probe_matches(gnss::comnav_receiver(), golden_Comnav::kProbe));
 }
 
-static void test_golden_rover_steps()
+/** P3b：基础脚本 + build_output 逐项下发，合起来的命令集合必须与基线脚本一致。 */
+static void test_golden_output_plan()
 {
-    const size_t bad =
-        golden_check::steps_mismatch(gnss::comnav_receiver(), golden_Comnav::kRover, golden_Comnav::kSteps);
+    const size_t bad = plan_check::plan_mismatch(gnss::comnav_receiver(), golden_Comnav::kRover, golden_Comnav::kSteps);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch), static_cast<uint32_t>(bad));
 }
 
@@ -179,7 +211,7 @@ int main(int, char **)
 {
     UNITY_BEGIN();
     RUN_TEST(test_golden_probe);
-    RUN_TEST(test_golden_rover_steps);
+    RUN_TEST(test_golden_output_plan);
     RUN_TEST(test_golden_probe_match);
     RUN_TEST(test_golden_replies);
     RUN_TEST(test_golden_caps);
@@ -187,6 +219,7 @@ int main(int, char **)
     RUN_TEST(test_build_probe);
     RUN_TEST(test_match_probe);
     RUN_TEST(test_rover_script);
+    RUN_TEST(test_build_output);
     RUN_TEST(test_match_reply);
     RUN_TEST(test_caps);
     return UNITY_END();

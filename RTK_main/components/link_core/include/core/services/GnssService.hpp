@@ -16,6 +16,8 @@ namespace core::services {
 
 inline constexpr size_t kGnssMsgCount = 6;
 inline constexpr uint32_t kGnssDefaultMask = 0;
+/** 未收到 GNSS 状态前的支持位假设：除 HEADINGA(bit 2) 外均可订阅（与 K4 行为一致）。 */
+inline constexpr uint32_t kGnssDefaultSupportedMask = 0x3BU;
 
 /** 0x04/0x05/0x1F/0x21/0x22/0x23 单次查询（interval==0）回调结果。 */
 struct GnssQueryResult {
@@ -30,7 +32,7 @@ using GnssMaskChangedFn = void (*)(void *ctx, uint32_t mask) noexcept;
 /**
  * GNSS 订阅与查询服务（ADR-0011 §6）：
  * - 路由 0x04(GGA)、0x05(SATSINFOA)、0x1F(HEADINGA)、0x21(GST)、0x22(RMC)、0x23(GSA)，仅允许 PHONE。
- * - interval != 0：按规则换算发送周期并开启对应 type 位订阅（0x1F 无航向能力时拒绝 02 02）。
+ * - interval != 0：按规则换算发送周期并开启对应 type 位订阅（接收机不支持该语句时拒绝 02 02，ADR-0012 §2.5）。
  * - interval == 0：关闭对应 type 位订阅，同时查询最新帧（<=256B 原文回复；无缓存/超长/不支持回 02 02）。
  * - 仅维护会话内订阅态，不写 NVS，断线重连通过 reset_session() 归零。
  */
@@ -49,11 +51,14 @@ public:
     /** 设置订阅掩码变化回调；线程安全：否（仅链路任务调用）。 */
     void set_mask_hook(GnssMaskChangedFn fn, void *ctx) noexcept;
 
-    /** 更新接收机是否支持 HEADINGA（0x1F）；线程安全：否（仅链路任务调用）。 */
-    void set_heading_supported(bool supported) noexcept;
+    /**
+     * 更新接收机支持的语句位掩码（bit 0..5 对应 0x04/0x05/0x1F/0x21/0x22/0x23，ADR-0012 §2.5）。
+     * 线程安全：否（仅链路任务调用）。
+     */
+    void set_supported_mask(uint32_t mask) noexcept;
 
-    /** 查询当前是否支持 HEADINGA（0x1F）；线程安全：否（仅链路任务调用）。 */
-    [[nodiscard]] bool heading_supported() const noexcept;
+    /** 查询当前支持位掩码；缺省 kGnssDefaultSupportedMask。线程安全：否（仅链路任务调用）。 */
+    [[nodiscard]] uint32_t supported_mask() const noexcept;
 
     /** 会话断开/重连时清零全部订阅掩码与周期，并在掩码变化时触发回调；线程安全：否。 */
     void reset_session() noexcept;
@@ -98,7 +103,7 @@ private:
     uint32_t active_mask_ = kGnssDefaultMask;
     std::array<uint32_t, kGnssMsgCount> periods_ms_{};
     uint32_t query_oversize_ = 0;
-    bool heading_supported_ = false;
+    uint32_t supported_mask_ = kGnssDefaultSupportedMask;
 };
 
 } // namespace core::services

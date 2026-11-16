@@ -12,6 +12,8 @@
 
 namespace {
 
+constexpr uint32_t kTestBaud = 921600U;
+
 using Bytes = std::vector<uint8_t>;
 
 Bytes make_frame(uint8_t cls, uint8_t id, const Bytes &payload)
@@ -143,8 +145,9 @@ static void test_rover_script()
     gnss::RoverConfig cfg{};
     cfg.rate_hz = 5;
     cfg.gsv = true;
-    cfg.port_baud = 921600;
+    cfg.port_baud = kTestBaud;
 
+    // P3b 之后基础脚本只剩两步：语句输出改由 build_output 逐项下发（ADR-0012 §2.4）。
     gnss::ConfigStep step{};
     TEST_ASSERT_TRUE(gnss::ublox_receiver().rover_step(0, gnss::Model::kZedF9p, cfg, step));
     TEST_ASSERT_TRUE(step.expect_reply);
@@ -153,26 +156,57 @@ static void test_rover_script()
     TEST_ASSERT_TRUE(has_item(step.cmd, 0x10740002U, 1U, 1));
 
     TEST_ASSERT_TRUE(gnss::ublox_receiver().rover_step(1, gnss::Model::kZedF9p, cfg, step));
-    TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100BBU, 1U, 1));
-    TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100ACU, 1U, 1));
-    TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100BFU, 1U, 1));
-    TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100D4U, 1U, 1));
-    TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100C3U, 1U, 1));
+    TEST_ASSERT_FALSE(step.expect_reply);
+    TEST_ASSERT_EQUAL_UINT32(kTestBaud, step.switch_baud);
+    TEST_ASSERT_TRUE(has_item(step.cmd, 0x40520001U, kTestBaud, 4));
     TEST_ASSERT_TRUE(valid_fletcher(Bytes(step.cmd.view().begin(), step.cmd.view().end())));
 
-    TEST_ASSERT_TRUE(gnss::ublox_receiver().rover_step(2, gnss::Model::kZedF9p, cfg, step));
-    TEST_ASSERT_FALSE(step.expect_reply);
-    TEST_ASSERT_EQUAL_UINT32(921600, step.switch_baud);
-    TEST_ASSERT_TRUE(has_item(step.cmd, 0x40520001U, 921600U, 4));
-
     gnss::ConfigStep none{};
-    TEST_ASSERT_FALSE(gnss::ublox_receiver().rover_step(3, gnss::Model::kZedF9p, cfg, none));
+    TEST_ASSERT_FALSE(gnss::ublox_receiver().rover_step(2, gnss::Model::kZedF9p, cfg, none));
 
-    cfg.gsv = false;
+    // 不改波特率时脚本只有一步。
     cfg.port_baud = 0;
-    TEST_ASSERT_TRUE(gnss::ublox_receiver().rover_step(1, gnss::Model::kZedF9p, cfg, step));
-    TEST_ASSERT_TRUE(has_item(step.cmd, 0x209100C3U, 0U, 1));
-    TEST_ASSERT_FALSE(gnss::ublox_receiver().rover_step(2, gnss::Model::kZedF9p, cfg, step));
+    TEST_ASSERT_FALSE(gnss::ublox_receiver().rover_step(1, gnss::Model::kZedF9p, cfg, none));
+}
+
+/** build_output：CFG-MSGOUT 单键 VALSET，值 = 每历元次数（周期 × 频率）。 */
+static void test_build_output()
+{
+    const gnss::Receiver &r = gnss::ublox_receiver();
+    gnss::OutputPlan plan{};
+    plan.port = 2;
+    plan.rate_hz = 5;
+    gnss::CmdBuf cmd;
+
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kGga, 200, gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(has_item(cmd, 0x209100BBU, 1U, 1));
+    TEST_ASSERT_TRUE(valid_fletcher(Bytes(cmd.view().begin(), cmd.view().end())));
+
+    // 1 Hz 下 2 s 周期 = 每两历元一次。
+    plan.rate_hz = 1;
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kRmc, 2000, gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(has_item(cmd, 0x209100ACU, 2U, 1));
+
+    // 周期 0 表示关闭。
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kGst, 0, gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(has_item(cmd, 0x209100D4U, 0U, 1));
+
+    // 20 Hz 下 50 ms 正好一个历元。
+    plan.rate_hz = 20;
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(r.build_output(gnss::OutputMsg::kGsv, 50, gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(has_item(cmd, 0x209100C3U, 1U, 1));
+
+    // 该系列没有 SATSINFOA/HEADINGA。
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(fw::Status::kNotSupported),
+        static_cast<int>(r.build_output(gnss::OutputMsg::kSatsInfo, 1000, gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(fw::Status::kNotSupported),
+        static_cast<int>(r.build_output(gnss::OutputMsg::kHeading, 1000, gnss::Model::kZedF9p, plan, cmd)));
 }
 
 static void test_match_reply()
@@ -213,15 +247,18 @@ static void test_caps()
 // ---- 黄金向量比对（ADR-0012 P3a 第 3 步）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----
 #include "GoldenCheck.hpp"
 #include "GoldenUblox.inc"
+#include "PlanCheck.hpp"
 
 static void test_golden_probe()
 {
     TEST_ASSERT_TRUE(golden_check::probe_matches(gnss::ublox_receiver(), golden_Ublox::kProbe));
 }
 
-static void test_golden_rover_steps()
+/** P3b：基础脚本 + build_output 逐项下发，合起来必须与基线脚本一致（按 VALSET 键值对比较）。 */
+static void test_golden_output_plan()
 {
-    const size_t bad = golden_check::steps_mismatch(gnss::ublox_receiver(), golden_Ublox::kRover, golden_Ublox::kSteps);
+    const size_t bad =
+        plan_check::ubx_plan_mismatch(gnss::ublox_receiver(), golden_Ublox::kRover, golden_Ublox::kSteps);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch), static_cast<uint32_t>(bad));
 }
 
@@ -247,13 +284,14 @@ int main(int, char **)
 {
     UNITY_BEGIN();
     RUN_TEST(test_golden_probe);
-    RUN_TEST(test_golden_rover_steps);
+    RUN_TEST(test_golden_output_plan);
     RUN_TEST(test_golden_probe_match);
     RUN_TEST(test_golden_replies);
     RUN_TEST(test_golden_caps);
     RUN_TEST(test_build_probe);
     RUN_TEST(test_match_probe);
     RUN_TEST(test_rover_script);
+    RUN_TEST(test_build_output);
     RUN_TEST(test_match_reply);
     RUN_TEST(test_caps);
     return UNITY_END();

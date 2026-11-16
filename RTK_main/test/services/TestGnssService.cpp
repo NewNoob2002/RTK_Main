@@ -1,4 +1,5 @@
-// GnssService 单元测试（K4 / ADR-0011）：6 路路由、interval 换算、0x1F 能力门限、<=256B 查询、>256B 计数与重连归零。
+// GnssService 单元测试（K4 / ADR-0011）：6 路路由、interval 换算、支持位掩码门限（ADR-0012 §2.5）、<=256B 查询、>256B
+// 计数与重连归零。
 
 #include <array>
 #include <cstdint>
@@ -38,6 +39,7 @@ inline constexpr uint16_t kMsgGga = 0x0004;
 inline constexpr uint16_t kMsgSat = 0x0005;
 inline constexpr uint16_t kMsgHeading = 0x001F;
 inline constexpr uint16_t kMsgGst = 0x0021;
+inline constexpr uint16_t kMsgGsa = 0x0023;
 inline constexpr uint8_t kResultOk = 0x01;
 inline constexpr uint8_t kResultFail = 0x02;
 inline constexpr size_t kRouteCountAll = 19;
@@ -163,7 +165,7 @@ void test_router_integration_with_all_services()
     TEST_ASSERT_EQUAL_UINT(kRouteCountAll, router.route_count());
 }
 
-void test_subscription_and_heading_gate()
+void test_subscription_and_capability_gate()
 {
     constexpr int8_t kSec5 = -5;
     constexpr uint32_t kTimeBase = 100;
@@ -191,8 +193,8 @@ void test_subscription_and_heading_gate()
     assert_reply_result(reply, kMsgHeading, proto::msg_type::kQueryRes, kResultFail);
     TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
 
-    // 开启航向能力后 0x1F 订阅成功；0x05(SATSINFOA) 负周期 -5 -> 5000ms。
-    gnss.set_heading_supported(true);
+    // 接收机上报支持 HEADINGA 后 0x1F 订阅成功；0x05(SATSINFOA) 负周期 -5 -> 5000ms。
+    gnss.set_supported_mask(core::services::kGnssDefaultSupportedMask | (1U << 2U));
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(DispatchResult::kReply),
         static_cast<uint8_t>(
@@ -213,6 +215,53 @@ void test_subscription_and_heading_gate()
     TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
     TEST_ASSERT_EQUAL_UINT32(0U, gnss.period_ms(1U));
     TEST_ASSERT_EQUAL_HEX32(0U, cache.last_mask);
+}
+
+/** 支持位掩码（ADR-0012 §2.5）：不支持的语句类型两个分支都回 02 02；改掩码不取消已有订阅。 */
+void test_unsupported_type_gate()
+{
+    constexpr uint32_t kTimeBase = 100;
+    constexpr uint32_t kStepMs = 10;
+    constexpr uint32_t kGsaBit = 1U << 5U;
+
+    GnssService gnss;
+    MockCache cache{};
+    gnss.set_query_hook(&query_cb, &cache);
+    gnss.set_mask_hook(&mask_cb, &cache);
+    gnss.set_supported_mask(core::services::kGnssDefaultSupportedMask & ~kGsaBit);
+
+    CommandRouter router;
+    const std::array<RouteTable, 1> tables = {gnss.table()};
+    TEST_ASSERT_TRUE(fw::is_ok(router.init(tables)));
+
+    Reply reply{};
+    // 开机订阅：GSA 不支持 -> 02 02，掩码保持 0。
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
+                            static_cast<uint8_t>(router.handle(
+                                Role::kPhone, make_req(kMsgGsa, proto::msg_type::kQuery, 1), kTimeBase, reply)));
+    assert_reply_result(reply, kMsgGsa, proto::msg_type::kQueryRes, kResultFail);
+    TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
+
+    // 关闭分支也一样被拒（不支持的类型不存在可关的订阅）。
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DispatchResult::kReply),
+        static_cast<uint8_t>(
+            router.handle(Role::kPhone, make_req(kMsgGsa, proto::msg_type::kQuery, 0), kTimeBase + kStepMs, reply)));
+    assert_reply_result(reply, kMsgGsa, proto::msg_type::kQueryRes, kResultFail);
+    TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
+
+    // 支持的 GGA 正常订阅。
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DispatchResult::kReply),
+        static_cast<uint8_t>(router.handle(Role::kPhone, make_req(kMsgGga, proto::msg_type::kSet, 1),
+                                           kTimeBase + (2U * kStepMs), reply)));
+    assert_reply_result(reply, kMsgGga, proto::msg_type::kSetRes, kResultOk);
+    TEST_ASSERT_EQUAL_HEX32(1U, gnss.active_mask());
+
+    // 接收机能力变化只更新白名单，不取消已有订阅。
+    gnss.set_supported_mask(core::services::kGnssDefaultSupportedMask & ~(1U << 0U));
+    TEST_ASSERT_EQUAL_HEX32(1U, gnss.active_mask());
+    TEST_ASSERT_EQUAL_UINT32(1000U, gnss.period_ms(0U));
 }
 
 void test_interval_zero_stops_and_queries_latest()
@@ -271,7 +320,8 @@ int main()
     UNITY_BEGIN();
     RUN_TEST(test_interval_conversion);
     RUN_TEST(test_router_integration_with_all_services);
-    RUN_TEST(test_subscription_and_heading_gate);
+    RUN_TEST(test_subscription_and_capability_gate);
+    RUN_TEST(test_unsupported_type_gate);
     RUN_TEST(test_interval_zero_stops_and_queries_latest);
     return UNITY_END();
 }

@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
@@ -36,33 +35,12 @@ constexpr uint32_t kByteMask = 0xFFU;
 constexpr size_t kMaxActionsPerPoll = 16U;
 constexpr uint32_t kBaudMin = 1200U;
 constexpr uint32_t kBaudMax = 2000000U;
-constexpr uint32_t kMsPerSec = 1000U;
-constexpr uint32_t kCentiDiv = 10U;
-constexpr size_t kOutCmdLineBytes = 64U;
-constexpr size_t kOutPeriodTextBytes = 16U;
+/** 输出/频率变更等待控制器落地的上限（毫秒）。 */
+constexpr uint32_t kApplyTimeoutMs = 5000U;
 
 void trace_gnss_sub(GnssSubTrace ev, uint32_t v0, uint32_t v1) noexcept
 {
     fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(ev), 0U, v0, v1);
-}
-
-void format_period_sec(int8_t interval, std::span<char> out) noexcept
-{
-    const uint32_t period_ms = core::services::GnssService::interval_to_period_ms(interval);
-    if ((period_ms % kMsPerSec) == 0U) {
-        (void)std::snprintf(out.data(), out.size(), "%lu", static_cast<unsigned long>(period_ms / kMsPerSec));
-    } else {
-        const uint32_t whole = period_ms / kMsPerSec;
-        const uint32_t centi = (period_ms % kMsPerSec) / kCentiDiv;
-        (void)std::snprintf(out.data(), out.size(), "%lu.%02lu", static_cast<unsigned long>(whole),
-                            static_cast<unsigned long>(centi));
-    }
-}
-
-bool out_cfg_differs_from_default(const data::GnssOutConfig &cfg) noexcept
-{
-    const auto def = data::GnssOutConfig::defaults();
-    return (cfg.mask != def.mask) || (cfg.intervals != def.intervals);
 }
 
 /** 拒绝原因在文本日志中的短名（explain 为空时的兜底，§2.11）。 */
@@ -81,13 +59,6 @@ const char *reject_cause_name(demux::RejectCause cause) noexcept
     }
 }
 
-/** 文本日志里可打印 ASCII 的下限（跳过空格，避免把分隔符带进名字）。 */
-constexpr uint8_t kTagPrintableMin = 0x21U;
-/** 文本日志里可打印 ASCII 的上限。 */
-constexpr uint8_t kTagPrintableMax = 0x7EU;
-constexpr uint8_t kCommaByte = static_cast<uint8_t>(',');
-/** 帧标识缓冲区：`UNICORE_CMD ` + 命令名足够，24 字节。 */
-constexpr size_t kFrameTagBytes = 24U;
 /** `GNSS ` + 帧标识 + 长度文本的整行缓冲。 */
 constexpr size_t kLogTagBytes = 48U;
 /** 拒绝原因文本缓冲（explain 输出在此缓冲内截断）。 */
@@ -103,58 +74,6 @@ constexpr uint32_t kByteLowNibbleBits = 4U;
 constexpr uint32_t kRtcmMsgMask = 0x0FFFU;
 /** UBX class/id 位于同步字之后。 */
 constexpr size_t kUbxClassOffset = 2U;
-
-/** 把 frame[start, size) 的 ASCII 名字拷进 out（最多 out.size()-1 字节），返回写入长度。 */
-size_t copy_word(const std::span<const uint8_t> frame, size_t start, std::span<char> out) noexcept
-{
-    size_t len = 0U;
-    for (size_t i = start; (i < frame.size()) && (len + 1U < out.size()); ++i) {
-        const uint8_t byte = frame[i];
-        if ((byte == kCommaByte) || (byte < kTagPrintableMin) || (byte > kTagPrintableMax)) {
-            break;
-        }
-        out[len] = static_cast<char>(byte);
-        ++len;
-    }
-    out[len] = '\0';
-    return len;
-}
-
-/** 生成一句帧标识，如 `NMEA GNGGA`、`UNICORE VERSIONA`、`RTCM3 1005`、`UBX 0x01/0x07`（§2.11）。 */
-void describe_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame, std::span<char> out) noexcept
-{
-    const std::string_view name{decoder.name};
-    std::array<char, kFrameTagBytes> word{};
-    if ((name == "NMEA") && (frame.size() > kNmeaTagLen)) {
-        // GGA/GSA/... 五位消息名紧跟 '$' 与两位 talker，可直接展示。
-        (void)copy_word(frame, kNmeaTagOffset, word);
-        std::snprintf(out.data(), out.size(), "NMEA %s", word.data());
-        return;
-    }
-    if ((name == "UnicoreHash") && (frame.size() > 2U)) {
-        (void)copy_word(frame, 1U, word);
-        std::snprintf(out.data(), out.size(), "UNICORE %s", word.data());
-        return;
-    }
-    if ((name == "UnicoreResp") && (frame.size() > kCommandTagOffset)) {
-        // "$command,<cmd>,response: ..."：命令名在第二个逗号之前。
-        (void)copy_word(frame, kCommandTagOffset, word);
-        std::snprintf(out.data(), out.size(), "UNICORE_CMD %s", word.data());
-        return;
-    }
-    if ((name == "RTCM3") && (frame.size() > kRtcmTagOffset + 1U)) {
-        const uint32_t msg = (static_cast<uint32_t>(frame[kRtcmTagOffset]) << kByteLowNibbleBits) |
-                             (static_cast<uint32_t>(frame[kRtcmTagOffset + 1U]) >> kByteLowNibbleBits);
-        std::snprintf(out.data(), out.size(), "RTCM3 %lu", static_cast<unsigned long>(msg & kRtcmMsgMask));
-        return;
-    }
-    if ((name == "UBX") && (frame.size() > kUbxClassOffset + 1U)) {
-        std::snprintf(out.data(), out.size(), "UBX 0x%02x/0x%02x", static_cast<unsigned>(frame[kUbxClassOffset]),
-                      static_cast<unsigned>(frame[kUbxClassOffset + 1U]));
-        return;
-    }
-    std::snprintf(out.data(), out.size(), "%s", decoder.name);
-}
 
 bool is_valid_rate_hz(uint8_t hz) noexcept
 {
@@ -204,23 +123,6 @@ void write_u32(uint32_t value, std::span<uint8_t> out) noexcept
         // out.size() >= 4 已在调用前校验；取字节无窄化丢失。
         out[i] = static_cast<uint8_t>((value >> (8U * i)) & kByteMask);
     }
-}
-
-::gnss::Family infer_probe_family(std::span<const uint8_t> bytes) noexcept
-{
-    constexpr uint8_t kUbxSync1 = 0xB5U;
-    constexpr uint8_t kUbxSync2 = 0x62U;
-    constexpr size_t kAsciiProbePrefix = 3U;
-    if ((bytes.size() >= 2U) && (bytes[0] == kUbxSync1) && (bytes[1] == kUbxSync2)) {
-        return ::gnss::Family::kUblox;
-    }
-    if ((bytes.size() >= kAsciiProbePrefix) && (bytes[0] == 'L') && (bytes[1] == 'O') && (bytes[2] == 'G')) {
-        return ::gnss::Family::kComnav;
-    }
-    if ((bytes.size() >= kAsciiProbePrefix) && (bytes[0] == 'V') && (bytes[1] == 'E') && (bytes[2] == 'R')) {
-        return ::gnss::Family::kUnicore;
-    }
-    return ::gnss::Family::kUnknown;
 }
 
 void add_unique_decoder(std::array<const demux::Decoder *, demux::kMaxDecoders> &out, size_t &count,
@@ -354,7 +256,11 @@ fw::Result GnssModule::init() noexcept
         }
     }
 
-    if (!controller().init(receivers, std::span<const uint32_t>{bauds_.data(), baud_count_}, cfg, hint_, timing)) {
+    // 输出计划是唯一来源（ADR-0012 §2.4）：先按默认值给一份，探测到型号后再按 caps 重算。
+    controller().set_output_plan(
+        data::make_output_plan(out_cfg_, cfg.rate_hz, cfg.gsv, static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT), 0U));
+    if (!controller().init(receivers, std::span<const uint32_t>{bauds_.data(), baud_count_}, cfg,
+                           controller().output_plan(), hint_, timing)) {
         return init_failed(fw::Result::kInvalidState);
     }
 
@@ -488,6 +394,7 @@ bool GnssModule::poll(uint32_t now_ms) noexcept
         return false;
     }
     poll_controller(now_ms);
+    tick_pending_apply(now_ms);
     const bool tx_progress = pump_rtcm_pipe();
 
     const auto cur_state = controller().state();
@@ -546,12 +453,35 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
             result.status = fw::Result::kInvalidArg;
             return;
         }
-        ensure_rover_cfg().rate_hz = cmd.args[0];
-        const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
-        if (!fw::is_ok(save_res)) {
-            result.status = save_res;
+        // 上一次变更尚未判定时拒绝：否则 pending_prev_* 会被暂存值覆盖，回滚到的不是 NVS 中的旧值。
+        if (pending_apply_ != PendingApply::kNone) {
+            result.status = fw::Result::kBusy;
             return;
         }
+        if (controller().state() != ::gnss::State::kRunning) {
+            // 与 kSetOut 一致：没有运行中的接收机可确认，直接落盘，下次配置完成时按新频率执行。
+            const uint8_t prev_rate = ensure_rover_cfg().rate_hz;
+            ensure_rover_cfg().rate_hz = cmd.args[0];
+            const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
+            if (!fw::is_ok(save_res)) {
+                ensure_rover_cfg().rate_hz = prev_rate;
+                result.status = save_res;
+                return;
+            }
+            controller().set_output_plan(make_plan());
+            last_apply_ = GnssApply::kOk;
+            ++apply_seq_;
+            publish_status(now);
+            result.status = fw::Result::kOk;
+            return;
+        }
+        // 两阶段提交（ADR-0012 §2.4）：先暂存并重配，成功后才写 NVS；失败由 tick_pending_apply 回滚。
+        pending_prev_rate_ = ensure_rover_cfg().rate_hz;
+        ensure_rover_cfg().rate_hz = cmd.args[0];
+        pending_apply_ = PendingApply::kRate;
+        pending_seq_ = controller().stats().output_seq + 1U;
+        pending_deadline_ms_ = now + kApplyTimeoutMs;
+        controller().set_output_plan(make_plan());
         controller().request_reconfigure(now);
         poll_controller(now);
         publish_status(now);
@@ -571,17 +501,38 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
                 result.status = fw::Result::kInvalidArg;
                 return;
             }
-            out_cfg_ = next;
-            ctx().data.gnss_out_cfg.write(out_cfg_);
-            const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
-            if (!fw::is_ok(save_res)) {
-                result.status = save_res;
+            if (pending_apply_ != PendingApply::kNone) {
+                result.status = fw::Result::kBusy;
                 return;
             }
-            if (controller().state() == ::gnss::State::kRunning) {
-                apply_out_to_receiver();
-            }
+            const data::GnssOutConfig prev = out_cfg_;
+            out_cfg_ = next;
+            ctx().data.gnss_out_cfg.write(out_cfg_);
             trace_gnss_sub(GnssSubTrace::kOutCfg, out_cfg_.mask, 0U);
+            if (controller().state() != ::gnss::State::kRunning) {
+                // 未进入 kRunning 时没有可下发的输出阶段：直接落盘，下次配置完成时按新表重算计划。
+                const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
+                if (!fw::is_ok(save_res)) {
+                    out_cfg_ = prev;
+                    ctx().data.gnss_out_cfg.write(out_cfg_);
+                    result.status = save_res;
+                    return;
+                }
+                controller().set_output_plan(make_plan());
+                last_apply_ = GnssApply::kOk;
+                ++apply_seq_;
+                publish_status(now);
+                result.status = fw::Result::kOk;
+                return;
+            }
+            pending_prev_out_ = prev;
+            pending_apply_ = PendingApply::kOut;
+            pending_seq_ = controller().stats().output_seq + 1U;
+            pending_deadline_ms_ = now + kApplyTimeoutMs;
+            controller().set_output_plan(make_plan());
+            static_cast<void>(controller().request_output(controller().output_plan(), now));
+            poll_controller(now);
+            publish_status(now);
             result.status = fw::Result::kOk;
             return;
         }
@@ -624,7 +575,7 @@ void GnssModule::handle_frame(const demux::Decoder &decoder, std::span<const uin
 {
     // 文本日志不经中断路径：本函数只由 kIo 任务的 feed() 调用（ADR-0009 §2.11）。
     std::array<char, kLogTagBytes> tag{};
-    describe_frame(decoder, frame, tag);
+    controller().receiver().frame_tag(decoder, frame, tag);
     fw::tlog(fw::TraceCat::kGnss, "%s, %lu bytes", tag.data(), static_cast<unsigned long>(frame.size()));
     fw::tlog_hex(fw::TraceCat::kGnss, frame);
 
@@ -642,10 +593,12 @@ void GnssModule::handle_frame(const demux::Decoder &decoder, std::span<const uin
     }
 
     // ADR-0011 §5：6 类可订阅语句同步更新 6 KiB 最新帧缓存，并按会话掩码与周期写入 App typed FanoutRing。
-    if ((&decoder == &demux::nmea::kDecoder) || (&decoder == &demux::unicore_hash::kDecoder)) {
-        const auto type_opt = data::classify_gnss_sentence(frame);
-        if (type_opt.has_value()) {
-            const uint8_t type_idx = *type_opt;
+    {
+        // 分类交给驱动（ADR-0012 §2.6）：基类覆盖 5 类 NMEA，Unicore 另加 #SATSINFOA/#HEADINGA。
+        const ::gnss::OutputMsg cls = controller().receiver().classify_frame(decoder, frame);
+        const auto idx = static_cast<size_t>(static_cast<uint8_t>(cls));
+        if ((cls != ::gnss::OutputMsg::kNone) && (idx < data::kGnssAppMsgCount)) {
+            const auto type_idx = static_cast<uint8_t>(idx);
             if (!ctx().data.gnss_latest.update(type_idx, frame)) {
                 trace_gnss_sub(GnssSubTrace::kAppDrop, 2U, type_idx);
             }
@@ -738,7 +691,8 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
             const auto st = controller().state();
             const auto cur_stats = controller().stats();
             if ((st == ::gnss::State::kProbing) && (cur_stats.probes_sent > prev_ctrl_stats_.probes_sent)) {
-                trace_gnss(GnssTrace::kProbeSend, static_cast<uint32_t>(infer_probe_family(act.bytes)), host_baud_);
+                trace_gnss(GnssTrace::kProbeSend, static_cast<uint32_t>(controller().probe_receiver().family()),
+                           host_baud_);
                 prev_ctrl_stats_.probes_sent = cur_stats.probes_sent;
             } else if ((st == ::gnss::State::kConfiguring) && (cur_stats.steps_sent > prev_ctrl_stats_.steps_sent)) {
                 const bool retried = (cur_stats.step_nacks > prev_ctrl_stats_.step_nacks) ||
@@ -793,9 +747,8 @@ void GnssModule::update_controller_status() noexcept
                 trace_gnss(GnssTrace::kStepAck, step_idx_, 0U);
             }
             persist_detected_hint();
-            if (out_cfg_differs_from_default(out_cfg_)) {
-                apply_out_to_receiver();
-            }
+            // 型号与 caps 已知，输出计划按支持的语句位重算一次（ADR-0012 §2.4）。
+            controller().set_output_plan(make_plan());
         } else if ((last_state_ == ::gnss::State::kRunning) && (cur_state == ::gnss::State::kProbing)) {
             if (!manual_reprobe_ && (cur_stats.reprobes > prev_ctrl_stats_.reprobes)) {
                 const uint32_t silence_ms = timing_.has_value() ? timing_->silence_ms : 0U;
@@ -860,6 +813,50 @@ bool GnssModule::pump_rtcm_pipe() noexcept
     return false;
 }
 
+::gnss::OutputPlan GnssModule::make_plan() noexcept
+{
+    uint8_t rate_hz = 0U;
+    bool gsv = false;
+    if (rover_cfg_.has_value()) {
+        rate_hz = rover_cfg_->rate_hz;
+        gsv = rover_cfg_->gsv;
+    }
+    const uint32_t caps = controller().detected().caps;
+    return data::make_output_plan(out_cfg_, rate_hz, gsv, static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT), caps);
+}
+
+void GnssModule::tick_pending_apply(uint32_t now_ms) noexcept
+{
+    if (pending_apply_ == PendingApply::kNone) {
+        return;
+    }
+    const auto stats = controller().stats();
+    const bool landed = stats.output_seq >= pending_seq_;
+    // 超时按有符号差判断，毫秒计数回绕时仍成立。
+    const bool timeout = static_cast<int32_t>(now_ms - pending_deadline_ms_) >= 0;
+    if (!landed && !timeout) {
+        return;
+    }
+    if (landed && (stats.failed_mask == 0U)) {
+        const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
+        last_apply_ = fw::is_ok(save_res) ? GnssApply::kOk : GnssApply::kFailed;
+    } else {
+        // 有语句失败或超时：NVS 保持旧值，界面与计划一起回滚到变更前。
+        if (pending_apply_ == PendingApply::kOut) {
+            out_cfg_ = pending_prev_out_;
+            ctx().data.gnss_out_cfg.write(out_cfg_);
+        } else {
+            ensure_rover_cfg().rate_hz = pending_prev_rate_;
+        }
+        last_apply_ = GnssApply::kRestored;
+        controller().set_output_plan(make_plan());
+        static_cast<void>(controller().request_output(controller().output_plan(), now_ms));
+    }
+    pending_apply_ = PendingApply::kNone;
+    ++apply_seq_;
+    publish_status(now_ms);
+}
+
 void GnssModule::publish_status(uint32_t now_ms) noexcept
 {
     GnssStatus st{};
@@ -874,6 +871,23 @@ void GnssModule::publish_status(uint32_t now_ms) noexcept
     }
     st.host_baud = host_baud_;
     st.ctrl = controller().stats();
+    st.output_seq = st.ctrl.output_seq;
+    st.applied_mask = st.ctrl.applied_mask;
+    st.unsupported_mask = st.ctrl.unsupported_mask;
+    st.failed_mask = st.ctrl.failed_mask;
+    st.last_apply = last_apply_;
+    st.apply_seq = apply_seq_;
+    static_assert(std::tuple_size_v<decltype(st.rx_period_ms)> == data::kGnssAppMsgCount);
+    const auto &plan = controller().output_plan();
+    for (size_t i = 0U; i < st.rx_period_ms.size(); ++i) {
+        st.rx_period_ms[i] = plan.period_ms[i];
+    }
+    // App 可见的支持位 = 驱动声明的语句位 & 本轮未报不支持 & 未失败（ADR-0012 §2.5）。
+    if (det.receiver != nullptr) {
+        constexpr uint32_t kAppBits = (1U << static_cast<uint32_t>(data::kGnssAppMsgCount)) - 1U;
+        const uint32_t declared = det.receiver->output_mask(det.probe.model) & kAppBits;
+        st.supported_mask = declared & ~st.ctrl.unsupported_mask & ~st.ctrl.failed_mask;
+    }
     st.nmea = parser().stats();
     st.uart_rx_bytes = uart_rx_bytes_;
     st.uart_tx_bytes = uart_tx_bytes_;
@@ -905,60 +919,6 @@ void GnssModule::persist_detected_hint() noexcept
     const fw::Result save_res = ctx().storage.save_keys(gnss_store::kCacheKeys);
     if (!fw::is_ok(save_res)) {
         // StorageModule::save_keys 内部已发 kStore trace；此处保留 hint_ 内存值避免每轮重复写盘。
-    }
-}
-
-void GnssModule::apply_out_to_receiver() noexcept
-{
-    const auto &det = controller().detected();
-    if (det.receiver == nullptr) {
-        return;
-    }
-    const auto fam = det.receiver->family();
-    if ((fam != ::gnss::Family::kUnicore) && (fam != ::gnss::Family::kComnav)) {
-        return;
-    }
-    static constexpr std::array<const char *, data::kGnssAppMsgCount> kUnicoreCmdNames = {
-        "GPGGA", "SATSINFOA", "HEADINGA", "GPGST", "GPRMC", "GPGSA",
-    };
-    const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
-    for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
-        if ((i == 2U) && ((det.caps & ::gnss::cap::kHeading) == 0U)) {
-            continue;
-        }
-        if ((fam == ::gnss::Family::kComnav) && ((i == 1U) || (i == 2U))) {
-            continue;
-        }
-        std::array<char, kOutCmdLineBytes> line{};
-        int len = 0;
-        const bool enabled = (out_cfg_.mask & (1U << i)) != 0U;
-        if (fam == ::gnss::Family::kUnicore) {
-            if (!enabled) {
-                len = std::snprintf(line.data(), line.size(), "UNLOG COM%d %s\r\n", CONFIG_RTK_GNSS_PORT,
-                                    kUnicoreCmdNames[i]);
-            } else {
-                std::array<char, kOutPeriodTextBytes> period{};
-                format_period_sec(out_cfg_.intervals[i], period);
-                len = std::snprintf(line.data(), line.size(), "%s COM%d %s\r\n", kUnicoreCmdNames[i],
-                                    CONFIG_RTK_GNSS_PORT, period.data());
-            }
-        } else {
-            if (!enabled) {
-                len = std::snprintf(line.data(), line.size(), "UNLOG COM%d %s\r\n", CONFIG_RTK_GNSS_PORT,
-                                    kUnicoreCmdNames[i]);
-            } else {
-                std::array<char, kOutPeriodTextBytes> period{};
-                format_period_sec(out_cfg_.intervals[i], period);
-                len = std::snprintf(line.data(), line.size(), "LOG COM%d %s ONTIME %s\r\n", CONFIG_RTK_GNSS_PORT,
-                                    kUnicoreCmdNames[i], period.data());
-            }
-        }
-        if (len > 0) {
-            const int written = uart_write_bytes(port, line.data(), static_cast<size_t>(len));
-            if (written > 0) {
-                uart_tx_bytes_ += static_cast<uint32_t>(written);
-            }
-        }
     }
 }
 

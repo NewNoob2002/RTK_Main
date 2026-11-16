@@ -78,14 +78,14 @@ void GnssService::set_mask_hook(GnssMaskChangedFn fn, void *ctx) noexcept
     mask_ctx_ = ctx;
 }
 
-void GnssService::set_heading_supported(bool supported) noexcept
+void GnssService::set_supported_mask(uint32_t mask) noexcept
 {
-    heading_supported_ = supported;
+    supported_mask_ = mask & ((1U << kGnssMsgCount) - 1U);
 }
 
-bool GnssService::heading_supported() const noexcept
+uint32_t GnssService::supported_mask() const noexcept
 {
-    return heading_supported_;
+    return supported_mask_;
 }
 
 void GnssService::reset_session() noexcept
@@ -180,7 +180,7 @@ DispatchResult GnssService::handle_frame(const proto::FrameView &frame, Reply &r
             mask_fn_(mask_ctx_, active_mask_);
         }
 
-        if ((frame.msg_id == kIdHeading) && !heading_supported_) {
+        if ((supported_mask_ & bit) == 0U) {
             return reply_result(reply, frame.msg_id, frame.type, kResultFail);
         }
         if (query_fn_ == nullptr) {
@@ -199,7 +199,7 @@ DispatchResult GnssService::handle_frame(const proto::FrameView &frame, Reply &r
         return reply_build(reply, frame.msg_id, frame.type, std::span<const uint8_t>{buf.data(), q.len});
     }
 
-    if ((frame.msg_id == kIdHeading) && !heading_supported_) {
+    if ((supported_mask_ & bit) == 0U) {
         return reply_result(reply, frame.msg_id, frame.type, kResultFail);
     }
 

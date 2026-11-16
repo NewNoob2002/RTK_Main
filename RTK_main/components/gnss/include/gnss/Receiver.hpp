@@ -2,6 +2,7 @@
 // 驱动只负责“字节怎么写、应答怎么认、帧是哪一类”，不做 IO、不计时；时序/重试集中在 gnss::Controller。
 // 所有成员函数 const noexcept、无可变状态：同样输入产生同样字节，便于重试与主机逐字节测试。
 // 线程安全：是（纯函数；实例为 constinit 静态对象，构造后只读）。ISR 安全：是（不阻塞、不分配）。
+// P3b 修订（ADR-0012 §2.4）：新增 OutputPlan.rate_hz 与 build_output()，语句输出不再写死在 rover 脚本里。
 // 冻结接口（ADR-0012 §3）。实现方不得修改；变更须先修订 ADR-0012。
 #pragma once
 
@@ -96,7 +97,8 @@ enum class Ack : uint8_t {
  */
 struct OutputPlan {
     std::array<uint32_t, kOutputMsgCount> period_ms{};
-    uint8_t port = 2; // 模块上接 ESP32 的口号（UM980 COM2；F9P UART1=1）
+    uint8_t port = 2;    // 模块上接 ESP32 的口号（UM980 COM2；F9P UART1=1）
+    uint8_t rate_hz = 1; // 导航频率（u-blox 需要把周期换算成每历元次数）
 };
 
 /**

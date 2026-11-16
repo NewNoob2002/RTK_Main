@@ -156,19 +156,19 @@ static void test_frame_tags()
     TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(base.frame_tag(demux::nmea::kDecoder, bytes_of(gga), tag)));
 }
 
-// 报文掩码：默认 GGA|RMC|GSA|GSV；Unicore 追加 SATSINFOA，双天线型号再追加 HEADINGA。
+// 报文掩码：默认 GGA|RMC|GSA|GSV；Unicore 追加 SATSINFOA 与 GPGST，双天线型号再追加 HEADINGA。
 static void test_output_masks()
 {
     const uint32_t base_mask = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 6); // GGA|RMC|GSA|GSV
     TEST_ASSERT_EQUAL_UINT32(0, gnss::null_receiver().output_mask(gnss::Model::kUm982));
     if (kHasUnicore) {
         const uint32_t single = gnss::unicore_receiver().output_mask(gnss::Model::kUm980);
-        TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 1), single); // + kSatsInfo
+        TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 1) | (1U << 3), single); // + kSatsInfo + kGst
         const uint32_t dual = gnss::unicore_receiver().output_mask(gnss::Model::kUm982);
-        TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 1) | (1U << 2), dual); // + kHeading
+        TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 1) | (1U << 2) | (1U << 3), dual); // + kHeading
     }
     if (kHasUblox) {
-        TEST_ASSERT_EQUAL_UINT32(base_mask, gnss::ublox_receiver().output_mask(gnss::Model::kZedF9p));
+        TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 3), gnss::ublox_receiver().output_mask(gnss::Model::kZedF9p));
     }
 }
 

@@ -33,9 +33,6 @@ constexpr uint8_t kHexDigitOffset = 10U; // 'A' 的数值
 constexpr uint8_t kHexShift = 4U;
 constexpr std::size_t kMinReplyBytes = 6U; // 最短应答 ",OK*" 一类
 constexpr std::size_t kTailBytes = 5U;     // "*hh\r\n"
-constexpr uint8_t kRate20Hz = 20U;
-constexpr uint8_t kRate10Hz = 10U;
-constexpr uint8_t kRate5Hz = 5U;
 constexpr uint32_t kConfigTimeoutMs = 500U;
 
 // $command 应答（match_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器，缺一则对应帧落入 unknown。
@@ -81,28 +78,49 @@ bool append_uint(CmdBuf &out, uint32_t value) noexcept
     return true;
 }
 
-// 频率参数按手册：1/2/5/10/20 Hz → "1"/"0.5"/"0.2"/"0.1"/"0.05"；不支持的值向下取到最近的频点。
-const char *period_for(uint8_t rate_hz) noexcept
-{
-    if (rate_hz >= kRate20Hz) {
-        return "0.05";
-    }
-    if (rate_hz >= kRate10Hz) {
-        return "0.1";
-    }
-    if (rate_hz >= kRate5Hz) {
-        return "0.2";
-    }
-    if (rate_hz >= 2U) {
-        return "0.5";
-    }
-    return "1";
-}
+// 报文体名字（下标 = OutputMsg）：与大写常量同名，便于与手册/日志对照。
+constexpr std::array<const char *, kOutputMsgCount> kOutputNames = {
+    "GPGGA", "SATSINFOA", "HEADINGA", "GPGST", "GPRMC", "GPGSA", "GPGSV",
+};
 
-bool append_message(CmdBuf &out, const char *name, uint8_t port, const char *period) noexcept
+constexpr uint32_t kMsPerSecond = 1000U;
+constexpr uint32_t kCentiPerSecond = 100U;
+/** 响应尾部：最少的 `*hh` 字节数，以及 '*' 距帧尾的偏移（沿用旧实现，ADR-0010）。 */
+constexpr size_t kMinTailBytes = 3U;
+constexpr size_t kStarFromEnd = 5U;
+/** 命令周期的最小粒度：接收机只接受 10 ms 整数倍。 */
+constexpr uint32_t kMillisPerCentiSecond = 10U;
+
+// 把周期毫秒写成人可读秒文本（最多两位小数，如 0.05/0.2/1/5）：Unicore 只接受 10 ms 整数倍。
+bool append_period(CmdBuf &out, uint32_t period_ms) noexcept
 {
-    return out.append(std::string_view(name)) && out.append(" COM") && append_uint(out, port) && out.append(" ") &&
-           out.append(std::string_view(period)) && out.append("\r\n");
+    if ((period_ms % kMillisPerCentiSecond) != 0U) {
+        return false;
+    }
+    const uint32_t whole = period_ms / kMsPerSecond;
+    // 四舍五入到百分位：period_ms 已是 10 ms 倍数，centi 必为整数。
+    const uint32_t centi = (period_ms % kMsPerSecond) / 10U;
+    if (whole == 0U) {
+        if (!out.append("0")) {
+            return false;
+        }
+    } else if (!append_uint(out, whole)) {
+        return false;
+    }
+    if (centi == 0U) {
+        return true;
+    }
+    if (!out.append(".")) {
+        return false;
+    }
+    // 只写有效数字：100 ms 写 "0.1"、500 ms 写 "0.5"，50 ms 写 "0.05"（与基线脚本一致）。
+    if ((centi % kMillisPerCentiSecond) == 0U) {
+        return append_uint(out, centi / kMillisPerCentiSecond);
+    }
+    if ((centi < kMillisPerCentiSecond) && !out.append("0")) {
+        return false;
+    }
+    return append_uint(out, centi);
 }
 
 // 取 frame 中 pos 之后的第一个引号字段；成功时 out 指向引号内文本，pos 移到结束引号之后。
@@ -379,14 +397,13 @@ bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, Prob
         return false;
     }
     Model model = Model::kUnknown;
-    if (quoted_equals(model_text, "UM980")) {
-        model = Model::kUm980;
-    } else if (quoted_equals(model_text, "UM981")) {
+    if (quoted_equals(model_text, "UM981")) {
         model = Model::kUm981;
     } else if (quoted_equals(model_text, "UM982")) {
         model = Model::kUm982;
-    } else if (quoted_starts_with(model_text, "UM9")) {
-        model = Model::kUm980; // 其他 UM9xx（UM960/UM960L 等）按 UM980 能力处理（ADR-0010 §2.2）
+    } else if (quoted_equals(model_text, "UM980") || quoted_starts_with(model_text, "UM9")) {
+        // 其他 UM9xx（UM960/UM960L 等）按 UM980 能力处理（ADR-0010 §2.2）。
+        model = Model::kUm980;
     } else {
         return false;
     }
@@ -418,51 +435,16 @@ uint32_t model_caps(Model model) noexcept;
 
 bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
 {
-    const char *period = period_for(cfg.rate_hz);
+    (void)model; // 基础脚本与型号无关；HEADINGA/SATSINFOA 改由输出阶段（build_output）下发
     CmdBuf cmd;
     size_t next = 0;
 
     if (index == next) {
+        // 先关掉全部输出，再由输出阶段按 OutputPlan 重新开启。
         return cmd.append("UNLOG COM") && append_uint(cmd, cfg.port) && cmd.append("\r\n") &&
                finish_step(cmd, true, 0, out);
     }
     ++next;
-    if (index == next) {
-        return append_message(cmd, "GPGGA", cfg.port, period) && finish_step(cmd, true, 0, out);
-    }
-    ++next;
-    if (index == next) {
-        return append_message(cmd, "GPRMC", cfg.port, period) && finish_step(cmd, true, 0, out);
-    }
-    ++next;
-    if (index == next) {
-        return append_message(cmd, "GPGSA", cfg.port, period) && finish_step(cmd, true, 0, out);
-    }
-    ++next;
-    if (index == next) {
-        // ADR-0010 §2.9：GPGST 与定位同频输出，供 App 0x21 订阅与查询。
-        return append_message(cmd, "GPGST", cfg.port, period) && finish_step(cmd, true, 0, out);
-    }
-    ++next;
-    if (index == next) {
-        // ADR-0010 §2.9：SATSINFOA 固定 1 Hz，避免高速率下长 ASCII 帧占满串口带宽。
-        return append_message(cmd, "SATSINFOA", cfg.port, "1") && finish_step(cmd, true, 0, out);
-    }
-    ++next;
-    if (cfg.gsv) {
-        if (index == next) {
-            // GSV 与定位同频，但至少 1 Hz，避免高速率时刷爆串口。
-            return append_message(cmd, "GPGSV", cfg.port, "1") && finish_step(cmd, true, 0, out);
-        }
-        ++next;
-    }
-    if ((model_caps(model) & cap::kHeading) != 0U) {
-        if (index == next) {
-            // 仅双天线型号（UM982）开启 HEADINGA，不在单天线型号上强开。
-            return append_message(cmd, "HEADINGA", cfg.port, "1") && finish_step(cmd, true, 0, out);
-        }
-        ++next;
-    }
     if (index == next) {
         return cmd.append("MODE ROVER\r\n") && finish_step(cmd, true, 0, out);
     }
@@ -482,8 +464,8 @@ Ack reply_ack(const demux::Decoder &dec, std::span<const uint8_t> frame, std::sp
     }
     const size_t size = frame.size();
     const size_t prefix_len = kCommandPrefix.size();
-    if (size < prefix_len + kResponseTag.size() + 3 || frame[size - 1] != kLf || frame[size - 2] != kCr ||
-        frame[size - 5] != kStar) {
+    if (size < prefix_len + kResponseTag.size() + kMinTailBytes || frame[size - 1] != kLf || frame[size - 2] != kCr ||
+        frame[size - kStarFromEnd] != kStar) {
         return Ack::kNone;
     }
 
@@ -520,7 +502,7 @@ Ack reply_ack(const demux::Decoder &dec, std::span<const uint8_t> frame, std::sp
     }
 
     size_t text_begin = sep + kResponseTag.size();
-    size_t text_end = size - 5; // '*' 之前
+    size_t text_end = size - kStarFromEnd; // '*' 之前
     while (text_end > text_begin && frame[text_end - 1] == static_cast<uint8_t>(' ')) {
         --text_end;
     }
@@ -547,7 +529,7 @@ uint32_t model_caps(Model model) noexcept
 namespace gnss {
 
 namespace {
-constinit const UnicoreReceiver kUnicoreReceiver{};
+constinit const UnicoreReceiver s_unicoreReceiver{};
 }
 
 Family UnicoreReceiver::family() const noexcept
@@ -608,15 +590,12 @@ size_t UnicoreReceiver::frame_tag(const demux::Decoder &dec, std::span<const uin
                                   std::span<char> out) const noexcept
 {
     const std::string_view name{dec.name};
-    std::array<char, detail::kFrameTagBytes> word{};
-    if (name == "UnicoreHash" && frame.size() > 2U) {
-        (void)detail::copy_word(frame, 1U, word); // 跳过 '#'
-        return detail::format_tag(out, "UNICORE %s", word.data());
+    if (name == "UnicoreHash" && frame.size() > detail::kNmeaTagOffset) {
+        return detail::tag_with_word(out, "UNICORE ", frame, detail::kNmeaTagOffset);
     }
     if (name == "UnicoreResp" && frame.size() > detail::kCommandTagOffset) {
         // "$command,<cmd>,response: ..."：命令名在第二个逗号之前。
-        (void)detail::copy_word(frame, detail::kCommandTagOffset, word);
-        return detail::format_tag(out, "UNICORE_CMD %s", word.data());
+        return detail::tag_with_word(out, "UNICORE_CMD ", frame, detail::kCommandTagOffset);
     }
     return Receiver::frame_tag(dec, frame, out);
 }
@@ -625,16 +604,50 @@ uint32_t UnicoreReceiver::output_mask(Model model) const noexcept
 {
     constexpr uint32_t kSatsInfoBit = 1U << static_cast<uint32_t>(OutputMsg::kSatsInfo);
     constexpr uint32_t kHeadingBit = 1U << static_cast<uint32_t>(OutputMsg::kHeading);
-    uint32_t mask = Receiver::output_mask(model) | kSatsInfoBit;
+    constexpr uint32_t kGstBit = 1U << static_cast<uint32_t>(OutputMsg::kGst);
+    // UM9xx 都能输出 GPGST（旧脚本一直下发 GPGST），基线基类默认只含 GGA/RMC/GSA/GSV。
+    uint32_t mask = Receiver::output_mask(model) | kSatsInfoBit | kGstBit;
     if ((unicore::model_caps(model) & cap::kHeading) != 0U) {
         mask |= kHeadingBit; // 仅双天线型号（UM982）有 HEADINGA
     }
     return mask;
 }
 
+fw::Status UnicoreReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+                                         CmdBuf &out) const noexcept
+{
+    out.clear();
+    const auto idx = static_cast<size_t>(static_cast<uint8_t>(msg));
+    if ((msg == OutputMsg::kNone) || (idx >= unicore::kOutputNames.size())) {
+        return fw::Status::kInvalidArg;
+    }
+    if ((msg == OutputMsg::kHeading) && ((unicore::model_caps(model) & cap::kHeading) == 0U)) {
+        return fw::Status::kNotSupported; // 单天线型号没有 HEADINGA
+    }
+    const char *name = unicore::kOutputNames[idx];
+    if (!out.append(name)) {
+        return fw::Status::kInvalidArg;
+    }
+    if (period_ms == 0U) {
+        // 关闭该类：UNLOG COMn <name>（与旧 apply 旁路一致）。
+        out.clear();
+        if (!out.append("UNLOG COM") || !unicore::append_uint(out, plan.port) || !out.append(" ") ||
+            !out.append(std::string_view{name}) || !out.append("\r\n")) {
+            return fw::Status::kInvalidArg;
+        }
+        return fw::Status::kOk;
+    }
+    if (!out.append(" COM") || !unicore::append_uint(out, plan.port) || !out.append(" ") ||
+        !unicore::append_period(out, period_ms) || !out.append("\r\n")) {
+        out.clear();
+        return fw::Status::kInvalidArg;
+    }
+    return fw::Status::kOk;
+}
+
 const Receiver &unicore_receiver() noexcept
 {
-    return kUnicoreReceiver;
+    return s_unicoreReceiver;
 }
 
 } // namespace gnss

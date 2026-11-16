@@ -24,11 +24,17 @@ constexpr uint8_t kPrintableMin = 0x20U;
 constexpr uint8_t kPrintableMax = 0x7EU;
 constexpr uint8_t kDecimalBase = 10U;
 constexpr uint8_t kUintDigits = 10U;
-constexpr uint8_t kRate20Hz = 20U;
-constexpr uint8_t kRate10Hz = 10U;
-constexpr uint8_t kRate5Hz = 5U;
 constexpr std::size_t kMinPromptBytes = 4U; // 最短有效应答 "<x\r\n"
 constexpr uint32_t kConfigTimeoutMs = 500U;
+constexpr uint32_t kMsPerSecond = 1000U;
+constexpr uint32_t kCentiPerSecond = 100U;
+/** 命令周期的最小粒度：接收机只接受 10 ms 整数倍。 */
+constexpr uint32_t kMillisPerCentiSecond = 10U;
+
+// 报文名字（下标 = OutputMsg）。ComNav 只支持这 4 类 NMEA。
+constexpr std::array<const char *, kOutputMsgCount> kOutputNames = {
+    "GPGGA", "SATSINFOA", "HEADINGA", "GPGST", "GPRMC", "GPGSA", "GPGSV",
+};
 
 // <OK 提示符应答（match_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器。
 constexpr std::array<const demux::Decoder *, 2> kDecoders{&kPromptDecoder, &demux::unicore_hash::kDecoder};
@@ -55,28 +61,35 @@ bool append_uint(CmdBuf &out, uint32_t value) noexcept
     return true;
 }
 
-const char *period_for(uint8_t rate_hz) noexcept
+// 把周期毫秒写成人可读秒文本（最多两位小数，如 0.05/0.2/1/5）：ONTIME 只接受 10 ms 整数倍。
+bool append_period(CmdBuf &out, uint32_t period_ms) noexcept
 {
-    if (rate_hz >= kRate20Hz) {
-        return "0.05";
+    if ((period_ms % kMillisPerCentiSecond) != 0U) {
+        return false;
     }
-    if (rate_hz >= kRate10Hz) {
-        return "0.1";
+    const uint32_t whole = period_ms / kMsPerSecond;
+    const uint32_t centi = (period_ms % kMsPerSecond) / 10U;
+    if (whole == 0U) {
+        if (!out.append("0")) {
+            return false;
+        }
+    } else if (!append_uint(out, whole)) {
+        return false;
     }
-    if (rate_hz >= kRate5Hz) {
-        return "0.2";
+    if (centi == 0U) {
+        return true;
     }
-    if (rate_hz >= 2U) {
-        return "0.5";
+    if (!out.append(".")) {
+        return false;
     }
-    return "1";
-}
-
-bool append_log(CmdBuf &out, const char *message, uint8_t port, const char *period) noexcept
-{
-    return out.append("LOG COM") && append_uint(out, port) && out.append(" ") &&
-           out.append(std::string_view(message)) && out.append(" ONTIME ") && out.append(std::string_view(period)) &&
-           out.append("\r\n");
+    // 只写有效数字：100 ms 写 "0.1"、500 ms 写 "0.5"，50 ms 写 "0.05"（与基线脚本一致）。
+    if ((centi % kMillisPerCentiSecond) == 0U) {
+        return append_uint(out, centi / kMillisPerCentiSecond);
+    }
+    if ((centi < kMillisPerCentiSecond) && !out.append("0")) {
+        return false;
+    }
+    return append_uint(out, centi);
 }
 
 bool starts_with(std::span<const uint8_t> text, std::string_view prefix) noexcept
@@ -263,34 +276,16 @@ bool finish_step(CmdBuf &cmd, bool expect_reply, uint32_t switch_baud, ConfigSte
 
 bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
 {
-    (void)model; // 目前只覆盖 K803
-    const char *period = period_for(cfg.rate_hz);
+    (void)model; // 目前只覆盖 K803；报文输出改由输出阶段（build_output）下发
     CmdBuf cmd;
     size_t next = 0;
 
     if (index == next) {
+        // 先关掉全部输出，再由输出阶段按 OutputPlan 重新开启。
         return cmd.append("UNLOGALL COM") && append_uint(cmd, cfg.port) && cmd.append("\r\n") &&
                finish_step(cmd, true, 0, out);
     }
     ++next;
-    if (index == next) {
-        return append_log(cmd, "GPGGA", cfg.port, period) && finish_step(cmd, true, 0, out);
-    }
-    ++next;
-    if (index == next) {
-        return append_log(cmd, "GPRMC", cfg.port, period) && finish_step(cmd, true, 0, out);
-    }
-    ++next;
-    if (index == next) {
-        return append_log(cmd, "GPGSA", cfg.port, period) && finish_step(cmd, true, 0, out);
-    }
-    ++next;
-    if (cfg.gsv) {
-        if (index == next) {
-            return append_log(cmd, "GPGSV", cfg.port, "1") && finish_step(cmd, true, 0, out);
-        }
-        ++next;
-    }
     if (index == next) {
         return cmd.append("MODE ROVER\r\n") && finish_step(cmd, true, 0, out);
     }
@@ -330,7 +325,7 @@ uint32_t model_caps(Model model) noexcept
 namespace gnss {
 
 namespace {
-constinit const ComnavReceiver kComnavReceiver{};
+constinit const ComnavReceiver s_comnavReceiver{};
 }
 
 Family ComnavReceiver::family() const noexcept
@@ -375,9 +370,49 @@ Ack ComnavReceiver::classify_reply(const demux::Decoder &dec, std::span<const ui
     return comnav::reply_ack(dec, frame, sent);
 }
 
+uint32_t ComnavReceiver::output_mask(Model model) const noexcept
+{
+    // K803 只能输出这四类 NMEA；SATSINFOA/HEADINGA/GST 一律 kNotSupported（与旧脚本一致）。
+    constexpr uint32_t kGgaBit = 1U << static_cast<uint32_t>(OutputMsg::kGga);
+    constexpr uint32_t kRmcBit = 1U << static_cast<uint32_t>(OutputMsg::kRmc);
+    constexpr uint32_t kGsaBit = 1U << static_cast<uint32_t>(OutputMsg::kGsa);
+    constexpr uint32_t kGsxBit = 1U << static_cast<uint32_t>(OutputMsg::kGsv);
+    static_cast<void>(model); // 单型号
+    return kGgaBit | kRmcBit | kGsaBit | kGsxBit;
+}
+
+fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+                                        CmdBuf &out) const noexcept
+{
+    out.clear();
+    const auto idx = static_cast<size_t>(static_cast<uint8_t>(msg));
+    if ((msg == OutputMsg::kNone) || (idx >= comnav::kOutputNames.size())) {
+        return fw::Status::kInvalidArg;
+    }
+    if ((output_mask(model) & (1U << static_cast<uint32_t>(msg))) == 0U) {
+        return fw::Status::kNotSupported;
+    }
+    const char *name = comnav::kOutputNames[idx];
+    if (period_ms == 0U) {
+        // 关闭该类：UNLOG COMn <name>（与旧 apply 旁路一致）。
+        if (!out.append("UNLOG COM") || !comnav::append_uint(out, plan.port) || !out.append(" ") ||
+            !out.append(std::string_view{name}) || !out.append("\r\n")) {
+            return fw::Status::kInvalidArg;
+        }
+        return fw::Status::kOk;
+    }
+    if (!out.append("LOG COM") || !comnav::append_uint(out, plan.port) || !out.append(" ") ||
+        !out.append(std::string_view{name}) || !out.append(" ONTIME ") || !comnav::append_period(out, period_ms) ||
+        !out.append("\r\n")) {
+        out.clear();
+        return fw::Status::kInvalidArg;
+    }
+    return fw::Status::kOk;
+}
+
 const Receiver &comnav_receiver() noexcept
 {
-    return kComnavReceiver;
+    return s_comnavReceiver;
 }
 
 } // namespace gnss

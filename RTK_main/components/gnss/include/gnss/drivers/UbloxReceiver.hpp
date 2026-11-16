@@ -37,6 +37,11 @@ public:
     /** "UBX cc-ii"（与 main 原 describe_frame() 文本一致）。 */
     size_t frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
                      std::span<char> out) const noexcept override;
+    /** CFG-MSGOUT-NMEA_ID_*_UART1 支持的 5 类（GGA/RMC/GSA/GST/GSV）；SATSINFOA/HEADINGA 不支持。 */
+    [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
+    /** CFG-MSGOUT VALSET（单键），值 = 每历元次数 round(period_ms*rate_hz/1000)；0 关闭。 */
+    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+                                          CmdBuf &out) const noexcept override;
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */
