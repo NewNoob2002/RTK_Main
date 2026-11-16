@@ -251,9 +251,9 @@ std::size_t log_format_line(std::span<char> out, const LogHeader &hdr, std::span
     // 预留 CRLF：前缀与正文最多写到 out.size() - 2。
     const std::size_t room = out.size() - kCrlf.size();
     // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
-    const int n = tagged ? std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] %.*s %c: ", sec, ms,
+    const int n = tagged ? std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] [%.*s] %c: ", sec, ms,
                                          static_cast<int>(cat.size()), cat.data(), log_level_char(hdr.level))
-                         : std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] %.*s ", sec, ms,
+                         : std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] [%.*s] ", sec, ms,
                                          static_cast<int>(cat.size()), cat.data());
     // NOLINTEND(cppcoreguidelines-pro-type-vararg)
     std::size_t pos = (n < 0) ? 0U : std::min(static_cast<std::size_t>(n), room);

@@ -149,7 +149,7 @@ void vlog_line(LogLevel level, TraceCat cat, const char *fmt, va_list args) noex
 [[nodiscard]] std::string_view log_cat_name(TraceCat cat) noexcept;
 
 /**
- * @brief  把一条文本记录格式化为控制台行："[   8.712] GNSS W: text\r\n"（kInfo 不带级别前缀）
+ * @brief  把一条文本记录格式化为控制台行："[   8.712] [GNSS] W: text\r\n"（kInfo 不带级别前缀）
  * @param  out: 输出缓冲；建议 kLogLineMax 字节
  * @param  hdr: 记录头（取时间、类别、级别）
  * @param  text: 文本（不含结尾 0 与换行）

@@ -217,10 +217,10 @@ void test_format_line(void)
     hdr.t_ms = kDirectClockMs;
     hdr.cat = fw::TraceCat::kGnss;
     hdr.level = fw::LogLevel::kInfo;
-    TEST_ASSERT_EQUAL_STRING("[   8.712] GNSS probe ok\r\n", format(hdr, "probe ok").c_str());
+    TEST_ASSERT_EQUAL_STRING("[   8.712] [GNSS] probe ok\r\n", format(hdr, "probe ok").c_str());
     hdr.level = fw::LogLevel::kWarn;
     hdr.cat = fw::TraceCat::kSys;
-    TEST_ASSERT_EQUAL_STRING("[   8.712] SYS W: low heap\r\n", format(hdr, "low heap").c_str());
+    TEST_ASSERT_EQUAL_STRING("[   8.712] [SYS] W: low heap\r\n", format(hdr, "low heap").c_str());
     // 缓冲不足：截断正文，仍以 CRLF 结尾。
     std::array<char, 16U> small{};
     const std::string_view text = "0123456789abcdef";

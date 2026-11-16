@@ -560,7 +560,7 @@ void format_event(const fw::TraceEvent &ev, char *out, size_t cap) noexcept
     const std::span<char> text{out, cap};
     text[0] = '\0';
     size_t pos = 0U;
-    append(out, cap, pos, "%s ", trace_cat_name(ev.cat));
+    append(out, cap, pos, "[%s] ", trace_cat_name(ev.cat));
     for (const TraceText &entry : trace_table()) {
         if ((entry.cat != ev.cat) || (entry.code != ev.code)) {
             continue;

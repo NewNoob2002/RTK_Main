@@ -149,14 +149,14 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
   句子以对象开头、说清发生了什么，数字带单位，必要时括号补充；只有确实是“名字=值”清单时才用 `k=v`。十六进制转储每行 16 字节，
   带偏移和 ASCII 列，缩进 4 格。示例：
   ```
-  [  12.345] GNSS NMEA GNGGA, 72 bytes
-  [  12.346] GNSS UnicoreHash rejected 41 bytes: bad checksum, received 0x23, computed 0x07
+  [  12.345] [GNSS] NMEA GNGGA, 72 bytes
+  [  12.346] [GNSS] UnicoreHash rejected 41 bytes: bad checksum, received 0x23, computed 0x07
   [  12.346]     0000: 24 43 4f 4e 46 49 47 2c 43 4f 4d 32 2c 43 4f 4e  $CONFIG,COM2,CON
-  [  12.400] GNSS 37 unknown bytes dropped (resync 18)
-  [  13.001] GNSS UM980 <- "GPGGA COM2 1"
-  [  13.013] GNSS UM980 -> OK (12 ms)
-  [  20.100] LINK session 0x0081 opened as ALARM (whitelisted)
-  [  20.200] PROTO session 0x0081 frame 0x04 rejected: bad CRC
+  [  12.400] [GNSS] 37 unknown bytes dropped (resync 18)
+  [  13.001] [GNSS] UM980 <- "GPGGA COM2 1"
+  [  13.013] [GNSS] UM980 -> OK (12 ms)
+  [  20.100] [LINK] session 0x0081 opened as ALARM (whitelisted)
+  [  20.200] [PROTO] session 0x0081 frame 0x04 rejected: bad CRC
   ```
   既有 trace 事件的文本表（`main/modules/debug/TraceText.cpp`）同步改成句子格式；事件码与字段含义不变。
 - **覆盖面。** 每个组件/应用模块都要能在打开对应类别后说清成功与失败；审计结果与补齐清单写入 `docs/reports/T4-log-audit.md`。
@@ -167,7 +167,7 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 - **接口。** C++ 用 `FW_LOGE/W/I/D(cat, fmt, ...)`（`fw/Log.hpp`），C 组件用 `FW_CLOGE/W/I/D(FW_LOG_CAT_*, fmt, ...)`（`fw/LogC.h`，同一实现）。各组件可包一层自己的宏（如 `#define GNSS_LOGW(...) FW_LOGW(fw::TraceCat::kGnss, __VA_ARGS__)`），放在组件私有头。`fw::tlog()` 保留，等价 `FW_LOGI`。
 - **全面替代 `ESP_LOG*`（L0b，2026-11-16）。** 固件自有代码（main 与 components）不再调用 `ESP_LOGx`，统一走本通道，每行带时间戳与类别 tag。只保留对 IDF 自身日志的控制调用：`esp_log_level_set`（压低 BTDM/phy 横幅、`log` 命令）与 `esp_log_set_vprintf`（把 IDF 日志转到控制台出口）。
 - **级别规则（L0b 修订：追踪与日志分开设置）。** 每个类别一个日志级别（2 bit），默认全部 I，与 trace 类别掩码无关：`debug log <cat...|all> <e|w|i|d> [hex]` 设置，`debug save` 写 NVS `dbg/loglv`。记录条件只有 `level ≤ 该类别级别`；E 总是记录。trace 事件由 `debug trace on|off <cat...|all>` 单独控制（NVS `dbg/mask`，默认全关）；`debug on|off` 保留为 `debug trace on|off` 的简写。hex 转储需该类别 hex 位且日志级别为 D。编译期上限 `CONFIG_RTK_LOG_LEVEL`（0..3，默认 3）把更高级别的调用连同参数一起编译掉；追踪关闭的固件同样按此上限（不再强制 W），日志走直写通道。
-- **通路。** 启动第一步（`step_power`）即安装直写 sink，启动横幅、复位原因、各模块初始化结果与启动摘要都以 `[t] SYS …` 行按序出现在提示符之前；启动结束（摘要之后、REPL 之前）DebugModule 才把文本环挂上（`attach_log`），此后写环，由 trace_out 按时间与 trace 事件合并输出；环未安装（启动早期、追踪关闭的固件）时写 `log_install_direct` 安装的直写 sink（`main/app/ConsoleSetup.cpp`，同步写 `cli::out_write`）；两者都没有时丢弃并计入 `log_stats().lost`。两条通路共用 `fw::log_format_line`，行格式一致：`[   8.712] GNSS W: text`，I 级不带级别前缀（与 §2.11 已有行兼容）。
+- **通路。** 启动第一步（`step_power`）即安装直写 sink，启动横幅、复位原因、各模块初始化结果与启动摘要都以 `[t] [SYS] …` 行按序出现在提示符之前；启动结束（摘要之后、REPL 之前）DebugModule 才把文本环挂上（`attach_log`），此后写环，由 trace_out 按时间与 trace 事件合并输出；环未安装（启动早期、追踪关闭的固件）时写 `log_install_direct` 安装的直写 sink（`main/app/ConsoleSetup.cpp`，同步写 `cli::out_write`）；两者都没有时丢弃并计入 `log_stats().lost`。两条通路共用 `fw::log_format_line`，行格式一致：`[   8.712] [GNSS] W: text`，I 级不带级别前缀；类别名用方括号隔开（2026-11-16 用户要求），trace 事件行同样是 `[t] [CAT] 句子`。
 - **记录头。** `LogHeader` 增加 `level` 与保留字节，`total` 由 uint32 收窄为 uint16，总长仍为 12 B（hex 转储原长上限 65535 足够，帧最长 4096）。
 - **新类别 `kSys`。** 启动、控制台、系统服务日志；`kTraceAllMask` 随 `kCount` 自动扩展。
 - **用法约束（CODING-STYLE §5.1）。** 日志记状态变化、错误与周期统计；默认 I 级可见，所以逐帧/逐句内容（NMEA 句子、拒收字节、未知字节）用 D；实时每轮路径、ISR、BT 回调任务只用 `trace()`。格式 `事件 key=value`，类别前缀由输出端加，正文不重复组件名。
