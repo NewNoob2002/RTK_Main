@@ -60,8 +60,10 @@ struct TraceText {
 [[nodiscard]] bool parse_cat(std::string_view name, fw::TraceCat &out) noexcept;
 
 /**
- * 一行事件文本：`LINK session 0x0081 opened as ALARM (whitelisted)`（不含时间前缀与换行）。
- * 未知码输出 `LINK code 77 a=3 b=4`。cap 不足时截断并保持 0 结尾。
+ * @brief  把一个 trace 事件格式化为一行文本：`[LINK] session 0x0081 opened as ALARM (whitelisted)`
+ * @param  ev: 事件
+ * @param  out: 输出缓冲（不含时间前缀与换行）；未知码输出 `[LINK] code 77 a=3 b=4`
+ * @param  cap: out 容量；不足时截断并保持 0 结尾
  */
 void format_event(const fw::TraceEvent &ev, char *out, size_t cap) noexcept;
 
