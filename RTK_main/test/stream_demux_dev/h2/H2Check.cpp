@@ -6,6 +6,7 @@
 //   4. 每个早拒绝点；长度超限时在 len + 1 > max_frame 处拒绝；
 //   5. Crc.hpp 的核对值、分段累计；产品帧 frame_view 的字段与拒绝条件。
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -90,9 +91,17 @@ void check_reject(const demux::Decoder &decoder, std::initializer_list<uint8_t> 
 }
 
 /** 无长度字段的 ASCII 协议：正文一直合法但永不结束，必须在 max_frame 之内拒绝且从不超限。 */
+/** 超长检查缓冲：须容纳被测解码器 max_frame 加 1 个越界探测字节（hash 解码器上限已由 2048 提到 4096）。 */
+constexpr std::size_t kOverflowBufBytes = std::max(demux::nmea::kMaxFrame, demux::unicore_hash::kMaxFrame) + 1U;
+
 void check_length_overflow(const demux::Decoder &decoder, uint8_t lead, uint8_t second, const char *name)
 {
-    std::array<uint8_t, 2048> buf{};
+    static std::array<uint8_t, kOverflowBufBytes> buf{};
+    if (decoder.max_frame >= buf.size()) {
+        check(false, name, decoder.max_frame); // 新解码器上限超出缓冲：报失败而不是越界
+        return;
+    }
+    buf.fill(0U);
     buf[0] = lead;
     buf[1] = second;
     std::size_t last_need = 0U;
