@@ -17,16 +17,16 @@
 
 ```
 components/gnss （纯 C++20，无 IDF；依赖 stream_demux）
-  types.hpp        Family/Model/cap、Fix、SatTable（整数定点）
-  nmea_parser.hpp  GGA/RMC/GSA/GSV → Fix/SatTable
-  dialect.hpp      方言描述符 Dialect（函数指针表）+ CmdBuf/ConfigStep/RoverConfig/ProbeResult
+  Types.hpp        Family/Model/cap、Fix、SatTable（整数定点）
+  NmeaParser.hpp  GGA/RMC/GSA/GSV → Fix/SatTable
+  Dialect.hpp      方言描述符 Dialect（函数指针表）+ CmdBuf/ConfigStep/RoverConfig/ProbeResult
   dialects/{unicore,ublox,comnav}.hpp   每个家族一个描述符（+ 家族专用应答解码器）
-  controller.hpp   探测/配置/监视状态机：poll() 产出 Action，on_frame() 喂帧；不做 IO、不计时
+  Controller.hpp   探测/配置/监视状态机：poll() 产出 Action，on_frame() 喂帧；不做 IO、不计时
 main/modules/gnss （IDF 侧）
   gnss_module      kIo 执行器上的 fw::Module：UART 驱动、电源脚、Demux、Controller、NmeaParser、RTCM 输入管道
   gnss_cmds        控制台 `gnss` 命令组
   gnss_keys        NVS 键表（ns "gnss"）
-main/def/gnss_def.hpp   跨模块类型：GnssStatus、GnssVerb、GnssTrace、RtcmPipe 容量
+main/def/GnssDef.hpp   跨模块类型：GnssStatus、GnssVerb、GnssTrace、RtcmPipe 容量
 ```
 
 与 SparkFun 的取舍：
@@ -131,14 +131,14 @@ kOff --start--> kPowerUp(断电 power_off_ms → 上电 → 等 boot_ms)
 2. **订阅表**：单份（同一时刻只有一个 PHONE 会话，ADR-0007 CONCURRENT 策略下 PHONE ≤1），`mask` + 每类型周期/统计（`GnssAppSubState`）；PHONE 断开或重连后全清 `mask=0`，无自动吐流、无历史回放。
 3. **跨任务路径（typed FanoutRing + SPP TX.stream）**：kIo 收到完整语句 → 分类并更新最新句缓存（总计 6144 B）→ 查订阅掩码与降采样到期 → 整句写入 4096 B `gnss_app_ring`（typed `FanoutRing`，单条最大有效载荷 4093 B；≥4094 B 写侧整帧丢弃并计数 `oversize_drop`）→ `bt_link` 每轮 `peek` 完整句经 `spp_server_stream_reserve` / `spp_server_tx_commit` 写入 PHONE 4096 B `TX.stream`（满时 `cancel` 留待下一轮）。
 4. **查询应答（Interval=0）**：从最新句缓存通过 ≤256 B 有界查询拷贝回封装帧（载荷 = 最近一条原文）；无数据、缺少能力位或原文 >256 B 时，不截断、回结果码失败 `0x02 0x02`（>256 B 递增 `query_oversize`）。
-5. **0x01/0x02/0x0D**：0x01 板卡型号/板卡固件来自探测结果（G-B 已写 DeviceInfo）；0x02 GNSS 功能字节按 ADR-0010 §2.9 约定应为 `kRunning ? 0x81 : 0x01`（注意：`reply.hpp` 与 `device_service.hpp` 属冻结头，K4 若未获授权修订则在报告列出字段请求）；`0x0D` 保持 `DeviceService` 32 B COM 查询 / SET 不回，与 `gnss/out` 解耦。
+5. **0x01/0x02/0x0D**：0x01 板卡型号/板卡固件来自探测结果（G-B 已写 DeviceInfo）；0x02 GNSS 功能字节按 ADR-0010 §2.9 约定应为 `kRunning ? 0x81 : 0x01`（注意：`Reply.hpp` 与 `DeviceService.hpp` 属冻结头，K4 若未获授权修订则在报告列出字段请求）；`0x0D` 保持 `DeviceService` 32 B COM 查询 / SET 不回，与 `gnss/out` 解耦。
 6. **demux 容量**：`#SATSINFOA` 在多星时可达 3–4 KB，`unicore_hash::kMaxFrame` 由 1024 扩到 4096 并更新 `docs/frozen.sha256` 对应条目（与 `unicore_bin` 同为 4096 B，GNSS 分流器 RAM 不变）。
 7. **后续**（不在本节）：自定义 Hash 报文与惯导报文（GPINS/GPFPD/INSPVAXA 等，PDF 0x0D 中已有 ID 972–974）作为新表项接入同一机制；K803 暂不支持。
 
 ### 2.10 NVS 存储目录（2026-11-12 补充）
 
-命名空间与键名保持不变（旧数据可直接读出）。整数键由 `main/modules/storage/store_catalog.cpp` 按分组登记，
-`store_keys.cpp` 提供按类型的通用读写；功能关闭时该组为空表，不再用 `#if` 阶梯。SN 与白名单仍走冻结的 `nvs_store`（ADR-0003）。
+命名空间与键名保持不变（旧数据可直接读出）。整数键由 `main/modules/storage/StoreCatalog.cpp` 按分组登记，
+`StoreKeys.cpp` 提供按类型的通用读写；功能关闭时该组为空表，不再用 `#if` 阶梯。SN 与白名单仍走冻结的 `nvs_store`（ADR-0003）。
 
 | 分组 | 命名空间/键 | 类型 | 内容 | 写入方 |
 |---|---|---|---|---|
@@ -156,8 +156,8 @@ G-C 将新增 `gnss/out`（blob，逐报文输出表，手机 0x0D 设置后永�
 
 - `components/gnss/include/gnss/{types,dialect,nmea_parser,controller}.hpp`
 - `components/gnss/include/gnss/dialects/{unicore,ublox,comnav}.hpp`
-- `main/def/gnss_def.hpp`
-- 修订：`components/app_fw/include/fw/trace.hpp`（+`kGnss`）、`components/link_core/include/core/reply.hpp`（`DeviceInfo::fix_quality`）、`components/rtos/include/rtos/static_stream_buffer.hpp`（+`space()`）
+- `main/def/GnssDef.hpp`
+- 修订：`components/app_fw/include/fw/Trace.hpp`（+`kGnss`）、`components/link_core/include/core/Reply.hpp`（`DeviceInfo::fix_quality`）、`components/rtos/include/rtos/StaticStreamBuffer.hpp`（+`space()`）
 
 ## 4. 验收
 

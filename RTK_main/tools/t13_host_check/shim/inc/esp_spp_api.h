@@ -1,7 +1,7 @@
 #pragma once
 
 /* SPP API 的 host 替身：枚举/结构体与 IDF esp_spp_api.h 同名同形，
- * 函数实现放在 fake_idf.c，行为可由回归用例控制。 */
+ * 函数实现放在 FakeIdf.c，行为可由回归用例控制。 */
 #include <stdbool.h>
 #include <stdint.h>
 

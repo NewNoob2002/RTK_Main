@@ -49,7 +49,7 @@ ESP32：8 MB Flash，520 KB SRAM，双核，归入 **T2**。本工程自有代�
 | `rtk_os` | freertos、esp_timer | `esp_err_t→Status` 映射、`now_ms()`、静态任务/队列/StreamBuffer/事件组/portMUX 守卫等 RAII 包装 | 否 |
 | `rtk_bt` | bt、rtk_core、rtk_os | `SppServer final : Transport`（仅 ESP32） | 否 |
 | `rtk_store` | nvs_flash、rtk_core、rtk_os | `SettingsStore`（SN、白名单） | 否 |
-| `main` | 以上全部、console | 组合根 `app_main.cpp`（`extern "C"`）、链路任务、控制台 | 否 |
+| `main` | 以上全部、console | 组合根 `AppMain.cpp`（`extern "C"`）、链路任务、控制台 | 否 |
 
 依赖方向：`main → rtk_bt/rtk_store → rtk_os → IDF`；`rtk_bt/rtk_store → rtk_core → rtk_proto`。`rtk_proto`、`rtk_core` 不得包含任何 IDF 或 FreeRTOS 头文件（门禁 G6）。
 
@@ -81,4 +81,4 @@ C 版实现（BATCH-A 已通过独立验收；BATCH-B 只有实现方自报的�
 
 ## 9. 修订记录
 
-- **2026-11-12 冻结接口演进（追加，不改原有语义）**：`core::LinkManager` 新增 `whitelist_add(const BtAddr&)` / `whitelist_remove(const BtAddr&)`，返回 `core::WhitelistEdit{kDone,kUnchanged,kFull}`；remove 删除后条目前移保持顺序；两者与 `whitelist_clear()` 一致，不影响已连接会话的角色（断开重连后按新白名单判定）。`core::LinkTrace` 追加 `kWhitelistRemove`（a = 白名单数量）；手动 add 复用 `kWhitelistAdd`（handle = 0）。用途：控制台 `wl add/del <MAC>`（`LinkVerb::kWhitelistAdd/kWhitelistDel`，args = 6 字节 MAC，改动立即落 NVS）。用例：`test/host/test_link_manager.cpp` `test_whitelist_add_remove_single`、`test_whitelist_add_full`。
+- **2026-11-12 冻结接口演进（追加，不改原有语义）**：`core::LinkManager` 新增 `whitelist_add(const BtAddr&)` / `whitelist_remove(const BtAddr&)`，返回 `core::WhitelistEdit{kDone,kUnchanged,kFull}`；remove 删除后条目前移保持顺序；两者与 `whitelist_clear()` 一致，不影响已连接会话的角色（断开重连后按新白名单判定）。`core::LinkTrace` 追加 `kWhitelistRemove`（a = 白名单数量）；手动 add 复用 `kWhitelistAdd`（handle = 0）。用途：控制台 `wl add/del <MAC>`（`LinkVerb::kWhitelistAdd/kWhitelistDel`，args = 6 字节 MAC，改动立即落 NVS）。用例：`test/host/TestLinkManager.cpp` `test_whitelist_add_remove_single`、`test_whitelist_add_full`。

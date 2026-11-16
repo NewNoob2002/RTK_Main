@@ -1,8 +1,8 @@
 # 控制台组件（ADR-0007 §3.3）：esp_console REPL + 命令表登记 + 参数解析辅助。
 # 只依赖 IDF（console、esp_system、串口驱动），不依赖任何自有业务组件（含 app_fw）。
-# src/reply.cpp 与 src/out.cpp 只用 C/C++ 标准库（无 IDF 头），host 测试直接编译。
+# src/Reply.cpp 与 src/Out.cpp 只用 C/C++ 标准库（无 IDF 头），host 测试直接编译。
 idf_component_register(
-    SRCS "src/console.cpp" "src/parse.cpp" "src/reply.cpp" "src/out.cpp"
+    SRCS "src/Console.cpp" "src/Parse.cpp" "src/Reply.cpp" "src/Out.cpp"
     INCLUDE_DIRS "include"
     REQUIRES console esp_system esp_driver_uart
     PRIV_REQUIRES log freertos pthread)
@@ -16,5 +16,5 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/strict_warnings.cmake)
 rtk_strict_warnings(${COMPONENT_LIB})
 
-# 未知命令输出 ERR：包装 esp_console_run（实现与原因见 src/console.cpp 末尾 __wrap_esp_console_run）。
+# 未知命令输出 ERR：包装 esp_console_run（实现与原因见 src/Console.cpp 末尾 __wrap_esp_console_run）。
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_console_run")

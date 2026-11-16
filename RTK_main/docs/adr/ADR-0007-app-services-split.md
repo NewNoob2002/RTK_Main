@@ -40,7 +40,7 @@
 
 ```
 ┌──────────────────────────────── main（组装根，只做组装） ──────────────────────────────────┐
-│ app_main.cpp ── 模块表 kModules[] ── 执行器表 ── 路由表 ── 控制台表 ── 存储键表               │
+│ AppMain.cpp ── 模块表 kModules[] ── 执行器表 ── 路由表 ── 控制台表 ── 存储键表               │
 │ 模块实现（IDF 相关）：bt_link_module  storage_module  rtcm_module  system_module            │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
         │ 使用                                │ 使用                         │ 使用
@@ -75,7 +75,7 @@
 | `rtk_console`（新） | console、esp_system | 一切 `rtk_*` 业务组件（只依赖 IDF，可被报警器复用） |
 | `main` | 以上全部 | — |
 
-### 3.2 模块契约（`app_fw/module.hpp`，J0 冻结）
+### 3.2 模块契约（`app_fw/Module.hpp`，J0 冻结）
 
 ```cpp
 namespace app {
@@ -96,7 +96,7 @@ struct Module {
 }
 ```
 
-执行器（`rtk_os/executor.hpp`）：
+执行器（`rtk_os/Executor.hpp`）：
 - 每轮固定顺序：等待唤醒（事件位、队列或超时）→ 处理 CommandBus → 按周期调用各模块 `poll()` → 统计本轮耗时 → 让出。
 - 本轮超过预算时记录 overrun 计数，供 `status` 输出。
 
@@ -119,7 +119,7 @@ struct Module {
 ### 3.4 数据中心主题（本轮）
 
 `LinkStatus`、`Sessions`、`AlarmState`、`Heartbeat`、`LinkStats`、`RtcmStats`、`StoreStatus`、`ExecStats`（各执行器的轮次、overrun、栈水位）、**`SystemMode`（预留，见 §3.6-3）**。
-主题集合是产品相关的，定义在 `main/app_data.hpp`（J1 编写），每个主题一个 `app::Slot<T>`；以后加新主题只追加一个结构体和一个 Slot。
+主题集合是产品相关的，定义在 `main/AppData.hpp`（J1 编写），每个主题一个 `app::Slot<T>`；以后加新主题只追加一个结构体和一个 Slot。
 
 ### 3.5 J0 冻结的接口细节（v3）
 
@@ -135,7 +135,7 @@ struct Module {
   `CommandRouter::init(span<const RouteTable>)` 在启动时把 `{self, routes}` 展开到固定容量索引并检查重复 msg_id（重复 → `kInvalidArg`）。
   查找顺序复现旧 dispatcher：未登记 ID → `kNoReply`（先于角色检查）；角色不在 `RoleMask` → `kDenied`；type 限制由 handler 自查。
 - **J2 拆两段**：J2a 只新增 router/services/test/services（不碰 link_service 与 main，可与 J1 并行）；
-  J2b 在 J1 合入后把 `LinkService` 的依赖从 `CommandDispatcher&` 换成 `CommandRouter& + AlarmService&`（我先冻结新版 link_service.hpp），
+  J2b 在 J1 合入后把 `LinkService` 的依赖从 `CommandDispatcher&` 换成 `CommandRouter& + AlarmService&`（我先冻结新版 LinkService.hpp），
   旧 dispatcher 与其测试移入 `reference/`。
 
 ### 3.6 借鉴 SparkFun 的三项预留（v3 新增）
@@ -249,7 +249,7 @@ LinkManager 白名单变化（配对成功 / wl clear）
 
 ## 6. 文件改动范围
 
-- 新增：`components/app_fw`、`components/bt_reconnect`、`components/rtk_console`、`rtk_os/executor.hpp`（含 CommandBus）、`rtk_core/command_router.hpp`、`rtk_core/services/*`、`main/*_module.*`、`test/app_fw`、`test/services`、`test/bt_reconnect`。
+- 新增：`components/app_fw`、`components/bt_reconnect`、`components/rtk_console`、`rtk_os/Executor.hpp`（含 CommandBus）、`rtk_core/CommandRouter.hpp`、`rtk_core/services/*`、`main/*_module.*`、`test/app_fw`、`test/services`、`test/bt_reconnect`。
 - 删除或缩减：`main/app_link.cpp` 拆分完成后删除；`main/app_console.cpp` 缩减为各模块的命令表；`command_dispatcher.*` 在 J2 验收后移入 `reference/`。
 - 不动：rtk_bt 驱动、rtk_proto、stream_demux、LinkManager、AlarmSource、LinkService、ExternalSpeak。
 
@@ -264,11 +264,11 @@ LinkManager 白名单变化（配对成功 / wl clear）
 | 步骤 | 内容 | 执行 | 依赖 |
 | --- | --- | --- | --- |
 | J0 | 冻结接口头（app_fw、executor、command_bus、command_router、services、rtk_console、bt_reconnect）；更新 AGENTS.md；任务卡；frozen.sha256 | Claude | — |
-| J1 | rtk_os Executor 实现；把 app_link 拆成 bt_link、storage、rtcm、system 模块；`main/app_data.hpp` 主题；console 改走 Executor::call + Slot 读取 | pi `codex/gpt-6.1-sol` | J0 |
+| J1 | rtk_os Executor 实现；把 app_link 拆成 bt_link、storage、rtcm、system 模块；`main/AppData.hpp` 主题；console 改走 Executor::call + Slot 读取 | pi `codex/gpt-6.1-sol` | J0 |
 | J2a | CommandRouter 与 4 个服务；golden 等价测试；test/services | pi `workbuddy/deepseek-v4.1-flash` | J0（与 J1 并行，文件不重叠） |
 | J2b | LinkService 切换到 CommandRouter，main 接线，旧 dispatcher 移入 reference | pi `workbuddy/deepseek-v4.1-flash` | J1、J2a |
 | J3 | rtk_console 组件；现有 7 条命令迁移到各模块的命令表 | pi `antigravity/gemini-3.8-flash` | J1 |
-| J4 | bt_reconnect 组件与 host 测试；接入 peer 固件；FanoutRing 实现；test/app_fw（Slot、LockGuard、StoreKey、FanoutRing）。app_fw 的 CMakeLists 与 result.cpp 已由 J0 提供 | pi `antigravity/gemini-3.8-flash` | J0（可与 J1 并行） |
+| J4 | bt_reconnect 组件与 host 测试；接入 peer 固件；FanoutRing 实现；test/app_fw（Slot、LockGuard、StoreKey、FanoutRing）。app_fw 的 CMakeLists 与 Result.cpp 已由 J0 提供 | pi `antigravity/gemini-3.8-flash` | J0（可与 J1 并行） |
 | J5 | 集成验收：门禁、烧录两块板、HIL 回归 | Claude | J1–J4 |
 
 ## 9. 门禁

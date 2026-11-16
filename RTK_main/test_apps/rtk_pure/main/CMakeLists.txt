@@ -1,6 +1,6 @@
 # WHOLE_ARCHIVE 保留 C/C++ TEST_CASE 的静态注册，避免未直接引用的用例被链接器丢弃。
 idf_component_register(
-    SRCS "test_main.cpp" "test_proto_c.c"
+    SRCS "TestMain.cpp" "TestProtoC.c"
     PRIV_REQUIRES device_proto link_core unity
     WHOLE_ARCHIVE)
 

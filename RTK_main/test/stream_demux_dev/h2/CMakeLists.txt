@@ -1,5 +1,5 @@
 # H2 自测工程（不交付、不参与构建）。只编译 H2 交付的文件 + 它们依赖的 device_proto 源文件，
-# 不依赖 H1 的 src/demux.cpp，因此可以与 H1/H3 并行运行。
+# 不依赖 H1 的 src/Demux.cpp，因此可以与 H1/H3 并行运行。
 cmake_minimum_required(VERSION 3.16)
 project(h2_selftest C CXX)
 
@@ -13,17 +13,17 @@ set(DEMUX_INC ${PROJ_ROOT}/components/stream_demux/include)
 set(PROTO_INC ${PROJ_ROOT}/components/device_proto/include)
 
 add_executable(h2_check
-    h2_check.cpp
-    ${PROJ_ROOT}/components/stream_demux/src/crc.cpp
-    ${PROJ_ROOT}/components/stream_demux/src/decoders/rtcm3.cpp
-    ${PROJ_ROOT}/components/stream_demux/src/decoders/nmea.cpp
-    ${PROJ_ROOT}/components/stream_demux/src/decoders/ubx.cpp
-    ${PROJ_ROOT}/components/stream_demux/src/decoders/unicore_bin.cpp
-    ${PROJ_ROOT}/components/stream_demux/src/decoders/unicore_hash.cpp
-    ${PROJ_ROOT}/components/device_proto/demux_frame.cpp
-    ${PROJ_ROOT}/components/device_proto/frame.cpp
-    ${PROJ_ROOT}/components/app_fw/src/status.cpp
-    ${PROJ_ROOT}/components/device_proto/dev_proto_frame.c)
+    H2Check.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/Crc.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/Rtcm3.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/Nmea.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/Ubx.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/UnicoreBin.cpp
+    ${PROJ_ROOT}/components/stream_demux/src/decoders/UnicoreHash.cpp
+    ${PROJ_ROOT}/components/device_proto/DemuxFrame.cpp
+    ${PROJ_ROOT}/components/device_proto/Frame.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Status.cpp
+    ${PROJ_ROOT}/components/device_proto/DevProtoFrame.c)
 
 target_include_directories(h2_check PRIVATE
     ${DEMUX_INC} ${PROTO_INC} ${PROJ_ROOT}/components/app_fw/include)

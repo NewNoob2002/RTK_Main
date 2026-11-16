@@ -1,6 +1,6 @@
-# HIL 对端主组件：peer.c（真实 SPP 服务端）+ reconnect_bridge.cpp（复用 bt_reconnect 状态机）。
+# HIL 对端主组件：Peer.c（真实 SPP 服务端）+ ReconnectBridge.cpp（复用 bt_reconnect 状态机）。
 idf_component_register(
-    SRCS "peer.c" "reconnect_bridge.cpp"
+    SRCS "Peer.c" "ReconnectBridge.cpp"
     INCLUDE_DIRS "."
     REQUIRES bt nvs_flash device_proto bt_reconnect esp_driver_uart esp_timer esp_hw_support)
 

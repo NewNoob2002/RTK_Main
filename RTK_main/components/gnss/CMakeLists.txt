@@ -1,9 +1,10 @@
 # GNSS 纯逻辑组件（ADR-0010 §2.1）：NMEA 解析、命令方言、探测/配置状态机。C++20、无 IDF 依赖，
 # 同一份 CMakeLists 既是 ESP-IDF 组件，也可被 host 测试 add_subdirectory()（依赖 stream_demux 目标）。
 # 方言按开关选编：IDF 下 CONFIG_RTK_GNSS_DIALECT_<D>，host 下 option RTK_GNSS_DIALECT_<D>；
-# 启用的方言以同名宏（=1）传给 src/registry.cpp 生成 enabled_dialects()。
+# 启用的方言以同名宏（=1）传给 src/Registry.cpp 生成 enabled_dialects()。
 set(_gnss_dialects UNICORE UBLOX COMNAV)
-set(_gnss_srcs src/nmea_parser.cpp src/controller.cpp src/registry.cpp)
+include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/pascal_case.cmake)
+set(_gnss_srcs src/NmeaParser.cpp src/Controller.cpp src/Registry.cpp)
 
 if(ESP_PLATFORM)
     set(_srcs ${_gnss_srcs})
@@ -11,7 +12,8 @@ if(ESP_PLATFORM)
     foreach(_d IN LISTS _gnss_dialects)
         if(CONFIG_RTK_GNSS_DIALECT_${_d})
             string(TOLOWER "${_d}" _l)
-            list(APPEND _srcs "src/dialects/${_l}.cpp")
+            rtk_pascal_case(_f "${_l}")
+            list(APPEND _srcs "src/dialects/${_f}.cpp")
             list(APPEND _defs "RTK_GNSS_DIALECT_${_d}=1")
         endif()
     endforeach()
@@ -30,7 +32,8 @@ else()
         option(RTK_GNSS_DIALECT_${_d} "编译 ${_d} 方言" ${_default})
         if(RTK_GNSS_DIALECT_${_d})
             string(TOLOWER "${_d}" _l)
-            target_sources(gnss PRIVATE src/dialects/${_l}.cpp)
+            rtk_pascal_case(_f "${_l}")
+            target_sources(gnss PRIVATE src/dialects/${_f}.cpp)
             target_compile_definitions(gnss PRIVATE RTK_GNSS_DIALECT_${_d}=1)
         endif()
     endforeach()

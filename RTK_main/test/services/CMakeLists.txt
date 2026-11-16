@@ -29,6 +29,7 @@ set(PROJ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 set(LINK_CORE_DIR ${PROJ_ROOT}/components/link_core)
 set(DEV_PROTO_DIR ${PROJ_ROOT}/components/device_proto)
 # J2b：旧 CommandDispatcher 已退役；R7a 只在构建目录适配其命名空间/include，reference 原件不改。
+include(${PROJ_ROOT}/cmake/pascal_case.cmake)
 set(REF_SOURCE ${PROJ_ROOT}/reference/cpp-v3-dispatcher)
 set(REF_GOLDEN ${CMAKE_CURRENT_BINARY_DIR}/golden)
 set(REF_LEGACY_PREFIX "rtk")
@@ -41,6 +42,17 @@ foreach(relative command_dispatcher.cpp ${REF_LEGACY_PREFIX}/core/command_dispat
     string(REPLACE "namespace proto = proto;\n" "" content "${content}")
     # 仅适配基础错误码；alarm::Status 仍为协议状态结构，golden 逻辑不变。
     string(REPLACE "const Status " "const fw::Status " content "${content}")
+    # 工程头文件已改为 PascalCase（CODING-STYLE §3.1）；退役 dispatcher 自身保留原名，其余工程头 include 同步转换。
+    string(REGEX MATCHALL "#include \"[a-z]+/[a-z0-9_]+\\.hpp\"" _incs "${content}")
+    foreach(_inc IN LISTS _incs)
+        string(REGEX REPLACE "#include \"([a-z]+)/([a-z0-9_]+)\\.hpp\"" "\\1;\\2" _parts "${_inc}")
+        list(GET _parts 0 _dir)
+        list(GET _parts 1 _stem)
+        if(NOT _stem STREQUAL "command_dispatcher")
+            rtk_pascal_case(_pascal "${_stem}")
+            string(REPLACE "${_inc}" "#include \"${_dir}/${_pascal}.hpp\"" content "${content}")
+        endif()
+    endforeach()
     string(REPLACE "${REF_LEGACY_PREFIX}/" "" output "${relative}")
     get_filename_component(output_dir ${REF_GOLDEN}/${output} DIRECTORY)
     file(MAKE_DIRECTORY ${output_dir})
@@ -64,29 +76,29 @@ add_library(unity STATIC ${UNITY_DIR}/unity.c)
 target_include_directories(unity SYSTEM PUBLIC ${UNITY_DIR})
 
 add_library(dev_proto_c STATIC
-    ${DEV_PROTO_DIR}/dev_proto_frame.c
-    ${DEV_PROTO_DIR}/dev_proto_alarm.c)
+    ${DEV_PROTO_DIR}/DevProtoFrame.c
+    ${DEV_PROTO_DIR}/DevProtoAlarm.c)
 target_include_directories(dev_proto_c PUBLIC ${DEV_PROTO_DIR}/include)
 target_compile_options(dev_proto_c PRIVATE ${PROJ_C_STRICT})
 
 # 被测代码：device_proto 的 C++ 外观 + link_core（旧 dispatcher 保留作为 golden 基准）。
 add_library(link_svc STATIC
-    ${PROJ_ROOT}/components/app_fw/src/status.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Status.cpp
     # link_core 的事件点经 fw::trace 上报（ADR-0009），测试要链上实现。
-    ${PROJ_ROOT}/components/app_fw/src/trace.cpp
-    ${DEV_PROTO_DIR}/bytes.cpp
-    ${DEV_PROTO_DIR}/frame.cpp
-    ${DEV_PROTO_DIR}/alarm_codec.cpp
-    ${LINK_CORE_DIR}/alarm_source.cpp
-    ${LINK_CORE_DIR}/link_manager.cpp
-    ${LINK_CORE_DIR}/link_service.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Trace.cpp
+    ${DEV_PROTO_DIR}/Bytes.cpp
+    ${DEV_PROTO_DIR}/Frame.cpp
+    ${DEV_PROTO_DIR}/AlarmCodec.cpp
+    ${LINK_CORE_DIR}/AlarmSource.cpp
+    ${LINK_CORE_DIR}/LinkManager.cpp
+    ${LINK_CORE_DIR}/LinkService.cpp
     ${REF_GOLDEN}/command_dispatcher.cpp
-    ${LINK_CORE_DIR}/command_router.cpp
-    ${LINK_CORE_DIR}/services/device_service.cpp
-    ${LINK_CORE_DIR}/services/config_service.cpp
-    ${LINK_CORE_DIR}/services/alarm_service.cpp
-    ${LINK_CORE_DIR}/services/pair_service.cpp
-    ${LINK_CORE_DIR}/services/gnss_service.cpp)
+    ${LINK_CORE_DIR}/CommandRouter.cpp
+    ${LINK_CORE_DIR}/services/DeviceService.cpp
+    ${LINK_CORE_DIR}/services/ConfigService.cpp
+    ${LINK_CORE_DIR}/services/AlarmService.cpp
+    ${LINK_CORE_DIR}/services/PairService.cpp
+    ${LINK_CORE_DIR}/services/GnssService.cpp)
 target_include_directories(link_svc PUBLIC
     ${PROJ_ROOT}/components/app_fw/include
     ${DEV_PROTO_DIR}/include
@@ -101,7 +113,8 @@ target_compile_options(link_svc PRIVATE ${PROJ_CXX_STRICT})
 enable_testing()
 foreach(name test_command_router test_services_golden test_gnss_service test_link_trace test_alarm_fix_quality
              test_link_credit)
-    add_executable(${name} ${name}.cpp)
+    rtk_pascal_case(_f "${name}")
+    add_executable(${name} ${_f}.cpp)
     target_link_libraries(${name} link_svc unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})
     add_test(NAME ${name} COMMAND ${name})

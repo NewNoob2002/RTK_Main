@@ -105,4 +105,4 @@
 
 - 设备名：`E1-Lite-<SN>`，不含换行（修正 5.4 的 `\n`）。SN 未写入 NVS 时用本机 BT MAC 后 2 字节，即 `%02X%02X`。
 - 安全：SPP 服务端 `ESP_SPP_SEC_NONE`（与 5.4 一致）；GAP 使用 SSP，IO 能力为 NONE（Just Works），`CFM_REQ` 自动确认；旧设备的 `PIN_REQ` 回固定 PIN `1234`（5.4 注释中的值）。
-- 报警器身份由 MAC 白名单与 0x41 HELLO 配对决定，不依赖蓝牙配对密钥（见 §5 与 `link_manager.hpp`）。
+- 报警器身份由 MAC 白名单与 0x41 HELLO 配对决定，不依赖蓝牙配对密钥（见 §5 与 `LinkManager.hpp`）。

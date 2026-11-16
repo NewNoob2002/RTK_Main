@@ -12,10 +12,10 @@
 | --- | --- |
 | 组件 | `components/stream_demux`（与 ESP 无关的通用组件不加 `rtk_` 前缀） |
 | 命名空间 | `demux`；各解码器 `demux::<协议>`（`rtcm3`、`nmea`、`ubx`、`unicore_bin`、`unicore_hash`）；CRC `demux::crc` |
-| 公共头 | `include/demux/decoder.hpp`、`demux.hpp`、`static_demux.hpp`、`crc.hpp`、`decoders/<协议>.hpp`（冻结） |
-| 源文件 | `src/demux.cpp`（引擎）、`src/crc.cpp`（两张 constexpr 256 项表）、`src/decoders/<协议>.cpp`（每协议一个） |
+| 公共头 | `include/demux/Decoder.hpp`、`Demux.hpp`、`StaticDemux.hpp`、`Crc.hpp`、`decoders/<协议>.hpp`（冻结） |
+| 源文件 | `src/Demux.cpp`（引擎）、`src/Crc.cpp`（两张 constexpr 256 项表）、`src/decoders/<协议>.cpp`（每协议一个） |
 | 构建 | 同一份 `CMakeLists.txt`：`ESP_PLATFORM` 下 `idf_component_register` + Kconfig `CONFIG_STREAM_DEMUX_<协议>`；否则 `add_library(stream_demux)` + `option(STREAM_DEMUX_<协议>)`，供其他工程/MCU 复用 |
-| 产品帧解码器 | 仍在 `rtk_proto`（与 ESP 无关但属产品协议）：`rtk/proto/demux_frame.hpp`，命名空间 `rtk::proto::demux_frame`，`rtk_proto` REQUIRES `stream_demux` |
+| 产品帧解码器 | 仍在 `rtk_proto`（与 ESP 无关但属产品协议）：`rtk/proto/DemuxFrame.hpp`，命名空间 `rtk::proto::demux_frame`，`rtk_proto` REQUIRES `stream_demux` |
 
 命名规则（写入 AGENTS.md）：直接绑定 ESP-IDF/产品的组件用 `rtk_` 前缀与 `rtk::<组件>` 命名空间；与平台、产品都无关、可被其他工程复用的组件按功能命名（组件名 = 目录名，命名空间取简短功能名），不得依赖任何 `rtk_*` 组件或 IDF/FreeRTOS 头。
 
@@ -24,7 +24,7 @@
 - `demux::Decoder`：`{name, max_frame, first_byte, step}`，函数指针均 `noexcept`；`step(std::span<const uint8_t>, std::size_t& need)`。去掉 C 版 `proto_id`：**描述符地址即身份**（`inline constexpr` 变量全程序唯一地址）。
 - 每个解码器头文件导出 `first_byte`、`step`、`kMaxFrame` 与 `inline constexpr Decoder kDecoder`，加减协议只需加减头文件/源文件，不改引擎。
 - `demux::Sink`：`on_frame(const Decoder&, uint8_t index, span)`、`on_unknown(span)`（默认丢弃）。**作为 CPP-011 的第二个授权多态边界**（受保护非虚析构，实现类建议 `final`）；理由：回调需绑定对象状态，`std::function` 禁用，`void*` 不类型安全，模板化 Sink 会让引擎按 Sink 类型多实例化。每帧一次虚调用开销可忽略。
-- `demux::Demux`：`constexpr` 默认构造（可 `constinit`），默认成员初值使“未初始化存储”问题不存在（修复 C 版 G1 阻塞项 1）；`init(span<const Decoder* const>, span<uint8_t>, Sink&)`、`feed(span)`、`abort()`、`busy()`、`stats()`、`reset_stats()`；错误 `enum class Error {kOk, kInvalidArg, kReentry}`（通用组件不依赖 `rtk::Status`）。内部实现通过 `friend struct Engine`（定义在 `demux.cpp`）访问私有状态，冻结头不随实现变。
+- `demux::Demux`：`constexpr` 默认构造（可 `constinit`），默认成员初值使“未初始化存储”问题不存在（修复 C 版 G1 阻塞项 1）；`init(span<const Decoder* const>, span<uint8_t>, Sink&)`、`feed(span)`、`abort()`、`busy()`、`stats()`、`reset_stats()`；错误 `enum class Error {kOk, kInvalidArg, kReentry}`（通用组件不依赖 `rtk::Status`）。内部实现通过 `friend struct Engine`（定义在 `Demux.cpp`）访问私有状态，冻结头不随实现变。
 - `demux::StaticDemux<const Decoder&... Ds>`：解码器集合为模板参数，缓冲区 = 最大 `max_frame`（`std::array`），数量 1..8 编译期检查，`index_of<D>()` 编译期下标。
 - `demux::crc`：`crc24q`、`crc32_novatel`，可分段累计；核对值 `"123456789"` → `0xCDE703` / `0x2DFD2D88`（已用 Python 逐位实现核对）。
 
@@ -39,8 +39,8 @@ AGENTS.md §2 C++ 规则全部适用（C++20 子集；无异常/RTTI/堆/`std::f
 
 | 任务 | 内容 | 执行 | 理由 |
 | --- | --- | --- | --- |
-| H1 引擎 | `src/demux.cpp`（ADR-0004 §3 全部语义） | pi + `codex/gpt-6.1-sol` high | 回放重扫与重入是最难的算法部分；该模型已写过 C 版 |
-| H2 解码器 | `src/crc.cpp`、5 个 `src/decoders/*.cpp`、`rtk_proto/demux_frame.cpp` 与 `rtk_proto/CMakeLists.txt` 接入 | pi + `workbuddy/deepseek-v4.1-flash` high | 规格明确、量大；该模型写过 C 版解码器 |
+| H1 引擎 | `src/Demux.cpp`（ADR-0004 §3 全部语义） | pi + `codex/gpt-6.1-sol` high | 回放重扫与重入是最难的算法部分；该模型已写过 C 版 |
+| H2 解码器 | `src/Crc.cpp`、5 个 `src/decoders/*.cpp`、`rtk_proto/DemuxFrame.cpp` 与 `rtk_proto/CMakeLists.txt` 接入 | pi + `workbuddy/deepseek-v4.1-flash` high | 规格明确、量大；该模型写过 C 版解码器 |
 | H3 测试 | `test/stream_demux/`：独立 host CMake + Unity，C++ 黑盒测试，移植 `reference/c-demux-v1/test/demux` 全部用例与生成器 | pi + `antigravity/gemini-3.8-flash` high | 与实现隔离；写过 C 版测试 |
 | H4 验收 | 交叉审查、host 普通 + ASan/UBSan、`-m32`/arm 交叉编译、`idf.py build`、冻结校验 | 架构方（Claude） | 验收独立 |
 

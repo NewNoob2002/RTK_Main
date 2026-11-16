@@ -17,8 +17,8 @@
 
 | 类别 | 模板标识 | 替换为（以 `demo` 为例） |
 | --- | --- | --- |
-| 文件名 | `template_module.hpp` / `template_module.cpp` / `template_cmds.cpp` | `demo_module.hpp` / `demo_module.cpp` / `demo_cmds.cpp` |
-| 头文件引用 | `"modules/_template/template_module.hpp"` | `"modules/demo/demo_module.hpp"` |
+| 文件名 | `TemplateModule.hpp` / `TemplateModule.cpp` / `TemplateCmds.cpp` | `demo_module.hpp` / `demo_module.cpp` / `demo_cmds.cpp` |
+| 头文件引用 | `"modules/_template/TemplateModule.hpp"` | `"modules/demo/demo_module.hpp"` |
 | 模块类名 | `TemplateModule` | `DemoModule`（保持 `final`、禁拷贝/移动、`constexpr explicit DemoModule(AppContext &) noexcept`） |
 | 状态结构体 | `TemplateState` | `DemoState` |
 | 动词枚举 | `TemplateVerb`（可移入 `def/`） | `DemoVerb` |
@@ -26,7 +26,7 @@
 | 内部命令符号 | `kTemplateCmds` / `cmd_tmpl` / `"tmpl"` | `kDemoCmds` / `cmd_demo` / `"demo"`（含 `usage:` 与提示文本） |
 | 命令目标占位 | `kTargetPlaceholder = 0xFFU` | 删去占位常量定义，`.target` 改为 `id(ModuleKind::kDemo)` |
 
-`components/app_fw/include/fw/module.hpp` 的 `fw::make_ops<T>()` 检测以下 4 个**全部可选**的 `noexcept` 成员，不需要的直接删除声明，不要写空函数：
+`components/app_fw/include/fw/Module.hpp` 的 `fw::make_ops<T>()` 检测以下 4 个**全部可选**的 `noexcept` 成员，不需要的直接删除声明，不要写空函数：
 - `fw::Result init() noexcept`（启动前 `app_main` 单线程调用）
 - `fw::Result start() noexcept`（执行器任务进入主循环前调用一次）
 - `bool poll(uint32_t now_ms) noexcept`（执行器每轮非阻塞调用；返回 `true` 表示仍有积压，下一轮 wait 取 0）
@@ -36,12 +36,12 @@
 
 ### 3. 常量与跨模块类型（`main/def/<name>_def.hpp`）
 
-- **跨模块共享类型/快照/命令动词**：新建 `main/def/<name>_def.hpp`，在 `namespace app` 下定义快照结构体、`enum class <Name>Verb : uint8_t` 及 `verb()` 转换函数（参考 `main/def/rtcm_def.hpp`）。
+- **跨模块共享类型/快照/命令动词**：新建 `main/def/<name>_def.hpp`，在 `namespace app` 下定义快照结构体、`enum class <Name>Verb : uint8_t` 及 `verb()` 转换函数（参考 `main/def/RtcmDef.hpp`）。
 - **模块内部常量**：放在 `<name>_module.cpp` 的匿名命名空间中并标明单位（如 `kDefaultLimitMs`），避免裸数字触发 `.clang-tidy` 魔法数字检查。
 
-### 4. 添加 `ModuleKind`（`main/app_config.hpp`）
+### 4. 添加 `ModuleKind`（`main/AppConfig.hpp`）
 
-在 `main/app_config.hpp` 的 `enum class ModuleKind : uint8_t` **末尾**追加 `k<Name>`（例如 `kDemo`）。
+在 `main/AppConfig.hpp` 的 `enum class ModuleKind : uint8_t` **末尾**追加 `k<Name>`（例如 `kDemo`）。
 
 > 约束：注释已要求“枚举顺序即 ID，勿插入或重排”，只能在枚举末尾追加（当前末尾已有 `kSystemMode`）。若引入新执行器，同步在 `ExecKind` 末尾追加。
 
@@ -69,21 +69,21 @@
 
 > 顺序约束：`AppContext` 成员初始化以及执行器 `init()` / `start()` / `poll()` 遍历顺序严格按照 `module_list.inc` 的书写顺序执行。依赖前置模块的条目必须排在被依赖模块之后。
 
-### 6. `main/app_context.hpp` 的自动展开
+### 6. `main/AppContext.hpp` 的自动展开
 
-`AppContext::kModuleCount` 与成员 `type member{*this};` 均通过 `#include "module_list.inc"` 由 `MODULE_DEF` 自动展开，**常规模块无需改动 `main/app_context.hpp`**。
+`AppContext::kModuleCount` 与成员 `type member{*this};` 均通过 `#include "module_list.inc"` 由 `MODULE_DEF` 自动展开，**常规模块无需改动 `main/AppContext.hpp`**。
 
-需要手改 `main/app_context.hpp` 的例外情况：
+需要手改 `main/AppContext.hpp` 的例外情况：
 - 新模块使链路任务栈需求增大时，调整 `AppContext::kLinkStackBytes`（当前 `4096` 字节）。
-- 新建了另一个 `ExecKind` 执行器时，需在 `AppContext` 手动添加对应的 `rtos::Executor` 和 `rtos::ExecutorStorage<...>` 成员，并在 `main/app_main.cpp` 中执行其 `init`/`start`。
+- 新建了另一个 `ExecKind` 执行器时，需在 `AppContext` 手动添加对应的 `rtos::Executor` 和 `rtos::ExecutorStorage<...>` 成员，并在 `main/AppMain.cpp` 中执行其 `init`/`start`。
 
-### 7. 控制台命令表接入 `main/app_main.cpp`
+### 7. 控制台命令表接入 `main/AppMain.cpp`
 
-`main/app_main.cpp` 的 `start_console()` 当前以定长数组集中注册控制台命令表。若新模块提供 `<name>_cmds()`，需修改 `main/app_main.cpp`（无需重复 `#include`，`app_context.hpp` 已通过 `module_list.inc` 间接引入各模块头文件）：
+`main/AppMain.cpp` 的 `start_console()` 当前以定长数组集中注册控制台命令表。若新模块提供 `<name>_cmds()`，需修改 `main/AppMain.cpp`（无需重复 `#include`，`AppContext.hpp` 已通过 `module_list.inc` 间接引入各模块头文件）：
 
 1. 将 `cmd_tables` 的 `std::array<std::span<const cli::Cmd>, N>` 元素个数 `N` 加 `1`（当前为 `4`）。
 2. 在初始化列表追加 `app::<name>_cmds(),`。
-3. 确认全部命令表条目总数不超过 `cli::kMaxCmds`（`24`，见 `components/cli/include/cli/console.hpp`）。
+3. 确认全部命令表条目总数不超过 `cli::kMaxCmds`（`24`，见 `components/cli/include/cli/Console.hpp`）。
 
 命令主体请用 `cli::Verb` 描述子命令并交给 `cli::dispatch` 分派，失败统一 `return cli::fail("<原因>")`：
 `start()` 的 trampoline 会补上最后一行 `OK` / `ERR …`，命令 handler 不要自己打印这两个状态行，
@@ -95,8 +95,8 @@
 ### 8. 发布数据到 `DataCenter`（Topic / Slot）
 
 1. 在 `main/def/<name>_def.hpp` 定义纯数据快照结构体（可默认构造、按值拷贝、无悬垂指针）。
-2. 在 `main/data/app_data.hpp` 包含 `def/<name>_def.hpp`，并在 `struct DataCenter` 中增加 `fw::Slot<DemoStatus> demo_status{};`。
-3. 在 `main/data/app_data.cpp` 的 `DataCenter::init()` 中**务必**补上一行：
+2. 在 `main/data/AppData.hpp` 包含 `def/<name>_def.hpp`，并在 `struct DataCenter` 中增加 `fw::Slot<DemoStatus> demo_status{};`。
+3. 在 `main/data/AppData.cpp` 的 `DataCenter::init()` 中**务必**补上一行：
    ```cpp
    demo_status.bind_lock(lock);
    ```
@@ -104,8 +104,8 @@
 
 ### 9. 需要持久化时的 `StoreKey`
 
-- `components/app_fw/include/fw/store_key.hpp` 定义了描述表类型 `fw::StoreKey`、`fw::StoreType` 与编译期校验 `fw::valid()`、`fw::unique_keys()`（`ns` 与 `key` 均 ≤ 15 字符）。可按需在模块中声明 `inline constexpr fw::StoreKey kKeys[]` 并附 `static_assert` 校验。
-- **现行实现注意**：目前 `StorageModule`（`main/modules/storage/storage_module.cpp`）尚未自动扫描各模块的 `kKeys[]`，NVS 读写仍通过 `components/nvs_store`（C11/BARR-C）的接口显式完成。因此新增持久化项时，除填写 `StoreKey` 元数据外，还需在 `components/nvs_store` 新增 C 存取函数并在 `StorageModule` 或模块内部接入。
+- `components/app_fw/include/fw/StoreKey.hpp` 定义了描述表类型 `fw::StoreKey`、`fw::StoreType` 与编译期校验 `fw::valid()`、`fw::unique_keys()`（`ns` 与 `key` 均 ≤ 15 字符）。可按需在模块中声明 `inline constexpr fw::StoreKey kKeys[]` 并附 `static_assert` 校验。
+- **现行实现注意**：目前 `StorageModule`（`main/modules/storage/StorageModule.cpp`）尚未自动扫描各模块的 `kKeys[]`，NVS 读写仍通过 `components/nvs_store`（C11/BARR-C）的接口显式完成。因此新增持久化项时，除填写 `StoreKey` 元数据外，还需在 `components/nvs_store` 新增 C 存取函数并在 `StorageModule` 或模块内部接入。
 
 ### 10. 需要堆内存时的登记（`CODING-STYLE.md` §7）
 

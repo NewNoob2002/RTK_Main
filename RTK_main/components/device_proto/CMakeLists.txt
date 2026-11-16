@@ -2,11 +2,11 @@
 # 不依赖任何 IDF/FreeRTOS 头文件，必须能被 test/host/CMakeLists.txt 用 host gcc/g++ 编译。
 # 告警组按 AGENTS.md §3，用生成器表达式区分 C/C++。
 idf_component_register(
-    SRCS "dev_proto_frame.c" "dev_proto_alarm.c"
-         "bytes.cpp" "frame.cpp" "alarm_codec.cpp"
-         "demux_frame.cpp"
+    SRCS "DevProtoFrame.c" "DevProtoAlarm.c"
+         "Bytes.cpp" "Frame.cpp" "AlarmCodec.cpp"
+         "DemuxFrame.cpp"
     INCLUDE_DIRS "include"
-    # ADR-0005：只服务于 demux_frame.cpp（产品帧的 stream_demux 解码器）；
+    # ADR-0005：只服务于 DemuxFrame.cpp（产品帧的 stream_demux 解码器）；
     # 上面的 C 核心与其它 C++ 外观不引用 stream_demux，也不包含它的头。
     REQUIRES stream_demux app_fw)
 

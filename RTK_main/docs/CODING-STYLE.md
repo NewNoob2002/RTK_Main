@@ -10,21 +10,21 @@ R0 只建立规范：目录迁移由 R1 完成，模块类/跳板由 R2 实现�
 ### 1.1 按功能组织，装配入口保持简单
 
 一个功能一个目录，模块实现、命令处理及其私有辅助文件放在一起。
-`app_main.cpp` 只做初始化、按清单注册模块、启动执行器。组件依赖以 `AGENTS.md` 的允许表和 CMake
+`AppMain.cpp` 只做初始化、按清单注册模块、启动执行器。组件依赖以 `AGENTS.md` 的允许表和 CMake
 `REQUIRES` 为门禁；纯逻辑组件不得因目录或命名空间统一而引入 IDF/FreeRTOS/产品依赖。
 
 这样写（ADR-0008 §3 的目标结构）：
 
 ```text
 main/
-  app_main.cpp
-  app_config.hpp                # 版本、执行器与任务参数
+  AppMain.cpp
+  AppConfig.hpp                # 版本、执行器与任务参数
   module_list.inc               # 一行注册一个模块
-  def/                          # link_def.hpp、rtcm_def.hpp、system_def.hpp
+  def/                          # LinkDef.hpp、RtcmDef.hpp、SystemDef.hpp
   modules/
     _template/                  # 模块、命令处理与新增模块说明
-    bt_link/                    # bt_link_module.*、bt_link_cmds.cpp、async_tx.*
-    rtcm/                       # rtcm_module.*、rtcm_cmds.cpp、rtcm_sink.*
+    bt_link/                    # bt_link_module.*、BtLinkCmds.cpp、async_tx.*
+    rtcm/                       # rtcm_module.*、RtcmCmds.cpp、rtcm_sink.*
     storage/
     system/
   support/                      # 与具体模块无关的控制台辅助等胶水
@@ -39,7 +39,7 @@ components/
 
 ```text
 main/
-  bt_link_module.cpp            # 同一功能散在根目录
+  BtLinkModule.cpp            # 同一功能散在根目录
   cmds_link.cpp
   async_tx.cpp
   all_modules.cpp              # 混合多个功能
@@ -51,7 +51,7 @@ main/
 其他模块通过共享定义或已有队列/Slot 交互。单文件建议不超过 500 行，超过时按职责拆分，避免机械切段。
 
 ```cpp
-// 这样写：main/def/link_def.hpp
+// 这样写：main/def/LinkDef.hpp
 struct LinkSnapshot {
     bool connected = false;
 };
@@ -61,7 +61,7 @@ void run_bt_tx_forever();
 
 ### 1.3 注册集中，新增模块从模板开始
 
-新增模块复制 `main/modules/_template/`（详见 [`main/modules/_template/README.md`](../main/modules/_template/README.md)），实现必需操作，再在 `app_config.hpp`、`module_list.inc` 及有命令时的 `app_main.cpp` 完成注册。
+新增模块复制 `main/modules/_template/`（详见 [`main/modules/_template/README.md`](../main/modules/_template/README.md)），实现必需操作，再在 `AppConfig.hpp`、`module_list.inc` 及有命令时的 `AppMain.cpp` 完成注册。
 不要在入口、多个命令文件中各维护一份模块列表。
 
 ```cpp
@@ -106,6 +106,17 @@ Generated-by: pi + codex/gpt-6.1-sol
 常量和枚举值用 `kName`；私有成员用 `name_`；文件作用域可变静态用 `s_` 并放在匿名命名空间；
 宏全大写。不用 `p_`、`b_` 等类型前缀，也不用 `g_` 表示文件静态。
 
+**源文件名（2026-11-16 用户确认）**：工程自有的 C/C++ 源文件与头文件（`.c`/`.h`/`.cpp`/`.hpp`）一律用
+`PascalCase`，按下划线分词逐段首字母大写：`gnss_module.cpp` → `GnssModule.cpp`、`spp_server.h` → `SppServer.h`、
+`test_link_service.cpp` → `TestLinkService.cpp`。没有对应类的文件同样适用（`GnssCmds.cpp`、`TraceCodes.hpp`）。
+以下保持原样：
+- 目录名（组件目录、include 根 `fw/`、`core/` 等）——IDF 以目录名作组件名；
+- 主机测试中模拟 IDF/FreeRTOS 的 shim 头（如 `shim/esp_err.h`），必须与被替代的系统头同名；
+- `reference/` 归档代码与 `docs/reports/` 历史记录；
+- CMake、Kconfig、`*.inc`、Python 脚本、CMake/ctest 目标名（仍为 `snake_case`）。
+CMake 里由 `snake_case` 名推导文件名时用 `cmake/pascal_case.cmake` 的 `rtk_pascal_case()`。
+新增文件不得与已有文件仅大小写不同。
+
 ```cpp
 // 这样写
 struct LinkState { bool connected = false; };
@@ -126,7 +137,7 @@ void PublishLink(uint32_t nowMs);
 ### 3.2 统一命名空间与 include 根
 
 ADR-0008 §9 的对照如下。组件按用途命名，统一名称不改变职责与可复用性。
-公共基础错误码位于 `app_fw` 的 `fw/status.hpp`，使用 `fw::Status`、`fw::is_ok`、`fw::to_string`，枚举值及字符串映射不变。
+公共基础错误码位于 `app_fw` 的 `fw/Status.hpp`，使用 `fw::Status`、`fw::is_ok`、`fw::to_string`，枚举值及字符串映射不变。
 C 头文件名与符号前缀取组件前缀（`dev_proto_*`、`spp_server_*`、`nvs_store_*`）；NVS 命名空间 `"rtk"`、键值、蓝牙名与 `RTK_*` Kconfig 选项保持不变。
 
 | 组件目录 | 命名空间 | C++ include 根 |
@@ -144,12 +155,12 @@ C 头文件名与符号前缀取组件前缀（`dev_proto_*`、`spp_server_*`、
 
 ```cpp
 // 这样写（R3 目标）
-#include "fw/module.hpp"
+#include "fw/Module.hpp"
 namespace app {
 // 应用模块
 }
 // 不要这样写（新增接口缺少组件根）
-#include "module.hpp"
+#include "Module.hpp"
 namespace unrelated_app {
 }
 ```

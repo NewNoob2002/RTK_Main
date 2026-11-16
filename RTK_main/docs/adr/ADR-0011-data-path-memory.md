@@ -27,8 +27,8 @@ BlueZ `spp_stress`：rtt～win8 零丢失，约 300 rep/s，下行约 25 KiB/s�
 
 ### 1.2 源码核对所得修正
 
-1. `components/spp_server/private_include/spp_server_priv.h` 中 `s_spp_tx_inflight` 限制的是**全驱动**至多一次未完成提交，比“每会话一次”更严格。每次最多 512 B，等待 WRITE_EVT 后才能继续。
-2. `main/def/rtcm_def.hpp` 的 `kRtcmBatchBytes=2×1029+256=2314`。`RtcmBatch` 只有 `span` 和拒绝计数；DataCenter 的 Slot 复制描述符，没有再复制 RTCM 负载。不能把 Slot 记成 2314 B 负载副本。
+1. `components/spp_server/private_include/SppServerPriv.h` 中 `s_spp_tx_inflight` 限制的是**全驱动**至多一次未完成提交，比“每会话一次”更严格。每次最多 512 B，等待 WRITE_EVT 后才能继续。
+2. `main/def/RtcmDef.hpp` 的 `kRtcmBatchBytes=2×1029+256=2314`。`RtcmBatch` 只有 `span` 和拒绝计数；DataCenter 的 Slot 复制描述符，没有再复制 RTCM 负载。不能把 Slot 记成 2314 B 负载副本。
 3. 最大产品线路帧是 `20+256+4=280 B`；旧注释中的 278 B 不作为容量依据。AsyncTx 的 Item 在 ESP32 ABI 下预计 292 B，精确值须由编译产物确认。
 4. `fw::FanoutRing` 已冻结：2 B 长度、4 读者、独立 tail、覆盖最旧完整记录，attach 从最新开始。尚未用于 main。其现实现对非二次幂容量在 u32 回绕时可能旋转存储，直接返回长期有效 span 不安全。
 5. `LinkService::on_data()` 先执行 `router_.handle()`，再调用 `Transport::write()`；仅替换发送驱动仍会在满时丢掉已执行请求的回复，必须同时增加 dispatch 前的容量预留。
@@ -525,11 +525,11 @@ python3 tools/hil/spp_stress.py F8:B3:B7:25:D8:B2 --mode upwin --window-bytes 30
 
 | 卡 | 重点 | 冻结变更提案 |
 | --- | --- | --- |
-| [K1](../tasks/K1-fanout-ring.md) | typed FanoutRing、租约、host回归 | `components/app_fw/include/fw/fanout_ring.hpp`；ADR-0007 §3.6-1 |
-| [K2](../tasks/K2-spp-nonblocking-tx.md) | 多在途TX、reply credit、删async_tx | `components/spp_server/include/spp_server.h`、`components/spp_server/include/spp/spp_transport.hpp`、`components/link_core/include/core/transport.hpp`、`components/link_core/include/core/link_service.hpp`；若扩展纯逻辑trace编号则 `components/link_core/include/core/trace_codes.hpp`；ADR-0007/0009相关契约 |
-| [K3](../tasks/K3-rtcm-rx-path.md) | RTCM直通、RX通知/512B、公平 | 在K2已批准的 `spp_server.h` 中定稿wake/RX统计契约；ADR-0007/0010通路描述 |
-| [K4](../tasks/K4-gnss-app-ring.md) | App环、订阅/配置/NVS、取代G-C相关部分 | `components/stream_demux/include/demux/decoders/unicore_hash.hpp`；新增 `components/link_core/include/core/services/gnss_service.hpp`；如服务注册确需更改 `components/link_core/include/core/command_router.hpp` 必须再列明；ADR-0010 §2.9、G-C、phone_protocol；需要方言公共数据表时先报告具体文件 |
-| [K5](../tasks/K5-boot-memory.md) | boot_alloc、sys mem、s_app .bss | 新增rtos RAII头按AGENTS例外；C storage契约修订 `spp_server.h`；ADR-0009内存指标/命令与CODING-STYLE启动堆说明如有冲突由架构方修订 |
+| [K1](../tasks/K1-fanout-ring.md) | typed FanoutRing、租约、host回归 | `components/app_fw/include/fw/FanoutRing.hpp`；ADR-0007 §3.6-1 |
+| [K2](../tasks/K2-spp-nonblocking-tx.md) | 多在途TX、reply credit、删async_tx | `components/spp_server/include/SppServer.h`、`components/spp_server/include/spp/SppTransport.hpp`、`components/link_core/include/core/Transport.hpp`、`components/link_core/include/core/LinkService.hpp`；若扩展纯逻辑trace编号则 `components/link_core/include/core/TraceCodes.hpp`；ADR-0007/0009相关契约 |
+| [K3](../tasks/K3-rtcm-rx-path.md) | RTCM直通、RX通知/512B、公平 | 在K2已批准的 `SppServer.h` 中定稿wake/RX统计契约；ADR-0007/0010通路描述 |
+| [K4](../tasks/K4-gnss-app-ring.md) | App环、订阅/配置/NVS、取代G-C相关部分 | `components/stream_demux/include/demux/decoders/UnicoreHash.hpp`；新增 `components/link_core/include/core/services/GnssService.hpp`；如服务注册确需更改 `components/link_core/include/core/CommandRouter.hpp` 必须再列明；ADR-0010 §2.9、G-C、phone_protocol；需要方言公共数据表时先报告具体文件 |
+| [K5](../tasks/K5-boot-memory.md) | boot_alloc、sys mem、s_app .bss | 新增rtos RAII头按AGENTS例外；C storage契约修订 `SppServer.h`；ADR-0009内存指标/命令与CODING-STYLE启动堆说明如有冲突由架构方修订 |
 | K6（未来） | SPI SD与静态观测记录 | 无本期修改/分配/硬件动作；待观测命令和板级信息后另立卡 |
 
 所有卡报告 `docs/reports/K<N>.md`，逐项PASS/FAIL/NOT_RUN/BLOCKED、命令/日志、内存实测、契约偏离和未决问题。禁止commit/push、串口/硬件操作、安装下载，授权未覆盖的冻结改动先停该项并继续独立工作。

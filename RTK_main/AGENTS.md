@@ -23,7 +23,7 @@
 - **C 文件规则**：布局同下（ESP-006）；公共符号/宏带组件前缀（`dev_proto_*`、`DEV_PROTO_*`、`spp_server_*`、`nvs_store_*`），文件作用域静态 `s_`，类型 `_t`；不用 `p_`/`g_`/`b_` 前缀。遵守 BARR-C 安全核心：`switch` 必有 `default`、不混用有/无符号、窄化转换写注释、变量使用前初始化、不把缓冲区强转为结构体指针、多字节字段逐字节小端读写、内部函数 `static`、不用 `malloc`/`free`、不用 `goto`。C 头文件 `#pragma once` + `extern "C"`，只含 C 构造。C 代码不调用 C++。
 - **以下各条针对 C++ 文件**（C 文件只适用其中的布局、错误检查与并发条款）：
 - **布局（ESP-006）**：ESP-IDF Astyle 风格：函数定义花括号换行，控制语句、类、命名空间花括号同行；4 空格；120 列；`#pragma once`。日常用 `clang-format --style=file` 检查（`.clang-format` 是近似规则）。
-- **组件命名（ADR-0008 §9）**：组件按用途命名，不带产品前缀；`spp_server`、`device_proto`、`nvs_store`、`rtos`、`link_core`、`cli` 的 C++ 命名空间/include 根分别为 `spp` / `spp/`、`proto` / `proto/`、无 C++ 接口、`rtos` / `rtos/`、`core` / `core/`、`cli` / `cli/`。`stream_demux`、`app_fw`、`bt_reconnect` 分别用 `demux` / `demux/`、`fw` / `fw/`、`reconnect` / `reconnect/`；这三个通用组件不得依赖产品组件或 IDF/FreeRTOS 头。`main` 使用 `app`，嵌套协议空间保留，不得引入顶层 `alarm`、`link`、`sync`。公共基础错误码位于 `app_fw` 的 `fw/status.hpp`，类型与辅助函数为 `fw::Status`、`fw::is_ok`、`fw::to_string`；C 文件名与符号前缀取组件前缀（`dev_proto_*`、`DEV_PROTO_*`、`spp_server_*`、`SPP_SERVER_*`、`nvs_store_*`、`NVS_STORE_*`）；产品名相关的 Kconfig 选项（`RTK_*`）、NVS 命名空间 `"rtk"` 与蓝牙名保持不变。
+- **组件命名（ADR-0008 §9）**：组件按用途命名，不带产品前缀；`spp_server`、`device_proto`、`nvs_store`、`rtos`、`link_core`、`cli` 的 C++ 命名空间/include 根分别为 `spp` / `spp/`、`proto` / `proto/`、无 C++ 接口、`rtos` / `rtos/`、`core` / `core/`、`cli` / `cli/`。`stream_demux`、`app_fw`、`bt_reconnect` 分别用 `demux` / `demux/`、`fw` / `fw/`、`reconnect` / `reconnect/`；这三个通用组件不得依赖产品组件或 IDF/FreeRTOS 头。`main` 使用 `app`，嵌套协议空间保留，不得引入顶层 `alarm`、`link`、`sync`。公共基础错误码位于 `app_fw` 的 `fw/Status.hpp`，类型与辅助函数为 `fw::Status`、`fw::is_ok`、`fw::to_string`；C 文件名与符号前缀取组件前缀（`dev_proto_*`、`DEV_PROTO_*`、`spp_server_*`、`SPP_SERVER_*`、`nvs_store_*`、`NVS_STORE_*`）；产品名相关的 Kconfig 选项（`RTK_*`）、NVS 命名空间 `"rtk"` 与蓝牙名保持不变。
 - **命名（cpp/coding.md）**：命名空间见上条；类型 `CamelCase`；函数、变量、参数 `lower_case`；私有成员后缀 `_`；常量与枚举值 `kCamelCase`；文件作用域可变静态加 `s_` 前缀并放进匿名命名空间；宏全大写。不用 `p_`/`b_` 这类类型前缀。
 - **禁止**：异常、RTTI、`dynamic_cast`、`typeid`；`std::function`；`<map>`、`<list>`、`<deque>`、`<unordered_*>`；iostream；`shared_ptr`；`<thread>`/`<mutex>`；`volatile` 用于同步；位域映射寄存器；`ESP_ERROR_CHECK` 用于可恢复错误；`(void)` 丢弃 `esp_err_t`。
 - **堆内存门禁**：`new`/`delete`/`malloc`/`free`、`<vector>`、`<string>` 按 `docs/CODING-STYLE.md` 的堆内存分级使用，须登记 `tools/g7b_check/heap_allowlist.txt`；placement new 不分配堆。ISR、蓝牙回调、链路任务每轮路径、发送任务禁止分配；只允许启动期一次性分配或非实时路径限量分配，并遵守失败处理要求。C 文件仍沿用上面的 `malloc`/`free` 禁令。
@@ -41,7 +41,7 @@
 | 组件 | 可 REQUIRES | 禁止 |
 | --- | --- | --- |
 | `components/stream_demux`（通用 C++20，ADR-0005） | 无 | 任何 IDF/FreeRTOS/平台头、产品组件 |
-| `components/device_proto`（C 核心 + C++ 外观） | stream_demux（ADR-0005，仅 `demux_frame.cpp`）、app_fw（C++ 基础错误码） | 任何 IDF/FreeRTOS 头 |
+| `components/device_proto`（C 核心 + C++ 外观） | stream_demux（ADR-0005，仅 `DemuxFrame.cpp`）、app_fw（C++ 基础错误码） | 任何 IDF/FreeRTOS 头 |
 | `components/app_fw`（通用 C++20，ADR-0007） | 无 | 任何 IDF/FreeRTOS/平台头、产品组件 |
 | `components/bt_reconnect`（通用 C++20，ADR-0007 §5） | 无 | 任何 IDF/FreeRTOS/平台头、产品组件 |
 | `components/link_core` | device_proto、app_fw | 任何 IDF/FreeRTOS 头 |
@@ -51,7 +51,7 @@
 | `components/nvs_store`（C） | nvs_flash、log | 其他自有组件 |
 | `main` | 以上全部、console、esp_system | — |
 
-纯组件（stream_demux、device_proto、link_core）必须能被 `test/host/CMakeLists.txt` 在 host 上用 g++ 编译。文件名已在该 CMake 中固定，不得改名。
+纯组件（stream_demux、device_proto、link_core）必须能被 `test/host/CMakeLists.txt` 在 host 上用 g++ 编译。文件名已在该 CMake 中固定，不得改名；C/C++ 文件名一律 `PascalCase`（CODING-STYLE §3.1）。
 ADR-0007 新增的纯组件（app_fw、bt_reconnect）与 link_core 的 `services/`、`command_router` 按 `stream_demux` 的 CMakeLists 模式（`if(ESP_PLATFORM)` 分支）同时支持 IDF 与 host，各自的 host 测试放在 `test/app_fw`、`test/bt_reconnect`、`test/services`（由实现方新建，不冻结；须支持普通与 ASan/UBSan 构建）。
 
 自有组件的 `CMakeLists.txt` 加编译选项（C 文件用 `$<$<COMPILE_LANGUAGE:C>:...>` 区分）：

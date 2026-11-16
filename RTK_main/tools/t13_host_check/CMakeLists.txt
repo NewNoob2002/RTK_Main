@@ -20,22 +20,22 @@ set(SHIM_INC "${CMAKE_CURRENT_SOURCE_DIR}/shim/inc")
 
 find_package(Threads REQUIRED)
 
-add_library(fake_rtos STATIC shim/fake_rtos.c)
+add_library(fake_rtos STATIC shim/FakeRtos.c)
 target_include_directories(fake_rtos PUBLIC "${SHIM_INC}")
 target_link_libraries(fake_rtos PUBLIC Threads::Threads)
 
-add_library(fake_idf STATIC shim/fake_idf.c)
+add_library(fake_idf STATIC shim/FakeIdf.c)
 target_include_directories(fake_idf PUBLIC "${SHIM_INC}")
 target_link_libraries(fake_idf PUBLIC fake_rtos)
 
 # 被检查的真实源码：与固件同一份文件（ADR-0008 R5 拆成 5 个职责文件），按 AGENTS.md 对
 # IDF 依赖组件的 C 告警集编译。
 add_library(spp_server_driver STATIC
-    "${PROJ_ROOT}/components/spp_server/spp_server_init.c"
-    "${PROJ_ROOT}/components/spp_server/spp_server_session.c"
-    "${PROJ_ROOT}/components/spp_server/spp_server_rx.c"
-    "${PROJ_ROOT}/components/spp_server/spp_server_tx.c"
-    "${PROJ_ROOT}/components/spp_server/spp_server_gap.c")
+    "${PROJ_ROOT}/components/spp_server/SppServerInit.c"
+    "${PROJ_ROOT}/components/spp_server/SppServerSession.c"
+    "${PROJ_ROOT}/components/spp_server/SppServerRx.c"
+    "${PROJ_ROOT}/components/spp_server/SppServerTx.c"
+    "${PROJ_ROOT}/components/spp_server/SppServerGap.c")
 target_include_directories(spp_server_driver PUBLIC "${SHIM_INC}" "${SPP_SERVER_INC}" "${SPP_SERVER_BOOT_INC}")
 target_include_directories(spp_server_driver PRIVATE "${SPP_SERVER_PRIV_INC}")
 target_link_libraries(spp_server_driver PUBLIC fake_idf)
@@ -43,8 +43,8 @@ target_compile_options(spp_server_driver PRIVATE
     -fno-builtin-memcpy # 仅 host：K2 通过 --wrap=memcpy 给复制窗口加确定性门闩。
     -Wall -Wextra -Werror -Wshadow -Wimplicit-fallthrough -Wstrict-prototypes)
 
-add_executable(t13_host_check t13_host_check.c)
-# fake_idf.h 在 shim/ 根（shim/inc 只放 IDF/FreeRTOS 头）。测试直接包含它，
+add_executable(t13_host_check T13HostCheck.c)
+# FakeIdf.h 在 shim/ 根（shim/inc 只放 IDF/FreeRTOS 头）。测试直接包含它，
 # 因此单独给测试目标加该目录；不移动头文件。
 target_include_directories(t13_host_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shim")
 target_link_libraries(t13_host_check PRIVATE spp_server_driver)
@@ -93,7 +93,7 @@ foreach(scenario IN LISTS T13_SCENARIOS)
     set_tests_properties("t13_${scenario}" PROPERTIES TIMEOUT 30)
 endforeach()
 
-add_executable(k2_tx_check k2_tx_check.c)
+add_executable(k2_tx_check K2TxCheck.c)
 target_include_directories(k2_tx_check PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shim" "${SPP_SERVER_PRIV_INC}")
 target_link_libraries(k2_tx_check PRIVATE spp_server_driver)
 target_link_options(k2_tx_check PRIVATE "-Wl,--wrap=memcpy")

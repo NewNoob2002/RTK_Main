@@ -37,7 +37,7 @@ target_compile_options(bt_reconnect PRIVATE -fno-exceptions -fno-rtti)
 
 enable_testing()
 
-add_executable(test_bt_reconnect test_reconnect.cpp)
+add_executable(test_bt_reconnect TestReconnect.cpp)
 target_link_libraries(test_bt_reconnect bt_reconnect unity)
 target_compile_options(test_bt_reconnect PRIVATE ${PROJ_CXX_STRICT})
 add_test(NAME test_bt_reconnect COMMAND test_bt_reconnect)

@@ -14,7 +14,7 @@
 
 ### 2.1 实时路径只记事件，不格式化、不碰串口
 
-- `app_fw` 新增 `fw/trace.hpp`：类别位掩码（原子读，关闭时一次比较即返回）、16 字节定长事件 `fw::TraceEvent`、多写者单读者的定长环 `fw::TraceRing`（注入 `LockOps`，临界区只拷 16 B；满了丢**新**事件并计数，不阻塞）。
+- `app_fw` 新增 `fw/Trace.hpp`：类别位掩码（原子读，关闭时一次比较即返回）、16 字节定长事件 `fw::TraceEvent`、多写者单读者的定长环 `fw::TraceRing`（注入 `LockOps`，临界区只拷 16 B；满了丢**新**事件并计数，不阻塞）。
 - 全局唯一入口 `fw::trace(cat, code, session, a, b)`：检查掩码 → 取时间 → 调用安装的 sink（main 安装为“压入 TraceRing”）。未安装 sink 时什么也不做（host 测试与报警器复用不受影响）。
 - 允许在 link 任务、spp_worker 任务、BT 回调任务（spp_server C 驱动经 C 钩子）中调用；**禁止在 ISR 中调用**。K2 删除 async_tx 任务。
 - 格式化与输出由 main 的 `DebugModule` 的低优先级任务完成（prio 1，core 0）：取事件 → 查 (cat, code) 文本表 → printf。环有丢弃时先补一行 `[trace] dropped N`。
@@ -24,7 +24,7 @@
 
 | 类别 | 事件（code） | 来源 |
 | --- | --- | --- |
-| `link` | open（角色及原因）、reject、close、alarm rx timeout、pending timeout、pair window open/close、whitelist add | `link_core`（`core/trace_codes.hpp`，经 `fw::trace`） |
+| `link` | open（角色及原因）、reject、close、alarm rx timeout、pending timeout、pair window open/close、whitelist add | `link_core`（`core/TraceCodes.hpp`，经 `fw::trace`） |
 | `spp` | cong on/off、write done/err、rx drop（字节）、sdp/srv start、gap auth | `spp_server` C 驱动，`spp_server_set_trace_hook()` 钩子；main 安装为转发到 `fw::trace` |
 | `rtcm` | 每帧：消息号、长度；reject（原因）、resync、unknown bytes | main `rtcm` 模块（demux 回调里，`stream_demux` 不依赖 app_fw，不改） |
 | `proto` | 产品帧 msg_id/type/len、应答结果码、解析错误（CRC/长度） | `link_core` link_service / command_router |
@@ -77,9 +77,9 @@ sys    info | heap | tasks | reboot
 
 ### 2.7 编译期开关 `CONFIG_RTK_TRACE_ENABLE`（默认 y）
 
-为 n 时：`app_fw` 对所有使用者 PUBLIC 定义 `FW_TRACE_ENABLED=0`，`fw/trace.hpp` 中 `trace()`/`trace_on()` 变为空内联（调用点不加 `#if`，整体编译消除）；
-`main/CMakeLists.txt` 不收 `modules/debug/`，`module_list.inc`、`app_main.cpp`（debug 命令/动词/早期 init）、storage 的 `kKeyTables` 同步去掉；
-`spp_server_priv.h` 的钩子调用编译为空。实测（IDF v6.1，esp32）：
+为 n 时：`app_fw` 对所有使用者 PUBLIC 定义 `FW_TRACE_ENABLED=0`，`fw/Trace.hpp` 中 `trace()`/`trace_on()` 变为空内联（调用点不加 `#if`，整体编译消除）；
+`main/CMakeLists.txt` 不收 `modules/debug/`，`module_list.inc`、`AppMain.cpp`（debug 命令/动词/早期 init）、storage 的 `kKeyTables` 同步去掉；
+`SppServerPriv.h` 的钩子调用编译为空。实测（IDF v6.1，esp32）：
 
 | 构建 | DRAM | Flash Code | Flash Data | 镜像 |
 |---|---|---|---|---|
@@ -92,7 +92,7 @@ off 构建 ELF 中无 TraceRing/DebugModule/trace_out/fw::trace 符号。
 运行时默认掩码为 0（全关；NVS `dbg/mask` 有保存值时以保存值为准）。T3 实测：7 类全开 + 29 KB/s RTCM 负载，
 trace_out 整行 `uart_write_bytes` 输出约 3.4 KB/s，环 max_depth 45/256、0 丢；数据通路 0 丢。
 
-### 2.8 控制台统一输出出口 `cli/out.hpp`（2026-11-12 补充）
+### 2.8 控制台统一输出出口 `cli/Out.hpp`（2026-11-12 补充）
 
 IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符调用一次 `uart_write_bytes(…, 1)`，
 `printf` 在 2 Mbaud / 240 MHz 下只有约 24.6 KB/s。决策：
@@ -136,7 +136,7 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 - **两条通道，一个读者。** 实时路径（BT 回调、spp 发送、link 执行器逐帧路径）继续只用 `fw::trace()`（§2.1 不变）。
   非实时任务（io 执行器上的 GNSS、控制台任务，以及 link 执行器上的**错误/拒绝分支**——不是逐帧成功分支）可用新的
   `fw::tlog(cat, fmt, ...)` 在自己栈上格式化一行句子，`fw::tlog_hex(cat, bytes)` 附原始字节（≤ 256 B）。两者写入变长记录环
-  `fw::LogRing`（新冻结头 `fw/tlog.hpp`，存储大小 Kconfig `CONFIG_RTK_LOG_RING_BYTES`，默认 4096）。`trace_out` 任务同时读
+  `fw::LogRing`（新冻结头 `fw/Tlog.hpp`，存储大小 Kconfig `CONFIG_RTK_LOG_RING_BYTES`，默认 4096）。`trace_out` 任务同时读
   TraceRing 与 LogRing，按时间戳合并输出（新增 `TraceRing::peek_time`），仍经 `cli::out_write` 整行写出，不穿插。
 - **两级开关。** 类别掩码（`debug on/off`，与 trace 共用）控制事件与文本行；新增十六进制掩码 `log_set_hex_mask`
   控制 `tlog_hex`。控制台：`debug on <cat...|all> [hex]` 打开类别，带 `hex` 同时打开这些类别的十六进制转储、不带则关闭；
@@ -158,16 +158,16 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
   [  20.100] LINK session 0x0081 opened as ALARM (whitelisted)
   [  20.200] PROTO session 0x0081 frame 0x04 rejected: bad CRC
   ```
-  既有 trace 事件的文本表（`main/modules/debug/trace_text.cpp`）同步改成句子格式；事件码与字段含义不变。
+  既有 trace 事件的文本表（`main/modules/debug/TraceText.cpp`）同步改成句子格式；事件码与字段含义不变。
 - **覆盖面。** 每个组件/应用模块都要能在打开对应类别后说清成功与失败；审计结果与补齐清单写入 `docs/reports/T4-log-audit.md`。
 
 ## 3. 冻结接口（T0 由 Claude 写入）
 
-- `components/app_fw/include/fw/trace.hpp`（新）
-- `components/link_core/include/core/trace_codes.hpp`（新，link/proto/alarm 事件码）
-- `components/cli/include/cli/console.hpp`（追加 `fail`、`Verb`、`dispatch`、`println_kv` 等；原接口不变）
-- `components/spp_server/include/spp_server.h`（追加 trace 钩子与事件码；原接口不变）
-- §2.11：`components/app_fw/include/fw/tlog.hpp`（新）、`fw/trace.hpp` 追加 `TraceRing::peek_time`、`components/stream_demux/include/demux/demux.hpp` 追加 `RejectCause`/`Sink::on_reject`、`demux/decoder.hpp` 追加 `Decoder::explain`
+- `components/app_fw/include/fw/Trace.hpp`（新）
+- `components/link_core/include/core/TraceCodes.hpp`（新，link/proto/alarm 事件码）
+- `components/cli/include/cli/Console.hpp`（追加 `fail`、`Verb`、`dispatch`、`println_kv` 等；原接口不变）
+- `components/spp_server/include/SppServer.h`（追加 trace 钩子与事件码；原接口不变）
+- §2.11：`components/app_fw/include/fw/Tlog.hpp`（新）、`fw/Trace.hpp` 追加 `TraceRing::peek_time`、`components/stream_demux/include/demux/Demux.hpp` 追加 `RejectCause`/`Sink::on_reject`、`demux/Decoder.hpp` 追加 `Decoder::explain`
 
 ## 4. 门槛
 

@@ -51,17 +51,17 @@
 ```
 RTK_main/
 ├─ main/                          # 应用层：只做装配和业务模块
-│  ├─ app_main.cpp                # 唯一入口：初始化 → 按清单注册模块 → 启动执行器
-│  ├─ app_config.hpp              # 版本、执行器/任务参数（原 app_version/app_ids 的配置部分）
+│  ├─ AppMain.cpp                # 唯一入口：初始化 → 按清单注册模块 → 启动执行器
+│  ├─ AppConfig.hpp              # 版本、执行器/任务参数（原 app_version/app_ids 的配置部分）
 │  ├─ module_list.inc             # 模块清单：一行一个 MODULE_DEF(BtLink, kLink)
 │  ├─ def/                        # 跨模块共享的类型（仿 DataProc/Def）
-│  │  ├─ link_def.hpp             # 链路状态快照、统计结构
-│  │  ├─ rtcm_def.hpp
-│  │  └─ system_def.hpp
+│  │  ├─ LinkDef.hpp             # 链路状态快照、统计结构
+│  │  ├─ RtcmDef.hpp
+│  │  └─ SystemDef.hpp
 │  ├─ modules/
 │  │  ├─ _template/               # 新增模块骨架（module + cmds + 说明）
-│  │  ├─ bt_link/                 # bt_link_module.hpp/.cpp、bt_link_cmds.cpp、async_tx.hpp/.cpp
-│  │  ├─ rtcm/                    # rtcm_module.*、rtcm_cmds.cpp、rtcm_sink.*（原 app_rtcm）
+│  │  ├─ bt_link/                 # BtLinkModule.hpp/.cpp、BtLinkCmds.cpp、async_tx.hpp/.cpp
+│  │  ├─ rtcm/                    # rtcm_module.*、RtcmCmds.cpp、rtcm_sink.*（原 app_rtcm）
 │  │  ├─ storage/
 │  │  └─ system/
 │  └─ support/                    # 控制台辅助等与具体模块无关的胶水
@@ -126,7 +126,7 @@ RTK_main/
 
 ## 7. 决定（2026-11-12 用户确认）
 
-1. 命名保持 `snake_case`。
+1. 命名保持 `snake_case`。（2026-11-16 修订：C/C++ 源文件名改为 `PascalCase`，函数/变量仍为 `snake_case`，见 CODING-STYLE §3.1。）
 2. 源文件第一行写“这个文件做什么”；`Generated-by / 人工负责人` 删除，生成来源记录在提交信息里。
 3. 同意 R3 改冻结头文件并重算 `docs/frozen.sha256`。
 

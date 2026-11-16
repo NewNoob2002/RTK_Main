@@ -2,11 +2,11 @@
 # 告警组按 AGENTS.md §3（纯组件全开）。
 # ADR-0007 J2b：旧 CommandDispatcher 已移入 reference/cpp-v3-dispatcher/，不参与构建。
 idf_component_register(
-    SRCS "alarm_source.cpp" "link_manager.cpp" "link_service.cpp"
-         "command_router.cpp"
-         "services/device_service.cpp" "services/config_service.cpp"
-         "services/alarm_service.cpp" "services/pair_service.cpp"
-         "services/gnss_service.cpp"
+    SRCS "AlarmSource.cpp" "LinkManager.cpp" "LinkService.cpp"
+         "CommandRouter.cpp"
+         "services/DeviceService.cpp" "services/ConfigService.cpp"
+         "services/AlarmService.cpp" "services/PairService.cpp"
+         "services/GnssService.cpp"
     INCLUDE_DIRS "include"
     REQUIRES device_proto app_fw)
 

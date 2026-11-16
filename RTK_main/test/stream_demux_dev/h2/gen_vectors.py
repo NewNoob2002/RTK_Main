@@ -2,10 +2,10 @@
 """H2 自测向量生成器（不交付、不参与构建；任务卡允许放 test/stream_demux_dev/h2/）。
 
 独立性：本脚本只用移位/异或/加法逐位实现 CRC 与校验，不调用被测 C++ 代码；产品帧的 CRC-32 用
-Python 标准库 zlib（与 dev_proto_frame.c 声称的 zlib 等价性互相核对）。
+Python 标准库 zlib（与 DevProtoFrame.c 声称的 zlib 等价性互相核对）。
 
 输出：
-  * h2_vectors.h —— h2_check.cpp 使用的帧向量；
+  * H2Vectors.h —— H2Check.cpp 使用的帧向量；
   * 标准输出 —— docs/reports/H2.md §3 的已知向量核对表数据。
 """
 
@@ -132,7 +132,7 @@ def main() -> None:
     for name, data in vectors.items():
         lines.append(cpp_array(name, data))
         lines.append("")
-    with open("h2_vectors.h", "w", encoding="utf-8") as handle:
+    with open("H2Vectors.h", "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines))
 
     print("=== 已知向量核对表（独立逐位实现 / zlib） ===")

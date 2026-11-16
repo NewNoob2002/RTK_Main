@@ -10,8 +10,8 @@ if(DEFINED CONFIG_SOC_BT_CLASSIC_SUPPORTED AND NOT CONFIG_SOC_BT_CLASSIC_SUPPORT
     message(WARNING "spp_server: CONFIG_SOC_BT_CLASSIC_SUPPORTED=0，SPP 驱动与适配器未编译")
 else()
     idf_component_register(
-        SRCS "spp_server_init.c" "spp_server_session.c" "spp_server_rx.c" "spp_server_tx.c" "spp_server_gap.c"
-             "spp_transport.cpp"
+        SRCS "SppServerInit.c" "SppServerSession.c" "SppServerRx.c" "SppServerTx.c" "SppServerGap.c"
+             "SppTransport.cpp"
         INCLUDE_DIRS "include" "boot_include"
         PRIV_INCLUDE_DIRS "private_include"
         REQUIRES link_core rtos app_fw bt)

@@ -42,25 +42,25 @@ add_library(unity STATIC ${UNITY_DIR}/unity.c)
 target_include_directories(unity SYSTEM PUBLIC ${UNITY_DIR})
 
 add_library(dev_proto_c STATIC
-    ${PROJ_ROOT}/components/device_proto/dev_proto_frame.c
-    ${PROJ_ROOT}/components/device_proto/dev_proto_alarm.c)
+    ${PROJ_ROOT}/components/device_proto/DevProtoFrame.c
+    ${PROJ_ROOT}/components/device_proto/DevProtoAlarm.c)
 target_include_directories(dev_proto_c PUBLIC ${PROJ_ROOT}/components/device_proto/include)
 target_compile_options(dev_proto_c PRIVATE ${PROJ_C_STRICT})
 
 add_library(host_pure STATIC
-    ${PROJ_ROOT}/components/app_fw/src/status.cpp
-    ${PROJ_ROOT}/components/app_fw/src/trace.cpp
-    ${PROJ_ROOT}/components/device_proto/bytes.cpp
-    ${PROJ_ROOT}/components/device_proto/frame.cpp
-    ${PROJ_ROOT}/components/device_proto/alarm_codec.cpp
-    ${PROJ_ROOT}/components/link_core/alarm_source.cpp
-    ${PROJ_ROOT}/components/link_core/link_manager.cpp
-    ${PROJ_ROOT}/components/link_core/command_router.cpp
-    ${PROJ_ROOT}/components/link_core/services/device_service.cpp
-    ${PROJ_ROOT}/components/link_core/services/config_service.cpp
-    ${PROJ_ROOT}/components/link_core/services/alarm_service.cpp
-    ${PROJ_ROOT}/components/link_core/services/pair_service.cpp
-    ${PROJ_ROOT}/components/link_core/link_service.cpp)
+    ${PROJ_ROOT}/components/app_fw/src/Status.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Trace.cpp
+    ${PROJ_ROOT}/components/device_proto/Bytes.cpp
+    ${PROJ_ROOT}/components/device_proto/Frame.cpp
+    ${PROJ_ROOT}/components/device_proto/AlarmCodec.cpp
+    ${PROJ_ROOT}/components/link_core/AlarmSource.cpp
+    ${PROJ_ROOT}/components/link_core/LinkManager.cpp
+    ${PROJ_ROOT}/components/link_core/CommandRouter.cpp
+    ${PROJ_ROOT}/components/link_core/services/DeviceService.cpp
+    ${PROJ_ROOT}/components/link_core/services/ConfigService.cpp
+    ${PROJ_ROOT}/components/link_core/services/AlarmService.cpp
+    ${PROJ_ROOT}/components/link_core/services/PairService.cpp
+    ${PROJ_ROOT}/components/link_core/LinkService.cpp)
 target_include_directories(host_pure PUBLIC
     ${PROJ_ROOT}/components/app_fw/include
     ${PROJ_ROOT}/components/device_proto/include
@@ -68,9 +68,11 @@ target_include_directories(host_pure PUBLIC
 target_link_libraries(host_pure PUBLIC dev_proto_c)
 target_compile_options(host_pure PRIVATE ${PROJ_CXX_STRICT})
 
+include(${PROJ_ROOT}/cmake/pascal_case.cmake)
 enable_testing()
 foreach(name test_bytes test_frame test_alarm_codec test_link_manager test_link_service)
-    add_executable(${name} ${name}.cpp)
+    rtk_pascal_case(_f "${name}")
+    add_executable(${name} ${_f}.cpp)
     target_link_libraries(${name} host_pure unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})
     add_test(NAME ${name} COMMAND ${name})
@@ -78,7 +80,8 @@ endforeach()
 
 # C 接口测试只链接 C 库，证明报警器固件（纯 C）可单独使用 device_proto 的 C 部分。
 foreach(name test_proto_frame_c test_proto_alarm_c)
-    add_executable(${name} ${name}.c)
+    rtk_pascal_case(_f "${name}")
+    add_executable(${name} ${_f}.c)
     target_link_libraries(${name} dev_proto_c unity)
     target_compile_options(${name} PRIVATE ${PROJ_C_STRICT})
     add_test(NAME ${name} COMMAND ${name})

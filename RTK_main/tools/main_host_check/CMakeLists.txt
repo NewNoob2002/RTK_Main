@@ -7,36 +7,36 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 get_filename_component(PROJ_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 find_package(Threads REQUIRED)
-add_library(main_rtos STATIC ../t13_host_check/shim/fake_rtos.c)
-# nvs_shim.c: storage 模块的通用键表直接用 nvs.h（冻结的 nvs_store.h 无整数 API）。
+add_library(main_rtos STATIC ../t13_host_check/shim/FakeRtos.c)
+# NvsShim.c: storage 模块的通用键表直接用 nvs.h（冻结的 NvsStore.h 无整数 API）。
 # 单独成库：它是 C 代码，不能继承 C++ 专用告警（-fno-rtti/-Wnon-virtual-dtor）。
-add_library(main_nvs_shim STATIC shim/nvs_shim.c)
+add_library(main_nvs_shim STATIC shim/NvsShim.c)
 target_include_directories(main_nvs_shim PUBLIC shim)
 target_include_directories(main_rtos PUBLIC ../t13_host_check/shim/inc)
 target_link_libraries(main_rtos PUBLIC Threads::Threads)
 add_subdirectory(${PROJ_ROOT}/components/stream_demux stream_demux_build)
 add_library(main_pure STATIC
-    ${PROJ_ROOT}/components/device_proto/dev_proto_frame.c
-    ${PROJ_ROOT}/components/device_proto/dev_proto_alarm.c
-    ${PROJ_ROOT}/components/device_proto/frame.cpp
-    ${PROJ_ROOT}/components/device_proto/demux_frame.cpp
-    ${PROJ_ROOT}/components/device_proto/alarm_codec.cpp
-    ${PROJ_ROOT}/components/device_proto/bytes.cpp
-    ${PROJ_ROOT}/components/app_fw/src/status.cpp
-    ${PROJ_ROOT}/components/app_fw/src/result.cpp
-    ${PROJ_ROOT}/components/app_fw/src/fanout_ring.cpp
-    ${PROJ_ROOT}/components/app_fw/src/trace.cpp
-    ${PROJ_ROOT}/components/app_fw/src/tlog.cpp
-    ${PROJ_ROOT}/components/cli/src/out.cpp
-    ${PROJ_ROOT}/components/link_core/alarm_source.cpp
-    ${PROJ_ROOT}/components/link_core/link_manager.cpp
-    ${PROJ_ROOT}/components/link_core/command_router.cpp
-    ${PROJ_ROOT}/components/link_core/services/device_service.cpp
-    ${PROJ_ROOT}/components/link_core/services/config_service.cpp
-    ${PROJ_ROOT}/components/link_core/services/alarm_service.cpp
-    ${PROJ_ROOT}/components/link_core/services/pair_service.cpp
-    ${PROJ_ROOT}/components/link_core/services/gnss_service.cpp
-    ${PROJ_ROOT}/components/link_core/link_service.cpp)
+    ${PROJ_ROOT}/components/device_proto/DevProtoFrame.c
+    ${PROJ_ROOT}/components/device_proto/DevProtoAlarm.c
+    ${PROJ_ROOT}/components/device_proto/Frame.cpp
+    ${PROJ_ROOT}/components/device_proto/DemuxFrame.cpp
+    ${PROJ_ROOT}/components/device_proto/AlarmCodec.cpp
+    ${PROJ_ROOT}/components/device_proto/Bytes.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Status.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Result.cpp
+    ${PROJ_ROOT}/components/app_fw/src/FanoutRing.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Trace.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Tlog.cpp
+    ${PROJ_ROOT}/components/cli/src/Out.cpp
+    ${PROJ_ROOT}/components/link_core/AlarmSource.cpp
+    ${PROJ_ROOT}/components/link_core/LinkManager.cpp
+    ${PROJ_ROOT}/components/link_core/CommandRouter.cpp
+    ${PROJ_ROOT}/components/link_core/services/DeviceService.cpp
+    ${PROJ_ROOT}/components/link_core/services/ConfigService.cpp
+    ${PROJ_ROOT}/components/link_core/services/AlarmService.cpp
+    ${PROJ_ROOT}/components/link_core/services/PairService.cpp
+    ${PROJ_ROOT}/components/link_core/services/GnssService.cpp
+    ${PROJ_ROOT}/components/link_core/LinkService.cpp)
 target_include_directories(main_pure PUBLIC
     ${PROJ_ROOT}/components/app_fw/include
     ${PROJ_ROOT}/components/device_proto/include ${PROJ_ROOT}/components/link_core/include)
@@ -47,12 +47,12 @@ target_compile_options(main_pure PRIVATE -Wall -Wextra -Werror -Wshadow)
 enable_testing()
 # 同一真实组合根分别编译两种 Kconfig 分支，产品不增加测试开关或可替换调度框架。
 foreach(policy concurrent preempt)
-    add_executable(main_${policy} main_host_check.cpp ${PROJ_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
-        ${PROJ_ROOT}/main/data/app_data.cpp ${PROJ_ROOT}/main/modules/storage/storage_module.cpp ${PROJ_ROOT}/main/modules/storage/store_keys.cpp ${PROJ_ROOT}/main/modules/storage/store_catalog.cpp
-        ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp
+    add_executable(main_${policy} MainHostCheck.cpp ${PROJ_ROOT}/main/modules/rtcm/RtcmForwarder.cpp
+        ${PROJ_ROOT}/main/data/AppData.cpp ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
+        ${PROJ_ROOT}/main/modules/rtcm/RtcmModule.cpp
         # storage 的通用键表引用 DebugModule 的绑定函数，因此链接真实的 debug 模块。
-        ${PROJ_ROOT}/main/modules/debug/debug_module.cpp ${PROJ_ROOT}/main/modules/debug/trace_text.cpp
-        ${PROJ_ROOT}/components/spp_server/spp_transport.cpp)
+        ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp
+        ${PROJ_ROOT}/components/spp_server/SppTransport.cpp)
     target_include_directories(main_${policy} BEFORE PRIVATE shim)
     target_include_directories(main_${policy} PRIVATE
         ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
@@ -74,9 +74,9 @@ foreach(policy concurrent preempt)
     endforeach()
 endforeach()
 
-# executor.cpp 通过 fw::trace 报告轮次超时/投递失败，因此要链 trace.cpp。
-add_executable(executor_check executor_check.cpp ${PROJ_ROOT}/components/rtos/executor.cpp
-    ${PROJ_ROOT}/components/app_fw/src/trace.cpp)
+# Executor.cpp 通过 fw::trace 报告轮次超时/投递失败，因此要链 Trace.cpp。
+add_executable(executor_check ExecutorCheck.cpp ${PROJ_ROOT}/components/rtos/Executor.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Trace.cpp)
 target_include_directories(executor_check BEFORE PRIVATE shim)
 target_include_directories(executor_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/components/rtos/include ${PROJ_ROOT}/components/device_proto/include
@@ -87,22 +87,22 @@ foreach(scenario lifecycle calls invalid)
     add_test(NAME executor_${scenario} COMMAND executor_check ${scenario})
 endforeach()
 
-add_executable(template_check template_check.cpp
-    ${PROJ_ROOT}/main/modules/_template/template_module.cpp
-    ${PROJ_ROOT}/main/modules/_template/template_cmds.cpp
-    ${PROJ_ROOT}/main/data/app_data.cpp
-    ${PROJ_ROOT}/main/support/console_support.cpp
-    ${PROJ_ROOT}/components/cli/src/parse.cpp
+add_executable(template_check TemplateCheck.cpp
+    ${PROJ_ROOT}/main/modules/_template/TemplateModule.cpp
+    ${PROJ_ROOT}/main/modules/_template/TemplateCmds.cpp
+    ${PROJ_ROOT}/main/data/AppData.cpp
+    ${PROJ_ROOT}/main/support/ConsoleSupport.cpp
+    ${PROJ_ROOT}/components/cli/src/Parse.cpp
     # debug 命令组用 cli::fail/dispatch（ADR-0009 §2.5）。
-    ${PROJ_ROOT}/components/cli/src/reply.cpp
-    ${PROJ_ROOT}/components/rtos/executor.cpp
-    ${PROJ_ROOT}/main/modules/bt_link/bt_link_module.cpp
-    ${PROJ_ROOT}/main/modules/rtcm/rtcm_module.cpp
-    ${PROJ_ROOT}/main/modules/rtcm/rtcm_forwarder.cpp
-    ${PROJ_ROOT}/main/modules/storage/storage_module.cpp ${PROJ_ROOT}/main/modules/storage/store_keys.cpp ${PROJ_ROOT}/main/modules/storage/store_catalog.cpp
-    ${PROJ_ROOT}/main/modules/debug/debug_module.cpp ${PROJ_ROOT}/main/modules/debug/trace_text.cpp
-    ${PROJ_ROOT}/main/modules/debug/debug_cmds.cpp
-    ${PROJ_ROOT}/components/spp_server/spp_transport.cpp)
+    ${PROJ_ROOT}/components/cli/src/Reply.cpp
+    ${PROJ_ROOT}/components/rtos/Executor.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/BtLinkModule.cpp
+    ${PROJ_ROOT}/main/modules/rtcm/RtcmModule.cpp
+    ${PROJ_ROOT}/main/modules/rtcm/RtcmForwarder.cpp
+    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
+    ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp
+    ${PROJ_ROOT}/main/modules/debug/DebugCmds.cpp
+    ${PROJ_ROOT}/components/spp_server/SppTransport.cpp)
 target_include_directories(template_check BEFORE PRIVATE shim)
 target_include_directories(template_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
@@ -115,9 +115,9 @@ target_compile_definitions(template_check PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096
 target_link_libraries(template_check PRIVATE main_pure main_nvs_shim)
 add_test(NAME template_module COMMAND template_check template_module)
 
-add_executable(gnss_output_check gnss_output_check.cpp
-    ${PROJ_ROOT}/main/data/gnss_output.cpp
-    ${PROJ_ROOT}/main/modules/storage/store_keys.cpp)
+add_executable(gnss_output_check GnssOutputCheck.cpp
+    ${PROJ_ROOT}/main/data/GnssOutput.cpp
+    ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp)
 target_include_directories(gnss_output_check BEFORE PRIVATE shim)
 target_include_directories(gnss_output_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/main ${PROJ_ROOT}/components/rtos/include
@@ -136,19 +136,19 @@ add_test(NAME gnss_output COMMAND gnss_output_check)
 # 编译真实组合根的内存计划；函数分节仅裁去 host 无法运行的硬件入口，不替换待测绑定/回滚逻辑。
 foreach(features on gnss_off trace_off all_off)
     set(boot_target boot_alloc_check_${features})
-    add_executable(${boot_target} boot_alloc_check.cpp
-        ${PROJ_ROOT}/main/app/app.cpp
-        ${PROJ_ROOT}/main/app/boot_buffers.cpp
-        ${PROJ_ROOT}/main/app/boot_steps.cpp
-        ${PROJ_ROOT}/main/app/console_setup.cpp
-        ${PROJ_ROOT}/components/rtos/boot_alloc.cpp
-        ${PROJ_ROOT}/main/data/app_data.cpp
-        ${PROJ_ROOT}/main/data/gnss_output.cpp
-        ${PROJ_ROOT}/main/modules/debug/debug_module.cpp
-        ${PROJ_ROOT}/main/modules/debug/trace_text.cpp
-        ${PROJ_ROOT}/components/spp_server/spp_server_init.c
-        ${PROJ_ROOT}/components/spp_server/spp_server_session.c
-        ${PROJ_ROOT}/components/cli/src/reply.cpp)
+    add_executable(${boot_target} BootAllocCheck.cpp
+        ${PROJ_ROOT}/main/app/App.cpp
+        ${PROJ_ROOT}/main/app/BootBuffers.cpp
+        ${PROJ_ROOT}/main/app/BootSteps.cpp
+        ${PROJ_ROOT}/main/app/ConsoleSetup.cpp
+        ${PROJ_ROOT}/components/rtos/BootAlloc.cpp
+        ${PROJ_ROOT}/main/data/AppData.cpp
+        ${PROJ_ROOT}/main/data/GnssOutput.cpp
+        ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp
+        ${PROJ_ROOT}/main/modules/debug/TraceText.cpp
+        ${PROJ_ROOT}/components/spp_server/SppServerInit.c
+        ${PROJ_ROOT}/components/spp_server/SppServerSession.c
+        ${PROJ_ROOT}/components/cli/src/Reply.cpp)
     target_include_directories(${boot_target} BEFORE PRIVATE shim)
     target_include_directories(${boot_target} PRIVATE ../t13_host_check/shim/inc
         ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
@@ -174,7 +174,7 @@ foreach(features on gnss_off trace_off all_off)
 endforeach()
 
 # 启动步骤执行器（R8a）：纯 C++ 表驱动逻辑，用注入的计时/堆/降级钩子验证四种结果分类。
-add_executable(boot_steps_check boot_steps_check.cpp ${PROJ_ROOT}/main/app/boot_steps.cpp)
+add_executable(boot_steps_check BootStepsCheck.cpp ${PROJ_ROOT}/main/app/BootSteps.cpp)
 target_include_directories(boot_steps_check PRIVATE ${PROJ_ROOT}/main)
 target_compile_options(boot_steps_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)

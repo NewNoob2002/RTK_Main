@@ -1,3 +1,3 @@
 # 自有目标文件堆符号白名单（G7b 门禁，docs/CODING-STYLE.md）。
 # 格式：<仓库相对源文件路径> # <档位与理由>
-components/rtos/boot_alloc.cpp # 第2档（启动期一次性内部8-bit堆分配与回滚，BootArena::seal()后禁止再分配）
+components/rtos/BootAlloc.cpp # 第2档（启动期一次性内部8-bit堆分配与回滚，BootArena::seal()后禁止再分配）

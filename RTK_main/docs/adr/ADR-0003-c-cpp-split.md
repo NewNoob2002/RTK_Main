@@ -18,10 +18,10 @@ C 与 C++ 的边界只有一种形式：C 头文件（`#pragma once` + `extern "
 
 | 组件 | 语言 | 公共接口 | 说明 |
 | --- | --- | --- | --- |
-| `rtk_proto` | **C 核心 + C++ 外观** | C：`rtk_proto_frame.h`、`rtk_proto_alarm.h`；C++：`rtk/proto/frame.hpp`、`alarm_codec.hpp`（委托给 C）、`bytes.hpp`、`status.hpp` | 协议逻辑只实现一次（C），两端共用。C 实现由 `reference/c-v1` 中经 QA-A 验收的 `proto_frame.c`/`alarm_msg.c` 移植（报警状态源已在 C++ `AlarmSource` 中，不再移植） |
+| `rtk_proto` | **C 核心 + C++ 外观** | C：`rtk_proto_frame.h`、`rtk_proto_alarm.h`；C++：`rtk/proto/Frame.hpp`、`AlarmCodec.hpp`（委托给 C）、`Bytes.hpp`、`Status.hpp` | 协议逻辑只实现一次（C），两端共用。C 实现由 `reference/c-v1` 中经 QA-A 验收的 `proto_frame.c`/`alarm_msg.c` 移植（报警状态源已在 C++ `AlarmSource` 中，不再移植） |
 | `rtk_core` | C++ | 不变（ADR-0002） | LinkManager、AlarmSource、CommandDispatcher、LinkService、Transport。BATCH-C 已通过验收，**不改代码** |
-| `rtk_os` | C++ | `esp_status.hpp` + 实现方在 T13 起草的 RAII 头 | 只供 C++ 代码使用（main、rtk_bt 适配器） |
-| `rtk_bt` | **C 驱动 + C++ 适配器** | C：`rtk_bt_spp.h`；C++：`rtk/bt/spp_transport.hpp`（`SppTransport final : Transport`） | C 驱动由 `reference/c-v1/components/bt_spp/bt_spp.c` 移植（PIN 改为 1234）。适配器无状态，只转调与映射错误 |
+| `rtk_os` | C++ | `EspStatus.hpp` + 实现方在 T13 起草的 RAII 头 | 只供 C++ 代码使用（main、rtk_bt 适配器） |
+| `rtk_bt` | **C 驱动 + C++ 适配器** | C：`rtk_bt_spp.h`；C++：`rtk/bt/SppTransport.hpp`（`SppTransport final : Transport`） | C 驱动由 `reference/c-v1/components/bt_spp/bt_spp.c` 移植（PIN 改为 1234）。适配器无状态，只转调与映射错误 |
 | `rtk_store` | **C** | `rtk_store.h` | 由 `reference/c-v1/components/store/store_nvs.c` 移植。main 直接调用，`BtAddr` ↔ `uint8_t[6]` 的转换在 main 中完成 |
 | `main` | C++ | — | 组合根、链路任务、控制台（ADR-0002 的 T14 要求不变） |
 | 未来：`rtk_gnss`、`rtk_radio`、`rtk_power`、`rtk_led` | C 驱动（需要状态机/聚合时上层用 C++） | 预留 | 不在本阶段 |
@@ -48,5 +48,5 @@ C 与 C++ 的边界只有一种形式：C 头文件（`#pragma once` + `extern "
 ## 5. 对已验收代码的影响
 
 - `rtk_core/*.cpp`：不改。
-- `rtk_proto/frame.cpp`、`alarm_codec.cpp`：改写为调用 C 接口的薄外观（行为由 74 个 C++ 用例约束不变）。`bytes.cpp`、`status.cpp` 不改。
+- `rtk_proto/Frame.cpp`、`AlarmCodec.cpp`：改写为调用 C 接口的薄外观（行为由 74 个 C++ 用例约束不变）。`Bytes.cpp`、`Status.cpp` 不改。
 - `rtk_os`：DeepSeek 起草的 RAII 头未经验收，在 T13 中完成并由 QA 审查。

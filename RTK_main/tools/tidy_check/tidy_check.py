@@ -50,8 +50,8 @@ C_EXTRA_CHECKS = {
 
 FINDING_RE = re.compile(r"^(.+?):(\d+):(\d+): (warning|error): (.*)$")
 
-# 冻结的 test/host/CMakeLists.txt 不编译 device_proto/demux_frame.cpp（该文件由 t13_host_check 目标链接），
-# 因此它在 host 编译数据库里没有条目，clang-tidy 会退化成无参数解析并误报 demux/decoder.hpp 找不到。
+# 冻结的 test/host/CMakeLists.txt 不编译 device_proto/DemuxFrame.cpp（该文件由 t13_host_check 目标链接），
+# 因此它在 host 编译数据库里没有条目，clang-tidy 会退化成无参数解析并误报 demux/Decoder.hpp 找不到。
 # 这里按 host_pure 的实际包含路径与语言标准补齐；用绝对路径，因为数据库的 directory 是构建目录。
 HOST_FALLBACK_INCLUDES = ("app_fw", "device_proto", "link_core", "stream_demux")
 HOST_FALLBACK_ARGS = ("-std=gnu++20",

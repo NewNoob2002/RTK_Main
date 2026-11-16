@@ -1,6 +1,6 @@
 # 通用 SPP 客户端重连策略状态机（ADR-0007 §5）。纯 C++20，平台无关，
 # 同一份 CMakeLists 既是 ESP-IDF 组件，也可被 host 测试 add_subdirectory() 复用（同 app_fw / stream_demux 模式）。
-set(_bt_reconnect_srcs "src/reconnect.cpp")
+set(_bt_reconnect_srcs "src/Reconnect.cpp")
 
 if(ESP_PLATFORM)
     idf_component_register(SRCS ${_bt_reconnect_srcs} INCLUDE_DIRS "include")
