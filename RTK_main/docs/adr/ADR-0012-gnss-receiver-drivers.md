@@ -186,9 +186,15 @@ GNSS_DRIVER(COMNAV,  kComnav,  ComnavReceiver,  "gnss/drivers/ComnavReceiver.hpp
 - 控制台新增 `gnss config`：触发读回并逐行打印 `match_readback()` 的结果，结尾 `OK`；超时 1 s 无新行即结束。其它驱动默认返回“不支持”。
 - 第一阶段只用于诊断，不做自动比对与修复（避免误把用户经 COM3 保存的配置当成错误）。
 
-### 2.8 型号子类
+### 2.8 型号子类（2026-11-16 修订，P3s；原“本期不建”作废）
 
-本期不建型号子类：UM980/981/982 差别都能用 `caps(model)` 与 `output_mask(model)` 表达（HEADING 仅 UM982）。若某型号的命令语法不同，再从家族驱动派生（例如 `class Um982Receiver final : public UnicoreReceiver`），并在 `match_probe` 命中后由家族驱动返回子类实例（`ProbeResult` 增加 `const Receiver *refined`，默认 nullptr）。此扩展点在接口中预留，不实现。
+用户要求命令/应答操作以类组织、型号差异用派生表达，而不是在家族驱动里继续堆 `switch (model)`。
+
+- **切换钩子。** `Receiver` 新增 `[[nodiscard]] virtual const Receiver &for_model(Model model) const noexcept;`，默认返回 `*this`。Controller 在 `match_probe` 命中后令 `detected_.receiver = &probe_receiver_->for_model(result.model)`；此后配置、输出、应答判定、帧归类全部经型号驱动。`caps` 的发布同样改用 `detected_.receiver`。`enabled_receivers()` / `receiver_for(Family)` / DriverList.inc 仍按家族登记（探测与 NVS 提示只认家族），型号子类不进登记表。
+- **家族驱动可派生。** 去掉 `final`；命令生成与应答解析改为 `protected static` 成员（`cmd_unlog`、`cmd_mode_rover`、`cmd_config_baud`、`cmd_log_msg`、`cmd_unlog_msg`、`cmd_version_query`；`resp_has_valid_tail`、`resp_find_tag`、`resp_echo_matches`、`resp_text`），子类直接复用；型号差异点：`protected virtual rover_script()`（返回脚本步骤表，型号要加配置步骤时覆盖）与已有的公有虚函数 `caps(Model)`；`output_mask`、`build_output` 一律经 `caps()` 判断 HEADING 等能力，所以型号子类通常只需覆盖 `caps`。
+- **家族驱动只描述基准型号。** `UnicoreReceiver` 描述 UM980/UM981（UM981 的 `kIns` 能力位仍在 `model_caps` 内，等真正使用惯导时再建 `Um981Receiver`）；不再认 HEADING。`Um982Receiver final : public UnicoreReceiver`（同一 .cpp，`constinit` 静态实例，访问器 `um982_receiver()`）覆盖 `caps`（加 `kHeading`），HEADINGA 随之进入 `output_mask` 与 `build_output`。对家族驱动直接以 `Model::kUm982` 调用得到的是 UM980 能力，这是有意的：调用方必须先 `for_model`。
+- **规则。** 只在型号真有差异时派生；继承最多两层（Receiver → 家族 → 型号）；新增型号 = 子类 + 家族 `for_model` 一个分支，不改 Controller、main。u-blox、ComNav 本期只做“去 final + protected static 命令/应答”整理，不建子类。
+- **代价。** 每个子类一个 vtable（几十字节 flash）+ 一个静态实例（一个 vptr）。
 
 ## 3. 冻结接口（修订 ADR-0010 §3）
 
@@ -203,6 +209,7 @@ GNSS_DRIVER(COMNAV,  kComnav,  ComnavReceiver,  "gnss/drivers/ComnavReceiver.hpp
 | --- | --- | --- | --- |
 | **P3a** | gnss 组件：Receiver/NullReceiver/三个驱动/DriverList/Registry/Kconfig 改名/Types 辅助函数/Ack 改名/Controller 用 Receiver*（暂不加 kOutput；`rover_step` 保持现有字节，含 GST/SATSINFOA/HEADINGA，P3b 再把输出移出） | deepseek | **黄金向量**：改动前先用旧方言把探测命令、全部 `rover_step` 脚本（各型号 × rate × gsv × port × baud）、应答判定导出成 `test/gnss/golden/*.inc`；新驱动逐字节一致；test/gnss 用例数只增不减 |
 | **P3b** | main 去厂家化：GnssModule/GnssCmds/TraceText/GnssOutput 改用 Receiver 接口；OutputPlan + Controller kOutput 阶段 + request_output；删除 apply_out_to_receiver；GnssService supported → `02 02` | deepseek | main 中 `rg -n 'Unicore|Ublox|Comnav|K803|SATSINFO|HEADING|UNLOG|COM%d' main/` 只剩注释与协议映射表；控制台 `gnss out` 失败不写 NVS 的主机用例；0x05 在不支持时回 `02 02` 的字节级用例 |
+| **P3s** | 型号子类（§2.8）：`for_model` 钩子、家族驱动去 final + protected static 命令/应答、`Um982Receiver`、Controller 改用 for_model；u-blox/ComNav 同步整理 | deepseek | 黄金向量逐字节一致（测试调用改经 `for_model`，期望字节不变）；新增 for_model 与家族/型号能力差异用例；frozen 只允许本节列出的头变化 |
 | **P3c** | `$CONFIG` 读回：UnicoreResp 修订 + 驱动 readback + `gnss config` | deepseek | demux 4096/边界用例；UM980 HIL：`gnss config` 列出全部行、无 `unknown bytes dropped` |
 
 每张卡结束都跑全部门禁（4 种 IDF 配置 0 警告、9 个主机套件普通 + ASan/UBSan、G7b、G5b、clang-format、frozen），并上板（UM980）验证：冷启动探测、NVS 记忆后一次命中、`gnss out` 修改与重启后保持、手机 0x04/0x05 订阅与断开清零、RTCM 通路无回退。F9P/K803 只做主机测试，报告标“未上板验证”。

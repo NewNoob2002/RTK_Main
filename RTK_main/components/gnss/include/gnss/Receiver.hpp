@@ -3,6 +3,7 @@
 // 所有成员函数 const noexcept、无可变状态：同样输入产生同样字节，便于重试与主机逐字节测试。
 // 线程安全：是（纯函数；实例为 constinit 静态对象，构造后只读）。ISR 安全：是（不阻塞、不分配）。
 // P3b 修订（ADR-0012 §2.4）：新增 OutputPlan.rate_hz 与 build_output()，语句输出不再写死在 rover 脚本里。
+// P3s 修订（ADR-0012 §2.8）：新增 for_model()，探测后切换到型号子类。
 // 冻结接口（ADR-0012 §3）。实现方不得修改；变更须先修订 ADR-0012。
 #pragma once
 
@@ -117,6 +118,13 @@ public:
     /** 本驱动需要额外挂到 UART 分流器上的解码器（NMEA、RTCM3 由 main 固定挂载，按地址去重）。 */
     [[nodiscard]] virtual std::span<const demux::Decoder *const> decoders() const noexcept = 0;
     [[nodiscard]] virtual uint32_t caps(Model model) const noexcept = 0;
+    /**
+     * @brief  探测得到型号后取该型号的驱动（ADR-0012 §2.8）
+     * @param  model: match_probe 给出的型号
+     * @retval 型号子类实例；该型号无专门子类时为 *this（默认实现）
+     * @note   Controller 在 match_probe 命中后调用一次，此后一切操作经返回的驱动。
+     */
+    [[nodiscard]] virtual const Receiver &for_model(Model model) const noexcept;
 
     // ---- 探测 ----
     /** 生成版本查询命令；返回 false 表示本驱动无法生成（控制器跳过该候选）。 */

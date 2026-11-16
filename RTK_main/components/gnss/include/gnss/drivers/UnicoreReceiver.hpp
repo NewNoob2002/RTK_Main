@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -32,18 +33,26 @@ inline constexpr demux::Decoder kResponseDecoder{"UnicoreResp", kResponseMaxFram
 
 namespace gnss {
 
-/** UM980/981/982 家族驱动（定义在 src/drivers/UnicoreReceiver.cpp）。 */
-class UnicoreReceiver final : public Receiver {
+/**
+ * Unicore N4 家族驱动（定义在 src/drivers/UnicoreReceiver.cpp），描述基准型号 UM980/UM981（ADR-0012 §2.8）。
+ * 有差异的型号从本类派生（Um982Receiver），由 for_model() 在探测后切换；命令生成与应答解析为 protected
+ * static，子类直接复用。
+ */
+class UnicoreReceiver : public Receiver {
 public:
     constexpr UnicoreReceiver() noexcept = default;
 
     [[nodiscard]] Family family() const noexcept override;
     [[nodiscard]] std::string_view name() const noexcept override;
     [[nodiscard]] std::span<const demux::Decoder *const> decoders() const noexcept override;
+    /** UM980/UM981 能力；不含 kHeading（双天线由 Um982Receiver 覆盖）。 */
     [[nodiscard]] uint32_t caps(Model model) const noexcept override;
+    /** kUm982 → um982_receiver()，其余 → *this。 */
+    [[nodiscard]] const Receiver &for_model(Model model) const noexcept override;
     [[nodiscard]] bool build_probe(CmdBuf &out) const noexcept override;
     [[nodiscard]] bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                    ProbeResult &out) const noexcept override;
+    /** 按 rover_script() 的表生成第 index 个启用步骤。 */
     [[nodiscard]] bool rover_step(size_t index, Model model, const RoverConfig &cfg,
                                   ConfigStep &out) const noexcept override;
     [[nodiscard]] Ack classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
@@ -51,17 +60,71 @@ public:
     /** 基类默认（NMEA）+ #SATSINFOA / #HEADINGA（ADR-0012 §2.6）。 */
     [[nodiscard]] OutputMsg classify_frame(const demux::Decoder &dec,
                                            std::span<const uint8_t> frame) const noexcept override;
-    /** 基类默认 + "#VERSIONA"/"$command" 专用标签，与 main 原 describe_frame() 文本一致。 */
+    /** 基类默认 + "#VERSIONA"/"$command" 专用标签。 */
     size_t frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
                      std::span<char> out) const noexcept override;
-    /** 基类默认 + SATSINFOA/GST，双天线型号（UM982）另加 HEADINGA。 */
+    /** 基类默认 + SATSINFOA/GST；caps(model) 含 kHeading 时另加 HEADINGA。 */
     [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
-    /** "<name> COMn <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）；10 ms 以上且可表示为秒时成功。 */
+    /** "<name> COMn <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）；HEADINGA 需 caps(model) 含 kHeading。 */
     [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
                                           CmdBuf &out) const noexcept override;
+
+protected:
+    /** 配置脚本的一步：build 生成命令，enabled 为 false 时该步在此配置下跳过（索引顺延）。 */
+    struct ScriptStep {
+        bool (*build)(const RoverConfig &cfg, ConfigStep &out) noexcept;
+        bool (*enabled)(const RoverConfig &cfg) noexcept;
+    };
+
+    /** 基础流动站脚本（UNLOG → MODE ROVER → [CONFIG 波特率]）；型号需要额外步骤时覆盖。 */
+    [[nodiscard]] virtual std::span<const ScriptStep> rover_script() const noexcept;
+
+    // ---- 基础脚本的步骤（rover_script() 内的函数局部表引用它们，子类脚本可复用） ----
+    /** 第 0 步 "UNLOG COMn"：先关掉全部输出，再由输出阶段按 OutputPlan 重新开启。 */
+    [[nodiscard]] static bool step_unlog_all(const RoverConfig &cfg, ConfigStep &out) noexcept;
+    /** 第 1 步 "MODE ROVER"。 */
+    [[nodiscard]] static bool step_mode_rover(const RoverConfig &cfg, ConfigStep &out) noexcept;
+    /** 第 2 步 "CONFIG COMn <baud>"：发送后不等应答，主机随即切换波特率。 */
+    [[nodiscard]] static bool step_port_baud(const RoverConfig &cfg, ConfigStep &out) noexcept;
+    /** 步骤启用条件：总是。 */
+    [[nodiscard]] static bool step_always(const RoverConfig &cfg) noexcept;
+    /** 步骤启用条件：cfg.port_baud != 0。 */
+    [[nodiscard]] static bool step_if_port_baud(const RoverConfig &cfg) noexcept;
+
+    // ---- 命令库：只往 out 写一条完整命令（含 \r\n，先清空），失败返回 false ----
+    [[nodiscard]] static bool cmd_unlog(CmdBuf &out, uint8_t port) noexcept; // "UNLOG COMn"
+    [[nodiscard]] static bool cmd_mode_rover(CmdBuf &out) noexcept;          // "MODE ROVER"
+    [[nodiscard]] static bool cmd_config_baud(CmdBuf &out, uint8_t port,
+                                              uint32_t baud) noexcept; // "CONFIG COMn <baud>"
+    [[nodiscard]] static bool cmd_log_msg(CmdBuf &out, std::string_view name, uint8_t port,
+                                          uint32_t period_ms) noexcept; // "<name> COMn <period>"
+    [[nodiscard]] static bool cmd_unlog_msg(CmdBuf &out, std::string_view name,
+                                            uint8_t port) noexcept;    // "UNLOG COMn <name>"
+    [[nodiscard]] static bool cmd_version_query(CmdBuf &out) noexcept; // "VERSIONA"
+
+    // ---- 应答解析：每个函数只判一件事 ----
+    [[nodiscard]] static bool resp_has_valid_tail(std::span<const uint8_t> frame) noexcept;
+    [[nodiscard]] static std::optional<size_t> resp_find_tag(std::span<const uint8_t> frame) noexcept;
+    [[nodiscard]] static bool resp_echo_matches(std::span<const uint8_t> frame, size_t tag_pos,
+                                                std::span<const uint8_t> sent) noexcept;
+    [[nodiscard]] static std::span<const uint8_t> resp_text(std::span<const uint8_t> frame, size_t tag_pos) noexcept;
+};
+
+/** UM982 双天线型号：在家族基础上增加 kHeading（HEADINGA 输出）。 */
+class Um982Receiver final : public UnicoreReceiver {
+public:
+    constexpr Um982Receiver() noexcept = default;
+
+    [[nodiscard]] std::string_view name() const noexcept override; // "unicore-um982"
+    /** 家族能力 + kHeading。 */
+    [[nodiscard]] uint32_t caps(Model model) const noexcept override;
+    /** 型号驱动不再细分：返回 *this。 */
+    [[nodiscard]] const Receiver &for_model(Model model) const noexcept override;
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */
 [[nodiscard]] const Receiver &unicore_receiver() noexcept;
+/** UM982 型号驱动单例；一般经 unicore_receiver().for_model(Model::kUm982) 取得。 */
+[[nodiscard]] const Receiver &um982_receiver() noexcept;
 
 } // namespace gnss
