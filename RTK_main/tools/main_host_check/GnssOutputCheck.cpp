@@ -34,10 +34,10 @@ void test_output_plan() noexcept
     const auto idx = [](gn::OutputMsg msg) { return static_cast<size_t>(static_cast<uint8_t>(msg)); };
     const GnssOutConfig def = GnssOutConfig::defaults();
 
-    // 默认配置、10 Hz、无 HEADINGA 能力：GGA/RMC/GSA/GST 跟频率，SATSINFOA 1 s，HEADINGA 不下发（与 P3a 脚本一致）。
+    // 默认配置、10 Hz、无 HEADINGA 能力：GGA/RMC/GSA/GST 跟频率，SATSINFOA 5 s，HEADINGA 不下发。
     const gn::OutputPlan plan = app::data::make_output_plan(def, 10U, true, 2U, 0U);
     CHECK(plan.period_ms[idx(gn::OutputMsg::kGga)] == 100U);
-    CHECK(plan.period_ms[idx(gn::OutputMsg::kSatsInfo)] == 1000U);
+    CHECK(plan.period_ms[idx(gn::OutputMsg::kSatsInfo)] == 5000U);
     CHECK(plan.period_ms[idx(gn::OutputMsg::kHeading)] == 0U);
     CHECK(plan.period_ms[idx(gn::OutputMsg::kGst)] == 100U);
     CHECK(plan.period_ms[idx(gn::OutputMsg::kRmc)] == 100U);

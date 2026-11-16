@@ -88,7 +88,7 @@ struct GnssStatus {
     // 避免 output_seq 已前进但两阶段提交尚未判定时读到上一次的 last_apply。
     uint32_t apply_seq = 0;
     // 当前输出计划里 App 6 类语句下发给接收机的周期（ms，0 = 不下发）；与 gnss/out 的 App 推送间隔不同，
-    // 默认项沿用流动站脚本（GGA/RMC/GSA/GST 跟频率，SATSINFOA 1 s）。
+    // 默认 GGA/RMC/GSA/GST 跟频率、SATSINFOA 5 s。
     std::array<uint32_t, 6U> rx_period_ms{};
 };
 

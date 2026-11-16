@@ -21,7 +21,8 @@
 | --- | --- |
 | `mask` 位为 0 | `0`（关闭；运行时重跑时驱动据此发 UNLOG / VALSET 0） |
 | GGA / RMC / GSA / GST 且 interval 等于 `GnssOutConfig::defaults()` 的同项值 | `1000 / rate_hz` |
-| SATSINFOA / HEADINGA 且等于默认值 | `1000`（HEADINGA 无 `cap::kHeading` 时为 0） |
+| SATSINFOA 且等于默认值 | `interval_to_period_ms(-5)` = 5000（用户 2026-11-16 决定，偏离 P3a 脚本的 1 s） |
+| HEADINGA 且等于默认值 | `1000`（无 `cap::kHeading` 时为 0） |
 | 用户改过 interval | `GnssService::interval_to_period_ms(interval)`（正数=Hz、负数=秒、0=关） |
 
 （审查时修正，见 §10：原实现 GST/SATSINFOA 默认走 interval，与卡 §1.1 不符。）
@@ -163,7 +164,7 @@ DRAM +312 B 的来源（均为静态成员，无堆）：`Controller::output_cmd
 2. **u-blox 端口**：`build_output()` 忽略 `plan.port`，始终用已验证的 `CFG-MSGOUT-…-UART1` 键（P3a 基线同样忽略端口；其余端口的键值 UNKNOWN，不猜）。
 3. **u-blox GSV 历元数**：由周期换算而非固定 1（见 §3.3），等价性比对中该键被显式剔除。
 4. **关闭项的下发时机**：开机首轮跳过周期 0 的项（与黄金脚本逐字节一致），运行时 `request_output()` 才补发 UNLOG；`Unicore/ComNav` 的 `kOutput` 因此比基线多一种「关闭」命令能力。
-5. ~~SATSINFOA 默认周期 5 s~~：审查时按卡 §1.1 改回 1 s（`-5` 只作 App 推送间隔），见 §10。
+5. **SATSINFOA 默认周期 5 s**：用户决定接收机侧也按 `gnss/out` 默认 5 s 输出（P3a 脚本为 1 s）；黄金等价性比对中 SATSINFOA 一项因此不再代表 main 的实际计划。
 6. **`gnss out show` 新增列、`gnss status` 新增行**：为满足 §1.4 的可观测性要求，控制台文本有增量（协议帧不变）。
 7. **测试新增文件**：`test/gnss/golden/PlanCheck.hpp`（等价性比对库）不在卡的必列文件里，但卡 §1.6 要求该比对，故新增；`golden_gen` 目标仍保留（`Dialect.hpp` 已删，目标不再生成）。
 8. **`.clangd`**：host `PathMatch` 增补 `components/(gnss|stream_demux|bt_reconnect)` 与对应 `-I`，修复 gnss 头文件在 LSP 中无解析路径的问题（`.clangd` 不在冻结清单内）。
@@ -187,7 +188,7 @@ DRAM +312 B 的来源（均为静态成员，无堆）：`Controller::output_cmd
 ## 10 审查与上板（Claude，2026-11-16）
 
 审查修正（均已在本提交内）：
-1. `make_output_plan` 默认规则与卡 §1.1 不符：GST 默认按 1 s、SATSINFOA 按 5 s 下发；而等价性测试 `PlanCheck.hpp::plan_from` 手写了旧计划，没有经过 `make_output_plan`，所以「与黄金等价」的结论对 main 实际计划不成立（rate>1 时 GST、以及 SATSINFOA 均不同）。改为 GGA/RMC/GSA/GST 默认 `1000/rate`、SATSINFOA 1000、HEADINGA 1000（有能力）；`GnssOutputCheck` 断言随之修正（10 Hz 下 GST=100、SATS=1000）。
+1. `make_output_plan` 默认规则与卡 §1.1 不符：GST 默认按 1 s、SATSINFOA 按 5 s 下发；而等价性测试 `PlanCheck.hpp::plan_from` 手写了旧计划，没有经过 `make_output_plan`，所以「与黄金等价」的结论对 main 实际计划不成立（rate>1 时 GST、以及 SATSINFOA 均不同）。改为 GGA/RMC/GSA/GST 默认 `1000/rate`、HEADINGA 1000（有能力）；SATSINFOA 经用户确认保持默认 5 s（后续提交）。`GnssOutputCheck` 断言：10 Hz 下 GST=100、SATS=5000。
 2. 控制台判定竞态：原来看到 `output_seq` 前进就读 `last_apply`，而 `last_apply` 由随后的 `tick_pending_apply` 才写，可能读到上一次的结果。新增 `GnssStatus::apply_seq`（两阶段提交每次判定 +1），控制台等它前进再按 `last_apply` 给 OK / `ERR … reverted` / `ERR … save failed`。
 3. 非运行态 `gnss out` 直接落盘却不推进任何序号，控制台必然 3 s 超时报错；现在同步判定（`apply_seq++`、`last_apply=kOk`）。`gnss rate` 非运行态同样直接落盘（原实现会超时回滚，无接收机时无法改频率）。
 4. 上一次变更未判定时再次 `gnss out/rate` 会用暂存值覆盖 `pending_prev_*`，回滚到错误的值 → 现在返回 `kBusy`（`gnss busy`）。

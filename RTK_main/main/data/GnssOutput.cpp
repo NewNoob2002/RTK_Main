@@ -18,7 +18,7 @@ constexpr std::array<uint16_t, kGnssAppMsgCount> kTypeMsgIds = {
     0x0004U, 0x0005U, 0x001FU, 0x0021U, 0x0022U, 0x0023U,
 };
 
-// 输出周期的基本单位（ADR-0012 §2.4：GGA/RMC/GSA/GST 跟 rate，SATSINFOA/HEADINGA/GSV 默认 1 s）。
+// 输出周期的基本单位（ADR-0012 §2.4：GGA/RMC/GSA/GST 跟 rate，HEADINGA/GSV 默认 1 s）。
 inline constexpr uint32_t kOneSecondMs = 1000U;
 
 } // namespace
@@ -146,8 +146,8 @@ gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, boo
             plan.period_ms[i] = core::services::GnssService::interval_to_period_ms(out.intervals[i]);
             continue;
         }
-        // 默认值沿用 P3a 流动站脚本（与黄金向量等价）：GGA/RMC/GSA/GST 跟定位频率，SATSINFOA 1 s，
-        // HEADINGA 1 s 且仅双天线型号下发。
+        // 默认值：GGA/RMC/GSA/GST 跟定位频率（与 P3a 流动站脚本一致）；SATSINFOA 按 gnss/out 默认 5 s
+        // （用户 2026-11-16 决定，偏离 P3a 脚本的 1 s）；HEADINGA 1 s 且仅双天线型号下发。
         const bool locate =
             (i == static_cast<size_t>(gnss::OutputMsg::kGga)) || (i == static_cast<size_t>(gnss::OutputMsg::kRmc)) ||
             (i == static_cast<size_t>(gnss::OutputMsg::kGsa)) || (i == static_cast<size_t>(gnss::OutputMsg::kGst));
@@ -156,7 +156,7 @@ gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, boo
         } else if (i == static_cast<size_t>(gnss::OutputMsg::kHeading)) {
             plan.period_ms[i] = ((caps & gnss::cap::kHeading) != 0U) ? kOneSecondMs : 0U;
         } else {
-            plan.period_ms[i] = kOneSecondMs;
+            plan.period_ms[i] = core::services::GnssService::interval_to_period_ms(out.intervals[i]);
         }
     }
     plan.period_ms[static_cast<size_t>(gnss::OutputMsg::kGsv)] = gsv ? kOneSecondMs : 0U;

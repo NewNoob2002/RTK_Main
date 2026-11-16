@@ -95,8 +95,8 @@ struct GnssOutConfig {
  *
  * 逐项规则（下标即 gnss::OutputMsg = App type_idx）：
  *  - mask 位关 → 0（驱动据此下发 UNLOG / VALSET 0）；
- *  - interval 等于 GnssOutConfig::defaults() 的同项值 → 沿用 P3a 流动站脚本（与黄金向量等价）：
- *    GGA/RMC/GSA/GST = 1000/rate_hz，SATSINFOA = 1000，HEADINGA = 1000（无 cap::kHeading 时为 0）；
+ *  - interval 等于 GnssOutConfig::defaults() 的同项值：GGA/RMC/GSA/GST = 1000/rate_hz（与 P3a 流动站脚本一致），
+ *    SATSINFOA = interval_to_period_ms（默认 5 s，偏离 P3a 脚本的 1 s），HEADINGA = 1000（无 cap::kHeading 时为 0）；
  *  - 否则 → GnssService::interval_to_period_ms(interval)，按用户设置生效；
  *  - GSV = gsv ? 1000 : 0。
  * 线程/ISR 安全：是（纯函数）。
