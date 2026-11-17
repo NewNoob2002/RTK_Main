@@ -1,5 +1,5 @@
 # 近似 ESP-IDF Astyle 规则（tools/ci/astyle-rules.yml：--style=otbs --attach-namespaces
-# --attach-classes --indent=spaces=4 --pad-header --pad-oper --unpad-paren，120 列）。
+# --attach-classes --indent=spaces=4 --pad-header --pad-oper --unpad-paren）；列宽按 ADR-0013 §2.1 取 100（IDF 为 120）。
 # 权威格式门禁仍是 astyle_py 3.4.7（见 AGENTS.md §5）；本文件用于日常检查与编辑器。
 BasedOnStyle: LLVM
 Language: Cpp
@@ -7,7 +7,7 @@ Standard: c++20
 IndentWidth: 4
 TabWidth: 4
 UseTab: Never
-ColumnLimit: 120
+ColumnLimit: 100
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterFunction: true        # otbs：函数定义花括号换行

@@ -1,6 +1,6 @@
 # ADR-0013：可读性整改：命名、间接层、长度、注释
 
-状态：提议（2026-11-17，待用户批准；§2.5 已批准，按 `docs/tasks/S1-receiver-leaves.md` 实施）
+状态：已批准（2026-11-17，用户批准；§2.1 文件作用域可变静态保留 `s_snake_case`，见下表）。§2.5 已由 S1 实施（a25b636）
 关联：ADR-0008（代码组织）、ADR-0012 §2.8（驱动层次）、`docs/CODING-STYLE.md`、技能 embedded-engineering v0.1
 （`references/cpp/readable-cpp.md`，规则 CPPF-001/CPPF-002/DOC-001/CPP-011）。
 
@@ -31,7 +31,9 @@
 | 函数、方法 | `snake_case` | `lowerCamelCase` | `poll_controller` → `pollController` |
 | 局部变量、参数 | `snake_case` | `lowerCamelCase` | `now_ms` → `nowMs` |
 | 私有/受保护成员 | `name_` | `lowerCamelCase_` | `last_tick_ms_` → `lastTickMs_` |
-| 文件作用域可变静态 | `s_name` | `sPascalCase`（clang-tidy 前缀 `s`） | `s_link_state` → `sLinkState` |
+| 公有数据成员（struct 字段） | `snake_case` | `lowerCamelCase` | `rx_period_ms` → `rxPeriodMs` |
+| 文件作用域可变静态 | `s_snake_case` | 不变（用户 2026-11-17 决定：保留 `s_` + snake，与 C 侧一致，也和常量 `k` 区分） | `s_link_state` |
+| 命名空间作用域只读对象（`const`/`constinit const`） | `kName`（部分靠 `NOLINT`） | `kName`，由 clang-tidy GlobalConstant 规则覆盖，删掉对应 `NOLINT` | `kReceivers` |
 | 常量、枚举值 | `kName` | 不变 | `kRetryMs` |
 | 命名空间 | `lower_snake` | 不变 | `core::services` |
 | 宏 | `UPPER_CASE` | 不变 | `FW_LOGI` |
@@ -50,7 +52,7 @@
 - 函数用 `lowerCamelCase`、类型用 `PascalCase`，看到 `pollController` 就知道是操作，`Controller` 是类型，
   不用再靠下划线位置来分辨。
 - 技能 readable-cpp v1 已给出 clang-format/clang-tidy 配置和门禁（style_gate），工具可以直接复用。
-- 现在的 `name_` 成员、`kName` 常量、`PascalCase` 文件名全部保留，迁移只改函数和变量这两类，属于机械改名。
+- 现在的 `_` 成员后缀、`kName` 常量、`s_` 文件静态、`PascalCase` 文件名全部保留，迁移只改函数、方法、变量、参数和成员这几类，属于机械改名。
 
 ### 2.2 注释：只写理由和约束
 

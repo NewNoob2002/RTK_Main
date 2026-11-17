@@ -59,10 +59,11 @@ CheckOptions:
   hicpp-signed-bitwise.IgnorePositiveIntegerLiterals: true
   readability-magic-numbers.IgnoredIntegerValues: '0;1;2;8;16;32;64'
   readability-magic-numbers.IgnorePowersOf2IntegerValues: true
-  # 命名（方案 A）：类型 CamelCase；函数/变量 lower_case；私有/受保护成员后缀 _；
-  # 常量 k 前缀；可变全局/文件作用域变量 s_ 前缀（AGENTS.md §2：放进匿名命名空间，不用 g_）；宏全大写。
-  # clang-tidy 把匿名命名空间中的变量归为 GlobalVariable，因此 GlobalVariablePrefix 也必须是 s_
-  # （2026-11-11 修订：原值 g_ 与 AGENTS.md 冲突，所有 s_ 变量均被误报）。
+  # 命名（ADR-0013 §2.1，readable-cpp）：类型 CamelCase；函数/方法/变量/参数/数据成员 camelBack；
+  # 私有/受保护成员后缀 _；常量、constexpr、命名空间作用域只读对象 k 前缀；
+  # 可变全局/文件作用域变量保持 s_ + lower_case（用户 2026-11-17 决定；AGENTS.md §2：放进匿名命名空间，不用 g_）；宏全大写。
+  # clang-tidy 把匿名命名空间中的变量归为 GlobalVariable，因此 GlobalVariablePrefix 为 s_。
+  # C 代码另有 .clang-tidy-c；C++ 里声明的 C 接口名由 *IgnoredRegexp 放行（S2 填写，带注释）。
   readability-identifier-naming.NamespaceCase: lower_case
   readability-identifier-naming.ClassCase: CamelCase
   readability-identifier-naming.StructCase: CamelCase
@@ -72,17 +73,20 @@ CheckOptions:
   readability-identifier-naming.TypedefCase: CamelCase
   readability-identifier-naming.ConceptCase: CamelCase
   readability-identifier-naming.TemplateParameterCase: CamelCase
-  readability-identifier-naming.FunctionCase: lower_case
-  readability-identifier-naming.MethodCase: lower_case
-  readability-identifier-naming.VariableCase: lower_case
-  readability-identifier-naming.ParameterCase: lower_case
+  readability-identifier-naming.FunctionCase: camelBack
+  readability-identifier-naming.MethodCase: camelBack
+  readability-identifier-naming.VariableCase: camelBack
+  readability-identifier-naming.ParameterCase: camelBack
+  readability-identifier-naming.MemberCase: camelBack
   readability-identifier-naming.PrivateMemberSuffix: _
   readability-identifier-naming.ProtectedMemberSuffix: _
   readability-identifier-naming.EnumConstantCase: CamelCase
   readability-identifier-naming.EnumConstantPrefix: k
   readability-identifier-naming.ConstexprVariableCase: CamelCase
   readability-identifier-naming.ConstexprVariablePrefix: k
+  readability-identifier-naming.GlobalConstantCase: CamelCase
+  readability-identifier-naming.GlobalConstantPrefix: k
+  readability-identifier-naming.GlobalVariableCase: lower_case
   readability-identifier-naming.GlobalVariablePrefix: s_
-  # StaticVariable 只匹配函数内 static（文件作用域 static 归入 GlobalVariable）；AGENTS.md 只要求文件作用域 s_，
-  # 函数内静态缓冲区不强制前缀（2026-11-11 修订，删除原 StaticVariablePrefix: s_）。
+  # StaticVariable 只匹配函数内 static（文件作用域 static 归入 GlobalVariable）；函数内静态不强制前缀，按 camelBack。
   readability-identifier-naming.MacroDefinitionCase: UPPER_CASE

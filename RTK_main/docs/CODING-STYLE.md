@@ -100,10 +100,13 @@ Generated-by: pi + codex/gpt-6.1-sol
 
 ## 3. 命名与 include
 
-### 3.1 C++ 保持 snake_case
+### 3.1 C++ 用 lowerCamelCase（ADR-0013 §2.1，2026-11-17 起）
 
-类型用 `PascalCase`（即配置中的 `CamelCase`）；函数、变量、参数用 `snake_case`；
-常量和枚举值用 `kName`；私有成员用 `name_`；文件作用域可变静态用 `s_` 并放在匿名命名空间；
+类型用 `PascalCase`（即配置中的 `CamelCase`）；函数、方法、变量、参数、数据成员用 `lowerCamelCase`；
+常量、枚举值和命名空间作用域只读对象用 `kName`；私有/受保护成员加后缀 `_`（`lastTickMs_`）；
+文件作用域可变静态保持 `s_snake_case`（`s_link_state`）并放在匿名命名空间；
+缩写按单词处理（`parseGga`、`rtcmMsg`），单位后缀保留（`nowMs`）。C 文件、C 接口头与 `extern "C"` 声明仍用 `snake_case`（§8）。
+迁移期间（S2 分批）尚未改名的层仍是 `snake_case`，以 `docs/tasks/S2-rename.md` 的批次进度为准。
 宏全大写。不用 `p_`、`b_` 等类型前缀，也不用 `g_` 表示文件静态。
 
 **源文件名（2026-11-16 用户确认）**：工程自有的 C/C++ 源文件与头文件（`.c`/`.h`/`.cpp`/`.hpp`）一律用
@@ -125,12 +128,12 @@ constexpr uint32_t kRetryMs = 1000; // ms
 namespace {
 constinit LinkState s_link_state{};
 }
-void publish_link(uint32_t now_ms) noexcept;
-// 类内：uint32_t last_tick_ms_ = 0;
+void publishLink(uint32_t nowMs) noexcept;
+// 类内：uint32_t lastTickMs_ = 0;
 
 // 不要这样写
 class link_state;
-void PublishLink(uint32_t nowMs);
+void PublishLink(uint32_t now_ms);
 // 类内：uint32_t _lastTick;
 ```
 
@@ -602,7 +605,7 @@ clang-tidy -p builds/host --config-file=.clang-tidy-c path/to/pure.c
 | 类 + 静态回调跳转 | 采用模块类与 `fw::make_ops<T>()`，业务方法隐藏 `void *` |
 | 固定分层 | 保留允许依赖表与 host 可测的纯组件边界 |
 | 成组常量/单位、doxygen 注释 | 采用并扩大到每个函数（§6.2，`tools/doc_check` 门禁）；实现内注释解释原因 |
-| lowerCamel/PascalCase 方法、前缀私有成员 | 改为 snake_case 方法、`name_` 私有成员 |
+| lowerCamel 方法、前缀私有成员 | 方法采用 lowerCamelCase（ADR-0013 起）；私有成员用后缀 `name_` 而非前缀 |
 | 字符串 ID 订阅、通用堆容器 | 用枚举/constexpr 表、静态存储；堆仅在允许档位按文件登记 |
 | 单线程无锁 DataBroker | 保留 Slot/FanoutRing/Executor 和双核同步契约 |
 | 每个设备虚函数 | 模块用模板跳板；多态仅限既有 Transport/Sink |
@@ -645,7 +648,7 @@ Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**�
 | GEN-010 | 校验外部输入的长度与范围 | 帧长在进缓冲前判上界 | 覆盖 | components/stream_demux/、components/device_proto/ |
 | DOC-001 | 新增自有函数都要 Doxygen（默认英文），声明或定义写一处，类注释不算 | §6.2 比技能更严：每个函数都要，正文中文；门禁只查增量，存量 1293 个中 315 个合格（24%，2026-11-17） | 缺口（存量）；正文语言为有意偏离 | §6.2；AGENTS.md §5 规定中文正文；存量按 ADR-0013 分批补齐 |
 | CPPF-001 | 布局按项目选定的风格 | 仓库 `.clang-format` | 有意偏离 | AGENTS.md §5：clang-format 为唯一门禁 |
-| CPPF-002 | 命名按项目风格 | §3 + ADR-0008 §9 | 覆盖 | §3 |
+| CPPF-002 | 命名按项目风格 | §3 + ADR-0013 §2.1（readable-cpp lowerCamelCase；文件静态保留 `s_`） | 覆盖（S2 迁移中） | §3 |
 | ARCH-007 | 驱动状态放设备上下文，分段初始化逐个查返回 | GNSS 驱动实例层次 + `init()` 返回 Status | 覆盖 | components/gnss/ |
 | C-001 | 不用 volatile 做任务同步 | §5.3 同款；`components/cli/src/Out.cpp` 的 volatile 双重检查在 Q2 改为原子一次性初始化 | 覆盖 | §5.3、Q2 |
 | C-002 | 模块外部以外的函数/变量 static | 文件作用域 `s_` 静态放匿名命名空间 | 覆盖 | §3 |
@@ -705,7 +708,7 @@ Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**�
 | ESP-003 | 栈按字节、绑核并写明理由、单核降级 | 栈字节常量 + 每处绑核注释 | 覆盖 | main/AppContext.hpp、main/app/Executors.cpp |
 | ESP-004 | 每个 `esp_err_t` 都检查，可恢复错误不用 `ESP_ERROR_CHECK` | 无 `ESP_ERROR_CHECK`、无 `(void)` 丢弃 | 覆盖 | Q1 审计 grep |
 | ESP-005 | eFuse/Secure Boot/Flash Encryption/JTAG 关闭需授权 | AGENTS §6 禁止 efuse | 覆盖 | AGENTS.md §6 |
-| ESP-006 | IDF 风格：4 空格、函数花括号换行、120 列、`s_` 前缀、组件前缀、`#pragma once`、Astyle | 前五项已落地，格式工具改用仓库 `.clang-format` | 有意偏离 | AGENTS.md §5：astyle 与 `.clang-format` 冲突 |
+| ESP-006 | IDF 风格：4 空格、函数花括号换行、120 列、`s_` 前缀、组件前缀、`#pragma once`、Astyle | 除列宽（ADR-0013 改为 100）外前五项已落地，格式工具改用仓库 `.clang-format` | 有意偏离 | AGENTS.md §5：astyle 与 `.clang-format` 冲突 |
 | ESP-007 | OTA 至少两个分区 + otadata + 开启回滚 + mark valid | 有 otadata/`ota_0`/`ota_1`；本期不做 OTA，未开回滚 | 有意偏离（延后） | ADR-0002 Q2 补充决定：做 OTA 时开 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 并在首次连通后 mark valid |
 | ESP-008 | Xtensa 与 RISC-V 都要能编，用 `CONFIG_IDF_TARGET_*`/`SOC_*` 隔离 | 产品固件只 esp32（经典蓝牙限制），纯组件经 `test_apps/rtk_pure` 双架构编译 | 有意偏离 | ADR-0002:70,76 |
 | ESP-009 | 用锁定版本的 IDF API，不关默认 `-Werror` | IDF v6.1 固定路径；无托管组件，IDF 不生成 `dependencies.lock` | 覆盖 | AGENTS.md §1、.gitignore 注释（Q2） |
