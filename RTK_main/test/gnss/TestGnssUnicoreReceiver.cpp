@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "demux/decoders/Nmea.hpp"
 #include "demux/decoders/Rtcm3.hpp"
@@ -14,6 +15,13 @@
 #include "gnss/Controller.hpp"
 #include "gnss/drivers/UnicoreReceiver.hpp"
 #include "unity.h"
+
+// S1（ADR-0012 §2.8、CPP-011）：家族基类不可直接实例化；型号只实例化平凡析构的 final 叶子类。
+static_assert(!std::is_constructible_v<gnss::UnicoreReceiver>);
+static_assert(std::is_final_v<gnss::Um980Receiver>);
+static_assert(std::is_final_v<gnss::Um982Receiver>);
+static_assert(std::is_trivially_destructible_v<gnss::Um980Receiver>);
+static_assert(std::is_trivially_destructible_v<gnss::Um982Receiver>);
 
 namespace {
 

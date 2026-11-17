@@ -18,15 +18,13 @@
 
 namespace gnss {
 
-/** ZED-F9P 驱动（定义在 src/drivers/UbloxReceiver.cpp）；应答解码器使用 demux::ubx::kDecoder。 */
+/**
+ * u-blox F9 代家族基类（定义在 src/drivers/UbloxReceiver.cpp）；应答解码器使用 demux::ubx::kDecoder。
+ * 家族基类，只能经 final 叶子类实例化（ADR-0012 §2.8）：构造与析构都是 protected 非虚，拷贝/移动删除；
+ * 实例为 ZedF9pReceiver 的 constinit 静态对象。
+ */
 class UbloxReceiver : public Receiver {
 public:
-    constexpr UbloxReceiver() noexcept = default;
-    // 去掉 final 后必须公开虚析构：基类 Receiver 的 protected 非虚析构会挡住命名空间作用域的对象定义，
-    // 且 -Wnon-virtual-dtor 视为错误（与 UnicoreReceiver 同一处理）。
-    // 驱动对象仍只在静态存储以 constinit 存活，从不 new/delete，故删除拷贝/移动。
-    virtual ~UbloxReceiver() = default;
-
     UbloxReceiver(const UbloxReceiver &) = delete;
     UbloxReceiver &operator=(const UbloxReceiver &) = delete;
     UbloxReceiver(UbloxReceiver &&) = delete;
@@ -53,6 +51,10 @@ public:
                                           CmdBuf &out) const noexcept override;
 
 protected:
+    // 家族基类不可直接实例化（CPP-011）：构造/析构 protected、析构非虚，保证可平凡析构且不生成删除析构。
+    constexpr UbloxReceiver() noexcept = default;
+    ~UbloxReceiver() = default;
+
     // ---- 命令库：每个函数只组一条完整 UBX 帧（sync + class/id + len + payload + Fletcher） ----
     [[nodiscard]] static bool cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id,
                                               std::span<const uint8_t> payload) noexcept;
@@ -65,6 +67,12 @@ protected:
     [[nodiscard]] static size_t resp_payload_len(std::span<const uint8_t> frame) noexcept;
     [[nodiscard]] static bool resp_has_valid_ack(std::span<const uint8_t> frame) noexcept;
     [[nodiscard]] static bool resp_ack_class_id(std::span<const uint8_t> frame, uint8_t cls, uint8_t id) noexcept;
+};
+
+/** ZED-F9P 基准型号叶子类：无覆盖，家族默认行为即 F9P 行为（name() 仍为 "ublox"）。 */
+class ZedF9pReceiver final : public UbloxReceiver {
+public:
+    constexpr ZedF9pReceiver() noexcept = default;
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */

@@ -36,19 +36,13 @@ inline constexpr demux::Decoder kResponseDecoder{"UnicoreResp", kResponseMaxFram
 namespace gnss {
 
 /**
- * Unicore N4 家族驱动（定义在 src/drivers/UnicoreReceiver.cpp），描述基准型号 UM980/UM981（ADR-0012 §2.8）。
- * 有差异的型号从本类派生（Um982Receiver），由 for_model() 在探测后切换；命令生成与应答解析为 protected
- * static，子类直接复用。
+ * Unicore N4 家族基类（定义在 src/drivers/UnicoreReceiver.cpp），描述基准型号 UM980/UM981（ADR-0012 §2.8）。
+ * 家族基类，只能经 final 叶子类实例化（ADR-0012 §2.8）：构造与析构都是 protected 非虚，拷贝/移动删除；
+ * 实例为 Um980Receiver（UM980/UM981）与 Um982Receiver 的 constinit 静态对象。
+ * 命令生成与应答解析为 protected static，子类直接复用。
  */
 class UnicoreReceiver : public Receiver {
 public:
-    constexpr UnicoreReceiver() noexcept = default;
-    // 本类既作型号家族基类（Um982Receiver）又被直接实例化为 constinit 只读单例：基类 Receiver 的
-    // protected 非虚析构会挡住命名空间作用域的对象定义，故改为 public virtual——
-    // 既满足 -Wnon-virtual-dtor，也能保证经 Receiver* 释放时不漏掉派生部分。
-    // 驱动对象仍只在静态存储以 constinit 存活，从不 new/delete。
-    virtual ~UnicoreReceiver() = default;
-
     UnicoreReceiver(const UnicoreReceiver &) = delete;
     UnicoreReceiver &operator=(const UnicoreReceiver &) = delete;
     UnicoreReceiver(UnicoreReceiver &&) = delete;
@@ -87,6 +81,10 @@ public:
                                           CmdBuf &out) const noexcept override;
 
 protected:
+    // 家族基类不可直接实例化（CPP-011）：构造/析构 protected、析构非虚，保证可平凡析构且不生成删除析构。
+    constexpr UnicoreReceiver() noexcept = default;
+    ~UnicoreReceiver() = default;
+
     /** 配置脚本的一步：build 生成命令，enabled 为 false 时该步在此配置下跳过（索引顺延）。 */
     struct ScriptStep {
         bool (*build)(const RoverConfig &cfg, ConfigStep &out) noexcept;
@@ -127,7 +125,13 @@ protected:
     [[nodiscard]] static std::span<const uint8_t> resp_text(std::span<const uint8_t> frame, size_t tag_pos) noexcept;
 };
 
-/** UM982 双天线型号：在家族基础上增加 kHeading（HEADINGA 输出）。 */
+/** UM980/UM981 基准型号叶子类：无覆盖，家族默认行为即基准型号行为（name() 仍为 "unicore"）。 */
+class Um980Receiver final : public UnicoreReceiver {
+public:
+    constexpr Um980Receiver() noexcept = default;
+};
+
+/** UM982 双天线型号叶子类：在家族基础上增加 kHeading（HEADINGA 输出）。 */
 class Um982Receiver final : public UnicoreReceiver {
 public:
     constexpr Um982Receiver() noexcept = default;

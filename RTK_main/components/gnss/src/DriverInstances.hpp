@@ -40,17 +40,17 @@ namespace gnss::detail {
 
 #if GNSS_ENABLE_UNICORE
 // NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例沿用 k 前缀；s_ 只用于文件作用域静态
-extern const UnicoreReceiver kUnicoreReceiver; ///< UM980/UM981 家族单例（定义在 UnicoreReceiver.cpp）。
+extern const Um980Receiver kUm980Receiver; ///< UM980/UM981 叶子单例（定义在 UnicoreReceiver.cpp）。
 // NOLINTNEXTLINE(readability-identifier-naming): 同上
-extern const Um982Receiver kUm982Receiver; ///< UM982 双天线单例（同文件）。
+extern const Um982Receiver kUm982Receiver; ///< UM982 双天线叶子单例（同文件）。
 #endif
 #if GNSS_ENABLE_UBLOX
 // NOLINTNEXTLINE(readability-identifier-naming): 同上
-extern const UbloxReceiver kUbloxReceiver; ///< u-blox F9 单例（定义在 UbloxReceiver.cpp）。
+extern const ZedF9pReceiver kZedF9pReceiver; ///< ZED-F9P 叶子单例（定义在 UbloxReceiver.cpp）。
 #endif
 #if GNSS_ENABLE_COMNAV
 // NOLINTNEXTLINE(readability-identifier-naming): 同上
-extern const ComnavReceiver kComnavReceiver; ///< ComNav K8 单例（定义在 ComnavReceiver.cpp）。
+extern const K803Receiver kK803Receiver; ///< K803 叶子单例（定义在 ComnavReceiver.cpp）。
 #endif
 
 } // namespace gnss::detail

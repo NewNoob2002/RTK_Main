@@ -428,7 +428,7 @@ std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out
 namespace detail {
 
 // NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
-constinit const UnicoreReceiver kUnicoreReceiver{};
+constinit const Um980Receiver kUm980Receiver{};
 // NOLINTNEXTLINE(readability-identifier-naming): 同上
 constinit const Um982Receiver kUm982Receiver{};
 
@@ -887,10 +887,10 @@ const Receiver &um982_receiver() noexcept
     return detail::kUm982Receiver;
 }
 
-/** @brief UM980/UM981 家族的只读单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
+/** @brief UM980/UM981 基准型号叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
 const Receiver &unicore_receiver() noexcept
 {
-    return detail::kUnicoreReceiver;
+    return detail::kUm980Receiver;
 }
 
 } // namespace gnss

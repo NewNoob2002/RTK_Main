@@ -28,15 +28,13 @@ inline constexpr demux::Decoder kPromptDecoder{"ComnavPrompt", kPromptMaxFrame, 
 
 namespace gnss {
 
-/** K803 驱动（定义在 src/drivers/ComnavReceiver.cpp）。 */
+/**
+ * K8 系列（K803 等）家族基类（定义在 src/drivers/ComnavReceiver.cpp）。
+ * 家族基类，只能经 final 叶子类实例化（ADR-0012 §2.8）：构造与析构都是 protected 非虚，拷贝/移动删除；
+ * 实例为 K803Receiver 的 constinit 静态对象。
+ */
 class ComnavReceiver : public Receiver {
 public:
-    constexpr ComnavReceiver() noexcept = default;
-    // 去掉 final 后必须公开虚析构：基类 Receiver 的 protected 非虚析构会挡住命名空间作用域的对象定义，
-    // 且 -Wnon-virtual-dtor 视为错误（与 UnicoreReceiver 同一处理）。
-    // 驱动对象仍只在静态存储以 constinit 存活，从不 new/delete，故删除拷贝/移动。
-    virtual ~ComnavReceiver() = default;
-
     ComnavReceiver(const ComnavReceiver &) = delete;
     ComnavReceiver &operator=(const ComnavReceiver &) = delete;
     ComnavReceiver(ComnavReceiver &&) = delete;
@@ -60,6 +58,10 @@ public:
                                           CmdBuf &out) const noexcept override;
 
 protected:
+    // 家族基类不可直接实例化（CPP-011）：构造/析构 protected、析构非虚，保证可平凡析构且不生成删除析构。
+    constexpr ComnavReceiver() noexcept = default;
+    ~ComnavReceiver() = default;
+
     // ---- 命令库：只往 out 写一条完整命令（含 \r\n，先清空），失败返回 false ----
     [[nodiscard]] static bool cmd_unlog_all(CmdBuf &out, uint8_t port) noexcept;               // "UNLOGALL COMn"
     [[nodiscard]] static bool cmd_mode_rover(CmdBuf &out) noexcept;                            // "MODE ROVER"
@@ -73,6 +75,12 @@ protected:
     // ---- 应答判定：只判成功/失败，具体文本不进主流程 ----
     [[nodiscard]] static bool resp_is_ok(std::span<const uint8_t> frame) noexcept;    // 以 "<OK" 开头
     [[nodiscard]] static bool resp_is_error(std::span<const uint8_t> frame) noexcept; // 以 "<ERROR" 开头
+};
+
+/** K803 基准型号叶子类：无覆盖，家族默认行为即 K803 行为（name() 仍为 "comnav"）。 */
+class K803Receiver final : public ComnavReceiver {
+public:
+    constexpr K803Receiver() noexcept = default;
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */

@@ -220,7 +220,7 @@ std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) 
 namespace detail {
 
 // NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
-constinit const ComnavReceiver kComnavReceiver{};
+constinit const K803Receiver kK803Receiver{};
 
 } // namespace detail
 
@@ -476,10 +476,10 @@ fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model
     return fw::Status::kOk;
 }
 
-/** @brief ComNav K8 的只读单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
+/** @brief K803 叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
 const Receiver &comnav_receiver() noexcept
 {
-    return detail::kComnavReceiver;
+    return detail::kK803Receiver;
 }
 
 } // namespace gnss

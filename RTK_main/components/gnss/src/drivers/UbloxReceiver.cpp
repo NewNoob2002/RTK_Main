@@ -315,7 +315,7 @@ uint16_t nav_period_ms(const RoverConfig &cfg) noexcept
 namespace detail {
 
 // NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
-constinit const UbloxReceiver kUbloxReceiver{};
+constinit const ZedF9pReceiver kZedF9pReceiver{};
 
 } // namespace detail
 
@@ -638,10 +638,10 @@ fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model 
     return fw::Status::kOk;
 }
 
-/** @brief u-blox F9 的只读单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
+/** @brief ZED-F9P 叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
 const Receiver &ublox_receiver() noexcept
 {
-    return detail::kUbloxReceiver;
+    return detail::kZedF9pReceiver;
 }
 
 } // namespace gnss

@@ -5,10 +5,16 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "demux/decoders/UnicoreHash.hpp"
 #include "gnss/drivers/ComnavReceiver.hpp"
 #include "unity.h"
+
+// S1（ADR-0012 §2.8、CPP-011）：家族基类不可直接实例化；型号只实例化平凡析构的 final 叶子类。
+static_assert(!std::is_constructible_v<gnss::ComnavReceiver>);
+static_assert(std::is_final_v<gnss::K803Receiver>);
+static_assert(std::is_trivially_destructible_v<gnss::K803Receiver>);
 
 namespace {
 
