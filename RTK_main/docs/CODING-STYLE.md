@@ -622,7 +622,9 @@ default:
 // node->subscribe("Power");  void onEvent(void *param);
 ```
 
-## 10. 与 embedded-engineering 技能的对照（技能 git 5cae6d9）
+## 10. 与 embedded-engineering 技能的对照（技能 v0.1）
+
+技能版本以 `SKILL.md` frontmatter 的 `metadata.version` 为准（源仓库 `/home/gtc/Desktop/workspace/Tools/Skills`）。Q1 审计读取的是 git `5cae6d9` 加当时尚未提交的工作区改动（含 CPPF-001/CPPF-002/DOC-001），这些改动随后定为 v0.1；单凭 `5cae6d9` 复现不出本表依据的规则。
 
 本表由 Q1 审计（2026-11-17）建立：只列对本工程适用或需要说明不适用的技能规则。状态取值：
 **覆盖**（已落地且有门禁/证据）、**有意偏离**（本工程规则更具体且有理由）、**缺口**（技能要求尚无对应做法，
