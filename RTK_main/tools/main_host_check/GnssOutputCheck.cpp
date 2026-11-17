@@ -84,7 +84,7 @@ void test_out_config_and_nvs_blob() noexcept
     CHECK(cfg.mask == app::data::kGnssOutMaskAll);
     CHECK(fw::isOk(cfg.apply_interval(2U, 5)));    // HEADINGA 200 ms
     CHECK(fw::isOk(cfg.apply_interval(1U, -128))); // -128 -> 128000 ms
-    CHECK(core::services::GnssService::interval_to_period_ms(cfg.intervals[1]) == 128000U);
+    CHECK(core::services::GnssService::intervalToPeriodMs(cfg.intervals[1]) == 128000U);
     CHECK(fw::isOk(cfg.apply_interval(3U, 0)));
     CHECK((cfg.mask & (1U << 3U)) == 0U);
     CHECK(cfg.intervals[3] == 0);

@@ -53,6 +53,64 @@ foreach(relative command_dispatcher.cpp ${REF_LEGACY_PREFIX}/core/command_dispat
             string(REPLACE "${_inc}" "#include \"${_dir}/${_pascal}.hpp\"" content "${content}")
         endif()
     endforeach()
+    # ADR-0013 S2（S2-rename.md B2）：工程 C++ 符号已改 lowerCamelCase，而退役参考实现的原件不改，
+    # 故生成期按本次改名表做子串替换（string(REPLACE) 不分词边界）。长名在前，避免 handle_work_mode 里的 work_mode 先被替换；
+    # 替换只改标识符，逻辑、字符串与字节布局保持参考实现原样。
+    foreach(_rename IN ITEMS
+            "handle_test_override=handleTestOverride"
+            "handle_status_query=handleStatusQuery"
+            "whitelist_changed=whitelistChanged"
+            "build_status_push=buildStatusPush"
+            "handle_heartbeat=handleHeartbeat"
+            "handle_sat_track=handleSatTrack"
+            "handle_dev_state=handleDevState"
+            "decode_heartbeat=decodeHeartbeat"
+            "handle_work_mode=handleWorkMode"
+            "whitelist_clear=whitelistClear"
+            "handle_dev_info=handleDevInfo"
+            "handle_battery=handleBattery"
+            "battery_temp_c=batteryTempC"
+            "clear_override=clearOverride"
+            "encode_status=encodeStatus"
+            "response_type=responseType"
+            "handle_radio=handleRadio"
+            "alarm_source=alarmSource"
+            "set_override=setOverride"
+            "handle_fence=handleFence"
+            "reply_result=replyResult"
+            "build_frame=buildFrame"
+            "handle_pair=handlePair"
+            "fix_quality=fixQuality"
+            "make_status=makeStatus"
+            "battery_pct=batteryPct"
+            "reply_build=replyBuild"
+            "is_override=isOverride"
+            "radio_type=radioType"
+            "reply_fail=replyFail"
+            "on_battery=onBattery"
+            "handle_log=handleLog"
+            "handle_com=handleCom"
+            "fixed_str=fixedStr"
+            "uptime_ms=uptimeMs"
+            "pair_open=pairOpen"
+            "work_mode=workMode"
+            "has_role=hasRole"
+            "board_fw=boardFw"
+            "reply_ok=replyOk"
+            "radio_fw=radioFw"
+            "com_baud=comBaud"
+            "board_sn=boardSn"
+            "req_type=reqType"
+            "fw_ver=fwVer"
+            "now_ms=nowMs"
+            "hw_ver=hwVer"
+            "msg_id=msgId"
+            "is_ok=fw::isOk")
+        string(REPLACE "=" ";" _pair "${_rename}")
+        list(GET _pair 0 _old)
+        list(GET _pair 1 _new)
+        string(REPLACE "${_old}" "${_new}" content "${content}")
+    endforeach()
     string(REPLACE "${REF_LEGACY_PREFIX}/" "" output "${relative}")
     get_filename_component(output_dir ${REF_GOLDEN}/${output} DIRECTORY)
     file(MAKE_DIRECTORY ${output_dir})

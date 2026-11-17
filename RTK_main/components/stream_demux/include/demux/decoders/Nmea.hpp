@@ -15,7 +15,7 @@ namespace demux::nmea {
 inline constexpr std::size_t kMaxFrame = 256;
 
 /** 线程/ISR 安全：是（纯函数）。 */
-[[nodiscard]] bool first_byte(uint8_t byte) noexcept;
+[[nodiscard]] bool firstByte(uint8_t byte) noexcept;
 
 /** 线程/ISR 安全：是（纯函数）。契约见 demux/Decoder.hpp。 */
 [[nodiscard]] Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
@@ -23,6 +23,6 @@ inline constexpr std::size_t kMaxFrame = 256;
 /** 线程/ISR 安全：是（纯函数）。对被 step 判为 kReject 的前缀写一句英文原因，见 demux/Decoder.hpp ExplainFn。 */
 [[nodiscard]] std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcept;
 
-inline constexpr Decoder kDecoder{"NMEA", kMaxFrame, &first_byte, &step, &explain};
+inline constexpr Decoder kDecoder{"NMEA", kMaxFrame, &firstByte, &step, &explain};
 
 } // namespace demux::nmea

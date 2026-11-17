@@ -47,8 +47,8 @@ void BtLinkModule::SessionSink::bind(BtLinkModule &owner, core::SessionHandle ha
     unhealthy_ = false;
 }
 
-void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t index,
-                                         std::span<const uint8_t> wire) noexcept
+void BtLinkModule::SessionSink::onFrame(const demux::Decoder &decoder, uint8_t index,
+                                        std::span<const uint8_t> wire) noexcept
 {
     const bool known = (index == kProductIndex && &decoder == &proto::demux_frame::kDecoder) ||
                        (index == kRtcmIndex && &decoder == &demux::rtcm3::kDecoder);
@@ -62,9 +62,9 @@ void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t 
         return;
     }
     if (index == kProductIndex) {
-        if (owner_->link_service().on_data(handle_, wire, rtos::nowMs()) == 0U) {
-            core::trace_proto(core::ProtoTrace::kReplyError, handle_,
-                              static_cast<uint32_t>(fw::Result::kBusy), 0U);
+        if (owner_->link_service().onData(handle_, wire, rtos::nowMs()) == 0U) {
+            core::traceProto(core::ProtoTrace::kReplyError, handle_,
+                             static_cast<uint32_t>(fw::Result::kBusy), 0U);
         }
         return;
     }
@@ -132,7 +132,7 @@ void BtLinkModule::session_forget(core::SessionHandle handle) noexcept
     /* 累计退役统计后复位会话，避免重用句柄携带半帧。 */
     if (entry->demux.has_value()) {
         const auto &stats = entry->demux->stats();
-        retired_demux_.unknown_bytes += stats.unknown_bytes;
+        retired_demux_.unknown_bytes += stats.unknownBytes;
         retired_demux_.product_rejects += stats.decoder[kProductIndex].rejects;
         retired_demux_.rtcm_rejects += stats.decoder[kRtcmIndex].rejects;
     }
@@ -183,7 +183,7 @@ void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr
 
 void BtLinkModule::collect_whitelist_dirty() noexcept
 {
-    if (link_service().consume_whitelist_dirty()) {
+    if (link_service().consumeWhitelistDirty()) {
         ctx().storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::nowMs());
     }
 }
@@ -196,7 +196,7 @@ void BtLinkModule::handle_open(const spp_server_evt_t &evt, uint32_t now_ms) noe
     }
     /* 会话元数据必须先于 LinkService 的 OPEN 可见。 */
     session_record(evt.handle, addr);
-    link_service().on_open(evt.handle, addr, now_ms);
+    link_service().onOpen(evt.handle, addr, now_ms);
 }
 
 void BtLinkModule::handle_close(core::SessionHandle handle) noexcept
@@ -207,10 +207,10 @@ void BtLinkModule::handle_close(core::SessionHandle handle) noexcept
                                   : 0U;
     const bool was_paused = link_service().paused(handle);
     if (was_paused || (unconsumed > 0U)) {
-        core::trace_link(core::LinkTrace::kCloseCancel, handle, static_cast<uint32_t>(unconsumed),
-                         was_paused ? 1U : 0U);
+        core::traceLink(core::LinkTrace::kCloseCancel, handle, static_cast<uint32_t>(unconsumed),
+                        was_paused ? 1U : 0U);
     }
-    link_service().on_close(handle);
+    link_service().onClose(handle);
     session_forget(handle);
 }
 
@@ -237,7 +237,7 @@ void BtLinkModule::handle_event(const spp_server_evt_t &evt, uint32_t now_ms) no
         link_service().resume(evt.handle, now_ms);
         break;
     case SPP_SERVER_EVT_RX_DROP:
-        link_service().on_rx_dropped(evt.dropped);
+        link_service().onRxDropped(evt.dropped);
         break;
     default:
         break;
@@ -344,7 +344,7 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
     /* 按基线顺序发布链路、会话与报警状态。 */
     LinkStatus link{};
     link.policy = policy_from_config();
-    link.pairing = link_manager_.is_pairing();
+    link.pairing = link_manager_.isPairing();
     link.snapshot_ms = now_ms;
     const auto list = link_manager_.whitelist();
     link.whitelist_count = std::min(list.size(), kMaxAlarms);
@@ -359,7 +359,7 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
     }
     ctx().data.sessions.write(sessions);
     if (alarm_.has_value()) {
-        const AlarmState snapshot{alarm_->state(), alarm_->level(), alarm_->is_override()};
+        const AlarmState snapshot{alarm_->state(), alarm_->level(), alarm_->isOverride()};
         ctx().data.alarm_state.write(snapshot);
     } else {
         ctx().data.alarm_state.write({});
@@ -367,8 +367,8 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
     /* 继续发布发送、心跳与分流统计，顺序不变。 */
     LinkStats stats{};
     static_cast<core::LinkStats &>(stats) = link_service().stats(); // 派生结构的基类赋值，无窄化。
-    stats.parser_crc_errors = link_service().parser_crc_errors();
-    stats.parser_length_errors = link_service().parser_length_errors();
+    stats.parser_crc_errors = link_service().parserCrcErrors();
+    stats.parser_length_errors = link_service().parserLengthErrors();
     spp_server_tx_stats_t tx{};
     spp_server_tx_stats(&tx);
     stats.tx_accepted = tx.accepted;
@@ -393,14 +393,14 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
         stats.rx_drop_events[idx] = rx.sessions[idx].drop_events;
     }
     ctx().data.link_stats.write(stats);
-    const auto heartbeat = link_service().last_heartbeat();
+    const auto heartbeat = link_service().lastHeartbeat();
     ctx().data.heartbeat.write(
         {heartbeat.has_value(), heartbeat.value_or(proto::alarm::Heartbeat{})});
     DemuxStats demux = retired_demux_;
     for (auto &entry : sessions_) {
         if (entry.used && entry.demux.has_value()) {
             const auto &counts = entry.demux->stats();
-            demux.unknown_bytes += counts.unknown_bytes;
+            demux.unknown_bytes += counts.unknownBytes;
             demux.product_rejects += counts.decoder[kProductIndex].rejects;
             demux.rtcm_rejects += counts.decoder[kRtcmIndex].rejects;
             /* 重同步与未知字节只在分流器内部累计；这里每轮取一次增量上报，
@@ -409,10 +409,10 @@ void BtLinkModule::publish_link(uint32_t now_ms) noexcept
                 trace_rtcm(RtcmTrace::kResync, entry.handle, counts.resyncs - entry.seen_resyncs);
                 entry.seen_resyncs = counts.resyncs;
             }
-            if (counts.unknown_bytes > entry.seen_unknown) {
+            if (counts.unknownBytes > entry.seen_unknown) {
                 trace_rtcm(RtcmTrace::kUnknown, entry.handle,
-                           counts.unknown_bytes - entry.seen_unknown);
-                entry.seen_unknown = counts.unknown_bytes;
+                           counts.unknownBytes - entry.seen_unknown);
+                entry.seen_unknown = counts.unknownBytes;
             }
         }
     }
@@ -430,7 +430,7 @@ void BtLinkModule::apply_rtcm_reset() noexcept
         rtcm_snapshot_.reset_epoch = reset;
         for (auto &entry : sessions_) {
             if (entry.demux.has_value()) {
-                entry.demux->reset_stats();
+                entry.demux->resetStats();
             }
             entry.seen_resyncs = 0U;
             entry.seen_unknown = 0U;
@@ -461,21 +461,21 @@ void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
     const uint8_t fix_q = (fix_fresh && (cached_fix.quality != ::gnss::FixQuality::kUnknown))
                               ? static_cast<uint8_t>(cached_fix.quality)
                               : proto::alarm::kValueUnknown;
-    device_info.fix_quality = fix_q;
+    device_info.fixQuality = fix_q;
 
     uint32_t status_ver = 0;
     const auto gnss_st = ctx().data.gnss_status.read(status_ver);
     if (status_ver != gnss_status_version_) {
         gnss_status_version_ = status_ver;
-        device_info.gnss_running = gnss_st.enabled && (gnss_st.state == ::gnss::State::kRunning);
+        device_info.gnssRunning = gnss_st.enabled && (gnss_st.state == ::gnss::State::kRunning);
         if (gnss_st.model != ::gnss::Model::kUnknown) {
             device_info.board.assign(::gnss::model_name(gnss_st.model));
         }
         if (gnss_st.fw_version[0] != '\0') {
-            device_info.board_fw.assign(std::string_view{gnss_st.fw_version.data()});
+            device_info.boardFw.assign(std::string_view{gnss_st.fw_version.data()});
         }
         if (gnss_service_.has_value()) {
-            gnss_service_->set_supported_mask(gnss_st.supported_mask);
+            gnss_service_->setSupportedMask(gnss_st.supported_mask);
         }
     }
 }
@@ -484,7 +484,7 @@ core::services::GnssQueryResult BtLinkModule::on_gnss_query(void *ctx, uint16_t 
                                                             std::span<uint8_t> dst) noexcept
 {
     auto *self = static_cast<BtLinkModule *>(ctx);
-    const auto idx = core::services::GnssService::type_index_of(msg_id);
+    const auto idx = core::services::GnssService::typeIndexOf(msg_id);
     if ((self == nullptr) || !idx.has_value()) {
         return {};
     }
@@ -492,9 +492,8 @@ core::services::GnssQueryResult BtLinkModule::on_gnss_query(void *ctx, uint16_t 
     const auto res = self->ctx().data.gnss_latest.query(type_idx, dst);
     if (res.oversize) {
         // query_oversize 在 GnssService 内于本回调返回后自增，先累加 1 再写快照避免少计当前次。
-        const uint32_t cur = self->gnss_service_.has_value()
-                                 ? (self->gnss_service_->query_oversize_count() + 1U)
-                                 : 1U;
+        const uint32_t cur =
+            self->gnss_service_.has_value() ? (self->gnss_service_->queryOversizeCount() + 1U) : 1U;
         self->ctx().data.gnss_app_sub.set_query_oversize_total(cur);
         fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppDrop), 0U, 1U,
                   type_idx);
@@ -514,7 +513,7 @@ void BtLinkModule::on_gnss_mask(void *ctx, uint32_t mask) noexcept
     std::array<uint32_t, core::services::kGnssMsgCount> periods_ms{};
     if (self->gnss_service_.has_value()) {
         for (size_t i = 0U; i < core::services::kGnssMsgCount; ++i) {
-            periods_ms[i] = self->gnss_service_->period_ms(i);
+            periods_ms[i] = self->gnss_service_->periodMs(i);
         }
     }
     self->ctx().data.gnss_app_sub.set_subscription(mask, periods_ms);
@@ -525,7 +524,7 @@ void BtLinkModule::on_gnss_mask(void *ctx, uint32_t mask) noexcept
 void BtLinkModule::reset_gnss_stream_session() noexcept
 {
     if (gnss_service_.has_value()) {
-        gnss_service_->reset_session();
+        gnss_service_->resetSession();
     }
     if (!gnss_reader_attached_) {
         return;
@@ -609,15 +608,15 @@ fw::Result BtLinkModule::init() noexcept
     auto &alarm = alarm_.emplace();
     auto &device_service = device_service_.emplace();
     device_service.info().sn.assign(system.sn.data());
-    device_service.info().fw_ver.assign(kAppVersion);
+    device_service.info().fwVer.assign(kAppVersion);
     auto &config_service = config_service_.emplace();
     auto &alarm_service = alarm_service_.emplace(alarm, link_manager_, device_service.info());
     auto &pair_service = pair_service_.emplace(link_manager_);
 #if RTK_GNSS_ENABLED
     cached_gnss_fix_.emplace();
     auto &gnss_service = gnss_service_.emplace();
-    gnss_service.set_query_hook(&BtLinkModule::on_gnss_query, this);
-    gnss_service.set_mask_hook(&BtLinkModule::on_gnss_mask, this);
+    gnss_service.setQueryHook(&BtLinkModule::on_gnss_query, this);
+    gnss_service.setMaskHook(&BtLinkModule::on_gnss_mask, this);
     gnss_reader_attached_ = fw::isOk(ctx().data.gnss_app_ring.attach(0U, gnss_reader_id_));
     if (!gnss_reader_attached_) {
         FW_LOGE(fw::TraceCat::kLink, "<gnss> app ring attach failed");
@@ -638,7 +637,7 @@ fw::Result BtLinkModule::init() noexcept
         return fw::Result::kInvalidState;
     }
     transport_.emplace();
-    if (!transport_->supports_credit()) {
+    if (!transport_->supportsCredit()) {
         return fw::Result::kInvalidState;
     }
     service_.emplace(*transport_, link_manager_, router_, alarm_service);
@@ -673,7 +672,7 @@ bool BtLinkModule::poll_and_check_ready(uint32_t now_ms) noexcept
             continue;
         }
         if (link_service().paused(entry.handle)) {
-            if (transport_.has_value() && transport_->reply_ready(entry.handle)) {
+            if (transport_.has_value() && transport_->replyReady(entry.handle)) {
                 ready = true;
             }
             continue;
@@ -752,7 +751,7 @@ void BtLinkModule::set_alarm(const fw::Command &cmd, fw::CommandResult &result) 
     if (!alarm_.has_value()) {
         alarm_.emplace();
     }
-    if (cmd.argLen != kAlarmArgBytes || !alarm_->set_override(cmd.args[0], cmd.args[1])) {
+    if (cmd.argLen != kAlarmArgBytes || !alarm_->setOverride(cmd.args[0], cmd.args[1])) {
         result.status = fw::Result::kInvalidArg;
     }
 }
@@ -760,7 +759,7 @@ void BtLinkModule::set_alarm(const fw::Command &cmd, fw::CommandResult &result) 
 void BtLinkModule::clear_whitelist(fw::CommandResult &result) noexcept
 {
     /* 清除内存白名单并同步持久化，回执携带原后端错误码。 */
-    link_manager_.whitelist_clear();
+    link_manager_.whitelistClear();
     persist_whitelist(result);
 }
 
@@ -785,7 +784,7 @@ void BtLinkModule::edit_whitelist(const fw::Command &cmd, bool add,
     core::BtAddr addr{};
     std::copy_n(cmd.args.begin(), core::kAddrLen, addr.bytes.begin());
     const core::WhitelistEdit edit =
-        add ? link_manager_.whitelist_add(addr) : link_manager_.whitelist_remove(addr);
+        add ? link_manager_.whitelistAdd(addr) : link_manager_.whitelistRemove(addr);
     switch (edit) {
     case core::WhitelistEdit::kDone:
         persist_whitelist(result);
@@ -820,13 +819,13 @@ void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result)
         if (!alarm_.has_value()) {
             alarm_.emplace();
         }
-        alarm_->clear_override();
+        alarm_->clearOverride();
         break;
     case LinkVerb::kPair:
-        if (link_manager_.is_pairing()) {
+        if (link_manager_.isPairing()) {
             result.status = fw::Result::kBusy;
         } else {
-            link_manager_.pair_open(rtos::nowMs());
+            link_manager_.pairOpen(rtos::nowMs());
         }
         break;
     case LinkVerb::kWhitelistClear:

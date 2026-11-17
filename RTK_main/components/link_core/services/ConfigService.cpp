@@ -21,15 +21,15 @@ inline constexpr uint8_t kResultOk = 0x01;
 inline constexpr uint8_t kResultFail = 0x02;
 
 /**
- * 组应答帧：sender 固定为 DEV，type 经 response_type 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ * 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
  * 组帧失败时把 reply.len 置 0 并返回 kNoReply（与旧 dispatcher 一致）。
  */
-inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_type,
-                                  std::span<const uint8_t> payload) noexcept
+inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
+                                 std::span<const uint8_t> payload) noexcept
 {
     size_t len = 0;
-    const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
-                                                 proto::response_type(req_type), payload, len);
+    const fw::Status status = proto::buildFrame(reply.buf, msgId, proto::sender::kDevice,
+                                                proto::responseType(reqType), payload, len);
     if (!isOk(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
@@ -39,23 +39,23 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
 }
 
 /** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
-inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type,
-                                   uint8_t value) noexcept
+inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
+                                  uint8_t value) noexcept
 {
     const std::array<uint8_t, 2> payload = {value, value};
-    return reply_build(reply, msg_id, req_type, payload);
+    return replyBuild(reply, msgId, reqType, payload);
 }
 
 /** 成功应答（0x01 0x01）。 */
-inline DispatchResult reply_ok(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+inline DispatchResult replyOk(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
-    return reply_result(reply, msg_id, req_type, kResultOk);
+    return replyResult(reply, msgId, reqType, kResultOk);
 }
 
 /** 失败应答（0x02 0x02）。 */
-inline DispatchResult reply_fail(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+inline DispatchResult replyFail(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
-    return reply_result(reply, msg_id, req_type, kResultFail);
+    return replyResult(reply, msgId, reqType, kResultFail);
 }
 
 namespace msg_type = proto::msg_type;
@@ -65,51 +65,51 @@ constexpr uint16_t kIdWorkMode = 0x0007;
 constexpr uint16_t kIdRadio = 0x0014;
 constexpr uint16_t kIdLog = 0x0015;
 
-DispatchResult handle_work_mode(std::span<uint8_t> cfg, const proto::FrameView &frame,
-                                Reply &reply) noexcept
+DispatchResult handleWorkMode(std::span<uint8_t> cfg, const proto::FrameView &frame,
+                              Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kWorkModeSetLen) {
-            return reply_fail(reply, frame.msg_id, frame.type);
+            return replyFail(reply, frame.msgId, frame.type);
         }
         for (size_t i = 0; i < kWorkModeSetLen; ++i) {
             cfg[i] = frame.payload[i];
         }
-        return reply_ok(reply, frame.msg_id, frame.type);
+        return replyOk(reply, frame.msgId, frame.type);
     }
-    return reply_build(reply, frame.msg_id, frame.type, cfg);
+    return replyBuild(reply, frame.msgId, frame.type, cfg);
 }
 
-DispatchResult handle_radio(std::span<uint8_t> cfg, const proto::FrameView &frame,
-                            Reply &reply) noexcept
+DispatchResult handleRadio(std::span<uint8_t> cfg, const proto::FrameView &frame,
+                           Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kRadioSetMinLen) {
-            return reply_fail(reply, frame.msg_id, frame.type);
+            return replyFail(reply, frame.msgId, frame.type);
         }
         const size_t count = (frame.payload.size() < kRadioLen) ? frame.payload.size() : kRadioLen;
         for (size_t i = 0; i < count; ++i) {
             cfg[i] = frame.payload[i];
         }
         // payload 未覆盖 [17] 时保持原值（§4）。
-        return reply_ok(reply, frame.msg_id, frame.type);
+        return replyOk(reply, frame.msgId, frame.type);
     }
-    return reply_build(reply, frame.msg_id, frame.type, cfg);
+    return replyBuild(reply, frame.msgId, frame.type, cfg);
 }
 
-DispatchResult handle_log(std::span<uint8_t> cfg, const proto::FrameView &frame,
-                          Reply &reply) noexcept
+DispatchResult handleLog(std::span<uint8_t> cfg, const proto::FrameView &frame,
+                         Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kLogLen) {
-            return reply_fail(reply, frame.msg_id, frame.type);
+            return replyFail(reply, frame.msgId, frame.type);
         }
         for (size_t i = 0; i < kLogLen; ++i) {
             cfg[i] = frame.payload[i];
         }
-        return reply_ok(reply, frame.msg_id, frame.type);
+        return replyOk(reply, frame.msgId, frame.type);
     }
-    return reply_build(reply, frame.msg_id, frame.type, cfg);
+    return replyBuild(reply, frame.msgId, frame.type, cfg);
 }
 
 } // namespace
@@ -123,7 +123,7 @@ ConfigService::ConfigService() noexcept
     log_.fill(0);
 }
 
-std::span<const uint8_t, kWorkModeLen> ConfigService::work_mode() const noexcept
+std::span<const uint8_t, kWorkModeLen> ConfigService::workMode() const noexcept
 {
     return work_mode_;
 }
@@ -144,31 +144,31 @@ std::span<const Route> ConfigService::routes() noexcept
     // 与成员函数具有相同访问权限，因此 static_cast 之后可以拿到可变引用；
     // 每个 self 都来自 table()（RouteTable{this, ...}），类型必然是本服务实例。
     struct Handlers {
-        static DispatchResult work_mode(void *self, const proto::FrameView &frame, uint32_t now_ms,
-                                        Reply &reply) noexcept
+        static DispatchResult workMode(void *self, const proto::FrameView &frame, uint32_t nowMs,
+                                       Reply &reply) noexcept
         {
-            static_cast<void>(now_ms);
+            static_cast<void>(nowMs);
             auto *const service = static_cast<ConfigService *>(self);
-            return handle_work_mode(std::span<uint8_t>(service->work_mode_), frame, reply);
+            return handleWorkMode(std::span<uint8_t>(service->work_mode_), frame, reply);
         }
-        static DispatchResult radio(void *self, const proto::FrameView &frame, uint32_t now_ms,
+        static DispatchResult radio(void *self, const proto::FrameView &frame, uint32_t nowMs,
                                     Reply &reply) noexcept
         {
-            static_cast<void>(now_ms);
+            static_cast<void>(nowMs);
             auto *const service = static_cast<ConfigService *>(self);
-            return handle_radio(std::span<uint8_t>(service->radio_), frame, reply);
+            return handleRadio(std::span<uint8_t>(service->radio_), frame, reply);
         }
-        static DispatchResult log(void *self, const proto::FrameView &frame, uint32_t now_ms,
+        static DispatchResult log(void *self, const proto::FrameView &frame, uint32_t nowMs,
                                   Reply &reply) noexcept
         {
-            static_cast<void>(now_ms);
+            static_cast<void>(nowMs);
             auto *const service = static_cast<ConfigService *>(self);
-            return handle_log(std::span<uint8_t>(service->log_), frame, reply);
+            return handleLog(std::span<uint8_t>(service->log_), frame, reply);
         }
     };
 
     static constexpr std::array<Route, 3> kRoutes = {{
-        {kIdWorkMode, kRolePhone, &Handlers::work_mode},
+        {kIdWorkMode, kRolePhone, &Handlers::workMode},
         {kIdRadio, kRolePhone, &Handlers::radio},
         {kIdLog, kRolePhone, &Handlers::log},
     }};

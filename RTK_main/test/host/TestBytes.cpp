@@ -48,8 +48,8 @@ static void test_writer_fixed_str_pads_and_truncates()
     std::array<uint8_t, 16> buf{};
     buf.fill(0x55);
     ByteWriter w(buf);
-    w.fixed_str("V1.1.0", 8);     // 短：补 0
-    w.fixed_str("ABCDEFGHIJ", 4); // 长：截断
+    w.fixedStr("V1.1.0", 8);     // 短：补 0
+    w.fixedStr("ABCDEFGHIJ", 4); // 长：截断
     TEST_ASSERT_TRUE(w.ok());
     TEST_ASSERT_EQUAL_UINT(12, w.size());
     TEST_ASSERT_EQUAL_MEMORY("V1.1.0\0\0", buf.data(), 8);

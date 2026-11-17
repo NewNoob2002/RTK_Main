@@ -67,8 +67,8 @@ public:
         unknown_len_ = 0U;
     }
 
-    void on_frame(const demux::Decoder &decoder, uint8_t index,
-                  std::span<const uint8_t> frame) noexcept override
+    void onFrame(const demux::Decoder &decoder, uint8_t index,
+                 std::span<const uint8_t> frame) noexcept override
     {
         if (frame_count_ < kMaxDecFrames) {
             DecodedFrame &dst = frames_[frame_count_++];
@@ -81,7 +81,7 @@ public:
         }
     }
 
-    void on_unknown(std::span<const uint8_t> bytes) noexcept override
+    void onUnknown(std::span<const uint8_t> bytes) noexcept override
     {
         if ((unknown_len_ + bytes.size()) <= unknown_.size()) {
             std::copy(bytes.begin(), bytes.end(),
@@ -118,7 +118,7 @@ demux::Step step_by_need(const demux::Decoder &dec, std::span<const uint8_t> buf
     std::size_t calls = 0U;
 
     TEST_ASSERT_TRUE(!buf.empty());
-    TEST_ASSERT_TRUE(dec.first_byte(buf[0]));
+    TEST_ASSERT_TRUE(dec.firstByte(buf[0]));
 
     for (;;) {
         std::size_t need = 0U;
@@ -134,8 +134,8 @@ demux::Step step_by_need(const demux::Decoder &dec, std::span<const uint8_t> buf
             return st;
         }
         TEST_ASSERT_TRUE(need >= 1U);
-        TEST_ASSERT_TRUE(need <= dec.max_frame);
-        TEST_ASSERT_TRUE((pos + need) <= dec.max_frame);
+        TEST_ASSERT_TRUE(need <= dec.maxFrame);
+        TEST_ASSERT_TRUE((pos + need) <= dec.maxFrame);
         if ((pos + need) > buf.size()) {
             if (out_end_pos != nullptr) {
                 *out_end_pos = pos;
@@ -153,7 +153,7 @@ void assert_only_first_byte(const demux::Decoder &dec, uint8_t expected)
 {
     for (uint32_t b = 0U; b <= 0xFFU; ++b) {
         // b <= 0xFFU，在 uint8_t 范围内
-        const bool got = dec.first_byte(static_cast<uint8_t>(b));
+        const bool got = dec.firstByte(static_cast<uint8_t>(b));
         if (b == static_cast<uint32_t>(expected)) {
             TEST_ASSERT_TRUE(got);
         } else {
@@ -211,42 +211,42 @@ static void test_decoder_descriptors_and_first_bytes()
 {
 #if STREAM_DEMUX_RTCM3
     TEST_ASSERT_NOT_NULL(demux::rtcm3::kDecoder.name);
-    TEST_ASSERT_EQUAL_UINT(1029U, demux::rtcm3::kDecoder.max_frame);
-    TEST_ASSERT_EQUAL_UINT(demux::rtcm3::kMaxFrame, demux::rtcm3::kDecoder.max_frame);
+    TEST_ASSERT_EQUAL_UINT(1029U, demux::rtcm3::kDecoder.maxFrame);
+    TEST_ASSERT_EQUAL_UINT(demux::rtcm3::kMaxFrame, demux::rtcm3::kDecoder.maxFrame);
     assert_only_first_byte(demux::rtcm3::kDecoder, 0xD3U);
 #endif
 
 #if STREAM_DEMUX_NMEA
     TEST_ASSERT_NOT_NULL(demux::nmea::kDecoder.name);
-    TEST_ASSERT_EQUAL_UINT(256U, demux::nmea::kDecoder.max_frame);
-    TEST_ASSERT_EQUAL_UINT(demux::nmea::kMaxFrame, demux::nmea::kDecoder.max_frame);
+    TEST_ASSERT_EQUAL_UINT(256U, demux::nmea::kDecoder.maxFrame);
+    TEST_ASSERT_EQUAL_UINT(demux::nmea::kMaxFrame, demux::nmea::kDecoder.maxFrame);
     assert_only_first_byte(demux::nmea::kDecoder, static_cast<uint8_t>('$'));
 #endif
 
 #if STREAM_DEMUX_UBX
     TEST_ASSERT_NOT_NULL(demux::ubx::kDecoder.name);
-    TEST_ASSERT_EQUAL_UINT(4096U, demux::ubx::kDecoder.max_frame);
-    TEST_ASSERT_EQUAL_UINT(demux::ubx::kMaxFrame, demux::ubx::kDecoder.max_frame);
+    TEST_ASSERT_EQUAL_UINT(4096U, demux::ubx::kDecoder.maxFrame);
+    TEST_ASSERT_EQUAL_UINT(demux::ubx::kMaxFrame, demux::ubx::kDecoder.maxFrame);
     assert_only_first_byte(demux::ubx::kDecoder, 0xB5U);
 #endif
 
 #if STREAM_DEMUX_UNICORE_BIN
     TEST_ASSERT_NOT_NULL(demux::unicore_bin::kDecoder.name);
-    TEST_ASSERT_EQUAL_UINT(4096U, demux::unicore_bin::kDecoder.max_frame);
-    TEST_ASSERT_EQUAL_UINT(demux::unicore_bin::kMaxFrame, demux::unicore_bin::kDecoder.max_frame);
+    TEST_ASSERT_EQUAL_UINT(4096U, demux::unicore_bin::kDecoder.maxFrame);
+    TEST_ASSERT_EQUAL_UINT(demux::unicore_bin::kMaxFrame, demux::unicore_bin::kDecoder.maxFrame);
     assert_only_first_byte(demux::unicore_bin::kDecoder, 0xAAU);
 #endif
 
 #if STREAM_DEMUX_UNICORE_HASH
     TEST_ASSERT_NOT_NULL(demux::unicore_hash::kDecoder.name);
-    TEST_ASSERT_EQUAL_UINT(4096U, demux::unicore_hash::kDecoder.max_frame);
-    TEST_ASSERT_EQUAL_UINT(demux::unicore_hash::kMaxFrame, demux::unicore_hash::kDecoder.max_frame);
+    TEST_ASSERT_EQUAL_UINT(4096U, demux::unicore_hash::kDecoder.maxFrame);
+    TEST_ASSERT_EQUAL_UINT(demux::unicore_hash::kMaxFrame, demux::unicore_hash::kDecoder.maxFrame);
     assert_only_first_byte(demux::unicore_hash::kDecoder, static_cast<uint8_t>('#'));
 #endif
 
     TEST_ASSERT_NOT_NULL(proto::demux_frame::kDecoder.name);
-    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_MAX_FRAME, proto::demux_frame::kDecoder.max_frame);
-    TEST_ASSERT_EQUAL_UINT(proto::demux_frame::kMaxFrame, proto::demux_frame::kDecoder.max_frame);
+    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_MAX_FRAME, proto::demux_frame::kDecoder.maxFrame);
+    TEST_ASSERT_EQUAL_UINT(proto::demux_frame::kMaxFrame, proto::demux_frame::kDecoder.maxFrame);
     assert_only_first_byte(proto::demux_frame::kDecoder, proto::kSyncA);
 }
 
@@ -283,7 +283,7 @@ static void test_rtcm3_valid_early_reject_and_crc_err()
     TEST_ASSERT_EQUAL_UINT(flen, s_sink.frames_[0].len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(s_work_buf.data(), s_sink.frames_[0].data.data(), flen);
 
-    // 最大载荷 1023（总长 1029 == max_frame），载荷阶段批量累积只调极少次 step
+    // 最大载荷 1023（总长 1029 == maxFrame），载荷阶段批量累积只调极少次 step
     for (std::size_t i = 0U; i < s_max_pl.size(); ++i) {
         // 掩码后在 uint8_t 范围内
         s_max_pl[i] = static_cast<uint8_t>((i ^ 0x5AU) & 0xFFU);
@@ -464,7 +464,7 @@ static void test_ubx_valid_early_reject_len_and_ck_err()
     TEST_ASSERT_EQUAL_PTR(&demux::ubx::kDecoder, s_sink.frames_[0].decoder);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(s_work_buf.data(), s_sink.frames_[0].data.data(), flen);
 
-    // 最大载荷 4088（总长 4096 == max_frame），验证批量累积
+    // 最大载荷 4088（总长 4096 == maxFrame），验证批量累积
     for (std::size_t i = 0U; i < s_max_pl.size(); ++i) {
         // 掩码后范围为 0..255
         s_max_pl[i] = static_cast<uint8_t>(i & 0xFFU);
@@ -560,7 +560,7 @@ static void test_unicore_bin_valid_early_reject_len_and_crc_err()
     TEST_ASSERT_EQUAL_PTR(&demux::unicore_bin::kDecoder, s_sink.frames_[0].decoder);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(s_work_buf.data(), s_sink.frames_[0].data.data(), flen);
 
-    // 最大载荷 4068（总长 4096 == max_frame），验证批量累积
+    // 最大载荷 4068（总长 4096 == maxFrame），验证批量累积
     for (std::size_t i = 0U; i < s_max_pl.size(); ++i) {
         // 掩码后范围为 0..255
         s_max_pl[i] = static_cast<uint8_t>(i & 0xFFU);
@@ -771,7 +771,7 @@ static void test_product_demux_and_frame_view()
         const std::optional<proto::FrameView> fv = proto::demux_frame::view(
             std::span<const uint8_t>(s_sink.frames_[0].data.data(), s_sink.frames_[0].len));
         TEST_ASSERT_TRUE(fv.has_value());
-        TEST_ASSERT_EQUAL_HEX16(0x0001U, fv->msg_id);
+        TEST_ASSERT_EQUAL_HEX16(0x0001U, fv->msgId);
         TEST_ASSERT_TRUE(fv->payload.empty());
     }
 
@@ -782,7 +782,7 @@ static void test_product_demux_and_frame_view()
         const std::span<const uint8_t> wire(s_sink.frames_[0].data.data(), s_sink.frames_[0].len);
         const std::optional<proto::FrameView> fv = proto::demux_frame::view(wire);
         TEST_ASSERT_TRUE(fv.has_value());
-        TEST_ASSERT_EQUAL_HEX16(0x0041U, fv->msg_id);
+        TEST_ASSERT_EQUAL_HEX16(0x0041U, fv->msgId);
         TEST_ASSERT_EQUAL_UINT8(proto::sender::kAlarm, fv->sender);
         TEST_ASSERT_EQUAL_UINT8(proto::msg_type::kPush, fv->type);
         TEST_ASSERT_EQUAL_UINT(8U, fv->payload.size());
@@ -906,7 +906,7 @@ static void test_dollar_conflict_with_custom_decoder()
     TEST_ASSERT_EQUAL_PTR(&kDecCustomSbf, s_sink.frames_[1].decoder);
     TEST_ASSERT_EQUAL_PTR(&demux::nmea::kDecoder, s_sink.frames_[2].decoder);
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().resyncs);
-    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknownBytes);
 
     run_demux_feed_and_abort(kOrderB, work.subspan(0, pos));
     TEST_ASSERT_EQUAL_UINT(3U, s_sink.frame_count_);
@@ -914,7 +914,7 @@ static void test_dollar_conflict_with_custom_decoder()
     TEST_ASSERT_EQUAL_PTR(&kDecCustomSbf, s_sink.frames_[1].decoder);
     TEST_ASSERT_EQUAL_PTR(&demux::nmea::kDecoder, s_sink.frames_[2].decoder);
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().resyncs);
-    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknownBytes);
 }
 #endif
 

@@ -104,8 +104,8 @@ class CaptureSink final : public demux::Sink {
 public:
     explicit CaptureSink(StreamCapture &cap) noexcept : cap_(&cap) {}
 
-    void on_frame(const demux::Decoder &decoder, uint8_t index,
-                  std::span<const uint8_t> frame) noexcept override
+    void onFrame(const demux::Decoder &decoder, uint8_t index,
+                 std::span<const uint8_t> frame) noexcept override
     {
         if ((cap_->frame_count >= kMaxFramesRec) ||
             ((cap_->frame_blob_used + frame.size()) > kBlobCap)) {
@@ -126,7 +126,7 @@ public:
         cap_->frame_count++;
     }
 
-    void on_unknown(std::span<const uint8_t> bytes) noexcept override
+    void onUnknown(std::span<const uint8_t> bytes) noexcept override
     {
         if ((cap_->unknown_len + bytes.size()) > kStreamCap) {
             cap_->overflowed = true;
@@ -235,7 +235,7 @@ void run_chunked(std::span<const demux::Decoder *const> decs, std::span<const ui
         total_frame_bytes += st.decoder[i].bytes;
     }
     TEST_ASSERT_EQUAL_UINT_MESSAGE(cap.frame_blob_used, total_frame_bytes, ctx_msg);
-    TEST_ASSERT_EQUAL_UINT_MESSAGE(cap.unknown_len, st.unknown_bytes, ctx_msg);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(cap.unknown_len, st.unknownBytes, ctx_msg);
     TEST_ASSERT_EQUAL_UINT_MESSAGE(data.size(), cap.frame_blob_used + cap.unknown_len, ctx_msg);
 }
 
@@ -520,8 +520,8 @@ static void test_scenario_bluetooth_product_and_rtcm3()
     };
     using BtStaticDemux = demux::StaticDemux<proto::demux_frame::kDecoder, demux::rtcm3::kDecoder>;
     static_assert(BtStaticDemux::kBufSize == demux::rtcm3::kMaxFrame);
-    static_assert(BtStaticDemux::index_of<proto::demux_frame::kDecoder>() == 0U);
-    static_assert(BtStaticDemux::index_of<demux::rtcm3::kDecoder>() == 1U);
+    static_assert(BtStaticDemux::indexOf<proto::demux_frame::kDecoder>() == 0U);
+    static_assert(BtStaticDemux::indexOf<demux::rtcm3::kDecoder>() == 1U);
 
     uint32_t rng = 0x20261111U;
     std::size_t pos = 0U;
@@ -536,8 +536,8 @@ static void test_scenario_bluetooth_product_and_rtcm3()
         pos += append_random_proto_frame(
             is_rtcm ? ProtoKind::kRtcm3 : ProtoKind::kProduct,
             is_rtcm ? &demux::rtcm3::kDecoder : &proto::demux_frame::kDecoder,
-            is_rtcm ? BtStaticDemux::index_of<demux::rtcm3::kDecoder>()
-                    : BtStaticDemux::index_of<proto::demux_frame::kDecoder>(),
+            is_rtcm ? BtStaticDemux::indexOf<demux::rtcm3::kDecoder>()
+                    : BtStaticDemux::indexOf<proto::demux_frame::kDecoder>(),
             stream.subspan(pos), rng, &s_truth_cap);
     }
 
@@ -663,17 +663,17 @@ static void test_scenario_product_vs_unicore_bin_conflict()
             is_unicore ? 1U : 0U, stream.subspan(pos), rng, &s_truth_cap);
     }
 
-    // 无垃圾交错：即使回放到次优先级解码器，resyncs == 0，unknown_bytes == 0
+    // 无垃圾交错：即使回放到次优先级解码器，resyncs == 0，unknownBytes == 0
     run_chunked(kOrderAb, stream.subspan(0, pos), s_cur_cap, 7U, nullptr, "aa-conflict-ab");
     TEST_ASSERT_EQUAL_UINT(16U, s_cur_cap.frame_count);
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().resyncs);
-    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknownBytes);
 
     // 对调优先级：{unicore_bin, product}
     run_chunked(kOrderBa, stream.subspan(0, pos), s_cur_cap, 5U, nullptr, "aa-conflict-ba");
     TEST_ASSERT_EQUAL_UINT(16U, s_cur_cap.frame_count);
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().resyncs);
-    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknownBytes);
     for (std::size_t i = 0U; i < s_cur_cap.frame_count; ++i) {
         const bool is_unicore = (i % 2U) != 0U;
         const demux::Decoder *exp_dec =

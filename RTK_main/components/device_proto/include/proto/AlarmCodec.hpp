@@ -37,30 +37,30 @@ struct Status {
     uint16_t seq = 0;
     uint8_t state = kStateUnknown;
     uint8_t level = 0;
-    uint8_t fix_quality = kValueUnknown;
-    uint8_t battery_pct = kValueUnknown;
+    uint8_t fixQuality = kValueUnknown;
+    uint8_t batteryPct = kValueUnknown;
     uint8_t flags = 0;
-    uint32_t uptime_ms = 0;
+    uint32_t uptimeMs = 0;
 };
 
 /** 0x41 心跳字段；纯数据，可平凡拷贝。 */
 struct Heartbeat {
     uint16_t seq = 0;
-    uint8_t battery_pct = kValueUnknown;
-    uint8_t local_state = 0;
+    uint8_t batteryPct = kValueUnknown;
+    uint8_t localState = 0;
 };
 
 /** 按 §5 布局写 16 字节，返回写入字节数；out 不足 16 字节返回 0 且不写入。 */
-[[nodiscard]] size_t encode_status(const Status &status, std::span<uint8_t> out) noexcept;
+[[nodiscard]] size_t encodeStatus(const Status &status, std::span<uint8_t> out) noexcept;
 
 /** data 不足 8 字节返回 nullopt；多余字节忽略。 */
-[[nodiscard]] std::optional<Heartbeat> decode_heartbeat(std::span<const uint8_t> data) noexcept;
+[[nodiscard]] std::optional<Heartbeat> decodeHeartbeat(std::span<const uint8_t> data) noexcept;
 
 /** 报警器侧复用：编码 0x41 心跳 8 字节；out 不足返回 0。 */
-[[nodiscard]] size_t encode_heartbeat(const Heartbeat &heartbeat, std::span<uint8_t> out) noexcept;
+[[nodiscard]] size_t encodeHeartbeat(const Heartbeat &heartbeat, std::span<uint8_t> out) noexcept;
 
 /** 报警器侧复用：解码 0x40 状态；data 不足 16 字节返回 nullopt。 */
-[[nodiscard]] std::optional<Status> decode_status(std::span<const uint8_t> data) noexcept;
+[[nodiscard]] std::optional<Status> decodeStatus(std::span<const uint8_t> data) noexcept;
 
 static_assert(kStatusLen == DEV_PROTO_ALARM_STATUS_LEN);
 static_assert(kHeartbeatLen == DEV_PROTO_ALARM_HEARTBEAT_LEN);

@@ -121,8 +121,8 @@ void append(size_t session, uint16_t msg, uint8_t sender, uint8_t type,
 {
     size_t count = 0U;
     auto &bytes = s_input[session];
-    CHECK(proto::build_frame(std::span<uint8_t>{bytes}.subspan(s_input_size[session]), msg, sender,
-                             type, payload, count) == fw::Status::kOk);
+    CHECK(proto::buildFrame(std::span<uint8_t>{bytes}.subspan(s_input_size[session]), msg, sender,
+                            type, payload, count) == fw::Status::kOk);
     s_input_size[session] += count;
 }
 
@@ -166,7 +166,7 @@ void save_recovery()
     CHECK(s_store_calls == 2U && !s_whitelist_pending && s_saved_count == 0U);
 
     // 配对升级本身触发 dirty，第一次落盘失败仍保留，重试不需要新 dirty。
-    s_link_manager.pair_open(s_clock);
+    s_link_manager.pairOpen(s_clock);
     open(2U, kAlarm);
     const std::array<uint8_t, 8> hello{1, 0, 80, 0, 0, 0, 0, 0};
     append(1U, core::kHelloMsgId, proto::sender::kAlarm, proto::msg_type::kPush, hello);
@@ -283,15 +283,15 @@ void rx_fairness()
     s_clock += app::kTickPeriodMs;
     // 第 2 轮起点轮换到 ALARM，优先投递心跳并响应命令，不让 PHONE 高频流饿死 ALARM。
     link_round(tick);
-    CHECK(s_alarm.is_override());
-    CHECK(s_service->last_heartbeat().has_value());
-    if (s_service->last_heartbeat().has_value()) {
-        CHECK(s_service->last_heartbeat()->seq == 5U);
+    CHECK(s_alarm.isOverride());
+    CHECK(s_service->lastHeartbeat().has_value());
+    if (s_service->lastHeartbeat().has_value()) {
+        CHECK(s_service->lastHeartbeat()->seq == 5U);
     }
-    for (size_t idx = 0U; idx < 6U && s_service->stats().frames_rx < 31U; ++idx) {
+    for (size_t idx = 0U; idx < 6U && s_service->stats().framesRx < 31U; ++idx) {
         link_round(tick);
     }
-    CHECK(s_service->stats().frames_rx == 31U);
+    CHECK(s_service->stats().framesRx == 31U);
     CHECK(s_write_timeouts[0] == 0U);
 }
 
@@ -308,7 +308,7 @@ void rx_fast_partial()
     // 多帧连续 feed：10 条小查询 (<=512B) 在首轮即可全部完成，无需等 10 轮。
     link_round(tick);
     CHECK(s_write_calls == 10U && s_poll_wait == 0U);
-    CHECK(s_service->stats().frames_rx == 10U);
+    CHECK(s_service->stats().framesRx == 10U);
     link_round(tick); // 非空标志直到 read=0 才清除。
     CHECK(!s_sessions[0].drain_pending);
 
@@ -317,24 +317,24 @@ void rx_fast_partial()
     s_input_size[0] -= 5U;
     dirty(0U);
     link_round(tick);
-    CHECK(s_service->stats().frames_rx == 10U);
+    CHECK(s_service->stats().framesRx == 10U);
     s_input_size[0] = full;
     dirty(0U);
     link_round(tick);
-    CHECK(s_service->stats().frames_rx == 11U);
+    CHECK(s_service->stats().framesRx == 11U);
 
     append(0U, 1U, 0U, proto::msg_type::kQuery);
     dirty(0U);
     s_read_delay = 20U; // 完成一次非阻塞读前发生抢占，整轮预算已耗尽。
-    const uint32_t frames = s_service->stats().frames_rx;
+    const uint32_t frames = s_service->stats().framesRx;
     link_round(tick);
-    CHECK(s_service->stats().frames_rx == frames);
+    CHECK(s_service->stats().framesRx == frames);
     CHECK(s_sessions[0].rx_offset == 0U && s_sessions[0].rx_size > 0U);
     s_read_delay = 0U;
-    if (s_service->stats().frames_rx == frames) {
+    if (s_service->stats().framesRx == frames) {
         link_round(tick);
     }
-    CHECK(s_service->stats().frames_rx == frames + 1U);
+    CHECK(s_service->stats().framesRx == frames + 1U);
 }
 
 void rx_tick_budget()
@@ -353,7 +353,7 @@ void rx_tick_budget()
     const uint32_t before = s_clock;
     link_round(tick);
     CHECK(s_write_calls == 2U && s_clock == before);
-    CHECK(s_service->stats().frames_rx == 1U && s_service->last_heartbeat().has_value());
+    CHECK(s_service->stats().framesRx == 1U && s_service->lastHeartbeat().has_value());
     CHECK(s_write_timeouts[0] == 0U && s_write_timeouts[1] == 0U);
 }
 
@@ -421,12 +421,12 @@ void check_reply(size_t index, uint16_t message)
     for (const uint8_t byte : std::span{s_write_bytes[index]}.first(s_write_sizes[index])) {
         if (parser.feed(byte, frame) == proto::ParseResult::kFrame) {
             ++frames;
-            CHECK(frame.msg_id == message);
+            CHECK(frame.msgId == message);
             CHECK(frame.sender == proto::sender::kDevice &&
                   frame.type == proto::msg_type::kQueryRes);
         }
     }
-    CHECK(frames == 1 && parser.crc_errors() == 0 && parser.length_errors() == 0);
+    CHECK(frames == 1 && parser.crcErrors() == 0 && parser.lengthErrors() == 0);
     CHECK(s_write_handles[index] == 1);
 }
 
@@ -446,7 +446,7 @@ void rtcm_mix()
     uint32_t tick = s_clock;
     link_round(tick);
     // K3 支持单轮多帧连续 feed（<=512B）：混杂的 2 条产品帧与 2 条 RTCM 帧在同一轮直推完成。
-    CHECK(s_write_calls == 2 && s_service->stats().frames_rx == 2);
+    CHECK(s_write_calls == 2 && s_service->stats().framesRx == 2);
     check_reply(0, 1);
     check_reply(1, 2);
     CHECK(s_snapshot.rtcm_frames == 2 && s_snapshot.rtcm_bytes == first.size() + second.size());
@@ -472,7 +472,7 @@ void rtcm_roles()
     close.handle = 1;
     handle_event(close, s_clock);
     open(1, kPhone);
-    s_link_manager.pair_open(s_clock);
+    s_link_manager.pairOpen(s_clock);
     open(2, kOtherAlarm);
     CHECK(s_link_manager.role(2) == core::Role::kPending);
     append_rtcm(1, 1077);
@@ -480,7 +480,7 @@ void rtcm_roles()
     drain_rx(s_clock);
     CHECK(s_rtcm.stats().rejected_role == 2 && s_rtcm.stats().frames == 0);
     // 主动断开到物理 CLOSE 之间角色已经是 NONE，也不能接受 RTCM。
-    s_service->on_close(2);
+    s_service->onClose(2);
     append_rtcm(1, 1077);
     dirty(1);
     drain_rx(s_clock);
@@ -511,7 +511,7 @@ void rtcm_replay_budget()
     dirty(0);
     uint32_t tick = s_clock;
     link_round(tick);
-    CHECK(s_service->stats().frames_rx == 2 && s_write_calls == 2);
+    CHECK(s_service->stats().framesRx == 2 && s_write_calls == 2);
     CHECK(s_snapshot.rtcm_frames == 1 && s_snapshot.rtcm_crc32 == expected_crc);
     CHECK(s_snapshot.demux_rtcm_rejects == 1 && s_snapshot.demux_unknown_bytes == 6);
     CHECK(s_snapshot.parser_crc_errors == 0 && s_snapshot.parser_length_errors == 0);
@@ -631,7 +631,7 @@ void lifecycle_application()
     link_round(tick);
     CHECK(s_link_manager.role(1U) == core::Role::kPhone);
     CHECK(s_snapshot.session_count == 1U && s_snapshot.sessions[0].addr == kAlarm);
-    CHECK(s_service->stats().frames_rx == 1U && s_write_calls == 1U);
+    CHECK(s_service->stats().framesRx == 1U && s_write_calls == 1U);
 }
 } // namespace
 
@@ -880,7 +880,7 @@ void credit_window()
     for (size_t index = 0; index < 20U; ++index) {
         round();
     }
-    CHECK(s_clock == start && s_write_calls == 16U && s_service->stats().frames_rx == 16U);
+    CHECK(s_clock == start && s_write_calls == 16U && s_service->stats().framesRx == 16U);
     CHECK(s_tx_used[0] < SPP_SERVER_REPLY_CAPACITY && !s_service->paused(1U));
     // 模拟另一生产者已占满容量；不得消费后续 RX 或重复路由完整 pending 帧。
     s_tx_used[0] = SPP_SERVER_REPLY_CAPACITY;
@@ -896,7 +896,7 @@ void credit_window()
     CHECK(s_service->paused(1U) && s_write_calls == 16U);
     const size_t offset = s_input_offset[0];
     round();
-    CHECK(s_service->last_heartbeat().has_value() && !s_tx_reserved[1] && s_tx_cancels == 1U);
+    CHECK(s_service->lastHeartbeat().has_value() && !s_tx_reserved[1] && s_tx_cancels == 1U);
     CHECK(s_input_offset[0] == offset && s_service->paused(1U));
     for (size_t index = 0; index < 3U; ++index) {
         round();
@@ -917,7 +917,7 @@ void credit_window()
     s_tx_used[0] = 0;
     round();
     CHECK(!s_service->paused(1U) && s_write_calls == 18U &&
-          s_service->stats().dispatch_cancelled == 1U);
+          s_service->stats().dispatchCancelled == 1U);
 }
 
 // K3：验证 RX level 兜底、paused reply_ready 复查与 BTC 通知唤醒（不依赖轮询睡死）。
@@ -931,7 +931,7 @@ void rx_wake_level_recheck()
     app_context().bt_link.wait(20U);
     CHECK(s_poll_wait == 0U && s_sessions[0].drain_pending);
     static_cast<void>(app_context().bt_link.poll(s_clock));
-    CHECK(s_service->stats().frames_rx == 1U && s_write_calls == 1U);
+    CHECK(s_service->stats().framesRx == 1U && s_write_calls == 1U);
 
     // 2) 模拟 TX_SPACE 丢失：paused 下 reply_ready 恢复时 wait(20) 立即返回。
     s_tx_hold = true;
@@ -980,7 +980,7 @@ void rx_wake_level_recheck()
     fake_current_task = nullptr;
     CHECK(elapsed_ms < 250);
     static_cast<void>(app_context().bt_link.poll(s_clock));
-    CHECK(s_service->stats().frames_rx == 3U && s_write_calls == 3U);
+    CHECK(s_service->stats().framesRx == 3U && s_write_calls == 3U);
 }
 
 // K3：验证 512B 读缓冲尾切片保留、单会话暂停不阻塞另一会话、以及 CLOSE 清理。
@@ -1007,7 +1007,7 @@ void rx_512_partial_and_pause_isolation()
     link_round(tick);
     CHECK(s_sessions[0].rx_size > 256U && s_sessions[0].rx_offset < s_sessions[0].rx_size);
     CHECK(s_service->paused(1U) && s_write_calls == 1U);
-    CHECK(s_service->last_heartbeat().has_value() && s_service->last_heartbeat()->seq == 9U);
+    CHECK(s_service->lastHeartbeat().has_value() && s_service->lastHeartbeat()->seq == 9U);
     const size_t paused_offset = s_sessions[0].rx_offset;
 
     // 再次从 ALARM 发送心跳，不得被 PHONE 暂停阻塞。
@@ -1016,16 +1016,16 @@ void rx_512_partial_and_pause_isolation()
            heartbeat2);
     dirty(1U);
     link_round(tick);
-    CHECK(s_service->last_heartbeat()->seq == 10U && s_write_calls == 1U);
+    CHECK(s_service->lastHeartbeat()->seq == 10U && s_write_calls == 1U);
     CHECK(s_sessions[0].rx_offset == paused_offset);
 
     // 释放 PHONE 回复信用后，保留在 512B 缓冲里的尾切片继续逐帧无损投递。
     s_tx_hold = false;
     s_tx_used[0] = 0U;
-    for (size_t i = 0U; i < 6U && s_service->stats().frames_rx < 22U; ++i) {
+    for (size_t i = 0U; i < 6U && s_service->stats().framesRx < 22U; ++i) {
         link_round(tick);
     }
-    CHECK(!s_service->paused(1U) && s_service->stats().frames_rx == 22U && s_write_calls == 20U);
+    CHECK(!s_service->paused(1U) && s_service->stats().framesRx == 22U && s_write_calls == 20U);
 
     // CLOSE 时取消在途挂起请求并丢弃未消费尾部。
     s_tx_used[0] = SPP_SERVER_REPLY_CAPACITY;
@@ -1038,7 +1038,7 @@ void rx_512_partial_and_pause_isolation()
     s_tx_used[0] = 0U;
     link_round(tick);
     CHECK(!s_service->paused(1U) && s_write_calls == 20U &&
-          s_service->stats().dispatch_cancelled == 1U);
+          s_service->stats().dispatchCancelled == 1U);
 }
 
 // K3：验证 RtcmPipe 4096B 直推满帧整帧丢弃与 kIo 写状态统计契约。

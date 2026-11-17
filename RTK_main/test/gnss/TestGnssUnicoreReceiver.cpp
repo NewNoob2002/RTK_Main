@@ -89,8 +89,8 @@ public:
     std::array<Frame, kCapacity> frames{};
     size_t count = 0;
 
-    void on_frame(const demux::Decoder &, uint8_t index,
-                  std::span<const uint8_t> frame) noexcept override
+    void onFrame(const demux::Decoder &, uint8_t index,
+                 std::span<const uint8_t> frame) noexcept override
     {
         if (count >= kCapacity) {
             return;
@@ -309,7 +309,7 @@ static void test_coexists_with_nmea()
                              static_cast<uint32_t>(sink.frames[0].len));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(reply.size()),
                              static_cast<uint32_t>(sink.frames[1].len));
-    TEST_ASSERT_EQUAL_UINT32(0, splitter.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(0, splitter.stats().unknownBytes);
 }
 
 /** 按 GnssModule::init 的方式（NMEA、RTCM3 + 驱动 decoders）组分流器，把帧交给驱动判定。 */
@@ -320,8 +320,8 @@ public:
     uint32_t acks = 0;
     uint32_t nmea = 0;
 
-    void on_frame(const demux::Decoder &dec, uint8_t,
-                  std::span<const uint8_t> frame) noexcept override
+    void onFrame(const demux::Decoder &dec, uint8_t,
+                 std::span<const uint8_t> frame) noexcept override
     {
         if (&dec == &demux::nmea::kDecoder) {
             ++nmea;
@@ -372,7 +372,7 @@ static void test_real_um980_capture_through_receiver_decoders()
     TEST_ASSERT_EQUAL_UINT32(1, sink.acks);
     TEST_ASSERT_EQUAL_UINT32(1, sink.nmea); // 只有 $GNRMC；小写 $devicename/$command 不归 NMEA
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(sizeof("$devicename,COM2*64\r\n") - 1U),
-                             splitter.stats().unknown_bytes);
+                             splitter.stats().unknownBytes);
 }
 
 void test_caps()

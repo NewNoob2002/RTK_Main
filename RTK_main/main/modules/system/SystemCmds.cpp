@@ -103,16 +103,16 @@ void print_link_section() noexcept
     if (heartbeat.present) {
         cli::printKv("heartbeat", "seq=%u battery=%u%% state=%u",
                      static_cast<unsigned>(heartbeat.value.seq),
-                     static_cast<unsigned>(heartbeat.value.battery_pct),
-                     static_cast<unsigned>(heartbeat.value.local_state));
+                     static_cast<unsigned>(heartbeat.value.batteryPct),
+                     static_cast<unsigned>(heartbeat.value.localState));
     } else {
         cli::printKv("heartbeat", "none");
     }
     cli::printKv("traffic",
                  "rx=%" PRIu32 " tx=%" PRIu32 " push=%" PRIu32 " werr=%" PRIu32 " disc=%" PRIu32
                  " drop=%" PRIu32,
-                 stats.frames_rx, stats.replies_tx, stats.pushes_tx, stats.write_errors,
-                 stats.disconnects, stats.rx_dropped);
+                 stats.framesRx, stats.repliesTx, stats.pushesTx, stats.writeErrors,
+                 stats.disconnects, stats.rxDropped);
     cli::printKv("parser", "crc_err=%" PRIu32 " len_err=%" PRIu32, stats.parser_crc_errors,
                  stats.parser_length_errors);
     cli::printKv("spp_tx",
@@ -125,8 +125,8 @@ void print_link_section() noexcept
     cli::printKv("spp_events",
                  "anon_write_fail=%" PRIu32 " stray=%" PRIu32 " dispatch_pauses=%" PRIu32
                  " cancelled=%" PRIu32,
-                 stats.tx_anon_write_fail, stats.tx_stray_write, stats.dispatch_pauses,
-                 stats.dispatch_cancelled);
+                 stats.tx_anon_write_fail, stats.tx_stray_write, stats.dispatchPauses,
+                 stats.dispatchCancelled);
     cli::printKv("spp_rx",
                  "evt_drop=%" PRIu32 " wakes=%" PRIu32 " s0=%" PRIu32 "/%" PRIu32 "(drop=%" PRIu32
                  ") "
@@ -201,8 +201,8 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     // 会话数/白名单/报警字段均为小无符号整数，转换到 unsigned 无损。
     cli::printKv("sessions", "%u/%u  wl=%u  rx=%" PRIu32 "  tx=%" PRIu32 "  drop=%" PRIu32,
                  static_cast<unsigned>(sessions.count), static_cast<unsigned>(kMaxSessions),
-                 static_cast<unsigned>(link.whitelist_count), stats.frames_rx, stats.replies_tx,
-                 stats.rx_dropped);
+                 static_cast<unsigned>(link.whitelist_count), stats.framesRx, stats.repliesTx,
+                 stats.rxDropped);
     cli::printKv("alarm", "state=%u  level=%u  override=%s", static_cast<unsigned>(alarm.state),
                  static_cast<unsigned>(alarm.level), alarm.override ? "yes" : "no");
 

@@ -66,8 +66,8 @@ int cmd_alarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     if (heartbeat.present) {
         cli::printKv("heartbeat", "seq %u, battery %u%%, state %u",
                      static_cast<unsigned>(heartbeat.value.seq),
-                     static_cast<unsigned>(heartbeat.value.battery_pct),
-                     static_cast<unsigned>(heartbeat.value.local_state));
+                     static_cast<unsigned>(heartbeat.value.batteryPct),
+                     static_cast<unsigned>(heartbeat.value.localState));
     } else {
         cli::printKv("heartbeat", "none");
     }

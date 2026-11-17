@@ -8,33 +8,33 @@
 namespace demux {
 
 struct Engine {
-    static bool config_valid(std::span<const Decoder *const> decoders,
-                             std::span<uint8_t> buf) noexcept
+    static bool configValid(std::span<const Decoder *const> decoders,
+                            std::span<uint8_t> buf) noexcept
     {
         if (decoders.empty() || decoders.size() > kMaxDecoders) {
             return false;
         }
         constexpr std::size_t kMaxFrame = 65535;
         for (const Decoder *decoder : decoders) {
-            if (decoder == nullptr || decoder->name == nullptr || decoder->first_byte == nullptr ||
-                decoder->step == nullptr || decoder->max_frame == 0 ||
-                decoder->max_frame > kMaxFrame || decoder->max_frame > buf.size()) {
+            if (decoder == nullptr || decoder->name == nullptr || decoder->firstByte == nullptr ||
+                decoder->step == nullptr || decoder->maxFrame == 0 ||
+                decoder->maxFrame > kMaxFrame || decoder->maxFrame > buf.size()) {
                 return false;
             }
         }
         return true;
     }
 
-    static uint8_t decoder_bit(uint8_t index) noexcept
+    static uint8_t decoderBit(uint8_t index) noexcept
     {
         // index < kMaxDecoders == 8，单个位最多为 0x80，收窄无损。
         return static_cast<uint8_t>(1U << index);
     }
 
-    static uint8_t next_decoder(const Demux &dmx, uint8_t first) noexcept
+    static uint8_t nextDecoder(const Demux &dmx, uint8_t first) noexcept
     {
         for (uint8_t index = 0; index < dmx.decoder_count_; ++index) {
-            const uint8_t bit = decoder_bit(index);
+            const uint8_t bit = decoderBit(index);
             if ((dmx.first_mask_[first] & bit) != 0U && (dmx.tried_mask_ & bit) == 0U) {
                 return index;
             }
@@ -53,9 +53,9 @@ struct Engine {
     {
         if (!bytes.empty()) {
             // 先取低 32 位，值不超过 UINT32_MAX；统计按 uint32_t 模 2^32 累加。
-            dmx.stats_.unknown_bytes += static_cast<uint32_t>(bytes.size() & UINT32_MAX);
+            dmx.stats_.unknownBytes += static_cast<uint32_t>(bytes.size() & UINT32_MAX);
             dmx.in_callback_ = true;
-            dmx.sink_->on_unknown(bytes);
+            dmx.sink_->onUnknown(bytes);
             dmx.in_callback_ = false;
         }
     }
@@ -64,14 +64,14 @@ struct Engine {
     {
         DecoderStats &stats = dmx.stats_.decoder[dmx.active_];
         ++stats.frames;
-        // 前缀长度 <= 当前解码器 max_frame <= 65535，转换到 uint32_t 无损。
+        // 前缀长度 <= 当前解码器 maxFrame <= 65535，转换到 uint32_t 无损。
         stats.bytes += static_cast<uint32_t>(bytes.size());
         dmx.in_callback_ = true;
-        dmx.sink_->on_frame(*dmx.decoders_[dmx.active_], dmx.active_, bytes);
+        dmx.sink_->onFrame(*dmx.decoders_[dmx.active_], dmx.active_, bytes);
         dmx.in_callback_ = false;
     }
 
-    // 拒绝钩子：回调期间置 in_callback_，与 on_frame/on_unknown 的重入约束一致。
+    // 拒绝钩子：回调期间置 in_callback_，与 onFrame/onUnknown 的重入约束一致。
     static void reject(Demux &dmx, uint8_t index, std::span<const uint8_t> prefix,
                        RejectCause cause, bool last) noexcept
     {
@@ -79,7 +79,7 @@ struct Engine {
             return;
         }
         dmx.in_callback_ = true;
-        dmx.sink_->on_reject(*dmx.decoders_[index], index, prefix, cause, last);
+        dmx.sink_->onReject(*dmx.decoders_[index], index, prefix, cause, last);
         dmx.in_callback_ = false;
     }
 
@@ -98,7 +98,7 @@ struct Engine {
     {
         std::size_t start = 0;
         std::size_t prefix = dmx.len_;
-        bool reject_current = aborting && dmx.active_ != Demux::kNoCandidate;
+        bool rejectCurrent = aborting && dmx.active_ != Demux::kNoCandidate;
         while (start < dmx.len_) {
             const std::span<const uint8_t> buffered{dmx.buf_, dmx.len_};
             if (dmx.active_ == Demux::kNoCandidate) {
@@ -109,16 +109,16 @@ struct Engine {
                     break;
                 }
                 dmx.tried_mask_ = 0;
-                dmx.active_ = next_decoder(dmx, buffered[start]);
+                dmx.active_ = nextDecoder(dmx, buffered[start]);
                 prefix = 1;
             }
 
             const Decoder &decoder = *dmx.decoders_[dmx.active_];
-            const bool forced = reject_current;
+            const bool forced = rejectCurrent;
             std::size_t need = 0;
             const Step step =
                 forced ? Step::kReject : decoder.step(buffered.subspan(start, prefix), need);
-            reject_current = false;
+            rejectCurrent = false;
             if (step == Step::kFrame) {
                 // 两次回调结束后才移动 buf，保证未知字节与帧的内容及输出顺序稳定。
                 unknown(dmx, buffered.first(start));
@@ -134,7 +134,7 @@ struct Engine {
                     if (overflow) {
                         ++dmx.stats_.overflows;
                     }
-                    if (need != 0 && need <= decoder.max_frame - prefix && !overflow) {
+                    if (need != 0 && need <= decoder.maxFrame - prefix && !overflow) {
                         const std::size_t remaining = dmx.len_ - start - prefix;
                         if (need <= remaining) {
                             prefix += need;
@@ -158,7 +158,7 @@ struct Engine {
                     // 三种来源：超出缓冲区容量（overflows 计数）、契约违规、abort() 时数据不足。
                     if (overflow) {
                         cause = RejectCause::kTooLong;
-                    } else if ((need == 0) || (need > decoder.max_frame - prefix)) {
+                    } else if ((need == 0) || (need > decoder.maxFrame - prefix)) {
                         cause = RejectCause::kContract;
                     } else {
                         cause = RejectCause::kAbort;
@@ -167,8 +167,8 @@ struct Engine {
                     cause = RejectCause::kContract;
                 }
                 ++dmx.stats_.decoder[rejected].rejects;
-                dmx.tried_mask_ |= decoder_bit(rejected);
-                dmx.active_ = next_decoder(dmx, buffered[start]);
+                dmx.tried_mask_ |= decoderBit(rejected);
+                dmx.active_ = nextDecoder(dmx, buffered[start]);
                 const bool last = dmx.active_ == Demux::kNoCandidate;
                 reject(dmx, rejected, buffered.subspan(start, prefix), cause, last);
                 if (last) {
@@ -186,7 +186,7 @@ struct Engine {
     }
 };
 
-// 线程安全：同一实例须串行访问；ISR 安全，first_byte 必须满足冻结的纯函数契约。
+// 线程安全：同一实例须串行访问；ISR 安全，firstByte 必须满足冻结的纯函数契约。
 Error Demux::init(std::span<const Decoder *const> decoders, std::span<uint8_t> buf,
                   Sink &sink) noexcept
 {
@@ -202,7 +202,7 @@ Error Demux::init(std::span<const Decoder *const> decoders, std::span<uint8_t> b
     len_ = 0;
     Engine::idle(*this);
     stats_ = Stats{};
-    if (!Engine::config_valid(decoders, buf)) {
+    if (!Engine::configValid(decoders, buf)) {
         return Error::kInvalidArg;
     }
 
@@ -213,10 +213,10 @@ Error Demux::init(std::span<const Decoder *const> decoders, std::span<uint8_t> b
     buf_size_ = buf.size();
     sink_ = &sink;
     for (uint8_t index = 0; index < decoder_count_; ++index) {
-        const uint8_t bit = Engine::decoder_bit(index);
+        const uint8_t bit = Engine::decoderBit(index);
         for (std::size_t byte = 0; byte < first_mask_.size(); ++byte) {
             // 循环范围为 0..255，转换到 uint8_t 无损。
-            if (decoders_[index]->first_byte(static_cast<uint8_t>(byte))) {
+            if (decoders_[index]->firstByte(static_cast<uint8_t>(byte))) {
                 first_mask_[byte] |= bit;
             }
         }

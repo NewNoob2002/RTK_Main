@@ -15,7 +15,7 @@ constexpr uint32_t kXorShiftB = 17U;
 constexpr uint32_t kXorShiftC = 5U;
 constexpr uint32_t kPercentBase = 100U;
 
-uint32_t next_xorshift32(uint32_t &state) noexcept
+uint32_t nextXorshift32(uint32_t &state) noexcept
 {
     uint32_t x = (state != 0U) ? state : kDefaultSeed;
     x ^= x << kXorShiftA;
@@ -25,16 +25,16 @@ uint32_t next_xorshift32(uint32_t &state) noexcept
     return x;
 }
 
-uint32_t apply_jitter(uint32_t base_ms, uint8_t jitter_pct, uint32_t &rng) noexcept
+uint32_t applyJitter(uint32_t baseMs, uint8_t jitterPct, uint32_t &rng) noexcept
 {
-    if (jitter_pct == 0U) {
-        return base_ms;
+    if (jitterPct == 0U) {
+        return baseMs;
     }
-    const uint32_t pct_half = static_cast<uint32_t>(jitter_pct); // uint8_t 扩宽至 uint32_t 无损
-    const uint32_t span = (pct_half * 2U) + 1U;
-    const uint32_t pct = (kPercentBase - pct_half) + (next_xorshift32(rng) % span);
+    const uint32_t pctHalf = static_cast<uint32_t>(jitterPct); // uint8_t 扩宽至 uint32_t 无损
+    const uint32_t span = (pctHalf * 2U) + 1U;
+    const uint32_t pct = (kPercentBase - pctHalf) + (nextXorshift32(rng) % span);
     const uint64_t scaled =
-        (static_cast<uint64_t>(base_ms) * static_cast<uint64_t>(pct)) / kPercentBase;
+        (static_cast<uint64_t>(baseMs) * static_cast<uint64_t>(pct)) / kPercentBase;
     if (scaled == 0ULL) {
         return 1U;
     }
@@ -45,40 +45,39 @@ uint32_t apply_jitter(uint32_t base_ms, uint8_t jitter_pct, uint32_t &rng) noexc
     return static_cast<uint32_t>(scaled);
 }
 
-uint32_t compute_backoff_delay(const Config &cfg, uint32_t now_ms, uint32_t window_start_ms,
-                               uint32_t &backoff_ms, uint32_t &rng) noexcept
+uint32_t computeBackoffDelay(const Config &cfg, uint32_t nowMs, uint32_t windowStartMs,
+                             uint32_t &backoffMs, uint32_t &rng) noexcept
 {
-    uint32_t base_delay = 0U;
-    const uint32_t window_elapsed = now_ms - window_start_ms;
-    if ((backoff_ms == 0U) && (window_elapsed < cfg.fast_window_ms)) {
-        base_delay = cfg.fast_retry_ms;
+    uint32_t baseDelay = 0U;
+    const uint32_t windowElapsed = nowMs - windowStartMs;
+    if ((backoffMs == 0U) && (windowElapsed < cfg.fastWindowMs)) {
+        baseDelay = cfg.fastRetryMs;
     } else {
-        if (backoff_ms == 0U) {
-            base_delay = cfg.backoff_min_ms;
+        if (backoffMs == 0U) {
+            baseDelay = cfg.backoffMinMs;
         } else {
-            base_delay = std::clamp(backoff_ms, cfg.backoff_min_ms, cfg.backoff_max_ms);
+            baseDelay = std::clamp(backoffMs, cfg.backoffMinMs, cfg.backoffMaxMs);
         }
 
-        if (base_delay > (cfg.backoff_max_ms / 2U)) {
-            backoff_ms = cfg.backoff_max_ms;
+        if (baseDelay > (cfg.backoffMaxMs / 2U)) {
+            backoffMs = cfg.backoffMaxMs;
         } else {
-            backoff_ms = base_delay * 2U;
+            backoffMs = baseDelay * 2U;
         }
     }
-    return apply_jitter(base_delay, cfg.jitter_pct, rng);
+    return applyJitter(baseDelay, cfg.jitterPct, rng);
 }
 
 } // namespace
 
 bool Reconnector::configure(const Config &cfg, uint32_t seed) noexcept
 {
-    if ((cfg.fast_window_ms == 0U) || (cfg.fast_retry_ms == 0U) || (cfg.backoff_min_ms == 0U) ||
-        (cfg.backoff_max_ms == 0U) || (cfg.stable_online_ms == 0U) ||
-        (cfg.attempt_timeout_ms == 0U)) {
+    if ((cfg.fastWindowMs == 0U) || (cfg.fastRetryMs == 0U) || (cfg.backoffMinMs == 0U) ||
+        (cfg.backoffMaxMs == 0U) || (cfg.stableOnlineMs == 0U) || (cfg.attemptTimeoutMs == 0U)) {
         return false;
     }
-    if ((cfg.jitter_pct > kMaxJitterPct) || (cfg.sdp_after_failures == 0U) ||
-        (cfg.backoff_min_ms > cfg.backoff_max_ms)) {
+    if ((cfg.jitterPct > kMaxJitterPct) || (cfg.sdpAfterFailures == 0U) ||
+        (cfg.backoffMinMs > cfg.backoffMaxMs)) {
         return false;
     }
 
@@ -87,7 +86,7 @@ bool Reconnector::configure(const Config &cfg, uint32_t seed) noexcept
     return true;
 }
 
-void Reconnector::set_target(const Addr &addr) noexcept
+void Reconnector::setTarget(const Addr &addr) noexcept
 {
     if (has_target_ && (addr_ == addr)) {
         return;
@@ -102,7 +101,7 @@ void Reconnector::set_target(const Addr &addr) noexcept
     state_ = State::kIdle;
 }
 
-void Reconnector::clear_target() noexcept
+void Reconnector::clearTarget() noexcept
 {
     has_target_ = false;
     addr_.fill(0U);
@@ -116,7 +115,7 @@ void Reconnector::clear_target() noexcept
     state_ = State::kIdle;
 }
 
-bool Reconnector::start(uint32_t now_ms, Action &out) noexcept
+bool Reconnector::start(uint32_t nowMs, Action &out) noexcept
 {
     out = Action{};
     if (!has_target_) {
@@ -127,20 +126,20 @@ bool Reconnector::start(uint32_t now_ms, Action &out) noexcept
         return false;
     }
 
-    window_start_ms_ = now_ms;
+    window_start_ms_ = nowMs;
     backoff_ms_ = 0U;
     connect_failures_ = 0U;
     next_attempt_ms_ = 0U;
 
     if (has_scn_) {
         state_ = State::kConnecting;
-        state_since_ms_ = now_ms;
+        state_since_ms_ = nowMs;
         ++stats_.attempts;
         out = Action{ActionType::kConnect, scn_};
     } else {
         state_ = State::kDiscovering;
-        state_since_ms_ = now_ms;
-        ++stats_.sdp_queries;
+        state_since_ms_ = nowMs;
+        ++stats_.sdpQueries;
         out = Action{ActionType::kStartSdp, 0U};
     }
     return true;
@@ -152,58 +151,58 @@ void Reconnector::stop() noexcept
     next_attempt_ms_ = 0U;
 }
 
-Action Reconnector::poll(uint32_t now_ms) noexcept
+Action Reconnector::poll(uint32_t nowMs) noexcept
 {
     if (state_ == State::kBackoff) {
-        const uint32_t elapsed = now_ms - state_since_ms_;
-        if (elapsed >= stats_.last_delay_ms) {
+        const uint32_t elapsed = nowMs - state_since_ms_;
+        if (elapsed >= stats_.lastDelayMs) {
             next_attempt_ms_ = 0U;
             if (has_scn_) {
                 state_ = State::kConnecting;
-                state_since_ms_ = now_ms;
+                state_since_ms_ = nowMs;
                 ++stats_.attempts;
                 return Action{ActionType::kConnect, scn_};
             }
             state_ = State::kDiscovering;
-            state_since_ms_ = now_ms;
-            ++stats_.sdp_queries;
+            state_since_ms_ = nowMs;
+            ++stats_.sdpQueries;
             return Action{ActionType::kStartSdp, 0U};
         }
         return Action{};
     }
 
     if (state_ == State::kDiscovering) {
-        const uint32_t elapsed = now_ms - state_since_ms_;
-        if (elapsed >= cfg_.attempt_timeout_ms) {
+        const uint32_t elapsed = nowMs - state_since_ms_;
+        if (elapsed >= cfg_.attemptTimeoutMs) {
             ++stats_.failures;
             const uint32_t delay =
-                compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
+                computeBackoffDelay(cfg_, nowMs, window_start_ms_, backoff_ms_, rng_);
             state_ = State::kBackoff;
-            state_since_ms_ = now_ms;
-            next_attempt_ms_ = now_ms + delay;
-            stats_.last_delay_ms = delay;
+            state_since_ms_ = nowMs;
+            next_attempt_ms_ = nowMs + delay;
+            stats_.lastDelayMs = delay;
         }
         return Action{};
     }
 
     if (state_ == State::kConnecting) {
-        const uint32_t elapsed = now_ms - state_since_ms_;
-        if (elapsed >= cfg_.attempt_timeout_ms) {
+        const uint32_t elapsed = nowMs - state_since_ms_;
+        if (elapsed >= cfg_.attemptTimeoutMs) {
             ++stats_.failures;
             if (has_scn_) {
                 ++connect_failures_;
-                if (connect_failures_ >= cfg_.sdp_after_failures) {
+                if (connect_failures_ >= cfg_.sdpAfterFailures) {
                     has_scn_ = false;
                     scn_ = 0U;
                     connect_failures_ = 0U;
                 }
             }
             const uint32_t delay =
-                compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
+                computeBackoffDelay(cfg_, nowMs, window_start_ms_, backoff_ms_, rng_);
             state_ = State::kBackoff;
-            state_since_ms_ = now_ms;
-            next_attempt_ms_ = now_ms + delay;
-            stats_.last_delay_ms = delay;
+            state_since_ms_ = nowMs;
+            next_attempt_ms_ = nowMs + delay;
+            stats_.lastDelayMs = delay;
         }
         return Action{};
     }
@@ -211,7 +210,7 @@ Action Reconnector::poll(uint32_t now_ms) noexcept
     return Action{};
 }
 
-Action Reconnector::on_sdp_result(bool ok, uint8_t scn, uint32_t now_ms) noexcept
+Action Reconnector::onSdpResult(bool ok, uint8_t scn, uint32_t nowMs) noexcept
 {
     if (state_ == State::kStopped) {
         if (!ok) {
@@ -228,21 +227,21 @@ Action Reconnector::on_sdp_result(bool ok, uint8_t scn, uint32_t now_ms) noexcep
         has_scn_ = true;
         connect_failures_ = 0U;
         state_ = State::kConnecting;
-        state_since_ms_ = now_ms;
+        state_since_ms_ = nowMs;
         ++stats_.attempts;
         return Action{ActionType::kConnect, scn_};
     }
 
     ++stats_.failures;
-    const uint32_t delay = compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
+    const uint32_t delay = computeBackoffDelay(cfg_, nowMs, window_start_ms_, backoff_ms_, rng_);
     state_ = State::kBackoff;
-    state_since_ms_ = now_ms;
-    next_attempt_ms_ = now_ms + delay;
-    stats_.last_delay_ms = delay;
+    state_since_ms_ = nowMs;
+    next_attempt_ms_ = nowMs + delay;
+    stats_.lastDelayMs = delay;
     return Action{};
 }
 
-Action Reconnector::on_open(uint32_t now_ms) noexcept
+Action Reconnector::onOpen(uint32_t nowMs) noexcept
 {
     if (state_ == State::kStopped) {
         ++stats_.connects;
@@ -255,12 +254,12 @@ Action Reconnector::on_open(uint32_t now_ms) noexcept
     ++stats_.connects;
     connect_failures_ = 0U;
     state_ = State::kConnected;
-    state_since_ms_ = now_ms;
+    state_since_ms_ = nowMs;
     next_attempt_ms_ = 0U;
     return Action{};
 }
 
-Action Reconnector::on_connect_failed(uint32_t now_ms) noexcept
+Action Reconnector::onConnectFailed(uint32_t nowMs) noexcept
 {
     if (state_ == State::kStopped) {
         ++stats_.failures;
@@ -273,21 +272,21 @@ Action Reconnector::on_connect_failed(uint32_t now_ms) noexcept
     ++stats_.failures;
     if (has_scn_) {
         ++connect_failures_;
-        if (connect_failures_ >= cfg_.sdp_after_failures) {
+        if (connect_failures_ >= cfg_.sdpAfterFailures) {
             has_scn_ = false;
             scn_ = 0U;
             connect_failures_ = 0U;
         }
     }
-    const uint32_t delay = compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
+    const uint32_t delay = computeBackoffDelay(cfg_, nowMs, window_start_ms_, backoff_ms_, rng_);
     state_ = State::kBackoff;
-    state_since_ms_ = now_ms;
-    next_attempt_ms_ = now_ms + delay;
-    stats_.last_delay_ms = delay;
+    state_since_ms_ = nowMs;
+    next_attempt_ms_ = nowMs + delay;
+    stats_.lastDelayMs = delay;
     return Action{};
 }
 
-Action Reconnector::on_close(uint32_t now_ms) noexcept
+Action Reconnector::onClose(uint32_t nowMs) noexcept
 {
     if (state_ == State::kStopped) {
         ++stats_.disconnects;
@@ -298,30 +297,30 @@ Action Reconnector::on_close(uint32_t now_ms) noexcept
     }
 
     ++stats_.disconnects;
-    const uint32_t online_ms = now_ms - state_since_ms_;
-    if (online_ms >= cfg_.stable_online_ms) {
+    const uint32_t onlineMs = nowMs - state_since_ms_;
+    if (onlineMs >= cfg_.stableOnlineMs) {
         backoff_ms_ = 0U;
-        window_start_ms_ = now_ms;
+        window_start_ms_ = nowMs;
     }
 
-    const uint32_t delay = compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
+    const uint32_t delay = computeBackoffDelay(cfg_, nowMs, window_start_ms_, backoff_ms_, rng_);
     state_ = State::kBackoff;
-    state_since_ms_ = now_ms;
-    next_attempt_ms_ = now_ms + delay;
-    stats_.last_delay_ms = delay;
+    state_since_ms_ = nowMs;
+    next_attempt_ms_ = nowMs + delay;
+    stats_.lastDelayMs = delay;
     return Action{};
 }
 
-uint32_t Reconnector::next_attempt_in(uint32_t now_ms) const noexcept
+uint32_t Reconnector::nextAttemptIn(uint32_t nowMs) const noexcept
 {
     if (state_ != State::kBackoff) {
         return 0U;
     }
-    const uint32_t elapsed = now_ms - state_since_ms_;
-    if (elapsed >= stats_.last_delay_ms) {
+    const uint32_t elapsed = nowMs - state_since_ms_;
+    if (elapsed >= stats_.lastDelayMs) {
         return 0U;
     }
-    return stats_.last_delay_ms - elapsed;
+    return stats_.lastDelayMs - elapsed;
 }
 
 } // namespace reconnect

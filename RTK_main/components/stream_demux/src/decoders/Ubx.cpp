@@ -51,7 +51,7 @@ Verdict reject(Reason reason) noexcept
 }
 
 /** 小端 u16；调用方保证 from + 2 <= frame.size()。 */
-uint32_t read_u16_le(std::span<const uint8_t> frame, std::size_t from) noexcept
+uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     return (static_cast<uint32_t>(frame[from]) | (static_cast<uint32_t>(frame[from + 1U]) << 8U));
 }
@@ -76,9 +76,9 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return verdict;
     }
 
-    const uint32_t payload_len = read_u16_le(frame, kOfsLen);
-    // payload_len ≤ 0xFFFF，加固定部分后仍在 size_t 范围内。
-    const std::size_t total = kHdrLen + static_cast<std::size_t>(payload_len) + kCkLen;
+    const uint32_t payloadLen = readU16Le(frame, kOfsLen);
+    // payloadLen ≤ 0xFFFF，加固定部分后仍在 size_t 范围内。
+    const std::size_t total = kHdrLen + static_cast<std::size_t>(payloadLen) + kCkLen;
     if (total > kMaxFrame) {
         // 长度字段声称超过 max_frame：早拒绝，让同首字节的其他解码器尝试。
         Verdict bad = reject(Reason::kTooLong);
@@ -97,23 +97,23 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     }
 
     // 8 位 Fletcher：CK_A 累加字节、CK_B 累加 CK_A，均模 256（uint8_t 自然截断），覆盖 class..载荷。
-    uint8_t ck_a = 0U;
-    uint8_t ck_b = 0U;
-    const std::size_t ck_from = kSyncLen;
-    const std::size_t ck_end = total - kCkLen;
-    for (std::size_t idx = ck_from; idx < ck_end; ++idx) {
+    uint8_t ckA = 0U;
+    uint8_t ckB = 0U;
+    const std::size_t ckFrom = kSyncLen;
+    const std::size_t ckEnd = total - kCkLen;
+    for (std::size_t idx = ckFrom; idx < ckEnd; ++idx) {
         // 模 256 截断是本算法定义，窄化安全。
-        ck_a = static_cast<uint8_t>(ck_a + frame[idx]);
-        ck_b = static_cast<uint8_t>(ck_b + ck_a);
+        ckA = static_cast<uint8_t>(ckA + frame[idx]);
+        ckB = static_cast<uint8_t>(ckB + ckA);
     }
 
-    const uint32_t ck_rx =
+    const uint32_t ckRx =
         static_cast<uint32_t>(frame[total - 2U]) | (static_cast<uint32_t>(frame[total - 1U]) << 8U);
-    const uint32_t ck_calc = static_cast<uint32_t>(ck_a) | (static_cast<uint32_t>(ck_b) << 8U);
-    if (ck_rx != ck_calc) {
+    const uint32_t ckCalc = static_cast<uint32_t>(ckA) | (static_cast<uint32_t>(ckB) << 8U);
+    if (ckRx != ckCalc) {
         Verdict bad = reject(Reason::kChecksum);
-        bad.received = ck_rx;
-        bad.computed = ck_calc;
+        bad.received = ckRx;
+        bad.computed = ckCalc;
         return bad;
     }
     Verdict good{};
@@ -121,7 +121,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return good;
 }
 
-void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:
@@ -152,14 +152,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 
 } // namespace
 
-bool first_byte(uint8_t byte) noexcept
+bool firstByte(uint8_t byte) noexcept
 {
     return byte == kSyncA;
 }
 
 Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 first_byte。
+    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 firstByte。
     const Verdict verdict = judge(frame);
     need = verdict.need;
     return verdict.step;
@@ -175,7 +175,7 @@ std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcep
     if (verdict.step == Step::kFrame) {
         return text.literal("not rejected").finish();
     }
-    explain_verdict(verdict, text);
+    explainVerdict(verdict, text);
     return text.finish();
 }
 

@@ -53,7 +53,7 @@ public:
     }
 
     /** 写一个原始字节的可见形式：可打印 ASCII 加引号，否则 0xNN。 */
-    TextWriter &byte_value(uint8_t value) noexcept
+    TextWriter &byteValue(uint8_t value) noexcept
     {
         if ((value >= text::kPrintableMin) && (value <= text::kPrintableMax)) {
             put('\'');

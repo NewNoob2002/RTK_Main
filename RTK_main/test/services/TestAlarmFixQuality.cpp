@@ -1,4 +1,4 @@
-// AlarmService::fix_quality 透传测试（ADR-0010 §2.8）：验证 0x40 负载第 4 字节随 DeviceInfo::fix_quality
+// AlarmService::fixQuality 透传测试（ADR-0010 §2.8）：验证 0x40 负载第 4 字节随 DeviceInfo::fixQuality
 // 变化，且默认值为 0xFF（kValueUnknown）。
 #include <array>
 #include <cstdint>
@@ -47,25 +47,25 @@ void test_fix_quality_default_and_updates()
     const std::array<core::RouteTable, 1U> tables = {alarm_svc.table()};
     TEST_ASSERT_TRUE(isOk(router.init(tables)));
 
-    // 默认 DeviceInfo::fix_quality 为 0xFF，0x40 推送与查询的第 4 字节均为 0xFF。
-    TEST_ASSERT_EQUAL_UINT8(proto::alarm::kValueUnknown, dev.info().fix_quality);
+    // 默认 DeviceInfo::fixQuality 为 0xFF，0x40 推送与查询的第 4 字节均为 0xFF。
+    TEST_ASSERT_EQUAL_UINT8(proto::alarm::kValueUnknown, dev.info().fixQuality);
 
     core::Reply reply;
     proto::FrameParser parser;
     proto::FrameView parsed{};
-    TEST_ASSERT_TRUE(alarm_svc.build_status_push(kPushSeq, kNowMs, reply));
+    TEST_ASSERT_TRUE(alarm_svc.buildStatusPush(kPushSeq, kNowMs, reply));
     TEST_ASSERT_TRUE(parse_wire(parser, reply.bytes(), parsed));
     TEST_ASSERT_EQUAL_UINT(proto::alarm::kStatusLen, parsed.payload.size());
     TEST_ASSERT_EQUAL_UINT8(proto::alarm::kValueUnknown, parsed.payload[kFixQualityPayloadOffset]);
 
     // 更新为 RTK Fixed (4) 后，推送和 0x40 QUERY 应答第 4 字节均为 4。
-    dev.info().fix_quality = 4U;
-    TEST_ASSERT_TRUE(alarm_svc.build_status_push(kPushSeq + 1U, kNowMs + 100U, reply));
+    dev.info().fixQuality = 4U;
+    TEST_ASSERT_TRUE(alarm_svc.buildStatusPush(kPushSeq + 1U, kNowMs + 100U, reply));
     TEST_ASSERT_TRUE(parse_wire(parser, reply.bytes(), parsed));
     TEST_ASSERT_EQUAL_UINT8(4U, parsed.payload[kFixQualityPayloadOffset]);
 
     proto::FrameView query{};
-    query.msg_id = proto::alarm::kMsgStatus;
+    query.msgId = proto::alarm::kMsgStatus;
     query.type = proto::msg_type::kQuery;
     query.sender = proto::sender::kApp;
     reply.clear();
@@ -77,7 +77,7 @@ void test_fix_quality_default_and_updates()
     TEST_ASSERT_EQUAL_UINT8(4U, parsed.payload[kFixQualityPayloadOffset]);
 
     // 超时回退为 0xFF。
-    dev.info().fix_quality = proto::alarm::kValueUnknown;
+    dev.info().fixQuality = proto::alarm::kValueUnknown;
     reply.clear();
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(core::DispatchResult::kReply),

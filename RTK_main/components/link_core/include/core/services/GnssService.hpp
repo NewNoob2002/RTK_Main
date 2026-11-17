@@ -26,8 +26,7 @@ struct GnssQueryResult {
     size_t len = 0;        // ok==true 时的有效负载字节数（1..256）
 };
 
-using GnssQueryFn = GnssQueryResult (*)(void *ctx, uint16_t msg_id,
-                                        std::span<uint8_t> dst) noexcept;
+using GnssQueryFn = GnssQueryResult (*)(void *ctx, uint16_t msgId, std::span<uint8_t> dst) noexcept;
 using GnssMaskChangedFn = void (*)(void *ctx, uint32_t mask) noexcept;
 
 /**
@@ -35,7 +34,7 @@ using GnssMaskChangedFn = void (*)(void *ctx, uint32_t mask) noexcept;
  * - 路由 0x04(GGA)、0x05(SATSINFOA)、0x1F(HEADINGA)、0x21(GST)、0x22(RMC)、0x23(GSA)，仅允许 PHONE。
  * - interval != 0：按规则换算发送周期并开启对应 type 位订阅（接收机不支持该语句时拒绝 02 02，ADR-0012 §2.5）。
  * - interval == 0：关闭对应 type 位订阅，同时查询最新帧（<=256B 原文回复；无缓存/超长/不支持回 02 02）。
- * - 仅维护会话内订阅态，不写 NVS，断线重连通过 reset_session() 归零。
+ * - 仅维护会话内订阅态，不写 NVS，断线重连通过 resetSession() 归零。
  */
 class GnssService {
 public:
@@ -47,43 +46,43 @@ public:
     ~GnssService() = default;
 
     /** 设置最新帧查询回调；线程安全：否（仅链路任务调用）。 */
-    void set_query_hook(GnssQueryFn fn, void *ctx) noexcept;
+    void setQueryHook(GnssQueryFn fn, void *ctx) noexcept;
 
     /** 设置订阅掩码变化回调；线程安全：否（仅链路任务调用）。 */
-    void set_mask_hook(GnssMaskChangedFn fn, void *ctx) noexcept;
+    void setMaskHook(GnssMaskChangedFn fn, void *ctx) noexcept;
 
     /**
      * 更新接收机支持的语句位掩码（bit 0..5 对应 0x04/0x05/0x1F/0x21/0x22/0x23，ADR-0012 §2.5）。
      * 线程安全：否（仅链路任务调用）。
      */
-    void set_supported_mask(uint32_t mask) noexcept;
+    void setSupportedMask(uint32_t mask) noexcept;
 
     /** 查询当前支持位掩码；缺省 kGnssDefaultSupportedMask。线程安全：否（仅链路任务调用）。 */
-    [[nodiscard]] uint32_t supported_mask() const noexcept;
+    [[nodiscard]] uint32_t supportedMask() const noexcept;
 
     /** 会话断开/重连时清零全部订阅掩码与周期，并在掩码变化时触发回调；线程安全：否。 */
-    void reset_session() noexcept;
+    void resetSession() noexcept;
 
     /** 当前活跃订阅位掩码（bit 0..5 对应 0x04/0x05/0x1F/0x21/0x22/0x23）；线程安全：否。 */
-    [[nodiscard]] uint32_t active_mask() const noexcept;
+    [[nodiscard]] uint32_t activeMask() const noexcept;
 
     /** 查询指定 type 索引（0..5）当前生效周期（ms，未订阅为 0）；线程安全：否。 */
-    [[nodiscard]] uint32_t period_ms(size_t type_idx) const noexcept;
+    [[nodiscard]] uint32_t periodMs(size_t typeIdx) const noexcept;
 
     /** 查询因缓存超 256B 被拒绝的次数；线程安全：否。 */
-    [[nodiscard]] uint32_t query_oversize_count() const noexcept;
+    [[nodiscard]] uint32_t queryOversizeCount() const noexcept;
 
     /** 协议 interval（有符号字节）换算周期（ms）：0->0，<0->|v|*1000，>0->max(50, 1000/v)。 */
-    [[nodiscard]] static uint32_t interval_to_period_ms(int8_t interval) noexcept;
+    [[nodiscard]] static uint32_t intervalToPeriodMs(int8_t interval) noexcept;
 
-    /** 协议 msg_id 映射到 type 索引（0..5）。 */
-    [[nodiscard]] static std::optional<size_t> type_index_of(uint16_t msg_id) noexcept;
+    /** 协议 msgId 映射到 type 索引（0..5）。 */
+    [[nodiscard]] static std::optional<size_t> typeIndexOf(uint16_t msgId) noexcept;
 
-    /** type 索引（0..5）映射到协议 msg_id。 */
-    [[nodiscard]] static uint16_t msg_id_at(size_t type_idx) noexcept;
+    /** type 索引（0..5）映射到协议 msgId。 */
+    [[nodiscard]] static uint16_t msgIdAt(size_t typeIdx) noexcept;
 
     /** type 索引（0..5）对应的默认周期（ms：1000/5000/1000/1000/1000/3000）。 */
-    [[nodiscard]] static uint32_t default_period_ms(size_t type_idx) noexcept;
+    [[nodiscard]] static uint32_t defaultPeriodMs(size_t typeIdx) noexcept;
 
     /** 返回本服务的路由表；线程安全：否。 */
     [[nodiscard]] static std::span<const Route> routes() noexcept;
@@ -95,7 +94,7 @@ public:
     }
 
 private:
-    DispatchResult handle_frame(const proto::FrameView &frame, Reply &reply) noexcept;
+    DispatchResult handleFrame(const proto::FrameView &frame, Reply &reply) noexcept;
 
     GnssQueryFn query_fn_ = nullptr;
     void *query_ctx_ = nullptr;

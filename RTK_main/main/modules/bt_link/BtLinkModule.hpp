@@ -66,8 +66,8 @@ public:
 private:
     friend struct ModuleTestAccess;
     using SessionDemux = demux::StaticDemux<proto::demux_frame::kDecoder, demux::rtcm3::kDecoder>;
-    static constexpr uint8_t kProductIndex = SessionDemux::index_of<proto::demux_frame::kDecoder>();
-    static constexpr uint8_t kRtcmIndex = SessionDemux::index_of<demux::rtcm3::kDecoder>();
+    static constexpr uint8_t kProductIndex = SessionDemux::indexOf<proto::demux_frame::kDecoder>();
+    static constexpr uint8_t kRtcmIndex = SessionDemux::indexOf<demux::rtcm3::kDecoder>();
     static constexpr size_t kRxChunkBytes = kLinkRxBufBytes;
     static constexpr size_t kRxBudgetBytes = kLinkRxBufBytes;
     class SessionSink final : public demux::Sink {
@@ -75,8 +75,8 @@ private:
         constexpr SessionSink() noexcept = default;
         // 仅 kLink，非 ISR；OPEN/CLOSE 时复位元数据，owner 覆盖本会话生命周期。
         void bind(BtLinkModule &owner, core::SessionHandle handle) noexcept;
-        void on_frame(const demux::Decoder &decoder, uint8_t index,
-                      std::span<const uint8_t> wire) noexcept override;
+        void onFrame(const demux::Decoder &decoder, uint8_t index,
+                     std::span<const uint8_t> wire) noexcept override;
         [[nodiscard]] bool healthy() const noexcept
         {
             return !unhealthy_;

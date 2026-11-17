@@ -52,7 +52,7 @@ inline constexpr uint8_t kErrReport = 0x05;
 // 解析出的一帧。payload 指向解析器内部缓冲区，只在下一次 feed() 前有效。
 /** 一次解析成功的帧视图；payload 指向解析器内部缓冲，有效期到下次 feed 或栈帧结束。 */
 struct FrameView {
-    uint16_t msg_id = 0;
+    uint16_t msgId = 0;
     uint8_t sender = 0;
     uint8_t type = 0;
     uint8_t protocol = 0;
@@ -67,16 +67,16 @@ struct FrameView {
 [[nodiscard]] uint32_t crc32(std::span<const uint8_t> data, uint32_t crc = 0) noexcept;
 
 /** 请求 type 映射到应答 type：0x00→0x01，0x02→0x03，其他→0x05。 */
-[[nodiscard]] uint8_t response_type(uint8_t req_type) noexcept;
+[[nodiscard]] uint8_t responseType(uint8_t reqType) noexcept;
 
 /**
  * 组一帧：头（预留字节、protocol、interval 置 0）+ payload + CRC（小端）。
- * 成功时 out_len = 20 + payload.size() + 4。
- * payload.size() > kMaxPayload → kInvalidArg；out 空间不足 → kNoSpace。失败时不写 out_len。
+ * 成功时 outLen = 20 + payload.size() + 4。
+ * payload.size() > kMaxPayload → kInvalidArg；out 空间不足 → kNoSpace。失败时不写 outLen。
  */
-[[nodiscard]] fw::Status build_frame(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender,
-                                     uint8_t type, std::span<const uint8_t> payload,
-                                     size_t &out_len) noexcept;
+[[nodiscard]] fw::Status buildFrame(std::span<uint8_t> out, uint16_t msgId, uint8_t sender,
+                                    uint8_t type, std::span<const uint8_t> payload,
+                                    size_t &outLen) noexcept;
 
 /** 一次解析调用的结果：找到完整帧 / 需要更多字节 / 出错。 */
 enum class ParseResult : uint8_t {
@@ -89,9 +89,9 @@ enum class ParseResult : uint8_t {
 // 逐字节流式解析器。每个会话一个实例，常驻，不得在每次收到数据时重建。
 // 状态机规则：
 // - 同步阶段遇到不匹配字节时，若该字节是 0xAA 则作为新帧起点，否则丢弃并重新寻找 0xAA。
-// - 头长字节 != 0x14 或 payload 长度 > kMaxPayload：返回 kLengthError，length_errors()+1，
+// - 头长字节 != 0x14 或 payload 长度 > kMaxPayload：返回 kLengthError，lengthErrors()+1，
 //   回到寻找 0xAA（不回扫已收字节）。
-// - 一帧收完：CRC 正确返回 kFrame 并填 frame；否则 kCrcError，crc_errors()+1。两者都回到寻找 0xAA。
+// - 一帧收完：CRC 正确返回 kFrame 并填 frame；否则 kCrcError，crcErrors()+1。两者都回到寻找 0xAA。
 /** 每会话独立的帧解析器（内部委托 C 实现）；只由链路任务使用。 */
 class FrameParser {
 public:
@@ -102,11 +102,11 @@ public:
 
     [[nodiscard]] ParseResult feed(uint8_t byte, FrameView &frame) noexcept;
 
-    [[nodiscard]] uint32_t crc_errors() const noexcept
+    [[nodiscard]] uint32_t crcErrors() const noexcept
     {
         return parser_.crc_errors;
     }
-    [[nodiscard]] uint32_t length_errors() const noexcept
+    [[nodiscard]] uint32_t lengthErrors() const noexcept
     {
         return parser_.len_errors;
     }

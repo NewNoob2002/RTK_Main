@@ -15,6 +15,6 @@ namespace demux::crc {
  * NovAtel/Unicore CRC-32：反射多项式 0xEDB88320，初值 0，无最终异或（≠ zlib 的 crc32）。
  * "123456789" → 0x2DFD2D88。
  */
-[[nodiscard]] uint32_t crc32_novatel(std::span<const uint8_t> data, uint32_t crc = 0) noexcept;
+[[nodiscard]] uint32_t crc32Novatel(std::span<const uint8_t> data, uint32_t crc = 0) noexcept;
 
 } // namespace demux::crc

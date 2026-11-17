@@ -55,7 +55,7 @@ TEST_CASE("C++ ByteWriter bulk overflow blocks later writes", "[rtk_pure][bytes]
     TEST_ASSERT_FALSE(writer.ok());
     TEST_ASSERT_EQUAL_UINT(5, writer.size());
     writer.zeros(1);
-    writer.fixed_str("A", 1);
+    writer.fixedStr("A", 1);
     writer.bytes(std::span<const uint8_t>(source.data(), 1));
     TEST_ASSERT_FALSE(writer.ok());
     TEST_ASSERT_EQUAL_UINT(5, writer.size());
@@ -70,21 +70,21 @@ TEST_CASE("C++ LinkManager pairs initial phone role and remembers alarm", "[rtk_
     LinkManager manager;
     Actions actions{};
     manager.init(Policy::kConcurrent, {});
-    TEST_ASSERT_TRUE(Role::kPhone == manager.on_open(kAlarm, kAlarmAddr, 0, actions));
-    manager.pair_open(10);
-    TEST_ASSERT_TRUE(manager.is_pairing());
+    TEST_ASSERT_TRUE(Role::kPhone == manager.onOpen(kAlarm, kAlarmAddr, 0, actions));
+    manager.pairOpen(10);
+    TEST_ASSERT_TRUE(manager.isPairing());
     TEST_ASSERT_TRUE(Role::kAlarm ==
-                     manager.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 20, actions));
+                     manager.onFrame(kAlarm, core::kHelloSender, core::kHelloMsgId, 20, actions));
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
     TEST_ASSERT_TRUE(Role::kAlarm == manager.role(kAlarm));
     TEST_ASSERT_EQUAL_UINT(1, manager.whitelist().size());
     TEST_ASSERT_TRUE(kAlarmAddr == manager.whitelist()[0]);
     TEST_ASSERT_TRUE(Role::kAlarm ==
-                     manager.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 30, actions));
+                     manager.onFrame(kAlarm, core::kHelloSender, core::kHelloMsgId, 30, actions));
     TEST_ASSERT_EQUAL_UINT(1, manager.whitelist().size());
-    manager.on_close(kAlarm);
+    manager.onClose(kAlarm);
     TEST_ASSERT_TRUE(Role::kNone == manager.role(kAlarm));
-    TEST_ASSERT_TRUE(Role::kAlarm == manager.on_open(kAlarm, kAlarmAddr, 40, actions));
+    TEST_ASSERT_TRUE(Role::kAlarm == manager.onOpen(kAlarm, kAlarmAddr, 40, actions));
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
 }
 
@@ -94,20 +94,20 @@ TEST_CASE("C++ LinkManager pairs pending alarm while phone remains online", "[rt
     LinkManager manager;
     Actions actions{};
     manager.init(Policy::kConcurrent, {});
-    TEST_ASSERT_TRUE(Role::kPhone == manager.on_open(kPhone, kPhoneAddr, 0, actions));
-    manager.pair_open(0);
-    TEST_ASSERT_TRUE(manager.is_pairing());
-    TEST_ASSERT_TRUE(Role::kPending == manager.on_open(kAlarm, kAlarmAddr, 100, actions));
+    TEST_ASSERT_TRUE(Role::kPhone == manager.onOpen(kPhone, kPhoneAddr, 0, actions));
+    manager.pairOpen(0);
+    TEST_ASSERT_TRUE(manager.isPairing());
+    TEST_ASSERT_TRUE(Role::kPending == manager.onOpen(kAlarm, kAlarmAddr, 100, actions));
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
     TEST_ASSERT_TRUE(Role::kAlarm ==
-                     manager.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 200, actions));
+                     manager.onFrame(kAlarm, core::kHelloSender, core::kHelloMsgId, 200, actions));
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
     TEST_ASSERT_TRUE(Role::kPhone == manager.role(kPhone));
     TEST_ASSERT_EQUAL_UINT(1, manager.whitelist().size());
     TEST_ASSERT_TRUE(kAlarmAddr == manager.whitelist()[0]);
-    manager.on_close(kAlarm);
+    manager.onClose(kAlarm);
     TEST_ASSERT_TRUE(Role::kNone == manager.role(kAlarm));
-    TEST_ASSERT_TRUE(Role::kAlarm == manager.on_open(kAlarm, kAlarmAddr, 300, actions));
+    TEST_ASSERT_TRUE(Role::kAlarm == manager.onOpen(kAlarm, kAlarmAddr, 300, actions));
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
     TEST_ASSERT_TRUE(Role::kPhone == manager.role(kPhone));
 }
@@ -118,15 +118,15 @@ TEST_CASE("C++ LinkManager rejects hello at expired pairing window", "[rtk_pure]
     LinkManager manager;
     Actions actions{};
     manager.init(Policy::kConcurrent, {});
-    manager.pair_open(500);
+    manager.pairOpen(500);
     manager.tick(500U + core::kPairWindowMs - 1U, actions);
-    TEST_ASSERT_TRUE(manager.is_pairing());
+    TEST_ASSERT_TRUE(manager.isPairing());
     manager.tick(500U + core::kPairWindowMs, actions);
-    TEST_ASSERT_FALSE(manager.is_pairing());
+    TEST_ASSERT_FALSE(manager.isPairing());
     TEST_ASSERT_TRUE(Role::kPhone ==
-                     manager.on_open(kAlarm, kAlarmAddr, 500U + core::kPairWindowMs, actions));
-    TEST_ASSERT_TRUE(Role::kNone == manager.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId,
-                                                     501U + core::kPairWindowMs, actions));
+                     manager.onOpen(kAlarm, kAlarmAddr, 500U + core::kPairWindowMs, actions));
+    TEST_ASSERT_TRUE(Role::kNone == manager.onFrame(kAlarm, core::kHelloSender, core::kHelloMsgId,
+                                                    501U + core::kPairWindowMs, actions));
     TEST_ASSERT_EQUAL_UINT8(1, actions.count);
     TEST_ASSERT_EQUAL_UINT32(kAlarm, actions.view()[0]);
     TEST_ASSERT_TRUE(Role::kNone == manager.role(kAlarm));

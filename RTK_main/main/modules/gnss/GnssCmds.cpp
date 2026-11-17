@@ -493,7 +493,7 @@ int cmd_gnss_out(void * /*ctx*/, int argc, char **argv) noexcept
         for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
             const bool en = (cfg.mask & (1U << i)) != 0U;
             const uint32_t period =
-                core::services::GnssService::interval_to_period_ms(cfg.intervals[i]);
+                core::services::GnssService::intervalToPeriodMs(cfg.intervals[i]);
             const uint32_t bit = 1U << i;
             const char *applied = (st.applied_mask & bit) != 0U ? "on" : "-";
             if ((st.unsupported_mask & bit) != 0U) {

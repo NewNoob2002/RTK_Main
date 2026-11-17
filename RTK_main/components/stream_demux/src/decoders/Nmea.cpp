@@ -67,29 +67,29 @@ struct Verdict {
     uint8_t computed = 0U;   // 校验类原因：算出的值
 };
 
-bool is_printable(uint8_t byte) noexcept
+bool isPrintable(uint8_t byte) noexcept
 {
     return (byte >= kPrintableMin) && (byte <= kPrintableMax);
 }
 
-bool is_hex_digit(uint8_t byte) noexcept
+bool isHexDigit(uint8_t byte) noexcept
 {
     return ((byte >= kDigit0) && (byte <= kDigit9)) || ((byte >= kUpperA) && (byte <= kUpperF)) ||
            ((byte >= kLowerA) && (byte <= kLowerF));
 }
 
-bool is_upper_alpha(uint8_t byte) noexcept
+bool isUpperAlpha(uint8_t byte) noexcept
 {
     return (byte >= kUpperA) && (byte <= kUpperZ);
 }
 
-bool is_upper_alnum(uint8_t byte) noexcept
+bool isUpperAlnum(uint8_t byte) noexcept
 {
-    return is_upper_alpha(byte) || ((byte >= kDigit0) && (byte <= kDigit9));
+    return isUpperAlpha(byte) || ((byte >= kDigit0) && (byte <= kDigit9));
 }
 
-/** 调用方必须先经 is_hex_digit() 判定；返回值 0..15。 */
-uint8_t hex_value(uint8_t byte) noexcept
+/** 调用方必须先经 isHexDigit() 判定；返回值 0..15。 */
+uint8_t hexValue(uint8_t byte) noexcept
 {
     if ((byte >= kDigit0) && (byte <= kDigit9)) {
         // 差 0..9，窄化到 uint8_t 安全。
@@ -104,9 +104,9 @@ uint8_t hex_value(uint8_t byte) noexcept
 }
 
 /** 正文合法性：可打印且不含 '$'。 */
-bool is_body(uint8_t byte) noexcept
+bool isBody(uint8_t byte) noexcept
 {
-    return is_printable(byte) && (byte != kSyncByte);
+    return isPrintable(byte) && (byte != kSyncByte);
 }
 
 uint8_t xor8(std::span<const uint8_t> data) noexcept
@@ -121,8 +121,8 @@ uint8_t xor8(std::span<const uint8_t> data) noexcept
 }
 
 /** 在 frame[last-window .. last] 内反向寻找最近的 '*'；窗口定长，因此 O(1)。 */
-bool find_star_reverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window,
-                       std::size_t &ofs) noexcept
+bool findStarReverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window,
+                     std::size_t &ofs) noexcept
 {
     ofs = 0U;
     for (std::size_t back = 0U; (back <= window) && (back <= last); ++back) {
@@ -157,10 +157,10 @@ Verdict finish(std::span<const uint8_t> frame) noexcept
     if (frame[last - 1U] != kCr) {
         return reject(Reason::kNoCrByte, last - 1U, frame[last - 1U]);
     }
-    if (!is_hex_digit(frame[last - kHexLoOffset])) {
+    if (!isHexDigit(frame[last - kHexLoOffset])) {
         return reject(Reason::kHexByte, last - kHexLoOffset, frame[last - kHexLoOffset]);
     }
-    if (!is_hex_digit(frame[last - kHexHiOffset])) {
+    if (!isHexDigit(frame[last - kHexHiOffset])) {
         return reject(Reason::kHexByte, last - kHexHiOffset, frame[last - kHexHiOffset]);
     }
     if (frame[star] != kStar) {
@@ -168,20 +168,20 @@ Verdict finish(std::span<const uint8_t> frame) noexcept
     }
     // 正文（'$' 与 '*' 之间）必须可打印且既不含 '$' 也不含 '*'（'*' 只能出现在校验字段起点）。
     for (std::size_t idx = 1U; idx < star; ++idx) {
-        if ((!is_body(frame[idx])) || (frame[idx] == kStar)) {
+        if ((!isBody(frame[idx])) || (frame[idx] == kStar)) {
             return reject(Reason::kBody, idx, frame[idx]);
         }
     }
 
-    const uint8_t checksum_calc = xor8(frame.subspan(1U, star - 1U));
+    const uint8_t checksumCalc = xor8(frame.subspan(1U, star - 1U));
     // 两位十六进制拼成一个字节：各 ≤ 0x0F，高位左移 4 位后 ≤ 0xF0，结果 ≤ 0xFF，窄化安全。
-    const uint8_t checksum_rx =
-        static_cast<uint8_t>((static_cast<uint32_t>(hex_value(frame[star + 1U])) << kNibbleBits) |
-                             static_cast<uint32_t>(hex_value(frame[star + 2U])));
+    const uint8_t checksumRx =
+        static_cast<uint8_t>((static_cast<uint32_t>(hexValue(frame[star + 1U])) << kNibbleBits) |
+                             static_cast<uint32_t>(hexValue(frame[star + 2U])));
 
-    if (checksum_calc != checksum_rx) {
-        Verdict verdict = reject(Reason::kChecksum, star + 1U, checksum_rx);
-        verdict.computed = checksum_calc;
+    if (checksumCalc != checksumRx) {
+        Verdict verdict = reject(Reason::kChecksum, star + 1U, checksumRx);
+        verdict.computed = checksumCalc;
         return verdict;
     }
     return Verdict{}; // step = kNeedMore 占位，由调用方改写
@@ -192,7 +192,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
     const std::size_t last = frame.size() - 1U;
-    const uint8_t new_byte = frame[last];
+    const uint8_t newByte = frame[last];
 
     if (frame[0] != kSyncByte) {
         return reject(Reason::kSync, 0U, frame[0]);
@@ -201,11 +201,11 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         verdict.need = 2U - frame.size();
         return verdict;
     }
-    if (!is_upper_alnum(frame[1])) {
+    if (!isUpperAlnum(frame[1])) {
         // 第 2 字节必须是发送方标识（大写字母或数字）：与同样以 '$' 开头的其他语法早分开。
         return reject(Reason::kSecond, 1U, frame[1]);
     }
-    if (new_byte == kLf) {
+    if (newByte == kLf) {
         Verdict finished = finish(frame);
         if (finished.reason == Reason::kNone) {
             finished.step = Step::kFrame;
@@ -213,26 +213,26 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return finished;
     }
 
-    std::size_t star_ofs = 0U;
-    if (find_star_reverse(frame, last, kStarWindow, star_ofs)) {
-        if (star_ofs == 0U) {
+    std::size_t starOfs = 0U;
+    if (findStarReverse(frame, last, kStarWindow, starOfs)) {
+        if (starOfs == 0U) {
             // 当前字节就是 '*'：校验字段从这里开始。
-        } else if (star_ofs < kHexHiOffset) {
+        } else if (starOfs < kHexHiOffset) {
             // 偏移 1、2：两位十六进制校验位。
-            if (!is_hex_digit(new_byte)) {
-                return reject(Reason::kHexByte, last, new_byte);
+            if (!isHexDigit(newByte)) {
+                return reject(Reason::kHexByte, last, newByte);
             }
-        } else if (star_ofs == kHexHiOffset) {
+        } else if (starOfs == kHexHiOffset) {
             // 偏移 3：只能是 '\r'。
-            if (new_byte != kCr) {
-                return reject(Reason::kNoCrByte, last, new_byte);
+            if (newByte != kCr) {
+                return reject(Reason::kNoCrByte, last, newByte);
             }
         } else {
             // 偏移 4 只可能以 '\n' 结束（上面已处理），其余情况非法。
-            return reject(Reason::kUnexpected, last, new_byte);
+            return reject(Reason::kUnexpected, last, newByte);
         }
-    } else if (!is_body(new_byte)) {
-        return reject(Reason::kBody, last, new_byte);
+    } else if (!isBody(newByte)) {
+        return reject(Reason::kBody, last, newByte);
     } else {
         // 正文字节合法，继续累积。
     }
@@ -245,7 +245,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return verdict;
 }
 
-void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:
@@ -255,7 +255,7 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
         break;
     case Reason::kSecond:
         text.literal("byte 1 is ")
-            .byte_value(verdict.received)
+            .byteValue(verdict.received)
             .literal(", not an upper-case sender id");
         break;
     case Reason::kShort:
@@ -265,12 +265,12 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
         text.literal("byte ")
             .decimal(verdict.offset)
             .literal(" is ")
-            .byte_value(verdict.received)
+            .byteValue(verdict.received)
             .literal(", expected '*'");
         break;
     case Reason::kBody:
         text.literal("illegal byte ")
-            .byte_value(verdict.received)
+            .byteValue(verdict.received)
             .literal(" at offset ")
             .decimal(verdict.offset);
         break;
@@ -278,14 +278,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
         text.literal("byte ")
             .decimal(verdict.offset)
             .literal(" is ")
-            .byte_value(verdict.received)
+            .byteValue(verdict.received)
             .literal(", expected CR");
         break;
     case Reason::kHexByte:
         text.literal("byte ")
             .decimal(verdict.offset)
             .literal(" is ")
-            .byte_value(verdict.received)
+            .byteValue(verdict.received)
             .literal(", not a hex digit");
         break;
     case Reason::kChecksum:
@@ -298,7 +298,7 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
         text.literal("byte ")
             .decimal(verdict.offset)
             .literal(" is ")
-            .byte_value(verdict.received)
+            .byteValue(verdict.received)
             .literal(" after the checksum");
         break;
     case Reason::kTooLong:
@@ -313,14 +313,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 
 } // namespace
 
-bool first_byte(uint8_t byte) noexcept
+bool firstByte(uint8_t byte) noexcept
 {
     return byte == kSyncByte;
 }
 
 Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 first_byte。
+    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 firstByte。
     const Verdict verdict = judge(frame);
     need = verdict.need;
     return verdict.step;
@@ -333,7 +333,7 @@ std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcep
         return text.literal("empty prefix").finish();
     }
     const Verdict verdict = judge(frame);
-    explain_verdict((verdict.step == Step::kReject) ? verdict : reject(Reason::kNone, 0U), text);
+    explainVerdict((verdict.step == Step::kReject) ? verdict : reject(Reason::kNone, 0U), text);
     return text.finish();
 }
 

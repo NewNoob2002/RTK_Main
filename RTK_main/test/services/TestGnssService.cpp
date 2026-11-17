@@ -54,7 +54,7 @@ struct MockCache {
 GnssQueryResult query_cb(void *ctx, uint16_t msg_id, std::span<uint8_t> dst) noexcept
 {
     auto *cache = static_cast<MockCache *>(ctx);
-    const auto idx_opt = GnssService::type_index_of(msg_id);
+    const auto idx_opt = GnssService::typeIndexOf(msg_id);
     if (!idx_opt.has_value()) {
         return {};
     }
@@ -80,7 +80,7 @@ void mask_cb(void *ctx, uint32_t mask) noexcept
 proto::FrameView make_req(uint16_t msg_id, uint8_t type, int8_t interval) noexcept
 {
     proto::FrameView frame{};
-    frame.msg_id = msg_id;
+    frame.msgId = msg_id;
     frame.sender = proto::sender::kApp;
     frame.type = type;
     frame.interval = static_cast<uint8_t>(interval);
@@ -109,7 +109,7 @@ void assert_reply_result(const Reply &reply, uint16_t msg_id, uint8_t expect_typ
     const auto res = parse_reply_bytes(parser, reply.bytes(), out);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(proto::ParseResult::kFrame),
                             static_cast<uint8_t>(res));
-    TEST_ASSERT_EQUAL_HEX16(msg_id, out.msg_id);
+    TEST_ASSERT_EQUAL_HEX16(msg_id, out.msgId);
     TEST_ASSERT_EQUAL_HEX8(proto::sender::kDevice, out.sender);
     TEST_ASSERT_EQUAL_HEX8(expect_type, out.type);
     TEST_ASSERT_EQUAL_UINT(2U, out.payload.size());
@@ -125,7 +125,7 @@ void assert_reply_payload(const Reply &reply, uint16_t msg_id, uint8_t expect_ty
     const auto res = parse_reply_bytes(parser, reply.bytes(), out);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(proto::ParseResult::kFrame),
                             static_cast<uint8_t>(res));
-    TEST_ASSERT_EQUAL_HEX16(msg_id, out.msg_id);
+    TEST_ASSERT_EQUAL_HEX16(msg_id, out.msgId);
     TEST_ASSERT_EQUAL_HEX8(proto::sender::kDevice, out.sender);
     TEST_ASSERT_EQUAL_HEX8(expect_type, out.type);
     TEST_ASSERT_EQUAL_UINT(expect_text.size(), out.payload.size());
@@ -141,15 +141,15 @@ void test_interval_conversion()
     constexpr int8_t kSec5 = -5;
     constexpr int8_t kSecMin = -128;
 
-    TEST_ASSERT_EQUAL_UINT32(0U, GnssService::interval_to_period_ms(0));
-    TEST_ASSERT_EQUAL_UINT32(1000U, GnssService::interval_to_period_ms(1));
-    TEST_ASSERT_EQUAL_UINT32(200U, GnssService::interval_to_period_ms(kRate5Hz));
-    TEST_ASSERT_EQUAL_UINT32(50U, GnssService::interval_to_period_ms(kRate20Hz));
-    TEST_ASSERT_EQUAL_UINT32(50U, GnssService::interval_to_period_ms(kRate50Hz));
-    TEST_ASSERT_EQUAL_UINT32(50U, GnssService::interval_to_period_ms(kRateMax));
-    TEST_ASSERT_EQUAL_UINT32(1000U, GnssService::interval_to_period_ms(-1));
-    TEST_ASSERT_EQUAL_UINT32(5000U, GnssService::interval_to_period_ms(kSec5));
-    TEST_ASSERT_EQUAL_UINT32(128000U, GnssService::interval_to_period_ms(kSecMin));
+    TEST_ASSERT_EQUAL_UINT32(0U, GnssService::intervalToPeriodMs(0));
+    TEST_ASSERT_EQUAL_UINT32(1000U, GnssService::intervalToPeriodMs(1));
+    TEST_ASSERT_EQUAL_UINT32(200U, GnssService::intervalToPeriodMs(kRate5Hz));
+    TEST_ASSERT_EQUAL_UINT32(50U, GnssService::intervalToPeriodMs(kRate20Hz));
+    TEST_ASSERT_EQUAL_UINT32(50U, GnssService::intervalToPeriodMs(kRate50Hz));
+    TEST_ASSERT_EQUAL_UINT32(50U, GnssService::intervalToPeriodMs(kRateMax));
+    TEST_ASSERT_EQUAL_UINT32(1000U, GnssService::intervalToPeriodMs(-1));
+    TEST_ASSERT_EQUAL_UINT32(5000U, GnssService::intervalToPeriodMs(kSec5));
+    TEST_ASSERT_EQUAL_UINT32(128000U, GnssService::intervalToPeriodMs(kSecMin));
 }
 
 void test_router_integration_with_all_services()
@@ -166,7 +166,7 @@ void test_router_integration_with_all_services()
     };
     CommandRouter router;
     TEST_ASSERT_TRUE(fw::isOk(router.init(tables)));
-    TEST_ASSERT_EQUAL_UINT(kRouteCountAll, router.route_count());
+    TEST_ASSERT_EQUAL_UINT(kRouteCountAll, router.routeCount());
 }
 
 void test_subscription_and_capability_gate()
@@ -177,8 +177,8 @@ void test_subscription_and_capability_gate()
 
     GnssService gnss;
     MockCache cache{};
-    gnss.set_query_hook(&query_cb, &cache);
-    gnss.set_mask_hook(&mask_cb, &cache);
+    gnss.setQueryHook(&query_cb, &cache);
+    gnss.setMaskHook(&mask_cb, &cache);
 
     CommandRouter router;
     const std::array<RouteTable, 1> tables = {gnss.table()};
@@ -197,10 +197,10 @@ void test_subscription_and_capability_gate()
         static_cast<uint8_t>(router.handle(
             Role::kPhone, make_req(kMsgHeading, proto::msg_type::kQuery, 1), kTimeBase, reply)));
     assert_reply_result(reply, kMsgHeading, proto::msg_type::kQueryRes, kResultFail);
-    TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
+    TEST_ASSERT_EQUAL_HEX32(0U, gnss.activeMask());
 
     // 接收机上报支持 HEADINGA 后 0x1F 订阅成功；0x05(SATSINFOA) 负周期 -5 -> 5000ms。
-    gnss.set_supported_mask(core::services::kGnssDefaultSupportedMask | (1U << 2U));
+    gnss.setSupportedMask(core::services::kGnssDefaultSupportedMask | (1U << 2U));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
                             static_cast<uint8_t>(router.handle(
                                 Role::kPhone, make_req(kMsgHeading, proto::msg_type::kSet, 2),
@@ -211,15 +211,15 @@ void test_subscription_and_capability_gate()
                                 Role::kPhone, make_req(kMsgSat, proto::msg_type::kQuery, kSec5),
                                 kTimeBase + (2U * kStepMs), reply)));
     assert_reply_result(reply, kMsgSat, proto::msg_type::kQueryRes, kResultOk);
-    TEST_ASSERT_EQUAL_HEX32((1U << 1U) | (1U << 2U), gnss.active_mask());
-    TEST_ASSERT_EQUAL_UINT32(5000U, gnss.period_ms(1U));
-    TEST_ASSERT_EQUAL_UINT32(500U, gnss.period_ms(2U));
-    TEST_ASSERT_EQUAL_HEX32(gnss.active_mask(), cache.last_mask);
+    TEST_ASSERT_EQUAL_HEX32((1U << 1U) | (1U << 2U), gnss.activeMask());
+    TEST_ASSERT_EQUAL_UINT32(5000U, gnss.periodMs(1U));
+    TEST_ASSERT_EQUAL_UINT32(500U, gnss.periodMs(2U));
+    TEST_ASSERT_EQUAL_HEX32(gnss.activeMask(), cache.last_mask);
 
     // 断线重连后订阅掩码清零，不自动恢复推送。
-    gnss.reset_session();
-    TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
-    TEST_ASSERT_EQUAL_UINT32(0U, gnss.period_ms(1U));
+    gnss.resetSession();
+    TEST_ASSERT_EQUAL_HEX32(0U, gnss.activeMask());
+    TEST_ASSERT_EQUAL_UINT32(0U, gnss.periodMs(1U));
     TEST_ASSERT_EQUAL_HEX32(0U, cache.last_mask);
 }
 
@@ -232,9 +232,9 @@ void test_unsupported_type_gate()
 
     GnssService gnss;
     MockCache cache{};
-    gnss.set_query_hook(&query_cb, &cache);
-    gnss.set_mask_hook(&mask_cb, &cache);
-    gnss.set_supported_mask(core::services::kGnssDefaultSupportedMask & ~kGsaBit);
+    gnss.setQueryHook(&query_cb, &cache);
+    gnss.setMaskHook(&mask_cb, &cache);
+    gnss.setSupportedMask(core::services::kGnssDefaultSupportedMask & ~kGsaBit);
 
     CommandRouter router;
     const std::array<RouteTable, 1> tables = {gnss.table()};
@@ -247,7 +247,7 @@ void test_unsupported_type_gate()
         static_cast<uint8_t>(router.handle(
             Role::kPhone, make_req(kMsgGsa, proto::msg_type::kQuery, 1), kTimeBase, reply)));
     assert_reply_result(reply, kMsgGsa, proto::msg_type::kQueryRes, kResultFail);
-    TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
+    TEST_ASSERT_EQUAL_HEX32(0U, gnss.activeMask());
 
     // 关闭分支也一样被拒（不支持的类型不存在可关的订阅）。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
@@ -255,7 +255,7 @@ void test_unsupported_type_gate()
                                 Role::kPhone, make_req(kMsgGsa, proto::msg_type::kQuery, 0),
                                 kTimeBase + kStepMs, reply)));
     assert_reply_result(reply, kMsgGsa, proto::msg_type::kQueryRes, kResultFail);
-    TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
+    TEST_ASSERT_EQUAL_HEX32(0U, gnss.activeMask());
 
     // 支持的 GGA 正常订阅。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
@@ -263,12 +263,12 @@ void test_unsupported_type_gate()
                                 Role::kPhone, make_req(kMsgGga, proto::msg_type::kSet, 1),
                                 kTimeBase + (2U * kStepMs), reply)));
     assert_reply_result(reply, kMsgGga, proto::msg_type::kSetRes, kResultOk);
-    TEST_ASSERT_EQUAL_HEX32(1U, gnss.active_mask());
+    TEST_ASSERT_EQUAL_HEX32(1U, gnss.activeMask());
 
     // 接收机能力变化只更新白名单，不取消已有订阅。
-    gnss.set_supported_mask(core::services::kGnssDefaultSupportedMask & ~(1U << 0U));
-    TEST_ASSERT_EQUAL_HEX32(1U, gnss.active_mask());
-    TEST_ASSERT_EQUAL_UINT32(1000U, gnss.period_ms(0U));
+    gnss.setSupportedMask(core::services::kGnssDefaultSupportedMask & ~(1U << 0U));
+    TEST_ASSERT_EQUAL_HEX32(1U, gnss.activeMask());
+    TEST_ASSERT_EQUAL_UINT32(1000U, gnss.periodMs(0U));
 }
 
 void test_interval_zero_stops_and_queries_latest()
@@ -280,8 +280,8 @@ void test_interval_zero_stops_and_queries_latest()
     MockCache cache{};
     cache.sentences[0] = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n";
     cache.oversize[1] = true; // SATSINFOA > 256B
-    gnss.set_query_hook(&query_cb, &cache);
-    gnss.set_mask_hook(&mask_cb, &cache);
+    gnss.setQueryHook(&query_cb, &cache);
+    gnss.setMaskHook(&mask_cb, &cache);
 
     CommandRouter router;
     const std::array<RouteTable, 1> tables = {gnss.table()};
@@ -292,14 +292,14 @@ void test_interval_zero_stops_and_queries_latest()
         static_cast<uint8_t>(DispatchResult::kReply),
         static_cast<uint8_t>(router.handle(
             Role::kPhone, make_req(kMsgGga, proto::msg_type::kQuery, 1), kTimeBase, reply)));
-    TEST_ASSERT_EQUAL_HEX32(1U << 0U, gnss.active_mask());
+    TEST_ASSERT_EQUAL_HEX32(1U << 0U, gnss.activeMask());
 
     // interval=0：先关闭 0x04 订阅，再返回 <=256B 最新原句。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
                             static_cast<uint8_t>(router.handle(
                                 Role::kPhone, make_req(kMsgGga, proto::msg_type::kQuery, 0),
                                 kTimeBase + kStepMs, reply)));
-    TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
+    TEST_ASSERT_EQUAL_HEX32(0U, gnss.activeMask());
     assert_reply_payload(reply, kMsgGga, proto::msg_type::kQueryRes, cache.sentences[0]);
 
     // 0x21(GST) 尚无缓存 -> 返回 02 02。
@@ -315,7 +315,7 @@ void test_interval_zero_stops_and_queries_latest()
                                 Role::kPhone, make_req(kMsgSat, proto::msg_type::kQuery, 0),
                                 kTimeBase + (3U * kStepMs), reply)));
     assert_reply_result(reply, kMsgSat, proto::msg_type::kQueryRes, kResultFail);
-    TEST_ASSERT_EQUAL_UINT32(1U, gnss.query_oversize_count());
+    TEST_ASSERT_EQUAL_UINT32(1U, gnss.queryOversizeCount());
 }
 
 } // namespace

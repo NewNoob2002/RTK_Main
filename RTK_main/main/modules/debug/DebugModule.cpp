@@ -501,11 +501,11 @@ void DebugModule::pump_report(uint32_t now_ms) noexcept
     const uint32_t frames = rtcm.frames - last_rtcm_frames_;
     const uint32_t bytes = rtcm.bytes - last_rtcm_bytes_;
     const uint32_t dropped = rtcm.rejected_role - last_rtcm_drop_;
-    const uint32_t prod = stats.frames_rx - last_prod_frames_;
+    const uint32_t prod = stats.framesRx - last_prod_frames_;
     last_rtcm_frames_ = rtcm.frames;
     last_rtcm_bytes_ = rtcm.bytes;
     last_rtcm_drop_ = rtcm.rejected_role;
-    last_prod_frames_ = stats.frames_rx;
+    last_prod_frames_ = stats.framesRx;
 
     // 先换算成“每秒”，再拆成整数字节/十分之一 KB，避免浮点与 64 位开销。
     const uint32_t kbps10 =

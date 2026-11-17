@@ -417,7 +417,7 @@ bool gen_unicore_hash_xor(std::span<uint8_t> out, std::string_view body, bool lo
 bool gen_product(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender, uint8_t type,
                  std::span<const uint8_t> payload, std::size_t &out_len) noexcept
 {
-    return proto::build_frame(out, msg_id, sender, type, payload, out_len) == fw::Status::kOk;
+    return proto::buildFrame(out, msg_id, sender, type, payload, out_len) == fw::Status::kOk;
 }
 
 } // namespace demux_test

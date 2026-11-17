@@ -134,17 +134,17 @@ void add_unique_decoder(std::array<const demux::Decoder *, demux::kMaxDecoders> 
 
 } // namespace
 
-void GnssModule::DemuxSink::on_frame(const demux::Decoder &decoder, uint8_t /*index*/,
-                                     std::span<const uint8_t> frame) noexcept
+void GnssModule::DemuxSink::onFrame(const demux::Decoder &decoder, uint8_t /*index*/,
+                                    std::span<const uint8_t> frame) noexcept
 {
     if (owner_ != nullptr) {
         owner_->handle_frame(decoder, frame);
     }
 }
 
-void GnssModule::DemuxSink::on_reject(const demux::Decoder &decoder, uint8_t /*index*/,
-                                      std::span<const uint8_t> prefix, demux::RejectCause cause,
-                                      bool last) noexcept
+void GnssModule::DemuxSink::onReject(const demux::Decoder &decoder, uint8_t /*index*/,
+                                     std::span<const uint8_t> prefix, demux::RejectCause cause,
+                                     bool last) noexcept
 {
     if (owner_ != nullptr) {
         owner_->handle_reject(decoder, prefix, cause, last);
@@ -379,10 +379,10 @@ void GnssModule::wait(uint32_t max_ms) noexcept
                    static_cast<uint32_t>(err));
     }
     const auto &dstats = stream_demux().stats();
-    if (dstats.unknown_bytes > prev_unknown_bytes_) {
+    if (dstats.unknownBytes > prev_unknown_bytes_) {
         FW_LOGD(fw::TraceCat::kGnss, "<rx> %lu unknown bytes dropped",
-                static_cast<unsigned long>(dstats.unknown_bytes - prev_unknown_bytes_));
-        prev_unknown_bytes_ = dstats.unknown_bytes;
+                static_cast<unsigned long>(dstats.unknownBytes - prev_unknown_bytes_));
+        prev_unknown_bytes_ = dstats.unknownBytes;
     }
 }
 
@@ -1080,7 +1080,7 @@ void GnssModule::publish_status(uint32_t now_ms) noexcept
     st.uart_rx_bytes = uart_rx_bytes_;
     st.uart_tx_bytes = uart_tx_bytes_;
     const auto &dstats = stream_demux().stats();
-    st.demux_unknown = dstats.unknown_bytes;
+    st.demux_unknown = dstats.unknownBytes;
     st.demux_resyncs = dstats.resyncs;
     st.pipe = ctx().rtcm_pipe.stats();
 

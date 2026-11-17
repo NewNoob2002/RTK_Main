@@ -10,17 +10,17 @@ namespace core {
 namespace {
 
 // 事件参数统一用 uint32_t；底层类型为 uint8_t 的枚举转宽不收窄。
-constexpr uint32_t role_value(Role role) noexcept
+constexpr uint32_t roleValue(Role role) noexcept
 {
     return static_cast<uint32_t>(role);
 }
 
-constexpr uint32_t reason_value(LinkReason reason) noexcept
+constexpr uint32_t reasonValue(LinkReason reason) noexcept
 {
     return static_cast<uint32_t>(reason);
 }
 
-void action_add(Actions &act, SessionHandle handle) noexcept
+void actionAdd(Actions &act, SessionHandle handle) noexcept
 {
     if (act.count < act.handles.size()) {
         act.handles[act.count] = handle;
@@ -28,7 +28,7 @@ void action_add(Actions &act, SessionHandle handle) noexcept
     }
 }
 
-bool contains_addr(std::span<const BtAddr> list, const BtAddr &addr) noexcept
+bool containsAddr(std::span<const BtAddr> list, const BtAddr &addr) noexcept
 {
     for (const BtAddr &entry : list) {
         if (entry == addr) {
@@ -38,14 +38,14 @@ bool contains_addr(std::span<const BtAddr> list, const BtAddr &addr) noexcept
     return false;
 }
 
-bool elapsed_exceeds(uint32_t now_ms, uint32_t then_ms, uint32_t limit_ms) noexcept
+bool elapsedExceeds(uint32_t nowMs, uint32_t thenMs, uint32_t limitMs) noexcept
 {
-    return static_cast<uint32_t>(now_ms - then_ms) > limit_ms;
+    return static_cast<uint32_t>(nowMs - thenMs) > limitMs;
 }
 
-bool elapsed_reaches(uint32_t now_ms, uint32_t then_ms, uint32_t limit_ms) noexcept
+bool elapsedReaches(uint32_t nowMs, uint32_t thenMs, uint32_t limitMs) noexcept
 {
-    return static_cast<uint32_t>(now_ms - then_ms) >= limit_ms;
+    return static_cast<uint32_t>(nowMs - thenMs) >= limitMs;
 }
 
 } // namespace
@@ -65,37 +65,37 @@ void LinkManager::init(Policy policy, std::span<const BtAddr> alarms) noexcept
     pair_start_ms_ = 0;
 }
 
-Role LinkManager::on_open(SessionHandle handle, const BtAddr &addr, uint32_t now_ms,
-                          Actions &act) noexcept
+Role LinkManager::onOpen(SessionHandle handle, const BtAddr &addr, uint32_t nowMs,
+                         Actions &act) noexcept
 {
     act.clear();
 
-    size_t free_idx = kMaxSessions;
+    size_t freeIdx = kMaxSessions;
     for (size_t i = 0; i < kMaxSessions; ++i) {
         const Session &session = sessions_[i];
-        if (session.in_use) {
+        if (session.inUse) {
             // 规则 1：重复句柄拒绝。
             if (session.handle == handle) {
-                action_add(act, handle);
+                actionAdd(act, handle);
                 return Role::kNone;
             }
-        } else if (free_idx == kMaxSessions) {
-            free_idx = i;
+        } else if (freeIdx == kMaxSessions) {
+            freeIdx = i;
         }
     }
 
     // 规则 2：会话表已满。
-    if (free_idx == kMaxSessions) {
-        action_add(act, handle);
+    if (freeIdx == kMaxSessions) {
+        actionAdd(act, handle);
         return Role::kNone;
     }
 
     const bool whitelisted =
-        contains_addr(std::span<const BtAddr>(alarms_.data(), alarm_count_), addr);
-    bool phone_online = false;
+        containsAddr(std::span<const BtAddr>(alarms_.data(), alarm_count_), addr);
+    bool phoneOnline = false;
     for (const Session &session : sessions_) {
-        if (session.in_use && (session.role == Role::kPhone)) {
-            phone_online = true;
+        if (session.inUse && (session.role == Role::kPhone)) {
+            phoneOnline = true;
             break;
         }
     }
@@ -103,68 +103,66 @@ Role LinkManager::on_open(SessionHandle handle, const BtAddr &addr, uint32_t now
     Role role = Role::kNone;
     if (whitelisted) {
         // 规则 3：白名单设备是 ALARM；手机优先策略下已有 PHONE 时拒绝。
-        if ((policy_ == Policy::kPhonePreempt) && phone_online) {
-            action_add(act, handle);
+        if ((policy_ == Policy::kPhonePreempt) && phoneOnline) {
+            actionAdd(act, handle);
             return Role::kNone;
         }
         role = Role::kAlarm;
-        trace_link(LinkTrace::kOpen, handle, role_value(role),
-                   reason_value(LinkReason::kWhitelisted));
-    } else if (!phone_online) {
+        traceLink(LinkTrace::kOpen, handle, roleValue(role), reasonValue(LinkReason::kWhitelisted));
+    } else if (!phoneOnline) {
         // 规则 4 第一支：无 PHONE 时未知设备作为 PHONE。
         role = Role::kPhone;
-        trace_link(LinkTrace::kOpen, handle, role_value(role),
-                   reason_value(LinkReason::kFirstPhone));
+        traceLink(LinkTrace::kOpen, handle, roleValue(role), reasonValue(LinkReason::kFirstPhone));
         if (policy_ == Policy::kPhonePreempt) {
             for (Session &session : sessions_) {
-                if (session.in_use && (session.role == Role::kAlarm)) {
+                if (session.inUse && (session.role == Role::kAlarm)) {
                     const uint32_t victim = session.handle;
-                    action_add(act, session.handle);
-                    session.in_use = false;
-                    trace_link(LinkTrace::kKick, victim, role_value(Role::kAlarm),
-                               reason_value(LinkReason::kPolicyPreempt));
+                    actionAdd(act, session.handle);
+                    session.inUse = false;
+                    traceLink(LinkTrace::kKick, victim, roleValue(Role::kAlarm),
+                              reasonValue(LinkReason::kPolicyPreempt));
                 }
             }
         }
     } else if (pairing_) {
         // 规则 4 第二支：手机在线且配对窗口打开，等待 HELLO。
         role = Role::kPending;
-        trace_link(LinkTrace::kOpen, handle, role_value(role),
-                   reason_value(LinkReason::kPendingHello));
+        traceLink(LinkTrace::kOpen, handle, roleValue(role),
+                  reasonValue(LinkReason::kPendingHello));
     } else {
-        action_add(act, handle);
+        actionAdd(act, handle);
         return Role::kNone;
     }
 
-    Session &session = sessions_[free_idx];
-    session.in_use = true;
+    Session &session = sessions_[freeIdx];
+    session.inUse = true;
     session.handle = handle;
     session.role = role;
     session.addr = addr;
-    session.since_ms = now_ms;
-    session.last_rx_ms = now_ms;
+    session.sinceMs = nowMs;
+    session.lastRxMs = nowMs;
     return role;
 }
 
-void LinkManager::on_close(SessionHandle handle) noexcept
+void LinkManager::onClose(SessionHandle handle) noexcept
 {
     for (Session &session : sessions_) {
-        if (session.in_use && (session.handle == handle)) {
-            trace_link(LinkTrace::kClose, handle, role_value(session.role));
-            session.in_use = false;
+        if (session.inUse && (session.handle == handle)) {
+            traceLink(LinkTrace::kClose, handle, roleValue(session.role));
+            session.inUse = false;
             return;
         }
     }
 }
 
-Role LinkManager::on_frame(SessionHandle handle, uint8_t sender, uint16_t msg_id, uint32_t now_ms,
-                           Actions &act) noexcept
+Role LinkManager::onFrame(SessionHandle handle, uint8_t sender, uint16_t msgId, uint32_t nowMs,
+                          Actions &act) noexcept
 {
     act.clear();
 
     Session *found = nullptr;
     for (Session &session : sessions_) {
-        if (session.in_use && (session.handle == handle)) {
+        if (session.inUse && (session.handle == handle)) {
             found = &session;
             break;
         }
@@ -173,88 +171,88 @@ Role LinkManager::on_frame(SessionHandle handle, uint8_t sender, uint16_t msg_id
         return Role::kNone;
     }
 
-    found->last_rx_ms = now_ms;
+    found->lastRxMs = nowMs;
 
-    if ((msg_id == kHelloMsgId) && (sender == kHelloSender)) {
+    if ((msgId == kHelloMsgId) && (sender == kHelloSender)) {
         if (found->role == Role::kAlarm) {
             return Role::kAlarm;
         }
         if (!pairing_) {
             // 配对窗口外的 HELLO：未授权报警器，断开。
-            action_add(act, handle);
-            found->in_use = false;
-            trace_link(LinkTrace::kClose, handle, role_value(found->role),
-                       reason_value(LinkReason::kOther));
+            actionAdd(act, handle);
+            found->inUse = false;
+            traceLink(LinkTrace::kClose, handle, roleValue(found->role),
+                      reasonValue(LinkReason::kOther));
             return Role::kNone;
         }
-        if (!contains_addr(std::span<const BtAddr>(alarms_.data(), alarm_count_), found->addr)) {
+        if (!containsAddr(std::span<const BtAddr>(alarms_.data(), alarm_count_), found->addr)) {
             // 白名单已满：拒绝并断开。
             if (alarm_count_ >= kMaxAlarms) {
-                action_add(act, handle);
+                actionAdd(act, handle);
                 const Role rejected = found->role;
-                found->in_use = false;
-                trace_link(LinkTrace::kClose, handle, role_value(rejected),
-                           reason_value(LinkReason::kNoSlot));
+                found->inUse = false;
+                traceLink(LinkTrace::kClose, handle, roleValue(rejected),
+                          reasonValue(LinkReason::kNoSlot));
                 return Role::kNone;
             }
             alarms_[alarm_count_] = found->addr;
             ++alarm_count_;
-            trace_link(LinkTrace::kWhitelistAdd, handle, static_cast<uint32_t>(alarm_count_));
+            traceLink(LinkTrace::kWhitelistAdd, handle, static_cast<uint32_t>(alarm_count_));
         }
-        const uint32_t previous = role_value(found->role);
+        const uint32_t previous = roleValue(found->role);
         found->role = Role::kAlarm;
-        found->since_ms = now_ms;
-        trace_link(LinkTrace::kRoleChange, handle, previous, role_value(found->role));
+        found->sinceMs = nowMs;
+        traceLink(LinkTrace::kRoleChange, handle, previous, roleValue(found->role));
         return Role::kAlarm;
     }
 
     if (found->role == Role::kPending) {
         // 等待 HELLO 的会话收到其他帧：不允许第二部手机，断开。
-        action_add(act, handle);
-        found->in_use = false;
+        actionAdd(act, handle);
+        found->inUse = false;
         return Role::kNone;
     }
 
     return found->role;
 }
 
-void LinkManager::tick(uint32_t now_ms, Actions &act) noexcept
+void LinkManager::tick(uint32_t nowMs, Actions &act) noexcept
 {
     act.clear();
 
     for (Session &session : sessions_) {
-        if (!session.in_use) {
+        if (!session.inUse) {
             continue;
         }
         if (session.role == Role::kAlarm) {
-            if (elapsed_exceeds(now_ms, session.last_rx_ms, kAlarmRxTimeoutMs)) {
-                trace_link(LinkTrace::kAlarmRxTimeout, session.handle,
-                           static_cast<uint32_t>(now_ms - session.last_rx_ms));
-                action_add(act, session.handle);
-                session.in_use = false;
+            if (elapsedExceeds(nowMs, session.lastRxMs, kAlarmRxTimeoutMs)) {
+                traceLink(LinkTrace::kAlarmRxTimeout, session.handle,
+                          static_cast<uint32_t>(nowMs - session.lastRxMs));
+                actionAdd(act, session.handle);
+                session.inUse = false;
             }
         } else if (session.role == Role::kPending) {
-            if (elapsed_exceeds(now_ms, session.since_ms, kPendingTimeoutMs)) {
-                trace_link(LinkTrace::kPendingTimeout, session.handle,
-                           static_cast<uint32_t>(now_ms - session.since_ms));
-                action_add(act, session.handle);
-                session.in_use = false;
+            if (elapsedExceeds(nowMs, session.sinceMs, kPendingTimeoutMs)) {
+                traceLink(LinkTrace::kPendingTimeout, session.handle,
+                          static_cast<uint32_t>(nowMs - session.sinceMs));
+                actionAdd(act, session.handle);
+                session.inUse = false;
             }
         } else {
             // PHONE 不因接收超时断开。
         }
     }
 
-    if (pairing_ && elapsed_reaches(now_ms, pair_start_ms_, kPairWindowMs)) {
+    if (pairing_ && elapsedReaches(nowMs, pair_start_ms_, kPairWindowMs)) {
         pairing_ = false;
-        trace_link(LinkTrace::kPairClose, 0, 1);
+        traceLink(LinkTrace::kPairClose, 0, 1);
     }
 }
 
 Role LinkManager::role(SessionHandle handle) const noexcept
 {
     for (const Session &session : sessions_) {
-        if (session.in_use && (session.handle == handle)) {
+        if (session.inUse && (session.handle == handle)) {
             return session.role;
         }
     }
@@ -265,7 +263,7 @@ size_t LinkManager::handles(Role role, std::span<SessionHandle> out) const noexc
 {
     size_t count = 0;
     for (const Session &session : sessions_) {
-        if (session.in_use && (session.role == role) && (count < out.size())) {
+        if (session.inUse && (session.role == role) && (count < out.size())) {
             out[count] = session.handle;
             ++count;
         }
@@ -273,37 +271,37 @@ size_t LinkManager::handles(Role role, std::span<SessionHandle> out) const noexc
     return count;
 }
 
-bool LinkManager::has_role(Role role) const noexcept
+bool LinkManager::hasRole(Role role) const noexcept
 {
     for (const Session &session : sessions_) {
-        if (session.in_use && (session.role == role)) {
+        if (session.inUse && (session.role == role)) {
             return true;
         }
     }
     return false;
 }
 
-void LinkManager::pair_open(uint32_t now_ms) noexcept
+void LinkManager::pairOpen(uint32_t nowMs) noexcept
 {
     pairing_ = true;
-    pair_start_ms_ = now_ms;
-    trace_link(LinkTrace::kPairOpen, 0, static_cast<uint32_t>(kPairWindowMs));
+    pair_start_ms_ = nowMs;
+    traceLink(LinkTrace::kPairOpen, 0, static_cast<uint32_t>(kPairWindowMs));
 }
 
-bool LinkManager::is_pairing() const noexcept
+bool LinkManager::isPairing() const noexcept
 {
     return pairing_;
 }
 
-void LinkManager::whitelist_clear() noexcept
+void LinkManager::whitelistClear() noexcept
 {
     alarm_count_ = 0;
-    trace_link(LinkTrace::kWhitelistClear, 0);
+    traceLink(LinkTrace::kWhitelistClear, 0);
 }
 
-WhitelistEdit LinkManager::whitelist_add(const BtAddr &addr) noexcept
+WhitelistEdit LinkManager::whitelistAdd(const BtAddr &addr) noexcept
 {
-    if (contains_addr(std::span<const BtAddr>(alarms_.data(), alarm_count_), addr)) {
+    if (containsAddr(std::span<const BtAddr>(alarms_.data(), alarm_count_), addr)) {
         return WhitelistEdit::kUnchanged;
     }
     if (alarm_count_ >= kMaxAlarms) {
@@ -311,11 +309,11 @@ WhitelistEdit LinkManager::whitelist_add(const BtAddr &addr) noexcept
     }
     alarms_[alarm_count_] = addr;
     ++alarm_count_;
-    trace_link(LinkTrace::kWhitelistAdd, 0, static_cast<uint32_t>(alarm_count_));
+    traceLink(LinkTrace::kWhitelistAdd, 0, static_cast<uint32_t>(alarm_count_));
     return WhitelistEdit::kDone;
 }
 
-WhitelistEdit LinkManager::whitelist_remove(const BtAddr &addr) noexcept
+WhitelistEdit LinkManager::whitelistRemove(const BtAddr &addr) noexcept
 {
     for (size_t i = 0; i < alarm_count_; ++i) {
         if (alarms_[i] == addr) {
@@ -325,7 +323,7 @@ WhitelistEdit LinkManager::whitelist_remove(const BtAddr &addr) noexcept
             }
             --alarm_count_;
             alarms_[alarm_count_] = BtAddr{};
-            trace_link(LinkTrace::kWhitelistRemove, 0, static_cast<uint32_t>(alarm_count_));
+            traceLink(LinkTrace::kWhitelistRemove, 0, static_cast<uint32_t>(alarm_count_));
             return WhitelistEdit::kDone;
         }
     }

@@ -27,26 +27,25 @@ public:
         last_disconnected = handle;
         return fw::Status::kOk;
     }
-    bool supports_credit() const noexcept override
+    bool supportsCredit() const noexcept override
     {
         return credit_enabled;
     }
-    fw::Status reserve_reply(core::SessionHandle handle,
-                             core::ReplyCredit &credit) noexcept override
+    fw::Status reserveReply(core::SessionHandle handle, core::ReplyCredit &credit) noexcept override
     {
         ++reserves;
         if (reserve_error != fw::Status::kOk) {
             return reserve_error;
         }
-        if (!reply_ready(handle)) {
+        if (!replyReady(handle)) {
             return fw::Status::kTimeout;
         }
         reserved = true;
         credit.capacity = proto::kMaxFrame;
         return fw::Status::kOk;
     }
-    fw::Status commit_reply(const core::ReplyCredit &credit,
-                            std::span<const uint8_t> data) noexcept override
+    fw::Status commitReply(const core::ReplyCredit &credit,
+                           std::span<const uint8_t> data) noexcept override
     {
         if (!reserved || (credit.capacity < data.size())) {
             return fw::Status::kInvalidState;
@@ -55,12 +54,12 @@ public:
         ++commits;
         return commit_status;
     }
-    void cancel_reply(const core::ReplyCredit &) noexcept override
+    void cancelReply(const core::ReplyCredit &) noexcept override
     {
         reserved = false;
         ++cancels;
     }
-    bool reply_ready(core::SessionHandle handle) const noexcept override
+    bool replyReady(core::SessionHandle handle) const noexcept override
     {
         return (handle == kSecondHandle) ? ready_second : ready;
     }
@@ -126,19 +125,19 @@ void test_credit_before_effect_and_cancel()
     const auto initialized = router.init(tables);
     TEST_ASSERT_TRUE(initialized == fw::Status::kOk);
     core::LinkService service{transport, manager, router, alarm};
-    service.on_open(kHandle, {}, 0);
+    service.onOpen(kHandle, {}, 0);
 
     std::array<uint8_t, proto::kMaxFrame> frame{};
     size_t size = 0;
     const auto built =
-        proto::build_frame(frame, kCommand, proto::sender::kApp, proto::msg_type::kSet, {}, size);
+        proto::buildFrame(frame, kCommand, proto::sender::kApp, proto::msg_type::kSet, {}, size);
     TEST_ASSERT_TRUE(built == fw::Status::kOk);
     const auto wire = std::span<const uint8_t>{frame}.first(size);
-    const size_t consumed = service.on_data(kHandle, wire, 0);
+    const size_t consumed = service.onData(kHandle, wire, 0);
     TEST_ASSERT_EQUAL(size, consumed);
     TEST_ASSERT_TRUE(service.paused(kHandle));
     service.resume(kHandle, 1);
-    const size_t tail = service.on_data(kHandle, wire, 1);
+    const size_t tail = service.onData(kHandle, wire, 1);
     TEST_ASSERT_EQUAL(0, tail);
     TEST_ASSERT_EQUAL(0, counter.effects);
 
@@ -154,30 +153,30 @@ void test_credit_before_effect_and_cancel()
 
     // 无回复命令归还信用；底层commit失败也不能重新执行副作用。
     counter.reply = false;
-    const size_t no_reply = service.on_data(kHandle, wire, 2);
+    const size_t no_reply = service.onData(kHandle, wire, 2);
     TEST_ASSERT_EQUAL(size, no_reply);
     TEST_ASSERT_EQUAL(2, counter.effects);
     TEST_ASSERT_EQUAL(1, transport.cancels);
     TEST_ASSERT_FALSE(transport.reserved);
     counter.reply = true;
     transport.commit_status = fw::Status::kIoError;
-    const size_t failed = service.on_data(kHandle, wire, 2);
+    const size_t failed = service.onData(kHandle, wire, 2);
     TEST_ASSERT_EQUAL(size, failed);
     service.resume(kHandle, 2);
     TEST_ASSERT_EQUAL(3, counter.effects);
     TEST_ASSERT_EQUAL(2, transport.commits);
-    TEST_ASSERT_EQUAL(1, service.stats().write_errors);
+    TEST_ASSERT_EQUAL(1, service.stats().writeErrors);
 
     // CLOSE后不执行等待中的完整帧，重开同句柄也不会携带旧pending。
     transport.ready = false;
-    const size_t pending = service.on_data(kHandle, wire, 2);
+    const size_t pending = service.onData(kHandle, wire, 2);
     TEST_ASSERT_EQUAL(size, pending);
-    service.on_close(kHandle);
+    service.onClose(kHandle);
     transport.ready = true;
-    service.on_open(kHandle, {}, 2);
+    service.onOpen(kHandle, {}, 2);
     service.resume(kHandle, 2);
     TEST_ASSERT_EQUAL(3, counter.effects);
-    TEST_ASSERT_EQUAL(1, service.stats().dispatch_cancelled);
+    TEST_ASSERT_EQUAL(1, service.stats().dispatchCancelled);
     TEST_ASSERT_EQUAL(0, transport.legacy_calls);
 }
 
@@ -202,25 +201,25 @@ void test_role_reject_cancels_credit_and_no_leak()
     core::CommandRouter router;
     TEST_ASSERT_TRUE(router.init(tables) == fw::Status::kOk);
     core::LinkService service{transport, manager, router, alarm};
-    service.on_open(kHandle, kAlarmAddr, 0);
+    service.onOpen(kHandle, kAlarmAddr, 0);
 
     std::array<uint8_t, proto::kMaxFrame> frame{};
     size_t size = 0;
-    TEST_ASSERT_TRUE(proto::build_frame(frame, kCommand, proto::sender::kAlarm,
-                                        proto::msg_type::kQuery, {}, size) == fw::Status::kOk);
+    TEST_ASSERT_TRUE(proto::buildFrame(frame, kCommand, proto::sender::kAlarm,
+                                       proto::msg_type::kQuery, {}, size) == fw::Status::kOk);
     const auto wire = std::span<const uint8_t>{frame}.first(size);
-    TEST_ASSERT_EQUAL(size, service.on_data(kHandle, wire, 1));
+    TEST_ASSERT_EQUAL(size, service.onData(kHandle, wire, 1));
     TEST_ASSERT_EQUAL(0, counter.effects);
     TEST_ASSERT_EQUAL(0, transport.commits);
     TEST_ASSERT_EQUAL(1, transport.cancels);
     TEST_ASSERT_FALSE(transport.reserved);
 
-    service.on_open(kSecondHandle, kPhoneAddr, kTickOpenPhone);
-    TEST_ASSERT_TRUE(proto::build_frame(frame, kCommand, proto::sender::kApp, proto::msg_type::kSet,
-                                        {}, size) == fw::Status::kOk);
+    service.onOpen(kSecondHandle, kPhoneAddr, kTickOpenPhone);
+    TEST_ASSERT_TRUE(proto::buildFrame(frame, kCommand, proto::sender::kApp, proto::msg_type::kSet,
+                                       {}, size) == fw::Status::kOk);
     TEST_ASSERT_EQUAL(size,
-                      service.on_data(kSecondHandle, std::span<const uint8_t>{frame}.first(size),
-                                      kTickPhoneFrame));
+                      service.onData(kSecondHandle, std::span<const uint8_t>{frame}.first(size),
+                                     kTickPhoneFrame));
     TEST_ASSERT_EQUAL(1, counter.effects);
     TEST_ASSERT_EQUAL(1, transport.commits);
 }
@@ -248,27 +247,27 @@ void test_two_sessions_isolated_pause_and_fair_resume()
     core::CommandRouter router;
     TEST_ASSERT_TRUE(router.init(tables) == fw::Status::kOk);
     core::LinkService service{transport, manager, router, alarm};
-    service.on_open(kHandle, kPhoneAddr, 0);
-    service.on_open(kSecondHandle, kAlarmAddr, 0);
+    service.onOpen(kHandle, kPhoneAddr, 0);
+    service.onOpen(kSecondHandle, kAlarmAddr, 0);
 
     std::array<uint8_t, proto::kMaxFrame> phone_frame{};
     size_t phone_size = 0;
-    TEST_ASSERT_TRUE(proto::build_frame(phone_frame, kCommand, proto::sender::kApp,
-                                        proto::msg_type::kSet, {}, phone_size) == fw::Status::kOk);
+    TEST_ASSERT_TRUE(proto::buildFrame(phone_frame, kCommand, proto::sender::kApp,
+                                       proto::msg_type::kSet, {}, phone_size) == fw::Status::kOk);
     TEST_ASSERT_EQUAL(
         phone_size,
-        service.on_data(kHandle, std::span<const uint8_t>{phone_frame}.first(phone_size), 1));
+        service.onData(kHandle, std::span<const uint8_t>{phone_frame}.first(phone_size), 1));
     TEST_ASSERT_TRUE(service.paused(kHandle));
     TEST_ASSERT_EQUAL(0, counter.effects);
 
     std::array<uint8_t, proto::kMaxFrame> alarm_frame{};
     size_t alarm_size = 0;
-    TEST_ASSERT_TRUE(proto::build_frame(alarm_frame, kCommand, proto::sender::kAlarm,
-                                        proto::msg_type::kSet, {}, alarm_size) == fw::Status::kOk);
+    TEST_ASSERT_TRUE(proto::buildFrame(alarm_frame, kCommand, proto::sender::kAlarm,
+                                       proto::msg_type::kSet, {}, alarm_size) == fw::Status::kOk);
     TEST_ASSERT_EQUAL(alarm_size,
-                      service.on_data(kSecondHandle,
-                                      std::span<const uint8_t>{alarm_frame}.first(alarm_size),
-                                      kTickSecond));
+                      service.onData(kSecondHandle,
+                                     std::span<const uint8_t>{alarm_frame}.first(alarm_size),
+                                     kTickSecond));
     TEST_ASSERT_FALSE(service.paused(kSecondHandle));
     TEST_ASSERT_TRUE(service.paused(kHandle));
     TEST_ASSERT_EQUAL(1, counter.effects);
@@ -296,17 +295,17 @@ void test_reserve_fatal_error_disconnects_session()
     core::CommandRouter router;
     TEST_ASSERT_TRUE(router.init(tables) == fw::Status::kOk);
     core::LinkService service{transport, manager, router, alarm};
-    service.on_open(kHandle, {}, 0);
+    service.onOpen(kHandle, {}, 0);
 
     std::array<uint8_t, proto::kMaxFrame> frame{};
     size_t size = 0;
-    TEST_ASSERT_TRUE(proto::build_frame(frame, kCommand, proto::sender::kApp, proto::msg_type::kSet,
-                                        {}, size) == fw::Status::kOk);
+    TEST_ASSERT_TRUE(proto::buildFrame(frame, kCommand, proto::sender::kApp, proto::msg_type::kSet,
+                                       {}, size) == fw::Status::kOk);
     TEST_ASSERT_EQUAL(size,
-                      service.on_data(kHandle, std::span<const uint8_t>{frame}.first(size), 1));
+                      service.onData(kHandle, std::span<const uint8_t>{frame}.first(size), 1));
     TEST_ASSERT_FALSE(service.paused(kHandle));
     TEST_ASSERT_EQUAL(0, counter.effects);
-    TEST_ASSERT_EQUAL(1, service.stats().write_errors);
+    TEST_ASSERT_EQUAL(1, service.stats().writeErrors);
     TEST_ASSERT_EQUAL(1, service.stats().disconnects);
     TEST_ASSERT_EQUAL(1, transport.disconnect_calls);
     TEST_ASSERT_EQUAL(kHandle, transport.last_disconnected);
@@ -326,14 +325,14 @@ void test_legacy_transport_compat_without_credit()
     core::CommandRouter router;
     TEST_ASSERT_TRUE(router.init(tables) == fw::Status::kOk);
     core::LinkService service{transport, manager, router, alarm};
-    service.on_open(kHandle, {}, 0);
+    service.onOpen(kHandle, {}, 0);
 
     std::array<uint8_t, proto::kMaxFrame> frame{};
     size_t size = 0;
-    TEST_ASSERT_TRUE(proto::build_frame(frame, kCommand, proto::sender::kApp, proto::msg_type::kSet,
-                                        {}, size) == fw::Status::kOk);
+    TEST_ASSERT_TRUE(proto::buildFrame(frame, kCommand, proto::sender::kApp, proto::msg_type::kSet,
+                                       {}, size) == fw::Status::kOk);
     TEST_ASSERT_EQUAL(size,
-                      service.on_data(kHandle, std::span<const uint8_t>{frame}.first(size), 1));
+                      service.onData(kHandle, std::span<const uint8_t>{frame}.first(size), 1));
     TEST_ASSERT_EQUAL(1, counter.effects);
     TEST_ASSERT_EQUAL(1, transport.writes);
     TEST_ASSERT_EQUAL(kHandle, transport.last_handle);

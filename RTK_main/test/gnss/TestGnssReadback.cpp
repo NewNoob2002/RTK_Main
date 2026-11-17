@@ -158,15 +158,15 @@ public:
     /** 帧计数上限：两个解码器用例只需前两项，多留两位避免越界。 */
     static constexpr size_t kCounters = 4U;
 
-    void on_frame(const demux::Decoder &, uint8_t index, std::span<const uint8_t>) noexcept override
+    void onFrame(const demux::Decoder &, uint8_t index, std::span<const uint8_t>) noexcept override
     {
         if (index < counters.size()) {
             ++counters[index];
         }
         ++total;
     }
-    void on_reject(const demux::Decoder &, uint8_t, std::span<const uint8_t>,
-                   demux::RejectCause cause, bool last) noexcept override
+    void onReject(const demux::Decoder &, uint8_t, std::span<const uint8_t>,
+                  demux::RejectCause cause, bool last) noexcept override
     {
         ++rejects;
         if (last) {
@@ -174,7 +174,7 @@ public:
         }
         last_cause = cause;
     }
-    void on_unknown(std::span<const uint8_t> bytes) noexcept override
+    void onUnknown(std::span<const uint8_t> bytes) noexcept override
     {
         unknown += bytes.size();
     }

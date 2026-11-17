@@ -23,7 +23,7 @@ public:
     ConfigService &operator=(ConfigService &&) = delete;
     ~ConfigService() = default;
 
-    [[nodiscard]] std::span<const uint8_t, kWorkModeLen> work_mode() const noexcept;
+    [[nodiscard]] std::span<const uint8_t, kWorkModeLen> workMode() const noexcept;
     [[nodiscard]] std::span<const uint8_t, kRadioLen> radio() const noexcept;
     [[nodiscard]] std::span<const uint8_t, kLogLen> log() const noexcept;
 

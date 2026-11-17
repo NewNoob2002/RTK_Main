@@ -143,8 +143,7 @@ gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, boo
             continue;
         }
         if (out.intervals[i] != dflt.intervals[i]) {
-            plan.period_ms[i] =
-                core::services::GnssService::interval_to_period_ms(out.intervals[i]);
+            plan.period_ms[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
             continue;
         }
         // 默认值：GGA/RMC/GSA/GST 跟定位频率（与 P3a 流动站脚本一致）；SATSINFOA 按 gnss/out 默认 5 s
@@ -158,8 +157,7 @@ gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, boo
         } else if (i == static_cast<size_t>(gnss::OutputMsg::kHeading)) {
             plan.period_ms[i] = ((caps & gnss::cap::kHeading) != 0U) ? kOneSecondMs : 0U;
         } else {
-            plan.period_ms[i] =
-                core::services::GnssService::interval_to_period_ms(out.intervals[i]);
+            plan.period_ms[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
         }
     }
     plan.period_ms[static_cast<size_t>(gnss::OutputMsg::kGsv)] = gsv ? kOneSecondMs : 0U;

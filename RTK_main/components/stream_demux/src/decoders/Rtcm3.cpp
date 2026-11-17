@@ -73,9 +73,9 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     }
 
     // 10 bit 长度：最大 1023，总长 = 3 + 1023 + 3 = 1029 = kMaxFrame，因此不需要额外超限判断。
-    const uint32_t payload_len = ((static_cast<uint32_t>(frame[1]) & kLenHiMask) << kBitsPerByte) |
-                                 static_cast<uint32_t>(frame[2]);
-    const std::size_t total = static_cast<std::size_t>(payload_len) + kHdrLen + kCrcLen;
+    const uint32_t payloadLen = ((static_cast<uint32_t>(frame[1]) & kLenHiMask) << kBitsPerByte) |
+                                static_cast<uint32_t>(frame[2]);
+    const std::size_t total = static_cast<std::size_t>(payloadLen) + kHdrLen + kCrcLen;
 
     if (frame.size() < total) {
         verdict.need = total - frame.size();
@@ -88,17 +88,17 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return bad;
     }
 
-    const std::size_t crc_ofs = total - kCrcLen;
-    const uint32_t crc_calc = crc::crc24q(frame.first(crc_ofs));
+    const std::size_t crcOfs = total - kCrcLen;
+    const uint32_t crcCalc = crc::crc24q(frame.first(crcOfs));
     // 校验值 3 B 大端；每字节 < 256，移位后仍在 uint32_t 内。
-    const uint32_t crc_rx = (static_cast<uint32_t>(frame[crc_ofs]) << 16U) |
-                            (static_cast<uint32_t>(frame[crc_ofs + 1U]) << 8U) |
-                            static_cast<uint32_t>(frame[crc_ofs + 2U]);
+    const uint32_t crcRx = (static_cast<uint32_t>(frame[crcOfs]) << 16U) |
+                           (static_cast<uint32_t>(frame[crcOfs + 1U]) << 8U) |
+                           static_cast<uint32_t>(frame[crcOfs + 2U]);
 
-    if (crc_calc != crc_rx) {
+    if (crcCalc != crcRx) {
         Verdict bad = reject(Reason::kCrc);
-        bad.received = crc_rx;
-        bad.computed = crc_calc;
+        bad.received = crcRx;
+        bad.computed = crcCalc;
         return bad;
     }
     Verdict good{};
@@ -106,7 +106,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return good;
 }
 
-void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:
@@ -135,14 +135,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 
 } // namespace
 
-bool first_byte(uint8_t byte) noexcept
+bool firstByte(uint8_t byte) noexcept
 {
     return byte == kSyncByte;
 }
 
 Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 first_byte。
+    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 firstByte。
     const Verdict verdict = judge(frame);
     need = verdict.need;
     return verdict.step;
@@ -158,7 +158,7 @@ std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcep
     if (verdict.step == Step::kFrame) {
         return text.literal("not rejected").finish();
     }
-    explain_verdict(verdict, text);
+    explainVerdict(verdict, text);
     return text.finish();
 }
 

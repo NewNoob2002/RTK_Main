@@ -103,8 +103,8 @@ public:
     std::size_t frames = 0;
     std::size_t unknown_calls = 0;
 
-    void on_frame(const demux::Decoder &decoder, uint8_t index,
-                  std::span<const uint8_t> bytes) noexcept override
+    void onFrame(const demux::Decoder &decoder, uint8_t index,
+                 std::span<const uint8_t> bytes) noexcept override
     {
         check(index < kDecoders.size());
         check(&decoder == kDecoders[index]);
@@ -298,8 +298,8 @@ void check_batching()
 
 class DefaultSink final : public demux::Sink {
 public:
-    void on_frame(const demux::Decoder &, uint8_t index,
-                  std::span<const uint8_t> bytes) noexcept override
+    void onFrame(const demux::Decoder &, uint8_t index,
+                 std::span<const uint8_t> bytes) noexcept override
     {
         last_index = index;
         check(bytes.size() == 1 && bytes[0] == '*');

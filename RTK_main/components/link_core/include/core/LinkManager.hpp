@@ -1,5 +1,5 @@
 // SPP 会话角色与策略管理（纯逻辑，无 IDF 依赖）。不调用传输层，只通过 Actions 返回要断开的句柄。
-// 时间以 now_ms 传入，所有时间比较用无符号差值以容忍 32 位回绕。线程安全：否（链路任务独占）。
+// 时间以 nowMs 传入，所有时间比较用无符号差值以容忍 32 位回绕。线程安全：否（链路任务独占）。
 // 冻结接口（ADR-0002）。实现方不得修改。
 #pragma once
 
@@ -58,58 +58,58 @@ public:
      *    - 无 PHONE：PHONE；kPhonePreempt 时把所有 ALARM 句柄放入 act 并立即从表中移除；
      *    - 已有 PHONE 且配对窗口打开：PENDING；
      *    - 否则拒绝。
-     * 新会话的 since/last_rx 都置为 now_ms。
+     * 新会话的 since/last_rx 都置为 nowMs。
      */
-    [[nodiscard]] Role on_open(SessionHandle handle, const BtAddr &addr, uint32_t now_ms,
-                               Actions &act) noexcept;
+    [[nodiscard]] Role onOpen(SessionHandle handle, const BtAddr &addr, uint32_t nowMs,
+                              Actions &act) noexcept;
 
     /** 连接关闭（任何一方发起）。未知句柄忽略。 */
-    void on_close(SessionHandle handle) noexcept;
+    void onClose(SessionHandle handle) noexcept;
 
     /**
      * 某会话收到一帧 CRC 正确的帧。返回处理后的角色。
      * - 刷新 last_rx。
-     * - msg_id == kHelloMsgId 且 sender == kHelloSender：
+     * - msgId == kHelloMsgId 且 sender == kHelloSender：
      *   ALARM 不变；PHONE/PENDING 且配对窗口打开：改为 ALARM，地址加入白名单（已存在不重复），
      *   白名单已满则断开；PHONE/PENDING 且窗口未打开：断开（未授权报警器）。
      * - 其他帧来自 PENDING：断开（不允许第二部手机）。
      * - 断开时：句柄放入 act，会话立即移除，返回 kNone。未知句柄返回 kNone 且 act 为空。
      */
-    [[nodiscard]] Role on_frame(SessionHandle handle, uint8_t sender, uint16_t msg_id,
-                                uint32_t now_ms, Actions &act) noexcept;
+    [[nodiscard]] Role onFrame(SessionHandle handle, uint8_t sender, uint16_t msgId, uint32_t nowMs,
+                               Actions &act) noexcept;
 
     /**
      * 周期调用（建议 100 ms）。ALARM 会话 now-last_rx > kAlarmRxTimeoutMs 断开；
      * PENDING 会话 now-since > kPendingTimeoutMs 断开；配对窗口 now-start >= kPairWindowMs 关闭。
      * 被断开的会话立即移除。
      */
-    void tick(uint32_t now_ms, Actions &act) noexcept;
+    void tick(uint32_t nowMs, Actions &act) noexcept;
 
     [[nodiscard]] Role role(SessionHandle handle) const noexcept;
     /** 把指定角色的句柄写入 out，返回写入数量（≤ out.size()）。 */
     [[nodiscard]] size_t handles(Role role, std::span<SessionHandle> out) const noexcept;
-    [[nodiscard]] bool has_role(Role role) const noexcept;
+    [[nodiscard]] bool hasRole(Role role) const noexcept;
 
-    void pair_open(uint32_t now_ms) noexcept; // 重复调用重新计时
-    [[nodiscard]] bool is_pairing() const noexcept;
+    void pairOpen(uint32_t nowMs) noexcept; // 重复调用重新计时
+    [[nodiscard]] bool isPairing() const noexcept;
 
-    void whitelist_clear() noexcept; // 不影响已连接会话的角色
+    void whitelistClear() noexcept; // 不影响已连接会话的角色
     /** 手动加入一条报警器地址（追加到末尾）；不影响已连接会话的角色。 */
-    [[nodiscard]] WhitelistEdit whitelist_add(const BtAddr &addr) noexcept;
+    [[nodiscard]] WhitelistEdit whitelistAdd(const BtAddr &addr) noexcept;
     /** 移除一条地址，其后条目前移保持顺序；不影响已连接会话的角色（断开后重连按新白名单判定）。 */
-    [[nodiscard]] WhitelistEdit whitelist_remove(const BtAddr &addr) noexcept;
+    [[nodiscard]] WhitelistEdit whitelistRemove(const BtAddr &addr) noexcept;
     [[nodiscard]] std::span<const BtAddr> whitelist() const noexcept;
 
     [[nodiscard]] Policy policy() const noexcept;
 
 private:
     struct Session {
-        bool in_use = false;
+        bool inUse = false;
         SessionHandle handle = 0;
         Role role = Role::kNone;
         BtAddr addr{};
-        uint32_t since_ms = 0;
-        uint32_t last_rx_ms = 0;
+        uint32_t sinceMs = 0;
+        uint32_t lastRxMs = 0;
     };
 
     std::array<Session, kMaxSessions> sessions_{};

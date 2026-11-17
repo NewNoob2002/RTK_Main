@@ -65,7 +65,7 @@ extern "C" void peer_rc_init(uint32_t seed)
 {
     reconnect::Config cfg{};
     // 单次尝试 6 s 无结果按失败处理：留出 LSTO(5 s) 余量，同时远小于协议栈 ~20 s 的 0x08 卡死
-    cfg.attempt_timeout_ms = 6000U;
+    cfg.attemptTimeoutMs = 6000U;
     static_cast<void>(s_reconnector.configure(cfg, seed));
 }
 
@@ -76,17 +76,17 @@ extern "C" void peer_rc_set_target(const uint8_t addr[PEER_RC_ADDR_LEN])
     }
     reconnect::Addr target{};
     std::copy_n(addr, reconnect::kAddrLen, target.begin());
-    s_reconnector.set_target(target);
+    s_reconnector.setTarget(target);
 }
 
 extern "C" bool peer_rc_has_target(void)
 {
-    return s_reconnector.has_target();
+    return s_reconnector.hasTarget();
 }
 
 extern "C" bool peer_rc_get_target(uint8_t out_addr[PEER_RC_ADDR_LEN])
 {
-    if ((out_addr == nullptr) || (!s_reconnector.has_target())) {
+    if ((out_addr == nullptr) || (!s_reconnector.hasTarget())) {
         return false;
     }
     const reconnect::Addr &target = s_reconnector.target();
@@ -116,22 +116,22 @@ extern "C" peer_rc_action_t peer_rc_poll(uint32_t now_ms)
 
 extern "C" peer_rc_action_t peer_rc_on_sdp_result(bool ok, uint8_t scn, uint32_t now_ms)
 {
-    return to_c_action(s_reconnector.on_sdp_result(ok, scn, now_ms));
+    return to_c_action(s_reconnector.onSdpResult(ok, scn, now_ms));
 }
 
 extern "C" peer_rc_action_t peer_rc_on_open(uint32_t now_ms)
 {
-    return to_c_action(s_reconnector.on_open(now_ms));
+    return to_c_action(s_reconnector.onOpen(now_ms));
 }
 
 extern "C" peer_rc_action_t peer_rc_on_connect_failed(uint32_t now_ms)
 {
-    return to_c_action(s_reconnector.on_connect_failed(now_ms));
+    return to_c_action(s_reconnector.onConnectFailed(now_ms));
 }
 
 extern "C" peer_rc_action_t peer_rc_on_close(uint32_t now_ms)
 {
-    return to_c_action(s_reconnector.on_close(now_ms));
+    return to_c_action(s_reconnector.onClose(now_ms));
 }
 
 extern "C" void peer_rc_get_status(uint32_t now_ms, peer_rc_status_t *out)
@@ -141,14 +141,14 @@ extern "C" void peer_rc_get_status(uint32_t now_ms, peer_rc_status_t *out)
     }
     const reconnect::Stats &st = s_reconnector.stats();
     out->state = to_c_state(s_reconnector.state());
-    out->next_attempt_in_ms = s_reconnector.next_attempt_in(now_ms);
+    out->next_attempt_in_ms = s_reconnector.nextAttemptIn(now_ms);
     out->attempts = st.attempts;
-    out->sdp_queries = st.sdp_queries;
+    out->sdp_queries = st.sdpQueries;
     out->failures = st.failures;
     out->connects = st.connects;
     out->disconnects = st.disconnects;
-    out->last_delay_ms = st.last_delay_ms;
-    out->has_target = s_reconnector.has_target();
+    out->last_delay_ms = st.lastDelayMs;
+    out->has_target = s_reconnector.hasTarget();
     if (out->has_target) {
         const reconnect::Addr &target = s_reconnector.target();
         std::copy_n(target.begin(), reconnect::kAddrLen, out->target);

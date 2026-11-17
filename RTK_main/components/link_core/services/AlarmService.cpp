@@ -23,15 +23,15 @@ inline constexpr uint8_t kResultOk = 0x01;
 inline constexpr uint8_t kResultFail = 0x02;
 
 /**
- * 组应答帧：sender 固定为 DEV，type 经 response_type 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ * 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
  * 组帧失败时把 reply.len 置 0 并返回 kNoReply（与旧 dispatcher 一致）。
  */
-inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_type,
-                                  std::span<const uint8_t> payload) noexcept
+inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
+                                 std::span<const uint8_t> payload) noexcept
 {
     size_t len = 0;
-    const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
-                                                 proto::response_type(req_type), payload, len);
+    const fw::Status status = proto::buildFrame(reply.buf, msgId, proto::sender::kDevice,
+                                                proto::responseType(reqType), payload, len);
     if (!isOk(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
@@ -41,23 +41,23 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
 }
 
 /** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
-inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type,
-                                   uint8_t value) noexcept
+inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
+                                  uint8_t value) noexcept
 {
     const std::array<uint8_t, 2> payload = {value, value};
-    return reply_build(reply, msg_id, req_type, payload);
+    return replyBuild(reply, msgId, reqType, payload);
 }
 
 /** 成功应答（0x01 0x01）。 */
-inline DispatchResult reply_ok(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+inline DispatchResult replyOk(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
-    return reply_result(reply, msg_id, req_type, kResultOk);
+    return replyResult(reply, msgId, reqType, kResultOk);
 }
 
 /** 失败应答（0x02 0x02）。 */
-inline DispatchResult reply_fail(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+inline DispatchResult replyFail(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
-    return reply_result(reply, msg_id, req_type, kResultFail);
+    return replyResult(reply, msgId, reqType, kResultFail);
 }
 
 namespace alarm = proto::alarm;
@@ -72,46 +72,46 @@ constexpr uint8_t kTestActionClear = 0x00;
 constexpr uint16_t kStatusQuerySeq = 0;
 
 /** 组报警状态结构：状态/等级来自 AlarmSource，手机在线与测试覆盖写入 flags（§5）。 */
-alarm::Status make_status(const AlarmSource &alarm_source, const LinkManager &link,
-                          const DeviceInfo &info, uint16_t seq, uint32_t now_ms) noexcept
+alarm::Status makeStatus(const AlarmSource &alarmSource, const LinkManager &link,
+                         const DeviceInfo &info, uint16_t seq, uint32_t nowMs) noexcept
 {
     alarm::Status status;
     status.seq = seq;
-    status.state = alarm_source.state();
-    status.level = alarm_source.level();
-    status.fix_quality = info.fix_quality;
-    status.battery_pct = info.battery_pct;
+    status.state = alarmSource.state();
+    status.level = alarmSource.level();
+    status.fixQuality = info.fixQuality;
+    status.batteryPct = info.batteryPct;
 
     uint8_t flags = 0;
-    if (link.has_role(Role::kPhone)) {
+    if (link.hasRole(Role::kPhone)) {
         flags = static_cast<uint8_t>(flags | alarm::kFlagPhoneOnline);
     }
-    if (alarm_source.is_override()) {
+    if (alarmSource.isOverride()) {
         flags = static_cast<uint8_t>(flags | alarm::kFlagTestOverride);
     }
     status.flags = flags;
-    status.uptime_ms = now_ms;
+    status.uptimeMs = nowMs;
     // 每次组帧都报告当前报警状态，事件里的 session 无意义（应答/推送由调用方打）。
-    trace_alarm(AlarmTrace::kState, 0, static_cast<uint32_t>(status.state),
-                static_cast<uint32_t>(status.level));
+    traceAlarm(AlarmTrace::kState, 0, static_cast<uint32_t>(status.state),
+               static_cast<uint32_t>(status.level));
     return status;
 }
 
-DispatchResult handle_status_query(const AlarmSource &alarm_source, const LinkManager &link,
-                                   const DeviceInfo &info, const proto::FrameView &frame,
-                                   uint32_t now_ms, Reply &reply) noexcept
+DispatchResult handleStatusQuery(const AlarmSource &alarmSource, const LinkManager &link,
+                                 const DeviceInfo &info, const proto::FrameView &frame,
+                                 uint32_t nowMs, Reply &reply) noexcept
 {
-    const alarm::Status status = make_status(alarm_source, link, info, kStatusQuerySeq, now_ms);
+    const alarm::Status status = makeStatus(alarmSource, link, info, kStatusQuerySeq, nowMs);
     std::array<uint8_t, alarm::kStatusLen> payload{};
-    if (alarm::encode_status(status, payload) != payload.size()) {
+    if (alarm::encodeStatus(status, payload) != payload.size()) {
         return DispatchResult::kNoReply;
     }
-    return reply_build(reply, frame.msg_id, frame.type, payload);
+    return replyBuild(reply, frame.msgId, frame.type, payload);
 }
 
-DispatchResult handle_heartbeat(const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handleHeartbeat(const proto::FrameView &frame, Reply &reply) noexcept
 {
-    const std::optional<alarm::Heartbeat> heartbeat = alarm::decode_heartbeat(frame.payload);
+    const std::optional<alarm::Heartbeat> heartbeat = alarm::decodeHeartbeat(frame.payload);
     if (heartbeat.has_value()) {
         reply.heartbeat = heartbeat;
     }
@@ -119,35 +119,35 @@ DispatchResult handle_heartbeat(const proto::FrameView &frame, Reply &reply) noe
     return DispatchResult::kNoReply;
 }
 
-DispatchResult handle_test_override(AlarmSource &alarm_source, const proto::FrameView &frame,
-                                    Reply &reply) noexcept
+DispatchResult handleTestOverride(AlarmSource &alarmSource, const proto::FrameView &frame,
+                                  Reply &reply) noexcept
 {
     if ((frame.type != msg_type::kSet) || (frame.payload.size() < kTestMsgLen)) {
-        return reply_fail(reply, frame.msg_id, frame.type);
+        return replyFail(reply, frame.msgId, frame.type);
     }
 
     const uint8_t action = frame.payload[0];
     if (action == kTestActionSet) {
-        if (!alarm_source.set_override(frame.payload[1], frame.payload[2])) {
-            return reply_fail(reply, frame.msg_id, frame.type);
+        if (!alarmSource.setOverride(frame.payload[1], frame.payload[2])) {
+            return replyFail(reply, frame.msgId, frame.type);
         }
-        trace_alarm(AlarmTrace::kOverride, 0, 1,
-                    (static_cast<uint32_t>(frame.payload[1]) << 8U) |
-                        static_cast<uint32_t>(frame.payload[2]));
-        return reply_ok(reply, frame.msg_id, frame.type);
+        traceAlarm(AlarmTrace::kOverride, 0, 1,
+                   (static_cast<uint32_t>(frame.payload[1]) << 8U) |
+                       static_cast<uint32_t>(frame.payload[2]));
+        return replyOk(reply, frame.msgId, frame.type);
     }
     if (action == kTestActionClear) {
-        alarm_source.clear_override();
-        trace_alarm(AlarmTrace::kOverride, 0, 0);
-        return reply_ok(reply, frame.msg_id, frame.type);
+        alarmSource.clearOverride();
+        traceAlarm(AlarmTrace::kOverride, 0, 0);
+        return replyOk(reply, frame.msgId, frame.type);
     }
-    return reply_fail(reply, frame.msg_id, frame.type);
+    return replyFail(reply, frame.msgId, frame.type);
 }
 
 /** 围栏本阶段预留：查询/设置均回失败（§5）。 */
-DispatchResult handle_fence(const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handleFence(const proto::FrameView &frame, Reply &reply) noexcept
 {
-    return reply_fail(reply, frame.msg_id, frame.type);
+    return replyFail(reply, frame.msgId, frame.type);
 }
 
 } // namespace
@@ -157,78 +157,78 @@ AlarmService::AlarmService(AlarmSource &alarm, const LinkManager &link,
     : alarm_(alarm), link_(link), info_(info)
 {}
 
-bool AlarmService::build_status_push(uint16_t seq, uint32_t now_ms, Reply &reply) const noexcept
+bool AlarmService::buildStatusPush(uint16_t seq, uint32_t nowMs, Reply &reply) const noexcept
 {
     reply.clear();
-    const alarm::Status status = make_status(alarm_, link_, info_, seq, now_ms);
+    const alarm::Status status = makeStatus(alarm_, link_, info_, seq, nowMs);
     std::array<uint8_t, alarm::kStatusLen> payload{};
-    if (alarm::encode_status(status, payload) != payload.size()) {
-        trace_alarm(AlarmTrace::kPushFail, 0, static_cast<uint32_t>(fw::Status::kInvalidArg));
+    if (alarm::encodeStatus(status, payload) != payload.size()) {
+        traceAlarm(AlarmTrace::kPushFail, 0, static_cast<uint32_t>(fw::Status::kInvalidArg));
         return false;
     }
 
     size_t len = 0;
-    const fw::Status result = proto::build_frame(
+    const fw::Status result = proto::buildFrame(
         reply.buf, alarm::kMsgStatus, proto::sender::kDevice, msg_type::kPush, payload, len);
     if (!isOk(result)) {
-        trace_alarm(AlarmTrace::kPushFail, 0, static_cast<uint32_t>(result));
+        traceAlarm(AlarmTrace::kPushFail, 0, static_cast<uint32_t>(result));
         return false;
     }
     reply.len = len;
     // 目标会话在写成功处由 LinkService 记录（session 0 表示“已组帧待发送”）。
-    trace_alarm(AlarmTrace::kPush, 0, static_cast<uint32_t>(status.state),
-                static_cast<uint32_t>(status.level));
+    traceAlarm(AlarmTrace::kPush, 0, static_cast<uint32_t>(status.state),
+               static_cast<uint32_t>(status.level));
     return true;
 }
 
 std::span<const Route> AlarmService::routes() noexcept
 {
-    // 冻结头只暴露 build_status_push，而 0x40 查询应答需要 AlarmSource/LinkManager/DeviceInfo 三份引用。
+    // 冻结头只暴露 buildStatusPush，而 0x40 查询应答需要 AlarmSource/LinkManager/DeviceInfo 三份引用。
     // 局部类定义在成员函数内，按 [class.access] 与成员函数具有相同访问权限，因此 static_cast 之后
     // 可以取到私有引用；每个 self 都来自 table()（RouteTable{this, ...}），类型必然是本服务实例。
     struct Handlers {
-        static DispatchResult status_query(void *self, const proto::FrameView &frame,
-                                           uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult statusQuery(void *self, const proto::FrameView &frame, uint32_t nowMs,
+                                          Reply &reply) noexcept
         {
             // 旧 dispatch_alarm：0x40 只接受 QUERY，其他 type 按角色无权处理（kDenied）。
             if (frame.type != msg_type::kQuery) {
                 return DispatchResult::kDenied;
             }
             const auto *const service = static_cast<const AlarmService *>(self);
-            return handle_status_query(service->alarm_, service->link_, service->info_, frame,
-                                       now_ms, reply);
+            return handleStatusQuery(service->alarm_, service->link_, service->info_, frame, nowMs,
+                                     reply);
         }
-        static DispatchResult heartbeat(void *self, const proto::FrameView &frame, uint32_t now_ms,
+        static DispatchResult heartbeat(void *self, const proto::FrameView &frame, uint32_t nowMs,
                                         Reply &reply) noexcept
         {
             static_cast<void>(self);
-            static_cast<void>(now_ms);
+            static_cast<void>(nowMs);
             // 旧 dispatch_alarm：0x41 只接受 PUSH，其他 type 返回 kDenied。
             if (frame.type != msg_type::kPush) {
                 return DispatchResult::kDenied;
             }
-            return handle_heartbeat(frame, reply);
+            return handleHeartbeat(frame, reply);
         }
-        static DispatchResult test_override(void *self, const proto::FrameView &frame,
-                                            uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult testOverride(void *self, const proto::FrameView &frame,
+                                           uint32_t nowMs, Reply &reply) noexcept
         {
-            static_cast<void>(now_ms);
+            static_cast<void>(nowMs);
             auto *const service = static_cast<AlarmService *>(self);
-            return handle_test_override(service->alarm_, frame, reply);
+            return handleTestOverride(service->alarm_, frame, reply);
         }
-        static DispatchResult fence(void *self, const proto::FrameView &frame, uint32_t now_ms,
+        static DispatchResult fence(void *self, const proto::FrameView &frame, uint32_t nowMs,
                                     Reply &reply) noexcept
         {
             static_cast<void>(self);
-            static_cast<void>(now_ms);
-            return handle_fence(frame, reply);
+            static_cast<void>(nowMs);
+            return handleFence(frame, reply);
         }
     };
 
     static constexpr std::array<Route, 4> kRoutes = {{
-        {alarm::kMsgStatus, kRoleAlarm, &Handlers::status_query},
+        {alarm::kMsgStatus, kRoleAlarm, &Handlers::statusQuery},
         {alarm::kMsgHeartbeat, kRoleAlarm, &Handlers::heartbeat},
-        {alarm::kMsgTest, kRolePhone, &Handlers::test_override},
+        {alarm::kMsgTest, kRolePhone, &Handlers::testOverride},
         {alarm::kMsgFence, kRolePhone, &Handlers::fence},
     }};
     return kRoutes;

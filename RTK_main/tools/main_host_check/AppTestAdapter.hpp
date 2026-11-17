@@ -189,7 +189,7 @@ void publish_snapshot(uint32_t now_ms)
     s_snapshot.demux_rtcm_rejects = demux.rtcm_rejects;
     s_snapshot.parser_crc_errors = stats.parser_crc_errors;
     s_snapshot.parser_length_errors = stats.parser_length_errors;
-    s_snapshot.rx_dropped = stats.rx_dropped;
+    s_snapshot.rx_dropped = stats.rxDropped;
 }
 void note_bt_failure()
 {

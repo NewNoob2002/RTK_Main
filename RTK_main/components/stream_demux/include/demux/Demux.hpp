@@ -24,7 +24,7 @@ inline constexpr std::size_t kMaxDecoders = 8;
  * 两个回调都在 feed()/abort() 内同步执行；数据 span 只在回调返回前有效。回调中对同一实例调用
  * init/feed/abort 返回 Error::kReentry 且不改变状态。
  */
-/** on_reject 的拒绝来源。 */
+/** onReject 的拒绝来源。 */
 enum class RejectCause : uint8_t {
     kStep = 0, // step() 返回 kReject（同步/长度/校验/非法字符；细节由 Decoder::explain 给出）
     kTooLong,  // step() 要求的长度超过 max_frame 或缓冲区容量（overflows 计数的那种）
@@ -38,14 +38,14 @@ public:
     Sink &operator=(const Sink &) = delete;
 
     /** 一条完整帧。index 为该解码器在 init 时解码器表中的下标。 */
-    virtual void on_frame(const Decoder &decoder, uint8_t index,
-                          std::span<const uint8_t> frame) noexcept = 0;
+    virtual void onFrame(const Decoder &decoder, uint8_t index,
+                         std::span<const uint8_t> frame) noexcept = 0;
 
     /**
      * 一段不属于任何已挂载协议的字节（按流顺序；同一段连续未知字节可能分多次回调）。
      * 默认实现丢弃（统计照常计数）。
      */
-    virtual void on_unknown(std::span<const uint8_t> bytes) noexcept
+    virtual void onUnknown(std::span<const uint8_t> bytes) noexcept
     {
         static_cast<void>(bytes);
     }
@@ -53,11 +53,11 @@ public:
     /**
      * 候选解码器放弃当前起点（ADR-0005 §5，可选观察钩子，默认空操作）。prefix 是被拒绝的那段前缀（以起点为首字节），
      * 只在回调期间有效；cause 说明拒绝来源；last = 该起点已没有其他候选（随后起点前移一字节重扫，resyncs+1）。
-     * 与 on_frame/on_unknown 相同的重入约束：回调中不得调用本实例的 init/feed/abort。实时路径的 Sink 应保持空操作
+     * 与 onFrame/onUnknown 相同的重入约束：回调中不得调用本实例的 init/feed/abort。实时路径的 Sink 应保持空操作
      * 或只记 trace() 事件。
      */
-    virtual void on_reject(const Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix,
-                           RejectCause cause, bool last) noexcept
+    virtual void onReject(const Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix,
+                          RejectCause cause, bool last) noexcept
     {
         static_cast<void>(decoder);
         static_cast<void>(index);
@@ -88,10 +88,10 @@ struct DecoderStats {
 /** 分流器整体统计（含未知字节与重扫次数）。 */
 struct Stats {
     std::array<DecoderStats, kMaxDecoders> decoder{};
-    uint32_t unknown_bytes = 0; // 交给 on_unknown 的字节数
-    uint32_t resyncs = 0;       // 所有候选都拒绝后起点前移重扫的次数
-    uint32_t overflows = 0;     // 解码器要求的长度超过缓冲区容量而被强制拒绝的次数
-    uint32_t aborts = 0;        // abort() 时存在半帧的次数
+    uint32_t unknownBytes = 0; // 交给 onUnknown 的字节数
+    uint32_t resyncs = 0;      // 所有候选都拒绝后起点前移重扫的次数
+    uint32_t overflows = 0;    // 解码器要求的长度超过缓冲区容量而被强制拒绝的次数
+    uint32_t aborts = 0;       // abort() 时存在半帧的次数
 };
 
 /**
@@ -136,7 +136,7 @@ public:
     }
 
     /** 清零统计，不影响解析状态。回调中调用也安全。 */
-    void reset_stats() noexcept
+    void resetStats() noexcept
     {
         stats_ = Stats{};
     }

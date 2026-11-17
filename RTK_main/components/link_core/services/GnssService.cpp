@@ -31,8 +31,8 @@ inline constexpr uint32_t kMinPositivePeriodMs = 50;
 inline constexpr uint32_t kMsPerSecond = 1000;
 
 struct MsgSpec {
-    uint16_t msg_id;
-    uint32_t default_period_ms;
+    uint16_t msgId;
+    uint32_t defaultPeriodMs;
 };
 
 constexpr std::array<MsgSpec, kGnssMsgCount> kMsgSpecs = {{
@@ -44,12 +44,12 @@ constexpr std::array<MsgSpec, kGnssMsgCount> kMsgSpecs = {{
     {kIdGsa, 3000U},
 }};
 
-inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_type,
-                                  std::span<const uint8_t> payload) noexcept
+inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
+                                 std::span<const uint8_t> payload) noexcept
 {
     size_t len = 0;
-    const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
-                                                 proto::response_type(req_type), payload, len);
+    const fw::Status status = proto::buildFrame(reply.buf, msgId, proto::sender::kDevice,
+                                                proto::responseType(reqType), payload, len);
     if (!isOk(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
@@ -58,38 +58,38 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
     return DispatchResult::kReply;
 }
 
-inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type,
-                                   uint8_t value) noexcept
+inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
+                                  uint8_t value) noexcept
 {
     const std::array<uint8_t, 2> payload = {value, value};
-    return reply_build(reply, msg_id, req_type, payload);
+    return replyBuild(reply, msgId, reqType, payload);
 }
 
 } // namespace
 
-void GnssService::set_query_hook(GnssQueryFn fn, void *ctx) noexcept
+void GnssService::setQueryHook(GnssQueryFn fn, void *ctx) noexcept
 {
     query_fn_ = fn;
     query_ctx_ = ctx;
 }
 
-void GnssService::set_mask_hook(GnssMaskChangedFn fn, void *ctx) noexcept
+void GnssService::setMaskHook(GnssMaskChangedFn fn, void *ctx) noexcept
 {
     mask_fn_ = fn;
     mask_ctx_ = ctx;
 }
 
-void GnssService::set_supported_mask(uint32_t mask) noexcept
+void GnssService::setSupportedMask(uint32_t mask) noexcept
 {
     supported_mask_ = mask & ((1U << kGnssMsgCount) - 1U);
 }
 
-uint32_t GnssService::supported_mask() const noexcept
+uint32_t GnssService::supportedMask() const noexcept
 {
     return supported_mask_;
 }
 
-void GnssService::reset_session() noexcept
+void GnssService::resetSession() noexcept
 {
     const bool changed = (active_mask_ != 0U);
     active_mask_ = 0U;
@@ -99,25 +99,25 @@ void GnssService::reset_session() noexcept
     }
 }
 
-uint32_t GnssService::active_mask() const noexcept
+uint32_t GnssService::activeMask() const noexcept
 {
     return active_mask_;
 }
 
-uint32_t GnssService::period_ms(size_t type_idx) const noexcept
+uint32_t GnssService::periodMs(size_t typeIdx) const noexcept
 {
-    if (type_idx >= kGnssMsgCount) {
+    if (typeIdx >= kGnssMsgCount) {
         return 0U;
     }
-    return periods_ms_[type_idx];
+    return periods_ms_[typeIdx];
 }
 
-uint32_t GnssService::query_oversize_count() const noexcept
+uint32_t GnssService::queryOversizeCount() const noexcept
 {
     return query_oversize_;
 }
 
-uint32_t GnssService::interval_to_period_ms(int8_t interval) noexcept
+uint32_t GnssService::intervalToPeriodMs(int8_t interval) noexcept
 {
     if (interval == 0) {
         return 0U;
@@ -131,98 +131,98 @@ uint32_t GnssService::interval_to_period_ms(int8_t interval) noexcept
     return std::max(kMinPositivePeriodMs, kMsPerSecond / hz);
 }
 
-std::optional<size_t> GnssService::type_index_of(uint16_t msg_id) noexcept
+std::optional<size_t> GnssService::typeIndexOf(uint16_t msgId) noexcept
 {
     for (size_t i = 0; i < kMsgSpecs.size(); ++i) {
-        if (kMsgSpecs[i].msg_id == msg_id) {
+        if (kMsgSpecs[i].msgId == msgId) {
             return i;
         }
     }
     return std::nullopt;
 }
 
-uint16_t GnssService::msg_id_at(size_t type_idx) noexcept
+uint16_t GnssService::msgIdAt(size_t typeIdx) noexcept
 {
-    if (type_idx >= kMsgSpecs.size()) {
+    if (typeIdx >= kMsgSpecs.size()) {
         return 0U;
     }
-    return kMsgSpecs[type_idx].msg_id;
+    return kMsgSpecs[typeIdx].msgId;
 }
 
-uint32_t GnssService::default_period_ms(size_t type_idx) noexcept
+uint32_t GnssService::defaultPeriodMs(size_t typeIdx) noexcept
 {
-    if (type_idx >= kMsgSpecs.size()) {
+    if (typeIdx >= kMsgSpecs.size()) {
         return 0U;
     }
-    return kMsgSpecs[type_idx].default_period_ms;
+    return kMsgSpecs[typeIdx].defaultPeriodMs;
 }
 
-DispatchResult GnssService::handle_frame(const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult GnssService::handleFrame(const proto::FrameView &frame, Reply &reply) noexcept
 {
     if ((frame.type != proto::msg_type::kQuery) && (frame.type != proto::msg_type::kSet)) {
-        return reply_result(reply, frame.msg_id, frame.type, kResultFail);
+        return replyResult(reply, frame.msgId, frame.type, kResultFail);
     }
 
-    const std::optional<size_t> idx_opt = type_index_of(frame.msg_id);
-    if (!idx_opt.has_value()) {
+    const std::optional<size_t> idxOpt = typeIndexOf(frame.msgId);
+    if (!idxOpt.has_value()) {
         return DispatchResult::kNoReply;
     }
-    const size_t idx = *idx_opt;
+    const size_t idx = *idxOpt;
     const uint32_t bit = 1U << idx;
 
-    // 协议第 19 字节按有符号 char 解释：先保位模式转为 int8_t，供 interval_to_period_ms 解析。
+    // 协议第 19 字节按有符号 char 解释：先保位模式转为 int8_t，供 intervalToPeriodMs 解析。
     const auto interval = static_cast<int8_t>(frame.interval);
     if (interval == 0) {
-        const uint32_t next_mask = active_mask_ & ~bit;
-        const bool changed = (next_mask != active_mask_);
-        active_mask_ = next_mask;
+        const uint32_t nextMask = active_mask_ & ~bit;
+        const bool changed = (nextMask != active_mask_);
+        active_mask_ = nextMask;
         periods_ms_[idx] = 0U;
         if (changed && (mask_fn_ != nullptr)) {
             mask_fn_(mask_ctx_, active_mask_);
         }
 
         if ((supported_mask_ & bit) == 0U) {
-            return reply_result(reply, frame.msg_id, frame.type, kResultFail);
+            return replyResult(reply, frame.msgId, frame.type, kResultFail);
         }
         if (query_fn_ == nullptr) {
-            return reply_result(reply, frame.msg_id, frame.type, kResultFail);
+            return replyResult(reply, frame.msgId, frame.type, kResultFail);
         }
 
         std::array<uint8_t, proto::kMaxPayload> buf{};
-        const GnssQueryResult q = query_fn_(query_ctx_, frame.msg_id, buf);
+        const GnssQueryResult q = query_fn_(query_ctx_, frame.msgId, buf);
         if (q.oversize) {
             ++query_oversize_;
-            return reply_result(reply, frame.msg_id, frame.type, kResultFail);
+            return replyResult(reply, frame.msgId, frame.type, kResultFail);
         }
         if (!q.ok || (q.len == 0U) || (q.len > buf.size())) {
-            return reply_result(reply, frame.msg_id, frame.type, kResultFail);
+            return replyResult(reply, frame.msgId, frame.type, kResultFail);
         }
-        return reply_build(reply, frame.msg_id, frame.type,
-                           std::span<const uint8_t>{buf.data(), q.len});
+        return replyBuild(reply, frame.msgId, frame.type,
+                          std::span<const uint8_t>{buf.data(), q.len});
     }
 
     if ((supported_mask_ & bit) == 0U) {
-        return reply_result(reply, frame.msg_id, frame.type, kResultFail);
+        return replyResult(reply, frame.msgId, frame.type, kResultFail);
     }
 
-    periods_ms_[idx] = interval_to_period_ms(interval);
-    const uint32_t next_mask = active_mask_ | bit;
-    const bool changed = (next_mask != active_mask_);
-    active_mask_ = next_mask;
+    periods_ms_[idx] = intervalToPeriodMs(interval);
+    const uint32_t nextMask = active_mask_ | bit;
+    const bool changed = (nextMask != active_mask_);
+    active_mask_ = nextMask;
     if (changed && (mask_fn_ != nullptr)) {
         mask_fn_(mask_ctx_, active_mask_);
     }
-    return reply_result(reply, frame.msg_id, frame.type, kResultOk);
+    return replyResult(reply, frame.msgId, frame.type, kResultOk);
 }
 
 std::span<const Route> GnssService::routes() noexcept
 {
     struct Handlers {
-        static DispatchResult handle(void *self, const proto::FrameView &frame, uint32_t now_ms,
+        static DispatchResult handle(void *self, const proto::FrameView &frame, uint32_t nowMs,
                                      Reply &reply) noexcept
         {
-            static_cast<void>(now_ms);
-            return static_cast<GnssService *>(self)->handle_frame(frame, reply);
+            static_cast<void>(nowMs);
+            return static_cast<GnssService *>(self)->handleFrame(frame, reply);
         }
     };
 

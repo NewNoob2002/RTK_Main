@@ -76,7 +76,8 @@ std::string with_checksum(const std::string &body, bool include_dollar = false)
     return "$" + body + tail;
 }
 
-std::string command_reply(const std::string &echo, const std::string &text, bool include_dollar = false)
+std::string command_reply(const std::string &echo, const std::string &text,
+                          bool include_dollar = false)
 {
     return with_checksum("command," + echo + ",response: " + text, include_dollar);
 }
@@ -257,12 +258,13 @@ bool write_family(const gnss::Dialect &dialect, const std::string &dir)
                             ++item.step_count;
                         }
                         if (item.step_count == 0) {
-                            std::fprintf(stderr, "%s: rover_step 对 %s 一步都没有生成\n", dialect.name,
-                                         gnss::model_name(model));
+                            std::fprintf(stderr, "%s: rover_step 对 %s 一步都没有生成\n",
+                                         dialect.name, gnss::model_name(model));
                             return false;
                         }
                         if (item.step_count == kMaxSteps) {
-                            std::fprintf(stderr, "%s: rover 脚本超过 %zu 步\n", dialect.name, kMaxSteps);
+                            std::fprintf(stderr, "%s: rover 脚本超过 %zu 步\n", dialect.name,
+                                         kMaxSteps);
                             return false;
                         }
                         cases.push_back(item);
@@ -276,7 +278,8 @@ bool write_family(const gnss::Dialect &dialect, const std::string &dir)
 
     // 应答/探测样本按家族给：沿用旧测试里出现过的真实样本与反例。
     gnss::ProbeResult result{};
-    const auto record_probe = [&](std::string decoder, std::span<const uint8_t> frame, const demux::Decoder &dec) {
+    const auto record_probe = [&](std::string decoder, std::span<const uint8_t> frame,
+                                  const demux::Decoder &dec) {
         const bool hit = dialect.match_probe(dec, frame, result);
         ProbeMatchText text{};
         text.decoder = std::move(decoder);
@@ -289,10 +292,11 @@ bool write_family(const gnss::Dialect &dialect, const std::string &dir)
         result = gnss::ProbeResult{};
         probes.push_back(text);
     };
-    const auto record_reply = [&](std::string decoder, std::string frame, std::string sent, const demux::Decoder &dec) {
+    const auto record_reply = [&](std::string decoder, std::string frame, std::string sent,
+                                  const demux::Decoder &dec) {
         const gnss::Reply reply = dialect.match_reply(dec, bytes_of(frame), bytes_of(sent));
-        replies.push_back(
-            ReplyText{std::move(decoder), std::move(frame), std::move(sent), static_cast<uint8_t>(reply)});
+        replies.push_back(ReplyText{std::move(decoder), std::move(frame), std::move(sent),
+                                    static_cast<uint8_t>(reply)});
     };
 
     if (dialect.family == gnss::Family::kUnicore) {
@@ -306,18 +310,23 @@ bool write_family(const gnss::Dialect &dialect, const std::string &dir)
             "#VERSIONA,0,GPS,UNKNOWN,0,0,0,0,0,249;\"UM980\",\"R4.10Build11833\",\"HRPT00-S10C-P\","
             "\"2310415000001-MD22A2244202679\",\"ff3b7c6f3c5fd90b\",\"2023/11/24\"*3f55fb4d";
         record_probe("kUnicoreHash", bytes_of(um980), demux::unicore_hash::kDecoder);
-        const std::string other = "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"OEM719\",\"1\",\"2\"*12345678";
+        const std::string other =
+            "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"OEM719\",\"1\",\"2\"*12345678";
         record_probe("kUnicoreHash", bytes_of(other), demux::unicore_hash::kDecoder);
 
         const std::string sent = "UNLOG COM2\r\n";
-        record_reply("kUnicoreResp", command_reply("UNLOG COM2", "OK"), sent, gnss::unicore::kResponseDecoder);
+        record_reply("kUnicoreResp", command_reply("UNLOG COM2", "OK"), sent,
+                     gnss::unicore::kResponseDecoder);
         // UM980 R4.10 实测把 '$' 算进校验（含 '$' 的 XOR）。
         record_reply("kUnicoreResp", command_reply("VERSIONA", "OK", true), "VERSIONA\r\n",
                      gnss::unicore::kResponseDecoder);
-        record_reply("kUnicoreResp", command_reply("UNLOG COM2", "ERROR"), sent, gnss::unicore::kResponseDecoder);
-        record_reply("kUnicoreResp", command_reply("OTHER", "OK"), sent, gnss::unicore::kResponseDecoder);
+        record_reply("kUnicoreResp", command_reply("UNLOG COM2", "ERROR"), sent,
+                     gnss::unicore::kResponseDecoder);
+        record_reply("kUnicoreResp", command_reply("OTHER", "OK"), sent,
+                     gnss::unicore::kResponseDecoder);
         record_reply("kNmea", command_reply("UNLOG COM2", "OK"), sent, demux::nmea::kDecoder);
-        record_reply("kUnicoreResp", "$command,UNLOG COM2,response: OK*", sent, gnss::unicore::kResponseDecoder);
+        record_reply("kUnicoreResp", "$command,UNLOG COM2,response: OK*", sent,
+                     gnss::unicore::kResponseDecoder);
         record_reply("kUnicoreResp", command_reply("UNLOG COM2", "OK"), "UNLOG COM3\r\n",
                      gnss::unicore::kResponseDecoder);
     } else if (dialect.family == gnss::Family::kUblox) {
@@ -334,14 +343,17 @@ bool write_family(const gnss::Dialect &dialect, const std::string &dir)
         record_reply("kUbx", as_text(as_bytes(ack)), "", demux::ubx::kDecoder);
         record_reply("kUbx", as_text(as_bytes(nak)), "", demux::ubx::kDecoder);
         record_reply("kUbx", as_text(as_bytes(ack_other)), "", demux::ubx::kDecoder);
-        record_reply("kUbx", as_text(as_bytes(ack).first(ack.size() - 1)), "", demux::ubx::kDecoder);
+        record_reply("kUbx", as_text(as_bytes(ack).first(ack.size() - 1)), "",
+                     demux::ubx::kDecoder);
         record_reply("kNmea", as_text(as_bytes(ack)), "", demux::nmea::kDecoder);
     } else if (dialect.family == gnss::Family::kComnav) {
-        const std::string version = "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"K803\",\"1\",\"2\"*12345678\r\n";
+        const std::string version =
+            "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"K803\",\"1\",\"2\"*12345678\r\n";
         record_probe("kUnicoreHash", bytes_of(version), demux::unicore_hash::kDecoder);
         record_probe("kNmea", bytes_of(version), demux::nmea::kDecoder);
         record_probe("kUnicoreHash", bytes_of(version).first(24), demux::unicore_hash::kDecoder);
-        const std::string other = "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"OEM719\",\"1\",\"2\"*12345678\r\n";
+        const std::string other =
+            "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"OEM719\",\"1\",\"2\"*12345678\r\n";
         record_probe("kUnicoreHash", bytes_of(other), demux::unicore_hash::kDecoder);
 
         record_reply("kComnavPrompt", "<OK\r\n", "", gnss::comnav::kPromptDecoder);
@@ -361,53 +373,65 @@ bool write_family(const gnss::Dialect &dialect, const std::string &dir)
         std::fprintf(stderr, "无法写 %s\n", path.c_str());
         return false;
     }
-    std::fprintf(file, "// 黄金向量 %s（ADR-0012 P3a）：由 test/gnss/golden/GoldenGen.cpp 在基线 4cf1320 的\n",
+    std::fprintf(
+        file,
+        "// 黄金向量 %s（ADR-0012 P3a）：由 test/gnss/golden/GoldenGen.cpp 在基线 4cf1320 的\n",
+        dialect.name);
+    std::fprintf(file, "// ADR-0010 方言实现（%s）上导出。测试只读；不得为迁就新实现修改本文件。\n",
                  dialect.name);
-    std::fprintf(file, "// ADR-0010 方言实现（%s）上导出。测试只读；不得为迁就新实现修改本文件。\n", dialect.name);
     std::fprintf(file, "// 家族标签 %s。\n", tag);
-    std::fprintf(file, "// 组合数：rover %zu，步骤 %zu；样本：探测 %zu，应答 %zu；能力位 %zu。\n", cases.size(),
-                 steps.size(), probes.size(), replies.size(), caps.size());
+    std::fprintf(file, "// 组合数：rover %zu，步骤 %zu；样本：探测 %zu，应答 %zu；能力位 %zu。\n",
+                 cases.size(), steps.size(), probes.size(), replies.size(), caps.size());
     std::fprintf(file, "namespace golden_%s {\n\n", tag);
 
-    std::fprintf(file, "inline constexpr golden::Probe kProbe{%s, %s};\n\n", quoted(probe_cmd.view()).c_str(),
-                 probe_ok ? "true" : "false");
+    std::fprintf(file, "inline constexpr golden::Probe kProbe{%s, %s};\n\n",
+                 quoted(probe_cmd.view()).c_str(), probe_ok ? "true" : "false");
 
     std::fprintf(file, "inline constexpr std::array<golden::Step, %zu> kSteps{\n{\n", steps.size());
     for (const StepText &step : steps) {
-        std::fprintf(file, "    {%s, %s, %u, %lu},\n", step.bytes.c_str(), step.expect_reply ? "true" : "false",
-                     static_cast<unsigned>(step.timeout_ms), static_cast<unsigned long>(step.switch_baud));
+        std::fprintf(file, "    {%s, %s, %u, %lu},\n", step.bytes.c_str(),
+                     step.expect_reply ? "true" : "false", static_cast<unsigned>(step.timeout_ms),
+                     static_cast<unsigned long>(step.switch_baud));
     }
     std::fprintf(file, "}\n};\n\n");
 
     std::fprintf(file, "// model / rate_hz / gsv / port / port_baud / step_first / step_count\n");
-    std::fprintf(file, "inline constexpr std::array<golden::RoverCase, %zu> kRover{\n{\n", cases.size());
+    std::fprintf(file, "inline constexpr std::array<golden::RoverCase, %zu> kRover{\n{\n",
+                 cases.size());
     for (const CaseText &item : cases) {
-        std::fprintf(file, "    {%u, %u, %s, %u, %lu, %u, %u}, // %s\n", static_cast<unsigned>(item.model),
-                     static_cast<unsigned>(item.rate_hz), item.gsv ? "true" : "false", static_cast<unsigned>(item.port),
-                     static_cast<unsigned long>(item.port_baud), static_cast<unsigned>(item.step_first),
-                     static_cast<unsigned>(item.step_count), gnss::model_name(item.model));
+        std::fprintf(file, "    {%u, %u, %s, %u, %lu, %u, %u}, // %s\n",
+                     static_cast<unsigned>(item.model), static_cast<unsigned>(item.rate_hz),
+                     item.gsv ? "true" : "false", static_cast<unsigned>(item.port),
+                     static_cast<unsigned long>(item.port_baud),
+                     static_cast<unsigned>(item.step_first), static_cast<unsigned>(item.step_count),
+                     gnss::model_name(item.model));
     }
     std::fprintf(file, "}\n};\n\n");
 
     std::fprintf(file, "// decoder / frame / hit / model / fw\n");
-    std::fprintf(file, "inline constexpr std::array<golden::ProbeMatchCase, %zu> kProbeMatch{\n{\n", probes.size());
+    std::fprintf(file, "inline constexpr std::array<golden::ProbeMatchCase, %zu> kProbeMatch{\n{\n",
+                 probes.size());
     for (const ProbeMatchText &item : probes) {
-        std::fprintf(file, "    {golden::DecoderKind::%s, %s, %s, %u, \"%s\"},\n", item.decoder.c_str(),
-                     quoted(bytes_of(item.frame)).c_str(), item.hit ? "true" : "false",
-                     static_cast<unsigned>(item.model), item.fw.c_str());
+        std::fprintf(file, "    {golden::DecoderKind::%s, %s, %s, %u, \"%s\"},\n",
+                     item.decoder.c_str(), quoted(bytes_of(item.frame)).c_str(),
+                     item.hit ? "true" : "false", static_cast<unsigned>(item.model),
+                     item.fw.c_str());
     }
     std::fprintf(file, "}\n};\n\n");
 
     std::fprintf(file, "// decoder / frame / sent / ack\n");
-    std::fprintf(file, "inline constexpr std::array<golden::ReplyCase, %zu> kReply{\n{\n", replies.size());
+    std::fprintf(file, "inline constexpr std::array<golden::ReplyCase, %zu> kReply{\n{\n",
+                 replies.size());
     for (const ReplyText &item : replies) {
-        std::fprintf(file, "    {golden::DecoderKind::%s, %s, %s, %u}, // %s\n", item.decoder.c_str(),
-                     quoted(bytes_of(item.frame)).c_str(), quoted(bytes_of(item.sent)).c_str(),
-                     static_cast<unsigned>(item.ack), ack_name(static_cast<gnss::Reply>(item.ack)));
+        std::fprintf(file, "    {golden::DecoderKind::%s, %s, %s, %u}, // %s\n",
+                     item.decoder.c_str(), quoted(bytes_of(item.frame)).c_str(),
+                     quoted(bytes_of(item.sent)).c_str(), static_cast<unsigned>(item.ack),
+                     ack_name(static_cast<gnss::Reply>(item.ack)));
     }
     std::fprintf(file, "}\n};\n\n");
 
-    std::fprintf(file, "inline constexpr std::array<golden::CapsCase, %zu> kCaps{\n{\n", caps.size());
+    std::fprintf(file, "inline constexpr std::array<golden::CapsCase, %zu> kCaps{\n{\n",
+                 caps.size());
     for (const CapsText &item : caps) {
         std::fprintf(file, "    {%u, %lu}, // %s\n", static_cast<unsigned>(item.model),
                      static_cast<unsigned long>(item.caps), gnss::model_name(item.model));
@@ -415,8 +439,8 @@ bool write_family(const gnss::Dialect &dialect, const std::string &dir)
     std::fprintf(file, "}\n};\n\n}  // namespace golden_%s\n", tag);
 
     const bool closed = std::fclose(file) == 0;
-    std::printf("%s: %zu 组 rover（%zu 步），%zu 个探测样本，%zu 个应答样本\n", path.c_str(), cases.size(),
-                steps.size(), probes.size(), replies.size());
+    std::printf("%s: %zu 组 rover（%zu 步），%zu 个探测样本，%zu 个应答样本\n", path.c_str(),
+                cases.size(), steps.size(), probes.size(), replies.size());
     return closed;
 }
 

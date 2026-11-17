@@ -43,7 +43,7 @@ static void test_crc32_known_and_segmented()
 
     TEST_ASSERT_EQUAL_HEX32(0xCBF43926U, demux_test::crc32_ieee(kVec));
     TEST_ASSERT_EQUAL_HEX32(0x2DFD2D88U, demux_test::crc32_novatel(kVec));
-    TEST_ASSERT_EQUAL_HEX32(0x2DFD2D88U, demux::crc::crc32_novatel(kVec));
+    TEST_ASSERT_EQUAL_HEX32(0x2DFD2D88U, demux::crc::crc32Novatel(kVec));
 
     for (std::size_t i = 0U; i < kUnicoreVer.size(); ++i) {
         // ASCII 字符按无符号字节 0..255 解释
@@ -51,18 +51,18 @@ static void test_crc32_known_and_segmented()
     }
     const std::span<const uint8_t> ver_span(s_ver_bytes.data(), kUnicoreVer.size());
     TEST_ASSERT_EQUAL_HEX32(0x7432D4EDU, demux_test::crc32_novatel(ver_span));
-    TEST_ASSERT_EQUAL_HEX32(0x7432D4EDU, demux::crc::crc32_novatel(ver_span));
+    TEST_ASSERT_EQUAL_HEX32(0x7432D4EDU, demux::crc::crc32Novatel(ver_span));
 
     TEST_ASSERT_EQUAL_HEX32(0U, demux_test::crc32_ieee({}));
     TEST_ASSERT_EQUAL_HEX32(0U, demux_test::crc32_novatel({}));
-    TEST_ASSERT_EQUAL_HEX32(0U, demux::crc::crc32_novatel({}));
-    TEST_ASSERT_EQUAL_HEX32(0x12345678U, demux::crc::crc32_novatel({}, 0x12345678U));
+    TEST_ASSERT_EQUAL_HEX32(0U, demux::crc::crc32Novatel({}));
+    TEST_ASSERT_EQUAL_HEX32(0x12345678U, demux::crc::crc32Novatel({}, 0x12345678U));
 
     // 验证 NovAtel CRC-32 分段累计
     const std::span<const uint8_t> full(kVec);
     for (std::size_t split = 0U; split <= kVec.size(); ++split) {
-        const uint32_t part = demux::crc::crc32_novatel(full.subspan(0, split));
-        const uint32_t total = demux::crc::crc32_novatel(full.subspan(split), part);
+        const uint32_t part = demux::crc::crc32Novatel(full.subspan(0, split));
+        const uint32_t total = demux::crc::crc32Novatel(full.subspan(split), part);
         TEST_ASSERT_EQUAL_HEX32(0x2DFD2D88U, total);
     }
 }
@@ -81,14 +81,14 @@ static void test_crc_cross_check_random_bytes()
 
     const std::span<const uint8_t> data(buf);
     TEST_ASSERT_EQUAL_HEX32(demux_test::crc24q(data), demux::crc::crc24q(data));
-    TEST_ASSERT_EQUAL_HEX32(demux_test::crc32_novatel(data), demux::crc::crc32_novatel(data));
+    TEST_ASSERT_EQUAL_HEX32(demux_test::crc32_novatel(data), demux::crc::crc32Novatel(data));
 
     const uint32_t c24_p1 = demux::crc::crc24q(data.subspan(0, 77));
     TEST_ASSERT_EQUAL_HEX32(demux_test::crc24q(data), demux::crc::crc24q(data.subspan(77), c24_p1));
 
-    const uint32_t c32_p1 = demux::crc::crc32_novatel(data.subspan(0, 129));
+    const uint32_t c32_p1 = demux::crc::crc32Novatel(data.subspan(0, 129));
     TEST_ASSERT_EQUAL_HEX32(demux_test::crc32_novatel(data),
-                            demux::crc::crc32_novatel(data.subspan(129), c32_p1));
+                            demux::crc::crc32Novatel(data.subspan(129), c32_p1));
 }
 
 static void test_xor_and_ubx_ck()

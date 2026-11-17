@@ -303,18 +303,18 @@ void explain_verdict(const ResponseVerdict &verdict, demux::text_writer::TextWri
         break;
     case ResponseReason::kPrefix:
         text.literal("byte ").decimal(verdict.offset).literal(" is ");
-        text.byte_value(verdict.received).literal(", expected ");
-        text.byte_value(verdict.computed);
+        text.byteValue(verdict.received).literal(", expected ");
+        text.byteValue(verdict.computed);
         if (verdict.alt != 0U) {
             text.literal(" or ");
-            text.byte_value(verdict.alt);
+            text.byteValue(verdict.alt);
         }
         break;
     case ResponseReason::kTail:
         text.literal("missing \"*hh\\r\\n\" tail before byte ")
             .decimal(verdict.offset)
             .literal(" (");
-        text.byte_value(verdict.received).literal(")");
+        text.byteValue(verdict.received).literal(")");
         break;
     case ResponseReason::kBody:
         text.literal("illegal byte ")

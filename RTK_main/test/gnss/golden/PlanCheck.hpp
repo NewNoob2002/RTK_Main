@@ -27,8 +27,8 @@ inline constexpr uint8_t kRate20Hz = 20U;
 /** 控制台只允许这几档频率（main 的 is_valid_rate_hz）；其余频率不在本轮比对范围。 */
 inline bool rate_supported(uint8_t rate_hz) noexcept
 {
-    return (rate_hz == kRate1Hz) || (rate_hz == kRate2Hz) || (rate_hz == kRate5Hz) || (rate_hz == kRate10Hz) ||
-           (rate_hz == kRate20Hz);
+    return (rate_hz == kRate1Hz) || (rate_hz == kRate2Hz) || (rate_hz == kRate5Hz) ||
+           (rate_hz == kRate10Hz) || (rate_hz == kRate20Hz);
 }
 
 /** 由黄金用例还原输出计划：周期取 1000/rate，GSV 跟 gsv 开关，SATSINFO/HEADING 取 1 s。 */
@@ -36,7 +36,9 @@ inline gnss::OutputPlan plan_from(const golden::RoverCase &item) noexcept
 {
     gnss::OutputPlan plan{};
     const uint32_t period = kOneSecondMs / static_cast<uint32_t>(item.rate_hz);
-    const auto idx = [](gnss::OutputMsg msg) { return static_cast<size_t>(static_cast<uint8_t>(msg)); };
+    const auto idx = [](gnss::OutputMsg msg) {
+        return static_cast<size_t>(static_cast<uint8_t>(msg));
+    };
     plan.period_ms[idx(gnss::OutputMsg::kGga)] = period;
     plan.period_ms[idx(gnss::OutputMsg::kSatsInfo)] = kOneSecondMs;
     plan.period_ms[idx(gnss::OutputMsg::kHeading)] = kOneSecondMs;
@@ -78,8 +80,8 @@ struct CommandSet {
  * @retval true: 收集完成。
  * @retval false: 命令生成失败或缓冲已满。
  */
-inline bool collect_plan(const gnss::Receiver &receiver, const golden::RoverCase &item, CommandSet &out,
-                         bool skip_disabled = true) noexcept
+inline bool collect_plan(const gnss::Receiver &receiver, const golden::RoverCase &item,
+                         CommandSet &out, bool skip_disabled = true) noexcept
 {
     gnss::RoverConfig cfg{};
     cfg.rate_hz = item.rate_hz;
@@ -148,7 +150,8 @@ inline bool same_multiset(const CommandSet &lhs, std::span<const golden::Step> s
     }
     std::array<bool, CommandSet::kMaxCommands> used{};
     for (size_t i = 0U; i < count; ++i) {
-        const std::span<const uint8_t> want = steps[static_cast<size_t>(item.step_first) + i].bytes.view();
+        const std::span<const uint8_t> want =
+            steps[static_cast<size_t>(item.step_first) + i].bytes.view();
         bool matched = false;
         for (size_t j = 0U; (j < lhs.count) && !matched; ++j) {
             if (used[j]) {
@@ -167,7 +170,8 @@ inline bool same_multiset(const CommandSet &lhs, std::span<const golden::Step> s
 }
 
 /** NMEA 驱动（Unicore/ComNav）：命令字节直接按文本比较。 */
-inline size_t plan_mismatch(const gnss::Receiver &receiver, std::span<const golden::RoverCase> cases,
+inline size_t plan_mismatch(const gnss::Receiver &receiver,
+                            std::span<const golden::RoverCase> cases,
                             std::span<const golden::Step> steps) noexcept
 {
     for (size_t c = 0U; c < cases.size(); ++c) {
@@ -222,10 +226,12 @@ inline size_t value_width(uint8_t code) noexcept
 }
 
 /** 从一帧 CFG-VALSET 里取出所有 (key, value) 对；返回对数，0 表示不是合法 VALSET。 */
-inline size_t valset_pairs(std::span<const uint8_t> frame, std::array<std::pair<uint32_t, uint32_t>, 8> &out) noexcept
+inline size_t valset_pairs(std::span<const uint8_t> frame,
+                           std::array<std::pair<uint32_t, uint32_t>, 8> &out) noexcept
 {
-    if ((frame.size() < (static_cast<size_t>(kUbxPayloadOffset) + kCrcBytes)) || (frame[0] != kUbxSync1) ||
-        (frame[1] != kUbxSync2) || (frame[2] != kUbxClsCfg) || (frame[kUbxIdOffset] != kUbxIdValset)) {
+    if ((frame.size() < (static_cast<size_t>(kUbxPayloadOffset) + kCrcBytes)) ||
+        (frame[0] != kUbxSync1) || (frame[1] != kUbxSync2) || (frame[2] != kUbxClsCfg) ||
+        (frame[kUbxIdOffset] != kUbxIdValset)) {
         return 0U;
     }
     const size_t body = frame.size() - static_cast<size_t>(kUbxPayloadOffset) - kCrcBytes;
@@ -285,7 +291,8 @@ inline bool pair_set_equal(std::span<const std::pair<uint32_t, uint32_t>> lhs,
 
 /** 把若干 VALSET 帧展开成 (key, value) 集合（同一 key 后写的生效，未出现的 key 等价于 0）。 */
 inline bool merge_valsets(std::span<const std::span<const uint8_t>> frames,
-                          std::array<std::pair<uint32_t, uint32_t>, 16> &pairs, size_t &count) noexcept
+                          std::array<std::pair<uint32_t, uint32_t>, 16> &pairs,
+                          size_t &count) noexcept
 {
     count = 0U;
     for (const auto frame : frames) {
@@ -316,19 +323,22 @@ inline bool merge_valsets(std::span<const std::span<const uint8_t>> frames,
 }
 
 /** u-blox：把两侧的 VALSET 全部展开成对集合后比较。 */
-inline size_t ubx_plan_mismatch(const gnss::Receiver &receiver, std::span<const golden::RoverCase> cases,
+inline size_t ubx_plan_mismatch(const gnss::Receiver &receiver,
+                                std::span<const golden::RoverCase> cases,
                                 std::span<const golden::Step> steps) noexcept
 {
     for (size_t c = 0U; c < cases.size(); ++c) {
         const golden::RoverCase &item = cases[c];
         CommandSet commands{};
-        if (!collect_plan(receiver, item, commands, false) || (commands.count > commands.kMaxCommands)) {
+        if (!collect_plan(receiver, item, commands, false) ||
+            (commands.count > commands.kMaxCommands)) {
             return c;
         }
         std::array<std::pair<uint32_t, uint32_t>, 16> got{};
         size_t got_count = 0U;
-        if (!merge_valsets(std::span<const std::span<const uint8_t>>{commands.views.data(), commands.count}, got,
-                           got_count)) {
+        if (!merge_valsets(
+                std::span<const std::span<const uint8_t>>{commands.views.data(), commands.count},
+                got, got_count)) {
             return c;
         }
         std::array<std::pair<uint32_t, uint32_t>, 16> want{};
@@ -338,15 +348,19 @@ inline size_t ubx_plan_mismatch(const gnss::Receiver &receiver, std::span<const 
         for (size_t i = 0U; i < count; ++i) {
             want_views[i] = steps[static_cast<size_t>(item.step_first) + i].bytes.view();
         }
-        if (!merge_valsets(std::span<const std::span<const uint8_t>>{want_views.data(), count}, want, want_count)) {
+        if (!merge_valsets(std::span<const std::span<const uint8_t>>{want_views.data(), count},
+                           want, want_count)) {
             return c;
         }
         // GSV 的历元数在 P3b 由周期换算（周期 1 s × 频率），基线固定写 1；这是 ADR-0012 §2.4 期望的行为差异，
         // 其余键仍逐对比较（未出现等价于 0）。
-        got_count = drop_key(std::span<std::pair<uint32_t, uint32_t>>{got.data(), got_count}, kKeyGsvUart1);
-        want_count = drop_key(std::span<std::pair<uint32_t, uint32_t>>{want.data(), want_count}, kKeyGsvUart1);
-        if (!pair_set_equal(std::span<const std::pair<uint32_t, uint32_t>>{got.data(), got_count},
-                            std::span<const std::pair<uint32_t, uint32_t>>{want.data(), want_count})) {
+        got_count =
+            drop_key(std::span<std::pair<uint32_t, uint32_t>>{got.data(), got_count}, kKeyGsvUart1);
+        want_count = drop_key(std::span<std::pair<uint32_t, uint32_t>>{want.data(), want_count},
+                              kKeyGsvUart1);
+        if (!pair_set_equal(
+                std::span<const std::pair<uint32_t, uint32_t>>{got.data(), got_count},
+                std::span<const std::pair<uint32_t, uint32_t>>{want.data(), want_count})) {
             return c;
         }
     }

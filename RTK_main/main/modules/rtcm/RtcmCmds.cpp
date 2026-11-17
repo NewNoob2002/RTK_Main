@@ -99,8 +99,8 @@ void print_rtcm_status() noexcept
                    demux.unknown_bytes, demux.product_rejects, demux.rtcm_rejects);
     cli::outPrintf("stats: frames_rx=%" PRIu32 " replies_tx=%" PRIu32 " write_errors=%" PRIu32
                    " pushes_tx=%" PRIu32 " disconnects=%" PRIu32 " rx_dropped=%" PRIu32 "\n",
-                   stats.frames_rx, stats.replies_tx, stats.write_errors, stats.pushes_tx,
-                   stats.disconnects, stats.rx_dropped);
+                   stats.framesRx, stats.repliesTx, stats.writeErrors, stats.pushesTx,
+                   stats.disconnects, stats.rxDropped);
 #if RTK_GNSS_ENABLED
     cli::outPrintf("rtcm_pipe: accepted=%" PRIu32 "/%" PRIu32 " dropped=%" PRIu32 "/%" PRIu32
                    " written=%" PRIu32 " pending=%" PRIu32 " discarded=%" PRIu32

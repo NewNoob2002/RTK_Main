@@ -8,80 +8,80 @@ namespace proto::alarm {
 
 namespace {
 
-dev_proto_alarm_status_t to_c(const Status &status) noexcept
+dev_proto_alarm_status_t toC(const Status &status) noexcept
 {
-    dev_proto_alarm_status_t c_status{};
-    c_status.seq = status.seq;
-    c_status.state = status.state;
-    c_status.level = status.level;
-    c_status.fix_quality = status.fix_quality;
-    c_status.battery_pct = status.battery_pct;
-    c_status.flags = status.flags;
-    c_status.uptime_ms = status.uptime_ms;
-    return c_status;
+    dev_proto_alarm_status_t cStatus{};
+    cStatus.seq = status.seq;
+    cStatus.state = status.state;
+    cStatus.level = status.level;
+    cStatus.fix_quality = status.fixQuality;
+    cStatus.battery_pct = status.batteryPct;
+    cStatus.flags = status.flags;
+    cStatus.uptime_ms = status.uptimeMs;
+    return cStatus;
 }
 
-Status from_c(const dev_proto_alarm_status_t &c_status) noexcept
+Status fromC(const dev_proto_alarm_status_t &cStatus) noexcept
 {
     Status status;
-    status.seq = c_status.seq;
-    status.state = c_status.state;
-    status.level = c_status.level;
-    status.fix_quality = c_status.fix_quality;
-    status.battery_pct = c_status.battery_pct;
-    status.flags = c_status.flags;
-    status.uptime_ms = c_status.uptime_ms;
+    status.seq = cStatus.seq;
+    status.state = cStatus.state;
+    status.level = cStatus.level;
+    status.fixQuality = cStatus.fix_quality;
+    status.batteryPct = cStatus.battery_pct;
+    status.flags = cStatus.flags;
+    status.uptimeMs = cStatus.uptime_ms;
     return status;
 }
 
-dev_proto_alarm_heartbeat_t to_c(const Heartbeat &heartbeat) noexcept
+dev_proto_alarm_heartbeat_t toC(const Heartbeat &heartbeat) noexcept
 {
-    dev_proto_alarm_heartbeat_t c_heartbeat{};
-    c_heartbeat.seq = heartbeat.seq;
-    c_heartbeat.battery_pct = heartbeat.battery_pct;
-    c_heartbeat.local_state = heartbeat.local_state;
-    return c_heartbeat;
+    dev_proto_alarm_heartbeat_t cHeartbeat{};
+    cHeartbeat.seq = heartbeat.seq;
+    cHeartbeat.battery_pct = heartbeat.batteryPct;
+    cHeartbeat.local_state = heartbeat.localState;
+    return cHeartbeat;
 }
 
-Heartbeat from_c(const dev_proto_alarm_heartbeat_t &c_heartbeat) noexcept
+Heartbeat fromC(const dev_proto_alarm_heartbeat_t &cHeartbeat) noexcept
 {
     Heartbeat heartbeat;
-    heartbeat.seq = c_heartbeat.seq;
-    heartbeat.battery_pct = c_heartbeat.battery_pct;
-    heartbeat.local_state = c_heartbeat.local_state;
+    heartbeat.seq = cHeartbeat.seq;
+    heartbeat.batteryPct = cHeartbeat.battery_pct;
+    heartbeat.localState = cHeartbeat.local_state;
     return heartbeat;
 }
 
 } // namespace
 
-size_t encode_status(const Status &status, std::span<uint8_t> out) noexcept
+size_t encodeStatus(const Status &status, std::span<uint8_t> out) noexcept
 {
-    const dev_proto_alarm_status_t c_status = to_c(status);
-    return dev_proto_alarm_encode_status(&c_status, out.data(), out.size());
+    const dev_proto_alarm_status_t cStatus = toC(status);
+    return dev_proto_alarm_encode_status(&cStatus, out.data(), out.size());
 }
 
-std::optional<Status> decode_status(std::span<const uint8_t> data) noexcept
+std::optional<Status> decodeStatus(std::span<const uint8_t> data) noexcept
 {
-    dev_proto_alarm_status_t c_status{};
-    if (!dev_proto_alarm_decode_status(data.data(), data.size(), &c_status)) {
+    dev_proto_alarm_status_t cStatus{};
+    if (!dev_proto_alarm_decode_status(data.data(), data.size(), &cStatus)) {
         return std::nullopt;
     }
-    return from_c(c_status);
+    return fromC(cStatus);
 }
 
-size_t encode_heartbeat(const Heartbeat &heartbeat, std::span<uint8_t> out) noexcept
+size_t encodeHeartbeat(const Heartbeat &heartbeat, std::span<uint8_t> out) noexcept
 {
-    const dev_proto_alarm_heartbeat_t c_heartbeat = to_c(heartbeat);
-    return dev_proto_alarm_encode_heartbeat(&c_heartbeat, out.data(), out.size());
+    const dev_proto_alarm_heartbeat_t cHeartbeat = toC(heartbeat);
+    return dev_proto_alarm_encode_heartbeat(&cHeartbeat, out.data(), out.size());
 }
 
-std::optional<Heartbeat> decode_heartbeat(std::span<const uint8_t> data) noexcept
+std::optional<Heartbeat> decodeHeartbeat(std::span<const uint8_t> data) noexcept
 {
-    dev_proto_alarm_heartbeat_t c_heartbeat{};
-    if (!dev_proto_alarm_decode_heartbeat(data.data(), data.size(), &c_heartbeat)) {
+    dev_proto_alarm_heartbeat_t cHeartbeat{};
+    if (!dev_proto_alarm_decode_heartbeat(data.data(), data.size(), &cHeartbeat)) {
         return std::nullopt;
     }
-    return from_c(c_heartbeat);
+    return fromC(cHeartbeat);
 }
 
 } // namespace proto::alarm

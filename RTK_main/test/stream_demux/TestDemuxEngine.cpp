@@ -177,7 +177,7 @@ demux::Step dec_need_zero_step(std::span<const uint8_t> frame, std::size_t &need
 
 demux::Step dec_exceed_max_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    need = 17U - frame.size(); // max_frame == 16，17 超出 max_frame
+    need = 17U - frame.size(); // maxFrame == 16，17 超出 maxFrame
     return demux::Step::kNeedMore;
 }
 
@@ -259,8 +259,8 @@ public:
         reject_count_ = 0U;
     }
 
-    void on_frame(const demux::Decoder &decoder, uint8_t index,
-                  std::span<const uint8_t> frame) noexcept override
+    void onFrame(const demux::Decoder &decoder, uint8_t index,
+                 std::span<const uint8_t> frame) noexcept override
     {
         static constexpr std::array<uint8_t, 1> kExtra{0x5AU};
         if (test_reentry_in_frame_ && (dmx_ != nullptr)) {
@@ -269,7 +269,7 @@ public:
             reentry_init_err_ = dmx_->init(reentry_decs_, reentry_buf_, *this);
         }
         if (reset_stats_in_frame_ && (dmx_ != nullptr)) {
-            dmx_->reset_stats();
+            dmx_->resetStats();
         }
         if (event_count_ < kMaxEvents) {
             RecordedEvent &ev = events_[event_count_++];
@@ -283,8 +283,8 @@ public:
         }
     }
 
-    void on_reject(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix,
-                   demux::RejectCause cause, bool last) noexcept override
+    void onReject(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix,
+                  demux::RejectCause cause, bool last) noexcept override
     {
         if (reject_count_ < rejects_.size()) {
             RecordedEvent &ev = rejects_[reject_count_++];
@@ -300,7 +300,7 @@ public:
         }
     }
 
-    void on_unknown(std::span<const uint8_t> bytes) noexcept override
+    void onUnknown(std::span<const uint8_t> bytes) noexcept override
     {
         static constexpr std::array<uint8_t, 1> kExtra{0x5AU};
         if (test_reentry_in_unknown_ && (dmx_ != nullptr)) {
@@ -343,11 +343,11 @@ public:
     std::span<uint8_t> reentry_buf_{};
 };
 
-// 仅实现 on_frame、继承默认 Sink::on_unknown 的极简 Sink
+// 仅实现 onFrame、继承默认 Sink::onUnknown 的极简 Sink
 class MinimalSink final : public demux::Sink {
 public:
-    void on_frame(const demux::Decoder &decoder, uint8_t index,
-                  std::span<const uint8_t> frame) noexcept override
+    void onFrame(const demux::Decoder &decoder, uint8_t index,
+                 std::span<const uint8_t> frame) noexcept override
     {
         last_decoder_ = &decoder;
         last_index_ = index;
@@ -432,7 +432,7 @@ static void test_uninitialized_and_constinit_globals()
     TEST_ASSERT_EQUAL(demux::Error::kOk, s_global_static_demux.init(s_sink));
     TEST_ASSERT_EQUAL(demux::Error::kOk, s_global_static_demux.feed(kFrame));
     TEST_ASSERT_EQUAL_UINT32(1U, s_global_static_demux.stats().decoder[0].frames);
-    TEST_ASSERT_EQUAL_UINT8((demux::StaticDemux<kDecFixed4, kDecBulk>::index_of<kDecFixed4>()),
+    TEST_ASSERT_EQUAL_UINT8((demux::StaticDemux<kDecFixed4, kDecBulk>::indexOf<kDecFixed4>()),
                             s_sink.events_[0].decoder_index);
 }
 
@@ -459,12 +459,12 @@ static void test_init_validation_and_poison_on_fail()
     TEST_ASSERT_EQUAL(demux::Error::kInvalidArg,
                       s_dmx.init(kDecsOnlyNull, guarded_slice(kTestBufCap), s_sink));
 
-    // 缓冲区为空或小于 max_frame（含后项 max_frame 更大）
+    // 缓冲区为空或小于 maxFrame（含后项 maxFrame 更大）
     TEST_ASSERT_EQUAL(demux::Error::kInvalidArg, s_dmx.init(kDecsOk, {}, s_sink));
     TEST_ASSERT_EQUAL(demux::Error::kInvalidArg,
-                      s_dmx.init(kDecsOk, guarded_slice(kDecFixed4.max_frame - 1U), s_sink));
+                      s_dmx.init(kDecsOk, guarded_slice(kDecFixed4.maxFrame - 1U), s_sink));
     TEST_ASSERT_EQUAL(demux::Error::kInvalidArg,
-                      s_dmx.init(kDecsTwo, guarded_slice(kDecBulk.max_frame - 1U), s_sink));
+                      s_dmx.init(kDecsTwo, guarded_slice(kDecBulk.maxFrame - 1U), s_sink));
 
     // 解码器字段非法
     demux::Decoder bad_dec = kDecFixed4;
@@ -476,16 +476,16 @@ static void test_init_validation_and_poison_on_fail()
                       s_dmx.init(bad_list, guarded_slice(kTestBufCap), s_sink));
 
     bad_dec = kDecFixed4;
-    bad_dec.max_frame = 0U;
+    bad_dec.maxFrame = 0U;
     TEST_ASSERT_EQUAL(demux::Error::kInvalidArg,
                       s_dmx.init(bad_list, guarded_slice(kTestBufCap), s_sink));
 
     bad_dec = kDecFixed4;
-    bad_dec.max_frame = 65536U;
+    bad_dec.maxFrame = 65536U;
     TEST_ASSERT_EQUAL(demux::Error::kInvalidArg, s_dmx.init(bad_list, s_huge_buf, s_sink));
 
     bad_dec = kDecFixed4;
-    bad_dec.first_byte = nullptr;
+    bad_dec.firstByte = nullptr;
     TEST_ASSERT_EQUAL(demux::Error::kInvalidArg,
                       s_dmx.init(bad_list, guarded_slice(kTestBufCap), s_sink));
 
@@ -548,9 +548,9 @@ static void test_idle_unknown_and_default_on_unknown()
 
     TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].frames);
     TEST_ASSERT_EQUAL_UINT32(4U, s_dmx.stats().decoder[0].bytes);
-    TEST_ASSERT_EQUAL_UINT32(4U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(4U, s_dmx.stats().unknownBytes);
 
-    // 验证 Sink::on_unknown 默认实现（丢弃且统计照常计数）
+    // 验证 Sink::onUnknown 默认实现（丢弃且统计照常计数）
     MinimalSink min_sink;
     TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.init(kDecs, guarded_slice(kTestBufCap), min_sink));
     TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.feed(kStream));
@@ -559,7 +559,7 @@ static void test_idle_unknown_and_default_on_unknown()
     TEST_ASSERT_EQUAL_UINT32(1U, min_sink.frame_count_);
     TEST_ASSERT_EQUAL_PTR(&kDecFixed4, min_sink.last_decoder_);
     TEST_ASSERT_EQUAL_UINT(4U, min_sink.last_len_);
-    TEST_ASSERT_EQUAL_UINT32(6U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(6U, s_dmx.stats().unknownBytes);
     TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().aborts);
 }
 
@@ -654,7 +654,7 @@ static void test_same_first_byte_priority_and_midbuffer_replay()
     TEST_ASSERT_EQUAL_PTR(&kDecFixed4, s_sink.events_[1].decoder);
     TEST_ASSERT_EQUAL_UINT(4U, s_sink.events_[1].len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(&kMatchP2ThenFixed4[3], s_sink.events_[1].data.data(), 4U);
-    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknownBytes);
 
     // 3b) p2 在 p=3 成帧 -> 后续 AA 冲突回放 p1 成帧并输出尾部未知字节
     reset_test_env();
@@ -692,7 +692,7 @@ static void test_all_reject_resync_recovers_nested_frame()
     TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().resyncs);
     TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].rejects);
     TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].frames);
-    TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknownBytes);
 }
 
 static void test_reject_callback_causes_and_last_flag()
@@ -812,10 +812,10 @@ static void test_contract_violations_and_overflow()
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].rejects);
         TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().overflows);
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().resyncs);
-        TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknown_bytes);
+        TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknownBytes);
     }
 
-    // 2) len + need > max_frame 契约违规（但 <= buf_size）
+    // 2) len + need > maxFrame 契约违规（但 <= buf_size）
     reset_test_env();
     {
         static constexpr std::array<const demux::Decoder *, 1> kDecs{&kDecExceedMax};
@@ -824,7 +824,7 @@ static void test_contract_violations_and_overflow()
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].rejects);
         TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().overflows);
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().resyncs);
-        TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknown_bytes);
+        TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknownBytes);
     }
 
     // 3) len + need > buf_size 触发 overflow（buf_size == 16，哨兵不得被踩）
@@ -836,7 +836,7 @@ static void test_contract_violations_and_overflow()
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].rejects);
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().overflows);
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().resyncs);
-        TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknown_bytes);
+        TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknownBytes);
         for (std::size_t i = 16U; i < s_guarded_buf.size(); ++i) {
             TEST_ASSERT_EQUAL_HEX8(kTestCanaryByte, s_guarded_buf[i]);
         }
@@ -850,7 +850,7 @@ static void test_contract_violations_and_overflow()
         TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.feed(kTrigger));
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].rejects);
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().overflows);
-        TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknown_bytes);
+        TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknownBytes);
     }
 
     // 5) 契约违规视为 kReject，同首字节次优先级解码器仍可接管成帧
@@ -864,7 +864,7 @@ static void test_contract_violations_and_overflow()
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[1].frames);
         TEST_ASSERT_EQUAL_PTR(&kDecBaValid2, s_sink.events_[0].decoder);
         TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().resyncs);
-        TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
+        TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknownBytes);
     }
 }
 
@@ -877,7 +877,7 @@ static void test_reentry_from_callbacks()
     };
     static constexpr std::array<uint8_t, 1> kUnk{0x55U};
 
-    // on_frame 内重入
+    // onFrame 内重入
     s_sink.reentry_decs_ = kDecs;
     s_sink.reentry_buf_ = guarded_slice(kTestBufCap);
     s_sink.test_reentry_in_frame_ = true;
@@ -890,7 +890,7 @@ static void test_reentry_from_callbacks()
     TEST_ASSERT_EQUAL_UINT(2U, s_sink.event_count_);
     TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().decoder[0].frames);
 
-    // on_unknown 内重入
+    // onUnknown 内重入
     s_sink.test_reentry_in_frame_ = false;
     s_sink.test_reentry_in_unknown_ = true;
     s_sink.reentry_feed_err_ = demux::Error::kOk;
@@ -901,7 +901,7 @@ static void test_reentry_from_callbacks()
     TEST_ASSERT_EQUAL(demux::Error::kReentry, s_sink.reentry_abort_err_);
     TEST_ASSERT_EQUAL(demux::Error::kReentry, s_sink.reentry_init_err_);
 
-    // abort 的 on_unknown 回调内重入
+    // abort 的 onUnknown 回调内重入
     s_sink.reentry_feed_err_ = demux::Error::kOk;
     s_sink.reentry_abort_err_ = demux::Error::kOk;
     s_sink.reentry_init_err_ = demux::Error::kOk;
@@ -912,7 +912,7 @@ static void test_reentry_from_callbacks()
     TEST_ASSERT_EQUAL(demux::Error::kReentry, s_sink.reentry_abort_err_);
     TEST_ASSERT_EQUAL(demux::Error::kReentry, s_sink.reentry_init_err_);
 
-    // abort 的 on_frame 回放回调内重入
+    // abort 的 onFrame 回放回调内重入
     {
         static constexpr std::array<const demux::Decoder *, 2> kDecsConflict{&kDecAaP0, &kDecAaP1};
         static constexpr std::array<uint8_t, 4> kHalfP1{0xAAU, 0x22U, 0x99U, 0x44U};
@@ -933,7 +933,7 @@ static void test_reentry_from_callbacks()
         TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[1].frames);
     }
 
-    // 回调中调用 reset_stats() 安全且不影响后续解析
+    // 回调中调用 resetStats() 安全且不影响后续解析
     reset_test_env();
     s_sink.reset_stats_in_frame_ = true;
     TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.init(kDecs, guarded_slice(kTestBufCap), s_sink));
@@ -1013,17 +1013,17 @@ static void test_reset_stats_midframe_and_eight_decoders()
     TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].frames);
     TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[3].rejects);
     TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().resyncs);
-    TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(2U, s_dmx.stats().unknownBytes);
 
-    // 喂入 slot7 第 1 字节，半帧期间 reset_stats 必须保持解析状态
+    // 喂入 slot7 第 1 字节，半帧期间 resetStats 必须保持解析状态
     TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.feed(std::span<const uint8_t>(kF7).subspan(0, 1U)));
     TEST_ASSERT_TRUE(s_dmx.busy());
-    s_dmx.reset_stats();
+    s_dmx.resetStats();
     TEST_ASSERT_TRUE(s_dmx.busy());
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().decoder[0].frames);
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().decoder[3].rejects);
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().resyncs);
-    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknownBytes);
 
     // 喂入第 2 字节完成 slot7 帧
     TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.feed(std::span<const uint8_t>(kF7).subspan(1U, 1U)));
@@ -1070,20 +1070,20 @@ static void test_static_demux()
     using EightDemux = demux::StaticDemux<kDecSlot0, kDecSlot1, kDecSlot2, kDecSlot3, kDecSlot4,
                                           kDecSlot5, kDecSlot6, kDecSlot7>;
 
-    // 编译期断言：kCount、kBufSize、index_of
+    // 编译期断言：kCount、kBufSize、indexOf
     static_assert(SingleDemux::kCount == 1U);
-    static_assert(SingleDemux::kBufSize == kDecFixed4.max_frame);
-    static_assert(SingleDemux::index_of<kDecFixed4>() == 0U);
+    static_assert(SingleDemux::kBufSize == kDecFixed4.maxFrame);
+    static_assert(SingleDemux::indexOf<kDecFixed4>() == 0U);
 
     static_assert(PairDemux::kCount == 2U);
-    static_assert(PairDemux::kBufSize == kDecBulk.max_frame);
-    static_assert(PairDemux::index_of<kDecFixed4>() == 0U);
-    static_assert(PairDemux::index_of<kDecBulk>() == 1U);
+    static_assert(PairDemux::kBufSize == kDecBulk.maxFrame);
+    static_assert(PairDemux::indexOf<kDecFixed4>() == 0U);
+    static_assert(PairDemux::indexOf<kDecBulk>() == 1U);
 
     static_assert(EightDemux::kCount == demux::kMaxDecoders);
     static_assert(EightDemux::kBufSize == 2U);
-    static_assert(EightDemux::index_of<kDecSlot0>() == 0U);
-    static_assert(EightDemux::index_of<kDecSlot7>() == 7U);
+    static_assert(EightDemux::indexOf<kDecSlot0>() == 0U);
+    static_assert(EightDemux::indexOf<kDecSlot7>() == 7U);
 
     PairDemux sd;
     s_sink.reset(nullptr);
@@ -1097,24 +1097,24 @@ static void test_static_demux()
     TEST_ASSERT_EQUAL(demux::Error::kOk, sd.feed(kF4));
     TEST_ASSERT_EQUAL(demux::Error::kOk, sd.feed(kFbulk));
     TEST_ASSERT_EQUAL_UINT(2U, s_sink.event_count_);
-    TEST_ASSERT_EQUAL_UINT8(PairDemux::index_of<kDecFixed4>(), s_sink.events_[0].decoder_index);
+    TEST_ASSERT_EQUAL_UINT8(PairDemux::indexOf<kDecFixed4>(), s_sink.events_[0].decoder_index);
     TEST_ASSERT_EQUAL_PTR(&kDecFixed4, s_sink.events_[0].decoder);
-    TEST_ASSERT_EQUAL_UINT8(PairDemux::index_of<kDecBulk>(), s_sink.events_[1].decoder_index);
+    TEST_ASSERT_EQUAL_UINT8(PairDemux::indexOf<kDecBulk>(), s_sink.events_[1].decoder_index);
     TEST_ASSERT_EQUAL_PTR(&kDecBulk, s_sink.events_[1].decoder);
 
     TEST_ASSERT_EQUAL_UINT32(1U, sd.stats().decoder[0].frames);
     TEST_ASSERT_EQUAL_UINT32(1U, sd.stats().decoder[1].frames);
 
-    // 半帧 -> busy -> reset_stats -> abort 转发验证
+    // 半帧 -> busy -> resetStats -> abort 转发验证
     TEST_ASSERT_EQUAL(demux::Error::kOk, sd.feed(kHalf));
     TEST_ASSERT_TRUE(sd.busy());
-    sd.reset_stats();
+    sd.resetStats();
     TEST_ASSERT_TRUE(sd.busy());
     TEST_ASSERT_EQUAL_UINT32(0U, sd.stats().decoder[0].frames);
     TEST_ASSERT_EQUAL(demux::Error::kOk, sd.abort());
     TEST_ASSERT_FALSE(sd.busy());
     TEST_ASSERT_EQUAL_UINT32(1U, sd.stats().aborts);
-    TEST_ASSERT_EQUAL_UINT32(2U, sd.stats().unknown_bytes);
+    TEST_ASSERT_EQUAL_UINT32(2U, sd.stats().unknownBytes);
 
     // 8 槽 StaticDemux 转发验证
     EightDemux eight;
@@ -1123,9 +1123,9 @@ static void test_static_demux()
     static constexpr std::array<uint8_t, 4> kSlots{0xC0U, 0x3FU, 0xC7U, 0x38U};
     TEST_ASSERT_EQUAL(demux::Error::kOk, eight.feed(kSlots));
     TEST_ASSERT_EQUAL_UINT(2U, s_sink.event_count_);
-    TEST_ASSERT_EQUAL_UINT8(EightDemux::index_of<kDecSlot0>(), s_sink.events_[0].decoder_index);
+    TEST_ASSERT_EQUAL_UINT8(EightDemux::indexOf<kDecSlot0>(), s_sink.events_[0].decoder_index);
     TEST_ASSERT_EQUAL_PTR(&kDecSlot0, s_sink.events_[0].decoder);
-    TEST_ASSERT_EQUAL_UINT8(EightDemux::index_of<kDecSlot7>(), s_sink.events_[1].decoder_index);
+    TEST_ASSERT_EQUAL_UINT8(EightDemux::indexOf<kDecSlot7>(), s_sink.events_[1].decoder_index);
     TEST_ASSERT_EQUAL_PTR(&kDecSlot7, s_sink.events_[1].decoder);
 }
 

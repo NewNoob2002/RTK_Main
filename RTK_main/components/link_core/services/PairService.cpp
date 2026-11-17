@@ -23,15 +23,15 @@ inline constexpr uint8_t kResultOk = 0x01;
 inline constexpr uint8_t kResultFail = 0x02;
 
 /**
- * 组应答帧：sender 固定为 DEV，type 经 response_type 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ * 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
  * 组帧失败时把 reply.len 置 0 并返回 kNoReply（与旧 dispatcher 一致）。
  */
-inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_type,
-                                  std::span<const uint8_t> payload) noexcept
+inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
+                                 std::span<const uint8_t> payload) noexcept
 {
     size_t len = 0;
-    const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
-                                                 proto::response_type(req_type), payload, len);
+    const fw::Status status = proto::buildFrame(reply.buf, msgId, proto::sender::kDevice,
+                                                proto::responseType(reqType), payload, len);
     if (!isOk(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
@@ -41,23 +41,23 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
 }
 
 /** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
-inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type,
-                                   uint8_t value) noexcept
+inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
+                                  uint8_t value) noexcept
 {
     const std::array<uint8_t, 2> payload = {value, value};
-    return reply_build(reply, msg_id, req_type, payload);
+    return replyBuild(reply, msgId, reqType, payload);
 }
 
 /** 成功应答（0x01 0x01）。 */
-inline DispatchResult reply_ok(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+inline DispatchResult replyOk(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
-    return reply_result(reply, msg_id, req_type, kResultOk);
+    return replyResult(reply, msgId, reqType, kResultOk);
 }
 
 /** 失败应答（0x02 0x02）。 */
-inline DispatchResult reply_fail(Reply &reply, uint16_t msg_id, uint8_t req_type) noexcept
+inline DispatchResult replyFail(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
-    return reply_result(reply, msg_id, req_type, kResultFail);
+    return replyResult(reply, msgId, reqType, kResultFail);
 }
 
 namespace msg_type = proto::msg_type;
@@ -71,24 +71,24 @@ constexpr size_t kPairOfsCount = 0;
 constexpr size_t kPairOfsFirst = 1;
 constexpr size_t kPairQueryMax = kPairOfsFirst + (kMaxAlarms * kAddrLen);
 
-DispatchResult handle_pair(LinkManager &link, const proto::FrameView &frame, uint32_t now_ms,
-                           Reply &reply) noexcept
+DispatchResult handlePair(LinkManager &link, const proto::FrameView &frame, uint32_t nowMs,
+                          Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.empty()) {
-            return reply_fail(reply, frame.msg_id, frame.type);
+            return replyFail(reply, frame.msgId, frame.type);
         }
         const uint8_t action = frame.payload[0];
         if (action == kPairActionOpen) {
-            link.pair_open(now_ms);
-            return reply_ok(reply, frame.msg_id, frame.type);
+            link.pairOpen(nowMs);
+            return replyOk(reply, frame.msgId, frame.type);
         }
         if (action == kPairActionClear) {
-            link.whitelist_clear();
-            reply.whitelist_changed = true;
-            return reply_ok(reply, frame.msg_id, frame.type);
+            link.whitelistClear();
+            reply.whitelistChanged = true;
+            return replyOk(reply, frame.msgId, frame.type);
         }
-        return reply_fail(reply, frame.msg_id, frame.type);
+        return replyFail(reply, frame.msgId, frame.type);
     }
 
     std::array<uint8_t, kPairQueryMax> payload{};
@@ -102,8 +102,7 @@ DispatchResult handle_pair(LinkManager &link, const proto::FrameView &frame, uin
         }
     }
     const size_t len = kPairOfsFirst + (count * kAddrLen);
-    return reply_build(reply, frame.msg_id, frame.type,
-                       std::span<const uint8_t>(payload).first(len));
+    return replyBuild(reply, frame.msgId, frame.type, std::span<const uint8_t>(payload).first(len));
 }
 
 } // namespace
@@ -116,11 +115,11 @@ std::span<const Route> PairService::routes() noexcept
     // 与成员函数具有相同访问权限，因此 static_cast 之后可以取到私有引用；
     // 每个 self 都来自 table()（RouteTable{this, ...}），类型必然是本服务实例。
     struct Handlers {
-        static DispatchResult pair(void *self, const proto::FrameView &frame, uint32_t now_ms,
+        static DispatchResult pair(void *self, const proto::FrameView &frame, uint32_t nowMs,
                                    Reply &reply) noexcept
         {
             auto *const service = static_cast<PairService *>(self);
-            return handle_pair(service->link_, frame, now_ms, reply);
+            return handlePair(service->link_, frame, nowMs, reply);
         }
     };
 

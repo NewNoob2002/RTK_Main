@@ -1,6 +1,6 @@
 // golden 等价测试（ADR-0007 §9 门禁 2、任务卡 J2a）：同一输入同时喂旧 CommandDispatcher 与
-// CommandRouter + 4 个服务，比较 DispatchResult、reply.bytes()、whitelist_changed、heartbeat，
-// 以及 AlarmService::build_status_push 与旧 build_status_push 的字节。
+// CommandRouter + 4 个服务，比较 DispatchResult、reply.bytes()、whitelistChanged、heartbeat，
+// 以及 AlarmService::buildStatusPush 与旧 buildStatusPush 的字节。
 // 一侧发现不一致时以旧实现为准修改服务，不得修改本测试的期望。
 #include <array>
 #include <cstddef>
@@ -50,7 +50,7 @@ constexpr uint32_t kNowStep = 16;
 constexpr uint32_t kPayloadSeed = 0x11;
 constexpr size_t kPayloadStride = 7;
 
-// msg_id 扫描范围：0x00–0xFF。
+// msgId 扫描范围：0x00–0xFF。
 constexpr uint32_t kLastSweptMsgId = 0xFF;
 
 // 各状态序列的起始时间（彼此不同，便于在日志里区分）。
@@ -194,7 +194,7 @@ struct Harness {
     fw::Status init_router() noexcept
     {
         // 旧 dispatcher 的 0x02 固定 GNSS=0x81，对照时按 GNSS 运行态比较。
-        dev.info().gnss_running = true;
+        dev.info().gnssRunning = true;
         const std::array<RouteTable, 4> tables = {dev.table(), cfg.table(), alarm_svc.table(),
                                                   pair_svc.table()};
         return router.init(tables);
@@ -205,7 +205,7 @@ void arm_reply(Reply &reply)
 {
     reply.buf.fill(kSentinelByte);
     reply.len = kSentinelLen;
-    reply.whitelist_changed = true;
+    reply.whitelistChanged = true;
     reply.heartbeat = ac::Heartbeat{};
 }
 
@@ -218,7 +218,7 @@ Outcome observe(const Reply &reply, DispatchResult result)
     for (size_t i = 0; (i < bytes.size()) && (i < out.bytes.size()); ++i) {
         out.bytes[i] = bytes[i];
     }
-    out.whitelist_changed = reply.whitelist_changed;
+    out.whitelist_changed = reply.whitelistChanged;
     out.has_heartbeat = reply.heartbeat.has_value();
     if (reply.heartbeat.has_value()) {
         out.heartbeat = *reply.heartbeat;
@@ -241,9 +241,9 @@ void compare_outcome(const Outcome &old_out, const Outcome &new_out, const char 
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.has_heartbeat ? 1U : 0U,
                                     new_out.has_heartbeat ? 1U : 0U, desc);
     TEST_ASSERT_EQUAL_HEX16_MESSAGE(old_out.heartbeat.seq, new_out.heartbeat.seq, desc);
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.heartbeat.battery_pct, new_out.heartbeat.battery_pct,
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.heartbeat.batteryPct, new_out.heartbeat.batteryPct,
                                     desc);
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.heartbeat.local_state, new_out.heartbeat.local_state,
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.heartbeat.localState, new_out.heartbeat.localState,
                                     desc);
 }
 
@@ -252,7 +252,7 @@ void run_case(Harness &harness, Role role, uint16_t msg_id, uint8_t type, const 
               size_t len, uint32_t now_ms, const char *desc)
 {
     proto::FrameView frame{};
-    frame.msg_id = msg_id;
+    frame.msgId = msg_id;
     frame.type = type;
     frame.sender = proto::sender::kApp;
     frame.payload = std::span<const uint8_t>(payload, len);
@@ -269,15 +269,15 @@ void run_case(Harness &harness, Role role, uint16_t msg_id, uint8_t type, const 
     compare_outcome(old_out, new_out, desc);
 }
 
-/** 0x40 主动推送：旧 build_status_push 与 AlarmService::build_status_push 逐字节比较。 */
+/** 0x40 主动推送：旧 buildStatusPush 与 AlarmService::buildStatusPush 逐字节比较。 */
 void compare_status_push(Harness &harness, uint16_t seq, uint32_t now_ms, const char *desc)
 {
     arm_reply(harness.old_reply);
-    const bool old_ok = harness.old_disp.build_status_push(seq, now_ms, harness.old_reply);
+    const bool old_ok = harness.old_disp.buildStatusPush(seq, now_ms, harness.old_reply);
     const Outcome old_out = observe(harness.old_reply, DispatchResult::kReply);
 
     arm_reply(harness.new_reply);
-    const bool new_ok = harness.alarm_svc.build_status_push(seq, now_ms, harness.new_reply);
+    const bool new_ok = harness.alarm_svc.buildStatusPush(seq, now_ms, harness.new_reply);
     const Outcome new_out = observe(harness.new_reply, DispatchResult::kReply);
 
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_ok ? 1U : 0U, new_ok ? 1U : 0U, desc);
@@ -338,7 +338,7 @@ void test_msg_id_sweep()
     Harness harness;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk),
                             static_cast<uint8_t>(harness.init_router()));
-    TEST_ASSERT_EQUAL_UINT(kRouteCount, harness.router.route_count());
+    TEST_ASSERT_EQUAL_UINT(kRouteCount, harness.router.routeCount());
 
     uint32_t now_ms = kFirstNowMs;
     size_t cases = 0;
@@ -351,7 +351,7 @@ void test_msg_id_sweep()
                     fill_payload(shape);
                     if ((msg_id == kMsgGga) || (msg_id == kMsgSat)) {
                         proto::FrameView frame{};
-                        frame.msg_id = msg_id;
+                        frame.msgId = msg_id;
                         frame.type = type;
                         frame.sender = proto::sender::kApp;
                         frame.payload = std::span<const uint8_t>(s_payload.data(), shape.len);
@@ -394,22 +394,22 @@ void test_device_sequence()
     // 2. 两侧显式写入同一组设备信息（golden 前提）。
     harness.old_disp.info().sn.assign("SN0001");
     harness.dev.info().sn.assign("SN0001");
-    harness.old_disp.info().fw_ver.assign("V6.1.0");
-    harness.dev.info().fw_ver.assign("V6.1.0");
-    harness.old_disp.info().board_sn.assign("B0001");
-    harness.dev.info().board_sn.assign("B0001");
-    harness.old_disp.info().board_fw.assign("R1.0");
-    harness.dev.info().board_fw.assign("R1.0");
-    harness.old_disp.info().radio_fw.assign("RF1");
-    harness.dev.info().radio_fw.assign("RF1");
-    harness.old_disp.info().on_battery = false;
-    harness.dev.info().on_battery = false;
-    harness.old_disp.info().battery_pct = kBatteryPct;
-    harness.dev.info().battery_pct = kBatteryPct;
-    harness.old_disp.info().battery_temp_c = kBatteryTempC;
-    harness.dev.info().battery_temp_c = kBatteryTempC;
-    harness.old_disp.info().com_baud = kComBaud;
-    harness.dev.info().com_baud = kComBaud;
+    harness.old_disp.info().fwVer.assign("V6.1.0");
+    harness.dev.info().fwVer.assign("V6.1.0");
+    harness.old_disp.info().boardSn.assign("B0001");
+    harness.dev.info().boardSn.assign("B0001");
+    harness.old_disp.info().boardFw.assign("R1.0");
+    harness.dev.info().boardFw.assign("R1.0");
+    harness.old_disp.info().radioFw.assign("RF1");
+    harness.dev.info().radioFw.assign("RF1");
+    harness.old_disp.info().onBattery = false;
+    harness.dev.info().onBattery = false;
+    harness.old_disp.info().batteryPct = kBatteryPct;
+    harness.dev.info().batteryPct = kBatteryPct;
+    harness.old_disp.info().batteryTempC = kBatteryTempC;
+    harness.dev.info().batteryTempC = kBatteryTempC;
+    harness.old_disp.info().comBaud = kComBaud;
+    harness.dev.info().comBaud = kComBaud;
 
     for (const uint16_t id : {kMsgDevInfo, kMsgBattery, kMsgCom}) {
         run_case(harness, Role::kPhone, id, mt::kQuery, s_payload.data(), 0, now_ms,
@@ -495,17 +495,17 @@ void test_pair_sequence()
     // 1. 打开配对窗口。
     run_case(harness, Role::kPhone, ac::kMsgPair, mt::kSet, pair_open.data(), pair_open.size(),
              now_ms, describe(Role::kPhone, ac::kMsgPair, mt::kSet, "open"));
-    TEST_ASSERT_TRUE(harness.link.is_pairing());
+    TEST_ASSERT_TRUE(harness.link.isPairing());
     now_ms += kNowStep;
 
     // 2. 报警器先以 PHONE 接入（地址还不在白名单），HELLO 之后转 ALARM 并加入白名单。
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(Role::kPhone),
-        static_cast<uint8_t>(harness.link.on_open(kAlarmHandle, kAlarmAddr, now_ms, act)));
+        static_cast<uint8_t>(harness.link.onOpen(kAlarmHandle, kAlarmAddr, now_ms, act)));
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(Role::kAlarm),
-        static_cast<uint8_t>(harness.link.on_frame(kAlarmHandle, proto::sender::kAlarm,
-                                                   core::kHelloMsgId, now_ms, act)));
+        static_cast<uint8_t>(harness.link.onFrame(kAlarmHandle, proto::sender::kAlarm,
+                                                  core::kHelloMsgId, now_ms, act)));
     TEST_ASSERT_EQUAL_UINT(1, harness.link.whitelist().size());
     now_ms += kNowStep;
 
@@ -514,11 +514,11 @@ void test_pair_sequence()
              describe(Role::kPhone, ac::kMsgPair, mt::kQuery, "1addr"));
     now_ms += kNowStep;
 
-    // 4. 清空白名单：whitelist_changed = true。
+    // 4. 清空白名单：whitelistChanged = true。
     run_case(harness, Role::kPhone, ac::kMsgPair, mt::kSet, pair_clear.data(), pair_clear.size(),
              now_ms, describe(Role::kPhone, ac::kMsgPair, mt::kSet, "clear"));
-    TEST_ASSERT_TRUE(harness.old_reply.whitelist_changed);
-    TEST_ASSERT_TRUE(harness.new_reply.whitelist_changed);
+    TEST_ASSERT_TRUE(harness.old_reply.whitelistChanged);
+    TEST_ASSERT_TRUE(harness.new_reply.whitelistChanged);
     TEST_ASSERT_EQUAL_UINT(0, harness.link.whitelist().size());
     now_ms += kNowStep;
 
@@ -542,8 +542,8 @@ void test_alarm_sequence()
     // 1. 手机在线 → 状态帧 flags bit0。
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(Role::kPhone),
-        static_cast<uint8_t>(harness.link.on_open(kPhoneHandle, kPhoneAddr, now_ms, act)));
-    TEST_ASSERT_TRUE(harness.link.has_role(Role::kPhone));
+        static_cast<uint8_t>(harness.link.onOpen(kPhoneHandle, kPhoneAddr, now_ms, act)));
+    TEST_ASSERT_TRUE(harness.link.hasRole(Role::kPhone));
 
     // 2. 无覆盖：推送与查询。
     compare_status_push(harness, 0x0000, now_ms, "push idle");
@@ -556,7 +556,7 @@ void test_alarm_sequence()
     const std::array<uint8_t, 3> test_set = {kTestSet, kStateAlert, kTestLevel};
     run_case(harness, Role::kPhone, ac::kMsgTest, mt::kSet, test_set.data(), test_set.size(),
              now_ms, describe(Role::kPhone, ac::kMsgTest, mt::kSet, "set"));
-    TEST_ASSERT_TRUE(harness.alarm.is_override());
+    TEST_ASSERT_TRUE(harness.alarm.isOverride());
     TEST_ASSERT_EQUAL_HEX8(kStateAlert, harness.alarm.state());
     now_ms += kNowStep;
 
@@ -575,13 +575,13 @@ void test_alarm_sequence()
     TEST_ASSERT_TRUE(harness.old_reply.heartbeat.has_value());
     TEST_ASSERT_TRUE(harness.new_reply.heartbeat.has_value());
     TEST_ASSERT_EQUAL_HEX16(kHeartbeatSeq, harness.new_reply.heartbeat->seq);
-    TEST_ASSERT_EQUAL_UINT8(kHeartbeatPct, harness.new_reply.heartbeat->battery_pct);
-    TEST_ASSERT_EQUAL_UINT8(kHeartbeatState, harness.new_reply.heartbeat->local_state);
+    TEST_ASSERT_EQUAL_UINT8(kHeartbeatPct, harness.new_reply.heartbeat->batteryPct);
+    TEST_ASSERT_EQUAL_UINT8(kHeartbeatState, harness.new_reply.heartbeat->localState);
     now_ms += kNowStep;
 
     // 6. 心跳之后（电池变化）再比一次推送。
-    harness.old_disp.info().battery_pct = kPushBatteryPct;
-    harness.dev.info().battery_pct = kPushBatteryPct;
+    harness.old_disp.info().batteryPct = kPushBatteryPct;
+    harness.dev.info().batteryPct = kPushBatteryPct;
     compare_status_push(harness, kPushSeq2, now_ms, "push after heartbeat");
     now_ms += kNowStep;
 
@@ -589,14 +589,14 @@ void test_alarm_sequence()
     const std::array<uint8_t, 3> test_clear = {kTestClear, kStateAlert, kTestLevel};
     run_case(harness, Role::kPhone, ac::kMsgTest, mt::kSet, test_clear.data(), test_clear.size(),
              now_ms, describe(Role::kPhone, ac::kMsgTest, mt::kSet, "clear"));
-    TEST_ASSERT_FALSE(harness.alarm.is_override());
+    TEST_ASSERT_FALSE(harness.alarm.isOverride());
     now_ms += kNowStep;
 
     // 8. 非法状态 → 失败且状态不变。
     const std::array<uint8_t, 3> test_bad = {kTestSet, kIllegalState, kTestLevel};
     run_case(harness, Role::kPhone, ac::kMsgTest, mt::kSet, test_bad.data(), test_bad.size(),
              now_ms, describe(Role::kPhone, ac::kMsgTest, mt::kSet, "bad_state"));
-    TEST_ASSERT_FALSE(harness.alarm.is_override());
+    TEST_ASSERT_FALSE(harness.alarm.isOverride());
     now_ms += kNowStep;
 
     // 9. 围栏（预留）与 0x40 / 0x41 的 type 限制。
@@ -627,12 +627,12 @@ void test_dev_state_gnss_byte()
     Harness harness;
     TEST_ASSERT_TRUE(isOk(harness.init_router()));
     proto::FrameView frame{};
-    frame.msg_id = kMsgDevState;
+    frame.msgId = kMsgDevState;
     frame.type = mt::kQuery;
     frame.sender = proto::sender::kApp;
     constexpr size_t kGnssByte = proto::kHeaderLen + 2U;
     for (const bool running : {true, false}) {
-        harness.dev.info().gnss_running = running;
+        harness.dev.info().gnssRunning = running;
         arm_reply(harness.old_reply);
         const Outcome old_out =
             observe(harness.old_reply,

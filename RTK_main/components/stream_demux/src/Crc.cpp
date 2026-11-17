@@ -25,7 +25,7 @@ constexpr uint32_t kByteMask = 0xFFU;
 constexpr uint32_t kBitsPerByte = 8U;
 
 /** 单字节表的第 index 项：i << 16 对多项式迭代 8 次（非反射，结果 < 2^24）。 */
-constexpr uint32_t crc24q_entry(uint32_t index) noexcept
+constexpr uint32_t crc24qEntry(uint32_t index) noexcept
 {
     // index < 256，左移 16 位后 < 2^24，uint32_t 内不溢出。
     uint32_t crc = index << 16U;
@@ -41,7 +41,7 @@ constexpr uint32_t crc24q_entry(uint32_t index) noexcept
 }
 
 /** 单字节表的第 index 项：i 对反射多项式迭代 8 次。 */
-constexpr uint32_t crc32_entry(uint32_t index) noexcept
+constexpr uint32_t crc32Entry(uint32_t index) noexcept
 {
     uint32_t crc = index;
 
@@ -55,31 +55,31 @@ constexpr uint32_t crc32_entry(uint32_t index) noexcept
     return crc;
 }
 
-constexpr std::array<uint32_t, kTableSize> make_crc24q_table() noexcept
+constexpr std::array<uint32_t, kTableSize> makeCrc24qTable() noexcept
 {
     std::array<uint32_t, kTableSize> table{};
 
     for (std::size_t idx = 0U; idx < kTableSize; ++idx) {
         // idx < 256，窄化到 uint32_t 安全（表项生成只需要 8 位下标）。
-        table[idx] = crc24q_entry(static_cast<uint32_t>(idx));
+        table[idx] = crc24qEntry(static_cast<uint32_t>(idx));
     }
     return table;
 }
 
-constexpr std::array<uint32_t, kTableSize> make_crc32_table() noexcept
+constexpr std::array<uint32_t, kTableSize> makeCrc32Table() noexcept
 {
     std::array<uint32_t, kTableSize> table{};
 
     for (std::size_t idx = 0U; idx < kTableSize; ++idx) {
         // 同上：idx < 256，窄化安全。
-        table[idx] = crc32_entry(static_cast<uint32_t>(idx));
+        table[idx] = crc32Entry(static_cast<uint32_t>(idx));
     }
     return table;
 }
 
 // 编译期生成的两个表；static 给出内部链接，内容进 .rodata（只读，ISR 安全）。
-static constexpr std::array<uint32_t, kTableSize> kCrc24qTable = make_crc24q_table();
-static constexpr std::array<uint32_t, kTableSize> kCrc32Table = make_crc32_table();
+static constexpr std::array<uint32_t, kTableSize> kCrc24qTable = makeCrc24qTable();
+static constexpr std::array<uint32_t, kTableSize> kCrc32Table = makeCrc32Table();
 
 } // namespace
 
@@ -97,7 +97,7 @@ uint32_t crc24q(std::span<const uint8_t> data, uint32_t crc) noexcept
     return value;
 }
 
-uint32_t crc32_novatel(std::span<const uint8_t> data, uint32_t crc) noexcept
+uint32_t crc32Novatel(std::span<const uint8_t> data, uint32_t crc) noexcept
 {
     uint32_t value = crc;
 

@@ -1,6 +1,6 @@
 // 产品 SPP 帧（AA 44 18）的分流器 C++ 解码器与线路帧 → 字段视图（ADR-0004 §4 / ADR-0005 §1）。
 // 判定规则与 dev_proto_parser_feed（components/device_proto/DevProtoFrame.c）完全一致：AA 44 18、
-// 头长字节 == 0x14、payload_len（偏移 12，u16 LE）≤ DEV_PROTO_MAX_PAYLOAD、CRC-32 正确；
+// 头长字节 == 0x14、payloadLen（偏移 12，u16 LE）≤ DEV_PROTO_MAX_PAYLOAD、CRC-32 正确；
 // CRC 复用 proto::crc32（zlib 兼容，不另建实现）。
 // 早拒绝点：第 2 字节（44）、第 3 字节（18，与 Unicore 二进制 AA 44 B5 分开）、头长字节、payload 长度字段。
 // 长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
@@ -61,7 +61,7 @@ Verdict reject(Reason reason) noexcept
     return verdict;
 }
 
-Verdict reject_sync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
+Verdict rejectSync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
 {
     Verdict verdict = reject(Reason::kSync);
     verdict.offset = offset;
@@ -71,13 +71,13 @@ Verdict reject_sync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
 }
 
 /** 小端 u16；调用方保证 from + 2 <= frame.size()。 */
-uint32_t read_u16_le(std::span<const uint8_t> frame, std::size_t from) noexcept
+uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     return (static_cast<uint32_t>(frame[from]) | (static_cast<uint32_t>(frame[from + 1U]) << 8U));
 }
 
 /** 小端 u32；调用方保证 from + 4 <= frame.size()。 */
-uint32_t read_u32_le(std::span<const uint8_t> frame, std::size_t from) noexcept
+uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     uint32_t value = 0U;
 
@@ -94,7 +94,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
     if (frame[0] != kSyncA) {
-        return reject_sync(0U, kSyncA, frame[0]);
+        return rejectSync(0U, kSyncA, frame[0]);
     }
     if (frame.size() < kSyncB1Len) {
         verdict.need = kSyncB1Len - frame.size();
@@ -102,7 +102,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     }
     if (frame[1] != kSyncB) {
         // 与 NovAtel/Unicore 等其它 AA 开头的协议在这里分开。
-        return reject_sync(1U, kSyncB, frame[1]);
+        return rejectSync(1U, kSyncB, frame[1]);
     }
     if (frame.size() < kSyncLen) {
         verdict.need = kSyncLen - frame.size();
@@ -110,7 +110,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     }
     if (frame[2] != kSyncC) {
         // 与 Unicore 二进制（AA 44 B5）区分的关键早拒绝点。
-        return reject_sync(2U, kSyncC, frame[2]);
+        return rejectSync(2U, kSyncC, frame[2]);
     }
     if (frame.size() < kPosHdrLen) {
         verdict.need = kPosHdrLen - frame.size();
@@ -127,14 +127,14 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return verdict;
     }
 
-    const uint32_t payload_len = read_u16_le(frame, kOfsMsgLen);
-    if (payload_len > kMaxPayload) {
+    const uint32_t payloadLen = readU16Le(frame, kOfsMsgLen);
+    if (payloadLen > kMaxPayload) {
         Verdict bad = reject(Reason::kTooLong);
-        bad.total = static_cast<std::size_t>(payload_len);
+        bad.total = static_cast<std::size_t>(payloadLen);
         return bad;
     }
     // 20 + 256 + 4 = 280 = kMaxFrame，size_t 加法不溢出。
-    const std::size_t total = kHeaderLen + static_cast<std::size_t>(payload_len) + kCrcLen;
+    const std::size_t total = kHeaderLen + static_cast<std::size_t>(payloadLen) + kCrcLen;
     if (frame.size() < total) {
         verdict.need = total - frame.size();
         return verdict;
@@ -146,14 +146,14 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return bad;
     }
 
-    const std::size_t crc_ofs = total - kCrcOfsFromEnd;
-    const uint32_t crc_calc = crc32(frame.first(crc_ofs));
-    const uint32_t crc_rx = read_u32_le(frame, crc_ofs);
+    const std::size_t crcOfs = total - kCrcOfsFromEnd;
+    const uint32_t crcCalc = crc32(frame.first(crcOfs));
+    const uint32_t crcRx = readU32Le(frame, crcOfs);
 
-    if (crc_calc != crc_rx) {
+    if (crcCalc != crcRx) {
         Verdict bad = reject(Reason::kCrc);
-        bad.received = crc_rx;
-        bad.computed = crc_calc;
+        bad.received = crcRx;
+        bad.computed = crcCalc;
         return bad;
     }
     Verdict good{};
@@ -161,7 +161,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return good;
 }
 
-void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:
@@ -202,14 +202,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 
 } // namespace
 
-bool first_byte(uint8_t byte) noexcept
+bool firstByte(uint8_t byte) noexcept
 {
     return byte == kSyncA;
 }
 
 demux::Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 first_byte。
+    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 firstByte。
     const Verdict verdict = judge(frame);
     need = verdict.need;
     return verdict.step;
@@ -225,15 +225,15 @@ std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcep
     if (verdict.step == demux::Step::kFrame) {
         return text.literal("not rejected").finish();
     }
-    explain_verdict(verdict, text);
+    explainVerdict(verdict, text);
     return text.finish();
 }
 
 std::optional<FrameView> view(std::span<const uint8_t> wire) noexcept
 {
-    const std::size_t min_len = kHeaderLen + kCrcLen;
+    const std::size_t minLen = kHeaderLen + kCrcLen;
 
-    if (wire.size() < min_len) {
+    if (wire.size() < minLen) {
         return std::nullopt;
     }
     if ((wire[0] != kSyncA) || (wire[1] != kSyncB) || (wire[2] != kSyncC)) {
@@ -244,24 +244,24 @@ std::optional<FrameView> view(std::span<const uint8_t> wire) noexcept
         return std::nullopt;
     }
 
-    const uint32_t payload_len = read_u16_le(wire, kOfsMsgLen);
-    if (payload_len > kMaxPayload) {
+    const uint32_t payloadLen = readU16Le(wire, kOfsMsgLen);
+    if (payloadLen > kMaxPayload) {
         return std::nullopt;
     }
-    const std::size_t expected = kHeaderLen + static_cast<std::size_t>(payload_len) + kCrcLen;
+    const std::size_t expected = kHeaderLen + static_cast<std::size_t>(payloadLen) + kCrcLen;
     if (wire.size() != expected) {
         // 长度字段与线路帧实际长度不一致：调用方给的 span 不是这一帧。
         return std::nullopt;
     }
 
     FrameView out{};
-    // msg_id 是 16 bit 字段：read_u16_le 的结果 < 2^16，窄化安全。
-    out.msg_id = static_cast<uint16_t>(read_u16_le(wire, kOfsMsgId));
+    // msgId 是 16 bit 字段：readU16Le 的结果 < 2^16，窄化安全。
+    out.msgId = static_cast<uint16_t>(readU16Le(wire, kOfsMsgId));
     out.sender = wire[kOfsSender];
     out.type = wire[kOfsType];
     out.protocol = wire[kOfsProtocol];
     out.interval = wire[kOfsInterval];
-    out.payload = wire.subspan(kHeaderLen, static_cast<std::size_t>(payload_len));
+    out.payload = wire.subspan(kHeaderLen, static_cast<std::size_t>(payloadLen));
     return out;
 }
 

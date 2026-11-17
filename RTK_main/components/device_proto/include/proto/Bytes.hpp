@@ -24,7 +24,7 @@ public:
     void bytes(std::span<const uint8_t> data) noexcept;
     void zeros(size_t count) noexcept;
     // 写定宽字段：拷贝 min(text.size(), width) 字节，其余补 0；不要求 text 以 0 结尾。
-    void fixed_str(std::string_view text, size_t width) noexcept;
+    void fixedStr(std::string_view text, size_t width) noexcept;
 
     [[nodiscard]] bool ok() const noexcept;
     [[nodiscard]] size_t size() const noexcept; // 已成功写入的字节数

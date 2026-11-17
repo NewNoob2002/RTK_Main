@@ -52,20 +52,20 @@ inline constexpr uint32_t kDefaultComBaud = 115200; // 0x0D 应答中的默认�
 struct DeviceInfo {
     FixedStr<8> product;
     FixedStr<16> sn;
-    FixedStr<8> hw_ver;
-    FixedStr<16> fw_ver;
+    FixedStr<8> hwVer;
+    FixedStr<16> fwVer;
     FixedStr<8> board;
-    FixedStr<16> board_sn;
-    FixedStr<16> board_fw;
-    FixedStr<8> radio_type;
-    FixedStr<16> radio_fw;
-    bool on_battery = true;
-    uint8_t battery_pct = proto::alarm::kValueUnknown;
-    int8_t battery_temp_c = 0;
-    uint32_t com_baud = kDefaultComBaud;
-    uint8_t fix_quality =
+    FixedStr<16> boardSn;
+    FixedStr<16> boardFw;
+    FixedStr<8> radioType;
+    FixedStr<16> radioFw;
+    bool onBattery = true;
+    uint8_t batteryPct = proto::alarm::kValueUnknown;
+    int8_t batteryTempC = 0;
+    uint32_t comBaud = kDefaultComBaud;
+    uint8_t fixQuality =
         proto::alarm::kValueUnknown; // GGA 质量（ADR-0010 §2.7），0x40 字节 4；0xFF 未知
-    bool gnss_running = false; // 0x02 字节 2：Controller kRunning 为 0x81，否则 0x01（G-C §7）
+    bool gnssRunning = false; // 0x02 字节 2：Controller kRunning 为 0x81，否则 0x01（G-C §7）
 };
 
 inline constexpr size_t kWorkModeLen = 48;
@@ -92,13 +92,13 @@ enum class DispatchResult : uint8_t {
 struct Reply {
     std::array<uint8_t, proto::kMaxFrame> buf{};
     size_t len = 0;
-    bool whitelist_changed = false;                   // app 层需持久化白名单
+    bool whitelistChanged = false;                    // app 层需持久化白名单
     std::optional<proto::alarm::Heartbeat> heartbeat; // 收到 0x41 心跳
 
     void clear() noexcept
     {
         len = 0;
-        whitelist_changed = false;
+        whitelistChanged = false;
         heartbeat.reset();
     }
     [[nodiscard]] std::span<const uint8_t> bytes() const noexcept

@@ -83,24 +83,24 @@ Verdict reject(Reason reason, std::size_t offset, uint8_t byte = 0U) noexcept
     return verdict;
 }
 
-bool is_printable(uint8_t byte) noexcept
+bool isPrintable(uint8_t byte) noexcept
 {
     return (byte >= kPrintableMin) && (byte <= kPrintableMax);
 }
 
-bool is_hex_digit(uint8_t byte) noexcept
+bool isHexDigit(uint8_t byte) noexcept
 {
     return ((byte >= kDigit0) && (byte <= kDigit9)) || ((byte >= kUpperA) && (byte <= kUpperF)) ||
            ((byte >= kLowerA) && (byte <= kLowerF));
 }
 
-bool is_upper_alpha(uint8_t byte) noexcept
+bool isUpperAlpha(uint8_t byte) noexcept
 {
     return (byte >= kUpperA) && (byte <= kUpperZ);
 }
 
-/** 调用方必须先经 is_hex_digit() 判定；返回值 0..15。 */
-uint8_t hex_value(uint8_t byte) noexcept
+/** 调用方必须先经 isHexDigit() 判定；返回值 0..15。 */
+uint8_t hexValue(uint8_t byte) noexcept
 {
     if ((byte >= kDigit0) && (byte <= kDigit9)) {
         // 差 0..9，窄化到 uint8_t 安全。
@@ -115,9 +115,9 @@ uint8_t hex_value(uint8_t byte) noexcept
 }
 
 /** Hash 正文比 NMEA 更严：可打印且不含 '#' '$' '*'。 */
-bool is_body(uint8_t byte) noexcept
+bool isBody(uint8_t byte) noexcept
 {
-    return is_printable(byte) && (byte != kSyncByte) && (byte != kDollar) && (byte != kStar);
+    return isPrintable(byte) && (byte != kSyncByte) && (byte != kDollar) && (byte != kStar);
 }
 
 uint8_t xor8(std::span<const uint8_t> data) noexcept
@@ -132,8 +132,8 @@ uint8_t xor8(std::span<const uint8_t> data) noexcept
 }
 
 /** 在 frame[last-window .. last] 内反向寻找最近的 '*'；窗口定长，因此 O(1)。 */
-bool find_star_reverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window,
-                       std::size_t &ofs) noexcept
+bool findStarReverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window,
+                     std::size_t &ofs) noexcept
 {
     ofs = 0U;
     for (std::size_t back = 0U; (back <= window) && (back <= last); ++back) {
@@ -146,20 +146,20 @@ bool find_star_reverse(std::span<const uint8_t> frame, std::size_t last, std::si
 }
 
 /** 读 count 位大端十六进制（count ≤ 8）；调用方保证范围合法且都是十六进制字符。 */
-uint32_t read_hex_be(std::span<const uint8_t> frame, std::size_t from, std::size_t count) noexcept
+uint32_t readHexBe(std::span<const uint8_t> frame, std::size_t from, std::size_t count) noexcept
 {
     uint32_t value = 0U;
 
     for (std::size_t idx = 0U; idx < count; ++idx) {
-        value = (value << kNibbleBits) | static_cast<uint32_t>(hex_value(frame[from + idx]));
+        value = (value << kNibbleBits) | static_cast<uint32_t>(hexValue(frame[from + idx]));
     }
     return value;
 }
 
-bool all_hex(std::span<const uint8_t> frame, std::size_t from, std::size_t count) noexcept
+bool allHex(std::span<const uint8_t> frame, std::size_t from, std::size_t count) noexcept
 {
     for (std::size_t idx = 0U; idx < count; ++idx) {
-        if (!is_hex_digit(frame[from + idx])) {
+        if (!isHexDigit(frame[from + idx])) {
             return false;
         }
     }
@@ -170,7 +170,7 @@ bool all_hex(std::span<const uint8_t> frame, std::size_t from, std::size_t count
 Verdict finish(std::span<const uint8_t> frame, std::size_t star) noexcept
 {
     for (std::size_t idx = 1U; idx < star; ++idx) {
-        if (!is_body(frame[idx])) {
+        if (!isBody(frame[idx])) {
             return reject(Reason::kBody, idx, frame[idx]);
         }
     }
@@ -179,23 +179,23 @@ Verdict finish(std::span<const uint8_t> frame, std::size_t star) noexcept
     if ((len - 1U - star) == kStarOfsXor) {
         // 形式一：2 位十六进制 XOR，覆盖 '#' 与 '*' 之间。
         // 各十六进制位 ≤ 0x0F，左移 4 位后 ≤ 0xF0，结果 ≤ 0xFF，窄化安全。
-        const uint8_t checksum_rx = static_cast<uint8_t>(
-            (static_cast<uint32_t>(hex_value(frame[star + 1U])) << kNibbleBits) |
-            static_cast<uint32_t>(hex_value(frame[star + 2U])));
-        const uint8_t checksum_calc = xor8(frame.subspan(1U, star - 1U));
-        if (checksum_calc != checksum_rx) {
-            Verdict bad = reject(Reason::kXorChecksum, star + 1U, checksum_rx);
-            bad.computed = static_cast<uint32_t>(checksum_calc);
+        const uint8_t checksumRx = static_cast<uint8_t>(
+            (static_cast<uint32_t>(hexValue(frame[star + 1U])) << kNibbleBits) |
+            static_cast<uint32_t>(hexValue(frame[star + 2U])));
+        const uint8_t checksumCalc = xor8(frame.subspan(1U, star - 1U));
+        if (checksumCalc != checksumRx) {
+            Verdict bad = reject(Reason::kXorChecksum, star + 1U, checksumRx);
+            bad.computed = static_cast<uint32_t>(checksumCalc);
             return bad;
         }
     } else {
         // 形式二：8 位十六进制 CRC-32，与 Unicore 二进制相同的算法。
-        const uint32_t checksum_rx = read_hex_be(frame, star + 1U, kCrcDigits);
-        const uint32_t checksum_calc = crc::crc32_novatel(frame.subspan(1U, star - 1U));
-        if (checksum_calc != checksum_rx) {
+        const uint32_t checksumRx = readHexBe(frame, star + 1U, kCrcDigits);
+        const uint32_t checksumCalc = crc::crc32Novatel(frame.subspan(1U, star - 1U));
+        if (checksumCalc != checksumRx) {
             Verdict bad = reject(Reason::kCrcChecksum, star + 1U, 0U);
-            bad.received = checksum_rx;
-            bad.computed = checksum_calc;
+            bad.received = checksumRx;
+            bad.computed = checksumCalc;
             return bad;
         }
     }
@@ -204,33 +204,33 @@ Verdict finish(std::span<const uint8_t> frame, std::size_t star) noexcept
     return good;
 }
 
-/** 未到结束符时，按新到字节相对 '*' 的偏移做 O(1) 预检（after_star ≥ 1，即当前字节不是 '*'）。 */
-bool mid_byte_ok(std::span<const uint8_t> frame, std::size_t last, std::size_t star,
-                 uint8_t new_byte) noexcept
+/** 未到结束符时，按新到字节相对 '*' 的偏移做 O(1) 预检（afterStar ≥ 1，即当前字节不是 '*'）。 */
+bool midByteOk(std::span<const uint8_t> frame, std::size_t last, std::size_t star,
+               uint8_t newByte) noexcept
 {
-    const std::size_t after_star = last - star;
+    const std::size_t afterStar = last - star;
 
-    if (after_star <= kXorDigits) {
+    if (afterStar <= kXorDigits) {
         // 两种形式的前两位都是十六进制。
-        return is_hex_digit(new_byte);
+        return isHexDigit(newByte);
     }
-    if (after_star == kOfsBranch) {
+    if (afterStar == kOfsBranch) {
         // XOR 形式到此结束应为 '\r'；CRC 形式继续是十六进制。
-        return is_hex_digit(new_byte) || (new_byte == kCr);
+        return isHexDigit(newByte) || (newByte == kCr);
     }
-    if (after_star <= kCrcDigits) {
+    if (afterStar <= kCrcDigits) {
         // 4..8：只有 CRC 形式能走到这里；第 3 字节已是 '\r' 说明 XOR 形式早该结束。
         if (frame[star + kOfsBranch] == kCr) {
             return false;
         }
-        return is_hex_digit(new_byte);
+        return isHexDigit(newByte);
     }
-    if (after_star == kOfsCr) {
+    if (afterStar == kOfsCr) {
         // CRC 形式 8 位十六进制之后的 '\r'。
         if (frame[star + kOfsBranch] == kCr) {
             return false;
         }
-        return new_byte == kCr;
+        return newByte == kCr;
     }
     // 更远的偏移只可能是 '\n'（结束符由调用方单独处理）。
     return false;
@@ -244,13 +244,13 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return reject(Reason::kSync, 0U, frame[0]);
     }
     const std::size_t last = frame.size() - 1U;
-    const uint8_t new_byte = frame[last];
+    const uint8_t newByte = frame[last];
 
     if (frame.size() < 2U) {
         verdict.need = 2U - frame.size();
         return verdict;
     }
-    if (!is_upper_alpha(frame[1])) {
+    if (!isUpperAlpha(frame[1])) {
         // 第 2 字节必须是语句名首字母（大写字母）：与同样以 '#' 开头的其他语法早分开。
         return reject(Reason::kSecond, 1U, frame[1]);
     }
@@ -259,46 +259,46 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return verdict;
     }
 
-    std::size_t star_ofs = 0U;
-    if (new_byte == kLf) {
+    std::size_t starOfs = 0U;
+    if (newByte == kLf) {
         // 最近的 '*' 就是校验字段起点；两种形式的 '*' 偏移都是定值。
-        if (!find_star_reverse(frame, last, kStarWindow, star_ofs)) {
-            return reject(Reason::kMissingStar, last, new_byte);
+        if (!findStarReverse(frame, last, kStarWindow, starOfs)) {
+            return reject(Reason::kMissingStar, last, newByte);
         }
-        if ((star_ofs != kStarOfsXor) && (star_ofs != kStarOfsCrc)) {
-            return reject(Reason::kStarOffset, last - star_ofs, frame[last - star_ofs]);
+        if ((starOfs != kStarOfsXor) && (starOfs != kStarOfsCrc)) {
+            return reject(Reason::kStarOffset, last - starOfs, frame[last - starOfs]);
         }
         if (frame[last - 1U] != kCr) {
             return reject(Reason::kNoCr, last - 1U, frame[last - 1U]);
         }
-        const std::size_t star = last - star_ofs; // star_ofs ≤ last，不越界
-        if (star_ofs == kStarOfsXor) {
-            if (!is_hex_digit(frame[star + 1U])) {
+        const std::size_t star = last - starOfs; // starOfs ≤ last，不越界
+        if (starOfs == kStarOfsXor) {
+            if (!isHexDigit(frame[star + 1U])) {
                 return reject(Reason::kBadHex, star + 1U, frame[star + 1U]);
             }
-            if (!is_hex_digit(frame[star + 2U])) {
+            if (!isHexDigit(frame[star + 2U])) {
                 return reject(Reason::kBadHex, star + 2U, frame[star + 2U]);
             }
-        } else if (!all_hex(frame, star + 1U, kCrcDigits)) {
+        } else if (!allHex(frame, star + 1U, kCrcDigits)) {
             for (std::size_t idx = 0U; idx < kCrcDigits; ++idx) {
-                if (!is_hex_digit(frame[star + 1U + idx])) {
+                if (!isHexDigit(frame[star + 1U + idx])) {
                     return reject(Reason::kBadHex, star + 1U + idx, frame[star + 1U + idx]);
                 }
             }
         } else {
-            // all_hex 已通过，校验字段都是十六进制。
+            // allHex 已通过，校验字段都是十六进制。
         }
         return finish(frame, star);
     }
 
     // 未到结束符：只查新到字节与其前面定长窗口内的 '*' 位置（O(1)）。
-    if (!find_star_reverse(frame, last, kStarWindow, star_ofs)) {
-        if (!is_body(new_byte)) {
-            return reject(Reason::kBody, last, new_byte);
+    if (!findStarReverse(frame, last, kStarWindow, starOfs)) {
+        if (!isBody(newByte)) {
+            return reject(Reason::kBody, last, newByte);
         }
-    } else if ((star_ofs != 0U) && (!mid_byte_ok(frame, last, last - star_ofs, new_byte))) {
+    } else if ((starOfs != 0U) && (!midByteOk(frame, last, last - starOfs, newByte))) {
         // 偏移 0 是 '*' 本身（校验字段开始），由下一个字节起再预检。
-        return reject(Reason::kChecksumByte, last, new_byte);
+        return reject(Reason::kChecksumByte, last, newByte);
     } else {
         // 正文字节或 '*' 合法，继续累积。
     }
@@ -311,17 +311,17 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return verdict;
 }
 
-void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:
         text.literal("byte 0 is ")
-            .byte_value(static_cast<uint8_t>(verdict.received))
+            .byteValue(static_cast<uint8_t>(verdict.received))
             .literal(", expected '#'");
         break;
     case Reason::kSecond:
         text.literal("byte 1 is ")
-            .byte_value(static_cast<uint8_t>(verdict.received))
+            .byteValue(static_cast<uint8_t>(verdict.received))
             .literal(", not 'A'-'Z'");
         break;
     case Reason::kMissingStar:
@@ -334,7 +334,7 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
         break;
     case Reason::kBody:
         text.literal("illegal byte ")
-            .byte_value(static_cast<uint8_t>(verdict.received))
+            .byteValue(static_cast<uint8_t>(verdict.received))
             .literal(" at offset ")
             .decimal(verdict.offset);
         break;
@@ -342,21 +342,21 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
         text.literal("byte ")
             .decimal(verdict.offset)
             .literal(" is ")
-            .byte_value(static_cast<uint8_t>(verdict.received))
+            .byteValue(static_cast<uint8_t>(verdict.received))
             .literal(", not a checksum digit or CR");
         break;
     case Reason::kNoCr:
         text.literal("byte ")
             .decimal(verdict.offset)
             .literal(" is ")
-            .byte_value(static_cast<uint8_t>(verdict.received))
+            .byteValue(static_cast<uint8_t>(verdict.received))
             .literal(", expected CR");
         break;
     case Reason::kBadHex:
         text.literal("byte ")
             .decimal(verdict.offset)
             .literal(" is ")
-            .byte_value(static_cast<uint8_t>(verdict.received))
+            .byteValue(static_cast<uint8_t>(verdict.received))
             .literal(", not a hex digit");
         break;
     case Reason::kXorChecksum:
@@ -383,14 +383,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 
 } // namespace
 
-bool first_byte(uint8_t byte) noexcept
+bool firstByte(uint8_t byte) noexcept
 {
     return byte == kSyncByte;
 }
 
 Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 first_byte。
+    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 firstByte。
     const Verdict verdict = judge(frame);
     need = verdict.need;
     return verdict.step;
@@ -406,7 +406,7 @@ std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcep
     if (verdict.step == Step::kFrame) {
         return text.literal("not rejected").finish();
     }
-    explain_verdict(verdict, text);
+    explainVerdict(verdict, text);
     return text.finish();
 }
 

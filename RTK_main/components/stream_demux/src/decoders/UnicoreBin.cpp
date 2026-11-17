@@ -62,7 +62,7 @@ Verdict reject(Reason reason) noexcept
     return verdict;
 }
 
-Verdict reject_sync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
+Verdict rejectSync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
 {
     Verdict verdict = reject(Reason::kSync);
     verdict.offset = offset;
@@ -71,13 +71,13 @@ Verdict reject_sync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
 }
 
 /** 小端 u16；调用方保证 from + 2 <= frame.size()。 */
-uint32_t read_u16_le(std::span<const uint8_t> frame, std::size_t from) noexcept
+uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     return (static_cast<uint32_t>(frame[from]) | (static_cast<uint32_t>(frame[from + 1U]) << 8U));
 }
 
 /** 小端 u32；调用方保证 from + 4 <= frame.size()。 */
-uint32_t read_u32_le(std::span<const uint8_t> frame, std::size_t from) noexcept
+uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     uint32_t value = 0U;
 
@@ -93,14 +93,14 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
     if (frame[0] != kSyncA) {
-        return reject_sync(0U, kSyncA, frame[0]);
+        return rejectSync(0U, kSyncA, frame[0]);
     }
     if (frame.size() < kSyncB1Len) {
         verdict.need = kSyncB1Len - frame.size();
         return verdict;
     }
     if (frame[1] != kSyncB) {
-        return reject_sync(1U, kSyncB, frame[1]);
+        return rejectSync(1U, kSyncB, frame[1]);
     }
     if (frame.size() < kSyncLen) {
         verdict.need = kSyncLen - frame.size();
@@ -108,16 +108,16 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     }
     if (frame[2] != kSyncC) {
         // 与同以 AA 44 开头的产品帧（AA 44 18）在这里分开。
-        return reject_sync(2U, kSyncC, frame[2]);
+        return rejectSync(2U, kSyncC, frame[2]);
     }
     if (frame.size() < kBytesToLenField) {
         verdict.need = kBytesToLenField - frame.size();
         return verdict;
     }
 
-    const uint32_t payload_len = read_u16_le(frame, kOfsLen);
-    // payload_len ≤ 0xFFFF，加固定头与 CRC 后仍在 size_t 范围内。
-    const std::size_t total = kHdrLen + static_cast<std::size_t>(payload_len) + kCrcLen;
+    const uint32_t payloadLen = readU16Le(frame, kOfsLen);
+    // payloadLen ≤ 0xFFFF，加固定头与 CRC 后仍在 size_t 范围内。
+    const std::size_t total = kHdrLen + static_cast<std::size_t>(payloadLen) + kCrcLen;
     if (total > kMaxFrame) {
         // 长度字段声称超过 max_frame：早拒绝。
         Verdict bad = reject(Reason::kTooLong);
@@ -135,14 +135,14 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return bad;
     }
 
-    const std::size_t crc_ofs = total - kCrcLen;
-    const uint32_t crc_calc = crc::crc32_novatel(frame.first(crc_ofs));
-    const uint32_t crc_rx = read_u32_le(frame, crc_ofs);
+    const std::size_t crcOfs = total - kCrcLen;
+    const uint32_t crcCalc = crc::crc32Novatel(frame.first(crcOfs));
+    const uint32_t crcRx = readU32Le(frame, crcOfs);
 
-    if (crc_calc != crc_rx) {
+    if (crcCalc != crcRx) {
         Verdict bad = reject(Reason::kCrc);
-        bad.received = crc_rx;
-        bad.computed = crc_calc;
+        bad.received = crcRx;
+        bad.computed = crcCalc;
         return bad;
     }
     Verdict good{};
@@ -150,7 +150,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return good;
 }
 
-void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:
@@ -186,14 +186,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 
 } // namespace
 
-bool first_byte(uint8_t byte) noexcept
+bool firstByte(uint8_t byte) noexcept
 {
     return byte == kSyncA;
 }
 
 Step step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
-    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 first_byte。
+    // 契约：调用方保证 frame.size() >= 1 且 frame[0] 已通过 firstByte。
     const Verdict verdict = judge(frame);
     need = verdict.need;
     return verdict.step;
@@ -209,7 +209,7 @@ std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcep
     if (verdict.step == Step::kFrame) {
         return text.literal("not rejected").finish();
     }
-    explain_verdict(verdict, text);
+    explainVerdict(verdict, text);
     return text.finish();
 }
 

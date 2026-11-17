@@ -84,7 +84,7 @@ void ByteWriter::zeros(size_t count) noexcept
     pos_ += count;
 }
 
-void ByteWriter::fixed_str(std::string_view text, size_t width) noexcept
+void ByteWriter::fixedStr(std::string_view text, size_t width) noexcept
 {
     if (!ok_) {
         return;
@@ -93,12 +93,12 @@ void ByteWriter::fixed_str(std::string_view text, size_t width) noexcept
         ok_ = false;
         return;
     }
-    const size_t copy_len = (text.size() < width) ? text.size() : width;
-    for (size_t i = 0; i < copy_len; ++i) {
+    const size_t copyLen = (text.size() < width) ? text.size() : width;
+    for (size_t i = 0; i < copyLen; ++i) {
         // char 的位模式按无符号字节写入（协议只传输字节，不解释字符集）。
         buf_[pos_ + i] = static_cast<uint8_t>(text[i]);
     }
-    for (size_t i = copy_len; i < width; ++i) {
+    for (size_t i = copyLen; i < width; ++i) {
         buf_[pos_ + i] = 0;
     }
     pos_ += width;

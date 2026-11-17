@@ -1,5 +1,5 @@
 // 协议指令路由实现（ADR-0007 §3.5）：启动时把各服务登记的 Route 表展开到固定容量索引，
-// 链路任务按 msg_id 查找后调用对应 handler，替代旧 CommandDispatcher 的大 switch。
+// 链路任务按 msgId 查找后调用对应 handler，替代旧 CommandDispatcher 的大 switch。
 // 判定顺序与旧 dispatcher 一致：未登记 → kNoReply（先于角色检查）→ 角色不在 RoleMask → kDenied → handler。
 
 #include "core/CommandRouter.hpp"
@@ -36,13 +36,13 @@ fw::Status CommandRouter::init(std::span<const RouteTable> tables) noexcept
             }
             bool duplicated = false;
             for (size_t i = 0; i < count_; ++i) {
-                if (entries_[i].msg_id == route.msg_id) {
+                if (entries_[i].msgId == route.msgId) {
                     duplicated = true;
                     break;
                 }
             }
             if (duplicated) {
-                // 同一 msg_id 只能有一个 handler；重复登记在启动期就暴露。
+                // 同一 msgId 只能有一个 handler；重复登记在启动期就暴露。
                 status = fw::Status::kInvalidArg;
                 break;
             }
@@ -50,7 +50,7 @@ fw::Status CommandRouter::init(std::span<const RouteTable> tables) noexcept
                 status = fw::Status::kNoSpace;
                 break;
             }
-            entries_[count_].msg_id = route.msg_id;
+            entries_[count_].msgId = route.msgId;
             entries_[count_].roles = route.roles;
             entries_[count_].handler = route.handler;
             entries_[count_].self = table.self;
@@ -67,7 +67,7 @@ fw::Status CommandRouter::init(std::span<const RouteTable> tables) noexcept
     return status;
 }
 
-DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, uint32_t now_ms,
+DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, uint32_t nowMs,
                                      Reply &reply) noexcept
 {
     reply.clear();
@@ -76,27 +76,27 @@ DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, u
     }
 
     // Role 枚举值 < 8（Types.hpp），移位结果落在 u8 内。
-    const RoleMask mask = role_bit(role);
+    const RoleMask mask = roleBit(role);
     for (size_t i = 0; i < count_; ++i) {
         const Entry &entry = entries_[i];
-        if (entry.msg_id != frame.msg_id) {
+        if (entry.msgId != frame.msgId) {
             continue;
         }
         if ((entry.roles & mask) == 0) {
             // 无路由：路由器不知道会话句柄，session 记 0。
-            trace_proto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msg_id),
-                        static_cast<uint32_t>(role));
+            traceProto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msgId),
+                       static_cast<uint32_t>(role));
             return DispatchResult::kDenied;
         }
-        return entry.handler(entry.self, frame, now_ms, reply);
+        return entry.handler(entry.self, frame, nowMs, reply);
     }
     // 未登记 ID（含 5.4 保留 ID）不回复，先于角色检查。
-    trace_proto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msg_id),
-                static_cast<uint32_t>(role));
+    traceProto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msgId),
+               static_cast<uint32_t>(role));
     return DispatchResult::kNoReply;
 }
 
-size_t CommandRouter::route_count() const noexcept
+size_t CommandRouter::routeCount() const noexcept
 {
     return count_;
 }

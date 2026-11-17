@@ -19,19 +19,19 @@ public:
     constexpr SppTransport() noexcept = default;
 
     [[nodiscard]] fw::Status write(core::SessionHandle handle, std::span<const uint8_t> data,
-                                   uint32_t timeout_ms) noexcept override;
-    [[nodiscard]] bool supports_credit() const noexcept override
+                                   uint32_t timeoutMs) noexcept override;
+    [[nodiscard]] bool supportsCredit() const noexcept override
     {
         return true;
     }
-    [[nodiscard]] fw::Status reserve_reply(core::SessionHandle handle,
-                                           core::ReplyCredit &credit) noexcept override;
-    [[nodiscard]] fw::Status commit_reply(const core::ReplyCredit &credit,
-                                          std::span<const uint8_t> data) noexcept override;
-    void cancel_reply(const core::ReplyCredit &credit) noexcept override;
-    [[nodiscard]] bool reply_ready(core::SessionHandle handle) const noexcept override;
-    [[nodiscard]] fw::Status push_latest(core::SessionHandle handle,
+    [[nodiscard]] fw::Status reserveReply(core::SessionHandle handle,
+                                          core::ReplyCredit &credit) noexcept override;
+    [[nodiscard]] fw::Status commitReply(const core::ReplyCredit &credit,
                                          std::span<const uint8_t> data) noexcept override;
+    void cancelReply(const core::ReplyCredit &credit) noexcept override;
+    [[nodiscard]] bool replyReady(core::SessionHandle handle) const noexcept override;
+    [[nodiscard]] fw::Status pushLatest(core::SessionHandle handle,
+                                        std::span<const uint8_t> data) noexcept override;
     [[nodiscard]] fw::Status disconnect(core::SessionHandle handle) noexcept override;
 };
 

@@ -57,19 +57,19 @@ enum class AlarmTrace : uint8_t {
 };
 
 /** 带类型的便捷包装；参数求值昂贵时，调用方先用 fw::trace_on() 判断。 */
-inline void trace_link(LinkTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
+inline void traceLink(LinkTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kLink, static_cast<uint8_t>(code),
               static_cast<uint16_t>(session & kTraceSessionMask), a, b);
 }
 
-inline void trace_proto(ProtoTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
+inline void traceProto(ProtoTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kProto, static_cast<uint8_t>(code),
               static_cast<uint16_t>(session & kTraceSessionMask), a, b);
 }
 
-inline void trace_alarm(AlarmTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
+inline void traceAlarm(AlarmTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kAlarm, static_cast<uint8_t>(code),
               static_cast<uint16_t>(session & kTraceSessionMask), a, b);

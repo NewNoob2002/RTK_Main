@@ -9,7 +9,7 @@ namespace proto {
 
 namespace {
 
-fw::Status from_c_err(dev_proto_err_t err) noexcept
+fw::Status fromCErr(dev_proto_err_t err) noexcept
 {
     switch (err) {
     case DEV_PROTO_OK:
@@ -23,7 +23,7 @@ fw::Status from_c_err(dev_proto_err_t err) noexcept
     }
 }
 
-ParseResult from_c_result(dev_proto_parse_result_t result) noexcept
+ParseResult fromCResult(dev_proto_parse_result_t result) noexcept
 {
     switch (result) {
     case DEV_PROTO_PARSE_NONE:
@@ -46,13 +46,13 @@ uint32_t crc32(std::span<const uint8_t> data, uint32_t crc) noexcept
     return dev_proto_crc32(crc, data.data(), data.size());
 }
 
-uint8_t response_type(uint8_t req_type) noexcept
+uint8_t responseType(uint8_t reqType) noexcept
 {
-    return dev_proto_response_type(req_type);
+    return dev_proto_response_type(reqType);
 }
 
-fw::Status build_frame(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender, uint8_t type,
-                       std::span<const uint8_t> payload, size_t &out_len) noexcept
+fw::Status buildFrame(std::span<uint8_t> out, uint16_t msgId, uint8_t sender, uint8_t type,
+                      std::span<const uint8_t> payload, size_t &outLen) noexcept
 {
     if (payload.size() > kMaxPayload) {
         return fw::Status::kInvalidArg;
@@ -62,16 +62,16 @@ fw::Status build_frame(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender, 
         return fw::Status::kNoSpace;
     }
 
-    size_t c_out_len = 0;
+    size_t cOutLen = 0;
     /* payload.size() ≤ kMaxPayload(256)，uint16_t 窄化安全 */
     const dev_proto_err_t err =
-        dev_proto_frame_build(out.data(), out.size(), msg_id, sender, type, payload.data(),
-                              static_cast<uint16_t>(payload.size()), &c_out_len);
+        dev_proto_frame_build(out.data(), out.size(), msgId, sender, type, payload.data(),
+                              static_cast<uint16_t>(payload.size()), &cOutLen);
     if (err != DEV_PROTO_OK) {
-        return from_c_err(err);
+        return fromCErr(err);
     }
 
-    out_len = c_out_len;
+    outLen = cOutLen;
     return fw::Status::kOk;
 }
 
@@ -82,20 +82,20 @@ void FrameParser::reset() noexcept
 
 ParseResult FrameParser::feed(uint8_t byte, FrameView &frame) noexcept
 {
-    dev_proto_frame_t c_frame{};
-    const ParseResult result = from_c_result(dev_proto_parser_feed(&parser_, byte, &c_frame));
+    dev_proto_frame_t cFrame{};
+    const ParseResult result = fromCResult(dev_proto_parser_feed(&parser_, byte, &cFrame));
 
     if (result != ParseResult::kFrame) {
         return result;
     }
 
-    frame.msg_id = c_frame.msg_id;
-    frame.sender = c_frame.sender;
-    frame.type = c_frame.type;
-    frame.protocol = c_frame.protocol;
-    frame.interval = c_frame.interval;
-    frame.payload = (c_frame.payload != nullptr)
-                        ? std::span<const uint8_t>(c_frame.payload, c_frame.payload_len)
+    frame.msgId = cFrame.msg_id;
+    frame.sender = cFrame.sender;
+    frame.type = cFrame.type;
+    frame.protocol = cFrame.protocol;
+    frame.interval = cFrame.interval;
+    frame.payload = (cFrame.payload != nullptr)
+                        ? std::span<const uint8_t>(cFrame.payload, cFrame.payload_len)
                         : std::span<const uint8_t>();
     return ParseResult::kFrame;
 }

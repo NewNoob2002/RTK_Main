@@ -30,7 +30,9 @@ struct Bytes {
 
     constexpr Bytes() noexcept = default;
 
-    template <std::size_t N> constexpr Bytes(const char (&literal)[N]) noexcept : text(literal), size(N - 1) {}
+    template <std::size_t N>
+    constexpr Bytes(const char (&literal)[N]) noexcept : text(literal), size(N - 1)
+    {}
 
     // 不是 constexpr：指针到 uint8_t* 的转换不允许出现在常量表达式里。
     [[nodiscard]] std::span<const uint8_t> view() const noexcept

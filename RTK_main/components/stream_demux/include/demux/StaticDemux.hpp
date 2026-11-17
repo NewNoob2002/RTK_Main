@@ -1,4 +1,4 @@
-// 编译期装配的分流器：解码器集合作为模板参数，缓冲区按最大 max_frame 自动定长，数量越界编译报错。
+// 编译期装配的分流器：解码器集合作为模板参数，缓冲区按最大 maxFrame 自动定长，数量越界编译报错。
 //   constinit demux::StaticDemux<proto::demux_frame::kDecoder, demux::rtcm3::kDecoder> s_bt_demux;
 //   if (s_bt_demux.init(sink) != demux::Error::kOk) { ... }
 // 冻结接口（ADR-0005）。实现方不得修改；变更须先修订 ADR-0005。
@@ -20,7 +20,7 @@ public:
     static constexpr std::size_t kCount = sizeof...(Ds);
     static_assert(kCount >= 1 && kCount <= kMaxDecoders,
                   "StaticDemux: 解码器数量必须在 1..kMaxDecoders");
-    static constexpr std::size_t kBufSize = std::max({Ds.max_frame...});
+    static constexpr std::size_t kBufSize = std::max({Ds.maxFrame...});
     static constexpr std::size_t kBufSizeMax = 65535U; // 单缓冲区上限（uint16 长度字段）
     static_assert(kBufSize >= 1 && kBufSize <= kBufSizeMax,
                   "StaticDemux: max_frame 必须在 1..65535");
@@ -56,13 +56,13 @@ public:
         return engine_.stats();
     }
 
-    void reset_stats() noexcept
+    void resetStats() noexcept
     {
-        engine_.reset_stats();
+        engine_.resetStats();
     }
 
     /** 解码器在表中的下标（与 Sink::on_frame 的 index 对应）。 */
-    template <const Decoder &D> [[nodiscard]] static constexpr uint8_t index_of() noexcept
+    template <const Decoder &D> [[nodiscard]] static constexpr uint8_t indexOf() noexcept
     {
         // 用模板实参等价性比较身份，而不是 `&D == &Ds`：GCC 在 -fsanitize=undefined 下不把不同对象的地址比较
         // 视为常量表达式（H3 报告 §5 复现），模板实参比较在任何模式下都是编译期常量。
