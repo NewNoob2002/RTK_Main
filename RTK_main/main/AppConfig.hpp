@@ -1,4 +1,5 @@
 // 应用全局配置常量、模块/执行器编号与策略查询（合并原 app_version.hpp 与 app_ids.hpp 全局部分）。
+// 只含常量、枚举与 constexpr 策略函数，无运行期状态；被各模块与组合根包含，线程/ISR 安全。
 #pragma once
 
 #include <cstddef>

@@ -1,4 +1,5 @@
-// RTCM 出口的单一所有者是链路任务；本阶段只统计，GNSS UART 管道由后续 ADR 定义。
+// RTCM 转发统计的跨模块接口：按角色累计帧数、字节数与 CRC-32（GNSS UART 管道由后续 ADR 定义）。
+// 写入方是 kLink 任务的分流回调，读取方是同任务上的 RTCM 模块；无内部同步，非 ISR 安全。
 #pragma once
 
 #include <cstdint>

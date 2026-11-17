@@ -1,4 +1,5 @@
-// 系统模块实现：prepare() 解析 SN、生成设备名并初始化蓝牙，poll() 发布系统/执行器状态（启动前或 kLink 任务）。
+// 系统模块实现：prepare() 解析 SN、生成设备名并初始化蓝牙，poll() 发布系统/执行器状态。
+// prepare() 只在启动期由 BootFlow 调用；poll() 与命令在 kLink 任务；蓝牙/NVS/日志调用可阻塞，非 ISR 安全。
 #include "modules/system/SystemModule.hpp"
 #include "AppContext.hpp"
 #include <cstdio>

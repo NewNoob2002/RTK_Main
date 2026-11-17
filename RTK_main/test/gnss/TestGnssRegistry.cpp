@@ -71,9 +71,16 @@ static void test_enabled_receivers_match_build_flags()
         }
     }
 
-    // 探测优先级：Unicore → u-blox → ComNav（被关闭的驱动不参与）。
+    // 探测优先级：Unicore → u-blox → ComNav（被关闭的驱动不参与，首位是第一个启用的驱动）。
     if (!receivers.empty()) {
-        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore), static_cast<int>(receivers.front()->family()));
+#if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
+        constexpr gnss::Family kExpectedFront = gnss::Family::kUnicore;
+#elif defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
+        constexpr gnss::Family kExpectedFront = gnss::Family::kUblox;
+#else
+        constexpr gnss::Family kExpectedFront = gnss::Family::kComnav;
+#endif
+        TEST_ASSERT_EQUAL(static_cast<int>(kExpectedFront), static_cast<int>(receivers.front()->family()));
     }
     TEST_ASSERT_NULL(gnss::receiver_for(gnss::Family::kUnknown));
 }

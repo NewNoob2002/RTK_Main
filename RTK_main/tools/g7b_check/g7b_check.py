@@ -9,6 +9,8 @@ new_opvnt.o → eh_catch.o（2 个异常符号）与 new_opv.o → new_op.o → 
 本门禁只放行这 6 个符号，且要求 map 中的拉入链与上述一致；其他任何异常/RTTI
 符号、链路变化、自有目标文件中的异常/RTTI 符号都判 FAIL。
 自有目标文件中的堆符号按源文件白名单放行，未登记或无法映射源文件时判 FAIL。
+自有目标文件不得引用 __cxa_guard_*：该符号只由函数内非平凡初始化的静态变量产生（CPP-009），
+出现即说明回到了动态初始化；改用文件作用域 constinit/常量初始化。
 
 用法：python3 -I tools/g7b_check/g7b_check.py [--build build] [--nm xtensa-esp32-elf-nm]
       [--allowlist tools/g7b_check/heap_allowlist.txt]
@@ -30,6 +32,8 @@ EXCEPTIONS_RE = re.compile(r"^(?:__cxa_throw|__cxa_begin_catch|__cxa_end_catch|_
 RTTI_RE = re.compile(r"^typeinfo (?:name )?for ")
 # 自有目标文件的堆检查：沿用 acceptance.md G7b 的原始（未反修饰）名模式。
 HEAP_RAW_RE = re.compile(r"^(?:_Znw|_Zna|_Zdl|_Zda|malloc$|free$|calloc$|realloc$|_malloc_r$|_free_r$)")
+# 函数内静态的线程安全初始化守卫（Itanium ABI C++ ABI §3.3.2）；未反修饰名，无参数重载。
+GUARD_RE = re.compile(r"^__cxa_guard_(?:acquire|release|abort)$")
 
 # 全 ELF 白名单：只允许以下 6 个符号存在（可以更少，不能更多）。
 ALLOWED_ELF_SYMBOLS = frozenset({
@@ -172,6 +176,7 @@ def main():
 
     failures = []
     allowed_heap_hits = []
+    guard_refs = 0
     try:
         allowlist = read_heap_allowlist(args.allowlist)
         sources = None
@@ -184,18 +189,41 @@ def main():
             for _, name in run_nm(nm, ["-C", str(obj)]):
                 if is_runtime(name):
                     failures.append(f"自有目标文件含异常/RTTI 符号：{obj.relative_to(build)}: {name}")
-            heap_hits = sorted({name for _, name in run_nm(nm, [str(obj)]) if HEAP_RAW_RE.match(name)})
-            if not heap_hits:
+            raw_symbols = run_nm(nm, [str(obj)])
+            # 未定义引用（U）才需要守卫；本仓库不允许任何形式，故按引用计数判定。
+            guard_hits = sorted({name for kind, name in raw_symbols if kind == "U" and GUARD_RE.match(name)})
+            heap_hits = sorted({name for _, name in raw_symbols if HEAP_RAW_RE.match(name)})
+            if not guard_hits and not heap_hits:
                 continue
             if sources is None:
                 sources = object_sources(build)
             source = sources.get(obj.resolve())
+            for name in guard_hits:
+                guard_refs += 1
+                failures.append(f"自有目标文件引用 __cxa_guard（函数内静态需常量初始化）："
+                                f"{obj.relative_to(build)}: {name}（源文件：{source or 'UNKNOWN'}）")
             for name in heap_hits:
                 if source in allowlist:
                     allowed_heap_hits.append(f"{source}: {name} # {allowlist[source]}")
                 else:
                     failures.append(f"自有目标文件含堆符号：{obj.relative_to(build)}: {name}"
                                     f"（源文件：{source or 'UNKNOWN'}，未登记白名单）")
+
+        # 1b. 守卫（CPP-009）：覆盖编译数据库中映射到仓库源码的全部目标文件。
+        # 堆/异常检查仍需逐源文件白名单裁决，故沿用 OWN_COMPONENT_DIRS；守卫符号不存在
+        # 误放行问题（虚函数的删除析构只引用 operator delete，不会引用 __cxa_guard），
+        # 因此未列入 OWN_COMPONENT_DIRS 的组件（如 gnss）也不能绕过本条。
+        sources = object_sources(build) if sources is None else sources
+        scanned = {obj.resolve() for obj in own_objs}
+        build_abs = build.resolve()
+        for obj, source in sorted(sources.items()):
+            if obj in scanned or not obj.is_file():
+                continue
+            for kind, name in run_nm(nm, [str(obj)]):
+                if kind == "U" and GUARD_RE.match(name):
+                    guard_refs += 1
+                    failures.append(f"自有目标文件引用 __cxa_guard（函数内静态需常量初始化）："
+                                    f"{obj.relative_to(build_abs)}: {name}（源文件：{source}）")
 
         # 2. 全 ELF：异常/RTTI 符号必须是白名单子集。
         elf_hits = {name for _, name in run_nm(nm, ["-C", "--defined-only", str(elf)]) if is_runtime(name)}
@@ -216,6 +244,7 @@ def main():
 
     print(f"自有目标文件：{len(own_objs)} 个")
     print(f"堆白名单：{len(allowlist)} 个源文件，放行 {len(allowed_heap_hits)} 个堆符号")
+    print(f"自有目标文件 __cxa_guard 未定义引用：{guard_refs} 个")
     for hit in allowed_heap_hits:
         print(f"  allowed heap: {hit}")
     print(f"ELF 异常/RTTI 符号（白名单内）：{len(elf_hits & ALLOWED_ELF_SYMBOLS)}/{len(ALLOWED_ELF_SYMBOLS)}")

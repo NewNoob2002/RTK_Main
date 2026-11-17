@@ -420,6 +420,7 @@ std::string sent_text(std::span<const uint8_t> bytes)
     return out;
 }
 
+#if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
 /** 按文本宽度补 '\0' 的定长字段（UBX-MON-VER 的文本块）。 */
 void put_field(std::string &payload, std::string_view text, size_t width)
 {
@@ -450,6 +451,7 @@ std::string ubx_frame(int8_t cls, int8_t id, const std::string &payload)
     frame.push_back(static_cast<char>(ck_b));
     return frame;
 }
+#endif
 
 /** 探测应答：按驱动家族回一条“型号已知”的帧。 */
 void feed_probe_reply(gnss::Controller &ctl, const gnss::Receiver &receiver, uint32_t now)

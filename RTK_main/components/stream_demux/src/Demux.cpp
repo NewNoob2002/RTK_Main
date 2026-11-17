@@ -1,4 +1,5 @@
 // 平台无关的分流引擎；原地回放与输入累积共用调用方提供的缓冲区。
+// feed/abort 由持有该实例的唯一任务调用，回调在调用内同步执行；不阻塞、无堆，ISR 安全。
 #include "demux/Demux.hpp"
 
 #include <algorithm>

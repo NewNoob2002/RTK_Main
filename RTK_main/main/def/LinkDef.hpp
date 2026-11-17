@@ -1,4 +1,5 @@
 // 链路模块跨模块共享类型与命令动词定义（拆自原 AppData.hpp 与 app_ids.hpp）。
+// 只含类型与枚举定义，无运行期状态；由链路模块与其命令共用，线程/ISR 安全。
 #pragma once
 
 #include <array>

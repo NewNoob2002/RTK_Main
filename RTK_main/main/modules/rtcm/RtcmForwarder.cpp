@@ -1,4 +1,5 @@
-// RTCM 转发统计实现：按角色过滤并累计帧数、字节数与 CRC-32（由 RTCM 模块在 kLink 任务中调用）。
+// RTCM 转发统计实现：按角色过滤并累计帧数、字节数与 CRC-32。
+// 由链路分流回调（kLink 任务）逐帧调用；只累加统计，不阻塞，非 ISR 安全。
 #include "modules/rtcm/RtcmForwarder.hpp"
 
 #include "proto/Frame.hpp"

@@ -1,4 +1,5 @@
 // RTCM 模块（kLink 执行器）：累计分流器交付的 RTCM 帧统计，处理 `rtcm` 命令的查询与复位。
+// 由 kLink 执行器任务调用；控制台经 rtos::Executor::call 投递命令，非 ISR 安全。
 #pragma once
 #include <span>
 

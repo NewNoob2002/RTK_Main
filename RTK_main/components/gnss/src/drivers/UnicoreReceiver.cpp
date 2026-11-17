@@ -16,6 +16,7 @@
 #include "demux/TextWriter.hpp"
 #include "demux/decoders/UnicoreHash.hpp"
 #include "../AsciiCmd.hpp"
+#include "../DriverInstances.hpp" // 单例声明（保证定义与 extern 声明一致）
 #include "../FrameTag.hpp"
 
 namespace gnss {
@@ -422,12 +423,14 @@ std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out
 
 } // namespace unicore
 
-namespace {
+namespace detail {
 
-constinit const UnicoreReceiver s_unicoreReceiver{};
-constinit const Um982Receiver s_um982Receiver{};
+// NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
+constinit const UnicoreReceiver kUnicoreReceiver{};
+// NOLINTNEXTLINE(readability-identifier-naming): 同上
+constinit const Um982Receiver kUm982Receiver{};
 
-} // namespace
+} // namespace detail
 
 // ---- 命令库：每个函数只把一条完整命令（含 "\r\n"）写进 out，不关心什么时候发 ----
 
@@ -879,12 +882,13 @@ const Receiver &Um982Receiver::for_model(Model) const noexcept
 
 const Receiver &um982_receiver() noexcept
 {
-    return s_um982Receiver;
+    return detail::kUm982Receiver;
 }
 
+/** @brief UM980/UM981 家族的只读单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
 const Receiver &unicore_receiver() noexcept
 {
-    return s_unicoreReceiver;
+    return detail::kUnicoreReceiver;
 }
 
 } // namespace gnss

@@ -17,16 +17,10 @@
 
 #if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
 #include "gnss/drivers/UnicoreReceiver.hpp"
-constexpr bool kHasUnicore = true;
-#else
-constexpr bool kHasUnicore = false;
 #endif
 
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
 #include "gnss/drivers/UbloxReceiver.hpp"
-constexpr bool kHasUblox = true;
-#else
-constexpr bool kHasUblox = false;
 #endif
 
 #if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
@@ -47,6 +41,7 @@ bool classifies_as(const gnss::Receiver &receiver, const demux::Decoder &dec, st
     return receiver.classify_frame(dec, bytes_of(frame)) == expect;
 }
 
+#if (defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE) || (defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX)
 /** 帧标签文本比较（按写入长度比较，避免依赖缓冲尾部）。 */
 bool tag_is(const gnss::Receiver &receiver, const demux::Decoder &dec, std::string_view frame, const char *expect)
 {
@@ -55,6 +50,7 @@ bool tag_is(const gnss::Receiver &receiver, const demux::Decoder &dec, std::stri
     const std::string_view got(tag, len);
     return got == expect;
 }
+#endif
 
 } // namespace
 
@@ -93,7 +89,13 @@ static void test_nmea_classification()
 #if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
     drivers[count++] = &gnss::comnav_receiver();
 #endif
+#if (defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE) || (defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX) ||  \
+    (defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV)
     TEST_ASSERT_GREATER_THAN_UINT32(0, static_cast<uint32_t>(count));
+#else
+    // 全部驱动关闭：没有驱动可测通用 NMEA 判定（null_receiver 对任何报文都是 kNone）。
+    TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(count));
+#endif
     for (size_t d = 0; d < count; ++d) {
         for (const Case &item : cases) {
             TEST_ASSERT_TRUE(classifies_as(*drivers[d], demux::nmea::kDecoder, item.frame, item.expect));
@@ -105,21 +107,21 @@ static void test_nmea_classification()
 static void test_vendor_frames()
 {
     const std::string_view sats = "#SATSINFOA,97,GPS,FINE,2281,1,0,0,18,10;10,20,30*12345678";
+
+#if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
     const std::string_view heading = "#HEADINGA,97,GPS,FINE,2281,1,0,0,18,10;SOL_COMPUTED,12*12345678";
     const std::string_view other = "#VERSIONA,96,GPS*12345678";
-
-    if (kHasUnicore) {
-        TEST_ASSERT_TRUE(
-            classifies_as(gnss::unicore_receiver(), demux::unicore_hash::kDecoder, sats, gnss::OutputMsg::kSatsInfo));
-        TEST_ASSERT_TRUE(
-            classifies_as(gnss::unicore_receiver(), demux::unicore_hash::kDecoder, heading, gnss::OutputMsg::kHeading));
-        TEST_ASSERT_TRUE(
-            classifies_as(gnss::unicore_receiver(), demux::unicore_hash::kDecoder, other, gnss::OutputMsg::kNone));
-    }
-    if (kHasUblox) {
-        TEST_ASSERT_TRUE(
-            classifies_as(gnss::ublox_receiver(), demux::unicore_hash::kDecoder, sats, gnss::OutputMsg::kNone));
-    }
+    TEST_ASSERT_TRUE(
+        classifies_as(gnss::unicore_receiver(), demux::unicore_hash::kDecoder, sats, gnss::OutputMsg::kSatsInfo));
+    TEST_ASSERT_TRUE(
+        classifies_as(gnss::unicore_receiver(), demux::unicore_hash::kDecoder, heading, gnss::OutputMsg::kHeading));
+    TEST_ASSERT_TRUE(
+        classifies_as(gnss::unicore_receiver(), demux::unicore_hash::kDecoder, other, gnss::OutputMsg::kNone));
+#endif
+#if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
+    TEST_ASSERT_TRUE(
+        classifies_as(gnss::ublox_receiver(), demux::unicore_hash::kDecoder, sats, gnss::OutputMsg::kNone));
+#endif
     // 未识别驱动（NullReceiver）对所有帧都是 kNone，保证探测失败后不会误投数据。
     TEST_ASSERT_TRUE(classifies_as(gnss::null_receiver(), demux::nmea::kDecoder, sats, gnss::OutputMsg::kNone));
 }
@@ -128,29 +130,29 @@ static void test_vendor_frames()
 static void test_frame_tags()
 {
     const std::string_view gga = "$GNGGA,123519,4807.038,N*47\r\n";
+
+    const gnss::Receiver &base = gnss::null_receiver();
+#if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
     const std::string_view unknown_nmea = "$GNZDA,123519.00,23,03,1994,00,00*4F\r\n";
     // 0xD3 0x00 0x05 → 长度 5，消息号 1005（0x3ED）。
     const uint8_t rtcm[] = {0xD3, 0x00, 0x05, 0x3E, 0xD0, 0x00, 0x00, 0x00, 0x00};
     // UBX 同步字 0xB5 0x62 + class 0x06 + id 0x8A。
     const uint8_t ubx[] = {0xB5, 0x62, 0x06, 0x8A, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};
-
-    const gnss::Receiver &base = gnss::null_receiver();
-    if (kHasUnicore) {
-        TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::nmea::kDecoder, gga, "NMEA GNGGA"));
-        TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::nmea::kDecoder, unknown_nmea, "NMEA GNZDA"));
-        TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::rtcm3::kDecoder,
-                                std::string_view(reinterpret_cast<const char *>(rtcm), sizeof(rtcm)), "RTCM3 1005"));
-        TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::ubx::kDecoder,
-                                std::string_view(reinterpret_cast<const char *>(ubx), sizeof(ubx)), "UBX 0x06/0x8a"));
-        const std::string_view sats = "#SATSINFOA,97,GPS*12345678";
-        TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::unicore_hash::kDecoder, sats, "UNICORE SATSINFOA"));
-        const std::string_view reply = "$command,UNLOG COM2,response: OK*1F\r\n";
-        TEST_ASSERT_TRUE(
-            tag_is(gnss::unicore_receiver(), gnss::unicore::kResponseDecoder, reply, "UNICORE_CMD UNLOG COM2"));
-    }
-    if (kHasUblox) {
-        TEST_ASSERT_TRUE(tag_is(gnss::ublox_receiver(), demux::nmea::kDecoder, gga, "NMEA GNGGA"));
-    }
+    TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::nmea::kDecoder, gga, "NMEA GNGGA"));
+    TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::nmea::kDecoder, unknown_nmea, "NMEA GNZDA"));
+    TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::rtcm3::kDecoder,
+                            std::string_view(reinterpret_cast<const char *>(rtcm), sizeof(rtcm)), "RTCM3 1005"));
+    TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::ubx::kDecoder,
+                            std::string_view(reinterpret_cast<const char *>(ubx), sizeof(ubx)), "UBX 0x06/0x8a"));
+    const std::string_view sats = "#SATSINFOA,97,GPS*12345678";
+    TEST_ASSERT_TRUE(tag_is(gnss::unicore_receiver(), demux::unicore_hash::kDecoder, sats, "UNICORE SATSINFOA"));
+    const std::string_view reply = "$command,UNLOG COM2,response: OK*1F\r\n";
+    TEST_ASSERT_TRUE(
+        tag_is(gnss::unicore_receiver(), gnss::unicore::kResponseDecoder, reply, "UNICORE_CMD UNLOG COM2"));
+#endif
+#if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
+    TEST_ASSERT_TRUE(tag_is(gnss::ublox_receiver(), demux::nmea::kDecoder, gga, "NMEA GNGGA"));
+#endif
     // NullReceiver 不产标签（main 在未探测到时不打印帧内容）。
     char tag[32] = {};
     TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(base.frame_tag(demux::nmea::kDecoder, bytes_of(gga), tag)));
@@ -159,18 +161,23 @@ static void test_frame_tags()
 // 报文掩码：默认 GGA|RMC|GSA|GSV；Unicore 追加 SATSINFOA 与 GPGST，双天线型号再追加 HEADINGA。
 static void test_output_masks()
 {
-    const uint32_t base_mask = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 6); // GGA|RMC|GSA|GSV
     TEST_ASSERT_EQUAL_UINT32(0, gnss::null_receiver().output_mask(gnss::Model::kUm982));
-    if (kHasUnicore) {
+#if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
+    {
+        const uint32_t base_mask = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 6); // GGA|RMC|GSA|GSV
         const uint32_t single = gnss::unicore_receiver().output_mask(gnss::Model::kUm980);
         TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 1) | (1U << 3), single); // + kSatsInfo + kGst
         // HEADINGA 只在型号驱动上出现：调用方须先 for_model（ADR-0012 §2.8）。
         const uint32_t dual = gnss::unicore_receiver().for_model(gnss::Model::kUm982).output_mask(gnss::Model::kUm982);
         TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 1) | (1U << 2) | (1U << 3), dual); // + kHeading
     }
-    if (kHasUblox) {
+#endif
+#if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
+    {
+        const uint32_t base_mask = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 6); // GGA|RMC|GSA|GSV
         TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 3), gnss::ublox_receiver().output_mask(gnss::Model::kZedF9p));
     }
+#endif
 }
 
 int main(int, char **)

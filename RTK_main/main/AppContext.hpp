@@ -34,7 +34,14 @@ template <size_t D>
     return rtos::ExecutorStorageView{stack, &st.tcb, st.cmd_area, &st.cmd_queue, st.result_area, &st.result_queue, D};
 }
 
-enum class BootPhase : uint8_t { kStarting = 0, kRunning, kConsoleOnly, kStopping };
+// 底层用 uint32_t：Xtensa LX6 没有 8 位原子 RMW，std::atomic<uint8_t> 会退回 libatomic 的锁实现（CPP-008）；
+// 枚举体积让位于无锁原子（与下方 static_assert 一致），故不接受本条检查的优化建议。
+// NOLINTNEXTLINE(performance-enum-size): 改成 1 字节会重新引入原子锁。
+enum class BootPhase : uint32_t { kStarting = 0, kRunning, kConsoleOnly, kStopping };
+
+/** 启动阶段的原子量必须无锁（CPP-008）：否则每次读相位都会进 libatomic 锁，启动屏障可能被阻塞。 */
+static_assert(std::atomic<BootPhase>::is_always_lock_free, "启动相位原子须无锁");
+static_assert(std::atomic<uint32_t>::is_always_lock_free, "启动屏障掩码原子须无锁");
 
 /** 启动屏障任务位（CODING-STYLE 规则 3）：boot_arrived/boot_stopped/launched 掩码的各位；bit31 保留给看门狗诊断。 */
 enum class BootTask : uint8_t {

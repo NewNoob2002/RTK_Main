@@ -1,4 +1,5 @@
 // 报警状态源：测试覆盖优先，其次围栏结果（phone_protocol.md §5）。
+// 只被链路任务调用（类本身无锁）；纯内存读写，不阻塞，非 ISR 安全。
 
 #include "core/AlarmSource.hpp"
 

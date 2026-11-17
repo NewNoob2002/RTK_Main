@@ -1,4 +1,5 @@
-// RTCM 模块实现：读取 kLink 直推侧的累计统计快照，计算吞吐率并管理 reset_epoch（只在 kLink 任务或启动前调用）。
+// RTCM 模块实现：读取 kLink 直推侧的累计统计快照，计算吞吐率并管理 reset_epoch。
+// 只在 kLink 任务或启动前调用；只读快照与累计，不阻塞，非 ISR 安全。
 #include "modules/rtcm/RtcmModule.hpp"
 #include "AppContext.hpp"
 

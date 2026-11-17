@@ -15,6 +15,7 @@
 #include "demux/TextWriter.hpp"
 #include "demux/decoders/UnicoreHash.hpp"
 #include "../AsciiCmd.hpp"
+#include "../DriverInstances.hpp" // 单例声明（保证定义与 extern 声明一致）
 
 namespace gnss {
 namespace {
@@ -216,11 +217,12 @@ std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) 
 
 } // namespace comnav
 
-namespace {
+namespace detail {
 
-constinit const ComnavReceiver s_comnavReceiver{};
+// NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
+constinit const ComnavReceiver kComnavReceiver{};
 
-} // namespace
+} // namespace detail
 
 // ---- 命令库：每个函数只把一条完整命令（含 "\r\n"）写进 out，不关心什么时候发 ----
 
@@ -474,9 +476,10 @@ fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model
     return fw::Status::kOk;
 }
 
+/** @brief ComNav K8 的只读单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
 const Receiver &comnav_receiver() noexcept
 {
-    return s_comnavReceiver;
+    return detail::kComnavReceiver;
 }
 
 } // namespace gnss

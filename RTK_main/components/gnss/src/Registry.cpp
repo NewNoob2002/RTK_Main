@@ -1,5 +1,5 @@
 // 驱动注册与型号元数据：按构建开关从 DriverList.inc 生成 enabled_receivers()（ADR-0012 §2.2/§2.3）。
-// 线程安全：是（返回静态常量表，编译期生成，无运行期状态）。
+// 线程安全：是（返回命名空间作用域的常量初始化地址表，无运行期状态）；可在任意任务/ISR 取用。
 // 堆：不使用。构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 RTK_GNSS_DRV_<D>（CMake 转为同名宏）。
 #include <array>
 #include <cstddef>
@@ -7,52 +7,30 @@
 #include <span>
 
 #include "gnss/Receiver.hpp"
-
-#if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
-#define GNSS_ENABLE_UNICORE 1
-#else
-#define GNSS_ENABLE_UNICORE 0
-#endif
-
-#if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
-#define GNSS_ENABLE_UBLOX 1
-#else
-#define GNSS_ENABLE_UBLOX 0
-#endif
-
-#if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
-#define GNSS_ENABLE_COMNAV 1
-#else
-#define GNSS_ENABLE_COMNAV 0
-#endif
-
-// 只包含已启用驱动的头（未启用驱动的 .cpp 不参与构建，其 accessor 也就不存在）。
-#if GNSS_ENABLE_UNICORE
-#include "gnss/drivers/UnicoreReceiver.hpp"
-#endif
-#if GNSS_ENABLE_UBLOX
-#include "gnss/drivers/UbloxReceiver.hpp"
-#endif
-#if GNSS_ENABLE_COMNAV
-#include "gnss/drivers/ComnavReceiver.hpp"
-#endif
+// 驱动单例声明与 GNSS_ENABLE_<D> 开关归一化（只包含已启用驱动的头）。
+#include "DriverInstances.hpp"
 
 namespace gnss {
 namespace {
 
 constexpr size_t kEnabledCount = GNSS_ENABLE_UNICORE + GNSS_ENABLE_UBLOX + GNSS_ENABLE_COMNAV;
 
-} // namespace
-
-std::span<const Receiver *const> enabled_receivers() noexcept
-{
-    // 地址表：accessor 不是 constexpr 函数，故用 const 静态表（地址为常量，仍是常量初始化）。
-    static const std::array<const Receiver *, kEnabledCount> kList{
-#define GNSS_DRIVER(suffix, family_, type, accessor) &accessor(),
+// 地址表在命名空间作用域做常量初始化（CPP-009）：不放进函数内静态，避免动态初始化与 __cxa_guard_*。
+constinit const std::array<const Receiver *, kEnabledCount> kReceivers{
+#define GNSS_DRIVER(suffix, family_, type, accessor) &detail::k##type,
 #include "gnss/DriverList.inc"
 #undef GNSS_DRIVER
-    };
-    return kList;
+};
+
+} // namespace
+
+/** @brief 按构建开关排好探测优先级的驱动地址表。
+ * @return 常量初始化数组的 span（Unicore → u-blox → ComNav，未启用的驱动不出现）。
+ * @note 无运行期状态，可在任意任务/ISR 调用。
+ */
+std::span<const Receiver *const> enabled_receivers() noexcept
+{
+    return kReceivers;
 }
 
 const Receiver *receiver_for(Family family) noexcept

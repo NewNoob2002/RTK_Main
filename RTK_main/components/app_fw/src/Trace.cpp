@@ -25,6 +25,9 @@ std::atomic<TraceSinkFn> s_sink{nullptr};
 TraceClockFn s_clock = nullptr;
 // 默认全关（T3：全开时空闲也每秒刷心跳/推送行）；需要时 debug on <类别> 打开，debug save 持久化。
 constinit std::atomic<uint32_t> s_mask{0U};
+// CPP-008：原子量必须无锁，否则退回 libatomic 的锁实现（trace 可能在中断上下文之外的高频路径调用）。
+static_assert(std::atomic<TraceSinkFn>::is_always_lock_free, "trace sink 原子须无锁");
+static_assert(std::atomic<uint32_t>::is_always_lock_free, "trace 掩码原子须无锁");
 
 } // namespace
 

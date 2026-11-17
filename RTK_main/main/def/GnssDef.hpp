@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "core/services/GnssService.hpp" // kGnssMsgCount：App 语句类数（避免此头依赖 main/data）
 #include "fw/Trace.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/NmeaParser.hpp"
@@ -103,9 +104,9 @@ struct GnssStatus {
     // 每次 gnss out/rate 变更有了结论（写入 NVS / 回滚 / 写入失败）时 +1；控制台等它变化后再读 last_apply，
     // 避免 output_seq 已前进但两阶段提交尚未判定时读到上一次的 last_apply。
     uint32_t apply_seq = 0;
-    // 当前输出计划里 App 6 类语句下发给接收机的周期（ms，0 = 不下发）；与 gnss/out 的 App 推送间隔不同，
-    // 默认 GGA/RMC/GSA/GST 跟频率、SATSINFOA 5 s。
-    std::array<uint32_t, 6U> rx_period_ms{};
+    // 当前输出计划里每类 App 语句下发给接收机的周期（ms，0 = 不下发）；与 gnss/out 的 App 推送间隔不同，
+    // 默认 GGA/RMC/GSA/GST 跟频率、SATSINFOA 5 s。长度随 kGnssMsgCount 变化，不写死。
+    std::array<uint32_t, core::services::kGnssMsgCount> rx_period_ms{};
 };
 
 } // namespace app

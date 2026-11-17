@@ -16,6 +16,7 @@
 
 #include "demux/decoders/Ubx.hpp"
 #include "../AsciiCmd.hpp"
+#include "../DriverInstances.hpp" // 单例声明（保证定义与 extern 声明一致）
 #include "../FrameTag.hpp"
 
 namespace gnss {
@@ -309,9 +310,14 @@ uint16_t nav_period_ms(const RoverConfig &cfg) noexcept
     return period == 0U ? kDefaultPeriodMs : period;
 }
 
-constinit const UbloxReceiver s_ubloxReceiver{};
-
 } // namespace
+
+namespace detail {
+
+// NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
+constinit const UbloxReceiver kUbloxReceiver{};
+
+} // namespace detail
 
 // ---- 命令库：每个函数只组一条完整 UBX 帧（同步字 + class/id + 长度 + 载荷 + Fletcher 校验） ----
 
@@ -632,9 +638,10 @@ fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model 
     return fw::Status::kOk;
 }
 
+/** @brief u-blox F9 的只读单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
 const Receiver &ublox_receiver() noexcept
 {
-    return s_ubloxReceiver;
+    return detail::kUbloxReceiver;
 }
 
 } // namespace gnss

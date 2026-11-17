@@ -1,4 +1,5 @@
 // 存储模块（kLink 执行器）：SN 与报警器白名单的 NVS 读写、去抖重试、目录键表加载与 `config` 查看命令。
+// 由 kLink 执行器任务调用；NVS 读写可阻塞，非 ISR 安全。
 #pragma once
 #include <span>
 

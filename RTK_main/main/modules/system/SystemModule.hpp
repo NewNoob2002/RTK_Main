@@ -1,4 +1,5 @@
 // 系统模块（kLink 执行器）：SN/设备名准备、系统与执行器状态发布，以及 `status` 命令用的纯函数辅助。
+// prepare 只在启动期调用；poll 与命令在 kLink 任务；蓝牙/NVS/日志调用可阻塞，非 ISR 安全。
 #pragma once
 #include <span>
 

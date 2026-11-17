@@ -1,4 +1,5 @@
 // 链路单一所有者；RX 调度保持 512 B 默认读缓冲、字节/20 ms 预算、每轮一个产品帧，RTCM 直推管道。
+// 启动期由组合根初始化一次；poll 与命令只在 kLink 执行器任务；蓝牙 API 可阻塞，非 ISR 安全。
 #include "modules/bt_link/BtLinkModule.hpp"
 #include "AppContext.hpp"
 

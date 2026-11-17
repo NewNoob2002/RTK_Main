@@ -1,6 +1,7 @@
 # 控制台组件（ADR-0007 §3.3）：esp_console REPL + 命令表登记 + 参数解析辅助。
 # 依赖 IDF（console、esp_system、串口驱动）与框架基座 app_fw（fw/Log.hpp，AGENTS.md §3），不依赖其他自有组件。
-# src/Reply.cpp 与 src/Out.cpp 只用 C/C++ 标准库（无 IDF 头），host 测试直接编译。
+# src/Reply.cpp 只用 C/C++ 标准库；src/Out.cpp 另用 FreeRTOS 静态递归互斥与 vTaskDelay（ESP_PLATFORM 分支）；
+# 两者都不含其他 IDF 头，host 测试直接编译。
 idf_component_register(
     SRCS "src/Console.cpp" "src/Parse.cpp" "src/Reply.cpp" "src/Out.cpp"
     INCLUDE_DIRS "include"
