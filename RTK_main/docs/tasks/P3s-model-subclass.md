@@ -1,6 +1,7 @@
 # P3s：GNSS 驱动型号子类与命令/应答类化（ADR-0012 §2.8）
 
-状态：ISSUED 2026-11-16，基线 `feat/gnss` a23ebc1 + 本卡 T0 改动（未提交，见 `git diff`）。
+状态：ISSUED 2026-11-16，基线 `feat/gnss` aaa9d72（T0 b1f278c + 日志样式 467c1f2 + T0b 编译桩 aaa9d72）。
+T0b 说明：`UnicoreReceiver` 已加 public virtual 析构并删除拷贝/移动（去 final 后 -Wnon-virtual-dtor 需要），`Receiver::for_model`、`UnicoreReceiver::for_model`、`rover_script`、`Um982Receiver` 已有可编译的桩实现，但仍调用旧的 `unicore::cmd::*` / `unicore::resp::*` / `unicore::model_caps` / `unicore::script_step`；本卡把它们按 §1.2 收尾。
 实施：pi + workbuddy/deepseek-v4.1-flash；审查/验收：Claude。
 
 先完整阅读：`AGENTS.md`、`docs/CODING-STYLE.md`（§5.1 日志、§6.2 注释）、`docs/adr/ADR-0012-gnss-receiver-drivers.md`
@@ -60,7 +61,7 @@
 
 ### 1.6 注释与日志
 - 新增/改动的每个函数按 CODING-STYLE §6.2 写 doxygen（英文标签、中文正文）；头里已有声明注释的，.cpp 定义处不重复。
-- gnss 组件内本卡不加日志（日志接入在 Q1）。
+- gnss 组件内本卡不加日志（日志接入在 Q1）。以后加日志时遵守 ADR-0009 §2.12 的子组件标签：`[t] [GNSS] <cfg> TX "MODE ROVER"`。
 
 ## 2 不做
 - 不改 `main/`（main 经 `detected().receiver` 已自动得到型号驱动；若编译需要改，先停下说明）。
