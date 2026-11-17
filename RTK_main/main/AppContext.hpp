@@ -8,6 +8,7 @@
 #include <span>
 
 #include "AppConfig.hpp"
+#include "fw/Atomic.hpp"
 #include "data/AppData.hpp"
 #if RTK_GNSS_ENABLED
 #include "modules/gnss/RtcmPipe.hpp"
@@ -40,8 +41,8 @@ template <size_t D>
 enum class BootPhase : uint32_t { kStarting = 0, kRunning, kConsoleOnly, kStopping };
 
 /** 启动阶段的原子量必须无锁（CPP-008）：否则每次读相位都会进 libatomic 锁，启动屏障可能被阻塞。 */
-static_assert(std::atomic<BootPhase>::is_always_lock_free, "启动相位原子须无锁");
-static_assert(std::atomic<uint32_t>::is_always_lock_free, "启动屏障掩码原子须无锁");
+static_assert(fw::kAtomicUsable<BootPhase>, "启动相位原子须无锁");
+static_assert(fw::kAtomicUsable<uint32_t>, "启动屏障掩码原子须无锁");
 
 /** 启动屏障任务位（CODING-STYLE 规则 3）：boot_arrived/boot_stopped/launched 掩码的各位；bit31 保留给看门狗诊断。 */
 enum class BootTask : uint8_t {

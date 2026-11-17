@@ -14,6 +14,7 @@
 #include <span>
 
 #if defined(ESP_PLATFORM)
+#include "fw/Atomic.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h" // vTaskDelay（等待创建者发布 kReady）
@@ -32,7 +33,7 @@ bool s_crlf = false;
 char s_prev = '\n'; // 上一个已输出字符，用于跨调用判断 "\r\n" 是否已成对
 
 #if defined(ESP_PLATFORM)
-static_assert(std::atomic<uint32_t>::is_always_lock_free, "输出锁的初始化状态须无锁：不得拉入 libatomic 的锁");
+static_assert(fw::kAtomicUsable<uint32_t>, "输出锁的初始化状态须无锁：不得拉入 libatomic 的锁");
 
 /**
  * @brief 静态递归互斥；首个调用者创建，之后只读 handle_。

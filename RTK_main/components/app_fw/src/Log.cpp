@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "TraceInternal.hpp"
+#include "fw/Atomic.hpp"
 #include "fw/LogC.h"
 
 namespace fw {
@@ -31,8 +32,8 @@ TraceClockFn s_direct_clock = nullptr;
 constinit std::atomic<uint32_t> s_levels{kLogLevelsDefault};
 constinit std::atomic<uint32_t> s_lost{0U};
 // CPP-008：原子量必须无锁，否则退回 libatomic 的锁实现（各级别日志从任意任务调用）。
-static_assert(std::atomic<LogSinkFn>::is_always_lock_free, "日志直写 sink 原子须无锁");
-static_assert(std::atomic<uint32_t>::is_always_lock_free, "日志级别/丢弃计数原子须无锁");
+static_assert(fw::kAtomicUsable<LogSinkFn>, "日志直写 sink 原子须无锁");
+static_assert(fw::kAtomicUsable<uint32_t>, "日志级别/丢弃计数原子须无锁");
 
 constexpr std::array<std::string_view, static_cast<std::size_t>(TraceCat::kCount)> kCatNames = {
     {"LINK", "SPP", "RTCM", "PROTO", "ALARM", "STORE", "EXEC", "GNSS", "SYS"}};

@@ -17,6 +17,7 @@
 #include <limits>
 #include <span>
 
+#include "fw/Atomic.hpp"
 #include "fw/Lock.hpp"
 #include "TraceInternal.hpp"
 
@@ -33,8 +34,8 @@ void *s_log_ctx = nullptr;
 // 默认全关：即使类别打开，也要显式 debug on <cat> hex 才转储原始字节。
 constinit std::atomic<uint32_t> s_hex_mask{0U};
 // CPP-008：原子量必须无锁，否则退回 libatomic 的锁实现（tlog 可能从任意任务调用，锁内不可阻塞）。
-static_assert(std::atomic<LogSinkFn>::is_always_lock_free, "日志 sink 原子须无锁");
-static_assert(std::atomic<uint32_t>::is_always_lock_free, "日志开关原子须无锁");
+static_assert(fw::kAtomicUsable<LogSinkFn>, "日志 sink 原子须无锁");
+static_assert(fw::kAtomicUsable<uint32_t>, "日志开关原子须无锁");
 
 // 环内一律按字节视图读写：记录头不保证 4 字节对齐，Xtensa 上非对齐访问会异常。
 // std::byte 视图避免 reinterpret_cast，子区间用 subspan 表达，不用裸指针算术。

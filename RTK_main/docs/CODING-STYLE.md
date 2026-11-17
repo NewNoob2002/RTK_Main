@@ -676,7 +676,7 @@ Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**�
 | CPP-005 | T0 不用分配容器，T1/T2 有界 | 只用 `std::array`/`std::span`/`std::string_view` | 覆盖 | §4 |
 | CPP-006 | 不用 iostream | 控制台走 `cli::out_printf` | 覆盖 | §5.1 |
 | CPP-007 | printf 只用于非实时路径，T0 禁 | `snprintf` 只出现在命令/日志格式化 | 覆盖 | §5.1 |
-| CPP-008 | 共享原子要 `static_assert(is_always_lock_free)` | 共享原子变量旁写 `static_assert(std::atomic<T>::is_always_lock_free)` | 覆盖 | main/AppContext.hpp、components/app_fw/src/（Q2） |
+| CPP-008 | 共享原子要 `static_assert(is_always_lock_free)` | 共享原子变量旁写 `static_assert(fw::kAtomicUsable<T>)`（`fw/Atomic.hpp`）：有原生原子指令的目标必须无锁，RISC-V 无 A 扩展时接受 IDF 关中断模拟（B7） | 覆盖 | main/AppContext.hpp、components/app_fw/src/、components/cli/src/Out.cpp、BtLinkModule.cpp |
 | CPP-009 | 函数内静态的动态初始化受限 | 函数内静态与全局表须常量初始化；g7b 检查自有目标文件不得引用 `__cxa_guard_*` | 覆盖 | components/gnss/src/Registry.cpp、docs/acceptance.md G7b（Q2） |
 | CPP-010 | 全局/静态构造不访问硬件/RTOS/日志，显式 `init()` | `constexpr` 构造 + `[[nodiscard]] init()` | 覆盖 | §4.1 |
 | CPP-011 | 多态基类受保护非虚析构、实现类 `final` | 虚函数只限 `Transport`/`demux::Sink`/`gnss::Receiver`；非叶子类受保护非虚析构，只实例化 `final` 叶子 | 缺口（整改中） | §4.1；P3s 起 `UnicoreReceiver`/`UbloxReceiver`/`ComnavReceiver` 用公有虚析构且被直接实例化，整改见 ADR-0013 S1 |
@@ -699,7 +699,7 @@ Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**�
 | BOOT-001 | 跳转前校验镜像哈希 | 无自有 bootloader/现场升级 | 不适用 | — |
 | BOOT-002 | 掉电安全更新 + 回滚 | 本期不做现场升级；分区表保留 `ota_0`/`ota_1` 只为兼容 E1-5.4 布局 | 有意偏离（延后） | ADR-0002 Q2 补充决定 |
 | BOOT-003 | 反回滚计数器 | 同上 | 不适用 | — |
-| RV-001 | RISC-V 目标原子 RMW 走临界区 | 产品固件只构建 esp32；esp32c3 只做 `rtk_pure` 编译验证 | 不适用 | ADR-0002 §偏离 |
+| RV-001 | RISC-V 目标原子 RMW 走临界区 | 产品固件只构建 esp32；esp32c3（RV32IMC，无 A 扩展）上 `std::atomic` 由 IDF 的 `__atomic_*` 关中断模拟实现，即临界区语义，单核下任务与 ISR 均安全；`rtk_pure` 双架构编译验证 | 覆盖 | `fw/Atomic.hpp`；ADR-0002 §偏离 |
 | ESP-001 | SMP 临界区用自旋锁，临界区内不阻塞 | `portMUX_TYPE` + `taskENTER_CRITICAL` | 覆盖 | §5.3 |
 | ESP-002 | 关 cache 期间的 ISR 必须 IRAM 安全 | 无此类 ISR | 不适用 | — |
 | ESP-003 | 栈按字节、绑核并写明理由、单核降级 | 栈字节常量 + 每处绑核注释 | 覆盖 | main/AppContext.hpp、main/app/Executors.cpp |

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cinttypes>
 #include <cstring>
+#include "fw/Atomic.hpp"
 #include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
 #include "core/LinkService.hpp"
@@ -19,7 +20,7 @@
 // 回复信用按整帧预留；协议帧长一旦超过预留量，commit 会拒绝并永久占住该会话的预留，
 // 使会话再也不能恢复。在此处绑定两者，避免只改一侧。
 static_assert(proto::kMaxFrame <= SPP_SERVER_REPLY_RESERVE, "reply reserve must cover a full protocol frame");
-static_assert(std::atomic<TaskHandle_t>::is_always_lock_free, "wake_task_ must be lock-free");
+static_assert(fw::kAtomicUsable<TaskHandle_t>, "wake_task_ must be lock-free");
 
 namespace app {
 namespace {
