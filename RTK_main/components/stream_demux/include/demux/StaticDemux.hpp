@@ -61,7 +61,7 @@ public:
         engine_.resetStats();
     }
 
-    /** 解码器在表中的下标（与 Sink::on_frame 的 index 对应）。 */
+    /** 解码器在表中的下标（与 Sink::onFrame 的 index 对应）。 */
     template <const Decoder &D> [[nodiscard]] static constexpr uint8_t indexOf() noexcept
     {
         // 用模板实参等价性比较身份，而不是 `&D == &Ds`：GCC 在 -fsanitize=undefined 下不把不同对象的地址比较

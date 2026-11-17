@@ -1,4 +1,4 @@
-// 配对/白名单指令（PHONE）：0x44（设置/查询/清除，成功修改时 reply.whitelist_changed = true）。
+// 配对/白名单指令（PHONE）：0x44（设置/查询/清除，成功修改时 reply.whitelistChanged = true）。
 // 行为与 CommandDispatcher 对应分支逐字节一致。线程安全：否（链路任务独占）。
 // 冻结接口（ADR-0007 §3.3）。实现方不得修改。
 #pragma once

@@ -19,7 +19,7 @@ namespace fw {
 
 // 只在无并发访问时设置边界值，避免用数十亿次操作验证计数器耗尽。
 struct FanoutRingTestAccess {
-    static void empty_at(FanoutRing &ring, uint32_t pos) noexcept
+    static void emptyAt(FanoutRing &ring, uint32_t pos) noexcept
     {
         ring.head_ = pos;
         ring.oldest_ = pos;
@@ -35,7 +35,7 @@ struct FanoutRingTestAccess {
     {
         ring.readers_[id].generation = value;
     }
-    static constexpr size_t reader_size() noexcept
+    static constexpr size_t readerSize() noexcept
     {
         return sizeof(FanoutRing::Reader);
     }
@@ -65,7 +65,7 @@ constexpr size_t kRounds = 200U;
 constexpr std::array<uint8_t, 1> kByte{0xA5U};
 
 // Unity 断言仅在主线程运行；子线程的系统调用失败立即终止，避免测试被卡住。
-void sys_ok(int code) noexcept
+void sysOk(int code) noexcept
 {
     if (code != 0) {
         std::abort();
@@ -84,7 +84,7 @@ void pattern(std::span<uint8_t> bytes)
     }
 }
 
-void view_equal(const fw::FanoutView &view, std::span<const uint8_t> expected)
+void viewEqual(const fw::FanoutView &view, std::span<const uint8_t> expected)
 {
     TEST_ASSERT_EQUAL_size_t(expected.size(), view.first.size() + view.second.size());
     TEST_ASSERT_TRUE(std::equal(view.first.begin(), view.first.end(), expected.begin()));
@@ -92,7 +92,7 @@ void view_equal(const fw::FanoutView &view, std::span<const uint8_t> expected)
                                 expected.subspan(view.first.size()).begin()));
 }
 
-void test_validation_and_modes()
+void testValidationAndModes()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, kCap> storage{};
@@ -112,8 +112,8 @@ void test_validation_and_modes()
     expect(Result::kInvalidArg, ring.initTyped(storage, kCap, fw::kNoLock));
     expect(Result::kInvalidArg,
            ring.initTyped(std::span(storage).first(kCap - 1U), 1U, fw::kNoLock));
-    const fw::LockOps bad_lock{[](void *) noexcept {}, nullptr, nullptr};
-    expect(Result::kInvalidArg, ring.initTyped(storage, 1U, bad_lock));
+    const fw::LockOps badLock{[](void *) noexcept {}, nullptr, nullptr};
+    expect(Result::kInvalidArg, ring.initTyped(storage, 1U, badLock));
     expect(Result::kOk, ring.initTyped(storage, kCap - fw::kFanoutTypedHeaderBytes, fw::kNoLock));
     expect(Result::kInvalidState, ring.initTyped(storage, 1U, fw::kNoLock));
     expect(Result::kInvalidState, ring.init(storage, 1U, fw::kNoLock));
@@ -143,7 +143,7 @@ void test_validation_and_modes()
     TEST_ASSERT_EQUAL_UINT32(0U, legacy.typedReaderStats(id).base.records);
 }
 
-void test_masks_and_independent_readers()
+void testMasksAndIndependentReaders()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, kCap> storage{};
@@ -163,7 +163,7 @@ void test_masks_and_independent_readers()
     expect(Result::kOk, ring.write(kHighestType, kByte));
     expect(Result::kOk, ring.peek(ids[1], view));
     TEST_ASSERT_EQUAL_UINT8(0U, view.type);
-    view_equal(view, kByte);
+    viewEqual(view, kByte);
     expect(Result::kOk, ring.commit(view.lease));
     expect(Result::kNotFound, ring.peek(ids[1], view));
     expect(Result::kOk, ring.peek(ids[2], view));
@@ -192,7 +192,7 @@ void test_masks_and_independent_readers()
     TEST_ASSERT_EQUAL_UINT32(0U, ring.typedReaderStats(extra).filtered);
 }
 
-void test_overwrite_filters_and_progress()
+void testOverwriteFiltersAndProgress()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, 16U> storage{};
@@ -218,7 +218,7 @@ void test_overwrite_filters_and_progress()
     TEST_ASSERT_EQUAL_size_t(storage.size(), ring.typedWriterStats().highWaterBytes);
 }
 
-void test_leases_and_pin_rejection()
+void testLeasesAndPinRejection()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, 16U> storage{};
@@ -240,7 +240,7 @@ void test_leases_and_pin_rejection()
     std::array<uint8_t, kFullPayload> full{};
     pattern(full);
     expect(Result::kBusy, ring.write(0U, full));
-    view_equal(pinned, kByte);
+    viewEqual(pinned, kByte);
     TEST_ASSERT_EQUAL_UINT32(1U, ring.typedWriterStats().pinnedDrop);
     TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(a).pinnedDrop);
     TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(b).pinnedDrop);
@@ -256,7 +256,7 @@ void test_leases_and_pin_rejection()
     expect(Result::kInvalidArg, ring.commit(pinned.lease));
     expect(Result::kOk, ring.peek(a, view));
     TEST_ASSERT_TRUE(view.lease.serial != pinned.lease.serial);
-    view_equal(view, kByte); // cancel 没消费。
+    viewEqual(view, kByte); // cancel 没消费。
     expect(Result::kInvalidArg, ring.cancel(pinned.lease));
     expect(Result::kOk, ring.commit(view.lease));
     expect(Result::kInvalidArg, ring.commit(view.lease));
@@ -266,13 +266,13 @@ void test_leases_and_pin_rejection()
     expect(Result::kOk, ring.write(0U, full));
     expect(Result::kOk, ring.peek(a, view));
     expect(Result::kInvalidArg, ring.commit(pinned.lease));
-    view_equal(view, full);
+    viewEqual(view, full);
     expect(Result::kOk, ring.commit(view.lease));
     TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(a).dropped);
     TEST_ASSERT_EQUAL_UINT32(1U, ring.readerStats(b).dropped);
 }
 
-void test_pin_rejection_does_not_partially_evict()
+void testPinRejectionDoesNotPartiallyEvict()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, 16U> storage{};
@@ -289,11 +289,11 @@ void test_pin_rejection_does_not_partially_evict()
     expect(Result::kBusy, ring.write(0U, full));
     TEST_ASSERT_EQUAL_UINT32(0U, ring.writerStats().overwritten);
     TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(id).dropped);
-    view_equal(view, kByte);
+    viewEqual(view, kByte);
     expect(Result::kOk, ring.commit(view.lease));
 }
 
-void test_capacity_and_oversize()
+void testCapacityAndOversize()
 {
     std::array<uint8_t, 8192U> backing{};
     std::array<uint8_t, 8192U> payload{};
@@ -308,7 +308,7 @@ void test_capacity_and_oversize()
         expect(Result::kOk, ring.write(0U, bytes));
         fw::FanoutView view{};
         expect(Result::kOk, ring.peek(id, view));
-        view_equal(view, bytes);
+        viewEqual(view, bytes);
         expect(Result::kOk, ring.commit(view.lease));
         TEST_ASSERT_EQUAL_size_t(max + fw::kFanoutTypedHeaderBytes,
                                  ring.typedWriterStats().highWaterBytes);
@@ -321,7 +321,7 @@ void test_capacity_and_oversize()
         } else if (cap > kAppCap) {
             expect(Result::kOk, ring.write(0U, std::span(payload).first(kAppCap)));
             expect(Result::kOk, ring.peek(id, view));
-            view_equal(view, std::span(payload).first(kAppCap));
+            viewEqual(view, std::span(payload).first(kAppCap));
             expect(Result::kOk, ring.commit(view.lease));
         }
     }
@@ -339,7 +339,7 @@ void test_capacity_and_oversize()
     TEST_ASSERT_EQUAL_UINT32(1U, tiny.readerStats(id).dropped);
 }
 
-void test_physical_and_u32_wrap_without_moving_pin()
+void testPhysicalAndU32WrapWithoutMovingPin()
 {
     for (const uint32_t start : {uint32_t{kCap - 1U}, uint32_t{kCap - 4U}, kMaxCounter - 1U,
                                  kMaxCounter - 4U, kMaxCounter - 16U}) {
@@ -348,40 +348,40 @@ void test_physical_and_u32_wrap_without_moving_pin()
         expect(Result::kOk, ring.initTyped(storage, 8U, fw::kNoLock));
         uint8_t id = 0U;
         expect(Result::kOk, ring.attach(kType0, id));
-        fw::FanoutRingTestAccess::empty_at(ring, start);
+        fw::FanoutRingTestAccess::emptyAt(ring, start);
         std::array<uint8_t, 8U> payload{};
         pattern(payload);
         expect(Result::kOk, ring.write(0U, payload));
         fw::FanoutView view{};
         expect(Result::kOk, ring.peek(id, view));
-        view_equal(view, payload);
-        const auto *first_address = view.first.data();
-        const auto *second_address = view.second.data();
+        viewEqual(view, payload);
+        const auto *firstAddress = view.first.data();
+        const auto *secondAddress = view.second.data();
         // 第一个租约仍存续时 head/oldest 可回绕，但不得搬动任何负载。
         expect(Result::kOk, ring.write(0U, payload));
-        view_equal(view, payload);
-        TEST_ASSERT_EQUAL_PTR(first_address, view.first.data());
-        TEST_ASSERT_EQUAL_PTR(second_address, view.second.data());
+        viewEqual(view, payload);
+        TEST_ASSERT_EQUAL_PTR(firstAddress, view.first.data());
+        TEST_ASSERT_EQUAL_PTR(secondAddress, view.second.data());
         expect(Result::kBusy, ring.write(0U, payload));
         expect(Result::kOk, ring.commit(view.lease));
         expect(Result::kOk, ring.write(0U, payload));
         expect(Result::kOk, ring.peek(id, view));
-        view_equal(view, payload);
+        viewEqual(view, payload);
         expect(Result::kOk, ring.commit(view.lease));
         expect(Result::kOk, ring.peek(id, view));
         // pin 留在较新记录，允许淘汰较旧记录；oldest 回绕也不能旋转 pin 负载。
         expect(Result::kOk, ring.write(0U, payload));
-        view_equal(view, payload);
+        viewEqual(view, payload);
         expect(Result::kOk, ring.commit(view.lease));
         expect(Result::kOk, ring.peek(id, view));
-        view_equal(view, payload);
+        viewEqual(view, payload);
         expect(Result::kOk, ring.commit(view.lease));
         expect(Result::kNotFound, ring.peek(id, view));
         TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(id).dropped);
     }
 }
 
-void test_serial_and_generation_exhaustion()
+void testSerialAndGenerationExhaustion()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, kCap> storage{};
@@ -414,15 +414,15 @@ void test_serial_and_generation_exhaustion()
     expect(Result::kInvalidState, ring.attach(kType0, id));
 }
 
-// writer 在选定的 lock/unlock 边界停住；主线程此时仍可正常使用 ring_mutex。
+// writer 在选定的 lock/unlock 边界停住；主线程此时仍可正常使用 ringMutex。
 struct ControlledLock {
-    pthread_mutex_t ring_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_t gate_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t gate_cond = PTHREAD_COND_INITIALIZER;
+    pthread_mutex_t ringMutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t gateMutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t gateCond = PTHREAD_COND_INITIALIZER;
     pthread_t writer{};
-    size_t lock_calls = 0U;
-    size_t pause_at = 0U;
-    bool pause_before_lock = false;
+    size_t lockCalls = 0U;
+    size_t pauseAt = 0U;
+    bool pauseBeforeLock = false;
     bool paused = false;
     bool resume = false;
     bool armed = false;
@@ -435,59 +435,59 @@ struct ControlledLock {
 
     ~ControlledLock() noexcept
     {
-        sys_ok(pthread_cond_destroy(&gate_cond));
-        sys_ok(pthread_mutex_destroy(&gate_mutex));
-        sys_ok(pthread_mutex_destroy(&ring_mutex));
+        sysOk(pthread_cond_destroy(&gateCond));
+        sysOk(pthread_mutex_destroy(&gateMutex));
+        sysOk(pthread_mutex_destroy(&ringMutex));
     }
 
     void pause() noexcept
     {
-        sys_ok(pthread_mutex_lock(&gate_mutex));
+        sysOk(pthread_mutex_lock(&gateMutex));
         paused = true;
-        sys_ok(pthread_cond_broadcast(&gate_cond));
+        sysOk(pthread_cond_broadcast(&gateCond));
         while (!resume) {
-            sys_ok(pthread_cond_wait(&gate_cond, &gate_mutex));
+            sysOk(pthread_cond_wait(&gateCond, &gateMutex));
         }
-        sys_ok(pthread_mutex_unlock(&gate_mutex));
+        sysOk(pthread_mutex_unlock(&gateMutex));
     }
 
     static void lock(void *ctx) noexcept
     {
         auto &self = *static_cast<ControlledLock *>(ctx); // ctx 仅绑定到本类型。
         if (self.armed && (pthread_equal(pthread_self(), self.writer) != 0)) {
-            ++self.lock_calls;
-            if (self.pause_before_lock && (self.lock_calls == self.pause_at)) {
+            ++self.lockCalls;
+            if (self.pauseBeforeLock && (self.lockCalls == self.pauseAt)) {
                 self.pause();
             }
         }
-        sys_ok(pthread_mutex_lock(&self.ring_mutex));
+        sysOk(pthread_mutex_lock(&self.ringMutex));
     }
 
     static void unlock(void *ctx) noexcept
     {
         auto &self = *static_cast<ControlledLock *>(ctx); // ctx 仅绑定到本类型。
-        sys_ok(pthread_mutex_unlock(&self.ring_mutex));
+        sysOk(pthread_mutex_unlock(&self.ringMutex));
         if (self.armed && (pthread_equal(pthread_self(), self.writer) != 0) &&
-            !self.pause_before_lock && (self.lock_calls == self.pause_at)) {
+            !self.pauseBeforeLock && (self.lockCalls == self.pauseAt)) {
             self.pause();
         }
     }
 
-    void await_pause() noexcept
+    void awaitPause() noexcept
     {
-        sys_ok(pthread_mutex_lock(&gate_mutex));
+        sysOk(pthread_mutex_lock(&gateMutex));
         while (!paused) {
-            sys_ok(pthread_cond_wait(&gate_cond, &gate_mutex));
+            sysOk(pthread_cond_wait(&gateCond, &gateMutex));
         }
-        sys_ok(pthread_mutex_unlock(&gate_mutex));
+        sysOk(pthread_mutex_unlock(&gateMutex));
     }
 
     void release() noexcept
     {
-        sys_ok(pthread_mutex_lock(&gate_mutex));
+        sysOk(pthread_mutex_lock(&gateMutex));
         resume = true;
-        sys_ok(pthread_cond_broadcast(&gate_cond));
-        sys_ok(pthread_mutex_unlock(&gate_mutex));
+        sysOk(pthread_cond_broadcast(&gateCond));
+        sysOk(pthread_mutex_unlock(&gateMutex));
     }
 };
 
@@ -507,7 +507,7 @@ struct Writer {
     }
 };
 
-void test_reservation_prevents_late_pin()
+void testReservationPreventsLatePin()
 {
     ControlledLock lock;
     const fw::LockOps ops{ControlledLock::lock, ControlledLock::unlock, &lock};
@@ -520,30 +520,30 @@ void test_reservation_prevents_late_pin()
         expect(Result::kOk, ring.write(0U, kByte));
     }
     const std::array<uint8_t, 5U> payload{1U, 2U, 3U, 4U, 5U};
-    lock.pause_at = 1U; // 保留区已发布，尚未淘汰旧记录。
+    lock.pauseAt = 1U; // 保留区已发布，尚未淘汰旧记录。
     Writer writer{&ring, &lock, payload};
     pthread_t thread{};
-    sys_ok(pthread_create(&thread, nullptr, Writer::run, &writer));
-    lock.await_pause();
+    sysOk(pthread_create(&thread, nullptr, Writer::run, &writer));
+    lock.awaitPause();
     fw::FanoutView view{};
-    const Result peek_result = ring.peek(id, view);
+    const Result peekResult = ring.peek(id, view);
     const uint32_t dropped = ring.readerStats(id).dropped;
     lock.release();
-    sys_ok(pthread_join(thread, nullptr));
-    expect(Result::kOk, peek_result);
+    sysOk(pthread_join(thread, nullptr));
+    expect(Result::kOk, peekResult);
     expect(Result::kOk, writer.result);
     TEST_ASSERT_EQUAL_UINT32(2U, dropped); // peek 协助淘汰待覆盖前缀后才获取租约。
-    view_equal(view, kByte);
+    viewEqual(view, kByte);
     expect(Result::kOk, ring.commit(view.lease));
     expect(Result::kOk, ring.peek(id, view));
-    view_equal(view, kByte);
+    viewEqual(view, kByte);
     expect(Result::kOk, ring.commit(view.lease));
     expect(Result::kOk, ring.peek(id, view));
-    view_equal(view, payload);
+    viewEqual(view, payload);
     expect(Result::kOk, ring.commit(view.lease));
 }
 
-void test_copy_before_publication_is_invisible()
+void testCopyBeforePublicationIsInvisible()
 {
     ControlledLock lock;
     const fw::LockOps ops{ControlledLock::lock, ControlledLock::unlock, &lock};
@@ -554,25 +554,25 @@ void test_copy_before_publication_is_invisible()
     expect(Result::kOk, ring.attach(kType0, id));
     std::array<uint8_t, kAppCap> payload{};
     pattern(payload);
-    lock.pause_at = kPublicationLock;
-    lock.pause_before_lock = true; // 锁外复制已完成，最终 head 发布锁尚未获取。
+    lock.pauseAt = kPublicationLock;
+    lock.pauseBeforeLock = true; // 锁外复制已完成，最终 head 发布锁尚未获取。
     Writer writer{&ring, &lock, payload};
     pthread_t thread{};
-    sys_ok(pthread_create(&thread, nullptr, Writer::run, &writer));
-    lock.await_pause();
+    sysOk(pthread_create(&thread, nullptr, Writer::run, &writer));
+    lock.awaitPause();
     fw::FanoutView view{};
-    const Result peek_result = ring.peek(id, view);
+    const Result peekResult = ring.peek(id, view);
     const uint32_t records = ring.writerStats().records;
     const bool copied = std::equal(payload.begin(), payload.end(),
                                    std::span(storage).subspan(fw::kFanoutTypedHeaderBytes).begin());
     lock.release();
-    sys_ok(pthread_join(thread, nullptr));
-    expect(Result::kNotFound, peek_result);
+    sysOk(pthread_join(thread, nullptr));
+    expect(Result::kNotFound, peekResult);
     TEST_ASSERT_EQUAL_UINT32(0U, records);
     TEST_ASSERT_TRUE(copied);
     expect(Result::kOk, writer.result);
     expect(Result::kOk, ring.peek(id, view));
-    view_equal(view, payload);
+    viewEqual(view, payload);
     expect(Result::kOk, ring.commit(view.lease));
 }
 
@@ -611,7 +611,7 @@ struct ConcurrentReader {
     }
 };
 
-void test_concurrent_reader_stats()
+void testConcurrentReaderStats()
 {
     ControlledLock lock;
     const fw::LockOps ops{ControlledLock::lock, ControlledLock::unlock, &lock};
@@ -619,7 +619,7 @@ void test_concurrent_reader_stats()
     std::array<uint8_t, kCap> storage{};
     expect(Result::kOk, ring.initTyped(storage, 1U, ops));
     pthread_barrier_t sync{};
-    sys_ok(pthread_barrier_init(&sync, nullptr, kBarrierParticipants));
+    sysOk(pthread_barrier_init(&sync, nullptr, kBarrierParticipants));
     uint8_t a = 0U;
     uint8_t b = 0U;
     expect(Result::kOk, ring.attach(kType0, a));
@@ -628,18 +628,18 @@ void test_concurrent_reader_stats()
     ConcurrentReader second{&ring, &sync, b};
     pthread_t ta{};
     pthread_t tb{};
-    sys_ok(pthread_create(&ta, nullptr, ConcurrentReader::run, &first));
-    sys_ok(pthread_create(&tb, nullptr, ConcurrentReader::run, &second));
-    bool writes_ok = true;
+    sysOk(pthread_create(&ta, nullptr, ConcurrentReader::run, &first));
+    sysOk(pthread_create(&tb, nullptr, ConcurrentReader::run, &second));
+    bool writesOk = true;
     for (size_t i = 0U; i < kRounds; ++i) {
-        writes_ok = (ring.write(0U, kByte) == Result::kOk) && writes_ok;
+        writesOk = (ring.write(0U, kByte) == Result::kOk) && writesOk;
         barrier(sync);
         barrier(sync);
     }
-    sys_ok(pthread_join(ta, nullptr));
-    sys_ok(pthread_join(tb, nullptr));
-    sys_ok(pthread_barrier_destroy(&sync));
-    TEST_ASSERT_TRUE(writes_ok);
+    sysOk(pthread_join(ta, nullptr));
+    sysOk(pthread_join(tb, nullptr));
+    sysOk(pthread_barrier_destroy(&sync));
+    TEST_ASSERT_TRUE(writesOk);
     TEST_ASSERT_TRUE(first.ok);
     TEST_ASSERT_TRUE(second.ok);
 }
@@ -650,19 +650,19 @@ int main()
 {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) host 报告对象布局，格式与 size_t 匹配。
     std::printf("K1 sizeof FanoutRing=%zu Reader=%zu FanoutLease=%zu FanoutView=%zu\n",
-                sizeof(fw::FanoutRing), fw::FanoutRingTestAccess::reader_size(),
+                sizeof(fw::FanoutRing), fw::FanoutRingTestAccess::readerSize(),
                 sizeof(fw::FanoutLease), sizeof(fw::FanoutView));
     UNITY_BEGIN();
-    RUN_TEST(test_validation_and_modes);
-    RUN_TEST(test_masks_and_independent_readers);
-    RUN_TEST(test_overwrite_filters_and_progress);
-    RUN_TEST(test_leases_and_pin_rejection);
-    RUN_TEST(test_pin_rejection_does_not_partially_evict);
-    RUN_TEST(test_capacity_and_oversize);
-    RUN_TEST(test_physical_and_u32_wrap_without_moving_pin);
-    RUN_TEST(test_serial_and_generation_exhaustion);
-    RUN_TEST(test_reservation_prevents_late_pin);
-    RUN_TEST(test_copy_before_publication_is_invisible);
-    RUN_TEST(test_concurrent_reader_stats);
+    RUN_TEST(testValidationAndModes);
+    RUN_TEST(testMasksAndIndependentReaders);
+    RUN_TEST(testOverwriteFiltersAndProgress);
+    RUN_TEST(testLeasesAndPinRejection);
+    RUN_TEST(testPinRejectionDoesNotPartiallyEvict);
+    RUN_TEST(testCapacityAndOversize);
+    RUN_TEST(testPhysicalAndU32WrapWithoutMovingPin);
+    RUN_TEST(testSerialAndGenerationExhaustion);
+    RUN_TEST(testReservationPreventsLatePin);
+    RUN_TEST(testCopyBeforePublicationIsInvisible);
+    RUN_TEST(testConcurrentReaderStats);
     return UNITY_END();
 }

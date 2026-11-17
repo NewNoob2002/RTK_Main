@@ -1,5 +1,5 @@
 // 执行器追踪事件码：轮次超时与命令投递失败（ADR-0009；main/def/SystemDef.hpp 以此为准导出）。
-// 线程：trace_exec 只写 trace 环，可在任务上下文调用；不可在 ISR 调用。不分配内存。
+// 线程：traceExec 只写 trace 环，可在任务上下文调用；不可在 ISR 调用。不分配内存。
 #pragma once
 
 #include <cstdint>

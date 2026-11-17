@@ -1,5 +1,5 @@
 // 调试模块（kLink 执行器）：追踪环、唯一格式化输出任务与 debug 命令组的状态所有者（ADR-0009）。
-// init() 只在启动前单线程调用；on_command 只在 kLink 执行器任务调用；trace_out 任务独立运行。
+// init() 只在启动前单线程调用；onCommand 只在 kLink 执行器任务调用；trace_out 任务独立运行。
 // 均非 ISR；不分配堆（环与任务栈都是静态存储）。
 #pragma once
 
@@ -28,16 +28,16 @@ class DebugModule final {
 public:
     /** 启动期外供存储视图（trace 环 + 文本日志环 + trace_out 栈）。 */
     struct StorageView {
-        std::span<fw::TraceEvent> trace_ring{};
-        std::span<uint8_t> log_ring{};
-        std::span<StackType_t> task_stack{};
+        std::span<fw::TraceEvent> traceRing{};
+        std::span<uint8_t> logRing{};
+        std::span<StackType_t> taskStack{};
     };
 
     /** 环容量：256 条 × 16 字节 = 4 KB 静态存储，够覆盖 20 ms 输出间隔的突发。 */
     static constexpr size_t kRingEvents = 256;
     /** 输出任务轮询周期；有事件时立即输出，不必等满一个周期。 */
     static constexpr uint32_t kPollPeriodMs = 20;
-    /** 单行事件文本上限，超长由 format_event 截断。 */
+    /** 单行事件文本上限，超长由 formatEvent 截断。 */
     static constexpr size_t kLineBytes = 192;
     /** 输出任务栈；T3 上板 7 类全开、40 KB/s 负载下实测占用约 1.7 KB（HWM 2412/4096），取 3 KB 留约 1.3 KB 余量。 */
     static constexpr size_t kTaskStackBytes = 3072;
@@ -53,7 +53,7 @@ public:
 
     constexpr DebugModule() noexcept = default;
     constexpr explicit DebugModule(AppContext &context) noexcept : context_(&context) {}
-    void bind_context(AppContext &context) noexcept
+    void bindContext(AppContext &context) noexcept
     {
         context_ = &context;
     }
@@ -64,10 +64,10 @@ public:
     DebugModule &operator=(DebugModule &&) = delete;
 
     /** 启动前单线程：绑定启动期外供存储视图；未满足容量要求返回 kInvalidArg。 */
-    [[nodiscard]] fw::Status bind_storage(const StorageView &storage) noexcept;
+    [[nodiscard]] fw::Status bindStorage(const StorageView &storage) noexcept;
 
     /** 仅启动绑定回滚、消费者尚未启动时调用；清除全部外供引用，非 ISR。 */
-    void unbind_storage() noexcept
+    void unbindStorage() noexcept
     {
         storage_ = {};
         storage_bound_ = false;
@@ -84,38 +84,38 @@ public:
      * @note   启动任务在启动摘要之后、REPL 之前调用：启动期日志同步直写、按序出现在提示符之前，
      *         运行期日志再交给 trace_out 与 trace 事件按时间合并。
      */
-    [[nodiscard]] fw::Result attach_log() noexcept;
+    [[nodiscard]] fw::Result attachLog() noexcept;
 
     /** 创建静态输出任务；重复调用返回 kBusy。仅执行器启动阶段调用。 */
     [[nodiscard]] fw::Result start() noexcept;
 
     /** 组合根单线程在 link 启动确认后读取，非 ISR。 */
-    [[nodiscard]] bool task_running() const noexcept
+    [[nodiscard]] bool taskRunning() const noexcept
     {
         return task_.running();
     }
 
     /** 仅 kLink：debug report/save 动词。 */
-    void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    void onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
     /** 本模块登记的持久化键（ADR-0009 §2.4），由 storage 模块在启动时加载。 */
     [[nodiscard]] static std::span<const fw::StoreKey> keys() noexcept;
 
     // 以下四个适配 fw::StoreBinding：obj 由 storage 传入，但表是 constexpr、无法保存实例地址，
-    // 因此统一经 app_context() 定位唯一实例（模块是单例）。
-    static fw::Result load_mask(void *obj, std::span<const uint8_t> in) noexcept;
-    static fw::Result save_mask(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
-    static fw::Result load_report(void *obj, std::span<const uint8_t> in) noexcept;
-    static fw::Result save_report(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
-    static fw::Result load_hex(void *obj, std::span<const uint8_t> in) noexcept;
-    static fw::Result save_hex(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    // 因此统一经 appContext() 定位唯一实例（模块是单例）。
+    static fw::Result loadMask(void *obj, std::span<const uint8_t> in) noexcept;
+    static fw::Result saveMask(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    static fw::Result loadReport(void *obj, std::span<const uint8_t> in) noexcept;
+    static fw::Result saveReport(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    static fw::Result loadHex(void *obj, std::span<const uint8_t> in) noexcept;
+    static fw::Result saveHex(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
     /**
      * @brief  NVS dbg/loglv → 各类别日志级别（打包表，每类别 2 bit）
      * @param  obj: 未用（单例）
      * @param  in: 4 字节小端 u32
      * @retval kOk 已应用；kInvalidArg 长度不对
      */
-    static fw::Result load_loglv(void *obj, std::span<const uint8_t> in) noexcept;
+    static fw::Result loadLoglv(void *obj, std::span<const uint8_t> in) noexcept;
     /**
      * @brief  各类别日志级别 → NVS dbg/loglv
      * @param  obj: 未用（单例）
@@ -123,47 +123,47 @@ public:
      * @param[out] len: 写入字节数
      * @retval kOk 成功；kNoSpace 缓冲不足
      */
-    static fw::Result save_loglv(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    static fw::Result saveLoglv(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
 
     /** 报告周期（秒，0 = 关闭）。跨任务读，非 ISR。 */
-    [[nodiscard]] uint16_t report_period_s() const noexcept
+    [[nodiscard]] uint16_t reportPeriodS() const noexcept
     {
         // 32 位对齐的单字读取在 ESP32 上是原子的；仅用于人为读取的控制台输出。
         return report_s_;
     }
 
     /** 环统计快照（console 任务读取，内部已加锁，非 ISR）。 */
-    [[nodiscard]] fw::TraceRingStats ring_stats() const noexcept
+    [[nodiscard]] fw::TraceRingStats ringStats() const noexcept
     {
         return ring_.stats();
     }
 
     /** 环中待输出事件数（console 任务读取，内部已加锁，非 ISR）。 */
-    [[nodiscard]] size_t ring_depth() const noexcept
+    [[nodiscard]] size_t ringDepth() const noexcept
     {
         return ring_.depth();
     }
 
     /** 文本日志环统计快照（console 任务读取，内部已加锁，非 ISR）。 */
-    [[nodiscard]] fw::LogRingStats log_ring_stats() const noexcept
+    [[nodiscard]] fw::LogRingStats logRingStats() const noexcept
     {
         return log_ring_.stats();
     }
 
     /** 文本日志环已用字节数（console 任务读取，内部已加锁，非 ISR）。 */
-    [[nodiscard]] size_t log_ring_used() const noexcept
+    [[nodiscard]] size_t logRingUsed() const noexcept
     {
         return log_ring_.used();
     }
 
 private:
-    static void task_entry(void *arg) noexcept;
+    static void taskEntry(void *arg) noexcept;
     /** 输出任务主循环：取事件、打印丢弃计数、按周期报告。 */
     void run() noexcept;
     /** 按时间戳合并输出两个环，非空返回 true 表示本轮打印过事件。 */
-    bool pump_events(char *line, size_t cap) noexcept;
+    bool pumpEvents(char *line, size_t cap) noexcept;
     /** 打印两个环的丢弃计数（有增量时），返回是否有输出。 */
-    bool pump_drops(char *out, size_t cap) noexcept;
+    bool pumpDrops(char *out, size_t cap) noexcept;
     /**
      * @brief  输出一条文本日志记录：`[ts] CAT 句子`（非 I 级带 `E:`/`W:`/`D:` 前缀）
      * @param  hdr: 记录头
@@ -171,13 +171,13 @@ private:
      * @param  out: 行缓冲（至少 fw::kLogLineMax 字节）
      * @param  cap: out 的容量
      */
-    void print_log_text(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
-                        size_t cap) noexcept;
+    void printLogText(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
+                      size_t cap) noexcept;
     /** 输出一条十六进制日志记录：标题行 + 若干转储行。 */
-    void print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
-                       size_t cap) noexcept;
+    void printLogHex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
+                     size_t cap) noexcept;
     /** 到点输出一行周期报告。 */
-    void pump_report(uint32_t now_ms) noexcept;
+    void pumpReport(uint32_t nowMs) noexcept;
     [[nodiscard]] AppContext &ctx() noexcept
     {
         return *context_;
@@ -203,9 +203,9 @@ private:
 };
 
 /** debug 命令表。 */
-[[nodiscard]] std::span<const cli::Cmd> debug_cmds() noexcept;
+[[nodiscard]] std::span<const cli::Cmd> debugCmds() noexcept;
 
-/** debug 子命令动词表，供 cli::add_verbs 登记。 */
-[[nodiscard]] std::span<const cli::Verb> debug_verbs() noexcept;
+/** debug 子命令动词表，供 cli::addVerbs 登记。 */
+[[nodiscard]] std::span<const cli::Verb> debugVerbs() noexcept;
 
 } // namespace app

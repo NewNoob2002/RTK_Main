@@ -1,7 +1,7 @@
 // 组件分级日志（ADR-0009 §2.12）：FW_LOGE/W/I/D(类别, 格式, ...)，各组件再包一层自己的宏（如 GNSS_LOGW）。
 // 与 trace() 分工：trace 记录实时路径的高频 16 B 事件；日志记录状态变化、错误与周期统计（CODING-STYLE §5.1）。
-// 去向：启动完成后 DebugModule 安装文本环（log_install）时写环，由 trace_out 任务按时间与 trace 事件合并输出；
-// 否则写 log_install_direct 安装的直写 sink（启动早期、或 CONFIG_RTK_TRACE_ENABLE=n 的固件）；都没有时丢弃并计数。
+// 去向：启动完成后 DebugModule 安装文本环（logInstall）时写环，由 trace_out 任务按时间与 trace 事件合并输出；
+// 否则写 logInstallDirect 安装的直写 sink（启动早期、或 CONFIG_RTK_TRACE_ENABLE=n 的固件）；都没有时丢弃并计数。
 // 过滤：编译期 FW_LOG_MAX_LEVEL（Kconfig RTK_LOG_LEVEL）之上的级别整句编译掉；
 // 运行期按类别级别过滤（`debug log <cat> <e|w|i|d>`，默认全部 I），与追踪掩码（`debug trace`）相互独立。
 // C 代码用 fw/LogC.h 的 FW_CLOG*。

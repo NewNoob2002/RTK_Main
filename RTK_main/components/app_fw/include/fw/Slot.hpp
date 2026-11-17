@@ -15,7 +15,7 @@ namespace fw {
 inline constexpr size_t kMaxSlotBytes = 512;
 
 /**
- * 单值主题槽：保存 T 的最新快照与写入版本号，锁由 bind_lock() 注入。
+ * 单值主题槽：保存 T 的最新快照与写入版本号，锁由 bindLock() 注入。
  * 生命周期：静态存储、不分配堆；写入者唯一，读者数量不限。
  */
 template <typename T> class Slot {

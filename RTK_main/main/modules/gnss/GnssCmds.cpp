@@ -1,5 +1,5 @@
 // gnss 命令组（ADR-0010 §2.7）：gnss status|fix|sats|probe|reset|rate <hz>|send <text>。
-// 仅在 console REPL 任务调用，非 ISR；只读命令读 DataCenter Slot，改状态命令经 io_executor::call 投递。
+// 仅在 console REPL 任务调用，非 ISR；只读命令读 DataCenter Slot，改状态命令经 ioExecutor::call 投递。
 
 #include "modules/gnss/GnssModule.hpp"
 
@@ -53,23 +53,23 @@ constexpr int kOutSetArgc = 3;
 constexpr std::array<const char *, data::kGnssAppMsgCount> kAppMsgNames = {
     {"gga", "sats", "heading", "gst", "rmc", "gsa"}};
 
-bool parse_msg_index(std::string_view name, uint8_t &out_idx, bool &is_all) noexcept
+bool parseMsgIndex(std::string_view name, uint8_t &outIdx, bool &isAll) noexcept
 {
-    is_all = false;
+    isAll = false;
     if (name == "all") {
-        is_all = true;
+        isAll = true;
         return true;
     }
     for (size_t i = 0U; i < kAppMsgNames.size(); ++i) {
         if (name == std::string_view{kAppMsgNames[i]}) {
-            out_idx = static_cast<uint8_t>(i);
+            outIdx = static_cast<uint8_t>(i);
             return true;
         }
     }
     return false;
 }
 
-bool parse_i8_range(const char *text, int8_t &out_val) noexcept
+bool parseI8Range(const char *text, int8_t &outVal) noexcept
 {
     if ((text == nullptr) || (*text == '\0')) {
         return false;
@@ -80,11 +80,11 @@ bool parse_i8_range(const char *text, int8_t &out_val) noexcept
         (val > kMaxSignedInterval)) {
         return false;
     }
-    out_val = static_cast<int8_t>(val);
+    outVal = static_cast<int8_t>(val);
     return true;
 }
 
-const char *fix_quality_name(::gnss::FixQuality q) noexcept
+const char *fixQualityName(::gnss::FixQuality q) noexcept
 {
     switch (q) {
     case ::gnss::FixQuality::kInvalid:
@@ -111,7 +111,7 @@ const char *fix_quality_name(::gnss::FixQuality q) noexcept
     }
 }
 
-const char *constellation_name(::gnss::Constellation sys) noexcept
+const char *constellationName(::gnss::Constellation sys) noexcept
 {
     switch (sys) {
     case ::gnss::Constellation::kGps:
@@ -134,27 +134,27 @@ const char *constellation_name(::gnss::Constellation sys) noexcept
     }
 }
 
-void format_e9(int64_t val, std::span<char, kLatLonBufBytes> out) noexcept
+void formatE9(int64_t val, std::span<char, kLatLonBufBytes> out) noexcept
 {
     const char *sign = (val < 0) ? "-" : "";
-    const int64_t abs_val = (val < 0) ? -val : val;
-    const int64_t whole = abs_val / kE9Scale;
-    const int64_t frac = abs_val % kE9Scale;
+    const int64_t absVal = (val < 0) ? -val : val;
+    const int64_t whole = absVal / kE9Scale;
+    const int64_t frac = absVal % kE9Scale;
     (void)std::snprintf(out.data(), out.size(), "%s%lld.%09lld", sign,
                         static_cast<long long>(whole), static_cast<long long>(frac));
 }
 
-void format_mm_as_meters(int32_t mm, std::span<char, kMetersBufBytes> out) noexcept
+void formatMmAsMeters(int32_t mm, std::span<char, kMetersBufBytes> out) noexcept
 {
     const char *sign = (mm < 0) ? "-" : "";
-    const int64_t abs_mm = (mm < 0) ? -static_cast<int64_t>(mm) : static_cast<int64_t>(mm);
-    const int64_t whole = abs_mm / kMmPerMeter;
-    const int64_t frac = abs_mm % kMmPerMeter;
+    const int64_t absMm = (mm < 0) ? -static_cast<int64_t>(mm) : static_cast<int64_t>(mm);
+    const int64_t whole = absMm / kMmPerMeter;
+    const int64_t frac = absMm % kMmPerMeter;
     (void)std::snprintf(out.data(), out.size(), "%s%lld.%03lld", sign,
                         static_cast<long long>(whole), static_cast<long long>(frac));
 }
 
-void format_x100(uint16_t val, std::span<char, kDopBufBytes> out) noexcept
+void formatX100(uint16_t val, std::span<char, kDopBufBytes> out) noexcept
 {
     if (val == ::gnss::kU16Unknown) {
         (void)std::snprintf(out.data(), out.size(), "unknown");
@@ -165,7 +165,7 @@ void format_x100(uint16_t val, std::span<char, kDopBufBytes> out) noexcept
     (void)std::snprintf(out.data(), out.size(), "%" PRIu32 ".%02" PRIu32, whole, frac);
 }
 
-bool report_gnss_result(const fw::CommandResult &res) noexcept
+bool reportGnssResult(const fw::CommandResult &res) noexcept
 {
     switch (res.status) {
     case fw::Result::kOk:
@@ -188,24 +188,24 @@ bool report_gnss_result(const fw::CommandResult &res) noexcept
     }
 }
 
-bool submit_gnss(const fw::Command &cmd) noexcept;
+bool submitGnss(const fw::Command &cmd) noexcept;
 
 /** 打印本轮输出计划的逐项结果；成功返回 true。 */
-bool report_output_plan(const GnssStatus &before, const GnssStatus &after) noexcept
+bool reportOutputPlan(const GnssStatus &before, const GnssStatus &after) noexcept
 {
     bool ok = true;
     for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
         const uint32_t bit = 1U << i;
         const char *state = "off";
-        if ((after.unsupported_mask & bit) != 0U) {
+        if ((after.unsupportedMask & bit) != 0U) {
             state = "unsupported";
-        } else if ((after.failed_mask & bit) != 0U) {
+        } else if ((after.failedMask & bit) != 0U) {
             state = "failed";
             ok = false;
-        } else if ((((after.applied_mask | before.applied_mask) & bit) != 0U) &&
-                   (after.rx_period_ms[i] != 0U)) {
+        } else if ((((after.appliedMask | before.appliedMask) & bit) != 0U) &&
+                   (after.rxPeriodMs[i] != 0U)) {
             // applied 位也包含已 ACK 的关闭命令（UNLOG），是否在输出看计划周期。
-            cli::outPrintf("  %-8s on %" PRIu32 "ms\n", kAppMsgNames[i], after.rx_period_ms[i]);
+            cli::outPrintf("  %-8s on %" PRIu32 "ms\n", kAppMsgNames[i], after.rxPeriodMs[i]);
             continue;
         }
         cli::outPrintf("  %-8s %s\n", kAppMsgNames[i], state);
@@ -214,27 +214,27 @@ bool report_output_plan(const GnssStatus &before, const GnssStatus &after) noexc
 }
 
 /**
- * 提交命令并等待两阶段提交判定（apply_seq 前进），再按 last_apply 给 OK/ERR。
+ * 提交命令并等待两阶段提交判定（applySeq 前进），再按 lastApply 给 OK/ERR。
  * 仅在 console REPL 任务调用；阻塞轮询，最长 6 s（不阻塞 kIo）。
  */
-bool submit_gnss_and_wait(const fw::Command &cmd) noexcept
+bool submitGnssAndWait(const fw::Command &cmd) noexcept
 {
-    const GnssStatus before = app_context().data.gnss_status.read();
-    if (!submit_gnss(cmd)) {
+    const GnssStatus before = appContext().data.gnssStatus.read();
+    if (!submitGnss(cmd)) {
         return false;
     }
     for (uint32_t round = 0U; round < kApplyPollRounds; ++round) {
-        const GnssStatus after = app_context().data.gnss_status.read();
-        if (after.apply_seq != before.apply_seq) {
-            if (after.last_apply == GnssApply::kRestored) {
+        const GnssStatus after = appContext().data.gnssStatus.read();
+        if (after.applySeq != before.applySeq) {
+            if (after.lastApply == GnssApply::kRestored) {
                 (void)cli::fail("receiver rejected output change, reverted");
                 return false;
             }
-            if (after.last_apply != GnssApply::kOk) {
+            if (after.lastApply != GnssApply::kOk) {
                 (void)cli::fail("output applied but settings save failed");
                 return false;
             }
-            return report_output_plan(before, after);
+            return reportOutputPlan(before, after);
         }
         vTaskDelay(pdMS_TO_TICKS(kApplyPollMs));
     }
@@ -242,33 +242,32 @@ bool submit_gnss_and_wait(const fw::Command &cmd) noexcept
     return false;
 }
 
-bool submit_gnss(const fw::Command &cmd) noexcept
+bool submitGnss(const fw::Command &cmd) noexcept
 {
-    if (app_context().io_executor == nullptr) {
+    if (appContext().ioExecutor == nullptr) {
         (void)cli::fail("gnss not running");
         return false;
     }
     fw::CommandResult res{};
-    if (!submit_raw_to(*app_context().io_executor, ModuleKind::kGnss, "gnss not running", cmd,
-                       res)) {
+    if (!submitRawTo(*appContext().ioExecutor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
         return false;
     }
-    return report_gnss_result(res);
+    return reportGnssResult(res);
 }
 
-int cmd_gnss_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdGnssStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: gnss status");
     }
-    const auto st = app_context().data.gnss_status.read();
+    const auto st = appContext().data.gnssStatus.read();
     cli::printSection("gnss");
     cli::printKv("enabled", "%s", st.enabled ? "yes" : "no");
     cli::printKv("state", "%s", ::gnss::stateName(st.state));
     cli::printKv("family", "%s", ::gnss::familyName(st.family));
     cli::printKv("model", "%s", ::gnss::modelName(st.model));
-    cli::printKv("fw", "%s", (st.fw_version[0] != '\0') ? st.fw_version.data() : "-");
-    cli::printKv("baud", "%" PRIu32, st.host_baud);
+    cli::printKv("fw", "%s", (st.fwVersion[0] != '\0') ? st.fwVersion.data() : "-");
+    cli::printKv("baud", "%" PRIu32, st.hostBaud);
     cli::printKv("caps", "0x%02" PRIX32, st.caps);
     cli::printKv("ctrl",
                  "probes=%" PRIu32 " steps=%" PRIu32 " nacks=%" PRIu32 " to=%" PRIu32
@@ -280,63 +279,61 @@ int cmd_gnss_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
                  " bad=%" PRIu32,
                  st.nmea.gga, st.nmea.rmc, st.nmea.gsa, st.nmea.gsv, st.nmea.ignored,
                  st.nmea.malformed);
-    cli::printKv("uart", "rx=%" PRIu32 " tx=%" PRIu32, st.uart_rx_bytes, st.uart_tx_bytes);
-    cli::printKv("demux", "unknown=%" PRIu32 " resyncs=%" PRIu32, st.demux_unknown,
-                 st.demux_resyncs);
+    cli::printKv("uart", "rx=%" PRIu32 " tx=%" PRIu32, st.uartRxBytes, st.uartTxBytes);
+    cli::printKv("demux", "unknown=%" PRIu32 " resyncs=%" PRIu32, st.demuxUnknown, st.demuxResyncs);
     cli::printKv("output",
                  "seq=%" PRIu32 " applied=0x%02" PRIX32 " unsupported=0x%02" PRIX32
                  " failed=0x%02" PRIX32 " supported=0x%02" PRIX32 " last=%s",
-                 st.output_seq, st.applied_mask, st.unsupported_mask, st.failed_mask,
-                 st.supported_mask,
-                 (st.last_apply == GnssApply::kOk)         ? "ok"
-                 : (st.last_apply == GnssApply::kFailed)   ? "save-failed"
-                 : (st.last_apply == GnssApply::kRestored) ? "reverted"
-                                                           : "-");
+                 st.outputSeq, st.appliedMask, st.unsupportedMask, st.failedMask, st.supportedMask,
+                 (st.lastApply == GnssApply::kOk)         ? "ok"
+                 : (st.lastApply == GnssApply::kFailed)   ? "save-failed"
+                 : (st.lastApply == GnssApply::kRestored) ? "reverted"
+                                                          : "-");
     cli::printKv("pipe",
                  "pushed=%" PRIu32 "/%" PRIu32 "B drop=%" PRIu32 "/%" PRIu32 "B written=%" PRIu32
                  "B",
-                 st.pipe.pushed_frames, st.pipe.pushed_bytes, st.pipe.dropped_frames,
-                 st.pipe.dropped_bytes, st.pipe.written_bytes);
+                 st.pipe.pushedFrames, st.pipe.pushedBytes, st.pipe.droppedFrames,
+                 st.pipe.droppedBytes, st.pipe.writtenBytes);
 
-    const auto &data = app_context().data;
-    const auto r_wr = data.gnss_app_ring.typedWriterStats();
-    const auto r_rd = data.gnss_app_ring.typedReaderStats(0U);
-    const auto sub = data.gnss_app_sub.snapshot();
-    const auto latest = data.gnss_latest.snapshot();
+    const auto &data = appContext().data;
+    const auto rWr = data.gnssAppRing.typedWriterStats();
+    const auto rRd = data.gnssAppRing.typedReaderStats(0U);
+    const auto sub = data.gnssAppSub.snapshot();
+    const auto latest = data.gnssLatest.snapshot();
     cli::printKv("app_ring",
                  "cap=%uB hwm=%zuB wr=%" PRIu32 "/%" PRIu32 "B overwr=%" PRIu32 " nosub=%" PRIu32
                  " ovsz=%" PRIu32 " pin=%" PRIu32,
-                 static_cast<unsigned>(kGnssAppRingBytes), r_wr.highWaterBytes, r_wr.base.records,
-                 r_wr.base.bytes, r_wr.base.overwritten, r_wr.noSubscriber, r_wr.oversizeDrop,
-                 r_wr.pinnedDrop);
+                 static_cast<unsigned>(kGnssAppRingBytes), rWr.highWaterBytes, rWr.base.records,
+                 rWr.base.bytes, rWr.base.overwritten, rWr.noSubscriber, rWr.oversizeDrop,
+                 rWr.pinnedDrop);
     cli::printKv("app_reader",
                  "mask=0x%02" PRIX32 " rec=%" PRIu32 "/%" PRIu32 "B drop=%" PRIu32 " filt=%" PRIu32
                  " pin=%" PRIu32,
-                 sub.active_mask, r_rd.base.records, r_rd.base.bytes, r_rd.base.dropped,
-                 r_rd.filtered, r_rd.pinnedDrop);
-    cli::printKv("app_qovsz", "query_oversize=%" PRIu32, sub.query_oversize_total);
+                 sub.activeMask, rRd.base.records, rRd.base.bytes, rRd.base.dropped, rRd.filtered,
+                 rRd.pinnedDrop);
+    cli::printKv("app_qovsz", "query_oversize=%" PRIu32, sub.queryOversizeTotal);
     for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
-        const bool en = (sub.active_mask & (1U << i)) != 0U;
+        const bool en = (sub.activeMask & (1U << i)) != 0U;
         cli::outPrintf("  sub[%s] %s period=%" PRIu32 "ms sent=%" PRIu32 " skip=%" PRIu32
                        " ring_ovsz=%" PRIu32 " latest=%uB(upd=%" PRIu32 ",ovsz=%" PRIu32 ")\n",
-                       kAppMsgNames[i], en ? "on" : "off", sub.periods_ms[i], sub.tx_sent[i],
-                       sub.skipped[i], sub.ring_oversize[i], static_cast<unsigned>(latest[i].len),
-                       latest[i].updates, latest[i].oversize_drops);
+                       kAppMsgNames[i], en ? "on" : "off", sub.periodsMs[i], sub.txSent[i],
+                       sub.skipped[i], sub.ringOversize[i], static_cast<unsigned>(latest[i].len),
+                       latest[i].updates, latest[i].oversizeDrops);
     }
     cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
     return 0;
 }
 
-int cmd_gnss_fix(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdGnssFix(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: gnss fix");
     }
-    const auto fix = app_context().data.gnss_fix.read();
+    const auto fix = appContext().data.gnssFix.read();
     const uint32_t now = rtos::nowMs();
     cli::printSection("gnss_fix");
     cli::printKv("valid", "%s", fix.valid ? "yes" : "no");
-    cli::printKv("quality", "%s (%u)", fix_quality_name(fix.quality),
+    cli::printKv("quality", "%s (%u)", fixQualityName(fix.quality),
                  static_cast<unsigned>(fix.quality));
     if (fix.updateMs != 0U) {
         const uint32_t sec = fix.utc.ms / 1000U;
@@ -350,66 +347,66 @@ int cmd_gnss_fix(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     std::array<char, kLatLonBufBytes> lat{};
     std::array<char, kLatLonBufBytes> lon{};
-    format_e9(fix.latE9, lat);
-    format_e9(fix.lonE9, lon);
+    formatE9(fix.latE9, lat);
+    formatE9(fix.lonE9, lon);
     cli::printKv("lat_deg", "%s", lat.data());
     cli::printKv("lon_deg", "%s", lon.data());
 
     std::array<char, kMetersBufBytes> alt{};
     std::array<char, kMetersBufBytes> geoid{};
-    format_mm_as_meters(fix.altMm, alt);
-    format_mm_as_meters(fix.geoidMm, geoid);
+    formatMmAsMeters(fix.altMm, alt);
+    formatMmAsMeters(fix.geoidMm, geoid);
     cli::printKv("alt_m", "%s (geoid %s)", alt.data(), geoid.data());
     cli::printKv("sats_used", "%u", fix.satsUsed);
 
     std::array<char, kDopBufBytes> hdop{};
     std::array<char, kDopBufBytes> pdop{};
     std::array<char, kDopBufBytes> vdop{};
-    format_x100(fix.hdopX100, hdop);
-    format_x100(fix.pdopX100, pdop);
-    format_x100(fix.vdopX100, vdop);
+    formatX100(fix.hdopX100, hdop);
+    formatX100(fix.pdopX100, pdop);
+    formatX100(fix.vdopX100, vdop);
     cli::printKv("dop", "h=%s p=%s v=%s", hdop.data(), pdop.data(), vdop.data());
 
     if (fix.diffAgeDs != ::gnss::kU16Unknown) {
-        const uint32_t age_whole = static_cast<uint32_t>(fix.diffAgeDs) / kTenthsBase;
-        const uint32_t age_tenths = static_cast<uint32_t>(fix.diffAgeDs) % kTenthsBase;
-        cli::printKv("diff", "age=%" PRIu32 ".%" PRIu32 "s station=%u", age_whole, age_tenths,
+        const uint32_t ageWhole = static_cast<uint32_t>(fix.diffAgeDs) / kTenthsBase;
+        const uint32_t ageTenths = static_cast<uint32_t>(fix.diffAgeDs) % kTenthsBase;
+        cli::printKv("diff", "age=%" PRIu32 ".%" PRIu32 "s station=%u", ageWhole, ageTenths,
                      fix.diffStation);
     } else {
         cli::printKv("diff", "none");
     }
     std::array<char, kDopBufBytes> course{};
-    format_x100(fix.courseCdeg, course);
+    formatX100(fix.courseCdeg, course);
     cli::printKv("motion", "speed=%" PRIu32 ".%03" PRIu32 "m/s course=%sdeg",
                  fix.speedMmps / kMmPerMeter, fix.speedMmps % kMmPerMeter, course.data());
     return 0;
 }
 
-int cmd_gnss_sats(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdGnssSats(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: gnss sats");
     }
-    const auto table = app_context().data.gnss_sats.read();
-    uint32_t used_count = 0U;
+    const auto table = appContext().data.gnssSats.read();
+    uint32_t usedCount = 0U;
     for (uint8_t i = 0U; (i < table.count) && (i < table.sats.size()); ++i) {
         if (table.sats[i].used) {
-            ++used_count;
+            ++usedCount;
         }
     }
     cli::printSection("gnss_sats");
-    cli::printKv("count", "%u (used=%" PRIu32 " update_ms=%" PRIu32 ")", table.count, used_count,
+    cli::printKv("count", "%u (used=%" PRIu32 " update_ms=%" PRIu32 ")", table.count, usedCount,
                  table.updateMs);
     for (uint8_t i = 0U; (i < table.count) && (i < table.sats.size()); ++i) {
         const auto &sat = table.sats[i];
-        cli::outPrintf("  %s-%03u elev=%d az=%u snr=%u %s\n", constellation_name(sat.system),
+        cli::outPrintf("  %s-%03u elev=%d az=%u snr=%u %s\n", constellationName(sat.system),
                        sat.prn, static_cast<int>(sat.elevDeg), sat.azimDeg, sat.snrDbhz,
                        sat.used ? "*" : "-");
     }
     return 0;
 }
 
-int cmd_gnss_probe(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdGnssProbe(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: gnss probe");
@@ -417,10 +414,10 @@ int cmd_gnss_probe(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     fw::Command cmd{};
     cmd.target = id(ModuleKind::kGnss);
     cmd.verb = static_cast<uint8_t>(GnssVerb::kProbe);
-    return submit_gnss(cmd) ? 0 : cli::kCmdFail;
+    return submitGnss(cmd) ? 0 : cli::kCmdFail;
 }
 
-int cmd_gnss_reset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdGnssReset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: gnss reset");
@@ -428,10 +425,10 @@ int cmd_gnss_reset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     fw::Command cmd{};
     cmd.target = id(ModuleKind::kGnss);
     cmd.verb = static_cast<uint8_t>(GnssVerb::kReset);
-    return submit_gnss(cmd) ? 0 : cli::kCmdFail;
+    return submitGnss(cmd) ? 0 : cli::kCmdFail;
 }
 
-int cmd_gnss_rate(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdGnssRate(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != 2) || (argv == nullptr)) {
         return cli::fail("usage: gnss rate <1|2|5|10|20>");
@@ -446,10 +443,10 @@ int cmd_gnss_rate(void * /*ctx*/, int argc, char **argv) noexcept
     cmd.verb = static_cast<uint8_t>(GnssVerb::kSetRate);
     cmd.argLen = 1U;
     cmd.args[0] = hz;
-    return submit_gnss_and_wait(cmd) ? 0 : cli::kCmdFail;
+    return submitGnssAndWait(cmd) ? 0 : cli::kCmdFail;
 }
 
-int cmd_gnss_send(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdGnssSend(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 2) || (argv == nullptr)) {
         return cli::fail("usage: gnss send <text>");
@@ -461,8 +458,8 @@ int cmd_gnss_send(void * /*ctx*/, int argc, char **argv) noexcept
     cmd.verb = static_cast<uint8_t>(GnssVerb::kSend);
     size_t pos = 0U;
     for (size_t i = 1U; i < args.size(); ++i) {
-        const size_t part_len = std::strlen(args[i]);
-        const size_t need = (i > 1) ? (part_len + 1U) : part_len;
+        const size_t partLen = std::strlen(args[i]);
+        const size_t need = (i > 1) ? (partLen + 1U) : partLen;
         if (need > (cmd.args.size() - pos)) {
             return cli::fail("command too long (max %u)", static_cast<unsigned>(cmd.args.size()));
         }
@@ -470,41 +467,41 @@ int cmd_gnss_send(void * /*ctx*/, int argc, char **argv) noexcept
             cmd.args[pos] = static_cast<uint8_t>(' ');
             ++pos;
         }
-        std::memcpy(std::span{cmd.args}.subspan(pos, part_len).data(), args[i], part_len);
-        pos += part_len;
+        std::memcpy(std::span{cmd.args}.subspan(pos, partLen).data(), args[i], partLen);
+        pos += partLen;
     }
     if (pos == 0U) {
         return cli::fail("empty command");
     }
     cmd.argLen = static_cast<uint8_t>(pos);
-    return submit_gnss(cmd) ? 0 : cli::kCmdFail;
+    return submitGnss(cmd) ? 0 : cli::kCmdFail;
 }
 
-int cmd_gnss_out(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdGnssOut(void * /*ctx*/, int argc, char **argv) noexcept
 {
     const std::span<char *const> args{(argv != nullptr) ? argv : nullptr,
                                       ((argv != nullptr) && (argc > 0)) ? static_cast<size_t>(argc)
                                                                         : 0U};
-    auto cfg = app_context().data.gnss_out_cfg.read();
+    auto cfg = appContext().data.gnssOutCfg.read();
     if ((args.size() <= 1U) || ((args.size() == 2U) && (std::string_view{args[1]} == "show"))) {
         cli::printSection("gnss_out");
         cli::printKv("mask", "0x%02X", static_cast<unsigned>(cfg.mask));
-        const GnssStatus st = app_context().data.gnss_status.read();
+        const GnssStatus st = appContext().data.gnssStatus.read();
         for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
             const bool en = (cfg.mask & (1U << i)) != 0U;
             const uint32_t period =
                 core::services::GnssService::intervalToPeriodMs(cfg.intervals[i]);
             const uint32_t bit = 1U << i;
-            const char *applied = (st.applied_mask & bit) != 0U ? "on" : "-";
-            if ((st.unsupported_mask & bit) != 0U) {
+            const char *applied = (st.appliedMask & bit) != 0U ? "on" : "-";
+            if ((st.unsupportedMask & bit) != 0U) {
                 applied = "unsupported";
-            } else if ((st.failed_mask & bit) != 0U) {
+            } else if ((st.failedMask & bit) != 0U) {
                 applied = "failed";
             }
             cli::outPrintf("  %-8s %s interval=%d push=%" PRIu32 "ms rx=%" PRIu32
                            "ms receiver=%s\n",
                            kAppMsgNames[i], en ? "on" : "off", static_cast<int>(cfg.intervals[i]),
-                           period, st.rx_period_ms[i], applied);
+                           period, st.rxPeriodMs[i], applied);
         }
         return 0;
     }
@@ -512,20 +509,20 @@ int cmd_gnss_out(void * /*ctx*/, int argc, char **argv) noexcept
         cfg = data::GnssOutConfig::defaults();
     } else if (args.size() == static_cast<size_t>(kOutSetArgc)) {
         uint8_t idx = 0U;
-        bool is_all = false;
-        if (!parse_msg_index(std::string_view{args[1]}, idx, is_all)) {
+        bool isAll = false;
+        if (!parseMsgIndex(std::string_view{args[1]}, idx, isAll)) {
             return cli::fail("invalid msg (gga|sats|heading|gst|rmc|gsa|all)");
         }
-        const std::string_view arg_val{args[2]};
-        const bool turn_off = (arg_val == "off");
+        const std::string_view argVal{args[2]};
+        const bool turnOff = (argVal == "off");
         int8_t iv = 0;
-        if (!turn_off && !parse_i8_range(args[2], iv)) {
+        if (!turnOff && !parseI8Range(args[2], iv)) {
             return cli::fail("invalid interval (-128..127 or off)");
         }
-        const size_t begin = is_all ? 0U : idx;
-        const size_t end = is_all ? data::kGnssAppMsgCount : (static_cast<size_t>(idx) + 1U);
+        const size_t begin = isAll ? 0U : idx;
+        const size_t end = isAll ? data::kGnssAppMsgCount : (static_cast<size_t>(idx) + 1U);
         for (size_t i = begin; i < end; ++i) {
-            if (!fw::isOk(cfg.apply_interval(i, turn_off ? int8_t{0} : iv))) {
+            if (!fw::isOk(cfg.applyInterval(i, turnOff ? int8_t{0} : iv))) {
                 return cli::fail("unsupported interval");
             }
         }
@@ -537,14 +534,14 @@ int cmd_gnss_out(void * /*ctx*/, int argc, char **argv) noexcept
     cmd.target = id(ModuleKind::kGnss);
     cmd.verb = static_cast<uint8_t>(GnssSubVerb::kSetOut);
     std::array<uint8_t, data::GnssOutConfig::kBlobBytes> blob{};
-    size_t blob_len = 0U;
-    if (!fw::isOk(cfg.encode(std::span<uint8_t>{blob}, blob_len))) {
+    size_t blobLen = 0U;
+    if (!fw::isOk(cfg.encode(std::span<uint8_t>{blob}, blobLen))) {
         return cli::fail("encode out config failed");
     }
     static_assert(data::GnssOutConfig::kBlobBytes <= fw::kCommandArgBytes);
-    std::memcpy(cmd.args.data(), blob.data(), blob_len);
-    cmd.argLen = static_cast<uint8_t>(blob_len);
-    return submit_gnss_and_wait(cmd) ? 0 : cli::kCmdFail;
+    std::memcpy(cmd.args.data(), blob.data(), blobLen);
+    cmd.argLen = static_cast<uint8_t>(blobLen);
+    return submitGnssAndWait(cmd) ? 0 : cli::kCmdFail;
 }
 
 /**
@@ -552,7 +549,7 @@ int cmd_gnss_out(void * /*ctx*/, int argc, char **argv) noexcept
  * @param rb: 已发布的读回结论
  * @return 0: 打印成功（由分发器补上 OK）；其他: cli::kCmdFail
  */
-int print_readback(const GnssReadback &rb) noexcept
+int printReadback(const GnssReadback &rb) noexcept
 {
     if (!rb.supported) {
         return cli::fail("not supported");
@@ -562,7 +559,7 @@ int print_readback(const GnssReadback &rb) noexcept
     }
     if (rb.len != 0U) {
         // 文本为若干 "...\n" 行，不以 '\0' 结尾，因此按长度整块写出。
-        cli::outWrite(app_context().data.gnss_readback_text.data(), rb.len);
+        cli::outWrite(appContext().data.gnssReadbackText.data(), rb.len);
     }
     cli::outPrintf("lines=%u%s\n", static_cast<unsigned>(rb.lines),
                    rb.truncated ? " truncated" : "");
@@ -576,7 +573,7 @@ int print_readback(const GnssReadback &rb) noexcept
  * @return 0: 成功；其他: cli::kCmdFail（ERR 原因已打印）
  * @note 仅 console REPL 任务，阻塞等待模块结论，最长 6 s。
  */
-int cmd_gnss_config(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdGnssConfig(void * /*ctx*/, int argc, char **argv) noexcept
 {
     const std::span<char *const> args{(argv != nullptr) ? argv : nullptr,
                                       ((argv != nullptr) && (argc > 0)) ? static_cast<size_t>(argc)
@@ -584,23 +581,22 @@ int cmd_gnss_config(void * /*ctx*/, int argc, char **argv) noexcept
     if (args.size() > 1U) {
         return cli::fail("usage: gnss config");
     }
-    if (app_context().io_executor == nullptr) {
+    if (appContext().ioExecutor == nullptr) {
         return cli::fail("gnss not running");
     }
-    const uint32_t before = app_context().data.gnss_readback.read().seq;
+    const uint32_t before = appContext().data.gnssReadback.read().seq;
     fw::Command cmd{};
     cmd.target = id(ModuleKind::kGnss);
     cmd.verb = static_cast<uint8_t>(GnssSubVerb::kReadback);
     fw::CommandResult res{};
-    if (!submit_raw_to(*app_context().io_executor, ModuleKind::kGnss, "gnss not running", cmd,
-                       res)) {
+    if (!submitRawTo(*appContext().ioExecutor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
         return cli::kCmdFail;
     }
-    // 模块在 on_command 里同步发布被拒结论，成功则等读回窗口收尾（≤ 5 s，这里给 6 s 余量）。
+    // 模块在 onCommand 里同步发布被拒结论，成功则等读回窗口收尾（≤ 5 s，这里给 6 s 余量）。
     for (uint32_t round = 0U; round < kApplyPollRounds; ++round) {
-        const GnssReadback rb = app_context().data.gnss_readback.read();
+        const GnssReadback rb = appContext().data.gnssReadback.read();
         if (rb.seq != before) {
-            return print_readback(rb);
+            return printReadback(rb);
         }
         vTaskDelay(pdMS_TO_TICKS(kApplyPollMs));
     }
@@ -609,19 +605,19 @@ int cmd_gnss_config(void * /*ctx*/, int argc, char **argv) noexcept
 
 // clang-format off
 constexpr std::array<cli::Verb, 9U> kGnssVerbs{{
-    {"status", nullptr, "GNSS status, stats and pipe", &cmd_gnss_status},
-    {"fix", nullptr, "latest position/quality fix", &cmd_gnss_fix},
-    {"sats", nullptr, "visible satellites table", &cmd_gnss_sats},
-    {"probe", nullptr, "re-probe without power cycle", &cmd_gnss_probe},
-    {"reset", nullptr, "power cycle and re-probe", &cmd_gnss_reset},
-    {"rate", "<hz>", "set output rate (1|2|5|10|20)", &cmd_gnss_rate},
-    {"out", "[show|default|<msg|all> <val>]", "set/show default receiver output", &cmd_gnss_out},
-    {"config", nullptr, "read back receiver config", &cmd_gnss_config},
-    {"send", "<text>", "send raw command line to GNSS", &cmd_gnss_send},
+    {"status", nullptr, "GNSS status, stats and pipe", &cmdGnssStatus},
+    {"fix", nullptr, "latest position/quality fix", &cmdGnssFix},
+    {"sats", nullptr, "visible satellites table", &cmdGnssSats},
+    {"probe", nullptr, "re-probe without power cycle", &cmdGnssProbe},
+    {"reset", nullptr, "power cycle and re-probe", &cmdGnssReset},
+    {"rate", "<hz>", "set output rate (1|2|5|10|20)", &cmdGnssRate},
+    {"out", "[show|default|<msg|all> <val>]", "set/show default receiver output", &cmdGnssOut},
+    {"config", nullptr, "read back receiver config", &cmdGnssConfig},
+    {"send", "<text>", "send raw command line to GNSS", &cmdGnssSend},
 }};
 // clang-format on
 
-int cmd_gnss(void *ctx, int argc, char **argv) noexcept
+int cmdGnss(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kGnssVerbs, ctx, argc, argv, "status");
 }
@@ -631,19 +627,19 @@ constexpr std::array<cli::Cmd, 1U> kGnssCmds{{
         .name = "gnss",
         .help = "GNSS receiver control and telemetry",
         .hint = "[status|fix|sats|probe|reset|rate|out|config|send]",
-        .handler = &cmd_gnss,
+        .handler = &cmdGnss,
         .ctx = nullptr,
     },
 }};
 
 } // namespace
 
-std::span<const cli::Cmd> gnss_cmds() noexcept
+std::span<const cli::Cmd> gnssCmds() noexcept
 {
     return kGnssCmds;
 }
 
-std::span<const cli::Verb> gnss_verbs() noexcept
+std::span<const cli::Verb> gnssVerbs() noexcept
 {
     return kGnssVerbs;
 }

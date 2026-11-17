@@ -29,40 +29,40 @@ namespace app {
 namespace {
 
 constexpr size_t kGroupArgs = 2U;
-constexpr int kNameWidth = 14; // 键名列宽，与 cli::print_kv 一致
+constexpr int kNameWidth = 14; // 键名列宽，与 cli::printKv 一致
 
-void show_identity() noexcept
+void showIdentity() noexcept
 {
-    const auto &data = app_context().data;
-    const auto sys = data.system_status.read();
-    const auto store = data.store_status.read();
+    const auto &data = appContext().data;
+    const auto sys = data.systemStatus.read();
+    const auto store = data.storeStatus.read();
     cli::printSection("identity");
     cli::printKv("sn", "%s", sys.sn.data());
-    cli::printKv("bt_name", "%s", sys.device_name.data());
-    if (store.sn_error != ESP_OK) {
-        cli::printKv("sn_store", "%s (SN derived from BT MAC)", esp_err_to_name(store.sn_error));
+    cli::printKv("bt_name", "%s", sys.deviceName.data());
+    if (store.snError != ESP_OK) {
+        cli::printKv("sn_store", "%s (SN derived from BT MAC)", esp_err_to_name(store.snError));
     }
 }
 
-void show_link() noexcept
+void showLink() noexcept
 {
-    const auto &data = app_context().data;
-    const auto link = data.link_status.read();
-    const auto store = data.store_status.read();
+    const auto &data = appContext().data;
+    const auto link = data.linkStatus.read();
+    const auto store = data.storeStatus.read();
     cli::printSection("link");
-    cli::printKv("policy", "%s", policy_name(link.policy));
+    cli::printKv("policy", "%s", policyName(link.policy));
     // 白名单计数上限为 kMaxAlarms，转 unsigned 无损。
-    cli::printKv("whitelist", "%u / %u", static_cast<unsigned>(link.whitelist_count),
+    cli::printKv("whitelist", "%u / %u", static_cast<unsigned>(link.whitelistCount),
                  static_cast<unsigned>(kMaxAlarms));
-    std::array<char, kMacStrBuf> mac_buf{};
-    for (size_t idx = 0U; idx < link.whitelist_count; ++idx) {
-        format_mac(link.whitelist[idx], mac_buf);
-        cli::printKv("  alarm", "%s", mac_buf.data());
+    std::array<char, kMacStrBuf> macBuf{};
+    for (size_t idx = 0U; idx < link.whitelistCount; ++idx) {
+        formatMac(link.whitelist[idx], macBuf);
+        cli::printKv("  alarm", "%s", macBuf.data());
     }
-    if (store.whitelist_pending || (store.whitelist_error != ESP_OK)) {
+    if (store.whitelistPending || (store.whitelistError != ESP_OK)) {
         cli::printKv("wl_sync", "%s, last error %s, failures %" PRIu32 ", retry %" PRIu32 " ms",
-                     store.whitelist_pending ? "pending" : "idle",
-                     esp_err_to_name(store.whitelist_error), store.failures, store.retry_ms);
+                     store.whitelistPending ? "pending" : "idle",
+                     esp_err_to_name(store.whitelistError), store.failures, store.retryMs);
     }
 }
 
@@ -70,7 +70,7 @@ void show_link() noexcept
  * @brief  打印一个持久化类别：每键一行“键名 当前值 说明”；数值键有显示名时打印为 "1 (unicore)"
  * @param  group: 类别（名字、说明、键表、可空的数值显示名钩子）
  */
-void show_group(const StoreGroup &group) noexcept
+void showGroup(const StoreGroup &group) noexcept
 {
     // 类别名长度为常量字面量，远小于 int 上限。
     cli::outPrintf("[%.*s] %.*s\n", static_cast<int>(group.name.size()), group.name.data(),
@@ -85,7 +85,7 @@ void show_group(const StoreGroup &group) noexcept
         if (key.type == fw::StoreType::kBlob) {
             std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
             size_t len = 0U;
-            const esp_err_t err = store::read_blob(key, blob, len);
+            const esp_err_t err = store::readBlob(key, blob, len);
             if (err == ESP_OK) {
                 (void)std::snprintf(text.data(), text.size(), "blob(%uB)",
                                     static_cast<unsigned>(len));
@@ -96,9 +96,9 @@ void show_group(const StoreGroup &group) noexcept
             }
         } else {
             uint32_t value = 0U;
-            const esp_err_t err = store::read_value(key, value);
-            const char *name = ((err == ESP_OK) && (group.value_name != nullptr))
-                                   ? group.value_name(key.key, value)
+            const esp_err_t err = store::readValue(key, value);
+            const char *name = ((err == ESP_OK) && (group.valueName != nullptr))
+                                   ? group.valueName(key.key, value)
                                    : nullptr;
             if (name != nullptr) {
                 (void)std::snprintf(text.data(), text.size(), "%" PRIu32 " (%s)", value, name);
@@ -116,16 +116,16 @@ void show_group(const StoreGroup &group) noexcept
     }
 }
 
-void show_groups(std::string_view prefix) noexcept
+void showGroups(std::string_view prefix) noexcept
 {
-    for (const StoreGroup &group : store_catalog()) {
+    for (const StoreGroup &group : storeCatalog()) {
         if (group.name.substr(0U, prefix.size()) == prefix) {
-            show_group(group);
+            showGroup(group);
         }
     }
 }
 
-void show_build() noexcept
+void showBuild() noexcept
 {
     cli::printSection("build");
     cli::printKv("console", "UART%d %d baud", CONFIG_RTK_CONSOLE_UART_NUM,
@@ -138,7 +138,7 @@ void show_build() noexcept
                  (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0) ? "high" : "low");
     cli::printKv("gnss_port", "COM%d", CONFIG_RTK_GNSS_PORT);
 #else
-    cli::print_kv("gnss", "disabled");
+    cli::printKv("gnss", "disabled");
 #endif
 }
 
@@ -147,25 +147,25 @@ struct Section {
     void (*show)() noexcept;
 };
 
-void show_gnss() noexcept
+void showGnss() noexcept
 {
-    show_groups("gnss");
+    showGroups("gnss");
 }
 
-void show_debug() noexcept
+void showDebug() noexcept
 {
-    show_groups("debug");
+    showGroups("debug");
 }
 
 constexpr std::array<Section, 5U> kSections{{
-    {"identity", show_identity},
-    {"link", show_link},
-    {"gnss", show_gnss},
-    {"debug", show_debug},
-    {"build", show_build},
+    {"identity", showIdentity},
+    {"link", showLink},
+    {"gnss", showGnss},
+    {"debug", showDebug},
+    {"build", showBuild},
 }};
 
-int cmd_config(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdConfig(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 1) || (argc > static_cast<int>(kGroupArgs)) || (argv == nullptr)) {
         return cli::fail("usage: config [identity|link|gnss|debug|build]");
@@ -189,12 +189,12 @@ int cmd_config(void * /*ctx*/, int argc, char **argv) noexcept
 
 constexpr std::array<cli::Cmd, 1U> kConfigCmds{{
     {"config", "config [identity|link|gnss|debug|build]: show saved settings (read-only)",
-     "[identity|link|gnss|debug|build]", cmd_config, nullptr, false},
+     "[identity|link|gnss|debug|build]", cmdConfig, nullptr, false},
 }};
 
 } // namespace
 
-std::span<const cli::Cmd> config_cmds() noexcept
+std::span<const cli::Cmd> configCmds() noexcept
 {
     return kConfigCmds;
 }

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "esp_log.h"
 
 namespace {
 uint32_t s_clock = 100;
@@ -43,24 +44,24 @@ struct Probe {
     uint32_t start = 0;
     uint32_t poll = 0;
     uint32_t command = 0;
-    bool fail_init = false;
-    bool fail_start = false;
+    bool failInit = false;
+    bool failStart = false;
     bool backlog = false;
     bool slow = false;
     std::array<uint32_t, 8> waits{};
-    size_t wait_count = 0;
+    size_t waitCount = 0;
 };
 fw::Result init(void *self) noexcept
 {
     auto &probe = *static_cast<Probe *>(self); // 表只绑定 Probe 指针。
     ++probe.init;
-    return probe.fail_init ? fw::Result::kIoError : fw::Result::kOk;
+    return probe.failInit ? fw::Result::kIoError : fw::Result::kOk;
 }
 fw::Result start(void *self) noexcept
 {
     auto &probe = *static_cast<Probe *>(self); // 同上。
     ++probe.start;
-    return probe.fail_start ? fw::Result::kIoError : fw::Result::kOk;
+    return probe.failStart ? fw::Result::kIoError : fw::Result::kOk;
 }
 bool poll(void *self, uint32_t now) noexcept
 {
@@ -81,12 +82,12 @@ void command(void *self, const fw::Command &cmd, fw::CommandResult &result) noex
     result.detail = cmd.args[0];
     result.seq = 0xBAD; // 故意覆盖，执行器必须恢复正确的请求序号。
 }
-void wait(void *self, uint32_t max_ms) noexcept
+void wait(void *self, uint32_t maxMs) noexcept
 {
     auto &probe = *static_cast<Probe *>(self); // 同上。
-    CHECK(probe.wait_count < probe.waits.size());
-    probe.waits[probe.wait_count++] = max_ms;
-    s_clock += max_ms;
+    CHECK(probe.waitCount < probe.waits.size());
+    probe.waits[probe.waitCount++] = maxMs;
+    s_clock += maxMs;
 }
 constexpr fw::ModuleOps kOps{init, start, poll, command};
 constexpr fw::ModuleOps kNoStartOps{init, nullptr, nullptr, command};
@@ -97,13 +98,13 @@ void lifecycle()
     static constinit rtos::Executor executor{};
     static constinit rtos::ExecutorStorage<6144, 2> storage{};
     static constinit Probe healthy{.executor = &executor, .backlog = true, .slow = true};
-    static constinit Probe bad_init{.executor = &executor, .fail_init = true};
-    static constinit Probe bad_start{.executor = &executor, .fail_start = true};
+    static constinit Probe badInit{.executor = &executor, .failInit = true};
+    static constinit Probe badStart{.executor = &executor, .failStart = true};
     static constinit Probe periodic{.executor = &executor};
     static constinit std::array<fw::Module, 6> modules{{
         {"healthy", 1, 0, 0, &healthy, &kOps},
-        {"init fail", 2, 0, 0, &bad_init, &kOps},
-        {"start fail", 3, 0, 0, &bad_start, &kOps},
+        {"init fail", 2, 0, 0, &badInit, &kOps},
+        {"start fail", 3, 0, 0, &badStart, &kOps},
         {"foreign", 1, 1, 0, nullptr, nullptr},
         {"periodic", 4, 0, 50, &periodic, &kOps},
         {"unsupported", 5, 0, 0, nullptr, &kUnsupportedOps},
@@ -113,7 +114,7 @@ void lifecycle()
     CHECK(executor.start() == fw::Status::kInvalidState);
     CHECK(executor.init(cfg, modules, rtos::viewOf(storage)) == fw::Status::kOk);
     CHECK(executor.init(cfg, modules, rtos::viewOf(storage)) == fw::Status::kBusy);
-    CHECK(healthy.init == 1 && bad_init.init == 1 && bad_start.init == 1);
+    CHECK(healthy.init == 1 && badInit.init == 1 && badStart.init == 1);
     CHECK(!executor.moduleOk(2) && executor.moduleOk(3));
     CHECK(executor.start() == fw::Status::kOk && s_created_bytes == 6144);
     CHECK(executor.start() == fw::Status::kBusy);
@@ -126,8 +127,8 @@ void lifecycle()
     CHECK(xQueueSend(&storage.resultQueue, &stale, 0) == pdTRUE);
     s_round_limit = 3;
     pump();
-    CHECK(healthy.start == 1 && bad_init.start == 0 && bad_start.start == 1);
-    CHECK(healthy.poll == 3 && bad_init.poll == 0 && bad_start.poll == 0);
+    CHECK(healthy.start == 1 && badInit.start == 0 && badStart.start == 1);
+    CHECK(healthy.poll == 3 && badInit.poll == 0 && badStart.poll == 0);
     CHECK(periodic.poll == 2 && !executor.moduleOk(3));
     CHECK(healthy.waits[0] == 20 && healthy.waits[1] == 0 && healthy.waits[2] == 20);
     const auto stats = executor.stats();

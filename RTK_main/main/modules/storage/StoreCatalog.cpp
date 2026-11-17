@@ -32,7 +32,7 @@ constexpr std::span<const fw::StoreKey> kGnssCache{gnss_store::kCacheKeys};
  * @param  value: NVS 读出的数值
  * @retval 家族/型号短名；其他键或越界值返回 nullptr
  */
-const char *gnss_cache_value_name(std::string_view key, uint32_t value) noexcept
+const char *gnssCacheValueName(std::string_view key, uint32_t value) noexcept
 {
     if (value > UINT8_MAX) {
         return nullptr;
@@ -48,7 +48,7 @@ const char *gnss_cache_value_name(std::string_view key, uint32_t value) noexcept
     }
     return nullptr;
 }
-constexpr StoreValueName kGnssCacheNames = &gnss_cache_value_name;
+constexpr StoreValueName kGnssCacheNames = &gnssCacheValueName;
 #else
 constexpr std::span<const fw::StoreKey> kGnssConfig{};
 constexpr std::span<const fw::StoreKey> kGnssCache{};
@@ -69,7 +69,7 @@ constexpr std::array<StoreGroup, 3U> kCatalog{{
 
 } // namespace
 
-std::span<const StoreGroup> store_catalog() noexcept
+std::span<const StoreGroup> storeCatalog() noexcept
 {
     return kCatalog;
 }

@@ -62,7 +62,7 @@ enum class ExecKind : uint8_t { kLink, kIo };
 }
 
 // 线程/ISR 安全：纯函数。
-[[nodiscard]] constexpr core::Policy policy_from_config() noexcept
+[[nodiscard]] constexpr core::Policy policyFromConfig() noexcept
 {
 #if defined(CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT)
     return core::Policy::kPhonePreempt;
@@ -70,7 +70,7 @@ enum class ExecKind : uint8_t { kLink, kIo };
     return core::Policy::kConcurrent;
 #endif
 }
-[[nodiscard]] inline const char *policy_name(core::Policy policy) noexcept
+[[nodiscard]] inline const char *policyName(core::Policy policy) noexcept
 {
     return policy == core::Policy::kPhonePreempt ? "PHONE_PREEMPT" : "CONCURRENT";
 }

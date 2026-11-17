@@ -4,7 +4,7 @@
 
 namespace app {
 
-const char *reset_reason_name(esp_reset_reason_t reason) noexcept
+const char *resetReasonName(esp_reset_reason_t reason) noexcept
 {
     switch (reason) {
     case ESP_RST_UNKNOWN:

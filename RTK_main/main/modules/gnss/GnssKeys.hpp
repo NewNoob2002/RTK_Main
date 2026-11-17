@@ -1,5 +1,5 @@
 // GNSS 模块的持久化键表（ADR-0010 §2.7）：NVS 命名空间 "gnss"，分为用户配置组与探测缓存组（storage 目录见
-// store_catalog）。 常量表，可被 storage 在启动早期遍历；非 ISR，无副作用。
+// storeCatalog）。 常量表，可被 storage 在启动早期遍历；非 ISR，无副作用。
 #pragma once
 
 #include <array>
@@ -20,7 +20,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kConfigKeys = {
       .min = 1,
       .max = 20,
       .help = "GNSS position output rate (Hz: 1/2/5/10/20)",
-      .binding = {.obj = nullptr, .load = &GnssModule::load_rate, .save = &GnssModule::save_rate}},
+      .binding = {.obj = nullptr, .load = &GnssModule::loadRate, .save = &GnssModule::saveRate}},
      {.ns = "gnss",
       .key = "gsv",
       .type = fw::StoreType::kU8,
@@ -29,7 +29,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kConfigKeys = {
       .min = 0,
       .max = 1,
       .help = "GSV satellite view output (0/1)",
-      .binding = {.obj = nullptr, .load = &GnssModule::load_gsv, .save = &GnssModule::save_gsv}},
+      .binding = {.obj = nullptr, .load = &GnssModule::loadGsv, .save = &GnssModule::saveGsv}},
      {.ns = "gnss",
       .key = "out",
       .type = fw::StoreType::kBlob,
@@ -38,7 +38,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kConfigKeys = {
       .min = 0,
       .max = 0,
       .help = "GNSS receiver & app output defaults (blob v1)",
-      .binding = {.obj = nullptr, .load = &GnssModule::load_out, .save = &GnssModule::save_out}}}};
+      .binding = {.obj = nullptr, .load = &GnssModule::loadOut, .save = &GnssModule::saveOut}}}};
 
 // 探测缓存组 gnss.cache：上次识别到的芯片族/型号/波特率，只作下次启动探测的提示，不是用户配置。
 inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
@@ -51,8 +51,8 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .max = 255,
       .help = "last detected GNSS chip family",
       .binding = {.obj = nullptr,
-                  .load = &GnssModule::load_family,
-                  .save = &GnssModule::save_family}},
+                  .load = &GnssModule::loadFamily,
+                  .save = &GnssModule::saveFamily}},
      {.ns = "gnss",
       .key = "model",
       .type = fw::StoreType::kU8,
@@ -61,9 +61,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .min = 0,
       .max = 255,
       .help = "last detected GNSS model",
-      .binding = {.obj = nullptr,
-                  .load = &GnssModule::load_model,
-                  .save = &GnssModule::save_model}},
+      .binding = {.obj = nullptr, .load = &GnssModule::loadModel, .save = &GnssModule::saveModel}},
      {.ns = "gnss",
       .key = "baud",
       .type = fw::StoreType::kU32,
@@ -72,8 +70,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .min = 0,
       .max = 2000000,
       .help = "last detected GNSS UART baud",
-      .binding = {
-          .obj = nullptr, .load = &GnssModule::load_baud, .save = &GnssModule::save_baud}}}};
+      .binding = {.obj = nullptr, .load = &GnssModule::loadBaud, .save = &GnssModule::saveBaud}}}};
 
 static_assert(fw::valid(kConfigKeys[0]) && fw::valid(kConfigKeys[1]) && fw::valid(kConfigKeys[2]),
               "gnss.config 键必须合法");

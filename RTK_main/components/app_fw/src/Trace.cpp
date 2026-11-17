@@ -1,5 +1,5 @@
 // 运行时调试追踪实现（ADR-0009 §2.1/§2.2）：sink 与时钟安装、类别掩码、定长事件环。
-// 线程：trace_install 只在启动阶段单线程调用一次；trace()/trace_set_mask() 任意任务可调用，禁止在 ISR 中调用；
+// 线程：traceInstall 只在启动阶段单线程调用一次；trace()/traceSetMask() 任意任务可调用，禁止在 ISR 中调用；
 // TraceRing 全部方法由注入的 LockOps 保护，push 可被多个任务并发调用。不分配堆、不抛异常。
 
 #include "fw/Trace.hpp"
@@ -102,7 +102,7 @@ Result TraceRing::init(std::span<TraceEvent> storage, const LockOps &lock) noexc
     if ((lock.lock == nullptr) != (lock.unlock == nullptr)) {
         return Result::kInvalidArg;
     }
-    // max_depth 是 uint32_t；容量超过该上限时拒绝，避免后面反复说明窄化安全。
+    // maxDepth 是 uint32_t；容量超过该上限时拒绝，避免后面反复说明窄化安全。
     if (storage.size() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
         return Result::kInvalidArg;
     }
@@ -209,7 +209,7 @@ namespace detail {
 
 TraceClockFn installedClock() noexcept
 {
-    // 只在启动阶段由 trace_install 写入一次；log_install 在 install 之后读取，无需原子。
+    // 只在启动阶段由 traceInstall 写入一次；logInstall 在 install 之后读取，无需原子。
     return s_clock;
 }
 

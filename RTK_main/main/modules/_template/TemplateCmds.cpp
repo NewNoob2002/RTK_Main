@@ -19,26 +19,26 @@ constexpr size_t kBitsPerByte = 8U;
 // 复制模板后，在 AppConfig.hpp 新增 ModuleKind，并改为 id(ModuleKind::k<Name>)。
 constexpr fw::ModuleId kTargetPlaceholder = 0xFFU;
 
-int cmd_tmpl_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdTmplStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: tmpl status");
     }
-    const auto sys = app_context().data.system_status.read();
-    const auto exec = app_context().data.exec_stats.read();
-    cli::outPrintf("tmpl: bt=%s exec_rounds=%" PRIu32 "\n", sys.bt_ready ? "ready" : "down",
+    const auto sys = appContext().data.systemStatus.read();
+    const auto exec = appContext().data.execStats.read();
+    cli::outPrintf("tmpl: bt=%s exec_rounds=%" PRIu32 "\n", sys.btReady ? "ready" : "down",
                    exec.rounds);
     return 0;
 }
 
-int cmd_tmpl_limit(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdTmplLimit(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != static_cast<int>(kLimitArgs)) || (argv == nullptr)) {
         return cli::fail("usage: tmpl limit <1..60000>");
     }
     const std::span<char *const> args(argv, kLimitArgs);
-    uint32_t limit_ms = 0U;
-    if (!cli::parseU32(args[1], limit_ms) || (limit_ms == 0U) || (limit_ms > kTemplateMaxLimitMs)) {
+    uint32_t limitMs = 0U;
+    if (!cli::parseU32(args[1], limitMs) || (limitMs == 0U) || (limitMs > kTemplateMaxLimitMs)) {
         // 1..60000 转 unsigned 安全。
         return cli::fail("limit 1-%u", static_cast<unsigned>(kTemplateMaxLimitMs));
     }
@@ -49,35 +49,35 @@ int cmd_tmpl_limit(void * /*ctx*/, int argc, char **argv) noexcept
     cmd.argLen = static_cast<uint8_t>(sizeof(uint32_t));
     for (size_t i = 0U; i < sizeof(uint32_t); ++i) {
         // 右移后取低 8 位无损。
-        cmd.args[i] = static_cast<uint8_t>(limit_ms >> (i * kBitsPerByte));
+        cmd.args[i] = static_cast<uint8_t>(limitMs >> (i * kBitsPerByte));
     }
     return submit(cmd, "tmpl limit") ? 0 : cli::kCmdFail;
 }
 
 constexpr std::array<cli::Verb, 2U> kTemplateVerbs{{
-    {"status", nullptr, "show template module status", cmd_tmpl_status},
-    {"limit", "<ms>", "set poll step limit (1-60000 ms)", cmd_tmpl_limit},
+    {"status", nullptr, "show template module status", cmdTmplStatus},
+    {"limit", "<ms>", "set poll step limit (1-60000 ms)", cmdTmplLimit},
 }};
 
 // esp_console_cmd_func_with_context_t 签名为 int(void *, int, char **)，不可改为 char *const *。
 // NOLINTNEXTLINE(misc-const-correctness)
-int cmd_tmpl(void *ctx, int argc, char **argv) noexcept
+int cmdTmpl(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kTemplateVerbs, ctx, argc, argv);
 }
 
 constexpr std::array<cli::Cmd, 1U> kTemplateCmds{{
-    {"tmpl", "tmpl <status|limit <ms>>: template module demo", "<status|limit <ms>>", cmd_tmpl,
+    {"tmpl", "tmpl <status|limit <ms>>: template module demo", "<status|limit <ms>>", cmdTmpl,
      nullptr},
 }};
 } // namespace
 
-std::span<const cli::Cmd> template_cmds() noexcept
+std::span<const cli::Cmd> templateCmds() noexcept
 {
     return kTemplateCmds;
 }
 
-std::span<const cli::Verb> template_verbs() noexcept
+std::span<const cli::Verb> templateVerbs() noexcept
 {
     return kTemplateVerbs;
 }

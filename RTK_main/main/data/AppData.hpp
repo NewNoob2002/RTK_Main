@@ -27,7 +27,7 @@ namespace app::data {
 template <typename T> class ZeroInitSlot {
 public:
     constexpr ZeroInitSlot() noexcept = default;
-    void bind_lock(fw::LockOps lock) noexcept
+    void bindLock(fw::LockOps lock) noexcept
     {
         if (!slot_.has_value()) {
             slot_.emplace();
@@ -44,13 +44,13 @@ public:
     {
         return slot_.has_value() ? slot_->read() : T{};
     }
-    [[nodiscard]] T read(uint32_t &version_out) const noexcept
+    [[nodiscard]] T read(uint32_t &versionOut) const noexcept
     {
         if (!slot_.has_value()) {
-            version_out = 0U;
+            versionOut = 0U;
             return T{};
         }
-        return slot_->read(version_out);
+        return slot_->read(versionOut);
     }
     [[nodiscard]] uint32_t version() const noexcept
     {
@@ -69,37 +69,37 @@ struct DataCenter {
     void init() noexcept;
 #if RTK_GNSS_ENABLED
     /** 启动前绑定外供 GNSS App 环形区与最新帧缓存（须在 init() 之后调用）。 */
-    [[nodiscard]] fw::Status init_gnss_buffers(std::span<uint8_t> app_ring_buf,
-                                               std::span<uint8_t> latest_buf) noexcept;
+    [[nodiscard]] fw::Status initGnssBuffers(std::span<uint8_t> appRingBuf,
+                                             std::span<uint8_t> latestBuf) noexcept;
     /** 仅启动绑定回滚、消费者尚未启动时调用；清除全部 GNSS 外供引用，非 ISR。 */
-    void unbind_gnss_buffers() noexcept;
+    void unbindGnssBuffers() noexcept;
 #endif
 
-    ZeroInitSlot<LinkStatus> link_status{};
+    ZeroInitSlot<LinkStatus> linkStatus{};
     fw::Slot<Sessions> sessions{};
-    fw::Slot<AlarmState> alarm_state{};
+    fw::Slot<AlarmState> alarmState{};
     ZeroInitSlot<Heartbeat> heartbeat{};
-    fw::Slot<LinkStats> link_stats{};
-    fw::Slot<RtcmStats> rtcm_stats{};
-    fw::Slot<DemuxStats> demux_stats{};
-    fw::Slot<StoreStatus> store_status{};
-    fw::Slot<rtos::ExecStats> exec_stats{};
-    fw::Slot<SystemStatus> system_status{};
-    fw::Slot<SystemMode> system_mode{};
-    fw::Slot<uint32_t> rtcm_reset{};
+    fw::Slot<LinkStats> linkStats{};
+    fw::Slot<RtcmStats> rtcmStats{};
+    fw::Slot<DemuxStats> demuxStats{};
+    fw::Slot<StoreStatus> storeStatus{};
+    fw::Slot<rtos::ExecStats> execStats{};
+    fw::Slot<SystemStatus> systemStatus{};
+    fw::Slot<SystemMode> systemMode{};
+    fw::Slot<uint32_t> rtcmReset{};
 #if RTK_GNSS_ENABLED
-    fw::Slot<rtos::ExecStats> io_exec_stats{};
-    fw::Slot<GnssStatus> gnss_status{};
-    ZeroInitSlot<gnss::Fix> gnss_fix{};
-    ZeroInitSlot<gnss::SatTable> gnss_sats{};
-    fw::Slot<GnssOutConfig> gnss_out_cfg{};
-    fw::Slot<GnssReadback> gnss_readback{};
-    // 读回文本交接缓冲（ADR-0012 §2.7）：只有 kIo 在读回进行中写，写完后才 write(gnss_readback) 发布；
-    // 控制台在看到 gnss_readback.seq 变化后按 len 读取。下一次读回只能由控制台在读完后发起，故读写不重叠、无需加锁。
-    std::array<char, kGnssReadbackBytes> gnss_readback_text{};
-    fw::FanoutRing gnss_app_ring{};
-    GnssLatestCache gnss_latest{};
-    GnssAppSubState gnss_app_sub{};
+    fw::Slot<rtos::ExecStats> ioExecStats{};
+    fw::Slot<GnssStatus> gnssStatus{};
+    ZeroInitSlot<gnss::Fix> gnssFix{};
+    ZeroInitSlot<gnss::SatTable> gnssSats{};
+    fw::Slot<GnssOutConfig> gnssOutCfg{};
+    fw::Slot<GnssReadback> gnssReadback{};
+    // 读回文本交接缓冲（ADR-0012 §2.7）：只有 kIo 在读回进行中写，写完后才 write(gnssReadback) 发布；
+    // 控制台在看到 gnssReadback.seq 变化后按 len 读取。下一次读回只能由控制台在读完后发起，故读写不重叠、无需加锁。
+    std::array<char, kGnssReadbackBytes> gnssReadbackText{};
+    fw::FanoutRing gnssAppRing{};
+    GnssLatestCache gnssLatest{};
+    GnssAppSubState gnssAppSub{};
 #endif
 
     portMUX_TYPE mux{};

@@ -18,24 +18,24 @@ public:
     // 测试替身只在本测试线程使用，非ISR。
     fw::Status write(core::SessionHandle, std::span<const uint8_t>, uint32_t) noexcept override
     {
-        ++legacy_calls;
+        ++legacyCalls;
         return fw::Status::kNotSupported;
     }
     fw::Status disconnect(core::SessionHandle handle) noexcept override
     {
-        ++disconnect_calls;
-        last_disconnected = handle;
+        ++disconnectCalls;
+        lastDisconnected = handle;
         return fw::Status::kOk;
     }
     bool supportsCredit() const noexcept override
     {
-        return credit_enabled;
+        return creditEnabled;
     }
     fw::Status reserveReply(core::SessionHandle handle, core::ReplyCredit &credit) noexcept override
     {
         ++reserves;
-        if (reserve_error != fw::Status::kOk) {
-            return reserve_error;
+        if (reserveError != fw::Status::kOk) {
+            return reserveError;
         }
         if (!replyReady(handle)) {
             return fw::Status::kTimeout;
@@ -52,7 +52,7 @@ public:
         }
         reserved = false;
         ++commits;
-        return commit_status;
+        return commitStatus;
     }
     void cancelReply(const core::ReplyCredit &) noexcept override
     {
@@ -61,21 +61,21 @@ public:
     }
     bool replyReady(core::SessionHandle handle) const noexcept override
     {
-        return (handle == kSecondHandle) ? ready_second : ready;
+        return (handle == kSecondHandle) ? readySecond : ready;
     }
 
-    bool credit_enabled = true;
+    bool creditEnabled = true;
     bool ready = false;
-    bool ready_second = false;
+    bool readySecond = false;
     bool reserved = false;
     uint32_t reserves = 0;
     uint32_t commits = 0;
     uint32_t cancels = 0;
-    uint32_t legacy_calls = 0;
-    uint32_t disconnect_calls = 0;
-    core::SessionHandle last_disconnected = 0;
-    fw::Status reserve_error = fw::Status::kOk;
-    fw::Status commit_status = fw::Status::kOk;
+    uint32_t legacyCalls = 0;
+    uint32_t disconnectCalls = 0;
+    core::SessionHandle lastDisconnected = 0;
+    fw::Status reserveError = fw::Status::kOk;
+    fw::Status commitStatus = fw::Status::kOk;
 };
 
 class LegacyTransport final : public core::Transport {
@@ -84,8 +84,8 @@ public:
                      uint32_t) noexcept override
     {
         ++writes;
-        last_handle = handle;
-        last_len = data.size();
+        lastHandle = handle;
+        lastLen = data.size();
         return fw::Status::kOk;
     }
     fw::Status disconnect(core::SessionHandle) noexcept override
@@ -93,8 +93,8 @@ public:
         return fw::Status::kOk;
     }
     uint32_t writes = 0;
-    core::SessionHandle last_handle = 0;
-    size_t last_len = 0;
+    core::SessionHandle lastHandle = 0;
+    size_t lastLen = 0;
 };
 
 struct Counter {
@@ -110,7 +110,7 @@ struct Counter {
     }
 };
 
-void test_credit_before_effect_and_cancel()
+void testCreditBeforeEffectAndCancel()
 {
     CreditTransport transport;
     core::LinkManager manager;
@@ -153,13 +153,13 @@ void test_credit_before_effect_and_cancel()
 
     // 无回复命令归还信用；底层commit失败也不能重新执行副作用。
     counter.reply = false;
-    const size_t no_reply = service.onData(kHandle, wire, 2);
-    TEST_ASSERT_EQUAL(size, no_reply);
+    const size_t noReply = service.onData(kHandle, wire, 2);
+    TEST_ASSERT_EQUAL(size, noReply);
     TEST_ASSERT_EQUAL(2, counter.effects);
     TEST_ASSERT_EQUAL(1, transport.cancels);
     TEST_ASSERT_FALSE(transport.reserved);
     counter.reply = true;
-    transport.commit_status = fw::Status::kIoError;
+    transport.commitStatus = fw::Status::kIoError;
     const size_t failed = service.onData(kHandle, wire, 2);
     TEST_ASSERT_EQUAL(size, failed);
     service.resume(kHandle, 2);
@@ -177,16 +177,16 @@ void test_credit_before_effect_and_cancel()
     service.resume(kHandle, 2);
     TEST_ASSERT_EQUAL(3, counter.effects);
     TEST_ASSERT_EQUAL(1, service.stats().dispatchCancelled);
-    TEST_ASSERT_EQUAL(0, transport.legacy_calls);
+    TEST_ASSERT_EQUAL(0, transport.legacyCalls);
 }
 
-void test_role_reject_cancels_credit_and_no_leak()
+void testRoleRejectCancelsCreditAndNoLeak()
 {
     constexpr uint32_t kTickOpenPhone = 2;
     constexpr uint32_t kTickPhoneFrame = 3;
     CreditTransport transport;
     transport.ready = true;
-    transport.ready_second = true;
+    transport.readySecond = true;
     constexpr core::BtAddr kAlarmAddr{{0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5}};
     constexpr core::BtAddr kPhoneAddr{{0x10, 0x11, 0x12, 0x13, 0x14, 0x15}};
     const std::array whitelist{kAlarmAddr};
@@ -224,7 +224,7 @@ void test_role_reject_cancels_credit_and_no_leak()
     TEST_ASSERT_EQUAL(1, transport.commits);
 }
 
-void test_two_sessions_isolated_pause_and_fair_resume()
+void testTwoSessionsIsolatedPauseAndFairResume()
 {
     constexpr uint32_t kTickSecond = 2;
     constexpr uint32_t kTickResume = 3;
@@ -233,7 +233,7 @@ void test_two_sessions_isolated_pause_and_fair_resume()
     const std::array whitelist{kAlarmAddr};
     CreditTransport transport;
     transport.ready = false;
-    transport.ready_second = true;
+    transport.readySecond = true;
     core::LinkManager manager;
     manager.init(core::Policy::kConcurrent, whitelist);
     core::AlarmSource source;
@@ -250,23 +250,23 @@ void test_two_sessions_isolated_pause_and_fair_resume()
     service.onOpen(kHandle, kPhoneAddr, 0);
     service.onOpen(kSecondHandle, kAlarmAddr, 0);
 
-    std::array<uint8_t, proto::kMaxFrame> phone_frame{};
-    size_t phone_size = 0;
-    TEST_ASSERT_TRUE(proto::buildFrame(phone_frame, kCommand, proto::sender::kApp,
-                                       proto::msg_type::kSet, {}, phone_size) == fw::Status::kOk);
+    std::array<uint8_t, proto::kMaxFrame> phoneFrame{};
+    size_t phoneSize = 0;
+    TEST_ASSERT_TRUE(proto::buildFrame(phoneFrame, kCommand, proto::sender::kApp,
+                                       proto::msg_type::kSet, {}, phoneSize) == fw::Status::kOk);
     TEST_ASSERT_EQUAL(
-        phone_size,
-        service.onData(kHandle, std::span<const uint8_t>{phone_frame}.first(phone_size), 1));
+        phoneSize,
+        service.onData(kHandle, std::span<const uint8_t>{phoneFrame}.first(phoneSize), 1));
     TEST_ASSERT_TRUE(service.paused(kHandle));
     TEST_ASSERT_EQUAL(0, counter.effects);
 
-    std::array<uint8_t, proto::kMaxFrame> alarm_frame{};
-    size_t alarm_size = 0;
-    TEST_ASSERT_TRUE(proto::buildFrame(alarm_frame, kCommand, proto::sender::kAlarm,
-                                       proto::msg_type::kSet, {}, alarm_size) == fw::Status::kOk);
-    TEST_ASSERT_EQUAL(alarm_size,
+    std::array<uint8_t, proto::kMaxFrame> alarmFrame{};
+    size_t alarmSize = 0;
+    TEST_ASSERT_TRUE(proto::buildFrame(alarmFrame, kCommand, proto::sender::kAlarm,
+                                       proto::msg_type::kSet, {}, alarmSize) == fw::Status::kOk);
+    TEST_ASSERT_EQUAL(alarmSize,
                       service.onData(kSecondHandle,
-                                     std::span<const uint8_t>{alarm_frame}.first(alarm_size),
+                                     std::span<const uint8_t>{alarmFrame}.first(alarmSize),
                                      kTickSecond));
     TEST_ASSERT_FALSE(service.paused(kSecondHandle));
     TEST_ASSERT_TRUE(service.paused(kHandle));
@@ -280,10 +280,10 @@ void test_two_sessions_isolated_pause_and_fair_resume()
     TEST_ASSERT_EQUAL(2, transport.commits);
 }
 
-void test_reserve_fatal_error_disconnects_session()
+void testReserveFatalErrorDisconnectsSession()
 {
     CreditTransport transport;
-    transport.reserve_error = fw::Status::kIoError;
+    transport.reserveError = fw::Status::kIoError;
     core::LinkManager manager;
     manager.init(core::Policy::kConcurrent, {});
     core::AlarmSource source;
@@ -307,11 +307,11 @@ void test_reserve_fatal_error_disconnects_session()
     TEST_ASSERT_EQUAL(0, counter.effects);
     TEST_ASSERT_EQUAL(1, service.stats().writeErrors);
     TEST_ASSERT_EQUAL(1, service.stats().disconnects);
-    TEST_ASSERT_EQUAL(1, transport.disconnect_calls);
-    TEST_ASSERT_EQUAL(kHandle, transport.last_disconnected);
+    TEST_ASSERT_EQUAL(1, transport.disconnectCalls);
+    TEST_ASSERT_EQUAL(kHandle, transport.lastDisconnected);
 }
 
-void test_legacy_transport_compat_without_credit()
+void testLegacyTransportCompatWithoutCredit()
 {
     LegacyTransport transport;
     core::LinkManager manager;
@@ -335,8 +335,8 @@ void test_legacy_transport_compat_without_credit()
                       service.onData(kHandle, std::span<const uint8_t>{frame}.first(size), 1));
     TEST_ASSERT_EQUAL(1, counter.effects);
     TEST_ASSERT_EQUAL(1, transport.writes);
-    TEST_ASSERT_EQUAL(kHandle, transport.last_handle);
-    TEST_ASSERT_TRUE(transport.last_len > 0U);
+    TEST_ASSERT_EQUAL(kHandle, transport.lastHandle);
+    TEST_ASSERT_TRUE(transport.lastLen > 0U);
 }
 } // namespace
 
@@ -345,10 +345,10 @@ extern "C" void tearDown(void) {}
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_credit_before_effect_and_cancel);
-    RUN_TEST(test_role_reject_cancels_credit_and_no_leak);
-    RUN_TEST(test_two_sessions_isolated_pause_and_fair_resume);
-    RUN_TEST(test_reserve_fatal_error_disconnects_session);
-    RUN_TEST(test_legacy_transport_compat_without_credit);
+    RUN_TEST(testCreditBeforeEffectAndCancel);
+    RUN_TEST(testRoleRejectCancelsCreditAndNoLeak);
+    RUN_TEST(testTwoSessionsIsolatedPauseAndFairResume);
+    RUN_TEST(testReserveFatalErrorDisconnectsSession);
+    RUN_TEST(testLegacyTransportCompatWithoutCredit);
     return UNITY_END();
 }

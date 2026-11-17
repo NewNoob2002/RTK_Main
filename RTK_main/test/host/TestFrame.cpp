@@ -28,7 +28,7 @@ extern "C" void setUp(void)
 }
 extern "C" void tearDown(void) {}
 
-static void test_crc32_check_value()
+static void testCrc32CheckValue()
 {
     const std::array<uint8_t, 9> msg = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     TEST_ASSERT_EQUAL_HEX32(0xCBF43926U, proto::crc32(msg));
@@ -38,7 +38,7 @@ static void test_crc32_check_value()
     TEST_ASSERT_EQUAL_HEX32(0x12345678U, proto::crc32({}, 0x12345678U));
 }
 
-static void test_build_query_frame()
+static void testBuildQueryFrame()
 {
     std::array<uint8_t, 64> out{};
     size_t len = 0;
@@ -48,7 +48,7 @@ static void test_build_query_frame()
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kFrameA.data(), out.data(), kFrameA.size());
 }
 
-static void test_build_set_response()
+static void testBuildSetResponse()
 {
     const std::array<uint8_t, 2> payload = {0x01, 0x01};
     std::array<uint8_t, 64> out{};
@@ -59,7 +59,7 @@ static void test_build_set_response()
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kFrameB.data(), out.data(), kFrameB.size());
 }
 
-static void test_build_rejects_bad_args()
+static void testBuildRejectsBadArgs()
 {
     static std::array<uint8_t, proto::kMaxPayload + 1> big{};
     static std::array<uint8_t, proto::kMaxFrame + 8> out{};
@@ -76,7 +76,7 @@ static void test_build_rejects_bad_args()
     TEST_ASSERT_EQUAL_UINT(proto::kMaxFrame, len);
 }
 
-static void test_response_type_mapping()
+static void testResponseTypeMapping()
 {
     TEST_ASSERT_EQUAL_HEX8(0x01, proto::responseType(0x00));
     TEST_ASSERT_EQUAL_HEX8(0x03, proto::responseType(0x02));
@@ -84,9 +84,9 @@ static void test_response_type_mapping()
     TEST_ASSERT_EQUAL_HEX8(0x05, proto::responseType(0x01));
 }
 
-static void test_parse_single_frame()
+static void testParseSingleFrame()
 {
-    auto r = test::feed_all(s_parser, kFrameC);
+    auto r = test::feedAll(s_parser, kFrameC);
     TEST_ASSERT_EQUAL_INT(1, r.frames);
     TEST_ASSERT_EQUAL_HEX16(0x0041, r.last.msgId);
     TEST_ASSERT_EQUAL_HEX8(0x03, r.last.sender);
@@ -94,11 +94,11 @@ static void test_parse_single_frame()
     TEST_ASSERT_EQUAL_UINT(8, r.last.payload.size());
     TEST_ASSERT_EQUAL_HEX8(0x05, r.payload[0]);
     TEST_ASSERT_EQUAL_HEX8(0x50, r.payload[2]);
-    TEST_ASSERT_EQUAL_INT(0, r.crc_errors);
-    TEST_ASSERT_EQUAL_INT(0, r.length_errors);
+    TEST_ASSERT_EQUAL_INT(0, r.crcErrors);
+    TEST_ASSERT_EQUAL_INT(0, r.lengthErrors);
 }
 
-static void test_parse_garbage_and_back_to_back()
+static void testParseGarbageAndBackToBack()
 {
     std::array<uint8_t, 128> stream{};
     size_t len = 0;
@@ -109,57 +109,57 @@ static void test_parse_garbage_and_back_to_back()
     len += kFrameA.size();
     std::memcpy(&stream[len], kFrameB.data(), kFrameB.size());
     len += kFrameB.size();
-    auto r = test::feed_all(s_parser, std::span<const uint8_t>(stream.data(), len));
+    auto r = test::feedAll(s_parser, std::span<const uint8_t>(stream.data(), len));
     TEST_ASSERT_EQUAL_INT(2, r.frames);
     TEST_ASSERT_EQUAL_HEX16(0x0004, r.last.msgId);
-    TEST_ASSERT_EQUAL_INT(0, r.crc_errors);
+    TEST_ASSERT_EQUAL_INT(0, r.crcErrors);
 }
 
-static void test_parse_aa_aa_resync()
+static void testParseAaAaResync()
 {
     std::array<uint8_t, kFrameA.size() + 1> stream{};
     stream[0] = 0xAA;
     std::memcpy(&stream[1], kFrameA.data(), kFrameA.size());
-    TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, stream).frames);
+    TEST_ASSERT_EQUAL_INT(1, test::feedAll(s_parser, stream).frames);
 }
 
-static void test_parse_split_across_feeds()
+static void testParseSplitAcrossFeeds()
 {
     const std::span<const uint8_t> all(kFrameC);
-    TEST_ASSERT_EQUAL_INT(0, test::feed_all(s_parser, all.subspan(0, 3)).frames);
-    TEST_ASSERT_EQUAL_INT(0, test::feed_all(s_parser, all.subspan(3, 20)).frames);
-    TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, all.subspan(23)).frames);
+    TEST_ASSERT_EQUAL_INT(0, test::feedAll(s_parser, all.subspan(0, 3)).frames);
+    TEST_ASSERT_EQUAL_INT(0, test::feedAll(s_parser, all.subspan(3, 20)).frames);
+    TEST_ASSERT_EQUAL_INT(1, test::feedAll(s_parser, all.subspan(23)).frames);
 }
 
-static void test_parse_crc_error_then_recover()
+static void testParseCrcErrorThenRecover()
 {
     auto bad = kFrameB;
     bad[20] ^= 0xFFU;
-    auto r = test::feed_all(s_parser, bad);
+    auto r = test::feedAll(s_parser, bad);
     TEST_ASSERT_EQUAL_INT(0, r.frames);
-    TEST_ASSERT_EQUAL_INT(1, r.crc_errors);
+    TEST_ASSERT_EQUAL_INT(1, r.crcErrors);
     TEST_ASSERT_EQUAL_UINT32(1, s_parser.crcErrors());
-    TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, kFrameB).frames);
+    TEST_ASSERT_EQUAL_INT(1, test::feedAll(s_parser, kFrameB).frames);
 }
 
-static void test_parse_length_errors()
+static void testParseLengthErrors()
 {
     auto hdr = kFrameA;
     hdr[3] = 0x15;
     TEST_ASSERT_EQUAL_INT(
-        1, test::feed_all(s_parser, std::span<const uint8_t>(hdr.data(), 4)).length_errors);
+        1, test::feedAll(s_parser, std::span<const uint8_t>(hdr.data(), 4)).lengthErrors);
 
     s_parser = proto::FrameParser{};
     hdr = kFrameA;
-    hdr[12] = 0x01; // payload_len = 257
+    hdr[12] = 0x01; // payloadLen = 257
     hdr[13] = 0x01;
     TEST_ASSERT_EQUAL_INT(
-        1, test::feed_all(s_parser, std::span<const uint8_t>(hdr.data(), 20)).length_errors);
+        1, test::feedAll(s_parser, std::span<const uint8_t>(hdr.data(), 20)).lengthErrors);
     TEST_ASSERT_EQUAL_UINT32(1, s_parser.lengthErrors());
-    TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, kFrameA).frames);
+    TEST_ASSERT_EQUAL_INT(1, test::feedAll(s_parser, kFrameA).frames);
 }
 
-static void test_parse_max_payload()
+static void testParseMaxPayload()
 {
     static std::array<uint8_t, proto::kMaxPayload> payload{};
     static std::array<uint8_t, proto::kMaxFrame> out{};
@@ -168,37 +168,37 @@ static void test_parse_max_payload()
     }
     size_t len = 0;
     TEST_ASSERT_TRUE(isOk(proto::buildFrame(out, 0x0007, 0, 2, payload, len)));
-    auto r = test::feed_all(s_parser, std::span<const uint8_t>(out.data(), len));
+    auto r = test::feedAll(s_parser, std::span<const uint8_t>(out.data(), len));
     TEST_ASSERT_EQUAL_INT(1, r.frames);
     TEST_ASSERT_EQUAL_UINT(proto::kMaxPayload, r.last.payload.size());
     TEST_ASSERT_EQUAL_HEX8_ARRAY(payload.data(), r.payload.data(), proto::kMaxPayload);
 }
 
-static void test_reset_drops_partial_frame()
+static void testResetDropsPartialFrame()
 {
     TEST_ASSERT_EQUAL_INT(
-        0, test::feed_all(s_parser, std::span<const uint8_t>(kFrameA.data(), 10)).frames);
+        0, test::feedAll(s_parser, std::span<const uint8_t>(kFrameA.data(), 10)).frames);
     s_parser.reset();
     TEST_ASSERT_EQUAL_INT(
-        0, test::feed_all(s_parser, std::span<const uint8_t>(kFrameA.data() + 10, 14)).frames);
-    TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, kFrameA).frames);
+        0, test::feedAll(s_parser, std::span<const uint8_t>(kFrameA.data() + 10, 14)).frames);
+    TEST_ASSERT_EQUAL_INT(1, test::feedAll(s_parser, kFrameA).frames);
 }
 
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_crc32_check_value);
-    RUN_TEST(test_build_query_frame);
-    RUN_TEST(test_build_set_response);
-    RUN_TEST(test_build_rejects_bad_args);
-    RUN_TEST(test_response_type_mapping);
-    RUN_TEST(test_parse_single_frame);
-    RUN_TEST(test_parse_garbage_and_back_to_back);
-    RUN_TEST(test_parse_aa_aa_resync);
-    RUN_TEST(test_parse_split_across_feeds);
-    RUN_TEST(test_parse_crc_error_then_recover);
-    RUN_TEST(test_parse_length_errors);
-    RUN_TEST(test_parse_max_payload);
-    RUN_TEST(test_reset_drops_partial_frame);
+    RUN_TEST(testCrc32CheckValue);
+    RUN_TEST(testBuildQueryFrame);
+    RUN_TEST(testBuildSetResponse);
+    RUN_TEST(testBuildRejectsBadArgs);
+    RUN_TEST(testResponseTypeMapping);
+    RUN_TEST(testParseSingleFrame);
+    RUN_TEST(testParseGarbageAndBackToBack);
+    RUN_TEST(testParseAaAaResync);
+    RUN_TEST(testParseSplitAcrossFeeds);
+    RUN_TEST(testParseCrcErrorThenRecover);
+    RUN_TEST(testParseLengthErrors);
+    RUN_TEST(testParseMaxPayload);
+    RUN_TEST(testResetDropsPartialFrame);
     return UNITY_END();
 }

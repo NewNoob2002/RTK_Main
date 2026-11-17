@@ -1,5 +1,5 @@
 // 模板模块（kLink 执行器）：演示模块最小接口、可选操作与命令接入。
-// init 启动前调用；poll 与 on_command 仅在 kLink 任务调用；均非阻塞、非 ISR。
+// init 启动前调用；poll 与 onCommand 仅在 kLink 任务调用；均非阻塞、非 ISR。
 #pragma once
 
 #include <cstdint>
@@ -25,7 +25,7 @@ inline constexpr uint32_t kTemplateMaxLimitMs = 60000U;
 struct TemplateState {
     bool initialized = false;
     uint32_t ticks = 0U;
-    uint32_t limit_ms = 0U;
+    uint32_t limitMs = 0U;
 };
 
 /** 模板模块（kLink 执行器）：示例化状态维护、周期步进与命令处理。 */
@@ -38,14 +38,14 @@ public:
     TemplateModule(TemplateModule &&) = delete;
     TemplateModule &operator=(TemplateModule &&) = delete;
     [[nodiscard]] fw::Result init() noexcept;
-    // start() 为可选操作，无需启动钩子时省略，fw::make_ops 自动置 nullptr。
-    [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
-    void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    // start() 为可选操作，无需启动钩子时省略，fw::makeOps 自动置 nullptr。
+    [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
+    void onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     [[nodiscard]] TemplateState state() const noexcept;
 
 private:
     [[nodiscard]] fw::Result reset() noexcept;
-    [[nodiscard]] fw::Result set_limit(const fw::Command &cmd) noexcept;
+    [[nodiscard]] fw::Result setLimit(const fw::Command &cmd) noexcept;
 
     AppContext &context_;
     TemplateState state_{};
@@ -53,7 +53,7 @@ private:
     uint32_t last_tick_ms_ = 0U;
 };
 /** 模板模块控制台命令表；静态存储，进程期有效。 */
-[[nodiscard]] std::span<const cli::Cmd> template_cmds() noexcept;
-/** 模板子命令动词表，供 cli::add_verbs 登记。 */
-[[nodiscard]] std::span<const cli::Verb> template_verbs() noexcept;
+[[nodiscard]] std::span<const cli::Cmd> templateCmds() noexcept;
+/** 模板子命令动词表，供 cli::addVerbs 登记。 */
+[[nodiscard]] std::span<const cli::Verb> templateVerbs() noexcept;
 } // namespace app

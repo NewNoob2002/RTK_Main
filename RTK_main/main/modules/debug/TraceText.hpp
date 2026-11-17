@@ -50,14 +50,14 @@ struct TraceText {
     std::span<const TraceField> fields;
 };
 
-/** 全部已知事件码；未知码由 format_event 用兜底格式输出。 */
-[[nodiscard]] std::span<const TraceText> trace_table() noexcept;
+/** 全部已知事件码；未知码由 formatEvent 用兜底格式输出。 */
+[[nodiscard]] std::span<const TraceText> traceTable() noexcept;
 
 /** 类别的大写短名（LINK/SPP/RTCM/PROTO/ALARM/STORE/EXEC/GNSS）；越界返回 "?"。 */
-[[nodiscard]] const char *trace_cat_name(fw::TraceCat cat) noexcept;
+[[nodiscard]] const char *traceCatName(fw::TraceCat cat) noexcept;
 
 /** 类别名 → 类别，大小写不敏感；未知名称返回 false 且不改 out。 */
-[[nodiscard]] bool parse_cat(std::string_view name, fw::TraceCat &out) noexcept;
+[[nodiscard]] bool parseCat(std::string_view name, fw::TraceCat &out) noexcept;
 
 /**
  * @brief  把一个 trace 事件格式化为一行文本：`[LINK] session 0x0081 opened as ALARM (whitelisted)`
@@ -65,9 +65,9 @@ struct TraceText {
  * @param  out: 输出缓冲（不含时间前缀与换行）；未知码输出 `[LINK] code 77 a=3 b=4`
  * @param  cap: out 容量；不足时截断并保持 0 结尾
  */
-void format_event(const fw::TraceEvent &ev, char *out, size_t cap) noexcept;
+void formatEvent(const fw::TraceEvent &ev, char *out, size_t cap) noexcept;
 
 /** 一组的一句话说明（`debug list` 用），未知类别返回空串。 */
-[[nodiscard]] const char *trace_cat_summary(fw::TraceCat cat) noexcept;
+[[nodiscard]] const char *traceCatSummary(fw::TraceCat cat) noexcept;
 
 } // namespace app::debug

@@ -1,5 +1,5 @@
 // 控制台公共辅助实现：命令投递、回执报错与 MAC/角色格式化。
-// 线程模型：仅在 console REPL 任务调用，非 ISR；format_mac/role_name 为纯函数。
+// 线程模型：仅在 console REPL 任务调用，非 ISR；formatMac/roleName 为纯函数。
 
 #include "support/ConsoleSupport.hpp"
 
@@ -15,7 +15,7 @@
 
 namespace app {
 
-const char *role_name(core::Role role) noexcept
+const char *roleName(core::Role role) noexcept
 {
     switch (role) {
     case core::Role::kNone:
@@ -31,7 +31,7 @@ const char *role_name(core::Role role) noexcept
     }
 }
 
-void format_mac(const core::BtAddr &addr, std::span<char, kMacStrBuf> out) noexcept
+void formatMac(const core::BtAddr &addr, std::span<char, kMacStrBuf> out) noexcept
 {
     constexpr std::string_view kHex = "0123456789ABCDEF";
     constexpr uint8_t kNibbleMask = 0x0FU;
@@ -52,10 +52,10 @@ void format_mac(const core::BtAddr &addr, std::span<char, kMacStrBuf> out) noexc
     out[pos] = '\0';
 }
 
-void print_mac(const core::BtAddr &addr) noexcept
+void printMac(const core::BtAddr &addr) noexcept
 {
     std::array<char, kMacStrBuf> text{};
-    format_mac(addr, text);
+    formatMac(addr, text);
     cli::outPrintf("%s", text.data());
 }
 
@@ -82,11 +82,11 @@ bool report(const char * /*what*/, const fw::CommandResult &result) noexcept
     }
 }
 
-bool submit_raw_to(rtos::Executor &executor, ModuleKind module, const char *down_msg,
-                   const fw::Command &command, fw::CommandResult &out) noexcept
+bool submitRawTo(rtos::Executor &executor, ModuleKind module, const char *downMsg,
+                 const fw::Command &command, fw::CommandResult &out) noexcept
 {
     if (!executor.running() || !executor.moduleOk(id(module))) {
-        (void)cli::fail("%s", down_msg != nullptr ? down_msg : "executor not running");
+        (void)cli::fail("%s", downMsg != nullptr ? downMsg : "executor not running");
         return false;
     }
     if (executor.call(command, out, kCommandTimeoutMs) != fw::Result::kOk) {
@@ -96,20 +96,20 @@ bool submit_raw_to(rtos::Executor &executor, ModuleKind module, const char *down
     return true;
 }
 
-bool submit_raw(const fw::Command &command, fw::CommandResult &out) noexcept
+bool submitRaw(const fw::Command &command, fw::CommandResult &out) noexcept
 {
-    if (app_context().link_executor == nullptr) {
+    if (appContext().linkExecutor == nullptr) {
         (void)cli::fail("link not running");
         return false;
     }
-    return submit_raw_to(*app_context().link_executor, ModuleKind::kBtLink, "link not running",
-                         command, out);
+    return submitRawTo(*appContext().linkExecutor, ModuleKind::kBtLink, "link not running", command,
+                       out);
 }
 
 bool submit(const fw::Command &command, const char *what) noexcept
 {
     fw::CommandResult result{};
-    if (!submit_raw(command, result)) {
+    if (!submitRaw(command, result)) {
         return false;
     }
     return report(what, result);

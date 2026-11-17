@@ -61,7 +61,7 @@ static_assert(SPP_SERVER_REPLY_CAPACITY * SPP_SERVER_MAX_SESSIONS + SPP_SERVER_S
                   SPP_SERVER_TX_PAYLOAD_BUDGET,
               "TX payload 预算");
 
-/* 发送任务：静态栈字节数（与 SppServerStorage.h 一致）；栈存储由组合根经 bind_storage 注入。 */
+/* 发送任务：静态栈字节数（与 SppServerStorage.h 一致）；栈存储由组合根经 bindStorage 注入。 */
 #define SPP_SERVER_WORKER_STACK SPP_SERVER_WORKER_STACK_BYTES
 
 /* 控制表：GAP 应答/无空槽拒绝只登记请求，由发送任务在任务上下文执行可能阻塞投递的 API。

@@ -52,7 +52,7 @@ int bump(int &counter) noexcept
 } // namespace
 
 /** 追踪关闭：日志不受影响，默认 I 级经直写 sink 输出；高于编译期上限的 D 级（本构建上限 I）不求值。 */
-void test_off_logs_still_work(void)
+void testOffLogsStillWork(void)
 {
     static_assert(fw::kLogMaxLevel == fw::LogLevel::kInfo, "this build sets FW_LOG_MAX_LEVEL=2");
     TEST_ASSERT_EQUAL(fw::Result::kOk, fw::logInstallDirect(&sink, nullptr, &clock0));
@@ -71,6 +71,6 @@ void test_off_logs_still_work(void)
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_off_logs_still_work);
+    RUN_TEST(testOffLogsStillWork);
     return UNITY_END();
 }

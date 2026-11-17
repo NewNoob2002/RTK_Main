@@ -20,33 +20,33 @@ using WhitelistRaw = std::array<std::array<uint8_t, core::kAddrLen>, kMaxAlarms>
 static_assert(sizeof(WhitelistRaw) == kMaxAlarms * NVS_STORE_ADDR_LEN);
 } // namespace
 
-fw::Result StorageModule::whitelist_load(std::span<const uint8_t> in) noexcept
+fw::Result StorageModule::whitelistLoad(std::span<const uint8_t> in) noexcept
 {
     if (in.size() > kMaxAlarms * core::kAddrLen || in.size() % core::kAddrLen != 0U) {
         return fw::Result::kInvalidArg;
     }
-    whitelist_.whitelist_count = in.size() / core::kAddrLen;
-    for (size_t i = 0; i < whitelist_.whitelist_count; ++i) {
+    whitelist_.whitelistCount = in.size() / core::kAddrLen;
+    for (size_t i = 0; i < whitelist_.whitelistCount; ++i) {
         std::memcpy(whitelist_.whitelist[i].bytes.data(), in.subspan(i * core::kAddrLen).data(),
                     core::kAddrLen);
     }
     return fw::Result::kOk;
 }
 
-fw::Result StorageModule::whitelist_save(std::span<uint8_t> out, size_t &len) const noexcept
+fw::Result StorageModule::whitelistSave(std::span<uint8_t> out, size_t &len) const noexcept
 {
-    len = whitelist_.whitelist_count * core::kAddrLen;
+    len = whitelist_.whitelistCount * core::kAddrLen;
     if (out.size() < len) {
         return fw::Result::kNoSpace;
     }
-    for (size_t i = 0; i < whitelist_.whitelist_count; ++i) {
+    for (size_t i = 0; i < whitelist_.whitelistCount; ++i) {
         std::memcpy(out.subspan(i * core::kAddrLen).data(), whitelist_.whitelist[i].bytes.data(),
                     core::kAddrLen);
     }
     return fw::Result::kOk;
 }
 
-fw::Result StorageModule::sn_load(std::span<const uint8_t> in) noexcept
+fw::Result StorageModule::snLoad(std::span<const uint8_t> in) noexcept
 {
     if (in.empty() || in.size() > NVS_STORE_SN_MAX ||
         std::find_if(in.begin(), in.end(),
@@ -58,7 +58,7 @@ fw::Result StorageModule::sn_load(std::span<const uint8_t> in) noexcept
     return fw::Result::kOk;
 }
 
-fw::Result StorageModule::sn_save(std::span<uint8_t> out, size_t &len) const noexcept
+fw::Result StorageModule::snSave(std::span<uint8_t> out, size_t &len) const noexcept
 {
     len = std::strlen(sn_.data());
     if (out.size() < len) {
@@ -71,7 +71,7 @@ fw::Result StorageModule::sn_save(std::span<uint8_t> out, size_t &len) const noe
 /**
  * @brief  从 NVS 读白名单；缺失或损坏时使用空表并记 W 级日志
  */
-void StorageModule::load_whitelist() noexcept
+void StorageModule::loadWhitelist() noexcept
 {
     WhitelistRaw raw{};
     size_t count = 0;
@@ -86,7 +86,7 @@ void StorageModule::load_whitelist() noexcept
     /* 按冻结的逐行字节布局反序列化，失败保持空表。 */
     std::array<uint8_t, sizeof(raw)> bytes{};
     std::memcpy(bytes.data(), raw.data(), count * core::kAddrLen);
-    const auto loaded = whitelist_load(std::span{bytes}.first(count * core::kAddrLen));
+    const auto loaded = whitelistLoad(std::span{bytes}.first(count * core::kAddrLen));
     if (!fw::isOk(loaded)) {
         FW_LOGW(fw::TraceCat::kStore, "invalid whitelist; use empty list");
     }
@@ -95,34 +95,34 @@ void StorageModule::load_whitelist() noexcept
 /**
  * @brief  从 NVS 读 SN；缺失时由 BT MAC 派生设备名
  */
-void StorageModule::load_sn() noexcept
+void StorageModule::loadSn() noexcept
 {
     std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
-    const esp_err_t sn_error = nvs_store_get_sn(sn.data(), sn.size());
-    if (sn_error != ESP_OK) {
-        if (sn_error == ESP_ERR_NVS_NOT_FOUND) {
+    const esp_err_t snError = nvs_store_get_sn(sn.data(), sn.size());
+    if (snError != ESP_OK) {
+        if (snError == ESP_ERR_NVS_NOT_FOUND) {
             // 未写入 SN 是出厂前的正常状态，不当作错误呈现。
             FW_LOGI(fw::TraceCat::kStore, "no SN set; name derived from BT MAC");
         } else {
             FW_LOGW(fw::TraceCat::kStore, "SN read failed: %s; name derived from BT MAC",
-                    esp_err_to_name(sn_error));
+                    esp_err_to_name(snError));
         }
         return;
     }
     /* 验证 SN 后保存到模块，供后续 BT 名称初始化使用。 */
     std::array<uint8_t, NVS_STORE_SN_MAX + 1U> bytes{};
     std::memcpy(bytes.data(), sn.data(), sn.size());
-    const auto status = sn_load(std::span{bytes}.first(std::strlen(sn.data())));
+    const auto status = snLoad(std::span{bytes}.first(std::strlen(sn.data())));
     if (!fw::isOk(status)) {
         FW_LOGW(fw::TraceCat::kStore, "invalid sn; derive from BT MAC");
     }
 }
 
-void StorageModule::load_key_tables() noexcept
+void StorageModule::loadKeyTables() noexcept
 {
-    for (const StoreGroup &group : store_catalog()) {
-        // 失败详情已由 load_keys 的 kStore 事件覆盖；启动早期不额外打印。
-        if (!fw::isOk(load_keys(group.keys))) {
+    for (const StoreGroup &group : storeCatalog()) {
+        // 失败详情已由 loadKeys 的 kStore 事件覆盖；启动早期不额外打印。
+        if (!fw::isOk(loadKeys(group.keys))) {
             continue;
         }
     }
@@ -144,31 +144,30 @@ fw::Result StorageModule::init() noexcept
     if (init != ESP_OK) {
         FW_LOGE(fw::TraceCat::kStore, "store init failed: %s; use defaults", esp_err_to_name(init));
     }
-    load_whitelist();
-    load_sn();
+    loadWhitelist();
+    loadSn();
     /* ADR-0009 §2.4 / ADR-0010 §2.10：启动时按目录加载所有类别的键表。 */
-    load_key_tables();
+    loadKeyTables();
     /* 保持 LinkStatus、SystemStatus、初始化标记、StoreStatus 的写入顺序。 */
-    ctx().data.link_status.write(whitelist_);
+    ctx().data.linkStatus.write(whitelist_);
     SystemStatus system{};
     system.sn = sn_;
-    ctx().data.system_status.write(system);
+    ctx().data.systemStatus.write(system);
     initialized_ = true;
-    ctx().data.store_status.write(status_);
+    ctx().data.storeStatus.write(status_);
     return fw::Result::kOk;
 }
 
-void StorageModule::mark_whitelist_dirty(std::span<const core::BtAddr> list,
-                                         uint32_t now_ms) noexcept
+void StorageModule::markWhitelistDirty(std::span<const core::BtAddr> list, uint32_t nowMs) noexcept
 {
     /* 新变化只重启去抖，不缩短已有失败的退避窗口。 */
-    whitelist_.whitelist_count = std::min(list.size(), kMaxAlarms);
-    std::copy_n(list.begin(), whitelist_.whitelist_count, whitelist_.whitelist.begin());
+    whitelist_.whitelistCount = std::min(list.size(), kMaxAlarms);
+    std::copy_n(list.begin(), whitelist_.whitelistCount, whitelist_.whitelist.begin());
     pending_ = true;
-    changed_ms_ = now_ms;
-    status_.whitelist_pending = true;
-    trace_store(StoreTrace::kDebounce, kDebounceMs, whitelist_.whitelist_count);
-    ctx().data.store_status.write(status_);
+    changed_ms_ = nowMs;
+    status_.whitelistPending = true;
+    traceStore(StoreTrace::kDebounce, kDebounceMs, whitelist_.whitelistCount);
+    ctx().data.storeStatus.write(status_);
 }
 
 bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
@@ -182,7 +181,7 @@ bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
     WhitelistRaw raw{};
     size_t len = 0;
     std::array<uint8_t, kMaxAlarms * core::kAddrLen> out{};
-    const auto serialized = whitelist_save(out, len);
+    const auto serialized = whitelistSave(out, len);
     if (!fw::isOk(serialized)) {
         FW_LOGE(fw::TraceCat::kStore, "whitelist not saved, serialization failed (%s)",
                 fw::toString(serialized));
@@ -196,50 +195,50 @@ bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
     /* 使用写入完成时间计算重试，保持失败倍增和状态发布顺序。 */
     attempt_ms_ = rtos::nowMs();
-    status_.whitelist_error = error;
+    status_.whitelistError = error;
     if (error == ESP_OK) {
         pending_ = false;
         attempted_ = false;
         retry_ms_ = kRetryInitialMs;
-        status_.retry_ms = 0;
-        trace_store(StoreTrace::kSave, static_cast<uint32_t>(fw::Result::kOk),
-                    static_cast<uint32_t>(len / core::kAddrLen));
+        status_.retryMs = 0;
+        traceStore(StoreTrace::kSave, static_cast<uint32_t>(fw::Result::kOk),
+                   static_cast<uint32_t>(len / core::kAddrLen));
     } else {
         retry_ms_ = attempted_ ? std::min(retry_ms_ * 2U, kRetryMaxMs) : kRetryInitialMs;
         attempted_ = true;
         ++status_.failures;
-        status_.retry_ms = retry_ms_;
-        trace_store(StoreTrace::kSave, static_cast<uint32_t>(fw::Result::kIoError),
-                    static_cast<uint32_t>(error));
-        trace_store(StoreTrace::kRetry, retry_ms_, status_.failures);
+        status_.retryMs = retry_ms_;
+        traceStore(StoreTrace::kSave, static_cast<uint32_t>(fw::Result::kIoError),
+                   static_cast<uint32_t>(error));
+        traceStore(StoreTrace::kRetry, retry_ms_, status_.failures);
         FW_LOGW(fw::TraceCat::kStore, "whitelist save failed (%s), retry in %u ms",
                 esp_err_to_name(error), static_cast<unsigned>(retry_ms_));
     }
-    status_.whitelist_pending = pending_;
-    ctx().data.store_status.write(status_);
+    status_.whitelistPending = pending_;
+    ctx().data.storeStatus.write(status_);
     return false;
 }
 
-esp_err_t StorageModule::flush_whitelist(uint32_t now_ms) noexcept
+esp_err_t StorageModule::flushWhitelist(uint32_t nowMs) noexcept
 {
     /* 显式命令跳过去抖和退避，并返回实际后端结果。 */
-    changed_ms_ = now_ms - kDebounceMs;
+    changed_ms_ = nowMs - kDebounceMs;
     attempted_ = false;
-    static_cast<void>(poll(now_ms));
-    return status_.whitelist_error;
+    static_cast<void>(poll(nowMs));
+    return status_.whitelistError;
 }
 
-void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) noexcept
+void StorageModule::saveSn(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     const auto previous = sn_;
-    result.status = sn_load(std::span{cmd.args}.first(cmd.argLen));
+    result.status = snLoad(std::span{cmd.args}.first(cmd.argLen));
     if (!fw::isOk(result.status)) {
         return;
     }
     /* 先验证并编码，失败时还原模块内的原 SN。 */
     std::array<uint8_t, NVS_STORE_SN_MAX + 1U> encoded{};
     size_t len = 0;
-    result.status = sn_save(encoded, len);
+    result.status = snSave(encoded, len);
     if (!fw::isOk(result.status)) {
         sn_ = previous;
         return;
@@ -248,7 +247,7 @@ void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) n
     std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
     std::memcpy(sn.data(), encoded.data(), len);
     const esp_err_t error = nvs_store_set_sn(sn.data());
-    status_.sn_error = error;
+    status_.snError = error;
     result.detail = error;
     result.status = error == ESP_OK ? fw::Result::kOk : fw::Result::kIoError;
     if (error != ESP_OK) {
@@ -256,16 +255,16 @@ void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) n
         FW_LOGE(fw::TraceCat::kStore, "serial number save failed (%s), previous value kept",
                 esp_err_to_name(error));
     }
-    ctx().data.store_status.write(status_);
+    ctx().data.storeStatus.write(status_);
 }
 
-void StorageModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
+void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (cmd.verb != verb(StorageVerb::kSaveSn) || cmd.argLen > cmd.args.size()) {
         result.status = fw::Result::kInvalidArg;
         return;
     }
     /* 校验信封后交给 SN 保存流程。 */
-    save_sn(cmd, result);
+    saveSn(cmd, result);
 }
 } // namespace app

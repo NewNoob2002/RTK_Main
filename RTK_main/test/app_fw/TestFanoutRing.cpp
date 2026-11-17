@@ -38,30 +38,30 @@ constexpr uint32_t kHighByteShift = 8U;
 constexpr uint32_t kByteMask = 0xFFU;
 
 struct RingLockSpy {
-    uint32_t lock_calls = 0U;
-    uint32_t unlock_calls = 0U;
+    uint32_t lockCalls = 0U;
+    uint32_t unlockCalls = 0U;
     int32_t depth = 0;
     bool underflow = false;
 };
 
-void ring_spy_lock(void *ctx) noexcept
+void ringSpyLock(void *ctx) noexcept
 {
     auto *spy = static_cast<RingLockSpy *>(ctx);
-    ++spy->lock_calls;
+    ++spy->lockCalls;
     ++spy->depth;
 }
 
-void ring_spy_unlock(void *ctx) noexcept
+void ringSpyUnlock(void *ctx) noexcept
 {
     auto *spy = static_cast<RingLockSpy *>(ctx);
-    ++spy->unlock_calls;
+    ++spy->unlockCalls;
     --spy->depth;
     if (spy->depth < 0) {
         spy->underflow = true;
     }
 }
 
-void fill_pattern(std::span<uint8_t> dst, uint32_t seq) noexcept
+void fillPattern(std::span<uint8_t> dst, uint32_t seq) noexcept
 {
     for (size_t i = 0U; i < dst.size(); ++i) {
         dst[i] = static_cast<uint8_t>((seq + static_cast<uint32_t>(i)) &
@@ -69,7 +69,7 @@ void fill_pattern(std::span<uint8_t> dst, uint32_t seq) noexcept
     }
 }
 
-void verify_pattern(std::span<const uint8_t> data, uint32_t seq) noexcept
+void verifyPattern(std::span<const uint8_t> data, uint32_t seq) noexcept
 {
     for (size_t i = 0U; i < data.size(); ++i) {
         const uint8_t expected = static_cast<uint8_t>((seq + static_cast<uint32_t>(i)) & kByteMask);
@@ -77,7 +77,7 @@ void verify_pattern(std::span<const uint8_t> data, uint32_t seq) noexcept
     }
 }
 
-void test_init_validation_and_uninit_calls()
+void testInitValidationAndUninitCalls()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, kSmallRingCap> storage{};
@@ -107,30 +107,30 @@ void test_init_validation_and_uninit_calls()
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(fw::Result::kInvalidArg),
         static_cast<uint8_t>(ring.init(storage, kWrapMaxRecord + 1U, fw::kNoLock)));
-    // storage.size() < 2 * (max_record + 2)
-    std::array<uint8_t, kTooSmallCap> too_small{};
+    // storage.size() < 2 * (maxRecord + 2)
+    std::array<uint8_t, kTooSmallCap> tooSmall{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(ring.init(too_small, 1U, fw::kNoLock)));
+                            static_cast<uint8_t>(ring.init(tooSmall, 1U, fw::kNoLock)));
     // 半空 LockOps 非法
-    const fw::LockOps bad_lock{&ring_spy_lock, nullptr, nullptr};
+    const fw::LockOps badLock{&ringSpyLock, nullptr, nullptr};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(ring.init(storage, 1U, bad_lock)));
+                            static_cast<uint8_t>(ring.init(storage, 1U, badLock)));
 
-    // 最小边界 max_record=1, size=6 合法
-    std::array<uint8_t, kMinValidCap> min_buf{};
+    // 最小边界 maxRecord=1, size=6 合法
+    std::array<uint8_t, kMinValidCap> minBuf{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.init(min_buf, 1U, fw::kNoLock)));
+                            static_cast<uint8_t>(ring.init(minBuf, 1U, fw::kNoLock)));
 
     // 重复 init 返回 kInvalidState
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
                             static_cast<uint8_t>(ring.init(storage, kSmallMaxRecord, fw::kNoLock)));
 }
 
-void test_attach_detach_and_late_attach()
+void testAttachDetachAndLateAttach()
 {
     std::array<uint8_t, kSmallRingCap> storage{};
     RingLockSpy spy{};
-    const fw::LockOps ops{&ring_spy_lock, &ring_spy_unlock, &spy};
+    const fw::LockOps ops{&ringSpyLock, &ringSpyUnlock, &spy};
     fw::FanoutRing ring;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, kSmallMaxRecord, ops)));
@@ -195,12 +195,12 @@ void test_attach_detach_and_late_attach()
     TEST_ASSERT_EQUAL_size_t(post1.size(), len);
     TEST_ASSERT_EQUAL_UINT8_ARRAY(post1.data(), out.data(), post1.size());
 
-    TEST_ASSERT_EQUAL_UINT32(spy.lock_calls, spy.unlock_calls);
+    TEST_ASSERT_EQUAL_UINT32(spy.lockCalls, spy.unlockCalls);
     TEST_ASSERT_EQUAL_INT32(0, spy.depth);
     TEST_ASSERT_FALSE(spy.underflow);
 }
 
-void test_record_boundaries_and_nospace_non_consuming()
+void testRecordBoundariesAndNospaceNonConsuming()
 {
     std::array<uint8_t, kSmallRingCap> storage{};
     fw::FanoutRing ring;
@@ -211,7 +211,7 @@ void test_record_boundaries_and_nospace_non_consuming()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.attach(rid)));
 
-    // 长度 0 与 > max_record 被拒绝并计入 rejected
+    // 长度 0 与 > maxRecord 被拒绝并计入 rejected
     std::array<uint8_t, kSmallMaxRecord + 1U> oversized{};
     oversized.fill(kOversizeFill);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
@@ -221,52 +221,52 @@ void test_record_boundaries_and_nospace_non_consuming()
     TEST_ASSERT_EQUAL_UINT32(2U, ring.writerStats().rejected);
     TEST_ASSERT_EQUAL_UINT32(0U, ring.writerStats().records);
 
-    // 写入长度 1 与 max_record 边界记录（同时跨过缓冲区物理末尾）
-    std::array<uint8_t, kSmallMaxRecord> max_rec{};
-    fill_pattern(max_rec, 1U);
-    const std::array<uint8_t, 1> min_rec{0xFEU};
+    // 写入长度 1 与 maxRecord 边界记录（同时跨过缓冲区物理末尾）
+    std::array<uint8_t, kSmallMaxRecord> maxRec{};
+    fillPattern(maxRec, 1U);
+    const std::array<uint8_t, 1> minRec{0xFEU};
     // 连续写 4 次，促使写指针多次跨越 storage 末尾（40 B）并包含 2 B 长度头跨尾的情况
     for (uint32_t round = 0U; round < kOddRounds; ++round) {
-        std::array<uint8_t, kOddRecordLen> odd_rec{};
-        fill_pattern(odd_rec, round + kOddSeqBase);
+        std::array<uint8_t, kOddRecordLen> oddRec{};
+        fillPattern(oddRec, round + kOddSeqBase);
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                                static_cast<uint8_t>(ring.write(odd_rec)));
+                                static_cast<uint8_t>(ring.write(oddRec)));
         std::array<uint8_t, kSmallMaxRecord> got{};
         size_t len = 0U;
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                                 static_cast<uint8_t>(ring.read(rid, got, len)));
-        TEST_ASSERT_EQUAL_size_t(odd_rec.size(), len);
-        verify_pattern(std::span<const uint8_t>(got.data(), len), round + kOddSeqBase);
+        TEST_ASSERT_EQUAL_size_t(oddRec.size(), len);
+        verifyPattern(std::span<const uint8_t>(got.data(), len), round + kOddSeqBase);
     }
 
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.write(max_rec)));
+                            static_cast<uint8_t>(ring.write(maxRec)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.write(min_rec)));
+                            static_cast<uint8_t>(ring.write(minRec)));
 
     // 输出缓冲不足 -> kNoSpace，len = 需要的长度，尾指针不动
-    std::array<uint8_t, kSmallMaxRecord - 1U> small_out{};
+    std::array<uint8_t, kSmallMaxRecord - 1U> smallOut{};
     size_t len = 0U;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNoSpace),
-                            static_cast<uint8_t>(ring.read(rid, small_out, len)));
+                            static_cast<uint8_t>(ring.read(rid, smallOut, len)));
     TEST_ASSERT_EQUAL_size_t(kSmallMaxRecord, len);
     TEST_ASSERT_EQUAL_UINT32(3U, ring.readerStats(rid).records);
 
-    // 换足够大的缓冲立即再次读：完整读出刚才那条 max_rec，然后读出 min_rec
-    std::array<uint8_t, kSmallMaxRecord> full_out{};
+    // 换足够大的缓冲立即再次读：完整读出刚才那条 maxRec，然后读出 minRec
+    std::array<uint8_t, kSmallMaxRecord> fullOut{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.read(rid, full_out, len)));
+                            static_cast<uint8_t>(ring.read(rid, fullOut, len)));
     TEST_ASSERT_EQUAL_size_t(kSmallMaxRecord, len);
-    verify_pattern(std::span<const uint8_t>(full_out.data(), len), 1U);
+    verifyPattern(std::span<const uint8_t>(fullOut.data(), len), 1U);
 
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.read(rid, full_out, len)));
+                            static_cast<uint8_t>(ring.read(rid, fullOut, len)));
     TEST_ASSERT_EQUAL_size_t(1U, len);
-    TEST_ASSERT_EQUAL_UINT8(0xFEU, full_out[0]);
+    TEST_ASSERT_EQUAL_UINT8(0xFEU, fullOut[0]);
     TEST_ASSERT_EQUAL_UINT32(5U, ring.readerStats(rid).records);
 }
 
-void test_multi_reader_overwrite_drops_whole_records()
+void testMultiReaderOverwriteDropsWholeRecords()
 {
     // cap = 40，每条记录 8 B 负载 + 2 B 头 = 10 B，容量正好放 4 条记录
     constexpr size_t kRecPayload = 8U;
@@ -276,36 +276,36 @@ void test_multi_reader_overwrite_drops_whole_records()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, kSmallMaxRecord, fw::kNoLock)));
 
-    uint8_t r_fast = 0U;
-    uint8_t r_mid = 0U;
-    uint8_t r_slow = 0U;
+    uint8_t rFast = 0U;
+    uint8_t rMid = 0U;
+    uint8_t rSlow = 0U;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.attach(r_fast)));
+                            static_cast<uint8_t>(ring.attach(rFast)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.attach(r_mid)));
+                            static_cast<uint8_t>(ring.attach(rMid)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.attach(r_slow)));
+                            static_cast<uint8_t>(ring.attach(rSlow)));
 
     std::array<uint8_t, kSmallMaxRecord> out{};
     size_t len = 0U;
 
     for (uint32_t seq = 0U; seq < kTotalWrites; ++seq) {
         std::array<uint8_t, kRecPayload> rec{};
-        fill_pattern(rec, seq);
+        fillPattern(rec, seq);
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                                 static_cast<uint8_t>(ring.write(rec)));
 
         // fast 读者每写一条读一条：0 丢弃
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                                static_cast<uint8_t>(ring.read(r_fast, out, len)));
+                                static_cast<uint8_t>(ring.read(rFast, out, len)));
         TEST_ASSERT_EQUAL_size_t(kRecPayload, len);
-        verify_pattern(std::span<const uint8_t>(out.data(), len), seq);
+        verifyPattern(std::span<const uint8_t>(out.data(), len), seq);
 
         // mid 读者在前半程读了 0,1,2，之后停下直到结束（丢 3,4,5，剩 6,7,8,9）
         if (seq < kMidReadStop) {
             TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                                    static_cast<uint8_t>(ring.read(r_mid, out, len)));
-            verify_pattern(std::span<const uint8_t>(out.data(), len), seq);
+                                    static_cast<uint8_t>(ring.read(rMid, out, len)));
+            verifyPattern(std::span<const uint8_t>(out.data(), len), seq);
         }
     }
 
@@ -314,60 +314,60 @@ void test_multi_reader_overwrite_drops_whole_records()
     TEST_ASSERT_EQUAL_UINT32(kTotalWrites * static_cast<uint32_t>(kRecPayload), ws.bytes);
     TEST_ASSERT_EQUAL_UINT32(kFirstSurvivingSeq, ws.overwritten);
 
-    const fw::FanoutReaderStats fs = ring.readerStats(r_fast);
+    const fw::FanoutReaderStats fs = ring.readerStats(rFast);
     TEST_ASSERT_EQUAL_UINT32(kTotalWrites, fs.records);
     TEST_ASSERT_EQUAL_UINT32(0U, fs.dropped);
 
     // mid 读者先用过小缓冲读：返回 kNoSpace 且不消费、不重复累加 dropped
-    std::array<uint8_t, 1> tiny_out{};
+    std::array<uint8_t, 1> tinyOut{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNoSpace),
-                            static_cast<uint8_t>(ring.read(r_mid, tiny_out, len)));
+                            static_cast<uint8_t>(ring.read(rMid, tinyOut, len)));
     TEST_ASSERT_EQUAL_size_t(kRecPayload, len);
-    TEST_ASSERT_EQUAL_UINT32(kMidReadStop, ring.readerStats(r_mid).dropped);
+    TEST_ASSERT_EQUAL_UINT32(kMidReadStop, ring.readerStats(rMid).dropped);
 
     // mid 读者跳过被覆盖的 3..5（dropped == 3），整条读出 6..9
-    for (uint32_t expected_seq = kFirstSurvivingSeq; expected_seq < kTotalWrites; ++expected_seq) {
+    for (uint32_t expectedSeq = kFirstSurvivingSeq; expectedSeq < kTotalWrites; ++expectedSeq) {
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                                static_cast<uint8_t>(ring.read(r_mid, out, len)));
+                                static_cast<uint8_t>(ring.read(rMid, out, len)));
         TEST_ASSERT_EQUAL_size_t(kRecPayload, len);
-        verify_pattern(std::span<const uint8_t>(out.data(), len), expected_seq);
+        verifyPattern(std::span<const uint8_t>(out.data(), len), expectedSeq);
     }
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNotFound),
-                            static_cast<uint8_t>(ring.read(r_mid, out, len)));
-    const fw::FanoutReaderStats ms = ring.readerStats(r_mid);
+                            static_cast<uint8_t>(ring.read(rMid, out, len)));
+    const fw::FanoutReaderStats ms = ring.readerStats(rMid);
     TEST_ASSERT_EQUAL_UINT32(7U, ms.records);
     TEST_ASSERT_EQUAL_UINT32(kMidReadStop, ms.dropped);
 
     // slow 读者从未读过：跳过 0..5（dropped == 6），整条读出 6..9
-    for (uint32_t expected_seq = kFirstSurvivingSeq; expected_seq < kTotalWrites; ++expected_seq) {
+    for (uint32_t expectedSeq = kFirstSurvivingSeq; expectedSeq < kTotalWrites; ++expectedSeq) {
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                                static_cast<uint8_t>(ring.read(r_slow, out, len)));
+                                static_cast<uint8_t>(ring.read(rSlow, out, len)));
         TEST_ASSERT_EQUAL_size_t(kRecPayload, len);
-        verify_pattern(std::span<const uint8_t>(out.data(), len), expected_seq);
+        verifyPattern(std::span<const uint8_t>(out.data(), len), expectedSeq);
     }
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNotFound),
-                            static_cast<uint8_t>(ring.read(r_slow, out, len)));
-    const fw::FanoutReaderStats ss = ring.readerStats(r_slow);
+                            static_cast<uint8_t>(ring.read(rSlow, out, len)));
+    const fw::FanoutReaderStats ss = ring.readerStats(rSlow);
     TEST_ASSERT_EQUAL_UINT32(4U, ss.records);
     TEST_ASSERT_EQUAL_UINT32(kFirstSurvivingSeq, ss.dropped);
     TEST_ASSERT_EQUAL_UINT32(4U * static_cast<uint32_t>(kRecPayload), ss.bytes);
 }
 
-void run_u32_wrap_case(std::span<uint8_t> storage)
+void runU32WrapCase(std::span<uint8_t> storage)
 {
     fw::FanoutRing ring;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, kWrapMaxRecord, fw::kNoLock)));
 
-    uint8_t r_fast = 0U;
-    uint8_t r_lag = 0U;
+    uint8_t rFast = 0U;
+    uint8_t rLag = 0U;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.attach(r_fast)));
+                            static_cast<uint8_t>(ring.attach(rFast)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(ring.attach(r_lag)));
+                            static_cast<uint8_t>(ring.attach(rLag)));
 
-    static std::array<uint8_t, kWrapMaxRecord> s_in_buf{};
-    static std::array<uint8_t, kWrapMaxRecord> s_out_buf{};
+    static std::array<uint8_t, kWrapMaxRecord> sInBuf{};
+    static std::array<uint8_t, kWrapMaxRecord> sOutBuf{};
 
     // 每条 65535 + 2 = 65537 B；写 65560 次，累计写入约 4.2966 GB，覆盖 head_ 与 oldest_ 的 u32 回绕。
     constexpr uint32_t kTotalWrapWrites = 65560U;
@@ -375,55 +375,55 @@ void run_u32_wrap_case(std::span<uint8_t> storage)
 
     for (uint32_t seq = 0U; seq < kTotalWrapWrites; ++seq) {
         // 用记录序号打标头尾，靠近回绕点填充完整图案
-        s_in_buf[0] = static_cast<uint8_t>(seq & kByteMask);
-        s_in_buf[1] = static_cast<uint8_t>((seq >> kHighByteShift) & kByteMask);
-        s_in_buf[kWrapMaxRecord - 1U] = static_cast<uint8_t>((seq ^ kWrapTailXor) & kByteMask);
+        sInBuf[0] = static_cast<uint8_t>(seq & kByteMask);
+        sInBuf[1] = static_cast<uint8_t>((seq >> kHighByteShift) & kByteMask);
+        sInBuf[kWrapMaxRecord - 1U] = static_cast<uint8_t>((seq ^ kWrapTailXor) & kByteMask);
         if (seq >= kVerifyStartSeq) {
-            fill_pattern(s_in_buf, seq);
+            fillPattern(sInBuf, seq);
         }
 
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                                static_cast<uint8_t>(ring.write(s_in_buf)));
+                                static_cast<uint8_t>(ring.write(sInBuf)));
 
         size_t len = 0U;
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                                static_cast<uint8_t>(ring.read(r_fast, s_out_buf, len)));
+                                static_cast<uint8_t>(ring.read(rFast, sOutBuf, len)));
         TEST_ASSERT_EQUAL_size_t(kWrapMaxRecord, len);
-        TEST_ASSERT_EQUAL_UINT8(s_in_buf[0], s_out_buf[0]);
-        TEST_ASSERT_EQUAL_UINT8(s_in_buf[1], s_out_buf[1]);
-        TEST_ASSERT_EQUAL_UINT8(s_in_buf[kWrapMaxRecord - 1U], s_out_buf[kWrapMaxRecord - 1U]);
+        TEST_ASSERT_EQUAL_UINT8(sInBuf[0], sOutBuf[0]);
+        TEST_ASSERT_EQUAL_UINT8(sInBuf[1], sOutBuf[1]);
+        TEST_ASSERT_EQUAL_UINT8(sInBuf[kWrapMaxRecord - 1U], sOutBuf[kWrapMaxRecord - 1U]);
         if (seq >= kVerifyStartSeq) {
-            verify_pattern(s_out_buf, seq);
+            verifyPattern(sOutBuf, seq);
         }
     }
 
     // 落后读者从未读取：它的 tail 与 oldest_ 均随淘汰跨越了 u32 回绕，现应读到最后存活记录且无损坏
-    size_t lag_len = 0U;
-    uint32_t lag_read_count = 0U;
-    uint32_t expected_seq = kTotalWrapWrites - 1U;
+    size_t lagLen = 0U;
+    uint32_t lagReadCount = 0U;
+    uint32_t expectedSeq = kTotalWrapWrites - 1U;
     // cap 可容纳的最大 kWrapMaxRecord 记录数（131074 放 2 条，262144 放 3 条）
-    const uint32_t cap_records =
+    const uint32_t capRecords =
         static_cast<uint32_t>(storage.size() / (kWrapMaxRecord + fw::kFanoutHeaderBytes));
-    const uint32_t first_surviving = kTotalWrapWrites - cap_records;
-    expected_seq = first_surviving;
-    while (ring.read(r_lag, s_out_buf, lag_len) == fw::Result::kOk) {
-        TEST_ASSERT_EQUAL_size_t(kWrapMaxRecord, lag_len);
-        verify_pattern(s_out_buf, expected_seq);
-        ++expected_seq;
-        ++lag_read_count;
+    const uint32_t firstSurviving = kTotalWrapWrites - capRecords;
+    expectedSeq = firstSurviving;
+    while (ring.read(rLag, sOutBuf, lagLen) == fw::Result::kOk) {
+        TEST_ASSERT_EQUAL_size_t(kWrapMaxRecord, lagLen);
+        verifyPattern(sOutBuf, expectedSeq);
+        ++expectedSeq;
+        ++lagReadCount;
     }
-    TEST_ASSERT_EQUAL_UINT32(cap_records, lag_read_count);
-    const fw::FanoutReaderStats ls = ring.readerStats(r_lag);
-    TEST_ASSERT_EQUAL_UINT32(cap_records, ls.records);
-    TEST_ASSERT_EQUAL_UINT32(kTotalWrapWrites - cap_records, ls.dropped);
+    TEST_ASSERT_EQUAL_UINT32(capRecords, lagReadCount);
+    const fw::FanoutReaderStats ls = ring.readerStats(rLag);
+    TEST_ASSERT_EQUAL_UINT32(capRecords, ls.records);
+    TEST_ASSERT_EQUAL_UINT32(kTotalWrapWrites - capRecords, ls.dropped);
 }
 
-void test_u32_wraparound_pow2_and_non_pow2()
+void testU32WraparoundPow2AndNonPow2()
 {
-    static std::array<uint8_t, kWrapPow2Cap> s_pow2_storage{};
-    static std::array<uint8_t, kWrapRingCapNonPow2> s_non_pow2_storage{};
-    run_u32_wrap_case(s_pow2_storage);
-    run_u32_wrap_case(s_non_pow2_storage);
+    static std::array<uint8_t, kWrapPow2Cap> sPow2Storage{};
+    static std::array<uint8_t, kWrapRingCapNonPow2> sNonPow2Storage{};
+    runU32WrapCase(sPow2Storage);
+    runU32WrapCase(sNonPow2Storage);
 }
 
 } // namespace
@@ -431,10 +431,10 @@ void test_u32_wraparound_pow2_and_non_pow2()
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_init_validation_and_uninit_calls);
-    RUN_TEST(test_attach_detach_and_late_attach);
-    RUN_TEST(test_record_boundaries_and_nospace_non_consuming);
-    RUN_TEST(test_multi_reader_overwrite_drops_whole_records);
-    RUN_TEST(test_u32_wraparound_pow2_and_non_pow2);
+    RUN_TEST(testInitValidationAndUninitCalls);
+    RUN_TEST(testAttachDetachAndLateAttach);
+    RUN_TEST(testRecordBoundariesAndNospaceNonConsuming);
+    RUN_TEST(testMultiReaderOverwriteDropsWholeRecords);
+    RUN_TEST(testU32WraparoundPow2AndNonPow2);
     return UNITY_END();
 }

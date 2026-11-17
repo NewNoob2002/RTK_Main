@@ -23,7 +23,7 @@ public:
     BootStreamBuffer &operator=(BootStreamBuffer &&) = delete;
     ~BootStreamBuffer() = default;
 
-    /** 使用外部存储区初始化 StreamBuffer；trigger_level 必须在 1..storage.size()。 */
+    /** 使用外部存储区初始化 StreamBuffer；triggerLevel 必须在 1..storage.size()。 */
     [[nodiscard]] fw::Status init(std::span<uint8_t> storage, size_t triggerLevel) noexcept
     {
         if (handle_ != nullptr) {

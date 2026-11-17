@@ -44,7 +44,7 @@ fw::LogRing s_ring{};
  * @param  hdr: 记录头
  * @param  payload: 文本
  */
-void direct_sink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
+void directSink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
 {
     auto *cap = static_cast<Captured *>(ctx);
     ++cap->calls;
@@ -56,7 +56,7 @@ void direct_sink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t> p
  * @brief  直写通路时钟
  * @retval 固定值 kDirectClockMs
  */
-uint32_t direct_clock() noexcept
+uint32_t directClock() noexcept
 {
     return kDirectClockMs;
 }
@@ -65,7 +65,7 @@ uint32_t direct_clock() noexcept
  * @brief  trace 时钟（文本环通路使用）
  * @retval 固定值 kTraceClockMs
  */
-uint32_t trace_clock() noexcept
+uint32_t traceClock() noexcept
 {
     return kTraceClockMs;
 }
@@ -75,7 +75,7 @@ uint32_t trace_clock() noexcept
  * @param  ctx: 未用
  * @param  ev: 未用
  */
-void trace_sink(void *ctx, const fw::TraceEvent &ev) noexcept
+void traceSink(void *ctx, const fw::TraceEvent &ev) noexcept
 {
     static_cast<void>(ctx);
     static_cast<void>(ev);
@@ -99,7 +99,7 @@ std::string format(const fw::LogHeader &hdr, std::string_view text)
 } // namespace
 
 /** 什么都没装：E 级别计入丢失，D 级别（默认 I 级过滤）根本不进入通路、不计数。 */
-void test_lost_without_sink(void)
+void testLostWithoutSink(void)
 {
     const uint32_t before = fw::logStats().lost;
     FW_LOGE(fw::TraceCat::kGnss, "boom %d", 1);
@@ -107,20 +107,19 @@ void test_lost_without_sink(void)
     TEST_ASSERT_EQUAL_UINT32(before + 1U, fw::logStats().lost);
 }
 
-void test_install_direct_validation(void)
+void testInstallDirectValidation(void)
 {
     TEST_ASSERT_EQUAL(fw::Result::kInvalidArg,
-                      fw::logInstallDirect(nullptr, &s_direct, &direct_clock));
+                      fw::logInstallDirect(nullptr, &s_direct, &directClock));
     TEST_ASSERT_EQUAL(fw::Result::kInvalidArg,
-                      fw::logInstallDirect(&direct_sink, &s_direct, nullptr));
-    TEST_ASSERT_EQUAL(fw::Result::kOk,
-                      fw::logInstallDirect(&direct_sink, &s_direct, &direct_clock));
+                      fw::logInstallDirect(&directSink, &s_direct, nullptr));
+    TEST_ASSERT_EQUAL(fw::Result::kOk, fw::logInstallDirect(&directSink, &s_direct, &directClock));
     TEST_ASSERT_EQUAL(fw::Result::kInvalidState,
-                      fw::logInstallDirect(&direct_sink, &s_direct, &direct_clock));
+                      fw::logInstallDirect(&directSink, &s_direct, &directClock));
 }
 
 /** 默认所有类别 I：E/W/I 输出、D 过滤；与追踪掩码无关。 */
-void test_default_info_independent_of_trace(void)
+void testDefaultInfoIndependentOfTrace(void)
 {
     fw::traceSetMask(0U);
     TEST_ASSERT_EQUAL_UINT32(fw::kLogLevelsDefault, fw::logLevels());
@@ -142,7 +141,7 @@ void test_default_info_independent_of_trace(void)
 }
 
 /** 按类别设级别：只影响该类别；E 总是记录；整表读写与截断。 */
-void test_per_category_levels(void)
+void testPerCategoryLevels(void)
 {
     s_direct = {};
     fw::logSetCatLevel(fw::TraceCat::kGnss, fw::LogLevel::kDebug);
@@ -168,7 +167,7 @@ void test_per_category_levels(void)
 }
 
 /** C 接口与 C++ 宏走同一通路。 */
-void test_c_api(void)
+void testCApi(void)
 {
     s_direct = {};
     FW_CLOGW(FW_LOG_CAT_SPP, "c side %d", 5);
@@ -182,7 +181,7 @@ void test_c_api(void)
 }
 
 /** 超长文本截断并以 "..." 结尾。 */
-void test_truncation(void)
+void testTruncation(void)
 {
     s_direct = {};
     const std::string longtext(fw::kLogTextMax + 40U, 'x');
@@ -192,9 +191,9 @@ void test_truncation(void)
 }
 
 /** 装上 trace 时钟与文本环后，日志改走环（时间戳来自 trace 时钟），直写 sink 不再收到。 */
-void test_ring_takes_precedence(void)
+void testRingTakesPrecedence(void)
 {
-    TEST_ASSERT_EQUAL(fw::Result::kOk, fw::traceInstall(&trace_sink, nullptr, &trace_clock));
+    TEST_ASSERT_EQUAL(fw::Result::kOk, fw::traceInstall(&traceSink, nullptr, &traceClock));
     TEST_ASSERT_EQUAL(fw::Result::kOk, s_ring.init(s_ring_storage, fw::LockOps{}));
     TEST_ASSERT_EQUAL(fw::Result::kOk, fw::logInstall(&fw::LogRing::sink, &s_ring));
     s_direct = {};
@@ -217,7 +216,7 @@ void test_ring_takes_precedence(void)
     TEST_ASSERT_FALSE(s_ring.pop(hdr, out, copied));
 }
 
-void test_format_line(void)
+void testFormatLine(void)
 {
     fw::LogHeader hdr{};
     hdr.tMs = kDirectClockMs;
@@ -238,7 +237,7 @@ void test_format_line(void)
     TEST_ASSERT_EQUAL_CHAR('\n', small[n - 1U]);
 }
 
-void test_parse_level_and_names(void)
+void testParseLevelAndNames(void)
 {
     fw::LogLevel lv = fw::LogLevel::kInfo;
     TEST_ASSERT_TRUE(fw::logParseLevel("W", lv));
@@ -256,14 +255,14 @@ void test_parse_level_and_names(void)
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_lost_without_sink);
-    RUN_TEST(test_install_direct_validation);
-    RUN_TEST(test_default_info_independent_of_trace);
-    RUN_TEST(test_per_category_levels);
-    RUN_TEST(test_c_api);
-    RUN_TEST(test_truncation);
-    RUN_TEST(test_ring_takes_precedence);
-    RUN_TEST(test_format_line);
-    RUN_TEST(test_parse_level_and_names);
+    RUN_TEST(testLostWithoutSink);
+    RUN_TEST(testInstallDirectValidation);
+    RUN_TEST(testDefaultInfoIndependentOfTrace);
+    RUN_TEST(testPerCategoryLevels);
+    RUN_TEST(testCApi);
+    RUN_TEST(testTruncation);
+    RUN_TEST(testRingTakesPrecedence);
+    RUN_TEST(testFormatLine);
+    RUN_TEST(testParseLevelAndNames);
     return UNITY_END();
 }

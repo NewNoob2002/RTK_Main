@@ -23,7 +23,7 @@ constexpr SessionHandle kAlarm = 0x82;
 constexpr BtAddr kPhoneAddr{{0x10, 0x11, 0x12, 0x13, 0x14, 0x15}};
 constexpr BtAddr kAlarmAddr{{0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5}};
 
-// 来源：Bytes.hpp 粘滞错误契约与 host 的 test_writer_sticky_overflow。
+// 来源：Bytes.hpp 粘滞错误契约与 host 的 testWriterStickyOverflow。
 TEST_CASE("C++ ByteWriter scalar overflow stays sticky", "[rtk_pure][bytes]")
 {
     std::array<uint8_t, 4> buffer = {0xEE, 0xEE, 0xEE, 0xEE};
@@ -41,7 +41,7 @@ TEST_CASE("C++ ByteWriter scalar overflow stays sticky", "[rtk_pure][bytes]")
     TEST_ASSERT_EQUAL_HEX8_ARRAY(expected.data(), buffer.data(), buffer.size());
 }
 
-// 来源：Bytes.hpp 的所有后续写入忽略；host 的 test_writer_bytes_and_zeros。
+// 来源：Bytes.hpp 的所有后续写入忽略；host 的 testWriterBytesAndZeros。
 TEST_CASE("C++ ByteWriter bulk overflow blocks later writes", "[rtk_pure][bytes]")
 {
     std::array<uint8_t, 6> buffer{};
@@ -64,7 +64,7 @@ TEST_CASE("C++ ByteWriter bulk overflow blocks later writes", "[rtk_pure][bytes]
     TEST_ASSERT_EQUAL_HEX8_ARRAY(expected.data(), buffer.data(), buffer.size());
 }
 
-// 来源：LinkManager.hpp 与 host 的 test_pairing_promotes_phone_role_to_alarm。
+// 来源：LinkManager.hpp 与 host 的 testPairingPromotesPhoneRoleToAlarm。
 TEST_CASE("C++ LinkManager pairs initial phone role and remembers alarm", "[rtk_pure][pair]")
 {
     LinkManager manager;
@@ -88,7 +88,7 @@ TEST_CASE("C++ LinkManager pairs initial phone role and remembers alarm", "[rtk_
     TEST_ASSERT_EQUAL_UINT8(0, actions.count);
 }
 
-// 来源：LinkManager.hpp 与 host 的 test_pending_when_phone_online_and_pairing。
+// 来源：LinkManager.hpp 与 host 的 testPendingWhenPhoneOnlineAndPairing。
 TEST_CASE("C++ LinkManager pairs pending alarm while phone remains online", "[rtk_pure][pair]")
 {
     LinkManager manager;
@@ -112,7 +112,7 @@ TEST_CASE("C++ LinkManager pairs pending alarm while phone remains online", "[rt
     TEST_ASSERT_TRUE(Role::kPhone == manager.role(kPhone));
 }
 
-// 来源：host 的 test_pair_window_expires、test_hello_without_pairing_is_unauthorized 与公共头阈值。
+// 来源：host 的 test_pair_window_expires、testHelloWithoutPairingIsUnauthorized 与公共头阈值。
 TEST_CASE("C++ LinkManager rejects hello at expired pairing window", "[rtk_pure][pair]")
 {
     LinkManager manager;

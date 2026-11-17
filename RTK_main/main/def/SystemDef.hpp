@@ -31,19 +31,19 @@ enum class SystemVerb : uint8_t { kPublish };
 
 /** 系统状态快照（蓝牙就绪、链路运行、SN/设备名、堆用量）。 */
 struct SystemStatus {
-    bool bt_ready = false;
-    bool link_running = false;
+    bool btReady = false;
+    bool linkRunning = false;
     std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
-    std::array<char, kDeviceNameBuf> device_name{};
-    uint32_t free_heap = 0;
-    uint32_t min_free_heap = 0;
+    std::array<char, kDeviceNameBuf> deviceName{};
+    uint32_t freeHeap = 0;
+    uint32_t minFreeHeap = 0;
 };
 /** 系统工作模式；本轮只有 kNormal。 */
 enum class Mode : uint8_t { kNormal };
 /** 工作模式快照（含生效时刻）。 */
 struct SystemMode {
     Mode mode = Mode::kNormal;
-    uint32_t since_ms = 0;
+    uint32_t sinceMs = 0;
 };
 
 } // namespace app

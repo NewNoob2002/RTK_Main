@@ -11,17 +11,20 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "esp_system.h"
 
 namespace app {
 namespace {
 constinit AppContext s_test_app{};
 }
-AppContext &app_context() noexcept
+AppContext &appContext() noexcept
 {
     return s_test_app;
 }
 // 原有执行器场景已完成启动；组合根启动门控在 boot_alloc_check 单独验证。
-bool AppContext::await_boot(BootTask, bool) noexcept
+bool AppContext::awaitBoot(BootTask, bool) noexcept
 {
     return true;
 }
@@ -65,33 +68,33 @@ void pump()
     s_current = previous;
 }
 
-fw::Result bt_stub_init(void *) noexcept
+fw::Result btStubInit(void *) noexcept
 {
     return fw::Result::kOk;
 }
-constexpr fw::ModuleOps kBtStubOps{bt_stub_init, nullptr, nullptr, nullptr};
+constexpr fw::ModuleOps kBtStubOps{btStubInit, nullptr, nullptr, nullptr};
 
-void wait_advance(void *, uint32_t max_ms) noexcept
+void waitAdvance(void *, uint32_t maxMs) noexcept
 {
-    s_clock += max_ms;
+    s_clock += maxMs;
 }
 
-fw::Command make_limit_cmd(fw::ModuleId target, uint32_t limit_ms) noexcept
+fw::Command makeLimitCmd(fw::ModuleId target, uint32_t limitMs) noexcept
 {
     fw::Command cmd{};
     cmd.target = target;
     cmd.verb = app::verb(app::TemplateVerb::kSetLimit);
     cmd.argLen = static_cast<uint8_t>(sizeof(uint32_t));
     for (size_t i = 0U; i < sizeof(uint32_t); ++i) {
-        cmd.args[i] = static_cast<uint8_t>(limit_ms >> (i * kBitsPerByte));
+        cmd.args[i] = static_cast<uint8_t>(limitMs >> (i * kBitsPerByte));
     }
     return cmd;
 }
 
-void test_lifecycle()
+void testLifecycle()
 {
-    auto &ctx = app::app_context();
-    ctx.bind_contexts();
+    auto &ctx = app::appContext();
+    ctx.bindContexts();
     ctx.data.init();
     app::TemplateModule tmpl{ctx};
 
@@ -101,9 +104,9 @@ void test_lifecycle()
 
     // 未 init 前的保护分支。
     CHECK(!tmpl.poll(s_clock));
-    fw::CommandResult pre_res{};
-    tmpl.on_command(fw::Command{.verb = app::verb(app::TemplateVerb::kReset)}, pre_res);
-    CHECK(pre_res.status == fw::Result::kInvalidState);
+    fw::CommandResult preRes{};
+    tmpl.onCommand(fw::Command{.verb = app::verb(app::TemplateVerb::kReset)}, preRes);
+    CHECK(preRes.status == fw::Result::kInvalidState);
 
     static constinit std::array<fw::Module, 2> modules{{
         {"bt_stub", app::id(app::ModuleKind::kBtLink), app::id(app::ExecKind::kLink), 0U, nullptr,
@@ -113,17 +116,17 @@ void test_lifecycle()
     modules[1].self = &tmpl;
     modules[1].ops = &ops;
 
-    static rtos::Executor s_exec{};
+    static rtos::Executor sExec{};
     static std::array<StackType_t, app::AppContext::kLinkStackBytes / sizeof(StackType_t)>
-        s_link_stack{};
-    ctx.link_executor = &s_exec;
+        sLinkStack{};
+    ctx.linkExecutor = &sExec;
 
     const rtos::ExecutorConfig cfg{
-        .name = "tmpl_exec", .priority = 5U, .core = 1, .wait = wait_advance, .waitCtx = nullptr};
-    CHECK(ctx.link_executor->init(cfg, modules, app::view_of(ctx.link_storage, s_link_stack)) ==
+        .name = "tmpl_exec", .priority = 5U, .core = 1, .wait = waitAdvance, .waitCtx = nullptr};
+    CHECK(ctx.linkExecutor->init(cfg, modules, app::viewOf(ctx.linkStorage, sLinkStack)) ==
           fw::Status::kOk);
-    CHECK(tmpl.state().initialized && tmpl.state().limit_ms == 1000U && tmpl.state().ticks == 0U);
-    CHECK(ctx.link_executor->start() == fw::Status::kOk);
+    CHECK(tmpl.state().initialized && tmpl.state().limitMs == 1000U && tmpl.state().ticks == 0U);
+    CHECK(ctx.linkExecutor->start() == fw::Status::kOk);
 
     // 第 1 轮：ticks=1；第 2 轮只过 100 ms（< 1000 ms）不变；推进到 >= 1000 ms 后 ticks=2。
     s_round_limit = 2U;
@@ -137,50 +140,48 @@ void test_lifecycle()
     // 通过 Executor CommandBus 验证合法/非法命令。
     s_pump_receive = true;
     fw::CommandResult res{};
-    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 2500U), res, 100U) ==
-          fw::Result::kOk);
-    CHECK(res.status == fw::Result::kOk && tmpl.state().limit_ms == 2500U);
+    CHECK(ctx.linkExecutor->call(makeLimitCmd(kTemplateId, 2500U), res, 100U) == fw::Result::kOk);
+    CHECK(res.status == fw::Result::kOk && tmpl.state().limitMs == 2500U);
 
-    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 0U), res, 100U) == fw::Result::kOk);
+    CHECK(ctx.linkExecutor->call(makeLimitCmd(kTemplateId, 0U), res, 100U) == fw::Result::kOk);
     CHECK(res.status == fw::Result::kInvalidArg);
-    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 60001U), res, 100U) ==
-          fw::Result::kOk);
+    CHECK(ctx.linkExecutor->call(makeLimitCmd(kTemplateId, 60001U), res, 100U) == fw::Result::kOk);
     CHECK(res.status == fw::Result::kInvalidArg);
 
-    fw::Command bad_len = make_limit_cmd(kTemplateId, 500U);
-    bad_len.argLen = 2U;
-    CHECK(ctx.link_executor->call(bad_len, res, 100U) == fw::Result::kOk &&
+    fw::Command badLen = makeLimitCmd(kTemplateId, 500U);
+    badLen.argLen = 2U;
+    CHECK(ctx.linkExecutor->call(badLen, res, 100U) == fw::Result::kOk &&
           res.status == fw::Result::kInvalidArg);
 
-    const fw::Command reset_bad{
+    const fw::Command resetBad{
         .target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .argLen = 1U};
-    CHECK(ctx.link_executor->call(reset_bad, res, 100U) == fw::Result::kOk &&
+    CHECK(ctx.linkExecutor->call(resetBad, res, 100U) == fw::Result::kOk &&
           res.status == fw::Result::kInvalidArg);
 
-    const fw::Command reset_ok{
+    const fw::Command resetOk{
         .target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .argLen = 0U};
-    CHECK(ctx.link_executor->call(reset_ok, res, 100U) == fw::Result::kOk &&
+    CHECK(ctx.linkExecutor->call(resetOk, res, 100U) == fw::Result::kOk &&
           res.status == fw::Result::kOk);
     CHECK(tmpl.state().ticks == 0U);
 
-    const fw::Command bad_verb{.target = kTemplateId, .verb = 99U};
-    CHECK(ctx.link_executor->call(bad_verb, res, 100U) == fw::Result::kOk &&
+    const fw::Command badVerb{.target = kTemplateId, .verb = 99U};
+    CHECK(ctx.linkExecutor->call(badVerb, res, 100U) == fw::Result::kOk &&
           res.status == fw::Result::kInvalidArg);
 }
 
-void test_commands_before_exec()
+void testCommandsBeforeExec()
 {
-    auto &ctx = app::app_context();
+    auto &ctx = app::appContext();
     ctx.data.init();
     app::SystemStatus sys{};
-    sys.bt_ready = true;
-    ctx.data.system_status.write(sys);
+    sys.btReady = true;
+    ctx.data.systemStatus.write(sys);
     rtos::ExecStats exec{};
     exec.rounds = 42U;
-    ctx.data.exec_stats.write(exec);
+    ctx.data.execStats.write(exec);
 
-    const auto cmds = app::template_cmds();
-    const auto verbs = app::template_verbs();
+    const auto cmds = app::templateCmds();
+    const auto verbs = app::templateVerbs();
     CHECK(cmds.size() == 1U && std::strcmp(cmds[0].name, "tmpl") == 0 &&
           cmds[0].handler != nullptr);
     CHECK(verbs.size() == 2U && std::strcmp(verbs[0].name, "status") == 0 &&
@@ -188,55 +189,55 @@ void test_commands_before_exec()
     const auto fn = cmds[0].handler;
 
     auto prog = std::to_array("tmpl");
-    auto sub_status = std::to_array("status");
-    auto sub_limit = std::to_array("limit");
-    auto sub_bad = std::to_array("bogus");
-    auto arg_zero = std::to_array("0");
-    auto arg_over = std::to_array("60001");
-    auto arg_nan = std::to_array("abc");
-    auto arg_ok = std::to_array("2500");
+    auto subStatus = std::to_array("status");
+    auto subLimit = std::to_array("limit");
+    auto subBad = std::to_array("bogus");
+    auto argZero = std::to_array("0");
+    auto argOver = std::to_array("60001");
+    auto argNan = std::to_array("abc");
+    auto argOk = std::to_array("2500");
 
-    std::array<char *, 1> only_prog{prog.data()};
-    std::array<char *, 2> status_ok{prog.data(), sub_status.data()};
-    std::array<char *, 3> status_extra{prog.data(), sub_status.data(), arg_ok.data()};
-    std::array<char *, 2> bad_sub{prog.data(), sub_bad.data()};
-    std::array<char *, 2> limit_missing{prog.data(), sub_limit.data()};
-    std::array<char *, 3> limit_zero{prog.data(), sub_limit.data(), arg_zero.data()};
-    std::array<char *, 3> limit_over{prog.data(), sub_limit.data(), arg_over.data()};
-    std::array<char *, 3> limit_nan{prog.data(), sub_limit.data(), arg_nan.data()};
-    std::array<char *, 3> limit_ok{prog.data(), sub_limit.data(), arg_ok.data()};
-    std::array<char *, 4> limit_extra{prog.data(), sub_limit.data(), arg_ok.data(), arg_ok.data()};
+    std::array<char *, 1> onlyProg{prog.data()};
+    std::array<char *, 2> statusOk{prog.data(), subStatus.data()};
+    std::array<char *, 3> statusExtra{prog.data(), subStatus.data(), argOk.data()};
+    std::array<char *, 2> badSub{prog.data(), subBad.data()};
+    std::array<char *, 2> limitMissing{prog.data(), subLimit.data()};
+    std::array<char *, 3> limitZero{prog.data(), subLimit.data(), argZero.data()};
+    std::array<char *, 3> limitOver{prog.data(), subLimit.data(), argOver.data()};
+    std::array<char *, 3> limitNan{prog.data(), subLimit.data(), argNan.data()};
+    std::array<char *, 3> limitOk{prog.data(), subLimit.data(), argOk.data()};
+    std::array<char *, 4> limitExtra{prog.data(), subLimit.data(), argOk.data(), argOk.data()};
 
-    CHECK(fn(nullptr, -1, status_ok.data()) == 1);
+    CHECK(fn(nullptr, -1, statusOk.data()) == 1);
     CHECK(fn(nullptr, 2, nullptr) == 1);
-    CHECK(fn(nullptr, 1, only_prog.data()) == 1);
-    CHECK(fn(nullptr, 2, status_ok.data()) == 0);
-    CHECK(fn(nullptr, 3, status_extra.data()) == 1);
-    CHECK(fn(nullptr, 2, bad_sub.data()) == 1);
-    CHECK(fn(nullptr, 2, limit_missing.data()) == 1);
-    CHECK(fn(nullptr, 3, limit_zero.data()) == 1);
-    CHECK(fn(nullptr, 3, limit_over.data()) == 1);
-    CHECK(fn(nullptr, 3, limit_nan.data()) == 1);
-    CHECK(fn(nullptr, 4, limit_extra.data()) == 1);
+    CHECK(fn(nullptr, 1, onlyProg.data()) == 1);
+    CHECK(fn(nullptr, 2, statusOk.data()) == 0);
+    CHECK(fn(nullptr, 3, statusExtra.data()) == 1);
+    CHECK(fn(nullptr, 2, badSub.data()) == 1);
+    CHECK(fn(nullptr, 2, limitMissing.data()) == 1);
+    CHECK(fn(nullptr, 3, limitZero.data()) == 1);
+    CHECK(fn(nullptr, 3, limitOver.data()) == 1);
+    CHECK(fn(nullptr, 3, limitNan.data()) == 1);
+    CHECK(fn(nullptr, 4, limitExtra.data()) == 1);
     // 执行器未运行且目标为占位符时应安全拒绝并返回非 0。
-    CHECK(fn(nullptr, 3, limit_ok.data()) == 1);
+    CHECK(fn(nullptr, 3, limitOk.data()) == 1);
 }
 
-void test_commands_after_exec()
+void testCommandsAfterExec()
 {
-    const auto cmds = app::template_cmds();
+    const auto cmds = app::templateCmds();
     const auto fn = cmds[0].handler;
     auto prog = std::to_array("tmpl");
-    auto sub_status = std::to_array("status");
-    auto sub_limit = std::to_array("limit");
-    auto arg_ok = std::to_array("2500");
-    std::array<char *, 2> status_ok{prog.data(), sub_status.data()};
-    std::array<char *, 3> limit_ok{prog.data(), sub_limit.data(), arg_ok.data()};
+    auto subStatus = std::to_array("status");
+    auto subLimit = std::to_array("limit");
+    auto argOk = std::to_array("2500");
+    std::array<char *, 2> statusOk{prog.data(), subStatus.data()};
+    std::array<char *, 3> limitOk{prog.data(), subLimit.data(), argOk.data()};
 
     // 执行器运行中：status 读取真实 DataCenter；占位目标 0xFF 经 submit() 安全返回 kNotFound -> 1。
-    CHECK(fn(nullptr, 2, status_ok.data()) == 0);
+    CHECK(fn(nullptr, 2, statusOk.data()) == 0);
     s_pump_receive = true;
-    CHECK(fn(nullptr, 3, limit_ok.data()) == 1);
+    CHECK(fn(nullptr, 3, limitOk.data()) == 1);
 }
 } // namespace
 
@@ -469,9 +470,9 @@ int main(int argc, const char **raw_args)
     if ((argc != 2) || (std::strcmp(argv[1], "template_module") != 0)) {
         return 2;
     }
-    test_commands_before_exec();
-    test_lifecycle();
-    test_commands_after_exec();
+    testCommandsBeforeExec();
+    testLifecycle();
+    testCommandsAfterExec();
     std::fputs((s_failures == 0) ? "PASS " : "FAIL ", stdout);
     std::puts(argv[1]);
     return (s_failures == 0) ? 0 : 1;

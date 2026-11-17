@@ -238,7 +238,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     }
 
     if ((frame.size() + 1U) > kMaxFrame) {
-        // 超过 max_frame 仍未结束：need 契约禁止要求超限字节，只能拒绝。
+        // 超过 maxFrame 仍未结束：need 契约禁止要求超限字节，只能拒绝。
         return reject(Reason::kTooLong, last);
     }
     verdict.need = 1U;

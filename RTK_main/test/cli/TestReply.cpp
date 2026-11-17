@@ -1,4 +1,4 @@
-// cli::fail / dispatch / print_usage / print_section / print_kv 的 host 单元测试（ADR-0009 §2.5）。
+// cli::fail / dispatch / printUsage / printSection / printKv 的 host 单元测试（ADR-0009 §2.5）。
 // 直接编译 components/cli/src/Reply.cpp（只用 C 标准库），通过 tmpfile + dup2 捕获 stdout。
 // 单线程执行，非 ISR 相关。
 
@@ -37,7 +37,7 @@ char s_last_arg[kScratchLen] = {};
  * 把 stdout 重定向到临时文件。必须在断言前检查 s_capture_ready，
  * 否则测试会在错误的文件描述符上比较（那比失败更难查）。
  */
-void capture_begin() noexcept
+void captureBegin() noexcept
 {
     s_capture[0] = '\0';
     s_handler_calls = 0;
@@ -57,7 +57,7 @@ void capture_begin() noexcept
 }
 
 /** 恢复 stdout 并把临时文件内容读进 s_capture（截断到 kCaptureMax-1）。 */
-void capture_end() noexcept
+void captureEnd() noexcept
 {
     fflush(stdout);
     if (s_saved_stdout >= 0) {
@@ -69,13 +69,13 @@ void capture_end() noexcept
         return;
     }
     (void)fseeko(s_tmp, 0, SEEK_SET);
-    const size_t read_bytes = fread(s_capture, 1U, kCaptureMax - 1U, s_tmp);
-    s_capture[read_bytes] = '\0';
+    const size_t readBytes = fread(s_capture, 1U, kCaptureMax - 1U, s_tmp);
+    s_capture[readBytes] = '\0';
     (void)fclose(s_tmp);
     s_tmp = nullptr;
 }
 
-void record_call(int argc, char **argv) noexcept
+void recordCall(int argc, char **argv) noexcept
 {
     ++s_handler_calls;
     s_last_argc = argc;
@@ -87,9 +87,9 @@ void record_call(int argc, char **argv) noexcept
     }
 }
 
-int verb_ok(void *ctx, int argc, char **argv) noexcept
+int verbOk(void *ctx, int argc, char **argv) noexcept
 {
-    record_call(argc, argv);
+    recordCall(argc, argv);
     // 顺便验证 ctx 传到了 handler（值 0x5A 表示调用方传入的标记）。
     if ((ctx == nullptr) || (*static_cast<const int *>(ctx) != 0x5A)) {
         return kFailCode;
@@ -97,50 +97,50 @@ int verb_ok(void *ctx, int argc, char **argv) noexcept
     return 0;
 }
 
-int verb_fail_with_reason(void * /*ctx*/, int argc, char **argv) noexcept
+int verbFailWithReason(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    record_call(argc, argv);
+    recordCall(argc, argv);
     return cli::fail("bad %s", "state");
 }
 
-int verb_fail_without_reason(void * /*ctx*/, int argc, char **argv) noexcept
+int verbFailWithoutReason(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    record_call(argc, argv);
+    recordCall(argc, argv);
     return kFailCode;
 }
 
 constexpr std::array<cli::Verb, 3> kVerbs{{
-    {"list", nullptr, "list sessions", verb_ok},
-    {"set", "<state>", "set alarm state", verb_fail_with_reason},
-    {"crash", "<code>", "fail without reason", verb_fail_without_reason},
+    {"list", nullptr, "list sessions", verbOk},
+    {"set", "<state>", "set alarm state", verbFailWithReason},
+    {"crash", "<code>", "fail without reason", verbFailWithoutReason},
 }};
 
 int s_ctx_marker = 0x5A;
 
-void test_fail_prints_err_line()
+void testFailPrintsErrLine()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     cli::detail::replyReset();
     const int rc = cli::fail("boom %d", 5);
     TEST_ASSERT_TRUE(cli::detail::replyFailed());
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
     TEST_ASSERT_EQUAL_STRING("ERR boom 5\n", s_capture);
     cli::detail::replyReset();
     TEST_ASSERT_FALSE(cli::detail::replyFailed());
 }
 
-void test_dispatch_known_verb()
+void testDispatchKnownVerb()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     char arg0[] = "alarm";
     char arg1[] = "list";
     char arg2[] = "extra";
     char *argv[] = {arg0, arg1, arg2};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 3, argv, nullptr);
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_INT(0, rc);
     TEST_ASSERT_EQUAL_INT(1, s_handler_calls);
     // handler 看到的是去掉组名后的参数：argv[0] = 动词。
@@ -150,16 +150,16 @@ void test_dispatch_known_verb()
     TEST_ASSERT_EQUAL_STRING("", s_capture);
 }
 
-void test_dispatch_unknown_verb_prints_usage_and_fails()
+void testDispatchUnknownVerbPrintsUsageAndFails()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     cli::detail::replyReset();
     char arg0[] = "alarm";
     char arg1[] = "bogus";
     char *argv[] = {arg0, arg1};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 2, argv, nullptr);
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
     TEST_ASSERT_EQUAL_INT(0, s_handler_calls);
     TEST_ASSERT_NOT_NULL(std::strstr(s_capture, "usage: alarm <verb> [args]\n"));
@@ -167,29 +167,29 @@ void test_dispatch_unknown_verb_prints_usage_and_fails()
     TEST_ASSERT_NOT_NULL(std::strstr(s_capture, "ERR usage\n"));
 }
 
-void test_dispatch_missing_verb_without_default()
+void testDispatchMissingVerbWithoutDefault()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     cli::detail::replyReset();
     char arg0[] = "alarm";
     char *argv[] = {arg0};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 1, argv, nullptr);
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
     TEST_ASSERT_EQUAL_INT(0, s_handler_calls);
     TEST_ASSERT_NOT_NULL(std::strstr(s_capture, "usage: alarm <verb> [args]\n"));
     TEST_ASSERT_NOT_NULL(std::strstr(s_capture, "ERR usage\n"));
 }
 
-void test_dispatch_missing_verb_with_default()
+void testDispatchMissingVerbWithDefault()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     char arg0[] = "alarm";
     char *argv[] = {arg0};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 1, argv, "list");
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_INT(0, rc);
     TEST_ASSERT_EQUAL_INT(1, s_handler_calls);
     TEST_ASSERT_EQUAL_INT(1, s_last_argc);
@@ -197,35 +197,35 @@ void test_dispatch_missing_verb_with_default()
     TEST_ASSERT_EQUAL_STRING("", s_capture);
 }
 
-void test_dispatch_default_verb_not_found()
+void testDispatchDefaultVerbNotFound()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     cli::detail::replyReset();
     char arg0[] = "alarm";
     char *argv[] = {arg0};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 1, argv, "nope");
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
     TEST_ASSERT_EQUAL_INT(0, s_handler_calls);
     TEST_ASSERT_NOT_NULL(std::strstr(s_capture, "usage: alarm <verb> [args]\n"));
 }
 
-void test_dispatch_null_argv()
+void testDispatchNullArgv()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     cli::detail::replyReset();
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 0, nullptr, nullptr);
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
     TEST_ASSERT_NOT_NULL(std::strstr(s_capture, "usage:  <verb> [args]\n"));
     TEST_ASSERT_NOT_NULL(std::strstr(s_capture, "ERR usage\n"));
 }
 
-void test_dispatch_propagates_handler_failure()
+void testDispatchPropagatesHandlerFailure()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     cli::detail::replyReset();
     char arg0[] = "alarm";
@@ -233,18 +233,18 @@ void test_dispatch_propagates_handler_failure()
     char *argv[] = {arg0, arg1};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 2, argv, nullptr);
     const bool failed = cli::detail::replyFailed();
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
     TEST_ASSERT_TRUE(failed);
     TEST_ASSERT_EQUAL_STRING("ERR bad state\n", s_capture);
 }
 
-void test_print_usage_format()
+void testPrintUsageFormat()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     cli::printUsage("alarm", kVerbs);
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_STRING("usage: alarm <verb> [args]\n"
                              "  list       -              list sessions\n"
                              "  set        <state>        set alarm state\n"
@@ -252,14 +252,14 @@ void test_print_usage_format()
                              s_capture);
 }
 
-void test_print_section_and_kv_alignment()
+void testPrintSectionAndKvAlignment()
 {
-    capture_begin();
+    captureBegin();
     TEST_ASSERT_TRUE(s_capture_ready);
     cli::printSection("link");
     cli::printKv("sn", "%s", "ABC123");
     cli::printKv("a_very_long_key", "%u", 42U);
-    capture_end();
+    captureEnd();
     TEST_ASSERT_EQUAL_STRING("[link]\n"
                              "  sn             ABC123\n"
                              "  a_very_long_key 42\n",
@@ -271,15 +271,15 @@ void test_print_section_and_kv_alignment()
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_fail_prints_err_line);
-    RUN_TEST(test_dispatch_known_verb);
-    RUN_TEST(test_dispatch_unknown_verb_prints_usage_and_fails);
-    RUN_TEST(test_dispatch_missing_verb_without_default);
-    RUN_TEST(test_dispatch_missing_verb_with_default);
-    RUN_TEST(test_dispatch_default_verb_not_found);
-    RUN_TEST(test_dispatch_null_argv);
-    RUN_TEST(test_dispatch_propagates_handler_failure);
-    RUN_TEST(test_print_usage_format);
-    RUN_TEST(test_print_section_and_kv_alignment);
+    RUN_TEST(testFailPrintsErrLine);
+    RUN_TEST(testDispatchKnownVerb);
+    RUN_TEST(testDispatchUnknownVerbPrintsUsageAndFails);
+    RUN_TEST(testDispatchMissingVerbWithoutDefault);
+    RUN_TEST(testDispatchMissingVerbWithDefault);
+    RUN_TEST(testDispatchDefaultVerbNotFound);
+    RUN_TEST(testDispatchNullArgv);
+    RUN_TEST(testDispatchPropagatesHandlerFailure);
+    RUN_TEST(testPrintUsageFormat);
+    RUN_TEST(testPrintSectionAndKvAlignment);
     return UNITY_END();
 }

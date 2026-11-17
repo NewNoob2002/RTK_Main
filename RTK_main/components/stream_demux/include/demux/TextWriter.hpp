@@ -1,5 +1,5 @@
 // 解码器诊断文本写入器（ADR-0005 §5 / ADR-0009 §2.11）：供各组件的 Decoder::explain 实现共用
-// （stream_demux 自带解码器、device_proto 的产品帧、gnss 的方言应答解码器）。不属于冻结接口。
+// （streamDemux 自带解码器、device_proto 的产品帧、gnss 的方言应答解码器）。不属于冻结接口。
 // 只写 ASCII；越界即停止增长（explain 契约允许截断），finish() 补 0 并返回实际长度。
 // 纯函数式使用：调用方持有输出 span，无全局状态，可重入、ISR 安全。
 

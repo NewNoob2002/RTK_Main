@@ -12,7 +12,7 @@ class SystemModule final {
 public:
     constexpr SystemModule() noexcept = default;
     constexpr explicit SystemModule(AppContext &context) noexcept : context_(&context) {}
-    void bind_context(AppContext &context) noexcept
+    void bindContext(AppContext &context) noexcept
     {
         context_ = &context;
     }
@@ -24,7 +24,7 @@ public:
     /** 启动前单线程，非 ISR；解析 SN、生成设备名并同步初始化 BT，失败仍发布状态。 */
     void prepare() noexcept;
     /** 仅 kLink，非 ISR、非阻塞；发布系统和执行器状态，返回 false。 */
-    [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
+    [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
 
 private:
     [[nodiscard]] AppContext &ctx() noexcept
@@ -36,18 +36,18 @@ private:
     SystemStatus status_{};
 };
 // 纯函数，线程/ISR 安全。
-[[nodiscard]] bool derive_sn_from_mac(std::span<const uint8_t, core::kAddrLen> mac,
-                                      std::span<char, NVS_STORE_SN_MAX + 1U> out) noexcept;
+[[nodiscard]] bool deriveSnFromMac(std::span<const uint8_t, core::kAddrLen> mac,
+                                   std::span<char, NVS_STORE_SN_MAX + 1U> out) noexcept;
 /** 按 SN 生成设备名（无 SN 时用回退名）；写入 out 并返回是否成功。 */
-[[nodiscard]] bool build_device_name(std::string_view sn,
-                                     std::span<char, kDeviceNameBuf> out) noexcept;
+[[nodiscard]] bool buildDeviceName(std::string_view sn,
+                                   std::span<char, kDeviceNameBuf> out) noexcept;
 /** 系统模块的控制台命令表（status/log/sys）；静态存储，进程期有效。 */
-[[nodiscard]] std::span<const cli::Cmd> system_cmds() noexcept;
-/** status/log/sys 子命令动词表，供 cli::add_verbs 登记。 */
-[[nodiscard]] std::span<const cli::Verb> status_verbs() noexcept;
-[[nodiscard]] std::span<const cli::Verb> log_verbs() noexcept;
-[[nodiscard]] std::span<const cli::Verb> sys_verbs() noexcept;
+[[nodiscard]] std::span<const cli::Cmd> systemCmds() noexcept;
+/** status/log/sys 子命令动词表，供 cli::addVerbs 登记。 */
+[[nodiscard]] std::span<const cli::Verb> statusVerbs() noexcept;
+[[nodiscard]] std::span<const cli::Verb> logVerbs() noexcept;
+[[nodiscard]] std::span<const cli::Verb> sysVerbs() noexcept;
 /** 隐藏的 factory 命令表与动词表（ADR-0009 §2.10）；help 列表不显示。 */
-[[nodiscard]] std::span<const cli::Cmd> factory_cmds() noexcept;
-[[nodiscard]] std::span<const cli::Verb> factory_verbs() noexcept;
+[[nodiscard]] std::span<const cli::Cmd> factoryCmds() noexcept;
+[[nodiscard]] std::span<const cli::Verb> factoryVerbs() noexcept;
 } // namespace app

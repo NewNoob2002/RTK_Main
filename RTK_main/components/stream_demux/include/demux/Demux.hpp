@@ -27,7 +27,7 @@ inline constexpr std::size_t kMaxDecoders = 8;
 /** onReject 的拒绝来源。 */
 enum class RejectCause : uint8_t {
     kStep = 0, // step() 返回 kReject（同步/长度/校验/非法字符；细节由 Decoder::explain 给出）
-    kTooLong,  // step() 要求的长度超过 max_frame 或缓冲区容量（overflows 计数的那种）
+    kTooLong,  // step() 要求的长度超过 maxFrame 或缓冲区容量（overflows 计数的那种）
     kContract, // step() 违反契约（need == 0、未知枚举值）
     kAbort,    // abort() 时丢弃的半帧
 };
@@ -74,7 +74,7 @@ protected:
 /** init/feed/abort 的返回码。 */
 enum class Error : uint8_t {
     kOk = 0,
-    kInvalidArg, // 解码器表为空/超过 kMaxDecoders/含空指针或无效描述符、缓冲区小于最大 max_frame、尚未 init 成功
+    kInvalidArg, // 解码器表为空/超过 kMaxDecoders/含空指针或无效描述符、缓冲区小于最大 maxFrame、尚未 init 成功
     kReentry, // 在本实例回调中调用了 init/feed/abort
 };
 

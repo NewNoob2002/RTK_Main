@@ -21,13 +21,13 @@ struct MemoryHeapView {
 };
 
 // heaps 第一项固定为 INTERNAL|8BIT；调用者在启动阶段结束后收集各能力视图。
-inline void print_memory_report(const rtos::BootArena &arena, size_t data_bytes, size_t bss_bytes,
-                                std::span<const MemoryHeapView> heaps) noexcept
+inline void printMemoryReport(const rtos::BootArena &arena, size_t dataBytes, size_t bssBytes,
+                              std::span<const MemoryHeapView> heaps) noexcept
 {
     cli::printSection("static");
-    cli::printKv("data", "%zu B", data_bytes);
-    cli::printKv("bss", "%zu B", bss_bytes);
-    cli::printKv("total", "%zu B", data_bytes + bss_bytes);
+    cli::printKv("data", "%zu B", dataBytes);
+    cli::printKv("bss", "%zu B", bssBytes);
+    cli::printKv("total", "%zu B", dataBytes + bssBytes);
 
     cli::printSection("boot_arena");
     cli::printKv("state", "%s", rtos::BootArena::stateName(arena.state()));
@@ -47,9 +47,9 @@ inline void print_memory_report(const rtos::BootArena &arena, size_t data_bytes,
     }
     constexpr size_t kInternalMinBudget = size_t{80} * size_t{1024};
     constexpr size_t kInternalLargestBudget = size_t{32} * size_t{1024};
-    const bool budget_ok = !heaps.empty() && heaps.front().minimum >= kInternalMinBudget &&
-                           heaps.front().largest >= kInternalLargestBudget;
-    cli::printKv("internal_budget", "%s (min>=%zu B, largest>=%zu B)", budget_ok ? "PASS" : "FAIL",
+    const bool budgetOk = !heaps.empty() && heaps.front().minimum >= kInternalMinBudget &&
+                          heaps.front().largest >= kInternalLargestBudget;
+    cli::printKv("internal_budget", "%s (min>=%zu B, largest>=%zu B)", budgetOk ? "PASS" : "FAIL",
                  kInternalMinBudget, kInternalLargestBudget);
     cli::printSection("mode");
     if (arena.degraded()) {

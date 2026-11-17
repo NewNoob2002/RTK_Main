@@ -13,9 +13,9 @@ namespace app {
 
 /**
  * 打印步骤记录、总计与最慢步骤。
- * 每行一次 out_write，保证整行原子；reason 为空时省略尾段。
+ * 每行一次 outWrite，保证整行原子；reason 为空时省略尾段。
  */
-inline void print_boot_table(std::span<const BootRecord> records) noexcept
+inline void printBootTable(std::span<const BootRecord> records) noexcept
 {
     if (records.empty()) {
         cli::outPrintf("boot: no records\r\n");
@@ -23,37 +23,36 @@ inline void print_boot_table(std::span<const BootRecord> records) noexcept
     }
     const BootRecord &first = records.front();
     const BootRecord &last = records.back();
-    const uint32_t total_ms = (last.start_ms + last.took_ms) - first.start_ms;
+    const uint32_t totalMs = (last.startMs + last.tookMs) - first.startMs;
     const BootRecord *slowest = nullptr;
     uint32_t skipped = 0U;
     cli::outPrintf("%-9s %-7s %8s %7s %9s %9s %9s\r\n", "step", "result", "start ms", "took ms",
                    "heap free", "heap min", "largest");
     for (const BootRecord &record : records) {
-        if ((slowest == nullptr) || (record.took_ms > slowest->took_ms)) {
+        if ((slowest == nullptr) || (record.tookMs > slowest->tookMs)) {
             slowest = &record;
         }
         if (record.result == BootResult::kSkipped) {
             ++skipped;
         }
         if (record.reason != nullptr) {
-            cli::outPrintf("%-9s %-7s %8u %7u %9u %9u %9u  %s\r\n", record.name,
-                           boot_result_name(record.result), static_cast<unsigned>(record.start_ms),
-                           static_cast<unsigned>(record.took_ms),
-                           static_cast<unsigned>(record.heap_free),
-                           static_cast<unsigned>(record.heap_min),
-                           static_cast<unsigned>(record.heap_largest), record.reason);
+            cli::outPrintf(
+                "%-9s %-7s %8u %7u %9u %9u %9u  %s\r\n", record.name, bootResultName(record.result),
+                static_cast<unsigned>(record.startMs), static_cast<unsigned>(record.tookMs),
+                static_cast<unsigned>(record.heapFree), static_cast<unsigned>(record.heapMin),
+                static_cast<unsigned>(record.heapLargest), record.reason);
         } else {
             cli::outPrintf(
-                "%-9s %-7s %8u %7u %9u %9u %9u\r\n", record.name, boot_result_name(record.result),
-                static_cast<unsigned>(record.start_ms), static_cast<unsigned>(record.took_ms),
-                static_cast<unsigned>(record.heap_free), static_cast<unsigned>(record.heap_min),
-                static_cast<unsigned>(record.heap_largest));
+                "%-9s %-7s %8u %7u %9u %9u %9u\r\n", record.name, bootResultName(record.result),
+                static_cast<unsigned>(record.startMs), static_cast<unsigned>(record.tookMs),
+                static_cast<unsigned>(record.heapFree), static_cast<unsigned>(record.heapMin),
+                static_cast<unsigned>(record.heapLargest));
         }
     }
     cli::outPrintf("boot: %u steps, %u skipped, %u ms total, slowest %s %u ms\r\n",
                    static_cast<unsigned>(records.size()), static_cast<unsigned>(skipped),
-                   static_cast<unsigned>(total_ms), slowest->name,
-                   static_cast<unsigned>(slowest->took_ms));
+                   static_cast<unsigned>(totalMs), slowest->name,
+                   static_cast<unsigned>(slowest->tookMs));
 }
 
 } // namespace app

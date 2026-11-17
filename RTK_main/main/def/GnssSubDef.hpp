@@ -20,7 +20,7 @@ enum class GnssSubVerb : uint8_t {
  */
 enum class GnssSubTrace : uint8_t {
     kAppMask = 10, // val0 = 订阅掩码，val1 = 变化来源（0=App订阅/查询，1=会话断开归零）
-    kAppDrop = 11, // val0 = 丢弃源（0=App环超长，1=查询超256B，2=最新帧缓存超限），val1 = type_idx
+    kAppDrop = 11, // val0 = 丢弃源（0=App环超长，1=查询超256B，2=最新帧缓存超限），val1 = typeIdx
     kOutCfg = 12,  // val0 = 启用掩码，val1 = 状态（0=加载/生效，1=回退默认）
 };
 

@@ -23,47 +23,47 @@ inline constexpr uint32_t kOneSecondMs = 1000U;
 
 } // namespace
 
-const char *gnss_type_name(size_t type_idx) noexcept
+const char *gnssTypeName(size_t typeIdx) noexcept
 {
-    if (type_idx >= kTypeNames.size()) {
+    if (typeIdx >= kTypeNames.size()) {
         return "?";
     }
-    return kTypeNames[type_idx];
+    return kTypeNames[typeIdx];
 }
 
-std::optional<uint8_t> gnss_type_from_msg_id(uint16_t msg_id) noexcept
+std::optional<uint8_t> gnssTypeFromMsgId(uint16_t msgId) noexcept
 {
     for (size_t i = 0; i < kTypeMsgIds.size(); ++i) {
-        if (kTypeMsgIds[i] == msg_id) {
+        if (kTypeMsgIds[i] == msgId) {
             return static_cast<uint8_t>(i);
         }
     }
     return std::nullopt;
 }
 
-bool GnssPushGate::due(uint32_t now_ms, uint32_t period_ms) const noexcept
+bool GnssPushGate::due(uint32_t nowMs, uint32_t periodMs) const noexcept
 {
-    if (!armed || (period_ms == 0U)) {
+    if (!armed || (periodMs == 0U)) {
         return true;
     }
     // 锚点可能领先 now 至多 slack，按有符号差处理回绕。
-    const auto elapsed = static_cast<int64_t>(static_cast<int32_t>(now_ms - anchor_ms));
-    const uint32_t slack = std::min(period_ms / 4U, kMaxSlackMs);
-    return (elapsed + static_cast<int64_t>(slack)) >= static_cast<int64_t>(period_ms);
+    const auto elapsed = static_cast<int64_t>(static_cast<int32_t>(nowMs - anchorMs));
+    const uint32_t slack = std::min(periodMs / 4U, kMaxSlackMs);
+    return (elapsed + static_cast<int64_t>(slack)) >= static_cast<int64_t>(periodMs);
 }
 
-void GnssPushGate::on_pushed(uint32_t now_ms, uint32_t period_ms) noexcept
+void GnssPushGate::onPushed(uint32_t nowMs, uint32_t periodMs) noexcept
 {
-    const auto elapsed = static_cast<int64_t>(static_cast<int32_t>(now_ms - anchor_ms));
-    if (armed && (period_ms != 0U) && (elapsed < 2 * static_cast<int64_t>(period_ms))) {
-        anchor_ms += period_ms;
+    const auto elapsed = static_cast<int64_t>(static_cast<int32_t>(nowMs - anchorMs));
+    if (armed && (periodMs != 0U) && (elapsed < 2 * static_cast<int64_t>(periodMs))) {
+        anchorMs += periodMs;
     } else {
-        anchor_ms = now_ms;
+        anchorMs = nowMs;
     }
     armed = true;
 }
 
-bool GnssOutConfig::is_valid() const noexcept
+bool GnssOutConfig::isValid() const noexcept
 {
     if ((version != kCurrentVersion) || ((mask & ~kGnssOutMaskAll) != 0U)) {
         return false;
@@ -76,25 +76,25 @@ bool GnssOutConfig::is_valid() const noexcept
     return true;
 }
 
-fw::Result GnssOutConfig::apply_interval(size_t type_idx, int8_t interval) noexcept
+fw::Result GnssOutConfig::applyInterval(size_t typeIdx, int8_t interval) noexcept
 {
-    if (type_idx >= kGnssAppMsgCount) {
+    if (typeIdx >= kGnssAppMsgCount) {
         return fw::Result::kInvalidArg;
     }
-    const auto bit = static_cast<uint8_t>(1U << type_idx);
+    const auto bit = static_cast<uint8_t>(1U << typeIdx);
     if (interval == 0) {
         mask = static_cast<uint8_t>(mask & ~bit);
-        intervals[type_idx] = 0;
+        intervals[typeIdx] = 0;
         return fw::Result::kOk;
     }
     mask = static_cast<uint8_t>(mask | bit);
-    intervals[type_idx] = interval;
+    intervals[typeIdx] = interval;
     return fw::Result::kOk;
 }
 
 fw::Result GnssOutConfig::encode(std::span<uint8_t> out, size_t &len) const noexcept
 {
-    if (!is_valid()) {
+    if (!isValid()) {
         return fw::Result::kInvalidArg;
     }
     if (out.size() < kBlobBytes) {
@@ -121,19 +121,19 @@ fw::Result GnssOutConfig::decode(std::span<const uint8_t> in, GnssOutConfig &out
         // NVS 字节还原回有符号 interval（-128..127）。
         parsed.intervals[i] = static_cast<int8_t>(in[2U + i]);
     }
-    if (!parsed.is_valid()) {
+    if (!parsed.isValid()) {
         return fw::Result::kInvalidArg;
     }
     out = parsed;
     return fw::Result::kOk;
 }
 
-gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, bool gsv, uint8_t port,
-                                  uint32_t caps) noexcept
+gnss::OutputPlan makeOutputPlan(const GnssOutConfig &out, uint8_t rateHz, bool gsv, uint8_t port,
+                                uint32_t caps) noexcept
 {
     gnss::OutputPlan plan{};
-    const uint8_t hz = (rate_hz == 0U) ? 1U : rate_hz;
-    const uint32_t locate_period_ms = kOneSecondMs / static_cast<uint32_t>(hz);
+    const uint8_t hz = (rateHz == 0U) ? 1U : rateHz;
+    const uint32_t locatePeriodMs = kOneSecondMs / static_cast<uint32_t>(hz);
     const GnssOutConfig dflt = GnssOutConfig::defaults();
 
     // 下标与 gnss::OutputMsg 一致（kGga=0 … kGsa=5），App 侧 6 项与驱动 7 项共用前缀。
@@ -153,7 +153,7 @@ gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, boo
                             (i == static_cast<size_t>(gnss::OutputMsg::kGsa)) ||
                             (i == static_cast<size_t>(gnss::OutputMsg::kGst));
         if (locate) {
-            plan.periodMs[i] = locate_period_ms;
+            plan.periodMs[i] = locatePeriodMs;
         } else if (i == static_cast<size_t>(gnss::OutputMsg::kHeading)) {
             plan.periodMs[i] = ((caps & gnss::cap::kHeading) != 0U) ? kOneSecondMs : 0U;
         } else {
@@ -180,49 +180,49 @@ fw::Status GnssLatestCache::init(std::span<uint8_t> buf) noexcept
     return fw::Status::kOk;
 }
 
-bool GnssLatestCache::update(uint8_t type_idx, std::span<const uint8_t> frame) noexcept
+bool GnssLatestCache::update(uint8_t typeIdx, std::span<const uint8_t> frame) noexcept
 {
-    if ((type_idx >= kGnssAppMsgCount) || frame.empty()) {
+    if ((typeIdx >= kGnssAppMsgCount) || frame.empty()) {
         return false;
     }
-    const size_t cap = kGnssLatestCaps[type_idx];
-    const size_t ofs = kGnssLatestOffsets[type_idx];
+    const size_t cap = kGnssLatestCaps[typeIdx];
+    const size_t ofs = kGnssLatestOffsets[typeIdx];
     const fw::LockGuard guard(lock_);
     if (buf_.size() < kGnssLatestTotalBytes) {
         return false;
     }
     if (frame.size() > cap) {
-        ++oversize_drops_[type_idx];
+        ++oversize_drops_[typeIdx];
         return false;
     }
-    const auto slot_dst = buf_.subspan(ofs, frame.size());
-    std::memcpy(slot_dst.data(), frame.data(), frame.size());
-    lengths_[type_idx] = static_cast<uint16_t>(frame.size());
-    ++updates_[type_idx];
+    const auto slotDst = buf_.subspan(ofs, frame.size());
+    std::memcpy(slotDst.data(), frame.data(), frame.size());
+    lengths_[typeIdx] = static_cast<uint16_t>(frame.size());
+    ++updates_[typeIdx];
     return true;
 }
 
-core::services::GnssQueryResult GnssLatestCache::query(uint8_t type_idx,
+core::services::GnssQueryResult GnssLatestCache::query(uint8_t typeIdx,
                                                        std::span<uint8_t> dst) noexcept
 {
-    if (type_idx >= kGnssAppMsgCount) {
+    if (typeIdx >= kGnssAppMsgCount) {
         return {};
     }
-    const size_t ofs = kGnssLatestOffsets[type_idx];
+    const size_t ofs = kGnssLatestOffsets[typeIdx];
     const fw::LockGuard guard(lock_);
     if (buf_.size() < kGnssLatestTotalBytes) {
         return {};
     }
-    const size_t len = lengths_[type_idx];
+    const size_t len = lengths_[typeIdx];
     if (len == 0U) {
         return {};
     }
     if ((len > kGnssMaxQueryBytes) || (len > dst.size())) {
-        ++query_oversize_[type_idx];
+        ++query_oversize_[typeIdx];
         return {.ok = false, .oversize = true, .len = 0U};
     }
-    const auto slot_src = buf_.subspan(ofs, len);
-    std::memcpy(dst.data(), slot_src.data(), len);
+    const auto slotSrc = buf_.subspan(ofs, len);
+    std::memcpy(dst.data(), slotSrc.data(), len);
     return {.ok = true, .oversize = false, .len = len};
 }
 
@@ -234,59 +234,59 @@ std::array<GnssLatestSlotStats, kGnssAppMsgCount> GnssLatestCache::snapshot() co
         out[i].len = lengths_[i];
         out[i].cap = static_cast<uint16_t>(kGnssLatestCaps[i]);
         out[i].updates = updates_[i];
-        out[i].oversize_drops = oversize_drops_[i];
-        out[i].query_oversize = query_oversize_[i];
+        out[i].oversizeDrops = oversize_drops_[i];
+        out[i].queryOversize = query_oversize_[i];
     }
     return out;
 }
 
-void GnssAppSubState::set_subscription(
-    uint32_t active_mask, const std::array<uint32_t, kGnssAppMsgCount> &periods_ms) noexcept
+void GnssAppSubState::setSubscription(
+    uint32_t activeMask, const std::array<uint32_t, kGnssAppMsgCount> &periodsMs) noexcept
 {
     const fw::LockGuard guard(lock_);
-    state_.active_mask = active_mask;
-    state_.periods_ms = periods_ms;
+    state_.activeMask = activeMask;
+    state_.periodsMs = periodsMs;
 }
 
-void GnssAppSubState::read_subscription(
-    uint32_t &active_mask, std::array<uint32_t, kGnssAppMsgCount> &periods_ms) const noexcept
+void GnssAppSubState::readSubscription(
+    uint32_t &activeMask, std::array<uint32_t, kGnssAppMsgCount> &periodsMs) const noexcept
 {
     const fw::LockGuard guard(lock_);
-    active_mask = state_.active_mask;
-    periods_ms = state_.periods_ms;
+    activeMask = state_.activeMask;
+    periodsMs = state_.periodsMs;
 }
 
-void GnssAppSubState::add_tx_sent(uint8_t type_idx) noexcept
+void GnssAppSubState::addTxSent(uint8_t typeIdx) noexcept
 {
-    if (type_idx >= kGnssAppMsgCount) {
+    if (typeIdx >= kGnssAppMsgCount) {
         return;
     }
     const fw::LockGuard guard(lock_);
-    ++state_.tx_sent[type_idx];
+    ++state_.txSent[typeIdx];
 }
 
-void GnssAppSubState::add_skipped(uint8_t type_idx) noexcept
+void GnssAppSubState::addSkipped(uint8_t typeIdx) noexcept
 {
-    if (type_idx >= kGnssAppMsgCount) {
+    if (typeIdx >= kGnssAppMsgCount) {
         return;
     }
     const fw::LockGuard guard(lock_);
-    ++state_.skipped[type_idx];
+    ++state_.skipped[typeIdx];
 }
 
-void GnssAppSubState::add_ring_oversize(uint8_t type_idx) noexcept
+void GnssAppSubState::addRingOversize(uint8_t typeIdx) noexcept
 {
-    if (type_idx >= kGnssAppMsgCount) {
+    if (typeIdx >= kGnssAppMsgCount) {
         return;
     }
     const fw::LockGuard guard(lock_);
-    ++state_.ring_oversize[type_idx];
+    ++state_.ringOversize[typeIdx];
 }
 
-void GnssAppSubState::set_query_oversize_total(uint32_t total) noexcept
+void GnssAppSubState::setQueryOversizeTotal(uint32_t total) noexcept
 {
     const fw::LockGuard guard(lock_);
-    state_.query_oversize_total = total;
+    state_.queryOversizeTotal = total;
 }
 
 GnssAppSubSnapshot GnssAppSubState::snapshot() const noexcept

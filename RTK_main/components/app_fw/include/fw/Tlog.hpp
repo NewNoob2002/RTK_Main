@@ -2,8 +2,8 @@
 // trace() 面向实时路径（只记 16 B 事件，不格式化）；tlog() 面向非实时任务（io 执行器、kLink 上的非热路径、
 // 控制台任务），由调用方在自己的栈上格式化一行文本，再整条压入变长记录环 LogRing，由同一个读者任务
 // （main 的 DebugModule::trace_out）按时间与 TraceRing 合并输出，保证日志、事件、命令回复互不穿插。
-// 开关（ADR-0009 §2.12）：文本行按类别日志级别过滤（fw/Log.hpp）；十六进制掩码（log_set_hex_mask）在 D 级之上
-// 额外控制 tlog_hex() 的原始字节转储。禁止在 ISR 中调用；不分配堆。纯 C++20，不依赖 IDF/FreeRTOS。
+// 开关（ADR-0009 §2.12）：文本行按类别日志级别过滤（fw/Log.hpp）；十六进制掩码（logSetHexMask）在 D 级之上
+// 额外控制 tlogHex() 的原始字节转储。禁止在 ISR 中调用；不分配堆。纯 C++20，不依赖 IDF/FreeRTOS。
 // 冻结接口（ADR-0009 §3；§2.12 增加 LogLevel 与记录头 level 字段）。新代码用 fw/Log.hpp 的 FW_LOG* 宏，
 // tlog() 等价于 kInfo 级别，保留给已有调用点。
 #pragma once
@@ -42,7 +42,7 @@ enum class LogLevel : uint8_t {
 
 struct LogHeader {
     uint32_t tMs =
-        0; // 记录时间（ms，环通路用 trace_install 的时钟，直写通路用 log_install_direct 的时钟）
+        0; // 记录时间（ms，环通路用 traceInstall 的时钟，直写通路用 logInstallDirect 的时钟）
     TraceCat cat = TraceCat::kLink;
     LogKind kind = LogKind::kText;
     LogLevel level = LogLevel::kInfo; // kHex 记录沿用 kInfo（与同一调用点的文本句子配对）
@@ -58,7 +58,7 @@ using LogSinkFn = void (*)(void *ctx, const LogHeader &hdr,
                            std::span<const uint8_t> payload) noexcept;
 
 /**
- * 安装文本通道 sink（启动阶段、单线程调用一次；时钟沿用 trace_install 注入的时钟，须先安装 trace）。
+ * 安装文本通道 sink（启动阶段、单线程调用一次；时钟沿用 traceInstall 注入的时钟，须先安装 trace）。
  * fn 为 nullptr → kInvalidArg；trace 未安装 → kInvalidState；重复安装 → kInvalidState。未安装时 tlog() 什么也不做。
  */
 [[nodiscard]] Result logInstall(LogSinkFn fn, void *ctx) noexcept;
@@ -82,7 +82,7 @@ void tlog(TraceCat cat, const char *fmt, ...) noexcept __attribute__((format(pri
 
 /**
  * @brief  记录原始字节的十六进制转储
- * @param  cat: 类别；log_hex_on(cat) 为假时立即返回
+ * @param  cat: 类别；logHexOn(cat) 为假时立即返回
  * @param  bytes: 原始字节；只复制前 kLogHexMax 字节，记录头 total 保留原长
  * @note   约束同 tlog。
  */
@@ -106,7 +106,7 @@ struct LogRingStats {
 };
 
 /**
- * 变长记录环：多写者（push，加锁）单读者（peek_time/pop，加锁）。一条记录 = LogHeader + payload，
+ * 变长记录环：多写者（push，加锁）单读者（peekTime/pop，加锁）。一条记录 = LogHeader + payload，
  * 整条放得下才压入，否则丢弃并计数，绝不阻塞、绝不只写半条。记录可以跨越存储末尾回绕。
  * 存储由调用方提供（≥ sizeof(LogHeader) + kLogTextMax），不分配堆。不可拷贝/移动。
  */

@@ -31,19 +31,19 @@ constexpr const char *kHexSuffix = "hex";
 /**
  * @brief  打印各类别的追踪开关与日志级别（`debug list` 与 `debug log` 共用）
  */
-void print_cat_table() noexcept
+void printCatTable() noexcept
 {
     const uint32_t mask = fw::traceMask();
-    const uint32_t hex_mask = fw::logHexMask();
+    const uint32_t hexMask = fw::logHexMask();
     cli::outPrintf("cat   trace log  summary\n");
     constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
     for (uint32_t index = 0U; index < kCount; ++index) {
         const auto cat = static_cast<fw::TraceCat>(index);
         const bool on = (mask & fw::traceBit(cat)) != 0U;
-        const bool hex = (hex_mask & fw::traceBit(cat)) != 0U;
-        cli::outPrintf("%-5s %-5s %c%-3s %s\n", debug::trace_cat_name(cat), on ? "on" : "off",
+        const bool hex = (hexMask & fw::traceBit(cat)) != 0U;
+        cli::outPrintf("%-5s %-5s %c%-3s %s\n", debug::traceCatName(cat), on ? "on" : "off",
                        fw::logLevelChar(fw::logCatLevel(cat)), hex ? "+hx" : "",
-                       debug::trace_cat_summary(cat));
+                       debug::traceCatSummary(cat));
     }
 }
 
@@ -52,28 +52,28 @@ void print_cat_table() noexcept
  * @param  argc: 参数个数（不接受额外参数）
  * @retval 0 成功；非 0 参数错误
  */
-int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdList(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: debug list");
     }
-    const DebugModule &module = app_context().debug;
-    const fw::TraceRingStats ring = module.ring_stats();
+    const DebugModule &module = appContext().debug;
+    const fw::TraceRingStats ring = module.ringStats();
     cli::outPrintf("trace ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
                    static_cast<unsigned>(DebugModule::kRingEvents),
-                   static_cast<unsigned>(module.ring_depth()),
+                   static_cast<unsigned>(module.ringDepth()),
                    static_cast<unsigned long>(ring.pushed),
                    static_cast<unsigned long>(ring.dropped), static_cast<unsigned>(ring.maxDepth));
-    const fw::LogRingStats log = module.log_ring_stats();
+    const fw::LogRingStats log = module.logRingStats();
     cli::outPrintf("log ring bytes=%u used=%u pushed=%lu dropped=%lu max_used=%u lost=%lu\n",
                    static_cast<unsigned>(DebugModule::kLogRingBytes),
-                   static_cast<unsigned>(module.log_ring_used()),
+                   static_cast<unsigned>(module.logRingUsed()),
                    static_cast<unsigned long>(log.pushed), static_cast<unsigned long>(log.dropped),
                    static_cast<unsigned>(log.maxUsed),
                    static_cast<unsigned long>(fw::logStats().lost));
-    cli::outPrintf("report period=%us%s\n", static_cast<unsigned>(module.report_period_s()),
-                   (module.report_period_s() == 0U) ? " (off)" : "");
-    print_cat_table();
+    cli::outPrintf("report period=%us%s\n", static_cast<unsigned>(module.reportPeriodS()),
+                   (module.reportPeriodS() == 0U) ? " (off)" : "");
+    printCatTable();
     return 0;
 }
 
@@ -84,7 +84,7 @@ int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
  * @retval true 全部认识
  * @retval false 有不认识的名字（已打印 ERR）
  */
-bool parse_cat_list(std::span<char *const> args, uint32_t &bits) noexcept
+bool parseCatList(std::span<char *const> args, uint32_t &bits) noexcept
 {
     bits = 0U;
     for (const char *const arg : args) {
@@ -94,7 +94,7 @@ bool parse_cat_list(std::span<char *const> args, uint32_t &bits) noexcept
             continue;
         }
         fw::TraceCat cat{};
-        if (!debug::parse_cat(name, cat)) {
+        if (!debug::parseCat(name, cat)) {
             static_cast<void>(cli::fail("unknown category: %s", arg));
             return false;
         }
@@ -108,7 +108,7 @@ bool parse_cat_list(std::span<char *const> args, uint32_t &bits) noexcept
  * @param  args: 参数（不含 "debug"/"trace"）
  * @retval 0 成功；非 0 参数错误
  */
-int toggle_trace(std::span<char *const> args) noexcept
+int toggleTrace(std::span<char *const> args) noexcept
 {
     if (args.size() < 2U) {
         return cli::fail("usage: debug trace <on|off> <category...|all>");
@@ -118,7 +118,7 @@ int toggle_trace(std::span<char *const> args) noexcept
         return cli::fail("usage: debug trace <on|off> <category...|all>");
     }
     uint32_t bits = 0U;
-    if (!parse_cat_list(args.subspan(1U), bits)) {
+    if (!parseCatList(args.subspan(1U), bits)) {
         return cli::kCmdFail;
     }
     const uint32_t mask = fw::traceMask();
@@ -132,13 +132,13 @@ int toggle_trace(std::span<char *const> args) noexcept
  * @param  argv: 参数表
  * @retval 0 成功；非 0 参数错误
  */
-int cmd_trace(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdTrace(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 1) || (argv == nullptr)) {
         return cli::fail("usage: debug trace <on|off> <category...|all>");
     }
     const std::span<char *const> args(argv, static_cast<size_t>(argc));
-    return toggle_trace(args.subspan(1U));
+    return toggleTrace(args.subspan(1U));
 }
 
 /**
@@ -147,12 +147,12 @@ int cmd_trace(void * /*ctx*/, int argc, char **argv) noexcept
  * @param  argv: 参数表
  * @retval 0 成功；非 0 参数错误
  */
-int cmd_on_off(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdOnOff(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 1) || (argv == nullptr)) {
         return cli::fail("usage: debug <on|off> <category...|all>");
     }
-    return toggle_trace(std::span<char *const>(argv, static_cast<size_t>(argc)));
+    return toggleTrace(std::span<char *const>(argv, static_cast<size_t>(argc)));
 }
 
 /**
@@ -162,7 +162,7 @@ int cmd_on_off(void * /*ctx*/, int argc, char **argv) noexcept
  * @retval 0 成功；非 0 参数错误
  * @note   hex 打开这些类别的原始字节转储（只在 D 级生效），不带 hex 则关闭；`debug save` 写 NVS。
  */
-int cmd_log(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdLog(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 1) || (argv == nullptr)) {
         return cli::fail("usage: debug log [<category...|all> <e|w|i|d> [hex]]");
@@ -170,12 +170,12 @@ int cmd_log(void * /*ctx*/, int argc, char **argv) noexcept
     std::span<char *const> args =
         std::span<char *const>(argv, static_cast<size_t>(argc)).subspan(1U);
     if (args.empty()) {
-        print_cat_table();
+        printCatTable();
         return 0;
     }
-    bool want_hex = false;
+    bool wantHex = false;
     if (std::string_view(args.back()) == kHexSuffix) {
-        want_hex = true;
+        wantHex = true;
         args = args.first(args.size() - 1U);
     }
     fw::LogLevel level{};
@@ -183,7 +183,7 @@ int cmd_log(void * /*ctx*/, int argc, char **argv) noexcept
         return cli::fail("usage: debug log [<category...|all> <e|w|i|d> [hex]]");
     }
     uint32_t bits = 0U;
-    if (!parse_cat_list(args.first(args.size() - 1U), bits)) {
+    if (!parseCatList(args.first(args.size() - 1U), bits)) {
         return cli::kCmdFail;
     }
     constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
@@ -193,12 +193,12 @@ int cmd_log(void * /*ctx*/, int argc, char **argv) noexcept
             fw::logSetCatLevel(cat, level);
         }
     }
-    const uint32_t hex_mask = fw::logHexMask();
-    fw::logSetHexMask(want_hex ? (hex_mask | bits) : (hex_mask & ~bits));
+    const uint32_t hexMask = fw::logHexMask();
+    fw::logSetHexMask(wantHex ? (hexMask | bits) : (hexMask & ~bits));
     return 0;
 }
 
-int cmd_report(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdReport(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != 2) || (argv == nullptr)) {
         return cli::fail("usage: debug report <1..3600|off>");
@@ -224,7 +224,7 @@ int cmd_report(void * /*ctx*/, int argc, char **argv) noexcept
     return submit(command, "debug report") ? 0 : cli::kCmdFail;
 }
 
-int cmd_save(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdSave(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: debug save");
@@ -236,13 +236,13 @@ int cmd_save(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 }
 
 constexpr std::array<cli::Verb, 7U> kVerbs{{
-    {"list", nullptr, "ring stats, trace switches and log levels per category", cmd_list},
-    {"trace", "<on|off> <category...|all>", "enable/disable real-time trace events", cmd_trace},
-    {"log", "[<category...|all> <e|w|i|d> [hex]]", "show or set per-category log level", cmd_log},
-    {"on", "<category...|all>", "short for: debug trace on", cmd_on_off},
-    {"off", "<category...|all>", "short for: debug trace off", cmd_on_off},
-    {"report", "<1..3600|off>", "set periodic report interval (s)", cmd_report},
-    {"save", nullptr, "save trace mask, log levels, hex mask and report interval", cmd_save},
+    {"list", nullptr, "ring stats, trace switches and log levels per category", cmdList},
+    {"trace", "<on|off> <category...|all>", "enable/disable real-time trace events", cmdTrace},
+    {"log", "[<category...|all> <e|w|i|d> [hex]]", "show or set per-category log level", cmdLog},
+    {"on", "<category...|all>", "short for: debug trace on", cmdOnOff},
+    {"off", "<category...|all>", "short for: debug trace off", cmdOnOff},
+    {"report", "<1..3600|off>", "set periodic report interval (s)", cmdReport},
+    {"save", nullptr, "save trace mask, log levels, hex mask and report interval", cmdSave},
 }};
 
 /**
@@ -252,7 +252,7 @@ constexpr std::array<cli::Verb, 7U> kVerbs{{
  * @param  argv: 参数表
  * @retval 动词处理函数的返回值；参数错误非 0
  */
-int cmd_debug(void *ctx, int argc, char **argv) noexcept
+int cmdDebug(void *ctx, int argc, char **argv) noexcept
 {
     if ((argc < 0) || (argv == nullptr)) {
         return cli::fail("usage: debug <list|trace|log|on|off|report|save>");
@@ -263,17 +263,17 @@ int cmd_debug(void *ctx, int argc, char **argv) noexcept
 
 constexpr std::array<cli::Cmd, 1U> kCmds{{
     {"debug", "debug <list|on|off|level|report|save>: trace ring, log level and report control",
-     "<list|on|off|level|report|save>", cmd_debug, nullptr},
+     "<list|on|off|level|report|save>", cmdDebug, nullptr},
 }};
 
 } // namespace
 
-std::span<const cli::Cmd> debug_cmds() noexcept
+std::span<const cli::Cmd> debugCmds() noexcept
 {
     return kCmds;
 }
 
-std::span<const cli::Verb> debug_verbs() noexcept
+std::span<const cli::Verb> debugVerbs() noexcept
 {
     return kVerbs;
 }

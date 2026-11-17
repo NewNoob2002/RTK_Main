@@ -1,5 +1,5 @@
 // 锁注入：纯组件不能包含 FreeRTOS 头，跨任务共享的 Slot/FanoutRing 通过函数指针表拿到锁。
-// 目标板：rtos::spin_lock_ops(portMUX_TYPE&)（rtos 提供）；host 单线程测试：kNoLock。
+// 目标板：rtos::spinLockOps(portMUX_TYPE&)（rtos 提供）；host 单线程测试：kNoLock。
 // 约束：lock/unlock 之间只允许做有界的内存拷贝，不得调用阻塞 API。
 // 冻结接口（ADR-0007 §3.5）。
 #pragma once

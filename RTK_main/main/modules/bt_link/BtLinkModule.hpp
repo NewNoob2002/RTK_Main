@@ -40,7 +40,7 @@ class BtLinkModule final {
 public:
     constexpr BtLinkModule() noexcept = default;
     constexpr explicit BtLinkModule(AppContext &context) noexcept : context_(&context) {}
-    void bind_context(AppContext &context) noexcept
+    void bindContext(AppContext &context) noexcept
     {
         context_ = &context;
     }
@@ -52,13 +52,13 @@ public:
     /** 启动前单线程，非 ISR；构造服务且不分配堆，失败返回 kInvalidState。 */
     [[nodiscard]] fw::Result init() noexcept;
     /** init 成功后仅 kLink 调用，非 ISR、非阻塞；发布快照，返回是否仍有 RX 积压。 */
-    [[nodiscard]] bool poll(uint32_t now_ms) noexcept;
+    [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
     /** init 成功后仅 kLink 调用，非 ISR；白名单清除可同步写 NVS，结果写入 result。 */
-    void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
-    /** 仅 kLink，非 ISR；至多等待 max_ms，先处理生命周期事件。 */
-    void wait(uint32_t max_ms) noexcept;
+    void onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /** 仅 kLink，非 ISR；至多等待 maxMs，先处理生命周期事件。 */
+    void wait(uint32_t maxMs) noexcept;
     /** 仅 kLink 或启动前，非 ISR；返回直推 RTCM 累计统计快照。 */
-    [[nodiscard]] const RtcmLinkSnapshot &rtcm_snapshot() const noexcept
+    [[nodiscard]] const RtcmLinkSnapshot &rtcmSnapshot() const noexcept
     {
         return rtcm_snapshot_;
     }
@@ -91,16 +91,16 @@ private:
         bool used = false;
         core::SessionHandle handle = 0;
         core::BtAddr addr{};
-        bool drain_pending = false;
+        bool drainPending = false;
         std::array<uint8_t, kRxChunkBytes> rx{};
-        size_t rx_offset = 0;
-        size_t rx_size = 0;
+        size_t rxOffset = 0;
+        size_t rxSize = 0;
         std::optional<SessionSink> sink{};
         std::optional<SessionDemux> demux{};
-        bool demux_ready = false;
+        bool demuxReady = false;
         // 分流器累计统计的上报基线，仅 kLink 读写；会话复用时归零。
-        uint32_t seen_resyncs = 0;
-        uint32_t seen_unknown = 0;
+        uint32_t seenResyncs = 0;
+        uint32_t seenUnknown = 0;
     };
     static_assert(std::is_trivially_destructible_v<SessionSink>,
                   "SessionSink must be trivially destructible");
@@ -109,57 +109,56 @@ private:
     static_assert(std::is_trivially_destructible_v<spp::SppTransport>,
                   "SppTransport must be trivially destructible");
 
-    [[nodiscard]] SessionEntry *session_find(core::SessionHandle handle) noexcept;
+    [[nodiscard]] SessionEntry *sessionFind(core::SessionHandle handle) noexcept;
     /**
      * @brief  会话关闭：中止该会话的分流器并清除记录
      * @param  handle: 会话句柄；未记录时只忽略
      * @note   仅 kLink 调用。
      */
-    void session_forget(core::SessionHandle handle) noexcept;
+    void sessionForget(core::SessionHandle handle) noexcept;
     /**
      * @brief  会话打开：分配表项、记录对端地址并初始化分流器
      * @param  handle: 会话句柄
      * @param  addr: 对端蓝牙地址
      * @note   仅 kLink 调用；表满或分流器初始化失败记 W 级日志，该会话不解析。
      */
-    void session_record(core::SessionHandle handle, const core::BtAddr &addr) noexcept;
-    [[nodiscard]] core::LinkService &link_service() noexcept;
-    void collect_whitelist_dirty() noexcept;
-    void handle_event(const spp_server_evt_t &evt, uint32_t now_ms) noexcept;
-    void handle_open(const spp_server_evt_t &evt, uint32_t now_ms) noexcept;
-    void handle_close(core::SessionHandle handle) noexcept;
-    void handle_data(core::SessionHandle handle) noexcept;
-    void handle_rtcm_frame(core::SessionHandle handle, std::span<const uint8_t> wire) noexcept;
-    [[nodiscard]] bool poll_and_check_ready(uint32_t now_ms) noexcept;
-    static void on_rx_wake(void *ctx) noexcept;
-    void drain_rx(uint32_t round_start_ms) noexcept;
-    [[nodiscard]] bool drain_session(SessionEntry &entry, size_t index, size_t &budget,
-                                     uint32_t round_start_ms) noexcept;
+    void sessionRecord(core::SessionHandle handle, const core::BtAddr &addr) noexcept;
+    [[nodiscard]] core::LinkService &linkService() noexcept;
+    void collectWhitelistDirty() noexcept;
+    void handleEvent(const spp_server_evt_t &evt, uint32_t nowMs) noexcept;
+    void handleOpen(const spp_server_evt_t &evt, uint32_t nowMs) noexcept;
+    void handleClose(core::SessionHandle handle) noexcept;
+    void handleData(core::SessionHandle handle) noexcept;
+    void handleRtcmFrame(core::SessionHandle handle, std::span<const uint8_t> wire) noexcept;
+    [[nodiscard]] bool pollAndCheckReady(uint32_t nowMs) noexcept;
+    static void onRxWake(void *ctx) noexcept;
+    void drainRx(uint32_t roundStartMs) noexcept;
+    [[nodiscard]] bool drainSession(SessionEntry &entry, size_t index, size_t &budget,
+                                    uint32_t roundStartMs) noexcept;
     /**
      * @brief  从会话 RX 取一块字节喂给分流器
      * @param  entry: 会话表项
      * @param[in,out] budget: 本轮剩余字节预算，按实际消费扣减
-     * @param  round_start_ms: 本轮开始时间（ms），用于超时判断
+     * @param  roundStartMs: 本轮开始时间（ms），用于超时判断
      * @retval true 还有积压可继续读
      * @retval false 已读空或分流器已停止
      */
-    [[nodiscard]] bool feed_one(SessionEntry &entry, size_t &budget,
-                                uint32_t round_start_ms) noexcept;
-    void sync_stream() noexcept;
-    void publish_link(uint32_t now_ms) noexcept;
-    void apply_rtcm_reset() noexcept;
+    [[nodiscard]] bool feedOne(SessionEntry &entry, size_t &budget, uint32_t roundStartMs) noexcept;
+    void syncStream() noexcept;
+    void publishLink(uint32_t nowMs) noexcept;
+    void applyRtcmReset() noexcept;
 #if RTK_GNSS_ENABLED
-    void sync_gnss_info(uint32_t now_ms) noexcept;
-    void reset_gnss_stream_session() noexcept;
-    [[nodiscard]] bool drain_gnss_stream() noexcept;
-    static core::services::GnssQueryResult on_gnss_query(void *ctx, uint16_t msg_id,
-                                                         std::span<uint8_t> dst) noexcept;
-    static void on_gnss_mask(void *ctx, uint32_t mask) noexcept;
+    void syncGnssInfo(uint32_t nowMs) noexcept;
+    void resetGnssStreamSession() noexcept;
+    [[nodiscard]] bool drainGnssStream() noexcept;
+    static core::services::GnssQueryResult onGnssQuery(void *ctx, uint16_t msgId,
+                                                       std::span<uint8_t> dst) noexcept;
+    static void onGnssMask(void *ctx, uint32_t mask) noexcept;
 #endif
-    void set_alarm(const fw::Command &cmd, fw::CommandResult &result) noexcept;
-    void clear_whitelist(fw::CommandResult &result) noexcept;
-    void edit_whitelist(const fw::Command &cmd, bool add, fw::CommandResult &result) noexcept;
-    void persist_whitelist(fw::CommandResult &result) noexcept;
+    void setAlarm(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    void clearWhitelist(fw::CommandResult &result) noexcept;
+    void editWhitelist(const fw::Command &cmd, bool add, fw::CommandResult &result) noexcept;
+    void persistWhitelist(fw::CommandResult &result) noexcept;
 
     static_assert(std::is_trivially_destructible_v<core::AlarmSource>,
                   "AlarmSource must be trivially destructible");
@@ -205,5 +204,5 @@ private:
 #endif
 };
 /** 链路模块的只读控制台命令表（bt/alarm）；静态存储，进程期有效。 */
-[[nodiscard]] std::span<const cli::Cmd> link_cmds() noexcept;
+[[nodiscard]] std::span<const cli::Cmd> linkCmds() noexcept;
 } // namespace app

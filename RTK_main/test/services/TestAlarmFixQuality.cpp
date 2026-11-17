@@ -19,8 +19,8 @@ constexpr size_t kFixQualityPayloadOffset = 4U;
 constexpr uint32_t kNowMs = 1000U;
 constexpr uint16_t kPushSeq = 0x002AU;
 
-bool parse_wire(proto::FrameParser &parser, std::span<const uint8_t> wire,
-                proto::FrameView &out) noexcept
+bool parseWire(proto::FrameParser &parser, std::span<const uint8_t> wire,
+               proto::FrameView &out) noexcept
 {
     parser.reset();
     for (const uint8_t byte : wire) {
@@ -35,16 +35,16 @@ bool parse_wire(proto::FrameParser &parser, std::span<const uint8_t> wire,
     return false;
 }
 
-void test_fix_quality_default_and_updates()
+void testFixQualityDefaultAndUpdates()
 {
     core::AlarmSource alarm;
     core::LinkManager link;
     link.init(core::Policy::kConcurrent, {});
     core::services::DeviceService dev;
-    core::services::AlarmService alarm_svc(alarm, link, dev.info());
+    core::services::AlarmService alarmSvc(alarm, link, dev.info());
 
     core::CommandRouter router;
-    const std::array<core::RouteTable, 1U> tables = {alarm_svc.table()};
+    const std::array<core::RouteTable, 1U> tables = {alarmSvc.table()};
     TEST_ASSERT_TRUE(isOk(router.init(tables)));
 
     // 默认 DeviceInfo::fixQuality 为 0xFF，0x40 推送与查询的第 4 字节均为 0xFF。
@@ -53,15 +53,15 @@ void test_fix_quality_default_and_updates()
     core::Reply reply;
     proto::FrameParser parser;
     proto::FrameView parsed{};
-    TEST_ASSERT_TRUE(alarm_svc.buildStatusPush(kPushSeq, kNowMs, reply));
-    TEST_ASSERT_TRUE(parse_wire(parser, reply.bytes(), parsed));
+    TEST_ASSERT_TRUE(alarmSvc.buildStatusPush(kPushSeq, kNowMs, reply));
+    TEST_ASSERT_TRUE(parseWire(parser, reply.bytes(), parsed));
     TEST_ASSERT_EQUAL_UINT(proto::alarm::kStatusLen, parsed.payload.size());
     TEST_ASSERT_EQUAL_UINT8(proto::alarm::kValueUnknown, parsed.payload[kFixQualityPayloadOffset]);
 
     // 更新为 RTK Fixed (4) 后，推送和 0x40 QUERY 应答第 4 字节均为 4。
     dev.info().fixQuality = 4U;
-    TEST_ASSERT_TRUE(alarm_svc.buildStatusPush(kPushSeq + 1U, kNowMs + 100U, reply));
-    TEST_ASSERT_TRUE(parse_wire(parser, reply.bytes(), parsed));
+    TEST_ASSERT_TRUE(alarmSvc.buildStatusPush(kPushSeq + 1U, kNowMs + 100U, reply));
+    TEST_ASSERT_TRUE(parseWire(parser, reply.bytes(), parsed));
     TEST_ASSERT_EQUAL_UINT8(4U, parsed.payload[kFixQualityPayloadOffset]);
 
     proto::FrameView query{};
@@ -72,7 +72,7 @@ void test_fix_quality_default_and_updates()
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(core::DispatchResult::kReply),
         static_cast<uint8_t>(router.handle(core::Role::kAlarm, query, kNowMs + 200U, reply)));
-    TEST_ASSERT_TRUE(parse_wire(parser, reply.bytes(), parsed));
+    TEST_ASSERT_TRUE(parseWire(parser, reply.bytes(), parsed));
     TEST_ASSERT_EQUAL_UINT(proto::alarm::kStatusLen, parsed.payload.size());
     TEST_ASSERT_EQUAL_UINT8(4U, parsed.payload[kFixQualityPayloadOffset]);
 
@@ -82,7 +82,7 @@ void test_fix_quality_default_and_updates()
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(core::DispatchResult::kReply),
         static_cast<uint8_t>(router.handle(core::Role::kAlarm, query, kNowMs + 300U, reply)));
-    TEST_ASSERT_TRUE(parse_wire(parser, reply.bytes(), parsed));
+    TEST_ASSERT_TRUE(parseWire(parser, reply.bytes(), parsed));
     TEST_ASSERT_EQUAL_UINT8(proto::alarm::kValueUnknown, parsed.payload[kFixQualityPayloadOffset]);
 }
 
@@ -94,6 +94,6 @@ extern "C" void tearDown(void) {}
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_fix_quality_default_and_updates);
+    RUN_TEST(testFixQualityDefaultAndUpdates);
     return UNITY_END();
 }

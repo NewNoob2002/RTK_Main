@@ -14,13 +14,13 @@ namespace test {
 // 把整段字节喂给解析器，统计结果；最后一帧的 payload 拷贝出来（视图会在下次 feed 时失效）。
 struct FeedResult {
     int frames = 0;
-    int crc_errors = 0;
-    int length_errors = 0;
+    int crcErrors = 0;
+    int lengthErrors = 0;
     proto::FrameView last{};
     std::array<uint8_t, proto::kMaxPayload> payload{};
 };
 
-inline FeedResult feed_all(proto::FrameParser &parser, std::span<const uint8_t> data)
+inline FeedResult feedAll(proto::FrameParser &parser, std::span<const uint8_t> data)
 {
     FeedResult res{};
     for (uint8_t byte : data) {
@@ -34,10 +34,10 @@ inline FeedResult feed_all(proto::FrameParser &parser, std::span<const uint8_t> 
             }
             break;
         case proto::ParseResult::kCrcError:
-            res.crc_errors++;
+            res.crcErrors++;
             break;
         case proto::ParseResult::kLengthError:
-            res.length_errors++;
+            res.lengthErrors++;
             break;
         case proto::ParseResult::kNone:
         default:
@@ -58,45 +58,45 @@ public:
     static constexpr size_t kMaxRecords = 32;
 
     fw::Status write(core::SessionHandle handle, std::span<const uint8_t> data,
-                     uint32_t timeout_ms) noexcept override
+                     uint32_t timeoutMs) noexcept override
     {
-        last_timeout_ms = timeout_ms;
-        if (fail_writes) {
+        lastTimeoutMs = timeoutMs;
+        if (failWrites) {
             return fw::Status::kTimeout;
         }
-        if (write_count < kMaxRecords) {
-            Write &rec = writes[write_count];
+        if (writeCount < kMaxRecords) {
+            Write &rec = writes[writeCount];
             rec.handle = handle;
             rec.len = data.size();
             for (size_t i = 0; i < data.size() && i < rec.data.size(); ++i) {
                 rec.data[i] = data[i];
             }
         }
-        write_count++;
+        writeCount++;
         return fw::Status::kOk;
     }
 
     fw::Status disconnect(core::SessionHandle handle) noexcept override
     {
-        if (disconnect_count < kMaxRecords) {
-            disconnects[disconnect_count] = handle;
+        if (disconnectCount < kMaxRecords) {
+            disconnects[disconnectCount] = handle;
         }
-        disconnect_count++;
+        disconnectCount++;
         return fw::Status::kOk;
     }
 
     void clear()
     {
-        write_count = 0;
-        disconnect_count = 0;
+        writeCount = 0;
+        disconnectCount = 0;
     }
 
     std::array<Write, kMaxRecords> writes{};
-    size_t write_count = 0;
+    size_t writeCount = 0;
     std::array<core::SessionHandle, kMaxRecords> disconnects{};
-    size_t disconnect_count = 0;
-    bool fail_writes = false;
-    uint32_t last_timeout_ms = 0;
+    size_t disconnectCount = 0;
+    bool failWrites = false;
+    uint32_t lastTimeoutMs = 0;
 };
 
 } // namespace test

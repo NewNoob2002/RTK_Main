@@ -1,4 +1,4 @@
-// 通用持久化键的 NVS 读写（ADR-0010 §2.10）与 StorageModule::load_keys/save_keys。
+// 通用持久化键的 NVS 读写（ADR-0010 §2.10）与 StorageModule::loadKeys/saveKeys。
 // 值以小端字节序列交给 fw::StoreBinding，与固件内其它持久化编码一致。
 
 #include "modules/storage/StoreKeys.hpp"
@@ -28,7 +28,7 @@ constexpr uint32_t kBitsPerByte = 8U;
 using Name = std::array<char, fw::kStoreNameMax + 1U>;
 
 /* StoreKey 的 ns/key 只是视图，NVS 需要 0 结尾的名字；超长直接拒绝。 */
-bool copy_name(std::string_view in, Name &out) noexcept
+bool copyName(std::string_view in, Name &out) noexcept
 {
     if (in.empty() || (in.size() > fw::kStoreNameMax)) {
         return false;
@@ -38,21 +38,21 @@ bool copy_name(std::string_view in, Name &out) noexcept
     return true;
 }
 
-bool names_of(const fw::StoreKey &key, Name &ns, Name &name) noexcept
+bool namesOf(const fw::StoreKey &key, Name &ns, Name &name) noexcept
 {
-    return fw::valid(key) && (value_width(key.type) != 0U) && copy_name(key.ns, ns) &&
-           copy_name(key.key, name);
+    return fw::valid(key) && (valueWidth(key.type) != 0U) && copyName(key.ns, ns) &&
+           copyName(key.key, name);
 }
 
-bool blob_names_of(const fw::StoreKey &key, Name &ns, Name &name) noexcept
+bool blobNamesOf(const fw::StoreKey &key, Name &ns, Name &name) noexcept
 {
     return fw::valid(key) && (key.type == fw::StoreType::kBlob) && (key.maxSize > 0U) &&
-           (key.maxSize <= kMaxBlobKeyBytes) && copy_name(key.ns, ns) && copy_name(key.key, name);
+           (key.maxSize <= kMaxBlobKeyBytes) && copyName(key.ns, ns) && copyName(key.key, name);
 }
 
 } // namespace
 
-size_t value_width(fw::StoreType type) noexcept
+size_t valueWidth(fw::StoreType type) noexcept
 {
     switch (type) {
     case fw::StoreType::kU8:
@@ -66,11 +66,11 @@ size_t value_width(fw::StoreType type) noexcept
     }
 }
 
-esp_err_t read_value(const fw::StoreKey &key, uint32_t &value) noexcept
+esp_err_t readValue(const fw::StoreKey &key, uint32_t &value) noexcept
 {
     Name ns{};
     Name name{};
-    if (!names_of(key, ns, name)) {
+    if (!namesOf(key, ns, name)) {
         return ESP_ERR_INVALID_ARG;
     }
     nvs_handle_t handle = 0;
@@ -94,11 +94,11 @@ esp_err_t read_value(const fw::StoreKey &key, uint32_t &value) noexcept
     return error;
 }
 
-esp_err_t write_value(const fw::StoreKey &key, uint32_t value) noexcept
+esp_err_t writeValue(const fw::StoreKey &key, uint32_t value) noexcept
 {
     Name ns{};
     Name name{};
-    if (!names_of(key, ns, name)) {
+    if (!namesOf(key, ns, name)) {
         return ESP_ERR_INVALID_ARG;
     }
     nvs_handle_t handle = 0;
@@ -122,12 +122,12 @@ esp_err_t write_value(const fw::StoreKey &key, uint32_t value) noexcept
     return error;
 }
 
-esp_err_t read_blob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len) noexcept
+esp_err_t readBlob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len) noexcept
 {
     len = 0U;
     Name ns{};
     Name name{};
-    if (!blob_names_of(key, ns, name) || (out.size() < key.maxSize)) {
+    if (!blobNamesOf(key, ns, name) || (out.size() < key.maxSize)) {
         return ESP_ERR_INVALID_ARG;
     }
     nvs_handle_t handle = 0;
@@ -144,11 +144,11 @@ esp_err_t read_blob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len
     return error;
 }
 
-esp_err_t write_blob(const fw::StoreKey &key, std::span<const uint8_t> data) noexcept
+esp_err_t writeBlob(const fw::StoreKey &key, std::span<const uint8_t> data) noexcept
 {
     Name ns{};
     Name name{};
-    if (!blob_names_of(key, ns, name) || data.empty() || (data.size() > key.maxSize)) {
+    if (!blobNamesOf(key, ns, name) || data.empty() || (data.size() > key.maxSize)) {
         return ESP_ERR_INVALID_ARG;
     }
     nvs_handle_t handle = 0;
@@ -168,7 +168,7 @@ esp_err_t write_blob(const fw::StoreKey &key, std::span<const uint8_t> data) noe
 
 namespace app {
 
-fw::Result StorageModule::load_keys(std::span<const fw::StoreKey> keys) noexcept
+fw::Result StorageModule::loadKeys(std::span<const fw::StoreKey> keys) noexcept
 {
     fw::Result overall = fw::Result::kOk;
     uint32_t loaded = 0U;
@@ -185,7 +185,7 @@ fw::Result StorageModule::load_keys(std::span<const fw::StoreKey> keys) noexcept
             std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
             size_t len = 0U;
             const esp_err_t error =
-                store::read_blob(key, std::span<uint8_t>{blob}.first(key.maxSize), len);
+                store::readBlob(key, std::span<uint8_t>{blob}.first(key.maxSize), len);
             if (error == ESP_ERR_NVS_NOT_FOUND) {
                 overall = fw::Result::kNotFound;
                 continue;
@@ -204,9 +204,9 @@ fw::Result StorageModule::load_keys(std::span<const fw::StoreKey> keys) noexcept
             ++loaded;
             continue;
         }
-        const size_t width = store::value_width(key.type);
+        const size_t width = store::valueWidth(key.type);
         uint32_t value = 0U;
-        const esp_err_t error = store::read_value(key, value);
+        const esp_err_t error = store::readValue(key, value);
         if (error == ESP_ERR_NVS_NOT_FOUND) {
             // 从未保存过：保持模块缺省值。
             overall = fw::Result::kNotFound;
@@ -231,11 +231,11 @@ fw::Result StorageModule::load_keys(std::span<const fw::StoreKey> keys) noexcept
         }
         ++loaded;
     }
-    trace_store(StoreTrace::kLoad, static_cast<uint32_t>(overall), loaded);
+    traceStore(StoreTrace::kLoad, static_cast<uint32_t>(overall), loaded);
     return overall;
 }
 
-fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> keys) noexcept
+fw::Result StorageModule::saveKeys(std::span<const fw::StoreKey> keys) noexcept
 {
     fw::Result overall = fw::Result::kOk;
     uint32_t saved = 0U;
@@ -258,7 +258,7 @@ fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> keys) noexcept
                 continue;
             }
             const esp_err_t error =
-                store::write_blob(key, std::span<const uint8_t>{blob}.first(len));
+                store::writeBlob(key, std::span<const uint8_t>{blob}.first(len));
             if (error != ESP_OK) {
                 overall =
                     (error == ESP_ERR_INVALID_ARG) ? fw::Result::kInvalidArg : fw::Result::kIoError;
@@ -267,7 +267,7 @@ fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> keys) noexcept
             ++saved;
             continue;
         }
-        const size_t width = store::value_width(key.type);
+        const size_t width = store::valueWidth(key.type);
         if (width == 0U) {
             overall = fw::Result::kInvalidArg;
             continue;
@@ -285,7 +285,7 @@ fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> keys) noexcept
             // len ≤ 4，移位结果落在 32 位内。
             value |= static_cast<uint32_t>(bytes[index]) << (store::kBitsPerByte * index);
         }
-        const esp_err_t error = store::write_value(key, value);
+        const esp_err_t error = store::writeValue(key, value);
         if (error != ESP_OK) {
             overall =
                 (error == ESP_ERR_INVALID_ARG) ? fw::Result::kInvalidArg : fw::Result::kIoError;
@@ -293,7 +293,7 @@ fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> keys) noexcept
         }
         ++saved;
     }
-    trace_store(StoreTrace::kSave, static_cast<uint32_t>(overall), saved);
+    traceStore(StoreTrace::kSave, static_cast<uint32_t>(overall), saved);
     return overall;
 }
 

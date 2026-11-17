@@ -16,10 +16,10 @@ namespace {
 
 std::string s_sunk;     // sink 收到的全部字节
 int s_sink_calls = 0;   // sink 调用次数
-int s_reentry_rc = 0;   // 重入测试中嵌套 out_log_vprintf 的返回值
+int s_reentry_rc = 0;   // 重入测试中嵌套 outLogVprintf 的返回值
 bool s_reenter = false; // 置位时 sink 内部再打一次“日志”
 
-int log_call(const char *fmt, ...) noexcept
+int logCall(const char *fmt, ...) noexcept
 {
     va_list args;
     va_start(args, fmt);
@@ -28,13 +28,13 @@ int log_call(const char *fmt, ...) noexcept
     return rc;
 }
 
-void fake_sink(const char *text, size_t len) noexcept
+void fakeSink(const char *text, size_t len) noexcept
 {
     ++s_sink_calls;
     s_sunk.append(text, len);
     if (s_reenter) {
         s_reenter = false;
-        s_reentry_rc = log_call("nested %d\n", 1);
+        s_reentry_rc = logCall("nested %d\n", 1);
     }
 }
 
@@ -46,7 +46,7 @@ void setUp(void)
     s_sink_calls = 0;
     s_reentry_rc = 0;
     s_reenter = false;
-    cli::setOutSink(fake_sink, true);
+    cli::setOutSink(fakeSink, true);
 }
 
 void tearDown(void)
@@ -54,35 +54,35 @@ void tearDown(void)
     cli::setOutSink(nullptr, false);
 }
 
-static void test_crlf_expanded_once_per_line(void)
+static void testCrlfExpandedOncePerLine(void)
 {
     cli::outPrintf("  %-4s %d\n", "ab", 7);
     TEST_ASSERT_EQUAL_STRING("  ab   7\r\n", s_sunk.c_str());
     TEST_ASSERT_EQUAL_INT(1, s_sink_calls);
 }
 
-static void test_existing_crlf_not_doubled(void)
+static void testExistingCrlfNotDoubled(void)
 {
     static constexpr char kLine[] = "[1.000] evt\r\n";
     cli::outWrite(kLine, sizeof(kLine) - 1U);
     TEST_ASSERT_EQUAL_STRING("[1.000] evt\r\n", s_sunk.c_str());
 }
 
-static void test_cr_lf_split_across_calls(void)
+static void testCrLfSplitAcrossCalls(void)
 {
     cli::outWrite("a\r", 2U);
     cli::outWrite("\nb\n", 3U);
     TEST_ASSERT_EQUAL_STRING("a\r\nb\r\n", s_sunk.c_str());
 }
 
-static void test_no_crlf_mode_passthrough(void)
+static void testNoCrlfModePassthrough(void)
 {
-    cli::setOutSink(fake_sink, false);
+    cli::setOutSink(fakeSink, false);
     cli::outPrintf("x\ny\n");
     TEST_ASSERT_EQUAL_STRING("x\ny\n", s_sunk.c_str());
 }
 
-static void test_long_newline_run_chunked_without_loss(void)
+static void testLongNewlineRunChunkedWithoutLoss(void)
 {
     // 全是 '\n' 时展开后长度翻倍，超过展开缓冲需要分段；内容不能丢。
     std::string text(cli::kOutLineMax - 1U, '\n');
@@ -95,7 +95,7 @@ static void test_long_newline_run_chunked_without_loss(void)
     }
 }
 
-static void test_overlong_format_falls_back_to_stdout(void)
+static void testOverlongFormatFallsBackToStdout(void)
 {
     // 超过 kOutLineMax 的一条输出改走 stdout（不截断），sink 不应收到半截内容。
     const std::string big(cli::kOutLineMax + 10U, 'z');
@@ -103,10 +103,10 @@ static void test_overlong_format_falls_back_to_stdout(void)
     TEST_ASSERT_EQUAL_INT(0, s_sink_calls);
 }
 
-static void test_log_reentry_rejected(void)
+static void testLogReentryRejected(void)
 {
     s_reenter = true;
-    const int rc = log_call("outer\n");
+    const int rc = logCall("outer\n");
     TEST_ASSERT_EQUAL_INT(6, rc);
     TEST_ASSERT_EQUAL_INT(-1, s_reentry_rc); // 同任务重入不碰缓冲
     TEST_ASSERT_EQUAL_STRING("outer\r\n", s_sunk.c_str());
@@ -115,12 +115,12 @@ static void test_log_reentry_rejected(void)
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_crlf_expanded_once_per_line);
-    RUN_TEST(test_existing_crlf_not_doubled);
-    RUN_TEST(test_cr_lf_split_across_calls);
-    RUN_TEST(test_no_crlf_mode_passthrough);
-    RUN_TEST(test_long_newline_run_chunked_without_loss);
-    RUN_TEST(test_overlong_format_falls_back_to_stdout);
-    RUN_TEST(test_log_reentry_rejected);
+    RUN_TEST(testCrlfExpandedOncePerLine);
+    RUN_TEST(testExistingCrlfNotDoubled);
+    RUN_TEST(testCrLfSplitAcrossCalls);
+    RUN_TEST(testNoCrlfModePassthrough);
+    RUN_TEST(testLongNewlineRunChunkedWithoutLoss);
+    RUN_TEST(testOverlongFormatFallsBackToStdout);
+    RUN_TEST(testLogReentryRejected);
     return UNITY_END();
 }

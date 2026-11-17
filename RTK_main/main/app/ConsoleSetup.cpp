@@ -1,5 +1,5 @@
 // 控制台装配与启动阶段门控（R8a，自 AppMain.cpp 迁入）：命令表/动词表在 REPL 启动前一次性登记。
-// 线程：init_console/run_console 只在启动任务调用，gated_command 只在 console REPL 任务调用；非 ISR，不分配堆。
+// 线程：initConsole/runConsole 只在启动任务调用，gatedCommand 只在 console REPL 任务调用；非 ISR，不分配堆。
 #include "app/App.hpp"
 
 #include <array>
@@ -25,10 +25,10 @@ constinit std::array<cli::Cmd, cli::kMaxCmds> s_gated_commands{};
  * @param  ctx: 未用
  * @param  hdr: 记录头
  * @param  payload: 文本（不含换行）
- * @note   任意任务调用；格式化缓冲在调用方栈上（kLogLineMax 字节），cli::out_write 内部加锁。
+ * @note   任意任务调用；格式化缓冲在调用方栈上（kLogLineMax 字节），cli::outWrite 内部加锁。
  */
 // NOLINTNEXTLINE(misc-const-correctness): LogSinkFn 固定为 void *ctx
-void direct_log_sink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
+void directLogSink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
 {
     static_cast<void>(ctx);
     std::array<char, fw::kLogLineMax> line{};
@@ -42,10 +42,10 @@ void direct_log_sink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_
 namespace app {
 
 // NOLINTNEXTLINE(misc-const-correctness): cli::Handler 的固定 ABI 要求 void*，gate 本身只读。
-int gated_command(void *ctx, int argc, char **argv) noexcept
+int gatedCommand(void *ctx, int argc, char **argv) noexcept
 {
     const auto &gate = *static_cast<const GatedCommand *>(ctx); // ctx 只指向组合根的静态命令 gate。
-    const auto phase = app_context().boot_phase.load(std::memory_order_acquire);
+    const auto phase = appContext().bootPhase.load(std::memory_order_acquire);
     if ((phase == BootPhase::kStarting) || (phase == BootPhase::kStopping)) {
         return cli::fail("unavailable: booting");
     }
@@ -55,19 +55,19 @@ int gated_command(void *ctx, int argc, char **argv) noexcept
     return gate.handler(gate.ctx, argc, argv);
 }
 
-void set_console_only() noexcept
+void setConsoleOnly() noexcept
 {
-    app_context().boot_phase.store(BootPhase::kConsoleOnly, std::memory_order_release);
+    appContext().bootPhase.store(BootPhase::kConsoleOnly, std::memory_order_release);
 }
 
 #if defined(ESP_PLATFORM)
-bool install_direct_log() noexcept
+bool installDirectLog() noexcept
 {
-    // 早于控制台 UART 重装：此前 cli::out_write 走 stdout（IDF 默认 UART0 VFS），之后走 UART 驱动，行格式不变。
-    return fw::logInstallDirect(&direct_log_sink, nullptr, &rtos::nowMs) == fw::Result::kOk;
+    // 早于控制台 UART 重装：此前 cli::outWrite 走 stdout（IDF 默认 UART0 VFS），之后走 UART 驱动，行格式不变。
+    return fw::logInstallDirect(&directLogSink, nullptr, &rtos::nowMs) == fw::Result::kOk;
 }
 
-bool init_console() noexcept
+bool initConsole() noexcept
 {
     constexpr const char *kConsolePrompt = "console> ";
     struct VerbGroupDef {
@@ -76,19 +76,19 @@ bool init_console() noexcept
         std::span<const cli::Verb> verbs;
     };
 
-    const std::array cmd_tables{
-        system_cmds(),  link_cmds(), config_cmds(), rtcm_cmds(),
+    const std::array cmdTables{
+        systemCmds(),  linkCmds(), configCmds(), rtcmCmds(),
 #if RTK_GNSS_ENABLED
-        gnss_cmds(),
+        gnssCmds(),
 #endif
 #if FW_TRACE_ENABLED
-        debug_cmds(),
+        debugCmds(),
 #endif
-        factory_cmds(),
+        factoryCmds(),
     };
     // 命令表地址在 init 后不可变；handler 经 phase 原子门控。输出通道先于业务堆分配建立，REPL 到启动末尾才放行。
     size_t used = 0U;
-    for (const auto table : cmd_tables) {
+    for (const auto table : cmdTables) {
         for (const auto &command : table) {
             if (used >= s_gated_commands.size()) {
                 return false;
@@ -98,7 +98,7 @@ bool init_console() noexcept
                                      name == "status" || name == "log" || name == "sys" ||
                                          name == "config"};
             s_gated_commands[used] = command;
-            s_gated_commands[used].handler = &gated_command;
+            s_gated_commands[used].handler = &gatedCommand;
             s_gated_commands[used].ctx = &s_command_gates[used];
             ++used;
         }
@@ -109,30 +109,30 @@ bool init_console() noexcept
     }
     // 动词表与命令表不是一一对应（system 命令表提供 status/log/sys 三组，link/config 没有动词组），
     // 因此保持两张清单，避免 X-macro 编码出虚假的对应关系。
-    const std::array verb_groups{
-        VerbGroupDef{"status", "system and link status (default overview)", status_verbs()},
-        VerbGroupDef{"log", "runtime IDF log level", log_verbs()},
-        VerbGroupDef{"sys", "system info, heap, mem, tasks, boot and reboot", sys_verbs()},
-        VerbGroupDef{"rtcm", "RTCM forwarding stats and reset", rtcm_verbs()},
+    const std::array verbGroups{
+        VerbGroupDef{"status", "system and link status (default overview)", statusVerbs()},
+        VerbGroupDef{"log", "runtime IDF log level", logVerbs()},
+        VerbGroupDef{"sys", "system info, heap, mem, tasks, boot and reboot", sysVerbs()},
+        VerbGroupDef{"rtcm", "RTCM forwarding stats and reset", rtcmVerbs()},
 #if RTK_GNSS_ENABLED
-        VerbGroupDef{"gnss", "GNSS receiver control and telemetry", gnss_verbs()},
+        VerbGroupDef{"gnss", "GNSS receiver control and telemetry", gnssVerbs()},
 #endif
 #if FW_TRACE_ENABLED
-        VerbGroupDef{"debug", "trace categories, report and NVS", debug_verbs()},
+        VerbGroupDef{"debug", "trace categories, report and NVS", debugVerbs()},
 #endif
-        VerbGroupDef{"factory", "production settings (hidden, needs unlock)", factory_verbs()},
+        VerbGroupDef{"factory", "production settings (hidden, needs unlock)", factoryVerbs()},
     };
     /* 必须在 init 之前登记所有动词表，供 help / help <group> 展示。 */
-    for (const auto &group : verb_groups) {
-        const esp_err_t verbs_err = cli::addVerbs(group.name, group.summary, group.verbs);
-        if (verbs_err != ESP_OK) {
-            FW_LOGE(fw::TraceCat::kSys, "console verbs failed: %s", esp_err_to_name(verbs_err));
+    for (const auto &group : verbGroups) {
+        const esp_err_t verbsErr = cli::addVerbs(group.name, group.summary, group.verbs);
+        if (verbsErr != ESP_OK) {
+            FW_LOGE(fw::TraceCat::kSys, "console verbs failed: %s", esp_err_to_name(verbsErr));
             return false;
         }
     }
-    const esp_err_t console_err = cli::init(kConsolePrompt);
-    if (console_err != ESP_OK) {
-        FW_LOGE(fw::TraceCat::kSys, "console init failed: %s", esp_err_to_name(console_err));
+    const esp_err_t consoleErr = cli::init(kConsolePrompt);
+    if (consoleErr != ESP_OK) {
+        FW_LOGE(fw::TraceCat::kSys, "console init failed: %s", esp_err_to_name(consoleErr));
         return false;
     }
     // 蓝牙控制器与 PHY 的 IDF 启动 INFO 已由 "Bluetooth online" 摘要行覆盖；需要时可用 `log` 命令调回。
@@ -143,7 +143,7 @@ bool init_console() noexcept
     return true;
 }
 
-void run_console() noexcept
+void runConsole() noexcept
 {
     // init 失败（降级路径）时 run 返回 INVALID_STATE：没有可用控制台，只能记录。
     const esp_err_t err = cli::run();

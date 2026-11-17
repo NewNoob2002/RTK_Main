@@ -25,7 +25,7 @@ public:
     StaticStreamBuffer &operator=(StaticStreamBuffer &&) = delete;
     ~StaticStreamBuffer() = default;
 
-    /** 创建静态 StreamBuffer；trigger_level 必须在 1..N。 */
+    /** 创建静态 StreamBuffer；triggerLevel 必须在 1..N。 */
     [[nodiscard]] fw::Status init(size_t triggerLevel) noexcept
     {
         if (handle_ != nullptr) {

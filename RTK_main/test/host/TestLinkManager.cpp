@@ -32,15 +32,15 @@ extern "C" void setUp(void)
 }
 extern "C" void tearDown(void) {}
 
-static void init_with_alarm(Policy policy)
+static void initWithAlarm(Policy policy)
 {
     const std::array<BtAddr, 1> wl = {kAlarmAddr};
     s_mgr.init(policy, wl);
 }
 
-static void test_whitelisted_is_alarm_unknown_is_phone()
+static void testWhitelistedIsAlarmUnknownIsPhone()
 {
-    init_with_alarm(Policy::kConcurrent);
+    initWithAlarm(Policy::kConcurrent);
     TEST_ASSERT_TRUE(Role::kPhone == s_mgr.onOpen(kPhone, kPhoneAddr, 100, s_act));
     TEST_ASSERT_EQUAL_UINT8(0, s_act.count);
     TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.onOpen(kAlarm, kAlarmAddr, 200, s_act));
@@ -52,7 +52,7 @@ static void test_whitelisted_is_alarm_unknown_is_phone()
     TEST_ASSERT_FALSE(s_mgr.hasRole(Role::kPending));
 }
 
-static void test_second_phone_rejected_without_pairing()
+static void testSecondPhoneRejectedWithoutPairing()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
@@ -62,9 +62,9 @@ static void test_second_phone_rejected_without_pairing()
     TEST_ASSERT_TRUE(Role::kNone == s_mgr.role(kOther));
 }
 
-static void test_duplicate_handle_and_full_table_rejected()
+static void testDuplicateHandleAndFullTableRejected()
 {
-    init_with_alarm(Policy::kConcurrent);
+    initWithAlarm(Policy::kConcurrent);
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
     TEST_ASSERT_TRUE(Role::kNone == s_mgr.onOpen(kPhone, kPhoneAddr, 1, s_act));
     static_cast<void>(s_mgr.onOpen(kAlarm, kAlarmAddr, 2, s_act));
@@ -73,9 +73,9 @@ static void test_duplicate_handle_and_full_table_rejected()
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }
 
-static void test_preempt_phone_kicks_alarm()
+static void testPreemptPhoneKicksAlarm()
 {
-    init_with_alarm(Policy::kPhonePreempt);
+    initWithAlarm(Policy::kPhonePreempt);
     TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.onOpen(kAlarm, kAlarmAddr, 0, s_act));
     TEST_ASSERT_TRUE(Role::kPhone == s_mgr.onOpen(kPhone, kPhoneAddr, 5, s_act));
     TEST_ASSERT_EQUAL_UINT8(1, s_act.count);
@@ -83,9 +83,9 @@ static void test_preempt_phone_kicks_alarm()
     TEST_ASSERT_TRUE(Role::kNone == s_mgr.role(kAlarm)); // 立即移除
 }
 
-static void test_preempt_alarm_rejected_while_phone()
+static void testPreemptAlarmRejectedWhilePhone()
 {
-    init_with_alarm(Policy::kPhonePreempt);
+    initWithAlarm(Policy::kPhonePreempt);
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
     TEST_ASSERT_TRUE(Role::kNone == s_mgr.onOpen(kAlarm, kAlarmAddr, 5, s_act));
     TEST_ASSERT_EQUAL_UINT8(1, s_act.count);
@@ -93,7 +93,7 @@ static void test_preempt_alarm_rejected_while_phone()
     TEST_ASSERT_TRUE(Policy::kPhonePreempt == s_mgr.policy());
 }
 
-static void test_close_frees_slot()
+static void testCloseFreesSlot()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
@@ -103,10 +103,10 @@ static void test_close_frees_slot()
     TEST_ASSERT_TRUE(Role::kPhone == s_mgr.onOpen(kOther, kOtherAddr, 1, s_act));
 }
 
-static void test_alarm_rx_timeout_with_wrap()
+static void testAlarmRxTimeoutWithWrap()
 {
     const uint32_t t0 = 0xFFFFF000U; // 跨越 32 位回绕
-    init_with_alarm(Policy::kConcurrent);
+    initWithAlarm(Policy::kConcurrent);
     static_cast<void>(s_mgr.onOpen(kAlarm, kAlarmAddr, t0, s_act));
     TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.onFrame(kAlarm, 0x03, 0x0041, t0 + 1000U, s_act));
     s_mgr.tick(t0 + 1000U + core::kAlarmRxTimeoutMs, s_act);
@@ -117,7 +117,7 @@ static void test_alarm_rx_timeout_with_wrap()
     TEST_ASSERT_TRUE(Role::kNone == s_mgr.role(kAlarm));
 }
 
-static void test_phone_has_no_rx_timeout()
+static void testPhoneHasNoRxTimeout()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
@@ -126,7 +126,7 @@ static void test_phone_has_no_rx_timeout()
     TEST_ASSERT_TRUE(Role::kPhone == s_mgr.role(kPhone));
 }
 
-static void test_pairing_promotes_phone_role_to_alarm()
+static void testPairingPromotesPhoneRoleToAlarm()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.onOpen(kAlarm, kAlarmAddr, 0, s_act));
@@ -141,7 +141,7 @@ static void test_pairing_promotes_phone_role_to_alarm()
     TEST_ASSERT_EQUAL_UINT(1, s_mgr.whitelist().size()); // 不重复加入
 }
 
-static void test_pending_when_phone_online_and_pairing()
+static void testPendingWhenPhoneOnlineAndPairing()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
@@ -151,7 +151,7 @@ static void test_pending_when_phone_online_and_pairing()
                      s_mgr.onFrame(kAlarm, core::kHelloSender, core::kHelloMsgId, 200, s_act));
 }
 
-static void test_pending_non_hello_is_disconnected()
+static void testPendingNonHelloIsDisconnected()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
@@ -163,7 +163,7 @@ static void test_pending_non_hello_is_disconnected()
     TEST_ASSERT_TRUE(Role::kNone == s_mgr.role(kOther));
 }
 
-static void test_pending_timeout()
+static void testPendingTimeout()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
@@ -176,7 +176,7 @@ static void test_pending_timeout()
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }
 
-static void test_hello_without_pairing_is_unauthorized()
+static void testHelloWithoutPairingIsUnauthorized()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.onOpen(kOther, kOtherAddr, 0, s_act));
@@ -186,7 +186,7 @@ static void test_hello_without_pairing_is_unauthorized()
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }
 
-static void test_pair_window_expires()
+static void testPairWindowExpires()
 {
     s_mgr.init(Policy::kConcurrent, {});
     s_mgr.pairOpen(500);
@@ -196,7 +196,7 @@ static void test_pair_window_expires()
     TEST_ASSERT_FALSE(s_mgr.isPairing());
 }
 
-static void test_whitelist_full_rejects_new_alarm()
+static void testWhitelistFullRejectsNewAlarm()
 {
     std::array<BtAddr, core::kMaxAlarms> full{};
     for (size_t i = 0; i < full.size(); ++i) {
@@ -211,7 +211,7 @@ static void test_whitelist_full_rejects_new_alarm()
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }
 
-static void test_init_truncates_and_clear()
+static void testInitTruncatesAndClear()
 {
     std::array<BtAddr, core::kMaxAlarms + 2> many{};
     for (size_t i = 0; i < many.size(); ++i) {
@@ -223,9 +223,9 @@ static void test_init_truncates_and_clear()
     TEST_ASSERT_EQUAL_UINT(0, s_mgr.whitelist().size());
 }
 
-static void test_handles_and_clear_keeps_roles()
+static void testHandlesAndClearKeepsRoles()
 {
-    init_with_alarm(Policy::kConcurrent);
+    initWithAlarm(Policy::kConcurrent);
     static_cast<void>(s_mgr.onOpen(kPhone, kPhoneAddr, 0, s_act));
     static_cast<void>(s_mgr.onOpen(kAlarm, kAlarmAddr, 0, s_act));
     std::array<SessionHandle, core::kMaxSessions> out{};
@@ -236,10 +236,10 @@ static void test_handles_and_clear_keeps_roles()
     TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.role(kAlarm));
 }
 
-static void test_whitelist_add_remove_single()
+static void testWhitelistAddRemoveSingle()
 {
     using core::WhitelistEdit;
-    init_with_alarm(Policy::kConcurrent);
+    initWithAlarm(Policy::kConcurrent);
     TEST_ASSERT_TRUE(WhitelistEdit::kUnchanged == s_mgr.whitelistAdd(kAlarmAddr)); // 已存在
     TEST_ASSERT_TRUE(WhitelistEdit::kDone == s_mgr.whitelistAdd(kOtherAddr));
     TEST_ASSERT_EQUAL_UINT(2, s_mgr.whitelist().size());
@@ -258,7 +258,7 @@ static void test_whitelist_add_remove_single()
     TEST_ASSERT_TRUE(Role::kPhone == s_mgr.onOpen(kAlarm, kAlarmAddr, 10, s_act));
 }
 
-static void test_whitelist_add_full()
+static void testWhitelistAddFull()
 {
     std::array<BtAddr, core::kMaxAlarms> full{};
     for (size_t i = 0; i < full.size(); ++i) {
@@ -275,24 +275,24 @@ static void test_whitelist_add_full()
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_whitelisted_is_alarm_unknown_is_phone);
-    RUN_TEST(test_whitelist_add_remove_single);
-    RUN_TEST(test_whitelist_add_full);
-    RUN_TEST(test_second_phone_rejected_without_pairing);
-    RUN_TEST(test_duplicate_handle_and_full_table_rejected);
-    RUN_TEST(test_preempt_phone_kicks_alarm);
-    RUN_TEST(test_preempt_alarm_rejected_while_phone);
-    RUN_TEST(test_close_frees_slot);
-    RUN_TEST(test_alarm_rx_timeout_with_wrap);
-    RUN_TEST(test_phone_has_no_rx_timeout);
-    RUN_TEST(test_pairing_promotes_phone_role_to_alarm);
-    RUN_TEST(test_pending_when_phone_online_and_pairing);
-    RUN_TEST(test_pending_non_hello_is_disconnected);
-    RUN_TEST(test_pending_timeout);
-    RUN_TEST(test_hello_without_pairing_is_unauthorized);
-    RUN_TEST(test_pair_window_expires);
-    RUN_TEST(test_whitelist_full_rejects_new_alarm);
-    RUN_TEST(test_init_truncates_and_clear);
-    RUN_TEST(test_handles_and_clear_keeps_roles);
+    RUN_TEST(testWhitelistedIsAlarmUnknownIsPhone);
+    RUN_TEST(testWhitelistAddRemoveSingle);
+    RUN_TEST(testWhitelistAddFull);
+    RUN_TEST(testSecondPhoneRejectedWithoutPairing);
+    RUN_TEST(testDuplicateHandleAndFullTableRejected);
+    RUN_TEST(testPreemptPhoneKicksAlarm);
+    RUN_TEST(testPreemptAlarmRejectedWhilePhone);
+    RUN_TEST(testCloseFreesSlot);
+    RUN_TEST(testAlarmRxTimeoutWithWrap);
+    RUN_TEST(testPhoneHasNoRxTimeout);
+    RUN_TEST(testPairingPromotesPhoneRoleToAlarm);
+    RUN_TEST(testPendingWhenPhoneOnlineAndPairing);
+    RUN_TEST(testPendingNonHelloIsDisconnected);
+    RUN_TEST(testPendingTimeout);
+    RUN_TEST(testHelloWithoutPairingIsUnauthorized);
+    RUN_TEST(testPairWindowExpires);
+    RUN_TEST(testWhitelistFullRejectsNewAlarm);
+    RUN_TEST(testInitTruncatesAndClear);
+    RUN_TEST(testHandlesAndClearKeepsRoles);
     return UNITY_END();
 }

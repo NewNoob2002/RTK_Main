@@ -1,6 +1,6 @@
 // fw::tlog / fw::LogRing host 单元测试（ADR-0009 §2.11）：install 校验与唯一性、类别掩码与十六进制掩码
 // 两级开关、文本记录字段与尾部换行剥离、超长截断加 "..."、hex 记录 len/total、环满丢新、跨越存储末尾回绕、
-// peek_time 次序、pop 复制截断、take_dropped 增量、注入锁成对使用、sink 适配器。
+// peekTime 次序、pop 复制截断、takeDropped 增量、注入锁成对使用、sink 适配器。
 
 #include <array>
 #include <cstddef>
@@ -23,7 +23,7 @@ namespace {
 
 constexpr size_t kRingBytes =
     fw::kLogHeaderBytes + fw::kLogTextMax; // 172：恰好放 3 条 40 字节 payload 记录
-// 全局环要能容纳一条最长 hex 记录（12 + 256 = 268），否则 tlog_hex 的记录会被丢弃。
+// 全局环要能容纳一条最长 hex 记录（12 + 256 = 268），否则 tlogHex 的记录会被丢弃。
 constexpr size_t kGlobalRingBytes = fw::kLogHeaderBytes + fw::kLogHexMax;
 constexpr size_t kPayloadLen = 40U;
 constexpr size_t kRecordBytes = fw::kLogHeaderBytes + kPayloadLen;
@@ -39,35 +39,35 @@ fw::LogRing s_ring{};
 uint32_t s_clock_value = 0U;
 uint32_t s_trace_calls = 0U;
 
-uint32_t test_clock() noexcept
+uint32_t testClock() noexcept
 {
     s_clock_value += kClockStep;
     return s_clock_value;
 }
 
-void trace_sink(void * /*ctx*/, const fw::TraceEvent & /*ev*/) noexcept
+void traceSink(void * /*ctx*/, const fw::TraceEvent & /*ev*/) noexcept
 {
     ++s_trace_calls;
 }
 
 struct RingLockSpy {
-    uint32_t lock_calls = 0U;
-    uint32_t unlock_calls = 0U;
+    uint32_t lockCalls = 0U;
+    uint32_t unlockCalls = 0U;
     int32_t depth = 0;
     bool underflow = false;
 };
 
-void spy_lock(void *ctx) noexcept
+void spyLock(void *ctx) noexcept
 {
     auto *spy = static_cast<RingLockSpy *>(ctx);
-    ++spy->lock_calls;
+    ++spy->lockCalls;
     ++spy->depth;
 }
 
-void spy_unlock(void *ctx) noexcept
+void spyUnlock(void *ctx) noexcept
 {
     auto *spy = static_cast<RingLockSpy *>(ctx);
-    ++spy->unlock_calls;
+    ++spy->unlockCalls;
     --spy->depth;
     if (spy->depth < 0) {
         spy->underflow = true;
@@ -75,7 +75,7 @@ void spy_unlock(void *ctx) noexcept
 }
 
 // 每个用例开始前把全局环里的残留记录读空，保持用例之间互不影响。
-void drain_ring() noexcept
+void drainRing() noexcept
 {
     fw::LogHeader hdr{};
     std::array<uint8_t, fw::kLogHexMax> out{};
@@ -84,7 +84,7 @@ void drain_ring() noexcept
     }
 }
 
-std::array<uint8_t, kPayloadLen> make_payload(uint8_t seed) noexcept
+std::array<uint8_t, kPayloadLen> makePayload(uint8_t seed) noexcept
 {
     std::array<uint8_t, kPayloadLen> payload{};
     for (size_t i = 0U; i < payload.size(); ++i) {
@@ -94,10 +94,10 @@ std::array<uint8_t, kPayloadLen> make_payload(uint8_t seed) noexcept
     return payload;
 }
 
-fw::LogHeader make_header(uint32_t t_ms, fw::LogKind kind = fw::LogKind::kText) noexcept
+fw::LogHeader makeHeader(uint32_t tMs, fw::LogKind kind = fw::LogKind::kText) noexcept
 {
     fw::LogHeader hdr{};
-    hdr.tMs = t_ms;
+    hdr.tMs = tMs;
     hdr.cat = fw::TraceCat::kLink;
     hdr.kind = kind;
     // kPayloadLen（40）≤ uint16 上限，窄化安全。
@@ -106,7 +106,7 @@ fw::LogHeader make_header(uint32_t t_ms, fw::LogKind kind = fw::LogKind::kText) 
     return hdr;
 }
 
-void test_log_install_validation_and_once()
+void testLogInstallValidationAndOnce()
 {
     // 未安装 trace 时没有可用的时钟源，文本记录的时间戳无从取得。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
@@ -115,7 +115,7 @@ void test_log_install_validation_and_once()
                             static_cast<uint8_t>(fw::logInstall(nullptr, &s_ring)));
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(fw::Result::kOk),
-        static_cast<uint8_t>(fw::traceInstall(&trace_sink, nullptr, &test_clock)));
+        static_cast<uint8_t>(fw::traceInstall(&traceSink, nullptr, &testClock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(fw::logInstall(&fw::LogRing::sink, &s_ring)));
     // 重复安装：sink 与 ctx 只能安装一次，避免运行期两条通道写不同环。
@@ -125,7 +125,7 @@ void test_log_install_validation_and_once()
     TEST_ASSERT_EQUAL_UINT32(0U, s_trace_calls);
 }
 
-void test_tlog_respects_category_mask()
+void testTlogRespectsCategoryMask()
 {
     // 类别日志级别低于 I 时 tlog 连格式化都不做，环里不应出现记录（ADR-0009 §2.12：与追踪掩码无关）。
     fw::logSetCatLevel(fw::TraceCat::kGnss, fw::LogLevel::kWarn);
@@ -139,9 +139,9 @@ void test_tlog_respects_category_mask()
     TEST_ASSERT_EQUAL_UINT32(0U, s_clock_value);
 }
 
-void test_tlog_text_record_fields()
+void testTlogTextRecordFields()
 {
-    drain_ring();
+    drainRing();
     fw::traceSetMask(fw::traceBit(fw::TraceCat::kGnss));
     const uint32_t before = s_clock_value;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
@@ -165,13 +165,13 @@ void test_tlog_text_record_fields()
     TEST_ASSERT_EQUAL_UINT32(0U, s_ring.takeDropped());
 }
 
-void test_tlog_truncates_with_ellipsis()
+void testTlogTruncatesWithEllipsis()
 {
-    drain_ring();
-    std::array<char, kLongTextLen + 1U> long_fmt{};
-    std::memset(long_fmt.data(), 'x', kLongTextLen);
+    drainRing();
+    std::array<char, kLongTextLen + 1U> longFmt{};
+    std::memset(longFmt.data(), 'x', kLongTextLen);
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-    fw::tlog(fw::TraceCat::kGnss, "%s", long_fmt.data());
+    fw::tlog(fw::TraceCat::kGnss, "%s", longFmt.data());
 
     fw::LogHeader hdr{};
     std::array<uint8_t, fw::kLogTextMax> out{};
@@ -186,9 +186,9 @@ void test_tlog_truncates_with_ellipsis()
     TEST_ASSERT_EQUAL_CHAR('.', static_cast<char>(out[copied - 3U]));
 }
 
-void test_tlog_hex_two_level_mask()
+void testTlogHexTwoLevelMask()
 {
-    drain_ring();
+    drainRing();
     std::array<uint8_t, kHexBytes> bytes{};
     for (size_t i = 0U; i < bytes.size(); ++i) {
         bytes[i] = static_cast<uint8_t>(i);
@@ -196,9 +196,9 @@ void test_tlog_hex_two_level_mask()
     // 级别一：类别 D 级、十六进制关 → 不写记录。
     TEST_ASSERT_TRUE(fw::logEnabled(fw::LogLevel::kDebug, fw::TraceCat::kGnss));
     TEST_ASSERT_FALSE(fw::logHexOn(fw::TraceCat::kGnss));
-    const uint32_t pushed_before = s_ring.stats().pushed;
+    const uint32_t pushedBefore = s_ring.stats().pushed;
     fw::tlogHex(fw::TraceCat::kGnss, bytes);
-    TEST_ASSERT_EQUAL_UINT32(pushed_before, s_ring.stats().pushed);
+    TEST_ASSERT_EQUAL_UINT32(pushedBefore, s_ring.stats().pushed);
 
     // 级别二：十六进制掩码打开 → 写记录，只保留前 kLogHexMax 字节，total 保留原始长度。
     fw::logSetHexMask(fw::traceBit(fw::TraceCat::kGnss) | 0x80000000U);
@@ -222,13 +222,13 @@ void test_tlog_hex_two_level_mask()
     // 类别降到 I 级后即使十六进制掩码还在，也不再转储。
     fw::logSetCatLevel(fw::TraceCat::kGnss, fw::LogLevel::kInfo);
     fw::tlogHex(fw::TraceCat::kGnss, bytes);
-    TEST_ASSERT_EQUAL_UINT32(pushed_before + 1U, s_ring.stats().pushed);
+    TEST_ASSERT_EQUAL_UINT32(pushedBefore + 1U, s_ring.stats().pushed);
     // 越界类别不得崩溃。
     TEST_ASSERT_FALSE(fw::logHexOn(fw::TraceCat::kCount));
     fw::logSetHexMask(0U);
 }
 
-void test_log_ring_init_validation()
+void testLogRingInitValidation()
 {
     std::array<uint8_t, kRingBytes> storage{};
     fw::LogRing ring{};
@@ -238,7 +238,7 @@ void test_log_ring_init_validation()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
                             static_cast<uint8_t>(ring.init(tiny, fw::kNoLock)));
     fw::LockOps half{};
-    half.lock = &spy_lock;
+    half.lock = &spyLock;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
                             static_cast<uint8_t>(ring.init(storage, half)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
@@ -248,30 +248,30 @@ void test_log_ring_init_validation()
     TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(ring.used()));
     // 未 init 的环一律返回 false / 0，不写调用方内存。
     fw::LogRing fresh{};
-    const auto payload = make_payload(1U);
-    TEST_ASSERT_FALSE(fresh.push(make_header(1U), payload));
-    uint32_t t_ms = 0U;
-    TEST_ASSERT_FALSE(fresh.peekTime(t_ms));
+    const auto payload = makePayload(1U);
+    TEST_ASSERT_FALSE(fresh.push(makeHeader(1U), payload));
+    uint32_t tMs = 0U;
+    TEST_ASSERT_FALSE(fresh.peekTime(tMs));
 }
 
-void test_log_ring_push_validation()
+void testLogRingPushValidation()
 {
     fw::LogRing ring{};
     static std::array<uint8_t, kRingBytes> storage{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
-    const auto payload = make_payload(2U);
+    const auto payload = makePayload(2U);
     // payload 长度与 hdr.len 不一致：拒绝，且不计 dropped（调用方 bug 不是拥塞）。
-    fw::LogHeader bad = make_header(1U);
+    fw::LogHeader bad = makeHeader(1U);
     bad.len = static_cast<uint16_t>(kPayloadLen - 1U);
     TEST_ASSERT_FALSE(ring.push(bad, payload));
     TEST_ASSERT_EQUAL_UINT32(0U, ring.stats().dropped);
     // 空 ctx 的 sink 什么也不做，不得崩溃。
-    fw::LogRing::sink(nullptr, make_header(1U), payload);
+    fw::LogRing::sink(nullptr, makeHeader(1U), payload);
     TEST_ASSERT_EQUAL_UINT32(0U, ring.stats().pushed);
 }
 
-void test_log_ring_full_drops_new_and_keeps_order()
+void testLogRingFullDropsNewAndKeepsOrder()
 {
     fw::LogRing ring{};
     static std::array<uint8_t, kRingBytes> storage{};
@@ -279,11 +279,11 @@ void test_log_ring_full_drops_new_and_keeps_order()
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
     // 172 字节恰好放 3 条 52 字节记录，第 4 条丢新。
     for (uint32_t i = 0U; i < kRecordsFit; ++i) {
-        const auto payload = make_payload(static_cast<uint8_t>(i));
-        TEST_ASSERT_TRUE(ring.push(make_header(i + 1U), payload));
+        const auto payload = makePayload(static_cast<uint8_t>(i));
+        TEST_ASSERT_TRUE(ring.push(makeHeader(i + 1U), payload));
     }
-    const auto payload = make_payload(9U);
-    TEST_ASSERT_FALSE(ring.push(make_header(99U), payload));
+    const auto payload = makePayload(9U);
+    TEST_ASSERT_FALSE(ring.push(makeHeader(99U), payload));
     TEST_ASSERT_EQUAL_UINT32(1U, ring.stats().dropped);
     TEST_ASSERT_EQUAL_UINT32(1U, ring.takeDropped());
     TEST_ASSERT_EQUAL_UINT32(0U, ring.takeDropped());
@@ -302,7 +302,7 @@ void test_log_ring_full_drops_new_and_keeps_order()
                              ring.stats().maxUsed);
 }
 
-void test_log_ring_wraps_across_end()
+void testLogRingWrapsAcrossEnd()
 {
     fw::LogRing ring{};
     static std::array<uint8_t, kRingBytes> storage{};
@@ -311,8 +311,8 @@ void test_log_ring_wraps_across_end()
     // 压满 3 条后弹 1 条：head=156、tail=52，下一条会从 156 写 16 字节、再从 0 写 36 字节。
     const std::array<uint8_t, kRecordsFit> seeds{1U, 2U, 7U};
     for (uint32_t i = 0U; i < kRecordsFit; ++i) {
-        const auto payload = make_payload(static_cast<uint8_t>(i));
-        TEST_ASSERT_TRUE(ring.push(make_header(i + 1U), payload));
+        const auto payload = makePayload(static_cast<uint8_t>(i));
+        TEST_ASSERT_TRUE(ring.push(makeHeader(i + 1U), payload));
     }
     fw::LogHeader hdr{};
     std::array<uint8_t, kPayloadLen> out{};
@@ -320,8 +320,8 @@ void test_log_ring_wraps_across_end()
     TEST_ASSERT_TRUE(ring.pop(hdr, out, copied));
     TEST_ASSERT_EQUAL_UINT32(1U, hdr.tMs);
 
-    const auto wrapped = make_payload(7U);
-    TEST_ASSERT_TRUE(ring.push(make_header(4U), wrapped));
+    const auto wrapped = makePayload(7U);
+    TEST_ASSERT_TRUE(ring.push(makeHeader(4U), wrapped));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kRecordsFit * kRecordBytes),
                              static_cast<uint32_t>(ring.used()));
     for (uint32_t i = 0U; i < kRecordsFit; ++i) {
@@ -335,20 +335,20 @@ void test_log_ring_wraps_across_end()
     TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(ring.used()));
 }
 
-void test_log_ring_peek_time_and_truncated_pop()
+void testLogRingPeekTimeAndTruncatedPop()
 {
     fw::LogRing ring{};
     static std::array<uint8_t, kRingBytes> storage{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
-    uint32_t t_ms = 0U;
-    TEST_ASSERT_FALSE(ring.peekTime(t_ms));
+    uint32_t tMs = 0U;
+    TEST_ASSERT_FALSE(ring.peekTime(tMs));
 
-    const auto payload = make_payload(4U);
-    TEST_ASSERT_TRUE(ring.push(make_header(500U), payload));
-    TEST_ASSERT_TRUE(ring.push(make_header(600U), payload));
-    TEST_ASSERT_TRUE(ring.peekTime(t_ms));
-    TEST_ASSERT_EQUAL_UINT32(500U, t_ms);
+    const auto payload = makePayload(4U);
+    TEST_ASSERT_TRUE(ring.push(makeHeader(500U), payload));
+    TEST_ASSERT_TRUE(ring.push(makeHeader(600U), payload));
+    TEST_ASSERT_TRUE(ring.peekTime(tMs));
+    TEST_ASSERT_EQUAL_UINT32(500U, tMs);
 
     // out 缓冲不足时截断复制，但记录整体移除，避免读者卡在一条超长记录上。
     fw::LogHeader hdr{};
@@ -357,25 +357,25 @@ void test_log_ring_peek_time_and_truncated_pop()
     TEST_ASSERT_TRUE(ring.pop(hdr, small, copied));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kPayloadLen), static_cast<uint32_t>(hdr.len));
     TEST_ASSERT_EQUAL_UINT32(4U, static_cast<uint32_t>(copied));
-    TEST_ASSERT_TRUE(ring.peekTime(t_ms));
-    TEST_ASSERT_EQUAL_UINT32(600U, t_ms);
+    TEST_ASSERT_TRUE(ring.peekTime(tMs));
+    TEST_ASSERT_EQUAL_UINT32(600U, tMs);
 }
 
-void test_log_ring_uses_injected_lock()
+void testLogRingUsesInjectedLock()
 {
     RingLockSpy spy{};
     fw::LockOps ops{};
     ops.ctx = &spy;
-    ops.lock = &spy_lock;
-    ops.unlock = &spy_unlock;
+    ops.lock = &spyLock;
+    ops.unlock = &spyUnlock;
     static std::array<uint8_t, kRingBytes> storage{};
     fw::LogRing ring{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, ops)));
-    const auto payload = make_payload(5U);
-    TEST_ASSERT_TRUE(ring.push(make_header(1U), payload));
-    uint32_t t_ms = 0U;
-    TEST_ASSERT_TRUE(ring.peekTime(t_ms));
+    const auto payload = makePayload(5U);
+    TEST_ASSERT_TRUE(ring.push(makeHeader(1U), payload));
+    uint32_t tMs = 0U;
+    TEST_ASSERT_TRUE(ring.peekTime(tMs));
     fw::LogHeader hdr{};
     std::array<uint8_t, kPayloadLen> out{};
     size_t copied = 0U;
@@ -383,14 +383,14 @@ void test_log_ring_uses_injected_lock()
     (void)ring.takeDropped();
     (void)ring.stats();
     (void)ring.used();
-    TEST_ASSERT_EQUAL_UINT32(spy.lock_calls, spy.unlock_calls);
+    TEST_ASSERT_EQUAL_UINT32(spy.lockCalls, spy.unlockCalls);
     TEST_ASSERT_EQUAL_INT32(0, spy.depth);
     TEST_ASSERT_FALSE(spy.underflow);
 }
 
-void test_log_ring_sink_receives_installed_context()
+void testLogRingSinkReceivesInstalledContext()
 {
-    drain_ring();
+    drainRing();
     std::array<uint8_t, 8U> payload{};
     for (size_t i = 0U; i < payload.size(); ++i) {
         payload[i] = static_cast<uint8_t>(i + 1U);
@@ -422,17 +422,17 @@ int main(void)
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(s_ring.init(s_storage, fw::kNoLock)));
     UNITY_BEGIN();
-    RUN_TEST(test_log_install_validation_and_once);
-    RUN_TEST(test_tlog_respects_category_mask);
-    RUN_TEST(test_tlog_text_record_fields);
-    RUN_TEST(test_tlog_truncates_with_ellipsis);
-    RUN_TEST(test_tlog_hex_two_level_mask);
-    RUN_TEST(test_log_ring_init_validation);
-    RUN_TEST(test_log_ring_push_validation);
-    RUN_TEST(test_log_ring_full_drops_new_and_keeps_order);
-    RUN_TEST(test_log_ring_wraps_across_end);
-    RUN_TEST(test_log_ring_peek_time_and_truncated_pop);
-    RUN_TEST(test_log_ring_uses_injected_lock);
-    RUN_TEST(test_log_ring_sink_receives_installed_context);
+    RUN_TEST(testLogInstallValidationAndOnce);
+    RUN_TEST(testTlogRespectsCategoryMask);
+    RUN_TEST(testTlogTextRecordFields);
+    RUN_TEST(testTlogTruncatesWithEllipsis);
+    RUN_TEST(testTlogHexTwoLevelMask);
+    RUN_TEST(testLogRingInitValidation);
+    RUN_TEST(testLogRingPushValidation);
+    RUN_TEST(testLogRingFullDropsNewAndKeepsOrder);
+    RUN_TEST(testLogRingWrapsAcrossEnd);
+    RUN_TEST(testLogRingPeekTimeAndTruncatedPop);
+    RUN_TEST(testLogRingUsesInjectedLock);
+    RUN_TEST(testLogRingSinkReceivesInstalledContext);
     return UNITY_END();
 }

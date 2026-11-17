@@ -30,7 +30,7 @@ void outPrintf(const char *fmt, ...) noexcept __attribute__((format(printf, 1, 2
 void outVprintf(const char *fmt, va_list args) noexcept;
 
 /**
- * ESP_LOG 钩子用：同 out_vprintf，但同一任务重入（输出端内部又打日志）时不碰缓冲，返回 -1，
+ * ESP_LOG 钩子用：同 outVprintf，但同一任务重入（输出端内部又打日志）时不碰缓冲，返回 -1，
  * 调用方此时应回落到原来的 vprintf。成功返回格式化后的字符数。
  */
 int outLogVprintf(const char *fmt, va_list args) noexcept;

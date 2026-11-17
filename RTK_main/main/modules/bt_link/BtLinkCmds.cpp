@@ -18,29 +18,29 @@ namespace app {
 
 namespace {
 
-int cmd_bt(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdBt(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: bt");
     }
-    const auto &data = app_context().data;
+    const auto &data = appContext().data;
     const auto sessions = data.sessions.read();
-    const auto link = data.link_status.read();
-    const auto sys = data.system_status.read();
+    const auto link = data.linkStatus.read();
+    const auto sys = data.systemStatus.read();
 
     cli::printSection("bt");
-    cli::printKv("stack", "%s", sys.bt_ready ? "ready" : "down");
-    cli::printKv("link", "%s", sys.link_running ? "running" : "stopped");
-    cli::printKv("name", "%s", sys.device_name.data());
+    cli::printKv("stack", "%s", sys.btReady ? "ready" : "down");
+    cli::printKv("link", "%s", sys.linkRunning ? "running" : "stopped");
+    cli::printKv("name", "%s", sys.deviceName.data());
     // 会话数上限为 kMaxSessions，转换为 unsigned 无损。
     cli::printKv("sessions", "%u / %u", static_cast<unsigned>(sessions.count),
                  static_cast<unsigned>(kMaxSessions));
-    std::array<char, kMacStrBuf> mac_buf{};
+    std::array<char, kMacStrBuf> macBuf{};
     for (size_t idx = 0U; idx < sessions.count; ++idx) {
         const SessionSnapshot &session = sessions.entries[idx];
-        format_mac(session.addr, mac_buf);
-        cli::printKv("session", "%-6s %s (handle 0x%08" PRIx32 ")", role_name(session.role),
-                     mac_buf.data(), session.handle);
+        formatMac(session.addr, macBuf);
+        cli::printKv("session", "%-6s %s (handle 0x%08" PRIx32 ")", roleName(session.role),
+                     macBuf.data(), session.handle);
     }
     if (link.pairing) {
         // 配对窗口只由 factory pair 或手机 0x44 打开；这里只提示状态。
@@ -49,13 +49,13 @@ int cmd_bt(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-int cmd_alarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdAlarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: alarm");
     }
-    const auto &data = app_context().data;
-    const auto alarm = data.alarm_state.read();
+    const auto &data = appContext().data;
+    const auto alarm = data.alarmState.read();
     const auto heartbeat = data.heartbeat.read();
 
     cli::printSection("alarm");
@@ -76,13 +76,13 @@ int cmd_alarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 
 // 只保留只读状态命令（ADR-0009 §2.10）；改链路状态的动作都在隐藏的 factory 命令集里。
 constexpr std::array<cli::Cmd, 2U> kLinkCmds{{
-    {"bt", "bt: BT stack state and current sessions", nullptr, cmd_bt, nullptr, false},
-    {"alarm", "alarm: alarm state and latest heartbeat", nullptr, cmd_alarm, nullptr, false},
+    {"bt", "bt: BT stack state and current sessions", nullptr, cmdBt, nullptr, false},
+    {"alarm", "alarm: alarm state and latest heartbeat", nullptr, cmdAlarm, nullptr, false},
 }};
 
 } // namespace
 
-std::span<const cli::Cmd> link_cmds() noexcept
+std::span<const cli::Cmd> linkCmds() noexcept
 {
     return kLinkCmds;
 }

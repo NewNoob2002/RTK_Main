@@ -22,10 +22,10 @@ struct StoreGroup {
     std::string_view name;  // 例如 "gnss.config"
     std::string_view title; // 一行说明
     std::span<const fw::StoreKey> keys;
-    StoreValueName value_name = nullptr; // 可空：数值键不需要显示名
+    StoreValueName valueName = nullptr; // 可空：数值键不需要显示名
 };
 
 /** 全部类别，按显示顺序排列。 */
-[[nodiscard]] std::span<const StoreGroup> store_catalog() noexcept;
+[[nodiscard]] std::span<const StoreGroup> storeCatalog() noexcept;
 
 } // namespace app

@@ -1,5 +1,5 @@
 // 控制台组件（ADR-0007 §3.3 / ADR-0009 §2.4-§2.5）：命令表与动词表登记、REPL 启动、统一回执、自定义 help、
-// UART TX 环形缓冲。add()/add_verbs()/start() 只在启动任务调用一次；handler 与 trampoline 在 console REPL
+// UART TX 环形缓冲。add()/addVerbs()/start() 只在启动任务调用一次；handler 与 trampoline 在 console REPL
 // 任务中串行执行，可阻塞，非 ISR 安全。本组件自身不做堆分配（命令表只保存指针），REPL 的堆由 IDF 分配。
 
 #include "cli/Console.hpp"
@@ -60,7 +60,7 @@ struct Entry {
 std::array<Entry, kMaxCmds> s_entries{};
 size_t s_entry_count = 0U;
 Entry s_help_entry{};
-bool s_started = false; // init() 成功后置位：命令表封存，add/add_verbs 不再接受
+bool s_started = false; // init() 成功后置位：命令表封存，add/addVerbs 不再接受
 esp_console_repl_t *s_repl =
     nullptr; // init() 创建、run() 启动；REPL 任务在 run 之前阻塞在任务通知上
 bool s_running = false;
@@ -152,7 +152,7 @@ void printGroupList() noexcept
 }
 
 // help 由本组件实现：无参列出各组，带参显示该组用法。
-// esp_console_common_init() 已注册 IDF 自带的 help，register_help() 先注销再登记本实现。
+// esp_console_common_init() 已注册 IDF 自带的 help，registerHelp() 先注销再登记本实现。
 int cmdHelp(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 0) || (argv == nullptr)) {

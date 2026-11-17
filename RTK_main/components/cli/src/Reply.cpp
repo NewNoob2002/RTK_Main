@@ -1,4 +1,4 @@
-// 控制台回执与子命令分派实现（ADR-0009 §2.5）：fail()、dispatch()、print_usage()、分节输出。
+// 控制台回执与子命令分派实现（ADR-0009 §2.5）：fail()、dispatch()、printUsage()、分节输出。
 // 只依赖 C 标准库，不含 IDF 头，便于 host 测试直接编译 src/Reply.cpp；输出全部经 cli/Out.hpp 整行写出。
 // 线程：只在 console REPL 任务（命令串行执行）或 host 测试主线程调用；非 ISR 安全；不分配堆。
 
@@ -21,9 +21,9 @@ namespace {
 constexpr int kNameWidth = 10;       // 动词名列最小宽度（表内更长时按最长项加宽）
 constexpr int kUsageWidth = 14;      // 参数用法列最小宽度（同上）
 constexpr size_t kColumnMax = 32U;   // 列宽上限，防止异常长的用法撑坏排版
-constexpr int kKeyWidth = 14;        // print_kv 的键列宽度
+constexpr int kKeyWidth = 14;        // printKv 的键列宽度
 constexpr size_t kVerbNameMax = 24U; // 默认动词复制到栈上的名称缓冲（含结尾 NUL）
-constexpr size_t kValueMax = 160U;   // fail 原因 / print_kv 值先格式化到栈上，再与前缀拼成一行输出
+constexpr size_t kValueMax = 160U;   // fail 原因 / printKv 值先格式化到栈上，再与前缀拼成一行输出
 
 bool s_failed = false;
 

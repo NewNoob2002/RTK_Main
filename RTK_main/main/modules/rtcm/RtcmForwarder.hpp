@@ -14,14 +14,14 @@ struct RtcmStats {
     uint32_t frames = 0;
     uint32_t bytes = 0;
     uint32_t crc32 = 0;
-    uint16_t last_msg = 0;
-    uint32_t rejected_role = 0;
-    uint32_t bytes_per_sec = 0;
-    uint32_t pipe_accepted_frames = 0;
-    uint32_t pipe_accepted_bytes = 0;
-    uint32_t pipe_dropped_frames = 0;
-    uint32_t pipe_dropped_bytes = 0;
-    uint32_t reset_epoch = 0;
+    uint16_t lastMsg = 0;
+    uint32_t rejectedRole = 0;
+    uint32_t bytesPerSec = 0;
+    uint32_t pipeAcceptedFrames = 0;
+    uint32_t pipeAcceptedBytes = 0;
+    uint32_t pipeDroppedFrames = 0;
+    uint32_t pipeDroppedBytes = 0;
+    uint32_t resetEpoch = 0;
 };
 
 /** RTCM 帧计数与 CRC-32 累计；无锁，仅 kLink 内部使用。 */
@@ -39,7 +39,7 @@ public:
     void reset() noexcept;
 
     /** 更新最近窗口测得的吞吐速率（字节/秒）。线程安全：否；仅链路任务，非 ISR。 */
-    void set_bytes_per_sec(uint32_t bps) noexcept;
+    void setBytesPerSec(uint32_t bps) noexcept;
 
     /** 线程安全：否；仅链路任务，非 ISR。跨任务查询须使用 data::kRtcmStats 主题。 */
     [[nodiscard]] const RtcmStats &stats() const noexcept;

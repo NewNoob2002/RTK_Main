@@ -108,7 +108,7 @@ constexpr uint8_t kStateAlert = ac::kStateAlert;
 std::array<uint8_t, proto::kMaxPayload> s_payload{};
 std::array<char, kDescCapacity> s_desc{};
 
-const char *role_name(Role role)
+const char *roleName(Role role)
 {
     switch (role) {
     case Role::kNone:
@@ -124,7 +124,7 @@ const char *role_name(Role role)
     }
 }
 
-size_t desc_text(size_t pos, std::string_view text)
+size_t descText(size_t pos, std::string_view text)
 {
     for (size_t i = 0; (i < text.size()) && ((pos + 1U) < s_desc.size()); ++i) {
         s_desc[pos] = text[i];
@@ -135,30 +135,30 @@ size_t desc_text(size_t pos, std::string_view text)
 }
 
 /** 追加固定位数的十六进制（大写，无前缀）；digits ≤ 4，位运算不越界。 */
-size_t desc_hex(size_t pos, uint32_t value, size_t digits)
+size_t descHex(size_t pos, uint32_t value, size_t digits)
 {
     for (size_t i = digits; i > 0; --i) {
         const uint32_t nibble = (value >> ((i - 1U) * 4U)) & 0x0FU;
         const char digit = (nibble < 10U) ? static_cast<char>('0' + nibble)
                                           : static_cast<char>('A' + (nibble - 10U));
         const std::array<char, 2> one = {digit, '\0'};
-        pos = desc_text(pos, one.data());
+        pos = descText(pos, one.data());
     }
     return pos;
 }
 
 /** 失败信息："id=0x0044 role=PHONE type=0x02 payload=pair_open1"。不用 vararg（项目规范禁止）。 */
-const char *describe(Role role, uint16_t msg_id, uint8_t type, const char *shape)
+const char *describe(Role role, uint16_t msgId, uint8_t type, const char *shape)
 {
     s_desc.fill('\0');
-    size_t pos = desc_text(0, "id=0x");
-    pos = desc_hex(pos, msg_id, 4);
-    pos = desc_text(pos, " role=");
-    pos = desc_text(pos, role_name(role));
-    pos = desc_text(pos, " type=0x");
-    pos = desc_hex(pos, type, 2);
-    pos = desc_text(pos, " payload=");
-    static_cast<void>(desc_text(pos, shape));
+    size_t pos = descText(0, "id=0x");
+    pos = descHex(pos, msgId, 4);
+    pos = descText(pos, " role=");
+    pos = descText(pos, roleName(role));
+    pos = descText(pos, " type=0x");
+    pos = descHex(pos, type, 2);
+    pos = descText(pos, " payload=");
+    static_cast<void>(descText(pos, shape));
     return s_desc.data();
 }
 
@@ -167,8 +167,8 @@ struct Outcome {
     DispatchResult result = DispatchResult::kNoReply;
     size_t len = 0;
     std::array<uint8_t, proto::kMaxFrame> bytes{};
-    bool whitelist_changed = false;
-    bool has_heartbeat = false;
+    bool whitelistChanged = false;
+    bool hasHeartbeat = false;
     ac::Heartbeat heartbeat{};
 };
 
@@ -176,32 +176,32 @@ struct Outcome {
 struct Harness {
     AlarmSource alarm{};
     LinkManager link{};
-    CommandDispatcher old_disp;
+    CommandDispatcher oldDisp;
     svc::DeviceService dev{};
     svc::ConfigService cfg{};
-    svc::AlarmService alarm_svc;
-    svc::PairService pair_svc;
+    svc::AlarmService alarmSvc;
+    svc::PairService pairSvc;
     CommandRouter router{};
-    Reply old_reply{};
-    Reply new_reply{};
+    Reply oldReply{};
+    Reply newReply{};
 
-    Harness() noexcept : old_disp(alarm, link), alarm_svc(alarm, link, dev.info()), pair_svc(link)
+    Harness() noexcept : oldDisp(alarm, link), alarmSvc(alarm, link, dev.info()), pairSvc(link)
     {
         link.init(Policy::kConcurrent, {});
     }
 
     /** 组装根：4 张路由表 → 1 个路由器（与 main 的组装方式一致）。 */
-    fw::Status init_router() noexcept
+    fw::Status initRouter() noexcept
     {
         // 旧 dispatcher 的 0x02 固定 GNSS=0x81，对照时按 GNSS 运行态比较。
         dev.info().gnssRunning = true;
-        const std::array<RouteTable, 4> tables = {dev.table(), cfg.table(), alarm_svc.table(),
-                                                  pair_svc.table()};
+        const std::array<RouteTable, 4> tables = {dev.table(), cfg.table(), alarmSvc.table(),
+                                                  pairSvc.table()};
         return router.init(tables);
     }
 };
 
-void arm_reply(Reply &reply)
+void armReply(Reply &reply)
 {
     reply.buf.fill(kSentinelByte);
     reply.len = kSentinelLen;
@@ -218,82 +218,79 @@ Outcome observe(const Reply &reply, DispatchResult result)
     for (size_t i = 0; (i < bytes.size()) && (i < out.bytes.size()); ++i) {
         out.bytes[i] = bytes[i];
     }
-    out.whitelist_changed = reply.whitelistChanged;
-    out.has_heartbeat = reply.heartbeat.has_value();
+    out.whitelistChanged = reply.whitelistChanged;
+    out.hasHeartbeat = reply.heartbeat.has_value();
     if (reply.heartbeat.has_value()) {
         out.heartbeat = *reply.heartbeat;
     }
     return out;
 }
 
-void compare_outcome(const Outcome &old_out, const Outcome &new_out, const char *desc)
+void compareOutcome(const Outcome &oldOut, const Outcome &newOut, const char *desc)
 {
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(static_cast<uint8_t>(old_out.result),
-                                    static_cast<uint8_t>(new_out.result), desc);
-    TEST_ASSERT_EQUAL_UINT_MESSAGE(static_cast<unsigned>(old_out.len),
-                                   static_cast<unsigned>(new_out.len), desc);
-    if (old_out.len > 0) {
-        TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(old_out.bytes.data(), new_out.bytes.data(),
-                                             old_out.len, desc);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(static_cast<uint8_t>(oldOut.result),
+                                    static_cast<uint8_t>(newOut.result), desc);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(static_cast<unsigned>(oldOut.len),
+                                   static_cast<unsigned>(newOut.len), desc);
+    if (oldOut.len > 0) {
+        TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(oldOut.bytes.data(), newOut.bytes.data(), oldOut.len,
+                                             desc);
     }
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.whitelist_changed ? 1U : 0U,
-                                    new_out.whitelist_changed ? 1U : 0U, desc);
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.has_heartbeat ? 1U : 0U,
-                                    new_out.has_heartbeat ? 1U : 0U, desc);
-    TEST_ASSERT_EQUAL_HEX16_MESSAGE(old_out.heartbeat.seq, new_out.heartbeat.seq, desc);
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.heartbeat.batteryPct, new_out.heartbeat.batteryPct,
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(oldOut.whitelistChanged ? 1U : 0U,
+                                    newOut.whitelistChanged ? 1U : 0U, desc);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(oldOut.hasHeartbeat ? 1U : 0U, newOut.hasHeartbeat ? 1U : 0U,
                                     desc);
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_out.heartbeat.localState, new_out.heartbeat.localState,
-                                    desc);
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(oldOut.heartbeat.seq, newOut.heartbeat.seq, desc);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(oldOut.heartbeat.batteryPct, newOut.heartbeat.batteryPct, desc);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(oldOut.heartbeat.localState, newOut.heartbeat.localState, desc);
 }
 
 /** 一次等价比较：先跑旧 dispatcher，再跑新路由器（两者共享 alarm/link 状态）。 */
-void run_case(Harness &harness, Role role, uint16_t msg_id, uint8_t type, const uint8_t *payload,
-              size_t len, uint32_t now_ms, const char *desc)
+void runCase(Harness &harness, Role role, uint16_t msgId, uint8_t type, const uint8_t *payload,
+             size_t len, uint32_t nowMs, const char *desc)
 {
     proto::FrameView frame{};
-    frame.msgId = msg_id;
+    frame.msgId = msgId;
     frame.type = type;
     frame.sender = proto::sender::kApp;
     frame.payload = std::span<const uint8_t>(payload, len);
 
-    arm_reply(harness.old_reply);
-    const DispatchResult old_result =
-        harness.old_disp.handle(role, frame, now_ms, harness.old_reply);
-    const Outcome old_out = observe(harness.old_reply, old_result);
+    armReply(harness.oldReply);
+    const DispatchResult oldResult = harness.oldDisp.handle(role, frame, nowMs, harness.oldReply);
+    const Outcome oldOut = observe(harness.oldReply, oldResult);
 
-    arm_reply(harness.new_reply);
-    const DispatchResult new_result = harness.router.handle(role, frame, now_ms, harness.new_reply);
-    const Outcome new_out = observe(harness.new_reply, new_result);
+    armReply(harness.newReply);
+    const DispatchResult newResult = harness.router.handle(role, frame, nowMs, harness.newReply);
+    const Outcome newOut = observe(harness.newReply, newResult);
 
-    compare_outcome(old_out, new_out, desc);
+    compareOutcome(oldOut, newOut, desc);
 }
 
 /** 0x40 主动推送：旧 buildStatusPush 与 AlarmService::buildStatusPush 逐字节比较。 */
-void compare_status_push(Harness &harness, uint16_t seq, uint32_t now_ms, const char *desc)
+void compareStatusPush(Harness &harness, uint16_t seq, uint32_t nowMs, const char *desc)
 {
-    arm_reply(harness.old_reply);
-    const bool old_ok = harness.old_disp.buildStatusPush(seq, now_ms, harness.old_reply);
-    const Outcome old_out = observe(harness.old_reply, DispatchResult::kReply);
+    armReply(harness.oldReply);
+    const bool oldOk = harness.oldDisp.buildStatusPush(seq, nowMs, harness.oldReply);
+    const Outcome oldOut = observe(harness.oldReply, DispatchResult::kReply);
 
-    arm_reply(harness.new_reply);
-    const bool new_ok = harness.alarm_svc.buildStatusPush(seq, now_ms, harness.new_reply);
-    const Outcome new_out = observe(harness.new_reply, DispatchResult::kReply);
+    armReply(harness.newReply);
+    const bool newOk = harness.alarmSvc.buildStatusPush(seq, nowMs, harness.newReply);
+    const Outcome newOut = observe(harness.newReply, DispatchResult::kReply);
 
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(old_ok ? 1U : 0U, new_ok ? 1U : 0U, desc);
-    TEST_ASSERT_EQUAL_UINT_MESSAGE(static_cast<unsigned>(old_out.len),
-                                   static_cast<unsigned>(new_out.len), desc);
-    if (old_out.len > 0) {
-        TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(old_out.bytes.data(), new_out.bytes.data(),
-                                             old_out.len, desc);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(oldOk ? 1U : 0U, newOk ? 1U : 0U, desc);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(static_cast<unsigned>(oldOut.len),
+                                   static_cast<unsigned>(newOut.len), desc);
+    if (oldOut.len > 0) {
+        TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(oldOut.bytes.data(), newOut.bytes.data(), oldOut.len,
+                                             desc);
     }
 }
 
-/** 负载形状：前 head_len 字节用显式值覆盖，其余按图案填充。 */
+/** 负载形状：前 headLen 字节用显式值覆盖，其余按图案填充。 */
 struct PayloadShape {
     const char *name;
     size_t len;
-    size_t head_len;
+    size_t headLen;
     uint8_t b0;
     uint8_t b1;
     uint8_t b2;
@@ -312,23 +309,23 @@ constexpr std::array<PayloadShape, 9> kShapes = {{
     {"full256", proto::kMaxPayload, 1, kTestSet, 0, 0},
 }};
 
-void fill_payload(const PayloadShape &shape)
+void fillPayload(const PayloadShape &shape)
 {
     for (size_t i = 0; i < s_payload.size(); ++i) {
         s_payload[i] = static_cast<uint8_t>((i * kPayloadStride) + kPayloadSeed);
     }
-    if (shape.head_len > 0) {
+    if (shape.headLen > 0) {
         s_payload[0] = shape.b0;
     }
-    if (shape.head_len > 1) {
+    if (shape.headLen > 1) {
         s_payload[1] = shape.b1;
     }
-    if (shape.head_len > 2) {
+    if (shape.headLen > 2) {
         s_payload[2] = shape.b2;
     }
 }
 
-void test_msg_id_sweep()
+void testMsgIdSweep()
 {
     constexpr std::array<uint8_t, 4> kTypes = {mt::kQuery, mt::kSet, mt::kPush, kUnknownType};
     // 旧 dispatcher 对 kNone/kPending 一律 kDenied；新路由器按 RoleMask 判定，同样要比一轮。
@@ -337,35 +334,35 @@ void test_msg_id_sweep()
 
     Harness harness;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk),
-                            static_cast<uint8_t>(harness.init_router()));
+                            static_cast<uint8_t>(harness.initRouter()));
     TEST_ASSERT_EQUAL_UINT(kRouteCount, harness.router.routeCount());
 
-    uint32_t now_ms = kFirstNowMs;
+    uint32_t nowMs = kFirstNowMs;
     size_t cases = 0;
-    for (uint32_t raw_id = 0; (raw_id <= kLastSweptMsgId); ++raw_id) {
-        // raw_id ≤ 0xFF，uint16_t 截断安全。
-        const uint16_t msg_id = static_cast<uint16_t>(raw_id);
+    for (uint32_t rawId = 0; (rawId <= kLastSweptMsgId); ++rawId) {
+        // rawId ≤ 0xFF，uint16_t 截断安全。
+        const uint16_t msgId = static_cast<uint16_t>(rawId);
         for (const Role role : kRoles) {
             for (const uint8_t type : kTypes) {
                 for (const PayloadShape &shape : kShapes) {
-                    fill_payload(shape);
-                    if ((msg_id == kMsgGga) || (msg_id == kMsgSat)) {
+                    fillPayload(shape);
+                    if ((msgId == kMsgGga) || (msgId == kMsgSat)) {
                         proto::FrameView frame{};
-                        frame.msgId = msg_id;
+                        frame.msgId = msgId;
                         frame.type = type;
                         frame.sender = proto::sender::kApp;
                         frame.payload = std::span<const uint8_t>(s_payload.data(), shape.len);
-                        arm_reply(harness.new_reply);
+                        armReply(harness.newReply);
                         const DispatchResult res =
-                            harness.router.handle(role, frame, now_ms, harness.new_reply);
+                            harness.router.handle(role, frame, nowMs, harness.newReply);
                         TEST_ASSERT_EQUAL_UINT8_MESSAGE(
                             static_cast<uint8_t>(DispatchResult::kNoReply),
-                            static_cast<uint8_t>(res), describe(role, msg_id, type, shape.name));
+                            static_cast<uint8_t>(res), describe(role, msgId, type, shape.name));
                     } else {
-                        run_case(harness, role, msg_id, type, s_payload.data(), shape.len, now_ms,
-                                 describe(role, msg_id, type, shape.name));
+                        runCase(harness, role, msgId, type, s_payload.data(), shape.len, nowMs,
+                                describe(role, msgId, type, shape.name));
                     }
-                    now_ms += kNowStep;
+                    nowMs += kNowStep;
                     ++cases;
                 }
             }
@@ -376,241 +373,240 @@ void test_msg_id_sweep()
     TEST_ASSERT_EQUAL_UINT(static_cast<unsigned>(expected), static_cast<unsigned>(cases));
 }
 
-void test_device_sequence()
+void testDeviceSequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(isOk(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.initRouter()));
 
-    uint32_t now_ms = kDeviceNowMs;
+    uint32_t nowMs = kDeviceNowMs;
     constexpr std::array<uint16_t, 5> kIds = {kMsgDevInfo, kMsgDevState, kMsgBattery, kMsgSatTrack,
                                               kMsgCom};
     // 1. 默认值（构造函数默认值必须与旧 dispatcher 相同）。
     for (const uint16_t id : kIds) {
-        run_case(harness, Role::kPhone, id, mt::kQuery, s_payload.data(), 0, now_ms,
-                 describe(Role::kPhone, id, mt::kQuery, "default"));
-        now_ms += kNowStep;
+        runCase(harness, Role::kPhone, id, mt::kQuery, s_payload.data(), 0, nowMs,
+                describe(Role::kPhone, id, mt::kQuery, "default"));
+        nowMs += kNowStep;
     }
 
     // 2. 两侧显式写入同一组设备信息（golden 前提）。
-    harness.old_disp.info().sn.assign("SN0001");
+    harness.oldDisp.info().sn.assign("SN0001");
     harness.dev.info().sn.assign("SN0001");
-    harness.old_disp.info().fwVer.assign("V6.1.0");
+    harness.oldDisp.info().fwVer.assign("V6.1.0");
     harness.dev.info().fwVer.assign("V6.1.0");
-    harness.old_disp.info().boardSn.assign("B0001");
+    harness.oldDisp.info().boardSn.assign("B0001");
     harness.dev.info().boardSn.assign("B0001");
-    harness.old_disp.info().boardFw.assign("R1.0");
+    harness.oldDisp.info().boardFw.assign("R1.0");
     harness.dev.info().boardFw.assign("R1.0");
-    harness.old_disp.info().radioFw.assign("RF1");
+    harness.oldDisp.info().radioFw.assign("RF1");
     harness.dev.info().radioFw.assign("RF1");
-    harness.old_disp.info().onBattery = false;
+    harness.oldDisp.info().onBattery = false;
     harness.dev.info().onBattery = false;
-    harness.old_disp.info().batteryPct = kBatteryPct;
+    harness.oldDisp.info().batteryPct = kBatteryPct;
     harness.dev.info().batteryPct = kBatteryPct;
-    harness.old_disp.info().batteryTempC = kBatteryTempC;
+    harness.oldDisp.info().batteryTempC = kBatteryTempC;
     harness.dev.info().batteryTempC = kBatteryTempC;
-    harness.old_disp.info().comBaud = kComBaud;
+    harness.oldDisp.info().comBaud = kComBaud;
     harness.dev.info().comBaud = kComBaud;
 
     for (const uint16_t id : {kMsgDevInfo, kMsgBattery, kMsgCom}) {
-        run_case(harness, Role::kPhone, id, mt::kQuery, s_payload.data(), 0, now_ms,
-                 describe(Role::kPhone, id, mt::kQuery, "custom"));
-        now_ms += kNowStep;
+        runCase(harness, Role::kPhone, id, mt::kQuery, s_payload.data(), 0, nowMs,
+                describe(Role::kPhone, id, mt::kQuery, "custom"));
+        nowMs += kNowStep;
     }
     // 0x06 与 0x0D 的 SET 分支（0x0D 按 5.4 行为不回复）。
-    run_case(harness, Role::kPhone, kMsgSatTrack, mt::kSet, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, kMsgSatTrack, mt::kSet, "none"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgCom, mt::kSet, s_payload.data(), core::kComLen, now_ms,
-             describe(Role::kPhone, kMsgCom, mt::kSet, "32B"));
+    runCase(harness, Role::kPhone, kMsgSatTrack, mt::kSet, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, kMsgSatTrack, mt::kSet, "none"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgCom, mt::kSet, s_payload.data(), core::kComLen, nowMs,
+            describe(Role::kPhone, kMsgCom, mt::kSet, "32B"));
 }
 
-void test_config_sequence()
+void testConfigSequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(isOk(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.initRouter()));
 
-    uint32_t now_ms = kConfigNowMs;
+    uint32_t nowMs = kConfigNowMs;
     for (size_t i = 0; i < s_payload.size(); ++i) {
         s_payload[i] = static_cast<uint8_t>((i * kPayloadStride) + kPayloadSeed);
     }
 
     // 0x07：SET 恰好 44 字节成功，QUERY 回读 48 字节，短包失败且不回滚。
-    run_case(harness, Role::kPhone, kMsgWorkMode, mt::kSet, s_payload.data(), core::kWorkModeSetLen,
-             now_ms, describe(Role::kPhone, kMsgWorkMode, mt::kSet, "44B"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgWorkMode, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, kMsgWorkMode, mt::kQuery, "readback"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgWorkMode, mt::kSet, s_payload.data(),
-             core::kWorkModeSetLen - 1U, now_ms,
-             describe(Role::kPhone, kMsgWorkMode, mt::kSet, "43B"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgWorkMode, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, kMsgWorkMode, mt::kQuery, "readback2"));
-    now_ms += kNowStep;
+    runCase(harness, Role::kPhone, kMsgWorkMode, mt::kSet, s_payload.data(), core::kWorkModeSetLen,
+            nowMs, describe(Role::kPhone, kMsgWorkMode, mt::kSet, "44B"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgWorkMode, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, kMsgWorkMode, mt::kQuery, "readback"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgWorkMode, mt::kSet, s_payload.data(),
+            core::kWorkModeSetLen - 1U, nowMs,
+            describe(Role::kPhone, kMsgWorkMode, mt::kSet, "43B"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgWorkMode, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, kMsgWorkMode, mt::kQuery, "readback2"));
+    nowMs += kNowStep;
 
     // 0x14：SET 15 字节成功（第 17 字节保持默认 0x05），满 28 字节覆盖全部字段。
-    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), core::kRadioSetMinLen,
-             now_ms, describe(Role::kPhone, kMsgRadio, mt::kSet, "15B"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgRadio, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, kMsgRadio, mt::kQuery, "readback"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(),
-             core::kRadioSetMinLen - 1U, now_ms,
-             describe(Role::kPhone, kMsgRadio, mt::kSet, "14B"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), core::kRadioLen, now_ms,
-             describe(Role::kPhone, kMsgRadio, mt::kSet, "28B"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgRadio, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, kMsgRadio, mt::kQuery, "readback2"));
-    now_ms += kNowStep;
+    runCase(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), core::kRadioSetMinLen,
+            nowMs, describe(Role::kPhone, kMsgRadio, mt::kSet, "15B"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgRadio, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, kMsgRadio, mt::kQuery, "readback"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(),
+            core::kRadioSetMinLen - 1U, nowMs, describe(Role::kPhone, kMsgRadio, mt::kSet, "14B"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgRadio, mt::kSet, s_payload.data(), core::kRadioLen, nowMs,
+            describe(Role::kPhone, kMsgRadio, mt::kSet, "28B"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgRadio, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, kMsgRadio, mt::kQuery, "readback2"));
+    nowMs += kNowStep;
 
     // 0x15：SET 50 字节成功，49 字节失败；非 QUERY/SET 的 type 走只读分支。
-    run_case(harness, Role::kPhone, kMsgLog, mt::kSet, s_payload.data(), core::kLogLen, now_ms,
-             describe(Role::kPhone, kMsgLog, mt::kSet, "50B"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgLog, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, kMsgLog, mt::kQuery, "readback"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgLog, mt::kSet, s_payload.data(), core::kLogLen - 1U, now_ms,
-             describe(Role::kPhone, kMsgLog, mt::kSet, "49B"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kPhone, kMsgLog, mt::kPush, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, kMsgLog, mt::kPush, "push"));
+    runCase(harness, Role::kPhone, kMsgLog, mt::kSet, s_payload.data(), core::kLogLen, nowMs,
+            describe(Role::kPhone, kMsgLog, mt::kSet, "50B"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgLog, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, kMsgLog, mt::kQuery, "readback"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgLog, mt::kSet, s_payload.data(), core::kLogLen - 1U, nowMs,
+            describe(Role::kPhone, kMsgLog, mt::kSet, "49B"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kPhone, kMsgLog, mt::kPush, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, kMsgLog, mt::kPush, "push"));
 }
 
-void test_pair_sequence()
+void testPairSequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(isOk(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.initRouter()));
 
     Actions act;
-    uint32_t now_ms = kPairNowMs;
-    const std::array<uint8_t, 1> pair_open = {kPairOpen};
-    const std::array<uint8_t, 1> pair_clear = {kPairClear};
-    const std::array<uint8_t, 1> pair_bad = {kPairBadAction};
+    uint32_t nowMs = kPairNowMs;
+    const std::array<uint8_t, 1> pairOpen = {kPairOpen};
+    const std::array<uint8_t, 1> pairClear = {kPairClear};
+    const std::array<uint8_t, 1> pairBad = {kPairBadAction};
 
     // 1. 打开配对窗口。
-    run_case(harness, Role::kPhone, ac::kMsgPair, mt::kSet, pair_open.data(), pair_open.size(),
-             now_ms, describe(Role::kPhone, ac::kMsgPair, mt::kSet, "open"));
+    runCase(harness, Role::kPhone, ac::kMsgPair, mt::kSet, pairOpen.data(), pairOpen.size(), nowMs,
+            describe(Role::kPhone, ac::kMsgPair, mt::kSet, "open"));
     TEST_ASSERT_TRUE(harness.link.isPairing());
-    now_ms += kNowStep;
+    nowMs += kNowStep;
 
     // 2. 报警器先以 PHONE 接入（地址还不在白名单），HELLO 之后转 ALARM 并加入白名单。
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(Role::kPhone),
-        static_cast<uint8_t>(harness.link.onOpen(kAlarmHandle, kAlarmAddr, now_ms, act)));
+        static_cast<uint8_t>(harness.link.onOpen(kAlarmHandle, kAlarmAddr, nowMs, act)));
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(Role::kAlarm),
         static_cast<uint8_t>(harness.link.onFrame(kAlarmHandle, proto::sender::kAlarm,
-                                                  core::kHelloMsgId, now_ms, act)));
+                                                  core::kHelloMsgId, nowMs, act)));
     TEST_ASSERT_EQUAL_UINT(1, harness.link.whitelist().size());
-    now_ms += kNowStep;
+    nowMs += kNowStep;
 
     // 3. 查询：1 字节数量 + 6 字节 MAC。
-    run_case(harness, Role::kPhone, ac::kMsgPair, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, ac::kMsgPair, mt::kQuery, "1addr"));
-    now_ms += kNowStep;
+    runCase(harness, Role::kPhone, ac::kMsgPair, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, ac::kMsgPair, mt::kQuery, "1addr"));
+    nowMs += kNowStep;
 
     // 4. 清空白名单：whitelistChanged = true。
-    run_case(harness, Role::kPhone, ac::kMsgPair, mt::kSet, pair_clear.data(), pair_clear.size(),
-             now_ms, describe(Role::kPhone, ac::kMsgPair, mt::kSet, "clear"));
-    TEST_ASSERT_TRUE(harness.old_reply.whitelistChanged);
-    TEST_ASSERT_TRUE(harness.new_reply.whitelistChanged);
+    runCase(harness, Role::kPhone, ac::kMsgPair, mt::kSet, pairClear.data(), pairClear.size(),
+            nowMs, describe(Role::kPhone, ac::kMsgPair, mt::kSet, "clear"));
+    TEST_ASSERT_TRUE(harness.oldReply.whitelistChanged);
+    TEST_ASSERT_TRUE(harness.newReply.whitelistChanged);
     TEST_ASSERT_EQUAL_UINT(0, harness.link.whitelist().size());
-    now_ms += kNowStep;
+    nowMs += kNowStep;
 
-    run_case(harness, Role::kPhone, ac::kMsgPair, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, ac::kMsgPair, mt::kQuery, "0addr"));
-    now_ms += kNowStep;
+    runCase(harness, Role::kPhone, ac::kMsgPair, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, ac::kMsgPair, mt::kQuery, "0addr"));
+    nowMs += kNowStep;
 
     // 5. 非法动作字节 → 失败应答。
-    run_case(harness, Role::kPhone, ac::kMsgPair, mt::kSet, pair_bad.data(), pair_bad.size(),
-             now_ms, describe(Role::kPhone, ac::kMsgPair, mt::kSet, "bad_action"));
+    runCase(harness, Role::kPhone, ac::kMsgPair, mt::kSet, pairBad.data(), pairBad.size(), nowMs,
+            describe(Role::kPhone, ac::kMsgPair, mt::kSet, "bad_action"));
 }
 
-void test_alarm_sequence()
+void testAlarmSequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(isOk(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.initRouter()));
 
     Actions act;
-    uint32_t now_ms = kAlarmNowMs;
+    uint32_t nowMs = kAlarmNowMs;
 
     // 1. 手机在线 → 状态帧 flags bit0。
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(Role::kPhone),
-        static_cast<uint8_t>(harness.link.onOpen(kPhoneHandle, kPhoneAddr, now_ms, act)));
+        static_cast<uint8_t>(harness.link.onOpen(kPhoneHandle, kPhoneAddr, nowMs, act)));
     TEST_ASSERT_TRUE(harness.link.hasRole(Role::kPhone));
 
     // 2. 无覆盖：推送与查询。
-    compare_status_push(harness, 0x0000, now_ms, "push idle");
-    now_ms += kNowStep;
-    run_case(harness, Role::kAlarm, ac::kMsgStatus, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kAlarm, ac::kMsgStatus, mt::kQuery, "idle"));
-    now_ms += kNowStep;
+    compareStatusPush(harness, 0x0000, nowMs, "push idle");
+    nowMs += kNowStep;
+    runCase(harness, Role::kAlarm, ac::kMsgStatus, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kAlarm, ac::kMsgStatus, mt::kQuery, "idle"));
+    nowMs += kNowStep;
 
     // 3. 设置测试覆盖：alert / level 3。
-    const std::array<uint8_t, 3> test_set = {kTestSet, kStateAlert, kTestLevel};
-    run_case(harness, Role::kPhone, ac::kMsgTest, mt::kSet, test_set.data(), test_set.size(),
-             now_ms, describe(Role::kPhone, ac::kMsgTest, mt::kSet, "set"));
+    const std::array<uint8_t, 3> testSet = {kTestSet, kStateAlert, kTestLevel};
+    runCase(harness, Role::kPhone, ac::kMsgTest, mt::kSet, testSet.data(), testSet.size(), nowMs,
+            describe(Role::kPhone, ac::kMsgTest, mt::kSet, "set"));
     TEST_ASSERT_TRUE(harness.alarm.isOverride());
     TEST_ASSERT_EQUAL_HEX8(kStateAlert, harness.alarm.state());
-    now_ms += kNowStep;
+    nowMs += kNowStep;
 
     // 4. 覆盖生效后的查询与推送。
-    run_case(harness, Role::kAlarm, ac::kMsgStatus, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kAlarm, ac::kMsgStatus, mt::kQuery, "override"));
-    now_ms += kNowStep;
-    compare_status_push(harness, kPushSeq, now_ms, "push override");
-    now_ms += kNowStep;
+    runCase(harness, Role::kAlarm, ac::kMsgStatus, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kAlarm, ac::kMsgStatus, mt::kQuery, "override"));
+    nowMs += kNowStep;
+    compareStatusPush(harness, kPushSeq, nowMs, "push override");
+    nowMs += kNowStep;
 
     // 5. 心跳：解析结果写 reply.heartbeat，不回复。
     const std::array<uint8_t, ac::kHeartbeatLen> heartbeat = {
         0x07, 0x00, kHeartbeatPct, kHeartbeatState, 0x00, 0x00, 0x00, 0x00};
-    run_case(harness, Role::kAlarm, ac::kMsgHeartbeat, mt::kPush, heartbeat.data(),
-             heartbeat.size(), now_ms, describe(Role::kAlarm, ac::kMsgHeartbeat, mt::kPush, "hb"));
-    TEST_ASSERT_TRUE(harness.old_reply.heartbeat.has_value());
-    TEST_ASSERT_TRUE(harness.new_reply.heartbeat.has_value());
-    TEST_ASSERT_EQUAL_HEX16(kHeartbeatSeq, harness.new_reply.heartbeat->seq);
-    TEST_ASSERT_EQUAL_UINT8(kHeartbeatPct, harness.new_reply.heartbeat->batteryPct);
-    TEST_ASSERT_EQUAL_UINT8(kHeartbeatState, harness.new_reply.heartbeat->localState);
-    now_ms += kNowStep;
+    runCase(harness, Role::kAlarm, ac::kMsgHeartbeat, mt::kPush, heartbeat.data(), heartbeat.size(),
+            nowMs, describe(Role::kAlarm, ac::kMsgHeartbeat, mt::kPush, "hb"));
+    TEST_ASSERT_TRUE(harness.oldReply.heartbeat.has_value());
+    TEST_ASSERT_TRUE(harness.newReply.heartbeat.has_value());
+    TEST_ASSERT_EQUAL_HEX16(kHeartbeatSeq, harness.newReply.heartbeat->seq);
+    TEST_ASSERT_EQUAL_UINT8(kHeartbeatPct, harness.newReply.heartbeat->batteryPct);
+    TEST_ASSERT_EQUAL_UINT8(kHeartbeatState, harness.newReply.heartbeat->localState);
+    nowMs += kNowStep;
 
     // 6. 心跳之后（电池变化）再比一次推送。
-    harness.old_disp.info().batteryPct = kPushBatteryPct;
+    harness.oldDisp.info().batteryPct = kPushBatteryPct;
     harness.dev.info().batteryPct = kPushBatteryPct;
-    compare_status_push(harness, kPushSeq2, now_ms, "push after heartbeat");
-    now_ms += kNowStep;
+    compareStatusPush(harness, kPushSeq2, nowMs, "push after heartbeat");
+    nowMs += kNowStep;
 
     // 7. 清除覆盖。
-    const std::array<uint8_t, 3> test_clear = {kTestClear, kStateAlert, kTestLevel};
-    run_case(harness, Role::kPhone, ac::kMsgTest, mt::kSet, test_clear.data(), test_clear.size(),
-             now_ms, describe(Role::kPhone, ac::kMsgTest, mt::kSet, "clear"));
+    const std::array<uint8_t, 3> testClear = {kTestClear, kStateAlert, kTestLevel};
+    runCase(harness, Role::kPhone, ac::kMsgTest, mt::kSet, testClear.data(), testClear.size(),
+            nowMs, describe(Role::kPhone, ac::kMsgTest, mt::kSet, "clear"));
     TEST_ASSERT_FALSE(harness.alarm.isOverride());
-    now_ms += kNowStep;
+    nowMs += kNowStep;
 
     // 8. 非法状态 → 失败且状态不变。
-    const std::array<uint8_t, 3> test_bad = {kTestSet, kIllegalState, kTestLevel};
-    run_case(harness, Role::kPhone, ac::kMsgTest, mt::kSet, test_bad.data(), test_bad.size(),
-             now_ms, describe(Role::kPhone, ac::kMsgTest, mt::kSet, "bad_state"));
+    const std::array<uint8_t, 3> testBad = {kTestSet, kIllegalState, kTestLevel};
+    runCase(harness, Role::kPhone, ac::kMsgTest, mt::kSet, testBad.data(), testBad.size(), nowMs,
+            describe(Role::kPhone, ac::kMsgTest, mt::kSet, "bad_state"));
     TEST_ASSERT_FALSE(harness.alarm.isOverride());
-    now_ms += kNowStep;
+    nowMs += kNowStep;
 
     // 9. 围栏（预留）与 0x40 / 0x41 的 type 限制。
-    run_case(harness, Role::kPhone, ac::kMsgFence, mt::kQuery, s_payload.data(), 0, now_ms,
-             describe(Role::kPhone, ac::kMsgFence, mt::kQuery, "reserved"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kAlarm, ac::kMsgStatus, mt::kSet, s_payload.data(), 0, now_ms,
-             describe(Role::kAlarm, ac::kMsgStatus, mt::kSet, "type_denied"));
-    now_ms += kNowStep;
-    run_case(harness, Role::kAlarm, ac::kMsgHeartbeat, mt::kQuery, heartbeat.data(),
-             heartbeat.size(), now_ms,
-             describe(Role::kAlarm, ac::kMsgHeartbeat, mt::kQuery, "type_denied"));
-    now_ms += kNowStep;
-    compare_status_push(harness, kPushSeq3, now_ms, "push final");
+    runCase(harness, Role::kPhone, ac::kMsgFence, mt::kQuery, s_payload.data(), 0, nowMs,
+            describe(Role::kPhone, ac::kMsgFence, mt::kQuery, "reserved"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kAlarm, ac::kMsgStatus, mt::kSet, s_payload.data(), 0, nowMs,
+            describe(Role::kAlarm, ac::kMsgStatus, mt::kSet, "type_denied"));
+    nowMs += kNowStep;
+    runCase(harness, Role::kAlarm, ac::kMsgHeartbeat, mt::kQuery, heartbeat.data(),
+            heartbeat.size(), nowMs,
+            describe(Role::kAlarm, ac::kMsgHeartbeat, mt::kQuery, "type_denied"));
+    nowMs += kNowStep;
+    compareStatusPush(harness, kPushSeq3, nowMs, "push final");
 }
 
 } // namespace
@@ -622,10 +618,10 @@ extern "C" void setUp(void) {}
 extern "C" void tearDown(void) {}
 
 /** 0x02 GNSS 字节随运行态变化：kRunning→0x81，其它→0x01；其余字节与旧 dispatcher 一致。 */
-void test_dev_state_gnss_byte()
+void testDevStateGnssByte()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(isOk(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.initRouter()));
     proto::FrameView frame{};
     frame.msgId = kMsgDevState;
     frame.type = mt::kQuery;
@@ -633,20 +629,20 @@ void test_dev_state_gnss_byte()
     constexpr size_t kGnssByte = proto::kHeaderLen + 2U;
     for (const bool running : {true, false}) {
         harness.dev.info().gnssRunning = running;
-        arm_reply(harness.old_reply);
-        const Outcome old_out =
-            observe(harness.old_reply,
-                    harness.old_disp.handle(Role::kPhone, frame, kDeviceNowMs, harness.old_reply));
-        arm_reply(harness.new_reply);
-        const Outcome new_out =
-            observe(harness.new_reply,
-                    harness.router.handle(Role::kPhone, frame, kDeviceNowMs, harness.new_reply));
-        TEST_ASSERT_EQUAL_UINT(old_out.len, new_out.len);
-        TEST_ASSERT_EQUAL_HEX8(running ? 0x81U : 0x01U, new_out.bytes[kGnssByte]);
+        armReply(harness.oldReply);
+        const Outcome oldOut =
+            observe(harness.oldReply,
+                    harness.oldDisp.handle(Role::kPhone, frame, kDeviceNowMs, harness.oldReply));
+        armReply(harness.newReply);
+        const Outcome newOut =
+            observe(harness.newReply,
+                    harness.router.handle(Role::kPhone, frame, kDeviceNowMs, harness.newReply));
+        TEST_ASSERT_EQUAL_UINT(oldOut.len, newOut.len);
+        TEST_ASSERT_EQUAL_HEX8(running ? 0x81U : 0x01U, newOut.bytes[kGnssByte]);
         // 只比较 header+payload，CRC 随 GNSS 字节变化。
-        for (size_t i = 0; i + proto::kCrcLen < new_out.len; ++i) {
+        for (size_t i = 0; i + proto::kCrcLen < newOut.len; ++i) {
             if (i != kGnssByte) {
-                TEST_ASSERT_EQUAL_HEX8(old_out.bytes[i], new_out.bytes[i]);
+                TEST_ASSERT_EQUAL_HEX8(oldOut.bytes[i], newOut.bytes[i]);
             }
         }
     }
@@ -655,11 +651,11 @@ void test_dev_state_gnss_byte()
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_msg_id_sweep);
-    RUN_TEST(test_device_sequence);
-    RUN_TEST(test_dev_state_gnss_byte);
-    RUN_TEST(test_config_sequence);
-    RUN_TEST(test_pair_sequence);
-    RUN_TEST(test_alarm_sequence);
+    RUN_TEST(testMsgIdSweep);
+    RUN_TEST(testDeviceSequence);
+    RUN_TEST(testDevStateGnssByte);
+    RUN_TEST(testConfigSequence);
+    RUN_TEST(testPairSequence);
+    RUN_TEST(testAlarmSequence);
     return UNITY_END();
 }

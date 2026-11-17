@@ -1,6 +1,6 @@
 // fw::trace / fw::TraceRing host 单元测试（ADR-0009 §2.1-§2.2）：安装校验与幂等、
 // 类别掩码开关与越界位、事件字段与时钟、环满丢新保持顺序、wrap-around、丢弃增量、
-// depth/max_depth 统计、注入锁的成对使用、sink 适配器。
+// depth/maxDepth 统计、注入锁的成对使用、sink 适配器。
 
 #include <array>
 #include <cstddef>
@@ -28,50 +28,50 @@ constexpr uint32_t kParamB = 9U;
 constexpr uint32_t kClockStep = 100U;
 constexpr uint32_t kAllBitsMask = 0xFFFFFFFFU;
 
-// 最近一次 sink 收到的事件与调用次数；sink 由 trace_install 安装一次，ctx 不使用。
+// 最近一次 sink 收到的事件与调用次数；sink 由 traceInstall 安装一次，ctx 不使用。
 uint32_t s_sink_calls = 0U;
 fw::TraceEvent s_last_event{};
 uint32_t s_clock_calls = 0U;
 uint32_t s_clock_value = 0U;
 
-uint32_t test_clock() noexcept
+uint32_t testClock() noexcept
 {
     ++s_clock_calls;
     s_clock_value += kClockStep;
     return s_clock_value;
 }
 
-void test_sink(void * /*ctx*/, const fw::TraceEvent &ev) noexcept
+void testSink(void * /*ctx*/, const fw::TraceEvent &ev) noexcept
 {
     ++s_sink_calls;
     s_last_event = ev;
 }
 
 struct RingLockSpy {
-    uint32_t lock_calls = 0U;
-    uint32_t unlock_calls = 0U;
+    uint32_t lockCalls = 0U;
+    uint32_t unlockCalls = 0U;
     int32_t depth = 0;
     bool underflow = false;
 };
 
-void spy_lock(void *ctx) noexcept
+void spyLock(void *ctx) noexcept
 {
     auto *spy = static_cast<RingLockSpy *>(ctx);
-    ++spy->lock_calls;
+    ++spy->lockCalls;
     ++spy->depth;
 }
 
-void spy_unlock(void *ctx) noexcept
+void spyUnlock(void *ctx) noexcept
 {
     auto *spy = static_cast<RingLockSpy *>(ctx);
-    ++spy->unlock_calls;
+    ++spy->unlockCalls;
     --spy->depth;
     if (spy->depth < 0) {
         spy->underflow = true;
     }
 }
 
-fw::TraceEvent make_event(uint8_t code, uint16_t session = 0U) noexcept
+fw::TraceEvent makeEvent(uint8_t code, uint16_t session = 0U) noexcept
 {
     fw::TraceEvent ev{};
     ev.tMs = static_cast<uint32_t>(code);
@@ -83,7 +83,7 @@ fw::TraceEvent make_event(uint8_t code, uint16_t session = 0U) noexcept
     return ev;
 }
 
-void test_trace_noop_before_install()
+void testTraceNoopBeforeInstall()
 {
     s_sink_calls = 0U;
     s_clock_calls = 0U;
@@ -93,19 +93,19 @@ void test_trace_noop_before_install()
     TEST_ASSERT_EQUAL_UINT32(0U, s_clock_calls);
 }
 
-void test_trace_install_validation_and_once()
+void testTraceInstallValidationAndOnce()
 {
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(fw::traceInstall(nullptr, nullptr, test_clock)));
+                            static_cast<uint8_t>(fw::traceInstall(nullptr, nullptr, testClock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(fw::traceInstall(test_sink, nullptr, nullptr)));
+                            static_cast<uint8_t>(fw::traceInstall(testSink, nullptr, nullptr)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(fw::traceInstall(test_sink, nullptr, test_clock)));
+                            static_cast<uint8_t>(fw::traceInstall(testSink, nullptr, testClock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
-                            static_cast<uint8_t>(fw::traceInstall(test_sink, nullptr, test_clock)));
+                            static_cast<uint8_t>(fw::traceInstall(testSink, nullptr, testClock)));
 }
 
-void test_trace_mask_switch()
+void testTraceMaskSwitch()
 {
     fw::traceSetMask(0U);
     TEST_ASSERT_EQUAL_UINT32(0U, fw::traceMask());
@@ -130,7 +130,7 @@ void test_trace_mask_switch()
     TEST_ASSERT_EQUAL_UINT32(0U, s_clock_calls);
 }
 
-void test_trace_event_fields_and_clock()
+void testTraceEventFieldsAndClock()
 {
     fw::traceSetMask(fw::kTraceAllMask);
     s_sink_calls = 0U;
@@ -148,12 +148,12 @@ void test_trace_event_fields_and_clock()
     TEST_ASSERT_EQUAL_UINT32(kParamB, s_last_event.b);
 }
 
-void test_trace_ring_init_validation()
+void testTraceRingInitValidation()
 {
     static std::array<fw::TraceEvent, kRingCap> storage{};
     static std::array<fw::TraceEvent, kTinyCap> tiny{};
     fw::TraceRing ring{};
-    const fw::TraceEvent ev = make_event(1U);
+    const fw::TraceEvent ev = makeEvent(1U);
 
     // 未 init：所有访问都应安全返回。
     TEST_ASSERT_FALSE(ring.push(ev));
@@ -168,9 +168,9 @@ void test_trace_ring_init_validation()
         static_cast<uint8_t>(ring.init(std::span<fw::TraceEvent>{}, fw::kNoLock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
                             static_cast<uint8_t>(ring.init(tiny, fw::kNoLock)));
-    const fw::LockOps half_lock{spy_lock, nullptr, nullptr};
+    const fw::LockOps halfLock{spyLock, nullptr, nullptr};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(ring.init(storage, half_lock)));
+                            static_cast<uint8_t>(ring.init(storage, halfLock)));
 
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
@@ -179,7 +179,7 @@ void test_trace_ring_init_validation()
     TEST_ASSERT_EQUAL_UINT32(0U, ring.depth());
 }
 
-void test_trace_ring_full_drops_new_and_keeps_order()
+void testTraceRingFullDropsNewAndKeepsOrder()
 {
     static std::array<fw::TraceEvent, kRingCap> storage{};
     fw::TraceRing ring{};
@@ -187,11 +187,11 @@ void test_trace_ring_full_drops_new_and_keeps_order()
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
 
     for (uint8_t i = 0U; i < static_cast<uint8_t>(kRingCap); ++i) {
-        TEST_ASSERT_TRUE(ring.push(make_event(static_cast<uint8_t>(kSeedCode + i))));
+        TEST_ASSERT_TRUE(ring.push(makeEvent(static_cast<uint8_t>(kSeedCode + i))));
     }
     // 环满丢新：新事件被拒绝，已有事件不受影响。
-    TEST_ASSERT_FALSE(ring.push(make_event(99U)));
-    TEST_ASSERT_FALSE(ring.push(make_event(100U)));
+    TEST_ASSERT_FALSE(ring.push(makeEvent(99U)));
+    TEST_ASSERT_FALSE(ring.push(makeEvent(100U)));
     TEST_ASSERT_EQUAL_UINT32(kRingCap, ring.depth());
     const fw::TraceRingStats st = ring.stats();
     TEST_ASSERT_EQUAL_UINT32(kRingCap, st.pushed);
@@ -201,7 +201,7 @@ void test_trace_ring_full_drops_new_and_keeps_order()
     // 丢弃增量语义：读一次清零，再读为 0，新增丢弃再累加。
     TEST_ASSERT_EQUAL_UINT32(2U, ring.takeDropped());
     TEST_ASSERT_EQUAL_UINT32(0U, ring.takeDropped());
-    TEST_ASSERT_FALSE(ring.push(make_event(101U)));
+    TEST_ASSERT_FALSE(ring.push(makeEvent(101U)));
     TEST_ASSERT_EQUAL_UINT32(1U, ring.takeDropped());
 
     fw::TraceEvent out{};
@@ -213,7 +213,7 @@ void test_trace_ring_full_drops_new_and_keeps_order()
     TEST_ASSERT_EQUAL_UINT32(0U, ring.depth());
 }
 
-void test_trace_ring_wrap_around()
+void testTraceRingWrapAround()
 {
     static std::array<fw::TraceEvent, kRingCap> storage{};
     fw::TraceRing ring{};
@@ -225,7 +225,7 @@ void test_trace_ring_wrap_around()
         for (size_t i = 0U; i < kRingCap; ++i) {
             // round < 3、i < 4 → 码值 < 32，转 uint8_t 无损。
             const uint32_t code = kWrapCodeBase * round + static_cast<uint32_t>(i);
-            TEST_ASSERT_TRUE(ring.push(make_event(static_cast<uint8_t>(code))));
+            TEST_ASSERT_TRUE(ring.push(makeEvent(static_cast<uint8_t>(code))));
         }
         for (size_t i = 0U; i < kRingCap; ++i) {
             TEST_ASSERT_TRUE(ring.pop(out));
@@ -241,57 +241,57 @@ void test_trace_ring_wrap_around()
     TEST_ASSERT_EQUAL_UINT32(kRingCap, st.maxDepth);
 }
 
-void test_trace_ring_partial_drain_depth()
+void testTraceRingPartialDrainDepth()
 {
     static std::array<fw::TraceEvent, kRingCap> storage{};
     fw::TraceRing ring{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
 
-    TEST_ASSERT_TRUE(ring.push(make_event(1U)));
-    TEST_ASSERT_TRUE(ring.push(make_event(2U)));
-    TEST_ASSERT_TRUE(ring.push(make_event(3U)));
+    TEST_ASSERT_TRUE(ring.push(makeEvent(1U)));
+    TEST_ASSERT_TRUE(ring.push(makeEvent(2U)));
+    TEST_ASSERT_TRUE(ring.push(makeEvent(3U)));
     TEST_ASSERT_EQUAL_UINT32(3U, ring.depth());
 
     fw::TraceEvent out{};
     TEST_ASSERT_TRUE(ring.pop(out));
     TEST_ASSERT_EQUAL_UINT8(1U, out.code);
     TEST_ASSERT_EQUAL_UINT32(2U, ring.depth());
-    // max_depth 是历史峰值，不随出队下降。
+    // maxDepth 是历史峰值，不随出队下降。
     TEST_ASSERT_EQUAL_UINT32(3U, ring.stats().maxDepth);
     TEST_ASSERT_EQUAL_UINT32(3U, ring.stats().pushed);
 }
 
-void test_trace_ring_uses_injected_lock()
+void testTraceRingUsesInjectedLock()
 {
     static std::array<fw::TraceEvent, kRingCap> storage{};
     RingLockSpy spy{};
-    const fw::LockOps ops{spy_lock, spy_unlock, &spy};
+    const fw::LockOps ops{spyLock, spyUnlock, &spy};
     fw::TraceRing ring{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, ops)));
 
-    TEST_ASSERT_TRUE(ring.push(make_event(1U)));
+    TEST_ASSERT_TRUE(ring.push(makeEvent(1U)));
     fw::TraceEvent out{};
     TEST_ASSERT_TRUE(ring.pop(out));
     (void)ring.takeDropped();
     (void)ring.depth();
     (void)ring.stats();
 
-    TEST_ASSERT_GREATER_THAN_UINT32(0U, spy.lock_calls);
-    TEST_ASSERT_EQUAL_UINT32(spy.lock_calls, spy.unlock_calls);
+    TEST_ASSERT_GREATER_THAN_UINT32(0U, spy.lockCalls);
+    TEST_ASSERT_EQUAL_UINT32(spy.lockCalls, spy.unlockCalls);
     TEST_ASSERT_EQUAL_INT32(0, spy.depth);
     TEST_ASSERT_FALSE(spy.underflow);
 }
 
-void test_trace_ring_sink_adapter()
+void testTraceRingSinkAdapter()
 {
     static std::array<fw::TraceEvent, kRingCap> storage{};
     fw::TraceRing ring{};
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
 
-    const fw::TraceEvent ev = make_event(7U);
+    const fw::TraceEvent ev = makeEvent(7U);
     fw::TraceRing::sink(&ring, ev);
     TEST_ASSERT_EQUAL_UINT32(1U, ring.depth());
     fw::TraceEvent out{};
@@ -307,15 +307,15 @@ void test_trace_ring_sink_adapter()
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_trace_noop_before_install);
-    RUN_TEST(test_trace_install_validation_and_once);
-    RUN_TEST(test_trace_mask_switch);
-    RUN_TEST(test_trace_event_fields_and_clock);
-    RUN_TEST(test_trace_ring_init_validation);
-    RUN_TEST(test_trace_ring_full_drops_new_and_keeps_order);
-    RUN_TEST(test_trace_ring_wrap_around);
-    RUN_TEST(test_trace_ring_partial_drain_depth);
-    RUN_TEST(test_trace_ring_uses_injected_lock);
-    RUN_TEST(test_trace_ring_sink_adapter);
+    RUN_TEST(testTraceNoopBeforeInstall);
+    RUN_TEST(testTraceInstallValidationAndOnce);
+    RUN_TEST(testTraceMaskSwitch);
+    RUN_TEST(testTraceEventFieldsAndClock);
+    RUN_TEST(testTraceRingInitValidation);
+    RUN_TEST(testTraceRingFullDropsNewAndKeepsOrder);
+    RUN_TEST(testTraceRingWrapAround);
+    RUN_TEST(testTraceRingPartialDrainDepth);
+    RUN_TEST(testTraceRingUsesInjectedLock);
+    RUN_TEST(testTraceRingSinkAdapter);
     return UNITY_END();
 }

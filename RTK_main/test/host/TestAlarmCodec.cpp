@@ -16,7 +16,7 @@ extern "C" void setUp(void)
 }
 extern "C" void tearDown(void) {}
 
-static void test_encode_status_layout()
+static void testEncodeStatusLayout()
 {
     ac::Status st{};
     st.seq = 0x1234;
@@ -35,7 +35,7 @@ static void test_encode_status_layout()
     TEST_ASSERT_EQUAL_HEX8(0xEE, out[16]);
 }
 
-static void test_encode_status_short_buffer()
+static void testEncodeStatusShortBuffer()
 {
     std::array<uint8_t, 15> out{};
     out.fill(0xEE);
@@ -43,7 +43,7 @@ static void test_encode_status_short_buffer()
     TEST_ASSERT_EQUAL_HEX8(0xEE, out[0]); // 不足时不写入
 }
 
-static void test_status_roundtrip()
+static void testStatusRoundtrip()
 {
     ac::Status st{};
     st.seq = 0xBEEF;
@@ -63,7 +63,7 @@ static void test_status_roundtrip()
     TEST_ASSERT_FALSE(ac::decodeStatus(std::span<const uint8_t>(buf.data(), 15)).has_value());
 }
 
-static void test_decode_heartbeat()
+static void testDecodeHeartbeat()
 {
     const std::array<uint8_t, 10> data = {0x05, 0x01, 0x50, 0x01, 0, 0, 0, 0, 9, 9};
     auto hb = ac::decodeHeartbeat(data);
@@ -74,7 +74,7 @@ static void test_decode_heartbeat()
     TEST_ASSERT_FALSE(ac::decodeHeartbeat(std::span<const uint8_t>(data.data(), 7)).has_value());
 }
 
-static void test_encode_heartbeat()
+static void testEncodeHeartbeat()
 {
     ac::Heartbeat hb{};
     hb.seq = 0x0005;
@@ -88,14 +88,14 @@ static void test_encode_heartbeat()
     TEST_ASSERT_EQUAL_UINT(0, ac::encodeHeartbeat(hb, std::span<uint8_t>(out.data(), 7)));
 }
 
-static void test_src_defaults_unknown()
+static void testSrcDefaultsUnknown()
 {
     TEST_ASSERT_FALSE(s_src.isOverride());
     TEST_ASSERT_EQUAL_HEX8(ac::kStateUnknown, s_src.state());
     TEST_ASSERT_EQUAL_UINT8(0, s_src.level());
 }
 
-static void test_src_override_priority()
+static void testSrcOverridePriority()
 {
     s_src.setFence(ac::kStateNormal);
     TEST_ASSERT_TRUE(s_src.setOverride(ac::kStateAlert, 3));
@@ -107,14 +107,14 @@ static void test_src_override_priority()
     TEST_ASSERT_EQUAL_UINT8(0, s_src.level());
 }
 
-static void test_src_fence_alert_level()
+static void testSrcFenceAlertLevel()
 {
     s_src.setFence(ac::kStateAlert);
     TEST_ASSERT_EQUAL_HEX8(ac::kStateAlert, s_src.state());
     TEST_ASSERT_EQUAL_UINT8(2, s_src.level());
 }
 
-static void test_src_override_rejects_invalid()
+static void testSrcOverrideRejectsInvalid()
 {
     TEST_ASSERT_FALSE(s_src.setOverride(0x03, 1));
     TEST_ASSERT_FALSE(s_src.setOverride(ac::kStateUnknown, 1));
@@ -127,14 +127,14 @@ static void test_src_override_rejects_invalid()
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_encode_status_layout);
-    RUN_TEST(test_encode_status_short_buffer);
-    RUN_TEST(test_status_roundtrip);
-    RUN_TEST(test_decode_heartbeat);
-    RUN_TEST(test_encode_heartbeat);
-    RUN_TEST(test_src_defaults_unknown);
-    RUN_TEST(test_src_override_priority);
-    RUN_TEST(test_src_fence_alert_level);
-    RUN_TEST(test_src_override_rejects_invalid);
+    RUN_TEST(testEncodeStatusLayout);
+    RUN_TEST(testEncodeStatusShortBuffer);
+    RUN_TEST(testStatusRoundtrip);
+    RUN_TEST(testDecodeHeartbeat);
+    RUN_TEST(testEncodeHeartbeat);
+    RUN_TEST(testSrcDefaultsUnknown);
+    RUN_TEST(testSrcOverridePriority);
+    RUN_TEST(testSrcFenceAlertLevel);
+    RUN_TEST(testSrcOverrideRejectsInvalid);
     return UNITY_END();
 }

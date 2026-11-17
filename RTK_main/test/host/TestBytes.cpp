@@ -13,7 +13,7 @@ using proto::ByteWriter;
 extern "C" void setUp(void) {}
 extern "C" void tearDown(void) {}
 
-static void test_writer_little_endian()
+static void testWriterLittleEndian()
 {
     std::array<uint8_t, 8> buf{};
     ByteWriter w(buf);
@@ -27,7 +27,7 @@ static void test_writer_little_endian()
     TEST_ASSERT_EQUAL_UINT(7, w.written().size());
 }
 
-static void test_writer_sticky_overflow()
+static void testWriterStickyOverflow()
 {
     std::array<uint8_t, 4> buf = {0xEE, 0xEE, 0xEE, 0xEE};
     ByteWriter w(std::span<uint8_t>(buf.data(), 3));
@@ -43,7 +43,7 @@ static void test_writer_sticky_overflow()
     TEST_ASSERT_EQUAL_HEX8(0xEE, buf[3]); // span 之外绝不触碰
 }
 
-static void test_writer_fixed_str_pads_and_truncates()
+static void testWriterFixedStrPadsAndTruncates()
 {
     std::array<uint8_t, 16> buf{};
     buf.fill(0x55);
@@ -57,7 +57,7 @@ static void test_writer_fixed_str_pads_and_truncates()
     TEST_ASSERT_EQUAL_HEX8(0x55, buf[12]);
 }
 
-static void test_writer_bytes_and_zeros()
+static void testWriterBytesAndZeros()
 {
     std::array<uint8_t, 6> buf{};
     buf.fill(0x77);
@@ -73,7 +73,7 @@ static void test_writer_bytes_and_zeros()
     TEST_ASSERT_EQUAL_HEX8(0x77, buf[5]);
 }
 
-static void test_reader_values_and_overflow()
+static void testReaderValuesAndOverflow()
 {
     const std::array<uint8_t, 7> data = {0x11, 0x33, 0x22, 0x77, 0x66, 0x55, 0x44};
     ByteReader r(data);
@@ -86,7 +86,7 @@ static void test_reader_values_and_overflow()
     TEST_ASSERT_FALSE(r.ok());
 }
 
-static void test_reader_take_and_skip()
+static void testReaderTakeAndSkip()
 {
     const std::array<uint8_t, 5> data = {1, 2, 3, 4, 5};
     ByteReader r(data);
@@ -99,7 +99,7 @@ static void test_reader_take_and_skip()
     TEST_ASSERT_FALSE(r.ok());
 }
 
-static void test_status_strings()
+static void testStatusStrings()
 {
     TEST_ASSERT_TRUE(isOk(fw::Status::kOk));
     TEST_ASSERT_FALSE(isOk(fw::Status::kTimeout));
@@ -111,12 +111,12 @@ static void test_status_strings()
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_writer_little_endian);
-    RUN_TEST(test_writer_sticky_overflow);
-    RUN_TEST(test_writer_fixed_str_pads_and_truncates);
-    RUN_TEST(test_writer_bytes_and_zeros);
-    RUN_TEST(test_reader_values_and_overflow);
-    RUN_TEST(test_reader_take_and_skip);
-    RUN_TEST(test_status_strings);
+    RUN_TEST(testWriterLittleEndian);
+    RUN_TEST(testWriterStickyOverflow);
+    RUN_TEST(testWriterFixedStrPadsAndTruncates);
+    RUN_TEST(testWriterBytesAndZeros);
+    RUN_TEST(testReaderValuesAndOverflow);
+    RUN_TEST(testReaderTakeAndSkip);
+    RUN_TEST(testStatusStrings);
     return UNITY_END();
 }

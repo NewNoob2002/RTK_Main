@@ -11,38 +11,38 @@ namespace app {
 
 namespace {
 
-uint32_t sample_now_ms(const BootHooks *hooks) noexcept
+uint32_t sampleNowMs(const BootHooks *hooks) noexcept
 {
-    return ((hooks != nullptr) && (hooks->now_ms != nullptr)) ? hooks->now_ms() : 0U;
+    return ((hooks != nullptr) && (hooks->nowMs != nullptr)) ? hooks->nowMs() : 0U;
 }
 
-void sample_heap(const BootHooks *hooks, BootRecord &record) noexcept
+void sampleHeap(const BootHooks *hooks, BootRecord &record) noexcept
 {
     if ((hooks == nullptr) || (hooks->heap == nullptr)) {
         return;
     }
     const BootHeap heap = hooks->heap();
-    record.heap_free = heap.free_bytes;
-    record.heap_min = heap.min_bytes;
-    record.heap_largest = heap.largest_bytes;
+    record.heapFree = heap.freeBytes;
+    record.heapMin = heap.minBytes;
+    record.heapLargest = heap.largestBytes;
 }
 
 /** 故障注入：按步骤名命中时不执行步骤体，原因写入 ctx 的固定缓冲。 */
-const char *fault_reason_for(BootCtx &ctx, const char *name) noexcept
+const char *faultReasonFor(BootCtx &ctx, const char *name) noexcept
 {
-    const std::string_view fault_step{ctx.fault_step != nullptr ? ctx.fault_step : ""};
-    if (fault_step.empty() || (fault_step != std::string_view{name})) {
+    const std::string_view faultStep{ctx.faultStep != nullptr ? ctx.faultStep : ""};
+    if (faultStep.empty() || (faultStep != std::string_view{name})) {
         return nullptr;
     }
     // "fault:" 加步骤名短于缓冲上限；写失败时退回常量，避免返回空原因。
-    const int written = std::snprintf(ctx.fault_reason.data(), ctx.fault_reason.size(), "%s%s",
+    const int written = std::snprintf(ctx.faultReason.data(), ctx.faultReason.size(), "%s%s",
                                       boot_reason::kFaultPrefix, name);
-    return (written > 0) ? ctx.fault_reason.data() : boot_reason::kFaultFallback;
+    return (written > 0) ? ctx.faultReason.data() : boot_reason::kFaultFallback;
 }
 
 } // namespace
 
-const char *boot_result_name(BootResult result) noexcept
+const char *bootResultName(BootResult result) noexcept
 {
     switch (result) {
     case BootResult::kOk:
@@ -60,8 +60,8 @@ const char *boot_result_name(BootResult result) noexcept
     }
 }
 
-size_t run_boot_steps(std::span<const BootStep> steps, BootCtx &ctx,
-                      std::span<BootRecord> records) noexcept
+size_t runBootSteps(std::span<const BootStep> steps, BootCtx &ctx,
+                    std::span<BootRecord> records) noexcept
 {
     size_t executed = 0U;
     const size_t limit = (steps.size() < records.size()) ? steps.size() : records.size();
@@ -69,9 +69,9 @@ size_t run_boot_steps(std::span<const BootStep> steps, BootCtx &ctx,
         BootRecord &record = records[i];
         record = BootRecord{};
         record.name = steps[i].name;
-        record.start_ms = sample_now_ms(ctx.hooks);
+        record.startMs = sampleNowMs(ctx.hooks);
 
-        const char *reason = fault_reason_for(ctx, steps[i].name);
+        const char *reason = faultReasonFor(ctx, steps[i].name);
         if (reason != nullptr) {
             record.result = BootResult::kFail;
         } else {
@@ -80,21 +80,21 @@ size_t run_boot_steps(std::span<const BootStep> steps, BootCtx &ctx,
             reason = ctx.reason;
         }
 
-        record.took_ms = sample_now_ms(ctx.hooks) - record.start_ms;
+        record.tookMs = sampleNowMs(ctx.hooks) - record.startMs;
         record.reason = reason;
-        sample_heap(ctx.hooks, record);
+        sampleHeap(ctx.hooks, record);
         ++executed;
 
         if (record.result != BootResult::kFail) {
             continue;
         }
-        if (steps[i].on_fail == OnFail::kContinue) {
+        if (steps[i].onFail == OnFail::kContinue) {
             // 已记录并报告本步原因，后续步骤不应继承它。
             ctx.reason = nullptr;
             continue;
         }
-        if ((ctx.hooks != nullptr) && (ctx.hooks->on_degrade != nullptr)) {
-            ctx.hooks->on_degrade(ctx, reason);
+        if ((ctx.hooks != nullptr) && (ctx.hooks->onDegrade != nullptr)) {
+            ctx.hooks->onDegrade(ctx, reason);
         }
         break;
     }

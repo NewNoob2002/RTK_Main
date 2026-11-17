@@ -1,5 +1,5 @@
 // GNSS 配置读回 host 测试：$CONFIG 行解码、与 NMEA 共存、驱动读回命令与正文提取、控制器读回窗口（ADR-0012 §2.7）。
-// 只用 host 可编的纯组件（gnss/stream_demux）与本地构造的协议字节，不碰硬件。
+// 只用 host 可编的纯组件（gnss/streamDemux）与本地构造的协议字节，不碰硬件。
 #include <array>
 #include <cstdint>
 #include <span>

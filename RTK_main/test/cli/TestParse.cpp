@@ -1,4 +1,4 @@
-// cli 参数解析辅助 host 单元测试（parse_u32 / parse_u8 / parse_mac / parse_hex）。
+// cli 参数解析辅助 host 单元测试（parseU32 / parseU8 / parseMac / parseHex）。
 
 #include <array>
 #include <cstddef>
@@ -26,7 +26,7 @@ constexpr uint8_t kVal127 = 127U;
 constexpr size_t kSmallHexBuf = 2U;
 constexpr size_t kHexOutCap = 4U;
 
-void test_parse_u32_valid()
+void testParseU32Valid()
 {
     uint32_t out = kU32Sentinel;
 
@@ -67,22 +67,22 @@ void test_parse_u32_valid()
     TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, out);
 }
 
-void test_parse_u32_invalid_preserves_out()
+void testParseU32InvalidPreservesOut()
 {
-    const std::array<const char *, 19> bad_inputs{{
+    const std::array<const char *, 19> badInputs{{
         nullptr, "",      "0x",         "0X",          " 1",          "1 ",  " 0x1",
         "0x1 ",  "+1",    "-1",         "+0x1",        "-0x1",        "12a", "0x12g",
         "1.5",   "0b101", "4294967296", "42949672950", "0x100000000",
     }};
 
-    for (const char *input : bad_inputs) {
+    for (const char *input : badInputs) {
         uint32_t out = kU32Sentinel;
         TEST_ASSERT_FALSE(cli::parseU32(input, out));
         TEST_ASSERT_EQUAL_UINT32(kU32Sentinel, out);
     }
 }
 
-void test_parse_u8()
+void testParseU8()
 {
     uint8_t out = kU8Sentinel;
 
@@ -104,7 +104,7 @@ void test_parse_u8()
     TEST_ASSERT_TRUE(cli::parseU8("0xff", out));
     TEST_ASSERT_EQUAL_UINT8(UINT8_MAX, out);
 
-    const std::array<const char *, 9> bad_inputs{{
+    const std::array<const char *, 9> badInputs{{
         nullptr,
         "",
         "256",
@@ -115,14 +115,14 @@ void test_parse_u8()
         " 1",
         "0x",
     }};
-    for (const char *input : bad_inputs) {
+    for (const char *input : badInputs) {
         out = kU8Sentinel;
         TEST_ASSERT_FALSE(cli::parseU8(input, out));
         TEST_ASSERT_EQUAL_UINT8(kU8Sentinel, out);
     }
 }
 
-void test_parse_mac()
+void testParseMac()
 {
     std::array<uint8_t, cli::kMacLen> mac{};
 
@@ -139,7 +139,7 @@ void test_parse_mac()
     TEST_ASSERT_EQUAL_UINT8_ARRAY(mixed.data(), mac.data(), cli::kMacLen);
 
     const std::array<uint8_t, cli::kMacLen> sentinel{0x11U, 0x22U, 0x33U, 0x44U, 0x55U, 0x66U};
-    const std::array<const char *, 11> bad_macs{{
+    const std::array<const char *, 11> badMacs{{
         nullptr,
         "",
         "AA:BB:CC:DD:EE",
@@ -152,14 +152,14 @@ void test_parse_mac()
         "AA:BB:CC:DD:EE:FF ",
         "AA:BB:CC:DD:EE;FF",
     }};
-    for (const char *input : bad_macs) {
+    for (const char *input : badMacs) {
         mac = sentinel;
         TEST_ASSERT_FALSE(cli::parseMac(input, mac));
         TEST_ASSERT_EQUAL_UINT8_ARRAY(sentinel.data(), mac.data(), cli::kMacLen);
     }
 }
 
-void test_parse_hex()
+void testParseHex()
 {
     std::array<uint8_t, kHexOutCap> buf{};
     buf.fill(kHexSentinel);
@@ -185,9 +185,9 @@ void test_parse_hex()
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expect4.data(), buf.data(), kHexOutCap);
 
     // 各类非法输入不得改动 out 或 written
-    const std::array<uint8_t, kHexOutCap> sentinel_buf{kHexSentinel, kHexSentinel, kHexSentinel,
-                                                       kHexSentinel};
-    const std::array<const char *, 9> bad_hex{{
+    const std::array<uint8_t, kHexOutCap> sentinelBuf{kHexSentinel, kHexSentinel, kHexSentinel,
+                                                      kHexSentinel};
+    const std::array<const char *, 9> badHex{{
         nullptr,
         "a",
         "123",
@@ -198,21 +198,21 @@ void test_parse_hex()
         "0x12",
         " 01",
     }};
-    for (const char *input : bad_hex) {
-        buf = sentinel_buf;
+    for (const char *input : badHex) {
+        buf = sentinelBuf;
         written = kWrittenSentinel;
         TEST_ASSERT_FALSE(cli::parseHex(input, buf, written));
         TEST_ASSERT_EQUAL_size_t(kWrittenSentinel, written);
-        TEST_ASSERT_EQUAL_UINT8_ARRAY(sentinel_buf.data(), buf.data(), kHexOutCap);
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(sentinelBuf.data(), buf.data(), kHexOutCap);
     }
 
     // 超出 out 容量不得改动 out 或 written
-    std::array<uint8_t, kSmallHexBuf> small_buf{kHexSentinel, kHexSentinel};
+    std::array<uint8_t, kSmallHexBuf> smallBuf{kHexSentinel, kHexSentinel};
     written = kWrittenSentinel;
-    TEST_ASSERT_FALSE(cli::parseHex("010203", small_buf, written));
+    TEST_ASSERT_FALSE(cli::parseHex("010203", smallBuf, written));
     TEST_ASSERT_EQUAL_size_t(kWrittenSentinel, written);
-    TEST_ASSERT_EQUAL_UINT8(kHexSentinel, small_buf[0]);
-    TEST_ASSERT_EQUAL_UINT8(kHexSentinel, small_buf[1]);
+    TEST_ASSERT_EQUAL_UINT8(kHexSentinel, smallBuf[0]);
+    TEST_ASSERT_EQUAL_UINT8(kHexSentinel, smallBuf[1]);
 
     written = kWrittenSentinel;
     TEST_ASSERT_FALSE(cli::parseHex("01", std::span<uint8_t>{}, written));
@@ -224,10 +224,10 @@ void test_parse_hex()
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_parse_u32_valid);
-    RUN_TEST(test_parse_u32_invalid_preserves_out);
-    RUN_TEST(test_parse_u8);
-    RUN_TEST(test_parse_mac);
-    RUN_TEST(test_parse_hex);
+    RUN_TEST(testParseU32Valid);
+    RUN_TEST(testParseU32InvalidPreservesOut);
+    RUN_TEST(testParseU8);
+    RUN_TEST(testParseMac);
+    RUN_TEST(testParseHex);
     return UNITY_END();
 }

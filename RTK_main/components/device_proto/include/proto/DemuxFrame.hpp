@@ -1,6 +1,6 @@
 // 产品 SPP 帧（AA 44 18，见 DevProtoFrame.h 与 docs/protocol/phone_protocol.md §1–§3）的分流器解码器，
-// 供 stream_demux 在同一条蓝牙字节流中区分产品帧与 RTCM（ADR-0004 方案 B）。
-// 校验规则与 dev_proto_parser_feed 完全一致：AA 44 18、头长字节 == 0x14、payload_len（偏移 12，u16 LE）
+// 供 streamDemux 在同一条蓝牙字节流中区分产品帧与 RTCM（ADR-0004 方案 B）。
+// 校验规则与 dev_proto_parser_feed 完全一致：AA 44 18、头长字节 == 0x14、payloadLen（偏移 12，u16 LE）
 // ≤ DEV_PROTO_MAX_PAYLOAD、CRC-32（proto::crc32）正确。实现：components/device_proto/DemuxFrame.cpp。
 // 冻结接口（ADR-0005）。实现方不得修改；变更须先修订 ADR-0005。
 #pragma once

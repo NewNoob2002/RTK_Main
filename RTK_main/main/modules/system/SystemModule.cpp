@@ -17,8 +17,8 @@ constexpr uint8_t kNibbleMask = 0x0F;
 constexpr unsigned kNibbleShift = 4;
 constexpr size_t kDeviceNameMax = kDeviceNameBuf - 1U;
 } // namespace
-bool derive_sn_from_mac(std::span<const uint8_t, core::kAddrLen> mac,
-                        std::span<char, NVS_STORE_SN_MAX + 1U> out) noexcept
+bool deriveSnFromMac(std::span<const uint8_t, core::kAddrLen> mac,
+                     std::span<char, NVS_STORE_SN_MAX + 1U> out) noexcept
 {
     const std::array nibbles{mac[kMacSnHighByte] >> kNibbleShift, mac[kMacSnHighByte] & kNibbleMask,
                              mac[kMacSnLowByte] >> kNibbleShift, mac[kMacSnLowByte] & kNibbleMask};
@@ -29,7 +29,7 @@ bool derive_sn_from_mac(std::span<const uint8_t, core::kAddrLen> mac,
     out[nibbles.size()] = '\0';
     return true;
 }
-bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out) noexcept
+bool buildDeviceName(std::string_view sn, std::span<char, kDeviceNameBuf> out) noexcept
 {
     if (sn.empty() || sn.size() > NVS_STORE_SN_MAX ||
         sn.find_first_of("\r\n") != std::string_view::npos) {
@@ -52,13 +52,13 @@ bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out)
 void SystemModule::prepare() noexcept
 {
     /* 读取持久化 SN 和启动期堆状态。 */
-    status_ = ctx().data.system_status.read();
-    status_.free_heap = esp_get_free_heap_size();
-    status_.min_free_heap = esp_get_minimum_free_heap_size();
+    status_ = ctx().data.systemStatus.read();
+    status_.freeHeap = esp_get_free_heap_size();
+    status_.minFreeHeap = esp_get_minimum_free_heap_size();
     if (status_.sn[0] == '\0') {
         std::array<uint8_t, core::kAddrLen> mac{};
         const esp_err_t error = esp_read_mac(mac.data(), ESP_MAC_BT);
-        if (error != ESP_OK || !derive_sn_from_mac(mac, status_.sn)) {
+        if (error != ESP_OK || !deriveSnFromMac(mac, status_.sn)) {
             const int written = snprintf(status_.sn.data(), status_.sn.size(), "%s", "0000");
             if (written < 0) {
                 FW_LOGE(fw::TraceCat::kSys, "fallback SN formatting failed");
@@ -66,34 +66,34 @@ void SystemModule::prepare() noexcept
         }
     }
     /* 名称校验通过后才启动 BT，失败仍发布状态供控制台读取。 */
-    if (!build_device_name(status_.sn.data(), status_.device_name)) {
+    if (!buildDeviceName(status_.sn.data(), status_.deviceName)) {
         FW_LOGE(fw::TraceCat::kSys, "invalid SN for BT name");
-        ctx().data.system_status.write(status_);
+        ctx().data.systemStatus.write(status_);
         return;
     }
     FW_LOGI(fw::TraceCat::kSys, "sn=%s bt_name=%s policy=%s", status_.sn.data(),
-            status_.device_name.data(), policy_name(policy_from_config()));
-    const esp_err_t error = spp_server_init(status_.device_name.data());
-    status_.bt_ready = error == ESP_OK;
+            status_.deviceName.data(), policyName(policyFromConfig()));
+    const esp_err_t error = spp_server_init(status_.deviceName.data());
+    status_.btReady = error == ESP_OK;
     if (error != ESP_OK) {
         FW_LOGE(fw::TraceCat::kSys, "bt_spp init failed: %s; console only", esp_err_to_name(error));
     }
-    ctx().data.system_status.write(status_);
+    ctx().data.systemStatus.write(status_);
 }
-bool SystemModule::poll(uint32_t /*now_ms*/) noexcept
+bool SystemModule::poll(uint32_t /*nowMs*/) noexcept
 {
     /* 先更新系统状态，再发布执行器统计，保持原主题写入顺序。 */
-    status_.link_running = (ctx().link_executor != nullptr) && ctx().link_executor->running() &&
-                           ctx().link_executor->moduleOk(id(ModuleKind::kBtLink));
-    status_.free_heap = esp_get_free_heap_size();
-    status_.min_free_heap = esp_get_minimum_free_heap_size();
-    ctx().data.system_status.write(status_);
-    if (ctx().link_executor != nullptr) {
-        ctx().data.exec_stats.write(ctx().link_executor->stats());
+    status_.linkRunning = (ctx().linkExecutor != nullptr) && ctx().linkExecutor->running() &&
+                          ctx().linkExecutor->moduleOk(id(ModuleKind::kBtLink));
+    status_.freeHeap = esp_get_free_heap_size();
+    status_.minFreeHeap = esp_get_minimum_free_heap_size();
+    ctx().data.systemStatus.write(status_);
+    if (ctx().linkExecutor != nullptr) {
+        ctx().data.execStats.write(ctx().linkExecutor->stats());
     }
 #if RTK_GNSS_ENABLED
-    if (ctx().io_executor != nullptr) {
-        ctx().data.io_exec_stats.write(ctx().io_executor->stats());
+    if (ctx().ioExecutor != nullptr) {
+        ctx().data.ioExecStats.write(ctx().ioExecutor->stats());
     }
 #endif
     return false;

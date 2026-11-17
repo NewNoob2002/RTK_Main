@@ -12,7 +12,7 @@
 #include "fw/Lock.hpp"
 #include "fw/Result.hpp"
 
-// 编译期总开关（ADR-0009 §2.6）：0 时 trace()/trace_on() 变为空内联，调用点整体被优化掉，
+// 编译期总开关（ADR-0009 §2.6）：0 时 trace()/traceOn() 变为空内联，调用点整体被优化掉，
 // 调用方无需 #if。ESP-IDF 构建由 app_fw 的 CMake 依据 CONFIG_RTK_TRACE_ENABLE 以 PUBLIC 宏传给所有依赖方；
 // 其他构建（host 测试、外部工程）未定义时默认开启。
 #ifndef FW_TRACE_ENABLED

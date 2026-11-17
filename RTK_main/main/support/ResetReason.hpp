@@ -7,6 +7,6 @@
 namespace app {
 
 /** 复位原因短名（小写连字符）；未识别取值返回 "unknown"。 */
-[[nodiscard]] const char *reset_reason_name(esp_reset_reason_t reason) noexcept;
+[[nodiscard]] const char *resetReasonName(esp_reset_reason_t reason) noexcept;
 
 } // namespace app

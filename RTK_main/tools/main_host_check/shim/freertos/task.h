@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 TaskHandle_t xTaskGetCurrentTaskHandle(void);
+// 由 t13 的 FakeRtos.c 定义；此处声明可让诊断只出现在 .h（不参与命名检查）且保持 C 链接。
+extern __thread StaticTask_t *fake_current_task;
 void vTaskDelay(TickType_t ticks);
 void vTaskDelete(TaskHandle_t task);
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t task);

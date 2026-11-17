@@ -15,6 +15,8 @@
 #include "data/AppData.hpp"
 #include "data/GnssOutput.hpp"
 #include "esp_err.h"
+#include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "fw/Lock.hpp"
 #include "modules/debug/DebugModule.hpp"
 #include "modules/gnss/RtcmPipe.hpp"
@@ -76,7 +78,7 @@ uint32_t nowMs() noexcept
 } // namespace rtos
 
 namespace app {
-fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> /*keys*/) noexcept
+fw::Result StorageModule::saveKeys(std::span<const fw::StoreKey> /*keys*/) noexcept
 {
     return fw::Result::kOk;
 }
@@ -100,63 +102,63 @@ void check(bool passed, const char *expression,
 namespace {
 
 struct FaultAllocCtx {
-    size_t fail_on_call = SIZE_MAX;
-    size_t call_count = 0U;
-    size_t live_allocs = 0U;
-    size_t free_calls = 0U;
-    size_t alloc_calls = 0U;
-    size_t last_req_bytes = 0U;
+    size_t failOnCall = SIZE_MAX;
+    size_t callCount = 0U;
+    size_t liveAllocs = 0U;
+    size_t freeCalls = 0U;
+    size_t allocCalls = 0U;
+    size_t lastReqBytes = 0U;
 };
 
-void *fault_alloc(size_t align, size_t bytes, void *raw_ctx) noexcept
+void *faultAlloc(size_t align, size_t bytes, void *rawCtx) noexcept
 {
-    auto *ctx = static_cast<FaultAllocCtx *>(raw_ctx);
-    const size_t idx = ctx->call_count;
-    ++ctx->call_count;
-    if (idx >= ctx->fail_on_call) {
+    auto *ctx = static_cast<FaultAllocCtx *>(rawCtx);
+    const size_t idx = ctx->callCount;
+    ++ctx->callCount;
+    if (idx >= ctx->failOnCall) {
         return nullptr;
     }
-    const size_t safe_align = (align < sizeof(void *)) ? sizeof(void *) : align;
-    const size_t rounded = ((bytes + safe_align - 1U) / safe_align) * safe_align;
-    void *ptr = std::aligned_alloc(safe_align, rounded);
+    const size_t safeAlign = (align < sizeof(void *)) ? sizeof(void *) : align;
+    const size_t rounded = ((bytes + safeAlign - 1U) / safeAlign) * safeAlign;
+    void *ptr = std::aligned_alloc(safeAlign, rounded);
     if (ptr != nullptr) {
-        ++ctx->live_allocs;
-        ++ctx->alloc_calls;
-        ctx->last_req_bytes = rounded;
+        ++ctx->liveAllocs;
+        ++ctx->allocCalls;
+        ctx->lastReqBytes = rounded;
     }
     return ptr;
 }
 
-void fault_free(void *ptr, void *raw_ctx) noexcept
+void faultFree(void *ptr, void *rawCtx) noexcept
 {
-    auto *ctx = static_cast<FaultAllocCtx *>(raw_ctx);
+    auto *ctx = static_cast<FaultAllocCtx *>(rawCtx);
     if (ptr != nullptr) {
         std::free(ptr);
-        --ctx->live_allocs;
-        ++ctx->free_calls;
+        --ctx->liveAllocs;
+        ++ctx->freeCalls;
     }
 }
 
-size_t fault_actual_size(void * /*ptr*/, void *raw_ctx) noexcept
+size_t faultActualSize(void * /*ptr*/, void *rawCtx) noexcept
 {
-    const auto *ctx = static_cast<const FaultAllocCtx *>(raw_ctx);
-    return ctx->last_req_bytes + 16U;
+    const auto *ctx = static_cast<const FaultAllocCtx *>(rawCtx);
+    return ctx->lastReqBytes + 16U;
 }
 
-rtos::BootAllocatorOps make_ops(FaultAllocCtx &ctx) noexcept
+rtos::BootAllocatorOps makeOps(FaultAllocCtx &ctx) noexcept
 {
     return rtos::BootAllocatorOps{
-        .alloc = &fault_alloc,
-        .free = &fault_free,
-        .allocatedSize = &fault_actual_size,
+        .alloc = &faultAlloc,
+        .free = &faultFree,
+        .allocatedSize = &faultActualSize,
         .ctx = &ctx,
     };
 }
 
-void test_arena_lifecycle_and_validation() noexcept
+void testArenaLifecycleAndValidation() noexcept
 {
     FaultAllocCtx ctx{};
-    const auto ops = make_ops(ctx);
+    const auto ops = makeOps(ctx);
     rtos::BootArena arena{};
 
     CHECK(arena.state() == rtos::ArenaState::kUninit);
@@ -184,20 +186,20 @@ void test_arena_lifecycle_and_validation() noexcept
     CHECK(arena2.allocate("align3", 64U, 3U, ptr) == fw::Status::kInvalidArg);
     CHECK(arena2.allocate("align6", 64U, 6U, ptr) == fw::Status::kInvalidArg);
     CHECK(arena2.allocate("round_overflow", SIZE_MAX, 16U, ptr) == fw::Status::kInvalidArg);
-    std::span<uint64_t> too_big{};
-    CHECK(arena2.allocArray<uint64_t>("count_overflow", SIZE_MAX, too_big) ==
+    std::span<uint64_t> tooBig{};
+    CHECK(arena2.allocArray<uint64_t>("count_overflow", SIZE_MAX, tooBig) ==
           fw::Status::kInvalidArg);
-    CHECK(too_big.empty());
-    CHECK(arena2.allocArray<uint64_t>("under_aligned", 1U, too_big, alignof(uint64_t) / 2U) ==
+    CHECK(tooBig.empty());
+    CHECK(arena2.allocArray<uint64_t>("under_aligned", 1U, tooBig, alignof(uint64_t) / 2U) ==
           fw::Status::kInvalidArg);
-    CHECK(too_big.empty() && arena2.entries().empty() && ctx.alloc_calls == 0U);
+    CHECK(tooBig.empty() && arena2.entries().empty() && ctx.allocCalls == 0U);
 
     // 默认宿主分配器（ops=nullptr）与 align=0 退化为平台指针宽度对齐
-    rtos::BootArena arena_def{};
-    CHECK(arena_def.open(nullptr) == fw::Status::kOk);
-    CHECK(arena_def.allocate("align0", 16U, 0U, ptr) == fw::Status::kOk);
+    rtos::BootArena arenaDef{};
+    CHECK(arenaDef.open(nullptr) == fw::Status::kOk);
+    CHECK(arenaDef.allocate("align0", 16U, 0U, ptr) == fw::Status::kOk);
     CHECK(ptr != nullptr);
-    CHECK(arena_def.abort("cleanup_def") == fw::Status::kOk);
+    CHECK(arenaDef.abort("cleanup_def") == fw::Status::kOk);
 
     // 正常分配与重复 tag 拒绝
     std::span<uint8_t> buf0{};
@@ -214,8 +216,8 @@ void test_arena_lifecycle_and_validation() noexcept
     CHECK(arena2.allocate("late", 64U, 4U, ptr) == fw::Status::kInvalidState);
     CHECK(arena2.seal() == fw::Status::kInvalidState);
     CHECK(arena2.abort("after_seal") == fw::Status::kInvalidState);
-    CHECK(ctx.live_allocs == 1U);
-    CHECK(ctx.free_calls == 0U);
+    CHECK(ctx.liveAllocs == 1U);
+    CHECK(ctx.freeCalls == 0U);
     CHECK(!arena2.degraded());
 
     // 运行期可标记非致命降级原因（例如 bt_not_ready）
@@ -227,12 +229,12 @@ void test_arena_lifecycle_and_validation() noexcept
     std::free(buf0.data());
 }
 
-void test_arena_max_entries_and_fault_injection() noexcept
+void testArenaMaxEntriesAndFaultInjection() noexcept
 {
     // 1. 超过 kMaxEntries (32) 拒绝
     {
         FaultAllocCtx ctx{};
-        const auto ops = make_ops(ctx);
+        const auto ops = makeOps(ctx);
         rtos::BootArena arena{};
         CHECK(arena.open(&ops) == fw::Status::kOk);
         static constexpr std::array<const char *, 33> kTags{{
@@ -246,33 +248,33 @@ void test_arena_max_entries_and_fault_injection() noexcept
         }
         void *extra = nullptr;
         CHECK(arena.allocate("overflow", 32U, 4U, extra) == fw::Status::kNoSpace);
-        CHECK(ctx.live_allocs == rtos::BootArena::kMaxEntries);
+        CHECK(ctx.liveAllocs == rtos::BootArena::kMaxEntries);
         CHECK(arena.abort("max_entries_test") == fw::Status::kOk);
-        CHECK(ctx.live_allocs == 0U);
-        CHECK(ctx.free_calls == rtos::BootArena::kMaxEntries);
+        CHECK(ctx.liveAllocs == 0U);
+        CHECK(ctx.freeCalls == rtos::BootArena::kMaxEntries);
     }
 }
 
-void reset_test_arena() noexcept
+void resetTestArena() noexcept
 {
     // 测试没有创建消费者；仅在所有引用已撤销、块已回收后重建台账。
-    std::destroy_at(&app::s_app.boot_arena);
-    std::construct_at(&app::s_app.boot_arena);
+    std::destroy_at(&app::s_app.bootArena);
+    std::construct_at(&app::s_app.bootArena);
 }
 
-void test_production_allocation_plan() noexcept
+void testProductionAllocationPlan() noexcept
 {
     FaultAllocCtx probe{};
-    auto ops = make_ops(probe);
+    auto ops = makeOps(probe);
     app::BootBuffers buffers{};
-    CHECK(app::allocate_boot_buffers(buffers, &ops));
-    const auto entries = app::s_app.boot_arena.entries();
+    CHECK(app::allocateBootBuffers(buffers, &ops));
+    const auto entries = app::s_app.bootArena.entries();
     const size_t owners = entries.size();
     std::array<const char *, rtos::BootArena::kMaxEntries> names{};
     size_t requested = 0U;
-    size_t stream_count = 0U;
-    bool has_gnss = false;
-    bool has_trace = false;
+    size_t streamCount = 0U;
+    bool hasGnss = false;
+    bool hasTrace = false;
     for (size_t i = 0; i < owners; ++i) {
         const auto &entry = entries[i];
         names[i] = entry.tag;
@@ -283,7 +285,7 @@ void test_production_allocation_plan() noexcept
         CHECK(entry.actualBytes >= entry.bytes);
         const std::string_view name{entry.tag};
         if (name.starts_with("spp.tx.stream")) {
-            ++stream_count;
+            ++streamCount;
             CHECK(name == "spp.tx.stream.phone" && entry.bytes == SPP_SERVER_STREAM_CAPACITY);
         }
         if (name.starts_with("spp.tx.reply")) {
@@ -292,145 +294,145 @@ void test_production_allocation_plan() noexcept
         if (name == "spp.tx.merge") {
             CHECK(entry.bytes == SPP_SERVER_MERGE_CAPACITY);
         }
-        has_gnss |= name == "gnss.latest";
-        has_trace |= name == "trace.ring";
+        hasGnss |= name == "gnss.latest";
+        hasTrace |= name == "trace.ring";
     }
-    CHECK(stream_count == 1U);
-    CHECK(has_gnss == bool(RTK_GNSS_ENABLED));
-    CHECK(has_trace == bool(FW_TRACE_ENABLED));
-    CHECK(requested == app::s_app.boot_arena.totalBytes());
+    CHECK(streamCount == 1U);
+    CHECK(hasGnss == bool(RTK_GNSS_ENABLED));
+    CHECK(hasTrace == bool(FW_TRACE_ENABLED));
+    CHECK(requested == app::s_app.bootArena.totalBytes());
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): host 计划结果使用固定格式报告。
     std::printf("boot plan: owners=%zu requested=%zu actual=%zu gnss=%d trace=%d\n", owners,
-                requested, app::s_app.boot_arena.totalActualBytes(), RTK_GNSS_ENABLED,
+                requested, app::s_app.bootArena.totalActualBytes(), RTK_GNSS_ENABLED,
                 FW_TRACE_ENABLED);
-    app::rollback_boot_bindings(buffers, "test:probe");
-    CHECK(probe.live_allocs == 0U);
-    reset_test_arena();
+    app::rollbackBootBindings(buffers, "test:probe");
+    CHECK(probe.liveAllocs == 0U);
+    resetTestArena();
 
     // 对生产计划第一个至最后一个 owner 分别注入失败，验证先前块全部回收。
     for (size_t fail = 0; fail < owners; ++fail) {
-        FaultAllocCtx ctx{.fail_on_call = fail};
-        ops = make_ops(ctx);
-        CHECK(!app::allocate_boot_buffers(buffers, &ops));
-        CHECK(buffers.link_stack.empty() && buffers.spp_rx_0.empty() && buffers.spp_stream.empty());
-        CHECK(ctx.live_allocs == 0U && ctx.free_calls == fail);
-        CHECK(app::s_app.boot_arena.state() == rtos::ArenaState::kAborted);
-        CHECK(app::s_app.boot_arena.entries().empty());
+        FaultAllocCtx ctx{.failOnCall = fail};
+        ops = makeOps(ctx);
+        CHECK(!app::allocateBootBuffers(buffers, &ops));
+        CHECK(buffers.linkStack.empty() && buffers.sppRx0.empty() && buffers.sppStream.empty());
+        CHECK(ctx.liveAllocs == 0U && ctx.freeCalls == fail);
+        CHECK(app::s_app.bootArena.state() == rtos::ArenaState::kAborted);
+        CHECK(app::s_app.bootArena.entries().empty());
         std::array<char, rtos::BootArena::kMaxReasonBytes> expected{};
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): 构造受限长的预期错误文本。
         std::snprintf(expected.data(), expected.size(), "boot_alloc:%s", names[fail]);
-        CHECK(std::string_view{app::s_app.boot_arena.reason()} == expected.data());
-        reset_test_arena();
+        CHECK(std::string_view{app::s_app.bootArena.reason()} == expected.data());
+        resetTestArena();
     }
 }
 
-void test_binding_rollback_and_sealed_lifetime() noexcept
+void testBindingRollbackAndSealedLifetime() noexcept
 {
     constexpr size_t kStages = 1U + (FW_TRACE_ENABLED ? 1U : 0U) + (RTK_GNSS_ENABLED ? 3U : 0U);
     for (size_t stage = 0; stage < kStages; ++stage) {
         FaultAllocCtx ctx{};
-        const auto ops = make_ops(ctx);
+        const auto ops = makeOps(ctx);
         app::BootBuffers buffers{};
-        CHECK(app::allocate_boot_buffers(buffers, &ops));
+        CHECK(app::allocateBootBuffers(buffers, &ops));
         auto invalid = buffers;
         size_t index = 0U;
         if (stage == index++) {
-            invalid.spp_rx_1 = {};
+            invalid.sppRx1 = {};
         }
 #if FW_TRACE_ENABLED
         if (stage == index++) {
-            invalid.trace_ring = {};
+            invalid.traceRing = {};
         }
 #endif
 #if RTK_GNSS_ENABLED
         if (stage == index++) {
-            invalid.gnss_latest = {};
+            invalid.gnssLatest = {};
         }
         if (stage == index++) {
-            invalid.rtcm_pipe = {};
+            invalid.rtcmPipe = {};
         }
         if (stage == index++) {
-            invalid.gnss_demux = {};
+            invalid.gnssDemux = {};
         }
 #endif
-        const char *failure = app::bind_boot_buffers(invalid);
+        const char *failure = app::bindBootBuffers(invalid);
         CHECK(failure != nullptr);
-        app::rollback_boot_bindings(buffers, failure);
-        CHECK(app::s_app.boot_arena.state() == rtos::ArenaState::kAborted);
-        CHECK(ctx.live_allocs == 0U);
+        app::rollbackBootBindings(buffers, failure);
+        CHECK(app::s_app.bootArena.state() == rtos::ArenaState::kAborted);
+        CHECK(ctx.liveAllocs == 0U);
         CHECK(spp_server_unbind_storage() == ESP_OK);
 #if RTK_GNSS_ENABLED
-        CHECK(app::s_app.rtcm_pipe.init() == fw::Status::kInvalidState);
+        CHECK(app::s_app.rtcmPipe.init() == fw::Status::kInvalidState);
         uint8_t reader = 0U;
-        CHECK(app::s_app.data.gnss_app_ring.attach(1U, reader) == fw::Result::kInvalidState);
+        CHECK(app::s_app.data.gnssAppRing.attach(1U, reader) == fw::Result::kInvalidState);
 #endif
 #if FW_TRACE_ENABLED
         CHECK(app::s_app.debug.init() == fw::Result::kInvalidState);
 #endif
-        reset_test_arena();
+        resetTestArena();
     }
     FaultAllocCtx ctx{};
-    const auto ops = make_ops(ctx);
+    const auto ops = makeOps(ctx);
     app::BootBuffers buffers{};
-    CHECK(app::allocate_boot_buffers(buffers, &ops));
-    CHECK(app::bind_boot_buffers(buffers) == nullptr);
-    CHECK(app::s_app.boot_arena.seal() == fw::Status::kOk);
-    CHECK(app::s_app.boot_arena.abort("callback_alive") == fw::Status::kInvalidState);
-    CHECK(ctx.free_calls == 0U);
+    CHECK(app::allocateBootBuffers(buffers, &ops));
+    CHECK(app::bindBootBuffers(buffers) == nullptr);
+    CHECK(app::s_app.bootArena.seal() == fw::Status::kOk);
+    CHECK(app::s_app.bootArena.abort("callback_alive") == fw::Status::kInvalidState);
+    CHECK(ctx.freeCalls == 0U);
     const uint8_t value = 0xA5U;
-    buffers.spp_stream.back() = value;
-    CHECK(buffers.spp_stream.back() == value);
-    app::s_app.boot_arena.setDegradedReason("task:create_failed");
+    buffers.sppStream.back() = value;
+    CHECK(buffers.sppStream.back() == value);
+    app::s_app.bootArena.setDegradedReason("task:create_failed");
     // 停机后块仍封存；host 不创建回调，撤销 view 后手动释放模拟重启。
-    app::rollback_boot_bindings(buffers, "task:create_failed");
-    CHECK(ctx.free_calls == 0U);
-    for (const auto &entry : app::s_app.boot_arena.entries()) {
-        fault_free(entry.ptr, &ctx);
+    app::rollbackBootBindings(buffers, "task:create_failed");
+    CHECK(ctx.freeCalls == 0U);
+    for (const auto &entry : app::s_app.bootArena.entries()) {
+        faultFree(entry.ptr, &ctx);
     }
-    CHECK(ctx.live_allocs == 0U);
-    reset_test_arena();
+    CHECK(ctx.liveAllocs == 0U);
+    resetTestArena();
 }
 
-int safe_command(void *ctx, int, char **) noexcept
+int safeCommand(void *ctx, int, char **) noexcept
 {
     ++*static_cast<unsigned *>(ctx);
     return 0;
 }
 
-void test_console_gate_and_task_admission() noexcept
+void testConsoleGateAndTaskAdmission() noexcept
 {
     unsigned calls = 0U;
-    app::GatedCommand safe{&safe_command, &calls, true};
-    app::GatedCommand business{&safe_command, &calls, false};
-    app::s_app.boot_phase.store(app::BootPhase::kStarting);
-    CHECK(app::gated_command(&safe, 0, nullptr) == cli::kCmdFail);
-    app::set_console_only();
-    CHECK(app::gated_command(&business, 0, nullptr) == cli::kCmdFail);
-    CHECK(app::gated_command(&safe, 0, nullptr) == 0 && calls == 1U);
-    CHECK(!app::s_app.await_boot(app::BootTask::kLink, true));
-    CHECK((app::s_app.boot_stopped.load() & 1U) != 0U);
-    app::s_app.boot_phase.store(app::BootPhase::kRunning);
-    CHECK(app::gated_command(&business, 0, nullptr) == 0 && calls == 2U);
-    CHECK(app::s_app.await_boot(app::BootTask::kIo, true));
-    app::s_app.boot_phase.store(app::BootPhase::kStopping);
-    CHECK(!app::s_app.await_boot(app::BootTask::kTrace, false));
-    CHECK((app::s_app.boot_stopped.load() & 4U) != 0U);
+    app::GatedCommand safe{&safeCommand, &calls, true};
+    app::GatedCommand business{&safeCommand, &calls, false};
+    app::s_app.bootPhase.store(app::BootPhase::kStarting);
+    CHECK(app::gatedCommand(&safe, 0, nullptr) == cli::kCmdFail);
+    app::setConsoleOnly();
+    CHECK(app::gatedCommand(&business, 0, nullptr) == cli::kCmdFail);
+    CHECK(app::gatedCommand(&safe, 0, nullptr) == 0 && calls == 1U);
+    CHECK(!app::s_app.awaitBoot(app::BootTask::kLink, true));
+    CHECK((app::s_app.bootStopped.load() & 1U) != 0U);
+    app::s_app.bootPhase.store(app::BootPhase::kRunning);
+    CHECK(app::gatedCommand(&business, 0, nullptr) == 0 && calls == 2U);
+    CHECK(app::s_app.awaitBoot(app::BootTask::kIo, true));
+    app::s_app.bootPhase.store(app::BootPhase::kStopping);
+    CHECK(!app::s_app.awaitBoot(app::BootTask::kTrace, false));
+    CHECK((app::s_app.bootStopped.load() & 4U) != 0U);
 }
 
 std::array<char, 8192U> s_memory_output{};
 size_t s_memory_output_size = 0U;
 
-void memory_sink(const char *text, size_t bytes) noexcept
+void memorySink(const char *text, size_t bytes) noexcept
 {
     CHECK(bytes < s_memory_output.size() - s_memory_output_size);
     std::memcpy(std::span{s_memory_output}.subspan(s_memory_output_size).data(), text, bytes);
     s_memory_output_size += bytes;
 }
 
-void test_memory_report() noexcept
+void testMemoryReport() noexcept
 {
     FaultAllocCtx ctx{};
-    const auto ops = make_ops(ctx);
+    const auto ops = makeOps(ctx);
     rtos::BootArena arena{};
     CHECK(arena.open(&ops) == fw::Status::kOk);
     std::span<uint8_t> block{};
@@ -442,8 +444,8 @@ void test_memory_report() noexcept
         {"dma", 4U, 100000U, 50000U, 40000U, 20000U},
         {"default", 8U, 200000U, 100000U, 81920U, 32768U},
     }};
-    cli::setOutSink(&memory_sink, false);
-    app::print_memory_report(arena, 100U, 200U, heaps);
+    cli::setOutSink(&memorySink, false);
+    app::printMemoryReport(arena, 100U, 200U, heaps);
     std::string_view output{s_memory_output.data(), s_memory_output_size};
     CHECK(output.find("test.owner") != output.npos && output.find("actual=272 B") != output.npos);
     CHECK(output.find("caps=0x") != output.npos && output.find("views overlap") != output.npos);
@@ -452,41 +454,41 @@ void test_memory_report() noexcept
     s_memory_output_size = 0U;
     heaps.front().minimum = 81919U;
     arena.setDegradedReason("test:startup");
-    app::print_memory_report(arena, 100U, 200U, heaps);
+    app::printMemoryReport(arena, 100U, 200U, heaps);
     output = {s_memory_output.data(), s_memory_output_size};
     CHECK(output.find("FAIL (min>=81920 B, largest>=32768 B)") != output.npos);
     CHECK(output.find("console-only: test:startup") != output.npos);
     s_memory_output_size = 0U;
     heaps.front().minimum = 81920U;
     heaps.front().largest = 32767U;
-    app::print_memory_report(arena, 100U, 200U, heaps);
+    app::printMemoryReport(arena, 100U, 200U, heaps);
     output = {s_memory_output.data(), s_memory_output_size};
     CHECK(output.find("FAIL (min>=81920 B, largest>=32768 B)") != output.npos);
     cli::setOutSink(nullptr, false);
-    fault_free(block.data(), &ctx);
+    faultFree(block.data(), &ctx);
 }
 
-void dummy_task(void * /*arg*/) noexcept {}
+void dummyTask(void * /*arg*/) noexcept {}
 
-void test_boot_task_and_stream_buffer() noexcept
+void testBootTaskAndStreamBuffer() noexcept
 {
     rtos::BootTask task{};
     CHECK(!task.running());
-    CHECK(task.start({}, "t", 1U, 0, &dummy_task, nullptr) == fw::Status::kInvalidArg);
+    CHECK(task.start({}, "t", 1U, 0, &dummyTask, nullptr) == fw::Status::kInvalidArg);
     std::array<StackType_t, 512U> stack{};
-    CHECK(task.start(stack, nullptr, 1U, 0, &dummy_task, nullptr) == fw::Status::kInvalidArg);
+    CHECK(task.start(stack, nullptr, 1U, 0, &dummyTask, nullptr) == fw::Status::kInvalidArg);
     CHECK(task.start(stack, "boot_t", 1U, 0, nullptr, nullptr) == fw::Status::kInvalidArg);
-    CHECK(task.start(stack, "boot_t", 1U, -1, &dummy_task, nullptr) == fw::Status::kInvalidArg);
-    CHECK(task.start(stack, "boot_t", configMAX_PRIORITIES, 0, &dummy_task, nullptr) ==
+    CHECK(task.start(stack, "boot_t", 1U, -1, &dummyTask, nullptr) == fw::Status::kInvalidArg);
+    CHECK(task.start(stack, "boot_t", configMAX_PRIORITIES, 0, &dummyTask, nullptr) ==
           fw::Status::kInvalidArg);
     s_task_create_fail = true;
-    CHECK(task.start(stack, "boot_t", 1U, 0, &dummy_task, nullptr) == fw::Status::kNoSpace);
+    CHECK(task.start(stack, "boot_t", 1U, 0, &dummyTask, nullptr) == fw::Status::kNoSpace);
     CHECK(!task.running());
     s_task_create_fail = false;
-    CHECK(task.start(stack, "boot_t", 1U, 0, &dummy_task, nullptr) == fw::Status::kOk);
+    CHECK(task.start(stack, "boot_t", 1U, 0, &dummyTask, nullptr) == fw::Status::kOk);
     CHECK(s_stack_bytes == sizeof(stack));
     CHECK(task.running());
-    CHECK(task.start(stack, "boot_t2", 1U, 0, &dummy_task, nullptr) == fw::Status::kBusy);
+    CHECK(task.start(stack, "boot_t2", 1U, 0, &dummyTask, nullptr) == fw::Status::kBusy);
 
     rtos::BootStreamBuffer sb{};
     std::array<uint8_t, 64U> small{};
@@ -507,14 +509,14 @@ void test_boot_task_and_stream_buffer() noexcept
     sb.deinit();
 }
 
-void test_consumer_storage_bindings() noexcept
+void testConsumerStorageBindings() noexcept
 {
     // 1. GnssLatestCache
     app::data::GnssLatestCache cache{};
-    cache.bind_lock(fw::kNoLock);
+    cache.bindLock(fw::kNoLock);
     CHECK(cache.init({}) == fw::Status::kInvalidArg);
-    std::array<uint8_t, app::data::kGnssLatestTotalBytes> latest_buf{};
-    CHECK(cache.init(latest_buf) == fw::Status::kOk);
+    std::array<uint8_t, app::data::kGnssLatestTotalBytes> latestBuf{};
+    CHECK(cache.init(latestBuf) == fw::Status::kOk);
     constexpr auto kGga = std::to_array("$GNGGA,123519,4807.038,N*47\r\n");
     const auto gga = std::bit_cast<std::array<uint8_t, sizeof(kGga)>>(kGga);
     const std::span<const uint8_t> sentence{gga.data(), gga.size() - 1U};
@@ -527,39 +529,39 @@ void test_consumer_storage_bindings() noexcept
 #if RTK_GNSS_ENABLED
     app::data::DataCenter data{};
     data.init();
-    std::array<uint8_t, app::kGnssAppRingBytes> ring_buf{};
-    CHECK(data.init_gnss_buffers({}, latest_buf) == fw::Status::kInvalidArg);
-    CHECK(data.init_gnss_buffers(ring_buf, {}) == fw::Status::kInvalidArg);
-    CHECK(data.init_gnss_buffers(ring_buf, latest_buf) == fw::Status::kOk);
+    std::array<uint8_t, app::kGnssAppRingBytes> ringBuf{};
+    CHECK(data.initGnssBuffers({}, latestBuf) == fw::Status::kInvalidArg);
+    CHECK(data.initGnssBuffers(ringBuf, {}) == fw::Status::kInvalidArg);
+    CHECK(data.initGnssBuffers(ringBuf, latestBuf) == fw::Status::kOk);
     uint8_t rid = 0U;
-    CHECK(data.gnss_app_ring.attach(1U, rid) == fw::Result::kOk);
-    CHECK(data.gnss_app_ring.write(0U, sentence) == fw::Result::kOk);
+    CHECK(data.gnssAppRing.attach(1U, rid) == fw::Result::kOk);
+    CHECK(data.gnssAppRing.write(0U, sentence) == fw::Result::kOk);
     fw::FanoutView view{};
-    CHECK(data.gnss_app_ring.peek(rid, view) == fw::Result::kOk);
-    CHECK(data.gnss_app_ring.commit(view.lease) == fw::Result::kOk);
+    CHECK(data.gnssAppRing.peek(rid, view) == fw::Result::kOk);
+    CHECK(data.gnssAppRing.commit(view.lease) == fw::Result::kOk);
 #endif
 
     // 3. RtcmPipe 外供缓冲绑定
     app::RtcmPipe pipe{};
-    pipe.init_lock();
+    pipe.initLock();
     CHECK(pipe.init() == fw::Status::kInvalidState);
-    CHECK(pipe.bind_storage({}) == fw::Status::kInvalidArg);
-    std::array<uint8_t, app::kRtcmPipeBytes> pipe_buf{};
-    CHECK(pipe.bind_storage(pipe_buf) == fw::Status::kOk);
+    CHECK(pipe.bindStorage({}) == fw::Status::kInvalidArg);
+    std::array<uint8_t, app::kRtcmPipeBytes> pipeBuf{};
+    CHECK(pipe.bindStorage(pipeBuf) == fw::Status::kOk);
     CHECK(pipe.init() == fw::Status::kOk);
 
     // 4. DebugModule 外供缓冲绑定
 #if FW_TRACE_ENABLED
     static app::DebugModule dbg{};
     CHECK(dbg.init() == fw::Result::kInvalidState);
-    static std::array<fw::TraceEvent, app::DebugModule::kRingEvents> trace_buf{};
-    static std::array<uint8_t, app::DebugModule::kLogRingBytes> log_buf{};
+    static std::array<fw::TraceEvent, app::DebugModule::kRingEvents> traceBuf{};
+    static std::array<uint8_t, app::DebugModule::kLogRingBytes> logBuf{};
     static std::array<StackType_t, app::DebugModule::kTaskStackBytes / sizeof(StackType_t)>
-        task_stack{};
-    CHECK(dbg.bind_storage({{}, log_buf, task_stack}) == fw::Status::kInvalidArg);
-    CHECK(dbg.bind_storage({trace_buf, {}, task_stack}) == fw::Status::kInvalidArg);
-    CHECK(dbg.bind_storage({trace_buf, log_buf, {}}) == fw::Status::kInvalidArg);
-    CHECK(dbg.bind_storage({trace_buf, log_buf, task_stack}) == fw::Status::kOk);
+        taskStack{};
+    CHECK(dbg.bindStorage({{}, logBuf, taskStack}) == fw::Status::kInvalidArg);
+    CHECK(dbg.bindStorage({traceBuf, {}, taskStack}) == fw::Status::kInvalidArg);
+    CHECK(dbg.bindStorage({traceBuf, logBuf, {}}) == fw::Status::kInvalidArg);
+    CHECK(dbg.bindStorage({traceBuf, logBuf, taskStack}) == fw::Status::kOk);
     CHECK(dbg.init() == fw::Result::kOk);
 #endif
 }
@@ -569,14 +571,14 @@ void test_consumer_storage_bindings() noexcept
 // NOLINTEND(readability-magic-numbers, cppcoreguidelines-no-malloc)
 int main()
 {
-    test_arena_lifecycle_and_validation();
-    test_arena_max_entries_and_fault_injection();
-    test_production_allocation_plan();
-    test_binding_rollback_and_sealed_lifetime();
-    test_console_gate_and_task_admission();
-    test_memory_report();
-    test_boot_task_and_stream_buffer();
-    test_consumer_storage_bindings();
+    testArenaLifecycleAndValidation();
+    testArenaMaxEntriesAndFaultInjection();
+    testProductionAllocationPlan();
+    testBindingRollbackAndSealedLifetime();
+    testConsoleGateAndTaskAdmission();
+    testMemoryReport();
+    testBootTaskAndStreamBuffer();
+    testConsumerStorageBindings();
     std::puts("boot_alloc_check: all tests PASS");
     return 0;
 }

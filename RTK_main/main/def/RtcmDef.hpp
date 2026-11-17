@@ -30,7 +30,7 @@ enum class RtcmReject : uint8_t {
 };
 
 // 事件码是 uint8_t 负载；会话号按 core::kTraceSessionMask 截到低 16 位。线程安全：只写 trace 环。
-inline void trace_rtcm(RtcmTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
+inline void traceRtcm(RtcmTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kRtcm, static_cast<uint8_t>(code),
               static_cast<uint16_t>(session & core::kTraceSessionMask), a, b);
@@ -44,30 +44,30 @@ inline void trace_rtcm(RtcmTrace code, uint32_t session, uint32_t a = 0, uint32_
 
 /** 分流器统计快照，只保留要展示的三项计数。 */
 struct DemuxStats {
-    uint32_t unknown_bytes = 0;
-    uint32_t product_rejects = 0;
-    uint32_t rtcm_rejects = 0;
+    uint32_t unknownBytes = 0;
+    uint32_t productRejects = 0;
+    uint32_t rtcmRejects = 0;
 };
 
-/** bt_link 直推路径维护的 RTCM 累计快照（纯数据；RtcmModule 仅读取并管理 reset_epoch）。 */
+/** bt_link 直推路径维护的 RTCM 累计快照（纯数据；RtcmModule 仅读取并管理 resetEpoch）。 */
 struct RtcmLinkSnapshot {
     uint32_t frames = 0;
     uint32_t bytes = 0;
     uint32_t crc32 = 0;
-    uint16_t last_msg = 0;
-    uint32_t rejected_role = 0;
-    uint32_t pipe_accepted_frames = 0;
-    uint32_t pipe_accepted_bytes = 0;
-    uint32_t pipe_dropped_frames = 0;
-    uint32_t pipe_dropped_bytes = 0;
-    uint32_t reset_epoch = 0;
+    uint16_t lastMsg = 0;
+    uint32_t rejectedRole = 0;
+    uint32_t pipeAcceptedFrames = 0;
+    uint32_t pipeAcceptedBytes = 0;
+    uint32_t pipeDroppedFrames = 0;
+    uint32_t pipeDroppedBytes = 0;
+    uint32_t resetEpoch = 0;
 };
 
 /** kIo 侧 RTCM 管道消费与 UART 写回状态快照（spinlock 保护跨任务读）。 */
 struct RtcmPipeIoStats {
-    uint32_t pending_bytes = 0;
-    uint32_t uart_write_errors = 0;
-    uint32_t discarded_bytes = 0;
+    uint32_t pendingBytes = 0;
+    uint32_t uartWriteErrors = 0;
+    uint32_t discardedBytes = 0;
     bool paused = false;
 };
 

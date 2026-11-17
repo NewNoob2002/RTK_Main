@@ -1,6 +1,6 @@
 // 执行器 = 一个静态 FreeRTOS 任务 + 一组模块 + CommandBus（命令队列/结果队列）。
-// 每轮：wait（钩子或命令队列，最长 idle_wait_ms；上一轮有模块报告积压则为 0）→ 取出全部待处理命令并分派给目标模块
-//       → 按周期调用各模块 poll() → 统计本轮耗时（> round_budget_ms 计 overrun）→ 喂狗 → vTaskDelay(yield_ticks)。
+// 每轮：wait（钩子或命令队列，最长 idleWaitMs；上一轮有模块报告积压则为 0）→ 取出全部待处理命令并分派给目标模块
+//       → 按周期调用各模块 poll() → 统计本轮耗时（> roundBudgetMs 计 overrun）→ 喂狗 → vTaskDelay(yieldTicks)。
 // 模块的所有回调（init 除外）只在本执行器任务中调用。
 // 冻结接口（ADR-0007 §3.2、§3.5）。实现方不得修改。
 #pragma once
@@ -33,9 +33,9 @@ struct ExecutorConfig {
     uint32_t idleWaitMs = kExecIdleWaitMs;       // 无积压时每轮最长等待
     uint32_t roundBudgetMs = kExecRoundBudgetMs; // 单轮（不含 wait 与 yield）超过此值计 overrun
     uint32_t yieldTicks = 1;                     // 每轮末 vTaskDelay；0 = 不让出（不建议）
-    bool watchdog = true;                        // 任务启动后 esp_task_wdt_add 自己，每轮 reset
+    bool watchdog = true;                        // 任务启动后 espTaskWdtAdd 自己，每轮 reset
     /**
-     * 可选等待钩子（执行器任务中调用）：最长阻塞 max_ms，可以顺带处理它等到的事件（例如 BT 事件）。
+     * 可选等待钩子（执行器任务中调用）：最长阻塞 maxMs，可以顺带处理它等到的事件（例如 BT 事件）。
      * 为 nullptr 时执行器阻塞在命令队列上（命令到达立即唤醒）。
      */
     void (*wait)(void *ctx, uint32_t maxMs) noexcept = nullptr;
@@ -106,7 +106,7 @@ public:
     [[nodiscard]] fw::Status start() noexcept;
 
     /**
-     * CommandBus：从其他任务同步调用目标模块的 on_command。分配 seq，入命令队列，等待 seq 匹配的结果
+     * CommandBus：从其他任务同步调用目标模块的 onCommand。分配 seq，入命令队列，等待 seq 匹配的结果
      * （丢弃 seq 不匹配的过期结果）。线程安全：同一时刻只允许一个调用者任务（当前为控制台）。
      * 返回：kOk（result 有效，result.status 为模块结果）、kTimeout（等待超时，命令可能稍后仍被执行）、
      *       kBusy（命令队列满）、kInvalidState（未运行，或从本执行器任务自身调用——会死锁）、

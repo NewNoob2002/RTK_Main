@@ -32,7 +32,7 @@ constexpr size_t kThreeArgs = 3U;
 bool s_unlocked = false; // 只在 console 任务读写
 
 /** 受保护动词的统一入口检查；锁定时给出原因并返回 false。 */
-bool require_unlocked() noexcept
+bool requireUnlocked() noexcept
 {
     if (!s_unlocked) {
         static_cast<void>(cli::fail("locked (factory unlock <key>)"));
@@ -41,7 +41,7 @@ bool require_unlocked() noexcept
     return true;
 }
 
-int cmd_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: factory status");
@@ -51,7 +51,7 @@ int cmd_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-int cmd_unlock(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdUnlock(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != static_cast<int>(kTwoArgs)) || (argv == nullptr)) {
         return cli::fail("usage: factory unlock <key>");
@@ -66,7 +66,7 @@ int cmd_unlock(void * /*ctx*/, int argc, char **argv) noexcept
     return 0;
 }
 
-int cmd_lock(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdLock(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: factory lock");
@@ -75,9 +75,9 @@ int cmd_lock(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-int cmd_sn(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdSn(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    if (!require_unlocked()) {
+    if (!requireUnlocked()) {
         return cli::kCmdFail;
     }
     if ((argc != static_cast<int>(kTwoArgs)) || (argv == nullptr)) {
@@ -101,10 +101,10 @@ int cmd_sn(void * /*ctx*/, int argc, char **argv) noexcept
     return 0;
 }
 
-int wl_edit(bool add, int argc, char **argv) noexcept
+int wlEdit(bool add, int argc, char **argv) noexcept
 {
     const char *const op = add ? "wl-add" : "wl-del";
-    if (!require_unlocked()) {
+    if (!requireUnlocked()) {
         return cli::kCmdFail;
     }
     if ((argc != static_cast<int>(kTwoArgs)) || (argv == nullptr)) {
@@ -122,7 +122,7 @@ int wl_edit(bool add, int argc, char **argv) noexcept
     std::copy(mac.begin(), mac.end(), command.args.begin());
     command.argLen = static_cast<uint8_t>(core::kAddrLen);
     fw::CommandResult result{};
-    if (!submit_raw(command, result)) {
+    if (!submitRaw(command, result)) {
         return cli::kCmdFail;
     }
     switch (result.status) {
@@ -138,19 +138,19 @@ int wl_edit(bool add, int argc, char **argv) noexcept
     return report(op, result) ? 0 : cli::kCmdFail;
 }
 
-int cmd_wl_add(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdWlAdd(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    return wl_edit(true, argc, argv);
+    return wlEdit(true, argc, argv);
 }
 
-int cmd_wl_del(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdWlDel(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    return wl_edit(false, argc, argv);
+    return wlEdit(false, argc, argv);
 }
 
-int cmd_wl_clear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdWlClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
-    if (!require_unlocked()) {
+    if (!requireUnlocked()) {
         return cli::kCmdFail;
     }
     if (argc != 1) {
@@ -162,24 +162,24 @@ int cmd_wl_clear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return submit(command, "wl-clear") ? 0 : cli::kCmdFail;
 }
 
-int cmd_pair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdPair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
-    if (!require_unlocked()) {
+    if (!requireUnlocked()) {
         return cli::kCmdFail;
     }
     if (argc != 1) {
         return cli::fail("usage: factory pair");
     }
-    // LinkManager::pair_open 接口冻结为固定窗口（kPairWindowMs）。
+    // LinkManager::pairOpen 接口冻结为固定窗口（kPairWindowMs）。
     constexpr uint32_t kPairSeconds = core::kPairWindowMs / kMsPerSecond;
-    if (app_context().data.link_status.read().pairing) {
+    if (appContext().data.linkStatus.read().pairing) {
         return cli::fail("pairing busy");
     }
     fw::Command command{};
     command.target = id(ModuleKind::kBtLink);
     command.verb = verb(LinkVerb::kPair);
     fw::CommandResult result{};
-    if (!submit_raw(command, result)) {
+    if (!submitRaw(command, result)) {
         return cli::kCmdFail;
     }
     if (result.status == fw::Result::kBusy) {
@@ -192,9 +192,9 @@ int cmd_pair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-int cmd_alarm_set(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdAlarmSet(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    if (!require_unlocked()) {
+    if (!requireUnlocked()) {
         return cli::kCmdFail;
     }
     if ((argc != static_cast<int>(kThreeArgs)) || (argv == nullptr)) {
@@ -218,9 +218,9 @@ int cmd_alarm_set(void * /*ctx*/, int argc, char **argv) noexcept
     return submit(command, "alarm-set") ? 0 : cli::kCmdFail;
 }
 
-int cmd_alarm_clear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdAlarmClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
-    if (!require_unlocked()) {
+    if (!requireUnlocked()) {
         return cli::kCmdFail;
     }
     if (argc != 1) {
@@ -233,36 +233,36 @@ int cmd_alarm_clear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 }
 
 constexpr std::array<cli::Verb, 10U> kFactoryVerbs{{
-    {"status", nullptr, "show lock state", cmd_status},
-    {"unlock", "<key>", "unlock factory commands until reboot", cmd_unlock},
-    {"lock", nullptr, "lock factory commands", cmd_lock},
-    {"sn", "<value>", "write device SN (1-16 chars, reboot to apply)", cmd_sn},
-    {"wl-add", "<MAC>", "add alarm MAC to whitelist", cmd_wl_add},
-    {"wl-del", "<MAC>", "remove alarm MAC from whitelist", cmd_wl_del},
-    {"wl-clear", nullptr, "clear alarm whitelist", cmd_wl_clear},
-    {"pair", nullptr, "open the alarm pairing window", cmd_pair},
-    {"alarm-set", "<state> <level>", "force alarm state (0-2) and level (0-3)", cmd_alarm_set},
-    {"alarm-clear", nullptr, "clear forced alarm state", cmd_alarm_clear},
+    {"status", nullptr, "show lock state", cmdStatus},
+    {"unlock", "<key>", "unlock factory commands until reboot", cmdUnlock},
+    {"lock", nullptr, "lock factory commands", cmdLock},
+    {"sn", "<value>", "write device SN (1-16 chars, reboot to apply)", cmdSn},
+    {"wl-add", "<MAC>", "add alarm MAC to whitelist", cmdWlAdd},
+    {"wl-del", "<MAC>", "remove alarm MAC from whitelist", cmdWlDel},
+    {"wl-clear", nullptr, "clear alarm whitelist", cmdWlClear},
+    {"pair", nullptr, "open the alarm pairing window", cmdPair},
+    {"alarm-set", "<state> <level>", "force alarm state (0-2) and level (0-3)", cmdAlarmSet},
+    {"alarm-clear", nullptr, "clear forced alarm state", cmdAlarmClear},
 }};
 
-int cmd_factory(void *ctx, int argc, char **argv) noexcept
+int cmdFactory(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kFactoryVerbs, ctx, argc, argv, "status");
 }
 
 constexpr std::array<cli::Cmd, 1U> kFactoryCmds{{
-    {"factory", "factory <verb>: production settings (hidden, needs unlock)", "<verb>", cmd_factory,
+    {"factory", "factory <verb>: production settings (hidden, needs unlock)", "<verb>", cmdFactory,
      nullptr, true},
 }};
 
 } // namespace
 
-std::span<const cli::Cmd> factory_cmds() noexcept
+std::span<const cli::Cmd> factoryCmds() noexcept
 {
     return kFactoryCmds;
 }
 
-std::span<const cli::Verb> factory_verbs() noexcept
+std::span<const cli::Verb> factoryVerbs() noexcept
 {
     return kFactoryVerbs;
 }

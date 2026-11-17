@@ -1,8 +1,8 @@
 // RTCM 到 GNSS 的 SPSC 字节管道（ADR-0010 §2.8）：封装 StaticStreamBuffer 与管道统计。
-// 线程/并发契约：init 仅启动前单线程；push 仅 kLink（RtcmModule::poll）调用，read/available/discard/note_written
+// 线程/并发契约：init 仅启动前单线程；push 仅 kLink（RtcmModule::poll）调用，read/available/discard/noteWritten
 // 仅 kIo（GnssModule::poll）调用。FreeRTOS StreamBuffer 在严格单写单读且无并发 reset 时免锁安全；
 // discard 采用非阻塞排空而非 xStreamBufferReset，避免与 kLink 的 send 并发冲突。stats_ 由 spinlock 保护跨核读写。
-// 非 ISR；无阻塞（send/receive 均使用 timeout_ms=0）；无堆分配。
+// 非 ISR；无阻塞（send/receive 均使用 timeoutMs=0）；无堆分配。
 #pragma once
 
 #include <array>
@@ -28,14 +28,14 @@ public:
     RtcmPipe(RtcmPipe &&) = delete;
     RtcmPipe &operator=(RtcmPipe &&) = delete;
 
-    /** 启动前单线程初始化自旋锁（支持降级模式下安全读 stats/io_stats）。 */
-    void init_lock() noexcept
+    /** 启动前单线程初始化自旋锁（支持降级模式下安全读 stats/ioStats）。 */
+    void initLock() noexcept
     {
         portMUX_INITIALIZE(&mux_);
     }
 
     /** 启动前单线程绑定外供管道存储；非空且 >= kRtcmPipeBytes 才返回 kOk。 */
-    [[nodiscard]] fw::Status bind_storage(std::span<uint8_t> storage) noexcept
+    [[nodiscard]] fw::Status bindStorage(std::span<uint8_t> storage) noexcept
     {
         if (buf_.valid()) {
             return fw::Status::kInvalidState;
@@ -48,12 +48,12 @@ public:
     }
 
     /** 仅启动绑定回滚、尚未 init 时调用；清除外供引用，非 ISR。 */
-    void unbind_storage() noexcept
+    void unbindStorage() noexcept
     {
         storage_ = {};
     }
 
-    /** 启动前单线程初始化静态 StreamBuffer；trigger_level=1，未绑定存储或失败返回 kInvalidState。 */
+    /** 启动前单线程初始化静态 StreamBuffer；triggerLevel=1，未绑定存储或失败返回 kInvalidState。 */
     [[nodiscard]] fw::Status init() noexcept
     {
         portMUX_INITIALIZE(&mux_);
@@ -73,27 +73,27 @@ public:
         if (avail < frame.size()) {
             {
                 const CriticalGuard guard(mux_);
-                ++stats_.dropped_frames;
-                stats_.dropped_bytes += static_cast<uint32_t>(frame.size());
+                ++stats_.droppedFrames;
+                stats_.droppedBytes += static_cast<uint32_t>(frame.size());
             }
-            trace_gnss(GnssTrace::kPipeDrop, static_cast<uint32_t>(frame.size()),
-                       static_cast<uint32_t>(avail));
+            traceGnss(GnssTrace::kPipeDrop, static_cast<uint32_t>(frame.size()),
+                      static_cast<uint32_t>(avail));
             return false;
         }
         const size_t sent = buf_.send(frame, 0U);
         if (sent != frame.size()) {
             {
                 const CriticalGuard guard(mux_);
-                ++stats_.dropped_frames;
-                stats_.dropped_bytes += static_cast<uint32_t>(frame.size());
+                ++stats_.droppedFrames;
+                stats_.droppedBytes += static_cast<uint32_t>(frame.size());
             }
-            trace_gnss(GnssTrace::kPipeDrop, static_cast<uint32_t>(frame.size()),
-                       static_cast<uint32_t>(avail));
+            traceGnss(GnssTrace::kPipeDrop, static_cast<uint32_t>(frame.size()),
+                      static_cast<uint32_t>(avail));
             return false;
         }
         const CriticalGuard guard(mux_);
-        ++stats_.pushed_frames;
-        stats_.pushed_bytes += static_cast<uint32_t>(sent);
+        ++stats_.pushedFrames;
+        stats_.pushedBytes += static_cast<uint32_t>(sent);
         return true;
     }
 
@@ -107,10 +107,10 @@ public:
     }
 
     /** 仅 kIo 调用，非 ISR、非阻塞；记录本次实际写入 GNSS UART 的字节数。 */
-    void note_written(size_t bytes) noexcept
+    void noteWritten(size_t bytes) noexcept
     {
         const CriticalGuard guard(mux_);
-        stats_.written_bytes += static_cast<uint32_t>(bytes);
+        stats_.writtenBytes += static_cast<uint32_t>(bytes);
     }
 
     /** 仅 kIo 调用，非 ISR、非阻塞；通过循环读取排空管道内容（SPSC 安全，不调用 xStreamBufferReset）。 */
@@ -129,35 +129,35 @@ public:
             dropped += n;
         }
         const CriticalGuard guard(mux_);
-        io_stats_.discarded_bytes += static_cast<uint32_t>(dropped);
-        io_stats_.pending_bytes = 0U;
+        io_stats_.discardedBytes += static_cast<uint32_t>(dropped);
+        io_stats_.pendingBytes = 0U;
         io_stats_.paused = false;
     }
 
     /** 仅 kIo 调用，非 ISR、非阻塞；记录因断电/失效显式丢弃的挂起块字节数。 */
-    void note_discarded(size_t bytes) noexcept
+    void noteDiscarded(size_t bytes) noexcept
     {
         const CriticalGuard guard(mux_);
-        io_stats_.discarded_bytes += static_cast<uint32_t>(bytes);
-        io_stats_.pending_bytes = 0U;
+        io_stats_.discardedBytes += static_cast<uint32_t>(bytes);
+        io_stats_.pendingBytes = 0U;
         io_stats_.paused = false;
     }
 
     /** 仅 kIo 调用，非 ISR、非阻塞；记录不可恢复 UART 写错误及被丢弃的挂起字节数。 */
-    void note_write_error(size_t dropped_bytes) noexcept
+    void noteWriteError(size_t droppedBytes) noexcept
     {
         const CriticalGuard guard(mux_);
-        ++io_stats_.uart_write_errors;
-        io_stats_.discarded_bytes += static_cast<uint32_t>(dropped_bytes);
-        io_stats_.pending_bytes = 0U;
+        ++io_stats_.uartWriteErrors;
+        io_stats_.discardedBytes += static_cast<uint32_t>(droppedBytes);
+        io_stats_.pendingBytes = 0U;
         io_stats_.paused = false;
     }
 
     /** 仅 kIo 调用，非 ISR、非阻塞；更新 kIo 待写块剩余字节与暂停状态。 */
-    void set_pending(size_t pending_bytes, bool paused) noexcept
+    void setPending(size_t pendingBytes, bool paused) noexcept
     {
         const CriticalGuard guard(mux_);
-        io_stats_.pending_bytes = static_cast<uint32_t>(pending_bytes);
+        io_stats_.pendingBytes = static_cast<uint32_t>(pendingBytes);
         io_stats_.paused = paused;
     }
 
@@ -175,7 +175,7 @@ public:
     }
 
     /** 跨任务安全（kIo/kLink/console），非 ISR；返回 kIo 消费与写回状态快照。 */
-    [[nodiscard]] RtcmPipeIoStats io_stats() const noexcept
+    [[nodiscard]] RtcmPipeIoStats ioStats() const noexcept
     {
         const CriticalGuard guard(mux_);
         return io_stats_;

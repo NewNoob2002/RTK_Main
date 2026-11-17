@@ -4,5 +4,5 @@
 
 extern "C" void app_main(void)
 {
-    app::app_context().boot();
+    app::appContext().boot();
 }

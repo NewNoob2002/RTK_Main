@@ -30,8 +30,8 @@ enum class Model : uint8_t {
 };
 
 /**
- * App 可订阅的报文类型（ADR-0012 §2.2）：值即 OutputPlan 的下标，前 6 项顺序与 main 的 type_idx
- * （协议 msg_id 0x04/0x05/0x1F/0x21/0x22/0x23）一致。只能追加，不得插队或改值。
+ * App 可订阅的报文类型（ADR-0012 §2.2）：值即 OutputPlan 的下标，前 6 项顺序与 main 的 typeIdx
+ * （协议 msgId 0x04/0x05/0x1F/0x21/0x22/0x23）一致。只能追加，不得插队或改值。
  */
 enum class OutputMsg : uint8_t {
     kNone = 0xFF, // 非 App 报文

@@ -18,7 +18,7 @@ static_assert(PEER_RC_STATE_STOPPED == static_cast<uint8_t>(reconnect::State::kS
 
 constinit reconnect::Reconnector s_reconnector{};
 
-peer_rc_action_t to_c_action(const reconnect::Action &act) noexcept
+peer_rc_action_t toCAction(const reconnect::Action &act) noexcept
 {
     peer_rc_action_t out{};
     switch (act.type) {
@@ -39,7 +39,7 @@ peer_rc_action_t to_c_action(const reconnect::Action &act) noexcept
     return out;
 }
 
-peer_rc_state_t to_c_state(reconnect::State state) noexcept
+peer_rc_state_t toCState(reconnect::State state) noexcept
 {
     switch (state) {
     case reconnect::State::kIdle:
@@ -84,22 +84,22 @@ extern "C" bool peer_rc_has_target(void)
     return s_reconnector.hasTarget();
 }
 
-extern "C" bool peer_rc_get_target(uint8_t out_addr[PEER_RC_ADDR_LEN])
+extern "C" bool peer_rc_get_target(uint8_t outAddr[PEER_RC_ADDR_LEN])
 {
-    if ((out_addr == nullptr) || (!s_reconnector.hasTarget())) {
+    if ((outAddr == nullptr) || (!s_reconnector.hasTarget())) {
         return false;
     }
     const reconnect::Addr &target = s_reconnector.target();
-    std::copy_n(target.begin(), reconnect::kAddrLen, out_addr);
+    std::copy_n(target.begin(), reconnect::kAddrLen, outAddr);
     return true;
 }
 
-extern "C" bool peer_rc_start(uint32_t now_ms, peer_rc_action_t *out)
+extern "C" bool peer_rc_start(uint32_t nowMs, peer_rc_action_t *out)
 {
     reconnect::Action act{};
-    const bool ok = s_reconnector.start(now_ms, act);
+    const bool ok = s_reconnector.start(nowMs, act);
     if (out != nullptr) {
-        *out = to_c_action(act);
+        *out = toCAction(act);
     }
     return ok;
 }
@@ -109,39 +109,39 @@ extern "C" void peer_rc_stop(void)
     s_reconnector.stop();
 }
 
-extern "C" peer_rc_action_t peer_rc_poll(uint32_t now_ms)
+extern "C" peer_rc_action_t peer_rc_poll(uint32_t nowMs)
 {
-    return to_c_action(s_reconnector.poll(now_ms));
+    return toCAction(s_reconnector.poll(nowMs));
 }
 
-extern "C" peer_rc_action_t peer_rc_on_sdp_result(bool ok, uint8_t scn, uint32_t now_ms)
+extern "C" peer_rc_action_t peer_rc_on_sdp_result(bool ok, uint8_t scn, uint32_t nowMs)
 {
-    return to_c_action(s_reconnector.onSdpResult(ok, scn, now_ms));
+    return toCAction(s_reconnector.onSdpResult(ok, scn, nowMs));
 }
 
-extern "C" peer_rc_action_t peer_rc_on_open(uint32_t now_ms)
+extern "C" peer_rc_action_t peer_rc_on_open(uint32_t nowMs)
 {
-    return to_c_action(s_reconnector.onOpen(now_ms));
+    return toCAction(s_reconnector.onOpen(nowMs));
 }
 
-extern "C" peer_rc_action_t peer_rc_on_connect_failed(uint32_t now_ms)
+extern "C" peer_rc_action_t peer_rc_on_connect_failed(uint32_t nowMs)
 {
-    return to_c_action(s_reconnector.onConnectFailed(now_ms));
+    return toCAction(s_reconnector.onConnectFailed(nowMs));
 }
 
-extern "C" peer_rc_action_t peer_rc_on_close(uint32_t now_ms)
+extern "C" peer_rc_action_t peer_rc_on_close(uint32_t nowMs)
 {
-    return to_c_action(s_reconnector.onClose(now_ms));
+    return toCAction(s_reconnector.onClose(nowMs));
 }
 
-extern "C" void peer_rc_get_status(uint32_t now_ms, peer_rc_status_t *out)
+extern "C" void peer_rc_get_status(uint32_t nowMs, peer_rc_status_t *out)
 {
     if (out == nullptr) {
         return;
     }
     const reconnect::Stats &st = s_reconnector.stats();
-    out->state = to_c_state(s_reconnector.state());
-    out->next_attempt_in_ms = s_reconnector.nextAttemptIn(now_ms);
+    out->state = toCState(s_reconnector.state());
+    out->next_attempt_in_ms = s_reconnector.nextAttemptIn(nowMs);
     out->attempts = st.attempts;
     out->sdp_queries = st.sdpQueries;
     out->failures = st.failures;

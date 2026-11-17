@@ -22,7 +22,7 @@ enum class StoreTrace : uint8_t {
 };
 
 // 事件码是 uint8_t 负载；storage 与蓝牙会话无关，session 恒为 0。线程安全：只写 trace 环。
-inline void trace_store(StoreTrace code, uint32_t a = 0, uint32_t b = 0) noexcept
+inline void traceStore(StoreTrace code, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kStore, static_cast<uint8_t>(code), 0, a, b);
 }
@@ -35,11 +35,11 @@ inline void trace_store(StoreTrace code, uint32_t a = 0, uint32_t b = 0) noexcep
 
 /** NVS 写入状态快照（白名单去抖与 SN 错误码）。 */
 struct StoreStatus {
-    bool whitelist_pending = false;
-    esp_err_t whitelist_error = ESP_OK;
+    bool whitelistPending = false;
+    esp_err_t whitelistError = ESP_OK;
     uint32_t failures = 0;
-    uint32_t retry_ms = 0;
-    esp_err_t sn_error = ESP_OK;
+    uint32_t retryMs = 0;
+    esp_err_t snError = ESP_OK;
 };
 
 } // namespace app

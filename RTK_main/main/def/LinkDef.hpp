@@ -37,11 +37,11 @@ struct SessionSnapshot {
 };
 /** 链路策略、配对状态与白名单的快照；经 DataCenter 共享。 */
 struct LinkStatus {
-    core::Policy policy = policy_from_config();
+    core::Policy policy = policyFromConfig();
     bool pairing = false;
-    size_t whitelist_count = 0;
+    size_t whitelistCount = 0;
     std::array<core::BtAddr, kMaxAlarms> whitelist{};
-    uint32_t snapshot_ms = 0;
+    uint32_t snapshotMs = 0;
 };
 /** 当前会话表的快照。 */
 struct Sessions {
@@ -61,25 +61,25 @@ struct Heartbeat {
 };
 /** 链路服务统计 + 驱动异步字节发送统计；纯数据快照。 */
 struct LinkStats : core::LinkStats {
-    uint32_t parser_crc_errors = 0;
-    uint32_t parser_length_errors = 0;
-    uint32_t tx_accepted = 0;  // 字节，接纳到驱动环
-    uint32_t tx_completed = 0; // 字节，真实 WRITE_EVT 成功
-    uint32_t tx_cancelled = 0; // 字节，关闭/取消
-    uint32_t tx_errors = 0;
-    uint32_t tx_cong = 0;
-    uint32_t tx_high_water = 0; // 字节
-    uint32_t tx_paused = 0;
-    uint32_t tx_anon_write_fail = 0;
-    uint32_t tx_stray_write = 0;
-    uint32_t tx_inflight = 0;
-    uint32_t evt_dropped = 0;
-    uint32_t rx_wake_calls = 0;
-    std::array<uint32_t, kMaxSessions> rx_used{};
-    std::array<uint32_t, kMaxSessions> rx_high_water{};
-    std::array<uint32_t, kMaxSessions> rx_dropped_bytes{};
-    std::array<uint32_t, kMaxSessions> rx_events{};
-    std::array<uint32_t, kMaxSessions> rx_drop_events{};
+    uint32_t parserCrcErrors = 0;
+    uint32_t parserLengthErrors = 0;
+    uint32_t txAccepted = 0;  // 字节，接纳到驱动环
+    uint32_t txCompleted = 0; // 字节，真实 WRITE_EVT 成功
+    uint32_t txCancelled = 0; // 字节，关闭/取消
+    uint32_t txErrors = 0;
+    uint32_t txCong = 0;
+    uint32_t txHighWater = 0; // 字节
+    uint32_t txPaused = 0;
+    uint32_t txAnonWriteFail = 0;
+    uint32_t txStrayWrite = 0;
+    uint32_t txInflight = 0;
+    uint32_t evtDropped = 0;
+    uint32_t rxWakeCalls = 0;
+    std::array<uint32_t, kMaxSessions> rxUsed{};
+    std::array<uint32_t, kMaxSessions> rxHighWater{};
+    std::array<uint32_t, kMaxSessions> rxDroppedBytes{};
+    std::array<uint32_t, kMaxSessions> rxEvents{};
+    std::array<uint32_t, kMaxSessions> rxDropEvents{};
 };
 
 } // namespace app

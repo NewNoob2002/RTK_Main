@@ -75,7 +75,7 @@ public:
     /**
      * 周期调用（建议 100 ms）：LinkManager::tick 并执行断开动作；
      * 距上次推送 >= kPushPeriodMs（首次调用视为已到期）时，对每个 ALARM 句柄发送 0x40
-     * 推送（AlarmService::build_status_push 组帧），seq 每轮 +1。
+     * 推送（AlarmService::buildStatusPush 组帧），seq 每轮 +1。
      */
     void tick(uint32_t nowMs) noexcept;
 

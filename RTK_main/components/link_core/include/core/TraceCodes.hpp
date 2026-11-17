@@ -18,7 +18,7 @@ enum class LinkTrace : uint8_t {
     kKick,           // 策略要求断开：a = 被断开会话的角色，b = LinkReason
     kAlarmRxTimeout, // 报警器超过 kAlarmRxTimeoutMs 无数据：a = 静默 ms
     kPendingTimeout, // 待定会话超过 kPendingTimeoutMs 未发 HELLO：a = 等待 ms
-    kRoleChange,     // on_frame 改变角色（HELLO 等）：a = 旧角色，b = 新角色
+    kRoleChange,     // onFrame 改变角色（HELLO 等）：a = 旧角色，b = 新角色
     kPairOpen,       // 配对窗口打开：a = 时长 ms
     kPairClose,      // 配对窗口关闭：a = 1 超时 / 0 主动
     kWhitelistAdd,   // a = 白名单当前数量
@@ -40,9 +40,9 @@ enum class LinkReason : uint8_t {
 
 /** TraceCat::kProto；session = 句柄低 16 位。 */
 enum class ProtoTrace : uint8_t {
-    kFrame = 0,  // 收到完整产品帧：a = (msg_id << 8) | type，b = 负载长度
-    kReply,      // 应答已排队：a = msg_id，b = 结果（fw::Result 数值）
-    kNoRoute,    // 无对应处理函数或角色不允许：a = msg_id，b = 发送方角色
+    kFrame = 0,  // 收到完整产品帧：a = (msgId << 8) | type，b = 负载长度
+    kReply,      // 应答已排队：a = msgId，b = 结果（fw::Result 数值）
+    kNoRoute,    // 无对应处理函数或角色不允许：a = msgId，b = 发送方角色
     kBadCrc,     // a = 已丢弃字节数
     kBadLength,  // a = 声明长度
     kReplyError, // 应答写失败：a = 错误码
@@ -56,7 +56,7 @@ enum class AlarmTrace : uint8_t {
     kPushFail,  // a = 错误码
 };
 
-/** 带类型的便捷包装；参数求值昂贵时，调用方先用 fw::trace_on() 判断。 */
+/** 带类型的便捷包装；参数求值昂贵时，调用方先用 fw::traceOn() 判断。 */
 inline void traceLink(LinkTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kLink, static_cast<uint8_t>(code),

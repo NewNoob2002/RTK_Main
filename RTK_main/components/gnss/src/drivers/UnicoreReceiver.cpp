@@ -2,7 +2,7 @@
 // 结构（P3s）：命令生成（cmd_*）、应答判定（resp_*）与脚本步骤（step_*）是 UnicoreReceiver 的 protected static，
 // 型号子类（Um982Receiver）直接复用；文件内匿名命名空间只留成帧判定（judge 家族）与型号识别。
 // 线程/调用约束：全部为纯函数（无全局可变状态），可从任意任务调用，不可阻塞；应答解码器亦可用于 ISR 安全的
-// demux 引擎（first_byte/step 只读入参）。
+// demux 引擎（firstByte/step 只读入参）。
 // 堆：不使用。浮点：不使用（频率参数按手册写死为文本）。
 #include "gnss/drivers/UnicoreReceiver.hpp"
 

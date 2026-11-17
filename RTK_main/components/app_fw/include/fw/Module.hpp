@@ -24,7 +24,7 @@ struct ModuleOps {
     /** 执行器任务启动后、第一次 poll 前调用一次（在执行器任务中）。可为 nullptr。 */
     Result (*start)(void *self) noexcept = nullptr;
     /**
-     * 周期调用（执行器任务中），必须非阻塞，单次耗时应 ≤ 执行器 round_budget_ms。
+     * 周期调用（执行器任务中），必须非阻塞，单次耗时应 ≤ 执行器 roundBudgetMs。
      * 返回 true 表示仍有待处理工作（例如 RX 积压），执行器下一轮等待时间取 0。可为 nullptr。
      */
     bool (*poll)(void *self, uint32_t nowMs) noexcept = nullptr;
@@ -65,11 +65,11 @@ template <typename T> [[nodiscard]] consteval ModuleOps makeOps() noexcept
         };
     }
     if constexpr (requires(T &module, const Command &cmd, CommandResult &result) {
-                      { module.on_command(cmd, result) } noexcept -> std::same_as<void>;
+                      { module.onCommand(cmd, result) } noexcept -> std::same_as<void>;
                   }) {
         ops.onCommand = [](void *self, const Command &cmd, CommandResult &result) noexcept {
             // self 的类型约束同 init 跳板。
-            static_cast<T *>(self)->on_command(cmd, result);
+            static_cast<T *>(self)->onCommand(cmd, result);
         };
     }
     return ops;

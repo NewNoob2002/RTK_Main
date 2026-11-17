@@ -22,18 +22,18 @@ namespace app {
 template <size_t QueueDepth> struct ExecutorControlStorage {
     static_assert(QueueDepth > 0U, "queue depth must be > 0");
     StaticTask_t tcb{};
-    std::array<uint8_t, QueueDepth * sizeof(fw::Command)> cmd_area{};
-    StaticQueue_t cmd_queue{};
-    std::array<uint8_t, QueueDepth * sizeof(fw::CommandResult)> result_area{};
-    StaticQueue_t result_queue{};
+    std::array<uint8_t, QueueDepth * sizeof(fw::Command)> cmdArea{};
+    StaticQueue_t cmdQueue{};
+    std::array<uint8_t, QueueDepth * sizeof(fw::CommandResult)> resultArea{};
+    StaticQueue_t resultQueue{};
 };
 
 template <size_t D>
-[[nodiscard]] inline rtos::ExecutorStorageView view_of(ExecutorControlStorage<D> &st,
-                                                       std::span<StackType_t> stack) noexcept
+[[nodiscard]] inline rtos::ExecutorStorageView viewOf(ExecutorControlStorage<D> &st,
+                                                      std::span<StackType_t> stack) noexcept
 {
-    return rtos::ExecutorStorageView{
-        stack, &st.tcb, st.cmd_area, &st.cmd_queue, st.result_area, &st.result_queue, D};
+    return rtos::ExecutorStorageView{stack,         &st.tcb,         st.cmdArea, &st.cmdQueue,
+                                     st.resultArea, &st.resultQueue, D};
 }
 
 // 底层用 uint32_t：Xtensa LX6 没有 8 位原子 RMW，std::atomic<uint8_t> 会退回 libatomic 的锁实现（CPP-008）；
@@ -45,7 +45,7 @@ enum class BootPhase : uint32_t { kStarting = 0, kRunning, kConsoleOnly, kStoppi
 static_assert(fw::kAtomicUsable<BootPhase>, "启动相位原子须无锁");
 static_assert(fw::kAtomicUsable<uint32_t>, "启动屏障掩码原子须无锁");
 
-/** 启动屏障任务位（CODING-STYLE 规则 3）：boot_arrived/boot_stopped/launched 掩码的各位；bit31 保留给看门狗诊断。 */
+/** 启动屏障任务位（CODING-STYLE 规则 3）：bootArrived/bootStopped/launched 掩码的各位；bit31 保留给看门狗诊断。 */
 enum class BootTask : uint8_t {
     kLink = 1U << 0U,  ///< link 执行器任务
     kIo = 1U << 1U,    ///< io 执行器任务（GNSS）
@@ -53,7 +53,7 @@ enum class BootTask : uint8_t {
 };
 
 /** BootTask → 掩码位；掩码仍为 uint32_t 以便原子 fetch_or。 */
-[[nodiscard]] constexpr uint32_t task_bit(BootTask task) noexcept
+[[nodiscard]] constexpr uint32_t taskBit(BootTask task) noexcept
 {
     return static_cast<uint32_t>(task);
 }
@@ -72,13 +72,13 @@ struct AppContext {
 #undef MODULE_DEF
         ;
 
-    rtos::BootArena boot_arena{};
-    std::atomic<BootPhase> boot_phase{};
-    std::atomic<uint32_t> boot_arrived{};
-    std::atomic<uint32_t> boot_stopped{};
+    rtos::BootArena bootArena{};
+    std::atomic<BootPhase> bootPhase{};
+    std::atomic<uint32_t> bootArrived{};
+    std::atomic<uint32_t> bootStopped{};
 
     /** 启动任务门控：执行器/trace 任务等待组合根放行；失败返回前退订 TWDT 并确认停稳，非 ISR。 */
-    [[nodiscard]] bool await_boot(BootTask task, bool watchdog) noexcept;
+    [[nodiscard]] bool awaitBoot(BootTask task, bool watchdog) noexcept;
 
     /**
      * 固件入口（R8a）：按有序步骤表完成启动，失败时按步骤语义降级/回滚/停机。
@@ -92,25 +92,25 @@ struct AppContext {
 #include "module_list.inc"
 #undef MODULE_DEF
     // 执行器本体含冻结非零默认成员（next_seq_/stats_mux_），由 AppMain.cpp 独立定义并以指针绑定，避免拖入 .data。
-    rtos::Executor *link_executor = nullptr;
-    ExecutorControlStorage<kModuleCount> link_storage{};
+    rtos::Executor *linkExecutor = nullptr;
+    ExecutorControlStorage<kModuleCount> linkStorage{};
 #if RTK_GNSS_ENABLED
-    rtos::Executor *io_executor = nullptr;
-    ExecutorControlStorage<kModuleCount> io_storage{};
-    RtcmPipe rtcm_pipe{};
+    rtos::Executor *ioExecutor = nullptr;
+    ExecutorControlStorage<kModuleCount> ioStorage{};
+    RtcmPipe rtcmPipe{};
 #endif
 
     /** 启动前单线程调用：把各模块的上下文指针绑定到本实例。 */
-    void bind_contexts() noexcept
+    void bindContexts() noexcept
     {
 // X-macro 批量绑定成员上下文指针，避免手写遗漏。
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define MODULE_DEF(type, member, name, kind, executor, period) member.bind_context(*this);
+#define MODULE_DEF(type, member, name, kind, executor, period) member.bindContext(*this);
 #include "module_list.inc"
 #undef MODULE_DEF
     }
 };
 
 /** 返回固件全生命周期的上下文；无阻塞、无分配，非 ISR；成员访问遵守各模块契约。 */
-[[nodiscard]] AppContext &app_context() noexcept;
+[[nodiscard]] AppContext &appContext() noexcept;
 } // namespace app

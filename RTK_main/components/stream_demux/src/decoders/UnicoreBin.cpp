@@ -119,7 +119,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     // payloadLen ≤ 0xFFFF，加固定头与 CRC 后仍在 size_t 范围内。
     const std::size_t total = kHdrLen + static_cast<std::size_t>(payloadLen) + kCrcLen;
     if (total > kMaxFrame) {
-        // 长度字段声称超过 max_frame：早拒绝。
+        // 长度字段声称超过 maxFrame：早拒绝。
         Verdict bad = reject(Reason::kTooLong);
         bad.total = total;
         return bad;

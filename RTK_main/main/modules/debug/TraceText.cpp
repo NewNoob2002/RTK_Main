@@ -278,7 +278,7 @@ constexpr std::array<TraceText, 47U> kTable = {{
 
 // 类别短名必须大写（ADR-0009 §2.11）；顺序与 fw::TraceCat 枚举一致。
 constexpr size_t kCatCount = static_cast<size_t>(fw::TraceCat::kCount);
-// 名称与 fw::log_cat_name 一致（日志行与 trace 行同一套类别名）；数组长度跟随 kCount，漏加类别会编译失败。
+// 名称与 fw::logCatName 一致（日志行与 trace 行同一套类别名）；数组长度跟随 kCount，漏加类别会编译失败。
 constexpr std::array<const char *, kCatCount> kCatNames = {
     {"LINK", "SPP", "RTCM", "PROTO", "ALARM", "STORE", "EXEC", "GNSS", "SYS"}};
 constexpr std::array<const char *, kCatCount> kCatSummaries = {{
@@ -315,12 +315,12 @@ void append(char *out, size_t cap, size_t &pos, const char *fmt, ...) noexcept
     pos = (len < (cap - pos)) ? (pos + len) : (cap - 1U);
 }
 
-bool key_equals(std::string_view a, const char *b) noexcept
+bool keyEquals(std::string_view a, const char *b) noexcept
 {
     return a == std::string_view(b);
 }
 
-const char *role_text(uint32_t value) noexcept
+const char *roleText(uint32_t value) noexcept
 {
     switch (static_cast<core::Role>(value)) {
     case core::Role::kNone:
@@ -336,7 +336,7 @@ const char *role_text(uint32_t value) noexcept
     }
 }
 
-const char *spp_stage_text(uint32_t value) noexcept
+const char *sppStageText(uint32_t value) noexcept
 {
     switch (value) {
     case SPP_SERVER_TRACE_STAGE_INIT:
@@ -352,7 +352,7 @@ const char *spp_stage_text(uint32_t value) noexcept
     }
 }
 
-const char *spp_ctrl_text(uint32_t value) noexcept
+const char *sppCtrlText(uint32_t value) noexcept
 {
     switch (value) {
     case SPP_SERVER_TRACE_CTRL_PIN:
@@ -368,7 +368,7 @@ const char *spp_ctrl_text(uint32_t value) noexcept
     }
 }
 
-const char *reason_text(uint32_t value) noexcept
+const char *reasonText(uint32_t value) noexcept
 {
     switch (static_cast<core::LinkReason>(value)) {
     case core::LinkReason::kWhitelisted:
@@ -390,7 +390,7 @@ const char *reason_text(uint32_t value) noexcept
     }
 }
 
-const char *result_text(uint32_t value) noexcept
+const char *resultText(uint32_t value) noexcept
 {
     // fw::Result 与 fw::Status 的数值定义一致（0=成功，1..8 为错误码）。
     switch (static_cast<fw::Result>(value)) {
@@ -418,7 +418,7 @@ const char *result_text(uint32_t value) noexcept
 }
 
 #if RTK_GNSS_ENABLED
-const char *gnss_family_text(uint32_t value) noexcept
+const char *gnssFamilyText(uint32_t value) noexcept
 {
     // 家族名集中在 gnss 组件（ADR-0012 §2.2），越界保护也用它自己的取值范围。
     const auto family = ::gnss::familyFromU8(static_cast<uint8_t>(value));
@@ -429,8 +429,8 @@ const char *gnss_family_text(uint32_t value) noexcept
 }
 #endif
 
-void append_value(char *out, size_t cap, size_t &pos, TraceValue value,
-                  const fw::TraceEvent &ev) noexcept
+void appendValue(char *out, size_t cap, size_t &pos, TraceValue value,
+                 const fw::TraceEvent &ev) noexcept
 {
     switch (value) {
     case TraceValue::kDecA:
@@ -446,22 +446,22 @@ void append_value(char *out, size_t cap, size_t &pos, TraceValue value,
         append(out, cap, pos, "0x%02lx", static_cast<unsigned long>(ev.b));
         break;
     case TraceValue::kRoleA:
-        append(out, cap, pos, "%s", role_text(ev.a));
+        append(out, cap, pos, "%s", roleText(ev.a));
         break;
     case TraceValue::kRoleB:
-        append(out, cap, pos, "%s", role_text(ev.b));
+        append(out, cap, pos, "%s", roleText(ev.b));
         break;
     case TraceValue::kReasonA:
-        append(out, cap, pos, "%s", reason_text(ev.a));
+        append(out, cap, pos, "%s", reasonText(ev.a));
         break;
     case TraceValue::kReasonB:
-        append(out, cap, pos, "%s", reason_text(ev.b));
+        append(out, cap, pos, "%s", reasonText(ev.b));
         break;
     case TraceValue::kResultA:
-        append(out, cap, pos, "%s", result_text(ev.a));
+        append(out, cap, pos, "%s", resultText(ev.a));
         break;
     case TraceValue::kResultB:
-        append(out, cap, pos, "%s", result_text(ev.b));
+        append(out, cap, pos, "%s", resultText(ev.b));
         break;
 #if RTK_GNSS_ENABLED
     case TraceValue::kGnssStateA:
@@ -471,17 +471,17 @@ void append_value(char *out, size_t cap, size_t &pos, TraceValue value,
         append(out, cap, pos, "%s", ::gnss::stateName(static_cast<::gnss::State>(ev.b)));
         break;
     case TraceValue::kGnssFamilyA:
-        append(out, cap, pos, "%s", gnss_family_text(ev.a));
+        append(out, cap, pos, "%s", gnssFamilyText(ev.a));
         break;
     case TraceValue::kGnssModelA:
         append(out, cap, pos, "%s", ::gnss::modelName(static_cast<::gnss::Model>(ev.a)));
         break;
 #endif
     case TraceValue::kSppStageA:
-        append(out, cap, pos, "%s", spp_stage_text(ev.a));
+        append(out, cap, pos, "%s", sppStageText(ev.a));
         break;
     case TraceValue::kSppCtrlA:
-        append(out, cap, pos, "%s", spp_ctrl_text(ev.a));
+        append(out, cap, pos, "%s", sppCtrlText(ev.a));
         break;
     case TraceValue::kSession:
         append(out, cap, pos, "0x%04lx", static_cast<unsigned long>(ev.session));
@@ -495,12 +495,12 @@ void append_value(char *out, size_t cap, size_t &pos, TraceValue value,
 }
 
 /** 渲染 {key} 占位符：在字段表里按键名查找并用对应方式输出；查不到则原样保留。 */
-void render_field(char *out, size_t cap, size_t &pos, std::string_view key,
-                  std::span<const TraceField> fields, const fw::TraceEvent &ev) noexcept
+void renderField(char *out, size_t cap, size_t &pos, std::string_view key,
+                 std::span<const TraceField> fields, const fw::TraceEvent &ev) noexcept
 {
     for (const TraceField &field : fields) {
-        if (key_equals(key, field.key)) {
-            append_value(out, cap, pos, field.value, ev);
+        if (keyEquals(key, field.key)) {
+            appendValue(out, cap, pos, field.value, ev);
             return;
         }
     }
@@ -508,8 +508,8 @@ void render_field(char *out, size_t cap, size_t &pos, std::string_view key,
 }
 
 /** 按句子模板渲染一行；未闭合或空的 {} 原样输出，便于发现模板写错。 */
-void render_sentence(std::string_view sentence, std::span<const TraceField> fields,
-                     const fw::TraceEvent &ev, char *out, size_t cap, size_t &pos) noexcept
+void renderSentence(std::string_view sentence, std::span<const TraceField> fields,
+                    const fw::TraceEvent &ev, char *out, size_t cap, size_t &pos) noexcept
 {
     // 用下标遍历模板，避免指针算术（项目规则禁止）。
     size_t i = 0U;
@@ -530,19 +530,19 @@ void render_sentence(std::string_view sentence, std::span<const TraceField> fiel
             }
             return;
         }
-        render_field(out, cap, pos, sentence.substr(i + 1U, close - i - 1U), fields, ev);
+        renderField(out, cap, pos, sentence.substr(i + 1U, close - i - 1U), fields, ev);
         i = close + 1U;
     }
 }
 
 } // namespace
 
-std::span<const TraceText> trace_table() noexcept
+std::span<const TraceText> traceTable() noexcept
 {
     return {kTable};
 }
 
-const char *trace_cat_name(fw::TraceCat cat) noexcept
+const char *traceCatName(fw::TraceCat cat) noexcept
 {
     const uint32_t index = static_cast<uint32_t>(cat);
     if (index >= kCatNames.size()) {
@@ -551,7 +551,7 @@ const char *trace_cat_name(fw::TraceCat cat) noexcept
     return kCatNames[index];
 }
 
-const char *trace_cat_summary(fw::TraceCat cat) noexcept
+const char *traceCatSummary(fw::TraceCat cat) noexcept
 {
     const uint32_t index = static_cast<uint32_t>(cat);
     if (index >= kCatSummaries.size()) {
@@ -560,7 +560,7 @@ const char *trace_cat_summary(fw::TraceCat cat) noexcept
     return kCatSummaries[index];
 }
 
-bool parse_cat(std::string_view name, fw::TraceCat &out) noexcept
+bool parseCat(std::string_view name, fw::TraceCat &out) noexcept
 {
     constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
     for (uint32_t i = 0; i < kCount; ++i) {
@@ -587,7 +587,7 @@ bool parse_cat(std::string_view name, fw::TraceCat &out) noexcept
     return false;
 }
 
-void format_event(const fw::TraceEvent &ev, char *out, size_t cap) noexcept
+void formatEvent(const fw::TraceEvent &ev, char *out, size_t cap) noexcept
 {
     if ((out == nullptr) || (cap == 0U)) {
         return;
@@ -595,12 +595,12 @@ void format_event(const fw::TraceEvent &ev, char *out, size_t cap) noexcept
     const std::span<char> text{out, cap};
     text[0] = '\0';
     size_t pos = 0U;
-    append(out, cap, pos, "[%s] ", trace_cat_name(ev.cat));
-    for (const TraceText &entry : trace_table()) {
+    append(out, cap, pos, "[%s] ", traceCatName(ev.cat));
+    for (const TraceText &entry : traceTable()) {
         if ((entry.cat != ev.cat) || (entry.code != ev.code)) {
             continue;
         }
-        render_sentence(entry.sentence, entry.fields, ev, out, cap, pos);
+        renderSentence(entry.sentence, entry.fields, ev, out, cap, pos);
         return;
     }
     // 未知码：保留原始数值，便于对照新加的调用点。

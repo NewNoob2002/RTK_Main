@@ -14,7 +14,7 @@
 extern "C" void setUp(void) {}
 extern "C" void tearDown(void) {}
 
-static void test_crc24q_known_and_segmented()
+static void testCrc24qKnownAndSegmented()
 {
     static constexpr std::array<uint8_t, 9> kVec{'1', '2', '3', '4', '5', '6', '7', '8', '9'};
 
@@ -33,28 +33,28 @@ static void test_crc24q_known_and_segmented()
     }
 }
 
-static void test_crc32_known_and_segmented()
+static void testCrc32KnownAndSegmented()
 {
     static constexpr std::array<uint8_t, 9> kVec{'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     static constexpr std::string_view kUnicoreVer =
         "VERSION,97,GPS,FINE,2282,248561000,0,0,18,676;UM980,R4.10Build7923,"
         "HRPT00-S10C-P,2310415000001-MD22B1224962616,ff3bac96f31f9bdd,2022/09/28";
-    static std::array<uint8_t, 256> s_ver_bytes{};
+    static std::array<uint8_t, 256> sVerBytes{};
 
-    TEST_ASSERT_EQUAL_HEX32(0xCBF43926U, demux_test::crc32_ieee(kVec));
-    TEST_ASSERT_EQUAL_HEX32(0x2DFD2D88U, demux_test::crc32_novatel(kVec));
+    TEST_ASSERT_EQUAL_HEX32(0xCBF43926U, demux_test::crc32Ieee(kVec));
+    TEST_ASSERT_EQUAL_HEX32(0x2DFD2D88U, demux_test::crc32Novatel(kVec));
     TEST_ASSERT_EQUAL_HEX32(0x2DFD2D88U, demux::crc::crc32Novatel(kVec));
 
     for (std::size_t i = 0U; i < kUnicoreVer.size(); ++i) {
         // ASCII 字符按无符号字节 0..255 解释
-        s_ver_bytes[i] = static_cast<uint8_t>(kUnicoreVer[i]);
+        sVerBytes[i] = static_cast<uint8_t>(kUnicoreVer[i]);
     }
-    const std::span<const uint8_t> ver_span(s_ver_bytes.data(), kUnicoreVer.size());
-    TEST_ASSERT_EQUAL_HEX32(0x7432D4EDU, demux_test::crc32_novatel(ver_span));
-    TEST_ASSERT_EQUAL_HEX32(0x7432D4EDU, demux::crc::crc32Novatel(ver_span));
+    const std::span<const uint8_t> verSpan(sVerBytes.data(), kUnicoreVer.size());
+    TEST_ASSERT_EQUAL_HEX32(0x7432D4EDU, demux_test::crc32Novatel(verSpan));
+    TEST_ASSERT_EQUAL_HEX32(0x7432D4EDU, demux::crc::crc32Novatel(verSpan));
 
-    TEST_ASSERT_EQUAL_HEX32(0U, demux_test::crc32_ieee({}));
-    TEST_ASSERT_EQUAL_HEX32(0U, demux_test::crc32_novatel({}));
+    TEST_ASSERT_EQUAL_HEX32(0U, demux_test::crc32Ieee({}));
+    TEST_ASSERT_EQUAL_HEX32(0U, demux_test::crc32Novatel({}));
     TEST_ASSERT_EQUAL_HEX32(0U, demux::crc::crc32Novatel({}));
     TEST_ASSERT_EQUAL_HEX32(0x12345678U, demux::crc::crc32Novatel({}, 0x12345678U));
 
@@ -67,7 +67,7 @@ static void test_crc32_known_and_segmented()
     }
 }
 
-static void test_crc_cross_check_random_bytes()
+static void testCrcCrossCheckRandomBytes()
 {
     std::array<uint8_t, 256> buf{};
     uint32_t rng = 0x13572468U;
@@ -81,81 +81,81 @@ static void test_crc_cross_check_random_bytes()
 
     const std::span<const uint8_t> data(buf);
     TEST_ASSERT_EQUAL_HEX32(demux_test::crc24q(data), demux::crc::crc24q(data));
-    TEST_ASSERT_EQUAL_HEX32(demux_test::crc32_novatel(data), demux::crc::crc32Novatel(data));
+    TEST_ASSERT_EQUAL_HEX32(demux_test::crc32Novatel(data), demux::crc::crc32Novatel(data));
 
-    const uint32_t c24_p1 = demux::crc::crc24q(data.subspan(0, 77));
-    TEST_ASSERT_EQUAL_HEX32(demux_test::crc24q(data), demux::crc::crc24q(data.subspan(77), c24_p1));
+    const uint32_t c24P1 = demux::crc::crc24q(data.subspan(0, 77));
+    TEST_ASSERT_EQUAL_HEX32(demux_test::crc24q(data), demux::crc::crc24q(data.subspan(77), c24P1));
 
-    const uint32_t c32_p1 = demux::crc::crc32Novatel(data.subspan(0, 129));
-    TEST_ASSERT_EQUAL_HEX32(demux_test::crc32_novatel(data),
-                            demux::crc::crc32Novatel(data.subspan(129), c32_p1));
+    const uint32_t c32P1 = demux::crc::crc32Novatel(data.subspan(0, 129));
+    TEST_ASSERT_EQUAL_HEX32(demux_test::crc32Novatel(data),
+                            demux::crc::crc32Novatel(data.subspan(129), c32P1));
 }
 
-static void test_xor_and_ubx_ck()
+static void testXorAndUbxCk()
 {
     static constexpr std::string_view kNmea =
         "GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,";
     static constexpr std::array<uint8_t, 7> kUbxBody{0x06U, 0x01U, 0x03U, 0x00U,
                                                      0xF0U, 0x00U, 0x01U};
-    std::array<uint8_t, 64> nmea_bytes{};
+    std::array<uint8_t, 64> nmeaBytes{};
 
     for (std::size_t i = 0U; i < kNmea.size(); ++i) {
         // ASCII 字符按无符号字节 0..255 解释
-        nmea_bytes[i] = static_cast<uint8_t>(kNmea[i]);
+        nmeaBytes[i] = static_cast<uint8_t>(kNmea[i]);
     }
     TEST_ASSERT_EQUAL_HEX8(
-        0x47U, demux_test::xor_checksum(std::span<const uint8_t>(nmea_bytes.data(), kNmea.size())));
+        0x47U, demux_test::xorChecksum(std::span<const uint8_t>(nmeaBytes.data(), kNmea.size())));
 
-    const demux_test::UbxChecksum ck = demux_test::ubx_checksum(kUbxBody);
-    TEST_ASSERT_EQUAL_HEX8(0xFBU, ck.ck_a);
-    TEST_ASSERT_EQUAL_HEX8(0x10U, ck.ck_b);
+    const demux_test::UbxChecksum ck = demux_test::ubxChecksum(kUbxBody);
+    TEST_ASSERT_EQUAL_HEX8(0xFBU, ck.ckA);
+    TEST_ASSERT_EQUAL_HEX8(0x10U, ck.ckB);
 }
 
-static void test_generators_sanity_and_bounds()
+static void testGeneratorsSanityAndBounds()
 {
-    static std::array<uint8_t, 4100> s_buf{};
+    static std::array<uint8_t, 4100> sBuf{};
     static constexpr std::array<uint8_t, 3> kPayload{0x11U, 0x22U, 0x33U};
     static constexpr std::array<uint8_t, 15> kBadRest{};
     static constexpr std::array<uint8_t, 16> kGoodRest{1, 2,  3,  4,  5,  6,  7,  8,
                                                        9, 10, 11, 12, 13, 14, 15, 16};
-    static std::array<uint8_t, demux_test::kUnicoreBinMaxPayload + 1U> s_too_big{};
+    static std::array<uint8_t, demux_test::kUnicoreBinMaxPayload + 1U> sTooBig{};
     std::size_t len = 0U;
 
-    const std::span<uint8_t> out(s_buf);
+    const std::span<uint8_t> out(sBuf);
 
     // RTCM3
-    TEST_ASSERT_TRUE(demux_test::gen_rtcm3(out, kPayload, len));
+    TEST_ASSERT_TRUE(demux_test::genRtcm3(out, kPayload, len));
     TEST_ASSERT_EQUAL_UINT(9U, len);
-    TEST_ASSERT_EQUAL_HEX8(0xD3U, s_buf[0]);
-    TEST_ASSERT_FALSE(demux_test::gen_rtcm3(
-        out, std::span<const uint8_t>(s_too_big.data(), demux_test::kRtcm3MaxPayload + 1U), len));
-    TEST_ASSERT_FALSE(demux_test::gen_rtcm3(out.subspan(0, 8U), kPayload, len));
+    TEST_ASSERT_EQUAL_HEX8(0xD3U, sBuf[0]);
+    TEST_ASSERT_FALSE(demux_test::genRtcm3(
+        out, std::span<const uint8_t>(sTooBig.data(), demux_test::kRtcm3MaxPayload + 1U), len));
+    TEST_ASSERT_FALSE(demux_test::genRtcm3(out.subspan(0, 8U), kPayload, len));
 
     // NMEA（含大小写校验）
     static constexpr std::array<uint8_t, 5> kExpNmeaTail{'*', '4', '7', '\r', '\n'};
-    TEST_ASSERT_TRUE(demux_test::gen_nmea(
+    TEST_ASSERT_TRUE(demux_test::genNmea(
         out, "GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,", false, len));
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kExpNmeaTail.data(), out.subspan(len - kExpNmeaTail.size()).data(),
                                  kExpNmeaTail.size());
-    TEST_ASSERT_FALSE(demux_test::gen_nmea(out, "@BAD", false, len));
+    TEST_ASSERT_FALSE(demux_test::genNmea(out, "@BAD", false, len));
 
     // UBX
-    TEST_ASSERT_TRUE(demux_test::gen_ubx(out, 0x01U, 0x07U, kPayload, len));
+    TEST_ASSERT_TRUE(demux_test::genUbx(out, 0x01U, 0x07U, kPayload, len));
     TEST_ASSERT_EQUAL_UINT(11U, len);
-    TEST_ASSERT_FALSE(demux_test::gen_ubx(
+    TEST_ASSERT_FALSE(demux_test::genUbx(
         out, 0x01U, 0x07U,
-        std::span<const uint8_t>(s_too_big.data(), demux_test::kUbxMaxPayload + 1U), len));
+        std::span<const uint8_t>(sTooBig.data(), demux_test::kUbxMaxPayload + 1U), len));
 
     // Unicore 二进制
-    TEST_ASSERT_TRUE(demux_test::gen_unicore_bin(out, 0x002AU, 55U, kGoodRest, kPayload, len));
+    TEST_ASSERT_TRUE(demux_test::genUnicoreBin(out, 0x002AU, 55U, kGoodRest, kPayload, len));
     TEST_ASSERT_EQUAL_UINT(31U, len);
-    TEST_ASSERT_FALSE(demux_test::gen_unicore_bin(out, 0x002AU, 55U, kBadRest, kPayload, len));
-    TEST_ASSERT_FALSE(demux_test::gen_unicore_bin(out, 0x002AU, 55U, {}, s_too_big, len));
+    TEST_ASSERT_FALSE(demux_test::genUnicoreBin(out, 0x002AU, 55U, kBadRest, kPayload, len));
+    TEST_ASSERT_FALSE(demux_test::genUnicoreBin(out, 0x002AU, 55U, {}, sTooBig, len));
 
     // Unicore Hash CRC-32（对照真实 VERSION 向量）
     static constexpr std::array<uint8_t, 11> kExpHashTail{'*', '7', '4', '3',  '2', 'd',
                                                           '4', 'e', 'd', '\r', '\n'};
-    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_crc32(
+    TEST_ASSERT_TRUE(demux_test::genUnicoreHashCrc32(
         out,
         "VERSION,97,GPS,FINE,2282,248561000,0,0,18,676;UM980,R4.10Build7923,"
         "HRPT00-S10C-P,2310415000001-MD22B1224962616,ff3bac96f31f9bdd,2022/09/28",
@@ -164,23 +164,23 @@ static void test_generators_sanity_and_bounds()
                                  kExpHashTail.size());
 
     // Unicore Hash XOR
-    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_xor(out, "OBSVMA,1", false, len));
+    TEST_ASSERT_TRUE(demux_test::genUnicoreHashXor(out, "OBSVMA,1", false, len));
     TEST_ASSERT_EQUAL_UINT(14U, len);
-    TEST_ASSERT_FALSE(demux_test::gen_unicore_hash_xor(out, "0BAD", false, len));
+    TEST_ASSERT_FALSE(demux_test::genUnicoreHashXor(out, "0BAD", false, len));
 
     // 产品帧
-    TEST_ASSERT_TRUE(demux_test::gen_product(out, 0x0001U, proto::sender::kApp,
-                                             proto::msg_type::kQuery, {}, len));
+    TEST_ASSERT_TRUE(demux_test::genProduct(out, 0x0001U, proto::sender::kApp,
+                                            proto::msg_type::kQuery, {}, len));
     TEST_ASSERT_EQUAL_UINT(24U, len);
 }
 
 int main()
 {
     UNITY_BEGIN();
-    RUN_TEST(test_crc24q_known_and_segmented);
-    RUN_TEST(test_crc32_known_and_segmented);
-    RUN_TEST(test_crc_cross_check_random_bytes);
-    RUN_TEST(test_xor_and_ubx_ck);
-    RUN_TEST(test_generators_sanity_and_bounds);
+    RUN_TEST(testCrc24qKnownAndSegmented);
+    RUN_TEST(testCrc32KnownAndSegmented);
+    RUN_TEST(testCrcCrossCheckRandomBytes);
+    RUN_TEST(testXorAndUbxCk);
+    RUN_TEST(testGeneratorsSanityAndBounds);
     return UNITY_END();
 }

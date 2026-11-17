@@ -24,7 +24,7 @@ inline constexpr uint8_t kRate5Hz = 5U;
 inline constexpr uint8_t kRate10Hz = 10U;
 inline constexpr uint8_t kRate20Hz = 20U;
 
-/** 控制台只允许这几档频率（main 的 is_valid_rate_hz）；其余频率不在本轮比对范围。 */
+/** 控制台只允许这几档频率（main 的 isValidRateHz）；其余频率不在本轮比对范围。 */
 inline bool rateSupported(uint8_t rateHz) noexcept
 {
     return (rateHz == kRate1Hz) || (rateHz == kRate2Hz) || (rateHz == kRate5Hz) ||

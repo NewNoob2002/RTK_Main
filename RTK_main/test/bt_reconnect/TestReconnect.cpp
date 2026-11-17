@@ -51,14 +51,14 @@ constexpr uint32_t kFlapRounds = 10U;
 constexpr uint32_t kJitterMinMs = 800U;
 constexpr uint32_t kJitterMaxMs = 1200U;
 
-reconnect::Config make_exact_cfg() noexcept
+reconnect::Config makeExactCfg() noexcept
 {
     reconnect::Config cfg{};
     cfg.jitterPct = 0U;
     return cfg;
 }
 
-void assert_stats_eq(const reconnect::Stats &expected, const reconnect::Stats &actual) noexcept
+void assertStatsEq(const reconnect::Stats &expected, const reconnect::Stats &actual) noexcept
 {
     TEST_ASSERT_EQUAL_UINT32(expected.attempts, actual.attempts);
     TEST_ASSERT_EQUAL_UINT32(expected.sdpQueries, actual.sdpQueries);
@@ -68,7 +68,7 @@ void assert_stats_eq(const reconnect::Stats &expected, const reconnect::Stats &a
     TEST_ASSERT_EQUAL_UINT32(expected.lastDelayMs, actual.lastDelayMs);
 }
 
-void test_default_state_and_no_target()
+void testDefaultStateAndNoTarget()
 {
     reconnect::Reconnector rc;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle),
@@ -84,7 +84,7 @@ void test_default_state_and_no_target()
                             static_cast<uint8_t>(rc.state()));
 }
 
-void test_configure_invalid_params()
+void testConfigureInvalidParams()
 {
     reconnect::Reconnector rc;
     reconnect::Config valid{};
@@ -165,16 +165,16 @@ void test_configure_invalid_params()
                             static_cast<uint8_t>(rc.state()));
 
     // backoff_min == backoff_max 且 seed == 0 合法
-    reconnect::Config eq_cfg = valid;
-    eq_cfg.backoffMinMs = kStep2000Ms;
-    eq_cfg.backoffMaxMs = kStep2000Ms;
-    TEST_ASSERT_TRUE(rc.configure(eq_cfg, 0U));
+    reconnect::Config eqCfg = valid;
+    eqCfg.backoffMinMs = kStep2000Ms;
+    eqCfg.backoffMaxMs = kStep2000Ms;
+    TEST_ASSERT_TRUE(rc.configure(eqCfg, 0U));
 }
 
-void test_fast_window_fixed_retry()
+void testFastWindowFixedRetry()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     uint32_t now = 0U;
@@ -209,10 +209,10 @@ void test_fast_window_fixed_retry()
     TEST_ASSERT_EQUAL_UINT32(kFastRounds + 1U, rc.stats().sdpQueries);
 }
 
-void test_backoff_outside_window_and_cap()
+void testBackoffOutsideWindowAndCap()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     uint32_t now = 0U;
@@ -223,9 +223,9 @@ void test_backoff_outside_window_and_cap()
 
     // 跨越 30000 ms 快速窗口边界
     now = kStep30000Ms;
-    const std::array<uint32_t, 8> expected_delays{1000U,  2000U,  4000U,  8000U,
-                                                  16000U, 30000U, 30000U, 30000U};
-    for (const uint32_t expected : expected_delays) {
+    const std::array<uint32_t, 8> expectedDelays{1000U,  2000U,  4000U,  8000U,
+                                                 16000U, 30000U, 30000U, 30000U};
+    for (const uint32_t expected : expectedDelays) {
         act = rc.onSdpResult(false, 0U, now);
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                                 static_cast<uint8_t>(act.type));
@@ -240,7 +240,7 @@ void test_backoff_outside_window_and_cap()
     }
 }
 
-void test_jitter_range_and_determinism()
+void testJitterRangeAndDeterminism()
 {
     reconnect::Config cfg{};
     cfg.fastWindowMs = kStep100Ms;
@@ -266,8 +266,8 @@ void test_jitter_range_and_determinism()
     // 先跳过 100 ms 快速窗口
     now1 = kStep200Ms;
     now2 = kStep200Ms;
-    uint32_t min_seen = UINT32_MAX;
-    uint32_t max_seen = 0U;
+    uint32_t minSeen = UINT32_MAX;
+    uint32_t maxSeen = 0U;
 
     for (uint32_t i = 0U; i < kSampleCount; ++i) {
         static_cast<void>(rc1.onSdpResult(false, 0U, now1));
@@ -277,11 +277,11 @@ void test_jitter_range_and_determinism()
         const uint32_t d2 = rc2.stats().lastDelayMs;
         TEST_ASSERT_EQUAL_UINT32(d2, d1);
         TEST_ASSERT_TRUE((d1 >= kJitterMinMs) && (d1 <= kJitterMaxMs));
-        if (d1 < min_seen) {
-            min_seen = d1;
+        if (d1 < minSeen) {
+            minSeen = d1;
         }
-        if (d1 > max_seen) {
-            max_seen = d1;
+        if (d1 > maxSeen) {
+            maxSeen = d1;
         }
 
         now1 += d1;
@@ -291,28 +291,28 @@ void test_jitter_range_and_determinism()
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
                                 static_cast<uint8_t>(rc2.poll(now2).type));
     }
-    TEST_ASSERT_TRUE(min_seen < max_seen);
+    TEST_ASSERT_TRUE(minSeen < maxSeen);
 
     // jitter=0 时精确
     cfg.jitterPct = 0U;
     reconnect::Reconnector exact;
     TEST_ASSERT_TRUE(exact.configure(cfg, kSeedA));
     exact.setTarget(kAddrA);
-    uint32_t now_e = 0U;
-    TEST_ASSERT_TRUE(exact.start(now_e, act1));
-    now_e = kStep200Ms;
+    uint32_t nowE = 0U;
+    TEST_ASSERT_TRUE(exact.start(nowE, act1));
+    nowE = kStep200Ms;
     for (uint32_t i = 0U; i < kExactSampleCount; ++i) {
-        static_cast<void>(exact.onSdpResult(false, 0U, now_e));
+        static_cast<void>(exact.onSdpResult(false, 0U, nowE));
         TEST_ASSERT_EQUAL_UINT32(kStep1000Ms, exact.stats().lastDelayMs);
-        now_e += kStep1000Ms;
-        static_cast<void>(exact.poll(now_e));
+        nowE += kStep1000Ms;
+        static_cast<void>(exact.poll(nowE));
     }
 }
 
-void test_disconnect_stable_vs_unstable()
+void testDisconnectStableVsUnstable()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     uint32_t now = 0U;
@@ -373,11 +373,11 @@ void test_disconnect_stable_vs_unstable()
     }
 }
 
-void test_unstable_disconnect_in_fast_window_no_storm()
+void testUnstableDisconnectInFastWindowNoStorm()
 {
     // 快速窗口内反复“连上 2 s 即断”，窗口起点不得刷新，30 s 后必然转入指数退避。
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     uint32_t now = 0U;
@@ -410,10 +410,10 @@ void test_unstable_disconnect_in_fast_window_no_storm()
     TEST_ASSERT_EQUAL_UINT32(kStep2000Ms, rc.stats().lastDelayMs);
 }
 
-void test_scn_cache_and_resdp_after_failures()
+void testScnCacheAndResdpAfterFailures()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     uint32_t now = 0U;
@@ -470,10 +470,10 @@ void test_scn_cache_and_resdp_after_failures()
     TEST_ASSERT_EQUAL_UINT8(kScnSecond, act.scn);
 }
 
-void test_attempt_timeout()
+void testAttemptTimeout()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     uint32_t now = kStep100Ms;
@@ -535,10 +535,10 @@ void test_attempt_timeout()
                             static_cast<uint8_t>(act.type));
 }
 
-void test_stop_and_start()
+void testStopAndStart()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     reconnect::Action act{};
@@ -585,10 +585,10 @@ void test_stop_and_start()
                             static_cast<uint8_t>(rc.state()));
 }
 
-void test_change_target_clears_cache()
+void testChangeTargetClearsCache()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
     TEST_ASSERT_TRUE(rc.hasTarget());
     TEST_ASSERT_EQUAL_UINT8_ARRAY(kAddrA.data(), rc.target().data(), reconnect::kAddrLen);
@@ -632,10 +632,10 @@ void test_change_target_clears_cache()
     TEST_ASSERT_FALSE(rc.start(kStep50Ms, act));
 }
 
-void test_unexpected_events_ignored()
+void testUnexpectedEventsIgnored()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     // kIdle 忽略所有事件
@@ -652,82 +652,82 @@ void test_unexpected_events_ignored()
                             static_cast<uint8_t>(rc.onClose(kStep100Ms).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle),
                             static_cast<uint8_t>(rc.state()));
-    assert_stats_eq(snap, rc.stats());
+    assertStatsEq(snap, rc.stats());
 
     // kDiscovering 忽略 open / connect_failed / close
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(kStep200Ms, act));
     snap = rc.stats();
-    const uint32_t t_disc = kStep200Ms + kStep10Ms;
+    const uint32_t tDisc = kStep200Ms + kStep10Ms;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onOpen(t_disc).type));
+                            static_cast<uint8_t>(rc.onOpen(tDisc).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onConnectFailed(t_disc).type));
+                            static_cast<uint8_t>(rc.onConnectFailed(tDisc).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onClose(t_disc).type));
+                            static_cast<uint8_t>(rc.onClose(tDisc).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering),
                             static_cast<uint8_t>(rc.state()));
-    assert_stats_eq(snap, rc.stats());
+    assertStatsEq(snap, rc.stats());
 
     // kConnecting 忽略 sdp_result / close，且重复 start 返回 false
     act = rc.onSdpResult(true, kScnFirst, kStep200Ms + kStep20Ms);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting),
                             static_cast<uint8_t>(rc.state()));
     snap = rc.stats();
-    const uint32_t t_conn = kStep200Ms + kStep30Ms;
-    TEST_ASSERT_FALSE(rc.start(t_conn, act));
+    const uint32_t tConn = kStep200Ms + kStep30Ms;
+    TEST_ASSERT_FALSE(rc.start(tConn, act));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onSdpResult(false, 0U, t_conn).type));
+                            static_cast<uint8_t>(rc.onSdpResult(false, 0U, tConn).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onClose(t_conn).type));
+                            static_cast<uint8_t>(rc.onClose(tConn).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting),
                             static_cast<uint8_t>(rc.state()));
-    assert_stats_eq(snap, rc.stats());
+    assertStatsEq(snap, rc.stats());
 
     // kConnected 忽略 sdp_result / open / connect_failed，且重复 start 返回 false
-    const uint32_t t_open = kStep200Ms + kStep40Ms;
-    static_cast<void>(rc.onOpen(t_open));
+    const uint32_t tOpen = kStep200Ms + kStep40Ms;
+    static_cast<void>(rc.onOpen(tOpen));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected),
                             static_cast<uint8_t>(rc.state()));
     snap = rc.stats();
-    const uint32_t t_online = kStep200Ms + kStep50Ms;
-    TEST_ASSERT_FALSE(rc.start(t_online, act));
+    const uint32_t tOnline = kStep200Ms + kStep50Ms;
+    TEST_ASSERT_FALSE(rc.start(tOnline, act));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onSdpResult(true, kScnSecond, t_online).type));
+                            static_cast<uint8_t>(rc.onSdpResult(true, kScnSecond, tOnline).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onOpen(t_online).type));
+                            static_cast<uint8_t>(rc.onOpen(tOnline).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onConnectFailed(t_online).type));
+                            static_cast<uint8_t>(rc.onConnectFailed(tOnline).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.poll(t_online).type));
+                            static_cast<uint8_t>(rc.poll(tOnline).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected),
                             static_cast<uint8_t>(rc.state()));
-    assert_stats_eq(snap, rc.stats());
+    assertStatsEq(snap, rc.stats());
 
     // kBackoff 忽略 sdp_result / open / connect_failed / close
-    const uint32_t t_close = kStep200Ms + kStep100Ms;
-    static_cast<void>(rc.onClose(t_close));
+    const uint32_t tClose = kStep200Ms + kStep100Ms;
+    static_cast<void>(rc.onClose(tClose));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
                             static_cast<uint8_t>(rc.state()));
     snap = rc.stats();
-    const uint32_t t_backoff = t_close + kStep10Ms;
+    const uint32_t tBackoff = tClose + kStep10Ms;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onSdpResult(true, kScnSecond, t_backoff).type));
+                            static_cast<uint8_t>(rc.onSdpResult(true, kScnSecond, tBackoff).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onOpen(t_backoff).type));
+                            static_cast<uint8_t>(rc.onOpen(tBackoff).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onConnectFailed(t_backoff).type));
+                            static_cast<uint8_t>(rc.onConnectFailed(tBackoff).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.onClose(t_backoff).type));
+                            static_cast<uint8_t>(rc.onClose(tBackoff).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
                             static_cast<uint8_t>(rc.state()));
-    assert_stats_eq(snap, rc.stats());
+    assertStatsEq(snap, rc.stats());
 }
 
-void test_u32_wraparound()
+void testU32Wraparound()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_TRUE(rc.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc.configure(makeExactCfg(), kSeedA));
     rc.setTarget(kAddrA);
 
     // now 从 0xFFFF_F000 起跑
@@ -773,7 +773,7 @@ void test_u32_wraparound()
 
     // 跨回绕在线 >= 10 s 复位（now 单调递增跨过 0xFFFF_FFFF）
     reconnect::Reconnector rc2;
-    TEST_ASSERT_TRUE(rc2.configure(make_exact_cfg(), kSeedA));
+    TEST_ASSERT_TRUE(rc2.configure(makeExactCfg(), kSeedA));
     rc2.setTarget(kAddrA);
     uint32_t t2 = kWrapOnlineStartMs;
     TEST_ASSERT_TRUE(rc2.start(t2, act));
@@ -798,18 +798,18 @@ void test_u32_wraparound()
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_default_state_and_no_target);
-    RUN_TEST(test_configure_invalid_params);
-    RUN_TEST(test_fast_window_fixed_retry);
-    RUN_TEST(test_backoff_outside_window_and_cap);
-    RUN_TEST(test_jitter_range_and_determinism);
-    RUN_TEST(test_disconnect_stable_vs_unstable);
-    RUN_TEST(test_unstable_disconnect_in_fast_window_no_storm);
-    RUN_TEST(test_scn_cache_and_resdp_after_failures);
-    RUN_TEST(test_attempt_timeout);
-    RUN_TEST(test_stop_and_start);
-    RUN_TEST(test_change_target_clears_cache);
-    RUN_TEST(test_unexpected_events_ignored);
-    RUN_TEST(test_u32_wraparound);
+    RUN_TEST(testDefaultStateAndNoTarget);
+    RUN_TEST(testConfigureInvalidParams);
+    RUN_TEST(testFastWindowFixedRetry);
+    RUN_TEST(testBackoffOutsideWindowAndCap);
+    RUN_TEST(testJitterRangeAndDeterminism);
+    RUN_TEST(testDisconnectStableVsUnstable);
+    RUN_TEST(testUnstableDisconnectInFastWindowNoStorm);
+    RUN_TEST(testScnCacheAndResdpAfterFailures);
+    RUN_TEST(testAttemptTimeout);
+    RUN_TEST(testStopAndStart);
+    RUN_TEST(testChangeTargetClearsCache);
+    RUN_TEST(testUnexpectedEventsIgnored);
+    RUN_TEST(testU32Wraparound);
     return UNITY_END();
 }

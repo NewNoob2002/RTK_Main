@@ -47,7 +47,7 @@ struct FanoutWriterStats {
     uint32_t records = 0;     // 成功写入的记录数
     uint32_t bytes = 0;       // 成功写入的负载字节数
     uint32_t overwritten = 0; // 为腾出空间而淘汰的记录数
-    uint32_t rejected = 0;    // 长度为 0 或超过 max_record 的写入
+    uint32_t rejected = 0;    // 长度为 0 或超过 maxRecord 的写入
 };
 
 /** typed 读者统计；计数按 uint32_t 回绕，重新 attach 后清零。 */
@@ -83,7 +83,7 @@ public:
 
     /**
      * 启动前（单线程）调用。storage 由调用方提供且生命周期覆盖本对象；
-     * 要求 max_record ≥ 1、max_record ≤ 65535、storage.size() ≥ 2 × (max_record + kFanoutHeaderBytes)，否则
+     * 要求 maxRecord ≥ 1、maxRecord ≤ 65535、storage.size() ≥ 2 × (maxRecord + kFanoutHeaderBytes)，否则
      * kInvalidArg。 重复 init → kInvalidState。
      */
     [[nodiscard]] Result init(std::span<uint8_t> storage, size_t maxRecord,
@@ -96,7 +96,7 @@ public:
 
     /**
      * 写入一条记录（写者任务）。空间不够时淘汰最旧记录直到放得下，不等待任何读者。
-     * len 为 0 或 > max_record → kInvalidArg 并计入 rejected；未 init → kInvalidState。
+     * len 为 0 或 > maxRecord → kInvalidArg 并计入 rejected；未 init → kInvalidState。
      */
     [[nodiscard]] Result write(std::span<const uint8_t> record) noexcept;
 
@@ -114,8 +114,8 @@ public:
     [[nodiscard]] FanoutWriterStats writerStats() const noexcept;
 
     /**
-     * 启动前单线程、非 ISR；typed 容量为二次幂且 <2^31，max_record 为 1..65535。
-     * 要求 max_record+3 <= cap，否则 kInvalidArg；重复初始化 kInvalidState。
+     * 启动前单线程、非 ISR；typed 容量为二次幂且 <2^31，maxRecord 为 1..65535。
+     * 要求 maxRecord+3 <= cap，否则 kInvalidArg；重复初始化 kInvalidState。
      */
     [[nodiscard]] Result initTyped(std::span<uint8_t> storage, size_t maxRecord,
                                    const LockOps &lock) noexcept;
@@ -125,9 +125,9 @@ public:
     [[nodiscard]] Result attach(FanoutMask mask, uint8_t &readerId) noexcept;
     /** 该读者任务、非 ISR；有租约 kBusy，否则修改 mask 并移至 head，不计历史丢弃。 */
     [[nodiscard]] Result setMask(uint8_t readerId, FanoutMask mask) noexcept;
-    /** 单写者任务、非 ISR；type<32；无匹配订阅 kOk/no_subscriber++。
-     * pin 阻挡时 kBusy，整条拒新且只计 writer/匹配读者 pinned_drop；无等待。
-     * 参数错误 kInvalidArg；超过 max_record 或容量额外计 oversize_drop。
+    /** 单写者任务、非 ISR；type<32；无匹配订阅 kOk/noSubscriber++。
+     * pin 阻挡时 kBusy，整条拒新且只计 writer/匹配读者 pinnedDrop；无等待。
+     * 参数错误 kInvalidArg；超过 maxRecord 或容量额外计 oversizeDrop。
      * payload 不得与环存储重叠，调用期间源字节保持不变。
      */
     [[nodiscard]] Result write(uint8_t type, std::span<const uint8_t> payload) noexcept;

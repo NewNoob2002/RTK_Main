@@ -11,18 +11,18 @@ namespace app {
 namespace {
 constinit AppContext s_test_app{};
 }
-AppContext &app_context() noexcept
+AppContext &appContext() noexcept
 {
     static bool s_bound = false;
     if (!s_bound) {
         s_bound = true;
-        s_test_app.bind_contexts();
+        s_test_app.bindContexts();
     }
     return s_test_app;
 }
 
 // 原有模块场景直接从运行态接线；真实启动门控由 boot_alloc_check 测试。
-bool AppContext::await_boot(BootTask, bool) noexcept
+bool AppContext::awaitBoot(BootTask, bool) noexcept
 {
     return true;
 }
@@ -32,58 +32,58 @@ struct ModuleTestAccess {
     static constexpr size_t kRxBudgetBytes = BtLinkModule::kRxBudgetBytes;
     static auto &manager() noexcept
     {
-        return app_context().bt_link.link_manager_;
+        return appContext().bt_link.link_manager_;
     }
     static auto &alarm() noexcept
     {
-        if (!app_context().bt_link.alarm_.has_value()) {
-            app_context().bt_link.alarm_.emplace();
+        if (!appContext().bt_link.alarm_.has_value()) {
+            appContext().bt_link.alarm_.emplace();
         }
-        return *app_context().bt_link.alarm_;
+        return *appContext().bt_link.alarm_;
     }
     static auto &service() noexcept
     {
-        return app_context().bt_link.link_service();
+        return appContext().bt_link.linkService();
     }
     static auto &sessions() noexcept
     {
-        return app_context().bt_link.sessions_;
+        return appContext().bt_link.sessions_;
     }
     static auto &last_tick_ms() noexcept
     {
-        return app_context().bt_link.last_tick_ms_;
+        return appContext().bt_link.last_tick_ms_;
     }
-    static auto &whitelist_pending() noexcept
+    static auto &whitelistPending() noexcept
     {
-        return app_context().storage.pending_;
+        return appContext().storage.pending_;
     }
     static auto &whitelist_attempt_ms() noexcept
     {
-        return app_context().storage.attempt_ms_;
+        return appContext().storage.attempt_ms_;
     }
-    static void handle_event(const spp_server_evt_t &evt, uint32_t now_ms) noexcept
+    static void handleEvent(const spp_server_evt_t &evt, uint32_t now_ms) noexcept
     {
-        app_context().bt_link.handle_event(evt, now_ms);
+        appContext().bt_link.handleEvent(evt, now_ms);
     }
-    static void drain_rx(uint32_t now_ms) noexcept
+    static void drainRx(uint32_t now_ms) noexcept
     {
-        app_context().bt_link.drain_rx(now_ms);
+        appContext().bt_link.drainRx(now_ms);
     }
-    static void collect_whitelist_dirty() noexcept
+    static void collectWhitelistDirty() noexcept
     {
-        app_context().bt_link.collect_whitelist_dirty();
+        appContext().bt_link.collectWhitelistDirty();
     }
-    static void apply_rtcm_reset() noexcept
+    static void applyRtcmReset() noexcept
     {
-        app_context().bt_link.apply_rtcm_reset();
+        appContext().bt_link.applyRtcmReset();
     }
-    static void publish_link(uint32_t now_ms) noexcept
+    static void publishLink(uint32_t now_ms) noexcept
     {
-        app_context().bt_link.publish_link(now_ms);
+        appContext().bt_link.publishLink(now_ms);
     }
     static void flush_rtcm() noexcept
     {
-        static_cast<void>(app_context().rtcm.poll(rtos::nowMs()));
+        static_cast<void>(appContext().rtcm.poll(rtos::nowMs()));
     }
 };
 namespace {
@@ -99,21 +99,21 @@ struct LinkServiceProbe {
 };
 constinit LinkServiceProbe s_service{};
 auto &s_sessions = ModuleTestAccess::sessions();
-void handle_event(const spp_server_evt_t &evt, uint32_t now_ms) noexcept
+void handleEvent(const spp_server_evt_t &evt, uint32_t now_ms) noexcept
 {
-    ModuleTestAccess::handle_event(evt, now_ms);
+    ModuleTestAccess::handleEvent(evt, now_ms);
 }
-void drain_rx(uint32_t now_ms) noexcept
+void drainRx(uint32_t now_ms) noexcept
 {
-    ModuleTestAccess::drain_rx(now_ms);
+    ModuleTestAccess::drainRx(now_ms);
 }
-void collect_whitelist_dirty() noexcept
+void collectWhitelistDirty() noexcept
 {
-    ModuleTestAccess::collect_whitelist_dirty();
+    ModuleTestAccess::collectWhitelistDirty();
 }
-void mark_whitelist_dirty(std::span<const core::BtAddr> list, uint32_t now_ms) noexcept
+void markWhitelistDirty(std::span<const core::BtAddr> list, uint32_t now_ms) noexcept
 {
-    app_context().storage.mark_whitelist_dirty(list, now_ms);
+    appContext().storage.markWhitelistDirty(list, now_ms);
 }
 using WhitelistRaw = std::array<std::array<uint8_t, core::kAddrLen>, kMaxAlarms>;
 constexpr uint32_t kWhitelistRetryMs = 1000;
@@ -131,14 +131,14 @@ struct CommandResult {
 };
 rtos::StaticQueue<Command, 4> s_command_queue{};
 rtos::StaticQueue<CommandResult, 1> s_result_queue{};
-bool &s_whitelist_pending = ModuleTestAccess::whitelist_pending();
+bool &s_whitelist_pending = ModuleTestAccess::whitelistPending();
 uint32_t &s_whitelist_attempt_ms = ModuleTestAccess::whitelist_attempt_ms();
 struct StatusSnapshot {
-    bool whitelist_pending = false;
-    esp_err_t whitelist_error = ESP_OK;
-    bool bt_ready = false;
-    bool link_running = false;
-    core::Policy policy = policy_from_config();
+    bool whitelistPending = false;
+    esp_err_t whitelistError = ESP_OK;
+    bool btReady = false;
+    bool linkRunning = false;
+    core::Policy policy = policyFromConfig();
     size_t session_count = 0;
     std::array<SessionSnapshot, kMaxSessions> sessions{};
     uint32_t rtcm_frames = 0;
@@ -149,8 +149,8 @@ struct StatusSnapshot {
     uint32_t demux_unknown_bytes = 0;
     uint32_t demux_product_rejects = 0;
     uint32_t demux_rtcm_rejects = 0;
-    uint32_t parser_crc_errors = 0;
-    uint32_t parser_length_errors = 0;
+    uint32_t parserCrcErrors = 0;
+    uint32_t parserLengthErrors = 0;
     uint32_t rx_dropped = 0;
 };
 StatusSnapshot s_snapshot{};
@@ -162,49 +162,49 @@ struct RtcmProbe {
     const RtcmStats &stats() const
     {
         flush_rtcm();
-        return app_context().rtcm.stats();
+        return appContext().rtcm.stats();
     }
 } s_rtcm;
 void publish_snapshot(uint32_t now_ms)
 {
-    ModuleTestAccess::apply_rtcm_reset();
-    ModuleTestAccess::publish_link(now_ms);
+    ModuleTestAccess::applyRtcmReset();
+    ModuleTestAccess::publishLink(now_ms);
     flush_rtcm();
-    const auto rtcm = app_context().data.rtcm_stats.read();
-    const auto demux = app_context().data.demux_stats.read();
-    const auto store = app_context().data.store_status.read();
-    const auto sessions = app_context().data.sessions.read();
-    const auto stats = app_context().data.link_stats.read();
-    s_snapshot.whitelist_pending = store.whitelist_pending;
-    s_snapshot.whitelist_error = store.whitelist_error;
+    const auto rtcm = appContext().data.rtcmStats.read();
+    const auto demux = appContext().data.demuxStats.read();
+    const auto store = appContext().data.storeStatus.read();
+    const auto sessions = appContext().data.sessions.read();
+    const auto stats = appContext().data.linkStats.read();
+    s_snapshot.whitelistPending = store.whitelistPending;
+    s_snapshot.whitelistError = store.whitelistError;
     s_snapshot.session_count = sessions.count;
     s_snapshot.sessions = sessions.entries;
     s_snapshot.rtcm_frames = rtcm.frames;
     s_snapshot.rtcm_bytes = rtcm.bytes;
     s_snapshot.rtcm_crc32 = rtcm.crc32;
-    s_snapshot.rtcm_last_msg = rtcm.last_msg;
-    s_snapshot.rtcm_rejected_role = rtcm.rejected_role;
-    s_snapshot.demux_unknown_bytes = demux.unknown_bytes;
-    s_snapshot.demux_product_rejects = demux.product_rejects;
-    s_snapshot.demux_rtcm_rejects = demux.rtcm_rejects;
-    s_snapshot.parser_crc_errors = stats.parser_crc_errors;
-    s_snapshot.parser_length_errors = stats.parser_length_errors;
+    s_snapshot.rtcm_last_msg = rtcm.lastMsg;
+    s_snapshot.rtcm_rejected_role = rtcm.rejectedRole;
+    s_snapshot.demux_unknown_bytes = demux.unknownBytes;
+    s_snapshot.demux_product_rejects = demux.productRejects;
+    s_snapshot.demux_rtcm_rejects = demux.rtcmRejects;
+    s_snapshot.parserCrcErrors = stats.parserCrcErrors;
+    s_snapshot.parserLengthErrors = stats.parserLengthErrors;
     s_snapshot.rx_dropped = stats.rxDropped;
 }
 void note_bt_failure()
 {
-    s_snapshot.bt_ready = false;
+    s_snapshot.btReady = false;
 }
 void read_snapshot(StatusSnapshot &out)
 {
     out = s_snapshot;
 }
-void persist_whitelist(uint32_t now_ms, bool force = false)
+void persistWhitelist(uint32_t now_ms, bool force = false)
 {
     if (force) {
-        static_cast<void>(app_context().storage.flush_whitelist(now_ms));
+        static_cast<void>(appContext().storage.flushWhitelist(now_ms));
     } else {
-        static_cast<void>(app_context().storage.poll(now_ms));
+        static_cast<void>(appContext().storage.poll(now_ms));
     }
 }
 void process_commands(uint32_t /*nowMs*/)
@@ -216,8 +216,8 @@ void process_commands(uint32_t /*nowMs*/)
         fw::CommandResult result{};
         if (queued.id == CommandId::kRtcmReset) {
             command.verb = verb(RtcmVerb::kReset);
-            app_context().rtcm.on_command(command, result);
-            ModuleTestAccess::apply_rtcm_reset();
+            appContext().rtcm.onCommand(command, result);
+            ModuleTestAccess::applyRtcmReset();
         } else {
             switch (queued.id) {
             case CommandId::kAlarmSet:
@@ -239,7 +239,7 @@ void process_commands(uint32_t /*nowMs*/)
                 command.verb = 0xFF;
                 break;
             }
-            app_context().bt_link.on_command(command, result);
+            appContext().bt_link.onCommand(command, result);
         }
         const CommandResult response{
             queued.seq, result.status == fw::Result::kOk        ? CommandStatus::kOk
@@ -256,17 +256,17 @@ void link_round(uint32_t &last_tick_ms)
 {
     bool pending = false;
     for (const auto &entry : s_sessions) {
-        pending = pending || (entry.used && entry.demux_ready &&
-                              (entry.drain_pending || entry.rx_offset < entry.rx_size));
+        pending = pending || (entry.used && entry.demuxReady &&
+                              (entry.drainPending || entry.rxOffset < entry.rxSize));
     }
-    app_context().bt_link.wait(pending ? 0U : 20U);
+    appContext().bt_link.wait(pending ? 0U : 20U);
     const uint32_t begin = rtos::nowMs();
     process_commands(begin);
     ModuleTestAccess::last_tick_ms() = last_tick_ms;
-    static_cast<void>(app_context().bt_link.poll(begin));
+    static_cast<void>(appContext().bt_link.poll(begin));
     last_tick_ms = ModuleTestAccess::last_tick_ms();
     flush_rtcm();
-    static_cast<void>(app_context().storage.poll(rtos::nowMs()));
+    static_cast<void>(appContext().storage.poll(rtos::nowMs()));
     publish_snapshot(rtos::nowMs());
 }
 } // namespace

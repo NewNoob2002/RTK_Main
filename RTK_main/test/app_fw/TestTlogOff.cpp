@@ -1,5 +1,5 @@
-// fw::tlog 在 FW_TRACE_ENABLED=0 下的编译路径（ADR-0009 §2.6）：tlog/tlog_hex/log_hex_on 退化为空内联，
-// 但不允许出现“未使用变量/参数”之类的告警，且 log_install 的校验语义保持不变。
+// fw::tlog 在 FW_TRACE_ENABLED=0 下的编译路径（ADR-0009 §2.6）：tlog/tlogHex/logHexOn 退化为空内联，
+// 但不允许出现“未使用变量/参数”之类的告警，且 logInstall 的校验语义保持不变。
 
 #include <array>
 #include <cstddef>
@@ -20,19 +20,19 @@ constexpr size_t kRingBytes = fw::kLogHeaderBytes + fw::kLogTextMax;
 constexpr uint32_t kMarker = 7U;
 uint32_t s_clock_value = 0U;
 
-uint32_t test_clock() noexcept
+uint32_t testClock() noexcept
 {
     s_clock_value += 1U;
     return s_clock_value;
 }
 
-void trace_sink(void * /*ctx*/, const fw::TraceEvent & /*ev*/) noexcept {}
+void traceSink(void * /*ctx*/, const fw::TraceEvent & /*ev*/) noexcept {}
 
-void log_sink(void * /*ctx*/, const fw::LogHeader & /*hdr*/,
-              std::span<const uint8_t> /*payload*/) noexcept
+void logSink(void * /*ctx*/, const fw::LogHeader & /*hdr*/,
+             std::span<const uint8_t> /*payload*/) noexcept
 {}
 
-void test_tlog_is_noop_when_disabled()
+void testTlogIsNoopWhenDisabled()
 {
     std::array<uint8_t, kRingBytes> storage{};
     fw::LogRing ring{};
@@ -52,20 +52,20 @@ void test_tlog_is_noop_when_disabled()
     TEST_ASSERT_EQUAL_UINT32(fw::kTraceAllMask, fw::logHexMask());
 }
 
-void test_log_install_still_validated_when_disabled()
+void testLogInstallStillValidatedWhenDisabled()
 {
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
                             static_cast<uint8_t>(fw::logInstall(nullptr, nullptr)));
     // 未安装 trace 时没有时钟源。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
-                            static_cast<uint8_t>(fw::logInstall(&log_sink, nullptr)));
+                            static_cast<uint8_t>(fw::logInstall(&logSink, nullptr)));
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(fw::Result::kOk),
-        static_cast<uint8_t>(fw::traceInstall(&trace_sink, nullptr, &test_clock)));
+        static_cast<uint8_t>(fw::traceInstall(&traceSink, nullptr, &testClock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(fw::logInstall(&log_sink, nullptr)));
+                            static_cast<uint8_t>(fw::logInstall(&logSink, nullptr)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
-                            static_cast<uint8_t>(fw::logInstall(&log_sink, nullptr)));
+                            static_cast<uint8_t>(fw::logInstall(&logSink, nullptr)));
 }
 
 } // namespace
@@ -73,7 +73,7 @@ void test_log_install_still_validated_when_disabled()
 int main(void)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_tlog_is_noop_when_disabled);
-    RUN_TEST(test_log_install_still_validated_when_disabled);
+    RUN_TEST(testTlogIsNoopWhenDisabled);
+    RUN_TEST(testLogInstallStillValidatedWhenDisabled);
     return UNITY_END();
 }

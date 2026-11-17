@@ -1,5 +1,5 @@
-// 调试文本日志通道实现（ADR-0009 §2.11）：tlog()/tlog_hex() 两级开关与变长记录环 LogRing。
-// 线程：log_install 只在启动阶段单线程调用一次；tlog()/tlog_hex() 任意任务可调用（禁止 ISR、禁止实时路径）；
+// 调试文本日志通道实现（ADR-0009 §2.11）：tlog()/tlogHex() 两级开关与变长记录环 LogRing。
+// 线程：logInstall 只在启动阶段单线程调用一次；tlog()/tlogHex() 任意任务可调用（禁止 ISR、禁止实时路径）；
 // LogRing 全部方法由注入的 LockOps 保护，push 可被多个任务并发调用。不分配堆、不抛异常。
 // 堆档位：无（格式化缓冲在调用方栈上，环存储由调用方提供）。
 
@@ -100,7 +100,7 @@ Result logInstall(LogSinkFn fn, void *ctx) noexcept
 
 void logSetHexMask(uint32_t mask) noexcept
 {
-    // 越界位一律清零：与 trace_set_mask 保持一致，避免调用方以为某类别已生效。
+    // 越界位一律清零：与 traceSetMask 保持一致，避免调用方以为某类别已生效。
     s_hex_mask.store(mask & kTraceAllMask, std::memory_order_relaxed);
 }
 
@@ -113,7 +113,7 @@ uint32_t logHexMask() noexcept
 
 namespace {
 
-// 仅 tlog_hex() 使用；放在开关内，关闭追踪时不留下未用常量。
+// 仅 tlogHex() 使用；放在开关内，关闭追踪时不留下未用常量。
 constexpr uint16_t kMaxPayloadLen = std::numeric_limits<uint16_t>::max();
 
 } // namespace
@@ -178,7 +178,7 @@ Result LogRing::init(std::span<uint8_t> storage, const LockOps &lock) noexcept
     if ((lock.lock == nullptr) != (lock.unlock == nullptr)) {
         return Result::kInvalidArg;
     }
-    // stats_.max_used 是 uint32_t；容量超过该上限时拒绝，避免后面反复说明窄化安全。
+    // stats_.maxUsed 是 uint32_t；容量超过该上限时拒绝，避免后面反复说明窄化安全。
     if (storage.size() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
         return Result::kInvalidArg;
     }

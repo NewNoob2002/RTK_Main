@@ -40,7 +40,7 @@ public:
 
     /**
      * 等待事件位；成功返回等待返回时的事件组快照（可能含本次未请求的位），超时/未满足返回 0。
-     * 未初始化或 bits 为 0 返回 0；wait_all 为 true 要求 bits 全部置位，为 false 要求至少一位。
+     * 未初始化或 bits 为 0 返回 0；waitAll 为 true 要求 bits 全部置位，为 false 要求至少一位。
      * xEventGroupWaitBits 超时时返回当前已置位的事件位（可能是请求位的真子集），因此这里按语义判定。
      */
     [[nodiscard]] EventBits_t wait(EventBits_t bits, bool clearOnExit, bool waitAll,

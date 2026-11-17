@@ -18,6 +18,9 @@ extern "C" {
 #include "AppTestAdapter.hpp"
 #include "modules/debug/TraceText.hpp"
 #include "modules/gnss/RtcmPipe.hpp"
+#include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "esp_system.h"
 
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
 // NOLINTBEGIN(readability-magic-numbers)
@@ -45,10 +48,6 @@ std::array<size_t, 2> s_input_offset{};
 std::array<spp_server_evt_t, 32> s_events{};
 size_t s_event_size = 0U;
 size_t s_event_offset = 0U;
-extern "C" {
-extern __thread StaticTask_t *fake_current_task;
-}
-
 uint32_t s_read_delay = 0U;
 uint32_t s_poll_wait = 0U;
 spp_server_rx_wake_fn s_rx_wake_fn = nullptr;
@@ -80,16 +79,16 @@ void setup(std::span<const core::BtAddr> whitelist = {},
            core::Policy policy = core::Policy::kConcurrent)
 {
     using namespace app;
-    app_context().data.init();
+    appContext().data.init();
     LinkStatus link{};
     link.policy = policy;
-    link.whitelist_count = whitelist.size();
+    link.whitelistCount = whitelist.size();
     std::copy(whitelist.begin(), whitelist.end(), link.whitelist.begin());
-    app_context().data.link_status.write(link);
+    appContext().data.linkStatus.write(link);
     SystemStatus system{};
-    system.bt_ready = true;
-    app_context().data.system_status.write(system);
-    CHECK(app_context().bt_link.init() == fw::Result::kOk);
+    system.btReady = true;
+    appContext().data.systemStatus.write(system);
+    CHECK(appContext().bt_link.init() == fw::Result::kOk);
     CHECK(s_command_queue.init() == fw::Status::kOk);
     CHECK(s_result_queue.init() == fw::Status::kOk);
 }
@@ -113,7 +112,7 @@ void open(uint32_t handle, const core::BtAddr &addr)
     for (size_t idx = 0U; idx < addr.bytes.size(); ++idx) {
         evt.addr[idx] = addr.bytes[idx];
     }
-    app::handle_event(evt, s_clock);
+    app::handleEvent(evt, s_clock);
 }
 
 void append(size_t session, uint16_t msg, uint8_t sender, uint8_t type,
@@ -131,10 +130,10 @@ void dirty(size_t session)
     spp_server_evt_t evt{};
     evt.type = SPP_SERVER_EVT_DATA;
     evt.handle = session + 1U;
-    app::handle_event(evt, s_clock);
+    app::handleEvent(evt, s_clock);
 }
 
-void save_recovery()
+void saveRecovery()
 {
     using namespace app;
     const std::array whitelist{kAlarm};
@@ -149,20 +148,20 @@ void save_recovery()
     CHECK(s_write_calls == 1U); // RAM 接受 ACK 仍先于 app 保存。
     CHECK(s_store_calls == 0U && s_whitelist_pending);
     CHECK(s_link_manager.whitelist().empty());
-    CHECK(s_snapshot.whitelist_pending && s_snapshot.whitelist_error == ESP_OK);
+    CHECK(s_snapshot.whitelistPending && s_snapshot.whitelistError == ESP_OK);
     s_clock += 499U;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(s_store_calls == 0U);
     ++s_clock;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     publish_snapshot(s_clock);
-    CHECK(s_store_calls == 1U && s_snapshot.whitelist_error == ESP_FAIL);
+    CHECK(s_store_calls == 1U && s_snapshot.whitelistError == ESP_FAIL);
     s_store_result = ESP_OK;
     s_clock = s_whitelist_attempt_ms + 999U;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(s_store_calls == 1U && s_whitelist_pending);
     ++s_clock;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(s_store_calls == 2U && !s_whitelist_pending && s_saved_count == 0U);
 
     // 配对升级本身触发 dirty，第一次落盘失败仍保留，重试不需要新 dirty。
@@ -171,20 +170,20 @@ void save_recovery()
     const std::array<uint8_t, 8> hello{1, 0, 80, 0, 0, 0, 0, 0};
     append(1U, core::kHelloMsgId, proto::sender::kAlarm, proto::msg_type::kPush, hello);
     dirty(1U);
-    drain_rx(s_clock);
-    collect_whitelist_dirty();
+    drainRx(s_clock);
+    collectWhitelistDirty();
     CHECK(s_link_manager.whitelist().size() == 1U && s_whitelist_pending);
     s_store_result = ESP_FAIL;
     s_clock += 500U;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     const size_t before = s_store_calls;
     CHECK(s_whitelist_pending);
     s_clock = s_whitelist_attempt_ms + 999U;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(s_store_calls == before);
     s_store_result = ESP_OK;
     ++s_clock;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(s_store_calls == before + 1U && !s_whitelist_pending);
     CHECK(s_saved_count == 1U && s_saved[0] == kAlarm.bytes);
 
@@ -201,59 +200,59 @@ void save_recovery()
     CHECK(s_whitelist_pending && s_link_manager.whitelist().empty());
     s_clock += kWhitelistRetryMs;
     s_store_result = ESP_OK;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(!s_whitelist_pending && s_saved_count == 0U);
     publish_snapshot(s_clock);
-    CHECK(!s_snapshot.whitelist_pending && s_snapshot.whitelist_error == ESP_OK);
+    CHECK(!s_snapshot.whitelistPending && s_snapshot.whitelistError == ESP_OK);
     CHECK(s_store_at_write[0] == 0U); // 0x44 接受 ACK 未等待落盘。
 
     // 已有 pending 的冷却比较容忍 32 位毫秒回绕。
     s_whitelist_pending = true;
     s_store_result = ESP_FAIL;
     s_clock = UINT32_MAX - 500U;
-    persist_whitelist(s_clock, true);
+    persistWhitelist(s_clock, true);
     CHECK(s_whitelist_pending);
     s_store_result = ESP_OK;
     s_clock += kWhitelistRetryMs;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(!s_whitelist_pending && s_saved_count == 0U);
 }
 
-void storage_backoff()
+void storageBackoff()
 {
     using namespace app;
     setup();
     const std::array whitelist{kAlarm};
-    mark_whitelist_dirty(whitelist, s_clock);
+    markWhitelistDirty(whitelist, s_clock);
     s_store_result = ESP_FAIL;
     s_clock += 499U;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(s_store_calls == 0U);
     ++s_clock;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(s_store_calls == 1U);
     const std::array<uint32_t, 7> delays{1000, 2000, 4000, 8000, 16000, 30000, 30000};
     for (const auto delay : delays) {
-        CHECK(app_context().data.store_status.read().retry_ms == delay);
+        CHECK(appContext().data.storeStatus.read().retryMs == delay);
         const size_t attempts = s_store_calls;
         s_clock = s_whitelist_attempt_ms + 5U;
-        mark_whitelist_dirty({}, s_clock); // 重试仍保存最新 RAM 值，变化不缩短退避。
+        markWhitelistDirty({}, s_clock); // 重试仍保存最新 RAM 值，变化不缩短退避。
         s_clock = s_whitelist_attempt_ms + delay - 1U;
-        persist_whitelist(s_clock);
+        persistWhitelist(s_clock);
         CHECK(s_store_calls == attempts);
         ++s_clock;
-        persist_whitelist(s_clock);
+        persistWhitelist(s_clock);
         CHECK(s_store_calls == attempts + 1U && s_whitelist_pending);
     }
     s_store_result = ESP_OK;
     s_clock += 30000U;
-    persist_whitelist(s_clock);
+    persistWhitelist(s_clock);
     CHECK(!s_whitelist_pending && s_saved_count == 0U);
-    CHECK(app_context().data.store_status.read().failures == 8U &&
-          app_context().data.store_status.read().retry_ms == 0U);
+    CHECK(appContext().data.storeStatus.read().failures == 8U &&
+          appContext().data.storeStatus.read().retryMs == 0U);
 }
 
-void rx_fairness()
+void rxFairness()
 {
     using namespace app;
     const std::array whitelist{kAlarm};
@@ -274,7 +273,7 @@ void rx_fairness()
     link_round(tick);
     // K3 支持单轮多帧连续消费，受 512B 字节预算限制而不是 1 帧上限。
     CHECK(s_write_calls > 1U && s_clock == start);
-    CHECK(s_sessions[0].drain_pending && s_input_offset[0] < s_input_size[0]);
+    CHECK(s_sessions[0].drainPending && s_input_offset[0] < s_input_size[0]);
     Command cmd{};
     cmd.id = CommandId::kAlarmSet;
     cmd.state = 1U;
@@ -295,7 +294,7 @@ void rx_fairness()
     CHECK(s_write_timeouts[0] == 0U);
 }
 
-void rx_fast_partial()
+void rxFastPartial()
 {
     using namespace app;
     setup();
@@ -310,7 +309,7 @@ void rx_fast_partial()
     CHECK(s_write_calls == 10U && s_poll_wait == 0U);
     CHECK(s_service->stats().framesRx == 10U);
     link_round(tick); // 非空标志直到 read=0 才清除。
-    CHECK(!s_sessions[0].drain_pending);
+    CHECK(!s_sessions[0].drainPending);
 
     append(0U, 1U, 0U, proto::msg_type::kQuery);
     const size_t full = s_input_size[0];
@@ -329,7 +328,7 @@ void rx_fast_partial()
     const uint32_t frames = s_service->stats().framesRx;
     link_round(tick);
     CHECK(s_service->stats().framesRx == frames);
-    CHECK(s_sessions[0].rx_offset == 0U && s_sessions[0].rx_size > 0U);
+    CHECK(s_sessions[0].rxOffset == 0U && s_sessions[0].rxSize > 0U);
     s_read_delay = 0U;
     if (s_service->stats().framesRx == frames) {
         link_round(tick);
@@ -337,7 +336,7 @@ void rx_fast_partial()
     CHECK(s_service->stats().framesRx == frames + 1U);
 }
 
-void rx_tick_budget()
+void rxTickBudget()
 {
     using namespace app;
     const std::array whitelist{kAlarm, kOtherAlarm};
@@ -358,7 +357,7 @@ void rx_tick_budget()
 }
 
 // 自测 oracle 用逐位 CRC，独立于产品的 CRC 查表实现。
-uint32_t crc24_reference(std::span<const uint8_t> wire)
+uint32_t crc24Reference(std::span<const uint8_t> wire)
 {
     uint32_t crc = 0;
     for (const uint8_t byte : wire) {
@@ -370,7 +369,7 @@ uint32_t crc24_reference(std::span<const uint8_t> wire)
     return crc & 0xFFFFFFU;
 }
 
-uint32_t crc32_reference(std::span<const uint8_t> wire, uint32_t initial = 0)
+uint32_t crc32Reference(std::span<const uint8_t> wire, uint32_t initial = 0)
 {
     uint32_t crc = initial ^ UINT32_MAX;
     for (const uint8_t byte : wire) {
@@ -382,29 +381,29 @@ uint32_t crc32_reference(std::span<const uint8_t> wire, uint32_t initial = 0)
     return crc ^ UINT32_MAX;
 }
 
-std::span<const uint8_t> append_rtcm(size_t session, uint16_t message, size_t payload_size = 8)
+std::span<const uint8_t> appendRtcm(size_t session, uint16_t message, size_t payloadSize = 8)
 {
-    CHECK(payload_size >= 2 && payload_size <= 1023);
-    const auto wire = std::span{s_input[session]}.subspan(s_input_size[session], payload_size + 6);
+    CHECK(payloadSize >= 2 && payloadSize <= 1023);
+    const auto wire = std::span{s_input[session]}.subspan(s_input_size[session], payloadSize + 6);
     wire[0] = 0xD3;
     // 载荷长度 <= 1023，上半部分 <= 3，掩码后的下半部分 <= 255，收窄安全。
-    wire[1] = static_cast<uint8_t>(payload_size >> 8U);
-    wire[2] = static_cast<uint8_t>(payload_size & 0xFFU);
+    wire[1] = static_cast<uint8_t>(payloadSize >> 8U);
+    wire[2] = static_cast<uint8_t>(payloadSize & 0xFFU);
     std::fill(wire.begin() + 3, wire.end() - 3, 0x11);
     // 测试消息号限制为 12 bit，上 8 位及掩码后的低半字节收窄安全。
     CHECK(message <= 4095);
     wire[3] = static_cast<uint8_t>(message >> 4U);
     wire[4] = static_cast<uint8_t>((message & 0xFU) << 4U);
-    const uint32_t crc = crc24_reference(wire.first(payload_size + 3));
+    const uint32_t crc = crc24Reference(wire.first(payloadSize + 3));
     // CRC-24Q 的三个字节逐一取低 8 bit，均在 uint8_t 范围内。
-    wire[payload_size + 3] = static_cast<uint8_t>((crc >> 16U) & 0xFFU);
-    wire[payload_size + 4] = static_cast<uint8_t>((crc >> 8U) & 0xFFU);
-    wire[payload_size + 5] = static_cast<uint8_t>(crc & 0xFFU);
+    wire[payloadSize + 3] = static_cast<uint8_t>((crc >> 16U) & 0xFFU);
+    wire[payloadSize + 4] = static_cast<uint8_t>((crc >> 8U) & 0xFFU);
+    wire[payloadSize + 5] = static_cast<uint8_t>(crc & 0xFFU);
     s_input_size[session] += wire.size();
     return wire;
 }
 
-void append_bytes(size_t session, std::span<const uint8_t> bytes)
+void appendBytes(size_t session, std::span<const uint8_t> bytes)
 {
     CHECK(bytes.size() <= s_input[session].size() - s_input_size[session]);
     std::memcpy(std::span{s_input[session]}.subspan(s_input_size[session]).data(), bytes.data(),
@@ -412,7 +411,7 @@ void append_bytes(size_t session, std::span<const uint8_t> bytes)
     s_input_size[session] += bytes.size();
 }
 
-void check_reply(size_t index, uint16_t message)
+void checkReply(size_t index, uint16_t message)
 {
     CHECK(index < s_write_calls);
     proto::FrameParser parser;
@@ -430,121 +429,120 @@ void check_reply(size_t index, uint16_t message)
     CHECK(s_write_handles[index] == 1);
 }
 
-void rtcm_mix()
+void rtcmMix()
 {
     using namespace app;
-    setup({}, policy_from_config());
+    setup({}, policyFromConfig());
     open(1, kPhone);
     append(0, 1, 0, proto::msg_type::kQuery);
-    const auto first = append_rtcm(0, 1005);
-    const auto second = append_rtcm(0, 1077, 11);
-    const uint32_t expected_crc = crc32_reference(second, crc32_reference(first));
+    const auto first = appendRtcm(0, 1005);
+    const auto second = appendRtcm(0, 1077, 11);
+    const uint32_t expectedCrc = crc32Reference(second, crc32Reference(first));
     constexpr std::array<uint8_t, 4> kGarbage{0, 0x7F, 0xFF, 0x55};
-    append_bytes(0, kGarbage);
+    appendBytes(0, kGarbage);
     append(0, 2, 0, proto::msg_type::kQuery);
     event(SPP_SERVER_EVT_DATA, 1);
     uint32_t tick = s_clock;
     link_round(tick);
     // K3 支持单轮多帧连续 feed（<=512B）：混杂的 2 条产品帧与 2 条 RTCM 帧在同一轮直推完成。
     CHECK(s_write_calls == 2 && s_service->stats().framesRx == 2);
-    check_reply(0, 1);
-    check_reply(1, 2);
+    checkReply(0, 1);
+    checkReply(1, 2);
     CHECK(s_snapshot.rtcm_frames == 2 && s_snapshot.rtcm_bytes == first.size() + second.size());
-    CHECK(s_snapshot.rtcm_crc32 == expected_crc && s_snapshot.rtcm_last_msg == 1077);
+    CHECK(s_snapshot.rtcm_crc32 == expectedCrc && s_snapshot.rtcm_last_msg == 1077);
     CHECK(s_snapshot.rtcm_rejected_role == 0 && s_snapshot.demux_unknown_bytes == kGarbage.size());
-    CHECK(s_snapshot.parser_crc_errors == 0 && s_snapshot.parser_length_errors == 0);
+    CHECK(s_snapshot.parserCrcErrors == 0 && s_snapshot.parserLengthErrors == 0);
     CHECK(s_snapshot.rx_dropped == 0 && s_poll_wait == 0);
 }
 
-void rtcm_roles()
+void rtcmRoles()
 {
     using namespace app;
     const std::array whitelist{kAlarm};
-    setup(whitelist, policy_from_config());
+    setup(whitelist, policyFromConfig());
     open(1, kAlarm);
     CHECK(s_link_manager.role(1) == core::Role::kAlarm);
-    append_rtcm(0, 1005);
+    appendRtcm(0, 1005);
     dirty(0);
-    drain_rx(s_clock);
-    CHECK(s_rtcm.stats().rejected_role == 1 && s_rtcm.stats().frames == 0);
+    drainRx(s_clock);
+    CHECK(s_rtcm.stats().rejectedRole == 1 && s_rtcm.stats().frames == 0);
     spp_server_evt_t close{};
     close.type = SPP_SERVER_EVT_CLOSE;
     close.handle = 1;
-    handle_event(close, s_clock);
+    handleEvent(close, s_clock);
     open(1, kPhone);
     s_link_manager.pairOpen(s_clock);
     open(2, kOtherAlarm);
     CHECK(s_link_manager.role(2) == core::Role::kPending);
-    append_rtcm(1, 1077);
+    appendRtcm(1, 1077);
     dirty(1);
-    drain_rx(s_clock);
-    CHECK(s_rtcm.stats().rejected_role == 2 && s_rtcm.stats().frames == 0);
+    drainRx(s_clock);
+    CHECK(s_rtcm.stats().rejectedRole == 2 && s_rtcm.stats().frames == 0);
     // 主动断开到物理 CLOSE 之间角色已经是 NONE，也不能接受 RTCM。
     s_service->onClose(2);
-    append_rtcm(1, 1077);
+    appendRtcm(1, 1077);
     dirty(1);
-    drain_rx(s_clock);
-    CHECK(s_rtcm.stats().rejected_role == 3);
+    drainRx(s_clock);
+    CHECK(s_rtcm.stats().rejectedRole == 3);
     publish_snapshot(s_clock);
     CHECK(s_snapshot.rtcm_frames == 0 && s_snapshot.rtcm_bytes == 0 && s_snapshot.rtcm_crc32 == 0);
     CHECK(s_snapshot.rtcm_last_msg == 0 && s_snapshot.rtcm_rejected_role == 3 &&
           s_write_calls == 0);
 }
 
-void rtcm_replay_budget()
+void rtcmReplayBudget()
 {
     using namespace app;
-    setup({}, policy_from_config());
+    setup({}, policyFromConfig());
     open(1, kPhone);
     constexpr std::array<uint8_t, 3> kHeader{0xD3, 0, 0};
-    append_bytes(0, kHeader);
+    appendBytes(0, kHeader);
     append(0, 1, 0, proto::msg_type::kQuery);
-    const auto rtcm = append_rtcm(0, 1005);
-    const uint32_t expected_crc = crc32_reference(rtcm);
+    const auto rtcm = appendRtcm(0, 1005);
+    const uint32_t expectedCrc = crc32Reference(rtcm);
     append(0, 2, 0, proto::msg_type::kQuery);
     // 外层假 RTCM 把两条产品帧暂时认作载荷；长度为 62，转换到 uint8_t 无损。
     CHECK(s_input_size[0] - 3 < 256);
     s_input[0][2] = static_cast<uint8_t>(s_input_size[0] - 3);
-    CHECK(crc24_reference(std::span{s_input[0]}.first(s_input_size[0])) != 0);
+    CHECK(crc24Reference(std::span{s_input[0]}.first(s_input_size[0])) != 0);
     constexpr std::array<uint8_t, 3> kBadCrc{0, 0, 0};
-    append_bytes(0, kBadCrc);
+    appendBytes(0, kBadCrc);
     dirty(0);
     uint32_t tick = s_clock;
     link_round(tick);
     CHECK(s_service->stats().framesRx == 2 && s_write_calls == 2);
-    CHECK(s_snapshot.rtcm_frames == 1 && s_snapshot.rtcm_crc32 == expected_crc);
+    CHECK(s_snapshot.rtcm_frames == 1 && s_snapshot.rtcm_crc32 == expectedCrc);
     CHECK(s_snapshot.demux_rtcm_rejects == 1 && s_snapshot.demux_unknown_bytes == 6);
-    CHECK(s_snapshot.parser_crc_errors == 0 && s_snapshot.parser_length_errors == 0);
-    check_reply(0, 1);
-    check_reply(1, 2);
+    CHECK(s_snapshot.parserCrcErrors == 0 && s_snapshot.parserLengthErrors == 0);
+    checkReply(0, 1);
+    checkReply(1, 2);
 }
 
-void rtcm_reset_lifecycle()
+void rtcmResetLifecycle()
 {
     using namespace app;
-    setup({}, policy_from_config());
+    setup({}, policyFromConfig());
     open(1, kPhone);
     constexpr std::array<uint8_t, 10> kInvalid{0xAA, 0x44, 0x18, 0x19, 0xD3,
                                                0xFC, 0,    0x7F, 0xFF, 0x55};
-    append_bytes(0, kInvalid);
-    const size_t bad_begin = s_input_size[0];
+    appendBytes(0, kInvalid);
+    const size_t badBegin = s_input_size[0];
     append(0, 1, 0, proto::msg_type::kQuery);
-    const size_t bad_size = s_input_size[0] - bad_begin;
-    CHECK(crc32_reference(std::span{s_input[0]}.subspan(bad_begin, bad_size - proto::kCrcLen)) !=
-          0);
-    const auto bad_crc =
+    const size_t badSize = s_input_size[0] - badBegin;
+    CHECK(crc32Reference(std::span{s_input[0]}.subspan(badBegin, badSize - proto::kCrcLen)) != 0);
+    const auto badCrc =
         std::span{s_input[0]}.subspan(s_input_size[0] - proto::kCrcLen, proto::kCrcLen);
-    std::fill(bad_crc.begin(), bad_crc.end(), 0);
-    const auto wire = append_rtcm(0, 1005);
+    std::fill(badCrc.begin(), badCrc.end(), 0);
+    const auto wire = appendRtcm(0, 1005);
     const size_t full = s_input_size[0];
     s_input_size[0] = full - wire.size() + 4;
     dirty(0);
-    drain_rx(s_clock);
+    drainRx(s_clock);
     publish_snapshot(s_clock);
     CHECK(s_sessions[0].demux->busy());
-    CHECK(s_snapshot.demux_unknown_bytes == kInvalid.size() + bad_size);
+    CHECK(s_snapshot.demux_unknown_bytes == kInvalid.size() + badSize);
     CHECK(s_snapshot.demux_product_rejects == 2 && s_snapshot.demux_rtcm_rejects == 1);
-    CHECK(s_snapshot.parser_crc_errors == 0 && s_snapshot.parser_length_errors == 0);
+    CHECK(s_snapshot.parserCrcErrors == 0 && s_snapshot.parserLengthErrors == 0);
     Command command{};
     command.id = CommandId::kRtcmReset;
     command.seq = 17;
@@ -561,29 +559,29 @@ void rtcm_reset_lifecycle()
           s_snapshot.demux_rtcm_rejects == 0);
     s_input_size[0] = full;
     dirty(0);
-    drain_rx(s_clock);
-    CHECK(s_rtcm.stats().frames == 1 && s_rtcm.stats().crc32 == crc32_reference(wire));
+    drainRx(s_clock);
+    CHECK(s_rtcm.stats().frames == 1 && s_rtcm.stats().crc32 == crc32Reference(wire));
 
     constexpr std::array<uint8_t, 3> kPartial{0xD3, 0, 6};
-    append_bytes(0, kPartial);
+    appendBytes(0, kPartial);
     dirty(0);
-    drain_rx(s_clock);
+    drainRx(s_clock);
     CHECK(s_sessions[0].demux->busy());
     spp_server_evt_t close{};
     close.type = SPP_SERVER_EVT_CLOSE;
     close.handle = 1;
-    handle_event(close, s_clock);
-    handle_event(close, s_clock); // 重复 CLOSE 不得重复累计。
+    handleEvent(close, s_clock);
+    handleEvent(close, s_clock); // 重复 CLOSE 不得重复累计。
     publish_snapshot(s_clock);
     CHECK(s_snapshot.demux_unknown_bytes == 3 && s_snapshot.demux_rtcm_rejects == 1);
     CHECK(!s_sessions[0].used && !s_sessions[0].demux->busy());
     open(1, kPhone);
-    const auto next = append_rtcm(0, 1077);
+    const auto next = appendRtcm(0, 1077);
     dirty(0);
-    drain_rx(s_clock);
+    drainRx(s_clock);
     publish_snapshot(s_clock);
     CHECK(s_snapshot.rtcm_frames == 2 && s_snapshot.rtcm_last_msg == 1077);
-    CHECK(s_snapshot.rtcm_crc32 == crc32_reference(next, crc32_reference(wire)));
+    CHECK(s_snapshot.rtcm_crc32 == crc32Reference(next, crc32Reference(wire)));
     CHECK(s_snapshot.demux_unknown_bytes == 3 && s_snapshot.demux_rtcm_rejects == 1);
     // 已关闭会话的统计也属于 rtcm reset 的清零范围。
     CHECK(s_command_queue.send(command, 0));
@@ -593,21 +591,21 @@ void rtcm_reset_lifecycle()
           s_snapshot.demux_unknown_bytes == 0 && s_snapshot.demux_rtcm_rejects == 0);
 }
 
-void rtcm_byte_budget()
+void rtcmByteBudget()
 {
     using namespace app;
-    setup({}, policy_from_config());
+    setup({}, policyFromConfig());
     open(1, kPhone);
-    const auto first = append_rtcm(0, 1005, 1023);
-    const auto second = append_rtcm(0, 1077);
-    const uint32_t expected_crc = crc32_reference(second, crc32_reference(first));
+    const auto first = appendRtcm(0, 1005, 1023);
+    const auto second = appendRtcm(0, 1077);
+    const uint32_t expectedCrc = crc32Reference(second, crc32Reference(first));
     dirty(0);
     uint32_t tick = s_clock;
     size_t consumed = 0;
     for (size_t round = 0; round < 6 && s_rtcm.stats().frames < 2; ++round) {
         link_round(tick);
         const auto &entry = s_sessions[0];
-        const size_t next = s_input_offset[0] - (entry.rx_size - entry.rx_offset);
+        const size_t next = s_input_offset[0] - (entry.rxSize - entry.rxOffset);
         CHECK(next - consumed <= kRxBudgetBytes);
         consumed = next;
         if (consumed < first.size()) {
@@ -615,10 +613,10 @@ void rtcm_byte_budget()
         }
     }
     CHECK(s_rtcm.stats().frames == 2 && s_rtcm.stats().bytes == first.size() + second.size());
-    CHECK(s_rtcm.stats().crc32 == expected_crc && s_write_calls == 0);
+    CHECK(s_rtcm.stats().crc32 == expectedCrc && s_write_calls == 0);
 }
 
-void lifecycle_application()
+void lifecycleApplication()
 {
     using namespace app;
     setup();
@@ -858,7 +856,7 @@ esp_err_t nvs_store_get_alarms(uint8_t (*)[NVS_STORE_ADDR_LEN], size_t, size_t *
 }
 
 // 真实 LinkService + SppTransport：16 请求跨过旧8项队列，满时保留尾帧并只暂停 PHONE。
-void credit_window()
+void creditWindow()
 {
     using namespace app;
     const std::array whitelist{kAlarm};
@@ -873,8 +871,8 @@ void credit_window()
     }
     dirty(0U);
     const auto round = [] {
-        app_context().bt_link.wait(0U); // 交付生命周期/接收通知，不推进假时钟。
-        static_cast<void>(app_context().bt_link.poll(s_clock));
+        appContext().bt_link.wait(0U); // 交付生命周期/接收通知，不推进假时钟。
+        static_cast<void>(appContext().bt_link.poll(s_clock));
     };
     const uint32_t start = s_clock;
     for (size_t index = 0; index < 20U; ++index) {
@@ -920,44 +918,44 @@ void credit_window()
           s_service->stats().dispatchCancelled == 1U);
 }
 
-// K3：验证 RX level 兜底、paused reply_ready 复查与 BTC 通知唤醒（不依赖轮询睡死）。
-void rx_wake_level_recheck()
+// K3：验证 RX level 兜底、paused replyReady 复查与 BTC 通知唤醒（不依赖轮询睡死）。
+void rxWakeLevelRecheck()
 {
     using namespace app;
     setup();
     open(1U, kPhone);
-    // 1) 模拟 evt_queue 满丢掉 DATA 事件：仅缓冲可读，wait(20) 仍须立即醒来并标记 drain_pending。
+    // 1) 模拟 evt_queue 满丢掉 DATA 事件：仅缓冲可读，wait(20) 仍须立即醒来并标记 drainPending。
     append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
-    app_context().bt_link.wait(20U);
-    CHECK(s_poll_wait == 0U && s_sessions[0].drain_pending);
-    static_cast<void>(app_context().bt_link.poll(s_clock));
+    appContext().bt_link.wait(20U);
+    CHECK(s_poll_wait == 0U && s_sessions[0].drainPending);
+    static_cast<void>(appContext().bt_link.poll(s_clock));
     CHECK(s_service->stats().framesRx == 1U && s_write_calls == 1U);
 
-    // 2) 模拟 TX_SPACE 丢失：paused 下 reply_ready 恢复时 wait(20) 立即返回。
+    // 2) 模拟 TX_SPACE 丢失：paused 下 replyReady 恢复时 wait(20) 立即返回。
     s_tx_hold = true;
     s_tx_used[0] = SPP_SERVER_REPLY_CAPACITY;
     append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
     dirty(0U);
-    app_context().bt_link.wait(0U);
-    static_cast<void>(app_context().bt_link.poll(s_clock));
+    appContext().bt_link.wait(0U);
+    static_cast<void>(appContext().bt_link.poll(s_clock));
     CHECK(s_service->paused(1U) && s_write_calls == 1U);
     s_tx_used[0] = 0U;
-    app_context().bt_link.wait(20U);
-    static_cast<void>(app_context().bt_link.poll(s_clock));
+    appContext().bt_link.wait(20U);
+    static_cast<void>(appContext().bt_link.poll(s_clock));
     CHECK(!s_service->paused(1U) && s_write_calls == 2U);
 
     // 3) 真实任务通知唤醒：空等 wait(500)，后台线程注入帧并调用 rx_wake_fn 应立刻唤醒。
     s_tx_hold = false;
-    // 清空上一帧残留的 drain_pending，确保真正进入阻塞等待分支。
-    app_context().bt_link.wait(0U);
-    static_cast<void>(app_context().bt_link.poll(s_clock));
-    CHECK(!s_sessions[0].drain_pending);
+    // 清空上一帧残留的 drainPending，确保真正进入阻塞等待分支。
+    appContext().bt_link.wait(0U);
+    static_cast<void>(appContext().bt_link.poll(s_clock));
+    CHECK(!s_sessions[0].drainPending);
     pthread_mutex_init(&s_host_task.lock, nullptr);
-    pthread_condattr_t cond_attr{};
-    pthread_condattr_init(&cond_attr);
-    pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
-    pthread_cond_init(&s_host_task.cond, &cond_attr);
-    pthread_condattr_destroy(&cond_attr);
+    pthread_condattr_t condAttr{};
+    pthread_condattr_init(&condAttr);
+    pthread_condattr_setclock(&condAttr, CLOCK_MONOTONIC);
+    pthread_cond_init(&s_host_task.cond, &condAttr);
+    pthread_condattr_destroy(&condAttr);
     s_host_task.notif = 0U;
     s_host_task.started = true;
     fake_current_task = &s_host_task;
@@ -971,20 +969,20 @@ void rx_wake_level_recheck()
         s_rx_wake_fn(s_rx_wake_ctx);
     });
     const auto t0 = std::chrono::steady_clock::now();
-    app_context().bt_link.wait(500U);
-    const auto elapsed_ms =
+    appContext().bt_link.wait(500U);
+    const auto elapsedMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
             .count();
     waker.join();
     s_use_host_task = false;
     fake_current_task = nullptr;
-    CHECK(elapsed_ms < 250);
-    static_cast<void>(app_context().bt_link.poll(s_clock));
+    CHECK(elapsedMs < 250);
+    static_cast<void>(appContext().bt_link.poll(s_clock));
     CHECK(s_service->stats().framesRx == 3U && s_write_calls == 3U);
 }
 
 // K3：验证 512B 读缓冲尾切片保留、单会话暂停不阻塞另一会话、以及 CLOSE 清理。
-void rx_512_partial_and_pause_isolation()
+void rx512PartialAndPauseIsolation()
 {
     using namespace app;
     const std::array whitelist{kAlarm};
@@ -1005,10 +1003,10 @@ void rx_512_partial_and_pause_isolation()
     uint32_t tick = s_clock;
     // 第 1 轮：单次 spp_server_read 读入 <=512B；PHONE 发 1 帧后第 2 帧 pause，同轮仍服务 ALARM 心跳。
     link_round(tick);
-    CHECK(s_sessions[0].rx_size > 256U && s_sessions[0].rx_offset < s_sessions[0].rx_size);
+    CHECK(s_sessions[0].rxSize > 256U && s_sessions[0].rxOffset < s_sessions[0].rxSize);
     CHECK(s_service->paused(1U) && s_write_calls == 1U);
     CHECK(s_service->lastHeartbeat().has_value() && s_service->lastHeartbeat()->seq == 9U);
-    const size_t paused_offset = s_sessions[0].rx_offset;
+    const size_t pausedOffset = s_sessions[0].rxOffset;
 
     // 再次从 ALARM 发送心跳，不得被 PHONE 暂停阻塞。
     const std::array<uint8_t, 8> heartbeat2{10, 0, 86, 0, 0, 0, 0, 0};
@@ -1017,7 +1015,7 @@ void rx_512_partial_and_pause_isolation()
     dirty(1U);
     link_round(tick);
     CHECK(s_service->lastHeartbeat()->seq == 10U && s_write_calls == 1U);
-    CHECK(s_sessions[0].rx_offset == paused_offset);
+    CHECK(s_sessions[0].rxOffset == pausedOffset);
 
     // 释放 PHONE 回复信用后，保留在 512B 缓冲里的尾切片继续逐帧无损投递。
     s_tx_hold = false;
@@ -1033,7 +1031,7 @@ void rx_512_partial_and_pause_isolation()
     append(0U, 1U, proto::sender::kApp, proto::msg_type::kQuery);
     dirty(0U);
     link_round(tick);
-    CHECK(s_service->paused(1U) && s_sessions[0].rx_offset < s_sessions[0].rx_size);
+    CHECK(s_service->paused(1U) && s_sessions[0].rxOffset < s_sessions[0].rxSize);
     event(SPP_SERVER_EVT_CLOSE, 1U);
     s_tx_used[0] = 0U;
     link_round(tick);
@@ -1042,12 +1040,12 @@ void rx_512_partial_and_pause_isolation()
 }
 
 // K3：验证 RtcmPipe 4096B 直推满帧整帧丢弃与 kIo 写状态统计契约。
-void rtcm_pipe_direct_and_io_stats()
+void rtcmPipeDirectAndIoStats()
 {
     app::RtcmPipe pipe;
-    pipe.init_lock();
-    std::array<uint8_t, app::kRtcmPipeBytes> pipe_buf{};
-    CHECK(pipe.bind_storage(pipe_buf) == fw::Status::kOk);
+    pipe.initLock();
+    std::array<uint8_t, app::kRtcmPipeBytes> pipeBuf{};
+    CHECK(pipe.bindStorage(pipeBuf) == fw::Status::kOk);
     CHECK(pipe.init() == fw::Status::kOk);
     std::array<uint8_t, 1029> frame{};
     frame[0] = 0xD3U;
@@ -1057,24 +1055,24 @@ void rtcm_pipe_direct_and_io_stats()
     // 已占 3087 B，剩余 1009 B < 1029 B，第 4 帧整帧丢弃且不破坏已入队字节。
     CHECK(!pipe.push(frame));
     auto stats = pipe.stats();
-    CHECK(stats.pushed_frames == 3U && stats.pushed_bytes == 3087U);
-    CHECK(stats.dropped_frames == 1U && stats.dropped_bytes == 1029U);
+    CHECK(stats.pushedFrames == 3U && stats.pushedBytes == 3087U);
+    CHECK(stats.droppedFrames == 1U && stats.droppedBytes == 1029U);
     CHECK(pipe.available() == 3087U);
 
     std::array<uint8_t, 512> chunk{};
     CHECK(pipe.read(chunk) == 512U);
-    pipe.note_written(256U);
-    pipe.set_pending(256U, true);
-    auto io = pipe.io_stats();
-    CHECK(io.pending_bytes == 256U && io.paused);
-    pipe.note_write_error(256U);
-    pipe.note_discarded(128U);
+    pipe.noteWritten(256U);
+    pipe.setPending(256U, true);
+    auto io = pipe.ioStats();
+    CHECK(io.pendingBytes == 256U && io.paused);
+    pipe.noteWriteError(256U);
+    pipe.noteDiscarded(128U);
     pipe.discard();
-    io = pipe.io_stats();
+    io = pipe.ioStats();
     stats = pipe.stats();
-    CHECK(pipe.available() == 0U && stats.written_bytes == 256U);
-    CHECK(io.uart_write_errors == 1U && !io.paused && io.pending_bytes == 0U);
-    CHECK(io.discarded_bytes == (256U + 128U + (3087U - 512U)));
+    CHECK(pipe.available() == 0U && stats.writtenBytes == 256U);
+    CHECK(io.uartWriteErrors == 1U && !io.paused && io.pendingBytes == 0U);
+    CHECK(io.discardedBytes == (256U + 128U + (3087U - 512U)));
 }
 
 int main(int argc, const char **raw_args)
@@ -1093,44 +1091,44 @@ int main(int argc, const char **raw_args)
 #else
         CHECK(snap.policy == core::Policy::kConcurrent);
 #endif
-        CHECK(!snap.bt_ready && !snap.link_running);
+        CHECK(!snap.btReady && !snap.linkRunning);
     } else if (std::strcmp(argv[1], "debug_cat_names") == 0) {
         // 控制台习惯输小写，表里是大写短名：两种写法都必须解析（T4 上板发现小写被拒）。
         fw::TraceCat cat = fw::TraceCat::kLink;
-        CHECK(app::debug::parse_cat("gnss", cat) && cat == fw::TraceCat::kGnss);
-        CHECK(app::debug::parse_cat("GNSS", cat) && cat == fw::TraceCat::kGnss);
-        CHECK(app::debug::parse_cat("Spp", cat) && cat == fw::TraceCat::kSpp);
-        CHECK(!app::debug::parse_cat("gns", cat) && !app::debug::parse_cat("gnssx", cat));
+        CHECK(app::debug::parseCat("gnss", cat) && cat == fw::TraceCat::kGnss);
+        CHECK(app::debug::parseCat("GNSS", cat) && cat == fw::TraceCat::kGnss);
+        CHECK(app::debug::parseCat("Spp", cat) && cat == fw::TraceCat::kSpp);
+        CHECK(!app::debug::parseCat("gns", cat) && !app::debug::parseCat("gnssx", cat));
     } else if (std::strcmp(argv[1], "save_recovery") == 0) {
-        save_recovery();
+        saveRecovery();
     } else if (std::strcmp(argv[1], "storage_backoff") == 0) {
-        storage_backoff();
+        storageBackoff();
     } else if (std::strcmp(argv[1], "credit_window") == 0) {
-        credit_window();
+        creditWindow();
     } else if (std::strcmp(argv[1], "rx_fairness") == 0) {
-        rx_fairness();
+        rxFairness();
     } else if (std::strcmp(argv[1], "rx_fast_partial") == 0) {
-        rx_fast_partial();
+        rxFastPartial();
     } else if (std::strcmp(argv[1], "rx_tick_budget") == 0) {
-        rx_tick_budget();
+        rxTickBudget();
     } else if (std::strcmp(argv[1], "rx_wake_level_recheck") == 0) {
-        rx_wake_level_recheck();
+        rxWakeLevelRecheck();
     } else if (std::strcmp(argv[1], "rx_512_partial_and_pause_isolation") == 0) {
-        rx_512_partial_and_pause_isolation();
+        rx512PartialAndPauseIsolation();
     } else if (std::strcmp(argv[1], "rtcm_pipe_direct_and_io_stats") == 0) {
-        rtcm_pipe_direct_and_io_stats();
+        rtcmPipeDirectAndIoStats();
     } else if (std::strcmp(argv[1], "rtcm_mix") == 0) {
-        rtcm_mix();
+        rtcmMix();
     } else if (std::strcmp(argv[1], "rtcm_roles") == 0) {
-        rtcm_roles();
+        rtcmRoles();
     } else if (std::strcmp(argv[1], "rtcm_replay_budget") == 0) {
-        rtcm_replay_budget();
+        rtcmReplayBudget();
     } else if (std::strcmp(argv[1], "rtcm_reset_lifecycle") == 0) {
-        rtcm_reset_lifecycle();
+        rtcmResetLifecycle();
     } else if (std::strcmp(argv[1], "rtcm_byte_budget") == 0) {
-        rtcm_byte_budget();
+        rtcmByteBudget();
     } else if (std::strcmp(argv[1], "lifecycle_application") == 0) {
-        lifecycle_application();
+        lifecycleApplication();
     } else {
         return 2;
     }

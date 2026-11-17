@@ -86,7 +86,7 @@ struct Verb {
 
 /**
  * 子命令分派：argv[0] 为组名，argv[1] 为动词。找到 → 以 (argc-1, argv+1) 调用该动词的 handler；
- * 没有动词且 default_verb 非空 → 按 default_verb 执行；否则打印本组用法并返回 fail("usage")。
+ * 没有动词且 defaultVerb 非空 → 按 defaultVerb 执行；否则打印本组用法并返回 fail("usage")。
  */
 int dispatch(std::span<const Verb> verbs, void *ctx, int argc, char **argv,
              const char *defaultVerb = nullptr) noexcept;

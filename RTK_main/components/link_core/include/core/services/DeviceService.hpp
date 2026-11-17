@@ -13,7 +13,7 @@ namespace core::services {
 /** 设备信息类指令服务（0x01–0x06/0x0D）：持有 DeviceInfo 副本；仅链路任务调用。 */
 class DeviceService {
 public:
-    /** 默认值与旧 dispatcher 相同：product="E1-Lite"，hw_ver="V1.1.0"，board="UM980"，radio_type="5002D"。 */
+    /** 默认值与旧 dispatcher 相同：product="E1-Lite"，hwVer="V1.1.0"，board="UM980"，radioType="5002D"。 */
     DeviceService() noexcept;
     DeviceService(const DeviceService &) = delete;
     DeviceService &operator=(const DeviceService &) = delete;
