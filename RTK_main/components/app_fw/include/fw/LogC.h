@@ -1,6 +1,6 @@
-/* 组件分级日志的 C 接口（ADR-0009 §2.12）：供 spp_server、nvs_store 等 C 组件使用，语义与 fw/Log.hpp 的
- * FW_LOG* 完全相同（同一过滤、同一通路、同一行格式）。类别与级别常量的数值与 fw::TraceCat / fw::LogLevel
- * 一致，由 Log.cpp 的 static_assert 保证。线程约束同 fw/Log.hpp。冻结接口（ADR-0009 §3）。 */
+/* 组件分级日志的 C 接口（ADR-0009 §2.12）：供 spp_server、nvs_store 等 C 组件使用，语义与 fw/Log.hpp 的 FW_LOG* 完全相同（同一过滤、同一通路、同一行格式）。
+ * 类别与级别常量数值与 fw::TraceCat / fw::LogLevel 一致，由 Log.cpp 的 static_assert 保证；线程约束同 fw/Log.hpp（禁止 ISR）。
+ * 冻结接口（ADR-0009 §3）。 */
 #pragma once
 
 #include <stdint.h>

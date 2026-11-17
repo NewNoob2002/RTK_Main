@@ -6,10 +6,15 @@
 namespace cli {
 namespace detail {
 
-/** 清除“本次命令已给出失败原因”标记；trampoline 在调用 handler 之前调用。 */
+/** @brief 清除“本次命令已给出失败原因”标记。 @note trampoline 在调用 handler 之前调用，只在 REPL 任务。 */
 void replyReset() noexcept;
 
-/** 本次命令是否已由 fail() 打印过原因。 */
+/**
+ * @brief  查询本次命令是否已由 fail() 打印过原因
+ * @retval true  已打印，trampoline 不再补 "ERR <返回值>"
+ * @retval false 未打印
+ * @note   只在 REPL 任务内、同一次命令调用期间使用。
+ */
 [[nodiscard]] bool replyFailed() noexcept;
 
 } // namespace detail

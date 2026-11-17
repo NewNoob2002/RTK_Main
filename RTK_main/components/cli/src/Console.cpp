@@ -1,7 +1,6 @@
-// 控制台组件（ADR-0007 §3.3 / ADR-0009 §2.4-§2.5）：命令表与动词表登记、REPL 启动、统一回执、自定义 help、
-// UART TX 环形缓冲（实现在 ConsoleUart.cpp）。add()/addVerbs()/start() 只在启动任务调用一次；handler 与
-// trampoline 在 console REPL
-// 任务中串行执行，可阻塞，非 ISR 安全。本组件自身不做堆分配（命令表只保存指针），REPL 的堆由 IDF 分配。
+// 控制台组件（ADR-0007 §3.3）：命令表/动词表登记、REPL 启动、统一回执、自定义 help、UART TX 环形缓冲。
+// 线程：add()/addVerbs()/init()/run() 只在启动任务各调一次；handler 与 trampoline 在 console 任务串行执行，
+//       可阻塞，非 ISR 安全。堆：本组件只保存指针、不分配堆；REPL 任务栈与命令行缓冲由 IDF 分配。
 
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
@@ -62,6 +61,12 @@ esp_console_repl_t *s_repl =
     nullptr; // init() 创建、run() 启动；REPL 任务在 run 之前阻塞在任务通知上
 bool s_running = false;
 
+/**
+ * @brief  串为 nullptr 或空串时返回 true
+ * @param  text: 待检查的 NUL 结尾串
+ * @retval true  text 为 nullptr 或长度为 0
+ * @retval false 其余情况
+ */
 bool isEmptyText(const char *text) noexcept
 {
     if (text == nullptr) {
@@ -70,6 +75,13 @@ bool isEmptyText(const char *text) noexcept
     return std::strlen(text) == 0U;
 }
 
+/**
+ * @brief  比较两个 NUL 结尾串
+ * @param  lhs: 左串
+ * @param  rhs: 右串
+ * @retval true  两串内容相同
+ * @retval false 内容不同，或任一为 nullptr
+ */
 bool sameText(const char *lhs, const char *rhs) noexcept
 {
     if ((lhs == nullptr) || (rhs == nullptr)) {
@@ -78,6 +90,12 @@ bool sameText(const char *lhs, const char *rhs) noexcept
     return std::strcmp(lhs, rhs) == 0;
 }
 
+/**
+ * @brief  已登记的命令表里是否有同名命令（add() 的重名检查）
+ * @param  name: 待查名字
+ * @retval true  已登记
+ * @retval false 未登记
+ */
 bool hasCmdName(const char *name) noexcept
 {
     for (size_t t = 0U; t < s_table_count; ++t) {
@@ -90,6 +108,12 @@ bool hasCmdName(const char *name) noexcept
     return false;
 }
 
+/**
+ * @brief  按名字在已登记命令表中查找
+ * @param  name: 待查名字
+ * @retval 找到时返回表内条目指针（静态存储，不拷贝）
+ * @retval nullptr 未找到
+ */
 const Cmd *findCmd(const char *name) noexcept
 {
     for (size_t t = 0U; t < s_table_count; ++t) {
@@ -102,6 +126,12 @@ const Cmd *findCmd(const char *name) noexcept
     return nullptr;
 }
 
+/**
+ * @brief  按组名查找已登记的动词表
+ * @param  group: 组名
+ * @retval 找到时返回表内条目指针
+ * @retval nullptr 未登记
+ */
 const VerbGroup *findVerbGroup(const char *group) noexcept
 {
     for (size_t g = 0U; g < s_verb_group_count; ++g) {
@@ -127,11 +157,19 @@ void cleanupRepl(esp_console_repl_t *repl) noexcept
     }
 }
 
+/**
+ * @brief  打印 help 的用法
+ * @retval kCmdFail 总是返回它（fail() 的返回值），由 trampoline 决定是否补打错误行
+ */
 int printHelpUsage() noexcept
 {
     return fail("usage: help [<group>]");
 }
 
+/**
+ * @brief  按登记顺序列出可见命令组；有动词表的用组摘要，否则用命令的单行 help
+ * @note   隐藏命令（Cmd::hidden）不列出；末尾固定补一行 help 自身（ADR-0009 §2.10）。
+ */
 void printGroupList() noexcept
 {
     // 按登记顺序输出；已登记动词表的组用摘要，否则回落到该命令的单行 help。
@@ -187,9 +225,15 @@ int cmdHelp(void * /*ctx*/, int argc, char **argv) noexcept
     return fail("unknown group");
 }
 
-// 每条命令的入口：先复位回执状态，再按 handler 返回值统一打印 OK / ERR（ADR-0009 §2.5）。
-// 始终返回 0，避免 esp_console 再打印一遍 "Command returned non-zero error code"。
-// NOLINTNEXTLINE(misc-const-correctness): esp_console_cmd_func_t 固定为 void *ctx 回调签名
+// NOLINTBEGIN(misc-const-correctness): esp_console_cmd_func_t 固定为 void *ctx 回调签名
+/**
+ * @brief  每条命令的统一入口：复位回执状态、调用 handler，再按返回值打印 OK / ERR
+ * @param  ctx: 指向静态 Entry（handler + 模块 ctx），由 init() 登记
+ * @param  argc: 参数个数
+ * @param  argv: 参数数组
+ * @retval 0 总是返回它，避免 esp_console 再打印 "Command returned non-zero error code"
+ * @note   在 console REPL 任务中串行执行（ADR-0009 §2.5）；可能阻塞在输出上，不分配堆。
+ */
 int trampoline(void *ctx, int argc, char **argv) noexcept
 {
     const auto *entry = static_cast<const Entry *>(ctx);
@@ -207,7 +251,14 @@ int trampoline(void *ctx, int argc, char **argv) noexcept
     }
     return 0;
 }
+// NOLINTEND(misc-const-correctness)
 
+/**
+ * @brief  注册自定义 help 命令（先注销 IDF 自带的同名命令）
+ * @retval ESP_OK 成功
+ * @retval 其他 注销或注册返回的 esp_err_t（ESP_ERR_INVALID_ARG 的注销结果视为未注册，继续登记）
+ * @note   只在 init() 中调用，此时命令表已封存、REPL 任务尚未启动；不分配堆。
+ */
 esp_err_t registerHelp() noexcept
 {
     s_help_entry = Entry{cmdHelp, nullptr};
@@ -286,7 +337,8 @@ esp_err_t addVerbs(const char *group, const char *summary, std::span<const Verb>
     return ESP_OK;
 }
 
-esp_err_t init(const char *prompt) noexcept // NOLINT(readability-function-*): 见不拆理由（S4 §2.1）
+// 线性初始化序列，拆开反而难读（ADR-0013 §2.4）。
+esp_err_t init(const char *prompt) noexcept // NOLINT(readability-function-*): 线性序列
 {
     if (s_started) {
         return ESP_ERR_INVALID_STATE;
@@ -408,6 +460,16 @@ extern "C" esp_err_t __real_esp_console_run(const char *cmdline, int *cmdRet);
 // NOLINTNEXTLINE(bugprone-reserved-identifier, readability-identifier-naming): 同上
 extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmdRet);
 
+/**
+ * @brief  --wrap 后的 esp_console_run：未知命令也以 "ERR unknown command" 结尾
+ * @param  cmdline: 命令行文本
+ * @param[out] cmdRet: 命令返回码，由原函数写入；未知命令时不改动
+ * @retval 原函数的返回值
+ * @retval ESP_ERR_INVALID_ARG 原函数返回 ESP_ERR_NOT_FOUND 时的替换值：已打印 "ERR unknown command"，
+ *         REPL 按“空行”处理，不再追加输出
+ * @note   C ABI 链接接缝：CMakeLists 用 -Wl,--wrap=esp_console_run 把 REPL 的调用引到这里；
+ *         在 console REPL 任务中调用，输出可能阻塞。
+ */
 extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmdRet)
 {
     const esp_err_t err = __real_esp_console_run(cmdline, cmdRet);

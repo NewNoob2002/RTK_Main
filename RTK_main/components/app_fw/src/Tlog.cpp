@@ -1,7 +1,6 @@
 // 调试文本日志通道实现（ADR-0009 §2.11）：tlog()/tlogHex() 两级开关与变长记录环 LogRing。
-// 线程：logInstall 只在启动阶段单线程调用一次；tlog()/tlogHex() 任意任务可调用（禁止 ISR、禁止实时路径）；
-// LogRing 全部方法由注入的 LockOps 保护，push 可被多个任务并发调用。不分配堆、不抛异常。
-// 堆档位：无（格式化缓冲在调用方栈上，环存储由调用方提供）。
+// 线程：logInstall 只在启动阶段单线程调用一次；tlog()/tlogHex() 任意任务可调用（禁止 ISR、禁止实时路径），push 经注入 LockOps 可被多任务并发。
+// 堆档位：无（格式化缓冲在调用方栈上，环存储由调用方提供）；不抛异常。
 
 #include "fw/Tlog.hpp"
 
@@ -42,6 +41,13 @@ static_assert(fw::kAtomicUsable<uint32_t>, "日志开关原子须无锁");
 using ByteSpan = std::span<std::byte>;
 using ConstByteSpan = std::span<const std::byte>;
 
+/**
+ * @brief  把 src 拷进 dst 的逻辑区间，跨越末尾时折返。
+ * @param  dst: 目标环缓冲的字节视图。
+ * @param  offset: 逻辑起始位置，须小于 dst.size()。
+ * @param  src: 源字节；可跨越末尾。
+ * @note   调用方持锁并保证该区间没有并发读者；不分配、不阻塞。
+ */
 void copyInto(ByteSpan dst, size_t offset, ConstByteSpan src) noexcept
 {
     const ByteSpan tail = dst.subspan(offset);
@@ -55,6 +61,13 @@ void copyInto(ByteSpan dst, size_t offset, ConstByteSpan src) noexcept
     }
 }
 
+/**
+ * @brief  从 src 的逻辑位置拷出到 dst，跨越末尾时折返。
+ * @param  src: 源环缓冲的只读字节视图。
+ * @param  offset: 逻辑起始位置，须小于 src.size()。
+ * @param  dst: 目标缓冲；可大于末尾剩余字节，剩余部分从头继续。
+ * @note   调用方持锁；不分配、不阻塞。
+ */
 void copyOut(ConstByteSpan src, size_t offset, ByteSpan dst) noexcept
 {
     const ConstByteSpan tail = src.subspan(offset);
@@ -68,11 +81,23 @@ void copyOut(ConstByteSpan src, size_t offset, ByteSpan dst) noexcept
     }
 }
 
+/**
+ * @brief  把记录头视为只读字节视图。
+ * @param  hdr: 待观察的记录头。
+ * @retval 覆盖整个记录头的只读字节视图
+ * @note   仅做类型擦除，不拷贝；视图有效期内调用方须保证 hdr 不被并发改写。
+ */
 ConstByteSpan headerBytes(const LogHeader &hdr) noexcept
 {
     return std::as_bytes(std::span<const LogHeader>(&hdr, 1U));
 }
 
+/**
+ * @brief  把记录头视为可写字节视图，供整条拷贝时填写头部。
+ * @param  hdr: 待填充的记录头。
+ * @retval 覆盖整个记录头的可写字节视图
+ * @note   仅做类型擦除，不拷贝；视图有效期内调用方须独占 hdr。
+ */
 ByteSpan headerBytes(LogHeader &hdr) noexcept
 {
     return std::as_writable_bytes(std::span<LogHeader>(&hdr, 1U));

@@ -1,10 +1,6 @@
-// 控制台统一输出出口实现（ADR-0009 §2.8）。只用 C/C++ 标准库与 FreeRTOS 互斥/延时，不依赖其他 IDF 头。
-// 背景：IDF v6.1 UART VFS（esp_driver_uart/src/uart_vfs.c:227）对每个字符调用一次 uart_write_bytes，
-// printf 在 2 Mbaud / 240 MHz 下只有约 24.6 KB/s；这里整行格式化后一次写出。
-// 线程：一把递归互斥保护静态缓冲与跨调用的行尾状态；s_busy 识别同一任务重入（输出端里又打日志）。
-// 目标板用静态 FreeRTOS 递归互斥：std::recursive_mutex 会拉入 system_error/format.o（堆、locale）
-// 与 __cxa_atexit，违反 g7b 链接约束；创建用无锁 CAS 选出唯一创建者，不在临界区里调 FreeRTOS API
-// （ESP-001）。host 构建仍用标准库互斥。
+// 控制台统一输出出口实现（ADR-0009 §2.8）：整行格式化后一次写出，绕开 UART VFS 的逐字节写出。
+// 线程：递归互斥保护静态缓冲与跨调用的行尾状态，s_busy 识别同任务重入；持锁可能阻塞，不可在 ISR 中调用。
+// 堆：静态缓冲 + 静态递归互斥（目标板不用 std::recursive_mutex，避免拉入堆与 locale）；不分配堆。
 
 #include "cli/Out.hpp"
 
@@ -90,10 +86,16 @@ using OutLock = std::recursive_mutex;
 /** 作用域加锁（不用 std::lock_guard，避免目标板拉入 <mutex>）。 */
 class Guard {
 public:
+    /**
+     * @brief  加锁，析构时释放
+     * @param  lock: 输出互斥；构造时加锁，可能阻塞
+     * @note   任意任务可构造；持锁期间不可在 ISR 中调用。
+     */
     explicit Guard(OutLock &lock) noexcept : lock_(lock)
     {
         lock_.lock();
     }
+    /** @brief 释放构造时拿到的锁。 @note 必须与构造函数在同一任务；不阻塞。 */
     ~Guard()
     {
         lock_.unlock();
@@ -112,13 +114,23 @@ bool s_busy = false; // 持锁期间置位；同任务重入时 recursive_mutex 
 std::array<char, kOutLineMax> s_fmt{};
 std::array<char, kXlatMax> s_xlat{};
 
-/** 写 stdout，保持与原 printf 路径一致（VFS 负责行尾转换）。 */
+/**
+ * @brief  写 stdout，保持与原 printf 路径一致（VFS 负责行尾转换）
+ * @param  text: 文本
+ * @param  len: 字节数
+ * @note   sink 未安装时的回落路径；可能阻塞在 VFS 写出，调用方已持锁。
+ */
 void writeStdout(const char *text, size_t len) noexcept
 {
     (void)std::fwrite(text, 1U, len, stdout);
 }
 
-/** 持锁调用：按设置转换行尾后交给输出端。 */
+/**
+ * @brief  持锁把文本交给输出端，按 crlf 设置转换行尾
+ * @param  text: 文本；nullptr 或 len 为 0 时直接返回
+ * @param  len: 字节数
+ * @note   调用方必须已持有 s_lock；可能阻塞在输出端或 VFS。
+ */
 void emitLocked(const char *text, size_t len) noexcept
 {
     if ((text == nullptr) || (len == 0U)) {
@@ -153,7 +165,14 @@ void emitLocked(const char *text, size_t len) noexcept
     s_sink(s_xlat.data(), used);
 }
 
-/** 持锁调用：格式化后输出；超长时整条交给 stdout（VFS 逐字节，慢但不截断）。 */
+/**
+ * @brief  持锁格式化后输出；超长时整条交给 stdout（VFS 逐字节，慢但不截断）
+ * @param  fmt: printf 格式串，非空（调用方已校验）
+ * @param  args: 参数列表；副本留给超长回落路径，原列表被 vsnprintf 消费
+ * @retval >=0 vsnprintf 报告的长度
+ * @retval <0  格式化失败，未输出
+ * @note   调用方必须已持有 s_lock；可能阻塞。
+ */
 int vprintfLocked(const char *fmt, va_list args) noexcept
 {
     va_list copy;

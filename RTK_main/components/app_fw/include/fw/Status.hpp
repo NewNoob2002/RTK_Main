@@ -20,7 +20,13 @@ enum class Status : uint8_t {
     kInvalidState, // 调用顺序错误（如未 init）
 };
 
-/** 检查成功码；无状态、无分配、不阻塞，线程/ISR 安全。 */
+/**
+ * @brief  判断状态码是否为成功。
+ * @param  status: 待判断的状态码。
+ * @retval true  仅当 status == Status::kOk
+ * @retval false 其余所有错误码
+ * @note   constexpr、无状态、不阻塞，线程/ISR 安全。
+ */
 [[nodiscard]] constexpr bool isOk(Status status) noexcept
 {
     return status == Status::kOk;

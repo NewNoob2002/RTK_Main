@@ -5,6 +5,12 @@
 
 namespace fw {
 
+/**
+ * @brief  把状态转成稳定的静态字符串。
+ * @param  status: 待转换的状态。
+ * @retval 指向静态字符串的指针（"ok"、"invalid-arg"、"no-space"…）；未知值返回 "?"
+ * @note   纯函数，任意任务/ISR 可调用；不分配、不阻塞。
+ */
 const char *toString(Status status) noexcept
 {
     switch (status) {

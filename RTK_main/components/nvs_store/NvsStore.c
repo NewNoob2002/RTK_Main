@@ -1,5 +1,6 @@
-// NVS 持久化：设备 SN 与报警器白名单（ADR-0003：C 实现）。
-// 每次操作 nvs_open → 操作 → nvs_close；写操作成功后 commit。仅访问 NVS 分区。
+// NVS 持久化实现：设备 SN 与报警器白名单；每次操作 nvs_open → 操作 → nvs_close，写成功后 commit。
+// 仅由启动流程与存储执行器任务串行调用，二者不并发；不可在 ISR 中调用。
+// 不分配堆；nvs_* 为阻塞调用，只在任务上下文执行。
 
 #include <stddef.h>
 #include <stdint.h>
@@ -17,10 +18,6 @@
 #define NVS_STORE_KEY_SN  "sn"
 #define NVS_STORE_KEY_ALM "alarm_wl"
 
-/**
- * @brief  初始化 NVS 分区；分区已满或版本不符时擦除后重试一次
- * @retval ESP_OK 成功；其他为 nvs_flash 错误码（已记 E 级日志）
- */
 esp_err_t nvs_store_init(void)
 {
     esp_err_t err = nvs_flash_init();

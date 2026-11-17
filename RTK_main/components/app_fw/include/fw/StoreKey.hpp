@@ -1,8 +1,6 @@
-// 存储键描述：每个模块用 `inline constexpr StoreKey kKeys[]` 登记自己的持久化项。
-// 同一张表以后驱动 NVS 持久化、控制台 cfg get/set、App 配置与导入导出（借鉴 SparkFun rtkSettingsEntries[]，
-// 但静态、类型化、按模块分表）。本轮 storage 模块只用 ns/key/type/maxSize/binding，其余元数据先登记、后使用。
-// 纯数据定义，无状态；表本身应为 constexpr，校验在编译期完成。
-// 冻结接口（ADR-0007 §3.3、§3.6-2）。
+// 存储键描述：模块用 `inline constexpr StoreKey kKeys[]` 登记持久化项，驱动 NVS、cfg get/set 与导入导出（ADR-0007 §3.3/§3.6-2）。
+// 纯数据、无状态，表为 constexpr，由 valid/uniqueKeys 在编译期校验。
+// 不访问后端、无分配、不阻塞；实际读写在所属模块的执行器任务中发生。
 #pragma once
 
 #include <cstddef>
@@ -60,7 +58,13 @@ struct StoreKey {
     StoreBinding binding{};
 };
 
-/** 编译期校验：命名长度、maxSize 与类型一致、范围有序。用法：static_assert(fw::valid(kKeys[0]))。 */
+/**
+ * @brief  编译期校验一条持久化项描述。
+ * @param  k: 待校验的描述项。
+ * @retval true  ns/key 非空且 ≤ kStoreNameMax，maxSize 与类型匹配（u8=1、u16=2、u32/i32=4，str/blob>0），范围有序
+ * @retval false 任一规则不满足
+ * @note   constexpr、无分配；用法 static_assert(fw::valid(kKeys[0]))。
+ */
 [[nodiscard]] constexpr bool valid(const StoreKey &k) noexcept
 {
     if (k.ns.empty() || (k.ns.size() > kStoreNameMax) || k.key.empty() ||
@@ -83,7 +87,13 @@ struct StoreKey {
     }
 }
 
-/** 同一张表内 (ns, key) 不重复。用法：static_assert(fw::uniqueKeys(kKeys))。 */
+/**
+ * @brief  校验同一张表内 (ns, key) 两两不重复。
+ * @param  keys: 表视图。
+ * @retval true  无重复键
+ * @retval false 存在重复的 (ns, key)
+ * @note   constexpr、无分配，O(n²)；用法 static_assert(fw::uniqueKeys(kKeys))。
+ */
 [[nodiscard]] constexpr bool uniqueKeys(std::span<const StoreKey> keys) noexcept
 {
     for (size_t i = 0; i < keys.size(); ++i) {

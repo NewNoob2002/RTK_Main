@@ -1,7 +1,5 @@
-// 执行器 = 一个静态 FreeRTOS 任务 + 一组模块 + CommandBus（命令队列/结果队列）。
-// 每轮：wait（钩子或命令队列，最长 idleWaitMs；上一轮有模块报告积压则为 0）→ 取出全部待处理命令并分派给目标模块
-//       → 按周期调用各模块 poll() → 统计本轮耗时（> roundBudgetMs 计 overrun）→ 喂狗 → vTaskDelay(yieldTicks)。
-// 模块的所有回调（init 除外）只在本执行器任务中调用。
+// 执行器 = 静态 FreeRTOS 任务 + 模块表 + CommandBus；每轮 等待→分派命令→周期 poll→统计→喂狗→让出。
+// 模块回调（init 除外）只在执行器任务中调用；不分配堆、不在 ISR 中调用。
 // 冻结接口（ADR-0007 §3.2、§3.5）。实现方不得修改。
 #pragma once
 
@@ -75,6 +73,11 @@ struct ExecutorStorageView {
     size_t queueDepth = 0;
 };
 
+/**
+ * @brief  把具体尺寸的 ExecutorStorage 类型擦除成 ExecutorStorageView
+ * @param  st: 调用方定义的 constinit 静态存储
+ * @retval 指向 st 各字段的视图（不复制、不分配）
+ */
 template <size_t S, size_t D>
 [[nodiscard]] ExecutorStorageView viewOf(ExecutorStorage<S, D> &st) noexcept
 {
@@ -93,32 +96,65 @@ public:
     ~Executor() = default;
 
     /**
-     * 启动前（单线程，app_main）调用：保存配置，创建两个静态队列，并对每个 module.executor == cfg.id 的模块调用
-     * ops->init。 模块 init 失败：记录日志并把该模块标记为不可用（不 start、不 poll，命令返回
-     * kInvalidState），整体仍返回 kOk。 参数非法（name 为空、模块数 > kExecMaxModules、同执行器内 ModuleId 重复、ops
-     * 为空）→ kInvalidArg；重复调用 → kBusy。 modules 必须指向静态存储（执行器保存该 span）。
+     * @brief  保存配置、创建命令/结果队列，并对本执行器的模块调用 ops->init
+     * @param  cfg: 任务名、优先级、核、等待/预算/让出等配置
+     * @param  modules: 模块表（执行器保存该 span，必须指向静态存储）
+     * @param  storage: 队列、栈与 TCB 的静态存储
+     * @retval fw::Status::kOk 初始化完成（个别模块 init 失败只标记为不可用，不影响返回值）
+     * @retval fw::Status::kInvalidArg name 为空、core/priority 越界、存储尺寸不足、模块数超
+     *         kExecMaxModules、本执行器内 ModuleId 重复或 ops 为空
+     * @retval fw::Status::kBusy 重复调用
+     * @retval fw::Status::kNoSpace 队列创建失败
+     * @note   只在启动期单线程（app_main）调用；不阻塞、不分配堆；模块 init 失败的日志为 E 级
      */
     [[nodiscard]] fw::Status init(const ExecutorConfig &cfg, std::span<const fw::Module> modules,
                                   const ExecutorStorageView &storage) noexcept;
 
-    /** 创建任务。任务首先对可用模块依次调用 ops->start（失败同样标记为不可用），然后进入轮询。未 init → kInvalidState。
+    /**
+     * @brief  创建执行器任务；任务先对可用模块调用 ops->start，再进入轮询循环
+     * @retval fw::Status::kOk 任务已创建
+     * @retval fw::Status::kInvalidState 尚未 init
+     * @retval fw::Status::kBusy 已启动
+     * @retval fw::Status::kNoSpace 任务创建失败
+     * @note   启动期调用；绑核由 cfg.core 指定；模块 start 失败只标记为不可用
      */
     [[nodiscard]] fw::Status start() noexcept;
 
     /**
-     * CommandBus：从其他任务同步调用目标模块的 onCommand。分配 seq，入命令队列，等待 seq 匹配的结果
-     * （丢弃 seq 不匹配的过期结果）。线程安全：同一时刻只允许一个调用者任务（当前为控制台）。
-     * 返回：kOk（result 有效，result.status 为模块结果）、kTimeout（等待超时，命令可能稍后仍被执行）、
-     *       kBusy（命令队列满）、kInvalidState（未运行，或从本执行器任务自身调用——会死锁）、
-     *       kNotFound（目标模块不存在）。
+     * @brief  经 CommandBus 同步调用目标模块的 onCommand 并等待结果
+     * @param  cmd: 待执行命令（target 指出目标模块）
+     * @param[out] result: 成功时写入执行器结果，seq 为本次分配值；失败时内容不变
+     * @param  timeoutMs: 等待结果的毫秒数
+     * @retval fw::Result::kOk result 有效，result.status 为模块结果
+     * @retval fw::Result::kTimeout 等待超时，命令可能稍后仍被执行
+     * @retval fw::Result::kBusy 命令队列满
+     * @retval fw::Result::kInvalidState 未运行，或从本执行器任务自身调用（会死锁）
+     * @retval fw::Result::kNotFound 目标模块不存在
+     * @note   任务上下文，timeoutMs>0 会阻塞；同一时刻只允许一个调用者任务（当前为控制台）
      */
     [[nodiscard]] fw::Result call(const fw::Command &cmd, fw::CommandResult &result,
                                   uint32_t timeoutMs) noexcept;
 
+    /**
+     * @brief  执行器任务是否已创建
+     * @retval true 任务已创建；false 否则
+     * @note   任意任务可调用（内部临界区）
+     */
     [[nodiscard]] bool running() const noexcept;
-    /** 任意任务可调用（内部临界区拷贝）。 */
+
+    /**
+     * @brief  取运行统计快照
+     * @retval 统计副本（临界区内拷贝）
+     * @note   任意任务可调用
+     */
     [[nodiscard]] ExecStats stats() const noexcept;
-    /** 模块是否可用（init/start 成功）。任意任务可调用。 */
+
+    /**
+     * @brief  模块是否可用（init/start 均成功）
+     * @param  id: 模块编号
+     * @retval true 可用；false 模块不属于本执行器或 init/start 失败
+     * @note   任意任务可调用
+     */
     [[nodiscard]] bool moduleOk(fw::ModuleId id) const noexcept;
 
 private:

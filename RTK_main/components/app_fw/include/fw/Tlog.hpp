@@ -1,11 +1,6 @@
-// 调试文本日志通道（ADR-0009 §2.11）：与 trace() 并行的第二条通道，承载“句子 + 可选原始字节”。
-// trace() 面向实时路径（只记 16 B 事件，不格式化）；tlog() 面向非实时任务（io 执行器、kLink 上的非热路径、
-// 控制台任务），由调用方在自己的栈上格式化一行文本，再整条压入变长记录环 LogRing，由同一个读者任务
-// （main 的 DebugModule::trace_out）按时间与 TraceRing 合并输出，保证日志、事件、命令回复互不穿插。
-// 开关（ADR-0009 §2.12）：文本行按类别日志级别过滤（fw/Log.hpp）；十六进制掩码（logSetHexMask）在 D 级之上
-// 额外控制 tlogHex() 的原始字节转储。禁止在 ISR 中调用；不分配堆。纯 C++20，不依赖 IDF/FreeRTOS。
-// 冻结接口（ADR-0009 §3；§2.12 增加 LogLevel 与记录头 level 字段）。新代码用 fw/Log.hpp 的 FW_LOG* 宏，
-// tlog() 等价于 kInfo 级别，保留给已有调用点。
+// 调试文本日志通道（ADR-0009 §2.11）：调用方在自己栈上格式化一行文本，整条压入变长记录环 LogRing，由读者任务与 TraceRing 合并输出。
+// 面向非实时任务（io 执行器、控制台），禁止在 ISR 中调用；不分配堆，纯 C++20、不依赖 IDF/FreeRTOS。
+// 过滤 = 类别日志级别（fw/Log.hpp）+ 十六进制掩码（logSetHexMask）；新代码用 FW_LOG* 宏，tlog() 只留给已有调用点。
 #pragma once
 
 #include <cstddef>
@@ -58,17 +53,37 @@ using LogSinkFn = void (*)(void *ctx, const LogHeader &hdr,
                            std::span<const uint8_t> payload) noexcept;
 
 /**
- * 安装文本通道 sink（启动阶段、单线程调用一次；时钟沿用 traceInstall 注入的时钟，须先安装 trace）。
- * fn 为 nullptr → kInvalidArg；trace 未安装 → kInvalidState；重复安装 → kInvalidState。未安装时 tlog() 什么也不做。
+ * @brief  安装文本通道 sink，时钟沿用 traceInstall 注入的时钟。
+ * @param  fn: 记录存储回调（通常是 LogRing::push 的适配函数）。
+ * @param  ctx: 原样传给 fn 的上下文指针。
+ * @retval Result::kOk 安装成功
+ * @retval Result::kInvalidArg fn 为 nullptr
+ * @retval Result::kInvalidState trace 尚未安装，或已安装过
+ * @note   仅启动阶段单线程调用一次，非 ISR；未安装时 tlog() 什么也不做。
  */
 [[nodiscard]] Result logInstall(LogSinkFn fn, void *ctx) noexcept;
 
-/** 十六进制级别掩码（原子，任意任务可调用）；超出 kTraceAllMask 的位被忽略。只有类别掩码同时打开时才生效。 */
+/**
+ * @brief  设置十六进制转储的类别掩码。
+ * @param  mask: 位图，bit n 对应 TraceCat n；超出 kTraceAllMask 的位被忽略。
+ * @note   原子写，任意任务可调用；只有该类别日志级别为 D 时才生效。
+ */
 void logSetHexMask(uint32_t mask) noexcept;
+/**
+ * @brief  读取十六进制转储的类别掩码。
+ * @retval 当前掩码（恒 ⊆ kTraceAllMask）
+ * @note   原子读，任意任务可调用，不阻塞。
+ */
 [[nodiscard]] uint32_t logHexMask() noexcept;
 
 #if FW_TRACE_ENABLED
-/** 该类别的十六进制转储是否打开（十六进制掩码置位且该类别日志级别为 D，ADR-0009 §2.12）。 */
+/**
+ * @brief  判断该类别的十六进制转储是否打开。
+ * @param  cat: 追踪类别。
+ * @retval true  该类别日志级别为 D 且掩码对应位置位
+ * @retval false 其余情况（含追踪总开关关闭）
+ * @note   原子读，任意任务可调用，不阻塞。
+ */
 [[nodiscard]] bool logHexOn(TraceCat cat) noexcept;
 
 /**
@@ -119,30 +134,74 @@ public:
     LogRing &operator=(LogRing &&) = delete;
     ~LogRing() = default;
 
-    /** 启动前调用。storage 过小 → kInvalidArg；重复 init → kInvalidState。lock 被拷贝保存。 */
+    /**
+     * @brief  初始化记录环，绑定调用方存储与锁。
+     * @param  storage: 环存储，长度须 ≥ kLogHeaderBytes + kLogTextMax 且 ≤ UINT32_MAX。
+     * @param  lock: 记录锁；lock/unlock 须同为 nullptr 或同为非 nullptr。
+     * @retval Result::kOk 初始化成功
+     * @retval Result::kInvalidArg 存储过小或过大、锁表不成对
+     * @retval Result::kInvalidState 已经初始化过
+     * @note   仅启动前单线程调用，非 ISR；持注入锁，不阻塞、不分配堆。
+     */
     [[nodiscard]] Result init(std::span<uint8_t> storage, const LockOps &lock) noexcept;
 
-    /** 压入一条；未 init、payload 超过 hdr.len 声明或空间不足 → false（空间不足时 dropped+1）。hdr.len 必须等于
-     * payload.size()。 */
+    /**
+     * @brief  压入一条完整记录（头 + 负载）。
+     * @param  hdr: 记录头，hdr.len 必须等于 payload.size()。
+     * @param  payload: 负载字节。
+     * @retval true  整条写入成功
+     * @retval false 未初始化、长度不符或空间不足（空间不足时 dropped+1）
+     * @note   多写者任务并发调用，持注入锁，非 ISR；绝不只写半条、不阻塞。
+     */
     bool push(const LogHeader &hdr, std::span<const uint8_t> payload) noexcept;
 
-    /** 最旧记录的时间戳；空或未 init → false。读者据此与 TraceRing 按时间合并。 */
+    /**
+     * @brief  读最旧记录的时间戳。
+     * @param[out] tMs: 最旧记录的毫秒时间戳；失败时不修改。
+     * @retval true  取到时间戳
+     * @retval false 环为空或未初始化
+     * @note   单读者任务调用，持注入锁，非 ISR；读者据此与 TraceRing 按时间合并。
+     */
     [[nodiscard]] bool peekTime(uint32_t &tMs) const noexcept;
 
     /**
-     * 弹出最旧记录：头写入 hdr，payload 复制到 out（out.size() 不足时截断复制，记录仍整体移除），
-     * copied = 实际复制字节数。空或未 init → false。
+     * @brief  弹出最旧记录。
+     * @param[out] hdr: 记录头；失败时不修改。
+     * @param[out] out: 接收负载的缓冲，不足时截断复制但记录仍整体移除。
+     * @param[out] copied: 实际复制的负载字节数。
+     * @retval true  记录已移除（可能被截断）
+     * @retval false 环为空或未初始化
+     * @note   单读者任务调用，持注入锁，非 ISR。
      */
     [[nodiscard]] bool pop(LogHeader &hdr, std::span<uint8_t> out, std::size_t &copied) noexcept;
 
-    /** 取走自上次调用以来新增的丢弃数。 */
+    /**
+     * @brief  取走自上次调用以来新增的丢弃计数。
+     * @retval 新增丢弃的记录数；返回后计数清零
+     * @note   单读者任务调用，持注入锁，非 ISR。
+     */
     [[nodiscard]] uint32_t takeDropped() noexcept;
 
+    /**
+     * @brief  读取累计统计。
+     * @retval 环的统计快照
+     * @note   任意任务调用，持注入锁，非 ISR。
+     */
     [[nodiscard]] LogRingStats stats() const noexcept;
-    /** 当前占用字节数。 */
+    /**
+     * @brief  读取当前占用字节数。
+     * @retval 环内已用字节数
+     * @note   任意任务调用，持注入锁，非 ISR。
+     */
     [[nodiscard]] std::size_t used() const noexcept;
 
-    /** 适配 LogSinkFn：ctx 必须是 LogRing*。 */
+    /**
+     * @brief  把 LogSinkFn 调用转成 push。
+     * @param  ctx: 必须是 LogRing*。
+     * @param  hdr: 记录头。
+     * @param  payload: 负载。
+     * @note   可由多个写者任务并发调用（内部持锁），非 ISR；不阻塞、不分配堆。
+     */
     static void sink(void *ctx, const LogHeader &hdr, std::span<const uint8_t> payload) noexcept;
 
 private:

@@ -26,7 +26,13 @@ public:
     StaticQueue &operator=(StaticQueue &&) = delete;
     ~StaticQueue() = default;
 
-    /** 创建静态队列；重复调用返回 kBusy。 */
+    /**
+     * @brief  创建静态队列（xQueueCreateStatic）；存储区与队列块都在对象内部
+     * @retval fw::Status::kOk 创建成功
+     * @retval fw::Status::kBusy 已初始化
+     * @retval fw::Status::kNoSpace 队列创建失败
+     * @note   启动期调用；不分配堆；创建后可由多任务并发 send/receive
+     */
     [[nodiscard]] fw::Status init() noexcept
     {
         if (handle_ != nullptr) {
@@ -37,6 +43,7 @@ public:
         return (handle_ != nullptr) ? fw::Status::kOk : fw::Status::kNoSpace;
     }
 
+    /** @brief 删除队列（vQueueDelete）并置为未初始化；未初始化时无副作用。 */
     void deinit() noexcept
     {
         if (handle_ != nullptr) {
@@ -45,7 +52,14 @@ public:
         }
     }
 
-    /** 入队；timeoutMs=0 不等待。未初始化或超时返回 false。 */
+    /**
+     * @brief  入队（xQueueSend），按字节复制 item
+     * @param  item: 待入队元素
+     * @param  timeoutMs: 队列满时的等待毫秒数，0 表示不等待
+     * @retval true 已入队
+     * @retval false 未初始化、超时或队列满
+     * @note   任务上下文；不可在 ISR 中调用（需 FromISR 版本）；timeoutMs>0 会阻塞
+     */
     [[nodiscard]] bool send(const T &item, uint32_t timeoutMs) noexcept
     {
         if (handle_ == nullptr) {
@@ -54,7 +68,14 @@ public:
         return xQueueSend(handle_, &item, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
     }
 
-    /** 出队；timeoutMs=0 不等待。未初始化或超时返回 false。 */
+    /**
+     * @brief  出队（xQueueReceive）并把元素复制到 item
+     * @param[out] item: 成功时写入出队元素；失败时内容不变
+     * @param  timeoutMs: 队列空时的等待毫秒数，0 表示不等待
+     * @retval true 已取出
+     * @retval false 未初始化、超时或队列空
+     * @note   任务上下文；不可在 ISR 中调用（需 FromISR 版本）；timeoutMs>0 会阻塞
+     */
     [[nodiscard]] bool receive(T &item, uint32_t timeoutMs) noexcept
     {
         if (handle_ == nullptr) {
@@ -63,6 +84,10 @@ public:
         return xQueueReceive(handle_, &item, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
     }
 
+    /**
+     * @brief  队列是否已创建
+     * @retval true 已初始化；false 未初始化或已 deinit
+     */
     [[nodiscard]] bool valid() const noexcept
     {
         return handle_ != nullptr;

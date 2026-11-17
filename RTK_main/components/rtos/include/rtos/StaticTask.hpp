@@ -32,7 +32,20 @@ public:
     StaticTask &operator=(StaticTask &&) = delete;
     ~StaticTask() = default;
 
-    /** 创建并启动静态任务；重复调用返回 kBusy，参数非法返回 kInvalidArg。 */
+    /**
+     * @brief  创建静态任务并绑定到 core（xTaskCreateStaticPinnedToCore）
+     * @param  name: 任务名，FreeRTOS 不复制内容，字符串寿命必须覆盖任务生命期
+     * @param  priority: FreeRTOS 优先级
+     * @param  core: 绑定核心号，取值 0..configNUMBER_OF_CORES-1
+     * @param  entry: 任务入口
+     * @param  arg: 传给 entry 的参数
+     * @retval fw::Status::kOk 任务已创建
+     * @retval fw::Status::kBusy 已启动过
+     * @retval fw::Status::kInvalidArg name 或 entry 为空
+     * @retval fw::Status::kNoSpace 任务创建失败
+     * @note   只由创建者在启动期调用一次；不可在 ISR 中调用；不分配堆
+     * @note   栈取自对象内部的 StackBytes 字节（按词长换算成 kStackDepth 个 StackType_t）
+     */
     [[nodiscard]] fw::Status start(const char *name, uint32_t priority, BaseType_t core,
                                    Entry entry, void *arg) noexcept
     {
@@ -57,12 +70,20 @@ public:
         return fw::Status::kOk;
     }
 
+    /**
+     * @brief  任务是否已创建成功
+     * @retval true 已启动；false 尚未启动或创建失败
+     */
     [[nodiscard]] bool running() const noexcept
     {
         return handle_ != nullptr;
     }
 
-    /** 栈高水位（剩余最小字节数）。未启动返回 0。 */
+    /**
+     * @brief  查询栈高水位
+     * @retval 任务运行以来剩余栈的最小字节数；未启动返回 0
+     * @note   任意任务可调用；uxTaskGetStackHighWaterMark 本身不阻塞
+     */
     [[nodiscard]] uint32_t stackHighWaterMark() const noexcept
     {
         if (handle_ == nullptr) {
@@ -80,6 +101,10 @@ public:
 private:
     static constexpr size_t kStackDepth = StackBytes / sizeof(StackType_t);
 
+    /**
+     * @brief  FreeRTOS 入口跳板：取回对象并调用用户入口
+     * @param  arg: 指向本 StaticTask 的指针（xTaskCreateStatic 的 pvParameters）
+     */
     static void trampoline(void *arg) noexcept
     {
         const auto *self = static_cast<const StaticTask *>(arg);

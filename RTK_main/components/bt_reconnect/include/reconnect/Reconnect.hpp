@@ -1,7 +1,6 @@
-// 通用 SPP 客户端重连策略状态机：纯 C++20，无 IDF/FreeRTOS/自有组件依赖（ExternalSpeak 报警器以后复用）。
-// 只产生“动作”，由调用方执行（esp_spp_start_discovery / esp_spp_connect / 定时），因此可在 host 上全覆盖测试。
-// 线程模型：单线程；所有方法只能由同一任务调用。时间单位 ms，u32 回绕由无符号差值处理。
-// 冻结接口（ADR-0007 §5）。
+// 通用 SPP 客户端重连策略状态机：纯 C++20，无 IDF/FreeRTOS/自有组件依赖。
+// 只产生动作（esp_spp_start_discovery / esp_spp_connect / 定时），由调用方执行；所有方法只能由同一任务调用，非 ISR 安全。
+// 时间单位 ms，u32 回绕由无符号差值处理；不阻塞、不分配堆。冻结接口（ADR-0007 §5）。
 #pragma once
 
 #include <array>
@@ -73,7 +72,7 @@ struct Stats {
 };
 
 /**
- * 语义（实现须满足，J4 host 测试逐条覆盖）：
+ * 语义（host 测试逐条覆盖）：
  * - start(now)：无目标 → 返回 false；否则进入尝试流程：有缓存 SCN 直接 kConnect，否则 kStartSdp；
  *   快速窗口从 now 起算。stop() → kStopped，之后所有事件只更新统计，不产生动作。
  * - 失败（SDP 失败、connect 失败、attempt 超时、在线时掉线）→ kBackoff，下一次尝试时刻 =
@@ -90,36 +89,137 @@ class Reconnector final {
 public:
     constexpr Reconnector() noexcept = default;
 
-    /** 配置非法（jitterPct > kMaxJitterPct、sdpAfterFailures == 0、backoff_min > backoff_max、任一时长为 0）→ false
-     * 且不改状态。 */
+    /**
+     * @brief  校验并保存重连参数与随机数种子
+     * @param  cfg: 重连参数，时长单位均为 ms
+     * @param  seed: xorshift32 种子；0 表示改用 kDefaultSeed
+     * @retval true 参数合法，已保存
+     * @retval false 任一时长为 0、jitterPct > kMaxJitterPct、sdpAfterFailures == 0 或
+     *         backoffMinMs > backoffMaxMs；此时配置与状态不变
+     * @note   不清零 Stats，不改变状态机状态；单线程调用，非 ISR
+     */
     [[nodiscard]] bool configure(const Config &cfg, uint32_t seed) noexcept;
-    /** 设置目标；改变目标会清除 SCN 缓存并回到 kIdle（若已在线，调用方负责断开）。 */
+
+    /**
+     * @brief  设置重连目标
+     * @param  addr: 经典蓝牙对端地址，6 字节大端线序
+     * @note   与当前地址相同时不做改动；否则清除 SCN 缓存、连续失败计数与退避级数并回到 kIdle。
+     *         若已在线，调用方负责先断开；单线程调用，非 ISR
+     */
     void setTarget(const Addr &addr) noexcept;
+
+    /**
+     * @brief  清除重连目标并回到 kIdle
+     * @note   同时清除 SCN 缓存、连续失败计数、退避级数与计时起点；累计 Stats 保留。
+     *         单线程调用，非 ISR
+     */
     void clearTarget() noexcept;
+
+    /**
+     * @brief  查询是否已设置目标
+     * @retval true 已 setTarget 且尚未 clearTarget
+     * @retval false 无目标
+     */
     [[nodiscard]] bool hasTarget() const noexcept
     {
         return has_target_;
     }
+
+    /**
+     * @brief  读取当前目标地址
+     * @retval 目标地址；未设置目标时为全 0
+     */
     [[nodiscard]] const Addr &target() const noexcept
     {
         return addr_;
     }
 
+    /**
+     * @brief  启动重连流程并输出第一个要执行的动作
+     * @param  nowMs: 当前毫秒时刻，同时作为快速重试窗口起点
+     * @param[out] out: 本次动作；失败时为 kNone
+     * @retval true 已进入 kConnecting（有 SCN 缓存）或 kDiscovering，out 为对应动作
+     * @retval false 无目标，或当前处于 kDiscovering/kConnecting/kConnected；out 为 kNone
+     * @note   可从 kIdle/kBackoff/kStopped 重新开始；清空退避级数与连续失败计数；单线程调用，非 ISR
+     */
     [[nodiscard]] bool start(uint32_t nowMs, Action &out) noexcept;
+
+    /**
+     * @brief  停止重连状态机，直到再次 start
+     * @note   进入 kStopped；之后所有 on_* 事件只累计统计、不产生动作。累计 Stats 保留，非 ISR
+     */
     void stop() noexcept;
 
+    /**
+     * @brief  推进超时与退避计时，返回到期应执行的动作
+     * @param  nowMs: 当前毫秒时刻；与内部记录做无符号差值，允许 u32 回绕
+     * @retval kStartSdp 退避到期且无 SCN 缓存，调用方应发起 SDP
+     * @retval kConnect 退避到期且有 SCN 缓存，调用方应按 scn 发起连接
+     * @retval kNone 无到期动作，或状态不属于 kBackoff/kDiscovering/kConnecting
+     * @note   kDiscovering/kConnecting 超过 attemptTimeoutMs 时按失败转入 kBackoff 并返回 kNone，
+     *         与 onConnectFailed 一样累计失败并按 sdpAfterFailures 清除 SCN 缓存。
+     *         由持有对象的任务周期调用，不阻塞、非 ISR 安全
+     */
     [[nodiscard]] Action poll(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief  处理 SDP 查询结果
+     * @param  ok: 查询是否成功
+     * @param  scn: 成功时的服务信道号；失败时忽略
+     * @param  nowMs: 当前毫秒时刻
+     * @retval kConnect 成功：已缓存 scn，应立刻发起连接
+     * @retval kNone 失败已转入 kBackoff，或状态不是 kDiscovering/kStopped（非预期事件被忽略）
+     * @note   失败累加 failures 并排定下一次尝试；kStopped 下只累计统计，非 ISR
+     */
     [[nodiscard]] Action onSdpResult(bool ok, uint8_t scn, uint32_t nowMs) noexcept;
+
+    /**
+     * @brief  处理连接建立
+     * @param  nowMs: 当前毫秒时刻，作为在线计时起点
+     * @retval kNone 恒为 kNone；kConnecting 时转入 kConnected 并清零连续失败计数
+     * @note   非预期状态忽略；kStopped 下只累计 connects；非 ISR
+     */
     [[nodiscard]] Action onOpen(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief  处理连接失败
+     * @param  nowMs: 当前毫秒时刻
+     * @retval kNone 恒为 kNone；kConnecting 时转入 kBackoff 并排定下一次尝试
+     * @note   连续失败达到 sdpAfterFailures 时清除 SCN 缓存，下次走 SDP；
+     *         非预期状态忽略；kStopped 下只累计 failures；非 ISR
+     */
     [[nodiscard]] Action onConnectFailed(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief  处理在线会话断开
+     * @param  nowMs: 当前毫秒时刻
+     * @retval kNone 恒为 kNone；kConnected 时转入 kBackoff 并排定下一次尝试
+     * @note   在线时长 ≥ stableOnlineMs 时复位退避级数并重开快速窗口，否则保留级数；
+     *         非预期状态忽略；kStopped 下只累计 disconnects；非 ISR
+     */
     [[nodiscard]] Action onClose(uint32_t nowMs) noexcept;
 
+    /**
+     * @brief  读取当前状态
+     * @retval 状态机的当前 State
+     */
     [[nodiscard]] State state() const noexcept
     {
         return state_;
     }
-    /** kBackoff 时距离下一次尝试的剩余 ms（已到期为 0）；其它状态返回 0。 */
+
+    /**
+     * @brief  查询距离下一次重连尝试的剩余时间
+     * @param  nowMs: 当前毫秒时刻
+     * @retval 0 不在 kBackoff，或已到尝试时刻
+     * @retval 正数 kBackoff 中的剩余毫秒数（已含抖动）
+     */
     [[nodiscard]] uint32_t nextAttemptIn(uint32_t nowMs) const noexcept;
+
+    /**
+     * @brief  读取累计统计
+     * @retval 统计快照的常量引用；configure() 与 start() 都不清零
+     */
     [[nodiscard]] const Stats &stats() const noexcept
     {
         return stats_;

@@ -4,6 +4,12 @@
 
 namespace fw {
 
+/**
+ * @brief  把结果码转成稳定的静态字符串。
+ * @param  r: 结果码。
+ * @retval 指向静态字符串的指针（"ok"、"invalid_arg"、"no_space"…）；未知值返回 "unknown"
+ * @note   纯函数，任意任务/ISR 可调用；不分配、不阻塞。
+ */
 const char *toString(Result r) noexcept
 {
     switch (r) {

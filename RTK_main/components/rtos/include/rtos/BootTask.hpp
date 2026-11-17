@@ -29,7 +29,20 @@ public:
     BootTask &operator=(BootTask &&) = delete;
     ~BootTask() = default;
 
-    /** 创建并启动任务；重复调用返回 kBusy，栈或参数非法返回 kInvalidArg。 */
+    /**
+     * @brief  用外供栈创建任务并绑定到 core（xTaskCreateStaticPinnedToCore）
+     * @param  stack: 任务栈存储，单位是 StackType_t 元素（IDF 上每个元素 1 字节），必须非空
+     * @param  name: 任务名，FreeRTOS 不复制内容，字符串寿命必须覆盖任务生命期
+     * @param  priority: FreeRTOS 优先级，必须小于 configMAX_PRIORITIES
+     * @param  core: 绑定核心号，取值 0..configNUMBER_OF_CORES-1
+     * @param  entry: 任务入口
+     * @param  arg: 传给 entry 的参数
+     * @retval fw::Status::kOk 任务已创建
+     * @retval fw::Status::kBusy 已启动过
+     * @retval fw::Status::kInvalidArg 栈为空、name/entry 为空、core 或 priority 越界、栈深度超出 configSTACK_DEPTH_TYPE
+     * @retval fw::Status::kNoSpace 任务创建失败
+     * @note   只由创建者在启动期调用一次；stack 的寿命必须覆盖整个任务生命期；不可在 ISR 中调用；不分配堆
+     */
     [[nodiscard]] fw::Status start(std::span<StackType_t> stack, const char *name,
                                    uint32_t priority, BaseType_t core, Entry entry,
                                    void *arg) noexcept
@@ -59,12 +72,20 @@ public:
         return fw::Status::kOk;
     }
 
+    /**
+     * @brief  任务是否已创建成功
+     * @retval true 已启动；false 尚未启动或创建失败
+     */
     [[nodiscard]] bool running() const noexcept
     {
         return handle_ != nullptr;
     }
 
-    /** 栈高水位（剩余最小字节数）；未启动返回 0。 */
+    /**
+     * @brief  查询栈高水位
+     * @retval 任务运行以来剩余栈的最小字节数；未启动返回 0
+     * @note   任意任务可调用；不阻塞
+     */
     [[nodiscard]] uint32_t stackHighWaterMark() const noexcept
     {
         if (handle_ == nullptr) {
@@ -75,6 +96,10 @@ public:
     }
 
 private:
+    /**
+     * @brief  FreeRTOS 入口跳板：取回对象并调用用户入口
+     * @param  arg: 指向本 BootTask 的指针（xTaskCreateStatic 的 pvParameters）
+     */
     static void trampoline(void *arg) noexcept
     {
         const auto *self = static_cast<const BootTask *>(arg);

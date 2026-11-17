@@ -29,14 +29,11 @@ constexpr int kRefTickMaxBaud = 1000000; // IDF uart_vfs_dev_port_init 的 REF_T
 #if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT) || defined(CONFIG_ESP_CONSOLE_UART_CUSTOM)
 #if CONFIG_RTK_CONSOLE_UART_TX_BUF > 0
 /**
- * 输出端：一次 uart_write_bytes 写完整段（ADR-0009 §2.8）。只有装了 TX 环形驱动才安装它；
- * 环形满时阻塞到有空间，调用方都是任务上下文。
- */
-/**
- * @brief  控制台输出重定向：把文本写到 UART 输出环
+ * @brief  控制台输出端：把文本一次写给 UART 输出环（ADR-0009 §2.8）
  * @param  text: 文本
  * @param  len: 字节数
- * @note   与 logVprintf 共用同一条排空路径；中断上下文不安全。
+ * @note   环形满时阻塞到有空间，只在任务上下文调用，不可在 ISR 中调用；与 logVprintf 共用同一条排空路径。
+ *         只有装了 TX 环形驱动（CONFIG_RTK_CONSOLE_UART_TX_BUF > 0）才安装它。
  */
 void uartSink(const char *text, size_t len) noexcept
 {
@@ -46,14 +43,12 @@ void uartSink(const char *text, size_t len) noexcept
 vprintf_like_t s_orig_log_vprintf = nullptr;
 
 /**
- * ESP_LOG 钩子：日志与命令回复走同一出口和同一把锁，整行写出、互不穿插。
- * ISR、调度器未运行或同任务重入时回落到原 vprintf（IDF 的 VFS 路径）。
- */
-/**
- * @brief  IDF 日志 vprintf 钩子：把日志也写到 UART 输出环
+ * @brief  ESP_LOG 钩子：日志与命令回复走同一出口和同一把锁，整行写出、互不穿插
  * @param  fmt: 格式串
- * @param  args: 参数
- * @retval 写入的字节数；失败时为 -1
+ * @param  args: 参数列表
+ * @retval >=0 格式化后的字符数
+ * @retval <0  回落路径（原 vprintf）的格式化失败
+ * @note   ISR 上下文、调度器未运行或同任务重入（outLogVprintf 返回 -1）时回落到原 vprintf（IDF 的 VFS 路径）。
  */
 int logVprintf(const char *fmt, va_list args)
 {
@@ -81,20 +76,15 @@ void installUartSink() noexcept
 #endif
 }
 
-/**
- * @brief  用带 TX 环形的 UART 驱动替换 esp_console 装的 0 字节 TX 驱动（ADR-0009 §2.4）
- * @retval ESP_OK 成功；其他为 UART 驱动删除/安装失败码
- * @note   经典 ESP32 没有 UART DMA，长输出靠大 TX 环形 + 中断搬运，避免命令任务阻塞在 FIFO 上。
- *       调用点：esp_console_new_repl_uart() 之后、esp_console_start_repl() 之前，console 任务尚未读写 UART。
- * @note   不拆（S4 §2.1）：UART 驱动替换步骤（排空→删驱动→参数→引脚→安装→VFS 行尾）顺序即内容，每步失败即返回。
- */
-esp_err_t enableUartTxBuffer() noexcept // NOLINT(readability-function-*): 见不拆理由（S4 §2.1）
+// UART 驱动替换的步骤顺序（排空→删驱动→参数→引脚→安装→VFS 行尾）即内容，每步失败即返回；
+// 经典 ESP32 没有 UART DMA，长输出靠大 TX 环形 + 中断搬运，避免命令任务阻塞在 FIFO 上（ADR-0013 §2.4）。
+esp_err_t enableUartTxBuffer() noexcept // NOLINT(readability-function-*): 线性序列
 {
 #if CONFIG_RTK_CONSOLE_UART_TX_BUF > 0
     // Kconfig range 0..2 保证端口号合法；uart_port_t 是枚举，转 static_cast 不改变数值。
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_CONSOLE_UART_NUM);
     // uart_param_config() 会复位 TX FIFO（uart_hal_txfifo_rst）：先等已写入 FIFO 的启动日志发完，
-    // 否则切换瞬间尚未移出的字节被丢弃，表现为启动日志行被截断（R8a HIL 观察到 "W (260) uart_vfs: light slee"）。
+    // 否则切换瞬间尚未移出的字节被丢弃，表现为启动日志行被截断（HIL 观察到 "W (260) uart_vfs: light slee"）。
     esp_err_t err = uart_wait_tx_done(port, pdMS_TO_TICKS(kTxDrainTimeoutMs));
     if (err != ESP_OK) {
         // 超时只意味着可能丢少量启动日志，不影响控制台功能，继续切换。

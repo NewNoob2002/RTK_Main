@@ -14,11 +14,27 @@
 namespace rtos {
 namespace {
 
+/**
+ * @brief  把毫秒换成 tick，并保证非零毫秒至少 1 tick
+ * @param  ms: 等待毫秒数
+ * @retval ms 为 0 返回 0；否则大于等于 1 的 tick 数
+ */
 TickType_t waitTicks(uint32_t ms) noexcept
 {
     const TickType_t ticks = pdMS_TO_TICKS(ms);
     return ms != 0U && ticks == 0U ? 1U : ticks;
 }
+
+/**
+ * @brief  在本执行器的模块表里找命令目标并调用其 onCommand
+ * @param  modules: 本执行器的模块表
+ * @param  executor: 执行器编号，用于过滤模块
+ * @param  available: 各模块可用标志，下标与 modules 对齐
+ * @param  command: 待分派命令
+ * @retval 结果对象：目标不存在为 kNotFound，模块不可用为 kInvalidState，无 onCommand 为
+ *         kNotSupported，否则为模块返回值；seq 恒为命令 seq
+ * @note   只在执行器任务中调用；不阻塞、不分配
+ */
 fw::CommandResult dispatchCommand(std::span<const fw::Module> modules, fw::ExecutorId executor,
                                   std::span<const bool> available,
                                   const fw::Command &command) noexcept
@@ -97,11 +113,15 @@ bool moduleTableValid(std::span<const fw::Module> modules, fw::ExecutorId execut
 } // namespace
 
 /**
- * @brief  绑定模块表与静态存储并创建执行器任务
- * @param  cfg: 任务名、优先级、核、周期等配置
- * @param  modules: 本执行器轮询的模块表
+ * @brief  创建命令/结果队列后逐个调用本执行器模块的 ops->init（公开契约见头文件声明）
+ * @param  cfg: 任务名、优先级、核、等待/预算/让出等配置
+ * @param  modules: 模块表，必须指向静态存储（执行器保存该 span）
  * @param  storage: 队列、栈与 TCB 的静态存储
- * @retval fw::Status::kOk 成功；参数或任务创建失败返回对应状态（已记 E 级日志）
+ * @retval fw::Status::kOk 校验与队列创建完成；个别模块 init 失败只标记为不可用
+ * @retval fw::Status::kInvalidArg 参数非法（name 为空、尺寸不足、模块数超限、ModuleId 重复、ops 为空）
+ * @retval fw::Status::kBusy 重复调用
+ * @retval fw::Status::kNoSpace 队列创建失败
+ * @note   块保留在定义处是因为本函数与 StaticQueue/StaticStreamBuffer 的 init 同名，工具按短名匹配会误取它们头文件里的注释。
  */
 fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module> modules,
                           const ExecutorStorageView &storage) noexcept
@@ -277,10 +297,10 @@ void Executor::taskEntry(void *arg) noexcept
 }
 
 /**
- * @brief  执行器主循环：轮询模块、投递命令、喂看门狗，收到停止请求后退出
- * @note   不拆（S4 §2.1）：每轮实时路径，等待→排空命令→轮询模块→统计→喂狗的顺序与 pending 标志构成单一状态机，拆出需 4 个以上出入参且辅助函数要改冻结头。
+ * @brief  执行器主循环：等命令、轮询模块、喂看门狗，永不返回
+ * @note   不拆（ADR-0013 §2.4 的保留例外）：每轮实时路径，等待→排空命令→轮询模块→统计→喂狗的顺序与 pending 标志构成单一状态机，拆出需 4 个以上出入参且辅助函数要改冻结头。
  */
-void Executor::run() noexcept // NOLINT(readability-function-*)
+void Executor::run() noexcept // NOLINT(readability-function-*): 单轮实时状态机，见上方 @note
 {
     bool watchdog = false;
     if (cfg_.watchdog) {

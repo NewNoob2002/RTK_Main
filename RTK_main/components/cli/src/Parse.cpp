@@ -21,6 +21,13 @@ constexpr uint32_t kBitsPerNibble = 4U;
 constexpr size_t kMacByteStride = 3U;
 constexpr size_t kMacStrLen = (kMacLen * 2U) + (kMacLen - 1U);
 
+/**
+ * @brief  单个十六进制字符转 0..15
+ * @param  ch: 待解析字符
+ * @param[out] out: 解析结果；失败时不修改
+ * @retval true  ch 是 0-9、a-f 或 A-F
+ * @retval false 其他字符
+ */
 bool hexNibble(char ch, uint8_t &out) noexcept
 {
     if ((ch >= '0') && (ch <= '9')) {

@@ -1,12 +1,6 @@
-// 组件分级日志（ADR-0009 §2.12）：FW_LOGE/W/I/D(类别, 格式, ...)，各组件再包一层自己的宏（如 GNSS_LOGW）。
-// 与 trace() 分工：trace 记录实时路径的高频 16 B 事件；日志记录状态变化、错误与周期统计（CODING-STYLE §5.1）。
-// 去向：启动完成后 DebugModule 安装文本环（logInstall）时写环，由 trace_out 任务按时间与 trace 事件合并输出；
-// 否则写 logInstallDirect 安装的直写 sink（启动早期、或 CONFIG_RTK_TRACE_ENABLE=n 的固件）；都没有时丢弃并计数。
-// 过滤：编译期 FW_LOG_MAX_LEVEL（Kconfig RTK_LOG_LEVEL）之上的级别整句编译掉；
-// 运行期按类别级别过滤（`debug log <cat> <e|w|i|d>`，默认全部 I），与追踪掩码（`debug trace`）相互独立。
-// C 代码用 fw/LogC.h 的 FW_CLOG*。
-// 线程：任意任务可调用，禁止 ISR、BT 回调任务与实时每轮路径（格式化在调用方栈上，约 0.8 KB）。不分配堆。
-// 纯 C++20，不依赖 IDF/FreeRTOS。冻结接口（ADR-0009 §3）。
+// 组件分级日志（ADR-0009 §2.12）：FW_LOGE/W/I/D(类别, 格式, ...)，按编译期上限与类别级别过滤后写文本环或直写 sink，都没有时丢弃并计数；C 代码用 fw/LogC.h。
+// 线程：任意任务可调用，禁止 ISR、BT 回调任务与实时每轮路径；格式化缓冲约 0.8 KB 在调用方栈上。
+// 堆：不分配堆，纯 C++20 不依赖 IDF/FreeRTOS；与 trace 事件按时间合并输出见 ADR-0009 §2.11，冻结接口见 §3。
 #pragma once
 
 #include <cstdarg>
@@ -27,7 +21,7 @@
 
 namespace fw {
 
-/** 编译期上限（L0b 起与追踪开关无关：日志级别按类别独立设置，追踪关闭的固件同样输出 I 级）。 */
+/** 编译期上限（与追踪开关无关：日志级别按类别独立设置，追踪关闭的固件同样输出 I 级）。 */
 inline constexpr LogLevel kLogMaxLevel = static_cast<LogLevel>(FW_LOG_MAX_LEVEL);
 
 /** 每个类别占 2 bit 的打包级别表（类别 i 在 bit 2i..2i+1）；用于 NVS 持久化。 */

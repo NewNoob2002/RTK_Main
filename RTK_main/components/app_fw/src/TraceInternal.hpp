@@ -8,7 +8,11 @@
 
 namespace fw::detail {
 
-/** 已安装的时钟；未安装时返回 nullptr（logInstall 据此返回 kInvalidState）。 */
+/**
+ * @brief  读取 traceInstall 安装的毫秒时钟。
+ * @retval 已安装的时钟函数指针；未安装为 nullptr（logInstall 据此返回 kInvalidState）
+ * @note   仅在启动阶段写入一次，之后只读；调用方保证非 ISR。
+ */
 [[nodiscard]] TraceClockFn installedClock() noexcept;
 
 /**

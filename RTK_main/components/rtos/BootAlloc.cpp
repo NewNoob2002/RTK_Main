@@ -15,6 +15,11 @@ namespace rtos {
 
 namespace {
 
+/**
+ * @brief  判断是否为非零的 2 的幂
+ * @param  value: 待判断值
+ * @retval true 是非零 2 的幂；false 为 0 或含多个置位
+ */
 constexpr bool isPowerOfTwo(size_t value) noexcept
 {
     return (value != 0U) && ((value & (value - 1U)) == 0U);
@@ -23,17 +28,35 @@ constexpr bool isPowerOfTwo(size_t value) noexcept
 #ifdef ESP_PLATFORM
 constexpr uint32_t kDefaultCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 
-// 平台默认分配器（ESP：内部 RAM 堆）：直接填入 BootAlloc::Allocator 的默认函数指针，不另包类。
+/**
+ * @brief  平台默认分配器：内部 RAM 8-bit 堆上按 align 分配（heap_caps_aligned_alloc）
+ * @param  align: 对齐字节数
+ * @param  bytes: 字节数
+ * @param  ctx: 未使用（BootAllocatorOps 的上下文位）
+ * @retval 分配地址；失败返回 nullptr
+ * @note   仅启动期调用；会分配堆
+ */
 void *defaultAlloc(size_t align, size_t bytes, void * /*ctx*/) noexcept
 {
     return heap_caps_aligned_alloc(align, bytes, kDefaultCaps);
 }
 
+/**
+ * @brief  平台默认释放：heap_caps_free
+ * @param  ptr: 分配地址
+ * @param  ctx: 未使用
+ */
 void defaultFree(void *ptr, void * /*ctx*/) noexcept
 {
     heap_caps_free(ptr);
 }
 
+/**
+ * @brief  平台默认占用查询：heap_caps_get_allocated_size
+ * @param  ptr: 分配地址
+ * @param  ctx: 未使用
+ * @retval 该块的实际占用字节数
+ */
 size_t defaultAllocatedSize(void *ptr, void * /*ctx*/) noexcept
 {
     return heap_caps_get_allocated_size(ptr);
@@ -41,17 +64,34 @@ size_t defaultAllocatedSize(void *ptr, void * /*ctx*/) noexcept
 #else
 constexpr uint32_t kDefaultCaps = 0U;
 
-// 主机默认分配器（host 测试构建）：同上，作为 Allocator 的默认函数指针。
+/**
+ * @brief  主机默认分配器：std::aligned_alloc，供 host 测试构建使用
+ * @param  align: 对齐字节数
+ * @param  bytes: 字节数
+ * @param  ctx: 未使用
+ * @retval 分配地址；失败返回 nullptr
+ */
 void *defaultAlloc(size_t align, size_t bytes, void * /*ctx*/) noexcept
 {
     return std::aligned_alloc(align, bytes);
 }
 
+/**
+ * @brief  主机默认释放：std::free
+ * @param  ptr: 分配地址
+ * @param  ctx: 未使用
+ */
 void defaultFree(void *ptr, void * /*ctx*/) noexcept
 {
     std::free(ptr);
 }
 
+/**
+ * @brief  主机默认占用查询（stub）
+ * @param  ptr: 未使用
+ * @param  ctx: 未使用
+ * @retval 恒为 0；主机不提供实际占用查询，台账回退到对齐后的请求字节数
+ */
 size_t defaultAllocatedSize(void * /*ptr*/, void * /*ctx*/) noexcept
 {
     return 0U;
@@ -86,15 +126,7 @@ fw::Status BootArena::open(const BootAllocatorOps *ops) noexcept
     return fw::Status::kOk;
 }
 
-/**
- * @brief  从启动期 arena 分配一块对齐内存
- * @param  tag: 分配标签（只记首次，重名按失败处理）
- * @param  bytes: 字节数
- * @param  align: 对齐字节数
- * @param[out] outPtr: 成功时返回分配地址
- * @retval fw::Status::kOk 成功；其他为失败原因
- * @note   不拆（S4 §2.1）：线性分配流程，状态→入参→重名→对齐→容量→分配→台账，顺序即契约。
- */
+// 不拆（ADR-0013 §2.4 的保留例外）：状态→入参→重名→对齐→容量→分配→台账，顺序即契约。
 fw::Status BootArena::allocate(const char *tag, size_t bytes, // NOLINT(readability-function-*)
                                size_t align, void *&outPtr) noexcept
 {
@@ -219,6 +251,11 @@ const char *BootArena::stateName(ArenaState state) noexcept
     }
 }
 
+/**
+ * @brief  把原因文本截断复制进 reason_，覆盖旧内容
+ * @param  text: 原因文本；nullptr 只清空 reason_
+ * @note   单线程启动期调用；snprintf 截断保证 NUL 结尾
+ */
 void BootArena::copyReason(const char *text) noexcept
 {
     reason_.fill('\0');

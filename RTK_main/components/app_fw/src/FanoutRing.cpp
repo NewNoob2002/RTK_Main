@@ -24,6 +24,13 @@ using detail::ringPhys;
 constexpr uint32_t kTypedHeaderBytes =
     kFanoutTypedHeaderBytes; // 固定为 3，索引加法必须按 u32 回绕。
 
+/**
+ * @brief  原地反转 buf[first, last) 区间。
+ * @param  buf: 目标缓冲。
+ * @param  first: 起始下标（含）。
+ * @param  last: 结束下标（不含）。
+ * @note   纯下标运算，无锁、无分配；供 ringRotate 的三次反转使用。
+ */
 void reverseSpan(std::span<uint8_t> buf, size_t first, size_t last) noexcept
 {
     while (first < last) {
@@ -37,6 +44,12 @@ void reverseSpan(std::span<uint8_t> buf, size_t first, size_t last) noexcept
     }
 }
 
+/**
+ * @brief  把整段环内容右移 shift 字节（三次反转实现）。
+ * @param  ring: 环存储。
+ * @param  shift: 右移字节数；0、≥ 容量或容量 ≤ 1 时不动。
+ * @note   仅在写者持锁、logical oldest 发生 u32 回绕需要重新对齐物理位置时调用。
+ */
 void rotateRingRight(std::span<uint8_t> ring, size_t shift) noexcept
 {
     const size_t cap = ring.size();
@@ -49,6 +62,14 @@ void rotateRingRight(std::span<uint8_t> ring, size_t shift) noexcept
     reverseSpan(ring, 0U, cap);
 }
 
+/**
+ * @brief  把 src 写到环的逻辑位置 pos，跨越存储末尾时折返。
+ * @param  ring: 环存储。
+ * @param  oldest: 逻辑位置 0 对应的物理下标。
+ * @param  pos: 逻辑写入位置。
+ * @param  src: 源字节；为空时直接返回。
+ * @note   调用方持锁并保证写入区没有读者在使用；无分配、不阻塞。
+ */
 void ringWrite(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos,
                std::span<const uint8_t> src) noexcept
 {
@@ -67,6 +88,14 @@ void ringWrite(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos,
     }
 }
 
+/**
+ * @brief  在记录起始位置写入 2 字节小端负载长度头。
+ * @param  ring: 环存储。
+ * @param  oldest: 逻辑位置 0 对应的物理下标。
+ * @param  pos: 记录起始的逻辑位置。
+ * @param  payloadLen: 负载长度，0..65535，直接决定头内容。
+ * @note   调用方持锁；无分配。
+ */
 void writeHeaderLen(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos,
                     uint16_t payloadLen) noexcept
 {
@@ -151,6 +180,15 @@ Result FanoutRing::detach(uint8_t readerId) noexcept
     return Result::kOk;
 }
 
+/**
+ * @brief  写入一条 legacy 记录，空间不足时淘汰最旧记录。
+ * @param  record: 负载，长度须为 1..maxRecord。
+ * @retval Result::kOk 写入成功
+ * @retval Result::kInvalidArg 负载为空或超过 maxRecord，并计入 rejected
+ * @retval Result::kInvalidState 尚未初始化
+ * @retval Result::kNotSupported 环为 typed
+ * @note   仅写者任务调用，非 ISR；持注入锁，永不等待读者，不分配堆。
+ */
 Result FanoutRing::write(std::span<const uint8_t> record) noexcept
 {
     if (!inited_) {
@@ -232,6 +270,16 @@ Result FanoutRing::initTyped(std::span<uint8_t> storage, size_t maxRecord,
     return Result::kOk;
 }
 
+/**
+ * @brief  登记一个 typed 读者，从当前 head 开始接收订阅记录。
+ * @param  mask: 订阅位图，bit n 表示接收 type n；0 表示不接收任何记录。
+ * @param[out] readerId: 成功时写入 [0, kFanoutMaxReaders)；失败时不修改。
+ * @retval Result::kOk 登记成功
+ * @retval Result::kNoSpace 读者槽已满
+ * @retval Result::kNotSupported 环为 legacy
+ * @retval Result::kInvalidState 尚未初始化，或 generation 耗尽的槽已全部退役
+ * @note   读者任务调用，非 ISR；持注入锁，不阻塞。
+ */
 Result FanoutRing::attach(FanoutMask mask, uint8_t &readerId) noexcept
 {
     if (!inited_) {
@@ -284,6 +332,10 @@ Result FanoutRing::setMask(uint8_t readerId, FanoutMask mask) noexcept
     return Result::kOk;
 }
 
+/**
+ * @brief  淘汰最旧的一条 typed 记录，并把正停在该记录上的读者前移。
+ * @note   调用方必须持注入锁；订阅该记录的读者计 dropped，未订阅的计 filtered；不分配、不阻塞。
+ */
 void FanoutRing::evictTyped() noexcept
 {
     const uint32_t next = oldest_ + kTypedHeaderBytes + typedLength(oldest_);
@@ -302,6 +354,16 @@ void FanoutRing::evictTyped() noexcept
     ++wstats_.overwritten;
 }
 
+/**
+ * @brief  校验参数并预留一条 typed 记录的空间。
+ * @param  type: 记录类型，须小于掩码位宽 32。
+ * @param  size: 负载长度，须为 1..maxRecord。
+ * @retval Result::kOk 已预留 size + 3 字节，调用方可以开始复制
+ * @retval Result::kInvalidArg type 越界、长度为 0 或超过 maxRecord（计入 rejected/oversizeDrop）
+ * @retval Result::kNotFound 没有读者订阅该类型（调用方转成 kOk 并计入 noSubscriber）
+ * @retval Result::kBusy 有读者 pin 住待淘汰区，整条拒新并计入 pinnedDrop
+ * @note   调用方须已确认环为 typed 且已初始化；内部短暂持锁，不阻塞、不分配堆。
+ */
 Result FanoutRing::beginTypedWrite(uint8_t type, size_t size) noexcept
 {
     const LockGuard guard(lock_);
@@ -338,6 +400,17 @@ Result FanoutRing::beginTypedWrite(uint8_t type, size_t size) noexcept
     return Result::kOk;
 }
 
+/**
+ * @brief  以 type 为标记写入一条 typed 记录。
+ * @param  type: 记录类型，0..31，用于匹配读者 mask。
+ * @param  payload: 负载，长度 1..maxRecord；不得与环存储重叠。
+ * @retval Result::kOk 写入成功；无订阅者时同样返回 kOk，仅累加 noSubscriber
+ * @retval Result::kInvalidArg type 越界、负载为空或超过 maxRecord
+ * @retval Result::kNotSupported 环为 legacy
+ * @retval Result::kInvalidState 尚未 initTyped
+ * @retval Result::kBusy 有读者 pin 住待写区，整条拒新并计入 pinnedDrop
+ * @note   仅写者任务调用，非 ISR；逐条淘汰时释放锁，永不等待读者，不分配堆。
+ */
 Result FanoutRing::write(uint8_t type, std::span<const uint8_t> payload) noexcept
 {
     if (!inited_) {
@@ -425,6 +498,16 @@ Result FanoutRing::peek(uint8_t readerId, FanoutView &view) noexcept
     }
 }
 
+/**
+ * @brief  校验租约，并按 consume 决定是否消费该记录。
+ * @param  lease: peek 返回的租约。
+ * @param  consume: true 前移 tail 并累加 records/bytes；false 只释放 pin。
+ * @retval Result::kOk 成功
+ * @retval Result::kInvalidArg 读者未 attach、未 pin，或 generation/serial 不匹配
+ * @retval Result::kInvalidState 尚未初始化
+ * @retval Result::kNotSupported 环为 legacy
+ * @note   持注入锁，不阻塞、不分配堆；失败时不移动 tail。
+ */
 Result FanoutRing::finishLease(const FanoutLease &lease, bool consume) noexcept
 {
     if (!inited_) {

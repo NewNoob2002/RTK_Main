@@ -1,5 +1,5 @@
 // 通用 SPP 客户端重连策略状态机实现（ADR-0007 §5）。纯 C++20，无 IDF/FreeRTOS 依赖。
-// 只由持有它的任务单线程调用；不阻塞、不分配堆。
+// 只由持有它的任务单线程调用，非 ISR 安全；不阻塞、不分配堆。
 
 #include "reconnect/Reconnect.hpp"
 
@@ -15,6 +15,11 @@ constexpr uint32_t kXorShiftB = 17U;
 constexpr uint32_t kXorShiftC = 5U;
 constexpr uint32_t kPercentBase = 100U;
 
+/**
+ * @brief  推进一次 xorshift32，产生下一个伪随机数
+ * @param[in,out] state: 随机数状态；为 0 时先改用 kDefaultSeed，随后回写新状态
+ * @retval 本轮 32 位伪随机数；状态非 0 时结果恒非 0，固定种子可复现
+ */
 uint32_t nextXorshift32(uint32_t &state) noexcept
 {
     uint32_t x = (state != 0U) ? state : kDefaultSeed;
@@ -25,6 +30,14 @@ uint32_t nextXorshift32(uint32_t &state) noexcept
     return x;
 }
 
+/**
+ * @brief  对基础延时施加均匀整数抖动
+ * @param  baseMs: 未被抖动的基础延时，单位 ms
+ * @param  jitterPct: 抖动幅度百分比，0 表示不抖动
+ * @param[in,out] rng: 随机数状态，每次计算推进一次
+ * @retval jitterPct==0 时原样返回 baseMs；否则返回 baseMs × [100-j, 100+j]% 的整数结果，
+ *         最小 1，超过 UINT32_MAX 时饱和为 UINT32_MAX
+ */
 uint32_t applyJitter(uint32_t baseMs, uint8_t jitterPct, uint32_t &rng) noexcept
 {
     if (jitterPct == 0U) {
@@ -45,6 +58,17 @@ uint32_t applyJitter(uint32_t baseMs, uint8_t jitterPct, uint32_t &rng) noexcept
     return static_cast<uint32_t>(scaled);
 }
 
+/**
+ * @brief  计算本次重试延时并推进退避级数
+ * @param  cfg: 重连参数，时长单位 ms
+ * @param  nowMs: 当前毫秒时刻
+ * @param  windowStartMs: 快速重试窗口起点（start 或稳定掉线时刻）
+ * @param[in,out] backoffMs: 当前退避级数；为 0 且仍在快速窗口内时按 fastRetryMs 计，
+ *                          否则从 backoffMinMs 起翻倍并封顶 backoffMaxMs
+ * @param[in,out] rng: 随机数状态，用于抖动
+ * @retval 施加抖动后的等待时长，单位 ms，最小 1
+ * @note   只在失败路径调用；无堆分配，可在任意任务上下文执行
+ */
 uint32_t computeBackoffDelay(const Config &cfg, uint32_t nowMs, uint32_t windowStartMs,
                              uint32_t &backoffMs, uint32_t &rng) noexcept
 {

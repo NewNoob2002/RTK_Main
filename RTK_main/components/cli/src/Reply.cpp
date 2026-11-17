@@ -27,6 +27,13 @@ constexpr size_t kValueMax = 160U;   // fail 原因 / printKv 值先格式化到
 
 bool s_failed = false;
 
+/**
+ * @brief  比较两个 NUL 结尾串
+ * @param  lhs: 左串
+ * @param  rhs: 右串
+ * @retval true  内容相同
+ * @retval false 内容不同，或任一为 nullptr
+ */
 bool sameText(const char *lhs, const char *rhs) noexcept
 {
     if ((lhs == nullptr) || (rhs == nullptr)) {
@@ -35,7 +42,13 @@ bool sameText(const char *lhs, const char *rhs) noexcept
     return std::string_view{lhs} == std::string_view{rhs};
 }
 
-/** 把 esp_console 的 (argc, argv) 包成 span，避免在分派逻辑里做裸指针运算。 */
+/**
+ * @brief  把 esp_console 的 (argc, argv) 包成 span，避免在分派逻辑里做裸指针运算
+ * @param  argc: 参数个数
+ * @param  argv: 参数数组
+ * @retval 空 span：argv 为 nullptr 或 argc <= 0
+ * @retval 否则覆盖 argv[0..argc)
+ */
 std::span<char *const> argSpan(int argc, char **argv) noexcept
 {
     if ((argv == nullptr) || (argc <= 0)) {
@@ -45,12 +58,25 @@ std::span<char *const> argSpan(int argc, char **argv) noexcept
     return {argv, static_cast<size_t>(argc)};
 }
 
-/** handler 的签名固定为 char **（冻结接口）；span::data() 给 char *const *，这里只去掉指针本身的 const。 */
+/**
+ * @brief  取 args[offset..] 的可写 char **
+ * @param  args: argSpan 产生的 span
+ * @param  offset: 起始下标，必须不大于 args.size()
+ * @retval 指向 args[offset] 的 char **；span 为空时即其 data()（可能为 nullptr）
+ * @note   handler 签名固定为 char **（冻结接口）；这里只去掉指针本身的 const，不修改所指数组。
+ */
 char **mutableArgs(std::span<char *const> args, size_t offset) noexcept
 {
     return const_cast<char **>(args.subspan(offset).data());
 }
 
+/**
+ * @brief  按名字在动词表里查找
+ * @param  verbs: 动词表
+ * @param  name: 动词名；nullptr 时直接返回 nullptr
+ * @retval 找到时返回表内条目指针
+ * @retval nullptr 未找到
+ */
 const Verb *findVerb(std::span<const Verb> verbs, const char *name) noexcept
 {
     if (name == nullptr) {

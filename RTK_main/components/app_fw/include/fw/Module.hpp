@@ -34,8 +34,9 @@ struct ModuleOps {
 };
 
 /**
- * 编译期生成模块操作表；线程/ISR 安全，无运行期分配。
- * T 仅提供所需的 noexcept 成员；self 必须绑定到同一个 T 对象，调用上下文遵守 ModuleOps 契约。
+ * @brief  编译期按 T 实际提供的成员生成模块操作表。
+ * @retval ModuleOps 只含 T 提供的 noexcept 成员对应的跳板，缺失的成员保持 nullptr
+ * @note   consteval、无运行期分配；self 必须绑定到同一个 T 对象，调用上下文遵守 ModuleOps 契约。
  */
 template <typename T> [[nodiscard]] consteval ModuleOps makeOps() noexcept
 {

@@ -58,7 +58,7 @@ constexpr LogLevel clampLevel(LogLevel level) noexcept
 std::size_t formatText(std::array<char, kLogTextMax + 1U> &buf, const char *fmt,
                        va_list args) noexcept
 {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay): vsnprintf 只接受裸指针，冻结 API 是 C 可变参数
     const int n = std::vsnprintf(buf.data(), buf.size(), fmt, args);
     if (n < 0) {
         // 格式化失败也留一条空记录，便于看出调用点有问题，而不是静默丢日志。
@@ -150,6 +150,7 @@ bool logEnabled(LogLevel level, TraceCat cat) noexcept
 
 void logLine(LogLevel level, TraceCat cat, const char *fmt, ...) noexcept
 {
+    // 冻结 API 是 C 可变参数入口，va_list 只能经宏边界传递。
     // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     va_list ap;
     va_start(ap, fmt);
@@ -255,10 +256,11 @@ std::size_t logFormatLine(std::span<char> out, const LogHeader &hdr,
     const std::string_view cat = logCatName(hdr.cat);
     const unsigned long sec = hdr.tMs / kMsPerSecond;
     const unsigned long ms = hdr.tMs % kMsPerSecond;
-    // kInfo 是最常见的级别，不加前缀，保持与 T4 已有行格式一致；其他级别加 "E:"/"W:"/"D:" 便于 grep。
+    // kInfo 是最常见的级别，不加前缀，保持已有行格式一致；其他级别加 "E:"/"W:"/"D:" 便于 grep。
     const bool tagged = hdr.level != LogLevel::kInfo;
     // 预留 CRLF：前缀与正文最多写到 out.size() - 2。
     const std::size_t room = out.size() - kCrlf.size();
+    // snprintf 的 C 变参接口，行格式由 ADR-0009 §2.12 的固定格式决定。
     // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
     const int n =
         tagged ? std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] [%.*s] %c: ", sec, ms,
@@ -306,6 +308,7 @@ extern "C" void fw_log_c(int level, int cat, const char *fmt, ...)
         (cat >= static_cast<int>(fw::TraceCat::kCount))) {
         return;
     }
+    // C ABI 入口（fw/LogC.h）：C 组件无法调用 C++ 变参，只能走宏 + va_list。
     // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     va_list ap;
     va_start(ap, fmt);

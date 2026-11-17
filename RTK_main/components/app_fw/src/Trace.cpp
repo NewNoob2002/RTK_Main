@@ -25,7 +25,7 @@ constexpr size_t kMinEventsInRing = 2U;
 std::atomic<TraceSinkFn> s_sink{nullptr};
 [[maybe_unused]] void *s_sink_ctx = nullptr; // 关闭追踪时只写不读
 TraceClockFn s_clock = nullptr;
-// 默认全关（T3：全开时空闲也每秒刷心跳/推送行）；需要时 debug on <类别> 打开，debug save 持久化。
+// 默认全关：全开时空闲也会每秒刷心跳/推送行；需要时 debug on <类别> 打开，debug save 持久化。
 constinit std::atomic<uint32_t> s_mask{0U};
 // CPP-008：原子量必须无锁，否则退回 libatomic 的锁实现（trace 可能在中断上下文之外的高频路径调用）。
 static_assert(fw::kAtomicUsable<TraceSinkFn>, "trace sink 原子须无锁");
@@ -116,6 +116,13 @@ Result TraceRing::init(std::span<TraceEvent> storage, const LockOps &lock) noexc
     return Result::kOk;
 }
 
+/**
+ * @brief  把一条事件压入环。
+ * @param  ev: 待记录的事件。
+ * @retval true  写入成功
+ * @retval false 尚未 init 或环已满（满时 stats.dropped+1）
+ * @note   多写者任务可并发调用，内部持注入锁，非 ISR；不阻塞、不分配堆。
+ */
 bool TraceRing::push(const TraceEvent &ev) noexcept
 {
     if (!ready_) {
@@ -196,6 +203,12 @@ bool TraceRing::peekTime(uint32_t &tMs) const noexcept
     return true;
 }
 
+/**
+ * @brief  把 TraceSinkFn 调用转成 push。
+ * @param  ctx: 必须是 TraceRing*；为 nullptr 时直接返回。
+ * @param  ev: 待记录的事件。
+ * @note   可由多个写者任务并发调用（内部持锁），非 ISR；不阻塞。
+ */
 void TraceRing::sink(void *ctx, const TraceEvent &ev) noexcept
 {
     auto *ring = static_cast<TraceRing *>(ctx);
