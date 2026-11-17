@@ -1,8 +1,6 @@
-// GNSS 探测/配置/运行状态机的公共接口与轮次驱动（ADR-0010 §2.6，驱动接口见 ADR-0012 §2.2）。
-// 纯逻辑：不读写 UART、不改波特率、不操作电源，只通过 poll() 返回 Action 让 main 侧执行；时间由调用方传入 nowMs。
-// 结构：poll() 只保留外层循环与守卫，状态处理见 ControllerProbe.cpp / ControllerConfigure.cpp，内部声明见 ControllerImpl.hpp。
-// 线程/调用约束：非线程安全，单任务顺序调用；不可阻塞、不可在 ISR 中使用。
-// 堆：不使用。时间比较统一用 int32 差值，支持 uint32 回绕。
+// GNSS 探测/配置/运行状态机的公共接口与轮次驱动（ADR-0010 §2.6，驱动接口见 ADR-0012 §2.2）；状态处理见 ControllerProbe.cpp / ControllerConfigure.cpp。
+// 线程安全：否（单任务顺序调用）。ISR 安全：否（会读写自身状态）。
+// 堆与阻塞：不使用堆、不阻塞；时间比较统一用 int32 差值（支持 uint32 回绕），纯逻辑不读写 UART/波特率/电源，只经 poll() 返回 Action。
 #include "gnss/Controller.hpp"
 
 #include <cstddef>
@@ -136,15 +134,7 @@ bool Controller::requestOutput(const OutputPlan &plan, uint32_t nowMs) noexcept
     return true;
 }
 
-/**
- * @brief 读回模块当前配置（ADR-0012 §2.7）。
- *
- * 只在 kRunning 且驱动支持读回时成立：命令写进 output_cmd_（kReadback 只能从 kRunning 进入，与 kOutput
- * 阶段不会重叠，故复用同一缓冲），随后 poll() 负责下发、onFrame() 负责计数。
- * @param nowMs: 当前时间，用于起算总时长。
- * @retval true: 已进入 kReadback。
- * @retval false: 状态不对或驱动不支持，状态未改变。
- */
+// 命令复用 output_cmd_：kReadback 只能从 kRunning 进入，与 kOutput 阶段不会重叠（详见头文件声明）。
 bool Controller::requestReadback(uint32_t nowMs) noexcept
 {
     if ((state_ != State::kRunning) || (detected_.receiver == nullptr)) {
@@ -174,12 +164,6 @@ Action Controller::poll(uint32_t nowMs) noexcept
     return Action{};
 }
 
-/**
- * @brief 把一帧协议数据交给当前阶段：探测时试匹配型号，等待应答时判 ACK/NACK。
- * @param dec: 该帧的解码器。
- * @param frame: 整帧字节。
- * @param nowMs: 当前时间（只用于判“模块还在说话”）。
- */
 void Controller::onFrame(const demux::Decoder &dec, std::span<const uint8_t> frame,
                          uint32_t nowMs) noexcept
 {
@@ -228,11 +212,6 @@ const Receiver &Controller::probeReceiver() const noexcept
     return probe_receiver_ != nullptr ? *probe_receiver_ : nullReceiver();
 }
 
-/**
- * @brief  控制器状态的日志/控制台短名
- * @param  state: 控制器状态
- * @retval 静态字符串，未知值返回 "unknown"
- */
 const char *stateName(State state) noexcept
 {
     switch (state) {

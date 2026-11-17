@@ -1,5 +1,5 @@
 // Unicore $command 应答解码：成帧判定（judge 家族）与应答文本解析（ADR-0010 §2.4）。
-// 线程/调用约束：全部为纯函数（无全局可变状态）；responseStep 由 demux 引擎每收到一字节调用，须 ISR 安全。
+// 线程/ISR：纯函数（无全局可变状态）；responseStep 由 demux 引擎每收到一字节调用，须 ISR 安全。
 // 堆：不使用。浮点：不使用。
 #include <cstddef>
 #include <cstdint>

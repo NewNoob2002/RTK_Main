@@ -1,9 +1,6 @@
-// 司南（ComNav）K8 系列驱动（K803 等）：NovAtel 风格 ASCII 命令，实验性。
-// 当前依据为公开资料的 NovAtel 兼容语法（LOG/UNLOGALL/COM，应答 "<OK" 行），
-// 未取得 K803 官方命令手册，未经实物验证；拿到手册后必须先修订 ADR-0012/ADR-0010 的 ComNav 小节再改实现。
-// 构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_COMNAV（默认关），主机 CMake 下 RTK_GNSS_DRV_COMNAV。
-// 线程安全：是（驱动无可变状态；解码器函数为纯函数）。ISR 安全：是。
-// 冻结接口（ADR-0012 §3）。实现方不得修改；变更须先修订 ADR-0012。
+// 司南（ComNav）K8 系列驱动（K803 等）：NovAtel 风格 ASCII 命令与 "<OK/<ERROR" 应答，实验性（ADR-0010 §2.2）；构建开关 IDF CONFIG_RTK_GNSS_DRV_COMNAV / host RTK_GNSS_DRV_COMNAV。
+// 线程安全：是（驱动无可变状态，解码器为纯函数）。ISR 安全：是（无锁、不阻塞）。
+// 堆与阻塞：不使用堆（命令写入调用方的 CmdBuf）、不阻塞。依据公开 NovAtel 兼容语法、未取得 K803 手册；冻结接口（ADR-0012 §3）实现方不得修改，变更须先修订 ADR-0012（ComNav 小节）。
 #pragma once
 
 #include <cstddef>
@@ -33,6 +30,8 @@ namespace gnss {
  * K8 系列（K803 等）家族基类（定义在 src/drivers/ComnavReceiver.cpp）。
  * 家族基类，只能经 final 叶子类实例化（ADR-0012 §2.8）：构造与析构都是 protected 非虚，拷贝/移动删除；
  * 实例为 K803Receiver 的 constinit 静态对象。
+ *
+ * @note   命令生成（cmd_*）与应答判定（resp_*）是 protected static，子类可直接复用；脚本回调须写在 roverStep 内（需取 protected 成员地址）。
  */
 class ComnavReceiver : public Receiver {
 public:

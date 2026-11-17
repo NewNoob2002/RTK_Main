@@ -1,7 +1,6 @@
-// 帧标签（frameTag）的公共小工具：把帧里的可打印词与文本/数字拼进缓冲。
-// 不用 printf 族：帧标签在链路任务里生成，vsnprintf 代价高且触发 vararg 规范告警。
-// 仅组件内部使用（src/ 私有头），不参与公共接口。
-// 线程/ISR 安全：是（纯函数，不阻塞、不分配）。
+// 帧标签（frameTag）的公共小工具（组件内部头）：把帧里的可打印词与文本/数字拼进缓冲。
+// 线程安全：是（纯函数，无状态）。ISR 安全：是（不阻塞、不分配）。
+// 堆与阻塞：不使用堆、不阻塞；不用 printf 族（vsnprintf 代价高且触发 vararg 规范告警）。
 #pragma once
 
 #include <array>
@@ -37,7 +36,14 @@ inline constexpr uint8_t kCommaByte = static_cast<uint8_t>(',');
 inline constexpr size_t kMaxUint32Digits = 10U;
 inline constexpr uint32_t kDecimalRadix = 10U;
 
-/** 把 frame[start, size) 的 ASCII 名字拷进 out（最多 out.size()-1 字节），返回写入长度。 */
+/**
+ * @brief  把 frame[start, size) 的 ASCII 名字拷进 out
+ * @param  frame: 源帧
+ * @param  start: 起始下标，须 ≤ frame.size()
+ * @param  out: 输出缓冲，最多写入 out.size()-1 字节（留 NUL）
+ * @retval 写入长度（不含 NUL）；遇非可打印字节或 ',' 即截断
+ * @note   out 为空时只返回 0，不写任何字节
+ */
 inline size_t copyWord(std::span<const uint8_t> frame, size_t start, std::span<char> out) noexcept
 {
     size_t len = 0U;
@@ -55,7 +61,13 @@ inline size_t copyWord(std::span<const uint8_t> frame, size_t start, std::span<c
     return len;
 }
 
-/** 把 text 追加到 out[pos..]，返回新的写入长度（缓冲不足时截断）。 */
+/**
+ * @brief  把 text 追加到 out[pos..]
+ * @param  out: 输出缓冲，始终保证 NUL 结尾
+ * @param  pos: 追加起点（当前已写长度）
+ * @param  text: 追加内容，不要求 NUL 结尾
+ * @retval 新的写入长度（不含 NUL）；缓冲不足时截断并返回 pos
+ */
 inline size_t appendText(std::span<char> out, size_t pos, std::string_view text) noexcept
 {
     for (const char ch : text) {
@@ -123,7 +135,14 @@ inline size_t appendHex2(std::span<char> out, size_t pos, uint8_t value) noexcep
     return pos + 2U;
 }
 
-/** 组成 "<prefix><frame[start..] 的可打印词>"，返回写入长度。 */
+/**
+ * @brief  组成 "<prefix><frame[start..] 的可打印词>"
+ * @param  out: 输出缓冲
+ * @param  prefix: 前缀文本（如 "NMEA "、"RTCM3 "）
+ * @param  frame: 源帧
+ * @param  start: 词在帧内的起始下标
+ * @retval 写入总长度（不含 NUL）；prefix 写不下时只返回 prefix 长度
+ */
 inline size_t tagWithWord(std::span<char> out, std::string_view prefix,
                           std::span<const uint8_t> frame, size_t start) noexcept
 {

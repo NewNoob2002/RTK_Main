@@ -1,6 +1,6 @@
 // NMEA 定位语句解析：GGA（定位质量/高度/差分龄期）与 RMC（状态/速度/日期）。
-// 线程/调用约束：只由 gnss::NmeaParser::feed 在单任务上下文调用；不可在 ISR 中使用、不可阻塞。
-// 堆：不使用。浮点：不使用（定点转整数，ADR-0010 §2.5）。
+// 线程安全：否（只由 gnss::NmeaParser::feed 在单任务上下文调用）。ISR 安全：否（写解析状态）。
+// 堆与阻塞：不使用堆、不阻塞、不使用浮点（定点转整数，ADR-0010 §2.5）。
 #include "NmeaParserPrivate.hpp"
 
 namespace gnss {

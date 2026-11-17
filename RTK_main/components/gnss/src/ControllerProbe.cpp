@@ -1,8 +1,6 @@
-// GNSS 控制器状态机：探测与失败重试（ADR-0010 §2.6）：断电/上电、候选枚举、探测下发与等待。
-// 纯逻辑：不读写 UART、不改波特率、不操作电源，只通过 Action 让 main 侧执行；所有时间由调用方传入 nowMs。
-// 结构：配置/输出/运行/读回见 ControllerConfigure.cpp，内部声明见 ControllerImpl.hpp。
-// 线程/调用约束：非线程安全，单任务顺序调用；不可阻塞、不可在 ISR 中使用。
-// 堆：不使用。
+// GNSS 控制器状态机：探测与失败重试（ADR-0010 §2.6）——断电/上电、候选枚举、探测下发与等待；配置/输出/运行/读回见 ControllerConfigure.cpp。
+// 线程安全：否（单任务顺序调用）。ISR 安全：否（会改写控制器状态）。
+// 堆与阻塞：不使用堆、不阻塞（时间由调用方传入 nowMs）；纯逻辑不读写 UART/波特率/电源，只经 Action 让 main 侧执行。
 #include "ControllerImpl.hpp"
 
 #include <cstddef>

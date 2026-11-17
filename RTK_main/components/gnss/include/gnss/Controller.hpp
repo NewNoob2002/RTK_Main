@@ -1,8 +1,6 @@
-// GNSS 控制状态机：上电 → 探测（方言×波特率）→ 流动站配置脚本 → 运行 → 静默超时重新探测（ADR-0010 §2.6）。
-// 纯逻辑、非阻塞、不做 IO：poll() 返回一个 Action，由 main 侧 gnss 模块执行（写 UART、改波特率、电源复位）；
-// 分流器识别出的帧经 onFrame() 送入。时间全部由调用方传入 nowMs（uint32 回绕安全）。
-// 线程安全：否（一个实例由一个任务使用）。无堆、无 OS 依赖。
-// 冻结接口（ADR-0010 §3，ADR-0012 §3 修订：方言表由驱动接口取代）。变更须先修订 ADR-0012。
+// GNSS 控制状态机：上电 → 探测（方言×波特率）→ 流动站配置脚本 → 运行 → 静默超时重新探测（ADR-0010 §2.6）；纯逻辑不做 IO，poll() 只返回 Action 由 main 侧执行。
+// 线程安全：否（一个实例由一个任务使用；帧经 onFrame() 送入）。ISR 安全：否。
+// 堆与阻塞：不使用堆、不阻塞、无 OS 依赖；时间全部由调用方传入 nowMs（uint32 回绕安全）。冻结接口（ADR-0010 §3，ADR-0012 §3 修订：方言表由驱动接口取代）实现方不得修改；变更须先修订 ADR-0012。
 #pragma once
 
 #include <cstddef>
@@ -103,79 +101,140 @@ public:
     Controller &operator=(const Controller &) = delete;
 
     /**
-     * 配置（不启动）。receivers 为候选驱动（通常是 enabledReceivers()），bauds 为探测波特率候选；
-     * 两个表与 cfg 必须在实例生命周期内有效。hint 有效时先探测提示的（方言,波特率）。
-     * plan 为初始输出计划（ADR-0012 §2.4），调用方可在运行期用 setOutputPlan()/requestOutput() 更新。
-     * 返回 false：receivers 或 bauds 为空、含 nullptr。
+     * @brief  配置控制器（不启动）
+     * @param  receivers: 候选驱动表（通常是 enabledReceivers()），须在实例生命周期内有效
+     * @param  bauds: 探测波特率候选表，须在实例生命周期内有效
+     * @param  cfg: 流动站配置，须在实例生命周期内有效
+     * @param  plan: 初始输出计划（ADR-0012 §2.4），运行期可用 setOutputPlan()/requestOutput() 更新
+     * @param  hint: 上次探测结果提示；family=kUnknown 表示无提示，有效时先探测提示的（方言,波特率）
+     * @param  timing: 时序参数（主机测试可缩短）
+     * @retval true: 配置完成，状态为 kOff
+     * @retval false: receivers/bauds 为空、含 nullptr，或 bauds 含 0；实例状态未改变
+     * @note   非线程安全；只在单任务上下文调用，不阻塞
      */
     [[nodiscard]] bool init(std::span<const Receiver *const> receivers,
                             std::span<const uint32_t> bauds, const RoverConfig &cfg,
                             const OutputPlan &plan, const Hint &hint,
                             const Timing &timing) noexcept;
 
-    /** 从 kOff 开始：先断电 powerOffMs 再上电（电源复位），然后探测。 */
+    /**
+     * @brief  从 kOff 开始：先断电 powerOffMs 再上电（电源复位），然后探测
+     * @param  nowMs: 当前时间
+     * @note   非线程安全；状态被无条件改写到 kPowerUp
+     */
     void start(uint32_t nowMs) noexcept;
-    /** 断电并进入 kOff。 */
+    /**
+     * @brief  断电并进入 kOff
+     * @param  nowMs: 当前时间
+     * @note   下一轮 poll() 先返回一次断电动作
+     */
     void stop(uint32_t nowMs) noexcept;
-    /** 立即重新探测（不复位电源），例如控制台 gnss probe。 */
+    /**
+     * @brief  立即重新探测（不复位电源），例如控制台 gnss probe
+     * @param  nowMs: 当前时间
+     * @note   非 kOff 时 reprobes 计数加一
+     */
     void requestReprobe(uint32_t nowMs) noexcept;
-    /** 已探测到模块时重跑配置脚本，例如修改 RoverConfig 后；否则等同 requestReprobe。 */
+    /**
+     * @brief  已探测到模块时重跑配置脚本，例如修改 RoverConfig 后；否则等同 requestReprobe()
+     * @param  nowMs: 当前时间
+     */
     void requestReconfigure(uint32_t nowMs) noexcept;
     /**
-     * 运行中修改报文输出（ADR-0012 §2.4）：只重跑输出阶段，不重新探测、不复位模块。
-     * 仅 kRunning 接受，其它状态返回 false（调用方应改用 requestReconfigure 或稍后重试）。
+     * @brief  运行中修改报文输出（ADR-0012 §2.4）：只重跑输出阶段，不重新探测、不复位模块
+     * @param  plan: 新输出计划，成功时立即生效
+     * @param  nowMs: 当前时间（本实现未使用，保留给状态机计时扩展）
+     * @retval true: 已进入 kOutput，本轮结果掩码被清零
+     * @retval false: 非 kRunning 或尚未探测到模块；状态与计划均未改变
+     * @note   非线程安全；调用方在 false 时应改用 requestReconfigure() 或稍后重试
      */
     [[nodiscard]] bool requestOutput(const OutputPlan &plan, uint32_t nowMs) noexcept;
     /**
-     * 读回模块当前配置（ADR-0012 §2.7）：发 receiver().buildReadback() 的命令，进入 kReadback；
-     * 每命中一行 matchReadback() 重置 1 s 静默计时，静默到期或总时长到期后回 kRunning 并 readbackSeq+1。
-     * 仅 kRunning 且驱动支持读回时返回 true；不支持或状态不对返回 false（不改 stats）。
-     * 行文本由调用方在 onFrame() 之外自行用 receiver().matchReadback() 取得，控制器只计数与计时。
+     * @brief  读回模块当前配置（ADR-0012 §2.7）：发 receiver().buildReadback() 的命令，进入 kReadback
+     * @param  nowMs: 当前时间，用于起算静默计时与总时长
+     * @retval true: 已进入 kReadback，即 readbackLines 清零、总时长开始计时
+     * @retval false: 非 kRunning、尚未探测到模块，或驱动不支持读回；stats 不变
+     * @note   每命中一行 matchReadback() 重置 1 s 静默计时，静默或总时长到期后回 kRunning 并
+     *         readbackSeq+1；行文本由调用方在 onFrame() 之外自行用 receiver().matchReadback() 取得，
+     *         控制器只计数与计时。非线程安全，不阻塞。
      */
     [[nodiscard]] bool requestReadback(uint32_t nowMs) noexcept;
-    /** 更新输出计划（探测到型号后 caps 才确定，main 每轮按最新配置重算）；不触发任何动作。 */
+    /**
+     * @brief  更新输出计划，不触发任何动作
+     * @param  plan: 新计划（探测到型号后 caps 才确定，main 每轮按最新配置重算）
+     */
     void setOutputPlan(const OutputPlan &plan) noexcept
     {
         plan_ = plan;
     }
-    /** 当前输出计划（诊断/测试用）。 */
+    /**
+     * @brief  当前输出计划（诊断/测试用）
+     * @retval 控制器持有的计划引用，生命周期同本实例
+     */
     [[nodiscard]] const OutputPlan &outputPlan() const noexcept
     {
         return plan_;
     }
 
-    /** 推进状态机，返回下一个要执行的动作（kNone 表示本轮无事）。调用方应循环 poll 直到 kNone。 */
+    /**
+     * @brief  推进状态机，返回下一个要执行的动作
+     * @param  nowMs: 当前时间（uint32 回绕安全）
+     * @retval 下一个动作；kind=kNone 表示本轮无事，调用方应循环 poll 直到 kNone
+     * @note   单次调用内最多推进有限次状态迁移（内部有轮次上限），防止死循环
+     */
     [[nodiscard]] Action poll(uint32_t nowMs) noexcept;
 
-    /** 分流器识别出的一帧（任意协议）。用于应答匹配与静默检测。 */
+    /**
+     * @brief  分流器识别出的一帧（任意协议），交给当前阶段处理
+     * @param  dec: 该帧的解码器（协议名）
+     * @param  frame: 整帧字节（含帧头，不含分帧器剥离的同步字）
+     * @param  nowMs: 当前时间，只用于判“模块还在说话”
+     * @note   探测阶段试匹配型号，等待应答时判 ACK/NACK；其余帧只刷新活动时间戳
+     *         （kReadback 窗口例外：只有命中 matchReadback() 的行才刷新）
+     */
     void onFrame(const demux::Decoder &dec, std::span<const uint8_t> frame,
                  uint32_t nowMs) noexcept;
 
+    /**
+     * @brief  当前状态机状态
+     * @retval 状态值；kOff 表示未启动或已 stop()
+     */
     [[nodiscard]] State state() const noexcept
     {
         return state_;
     }
-    /** 探测成功后有效（receiver 非空）；否则 receiver 为 nullptr。 */
+    /**
+     * @brief  最近一次探测结论
+     * @retval 探测结果引用；receiver 为 nullptr 表示尚未探测成功
+     */
     [[nodiscard]] const Detected &detected() const noexcept
     {
         return detected_;
     }
     /**
-     * 当前驱动（ADR-0012 §2.2）：探测成功后为对应驱动，未探测到（或探测中被清空）时为 nullReceiver()。
-     * 永不返回 nullptr，调用方无需判空。
+     * @brief  当前驱动（ADR-0012 §2.2）
+     * @retval 探测成功后为对应驱动；未探测到（或探测中被清空）时为 nullReceiver()，永不返回 nullptr
      */
     [[nodiscard]] const Receiver &receiver() const noexcept;
     /**
-     * 最近一次探测发送所用的驱动（kProbeSend 追踪日志用）；未在探测中时为 nullReceiver()。
-     * 与 detected() 不同：探测失败也会保留最后一个候选项，因此可用来区分“发的是哪家的查询”。
+     * @brief  最近一次探测发送所用的驱动（追踪日志用）
+     * @retval 探测中为当前候选项；未在探测中时为 nullReceiver()
+     * @note   与 detected() 不同：探测失败也会保留最后一个候选项，因此可用来区分“发的是哪家的查询”
      */
     [[nodiscard]] const Receiver &probeReceiver() const noexcept;
 
+    /**
+     * @brief  控制器统计值（控制台 gnss status 打印）
+     * @retval 统计引用，随控制器更新
+     */
     [[nodiscard]] const ControllerStats &stats() const noexcept
     {
         return stats_;
     }
-    /** 当前主机 UART 应使用的波特率（每次 kSetBaud 后更新）。 */
+    /**
+     * @brief  当前主机 UART 应使用的波特率
+     * @retval 波特率值（每次 kSetBaud 动作后更新）
+     */
     [[nodiscard]] uint32_t hostBaud() const noexcept
     {
         return host_baud_;
@@ -215,7 +274,12 @@ private:
     friend struct ControllerImpl; // 实现细节在 src/Controller.cpp
 };
 
-/** 状态名（控制台用）。 */
+/**
+ * @brief  状态名（控制台/日志用）
+ * @param  state: 控制器状态
+ * @retval 静态字符串（"off"/"power-up"/"probing"/"configuring"/"running"/"failed"/"output"/"readback"）；
+ *         未知值返回 "unknown"
+ */
 [[nodiscard]] const char *stateName(State state) noexcept;
 
 } // namespace gnss

@@ -1,7 +1,6 @@
-// Unicore N4（UM980/UM981/UM982）驱动实现：型号识别（#VERSIONA）、能力表、探测/读回、输出计划与虚函数实现。
-// 结构：应答解码见 UnicoreResp.cpp，命令与脚本见 UnicoreScript.cpp，共享字面量见 UnicoreKeys.hpp（ADR-0010 §2.2/§2.4）。
-// 线程/调用约束：全部为纯函数（无全局可变状态），可从任意任务调用，不可阻塞。
-// 堆：不使用。浮点：不使用。
+// Unicore N4（UM980/UM981/UM982）驱动实现：型号识别（#VERSIONA）、能力表、探测/读回、输出计划与虚函数实现（ADR-0010 §2.2/§2.4）。
+// 线程安全：是（纯函数，无全局可变状态）。ISR 安全：是（无锁、不阻塞）。
+// 堆与阻塞：不使用堆、不阻塞；应答解码见 UnicoreResp.cpp，命令与脚本见 UnicoreScript.cpp。
 #include "gnss/drivers/UnicoreReceiver.hpp"
 
 #include <array>
@@ -74,9 +73,7 @@ std::optional<Model> modelFromText(std::span<const uint8_t> text) noexcept
 
 namespace detail {
 
-// NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
 constinit const Um980Receiver kUm980Receiver{};
-// NOLINTNEXTLINE(readability-identifier-naming): 同上
 constinit const Um982Receiver kUm982Receiver{};
 
 } // namespace detail

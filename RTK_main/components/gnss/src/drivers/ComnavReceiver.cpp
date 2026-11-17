@@ -1,8 +1,6 @@
 // ComNav K8（K803）驱动实现：NovAtel 风格命令与 "<OK/<ERROR" 应答（ADR-0010 §2.2，实验性、未经实物验证）。
-// 结构（P3s）：命令生成（cmd_*）与应答判定（resp_*）是 ComnavReceiver 的 protected static，子类可直接复用；
-// 脚本步骤的回调写在 roverStep 内（要取 protected 成员的地址，匿名命名空间的自由函数没有访问权）。
-// 线程/调用约束：纯函数，无全局可变状态，可重入、不阻塞。
-// 堆：不使用。注意：未取得官方手册，语法按公开的 NovAtel 兼容资料实现；改动前须先修订 ADR-0010 §2.2。
+// 线程安全：是（纯函数，无全局可变状态，可重入）。ISR 安全：是（无锁、不阻塞）。
+// 堆与阻塞：不使用堆（命令写入调用方的 CmdBuf）、不阻塞。未取得官方手册，语法按公开 NovAtel 兼容资料；改动前须先修订 ADR-0010 §2.2。
 #include "gnss/drivers/ComnavReceiver.hpp"
 
 #include <array>
@@ -155,14 +153,23 @@ struct ScriptStep {
     StepEnabledFn enabled;
 };
 
-/** @brief 无条件参与。 */
+/**
+ * @brief 无条件参与脚本：任何配置下该步都执行。
+ * @param cfg: 流动站配置（不使用）。
+ * @retval true: 总是参与。
+ */
 bool always(const RoverConfig &cfg) noexcept
 {
     static_cast<void>(cfg);
     return true;
 }
 
-/** @brief 仅在要求改波特率时参与（portBaud == 0 时脚本提前结束）。 */
+/**
+ * @brief 仅在要求改波特率时参与（portBaud == 0 时脚本提前结束）。
+ * @param cfg: 流动站配置，只读 portBaud。
+ * @retval true: portBaud 非 0，需要下发改波特率命令。
+ * @retval false: portBaud 为 0，跳过该步。
+ */
 bool portBaudEnabled(const RoverConfig &cfg) noexcept
 {
     return cfg.portBaud != 0U;
@@ -220,7 +227,6 @@ std::size_t explainPrompt(std::span<const uint8_t> frame, std::span<char> out) n
 
 namespace detail {
 
-// NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
 constinit const K803Receiver kK803Receiver{};
 
 } // namespace detail

@@ -1,5 +1,5 @@
 // Unicore N4 驱动的共享字面量（组件私有头）：$command/$CONFIG 应答与 #VERSIONA 探测的前缀、帧尾与超时。
-// 线程/调用约束：只含 constexpr 常量，无状态、无副作用；任何 TU 均可包含。
+// 线程/ISR：只含 constexpr 常量，无状态、无副作用，任何 TU 均可包含。
 // 堆：不使用。浮点：不使用。
 #pragma once
 

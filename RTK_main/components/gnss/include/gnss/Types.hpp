@@ -1,7 +1,6 @@
 // GNSS 公共数据类型：型号/家族枚举、能力位、输出报文类型、定位解与卫星表（纯数据，无 IDF 依赖）。
-// 坐标用整数定点避免 ESP32 双精度软浮点：纬经度单位 1e-9 度（int64，≈0.1 mm），高度 mm。
-// 线程安全：纯数据，拷贝由调用方保护（main 侧经 fw::Slot 跨任务发布）。
-// 冻结接口（ADR-0010 §3，ADR-0012 §3 修订）。实现方不得修改；变更须先修订 ADR-0012。
+// 线程安全：纯数据，拷贝由调用方保护（main 侧经 fw::Slot 跨任务发布）。ISR 安全：是（不阻塞、不分配）。
+// 堆与阻塞：不使用堆、不阻塞。冻结接口（ADR-0010 §3，ADR-0012 §3 修订）实现方不得修改；变更须先修订 ADR-0012。
 #pragma once
 
 #include <array>
@@ -83,7 +82,11 @@ struct UtcTime {
 
 inline constexpr uint16_t kU16Unknown = 0xFFFFU; // 16 位字段“未知/不可用”的统一取值
 
-/** 一次定位解（GGA + RMC + GSA 合并）。valid=false 时其余字段无意义。 */
+/**
+ * 一次定位解（GGA + RMC + GSA 合并）。valid=false 时其余字段无意义。
+ *
+ * @note   坐标用整数定点避免 ESP32 双精度软浮点：纬经度 1e-9 度（int64，≈0.1 mm），高度 mm。
+ */
 struct Fix {
     bool valid = false; // GGA 质量非 0
     FixQuality quality = FixQuality::kUnknown;
@@ -136,18 +139,41 @@ struct SatTable {
     uint32_t updateMs = 0;
 };
 
-/** 型号的显示名（"UM980"、"ZED-F9P"……）；未知返回 "unknown"。线程/ISR 安全：是。 */
+/**
+ * @brief  型号的显示名
+ * @param  model: 型号枚举
+ * @retval 静态字符串（"UM980"、"ZED-F9P"……）；未知或越界返回 "unknown"
+ * @note   线程/ISR 安全：是（只读常量）
+ */
 [[nodiscard]] const char *modelName(Model model) noexcept;
-/** 型号所属家族。线程/ISR 安全：是。 */
+/**
+ * @brief  型号所属家族
+ * @param  model: 型号枚举
+ * @retval 家族枚举；未知或越界返回 Family::kUnknown
+ * @note   线程/ISR 安全：是（纯函数）
+ */
 [[nodiscard]] Family familyOf(Model model) noexcept;
-/** 家族的短名（"unicore"/"ublox"/"comnav"）；未知返回 "unknown"。线程/ISR 安全：是。 */
+/**
+ * @brief  家族的短名
+ * @param  family: 家族枚举
+ * @retval 静态字符串（"unicore"/"ublox"/"comnav"）；未知或越界返回 "unknown"
+ * @note   线程/ISR 安全：是（只读常量）
+ */
 [[nodiscard]] const char *familyName(Family family) noexcept;
 /**
- * NVS 读回的范围校验：等价于 `value <= static_cast<uint8_t>(Family::kComnav)`，
- * 但不把最后一个枚举值写死在调用方（ADR-0012 §2.3）。线程/ISR 安全：是。
+ * @brief  NVS 读回的范围校验：等价于 `value <= static_cast<uint8_t>(Family::kComnav)`，
+ *         但不把最后一个枚举值写死在调用方（ADR-0012 §2.3）
+ * @param  value: NVS 中的原始字节
+ * @retval 对应的 Family；越界值（旧格式/损坏）返回 std::nullopt，由调用方决定回落策略
+ * @note   线程/ISR 安全：是；不阻塞
  */
 [[nodiscard]] std::optional<Family> familyFromU8(uint8_t value) noexcept;
-/** 同上，用于 Model。线程/ISR 安全：是。 */
+/**
+ * @brief  Model 的 NVS 读回范围校验（同上，用于 Model）
+ * @param  value: NVS 中的原始字节
+ * @retval 对应的 Model；越界值返回 std::nullopt
+ * @note   线程/ISR 安全：是；不阻塞
+ */
 [[nodiscard]] std::optional<Model> modelFromU8(uint8_t value) noexcept;
 
 } // namespace gnss

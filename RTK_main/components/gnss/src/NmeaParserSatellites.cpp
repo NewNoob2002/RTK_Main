@@ -1,6 +1,6 @@
 // NMEA 卫星视图语句解析：GSA（参与解算的卫星、DOP）与 GSV（逐颗信噪比、多句合并）。
-// 线程/调用约束：只由 gnss::NmeaParser::feed 在单任务上下文调用；不可在 ISR 中使用、不可阻塞。
-// 堆：不使用。浮点：不使用。
+// 线程安全：否（只由 gnss::NmeaParser::feed 在单任务上下文调用）。ISR 安全：否（写解析状态）。
+// 堆与阻塞：不使用堆、不阻塞、不使用浮点。
 #include "NmeaParserPrivate.hpp"
 
 namespace gnss {

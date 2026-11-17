@@ -1,6 +1,6 @@
 // Receiver 基类的默认实现（ADR-0012 §2.2）：输出掩码、输出配置、帧归类、帧标签、配置读回。
-// 线程/调用约束：全部为纯函数（无全局可变状态、不阻塞），可从任意任务或 ISR 调用。
-// 堆：不使用。浮点：不使用。
+// 线程安全：是（全部纯函数，无全局可变状态）。ISR 安全：是（不阻塞、不分配）。
+// 堆与阻塞：不使用堆、不使用浮点、不阻塞。
 #include "gnss/Receiver.hpp"
 
 #include <cstring>
@@ -11,7 +11,11 @@
 namespace gnss {
 namespace {
 
-/** OutputMsg → 掩码位。 */
+/**
+ * @brief  OutputMsg → 掩码位
+ * @param  msg: 报文类型枚举值
+ * @retval 单比特掩码（1 << msg），与 outputMask() 的位序一致
+ */
 constexpr uint32_t bit(OutputMsg msg) noexcept
 {
     return 1U << static_cast<uint32_t>(msg);
@@ -23,6 +27,13 @@ constexpr size_t kNmeaTagLen = 3U;    // "GGA"/"GSV"…
 constexpr size_t kNmeaCommaPos = 6U;
 constexpr size_t kNmeaHeaderLen = 7U;
 
+/**
+ * @brief  判断 NMEA 帧的语句名是否等于 tag
+ * @param  frame: 已按 '$' 分流的帧，长度须 ≥ kNmeaHeaderLen（由调用方保证）
+ * @param  tag: 3 字节语句名（"GGA"/"GST"…），不在内部做长度检查
+ * @retval true: 第 3..5 字节与 tag 相同（大小写敏感）
+ * @retval false: 不同
+ */
 bool tagIs(std::span<const uint8_t> frame, const char *tag) noexcept
 {
     return std::memcmp(frame.subspan(kNmeaTalkerEnd, kNmeaTagLen).data(), tag, kNmeaTagLen) == 0;
@@ -46,7 +57,7 @@ const Receiver &Receiver::forModel(Model) const noexcept
 fw::Status Receiver::buildOutput(OutputMsg, uint32_t, Model, const OutputPlan &,
                                  CmdBuf &) const noexcept
 {
-    return fw::Status::kNotSupported; // P3b 在驱动里实现
+    return fw::Status::kNotSupported; // 由具体驱动覆盖（ADR-0012 §2.4）
 }
 
 OutputMsg Receiver::classifyFrame(const demux::Decoder &,
@@ -79,7 +90,7 @@ OutputMsg Receiver::classifyFrame(const demux::Decoder &,
 size_t Receiver::frameTag(const demux::Decoder &dec, std::span<const uint8_t> frame,
                           std::span<char> out) const noexcept
 {
-    // 与 main 原 describe_frame() 文本一致（P3b 替换后日志不变）。
+    // 与 main 原 describe_frame() 文本一致：驱动接入后日志不变。
     const std::string_view name{dec.name};
     if (name == "NMEA" && frame.size() > detail::kNmeaTagLen) {
         return detail::tagWithWord(out, "NMEA ", frame, detail::kNmeaTagOffset);
@@ -102,13 +113,13 @@ size_t Receiver::frameTag(const demux::Decoder &dec, std::span<const uint8_t> fr
 
 bool Receiver::buildReadback(CmdBuf &) const noexcept
 {
-    return false; // P3c
+    return false; // 由具体驱动覆盖（ADR-0012 §2.7）
 }
 
 size_t Receiver::matchReadback(const demux::Decoder &, std::span<const uint8_t>,
                                std::span<char>) const noexcept
 {
-    return 0U; // P3c
+    return 0U; // 由具体驱动覆盖（ADR-0012 §2.7）
 }
 
 } // namespace gnss

@@ -1,6 +1,6 @@
-// 驱动单例的外部声明（gnss::detail）：让注册表在命名空间作用域完成常量初始化，
-// 避免函数内静态的动态初始化与 __cxa_guard_*（CPP-009）。
-// 由 src/Registry.cpp 与各驱动 .cpp 包含；只含宏与 extern 声明，无运行期状态。
+// 驱动单例的外部声明（gnss::detail）：供注册表在命名空间作用域常量初始化（CPP-009），只给地址、无运行期状态。
+// 线程安全：是（只读 extern 声明）。ISR 安全：是（不阻塞、不分配）。
+// 堆与阻塞：不使用堆、不阻塞；只含宏与 extern 声明，对象在驱动 .cpp 的 constinit 定义处，避免函数内静态与 __cxa_guard_*。
 #pragma once
 
 // 构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 RTK_GNSS_DRV_<D>（CMake 转为同名宏）。
@@ -39,17 +39,13 @@
 namespace gnss::detail {
 
 #if GNSS_ENABLE_UNICORE
-// NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例沿用 k 前缀；s_ 只用于文件作用域静态
 extern const Um980Receiver kUm980Receiver; ///< UM980/UM981 叶子单例（定义在 UnicoreReceiver.cpp）。
-// NOLINTNEXTLINE(readability-identifier-naming): 同上
 extern const Um982Receiver kUm982Receiver; ///< UM982 双天线叶子单例（同文件）。
 #endif
 #if GNSS_ENABLE_UBLOX
-// NOLINTNEXTLINE(readability-identifier-naming): 同上
 extern const ZedF9pReceiver kZedF9pReceiver; ///< ZED-F9P 叶子单例（定义在 UbloxReceiver.cpp）。
 #endif
 #if GNSS_ENABLE_COMNAV
-// NOLINTNEXTLINE(readability-identifier-naming): 同上
 extern const K803Receiver kK803Receiver; ///< K803 叶子单例（定义在 ComnavReceiver.cpp）。
 #endif
 

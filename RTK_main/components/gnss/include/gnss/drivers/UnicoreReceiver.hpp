@@ -1,10 +1,6 @@
-// Unicore N4 平台驱动（UM980/UM981/UM982）：ASCII 命令以 \r\n 结尾；
-// 命令应答 "$command,<原命令>,response: OK*hh\r\n"（失败为 PARSING/其他文本），XOR 校验同 NMEA；
-// 版本查询 "VERSIONA\r\n" → "#VERSIONA,...;\"UM980\",\"<fw>\",...*crc32\r\n"（demux::unicore_hash 成帧）。
-// 依据：Unicore N4 高精度产品命令手册 V2 R1.6 §7（GPGGA COMx rate、UNLOG、CONFIG COMx baud、MODE ROVER、VERSIONA）。
-// 构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_UNICORE，主机 CMake 下 RTK_GNSS_DRV_UNICORE。
-// 线程安全：是（驱动无可变状态；解码器函数为纯函数）。ISR 安全：是。
-// 冻结接口（ADR-0012 §3）。实现方不得修改；变更须先修订 ADR-0012。
+// Unicore N4 平台驱动（UM980/UM981/UM982）：ASCII 命令、应答判定与 "#VERSIONA" 型号识别（ADR-0010 §2.2/§2.4）；构建开关 IDF CONFIG_RTK_GNSS_DRV_UNICORE / host RTK_GNSS_DRV_UNICORE。
+// 线程安全：是（驱动无可变状态，解码器为纯函数）。ISR 安全：是（无锁、不阻塞）。
+// 堆与阻塞：不使用堆（命令写入调用方的 CmdBuf）、不阻塞。冻结接口（ADR-0012 §3）实现方不得修改；变更须先修订 ADR-0012。
 #pragma once
 
 #include <cstddef>
@@ -22,7 +18,7 @@ namespace gnss::unicore {
  * Unicore 应答解码器：$ | "command," 或 "CONFIG," | 可打印 ASCII（不含 $ *）| * 两位十六进制 XOR（含 '$'）| \r\n。
  * "$command" 由 nmea 的第 2 字节 [A-Z0-9] 规则让出（'c' 小写）；"$CONFIG," 能过 nmea 的字符规则，靠的是 Unicore
  * 校验和含 '$'——nmea 校验失败后 demux 重扫，本解码器接手（ADR-0012 §2.7 现场证据）。若某固件对 $CONFIG 用标准
- * NMEA 校验和，这些行会被 nmea 认领、读回 0 行（P3c 报告 §4.1，HIL 确认）。
+ * NMEA 校验和，这些行会被 nmea 认领、读回 0 行（HIL 实测，见 ADR-0012 §2.7）。
  */
 inline constexpr std::size_t kResponseMaxFrame = 256;
 [[nodiscard]] bool responseFirstByte(uint8_t byte) noexcept;
@@ -41,6 +37,8 @@ namespace gnss {
  * 家族基类，只能经 final 叶子类实例化（ADR-0012 §2.8）：构造与析构都是 protected 非虚，拷贝/移动删除；
  * 实例为 Um980Receiver（UM980/UM981）与 Um982Receiver 的 constinit 静态对象。
  * 命令生成与应答解析为 protected static，子类直接复用。
+ *
+ * @note   应答 "$command,<原命令>,response: OK*hh"（失败为 PARSING 等文本，XOR 同 NMEA）；版本 "#VERSIONA,..." 由 demux::unicore_hash 成帧（手册 V2 R1.6 §7）。
  */
 class UnicoreReceiver : public Receiver {
 public:
@@ -97,6 +95,7 @@ protected:
     [[nodiscard]] virtual std::span<const ScriptStep> roverScript() const noexcept;
 
     // ---- 基础脚本的步骤（roverScript() 内的函数局部表引用它们，子类脚本可复用） ----
+
     /** 第 0 步 "UNLOG COMn"：先关掉全部输出，再由输出阶段按 OutputPlan 重新开启。 */
     [[nodiscard]] static bool stepUnlogAll(const RoverConfig &cfg, ConfigStep &out) noexcept;
     /** 第 1 步 "MODE ROVER"。 */

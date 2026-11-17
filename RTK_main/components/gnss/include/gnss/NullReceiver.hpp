@@ -1,7 +1,6 @@
-// “无接收机”驱动（ADR-0012 §2.3/§2.2）：探测全表无应答时控制器持有它而不是 nullptr，main 无需判空。
-// 所有能力查询返回 0/false，所有命令生成返回失败；不产生字节、不识别帧。
+// “无接收机”驱动（ADR-0012 §2.3/§2.2）：探测全表无应答时控制器持有它而不是 nullptr，main 无需判空；能力查询返回 0/false。
 // 线程安全：是（无可变状态）。ISR 安全：是。
-// 冻结接口（ADR-0012 §3）。实现方不得修改；变更须先修订 ADR-0012。
+// 堆与阻塞：不使用堆、不阻塞；不产生字节、不识别帧，所有命令生成返回失败。冻结接口（ADR-0012 §3）实现方不得修改；变更须先修订 ADR-0012。
 #pragma once
 
 #include <cstddef>
@@ -86,7 +85,11 @@ namespace detail {
 inline constexpr NullReceiver kNullReceiver{};
 } // namespace detail
 
-/** 全局“无接收机”实例。线程/ISR 安全：是（只读）。 */
+/**
+ * @brief  全局“无接收机”实例
+ * @retval 只读的 NullReceiver 引用（静态存储，生命周期同进程），永不返回 nullptr
+ * @note   线程/ISR 安全：是（只读）
+ */
 inline const Receiver &nullReceiver() noexcept
 {
     return detail::kNullReceiver;

@@ -1,6 +1,6 @@
 // 驱动注册与型号元数据：按构建开关组成探测优先级表 kReceivers，供 enabledReceivers() 查询（ADR-0012 §2.2/§2.3）。
-// 线程安全：是（返回命名空间作用域的常量初始化地址表，无运行期状态）；可在任意任务/ISR 取用。
-// 堆：不使用。构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 RTK_GNSS_DRV_<D>（CMake 转为同名宏）。
+// 线程安全：是（返回命名空间作用域的常量初始化地址表，无运行期状态）。ISR 安全：是（不阻塞、不分配）。
+// 堆与阻塞：不使用堆、不阻塞。构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 RTK_GNSS_DRV_<D>（CMake 转为同名宏）。
 #include <array>
 #include <cstddef>
 #include <optional>
@@ -17,7 +17,6 @@ constexpr size_t kEnabledCount = GNSS_ENABLE_UNICORE + GNSS_ENABLE_UBLOX + GNSS_
 
 // 顺序即探测优先级：Unicore → u-blox → ComNav。新增驱动在这里加一行，并在 DriverInstances.hpp 声明其实例。
 // 地址表在命名空间作用域做常量初始化（CPP-009）：不放进函数内静态，避免动态初始化与 __cxa_guard_*。
-// NOLINTNEXTLINE(readability-identifier-naming): 同 DriverInstances.hpp；constinit 数组被判为 GlobalVariable
 constinit const std::array<const Receiver *, kEnabledCount> kReceivers{
 #if GNSS_ENABLE_UNICORE
     &detail::kUm980Receiver,
@@ -32,10 +31,6 @@ constinit const std::array<const Receiver *, kEnabledCount> kReceivers{
 
 } // namespace
 
-/** @brief 按构建开关排好探测优先级的驱动地址表。
- * @return 常量初始化数组的 span（Unicore → u-blox → ComNav，未启用的驱动不出现）。
- * @note 无运行期状态，可在任意任务/ISR 调用。
- */
 std::span<const Receiver *const> enabledReceivers() noexcept
 {
     return kReceivers;

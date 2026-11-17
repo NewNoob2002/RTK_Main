@@ -1,8 +1,6 @@
-// NMEA 0183 解析器：语句骨架校验、语句分发、卫星表合并与 Fix 发布。
-// 线程/调用约束：feed/reset 只能由同一任务顺序调用；不可在 ISR 中使用、不可阻塞。
-// 堆：不使用。浮点：不使用（定点解析，ADR-0010 §2.5）。
-// 具体语句解析见 NmeaParserPosition.cpp（GGA/RMC）与 NmeaParserSatellites.cpp（GSA/GSV），
-// 定点原语见 NmeaParserNumeric.cpp。
+// NMEA 0183 解析器：语句骨架校验、语句分发、卫星表合并与 Fix 发布；具体语句见 NmeaParserPosition.cpp（GGA/RMC）与 NmeaParserSatellites.cpp（GSA/GSV）。
+// 线程安全：否（feed/reset 只能由同一任务顺序调用）。ISR 安全：否（会改写解析状态）。
+// 堆与阻塞：不使用堆、不阻塞、不使用浮点（定点解析见 NmeaParserNumeric.cpp，ADR-0010 §2.5）。
 #include <string_view>
 
 #include "NmeaParserPrivate.hpp"
@@ -39,6 +37,11 @@ bool addrIs(std::span<const uint8_t> addr, std::string_view suffix) noexcept
 
 } // namespace
 
+/**
+ * @brief  把一颗卫星的可见状态清零（新历元开始或该槽位换星时）
+ * @param  sat: 待清零的槽位，整体赋默认值（system=kOther、prn/elev/azim/snr=0、used=false）
+ * @note   只是覆盖结构体，不涉及 GSV 合并状态；ISR 安全、不分配
+ */
 void NmeaImpl::clearField(SatInfo &sat) noexcept
 {
     sat = SatInfo{};

@@ -1,7 +1,6 @@
-// GNSS 控制器状态机的内部实现声明（组件私有头，ADR-0010 §2.6；`friend struct` 见 Controller.hpp）。
-// 结构：声明与静态动作构造在本文件，状态处理在 ControllerProbe.cpp 与 ControllerConfigure.cpp，公共 API 在 Controller.cpp。
-// 线程/调用约束：非线程安全，单任务顺序调用；不可阻塞、不可在 ISR 中使用。
-// 堆：不使用。
+// GNSS 控制器状态机的内部实现声明（组件私有头，ADR-0010 §2.6；`friend struct` 见 Controller.hpp），公共 API 在 Controller.cpp。
+// 线程安全：否（单任务顺序调用）。ISR 安全：否（声明含状态成员）。
+// 堆与阻塞：不使用堆、不阻塞；声明与静态动作构造在此，状态处理在 ControllerProbe.cpp 与 ControllerConfigure.cpp。
 #pragma once
 
 #include <cstddef>

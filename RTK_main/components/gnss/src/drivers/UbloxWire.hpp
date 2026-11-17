@@ -1,5 +1,5 @@
 // u-blox F9 驱动的 UBX 线格式常量（组件私有头）：帧结构偏移、CFG-VALSET 层与键 ID、MON-VER 布局。
-// 线程/调用约束：只含 constexpr 常量，无状态；任何 TU 均可包含。
+// 线程/ISR：只含 constexpr 常量，无状态，任何 TU 均可包含。
 // 堆：不使用。浮点：不使用。
 #pragma once
 

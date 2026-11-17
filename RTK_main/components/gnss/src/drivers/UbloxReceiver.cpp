@@ -1,10 +1,6 @@
-// u-blox F9（ZED-F9P）驱动实现：UBX-MON-VER 探测、配置脚本、输出计划与虚函数实现（ADR-0010 §2.2/§2.4）。
-// 结构：UBX 帧层与 CFG-VALSET 编码见 UbloxUbx.cpp，线格式常量见 UbloxWire.hpp；
-// 脚本步骤的回调写在 roverStep 内（要取 protected 成员的地址，匿名命名空间的自由函数没有访问权）。
-// 线程/调用约束：纯函数，无全局可变状态，可重入、不阻塞。
-// 堆：不使用（命令在 CmdBuf 定长缓冲内构造）。
-// 键 ID 出处：u-blox F9 HPG 1.32 Interface Description，CFG-MSGOUT NMEA 段、RATE 段、UART1 段；
-// 本仓库无该手册副本，ID 未经实物验证（仅 UM980 有 HIL）。
+// u-blox F9（ZED-F9P）驱动实现：UBX-MON-VER 探测、配置脚本、输出计划与虚函数实现（ADR-0010 §2.2/§2.4）；UBX 帧层与 CFG-VALSET 编码见 UbloxUbx.cpp。
+// 线程安全：是（纯函数，无全局可变状态，可重入）。ISR 安全：是（无锁、不阻塞）。
+// 堆与阻塞：不使用堆（命令在 CmdBuf 定长缓冲内构造）、不阻塞；键 ID 出处 u-blox F9 HPG 1.32 Interface Description，未实物验证（HIL 仅 UM980）。
 #include "gnss/drivers/UbloxReceiver.hpp"
 
 #include <array>
@@ -21,36 +17,6 @@
 
 namespace gnss {
 namespace {
-
-using ublox::kClsCfg;
-using ublox::kClsMon;
-using ublox::kClsOffset;
-using ublox::kConfigTimeoutMs;
-using ublox::kCrcBytes;
-using ublox::kDefaultPeriodMs;
-using ublox::kHalfSecondMs;
-using ublox::kHeaderBytes;
-using ublox::kIdAck;
-using ublox::kIdCfgValset;
-using ublox::kIdMonVer;
-using ublox::kIdOffset;
-using ublox::kKeyMsgoutGgaUart1;
-using ublox::kKeyMsgoutGsaUart1;
-using ublox::kKeyMsgoutGstUart1;
-using ublox::kKeyMsgoutGsvUart1;
-using ublox::kKeyMsgoutRmcUart1;
-using ublox::kMaxEpochsPerEpoch;
-using ublox::kMaxRateHz;
-using ublox::kMinRateHz;
-using ublox::kMonVerExtBytes;
-using ublox::kMonVerMinLen;
-using ublox::kMonVerPollBytes;
-using ublox::kMonVerPollCkA;
-using ublox::kMonVerPollCkB;
-using ublox::kMsPerSecond;
-using ublox::kPayloadOffset;
-using ublox::kSync1;
-using ublox::kSync2;
 
 // MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（matchProbe / classifyReply 均按 ubx 解码器判定）。
 constexpr std::array<const demux::Decoder *, 1> kDecoders{&demux::ubx::kDecoder};
@@ -102,9 +68,9 @@ bool readMonVer(std::span<const uint8_t> payload, ProbeResult &out) noexcept
 {
     ProbeResult result{};
     bool haveModel = false;
-    for (size_t off = kMonVerMinLen; (off + kMonVerExtBytes) <= payload.size();
-         off += kMonVerExtBytes) {
-        const std::span<const uint8_t> ext = payload.subspan(off, kMonVerExtBytes);
+    for (size_t off = ublox::kMonVerMinLen; (off + ublox::kMonVerExtBytes) <= payload.size();
+         off += ublox::kMonVerExtBytes) {
+        const std::span<const uint8_t> ext = payload.subspan(off, ublox::kMonVerExtBytes);
         std::span<const uint8_t> tail{};
         if (extText(ext, "MOD=", tail)) {
             if (!ascii::quotedStartsWith(tail, "ZED-F9P")) {
@@ -132,14 +98,23 @@ struct ScriptStep {
     StepEnabledFn enabled;
 };
 
-/** @brief 无条件参与。 */
+/**
+ * @brief 无条件参与脚本：任何配置下该步都执行。
+ * @param cfg: 流动站配置（不使用）。
+ * @retval true: 总是参与。
+ */
 bool always(const RoverConfig &cfg) noexcept
 {
     static_cast<void>(cfg);
     return true;
 }
 
-/** @brief 仅在要求改波特率时参与（portBaud == 0 时脚本提前结束）。 */
+/**
+ * @brief 仅在要求改波特率时参与（portBaud == 0 时脚本提前结束）。
+ * @param cfg: 流动站配置，只读 portBaud。
+ * @retval true: portBaud 非 0，需要下发改波特率命令。
+ * @retval false: portBaud 为 0，跳过该步。
+ */
 bool portBaudEnabled(const RoverConfig &cfg) noexcept
 {
     return cfg.portBaud != 0U;
@@ -154,19 +129,18 @@ uint16_t navPeriodMs(const RoverConfig &cfg) noexcept
 {
     uint8_t rate = cfg.rateHz;
     if (rate == 0U) {
-        rate = kMinRateHz;
+        rate = ublox::kMinRateHz;
     }
-    if (rate > kMaxRateHz) {
-        rate = kMaxRateHz;
+    if (rate > ublox::kMaxRateHz) {
+        rate = ublox::kMaxRateHz;
     }
-    const auto period = static_cast<uint16_t>(kDefaultPeriodMs / rate);
-    return period == 0U ? kDefaultPeriodMs : period;
+    const auto period = static_cast<uint16_t>(ublox::kDefaultPeriodMs / rate);
+    return period == 0U ? ublox::kDefaultPeriodMs : period;
 }
 } // namespace
 
 namespace detail {
 
-// NOLINTNEXTLINE(readability-identifier-naming): 外部链接只读单例，命名见 DriverInstances.hpp
 constinit const ZedF9pReceiver kZedF9pReceiver{};
 
 } // namespace detail
@@ -182,8 +156,9 @@ constinit const ZedF9pReceiver kZedF9pReceiver{};
 bool UbloxReceiver::cmdPollMonVer(CmdBuf &out) noexcept
 {
     out.clear();
-    return out.append(std::array<uint8_t, kMonVerPollBytes>{
-        kSync1, kSync2, kClsMon, kIdMonVer, 0x00, 0x00, kMonVerPollCkA, kMonVerPollCkB});
+    return out.append(std::array<uint8_t, ublox::kMonVerPollBytes>{
+        ublox::kSync1, ublox::kSync2, ublox::kClsMon, ublox::kIdMonVer, 0x00, 0x00,
+        ublox::kMonVerPollCkA, ublox::kMonVerPollCkB});
 }
 
 // ---- 驱动成员 ----
@@ -219,17 +194,20 @@ bool UbloxReceiver::buildProbe(CmdBuf &out) const noexcept
 bool UbloxReceiver::matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                ProbeResult &out) const noexcept
 {
-    if ((&dec != &demux::ubx::kDecoder) || (frame.size() < (kHeaderBytes + kCrcBytes))) {
+    if ((&dec != &demux::ubx::kDecoder) ||
+        (frame.size() < (ublox::kHeaderBytes + ublox::kCrcBytes))) {
         return false;
     }
-    if ((frame[kClsOffset] != kClsMon) || (frame[kIdOffset] != kIdMonVer)) {
+    if ((frame[ublox::kClsOffset] != ublox::kClsMon) ||
+        (frame[ublox::kIdOffset] != ublox::kIdMonVer)) {
         return false;
     }
     const size_t len = respPayloadLen(frame);
-    if ((len < kMonVerMinLen) || (frame.size() < (kPayloadOffset + len + kCrcBytes))) {
+    if ((len < ublox::kMonVerMinLen) ||
+        (frame.size() < (ublox::kPayloadOffset + len + ublox::kCrcBytes))) {
         return false;
     }
-    return readMonVer(frame.subspan(kPayloadOffset, len), out);
+    return readMonVer(frame.subspan(ublox::kPayloadOffset, len), out);
 }
 
 bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
@@ -243,7 +221,7 @@ bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
                  return false;
              }
              o.expectReply = true;
-             o.timeoutMs = kConfigTimeoutMs;
+             o.timeoutMs = ublox::kConfigTimeoutMs;
              o.switchBaud = 0;
              return true;
          },
@@ -253,7 +231,7 @@ bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
                  return false;
              }
              o.expectReply = false;
-             o.timeoutMs = kConfigTimeoutMs;
+             o.timeoutMs = ublox::kConfigTimeoutMs;
              o.switchBaud = c.portBaud;
              return true;
          },
@@ -279,10 +257,10 @@ Ack UbloxReceiver::classifyReply(const demux::Decoder &dec, std::span<const uint
     if (&dec != &demux::ubx::kDecoder) {
         return Ack::kNone;
     }
-    if (!respHasValidAck(frame) || !respAckClassId(frame, kClsCfg, kIdCfgValset)) {
+    if (!respHasValidAck(frame) || !respAckClassId(frame, ublox::kClsCfg, ublox::kIdCfgValset)) {
         return Ack::kNone; // 只认 CFG-VALSET（06 8A）的应答
     }
-    return frame[kIdOffset] == kIdAck ? Ack::kAck : Ack::kNack;
+    return frame[ublox::kIdOffset] == ublox::kIdAck ? Ack::kAck : Ack::kNack;
 }
 
 size_t UbloxReceiver::frameTag(const demux::Decoder &dec, std::span<const uint8_t> frame,
@@ -316,19 +294,19 @@ fw::Status UbloxReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model mo
     uint32_t key = 0U;
     switch (msg) {
     case OutputMsg::kGga:
-        key = kKeyMsgoutGgaUart1;
+        key = ublox::kKeyMsgoutGgaUart1;
         break;
     case OutputMsg::kRmc:
-        key = kKeyMsgoutRmcUart1;
+        key = ublox::kKeyMsgoutRmcUart1;
         break;
     case OutputMsg::kGsa:
-        key = kKeyMsgoutGsaUart1;
+        key = ublox::kKeyMsgoutGsaUart1;
         break;
     case OutputMsg::kGst:
-        key = kKeyMsgoutGstUart1;
+        key = ublox::kKeyMsgoutGstUart1;
         break;
     case OutputMsg::kGsv:
-        key = kKeyMsgoutGsvUart1;
+        key = ublox::kKeyMsgoutGsvUart1;
         break;
     case OutputMsg::kSatsInfo:
     case OutputMsg::kHeading:
@@ -340,16 +318,17 @@ fw::Status UbloxReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model mo
     }
 
     // 值 = 每历元次数：round(periodMs * rateHz / 1000)，0 关闭；算下来为 0 时按 1（最慢 1 历元一次）。
-    const uint32_t rate = (plan.rateHz == 0U) ? kMinRateHz : static_cast<uint32_t>(plan.rateHz);
+    const uint32_t rate =
+        (plan.rateHz == 0U) ? ublox::kMinRateHz : static_cast<uint32_t>(plan.rateHz);
     uint32_t epochs = 0U;
     if (periodMs != 0U) {
         // periodMs 最大 128000、rate 最大 20，乘积 2.56e6 在 uint32_t 内，无需 64 位。
-        const uint32_t scaled = (periodMs * rate) + kHalfSecondMs;
-        epochs = scaled / kMsPerSecond;
+        const uint32_t scaled = (periodMs * rate) + ublox::kHalfSecondMs;
+        epochs = scaled / ublox::kMsPerSecond;
         if (epochs == 0U) {
             epochs = 1U;
         }
-        if (epochs > kMaxEpochsPerEpoch) {
+        if (epochs > ublox::kMaxEpochsPerEpoch) {
             return fw::Status::kInvalidArg; // 键类型是 U1，超出可表示范围视为不可实现参数
         }
     }

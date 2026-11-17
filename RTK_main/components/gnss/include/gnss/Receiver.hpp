@@ -1,10 +1,6 @@
-// GNSS 接收机驱动接口（ADR-0012 §2.2）：按厂家派生的驱动类，替代 ADR-0010 的函数指针方言表。
-// 驱动只负责“字节怎么写、应答怎么认、帧是哪一类”，不做 IO、不计时；时序/重试集中在 gnss::Controller。
-// 所有成员函数 const noexcept、无可变状态：同样输入产生同样字节，便于重试与主机逐字节测试。
+// GNSS 接收机驱动接口（ADR-0012 §2.2）：按厂家派生的驱动类，替代 ADR-0010 的函数指针方言表；含 OutputPlan.rateHz/buildOutput()（§2.4）与 forModel()（§2.8）。
 // 线程安全：是（纯函数；实例为 constinit 静态对象，构造后只读）。ISR 安全：是（不阻塞、不分配）。
-// P3b 修订（ADR-0012 §2.4）：新增 OutputPlan.rateHz 与 buildOutput()，语句输出不再写死在 rover 脚本里。
-// P3s 修订（ADR-0012 §2.8）：新增 forModel()，探测后切换到型号子类。
-// 冻结接口（ADR-0012 §3）。实现方不得修改；变更须先修订 ADR-0012。
+// 堆与阻塞：不使用堆、不阻塞；成员函数全部 const noexcept、无可变状态（同输入同字节）。冻结接口（ADR-0012 §3）实现方不得修改；变更须先修订 ADR-0012。
 #pragma once
 
 #include <array>
@@ -26,10 +22,20 @@ struct CmdBuf {
     std::array<uint8_t, kMaxCommand> data{};
     size_t len = 0;
 
+    /**
+     * @brief  清空缓冲（长度置 0）
+     * @note   data 内容不变，只是不再有效
+     */
     void clear() noexcept
     {
         len = 0;
     }
+    /**
+     * @brief  追加一段字节
+     * @param  bytes: 追加内容
+     * @retval true: 追加成功
+     * @retval false: 剩余空间不足，缓冲内容不变
+     */
     [[nodiscard]] bool append(std::span<const uint8_t> bytes) noexcept
     {
         if (bytes.size() > (data.size() - len)) {
@@ -41,6 +47,12 @@ struct CmdBuf {
         }
         return true;
     }
+    /**
+     * @brief  追加一段文本（按字节原样写入）
+     * @param  text: 追加内容，不要求 NUL 结尾
+     * @retval true: 追加成功
+     * @retval false: 剩余空间不足，缓冲内容不变
+     */
     [[nodiscard]] bool append(std::string_view text) noexcept
     {
         if (text.size() > (data.size() - len)) {
@@ -52,6 +64,10 @@ struct CmdBuf {
         }
         return true;
     }
+    /**
+     * @brief  当前缓冲内容
+     * @retval 指向 data[0..len) 的只读视图，len=0 时为空 span
+     */
     [[nodiscard]] std::span<const uint8_t> view() const noexcept
     {
         return {data.data(), len};
@@ -109,6 +125,8 @@ struct OutputPlan {
  * 默认实现（本卡可用到的）：outputMask = GGA|RMC|GSA|GSV；buildOutput = kNotSupported；
  * classifyFrame = 通用 NMEA（忽略 talker）；frameTag = 通用 NMEA/RTCM3 标签；
  * buildReadback = false；matchReadback = 0。
+ *
+ * @note   驱动只负责“字节怎么写、应答怎么认、帧是哪一类”；不做 IO、不计时，时序与重试集中在 gnss::Controller。
  */
 class Receiver {
 public:
@@ -145,7 +163,7 @@ public:
                                             std::span<const uint8_t> frame,
                                             std::span<const uint8_t> sent) const noexcept = 0;
 
-    // ---- 报文输出（ADR-0012 §2.4；本卡只提供默认与掩码，buildOutput 在 P3b 实现） ----
+    // ---- 报文输出（ADR-0012 §2.4；基类只给默认与掩码，具体命令由驱动覆盖） ----
     /** 本型号能输出的报文（位 = OutputMsg）。App 订阅与控制台据此拒绝不支持的报文。 */
     [[nodiscard]] virtual uint32_t outputMask(Model model) const noexcept;
     /** 生成“把 msg 设为 periodMs（0 = 关闭）”的一条命令。不支持返回 kNotSupported。 */
@@ -159,7 +177,7 @@ public:
     virtual size_t frameTag(const demux::Decoder &dec, std::span<const uint8_t> frame,
                             std::span<char> out) const noexcept;
 
-    // ---- 配置读回（ADR-0012 §2.7；P3c 实现） ----
+    // ---- 配置读回（ADR-0012 §2.7；基类不支持，由驱动覆盖） ----
     /** 生成查询模块当前配置的命令；不支持返回 false。 */
     [[nodiscard]] virtual bool buildReadback(CmdBuf &out) const noexcept;
     /** frame 是否属于读回结果；是则把一行可读文本写入 out 并返回长度，否则 0。 */
@@ -180,12 +198,18 @@ protected:
 };
 
 /**
- * 本次构建启用的驱动，顺序即探测优先级（Registry.cpp 的 kReceivers 表序）。
- * 未编译进来的驱动不出现在表中。线程/ISR 安全：是（静态常量表）。
+ * @brief  本次构建启用的驱动表，顺序即探测优先级（Registry.cpp 的 kReceivers 表序）
+ * @retval 常量初始化数组的 span；未编译进来的驱动不出现在表中，至少为空 span
+ * @note   线程/ISR 安全：是（静态常量表，无运行期状态）；不阻塞
  */
 [[nodiscard]] std::span<const Receiver *const> enabledReceivers() noexcept;
 
-/** 按家族取启用的驱动；未启用或未知返回 nullptr（调用方回落 nullReceiver()）。 */
+/**
+ * @brief  按家族取启用的驱动
+ * @param  family: 命令方言家族
+ * @retval 驱动指针；未启用或未知返回 nullptr，调用方应回落 nullReceiver()
+ * @note   线程/ISR 安全：是（只读常量表）；不阻塞
+ */
 [[nodiscard]] const Receiver *receiverFor(Family family) noexcept;
 
 } // namespace gnss

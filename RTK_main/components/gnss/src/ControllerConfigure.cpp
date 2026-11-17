@@ -1,8 +1,6 @@
 // GNSS 控制器状态机：配置脚本、报文输出、运行守护与读回（ADR-0010 §2.6、ADR-0012 §2.4/§2.7）。
-// 纯逻辑：不读写 UART、不改波特率、不操作电源，只通过 Action 让 main 侧执行；所有时间由调用方传入 nowMs。
-// 结构：探测与失败重试见 ControllerProbe.cpp，内部声明见 ControllerImpl.hpp。
-// 线程/调用约束：非线程安全，单任务顺序调用；不可阻塞、不可在 ISR 中使用。
-// 堆：不使用。
+// 线程安全：否（单任务顺序调用）。ISR 安全：否（会改写控制器状态）。
+// 堆与阻塞：不使用堆、不阻塞（时间由调用方传入 nowMs）；纯逻辑不读写 UART/波特率/电源，只经 Action 让 main 侧执行。
 #include "ControllerImpl.hpp"
 
 #include <cstddef>
@@ -205,7 +203,7 @@ ControllerImpl::Round ControllerImpl::outputSend(Controller &self, uint32_t nowM
     const auto msg = static_cast<OutputMsg>(static_cast<uint8_t>(self.output_index_));
     const uint32_t bit = 1U << static_cast<uint32_t>(self.output_index_);
     if ((self.plan_.periodMs[self.output_index_] == 0U) && !self.output_rerun_) {
-        // 开机首轮：关闭的语句本来就没开，不发命令（与 P3a 黄金脚本一致）。
+        // 开机首轮：关闭的语句本来就没开，不发命令（host 黄金脚本按此序列断言）。
         ++self.output_index_;
         return Round::kAgain;
     }
