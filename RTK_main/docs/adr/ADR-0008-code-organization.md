@@ -91,10 +91,10 @@ RTK_main/
   private:
       uint32_t last_tick_ms_ = 0;
   };
-  // module_list.inc 一行：MODULE_DEF(BtLink, kLink) → 生成实例与 fw::make_ops<BtLinkModule>() 跳板表
+  // module_list.inc 一行：MODULE_DEF(BtLink, kLink) → 生成实例与 fw::makeOps<BtLinkModule>() 跳板表
   ```
 
-  `fw::make_ops<T>()` 用 `if constexpr (requires { … })` 检测成员是否存在，缺省成员填 `nullptr`，零虚函数、零堆。
+  `fw::makeOps<T>()` 用 `if constexpr (requires { … })` 检测成员是否存在，缺省成员填 `nullptr`，零虚函数、零堆。
 - **文件头**：第一行写“这个文件做什么”，第二行起写线程/调用约束；工具与模型来源移到 git 提交 trailer，不再写进源文件。
 - **注释**：公开头文件每个函数一段 `/** … */`（做什么、谁调用、可否阻塞、错误返回）；实现里只写原因与约束。
 - **常量**：同组常量放一块，行尾注明单位（`// ms`、`// B`）。
@@ -108,7 +108,7 @@ RTK_main/
 | --- | --- | --- |
 | R0 | 本 ADR + `docs/CODING-STYLE.md` + AGENTS.md 规则更新 | 无 |
 | R1 | `main/` 按 §3 搬目录（`git mv`，只改 include 和 CMake 源列表） | 低 |
-| R2 | `fw::make_ops<T>()` + `module_list.inc`；四个模块改为类 | 中（主机场景测试覆盖） |
+| R2 | `fw::makeOps<T>()` + `module_list.inc`；四个模块改为类 | 中（主机场景测试覆盖） |
 | R3 | 命名空间与 include 根统一（逐组件，一组件一提交；冻结清单重算） | 中（纯机械，编译器兜底） |
 | R4 | 文件头与注释清理、公开 API doxygen 补齐 | 低 |
 | R5 | `rtk_bt_spp.c` 按职责拆为 init / session / rx / tx / gap 五个文件 | 中（t13_host_check 29 例覆盖 + HIL） |

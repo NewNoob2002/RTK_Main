@@ -31,7 +31,7 @@ BlueZ `spp_stress`：rtt～win8 零丢失，约 300 rep/s，下行约 25 KiB/s�
 2. `main/def/RtcmDef.hpp` 的 `kRtcmBatchBytes=2×1029+256=2314`。`RtcmBatch` 只有 `span` 和拒绝计数；DataCenter 的 Slot 复制描述符，没有再复制 RTCM 负载。不能把 Slot 记成 2314 B 负载副本。
 3. 最大产品线路帧是 `20+256+4=280 B`；旧注释中的 278 B 不作为容量依据。AsyncTx 的 Item 在 ESP32 ABI 下预计 292 B，精确值须由编译产物确认。
 4. `fw::FanoutRing` 已冻结：2 B 长度、4 读者、独立 tail、覆盖最旧完整记录，attach 从最新开始。尚未用于 main。其现实现对非二次幂容量在 u32 回绕时可能旋转存储，直接返回长期有效 span 不安全。
-5. `LinkService::on_data()` 先执行 `router_.handle()`，再调用 `Transport::write()`；仅替换发送驱动仍会在满时丢掉已执行请求的回复，必须同时增加 dispatch 前的容量预留。
+5. `LinkService::onData()` 先执行 `router_.handle()`，再调用 `Transport::write()`；仅替换发送驱动仍会在满时丢掉已执行请求的回复，必须同时增加 dispatch 前的容量预留。
 
 ### 1.3 SDK 事实与适用边界
 
@@ -66,7 +66,7 @@ SPP RX StreamBuffer[2 × 4096 B；writer=BTC，reader=kLink]
   | copy -> SessionEntry.rx[2 × 64 B]
   v
 会话 Demux[2 × 1029 B；kLink]
-  | copy -> SessionSink.bytes_[2 × 1029 B] + frames_[2 × 171 项]
+  | copy -> SessionSink.bytes_[2 × 1029 B] + frames[2 × 171 项]
   +-- 产品帧 -> LinkService/Router
   |              -> async_tx[8 × Item≈292 B + 两个 Item + 2048 B 栈]
   |              -> spp tx_buf[2 × 512 B] -> spp_worker[2560 B 栈]
@@ -126,7 +126,7 @@ App逐消息 interval -> 同一校验入口 -> 会话订阅（不保存默认，
 
 ### 3.3 App 环大小与长句的明确边界
 
-typed 记录为 `LE16(payload_len) + uint8_t type + payload`，不含填充，原文保留行尾；type 是映射表 0～31 的稳定类别索引，掩码为 `uint32_t`，不能直接以 0x1F/0x23 等消息 ID 移位。**Q1 已决定：App 环默认4 KiB**；`RTK_GNSS_APP_RING_BYTES` 以 Kconfig 配置、默认4096，2KiB只用于边界试验，8KiB留给实际需求另行变更。4KiB最多容纳4093B负载；超过容量的记录（如4096B SATSINFOA）写者端整条丢弃、累计 `oversize_drop`，不截断、不分片。
+typed 记录为 `LE16(payload_len) + uint8_t type + payload`，不含填充，原文保留行尾；type 是映射表 0～31 的稳定类别索引，掩码为 `uint32_t`，不能直接以 0x1F/0x23 等消息 ID 移位。**Q1 已决定：App 环默认4 KiB**；`RTK_GNSS_APP_RING_BYTES` 以 Kconfig 配置、默认4096，2KiB只用于边界试验，8KiB留给实际需求另行变更。4KiB最多容纳4093B负载；超过容量的记录（如4096B SATSINFOA）写者端整条丢弃、累计 `oversizeDrop`，不截断、不分片。
 
 本期K4用“4096B完整输入被识别、整条拒绝并显式计数”验收，无容量未决阻塞。若App实际需要完整SATSINFOA，再单独启用8KiB并复验内存门槛；typed mode允许只容纳一条最大记录，§5。GNSS Demux仍4096B，因为二进制解码器已经要求该容量；hash解码器上限1024→4096列入冻结契约定稿。
 
@@ -164,7 +164,7 @@ typed 记录为 `LE16(payload_len) + uint8_t type + payload`，不含填充，�
 
 ### 4.2 链路任务什么时候暂停、恢复
 
-1. 生命周期事件优先；CLOSE 立即取消对应 generation 的 reservation/pending request/流状态，未执行请求不 dispatch。不能沿用当前 `session_forget` 先 dispatch 尾帧的行为。
+1. 生命周期事件优先；CLOSE 立即取消对应 generation 的 reservation/pending request/流状态，未执行请求不 dispatch。不能沿用当前 `sessionForget` 先 dispatch 尾帧的行为。
 2. 从 Demux 得到产品帧时，最多保留该会话一个完整 pending request（280 B），逐字节 feed 可暂停，保留 512 B read chunk 未消费后缀。取得 reply reservation 之后才允许调用可能改变状态的路由。角色转换/准入判断若断开，释放 reservation，禁止副作用重放。
 3. 空间不足：标记 `reply_paused`，停止该会话继续读取/dispatch，继续处理另一会话、断开、心跳超时、执行器命令和定时器；无立即可做工作时等待通知，不忙轮询。当前 TCP/RFCOMM 之外没有设备端强制上游反压，App 必须限制在途请求。
 4. worker 成功提交并归还环空间后发布 `TX_SPACE` level 状态并通知；kLink 重查完整 280 B credit，成功才恢复。检查状态→准备等待→再检查状态，避免丢唤醒；队列事件丢失仍能从 level 状态恢复。
@@ -230,7 +230,7 @@ using FanoutMask = uint32_t;
 struct FanoutLease {
     uint32_t generation = 0;
     uint32_t serial = 0;
-    uint8_t reader_id = 0;
+    uint8_t readerId = 0;
 };
 struct FanoutView {
     FanoutLease lease{};
@@ -241,38 +241,38 @@ struct FanoutView {
 struct FanoutTypedReaderStats {
     FanoutReaderStats base{};
     uint32_t filtered = 0;
-    uint32_t pinned_drop = 0;
+    uint32_t pinnedDrop = 0;
 };
 struct FanoutTypedWriterStats {
     FanoutWriterStats base{};
-    uint32_t no_subscriber = 0;
-    uint32_t pinned_drop = 0;
-    uint32_t oversize_drop = 0;
-    size_t high_water_bytes = 0;
+    uint32_t noSubscriber = 0;
+    uint32_t pinnedDrop = 0;
+    uint32_t oversizeDrop = 0;
+    size_t highWaterBytes = 0;
 };
 class FanoutRing {
 public:
-    // 启动前单线程、非 ISR；typed 专用，容量为二次幂且 <2^31，max_record+3 <= cap。
+    // 启动前单线程、非 ISR；typed 专用，容量为二次幂且 <2^31，maxRecord+3 <= cap。
     // 负载 1..65535；存储寿命覆盖环；无分配；重复 init 拒绝。
-    [[nodiscard]] Result init_typed(std::span<uint8_t> storage, size_t max_record,
+    [[nodiscard]] Result initTyped(std::span<uint8_t> storage, size_t maxRecord,
                                     const LockOps &lock) noexcept;
     // 每 id 一个读者任务、非 ISR；mask=0 不接收；attach 从最新位置开始。
-    [[nodiscard]] Result attach(FanoutMask mask, uint8_t &reader_id) noexcept;
+    [[nodiscard]] Result attach(FanoutMask mask, uint8_t &readerId) noexcept;
     // 仅该读者、非 ISR；无活动租约时更新；不回放旧订阅，tail 移至当前 head。
-    [[nodiscard]] Result set_mask(uint8_t reader_id, FanoutMask mask) noexcept;
-    // 写者任务、非 ISR；type<32；无匹配读者不写，kOk 且 no_subscriber++。
+    [[nodiscard]] Result setMask(uint8_t readerId, FanoutMask mask) noexcept;
+    // 写者任务、非 ISR；type<32；无匹配读者不写，kOk 且 noSubscriber++。
     // 被 pin 阻挡则不等待、整条拒新 kBusy；oversize 为 kInvalidArg。
     [[nodiscard]] Result write(uint8_t type, std::span<const uint8_t> payload) noexcept;
     // 仅该读者、非 ISR；跳过不订阅记录，最多一个活动租约/id。
     // kNotFound 无记录；kBusy 已有租约；两 span 只含 payload、长度和等于原记录长度。
-    [[nodiscard]] Result peek(uint8_t reader_id, FanoutView &view) noexcept;
+    [[nodiscard]] Result peek(uint8_t readerId, FanoutView &view) noexcept;
     // 仅该读者、非 ISR；消费整条并释放 pin；过期 token 拒绝且不移动 tail。
     [[nodiscard]] Result commit(const FanoutLease &lease) noexcept;
     // 仅该读者、非 ISR；释放 pin、不消费；不得在 cancel 后访问 view。
     [[nodiscard]] Result cancel(const FanoutLease &lease) noexcept;
     // 任意任务非 ISR；锁保护下读取；无效 id 返回空统计，不改变状态。
-    [[nodiscard]] FanoutTypedReaderStats typed_reader_stats(uint8_t reader_id) const noexcept;
-    [[nodiscard]] FanoutTypedWriterStats typed_writer_stats() const noexcept;
+    [[nodiscard]] FanoutTypedReaderStats typedReaderStats(uint8_t readerId) const noexcept;
+    [[nodiscard]] FanoutTypedWriterStats typedWriterStats() const noexcept;
 };
 } // namespace fw
 ```
@@ -280,7 +280,7 @@ public:
 契约细节：
 
 - `detach` 有活动租约返回 kBusy；读者必须先 cancel/commit。断链由该读者任务完成，不能从另一任务强制释放正在使用的指针。销毁/重初始化前所有任务与租约必须静止。
-- 无 pin 时保持整记录覆盖；覆盖仅给落后的订阅读者计 dropped，被过滤记录计 filtered；legacy 统计口径不变。pin 阻挡覆盖时写者不等待，计 writer `pinned_drop`，并给当时订阅该类型的读者各计一条 `pinned_drop`；这与已经发布记录被覆盖的 dropped 分开。无读者/无订阅计 no_subscriber，不算传输丢失。
+- 无 pin 时保持整记录覆盖；覆盖仅给落后的订阅读者计 dropped，被过滤记录计 filtered；legacy 统计口径不变。pin 阻挡覆盖时写者不等待，计 writer `pinnedDrop`，并给当时订阅该类型的读者各计一条 `pinnedDrop`；这与已经发布记录被覆盖的 dropped 分开。无读者/无订阅计 noSubscriber，不算传输丢失。
 - 类型头和记录发布原子可见。长记录写入分为保留空闲区→锁外 copy→锁内发布，读者不可见未完成记录；或 ≤1 KiB 分段锁内复制但整个记录直到最后才发布。旧可读区域和租约区都不可覆盖。每段临界区必须有界；不为 4096 B memcpy 长持 SMP 锁。
 - typed mode 限二次幂存储，u32 逻辑位置回绕不搬动内存，差值始终 <2^31。legacy 原算法保留。generation/serial 回绕不能让旧 lease 重新有效；耗尽时要求静止重置或使用更宽 token，K1 以测试和定稿说明选择。
 - `read()` 在 typed mode 返回 kNotSupported，typed peek 在 legacy mode 同样拒绝，避免静默丢类型。实现可复用内部逻辑，不能复制两套无关环实现。
@@ -300,14 +300,14 @@ kIo 读 Pipe 后要保留 UART 未完成的 512 B chunk 和偏移；短写/零�
 
 保留 G-C 的消息映射及 interval：0x04 GGA（默认1s）、0x05 SATSINFOA（5s）、0x1F HEADINGA（1s、需能力位）、0x21 GST（1s）、0x22 RMC（1s）、0x23 GSA（3s）；NMEA 忽略 talker。interval<0 为绝对值秒（先提升整数宽度再处理 -128），>0 为 1000/v ms 且最短50ms，=0 关闭并查询最新句。原始持续输出不加产品帧封装；无缓存/不支持返回 02 02。
 
-统一的main输出配置入口接受 `SetOutput(source, session_generation, msg_id, period_ms, persist)` 等值对象，共用映射、能力校验和频率边界。**本期外部配置只接串口控制台**；内部App订阅沿用G-C已定义的逐消息interval语义，调用同一校验入口，但不新增协议、不保存持久默认。接收机配置经过CommandBus交给所属执行器，不跨任务直接改模块；未来web与0x0D订阅/保存扩展不在本期范围。区分：
+统一的main输出配置入口接受 `SetOutput(source, session_generation, msg_id, periodMs, persist)` 等值对象，共用映射、能力校验和频率边界。**本期外部配置只接串口控制台**；内部App订阅沿用G-C已定义的逐消息interval语义，调用同一校验入口，但不新增协议、不保存持久默认。接收机配置经过CommandBus交给所属执行器，不跨任务直接改模块；未来web与0x0D订阅/保存扩展不在本期范围。区分：
 
 1. **会话订阅**：kLink 独占、关闭即清；向 kIo 发布小型配置快照，包含每会话 period/mask/epoch。kIo 每会话独立 last_sent，到期读者取并集决定是否写该条，读者侧再按自身周期和掩码过滤。无在线订阅读者不写 App 环。配置快照加锁，不能用非原子 payload seqlock。
 2. **接收机输出配置/持久默认**：kIo独占，本期仅串口控制台命令可设置并请求保存；命令队列排序，最后成功命令生效，GNSS不支持则返回失败而不持久化。用 `gnss/out` 的版本化有界表blob存默认周期及报文配置，storage负责读写；已有 `gnss/rate/gsv/family/model/baud` 键保持。NVS写失败要报告，不能将“已运行但未保存”说成持久化成功；App逐消息订阅不改NVS。
 
 重连仍 mask=0、无历史回放；NVS 默认仅作为用户显式开启订阅的默认值，不在重连后自动开始流。固定 GNSS 输出超集加 ESP 降采样；实际频率受模块产生速率限制。console 的 GNSS rate 和每类 output 周期通过同一校验，不把观测记录开启混入 App 订阅。
 
-最新句缓存只保留这六类，预算见§8。查询采用kLink→kIo命令→有界邮箱返回≤256B快照，kIo私有大缓存不经Slot大memcpy，禁止用非原子seqlock。**Q2已决定：最新句>256B返回02 02，累计 `query_oversize`，不截断、不分片**；已有缓存内容与持续订阅不因此改变。原始流不受回复payload256限制，但仍受App环整条容量约束。
+最新句缓存只保留这六类，预算见§8。查询采用kLink→kIo命令→有界邮箱返回≤256B快照，kIo私有大缓存不经Slot大memcpy，禁止用非原子seqlock。**Q2已决定：最新句>256B返回02 02，累计 `queryOversize`，不截断、不分片**；已有缓存内容与持续订阅不因此改变。原始流不受回复payload256限制，但仍受App环整条容量约束。
 
 **Q3已决定：0x0D保持现状**，32B COM查询、SET无回复；本期不添加订阅表/保存字段、不扩展线上协议。`survey_protocol_0530.md` 中头offset19 interval和逐消息查询继续适用；`phone_protocol.md` offset19“预留”需架构方正式对齐。统一入口、控制台持久默认及现有App逐消息订阅可独立完成，0x0D订阅/保存扩展列未来项，不阻塞K4。
 
@@ -446,7 +446,7 @@ seal后若任务/IDF驱动初始化失败，先停止已启动子系统并等待
 | 出口 | 字段 |
 | --- | --- |
 | status / status link | 每会话generation、RX used/hwm/dropped_bytes、reply used/hwm、PHONE stream used/hwm（其他角色无stream）、reserved、paused/累计ms/最大ms、accepted/completed/cancelled/errors、inflight、cong_enter/cong_duration、stray_write、anon_write_fail、push_coalesced |
-| gnss status / status gnss | 每环cap/used/hwm、writer records/bytes/overwritten/no_subscriber/oversize_drop/pinned_drop；每读者mask、records/bytes/dropped/filtered/pinned_drop；各消息period/sent/skipped、query_oversize；观测显示reserved/not allocated |
+| gnss status / status gnss | 每环cap/used/hwm、writer records/bytes/overwritten/noSubscriber/oversizeDrop/pinnedDrop；每读者mask、records/bytes/dropped/filtered/pinnedDrop；各消息period/sent/skipped、queryOversize；观测显示reserved/not allocated |
 | status rtcm | 保持原两行，另行pipe accepted/drop/discard/UART pending及错误、reset epoch |
 | sys mem | §7.3的静态段、boot owner表、各caps堆、seal/降级状态 |
 | trace（只追加码） | TX reserve失败/恢复、cong进入/退出、提交失败/短写/迟到/匿名故障、RX drop、环覆盖/租约拒新/oversize、RTCM pipe/UART错误、boot阶段失败/封存 |
@@ -462,7 +462,7 @@ C驱动只提交数值给已有trace hook，文本映射在main debug表，旧�
 - win16及up256使用窗口内零丢验收，记录请求线路大小、窗口字节、RTCM并发流量、RX高水位。K3新增upwin模式，以 `--window-bytes 3072` 运行256B payload上行，窗口只在收到完整有效回复后归还，至少10000帧且连续10min（不足时重复），`rx_dropped=0`、应答/序号/CRC零缺失。现有 `--mode up` 无窗口洪泛只作负例，观察显式rx_dropped，不纳入零丢结论。
 - **Q7已决定**：同机BlueZ、同报文、同无线环境下，下行≥基线25KiB/s的1.5倍，即≥37.5KiB/s，探索2倍（50KiB/s）。报告实际值和p50/p95/p99延迟，未测不能写达标；未达门槛标FAIL并报告。连续流中健康未拥塞时协议应答p95≤100ms，长句/拥塞另报最大延迟；遵守Q4窗口等待与有副作用命令不自动重发。
 - K3 RTCM逐字节CRC32和frames/bytes对照一致；pipe满、UART短写/暂不可写、断电/重探测均可观测；无丢失负例不能靠端到端CRC一句话掩盖。
-- K4无订阅时App环写入0；ALARM无stream区且GNSS流量0；断链重连无历史。默认4KiB下4096B hash整条拒绝且oversize_drop增加，>256B查询返回02 02且query_oversize增加；边界内记录整条进入PHONE stream，满则cancel重试、落后覆盖计dropped且不断链。双方策略、-128/0/正interval、控制台持久默认/NVS重启/错误通过；0x0D保持32B COM查询/SET无回复，其订阅/保存扩展不在本期范围。
+- K4无订阅时App环写入0；ALARM无stream区且GNSS流量0；断链重连无历史。默认4KiB下4096B hash整条拒绝且oversizeDrop增加，>256B查询返回02 02且queryOversize增加；边界内记录整条进入PHONE stream，满则cancel重试、落后覆盖计dropped且不断链。双方策略、-128/0/正interval、控制台持久默认/NVS重启/错误通过；0x0D保持32B COM查询/SET无回复，其订阅/保存扩展不在本期范围。
 - K5 seal后申请失败、逐owner注入分配失败退控制台、初始化中途失败无UAF；map确认.bss与boot owner账对应；静态预算不过界、最低内部8bit堆≥81920B、最大块≥32768B、各任务余栈≥原验收30%且无持续下降、无TWDT。栈不因迁移再缩小。
 
 ### 10.2 软件门禁命令（将来实施执行，本轮不构建）
@@ -540,8 +540,8 @@ python3 tools/hil/spp_stress.py F8:B3:B7:25:D8:B2 --mode upwin --window-bytes 30
 
 | 项 | 已决定 | 理由 / 验收影响 |
 | --- | --- | --- |
-| Q1 App环与长hash | Kconfig默认4096B，超容量写者整条丢并计oversize_drop，不截断；实际需要完整SATSINFOA时另改8KiB。 | 控制本期RAM；4KiB装不下4096B+3B头。K4验收显式oversize计数，无长句容量阻塞。 |
-| Q2 最新句查询 | >256B返回02 02并计query_oversize，不截断、不分片。 | 维持现有payload上限与线上协议。 |
+| Q1 App环与长hash | Kconfig默认4096B，超容量写者整条丢并计oversizeDrop，不截断；实际需要完整SATSINFOA时另改8KiB。 | 控制本期RAM；4KiB装不下4096B+3B头。K4验收显式oversize计数，无长句容量阻塞。 |
+| Q2 最新句查询 | >256B返回02 02并计queryOversize，不截断、不分片。 | 维持现有payload上限与线上协议。 |
 | Q3 0x0D/持久配置 | 0x0D保持32B COM查询/SET无回复；本期外部统一配置入口只接串口控制台，持久默认由控制台设置；内部App订阅沿用G-C逐消息interval。 | 不扩展未定义的线上字段；0x0D订阅/保存及web不在本期范围，不阻塞K4。 |
 | Q4 回复反压/App | 回复满暂停该会话，已执行请求回复保留；App按约3KiB内字节窗口等待，超时不自动重发副作用命令。 | 有限RX容量需要上游节流，避免丢回复与重复执行；up256用窗口模式零丢验收。 |
 | Q5 简化B/整条接纳 | 每会话reply2048B；仅PHONE另有stream4096B。peek后整条复制，空间不足不commit、cancel后下轮重试；被覆盖计dropped。租约只覆盖≤4096B复制，不跨等待。 | 一次接纳完整句，省去跨轮租约与发送进度追踪；TX持有后不受App环覆盖影响，报警器不占stream RAM。 |

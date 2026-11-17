@@ -5,9 +5,9 @@
 
 ## 1. 决策
 
-1. **分流放在 `main/app_link.cpp` 的 `drain_rx`，不改 `rtk_core`。** 每个 `SessionEntry` 持有一个
+1. **分流放在 `main/app_link.cpp` 的 `drainRx`，不改 `rtk_core`。** 每个 `SessionEntry` 持有一个
    `demux::StaticDemux<rtk::proto::demux_frame::kDecoder, demux::rtcm3::kDecoder>`（产品帧优先，缓冲 1029 B）与一个
-   `final : demux::Sink` 会话接收器。产品帧的完整线路帧原样交给 `LinkService::on_data(handle, wire, now)`：
+   `final : demux::Sink` 会话接收器。产品帧的完整线路帧原样交给 `LinkService::onData(handle, wire, now)`：
    冻结的 `FrameParser` 对一条已校验的完整帧再解析一次（≤280 B，开销可忽略），`rtk_core` 与 `test/host` 均不改。
 2. **调度保持 ADR-0002/0003 的“每轮至多一个产品帧”**：仍逐字节 `feed`，产品帧回调后本轮立即让出。
    RTCM 帧不计入该限制（转发廉价、不产生同步写），只受每轮 256 B / 20 ms 预算约束。
@@ -17,7 +17,7 @@
    最近一条消息号（载荷前 12 bit）、角色拒绝数。接入 UART 管道（StreamBuffer，满则整帧丢弃并计数）留给 GNSS 驱动 ADR。
 5. **未知字节只计数**（汇总 `unknown_bytes`），不再透传。会话 OPEN 时 `init` 该会话的分流器，CLOSE 时 `abort` 后释放。
 6. **指标语义变化**：坏 CRC/坏长度的产品帧现在在分流器中被拒绝（计入 `demux_product_rejects`），不再到达
-   `FrameParser`，因此 `parser_crc_errors/parser_length_errors` 在正常运行中保持 0。`status` 同时输出两组计数。
+   `FrameParser`，因此 `parserCrcErrors/parserLengthErrors` 在正常运行中保持 0。`status` 同时输出两组计数。
 7. **RX StreamBuffer 可配置**：`rtk_bt_spp.h` 的 `RTK_BT_SPP_RX_BUF_SIZE` 改由 `CONFIG_RTK_BT_SPP_RX_BUF_SIZE`
    （`components/rtk_bt/Kconfig`，1024–16384，默认 4096）决定；非 IDF 构建回退 2048。2 会话共 8 KB 静态 RAM。
 
@@ -48,7 +48,7 @@
 
 | 本文旧名 / 旧路径 | 当前名称 / 当前路径 |
 | --- | --- |
-| `main/app_link.cpp` 的 `drain_rx` | `main/modules/bt_link/BtLinkModule.cpp` |
+| `main/app_link.cpp` 的 `drainRx` | `main/modules/bt_link/BtLinkModule.cpp` |
 | `rtk_core` | `link_core`（`core::`） |
 | `rtk_bt` | `spp_server`（C 驱动 `SppServer.h` + 适配器 `spp/SppTransport.hpp`） |
 | `components/rtk_bt/Kconfig`、`rtk_bt_spp.h` | `components/spp_server/Kconfig`、`components/spp_server/include/SppServer.h` + `boot_include/SppServerStorage.h` |

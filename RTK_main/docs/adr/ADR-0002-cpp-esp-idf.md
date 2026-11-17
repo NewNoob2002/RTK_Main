@@ -58,7 +58,7 @@ ESP32：8 MB Flash，520 KB SRAM，双核，归入 **T2**。本工程自有代�
 - 布局：ESP-IDF Astyle（otbs；函数定义花括号换行，控制语句、类、命名空间花括号同行；4 空格；120 列）。日常检查用 `.clang-format`（近似规则），**权威门禁是 astyle_py 3.4.7 + IDF 规则文件**。
 - 头文件：`#pragma once`（ESP-006）。纯 C++ 头不加 `extern "C"`；只有 `app_main` 与 SDK 回调蹦床使用 `extern "C"`/静态函数。
 - 命名：命名空间 `rtk::<组件>`；类型 `CamelCase`；函数、变量 `lower_case`；私有成员后缀 `_`；常量 `kCamelCase`；文件作用域可变静态 `s_`（ESP-006），尽量放在匿名命名空间中；宏全大写。
-- 错误：可恢复错误返回 `[[nodiscard]] rtk::Status`。`esp_err_t` 只在 `rtk_os::from_esp_err` 映射。IDF 调用用 `ESP_RETURN_ON_ERROR` 等宏传播；`ESP_ERROR_CHECK` 只用于不可恢复的启动错误（ESP-004）。
+- 错误：可恢复错误返回 `[[nodiscard]] rtk::Status`。`esp_err_t` 只在 `rtk_os::fromEspErr` 映射。IDF 调用用 `ESP_RETURN_ON_ERROR` 等宏传播；`ESP_ERROR_CHECK` 只用于不可恢复的启动错误（ESP-004）。
 - 并发：链路任务独占 `LinkService`、`LinkManager`、`CommandDispatcher`、`AlarmSource`；控制台通过命令队列请求。SMP 临界区用 `portMUX_TYPE` 守卫（ESP-001），不用 `volatile` 同步。
 - BARR-C 安全核心中不冲突的条目仍然适用：每个 `switch` 有 `default`、比较不混用有符号与无符号、窄化转换加注释说明范围、变量使用前初始化。
 
@@ -81,7 +81,7 @@ C 版实现（BATCH-A 已通过独立验收；BATCH-B 只有实现方自报的�
 
 ## 9. 修订记录
 
-- **2026-11-12 冻结接口演进（追加，不改原有语义）**：`core::LinkManager` 新增 `whitelist_add(const BtAddr&)` / `whitelist_remove(const BtAddr&)`，返回 `core::WhitelistEdit{kDone,kUnchanged,kFull}`；remove 删除后条目前移保持顺序；两者与 `whitelist_clear()` 一致，不影响已连接会话的角色（断开重连后按新白名单判定）。`core::LinkTrace` 追加 `kWhitelistRemove`（a = 白名单数量）；手动 add 复用 `kWhitelistAdd`（handle = 0）。用途：控制台 `wl add/del <MAC>`（`LinkVerb::kWhitelistAdd/kWhitelistDel`，args = 6 字节 MAC，改动立即落 NVS）。用例：`test/host/TestLinkManager.cpp` `test_whitelist_add_remove_single`、`test_whitelist_add_full`。
+- **2026-11-12 冻结接口演进（追加，不改原有语义）**：`core::LinkManager` 新增 `whitelistAdd(const BtAddr&)` / `whitelistRemove(const BtAddr&)`，返回 `core::WhitelistEdit{kDone,kUnchanged,kFull}`；remove 删除后条目前移保持顺序；两者与 `whitelist_clear()` 一致，不影响已连接会话的角色（断开重连后按新白名单判定）。`core::LinkTrace` 追加 `kWhitelistRemove`（a = 白名单数量）；手动 add 复用 `kWhitelistAdd`（handle = 0）。用途：控制台 `wl add/del <MAC>`（`LinkVerb::kWhitelistAdd/kWhitelistDel`，args = 6 字节 MAC，改动立即落 NVS）。用例：`test/host/TestLinkManager.cpp` `testWhitelistAddRemoveSingle`、`testWhitelistAddFull`。
 
 - **2026-11-17 现场升级（OTA）暂不实施（Q2，用户确认）**：本期不做现场升级，不开 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`。`partitions.csv` 保持现状：`otadata`、`ota_0`、`ota_1` 来自已在硬件上使用的 E1-5.4 `partitions_ota.csv`，保留只为布局兼容，app 槽 0x1A0000 仍是固件体积上限。以后做 OTA 时：开回滚、首次连通后调用 `esp_ota_mark_app_valid_cancel_rollback()`，并另立 ADR 写掉电安全与镜像校验。技能 ESP-007/BOOT-002 记为「有意偏离（延后）」（`docs/CODING-STYLE.md` §10）。
 
@@ -93,7 +93,7 @@ C 版实现（BATCH-A 已通过独立验收；BATCH-B 只有实现方自报的�
 | --- | --- | --- |
 | `rtk_proto` | `device_proto` | C++ 外观 `proto::` / `include/proto/`；C 头 `DevProtoFrame.h`、`DevProtoAlarm.h` |
 | `rtk_core` | `link_core` | `core::` / `include/core/` |
-| `rtk_os` | `rtos` | `rtos::` / `include/rtos/`；`rtk_os::from_esp_err` 现为 `rtos::from_esp_err` |
+| `rtk_os` | `rtos` | `rtos::` / `include/rtos/`；`rtk_os::fromEspErr` 现为 `rtos::fromEspErr` |
 | `rtk_bt` | `spp_server` | C 驱动 `SppServer.h` + 适配器 `spp/SppTransport.hpp` |
 | `rtk_store` | `nvs_store` | 纯 C，`nvs_store_*` / `NVS_STORE_*` |
-| `rtk::Status` | `fw::Status` | 公共基础错误码移到 `app_fw`（`fw/Status.hpp`），`fw::is_ok` / `fw::to_string` 同理 |
+| `rtk::Status` | `fw::Status` | 公共基础错误码移到 `app_fw`（`fw/Status.hpp`），`fw::isOk` / `fw::toString` 同理 |

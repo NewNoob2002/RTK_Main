@@ -140,7 +140,7 @@ void PublishLink(uint32_t now_ms);
 ### 3.2 统一命名空间与 include 根
 
 ADR-0008 §9 的对照如下。组件按用途命名，统一名称不改变职责与可复用性。
-公共基础错误码位于 `app_fw` 的 `fw/Status.hpp`，使用 `fw::Status`、`fw::is_ok`、`fw::to_string`，枚举值及字符串映射不变。
+公共基础错误码位于 `app_fw` 的 `fw/Status.hpp`，使用 `fw::Status`、`fw::isOk`、`fw::toString`，枚举值及字符串映射不变。
 C 头文件名与符号前缀取组件前缀（`dev_proto_*`、`spp_server_*`、`nvs_store_*`）；NVS 命名空间 `"rtk"`、键值、蓝牙名与 `RTK_*` Kconfig 选项保持不变。
 
 | 组件目录 | 命名空间 | C++ include 根 |
@@ -262,18 +262,18 @@ if (verb == LinkVerb::kReset) {
 
 可失败函数返回 `fw::Status`/`Result` 并加 `[[nodiscard]]`。错误在发生处记一次日志，上层只传错误码；
 纯逻辑层不依赖日志平台，由第一个有日志能力的适配边界记录一次。
-IDF 返回值必须检查，`esp_err_t` 只在 `rtos::from_esp_err` 映射；
+IDF 返回值必须检查，`esp_err_t` 只在 `rtos::fromEspErr` 映射；
 禁止用 `ESP_ERROR_CHECK` 处理可恢复错误或用 `(void)` 丢弃 `esp_err_t`。
 ISR、C 回调蹦床、析构和移动操作标 `noexcept`。失败路径释放已获得的资源，避免部分更新。
 
 ```cpp
 // 这样写：init 已在有日志能力的边界记录错误
 const auto status = transport.init();
-if (!is_ok(status)) {
+if (!isOk(status)) {
     return status;
 }
 // 不要这样写：重复记录，或把失败直接忽略
-if (!is_ok(status)) {
+if (!isOk(status)) {
     ESP_LOGE("link", "link: init_failed_again");
 }
 (void)esp_some_fallible_call();
@@ -286,7 +286,7 @@ if (!is_ok(status)) {
 | `bool` | 只用于谓词（`is_*`/`has_*`/`can_*`、`poll()` 是否还有工作），`false` 不代表“出错” |
 | `fw::Status` | 组件内部与组件之间的可恢复错误（驱动、管道、存储绑定、`bind_storage`） |
 | `fw::Result` | `app_fw` 模块接口：`fw::Module` 生命周期、`StoreBinding` 编解码、命令处理结果 |
-| `esp_err_t` | 只出现在 IDF/C 接口边界，进入 C++ 前立即用 `rtos::from_esp_err` 映射 |
+| `esp_err_t` | 只出现在 IDF/C 接口边界，进入 C++ 前立即用 `rtos::fromEspErr` 映射 |
 
 - 不用 `const char *` 返回失败原因、`nullptr` 表示成功；需要诊断文本时返回错误码，原因字符串由常量表提供（规则 2）。
 - 新代码强制执行；存量代码改动到哪个函数就顺带迁移哪个，不做一次性全量改动（GNSS 部分在 P3 迁移）。
@@ -322,12 +322,12 @@ fw::Status apply(Settings settings); // 复制大对象
 
 每个类别单独设级别，默认 I（`debug log <类别|all> <e|w|i|d>`），与 trace 开关无关；因此默认就能看到的 I 级只写状态变化，
 逐帧/逐句内容用 D。实时每轮路径、ISR、BT 回调任务只用 `fw::trace()`（16 B 事件，不格式化），
-不写日志。不逐次打印函数进入/退出，不打印蓝牙数据内容（需要时用 `tlog_hex`，受 hex 掩码控制）。
+不写日志。不逐次打印函数进入/退出，不打印蓝牙数据内容（需要时用 `tlogHex`，受 hex 掩码控制）。
 禁止在固件自有代码中调用 `ESP_LOG*`/`printf` 输出日志；只允许 `esp_log_level_set`/`esp_log_set_vprintf` 控制 IDF 自身日志。
 
 ```cpp
 // 这样写
-FW_LOGI(fw::TraceCat::kGnss, "<probe> Detected %s at %lu baud.", model_name(m), baud);
+FW_LOGI(fw::TraceCat::kGnss, "<probe> Detected %s at %lu baud.", modelName(m), baud);
 FW_LOGW(fw::TraceCat::kGnss, "<cfg> Step %u was rejected, retry %u.", step, retry);
 // 不要这样写
 FW_LOGI(fw::TraceCat::kGnss, "GNSS: begin poll"); // 每轮噪声，重复类别名，无子标签
@@ -360,7 +360,7 @@ if (now_ms - last_ms > 5000) {
 ```cpp
 // 这样写（main/AppContext.hpp）
 enum class BootTask : uint32_t { kLink = 1U << 0U, kIo = 1U << 1U, kTrace = 1U << 2U };
-launched |= task_bit(BootTask::kLink);
+launched |= taskBit(BootTask::kLink);
 // 不要这样写
 launched |= 1U; // 哪个任务？
 ```
@@ -405,9 +405,9 @@ volatile bool ready = false; // 不能建立跨核同步关系
 ### 6.1 模块类 + 模板跳板 + 一行清单注册
 
 模块以类保存状态，按需要提供 `init`、`start`、`poll`、`command`。
-`fw::make_ops<T>()` 用 `if constexpr (requires { ... })` 检测成员，未提供的操作填 `nullptr`；
+`fw::makeOps<T>()` 用 `if constexpr (requires { ... })` 检测成员，未提供的操作填 `nullptr`；
 框架内部生成静态跳板，业务方法不暴露 `void *self`。实例静态存储，零虚表、零堆。
-实现见 `components/app_fw/include/fw/Module.hpp` 的 `make_ops`。
+实现见 `components/app_fw/include/fw/Module.hpp` 的 `makeOps`。
 
 ```cpp
 // 这样写：命名空间 app 中，fw 指通用 app_fw 组件
@@ -420,7 +420,7 @@ public:
 private:
     uint32_t last_tick_ms_ = 0;
 };
-// 清单的一行展开为静态实例与 fw::make_ops<BtLinkModule>() 跳板表
+// 清单的一行展开为静态实例与 fw::makeOps<BtLinkModule>() 跳板表
 MODULE_DEF(BtLink, kLink)
 
 // 不要这样写：业务层重复恢复指针并手工维护操作表
@@ -602,7 +602,7 @@ clang-tidy -p builds/host --config-file=.clang-tidy-c path/to/pure.c
 | `DataProc_NodeList.inc` 一行注册 | 使用 `module_list.inc`，避免多份注册表 |
 | `_Template` 最小骨架 | 提供 `_template/`，新增模块从最小必需操作开始 |
 | `onEvent` + switch + 长度检查 | 采用统一入口与先校验后解码，每分支调用具名函数 |
-| 类 + 静态回调跳转 | 采用模块类与 `fw::make_ops<T>()`，业务方法隐藏 `void *` |
+| 类 + 静态回调跳转 | 采用模块类与 `fw::makeOps<T>()`，业务方法隐藏 `void *` |
 | 固定分层 | 保留允许依赖表与 host 可测的纯组件边界 |
 | 成组常量/单位、doxygen 注释 | 采用并扩大到每个函数（§6.2，`tools/doc_check` 门禁）；实现内注释解释原因 |
 | lowerCamel 方法、前缀私有成员 | 方法采用 lowerCamelCase（ADR-0013 起）；私有成员用后缀 `name_` 而非前缀 |
@@ -677,7 +677,7 @@ Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**�
 | CPP-003 | 堆分档：实时路径禁止、T1 只启动期、T2 固定池或注入分配器 | §7 三档 + g7b 白名单；全仓只有 `BootAlloc` 一处启动期分配，不提供注入分配器 API | 有意偏离 | §7、tools/g7b_check/heap_allowlist.txt；单一分配点不值得建分配器接口（Q2 决定） |
 | CPP-004 | 不用 `std::function` | 模块用 ops 结构体 + 静态蹦床 | 覆盖 | §6 |
 | CPP-005 | T0 不用分配容器，T1/T2 有界 | 只用 `std::array`/`std::span`/`std::string_view` | 覆盖 | §4 |
-| CPP-006 | 不用 iostream | 控制台走 `cli::out_printf` | 覆盖 | §5.1 |
+| CPP-006 | 不用 iostream | 控制台走 `cli::outPrintf` | 覆盖 | §5.1 |
 | CPP-007 | printf 只用于非实时路径，T0 禁 | `snprintf` 只出现在命令/日志格式化 | 覆盖 | §5.1 |
 | CPP-008 | 共享原子要 `static_assert(is_always_lock_free)` | 共享原子变量旁写 `static_assert(fw::kAtomicUsable<T>)`（`fw/Atomic.hpp`）：有原生原子指令的目标必须无锁，RISC-V 无 A 扩展时接受 IDF 关中断模拟（B7） | 覆盖 | main/AppContext.hpp、components/app_fw/src/、components/cli/src/Out.cpp、BtLinkModule.cpp |
 | CPP-009 | 函数内静态的动态初始化受限 | 函数内静态与全局表须常量初始化；g7b 检查自有目标文件不得引用 `__cxa_guard_*` | 覆盖 | components/gnss/src/Registry.cpp、docs/acceptance.md G7b（Q2） |
@@ -685,7 +685,7 @@ Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**�
 | CPP-011 | 多态基类受保护非虚析构、实现类 `final` | 虚函数只限 `Transport`/`demux::Sink`/`gnss::Receiver`；非叶子类受保护非虚析构，只实例化 `final` 叶子 | 缺口（整改中） | §4.1；P3s 起 `UnicoreReceiver`/`UbloxReceiver`/`ComnavReceiver` 用公有虚析构且被直接实例化，整改见 ADR-0013 S1 |
 | CPP-012 | volatile 只用于 MMIO/DMA，不做复合运算 | 无 MMIO volatile | 覆盖 | — |
 | CPP-013 | ISR 向量 `extern "C"`、C 回调 `noexcept` 蹦床、跨边界类型 standard-layout | 无自有 ISR；BT 回调经 C 函数转发 | 覆盖 | components/spp_server/ |
-| CPP-014 | SDK 错误码在 bsp 层映射一次并检查 | `esp_err_t` 只在 IDF 边界，`rtos::from_esp_err` 映射 | 覆盖 | §4.4 |
+| CPP-014 | SDK 错误码在 bsp 层映射一次并检查 | `esp_err_t` 只在 IDF 边界，`rtos::fromEspErr` 映射 | 覆盖 | §4.4 |
 | CPP-015 | 自有代码开严格告警 + `-Werror`，第三方头用 `-isystem` | `rtk_strict_warnings()` + 组件选项集 | 覆盖 | cmake/strict_warnings.cmake |
 | CPP-017 | 不把位域用于寄存器映射 | 无位域映射 | 覆盖 | — |
 | CPP-020 | 全局用 `constinit`/`constexpr` | 执行器与模块表 `constinit` | 覆盖 | main/app/Executors.cpp |

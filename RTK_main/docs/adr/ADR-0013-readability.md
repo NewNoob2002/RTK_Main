@@ -28,10 +28,10 @@
 | 对象 | 现在 | 改为 | 例 |
 | --- | --- | --- | --- |
 | 类型、概念、模板参数 | `PascalCase` | 不变 | `LinkManager` |
-| 函数、方法 | `snake_case` | `lowerCamelCase` | `poll_controller` → `pollController` |
+| 函数、方法 | `snake_case` | `lowerCamelCase` | `pollController` → `pollController` |
 | 局部变量、参数 | `snake_case` | `lowerCamelCase` | `now_ms` → `nowMs` |
 | 私有/受保护成员 | `name_` | `lowerCamelCase_` | `last_tick_ms_` → `lastTickMs_` |
-| 公有数据成员（struct 字段） | `snake_case` | `lowerCamelCase` | `rx_period_ms` → `rxPeriodMs` |
+| 公有数据成员（struct 字段） | `snake_case` | `lowerCamelCase` | `rxPeriodMs` → `rxPeriodMs` |
 | 文件作用域可变静态 | `s_snake_case` | 不变（用户 2026-11-17 决定：保留 `s_` + snake，与 C 侧一致，也和常量 `k` 区分） | `s_link_state` |
 | 命名空间作用域只读对象（`const`/`constinit const`） | `kName`（部分靠 `NOLINT`） | `kName`，由 clang-tidy GlobalConstant 规则覆盖，删掉对应 `NOLINT` | `kReceivers` |
 | 常量、枚举值 | `kName` | 不变 | `kRetryMs` |
@@ -88,7 +88,7 @@
 - `UnicoreReceiver`、`UbloxReceiver`、`ComnavReceiver` 是可以派生的家族类，析构函数改成受保护、非虚。
 - 每个型号只实例化 `final` 叶子类：新增 `Um980Receiver final : UnicoreReceiver`（UM980/UM981 共用）、
   `ZedF9pReceiver final : UbloxReceiver`、`K803Receiver final : ComnavReceiver`；`Um982Receiver` 保持现状。
-- `for_model` 返回叶子实例。
+- `forModel` 返回叶子实例。
 - G7b 门禁里的删除析构函数豁免（`.text.*D0Ev`）删掉，恢复为“自有目标文件不得引用 `operator delete`”。
 
 ## 3 实施顺序（每张卡由 omp + deepseek 实施，Claude 验收）

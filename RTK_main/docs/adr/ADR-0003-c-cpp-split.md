@@ -37,7 +37,7 @@ C 与 C++ 的边界只有一种形式：C 头文件（`#pragma once` + `extern "
 | 命名 | 公共符号与宏带组件前缀：`rtk_proto_*`/`RTK_PROTO_*`、`rtk_bt_spp_*`、`rtk_store_*`；文件作用域静态 `s_`；类型 `_t` 结尾；**不用** BARR-C 的 `p_`/`g_`/`b_` 前缀 | cpp/coding.md（不变） |
 | 安全规则 | BARR-C 安全核心：每个 `switch` 有 `default`；不混用有符号与无符号；窄化转换写注释；变量使用前初始化；不对缓冲区强转结构体指针；多字节字段逐字节小端读写；有界循环；文件内函数 `static` | CPP-001…020 |
 | 内存 | 不用 `malloc`/`free`；状态放静态存储或调用方提供 | 不变（无堆） |
-| 错误 | 纯 C 模块用本模块枚举；IDF 相关模块返回 `esp_err_t`，用 `ESP_RETURN_ON_ERROR` 等传播（ESP-004） | `rtk::Status`，`esp_err_t` 只在 `rtk::os::from_esp_err` 映射 |
+| 错误 | 纯 C 模块用本模块枚举；IDF 相关模块返回 `esp_err_t`，用 `ESP_RETURN_ON_ERROR` 等传播（ESP-004） | `rtk::Status`，`esp_err_t` 只在 `rtk::os::fromEspErr` 映射 |
 | 静态分析 | `clang-tidy --config-file=.clang-tidy-c`（无 C++ 命名规则） | `.clang-tidy`（不变） |
 
 ## 4. 测试
@@ -60,6 +60,6 @@ C 与 C++ 的边界只有一种形式：C 头文件（`#pragma once` + `extern "
 | --- | --- |
 | `rtk_proto`（C 核心 + C++ 外观） | `device_proto`：C 头 `components/device_proto/include/DevProtoFrame.h`、`DevProtoAlarm.h`；C++ 外观 `include/proto/Frame.hpp`、`AlarmCodec.hpp` |
 | `rtk_core`（C++） | `link_core`：`components/link_core/include/core/` |
-| `rtk_os`（C++） | `rtos`：`components/rtos/include/rtos/`、`fw/Status.hpp` 里的 `rtos::from_esp_err` |
+| `rtk_os`（C++） | `rtos`：`components/rtos/include/rtos/`、`fw/Status.hpp` 里的 `rtos::fromEspErr` |
 | `rtk_bt`（C 驱动 + C++ 适配器） | `spp_server`：C 头 `include/SppServer.h`、`boot_include/SppServerStorage.h`；适配器 `include/spp/SppTransport.hpp` |
 | `rtk_store`（C） | `nvs_store`：`components/nvs_store/NvsStore.c` |

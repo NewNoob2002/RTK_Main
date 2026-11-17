@@ -77,7 +77,7 @@ sys    info | heap | tasks | reboot
 
 ### 2.7 编译期开关 `CONFIG_RTK_TRACE_ENABLE`（默认 y）
 
-为 n 时：`app_fw` 对所有使用者 PUBLIC 定义 `FW_TRACE_ENABLED=0`，`fw/Trace.hpp` 中 `trace()`/`trace_on()` 变为空内联（调用点不加 `#if`，整体编译消除）；
+为 n 时：`app_fw` 对所有使用者 PUBLIC 定义 `FW_TRACE_ENABLED=0`，`fw/Trace.hpp` 中 `trace()`/`traceOn()` 变为空内联（调用点不加 `#if`，整体编译消除）；
 `main/CMakeLists.txt` 不收 `modules/debug/`，`module_list.inc`、`AppMain.cpp`（debug 命令/动词/早期 init）、storage 的 `kKeyTables` 同步去掉；
 `SppServerPriv.h` 的钩子调用编译为空。实测（IDF v6.1，esp32）：
 
@@ -98,7 +98,7 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 `printf` 在 2 Mbaud / 240 MHz 下只有约 24.6 KB/s。决策：
 
 - 命令回复（`cli::fail/print_*`、trampoline 的 `OK`/`ERR`、help）、各模块命令里的输出、trace 事件行与周期报告，
-  一律经 `cli::out_printf/out_write`：在 256 B 静态缓冲里整行格式化，再一次交给输出端。业务代码不再直接 `printf`。
+  一律经 `cli::outPrintf/outWrite`：在 256 B 静态缓冲里整行格式化，再一次交给输出端。业务代码不再直接 `printf`。
 - 输出端由 `console start()` 在装好 UART TX 环形驱动后安装（`uart_write_bytes` 直写）；未安装（host 测试、USB 控制台、
   TX 环形=0）时写 stdout。绕过 VFS 后 `\n → \r\n` 由 out 模块负责（跨调用记住上一个字符，不重复补 `\r`）。
 - `ESP_LOG` 经 `esp_log_set_vprintf` 接到同一出口、同一把锁，日志、回复、trace 互不穿插；ISR、调度器未运行、
@@ -135,14 +135,14 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 
 - **两条通道，一个读者。** 实时路径（BT 回调、spp 发送、link 执行器逐帧路径）继续只用 `fw::trace()`（§2.1 不变）。
   非实时任务（io 执行器上的 GNSS、控制台任务，以及 link 执行器上的**错误/拒绝分支**——不是逐帧成功分支）可用新的
-  `fw::tlog(cat, fmt, ...)` 在自己栈上格式化一行句子，`fw::tlog_hex(cat, bytes)` 附原始字节（≤ 256 B）。两者写入变长记录环
+  `fw::tlog(cat, fmt, ...)` 在自己栈上格式化一行句子，`fw::tlogHex(cat, bytes)` 附原始字节（≤ 256 B）。两者写入变长记录环
   `fw::LogRing`（新冻结头 `fw/Tlog.hpp`，存储大小 Kconfig `CONFIG_RTK_LOG_RING_BYTES`，默认 4096）。`trace_out` 任务同时读
-  TraceRing 与 LogRing，按时间戳合并输出（新增 `TraceRing::peek_time`），仍经 `cli::out_write` 整行写出，不穿插。
-- **两级开关。** 类别掩码（`debug on/off`，与 trace 共用）控制事件与文本行；新增十六进制掩码 `log_set_hex_mask`
-  控制 `tlog_hex`。控制台：`debug on <cat...|all> [hex]` 打开类别，带 `hex` 同时打开这些类别的十六进制转储、不带则关闭；
+  TraceRing 与 LogRing，按时间戳合并输出（新增 `TraceRing::peekTime`），仍经 `cli::outWrite` 整行写出，不穿插。
+- **两级开关。** 类别掩码（`debug on/off`，与 trace 共用）控制事件与文本行；新增十六进制掩码 `logSetHexMask`
+  控制 `tlogHex`。控制台：`debug on <cat...|all> [hex]` 打开类别，带 `hex` 同时打开这些类别的十六进制转储、不带则关闭；
   `debug off <cat...|all>` 两者都关；`debug list` 显示每类 `off / on / on+hex`；`debug save` 同时保存十六进制掩码
-  （NVS 命名空间 `dbg` 新键 `hex`，u32）。`CONFIG_RTK_TRACE_ENABLE=n` 时 `tlog/tlog_hex/log_hex_on` 为空内联。
-- **分流器拒绝钩子。** `demux::Sink` 新增虚函数 `on_reject(decoder, index, prefix, cause, last)`（默认空操作，已有 Sink 不受影响），
+  （NVS 命名空间 `dbg` 新键 `hex`，u32）。`CONFIG_RTK_TRACE_ENABLE=n` 时 `tlog/tlogHex/logHexOn` 为空内联。
+- **分流器拒绝钩子。** `demux::Sink` 新增虚函数 `onReject(decoder, index, prefix, cause, last)`（默认空操作，已有 Sink 不受影响），
   `RejectCause{kStep, kTooLong, kContract, kAbort}`；`demux::Decoder` 新增可选成员 `explain(prefix, out)`：对被拒绝的前缀给出一句英文原因
   （纯函数，引擎从不调用）。各解码器（NMEA、RTCM3、UBX、UnicoreBin、UnicoreHash、RtkFrame、UnicoreResp、ComnavPrompt）都要实现 explain。
 - **句子格式（参考 SparkFun）。** 每行：`[  秒.毫秒] 类别 句子`，类别用大写短名（`LINK SPP RTCM PROTO ALARM STORE EXEC GNSS`），
@@ -167,12 +167,12 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 - **接口。** C++ 用 `FW_LOGE/W/I/D(cat, fmt, ...)`（`fw/Log.hpp`），C 组件用 `FW_CLOGE/W/I/D(FW_LOG_CAT_*, fmt, ...)`（`fw/LogC.h`，同一实现）。各组件可包一层自己的宏（如 `#define GNSS_LOGW(...) FW_LOGW(fw::TraceCat::kGnss, __VA_ARGS__)`），放在组件私有头。`fw::tlog()` 保留，等价 `FW_LOGI`。
 - **全面替代 `ESP_LOG*`（L0b，2026-11-16）。** 固件自有代码（main 与 components）不再调用 `ESP_LOGx`，统一走本通道，每行带时间戳与类别 tag。只保留对 IDF 自身日志的控制调用：`esp_log_level_set`（压低 BTDM/phy 横幅、`log` 命令）与 `esp_log_set_vprintf`（把 IDF 日志转到控制台出口）。
 - **级别规则（L0b 修订：追踪与日志分开设置）。** 每个类别一个日志级别（2 bit），默认全部 I，与 trace 类别掩码无关：`debug log <cat...|all> <e|w|i|d> [hex]` 设置，`debug save` 写 NVS `dbg/loglv`。记录条件只有 `level ≤ 该类别级别`；E 总是记录。trace 事件由 `debug trace on|off <cat...|all>` 单独控制（NVS `dbg/mask`，默认全关）；`debug on|off` 保留为 `debug trace on|off` 的简写。hex 转储需该类别 hex 位且日志级别为 D。编译期上限 `CONFIG_RTK_LOG_LEVEL`（0..3，默认 3）把更高级别的调用连同参数一起编译掉；追踪关闭的固件同样按此上限（不再强制 W），日志走直写通道。
-- **通路。** 启动第一步（`step_power`）即安装直写 sink，启动横幅、复位原因、各模块初始化结果与启动摘要都以 `[t] [SYS] …` 行按序出现在提示符之前；启动结束（摘要之后、REPL 之前）DebugModule 才把文本环挂上（`attach_log`），此后写环，由 trace_out 按时间与 trace 事件合并输出；环未安装（启动早期、追踪关闭的固件）时写 `log_install_direct` 安装的直写 sink（`main/app/ConsoleSetup.cpp`，同步写 `cli::out_write`）；两者都没有时丢弃并计入 `log_stats().lost`。两条通路共用 `fw::log_format_line`，行格式一致：`[   8.712] [GNSS] W: text`，I 级不带级别前缀；类别名用方括号隔开（2026-11-16 用户要求），trace 事件行同样是 `[t] [CAT] 句子`。
+- **通路。** 启动第一步（`stepPower`）即安装直写 sink，启动横幅、复位原因、各模块初始化结果与启动摘要都以 `[t] [SYS] …` 行按序出现在提示符之前；启动结束（摘要之后、REPL 之前）DebugModule 才把文本环挂上（`attachLog`），此后写环，由 trace_out 按时间与 trace 事件合并输出；环未安装（启动早期、追踪关闭的固件）时写 `logInstallDirect` 安装的直写 sink（`main/app/ConsoleSetup.cpp`，同步写 `cli::outWrite`）；两者都没有时丢弃并计入 `logStats().lost`。两条通路共用 `fw::logFormatLine`，行格式一致：`[   8.712] [GNSS] W: text`，I 级不带级别前缀；类别名用方括号隔开（2026-11-16 用户要求），trace 事件行同样是 `[t] [CAT] 句子`。
 - **记录头。** `LogHeader` 增加 `level` 与保留字节，`total` 由 uint32 收窄为 uint16，总长仍为 12 B（hex 转储原长上限 65535 足够，帧最长 4096）。
 - **新类别 `kSys`。** 启动、控制台、系统服务日志；`kTraceAllMask` 随 `kCount` 自动扩展。
 - **用法约束（CODING-STYLE §5.1）。** 日志记状态变化、错误与周期统计；默认 I 级可见，所以逐帧/逐句内容（NMEA 句子、拒收字节、未知字节）用 D；实时每轮路径、ISR、BT 回调任务只用 `trace()`。格式见 §2.11 与下一节的子组件标签（`[CAT] <子组件> 句子`）；只有确实是“名字=值”清单时才用 `k=v`，类别前缀由输出端加，正文不重复组件名。
 - **子组件标签（2026-11-16 补充，用户要求）。** 类别方括号之外，句子开头再用 `<子组件>` 标出产生该行的子范围（状态机、探测、配置等），行形如 `[  13.001] [GNSS] <cfg> TX "MODE ROVER"`；标签小写单词、语义固定，正文仍按 §2.11 以对象开头。GNSS 现有标签：`<sm>` 状态机、`<probe>` 方言/波特率探测、`<cfg>` 配置脚本步骤、`<out>` 报文输出与掩码、`<uart>` 串口与波特率、`<rx>` 接收侧解析/拒收/静默、`<rtcm>` RTCM 下行管道、`<app>` 应用订阅环。其他类别提到 GNSS 时用 `<gnss>`（如 `[SYS] <gnss> UART2 started, 115200 baud`、`[LINK] <gnss> app ring attach failed`）。方向词统一写 `TX`/`RX`（MCU 视角），不再用 `<-`/`->`：旧的 `<model> <- "cmd"` 会被读成“收到但未识别”，且探测命中前模型名只是 `unknown`。trace 句子表（`main/modules/debug/TraceText.cpp`）使用同一套标签。
-- **host。** 测试可调 `log_install_direct` 装捕获 sink 断言日志；未装时只计数，不写 stderr，测试输出保持干净。
+- **host。** 测试可调 `logInstallDirect` 装捕获 sink 断言日志；未装时只计数，不写 stderr，测试输出保持干净。
 
 ## 3. 冻结接口（T0 由 Claude 写入）
 
@@ -180,7 +180,7 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 - `components/link_core/include/core/TraceCodes.hpp`（新，link/proto/alarm 事件码）
 - `components/cli/include/cli/Console.hpp`（追加 `fail`、`Verb`、`dispatch`、`println_kv` 等；原接口不变）
 - `components/spp_server/include/SppServer.h`（追加 trace 钩子与事件码；原接口不变）
-- §2.11：`components/app_fw/include/fw/Tlog.hpp`（新）、`fw/Trace.hpp` 追加 `TraceRing::peek_time`、`components/stream_demux/include/demux/Demux.hpp` 追加 `RejectCause`/`Sink::on_reject`、`demux/Decoder.hpp` 追加 `Decoder::explain`
+- §2.11：`components/app_fw/include/fw/Tlog.hpp`（新）、`fw/Trace.hpp` 追加 `TraceRing::peekTime`、`components/stream_demux/include/demux/Demux.hpp` 追加 `RejectCause`/`Sink::onReject`、`demux/Decoder.hpp` 追加 `Decoder::explain`
 - §2.12：`components/app_fw/include/fw/Log.hpp`（新）、`fw/Tlog.hpp` 增加 `LogLevel` 与 `LogHeader::level`、`fw/Trace.hpp` 增加 `TraceCat::kSys`；L0b：`fw/LogC.h`（新）、`fw/Log.hpp` 每类别级别接口
 
 ## 4. 门槛

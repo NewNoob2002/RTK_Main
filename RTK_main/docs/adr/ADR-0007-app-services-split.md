@@ -83,13 +83,13 @@ struct ModuleOps {                       // 函数指针表，不用 virtual
     Status (*init)(void *self) noexcept;               // 启动前，单线程，可失败
     Status (*start)(void *self) noexcept;              // 执行器启动后、首轮 poll 前
     void   (*poll)(void *self, uint32_t now_ms) noexcept;  // 非阻塞；单次耗时上限见执行器
-    void   (*on_command)(void *self, const Command &, CommandResult &) noexcept; // 可为 nullptr
+    void   (*onCommand)(void *self, const Command &, CommandResult &) noexcept; // 可为 nullptr
 };
 struct Module {
     std::string_view name;   // 控制台 / 日志用
     ModuleId id;             // enum class，CommandBus 寻址
     ExecutorId executor;     // 所属执行器
-    uint16_t poll_period_ms; // 0 = 每轮都调用
+    uint16_t pollPeriodMs; // 0 = 每轮都调用
     void *self;
     const ModuleOps *ops;
 };
@@ -124,12 +124,12 @@ struct Module {
 ### 3.5 J0 冻结的接口细节（v3）
 
 - **锁注入**：纯组件不能包含 FreeRTOS 头，跨任务共享的 `Slot<T>`、`FanoutRing` 通过 `app::LockOps`（函数指针 + ctx）注入锁；
-  目标板由 `rtk::os::spin_lock_ops(portMUX_TYPE&)` 提供（临界区内只做 memcpy，单次 ≤ 1 KB），host 测试用 `app::kNoLock`。
+  目标板由 `rtk::os::spinLockOps(portMUX_TYPE&)` 提供（临界区内只做 memcpy，单次 ≤ 1 KB），host 测试用 `app::kNoLock`。
   不用无锁 seqlock：C++ 内存模型下对非原子负载的并发拷贝是数据竞争（UB），而临界区代价可度量且足够小。
 - **模块 poll 返回 bool**：返回 true 表示仍有待处理工作（如 RX 积压），执行器本轮等待时间取 0，复现基线的 `rx_pending` 行为。
-- **执行器等待钩子**：执行器每轮先调用可选 `wait(ctx, max_ms)`（kLink 用 `rtk_bt_spp_poll_event` 的阻塞等待），没有钩子时阻塞在命令队列上。
-  命令在每轮开头处理，最坏延迟 = 一轮（≤ 20 ms + 1 tick）。每轮末 `vTaskDelay(yield_ticks)`（基线为 1）。
-- **CommandBus 并入执行器**：`Executor::call(cmd, result, timeout_ms)` 同步调用，按 seq 匹配，超时返回 `kTimeout`；结果队列满时丢最旧。
+- **执行器等待钩子**：执行器每轮先调用可选 `wait(ctx, maxMs)`（kLink 用 `rtk_bt_spp_poll_event` 的阻塞等待），没有钩子时阻塞在命令队列上。
+  命令在每轮开头处理，最坏延迟 = 一轮（≤ 20 ms + 1 tick）。每轮末 `vTaskDelay(yieldTicks)`（基线为 1）。
+- **CommandBus 并入执行器**：`Executor::call(cmd, result, timeoutMs)` 同步调用，按 seq 匹配，超时返回 `kTimeout`；结果队列满时丢最旧。
   只允许一个调用者任务（控制台）；多调用者以后加 per-caller 结果队列，不改 Command 结构。
 - **路由绑定**：服务提供 `static constexpr Route kRoutes[]`（handler 签名 `DispatchResult(void *self, const FrameView&, uint32_t, Reply&)`），
   `CommandRouter::init(span<const RouteTable>)` 在启动时把 `{self, routes}` 展开到固定容量索引并检查重复 msg_id（重复 → `kInvalidArg`）。
@@ -142,19 +142,19 @@ struct Module {
 
 1. **FanoutRing（app_fw，一写多读）**：GNSS 输出这类“一路数据发往多个出口”的场景；存储由调用方提供，不分配堆，最多 `kFanoutMaxReaders=4`。
    legacy 保留 2B 小端长度头、`init/attach/write/read`、至少容纳两条最大记录的容量规则与原统计语义；写满整条覆盖，落后读者整条跳过并累计 `dropped`。
-   K1 按 ADR-0011 §5 新增 typed mode：`init_typed` 使用二次幂容量（小于 2^31），容量至少为 `max_record+3`；记录头为 2B 小端长度 + 1B type（0..31）。
-   `attach(mask,id)` 支持 32bit 订阅掩码（含 0）；无匹配在线读者时不发布，返回 `kOk` 并计 `no_subscriber`。`set_mask` 无租约时可用，从当前 head 开始。
-   `peek` 返回只含整条负载的至多两段只读 span 和 `{generation,serial,reader_id}` 租约；每读者最多一份，`commit` 消费整条，`cancel` 释放而不消费。
-   租约期间 span 不覆盖、不搬动；阻挡写入时立即整条拒新 `kBusy`，计 writer 与匹配读者 `pinned_drop`，不计覆盖。无 pin 时仍整条覆盖；筛除计 `filtered`，覆盖订阅记录计 `dropped`。
+   K1 按 ADR-0011 §5 新增 typed mode：`initTyped` 使用二次幂容量（小于 2^31），容量至少为 `maxRecord+3`；记录头为 2B 小端长度 + 1B type（0..31）。
+   `attach(mask,id)` 支持 32bit 订阅掩码（含 0）；无匹配在线读者时不发布，返回 `kOk` 并计 `noSubscriber`。`setMask` 无租约时可用，从当前 head 开始。
+   `peek` 返回只含整条负载的至多两段只读 span 和 `{generation,serial,readerId}` 租约；每读者最多一份，`commit` 消费整条，`cancel` 释放而不消费。
+   租约期间 span 不覆盖、不搬动；阻挡写入时立即整条拒新 `kBusy`，计 writer 与匹配读者 `pinnedDrop`，不计覆盖。无 pin 时仍整条覆盖；筛除计 `filtered`，覆盖订阅记录计 `dropped`。
    写者先在锁内检查全部 pin 并保留区间，逐条淘汰时逐次释放锁；读者不得在待覆盖前缀新建 pin，可逐条协助淘汰。长负载仅在保留空闲区锁外复制，最后锁内发布，读者不可见半条记录；typed 每段临界区只处理一条 3B 头和至多 4 个读者，低于 1KiB 复制上限。
    typed u32 位置回绕不旋转存储；generation/serial 永不复用：serial 达 UINT32_MAX 后 `peek` 返回 `kInvalidState`，须 detach/attach 换 generation；generation 达 UINT32_MAX 的槽在 detach 后永久退役，空闲槽均退役时 attach 返回 `kInvalidState`。
-   有租约时 detach/set_mask 返回 `kBusy`；无效、过期、重复 token 返回 `kInvalidArg`，不改变当前租约。销毁前须任务与租约静止并丢弃全部 token，禁止携旧 token 重建对象。
+   有租约时 detach/setMask 返回 `kBusy`；无效、过期、重复 token 返回 `kInvalidArg`，不改变当前租约。销毁前须任务与租约静止并丢弃全部 token，禁止携旧 token 重建对象。
    legacy/typed 专用接口混用返回 `kNotSupported`，detach/base stats 共用；typed 新统计独立扩展。单写者、每 id 单读者；锁由 `fw::LockOps` 注入，非 ISR 安全。BT 调用方的租约只覆盖一次总量 ≤4096B 的锁外有界复制，不跨 IO/等待。
    K1 仅实现原语与 host 回归，不接入业务；类布局变更要求重编译，不承诺二进制 ABI 兼容。
-2. **StoreKey 元数据**：在存储描述之外加 `flags`（控制台可见 / 参与导入导出 / 只读 / 需重启生效）、`min/max`、`product_mask`、`help`，
+2. **StoreKey 元数据**：在存储描述之外加 `flags`（控制台可见 / 参与导入导出 / 只读 / 需重启生效）、`min/max`、`productMask`、`help`，
    使同一张表以后驱动 NVS、控制台 `cfg get/set` 和 App 配置（对应 SparkFun `rtkSettingsEntries[]`，但静态、类型化、按模块分表）。
    本轮只迁移白名单与 SN 两个键；`cfg` 命令不做。
-3. **系统工作模式**：预留 `Topic SystemMode{mode, since_ms}` 与 `ModuleId::kSystemMode` 位置（对应 SparkFun `States.ino`），本轮不实现状态机。
+3. **系统工作模式**：预留 `Topic SystemMode{mode, sinceMs}` 与 `ModuleId::kSystemMode` 位置（对应 SparkFun `States.ino`），本轮不实现状态机。
 
 不借鉴：运行时多型号识别与 GNSS 虚基类（等第二款硬件再开 ADR）、网络消费者模型（无网络）、运行时可调任务优先级（违反静态可验证）。
 
@@ -165,7 +165,7 @@ struct Module {
 ```
 app_main
   ├─ nvs/store 初始化 ── storage_module.init()：按 kKeys 读取 NVS（白名单、SN）→ 写入 DataCenter
-  ├─ rtk_bt 初始化（失败 → system_module 记录 bt_ready=false，继续运行控制台）
+  ├─ rtk_bt 初始化（失败 → system_module 记录 btReady=false，继续运行控制台）
   ├─ for m in kModules: m.ops->init(m.self)          // 任一失败 → 日志 + 标记，不启动该模块
   ├─ CommandRouter 组装（constexpr，无运行时成本）
   ├─ Executor kLink.start()  → 每个模块 start() → 进入轮询
@@ -177,11 +177,11 @@ app_main
 ```
 BTC 回调 ── 拷贝到会话 RX StreamBuffer ── 非阻塞投递事件队列 + portMUX 外唤醒 kLink
 kLink 每轮（从上次下一会话轮转，受字节与 20 ms 时间预算约束）：
-  drain_rx（每会话单次 read 默认 512 B，保留未消费尾部）
+  drainRx（每会话单次 read 默认 512 B，保留未消费尾部）
     └─ StaticDemux（逐字节/逐帧 feed，产品帧 pending 或回复无 credit 时暂停）
          ├─ 产品帧 → LinkService.on_data → FrameParser → 预留280B reply信用
          │            → LinkManager角色检查 → CommandRouter.dispatch(msg_id, role)
-         │                 └─ services/xxx handler → Reply → commit_reply（非阻塞，消耗既有信用）
+         │                 └─ services/xxx handler → Reply → commitReply（非阻塞，消耗既有信用）
          │            信用不足：保留完整 pending 帧与未消费尾部，只暂停该会话 RX；TX_SPACE/睡眠前 level 重查恢复
          ├─ RTCM（仅 PHONE）→ Demux 回调直接校验角色并整帧推入 RtcmPipe（≤1029B，满则整帧丢弃）
          │                      → 通路小快照累计；rtcm_module 只计算速率差量与管理 reset epoch
@@ -213,7 +213,7 @@ kLink 每轮（从上次下一会话轮转，受字节与 20 ms 时间预算约�
    ├─ 只读命令（status 等）：直接 DataCenter.read(Topic) → 打印        // 不进链路任务
    └─ 改状态命令（alarm/pair/wl/sn/rtcm reset）：
         CommandBus.post({module=ModuleId::X, verb, args}, timeout)
-          → kLink 本轮开头取出 → 模块 on_command() → CommandResult{seq}
+          → kLink 本轮开头取出 → 模块 onCommand() → CommandResult{seq}
           → console 按 seq 匹配结果 → 打印（超时打印 "timeout"）
 ```
 

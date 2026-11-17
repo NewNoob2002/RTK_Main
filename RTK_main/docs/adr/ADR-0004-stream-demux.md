@@ -82,7 +82,7 @@
 
 ## 7. 固件集成（下一阶段，本批次不做）
 
-- 蓝牙会话的 `drain_rx`（`main/app_link.cpp`）改为把 StreamBuffer 读出的块整块 `rtk_demux_feed()`；实例挂 `{rtk_proto_demux_decoder, rtk_demux_dec_rtcm3}`，产品帧优先。
+- 蓝牙会话的 `drainRx`（`main/app_link.cpp`）改为把 StreamBuffer 读出的块整块 `rtk_demux_feed()`；实例挂 `{rtk_proto_demux_decoder, rtk_demux_dec_rtcm3}`，产品帧优先。
 - 产品帧 → 现有 `LinkService`（经 `rtk_proto_frame_view` 解出字段）；RTCM 帧 → GNSS UART 发送管道（StreamBuffer，满则丢整帧并计数），不受“每轮一帧”限制。只接受 PHONE 角色会话的 RTCM。
 - 未知字节只计数。会话断开时 `rtk_demux_abort()`。
 - 现有 `FrameParser`（ADR-0003 冻结）保留，供报警器 C 固件与现有测试使用。
@@ -115,5 +115,5 @@
 | `rtk_demux` 组件（C） | `stream_demux` 组件（C++）：`components/stream_demux/include/demux/{Demux,StaticDemux,Decoder,TextWriter,Crc}.hpp`、`include/demux/decoders/*.hpp`、`src/{Demux,Crc}.cpp` |
 | `rtk_demux_t` / `rtk_demux_feed()` / `rtk_demux_abort()` | `demux::StaticDemux` 实例与 `feed()` / `abort()` 成员（命名空间 `demux`） |
 | `rtk_proto_demux.h`、`rtk_proto_demux_decoder` | `proto/DemuxFrame.hpp`（`device_proto`），产品帧解码器在 `proto::demux_frame` |
-| `main/app_link.cpp` 的 `drain_rx` | `main/modules/bt_link/BtLinkModule.cpp` |
+| `main/app_link.cpp` 的 `drainRx` | `main/modules/bt_link/BtLinkModule.cpp` |
 | `rtk_proto_frame_view` | `proto/Frame.hpp` 的字段视图接口 |
