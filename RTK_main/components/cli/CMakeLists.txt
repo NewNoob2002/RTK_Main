@@ -1,5 +1,5 @@
 # 控制台组件（ADR-0007 §3.3）：esp_console REPL + 命令表登记 + 参数解析辅助。
-# 只依赖 IDF（console、esp_system、串口驱动），不依赖任何自有业务组件（含 app_fw）。
+# 依赖 IDF（console、esp_system、串口驱动）与框架基座 app_fw（fw/Log.hpp，AGENTS.md §3），不依赖其他自有组件。
 # src/Reply.cpp 与 src/Out.cpp 只用 C/C++ 标准库（无 IDF 头），host 测试直接编译。
 idf_component_register(
     SRCS "src/Console.cpp" "src/Parse.cpp" "src/Reply.cpp" "src/Out.cpp"

@@ -83,6 +83,8 @@ C 版实现（BATCH-A 已通过独立验收；BATCH-B 只有实现方自报的�
 
 - **2026-11-12 冻结接口演进（追加，不改原有语义）**：`core::LinkManager` 新增 `whitelist_add(const BtAddr&)` / `whitelist_remove(const BtAddr&)`，返回 `core::WhitelistEdit{kDone,kUnchanged,kFull}`；remove 删除后条目前移保持顺序；两者与 `whitelist_clear()` 一致，不影响已连接会话的角色（断开重连后按新白名单判定）。`core::LinkTrace` 追加 `kWhitelistRemove`（a = 白名单数量）；手动 add 复用 `kWhitelistAdd`（handle = 0）。用途：控制台 `wl add/del <MAC>`（`LinkVerb::kWhitelistAdd/kWhitelistDel`，args = 6 字节 MAC，改动立即落 NVS）。用例：`test/host/TestLinkManager.cpp` `test_whitelist_add_remove_single`、`test_whitelist_add_full`。
 
+- **2026-11-17 现场升级（OTA）暂不实施（Q2，用户确认）**：本期不做现场升级，不开 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`。`partitions.csv` 保持现状：`otadata`、`ota_0`、`ota_1` 来自已在硬件上使用的 E1-5.4 `partitions_ota.csv`，保留只为布局兼容，app 槽 0x1A0000 仍是固件体积上限。以后做 OTA 时：开回滚、首次连通后调用 `esp_ota_mark_app_valid_cancel_rollback()`，并另立 ADR 写掉电安全与镜像校验。技能 ESP-007/BOOT-002 记为「有意偏离（延后）」（`docs/CODING-STYLE.md` §10）。
+
 ## 10. 勘误 2026-11-17（组件改名后的当前名称）
 
 本节只订正名称与路径事实，不改变第 2–9 节的决定；改名依据 ADR-0008 §9 的映射表。

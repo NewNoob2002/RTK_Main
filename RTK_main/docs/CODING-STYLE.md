@@ -290,7 +290,7 @@ if (!is_ok(status)) {
 
 只读大对象传 `const T &`，连续数据传 `std::span<const T>`（轻量视图按值传递）；输出参数放最后。
 小标量按值传；业务 API 不用裸 `void *` 传上下文，只有 C/框架跳板可以恢复已知对象类型。
-每处 `static_cast` 都需注释说明数值范围或类型恢复为何安全；C++ 不用 C 风格转换。
+以下 `static_cast` 必须在同行或上一行注释说明数值范围或类型恢复为何安全：窄化（宽→窄、浮点→整数）、符号变化（有符号↔无符号）、指针↔整数、枚举↔整数、`void *` 恢复对象类型；拓宽且同符号的转换不强制注释（Q2 决定：原规则覆盖所有转换无法执行，存量不批量补，改到哪处补哪处）。C++ 不用 C 风格转换。
 
 ```cpp
 // 这样写
@@ -573,6 +573,9 @@ value = (uint16_t)((uint32_t)data[0] | ((uint32_t)data[1] << 8U));
 布局不在此重复维护：日常用仓库 `.clang-format`，C++ 静态检查用 `.clang-tidy`，C 用 `.clang-tidy-c`；
 权威格式门禁是 `clang-format --style=file`（仓库 `.clang-format`，用户 2026-11-13 决定）；IDF 的 astyle 规则与
 `.clang-format` 冲突（续行缩进、`T {x}` 空格），不得用 astyle 改写本仓库文件，仅可作参考。
+生成文件（脚本输出、厂商生成代码）第一行写明用途和生成脚本路径（如 `由 <脚本> 生成`），不要手改，不参加格式门禁，
+由生成脚本保证可复现（技能 GEN-007；当前唯一一处是 `test/stream_demux_dev/h2/H2Vectors.h`，排除写在
+`docs/acceptance.md` G5）。
 格式工具不能替代线程契约、命名语义、内存档位及错误路径审查；不得通过放宽告警或改冻结配置消除发现。
 
 ```sh
@@ -623,7 +626,7 @@ default:
 
 本表由 Q1 审计（2026-11-17）建立：只列对本工程适用或需要说明不适用的技能规则。状态取值：
 **覆盖**（已落地且有门禁/证据）、**有意偏离**（本工程规则更具体且有理由）、**缺口**（技能要求尚无对应做法，
-具体待决提议见 `docs/reports/Q1.md` §5）、**不适用**（本工程无该场景）。规则优先级见技能 `SKILL.md`：
+Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**不适用**（本工程无该场景）。规则优先级见技能 `SKILL.md`：
 项目显式规则高于技能默认值，所以「有意偏离」不等于错误，但理由必须写在「依据或理由」列。
 
 | 技能 Rule ID | 技能要求（一句话） | 本项目做法 | 状态 | 依据或理由 |
@@ -634,7 +637,7 @@ default:
 | GEN-004 | 提交不带 agent `Signed-off-by`，生成代码记录工具与模型并指定人类 owner | `Generated-by: pi + <模型>` trailer，禁止 Signed-off-by | 覆盖 | AGENTS.md §2 |
 | GEN-005 | 架构级改动走 Phase 1 审批 | ADR 由架构方批准后才落地 | 覆盖 | docs/adr/*.md |
 | GEN-006 | 测试基准来自规格，不取自实现输出 | 解码向量由脚本独立算 CRC/长度 | 覆盖 | test/stream_demux_dev/h2/gen_vectors.py |
-| GEN-007 | 厂商生成代码不重排、不进门禁 | `reference/` 只读不参与构建；生成物 `test/stream_demux_dev/h2/H2Vectors.h` 仍被格式门禁扫到 | 缺口 | Q1-A05 |
+| GEN-007 | 厂商生成代码不重排、不进门禁 | `reference/` 只读不参与构建；生成物 `test/stream_demux_dev/h2/H2Vectors.h` 不参加格式门禁，规则见 §9 | 覆盖 | §9、docs/acceptance.md G5 |
 | GEN-008 | 向上游提交只用上游规格 | 本仓库无上游提交 | 不适用 | — |
 | GEN-009 | 外设等待有界、时钟在该阶段有效、tick 回绕安全 | BT 初始化按阶段位 + 超时；时间差用无符号运算 | 覆盖 | components/spp_server/SppServerInit.c、components/rtos/ |
 | GEN-010 | 校验外部输入的长度与范围 | 帧长在进缓冲前判上界 | 覆盖 | components/stream_demux/、components/device_proto/ |
@@ -642,7 +645,7 @@ default:
 | CPPF-001 | 布局按项目选定的风格 | 仓库 `.clang-format` | 有意偏离 | AGENTS.md §5：clang-format 为唯一门禁 |
 | CPPF-002 | 命名按项目风格 | §3 + ADR-0008 §9 | 覆盖 | §3 |
 | ARCH-007 | 驱动状态放设备上下文，分段初始化逐个查返回 | GNSS 驱动实例层次 + `init()` 返回 Status | 覆盖 | components/gnss/ |
-| C-001 | 不用 volatile 做任务同步 | §5.3 同款；现存一处双重检查 volatile（Q1-A06） | 覆盖 | §5.3 |
+| C-001 | 不用 volatile 做任务同步 | §5.3 同款；`components/cli/src/Out.cpp` 的 volatile 双重检查在 Q2 改为原子一次性初始化 | 覆盖 | §5.3、Q2 |
 | C-002 | 模块外部以外的函数/变量 static | 文件作用域 `s_` 静态放匿名命名空间 | 覆盖 | §3 |
 | C-003 | 不留注释掉的代码 | 审查项 | 覆盖 | — |
 | C-004 | 宽度敏感处用定宽整数 | 协议字段全定宽 | 覆盖 | components/device_proto/ |
@@ -666,13 +669,13 @@ default:
 | DMA-001/002 | D-cache 对齐、ISR 只通知 | 无 DMA | 不适用 | — |
 | CPP-001 | T0–T2 关异常/RTTI/cxa_atexit，ELF 内无异常运行时 | `-fno-exceptions -fno-rtti`；ELF 仅 6 个白名单符号 | 覆盖 | docs/acceptance.md G7b |
 | CPP-002 | 无 RTTI typeinfo | 同上 | 覆盖 | 同上 |
-| CPP-003 | 堆分档：实时路径禁止、T1 只启动期、T2 固定池或注入分配器 | §7 三档 + g7b 白名单；T2 没有注入分配器 API，靠白名单审查 | 缺口 | §7、tools/g7b_check/heap_allowlist.txt |
+| CPP-003 | 堆分档：实时路径禁止、T1 只启动期、T2 固定池或注入分配器 | §7 三档 + g7b 白名单；全仓只有 `BootAlloc` 一处启动期分配，不提供注入分配器 API | 有意偏离 | §7、tools/g7b_check/heap_allowlist.txt；单一分配点不值得建分配器接口（Q2 决定） |
 | CPP-004 | 不用 `std::function` | 模块用 ops 结构体 + 静态蹦床 | 覆盖 | §6 |
 | CPP-005 | T0 不用分配容器，T1/T2 有界 | 只用 `std::array`/`std::span`/`std::string_view` | 覆盖 | §4 |
 | CPP-006 | 不用 iostream | 控制台走 `cli::out_printf` | 覆盖 | §5.1 |
 | CPP-007 | printf 只用于非实时路径，T0 禁 | `snprintf` 只出现在命令/日志格式化 | 覆盖 | §5.1 |
-| CPP-008 | 共享原子要 `static_assert(is_always_lock_free)` | 仅 `main/modules/bt_link/BtLinkModule.cpp` 一处 | 缺口 | main/AppContext.hpp、components/app_fw/ |
-| CPP-009 | 函数内静态的动态初始化受限 | `gnss::enabled_receivers()` 的 `kList` 仍是动态初始化 | 缺口 | components/gnss/src/Registry.cpp |
+| CPP-008 | 共享原子要 `static_assert(is_always_lock_free)` | 共享原子变量旁写 `static_assert(std::atomic<T>::is_always_lock_free)` | 覆盖 | main/AppContext.hpp、components/app_fw/src/（Q2） |
+| CPP-009 | 函数内静态的动态初始化受限 | 函数内静态与全局表须常量初始化；g7b 检查自有目标文件不得引用 `__cxa_guard_*` | 覆盖 | components/gnss/src/Registry.cpp、docs/acceptance.md G7b（Q2） |
 | CPP-010 | 全局/静态构造不访问硬件/RTOS/日志，显式 `init()` | `constexpr` 构造 + `[[nodiscard]] init()` | 覆盖 | §4.2 |
 | CPP-011 | 多态基类受保护非虚析构、实现类 `final` | 虚函数只限 `Transport`/`demux::Sink`/`gnss::Receiver` | 覆盖 | §4.3 |
 | CPP-012 | volatile 只用于 MMIO/DMA，不做复合运算 | 无 MMIO volatile | 覆盖 | — |
@@ -682,8 +685,8 @@ default:
 | CPP-017 | 不把位域用于寄存器映射 | 无位域映射 | 覆盖 | — |
 | CPP-020 | 全局用 `constinit`/`constexpr` | 执行器与模块表 `constinit` | 覆盖 | main/app/Executors.cpp |
 | TEST-001 | 测试基线：MCU C 用 Ceedling 等；已有框架可延续 | host 用 Unity + CTest，目标侧用 IDF Unity | 覆盖 | test/、test_apps/ |
-| TEST-002 | 新增/修改的 C 公共函数要有测试（正常/参数错误/依赖错误/边界） | C 侧用例集中在 device_proto/stream_demux，nvs_store 无 host 测试 | 缺口 | Q1-B（见报告） |
-| TEST-004 | 报告 Flash/RAM 增量与 `cpp_cost.py diff` | 报告给镜像字节与基线差，未用 `cpp_cost.py diff` | 缺口 | docs/reports/P3c.md |
+| TEST-002 | 新增/修改的 C 公共函数要有测试（正常/参数错误/依赖错误/边界） | C 侧用例集中在 device_proto/stream_demux，nvs_store 无 host 测试（需先对 nvs_flash 打桩） | 缺口 | 已知缺口，单独开卡 |
+| TEST-004 | 报告 Flash/RAM 增量与 `cpp_cost.py diff` | 报告给镜像字节、基线差与 `cpp_cost.py diff <基线 elf> <新 elf>` 结果 | 覆盖 | docs/acceptance.md G4（Q2 起） |
 | TEST-006 | C++ 公共函数同样要有测试 | 纯组件各有 host 测试目录 | 覆盖 | test/ |
 | FSM-001 | 每个状态都显式处理意外事件 | 重连/链路状态机的 switch 都有 default | 覆盖 | components/bt_reconnect/ |
 | PROTO-001 | 访问前校验帧长与剩余缓冲，校验通过才执行命令 | 解码器先校验长度/CRC 再交付 | 覆盖 | components/stream_demux/ |
@@ -692,7 +695,7 @@ default:
 | FAULT-001 | 启动记录复位原因，故障处理器写 noinit RAM/保留 flash | 记录并打印 `reset_reason`，无自有故障处理器 | 覆盖 | main/support/ResetReason.cpp |
 | DBG-001 | 调试器 halt/reset/flash/option bytes 属硬件动作需授权 | AGENTS §6 禁止 | 覆盖 | AGENTS.md §6 |
 | BOOT-001 | 跳转前校验镜像哈希 | 无自有 bootloader/现场升级 | 不适用 | — |
-| BOOT-002 | 掉电安全更新 + 回滚 | 分区表有 `ota_0`/`ota_1`，未开回滚、无更新流程 | 缺口 | partitions.csv、sdkconfig.defaults |
+| BOOT-002 | 掉电安全更新 + 回滚 | 本期不做现场升级；分区表保留 `ota_0`/`ota_1` 只为兼容 E1-5.4 布局 | 有意偏离（延后） | ADR-0002 Q2 补充决定 |
 | BOOT-003 | 反回滚计数器 | 同上 | 不适用 | — |
 | RV-001 | RISC-V 目标原子 RMW 走临界区 | 产品固件只构建 esp32；esp32c3 只做 `rtk_pure` 编译验证 | 不适用 | ADR-0002 §偏离 |
 | ESP-001 | SMP 临界区用自旋锁，临界区内不阻塞 | `portMUX_TYPE` + `taskENTER_CRITICAL` | 覆盖 | §5.3 |
@@ -701,6 +704,6 @@ default:
 | ESP-004 | 每个 `esp_err_t` 都检查，可恢复错误不用 `ESP_ERROR_CHECK` | 无 `ESP_ERROR_CHECK`、无 `(void)` 丢弃 | 覆盖 | Q1 审计 grep |
 | ESP-005 | eFuse/Secure Boot/Flash Encryption/JTAG 关闭需授权 | AGENTS §6 禁止 efuse | 覆盖 | AGENTS.md §6 |
 | ESP-006 | IDF 风格：4 空格、函数花括号换行、120 列、`s_` 前缀、组件前缀、`#pragma once`、Astyle | 前五项已落地，格式工具改用仓库 `.clang-format` | 有意偏离 | AGENTS.md §5：astyle 与 `.clang-format` 冲突 |
-| ESP-007 | OTA 至少两个分区 + otadata + 开启回滚 + mark valid | 有 otadata/`ota_0`/`ota_1`，未开 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | 缺口 | partitions.csv、sdkconfig.defaults |
+| ESP-007 | OTA 至少两个分区 + otadata + 开启回滚 + mark valid | 有 otadata/`ota_0`/`ota_1`；本期不做 OTA，未开回滚 | 有意偏离（延后） | ADR-0002 Q2 补充决定：做 OTA 时开 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 并在首次连通后 mark valid |
 | ESP-008 | Xtensa 与 RISC-V 都要能编，用 `CONFIG_IDF_TARGET_*`/`SOC_*` 隔离 | 产品固件只 esp32（经典蓝牙限制），纯组件经 `test_apps/rtk_pure` 双架构编译 | 有意偏离 | ADR-0002:70,76 |
-| ESP-009 | 用锁定版本的 IDF API，不关默认 `-Werror` | IDF v6.1 固定路径；仓库无 `dependencies.lock` | 缺口 | .gitignore 注释与现状不符 |
+| ESP-009 | 用锁定版本的 IDF API，不关默认 `-Werror` | IDF v6.1 固定路径；无托管组件，IDF 不生成 `dependencies.lock` | 覆盖 | AGENTS.md §1、.gitignore 注释（Q2） |

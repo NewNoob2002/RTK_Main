@@ -5,7 +5,7 @@ build-*/
 builds/
 /sdkconfig
 /sdkconfig.old
-# 组件管理器下载的依赖（dependencies.lock 需要提交，不在此忽略）
+# 组件管理器下载的依赖。本工程没有托管组件，IDF 不生成 dependencies.lock；IDF 版本由 AGENTS.md §1 固定。以后引入托管组件时须提交该文件。
 managed_components/
 
 # 编辑器 / 语言服务器缓存
