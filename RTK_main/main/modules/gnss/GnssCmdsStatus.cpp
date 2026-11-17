@@ -54,7 +54,6 @@ using detail::kTenthsBase;
 void printGnssCore(const GnssStatus &st) noexcept
 {
     cli::printSection("gnss");
-    cli::printSection("gnss");
     cli::printKv("enabled", "%s", st.enabled ? "yes" : "no");
     cli::printKv("state", "%s", ::gnss::stateName(st.state));
     cli::printKv("family", "%s", ::gnss::familyName(st.family));
