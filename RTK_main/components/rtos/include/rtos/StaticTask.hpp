@@ -63,7 +63,7 @@ public:
     }
 
     /** 栈高水位（剩余最小字节数）。未启动返回 0。 */
-    [[nodiscard]] uint32_t stack_high_water_mark() const noexcept
+    [[nodiscard]] uint32_t stackHighWaterMark() const noexcept
     {
         if (handle_ == nullptr) {
             return 0;
@@ -73,8 +73,8 @@ public:
         // 下面乘 sizeof(StackType_t) 是恒等换算，保留只为让接口按字节返回。
         // 剩余量 ≤ StackBytes / sizeof(StackType_t)，32 位目标上乘法不会溢出。
         const uint32_t words = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(handle_));
-        const uint32_t word_bytes = static_cast<uint32_t>(sizeof(StackType_t));
-        return words * word_bytes;
+        const uint32_t wordBytes = static_cast<uint32_t>(sizeof(StackType_t));
+        return words * wordBytes;
     }
 
 private:

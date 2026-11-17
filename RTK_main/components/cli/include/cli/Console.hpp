@@ -57,13 +57,13 @@ inline constexpr size_t kMacLen = 6;
 
 /* ---- 参数解析辅助（纯函数，失败返回 false 且不改 out） ---- */
 /** 十进制或 0x 前缀十六进制 → u32；空串/非法字符/溢出 → false。 */
-[[nodiscard]] bool parse_u32(const char *s, uint32_t &out) noexcept;
+[[nodiscard]] bool parseU32(const char *s, uint32_t &out) noexcept;
 /** 同上，但超出 0..255 → false。 */
-[[nodiscard]] bool parse_u8(const char *s, uint8_t &out) noexcept;
+[[nodiscard]] bool parseU8(const char *s, uint8_t &out) noexcept;
 /** "AA:BB:CC:DD:EE:FF"（大小写均可）。 */
-[[nodiscard]] bool parse_mac(const char *s, std::span<uint8_t, kMacLen> out) noexcept;
+[[nodiscard]] bool parseMac(const char *s, std::span<uint8_t, kMacLen> out) noexcept;
 /** 偶数个十六进制字符 → 字节，长度超过 out.size() → false；written 为写入字节数。 */
-[[nodiscard]] bool parse_hex(const char *s, std::span<uint8_t> out, size_t &written) noexcept;
+[[nodiscard]] bool parseHex(const char *s, std::span<uint8_t> out, size_t &written) noexcept;
 
 /* ---- 统一回执与子命令（ADR-0009 §2.5）----
  * init() 为每条命令注册一个 trampoline：handler 返回 0 → 打印 "OK"；返回非 0 且本次调用过 fail() →
@@ -89,23 +89,23 @@ struct Verb {
  * 没有动词且 default_verb 非空 → 按 default_verb 执行；否则打印本组用法并返回 fail("usage")。
  */
 int dispatch(std::span<const Verb> verbs, void *ctx, int argc, char **argv,
-             const char *default_verb = nullptr) noexcept;
+             const char *defaultVerb = nullptr) noexcept;
 
 /** 打印一组的用法（`help <组>` 与 dispatch 失败时使用）。 */
-void print_usage(const char *group, std::span<const Verb> verbs) noexcept;
+void printUsage(const char *group, std::span<const Verb> verbs) noexcept;
 
 /**
  * 登记一组的动词表，供 `help` 与 `help <组>` 显示（组名必须已经或将要经 add() 登记）。
  * 只保存指针；必须在 init/start 之前调用；超过 kMaxCmds → ESP_ERR_NO_MEM。
  */
-[[nodiscard]] esp_err_t add_verbs(const char *group, const char *summary,
-                                  std::span<const Verb> verbs) noexcept;
+[[nodiscard]] esp_err_t addVerbs(const char *group, const char *summary,
+                                 std::span<const Verb> verbs) noexcept;
 
 /* ---- 分节输出辅助（status、sys 等使用，统一对齐与单位）---- */
 
 /** 打印节标题，例如 "[link]"。 */
-void print_section(const char *title) noexcept;
+void printSection(const char *title) noexcept;
 /** 打印一行键值：键左对齐到固定宽度，值按 fmt 格式化。 */
-void print_kv(const char *key, const char *fmt, ...) noexcept __attribute__((format(printf, 2, 3)));
+void printKv(const char *key, const char *fmt, ...) noexcept __attribute__((format(printf, 2, 3)));
 
 } // namespace cli

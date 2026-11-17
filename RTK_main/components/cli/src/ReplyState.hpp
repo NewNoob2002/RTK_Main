@@ -7,10 +7,10 @@ namespace cli {
 namespace detail {
 
 /** 清除“本次命令已给出失败原因”标记；trampoline 在调用 handler 之前调用。 */
-void reply_reset() noexcept;
+void replyReset() noexcept;
 
 /** 本次命令是否已由 fail() 打印过原因。 */
-[[nodiscard]] bool reply_failed() noexcept;
+[[nodiscard]] bool replyFailed() noexcept;
 
 } // namespace detail
 } // namespace cli

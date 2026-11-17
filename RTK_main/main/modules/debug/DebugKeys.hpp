@@ -23,7 +23,7 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
     {.ns = "dbg",
      .key = "mask",
      .type = fw::StoreType::kU32,
-     .max_size = 4U,
+     .maxSize = 4U,
      .flags = fw::store_flag::kConsole,
      .min = 0,
      .max = static_cast<int32_t>(fw::kTraceAllMask),
@@ -32,7 +32,7 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
     {.ns = "dbg",
      .key = "report",
      .type = fw::StoreType::kU16,
-     .max_size = 2U,
+     .maxSize = 2U,
      .flags = fw::store_flag::kConsole,
      .min = 0,
      .max = 3600,
@@ -43,7 +43,7 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
     {.ns = "dbg",
      .key = "hex",
      .type = fw::StoreType::kU32,
-     .max_size = 4U,
+     .maxSize = 4U,
      .flags = fw::store_flag::kConsole,
      .min = 0,
      .max = static_cast<int32_t>(fw::kTraceAllMask),
@@ -52,10 +52,10 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
     {.ns = "dbg",
      .key = "loglv",
      .type = fw::StoreType::kU32,
-     .max_size = 4U,
+     .maxSize = 4U,
      .flags = fw::store_flag::kConsole,
      .min = 0,
-     .max = static_cast<int32_t>(fw::log_levels_all(fw::LogLevel::kDebug)),
+     .max = static_cast<int32_t>(fw::logLevelsAll(fw::LogLevel::kDebug)),
      .help = "per-category log level, 2 bits each (0=E 1=W 2=I 3=D)",
      .binding = {.obj = nullptr,
                  .load = &DebugModule::load_loglv,
@@ -66,6 +66,6 @@ static_assert(fw::valid(kKeys[kIdxMask]), "dbg/mask 必须是合法 u32 键");
 static_assert(fw::valid(kKeys[kIdxReport]), "dbg/report 必须是合法 u16 键");
 static_assert(fw::valid(kKeys[kIdxHex]), "dbg/hex 必须是合法 u32 键");
 static_assert(fw::valid(kKeys[kIdxLogLevel]), "dbg/loglv 必须是合法 u32 键");
-static_assert(fw::unique_keys(kKeys), "debug 键表不得有重复的 ns/key");
+static_assert(fw::uniqueKeys(kKeys), "debug 键表不得有重复的 ns/key");
 
 } // namespace app::debug

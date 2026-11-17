@@ -12,28 +12,28 @@ void DataCenter::init() noexcept
 {
     /* 启动前初始化自旋锁，并将所有主题绑定到上下文持有的同一把锁。 */
     portMUX_INITIALIZE(&mux);
-    const auto lock = rtos::spin_lock_ops(mux);
+    const auto lock = rtos::spinLockOps(mux);
     link_status.bind_lock(lock);
     link_status.write(LinkStatus{});
-    sessions.bind_lock(lock);
-    alarm_state.bind_lock(lock);
+    sessions.bindLock(lock);
+    alarm_state.bindLock(lock);
     heartbeat.bind_lock(lock);
     heartbeat.write(Heartbeat{});
-    link_stats.bind_lock(lock);
-    rtcm_stats.bind_lock(lock);
-    demux_stats.bind_lock(lock);
-    store_status.bind_lock(lock);
-    exec_stats.bind_lock(lock);
-    system_status.bind_lock(lock);
-    system_mode.bind_lock(lock);
-    rtcm_reset.bind_lock(lock);
+    link_stats.bindLock(lock);
+    rtcm_stats.bindLock(lock);
+    demux_stats.bindLock(lock);
+    store_status.bindLock(lock);
+    exec_stats.bindLock(lock);
+    system_status.bindLock(lock);
+    system_mode.bindLock(lock);
+    rtcm_reset.bindLock(lock);
 #if RTK_GNSS_ENABLED
-    io_exec_stats.bind_lock(lock);
-    gnss_status.bind_lock(lock);
+    io_exec_stats.bindLock(lock);
+    gnss_status.bindLock(lock);
     gnss_fix.bind_lock(lock);
     gnss_sats.bind_lock(lock);
-    gnss_out_cfg.bind_lock(lock);
-    gnss_readback.bind_lock(lock);
+    gnss_out_cfg.bindLock(lock);
+    gnss_readback.bindLock(lock);
     gnss_latest.bind_lock(lock);
     gnss_app_sub.bind_lock(lock);
 #endif
@@ -47,11 +47,11 @@ fw::Status DataCenter::init_gnss_buffers(std::span<uint8_t> app_ring_buf,
         (latest_buf.data() == nullptr) || (latest_buf.size() < kGnssLatestTotalBytes)) {
         return fw::Status::kInvalidArg;
     }
-    const auto lock = rtos::spin_lock_ops(mux);
+    const auto lock = rtos::spinLockOps(mux);
     // App typed FanoutRing 最大载荷 = 容量 - 3 B 记录头（ADR-0011 §5.3）。
-    if (gnss_app_ring.init_typed(app_ring_buf.first(kGnssAppRingBytes),
-                                 kGnssAppRingBytes - fw::kFanoutTypedHeaderBytes,
-                                 lock) != fw::Result::kOk) {
+    if (gnss_app_ring.initTyped(app_ring_buf.first(kGnssAppRingBytes),
+                                kGnssAppRingBytes - fw::kFanoutTypedHeaderBytes,
+                                lock) != fw::Result::kOk) {
         return fw::Status::kInvalidArg;
     }
     return gnss_latest.init(latest_buf);
@@ -65,7 +65,7 @@ void DataCenter::unbind_gnss_buffers() noexcept
     ::new (static_cast<void *>(&gnss_app_ring)) fw::FanoutRing{};
     gnss_latest.~GnssLatestCache();
     ::new (static_cast<void *>(&gnss_latest)) GnssLatestCache{};
-    gnss_latest.bind_lock(rtos::spin_lock_ops(mux));
+    gnss_latest.bind_lock(rtos::spinLockOps(mux));
 }
 #endif
 } // namespace app::data

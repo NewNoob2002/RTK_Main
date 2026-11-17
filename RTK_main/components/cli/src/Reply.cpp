@@ -27,7 +27,7 @@ constexpr size_t kValueMax = 160U;   // fail 原因 / print_kv 值先格式化�
 
 bool s_failed = false;
 
-bool same_text(const char *lhs, const char *rhs) noexcept
+bool sameText(const char *lhs, const char *rhs) noexcept
 {
     if ((lhs == nullptr) || (rhs == nullptr)) {
         return false;
@@ -36,7 +36,7 @@ bool same_text(const char *lhs, const char *rhs) noexcept
 }
 
 /** 把 esp_console 的 (argc, argv) 包成 span，避免在分派逻辑里做裸指针运算。 */
-std::span<char *const> arg_span(int argc, char **argv) noexcept
+std::span<char *const> argSpan(int argc, char **argv) noexcept
 {
     if ((argv == nullptr) || (argc <= 0)) {
         return {};
@@ -46,18 +46,18 @@ std::span<char *const> arg_span(int argc, char **argv) noexcept
 }
 
 /** handler 的签名固定为 char **（冻结接口）；span::data() 给 char *const *，这里只去掉指针本身的 const。 */
-char **mutable_args(std::span<char *const> args, size_t offset) noexcept
+char **mutableArgs(std::span<char *const> args, size_t offset) noexcept
 {
     return const_cast<char **>(args.subspan(offset).data());
 }
 
-const Verb *find_verb(std::span<const Verb> verbs, const char *name) noexcept
+const Verb *findVerb(std::span<const Verb> verbs, const char *name) noexcept
 {
     if (name == nullptr) {
         return nullptr;
     }
     for (const Verb &verb : verbs) {
-        if (same_text(verb.name, name)) {
+        if (sameText(verb.name, name)) {
             return &verb;
         }
     }
@@ -68,12 +68,12 @@ const Verb *find_verb(std::span<const Verb> verbs, const char *name) noexcept
 
 namespace detail {
 
-void reply_reset() noexcept
+void replyReset() noexcept
 {
     s_failed = false;
 }
 
-bool reply_failed() noexcept
+bool replyFailed() noexcept
 {
     return s_failed;
 }
@@ -91,57 +91,57 @@ int fail(const char *fmt, ...) noexcept
         (void)std::vsnprintf(reason.data(), reason.size(), fmt, args); // 超长截断：原因只是一行诊断
         va_end(args);
     }
-    out_printf("ERR %s\n", reason.data());
+    outPrintf("ERR %s\n", reason.data());
     return kCmdFail;
 }
 
-void print_usage(const char *group, std::span<const Verb> verbs) noexcept
+void printUsage(const char *group, std::span<const Verb> verbs) noexcept
 {
     // 按本表最长项定列宽，保证说明列对齐（例如 factory 的 "alarm-set <state> <level>"）。
-    size_t name_width = static_cast<size_t>(kNameWidth);
-    size_t usage_width = static_cast<size_t>(kUsageWidth);
+    size_t nameWidth = static_cast<size_t>(kNameWidth);
+    size_t usageWidth = static_cast<size_t>(kUsageWidth);
     for (const Verb &verb : verbs) {
         if (verb.name != nullptr) {
-            name_width = std::max(name_width, std::string_view{verb.name}.size());
+            nameWidth = std::max(nameWidth, std::string_view{verb.name}.size());
         }
         if (verb.usage != nullptr) {
-            usage_width = std::max(usage_width, std::string_view{verb.usage}.size());
+            usageWidth = std::max(usageWidth, std::string_view{verb.usage}.size());
         }
     }
     // 上限 kColumnMax(32)，转换为 int 无损。
-    const int name_col = static_cast<int>(std::min(name_width, kColumnMax));
-    const int usage_col = static_cast<int>(std::min(usage_width, kColumnMax));
-    out_printf("usage: %s <verb> [args]\n", (group != nullptr) ? group : "");
+    const int nameCol = static_cast<int>(std::min(nameWidth, kColumnMax));
+    const int usageCol = static_cast<int>(std::min(usageWidth, kColumnMax));
+    outPrintf("usage: %s <verb> [args]\n", (group != nullptr) ? group : "");
     for (const Verb &verb : verbs) {
         const char *name = (verb.name != nullptr) ? verb.name : "?";
         const char *usage = (verb.usage != nullptr) ? verb.usage : "-";
         if (verb.help != nullptr) {
-            out_printf("  %-*s %-*s %s\n", name_col, name, usage_col, usage, verb.help);
+            outPrintf("  %-*s %-*s %s\n", nameCol, name, usageCol, usage, verb.help);
         } else {
-            out_printf("  %-*s %s\n", name_col, name, usage);
+            outPrintf("  %-*s %s\n", nameCol, name, usage);
         }
     }
 }
 
 int dispatch(std::span<const Verb> verbs, void *ctx, int argc, char **argv,
-             const char *default_verb) noexcept
+             const char *defaultVerb) noexcept
 {
-    const std::span<char *const> args = arg_span(argc, argv);
+    const std::span<char *const> args = argSpan(argc, argv);
     const char *group = (args.size() > 0U) ? args[0] : ""; // 组名只用于诊断输出
     if (args.size() > 1U) {
-        const Verb *verb = find_verb(verbs, args[1]);
+        const Verb *verb = findVerb(verbs, args[1]);
         if (verb == nullptr) {
-            print_usage(group, verbs);
+            printUsage(group, verbs);
             return fail("usage");
         }
         if (verb->handler == nullptr) {
             // 动词表由实现方维护，缺 handler 属表的缺陷，仍按命令失败处理而不是崩溃。
             return fail("%s: no handler", (verb->name != nullptr) ? verb->name : "?");
         }
-        return verb->handler(ctx, argc - 1, mutable_args(args, 1U));
+        return verb->handler(ctx, argc - 1, mutableArgs(args, 1U));
     }
-    if (default_verb != nullptr) {
-        const Verb *verb = find_verb(verbs, default_verb);
+    if (defaultVerb != nullptr) {
+        const Verb *verb = findVerb(verbs, defaultVerb);
         if ((verb != nullptr) && (verb->handler != nullptr) && (verb->name != nullptr)) {
             // handler 约定 argv[0] 为动词本身；Verb::name 是 const，复制到栈上可写缓冲再传入，
             // 这样不必对冻结签名里的 char ** 做 const_cast。
@@ -149,22 +149,22 @@ int dispatch(std::span<const Verb> verbs, void *ctx, int argc, char **argv,
             if (name.size() >= kVerbNameMax) {
                 return fail("verb name too long");
             }
-            std::array<char, kVerbNameMax> name_buf{};
-            std::copy(name.begin(), name.end(), name_buf.begin());
-            std::array<char *, 1> single{name_buf.data()};
+            std::array<char, kVerbNameMax> nameBuf{};
+            std::copy(name.begin(), name.end(), nameBuf.begin());
+            std::array<char *, 1> single{nameBuf.data()};
             return verb->handler(ctx, 1, single.data());
         }
     }
-    print_usage(group, verbs);
+    printUsage(group, verbs);
     return fail("usage");
 }
 
-void print_section(const char *title) noexcept
+void printSection(const char *title) noexcept
 {
-    out_printf("[%s]\n", (title != nullptr) ? title : "");
+    outPrintf("[%s]\n", (title != nullptr) ? title : "");
 }
 
-void print_kv(const char *key, const char *fmt, ...) noexcept
+void printKv(const char *key, const char *fmt, ...) noexcept
 {
     std::array<char, kValueMax> value{};
     if (fmt != nullptr) {
@@ -173,7 +173,7 @@ void print_kv(const char *key, const char *fmt, ...) noexcept
         (void)std::vsnprintf(value.data(), value.size(), fmt, args); // 超长截断：一行一个值
         va_end(args);
     }
-    out_printf("  %-*s %s\n", kKeyWidth, (key != nullptr) ? key : "", value.data());
+    outPrintf("  %-*s %s\n", kKeyWidth, (key != nullptr) ? key : "", value.data());
 }
 
 } // namespace cli

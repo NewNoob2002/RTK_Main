@@ -56,7 +56,7 @@ void print_mac(const core::BtAddr &addr) noexcept
 {
     std::array<char, kMacStrBuf> text{};
     format_mac(addr, text);
-    cli::out_printf("%s", text.data());
+    cli::outPrintf("%s", text.data());
 }
 
 bool report(const char * /*what*/, const fw::CommandResult &result) noexcept
@@ -85,7 +85,7 @@ bool report(const char * /*what*/, const fw::CommandResult &result) noexcept
 bool submit_raw_to(rtos::Executor &executor, ModuleKind module, const char *down_msg,
                    const fw::Command &command, fw::CommandResult &out) noexcept
 {
-    if (!executor.running() || !executor.module_ok(id(module))) {
+    if (!executor.running() || !executor.moduleOk(id(module))) {
         (void)cli::fail("%s", down_msg != nullptr ? down_msg : "executor not running");
         return false;
     }

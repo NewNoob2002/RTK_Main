@@ -74,7 +74,7 @@ void assert_event(Step step, core::LinkTrace code, SessionHandle session, uint32
     TEST_ASSERT_EQUAL_UINT32(session, static_cast<uint32_t>(event.session));
     TEST_ASSERT_EQUAL_UINT32(a, event.a);
     TEST_ASSERT_EQUAL_UINT32(b, event.b);
-    TEST_ASSERT_EQUAL_UINT32(kNowMs, event.t_ms);
+    TEST_ASSERT_EQUAL_UINT32(kNowMs, event.tMs);
 }
 
 } // namespace
@@ -84,7 +84,7 @@ static void test_open_hello_close_event_sequence()
 {
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(fw::Result::kOk),
-        static_cast<uint8_t>(fw::trace_install(&record_sink, nullptr, &fixed_clock)));
+        static_cast<uint8_t>(fw::traceInstall(&record_sink, nullptr, &fixed_clock)));
 
     LinkManager manager{};
     // 空白名单：init 会原样拷入 span 里的每一项，传空 span 才是“没有已授权报警器”。
@@ -129,7 +129,7 @@ extern "C" void setUp(void)
     s_count = 0U;
     s_events.fill(fw::TraceEvent{});
     // 运行时默认掩码为 0（ADR-0009 §2.7），本组用例要观察全部类别。
-    fw::trace_set_mask(fw::kTraceAllMask);
+    fw::traceSetMask(fw::kTraceAllMask);
 }
 
 extern "C" void tearDown(void) {}

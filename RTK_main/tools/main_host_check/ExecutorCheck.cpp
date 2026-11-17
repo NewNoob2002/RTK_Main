@@ -109,33 +109,33 @@ void lifecycle()
         {"unsupported", 5, 0, 0, nullptr, &kUnsupportedOps},
     }};
     rtos::ExecutorConfig cfg{
-        .name = "test", .priority = 10, .core = 1, .wait = wait, .wait_ctx = &healthy};
+        .name = "test", .priority = 10, .core = 1, .wait = wait, .waitCtx = &healthy};
     CHECK(executor.start() == fw::Status::kInvalidState);
-    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kOk);
-    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kBusy);
+    CHECK(executor.init(cfg, modules, rtos::viewOf(storage)) == fw::Status::kOk);
+    CHECK(executor.init(cfg, modules, rtos::viewOf(storage)) == fw::Status::kBusy);
     CHECK(healthy.init == 1 && bad_init.init == 1 && bad_start.init == 1);
-    CHECK(!executor.module_ok(2) && executor.module_ok(3));
+    CHECK(!executor.moduleOk(2) && executor.moduleOk(3));
     CHECK(executor.start() == fw::Status::kOk && s_created_bytes == 6144);
     CHECK(executor.start() == fw::Status::kBusy);
     fw::Command a{.target = 2, .seq = 7};
     fw::Command b{.target = 5, .seq = 8};
-    CHECK(xQueueSend(&storage.cmd_queue, &a, 0) == pdTRUE);
-    CHECK(xQueueSend(&storage.cmd_queue, &b, 0) == pdTRUE);
+    CHECK(xQueueSend(&storage.cmdQueue, &a, 0) == pdTRUE);
+    CHECK(xQueueSend(&storage.cmdQueue, &b, 0) == pdTRUE);
     fw::CommandResult stale{};
-    CHECK(xQueueSend(&storage.result_queue, &stale, 0) == pdTRUE);
-    CHECK(xQueueSend(&storage.result_queue, &stale, 0) == pdTRUE);
+    CHECK(xQueueSend(&storage.resultQueue, &stale, 0) == pdTRUE);
+    CHECK(xQueueSend(&storage.resultQueue, &stale, 0) == pdTRUE);
     s_round_limit = 3;
     pump();
     CHECK(healthy.start == 1 && bad_init.start == 0 && bad_start.start == 1);
     CHECK(healthy.poll == 3 && bad_init.poll == 0 && bad_start.poll == 0);
-    CHECK(periodic.poll == 2 && !executor.module_ok(3));
+    CHECK(periodic.poll == 2 && !executor.moduleOk(3));
     CHECK(healthy.waits[0] == 20 && healthy.waits[1] == 0 && healthy.waits[2] == 20);
     const auto stats = executor.stats();
-    CHECK(stats.rounds == 3 && stats.overruns == 3 && stats.max_round_ms == 21);
-    CHECK(stats.commands == 2 && stats.result_drops == 2 && stats.stack_free == 2048);
-    CHECK(xQueueReceive(&storage.result_queue, &stale, 0) == pdTRUE);
+    CHECK(stats.rounds == 3 && stats.overruns == 3 && stats.maxRoundMs == 21);
+    CHECK(stats.commands == 2 && stats.resultDrops == 2 && stats.stackFree == 2048);
+    CHECK(xQueueReceive(&storage.resultQueue, &stale, 0) == pdTRUE);
     CHECK(stale.seq == 7 && stale.status == fw::Result::kInvalidState);
-    CHECK(xQueueReceive(&storage.result_queue, &stale, 0) == pdTRUE);
+    CHECK(xQueueReceive(&storage.resultQueue, &stale, 0) == pdTRUE);
     CHECK(stale.seq == 8 && stale.status == fw::Result::kNotSupported);
 }
 void calls()
@@ -149,16 +149,16 @@ void calls()
     fw::Command cmd{.target = 1};
     fw::CommandResult result{};
     CHECK(executor.call(cmd, result, 10) == fw::Result::kInvalidState);
-    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kOk);
+    CHECK(executor.init(cfg, modules, rtos::viewOf(storage)) == fw::Status::kOk);
     CHECK(executor.start() == fw::Status::kOk);
     cmd.target = 9;
     CHECK(executor.call(cmd, result, 10) == fw::Result::kNotFound);
     cmd.target = 1;
-    CHECK(xQueueSend(&storage.cmd_queue, &cmd, 0) == pdTRUE);
-    CHECK(xQueueSend(&storage.cmd_queue, &cmd, 0) == pdTRUE);
+    CHECK(xQueueSend(&storage.cmdQueue, &cmd, 0) == pdTRUE);
+    CHECK(xQueueSend(&storage.cmdQueue, &cmd, 0) == pdTRUE);
     CHECK(executor.call(cmd, result, 10) == fw::Result::kBusy);
-    CHECK(xQueueReceive(&storage.cmd_queue, &cmd, 0) == pdTRUE);
-    CHECK(xQueueReceive(&storage.cmd_queue, &cmd, 0) == pdTRUE);
+    CHECK(xQueueReceive(&storage.cmdQueue, &cmd, 0) == pdTRUE);
+    CHECK(xQueueReceive(&storage.cmdQueue, &cmd, 0) == pdTRUE);
     cmd.args[0] = 11;
     CHECK(executor.call(cmd, result, 10) == fw::Result::kTimeout);
     cmd.args[0] = 22;
@@ -180,24 +180,24 @@ void invalid()
     static constinit rtos::Executor executor{};
     static constinit rtos::ExecutorStorage<6144, 2> storage{};
     rtos::ExecutorConfig cfg{};
-    CHECK(executor.init(cfg, {}, rtos::view_of(storage)) == fw::Status::kInvalidArg);
+    CHECK(executor.init(cfg, {}, rtos::viewOf(storage)) == fw::Status::kInvalidArg);
     cfg.name = "invalid";
-    auto view = rtos::view_of(storage);
-    view.cmd_area = {};
+    auto view = rtos::viewOf(storage);
+    view.cmdArea = {};
     CHECK(executor.init(cfg, {}, view) == fw::Status::kInvalidArg);
     std::array<fw::Module, 2> modules{
         {{"a", 1, 0, 0, nullptr, &kUnsupportedOps}, {"b", 1, 0, 0, nullptr, &kUnsupportedOps}}};
-    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kInvalidArg);
+    CHECK(executor.init(cfg, modules, rtos::viewOf(storage)) == fw::Status::kInvalidArg);
     modules[1].id = 2;
     modules[1].ops = nullptr;
-    CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kInvalidArg);
+    CHECK(executor.init(cfg, modules, rtos::viewOf(storage)) == fw::Status::kInvalidArg);
     cfg.core = configNUMBER_OF_CORES;
-    CHECK(executor.init(cfg, {}, rtos::view_of(storage)) == fw::Status::kInvalidArg);
+    CHECK(executor.init(cfg, {}, rtos::viewOf(storage)) == fw::Status::kInvalidArg);
 }
 } // namespace
 
 namespace rtos {
-uint32_t now_ms() noexcept
+uint32_t nowMs() noexcept
 {
     CHECK(s_critical == 0);
     return s_clock;

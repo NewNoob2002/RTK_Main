@@ -21,12 +21,12 @@ enum class Status : uint8_t {
 };
 
 /** 检查成功码；无状态、无分配、不阻塞，线程/ISR 安全。 */
-[[nodiscard]] constexpr bool is_ok(Status status) noexcept
+[[nodiscard]] constexpr bool isOk(Status status) noexcept
 {
     return status == Status::kOk;
 }
 
 /** 返回静态字符串，用于日志；未知值返回 "?"。线程/ISR 安全。 */
-[[nodiscard]] const char *to_string(Status status) noexcept;
+[[nodiscard]] const char *toString(Status status) noexcept;
 
 } // namespace fw

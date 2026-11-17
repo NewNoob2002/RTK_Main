@@ -194,7 +194,7 @@ app::BootResult step_bind(app::BootCtx &ctx) noexcept
 app::BootResult step_seal(app::BootCtx &ctx) noexcept
 {
     auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
-    if (fw::is_ok(app::app_context().boot_arena.seal())) {
+    if (fw::isOk(app::app_context().boot_arena.seal())) {
         return app::BootResult::kOk;
     }
     app::rollback_boot_bindings(bufs, app::boot_reason::kAllocSeal);
@@ -212,7 +212,7 @@ app::BootResult step_debug(app::BootCtx &ctx) noexcept
     (void)ctx;
 #if FW_TRACE_ENABLED
     // 所有绑定成功、封存后才安装全局 sink，回滚时不会留下悬空的日志引用。
-    if (fw::is_ok(app::app_context().debug.init())) {
+    if (fw::isOk(app::app_context().debug.init())) {
         return app::BootResult::kOk;
     }
     ctx.reason = app::boot_reason::kDebugInit;
@@ -229,7 +229,7 @@ app::BootResult step_debug(app::BootCtx &ctx) noexcept
  */
 app::BootResult step_storage(app::BootCtx &ctx) noexcept
 {
-    if (fw::is_ok(app::app_context().storage.init())) {
+    if (fw::isOk(app::app_context().storage.init())) {
         return app::BootResult::kOk;
     }
     ctx.reason = app::boot_reason::kStorageInit;
@@ -352,7 +352,7 @@ void handle_degrade(app::BootCtx &ctx, const char *reason) noexcept
     app::AppContext &self = app::app_context();
     if (reason != nullptr) {
         // SEALED 后仍保留首个原因；未封存的分配器同样留住原因供 sys info 显示。
-        self.boot_arena.set_degraded_reason(reason);
+        self.boot_arena.setDegradedReason(reason);
     }
     if (ctx.stop_required || (ctx.launched != 0U)) {
         app::stop_boot_tasks(ctx.launched);

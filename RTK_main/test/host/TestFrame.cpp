@@ -42,7 +42,7 @@ static void test_build_query_frame()
 {
     std::array<uint8_t, 64> out{};
     size_t len = 0;
-    TEST_ASSERT_TRUE(is_ok(
+    TEST_ASSERT_TRUE(isOk(
         proto::build_frame(out, 0x0001, proto::sender::kApp, proto::msg_type::kQuery, {}, len)));
     TEST_ASSERT_EQUAL_UINT(kFrameA.size(), len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kFrameA.data(), out.data(), kFrameA.size());
@@ -53,8 +53,8 @@ static void test_build_set_response()
     const std::array<uint8_t, 2> payload = {0x01, 0x01};
     std::array<uint8_t, 64> out{};
     size_t len = 0;
-    TEST_ASSERT_TRUE(is_ok(proto::build_frame(out, 0x0004, proto::sender::kDevice,
-                                              proto::msg_type::kSetRes, payload, len)));
+    TEST_ASSERT_TRUE(isOk(proto::build_frame(out, 0x0004, proto::sender::kDevice,
+                                             proto::msg_type::kSetRes, payload, len)));
     TEST_ASSERT_EQUAL_UINT(kFrameB.size(), len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kFrameB.data(), out.data(), kFrameB.size());
 }
@@ -167,7 +167,7 @@ static void test_parse_max_payload()
         payload[i] = static_cast<uint8_t>(i); // i < 256
     }
     size_t len = 0;
-    TEST_ASSERT_TRUE(is_ok(proto::build_frame(out, 0x0007, 0, 2, payload, len)));
+    TEST_ASSERT_TRUE(isOk(proto::build_frame(out, 0x0007, 0, 2, payload, len)));
     auto r = test::feed_all(s_parser, std::span<const uint8_t>(out.data(), len));
     TEST_ASSERT_EQUAL_INT(1, r.frames);
     TEST_ASSERT_EQUAL_UINT(proto::kMaxPayload, r.last.payload.size());

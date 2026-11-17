@@ -81,7 +81,7 @@ fw::Command make_limit_cmd(fw::ModuleId target, uint32_t limit_ms) noexcept
     fw::Command cmd{};
     cmd.target = target;
     cmd.verb = app::verb(app::TemplateVerb::kSetLimit);
-    cmd.arg_len = static_cast<uint8_t>(sizeof(uint32_t));
+    cmd.argLen = static_cast<uint8_t>(sizeof(uint32_t));
     for (size_t i = 0U; i < sizeof(uint32_t); ++i) {
         cmd.args[i] = static_cast<uint8_t>(limit_ms >> (i * kBitsPerByte));
     }
@@ -95,9 +95,9 @@ void test_lifecycle()
     ctx.data.init();
     app::TemplateModule tmpl{ctx};
 
-    const auto ops = fw::make_ops<app::TemplateModule>();
+    const auto ops = fw::makeOps<app::TemplateModule>();
     CHECK(ops.init != nullptr && ops.start == nullptr && ops.poll != nullptr &&
-          ops.on_command != nullptr);
+          ops.onCommand != nullptr);
 
     // 未 init 前的保护分支。
     CHECK(!tmpl.poll(s_clock));
@@ -119,7 +119,7 @@ void test_lifecycle()
     ctx.link_executor = &s_exec;
 
     const rtos::ExecutorConfig cfg{
-        .name = "tmpl_exec", .priority = 5U, .core = 1, .wait = wait_advance, .wait_ctx = nullptr};
+        .name = "tmpl_exec", .priority = 5U, .core = 1, .wait = wait_advance, .waitCtx = nullptr};
     CHECK(ctx.link_executor->init(cfg, modules, app::view_of(ctx.link_storage, s_link_stack)) ==
           fw::Status::kOk);
     CHECK(tmpl.state().initialized && tmpl.state().limit_ms == 1000U && tmpl.state().ticks == 0U);
@@ -148,17 +148,17 @@ void test_lifecycle()
     CHECK(res.status == fw::Result::kInvalidArg);
 
     fw::Command bad_len = make_limit_cmd(kTemplateId, 500U);
-    bad_len.arg_len = 2U;
+    bad_len.argLen = 2U;
     CHECK(ctx.link_executor->call(bad_len, res, 100U) == fw::Result::kOk &&
           res.status == fw::Result::kInvalidArg);
 
     const fw::Command reset_bad{
-        .target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 1U};
+        .target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .argLen = 1U};
     CHECK(ctx.link_executor->call(reset_bad, res, 100U) == fw::Result::kOk &&
           res.status == fw::Result::kInvalidArg);
 
     const fw::Command reset_ok{
-        .target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 0U};
+        .target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .argLen = 0U};
     CHECK(ctx.link_executor->call(reset_ok, res, 100U) == fw::Result::kOk &&
           res.status == fw::Result::kOk);
     CHECK(tmpl.state().ticks == 0U);
@@ -241,12 +241,12 @@ void test_commands_after_exec()
 } // namespace
 
 namespace rtos {
-uint32_t now_ms() noexcept
+uint32_t nowMs() noexcept
 {
     CHECK(s_critical == 0);
     return s_clock;
 }
-fw::Status from_esp_err(esp_err_t err) noexcept
+fw::Status fromEspErr(esp_err_t err) noexcept
 {
     return (err == ESP_OK) ? fw::Status::kOk : fw::Status::kTimeout;
 }

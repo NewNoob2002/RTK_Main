@@ -26,8 +26,8 @@ int cmd_tmpl_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     const auto sys = app_context().data.system_status.read();
     const auto exec = app_context().data.exec_stats.read();
-    cli::out_printf("tmpl: bt=%s exec_rounds=%" PRIu32 "\n", sys.bt_ready ? "ready" : "down",
-                    exec.rounds);
+    cli::outPrintf("tmpl: bt=%s exec_rounds=%" PRIu32 "\n", sys.bt_ready ? "ready" : "down",
+                   exec.rounds);
     return 0;
 }
 
@@ -38,8 +38,7 @@ int cmd_tmpl_limit(void * /*ctx*/, int argc, char **argv) noexcept
     }
     const std::span<char *const> args(argv, kLimitArgs);
     uint32_t limit_ms = 0U;
-    if (!cli::parse_u32(args[1], limit_ms) || (limit_ms == 0U) ||
-        (limit_ms > kTemplateMaxLimitMs)) {
+    if (!cli::parseU32(args[1], limit_ms) || (limit_ms == 0U) || (limit_ms > kTemplateMaxLimitMs)) {
         // 1..60000 转 unsigned 安全。
         return cli::fail("limit 1-%u", static_cast<unsigned>(kTemplateMaxLimitMs));
     }
@@ -47,7 +46,7 @@ int cmd_tmpl_limit(void * /*ctx*/, int argc, char **argv) noexcept
     cmd.target = kTargetPlaceholder;
     cmd.verb = verb(TemplateVerb::kSetLimit);
     // sizeof(uint32_t)==4，转 uint8_t 无损。
-    cmd.arg_len = static_cast<uint8_t>(sizeof(uint32_t));
+    cmd.argLen = static_cast<uint8_t>(sizeof(uint32_t));
     for (size_t i = 0U; i < sizeof(uint32_t); ++i) {
         // 右移后取低 8 位无损。
         cmd.args[i] = static_cast<uint8_t>(limit_ms >> (i * kBitsPerByte));

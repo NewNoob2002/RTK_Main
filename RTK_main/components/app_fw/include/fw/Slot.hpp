@@ -26,7 +26,7 @@ public:
     constexpr Slot() noexcept = default;
 
     /** 启动前（单线程）调用一次；之后不得再改。 */
-    constexpr void bind_lock(const LockOps &ops) noexcept
+    constexpr void bindLock(const LockOps &ops) noexcept
     {
         lock_ = ops;
     }

@@ -17,7 +17,7 @@ enum class ExecTrace : uint8_t {
 };
 
 // session 恒为 0：执行器与蓝牙会话无关。
-inline void trace_exec(ExecTrace code, uint32_t a = 0, uint32_t b = 0) noexcept
+inline void traceExec(ExecTrace code, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kExec, static_cast<uint8_t>(code), 0, a, b);
 }

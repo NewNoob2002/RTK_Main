@@ -121,14 +121,14 @@ void test_fail_prints_err_line()
 {
     capture_begin();
     TEST_ASSERT_TRUE(s_capture_ready);
-    cli::detail::reply_reset();
+    cli::detail::replyReset();
     const int rc = cli::fail("boom %d", 5);
-    TEST_ASSERT_TRUE(cli::detail::reply_failed());
+    TEST_ASSERT_TRUE(cli::detail::replyFailed());
     capture_end();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
     TEST_ASSERT_EQUAL_STRING("ERR boom 5\n", s_capture);
-    cli::detail::reply_reset();
-    TEST_ASSERT_FALSE(cli::detail::reply_failed());
+    cli::detail::replyReset();
+    TEST_ASSERT_FALSE(cli::detail::replyFailed());
 }
 
 void test_dispatch_known_verb()
@@ -154,7 +154,7 @@ void test_dispatch_unknown_verb_prints_usage_and_fails()
 {
     capture_begin();
     TEST_ASSERT_TRUE(s_capture_ready);
-    cli::detail::reply_reset();
+    cli::detail::replyReset();
     char arg0[] = "alarm";
     char arg1[] = "bogus";
     char *argv[] = {arg0, arg1};
@@ -171,7 +171,7 @@ void test_dispatch_missing_verb_without_default()
 {
     capture_begin();
     TEST_ASSERT_TRUE(s_capture_ready);
-    cli::detail::reply_reset();
+    cli::detail::replyReset();
     char arg0[] = "alarm";
     char *argv[] = {arg0};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 1, argv, nullptr);
@@ -201,7 +201,7 @@ void test_dispatch_default_verb_not_found()
 {
     capture_begin();
     TEST_ASSERT_TRUE(s_capture_ready);
-    cli::detail::reply_reset();
+    cli::detail::replyReset();
     char arg0[] = "alarm";
     char *argv[] = {arg0};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 1, argv, "nope");
@@ -215,7 +215,7 @@ void test_dispatch_null_argv()
 {
     capture_begin();
     TEST_ASSERT_TRUE(s_capture_ready);
-    cli::detail::reply_reset();
+    cli::detail::replyReset();
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 0, nullptr, nullptr);
     capture_end();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
@@ -227,12 +227,12 @@ void test_dispatch_propagates_handler_failure()
 {
     capture_begin();
     TEST_ASSERT_TRUE(s_capture_ready);
-    cli::detail::reply_reset();
+    cli::detail::replyReset();
     char arg0[] = "alarm";
     char arg1[] = "set";
     char *argv[] = {arg0, arg1};
     const int rc = cli::dispatch(kVerbs, &s_ctx_marker, 2, argv, nullptr);
-    const bool failed = cli::detail::reply_failed();
+    const bool failed = cli::detail::replyFailed();
     capture_end();
     TEST_ASSERT_EQUAL_INT(cli::kCmdFail, rc);
     TEST_ASSERT_TRUE(failed);
@@ -243,7 +243,7 @@ void test_print_usage_format()
 {
     capture_begin();
     TEST_ASSERT_TRUE(s_capture_ready);
-    cli::print_usage("alarm", kVerbs);
+    cli::printUsage("alarm", kVerbs);
     capture_end();
     TEST_ASSERT_EQUAL_STRING("usage: alarm <verb> [args]\n"
                              "  list       -              list sessions\n"
@@ -256,9 +256,9 @@ void test_print_section_and_kv_alignment()
 {
     capture_begin();
     TEST_ASSERT_TRUE(s_capture_ready);
-    cli::print_section("link");
-    cli::print_kv("sn", "%s", "ABC123");
-    cli::print_kv("a_very_long_key", "%u", 42U);
+    cli::printSection("link");
+    cli::printKv("sn", "%s", "ABC123");
+    cli::printKv("a_very_long_key", "%u", 42U);
     capture_end();
     TEST_ASSERT_EQUAL_STRING("[link]\n"
                              "  sn             ABC123\n"

@@ -15,7 +15,7 @@ constexpr int64_t kUsPerMs = 1000;
 
 } // namespace
 
-fw::Status from_esp_err(esp_err_t err) noexcept
+fw::Status fromEspErr(esp_err_t err) noexcept
 {
     switch (err) {
     case ESP_OK:
@@ -41,7 +41,7 @@ fw::Status from_esp_err(esp_err_t err) noexcept
     }
 }
 
-uint32_t now_ms() noexcept
+uint32_t nowMs() noexcept
 {
     // esp_timer_get_time() 为 int64 微秒；除以 1000 得毫秒。
     // 毫秒时间按 2^32 取模（约 49.7 天回绕），调用方必须用无符号差值比较。

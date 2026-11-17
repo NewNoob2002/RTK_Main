@@ -26,15 +26,15 @@ public:
     ~StaticStreamBuffer() = default;
 
     /** 创建静态 StreamBuffer；trigger_level 必须在 1..N。 */
-    [[nodiscard]] fw::Status init(size_t trigger_level) noexcept
+    [[nodiscard]] fw::Status init(size_t triggerLevel) noexcept
     {
         if (handle_ != nullptr) {
             return fw::Status::kBusy;
         }
-        if ((trigger_level == 0U) || (trigger_level > N)) {
+        if ((triggerLevel == 0U) || (triggerLevel > N)) {
             return fw::Status::kInvalidArg;
         }
-        handle_ = xStreamBufferCreateStatic(N, trigger_level, storage_.data(), &buffer_);
+        handle_ = xStreamBufferCreateStatic(N, triggerLevel, storage_.data(), &buffer_);
         return (handle_ != nullptr) ? fw::Status::kOk : fw::Status::kNoSpace;
     }
 
@@ -47,21 +47,21 @@ public:
     }
 
     /** 写入，返回实际写入字节数；回调中传 timeout_ms=0。 */
-    [[nodiscard]] size_t send(std::span<const uint8_t> data, uint32_t timeout_ms) noexcept
+    [[nodiscard]] size_t send(std::span<const uint8_t> data, uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || data.empty()) {
             return 0;
         }
-        return xStreamBufferSend(handle_, data.data(), data.size(), pdMS_TO_TICKS(timeout_ms));
+        return xStreamBufferSend(handle_, data.data(), data.size(), pdMS_TO_TICKS(timeoutMs));
     }
 
     /** 读取，返回实际读取字节数；timeout_ms=0 为非阻塞。 */
-    [[nodiscard]] size_t receive(std::span<uint8_t> out, uint32_t timeout_ms) noexcept
+    [[nodiscard]] size_t receive(std::span<uint8_t> out, uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || out.empty()) {
             return 0;
         }
-        return xStreamBufferReceive(handle_, out.data(), out.size(), pdMS_TO_TICKS(timeout_ms));
+        return xStreamBufferReceive(handle_, out.data(), out.size(), pdMS_TO_TICKS(timeoutMs));
     }
 
     /** 当前可写入的字节数（单写者据此整帧写入或整帧丢弃）；未初始化返回 0。 */

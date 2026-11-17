@@ -21,8 +21,8 @@ enum class ArenaState : uint8_t {
 struct BootAllocEntry {
     const char *tag = nullptr;
     void *ptr = nullptr;
-    size_t bytes = 0U;        // 调用方请求的逻辑字节数
-    size_t actual_bytes = 0U; // 分配器报告的可用块字节数（含对齐取整，不含隐藏堆块头）
+    size_t bytes = 0U;       // 调用方请求的逻辑字节数
+    size_t actualBytes = 0U; // 分配器报告的可用块字节数（含对齐取整，不含隐藏堆块头）
     size_t align = 0U;
     uint32_t caps = 0U;
 };
@@ -31,7 +31,7 @@ struct BootAllocEntry {
 struct BootAllocatorOps {
     void *(*alloc)(size_t align, size_t bytes, void *ctx) noexcept = nullptr;
     void (*free)(void *ptr, void *ctx) noexcept = nullptr;
-    size_t (*allocated_size)(void *ptr, void *ctx) noexcept = nullptr;
+    size_t (*allocatedSize)(void *ptr, void *ctx) noexcept = nullptr;
     void *ctx = nullptr;
 };
 
@@ -59,21 +59,21 @@ public:
 
     /** 在 OPEN 态分配一块对齐的内部 8-bit 字节数组并清零；非 OPEN 返回 kInvalidState。 */
     [[nodiscard]] fw::Status allocate(const char *tag, size_t bytes, size_t align,
-                                      void *&out_ptr) noexcept;
+                                      void *&outPtr) noexcept;
 
     /** 类型安全数组分配包装；失败时保持 out 为空 span。 */
     template <typename T>
-    [[nodiscard]] fw::Status alloc_array(const char *tag, size_t count, std::span<T> &out,
-                                         size_t align = alignof(T)) noexcept
+    [[nodiscard]] fw::Status allocArray(const char *tag, size_t count, std::span<T> &out,
+                                        size_t align = alignof(T)) noexcept
     {
         out = std::span<T>{};
-        const size_t typed_align = (align == 0U) ? alignof(T) : align;
-        if ((count == 0U) || (count > (SIZE_MAX / sizeof(T))) || (typed_align < alignof(T))) {
+        const size_t typedAlign = (align == 0U) ? alignof(T) : align;
+        if ((count == 0U) || (count > (SIZE_MAX / sizeof(T))) || (typedAlign < alignof(T))) {
             return fw::Status::kInvalidArg;
         }
         void *raw = nullptr;
-        const fw::Status st = allocate(tag, count * sizeof(T), typed_align, raw);
-        if (!fw::is_ok(st)) {
+        const fw::Status st = allocate(tag, count * sizeof(T), typedAlign, raw);
+        if (!fw::isOk(st)) {
             return st;
         }
         out = std::span<T>{static_cast<T *>(raw), count};
@@ -90,7 +90,7 @@ public:
     [[nodiscard]] fw::Status abort(const char *reason = nullptr) noexcept;
 
     /** 记录启动期后段（已 seal/已有消费者）发生的降级原因，不改变 SEALED 状态。 */
-    void set_degraded_reason(const char *reason) noexcept;
+    void setDegradedReason(const char *reason) noexcept;
 
     [[nodiscard]] ArenaState state() const noexcept
     {
@@ -102,22 +102,22 @@ public:
         return count_;
     }
 
-    [[nodiscard]] size_t total_bytes() const noexcept
+    [[nodiscard]] size_t totalBytes() const noexcept
     {
         return total_bytes_;
     }
 
-    [[nodiscard]] size_t total_actual_bytes() const noexcept
+    [[nodiscard]] size_t totalActualBytes() const noexcept
     {
         return total_actual_bytes_;
     }
 
-    [[nodiscard]] size_t live_count() const noexcept
+    [[nodiscard]] size_t liveCount() const noexcept
     {
         return live_count_;
     }
 
-    [[nodiscard]] size_t freed_count() const noexcept
+    [[nodiscard]] size_t freedCount() const noexcept
     {
         return freed_count_;
     }
@@ -137,10 +137,10 @@ public:
         return reason_.data();
     }
 
-    [[nodiscard]] static const char *state_name(ArenaState state) noexcept;
+    [[nodiscard]] static const char *stateName(ArenaState state) noexcept;
 
 private:
-    void copy_reason(const char *text) noexcept;
+    void copyReason(const char *text) noexcept;
 
     ArenaState state_ = ArenaState::kUninit;
     BootAllocatorOps ops_{};

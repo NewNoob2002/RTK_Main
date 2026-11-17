@@ -39,7 +39,7 @@ inline constexpr uint32_t kLogLevelFieldMask = 0x3U;
  * @param  level: 级别
  * @retval 打包表
  */
-constexpr uint32_t log_levels_all(LogLevel level) noexcept
+constexpr uint32_t logLevelsAll(LogLevel level) noexcept
 {
     uint32_t packed = 0U;
     for (uint32_t i = 0U; i < static_cast<uint32_t>(TraceCat::kCount); ++i) {
@@ -49,7 +49,7 @@ constexpr uint32_t log_levels_all(LogLevel level) noexcept
 }
 
 /** 默认：所有类别 kInfo（启动与运行中的状态变化默认可见，ADR-0009 §2.12）。 */
-inline constexpr uint32_t kLogLevelsDefault = log_levels_all(LogLevel::kInfo);
+inline constexpr uint32_t kLogLevelsDefault = logLevelsAll(LogLevel::kInfo);
 static_assert(static_cast<uint32_t>(TraceCat::kCount) * kLogLevelBits <= 32U,
               "log level table must fit in u32");
 
@@ -71,7 +71,7 @@ struct LogStats {
  * @retval kInvalidState 已安装过
  * @note   启动阶段单线程调用一次（启动最开始，早于任何 FW_LOG*）。
  */
-[[nodiscard]] Result log_install_direct(LogSinkFn fn, void *ctx, TraceClockFn clock) noexcept;
+[[nodiscard]] Result logInstallDirect(LogSinkFn fn, void *ctx, TraceClockFn clock) noexcept;
 
 /**
  * @brief  设置某类别的运行期日志级别（与追踪掩码无关）
@@ -79,26 +79,26 @@ struct LogStats {
  * @param  level: 新级别；高于 kLogMaxLevel 时按 kLogMaxLevel 处理
  * @note   原子，任意任务可调用。kError 总是记录（最低只能设到 kError）。
  */
-void log_set_cat_level(TraceCat cat, LogLevel level) noexcept;
+void logSetCatLevel(TraceCat cat, LogLevel level) noexcept;
 
 /**
  * @brief  读取某类别的运行期日志级别
  * @param  cat: 类别
  * @retval 当前级别；越界为 kError
  */
-[[nodiscard]] LogLevel log_cat_level(TraceCat cat) noexcept;
+[[nodiscard]] LogLevel logCatLevel(TraceCat cat) noexcept;
 
 /**
  * @brief  整表设置（NVS 恢复用）
  * @param  packed: 打包表（见 kLogLevelBits）；每个字段按 kLogMaxLevel 截断，未用高位忽略
  */
-void log_set_levels(uint32_t packed) noexcept;
+void logSetLevels(uint32_t packed) noexcept;
 
 /**
  * @brief  读取整张打包表（NVS 保存用）
  * @retval 打包表
  */
-[[nodiscard]] uint32_t log_levels() noexcept;
+[[nodiscard]] uint32_t logLevels() noexcept;
 
 /**
  * @brief  判断某级别、某类别的日志此刻是否会被记录
@@ -107,7 +107,7 @@ void log_set_levels(uint32_t packed) noexcept;
  * @retval true 会记录（调用方可据此跳过昂贵的参数准备）
  * @retval false 会被丢弃
  */
-[[nodiscard]] bool log_enabled(LogLevel level, TraceCat cat) noexcept;
+[[nodiscard]] bool logEnabled(LogLevel level, TraceCat cat) noexcept;
 
 /**
  * @brief  记录一行日志（宏 FW_LOG* 的实现；一般不直接调用）
@@ -116,24 +116,24 @@ void log_set_levels(uint32_t packed) noexcept;
  * @param  fmt: printf 格式；结尾换行会被去掉，超过 kLogTextMax 截断并以 "..." 结尾
  * @note   非阻塞（环满丢弃并计数）；禁止 ISR。
  */
-void log_line(LogLevel level, TraceCat cat, const char *fmt, ...) noexcept
+void logLine(LogLevel level, TraceCat cat, const char *fmt, ...) noexcept
     __attribute__((format(printf, 3, 4)));
 
 /**
- * @brief  log_line 的 va_list 版本
+ * @brief  logLine 的 va_list 版本
  * @param  level: 日志级别
  * @param  cat: 类别
  * @param  fmt: printf 格式
  * @param  args: 参数表（调用方负责 va_start/va_end）
  */
-void vlog_line(LogLevel level, TraceCat cat, const char *fmt, va_list args) noexcept;
+void vlogLine(LogLevel level, TraceCat cat, const char *fmt, va_list args) noexcept;
 
 /**
  * @brief  级别的单字母缩写
  * @param  level: 日志级别
  * @retval 'E'/'W'/'I'/'D'；非法值为 '?'
  */
-[[nodiscard]] char log_level_char(LogLevel level) noexcept;
+[[nodiscard]] char logLevelChar(LogLevel level) noexcept;
 
 /**
  * @brief  解析级别名（e/w/i/d 或 error/warn/info/debug，不区分大小写）
@@ -142,14 +142,14 @@ void vlog_line(LogLevel level, TraceCat cat, const char *fmt, va_list args) noex
  * @retval true 解析成功
  * @retval false 不认识的名字
  */
-[[nodiscard]] bool log_parse_level(std::string_view name, LogLevel &out) noexcept;
+[[nodiscard]] bool logParseLevel(std::string_view name, LogLevel &out) noexcept;
 
 /**
  * @brief  类别的大写短名（控制台行首使用，如 "GNSS"）
  * @param  cat: 类别
  * @retval 名称；越界为 "?"
  */
-[[nodiscard]] std::string_view log_cat_name(TraceCat cat) noexcept;
+[[nodiscard]] std::string_view logCatName(TraceCat cat) noexcept;
 
 /**
  * @brief  把一条文本记录格式化为控制台行："[   8.712] [GNSS] W: text\r\n"（kInfo 不带级别前缀）
@@ -159,14 +159,14 @@ void vlog_line(LogLevel level, TraceCat cat, const char *fmt, va_list args) noex
  * @retval 写入的字节数（不含结尾 0；缓冲不足时截断，仍以 CRLF 结尾）
  * @note   环通路（DebugModule）与直写通路共用，保证两条通路行格式一致。
  */
-std::size_t log_format_line(std::span<char> out, const LogHeader &hdr,
-                            std::span<const uint8_t> text) noexcept;
+std::size_t logFormatLine(std::span<char> out, const LogHeader &hdr,
+                          std::span<const uint8_t> text) noexcept;
 
 /**
  * @brief  读取丢失统计
  * @retval 自启动以来的累计值
  */
-[[nodiscard]] LogStats log_stats() noexcept;
+[[nodiscard]] LogStats logStats() noexcept;
 
 } // namespace fw
 
@@ -175,7 +175,7 @@ std::size_t log_format_line(std::span<char> out, const LogHeader &hdr,
 #define FW_LOG_AT(level, cat, ...)                                                                 \
     do {                                                                                           \
         if constexpr ((level) <= ::fw::kLogMaxLevel) {                                             \
-            ::fw::log_line((level), (cat), __VA_ARGS__);                                           \
+            ::fw::logLine((level), (cat), __VA_ARGS__);                                            \
         }                                                                                          \
     } while (0)
 #define FW_LOGE(cat, ...) FW_LOG_AT(::fw::LogLevel::kError, cat, __VA_ARGS__)

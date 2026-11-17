@@ -43,17 +43,17 @@ public:
      * 未初始化或 bits 为 0 返回 0；wait_all 为 true 要求 bits 全部置位，为 false 要求至少一位。
      * xEventGroupWaitBits 超时时返回当前已置位的事件位（可能是请求位的真子集），因此这里按语义判定。
      */
-    [[nodiscard]] EventBits_t wait(EventBits_t bits, bool clear_on_exit, bool wait_all,
-                                   uint32_t timeout_ms) noexcept
+    [[nodiscard]] EventBits_t wait(EventBits_t bits, bool clearOnExit, bool waitAll,
+                                   uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || (bits == 0U)) {
             return 0;
         }
         const EventBits_t got =
-            xEventGroupWaitBits(handle_, bits, clear_on_exit ? pdTRUE : pdFALSE,
-                                wait_all ? pdTRUE : pdFALSE, pdMS_TO_TICKS(timeout_ms));
+            xEventGroupWaitBits(handle_, bits, clearOnExit ? pdTRUE : pdFALSE,
+                                waitAll ? pdTRUE : pdFALSE, pdMS_TO_TICKS(timeoutMs));
         const EventBits_t wanted = got & bits;
-        const bool satisfied = wait_all ? (wanted == bits) : (wanted != 0U);
+        const bool satisfied = waitAll ? (wanted == bits) : (wanted != 0U);
         // 成功时保留完整快照 got；只有等待条件未满足才返回 0。
         return satisfied ? got : 0U;
     }

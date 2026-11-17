@@ -82,21 +82,21 @@ void test_out_config_and_nvs_blob() noexcept
     GnssOutConfig cfg = GnssOutConfig::defaults();
     CHECK(cfg.is_valid());
     CHECK(cfg.mask == app::data::kGnssOutMaskAll);
-    CHECK(fw::is_ok(cfg.apply_interval(2U, 5)));    // HEADINGA 200 ms
-    CHECK(fw::is_ok(cfg.apply_interval(1U, -128))); // -128 -> 128000 ms
+    CHECK(fw::isOk(cfg.apply_interval(2U, 5)));    // HEADINGA 200 ms
+    CHECK(fw::isOk(cfg.apply_interval(1U, -128))); // -128 -> 128000 ms
     CHECK(core::services::GnssService::interval_to_period_ms(cfg.intervals[1]) == 128000U);
-    CHECK(fw::is_ok(cfg.apply_interval(3U, 0)));
+    CHECK(fw::isOk(cfg.apply_interval(3U, 0)));
     CHECK((cfg.mask & (1U << 3U)) == 0U);
     CHECK(cfg.intervals[3] == 0);
     CHECK(cfg.apply_interval(app::data::kGnssAppMsgCount, 1) == fw::Result::kInvalidArg);
 
     std::array<uint8_t, GnssOutConfig::kBlobBytes> blob{};
     size_t len = 0U;
-    CHECK(fw::is_ok(cfg.encode(blob, len)));
+    CHECK(fw::isOk(cfg.encode(blob, len)));
     CHECK(len == GnssOutConfig::kBlobBytes);
 
     GnssOutConfig decoded{};
-    CHECK(fw::is_ok(GnssOutConfig::decode(blob, decoded)));
+    CHECK(fw::isOk(GnssOutConfig::decode(blob, decoded)));
     CHECK(decoded.mask == cfg.mask);
     CHECK(decoded.intervals == cfg.intervals);
 
@@ -113,11 +113,11 @@ void test_out_config_and_nvs_blob() noexcept
         .ns = "gnss",
         .key = "out",
         .type = fw::StoreType::kBlob,
-        .max_size = GnssOutConfig::kBlobBytes,
+        .maxSize = GnssOutConfig::kBlobBytes,
         .flags = 0U,
         .min = 0,
         .max = 0,
-        .product_mask = fw::kAllProducts,
+        .productMask = fw::kAllProducts,
         .help = "out",
         .binding = {},
     };
@@ -134,7 +134,7 @@ void test_latest_cache_and_query_caps() noexcept
     app::data::GnssLatestCache cache{};
     cache.bind_lock(fw::kNoLock);
     std::array<uint8_t, app::data::kGnssLatestTotalBytes> cache_buf{};
-    CHECK(fw::is_ok(cache.init(cache_buf)));
+    CHECK(fw::isOk(cache.init(cache_buf)));
 
     std::array<uint8_t, 256U> query_buf{};
     // 无缓存时不命中且不计 oversize。
@@ -195,28 +195,28 @@ void test_subscription_and_app_ring() noexcept
     std::array<uint8_t, 4096U> backing{};
     fw::FanoutRing ring{};
     const size_t max_payload = 4096U - fw::kFanoutTypedHeaderBytes;
-    CHECK(fw::is_ok(ring.init_typed(backing, max_payload, fw::kNoLock)));
+    CHECK(fw::isOk(ring.initTyped(backing, max_payload, fw::kNoLock)));
     uint8_t reader_id = 0U;
-    CHECK(fw::is_ok(ring.attach(0U, reader_id)));
+    CHECK(fw::isOk(ring.attach(0U, reader_id)));
 
     static std::array<uint8_t, 4093U> frame{};
     frame.fill(static_cast<uint8_t>('A'));
     // 未订阅时写侧不入环，记 no_subscriber。
     CHECK(ring.write(0U, std::span<const uint8_t>{frame}.first(32U)) == fw::Result::kOk);
-    CHECK(ring.typed_writer_stats().no_subscriber == 1U);
+    CHECK(ring.typedWriterStats().noSubscriber == 1U);
 
     // 订阅后 4093 B 成功，4094 B 触发 oversize_drop。
-    CHECK(fw::is_ok(ring.set_mask(reader_id, (1U << 0U) | (1U << 1U))));
-    CHECK(fw::is_ok(ring.write(1U, frame)));
+    CHECK(fw::isOk(ring.setMask(reader_id, (1U << 0U) | (1U << 1U))));
+    CHECK(fw::isOk(ring.write(1U, frame)));
     fw::FanoutView view{};
-    CHECK(fw::is_ok(ring.peek(reader_id, view)));
+    CHECK(fw::isOk(ring.peek(reader_id, view)));
     CHECK((view.type == 1U) && ((view.first.size() + view.second.size()) == 4093U));
-    CHECK(fw::is_ok(ring.commit(view.lease)));
+    CHECK(fw::isOk(ring.commit(view.lease)));
 
     static std::array<uint8_t, 4094U> oversize{};
     oversize.fill(static_cast<uint8_t>('B'));
     CHECK(ring.write(1U, oversize) == fw::Result::kInvalidArg);
-    CHECK(ring.typed_writer_stats().oversize_drop == 1U);
+    CHECK(ring.typedWriterStats().oversizeDrop == 1U);
 
     // 断连清零：mask=0 后不再有活跃订阅。
     std::array<uint32_t, app::data::kGnssAppMsgCount> zero_periods{};

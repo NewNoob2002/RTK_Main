@@ -65,7 +65,7 @@ public:
     }
 
     /** 栈高水位（剩余最小字节数）；未启动返回 0。 */
-    [[nodiscard]] uint32_t stack_high_water_mark() const noexcept
+    [[nodiscard]] uint32_t stackHighWaterMark() const noexcept
     {
         if (handle_ == nullptr) {
             return 0U;

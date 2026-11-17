@@ -65,7 +65,7 @@ esp_console_repl_t *s_repl =
     nullptr; // init() 创建、run() 启动；REPL 任务在 run 之前阻塞在任务通知上
 bool s_running = false;
 
-bool is_empty_text(const char *text) noexcept
+bool isEmptyText(const char *text) noexcept
 {
     if (text == nullptr) {
         return true;
@@ -73,7 +73,7 @@ bool is_empty_text(const char *text) noexcept
     return std::strlen(text) == 0U;
 }
 
-bool same_text(const char *lhs, const char *rhs) noexcept
+bool sameText(const char *lhs, const char *rhs) noexcept
 {
     if ((lhs == nullptr) || (rhs == nullptr)) {
         return false;
@@ -81,11 +81,11 @@ bool same_text(const char *lhs, const char *rhs) noexcept
     return std::strcmp(lhs, rhs) == 0;
 }
 
-bool has_cmd_name(const char *name) noexcept
+bool hasCmdName(const char *name) noexcept
 {
     for (size_t t = 0U; t < s_table_count; ++t) {
         for (const Cmd &existing : s_tables[t]) {
-            if (same_text(existing.name, name)) {
+            if (sameText(existing.name, name)) {
                 return true;
             }
         }
@@ -93,11 +93,11 @@ bool has_cmd_name(const char *name) noexcept
     return false;
 }
 
-const Cmd *find_cmd(const char *name) noexcept
+const Cmd *findCmd(const char *name) noexcept
 {
     for (size_t t = 0U; t < s_table_count; ++t) {
         for (const Cmd &cmd : s_tables[t]) {
-            if (same_text(cmd.name, name)) {
+            if (sameText(cmd.name, name)) {
                 return &cmd;
             }
         }
@@ -105,10 +105,10 @@ const Cmd *find_cmd(const char *name) noexcept
     return nullptr;
 }
 
-const VerbGroup *find_verb_group(const char *group) noexcept
+const VerbGroup *findVerbGroup(const char *group) noexcept
 {
     for (size_t g = 0U; g < s_verb_group_count; ++g) {
-        if (same_text(s_verb_groups[g].group, group)) {
+        if (sameText(s_verb_groups[g].group, group)) {
             return &s_verb_groups[g];
         }
     }
@@ -119,23 +119,23 @@ const VerbGroup *find_verb_group(const char *group) noexcept
  * @brief  释放 REPL 失败路径上已创建的对象
  * @param  repl: esp_console REPL 句柄；nullptr 时忽略
  */
-void cleanup_repl(esp_console_repl_t *repl) noexcept
+void cleanupRepl(esp_console_repl_t *repl) noexcept
 {
     if (repl == nullptr) {
         return;
     }
-    const esp_err_t cleanup_err = repl->del(repl);
-    if (cleanup_err != ESP_OK) {
-        FW_LOGW(fw::TraceCat::kSys, "console cleanup failed: %s", esp_err_to_name(cleanup_err));
+    const esp_err_t cleanupErr = repl->del(repl);
+    if (cleanupErr != ESP_OK) {
+        FW_LOGW(fw::TraceCat::kSys, "console cleanup failed: %s", esp_err_to_name(cleanupErr));
     }
 }
 
-int print_help_usage() noexcept
+int printHelpUsage() noexcept
 {
     return fail("usage: help [<group>]");
 }
 
-void print_group_list() noexcept
+void printGroupList() noexcept
 {
     // 按登记顺序输出；已登记动词表的组用摘要，否则回落到该命令的单行 help。
     for (size_t t = 0U; t < s_table_count; ++t) {
@@ -143,42 +143,42 @@ void print_group_list() noexcept
             if (cmd.hidden) {
                 continue; // 隐藏命令只在知道名字时使用（ADR-0009 §2.10）
             }
-            const VerbGroup *group = find_verb_group(cmd.name);
+            const VerbGroup *group = findVerbGroup(cmd.name);
             const char *summary = (group != nullptr) ? group->summary : cmd.help;
-            out_printf("  %-*s %s\n", kGroupWidth, cmd.name, (summary != nullptr) ? summary : "");
+            outPrintf("  %-*s %s\n", kGroupWidth, cmd.name, (summary != nullptr) ? summary : "");
         }
     }
-    out_printf("  %-*s %s\n", kGroupWidth, kHelpName, kHelpSummary);
+    outPrintf("  %-*s %s\n", kGroupWidth, kHelpName, kHelpSummary);
 }
 
 // help 由本组件实现：无参列出各组，带参显示该组用法。
 // esp_console_common_init() 已注册 IDF 自带的 help，register_help() 先注销再登记本实现。
-int cmd_help(void * /*ctx*/, int argc, char **argv) noexcept
+int cmdHelp(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 0) || (argv == nullptr)) {
-        return print_help_usage();
+        return printHelpUsage();
     }
     // argc >= 0 已校验，转 size_t 无损。
     const std::span<char *const> args(argv, static_cast<size_t>(argc));
     if (args.size() <= 1U) {
-        print_group_list();
+        printGroupList();
         return 0;
     }
     if (args.size() > kHelpMaxArgs) {
-        return print_help_usage();
+        return printHelpUsage();
     }
     const char *target = args[1];
-    if (same_text(target, kHelpName)) {
-        return print_help_usage();
+    if (sameText(target, kHelpName)) {
+        return printHelpUsage();
     }
-    const VerbGroup *group = find_verb_group(target);
+    const VerbGroup *group = findVerbGroup(target);
     if (group != nullptr) {
-        print_usage(group->group, group->verbs);
+        printUsage(group->group, group->verbs);
         return 0;
     }
-    const Cmd *cmd = find_cmd(target);
+    const Cmd *cmd = findCmd(target);
     if (cmd != nullptr) {
-        out_printf("%s\n", (cmd->help != nullptr) ? cmd->help : "");
+        outPrintf("%s\n", (cmd->help != nullptr) ? cmd->help : "");
         return 0;
     }
     return fail("unknown group");
@@ -191,16 +191,16 @@ int trampoline(void *ctx, int argc, char **argv) noexcept
 {
     const auto *entry = static_cast<const Entry *>(ctx);
     if ((entry == nullptr) || (entry->handler == nullptr)) {
-        out_printf("ERR internal: command entry missing\n");
+        outPrintf("ERR internal: command entry missing\n");
         return 0;
     }
-    detail::reply_reset();
+    detail::replyReset();
     const int rc = entry->handler(entry->ctx, argc, argv);
     if (rc == 0) {
-        out_printf("OK\n");
-    } else if (!detail::reply_failed()) {
+        outPrintf("OK\n");
+    } else if (!detail::replyFailed()) {
         // handler 没解释原因时只报返回码，保证每条命令最后一行都是 OK / ERR。
-        out_printf("ERR %d\n", rc);
+        outPrintf("ERR %d\n", rc);
     }
     return 0;
 }
@@ -211,7 +211,7 @@ int trampoline(void *ctx, int argc, char **argv) noexcept
  * 输出端：一次 uart_write_bytes 写完整段（ADR-0009 §2.8）。只有装了 TX 环形驱动才安装它；
  * 环形满时阻塞到有空间，调用方都是任务上下文。
  */
-void uart_sink(const char *text, size_t len) noexcept
+void uartSink(const char *text, size_t len) noexcept
 {
     (void)uart_write_bytes(static_cast<uart_port_t>(CONFIG_RTK_CONSOLE_UART_NUM), text, len);
 }
@@ -222,10 +222,10 @@ vprintf_like_t s_orig_log_vprintf = nullptr;
  * ESP_LOG 钩子：日志与命令回复走同一出口和同一把锁，整行写出、互不穿插。
  * ISR、调度器未运行或同任务重入时回落到原 vprintf（IDF 的 VFS 路径）。
  */
-int log_vprintf(const char *fmt, va_list args)
+int logVprintf(const char *fmt, va_list args)
 {
     if ((xPortInIsrContext() == 0) && (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)) {
-        const int n = out_log_vprintf(fmt, args);
+        const int n = outLogVprintf(fmt, args);
         if (n >= 0) {
             return n;
         }
@@ -234,18 +234,18 @@ int log_vprintf(const char *fmt, va_list args)
                                            : std::vprintf(fmt, args);
 }
 
-void install_uart_sink() noexcept
+void installUartSink() noexcept
 {
     // 绕过 VFS 后由 out 模块负责 "\n" → "\r\n"，与 VFS 的 TX 行尾设置（CRLF）一致。
-    set_out_sink(uart_sink, true);
-    s_orig_log_vprintf = esp_log_set_vprintf(log_vprintf);
+    setOutSink(uartSink, true);
+    s_orig_log_vprintf = esp_log_set_vprintf(logVprintf);
 }
 #endif
 #endif
 
-esp_err_t register_help() noexcept
+esp_err_t registerHelp() noexcept
 {
-    s_help_entry = Entry{cmd_help, nullptr};
+    s_help_entry = Entry{cmdHelp, nullptr};
     esp_console_cmd_t command{};
     command.command = kHelpName;
     command.help = kHelpSummary;
@@ -268,7 +268,7 @@ esp_err_t register_help() noexcept
  * @note   经典 ESP32 没有 UART DMA，长输出靠大 TX 环形 + 中断搬运，避免命令任务阻塞在 FIFO 上。
  *       调用点：esp_console_new_repl_uart() 之后、esp_console_start_repl() 之前，console 任务尚未读写 UART。
  */
-esp_err_t enable_uart_tx_buffer() noexcept
+esp_err_t enableUartTxBuffer() noexcept
 {
 #if CONFIG_RTK_CONSOLE_UART_TX_BUF > 0
     // Kconfig range 0..2 保证端口号合法；uart_port_t 是枚举，转 static_cast 不改变数值。
@@ -353,14 +353,14 @@ esp_err_t add(std::span<const Cmd> cmds) noexcept
     // 原子校验整张表：任一校验失败不得登记任何一项。
     for (size_t i = 0U; i < cmds.size(); ++i) {
         const Cmd &cmd = cmds[i];
-        if (is_empty_text(cmd.name) || is_empty_text(cmd.help) || (cmd.handler == nullptr)) {
+        if (isEmptyText(cmd.name) || isEmptyText(cmd.help) || (cmd.handler == nullptr)) {
             return ESP_ERR_INVALID_ARG;
         }
-        if (has_cmd_name(cmd.name)) {
+        if (hasCmdName(cmd.name)) {
             return ESP_ERR_INVALID_STATE;
         }
         for (size_t j = 0U; j < i; ++j) {
-            if (same_text(cmds[j].name, cmd.name)) {
+            if (sameText(cmds[j].name, cmd.name)) {
                 return ESP_ERR_INVALID_STATE;
             }
         }
@@ -376,12 +376,12 @@ esp_err_t add(std::span<const Cmd> cmds) noexcept
     return ESP_OK;
 }
 
-esp_err_t add_verbs(const char *group, const char *summary, std::span<const Verb> verbs) noexcept
+esp_err_t addVerbs(const char *group, const char *summary, std::span<const Verb> verbs) noexcept
 {
     if (s_started) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (is_empty_text(group) || is_empty_text(summary) || verbs.empty()) {
+    if (isEmptyText(group) || isEmptyText(summary) || verbs.empty()) {
         return ESP_ERR_INVALID_ARG;
     }
     for (const Verb &verb : verbs) {
@@ -404,62 +404,62 @@ esp_err_t init(const char *prompt) noexcept
     if (s_started) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (is_empty_text(prompt)) {
+    if (isEmptyText(prompt)) {
         return ESP_ERR_INVALID_ARG;
     }
 
     esp_console_repl_t *repl = nullptr;
-    esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    repl_cfg.prompt = prompt;
-    repl_cfg.max_cmdline_length = CONFIG_RTK_CONSOLE_CMDLINE_MAX;
-    repl_cfg.task_stack_size = CONFIG_RTK_CONSOLE_STACK_SIZE;
-    repl_cfg.task_priority = CONFIG_RTK_CONSOLE_TASK_PRIO;
+    esp_console_repl_config_t replCfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    replCfg.prompt = prompt;
+    replCfg.max_cmdline_length = CONFIG_RTK_CONSOLE_CMDLINE_MAX;
+    replCfg.task_stack_size = CONFIG_RTK_CONSOLE_STACK_SIZE;
+    replCfg.task_priority = CONFIG_RTK_CONSOLE_TASK_PRIO;
     // 默认 tskNO_AFFINITY；这里显式绑到配置核（默认 core 0，链路任务独占 core 1）。
-    repl_cfg.task_core_id = CONFIG_RTK_CONSOLE_TASK_CORE;
+    replCfg.task_core_id = CONFIG_RTK_CONSOLE_TASK_CORE;
 
     esp_err_t err = ESP_OK;
 #if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT) || defined(CONFIG_ESP_CONSOLE_UART_CUSTOM)
     // 控制台固定 2 Mbaud（> 1 MHz 只能用 APB 时钟）；本固件不用 UART light-sleep 唤醒，
     // uart_vfs 每次启动打印的 "light sleep UART wakeup might not work" 告警无意义，只保留其错误级日志。
     esp_log_level_set("uart_vfs", ESP_LOG_ERROR);
-    esp_console_dev_uart_config_t uart_cfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-    uart_cfg.channel = CONFIG_RTK_CONSOLE_UART_NUM;
-    uart_cfg.baud_rate = CONFIG_RTK_CONSOLE_UART_BAUD;
-    uart_cfg.tx_gpio_num = -1;
-    uart_cfg.rx_gpio_num = -1;
-    err = esp_console_new_repl_uart(&uart_cfg, &repl_cfg, &repl);
+    esp_console_dev_uart_config_t uartCfg = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+    uartCfg.channel = CONFIG_RTK_CONSOLE_UART_NUM;
+    uartCfg.baud_rate = CONFIG_RTK_CONSOLE_UART_BAUD;
+    uartCfg.tx_gpio_num = -1;
+    uartCfg.rx_gpio_num = -1;
+    err = esp_console_new_repl_uart(&uartCfg, &replCfg, &repl);
     if (err != ESP_OK) {
         FW_LOGE(fw::TraceCat::kSys, "console init failed: %s", esp_err_to_name(err));
         return err;
     }
     // 此处 UART 驱动已由 uart_vfs_dev_port_init() 以 0 字节 TX 缓冲装好，且 console 任务尚未启动。
-    err = enable_uart_tx_buffer();
+    err = enableUartTxBuffer();
     if (err != ESP_OK) {
-        cleanup_repl(repl);
+        cleanupRepl(repl);
         return err;
     }
 #if CONFIG_RTK_CONSOLE_UART_TX_BUF > 0
-    install_uart_sink();
+    installUartSink();
 #endif
 #elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
-    esp_console_dev_usb_cdc_config_t cdc_cfg = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
-    err = esp_console_new_repl_usb_cdc(&cdc_cfg, &repl_cfg, &repl);
+    esp_console_dev_usb_cdc_config_t cdcCfg = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
+    err = esp_console_new_repl_usb_cdc(&cdcCfg, &replCfg, &repl);
 #elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
-    esp_console_dev_usb_serial_jtag_config_t jtag_cfg =
+    esp_console_dev_usb_serial_jtag_config_t jtagCfg =
         ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
-    err = esp_console_new_repl_usb_serial_jtag(&jtag_cfg, &repl_cfg, &repl);
+    err = esp_console_new_repl_usb_serial_jtag(&jtagCfg, &replCfg, &repl);
 #else
-    err = esp_console_new_repl_stdio(&repl_cfg, &repl);
+    err = esp_console_new_repl_stdio(&replCfg, &repl);
 #endif
     if (err != ESP_OK) {
         FW_LOGE(fw::TraceCat::kSys, "console init failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    err = register_help();
+    err = registerHelp();
     if (err != ESP_OK) {
         FW_LOGE(fw::TraceCat::kSys, "register help failed: %s", esp_err_to_name(err));
-        cleanup_repl(repl);
+        cleanupRepl(repl);
         return err;
     }
 
@@ -478,7 +478,7 @@ esp_err_t init(const char *prompt) noexcept
             if (err != ESP_OK) {
                 FW_LOGE(fw::TraceCat::kSys, "register %s failed: %s", entry.name,
                         esp_err_to_name(err));
-                cleanup_repl(repl);
+                cleanupRepl(repl);
                 return err;
             }
         }
@@ -517,15 +517,15 @@ esp_err_t start(const char *prompt) noexcept
 // -Wl,--wrap=esp_console_run 把 REPL 的调用引到这里：未找到时自己输出 "ERR unknown command"，
 // 并返回 ESP_ERR_INVALID_ARG（REPL 按“空行”处理，不再追加输出）。其余结果原样透传。
 // NOLINTNEXTLINE(bugprone-reserved-identifier, readability-identifier-naming): --wrap 规定 __real_/__wrap_ 前缀
-extern "C" esp_err_t __real_esp_console_run(const char *cmdline, int *cmd_ret);
+extern "C" esp_err_t __real_esp_console_run(const char *cmdline, int *cmdRet);
 // NOLINTNEXTLINE(bugprone-reserved-identifier, readability-identifier-naming): 同上
-extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmd_ret);
+extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmdRet);
 
-extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmd_ret)
+extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmdRet)
 {
-    const esp_err_t err = __real_esp_console_run(cmdline, cmd_ret);
+    const esp_err_t err = __real_esp_console_run(cmdline, cmdRet);
     if (err == ESP_ERR_NOT_FOUND) {
-        cli::out_printf("ERR unknown command\n");
+        cli::outPrintf("ERR unknown command\n");
         return ESP_ERR_INVALID_ARG;
     }
     return err;

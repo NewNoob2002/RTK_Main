@@ -534,7 +534,7 @@ ControllerImpl::Round ControllerImpl::output_send(Controller &self, uint32_t now
         ++self.output_index_;
         return Round::kAgain;
     }
-    if (!fw::is_ok(built) || (self.output_cmd_.len == 0U)) {
+    if (!fw::isOk(built) || (self.output_cmd_.len == 0U)) {
         self.stats_.failed_mask |= bit;
         ++self.output_index_;
         return Round::kAgain;

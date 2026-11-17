@@ -101,11 +101,11 @@ static void test_reader_take_and_skip()
 
 static void test_status_strings()
 {
-    TEST_ASSERT_TRUE(is_ok(fw::Status::kOk));
-    TEST_ASSERT_FALSE(is_ok(fw::Status::kTimeout));
-    TEST_ASSERT_NOT_NULL(to_string(fw::Status::kCorrupt));
-    TEST_ASSERT_TRUE(std::strlen(to_string(fw::Status::kOk)) > 0U);
-    TEST_ASSERT_EQUAL_STRING("?", to_string(static_cast<fw::Status>(0xEE)));
+    TEST_ASSERT_TRUE(isOk(fw::Status::kOk));
+    TEST_ASSERT_FALSE(isOk(fw::Status::kTimeout));
+    TEST_ASSERT_NOT_NULL(toString(fw::Status::kCorrupt));
+    TEST_ASSERT_TRUE(std::strlen(toString(fw::Status::kOk)) > 0U);
+    TEST_ASSERT_EQUAL_STRING("?", toString(static_cast<fw::Status>(0xEE)));
 }
 
 int main()

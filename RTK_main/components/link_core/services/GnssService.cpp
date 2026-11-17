@@ -50,7 +50,7 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
     size_t len = 0;
     const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
                                                  proto::response_type(req_type), payload, len);
-    if (!is_ok(status)) {
+    if (!isOk(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
     }

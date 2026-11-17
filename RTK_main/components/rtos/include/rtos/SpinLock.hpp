@@ -9,20 +9,20 @@
 namespace rtos {
 
 namespace detail {
-inline void spin_lock(void *ctx) noexcept
+inline void spinLock(void *ctx) noexcept
 {
     portENTER_CRITICAL(static_cast<portMUX_TYPE *>(ctx));
 }
-inline void spin_unlock(void *ctx) noexcept
+inline void spinUnlock(void *ctx) noexcept
 {
     portEXIT_CRITICAL(static_cast<portMUX_TYPE *>(ctx));
 }
 } // namespace detail
 
 /** mux 的生命周期必须覆盖所有使用返回值的对象（通常是 constinit 全局）。 */
-[[nodiscard]] inline fw::LockOps spin_lock_ops(portMUX_TYPE &mux) noexcept
+[[nodiscard]] inline fw::LockOps spinLockOps(portMUX_TYPE &mux) noexcept
 {
-    return fw::LockOps{&detail::spin_lock, &detail::spin_unlock, &mux};
+    return fw::LockOps{&detail::spinLock, &detail::spinUnlock, &mux};
 }
 
 } // namespace rtos

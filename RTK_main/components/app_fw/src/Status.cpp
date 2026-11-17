@@ -5,7 +5,7 @@
 
 namespace fw {
 
-const char *to_string(Status status) noexcept
+const char *toString(Status status) noexcept
 {
     switch (status) {
     case Status::kOk:

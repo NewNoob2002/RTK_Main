@@ -21,7 +21,7 @@ fw::Status CommandRouter::init(std::span<const RouteTable> tables) noexcept
     count_ = 0;
     fw::Status status = fw::Status::kOk;
     for (const RouteTable &table : tables) {
-        if (!is_ok(status)) {
+        if (!isOk(status)) {
             break;
         }
         if (table.self == nullptr) {
@@ -58,7 +58,7 @@ fw::Status CommandRouter::init(std::span<const RouteTable> tables) noexcept
         }
     }
 
-    if (!is_ok(status)) {
+    if (!isOk(status)) {
         // 出错时路由器保持未初始化：handle 一律 reply.clear() + kNoReply。
         count_ = 0;
         return status;

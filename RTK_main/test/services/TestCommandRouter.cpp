@@ -205,7 +205,7 @@ void test_dispatch_and_arguments()
     const std::array<Route, 1> routes = {Route{kMsgHeartbeat, kRoleAlarm, &handle_reply}};
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, routes}};
     CommandRouter router;
-    TEST_ASSERT_TRUE(is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(isOk(router.init(tables)));
 
     Fixture f;
     TEST_ASSERT_EQUAL_UINT8(
@@ -230,7 +230,7 @@ void test_role_check_and_unknown_order()
         RouteTable{&s_calls, alarm_route},
     };
     CommandRouter router;
-    TEST_ASSERT_TRUE(is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(isOk(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(2, router.route_count());
 
     Fixture f;
@@ -265,7 +265,7 @@ void test_handler_result_is_passed_through()
     const std::array<Route, 1> routes = {Route{kMsgHeartbeat, kRoleAlarm, &handle_silent}};
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, routes}};
     CommandRouter router;
-    TEST_ASSERT_TRUE(is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(isOk(router.init(tables)));
 
     Fixture f;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kNoReply),

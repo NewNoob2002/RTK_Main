@@ -84,7 +84,7 @@ bool SystemModule::poll(uint32_t /*now_ms*/) noexcept
 {
     /* 先更新系统状态，再发布执行器统计，保持原主题写入顺序。 */
     status_.link_running = (ctx().link_executor != nullptr) && ctx().link_executor->running() &&
-                           ctx().link_executor->module_ok(id(ModuleKind::kBtLink));
+                           ctx().link_executor->moduleOk(id(ModuleKind::kBtLink));
     status_.free_heap = esp_get_free_heap_size();
     status_.min_free_heap = esp_get_minimum_free_heap_size();
     ctx().data.system_status.write(status_);

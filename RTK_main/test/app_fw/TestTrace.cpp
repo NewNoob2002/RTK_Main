@@ -74,7 +74,7 @@ void spy_unlock(void *ctx) noexcept
 fw::TraceEvent make_event(uint8_t code, uint16_t session = 0U) noexcept
 {
     fw::TraceEvent ev{};
-    ev.t_ms = static_cast<uint32_t>(code);
+    ev.tMs = static_cast<uint32_t>(code);
     ev.cat = fw::TraceCat::kLink;
     ev.code = code;
     ev.session = session;
@@ -87,7 +87,7 @@ void test_trace_noop_before_install()
 {
     s_sink_calls = 0U;
     s_clock_calls = 0U;
-    fw::trace_set_mask(fw::kTraceAllMask);
+    fw::traceSetMask(fw::kTraceAllMask);
     fw::trace(fw::TraceCat::kLink, 1U, 0U, 0U, 0U);
     TEST_ASSERT_EQUAL_UINT32(0U, s_sink_calls);
     TEST_ASSERT_EQUAL_UINT32(0U, s_clock_calls);
@@ -96,22 +96,20 @@ void test_trace_noop_before_install()
 void test_trace_install_validation_and_once()
 {
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(fw::trace_install(nullptr, nullptr, test_clock)));
+                            static_cast<uint8_t>(fw::traceInstall(nullptr, nullptr, test_clock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(fw::trace_install(test_sink, nullptr, nullptr)));
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(fw::Result::kOk),
-        static_cast<uint8_t>(fw::trace_install(test_sink, nullptr, test_clock)));
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(fw::Result::kInvalidState),
-        static_cast<uint8_t>(fw::trace_install(test_sink, nullptr, test_clock)));
+                            static_cast<uint8_t>(fw::traceInstall(test_sink, nullptr, nullptr)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
+                            static_cast<uint8_t>(fw::traceInstall(test_sink, nullptr, test_clock)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
+                            static_cast<uint8_t>(fw::traceInstall(test_sink, nullptr, test_clock)));
 }
 
 void test_trace_mask_switch()
 {
-    fw::trace_set_mask(0U);
-    TEST_ASSERT_EQUAL_UINT32(0U, fw::trace_mask());
-    TEST_ASSERT_FALSE(fw::trace_on(fw::TraceCat::kLink));
+    fw::traceSetMask(0U);
+    TEST_ASSERT_EQUAL_UINT32(0U, fw::traceMask());
+    TEST_ASSERT_FALSE(fw::traceOn(fw::TraceCat::kLink));
     s_sink_calls = 0U;
     s_clock_calls = 0U;
     fw::trace(fw::TraceCat::kLink, 1U, 0U, 0U, 0U);
@@ -119,14 +117,14 @@ void test_trace_mask_switch()
     TEST_ASSERT_EQUAL_UINT32(0U, s_clock_calls);
 
     // 越界位被清零：掩码等于可用类别全集。
-    fw::trace_set_mask(kAllBitsMask);
-    TEST_ASSERT_EQUAL_UINT32(fw::kTraceAllMask, fw::trace_mask());
+    fw::traceSetMask(kAllBitsMask);
+    TEST_ASSERT_EQUAL_UINT32(fw::kTraceAllMask, fw::traceMask());
 
-    fw::trace_set_mask(fw::trace_bit(fw::TraceCat::kStore));
-    TEST_ASSERT_TRUE(fw::trace_on(fw::TraceCat::kStore));
-    TEST_ASSERT_FALSE(fw::trace_on(fw::TraceCat::kLink));
+    fw::traceSetMask(fw::traceBit(fw::TraceCat::kStore));
+    TEST_ASSERT_TRUE(fw::traceOn(fw::TraceCat::kStore));
+    TEST_ASSERT_FALSE(fw::traceOn(fw::TraceCat::kLink));
     // 越界类别（>= kCount）不能打开，也不产生事件。
-    TEST_ASSERT_FALSE(fw::trace_on(fw::TraceCat::kCount));
+    TEST_ASSERT_FALSE(fw::traceOn(fw::TraceCat::kCount));
     s_clock_calls = 0U;
     fw::trace(fw::TraceCat::kCount, 1U, 0U, 0U, 0U);
     TEST_ASSERT_EQUAL_UINT32(0U, s_clock_calls);
@@ -134,14 +132,14 @@ void test_trace_mask_switch()
 
 void test_trace_event_fields_and_clock()
 {
-    fw::trace_set_mask(fw::kTraceAllMask);
+    fw::traceSetMask(fw::kTraceAllMask);
     s_sink_calls = 0U;
     s_clock_calls = 0U;
     const uint32_t before = s_clock_value;
     fw::trace(fw::TraceCat::kRtcm, kCodeMarker, kSessionMarker, kParamA, kParamB);
     TEST_ASSERT_EQUAL_UINT32(1U, s_sink_calls);
     TEST_ASSERT_EQUAL_UINT32(1U, s_clock_calls);
-    TEST_ASSERT_EQUAL_UINT32(before + kClockStep, s_last_event.t_ms);
+    TEST_ASSERT_EQUAL_UINT32(before + kClockStep, s_last_event.tMs);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::TraceCat::kRtcm),
                             static_cast<uint8_t>(s_last_event.cat));
     TEST_ASSERT_EQUAL_UINT8(kCodeMarker, s_last_event.code);
@@ -161,7 +159,7 @@ void test_trace_ring_init_validation()
     TEST_ASSERT_FALSE(ring.push(ev));
     fw::TraceEvent out{};
     TEST_ASSERT_FALSE(ring.pop(out));
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.take_dropped());
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.takeDropped());
     TEST_ASSERT_EQUAL_UINT32(0U, ring.stats().pushed);
     TEST_ASSERT_EQUAL_UINT32(0U, ring.depth());
 
@@ -198,13 +196,13 @@ void test_trace_ring_full_drops_new_and_keeps_order()
     const fw::TraceRingStats st = ring.stats();
     TEST_ASSERT_EQUAL_UINT32(kRingCap, st.pushed);
     TEST_ASSERT_EQUAL_UINT32(2U, st.dropped);
-    TEST_ASSERT_EQUAL_UINT32(kRingCap, st.max_depth);
+    TEST_ASSERT_EQUAL_UINT32(kRingCap, st.maxDepth);
 
     // 丢弃增量语义：读一次清零，再读为 0，新增丢弃再累加。
-    TEST_ASSERT_EQUAL_UINT32(2U, ring.take_dropped());
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.take_dropped());
+    TEST_ASSERT_EQUAL_UINT32(2U, ring.takeDropped());
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.takeDropped());
     TEST_ASSERT_FALSE(ring.push(make_event(101U)));
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.take_dropped());
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.takeDropped());
 
     fw::TraceEvent out{};
     for (uint8_t i = 0U; i < static_cast<uint8_t>(kRingCap); ++i) {
@@ -240,7 +238,7 @@ void test_trace_ring_wrap_around()
     const fw::TraceRingStats st = ring.stats();
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kWrapRounds * kRingCap), st.pushed);
     TEST_ASSERT_EQUAL_UINT32(0U, st.dropped);
-    TEST_ASSERT_EQUAL_UINT32(kRingCap, st.max_depth);
+    TEST_ASSERT_EQUAL_UINT32(kRingCap, st.maxDepth);
 }
 
 void test_trace_ring_partial_drain_depth()
@@ -260,7 +258,7 @@ void test_trace_ring_partial_drain_depth()
     TEST_ASSERT_EQUAL_UINT8(1U, out.code);
     TEST_ASSERT_EQUAL_UINT32(2U, ring.depth());
     // max_depth 是历史峰值，不随出队下降。
-    TEST_ASSERT_EQUAL_UINT32(3U, ring.stats().max_depth);
+    TEST_ASSERT_EQUAL_UINT32(3U, ring.stats().maxDepth);
     TEST_ASSERT_EQUAL_UINT32(3U, ring.stats().pushed);
 }
 
@@ -276,7 +274,7 @@ void test_trace_ring_uses_injected_lock()
     TEST_ASSERT_TRUE(ring.push(make_event(1U)));
     fw::TraceEvent out{};
     TEST_ASSERT_TRUE(ring.pop(out));
-    (void)ring.take_dropped();
+    (void)ring.takeDropped();
     (void)ring.depth();
     (void)ring.stats();
 

@@ -97,7 +97,7 @@ std::array<uint8_t, kPayloadLen> make_payload(uint8_t seed) noexcept
 fw::LogHeader make_header(uint32_t t_ms, fw::LogKind kind = fw::LogKind::kText) noexcept
 {
     fw::LogHeader hdr{};
-    hdr.t_ms = t_ms;
+    hdr.tMs = t_ms;
     hdr.cat = fw::TraceCat::kLink;
     hdr.kind = kind;
     // kPayloadLen（40）≤ uint16 上限，窄化安全。
@@ -110,17 +110,17 @@ void test_log_install_validation_and_once()
 {
     // 未安装 trace 时没有可用的时钟源，文本记录的时间戳无从取得。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
-                            static_cast<uint8_t>(fw::log_install(&fw::LogRing::sink, &s_ring)));
+                            static_cast<uint8_t>(fw::logInstall(&fw::LogRing::sink, &s_ring)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(fw::log_install(nullptr, &s_ring)));
+                            static_cast<uint8_t>(fw::logInstall(nullptr, &s_ring)));
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(fw::Result::kOk),
-        static_cast<uint8_t>(fw::trace_install(&trace_sink, nullptr, &test_clock)));
+        static_cast<uint8_t>(fw::traceInstall(&trace_sink, nullptr, &test_clock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(fw::log_install(&fw::LogRing::sink, &s_ring)));
+                            static_cast<uint8_t>(fw::logInstall(&fw::LogRing::sink, &s_ring)));
     // 重复安装：sink 与 ctx 只能安装一次，避免运行期两条通道写不同环。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
-                            static_cast<uint8_t>(fw::log_install(&fw::LogRing::sink, &s_ring)));
+                            static_cast<uint8_t>(fw::logInstall(&fw::LogRing::sink, &s_ring)));
     // trace 通道本身没有被这些调用触发。
     TEST_ASSERT_EQUAL_UINT32(0U, s_trace_calls);
 }
@@ -128,13 +128,13 @@ void test_log_install_validation_and_once()
 void test_tlog_respects_category_mask()
 {
     // 类别日志级别低于 I 时 tlog 连格式化都不做，环里不应出现记录（ADR-0009 §2.12：与追踪掩码无关）。
-    fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kWarn);
+    fw::logSetCatLevel(fw::TraceCat::kGnss, fw::LogLevel::kWarn);
     // tlog 是冻结的 printf 风格接口（ADR-0009 §3），无法改成模板 vararg。
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     fw::tlog(fw::TraceCat::kGnss, "should be dropped");
     TEST_ASSERT_EQUAL_UINT32(0U, s_ring.stats().pushed);
 
-    fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kDebug);
+    fw::logSetCatLevel(fw::TraceCat::kGnss, fw::LogLevel::kDebug);
     // 类别关闭时不应触碰时钟：时间戳只在真正要写记录时才取。
     TEST_ASSERT_EQUAL_UINT32(0U, s_clock_value);
 }
@@ -142,7 +142,7 @@ void test_tlog_respects_category_mask()
 void test_tlog_text_record_fields()
 {
     drain_ring();
-    fw::trace_set_mask(fw::trace_bit(fw::TraceCat::kGnss));
+    fw::traceSetMask(fw::traceBit(fw::TraceCat::kGnss));
     const uint32_t before = s_clock_value;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     fw::tlog(fw::TraceCat::kGnss, "NMEA %s, %u bytes\n", "GNGGA", kBytesMarker);
@@ -155,14 +155,14 @@ void test_tlog_text_record_fields()
                             static_cast<uint8_t>(hdr.cat));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::LogKind::kText),
                             static_cast<uint8_t>(hdr.kind));
-    TEST_ASSERT_EQUAL_UINT32(kClockStep, hdr.t_ms - before);
+    TEST_ASSERT_EQUAL_UINT32(kClockStep, hdr.tMs - before);
     TEST_ASSERT_EQUAL_UINT32(hdr.len, hdr.total);
     // 期望文本与上面那次调用一一对应（kBytesMarker == 72）。
     constexpr std::string_view kExpected = "NMEA GNGGA, 72 bytes";
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kExpected.size()),
                              static_cast<uint32_t>(copied));
     TEST_ASSERT_EQUAL_INT(0, std::memcmp(kExpected.data(), out.data(), kExpected.size()));
-    TEST_ASSERT_EQUAL_UINT32(0U, s_ring.take_dropped());
+    TEST_ASSERT_EQUAL_UINT32(0U, s_ring.takeDropped());
 }
 
 void test_tlog_truncates_with_ellipsis()
@@ -194,18 +194,18 @@ void test_tlog_hex_two_level_mask()
         bytes[i] = static_cast<uint8_t>(i);
     }
     // 级别一：类别 D 级、十六进制关 → 不写记录。
-    TEST_ASSERT_TRUE(fw::log_enabled(fw::LogLevel::kDebug, fw::TraceCat::kGnss));
-    TEST_ASSERT_FALSE(fw::log_hex_on(fw::TraceCat::kGnss));
+    TEST_ASSERT_TRUE(fw::logEnabled(fw::LogLevel::kDebug, fw::TraceCat::kGnss));
+    TEST_ASSERT_FALSE(fw::logHexOn(fw::TraceCat::kGnss));
     const uint32_t pushed_before = s_ring.stats().pushed;
-    fw::tlog_hex(fw::TraceCat::kGnss, bytes);
+    fw::tlogHex(fw::TraceCat::kGnss, bytes);
     TEST_ASSERT_EQUAL_UINT32(pushed_before, s_ring.stats().pushed);
 
     // 级别二：十六进制掩码打开 → 写记录，只保留前 kLogHexMax 字节，total 保留原始长度。
-    fw::log_set_hex_mask(fw::trace_bit(fw::TraceCat::kGnss) | 0x80000000U);
-    TEST_ASSERT_TRUE(fw::log_hex_on(fw::TraceCat::kGnss));
+    fw::logSetHexMask(fw::traceBit(fw::TraceCat::kGnss) | 0x80000000U);
+    TEST_ASSERT_TRUE(fw::logHexOn(fw::TraceCat::kGnss));
     // 越界位被清掉。
-    TEST_ASSERT_EQUAL_UINT32(fw::trace_bit(fw::TraceCat::kGnss), fw::log_hex_mask());
-    fw::tlog_hex(fw::TraceCat::kGnss, bytes);
+    TEST_ASSERT_EQUAL_UINT32(fw::traceBit(fw::TraceCat::kGnss), fw::logHexMask());
+    fw::tlogHex(fw::TraceCat::kGnss, bytes);
 
     fw::LogHeader hdr{};
     std::array<uint8_t, fw::kLogHexMax> out{};
@@ -220,12 +220,12 @@ void test_tlog_hex_two_level_mask()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::kLogHexMax - 1U), out[copied - 1U]);
 
     // 类别降到 I 级后即使十六进制掩码还在，也不再转储。
-    fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kInfo);
-    fw::tlog_hex(fw::TraceCat::kGnss, bytes);
+    fw::logSetCatLevel(fw::TraceCat::kGnss, fw::LogLevel::kInfo);
+    fw::tlogHex(fw::TraceCat::kGnss, bytes);
     TEST_ASSERT_EQUAL_UINT32(pushed_before + 1U, s_ring.stats().pushed);
     // 越界类别不得崩溃。
-    TEST_ASSERT_FALSE(fw::log_hex_on(fw::TraceCat::kCount));
-    fw::log_set_hex_mask(0U);
+    TEST_ASSERT_FALSE(fw::logHexOn(fw::TraceCat::kCount));
+    fw::logSetHexMask(0U);
 }
 
 void test_log_ring_init_validation()
@@ -251,7 +251,7 @@ void test_log_ring_init_validation()
     const auto payload = make_payload(1U);
     TEST_ASSERT_FALSE(fresh.push(make_header(1U), payload));
     uint32_t t_ms = 0U;
-    TEST_ASSERT_FALSE(fresh.peek_time(t_ms));
+    TEST_ASSERT_FALSE(fresh.peekTime(t_ms));
 }
 
 void test_log_ring_push_validation()
@@ -285,21 +285,21 @@ void test_log_ring_full_drops_new_and_keeps_order()
     const auto payload = make_payload(9U);
     TEST_ASSERT_FALSE(ring.push(make_header(99U), payload));
     TEST_ASSERT_EQUAL_UINT32(1U, ring.stats().dropped);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.take_dropped());
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.take_dropped());
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.takeDropped());
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.takeDropped());
     // 取出顺序 = 压入顺序，丢的是新记录。
     fw::LogHeader hdr{};
     std::array<uint8_t, kPayloadLen> out{};
     size_t copied = 0U;
     for (uint32_t i = 0U; i < kRecordsFit; ++i) {
         TEST_ASSERT_TRUE(ring.pop(hdr, out, copied));
-        TEST_ASSERT_EQUAL_UINT32(i + 1U, hdr.t_ms);
+        TEST_ASSERT_EQUAL_UINT32(i + 1U, hdr.tMs);
         TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kPayloadLen), static_cast<uint32_t>(copied));
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(i), out[0]);
     }
     TEST_ASSERT_FALSE(ring.pop(hdr, out, copied));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kRecordsFit * kRecordBytes),
-                             ring.stats().max_used);
+                             ring.stats().maxUsed);
 }
 
 void test_log_ring_wraps_across_end()
@@ -318,7 +318,7 @@ void test_log_ring_wraps_across_end()
     std::array<uint8_t, kPayloadLen> out{};
     size_t copied = 0U;
     TEST_ASSERT_TRUE(ring.pop(hdr, out, copied));
-    TEST_ASSERT_EQUAL_UINT32(1U, hdr.t_ms);
+    TEST_ASSERT_EQUAL_UINT32(1U, hdr.tMs);
 
     const auto wrapped = make_payload(7U);
     TEST_ASSERT_TRUE(ring.push(make_header(4U), wrapped));
@@ -326,7 +326,7 @@ void test_log_ring_wraps_across_end()
                              static_cast<uint32_t>(ring.used()));
     for (uint32_t i = 0U; i < kRecordsFit; ++i) {
         TEST_ASSERT_TRUE(ring.pop(hdr, out, copied));
-        TEST_ASSERT_EQUAL_UINT32(i + 2U, hdr.t_ms);
+        TEST_ASSERT_EQUAL_UINT32(i + 2U, hdr.tMs);
         TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kPayloadLen), static_cast<uint32_t>(copied));
         TEST_ASSERT_EQUAL_UINT8(seeds[i], out[0]);
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(seeds[i] + kPayloadLen - 1U),
@@ -342,12 +342,12 @@ void test_log_ring_peek_time_and_truncated_pop()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
     uint32_t t_ms = 0U;
-    TEST_ASSERT_FALSE(ring.peek_time(t_ms));
+    TEST_ASSERT_FALSE(ring.peekTime(t_ms));
 
     const auto payload = make_payload(4U);
     TEST_ASSERT_TRUE(ring.push(make_header(500U), payload));
     TEST_ASSERT_TRUE(ring.push(make_header(600U), payload));
-    TEST_ASSERT_TRUE(ring.peek_time(t_ms));
+    TEST_ASSERT_TRUE(ring.peekTime(t_ms));
     TEST_ASSERT_EQUAL_UINT32(500U, t_ms);
 
     // out 缓冲不足时截断复制，但记录整体移除，避免读者卡在一条超长记录上。
@@ -357,7 +357,7 @@ void test_log_ring_peek_time_and_truncated_pop()
     TEST_ASSERT_TRUE(ring.pop(hdr, small, copied));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kPayloadLen), static_cast<uint32_t>(hdr.len));
     TEST_ASSERT_EQUAL_UINT32(4U, static_cast<uint32_t>(copied));
-    TEST_ASSERT_TRUE(ring.peek_time(t_ms));
+    TEST_ASSERT_TRUE(ring.peekTime(t_ms));
     TEST_ASSERT_EQUAL_UINT32(600U, t_ms);
 }
 
@@ -375,12 +375,12 @@ void test_log_ring_uses_injected_lock()
     const auto payload = make_payload(5U);
     TEST_ASSERT_TRUE(ring.push(make_header(1U), payload));
     uint32_t t_ms = 0U;
-    TEST_ASSERT_TRUE(ring.peek_time(t_ms));
+    TEST_ASSERT_TRUE(ring.peekTime(t_ms));
     fw::LogHeader hdr{};
     std::array<uint8_t, kPayloadLen> out{};
     size_t copied = 0U;
     TEST_ASSERT_TRUE(ring.pop(hdr, out, copied));
-    (void)ring.take_dropped();
+    (void)ring.takeDropped();
     (void)ring.stats();
     (void)ring.used();
     TEST_ASSERT_EQUAL_UINT32(spy.lock_calls, spy.unlock_calls);
@@ -396,7 +396,7 @@ void test_log_ring_sink_receives_installed_context()
         payload[i] = static_cast<uint8_t>(i + 1U);
     }
     fw::LogHeader hdr{};
-    hdr.t_ms = kTimestampMarker;
+    hdr.tMs = kTimestampMarker;
     hdr.cat = fw::TraceCat::kStore;
     hdr.kind = fw::LogKind::kHex;
     // payload.size()（8）≤ uint16 上限，窄化安全。
@@ -408,7 +408,7 @@ void test_log_ring_sink_receives_installed_context()
     std::array<uint8_t, 8U> out{};
     size_t copied = 0U;
     TEST_ASSERT_TRUE(s_ring.pop(got, out, copied));
-    TEST_ASSERT_EQUAL_UINT32(kTimestampMarker, got.t_ms);
+    TEST_ASSERT_EQUAL_UINT32(kTimestampMarker, got.tMs);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::LogKind::kHex),
                             static_cast<uint8_t>(got.kind));
     TEST_ASSERT_EQUAL_UINT32(8U, static_cast<uint32_t>(copied));

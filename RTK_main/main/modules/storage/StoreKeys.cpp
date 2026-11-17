@@ -46,8 +46,8 @@ bool names_of(const fw::StoreKey &key, Name &ns, Name &name) noexcept
 
 bool blob_names_of(const fw::StoreKey &key, Name &ns, Name &name) noexcept
 {
-    return fw::valid(key) && (key.type == fw::StoreType::kBlob) && (key.max_size > 0U) &&
-           (key.max_size <= kMaxBlobKeyBytes) && copy_name(key.ns, ns) && copy_name(key.key, name);
+    return fw::valid(key) && (key.type == fw::StoreType::kBlob) && (key.maxSize > 0U) &&
+           (key.maxSize <= kMaxBlobKeyBytes) && copy_name(key.ns, ns) && copy_name(key.key, name);
 }
 
 } // namespace
@@ -127,7 +127,7 @@ esp_err_t read_blob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len
     len = 0U;
     Name ns{};
     Name name{};
-    if (!blob_names_of(key, ns, name) || (out.size() < key.max_size)) {
+    if (!blob_names_of(key, ns, name) || (out.size() < key.maxSize)) {
         return ESP_ERR_INVALID_ARG;
     }
     nvs_handle_t handle = 0;
@@ -148,7 +148,7 @@ esp_err_t write_blob(const fw::StoreKey &key, std::span<const uint8_t> data) noe
 {
     Name ns{};
     Name name{};
-    if (!blob_names_of(key, ns, name) || data.empty() || (data.size() > key.max_size)) {
+    if (!blob_names_of(key, ns, name) || data.empty() || (data.size() > key.maxSize)) {
         return ESP_ERR_INVALID_ARG;
     }
     nvs_handle_t handle = 0;
@@ -178,14 +178,14 @@ fw::Result StorageModule::load_keys(std::span<const fw::StoreKey> keys) noexcept
             continue;
         }
         if (key.type == fw::StoreType::kBlob) {
-            if ((key.max_size == 0U) || (key.max_size > store::kMaxBlobKeyBytes)) {
+            if ((key.maxSize == 0U) || (key.maxSize > store::kMaxBlobKeyBytes)) {
                 overall = fw::Result::kInvalidArg;
                 continue;
             }
             std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
             size_t len = 0U;
             const esp_err_t error =
-                store::read_blob(key, std::span<uint8_t>{blob}.first(key.max_size), len);
+                store::read_blob(key, std::span<uint8_t>{blob}.first(key.maxSize), len);
             if (error == ESP_ERR_NVS_NOT_FOUND) {
                 overall = fw::Result::kNotFound;
                 continue;
@@ -197,7 +197,7 @@ fw::Result StorageModule::load_keys(std::span<const fw::StoreKey> keys) noexcept
             }
             const fw::Result applied =
                 key.binding.load(key.binding.obj, std::span<const uint8_t>{blob}.first(len));
-            if (!fw::is_ok(applied)) {
+            if (!fw::isOk(applied)) {
                 overall = applied;
                 continue;
             }
@@ -225,7 +225,7 @@ fw::Result StorageModule::load_keys(std::span<const fw::StoreKey> keys) noexcept
         }
         const fw::Result applied =
             key.binding.load(key.binding.obj, std::span<const uint8_t>{bytes}.first(width));
-        if (!fw::is_ok(applied)) {
+        if (!fw::isOk(applied)) {
             overall = applied;
             continue;
         }
@@ -245,16 +245,16 @@ fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> keys) noexcept
             continue;
         }
         if (key.type == fw::StoreType::kBlob) {
-            if ((key.max_size == 0U) || (key.max_size > store::kMaxBlobKeyBytes)) {
+            if ((key.maxSize == 0U) || (key.maxSize > store::kMaxBlobKeyBytes)) {
                 overall = fw::Result::kInvalidArg;
                 continue;
             }
             std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
             size_t len = 0U;
-            const fw::Result encoded = key.binding.save(
-                key.binding.obj, std::span<uint8_t>{blob}.first(key.max_size), len);
-            if (!fw::is_ok(encoded) || (len == 0U) || (len > key.max_size)) {
-                overall = fw::is_ok(encoded) ? fw::Result::kInvalidArg : encoded;
+            const fw::Result encoded =
+                key.binding.save(key.binding.obj, std::span<uint8_t>{blob}.first(key.maxSize), len);
+            if (!fw::isOk(encoded) || (len == 0U) || (len > key.maxSize)) {
+                overall = fw::isOk(encoded) ? fw::Result::kInvalidArg : encoded;
                 continue;
             }
             const esp_err_t error =
@@ -276,8 +276,8 @@ fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> keys) noexcept
         size_t len = 0U;
         const fw::Result encoded =
             key.binding.save(key.binding.obj, std::span<uint8_t>{bytes}, len);
-        if (!fw::is_ok(encoded) || (len != width)) {
-            overall = fw::is_ok(encoded) ? fw::Result::kInvalidArg : encoded;
+        if (!fw::isOk(encoded) || (len != width)) {
+            overall = fw::isOk(encoded) ? fw::Result::kInvalidArg : encoded;
             continue;
         }
         uint32_t value = 0U;

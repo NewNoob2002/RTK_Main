@@ -32,7 +32,7 @@ public:
         if (!slot_.has_value()) {
             slot_.emplace();
         }
-        slot_->bind_lock(lock);
+        slot_->bindLock(lock);
     }
     void write(const T &value) noexcept
     {

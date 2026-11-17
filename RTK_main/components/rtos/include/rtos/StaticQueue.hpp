@@ -46,21 +46,21 @@ public:
     }
 
     /** 入队；timeout_ms=0 不等待。未初始化或超时返回 false。 */
-    [[nodiscard]] bool send(const T &item, uint32_t timeout_ms) noexcept
+    [[nodiscard]] bool send(const T &item, uint32_t timeoutMs) noexcept
     {
         if (handle_ == nullptr) {
             return false;
         }
-        return xQueueSend(handle_, &item, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+        return xQueueSend(handle_, &item, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
     }
 
     /** 出队；timeout_ms=0 不等待。未初始化或超时返回 false。 */
-    [[nodiscard]] bool receive(T &item, uint32_t timeout_ms) noexcept
+    [[nodiscard]] bool receive(T &item, uint32_t timeoutMs) noexcept
     {
         if (handle_ == nullptr) {
             return false;
         }
-        return xQueueReceive(handle_, &item, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+        return xQueueReceive(handle_, &item, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
     }
 
     [[nodiscard]] bool valid() const noexcept

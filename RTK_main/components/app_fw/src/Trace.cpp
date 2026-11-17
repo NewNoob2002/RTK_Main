@@ -33,7 +33,7 @@ static_assert(fw::kAtomicUsable<uint32_t>, "trace 掩码原子须无锁");
 
 } // namespace
 
-Result trace_install(TraceSinkFn fn, void *ctx, TraceClockFn clock) noexcept
+Result traceInstall(TraceSinkFn fn, void *ctx, TraceClockFn clock) noexcept
 {
     if ((fn == nullptr) || (clock == nullptr)) {
         return Result::kInvalidArg;
@@ -49,30 +49,30 @@ Result trace_install(TraceSinkFn fn, void *ctx, TraceClockFn clock) noexcept
     return Result::kOk;
 }
 
-void trace_set_mask(uint32_t mask) noexcept
+void traceSetMask(uint32_t mask) noexcept
 {
     // 越界位一律清零：trace() 只按位检查，清掉可避免调用方误以为某类别已生效。
     s_mask.store(mask & kTraceAllMask, std::memory_order_relaxed);
 }
 
-uint32_t trace_mask() noexcept
+uint32_t traceMask() noexcept
 {
     return s_mask.load(std::memory_order_relaxed);
 }
 
 #if FW_TRACE_ENABLED
-bool trace_on(TraceCat cat) noexcept
+bool traceOn(TraceCat cat) noexcept
 {
     const uint32_t bit = static_cast<uint32_t>(cat);
     if (bit >= kCatCount) {
         return false;
     }
-    return (s_mask.load(std::memory_order_relaxed) & trace_bit(cat)) != 0U;
+    return (s_mask.load(std::memory_order_relaxed) & traceBit(cat)) != 0U;
 }
 
 void trace(TraceCat cat, uint8_t code, uint16_t session, uint32_t a, uint32_t b) noexcept
 {
-    if (!trace_on(cat)) {
+    if (!traceOn(cat)) {
         return;
     }
     const TraceSinkFn fn = s_sink.load(std::memory_order_acquire);
@@ -80,7 +80,7 @@ void trace(TraceCat cat, uint8_t code, uint16_t session, uint32_t a, uint32_t b)
         return;
     }
     TraceEvent ev{};
-    ev.t_ms = s_clock();
+    ev.tMs = s_clock();
     ev.cat = cat;
     ev.code = code;
     ev.session = session;
@@ -131,9 +131,9 @@ bool TraceRing::push(const TraceEvent &ev) noexcept
     buf_[(head_ + count_) % cap] = ev;
     ++count_;
     ++stats_.pushed;
-    if (count_ > static_cast<size_t>(stats_.max_depth)) {
+    if (count_ > static_cast<size_t>(stats_.maxDepth)) {
         // init 已校验 capacity ≤ UINT32_MAX，因此 count_ 转 uint32_t 不丢位。
-        stats_.max_depth = static_cast<uint32_t>(count_);
+        stats_.maxDepth = static_cast<uint32_t>(count_);
     }
     return true;
 }
@@ -153,7 +153,7 @@ bool TraceRing::pop(TraceEvent &out) noexcept
     return true;
 }
 
-uint32_t TraceRing::take_dropped() noexcept
+uint32_t TraceRing::takeDropped() noexcept
 {
     if (!ready_) {
         return 0U;
@@ -182,7 +182,7 @@ size_t TraceRing::depth() const noexcept
     return count_;
 }
 
-bool TraceRing::peek_time(uint32_t &t_ms) const noexcept
+bool TraceRing::peekTime(uint32_t &tMs) const noexcept
 {
     if (!ready_) {
         return false;
@@ -192,7 +192,7 @@ bool TraceRing::peek_time(uint32_t &t_ms) const noexcept
     if (count_ == 0U) {
         return false;
     }
-    t_ms = buf_[head_].t_ms;
+    tMs = buf_[head_].tMs;
     return true;
 }
 
@@ -207,7 +207,7 @@ void TraceRing::sink(void *ctx, const TraceEvent &ev) noexcept
 
 namespace detail {
 
-TraceClockFn installed_clock() noexcept
+TraceClockFn installedClock() noexcept
 {
     // 只在启动阶段由 trace_install 写入一次；log_install 在 install 之后读取，无需原子。
     return s_clock;

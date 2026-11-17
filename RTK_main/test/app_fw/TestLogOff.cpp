@@ -55,7 +55,7 @@ int bump(int &counter) noexcept
 void test_off_logs_still_work(void)
 {
     static_assert(fw::kLogMaxLevel == fw::LogLevel::kInfo, "this build sets FW_LOG_MAX_LEVEL=2");
-    TEST_ASSERT_EQUAL(fw::Result::kOk, fw::log_install_direct(&sink, nullptr, &clock0));
+    TEST_ASSERT_EQUAL(fw::Result::kOk, fw::logInstallDirect(&sink, nullptr, &clock0));
     int evaluated = 0;
     FW_LOGD(fw::TraceCat::kGnss, "x=%d", bump(evaluated));
     TEST_ASSERT_EQUAL_INT(0, evaluated);
@@ -63,9 +63,9 @@ void test_off_logs_still_work(void)
     FW_LOGI(fw::TraceCat::kGnss, "x=%d", bump(evaluated));
     TEST_ASSERT_EQUAL_UINT32(1U, s_calls);
     TEST_ASSERT_EQUAL_STRING("x=1", s_last.c_str());
-    fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kDebug);
+    fw::logSetCatLevel(fw::TraceCat::kGnss, fw::LogLevel::kDebug);
     TEST_ASSERT_EQUAL(fw::LogLevel::kInfo,
-                      fw::log_cat_level(fw::TraceCat::kGnss)); // 运行期也被上限截住
+                      fw::logCatLevel(fw::TraceCat::kGnss)); // 运行期也被上限截住
 }
 
 int main(void)

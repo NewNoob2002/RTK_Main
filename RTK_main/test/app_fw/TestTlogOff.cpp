@@ -39,33 +39,33 @@ void test_tlog_is_noop_when_disabled()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.init(storage, fw::kNoLock)));
 
-    fw::trace_set_mask(fw::kTraceAllMask);
-    fw::log_set_hex_mask(fw::kTraceAllMask);
+    fw::traceSetMask(fw::kTraceAllMask);
+    fw::logSetHexMask(fw::kTraceAllMask);
     // 十六进制通通关闭：即使两级掩码都置位也不认为打开。
-    TEST_ASSERT_FALSE(fw::log_hex_on(fw::TraceCat::kGnss));
+    TEST_ASSERT_FALSE(fw::logHexOn(fw::TraceCat::kGnss));
 
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     fw::tlog(fw::TraceCat::kGnss, "must not reach the ring: %u", kMarker);
     const std::array<uint8_t, 4U> bytes{0U, 1U, 2U, 3U};
-    fw::tlog_hex(fw::TraceCat::kGnss, bytes);
+    fw::tlogHex(fw::TraceCat::kGnss, bytes);
     TEST_ASSERT_EQUAL_UINT32(0U, ring.stats().pushed);
-    TEST_ASSERT_EQUAL_UINT32(fw::kTraceAllMask, fw::log_hex_mask());
+    TEST_ASSERT_EQUAL_UINT32(fw::kTraceAllMask, fw::logHexMask());
 }
 
 void test_log_install_still_validated_when_disabled()
 {
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(fw::log_install(nullptr, nullptr)));
+                            static_cast<uint8_t>(fw::logInstall(nullptr, nullptr)));
     // 未安装 trace 时没有时钟源。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
-                            static_cast<uint8_t>(fw::log_install(&log_sink, nullptr)));
+                            static_cast<uint8_t>(fw::logInstall(&log_sink, nullptr)));
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(fw::Result::kOk),
-        static_cast<uint8_t>(fw::trace_install(&trace_sink, nullptr, &test_clock)));
+        static_cast<uint8_t>(fw::traceInstall(&trace_sink, nullptr, &test_clock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(fw::log_install(&log_sink, nullptr)));
+                            static_cast<uint8_t>(fw::logInstall(&log_sink, nullptr)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
-                            static_cast<uint8_t>(fw::log_install(&log_sink, nullptr)));
+                            static_cast<uint8_t>(fw::logInstall(&log_sink, nullptr)));
 }
 
 } // namespace

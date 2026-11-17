@@ -16,9 +16,9 @@ namespace rtos {
  * ESP_ERR_NOT_SUPPORTED→kNotSupported，ESP_ERR_INVALID_STATE→kInvalidState，
  * ESP_ERR_INVALID_CRC→kCorrupt，其他→kIoError。
  */
-[[nodiscard]] fw::Status from_esp_err(esp_err_t err) noexcept;
+[[nodiscard]] fw::Status fromEspErr(esp_err_t err) noexcept;
 
 /** 单调毫秒时间（esp_timer），约 49.7 天回绕；所有比较须用无符号差值。ISR 安全：是。 */
-[[nodiscard]] uint32_t now_ms() noexcept;
+[[nodiscard]] uint32_t nowMs() noexcept;
 
 } // namespace rtos

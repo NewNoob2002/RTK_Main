@@ -62,7 +62,7 @@ void BtLinkModule::SessionSink::on_frame(const demux::Decoder &decoder, uint8_t 
         return;
     }
     if (index == kProductIndex) {
-        if (owner_->link_service().on_data(handle_, wire, rtos::now_ms()) == 0U) {
+        if (owner_->link_service().on_data(handle_, wire, rtos::nowMs()) == 0U) {
             core::trace_proto(core::ProtoTrace::kReplyError, handle_,
                               static_cast<uint32_t>(fw::Result::kBusy), 0U);
         }
@@ -184,7 +184,7 @@ void BtLinkModule::session_record(core::SessionHandle handle, const core::BtAddr
 void BtLinkModule::collect_whitelist_dirty() noexcept
 {
     if (link_service().consume_whitelist_dirty()) {
-        ctx().storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
+        ctx().storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::nowMs());
     }
 }
 
@@ -263,7 +263,7 @@ bool BtLinkModule::feed_one(SessionEntry &entry, size_t &budget, uint32_t round_
         }
     }
     // 非阻塞 read 也可能被抢占，过期时保留整个预读结果。
-    if (rtos::now_ms() - round_start_ms >= kRoundBudgetMs) {
+    if (rtos::nowMs() - round_start_ms >= kRoundBudgetMs) {
         return true;
     }
     /* 逐字节 feed 保留基线的帧投递和预算边界。 */
@@ -287,7 +287,7 @@ bool BtLinkModule::drain_session(SessionEntry &entry, size_t index, size_t &budg
 {
     while (entry.used && entry.demux_ready && !link_service().paused(entry.handle) &&
            (entry.drain_pending || entry.rx_offset < entry.rx_size) && budget > 0U) {
-        if (rtos::now_ms() - round_start_ms >= kRoundBudgetMs) {
+        if (rtos::nowMs() - round_start_ms >= kRoundBudgetMs) {
             return true;
         }
         // 时间耗尽前不推进起点，避免跳过上轮让出的会话。
@@ -509,7 +509,7 @@ void BtLinkModule::on_gnss_mask(void *ctx, uint32_t mask) noexcept
         return;
     }
     if (self->gnss_reader_attached_) {
-        static_cast<void>(self->ctx().data.gnss_app_ring.set_mask(self->gnss_reader_id_, mask));
+        static_cast<void>(self->ctx().data.gnss_app_ring.setMask(self->gnss_reader_id_, mask));
     }
     std::array<uint32_t, core::services::kGnssMsgCount> periods_ms{};
     if (self->gnss_service_.has_value()) {
@@ -533,7 +533,7 @@ void BtLinkModule::reset_gnss_stream_session() noexcept
     // 断连或切会话时清空旧读者的残余记录，避免重连后重放上一会话的句子（ADR-0011 §6.2）。
     for (size_t i = 0U; i < kMaxGnssFlushRecords; ++i) {
         fw::FanoutView view{};
-        if (!fw::is_ok(ctx().data.gnss_app_ring.peek(gnss_reader_id_, view))) {
+        if (!fw::isOk(ctx().data.gnss_app_ring.peek(gnss_reader_id_, view))) {
             break;
         }
         static_cast<void>(ctx().data.gnss_app_ring.commit(view.lease));
@@ -549,7 +549,7 @@ bool BtLinkModule::drain_gnss_stream() noexcept
     size_t sent_count = 0U;
     for (; sent_count < kMaxGnssStreamRecordsPerPoll; ++sent_count) {
         fw::FanoutView view{};
-        if (!fw::is_ok(ctx().data.gnss_app_ring.peek(gnss_reader_id_, view))) {
+        if (!fw::isOk(ctx().data.gnss_app_ring.peek(gnss_reader_id_, view))) {
             break;
         }
         const size_t total = view.first.size() + view.second.size();
@@ -618,7 +618,7 @@ fw::Result BtLinkModule::init() noexcept
     auto &gnss_service = gnss_service_.emplace();
     gnss_service.set_query_hook(&BtLinkModule::on_gnss_query, this);
     gnss_service.set_mask_hook(&BtLinkModule::on_gnss_mask, this);
-    gnss_reader_attached_ = fw::is_ok(ctx().data.gnss_app_ring.attach(0U, gnss_reader_id_));
+    gnss_reader_attached_ = fw::isOk(ctx().data.gnss_app_ring.attach(0U, gnss_reader_id_));
     if (!gnss_reader_attached_) {
         FW_LOGE(fw::TraceCat::kLink, "<gnss> app ring attach failed");
         return fw::Result::kInvalidState;
@@ -633,8 +633,8 @@ fw::Result BtLinkModule::init() noexcept
                                                     alarm_service.table(), pair_service.table()};
 #endif
     const fw::Status route_status = router_.init(tables);
-    if (!is_ok(route_status)) {
-        FW_LOGE(fw::TraceCat::kLink, "command router init failed: %s", to_string(route_status));
+    if (!isOk(route_status)) {
+        FW_LOGE(fw::TraceCat::kLink, "command router init failed: %s", toString(route_status));
         return fw::Result::kInvalidState;
     }
     transport_.emplace();
@@ -692,22 +692,22 @@ bool BtLinkModule::poll_and_check_ready(uint32_t now_ms) noexcept
 
 void BtLinkModule::wait(uint32_t max_ms) noexcept
 {
-    round_start_ms_ = rtos::now_ms();
+    round_start_ms_ = rtos::nowMs();
     if (!service_.has_value()) {
         return;
     }
     wake_task_.store(xTaskGetCurrentTaskHandle(), std::memory_order_release);
     // 先清旧边缘通知，再查队列与水平状态；若仍空闲则复查后阻塞。
     static_cast<void>(ulTaskNotifyTake(pdTRUE, 0U));
-    if (!poll_and_check_ready(rtos::now_ms()) && (max_ms > 0U)) {
-        if (!poll_and_check_ready(rtos::now_ms())) {
+    if (!poll_and_check_ready(rtos::nowMs()) && (max_ms > 0U)) {
+        if (!poll_and_check_ready(rtos::nowMs())) {
             const TickType_t ticks = pdMS_TO_TICKS(max_ms);
             const TickType_t wait_ticks = (ticks == 0U) ? 1U : ticks;
             static_cast<void>(ulTaskNotifyTake(pdTRUE, wait_ticks));
-            static_cast<void>(poll_and_check_ready(rtos::now_ms()));
+            static_cast<void>(poll_and_check_ready(rtos::nowMs()));
         }
     }
-    round_start_ms_ = rtos::now_ms();
+    round_start_ms_ = rtos::nowMs();
 }
 
 bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
@@ -715,7 +715,7 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
     /* 先消费复位和白名单变化，再按真实时钟推进 tick。 */
     apply_rtcm_reset();
     collect_whitelist_dirty();
-    const uint32_t now = rtos::now_ms();
+    const uint32_t now = rtos::nowMs();
 #if RTK_GNSS_ENABLED
     sync_gnss_info(now);
 #endif
@@ -737,7 +737,7 @@ bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
     const bool gnss_more = false;
 #endif
     collect_whitelist_dirty();
-    publish_link(rtos::now_ms());
+    publish_link(rtos::nowMs());
     bool pending = gnss_more;
     for (const auto &entry : sessions_) {
         pending =
@@ -752,7 +752,7 @@ void BtLinkModule::set_alarm(const fw::Command &cmd, fw::CommandResult &result) 
     if (!alarm_.has_value()) {
         alarm_.emplace();
     }
-    if (cmd.arg_len != kAlarmArgBytes || !alarm_->set_override(cmd.args[0], cmd.args[1])) {
+    if (cmd.argLen != kAlarmArgBytes || !alarm_->set_override(cmd.args[0], cmd.args[1])) {
         result.status = fw::Result::kInvalidArg;
     }
 }
@@ -767,8 +767,8 @@ void BtLinkModule::clear_whitelist(fw::CommandResult &result) noexcept
 void BtLinkModule::persist_whitelist(fw::CommandResult &result) noexcept
 {
     /* 控制台改动立即落盘（不走 HELLO 学习的延迟合并），回执携带原后端错误码。 */
-    ctx().storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::now_ms());
-    result.detail = ctx().storage.flush_whitelist(rtos::now_ms());
+    ctx().storage.mark_whitelist_dirty(link_manager_.whitelist(), rtos::nowMs());
+    result.detail = ctx().storage.flush_whitelist(rtos::nowMs());
     if (result.detail != ESP_OK) {
         result.status = fw::Result::kIoError;
     }
@@ -778,7 +778,7 @@ void BtLinkModule::edit_whitelist(const fw::Command &cmd, bool add,
                                   fw::CommandResult &result) noexcept
 {
     /* args = 6 字节 MAC；仅在白名单实际变化时持久化。 */
-    if (cmd.arg_len != core::kAddrLen) {
+    if (cmd.argLen != core::kAddrLen) {
         result.status = fw::Result::kInvalidArg;
         return;
     }
@@ -806,7 +806,7 @@ void BtLinkModule::edit_whitelist(const fw::Command &cmd, bool add,
 void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     result.status = fw::Result::kOk;
-    if (cmd.arg_len > cmd.args.size()) {
+    if (cmd.argLen > cmd.args.size()) {
         result.status = fw::Result::kInvalidArg;
         return;
     }
@@ -826,7 +826,7 @@ void BtLinkModule::on_command(const fw::Command &cmd, fw::CommandResult &result)
         if (link_manager_.is_pairing()) {
             result.status = fw::Result::kBusy;
         } else {
-            link_manager_.pair_open(rtos::now_ms());
+            link_manager_.pair_open(rtos::nowMs());
         }
         break;
     case LinkVerb::kWhitelistClear:

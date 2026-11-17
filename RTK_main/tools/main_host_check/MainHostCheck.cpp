@@ -636,11 +636,11 @@ void lifecycle_application()
 } // namespace
 
 namespace rtos {
-uint32_t now_ms() noexcept
+uint32_t nowMs() noexcept
 {
     return s_clock;
 }
-fw::Status from_esp_err(esp_err_t err) noexcept
+fw::Status fromEspErr(esp_err_t err) noexcept
 {
     return (err == ESP_OK) ? fw::Status::kOk : fw::Status::kTimeout;
 }

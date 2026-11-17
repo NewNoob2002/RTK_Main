@@ -87,7 +87,7 @@ void StorageModule::load_whitelist() noexcept
     std::array<uint8_t, sizeof(raw)> bytes{};
     std::memcpy(bytes.data(), raw.data(), count * core::kAddrLen);
     const auto loaded = whitelist_load(std::span{bytes}.first(count * core::kAddrLen));
-    if (!fw::is_ok(loaded)) {
+    if (!fw::isOk(loaded)) {
         FW_LOGW(fw::TraceCat::kStore, "invalid whitelist; use empty list");
     }
 }
@@ -113,7 +113,7 @@ void StorageModule::load_sn() noexcept
     std::array<uint8_t, NVS_STORE_SN_MAX + 1U> bytes{};
     std::memcpy(bytes.data(), sn.data(), sn.size());
     const auto status = sn_load(std::span{bytes}.first(std::strlen(sn.data())));
-    if (!fw::is_ok(status)) {
+    if (!fw::isOk(status)) {
         FW_LOGW(fw::TraceCat::kStore, "invalid sn; derive from BT MAC");
     }
 }
@@ -122,7 +122,7 @@ void StorageModule::load_key_tables() noexcept
 {
     for (const StoreGroup &group : store_catalog()) {
         // 失败详情已由 load_keys 的 kStore 事件覆盖；启动早期不额外打印。
-        if (!fw::is_ok(load_keys(group.keys))) {
+        if (!fw::isOk(load_keys(group.keys))) {
             continue;
         }
     }
@@ -173,7 +173,7 @@ void StorageModule::mark_whitelist_dirty(std::span<const core::BtAddr> list,
 
 bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
 {
-    const uint32_t now = rtos::now_ms();
+    const uint32_t now = rtos::nowMs();
     if (!pending_ || now - changed_ms_ < kDebounceMs ||
         (attempted_ && now - attempt_ms_ < retry_ms_)) {
         return false;
@@ -183,9 +183,9 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
     size_t len = 0;
     std::array<uint8_t, kMaxAlarms * core::kAddrLen> out{};
     const auto serialized = whitelist_save(out, len);
-    if (!fw::is_ok(serialized)) {
+    if (!fw::isOk(serialized)) {
         FW_LOGE(fw::TraceCat::kStore, "whitelist not saved, serialization failed (%s)",
-                fw::to_string(serialized));
+                fw::toString(serialized));
         return false;
     }
     std::memcpy(raw.data(), out.data(), len);
@@ -195,7 +195,7 @@ bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
         reinterpret_cast<const uint8_t (*)[NVS_STORE_ADDR_LEN]>(raw.data()), len / core::kAddrLen);
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
     /* 使用写入完成时间计算重试，保持失败倍增和状态发布顺序。 */
-    attempt_ms_ = rtos::now_ms();
+    attempt_ms_ = rtos::nowMs();
     status_.whitelist_error = error;
     if (error == ESP_OK) {
         pending_ = false;
@@ -232,15 +232,15 @@ esp_err_t StorageModule::flush_whitelist(uint32_t now_ms) noexcept
 void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     const auto previous = sn_;
-    result.status = sn_load(std::span{cmd.args}.first(cmd.arg_len));
-    if (!fw::is_ok(result.status)) {
+    result.status = sn_load(std::span{cmd.args}.first(cmd.argLen));
+    if (!fw::isOk(result.status)) {
         return;
     }
     /* 先验证并编码，失败时还原模块内的原 SN。 */
     std::array<uint8_t, NVS_STORE_SN_MAX + 1U> encoded{};
     size_t len = 0;
     result.status = sn_save(encoded, len);
-    if (!fw::is_ok(result.status)) {
+    if (!fw::isOk(result.status)) {
         sn_ = previous;
         return;
     }
@@ -261,7 +261,7 @@ void StorageModule::save_sn(const fw::Command &cmd, fw::CommandResult &result) n
 
 void StorageModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
-    if (cmd.verb != verb(StorageVerb::kSaveSn) || cmd.arg_len > cmd.args.size()) {
+    if (cmd.verb != verb(StorageVerb::kSaveSn) || cmd.argLen > cmd.args.size()) {
         result.status = fw::Result::kInvalidArg;
         return;
     }

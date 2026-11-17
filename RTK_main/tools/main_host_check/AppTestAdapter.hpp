@@ -83,7 +83,7 @@ struct ModuleTestAccess {
     }
     static void flush_rtcm() noexcept
     {
-        static_cast<void>(app_context().rtcm.poll(rtos::now_ms()));
+        static_cast<void>(app_context().rtcm.poll(rtos::nowMs()));
     }
 };
 namespace {
@@ -222,7 +222,7 @@ void process_commands(uint32_t /*now_ms*/)
             switch (queued.id) {
             case CommandId::kAlarmSet:
                 command.verb = verb(LinkVerb::kAlarmSet);
-                command.arg_len = 2;
+                command.argLen = 2;
                 command.args[0] = queued.state;
                 command.args[1] = queued.level;
                 break;
@@ -260,14 +260,14 @@ void link_round(uint32_t &last_tick_ms)
                               (entry.drain_pending || entry.rx_offset < entry.rx_size));
     }
     app_context().bt_link.wait(pending ? 0U : 20U);
-    const uint32_t begin = rtos::now_ms();
+    const uint32_t begin = rtos::nowMs();
     process_commands(begin);
     ModuleTestAccess::last_tick_ms() = last_tick_ms;
     static_cast<void>(app_context().bt_link.poll(begin));
     last_tick_ms = ModuleTestAccess::last_tick_ms();
     flush_rtcm();
-    static_cast<void>(app_context().storage.poll(rtos::now_ms()));
-    publish_snapshot(rtos::now_ms());
+    static_cast<void>(app_context().storage.poll(rtos::nowMs()));
+    publish_snapshot(rtos::nowMs());
 }
 } // namespace
 } // namespace app

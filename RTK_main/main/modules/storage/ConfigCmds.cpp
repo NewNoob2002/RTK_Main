@@ -36,11 +36,11 @@ void show_identity() noexcept
     const auto &data = app_context().data;
     const auto sys = data.system_status.read();
     const auto store = data.store_status.read();
-    cli::print_section("identity");
-    cli::print_kv("sn", "%s", sys.sn.data());
-    cli::print_kv("bt_name", "%s", sys.device_name.data());
+    cli::printSection("identity");
+    cli::printKv("sn", "%s", sys.sn.data());
+    cli::printKv("bt_name", "%s", sys.device_name.data());
     if (store.sn_error != ESP_OK) {
-        cli::print_kv("sn_store", "%s (SN derived from BT MAC)", esp_err_to_name(store.sn_error));
+        cli::printKv("sn_store", "%s (SN derived from BT MAC)", esp_err_to_name(store.sn_error));
     }
 }
 
@@ -49,20 +49,20 @@ void show_link() noexcept
     const auto &data = app_context().data;
     const auto link = data.link_status.read();
     const auto store = data.store_status.read();
-    cli::print_section("link");
-    cli::print_kv("policy", "%s", policy_name(link.policy));
+    cli::printSection("link");
+    cli::printKv("policy", "%s", policy_name(link.policy));
     // 白名单计数上限为 kMaxAlarms，转 unsigned 无损。
-    cli::print_kv("whitelist", "%u / %u", static_cast<unsigned>(link.whitelist_count),
-                  static_cast<unsigned>(kMaxAlarms));
+    cli::printKv("whitelist", "%u / %u", static_cast<unsigned>(link.whitelist_count),
+                 static_cast<unsigned>(kMaxAlarms));
     std::array<char, kMacStrBuf> mac_buf{};
     for (size_t idx = 0U; idx < link.whitelist_count; ++idx) {
         format_mac(link.whitelist[idx], mac_buf);
-        cli::print_kv("  alarm", "%s", mac_buf.data());
+        cli::printKv("  alarm", "%s", mac_buf.data());
     }
     if (store.whitelist_pending || (store.whitelist_error != ESP_OK)) {
-        cli::print_kv("wl_sync", "%s, last error %s, failures %" PRIu32 ", retry %" PRIu32 " ms",
-                      store.whitelist_pending ? "pending" : "idle",
-                      esp_err_to_name(store.whitelist_error), store.failures, store.retry_ms);
+        cli::printKv("wl_sync", "%s, last error %s, failures %" PRIu32 ", retry %" PRIu32 " ms",
+                     store.whitelist_pending ? "pending" : "idle",
+                     esp_err_to_name(store.whitelist_error), store.failures, store.retry_ms);
     }
 }
 
@@ -73,10 +73,10 @@ void show_link() noexcept
 void show_group(const StoreGroup &group) noexcept
 {
     // 类别名长度为常量字面量，远小于 int 上限。
-    cli::out_printf("[%.*s] %.*s\n", static_cast<int>(group.name.size()), group.name.data(),
-                    static_cast<int>(group.title.size()), group.title.data());
+    cli::outPrintf("[%.*s] %.*s\n", static_cast<int>(group.name.size()), group.name.data(),
+                   static_cast<int>(group.title.size()), group.title.data());
     if (group.keys.empty()) {
-        cli::out_printf("  (feature disabled in this build)\n");
+        cli::outPrintf("  (feature disabled in this build)\n");
         return;
     }
     for (const fw::StoreKey &key : group.keys) {
@@ -110,9 +110,9 @@ void show_group(const StoreGroup &group) noexcept
                 (void)std::snprintf(text.data(), text.size(), "error");
             }
         }
-        cli::out_printf("  %-*.*s %-12s  %.*s\n", kNameWidth, static_cast<int>(key.key.size()),
-                        key.key.data(), text.data(), static_cast<int>(key.help.size()),
-                        key.help.data());
+        cli::outPrintf("  %-*.*s %-12s  %.*s\n", kNameWidth, static_cast<int>(key.key.size()),
+                       key.key.data(), text.data(), static_cast<int>(key.help.size()),
+                       key.help.data());
     }
 }
 
@@ -127,16 +127,16 @@ void show_groups(std::string_view prefix) noexcept
 
 void show_build() noexcept
 {
-    cli::print_section("build");
-    cli::print_kv("console", "UART%d %d baud", CONFIG_RTK_CONSOLE_UART_NUM,
-                  CONFIG_RTK_CONSOLE_UART_BAUD);
-    cli::print_kv("trace", "%s", FW_TRACE_ENABLED ? "compiled in" : "compiled out");
+    cli::printSection("build");
+    cli::printKv("console", "UART%d %d baud", CONFIG_RTK_CONSOLE_UART_NUM,
+                 CONFIG_RTK_CONSOLE_UART_BAUD);
+    cli::printKv("trace", "%s", FW_TRACE_ENABLED ? "compiled in" : "compiled out");
 #if RTK_GNSS_ENABLED
-    cli::print_kv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", CONFIG_RTK_GNSS_UART_NUM,
-                  CONFIG_RTK_GNSS_RX_GPIO, CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_DEFAULT_BAUD);
-    cli::print_kv("gnss_power", "GPIO%d active %s", CONFIG_RTK_GNSS_POWER_GPIO,
-                  (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0) ? "high" : "low");
-    cli::print_kv("gnss_port", "COM%d", CONFIG_RTK_GNSS_PORT);
+    cli::printKv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", CONFIG_RTK_GNSS_UART_NUM,
+                 CONFIG_RTK_GNSS_RX_GPIO, CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_DEFAULT_BAUD);
+    cli::printKv("gnss_power", "GPIO%d active %s", CONFIG_RTK_GNSS_POWER_GPIO,
+                 (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0) ? "high" : "low");
+    cli::printKv("gnss_port", "COM%d", CONFIG_RTK_GNSS_PORT);
 #else
     cli::print_kv("gnss", "disabled");
 #endif

@@ -39,7 +39,7 @@ struct Fixture {
         // J2b：原来的 CommandDispatcher 换成 4 个服务 + CommandRouter（组装方式与 main 一致）。
         const std::array<core::RouteTable, 4> tables = {device.table(), config.table(),
                                                         alarm_service.table(), pair.table()};
-        TEST_ASSERT_TRUE(is_ok(router.init(tables)));
+        TEST_ASSERT_TRUE(isOk(router.init(tables)));
     }
     test::FakeTransport transport;
     core::AlarmSource alarm;
@@ -65,8 +65,8 @@ struct Bytes {
     {
         size_t n = 0;
         TEST_ASSERT_TRUE(
-            is_ok(proto::build_frame(std::span<uint8_t>(data.data() + len, data.size() - len),
-                                     msg_id, sender, type, payload, n)));
+            isOk(proto::build_frame(std::span<uint8_t>(data.data() + len, data.size() - len),
+                                    msg_id, sender, type, payload, n)));
         len += n;
     }
 };

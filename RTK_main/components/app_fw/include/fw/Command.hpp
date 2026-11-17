@@ -19,7 +19,7 @@ inline constexpr size_t kCommandArgBytes =
 struct Command {
     uint8_t target = 0; // ModuleId
     uint8_t verb = 0;   // 模块内定义的动词
-    uint8_t arg_len = 0;
+    uint8_t argLen = 0;
     uint32_t seq = 0; // 由 Executor::call 分配，调用方不用填
     std::array<uint8_t, kCommandArgBytes> args{};
 };

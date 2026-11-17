@@ -23,7 +23,7 @@ int log_call(const char *fmt, ...) noexcept
 {
     va_list args;
     va_start(args, fmt);
-    const int rc = cli::out_log_vprintf(fmt, args);
+    const int rc = cli::outLogVprintf(fmt, args);
     va_end(args);
     return rc;
 }
@@ -46,17 +46,17 @@ void setUp(void)
     s_sink_calls = 0;
     s_reentry_rc = 0;
     s_reenter = false;
-    cli::set_out_sink(fake_sink, true);
+    cli::setOutSink(fake_sink, true);
 }
 
 void tearDown(void)
 {
-    cli::set_out_sink(nullptr, false);
+    cli::setOutSink(nullptr, false);
 }
 
 static void test_crlf_expanded_once_per_line(void)
 {
-    cli::out_printf("  %-4s %d\n", "ab", 7);
+    cli::outPrintf("  %-4s %d\n", "ab", 7);
     TEST_ASSERT_EQUAL_STRING("  ab   7\r\n", s_sunk.c_str());
     TEST_ASSERT_EQUAL_INT(1, s_sink_calls);
 }
@@ -64,21 +64,21 @@ static void test_crlf_expanded_once_per_line(void)
 static void test_existing_crlf_not_doubled(void)
 {
     static constexpr char kLine[] = "[1.000] evt\r\n";
-    cli::out_write(kLine, sizeof(kLine) - 1U);
+    cli::outWrite(kLine, sizeof(kLine) - 1U);
     TEST_ASSERT_EQUAL_STRING("[1.000] evt\r\n", s_sunk.c_str());
 }
 
 static void test_cr_lf_split_across_calls(void)
 {
-    cli::out_write("a\r", 2U);
-    cli::out_write("\nb\n", 3U);
+    cli::outWrite("a\r", 2U);
+    cli::outWrite("\nb\n", 3U);
     TEST_ASSERT_EQUAL_STRING("a\r\nb\r\n", s_sunk.c_str());
 }
 
 static void test_no_crlf_mode_passthrough(void)
 {
-    cli::set_out_sink(fake_sink, false);
-    cli::out_printf("x\ny\n");
+    cli::setOutSink(fake_sink, false);
+    cli::outPrintf("x\ny\n");
     TEST_ASSERT_EQUAL_STRING("x\ny\n", s_sunk.c_str());
 }
 
@@ -86,7 +86,7 @@ static void test_long_newline_run_chunked_without_loss(void)
 {
     // 全是 '\n' 时展开后长度翻倍，超过展开缓冲需要分段；内容不能丢。
     std::string text(cli::kOutLineMax - 1U, '\n');
-    cli::out_write(text.data(), text.size());
+    cli::outWrite(text.data(), text.size());
     TEST_ASSERT_EQUAL_size_t(text.size() * 2U, s_sunk.size());
     TEST_ASSERT_GREATER_THAN_INT(1, s_sink_calls);
     for (size_t i = 0; i < s_sunk.size(); i += 2U) {
@@ -99,7 +99,7 @@ static void test_overlong_format_falls_back_to_stdout(void)
 {
     // 超过 kOutLineMax 的一条输出改走 stdout（不截断），sink 不应收到半截内容。
     const std::string big(cli::kOutLineMax + 10U, 'z');
-    cli::out_printf("%s\n", big.c_str());
+    cli::outPrintf("%s\n", big.c_str());
     TEST_ASSERT_EQUAL_INT(0, s_sink_calls);
 }
 

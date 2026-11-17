@@ -96,8 +96,8 @@ void test_init_validation_and_uninit_calls()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
                             static_cast<uint8_t>(ring.read(0U, out, len)));
     TEST_ASSERT_EQUAL_size_t(0U, len);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.writer_stats().records);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(0U).records);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.writerStats().records);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(0U).records);
 
     // 非法 init 参数
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
@@ -183,9 +183,9 @@ void test_attach_detach_and_late_attach()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(ring.attach(reused)));
     TEST_ASSERT_EQUAL_UINT8(ids[0], reused);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(reused).records);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(reused).bytes);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(reused).dropped);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(reused).records);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(reused).bytes);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(reused).dropped);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNotFound),
                             static_cast<uint8_t>(ring.read(reused, out, len)));
 
@@ -218,8 +218,8 @@ void test_record_boundaries_and_nospace_non_consuming()
                             static_cast<uint8_t>(ring.write(std::span<const uint8_t>{})));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
                             static_cast<uint8_t>(ring.write(oversized)));
-    TEST_ASSERT_EQUAL_UINT32(2U, ring.writer_stats().rejected);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.writer_stats().records);
+    TEST_ASSERT_EQUAL_UINT32(2U, ring.writerStats().rejected);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.writerStats().records);
 
     // 写入长度 1 与 max_record 边界记录（同时跨过缓冲区物理末尾）
     std::array<uint8_t, kSmallMaxRecord> max_rec{};
@@ -250,7 +250,7 @@ void test_record_boundaries_and_nospace_non_consuming()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNoSpace),
                             static_cast<uint8_t>(ring.read(rid, small_out, len)));
     TEST_ASSERT_EQUAL_size_t(kSmallMaxRecord, len);
-    TEST_ASSERT_EQUAL_UINT32(3U, ring.reader_stats(rid).records);
+    TEST_ASSERT_EQUAL_UINT32(3U, ring.readerStats(rid).records);
 
     // 换足够大的缓冲立即再次读：完整读出刚才那条 max_rec，然后读出 min_rec
     std::array<uint8_t, kSmallMaxRecord> full_out{};
@@ -263,7 +263,7 @@ void test_record_boundaries_and_nospace_non_consuming()
                             static_cast<uint8_t>(ring.read(rid, full_out, len)));
     TEST_ASSERT_EQUAL_size_t(1U, len);
     TEST_ASSERT_EQUAL_UINT8(0xFEU, full_out[0]);
-    TEST_ASSERT_EQUAL_UINT32(5U, ring.reader_stats(rid).records);
+    TEST_ASSERT_EQUAL_UINT32(5U, ring.readerStats(rid).records);
 }
 
 void test_multi_reader_overwrite_drops_whole_records()
@@ -309,12 +309,12 @@ void test_multi_reader_overwrite_drops_whole_records()
         }
     }
 
-    const fw::FanoutWriterStats ws = ring.writer_stats();
+    const fw::FanoutWriterStats ws = ring.writerStats();
     TEST_ASSERT_EQUAL_UINT32(kTotalWrites, ws.records);
     TEST_ASSERT_EQUAL_UINT32(kTotalWrites * static_cast<uint32_t>(kRecPayload), ws.bytes);
     TEST_ASSERT_EQUAL_UINT32(kFirstSurvivingSeq, ws.overwritten);
 
-    const fw::FanoutReaderStats fs = ring.reader_stats(r_fast);
+    const fw::FanoutReaderStats fs = ring.readerStats(r_fast);
     TEST_ASSERT_EQUAL_UINT32(kTotalWrites, fs.records);
     TEST_ASSERT_EQUAL_UINT32(0U, fs.dropped);
 
@@ -323,7 +323,7 @@ void test_multi_reader_overwrite_drops_whole_records()
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNoSpace),
                             static_cast<uint8_t>(ring.read(r_mid, tiny_out, len)));
     TEST_ASSERT_EQUAL_size_t(kRecPayload, len);
-    TEST_ASSERT_EQUAL_UINT32(kMidReadStop, ring.reader_stats(r_mid).dropped);
+    TEST_ASSERT_EQUAL_UINT32(kMidReadStop, ring.readerStats(r_mid).dropped);
 
     // mid 读者跳过被覆盖的 3..5（dropped == 3），整条读出 6..9
     for (uint32_t expected_seq = kFirstSurvivingSeq; expected_seq < kTotalWrites; ++expected_seq) {
@@ -334,7 +334,7 @@ void test_multi_reader_overwrite_drops_whole_records()
     }
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNotFound),
                             static_cast<uint8_t>(ring.read(r_mid, out, len)));
-    const fw::FanoutReaderStats ms = ring.reader_stats(r_mid);
+    const fw::FanoutReaderStats ms = ring.readerStats(r_mid);
     TEST_ASSERT_EQUAL_UINT32(7U, ms.records);
     TEST_ASSERT_EQUAL_UINT32(kMidReadStop, ms.dropped);
 
@@ -347,7 +347,7 @@ void test_multi_reader_overwrite_drops_whole_records()
     }
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kNotFound),
                             static_cast<uint8_t>(ring.read(r_slow, out, len)));
-    const fw::FanoutReaderStats ss = ring.reader_stats(r_slow);
+    const fw::FanoutReaderStats ss = ring.readerStats(r_slow);
     TEST_ASSERT_EQUAL_UINT32(4U, ss.records);
     TEST_ASSERT_EQUAL_UINT32(kFirstSurvivingSeq, ss.dropped);
     TEST_ASSERT_EQUAL_UINT32(4U * static_cast<uint32_t>(kRecPayload), ss.bytes);
@@ -413,7 +413,7 @@ void run_u32_wrap_case(std::span<uint8_t> storage)
         ++lag_read_count;
     }
     TEST_ASSERT_EQUAL_UINT32(cap_records, lag_read_count);
-    const fw::FanoutReaderStats ls = ring.reader_stats(r_lag);
+    const fw::FanoutReaderStats ls = ring.readerStats(r_lag);
     TEST_ASSERT_EQUAL_UINT32(cap_records, ls.records);
     TEST_ASSERT_EQUAL_UINT32(kTotalWrapWrites - cap_records, ls.dropped);
 }

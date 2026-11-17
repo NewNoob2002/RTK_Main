@@ -85,7 +85,7 @@ bool RtcmModule::poll(uint32_t now_ms) noexcept
 }
 void RtcmModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
-    if (cmd.verb != verb(RtcmVerb::kReset) || cmd.arg_len != 0U) {
+    if (cmd.verb != verb(RtcmVerb::kReset) || cmd.argLen != 0U) {
         result.status = fw::Result::kInvalidArg;
         return;
     }

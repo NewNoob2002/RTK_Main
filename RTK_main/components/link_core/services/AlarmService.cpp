@@ -32,7 +32,7 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
     size_t len = 0;
     const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
                                                  proto::response_type(req_type), payload, len);
-    if (!is_ok(status)) {
+    if (!isOk(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
     }
@@ -170,7 +170,7 @@ bool AlarmService::build_status_push(uint16_t seq, uint32_t now_ms, Reply &reply
     size_t len = 0;
     const fw::Status result = proto::build_frame(
         reply.buf, alarm::kMsgStatus, proto::sender::kDevice, msg_type::kPush, payload, len);
-    if (!is_ok(result)) {
+    if (!isOk(result)) {
         trace_alarm(AlarmTrace::kPushFail, 0, static_cast<uint32_t>(result));
         return false;
     }

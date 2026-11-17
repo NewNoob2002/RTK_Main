@@ -68,7 +68,7 @@ void vTaskDelay(TickType_t ticks)
 }
 
 namespace rtos {
-uint32_t now_ms() noexcept
+uint32_t nowMs() noexcept
 {
     constexpr uint32_t kTestNowMs = 100U;
     return kTestNowMs;
@@ -148,7 +148,7 @@ rtos::BootAllocatorOps make_ops(FaultAllocCtx &ctx) noexcept
     return rtos::BootAllocatorOps{
         .alloc = &fault_alloc,
         .free = &fault_free,
-        .allocated_size = &fault_actual_size,
+        .allocatedSize = &fault_actual_size,
         .ctx = &ctx,
     };
 }
@@ -160,8 +160,8 @@ void test_arena_lifecycle_and_validation() noexcept
     rtos::BootArena arena{};
 
     CHECK(arena.state() == rtos::ArenaState::kUninit);
-    CHECK(arena.total_bytes() == 0U);
-    CHECK(arena.total_actual_bytes() == 0U);
+    CHECK(arena.totalBytes() == 0U);
+    CHECK(arena.totalActualBytes() == 0U);
     CHECK(arena.entries().empty());
     CHECK(!arena.degraded());
 
@@ -185,10 +185,10 @@ void test_arena_lifecycle_and_validation() noexcept
     CHECK(arena2.allocate("align6", 64U, 6U, ptr) == fw::Status::kInvalidArg);
     CHECK(arena2.allocate("round_overflow", SIZE_MAX, 16U, ptr) == fw::Status::kInvalidArg);
     std::span<uint64_t> too_big{};
-    CHECK(arena2.alloc_array<uint64_t>("count_overflow", SIZE_MAX, too_big) ==
+    CHECK(arena2.allocArray<uint64_t>("count_overflow", SIZE_MAX, too_big) ==
           fw::Status::kInvalidArg);
     CHECK(too_big.empty());
-    CHECK(arena2.alloc_array<uint64_t>("under_aligned", 1U, too_big, alignof(uint64_t) / 2U) ==
+    CHECK(arena2.allocArray<uint64_t>("under_aligned", 1U, too_big, alignof(uint64_t) / 2U) ==
           fw::Status::kInvalidArg);
     CHECK(too_big.empty() && arena2.entries().empty() && ctx.alloc_calls == 0U);
 
@@ -201,11 +201,11 @@ void test_arena_lifecycle_and_validation() noexcept
 
     // 正常分配与重复 tag 拒绝
     std::span<uint8_t> buf0{};
-    CHECK(arena2.alloc_array<uint8_t>("buf.a", 128U, buf0, 16U) == fw::Status::kOk);
+    CHECK(arena2.allocArray<uint8_t>("buf.a", 128U, buf0, 16U) == fw::Status::kOk);
     CHECK(buf0.size() == 128U && buf0.data() != nullptr);
     CHECK(arena2.allocate("buf.a", 64U, 4U, ptr) == fw::Status::kInvalidArg);
-    CHECK(arena2.total_bytes() == 128U);
-    CHECK(arena2.total_actual_bytes() == 144U);
+    CHECK(arena2.totalBytes() == 128U);
+    CHECK(arena2.totalActualBytes() == 144U);
     CHECK(arena2.entries().size() == 1U);
 
     // seal 后只读，abort 也不释放已封存内存
@@ -219,7 +219,7 @@ void test_arena_lifecycle_and_validation() noexcept
     CHECK(!arena2.degraded());
 
     // 运行期可标记非致命降级原因（例如 bt_not_ready）
-    arena2.set_degraded_reason("bt_not_ready");
+    arena2.setDegradedReason("bt_not_ready");
     CHECK(arena2.degraded());
     CHECK(std::string_view{arena2.reason()} == "bt_not_ready");
 
@@ -280,7 +280,7 @@ void test_production_allocation_plan() noexcept
         CHECK(entry.ptr != nullptr);
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): 检查分配地址的数值对齐，不解引用。
         CHECK((reinterpret_cast<uintptr_t>(entry.ptr) % entry.align) == 0U);
-        CHECK(entry.actual_bytes >= entry.bytes);
+        CHECK(entry.actualBytes >= entry.bytes);
         const std::string_view name{entry.tag};
         if (name.starts_with("spp.tx.stream")) {
             ++stream_count;
@@ -298,10 +298,10 @@ void test_production_allocation_plan() noexcept
     CHECK(stream_count == 1U);
     CHECK(has_gnss == bool(RTK_GNSS_ENABLED));
     CHECK(has_trace == bool(FW_TRACE_ENABLED));
-    CHECK(requested == app::s_app.boot_arena.total_bytes());
+    CHECK(requested == app::s_app.boot_arena.totalBytes());
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): host 计划结果使用固定格式报告。
     std::printf("boot plan: owners=%zu requested=%zu actual=%zu gnss=%d trace=%d\n", owners,
-                requested, app::s_app.boot_arena.total_actual_bytes(), RTK_GNSS_ENABLED,
+                requested, app::s_app.boot_arena.totalActualBytes(), RTK_GNSS_ENABLED,
                 FW_TRACE_ENABLED);
     app::rollback_boot_bindings(buffers, "test:probe");
     CHECK(probe.live_allocs == 0U);
@@ -380,7 +380,7 @@ void test_binding_rollback_and_sealed_lifetime() noexcept
     const uint8_t value = 0xA5U;
     buffers.spp_stream.back() = value;
     CHECK(buffers.spp_stream.back() == value);
-    app::s_app.boot_arena.set_degraded_reason("task:create_failed");
+    app::s_app.boot_arena.setDegradedReason("task:create_failed");
     // 停机后块仍封存；host 不创建回调，撤销 view 后手动释放模拟重启。
     app::rollback_boot_bindings(buffers, "task:create_failed");
     CHECK(ctx.free_calls == 0U);
@@ -434,7 +434,7 @@ void test_memory_report() noexcept
     rtos::BootArena arena{};
     CHECK(arena.open(&ops) == fw::Status::kOk);
     std::span<uint8_t> block{};
-    CHECK(arena.alloc_array("test.owner", 256U, block) == fw::Status::kOk);
+    CHECK(arena.allocArray("test.owner", 256U, block) == fw::Status::kOk);
     CHECK(arena.seal() == fw::Status::kOk);
     std::array<app::MemoryHeapView, 4U> heaps{{
         {"internal_8bit", 1U, 200000U, 100000U, 81920U, 32768U},
@@ -442,7 +442,7 @@ void test_memory_report() noexcept
         {"dma", 4U, 100000U, 50000U, 40000U, 20000U},
         {"default", 8U, 200000U, 100000U, 81920U, 32768U},
     }};
-    cli::set_out_sink(&memory_sink, false);
+    cli::setOutSink(&memory_sink, false);
     app::print_memory_report(arena, 100U, 200U, heaps);
     std::string_view output{s_memory_output.data(), s_memory_output_size};
     CHECK(output.find("test.owner") != output.npos && output.find("actual=272 B") != output.npos);
@@ -451,7 +451,7 @@ void test_memory_report() noexcept
     CHECK(output.find("normal") != output.npos);
     s_memory_output_size = 0U;
     heaps.front().minimum = 81919U;
-    arena.set_degraded_reason("test:startup");
+    arena.setDegradedReason("test:startup");
     app::print_memory_report(arena, 100U, 200U, heaps);
     output = {s_memory_output.data(), s_memory_output_size};
     CHECK(output.find("FAIL (min>=81920 B, largest>=32768 B)") != output.npos);
@@ -462,7 +462,7 @@ void test_memory_report() noexcept
     app::print_memory_report(arena, 100U, 200U, heaps);
     output = {s_memory_output.data(), s_memory_output_size};
     CHECK(output.find("FAIL (min>=81920 B, largest>=32768 B)") != output.npos);
-    cli::set_out_sink(nullptr, false);
+    cli::setOutSink(nullptr, false);
     fault_free(block.data(), &ctx);
 }
 

@@ -18,8 +18,8 @@ fw::Status SppTransport::reserve_reply(core::SessionHandle handle,
                                        core::ReplyCredit &credit) noexcept
 {
     spp_server_tx_token_t token{};
-    const fw::Status status = rtos::from_esp_err(spp_server_reply_reserve(handle, &token));
-    if (fw::is_ok(status)) {
+    const fw::Status status = rtos::fromEspErr(spp_server_reply_reserve(handle, &token));
+    if (fw::isOk(status)) {
         credit = {token.generation, token.serial, token.capacity, token.slot, token.channel};
     }
     return status;
@@ -29,7 +29,7 @@ fw::Status SppTransport::commit_reply(const core::ReplyCredit &credit,
                                       std::span<const uint8_t> data) noexcept
 {
     const auto token = token_from(credit);
-    return rtos::from_esp_err(spp_server_tx_commit(&token, data.data(), data.size()));
+    return rtos::fromEspErr(spp_server_tx_commit(&token, data.data(), data.size()));
 }
 
 void SppTransport::cancel_reply(const core::ReplyCredit &credit) noexcept
@@ -46,7 +46,7 @@ bool SppTransport::reply_ready(core::SessionHandle handle) const noexcept
 fw::Status SppTransport::push_latest(core::SessionHandle handle,
                                      std::span<const uint8_t> data) noexcept
 {
-    return rtos::from_esp_err(spp_server_push_latest(handle, data.data(), data.size()));
+    return rtos::fromEspErr(spp_server_push_latest(handle, data.data(), data.size()));
 }
 
 fw::Status SppTransport::write(core::SessionHandle handle, std::span<const uint8_t> data,
@@ -56,12 +56,12 @@ fw::Status SppTransport::write(core::SessionHandle handle, std::span<const uint8
     if (data.empty()) {
         return fw::Status::kInvalidArg;
     }
-    return rtos::from_esp_err(spp_server_write(handle, data.data(), data.size(), timeout_ms));
+    return rtos::fromEspErr(spp_server_write(handle, data.data(), data.size(), timeout_ms));
 }
 
 fw::Status SppTransport::disconnect(core::SessionHandle handle) noexcept
 {
-    return rtos::from_esp_err(spp_server_disconnect(handle));
+    return rtos::fromEspErr(spp_server_disconnect(handle));
 }
 
 } // namespace spp

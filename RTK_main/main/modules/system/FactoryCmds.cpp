@@ -46,8 +46,8 @@ int cmd_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     if (argc != 1) {
         return cli::fail("usage: factory status");
     }
-    cli::print_section("factory");
-    cli::print_kv("access", "%s", s_unlocked ? "unlocked" : "locked");
+    cli::printSection("factory");
+    cli::printKv("access", "%s", s_unlocked ? "unlocked" : "locked");
     return 0;
 }
 
@@ -62,7 +62,7 @@ int cmd_unlock(void * /*ctx*/, int argc, char **argv) noexcept
         return cli::fail("bad key");
     }
     s_unlocked = true;
-    cli::out_printf("factory commands unlocked until reboot or 'factory lock'\n");
+    cli::outPrintf("factory commands unlocked until reboot or 'factory lock'\n");
     return 0;
 }
 
@@ -92,12 +92,12 @@ int cmd_sn(void * /*ctx*/, int argc, char **argv) noexcept
     command.target = id(ModuleKind::kStorage);
     command.verb = verb(StorageVerb::kSaveSn);
     // len 已校验在 1..NVS_STORE_SN_MAX(16) 范围，缩窄到 uint8_t 无损。
-    command.arg_len = static_cast<uint8_t>(len);
+    command.argLen = static_cast<uint8_t>(len);
     std::memcpy(command.args.data(), args[1], len);
     if (!submit(command, "factory sn")) {
         return cli::kCmdFail;
     }
-    cli::out_printf("sn saved; reboot to apply\n");
+    cli::outPrintf("sn saved; reboot to apply\n");
     return 0;
 }
 
@@ -112,7 +112,7 @@ int wl_edit(bool add, int argc, char **argv) noexcept
     }
     const std::span<char *const> args(argv, kTwoArgs);
     std::array<uint8_t, cli::kMacLen> mac{};
-    if (!cli::parse_mac(args[1], mac)) {
+    if (!cli::parseMac(args[1], mac)) {
         return cli::fail("bad MAC");
     }
     static_assert(cli::kMacLen == core::kAddrLen, "MAC length mismatch");
@@ -120,7 +120,7 @@ int wl_edit(bool add, int argc, char **argv) noexcept
     command.target = id(ModuleKind::kBtLink);
     command.verb = verb(add ? LinkVerb::kWhitelistAdd : LinkVerb::kWhitelistDel);
     std::copy(mac.begin(), mac.end(), command.args.begin());
-    command.arg_len = static_cast<uint8_t>(core::kAddrLen);
+    command.argLen = static_cast<uint8_t>(core::kAddrLen);
     fw::CommandResult result{};
     if (!submit_raw(command, result)) {
         return cli::kCmdFail;
@@ -188,7 +188,7 @@ int cmd_pair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     if (!report("pair", result)) {
         return cli::kCmdFail;
     }
-    cli::out_printf("pairing window open for %u s\n", static_cast<unsigned>(kPairSeconds));
+    cli::outPrintf("pairing window open for %u s\n", static_cast<unsigned>(kPairSeconds));
     return 0;
 }
 
@@ -202,11 +202,11 @@ int cmd_alarm_set(void * /*ctx*/, int argc, char **argv) noexcept
     }
     const std::span<char *const> args(argv, kThreeArgs);
     uint8_t state = 0U;
-    if (!cli::parse_u8(args[1], state) || (state > kAlarmStateMax)) {
+    if (!cli::parseU8(args[1], state) || (state > kAlarmStateMax)) {
         return cli::fail("state 0-2");
     }
     uint8_t level = 0U;
-    if (!cli::parse_u8(args[2], level) || (level > kAlarmLevelMax)) {
+    if (!cli::parseU8(args[2], level) || (level > kAlarmLevelMax)) {
         return cli::fail("level 0-3");
     }
     fw::Command command{};
@@ -214,7 +214,7 @@ int cmd_alarm_set(void * /*ctx*/, int argc, char **argv) noexcept
     command.verb = verb(LinkVerb::kAlarmSet);
     command.args[0] = state;
     command.args[1] = level;
-    command.arg_len = 2U;
+    command.argLen = 2U;
     return submit(command, "alarm-set") ? 0 : cli::kCmdFail;
 }
 

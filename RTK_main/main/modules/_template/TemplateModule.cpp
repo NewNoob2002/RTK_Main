@@ -44,7 +44,7 @@ void TemplateModule::on_command(const fw::Command &cmd, fw::CommandResult &resul
     // 每个动词一个具名处理函数，case 内不堆逻辑（CODING-STYLE §6）。
     switch (static_cast<TemplateVerb>(cmd.verb)) {
     case TemplateVerb::kReset:
-        result.status = cmd.arg_len == 0U ? reset() : fw::Result::kInvalidArg;
+        result.status = cmd.argLen == 0U ? reset() : fw::Result::kInvalidArg;
         return;
     case TemplateVerb::kSetLimit:
         result.status = set_limit(cmd);
@@ -61,7 +61,7 @@ fw::Result TemplateModule::reset() noexcept
 
 fw::Result TemplateModule::set_limit(const fw::Command &cmd) noexcept
 {
-    if (cmd.arg_len != sizeof(uint32_t)) {
+    if (cmd.argLen != sizeof(uint32_t)) {
         return fw::Result::kInvalidArg;
     }
     uint32_t limit_ms = 0U; // 小端 4 字节

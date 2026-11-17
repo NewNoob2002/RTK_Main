@@ -33,17 +33,17 @@ constexpr const char *kHexSuffix = "hex";
  */
 void print_cat_table() noexcept
 {
-    const uint32_t mask = fw::trace_mask();
-    const uint32_t hex_mask = fw::log_hex_mask();
-    cli::out_printf("cat   trace log  summary\n");
+    const uint32_t mask = fw::traceMask();
+    const uint32_t hex_mask = fw::logHexMask();
+    cli::outPrintf("cat   trace log  summary\n");
     constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
     for (uint32_t index = 0U; index < kCount; ++index) {
         const auto cat = static_cast<fw::TraceCat>(index);
-        const bool on = (mask & fw::trace_bit(cat)) != 0U;
-        const bool hex = (hex_mask & fw::trace_bit(cat)) != 0U;
-        cli::out_printf("%-5s %-5s %c%-3s %s\n", debug::trace_cat_name(cat), on ? "on" : "off",
-                        fw::log_level_char(fw::log_cat_level(cat)), hex ? "+hx" : "",
-                        debug::trace_cat_summary(cat));
+        const bool on = (mask & fw::traceBit(cat)) != 0U;
+        const bool hex = (hex_mask & fw::traceBit(cat)) != 0U;
+        cli::outPrintf("%-5s %-5s %c%-3s %s\n", debug::trace_cat_name(cat), on ? "on" : "off",
+                       fw::logLevelChar(fw::logCatLevel(cat)), hex ? "+hx" : "",
+                       debug::trace_cat_summary(cat));
     }
 }
 
@@ -59,20 +59,20 @@ int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     const DebugModule &module = app_context().debug;
     const fw::TraceRingStats ring = module.ring_stats();
-    cli::out_printf(
-        "trace ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
-        static_cast<unsigned>(DebugModule::kRingEvents), static_cast<unsigned>(module.ring_depth()),
-        static_cast<unsigned long>(ring.pushed), static_cast<unsigned long>(ring.dropped),
-        static_cast<unsigned>(ring.max_depth));
+    cli::outPrintf("trace ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
+                   static_cast<unsigned>(DebugModule::kRingEvents),
+                   static_cast<unsigned>(module.ring_depth()),
+                   static_cast<unsigned long>(ring.pushed),
+                   static_cast<unsigned long>(ring.dropped), static_cast<unsigned>(ring.maxDepth));
     const fw::LogRingStats log = module.log_ring_stats();
-    cli::out_printf("log ring bytes=%u used=%u pushed=%lu dropped=%lu max_used=%u lost=%lu\n",
-                    static_cast<unsigned>(DebugModule::kLogRingBytes),
-                    static_cast<unsigned>(module.log_ring_used()),
-                    static_cast<unsigned long>(log.pushed), static_cast<unsigned long>(log.dropped),
-                    static_cast<unsigned>(log.max_used),
-                    static_cast<unsigned long>(fw::log_stats().lost));
-    cli::out_printf("report period=%us%s\n", static_cast<unsigned>(module.report_period_s()),
-                    (module.report_period_s() == 0U) ? " (off)" : "");
+    cli::outPrintf("log ring bytes=%u used=%u pushed=%lu dropped=%lu max_used=%u lost=%lu\n",
+                   static_cast<unsigned>(DebugModule::kLogRingBytes),
+                   static_cast<unsigned>(module.log_ring_used()),
+                   static_cast<unsigned long>(log.pushed), static_cast<unsigned long>(log.dropped),
+                   static_cast<unsigned>(log.maxUsed),
+                   static_cast<unsigned long>(fw::logStats().lost));
+    cli::outPrintf("report period=%us%s\n", static_cast<unsigned>(module.report_period_s()),
+                   (module.report_period_s() == 0U) ? " (off)" : "");
     print_cat_table();
     return 0;
 }
@@ -98,7 +98,7 @@ bool parse_cat_list(std::span<char *const> args, uint32_t &bits) noexcept
             static_cast<void>(cli::fail("unknown category: %s", arg));
             return false;
         }
-        bits |= fw::trace_bit(cat);
+        bits |= fw::traceBit(cat);
     }
     return true;
 }
@@ -121,8 +121,8 @@ int toggle_trace(std::span<char *const> args) noexcept
     if (!parse_cat_list(args.subspan(1U), bits)) {
         return cli::kCmdFail;
     }
-    const uint32_t mask = fw::trace_mask();
-    fw::trace_set_mask((action == "on") ? (mask | bits) : (mask & ~bits));
+    const uint32_t mask = fw::traceMask();
+    fw::traceSetMask((action == "on") ? (mask | bits) : (mask & ~bits));
     return 0;
 }
 
@@ -179,7 +179,7 @@ int cmd_log(void * /*ctx*/, int argc, char **argv) noexcept
         args = args.first(args.size() - 1U);
     }
     fw::LogLevel level{};
-    if ((args.size() < 2U) || !fw::log_parse_level(args.back(), level)) {
+    if ((args.size() < 2U) || !fw::logParseLevel(args.back(), level)) {
         return cli::fail("usage: debug log [<category...|all> <e|w|i|d> [hex]]");
     }
     uint32_t bits = 0U;
@@ -189,12 +189,12 @@ int cmd_log(void * /*ctx*/, int argc, char **argv) noexcept
     constexpr uint32_t kCount = static_cast<uint32_t>(fw::TraceCat::kCount);
     for (uint32_t index = 0U; index < kCount; ++index) {
         const auto cat = static_cast<fw::TraceCat>(index);
-        if ((bits & fw::trace_bit(cat)) != 0U) {
-            fw::log_set_cat_level(cat, level);
+        if ((bits & fw::traceBit(cat)) != 0U) {
+            fw::logSetCatLevel(cat, level);
         }
     }
-    const uint32_t hex_mask = fw::log_hex_mask();
-    fw::log_set_hex_mask(want_hex ? (hex_mask | bits) : (hex_mask & ~bits));
+    const uint32_t hex_mask = fw::logHexMask();
+    fw::logSetHexMask(want_hex ? (hex_mask | bits) : (hex_mask & ~bits));
     return 0;
 }
 
@@ -207,13 +207,13 @@ int cmd_report(void * /*ctx*/, int argc, char **argv) noexcept
     fw::Command command{};
     command.target = id(ModuleKind::kDebug);
     command.verb = verb(DebugVerb::kReport);
-    command.arg_len = 2U;
+    command.argLen = 2U;
     if (strcmp(args[1], "off") == 0) {
         command.args[0] = 0U;
         command.args[1] = 0U;
     } else {
         uint32_t seconds = 0U;
-        if (!cli::parse_u32(args[1], seconds) || (seconds < kReportMinSeconds) ||
+        if (!cli::parseU32(args[1], seconds) || (seconds < kReportMinSeconds) ||
             (seconds > kReportMaxSeconds)) {
             return cli::fail("invalid period: %s", args[1]);
         }

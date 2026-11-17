@@ -42,7 +42,7 @@ static_assert(fw::kAtomicUsable<uint32_t>, "日志开关原子须无锁");
 using ByteSpan = std::span<std::byte>;
 using ConstByteSpan = std::span<const std::byte>;
 
-void copy_into(ByteSpan dst, size_t offset, ConstByteSpan src) noexcept
+void copyInto(ByteSpan dst, size_t offset, ConstByteSpan src) noexcept
 {
     const ByteSpan tail = dst.subspan(offset);
     const size_t first = std::min(src.size(), tail.size());
@@ -55,7 +55,7 @@ void copy_into(ByteSpan dst, size_t offset, ConstByteSpan src) noexcept
     }
 }
 
-void copy_out(ConstByteSpan src, size_t offset, ByteSpan dst) noexcept
+void copyOut(ConstByteSpan src, size_t offset, ByteSpan dst) noexcept
 {
     const ConstByteSpan tail = src.subspan(offset);
     const size_t first = std::min(dst.size(), tail.size());
@@ -68,25 +68,25 @@ void copy_out(ConstByteSpan src, size_t offset, ByteSpan dst) noexcept
     }
 }
 
-ConstByteSpan header_bytes(const LogHeader &hdr) noexcept
+ConstByteSpan headerBytes(const LogHeader &hdr) noexcept
 {
     return std::as_bytes(std::span<const LogHeader>(&hdr, 1U));
 }
 
-ByteSpan header_bytes(LogHeader &hdr) noexcept
+ByteSpan headerBytes(LogHeader &hdr) noexcept
 {
     return std::as_writable_bytes(std::span<LogHeader>(&hdr, 1U));
 }
 
 } // namespace
 
-Result log_install(LogSinkFn fn, void *ctx) noexcept
+Result logInstall(LogSinkFn fn, void *ctx) noexcept
 {
     if (fn == nullptr) {
         return Result::kInvalidArg;
     }
     // 文本记录的时间戳必须与 trace 事件同源，否则读者无法按时间合并两条通道。
-    if (detail::installed_clock() == nullptr) {
+    if (detail::installedClock() == nullptr) {
         return Result::kInvalidState;
     }
     s_log_ctx = ctx;
@@ -98,13 +98,13 @@ Result log_install(LogSinkFn fn, void *ctx) noexcept
     return Result::kOk;
 }
 
-void log_set_hex_mask(uint32_t mask) noexcept
+void logSetHexMask(uint32_t mask) noexcept
 {
     // 越界位一律清零：与 trace_set_mask 保持一致，避免调用方以为某类别已生效。
     s_hex_mask.store(mask & kTraceAllMask, std::memory_order_relaxed);
 }
 
-uint32_t log_hex_mask() noexcept
+uint32_t logHexMask() noexcept
 {
     return s_hex_mask.load(std::memory_order_relaxed);
 }
@@ -123,15 +123,15 @@ constexpr uint16_t kMaxPayloadLen = std::numeric_limits<uint16_t>::max();
  * @param  cat: 类别
  * @retval true hex 掩码置位且该类别日志级别为 D
  */
-bool log_hex_on(TraceCat cat) noexcept
+bool logHexOn(TraceCat cat) noexcept
 {
     const uint32_t bit = static_cast<uint32_t>(cat);
     if (bit >= static_cast<uint32_t>(TraceCat::kCount)) {
         return false;
     }
     // 两级开关（ADR-0009 §2.12）：转储与同一调用点的 D 级句子配对，需该类别日志级别为 D，十六进制掩码再收一层。
-    return ((s_hex_mask.load(std::memory_order_relaxed) & trace_bit(cat)) != 0U) &&
-           log_enabled(LogLevel::kDebug, cat);
+    return ((s_hex_mask.load(std::memory_order_relaxed) & traceBit(cat)) != 0U) &&
+           logEnabled(LogLevel::kDebug, cat);
 }
 
 void tlog(TraceCat cat, const char *fmt, ...) noexcept
@@ -140,14 +140,14 @@ void tlog(TraceCat cat, const char *fmt, ...) noexcept
     // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     va_list ap;
     va_start(ap, fmt);
-    vlog_line(LogLevel::kInfo, cat, fmt, ap);
+    vlogLine(LogLevel::kInfo, cat, fmt, ap);
     va_end(ap);
     // NOLINTEND(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
 }
 
-void tlog_hex(TraceCat cat, std::span<const uint8_t> bytes) noexcept
+void tlogHex(TraceCat cat, std::span<const uint8_t> bytes) noexcept
 {
-    if (!log_hex_on(cat)) {
+    if (!logHexOn(cat)) {
         return;
     }
     const LogSinkFn fn = s_log_sink.load(std::memory_order_acquire);
@@ -156,7 +156,7 @@ void tlog_hex(TraceCat cat, std::span<const uint8_t> bytes) noexcept
     }
     const size_t len = std::min(bytes.size(), kLogHexMax);
     LogHeader hdr{};
-    hdr.t_ms = detail::installed_clock()();
+    hdr.tMs = detail::installedClock()();
     hdr.cat = cat;
     hdr.kind = LogKind::kHex;
     // len ≤ kLogHexMax（256）；total 是原始长度，帧长上限 1029，同样远小于 uint16 上限。
@@ -209,20 +209,20 @@ bool LogRing::push(const LogHeader &hdr, std::span<const uint8_t> payload) noexc
         ++stats_.dropped;
         return false;
     }
-    copy_into(std::as_writable_bytes(buf_), head_, header_bytes(hdr));
-    const size_t payload_at = (head_ + kLogHeaderBytes) % buf_.size();
-    copy_into(std::as_writable_bytes(buf_), payload_at, std::as_bytes(payload));
+    copyInto(std::as_writable_bytes(buf_), head_, headerBytes(hdr));
+    const size_t payloadAt = (head_ + kLogHeaderBytes) % buf_.size();
+    copyInto(std::as_writable_bytes(buf_), payloadAt, std::as_bytes(payload));
     head_ = (head_ + need) % buf_.size();
     used_ += need;
     ++stats_.pushed;
-    if (used_ > static_cast<size_t>(stats_.max_used)) {
+    if (used_ > static_cast<size_t>(stats_.maxUsed)) {
         // init 已校验容量 ≤ UINT32_MAX，因此 used_ 转 uint32_t 不丢位。
-        stats_.max_used = static_cast<uint32_t>(used_);
+        stats_.maxUsed = static_cast<uint32_t>(used_);
     }
     return true;
 }
 
-bool LogRing::peek_time(uint32_t &t_ms) const noexcept
+bool LogRing::peekTime(uint32_t &tMs) const noexcept
 {
     if (!ready_) {
         return false;
@@ -232,9 +232,9 @@ bool LogRing::peek_time(uint32_t &t_ms) const noexcept
         return false;
     }
     LogHeader hdr{};
-    copy_out(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())), tail_,
-             header_bytes(hdr));
-    t_ms = hdr.t_ms;
+    copyOut(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())), tail_,
+            headerBytes(hdr));
+    tMs = hdr.tMs;
     return true;
 }
 
@@ -247,21 +247,20 @@ bool LogRing::pop(LogHeader &hdr, std::span<uint8_t> out, size_t &copied) noexce
     if (used_ == 0U) {
         return false;
     }
-    copy_out(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())), tail_,
-             header_bytes(hdr));
+    copyOut(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())), tail_,
+            headerBytes(hdr));
     const size_t total = kLogHeaderBytes + static_cast<size_t>(hdr.len);
     copied = std::min(static_cast<size_t>(hdr.len), out.size());
     if ((copied > 0U) && (out.data() != nullptr)) {
-        copy_out(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())),
-                 (tail_ + kLogHeaderBytes) % buf_.size(),
-                 std::as_writable_bytes(out).first(copied));
+        copyOut(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())),
+                (tail_ + kLogHeaderBytes) % buf_.size(), std::as_writable_bytes(out).first(copied));
     }
     tail_ = (tail_ + total) % buf_.size();
     used_ -= total;
     return true;
 }
 
-uint32_t LogRing::take_dropped() noexcept
+uint32_t LogRing::takeDropped() noexcept
 {
     if (!ready_) {
         return 0U;
@@ -301,7 +300,7 @@ void LogRing::sink(void *ctx, const LogHeader &hdr, std::span<const uint8_t> pay
 
 namespace detail {
 
-LogSinkFn installed_log_sink(void *&ctx) noexcept
+LogSinkFn installedLogSink(void *&ctx) noexcept
 {
     const LogSinkFn fn = s_log_sink.load(std::memory_order_acquire);
     if (fn != nullptr) {

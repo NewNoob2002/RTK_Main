@@ -90,3 +90,5 @@ CheckOptions:
   readability-identifier-naming.GlobalVariablePrefix: s_
   # StaticVariable 只匹配函数内 static（文件作用域 static 归入 GlobalVariable）；函数内静态不强制前缀，按 camelBack。
   readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
+  # IDF 规定的应用入口名（AGENTS.md §2：app_main 不改名），不按 camelBack 检查。
+  readability-identifier-naming.FunctionIgnoredRegexp: 'app_main'

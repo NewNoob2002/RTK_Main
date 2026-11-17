@@ -30,26 +30,26 @@ struct ExecutorConfig {
     fw::ExecutorId id = 0;
     uint32_t priority = 1;
     BaseType_t core = 0;
-    uint32_t idle_wait_ms = kExecIdleWaitMs;       // 无积压时每轮最长等待
-    uint32_t round_budget_ms = kExecRoundBudgetMs; // 单轮（不含 wait 与 yield）超过此值计 overrun
-    uint32_t yield_ticks = 1;                      // 每轮末 vTaskDelay；0 = 不让出（不建议）
-    bool watchdog = true;                          // 任务启动后 esp_task_wdt_add 自己，每轮 reset
+    uint32_t idleWaitMs = kExecIdleWaitMs;       // 无积压时每轮最长等待
+    uint32_t roundBudgetMs = kExecRoundBudgetMs; // 单轮（不含 wait 与 yield）超过此值计 overrun
+    uint32_t yieldTicks = 1;                     // 每轮末 vTaskDelay；0 = 不让出（不建议）
+    bool watchdog = true;                        // 任务启动后 esp_task_wdt_add 自己，每轮 reset
     /**
      * 可选等待钩子（执行器任务中调用）：最长阻塞 max_ms，可以顺带处理它等到的事件（例如 BT 事件）。
      * 为 nullptr 时执行器阻塞在命令队列上（命令到达立即唤醒）。
      */
-    void (*wait)(void *ctx, uint32_t max_ms) noexcept = nullptr;
-    void *wait_ctx = nullptr;
+    void (*wait)(void *ctx, uint32_t maxMs) noexcept = nullptr;
+    void *waitCtx = nullptr;
 };
 
 /** 执行器运行统计（临界区内累加），由 stats() 拷贝出快照。 */
 struct ExecStats {
     uint32_t rounds = 0;
     uint32_t overruns = 0;
-    uint32_t max_round_ms = 0;
-    uint32_t commands = 0;     // 已分派的命令数
-    uint32_t result_drops = 0; // 结果队列满时丢弃的最旧结果数
-    uint32_t stack_free = 0;   // 栈高水位（字节），每轮更新
+    uint32_t maxRoundMs = 0;
+    uint32_t commands = 0;    // 已分派的命令数
+    uint32_t resultDrops = 0; // 结果队列满时丢弃的最旧结果数
+    uint32_t stackFree = 0;   // 栈高水位（字节），每轮更新
 };
 
 /** 执行器所需的全部静态存储；由调用方定义为 constinit 全局并交给 Executor::init。 */
@@ -58,28 +58,28 @@ template <size_t StackBytes, size_t QueueDepth> struct ExecutorStorage {
     static_assert(QueueDepth > 0U, "queue depth must be > 0");
     std::array<StackType_t, StackBytes / sizeof(StackType_t)> stack{};
     StaticTask_t tcb{};
-    std::array<uint8_t, QueueDepth * sizeof(fw::Command)> cmd_area{};
-    StaticQueue_t cmd_queue{};
-    std::array<uint8_t, QueueDepth * sizeof(fw::CommandResult)> result_area{};
-    StaticQueue_t result_queue{};
+    std::array<uint8_t, QueueDepth * sizeof(fw::Command)> cmdArea{};
+    StaticQueue_t cmdQueue{};
+    std::array<uint8_t, QueueDepth * sizeof(fw::CommandResult)> resultArea{};
+    StaticQueue_t resultQueue{};
 };
 
 /** ExecutorStorage 的类型擦除视图（避免 Executor 本身成为模板）。 */
 struct ExecutorStorageView {
     std::span<StackType_t> stack;
     StaticTask_t *tcb = nullptr;
-    std::span<uint8_t> cmd_area;
-    StaticQueue_t *cmd_queue = nullptr;
-    std::span<uint8_t> result_area;
-    StaticQueue_t *result_queue = nullptr;
-    size_t queue_depth = 0;
+    std::span<uint8_t> cmdArea;
+    StaticQueue_t *cmdQueue = nullptr;
+    std::span<uint8_t> resultArea;
+    StaticQueue_t *resultQueue = nullptr;
+    size_t queueDepth = 0;
 };
 
 template <size_t S, size_t D>
-[[nodiscard]] ExecutorStorageView view_of(ExecutorStorage<S, D> &st) noexcept
+[[nodiscard]] ExecutorStorageView viewOf(ExecutorStorage<S, D> &st) noexcept
 {
-    return ExecutorStorageView{
-        st.stack, &st.tcb, st.cmd_area, &st.cmd_queue, st.result_area, &st.result_queue, D};
+    return ExecutorStorageView{st.stack,      &st.tcb,         st.cmdArea, &st.cmdQueue,
+                               st.resultArea, &st.resultQueue, D};
 }
 
 /** 静态任务 + 模块表 + 命令/结果队列的执行器；init 后由本任务独占运行，外部只经 call()/stats() 交互。 */
@@ -113,16 +113,16 @@ public:
      *       kNotFound（目标模块不存在）。
      */
     [[nodiscard]] fw::Result call(const fw::Command &cmd, fw::CommandResult &result,
-                                  uint32_t timeout_ms) noexcept;
+                                  uint32_t timeoutMs) noexcept;
 
     [[nodiscard]] bool running() const noexcept;
     /** 任意任务可调用（内部临界区拷贝）。 */
     [[nodiscard]] ExecStats stats() const noexcept;
     /** 模块是否可用（init/start 成功）。任意任务可调用。 */
-    [[nodiscard]] bool module_ok(fw::ModuleId id) const noexcept;
+    [[nodiscard]] bool moduleOk(fw::ModuleId id) const noexcept;
 
 private:
-    static void task_entry(void *arg) noexcept;
+    static void taskEntry(void *arg) noexcept;
     void run() noexcept;
 
     ExecutorConfig cfg_{};

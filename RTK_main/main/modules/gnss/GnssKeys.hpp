@@ -15,7 +15,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kConfigKeys = {
     {{.ns = "gnss",
       .key = "rate",
       .type = fw::StoreType::kU8,
-      .max_size = 1U,
+      .maxSize = 1U,
       .flags = fw::store_flag::kConsole,
       .min = 1,
       .max = 20,
@@ -24,7 +24,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kConfigKeys = {
      {.ns = "gnss",
       .key = "gsv",
       .type = fw::StoreType::kU8,
-      .max_size = 1U,
+      .maxSize = 1U,
       .flags = fw::store_flag::kConsole,
       .min = 0,
       .max = 1,
@@ -33,7 +33,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kConfigKeys = {
      {.ns = "gnss",
       .key = "out",
       .type = fw::StoreType::kBlob,
-      .max_size = app::data::GnssOutConfig::kBlobBytes,
+      .maxSize = app::data::GnssOutConfig::kBlobBytes,
       .flags = fw::store_flag::kConsole | fw::store_flag::kExport,
       .min = 0,
       .max = 0,
@@ -45,7 +45,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
     {{.ns = "gnss",
       .key = "family",
       .type = fw::StoreType::kU8,
-      .max_size = 1U,
+      .maxSize = 1U,
       .flags = 0U,
       .min = 0,
       .max = 255,
@@ -56,7 +56,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
      {.ns = "gnss",
       .key = "model",
       .type = fw::StoreType::kU8,
-      .max_size = 1U,
+      .maxSize = 1U,
       .flags = 0U,
       .min = 0,
       .max = 255,
@@ -67,7 +67,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
      {.ns = "gnss",
       .key = "baud",
       .type = fw::StoreType::kU32,
-      .max_size = 4U,
+      .maxSize = 4U,
       .flags = 0U,
       .min = 0,
       .max = 2000000,
@@ -79,7 +79,7 @@ static_assert(fw::valid(kConfigKeys[0]) && fw::valid(kConfigKeys[1]) && fw::vali
               "gnss.config 键必须合法");
 static_assert(fw::valid(kCacheKeys[0]) && fw::valid(kCacheKeys[1]) && fw::valid(kCacheKeys[2]),
               "gnss.cache 键必须合法");
-static_assert(fw::unique_keys(kConfigKeys) && fw::unique_keys(kCacheKeys),
+static_assert(fw::uniqueKeys(kConfigKeys) && fw::uniqueKeys(kCacheKeys),
               "gnss 键表不得有重复的 ns/key");
 
 } // namespace app::gnss_store

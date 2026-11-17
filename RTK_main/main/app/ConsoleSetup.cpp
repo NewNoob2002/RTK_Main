@@ -32,8 +32,8 @@ void direct_log_sink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_
 {
     static_cast<void>(ctx);
     std::array<char, fw::kLogLineMax> line{};
-    const size_t len = fw::log_format_line(line, hdr, payload);
-    cli::out_write(line.data(), len);
+    const size_t len = fw::logFormatLine(line, hdr, payload);
+    cli::outWrite(line.data(), len);
 }
 #endif
 
@@ -64,7 +64,7 @@ void set_console_only() noexcept
 bool install_direct_log() noexcept
 {
     // 早于控制台 UART 重装：此前 cli::out_write 走 stdout（IDF 默认 UART0 VFS），之后走 UART 驱动，行格式不变。
-    return fw::log_install_direct(&direct_log_sink, nullptr, &rtos::now_ms) == fw::Result::kOk;
+    return fw::logInstallDirect(&direct_log_sink, nullptr, &rtos::nowMs) == fw::Result::kOk;
 }
 
 bool init_console() noexcept
@@ -124,7 +124,7 @@ bool init_console() noexcept
     };
     /* 必须在 init 之前登记所有动词表，供 help / help <group> 展示。 */
     for (const auto &group : verb_groups) {
-        const esp_err_t verbs_err = cli::add_verbs(group.name, group.summary, group.verbs);
+        const esp_err_t verbs_err = cli::addVerbs(group.name, group.summary, group.verbs);
         if (verbs_err != ESP_OK) {
             FW_LOGE(fw::TraceCat::kSys, "console verbs failed: %s", esp_err_to_name(verbs_err));
             return false;

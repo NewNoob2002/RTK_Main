@@ -20,19 +20,19 @@ inline constexpr size_t kOutLineMax = 256U;
  * crlf=true 时把未跟在 '\r' 之后的 '\n' 展开为 "\r\n"（绕过 VFS 后行尾转换由这里负责）。
  * 只在启动阶段调用一次，调用时不得有并发输出。
  */
-void set_out_sink(OutSink sink, bool crlf) noexcept;
+void setOutSink(OutSink sink, bool crlf) noexcept;
 
 /** 原样输出一段文本（按 crlf 设置转换行尾）。 */
-void out_write(const char *text, size_t len) noexcept;
+void outWrite(const char *text, size_t len) noexcept;
 
 /** 格式化后输出；一次调用对应一次（或少数几次）输出端写入，调用之间不会被其他输出插入。 */
-void out_printf(const char *fmt, ...) noexcept __attribute__((format(printf, 1, 2)));
-void out_vprintf(const char *fmt, va_list args) noexcept;
+void outPrintf(const char *fmt, ...) noexcept __attribute__((format(printf, 1, 2)));
+void outVprintf(const char *fmt, va_list args) noexcept;
 
 /**
  * ESP_LOG 钩子用：同 out_vprintf，但同一任务重入（输出端内部又打日志）时不碰缓冲，返回 -1，
  * 调用方此时应回落到原来的 vprintf。成功返回格式化后的字符数。
  */
-int out_log_vprintf(const char *fmt, va_list args) noexcept;
+int outLogVprintf(const char *fmt, va_list args) noexcept;
 
 } // namespace cli

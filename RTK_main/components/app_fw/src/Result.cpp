@@ -4,7 +4,7 @@
 
 namespace fw {
 
-const char *to_string(Result r) noexcept
+const char *toString(Result r) noexcept
 {
     switch (r) {
     case Result::kOk:

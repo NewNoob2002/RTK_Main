@@ -64,50 +64,50 @@ void print_rtcm_status() noexcept
     const auto stats = data.link_stats.read();
 
     const uint64_t kib_tenths = (static_cast<uint64_t>(rtcm.bytes) * kTenthsPerUnit) / kBytesPerKib;
-    cli::print_section("rtcm");
-    cli::print_kv("frames", "%" PRIu32, rtcm.frames);
-    cli::print_kv("bytes", "%" PRIu32 " B (%llu.%llu KB)", rtcm.bytes,
-                  static_cast<unsigned long long>(kib_tenths / kTenthsPerUnit),
-                  static_cast<unsigned long long>(kib_tenths % kTenthsPerUnit));
-    cli::print_kv("rate", "%" PRIu32 " B/s", rtcm.bytes_per_sec);
-    cli::print_kv("crc32", "0x%08" PRIX32, rtcm.crc32);
-    cli::print_kv("last_msg", "%" PRIu16, rtcm.last_msg);
-    cli::print_kv("rejected_role", "%" PRIu32, rtcm.rejected_role);
-    cli::print_kv("unknown_bytes", "%" PRIu32 " B", demux.unknown_bytes);
-    cli::print_kv("prod_rejects", "%" PRIu32, demux.product_rejects);
-    cli::print_kv("rtcm_rejects", "%" PRIu32, demux.rtcm_rejects);
-    cli::print_kv("reset_epoch", "%" PRIu32, rtcm.reset_epoch);
-    cli::print_kv("pipe_push",
-                  "%" PRIu32 " frames / %" PRIu32 " B (drop=%" PRIu32 " frames / %" PRIu32 " B)",
-                  rtcm.pipe_accepted_frames, rtcm.pipe_accepted_bytes, rtcm.pipe_dropped_frames,
-                  rtcm.pipe_dropped_bytes);
+    cli::printSection("rtcm");
+    cli::printKv("frames", "%" PRIu32, rtcm.frames);
+    cli::printKv("bytes", "%" PRIu32 " B (%llu.%llu KB)", rtcm.bytes,
+                 static_cast<unsigned long long>(kib_tenths / kTenthsPerUnit),
+                 static_cast<unsigned long long>(kib_tenths % kTenthsPerUnit));
+    cli::printKv("rate", "%" PRIu32 " B/s", rtcm.bytes_per_sec);
+    cli::printKv("crc32", "0x%08" PRIX32, rtcm.crc32);
+    cli::printKv("last_msg", "%" PRIu16, rtcm.last_msg);
+    cli::printKv("rejected_role", "%" PRIu32, rtcm.rejected_role);
+    cli::printKv("unknown_bytes", "%" PRIu32 " B", demux.unknown_bytes);
+    cli::printKv("prod_rejects", "%" PRIu32, demux.product_rejects);
+    cli::printKv("rtcm_rejects", "%" PRIu32, demux.rtcm_rejects);
+    cli::printKv("reset_epoch", "%" PRIu32, rtcm.reset_epoch);
+    cli::printKv("pipe_push",
+                 "%" PRIu32 " frames / %" PRIu32 " B (drop=%" PRIu32 " frames / %" PRIu32 " B)",
+                 rtcm.pipe_accepted_frames, rtcm.pipe_accepted_bytes, rtcm.pipe_dropped_frames,
+                 rtcm.pipe_dropped_bytes);
 #if RTK_GNSS_ENABLED
     const auto pipe_stats = app_context().rtcm_pipe.stats();
     const auto pipe_io = app_context().rtcm_pipe.io_stats();
-    cli::print_kv("pipe_uart",
-                  "written=%" PRIu32 " B pending=%" PRIu32 " B discarded=%" PRIu32
-                  " B write_err=%" PRIu32 " paused=%s",
-                  pipe_stats.written_bytes, pipe_io.pending_bytes, pipe_io.discarded_bytes,
-                  pipe_io.uart_write_errors, pipe_io.paused ? "yes" : "no");
+    cli::printKv("pipe_uart",
+                 "written=%" PRIu32 " B pending=%" PRIu32 " B discarded=%" PRIu32
+                 " B write_err=%" PRIu32 " paused=%s",
+                 pipe_stats.written_bytes, pipe_io.pending_bytes, pipe_io.discarded_bytes,
+                 pipe_io.uart_write_errors, pipe_io.paused ? "yes" : "no");
 #endif
 
     // 保留 ADR-0006 §2 逐字格式行，供 tools/hil/spp_rtcm_mix.py 正则匹配。
-    cli::out_printf("rtcm: frames=%" PRIu32 " bytes=%" PRIu32 " crc32=0x%08" PRIX32
-                    " last_msg=%" PRIu16 " rejected_role=%" PRIu32 " unknown_bytes=%" PRIu32
-                    " product_rejects=%" PRIu32 " rtcm_rejects=%" PRIu32 "\n",
-                    rtcm.frames, rtcm.bytes, rtcm.crc32, rtcm.last_msg, rtcm.rejected_role,
-                    demux.unknown_bytes, demux.product_rejects, demux.rtcm_rejects);
-    cli::out_printf("stats: frames_rx=%" PRIu32 " replies_tx=%" PRIu32 " write_errors=%" PRIu32
-                    " pushes_tx=%" PRIu32 " disconnects=%" PRIu32 " rx_dropped=%" PRIu32 "\n",
-                    stats.frames_rx, stats.replies_tx, stats.write_errors, stats.pushes_tx,
-                    stats.disconnects, stats.rx_dropped);
+    cli::outPrintf("rtcm: frames=%" PRIu32 " bytes=%" PRIu32 " crc32=0x%08" PRIX32
+                   " last_msg=%" PRIu16 " rejected_role=%" PRIu32 " unknown_bytes=%" PRIu32
+                   " product_rejects=%" PRIu32 " rtcm_rejects=%" PRIu32 "\n",
+                   rtcm.frames, rtcm.bytes, rtcm.crc32, rtcm.last_msg, rtcm.rejected_role,
+                   demux.unknown_bytes, demux.product_rejects, demux.rtcm_rejects);
+    cli::outPrintf("stats: frames_rx=%" PRIu32 " replies_tx=%" PRIu32 " write_errors=%" PRIu32
+                   " pushes_tx=%" PRIu32 " disconnects=%" PRIu32 " rx_dropped=%" PRIu32 "\n",
+                   stats.frames_rx, stats.replies_tx, stats.write_errors, stats.pushes_tx,
+                   stats.disconnects, stats.rx_dropped);
 #if RTK_GNSS_ENABLED
-    cli::out_printf("rtcm_pipe: accepted=%" PRIu32 "/%" PRIu32 " dropped=%" PRIu32 "/%" PRIu32
-                    " written=%" PRIu32 " pending=%" PRIu32 " discarded=%" PRIu32
-                    " uart_err=%" PRIu32 " epoch=%" PRIu32 "\n",
-                    rtcm.pipe_accepted_frames, rtcm.pipe_accepted_bytes, rtcm.pipe_dropped_frames,
-                    rtcm.pipe_dropped_bytes, pipe_stats.written_bytes, pipe_io.pending_bytes,
-                    pipe_io.discarded_bytes, pipe_io.uart_write_errors, rtcm.reset_epoch);
+    cli::outPrintf("rtcm_pipe: accepted=%" PRIu32 "/%" PRIu32 " dropped=%" PRIu32 "/%" PRIu32
+                   " written=%" PRIu32 " pending=%" PRIu32 " discarded=%" PRIu32
+                   " uart_err=%" PRIu32 " epoch=%" PRIu32 "\n",
+                   rtcm.pipe_accepted_frames, rtcm.pipe_accepted_bytes, rtcm.pipe_dropped_frames,
+                   rtcm.pipe_dropped_bytes, pipe_stats.written_bytes, pipe_io.pending_bytes,
+                   pipe_io.discarded_bytes, pipe_io.uart_write_errors, rtcm.reset_epoch);
 #else
     cli::out_printf("rtcm_pipe: accepted=%" PRIu32 "/%" PRIu32 " dropped=%" PRIu32 "/%" PRIu32
                     " epoch=%" PRIu32 "\n",

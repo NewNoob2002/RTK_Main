@@ -57,19 +57,19 @@ struct PollOnlyModule {
     }
 };
 struct EmptyModule {};
-constexpr auto kFullOps = fw::make_ops<FullModule>();
-constexpr auto kPartialOps = fw::make_ops<PollOnlyModule>();
-constexpr auto kEmptyOps = fw::make_ops<EmptyModule>();
+constexpr auto kFullOps = fw::makeOps<FullModule>();
+constexpr auto kPartialOps = fw::makeOps<PollOnlyModule>();
+constexpr auto kEmptyOps = fw::makeOps<EmptyModule>();
 consteval bool has_all_callbacks(const fw::ModuleOps &ops) noexcept
 {
     return ops.init != nullptr && ops.start != nullptr && ops.poll != nullptr &&
-           ops.on_command != nullptr;
+           ops.onCommand != nullptr;
 }
 static_assert(has_all_callbacks(kFullOps));
 static_assert(kPartialOps.init == nullptr && kPartialOps.start == nullptr &&
-              kPartialOps.on_command == nullptr);
+              kPartialOps.onCommand == nullptr);
 static_assert(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr &&
-              kEmptyOps.poll == nullptr && kEmptyOps.on_command == nullptr);
+              kEmptyOps.poll == nullptr && kEmptyOps.onCommand == nullptr);
 
 void test_make_ops_full_forwarding()
 {
@@ -85,7 +85,7 @@ void test_make_ops_full_forwarding()
     fw::Command command{};
     command.seq = kCommandSequence;
     fw::CommandResult result{};
-    kFullOps.on_command(&module, command, result);
+    kFullOps.onCommand(&module, command, result);
     TEST_ASSERT_EQUAL_PTR(&command, module.command);
     TEST_ASSERT_EQUAL_UINT32(kCommandSequence, result.seq);
     TEST_ASSERT_TRUE(result.status == fw::Result::kTimeout);
@@ -97,27 +97,27 @@ void test_make_ops_partial_forwarding()
     TEST_ASSERT_FALSE(kPartialOps.poll(&module, kPollNowMs));
     TEST_ASSERT_EQUAL_UINT32(kPollNowMs, module.now_ms);
     TEST_ASSERT_TRUE(kPartialOps.init == nullptr && kPartialOps.start == nullptr &&
-                     kPartialOps.on_command == nullptr);
+                     kPartialOps.onCommand == nullptr);
 }
 
 void test_make_ops_empty_table()
 {
     TEST_ASSERT_TRUE(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr &&
-                     kEmptyOps.poll == nullptr && kEmptyOps.on_command == nullptr);
+                     kEmptyOps.poll == nullptr && kEmptyOps.onCommand == nullptr);
 }
 
 // --------------------------------------------------------------------------
 // Result 编译期 + 运行期检查
 // --------------------------------------------------------------------------
-static_assert(fw::is_ok(fw::Result::kOk));
-static_assert(!fw::is_ok(fw::Result::kInvalidArg));
-static_assert(!fw::is_ok(fw::Result::kNoSpace));
-static_assert(!fw::is_ok(fw::Result::kTimeout));
-static_assert(!fw::is_ok(fw::Result::kNotFound));
-static_assert(!fw::is_ok(fw::Result::kIoError));
-static_assert(!fw::is_ok(fw::Result::kNotSupported));
-static_assert(!fw::is_ok(fw::Result::kBusy));
-static_assert(!fw::is_ok(fw::Result::kInvalidState));
+static_assert(fw::isOk(fw::Result::kOk));
+static_assert(!fw::isOk(fw::Result::kInvalidArg));
+static_assert(!fw::isOk(fw::Result::kNoSpace));
+static_assert(!fw::isOk(fw::Result::kTimeout));
+static_assert(!fw::isOk(fw::Result::kNotFound));
+static_assert(!fw::isOk(fw::Result::kIoError));
+static_assert(!fw::isOk(fw::Result::kNotSupported));
+static_assert(!fw::isOk(fw::Result::kBusy));
+static_assert(!fw::isOk(fw::Result::kInvalidState));
 
 // --------------------------------------------------------------------------
 // StoreKey::valid / unique_keys 编译期 static_assert 用例
@@ -198,9 +198,9 @@ constexpr std::array<fw::StoreKey, 3> kDupTable{{
     make_key("ns2", "k2", fw::StoreType::kU8, 1U),
     make_key("ns1", "k1", fw::StoreType::kU32, 4U),
 }};
-static_assert(fw::unique_keys(std::span<const fw::StoreKey>{}));
-static_assert(fw::unique_keys(kUniqueTable));
-static_assert(!fw::unique_keys(kDupTable));
+static_assert(fw::uniqueKeys(std::span<const fw::StoreKey>{}));
+static_assert(fw::uniqueKeys(kUniqueTable));
+static_assert(!fw::uniqueKeys(kDupTable));
 
 // --------------------------------------------------------------------------
 // LockOps 间谍
@@ -259,16 +259,16 @@ constinit fw::Slot<SamplePayload> s_static_slot{};
 
 void test_result_strings()
 {
-    TEST_ASSERT_EQUAL_STRING("ok", fw::to_string(fw::Result::kOk));
-    TEST_ASSERT_EQUAL_STRING("invalid_arg", fw::to_string(fw::Result::kInvalidArg));
-    TEST_ASSERT_EQUAL_STRING("no_space", fw::to_string(fw::Result::kNoSpace));
-    TEST_ASSERT_EQUAL_STRING("timeout", fw::to_string(fw::Result::kTimeout));
-    TEST_ASSERT_EQUAL_STRING("not_found", fw::to_string(fw::Result::kNotFound));
-    TEST_ASSERT_EQUAL_STRING("io_error", fw::to_string(fw::Result::kIoError));
-    TEST_ASSERT_EQUAL_STRING("not_supported", fw::to_string(fw::Result::kNotSupported));
-    TEST_ASSERT_EQUAL_STRING("busy", fw::to_string(fw::Result::kBusy));
-    TEST_ASSERT_EQUAL_STRING("invalid_state", fw::to_string(fw::Result::kInvalidState));
-    TEST_ASSERT_EQUAL_STRING("unknown", fw::to_string(static_cast<fw::Result>(kUnknownResultRaw)));
+    TEST_ASSERT_EQUAL_STRING("ok", fw::toString(fw::Result::kOk));
+    TEST_ASSERT_EQUAL_STRING("invalid_arg", fw::toString(fw::Result::kInvalidArg));
+    TEST_ASSERT_EQUAL_STRING("no_space", fw::toString(fw::Result::kNoSpace));
+    TEST_ASSERT_EQUAL_STRING("timeout", fw::toString(fw::Result::kTimeout));
+    TEST_ASSERT_EQUAL_STRING("not_found", fw::toString(fw::Result::kNotFound));
+    TEST_ASSERT_EQUAL_STRING("io_error", fw::toString(fw::Result::kIoError));
+    TEST_ASSERT_EQUAL_STRING("not_supported", fw::toString(fw::Result::kNotSupported));
+    TEST_ASSERT_EQUAL_STRING("busy", fw::toString(fw::Result::kBusy));
+    TEST_ASSERT_EQUAL_STRING("invalid_state", fw::toString(fw::Result::kInvalidState));
+    TEST_ASSERT_EQUAL_STRING("unknown", fw::toString(static_cast<fw::Result>(kUnknownResultRaw)));
 }
 
 void test_lock_guard_pairing_and_nolock()
@@ -295,7 +295,7 @@ void test_lock_guard_pairing_and_nolock()
 void test_slot_read_write_version_and_lock_pairing()
 {
     LockSpy spy{};
-    s_static_slot.bind_lock(make_spy_lock(spy));
+    s_static_slot.bindLock(make_spy_lock(spy));
 
     // 初始版本号为 0，读一次触发 1 次配对锁
     uint32_t ver = kInitVerSentinel;
@@ -342,7 +342,7 @@ void test_slot_read_write_version_and_lock_pairing()
 
     // 最大允许尺寸 Slot<MaxSlotPayload>（512 B）读写正确
     fw::Slot<MaxSlotPayload> big_slot;
-    big_slot.bind_lock(fw::kNoLock);
+    big_slot.bindLock(fw::kNoLock);
     MaxSlotPayload in_big{};
     constexpr uint8_t kBigFill = 0x5CU;
     constexpr uint8_t kBigHead = 0x11U;
@@ -363,8 +363,8 @@ void test_store_key_runtime_and_binding()
     TEST_ASSERT_TRUE(fw::valid(kValidBlob));
     TEST_ASSERT_FALSE(fw::valid(kBadLongKey));
     TEST_ASSERT_FALSE(fw::valid(kBadRange));
-    TEST_ASSERT_TRUE(fw::unique_keys(kUniqueTable));
-    TEST_ASSERT_FALSE(fw::unique_keys(kDupTable));
+    TEST_ASSERT_TRUE(fw::uniqueKeys(kUniqueTable));
+    TEST_ASSERT_FALSE(fw::uniqueKeys(kDupTable));
 
     // StoreBinding 绑定示例
     constexpr uint32_t kInitialCounter = 42U;

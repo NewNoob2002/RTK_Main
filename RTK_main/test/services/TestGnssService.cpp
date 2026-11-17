@@ -165,7 +165,7 @@ void test_router_integration_with_all_services()
         dev.table(), cfg.table(), alm.table(), pair.table(), gnss.table(),
     };
     CommandRouter router;
-    TEST_ASSERT_TRUE(fw::is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(fw::isOk(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(kRouteCountAll, router.route_count());
 }
 
@@ -182,7 +182,7 @@ void test_subscription_and_capability_gate()
 
     CommandRouter router;
     const std::array<RouteTable, 1> tables = {gnss.table()};
-    TEST_ASSERT_TRUE(fw::is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(fw::isOk(router.init(tables)));
 
     Reply reply{};
     // ALARM 不可访问 PHONE 路由。
@@ -238,7 +238,7 @@ void test_unsupported_type_gate()
 
     CommandRouter router;
     const std::array<RouteTable, 1> tables = {gnss.table()};
-    TEST_ASSERT_TRUE(fw::is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(fw::isOk(router.init(tables)));
 
     Reply reply{};
     // 开机订阅：GSA 不支持 -> 02 02，掩码保持 0。
@@ -285,7 +285,7 @@ void test_interval_zero_stops_and_queries_latest()
 
     CommandRouter router;
     const std::array<RouteTable, 1> tables = {gnss.table()};
-    TEST_ASSERT_TRUE(fw::is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(fw::isOk(router.init(tables)));
 
     Reply reply{};
     TEST_ASSERT_EQUAL_UINT8(

@@ -24,17 +24,16 @@ public:
     ~BootStreamBuffer() = default;
 
     /** 使用外部存储区初始化 StreamBuffer；trigger_level 必须在 1..storage.size()。 */
-    [[nodiscard]] fw::Status init(std::span<uint8_t> storage, size_t trigger_level) noexcept
+    [[nodiscard]] fw::Status init(std::span<uint8_t> storage, size_t triggerLevel) noexcept
     {
         if (handle_ != nullptr) {
             return fw::Status::kBusy;
         }
-        if (storage.empty() || (storage.data() == nullptr) || (trigger_level == 0U) ||
-            (trigger_level > storage.size())) {
+        if (storage.empty() || (storage.data() == nullptr) || (triggerLevel == 0U) ||
+            (triggerLevel > storage.size())) {
             return fw::Status::kInvalidArg;
         }
-        handle_ =
-            xStreamBufferCreateStatic(storage.size(), trigger_level, storage.data(), &buffer_);
+        handle_ = xStreamBufferCreateStatic(storage.size(), triggerLevel, storage.data(), &buffer_);
         if (handle_ == nullptr) {
             return fw::Status::kNoSpace;
         }
@@ -52,21 +51,21 @@ public:
     }
 
     /** 写入，返回实际写入字节数；回调中传 timeout_ms=0。 */
-    [[nodiscard]] size_t send(std::span<const uint8_t> data, uint32_t timeout_ms) noexcept
+    [[nodiscard]] size_t send(std::span<const uint8_t> data, uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || data.empty()) {
             return 0U;
         }
-        return xStreamBufferSend(handle_, data.data(), data.size(), pdMS_TO_TICKS(timeout_ms));
+        return xStreamBufferSend(handle_, data.data(), data.size(), pdMS_TO_TICKS(timeoutMs));
     }
 
     /** 读取，返回实际读取字节数；timeout_ms=0 为非阻塞。 */
-    [[nodiscard]] size_t receive(std::span<uint8_t> out, uint32_t timeout_ms) noexcept
+    [[nodiscard]] size_t receive(std::span<uint8_t> out, uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || out.empty()) {
             return 0U;
         }
-        return xStreamBufferReceive(handle_, out.data(), out.size(), pdMS_TO_TICKS(timeout_ms));
+        return xStreamBufferReceive(handle_, out.data(), out.size(), pdMS_TO_TICKS(timeoutMs));
     }
 
     [[nodiscard]] size_t space() const noexcept

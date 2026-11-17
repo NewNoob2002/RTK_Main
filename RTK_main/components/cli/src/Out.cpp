@@ -113,20 +113,20 @@ std::array<char, kOutLineMax> s_fmt{};
 std::array<char, kXlatMax> s_xlat{};
 
 /** 写 stdout，保持与原 printf 路径一致（VFS 负责行尾转换）。 */
-void write_stdout(const char *text, size_t len) noexcept
+void writeStdout(const char *text, size_t len) noexcept
 {
     (void)std::fwrite(text, 1U, len, stdout);
 }
 
 /** 持锁调用：按设置转换行尾后交给输出端。 */
-void emit_locked(const char *text, size_t len) noexcept
+void emitLocked(const char *text, size_t len) noexcept
 {
     if ((text == nullptr) || (len == 0U)) {
         return;
     }
     const std::span<const char> src{text, len};
     if (s_sink == nullptr) {
-        write_stdout(src.data(), src.size());
+        writeStdout(src.data(), src.size());
         return;
     }
     // linenoise 的提示符/回显和回落路径仍走 stdout，先冲刷，保证顺序。
@@ -154,13 +154,13 @@ void emit_locked(const char *text, size_t len) noexcept
 }
 
 /** 持锁调用：格式化后输出；超长时整条交给 stdout（VFS 逐字节，慢但不截断）。 */
-int vprintf_locked(const char *fmt, va_list args) noexcept
+int vprintfLocked(const char *fmt, va_list args) noexcept
 {
     va_list copy;
     va_copy(copy, args);
     const int n = std::vsnprintf(s_fmt.data(), s_fmt.size(), fmt, args);
     if ((n >= 0) && (static_cast<size_t>(n) < s_fmt.size())) {
-        emit_locked(s_fmt.data(), static_cast<size_t>(n));
+        emitLocked(s_fmt.data(), static_cast<size_t>(n));
     } else if (n >= 0) {
         (void)std::fflush(stdout);
         (void)std::vfprintf(stdout, fmt, copy);
@@ -173,7 +173,7 @@ int vprintf_locked(const char *fmt, va_list args) noexcept
 
 } // namespace
 
-void set_out_sink(OutSink sink, bool crlf) noexcept
+void setOutSink(OutSink sink, bool crlf) noexcept
 {
     const Guard guard(s_lock);
     s_sink = sink;
@@ -181,34 +181,34 @@ void set_out_sink(OutSink sink, bool crlf) noexcept
     s_prev = '\n';
 }
 
-void out_write(const char *text, size_t len) noexcept
+void outWrite(const char *text, size_t len) noexcept
 {
     const Guard guard(s_lock);
     s_busy = true;
-    emit_locked(text, len);
+    emitLocked(text, len);
     s_busy = false;
 }
 
-void out_vprintf(const char *fmt, va_list args) noexcept
+void outVprintf(const char *fmt, va_list args) noexcept
 {
     if (fmt == nullptr) {
         return;
     }
     const Guard guard(s_lock);
     s_busy = true;
-    (void)vprintf_locked(fmt, args);
+    (void)vprintfLocked(fmt, args);
     s_busy = false;
 }
 
-void out_printf(const char *fmt, ...) noexcept
+void outPrintf(const char *fmt, ...) noexcept
 {
     va_list args;
     va_start(args, fmt);
-    out_vprintf(fmt, args);
+    outVprintf(fmt, args);
     va_end(args);
 }
 
-int out_log_vprintf(const char *fmt, va_list args) noexcept
+int outLogVprintf(const char *fmt, va_list args) noexcept
 {
     if (fmt == nullptr) {
         return 0;
@@ -218,7 +218,7 @@ int out_log_vprintf(const char *fmt, va_list args) noexcept
         return -1; // 同任务重入：缓冲正在使用，交回调用方
     }
     s_busy = true;
-    const int n = vprintf_locked(fmt, args);
+    const int n = vprintfLocked(fmt, args);
     s_busy = false;
     return n;
 }

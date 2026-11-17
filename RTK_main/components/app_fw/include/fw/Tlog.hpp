@@ -41,7 +41,7 @@ enum class LogLevel : uint8_t {
 };
 
 struct LogHeader {
-    uint32_t t_ms =
+    uint32_t tMs =
         0; // 记录时间（ms，环通路用 trace_install 的时钟，直写通路用 log_install_direct 的时钟）
     TraceCat cat = TraceCat::kLink;
     LogKind kind = LogKind::kText;
@@ -61,15 +61,15 @@ using LogSinkFn = void (*)(void *ctx, const LogHeader &hdr,
  * 安装文本通道 sink（启动阶段、单线程调用一次；时钟沿用 trace_install 注入的时钟，须先安装 trace）。
  * fn 为 nullptr → kInvalidArg；trace 未安装 → kInvalidState；重复安装 → kInvalidState。未安装时 tlog() 什么也不做。
  */
-[[nodiscard]] Result log_install(LogSinkFn fn, void *ctx) noexcept;
+[[nodiscard]] Result logInstall(LogSinkFn fn, void *ctx) noexcept;
 
 /** 十六进制级别掩码（原子，任意任务可调用）；超出 kTraceAllMask 的位被忽略。只有类别掩码同时打开时才生效。 */
-void log_set_hex_mask(uint32_t mask) noexcept;
-[[nodiscard]] uint32_t log_hex_mask() noexcept;
+void logSetHexMask(uint32_t mask) noexcept;
+[[nodiscard]] uint32_t logHexMask() noexcept;
 
 #if FW_TRACE_ENABLED
 /** 该类别的十六进制转储是否打开（十六进制掩码置位且该类别日志级别为 D，ADR-0009 §2.12）。 */
-[[nodiscard]] bool log_hex_on(TraceCat cat) noexcept;
+[[nodiscard]] bool logHexOn(TraceCat cat) noexcept;
 
 /**
  * @brief  记录一行 kInfo 级文本（ADR-0009 §2.11）；等价 FW_LOGI，但追踪关闭时为空。已废弃，新代码用 fw/Log.hpp
@@ -86,23 +86,23 @@ void tlog(TraceCat cat, const char *fmt, ...) noexcept __attribute__((format(pri
  * @param  bytes: 原始字节；只复制前 kLogHexMax 字节，记录头 total 保留原长
  * @note   约束同 tlog。
  */
-void tlog_hex(TraceCat cat, std::span<const uint8_t> bytes) noexcept;
+void tlogHex(TraceCat cat, std::span<const uint8_t> bytes) noexcept;
 #else
-[[nodiscard]] inline bool log_hex_on(TraceCat /*cat*/) noexcept
+[[nodiscard]] inline bool logHexOn(TraceCat /*cat*/) noexcept
 {
     return false;
 }
 
 inline void tlog(TraceCat /*cat*/, const char * /*fmt*/, ...) noexcept {}
 
-inline void tlog_hex(TraceCat /*cat*/, std::span<const uint8_t> /*bytes*/) noexcept {}
+inline void tlogHex(TraceCat /*cat*/, std::span<const uint8_t> /*bytes*/) noexcept {}
 #endif
 
 /** LogRing 统计；init() 后清零。 */
 struct LogRingStats {
-    uint32_t pushed = 0;   // 成功压入的记录数
-    uint32_t dropped = 0;  // 空间不足丢弃的记录数（累计）
-    uint32_t max_used = 0; // 历史最大占用字节数
+    uint32_t pushed = 0;  // 成功压入的记录数
+    uint32_t dropped = 0; // 空间不足丢弃的记录数（累计）
+    uint32_t maxUsed = 0; // 历史最大占用字节数
 };
 
 /**
@@ -127,7 +127,7 @@ public:
     bool push(const LogHeader &hdr, std::span<const uint8_t> payload) noexcept;
 
     /** 最旧记录的时间戳；空或未 init → false。读者据此与 TraceRing 按时间合并。 */
-    [[nodiscard]] bool peek_time(uint32_t &t_ms) const noexcept;
+    [[nodiscard]] bool peekTime(uint32_t &tMs) const noexcept;
 
     /**
      * 弹出最旧记录：头写入 hdr，payload 复制到 out（out.size() 不足时截断复制，记录仍整体移除），
@@ -136,7 +136,7 @@ public:
     [[nodiscard]] bool pop(LogHeader &hdr, std::span<uint8_t> out, std::size_t &copied) noexcept;
 
     /** 取走自上次调用以来新增的丢弃数。 */
-    [[nodiscard]] uint32_t take_dropped() noexcept;
+    [[nodiscard]] uint32_t takeDropped() noexcept;
 
     [[nodiscard]] LogRingStats stats() const noexcept;
     /** 当前占用字节数。 */

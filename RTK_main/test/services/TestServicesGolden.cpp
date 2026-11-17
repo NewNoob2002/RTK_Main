@@ -379,7 +379,7 @@ void test_msg_id_sweep()
 void test_device_sequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.init_router()));
 
     uint32_t now_ms = kDeviceNowMs;
     constexpr std::array<uint16_t, 5> kIds = {kMsgDevInfo, kMsgDevState, kMsgBattery, kMsgSatTrack,
@@ -427,7 +427,7 @@ void test_device_sequence()
 void test_config_sequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.init_router()));
 
     uint32_t now_ms = kConfigNowMs;
     for (size_t i = 0; i < s_payload.size(); ++i) {
@@ -484,7 +484,7 @@ void test_config_sequence()
 void test_pair_sequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.init_router()));
 
     Actions act;
     uint32_t now_ms = kPairNowMs;
@@ -534,7 +534,7 @@ void test_pair_sequence()
 void test_alarm_sequence()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.init_router()));
 
     Actions act;
     uint32_t now_ms = kAlarmNowMs;
@@ -625,7 +625,7 @@ extern "C" void tearDown(void) {}
 void test_dev_state_gnss_byte()
 {
     Harness harness;
-    TEST_ASSERT_TRUE(is_ok(harness.init_router()));
+    TEST_ASSERT_TRUE(isOk(harness.init_router()));
     proto::FrameView frame{};
     frame.msg_id = kMsgDevState;
     frame.type = mt::kQuery;

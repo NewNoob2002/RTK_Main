@@ -99,23 +99,23 @@ void test_validation_and_modes()
     fw::FanoutView view{};
     uint8_t id = 0U;
     expect(Result::kInvalidState, ring.attach(kType0, id));
-    expect(Result::kInvalidState, ring.set_mask(id, kType0));
+    expect(Result::kInvalidState, ring.setMask(id, kType0));
     expect(Result::kInvalidState, ring.write(0U, kByte));
     expect(Result::kInvalidState, ring.peek(id, view));
     expect(Result::kInvalidState, ring.commit({}));
     expect(Result::kInvalidState, ring.cancel({}));
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.typed_writer_stats().base.records);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.typed_reader_stats(id).filtered);
-    expect(Result::kInvalidArg, ring.init_typed({}, 1U, fw::kNoLock));
-    expect(Result::kInvalidArg, ring.init_typed(storage, 0U, fw::kNoLock));
-    expect(Result::kInvalidArg, ring.init_typed(storage, 65536U, fw::kNoLock));
-    expect(Result::kInvalidArg, ring.init_typed(storage, kCap, fw::kNoLock));
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.typedWriterStats().base.records);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.typedReaderStats(id).filtered);
+    expect(Result::kInvalidArg, ring.initTyped({}, 1U, fw::kNoLock));
+    expect(Result::kInvalidArg, ring.initTyped(storage, 0U, fw::kNoLock));
+    expect(Result::kInvalidArg, ring.initTyped(storage, 65536U, fw::kNoLock));
+    expect(Result::kInvalidArg, ring.initTyped(storage, kCap, fw::kNoLock));
     expect(Result::kInvalidArg,
-           ring.init_typed(std::span(storage).first(kCap - 1U), 1U, fw::kNoLock));
+           ring.initTyped(std::span(storage).first(kCap - 1U), 1U, fw::kNoLock));
     const fw::LockOps bad_lock{[](void *) noexcept {}, nullptr, nullptr};
-    expect(Result::kInvalidArg, ring.init_typed(storage, 1U, bad_lock));
-    expect(Result::kOk, ring.init_typed(storage, kCap - fw::kFanoutTypedHeaderBytes, fw::kNoLock));
-    expect(Result::kInvalidState, ring.init_typed(storage, 1U, fw::kNoLock));
+    expect(Result::kInvalidArg, ring.initTyped(storage, 1U, bad_lock));
+    expect(Result::kOk, ring.initTyped(storage, kCap - fw::kFanoutTypedHeaderBytes, fw::kNoLock));
+    expect(Result::kInvalidState, ring.initTyped(storage, 1U, fw::kNoLock));
     expect(Result::kInvalidState, ring.init(storage, 1U, fw::kNoLock));
     expect(Result::kNotSupported, ring.attach(id));
     expect(Result::kNotSupported, ring.write(kByte));
@@ -123,31 +123,31 @@ void test_validation_and_modes()
     expect(Result::kNotSupported, ring.read(id, std::span<uint8_t>{}, length));
     TEST_ASSERT_EQUAL_size_t(0U, length);
     expect(Result::kInvalidArg, ring.peek(kBadId, view));
-    expect(Result::kInvalidArg, ring.set_mask(kBadId, 0U));
+    expect(Result::kInvalidArg, ring.setMask(kBadId, 0U));
     expect(Result::kInvalidArg, ring.commit({1U, 1U, kBadId}));
     expect(Result::kInvalidArg, ring.detach(id));
     expect(Result::kInvalidArg, ring.write(32U, kByte));
     expect(Result::kInvalidArg, ring.write(0U, {}));
-    TEST_ASSERT_EQUAL_UINT32(2U, ring.typed_writer_stats().base.rejected);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.typed_writer_stats().oversize_drop);
+    TEST_ASSERT_EQUAL_UINT32(2U, ring.typedWriterStats().base.rejected);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.typedWriterStats().oversizeDrop);
 
     fw::FanoutRing legacy;
     expect(Result::kOk, legacy.init(storage, 1U, fw::kNoLock));
     expect(Result::kNotSupported, legacy.attach(kType0, id));
-    expect(Result::kNotSupported, legacy.set_mask(id, kType0));
+    expect(Result::kNotSupported, legacy.setMask(id, kType0));
     expect(Result::kNotSupported, legacy.write(0U, kByte));
     expect(Result::kNotSupported, legacy.peek(id, view));
     expect(Result::kNotSupported, legacy.commit({}));
     expect(Result::kNotSupported, legacy.cancel({}));
-    TEST_ASSERT_EQUAL_UINT32(0U, legacy.typed_writer_stats().base.records);
-    TEST_ASSERT_EQUAL_UINT32(0U, legacy.typed_reader_stats(id).base.records);
+    TEST_ASSERT_EQUAL_UINT32(0U, legacy.typedWriterStats().base.records);
+    TEST_ASSERT_EQUAL_UINT32(0U, legacy.typedReaderStats(id).base.records);
 }
 
 void test_masks_and_independent_readers()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, kCap> storage{};
-    expect(Result::kOk, ring.init_typed(storage, 1U, fw::kNoLock));
+    expect(Result::kOk, ring.initTyped(storage, 1U, fw::kNoLock));
     expect(Result::kOk, ring.write(0U, kByte)); // 无读者不发布。
     std::array<uint8_t, fw::kFanoutMaxReaders> ids{};
     expect(Result::kOk, ring.attach(0U, ids[0]));
@@ -175,28 +175,28 @@ void test_masks_and_independent_readers()
         TEST_ASSERT_EQUAL_UINT8(type, view.type);
         expect(Result::kOk, ring.commit(view.lease));
     }
-    TEST_ASSERT_EQUAL_UINT32(2U, ring.typed_reader_stats(ids[0]).filtered);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_reader_stats(ids[1]).filtered);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_reader_stats(ids[2]).filtered);
-    TEST_ASSERT_EQUAL_UINT32(2U, ring.typed_reader_stats(ids[kMixedReader]).base.records);
-    TEST_ASSERT_EQUAL_UINT32(2U, ring.typed_writer_stats().no_subscriber);
-    TEST_ASSERT_EQUAL_UINT32(2U, ring.writer_stats().records);
+    TEST_ASSERT_EQUAL_UINT32(2U, ring.typedReaderStats(ids[0]).filtered);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(ids[1]).filtered);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(ids[2]).filtered);
+    TEST_ASSERT_EQUAL_UINT32(2U, ring.typedReaderStats(ids[kMixedReader]).base.records);
+    TEST_ASSERT_EQUAL_UINT32(2U, ring.typedWriterStats().noSubscriber);
+    TEST_ASSERT_EQUAL_UINT32(2U, ring.writerStats().records);
     expect(Result::kOk, ring.write(0U, kByte));
-    expect(Result::kOk, ring.set_mask(ids[1], kType31));
+    expect(Result::kOk, ring.setMask(ids[1], kType31));
     expect(Result::kNotFound, ring.peek(ids[1], view)); // 改 mask 从最新开始。
     expect(Result::kOk, ring.detach(ids[2]));
     expect(Result::kOk, ring.attach(kType31, extra));
     TEST_ASSERT_EQUAL_UINT8(ids[2], extra);
     expect(Result::kNotFound, ring.peek(extra, view));
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(extra).records);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.typed_reader_stats(extra).filtered);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(extra).records);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.typedReaderStats(extra).filtered);
 }
 
 void test_overwrite_filters_and_progress()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, 16U> storage{};
-    expect(Result::kOk, ring.init_typed(storage, 1U, fw::kNoLock));
+    expect(Result::kOk, ring.initTyped(storage, 1U, fw::kNoLock));
     uint8_t slow = 0U;
     uint8_t fast = 0U;
     uint8_t other = 0U;
@@ -209,20 +209,20 @@ void test_overwrite_filters_and_progress()
         expect(Result::kOk, ring.peek(fast, view));
         expect(Result::kOk, ring.commit(view.lease));
     }
-    TEST_ASSERT_EQUAL_UINT32(2U, ring.writer_stats().overwritten);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_reader_stats(slow).base.dropped);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_reader_stats(slow).filtered);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_reader_stats(other).base.dropped);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_reader_stats(other).filtered);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(fast).dropped);
-    TEST_ASSERT_EQUAL_size_t(storage.size(), ring.typed_writer_stats().high_water_bytes);
+    TEST_ASSERT_EQUAL_UINT32(2U, ring.writerStats().overwritten);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(slow).base.dropped);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(slow).filtered);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(other).base.dropped);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(other).filtered);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(fast).dropped);
+    TEST_ASSERT_EQUAL_size_t(storage.size(), ring.typedWriterStats().highWaterBytes);
 }
 
 void test_leases_and_pin_rejection()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, 16U> storage{};
-    expect(Result::kOk, ring.init_typed(storage, kFullPayload, fw::kNoLock));
+    expect(Result::kOk, ring.initTyped(storage, kFullPayload, fw::kNoLock));
     uint8_t a = 0U;
     uint8_t b = 0U;
     uint8_t unrelated = 0U;
@@ -236,17 +236,17 @@ void test_leases_and_pin_rejection()
     expect(Result::kBusy, ring.peek(a, view));
     TEST_ASSERT_TRUE(view.first.empty());
     expect(Result::kBusy, ring.detach(a));
-    expect(Result::kBusy, ring.set_mask(a, kType31));
+    expect(Result::kBusy, ring.setMask(a, kType31));
     std::array<uint8_t, kFullPayload> full{};
     pattern(full);
     expect(Result::kBusy, ring.write(0U, full));
     view_equal(pinned, kByte);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_writer_stats().pinned_drop);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_reader_stats(a).pinned_drop);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_reader_stats(b).pinned_drop);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.typed_reader_stats(unrelated).pinned_drop);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.writer_stats().overwritten);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.writer_stats().rejected);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedWriterStats().pinnedDrop);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(a).pinnedDrop);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.typedReaderStats(b).pinnedDrop);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.typedReaderStats(unrelated).pinnedDrop);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.writerStats().overwritten);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.writerStats().rejected);
     auto bad = pinned.lease;
     ++bad.generation;
     expect(Result::kInvalidArg, ring.commit(bad));
@@ -260,7 +260,7 @@ void test_leases_and_pin_rejection()
     expect(Result::kInvalidArg, ring.cancel(pinned.lease));
     expect(Result::kOk, ring.commit(view.lease));
     expect(Result::kInvalidArg, ring.commit(view.lease));
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.reader_stats(a).records);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.readerStats(a).records);
     expect(Result::kOk, ring.detach(a));
     expect(Result::kOk, ring.attach(kType0, a));
     expect(Result::kOk, ring.write(0U, full));
@@ -268,15 +268,15 @@ void test_leases_and_pin_rejection()
     expect(Result::kInvalidArg, ring.commit(pinned.lease));
     view_equal(view, full);
     expect(Result::kOk, ring.commit(view.lease));
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(a).dropped);
-    TEST_ASSERT_EQUAL_UINT32(1U, ring.reader_stats(b).dropped);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(a).dropped);
+    TEST_ASSERT_EQUAL_UINT32(1U, ring.readerStats(b).dropped);
 }
 
 void test_pin_rejection_does_not_partially_evict()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, 16U> storage{};
-    expect(Result::kOk, ring.init_typed(storage, kFullPayload, fw::kNoLock));
+    expect(Result::kOk, ring.initTyped(storage, kFullPayload, fw::kNoLock));
     uint8_t id = 0U;
     expect(Result::kOk, ring.attach(kType0, id));
     expect(Result::kOk, ring.write(0U, kByte));
@@ -287,8 +287,8 @@ void test_pin_rejection_does_not_partially_evict()
     expect(Result::kOk, ring.peek(id, view)); // pin 在第二条，第一条可以被覆盖。
     const std::array<uint8_t, kFullPayload> full{};
     expect(Result::kBusy, ring.write(0U, full));
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.writer_stats().overwritten);
-    TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(id).dropped);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.writerStats().overwritten);
+    TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(id).dropped);
     view_equal(view, kByte);
     expect(Result::kOk, ring.commit(view.lease));
 }
@@ -301,7 +301,7 @@ void test_capacity_and_oversize()
     for (const size_t cap : {size_t{2048U}, size_t{4096U}, size_t{8192U}}) {
         fw::FanoutRing ring;
         const size_t max = cap - fw::kFanoutTypedHeaderBytes;
-        expect(Result::kOk, ring.init_typed(std::span(backing).first(cap), max, fw::kNoLock));
+        expect(Result::kOk, ring.initTyped(std::span(backing).first(cap), max, fw::kNoLock));
         uint8_t id = 0U;
         expect(Result::kOk, ring.attach(kType0, id));
         const auto bytes = std::span(payload).first(max);
@@ -311,12 +311,12 @@ void test_capacity_and_oversize()
         view_equal(view, bytes);
         expect(Result::kOk, ring.commit(view.lease));
         TEST_ASSERT_EQUAL_size_t(max + fw::kFanoutTypedHeaderBytes,
-                                 ring.typed_writer_stats().high_water_bytes);
+                                 ring.typedWriterStats().highWaterBytes);
         if (cap == kAppCap) {
             expect(Result::kInvalidArg, ring.write(0U, std::span(payload).first(kAppCap)));
-            TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_writer_stats().oversize_drop);
-            TEST_ASSERT_EQUAL_UINT32(1U, ring.writer_stats().rejected);
-            TEST_ASSERT_EQUAL_UINT32(1U, ring.writer_stats().records);
+            TEST_ASSERT_EQUAL_UINT32(1U, ring.typedWriterStats().oversizeDrop);
+            TEST_ASSERT_EQUAL_UINT32(1U, ring.writerStats().rejected);
+            TEST_ASSERT_EQUAL_UINT32(1U, ring.writerStats().records);
             expect(Result::kNotFound, ring.peek(id, view));
         } else if (cap > kAppCap) {
             expect(Result::kOk, ring.write(0U, std::span(payload).first(kAppCap)));
@@ -326,17 +326,17 @@ void test_capacity_and_oversize()
         }
     }
     fw::FanoutRing small;
-    expect(Result::kOk, small.init_typed(backing, 1U, fw::kNoLock));
+    expect(Result::kOk, small.initTyped(backing, 1U, fw::kNoLock));
     expect(Result::kInvalidArg, small.write(0U, payload)); // 超 max，但未超过容量也计 oversize。
-    TEST_ASSERT_EQUAL_UINT32(1U, small.typed_writer_stats().oversize_drop);
+    TEST_ASSERT_EQUAL_UINT32(1U, small.typedWriterStats().oversizeDrop);
     std::array<uint8_t, 4U> minimum{};
     fw::FanoutRing tiny;
-    expect(Result::kOk, tiny.init_typed(minimum, 1U, fw::kNoLock));
+    expect(Result::kOk, tiny.initTyped(minimum, 1U, fw::kNoLock));
     uint8_t id = 0U;
     expect(Result::kOk, tiny.attach(kType0, id));
     expect(Result::kOk, tiny.write(0U, kByte));
     expect(Result::kOk, tiny.write(0U, kByte));
-    TEST_ASSERT_EQUAL_UINT32(1U, tiny.reader_stats(id).dropped);
+    TEST_ASSERT_EQUAL_UINT32(1U, tiny.readerStats(id).dropped);
 }
 
 void test_physical_and_u32_wrap_without_moving_pin()
@@ -345,7 +345,7 @@ void test_physical_and_u32_wrap_without_moving_pin()
                                  kMaxCounter - 4U, kMaxCounter - 16U}) {
         fw::FanoutRing ring;
         std::array<uint8_t, kCap> storage{};
-        expect(Result::kOk, ring.init_typed(storage, 8U, fw::kNoLock));
+        expect(Result::kOk, ring.initTyped(storage, 8U, fw::kNoLock));
         uint8_t id = 0U;
         expect(Result::kOk, ring.attach(kType0, id));
         fw::FanoutRingTestAccess::empty_at(ring, start);
@@ -377,7 +377,7 @@ void test_physical_and_u32_wrap_without_moving_pin()
         view_equal(view, payload);
         expect(Result::kOk, ring.commit(view.lease));
         expect(Result::kNotFound, ring.peek(id, view));
-        TEST_ASSERT_EQUAL_UINT32(0U, ring.reader_stats(id).dropped);
+        TEST_ASSERT_EQUAL_UINT32(0U, ring.readerStats(id).dropped);
     }
 }
 
@@ -385,7 +385,7 @@ void test_serial_and_generation_exhaustion()
 {
     fw::FanoutRing ring;
     std::array<uint8_t, kCap> storage{};
-    expect(Result::kOk, ring.init_typed(storage, 1U, fw::kNoLock));
+    expect(Result::kOk, ring.initTyped(storage, 1U, fw::kNoLock));
     uint8_t id = 0U;
     expect(Result::kOk, ring.attach(kType0, id));
     fw::FanoutRingTestAccess::serial(ring, id, kMaxCounter - 1U);
@@ -513,7 +513,7 @@ void test_reservation_prevents_late_pin()
     const fw::LockOps ops{ControlledLock::lock, ControlledLock::unlock, &lock};
     fw::FanoutRing ring;
     std::array<uint8_t, 16U> storage{};
-    expect(Result::kOk, ring.init_typed(storage, kReservationPayload, ops));
+    expect(Result::kOk, ring.initTyped(storage, kReservationPayload, ops));
     uint8_t id = 0U;
     expect(Result::kOk, ring.attach(kType0, id));
     for (size_t i = 0U; i < 4U; ++i) {
@@ -527,7 +527,7 @@ void test_reservation_prevents_late_pin()
     lock.await_pause();
     fw::FanoutView view{};
     const Result peek_result = ring.peek(id, view);
-    const uint32_t dropped = ring.reader_stats(id).dropped;
+    const uint32_t dropped = ring.readerStats(id).dropped;
     lock.release();
     sys_ok(pthread_join(thread, nullptr));
     expect(Result::kOk, peek_result);
@@ -549,7 +549,7 @@ void test_copy_before_publication_is_invisible()
     const fw::LockOps ops{ControlledLock::lock, ControlledLock::unlock, &lock};
     fw::FanoutRing ring;
     std::array<uint8_t, kAppCap * 2U> storage{};
-    expect(Result::kOk, ring.init_typed(storage, kAppCap, ops));
+    expect(Result::kOk, ring.initTyped(storage, kAppCap, ops));
     uint8_t id = 0U;
     expect(Result::kOk, ring.attach(kType0, id));
     std::array<uint8_t, kAppCap> payload{};
@@ -562,7 +562,7 @@ void test_copy_before_publication_is_invisible()
     lock.await_pause();
     fw::FanoutView view{};
     const Result peek_result = ring.peek(id, view);
-    const uint32_t records = ring.writer_stats().records;
+    const uint32_t records = ring.writerStats().records;
     const bool copied = std::equal(payload.begin(), payload.end(),
                                    std::span(storage).subspan(fw::kFanoutTypedHeaderBytes).begin());
     lock.release();
@@ -602,9 +602,9 @@ struct ConcurrentReader {
             } else {
                 self.ok = false;
             }
-            const auto stats = self.ring->typed_reader_stats(self.id);
+            const auto stats = self.ring->typedReaderStats(self.id);
             self.ok = self.ok && (stats.base.records == i + 1U) && (stats.base.dropped == 0U) &&
-                      (self.ring->typed_writer_stats().base.records == i + 1U);
+                      (self.ring->typedWriterStats().base.records == i + 1U);
             barrier(*self.sync);
         }
         return nullptr;
@@ -617,7 +617,7 @@ void test_concurrent_reader_stats()
     const fw::LockOps ops{ControlledLock::lock, ControlledLock::unlock, &lock};
     fw::FanoutRing ring;
     std::array<uint8_t, kCap> storage{};
-    expect(Result::kOk, ring.init_typed(storage, 1U, ops));
+    expect(Result::kOk, ring.initTyped(storage, 1U, ops));
     pthread_barrier_t sync{};
     sys_ok(pthread_barrier_init(&sync, nullptr, kBarrierParticipants));
     uint8_t a = 0U;

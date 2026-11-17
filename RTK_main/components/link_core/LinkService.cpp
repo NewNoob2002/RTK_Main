@@ -108,7 +108,7 @@ void LinkService::send_reply(SessionHandle handle, const ReplyCredit &credit,
     const fw::Status status = transport_.supports_credit()
                                   ? transport_.commit_reply(credit, reply_.bytes())
                                   : transport_.write(handle, reply_.bytes(), kWriteTimeoutMs);
-    if (is_ok(status)) {
+    if (isOk(status)) {
         ++stats_.replies_tx; // 接纳，不表示 WRITE_EVT 或应用 ACK
         trace_proto(ProtoTrace::kReply, handle, msg_id,
                     static_cast<uint32_t>(status)); // 枚举范围<=255
@@ -125,7 +125,7 @@ bool LinkService::dispatch_pending(Slot &slot, uint32_t now_ms) noexcept
     const SessionHandle handle = slot.handle;
     if (transport_.supports_credit()) {
         const fw::Status status = transport_.reserve_reply(handle, credit);
-        if (!is_ok(status)) {
+        if (!isOk(status)) {
             if ((status == fw::Status::kTimeout) || (status == fw::Status::kNoSpace) ||
                 (status == fw::Status::kBusy)) {
                 return false;
@@ -255,7 +255,7 @@ void LinkService::tick(uint32_t now_ms) noexcept
             continue;
         }
         const fw::Status status = transport_.push_latest(handles[i], reply_.bytes());
-        if (is_ok(status)) {
+        if (isOk(status)) {
             ++stats_.pushes_tx;
         } else {
             ++stats_.write_errors;

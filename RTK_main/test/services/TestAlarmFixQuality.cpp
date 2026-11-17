@@ -45,7 +45,7 @@ void test_fix_quality_default_and_updates()
 
     core::CommandRouter router;
     const std::array<core::RouteTable, 1U> tables = {alarm_svc.table()};
-    TEST_ASSERT_TRUE(is_ok(router.init(tables)));
+    TEST_ASSERT_TRUE(isOk(router.init(tables)));
 
     // 默认 DeviceInfo::fix_quality 为 0xFF，0x40 推送与查询的第 4 字节均为 0xFF。
     TEST_ASSERT_EQUAL_UINT8(proto::alarm::kValueUnknown, dev.info().fix_quality);

@@ -202,12 +202,12 @@ fw::Result GnssModule::init() noexcept
     }
 
     const auto uart_result = init_uart();
-    if (!fw::is_ok(uart_result)) {
+    if (!fw::isOk(uart_result)) {
         return uart_result;
     }
 
     const fw::Result pipe_res = to_result(ctx().rtcm_pipe.init());
-    if (!fw::is_ok(pipe_res)) {
+    if (!fw::isOk(pipe_res)) {
         return init_failed(pipe_res);
     }
 
@@ -274,7 +274,7 @@ fw::Result GnssModule::init_uart() noexcept
     const esp_err_t drv_err = uart_driver_install(port, static_cast<int>(kUartRxBufBytes),
                                                   static_cast<int>(kUartTxBufBytes), 0, nullptr, 0);
     if (drv_err != ESP_OK) {
-        return to_result(rtos::from_esp_err(drv_err));
+        return to_result(rtos::fromEspErr(drv_err));
     }
     uart_installed_ = true;
     const uart_config_t uart_cfg{
@@ -290,12 +290,12 @@ fw::Result GnssModule::init_uart() noexcept
     };
     const esp_err_t cfg_err = uart_param_config(port, &uart_cfg);
     if (cfg_err != ESP_OK) {
-        return init_failed(to_result(rtos::from_esp_err(cfg_err)));
+        return init_failed(to_result(rtos::fromEspErr(cfg_err)));
     }
     const esp_err_t pin_err = uart_set_pin(port, CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_RX_GPIO,
                                            UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (pin_err != ESP_OK) {
-        return init_failed(to_result(rtos::from_esp_err(pin_err)));
+        return init_failed(to_result(rtos::fromEspErr(pin_err)));
     }
 #if CONFIG_RTK_GNSS_POWER_GPIO >= 0
     // Kconfig GPIO 限制为 0..39，枚举转换与 64 位移位安全。
@@ -303,7 +303,7 @@ fw::Result GnssModule::init_uart() noexcept
     const uint32_t off_level = (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0) ? 0U : 1U;
     const esp_err_t level_err = gpio_set_level(power_pin, off_level);
     if (level_err != ESP_OK) {
-        return init_failed(to_result(rtos::from_esp_err(level_err)));
+        return init_failed(to_result(rtos::fromEspErr(level_err)));
     }
     gpio_config_t power_cfg{};
     power_cfg.pin_bit_mask = 1ULL << static_cast<unsigned>(CONFIG_RTK_GNSS_POWER_GPIO);
@@ -313,7 +313,7 @@ fw::Result GnssModule::init_uart() noexcept
     power_cfg.intr_type = GPIO_INTR_DISABLE;
     const esp_err_t gpio_err = gpio_config(&power_cfg);
     if (gpio_err != ESP_OK) {
-        return init_failed(to_result(rtos::from_esp_err(gpio_err)));
+        return init_failed(to_result(rtos::fromEspErr(gpio_err)));
     }
 #endif
     return fw::Result::kOk;
@@ -328,7 +328,7 @@ fw::Status GnssModule::stop_boot() noexcept
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
     const esp_err_t err = uart_driver_delete(port);
     if (err != ESP_OK) {
-        return rtos::from_esp_err(err);
+        return rtos::fromEspErr(err);
     }
     uart_installed_ = false;
     initialized_ = false;
@@ -338,7 +338,7 @@ fw::Status GnssModule::stop_boot() noexcept
 fw::Result GnssModule::init_failed(fw::Result original) noexcept
 {
     const auto cleanup = stop_boot();
-    return fw::is_ok(cleanup) ? original : to_result(cleanup);
+    return fw::isOk(cleanup) ? original : to_result(cleanup);
 }
 
 fw::Result GnssModule::start() noexcept
@@ -346,7 +346,7 @@ fw::Result GnssModule::start() noexcept
     if (!initialized_) {
         return fw::Result::kInvalidState;
     }
-    const uint32_t now = rtos::now_ms();
+    const uint32_t now = rtos::nowMs();
     controller().start(now);
     poll_controller(now);
     publish_status(now);
@@ -421,17 +421,17 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
         result.status = fw::Result::kInvalidState;
         return;
     }
-    const uint32_t now = rtos::now_ms();
+    const uint32_t now = rtos::nowMs();
     switch (static_cast<GnssVerb>(cmd.verb)) {
     case GnssVerb::kProbe:
-        if (cmd.arg_len != 0U) {
+        if (cmd.argLen != 0U) {
             result.status = fw::Result::kInvalidArg;
             return;
         }
         cmd_probe(now, result);
         return;
     case GnssVerb::kReset:
-        if (cmd.arg_len != 0U) {
+        if (cmd.argLen != 0U) {
             result.status = fw::Result::kInvalidArg;
             return;
         }
@@ -505,7 +505,7 @@ void GnssModule::cmd_reset(uint32_t now_ms, fw::CommandResult &result) noexcept
 void GnssModule::cmd_set_rate(const fw::Command &cmd, uint32_t now_ms,
                               fw::CommandResult &result) noexcept
 {
-    if ((cmd.arg_len != 1U) || !is_valid_rate_hz(cmd.args[0])) {
+    if ((cmd.argLen != 1U) || !is_valid_rate_hz(cmd.args[0])) {
         result.status = fw::Result::kInvalidArg;
         return;
     }
@@ -519,7 +519,7 @@ void GnssModule::cmd_set_rate(const fw::Command &cmd, uint32_t now_ms,
         const uint8_t prev_rate = ensure_rover_cfg().rate_hz;
         ensure_rover_cfg().rate_hz = cmd.args[0];
         const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
-        if (!fw::is_ok(save_res)) {
+        if (!fw::isOk(save_res)) {
             ensure_rover_cfg().rate_hz = prev_rate;
             result.status = save_res;
             return;
@@ -555,9 +555,9 @@ void GnssModule::cmd_set_out(const fw::Command &cmd, uint32_t now_ms,
                              fw::CommandResult &result) noexcept
 {
     data::GnssOutConfig next{};
-    if ((cmd.arg_len != data::GnssOutConfig::kBlobBytes) ||
-        !fw::is_ok(data::GnssOutConfig::decode(
-            std::span<const uint8_t>{cmd.args.data(), cmd.arg_len}, next))) {
+    if ((cmd.argLen != data::GnssOutConfig::kBlobBytes) ||
+        !fw::isOk(data::GnssOutConfig::decode(std::span<const uint8_t>{cmd.args.data(), cmd.argLen},
+                                              next))) {
         result.status = fw::Result::kInvalidArg;
         return;
     }
@@ -572,7 +572,7 @@ void GnssModule::cmd_set_out(const fw::Command &cmd, uint32_t now_ms,
     if (controller().state() != ::gnss::State::kRunning) {
         // 未进入 kRunning 时没有可下发的输出阶段：直接落盘，下次配置完成时按新表重算计划。
         const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
-        if (!fw::is_ok(save_res)) {
+        if (!fw::isOk(save_res)) {
             out_cfg_ = prev;
             ctx().data.gnss_out_cfg.write(out_cfg_);
             result.status = save_res;
@@ -603,13 +603,13 @@ void GnssModule::send_raw(const fw::Command &cmd, fw::CommandResult &result) noe
         result.status = fw::Result::kInvalidState;
         return;
     }
-    if ((cmd.arg_len == 0U) || (cmd.arg_len > cmd.args.size())) {
+    if ((cmd.argLen == 0U) || (cmd.argLen > cmd.args.size())) {
         result.status = fw::Result::kInvalidArg;
         return;
     }
     std::array<char, fw::kCommandArgBytes + 2U> line{};
     // arg_len 已检查不超过固定 args；size_t 足以表示它。
-    const auto len = static_cast<size_t>(cmd.arg_len);
+    const auto len = static_cast<size_t>(cmd.argLen);
     std::memcpy(line.data(), cmd.args.data(), len);
     line[len] = '\r';
     line[len + 1U] = '\n';
@@ -638,9 +638,9 @@ void GnssModule::handle_frame(const demux::Decoder &decoder,
     controller().receiver().frame_tag(decoder, frame, tag);
     FW_LOGD(fw::TraceCat::kGnss, "<rx> %s, %lu bytes", tag.data(),
             static_cast<unsigned long>(frame.size()));
-    fw::tlog_hex(fw::TraceCat::kGnss, frame);
+    fw::tlogHex(fw::TraceCat::kGnss, frame);
 
-    const uint32_t now = rtos::now_ms();
+    const uint32_t now = rtos::nowMs();
     // 读回窗口内先把这一行取走（只在 kIo 任务里写交接缓冲），再交给状态机计数与计时。
     if (controller().state() == ::gnss::State::kReadback) {
         append_readback_line(decoder, frame);
@@ -681,7 +681,7 @@ void GnssModule::handle_frame(const demux::Decoder &decoder,
                     ctx().data.gnss_app_sub.add_skipped(type_idx);
                 } else {
                     const fw::Result wres = ctx().data.gnss_app_ring.write(type_idx, frame);
-                    if (fw::is_ok(wres)) {
+                    if (fw::isOk(wres)) {
                         gate.on_pushed(now, period);
                     } else if (wres == fw::Result::kInvalidArg) {
                         ctx().data.gnss_app_sub.add_ring_oversize(type_idx);
@@ -712,7 +712,7 @@ void GnssModule::handle_reject(const demux::Decoder &decoder, std::span<const ui
     const char *text = (len != 0U) ? reason.data() : reject_cause_name(cause);
     FW_LOGD(fw::TraceCat::kGnss, "<rx> %s rejected %lu bytes: %s", decoder.name,
             static_cast<unsigned long>(prefix.size()), text);
-    fw::tlog_hex(fw::TraceCat::kGnss, prefix);
+    fw::tlogHex(fw::TraceCat::kGnss, prefix);
 }
 
 /**
@@ -817,7 +817,7 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
         switch (act.kind) {
         case ::gnss::Action::Kind::kPower: {
             const fw::Result err = apply_power(act.on);
-            if (!fw::is_ok(err)) {
+            if (!fw::isOk(err)) {
                 trace_gnss(GnssTrace::kState, static_cast<uint32_t>(controller().state()),
                            static_cast<uint32_t>(err));
             }
@@ -826,7 +826,7 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
         case ::gnss::Action::Kind::kSetBaud: {
             const uint32_t old_baud = host_baud_;
             const fw::Result err = apply_baud(act.baud);
-            if (fw::is_ok(err)) {
+            if (fw::isOk(err)) {
                 trace_gnss(GnssTrace::kBaud, act.baud, old_baud);
                 FW_LOGI(fw::TraceCat::kGnss, "<uart> baud %lu (was %lu)",
                         static_cast<unsigned long>(act.baud), static_cast<unsigned long>(old_baud));
@@ -1027,7 +1027,7 @@ void GnssModule::tick_pending_apply(uint32_t now_ms) noexcept
     }
     if (landed && (stats.failed_mask == 0U)) {
         const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
-        last_apply_ = fw::is_ok(save_res) ? GnssApply::kOk : GnssApply::kFailed;
+        last_apply_ = fw::isOk(save_res) ? GnssApply::kOk : GnssApply::kFailed;
     } else {
         // 有语句失败或超时：NVS 保持旧值，界面与计划一起回滚到变更前。
         if (pending_apply_ == PendingApply::kOut) {
@@ -1105,7 +1105,7 @@ void GnssModule::persist_detected_hint() noexcept
     hint_.model = det_model;
     hint_.baud = det_baud;
     const fw::Result save_res = ctx().storage.save_keys(gnss_store::kCacheKeys);
-    if (!fw::is_ok(save_res)) {
+    if (!fw::isOk(save_res)) {
         // StorageModule::save_keys 内部已发 kStore trace；此处保留 hint_ 内存值避免每轮重复写盘。
     }
 }
@@ -1116,7 +1116,7 @@ fw::Result GnssModule::apply_power(bool on) noexcept
     const auto power_pin = static_cast<gpio_num_t>(CONFIG_RTK_GNSS_POWER_GPIO);
     const bool active_high = (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0);
     const uint32_t level = (on == active_high) ? 1U : 0U;
-    return to_result(rtos::from_esp_err(gpio_set_level(power_pin, level)));
+    return to_result(rtos::fromEspErr(gpio_set_level(power_pin, level)));
 #else
     static_cast<void>(on);
     return fw::Result::kOk;
@@ -1128,11 +1128,11 @@ fw::Result GnssModule::apply_baud(uint32_t baud) noexcept
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
     const esp_err_t baud_err = uart_set_baudrate(port, baud);
     if (baud_err != ESP_OK) {
-        return to_result(rtos::from_esp_err(baud_err));
+        return to_result(rtos::fromEspErr(baud_err));
     }
     const esp_err_t flush_err = uart_flush_input(port);
     if (flush_err != ESP_OK) {
-        return to_result(rtos::from_esp_err(flush_err));
+        return to_result(rtos::fromEspErr(flush_err));
     }
     host_baud_ = baud;
     return fw::Result::kOk;
@@ -1258,7 +1258,7 @@ fw::Result GnssModule::save_gsv(const void * /*obj*/, std::span<uint8_t> out, si
 fw::Result GnssModule::load_out(void * /*obj*/, std::span<const uint8_t> in) noexcept
 {
     data::GnssOutConfig parsed{};
-    if (!fw::is_ok(data::GnssOutConfig::decode(in, parsed))) {
+    if (!fw::isOk(data::GnssOutConfig::decode(in, parsed))) {
         auto &gnss = app_context().gnss;
         if (!gnss.out_cfg_.is_valid()) {
             gnss.out_cfg_ = data::GnssOutConfig::defaults();

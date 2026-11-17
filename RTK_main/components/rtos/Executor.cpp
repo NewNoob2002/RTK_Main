@@ -14,14 +14,14 @@
 namespace rtos {
 namespace {
 
-TickType_t wait_ticks(uint32_t ms) noexcept
+TickType_t waitTicks(uint32_t ms) noexcept
 {
     const TickType_t ticks = pdMS_TO_TICKS(ms);
     return ms != 0U && ticks == 0U ? 1U : ticks;
 }
-fw::CommandResult dispatch_command(std::span<const fw::Module> modules, fw::ExecutorId executor,
-                                   std::span<const bool> available,
-                                   const fw::Command &command) noexcept
+fw::CommandResult dispatchCommand(std::span<const fw::Module> modules, fw::ExecutorId executor,
+                                  std::span<const bool> available,
+                                  const fw::Command &command) noexcept
 {
     fw::CommandResult result{command.seq, fw::Result::kNotFound, 0};
     for (size_t i = 0; i < modules.size(); ++i) {
@@ -29,11 +29,11 @@ fw::CommandResult dispatch_command(std::span<const fw::Module> modules, fw::Exec
         if (module.executor != executor || module.id != command.target) {
             continue;
         }
-        result.status = !available[i]                       ? fw::Result::kInvalidState
-                        : module.ops->on_command == nullptr ? fw::Result::kNotSupported
-                                                            : fw::Result::kOk;
+        result.status = !available[i]                      ? fw::Result::kInvalidState
+                        : module.ops->onCommand == nullptr ? fw::Result::kNotSupported
+                                                           : fw::Result::kOk;
         if (result.status == fw::Result::kOk) {
-            module.ops->on_command(module.self, command, result);
+            module.ops->onCommand(module.self, command, result);
         }
         break;
     }
@@ -60,11 +60,11 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
         modules.size() > kExecMaxModules || cfg.core < 0 || cfg.core >= configNUMBER_OF_CORES ||
         cfg.priority >= configMAX_PRIORITIES || storage.stack.empty() ||
         storage.stack.size_bytes() > std::numeric_limits<uint32_t>::max() ||
-        storage.tcb == nullptr || storage.cmd_queue == nullptr || storage.result_queue == nullptr ||
-        storage.cmd_queue == storage.result_queue || storage.queue_depth == 0U ||
-        storage.queue_depth > std::numeric_limits<UBaseType_t>::max() ||
-        storage.queue_depth > storage.cmd_area.size() / sizeof(fw::Command) ||
-        storage.queue_depth > storage.result_area.size() / sizeof(fw::CommandResult)) {
+        storage.tcb == nullptr || storage.cmdQueue == nullptr || storage.resultQueue == nullptr ||
+        storage.cmdQueue == storage.resultQueue || storage.queueDepth == 0U ||
+        storage.queueDepth > std::numeric_limits<UBaseType_t>::max() ||
+        storage.queueDepth > storage.cmdArea.size() / sizeof(fw::Command) ||
+        storage.queueDepth > storage.resultArea.size() / sizeof(fw::CommandResult)) {
         return fw::Status::kInvalidArg;
     }
     for (size_t i = 0; i < modules.size(); ++i) {
@@ -81,15 +81,15 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
         }
     }
     // 长度已限制在 UBaseType_t 范围内；定长命令/结果的大小远小于该上限。
-    cmd_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queue_depth), sizeof(fw::Command),
-                                storage.cmd_area.data(), storage.cmd_queue);
+    cmd_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queueDepth), sizeof(fw::Command),
+                                storage.cmdArea.data(), storage.cmdQueue);
     if (cmd_q_ == nullptr) {
         return fw::Status::kNoSpace;
     }
     // 同上，队列深度已经过范围检查。
     result_q_ =
-        xQueueCreateStatic(static_cast<UBaseType_t>(storage.queue_depth), sizeof(fw::CommandResult),
-                           storage.result_area.data(), storage.result_queue);
+        xQueueCreateStatic(static_cast<UBaseType_t>(storage.queueDepth), sizeof(fw::CommandResult),
+                           storage.resultArea.data(), storage.resultQueue);
     if (result_q_ == nullptr) {
         vQueueDelete(cmd_q_);
         cmd_q_ = nullptr;
@@ -105,7 +105,7 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
         }
         const fw::Result status =
             module.ops->init == nullptr ? fw::Result::kOk : module.ops->init(module.self);
-        ok_[i] = fw::is_ok(status);
+        ok_[i] = fw::isOk(status);
         if (!ok_[i]) {
             // Result 的底层类型为 uint8_t，扩展为 unsigned 无损。
             FW_LOGE(fw::TraceCat::kExec, "module init failed: id=%u status=%u", module.id,
@@ -127,7 +127,7 @@ fw::Status Executor::start() noexcept
     // 显式绑核由配置指定；产品链路放 core1，避免与 core0 的 BT worker 争用。
     // init 已验证栈字节数可用 uint32_t 表示，优先级小于 configMAX_PRIORITIES。
     const TaskHandle_t task = xTaskCreateStaticPinnedToCore(
-        &Executor::task_entry, cfg_.name, static_cast<uint32_t>(storage_.stack.size_bytes()), this,
+        &Executor::taskEntry, cfg_.name, static_cast<uint32_t>(storage_.stack.size_bytes()), this,
         static_cast<UBaseType_t>(cfg_.priority), storage_.stack.data(), storage_.tcb, cfg_.core);
     if (task == nullptr) {
         return fw::Status::kNoSpace;
@@ -151,7 +151,7 @@ ExecStats Executor::stats() const noexcept
     return stats_;
 }
 
-bool Executor::module_ok(fw::ModuleId id) const noexcept
+bool Executor::moduleOk(fw::ModuleId id) const noexcept
 {
     const CriticalSection guard(stats_mux_);
     for (size_t i = 0; i < modules_.size(); ++i) {
@@ -163,7 +163,7 @@ bool Executor::module_ok(fw::ModuleId id) const noexcept
 }
 
 fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result,
-                          uint32_t timeout_ms) noexcept
+                          uint32_t timeoutMs) noexcept
 {
     TaskHandle_t owner = nullptr;
     {
@@ -188,24 +188,24 @@ fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result,
     if (next_seq_ == 0U) {
         next_seq_ = 1U;
     }
-    const uint32_t begin = now_ms();
+    const uint32_t begin = nowMs();
     if (xQueueSend(cmd_q_, &queued, 0) != pdTRUE) {
         // 队列满：调用方任务上下文，记事件后立即返回 kBusy（不阻塞、不重试）。
-        trace_exec(ExecTrace::kCallDrop, static_cast<uint32_t>(cmd.target), timeout_ms);
+        traceExec(ExecTrace::kCallDrop, static_cast<uint32_t>(cmd.target), timeoutMs);
         return fw::Result::kBusy;
     }
     for (;;) {
-        const uint32_t elapsed = now_ms() - begin;
+        const uint32_t elapsed = nowMs() - begin;
         fw::CommandResult received{};
         if (xQueueReceive(result_q_, &received,
-                          wait_ticks(elapsed < timeout_ms ? timeout_ms - elapsed : 0U)) != pdTRUE) {
+                          waitTicks(elapsed < timeoutMs ? timeoutMs - elapsed : 0U)) != pdTRUE) {
             return fw::Result::kTimeout;
         }
         if (received.seq == queued.seq) {
             result = received;
             return fw::Result::kOk;
         }
-        if ((now_ms() - begin) >= timeout_ms) {
+        if ((nowMs() - begin) >= timeoutMs) {
             return fw::Result::kTimeout;
         }
     }
@@ -215,7 +215,7 @@ fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result,
  * @brief  FreeRTOS 任务入口：等启动放行后进入主循环
  * @param  arg: 指向本 Executor 的指针
  */
-void Executor::task_entry(void *arg) noexcept
+void Executor::taskEntry(void *arg) noexcept
 {
     // RTOS 原样返回 start 传入的 Executor 指针，类型恢复安全。
     auto &self = *static_cast<Executor *>(arg);
@@ -226,12 +226,12 @@ void Executor::task_entry(void *arg) noexcept
     }
     for (size_t i = 0; i < self.modules_.size(); ++i) {
         const auto &module = self.modules_[i];
-        if (module.executor != self.cfg_.id || !self.module_ok(module.id) ||
+        if (module.executor != self.cfg_.id || !self.moduleOk(module.id) ||
             module.ops->start == nullptr) {
             continue;
         }
         const fw::Result status = module.ops->start(module.self);
-        if (!fw::is_ok(status)) {
+        if (!fw::isOk(status)) {
             {
                 const CriticalSection guard(self.stats_mux_);
                 self.ok_[i] = false;
@@ -261,26 +261,26 @@ void Executor::run() noexcept
     for (;;) {
         fw::Command command{};
         bool received = false;
-        const uint32_t max_wait = pending ? 0U : cfg_.idle_wait_ms;
+        const uint32_t maxWait = pending ? 0U : cfg_.idleWaitMs;
         if (cfg_.wait != nullptr) {
-            cfg_.wait(cfg_.wait_ctx, max_wait);
+            cfg_.wait(cfg_.waitCtx, maxWait);
         } else {
-            received = xQueueReceive(cmd_q_, &command, wait_ticks(max_wait)) == pdTRUE;
+            received = xQueueReceive(cmd_q_, &command, waitTicks(maxWait)) == pdTRUE;
         }
-        const uint32_t begin = now_ms();
+        const uint32_t begin = nowMs();
         uint32_t commands = 0;
         uint32_t drops = 0;
         while (received || xQueueReceive(cmd_q_, &command, 0) == pdTRUE) {
             received = false;
             // available 只由本任务在 start 阶段修改；运行中为只读，不存在并发写者。
-            const auto result = dispatch_command(modules_, cfg_.id, ok_, command);
+            const auto result = dispatchCommand(modules_, cfg_.id, ok_, command);
             if (xQueueSend(result_q_, &result, 0) != pdTRUE) {
                 fw::CommandResult old{};
                 if (xQueueReceive(result_q_, &old, 0) == pdTRUE) {
                     ++drops;
                 }
                 if (xQueueSend(result_q_, &result, 0) != pdTRUE) {
-                    trace_exec(ExecTrace::kResultDrop, result.seq, drops);
+                    traceExec(ExecTrace::kResultDrop, result.seq, drops);
                 }
             }
             ++commands;
@@ -288,42 +288,41 @@ void Executor::run() noexcept
         pending = false;
         for (size_t i = 0; i < modules_.size(); ++i) {
             const auto &module = modules_[i];
-            if (module.executor != cfg_.id || !module_ok(module.id) ||
-                module.ops->poll == nullptr) {
+            if (module.executor != cfg_.id || !moduleOk(module.id) || module.ops->poll == nullptr) {
                 continue;
             }
-            const uint32_t now = now_ms();
-            if (module.poll_period_ms == 0U || (now - last_poll_ms_[i]) >= module.poll_period_ms) {
+            const uint32_t now = nowMs();
+            if (module.pollPeriodMs == 0U || (now - last_poll_ms_[i]) >= module.pollPeriodMs) {
                 last_poll_ms_[i] = now;
                 pending = module.ops->poll(module.self, now) || pending;
             }
         }
-        const uint32_t duration = now_ms() - begin;
+        const uint32_t duration = nowMs() - begin;
         // 超轮预算即记事件：此处是本任务上下文，写环不阻塞；格式化留给 DebugModule。
-        if (duration > cfg_.round_budget_ms) {
-            trace_exec(ExecTrace::kRoundOverrun, duration, cfg_.round_budget_ms);
+        if (duration > cfg_.roundBudgetMs) {
+            traceExec(ExecTrace::kRoundOverrun, duration, cfg_.roundBudgetMs);
         }
         // IDF 高水位返回字节；本工程 ESP32 StackType_t 为 uint8_t，结果在 u32 范围内。
-        const uint32_t stack_free = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
+        const uint32_t stackFree = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
         {
             const CriticalSection guard(stats_mux_);
             ++stats_.rounds;
-            stats_.overruns += duration > cfg_.round_budget_ms ? 1U : 0U;
-            if (duration > stats_.max_round_ms) {
-                stats_.max_round_ms = duration;
+            stats_.overruns += duration > cfg_.roundBudgetMs ? 1U : 0U;
+            if (duration > stats_.maxRoundMs) {
+                stats_.maxRoundMs = duration;
             }
             stats_.commands += commands;
-            stats_.result_drops += drops;
-            stats_.stack_free = stack_free;
+            stats_.resultDrops += drops;
+            stats_.stackFree = stackFree;
         }
         if (watchdog) {
             const esp_err_t error = esp_task_wdt_reset();
             if (error != ESP_OK) {
-                trace_exec(ExecTrace::kWdtResetFail, static_cast<uint32_t>(error), 0U);
+                traceExec(ExecTrace::kWdtResetFail, static_cast<uint32_t>(error), 0U);
                 watchdog = false;
             }
         }
-        vTaskDelay(cfg_.yield_ticks);
+        vTaskDelay(cfg_.yieldTicks);
     }
 }
 } // namespace rtos

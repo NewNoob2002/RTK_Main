@@ -14,7 +14,7 @@
 
 namespace {
 
-template <typename T> constexpr auto kModuleOps = fw::make_ops<T>();
+template <typename T> constexpr auto kModuleOps = fw::makeOps<T>();
 // 编号由 id() 保证无窄化；对象与操作表同为静态存储。
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, readability-identifier-naming)
 constinit const fw::Module kModules[]{
@@ -44,9 +44,9 @@ constexpr rtos::ExecutorConfig kIoConfig{
     .id = app::id(app::ExecKind::kIo),
     .priority = 9,
     .core = 0,
-    .idle_wait_ms = 20,
-    .round_budget_ms = 20,
-    .yield_ticks = 1,
+    .idleWaitMs = 20,
+    .roundBudgetMs = 20,
+    .yieldTicks = 1,
     .watchdog = true,
     .wait =
         [](void * /*ctx*/, uint32_t max_ms) noexcept {
@@ -56,7 +56,7 @@ constexpr rtos::ExecutorConfig kIoConfig{
             }
             app::s_app.gnss.wait(max_ms);
         },
-    .wait_ctx = nullptr,
+    .waitCtx = nullptr,
 };
 #endif // RTK_GNSS_ENABLED
 // 链路绑 core1，BT worker/控制台在 core0；每轮至少让出 1 tick 给 IDLE1。
@@ -65,9 +65,9 @@ constexpr rtos::ExecutorConfig kLinkConfig{
     .id = app::id(app::ExecKind::kLink),
     .priority = 10,
     .core = 1,
-    .idle_wait_ms = 20,
-    .round_budget_ms = 20,
-    .yield_ticks = 1,
+    .idleWaitMs = 20,
+    .roundBudgetMs = 20,
+    .yieldTicks = 1,
     .watchdog = true,
     .wait =
         [](void * /*ctx*/, uint32_t max_ms) noexcept {
@@ -77,13 +77,13 @@ constexpr rtos::ExecutorConfig kLinkConfig{
             }
             app::s_app.bt_link.wait(max_ms);
         },
-    .wait_ctx = nullptr,
+    .waitCtx = nullptr,
 };
 
 bool modules_ready(const rtos::Executor &executor, fw::ExecutorId id) noexcept
 {
     for (const auto &module : kModules) {
-        if ((module.executor == id) && !executor.module_ok(module.id)) {
+        if ((module.executor == id) && !executor.moduleOk(module.id)) {
             return false;
         }
     }
@@ -118,11 +118,11 @@ const char *start_link(std::span<StackType_t> link_stack, uint32_t &launched) no
 {
     const auto initialized = s_app.link_executor->init(
         kLinkConfig, kModules, app::view_of(s_app.link_storage, link_stack));
-    if (!fw::is_ok(initialized) || !modules_ready(*s_app.link_executor, kLinkConfig.id) ||
+    if (!fw::isOk(initialized) || !modules_ready(*s_app.link_executor, kLinkConfig.id) ||
         !s_app.data.system_status.read().bt_ready) {
         return boot_reason::kLinkInit;
     }
-    if (!fw::is_ok(s_app.link_executor->start())) {
+    if (!fw::isOk(s_app.link_executor->start())) {
         return boot_reason::kLinkTaskStart;
     }
     launched |= task_bit(BootTask::kLink);
@@ -137,10 +137,10 @@ const char *start_io(std::span<StackType_t> io_stack, uint32_t &launched) noexce
 {
     const auto initialized =
         s_app.io_executor->init(kIoConfig, kModules, app::view_of(s_app.io_storage, io_stack));
-    if (!fw::is_ok(initialized) || !modules_ready(*s_app.io_executor, kIoConfig.id)) {
+    if (!fw::isOk(initialized) || !modules_ready(*s_app.io_executor, kIoConfig.id)) {
         return boot_reason::kIoInit;
     }
-    if (!fw::is_ok(s_app.io_executor->start())) {
+    if (!fw::isOk(s_app.io_executor->start())) {
         return boot_reason::kIoTaskStart;
     }
     launched |= task_bit(BootTask::kIo);
@@ -157,7 +157,7 @@ void stop_boot_tasks(uint32_t launched) noexcept
     const TickType_t begin = xTaskGetTickCount();
     while ((s_app.boot_stopped.load(std::memory_order_acquire) & launched) != launched) {
         if ((xTaskGetTickCount() - begin) >= pdMS_TO_TICKS(5000U)) {
-            s_app.boot_arena.set_degraded_reason(boot_reason::kStopTaskTimeout);
+            s_app.boot_arena.setDegradedReason(boot_reason::kStopTaskTimeout);
             // 消费者未确认停稳：不撤销驱动、回调或任何封存块，诊断控制台仍可用。
             set_console_only();
             return;
@@ -165,12 +165,12 @@ void stop_boot_tasks(uint32_t launched) noexcept
         vTaskDelay(1U);
     }
 #if RTK_GNSS_ENABLED
-    if (!fw::is_ok(s_app.gnss.stop_boot())) {
-        s_app.boot_arena.set_degraded_reason(boot_reason::kStopGnss);
+    if (!fw::isOk(s_app.gnss.stop_boot())) {
+        s_app.boot_arena.setDegradedReason(boot_reason::kStopGnss);
     }
 #endif
     if (spp_server_stop_boot() != ESP_OK) {
-        s_app.boot_arena.set_degraded_reason(boot_reason::kStopSpp);
+        s_app.boot_arena.setDegradedReason(boot_reason::kStopSpp);
     }
     // SEALED 块始终保留至重启；SDK 停机失败或迟到回调也不回收其存储。
     set_console_only();

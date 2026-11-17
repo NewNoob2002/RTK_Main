@@ -39,14 +39,14 @@ enum class TraceCat : uint8_t {
 
 inline constexpr uint32_t kTraceAllMask = (1U << static_cast<uint32_t>(TraceCat::kCount)) - 1U;
 
-[[nodiscard]] constexpr uint32_t trace_bit(TraceCat cat) noexcept
+[[nodiscard]] constexpr uint32_t traceBit(TraceCat cat) noexcept
 {
     return 1U << static_cast<uint32_t>(cat);
 }
 
 /** 一条追踪事件；各字段含义由 (cat, code) 决定，文本表在 main。session 无关时填 0。 */
 struct TraceEvent {
-    uint32_t t_ms = 0; // 事件时间（ms，来自安装时注入的时钟）
+    uint32_t tMs = 0; // 事件时间（ms，来自安装时注入的时钟）
     TraceCat cat = TraceCat::kLink;
     uint8_t code = 0;     // 类别内事件码
     uint16_t session = 0; // 会话句柄低 16 位
@@ -63,21 +63,21 @@ using TraceClockFn = uint32_t (*)() noexcept;
  * 安装 sink 与时钟（启动阶段、单线程调用一次）。fn 或 clock 为 nullptr → kInvalidArg；
  * 重复安装 → kInvalidState。未安装时 trace() 什么也不做。
  */
-[[nodiscard]] Result trace_install(TraceSinkFn fn, void *ctx, TraceClockFn clock) noexcept;
+[[nodiscard]] Result traceInstall(TraceSinkFn fn, void *ctx, TraceClockFn clock) noexcept;
 
 /** 设置/读取类别掩码（原子，任意任务可调用）；超出 kTraceAllMask 的位被忽略。 */
-void trace_set_mask(uint32_t mask) noexcept;
-[[nodiscard]] uint32_t trace_mask() noexcept;
+void traceSetMask(uint32_t mask) noexcept;
+[[nodiscard]] uint32_t traceMask() noexcept;
 
 #if FW_TRACE_ENABLED
 /** 该类别是否打开（原子 relaxed 读）；调用方可先判断再准备昂贵的参数。 */
-[[nodiscard]] bool trace_on(TraceCat cat) noexcept;
+[[nodiscard]] bool traceOn(TraceCat cat) noexcept;
 
 /** 记录一条事件：类别关闭或未安装 sink 时立即返回。非阻塞，不可在 ISR 中调用。 */
 void trace(TraceCat cat, uint8_t code, uint16_t session, uint32_t a, uint32_t b) noexcept;
 #else
 // 关闭时恒为 false / 空操作；参数仍做类型检查，调用点不必改动。
-[[nodiscard]] inline bool trace_on(TraceCat /*cat*/) noexcept
+[[nodiscard]] inline bool traceOn(TraceCat /*cat*/) noexcept
 {
     return false;
 }
@@ -89,9 +89,9 @@ inline void trace(TraceCat /*cat*/, uint8_t /*code*/, uint16_t /*session*/, uint
 
 /** TraceRing 统计；init() 后清零。 */
 struct TraceRingStats {
-    uint32_t pushed = 0;    // 成功压入
-    uint32_t dropped = 0;   // 环满丢弃（累计）
-    uint32_t max_depth = 0; // 历史最大占用
+    uint32_t pushed = 0;   // 成功压入
+    uint32_t dropped = 0;  // 环满丢弃（累计）
+    uint32_t maxDepth = 0; // 历史最大占用
 };
 
 /**
@@ -117,10 +117,10 @@ public:
     [[nodiscard]] bool pop(TraceEvent &out) noexcept;
 
     /** 最旧事件的时间戳；空或未 init → false。读者据此与 LogRing 按时间合并（ADR-0009 §2.11）。 */
-    [[nodiscard]] bool peek_time(uint32_t &t_ms) const noexcept;
+    [[nodiscard]] bool peekTime(uint32_t &tMs) const noexcept;
 
     /** 取走自上次调用以来新增的丢弃数（读者用来打印 "[trace] dropped N"）。 */
-    [[nodiscard]] uint32_t take_dropped() noexcept;
+    [[nodiscard]] uint32_t takeDropped() noexcept;
 
     [[nodiscard]] TraceRingStats stats() const noexcept;
     [[nodiscard]] size_t depth() const noexcept;

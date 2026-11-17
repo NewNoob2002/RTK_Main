@@ -51,11 +51,11 @@ struct StoreKey {
     std::string_view ns;  // NVS 命名空间，按模块
     std::string_view key; // NVS 键名
     StoreType type = StoreType::kBlob;
-    uint16_t max_size = 0; // kStr/kBlob 的最大字节数；数值类型填 sizeof
-    uint8_t flags = 0;     // store_flag 位或
-    int32_t min = 0;       // 数值类型的取值范围（含）；kStr/kBlob 忽略
+    uint16_t maxSize = 0; // kStr/kBlob 的最大字节数；数值类型填 sizeof
+    uint8_t flags = 0;    // store_flag 位或
+    int32_t min = 0;      // 数值类型的取值范围（含）；kStr/kBlob 忽略
     int32_t max = 0;
-    uint32_t product_mask = kAllProducts;
+    uint32_t productMask = kAllProducts;
     std::string_view help; // 控制台帮助（可空）
     StoreBinding binding{};
 };
@@ -69,22 +69,22 @@ struct StoreKey {
     }
     switch (k.type) {
     case StoreType::kU8:
-        return (k.max_size == 1U) && (k.min <= k.max);
+        return (k.maxSize == 1U) && (k.min <= k.max);
     case StoreType::kU16:
-        return (k.max_size == 2U) && (k.min <= k.max);
+        return (k.maxSize == 2U) && (k.min <= k.max);
     case StoreType::kU32:
     case StoreType::kI32:
-        return (k.max_size == 4U) && (k.min <= k.max);
+        return (k.maxSize == 4U) && (k.min <= k.max);
     case StoreType::kStr:
     case StoreType::kBlob:
-        return k.max_size > 0U;
+        return k.maxSize > 0U;
     default:
         return false;
     }
 }
 
 /** 同一张表内 (ns, key) 不重复。用法：static_assert(fw::unique_keys(kKeys))。 */
-[[nodiscard]] constexpr bool unique_keys(std::span<const StoreKey> keys) noexcept
+[[nodiscard]] constexpr bool uniqueKeys(std::span<const StoreKey> keys) noexcept
 {
     for (size_t i = 0; i < keys.size(); ++i) {
         for (size_t j = i + 1U; j < keys.size(); ++j) {

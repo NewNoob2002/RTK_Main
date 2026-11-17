@@ -20,12 +20,12 @@ enum class Result : uint8_t {
     kInvalidState,
 };
 
-[[nodiscard]] constexpr bool is_ok(Result r) noexcept
+[[nodiscard]] constexpr bool isOk(Result r) noexcept
 {
     return r == Result::kOk;
 }
 
 /** 返回静态字符串（"ok"、"invalid_arg"…）；未知值返回 "unknown"。线程安全。 */
-[[nodiscard]] const char *to_string(Result r) noexcept;
+[[nodiscard]] const char *toString(Result r) noexcept;
 
 } // namespace fw
