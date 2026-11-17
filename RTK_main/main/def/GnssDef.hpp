@@ -61,6 +61,22 @@ enum class GnssApply : uint8_t {
     kRestored = 3, // 失败后已回滚到旧配置
 };
 
+/** 读回文本缓冲容量：UM980 `CONFIG` 约 20–30 行 × ≤ 60 B，超出部分截断并置 truncated。 */
+inline constexpr size_t kGnssReadbackBytes = 1536U;
+
+/**
+ * 最近一次配置读回的结论（ADR-0012 §2.7，data::DataCenter::gnss_readback）。
+ * 文本本体超出 Slot 上限，放在 DataCenter::gnss_readback_text（交接缓冲，见该成员注释）；本结构只带长度与计数。
+ */
+struct GnssReadback {
+    uint32_t seq = 0;       // 每次读回结束 +1（与 ControllerStats::readback_seq 同步）
+    uint16_t lines = 0;     // 命中行数（含因容量不足被丢弃的行）
+    uint16_t len = 0;       // gnss_readback_text 有效字节；文本为若干 "...\n" 行，不以 '\0' 结尾
+    bool supported = false; // 当前驱动支持读回；false 时其余字段无意义
+    bool truncated = false; // 有行因容量不足被丢弃
+    bool busy = false;      // 请求被拒：控制器不在 kRunning（未读回，lines/len 为 0）
+};
+
 /** GNSS 状态快照（data::DataCenter::gnss_status）。 */
 struct GnssStatus {
     bool enabled = false; // RTK_GNSS_ENABLE 且 UART 初始化成功

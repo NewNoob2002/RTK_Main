@@ -24,6 +24,7 @@ enum class State : uint8_t {
     kRunning,     // 配置完成，正常接收 NMEA
     kFailed,      // 探测/配置用尽重试，等待 retry_backoff_ms 后从 kPowerUp 重来
     kOutput,      // 基础脚本完成后逐项下发/关闭报文输出（ADR-0012 §2.4）
+    kReadback,    // 运行中读回模块配置（ADR-0012 §2.7），结束后回 kRunning
 };
 
 /** poll() 要求调用方执行的动作。 */
@@ -81,6 +82,9 @@ struct ControllerStats {
     uint32_t failed_mask = 0;      // 参数非法或重试用尽
     uint32_t output_runs = 0;      // 输出阶段次数
     uint32_t output_seq = 0;       // 每次输出阶段结束时 +1；main 用它匹配请求与完成
+    // 最近一次配置读回（ADR-0012 §2.7）。
+    uint32_t readback_lines = 0; // 本轮 match_readback() 命中的行数
+    uint32_t readback_seq = 0;   // 每次读回结束（静默超时/总超时/不支持）时 +1
 };
 
 /** 探测成功后的结论（供 main 写 NVS 与 DeviceInfo）。 */
@@ -121,6 +125,13 @@ public:
      * 仅 kRunning 接受，其它状态返回 false（调用方应改用 request_reconfigure 或稍后重试）。
      */
     [[nodiscard]] bool request_output(const OutputPlan &plan, uint32_t now_ms) noexcept;
+    /**
+     * 读回模块当前配置（ADR-0012 §2.7）：发 receiver().build_readback() 的命令，进入 kReadback；
+     * 每命中一行 match_readback() 重置 1 s 静默计时，静默到期或总时长到期后回 kRunning 并 readback_seq+1。
+     * 仅 kRunning 且驱动支持读回时返回 true；不支持或状态不对返回 false（不改 stats）。
+     * 行文本由调用方在 on_frame() 之外自行用 receiver().match_readback() 取得，控制器只计数与计时。
+     */
+    [[nodiscard]] bool request_readback(uint32_t now_ms) noexcept;
     /** 更新输出计划（探测到型号后 caps 才确定，main 每轮按最新配置重算）；不触发任何动作。 */
     void set_output_plan(const OutputPlan &plan) noexcept
     {

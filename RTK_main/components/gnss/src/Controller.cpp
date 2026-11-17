@@ -701,6 +701,17 @@ bool Controller::request_output(const OutputPlan &plan, uint32_t now_ms) noexcep
     return true;
 }
 
+/**
+ * @brief  T0 桩：P3c 实现前一律拒绝读回请求
+ * @param  now_ms: 当前时间（桩内未用）
+ * @retval false
+ */
+bool Controller::request_readback(uint32_t now_ms) noexcept
+{
+    static_cast<void>(now_ms);
+    return false; // P3c 实现
+}
+
 Action Controller::poll(uint32_t now_ms) noexcept
 {
     Action action{};
@@ -752,6 +763,11 @@ const Receiver &Controller::probe_receiver() const noexcept
     return probe_receiver_ != nullptr ? *probe_receiver_ : null_receiver();
 }
 
+/**
+ * @brief  控制器状态的日志/控制台短名
+ * @param  state: 控制器状态
+ * @retval 静态字符串，未知值返回 "unknown"
+ */
 const char *state_name(State state) noexcept
 {
     switch (state) {
@@ -769,6 +785,8 @@ const char *state_name(State state) noexcept
         return "failed";
     case State::kOutput:
         return "output";
+    case State::kReadback:
+        return "readback";
     default:
         return "unknown";
     }

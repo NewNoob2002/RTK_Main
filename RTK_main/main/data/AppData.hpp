@@ -2,6 +2,7 @@
 // init 仅启动前调用；绑定后各 Slot 支持跨任务读写，非 ISR。
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -90,6 +91,10 @@ struct DataCenter {
     ZeroInitSlot<gnss::Fix> gnss_fix{};
     ZeroInitSlot<gnss::SatTable> gnss_sats{};
     fw::Slot<GnssOutConfig> gnss_out_cfg{};
+    fw::Slot<GnssReadback> gnss_readback{};
+    // 读回文本交接缓冲（ADR-0012 §2.7）：只有 kIo 在读回进行中写，写完后才 write(gnss_readback) 发布；
+    // 控制台在看到 gnss_readback.seq 变化后按 len 读取。下一次读回只能由控制台在读完后发起，故读写不重叠、无需加锁。
+    std::array<char, kGnssReadbackBytes> gnss_readback_text{};
     fw::FanoutRing gnss_app_ring{};
     GnssLatestCache gnss_latest{};
     GnssAppSubState gnss_app_sub{};

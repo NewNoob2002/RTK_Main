@@ -19,8 +19,9 @@
 namespace gnss::unicore {
 
 /**
- * "$command,...*hh\r\n" 应答解码器：$ | "command," | 可打印 ASCII（不含 $ *）| * 两位十六进制 XOR | \r\n。
- * 与 demux::nmea 首字节相同（$），由 nmea 的第 2 字节 [A-Z0-9] 规则让出（'c' 小写），故两者可同时挂载。
+ * Unicore 应答解码器：$ | "command," 或 "CONFIG," | 可打印 ASCII（不含 $ *）| * 两位十六进制 XOR | \r\n。
+ * "$command" 由 nmea 的第 2 字节 [A-Z0-9] 规则让出（'c' 小写）；"$CONFIG," 的地址段 6 字符，nmea 按 5 字符
+ * 地址规则拒收（ADR-0012 §2.7），故两者可同时挂载。
  */
 inline constexpr std::size_t kResponseMaxFrame = 256;
 [[nodiscard]] bool response_first_byte(uint8_t byte) noexcept;

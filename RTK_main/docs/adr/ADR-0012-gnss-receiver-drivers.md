@@ -185,6 +185,10 @@ GNSS_DRIVER(COMNAV,  kComnav,  ComnavReceiver,  "gnss/drivers/ComnavReceiver.hpp
 - 现在这些行被 `UnicoreResp` 解码器拒收（`byte 1 is 'C', expected 'c'`，并丢弃约 436 B）。修订 `demux::unicore_resp`（冻结头，更新 `docs/frozen.sha256`）同时接受 `$command,` 与 `$CONFIG,`，校验规则同 `$command`（含 `$` 的 XOR）。
 - 控制台新增 `gnss config`：触发读回并逐行打印 `match_readback()` 的结果，结尾 `OK`；超时 1 s 无新行即结束。其它驱动默认返回“不支持”。
 - 第一阶段只用于诊断，不做自动比对与修复（避免误把用户经 COM3 保存的配置当成错误）。
+- **数据通路（2026-11-17 补充，P3c T0）**：
+  - `Controller` 新增 `State::kReadback`（枚举末尾追加）与 `request_readback(now)`：仅 kRunning 且 `receiver().build_readback()` 成功时接受；下一次 `poll()` 写出该命令，进入等待；`on_frame()` 中每次 `match_readback()` 返回 > 0 计一行并把静默截止推到 now + 1000 ms；静默到期或总时长 5000 ms 到期回 kRunning，`stats.readback_seq`+1。读回期间不做 kRunning 的静默重探测。`readback_lines`/`readback_seq` 加入 `ControllerStats`。
+  - 行文本不经控制器：GnssModule（kIo）在把帧交给 `on_frame()` 的同一处，`state()==kReadback` 时调用 `receiver().match_readback()` 取文本，追加到 `DataCenter::gnss_readback_text`（1536 B 交接缓冲，满则丢行并置 truncated）；结束时一次 `gnss_readback.write()` 发布 `GnssReadback{seq,lines,len,supported,truncated}`（Slot 上限 512 B，故文本不进 Slot）。
+  - 控制台 `gnss config`：投递 `GnssSubVerb::kReadback`，等 `gnss_readback.seq` 变化（≤ 6 s），按 len 打印文本、再打印 `lines=<n>`（截断时加 `truncated`）与 `OK`；驱动不支持 → `ERR not supported`；状态不是 kRunning → `ERR busy`。
 
 ### 2.8 型号子类（2026-11-16 修订，P3s；原“本期不建”作废）
 
@@ -199,7 +203,7 @@ GNSS_DRIVER(COMNAV,  kComnav,  ComnavReceiver,  "gnss/drivers/ComnavReceiver.hpp
 ## 3. 冻结接口（修订 ADR-0010 §3）
 
 - 新冻结：`components/gnss/include/gnss/{Receiver,NullReceiver}.hpp`、`gnss/DriverList.inc`、`gnss/drivers/*.hpp`
-- 修订：`gnss/Types.hpp`（OutputMsg、family_name、*_from_u8）、`gnss/Controller.hpp`（Receiver*、kOutput 阶段、request_output、stats 掩码）、`demux/decoders/UnicoreResp.hpp`（`$CONFIG`）、`core/services/GnssService.hpp`（supported 掩码）、`main/def/GnssDef.hpp`（stats 字段）
+- 修订：`gnss/Types.hpp`（OutputMsg、family_name、*_from_u8）、`gnss/Controller.hpp`（Receiver*、kOutput 阶段、request_output、stats 掩码；P3c：kReadback、request_readback、readback 统计）、`demux/decoders/UnicoreResp.hpp`（`$CONFIG`）、`core/services/GnssService.hpp`（supported 掩码）、`main/def/GnssDef.hpp`（stats 字段）
 - 删除：`gnss/Dialect.hpp`、`gnss/dialects/*.hpp`
 - `docs/frozen.sha256` 同步重算
 

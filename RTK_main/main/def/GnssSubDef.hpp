@@ -12,6 +12,7 @@ namespace app {
  */
 enum class GnssSubVerb : uint8_t {
     kSetOut = 4,
+    kReadback = 5, // 控制台 gnss config：读回模块配置（ADR-0012 §2.7），无参数
 };
 
 /**
