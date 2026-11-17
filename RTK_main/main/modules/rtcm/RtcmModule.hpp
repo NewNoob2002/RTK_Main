@@ -33,6 +33,12 @@ private:
     {
         return *context_;
     }
+    /** 首个轮次初始化速率窗口（ADR-0011 §2.6）；仅 kLink，非阻塞。 */
+    void startRateWindow(uint32_t nowMs) noexcept;
+    /** 按 resetEpoch 决定直接采用快照还是扣减基线；仅 kLink，非阻塞。 */
+    void takeSnapshot(const RtcmLinkSnapshot &snap, RtcmStats &next) const noexcept;
+    /** 每秒窗口到期时刷新 bytesPerSec，返回窗口是否已滚动；仅 kLink，非阻塞。 */
+    [[nodiscard]] bool refreshRate(uint32_t nowMs, RtcmStats &next) noexcept;
 
     AppContext *context_ = nullptr;
     RtcmStats stats_{};

@@ -8,16 +8,29 @@ namespace {
 constexpr uint32_t kRateWindowMs = 1000U;
 constexpr uint64_t kMsPerSecond = 1000ULL;
 } // namespace
-bool RtcmModule::poll(uint32_t nowMs) noexcept
+/**
+ * @brief 首个 poll 轮次初始化速率窗口
+ * @param nowMs: 当前毫秒
+ * @note 仅 kLink 任务；非阻塞、不分配堆。
+ */
+void RtcmModule::startRateWindow(uint32_t nowMs) noexcept
 {
-    if (!rate_started_) {
-        rate_started_ = true;
-        rate_window_ms_ = nowMs;
-        rate_window_bytes_ = stats_.bytes;
+    if (rate_started_) {
+        return;
     }
+    rate_started_ = true;
+    rate_window_ms_ = nowMs;
+    rate_window_bytes_ = stats_.bytes;
+}
 
-    const RtcmLinkSnapshot snap = ctx().bt_link.rtcmSnapshot();
-    RtcmStats next = stats_;
+/**
+ * @brief 按统计世代把 bt_link 快照折算成 next
+ * @param snap: bt_link 侧累计快照
+ * @param next: 输出，本轮的累计值
+ * @note 仅 kLink 任务；世代一致时直接采用，否则按 reset 基线扣减，避免回滚旧累计。
+ */
+void RtcmModule::takeSnapshot(const RtcmLinkSnapshot &snap, RtcmStats &next) const noexcept
+{
     if (snap.resetEpoch == reset_epoch_) {
         next.frames = snap.frames;
         next.bytes = snap.bytes;
@@ -28,60 +41,87 @@ bool RtcmModule::poll(uint32_t nowMs) noexcept
         next.pipeAcceptedBytes = snap.pipeAcceptedBytes;
         next.pipeDroppedFrames = snap.pipeDroppedFrames;
         next.pipeDroppedBytes = snap.pipeDroppedBytes;
-    } else {
-        // bt_link 尚未执行新一轮 reset 切换时，按 reset 时基线扣减增量，避免回滚旧累计。
-        next.frames = (snap.frames >= baseline_.frames) ? (snap.frames - baseline_.frames) : 0U;
-        next.bytes = (snap.bytes >= baseline_.bytes) ? (snap.bytes - baseline_.bytes) : 0U;
-        next.rejectedRole = (snap.rejectedRole >= baseline_.rejectedRole)
-                                ? (snap.rejectedRole - baseline_.rejectedRole)
-                                : 0U;
-        next.pipeAcceptedFrames = (snap.pipeAcceptedFrames >= baseline_.pipeAcceptedFrames)
-                                      ? (snap.pipeAcceptedFrames - baseline_.pipeAcceptedFrames)
-                                      : 0U;
-        next.pipeAcceptedBytes = (snap.pipeAcceptedBytes >= baseline_.pipeAcceptedBytes)
-                                     ? (snap.pipeAcceptedBytes - baseline_.pipeAcceptedBytes)
-                                     : 0U;
-        next.pipeDroppedFrames = (snap.pipeDroppedFrames >= baseline_.pipeDroppedFrames)
-                                     ? (snap.pipeDroppedFrames - baseline_.pipeDroppedFrames)
-                                     : 0U;
-        next.pipeDroppedBytes = (snap.pipeDroppedBytes >= baseline_.pipeDroppedBytes)
-                                    ? (snap.pipeDroppedBytes - baseline_.pipeDroppedBytes)
-                                    : 0U;
-        next.crc32 = 0U;
-        next.lastMsg = 0U;
+        return;
     }
+    // bt_link 尚未执行新一轮 reset 切换时，按 reset 时基线扣减增量，避免回滚旧累计。
+    next.frames = (snap.frames >= baseline_.frames) ? (snap.frames - baseline_.frames) : 0U;
+    next.bytes = (snap.bytes >= baseline_.bytes) ? (snap.bytes - baseline_.bytes) : 0U;
+    next.rejectedRole = (snap.rejectedRole >= baseline_.rejectedRole)
+                            ? (snap.rejectedRole - baseline_.rejectedRole)
+                            : 0U;
+    next.pipeAcceptedFrames = (snap.pipeAcceptedFrames >= baseline_.pipeAcceptedFrames)
+                                  ? (snap.pipeAcceptedFrames - baseline_.pipeAcceptedFrames)
+                                  : 0U;
+    next.pipeAcceptedBytes = (snap.pipeAcceptedBytes >= baseline_.pipeAcceptedBytes)
+                                 ? (snap.pipeAcceptedBytes - baseline_.pipeAcceptedBytes)
+                                 : 0U;
+    next.pipeDroppedFrames = (snap.pipeDroppedFrames >= baseline_.pipeDroppedFrames)
+                                 ? (snap.pipeDroppedFrames - baseline_.pipeDroppedFrames)
+                                 : 0U;
+    next.pipeDroppedBytes = (snap.pipeDroppedBytes >= baseline_.pipeDroppedBytes)
+                                ? (snap.pipeDroppedBytes - baseline_.pipeDroppedBytes)
+                                : 0U;
+    next.crc32 = 0U;
+    next.lastMsg = 0U;
+}
+
+/**
+ * @brief 速率窗口到期时刷新 bytesPerSec
+ * @param nowMs: 当前毫秒
+ * @param next: 输入输出，本轮累计与速率
+ * @retval true: 速率已变化（需发布）；false: 未到期或速率未变
+ * @note 仅 kLink 任务；elapsed ≥ 1000 保证换算不溢出。
+ */
+bool RtcmModule::refreshRate(uint32_t nowMs, RtcmStats &next) noexcept
+{
+    const uint32_t elapsed = nowMs - rate_window_ms_;
+    if (elapsed < kRateWindowMs) {
+        return false;
+    }
+    const uint32_t totalBytes = next.bytes;
+    const uint32_t delta = totalBytes - rate_window_bytes_;
+    // elapsed >= 1000，乘以 1000 不会溢出 uint64_t；且字节增量小于 4GB/s，转换到 uint32_t 安全。
+    const uint32_t bps =
+        static_cast<uint32_t>((static_cast<uint64_t>(delta) * kMsPerSecond) / elapsed);
+    rate_window_ms_ = nowMs;
+    rate_window_bytes_ = totalBytes;
+    if (bps == next.bytesPerSec) {
+        return false;
+    }
+    next.bytesPerSec = bps;
+    return true;
+}
+
+/**
+ * @brief 每轮把 bt_link 累计折算进 RtcmStats 并在变化时发布（ADR-0006 兼容字段）
+ * @param nowMs: 当前毫秒
+ * @retval 恒 false（无跨轮积压）
+ * @note 仅 kLink 任务；非阻塞、非 ISR、不分配堆。
+ */
+bool RtcmModule::poll(uint32_t nowMs) noexcept
+{
+    startRateWindow(nowMs);
+    RtcmStats next = stats_;
+    takeSnapshot(ctx().bt_link.rtcmSnapshot(), next);
     next.resetEpoch = reset_epoch_;
 
-    bool dirty = (next.frames != stats_.frames) || (next.bytes != stats_.bytes) ||
-                 (next.crc32 != stats_.crc32) || (next.lastMsg != stats_.lastMsg) ||
-                 (next.rejectedRole != stats_.rejectedRole) ||
-                 (next.pipeAcceptedFrames != stats_.pipeAcceptedFrames) ||
-                 (next.pipeAcceptedBytes != stats_.pipeAcceptedBytes) ||
-                 (next.pipeDroppedFrames != stats_.pipeDroppedFrames) ||
-                 (next.pipeDroppedBytes != stats_.pipeDroppedBytes) ||
-                 (next.resetEpoch != stats_.resetEpoch);
-
-    const uint32_t elapsed = nowMs - rate_window_ms_;
-    if (elapsed >= kRateWindowMs) {
-        const uint32_t totalBytes = next.bytes;
-        const uint32_t delta = totalBytes - rate_window_bytes_;
-        // elapsed >= 1000，乘以 1000 不会溢出 uint64_t；且字节增量小于 4GB/s，转换到 uint32_t 安全。
-        const uint32_t bps =
-            static_cast<uint32_t>((static_cast<uint64_t>(delta) * kMsPerSecond) / elapsed);
-        if (bps != next.bytesPerSec) {
-            next.bytesPerSec = bps;
-            dirty = true;
-        }
-        rate_window_ms_ = nowMs;
-        rate_window_bytes_ = totalBytes;
+    const bool changed = (next.frames != stats_.frames) || (next.bytes != stats_.bytes) ||
+                         (next.crc32 != stats_.crc32) || (next.lastMsg != stats_.lastMsg) ||
+                         (next.rejectedRole != stats_.rejectedRole) ||
+                         (next.pipeAcceptedFrames != stats_.pipeAcceptedFrames) ||
+                         (next.pipeAcceptedBytes != stats_.pipeAcceptedBytes) ||
+                         (next.pipeDroppedFrames != stats_.pipeDroppedFrames) ||
+                         (next.pipeDroppedBytes != stats_.pipeDroppedBytes) ||
+                         (next.resetEpoch != stats_.resetEpoch);
+    const bool rateRolled = refreshRate(nowMs, next);
+    if (!changed && !rateRolled) {
+        return false;
     }
-
-    if (dirty) {
-        stats_ = next;
-        ctx().data.rtcmStats.write(stats_);
-    }
+    stats_ = next;
+    ctx().data.rtcmStats.write(stats_);
     return false;
 }
+
 void RtcmModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (cmd.verb != verb(RtcmVerb::kReset) || cmd.argLen != 0U) {

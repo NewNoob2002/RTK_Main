@@ -6,6 +6,8 @@
 #                                                    要求 C11 Annex K（memset_s），picolibc/glibc 均不提供
 #   bugprone/hicpp-signed-bitwise                    测试按小端从 uint8_t 组装期望值（整型提升为 int），被测代码已覆盖该规则
 #   misc-const-correctness                           冻结测试中的局部结果变量；不影响被测代码，被测代码仍执行该规则
+#   readability-function-cognitive-complexity        单个用例按场景顺序铺开（逐条断言即用例内容），拆分反而藏掉失败定位；产品代码仍执行该规则
+#                                                    （S4-B3 打开该检查后露出 2 个冻结用例，需 Architect 重算 frozen 哈希）
 InheritParentConfig: true
 Checks: >
   -readability-magic-numbers,
@@ -13,4 +15,5 @@ Checks: >
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   -bugprone-signed-bitwise,
   -hicpp-signed-bitwise,
-  -misc-const-correctness
+  -misc-const-correctness,
+  -readability-function-cognitive-complexity

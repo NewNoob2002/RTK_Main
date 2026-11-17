@@ -1,6 +1,7 @@
 // 追踪事件文本表与句子渲染（ADR-0009 §2.1/§2.11）：把二进制事件翻成一行人可读文本。
 // 线程：仅 DebugModule 输出任务调用（唯一格式化者），非 ISR；无堆、无阻塞、不调用日志。
 
+#include "TraceTextInternal.hpp"
 #include "modules/debug/TraceText.hpp"
 
 #include <array>
@@ -24,6 +25,9 @@
 namespace app::debug {
 
 namespace {
+
+using detail::append;
+using detail::appendValue;
 
 // 字段表：每个事件码一项，键名与句子模板里的 {占位符} 一一对应。
 constexpr std::array<TraceField, 3U> kLinkOpen = {
@@ -294,207 +298,11 @@ constexpr std::array<const char *, kCatCount> kCatSummaries = {{
 }};
 
 // 追加一段文本；写满时停在末尾并保持 0 结尾。
-void append(char *out, size_t cap, size_t &pos, const char *fmt, ...) noexcept
-{
-    if ((out == nullptr) || (cap == 0U) || (pos >= (cap - 1U))) {
-        return;
-    }
-    // 理由（下面三处 NOLINT）：C 可变参数只能走裸指针——va_list 在 x86_64 上就是数组类型、
-    // vsnprintf 不接受 span；越界已由上面的 pos 检查排除，写入长度由返回值夹紧。
-    va_list args;
-    va_start(args,
-             fmt); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay): va_list 即数组
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const int written = vsnprintf(&out[pos], cap - pos, fmt, args);
-    va_end(args); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay): va_list 即数组
-    if (written <= 0) {
-        return;
-    }
-    const size_t len = static_cast<size_t>(written);
-    // 返回值为“若空间足够会写多少”，因此越界时直接顶到末尾。
-    pos = (len < (cap - pos)) ? (pos + len) : (cap - 1U);
-}
-
 bool keyEquals(std::string_view a, const char *b) noexcept
 {
     return a == std::string_view(b);
 }
 
-const char *roleText(uint32_t value) noexcept
-{
-    switch (static_cast<core::Role>(value)) {
-    case core::Role::kNone:
-        return "NONE";
-    case core::Role::kPhone:
-        return "PHONE";
-    case core::Role::kAlarm:
-        return "ALARM";
-    case core::Role::kPending:
-        return "PENDING";
-    default:
-        return "?";
-    }
-}
-
-const char *sppStageText(uint32_t value) noexcept
-{
-    switch (value) {
-    case SPP_SERVER_TRACE_STAGE_INIT:
-        return "SPP init";
-    case SPP_SERVER_TRACE_STAGE_START:
-        return "SPP server start";
-    case SPP_SERVER_TRACE_STAGE_UNINIT:
-        return "SPP uninit";
-    case SPP_SERVER_TRACE_STAGE_SRV_OPEN:
-        return "incoming connection";
-    default:
-        return "unknown SPP stage";
-    }
-}
-
-const char *sppCtrlText(uint32_t value) noexcept
-{
-    switch (value) {
-    case SPP_SERVER_TRACE_CTRL_PIN:
-        return "PIN reply";
-    case SPP_SERVER_TRACE_CTRL_CONFIRM:
-        return "SSP confirm";
-    case SPP_SERVER_TRACE_CTRL_REJECT:
-        return "reject disconnect";
-    case SPP_SERVER_TRACE_CTRL_DISCONNECT:
-        return "disconnect";
-    default:
-        return "unknown control";
-    }
-}
-
-const char *reasonText(uint32_t value) noexcept
-{
-    switch (static_cast<core::LinkReason>(value)) {
-    case core::LinkReason::kWhitelisted:
-        return "whitelisted";
-    case core::LinkReason::kFirstPhone:
-        return "first phone";
-    case core::LinkReason::kPendingHello:
-        return "pending hello";
-    case core::LinkReason::kPairing:
-        return "pairing";
-    case core::LinkReason::kPolicyPreempt:
-        return "preempted";
-    case core::LinkReason::kNoSlot:
-        return "no free slot";
-    case core::LinkReason::kOther:
-        return "other";
-    default:
-        return "?";
-    }
-}
-
-const char *resultText(uint32_t value) noexcept
-{
-    // fw::Result 与 fw::Status 的数值定义一致（0=成功，1..8 为错误码）。
-    switch (static_cast<fw::Result>(value)) {
-    case fw::Result::kOk:
-        return "OK";
-    case fw::Result::kInvalidArg:
-        return "EINVAL";
-    case fw::Result::kNoSpace:
-        return "ENOSPC";
-    case fw::Result::kTimeout:
-        return "ETIMEDOUT";
-    case fw::Result::kNotFound:
-        return "ENOENT";
-    case fw::Result::kIoError:
-        return "EIO";
-    case fw::Result::kNotSupported:
-        return "ENOTSUP";
-    case fw::Result::kBusy:
-        return "EBUSY";
-    case fw::Result::kInvalidState:
-        return "ESTATE";
-    default:
-        return "?";
-    }
-}
-
-#if RTK_GNSS_ENABLED
-const char *gnssFamilyText(uint32_t value) noexcept
-{
-    // 家族名集中在 gnss 组件（ADR-0012 §2.2），越界保护也用它自己的取值范围。
-    const auto family = ::gnss::familyFromU8(static_cast<uint8_t>(value));
-    if (!family.has_value()) {
-        return "?";
-    }
-    return ::gnss::familyName(*family);
-}
-#endif
-
-void appendValue(char *out, size_t cap, size_t &pos, TraceValue value,
-                 const fw::TraceEvent &ev) noexcept
-{
-    switch (value) {
-    case TraceValue::kDecA:
-        append(out, cap, pos, "%lu", static_cast<unsigned long>(ev.a));
-        break;
-    case TraceValue::kHexA:
-        append(out, cap, pos, "0x%02lx", static_cast<unsigned long>(ev.a));
-        break;
-    case TraceValue::kDecB:
-        append(out, cap, pos, "%lu", static_cast<unsigned long>(ev.b));
-        break;
-    case TraceValue::kHexB:
-        append(out, cap, pos, "0x%02lx", static_cast<unsigned long>(ev.b));
-        break;
-    case TraceValue::kRoleA:
-        append(out, cap, pos, "%s", roleText(ev.a));
-        break;
-    case TraceValue::kRoleB:
-        append(out, cap, pos, "%s", roleText(ev.b));
-        break;
-    case TraceValue::kReasonA:
-        append(out, cap, pos, "%s", reasonText(ev.a));
-        break;
-    case TraceValue::kReasonB:
-        append(out, cap, pos, "%s", reasonText(ev.b));
-        break;
-    case TraceValue::kResultA:
-        append(out, cap, pos, "%s", resultText(ev.a));
-        break;
-    case TraceValue::kResultB:
-        append(out, cap, pos, "%s", resultText(ev.b));
-        break;
-#if RTK_GNSS_ENABLED
-    case TraceValue::kGnssStateA:
-        append(out, cap, pos, "%s", ::gnss::stateName(static_cast<::gnss::State>(ev.a)));
-        break;
-    case TraceValue::kGnssStateB:
-        append(out, cap, pos, "%s", ::gnss::stateName(static_cast<::gnss::State>(ev.b)));
-        break;
-    case TraceValue::kGnssFamilyA:
-        append(out, cap, pos, "%s", gnssFamilyText(ev.a));
-        break;
-    case TraceValue::kGnssModelA:
-        append(out, cap, pos, "%s", ::gnss::modelName(static_cast<::gnss::Model>(ev.a)));
-        break;
-#endif
-    case TraceValue::kSppStageA:
-        append(out, cap, pos, "%s", sppStageText(ev.a));
-        break;
-    case TraceValue::kSppCtrlA:
-        append(out, cap, pos, "%s", sppCtrlText(ev.a));
-        break;
-    case TraceValue::kSession:
-        append(out, cap, pos, "0x%04lx", static_cast<unsigned long>(ev.session));
-        break;
-    case TraceValue::kNoValue:
-        break;
-    default:
-        append(out, cap, pos, "%lu", static_cast<unsigned long>(ev.a));
-        break;
-    }
-}
-
-/** 渲染 {key} 占位符：在字段表里按键名查找并用对应方式输出；查不到则原样保留。 */
 void renderField(char *out, size_t cap, size_t &pos, std::string_view key,
                  std::span<const TraceField> fields, const fw::TraceEvent &ev) noexcept
 {

@@ -146,6 +146,16 @@ private:
     [[nodiscard]] bool feedOne(SessionEntry &entry, size_t &budget, uint32_t roundStartMs) noexcept;
     void syncStream() noexcept;
     void publishLink(uint32_t nowMs) noexcept;
+    /** 发布链路策略/配对/白名单快照（publishLink 第一节）；仅 kLink，非阻塞。 */
+    void publishLinkStatus(uint32_t nowMs) noexcept;
+    /** 发布当前会话表快照；仅 kLink，非阻塞。 */
+    void publishSessions() noexcept;
+    /** 发布报警状态（无报警时写空快照）；仅 kLink，非阻塞。 */
+    void publishAlarmState() noexcept;
+    /** 发布发送/心跳/分流统计；仅 kLink，非阻塞。 */
+    void publishStats() noexcept;
+    /** 汇总各会话分流器增量并上报重同步/未知字节；仅 kLink，非阻塞。 */
+    void publishDemuxStats() noexcept;
     void applyRtcmReset() noexcept;
 #if RTK_GNSS_ENABLED
     void syncGnssInfo(uint32_t nowMs) noexcept;

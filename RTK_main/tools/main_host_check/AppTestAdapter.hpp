@@ -3,6 +3,10 @@
 // 保留基线白盒场景对会话/预读状态的检查；不额外编译此 cpp，避免重复定义。
 // NOLINTNEXTLINE(bugprone-suspicious-include)
 #include "../../main/modules/bt_link/BtLinkModule.cpp"
+// NOLINTNEXTLINE(bugprone-suspicious-include)
+#include "../../main/modules/bt_link/BtLinkSessions.cpp"
+// NOLINTNEXTLINE(bugprone-suspicious-include)
+#include "../../main/modules/bt_link/BtLinkGnss.cpp"
 #include "../../main/modules/rtcm/RtcmModule.hpp"
 #include "../../main/modules/storage/StorageModule.hpp"
 #include "rtos/StaticQueue.hpp"

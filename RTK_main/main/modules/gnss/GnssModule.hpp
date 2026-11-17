@@ -175,6 +175,30 @@ private:
                       demux::RejectCause cause, bool last) noexcept;
     void pollController(uint32_t nowMs) noexcept;
     /**
+     * @brief  把控制器下发的一条 UART 写动作落到串口，并记录探测/配置进度
+     * @param  act: 控制器动作（kind 必为 kWrite）
+     * @note   仅 kIo 调用；写失败只记日志，不改状态机。
+     */
+    void applyWriteAction(const ::gnss::Action &act) noexcept;
+    /**
+     * @brief  状态迁移的副作用：探测结果、步进计数与输出计划重算
+     * @param  prev: 迁移前状态
+     * @param  cur: 迁移后状态
+     * @note   仅 kIo 调用；只在 prev != cur 时调用一次。
+     */
+    void onControllerStateChanged(::gnss::State prev, ::gnss::State cur) noexcept;
+    /**
+     * @brief 登记基础解码器与各驱动私有解码器（顺序即探测优先级）
+     * @param receivers: 编译期启用的接收机实例表（可为空表）
+     * @note 仅 init() 调用；重复登记同一解码器会被跳过。
+     */
+    void registerDecoders(std::span<const ::gnss::Receiver *const> receivers) noexcept;
+    /**
+     * @brief 生成探测用的候选波特率表：默认值优先，其后按从快到慢回退
+     * @note 仅 init() 调用；重复值只保留一次，顺序即尝试顺序。
+     */
+    void initBaudCandidates() noexcept;
+    /**
      * @brief  读回期间把一帧转成一行文本追加到 gnssReadbackText（ADR-0012 §2.7）
      * @param  decoder: 该帧的解码器
      * @param  frame: 整帧字节
@@ -215,12 +239,22 @@ private:
     [[nodiscard]] ::gnss::Controller &controller() noexcept;
     [[nodiscard]] ::gnss::NmeaParser &parser() noexcept;
     [[nodiscard]] demux::Demux &streamDemux() noexcept;
+    /** 构造子对象并回填默认配置；仅启动期，非阻塞。 */
+    [[nodiscard]] fw::Result initObjects() noexcept;
+    /** 起 UART/管道/分流器并算候选波特率；仅启动期，可阻塞。 */
+    [[nodiscard]] fw::Result initPipelines() noexcept;
+    /** 启动控制器并发布初始状态；仅启动期，非阻塞。 */
+    [[nodiscard]] fw::Result startController() noexcept;
     [[nodiscard]] fw::Result initUart() noexcept;
     void sendRaw(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /** 由当前配置与接收机能力生成输出计划（纯计算，不碰串口）。 */
     [[nodiscard]] ::gnss::OutputPlan makePlan() noexcept;
     /** 输出/频率变更的落地检查：成功写 NVS，失败回滚并重下发旧计划（ADR-0012 §2.4）。 */
     void tickPendingApply(uint32_t nowMs) noexcept;
+    /** 把一个控制器动作落到 UART。 */
+    void applyAction(const ::gnss::Action &act) noexcept;
+    /** 读回窗口结束时发布一次结论。 */
+    void finishReadbackIfDone() noexcept;
     void updateControllerStatus() noexcept;
     [[nodiscard]] fw::Result initFailed(fw::Result original) noexcept;
     AppContext *context_ = nullptr;

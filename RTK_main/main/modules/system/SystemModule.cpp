@@ -47,24 +47,35 @@ bool buildDeviceName(std::string_view sn, std::span<char, kDeviceNameBuf> out) n
 }
 
 /**
- * @brief  计算设备名与身份信息并发布到 DataCenter（BT 启动前调用）
+ * @brief 读取并回填身份信息（SN 缺失时用蓝牙 MAC 派生，失败退化为 "0000"）
+ * @note 仅启动期单线程调用；esp_read_mac 非 ISR，不阻塞控制台。
  */
-void SystemModule::prepare() noexcept
+void SystemModule::fillIdentity() noexcept
 {
     /* 读取持久化 SN 和启动期堆状态。 */
     status_ = ctx().data.systemStatus.read();
     status_.freeHeap = esp_get_free_heap_size();
     status_.minFreeHeap = esp_get_minimum_free_heap_size();
-    if (status_.sn[0] == '\0') {
-        std::array<uint8_t, core::kAddrLen> mac{};
-        const esp_err_t error = esp_read_mac(mac.data(), ESP_MAC_BT);
-        if (error != ESP_OK || !deriveSnFromMac(mac, status_.sn)) {
-            const int written = snprintf(status_.sn.data(), status_.sn.size(), "%s", "0000");
-            if (written < 0) {
-                FW_LOGE(fw::TraceCat::kSys, "fallback SN formatting failed");
-            }
-        }
+    if (status_.sn[0] != '\0') {
+        return;
     }
+    std::array<uint8_t, core::kAddrLen> mac{};
+    const esp_err_t error = esp_read_mac(mac.data(), ESP_MAC_BT);
+    if (error == ESP_OK && deriveSnFromMac(mac, status_.sn)) {
+        return;
+    }
+    const int written = snprintf(status_.sn.data(), status_.sn.size(), "%s", "0000");
+    if (written < 0) {
+        FW_LOGE(fw::TraceCat::kSys, "fallback SN formatting failed");
+    }
+}
+
+/**
+ * @brief 校验 SN、生成 BT 名并启动 SPP 服务，结果写回 systemStatus
+ * @note 仅启动期单线程调用；spp_server_init 可阻塞（蓝牙控制器启动）。
+ */
+void SystemModule::startBt() noexcept
+{
     /* 名称校验通过后才启动 BT，失败仍发布状态供控制台读取。 */
     if (!buildDeviceName(status_.sn.data(), status_.deviceName)) {
         FW_LOGE(fw::TraceCat::kSys, "invalid SN for BT name");
@@ -80,6 +91,17 @@ void SystemModule::prepare() noexcept
     }
     ctx().data.systemStatus.write(status_);
 }
+
+/**
+ * @brief  计算设备名与身份信息并发布到 DataCenter（BT 启动前调用）
+ * @note 仅启动期单线程调用；顺序为先身份后蓝牙，二者都不在 ISR。
+ */
+void SystemModule::prepare() noexcept
+{
+    fillIdentity();
+    startBt();
+}
+
 bool SystemModule::poll(uint32_t /*nowMs*/) noexcept
 {
     /* 先更新系统状态，再发布执行器统计，保持原主题写入顺序。 */

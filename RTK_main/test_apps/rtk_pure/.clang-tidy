@@ -4,6 +4,7 @@
 # IDF unity_test_runner.h:81/85 的 TEST_CASE 宏定义 `static test_func test_fn_[]` 并赋给 .fn，在 C++ 下触发
 # avoid-c-arrays、array-to-pointer-decay、misc-const-correctness；宏内无法加 NOLINT，故对本测试目录关闭这三项
 # （T15 复审 Medium，2026-11-11）。产品代码（main/、components/）仍执行这三项。C 文件由 tools/tidy_check/tidy_check.py 处理。
+# readability-function-cognitive-complexity：单个 TEST_CASE 按场景顺序铺开，拆分反而藏掉失败定位（S4-B3 打开该检查）。
 InheritParentConfig: true
 Checks: >
   -readability-magic-numbers,
@@ -16,4 +17,5 @@ Checks: >
   -bugprone-signed-bitwise,
   -cppcoreguidelines-avoid-c-arrays,
   -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
-  -misc-const-correctness
+  -misc-const-correctness,
+  -readability-function-cognitive-complexity

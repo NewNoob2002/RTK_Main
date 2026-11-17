@@ -53,7 +53,7 @@ foreach(policy concurrent preempt)
         ${PROJ_ROOT}/main/data/AppData.cpp ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
         ${PROJ_ROOT}/main/modules/rtcm/RtcmModule.cpp
         # storage 的通用键表引用 DebugModule 的绑定函数，因此链接真实的 debug 模块。
-        ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp
+        ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/DebugModuleLog.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp ${PROJ_ROOT}/main/modules/debug/TraceTextValues.cpp
         ${PROJ_ROOT}/components/spp_server/SppTransport.cpp)
     target_include_directories(main_${policy} BEFORE PRIVATE shim)
     target_include_directories(main_${policy} PRIVATE
@@ -99,11 +99,11 @@ add_executable(template_check TemplateCheck.cpp
     # debug 命令组用 cli::fail/dispatch（ADR-0009 §2.5）。
     ${PROJ_ROOT}/components/cli/src/Reply.cpp
     ${PROJ_ROOT}/components/rtos/Executor.cpp
-    ${PROJ_ROOT}/main/modules/bt_link/BtLinkModule.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/BtLinkModule.cpp ${PROJ_ROOT}/main/modules/bt_link/BtLinkSessions.cpp ${PROJ_ROOT}/main/modules/bt_link/BtLinkGnss.cpp
     ${PROJ_ROOT}/main/modules/rtcm/RtcmModule.cpp
     ${PROJ_ROOT}/main/modules/rtcm/RtcmForwarder.cpp
     ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
-    ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp
+    ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/DebugModuleLog.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp ${PROJ_ROOT}/main/modules/debug/TraceTextValues.cpp
     ${PROJ_ROOT}/main/modules/debug/DebugCmds.cpp
     ${PROJ_ROOT}/components/spp_server/SppTransport.cpp)
 target_include_directories(template_check BEFORE PRIVATE shim)
@@ -147,8 +147,8 @@ foreach(features on gnss_off trace_off all_off)
         ${PROJ_ROOT}/components/rtos/BootAlloc.cpp
         ${PROJ_ROOT}/main/data/AppData.cpp
         ${PROJ_ROOT}/main/data/GnssOutput.cpp
-        ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp
-        ${PROJ_ROOT}/main/modules/debug/TraceText.cpp
+        ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/DebugModuleLog.cpp
+        ${PROJ_ROOT}/main/modules/debug/TraceText.cpp ${PROJ_ROOT}/main/modules/debug/TraceTextValues.cpp
         ${PROJ_ROOT}/components/spp_server/SppServerInit.c
         ${PROJ_ROOT}/components/spp_server/SppServerSession.c
         ${PROJ_ROOT}/components/cli/src/Reply.cpp)

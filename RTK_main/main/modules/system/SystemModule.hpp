@@ -27,6 +27,11 @@ public:
     [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
 
 private:
+    /** 读取并回填身份信息（SN 缺失时用 MAC 派生）；仅启动期，非阻塞日志。 */
+    void fillIdentity() noexcept;
+    /** 校验 SN、生成 BT 名并启动 SPP 服务；仅启动期，可阻塞。 */
+    void startBt() noexcept;
+
     [[nodiscard]] AppContext &ctx() noexcept
     {
         return *context_;

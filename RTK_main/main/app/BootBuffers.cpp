@@ -35,8 +35,10 @@ AppContext &self() noexcept
  * @param[out] out: 申请到的缓冲
  * @param  ops: 分配器操作表（host 测试可注入）
  * @retval true 全部成功；false 任一失败（已回滚并记录原因）
+ * @note 不拆（S4 §2.1）：启动期线性分配台账，每项只有名字与对齐差异，顺序即布局。
  */
-bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) noexcept
+bool allocateBootBuffers(BootBuffers &out, // NOLINT(readability-function-size)
+                         const rtos::BootAllocatorOps *ops) noexcept
 {
     if (!fw::isOk(self().bootArena.open(ops))) {
         (void)self().bootArena.abort(boot_reason::kAllocOpen);

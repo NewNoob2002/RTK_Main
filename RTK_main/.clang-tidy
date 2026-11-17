@@ -44,6 +44,7 @@ Checks: >
   bugprone-signed-bitwise,
   readability-braces-around-statements,
   readability-function-size,
+  readability-function-cognitive-complexity,
   readability-identifier-naming,
   readability-magic-numbers
 WarningsAsErrors: '*'
@@ -52,7 +53,10 @@ CheckOptions:
   cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted: true
   # span 是“指针 + 长度”，按值传递是惯用法（Core Guidelines F.16），不要改成 const 引用。
   performance-unnecessary-value-param.AllowedTypes: 'etl::span;std::span;pw::span;std::string_view;etl::string_view'
-  readability-function-size.LineThreshold: 100
+  # 函数长度/复杂度门禁（ADR-0013 §2.4）：60 行、cognitive 25；
+  # 平铺分派、线性初始化序列、表定义等拆了更难读的，按 ADR-0013 §2.1 就地 NOLINT 并写明理由。
+  readability-function-size.LineThreshold: 60
+  readability-function-cognitive-complexity.Threshold: 25
   # 正整数字面量（如 1U << 0、x & 0x0F）不按“有符号操作数”报告：字面量非负，结果确定；
   # 由整型提升产生的有符号操作数（uint8_t/uint16_t 参与位运算）仍报告（Q3，2026-11-17）。
   bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true

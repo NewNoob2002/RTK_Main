@@ -168,6 +168,120 @@ esp_err_t writeBlob(const fw::StoreKey &key, std::span<const uint8_t> data) noex
 
 namespace app {
 
+/**
+ * @brief 把 NVS 错误码映射成框架错误码
+ * @param error: NVS 返回码
+ * @retval kOk 表示成功；其他为失败原因
+ */
+fw::Result mapStoreError(esp_err_t error) noexcept
+{
+    return (error == ESP_ERR_INVALID_ARG) ? fw::Result::kInvalidArg : fw::Result::kIoError;
+}
+
+/**
+ * @brief 加载一个 blob 键并交给模块的绑定函数
+ * @param key: 键定义（binding.load 已由调用方确认非空）
+ * @retval kOk: 已加载；kNotFound: 从未保存；其他: 失败类型
+ * @note 仅 storage 任务启动期调用；栈上缓冲，不分配堆。
+ */
+fw::Result loadBlobKey(const fw::StoreKey &key) noexcept
+{
+    if ((key.maxSize == 0U) || (key.maxSize > store::kMaxBlobKeyBytes)) {
+        return fw::Result::kInvalidArg;
+    }
+    std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
+    size_t len = 0U;
+    const esp_err_t error = store::readBlob(key, std::span<uint8_t>{blob}.first(key.maxSize), len);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        return fw::Result::kNotFound;
+    }
+    if (error != ESP_OK) {
+        return mapStoreError(error);
+    }
+    return key.binding.load(key.binding.obj, std::span<const uint8_t>{blob}.first(len));
+}
+
+/**
+ * @brief 加载一个标量键（1–4 字节小端）并交给模块的绑定函数
+ * @param key: 键定义（binding.load 已由调用方确认非空）
+ * @retval kOk: 已加载；kNotFound: 从未保存（保持模块缺省值）；其他: 失败类型
+ * @note 仅 storage 任务启动期调用；不分配堆。
+ */
+fw::Result loadValueKey(const fw::StoreKey &key) noexcept
+{
+    const size_t width = store::valueWidth(key.type);
+    uint32_t value = 0U;
+    const esp_err_t error = store::readValue(key, value);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        return fw::Result::kNotFound;
+    }
+    if (error != ESP_OK) {
+        return mapStoreError(error);
+    }
+    std::array<uint8_t, store::kMaxKeyWidth> bytes{};
+    for (size_t index = 0U; index < width; ++index) {
+        // value 为 32 位、width ≤ 4，移位与掩码都不会越界。
+        bytes[index] =
+            static_cast<uint8_t>((value >> (store::kBitsPerByte * index)) & store::kByteMask);
+    }
+    return key.binding.load(key.binding.obj, std::span<const uint8_t>{bytes}.first(width));
+}
+
+/**
+ * @brief 让模块编码一个 blob 键并写回 NVS
+ * @param key: 键定义（binding.save 已由调用方确认非空）
+ * @retval kOk: 已保存；其他: 失败类型
+ * @note 仅 storage 任务调用；栈上缓冲，不分配堆。
+ */
+fw::Result saveBlobKey(const fw::StoreKey &key) noexcept
+{
+    if ((key.maxSize == 0U) || (key.maxSize > store::kMaxBlobKeyBytes)) {
+        return fw::Result::kInvalidArg;
+    }
+    std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
+    size_t len = 0U;
+    const fw::Result encoded =
+        key.binding.save(key.binding.obj, std::span<uint8_t>{blob}.first(key.maxSize), len);
+    if (!fw::isOk(encoded) || (len == 0U) || (len > key.maxSize)) {
+        return fw::isOk(encoded) ? fw::Result::kInvalidArg : encoded;
+    }
+    const esp_err_t error = store::writeBlob(key, std::span<const uint8_t>{blob}.first(len));
+    return (error == ESP_OK) ? fw::Result::kOk : mapStoreError(error);
+}
+
+/**
+ * @brief 让模块编码一个标量键（宽度由键类型决定）并写回 NVS
+ * @param key: 键定义（binding.save 已由调用方确认非空）
+ * @retval kOk: 已保存；其他: 失败类型
+ * @note 仅 storage 任务调用；不分配堆。
+ */
+fw::Result saveValueKey(const fw::StoreKey &key) noexcept
+{
+    const size_t width = store::valueWidth(key.type);
+    if (width == 0U) {
+        return fw::Result::kInvalidArg;
+    }
+    std::array<uint8_t, store::kMaxKeyWidth> bytes{};
+    size_t len = 0U;
+    const fw::Result encoded = key.binding.save(key.binding.obj, std::span<uint8_t>{bytes}, len);
+    if (!fw::isOk(encoded) || (len != width)) {
+        return fw::isOk(encoded) ? fw::Result::kInvalidArg : encoded;
+    }
+    uint32_t value = 0U;
+    for (size_t index = 0U; index < len; ++index) {
+        // len ≤ 4，移位结果落在 32 位内。
+        value |= static_cast<uint32_t>(bytes[index]) << (store::kBitsPerByte * index);
+    }
+    const esp_err_t error = store::writeValue(key, value);
+    return (error == ESP_OK) ? fw::Result::kOk : mapStoreError(error);
+}
+
+/**
+ * @brief 逐个加载键表（blob 与标量分派给上面的单键函数）
+ * @param keys: 键表
+ * @retval kOk: 全部成功；其他: 最后一个失败键的类型（既有语义）
+ * @note 仅 storage 任务启动期调用；非 ISR，不分配堆。
+ */
 fw::Result StorageModule::loadKeys(std::span<const fw::StoreKey> keys) noexcept
 {
     fw::Result overall = fw::Result::kOk;
@@ -177,54 +291,8 @@ fw::Result StorageModule::loadKeys(std::span<const fw::StoreKey> keys) noexcept
             overall = fw::Result::kInvalidArg;
             continue;
         }
-        if (key.type == fw::StoreType::kBlob) {
-            if ((key.maxSize == 0U) || (key.maxSize > store::kMaxBlobKeyBytes)) {
-                overall = fw::Result::kInvalidArg;
-                continue;
-            }
-            std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
-            size_t len = 0U;
-            const esp_err_t error =
-                store::readBlob(key, std::span<uint8_t>{blob}.first(key.maxSize), len);
-            if (error == ESP_ERR_NVS_NOT_FOUND) {
-                overall = fw::Result::kNotFound;
-                continue;
-            }
-            if (error != ESP_OK) {
-                overall =
-                    (error == ESP_ERR_INVALID_ARG) ? fw::Result::kInvalidArg : fw::Result::kIoError;
-                continue;
-            }
-            const fw::Result applied =
-                key.binding.load(key.binding.obj, std::span<const uint8_t>{blob}.first(len));
-            if (!fw::isOk(applied)) {
-                overall = applied;
-                continue;
-            }
-            ++loaded;
-            continue;
-        }
-        const size_t width = store::valueWidth(key.type);
-        uint32_t value = 0U;
-        const esp_err_t error = store::readValue(key, value);
-        if (error == ESP_ERR_NVS_NOT_FOUND) {
-            // 从未保存过：保持模块缺省值。
-            overall = fw::Result::kNotFound;
-            continue;
-        }
-        if (error != ESP_OK) {
-            overall =
-                (error == ESP_ERR_INVALID_ARG) ? fw::Result::kInvalidArg : fw::Result::kIoError;
-            continue;
-        }
-        std::array<uint8_t, store::kMaxKeyWidth> bytes{};
-        for (size_t index = 0U; index < width; ++index) {
-            // value 为 32 位、width ≤ 4，移位与掩码都不会越界。
-            bytes[index] =
-                static_cast<uint8_t>((value >> (store::kBitsPerByte * index)) & store::kByteMask);
-        }
         const fw::Result applied =
-            key.binding.load(key.binding.obj, std::span<const uint8_t>{bytes}.first(width));
+            (key.type == fw::StoreType::kBlob) ? loadBlobKey(key) : loadValueKey(key);
         if (!fw::isOk(applied)) {
             overall = applied;
             continue;
@@ -235,6 +303,12 @@ fw::Result StorageModule::loadKeys(std::span<const fw::StoreKey> keys) noexcept
     return overall;
 }
 
+/**
+ * @brief 逐个保存键表（blob 与标量分派给上面的单键函数）
+ * @param keys: 键表
+ * @retval kOk: 全部成功；其他: 最后一个失败键的类型（既有语义）
+ * @note 仅 storage 任务调用；非 ISR，不分配堆。
+ */
 fw::Result StorageModule::saveKeys(std::span<const fw::StoreKey> keys) noexcept
 {
     fw::Result overall = fw::Result::kOk;
@@ -244,51 +318,10 @@ fw::Result StorageModule::saveKeys(std::span<const fw::StoreKey> keys) noexcept
             overall = fw::Result::kInvalidArg;
             continue;
         }
-        if (key.type == fw::StoreType::kBlob) {
-            if ((key.maxSize == 0U) || (key.maxSize > store::kMaxBlobKeyBytes)) {
-                overall = fw::Result::kInvalidArg;
-                continue;
-            }
-            std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
-            size_t len = 0U;
-            const fw::Result encoded =
-                key.binding.save(key.binding.obj, std::span<uint8_t>{blob}.first(key.maxSize), len);
-            if (!fw::isOk(encoded) || (len == 0U) || (len > key.maxSize)) {
-                overall = fw::isOk(encoded) ? fw::Result::kInvalidArg : encoded;
-                continue;
-            }
-            const esp_err_t error =
-                store::writeBlob(key, std::span<const uint8_t>{blob}.first(len));
-            if (error != ESP_OK) {
-                overall =
-                    (error == ESP_ERR_INVALID_ARG) ? fw::Result::kInvalidArg : fw::Result::kIoError;
-                continue;
-            }
-            ++saved;
-            continue;
-        }
-        const size_t width = store::valueWidth(key.type);
-        if (width == 0U) {
-            overall = fw::Result::kInvalidArg;
-            continue;
-        }
-        std::array<uint8_t, store::kMaxKeyWidth> bytes{};
-        size_t len = 0U;
-        const fw::Result encoded =
-            key.binding.save(key.binding.obj, std::span<uint8_t>{bytes}, len);
-        if (!fw::isOk(encoded) || (len != width)) {
-            overall = fw::isOk(encoded) ? fw::Result::kInvalidArg : encoded;
-            continue;
-        }
-        uint32_t value = 0U;
-        for (size_t index = 0U; index < len; ++index) {
-            // len ≤ 4，移位结果落在 32 位内。
-            value |= static_cast<uint32_t>(bytes[index]) << (store::kBitsPerByte * index);
-        }
-        const esp_err_t error = store::writeValue(key, value);
-        if (error != ESP_OK) {
-            overall =
-                (error == ESP_ERR_INVALID_ARG) ? fw::Result::kInvalidArg : fw::Result::kIoError;
+        const fw::Result applied =
+            (key.type == fw::StoreType::kBlob) ? saveBlobKey(key) : saveValueKey(key);
+        if (!fw::isOk(applied)) {
+            overall = applied;
             continue;
         }
         ++saved;

@@ -67,15 +67,20 @@ bool installDirectLog() noexcept
     return fw::logInstallDirect(&directLogSink, nullptr, &rtos::nowMs) == fw::Result::kOk;
 }
 
-bool initConsole() noexcept
-{
-    constexpr const char *kConsolePrompt = "console> ";
-    struct VerbGroupDef {
-        const char *name;
-        const char *summary;
-        std::span<const cli::Verb> verbs;
-    };
+/** help 分组用的动词表条目；名字与摘要同样来自各模块的命令组。 */
+struct VerbGroupDef {
+    const char *name;
+    const char *summary;
+    std::span<const cli::Verb> verbs;
+};
 
+/**
+ * @brief 登记全部命令表，并把 handler 包进 phase 门控
+ * @retval true: 全部登记成功；false: 表超容量或 cli::add 失败（已记日志）
+ * @note 仅启动期单线程调用；输出通道先于业务堆分配建立。
+ */
+bool registerCommandTables() noexcept
+{
     const std::array cmdTables{
         systemCmds(),  linkCmds(), configCmds(), rtcmCmds(),
 #if RTK_GNSS_ENABLED
@@ -86,7 +91,7 @@ bool initConsole() noexcept
 #endif
         factoryCmds(),
     };
-    // 命令表地址在 init 后不可变；handler 经 phase 原子门控。输出通道先于业务堆分配建立，REPL 到启动末尾才放行。
+    // 命令表地址在 init 后不可变；handler 经 phase 原子门控。
     size_t used = 0U;
     for (const auto table : cmdTables) {
         for (const auto &command : table) {
@@ -107,6 +112,16 @@ bool initConsole() noexcept
         FW_LOGE(fw::TraceCat::kSys, "console add failed");
         return false;
     }
+    return true;
+}
+
+/**
+ * @brief 登记全部动词组供 help / help <group> 展示
+ * @retval true: 全部登记成功；false: cli::addVerbs 失败（已记日志）
+ * @note 仅启动期单线程调用；必须在 cli::init 之前完成。
+ */
+bool registerVerbGroups() noexcept
+{
     // 动词表与命令表不是一一对应（system 命令表提供 status/log/sys 三组，link/config 没有动词组），
     // 因此保持两张清单，避免 X-macro 编码出虚假的对应关系。
     const std::array verbGroups{
@@ -122,13 +137,26 @@ bool initConsole() noexcept
 #endif
         VerbGroupDef{"factory", "production settings (hidden, needs unlock)", factoryVerbs()},
     };
-    /* 必须在 init 之前登记所有动词表，供 help / help <group> 展示。 */
     for (const auto &group : verbGroups) {
         const esp_err_t verbsErr = cli::addVerbs(group.name, group.summary, group.verbs);
         if (verbsErr != ESP_OK) {
             FW_LOGE(fw::TraceCat::kSys, "console verbs failed: %s", esp_err_to_name(verbsErr));
             return false;
         }
+    }
+    return true;
+}
+
+/**
+ * @brief 建立控制台：登记命令与动词表、初始化 REPL、压低启动期 IDF 日志
+ * @retval true: 控制台可用；false: 任一登记/初始化失败（降级为无控制台）
+ * @note 仅启动期单线程调用；非 ISR，不阻塞。
+ */
+bool initConsole() noexcept
+{
+    constexpr const char *kConsolePrompt = "console> ";
+    if (!registerCommandTables() || !registerVerbGroups()) {
+        return false;
     }
     const esp_err_t consoleErr = cli::init(kConsolePrompt);
     if (consoleErr != ESP_OK) {
