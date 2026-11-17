@@ -114,3 +114,12 @@
 - 复跑：test/gnss 8/8、全驱动 ASan 9/9、main_host_check 44/44、t13_host_check 43/43、doc_check 0 不合格、
   clang-format 通过、frozen 全 OK、`idf.py -B builds/p3c build` 0 warning（rtk_main.bin 0xc3920 = 801 056 B，TRACE=y）。
 - 待 HIL：UM980 `gnss config`（行数、无 `unknown bytes dropped`、`$CONFIG` 校验和变体）。
+
+## 7. HIL（2026-11-17，UM980 R4.10Build11833，115200，builds/p3c 90cff22）
+
+- `gnss config`：`<cfg> TX "CONFIG"` → readback → 1.13 s 后 `Readback done, 16 lines`；控制台列出 16 行
+  （ANTENNA、NMEAVERSION、RTK×2、PPP、DGPS、RTCMB1CB2A、ANTENNADELTAHEN、PPS、SIGNALGROUP、ANTIJAM、AGNSS、
+  BASEOBSFILTER、COM1–3），`lines=16`、`OK`，无 truncated。
+- 前后 `gnss status`：`demux unknown=22 resyncs=1` 不变（均为上电期），`nmea bad=0`；即真机 `$CONFIG` 走含 `$`
+  的校验和变体，由 UnicoreResp 接手，§4.1 风险排除。读回后状态回 running，NMEA 计数持续增长。
+- 未覆盖：截断（真机配置约 600 B，远小于 1536 B）。
