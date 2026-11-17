@@ -66,17 +66,6 @@ const char *reject_cause_name(demux::RejectCause cause) noexcept
 constexpr size_t kLogTagBytes = 48U;
 /** 拒绝原因文本缓冲（explain 输出在此缓冲内截断）。 */
 constexpr size_t kRejectReasonBytes = 96U;
-/** NMEA 五位消息名（如 GNGGA）在 '$' 与 talker 之后。 */
-constexpr size_t kNmeaTagOffset = 1U;
-constexpr size_t kNmeaTagLen = 6U;
-/** `$command,` 之后的命令名起点。 */
-constexpr size_t kCommandTagOffset = 9U;
-/** RTCM3 消息号占 12 位，起点为长度字段第 1 字节。 */
-constexpr size_t kRtcmTagOffset = 3U;
-constexpr uint32_t kByteLowNibbleBits = 4U;
-constexpr uint32_t kRtcmMsgMask = 0x0FFFU;
-/** UBX class/id 位于同步字之后。 */
-constexpr size_t kUbxClassOffset = 2U;
 
 bool is_valid_rate_hz(uint8_t hz) noexcept
 {
@@ -436,127 +425,169 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
             result.status = fw::Result::kInvalidArg;
             return;
         }
-        manual_reprobe_ = true;
-        parser().reset();
-        ctx().data.gnss_fix.write(::gnss::Fix{});
-        controller().request_reprobe(now);
-        poll_controller(now);
-        publish_status(now);
-        result.status = fw::Result::kOk;
+        cmd_probe(now, result);
         return;
-
     case GnssVerb::kReset:
         if (cmd.arg_len != 0U) {
             result.status = fw::Result::kInvalidArg;
             return;
         }
-        manual_reprobe_ = true;
-        parser().reset();
-        ctx().data.gnss_fix.write(::gnss::Fix{});
-        controller().stop(now);
-        poll_controller(now);
-        controller().start(now);
-        poll_controller(now);
-        publish_status(now);
-        result.status = fw::Result::kOk;
+        cmd_reset(now, result);
         return;
-
-    case GnssVerb::kSetRate: {
-        if ((cmd.arg_len != 1U) || !is_valid_rate_hz(cmd.args[0])) {
-            result.status = fw::Result::kInvalidArg;
-            return;
-        }
-        // 上一次变更尚未判定时拒绝：否则 pending_prev_* 会被暂存值覆盖，回滚到的不是 NVS 中的旧值。
-        if (pending_apply_ != PendingApply::kNone) {
-            result.status = fw::Result::kBusy;
-            return;
-        }
-        if (controller().state() != ::gnss::State::kRunning) {
-            // 与 kSetOut 一致：没有运行中的接收机可确认，直接落盘，下次配置完成时按新频率执行。
-            const uint8_t prev_rate = ensure_rover_cfg().rate_hz;
-            ensure_rover_cfg().rate_hz = cmd.args[0];
-            const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
-            if (!fw::is_ok(save_res)) {
-                ensure_rover_cfg().rate_hz = prev_rate;
-                result.status = save_res;
-                return;
-            }
-            controller().set_output_plan(make_plan());
-            last_apply_ = GnssApply::kOk;
-            ++apply_seq_;
-            publish_status(now);
-            result.status = fw::Result::kOk;
-            return;
-        }
-        // 两阶段提交（ADR-0012 §2.4）：先暂存并重配，成功后才写 NVS；失败由 tick_pending_apply 回滚。
-        pending_prev_rate_ = ensure_rover_cfg().rate_hz;
-        ensure_rover_cfg().rate_hz = cmd.args[0];
-        pending_apply_ = PendingApply::kRate;
-        pending_seq_ = controller().stats().output_seq + 1U;
-        pending_deadline_ms_ = now + kApplyTimeoutMs;
-        controller().set_output_plan(make_plan());
-        controller().request_reconfigure(now);
-        poll_controller(now);
-        publish_status(now);
-        result.status = fw::Result::kOk;
+    case GnssVerb::kSetRate:
+        cmd_set_rate(cmd, now, result);
         return;
-    }
-
     case GnssVerb::kSend:
         send_raw(cmd, result);
         return;
-
-    default: {
-        if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetOut) {
-            data::GnssOutConfig next{};
-            if ((cmd.arg_len != data::GnssOutConfig::kBlobBytes) ||
-                !fw::is_ok(data::GnssOutConfig::decode(std::span<const uint8_t>{cmd.args.data(), cmd.arg_len}, next))) {
-                result.status = fw::Result::kInvalidArg;
-                return;
-            }
-            if (pending_apply_ != PendingApply::kNone) {
-                result.status = fw::Result::kBusy;
-                return;
-            }
-            const data::GnssOutConfig prev = out_cfg_;
-            out_cfg_ = next;
-            ctx().data.gnss_out_cfg.write(out_cfg_);
-            trace_gnss_sub(GnssSubTrace::kOutCfg, out_cfg_.mask, 0U);
-            if (controller().state() != ::gnss::State::kRunning) {
-                // 未进入 kRunning 时没有可下发的输出阶段：直接落盘，下次配置完成时按新表重算计划。
-                const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
-                if (!fw::is_ok(save_res)) {
-                    out_cfg_ = prev;
-                    ctx().data.gnss_out_cfg.write(out_cfg_);
-                    result.status = save_res;
-                    return;
-                }
-                controller().set_output_plan(make_plan());
-                last_apply_ = GnssApply::kOk;
-                ++apply_seq_;
-                publish_status(now);
-                result.status = fw::Result::kOk;
-                return;
-            }
-            pending_prev_out_ = prev;
-            pending_apply_ = PendingApply::kOut;
-            pending_seq_ = controller().stats().output_seq + 1U;
-            pending_deadline_ms_ = now + kApplyTimeoutMs;
-            controller().set_output_plan(make_plan());
-            static_cast<void>(controller().request_output(controller().output_plan(), now));
-            poll_controller(now);
-            publish_status(now);
-            result.status = fw::Result::kOk;
-            return;
-        }
-        if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kReadback) {
-            start_readback(now, result);
-            return;
-        }
-        result.status = fw::Result::kNotSupported;
+    default:
+        break;
+    }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetOut) {
+        cmd_set_out(cmd, now, result);
         return;
     }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kReadback) {
+        start_readback(now, result);
+        return;
     }
+    result.status = fw::Result::kNotSupported;
+}
+
+/**
+ * @brief  gnss probe：标记人工重探，清空最近定位并让控制器重新探测
+ * @param  now_ms: 当前时间
+ * @param  result: 写入命令结果（kOk）
+ * @note   仅 kIo 调用，非阻塞。
+ */
+void GnssModule::cmd_probe(uint32_t now_ms, fw::CommandResult &result) noexcept
+{
+    // 人工重探：清空最近定位，避免旧定位在重探期间被当成当前值发布。
+    manual_reprobe_ = true;
+    parser().reset();
+    ctx().data.gnss_fix.write(::gnss::Fix{});
+    controller().request_reprobe(now_ms);
+    poll_controller(now_ms);
+    publish_status(now_ms);
+    result.status = fw::Result::kOk;
+}
+
+/**
+ * @brief  gnss reset：清空最近定位后停再启动控制器
+ * @param  now_ms: 当前时间
+ * @param  result: 写入命令结果（kOk）
+ * @note   仅 kIo 调用，非阻塞。
+ */
+void GnssModule::cmd_reset(uint32_t now_ms, fw::CommandResult &result) noexcept
+{
+    // 人工复位：先清空定位再停/启控制器，重配流程由控制器自己推进。
+    manual_reprobe_ = true;
+    parser().reset();
+    ctx().data.gnss_fix.write(::gnss::Fix{});
+    controller().stop(now_ms);
+    poll_controller(now_ms);
+    controller().start(now_ms);
+    poll_controller(now_ms);
+    publish_status(now_ms);
+    result.status = fw::Result::kOk;
+}
+
+/**
+ * @brief  gnss rate：两阶段提交更新输出频率（ADR-0012 §2.4）
+ * @param  cmd: 指令，args[0] 必须是支持的频率
+ * @param  now_ms: 当前时间
+ * @param  result: 写入命令结果（kInvalidArg / kBusy / 落盘错误 / kOk）
+ * @note   仅 kIo 调用，非阻塞；NVS 写只在非 kRunning 的直落盘路径发生。
+ */
+void GnssModule::cmd_set_rate(const fw::Command &cmd, uint32_t now_ms, fw::CommandResult &result) noexcept
+{
+    if ((cmd.arg_len != 1U) || !is_valid_rate_hz(cmd.args[0])) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    // 上一次变更尚未判定时拒绝：否则 pending_prev_* 会被暂存值覆盖，回滚到的不是 NVS 中的旧值。
+    if (pending_apply_ != PendingApply::kNone) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    if (controller().state() != ::gnss::State::kRunning) {
+        // 与 kSetOut 一致：没有运行中的接收机可确认，直接落盘，下次配置完成时按新频率执行。
+        const uint8_t prev_rate = ensure_rover_cfg().rate_hz;
+        ensure_rover_cfg().rate_hz = cmd.args[0];
+        const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
+        if (!fw::is_ok(save_res)) {
+            ensure_rover_cfg().rate_hz = prev_rate;
+            result.status = save_res;
+            return;
+        }
+        controller().set_output_plan(make_plan());
+        last_apply_ = GnssApply::kOk;
+        ++apply_seq_;
+        publish_status(now_ms);
+        result.status = fw::Result::kOk;
+        return;
+    }
+    // 两阶段提交（ADR-0012 §2.4）：先暂存并重配，成功后才写 NVS；失败由 tick_pending_apply 回滚。
+    pending_prev_rate_ = ensure_rover_cfg().rate_hz;
+    ensure_rover_cfg().rate_hz = cmd.args[0];
+    pending_apply_ = PendingApply::kRate;
+    pending_seq_ = controller().stats().output_seq + 1U;
+    pending_deadline_ms_ = now_ms + kApplyTimeoutMs;
+    controller().set_output_plan(make_plan());
+    controller().request_reconfigure(now_ms);
+    poll_controller(now_ms);
+    publish_status(now_ms);
+    result.status = fw::Result::kOk;
+}
+
+/**
+ * @brief  gnss setout：两阶段提交更新输出表
+ * @param  cmd: 指令，args 为 GnssOutConfig 编码块
+ * @param  now_ms: 当前时间
+ * @param  result: 写入命令结果（kInvalidArg / kBusy / 落盘错误 / kOk）
+ * @note   仅 kIo 调用，非阻塞。
+ */
+void GnssModule::cmd_set_out(const fw::Command &cmd, uint32_t now_ms, fw::CommandResult &result) noexcept
+{
+    data::GnssOutConfig next{};
+    if ((cmd.arg_len != data::GnssOutConfig::kBlobBytes) ||
+        !fw::is_ok(data::GnssOutConfig::decode(std::span<const uint8_t>{cmd.args.data(), cmd.arg_len}, next))) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    if (pending_apply_ != PendingApply::kNone) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    const data::GnssOutConfig prev = out_cfg_;
+    out_cfg_ = next;
+    ctx().data.gnss_out_cfg.write(out_cfg_);
+    trace_gnss_sub(GnssSubTrace::kOutCfg, out_cfg_.mask, 0U);
+    if (controller().state() != ::gnss::State::kRunning) {
+        // 未进入 kRunning 时没有可下发的输出阶段：直接落盘，下次配置完成时按新表重算计划。
+        const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
+        if (!fw::is_ok(save_res)) {
+            out_cfg_ = prev;
+            ctx().data.gnss_out_cfg.write(out_cfg_);
+            result.status = save_res;
+            return;
+        }
+        controller().set_output_plan(make_plan());
+        last_apply_ = GnssApply::kOk;
+        ++apply_seq_;
+        publish_status(now_ms);
+        result.status = fw::Result::kOk;
+        return;
+    }
+    pending_prev_out_ = prev;
+    pending_apply_ = PendingApply::kOut;
+    pending_seq_ = controller().stats().output_seq + 1U;
+    pending_deadline_ms_ = now_ms + kApplyTimeoutMs;
+    controller().set_output_plan(make_plan());
+    static_cast<void>(controller().request_output(controller().output_plan(), now_ms));
+    poll_controller(now_ms);
+    publish_status(now_ms);
+    result.status = fw::Result::kOk;
 }
 
 void GnssModule::send_raw(const fw::Command &cmd, fw::CommandResult &result) noexcept

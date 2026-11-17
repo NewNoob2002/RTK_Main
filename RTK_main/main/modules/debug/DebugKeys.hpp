@@ -4,12 +4,19 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 
 #include "fw/Log.hpp"
 #include "fw/StoreKey.hpp"
 #include "modules/debug/DebugModule.hpp"
 
 namespace app::debug {
+
+// 键表下标：static_assert 按名引用，避免字面量下标被判为魔数。
+constexpr size_t kIdxMask = 0U;
+constexpr size_t kIdxReport = 1U;
+constexpr size_t kIdxHex = 2U;
+constexpr size_t kIdxLogLevel = 3U;
 
 // 键表必须满足 fw::valid（类型宽度与取值范围一致），否则 NVS 通路会拒绝它。
 inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
@@ -51,10 +58,10 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
      .binding = {.obj = nullptr, .load = &DebugModule::load_loglv, .save = &DebugModule::save_loglv}},
 }};
 
-static_assert(fw::valid(kKeys[0]), "dbg/mask 必须是合法 u32 键");
-static_assert(fw::valid(kKeys[1]), "dbg/report 必须是合法 u16 键");
-static_assert(fw::valid(kKeys[2]), "dbg/hex 必须是合法 u32 键");
-static_assert(fw::valid(kKeys[3]), "dbg/loglv 必须是合法 u32 键");
+static_assert(fw::valid(kKeys[kIdxMask]), "dbg/mask 必须是合法 u32 键");
+static_assert(fw::valid(kKeys[kIdxReport]), "dbg/report 必须是合法 u16 键");
+static_assert(fw::valid(kKeys[kIdxHex]), "dbg/hex 必须是合法 u32 键");
+static_assert(fw::valid(kKeys[kIdxLogLevel]), "dbg/loglv 必须是合法 u32 键");
 static_assert(fw::unique_keys(kKeys), "debug 键表不得有重复的 ns/key");
 
 } // namespace app::debug

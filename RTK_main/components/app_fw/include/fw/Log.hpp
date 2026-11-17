@@ -21,6 +21,7 @@
 
 /** 编译期最高日志级别：0=E 1=W 2=I 3=D；ESP-IDF 下由 CONFIG_RTK_LOG_LEVEL 经 CMake 定义。 */
 #ifndef FW_LOG_MAX_LEVEL
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): 须是宏，CMake 以 -D 覆盖，且与 C 头 fw/LogC.h 共用
 #define FW_LOG_MAX_LEVEL 3
 #endif
 

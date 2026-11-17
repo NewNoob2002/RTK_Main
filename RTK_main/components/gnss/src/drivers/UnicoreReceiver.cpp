@@ -184,8 +184,10 @@ bool checksum_matches(std::span<const uint8_t> frame, std::size_t star_pos, uint
                       uint8_t &computed) noexcept
 {
     computed = ascii::xor_checksum(frame, 1U, star_pos);
-    received = static_cast<uint8_t>((ascii::hex_value(frame[star_pos + 1U]) << ascii::kHexShift) |
-                                    ascii::hex_value(frame[star_pos + 2U]));
+    // hex_value 返回 uint8_t，整型提升为 int 后再移位属有符号位运算：先转 uint32_t（值域 0..15，安全）。
+    const uint32_t high = static_cast<uint32_t>(ascii::hex_value(frame[star_pos + 1U])) << ascii::kHexShift;
+    const uint32_t low = static_cast<uint32_t>(ascii::hex_value(frame[star_pos + 2U]));
+    received = static_cast<uint8_t>(high | low);
     if (computed == received) {
         return true;
     }

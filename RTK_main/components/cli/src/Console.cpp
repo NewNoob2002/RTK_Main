@@ -29,6 +29,7 @@ namespace {
 constexpr int kGroupWidth = 12;             // help 列表里组名左对齐宽度
 constexpr size_t kConsoleRxBufBytes = 256U; // 与 IDF uart_vfs_dev_port_init 的内部选择保持一致
 constexpr uint32_t kTxDrainTimeoutMs = 50U; // 128 B 硬件 FIFO 在 2 Mbaud 下约 0.64 ms 发完，留足余量
+constexpr int kRefTickMaxBaud = 1000000;    // IDF uart_vfs_dev_port_init 的 REF_TICK/APB 分界
 constexpr size_t kHelpMaxArgs = 2U;         // help [<group>]
 constexpr const char *kHelpName = "help";
 constexpr const char *kHelpSummary = "show command list, or usage of one group";
@@ -183,6 +184,7 @@ int cmd_help(void * /*ctx*/, int argc, char **argv) noexcept
 
 // 每条命令的入口：先复位回执状态，再按 handler 返回值统一打印 OK / ERR（ADR-0009 §2.5）。
 // 始终返回 0，避免 esp_console 再打印一遍 "Command returned non-zero error code"。
+// NOLINTNEXTLINE(misc-const-correctness): esp_console_cmd_func_t 固定为 void *ctx 回调签名
 int trampoline(void *ctx, int argc, char **argv) noexcept
 {
     const auto *entry = static_cast<const Entry *>(ctx);
@@ -281,15 +283,20 @@ esp_err_t enable_uart_tx_buffer() noexcept
         return err;
     }
 
+    constexpr int kBaudRate = CONFIG_RTK_CONSOLE_UART_BAUD;
+    // 零初始化后逐字段赋值：枚举字段的 0 值虽无对应枚举名，但下面会全部覆盖，
+    // 而 IDF 结构体成员随版本增减（v6.1 有 rx_glitch_filt_thresh/flags），逐字段指定会触发 missing-field-initializers。
+    // NOLINTNEXTLINE(bugprone-invalid-enum-default-initialization): 上述成员随后全部赋有效枚举值
     uart_config_t cfg{};
-    cfg.baud_rate = CONFIG_RTK_CONSOLE_UART_BAUD;
+    cfg.baud_rate = kBaudRate;
     cfg.data_bits = UART_DATA_8_BITS;
     cfg.parity = UART_PARITY_DISABLE;
     cfg.stop_bits = UART_STOP_BITS_1;
     cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
 #if SOC_UART_SUPPORT_REF_TICK
     // 与 IDF uart_vfs_dev_port_init 的选择一致：<= 1 MHz 用 REF_TICK，更高波特率必须用 APB（DEFAULT）。
-    cfg.source_clk = (cfg.baud_rate > 1000000) ? UART_SCLK_DEFAULT : UART_SCLK_REF_TICK;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-union-access): IDF 以匿名 union 提供时钟字段，只能直接访问
+    cfg.source_clk = (kBaudRate > kRefTickMaxBaud) ? UART_SCLK_DEFAULT : UART_SCLK_REF_TICK;
 #else
     cfg.source_clk = UART_SCLK_DEFAULT;
 #endif
@@ -503,7 +510,9 @@ esp_err_t start(const char *prompt) noexcept
 // 对 ESP_ERR_NOT_FOUND 硬编码打印 "Unrecognized command"，没有回调可挂。CMakeLists 用
 // -Wl,--wrap=esp_console_run 把 REPL 的调用引到这里：未找到时自己输出 "ERR unknown command"，
 // 并返回 ESP_ERR_INVALID_ARG（REPL 按“空行”处理，不再追加输出）。其余结果原样透传。
+// NOLINTNEXTLINE(bugprone-reserved-identifier, readability-identifier-naming): --wrap 规定 __real_/__wrap_ 前缀
 extern "C" esp_err_t __real_esp_console_run(const char *cmdline, int *cmd_ret);
+// NOLINTNEXTLINE(bugprone-reserved-identifier, readability-identifier-naming): 同上
 extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmd_ret);
 
 extern "C" esp_err_t __wrap_esp_console_run(const char *cmdline, int *cmd_ret)

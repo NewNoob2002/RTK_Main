@@ -84,6 +84,36 @@ public:
 
     /** 仅 kIo 调用：处理 gnss probe/reset/rate/send 命令。 */
     void on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  gnss probe：标记人工重探，清空最近定位并让控制器重新探测
+     * @param  now_ms: 当前时间
+     * @param  result: 写入命令结果（kOk；参数校验在 on_command）
+     * @note   仅 kIo 调用，非阻塞。
+     */
+    void cmd_probe(uint32_t now_ms, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  gnss reset：清空最近定位后停再启动控制器
+     * @param  now_ms: 当前时间
+     * @param  result: 写入命令结果（kOk；参数校验在 on_command）
+     * @note   仅 kIo 调用，非阻塞。
+     */
+    void cmd_reset(uint32_t now_ms, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  gnss rate：两阶段提交更新输出频率（ADR-0012 §2.4）
+     * @param  cmd: 指令，args[0] 必须是支持的频率
+     * @param  now_ms: 当前时间
+     * @param  result: 写入命令结果（kInvalidArg / kBusy / 落盘错误 / kOk）
+     * @note   仅 kIo 调用，非阻塞；NVS 写只在非 kRunning 的直落盘路径发生。
+     */
+    void cmd_set_rate(const fw::Command &cmd, uint32_t now_ms, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  gnss setout：两阶段提交更新输出表
+     * @param  cmd: 指令，args 为 GnssOutConfig 编码块
+     * @param  now_ms: 当前时间
+     * @param  result: 写入命令结果（kInvalidArg / kBusy / 落盘错误 / kOk）
+     * @note   仅 kIo 调用，非阻塞。
+     */
+    void cmd_set_out(const fw::Command &cmd, uint32_t now_ms, fw::CommandResult &result) noexcept;
 
     // 适配 fw::StoreBinding：表为 constexpr，通过 app_context().gnss 定位单例实例。
     static fw::Result load_family(void *obj, std::span<const uint8_t> in) noexcept;

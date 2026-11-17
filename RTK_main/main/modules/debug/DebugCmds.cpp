@@ -83,7 +83,7 @@ int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 bool parse_cat_list(std::span<char *const> args, uint32_t &bits) noexcept
 {
     bits = 0U;
-    for (char *const arg : args) {
+    for (const char *const arg : args) {
         const std::string_view name{arg};
         if (name == kAllCats) {
             bits = fw::kTraceAllMask;

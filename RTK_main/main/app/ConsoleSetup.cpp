@@ -27,6 +27,7 @@ constinit std::array<cli::Cmd, cli::kMaxCmds> s_gated_commands{};
  * @param  payload: 文本（不含换行）
  * @note   任意任务调用；格式化缓冲在调用方栈上（kLogLineMax 字节），cli::out_write 内部加锁。
  */
+// NOLINTNEXTLINE(misc-const-correctness): LogSinkFn 固定为 void *ctx
 void direct_log_sink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
 {
     static_cast<void>(ctx);

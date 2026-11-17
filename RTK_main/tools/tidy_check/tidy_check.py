@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""G5b clang-tidy 门禁：覆盖纯组件、host 测试与 ESP-IDF 依赖代码。
+"""G5b clang-tidy 门禁：覆盖全部自有源文件（components/**、main/**）与测试工程。
 
-规则来源（2026-11-11 用户授权修订）：
-- C++ 文件：根 .clang-tidy，按目录继承 main/、components/spp_server|rtos/、test/host/ 下的 .clang-tidy；
+规则来源（2026-11-11 用户授权修订，2026-11-17 Q3 扩到全部自有源）：
+- C++ 文件：根 .clang-tidy，按目录继承 main/、components/spp_server|rtos|cli/、test/host/ 下的 .clang-tidy；
 - C 文件：.clang-tidy-c（--config-file 会屏蔽目录配置，因此 C 侧的分区排除项在本脚本 C_EXTRA_CHECKS 中给出，
   与对应目录 .clang-tidy 的理由一致）。
 ESP 侧翻译单元用 idf.py 生成的 compile_commands.json，按 .clangd 的做法去掉 clang 不认识的 xtensa GCC
 选项、补齐工具链系统头，生成临时编译数据库后解析。本机 clang 必须支持 xtensa 目标。
+gnss 是纯组件，IDF 只启用树内默认驱动，ComNav 不在 ESP 数据库里；因此 src/**/*.cpp 用 test/gnss
+全驱动构建的编译数据库（host 语言标准与配置），保证每个驱动都被分析到。
+纯组件（device_proto/link_core/app_fw/bt_reconnect/stream_demux）若在 host 数据库里已有条目就用它
+（同一份源、同一配置、能完整解析），否则回落到 ESP 数据库。
+覆盖率自检：components/** 与 main/** 下全部 .c/.cpp（排除组件内 test/ 与生成物）必须被某个 job 覆盖，
+或登记在 EXCLUDED 表（附理由），否则退出码 2。
 
-用法（先 . ~/esp/esp-idf/export.sh，并已构建 builds/host 与 idf.py build）：
+用法（先 . ~/esp/esp-idf/export.sh，并已构建 builds/host、idf.py build 与 test/gnss）：
   python3 -I tools/tidy_check/tidy_check.py [--host-build builds/host] [--idf-build build]
-      [--test-app-build builds/rtk_pure-esp32] [--jobs N]
-退出码：0 PASS；1 有发现；2 工具或输入错误。
+      [--gnss-build builds/gnss] [--test-app-build builds/rtk_pure-esp32] [--jobs N]
+退出码：0 PASS；1 有发现；2 工具或输入错误（含覆盖率不全）。
 """
 
 import argparse
@@ -50,12 +56,22 @@ C_EXTRA_CHECKS = {
 
 FINDING_RE = re.compile(r"^(.+?):(\d+):(\d+): (warning|error): (.*)$")
 
+# 覆盖率自检的显式排除项：路径 -> 理由。只放确实不参与任何构建的自有源文件。
+EXCLUDED = {
+    "main/modules/_template/TemplateCmds.cpp":
+        "模块模板：module_list.inc 未注册，ESP 与 host 编译数据库均无条目",
+    "main/modules/_template/TemplateModule.cpp":
+        "模块模板：module_list.inc 未注册，ESP 与 host 编译数据库均无条目",
+}
+
+# 自有源文件根：覆盖率自检与 job 构造共用。
+OWNED_ROOTS = ("components", "main")
+# 自有源文件中不参与产品构建的子目录段（组件内测试、生成物）。
+SKIP_SEGMENTS = ("test", "golden")
+
 # 冻结的 test/host/CMakeLists.txt 不编译 device_proto/DemuxFrame.cpp（该文件由 t13_host_check 目标链接），
-# 因此它在 host 编译数据库里没有条目，clang-tidy 会退化成无参数解析并误报 demux/Decoder.hpp 找不到。
-# 这里按 host_pure 的实际包含路径与语言标准补齐；用绝对路径，因为数据库的 directory 是构建目录。
-HOST_FALLBACK_INCLUDES = ("app_fw", "device_proto", "link_core", "stream_demux")
-HOST_FALLBACK_ARGS = ("-std=gnu++20",
-                     *(f"-I{ROOT / 'components' / name / 'include'}" for name in HOST_FALLBACK_INCLUDES))
+# 因此它在 host 编译数据库里没有条目；Q3 起按 job 构造规则回落到 ESP 数据库（该文件属于 device_proto 组件，
+# 在 idf.py 构建中有条目），不再手工补包含路径。
 
 
 def sources(*globs):
@@ -63,6 +79,27 @@ def sources(*globs):
     for g in globs:
         out.extend(sorted(ROOT.glob(g)))
     return out
+
+
+def owned_sources():
+    """列举 components/** 与 main/** 下的自有 C/C++ 源文件（排除组件内 test/ 与生成物）。"""
+    out = []
+    for base in OWNED_ROOTS:
+        for p in sorted((ROOT / base).rglob("*")):
+            if p.suffix not in (".c", ".cpp") or not p.is_file():
+                continue
+            if any(part in SKIP_SEGMENTS for part in p.relative_to(ROOT).parts[:-1]):
+                continue
+            out.append(p)
+    return out
+
+
+def db_files(build):
+    """读取 CMake 编译数据库中的源文件集合（绝对路径）。"""
+    path = Path(build) / "compile_commands.json"
+    if not path.is_file():
+        raise RuntimeError(f"缺少 {path}")
+    return {str(Path(e["file"]).resolve()) for e in json.loads(path.read_text())}
 
 
 def toolchain_isystem(compiler):
@@ -131,6 +168,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host-build", default="builds/host")
     ap.add_argument("--idf-build", default="build")
+    ap.add_argument("--gnss-build", default="builds/gnss",
+                    help="test/gnss 全驱动构建目录（需要 compile_commands.json）")
     ap.add_argument("--test-app-build", default="builds/rtk_pure-esp32",
                     help="T15 测试应用的 esp32 构建目录；不存在时跳过并提示")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
@@ -140,11 +179,17 @@ def main():
         print("ERROR: 找不到 clang-tidy", file=sys.stderr)
         return 2
     host_db = ROOT / args.host_build
+    gnss_db = ROOT / args.gnss_build
     host_cc = host_db / "compile_commands.json"
     if not host_cc.is_file():
         print(f"ERROR: 缺少 {host_db}/compile_commands.json", file=sys.stderr)
         return 2
-    host_files = {str(Path(e["file"]).resolve()) for e in json.loads(host_cc.read_text())}
+    try:
+        host_files = db_files(host_db)
+        gnss_files = db_files(gnss_db)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
     jobs = []
     with tempfile.TemporaryDirectory(prefix="rtk-tidy-") as tmp:
@@ -162,27 +207,67 @@ def main():
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
 
-        for p in sources("components/device_proto/*.cpp", "components/link_core/*.cpp", "test/host/*.cpp"):
-            fallback = () if str(p.resolve()) in host_files else HOST_FALLBACK_ARGS
-            jobs.append((p, host_db, False, None, fallback))
-        for p in sources("components/device_proto/*.c"):
-            jobs.append((p, host_db, True, None, ()))
-        for p in sources("test/host/*.c"):
-            jobs.append((p, host_db, True, C_EXTRA_CHECKS["host_test"], ()))
-        for p in sources("main/*.cpp", "components/spp_server/*.cpp", "components/rtos/*.cpp"):
-            jobs.append((p, esp_db, False, None, ESP_EXTRA_ARGS))
+        def pick_db(path):
+            """gnss 用全驱动 host 数据库；纯组件优先 host 数据库，缺失时用 ESP 数据库。"""
+            if str(path.resolve()) in gnss_files:
+                return gnss_db
+            if str(path.resolve()) in host_files:
+                return host_db
+            return esp_db
+
+        esp_like = {esp_db} if app_db is None else {esp_db, app_db}
+
+        def add(path, is_c, extra_checks=(), db=None):
+            if path.relative_to(ROOT).as_posix() in EXCLUDED:
+                return
+            chosen = db or pick_db(path)
+            extra_args = ESP_EXTRA_ARGS if chosen in esp_like else ()
+            jobs.append((path, chosen, is_c, extra_checks or None, extra_args))
+
+        # host 测试与纯组件：host 数据库条目优先（同一份源、同一配置、能完整解析）。
+        for p in sources("test/host/*.cpp", "test/host/*.c"):
+            add(p, p.suffix == ".c", C_EXTRA_CHECKS["host_test"] if p.suffix == ".c" else (),
+                db=host_db if str(p.resolve()) in host_files else esp_db)
+        for p in sources("components/device_proto/*.cpp", "components/device_proto/*.c",
+                         "components/link_core/*.cpp", "components/link_core/services/*.cpp",
+                         "components/app_fw/src/*.cpp", "components/bt_reconnect/src/*.cpp",
+                         "components/stream_demux/src/**/*.cpp"):
+            add(p, p.suffix == ".c")
+        # gnss：test/gnss 全驱动数据库，包含 IDF 未启用的 ComNav。
+        for p in sources("components/gnss/src/**/*.cpp"):
+            add(p, False, db=gnss_db)
+        # ESP 侧其余自有源：main（递归）、cli、spp_server、rtos、nvs_store。
+        for p in sources("main/**/*.cpp", "components/cli/src/*.cpp",
+                         "components/spp_server/*.cpp", "components/rtos/*.cpp"):
+            add(p, False, db=esp_db)
         for p in sources("components/spp_server/*.c", "components/nvs_store/*.c"):
-            jobs.append((p, esp_db, True, C_EXTRA_CHECKS["esp"], ESP_EXTRA_ARGS))
+            add(p, True, C_EXTRA_CHECKS["esp"], db=esp_db)
         if app_db is not None:
             for p in sources("test_apps/rtk_pure/main/*.cpp"):
-                jobs.append((p, app_db, False, None, ESP_EXTRA_ARGS))
+                add(p, False, db=app_db)
             for p in sources("test_apps/rtk_pure/main/*.c"):
-                jobs.append((p, app_db, True, C_EXTRA_CHECKS["app_test"], ESP_EXTRA_ARGS))
+                add(p, True, C_EXTRA_CHECKS["app_test"], db=app_db)
 
+        files_by_db = {host_db: host_files, gnss_db: gnss_files, esp_db: esp_files,
+                       app_db: app_files}
         missing = [str(j[0].relative_to(ROOT)) for j in jobs
-                   if j[1] in (esp_db, app_db) and str(j[0].resolve()) not in (esp_files | app_files)]
+                   if str(j[0].resolve()) not in files_by_db[j[1]]]
         if missing:
             print(f"ERROR: 编译数据库中缺少：{', '.join(missing)}", file=sys.stderr)
+            return 2
+
+        covered = {str(j[0].resolve()) for j in jobs}
+        uncovered = []
+        for p in owned_sources():
+            rel = p.relative_to(ROOT).as_posix()
+            if str(p.resolve()) in covered:
+                continue
+            if rel in EXCLUDED:
+                print(f"NOTE: 排除 {rel}：{EXCLUDED[rel]}")
+                continue
+            uncovered.append(rel)
+        if uncovered:
+            print(f"ERROR: tidy 覆盖不全（未纳入且无排除理由）：{', '.join(uncovered)}", file=sys.stderr)
             return 2
 
         total, rc = 0, 0

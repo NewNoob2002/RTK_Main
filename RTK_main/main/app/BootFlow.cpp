@@ -91,7 +91,7 @@ bool enable_power_hold() noexcept
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 成功；kFail 电源保持失败
  */
-app::BootResult step_power(app::BootCtx &ctx) noexcept
+app::BootResult step_power(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
 {
     (void)ctx;
     (void)app::install_direct_log(); // 只会因重复安装失败，此时已有通道可用
@@ -103,7 +103,7 @@ app::BootResult step_power(app::BootCtx &ctx) noexcept
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是
  */
-app::BootResult step_banner(app::BootCtx &ctx) noexcept
+app::BootResult step_banner(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
 {
     (void)ctx;
     const esp_reset_reason_t reason = esp_reset_reason();
@@ -120,8 +120,12 @@ app::BootResult step_banner(app::BootCtx &ctx) noexcept
     return app::BootResult::kOk;
 }
 
-/** 步骤 3：绑定数据主题共享锁与执行器指针（K5 顺序：contexts 先于 console）。 */
-app::BootResult step_contexts(app::BootCtx &ctx) noexcept
+/**
+ * @brief  启动步骤 3：绑定数据主题共享锁与执行器指针（K5 顺序：contexts 先于 console）
+ * @param  ctx: 启动上下文（未用）
+ * @retval kOk 总是
+ */
+app::BootResult step_contexts(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
 {
     (void)ctx;
     app::AppContext &self = app::app_context();
@@ -135,17 +139,23 @@ app::BootResult step_contexts(app::BootCtx &ctx) noexcept
 }
 
 /**
- * 步骤 4：只建立控制台输出通道并登记命令，不放行 REPL。
- * REPL 到 boot() 末尾才 run：此前提示符/IDF 提示语若先出现，会与后续各步骤日志交错。
- * UART 驱动重装必须在业务任务启动前完成，所以 init 留在这里而不是挪到末尾。
+ * @brief  启动步骤 4：只建立控制台输出通道并登记命令，不放行 REPL
+ * @param  ctx: 启动上下文（未用）
+ * @retval kOk 成功；kFail 控制台初始化失败
+ * @note   REPL 到 boot() 末尾才 run：此前提示符/IDF 提示语若先出现，会与后续各步骤日志交错。
+ *         UART 驱动重装必须在业务任务启动前完成，所以 init 留在这里而不是挪到末尾。
  */
-app::BootResult step_console(app::BootCtx &ctx) noexcept
+app::BootResult step_console(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
 {
     (void)ctx;
     return app::init_console() ? app::BootResult::kOk : app::BootResult::kFail;
 }
 
-/** 步骤 5：按固定 owner 顺序一次性分配数据通路与栈缓冲。 */
+/**
+ * @brief  启动步骤 5：按固定 owner 顺序一次性分配数据通路与栈缓冲
+ * @param  ctx: 启动上下文（读写 user/reason）
+ * @retval kOk 成功；kFail 分配失败（原因已写 ctx.reason，未封存可回滚）
+ */
 app::BootResult step_alloc(app::BootCtx &ctx) noexcept
 {
     auto &bufs = *static_cast<app::BootBuffers *>(ctx.user); // user 只指向启动任务的栈上 BootBuffers。
@@ -157,7 +167,11 @@ app::BootResult step_alloc(app::BootCtx &ctx) noexcept
     return app::BootResult::kFail;
 }
 
-/** 步骤 6：把缓冲交给各 C 驱动；失败时按 K5 语义回滚已绑定部分。 */
+/**
+ * @brief  启动步骤 6：把缓冲交给各 C 驱动；失败时按 K5 语义回滚已绑定部分
+ * @param  ctx: 启动上下文（读写 user/reason）
+ * @retval kOk 成功；kFail 绑定失败
+ */
 app::BootResult step_bind(app::BootCtx &ctx) noexcept
 {
     auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
@@ -170,7 +184,11 @@ app::BootResult step_bind(app::BootCtx &ctx) noexcept
     return app::BootResult::kFail;
 }
 
-/** 步骤 7：封存分配器；失败时回滚绑定（SEALED 后无法释放块）。 */
+/**
+ * @brief  启动步骤 7：封存分配器；失败时回滚绑定（SEALED 后无法释放块）
+ * @param  ctx: 启动上下文（读 user，写 reason）
+ * @retval kOk 成功；kFail 封存失败
+ */
 app::BootResult step_seal(app::BootCtx &ctx) noexcept
 {
     auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
@@ -182,7 +200,11 @@ app::BootResult step_seal(app::BootCtx &ctx) noexcept
     return app::BootResult::kFail;
 }
 
-/** 步骤 8：安装 trace 全局 sink（编译关闭时记 kSkipped，不从表里删除）。 */
+/**
+ * @brief  启动步骤 8：安装 trace 全局 sink（编译关闭时记 kSkipped，不从表里删除）
+ * @param  ctx: 启动上下文（未用）
+ * @retval kOk 成功；kSkipped 未编译 trace；kFail sink 安装失败
+ */
 app::BootResult step_debug(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
@@ -198,7 +220,11 @@ app::BootResult step_debug(app::BootCtx &ctx) noexcept
 #endif
 }
 
-/** 步骤 9：加载 NVS/SN；必须先于 BT 初始化，执行器再次 init 时为幂等。 */
+/**
+ * @brief  启动步骤 9：加载 NVS/SN；必须先于 BT 初始化，执行器再次 init 时为幂等
+ * @param  ctx: 启动上下文（写 reason）
+ * @retval kOk 成功；kFail 存储初始化失败
+ */
 app::BootResult step_storage(app::BootCtx &ctx) noexcept
 {
     if (fw::is_ok(app::app_context().storage.init())) {
@@ -208,8 +234,12 @@ app::BootResult step_storage(app::BootCtx &ctx) noexcept
     return app::BootResult::kFail;
 }
 
-/** 步骤 10：系统模块准备（SN/蓝牙名/策略，写 system_status）；失败不可恢复，交由后续步骤暴露。 */
-app::BootResult step_system(app::BootCtx &ctx) noexcept
+/**
+ * @brief  启动步骤 10：系统模块准备（SN/蓝牙名/策略，写 system_status）
+ * @param  ctx: 启动上下文（未用）
+ * @retval kOk 总是；失败不可恢复，交由后续步骤暴露
+ */
+app::BootResult step_system(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
 {
     (void)ctx;
     app::app_context().system.prepare();
@@ -228,13 +258,17 @@ void mark_trace_launched(app::BootCtx &ctx) noexcept
 #endif
 }
 
-/** 步骤 11：链路执行器初始化、启动并等待首批模块就绪。 */
+/**
+ * @brief  启动步骤 11：链路执行器初始化、启动并等待首批模块就绪
+ * @param  ctx: 启动上下文（读写 launched/reason/stop_required）
+ * @retval kOk 成功；kFail 启动失败（需停机回滚）
+ */
 app::BootResult step_link(app::BootCtx &ctx) noexcept
 {
     // 与 K5 一致：从这里起任何失败（含 launched==0）都走 stop_boot_tasks，撤销 GNSS/SPP 启动状态。
     ctx.stop_required = true;
     mark_trace_launched(ctx);
-    auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
+    const auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
     const char *error = app::start_link(bufs.link_stack, ctx.launched);
     if (error == nullptr) {
         return app::BootResult::kOk;
@@ -243,11 +277,15 @@ app::BootResult step_link(app::BootCtx &ctx) noexcept
     return app::BootResult::kFail;
 }
 
-/** 步骤 12：IO 执行器（GNSS）；编译关闭时记 kSkipped。 */
-app::BootResult step_io(app::BootCtx &ctx) noexcept
+/**
+ * @brief  启动步骤 12：IO 执行器（GNSS）；编译关闭时记 kSkipped
+ * @param  ctx: 启动上下文（读写 launched/reason）
+ * @retval kOk 成功；kFail 启动失败；kSkipped 未编译 GNSS
+ */
+app::BootResult step_io(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
 {
 #if RTK_GNSS_ENABLED
-    auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
+    const auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
     const char *error = app::start_io(bufs.io_stack, ctx.launched);
     if (error == nullptr) {
         return app::BootResult::kOk;
@@ -260,7 +298,11 @@ app::BootResult step_io(app::BootCtx &ctx) noexcept
 #endif
 }
 
-/** 步骤 13：等待全部消费者到达启动屏障并放行；失败标记需要停机。 */
+/**
+ * @brief  启动步骤 13：等待全部消费者到达启动屏障并放行
+ * @param  ctx: 启动上下文（读写 reason/stop_required）
+ * @retval kOk 成功；kFail 屏障等待失败
+ */
 app::BootResult step_started(app::BootCtx &ctx) noexcept
 {
     app::AppContext &self = app::app_context();
@@ -300,6 +342,7 @@ constinit std::array<app::BootRecord, std::size(kBootSteps)> s_boot_records{};
 size_t s_boot_executed{};
 
 /** 降级处理：记录原因；进入任务启动阶段后停机（K5 语义），未封存时回滚绑定，否则只留 console-only。 */
+// NOLINTNEXTLINE(misc-const-correctness): 由 BootStep::on_degrade 固定
 void handle_degrade(app::BootCtx &ctx, const char *reason) noexcept
 {
     app::AppContext &self = app::app_context();
@@ -341,7 +384,7 @@ void attach_debug_log() noexcept
  */
 void print_boot_summary(std::span<const app::BootRecord> records) noexcept
 {
-    app::AppContext &self = app::app_context();
+    const app::AppContext &self = app::app_context();
     const auto system = self.data.system_status.read();
     const auto sessions = self.data.sessions.read();
     const auto link = self.data.link_status.read();

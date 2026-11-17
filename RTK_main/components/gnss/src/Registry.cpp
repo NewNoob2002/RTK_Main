@@ -16,6 +16,7 @@ namespace {
 constexpr size_t kEnabledCount = GNSS_ENABLE_UNICORE + GNSS_ENABLE_UBLOX + GNSS_ENABLE_COMNAV;
 
 // 地址表在命名空间作用域做常量初始化（CPP-009）：不放进函数内静态，避免动态初始化与 __cxa_guard_*。
+// NOLINTNEXTLINE(readability-identifier-naming): 同 DriverInstances.hpp；constinit 数组被判为 GlobalVariable
 constinit const std::array<const Receiver *, kEnabledCount> kReceivers{
 #define GNSS_DRIVER(suffix, family_, type, accessor) &detail::k##type,
 #include "gnss/DriverList.inc"

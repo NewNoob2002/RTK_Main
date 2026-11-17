@@ -1,6 +1,6 @@
 # 检查自有目标文件的堆使用白名单与全 ELF 的异常/RTTI 门禁。
 # 由构建/验收进程调用，可阻塞等待 nm；不适用于任务回调或 ISR。
-"""G7b C++ 运行时门禁：自有目标文件分级堆规则 + 全 ELF 精确白名单。
+r"""G7b C++ 运行时门禁：自有目标文件分级堆规则 + 全 ELF 精确白名单。
 
 背景：IDF nvs_flash 的 nvs_encrypted_partition.cpp 无条件编译，引用
 operator new[](size_t, const std::nothrow_t&)，链接器因此从 libstdc++ 拉入
@@ -12,7 +12,18 @@ new_opvnt.o → eh_catch.o（2 个异常符号）与 new_opv.o → new_op.o → 
 自有目标文件不得引用 __cxa_guard_*：该符号只由函数内非平凡初始化的静态变量产生（CPP-009），
 出现即说明回到了动态初始化；改用文件作用域 constinit/常量初始化。
 
+自有目标文件范围：main/ 与 components/ 下每个含 CMakeLists.txt 的目录（运行时列举，Q3 起）。
+唯一规则内例外（docs/acceptance.md G7b）——删除析构中的 operator delete：
+虚析构会让编译器生成删除析构（Itanium ABI D0，符号 _ZN...D0Ev），其中含一条 delete 路径；
+对象从不经 new 创建时该函数不会执行，因此不算真实分配。判定依据是重定位表：
+operator delete（_ZdlPv*）的每一条重定位都必须位于删除析构的代码段，否则照旧按白名单裁决。
+段名来自 -ffunction-sections（IDF 默认开启）；只有 .text 的目标文件不豁免。
+Xtensa GCC 把调用目标地址放进独立的字面量池段（.literal.<组签名>；.text.<D0Ev> 内另有
+R_XTENSA_ASM_EXPAND 重定位引用该池），而字面量池段与 .text.<...>D0Ev 同属一个 COMDAT 组；
+因此“位于删除析构” = 段名匹配 ^\.text\..*D0Ev$ 或与某个这样的段同组。_Zda*（数组删除）不适用本例外。
+
 用法：python3 -I tools/g7b_check/g7b_check.py [--build build] [--nm xtensa-esp32-elf-nm]
+      [--objdump xtensa-esp32-elf-objdump] [--readelf xtensa-esp32-elf-readelf]
       [--allowlist tools/g7b_check/heap_allowlist.txt]
 退出码：0 PASS；1 FAIL；2 工具或输入错误。
 """
@@ -34,6 +45,10 @@ RTTI_RE = re.compile(r"^typeinfo (?:name )?for ")
 HEAP_RAW_RE = re.compile(r"^(?:_Znw|_Zna|_Zdl|_Zda|malloc$|free$|calloc$|realloc$|_malloc_r$|_free_r$)")
 # 函数内静态的线程安全初始化守卫（Itanium ABI C++ ABI §3.3.2）；未反修饰名，无参数重载。
 GUARD_RE = re.compile(r"^__cxa_guard_(?:acquire|release|abort)$")
+# 删除析构例外（acceptance G7b）：只限 operator delete，不含数组删除 _Zda*。
+DELETE_OP_RE = re.compile(r"^_ZdlPv")
+# 删除析构的代码段；-ffunction-sections 下每个函数一段，段名带反修饰前的符号名。
+DTOR_TEXT_RE = re.compile(r"^\.text\..*D0Ev$")
 
 # 全 ELF 白名单：只允许以下 6 个符号存在（可以更少，不能更多）。
 ALLOWED_ELF_SYMBOLS = frozenset({
@@ -57,8 +72,13 @@ REQUIRED_EDGES = {
 }
 
 ROOT = Path(__file__).resolve().parents[2]
-OWN_COMPONENT_DIRS = ("main", "device_proto", "link_core", "rtos", "spp_server", "nvs_store",
-                      "app_fw", "stream_demux", "bt_reconnect", "cli")
+
+
+def own_component_dirs():
+    """列举自有目标文件所在目录：main/ 与 components/ 下每个含 CMakeLists.txt 的目录。"""
+    dirs = ["main"]
+    dirs += sorted(p.name for p in (ROOT / "components").iterdir() if (p / "CMakeLists.txt").is_file())
+    return dirs
 
 
 def read_heap_allowlist(path):
@@ -127,6 +147,61 @@ def is_runtime(name):
     return bool(EXCEPTIONS_RE.match(name) or RTTI_RE.match(name))
 
 
+def reloc_sections(objdump, obj):
+    """返回 {符号: [所在段名…]}；objdump -r 按“RELOCATION RECORDS FOR [段]”分段输出。"""
+    proc = subprocess.run([objdump, "-r", str(obj)], capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"{objdump} -r {obj} 失败：{proc.stderr.strip()}")
+    relocs = {}
+    section = None
+    for line in proc.stdout.splitlines():
+        header = re.match(r"^RELOCATION RECORDS FOR \[(.+)\]:$", line)
+        if header:
+            section = header.group(1)
+            continue
+        if section is None:
+            continue
+        # "偏移 类型 值"；值可能带 +0x… 加数，符号名本身不含空格。
+        parts = line.split()
+        if len(parts) >= 3 and re.fullmatch(r"[0-9a-fA-F]+", parts[0]):
+            relocs.setdefault(parts[2].split("+")[0], []).append(section)
+    return relocs
+
+
+def dtor_group_sections(readelf, obj):
+    """返回与任一 .text.*D0Ev 段同属一个 COMDAT 组的段名集合（Xtensa 字面量池段的归属依据）。"""
+    proc = subprocess.run([readelf, "-g", str(obj)], capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"{readelf} -g {obj} 失败：{proc.stderr.strip()}")
+    groups = []
+    current = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("COMDAT group section"):
+            current = []
+            groups.append(current)
+            continue
+        member = re.match(r"^\s*\[\s*\d+\]\s+(\S+)\s*$", line)
+        if current is not None and member:
+            current.append(member.group(1))
+    names = set()
+    for group in groups:
+        if any(DTOR_TEXT_RE.match(name) for name in group):
+            names.update(group)
+    return names
+
+
+def deleting_dtor_exempt(objdump, readelf, obj, symbol):
+    """判断 symbol 的每条重定位是否都位于删除析构范围内；返回删除析构函数名或 None。"""
+    sections = reloc_sections(objdump, obj).get(symbol)
+    if not sections:
+        return None
+    group = dtor_group_sections(readelf, obj)
+    if not all(DTOR_TEXT_RE.match(name) or name in group for name in sections):
+        return None
+    dtors = sorted(name[len(".text."):] for name in group if DTOR_TEXT_RE.match(name))
+    return ", ".join(dtors) if dtors else None
+
+
 def short_member(path):
     """把 map 中的长路径缩成 'libX.a(member)' 或 'file.obj'。"""
     m = re.search(r"([^/\s]+\.a\([^)]+\))$", path)
@@ -163,6 +238,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--build", default="build", help="idf.py 构建目录（默认 build）")
     ap.add_argument("--nm", default="xtensa-esp32-elf-nm", help="nm 可执行文件")
+    ap.add_argument("--objdump", default="xtensa-esp32-elf-objdump", help="objdump 可执行文件（读重定位表）")
+    ap.add_argument("--readelf", default="xtensa-esp32-elf-readelf", help="readelf 可执行文件（读 COMDAT 组）")
     ap.add_argument("--allowlist", type=Path, default=ROOT / "tools/g7b_check/heap_allowlist.txt",
                     help="堆白名单文件（条目均相对仓库根目录）")
     args = ap.parse_args()
@@ -170,18 +247,24 @@ def main():
     build = Path(args.build)
     elf, map_path = build / "rtk_main.elf", build / "rtk_main.map"
     nm = shutil.which(args.nm)
-    if nm is None or not elf.is_file() or not map_path.is_file():
-        print(f"ERROR: 需要 {args.nm}、{elf}、{map_path}（先 export.sh 并构建）", file=sys.stderr)
+    objdump = shutil.which(args.objdump)
+    readelf = shutil.which(args.readelf)
+    if nm is None or objdump is None or readelf is None or not elf.is_file() or not map_path.is_file():
+        print(f"ERROR: 需要 {args.nm}、{args.objdump}、{args.readelf}、{elf}、{map_path}"
+              "（先 export.sh 并构建）", file=sys.stderr)
         return 2
 
     failures = []
     allowed_heap_hits = []
+    exempt_delete_hits = []
     guard_refs = 0
+    own_dirs = own_component_dirs()
+    print(f"自有组件目录：{', '.join(own_dirs)}")
     try:
         allowlist = read_heap_allowlist(args.allowlist)
         sources = None
         # 1. 自有目标文件：异常/RTTI 为 0；堆符号仅按精确源文件路径放行。
-        own_objs = sorted(p for d in OWN_COMPONENT_DIRS for p in (build / "esp-idf" / d).rglob("*.obj"))
+        own_objs = sorted(p for d in own_dirs for p in (build / "esp-idf" / d).rglob("*.obj"))
         if not own_objs:
             print(f"ERROR: {build}/esp-idf 下没有自有目标文件", file=sys.stderr)
             return 2
@@ -203,6 +286,11 @@ def main():
                 failures.append(f"自有目标文件引用 __cxa_guard（函数内静态需常量初始化）："
                                 f"{obj.relative_to(build)}: {name}（源文件：{source or 'UNKNOWN'}）")
             for name in heap_hits:
+                if DELETE_OP_RE.match(name):
+                    dtor = deleting_dtor_exempt(objdump, readelf, obj, name)
+                    if dtor is not None:
+                        exempt_delete_hits.append(f"{source or 'UNKNOWN'}: {dtor}")
+                        continue
                 if source in allowlist:
                     allowed_heap_hits.append(f"{source}: {name} # {allowlist[source]}")
                 else:
@@ -210,9 +298,8 @@ def main():
                                     f"（源文件：{source or 'UNKNOWN'}，未登记白名单）")
 
         # 1b. 守卫（CPP-009）：覆盖编译数据库中映射到仓库源码的全部目标文件。
-        # 堆/异常检查仍需逐源文件白名单裁决，故沿用 OWN_COMPONENT_DIRS；守卫符号不存在
-        # 误放行问题（虚函数的删除析构只引用 operator delete，不会引用 __cxa_guard），
-        # 因此未列入 OWN_COMPONENT_DIRS 的组件（如 gnss）也不能绕过本条。
+        # 自有目录已由 main/ 与 components/* 列举（Q3），这里仍扫全部数据库映射对象，
+        # 覆盖 ESP 侧未编译、但出现在 host/测试数据库里的自有源文件。
         sources = object_sources(build) if sources is None else sources
         scanned = {obj.resolve() for obj in own_objs}
         build_abs = build.resolve()
@@ -245,6 +332,9 @@ def main():
     print(f"自有目标文件：{len(own_objs)} 个")
     print(f"堆白名单：{len(allowlist)} 个源文件，放行 {len(allowed_heap_hits)} 个堆符号")
     print(f"自有目标文件 __cxa_guard 未定义引用：{guard_refs} 个")
+    print(f"删除析构豁免的 operator delete：{len(exempt_delete_hits)} 处")
+    for hit in exempt_delete_hits:
+        print(f"  deleting-dtor exempt: {hit}")
     for hit in allowed_heap_hits:
         print(f"  allowed heap: {hit}")
     print(f"ELF 异常/RTTI 符号（白名单内）：{len(elf_hits & ALLOWED_ELF_SYMBOLS)}/{len(ALLOWED_ELF_SYMBOLS)}")
