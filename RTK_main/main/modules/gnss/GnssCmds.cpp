@@ -528,8 +528,65 @@ int cmd_gnss_out(void * /*ctx*/, int argc, char **argv) noexcept
     return submit_gnss_and_wait(cmd) ? 0 : cli::kCmdFail;
 }
 
+/**
+ * @brief 打印一次读回结论（ERR not supported / ERR busy / 文本 + lines + OK）
+ * @param rb: 已发布的读回结论
+ * @return 0: 打印成功（由分发器补上 OK）；其他: cli::kCmdFail
+ */
+int print_readback(const GnssReadback &rb) noexcept
+{
+    if (!rb.supported) {
+        return cli::fail("not supported");
+    }
+    if (rb.busy) {
+        return cli::fail("busy");
+    }
+    if (rb.len != 0U) {
+        // 文本为若干 "...\n" 行，不以 '\0' 结尾，因此按长度整块写出。
+        cli::out_write(app_context().data.gnss_readback_text.data(), rb.len);
+    }
+    cli::out_printf("lines=%u%s\n", static_cast<unsigned>(rb.lines), rb.truncated ? " truncated" : "");
+    return 0;
+}
+
+/**
+ * @brief `gnss config`：读回模块当前配置并逐行打印（ADR-0012 §2.7）
+ * @param argc: 参数个数（只允许 1）
+ * @param argv: 参数向量
+ * @return 0: 成功；其他: cli::kCmdFail（ERR 原因已打印）
+ * @note 仅 console REPL 任务，阻塞等待模块结论，最长 6 s。
+ */
+int cmd_gnss_config(void * /*ctx*/, int argc, char **argv) noexcept
+{
+    const std::span<char *const> args{(argv != nullptr) ? argv : nullptr,
+                                      ((argv != nullptr) && (argc > 0)) ? static_cast<size_t>(argc) : 0U};
+    if (args.size() > 1U) {
+        return cli::fail("usage: gnss config");
+    }
+    if (app_context().io_executor == nullptr) {
+        return cli::fail("gnss not running");
+    }
+    const uint32_t before = app_context().data.gnss_readback.read().seq;
+    fw::Command cmd{};
+    cmd.target = id(ModuleKind::kGnss);
+    cmd.verb = static_cast<uint8_t>(GnssSubVerb::kReadback);
+    fw::CommandResult res{};
+    if (!submit_raw_to(*app_context().io_executor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
+        return cli::kCmdFail;
+    }
+    // 模块在 on_command 里同步发布被拒结论，成功则等读回窗口收尾（≤ 5 s，这里给 6 s 余量）。
+    for (uint32_t round = 0U; round < kApplyPollRounds; ++round) {
+        const GnssReadback rb = app_context().data.gnss_readback.read();
+        if (rb.seq != before) {
+            return print_readback(rb);
+        }
+        vTaskDelay(pdMS_TO_TICKS(kApplyPollMs));
+    }
+    return cli::fail("timeout");
+}
+
 // clang-format off
-constexpr std::array<cli::Verb, 8U> kGnssVerbs{{
+constexpr std::array<cli::Verb, 9U> kGnssVerbs{{
     {"status", nullptr, "GNSS status, stats and pipe", &cmd_gnss_status},
     {"fix", nullptr, "latest position/quality fix", &cmd_gnss_fix},
     {"sats", nullptr, "visible satellites table", &cmd_gnss_sats},
@@ -537,6 +594,7 @@ constexpr std::array<cli::Verb, 8U> kGnssVerbs{{
     {"reset", nullptr, "power cycle and re-probe", &cmd_gnss_reset},
     {"rate", "<hz>", "set output rate (1|2|5|10|20)", &cmd_gnss_rate},
     {"out", "[show|default|<msg|all> <val>]", "set/show default receiver output", &cmd_gnss_out},
+    {"config", nullptr, "read back receiver config", &cmd_gnss_config},
     {"send", "<text>", "send raw command line to GNSS", &cmd_gnss_send},
 }};
 // clang-format on
@@ -550,7 +608,7 @@ constexpr std::array<cli::Cmd, 1U> kGnssCmds{{
     {
         .name = "gnss",
         .help = "GNSS receiver control and telemetry",
-        .hint = "[status|fix|sats|probe|reset|rate|out|send]",
+        .hint = "[status|fix|sats|probe|reset|rate|out|config|send]",
         .handler = &cmd_gnss,
         .ctx = nullptr,
     },

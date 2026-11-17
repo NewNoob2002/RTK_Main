@@ -65,6 +65,8 @@ set(_gnss_tests test_gnss_nmea test_gnss_controller test_gnss_registry test_gnss
     test_gnss_classify)
 if(RTK_GNSS_DRV_UNICORE)
     list(APPEND _gnss_tests test_gnss_unicore_receiver)
+    # $CONFIG 读回与控制器读回窗口（ADR-0012 §2.7）；u-blox 用例内部按开关裁剪。
+    list(APPEND _gnss_tests test_gnss_readback)
 endif()
 if(RTK_GNSS_DRV_UBLOX)
     list(APPEND _gnss_tests test_gnss_ublox_receiver)

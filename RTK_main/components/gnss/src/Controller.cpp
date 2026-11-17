@@ -73,6 +73,10 @@ bool reached(uint32_t now_ms, uint32_t deadline_ms_ms) noexcept
 /** 单次 poll 内允许的状态迁移次数（原实现的 guard 上限）。 */
 constexpr uint8_t kPollGuardRounds = 16;
 
+// 读回窗口（ADR-0012 §2.7）：行间静默超过 1 s 或总时长超过 5 s 即收尾，避免永远停在 kReadback。
+constexpr uint32_t kReadbackIdleMs = 1000U;
+constexpr uint32_t kReadbackTotalMs = 5000U;
+
 } // namespace
 
 /** 状态机内部实现（friend struct，见 Controller.hpp）：只通过 `Controller &self` 访问私有状态。 */
@@ -233,6 +237,7 @@ struct ControllerImpl {
     static Round on_configuring(Controller &self, uint32_t now_ms, Action &out) noexcept;
     static Round on_output(Controller &self, uint32_t now_ms, Action &out) noexcept;
     static Round on_running(Controller &self, uint32_t now_ms, Action &out) noexcept;
+    static Round on_readback(Controller &self, uint32_t now_ms, Action &out) noexcept;
     static Round on_failed(Controller &self, uint32_t now_ms, Action &out) noexcept;
 
     static Round probe_start(Controller &self, uint32_t now_ms, Action &out) noexcept;
@@ -267,6 +272,8 @@ struct ControllerImpl {
             return on_output(self, now_ms, out);
         case State::kRunning:
             return on_running(self, now_ms, out);
+        case State::kReadback:
+            return on_readback(self, now_ms, out);
         case State::kFailed:
             return on_failed(self, now_ms, out);
         default:
@@ -576,6 +583,39 @@ ControllerImpl::Round ControllerImpl::on_running(Controller &self, uint32_t now_
     return Round::kDone;
 }
 
+/**
+ * @brief 读回阶段：先下发 CONFIG，再按“行间静默 1 s / 总时长 5 s”收尾。
+ *
+ * 静默截止时间不存成员（Controller 布局冻结），直接由 last_frame_ms_ 推得；读回期间只有 $CONFIG 行会
+ * 刷新它（见 Controller::on_frame），所以模块持续输出的 NMEA 不会把窗口无限延长。
+ * @param self: 控制器。
+ * @param now_ms: 当前时间。
+ * @param out: 输出动作（kDone 时有效）。
+ * @retval kDone: 命令刚发出，或窗口还没到。
+ * @retval kAgain: 读回结束，已回到 kRunning。
+ */
+ControllerImpl::Round ControllerImpl::on_readback(Controller &self, uint32_t now_ms, Action &out) noexcept
+{
+    if (self.phase_ == 0) {
+        self.phase_ = 1;
+        self.last_frame_ms_ = now_ms;
+        out = write(self.output_cmd_.view());
+        return Round::kDone;
+    }
+    // reached() 用的是 int32 差值，now/last_frame_ms_ 回绕时仍然单调，无需另存截止时间字段。
+    const bool idle_done = reached(now_ms, self.last_frame_ms_ + kReadbackIdleMs);
+    const bool total_done = reached(now_ms, self.deadline_ms_);
+    if (!idle_done && !total_done) {
+        return Round::kDone;
+    }
+    ++self.stats_.readback_seq;
+    self.state_ = State::kRunning;
+    self.phase_ = 0;
+    // 回 kRunning 后重新起算，避免刚读完就立刻触发静默重探测。
+    self.last_frame_ms_ = now_ms;
+    return Round::kAgain;
+}
+
 ControllerImpl::Round ControllerImpl::on_failed(Controller &self, uint32_t now_ms, Action &out) noexcept
 {
     static_cast<void>(out);
@@ -702,14 +742,29 @@ bool Controller::request_output(const OutputPlan &plan, uint32_t now_ms) noexcep
 }
 
 /**
- * @brief  T0 桩：P3c 实现前一律拒绝读回请求
- * @param  now_ms: 当前时间（桩内未用）
- * @retval false
+ * @brief 读回模块当前配置（ADR-0012 §2.7）。
+ *
+ * 只在 kRunning 且驱动支持读回时成立：命令写进 output_cmd_（kReadback 只能从 kRunning 进入，与 kOutput
+ * 阶段不会重叠，故复用同一缓冲），随后 poll() 负责下发、on_frame() 负责计数。
+ * @param now_ms: 当前时间，用于起算总时长。
+ * @retval true: 已进入 kReadback。
+ * @retval false: 状态不对或驱动不支持，状态未改变。
  */
 bool Controller::request_readback(uint32_t now_ms) noexcept
 {
-    static_cast<void>(now_ms);
-    return false; // P3c 实现
+    if ((state_ != State::kRunning) || (detected_.receiver == nullptr)) {
+        return false;
+    }
+    if (!detected_.receiver->build_readback(output_cmd_)) {
+        return false; // 驱动不支持读回（u-blox/ComNav）：不进 kReadback，也不动 stats。
+    }
+    state_ = State::kReadback;
+    phase_ = 0;
+    waiting_reply_ = false;
+    stats_.readback_lines = 0U;
+    last_frame_ms_ = now_ms;
+    deadline_ms_ = now_ms + kReadbackTotalMs;
+    return true;
 }
 
 Action Controller::poll(uint32_t now_ms) noexcept
@@ -732,6 +787,15 @@ Action Controller::poll(uint32_t now_ms) noexcept
  */
 void Controller::on_frame(const demux::Decoder &dec, std::span<const uint8_t> frame, uint32_t now_ms) noexcept
 {
+    if (state_ == State::kReadback) {
+        // 读回窗口只认 $CONFIG 行：模块照常输出的 NMEA 仍算“在工作”，但不得延长读回窗口。
+        std::array<char, 8U> scratch{}; // 只判命中，正文由 main 侧另取，故截断不影响返回值
+        if ((detected_.receiver != nullptr) && (detected_.receiver->match_readback(dec, frame, scratch) > 0U)) {
+            ++stats_.readback_lines;
+            last_frame_ms_ = now_ms;
+        }
+        return;
+    }
     last_frame_ms_ = now_ms; // 任意协议帧都算“模块还在说话”
     if ((state_ == State::kProbing) && (phase_ == 1) && (probe_receiver_ != nullptr)) {
         ProbeResult result{};

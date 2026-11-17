@@ -139,6 +139,30 @@ private:
                        bool last) noexcept;
     void poll_controller(uint32_t now_ms) noexcept;
     /**
+     * @brief  读回期间把一帧转成一行文本追加到 gnss_readback_text（ADR-0012 §2.7）
+     * @param  decoder: 该帧的解码器
+     * @param  frame: 整帧字节
+     * @note   仅 kIo 调用；命中即计数，容量不足时丢弃该行并置 truncated。
+     */
+    void append_readback_line(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept;
+    /**
+     * @brief  发起一次配置读回，并把被拒原因就地发布
+     * @param  now_ms: 当前时间
+     * @param  result: 写入命令结果（kOk / kBusy / kNotSupported）
+     * @note   仅 kIo 调用；成功时清空上一轮文本与计数。
+     */
+    void start_readback(uint32_t now_ms, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  发布一次读回结论（seq 严格递增，保证控制台一定能看到变化）
+     * @param  lines: 命中行数
+     * @param  len: 文本有效字节
+     * @param  supported: 驱动是否支持读回
+     * @param  truncated: 是否有行因容量不足被丢弃
+     * @param  busy: 是否因状态不对被拒
+     * @note   仅 kIo 调用；文本本体已在 gnss_readback_text 中。
+     */
+    void publish_readback(uint16_t lines, uint16_t len, bool supported, bool truncated, bool busy) noexcept;
+    /**
      * @brief  把 RTCM 管道中的待发字节写到 GNSS UART
      * @retval true 管道仍有积压
      * @retval false 已排空或写失败（失败时丢弃积压并记 W 级日志）
@@ -168,6 +192,14 @@ private:
     std::optional<::gnss::NmeaParser> parser_{};
     std::optional<::gnss::Controller> controller_{};
     ::gnss::ControllerStats prev_ctrl_stats_{};
+    /** 读回状态（ADR-0012 §2.7）：文本在 gnss_readback_text，这里只留长度/计数与 seq 账本。 */
+    uint16_t readback_len_ = 0U;
+    uint16_t readback_lines_ = 0U;
+    bool readback_truncated_ = false;
+    /** 当前这轮读回开始时的 stats 值：与 stats 不等即表示刚收尾。 */
+    uint32_t readback_base_seq_ = 0U;
+    /** 已发布的 seq：失败路径会“预支”到 stats+1，发布时取 max 以免与控制台记录相撞。 */
+    uint32_t readback_pub_seq_ = 0U;
     /** 上一次已上报的未知字节计数，用于按增量输出 `GNSS N unknown bytes dropped`（§2.11）。 */
     uint32_t prev_unknown_bytes_ = 0U;
     ::gnss::Hint hint_{};

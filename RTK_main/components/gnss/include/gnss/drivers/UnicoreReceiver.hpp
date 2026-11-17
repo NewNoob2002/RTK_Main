@@ -19,9 +19,10 @@
 namespace gnss::unicore {
 
 /**
- * Unicore 应答解码器：$ | "command," 或 "CONFIG," | 可打印 ASCII（不含 $ *）| * 两位十六进制 XOR | \r\n。
- * "$command" 由 nmea 的第 2 字节 [A-Z0-9] 规则让出（'c' 小写）；"$CONFIG," 的地址段 6 字符，nmea 按 5 字符
- * 地址规则拒收（ADR-0012 §2.7），故两者可同时挂载。
+ * Unicore 应答解码器：$ | "command," 或 "CONFIG," | 可打印 ASCII（不含 $ *）| * 两位十六进制 XOR（含 '$'）| \r\n。
+ * "$command" 由 nmea 的第 2 字节 [A-Z0-9] 规则让出（'c' 小写）；"$CONFIG," 能过 nmea 的字符规则，靠的是 Unicore
+ * 校验和含 '$'——nmea 校验失败后 demux 重扫，本解码器接手（ADR-0012 §2.7 现场证据）。若某固件对 $CONFIG 用标准
+ * NMEA 校验和，这些行会被 nmea 认领、读回 0 行（P3c 报告 §4.1，HIL 确认）。
  */
 inline constexpr std::size_t kResponseMaxFrame = 256;
 [[nodiscard]] bool response_first_byte(uint8_t byte) noexcept;
@@ -63,6 +64,11 @@ public:
     [[nodiscard]] bool build_probe(CmdBuf &out) const noexcept override;
     [[nodiscard]] bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                    ProbeResult &out) const noexcept override;
+    /** 读回命令 "CONFIG"（ADR-0012 §2.7）：UM980 回一组 $CONFIG,<port>,<config>*hh 行。 */
+    [[nodiscard]] bool build_readback(CmdBuf &out) const noexcept override;
+    /** 只认 UnicoreResp 交付的 $CONFIG 行，取 "$CONFIG," 与 "*" 之间的正文（超长截断）。 */
+    size_t match_readback(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                          std::span<char> out) const noexcept override;
     /** 按 rover_script() 的表生成第 index 个启用步骤。 */
     [[nodiscard]] bool rover_step(size_t index, Model model, const RoverConfig &cfg,
                                   ConfigStep &out) const noexcept override;

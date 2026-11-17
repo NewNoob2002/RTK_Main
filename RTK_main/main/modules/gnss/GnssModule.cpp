@@ -38,6 +38,8 @@ constexpr uint32_t kBaudMin = 1200U;
 constexpr uint32_t kBaudMax = 2000000U;
 /** 输出/频率变更等待控制器落地的上限（毫秒）。 */
 constexpr uint32_t kApplyTimeoutMs = 5000U;
+/** 读回行缓冲：UnicoreResp 单帧上限 256 B，正文必小于它（ADR-0012 §2.7）。 */
+constexpr size_t kReadbackLineBytes = 256U;
 
 void trace_gnss_sub(GnssSubTrace ev, uint32_t v0, uint32_t v1) noexcept
 {
@@ -415,6 +417,12 @@ bool GnssModule::poll(uint32_t now_ms) noexcept
     return had_full_rx || (allow_tx && tx_progress && has_more_tx);
 }
 
+/**
+ * @brief 处理一条应用层指令（kProbe/kReset/kSetRate/kSend/kSetOut/kReadback）
+ * @param cmd: 指令（verb 为 GnssVerb 或 GnssSubVerb）
+ * @param result: 输出，执行结果；不支持的子命令返回 kNotSupported
+ * @note 在 IO 执行器任务里调用，不阻塞；读回子命令只发起请求，结果由 AppData 发布
+ */
 void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (!initialized_) {
@@ -541,6 +549,10 @@ void GnssModule::on_command(const fw::Command &cmd, fw::CommandResult &result) n
             result.status = fw::Result::kOk;
             return;
         }
+        if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kReadback) {
+            start_readback(now, result);
+            return;
+        }
         result.status = fw::Result::kNotSupported;
         return;
     }
@@ -590,6 +602,10 @@ void GnssModule::handle_frame(const demux::Decoder &decoder, std::span<const uin
     fw::tlog_hex(fw::TraceCat::kGnss, frame);
 
     const uint32_t now = rtos::now_ms();
+    // 读回窗口内先把这一行取走（只在 kIo 任务里写交接缓冲），再交给状态机计数与计时。
+    if (controller().state() == ::gnss::State::kReadback) {
+        append_readback_line(decoder, frame);
+    }
     controller().on_frame(decoder, frame, now);
     if (&decoder == &demux::nmea::kDecoder) {
         const auto res = parser().feed(frame, now);
@@ -661,8 +677,93 @@ void GnssModule::handle_reject(const demux::Decoder &decoder, std::span<const ui
 }
 
 /**
- * @brief  推进 GNSS 控制器状态机并执行其动作（发命令、改波特率、上电）
- * @param  now_ms: 当前时间（ms）
+ * @brief 读回期间把一帧转成一行文本追加到 gnss_readback_text（ADR-0012 §2.7）。
+ *
+ * 交接缓冲是唯一的跳任务载体：kIo 在读回进行中逐行追加，控制台看到 gnss_readback.seq 变化后按 len 读取，
+ * 读写不重叠（见 AppData.hpp 该成员的注释），因此不需要锁。
+ * @param decoder: 该帧的解码器。
+ * @param frame: 整帧字节。
+ * @note 仅 kIo 调用，非阻塞，不分配。
+ */
+void GnssModule::append_readback_line(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept
+{
+    std::array<char, kReadbackLineBytes> line{};
+    // 留一格给 '\0'：下面按 %s 打 D 级日志，正文截断到 kReadbackLineBytes-1 才不会越界读。
+    const size_t len =
+        controller().receiver().match_readback(decoder, frame, std::span<char>(line.data(), line.size() - 1U));
+    if (len == 0U) {
+        return;
+    }
+    ++readback_lines_; // 命中即计数：即使整行因容量不足被丢弃也算一行（见 GnssReadback::lines）
+    FW_LOGD(fw::TraceCat::kGnss, "<cfg> RX %s", line.data());
+    auto &text = ctx().data.gnss_readback_text;
+    const size_t used = readback_len_;
+    if ((used + len + 1U) > text.size()) {
+        readback_truncated_ = true;
+        return;
+    }
+    for (size_t i = 0U; i < len; ++i) {
+        text[used + i] = line[i];
+    }
+    text[used + len] = '\n';
+    // 上面的容量检查已保证 used + len + 1 <= text.size()（1536），窄化到 uint16_t 安全。
+    readback_len_ = static_cast<uint16_t>(used + len + 1U);
+}
+
+/**
+ * @brief 发起一次配置读回，并把被拒原因就地发布（ADR-0012 §2.7）。
+ * @param now_ms: 当前时间。
+ * @param result: 写入命令结果（kOk / kBusy / kNotSupported）。
+ * @note 仅 kIo 调用；被拒时立即发布结论，控制台不必等到超时。
+ */
+void GnssModule::start_readback(uint32_t now_ms, fw::CommandResult &result) noexcept
+{
+    ::gnss::CmdBuf probe{};
+    // 先单独问一句驱动能力：request_readback() 把“不支持”与“状态不对”合为一个 false。
+    const bool supported = controller().receiver().build_readback(probe);
+    if (controller().request_readback(now_ms)) {
+        readback_len_ = 0U;
+        readback_lines_ = 0U;
+        readback_truncated_ = false;
+        readback_base_seq_ = controller().stats().readback_seq;
+        result.status = fw::Result::kOk;
+        return;
+    }
+    publish_readback(0U, 0U, supported, false, supported);
+    result.status = supported ? fw::Result::kBusy : fw::Result::kNotSupported;
+}
+
+/**
+ * @brief 发布一次读回结论，seq 严格递增（ADR-0012 §2.7）。
+ *
+ * 失败路径按卡要求“预支” stats+1，成功路径用 stats 原值，两者可能撞车；取 max(上一发布+1) 保证控制台
+ * “等 seq 变化”的判定不会漏掉任何一次结论。
+ * @param lines: 命中行数。
+ * @param len: 文本有效字节。
+ * @param supported: 驱动是否支持读回。
+ * @param truncated: 是否有行因容量不足被丢弃。
+ * @param busy: 是否因状态不对被拒。
+ * @note 仅 kIo 调用。
+ */
+void GnssModule::publish_readback(uint16_t lines, uint16_t len, bool supported, bool truncated, bool busy) noexcept
+{
+    const uint32_t stats_seq = controller().stats().readback_seq;
+    const uint32_t seq = stats_seq > readback_pub_seq_ ? stats_seq : (readback_pub_seq_ + 1U);
+    readback_pub_seq_ = seq;
+    GnssReadback out{};
+    out.seq = seq;
+    out.lines = lines;
+    out.len = len;
+    out.supported = supported;
+    out.truncated = truncated;
+    out.busy = busy;
+    ctx().data.gnss_readback.write(out);
+}
+
+/**
+ * @brief 跑一轮控制器状态机并把动作落到 UART，收尾时检测读回窗口结束
+ * @param now_ms: 单调时间（毫秒）
+ * @note 在模块任务里调用，最多 kMaxActionsPerPoll 次动作，不阻塞
  */
 void GnssModule::poll_controller(uint32_t now_ms) noexcept
 {
@@ -739,6 +840,13 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
     }
 
     update_controller_status();
+    // 读回收尾（ADR-0012 §2.7）：控制器已回 kRunning 并推进 readback_seq，这里发布一次结论。
+    if (controller().stats().readback_seq != readback_base_seq_) {
+        readback_base_seq_ = controller().stats().readback_seq;
+        FW_LOGI(fw::TraceCat::kGnss, "<cfg> Readback done, %u lines%s", static_cast<unsigned>(readback_lines_),
+                readback_truncated_ ? " (truncated)" : "");
+        publish_readback(readback_lines_, readback_len_, true, readback_truncated_, false);
+    }
 }
 
 /**

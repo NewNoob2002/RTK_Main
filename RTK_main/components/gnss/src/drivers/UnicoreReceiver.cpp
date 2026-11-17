@@ -26,6 +26,8 @@ constexpr uint8_t kStar = static_cast<uint8_t>(ascii::kStar);
 constexpr uint8_t kCr = static_cast<uint8_t>(ascii::kCr);
 constexpr uint8_t kLf = static_cast<uint8_t>(ascii::kLf);
 constexpr std::string_view kCommandPrefix = "$command,";
+// 读回行（ADR-0012 §2.7）："$CONFIG,<port>,<config>*hh\r\n"，与 $command 应答同为 NMEA 式帧，仅前缀不同。
+constexpr std::string_view kConfigPrefix = "$CONFIG,";
 constexpr std::string_view kResponseTag = ",response: ";
 constexpr std::string_view kVersionTag = "#VERSIONA,";
 /** 前缀之后的最小应答字节数（",OK" 一类），不足则继续等待。 */
@@ -62,6 +64,7 @@ struct ResponseVerdict {
     std::size_t offset = 0;
     uint8_t received = 0;
     uint8_t computed = 0;
+    uint8_t alt = 0; // 第二个期望字节（两种前缀都还成立时才有，0 表示没有）
 };
 
 /**
@@ -80,6 +83,21 @@ ResponseVerdict reject(ResponseReason reason, std::size_t offset = 0, uint8_t re
     verdict.offset = offset;
     verdict.received = received;
     verdict.computed = computed;
+    return verdict;
+}
+
+/**
+ * @brief 构造“前缀字节不符”的拒绝结论（两种前缀都可能时给出两个期望字节）。
+ * @param offset: 出问题的字节位置。
+ * @param received: 实际读到的字节。
+ * @param want_first: 第一个仍可能的期望字节（0 表示该候选已失效）。
+ * @param want_second: 第二个仍可能的期望字节（0 表示没有）。
+ * @retval verdict: step = kReject，reason = kPrefix。
+ */
+ResponseVerdict reject_prefix(std::size_t offset, uint8_t received, uint8_t want_first, uint8_t want_second) noexcept
+{
+    ResponseVerdict verdict = reject(ResponseReason::kPrefix, offset, received, want_first);
+    verdict.alt = want_second;
     return verdict;
 }
 
@@ -108,7 +126,10 @@ ResponseVerdict complete() noexcept
 }
 
 /**
- * @brief 检查 "$command," 前缀与最小长度。
+ * @brief 检查两种可接受前缀（"$command," / "$CONFIG,"）与最小长度。
+ *
+ * 逐字节判定：只要仍有前缀成立就继续收取；两个候选同时失配才拒绝。两者从第 2 字节起分叉（'c' / 'C'），
+ * 因此绝大多数拒收只报一个期望字节，第 2 字节失配时报两个。
  * @param frame: 已收到的字节。
  * @retval std::nullopt: 前缀完整且长度够，可继续看正文。
  * @retval verdict: 需要继续收取或直接拒绝。
@@ -119,18 +140,32 @@ std::optional<ResponseVerdict> check_prefix(std::span<const uint8_t> frame) noex
     if (size == 0U) {
         return reject(ResponseReason::kEmpty);
     }
-    const size_t prefix_len = kCommandPrefix.size();
-    const size_t compared = size < prefix_len ? size : prefix_len;
+    const size_t cmd_len = kCommandPrefix.size();
+    const size_t cfg_len = kConfigPrefix.size();
+    const size_t longest = cmd_len > cfg_len ? cmd_len : cfg_len;
+    const size_t compared = size < longest ? size : longest;
+    bool cmd_alive = true;
+    bool cfg_alive = true;
     for (size_t i = 0; i < compared; ++i) {
-        if (frame[i] != static_cast<uint8_t>(kCommandPrefix[i])) {
-            return reject(ResponseReason::kPrefix, i, frame[i]);
+        const uint8_t byte = frame[i];
+        // 前缀已走完的候选不再受本字节约束（视为仍然成立）。
+        const bool cmd_next = cmd_alive && ((i >= cmd_len) || (byte == static_cast<uint8_t>(kCommandPrefix[i])));
+        const bool cfg_next = cfg_alive && ((i >= cfg_len) || (byte == static_cast<uint8_t>(kConfigPrefix[i])));
+        if (!cmd_next && !cfg_next) {
+            // 只有失配前仍成立的候选才参与“expected”文本，避免报出已排除的字节。
+            const uint8_t want_cmd = (cmd_alive && (i < cmd_len)) ? static_cast<uint8_t>(kCommandPrefix[i]) : 0U;
+            const uint8_t want_cfg = (cfg_alive && (i < cfg_len)) ? static_cast<uint8_t>(kConfigPrefix[i]) : 0U;
+            return reject_prefix(i, byte, want_cmd, want_cfg);
         }
+        cmd_alive = cmd_next;
+        cfg_alive = cfg_next;
     }
-    if (size < prefix_len) {
-        return need_more(prefix_len - size);
+    // 最小帧长按较长前缀（$command）计算：对 $CONFIG 只多要 1 字节，仍远小于真实读回行。
+    if (size < cmd_len) {
+        return need_more(cmd_len - size);
     }
-    if (size < (prefix_len + kMinReplyBytes)) {
-        return need_more((prefix_len + kMinReplyBytes) - size);
+    if (size < (cmd_len + kMinReplyBytes)) {
+        return need_more((cmd_len + kMinReplyBytes) - size);
     }
     return std::nullopt;
 }
@@ -259,7 +294,11 @@ void explain_verdict(const ResponseVerdict &verdict, demux::text_writer::TextWri
     case ResponseReason::kPrefix:
         text.literal("byte ").decimal(verdict.offset).literal(" is ");
         text.byte_value(verdict.received).literal(", expected ");
-        text.byte_value(static_cast<uint8_t>(kCommandPrefix[verdict.offset]));
+        text.byte_value(verdict.computed);
+        if (verdict.alt != 0U) {
+            text.literal(" or ");
+            text.byte_value(verdict.alt);
+        }
         break;
     case ResponseReason::kTail:
         text.literal("missing \"*hh\\r\\n\" tail before byte ").decimal(verdict.offset).literal(" (");
@@ -665,6 +704,33 @@ const Receiver &UnicoreReceiver::for_model(Model model) const noexcept
 bool UnicoreReceiver::build_probe(CmdBuf &out) const noexcept
 {
     return cmd_version_query(out);
+}
+
+bool UnicoreReceiver::build_readback(CmdBuf &out) const noexcept
+{
+    out.clear();
+    return out.append("CONFIG\r\n");
+}
+
+size_t UnicoreReceiver::match_readback(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                       std::span<char> out) const noexcept
+{
+    // 只认应答解码器交付的 $CONFIG 行：$command,CONFIG,response: OK*.. 是命令应答，不算配置行。
+    if ((&dec != &unicore::kResponseDecoder) || (frame.size() <= (kConfigPrefix.size() + kStarFromEnd)) ||
+        !ascii::starts_with(frame, kConfigPrefix)) {
+        return 0U;
+    }
+    const size_t begin = kConfigPrefix.size();
+    const size_t end = frame.size() - kStarFromEnd; // '*' 的位置：帧尾固定 "*hh\r\n"
+    if ((frame[end] != kStar) || (end <= begin)) {
+        return 0U;
+    }
+    const size_t body = end - begin;
+    const size_t copy = body < out.size() ? body : out.size();
+    for (size_t i = 0; i < copy; ++i) {
+        out[i] = static_cast<char>(frame[begin + i]); // 帧体已由解码器限定为可打印 ASCII
+    }
+    return copy;
 }
 
 bool UnicoreReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
