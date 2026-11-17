@@ -677,7 +677,8 @@ namespace gnss {
 
 namespace {
 constinit const UnicoreReceiver s_unicoreReceiver{};
-}
+constinit const Um982Receiver s_um982Receiver{};
+} // namespace
 
 Family UnicoreReceiver::family() const noexcept
 {
@@ -699,6 +700,12 @@ uint32_t UnicoreReceiver::caps(Model model) const noexcept
     return unicore::model_caps(model);
 }
 
+const Receiver &UnicoreReceiver::for_model(Model model) const noexcept
+{
+    // 双天线型号有单独驱动（多 kHeading 能力），其余型号就是家族驱动本身（ADR-0012 §2.8）。
+    return (model == Model::kUm982) ? um982_receiver() : *this;
+}
+
 bool UnicoreReceiver::build_probe(CmdBuf &out) const noexcept
 {
     return unicore::cmd::version_query(out);
@@ -713,6 +720,18 @@ bool UnicoreReceiver::match_probe(const demux::Decoder &dec, std::span<const uin
 bool UnicoreReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
 {
     return unicore::script_step(index, model, cfg, out);
+}
+
+std::span<const UnicoreReceiver::ScriptStep> UnicoreReceiver::rover_script() const noexcept
+{
+    // 与 unicore::kRoverScript 同表：rover_step 目前经 unicore::script_step 走同一份步骤函数，
+    // 两处必须保持一致，避免型号子类覆盖脚本后行为分叉（ADR-0012 §2.8）。
+    static constexpr std::array<ScriptStep, 3> kScript{{
+        {&unicore::step_unlog_all, &unicore::always},
+        {&unicore::step_mode_rover, &unicore::always},
+        {&unicore::step_port_baud, &unicore::port_baud_enabled},
+    }};
+    return kScript;
 }
 
 Ack UnicoreReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
@@ -779,6 +798,27 @@ fw::Status UnicoreReceiver::build_output(OutputMsg msg, uint32_t period_ms, Mode
         return fw::Status::kInvalidArg;
     }
     return fw::Status::kOk;
+}
+
+std::string_view Um982Receiver::name() const noexcept
+{
+    return "unicore-um982";
+}
+
+uint32_t Um982Receiver::caps(Model model) const noexcept
+{
+    // 家族能力 + HEADINGA 输出（双天线）；其余能力与 UM980/UM981 相同。
+    return UnicoreReceiver::caps(model) | cap::kHeading;
+}
+
+const Receiver &Um982Receiver::for_model(Model) const noexcept
+{
+    return *this;
+}
+
+const Receiver &um982_receiver() noexcept
+{
+    return s_um982Receiver;
 }
 
 const Receiver &unicore_receiver() noexcept

@@ -41,6 +41,16 @@ namespace gnss {
 class UnicoreReceiver : public Receiver {
 public:
     constexpr UnicoreReceiver() noexcept = default;
+    // 本类既作型号家族基类（Um982Receiver）又被直接实例化为 constinit 只读单例：基类 Receiver 的
+    // protected 非虚析构会挡住命名空间作用域的对象定义，故改为 public virtual——
+    // 既满足 -Wnon-virtual-dtor，也能保证经 Receiver* 释放时不漏掉派生部分。
+    // 驱动对象仍只在静态存储以 constinit 存活，从不 new/delete。
+    virtual ~UnicoreReceiver() = default;
+
+    UnicoreReceiver(const UnicoreReceiver &) = delete;
+    UnicoreReceiver &operator=(const UnicoreReceiver &) = delete;
+    UnicoreReceiver(UnicoreReceiver &&) = delete;
+    UnicoreReceiver &operator=(UnicoreReceiver &&) = delete;
 
     [[nodiscard]] Family family() const noexcept override;
     [[nodiscard]] std::string_view name() const noexcept override;

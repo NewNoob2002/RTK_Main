@@ -36,6 +36,12 @@ uint32_t Receiver::output_mask(Model) const noexcept
     return bit(OutputMsg::kGga) | bit(OutputMsg::kRmc) | bit(OutputMsg::kGsa) | bit(OutputMsg::kGsv);
 }
 
+const Receiver &Receiver::for_model(Model) const noexcept
+{
+    // 没有型号子类的驱动：型号就是自身（ADR-0012 §2.8）。
+    return *this;
+}
+
 fw::Status Receiver::build_output(OutputMsg, uint32_t, Model, const OutputPlan &, CmdBuf &) const noexcept
 {
     return fw::Status::kNotSupported; // P3b 在驱动里实现
