@@ -18,12 +18,14 @@ static void test_encode_status_layout(void)
         .flags = (DEV_PROTO_ALARM_FLAG_PHONE_ONLINE | DEV_PROTO_ALARM_FLAG_TEST_OVERRIDE),
         .uptime_ms = 0xA1B2C3D4U,
     };
-    const uint8_t expect[DEV_PROTO_ALARM_STATUS_LEN] = {0x34, 0x12, 0x01, 0x03, 0xFF, 0x57, 0x03, 0x00,
-                                                        0xD4, 0xC3, 0xB2, 0xA1, 0x00, 0x00, 0x00, 0x00};
+    const uint8_t expect[DEV_PROTO_ALARM_STATUS_LEN] = {0x34, 0x12, 0x01, 0x03, 0xFF, 0x57,
+                                                        0x03, 0x00, 0xD4, 0xC3, 0xB2, 0xA1,
+                                                        0x00, 0x00, 0x00, 0x00};
     uint8_t out[DEV_PROTO_ALARM_STATUS_LEN + 4U];
 
     memset(out, 0xEE, sizeof(out));
-    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_ALARM_STATUS_LEN, dev_proto_alarm_encode_status(&st, out, sizeof(out)));
+    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_ALARM_STATUS_LEN,
+                           dev_proto_alarm_encode_status(&st, out, sizeof(out)));
     TEST_ASSERT_EQUAL_HEX8_ARRAY(expect, out, DEV_PROTO_ALARM_STATUS_LEN);
     TEST_ASSERT_EQUAL_HEX8(0xEE, out[DEV_PROTO_ALARM_STATUS_LEN]); /* 不越界写 */
 }
@@ -35,7 +37,8 @@ static void test_encode_status_bad_args(void)
 
     memset(&st, 0, sizeof(st));
     memset(out, 0xEE, sizeof(out));
-    TEST_ASSERT_EQUAL_UINT(0U, dev_proto_alarm_encode_status(&st, out, DEV_PROTO_ALARM_STATUS_LEN - 1U));
+    TEST_ASSERT_EQUAL_UINT(
+        0U, dev_proto_alarm_encode_status(&st, out, DEV_PROTO_ALARM_STATUS_LEN - 1U));
     TEST_ASSERT_EQUAL_HEX8(0xEE, out[0]); /* 不足时不写入 */
     TEST_ASSERT_EQUAL_UINT(0U, dev_proto_alarm_encode_status(NULL, out, sizeof(out)));
     TEST_ASSERT_EQUAL_UINT(0U, dev_proto_alarm_encode_status(&st, NULL, sizeof(out)));
@@ -55,7 +58,8 @@ static void test_status_roundtrip(void)
     dev_proto_alarm_status_t back;
     uint8_t buf[DEV_PROTO_ALARM_STATUS_LEN];
 
-    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_ALARM_STATUS_LEN, dev_proto_alarm_encode_status(&st, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_ALARM_STATUS_LEN,
+                           dev_proto_alarm_encode_status(&st, buf, sizeof(buf)));
     TEST_ASSERT_TRUE(dev_proto_alarm_decode_status(buf, sizeof(buf), &back));
     TEST_ASSERT_EQUAL_HEX16(0xBEEFU, back.seq);
     TEST_ASSERT_EQUAL_HEX8(DEV_PROTO_ALARM_STATE_NO_FIX, back.state);
@@ -86,11 +90,13 @@ static void test_decode_heartbeat(void)
 static void test_encode_heartbeat(void)
 {
     const dev_proto_alarm_heartbeat_t hb = {.seq = 0x0005U, .battery_pct = 80U, .local_state = 0U};
-    const uint8_t expect[DEV_PROTO_ALARM_HEARTBEAT_LEN] = {0x05, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00};
+    const uint8_t expect[DEV_PROTO_ALARM_HEARTBEAT_LEN] = {0x05, 0x00, 0x50, 0x00,
+                                                           0x00, 0x00, 0x00, 0x00};
     uint8_t out[DEV_PROTO_ALARM_HEARTBEAT_LEN];
 
     memset(out, 0xEE, sizeof(out));
-    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_ALARM_HEARTBEAT_LEN, dev_proto_alarm_encode_heartbeat(&hb, out, sizeof(out)));
+    TEST_ASSERT_EQUAL_UINT(DEV_PROTO_ALARM_HEARTBEAT_LEN,
+                           dev_proto_alarm_encode_heartbeat(&hb, out, sizeof(out)));
     TEST_ASSERT_EQUAL_HEX8_ARRAY(expect, out, sizeof(out));
     memset(out, 0xEE, sizeof(out));
     TEST_ASSERT_EQUAL_UINT(0U, dev_proto_alarm_encode_heartbeat(&hb, out, sizeof(out) - 1U));

@@ -91,7 +91,8 @@ Result log_install(LogSinkFn fn, void *ctx) noexcept
     }
     s_log_ctx = ctx;
     LogSinkFn expected = nullptr;
-    if (!s_log_sink.compare_exchange_strong(expected, fn, std::memory_order_release, std::memory_order_relaxed)) {
+    if (!s_log_sink.compare_exchange_strong(expected, fn, std::memory_order_release,
+                                            std::memory_order_relaxed)) {
         return Result::kInvalidState;
     }
     return Result::kOk;
@@ -129,7 +130,8 @@ bool log_hex_on(TraceCat cat) noexcept
         return false;
     }
     // 两级开关（ADR-0009 §2.12）：转储与同一调用点的 D 级句子配对，需该类别日志级别为 D，十六进制掩码再收一层。
-    return ((s_hex_mask.load(std::memory_order_relaxed) & trace_bit(cat)) != 0U) && log_enabled(LogLevel::kDebug, cat);
+    return ((s_hex_mask.load(std::memory_order_relaxed) & trace_bit(cat)) != 0U) &&
+           log_enabled(LogLevel::kDebug, cat);
 }
 
 void tlog(TraceCat cat, const char *fmt, ...) noexcept
@@ -230,7 +232,8 @@ bool LogRing::peek_time(uint32_t &t_ms) const noexcept
         return false;
     }
     LogHeader hdr{};
-    copy_out(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())), tail_, header_bytes(hdr));
+    copy_out(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())), tail_,
+             header_bytes(hdr));
     t_ms = hdr.t_ms;
     return true;
 }
@@ -244,12 +247,14 @@ bool LogRing::pop(LogHeader &hdr, std::span<uint8_t> out, size_t &copied) noexce
     if (used_ == 0U) {
         return false;
     }
-    copy_out(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())), tail_, header_bytes(hdr));
+    copy_out(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())), tail_,
+             header_bytes(hdr));
     const size_t total = kLogHeaderBytes + static_cast<size_t>(hdr.len);
     copied = std::min(static_cast<size_t>(hdr.len), out.size());
     if ((copied > 0U) && (out.data() != nullptr)) {
         copy_out(std::as_bytes(std::span<const uint8_t>(buf_.data(), buf_.size())),
-                 (tail_ + kLogHeaderBytes) % buf_.size(), std::as_writable_bytes(out).first(copied));
+                 (tail_ + kLogHeaderBytes) % buf_.size(),
+                 std::as_writable_bytes(out).first(copied));
     }
     tail_ = (tail_ + total) % buf_.size();
     used_ -= total;

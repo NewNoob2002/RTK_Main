@@ -39,7 +39,8 @@ struct BootBuffers {
  * 打开 BootArena 并按固定顺序申请全部块；任一失败清空 out、置 boot_alloc:<owner> 原因并 abort 释放。
  * ops 为 nullptr 时用默认内部 8-bit 分配器；host 测试注入替身。返回 false 时不得再绑定。
  */
-[[nodiscard]] bool allocate_boot_buffers(BootBuffers &out, const rtos::BootAllocatorOps *ops = nullptr) noexcept;
+[[nodiscard]] bool allocate_boot_buffers(BootBuffers &out,
+                                         const rtos::BootAllocatorOps *ops = nullptr) noexcept;
 
 /** 把已申请的块绑定到各消费者；成功返回 nullptr，失败返回 bind:debug/bind:spp/bind:gnss。 */
 [[nodiscard]] const char *bind_boot_buffers(const BootBuffers &bufs) noexcept;

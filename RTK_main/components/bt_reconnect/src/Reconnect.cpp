@@ -33,7 +33,8 @@ uint32_t apply_jitter(uint32_t base_ms, uint8_t jitter_pct, uint32_t &rng) noexc
     const uint32_t pct_half = static_cast<uint32_t>(jitter_pct); // uint8_t 扩宽至 uint32_t 无损
     const uint32_t span = (pct_half * 2U) + 1U;
     const uint32_t pct = (kPercentBase - pct_half) + (next_xorshift32(rng) % span);
-    const uint64_t scaled = (static_cast<uint64_t>(base_ms) * static_cast<uint64_t>(pct)) / kPercentBase;
+    const uint64_t scaled =
+        (static_cast<uint64_t>(base_ms) * static_cast<uint64_t>(pct)) / kPercentBase;
     if (scaled == 0ULL) {
         return 1U;
     }
@@ -44,8 +45,8 @@ uint32_t apply_jitter(uint32_t base_ms, uint8_t jitter_pct, uint32_t &rng) noexc
     return static_cast<uint32_t>(scaled);
 }
 
-uint32_t compute_backoff_delay(const Config &cfg, uint32_t now_ms, uint32_t window_start_ms, uint32_t &backoff_ms,
-                               uint32_t &rng) noexcept
+uint32_t compute_backoff_delay(const Config &cfg, uint32_t now_ms, uint32_t window_start_ms,
+                               uint32_t &backoff_ms, uint32_t &rng) noexcept
 {
     uint32_t base_delay = 0U;
     const uint32_t window_elapsed = now_ms - window_start_ms;
@@ -72,7 +73,8 @@ uint32_t compute_backoff_delay(const Config &cfg, uint32_t now_ms, uint32_t wind
 bool Reconnector::configure(const Config &cfg, uint32_t seed) noexcept
 {
     if ((cfg.fast_window_ms == 0U) || (cfg.fast_retry_ms == 0U) || (cfg.backoff_min_ms == 0U) ||
-        (cfg.backoff_max_ms == 0U) || (cfg.stable_online_ms == 0U) || (cfg.attempt_timeout_ms == 0U)) {
+        (cfg.backoff_max_ms == 0U) || (cfg.stable_online_ms == 0U) ||
+        (cfg.attempt_timeout_ms == 0U)) {
         return false;
     }
     if ((cfg.jitter_pct > kMaxJitterPct) || (cfg.sdp_after_failures == 0U) ||
@@ -120,7 +122,8 @@ bool Reconnector::start(uint32_t now_ms, Action &out) noexcept
     if (!has_target_) {
         return false;
     }
-    if ((state_ == State::kDiscovering) || (state_ == State::kConnecting) || (state_ == State::kConnected)) {
+    if ((state_ == State::kDiscovering) || (state_ == State::kConnecting) ||
+        (state_ == State::kConnected)) {
         return false;
     }
 
@@ -173,7 +176,8 @@ Action Reconnector::poll(uint32_t now_ms) noexcept
         const uint32_t elapsed = now_ms - state_since_ms_;
         if (elapsed >= cfg_.attempt_timeout_ms) {
             ++stats_.failures;
-            const uint32_t delay = compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
+            const uint32_t delay =
+                compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
             state_ = State::kBackoff;
             state_since_ms_ = now_ms;
             next_attempt_ms_ = now_ms + delay;
@@ -194,7 +198,8 @@ Action Reconnector::poll(uint32_t now_ms) noexcept
                     connect_failures_ = 0U;
                 }
             }
-            const uint32_t delay = compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
+            const uint32_t delay =
+                compute_backoff_delay(cfg_, now_ms, window_start_ms_, backoff_ms_, rng_);
             state_ = State::kBackoff;
             state_since_ms_ = now_ms;
             next_attempt_ms_ = now_ms + delay;

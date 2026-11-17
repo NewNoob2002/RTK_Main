@@ -60,7 +60,8 @@ public:
      *    - 否则拒绝。
      * 新会话的 since/last_rx 都置为 now_ms。
      */
-    [[nodiscard]] Role on_open(SessionHandle handle, const BtAddr &addr, uint32_t now_ms, Actions &act) noexcept;
+    [[nodiscard]] Role on_open(SessionHandle handle, const BtAddr &addr, uint32_t now_ms,
+                               Actions &act) noexcept;
 
     /** 连接关闭（任何一方发起）。未知句柄忽略。 */
     void on_close(SessionHandle handle) noexcept;
@@ -74,8 +75,8 @@ public:
      * - 其他帧来自 PENDING：断开（不允许第二部手机）。
      * - 断开时：句柄放入 act，会话立即移除，返回 kNone。未知句柄返回 kNone 且 act 为空。
      */
-    [[nodiscard]] Role on_frame(SessionHandle handle, uint8_t sender, uint16_t msg_id, uint32_t now_ms,
-                                Actions &act) noexcept;
+    [[nodiscard]] Role on_frame(SessionHandle handle, uint8_t sender, uint16_t msg_id,
+                                uint32_t now_ms, Actions &act) noexcept;
 
     /**
      * 周期调用（建议 100 ms）。ALARM 会话 now-last_rx > kAlarmRxTimeoutMs 断开；

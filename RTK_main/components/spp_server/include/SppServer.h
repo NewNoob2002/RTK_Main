@@ -109,8 +109,8 @@ esp_err_t spp_server_reply_reserve(uint32_t handle, spp_server_tx_token_t *token
 esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t len);
 /** 两段视图拼成一条记录提交（源环跨尾时免中转缓冲）；alen+blen ≤ 预留容量，两段均须非空。
  * 语义同 tx_commit：成功即整条发布；失败时预留仍在，由调用者 cancel。 */
-esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen, const uint8_t *b,
-                                size_t blen);
+esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen,
+                                const uint8_t *b, size_t blen);
 void spp_server_tx_cancel(const spp_server_tx_token_t *token);
 /** PHONE 绑定由角色所有者维护；仅一个句柄可拥有唯一 stream；解绑等待当前 API/copy 退出。
  * reserve 按整条句长接纳，最大4096；不足时零接纳，调用者不能消费源句。
@@ -173,12 +173,12 @@ typedef enum {
     SPP_SERVER_TRACE_RX_DROP,       /* RX 缓冲满丢弃：a = 本次丢弃字节，b = 缓冲已用字节 */
     SPP_SERVER_TRACE_AUTH,          /* GAP 认证完成：a = 状态码 */
     SPP_SERVER_TRACE_EVT_DROP,      /* 事件队列满丢事件：a = 事件类型 */
-    SPP_SERVER_TRACE_STAGE,         /* SPP 回调阶段结果：a = spp_server_trace_stage_t，b = esp_spp_status_t（0 成功） */
-    SPP_SERVER_TRACE_CTRL_FULL,     /* 控制表满，GAP 应答/拒绝断开命令丢失：a = spp_server_trace_ctrl_t */
-    SPP_SERVER_TRACE_CTRL_ERR,      /* 控制命令/断开提交失败：a = spp_server_trace_ctrl_t，b = esp_err_t */
-    SPP_SERVER_TRACE_REJECT,        /* 无安全槽拒绝连接：a = 1 已发断开 / 0 跳过（同句柄已被新会话接纳） */
-    SPP_SERVER_TRACE_WRITE_STRAY,   /* 不属于在途请求的写完成事件（被忽略）：a = 写长度，b = esp_spp_status_t */
-    SPP_SERVER_TRACE_WRITE_ANON,    /* 匿名写失败：a = status，b = 受影响会话位图，不猜 owner */
+    SPP_SERVER_TRACE_STAGE, /* SPP 回调阶段结果：a = spp_server_trace_stage_t，b = esp_spp_status_t（0 成功） */
+    SPP_SERVER_TRACE_CTRL_FULL, /* 控制表满，GAP 应答/拒绝断开命令丢失：a = spp_server_trace_ctrl_t */
+    SPP_SERVER_TRACE_CTRL_ERR, /* 控制命令/断开提交失败：a = spp_server_trace_ctrl_t，b = esp_err_t */
+    SPP_SERVER_TRACE_REJECT, /* 无安全槽拒绝连接：a = 1 已发断开 / 0 跳过（同句柄已被新会话接纳） */
+    SPP_SERVER_TRACE_WRITE_STRAY, /* 不属于在途请求的写完成事件（被忽略）：a = 写长度，b = esp_spp_status_t */
+    SPP_SERVER_TRACE_WRITE_ANON, /* 匿名写失败：a = status，b = 受影响会话位图，不猜 owner */
 } spp_server_trace_code_t;
 
 /** SPP_SERVER_TRACE_STAGE 的 a。 */
@@ -201,7 +201,8 @@ typedef enum {
  * 追踪钩子：在 BT 回调任务、worker 任务或调用 write 的任务中被同步调用，必须非阻塞且不做 I/O。
  * handle 为会话句柄（无关时为 0）。
  */
-typedef void (*spp_server_trace_fn)(spp_server_trace_code_t code, uint32_t handle, uint32_t a, uint32_t b);
+typedef void (*spp_server_trace_fn)(spp_server_trace_code_t code, uint32_t handle, uint32_t a,
+                                    uint32_t b);
 
 /** 安装/清除（NULL）钩子；任意时刻可调用（原子指针写）。未安装时驱动不产生任何追踪开销以外的工作。 */
 void spp_server_set_trace_hook(spp_server_trace_fn fn);

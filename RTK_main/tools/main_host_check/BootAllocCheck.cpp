@@ -37,8 +37,9 @@ uint32_t s_stack_bytes = 0U;
 
 extern "C" {
 // NOLINTNEXTLINE(readability-identifier-naming, bugprone-reserved-identifier): GNU ld --wrap 要求的精确符号。
-TaskHandle_t __wrap_xTaskCreateStaticPinnedToCore(TaskFunction_t, const char *, uint32_t bytes, void *, UBaseType_t,
-                                                  StackType_t *, StaticTask_t *tcb, BaseType_t)
+TaskHandle_t __wrap_xTaskCreateStaticPinnedToCore(TaskFunction_t, const char *, uint32_t bytes,
+                                                  void *, UBaseType_t, StackType_t *,
+                                                  StaticTask_t *tcb, BaseType_t)
 {
     s_stack_bytes = bytes;
     return s_task_create_fail ? nullptr : tcb;
@@ -81,11 +82,13 @@ fw::Result StorageModule::save_keys(std::span<const fw::StoreKey> /*keys*/) noex
 }
 } // namespace app
 
-void check(bool passed, const char *expression, std::source_location location = std::source_location::current())
+void check(bool passed, const char *expression,
+           std::source_location location = std::source_location::current())
 {
     if (!passed) {
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): host 断言的固定格式错误报告。
-        std::fprintf(stderr, "CHECK FAILED (%s:%u): %s\n", location.file_name(), location.line(), expression);
+        std::fprintf(stderr, "CHECK FAILED (%s:%u): %s\n", location.file_name(), location.line(),
+                     expression);
         std::abort();
     }
 }
@@ -182,7 +185,8 @@ void test_arena_lifecycle_and_validation() noexcept
     CHECK(arena2.allocate("align6", 64U, 6U, ptr) == fw::Status::kInvalidArg);
     CHECK(arena2.allocate("round_overflow", SIZE_MAX, 16U, ptr) == fw::Status::kInvalidArg);
     std::span<uint64_t> too_big{};
-    CHECK(arena2.alloc_array<uint64_t>("count_overflow", SIZE_MAX, too_big) == fw::Status::kInvalidArg);
+    CHECK(arena2.alloc_array<uint64_t>("count_overflow", SIZE_MAX, too_big) ==
+          fw::Status::kInvalidArg);
     CHECK(too_big.empty());
     CHECK(arena2.alloc_array<uint64_t>("under_aligned", 1U, too_big, alignof(uint64_t) / 2U) ==
           fw::Status::kInvalidArg);
@@ -296,8 +300,9 @@ void test_production_allocation_plan() noexcept
     CHECK(has_trace == bool(FW_TRACE_ENABLED));
     CHECK(requested == app::s_app.boot_arena.total_bytes());
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): host 计划结果使用固定格式报告。
-    std::printf("boot plan: owners=%zu requested=%zu actual=%zu gnss=%d trace=%d\n", owners, requested,
-                app::s_app.boot_arena.total_actual_bytes(), RTK_GNSS_ENABLED, FW_TRACE_ENABLED);
+    std::printf("boot plan: owners=%zu requested=%zu actual=%zu gnss=%d trace=%d\n", owners,
+                requested, app::s_app.boot_arena.total_actual_bytes(), RTK_GNSS_ENABLED,
+                FW_TRACE_ENABLED);
     app::rollback_boot_bindings(buffers, "test:probe");
     CHECK(probe.live_allocs == 0U);
     reset_test_arena();
@@ -472,7 +477,8 @@ void test_boot_task_and_stream_buffer() noexcept
     CHECK(task.start(stack, nullptr, 1U, 0, &dummy_task, nullptr) == fw::Status::kInvalidArg);
     CHECK(task.start(stack, "boot_t", 1U, 0, nullptr, nullptr) == fw::Status::kInvalidArg);
     CHECK(task.start(stack, "boot_t", 1U, -1, &dummy_task, nullptr) == fw::Status::kInvalidArg);
-    CHECK(task.start(stack, "boot_t", configMAX_PRIORITIES, 0, &dummy_task, nullptr) == fw::Status::kInvalidArg);
+    CHECK(task.start(stack, "boot_t", configMAX_PRIORITIES, 0, &dummy_task, nullptr) ==
+          fw::Status::kInvalidArg);
     s_task_create_fail = true;
     CHECK(task.start(stack, "boot_t", 1U, 0, &dummy_task, nullptr) == fw::Status::kNoSpace);
     CHECK(!task.running());
@@ -548,7 +554,8 @@ void test_consumer_storage_bindings() noexcept
     CHECK(dbg.init() == fw::Result::kInvalidState);
     static std::array<fw::TraceEvent, app::DebugModule::kRingEvents> trace_buf{};
     static std::array<uint8_t, app::DebugModule::kLogRingBytes> log_buf{};
-    static std::array<StackType_t, app::DebugModule::kTaskStackBytes / sizeof(StackType_t)> task_stack{};
+    static std::array<StackType_t, app::DebugModule::kTaskStackBytes / sizeof(StackType_t)>
+        task_stack{};
     CHECK(dbg.bind_storage({{}, log_buf, task_stack}) == fw::Status::kInvalidArg);
     CHECK(dbg.bind_storage({trace_buf, {}, task_stack}) == fw::Status::kInvalidArg);
     CHECK(dbg.bind_storage({trace_buf, log_buf, {}}) == fw::Status::kInvalidArg);

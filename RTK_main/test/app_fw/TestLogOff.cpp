@@ -64,7 +64,8 @@ void test_off_logs_still_work(void)
     TEST_ASSERT_EQUAL_UINT32(1U, s_calls);
     TEST_ASSERT_EQUAL_STRING("x=1", s_last.c_str());
     fw::log_set_cat_level(fw::TraceCat::kGnss, fw::LogLevel::kDebug);
-    TEST_ASSERT_EQUAL(fw::LogLevel::kInfo, fw::log_cat_level(fw::TraceCat::kGnss)); // 运行期也被上限截住
+    TEST_ASSERT_EQUAL(fw::LogLevel::kInfo,
+                      fw::log_cat_level(fw::TraceCat::kGnss)); // 运行期也被上限截住
 }
 
 int main(void)

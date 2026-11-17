@@ -67,7 +67,8 @@ fw::Status CommandRouter::init(std::span<const RouteTable> tables) noexcept
     return status;
 }
 
-DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, uint32_t now_ms,
+                                     Reply &reply) noexcept
 {
     reply.clear();
     if (!inited_) {
@@ -83,13 +84,15 @@ DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, u
         }
         if ((entry.roles & mask) == 0) {
             // 无路由：路由器不知道会话句柄，session 记 0。
-            trace_proto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msg_id), static_cast<uint32_t>(role));
+            trace_proto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msg_id),
+                        static_cast<uint32_t>(role));
             return DispatchResult::kDenied;
         }
         return entry.handler(entry.self, frame, now_ms, reply);
     }
     // 未登记 ID（含 5.4 保留 ID）不回复，先于角色检查。
-    trace_proto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msg_id), static_cast<uint32_t>(role));
+    trace_proto(ProtoTrace::kNoRoute, 0, static_cast<uint32_t>(frame.msg_id),
+                static_cast<uint32_t>(role));
     return DispatchResult::kNoReply;
 }
 

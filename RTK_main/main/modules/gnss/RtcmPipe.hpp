@@ -76,7 +76,8 @@ public:
                 ++stats_.dropped_frames;
                 stats_.dropped_bytes += static_cast<uint32_t>(frame.size());
             }
-            trace_gnss(GnssTrace::kPipeDrop, static_cast<uint32_t>(frame.size()), static_cast<uint32_t>(avail));
+            trace_gnss(GnssTrace::kPipeDrop, static_cast<uint32_t>(frame.size()),
+                       static_cast<uint32_t>(avail));
             return false;
         }
         const size_t sent = buf_.send(frame, 0U);
@@ -86,7 +87,8 @@ public:
                 ++stats_.dropped_frames;
                 stats_.dropped_bytes += static_cast<uint32_t>(frame.size());
             }
-            trace_gnss(GnssTrace::kPipeDrop, static_cast<uint32_t>(frame.size()), static_cast<uint32_t>(avail));
+            trace_gnss(GnssTrace::kPipeDrop, static_cast<uint32_t>(frame.size()),
+                       static_cast<uint32_t>(avail));
             return false;
         }
         const CriticalGuard guard(mux_);

@@ -26,7 +26,8 @@ struct GnssQueryResult {
     size_t len = 0;        // ok==true 时的有效负载字节数（1..256）
 };
 
-using GnssQueryFn = GnssQueryResult (*)(void *ctx, uint16_t msg_id, std::span<uint8_t> dst) noexcept;
+using GnssQueryFn = GnssQueryResult (*)(void *ctx, uint16_t msg_id,
+                                        std::span<uint8_t> dst) noexcept;
 using GnssMaskChangedFn = void (*)(void *ctx, uint32_t mask) noexcept;
 
 /**

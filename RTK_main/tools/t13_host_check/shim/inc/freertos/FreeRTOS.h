@@ -85,29 +85,35 @@ void fake_crit_exit(void);
 #define taskENTER_CRITICAL(mux) ((void)(mux), fake_crit_enter())
 #define taskEXIT_CRITICAL(mux)  ((void)(mux), fake_crit_exit())
 
-TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *name, uint32_t stack_depth, void *arg,
-                                           UBaseType_t priority, StackType_t *stack_buf, StaticTask_t *tcb,
+TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *name,
+                                           uint32_t stack_depth, void *arg, UBaseType_t priority,
+                                           StackType_t *stack_buf, StaticTask_t *tcb,
                                            BaseType_t core);
 void xTaskNotifyGive(TaskHandle_t task);
 uint32_t ulTaskNotifyTake(BaseType_t clear_count_on_exit, TickType_t ticks_to_wait);
 TickType_t xTaskGetTickCount(void);
 
-QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item_size, uint8_t *storage, StaticQueue_t *queue);
+QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item_size, uint8_t *storage,
+                                 StaticQueue_t *queue);
 BaseType_t xQueueSend(QueueHandle_t queue, const void *item, TickType_t ticks_to_wait);
 BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t ticks_to_wait);
 void vQueueDelete(QueueHandle_t queue);
 
 EventGroupHandle_t xEventGroupCreateStatic(StaticEventGroup_t *group);
-EventBits_t xEventGroupWaitBits(EventGroupHandle_t group, EventBits_t bits, BaseType_t clear_on_exit,
-                                BaseType_t wait_for_all, TickType_t ticks_to_wait);
+EventBits_t xEventGroupWaitBits(EventGroupHandle_t group, EventBits_t bits,
+                                BaseType_t clear_on_exit, BaseType_t wait_for_all,
+                                TickType_t ticks_to_wait);
 EventBits_t xEventGroupSetBits(EventGroupHandle_t group, EventBits_t bits);
 EventBits_t xEventGroupClearBits(EventGroupHandle_t group, EventBits_t bits);
 void vEventGroupDelete(EventGroupHandle_t group);
 
-StreamBufferHandle_t xStreamBufferCreateStatic(size_t buffer_size, size_t trigger_level, uint8_t *storage,
+StreamBufferHandle_t xStreamBufferCreateStatic(size_t buffer_size, size_t trigger_level,
+                                               uint8_t *storage,
                                                StaticStreamBuffer_t *stream_buffer);
-size_t xStreamBufferSend(StreamBufferHandle_t stream_buffer, const void *data, size_t len, TickType_t ticks_to_wait);
-size_t xStreamBufferReceive(StreamBufferHandle_t stream_buffer, void *data, size_t len, TickType_t ticks_to_wait);
+size_t xStreamBufferSend(StreamBufferHandle_t stream_buffer, const void *data, size_t len,
+                         TickType_t ticks_to_wait);
+size_t xStreamBufferReceive(StreamBufferHandle_t stream_buffer, void *data, size_t len,
+                            TickType_t ticks_to_wait);
 size_t xStreamBufferBytesAvailable(StreamBufferHandle_t stream_buffer);
 size_t xStreamBufferSpacesAvailable(StreamBufferHandle_t stream_buffer);
 BaseType_t xStreamBufferReset(StreamBufferHandle_t stream_buffer);

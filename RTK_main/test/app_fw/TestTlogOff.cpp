@@ -28,7 +28,9 @@ uint32_t test_clock() noexcept
 
 void trace_sink(void * /*ctx*/, const fw::TraceEvent & /*ev*/) noexcept {}
 
-void log_sink(void * /*ctx*/, const fw::LogHeader & /*hdr*/, std::span<const uint8_t> /*payload*/) noexcept {}
+void log_sink(void * /*ctx*/, const fw::LogHeader & /*hdr*/,
+              std::span<const uint8_t> /*payload*/) noexcept
+{}
 
 void test_tlog_is_noop_when_disabled()
 {
@@ -57,8 +59,9 @@ void test_log_install_still_validated_when_disabled()
     // 未安装 trace 时没有时钟源。
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
                             static_cast<uint8_t>(fw::log_install(&log_sink, nullptr)));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(fw::trace_install(&trace_sink, nullptr, &test_clock)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(fw::Result::kOk),
+        static_cast<uint8_t>(fw::trace_install(&trace_sink, nullptr, &test_clock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(fw::log_install(&log_sink, nullptr)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),

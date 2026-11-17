@@ -121,7 +121,8 @@ uint8_t xor8(std::span<const uint8_t> data) noexcept
 }
 
 /** 在 frame[last-window .. last] 内反向寻找最近的 '*'；窗口定长，因此 O(1)。 */
-bool find_star_reverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window, std::size_t &ofs) noexcept
+bool find_star_reverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window,
+                       std::size_t &ofs) noexcept
 {
     ofs = 0U;
     for (std::size_t back = 0U; (back <= window) && (back <= last); ++back) {
@@ -248,10 +249,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 {
     switch (verdict.reason) {
     case Reason::kSync:
-        text.literal("sync byte 1 is ").hex(static_cast<uint32_t>(verdict.received), 2U).literal(", expected '$'");
+        text.literal("sync byte 1 is ")
+            .hex(static_cast<uint32_t>(verdict.received), 2U)
+            .literal(", expected '$'");
         break;
     case Reason::kSecond:
-        text.literal("byte 1 is ").byte_value(verdict.received).literal(", not an upper-case sender id");
+        text.literal("byte 1 is ")
+            .byte_value(verdict.received)
+            .literal(", not an upper-case sender id");
         break;
     case Reason::kShort:
         text.literal("shorter than ").decimal(kMinLen).literal(" bytes");
@@ -264,7 +269,10 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
             .literal(", expected '*'");
         break;
     case Reason::kBody:
-        text.literal("illegal byte ").byte_value(verdict.received).literal(" at offset ").decimal(verdict.offset);
+        text.literal("illegal byte ")
+            .byte_value(verdict.received)
+            .literal(" at offset ")
+            .decimal(verdict.offset);
         break;
     case Reason::kNoCrByte:
         text.literal("byte ")

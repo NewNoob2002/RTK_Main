@@ -32,7 +32,8 @@ template <size_t D>
 [[nodiscard]] inline rtos::ExecutorStorageView view_of(ExecutorControlStorage<D> &st,
                                                        std::span<StackType_t> stack) noexcept
 {
-    return rtos::ExecutorStorageView{stack, &st.tcb, st.cmd_area, &st.cmd_queue, st.result_area, &st.result_queue, D};
+    return rtos::ExecutorStorageView{
+        stack, &st.tcb, st.cmd_area, &st.cmd_queue, st.result_area, &st.result_queue, D};
 }
 
 // 底层用 uint32_t：Xtensa LX6 没有 8 位原子 RMW，std::atomic<uint8_t> 会退回 libatomic 的锁实现（CPP-008）；

@@ -62,12 +62,14 @@ constexpr auto kPartialOps = fw::make_ops<PollOnlyModule>();
 constexpr auto kEmptyOps = fw::make_ops<EmptyModule>();
 consteval bool has_all_callbacks(const fw::ModuleOps &ops) noexcept
 {
-    return ops.init != nullptr && ops.start != nullptr && ops.poll != nullptr && ops.on_command != nullptr;
+    return ops.init != nullptr && ops.start != nullptr && ops.poll != nullptr &&
+           ops.on_command != nullptr;
 }
 static_assert(has_all_callbacks(kFullOps));
-static_assert(kPartialOps.init == nullptr && kPartialOps.start == nullptr && kPartialOps.on_command == nullptr);
-static_assert(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr && kEmptyOps.poll == nullptr &&
-              kEmptyOps.on_command == nullptr);
+static_assert(kPartialOps.init == nullptr && kPartialOps.start == nullptr &&
+              kPartialOps.on_command == nullptr);
+static_assert(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr &&
+              kEmptyOps.poll == nullptr && kEmptyOps.on_command == nullptr);
 
 void test_make_ops_full_forwarding()
 {
@@ -94,13 +96,14 @@ void test_make_ops_partial_forwarding()
     PollOnlyModule module{};
     TEST_ASSERT_FALSE(kPartialOps.poll(&module, kPollNowMs));
     TEST_ASSERT_EQUAL_UINT32(kPollNowMs, module.now_ms);
-    TEST_ASSERT_TRUE(kPartialOps.init == nullptr && kPartialOps.start == nullptr && kPartialOps.on_command == nullptr);
+    TEST_ASSERT_TRUE(kPartialOps.init == nullptr && kPartialOps.start == nullptr &&
+                     kPartialOps.on_command == nullptr);
 }
 
 void test_make_ops_empty_table()
 {
-    TEST_ASSERT_TRUE(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr && kEmptyOps.poll == nullptr &&
-                     kEmptyOps.on_command == nullptr);
+    TEST_ASSERT_TRUE(kEmptyOps.init == nullptr && kEmptyOps.start == nullptr &&
+                     kEmptyOps.poll == nullptr && kEmptyOps.on_command == nullptr);
 }
 
 // --------------------------------------------------------------------------
@@ -128,20 +131,26 @@ constexpr int32_t kBaudMax = 1000000;
 constexpr uint8_t kUnknownResultRaw = 250U;
 constexpr uint8_t kUnknownStoreTypeRaw = 99U;
 
-consteval fw::StoreKey make_key(std::string_view ns, std::string_view key, fw::StoreType type, uint16_t max_size,
-                                uint8_t flags = 0U, int32_t min = 0, int32_t max = 0) noexcept
+consteval fw::StoreKey make_key(std::string_view ns, std::string_view key, fw::StoreType type,
+                                uint16_t max_size, uint8_t flags = 0U, int32_t min = 0,
+                                int32_t max = 0) noexcept
 {
-    return fw::StoreKey{ns, key, type, max_size, flags, min, max, fw::kAllProducts, "", fw::StoreBinding{}};
+    return fw::StoreKey{
+        ns, key, type, max_size, flags, min, max, fw::kAllProducts, "", fw::StoreBinding{}};
 }
 
-constexpr fw::StoreKey kValidU8 = make_key("mod_a", "flag", fw::StoreType::kU8, 1U, fw::store_flag::kConsole, 0, 1);
-constexpr fw::StoreKey kValidU16 = make_key("mod_a", "port", fw::StoreType::kU16, 2U, 0U, 1, kU16MaxVal);
-constexpr fw::StoreKey kValidU32 = make_key("mod_a", "baud", fw::StoreType::kU32, 4U, 0U, 0, kBaudMax);
-constexpr fw::StoreKey kValidI32 = make_key("mod_a", "offs", fw::StoreType::kI32, 4U, 0U, kSignedMin, kSignedMax);
-constexpr fw::StoreKey kValidStr =
-    make_key("mod_b", "sn_key_12345678", fw::StoreType::kStr, kTestStrSize, fw::store_flag::kReadOnly);
-constexpr fw::StoreKey kValidBlob =
-    make_key("123456789012345", "blob", fw::StoreType::kBlob, kTestBlobSize, fw::store_flag::kExport);
+constexpr fw::StoreKey kValidU8 =
+    make_key("mod_a", "flag", fw::StoreType::kU8, 1U, fw::store_flag::kConsole, 0, 1);
+constexpr fw::StoreKey kValidU16 =
+    make_key("mod_a", "port", fw::StoreType::kU16, 2U, 0U, 1, kU16MaxVal);
+constexpr fw::StoreKey kValidU32 =
+    make_key("mod_a", "baud", fw::StoreType::kU32, 4U, 0U, 0, kBaudMax);
+constexpr fw::StoreKey kValidI32 =
+    make_key("mod_a", "offs", fw::StoreType::kI32, 4U, 0U, kSignedMin, kSignedMax);
+constexpr fw::StoreKey kValidStr = make_key("mod_b", "sn_key_12345678", fw::StoreType::kStr,
+                                            kTestStrSize, fw::store_flag::kReadOnly);
+constexpr fw::StoreKey kValidBlob = make_key("123456789012345", "blob", fw::StoreType::kBlob,
+                                             kTestBlobSize, fw::store_flag::kExport);
 
 static_assert(fw::valid(kValidU8));
 static_assert(fw::valid(kValidU16));
@@ -162,7 +171,8 @@ constexpr fw::StoreKey kBadI32Size = make_key("ns", "k", fw::StoreType::kI32, 8U
 constexpr fw::StoreKey kBadRange = make_key("ns", "k", fw::StoreType::kI32, 4U, 0U, 10, -10);
 constexpr fw::StoreKey kBadStrZero = make_key("ns", "k", fw::StoreType::kStr, 0U);
 constexpr fw::StoreKey kBadBlobZero = make_key("ns", "k", fw::StoreType::kBlob, 0U);
-constexpr fw::StoreKey kBadType = make_key("ns", "k", static_cast<fw::StoreType>(kUnknownStoreTypeRaw), 4U);
+constexpr fw::StoreKey kBadType =
+    make_key("ns", "k", static_cast<fw::StoreType>(kUnknownStoreTypeRaw), 4U);
 
 static_assert(!fw::valid(kBadEmptyNs));
 static_assert(!fw::valid(kBadEmptyKey));
@@ -388,13 +398,15 @@ void test_store_key_runtime_and_binding()
 
     std::array<uint8_t, sizeof(uint32_t)> buf{};
     size_t len = 0U;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(key_with_bind.binding.save(key_with_bind.binding.obj, buf, len)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(fw::Result::kOk),
+        static_cast<uint8_t>(key_with_bind.binding.save(key_with_bind.binding.obj, buf, len)));
     TEST_ASSERT_EQUAL_size_t(sizeof(uint32_t), len);
 
     stored_val = 0U;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(key_with_bind.binding.load(key_with_bind.binding.obj, buf)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(fw::Result::kOk),
+        static_cast<uint8_t>(key_with_bind.binding.load(key_with_bind.binding.obj, buf)));
     TEST_ASSERT_EQUAL_UINT32(kInitialCounter, stored_val);
 }
 

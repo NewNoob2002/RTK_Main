@@ -20,12 +20,12 @@ template <typename T> constexpr auto kModuleOps = fw::make_ops<T>();
 constinit const fw::Module kModules[]{
 // X-macro 生成异构对象的注册项，constexpr 函数无法替代清单展开。
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define MODULE_DEF(type, member, name, kind, executor, period)                                                         \
-    {name,                                                                                                             \
-     app::id(app::ModuleKind::kind),                                                                                   \
-     app::id(app::ExecKind::executor),                                                                                 \
-     period,                                                                                                           \
-     &app::s_app.member,                                                                                               \
+#define MODULE_DEF(type, member, name, kind, executor, period)                                     \
+    {name,                                                                                         \
+     app::id(app::ModuleKind::kind),                                                               \
+     app::id(app::ExecKind::executor),                                                             \
+     period,                                                                                       \
+     &app::s_app.member,                                                                           \
      &kModuleOps<app::type>},
 #include "module_list.inc"
 #undef MODULE_DEF
@@ -35,7 +35,8 @@ constinit rtos::Executor s_link_executor{};
 #if RTK_GNSS_ENABLED
 constinit rtos::Executor s_io_executor{};
 #if defined(CONFIG_ESP_CONSOLE_UART_NUM)
-static_assert(CONFIG_RTK_GNSS_UART_NUM != CONFIG_ESP_CONSOLE_UART_NUM, "GNSS UART must not conflict with console UART");
+static_assert(CONFIG_RTK_GNSS_UART_NUM != CONFIG_ESP_CONSOLE_UART_NUM,
+              "GNSS UART must not conflict with console UART");
 #endif
 // IO 执行器绑 core0（prio 9，低于 link 的 prio 10），不抢占蓝牙链路实时性；阻塞于 GNSS UART 读。
 constexpr rtos::ExecutorConfig kIoConfig{
@@ -115,8 +116,8 @@ bool wait_started(uint32_t bits) noexcept
 
 const char *start_link(std::span<StackType_t> link_stack, uint32_t &launched) noexcept
 {
-    const auto initialized =
-        s_app.link_executor->init(kLinkConfig, kModules, app::view_of(s_app.link_storage, link_stack));
+    const auto initialized = s_app.link_executor->init(
+        kLinkConfig, kModules, app::view_of(s_app.link_storage, link_stack));
     if (!fw::is_ok(initialized) || !modules_ready(*s_app.link_executor, kLinkConfig.id) ||
         !s_app.data.system_status.read().bt_ready) {
         return boot_reason::kLinkInit;
@@ -134,7 +135,8 @@ const char *start_link(std::span<StackType_t> link_stack, uint32_t &launched) no
 #if RTK_GNSS_ENABLED
 const char *start_io(std::span<StackType_t> io_stack, uint32_t &launched) noexcept
 {
-    const auto initialized = s_app.io_executor->init(kIoConfig, kModules, app::view_of(s_app.io_storage, io_stack));
+    const auto initialized =
+        s_app.io_executor->init(kIoConfig, kModules, app::view_of(s_app.io_storage, io_stack));
     if (!fw::is_ok(initialized) || !modules_ready(*s_app.io_executor, kIoConfig.id)) {
         return boot_reason::kIoInit;
     }

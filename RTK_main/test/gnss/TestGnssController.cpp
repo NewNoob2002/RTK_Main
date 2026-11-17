@@ -112,10 +112,12 @@ bool step_switch(size_t index, Model, const RoverConfig &, ConfigStep &out) noex
 
 Ack fake_reply(std::span<const uint8_t> frame) noexcept
 {
-    if (frame.size() == 2 && frame[0] == static_cast<uint8_t>('O') && frame[1] == static_cast<uint8_t>('K')) {
+    if (frame.size() == 2 && frame[0] == static_cast<uint8_t>('O') &&
+        frame[1] == static_cast<uint8_t>('K')) {
         return Ack::kAck;
     }
-    if (frame.size() == 2 && frame[0] == static_cast<uint8_t>('N') && frame[1] == static_cast<uint8_t>('O')) {
+    if (frame.size() == 2 && frame[0] == static_cast<uint8_t>('N') &&
+        frame[1] == static_cast<uint8_t>('O')) {
         return Ack::kNack;
     }
     return Ack::kNone;
@@ -131,7 +133,8 @@ public:
     using MatchFn = bool (*)(const demux::Decoder &, std::span<const uint8_t>, ProbeResult &);
     using StepFn = bool (*)(size_t, Model, const RoverConfig &, ConfigStep &);
 
-    constexpr FakeReceiver(Family family, const char *name, ProbeFn probe, MatchFn match, StepFn step) noexcept
+    constexpr FakeReceiver(Family family, const char *name, ProbeFn probe, MatchFn match,
+                           StepFn step) noexcept
         : family_(family), name_(name), probe_(probe), match_(match), step_(step)
     {}
 
@@ -238,7 +241,8 @@ void power_up(Controller &controller, uint32_t &now)
 
 void feed(Controller &controller, const char *frame, uint32_t now)
 {
-    const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t *>(frame), std::string(frame).size());
+    const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t *>(frame),
+                                         std::string(frame).size());
     controller.on_frame(kFakeDecoder, bytes, now);
 }
 
@@ -275,17 +279,21 @@ static void test_full_flow_probe_configure_run_reprobe()
 
     uint32_t now = 0;
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kOff), static_cast<int>(controller.state()));
-    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone), static_cast<int>(controller.poll(now).kind));
+    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
+                      static_cast<int>(controller.poll(now).kind));
 
     power_up(controller, now);
     TEST_ASSERT_TRUE(is_write(controller.poll(now), "VERSION\r\n"));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kProbing), static_cast<int>(controller.state()));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kProbing),
+                      static_cast<int>(controller.state()));
 
     feed(controller, "#VERSIONA,1", now);
     ++now;
     TEST_ASSERT_TRUE(is_write(controller.poll(now), "A0\r\n"));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kConfiguring), static_cast<int>(controller.state()));
-    TEST_ASSERT_EQUAL(static_cast<int>(Model::kUm980), static_cast<int>(controller.detected().probe.model));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kConfiguring),
+                      static_cast<int>(controller.state()));
+    TEST_ASSERT_EQUAL(static_cast<int>(Model::kUm980),
+                      static_cast<int>(controller.detected().probe.model));
     TEST_ASSERT_EQUAL_UINT32(115200, controller.detected().baud);
 
     feed(controller, "OK", now);
@@ -296,20 +304,23 @@ static void test_full_flow_probe_configure_run_reprobe()
     ++now;
     const Action action = controller.poll(now);
     TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone), static_cast<int>(action.kind));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(controller.state()));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning),
+                      static_cast<int>(controller.state()));
     TEST_ASSERT_EQUAL_UINT32(2, controller.stats().steps_sent);
 
     // 静默超时（>100 ms）→ 重新探测；任意帧刷新 last_frame。
     now += 50;
     feed(controller, "noise", now);
-    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone), static_cast<int>(controller.poll(now + 90).kind));
+    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
+                      static_cast<int>(controller.poll(now + 90).kind));
     now += 101;
     TEST_ASSERT_TRUE(is_write(controller.poll(now), "VERSION\r\n"));
     TEST_ASSERT_EQUAL_UINT32(1, controller.stats().reprobes);
 
     controller.request_reprobe(now);
     TEST_ASSERT_EQUAL_UINT32(2, controller.stats().reprobes);
-    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kWrite), static_cast<int>(controller.poll(now).kind));
+    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kWrite),
+                      static_cast<int>(controller.poll(now).kind));
 }
 
 static void test_probe_timeout_exhausts_rounds()
@@ -328,13 +339,15 @@ static void test_probe_timeout_exhausts_rounds()
     now += 50; // 超时 → 第一轮结束，进入第二轮
     TEST_ASSERT_TRUE(is_write(controller.poll(now), "VERSION\r\n"));
     now += 50; // 第二轮超时 → 失败
-    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone), static_cast<int>(controller.poll(now).kind));
+    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
+                      static_cast<int>(controller.poll(now).kind));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kFailed), static_cast<int>(controller.state()));
     TEST_ASSERT_EQUAL_UINT32(2, controller.stats().probes_sent);
     TEST_ASSERT_EQUAL_UINT32(1, controller.stats().failures);
 
     now += 29; // 退避未到
-    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone), static_cast<int>(controller.poll(now).kind));
+    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
+                      static_cast<int>(controller.poll(now).kind));
     now += 1; // 退避到 → 重新上电
     TEST_ASSERT_TRUE(is_power(controller.poll(now), false));
 }
@@ -362,7 +375,8 @@ static void test_nack_retries_then_fails()
 
     feed(controller, "NO", now);
     ++now;
-    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone), static_cast<int>(controller.poll(now).kind));
+    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
+                      static_cast<int>(controller.poll(now).kind));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kFailed), static_cast<int>(controller.state()));
     TEST_ASSERT_EQUAL_UINT32(2, controller.stats().step_nacks);
     TEST_ASSERT_EQUAL_UINT32(1, controller.stats().failures);
@@ -414,7 +428,8 @@ static void test_baud_switch_step()
     feed(controller, "OK", now);
     ++now;
     (void)controller.poll(now);
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(controller.state()));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning),
+                      static_cast<int>(controller.state()));
     TEST_ASSERT_EQUAL_UINT32(57600, controller.detected().baud);
 }
 
@@ -448,7 +463,8 @@ static void test_request_reconfigure()
 
     uint32_t now = 0;
     controller.request_reconfigure(now); // 尚未探测 → 等同 request_reprobe
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kProbing), static_cast<int>(controller.state()));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kProbing),
+                      static_cast<int>(controller.state()));
     TEST_ASSERT_EQUAL_UINT32(0, controller.stats().reprobes);
 
     power_up(controller, now);
@@ -462,10 +478,12 @@ static void test_request_reconfigure()
     feed(controller, "OK", now);
     ++now;
     (void)controller.poll(now);
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(controller.state()));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning),
+                      static_cast<int>(controller.state()));
 
     controller.request_reconfigure(now);
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kConfiguring), static_cast<int>(controller.state()));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kConfiguring),
+                      static_cast<int>(controller.state()));
     TEST_ASSERT_TRUE(is_write(controller.poll(now), "A0\r\n"));
 }
 

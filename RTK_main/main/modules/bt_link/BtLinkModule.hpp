@@ -75,7 +75,8 @@ private:
         constexpr SessionSink() noexcept = default;
         // 仅 kLink，非 ISR；OPEN/CLOSE 时复位元数据，owner 覆盖本会话生命周期。
         void bind(BtLinkModule &owner, core::SessionHandle handle) noexcept;
-        void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> wire) noexcept override;
+        void on_frame(const demux::Decoder &decoder, uint8_t index,
+                      std::span<const uint8_t> wire) noexcept override;
         [[nodiscard]] bool healthy() const noexcept
         {
             return !unhealthy_;
@@ -101,9 +102,12 @@ private:
         uint32_t seen_resyncs = 0;
         uint32_t seen_unknown = 0;
     };
-    static_assert(std::is_trivially_destructible_v<SessionSink>, "SessionSink must be trivially destructible");
-    static_assert(std::is_trivially_destructible_v<SessionDemux>, "SessionDemux must be trivially destructible");
-    static_assert(std::is_trivially_destructible_v<spp::SppTransport>, "SppTransport must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<SessionSink>,
+                  "SessionSink must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<SessionDemux>,
+                  "SessionDemux must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<spp::SppTransport>,
+                  "SppTransport must be trivially destructible");
 
     [[nodiscard]] SessionEntry *session_find(core::SessionHandle handle) noexcept;
     /**
@@ -139,7 +143,8 @@ private:
      * @retval true 还有积压可继续读
      * @retval false 已读空或分流器已停止
      */
-    [[nodiscard]] bool feed_one(SessionEntry &entry, size_t &budget, uint32_t round_start_ms) noexcept;
+    [[nodiscard]] bool feed_one(SessionEntry &entry, size_t &budget,
+                                uint32_t round_start_ms) noexcept;
     void sync_stream() noexcept;
     void publish_link(uint32_t now_ms) noexcept;
     void apply_rtcm_reset() noexcept;
@@ -147,7 +152,8 @@ private:
     void sync_gnss_info(uint32_t now_ms) noexcept;
     void reset_gnss_stream_session() noexcept;
     [[nodiscard]] bool drain_gnss_stream() noexcept;
-    static core::services::GnssQueryResult on_gnss_query(void *ctx, uint16_t msg_id, std::span<uint8_t> dst) noexcept;
+    static core::services::GnssQueryResult on_gnss_query(void *ctx, uint16_t msg_id,
+                                                         std::span<uint8_t> dst) noexcept;
     static void on_gnss_mask(void *ctx, uint32_t mask) noexcept;
 #endif
     void set_alarm(const fw::Command &cmd, fw::CommandResult &result) noexcept;
@@ -155,7 +161,8 @@ private:
     void edit_whitelist(const fw::Command &cmd, bool add, fw::CommandResult &result) noexcept;
     void persist_whitelist(fw::CommandResult &result) noexcept;
 
-    static_assert(std::is_trivially_destructible_v<core::AlarmSource>, "AlarmSource must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<core::AlarmSource>,
+                  "AlarmSource must be trivially destructible");
 
     [[nodiscard]] AppContext &ctx() noexcept
     {
@@ -190,7 +197,8 @@ private:
     RtcmLinkSnapshot rtcm_snapshot_{};
     std::atomic<TaskHandle_t> wake_task_{nullptr};
 #if RTK_GNSS_ENABLED
-    static_assert(std::is_trivially_destructible_v<::gnss::Fix>, "gnss::Fix must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<::gnss::Fix>,
+                  "gnss::Fix must be trivially destructible");
     uint32_t gnss_fix_version_ = 0;
     uint32_t gnss_status_version_ = 0;
     std::optional<::gnss::Fix> cached_gnss_fix_{};

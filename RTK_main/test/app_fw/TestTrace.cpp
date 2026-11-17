@@ -99,10 +99,12 @@ void test_trace_install_validation_and_once()
                             static_cast<uint8_t>(fw::trace_install(nullptr, nullptr, test_clock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
                             static_cast<uint8_t>(fw::trace_install(test_sink, nullptr, nullptr)));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(fw::trace_install(test_sink, nullptr, test_clock)));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidState),
-                            static_cast<uint8_t>(fw::trace_install(test_sink, nullptr, test_clock)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(fw::Result::kOk),
+        static_cast<uint8_t>(fw::trace_install(test_sink, nullptr, test_clock)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(fw::Result::kInvalidState),
+        static_cast<uint8_t>(fw::trace_install(test_sink, nullptr, test_clock)));
 }
 
 void test_trace_mask_switch()
@@ -140,7 +142,8 @@ void test_trace_event_fields_and_clock()
     TEST_ASSERT_EQUAL_UINT32(1U, s_sink_calls);
     TEST_ASSERT_EQUAL_UINT32(1U, s_clock_calls);
     TEST_ASSERT_EQUAL_UINT32(before + kClockStep, s_last_event.t_ms);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::TraceCat::kRtcm), static_cast<uint8_t>(s_last_event.cat));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::TraceCat::kRtcm),
+                            static_cast<uint8_t>(s_last_event.cat));
     TEST_ASSERT_EQUAL_UINT8(kCodeMarker, s_last_event.code);
     TEST_ASSERT_EQUAL_UINT16(kSessionMarker, s_last_event.session);
     TEST_ASSERT_EQUAL_UINT32(kParamA, s_last_event.a);
@@ -162,8 +165,9 @@ void test_trace_ring_init_validation()
     TEST_ASSERT_EQUAL_UINT32(0U, ring.stats().pushed);
     TEST_ASSERT_EQUAL_UINT32(0U, ring.depth());
 
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
-                            static_cast<uint8_t>(ring.init(std::span<fw::TraceEvent>{}, fw::kNoLock)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(fw::Result::kInvalidArg),
+        static_cast<uint8_t>(ring.init(std::span<fw::TraceEvent>{}, fw::kNoLock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
                             static_cast<uint8_t>(ring.init(tiny, fw::kNoLock)));
     const fw::LockOps half_lock{spy_lock, nullptr, nullptr};
@@ -266,7 +270,8 @@ void test_trace_ring_uses_injected_lock()
     RingLockSpy spy{};
     const fw::LockOps ops{spy_lock, spy_unlock, &spy};
     fw::TraceRing ring{};
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk), static_cast<uint8_t>(ring.init(storage, ops)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
+                            static_cast<uint8_t>(ring.init(storage, ops)));
 
     TEST_ASSERT_TRUE(ring.push(make_event(1U)));
     fw::TraceEvent out{};

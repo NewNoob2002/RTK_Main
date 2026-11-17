@@ -20,7 +20,8 @@ TickType_t wait_ticks(uint32_t ms) noexcept
     return ms != 0U && ticks == 0U ? 1U : ticks;
 }
 fw::CommandResult dispatch_command(std::span<const fw::Module> modules, fw::ExecutorId executor,
-                                   std::span<const bool> available, const fw::Command &command) noexcept
+                                   std::span<const bool> available,
+                                   const fw::Command &command) noexcept
 {
     fw::CommandResult result{command.seq, fw::Result::kNotFound, 0};
     for (size_t i = 0; i < modules.size(); ++i) {
@@ -55,11 +56,13 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
     if (inited_) {
         return fw::Status::kBusy;
     }
-    if (cfg.name == nullptr || std::string_view{cfg.name}.empty() || modules.size() > kExecMaxModules || cfg.core < 0 ||
-        cfg.core >= configNUMBER_OF_CORES || cfg.priority >= configMAX_PRIORITIES || storage.stack.empty() ||
-        storage.stack.size_bytes() > std::numeric_limits<uint32_t>::max() || storage.tcb == nullptr ||
-        storage.cmd_queue == nullptr || storage.result_queue == nullptr || storage.cmd_queue == storage.result_queue ||
-        storage.queue_depth == 0U || storage.queue_depth > std::numeric_limits<UBaseType_t>::max() ||
+    if (cfg.name == nullptr || std::string_view{cfg.name}.empty() ||
+        modules.size() > kExecMaxModules || cfg.core < 0 || cfg.core >= configNUMBER_OF_CORES ||
+        cfg.priority >= configMAX_PRIORITIES || storage.stack.empty() ||
+        storage.stack.size_bytes() > std::numeric_limits<uint32_t>::max() ||
+        storage.tcb == nullptr || storage.cmd_queue == nullptr || storage.result_queue == nullptr ||
+        storage.cmd_queue == storage.result_queue || storage.queue_depth == 0U ||
+        storage.queue_depth > std::numeric_limits<UBaseType_t>::max() ||
         storage.queue_depth > storage.cmd_area.size() / sizeof(fw::Command) ||
         storage.queue_depth > storage.result_area.size() / sizeof(fw::CommandResult)) {
         return fw::Status::kInvalidArg;
@@ -84,8 +87,9 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
         return fw::Status::kNoSpace;
     }
     // 同上，队列深度已经过范围检查。
-    result_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queue_depth), sizeof(fw::CommandResult),
-                                   storage.result_area.data(), storage.result_queue);
+    result_q_ =
+        xQueueCreateStatic(static_cast<UBaseType_t>(storage.queue_depth), sizeof(fw::CommandResult),
+                           storage.result_area.data(), storage.result_queue);
     if (result_q_ == nullptr) {
         vQueueDelete(cmd_q_);
         cmd_q_ = nullptr;
@@ -99,7 +103,8 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
         if (module.executor != cfg_.id) {
             continue;
         }
-        const fw::Result status = module.ops->init == nullptr ? fw::Result::kOk : module.ops->init(module.self);
+        const fw::Result status =
+            module.ops->init == nullptr ? fw::Result::kOk : module.ops->init(module.self);
         ok_[i] = fw::is_ok(status);
         if (!ok_[i]) {
             // Result 的底层类型为 uint8_t，扩展为 unsigned 无损。
@@ -157,7 +162,8 @@ bool Executor::module_ok(fw::ModuleId id) const noexcept
     return false;
 }
 
-fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result, uint32_t timeout_ms) noexcept
+fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result,
+                          uint32_t timeout_ms) noexcept
 {
     TaskHandle_t owner = nullptr;
     {
@@ -191,8 +197,8 @@ fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result, uin
     for (;;) {
         const uint32_t elapsed = now_ms() - begin;
         fw::CommandResult received{};
-        if (xQueueReceive(result_q_, &received, wait_ticks(elapsed < timeout_ms ? timeout_ms - elapsed : 0U)) !=
-            pdTRUE) {
+        if (xQueueReceive(result_q_, &received,
+                          wait_ticks(elapsed < timeout_ms ? timeout_ms - elapsed : 0U)) != pdTRUE) {
             return fw::Result::kTimeout;
         }
         if (received.seq == queued.seq) {
@@ -220,7 +226,8 @@ void Executor::task_entry(void *arg) noexcept
     }
     for (size_t i = 0; i < self.modules_.size(); ++i) {
         const auto &module = self.modules_[i];
-        if (module.executor != self.cfg_.id || !self.module_ok(module.id) || module.ops->start == nullptr) {
+        if (module.executor != self.cfg_.id || !self.module_ok(module.id) ||
+            module.ops->start == nullptr) {
             continue;
         }
         const fw::Result status = module.ops->start(module.self);
@@ -281,7 +288,8 @@ void Executor::run() noexcept
         pending = false;
         for (size_t i = 0; i < modules_.size(); ++i) {
             const auto &module = modules_[i];
-            if (module.executor != cfg_.id || !module_ok(module.id) || module.ops->poll == nullptr) {
+            if (module.executor != cfg_.id || !module_ok(module.id) ||
+                module.ops->poll == nullptr) {
                 continue;
             }
             const uint32_t now = now_ms();

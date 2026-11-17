@@ -55,76 +55,80 @@ bool allocate_boot_buffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) 
     constexpr size_t kBufAlign = 4U;
 
     if (!fw::is_ok(self().boot_arena.alloc_array<StackType_t>(
-            "task.link", AppContext::kLinkStackBytes / sizeof(StackType_t), out.link_stack, kStackAlign))) {
+            "task.link", AppContext::kLinkStackBytes / sizeof(StackType_t), out.link_stack,
+            kStackAlign))) {
         return fail_alloc("task.link");
     }
 #if RTK_GNSS_ENABLED
     if (!fw::is_ok(self().boot_arena.alloc_array<StackType_t>(
-            "task.io", AppContext::kIoStackBytes / sizeof(StackType_t), out.io_stack, kStackAlign))) {
+            "task.io", AppContext::kIoStackBytes / sizeof(StackType_t), out.io_stack,
+            kStackAlign))) {
         return fail_alloc("task.io");
     }
 #endif
-    if (!fw::is_ok(self().boot_arena.alloc_array<StackType_t>("task.spp_worker",
-                                                              SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t),
-                                                              out.spp_worker_stack, kStackAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<StackType_t>(
+            "task.spp_worker", SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t),
+            out.spp_worker_stack, kStackAlign))) {
         return fail_alloc("task.spp_worker");
     }
 #if FW_TRACE_ENABLED
     if (!fw::is_ok(self().boot_arena.alloc_array<StackType_t>(
-            "task.trace_out", DebugModule::kTaskStackBytes / sizeof(StackType_t), out.trace_task_stack, kStackAlign))) {
+            "task.trace_out", DebugModule::kTaskStackBytes / sizeof(StackType_t),
+            out.trace_task_stack, kStackAlign))) {
         return fail_alloc("task.trace_out");
     }
 #endif
-    if (!fw::is_ok(
-            self().boot_arena.alloc_array<uint8_t>("spp.rx.0", SPP_SERVER_RX_BUF_SIZE, out.spp_rx_0, kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("spp.rx.0", SPP_SERVER_RX_BUF_SIZE,
+                                                          out.spp_rx_0, kBufAlign))) {
         return fail_alloc("spp.rx.0");
     }
-    if (!fw::is_ok(
-            self().boot_arena.alloc_array<uint8_t>("spp.rx.1", SPP_SERVER_RX_BUF_SIZE, out.spp_rx_1, kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("spp.rx.1", SPP_SERVER_RX_BUF_SIZE,
+                                                          out.spp_rx_1, kBufAlign))) {
         return fail_alloc("spp.rx.1");
     }
 #if FW_TRACE_ENABLED
-    if (!fw::is_ok(self().boot_arena.alloc_array<fw::TraceEvent>("trace.ring", DebugModule::kRingEvents, out.trace_ring,
-                                                                 alignof(fw::TraceEvent)))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<fw::TraceEvent>(
+            "trace.ring", DebugModule::kRingEvents, out.trace_ring, alignof(fw::TraceEvent)))) {
         return fail_alloc("trace.ring");
     }
-    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("log.ring", DebugModule::kLogRingBytes, out.log_ring,
-                                                          alignof(fw::LogHeader)))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("log.ring", DebugModule::kLogRingBytes,
+                                                          out.log_ring, alignof(fw::LogHeader)))) {
         return fail_alloc("log.ring");
     }
 #endif
 #if RTK_GNSS_ENABLED
-    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("gnss.demux", GnssModule::kDemuxBufBytes, out.gnss_demux,
-                                                          kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("gnss.demux", GnssModule::kDemuxBufBytes,
+                                                          out.gnss_demux, kBufAlign))) {
         return fail_alloc("gnss.demux");
     }
-    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("rtcm.pipe", kRtcmPipeBytes, out.rtcm_pipe, kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("rtcm.pipe", kRtcmPipeBytes,
+                                                          out.rtcm_pipe, kBufAlign))) {
         return fail_alloc("rtcm.pipe");
     }
 #endif
-    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("spp.tx.reply.0", SPP_SERVER_REPLY_CAPACITY, out.spp_reply_0,
-                                                          kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>(
+            "spp.tx.reply.0", SPP_SERVER_REPLY_CAPACITY, out.spp_reply_0, kBufAlign))) {
         return fail_alloc("spp.tx.reply.0");
     }
-    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("spp.tx.reply.1", SPP_SERVER_REPLY_CAPACITY, out.spp_reply_1,
-                                                          kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>(
+            "spp.tx.reply.1", SPP_SERVER_REPLY_CAPACITY, out.spp_reply_1, kBufAlign))) {
         return fail_alloc("spp.tx.reply.1");
     }
-    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("spp.tx.stream.phone", SPP_SERVER_STREAM_CAPACITY,
-                                                          out.spp_stream, kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>(
+            "spp.tx.stream.phone", SPP_SERVER_STREAM_CAPACITY, out.spp_stream, kBufAlign))) {
         return fail_alloc("spp.tx.stream.phone");
     }
-    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("spp.tx.merge", SPP_SERVER_MERGE_CAPACITY, out.spp_merge,
-                                                          kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("spp.tx.merge", SPP_SERVER_MERGE_CAPACITY,
+                                                          out.spp_merge, kBufAlign))) {
         return fail_alloc("spp.tx.merge");
     }
 #if RTK_GNSS_ENABLED
-    if (!fw::is_ok(
-            self().boot_arena.alloc_array<uint8_t>("gnss.app_ring", kGnssAppRingBytes, out.gnss_app_ring, kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("gnss.app_ring", kGnssAppRingBytes,
+                                                          out.gnss_app_ring, kBufAlign))) {
         return fail_alloc("gnss.app_ring");
     }
-    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>("gnss.latest", data::kGnssLatestTotalBytes, out.gnss_latest,
-                                                          kBufAlign))) {
+    if (!fw::is_ok(self().boot_arena.alloc_array<uint8_t>(
+            "gnss.latest", data::kGnssLatestTotalBytes, out.gnss_latest, kBufAlign))) {
         return fail_alloc("gnss.latest");
     }
 #endif
@@ -134,7 +138,8 @@ bool allocate_boot_buffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) 
 const char *bind_boot_buffers(const BootBuffers &bufs) noexcept
 {
 #if FW_TRACE_ENABLED
-    if (!fw::is_ok(self().debug.bind_storage({bufs.trace_ring, bufs.log_ring, bufs.trace_task_stack}))) {
+    if (!fw::is_ok(
+            self().debug.bind_storage({bufs.trace_ring, bufs.log_ring, bufs.trace_task_stack}))) {
         return boot_reason::kBindDebug;
     }
 #endif

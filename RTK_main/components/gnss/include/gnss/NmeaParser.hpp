@@ -65,9 +65,10 @@ public:
 
 private:
     Fix fix_{};
-    SatTable sats_{};                                                            // 已发布
-    SatTable pending_{};                                                         // 本历元累积中
-    std::array<uint8_t, static_cast<size_t>(Constellation::kCount)> gsv_done_{}; // 每系统：0 未完成，1 已收齐
+    SatTable sats_{};    // 已发布
+    SatTable pending_{}; // 本历元累积中
+    std::array<uint8_t, static_cast<size_t>(Constellation::kCount)>
+        gsv_done_{};                        // 每系统：0 未完成，1 已收齐
     std::array<uint16_t, kMaxSats> used_{}; // GSA 本历元使用的卫星键（system<<8|prn），0 = 空
     uint8_t used_count_ = 0;
     NmeaStats stats_{};

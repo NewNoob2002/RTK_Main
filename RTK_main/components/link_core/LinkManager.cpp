@@ -65,7 +65,8 @@ void LinkManager::init(Policy policy, std::span<const BtAddr> alarms) noexcept
     pair_start_ms_ = 0;
 }
 
-Role LinkManager::on_open(SessionHandle handle, const BtAddr &addr, uint32_t now_ms, Actions &act) noexcept
+Role LinkManager::on_open(SessionHandle handle, const BtAddr &addr, uint32_t now_ms,
+                          Actions &act) noexcept
 {
     act.clear();
 
@@ -89,7 +90,8 @@ Role LinkManager::on_open(SessionHandle handle, const BtAddr &addr, uint32_t now
         return Role::kNone;
     }
 
-    const bool whitelisted = contains_addr(std::span<const BtAddr>(alarms_.data(), alarm_count_), addr);
+    const bool whitelisted =
+        contains_addr(std::span<const BtAddr>(alarms_.data(), alarm_count_), addr);
     bool phone_online = false;
     for (const Session &session : sessions_) {
         if (session.in_use && (session.role == Role::kPhone)) {
@@ -106,11 +108,13 @@ Role LinkManager::on_open(SessionHandle handle, const BtAddr &addr, uint32_t now
             return Role::kNone;
         }
         role = Role::kAlarm;
-        trace_link(LinkTrace::kOpen, handle, role_value(role), reason_value(LinkReason::kWhitelisted));
+        trace_link(LinkTrace::kOpen, handle, role_value(role),
+                   reason_value(LinkReason::kWhitelisted));
     } else if (!phone_online) {
         // 规则 4 第一支：无 PHONE 时未知设备作为 PHONE。
         role = Role::kPhone;
-        trace_link(LinkTrace::kOpen, handle, role_value(role), reason_value(LinkReason::kFirstPhone));
+        trace_link(LinkTrace::kOpen, handle, role_value(role),
+                   reason_value(LinkReason::kFirstPhone));
         if (policy_ == Policy::kPhonePreempt) {
             for (Session &session : sessions_) {
                 if (session.in_use && (session.role == Role::kAlarm)) {
@@ -125,7 +129,8 @@ Role LinkManager::on_open(SessionHandle handle, const BtAddr &addr, uint32_t now
     } else if (pairing_) {
         // 规则 4 第二支：手机在线且配对窗口打开，等待 HELLO。
         role = Role::kPending;
-        trace_link(LinkTrace::kOpen, handle, role_value(role), reason_value(LinkReason::kPendingHello));
+        trace_link(LinkTrace::kOpen, handle, role_value(role),
+                   reason_value(LinkReason::kPendingHello));
     } else {
         action_add(act, handle);
         return Role::kNone;
@@ -178,7 +183,8 @@ Role LinkManager::on_frame(SessionHandle handle, uint8_t sender, uint16_t msg_id
             // 配对窗口外的 HELLO：未授权报警器，断开。
             action_add(act, handle);
             found->in_use = false;
-            trace_link(LinkTrace::kClose, handle, role_value(found->role), reason_value(LinkReason::kOther));
+            trace_link(LinkTrace::kClose, handle, role_value(found->role),
+                       reason_value(LinkReason::kOther));
             return Role::kNone;
         }
         if (!contains_addr(std::span<const BtAddr>(alarms_.data(), alarm_count_), found->addr)) {
@@ -187,7 +193,8 @@ Role LinkManager::on_frame(SessionHandle handle, uint8_t sender, uint16_t msg_id
                 action_add(act, handle);
                 const Role rejected = found->role;
                 found->in_use = false;
-                trace_link(LinkTrace::kClose, handle, role_value(rejected), reason_value(LinkReason::kNoSlot));
+                trace_link(LinkTrace::kClose, handle, role_value(rejected),
+                           reason_value(LinkReason::kNoSlot));
                 return Role::kNone;
             }
             alarms_[alarm_count_] = found->addr;

@@ -71,14 +71,17 @@ void assert_stats_eq(const reconnect::Stats &expected, const reconnect::Stats &a
 void test_default_state_and_no_target()
 {
     reconnect::Reconnector rc;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle),
+                            static_cast<uint8_t>(rc.state()));
     TEST_ASSERT_FALSE(rc.has_target());
     TEST_ASSERT_EQUAL_UINT32(0U, rc.next_attempt_in(0U));
 
     reconnect::Action act{};
     TEST_ASSERT_FALSE(rc.start(kStep100Ms, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone), static_cast<uint8_t>(act.type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
+                            static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle),
+                            static_cast<uint8_t>(rc.state()));
 }
 
 void test_configure_invalid_params()
@@ -98,7 +101,8 @@ void test_configure_invalid_params()
     rc.set_target(kAddrA);
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(kStep100Ms, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering),
+                            static_cast<uint8_t>(rc.state()));
 
     // jitter > kMaxJitterPct
     {
@@ -151,12 +155,14 @@ void test_configure_invalid_params()
     }
 
     // 非法 configure 不得改变状态与已有合法配置
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering),
+                            static_cast<uint8_t>(rc.state()));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.poll(kStep100Ms + kStep1999Ms).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.poll(kStep100Ms + kStep2000Ms).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                            static_cast<uint8_t>(rc.state()));
 
     // backoff_min == backoff_max 且 seed == 0 合法
     reconnect::Config eq_cfg = valid;
@@ -174,14 +180,17 @@ void test_fast_window_fixed_retry()
     uint32_t now = 0U;
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(now, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
 
     // 在 30000 ms 快速窗口内多次失败：始终 1000 ms 固定间隔
     for (uint32_t round = 0U; round < kFastRounds; ++round) {
         now += kStep100Ms;
         act = rc.on_sdp_result(false, 0U, now);
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone), static_cast<uint8_t>(act.type));
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
+                                static_cast<uint8_t>(act.type));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                                static_cast<uint8_t>(rc.state()));
         TEST_ASSERT_EQUAL_UINT32(kStep1000Ms, rc.stats().last_delay_ms);
         TEST_ASSERT_EQUAL_UINT32(kStep1000Ms, rc.next_attempt_in(now));
         TEST_ASSERT_EQUAL_UINT32(1U, rc.next_attempt_in(now + kStep999Ms));
@@ -191,8 +200,10 @@ void test_fast_window_fixed_retry()
         now += kStep1000Ms;
         TEST_ASSERT_EQUAL_UINT32(0U, rc.next_attempt_in(now));
         act = rc.poll(now);
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering), static_cast<uint8_t>(rc.state()));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                                static_cast<uint8_t>(act.type));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering),
+                                static_cast<uint8_t>(rc.state()));
     }
     TEST_ASSERT_EQUAL_UINT32(kFastRounds, rc.stats().failures);
     TEST_ASSERT_EQUAL_UINT32(kFastRounds + 1U, rc.stats().sdp_queries);
@@ -207,20 +218,25 @@ void test_backoff_outside_window_and_cap()
     uint32_t now = 0U;
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(now, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
 
     // 跨越 30000 ms 快速窗口边界
     now = kStep30000Ms;
-    const std::array<uint32_t, 8> expected_delays{1000U, 2000U, 4000U, 8000U, 16000U, 30000U, 30000U, 30000U};
+    const std::array<uint32_t, 8> expected_delays{1000U,  2000U,  4000U,  8000U,
+                                                  16000U, 30000U, 30000U, 30000U};
     for (const uint32_t expected : expected_delays) {
         act = rc.on_sdp_result(false, 0U, now);
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone), static_cast<uint8_t>(act.type));
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
+                                static_cast<uint8_t>(act.type));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                                static_cast<uint8_t>(rc.state()));
         TEST_ASSERT_EQUAL_UINT32(expected, rc.stats().last_delay_ms);
 
         now += expected;
         act = rc.poll(now);
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                                static_cast<uint8_t>(act.type));
     }
 }
 
@@ -316,21 +332,26 @@ void test_disconnect_stable_vs_unstable()
 
     // 连上后不足 10 s（9999 ms）掉线：不复位退避，继续到 4000 ms
     act = rc.on_sdp_result(true, kScnFirst, now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
     act = rc.on_open(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected),
+                            static_cast<uint8_t>(rc.state()));
 
     now += kStep9999Ms;
     act = rc.on_close(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone), static_cast<uint8_t>(act.type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
+                            static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                            static_cast<uint8_t>(rc.state()));
     TEST_ASSERT_EQUAL_UINT32(kStep4000Ms, rc.stats().last_delay_ms);
     TEST_ASSERT_EQUAL_UINT32(1U, rc.stats().disconnects);
 
     // 再次连上并在线满 10000 ms 后掉线：复位退避并重开快速窗口
     now += kStep4000Ms;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
     static_cast<void>(rc.on_open(now));
 
     now += kStep10000Ms;
@@ -345,7 +366,8 @@ void test_disconnect_stable_vs_unstable()
         if (act.type == reconnect::ActionType::kStartSdp) {
             act = rc.on_sdp_result(true, kScnFirst, now);
         }
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                                static_cast<uint8_t>(act.type));
         static_cast<void>(rc.on_connect_failed(now));
         TEST_ASSERT_EQUAL_UINT32(kStep1000Ms, rc.stats().last_delay_ms);
     }
@@ -362,7 +384,8 @@ void test_unstable_disconnect_in_fast_window_no_storm()
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(now, act));
     act = rc.on_sdp_result(true, kScnFirst, now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
 
     for (uint32_t round = 0U; round < kFlapRounds; ++round) {
         static_cast<void>(rc.on_open(now));
@@ -371,7 +394,8 @@ void test_unstable_disconnect_in_fast_window_no_storm()
         TEST_ASSERT_EQUAL_UINT32(kStep1000Ms, rc.stats().last_delay_ms);
         now += kStep1000Ms;
         act = rc.poll(now);
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                                static_cast<uint8_t>(act.type));
     }
     // 当前 now == 30000，下一轮不稳定掉线落在窗口外
     static_cast<void>(rc.on_open(now));
@@ -395,12 +419,14 @@ void test_scn_cache_and_resdp_after_failures()
     uint32_t now = 0U;
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(now, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
     TEST_ASSERT_EQUAL_UINT32(1U, rc.stats().sdp_queries);
 
     // SDP 成功缓存 SCN=7 并立即返回 kConnect(7)
     act = rc.on_sdp_result(true, kScnFirst, now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
     TEST_ASSERT_EQUAL_UINT8(kScnFirst, act.scn);
     TEST_ASSERT_EQUAL_UINT32(1U, rc.stats().attempts);
 
@@ -408,7 +434,8 @@ void test_scn_cache_and_resdp_after_failures()
     static_cast<void>(rc.on_connect_failed(now));
     now += kStep1000Ms;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
     TEST_ASSERT_EQUAL_UINT8(kScnFirst, act.scn);
     TEST_ASSERT_EQUAL_UINT32(1U, rc.stats().sdp_queries);
 
@@ -418,24 +445,28 @@ void test_scn_cache_and_resdp_after_failures()
     static_cast<void>(rc.on_close(now));
     now += kStep1000Ms;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
 
     // 连续第 1 次失败：不触发重新 SDP
     static_cast<void>(rc.on_connect_failed(now));
     now += kStep1000Ms;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
     TEST_ASSERT_EQUAL_UINT32(1U, rc.stats().sdp_queries);
 
     // 连续第 2 次失败：清除缓存，下次退避到期走 SDP
     static_cast<void>(rc.on_connect_failed(now));
     now += kStep1000Ms;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
     TEST_ASSERT_EQUAL_UINT32(2U, rc.stats().sdp_queries);
 
     act = rc.on_sdp_result(true, kScnSecond, now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
     TEST_ASSERT_EQUAL_UINT8(kScnSecond, act.scn);
 }
 
@@ -448,39 +479,50 @@ void test_attempt_timeout()
     uint32_t now = kStep100Ms;
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(now, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering),
+                            static_cast<uint8_t>(rc.state()));
 
     // kDiscovering 超时前不触发
     act = rc.poll(now + reconnect::kDefAttemptTimeoutMs - 1U);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone), static_cast<uint8_t>(act.type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
+                            static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering),
+                            static_cast<uint8_t>(rc.state()));
 
     // 到 attempt_timeout_ms 按失败处理
     now += reconnect::kDefAttemptTimeoutMs;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone), static_cast<uint8_t>(act.type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
+                            static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                            static_cast<uint8_t>(rc.state()));
     TEST_ASSERT_EQUAL_UINT32(1U, rc.stats().failures);
 
     // 退避到期后完成 SDP，再测 kConnecting 超时（连续 2 次同样清 SCN）
     now += rc.stats().last_delay_ms;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
     act = rc.on_sdp_result(true, kScnFirst, now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting),
+                            static_cast<uint8_t>(rc.state()));
 
     // 第 1 次 connect 超时
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting),
+                            static_cast<uint8_t>(rc.state()));
     static_cast<void>(rc.poll(now + reconnect::kDefAttemptTimeoutMs - 1U));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting),
+                            static_cast<uint8_t>(rc.state()));
     now += reconnect::kDefAttemptTimeoutMs;
     static_cast<void>(rc.poll(now));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                            static_cast<uint8_t>(rc.state()));
     TEST_ASSERT_EQUAL_UINT32(2U, rc.stats().failures);
 
     now += rc.stats().last_delay_ms;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
 
     // 第 2 次 connect 超时 -> 清除缓存
     now += reconnect::kDefAttemptTimeoutMs;
@@ -489,7 +531,8 @@ void test_attempt_timeout()
 
     now += rc.stats().last_delay_ms;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
 }
 
 void test_stop_and_start()
@@ -501,10 +544,12 @@ void test_stop_and_start()
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(0U, act));
     act = rc.on_sdp_result(true, kScnFirst, kStep10Ms);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
 
     rc.stop();
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kStopped), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kStopped),
+                            static_cast<uint8_t>(rc.state()));
     TEST_ASSERT_EQUAL_UINT32(0U, rc.next_attempt_in(kStep10Ms));
 
     // kStopped 后所有事件只更新统计，不产生动作、不改变状态
@@ -513,15 +558,18 @@ void test_stop_and_start()
                             static_cast<uint8_t>(rc.poll(kStep100000Ms).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_sdp_result(false, 0U, kStep100Ms).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.on_sdp_result(true, kScnSecond, kStep100Ms + kStep10Ms).type));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(reconnect::ActionType::kNone),
+        static_cast<uint8_t>(rc.on_sdp_result(true, kScnSecond, kStep100Ms + kStep10Ms).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_open(kStep100Ms + kStep20Ms).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.on_connect_failed(kStep100Ms + kStep30Ms).type));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(reconnect::ActionType::kNone),
+        static_cast<uint8_t>(rc.on_connect_failed(kStep100Ms + kStep30Ms).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_close(kStep100Ms + kStep40Ms).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kStopped), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kStopped),
+                            static_cast<uint8_t>(rc.state()));
 
     TEST_ASSERT_EQUAL_UINT32(before.failures + 2U, rc.stats().failures);
     TEST_ASSERT_EQUAL_UINT32(before.connects + 1U, rc.stats().connects);
@@ -531,9 +579,11 @@ void test_stop_and_start()
 
     // 再次 start：保留此前缓存的 SCN=7，直接 kConnect(7)
     TEST_ASSERT_TRUE(rc.start(kStep100000Ms, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kConnect),
+                            static_cast<uint8_t>(act.type));
     TEST_ASSERT_EQUAL_UINT8(kScnFirst, act.scn);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting),
+                            static_cast<uint8_t>(rc.state()));
 }
 
 void test_change_target_clears_cache()
@@ -548,31 +598,38 @@ void test_change_target_clears_cache()
     TEST_ASSERT_TRUE(rc.start(0U, act));
     act = rc.on_sdp_result(true, kScnFirst, kStep10Ms);
     static_cast<void>(rc.on_open(kStep20Ms));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected),
+                            static_cast<uint8_t>(rc.state()));
 
     // 设相同目标不清除连接与缓存
     rc.set_target(kAddrA);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected),
+                            static_cast<uint8_t>(rc.state()));
 
     // 改目标清除 SCN 缓存并回到 kIdle
     rc.set_target(kAddrB);
     TEST_ASSERT_TRUE(rc.has_target());
     TEST_ASSERT_EQUAL_UINT8_ARRAY(kAddrB.data(), rc.target().data(), reconnect::kAddrLen);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle),
+                            static_cast<uint8_t>(rc.state()));
 
     // 此时旧连接回调 on_close 被忽略
     act = rc.on_close(kStep30Ms);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone), static_cast<uint8_t>(act.type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
+                            static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle),
+                            static_cast<uint8_t>(rc.state()));
 
     // start 必须重新 SDP
     TEST_ASSERT_TRUE(rc.start(kStep40Ms, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
 
     // clear_target 回到 kIdle 且无目标
     rc.clear_target();
     TEST_ASSERT_FALSE(rc.has_target());
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle),
+                            static_cast<uint8_t>(rc.state()));
     TEST_ASSERT_FALSE(rc.start(kStep50Ms, act));
 }
 
@@ -586,15 +643,17 @@ void test_unexpected_events_ignored()
     reconnect::Stats snap = rc.stats();
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.poll(kStep100Ms).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.on_sdp_result(true, kScnFirst, kStep100Ms).type));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(reconnect::ActionType::kNone),
+        static_cast<uint8_t>(rc.on_sdp_result(true, kScnFirst, kStep100Ms).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_open(kStep100Ms).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_connect_failed(kStep100Ms).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_close(kStep100Ms).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kIdle),
+                            static_cast<uint8_t>(rc.state()));
     assert_stats_eq(snap, rc.stats());
 
     // kDiscovering 忽略 open / connect_failed / close
@@ -608,12 +667,14 @@ void test_unexpected_events_ignored()
                             static_cast<uint8_t>(rc.on_connect_failed(t_disc).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_close(t_disc).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kDiscovering),
+                            static_cast<uint8_t>(rc.state()));
     assert_stats_eq(snap, rc.stats());
 
     // kConnecting 忽略 sdp_result / close，且重复 start 返回 false
     act = rc.on_sdp_result(true, kScnFirst, kStep200Ms + kStep20Ms);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting),
+                            static_cast<uint8_t>(rc.state()));
     snap = rc.stats();
     const uint32_t t_conn = kStep200Ms + kStep30Ms;
     TEST_ASSERT_FALSE(rc.start(t_conn, act));
@@ -621,42 +682,49 @@ void test_unexpected_events_ignored()
                             static_cast<uint8_t>(rc.on_sdp_result(false, 0U, t_conn).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_close(t_conn).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnecting),
+                            static_cast<uint8_t>(rc.state()));
     assert_stats_eq(snap, rc.stats());
 
     // kConnected 忽略 sdp_result / open / connect_failed，且重复 start 返回 false
     const uint32_t t_open = kStep200Ms + kStep40Ms;
     static_cast<void>(rc.on_open(t_open));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected),
+                            static_cast<uint8_t>(rc.state()));
     snap = rc.stats();
     const uint32_t t_online = kStep200Ms + kStep50Ms;
     TEST_ASSERT_FALSE(rc.start(t_online, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.on_sdp_result(true, kScnSecond, t_online).type));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(reconnect::ActionType::kNone),
+        static_cast<uint8_t>(rc.on_sdp_result(true, kScnSecond, t_online).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_open(t_online).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_connect_failed(t_online).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.poll(t_online).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kConnected),
+                            static_cast<uint8_t>(rc.state()));
     assert_stats_eq(snap, rc.stats());
 
     // kBackoff 忽略 sdp_result / open / connect_failed / close
     const uint32_t t_close = kStep200Ms + kStep100Ms;
     static_cast<void>(rc.on_close(t_close));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                            static_cast<uint8_t>(rc.state()));
     snap = rc.stats();
     const uint32_t t_backoff = t_close + kStep10Ms;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
-                            static_cast<uint8_t>(rc.on_sdp_result(true, kScnSecond, t_backoff).type));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(reconnect::ActionType::kNone),
+        static_cast<uint8_t>(rc.on_sdp_result(true, kScnSecond, t_backoff).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_open(t_backoff).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_connect_failed(t_backoff).type));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kNone),
                             static_cast<uint8_t>(rc.on_close(t_backoff).type));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                            static_cast<uint8_t>(rc.state()));
     assert_stats_eq(snap, rc.stats());
 }
 
@@ -670,12 +738,14 @@ void test_u32_wraparound()
     uint32_t now = kWrapStartMs;
     reconnect::Action act{};
     TEST_ASSERT_TRUE(rc.start(now, act));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
 
     // attempt 超时跨越 0xFFFF_FFFF -> 0x0000_0F40
     now += reconnect::kDefAttemptTimeoutMs;
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff), static_cast<uint8_t>(rc.state()));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::State::kBackoff),
+                            static_cast<uint8_t>(rc.state()));
     TEST_ASSERT_EQUAL_UINT32(kStep1000Ms, rc.stats().last_delay_ms);
 
     // 验证跨回绕的 next_attempt_in 与到期
@@ -693,7 +763,8 @@ void test_u32_wraparound()
     now += kStep1000Ms; // 0x0000_034C
     TEST_ASSERT_EQUAL_UINT32(0U, rc.next_attempt_in(now));
     act = rc.poll(now);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp), static_cast<uint8_t>(act.type));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(reconnect::ActionType::kStartSdp),
+                            static_cast<uint8_t>(act.type));
 
     // 跨回绕后继续超过 30000 ms 快速窗口，验证指数退避
     now = kWrapBackoffStartMs + kStep30000Ms;

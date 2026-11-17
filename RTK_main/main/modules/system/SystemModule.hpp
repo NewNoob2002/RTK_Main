@@ -39,7 +39,8 @@ private:
 [[nodiscard]] bool derive_sn_from_mac(std::span<const uint8_t, core::kAddrLen> mac,
                                       std::span<char, NVS_STORE_SN_MAX + 1U> out) noexcept;
 /** 按 SN 生成设备名（无 SN 时用回退名）；写入 out 并返回是否成功。 */
-[[nodiscard]] bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out) noexcept;
+[[nodiscard]] bool build_device_name(std::string_view sn,
+                                     std::span<char, kDeviceNameBuf> out) noexcept;
 /** 系统模块的控制台命令表（status/log/sys）；静态存储，进程期有效。 */
 [[nodiscard]] std::span<const cli::Cmd> system_cmds() noexcept;
 /** status/log/sys 子命令动词表，供 cli::add_verbs 登记。 */

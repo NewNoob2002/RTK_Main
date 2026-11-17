@@ -122,7 +122,8 @@ constexpr uint32_t kSatKeySystemShift = 8U;
 uint16_t sat_key(Constellation system, uint8_t prn) noexcept
 {
     // 星座枚举 < 8、prn < 256，合进 uint16 不会溢出。
-    return static_cast<uint16_t>((static_cast<uint32_t>(system) << kSatKeySystemShift) | static_cast<uint32_t>(prn));
+    return static_cast<uint16_t>((static_cast<uint32_t>(system) << kSatKeySystemShift) |
+                                 static_cast<uint32_t>(prn));
 }
 
 /** @brief 判断地址字段是否以给定 3 字母消息名结尾。
@@ -199,7 +200,8 @@ int64_t rescale(int64_t value, uint8_t from_frac, uint8_t to_frac) noexcept
  * @param frac: 输出实际小数位数
  * @retval kEmpty 空字段；kOk 成功；kError 格式错误
  */
-NumResult parse_fixed(std::span<const uint8_t> field, uint8_t max_frac, int64_t &value, uint8_t &frac) noexcept
+NumResult parse_fixed(std::span<const uint8_t> field, uint8_t max_frac, int64_t &value,
+                      uint8_t &frac) noexcept
 {
     if (field.empty()) {
         return NumResult::kEmpty;
@@ -387,7 +389,9 @@ bool talker_to_constellation(std::span<const uint8_t> addr, Constellation &out) 
 size_t constellation_index(Constellation c) noexcept
 {
     const size_t index = static_cast<size_t>(c);
-    return index < static_cast<size_t>(Constellation::kCount) ? index : static_cast<size_t>(Constellation::kOther);
+    return index < static_cast<size_t>(Constellation::kCount)
+               ? index
+               : static_cast<size_t>(Constellation::kOther);
 }
 
 /** @brief 由 talker 与可选 System ID 字段确定星座。
@@ -396,7 +400,8 @@ size_t constellation_index(Constellation c) noexcept
  * @param system: 输出的星座
  * @retval false 表示 System ID 存在但格式错误
  */
-bool resolve_system(std::span<const uint8_t> addr, std::span<const uint8_t> id_field, Constellation &system) noexcept
+bool resolve_system(std::span<const uint8_t> addr, std::span<const uint8_t> id_field,
+                    Constellation &system) noexcept
 {
     bool have_system = talker_to_constellation(addr, system);
     if (!id_field.empty()) {
@@ -502,7 +507,8 @@ NumResult parse_angle(std::span<const uint8_t> field, bool is_longitude, int64_t
     if (degree > limit_deg || minute_scaled >= (kMinutesPerDegree * scale)) {
         return NumResult::kError;
     }
-    const int64_t value = (degree * kE9PerDegree) + round_div(minute_scaled * kE9PerDegree, kMinutesPerDegree * scale);
+    const int64_t value = (degree * kE9PerDegree) +
+                          round_div(minute_scaled * kE9PerDegree, kMinutesPerDegree * scale);
     if (value > (limit_deg * kE9PerDegree)) {
         return NumResult::kError;
     }
@@ -528,7 +534,8 @@ NumResult parse_dop(std::span<const uint8_t> field, uint16_t &out) noexcept
         return r;
     }
     const int64_t x100 = rescale(v, frac, kDopScale);
-    out = (x100 < 0 || x100 > static_cast<int64_t>(kU16Unknown - 1)) ? kU16Unknown : static_cast<uint16_t>(x100);
+    out = (x100 < 0 || x100 > static_cast<int64_t>(kU16Unknown - 1)) ? kU16Unknown
+                                                                     : static_cast<uint16_t>(x100);
     return NumResult::kOk;
 }
 
@@ -571,7 +578,8 @@ NumResult parse_diff_age(std::span<const uint8_t> field, uint16_t &out) noexcept
         return r;
     }
     const int64_t ds = rescale(v, frac, kDiffAgeScale);
-    out = (ds < 0 || ds > static_cast<int64_t>(kU16Unknown - 1)) ? kU16Unknown : static_cast<uint16_t>(ds);
+    out = (ds < 0 || ds > static_cast<int64_t>(kU16Unknown - 1)) ? kU16Unknown
+                                                                 : static_cast<uint16_t>(ds);
     return NumResult::kOk;
 }
 
@@ -652,8 +660,9 @@ bool take_quality(FieldIter &it, Fix &fix) noexcept
         return false;
     }
     if (qr == NumResult::kOk) {
-        fix.quality = (quality_raw <= kMaxQuality) ? static_cast<FixQuality>(static_cast<uint8_t>(quality_raw))
-                                                   : FixQuality::kUnknown;
+        fix.quality = (quality_raw <= kMaxQuality)
+                          ? static_cast<FixQuality>(static_cast<uint8_t>(quality_raw))
+                          : FixQuality::kUnknown;
         fix.valid = fix.quality != FixQuality::kInvalid && fix.quality != FixQuality::kUnknown;
     } else {
         fix.quality = FixQuality::kInvalid;
@@ -716,9 +725,10 @@ bool take_diff(FieldIter &it, Fix &fix) noexcept
         if (st == NumResult::kError) {
             return false;
         }
-        fix.diff_station = (st == NumResult::kOk)
-                               ? static_cast<uint16_t>(station > kMaxDiffStation ? kMaxDiffStation : station)
-                               : kU16Unknown;
+        fix.diff_station =
+            (st == NumResult::kOk)
+                ? static_cast<uint16_t>(station > kMaxDiffStation ? kMaxDiffStation : station)
+                : kU16Unknown;
     }
     return true;
 }
@@ -730,20 +740,22 @@ bool take_diff(FieldIter &it, Fix &fix) noexcept
  * @param num: 输出的当前句号
  * @retval false 表示字段缺失或越界
  */
-bool take_gsv_header(const std::array<std::span<const uint8_t>, kGsvMaxFields> &fields, size_t count, uint32_t &total,
-                     uint32_t &num) noexcept
+bool take_gsv_header(const std::array<std::span<const uint8_t>, kGsvMaxFields> &fields,
+                     size_t count, uint32_t &total, uint32_t &num) noexcept
 {
     if (count < kGsvMinFields) {
         return false;
     }
     uint32_t in_view = 0;
-    if (parse_uint(fields[1], total) != NumResult::kOk || parse_uint(fields[2], num) != NumResult::kOk) {
+    if (parse_uint(fields[1], total) != NumResult::kOk ||
+        parse_uint(fields[2], num) != NumResult::kOk) {
         return false;
     }
     if (total == 0 || total > kGsvMaxSentences || num == 0 || num > total) {
         return false;
     }
-    if (!fields[kGsvInViewField].empty() && parse_uint(fields[kGsvInViewField], in_view) == NumResult::kError) {
+    if (!fields[kGsvInViewField].empty() &&
+        parse_uint(fields[kGsvInViewField], in_view) == NumResult::kError) {
         return false;
     }
     return true;
@@ -756,8 +768,9 @@ bool take_gsv_header(const std::array<std::span<const uint8_t>, kGsvMaxFields> &
  * @param sat_count: 输出的有效卫星数
  * @retval false 表示某块字段格式或范围错误
  */
-bool take_gsv_blocks(const std::array<std::span<const uint8_t>, kGsvMaxFields> &fields, size_t blocks,
-                     std::array<SatInfo, kGsvMaxBlocks> &sats, size_t &sat_count) noexcept
+bool take_gsv_blocks(const std::array<std::span<const uint8_t>, kGsvMaxFields> &fields,
+                     size_t blocks, std::array<SatInfo, kGsvMaxBlocks> &sats,
+                     size_t &sat_count) noexcept
 {
     for (size_t b = 0; b < blocks; ++b) {
         const size_t base = kGsvHeaderFields + (b * kGsvBlockFields);
@@ -820,8 +833,10 @@ void merge_gsv(SatTable &pending, const std::array<SatInfo, kGsvMaxBlocks> &sats
 
 // 解析细节通过 friend 访问 NmeaParser 的私有状态；对外只暴露 feed()。
 struct NmeaImpl {
-    static NmeaResult feed(NmeaParser &parser, std::span<const uint8_t> sentence, uint32_t now_ms) noexcept;
-    static NmeaResult parse_gga(NmeaParser &parser, std::span<const uint8_t> body, uint32_t now_ms) noexcept;
+    static NmeaResult feed(NmeaParser &parser, std::span<const uint8_t> sentence,
+                           uint32_t now_ms) noexcept;
+    static NmeaResult parse_gga(NmeaParser &parser, std::span<const uint8_t> body,
+                                uint32_t now_ms) noexcept;
     static NmeaResult parse_rmc(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
     static NmeaResult parse_gsa(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
     static NmeaResult parse_gsv(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
@@ -889,7 +904,8 @@ bool NmeaImpl::publish(NmeaParser &parser, uint32_t now_ms) noexcept
  * @param  now_ms: 当前时间（写入定位时间戳）
  * @retval kFix 已更新定位；kSatsReady 同时完成卫星表发布；kMalformed 字段不合法
  */
-NmeaResult NmeaImpl::parse_gga(NmeaParser &parser, std::span<const uint8_t> body, uint32_t now_ms) noexcept
+NmeaResult NmeaImpl::parse_gga(NmeaParser &parser, std::span<const uint8_t> body,
+                               uint32_t now_ms) noexcept
 {
     FieldIter it{body};
     std::span<const uint8_t> f{};
@@ -898,8 +914,9 @@ NmeaResult NmeaImpl::parse_gga(NmeaParser &parser, std::span<const uint8_t> body
     }
 
     Fix fix = parser.fix_;
-    if (!take_time(it, fix) || !take_position(it, fix) || !take_quality(it, fix) || !take_hdop(it, fix) ||
-        !take_altitude(it, fix.alt_mm) || !take_altitude(it, fix.geoid_mm) || !take_diff(it, fix)) {
+    if (!take_time(it, fix) || !take_position(it, fix) || !take_quality(it, fix) ||
+        !take_hdop(it, fix) || !take_altitude(it, fix.alt_mm) || !take_altitude(it, fix.geoid_mm) ||
+        !take_diff(it, fix)) {
         return NmeaResult::kMalformed;
     }
 
@@ -954,7 +971,8 @@ NmeaResult NmeaImpl::parse_rmc(NmeaParser &parser, std::span<const uint8_t> body
     }
     if (cr == NumResult::kOk) {
         const int64_t cdeg = rescale(course, frac, kCourseScale);
-        fix.course_cdeg = (cdeg < 0) ? 0U : static_cast<uint16_t>(cdeg > kMaxCourseCdeg ? kMaxCourseCdeg : cdeg);
+        fix.course_cdeg =
+            (cdeg < 0) ? 0U : static_cast<uint16_t>(cdeg > kMaxCourseCdeg ? kMaxCourseCdeg : cdeg);
     }
 
     if (parse_date(fields[kRmcDateField], fix.utc) == NumResult::kError) {
@@ -1079,7 +1097,8 @@ NmeaResult NmeaImpl::parse_gsv(NmeaParser &parser, std::span<const uint8_t> body
 
     Constellation system = Constellation::kOther;
     const std::span<const uint8_t> id_field =
-        (extra == 1) ? fields[kGsvHeaderFields + (blocks * kGsvBlockFields)] : std::span<const uint8_t>{};
+        (extra == 1) ? fields[kGsvHeaderFields + (blocks * kGsvBlockFields)]
+                     : std::span<const uint8_t>{};
     if (!resolve_system(fields[0], id_field, system)) {
         return NmeaResult::kMalformed;
     }
@@ -1100,7 +1119,8 @@ NmeaResult NmeaImpl::parse_gsv(NmeaParser &parser, std::span<const uint8_t> body
  * @param  now_ms: 当前时间
  * @retval 解析结果；非 NMEA 语句返回 kIgnored，校验/形状错误返回 kMalformed
  */
-NmeaResult NmeaImpl::feed(NmeaParser &parser, std::span<const uint8_t> sentence, uint32_t now_ms) noexcept
+NmeaResult NmeaImpl::feed(NmeaParser &parser, std::span<const uint8_t> sentence,
+                          uint32_t now_ms) noexcept
 {
     // 输入由 demux::nmea 保证：'$'、正文、'*hh'、"\r\n"。这里再做最小防御。
     if (sentence.size() < kMinSentenceBytes || sentence[0] != static_cast<uint8_t>('$') ||

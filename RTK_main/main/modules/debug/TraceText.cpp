@@ -28,10 +28,12 @@ namespace {
 // 字段表：每个事件码一项，键名与句子模板里的 {占位符} 一一对应。
 constexpr std::array<TraceField, 3U> kLinkOpen = {
     {{"h", TraceValue::kSession}, {"role", TraceValue::kRoleA}, {"why", TraceValue::kReasonB}}};
-constexpr std::array<TraceField, 2U> kLinkClose = {{{"h", TraceValue::kSession}, {"role", TraceValue::kRoleA}}};
+constexpr std::array<TraceField, 2U> kLinkClose = {
+    {{"h", TraceValue::kSession}, {"role", TraceValue::kRoleA}}};
 constexpr std::array<TraceField, 3U> kLinkKick = {
     {{"h", TraceValue::kSession}, {"role", TraceValue::kRoleA}, {"why", TraceValue::kReasonB}}};
-constexpr std::array<TraceField, 2U> kLinkTimeout = {{{"h", TraceValue::kSession}, {"ms", TraceValue::kDecA}}};
+constexpr std::array<TraceField, 2U> kLinkTimeout = {
+    {{"h", TraceValue::kSession}, {"ms", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 3U> kLinkRoleChange = {
     {{"h", TraceValue::kSession}, {"from", TraceValue::kRoleA}, {"to", TraceValue::kRoleB}}};
 constexpr std::array<TraceField, 1U> kLinkPairOpen = {{{"window_ms", TraceValue::kDecA}}};
@@ -46,33 +48,44 @@ constexpr std::array<TraceField, 3U> kProtoFrame = {
     {{"h", TraceValue::kSession}, {"id", TraceValue::kHexA}, {"len", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 3U> kProtoReply = {
     {{"h", TraceValue::kSession}, {"msg", TraceValue::kHexA}, {"result", TraceValue::kResultB}}};
-constexpr std::array<TraceField, 2U> kProtoNoRoute = {{{"msg", TraceValue::kHexA}, {"role", TraceValue::kRoleB}}};
+constexpr std::array<TraceField, 2U> kProtoNoRoute = {
+    {{"msg", TraceValue::kHexA}, {"role", TraceValue::kRoleB}}};
 constexpr std::array<TraceField, 1U> kProtoBadCrc = {{{"dropped", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 1U> kProtoBadLength = {{{"declared", TraceValue::kDecA}}};
-constexpr std::array<TraceField, 2U> kProtoReplyError = {{{"h", TraceValue::kSession}, {"err", TraceValue::kResultA}}};
+constexpr std::array<TraceField, 2U> kProtoReplyError = {
+    {{"h", TraceValue::kSession}, {"err", TraceValue::kResultA}}};
 
-constexpr std::array<TraceField, 2U> kAlarmState = {{{"state", TraceValue::kDecA}, {"level", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kAlarmState = {
+    {{"state", TraceValue::kDecA}, {"level", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 2U> kAlarmOverride = {
     {{"set", TraceValue::kDecA}, {"state_level", TraceValue::kHexB}}};
 constexpr std::array<TraceField, 3U> kAlarmPush = {
     {{"h", TraceValue::kSession}, {"state", TraceValue::kDecA}, {"level", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kAlarmPushFail = {{{"h", TraceValue::kSession}, {"err", TraceValue::kResultA}}};
+constexpr std::array<TraceField, 2U> kAlarmPushFail = {
+    {{"h", TraceValue::kSession}, {"err", TraceValue::kResultA}}};
 
-constexpr std::array<TraceField, 2U> kStoreResult = {{{"result", TraceValue::kResultA}, {"ok", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kStoreResult = {
+    {{"result", TraceValue::kResultA}, {"ok", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 1U> kStoreDebounce = {{{"ms", TraceValue::kDecA}}};
-constexpr std::array<TraceField, 2U> kStoreRetry = {{{"retry_ms", TraceValue::kDecA}, {"fails", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kStoreRetry = {
+    {{"retry_ms", TraceValue::kDecA}, {"fails", TraceValue::kDecB}}};
 
-constexpr std::array<TraceField, 2U> kExecOverrun = {{{"ms", TraceValue::kDecA}, {"budget", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kExecOverrun = {
+    {{"ms", TraceValue::kDecA}, {"budget", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 2U> kExecCallDrop = {
     {{"target", TraceValue::kDecA}, {"timeout_ms", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kExecResultDrop = {{{"seq", TraceValue::kDecA}, {"old", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kExecResultDrop = {
+    {{"seq", TraceValue::kDecA}, {"old", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 1U> kExecWdtFail = {{{"err", TraceValue::kHexA}}};
 
 constexpr std::array<TraceField, 3U> kRtcmFrame = {
     {{"h", TraceValue::kSession}, {"msg", TraceValue::kDecA}, {"len", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kRtcmReject = {{{"why", TraceValue::kDecA}, {"len", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kRtcmResync = {{{"h", TraceValue::kSession}, {"count", TraceValue::kDecA}}};
-constexpr std::array<TraceField, 2U> kRtcmUnknown = {{{"h", TraceValue::kSession}, {"bytes", TraceValue::kDecA}}};
+constexpr std::array<TraceField, 2U> kRtcmReject = {
+    {{"why", TraceValue::kDecA}, {"len", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kRtcmResync = {
+    {{"h", TraceValue::kSession}, {"count", TraceValue::kDecA}}};
+constexpr std::array<TraceField, 2U> kRtcmUnknown = {
+    {{"h", TraceValue::kSession}, {"bytes", TraceValue::kDecA}}};
 
 constexpr std::array<TraceField, 1U> kSppStart = {{{"scn", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 1U> kSppCong = {{{"cong", TraceValue::kDecA}}};
@@ -83,13 +96,17 @@ constexpr std::array<TraceField, 3U> kSppWriteErr = {
 constexpr std::array<TraceField, 3U> kSppRxDrop = {
     {{"h", TraceValue::kSession}, {"dropped", TraceValue::kDecA}, {"used", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 1U> kSppAuth = {{{"status", TraceValue::kDecA}}};
-constexpr std::array<TraceField, 2U> kSppEvtDrop = {{{"type", TraceValue::kDecA}, {"total", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 3U> kSppStage = {
-    {{"h", TraceValue::kSession}, {"stage", TraceValue::kSppStageA}, {"status", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kSppCtrlFull = {{{"h", TraceValue::kSession}, {"ctrl", TraceValue::kSppCtrlA}}};
+constexpr std::array<TraceField, 2U> kSppEvtDrop = {
+    {{"type", TraceValue::kDecA}, {"total", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 3U> kSppStage = {{{"h", TraceValue::kSession},
+                                                   {"stage", TraceValue::kSppStageA},
+                                                   {"status", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kSppCtrlFull = {
+    {{"h", TraceValue::kSession}, {"ctrl", TraceValue::kSppCtrlA}}};
 constexpr std::array<TraceField, 3U> kSppCtrlErr = {
     {{"h", TraceValue::kSession}, {"ctrl", TraceValue::kSppCtrlA}, {"err", TraceValue::kHexB}}};
-constexpr std::array<TraceField, 2U> kSppReject = {{{"h", TraceValue::kSession}, {"sent", TraceValue::kDecA}}};
+constexpr std::array<TraceField, 2U> kSppReject = {
+    {{"h", TraceValue::kSession}, {"sent", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 2U> kSppWriteAnon = {
     {{"status", TraceValue::kDecA}, {"candidates", TraceValue::kHexB}}};
 constexpr std::array<TraceField, 3U> kSppWriteStray = {
@@ -102,14 +119,20 @@ constexpr std::array<TraceField, 2U> kGnssProbeSend = {
     {{"family", TraceValue::kGnssFamilyA}, {"baud", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 2U> kGnssProbeHit = {
     {{"model", TraceValue::kGnssModelA}, {"baud", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kGnssStepRetry = {{{"step", TraceValue::kDecA}, {"retry", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssStepRetry = {
+    {{"step", TraceValue::kDecA}, {"retry", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 1U> kGnssStep = {{{"step", TraceValue::kDecA}}};
 constexpr std::array<TraceField, 1U> kGnssSilence = {{{"ms", TraceValue::kDecA}}};
-constexpr std::array<TraceField, 2U> kGnssPipeDrop = {{{"len", TraceValue::kDecA}, {"space", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kGnssBaud = {{{"baud", TraceValue::kDecA}, {"from", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kGnssAppMask = {{{"mask", TraceValue::kHexA}, {"disc", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kGnssAppDrop = {{{"kind", TraceValue::kDecA}, {"type", TraceValue::kDecB}}};
-constexpr std::array<TraceField, 2U> kGnssOutCfg = {{{"mask", TraceValue::kHexA}, {"saved", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssPipeDrop = {
+    {{"len", TraceValue::kDecA}, {"space", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssBaud = {
+    {{"baud", TraceValue::kDecA}, {"from", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssAppMask = {
+    {{"mask", TraceValue::kHexA}, {"disc", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssAppDrop = {
+    {{"kind", TraceValue::kDecA}, {"type", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssOutCfg = {
+    {{"mask", TraceValue::kHexA}, {"saved", TraceValue::kDecB}}};
 #endif
 
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
@@ -118,98 +141,104 @@ constexpr std::array<TraceText, 60U> kTable = {{
 #else
 constexpr std::array<TraceText, 47U> kTable = {{
 #endif
-    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen), "session {h} opened as {role} ({why})",
-     std::span<const TraceField>(kLinkOpen)},
-    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kClose), "session {h} closed ({role})",
-     std::span<const TraceField>(kLinkClose)},
-    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kKick), "session {h} kicked ({role}, {why})",
-     std::span<const TraceField>(kLinkKick)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen),
+     "session {h} opened as {role} ({why})", std::span<const TraceField>(kLinkOpen)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kClose),
+     "session {h} closed ({role})", std::span<const TraceField>(kLinkClose)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kKick),
+     "session {h} kicked ({role}, {why})", std::span<const TraceField>(kLinkKick)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kAlarmRxTimeout),
      "session {h} alarm reply timeout after {ms} ms", std::span<const TraceField>(kLinkTimeout)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kPendingTimeout),
      "session {h} pending hello timeout after {ms} ms", std::span<const TraceField>(kLinkTimeout)},
-    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kRoleChange), "session {h} role {from} -> {to}",
-     std::span<const TraceField>(kLinkRoleChange)},
-    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kPairOpen), "pairing window opened for {window_ms} ms",
-     std::span<const TraceField>(kLinkPairOpen)},
-    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kPairClose), "pairing window closed after {timeout} ms",
-     std::span<const TraceField>(kLinkPairClose)},
-    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kWhitelistAdd), "whitelist add, {count} entries",
-     std::span<const TraceField>(kLinkWhitelistAdd)},
-    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kWhitelistClear), "whitelist cleared",
-     std::span<const TraceField>(kLinkWhitelistClear)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kRoleChange),
+     "session {h} role {from} -> {to}", std::span<const TraceField>(kLinkRoleChange)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kPairOpen),
+     "pairing window opened for {window_ms} ms", std::span<const TraceField>(kLinkPairOpen)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kPairClose),
+     "pairing window closed after {timeout} ms", std::span<const TraceField>(kLinkPairClose)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kWhitelistAdd),
+     "whitelist add, {count} entries", std::span<const TraceField>(kLinkWhitelistAdd)},
+    {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kWhitelistClear),
+     "whitelist cleared", std::span<const TraceField>(kLinkWhitelistClear)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kWhitelistRemove),
      "whitelist remove, {count} entries left", std::span<const TraceField>(kLinkWhitelistRemove)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kCloseCancel),
-     "session {h} close cancelled {rx} rx bytes (paused={paused})", std::span<const TraceField>(kLinkCloseCancel)},
-    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kFrame), "session {h} frame {id}, {len} bytes",
-     std::span<const TraceField>(kProtoFrame)},
-    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kReply), "session {h} reply to {msg}: {result}",
-     std::span<const TraceField>(kProtoReply)},
-    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kNoRoute), "message {msg} has no route for {role}",
-     std::span<const TraceField>(kProtoNoRoute)},
-    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kBadCrc), "dropped {dropped} frames: bad CRC",
-     std::span<const TraceField>(kProtoBadCrc)},
+     "session {h} close cancelled {rx} rx bytes (paused={paused})",
+     std::span<const TraceField>(kLinkCloseCancel)},
+    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kFrame),
+     "session {h} frame {id}, {len} bytes", std::span<const TraceField>(kProtoFrame)},
+    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kReply),
+     "session {h} reply to {msg}: {result}", std::span<const TraceField>(kProtoReply)},
+    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kNoRoute),
+     "message {msg} has no route for {role}", std::span<const TraceField>(kProtoNoRoute)},
+    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kBadCrc),
+     "dropped {dropped} frames: bad CRC", std::span<const TraceField>(kProtoBadCrc)},
     {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kBadLength),
      "dropped frame, declared {declared} bytes", std::span<const TraceField>(kProtoBadLength)},
-    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kReplyError), "session {h} reply failed: {err}",
-     std::span<const TraceField>(kProtoReplyError)},
-    {fw::TraceCat::kAlarm, static_cast<uint8_t>(core::AlarmTrace::kState), "state {state}, level {level}",
-     std::span<const TraceField>(kAlarmState)},
+    {fw::TraceCat::kProto, static_cast<uint8_t>(core::ProtoTrace::kReplyError),
+     "session {h} reply failed: {err}", std::span<const TraceField>(kProtoReplyError)},
+    {fw::TraceCat::kAlarm, static_cast<uint8_t>(core::AlarmTrace::kState),
+     "state {state}, level {level}", std::span<const TraceField>(kAlarmState)},
     {fw::TraceCat::kAlarm, static_cast<uint8_t>(core::AlarmTrace::kOverride),
      "override {set}, state/level {state_level}", std::span<const TraceField>(kAlarmOverride)},
     {fw::TraceCat::kAlarm, static_cast<uint8_t>(core::AlarmTrace::kPush),
      "session {h} push state {state}, level {level}", std::span<const TraceField>(kAlarmPush)},
-    {fw::TraceCat::kAlarm, static_cast<uint8_t>(core::AlarmTrace::kPushFail), "session {h} push failed: {err}",
-     std::span<const TraceField>(kAlarmPushFail)},
+    {fw::TraceCat::kAlarm, static_cast<uint8_t>(core::AlarmTrace::kPushFail),
+     "session {h} push failed: {err}", std::span<const TraceField>(kAlarmPushFail)},
     {fw::TraceCat::kStore, static_cast<uint8_t>(StoreTrace::kLoad), "{result}, {ok} keys",
      std::span<const TraceField>(kStoreResult)},
     {fw::TraceCat::kStore, static_cast<uint8_t>(StoreTrace::kSave), "{result}, {ok} keys",
      std::span<const TraceField>(kStoreResult)},
     {fw::TraceCat::kStore, static_cast<uint8_t>(StoreTrace::kDebounce), "save deferred by {ms} ms",
      std::span<const TraceField>(kStoreDebounce)},
-    {fw::TraceCat::kStore, static_cast<uint8_t>(StoreTrace::kRetry), "retry in {retry_ms} ms after {fails} failures",
-     std::span<const TraceField>(kStoreRetry)},
-    {fw::TraceCat::kExec, static_cast<uint8_t>(ExecTrace::kRoundOverrun), "round took {ms} ms, budget {budget} ms",
-     std::span<const TraceField>(kExecOverrun)},
-    {fw::TraceCat::kExec, static_cast<uint8_t>(ExecTrace::kCallDrop), "call to {target} dropped after {timeout_ms} ms",
-     std::span<const TraceField>(kExecCallDrop)},
+    {fw::TraceCat::kStore, static_cast<uint8_t>(StoreTrace::kRetry),
+     "retry in {retry_ms} ms after {fails} failures", std::span<const TraceField>(kStoreRetry)},
+    {fw::TraceCat::kExec, static_cast<uint8_t>(ExecTrace::kRoundOverrun),
+     "round took {ms} ms, budget {budget} ms", std::span<const TraceField>(kExecOverrun)},
+    {fw::TraceCat::kExec, static_cast<uint8_t>(ExecTrace::kCallDrop),
+     "call to {target} dropped after {timeout_ms} ms", std::span<const TraceField>(kExecCallDrop)},
     {fw::TraceCat::kExec, static_cast<uint8_t>(ExecTrace::kResultDrop),
      "result of command {seq} lost, result queue still full after dropping {old} old results",
      std::span<const TraceField>(kExecResultDrop)},
     {fw::TraceCat::kExec, static_cast<uint8_t>(ExecTrace::kWdtResetFail),
      "task watchdog reset failed with error {err}, watchdog feeding stopped",
      std::span<const TraceField>(kExecWdtFail)},
-    {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kFrame), "session {h} frame {msg}, {len} bytes",
-     std::span<const TraceField>(kRtcmFrame)},
-    {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kReject), "frame rejected, reason {why}, {len} bytes",
-     std::span<const TraceField>(kRtcmReject)},
+    {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kFrame),
+     "session {h} frame {msg}, {len} bytes", std::span<const TraceField>(kRtcmFrame)},
+    {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kReject),
+     "frame rejected, reason {why}, {len} bytes", std::span<const TraceField>(kRtcmReject)},
     {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kResync), "session {h} resync {count}",
      std::span<const TraceField>(kRtcmResync)},
-    {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kUnknown), "session {h} dropped {bytes} unknown bytes",
-     std::span<const TraceField>(kRtcmUnknown)},
-    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_SRV_START), "server started, scn {scn}",
-     std::span<const TraceField>(kSppStart)},
+    {fw::TraceCat::kRtcm, static_cast<uint8_t>(RtcmTrace::kUnknown),
+     "session {h} dropped {bytes} unknown bytes", std::span<const TraceField>(kRtcmUnknown)},
+    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_SRV_START),
+     "server started, scn {scn}", std::span<const TraceField>(kSppStart)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_CONG), "congestion {cong}",
      std::span<const TraceField>(kSppCong)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_WRITE_DONE),
      "session {h} wrote {bytes} bytes in {ms} ms", std::span<const TraceField>(kSppWriteDone)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_WRITE_ERR),
-     "session {h} write failed {err} after {bytes} bytes", std::span<const TraceField>(kSppWriteErr)},
+     "session {h} write failed {err} after {bytes} bytes",
+     std::span<const TraceField>(kSppWriteErr)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_RX_DROP),
-     "session {h} dropped {dropped} rx bytes (used {used})", std::span<const TraceField>(kSppRxDrop)},
+     "session {h} dropped {dropped} rx bytes (used {used})",
+     std::span<const TraceField>(kSppRxDrop)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_AUTH), "auth status {status}",
      std::span<const TraceField>(kSppAuth)},
-    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_EVT_DROP), "event {type} dropped, total {total}",
-     std::span<const TraceField>(kSppEvtDrop)},
+    {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_EVT_DROP),
+     "event {type} dropped, total {total}", std::span<const TraceField>(kSppEvtDrop)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_STAGE),
      "{stage} finished with status {status} (session {h})", std::span<const TraceField>(kSppStage)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_CTRL_FULL),
-     "control queue full, {ctrl} reply lost (session {h})", std::span<const TraceField>(kSppCtrlFull)},
+     "control queue full, {ctrl} reply lost (session {h})",
+     std::span<const TraceField>(kSppCtrlFull)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_CTRL_ERR),
-     "{ctrl} request failed with error {err} (session {h})", std::span<const TraceField>(kSppCtrlErr)},
+     "{ctrl} request failed with error {err} (session {h})",
+     std::span<const TraceField>(kSppCtrlErr)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_REJECT),
-     "session {h} rejected, no free secure slot (disconnect sent {sent})", std::span<const TraceField>(kSppReject)},
+     "session {h} rejected, no free secure slot (disconnect sent {sent})",
+     std::span<const TraceField>(kSppReject)},
     {fw::TraceCat::kSpp, static_cast<uint8_t>(SPP_SERVER_TRACE_WRITE_STRAY),
      "stray write completion ignored, {bytes} bytes, status {status} (session {h})",
      std::span<const TraceField>(kSppWriteStray)},
@@ -217,32 +246,33 @@ constexpr std::array<TraceText, 47U> kTable = {{
      "anonymous write failure {status}, disconnect candidates {candidates}",
      std::span<const TraceField>(kSppWriteAnon)},
 #if RTK_GNSS_ENABLED
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kState), "<sm> state {state} (from {from})",
-     std::span<const TraceField>(kGnssState)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kProbeSend), "<probe> sent {family} query at {baud} baud",
-     std::span<const TraceField>(kGnssProbeSend)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kProbeHit), "<probe> detected {model} at {baud} baud",
-     std::span<const TraceField>(kGnssProbeHit)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepSend), "<cfg> step {step} sent, retry {retry}",
-     std::span<const TraceField>(kGnssStepRetry)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepAck), "<cfg> step {step} acknowledged",
-     std::span<const TraceField>(kGnssStep)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepNack), "<cfg> step {step} rejected by receiver",
-     std::span<const TraceField>(kGnssStep)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepTimeout), "<cfg> step {step} timed out, retry {retry}",
-     std::span<const TraceField>(kGnssStepRetry)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kSilence), "<rx> no data for {ms} ms, reprobing",
-     std::span<const TraceField>(kGnssSilence)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kState),
+     "<sm> state {state} (from {from})", std::span<const TraceField>(kGnssState)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kProbeSend),
+     "<probe> sent {family} query at {baud} baud", std::span<const TraceField>(kGnssProbeSend)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kProbeHit),
+     "<probe> detected {model} at {baud} baud", std::span<const TraceField>(kGnssProbeHit)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepSend),
+     "<cfg> step {step} sent, retry {retry}", std::span<const TraceField>(kGnssStepRetry)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepAck),
+     "<cfg> step {step} acknowledged", std::span<const TraceField>(kGnssStep)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepNack),
+     "<cfg> step {step} rejected by receiver", std::span<const TraceField>(kGnssStep)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kStepTimeout),
+     "<cfg> step {step} timed out, retry {retry}", std::span<const TraceField>(kGnssStepRetry)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kSilence),
+     "<rx> no data for {ms} ms, reprobing", std::span<const TraceField>(kGnssSilence)},
     {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kPipeDrop),
-     "<rtcm> pipe dropped {len} bytes, {space} bytes free", std::span<const TraceField>(kGnssPipeDrop)},
+     "<rtcm> pipe dropped {len} bytes, {space} bytes free",
+     std::span<const TraceField>(kGnssPipeDrop)},
     {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssTrace::kBaud), "<uart> baud {baud} (was {from})",
      std::span<const TraceField>(kGnssBaud)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppMask), "<app> sub mask {mask} (disc={disc})",
-     std::span<const TraceField>(kGnssAppMask)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppDrop), "<app> drop kind={kind} type={type}",
-     std::span<const TraceField>(kGnssAppDrop)},
-    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kOutCfg), "<out> mask={mask} saved={saved}",
-     std::span<const TraceField>(kGnssOutCfg)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppMask),
+     "<app> sub mask {mask} (disc={disc})", std::span<const TraceField>(kGnssAppMask)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppDrop),
+     "<app> drop kind={kind} type={type}", std::span<const TraceField>(kGnssAppDrop)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kOutCfg),
+     "<out> mask={mask} saved={saved}", std::span<const TraceField>(kGnssOutCfg)},
 #endif
 }};
 
@@ -272,7 +302,8 @@ void append(char *out, size_t cap, size_t &pos, const char *fmt, ...) noexcept
     // 理由（下面三处 NOLINT）：C 可变参数只能走裸指针——va_list 在 x86_64 上就是数组类型、
     // vsnprintf 不接受 span；越界已由上面的 pos 检查排除，写入长度由返回值夹紧。
     va_list args;
-    va_start(args, fmt); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay): va_list 即数组
+    va_start(args,
+             fmt); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay): va_list 即数组
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     const int written = vsnprintf(&out[pos], cap - pos, fmt, args);
     va_end(args); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay): va_list 即数组
@@ -398,7 +429,8 @@ const char *gnss_family_text(uint32_t value) noexcept
 }
 #endif
 
-void append_value(char *out, size_t cap, size_t &pos, TraceValue value, const fw::TraceEvent &ev) noexcept
+void append_value(char *out, size_t cap, size_t &pos, TraceValue value,
+                  const fw::TraceEvent &ev) noexcept
 {
     switch (value) {
     case TraceValue::kDecA:
@@ -463,8 +495,8 @@ void append_value(char *out, size_t cap, size_t &pos, TraceValue value, const fw
 }
 
 /** 渲染 {key} 占位符：在字段表里按键名查找并用对应方式输出；查不到则原样保留。 */
-void render_field(char *out, size_t cap, size_t &pos, std::string_view key, std::span<const TraceField> fields,
-                  const fw::TraceEvent &ev) noexcept
+void render_field(char *out, size_t cap, size_t &pos, std::string_view key,
+                  std::span<const TraceField> fields, const fw::TraceEvent &ev) noexcept
 {
     for (const TraceField &field : fields) {
         if (key_equals(key, field.key)) {
@@ -476,8 +508,8 @@ void render_field(char *out, size_t cap, size_t &pos, std::string_view key, std:
 }
 
 /** 按句子模板渲染一行；未闭合或空的 {} 原样输出，便于发现模板写错。 */
-void render_sentence(std::string_view sentence, std::span<const TraceField> fields, const fw::TraceEvent &ev, char *out,
-                     size_t cap, size_t &pos) noexcept
+void render_sentence(std::string_view sentence, std::span<const TraceField> fields,
+                     const fw::TraceEvent &ev, char *out, size_t cap, size_t &pos) noexcept
 {
     // 用下标遍历模板，避免指针算术（项目规则禁止）。
     size_t i = 0U;
@@ -491,7 +523,8 @@ void render_sentence(std::string_view sentence, std::span<const TraceField> fiel
         while ((close < sentence.size()) && (sentence[close] != '}')) {
             ++close;
         }
-        if (close >= sentence.size()) { // 未闭合：原样输出剩余部分（逐字符，避免对非 0 结尾的视图取 data()）
+        if (close >=
+            sentence.size()) { // 未闭合：原样输出剩余部分（逐字符，避免对非 0 结尾的视图取 data()）
             for (size_t k = i; k < sentence.size(); ++k) {
                 append(out, cap, pos, "%c", sentence[k]);
             }
@@ -538,7 +571,9 @@ bool parse_cat(std::string_view name, fw::TraceCat &out) noexcept
         bool same = true;
         for (size_t k = 0; k < name.size(); ++k) {
             // 只比较 ASCII、不区分大小写：控制台习惯输小写，表里是大写短名。
-            const char upper = (name[k] >= 'a' && name[k] <= 'z') ? static_cast<char>(name[k] - 'a' + 'A') : name[k];
+            const char upper = (name[k] >= 'a' && name[k] <= 'z')
+                                   ? static_cast<char>(name[k] - 'a' + 'A')
+                                   : name[k];
             if (upper != candidate[k]) {
                 same = false;
                 break;
@@ -569,8 +604,8 @@ void format_event(const fw::TraceEvent &ev, char *out, size_t cap) noexcept
         return;
     }
     // 未知码：保留原始数值，便于对照新加的调用点。
-    append(out, cap, pos, "code %u a=%lu b=%lu", static_cast<unsigned>(ev.code), static_cast<unsigned long>(ev.a),
-           static_cast<unsigned long>(ev.b));
+    append(out, cap, pos, "code %u a=%lu b=%lu", static_cast<unsigned>(ev.code),
+           static_cast<unsigned long>(ev.a), static_cast<unsigned long>(ev.b));
 }
 
 } // namespace app::debug

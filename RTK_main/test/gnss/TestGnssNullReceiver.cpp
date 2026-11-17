@@ -15,7 +15,8 @@ void tearDown() {}
 static void test_identity()
 {
     const gnss::Receiver &null_receiver = gnss::null_receiver();
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnknown), static_cast<int>(null_receiver.family()));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnknown),
+                      static_cast<int>(null_receiver.family()));
     TEST_ASSERT_EQUAL_STRING("null", null_receiver.name().data());
     TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(null_receiver.decoders().size()));
     TEST_ASSERT_EQUAL_UINT32(0, null_receiver.caps(gnss::Model::kUm982));
@@ -43,22 +44,25 @@ static void test_no_bytes_and_no_frames()
 
     const uint8_t sent[] = "MODE ROVER\r\n";
     const uint8_t reply[] = "$command,MODE ROVER,response: OK*1F\r\n";
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNone),
-                      static_cast<int>(null_receiver.classify_reply(demux::nmea::kDecoder, reply, sent)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::Ack::kNone),
+        static_cast<int>(null_receiver.classify_reply(demux::nmea::kDecoder, reply, sent)));
 
     gnss::OutputPlan plan{};
-    TEST_ASSERT_EQUAL(
-        static_cast<int>(fw::Status::kNotSupported),
-        static_cast<int>(null_receiver.build_output(gnss::OutputMsg::kGga, 1000U, gnss::Model::kUm982, plan, cmd)));
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kNotSupported),
+                      static_cast<int>(null_receiver.build_output(gnss::OutputMsg::kGga, 1000U,
+                                                                  gnss::Model::kUm982, plan, cmd)));
     TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(cmd.len));
 
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::OutputMsg::kNone),
                       static_cast<int>(null_receiver.classify_frame(demux::nmea::kDecoder, reply)));
 
     char tag[32] = {};
-    TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(null_receiver.frame_tag(demux::nmea::kDecoder, reply, tag)));
+    TEST_ASSERT_EQUAL_UINT32(
+        0, static_cast<uint32_t>(null_receiver.frame_tag(demux::nmea::kDecoder, reply, tag)));
     TEST_ASSERT_FALSE(null_receiver.build_readback(cmd));
-    TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(null_receiver.match_readback(demux::nmea::kDecoder, reply, tag)));
+    TEST_ASSERT_EQUAL_UINT32(
+        0, static_cast<uint32_t>(null_receiver.match_readback(demux::nmea::kDecoder, reply, tag)));
 }
 
 int main(int, char **)

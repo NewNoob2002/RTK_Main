@@ -88,7 +88,8 @@ void view_equal(const fw::FanoutView &view, std::span<const uint8_t> expected)
 {
     TEST_ASSERT_EQUAL_size_t(expected.size(), view.first.size() + view.second.size());
     TEST_ASSERT_TRUE(std::equal(view.first.begin(), view.first.end(), expected.begin()));
-    TEST_ASSERT_TRUE(std::equal(view.second.begin(), view.second.end(), expected.subspan(view.first.size()).begin()));
+    TEST_ASSERT_TRUE(std::equal(view.second.begin(), view.second.end(),
+                                expected.subspan(view.first.size()).begin()));
 }
 
 void test_validation_and_modes()
@@ -109,7 +110,8 @@ void test_validation_and_modes()
     expect(Result::kInvalidArg, ring.init_typed(storage, 0U, fw::kNoLock));
     expect(Result::kInvalidArg, ring.init_typed(storage, 65536U, fw::kNoLock));
     expect(Result::kInvalidArg, ring.init_typed(storage, kCap, fw::kNoLock));
-    expect(Result::kInvalidArg, ring.init_typed(std::span(storage).first(kCap - 1U), 1U, fw::kNoLock));
+    expect(Result::kInvalidArg,
+           ring.init_typed(std::span(storage).first(kCap - 1U), 1U, fw::kNoLock));
     const fw::LockOps bad_lock{[](void *) noexcept {}, nullptr, nullptr};
     expect(Result::kInvalidArg, ring.init_typed(storage, 1U, bad_lock));
     expect(Result::kOk, ring.init_typed(storage, kCap - fw::kFanoutTypedHeaderBytes, fw::kNoLock));
@@ -308,7 +310,8 @@ void test_capacity_and_oversize()
         expect(Result::kOk, ring.peek(id, view));
         view_equal(view, bytes);
         expect(Result::kOk, ring.commit(view.lease));
-        TEST_ASSERT_EQUAL_size_t(max + fw::kFanoutTypedHeaderBytes, ring.typed_writer_stats().high_water_bytes);
+        TEST_ASSERT_EQUAL_size_t(max + fw::kFanoutTypedHeaderBytes,
+                                 ring.typed_writer_stats().high_water_bytes);
         if (cap == kAppCap) {
             expect(Result::kInvalidArg, ring.write(0U, std::span(payload).first(kAppCap)));
             TEST_ASSERT_EQUAL_UINT32(1U, ring.typed_writer_stats().oversize_drop);
@@ -338,8 +341,8 @@ void test_capacity_and_oversize()
 
 void test_physical_and_u32_wrap_without_moving_pin()
 {
-    for (const uint32_t start :
-         {uint32_t{kCap - 1U}, uint32_t{kCap - 4U}, kMaxCounter - 1U, kMaxCounter - 4U, kMaxCounter - 16U}) {
+    for (const uint32_t start : {uint32_t{kCap - 1U}, uint32_t{kCap - 4U}, kMaxCounter - 1U,
+                                 kMaxCounter - 4U, kMaxCounter - 16U}) {
         fw::FanoutRing ring;
         std::array<uint8_t, kCap> storage{};
         expect(Result::kOk, ring.init_typed(storage, 8U, fw::kNoLock));
@@ -464,8 +467,8 @@ struct ControlledLock {
     {
         auto &self = *static_cast<ControlledLock *>(ctx); // ctx 仅绑定到本类型。
         sys_ok(pthread_mutex_unlock(&self.ring_mutex));
-        if (self.armed && (pthread_equal(pthread_self(), self.writer) != 0) && !self.pause_before_lock &&
-            (self.lock_calls == self.pause_at)) {
+        if (self.armed && (pthread_equal(pthread_self(), self.writer) != 0) &&
+            !self.pause_before_lock && (self.lock_calls == self.pause_at)) {
             self.pause();
         }
     }
@@ -560,8 +563,8 @@ void test_copy_before_publication_is_invisible()
     fw::FanoutView view{};
     const Result peek_result = ring.peek(id, view);
     const uint32_t records = ring.writer_stats().records;
-    const bool copied =
-        std::equal(payload.begin(), payload.end(), std::span(storage).subspan(fw::kFanoutTypedHeaderBytes).begin());
+    const bool copied = std::equal(payload.begin(), payload.end(),
+                                   std::span(storage).subspan(fw::kFanoutTypedHeaderBytes).begin());
     lock.release();
     sys_ok(pthread_join(thread, nullptr));
     expect(Result::kNotFound, peek_result);
@@ -646,8 +649,9 @@ void test_concurrent_reader_stats()
 int main()
 {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) host 报告对象布局，格式与 size_t 匹配。
-    std::printf("K1 sizeof FanoutRing=%zu Reader=%zu FanoutLease=%zu FanoutView=%zu\n", sizeof(fw::FanoutRing),
-                fw::FanoutRingTestAccess::reader_size(), sizeof(fw::FanoutLease), sizeof(fw::FanoutView));
+    std::printf("K1 sizeof FanoutRing=%zu Reader=%zu FanoutLease=%zu FanoutView=%zu\n",
+                sizeof(fw::FanoutRing), fw::FanoutRingTestAccess::reader_size(),
+                sizeof(fw::FanoutLease), sizeof(fw::FanoutView));
     UNITY_BEGIN();
     RUN_TEST(test_validation_and_modes);
     RUN_TEST(test_masks_and_independent_readers);

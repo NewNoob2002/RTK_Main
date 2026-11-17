@@ -15,8 +15,10 @@ namespace app {
 using ExecTrace = rtos::ExecTrace;
 
 // 码值是对外可观测契约：两边不一致会让控制台文本表解释错位，故编译期锁定。
-static_assert(static_cast<uint8_t>(ExecTrace::kRoundOverrun) == 0U, "kExec 码值与 rtos/ExecTrace.hpp 不一致");
-static_assert(static_cast<uint8_t>(ExecTrace::kCallDrop) == 1U, "kExec 码值与 rtos/ExecTrace.hpp 不一致");
+static_assert(static_cast<uint8_t>(ExecTrace::kRoundOverrun) == 0U,
+              "kExec 码值与 rtos/ExecTrace.hpp 不一致");
+static_assert(static_cast<uint8_t>(ExecTrace::kCallDrop) == 1U,
+              "kExec 码值与 rtos/ExecTrace.hpp 不一致");
 
 /** 系统模块命令动词。 */
 enum class SystemVerb : uint8_t { kPublish };

@@ -30,14 +30,16 @@ public:
     ~BootTask() = default;
 
     /** 创建并启动任务；重复调用返回 kBusy，栈或参数非法返回 kInvalidArg。 */
-    [[nodiscard]] fw::Status start(std::span<StackType_t> stack, const char *name, uint32_t priority, BaseType_t core,
-                                   Entry entry, void *arg) noexcept
+    [[nodiscard]] fw::Status start(std::span<StackType_t> stack, const char *name,
+                                   uint32_t priority, BaseType_t core, Entry entry,
+                                   void *arg) noexcept
     {
         if (handle_ != nullptr) {
             return fw::Status::kBusy;
         }
-        if (stack.empty() || (stack.data() == nullptr) || (name == nullptr) || (*name == '\0') || (entry == nullptr) ||
-            (core < 0) || (core >= configNUMBER_OF_CORES) || (priority >= configMAX_PRIORITIES) ||
+        if (stack.empty() || (stack.data() == nullptr) || (name == nullptr) || (*name == '\0') ||
+            (entry == nullptr) || (core < 0) || (core >= configNUMBER_OF_CORES) ||
+            (priority >= configMAX_PRIORITIES) ||
             (stack.size_bytes() > std::numeric_limits<configSTACK_DEPTH_TYPE>::max())) {
             return fw::Status::kInvalidArg;
         }
@@ -45,9 +47,9 @@ public:
         entry_ = entry;
         arg_ = arg;
         // ESP-IDF 的栈深度单位为字节；上面已验证深度和优先级的转换范围，绑核理由由调用方记录。
-        handle_ = xTaskCreateStaticPinnedToCore(&BootTask::trampoline, name,
-                                                static_cast<configSTACK_DEPTH_TYPE>(stack_.size_bytes()), this,
-                                                static_cast<UBaseType_t>(priority), stack_.data(), &tcb_, core);
+        handle_ = xTaskCreateStaticPinnedToCore(
+            &BootTask::trampoline, name, static_cast<configSTACK_DEPTH_TYPE>(stack_.size_bytes()),
+            this, static_cast<UBaseType_t>(priority), stack_.data(), &tcb_, core);
         if (handle_ == nullptr) {
             stack_ = std::span<StackType_t>{};
             entry_ = nullptr;

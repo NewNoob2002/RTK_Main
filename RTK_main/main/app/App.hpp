@@ -60,7 +60,8 @@ void bind_executors() noexcept;
 void run_console() noexcept;
 
 /** 启动链路执行器并等待首批模块就绪；成功返回 nullptr，失败返回降级原因字符串。 */
-[[nodiscard]] const char *start_link(std::span<StackType_t> link_stack, uint32_t &launched) noexcept;
+[[nodiscard]] const char *start_link(std::span<StackType_t> link_stack,
+                                     uint32_t &launched) noexcept;
 
 #if RTK_GNSS_ENABLED
 /** 启动 IO 执行器并等待首批模块就绪；成功返回 nullptr，失败返回降级原因字符串。 */

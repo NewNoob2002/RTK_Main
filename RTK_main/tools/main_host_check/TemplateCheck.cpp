@@ -57,7 +57,8 @@ void pump()
     const TaskHandle_t previous = s_current;
     s_current = s_created;
     s_rounds = 0U;
-    if (setjmp(s_return) == 0) { // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay) -- setjmp C
+    if (setjmp(s_return) ==
+        0) { // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay) -- setjmp C
         // ABI，测试用来结束执行器无限循环。
         s_created->fn(s_created->arg);
     }
@@ -95,7 +96,8 @@ void test_lifecycle()
     app::TemplateModule tmpl{ctx};
 
     const auto ops = fw::make_ops<app::TemplateModule>();
-    CHECK(ops.init != nullptr && ops.start == nullptr && ops.poll != nullptr && ops.on_command != nullptr);
+    CHECK(ops.init != nullptr && ops.start == nullptr && ops.poll != nullptr &&
+          ops.on_command != nullptr);
 
     // 未 init 前的保护分支。
     CHECK(!tmpl.poll(s_clock));
@@ -104,19 +106,22 @@ void test_lifecycle()
     CHECK(pre_res.status == fw::Result::kInvalidState);
 
     static constinit std::array<fw::Module, 2> modules{{
-        {"bt_stub", app::id(app::ModuleKind::kBtLink), app::id(app::ExecKind::kLink), 0U, nullptr, &kBtStubOps},
+        {"bt_stub", app::id(app::ModuleKind::kBtLink), app::id(app::ExecKind::kLink), 0U, nullptr,
+         &kBtStubOps},
         {"template", kTemplateId, app::id(app::ExecKind::kLink), 0U, nullptr, nullptr},
     }};
     modules[1].self = &tmpl;
     modules[1].ops = &ops;
 
     static rtos::Executor s_exec{};
-    static std::array<StackType_t, app::AppContext::kLinkStackBytes / sizeof(StackType_t)> s_link_stack{};
+    static std::array<StackType_t, app::AppContext::kLinkStackBytes / sizeof(StackType_t)>
+        s_link_stack{};
     ctx.link_executor = &s_exec;
 
     const rtos::ExecutorConfig cfg{
         .name = "tmpl_exec", .priority = 5U, .core = 1, .wait = wait_advance, .wait_ctx = nullptr};
-    CHECK(ctx.link_executor->init(cfg, modules, app::view_of(ctx.link_storage, s_link_stack)) == fw::Status::kOk);
+    CHECK(ctx.link_executor->init(cfg, modules, app::view_of(ctx.link_storage, s_link_stack)) ==
+          fw::Status::kOk);
     CHECK(tmpl.state().initialized && tmpl.state().limit_ms == 1000U && tmpl.state().ticks == 0U);
     CHECK(ctx.link_executor->start() == fw::Status::kOk);
 
@@ -132,27 +137,35 @@ void test_lifecycle()
     // 通过 Executor CommandBus 验证合法/非法命令。
     s_pump_receive = true;
     fw::CommandResult res{};
-    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 2500U), res, 100U) == fw::Result::kOk);
+    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 2500U), res, 100U) ==
+          fw::Result::kOk);
     CHECK(res.status == fw::Result::kOk && tmpl.state().limit_ms == 2500U);
 
     CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 0U), res, 100U) == fw::Result::kOk);
     CHECK(res.status == fw::Result::kInvalidArg);
-    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 60001U), res, 100U) == fw::Result::kOk);
+    CHECK(ctx.link_executor->call(make_limit_cmd(kTemplateId, 60001U), res, 100U) ==
+          fw::Result::kOk);
     CHECK(res.status == fw::Result::kInvalidArg);
 
     fw::Command bad_len = make_limit_cmd(kTemplateId, 500U);
     bad_len.arg_len = 2U;
-    CHECK(ctx.link_executor->call(bad_len, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+    CHECK(ctx.link_executor->call(bad_len, res, 100U) == fw::Result::kOk &&
+          res.status == fw::Result::kInvalidArg);
 
-    const fw::Command reset_bad{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 1U};
-    CHECK(ctx.link_executor->call(reset_bad, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+    const fw::Command reset_bad{
+        .target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 1U};
+    CHECK(ctx.link_executor->call(reset_bad, res, 100U) == fw::Result::kOk &&
+          res.status == fw::Result::kInvalidArg);
 
-    const fw::Command reset_ok{.target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 0U};
-    CHECK(ctx.link_executor->call(reset_ok, res, 100U) == fw::Result::kOk && res.status == fw::Result::kOk);
+    const fw::Command reset_ok{
+        .target = kTemplateId, .verb = app::verb(app::TemplateVerb::kReset), .arg_len = 0U};
+    CHECK(ctx.link_executor->call(reset_ok, res, 100U) == fw::Result::kOk &&
+          res.status == fw::Result::kOk);
     CHECK(tmpl.state().ticks == 0U);
 
     const fw::Command bad_verb{.target = kTemplateId, .verb = 99U};
-    CHECK(ctx.link_executor->call(bad_verb, res, 100U) == fw::Result::kOk && res.status == fw::Result::kInvalidArg);
+    CHECK(ctx.link_executor->call(bad_verb, res, 100U) == fw::Result::kOk &&
+          res.status == fw::Result::kInvalidArg);
 }
 
 void test_commands_before_exec()
@@ -168,8 +181,10 @@ void test_commands_before_exec()
 
     const auto cmds = app::template_cmds();
     const auto verbs = app::template_verbs();
-    CHECK(cmds.size() == 1U && std::strcmp(cmds[0].name, "tmpl") == 0 && cmds[0].handler != nullptr);
-    CHECK(verbs.size() == 2U && std::strcmp(verbs[0].name, "status") == 0 && std::strcmp(verbs[1].name, "limit") == 0);
+    CHECK(cmds.size() == 1U && std::strcmp(cmds[0].name, "tmpl") == 0 &&
+          cmds[0].handler != nullptr);
+    CHECK(verbs.size() == 2U && std::strcmp(verbs[0].name, "status") == 0 &&
+          std::strcmp(verbs[1].name, "limit") == 0);
     const auto fn = cmds[0].handler;
 
     auto prog = std::to_array("tmpl");
@@ -269,8 +284,9 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void)
     CHECK(s_critical == 0);
     return s_current;
 }
-TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *, uint32_t, void *arg, UBaseType_t,
-                                           StackType_t *, StaticTask_t *tcb, BaseType_t)
+TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *, uint32_t, void *arg,
+                                           UBaseType_t, StackType_t *, StaticTask_t *tcb,
+                                           BaseType_t)
 {
     CHECK(s_critical == 0);
     tcb->fn = fn;
@@ -278,7 +294,8 @@ TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *, uint
     s_created = tcb;
     return tcb;
 }
-QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item, uint8_t *area, StaticQueue_t *queue)
+QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item, uint8_t *area,
+                                 StaticQueue_t *queue)
 {
     CHECK(s_critical == 0);
     queue->buf = area;
@@ -369,7 +386,8 @@ esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *, const uint8_t *, s
 {
     return ESP_OK;
 }
-esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *, const uint8_t *, size_t, const uint8_t *, size_t)
+esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *, const uint8_t *, size_t,
+                                const uint8_t *, size_t)
 {
     return ESP_OK;
 }
@@ -446,7 +464,8 @@ esp_err_t nvs_store_get_alarms(uint8_t (*)[NVS_STORE_ADDR_LEN], size_t, size_t *
 
 int main(int argc, const char **raw_args)
 {
-    const std::span<const char *> argv{raw_args, static_cast<size_t>(argc)}; // argc>=0，无符号转换安全。
+    const std::span<const char *> argv{raw_args,
+                                       static_cast<size_t>(argc)}; // argc>=0，无符号转换安全。
     if ((argc != 2) || (std::strcmp(argv[1], "template_module") != 0)) {
         return 2;
     }

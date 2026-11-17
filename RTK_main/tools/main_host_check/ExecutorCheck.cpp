@@ -19,12 +19,12 @@ uint32_t s_round_limit = 1;
 uint32_t s_rounds = 0;
 bool s_pump_receive = false;
 std::jmp_buf s_return{};
-#define CHECK(value)                                                                                                   \
-    do {                                                                                                               \
-        if (!(value)) {                                                                                                \
-            std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #value);                                                   \
-            ++s_failures;                                                                                              \
-        }                                                                                                              \
+#define CHECK(value)                                                                               \
+    do {                                                                                           \
+        if (!(value)) {                                                                            \
+            std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #value);                               \
+            ++s_failures;                                                                          \
+        }                                                                                          \
     } while (false)
 
 void pump()
@@ -108,7 +108,8 @@ void lifecycle()
         {"periodic", 4, 0, 50, &periodic, &kOps},
         {"unsupported", 5, 0, 0, nullptr, &kUnsupportedOps},
     }};
-    rtos::ExecutorConfig cfg{.name = "test", .priority = 10, .core = 1, .wait = wait, .wait_ctx = &healthy};
+    rtos::ExecutorConfig cfg{
+        .name = "test", .priority = 10, .core = 1, .wait = wait, .wait_ctx = &healthy};
     CHECK(executor.start() == fw::Status::kInvalidState);
     CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kOk);
     CHECK(executor.init(cfg, modules, rtos::view_of(storage)) == fw::Status::kBusy);
@@ -142,7 +143,8 @@ void calls()
     static constinit rtos::Executor executor{};
     static constinit rtos::ExecutorStorage<6144, 2> storage{};
     static constinit Probe probe{.executor = &executor};
-    static constinit std::array<fw::Module, 1> modules{{{"command", 1, 0, 0, &probe, &kNoStartOps}}};
+    static constinit std::array<fw::Module, 1> modules{
+        {{"command", 1, 0, 0, &probe, &kNoStartOps}}};
     const rtos::ExecutorConfig cfg{.name = "call", .core = 1};
     fw::Command cmd{.target = 1};
     fw::CommandResult result{};
@@ -225,8 +227,9 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void)
     CHECK(s_critical == 0);
     return s_current;
 }
-TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *, uint32_t bytes, void *arg, UBaseType_t,
-                                           StackType_t *, StaticTask_t *tcb, BaseType_t)
+TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *, uint32_t bytes,
+                                           void *arg, UBaseType_t, StackType_t *, StaticTask_t *tcb,
+                                           BaseType_t)
 {
     CHECK(s_critical == 0);
     tcb->fn = fn;
@@ -235,7 +238,8 @@ TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *, uint
     s_created_bytes = bytes;
     return tcb;
 }
-QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item, uint8_t *area, StaticQueue_t *queue)
+QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item, uint8_t *area,
+                                 StaticQueue_t *queue)
 {
     CHECK(s_critical == 0);
     queue->buf = area;

@@ -37,7 +37,9 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
      .min = 0,
      .max = 3600,
      .help = "periodic report interval (s, 0 = off)",
-     .binding = {.obj = nullptr, .load = &DebugModule::load_report, .save = &DebugModule::save_report}},
+     .binding = {.obj = nullptr,
+                 .load = &DebugModule::load_report,
+                 .save = &DebugModule::save_report}},
     {.ns = "dbg",
      .key = "hex",
      .type = fw::StoreType::kU32,
@@ -55,7 +57,9 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
      .min = 0,
      .max = static_cast<int32_t>(fw::log_levels_all(fw::LogLevel::kDebug)),
      .help = "per-category log level, 2 bits each (0=E 1=W 2=I 3=D)",
-     .binding = {.obj = nullptr, .load = &DebugModule::load_loglv, .save = &DebugModule::save_loglv}},
+     .binding = {.obj = nullptr,
+                 .load = &DebugModule::load_loglv,
+                 .save = &DebugModule::save_loglv}},
 }};
 
 static_assert(fw::valid(kKeys[kIdxMask]), "dbg/mask 必须是合法 u32 键");

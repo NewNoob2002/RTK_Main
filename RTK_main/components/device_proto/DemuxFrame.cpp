@@ -65,7 +65,8 @@ Verdict reject_sync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
 {
     Verdict verdict = reject(Reason::kSync);
     verdict.offset = offset;
-    verdict.received = static_cast<uint32_t>(got) | (static_cast<uint32_t>(expected) << kBitsPerByte);
+    verdict.received =
+        static_cast<uint32_t>(got) | (static_cast<uint32_t>(expected) << kBitsPerByte);
     return verdict;
 }
 
@@ -82,7 +83,8 @@ uint32_t read_u32_le(std::span<const uint8_t> frame, std::size_t from) noexcept
 
     for (std::size_t idx = 0U; idx < kU32Bytes; ++idx) {
         // idx ≤ 3，窄化到 uint32_t 安全；移位量 = idx * 8 ≤ 24，uint32_t 内不溢出。
-        value |= static_cast<uint32_t>(frame[from + idx]) << (static_cast<uint32_t>(idx) * kBitsPerByte);
+        value |= static_cast<uint32_t>(frame[from + idx])
+                 << (static_cast<uint32_t>(idx) * kBitsPerByte);
     }
     return value;
 }
@@ -171,10 +173,16 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
             .hex(verdict.received >> kBitsPerByte, 2U);
         break;
     case Reason::kHeaderLen:
-        text.literal("header length is ").hex(verdict.received, 2U).literal(", expected ").hex(kHeaderLen, 2U);
+        text.literal("header length is ")
+            .hex(verdict.received, 2U)
+            .literal(", expected ")
+            .hex(kHeaderLen, 2U);
         break;
     case Reason::kTooLong:
-        text.literal("payload length ").decimal(verdict.total).literal(" exceeds ").decimal(kMaxPayload);
+        text.literal("payload length ")
+            .decimal(verdict.total)
+            .literal(" exceeds ")
+            .decimal(kMaxPayload);
         break;
     case Reason::kExtra:
         text.literal("frame longer than the declared ").decimal(verdict.total).literal(" bytes");

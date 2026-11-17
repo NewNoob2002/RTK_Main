@@ -18,12 +18,12 @@
 
 static int s_fail;
 
-#define CHECK(cond)                                                                                                    \
-    do {                                                                                                               \
-        if (!(cond)) {                                                                                                 \
-            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                                            \
-            s_fail++;                                                                                                  \
-        }                                                                                                              \
+#define CHECK(cond)                                                                                \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                        \
+            s_fail++;                                                                              \
+        }                                                                                          \
     } while (0)
 
 static const uint8_t s_bda[SPP_SERVER_ADDR_LEN] = {0xAAU, 0xBBU, 0xCCU, 0xDDU, 0xEEU, 0xFFU};
@@ -40,7 +40,8 @@ static uint8_t s_rx_buf[SPP_SERVER_MAX_SESSIONS][SPP_SERVER_RX_BUF_SIZE];
 static uint8_t s_reply_buf[SPP_SERVER_MAX_SESSIONS][SPP_SERVER_REPLY_CAPACITY];
 static uint8_t s_stream_buf[SPP_SERVER_STREAM_CAPACITY];
 static uint8_t s_merge_buf[SPP_SERVER_MERGE_CAPACITY];
-static _Alignas(uint32_t) StackType_t s_worker_stack[SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t)];
+static _Alignas(uint32_t)
+    StackType_t s_worker_stack[SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t)];
 
 static spp_server_storage_t make_storage(void)
 {
@@ -418,7 +419,8 @@ static void sc_write_timeout_budget(void)
 /* #3/K2：WRITE_EVT 的 status 与回报长度错误必须返回失败，并请求断开受影响会话而不影响对端。 */
 static void sc_write_status_propagation(void)
 {
-    static const fake_write_mode_t modes[] = {FAKE_WRITE_FAIL, FAKE_WRITE_NO_RESOURCE, FAKE_WRITE_SHORT};
+    static const fake_write_mode_t modes[] = {FAKE_WRITE_FAIL, FAKE_WRITE_NO_RESOURCE,
+                                              FAKE_WRITE_SHORT};
     uint8_t payload[8];
 
     bring_up();
@@ -773,9 +775,9 @@ static void sc_lifecycle_burst_churn(void)
 {
     uint8_t bytes[1024] = {0};
     spp_server_evt_t evt;
-    const spp_server_evt_type_t types[] = {SPP_SERVER_EVT_OPEN,    SPP_SERVER_EVT_OPEN, SPP_SERVER_EVT_DATA,
-                                           SPP_SERVER_EVT_RX_DROP, SPP_SERVER_EVT_DATA, SPP_SERVER_EVT_RX_DROP,
-                                           SPP_SERVER_EVT_CLOSE,   SPP_SERVER_EVT_CLOSE};
+    const spp_server_evt_type_t types[] = {
+        SPP_SERVER_EVT_OPEN, SPP_SERVER_EVT_OPEN,    SPP_SERVER_EVT_DATA,  SPP_SERVER_EVT_RX_DROP,
+        SPP_SERVER_EVT_DATA, SPP_SERVER_EVT_RX_DROP, SPP_SERVER_EVT_CLOSE, SPP_SERVER_EVT_CLOSE};
     const uint32_t handles[] = {0x11U, 0x22U, 0x11U, 0x11U, 0x22U, 0x22U, 0x22U, 0x11U};
     bring_up();
     fake_emit_srv_open(0x11U, s_bda);

@@ -57,7 +57,8 @@ public:
     };
     static constexpr size_t kMaxRecords = 32;
 
-    fw::Status write(core::SessionHandle handle, std::span<const uint8_t> data, uint32_t timeout_ms) noexcept override
+    fw::Status write(core::SessionHandle handle, std::span<const uint8_t> data,
+                     uint32_t timeout_ms) noexcept override
     {
         last_timeout_ms = timeout_ms;
         if (fail_writes) {

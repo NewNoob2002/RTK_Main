@@ -241,9 +241,10 @@ void process_commands(uint32_t /*now_ms*/)
             }
             app_context().bt_link.on_command(command, result);
         }
-        const CommandResult response{queued.seq, result.status == fw::Result::kOk        ? CommandStatus::kOk
-                                                 : result.status == fw::Result::kIoError ? CommandStatus::kStoreError
-                                                                                         : CommandStatus::kInvalidArg};
+        const CommandResult response{
+            queued.seq, result.status == fw::Result::kOk        ? CommandStatus::kOk
+                        : result.status == fw::Result::kIoError ? CommandStatus::kStoreError
+                                                                : CommandStatus::kInvalidArg};
         if (!s_result_queue.send(response, 0)) {
             CommandResult stale{};
             static_cast<void>(s_result_queue.receive(stale, 0));
@@ -255,8 +256,8 @@ void link_round(uint32_t &last_tick_ms)
 {
     bool pending = false;
     for (const auto &entry : s_sessions) {
-        pending =
-            pending || (entry.used && entry.demux_ready && (entry.drain_pending || entry.rx_offset < entry.rx_size));
+        pending = pending || (entry.used && entry.demux_ready &&
+                              (entry.drain_pending || entry.rx_offset < entry.rx_size));
     }
     app_context().bt_link.wait(pending ? 0U : 20U);
     const uint32_t begin = rtos::now_ms();

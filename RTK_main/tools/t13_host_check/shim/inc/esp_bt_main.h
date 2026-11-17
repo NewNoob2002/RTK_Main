@@ -9,10 +9,7 @@ typedef struct {
     bool ssp_en;
 } esp_bluedroid_config_t;
 
-#define BT_BLUEDROID_INIT_CONFIG_DEFAULT() \
-    {                                      \
-        true                               \
-    }
+#define BT_BLUEDROID_INIT_CONFIG_DEFAULT() {true}
 
 typedef enum {
     ESP_BLUEDROID_STATUS_UNINITIALIZED = 0,

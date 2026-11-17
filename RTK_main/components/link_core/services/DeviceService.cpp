@@ -28,8 +28,8 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
                                   std::span<const uint8_t> payload) noexcept
 {
     size_t len = 0;
-    const fw::Status status =
-        proto::build_frame(reply.buf, msg_id, proto::sender::kDevice, proto::response_type(req_type), payload, len);
+    const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
+                                                 proto::response_type(req_type), payload, len);
     if (!is_ok(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
@@ -39,7 +39,8 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
 }
 
 /** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
-inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type, uint8_t value) noexcept
+inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type,
+                                   uint8_t value) noexcept
 {
     const std::array<uint8_t, 2> payload = {value, value};
     return reply_build(reply, msg_id, req_type, payload);
@@ -76,7 +77,8 @@ constexpr std::array<uint8_t, kDevStateLen> kDevStatePayload = {
     0x03, 0x01, 0x81, 0x83, 0x81, 0x00, 0x00, 0x00, 0x00, 0x81, 0x81, 0x81, 0x00, 0x01,
 };
 
-DispatchResult handle_dev_info(const DeviceInfo &info, const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handle_dev_info(const DeviceInfo &info, const proto::FrameView &frame,
+                               Reply &reply) noexcept
 {
     std::array<uint8_t, kDevInfoLen> payload{};
     proto::ByteWriter writer(payload);
@@ -100,14 +102,16 @@ constexpr size_t kDevStateGnssOfs = 2;
 constexpr uint8_t kDevStateGnssRunning = 0x81;
 constexpr uint8_t kDevStateGnssPresent = 0x01;
 
-DispatchResult handle_dev_state(const DeviceInfo &info, const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handle_dev_state(const DeviceInfo &info, const proto::FrameView &frame,
+                                Reply &reply) noexcept
 {
     auto payload = kDevStatePayload;
     payload[kDevStateGnssOfs] = info.gnss_running ? kDevStateGnssRunning : kDevStateGnssPresent;
     return reply_build(reply, frame.msg_id, frame.type, payload);
 }
 
-DispatchResult handle_battery(const DeviceInfo &info, const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handle_battery(const DeviceInfo &info, const proto::FrameView &frame,
+                              Reply &reply) noexcept
 {
     std::array<uint8_t, kBatteryLen> payload{};
     proto::ByteWriter writer(payload);
@@ -130,7 +134,8 @@ DispatchResult handle_sat_track(const proto::FrameView &frame, Reply &reply) noe
     return reply_build(reply, frame.msg_id, frame.type, payload);
 }
 
-DispatchResult handle_com(const DeviceInfo &info, const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handle_com(const DeviceInfo &info, const proto::FrameView &frame,
+                          Reply &reply) noexcept
 {
     // 5.4 行为：0x0D 设置不回复（§4）。
     if (frame.type != msg_type::kQuery) {
@@ -190,17 +195,20 @@ std::span<const Route> DeviceService::routes() noexcept
             static_cast<void>(now_ms);
             return handle_dev_state(static_cast<DeviceService *>(self)->info(), frame, reply);
         }
-        static DispatchResult battery(void *self, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult battery(void *self, const proto::FrameView &frame, uint32_t now_ms,
+                                      Reply &reply) noexcept
         {
             static_cast<void>(now_ms);
             return handle_battery(static_cast<DeviceService *>(self)->info(), frame, reply);
         }
-        static DispatchResult sat_track(void *, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult sat_track(void *, const proto::FrameView &frame, uint32_t now_ms,
+                                        Reply &reply) noexcept
         {
             static_cast<void>(now_ms);
             return handle_sat_track(frame, reply);
         }
-        static DispatchResult com(void *self, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult com(void *self, const proto::FrameView &frame, uint32_t now_ms,
+                                  Reply &reply) noexcept
         {
             static_cast<void>(now_ms);
             return handle_com(static_cast<DeviceService *>(self)->info(), frame, reply);

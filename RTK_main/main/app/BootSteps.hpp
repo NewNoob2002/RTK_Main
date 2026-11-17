@@ -73,6 +73,7 @@ struct BootRecord {
  * 依序执行步骤并写记录；kDegrade 失败时调用 hooks->on_degrade 后停止，剩余记录保持 kPending。
  * 返回已写入的记录数（= 实际执行到第几步）。不分配、不阻塞、不打印；非 ISR。
  */
-size_t run_boot_steps(std::span<const BootStep> steps, BootCtx &ctx, std::span<BootRecord> records) noexcept;
+size_t run_boot_steps(std::span<const BootStep> steps, BootCtx &ctx,
+                      std::span<BootRecord> records) noexcept;
 
 } // namespace app

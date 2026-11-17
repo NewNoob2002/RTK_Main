@@ -102,16 +102,20 @@ void LinkService::on_close(SessionHandle handle) noexcept
     slot->handle = 0;
 }
 
-void LinkService::send_reply(SessionHandle handle, const ReplyCredit &credit, uint16_t msg_id) noexcept
+void LinkService::send_reply(SessionHandle handle, const ReplyCredit &credit,
+                             uint16_t msg_id) noexcept
 {
-    const fw::Status status = transport_.supports_credit() ? transport_.commit_reply(credit, reply_.bytes())
-                                                           : transport_.write(handle, reply_.bytes(), kWriteTimeoutMs);
+    const fw::Status status = transport_.supports_credit()
+                                  ? transport_.commit_reply(credit, reply_.bytes())
+                                  : transport_.write(handle, reply_.bytes(), kWriteTimeoutMs);
     if (is_ok(status)) {
         ++stats_.replies_tx; // 接纳，不表示 WRITE_EVT 或应用 ACK
-        trace_proto(ProtoTrace::kReply, handle, msg_id, static_cast<uint32_t>(status)); // 枚举范围<=255
+        trace_proto(ProtoTrace::kReply, handle, msg_id,
+                    static_cast<uint32_t>(status)); // 枚举范围<=255
     } else {
         ++stats_.write_errors;
-        trace_proto(ProtoTrace::kReplyError, handle, static_cast<uint32_t>(status), msg_id); // 枚举范围<=255
+        trace_proto(ProtoTrace::kReplyError, handle, static_cast<uint32_t>(status),
+                    msg_id); // 枚举范围<=255
     }
 }
 
@@ -122,7 +126,8 @@ bool LinkService::dispatch_pending(Slot &slot, uint32_t now_ms) noexcept
     if (transport_.supports_credit()) {
         const fw::Status status = transport_.reserve_reply(handle, credit);
         if (!is_ok(status)) {
-            if ((status == fw::Status::kTimeout) || (status == fw::Status::kNoSpace) || (status == fw::Status::kBusy)) {
+            if ((status == fw::Status::kTimeout) || (status == fw::Status::kNoSpace) ||
+                (status == fw::Status::kBusy)) {
                 return false;
             }
             ++stats_.write_errors;
@@ -137,7 +142,8 @@ bool LinkService::dispatch_pending(Slot &slot, uint32_t now_ms) noexcept
     slot.pending = false;
     const Role role_before = link_.role(handle);
     Actions act;
-    const Role role_after = link_.on_frame(handle, slot.frame.sender, slot.frame.msg_id, now_ms, act);
+    const Role role_after =
+        link_.on_frame(handle, slot.frame.sender, slot.frame.msg_id, now_ms, act);
     const bool current_disconnected = actions_contain(act, handle);
     apply(act);
     if (current_disconnected || (role_after == Role::kNone)) {
@@ -155,7 +161,8 @@ bool LinkService::dispatch_pending(Slot &slot, uint32_t now_ms) noexcept
     if (reply_.heartbeat.has_value()) {
         last_hb_ = reply_.heartbeat;
     }
-    if (reply_.whitelist_changed || ((role_after == Role::kAlarm) && (role_before != Role::kAlarm))) {
+    if (reply_.whitelist_changed ||
+        ((role_after == Role::kAlarm) && (role_before != Role::kAlarm))) {
         whitelist_dirty_ = true;
     }
     return true;
@@ -179,7 +186,8 @@ void LinkService::resume(SessionHandle handle, uint32_t now_ms) noexcept
     }
 }
 
-size_t LinkService::on_data(SessionHandle handle, std::span<const uint8_t> data, uint32_t now_ms) noexcept
+size_t LinkService::on_data(SessionHandle handle, std::span<const uint8_t> data,
+                            uint32_t now_ms) noexcept
 {
     Slot *slot = find_slot(handle);
     if (slot == nullptr) {
@@ -226,7 +234,8 @@ void LinkService::tick(uint32_t now_ms) noexcept
     link_.tick(now_ms, act);
     apply(act);
 
-    const bool due = (!pushed_once_) || (static_cast<uint32_t>(now_ms - last_push_ms_) >= proto::alarm::kPushPeriodMs);
+    const bool due = (!pushed_once_) ||
+                     (static_cast<uint32_t>(now_ms - last_push_ms_) >= proto::alarm::kPushPeriodMs);
     if (!due) {
         return;
     }

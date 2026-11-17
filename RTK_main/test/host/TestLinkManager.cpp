@@ -132,7 +132,8 @@ static void test_pairing_promotes_phone_role_to_alarm()
     static_cast<void>(s_mgr.on_open(kAlarm, kAlarmAddr, 0, s_act));
     s_mgr.pair_open(10);
     TEST_ASSERT_TRUE(s_mgr.is_pairing());
-    TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 20, s_act));
+    TEST_ASSERT_TRUE(Role::kAlarm ==
+                     s_mgr.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 20, s_act));
     TEST_ASSERT_EQUAL_UINT8(0, s_act.count);
     TEST_ASSERT_EQUAL_UINT(1, s_mgr.whitelist().size());
     TEST_ASSERT_TRUE(s_mgr.whitelist()[0] == kAlarmAddr);
@@ -146,7 +147,8 @@ static void test_pending_when_phone_online_and_pairing()
     static_cast<void>(s_mgr.on_open(kPhone, kPhoneAddr, 0, s_act));
     s_mgr.pair_open(0);
     TEST_ASSERT_TRUE(Role::kPending == s_mgr.on_open(kAlarm, kAlarmAddr, 100, s_act));
-    TEST_ASSERT_TRUE(Role::kAlarm == s_mgr.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 200, s_act));
+    TEST_ASSERT_TRUE(Role::kAlarm ==
+                     s_mgr.on_frame(kAlarm, core::kHelloSender, core::kHelloMsgId, 200, s_act));
 }
 
 static void test_pending_non_hello_is_disconnected()
@@ -178,7 +180,8 @@ static void test_hello_without_pairing_is_unauthorized()
 {
     s_mgr.init(Policy::kConcurrent, {});
     static_cast<void>(s_mgr.on_open(kOther, kOtherAddr, 0, s_act));
-    TEST_ASSERT_TRUE(Role::kNone == s_mgr.on_frame(kOther, core::kHelloSender, core::kHelloMsgId, 10, s_act));
+    TEST_ASSERT_TRUE(Role::kNone ==
+                     s_mgr.on_frame(kOther, core::kHelloSender, core::kHelloMsgId, 10, s_act));
     TEST_ASSERT_EQUAL_UINT8(1, s_act.count);
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }
@@ -202,7 +205,8 @@ static void test_whitelist_full_rejects_new_alarm()
     s_mgr.init(Policy::kConcurrent, full);
     static_cast<void>(s_mgr.on_open(kOther, kOtherAddr, 0, s_act));
     s_mgr.pair_open(0);
-    TEST_ASSERT_TRUE(Role::kNone == s_mgr.on_frame(kOther, core::kHelloSender, core::kHelloMsgId, 10, s_act));
+    TEST_ASSERT_TRUE(Role::kNone ==
+                     s_mgr.on_frame(kOther, core::kHelloSender, core::kHelloMsgId, 10, s_act));
     TEST_ASSERT_EQUAL_UINT8(1, s_act.count);
     TEST_ASSERT_EQUAL_UINT32(kOther, s_act.handles[0]);
 }

@@ -48,11 +48,11 @@ void fw_log_c(int level, int cat, const char *fmt, ...) __attribute__((format(pr
 #endif
 
 /* 宏：高于 FW_LOG_MAX_LEVEL 的调用被常量条件消除（参数不求值）。 */
-#define FW_CLOG_AT(level, cat, ...)                                                                                    \
-    do {                                                                                                               \
-        if ((level) <= FW_LOG_MAX_LEVEL) {                                                                             \
-            fw_log_c((level), (cat), __VA_ARGS__);                                                                     \
-        }                                                                                                              \
+#define FW_CLOG_AT(level, cat, ...)                                                                \
+    do {                                                                                           \
+        if ((level) <= FW_LOG_MAX_LEVEL) {                                                         \
+            fw_log_c((level), (cat), __VA_ARGS__);                                                 \
+        }                                                                                          \
     } while (0)
 #define FW_CLOGE(cat, ...) FW_CLOG_AT(FW_LOG_LEVEL_ERROR, cat, __VA_ARGS__)
 #define FW_CLOGW(cat, ...) FW_CLOG_AT(FW_LOG_LEVEL_WARN, cat, __VA_ARGS__)

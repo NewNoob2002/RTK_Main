@@ -16,7 +16,8 @@ namespace {
 constexpr size_t kByteMask = 0xFFU;
 constexpr size_t kBitsPerByte = 8U;
 constexpr size_t kMinRecordsInRing = 2U;
-constexpr uint32_t kTypedHeaderBytes = kFanoutTypedHeaderBytes; // 固定为 3，索引加法必须按 u32 回绕。
+constexpr uint32_t kTypedHeaderBytes =
+    kFanoutTypedHeaderBytes; // 固定为 3，索引加法必须按 u32 回绕。
 
 void reverse_span(std::span<uint8_t> buf, size_t first, size_t last) noexcept
 {
@@ -45,12 +46,14 @@ void rotate_ring_right(std::span<uint8_t> ring, size_t shift) noexcept
 
 size_t ring_phys(uint32_t oldest, size_t cap, uint32_t pos) noexcept
 {
-    const size_t base = static_cast<size_t>(oldest) % cap; // uint32_t 扩宽至 size_t 无损（32/64 位平台）
+    const size_t base =
+        static_cast<size_t>(oldest) % cap; // uint32_t 扩宽至 size_t 无损（32/64 位平台）
     const size_t offset = static_cast<size_t>(pos - oldest);
     return (base + offset) % cap;
 }
 
-void ring_write(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos, std::span<const uint8_t> src) noexcept
+void ring_write(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos,
+                std::span<const uint8_t> src) noexcept
 {
     if (src.empty()) {
         return;
@@ -67,7 +70,8 @@ void ring_write(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos, std::spa
     }
 }
 
-void ring_read(std::span<const uint8_t> ring, uint32_t oldest, uint32_t pos, std::span<uint8_t> dst) noexcept
+void ring_read(std::span<const uint8_t> ring, uint32_t oldest, uint32_t pos,
+               std::span<uint8_t> dst) noexcept
 {
     if (dst.empty()) {
         return;
@@ -93,11 +97,13 @@ uint16_t read_header_len(std::span<const uint8_t> ring, uint32_t oldest, uint32_
     return static_cast<uint16_t>(lo | hi); // hdr[0..1] 均为 uint8_t，结果在 0..65535
 }
 
-void write_header_len(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos, uint16_t payload_len) noexcept
+void write_header_len(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos,
+                      uint16_t payload_len) noexcept
 {
     const std::array<uint8_t, kFanoutHeaderBytes> hdr{
-        static_cast<uint8_t>(static_cast<size_t>(payload_len) & kByteMask),                   // 低 8 位，范围 0..255
-        static_cast<uint8_t>((static_cast<size_t>(payload_len) >> kBitsPerByte) & kByteMask), // 高 8 位，范围 0..255
+        static_cast<uint8_t>(static_cast<size_t>(payload_len) & kByteMask), // 低 8 位，范围 0..255
+        static_cast<uint8_t>((static_cast<size_t>(payload_len) >> kBitsPerByte) &
+                             kByteMask), // 高 8 位，范围 0..255
     };
     ring_write(ring, oldest, pos, hdr);
 }
@@ -109,11 +115,13 @@ Result FanoutRing::init(std::span<uint8_t> storage, size_t max_record, const Loc
     if (inited_) {
         return Result::kInvalidState;
     }
-    if ((storage.data() == nullptr) || (max_record < 1U) || (max_record > std::numeric_limits<uint16_t>::max())) {
+    if ((storage.data() == nullptr) || (max_record < 1U) ||
+        (max_record > std::numeric_limits<uint16_t>::max())) {
         return Result::kInvalidArg;
     }
     const size_t min_cap = kMinRecordsInRing * (max_record + kFanoutHeaderBytes);
-    if ((storage.size() < min_cap) || (storage.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()))) {
+    if ((storage.size() < min_cap) ||
+        (storage.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()))) {
         return Result::kInvalidArg;
     }
     if ((lock.lock == nullptr) != (lock.unlock == nullptr)) {
@@ -193,8 +201,8 @@ Result FanoutRing::write(std::span<const uint8_t> record) noexcept
     uint32_t cur_oldest = oldest_;
     while ((cap_ - static_cast<size_t>(head_ - cur_oldest)) < need) {
         const uint16_t victim_payload = read_header_len(ring, oldest_, cur_oldest);
-        const uint32_t victim_total =
-            static_cast<uint32_t>(kFanoutHeaderBytes + static_cast<size_t>(victim_payload)); // <= 65537
+        const uint32_t victim_total = static_cast<uint32_t>(
+            kFanoutHeaderBytes + static_cast<size_t>(victim_payload)); // <= 65537
         const uint32_t next_oldest = cur_oldest + victim_total;
 
         for (Reader &reader : readers_) {
@@ -291,14 +299,17 @@ FanoutWriterStats FanoutRing::writer_stats() const noexcept
     return wstats_;
 }
 
-Result FanoutRing::init_typed(std::span<uint8_t> storage, size_t max_record, const LockOps &lock) noexcept
+Result FanoutRing::init_typed(std::span<uint8_t> storage, size_t max_record,
+                              const LockOps &lock) noexcept
 {
     if (inited_) {
         return Result::kInvalidState;
     }
-    if ((storage.data() == nullptr) || (max_record == 0U) || (max_record > std::numeric_limits<uint16_t>::max()) ||
+    if ((storage.data() == nullptr) || (max_record == 0U) ||
+        (max_record > std::numeric_limits<uint16_t>::max()) ||
         (storage.size() < max_record + kFanoutTypedHeaderBytes) ||
-        (storage.size() > std::numeric_limits<int32_t>::max()) || ((storage.size() & (storage.size() - 1U)) != 0U) ||
+        (storage.size() > std::numeric_limits<int32_t>::max()) ||
+        ((storage.size() & (storage.size() - 1U)) != 0U) ||
         ((lock.lock == nullptr) != (lock.unlock == nullptr))) {
         return Result::kInvalidArg;
     }
@@ -459,7 +470,8 @@ Result FanoutRing::write(uint8_t type, std::span<const uint8_t> payload) noexcep
         reserved_bytes_ = 0U;
         ++wstats_.records;
         wstats_.bytes += static_cast<uint32_t>(payload.size()); // <=65535，收窄安全。
-        typed_wstats_.high_water_bytes = std::max(typed_wstats_.high_water_bytes, size_t{head_ - oldest_});
+        typed_wstats_.high_water_bytes =
+            std::max(typed_wstats_.high_water_bytes, size_t{head_ - oldest_});
     }
     return Result::kOk;
 }

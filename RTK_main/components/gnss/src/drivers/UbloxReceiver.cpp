@@ -126,7 +126,8 @@ struct Writer {
      */
     bool u32(uint32_t v) noexcept
     {
-        return u8(static_cast<uint8_t>(v & kByteMask)) && u8(static_cast<uint8_t>((v >> kShift1Byte) & kByteMask)) &&
+        return u8(static_cast<uint8_t>(v & kByteMask)) &&
+               u8(static_cast<uint8_t>((v >> kShift1Byte) & kByteMask)) &&
                u8(static_cast<uint8_t>((v >> kShift2Bytes) & kByteMask)) &&
                u8(static_cast<uint8_t>((v >> kShift3Bytes) & kByteMask));
     }
@@ -158,7 +159,8 @@ void fletcher(uint8_t byte, uint8_t &ck_a, uint8_t &ck_b) noexcept
  */
 bool begin_valset(Writer &writer) noexcept
 {
-    return writer.u8(kVersetVersion) && writer.u8(kLayerRamBbr) && writer.u8(0x00) && (writer.pos == kValsetHeadBytes);
+    return writer.u8(kVersetVersion) && writer.u8(kLayerRamBbr) && writer.u8(0x00) &&
+           (writer.pos == kValsetHeadBytes);
 }
 
 /**
@@ -229,7 +231,8 @@ void copy_text(std::span<const uint8_t> text, std::array<char, kVersionLen> &out
  * @retval true: 前缀匹配。
  * @retval false: 不匹配。
  */
-bool ext_text(std::span<const uint8_t> ext, std::string_view prefix, std::span<const uint8_t> &tail) noexcept
+bool ext_text(std::span<const uint8_t> ext, std::string_view prefix,
+              std::span<const uint8_t> &tail) noexcept
 {
     if (!ascii::starts_with(ext, prefix)) {
         return false;
@@ -249,7 +252,8 @@ bool read_mon_ver(std::span<const uint8_t> payload, ProbeResult &out) noexcept
 {
     ProbeResult result{};
     bool have_model = false;
-    for (size_t off = kMonVerMinLen; (off + kMonVerExtBytes) <= payload.size(); off += kMonVerExtBytes) {
+    for (size_t off = kMonVerMinLen; (off + kMonVerExtBytes) <= payload.size();
+         off += kMonVerExtBytes) {
         const std::span<const uint8_t> ext = payload.subspan(off, kMonVerExtBytes);
         std::span<const uint8_t> tail{};
         if (ext_text(ext, "MOD=", tail)) {
@@ -330,17 +334,19 @@ constinit const ZedF9pReceiver kZedF9pReceiver{};
  * @retval true: 已写入完整帧。
  * @retval false: 载荷超长或缓冲不足。
  */
-bool UbloxReceiver::cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id, std::span<const uint8_t> payload) noexcept
+bool UbloxReceiver::cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id,
+                                    std::span<const uint8_t> payload) noexcept
 {
     if (payload.size() > kMaxPayload) {
         return false;
     }
-    const std::array<uint8_t, kHeaderBytes> header{kSync1,
-                                                   kSync2,
-                                                   cls,
-                                                   id,
-                                                   static_cast<uint8_t>(payload.size() & kByteMask),
-                                                   static_cast<uint8_t>((payload.size() >> kShift1Byte) & kByteMask)};
+    const std::array<uint8_t, kHeaderBytes> header{
+        kSync1,
+        kSync2,
+        cls,
+        id,
+        static_cast<uint8_t>(payload.size() & kByteMask),
+        static_cast<uint8_t>((payload.size() >> kShift1Byte) & kByteMask)};
     uint8_t ck_a = 0;
     uint8_t ck_b = 0;
     for (size_t i = kSyncBytes; i < header.size(); ++i) {
@@ -363,8 +369,8 @@ bool UbloxReceiver::cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id, std::s
 bool UbloxReceiver::cmd_poll_mon_ver(CmdBuf &out) noexcept
 {
     out.clear();
-    return out.append(std::array<uint8_t, kMonVerPollBytes>{kSync1, kSync2, kClsMon, kIdMonVer, 0x00, 0x00,
-                                                            kMonVerPollCkA, kMonVerPollCkB});
+    return out.append(std::array<uint8_t, kMonVerPollBytes>{
+        kSync1, kSync2, kClsMon, kIdMonVer, 0x00, 0x00, kMonVerPollCkA, kMonVerPollCkB});
 }
 
 /**
@@ -379,7 +385,8 @@ bool UbloxReceiver::cmd_configure_receiver(CmdBuf &out, uint16_t period_ms) noex
     std::array<uint8_t, kValsetPayloadMax> payload{};
     Writer writer{payload};
     if (!begin_valset(writer) || !add_u2_item(writer, kKeyRateMeas, period_ms) ||
-        !add_u1_item(writer, kKeyUart1InprotRtcm3x, 1U) || !add_u1_item(writer, kKeyUart1OutprotNmea, 1U)) {
+        !add_u1_item(writer, kKeyUart1InprotRtcm3x, 1U) ||
+        !add_u1_item(writer, kKeyUart1OutprotNmea, 1U)) {
         return false;
     }
     return cmd_build_frame(out, kClsCfg, kIdCfgValset, writer.view());
@@ -432,7 +439,8 @@ size_t UbloxReceiver::resp_payload_len(std::span<const uint8_t> frame) noexcept
     if (frame.size() < (kLenOffset + 2U)) {
         return 0U;
     }
-    return static_cast<size_t>(frame[kLenOffset]) | (static_cast<size_t>(frame[kLenOffset + 1U]) << kShift1Byte);
+    return static_cast<size_t>(frame[kLenOffset]) |
+           (static_cast<size_t>(frame[kLenOffset + 1U]) << kShift1Byte);
 }
 
 /**
@@ -443,7 +451,8 @@ size_t UbloxReceiver::resp_payload_len(std::span<const uint8_t> frame) noexcept
  */
 bool UbloxReceiver::resp_has_valid_ack(std::span<const uint8_t> frame) noexcept
 {
-    if ((frame.size() != (kHeaderBytes + kAckPayloadBytes + kCrcBytes)) || (frame[kClsOffset] != kClsAck)) {
+    if ((frame.size() != (kHeaderBytes + kAckPayloadBytes + kCrcBytes)) ||
+        (frame[kClsOffset] != kClsAck)) {
         return false;
     }
     if ((frame[kIdOffset] != kIdAck) && (frame[kIdOffset] != kIdNak)) {
@@ -460,7 +469,8 @@ bool UbloxReceiver::resp_has_valid_ack(std::span<const uint8_t> frame) noexcept
  * @retval true: 载荷等于 cls/id。
  * @retval false: 其他命令的应答。
  */
-bool UbloxReceiver::resp_ack_class_id(std::span<const uint8_t> frame, uint8_t cls, uint8_t id) noexcept
+bool UbloxReceiver::resp_ack_class_id(std::span<const uint8_t> frame, uint8_t cls,
+                                      uint8_t id) noexcept
 {
     return (frame[kPayloadOffset] == cls) && (frame[kPayloadOffset + 1U] == id);
 }
@@ -511,7 +521,8 @@ bool UbloxReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8
     return read_mon_ver(frame.subspan(kPayloadOffset, len), out);
 }
 
-bool UbloxReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
+bool UbloxReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg,
+                               ConfigStep &out) const noexcept
 {
     static_cast<void>(model); // ZED-F9P 单型号，脚本与型号无关
     // 表放在成员函数作用域内：步骤回调要调 protected 的 cmd_*，匿名命名空间的自由函数没有访问权。
@@ -587,8 +598,8 @@ uint32_t UbloxReceiver::output_mask(Model model) const noexcept
     return kGgaBit | kGstBit | kRmcBit | kGsaBit | kGsvBit;
 }
 
-fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
-                                       CmdBuf &out) const noexcept
+fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model,
+                                       const OutputPlan &plan, CmdBuf &out) const noexcept
 {
     static_cast<void>(model);
     uint32_t key = 0U;

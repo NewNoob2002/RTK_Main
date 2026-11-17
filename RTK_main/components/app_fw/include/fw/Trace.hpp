@@ -82,7 +82,9 @@ void trace(TraceCat cat, uint8_t code, uint16_t session, uint32_t a, uint32_t b)
     return false;
 }
 
-inline void trace(TraceCat /*cat*/, uint8_t /*code*/, uint16_t /*session*/, uint32_t /*a*/, uint32_t /*b*/) noexcept {}
+inline void trace(TraceCat /*cat*/, uint8_t /*code*/, uint16_t /*session*/, uint32_t /*a*/,
+                  uint32_t /*b*/) noexcept
+{}
 #endif
 
 /** TraceRing 统计；init() 后清零。 */

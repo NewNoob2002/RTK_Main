@@ -33,13 +33,14 @@ int cmd_bt(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::print_kv("link", "%s", sys.link_running ? "running" : "stopped");
     cli::print_kv("name", "%s", sys.device_name.data());
     // 会话数上限为 kMaxSessions，转换为 unsigned 无损。
-    cli::print_kv("sessions", "%u / %u", static_cast<unsigned>(sessions.count), static_cast<unsigned>(kMaxSessions));
+    cli::print_kv("sessions", "%u / %u", static_cast<unsigned>(sessions.count),
+                  static_cast<unsigned>(kMaxSessions));
     std::array<char, kMacStrBuf> mac_buf{};
     for (size_t idx = 0U; idx < sessions.count; ++idx) {
         const SessionSnapshot &session = sessions.entries[idx];
         format_mac(session.addr, mac_buf);
-        cli::print_kv("session", "%-6s %s (handle 0x%08" PRIx32 ")", role_name(session.role), mac_buf.data(),
-                      session.handle);
+        cli::print_kv("session", "%-6s %s (handle 0x%08" PRIx32 ")", role_name(session.role),
+                      mac_buf.data(), session.handle);
     }
     if (link.pairing) {
         // 配对窗口只由 factory pair 或手机 0x44 打开；这里只提示状态。
@@ -63,7 +64,8 @@ int cmd_alarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::print_kv("level", "%u", static_cast<unsigned>(alarm.level));
     cli::print_kv("override", "%s", alarm.override ? "yes" : "no");
     if (heartbeat.present) {
-        cli::print_kv("heartbeat", "seq %u, battery %u%%, state %u", static_cast<unsigned>(heartbeat.value.seq),
+        cli::print_kv("heartbeat", "seq %u, battery %u%%, state %u",
+                      static_cast<unsigned>(heartbeat.value.seq),
                       static_cast<unsigned>(heartbeat.value.battery_pct),
                       static_cast<unsigned>(heartbeat.value.local_state));
     } else {

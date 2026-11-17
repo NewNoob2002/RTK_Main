@@ -104,9 +104,11 @@ class CaptureSink final : public demux::Sink {
 public:
     explicit CaptureSink(StreamCapture &cap) noexcept : cap_(&cap) {}
 
-    void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> frame) noexcept override
+    void on_frame(const demux::Decoder &decoder, uint8_t index,
+                  std::span<const uint8_t> frame) noexcept override
     {
-        if ((cap_->frame_count >= kMaxFramesRec) || ((cap_->frame_blob_used + frame.size()) > kBlobCap)) {
+        if ((cap_->frame_count >= kMaxFramesRec) ||
+            ((cap_->frame_blob_used + frame.size()) > kBlobCap)) {
             cap_->overflowed = true;
             return;
         }
@@ -117,7 +119,8 @@ public:
         m.len = frame.size();
         if (!frame.empty()) {
             std::copy(frame.begin(), frame.end(),
-                      cap_->frame_blob.begin() + static_cast<std::ptrdiff_t>(cap_->frame_blob_used));
+                      cap_->frame_blob.begin() +
+                          static_cast<std::ptrdiff_t>(cap_->frame_blob_used));
         }
         cap_->frame_blob_used += frame.size();
         cap_->frame_count++;
@@ -182,8 +185,9 @@ uint32_t xorshift32(uint32_t &state) noexcept
     return x;
 }
 
-void run_chunked(std::span<const demux::Decoder *const> decs, std::span<const uint8_t> data, StreamCapture &cap,
-                 std::size_t fixed_chunk, uint32_t *rng_or_null, const char *ctx_msg)
+void run_chunked(std::span<const demux::Decoder *const> decs, std::span<const uint8_t> data,
+                 StreamCapture &cap, std::size_t fixed_chunk, uint32_t *rng_or_null,
+                 const char *ctx_msg)
 {
     CaptureSink sink(cap);
     std::size_t pos = 0U;
@@ -235,16 +239,19 @@ void run_chunked(std::span<const demux::Decoder *const> decs, std::span<const ui
     TEST_ASSERT_EQUAL_UINT_MESSAGE(data.size(), cap.frame_blob_used + cap.unknown_len, ctx_msg);
 }
 
-void assert_frames_match_truth(const StreamCapture &truth, const StreamCapture &got, const char *ctx_msg)
+void assert_frames_match_truth(const StreamCapture &truth, const StreamCapture &got,
+                               const char *ctx_msg)
 {
     TEST_ASSERT_EQUAL_UINT_MESSAGE(truth.frame_count, got.frame_count, ctx_msg);
     TEST_ASSERT_EQUAL_UINT_MESSAGE(truth.frame_blob_used, got.frame_blob_used, ctx_msg);
     for (std::size_t i = 0U; i < truth.frame_count; ++i) {
         TEST_ASSERT_EQUAL_PTR_MESSAGE(truth.meta[i].decoder, got.meta[i].decoder, ctx_msg);
-        TEST_ASSERT_EQUAL_UINT8_MESSAGE(truth.meta[i].decoder_index, got.meta[i].decoder_index, ctx_msg);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(truth.meta[i].decoder_index, got.meta[i].decoder_index,
+                                        ctx_msg);
         TEST_ASSERT_EQUAL_UINT_MESSAGE(truth.meta[i].len, got.meta[i].len, ctx_msg);
         TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(&truth.frame_blob[truth.meta[i].offset],
-                                             &got.frame_blob[got.meta[i].offset], truth.meta[i].len, ctx_msg);
+                                             &got.frame_blob[got.meta[i].offset], truth.meta[i].len,
+                                             ctx_msg);
     }
 }
 
@@ -253,8 +260,8 @@ void assert_captures_equal(const StreamCapture &exp, const StreamCapture &got, c
     assert_frames_match_truth(exp, got, ctx_msg);
     TEST_ASSERT_EQUAL_UINT_MESSAGE(exp.unknown_len, got.unknown_len, ctx_msg);
     if (exp.unknown_len > 0U) {
-        TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(exp.unknown_blob.data(), got.unknown_blob.data(), exp.unknown_len,
-                                             ctx_msg);
+        TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(exp.unknown_blob.data(), got.unknown_blob.data(),
+                                             exp.unknown_len, ctx_msg);
     }
 }
 
@@ -265,12 +272,14 @@ std::size_t append_fake_garbage(std::span<uint8_t> dst, uint32_t &rng) noexcept
     static constexpr std::array<uint8_t, 3> kF1{0xD3U, 0xFCU, 0x00U};
     static constexpr std::array<uint8_t, 2> kF2{0xAAU, 0x44U};
     static constexpr std::array<uint8_t, 7> kF3{0xAAU, 0x44U, 0x18U, 0x14U, 0x01U, 0x00U, 0x00U};
-    static constexpr std::array<uint8_t, 8> kF4{0xAAU, 0x44U, 0xB5U, 0x20U, 0x05U, 0x00U, 0x08U, 0x00U};
+    static constexpr std::array<uint8_t, 8> kF4{0xAAU, 0x44U, 0xB5U, 0x20U,
+                                                0x05U, 0x00U, 0x08U, 0x00U};
     static constexpr std::array<uint8_t, 7> kF5{'$', 'G', 'P', 'G', 'G', 'A', ','};
     static constexpr std::array<uint8_t, 5> kF6{'$', '@', 'S', 'B', 'F'};
     static constexpr std::array<uint8_t, 5> kF7{'#', 'V', 'E', 'R', ','};
     static constexpr std::array<uint8_t, 5> kF8{'#', '0', 'B', 'A', 'D'};
-    static constexpr std::array<uint8_t, 8> kF9{0xB5U, 0x62U, 0x01U, 0x07U, 0x20U, 0x00U, 0x11U, 0x22U};
+    static constexpr std::array<uint8_t, 8> kF9{0xB5U, 0x62U, 0x01U, 0x07U,
+                                                0x20U, 0x00U, 0x11U, 0x22U};
     static constexpr std::array<uint8_t, 2> kF10{0xB5U, 0x61U};
     static constexpr std::array<uint8_t, 1> kF11{0xAAU};
     static constexpr std::array<uint8_t, 1> kF12{0xD3U};
@@ -299,8 +308,9 @@ std::size_t append_fake_garbage(std::span<uint8_t> dst, uint32_t &rng) noexcept
 }
 
 // 按协议类型生成随机真帧并记录到 truth
-std::size_t append_random_proto_frame(ProtoKind kind, const demux::Decoder *decoder_ptr, uint8_t dec_idx,
-                                      std::span<uint8_t> dst, uint32_t &rng, StreamCapture *truth)
+std::size_t append_random_proto_frame(ProtoKind kind, const demux::Decoder *decoder_ptr,
+                                      uint8_t dec_idx, std::span<uint8_t> dst, uint32_t &rng,
+                                      StreamCapture *truth)
 {
     std::array<uint8_t, 260> payload{};
     std::array<char, 96> text{};
@@ -319,11 +329,13 @@ std::size_t append_random_proto_frame(ProtoKind kind, const demux::Decoder *deco
     case ProtoKind::kNmea: {
         const uint32_t seq = xorshift32(rng) % 10000U;
         const bool lc = (xorshift32(rng) & 1U) != 0U;
-        const int n = std::snprintf(text.data(), text.size(), "GNGGA,1235%02u,4807.038,N,01131.000,E,1,08,%u",
-                                    static_cast<unsigned>(seq % 60U), static_cast<unsigned>(seq));
+        const int n =
+            std::snprintf(text.data(), text.size(), "GNGGA,1235%02u,4807.038,N,01131.000,E,1,08,%u",
+                          static_cast<unsigned>(seq % 60U), static_cast<unsigned>(seq));
         TEST_ASSERT_TRUE(n > 0);
         // n > 0 且受 text.size() 限制
-        ok = demux_test::gen_nmea(dst, std::string_view(text.data(), static_cast<std::size_t>(n)), lc, flen);
+        ok = demux_test::gen_nmea(dst, std::string_view(text.data(), static_cast<std::size_t>(n)),
+                                  lc, flen);
         break;
     }
     case ProtoKind::kUbx: {
@@ -332,7 +344,8 @@ std::size_t append_random_proto_frame(ProtoKind kind, const demux::Decoder *deco
             payload[i] = static_cast<uint8_t>(xorshift32(rng) & 0xFFU); // 掩码后 0..255
         }
         const auto msg_id = static_cast<uint8_t>(xorshift32(rng) & 0xFFU); // 掩码后 0..255
-        ok = demux_test::gen_ubx(dst, 0x01U, msg_id, std::span<const uint8_t>(payload.data(), plen), flen);
+        ok = demux_test::gen_ubx(dst, 0x01U, msg_id, std::span<const uint8_t>(payload.data(), plen),
+                                 flen);
         break;
     }
     case ProtoKind::kUnicoreBin: {
@@ -341,15 +354,16 @@ std::size_t append_random_proto_frame(ProtoKind kind, const demux::Decoder *deco
             payload[i] = static_cast<uint8_t>(xorshift32(rng) & 0xFFU); // 掩码后 0..255
         }
         const auto msg_id = static_cast<uint16_t>(xorshift32(rng) & 0xFFFFU); // 掩码后 0..65535
-        ok = demux_test::gen_unicore_bin(dst, msg_id, 42U, {}, std::span<const uint8_t>(payload.data(), plen), flen);
+        ok = demux_test::gen_unicore_bin(dst, msg_id, 42U, {},
+                                         std::span<const uint8_t>(payload.data(), plen), flen);
         break;
     }
     case ProtoKind::kUnicoreHash: {
         const uint32_t seq = xorshift32(rng) % 100000U;
         const bool lc = (xorshift32(rng) & 1U) != 0U;
         const bool use_xor = (xorshift32(rng) & 2U) != 0U;
-        const int n =
-            std::snprintf(text.data(), text.size(), "BESTPOSA,97,GPS;%u,SOL_COMPUTED", static_cast<unsigned>(seq));
+        const int n = std::snprintf(text.data(), text.size(), "BESTPOSA,97,GPS;%u,SOL_COMPUTED",
+                                    static_cast<unsigned>(seq));
         TEST_ASSERT_TRUE(n > 0);
         // n > 0 且受 text.size() 限制
         const std::string_view sv(text.data(), static_cast<std::size_t>(n));
@@ -391,8 +405,8 @@ std::size_t append_random_proto_frame(ProtoKind kind, const demux::Decoder *deco
     return flen;
 }
 
-std::size_t build_all_proto_mixed_stream(uint32_t seed, std::span<uint8_t> buf, std::size_t frame_count,
-                                         StreamCapture *truth)
+std::size_t build_all_proto_mixed_stream(uint32_t seed, std::span<uint8_t> buf,
+                                         std::size_t frame_count, StreamCapture *truth)
 {
     uint32_t rng = seed;
     std::size_t pos = 0U;
@@ -405,8 +419,8 @@ std::size_t build_all_proto_mixed_stream(uint32_t seed, std::span<uint8_t> buf, 
         const ActiveProtoEntry &entry = kActiveProtos[idx];
         pos += append_fake_garbage(buf.subspan(pos), rng);
         // idx < kActiveProtoCount <= 6，在 uint8_t 范围内
-        pos += append_random_proto_frame(entry.kind, entry.decoder, static_cast<uint8_t>(idx), buf.subspan(pos), rng,
-                                         truth);
+        pos += append_random_proto_frame(entry.kind, entry.decoder, static_cast<uint8_t>(idx),
+                                         buf.subspan(pos), rng, truth);
     }
     pos += append_fake_garbage(buf.subspan(pos), rng);
     return pos;
@@ -437,7 +451,8 @@ static void test_property_i1_chunk_independence_1000_splits()
     std::array<char, kFailMsgCap> msg{};
     const std::span<uint8_t> stream(s_stream_buf);
 
-    const std::size_t stream_len = build_all_proto_mixed_stream(kBasePrngSeed, stream, 36U, &s_truth_cap);
+    const std::size_t stream_len =
+        build_all_proto_mixed_stream(kBasePrngSeed, stream, 36U, &s_truth_cap);
     TEST_ASSERT_TRUE(stream_len > 1000U);
 
     // 参考运行 0：整块喂入
@@ -451,10 +466,11 @@ static void test_property_i1_chunk_independence_1000_splits()
     // >= 1000 轮随机切分
     for (uint32_t round = 0U; round < kSplitRounds; ++round) {
         const uint32_t round_seed = rng;
-        static_cast<void>(std::snprintf(msg.data(), msg.size(),
-                                        "I1 split failed: base_seed=0x%08lX round=%lu round_rng=0x%08lX",
-                                        static_cast<unsigned long>(kBasePrngSeed), static_cast<unsigned long>(round),
-                                        static_cast<unsigned long>(round_seed)));
+        static_cast<void>(std::snprintf(
+            msg.data(), msg.size(),
+            "I1 split failed: base_seed=0x%08lX round=%lu round_rng=0x%08lX",
+            static_cast<unsigned long>(kBasePrngSeed), static_cast<unsigned long>(round),
+            static_cast<unsigned long>(round_seed)));
         run_chunked(decs, stream.subspan(0, stream_len), s_cur_cap, 0U, &rng, msg.data());
         assert_captures_equal(s_ref_cap, s_cur_cap, msg.data());
     }
@@ -470,22 +486,27 @@ static void test_property_mixed_stream_false_preambles_recovery()
     for (uint32_t iter = 0U; iter < kMixedSeedRounds; ++iter) {
         const uint32_t stream_seed = xorshift32(master_rng);
         uint32_t split_rng = stream_seed ^ 0x9E3779B9U;
-        const std::size_t stream_len = build_all_proto_mixed_stream(stream_seed, stream, 28U, &s_truth_cap);
+        const std::size_t stream_len =
+            build_all_proto_mixed_stream(stream_seed, stream, 28U, &s_truth_cap);
 
-        static_cast<void>(std::snprintf(msg.data(), msg.size(), "mixed recovery failed: iter=%lu stream_seed=0x%08lX",
-                                        static_cast<unsigned long>(iter), static_cast<unsigned long>(stream_seed)));
+        static_cast<void>(std::snprintf(
+            msg.data(), msg.size(), "mixed recovery failed: iter=%lu stream_seed=0x%08lX",
+            static_cast<unsigned long>(iter), static_cast<unsigned long>(stream_seed)));
         run_chunked(decs, stream.subspan(0, stream_len), s_cur_cap, 0U, &split_rng, msg.data());
 
         // abort 后所有真帧必须按序恢复且逐字节相同
         TEST_ASSERT_EQUAL_UINT_MESSAGE(s_truth_cap.frame_count, s_cur_cap.frame_count, msg.data());
         for (std::size_t i = 0U; i < s_truth_cap.frame_count; ++i) {
-            TEST_ASSERT_EQUAL_PTR_MESSAGE(s_truth_cap.meta[i].decoder, s_cur_cap.meta[i].decoder, msg.data());
-            TEST_ASSERT_EQUAL_UINT8_MESSAGE(s_truth_cap.meta[i].decoder_index, s_cur_cap.meta[i].decoder_index,
-                                            msg.data());
-            TEST_ASSERT_EQUAL_UINT_MESSAGE(s_truth_cap.meta[i].len, s_cur_cap.meta[i].len, msg.data());
-            TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(&s_truth_cap.frame_blob[s_truth_cap.meta[i].offset],
-                                                 &s_cur_cap.frame_blob[s_cur_cap.meta[i].offset],
-                                                 s_truth_cap.meta[i].len, msg.data());
+            TEST_ASSERT_EQUAL_PTR_MESSAGE(s_truth_cap.meta[i].decoder, s_cur_cap.meta[i].decoder,
+                                          msg.data());
+            TEST_ASSERT_EQUAL_UINT8_MESSAGE(s_truth_cap.meta[i].decoder_index,
+                                            s_cur_cap.meta[i].decoder_index, msg.data());
+            TEST_ASSERT_EQUAL_UINT_MESSAGE(s_truth_cap.meta[i].len, s_cur_cap.meta[i].len,
+                                           msg.data());
+            TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(
+                &s_truth_cap.frame_blob[s_truth_cap.meta[i].offset],
+                &s_cur_cap.frame_blob[s_cur_cap.meta[i].offset], s_truth_cap.meta[i].len,
+                msg.data());
         }
     }
 }
@@ -512,11 +533,12 @@ static void test_scenario_bluetooth_product_and_rtcm3()
         if ((i % 3U) == 0U) {
             pos += append_fake_garbage(stream.subspan(pos), rng);
         }
-        pos += append_random_proto_frame(is_rtcm ? ProtoKind::kRtcm3 : ProtoKind::kProduct,
-                                         is_rtcm ? &demux::rtcm3::kDecoder : &proto::demux_frame::kDecoder,
-                                         is_rtcm ? BtStaticDemux::index_of<demux::rtcm3::kDecoder>()
-                                                 : BtStaticDemux::index_of<proto::demux_frame::kDecoder>(),
-                                         stream.subspan(pos), rng, &s_truth_cap);
+        pos += append_random_proto_frame(
+            is_rtcm ? ProtoKind::kRtcm3 : ProtoKind::kProduct,
+            is_rtcm ? &demux::rtcm3::kDecoder : &proto::demux_frame::kDecoder,
+            is_rtcm ? BtStaticDemux::index_of<demux::rtcm3::kDecoder>()
+                    : BtStaticDemux::index_of<proto::demux_frame::kDecoder>(),
+            stream.subspan(pos), rng, &s_truth_cap);
     }
 
     run_chunked(kBtDecs, stream.subspan(0, pos), s_ref_cap, 0U, nullptr, "bt-whole");
@@ -535,10 +557,12 @@ static void test_scenario_bluetooth_product_and_rtcm3()
 
     for (std::size_t i = 0U; i < s_cur_cap.frame_count; ++i) {
         if (s_cur_cap.meta[i].decoder == &proto::demux_frame::kDecoder) {
-            const std::span<const uint8_t> wire(&s_cur_cap.frame_blob[s_cur_cap.meta[i].offset], s_cur_cap.meta[i].len);
+            const std::span<const uint8_t> wire(&s_cur_cap.frame_blob[s_cur_cap.meta[i].offset],
+                                                s_cur_cap.meta[i].len);
             const std::optional<proto::FrameView> fv = proto::demux_frame::view(wire);
             TEST_ASSERT_TRUE(fv.has_value());
-            TEST_ASSERT_EQUAL_UINT(proto::kHeaderLen + fv->payload.size() + proto::kCrcLen, s_cur_cap.meta[i].len);
+            TEST_ASSERT_EQUAL_UINT(proto::kHeaderLen + fv->payload.size() + proto::kCrcLen,
+                                   s_cur_cap.meta[i].len);
         }
     }
 }
@@ -571,8 +595,9 @@ static void test_scenario_gnss_unicore_and_ublox_sets()
             const std::size_t slot = i % 4U;
             pos += append_fake_garbage(stream.subspan(pos), rng);
             // slot < 4，在 uint8_t 范围内
-            pos += append_random_proto_frame(kPicks[slot], kUm980Decs[slot], static_cast<uint8_t>(slot),
-                                             stream.subspan(pos), rng, &s_truth_cap);
+            pos += append_random_proto_frame(kPicks[slot], kUm980Decs[slot],
+                                             static_cast<uint8_t>(slot), stream.subspan(pos), rng,
+                                             &s_truth_cap);
         }
         run_chunked(kUm980Decs, stream.subspan(0, pos), s_ref_cap, 0U, nullptr, "gnss-um980-whole");
         run_chunked(kUm980Decs, stream.subspan(0, pos), s_cur_cap, 0U, &rng, "gnss-um980");
@@ -602,8 +627,9 @@ static void test_scenario_gnss_unicore_and_ublox_sets()
             const std::size_t slot = i % 3U;
             pos += append_fake_garbage(stream.subspan(pos), rng);
             // slot < 3，在 uint8_t 范围内
-            pos += append_random_proto_frame(kPicks[slot], kF9pDecs[slot], static_cast<uint8_t>(slot),
-                                             stream.subspan(pos), rng, &s_truth_cap);
+            pos +=
+                append_random_proto_frame(kPicks[slot], kF9pDecs[slot], static_cast<uint8_t>(slot),
+                                          stream.subspan(pos), rng, &s_truth_cap);
         }
         run_chunked(kF9pDecs, stream.subspan(0, pos), s_ref_cap, 0U, nullptr, "gnss-f9p-whole");
         run_chunked(kF9pDecs, stream.subspan(0, pos), s_cur_cap, 0U, &rng, "gnss-f9p");
@@ -631,9 +657,10 @@ static void test_scenario_product_vs_unicore_bin_conflict()
     s_truth_cap.clear();
     for (std::size_t i = 0U; i < 16U; ++i) {
         const bool is_unicore = (i % 2U) != 0U;
-        pos += append_random_proto_frame(is_unicore ? ProtoKind::kUnicoreBin : ProtoKind::kProduct,
-                                         is_unicore ? &demux::unicore_bin::kDecoder : &proto::demux_frame::kDecoder,
-                                         is_unicore ? 1U : 0U, stream.subspan(pos), rng, &s_truth_cap);
+        pos += append_random_proto_frame(
+            is_unicore ? ProtoKind::kUnicoreBin : ProtoKind::kProduct,
+            is_unicore ? &demux::unicore_bin::kDecoder : &proto::demux_frame::kDecoder,
+            is_unicore ? 1U : 0U, stream.subspan(pos), rng, &s_truth_cap);
     }
 
     // 无垃圾交错：即使回放到次优先级解码器，resyncs == 0，unknown_bytes == 0
@@ -649,7 +676,8 @@ static void test_scenario_product_vs_unicore_bin_conflict()
     TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().unknown_bytes);
     for (std::size_t i = 0U; i < s_cur_cap.frame_count; ++i) {
         const bool is_unicore = (i % 2U) != 0U;
-        const demux::Decoder *exp_dec = is_unicore ? &demux::unicore_bin::kDecoder : &proto::demux_frame::kDecoder;
+        const demux::Decoder *exp_dec =
+            is_unicore ? &demux::unicore_bin::kDecoder : &proto::demux_frame::kDecoder;
         const uint8_t exp_idx = is_unicore ? 0U : 1U;
         TEST_ASSERT_EQUAL_PTR(exp_dec, s_cur_cap.meta[i].decoder);
         TEST_ASSERT_EQUAL_UINT8(exp_idx, s_cur_cap.meta[i].decoder_index);
@@ -666,12 +694,12 @@ static void test_scenario_product_vs_unicore_bin_conflict()
         s_truth_cap.clear();
         std::copy(kFakeAa1.begin(), kFakeAa1.end(), stream.subspan(pos).begin());
         pos += kFakeAa1.size();
-        pos += append_random_proto_frame(ProtoKind::kProduct, &proto::demux_frame::kDecoder, 0U, stream.subspan(pos),
-                                         rng, &s_truth_cap);
+        pos += append_random_proto_frame(ProtoKind::kProduct, &proto::demux_frame::kDecoder, 0U,
+                                         stream.subspan(pos), rng, &s_truth_cap);
         std::copy(kFakeAa2.begin(), kFakeAa2.end(), stream.subspan(pos).begin());
         pos += kFakeAa2.size();
-        pos += append_random_proto_frame(ProtoKind::kUnicoreBin, &demux::unicore_bin::kDecoder, 1U, stream.subspan(pos),
-                                         rng, &s_truth_cap);
+        pos += append_random_proto_frame(ProtoKind::kUnicoreBin, &demux::unicore_bin::kDecoder, 1U,
+                                         stream.subspan(pos), rng, &s_truth_cap);
         std::copy(kFakeAa3.begin(), kFakeAa3.end(), stream.subspan(pos).begin());
         pos += kFakeAa3.size();
         TEST_ASSERT_TRUE(demux_test::gen_product(stream.subspan(pos), 0x0042U, proto::sender::kApp,
@@ -681,17 +709,20 @@ static void test_scenario_product_vs_unicore_bin_conflict()
         s_truth_cap.meta[s_truth_cap.frame_count].offset = s_truth_cap.frame_blob_used;
         s_truth_cap.meta[s_truth_cap.frame_count].len = flen;
         std::copy(stream.subspan(pos, flen).begin(), stream.subspan(pos, flen).end(),
-                  s_truth_cap.frame_blob.begin() + static_cast<std::ptrdiff_t>(s_truth_cap.frame_blob_used));
+                  s_truth_cap.frame_blob.begin() +
+                      static_cast<std::ptrdiff_t>(s_truth_cap.frame_blob_used));
         s_truth_cap.frame_blob_used += flen;
         s_truth_cap.frame_count++;
         pos += flen;
 
-        run_chunked(kOrderAb, stream.subspan(0, pos), s_cur_cap, 3U, nullptr, "aa-conflict-fake-preambles");
+        run_chunked(kOrderAb, stream.subspan(0, pos), s_cur_cap, 3U, nullptr,
+                    "aa-conflict-fake-preambles");
         TEST_ASSERT_EQUAL_UINT(s_truth_cap.frame_count, s_cur_cap.frame_count);
         for (std::size_t i = 0U; i < s_truth_cap.frame_count; ++i) {
             TEST_ASSERT_EQUAL_PTR(s_truth_cap.meta[i].decoder, s_cur_cap.meta[i].decoder);
             TEST_ASSERT_EQUAL_HEX8_ARRAY(&s_truth_cap.frame_blob[s_truth_cap.meta[i].offset],
-                                         &s_cur_cap.frame_blob[s_cur_cap.meta[i].offset], s_truth_cap.meta[i].len);
+                                         &s_cur_cap.frame_blob[s_cur_cap.meta[i].offset],
+                                         s_truth_cap.meta[i].len);
         }
     }
 }

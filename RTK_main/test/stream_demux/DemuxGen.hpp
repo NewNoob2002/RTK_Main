@@ -39,31 +39,33 @@ struct UbxChecksum {
 [[nodiscard]] UbxChecksum ubx_checksum(std::span<const uint8_t> data) noexcept;
 
 /** 生成合法 RTCM3 帧；payload.size() <= 1023。线程/ISR 安全：是。 */
-[[nodiscard]] bool gen_rtcm3(std::span<uint8_t> out, std::span<const uint8_t> payload, std::size_t &out_len) noexcept;
+[[nodiscard]] bool gen_rtcm3(std::span<uint8_t> out, std::span<const uint8_t> payload,
+                             std::size_t &out_len) noexcept;
 
 /** 生成合法 NMEA 0183 语句；body 为 '$' 与 '*' 之间的内容（含首字符 [A-Z0-9]）。线程/ISR 安全：是。 */
 [[nodiscard]] bool gen_nmea(std::span<uint8_t> out, std::string_view body, bool lowercase_hex,
                             std::size_t &out_len) noexcept;
 
 /** 生成合法 u-blox UBX 帧；payload.size() <= 4088。线程/ISR 安全：是。 */
-[[nodiscard]] bool gen_ubx(std::span<uint8_t> out, uint8_t msg_class, uint8_t msg_id, std::span<const uint8_t> payload,
-                           std::size_t &out_len) noexcept;
+[[nodiscard]] bool gen_ubx(std::span<uint8_t> out, uint8_t msg_class, uint8_t msg_id,
+                           std::span<const uint8_t> payload, std::size_t &out_len) noexcept;
 
 /** 生成合法 Unicore 二进制帧；hdr_rest_16 为空时补 0，否则长度须为 16；payload.size() <= 4068。线程/ISR 安全：是。 */
 [[nodiscard]] bool gen_unicore_bin(std::span<uint8_t> out, uint16_t msg_id, uint8_t cpu_idle,
-                                   std::span<const uint8_t> hdr_rest_16, std::span<const uint8_t> payload,
-                                   std::size_t &out_len) noexcept;
+                                   std::span<const uint8_t> hdr_rest_16,
+                                   std::span<const uint8_t> payload, std::size_t &out_len) noexcept;
 
 /** 生成合法 Unicore Hash 语句（8 位十六进制 CRC-32）；body 为 '#' 与 '*' 之间的内容。线程/ISR 安全：是。 */
-[[nodiscard]] bool gen_unicore_hash_crc32(std::span<uint8_t> out, std::string_view body, bool lowercase_hex,
-                                          std::size_t &out_len) noexcept;
+[[nodiscard]] bool gen_unicore_hash_crc32(std::span<uint8_t> out, std::string_view body,
+                                          bool lowercase_hex, std::size_t &out_len) noexcept;
 
 /** 生成合法 Unicore Hash 语句（2 位十六进制 XOR）；body 为 '#' 与 '*' 之间的内容。线程/ISR 安全：是。 */
-[[nodiscard]] bool gen_unicore_hash_xor(std::span<uint8_t> out, std::string_view body, bool lowercase_hex,
-                                        std::size_t &out_len) noexcept;
+[[nodiscard]] bool gen_unicore_hash_xor(std::span<uint8_t> out, std::string_view body,
+                                        bool lowercase_hex, std::size_t &out_len) noexcept;
 
 /** 生成合法产品 SPP 帧（内部调用 proto::build_frame）。线程/ISR 安全：是。 */
-[[nodiscard]] bool gen_product(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender, uint8_t type,
-                               std::span<const uint8_t> payload, std::size_t &out_len) noexcept;
+[[nodiscard]] bool gen_product(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender,
+                               uint8_t type, std::span<const uint8_t> payload,
+                               std::size_t &out_len) noexcept;
 
 } // namespace demux_test

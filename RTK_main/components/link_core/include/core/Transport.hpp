@@ -42,7 +42,8 @@ public:
     {
         return fw::Status::kNotSupported;
     }
-    [[nodiscard]] virtual fw::Status commit_reply(const ReplyCredit &, std::span<const uint8_t>) noexcept
+    [[nodiscard]] virtual fw::Status commit_reply(const ReplyCredit &,
+                                                  std::span<const uint8_t>) noexcept
     {
         return fw::Status::kNotSupported;
     }
@@ -52,7 +53,8 @@ public:
         return false;
     }
     /** 最新40B推送邮箱，不覆盖 reply；默认保留旧同步 host 行为。 */
-    [[nodiscard]] virtual fw::Status push_latest(SessionHandle handle, std::span<const uint8_t> bytes) noexcept
+    [[nodiscard]] virtual fw::Status push_latest(SessionHandle handle,
+                                                 std::span<const uint8_t> bytes) noexcept
     {
         constexpr uint32_t kLegacyTimeoutMs = 200;
         return write(handle, bytes, kLegacyTimeoutMs);

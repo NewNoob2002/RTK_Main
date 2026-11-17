@@ -28,9 +28,10 @@ namespace {
 
 constexpr int kGroupWidth = 12;             // help 列表里组名左对齐宽度
 constexpr size_t kConsoleRxBufBytes = 256U; // 与 IDF uart_vfs_dev_port_init 的内部选择保持一致
-constexpr uint32_t kTxDrainTimeoutMs = 50U; // 128 B 硬件 FIFO 在 2 Mbaud 下约 0.64 ms 发完，留足余量
-constexpr int kRefTickMaxBaud = 1000000;    // IDF uart_vfs_dev_port_init 的 REF_TICK/APB 分界
-constexpr size_t kHelpMaxArgs = 2U;         // help [<group>]
+constexpr uint32_t kTxDrainTimeoutMs =
+    50U;                                 // 128 B 硬件 FIFO 在 2 Mbaud 下约 0.64 ms 发完，留足余量
+constexpr int kRefTickMaxBaud = 1000000; // IDF uart_vfs_dev_port_init 的 REF_TICK/APB 分界
+constexpr size_t kHelpMaxArgs = 2U;      // help [<group>]
 constexpr const char *kHelpName = "help";
 constexpr const char *kHelpSummary = "show command list, or usage of one group";
 
@@ -59,8 +60,9 @@ struct Entry {
 std::array<Entry, kMaxCmds> s_entries{};
 size_t s_entry_count = 0U;
 Entry s_help_entry{};
-bool s_started = false;               // init() 成功后置位：命令表封存，add/add_verbs 不再接受
-esp_console_repl_t *s_repl = nullptr; // init() 创建、run() 启动；REPL 任务在 run 之前阻塞在任务通知上
+bool s_started = false; // init() 成功后置位：命令表封存，add/add_verbs 不再接受
+esp_console_repl_t *s_repl =
+    nullptr; // init() 创建、run() 启动；REPL 任务在 run 之前阻塞在任务通知上
 bool s_running = false;
 
 bool is_empty_text(const char *text) noexcept
@@ -228,7 +230,8 @@ int log_vprintf(const char *fmt, va_list args)
             return n;
         }
     }
-    return (s_orig_log_vprintf != nullptr) ? s_orig_log_vprintf(fmt, args) : std::vprintf(fmt, args);
+    return (s_orig_log_vprintf != nullptr) ? s_orig_log_vprintf(fmt, args)
+                                           : std::vprintf(fmt, args);
 }
 
 void install_uart_sink() noexcept
@@ -307,14 +310,15 @@ esp_err_t enable_uart_tx_buffer() noexcept
     }
 
     // 控制台使用默认 UART 引脚（IOMUX 直连），这里不重路由：重路由反而会覆盖 ROM/console 的既有配置。
-    err = uart_set_pin(port, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    err = uart_set_pin(port, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
+                       UART_PIN_NO_CHANGE);
     if (err != ESP_OK) {
         FW_LOGE(fw::TraceCat::kSys, "uart_set_pin failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    err =
-        uart_driver_install(port, static_cast<int>(kConsoleRxBufBytes), CONFIG_RTK_CONSOLE_UART_TX_BUF, 0, nullptr, 0);
+    err = uart_driver_install(port, static_cast<int>(kConsoleRxBufBytes),
+                              CONFIG_RTK_CONSOLE_UART_TX_BUF, 0, nullptr, 0);
     if (err != ESP_OK) {
         FW_LOGE(fw::TraceCat::kSys, "uart_driver_install failed: %s", esp_err_to_name(err));
         return err;
@@ -441,7 +445,8 @@ esp_err_t init(const char *prompt) noexcept
     esp_console_dev_usb_cdc_config_t cdc_cfg = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
     err = esp_console_new_repl_usb_cdc(&cdc_cfg, &repl_cfg, &repl);
 #elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
-    esp_console_dev_usb_serial_jtag_config_t jtag_cfg = ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    esp_console_dev_usb_serial_jtag_config_t jtag_cfg =
+        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
     err = esp_console_new_repl_usb_serial_jtag(&jtag_cfg, &repl_cfg, &repl);
 #else
     err = esp_console_new_repl_stdio(&repl_cfg, &repl);
@@ -471,7 +476,8 @@ esp_err_t init(const char *prompt) noexcept
             ++s_entry_count;
             err = esp_console_cmd_register(&command);
             if (err != ESP_OK) {
-                FW_LOGE(fw::TraceCat::kSys, "register %s failed: %s", entry.name, esp_err_to_name(err));
+                FW_LOGE(fw::TraceCat::kSys, "register %s failed: %s", entry.name,
+                        esp_err_to_name(err));
                 cleanup_repl(repl);
                 return err;
             }

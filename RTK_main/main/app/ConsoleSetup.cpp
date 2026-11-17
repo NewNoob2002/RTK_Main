@@ -95,7 +95,8 @@ bool init_console() noexcept
             }
             const std::string_view name{command.name};
             s_command_gates[used] = {command.handler, command.ctx,
-                                     name == "status" || name == "log" || name == "sys" || name == "config"};
+                                     name == "status" || name == "log" || name == "sys" ||
+                                         name == "config"};
             s_gated_commands[used] = command;
             s_gated_commands[used].handler = &gated_command;
             s_gated_commands[used].ctx = &s_command_gates[used];

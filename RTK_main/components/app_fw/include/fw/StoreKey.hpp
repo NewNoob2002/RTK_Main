@@ -63,7 +63,8 @@ struct StoreKey {
 /** 编译期校验：命名长度、max_size 与类型一致、范围有序。用法：static_assert(fw::valid(kKeys[0]))。 */
 [[nodiscard]] constexpr bool valid(const StoreKey &k) noexcept
 {
-    if (k.ns.empty() || (k.ns.size() > kStoreNameMax) || k.key.empty() || (k.key.size() > kStoreNameMax)) {
+    if (k.ns.empty() || (k.ns.size() > kStoreNameMax) || k.key.empty() ||
+        (k.key.size() > kStoreNameMax)) {
         return false;
     }
     switch (k.type) {

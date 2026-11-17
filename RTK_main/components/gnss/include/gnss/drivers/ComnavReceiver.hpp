@@ -20,9 +20,10 @@ namespace gnss::comnav {
 inline constexpr std::size_t kPromptMaxFrame = 128;
 [[nodiscard]] bool prompt_first_byte(uint8_t byte) noexcept;
 [[nodiscard]] demux::Step prompt_step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
-[[nodiscard]] std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) noexcept;
-inline constexpr demux::Decoder kPromptDecoder{"ComnavPrompt", kPromptMaxFrame, &prompt_first_byte, &prompt_step,
-                                               &explain_prompt};
+[[nodiscard]] std::size_t explain_prompt(std::span<const uint8_t> frame,
+                                         std::span<char> out) noexcept;
+inline constexpr demux::Decoder kPromptDecoder{"ComnavPrompt", kPromptMaxFrame, &prompt_first_byte,
+                                               &prompt_step, &explain_prompt};
 
 } // namespace gnss::comnav
 
@@ -54,7 +55,8 @@ public:
     /** K803 只能输出 GGA/RMC/GSA/GSV；SATSINFOA/HEADINGA/GST 不支持。 */
     [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
     /** "LOG COMn <name> ONTIME <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）。 */
-    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model,
+                                          const OutputPlan &plan,
                                           CmdBuf &out) const noexcept override;
 
 protected:
@@ -63,18 +65,21 @@ protected:
     ~ComnavReceiver() = default;
 
     // ---- 命令库：只往 out 写一条完整命令（含 \r\n，先清空），失败返回 false ----
-    [[nodiscard]] static bool cmd_unlog_all(CmdBuf &out, uint8_t port) noexcept;               // "UNLOGALL COMn"
-    [[nodiscard]] static bool cmd_mode_rover(CmdBuf &out) noexcept;                            // "MODE ROVER"
-    [[nodiscard]] static bool cmd_com_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept; // "COM COMn <baud>"
-    [[nodiscard]] static bool cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t port,
-                                             uint32_t period_ms) noexcept; // "LOG COMn <name> ONTIME <period>"
+    [[nodiscard]] static bool cmd_unlog_all(CmdBuf &out, uint8_t port) noexcept; // "UNLOGALL COMn"
+    [[nodiscard]] static bool cmd_mode_rover(CmdBuf &out) noexcept;              // "MODE ROVER"
+    [[nodiscard]] static bool cmd_com_baud(CmdBuf &out, uint8_t port,
+                                           uint32_t baud) noexcept; // "COM COMn <baud>"
+    [[nodiscard]] static bool
+    cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t port,
+                   uint32_t period_ms) noexcept; // "LOG COMn <name> ONTIME <period>"
     [[nodiscard]] static bool cmd_unlog_msg(CmdBuf &out, std::string_view name,
                                             uint8_t port) noexcept;    // "UNLOG COMn <name>"
     [[nodiscard]] static bool cmd_version_query(CmdBuf &out) noexcept; // "LOG VERSIONA ONCE"
 
     // ---- 应答判定：只判成功/失败，具体文本不进主流程 ----
-    [[nodiscard]] static bool resp_is_ok(std::span<const uint8_t> frame) noexcept;    // 以 "<OK" 开头
-    [[nodiscard]] static bool resp_is_error(std::span<const uint8_t> frame) noexcept; // 以 "<ERROR" 开头
+    [[nodiscard]] static bool resp_is_ok(std::span<const uint8_t> frame) noexcept; // 以 "<OK" 开头
+    [[nodiscard]] static bool
+    resp_is_error(std::span<const uint8_t> frame) noexcept; // 以 "<ERROR" 开头
 };
 
 /** K803 基准型号叶子类：无覆盖，家族默认行为即 K803 行为（name() 仍为 "comnav"）。 */

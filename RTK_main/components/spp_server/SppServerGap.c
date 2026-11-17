@@ -19,7 +19,8 @@ static void spp_server_handle_init(esp_spp_cb_param_t *param)
     taskEXIT_CRITICAL(&s_spp_mux);
 
     /* 失败原因由 init 任务在 spp_server_wait_stage 中打印（任务上下文）；回调里只记追踪。 */
-    spp_server_trace(SPP_SERVER_TRACE_STAGE, 0U, (uint32_t)SPP_SERVER_TRACE_STAGE_INIT, (uint32_t)param->init.status);
+    spp_server_trace(SPP_SERVER_TRACE_STAGE, 0U, (uint32_t)SPP_SERVER_TRACE_STAGE_INIT,
+                     (uint32_t)param->init.status);
     if (s_spp.rtos.evt_group != NULL) {
         (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_INIT_DONE);
     }
@@ -48,7 +49,8 @@ static void spp_server_handle_srv_open(esp_spp_cb_param_t *param)
     const uint32_t handle = param->srv_open.handle;
 
     if (param->srv_open.status != ESP_SPP_SUCCESS) {
-        spp_server_trace(SPP_SERVER_TRACE_STAGE, param->srv_open.handle, (uint32_t)SPP_SERVER_TRACE_STAGE_SRV_OPEN,
+        spp_server_trace(SPP_SERVER_TRACE_STAGE, param->srv_open.handle,
+                         (uint32_t)SPP_SERVER_TRACE_STAGE_SRV_OPEN,
                          (uint32_t)param->srv_open.status);
         return;
     }
@@ -62,7 +64,8 @@ static void spp_server_handle_srv_open(esp_spp_cb_param_t *param)
      * 不在回调里调用 esp_spp_disconnect（btc_transfer_context 可能无限阻塞），登记拒绝命令，
      * 由发送任务断开。不做延后接纳，避免 CLOSE 后把已死的连接重新发布为会话。 */
     if (!spp_server_ctrl_add(SPP_SERVER_CTRL_REJECT, handle, NULL)) {
-        spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, handle, (uint32_t)SPP_SERVER_TRACE_CTRL_REJECT, 0U);
+        spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, handle, (uint32_t)SPP_SERVER_TRACE_CTRL_REJECT,
+                         0U);
     }
 }
 
@@ -140,13 +143,15 @@ void spp_server_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param
 
     case ESP_BT_GAP_PIN_REQ_EVT:
         if (!spp_server_ctrl_add(SPP_SERVER_CTRL_PIN_REQ, 0U, param->pin_req.bda)) {
-            spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, 0U, (uint32_t)SPP_SERVER_TRACE_CTRL_PIN, 0U);
+            spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, 0U, (uint32_t)SPP_SERVER_TRACE_CTRL_PIN,
+                             0U);
         }
         break;
 
     case ESP_BT_GAP_CFM_REQ_EVT:
         if (!spp_server_ctrl_add(SPP_SERVER_CTRL_CFM_REQ, 0U, param->cfm_req.bda)) {
-            spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, 0U, (uint32_t)SPP_SERVER_TRACE_CTRL_CONFIRM, 0U);
+            spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, 0U,
+                             (uint32_t)SPP_SERVER_TRACE_CTRL_CONFIRM, 0U);
         }
         break;
 

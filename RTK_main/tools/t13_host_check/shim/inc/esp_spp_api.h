@@ -108,6 +108,7 @@ typedef void (*esp_spp_cb_t)(esp_spp_cb_event_t event, esp_spp_cb_param_t *param
 esp_err_t esp_spp_register_callback(esp_spp_cb_t callback);
 esp_err_t esp_spp_enhanced_init(const esp_spp_cfg_t *cfg);
 esp_err_t esp_spp_deinit(void);
-esp_err_t esp_spp_start_srv(esp_spp_sec_t sec_mask, esp_spp_role_t role, uint8_t local_scn, const char *name);
+esp_err_t esp_spp_start_srv(esp_spp_sec_t sec_mask, esp_spp_role_t role, uint8_t local_scn,
+                            const char *name);
 esp_err_t esp_spp_write(uint32_t handle, int len, uint8_t *p_data);
 esp_err_t esp_spp_disconnect(uint32_t handle);

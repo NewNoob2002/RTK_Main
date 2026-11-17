@@ -83,7 +83,8 @@ inline bool is_printable(uint8_t c) noexcept
  */
 inline bool is_body_byte(uint8_t c) noexcept
 {
-    return is_printable(c) && (c != static_cast<uint8_t>('$')) && (c != static_cast<uint8_t>(kStar));
+    return is_printable(c) && (c != static_cast<uint8_t>('$')) &&
+           (c != static_cast<uint8_t>(kStar));
 }
 
 /**
@@ -156,7 +157,8 @@ inline bool append_period(CmdBuf &out, uint32_t period_ms) noexcept
  * @retval true: 找到完整引号字段。
  * @retval false: 未闭合，或先遇到 '*'（校验段开始，说明没有该字段）。
  */
-inline bool next_quoted(std::span<const uint8_t> frame, size_t &pos, std::span<const uint8_t> &out) noexcept
+inline bool next_quoted(std::span<const uint8_t> frame, size_t &pos,
+                        std::span<const uint8_t> &out) noexcept
 {
     while ((pos < frame.size()) && (frame[pos] != static_cast<uint8_t>(kQuote))) {
         if (frame[pos] == static_cast<uint8_t>(kStar)) {
@@ -239,7 +241,8 @@ inline bool starts_with(std::span<const uint8_t> text, std::string_view prefix) 
  * @retval true: 前缀匹配。
  * @retval false: 长度不足或字节不同。
  */
-inline bool bytes_starts_with(std::span<const uint8_t> text, std::span<const uint8_t> prefix) noexcept
+inline bool bytes_starts_with(std::span<const uint8_t> text,
+                              std::span<const uint8_t> prefix) noexcept
 {
     if (text.size() < prefix.size()) {
         return false;
@@ -265,7 +268,8 @@ inline bool has_hex_tail(std::span<const uint8_t> frame) noexcept
         return false;
     }
     const size_t star_pos = size - kTailBytes;
-    return (frame[size - 1U] == static_cast<uint8_t>(kLf)) && (frame[size - 2U] == static_cast<uint8_t>(kCr)) &&
+    return (frame[size - 1U] == static_cast<uint8_t>(kLf)) &&
+           (frame[size - 2U] == static_cast<uint8_t>(kCr)) &&
            (frame[star_pos] == static_cast<uint8_t>(kStar)) && is_hex(frame[star_pos + 1U]) &&
            is_hex(frame[star_pos + 2U]);
 }
@@ -278,8 +282,8 @@ inline bool has_hex_tail(std::span<const uint8_t> frame) noexcept
 inline size_t strip_line_end(std::span<const uint8_t> sent) noexcept
 {
     size_t len = sent.size();
-    while ((len > 0U) &&
-           ((sent[len - 1U] == static_cast<uint8_t>(kCr)) || (sent[len - 1U] == static_cast<uint8_t>(kLf)))) {
+    while ((len > 0U) && ((sent[len - 1U] == static_cast<uint8_t>(kCr)) ||
+                          (sent[len - 1U] == static_cast<uint8_t>(kLf)))) {
         --len;
     }
     return len;

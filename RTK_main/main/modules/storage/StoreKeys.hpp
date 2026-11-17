@@ -23,7 +23,8 @@ inline constexpr size_t kMaxBlobKeyBytes = 64U;
 [[nodiscard]] esp_err_t write_value(const fw::StoreKey &key, uint32_t value) noexcept;
 
 /** 读一个 Blob 键到 out（len 返回实际读取字节数）。 */
-[[nodiscard]] esp_err_t read_blob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len) noexcept;
+[[nodiscard]] esp_err_t read_blob(const fw::StoreKey &key, std::span<uint8_t> out,
+                                  size_t &len) noexcept;
 
 /** 写一个 Blob 键并提交。 */
 [[nodiscard]] esp_err_t write_blob(const fw::StoreKey &key, std::span<const uint8_t> data) noexcept;

@@ -93,8 +93,8 @@ spp_server_session_t *spp_server_session_alloc(uint32_t handle, const uint8_t *a
     for (idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
         /* CLOSE 取消在途，API/copy 尚未返回时 users 保留源区。 */
         if ((!s_spp.sessions[idx].in_use) && (!s_spp.sessions[idx].reserving) &&
-            (!s_spp.sessions[idx].lifecycle_pending) && (!s_spp.sessions[idx].disconnect_submitting) &&
-            (s_spp.sessions[idx].users == 0U)) {
+            (!s_spp.sessions[idx].lifecycle_pending) &&
+            (!s_spp.sessions[idx].disconnect_submitting) && (s_spp.sessions[idx].users == 0U)) {
             s_spp.sessions[idx].reserving = true;
             slot = &s_spp.sessions[idx];
             break;
@@ -217,8 +217,8 @@ bool spp_server_ctrl_add(spp_server_ctrl_type_t type, uint32_t handle, const uin
 
     taskENTER_CRITICAL(&s_spp_mux);
     for (uint32_t slot = 0U; slot < SPP_SERVER_CTRL_MAX; slot++) {
-        if ((type == SPP_SERVER_CTRL_REJECT) && s_spp.ctrl[slot].in_use && (s_spp.ctrl[slot].type == type) &&
-            (s_spp.ctrl[slot].handle == handle)) {
+        if ((type == SPP_SERVER_CTRL_REJECT) && s_spp.ctrl[slot].in_use &&
+            (s_spp.ctrl[slot].type == type) && (s_spp.ctrl[slot].handle == handle)) {
             if (s_spp.ctrl[slot].closed) {
                 s_spp.ctrl[slot].closed = false;
                 s_spp.ctrl[slot].rearmed = true;

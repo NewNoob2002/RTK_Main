@@ -117,7 +117,8 @@ bool parse_mac(const char *s, std::span<uint8_t, kMacLen> out) noexcept
             return false;
         }
         // hi, lo 均在 0..15，组合值在 0..255。
-        tmp[i] = static_cast<uint8_t>((static_cast<uint32_t>(hi) << kBitsPerNibble) | static_cast<uint32_t>(lo));
+        tmp[i] = static_cast<uint8_t>((static_cast<uint32_t>(hi) << kBitsPerNibble) |
+                                      static_cast<uint32_t>(lo));
     }
 
     std::copy(tmp.begin(), tmp.end(), out.begin());
@@ -152,7 +153,8 @@ bool parse_hex(const char *s, std::span<uint8_t> out, size_t &written) noexcept
         static_cast<void>(hex_nibble(sv[i * 2U], hi));
         static_cast<void>(hex_nibble(sv[(i * 2U) + 1U], lo));
         // hi, lo 均在 0..15，组合值在 0..255。
-        out[i] = static_cast<uint8_t>((static_cast<uint32_t>(hi) << kBitsPerNibble) | static_cast<uint32_t>(lo));
+        out[i] = static_cast<uint8_t>((static_cast<uint32_t>(hi) << kBitsPerNibble) |
+                                      static_cast<uint32_t>(lo));
     }
     written = byte_len;
     return true;

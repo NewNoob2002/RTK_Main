@@ -70,8 +70,9 @@ void test_parse_u32_valid()
 void test_parse_u32_invalid_preserves_out()
 {
     const std::array<const char *, 19> bad_inputs{{
-        nullptr, "",     "0x",  "0X",    " 1",  "1 ",    " 0x1",       "0x1 ",        "+1",          "-1",
-        "+0x1",  "-0x1", "12a", "0x12g", "1.5", "0b101", "4294967296", "42949672950", "0x100000000",
+        nullptr, "",      "0x",         "0X",          " 1",          "1 ",  " 0x1",
+        "0x1 ",  "+1",    "-1",         "+0x1",        "-0x1",        "12a", "0x12g",
+        "1.5",   "0b101", "4294967296", "42949672950", "0x100000000",
     }};
 
     for (const char *input : bad_inputs) {
@@ -184,7 +185,8 @@ void test_parse_hex()
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expect4.data(), buf.data(), kHexOutCap);
 
     // 各类非法输入不得改动 out 或 written
-    const std::array<uint8_t, kHexOutCap> sentinel_buf{kHexSentinel, kHexSentinel, kHexSentinel, kHexSentinel};
+    const std::array<uint8_t, kHexOutCap> sentinel_buf{kHexSentinel, kHexSentinel, kHexSentinel,
+                                                       kHexSentinel};
     const std::array<const char *, 9> bad_hex{{
         nullptr,
         "a",

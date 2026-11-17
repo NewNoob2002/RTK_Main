@@ -251,7 +251,8 @@ int cmd_factory(void *ctx, int argc, char **argv) noexcept
 }
 
 constexpr std::array<cli::Cmd, 1U> kFactoryCmds{{
-    {"factory", "factory <verb>: production settings (hidden, needs unlock)", "<verb>", cmd_factory, nullptr, true},
+    {"factory", "factory <verb>: production settings (hidden, needs unlock)", "<verb>", cmd_factory,
+     nullptr, true},
 }};
 
 } // namespace

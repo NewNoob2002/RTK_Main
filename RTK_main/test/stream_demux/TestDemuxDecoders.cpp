@@ -67,7 +67,8 @@ public:
         unknown_len_ = 0U;
     }
 
-    void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> frame) noexcept override
+    void on_frame(const demux::Decoder &decoder, uint8_t index,
+                  std::span<const uint8_t> frame) noexcept override
     {
         if (frame_count_ < kMaxDecFrames) {
             DecodedFrame &dst = frames_[frame_count_++];
@@ -83,7 +84,8 @@ public:
     void on_unknown(std::span<const uint8_t> bytes) noexcept override
     {
         if ((unknown_len_ + bytes.size()) <= unknown_.size()) {
-            std::copy(bytes.begin(), bytes.end(), unknown_.begin() + static_cast<std::ptrdiff_t>(unknown_len_));
+            std::copy(bytes.begin(), bytes.end(),
+                      unknown_.begin() + static_cast<std::ptrdiff_t>(unknown_len_));
         }
         unknown_len_ += bytes.size();
     }
@@ -99,7 +101,8 @@ std::array<uint8_t, kWorkBufSize> s_work_buf{};
 demux::Demux s_dmx;
 DecoderSink s_sink;
 
-void run_demux_feed_and_abort(std::span<const demux::Decoder *const> decs, std::span<const uint8_t> data)
+void run_demux_feed_and_abort(std::span<const demux::Decoder *const> decs,
+                              std::span<const uint8_t> data)
 {
     s_sink.reset();
     TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.init(decs, s_demux_buf, s_sink));
@@ -108,8 +111,8 @@ void run_demux_feed_and_abort(std::span<const demux::Decoder *const> decs, std::
 }
 
 // 按解码器 need 契约驱动 step 直至出现 kFrame / kReject / 耗尽输入
-demux::Step step_by_need(const demux::Decoder &dec, std::span<const uint8_t> buf, std::size_t *out_end_pos,
-                         std::size_t *out_calls)
+demux::Step step_by_need(const demux::Decoder &dec, std::span<const uint8_t> buf,
+                         std::size_t *out_end_pos, std::size_t *out_calls)
 {
     std::size_t pos = 1U;
     std::size_t calls = 0U;
@@ -255,7 +258,8 @@ static void test_decoder_descriptors_and_first_bytes()
 static void test_rtcm3_valid_early_reject_and_crc_err()
 {
     static constexpr std::array<const demux::Decoder *, 1> kDecs{&demux::rtcm3::kDecoder};
-    static constexpr std::array<uint8_t, 8> kBadB1{0x04U, 0x08U, 0x10U, 0x20U, 0x40U, 0x80U, 0xFCU, 0xFFU};
+    static constexpr std::array<uint8_t, 8> kBadB1{0x04U, 0x08U, 0x10U, 0x20U,
+                                                   0x40U, 0x80U, 0xFCU, 0xFFU};
     static std::array<uint8_t, demux_test::kRtcm3MaxPayload> s_max_pl{};
     std::array<uint8_t, 19> rtcm_1005{};
     std::size_t flen = 0U;
@@ -264,8 +268,8 @@ static void test_rtcm3_valid_early_reject_and_crc_err()
 
     // 0 载荷（6 字节）
     TEST_ASSERT_TRUE(demux_test::gen_rtcm3(work, {}, flen));
-    TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                      step_by_need(demux::rtcm3::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kFrame, step_by_need(demux::rtcm3::kDecoder,
+                                                        work.subspan(0, flen), &end_pos, nullptr));
     TEST_ASSERT_EQUAL_UINT(6U, end_pos);
 
     // 典型 RTCM 1005 载荷（消息号 1005 = 0x3ED，19 字节）
@@ -288,8 +292,9 @@ static void test_rtcm3_valid_early_reject_and_crc_err()
     TEST_ASSERT_EQUAL_UINT(1029U, flen);
     {
         std::size_t calls = 0U;
-        TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                          step_by_need(demux::rtcm3::kDecoder, work.subspan(0, flen), &end_pos, &calls));
+        TEST_ASSERT_EQUAL(
+            demux::Step::kFrame,
+            step_by_need(demux::rtcm3::kDecoder, work.subspan(0, flen), &end_pos, &calls));
         TEST_ASSERT_EQUAL_UINT(1029U, end_pos);
         TEST_ASSERT_TRUE(calls <= 4U);
     }
@@ -298,19 +303,20 @@ static void test_rtcm3_valid_early_reject_and_crc_err()
     for (const uint8_t bad : kBadB1) {
         const std::array<uint8_t, 3> prefix{0xD3U, bad, 0x00U};
         std::size_t need = 0U;
-        TEST_ASSERT_EQUAL(demux::Step::kReject,
-                          demux::rtcm3::kDecoder.step(std::span<const uint8_t>(prefix).subspan(0, 2U), need));
+        TEST_ASSERT_EQUAL(
+            demux::Step::kReject,
+            demux::rtcm3::kDecoder.step(std::span<const uint8_t>(prefix).subspan(0, 2U), need));
     }
 
     // CRC 错：翻转 CRC 与载荷各一处均应 kReject；且能从坏帧载荷内重同步出真帧
     TEST_ASSERT_TRUE(demux_test::gen_rtcm3(work, rtcm_1005, flen));
     s_work_buf[flen - 1U] ^= 0x01U;
-    TEST_ASSERT_EQUAL(demux::Step::kReject,
-                      step_by_need(demux::rtcm3::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(demux::rtcm3::kDecoder,
+                                                         work.subspan(0, flen), &end_pos, nullptr));
     s_work_buf[flen - 1U] ^= 0x01U;
     s_work_buf[5] ^= 0x80U;
-    TEST_ASSERT_EQUAL(demux::Step::kReject,
-                      step_by_need(demux::rtcm3::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(demux::rtcm3::kDecoder,
+                                                         work.subspan(0, flen), &end_pos, nullptr));
 
     // 坏 RTCM3 头（D3 00 04）后紧跟真 RTCM3（6 字节）：前帧 CRC 错回溯后应恢复真帧
     s_work_buf[0] = 0xD3U;
@@ -368,10 +374,11 @@ static void test_nmea_valid_early_reject_chars_case_and_len()
     // 最大长度 256 字节
     max_body.fill('X');
     max_body[0] = 'G';
-    TEST_ASSERT_TRUE(demux_test::gen_nmea(work, std::string_view(max_body.data(), 250U), false, flen));
+    TEST_ASSERT_TRUE(
+        demux_test::gen_nmea(work, std::string_view(max_body.data(), 250U), false, flen));
     TEST_ASSERT_EQUAL_UINT(256U, flen);
-    TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                      step_by_need(demux::nmea::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kFrame, step_by_need(demux::nmea::kDecoder,
+                                                        work.subspan(0, flen), &end_pos, nullptr));
     TEST_ASSERT_EQUAL_UINT(256U, end_pos);
 
     // 长度超限（257 字节：251 字节正文 + *00\r\n），后面紧跟合法 NMEA
@@ -379,8 +386,8 @@ static void test_nmea_valid_early_reject_chars_case_and_len()
     std::fill_n(work.subspan(1U).begin(), 251U, static_cast<uint8_t>('X'));
     s_work_buf[1] = static_cast<uint8_t>('G');
     copy_sv_to_span("*00\r\n", work.subspan(252U, 5U));
-    TEST_ASSERT_EQUAL(demux::Step::kReject,
-                      step_by_need(demux::nmea::kDecoder, work.subspan(0, 257U), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(demux::nmea::kDecoder,
+                                                         work.subspan(0, 257U), &end_pos, nullptr));
     TEST_ASSERT_TRUE(end_pos <= 256U);
     TEST_ASSERT_TRUE(demux_test::gen_nmea(work.subspan(257U), "GNGGA,OK", false, flen));
     run_demux_feed_and_abort(kDecs, work.subspan(0, 257U + flen));
@@ -396,8 +403,8 @@ static void test_nmea_valid_early_reject_chars_case_and_len()
 
     // 正文非法字符立即拒绝
     for (const uint8_t bad_ch : kBadBody) {
-        const std::array<uint8_t, 4> p{static_cast<uint8_t>('$'), static_cast<uint8_t>('G'), static_cast<uint8_t>('P'),
-                                       bad_ch};
+        const std::array<uint8_t, 4> p{static_cast<uint8_t>('$'), static_cast<uint8_t>('G'),
+                                       static_cast<uint8_t>('P'), bad_ch};
         std::size_t need = 0U;
         TEST_ASSERT_EQUAL(demux::Step::kReject, demux::nmea::kDecoder.step(p, need));
     }
@@ -411,7 +418,8 @@ static void test_nmea_valid_early_reject_chars_case_and_len()
         for (const std::string_view tail : kBadTails) {
             copy_sv_to_span(tail, work);
             TEST_ASSERT_EQUAL(demux::Step::kReject,
-                              step_by_need(demux::nmea::kDecoder, work.subspan(0, tail.size()), &end_pos, nullptr));
+                              step_by_need(demux::nmea::kDecoder, work.subspan(0, tail.size()),
+                                           &end_pos, nullptr));
         }
     }
 
@@ -465,8 +473,9 @@ static void test_ubx_valid_early_reject_len_and_ck_err()
     TEST_ASSERT_EQUAL_UINT(4096U, flen);
     {
         std::size_t calls = 0U;
-        TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                          step_by_need(demux::ubx::kDecoder, work.subspan(0, flen), &end_pos, &calls));
+        TEST_ASSERT_EQUAL(
+            demux::Step::kFrame,
+            step_by_need(demux::ubx::kDecoder, work.subspan(0, flen), &end_pos, &calls));
         TEST_ASSERT_TRUE(calls <= 4U);
     }
 
@@ -533,8 +542,8 @@ static void test_unicore_bin_valid_early_reject_len_and_crc_err()
     // 0 载荷（28 字节）
     TEST_ASSERT_TRUE(demux_test::gen_unicore_bin(work, 42U, 15U, {}, {}, flen));
     TEST_ASSERT_EQUAL_UINT(28U, flen);
-    TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                      step_by_need(demux::unicore_bin::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kFrame, step_by_need(demux::unicore_bin::kDecoder,
+                                                        work.subspan(0, flen), &end_pos, nullptr));
 
     // 非零时间头 + 载荷 + 经引擎投递
     for (std::size_t i = 0U; i < rest.size(); ++i) {
@@ -560,8 +569,9 @@ static void test_unicore_bin_valid_early_reject_len_and_crc_err()
     TEST_ASSERT_EQUAL_UINT(4096U, flen);
     {
         std::size_t calls = 0U;
-        TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                          step_by_need(demux::unicore_bin::kDecoder, work.subspan(0, flen), &end_pos, &calls));
+        TEST_ASSERT_EQUAL(
+            demux::Step::kFrame,
+            step_by_need(demux::unicore_bin::kDecoder, work.subspan(0, flen), &end_pos, &calls));
         TEST_ASSERT_TRUE(calls <= 8U);
     }
 
@@ -573,7 +583,8 @@ static void test_unicore_bin_valid_early_reject_len_and_crc_err()
         std::size_t need = 0U;
         TEST_ASSERT_EQUAL(demux::Step::kReject, demux::unicore_bin::kDecoder.step(kBad2, need));
         TEST_ASSERT_EQUAL(demux::Step::kReject, demux::unicore_bin::kDecoder.step(kBad3Prod, need));
-        TEST_ASSERT_EQUAL(demux::Step::kReject, demux::unicore_bin::kDecoder.step(kBad3Other, need));
+        TEST_ASSERT_EQUAL(demux::Step::kReject,
+                          demux::unicore_bin::kDecoder.step(kBad3Other, need));
     }
 
     // 早拒绝：payload_len = 4069（超限）与 0xFFFF，必须在 <= 24 字节头部完成前拒绝
@@ -584,28 +595,31 @@ static void test_unicore_bin_valid_early_reject_len_and_crc_err()
         hdr[2] = 0xB5U;
         hdr[6] = 0xE5U; // 4069 = 0x0FE5
         hdr[7] = 0x0FU;
-        TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(demux::unicore_bin::kDecoder, hdr, &end_pos, nullptr));
+        TEST_ASSERT_EQUAL(demux::Step::kReject,
+                          step_by_need(demux::unicore_bin::kDecoder, hdr, &end_pos, nullptr));
         TEST_ASSERT_TRUE(end_pos <= 24U);
 
         hdr[6] = 0xFFU;
         hdr[7] = 0xFFU;
-        TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(demux::unicore_bin::kDecoder, hdr, &end_pos, nullptr));
+        TEST_ASSERT_EQUAL(demux::Step::kReject,
+                          step_by_need(demux::unicore_bin::kDecoder, hdr, &end_pos, nullptr));
         TEST_ASSERT_TRUE(end_pos <= 24U);
     }
 
     // CRC 错误 & 若错用标准 IEEE 取反 CRC-32 必须拒绝
     TEST_ASSERT_TRUE(demux_test::gen_unicore_bin(work, 101U, 30U, rest, pl, flen));
     s_work_buf[flen - 1U] ^= 0x01U;
-    TEST_ASSERT_EQUAL(demux::Step::kReject,
-                      step_by_need(demux::unicore_bin::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(demux::unicore_bin::kDecoder,
+                                                         work.subspan(0, flen), &end_pos, nullptr));
     {
         const uint32_t ieee_crc = demux_test::crc32_ieee(work.subspan(0, flen - 4U));
         s_work_buf[flen - 4U] = static_cast<uint8_t>(ieee_crc & 0xFFU);         // 掩码后 0..255
         s_work_buf[flen - 3U] = static_cast<uint8_t>((ieee_crc >> 8U) & 0xFFU); // 掩码后 0..255
         s_work_buf[flen - 2U] = static_cast<uint8_t>((ieee_crc >> 16U) & 0xFFU);
         s_work_buf[flen - 1U] = static_cast<uint8_t>((ieee_crc >> 24U) & 0xFFU);
-        TEST_ASSERT_EQUAL(demux::Step::kReject,
-                          step_by_need(demux::unicore_bin::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+        TEST_ASSERT_EQUAL(
+            demux::Step::kReject,
+            step_by_need(demux::unicore_bin::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
     }
 }
 #endif
@@ -654,18 +668,20 @@ static void test_unicore_hash_valid_early_reject_chars_case_and_len()
 
     // 最大长度 4096（XOR 与 CRC-32 两种模式，覆盖 #SATSINFOA 长帧）
     max_body.fill('A');
-    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_xor(work, std::string_view(max_body.data(), 4090U), false, flen));
+    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_xor(
+        work, std::string_view(max_body.data(), 4090U), false, flen));
     TEST_ASSERT_EQUAL_UINT(4096U, flen);
-    TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                      step_by_need(demux::unicore_hash::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kFrame, step_by_need(demux::unicore_hash::kDecoder,
+                                                        work.subspan(0, flen), &end_pos, nullptr));
     run_demux_feed_and_abort(kDecs, work.subspan(0, flen));
     TEST_ASSERT_EQUAL_UINT(1U, s_sink.frame_count_);
     TEST_ASSERT_EQUAL_UINT(4096U, s_sink.frames_[0].len);
 
-    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_crc32(work, std::string_view(max_body.data(), 4084U), false, flen));
+    TEST_ASSERT_TRUE(demux_test::gen_unicore_hash_crc32(
+        work, std::string_view(max_body.data(), 4084U), false, flen));
     TEST_ASSERT_EQUAL_UINT(4096U, flen);
-    TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                      step_by_need(demux::unicore_hash::kDecoder, work.subspan(0, flen), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(demux::Step::kFrame, step_by_need(demux::unicore_hash::kDecoder,
+                                                        work.subspan(0, flen), &end_pos, nullptr));
     run_demux_feed_and_abort(kDecs, work.subspan(0, flen));
     TEST_ASSERT_EQUAL_UINT(1U, s_sink.frame_count_);
     TEST_ASSERT_EQUAL_UINT(4096U, s_sink.frames_[0].len);
@@ -674,8 +690,9 @@ static void test_unicore_hash_valid_early_reject_chars_case_and_len()
     s_work_buf[0] = static_cast<uint8_t>('#');
     std::fill_n(work.subspan(1U).begin(), 4091U, static_cast<uint8_t>('A'));
     copy_sv_to_span("*00\r\n", work.subspan(4092U, 5U));
-    TEST_ASSERT_EQUAL(demux::Step::kReject,
-                      step_by_need(demux::unicore_hash::kDecoder, work.subspan(0, 4097U), &end_pos, nullptr));
+    TEST_ASSERT_EQUAL(
+        demux::Step::kReject,
+        step_by_need(demux::unicore_hash::kDecoder, work.subspan(0, 4097U), &end_pos, nullptr));
 
     // 早拒绝：第 2 字节非 'A'..'Z'（包含数字 '0'..'9'）
     for (const uint8_t b1 : kBadB1) {
@@ -686,8 +703,8 @@ static void test_unicore_hash_valid_early_reject_chars_case_and_len()
 
     // 正文非法字符立即拒绝
     for (const uint8_t bad_ch : kBadBody) {
-        const std::array<uint8_t, 4> p{static_cast<uint8_t>('#'), static_cast<uint8_t>('V'), static_cast<uint8_t>('E'),
-                                       bad_ch};
+        const std::array<uint8_t, 4> p{static_cast<uint8_t>('#'), static_cast<uint8_t>('V'),
+                                       static_cast<uint8_t>('E'), bad_ch};
         std::size_t need = 0U;
         TEST_ASSERT_EQUAL(demux::Step::kReject, demux::unicore_hash::kDecoder.step(p, need));
     }
@@ -695,13 +712,15 @@ static void test_unicore_hash_valid_early_reject_chars_case_and_len()
     // 校验位数不对 / 非十六进制 / 缺 \r\n / 错校验值
     {
         static constexpr std::array<std::string_view, 11> kBadHash{
-            "#A*\r\n",         "#A*4\r\n", "#A*41A\r\n", "#A*1234567\r\n", "#A*123456789\r\n", "#A*1G\r\n",
-            "#A*1234567G\r\n", "#A*41\n",  "#A*41\rX",   "#A*42\r\n",      "#A*00000000\r\n",
+            "#A*\r\n",          "#A*4\r\n",  "#A*41A\r\n",      "#A*1234567\r\n",
+            "#A*123456789\r\n", "#A*1G\r\n", "#A*1234567G\r\n", "#A*41\n",
+            "#A*41\rX",         "#A*42\r\n", "#A*00000000\r\n",
         };
         for (const std::string_view bad : kBadHash) {
             copy_sv_to_span(bad, work);
-            TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(demux::unicore_hash::kDecoder,
-                                                                 work.subspan(0, bad.size()), &end_pos, nullptr));
+            TEST_ASSERT_EQUAL(demux::Step::kReject,
+                              step_by_need(demux::unicore_hash::kDecoder,
+                                           work.subspan(0, bad.size()), &end_pos, nullptr));
         }
     }
 
@@ -714,7 +733,8 @@ static void test_unicore_hash_valid_early_reject_chars_case_and_len()
         };
         static constexpr std::string_view kBadPrefix = "#VERSION,CUT";
         copy_sv_to_span(kBadPrefix, work);
-        TEST_ASSERT_TRUE(demux_test::gen_nmea(work.subspan(kBadPrefix.size()), "GPGGA,1", false, flen));
+        TEST_ASSERT_TRUE(
+            demux_test::gen_nmea(work.subspan(kBadPrefix.size()), "GPGGA,1", false, flen));
         run_demux_feed_and_abort(kCombo, work.subspan(0, kBadPrefix.size() + flen));
         TEST_ASSERT_EQUAL_UINT(1U, s_sink.frame_count_);
         TEST_ASSERT_EQUAL_PTR(&demux::nmea::kDecoder, s_sink.frames_[0].decoder);
@@ -732,8 +752,9 @@ static void test_product_demux_and_frame_view()
 {
     static constexpr std::array<const demux::Decoder *, 1> kDecs{&proto::demux_frame::kDecoder};
     static constexpr std::array<uint8_t, 32> kFrameC{
-        0xAA, 0x44, 0x18, 0x14, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
-        0x03, 0x04, 0x00, 0x00, 0x05, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x34, 0x05, 0xAA,
+        0xAA, 0x44, 0x18, 0x14, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x08, 0x00, 0x00, 0x00, 0x03, 0x04, 0x00, 0x00, 0x05, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x34, 0x05, 0xAA,
     };
     static std::array<uint8_t, proto::kMaxPayload> s_max_pl{};
     std::size_t flen = 0U;
@@ -741,13 +762,14 @@ static void test_product_demux_and_frame_view()
     const std::span<uint8_t> work(s_work_buf);
 
     // 0 载荷、已知向量 kFrameC、最大载荷 256
-    TEST_ASSERT_TRUE(demux_test::gen_product(work, 0x0001U, proto::sender::kApp, proto::msg_type::kQuery, {}, flen));
+    TEST_ASSERT_TRUE(demux_test::gen_product(work, 0x0001U, proto::sender::kApp,
+                                             proto::msg_type::kQuery, {}, flen));
     run_demux_feed_and_abort(kDecs, work.subspan(0, flen));
     TEST_ASSERT_EQUAL_UINT(1U, s_sink.frame_count_);
     TEST_ASSERT_EQUAL_PTR(&proto::demux_frame::kDecoder, s_sink.frames_[0].decoder);
     {
-        const std::optional<proto::FrameView> fv =
-            proto::demux_frame::view(std::span<const uint8_t>(s_sink.frames_[0].data.data(), s_sink.frames_[0].len));
+        const std::optional<proto::FrameView> fv = proto::demux_frame::view(
+            std::span<const uint8_t>(s_sink.frames_[0].data.data(), s_sink.frames_[0].len));
         TEST_ASSERT_TRUE(fv.has_value());
         TEST_ASSERT_EQUAL_HEX16(0x0001U, fv->msg_id);
         TEST_ASSERT_TRUE(fv->payload.empty());
@@ -771,13 +793,14 @@ static void test_product_demux_and_frame_view()
         // i < 256，在 uint8_t 范围内
         s_max_pl[i] = static_cast<uint8_t>(i);
     }
-    TEST_ASSERT_TRUE(
-        demux_test::gen_product(work, 0x0077U, proto::sender::kDevice, proto::msg_type::kSetRes, s_max_pl, flen));
+    TEST_ASSERT_TRUE(demux_test::gen_product(work, 0x0077U, proto::sender::kDevice,
+                                             proto::msg_type::kSetRes, s_max_pl, flen));
     TEST_ASSERT_EQUAL_UINT(proto::kMaxFrame, flen);
     {
         std::size_t calls = 0U;
-        TEST_ASSERT_EQUAL(demux::Step::kFrame,
-                          step_by_need(proto::demux_frame::kDecoder, work.subspan(0, flen), &end_pos, &calls));
+        TEST_ASSERT_EQUAL(
+            demux::Step::kFrame,
+            step_by_need(proto::demux_frame::kDecoder, work.subspan(0, flen), &end_pos, &calls));
         TEST_ASSERT_TRUE(calls <= 8U);
     }
 
@@ -793,10 +816,12 @@ static void test_product_demux_and_frame_view()
         TEST_ASSERT_EQUAL(demux::Step::kReject, proto::demux_frame::kDecoder.step(kB3, need));
         TEST_ASSERT_EQUAL(demux::Step::kReject, proto::demux_frame::kDecoder.step(kB4, need));
 
-        std::copy(kFrameC.begin(), kFrameC.begin() + static_cast<std::ptrdiff_t>(proto::kHeaderLen), hdr_257.begin());
+        std::copy(kFrameC.begin(), kFrameC.begin() + static_cast<std::ptrdiff_t>(proto::kHeaderLen),
+                  hdr_257.begin());
         hdr_257[12] = 0x01U;
         hdr_257[13] = 0x01U; // payload_len = 257
-        TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(proto::demux_frame::kDecoder, hdr_257, &end_pos, nullptr));
+        TEST_ASSERT_EQUAL(demux::Step::kReject,
+                          step_by_need(proto::demux_frame::kDecoder, hdr_257, &end_pos, nullptr));
         TEST_ASSERT_TRUE(end_pos <= proto::kHeaderLen);
     }
 
@@ -804,23 +829,27 @@ static void test_product_demux_and_frame_view()
     std::copy(kFrameC.begin(), kFrameC.end(), s_work_buf.begin());
     s_work_buf[kFrameC.size() - 1U] ^= 0x01U;
     TEST_ASSERT_EQUAL(demux::Step::kReject,
-                      step_by_need(proto::demux_frame::kDecoder, work.subspan(0, kFrameC.size()), &end_pos, nullptr));
+                      step_by_need(proto::demux_frame::kDecoder, work.subspan(0, kFrameC.size()),
+                                   &end_pos, nullptr));
     {
         const uint32_t nov_crc = demux_test::crc32_novatel(work.subspan(0, kFrameC.size() - 4U));
         s_work_buf[kFrameC.size() - 4U] = static_cast<uint8_t>(nov_crc & 0xFFU);
         s_work_buf[kFrameC.size() - 3U] = static_cast<uint8_t>((nov_crc >> 8U) & 0xFFU);
         s_work_buf[kFrameC.size() - 2U] = static_cast<uint8_t>((nov_crc >> 16U) & 0xFFU);
         s_work_buf[kFrameC.size() - 1U] = static_cast<uint8_t>((nov_crc >> 24U) & 0xFFU);
-        TEST_ASSERT_EQUAL(demux::Step::kReject, step_by_need(proto::demux_frame::kDecoder,
-                                                             work.subspan(0, kFrameC.size()), &end_pos, nullptr));
+        TEST_ASSERT_EQUAL(demux::Step::kReject,
+                          step_by_need(proto::demux_frame::kDecoder,
+                                       work.subspan(0, kFrameC.size()), &end_pos, nullptr));
     }
 
     // proto::demux_frame::view 非法输入返回 nullopt；不重复校验 CRC；保留 protocol/interval
     TEST_ASSERT_FALSE(proto::demux_frame::view({}).has_value());
-    TEST_ASSERT_FALSE(proto::demux_frame::view(std::span<const uint8_t>(kFrameC).subspan(0, 23U)).has_value());
+    TEST_ASSERT_FALSE(
+        proto::demux_frame::view(std::span<const uint8_t>(kFrameC).subspan(0, 23U)).has_value());
     TEST_ASSERT_FALSE(proto::demux_frame::view(work.subspan(0, proto::kMaxFrame + 1U)).has_value());
     TEST_ASSERT_FALSE(
-        proto::demux_frame::view(std::span<const uint8_t>(kFrameC).subspan(0, kFrameC.size() - 1U)).has_value());
+        proto::demux_frame::view(std::span<const uint8_t>(kFrameC).subspan(0, kFrameC.size() - 1U))
+            .has_value());
 
     std::copy(kFrameC.begin(), kFrameC.end(), s_work_buf.begin());
     s_work_buf[2] = 0xB5U;
@@ -840,7 +869,8 @@ static void test_product_demux_and_frame_view()
     s_work_buf[19] = 0x0AU;                   // interval
     s_work_buf[kFrameC.size() - 1U] ^= 0xFFU; // 故意坏 CRC：view() 不重复校验
     {
-        const std::optional<proto::FrameView> fv = proto::demux_frame::view(work.subspan(0, kFrameC.size()));
+        const std::optional<proto::FrameView> fv =
+            proto::demux_frame::view(work.subspan(0, kFrameC.size()));
         TEST_ASSERT_TRUE(fv.has_value());
         TEST_ASSERT_EQUAL_HEX8(0x07U, fv->protocol);
         TEST_ASSERT_EQUAL_HEX8(0x0AU, fv->interval);
@@ -854,8 +884,10 @@ static void test_product_demux_and_frame_view()
 #if STREAM_DEMUX_NMEA
 static void test_dollar_conflict_with_custom_decoder()
 {
-    static constexpr std::array<const demux::Decoder *, 2> kOrderA{&demux::nmea::kDecoder, &kDecCustomSbf};
-    static constexpr std::array<const demux::Decoder *, 2> kOrderB{&kDecCustomSbf, &demux::nmea::kDecoder};
+    static constexpr std::array<const demux::Decoder *, 2> kOrderA{&demux::nmea::kDecoder,
+                                                                   &kDecCustomSbf};
+    static constexpr std::array<const demux::Decoder *, 2> kOrderB{&kDecCustomSbf,
+                                                                   &demux::nmea::kDecoder};
     static constexpr std::array<uint8_t, 6> kSbf{'$', '@', 0x11U, 0x22U, 0x33U, 0x44U};
     std::size_t nmea_len = 0U;
     std::size_t pos = 0U;
@@ -907,7 +939,8 @@ std::string_view explain_text(const demux::Decoder &decoder, std::span<const uin
     return std::string_view(buf.data(), len);
 }
 
-void assert_explain(const demux::Decoder &decoder, std::span<const uint8_t> prefix, std::string_view needle) noexcept
+void assert_explain(const demux::Decoder &decoder, std::span<const uint8_t> prefix,
+                    std::string_view needle) noexcept
 {
     std::array<char, 96> buf{};
     const std::string_view text = explain_text(decoder, prefix, buf);
@@ -923,8 +956,10 @@ static void test_explain_nmea()
 #if STREAM_DEMUX_NMEA
     static constexpr std::array<uint8_t, 13> kBadChecksum{'$', 'G', 'P', 'G', 'G',  'A', ',',
                                                           '1', '*', '0', '0', '\r', '\n'};
-    assert_explain(demux::nmea::kDecoder, kBadChecksum, "bad checksum, received 0x00, computed 0x4B");
-    static constexpr std::array<uint8_t, 10> kIllegal{'$', 'G', 'P', 0x01U, 'X', '*', '0', '7', '\r', '\n'};
+    assert_explain(demux::nmea::kDecoder, kBadChecksum,
+                   "bad checksum, received 0x00, computed 0x4B");
+    static constexpr std::array<uint8_t, 10> kIllegal{'$', 'G', 'P', 0x01U, 'X',
+                                                      '*', '0', '7', '\r',  '\n'};
     assert_explain(demux::nmea::kDecoder, kIllegal, "illegal byte 0x01 at offset 3");
 #endif
 }
@@ -932,9 +967,11 @@ static void test_explain_nmea()
 static void test_explain_rtcm3()
 {
 #if STREAM_DEMUX_RTCM3
-    static constexpr std::array<uint8_t, 7> kReserved{0xD3U, 0x40U, 0x01U, 0x3CU, 0x00U, 0x00U, 0x00U};
+    static constexpr std::array<uint8_t, 7> kReserved{0xD3U, 0x40U, 0x01U, 0x3CU,
+                                                      0x00U, 0x00U, 0x00U};
     assert_explain(demux::rtcm3::kDecoder, kReserved, "reserved bits set in byte 1: 0x40");
-    static constexpr std::array<uint8_t, 7> kBadCrc{0xD3U, 0x00U, 0x01U, 0x3CU, 0x00U, 0x00U, 0x00U};
+    static constexpr std::array<uint8_t, 7> kBadCrc{0xD3U, 0x00U, 0x01U, 0x3CU,
+                                                    0x00U, 0x00U, 0x00U};
     assert_explain(demux::rtcm3::kDecoder, kBadCrc, "bad CRC-24Q, received 0x000000");
 #endif
 }
@@ -944,7 +981,8 @@ static void test_explain_ubx()
 #if STREAM_DEMUX_UBX
     static constexpr std::array<uint8_t, 2> kBadSync{0xB5U, 0x00U};
     assert_explain(demux::ubx::kDecoder, kBadSync, "sync byte 2 is 0x00, expected 0x62");
-    static constexpr std::array<uint8_t, 8> kBadCk{0xB5U, 0x62U, 0x01U, 0x07U, 0x00U, 0x00U, 0x00U, 0x00U};
+    static constexpr std::array<uint8_t, 8> kBadCk{0xB5U, 0x62U, 0x01U, 0x07U,
+                                                   0x00U, 0x00U, 0x00U, 0x00U};
     assert_explain(demux::ubx::kDecoder, kBadCk, "bad checksum, received 0x0000");
 #endif
 }
@@ -966,10 +1004,12 @@ static void test_explain_unicore_bin()
 static void test_explain_unicore_hash()
 {
 #if STREAM_DEMUX_UNICORE_HASH
-    static constexpr std::array<uint8_t, 13> kNoStar{'#', 'V', 'E', 'R', 'S', 'I', 'O', 'N', 'A', ',', 'x', '\r', '\n'};
+    static constexpr std::array<uint8_t, 13> kNoStar{'#', 'V', 'E', 'R', 'S',  'I', 'O',
+                                                     'N', 'A', ',', 'x', '\r', '\n'};
     assert_explain(demux::unicore_hash::kDecoder, kNoStar, "no '*' before LF");
     static constexpr std::array<uint8_t, 8> kBadXor{'#', 'A', 'B', '*', '0', '0', '\r', '\n'};
-    assert_explain(demux::unicore_hash::kDecoder, kBadXor, "bad XOR checksum, received 0x00, computed 0x03");
+    assert_explain(demux::unicore_hash::kDecoder, kBadXor,
+                   "bad XOR checksum, received 0x00, computed 0x03");
 #endif
 }
 

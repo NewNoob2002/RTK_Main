@@ -55,10 +55,11 @@ size_t clamp_len(int written, size_t cap) noexcept
 }
 
 // SPP 驱动的追踪码 → fw::trace(kSpp, …)。驱动只给数值，翻译与格式化推迟到输出任务。
-void spp_trace_forward(spp_server_trace_code_t code, uint32_t handle, uint32_t a, uint32_t b) noexcept
+void spp_trace_forward(spp_server_trace_code_t code, uint32_t handle, uint32_t a,
+                       uint32_t b) noexcept
 {
-    fw::trace(fw::TraceCat::kSpp, static_cast<uint8_t>(code), static_cast<uint16_t>(handle & core::kTraceSessionMask),
-              a, b);
+    fw::trace(fw::TraceCat::kSpp, static_cast<uint8_t>(code),
+              static_cast<uint16_t>(handle & core::kTraceSessionMask), a, b);
 }
 
 /** 小端读取 u16；buf 长度已由调用方按键宽校验。 */
@@ -133,7 +134,8 @@ fw::Result DebugModule::init() noexcept
     if (ring_result != fw::Result::kOk) {
         return ring_result;
     }
-    const fw::Result install_result = fw::trace_install(&fw::TraceRing::sink, &ring_, &rtos::now_ms);
+    const fw::Result install_result =
+        fw::trace_install(&fw::TraceRing::sink, &ring_, &rtos::now_ms);
     if (install_result != fw::Result::kOk) {
         return install_result;
     }
@@ -174,7 +176,8 @@ fw::Result DebugModule::start() noexcept
         return fw::Result::kBusy;
     }
     // 最低优先级、控制台核：只在没有其它工作时占用 CPU。
-    const fw::Status status = task_.start(storage_.task_stack, "trace_out", 1U, 0, &DebugModule::task_entry, this);
+    const fw::Status status =
+        task_.start(storage_.task_stack, "trace_out", 1U, 0, &DebugModule::task_entry, this);
     if (status == fw::Status::kOk) {
         return fw::Result::kOk;
     }
@@ -233,7 +236,8 @@ fw::Result DebugModule::load_mask(void * /*obj*/, std::span<const uint8_t> in) n
     return fw::Result::kOk;
 }
 
-fw::Result DebugModule::save_mask(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
+fw::Result DebugModule::save_mask(const void * /*obj*/, std::span<uint8_t> out,
+                                  size_t &len) noexcept
 {
     if (out.size() < 4U) {
         return fw::Result::kNoSpace;
@@ -260,7 +264,8 @@ fw::Result DebugModule::load_report(void * /*obj*/, std::span<const uint8_t> in)
     return fw::Result::kOk;
 }
 
-fw::Result DebugModule::save_report(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
+fw::Result DebugModule::save_report(const void * /*obj*/, std::span<uint8_t> out,
+                                    size_t &len) noexcept
 {
     if (out.size() < 2U) {
         return fw::Result::kNoSpace;
@@ -304,7 +309,8 @@ fw::Result DebugModule::load_loglv(void * /*obj*/, std::span<const uint8_t> in) 
     return fw::Result::kOk;
 }
 
-fw::Result DebugModule::save_loglv(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
+fw::Result DebugModule::save_loglv(const void * /*obj*/, std::span<uint8_t> out,
+                                   size_t &len) noexcept
 {
     if (out.size() < 4U) {
         return fw::Result::kNoSpace;
@@ -345,22 +351,23 @@ bool DebugModule::pump_drops(char *out, size_t cap) noexcept
     bool printed = false;
     const uint32_t trace_dropped = ring_.take_dropped();
     if (trace_dropped > 0U) {
-        const int n =
-            std::snprintf(out, cap, "[trace] %lu events dropped\r\n", static_cast<unsigned long>(trace_dropped));
+        const int n = std::snprintf(out, cap, "[trace] %lu events dropped\r\n",
+                                    static_cast<unsigned long>(trace_dropped));
         write_line(out, clamp_len(n, cap));
         printed = true;
     }
     const uint32_t log_dropped = log_ring_.take_dropped();
     if (log_dropped > 0U) {
-        const int n = std::snprintf(out, cap, "[log] %lu lines dropped\r\n", static_cast<unsigned long>(log_dropped));
+        const int n = std::snprintf(out, cap, "[log] %lu lines dropped\r\n",
+                                    static_cast<unsigned long>(log_dropped));
         write_line(out, clamp_len(n, cap));
         printed = true;
     }
     return printed;
 }
 
-void DebugModule::print_log_text(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
-                                 size_t cap) noexcept
+void DebugModule::print_log_text(const fw::LogHeader &hdr, std::span<const uint8_t> payload,
+                                 char *out, size_t cap) noexcept
 {
     static_assert(kLineBytes + kLinePrefixBytes >= fw::kLogLineMax, "log line buffer too small");
     // 与直写通路共用 fw::log_format_line，两条通路的行格式（时间、类别、级别前缀）完全一致。
@@ -368,31 +375,34 @@ void DebugModule::print_log_text(const fw::LogHeader &hdr, std::span<const uint8
     write_line(out, len);
 }
 
-void DebugModule::print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
-                                size_t cap) noexcept
+void DebugModule::print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_t> payload,
+                                char *out, size_t cap) noexcept
 {
     // 不打标题行：转储紧跟在同一调用点的文本句子之后，句子已给出对象与字节数（ADR-0009 §2.11 示例）。
     std::array<char, kHexLineBytes> dump{};
     for (size_t offset = 0U; offset < payload.size(); offset += kHexBytesPerLine) {
-        const size_t line_len =
-            ((payload.size() - offset) < kHexBytesPerLine) ? (payload.size() - offset) : kHexBytesPerLine;
+        const size_t line_len = ((payload.size() - offset) < kHexBytesPerLine)
+                                    ? (payload.size() - offset)
+                                    : kHexBytesPerLine;
         size_t pos = 0U;
         const size_t used = std::min(line_len, kHexBytesPerLine);
         // 缩进 4 格 + 4 位十六进制偏移（载荷最多 256 字节，2 位足够，固定 4 位便于对齐）。
-        const int prefix = std::snprintf(dump.data(), dump.size(), "    %04lx: ", static_cast<unsigned long>(offset));
+        const int prefix = std::snprintf(dump.data(), dump.size(),
+                                         "    %04lx: ", static_cast<unsigned long>(offset));
         if (prefix > 0) {
             pos = static_cast<size_t>(prefix);
         }
         for (size_t i = 0U; i < used; ++i) {
-            const int n = std::snprintf(&dump[pos], (pos < dump.size()) ? (dump.size() - pos) : 0U, "%02x ",
-                                        static_cast<unsigned>(payload[offset + i]));
+            const int n = std::snprintf(&dump[pos], (pos < dump.size()) ? (dump.size() - pos) : 0U,
+                                        "%02x ", static_cast<unsigned>(payload[offset + i]));
             if ((n > 0) && ((pos + static_cast<size_t>(n)) < dump.size())) {
                 pos += static_cast<size_t>(n);
             }
         }
         // 不足 16 字节时补空格，让 ASCII 列对齐。
         for (size_t i = used; i < kHexBytesPerLine; ++i) {
-            const int n = std::snprintf(&dump[pos], (pos < dump.size()) ? (dump.size() - pos) : 0U, "   ");
+            const int n =
+                std::snprintf(&dump[pos], (pos < dump.size()) ? (dump.size() - pos) : 0U, "   ");
             if ((n > 0) && ((pos + static_cast<size_t>(n)) < dump.size())) {
                 pos += static_cast<size_t>(n);
             }
@@ -403,8 +413,11 @@ void DebugModule::print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_
         }
         for (size_t i = 0U; i < used; ++i) {
             const uint8_t byte = payload[offset + i];
-            const char ch = ((byte >= kPrintableMin) && (byte <= kPrintableMax)) ? static_cast<char>(byte) : kDotChar;
-            const int n = std::snprintf(&dump[pos], (pos < dump.size()) ? (dump.size() - pos) : 0U, "%c", ch);
+            const char ch = ((byte >= kPrintableMin) && (byte <= kPrintableMax))
+                                ? static_cast<char>(byte)
+                                : kDotChar;
+            const int n =
+                std::snprintf(&dump[pos], (pos < dump.size()) ? (dump.size() - pos) : 0U, "%c", ch);
             if ((n > 0) && ((pos + static_cast<size_t>(n)) < dump.size())) {
                 pos += static_cast<size_t>(n);
             }
@@ -439,9 +452,10 @@ bool DebugModule::pump_events(char *line, size_t cap) noexcept
                 break;
             }
             debug::format_event(event, line, cap);
-            const int n = std::snprintf(out.data(), out.size(), "[%4lu.%03lu] %s\r\n",
-                                        static_cast<unsigned long>(event.t_ms / kMsPerSecond),
-                                        static_cast<unsigned long>(event.t_ms % kMsPerSecond), line);
+            const int n =
+                std::snprintf(out.data(), out.size(), "[%4lu.%03lu] %s\r\n",
+                              static_cast<unsigned long>(event.t_ms / kMsPerSecond),
+                              static_cast<unsigned long>(event.t_ms % kMsPerSecond), line);
             write_line(out.data(), clamp_len(n, out.size()));
         } else {
             fw::LogHeader hdr{};
@@ -496,20 +510,25 @@ void DebugModule::pump_report(uint32_t now_ms) noexcept
     last_prod_frames_ = stats.frames_rx;
 
     // 先换算成“每秒”，再拆成整数字节/十分之一 KB，避免浮点与 64 位开销。
-    const uint32_t kbps10 = (bytes / (elapsed / kMsPerSecond + 1U)) * kTenthsPerUnit / kBytesPerUnit;
+    const uint32_t kbps10 =
+        (bytes / (elapsed / kMsPerSecond + 1U)) * kTenthsPerUnit / kBytesPerUnit;
     const uint32_t fps = frames / (elapsed / kMsPerSecond + 1U);
     const uint32_t prod_fps = prod / (elapsed / kMsPerSecond + 1U);
     cli::out_printf("[report] rtcm %lu.%luKB/s %luf/s drop+%lu | prod %lu/s | heap %luK min %luK | "
                     "stk link %lu.%luK | tx accepted %luB completed %luB | trace drop %lu\n",
                     static_cast<unsigned long>(kbps10 / kTenthsPerUnit),
-                    static_cast<unsigned long>(kbps10 % kTenthsPerUnit), static_cast<unsigned long>(fps),
-                    static_cast<unsigned long>(dropped), static_cast<unsigned long>(prod_fps),
+                    static_cast<unsigned long>(kbps10 % kTenthsPerUnit),
+                    static_cast<unsigned long>(fps), static_cast<unsigned long>(dropped),
+                    static_cast<unsigned long>(prod_fps),
                     static_cast<unsigned long>(system.free_heap / kBytesPerUnit),
                     static_cast<unsigned long>(system.min_free_heap / kBytesPerUnit),
-                    static_cast<unsigned long>((exec.stack_free * kTenthsPerUnit / kBytesPerUnit) / kTenthsPerUnit),
-                    static_cast<unsigned long>((exec.stack_free * kTenthsPerUnit / kBytesPerUnit) % kTenthsPerUnit),
+                    static_cast<unsigned long>((exec.stack_free * kTenthsPerUnit / kBytesPerUnit) /
+                                               kTenthsPerUnit),
+                    static_cast<unsigned long>((exec.stack_free * kTenthsPerUnit / kBytesPerUnit) %
+                                               kTenthsPerUnit),
                     static_cast<unsigned long>(stats.tx_accepted), // uint32_t→unsigned long 不窄化
-                    static_cast<unsigned long>(stats.tx_completed), static_cast<unsigned long>(ring_stats.dropped));
+                    static_cast<unsigned long>(stats.tx_completed),
+                    static_cast<unsigned long>(ring_stats.dropped));
 }
 
 } // namespace app

@@ -75,9 +75,11 @@ struct ExecutorStorageView {
     size_t queue_depth = 0;
 };
 
-template <size_t S, size_t D> [[nodiscard]] ExecutorStorageView view_of(ExecutorStorage<S, D> &st) noexcept
+template <size_t S, size_t D>
+[[nodiscard]] ExecutorStorageView view_of(ExecutorStorage<S, D> &st) noexcept
 {
-    return ExecutorStorageView{st.stack, &st.tcb, st.cmd_area, &st.cmd_queue, st.result_area, &st.result_queue, D};
+    return ExecutorStorageView{
+        st.stack, &st.tcb, st.cmd_area, &st.cmd_queue, st.result_area, &st.result_queue, D};
 }
 
 /** 静态任务 + 模块表 + 命令/结果队列的执行器；init 后由本任务独占运行，外部只经 call()/stats() 交互。 */
@@ -110,7 +112,8 @@ public:
      *       kBusy（命令队列满）、kInvalidState（未运行，或从本执行器任务自身调用——会死锁）、
      *       kNotFound（目标模块不存在）。
      */
-    [[nodiscard]] fw::Result call(const fw::Command &cmd, fw::CommandResult &result, uint32_t timeout_ms) noexcept;
+    [[nodiscard]] fw::Result call(const fw::Command &cmd, fw::CommandResult &result,
+                                  uint32_t timeout_ms) noexcept;
 
     [[nodiscard]] bool running() const noexcept;
     /** 任意任务可调用（内部临界区拷贝）。 */

@@ -40,7 +40,8 @@ void DataCenter::init() noexcept
 }
 
 #if RTK_GNSS_ENABLED
-fw::Status DataCenter::init_gnss_buffers(std::span<uint8_t> app_ring_buf, std::span<uint8_t> latest_buf) noexcept
+fw::Status DataCenter::init_gnss_buffers(std::span<uint8_t> app_ring_buf,
+                                         std::span<uint8_t> latest_buf) noexcept
 {
     if ((app_ring_buf.data() == nullptr) || (app_ring_buf.size() < kGnssAppRingBytes) ||
         (latest_buf.data() == nullptr) || (latest_buf.size() < kGnssLatestTotalBytes)) {
@@ -48,7 +49,8 @@ fw::Status DataCenter::init_gnss_buffers(std::span<uint8_t> app_ring_buf, std::s
     }
     const auto lock = rtos::spin_lock_ops(mux);
     // App typed FanoutRing 最大载荷 = 容量 - 3 B 记录头（ADR-0011 §5.3）。
-    if (gnss_app_ring.init_typed(app_ring_buf.first(kGnssAppRingBytes), kGnssAppRingBytes - fw::kFanoutTypedHeaderBytes,
+    if (gnss_app_ring.init_typed(app_ring_buf.first(kGnssAppRingBytes),
+                                 kGnssAppRingBytes - fw::kFanoutTypedHeaderBytes,
                                  lock) != fw::Result::kOk) {
         return fw::Status::kInvalidArg;
     }

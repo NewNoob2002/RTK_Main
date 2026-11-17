@@ -73,8 +73,8 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     }
 
     // 10 bit 长度：最大 1023，总长 = 3 + 1023 + 3 = 1029 = kMaxFrame，因此不需要额外超限判断。
-    const uint32_t payload_len =
-        ((static_cast<uint32_t>(frame[1]) & kLenHiMask) << kBitsPerByte) | static_cast<uint32_t>(frame[2]);
+    const uint32_t payload_len = ((static_cast<uint32_t>(frame[1]) & kLenHiMask) << kBitsPerByte) |
+                                 static_cast<uint32_t>(frame[2]);
     const std::size_t total = static_cast<std::size_t>(payload_len) + kHdrLen + kCrcLen;
 
     if (frame.size() < total) {
@@ -110,7 +110,9 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 {
     switch (verdict.reason) {
     case Reason::kSync:
-        text.literal("byte 0 is ").hex(static_cast<uint32_t>(kSyncByte), 2U).literal(", expected 0xD3");
+        text.literal("byte 0 is ")
+            .hex(static_cast<uint32_t>(kSyncByte), 2U)
+            .literal(", expected 0xD3");
         break;
     case Reason::kReserved:
         text.literal("reserved bits set in byte 1: ").hex(verdict.received, 2U);

@@ -50,7 +50,8 @@ constexpr uint32_t log_levels_all(LogLevel level) noexcept
 
 /** 默认：所有类别 kInfo（启动与运行中的状态变化默认可见，ADR-0009 §2.12）。 */
 inline constexpr uint32_t kLogLevelsDefault = log_levels_all(LogLevel::kInfo);
-static_assert(static_cast<uint32_t>(TraceCat::kCount) * kLogLevelBits <= 32U, "log level table must fit in u32");
+static_assert(static_cast<uint32_t>(TraceCat::kCount) * kLogLevelBits <= 32U,
+              "log level table must fit in u32");
 
 /** 直写通路与环通路共用的一行最大长度（含时间戳、类别、级别前缀与 CRLF）。 */
 inline constexpr std::size_t kLogLineMax = kLogTextMax + 32U;
@@ -115,7 +116,8 @@ void log_set_levels(uint32_t packed) noexcept;
  * @param  fmt: printf 格式；结尾换行会被去掉，超过 kLogTextMax 截断并以 "..." 结尾
  * @note   非阻塞（环满丢弃并计数）；禁止 ISR。
  */
-void log_line(LogLevel level, TraceCat cat, const char *fmt, ...) noexcept __attribute__((format(printf, 3, 4)));
+void log_line(LogLevel level, TraceCat cat, const char *fmt, ...) noexcept
+    __attribute__((format(printf, 3, 4)));
 
 /**
  * @brief  log_line 的 va_list 版本
@@ -157,7 +159,8 @@ void vlog_line(LogLevel level, TraceCat cat, const char *fmt, va_list args) noex
  * @retval 写入的字节数（不含结尾 0；缓冲不足时截断，仍以 CRLF 结尾）
  * @note   环通路（DebugModule）与直写通路共用，保证两条通路行格式一致。
  */
-std::size_t log_format_line(std::span<char> out, const LogHeader &hdr, std::span<const uint8_t> text) noexcept;
+std::size_t log_format_line(std::span<char> out, const LogHeader &hdr,
+                            std::span<const uint8_t> text) noexcept;
 
 /**
  * @brief  读取丢失统计
@@ -169,11 +172,11 @@ std::size_t log_format_line(std::span<char> out, const LogHeader &hdr, std::span
 
 // 宏而非函数：高于 kLogMaxLevel 的调用连同参数求值一起编译掉。
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)
-#define FW_LOG_AT(level, cat, ...)                                                                                     \
-    do {                                                                                                               \
-        if constexpr ((level) <= ::fw::kLogMaxLevel) {                                                                 \
-            ::fw::log_line((level), (cat), __VA_ARGS__);                                                               \
-        }                                                                                                              \
+#define FW_LOG_AT(level, cat, ...)                                                                 \
+    do {                                                                                           \
+        if constexpr ((level) <= ::fw::kLogMaxLevel) {                                             \
+            ::fw::log_line((level), (cat), __VA_ARGS__);                                           \
+        }                                                                                          \
     } while (0)
 #define FW_LOGE(cat, ...) FW_LOG_AT(::fw::LogLevel::kError, cat, __VA_ARGS__)
 #define FW_LOGW(cat, ...) FW_LOG_AT(::fw::LogLevel::kWarn, cat, __VA_ARGS__)

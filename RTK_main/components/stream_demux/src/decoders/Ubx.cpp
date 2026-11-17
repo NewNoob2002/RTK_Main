@@ -107,7 +107,8 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         ck_b = static_cast<uint8_t>(ck_b + ck_a);
     }
 
-    const uint32_t ck_rx = static_cast<uint32_t>(frame[total - 2U]) | (static_cast<uint32_t>(frame[total - 1U]) << 8U);
+    const uint32_t ck_rx =
+        static_cast<uint32_t>(frame[total - 2U]) | (static_cast<uint32_t>(frame[total - 1U]) << 8U);
     const uint32_t ck_calc = static_cast<uint32_t>(ck_a) | (static_cast<uint32_t>(ck_b) << 8U);
     if (ck_rx != ck_calc) {
         Verdict bad = reject(Reason::kChecksum);
@@ -127,7 +128,11 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
         text.literal("sync byte 2 is ").hex(verdict.received, 2U).literal(", expected 0x62");
         break;
     case Reason::kTooLong:
-        text.literal("length ").decimal(verdict.total).literal(" exceeds ").decimal(kMaxFrame).literal(" bytes");
+        text.literal("length ")
+            .decimal(verdict.total)
+            .literal(" exceeds ")
+            .decimal(kMaxFrame)
+            .literal(" bytes");
         break;
     case Reason::kExtra:
         text.literal("frame longer than the declared ").decimal(verdict.total).literal(" bytes");

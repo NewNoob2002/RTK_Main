@@ -48,8 +48,8 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
                                   std::span<const uint8_t> payload) noexcept
 {
     size_t len = 0;
-    const fw::Status status =
-        proto::build_frame(reply.buf, msg_id, proto::sender::kDevice, proto::response_type(req_type), payload, len);
+    const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
+                                                 proto::response_type(req_type), payload, len);
     if (!is_ok(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
@@ -58,7 +58,8 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
     return DispatchResult::kReply;
 }
 
-inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type, uint8_t value) noexcept
+inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type,
+                                   uint8_t value) noexcept
 {
     const std::array<uint8_t, 2> payload = {value, value};
     return reply_build(reply, msg_id, req_type, payload);
@@ -196,7 +197,8 @@ DispatchResult GnssService::handle_frame(const proto::FrameView &frame, Reply &r
         if (!q.ok || (q.len == 0U) || (q.len > buf.size())) {
             return reply_result(reply, frame.msg_id, frame.type, kResultFail);
         }
-        return reply_build(reply, frame.msg_id, frame.type, std::span<const uint8_t>{buf.data(), q.len});
+        return reply_build(reply, frame.msg_id, frame.type,
+                           std::span<const uint8_t>{buf.data(), q.len});
     }
 
     if ((supported_mask_ & bit) == 0U) {
@@ -216,7 +218,8 @@ DispatchResult GnssService::handle_frame(const proto::FrameView &frame, Reply &r
 std::span<const Route> GnssService::routes() noexcept
 {
     struct Handlers {
-        static DispatchResult handle(void *self, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult handle(void *self, const proto::FrameView &frame, uint32_t now_ms,
+                                     Reply &reply) noexcept
         {
             static_cast<void>(now_ms);
             return static_cast<GnssService *>(self)->handle_frame(frame, reply);

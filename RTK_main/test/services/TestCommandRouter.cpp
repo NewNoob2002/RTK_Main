@@ -37,7 +37,8 @@ uint16_t s_last_msg_id = 0;
 size_t s_last_reply_len = 0;
 void *s_last_self = nullptr;
 
-DispatchResult handle_reply(void *self, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+DispatchResult handle_reply(void *self, const proto::FrameView &frame, uint32_t now_ms,
+                            Reply &reply) noexcept
 {
     ++s_calls;
     s_last_self = self;
@@ -48,7 +49,8 @@ DispatchResult handle_reply(void *self, const proto::FrameView &frame, uint32_t 
     return DispatchResult::kReply;
 }
 
-DispatchResult handle_silent(void *, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+DispatchResult handle_silent(void *, const proto::FrameView &frame, uint32_t now_ms,
+                             Reply &reply) noexcept
 {
     static_cast<void>(frame);
     static_cast<void>(now_ms);
@@ -89,7 +91,8 @@ void test_init_and_route_count()
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, routes}};
     CommandRouter router;
     TEST_ASSERT_EQUAL_UINT8(0, router.route_count());
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk), static_cast<uint8_t>(router.init(tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk),
+                            static_cast<uint8_t>(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(2, router.route_count());
 }
 
@@ -143,7 +146,8 @@ void test_failed_init_leaves_router_unusable()
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, too_many}};
 
     CommandRouter router;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kNoSpace), static_cast<uint8_t>(router.init(tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kNoSpace),
+                            static_cast<uint8_t>(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(0, router.route_count());
 
     Fixture f;
@@ -163,7 +167,8 @@ void test_capacity_limits()
     }
     const std::array<RouteTable, 1> ok_tables = {RouteTable{&s_calls, exact}};
     CommandRouter full;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk), static_cast<uint8_t>(full.init(ok_tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk),
+                            static_cast<uint8_t>(full.init(ok_tables)));
     TEST_ASSERT_EQUAL_UINT(kMaxRoutes, full.route_count());
 
     std::array<Route, kMaxRoutes + 1> overflow{};
@@ -172,7 +177,8 @@ void test_capacity_limits()
     }
     const std::array<RouteTable, 1> bad_tables = {RouteTable{&s_calls, overflow}};
     CommandRouter over;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kNoSpace), static_cast<uint8_t>(over.init(bad_tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kNoSpace),
+                            static_cast<uint8_t>(over.init(bad_tables)));
 }
 
 void test_duplicate_init_returns_busy()
@@ -180,8 +186,10 @@ void test_duplicate_init_returns_busy()
     const std::array<Route, 1> routes = {Route{kMsgHeartbeat, kRoleAlarm, &handle_reply}};
     const std::array<RouteTable, 1> tables = {RouteTable{&s_calls, routes}};
     CommandRouter router;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk), static_cast<uint8_t>(router.init(tables)));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kBusy), static_cast<uint8_t>(router.init(tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kOk),
+                            static_cast<uint8_t>(router.init(tables)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Status::kBusy),
+                            static_cast<uint8_t>(router.init(tables)));
     TEST_ASSERT_EQUAL_UINT(1, router.route_count());
 
     // 第一次登记仍然有效。
@@ -200,8 +208,9 @@ void test_dispatch_and_arguments()
     TEST_ASSERT_TRUE(is_ok(router.init(tables)));
 
     Fixture f;
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
-                            static_cast<uint8_t>(router.handle(Role::kAlarm, f.frame, kNowMs, f.reply)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DispatchResult::kReply),
+        static_cast<uint8_t>(router.handle(Role::kAlarm, f.frame, kNowMs, f.reply)));
     TEST_ASSERT_EQUAL_UINT(1, s_calls);
     TEST_ASSERT_EQUAL_HEX32(kNowMs, s_last_now);
     TEST_ASSERT_EQUAL_HEX16(kMsgHeartbeat, s_last_msg_id);
@@ -233,8 +242,9 @@ void test_role_check_and_unknown_order()
     f.frame.msg_id = kMsgDevInfo;
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kDenied),
                             static_cast<uint8_t>(router.handle(Role::kNone, f.frame, 0, f.reply)));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kDenied),
-                            static_cast<uint8_t>(router.handle(Role::kPending, f.frame, 0, f.reply)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DispatchResult::kDenied),
+        static_cast<uint8_t>(router.handle(Role::kPending, f.frame, 0, f.reply)));
     TEST_ASSERT_EQUAL_UINT(0, s_calls);
 
     // 未登记 ID 先于角色检查：任何角色都 kNoReply。

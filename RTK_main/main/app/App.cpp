@@ -14,8 +14,9 @@ namespace {
 
 /** 看门狗超时判定用的高位标记：boot_stopped 中低位为 BootTask 任务位。 */
 constexpr uint32_t kWatchdogStopBit = 0x80000000U;
-static_assert((kWatchdogStopBit & (app::task_bit(app::BootTask::kLink) | app::task_bit(app::BootTask::kIo) |
-                                   app::task_bit(app::BootTask::kTrace))) == 0U,
+static_assert((kWatchdogStopBit &
+               (app::task_bit(app::BootTask::kLink) | app::task_bit(app::BootTask::kIo) |
+                app::task_bit(app::BootTask::kTrace))) == 0U,
               "看门狗诊断位不得与任务位重叠");
 
 } // namespace

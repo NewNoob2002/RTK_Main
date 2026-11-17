@@ -22,7 +22,8 @@ enum class GnssVerb : uint8_t {
     kProbe = 0,   // 重新探测（不复位电源）；arg 无
     kReset = 1,   // 电源复位后重新探测
     kSetRate = 2, // arg0 = 频率 Hz（1/2/5/10/20），写 NVS 并重配
-    kSend = 3,    // 原样发送调试命令：args 为文本（不含 \r\n，≤ fw::kCommandArgBytes），仅 kRunning/kFailed 允许
+    kSend =
+        3, // 原样发送调试命令：args 为文本（不含 \r\n，≤ fw::kCommandArgBytes），仅 kRunning/kFailed 允许
 };
 
 /** kGnss 追踪事件码；控制台文本表 main/modules/debug/TraceText.cpp 按此解释。 */

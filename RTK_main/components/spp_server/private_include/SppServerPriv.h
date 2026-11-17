@@ -71,7 +71,9 @@ static_assert(SPP_SERVER_REPLY_CAPACITY * SPP_SERVER_MAX_SESSIONS + SPP_SERVER_S
 
 /* OPEN/CLOSE/DATA/RX_DROP/TX_SPACE 五类通知；队列满时 TX level 仍由 poll_event 重查。 */
 #define SPP_SERVER_NOTICES_PER_SESSION (5U)
-static_assert(SPP_SERVER_EVENT_QUEUE_LEN >= (SPP_SERVER_NOTICES_PER_SESSION * SPP_SERVER_MAX_SESSIONS), "事件队列不足");
+static_assert(SPP_SERVER_EVENT_QUEUE_LEN >=
+                  (SPP_SERVER_NOTICES_PER_SESSION * SPP_SERVER_MAX_SESSIONS),
+              "事件队列不足");
 
 /* 事件位：低 2 位为每会话唤醒位，其余为初始化阶段完成位。 */
 #define SPP_SERVER_BIT_WAKE(idx)   ((EventBits_t)(1UL << (idx)))
@@ -149,9 +151,12 @@ typedef enum {
 } spp_server_ctrl_type_t;
 
 /* CTRL_ERR 追踪直接把 ctrl_type 作为 spp_server_trace_ctrl_t 上报，两者取值必须一致。 */
-_Static_assert((int)SPP_SERVER_CTRL_PIN_REQ == (int)SPP_SERVER_TRACE_CTRL_PIN, "ctrl/trace mapping");
-_Static_assert((int)SPP_SERVER_CTRL_CFM_REQ == (int)SPP_SERVER_TRACE_CTRL_CONFIRM, "ctrl/trace mapping");
-_Static_assert((int)SPP_SERVER_CTRL_REJECT == (int)SPP_SERVER_TRACE_CTRL_REJECT, "ctrl/trace mapping");
+_Static_assert((int)SPP_SERVER_CTRL_PIN_REQ == (int)SPP_SERVER_TRACE_CTRL_PIN,
+               "ctrl/trace mapping");
+_Static_assert((int)SPP_SERVER_CTRL_CFM_REQ == (int)SPP_SERVER_TRACE_CTRL_CONFIRM,
+               "ctrl/trace mapping");
+_Static_assert((int)SPP_SERVER_CTRL_REJECT == (int)SPP_SERVER_TRACE_CTRL_REJECT,
+               "ctrl/trace mapping");
 
 typedef struct {
     bool in_use;
@@ -201,7 +206,7 @@ typedef struct {
     spp_server_inflight_t inflight[SPP_SERVER_INFLIGHT_MAX];
     spp_server_ring_t stream;
     uint8_t stream_ends[SPP_SERVER_STREAM_CAPACITY / 8U]; /* 每字节一个句末位，无记录数隐藏上限 */
-    uint8_t stream_owner;                                 /* slot+1；0 为无 owner，避免非零初值搬到 .data */
+    uint8_t stream_owner; /* slot+1；0 为无 owner，避免非零初值搬到 .data */
     bool stream_unbind;
     bool stream_active;
     uint8_t tx_cursor;
@@ -227,7 +232,8 @@ extern portMUX_TYPE s_spp_mux;
 extern spp_server_trace_fn s_spp_trace;
 
 /* 非空才调用：先在本临界区取出函数指针，出临界区后再调用，避免钩子实现里再进临界区。 */
-static inline void spp_server_trace(spp_server_trace_code_t code, uint32_t handle, uint32_t a, uint32_t b)
+static inline void spp_server_trace(spp_server_trace_code_t code, uint32_t handle, uint32_t a,
+                                    uint32_t b)
 {
 #if defined(CONFIG_RTK_TRACE_ENABLE)
     spp_server_trace_fn fn = NULL;
@@ -264,7 +270,8 @@ void spp_server_ctrl_drop_reject(uint32_t handle);
 void spp_server_ctrl_process(void);
 
 /* SppServerRx.c：BTC 回调线程的接收与事件投递。 */
-void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint8_t *addr, uint32_t dropped);
+void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint8_t *addr,
+                         uint32_t dropped);
 void spp_server_handle_data(esp_spp_cb_param_t *param);
 void spp_server_notify_rx_wake(void);
 

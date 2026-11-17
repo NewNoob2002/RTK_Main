@@ -32,8 +32,8 @@ public:
         if (handle_ != nullptr) {
             return fw::Status::kBusy;
         }
-        handle_ = xQueueCreateStatic(static_cast<UBaseType_t>(N), static_cast<UBaseType_t>(sizeof(T)), storage_.data(),
-                                     &queue_);
+        handle_ = xQueueCreateStatic(static_cast<UBaseType_t>(N),
+                                     static_cast<UBaseType_t>(sizeof(T)), storage_.data(), &queue_);
         return (handle_ != nullptr) ? fw::Status::kOk : fw::Status::kNoSpace;
     }
 

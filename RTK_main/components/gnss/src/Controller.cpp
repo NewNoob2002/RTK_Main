@@ -44,8 +44,8 @@ size_t candidate_count(std::span<const Receiver *const> receivers, std::span<con
 }
 
 // 探测顺序：提示的（方言, 波特率）→ 启用方言 × 波特率全表（方言为外层循环）。
-bool candidate_at(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds, const Hint &hint,
-                  size_t index, Candidate &out) noexcept
+bool candidate_at(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds,
+                  const Hint &hint, size_t index, Candidate &out) noexcept
 {
     const Receiver *hinted = hint_receiver(receivers, hint);
     if (hinted != nullptr) {
@@ -161,8 +161,9 @@ struct ControllerImpl {
     static void enter_configuring(Controller &self) noexcept
     {
         // 能力必须问“具体型号的那个驱动”：家族驱动对 UM982 只报 UM980 能力（ADR-0012 §2.8）。
-        self.detected_.caps =
-            self.detected_.receiver != nullptr ? self.detected_.receiver->caps(self.detected_.probe.model) : 0U;
+        self.detected_.caps = self.detected_.receiver != nullptr
+                                  ? self.detected_.receiver->caps(self.detected_.probe.model)
+                                  : 0U;
         self.state_ = State::kConfiguring;
         self.phase_ = 0;
         self.step_index_ = 0;
@@ -282,7 +283,8 @@ struct ControllerImpl {
     }
 };
 
-ControllerImpl::Round ControllerImpl::on_off(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::on_off(Controller &self, uint32_t now_ms,
+                                             Action &out) noexcept
 {
     static_cast<void>(now_ms);
     if (self.phase_ == 1) {
@@ -293,7 +295,8 @@ ControllerImpl::Round ControllerImpl::on_off(Controller &self, uint32_t now_ms, 
     return Round::kDone;
 }
 
-ControllerImpl::Round ControllerImpl::on_power_up(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::on_power_up(Controller &self, uint32_t now_ms,
+                                                  Action &out) noexcept
 {
     if (self.phase_ == 0) {
         arm_deadline(self, now_ms, self.timing_.power_off_ms);
@@ -317,7 +320,8 @@ ControllerImpl::Round ControllerImpl::on_power_up(Controller &self, uint32_t now
     return Round::kAgain;
 }
 
-ControllerImpl::Round ControllerImpl::on_probing(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::on_probing(Controller &self, uint32_t now_ms,
+                                                 Action &out) noexcept
 {
     if (self.phase_ == 0) {
         return probe_start(self, now_ms, out);
@@ -325,7 +329,8 @@ ControllerImpl::Round ControllerImpl::on_probing(Controller &self, uint32_t now_
     return probe_await(self, now_ms, out);
 }
 
-ControllerImpl::Round ControllerImpl::probe_start(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::probe_start(Controller &self, uint32_t now_ms,
+                                                  Action &out) noexcept
 {
     const size_t total = candidate_count(self.receivers_, self.bauds_, self.hint_);
     if (total == 0U) {
@@ -365,7 +370,8 @@ ControllerImpl::Round ControllerImpl::probe_start(Controller &self, uint32_t now
     return Round::kDone;
 }
 
-ControllerImpl::Round ControllerImpl::probe_await(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::probe_await(Controller &self, uint32_t now_ms,
+                                                  Action &out) noexcept
 {
     static_cast<void>(out);
     if (self.probe_hit_) {
@@ -382,7 +388,8 @@ ControllerImpl::Round ControllerImpl::probe_await(Controller &self, uint32_t now
     return Round::kAgain;
 }
 
-ControllerImpl::Round ControllerImpl::on_configuring(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::on_configuring(Controller &self, uint32_t now_ms,
+                                                     Action &out) noexcept
 {
     if ((self.cfg_ == nullptr) || (self.detected_.receiver == nullptr)) {
         enter_failed(self, now_ms);
@@ -392,7 +399,8 @@ ControllerImpl::Round ControllerImpl::on_configuring(Controller &self, uint32_t 
     case 0:
         return config_send(self, now_ms, out);
     case 1:
-        return self.waiting_reply_ ? config_await(self, now_ms, out) : config_no_reply(self, now_ms, out);
+        return self.waiting_reply_ ? config_await(self, now_ms, out)
+                                   : config_no_reply(self, now_ms, out);
     case 2:
         return config_switch_baud(self, now_ms, out);
     default:
@@ -400,10 +408,12 @@ ControllerImpl::Round ControllerImpl::on_configuring(Controller &self, uint32_t 
     }
 }
 
-ControllerImpl::Round ControllerImpl::config_send(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::config_send(Controller &self, uint32_t now_ms,
+                                                  Action &out) noexcept
 {
     ConfigStep step{};
-    if (!self.detected_.receiver->rover_step(self.step_index_, self.detected_.probe.model, *self.cfg_, step)) {
+    if (!self.detected_.receiver->rover_step(self.step_index_, self.detected_.probe.model,
+                                             *self.cfg_, step)) {
         // 基础脚本结束：进入报文输出阶段（ADR-0012 §2.4），结束后才到 kRunning。
         enter_output(self, false);
         return Round::kAgain;
@@ -419,7 +429,8 @@ ControllerImpl::Round ControllerImpl::config_send(Controller &self, uint32_t now
     return Round::kDone;
 }
 
-ControllerImpl::Round ControllerImpl::config_await(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::config_await(Controller &self, uint32_t now_ms,
+                                                   Action &out) noexcept
 {
     static_cast<void>(out);
     if (self.reply_ok_ || self.reply_nack_) {
@@ -456,7 +467,8 @@ ControllerImpl::Round ControllerImpl::config_await(Controller &self, uint32_t no
     return Round::kAgain;
 }
 
-ControllerImpl::Round ControllerImpl::config_no_reply(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::config_no_reply(Controller &self, uint32_t now_ms,
+                                                      Action &out) noexcept
 {
     static_cast<void>(now_ms);
     static_cast<void>(out);
@@ -469,7 +481,8 @@ ControllerImpl::Round ControllerImpl::config_no_reply(Controller &self, uint32_t
     return Round::kAgain;
 }
 
-ControllerImpl::Round ControllerImpl::config_switch_baud(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::config_switch_baud(Controller &self, uint32_t now_ms,
+                                                         Action &out) noexcept
 {
     static_cast<void>(now_ms);
     self.host_baud_ = self.step_.switch_baud;
@@ -479,7 +492,8 @@ ControllerImpl::Round ControllerImpl::config_switch_baud(Controller &self, uint3
     return Round::kDone;
 }
 
-ControllerImpl::Round ControllerImpl::on_output(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::on_output(Controller &self, uint32_t now_ms,
+                                                Action &out) noexcept
 {
     if (self.detected_.receiver == nullptr) {
         enter_failed(self, now_ms);
@@ -491,7 +505,8 @@ ControllerImpl::Round ControllerImpl::on_output(Controller &self, uint32_t now_m
     return output_send(self, now_ms, out);
 }
 
-ControllerImpl::Round ControllerImpl::output_send(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::output_send(Controller &self, uint32_t now_ms,
+                                                  Action &out) noexcept
 {
     if (self.output_index_ >= kOutputMsgCount) {
         // 输出阶段完成：结果掩码留在 stats_，seq 自增供 main 判断“我请求的那次完成了”。
@@ -511,7 +526,8 @@ ControllerImpl::Round ControllerImpl::output_send(Controller &self, uint32_t now
     }
     self.output_cmd_.clear();
     const fw::Status built = self.detected_.receiver->build_output(
-        msg, self.plan_.period_ms[self.output_index_], self.detected_.probe.model, self.plan_, self.output_cmd_);
+        msg, self.plan_.period_ms[self.output_index_], self.detected_.probe.model, self.plan_,
+        self.output_cmd_);
     if (built == fw::Status::kNotSupported) {
         // 型号不支持不是错误（ADR-0012 §2.5）：跳过并记入 unsupported_mask。
         self.stats_.unsupported_mask |= bit;
@@ -533,7 +549,8 @@ ControllerImpl::Round ControllerImpl::output_send(Controller &self, uint32_t now
     return Round::kDone;
 }
 
-ControllerImpl::Round ControllerImpl::output_await(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::output_await(Controller &self, uint32_t now_ms,
+                                                   Action &out) noexcept
 {
     static_cast<void>(out);
     const uint32_t bit = 1U << static_cast<uint32_t>(self.output_index_);
@@ -571,10 +588,12 @@ ControllerImpl::Round ControllerImpl::output_await(Controller &self, uint32_t no
     return Round::kAgain;
 }
 
-ControllerImpl::Round ControllerImpl::on_running(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::on_running(Controller &self, uint32_t now_ms,
+                                                 Action &out) noexcept
 {
     static_cast<void>(out);
-    if (static_cast<int32_t>(now_ms - self.last_frame_ms_) > static_cast<int32_t>(self.timing_.silence_ms)) {
+    if (static_cast<int32_t>(now_ms - self.last_frame_ms_) >
+        static_cast<int32_t>(self.timing_.silence_ms)) {
         ++self.stats_.reprobes;
         self.detected_ = Detected{};
         enter_probing(self);
@@ -594,7 +613,8 @@ ControllerImpl::Round ControllerImpl::on_running(Controller &self, uint32_t now_
  * @retval kDone: 命令刚发出，或窗口还没到。
  * @retval kAgain: 读回结束，已回到 kRunning。
  */
-ControllerImpl::Round ControllerImpl::on_readback(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::on_readback(Controller &self, uint32_t now_ms,
+                                                  Action &out) noexcept
 {
     if (self.phase_ == 0) {
         self.phase_ = 1;
@@ -616,7 +636,8 @@ ControllerImpl::Round ControllerImpl::on_readback(Controller &self, uint32_t now
     return Round::kAgain;
 }
 
-ControllerImpl::Round ControllerImpl::on_failed(Controller &self, uint32_t now_ms, Action &out) noexcept
+ControllerImpl::Round ControllerImpl::on_failed(Controller &self, uint32_t now_ms,
+                                                Action &out) noexcept
 {
     static_cast<void>(out);
     if (!reached(now_ms, self.deadline_ms_)) {
@@ -628,7 +649,8 @@ ControllerImpl::Round ControllerImpl::on_failed(Controller &self, uint32_t now_m
 }
 
 bool Controller::init(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds,
-                      const RoverConfig &cfg, const OutputPlan &plan, const Hint &hint, const Timing &timing) noexcept
+                      const RoverConfig &cfg, const OutputPlan &plan, const Hint &hint,
+                      const Timing &timing) noexcept
 {
     if (receivers.empty() || bauds.empty()) {
         return false;
@@ -785,12 +807,14 @@ Action Controller::poll(uint32_t now_ms) noexcept
  * @param frame: 整帧字节。
  * @param now_ms: 当前时间（只用于判“模块还在说话”）。
  */
-void Controller::on_frame(const demux::Decoder &dec, std::span<const uint8_t> frame, uint32_t now_ms) noexcept
+void Controller::on_frame(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                          uint32_t now_ms) noexcept
 {
     if (state_ == State::kReadback) {
         // 读回窗口只认 $CONFIG 行：模块照常输出的 NMEA 仍算“在工作”，但不得延长读回窗口。
         std::array<char, 8U> scratch{}; // 只判命中，正文由 main 侧另取，故截断不影响返回值
-        if ((detected_.receiver != nullptr) && (detected_.receiver->match_readback(dec, frame, scratch) > 0U)) {
+        if ((detected_.receiver != nullptr) &&
+            (detected_.receiver->match_readback(dec, frame, scratch) > 0U)) {
             ++stats_.readback_lines;
             last_frame_ms_ = now_ms;
         }
@@ -808,12 +832,16 @@ void Controller::on_frame(const demux::Decoder &dec, std::span<const uint8_t> fr
         }
         return;
     }
-    if ((state_ == State::kConfiguring) && (phase_ == 1) && waiting_reply_ && (detected_.receiver != nullptr)) {
-        ControllerImpl::mark_reply(*this, detected_.receiver->classify_reply(dec, frame, step_.cmd.view()));
+    if ((state_ == State::kConfiguring) && (phase_ == 1) && waiting_reply_ &&
+        (detected_.receiver != nullptr)) {
+        ControllerImpl::mark_reply(
+            *this, detected_.receiver->classify_reply(dec, frame, step_.cmd.view()));
         return;
     }
-    if ((state_ == State::kOutput) && (phase_ == 1) && waiting_reply_ && (detected_.receiver != nullptr)) {
-        ControllerImpl::mark_reply(*this, detected_.receiver->classify_reply(dec, frame, output_cmd_.view()));
+    if ((state_ == State::kOutput) && (phase_ == 1) && waiting_reply_ &&
+        (detected_.receiver != nullptr)) {
+        ControllerImpl::mark_reply(
+            *this, detected_.receiver->classify_reply(dec, frame, output_cmd_.view()));
     }
 }
 

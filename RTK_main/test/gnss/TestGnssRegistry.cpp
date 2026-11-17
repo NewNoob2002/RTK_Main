@@ -45,11 +45,16 @@ static void test_model_names()
 
 static void test_family_of()
 {
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore), static_cast<int>(gnss::family_of(gnss::Model::kUm980)));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore), static_cast<int>(gnss::family_of(gnss::Model::kUm981)));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore), static_cast<int>(gnss::family_of(gnss::Model::kUm982)));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUblox), static_cast<int>(gnss::family_of(gnss::Model::kZedF9p)));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kComnav), static_cast<int>(gnss::family_of(gnss::Model::kK803)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
+                      static_cast<int>(gnss::family_of(gnss::Model::kUm980)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
+                      static_cast<int>(gnss::family_of(gnss::Model::kUm981)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
+                      static_cast<int>(gnss::family_of(gnss::Model::kUm982)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUblox),
+                      static_cast<int>(gnss::family_of(gnss::Model::kZedF9p)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kComnav),
+                      static_cast<int>(gnss::family_of(gnss::Model::kK803)));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnknown),
                       static_cast<int>(gnss::family_of(gnss::Model::kUnknown)));
 }
@@ -57,8 +62,9 @@ static void test_family_of()
 static void test_enabled_receivers_match_build_flags()
 {
     const std::span<const gnss::Receiver *const> receivers = gnss::enabled_receivers();
-    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kExpectedUnicore + kExpectedUblox + kExpectedComnav),
-                             static_cast<uint32_t>(receivers.size()));
+    TEST_ASSERT_EQUAL_UINT32(
+        static_cast<uint32_t>(kExpectedUnicore + kExpectedUblox + kExpectedComnav),
+        static_cast<uint32_t>(receivers.size()));
 
     for (const gnss::Receiver *receiver : receivers) {
         TEST_ASSERT_NOT_NULL(receiver);
@@ -80,7 +86,8 @@ static void test_enabled_receivers_match_build_flags()
 #else
         constexpr gnss::Family kExpectedFront = gnss::Family::kComnav;
 #endif
-        TEST_ASSERT_EQUAL(static_cast<int>(kExpectedFront), static_cast<int>(receivers.front()->family()));
+        TEST_ASSERT_EQUAL(static_cast<int>(kExpectedFront),
+                          static_cast<int>(receivers.front()->family()));
     }
     TEST_ASSERT_NULL(gnss::receiver_for(gnss::Family::kUnknown));
 }
@@ -88,22 +95,31 @@ static void test_enabled_receivers_match_build_flags()
 // family_from_u8/model_from_u8：合法值往返一致，越界回落到 kUnknown（NVS 旧值/未来值）。
 static void test_u8_boundaries()
 {
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
-                      static_cast<int>(gnss::family_from_u8(static_cast<uint8_t>(gnss::Family::kUnicore)).value()));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUblox),
-                      static_cast<int>(gnss::family_from_u8(static_cast<uint8_t>(gnss::Family::kUblox)).value()));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kComnav),
-                      static_cast<int>(gnss::family_from_u8(static_cast<uint8_t>(gnss::Family::kComnav)).value()));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnknown),
-                      static_cast<int>(gnss::family_from_u8(static_cast<uint8_t>(gnss::Family::kUnknown)).value()));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::Family::kUnicore),
+        static_cast<int>(
+            gnss::family_from_u8(static_cast<uint8_t>(gnss::Family::kUnicore)).value()));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::Family::kUblox),
+        static_cast<int>(gnss::family_from_u8(static_cast<uint8_t>(gnss::Family::kUblox)).value()));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::Family::kComnav),
+        static_cast<int>(
+            gnss::family_from_u8(static_cast<uint8_t>(gnss::Family::kComnav)).value()));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::Family::kUnknown),
+        static_cast<int>(
+            gnss::family_from_u8(static_cast<uint8_t>(gnss::Family::kUnknown)).value()));
     // 越界（旧格式/损坏的 NVS 值）必须显式报告无效，而不是静默当成某个家族。
     TEST_ASSERT_FALSE(gnss::family_from_u8(4U).has_value());
     TEST_ASSERT_FALSE(gnss::family_from_u8(0xFFU).has_value());
 
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Model::kUm980),
-                      static_cast<int>(gnss::model_from_u8(static_cast<uint8_t>(gnss::Model::kUm980)).value()));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Model::kK803),
-                      static_cast<int>(gnss::model_from_u8(static_cast<uint8_t>(gnss::Model::kK803)).value()));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::Model::kUm980),
+        static_cast<int>(gnss::model_from_u8(static_cast<uint8_t>(gnss::Model::kUm980)).value()));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::Model::kK803),
+        static_cast<int>(gnss::model_from_u8(static_cast<uint8_t>(gnss::Model::kK803)).value()));
     TEST_ASSERT_FALSE(gnss::model_from_u8(6U).has_value());
     TEST_ASSERT_FALSE(gnss::model_from_u8(0xFFU).has_value());
     TEST_ASSERT_FALSE(gnss::model_from_u8(0xFFU).has_value());

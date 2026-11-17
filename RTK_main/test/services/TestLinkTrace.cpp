@@ -68,7 +68,8 @@ void assert_event(Step step, core::LinkTrace code, SessionHandle session, uint32
     const auto index = static_cast<size_t>(step);
     TEST_ASSERT_LESS_THAN_UINT32(static_cast<uint32_t>(s_count), static_cast<uint32_t>(index));
     const fw::TraceEvent &event = s_events[index];
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::TraceCat::kLink), static_cast<uint8_t>(event.cat));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::TraceCat::kLink),
+                            static_cast<uint8_t>(event.cat));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(code), event.code);
     TEST_ASSERT_EQUAL_UINT32(session, static_cast<uint32_t>(event.session));
     TEST_ASSERT_EQUAL_UINT32(a, event.a);
@@ -81,8 +82,9 @@ void assert_event(Step step, core::LinkTrace code, SessionHandle session, uint32
 /* open(PHONE) → pair_open → open(PENDING) → HELLO(变成 ALARM) → close 的完整事件序列。 */
 static void test_open_hello_close_event_sequence()
 {
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(fw::trace_install(&record_sink, nullptr, &fixed_clock)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(fw::Result::kOk),
+        static_cast<uint8_t>(fw::trace_install(&record_sink, nullptr, &fixed_clock)));
 
     LinkManager manager{};
     // 空白名单：init 会原样拷入 span 里的每一项，传空 span 才是“没有已授权报警器”。
@@ -90,29 +92,35 @@ static void test_open_hello_close_event_sequence()
 
     Actions actions{};
     // 第一部手机先占 PHONE 角色（无 PHONE 时未知设备即为 PHONE）。
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Role::kPhone),
-                            static_cast<uint8_t>(manager.on_open(kPhoneHandle, make_addr(0x01U), kNowMs, actions)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Role::kPhone),
+        static_cast<uint8_t>(manager.on_open(kPhoneHandle, make_addr(0x01U), kNowMs, actions)));
     manager.pair_open(kNowMs);
     // 配对窗口内第二台设备等待 HELLO。
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Role::kPending),
-                            static_cast<uint8_t>(manager.on_open(kAlarmHandle, make_addr(0x02U), kNowMs, actions)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(Role::kPending),
+        static_cast<uint8_t>(manager.on_open(kAlarmHandle, make_addr(0x02U), kNowMs, actions)));
     // HELLO 让 PENDING 变成 ALARM，并进入白名单。
     TEST_ASSERT_EQUAL_UINT8(
         static_cast<uint8_t>(Role::kAlarm),
-        static_cast<uint8_t>(manager.on_frame(kAlarmHandle, core::kHelloSender, core::kHelloMsgId, kNowMs, actions)));
+        static_cast<uint8_t>(manager.on_frame(kAlarmHandle, core::kHelloSender, core::kHelloMsgId,
+                                              kNowMs, actions)));
     manager.on_close(kAlarmHandle);
 
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(Step::kCount), static_cast<uint32_t>(s_count));
-    assert_event(Step::kOpenPhone, LinkTrace::kOpen, kPhoneHandle, static_cast<uint32_t>(Role::kPhone),
+    assert_event(Step::kOpenPhone, LinkTrace::kOpen, kPhoneHandle,
+                 static_cast<uint32_t>(Role::kPhone),
                  static_cast<uint32_t>(LinkReason::kFirstPhone));
     // 实现把窗口长度放在 a（b 未用），见 LinkManager.cpp 的 pair_open。
     assert_event(Step::kPairOpen, LinkTrace::kPairOpen, 0U, core::kPairWindowMs, 0U);
-    assert_event(Step::kOpenPending, LinkTrace::kOpen, kAlarmHandle, static_cast<uint32_t>(Role::kPending),
+    assert_event(Step::kOpenPending, LinkTrace::kOpen, kAlarmHandle,
+                 static_cast<uint32_t>(Role::kPending),
                  static_cast<uint32_t>(LinkReason::kPendingHello));
     assert_event(Step::kWhitelistAdd, LinkTrace::kWhitelistAdd, kAlarmHandle, 1U, 0U);
-    assert_event(Step::kRoleChange, LinkTrace::kRoleChange, kAlarmHandle, static_cast<uint32_t>(Role::kPending),
-                 static_cast<uint32_t>(Role::kAlarm));
-    assert_event(Step::kClose, LinkTrace::kClose, kAlarmHandle, static_cast<uint32_t>(Role::kAlarm), 0U);
+    assert_event(Step::kRoleChange, LinkTrace::kRoleChange, kAlarmHandle,
+                 static_cast<uint32_t>(Role::kPending), static_cast<uint32_t>(Role::kAlarm));
+    assert_event(Step::kClose, LinkTrace::kClose, kAlarmHandle, static_cast<uint32_t>(Role::kAlarm),
+                 0U);
 }
 
 /* Unity 在两个用例之间调用；本文件只有一个用例，清空记录即可。 */

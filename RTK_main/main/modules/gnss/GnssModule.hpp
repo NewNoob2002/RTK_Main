@@ -138,19 +138,26 @@ private:
         {
             owner_ = owner;
         }
-        void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> frame) noexcept override;
-        void on_reject(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix,
-                       demux::RejectCause cause, bool last) noexcept override;
+        void on_frame(const demux::Decoder &decoder, uint8_t index,
+                      std::span<const uint8_t> frame) noexcept override;
+        void on_reject(const demux::Decoder &decoder, uint8_t index,
+                       std::span<const uint8_t> prefix, demux::RejectCause cause,
+                       bool last) noexcept override;
 
     private:
         GnssModule *owner_ = nullptr;
     };
-    static_assert(std::is_trivially_destructible_v<DemuxSink>, "DemuxSink must be trivially destructible");
-    static_assert(std::is_trivially_destructible_v<demux::Demux>, "Demux must be trivially destructible");
-    static_assert(std::is_trivially_destructible_v<::gnss::NmeaParser>, "NmeaParser must be trivially destructible");
-    static_assert(std::is_trivially_destructible_v<::gnss::Controller>, "Controller must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<DemuxSink>,
+                  "DemuxSink must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<demux::Demux>,
+                  "Demux must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<::gnss::NmeaParser>,
+                  "NmeaParser must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<::gnss::Controller>,
+                  "Controller must be trivially destructible");
 
-    static_assert(std::is_trivially_destructible_v<::gnss::RoverConfig>, "RoverConfig must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<::gnss::RoverConfig>,
+                  "RoverConfig must be trivially destructible");
     ::gnss::RoverConfig &ensure_rover_cfg() noexcept
     {
         if (!rover_cfg_.has_value()) {
@@ -165,8 +172,8 @@ private:
     }
 
     void handle_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept;
-    void handle_reject(const demux::Decoder &decoder, std::span<const uint8_t> prefix, demux::RejectCause cause,
-                       bool last) noexcept;
+    void handle_reject(const demux::Decoder &decoder, std::span<const uint8_t> prefix,
+                       demux::RejectCause cause, bool last) noexcept;
     void poll_controller(uint32_t now_ms) noexcept;
     /**
      * @brief  读回期间把一帧转成一行文本追加到 gnss_readback_text（ADR-0012 §2.7）
@@ -174,7 +181,8 @@ private:
      * @param  frame: 整帧字节
      * @note   仅 kIo 调用；命中即计数，容量不足时丢弃该行并置 truncated。
      */
-    void append_readback_line(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept;
+    void append_readback_line(const demux::Decoder &decoder,
+                              std::span<const uint8_t> frame) noexcept;
     /**
      * @brief  发起一次配置读回，并把被拒原因就地发布
      * @param  now_ms: 当前时间
@@ -191,7 +199,8 @@ private:
      * @param  busy: 是否因状态不对被拒
      * @note   仅 kIo 调用；文本本体已在 gnss_readback_text 中。
      */
-    void publish_readback(uint16_t lines, uint16_t len, bool supported, bool truncated, bool busy) noexcept;
+    void publish_readback(uint16_t lines, uint16_t len, bool supported, bool truncated,
+                          bool busy) noexcept;
     /**
      * @brief  把 RTCM 管道中的待发字节写到 GNSS UART
      * @retval true 管道仍有积压

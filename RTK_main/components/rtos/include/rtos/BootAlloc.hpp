@@ -58,7 +58,8 @@ public:
     [[nodiscard]] fw::Status open(const BootAllocatorOps *ops = nullptr) noexcept;
 
     /** 在 OPEN 态分配一块对齐的内部 8-bit 字节数组并清零；非 OPEN 返回 kInvalidState。 */
-    [[nodiscard]] fw::Status allocate(const char *tag, size_t bytes, size_t align, void *&out_ptr) noexcept;
+    [[nodiscard]] fw::Status allocate(const char *tag, size_t bytes, size_t align,
+                                      void *&out_ptr) noexcept;
 
     /** 类型安全数组分配包装；失败时保持 out 为空 span。 */
     template <typename T>

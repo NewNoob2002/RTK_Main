@@ -24,7 +24,8 @@ std::string with_checksum(const std::string &body)
 gnss::NmeaResult feed(gnss::NmeaParser &parser, const std::string &body, uint32_t now_ms)
 {
     const std::string sentence = with_checksum(body);
-    return parser.feed(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(sentence.data()), sentence.size()),
+    return parser.feed(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(sentence.data()),
+                                                sentence.size()),
                        now_ms);
 }
 
@@ -42,7 +43,8 @@ void tearDown() {}
 static void test_gga_fields()
 {
     gnss::NmeaParser parser;
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kFix), static_cast<int>(feed(parser, kGga, 1000)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kFix),
+                      static_cast<int>(feed(parser, kGga, 1000)));
 
     const gnss::Fix &fix = parser.fix();
     TEST_ASSERT_TRUE(fix.valid);
@@ -65,7 +67,8 @@ static void test_gga_south_west_and_invalid_quality()
     gnss::NmeaParser parser;
     TEST_ASSERT_EQUAL(
         static_cast<int>(gnss::NmeaResult::kFix),
-        static_cast<int>(feed(parser, "GNGGA,120000.00,3352.00000,S,15112.00000,W,0,3,1.0,5.0,M,0.0,M,,", 7)));
+        static_cast<int>(
+            feed(parser, "GNGGA,120000.00,3352.00000,S,15112.00000,W,0,3,1.0,5.0,M,0.0,M,,", 7)));
     TEST_ASSERT_FALSE(parser.fix().valid);
     TEST_ASSERT_EQUAL_INT64(-33866666667LL, parser.fix().lat_e9);
     TEST_ASSERT_EQUAL_INT64(-151200000000LL, parser.fix().lon_e9);
@@ -74,7 +77,8 @@ static void test_gga_south_west_and_invalid_quality()
 static void test_rmc_date_speed_course()
 {
     gnss::NmeaParser parser;
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kAux), static_cast<int>(feed(parser, kRmc, 2000)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kAux),
+                      static_cast<int>(feed(parser, kRmc, 2000)));
     const gnss::Fix &fix = parser.fix();
     TEST_ASSERT_EQUAL_UINT16(2025, fix.utc.year);
     TEST_ASSERT_EQUAL_UINT8(1, fix.utc.month);
@@ -87,18 +91,23 @@ static void test_rmc_date_speed_course()
 static void test_gsv_round_published_on_next_gga()
 {
     gnss::NmeaParser parser;
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kSatsPart), static_cast<int>(feed(parser, kGsv1, 10)));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kSatsPart), static_cast<int>(feed(parser, kGsv2, 10)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kSatsPart),
+                      static_cast<int>(feed(parser, kGsv1, 10)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kSatsPart),
+                      static_cast<int>(feed(parser, kGsv2, 10)));
     TEST_ASSERT_EQUAL_UINT8(0, parser.sats().count); // 尚未到 GGA，不发布
 
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kSatsReady), static_cast<int>(feed(parser, kGga, 20)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kSatsReady),
+                      static_cast<int>(feed(parser, kGga, 20)));
     TEST_ASSERT_EQUAL_UINT8(8, parser.sats().count);
     TEST_ASSERT_EQUAL_UINT32(20, parser.sats().update_ms);
     TEST_ASSERT_EQUAL_UINT32(20, parser.fix().update_ms); // 同一 GGA 也更新了定位
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Constellation::kGps), static_cast<int>(parser.sats().sats[0].system));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Constellation::kGps),
+                      static_cast<int>(parser.sats().sats[0].system));
 
     // 发布后 pending 清空：再来一条 GGA 不再发布卫星。
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kFix), static_cast<int>(feed(parser, kGga, 30)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kFix),
+                      static_cast<int>(feed(parser, kGga, 30)));
     TEST_ASSERT_EQUAL_UINT32(30, parser.fix().update_ms);
     TEST_ASSERT_EQUAL_UINT32(20, parser.sats().update_ms);
 }
@@ -112,12 +121,14 @@ static void test_gsa_used_marks_merged()
     TEST_ASSERT_EQUAL_UINT16(180, parser.fix().pdop_x100);
     TEST_ASSERT_EQUAL_UINT16(90, parser.fix().hdop_x100);
     TEST_ASSERT_EQUAL_UINT16(150, parser.fix().vdop_x100);
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kSatsReady), static_cast<int>(feed(parser, kGga, 7)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kSatsReady),
+                      static_cast<int>(feed(parser, kGga, 7)));
 
     const gnss::SatTable &sats = parser.sats();
     TEST_ASSERT_EQUAL_UINT8(8, sats.count);
     for (size_t i = 0; i < sats.count; ++i) {
-        const bool expected = sats.sats[i].prn == 1 || sats.sats[i].prn == 2 || sats.sats[i].prn == 3;
+        const bool expected =
+            sats.sats[i].prn == 1 || sats.sats[i].prn == 2 || sats.sats[i].prn == 3;
         TEST_ASSERT_EQUAL(expected, sats.sats[i].used);
     }
 }
@@ -126,7 +137,8 @@ static void test_half_round_not_published()
 {
     gnss::NmeaParser parser;
     (void)feed(parser, kGsv1, 10); // 1/2，缺第 2 条
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kFix), static_cast<int>(feed(parser, kGga, 20)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kFix),
+                      static_cast<int>(feed(parser, kGga, 20)));
     TEST_ASSERT_EQUAL_UINT8(0, parser.sats().count);
 }
 
@@ -137,7 +149,8 @@ static void test_malformed_keeps_state()
     const gnss::Fix before = parser.fix();
     TEST_ASSERT_EQUAL(
         static_cast<int>(gnss::NmeaResult::kMalformed),
-        static_cast<int>(feed(parser, "GNGGA,001043.00,4404.14036,N,12118.85961,E,x,12,0.98,1.0,M,0.0,M,,", 200)));
+        static_cast<int>(feed(
+            parser, "GNGGA,001043.00,4404.14036,N,12118.85961,E,x,12,0.98,1.0,M,0.0,M,,", 200)));
     TEST_ASSERT_EQUAL_UINT32(before.update_ms, parser.fix().update_ms);
     TEST_ASSERT_EQUAL_INT32(before.alt_mm, parser.fix().alt_mm);
     TEST_ASSERT_EQUAL_UINT32(1, parser.stats().malformed);
@@ -168,7 +181,8 @@ static void test_talker_constellation_mapping()
                       static_cast<int>(feed(parser, "GLGSV,1,1,01,65,40,083,46", 1)));
     (void)feed(parser, kGga, 2);
     TEST_ASSERT_EQUAL_UINT8(1, parser.sats().count);
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Constellation::kGlonass), static_cast<int>(parser.sats().sats[0].system));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Constellation::kGlonass),
+                      static_cast<int>(parser.sats().sats[0].system));
 }
 
 int main(int, char **)

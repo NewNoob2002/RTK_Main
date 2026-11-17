@@ -18,10 +18,12 @@ namespace demux {
 template <const Decoder &...Ds> class StaticDemux {
 public:
     static constexpr std::size_t kCount = sizeof...(Ds);
-    static_assert(kCount >= 1 && kCount <= kMaxDecoders, "StaticDemux: 解码器数量必须在 1..kMaxDecoders");
+    static_assert(kCount >= 1 && kCount <= kMaxDecoders,
+                  "StaticDemux: 解码器数量必须在 1..kMaxDecoders");
     static constexpr std::size_t kBufSize = std::max({Ds.max_frame...});
     static constexpr std::size_t kBufSizeMax = 65535U; // 单缓冲区上限（uint16 长度字段）
-    static_assert(kBufSize >= 1 && kBufSize <= kBufSizeMax, "StaticDemux: max_frame 必须在 1..65535");
+    static_assert(kBufSize >= 1 && kBufSize <= kBufSizeMax,
+                  "StaticDemux: max_frame 必须在 1..65535");
 
     constexpr StaticDemux() noexcept = default;
     ~StaticDemux() = default;
@@ -65,7 +67,8 @@ public:
         // 用模板实参等价性比较身份，而不是 `&D == &Ds`：GCC 在 -fsanitize=undefined 下不把不同对象的地址比较
         // 视为常量表达式（H3 报告 §5 复现），模板实参比较在任何模式下都是编译期常量。
         constexpr std::array<bool, kCount> kMatch{std::is_same_v<Tag<D>, Tag<Ds>>...};
-        static_assert((std::is_same_v<Tag<D>, Tag<Ds>> || ...), "StaticDemux::index_of: 解码器不在本实例中");
+        static_assert((std::is_same_v<Tag<D>, Tag<Ds>> || ...),
+                      "StaticDemux::index_of: 解码器不在本实例中");
         for (std::size_t i = 0; i < kCount; ++i) {
             if (kMatch[i]) {
                 return static_cast<uint8_t>(i); // i < kCount ≤ 8

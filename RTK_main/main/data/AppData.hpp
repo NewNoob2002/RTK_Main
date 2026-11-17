@@ -58,7 +58,8 @@ public:
     }
 
 private:
-    static_assert(std::is_trivially_destructible_v<fw::Slot<T>>, "Slot must be trivially destructible");
+    static_assert(std::is_trivially_destructible_v<fw::Slot<T>>,
+                  "Slot must be trivially destructible");
     std::optional<fw::Slot<T>> slot_{};
 };
 
@@ -68,7 +69,8 @@ struct DataCenter {
     void init() noexcept;
 #if RTK_GNSS_ENABLED
     /** 启动前绑定外供 GNSS App 环形区与最新帧缓存（须在 init() 之后调用）。 */
-    [[nodiscard]] fw::Status init_gnss_buffers(std::span<uint8_t> app_ring_buf, std::span<uint8_t> latest_buf) noexcept;
+    [[nodiscard]] fw::Status init_gnss_buffers(std::span<uint8_t> app_ring_buf,
+                                               std::span<uint8_t> latest_buf) noexcept;
     /** 仅启动绑定回滚、消费者尚未启动时调用；清除全部 GNSS 外供引用，非 ISR。 */
     void unbind_gnss_buffers() noexcept;
 #endif

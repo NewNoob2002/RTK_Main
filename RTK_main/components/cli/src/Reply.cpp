@@ -123,7 +123,8 @@ void print_usage(const char *group, std::span<const Verb> verbs) noexcept
     }
 }
 
-int dispatch(std::span<const Verb> verbs, void *ctx, int argc, char **argv, const char *default_verb) noexcept
+int dispatch(std::span<const Verb> verbs, void *ctx, int argc, char **argv,
+             const char *default_verb) noexcept
 {
     const std::span<char *const> args = arg_span(argc, argv);
     const char *group = (args.size() > 0U) ? args[0] : ""; // 组名只用于诊断输出

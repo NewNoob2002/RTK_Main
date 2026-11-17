@@ -55,7 +55,8 @@ constexpr LogLevel clamp_level(LogLevel level) noexcept
  * @param  args: 参数表
  * @retval 正文字节数（≤ kLogTextMax）；格式化失败为 0
  */
-std::size_t format_text(std::array<char, kLogTextMax + 1U> &buf, const char *fmt, va_list args) noexcept
+std::size_t format_text(std::array<char, kLogTextMax + 1U> &buf, const char *fmt,
+                        va_list args) noexcept
 {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     const int n = std::vsnprintf(buf.data(), buf.size(), fmt, args);
@@ -102,7 +103,8 @@ void log_set_cat_level(TraceCat cat, LogLevel level) noexcept
         return;
     }
     const uint32_t shift = index * kLogLevelBits;
-    const uint32_t field = (static_cast<uint32_t>(clamp_level(level)) & kLogLevelFieldMask) << shift;
+    const uint32_t field = (static_cast<uint32_t>(clamp_level(level)) & kLogLevelFieldMask)
+                           << shift;
     uint32_t cur = s_levels.load(std::memory_order_relaxed);
     // CAS 循环：多个任务同时改不同类别时互不覆盖。
     while (!s_levels.compare_exchange_weak(cur, (cur & ~(kLogLevelFieldMask << shift)) | field,
@@ -116,7 +118,8 @@ LogLevel log_cat_level(TraceCat cat) noexcept
     if (index >= static_cast<uint32_t>(TraceCat::kCount)) {
         return LogLevel::kError;
     }
-    const uint32_t field = (s_levels.load(std::memory_order_relaxed) >> (index * kLogLevelBits)) & kLogLevelFieldMask;
+    const uint32_t field =
+        (s_levels.load(std::memory_order_relaxed) >> (index * kLogLevelBits)) & kLogLevelFieldMask;
     return static_cast<LogLevel>(field);
 }
 
@@ -124,7 +127,8 @@ void log_set_levels(uint32_t packed) noexcept
 {
     uint32_t clamped = 0U;
     for (uint32_t i = 0U; i < static_cast<uint32_t>(TraceCat::kCount); ++i) {
-        const auto level = static_cast<LogLevel>((packed >> (i * kLogLevelBits)) & kLogLevelFieldMask);
+        const auto level =
+            static_cast<LogLevel>((packed >> (i * kLogLevelBits)) & kLogLevelFieldMask);
         clamped |= static_cast<uint32_t>(clamp_level(level)) << (i * kLogLevelBits);
     }
     s_levels.store(clamped, std::memory_order_relaxed);
@@ -137,7 +141,8 @@ uint32_t log_levels() noexcept
 
 bool log_enabled(LogLevel level, TraceCat cat) noexcept
 {
-    if ((level > kLogMaxLevel) || (static_cast<uint32_t>(cat) >= static_cast<uint32_t>(TraceCat::kCount))) {
+    if ((level > kLogMaxLevel) ||
+        (static_cast<uint32_t>(cat) >= static_cast<uint32_t>(TraceCat::kCount))) {
         return false;
     }
     // 与追踪掩码无关：只看该类别的日志级别（kError 是最低可设级别，因此错误总会记录）。
@@ -241,7 +246,8 @@ std::string_view log_cat_name(TraceCat cat) noexcept
     return (index < kCatNames.size()) ? kCatNames[index] : std::string_view("?");
 }
 
-std::size_t log_format_line(std::span<char> out, const LogHeader &hdr, std::span<const uint8_t> text) noexcept
+std::size_t log_format_line(std::span<char> out, const LogHeader &hdr,
+                            std::span<const uint8_t> text) noexcept
 {
     constexpr std::string_view kCrlf = "\r\n";
     if (out.size() <= kCrlf.size()) {
@@ -255,10 +261,11 @@ std::size_t log_format_line(std::span<char> out, const LogHeader &hdr, std::span
     // 预留 CRLF：前缀与正文最多写到 out.size() - 2。
     const std::size_t room = out.size() - kCrlf.size();
     // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg)
-    const int n = tagged ? std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] [%.*s] %c: ", sec, ms,
-                                         static_cast<int>(cat.size()), cat.data(), log_level_char(hdr.level))
-                         : std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] [%.*s] ", sec, ms,
-                                         static_cast<int>(cat.size()), cat.data());
+    const int n =
+        tagged ? std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] [%.*s] %c: ", sec, ms,
+                               static_cast<int>(cat.size()), cat.data(), log_level_char(hdr.level))
+               : std::snprintf(out.data(), room + 1U, "[%4lu.%03lu] [%.*s] ", sec, ms,
+                               static_cast<int>(cat.size()), cat.data());
     // NOLINTEND(cppcoreguidelines-pro-type-vararg)
     std::size_t pos = (n < 0) ? 0U : std::min(static_cast<std::size_t>(n), room);
     const std::size_t copy = std::min(text.size(), room - pos);
@@ -274,11 +281,16 @@ std::size_t log_format_line(std::span<char> out, const LogHeader &hdr, std::span
     return pos;
 }
 
-static_assert(FW_LOG_CAT_SYS == static_cast<int>(TraceCat::kSys), "LogC.h category values must match TraceCat");
-static_assert(FW_LOG_CAT_GNSS == static_cast<int>(TraceCat::kGnss), "LogC.h category values must match TraceCat");
-static_assert(FW_LOG_CAT_LINK == static_cast<int>(TraceCat::kLink), "LogC.h category values must match TraceCat");
-static_assert(FW_LOG_LEVEL_DEBUG == static_cast<int>(LogLevel::kDebug), "LogC.h level values must match LogLevel");
-static_assert(FW_LOG_LEVEL_ERROR == static_cast<int>(LogLevel::kError), "LogC.h level values must match LogLevel");
+static_assert(FW_LOG_CAT_SYS == static_cast<int>(TraceCat::kSys),
+              "LogC.h category values must match TraceCat");
+static_assert(FW_LOG_CAT_GNSS == static_cast<int>(TraceCat::kGnss),
+              "LogC.h category values must match TraceCat");
+static_assert(FW_LOG_CAT_LINK == static_cast<int>(TraceCat::kLink),
+              "LogC.h category values must match TraceCat");
+static_assert(FW_LOG_LEVEL_DEBUG == static_cast<int>(LogLevel::kDebug),
+              "LogC.h level values must match LogLevel");
+static_assert(FW_LOG_LEVEL_ERROR == static_cast<int>(LogLevel::kError),
+              "LogC.h level values must match LogLevel");
 
 LogStats log_stats() noexcept
 {

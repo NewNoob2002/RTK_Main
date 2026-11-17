@@ -21,7 +21,8 @@ void tearDown(void) {}
 
 namespace {
 
-constexpr size_t kRingBytes = fw::kLogHeaderBytes + fw::kLogTextMax; // 172：恰好放 3 条 40 字节 payload 记录
+constexpr size_t kRingBytes =
+    fw::kLogHeaderBytes + fw::kLogTextMax; // 172：恰好放 3 条 40 字节 payload 记录
 // 全局环要能容纳一条最长 hex 记录（12 + 256 = 268），否则 tlog_hex 的记录会被丢弃。
 constexpr size_t kGlobalRingBytes = fw::kLogHeaderBytes + fw::kLogHexMax;
 constexpr size_t kPayloadLen = 40U;
@@ -112,8 +113,9 @@ void test_log_install_validation_and_once()
                             static_cast<uint8_t>(fw::log_install(&fw::LogRing::sink, &s_ring)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kInvalidArg),
                             static_cast<uint8_t>(fw::log_install(nullptr, &s_ring)));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
-                            static_cast<uint8_t>(fw::trace_install(&trace_sink, nullptr, &test_clock)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(fw::Result::kOk),
+        static_cast<uint8_t>(fw::trace_install(&trace_sink, nullptr, &test_clock)));
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
                             static_cast<uint8_t>(fw::log_install(&fw::LogRing::sink, &s_ring)));
     // 重复安装：sink 与 ctx 只能安装一次，避免运行期两条通道写不同环。
@@ -149,13 +151,16 @@ void test_tlog_text_record_fields()
     std::array<uint8_t, fw::kLogTextMax> out{};
     size_t copied = 0U;
     TEST_ASSERT_TRUE(s_ring.pop(hdr, out, copied));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::TraceCat::kGnss), static_cast<uint8_t>(hdr.cat));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::LogKind::kText), static_cast<uint8_t>(hdr.kind));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::TraceCat::kGnss),
+                            static_cast<uint8_t>(hdr.cat));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::LogKind::kText),
+                            static_cast<uint8_t>(hdr.kind));
     TEST_ASSERT_EQUAL_UINT32(kClockStep, hdr.t_ms - before);
     TEST_ASSERT_EQUAL_UINT32(hdr.len, hdr.total);
     // 期望文本与上面那次调用一一对应（kBytesMarker == 72）。
     constexpr std::string_view kExpected = "NMEA GNGGA, 72 bytes";
-    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kExpected.size()), static_cast<uint32_t>(copied));
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kExpected.size()),
+                             static_cast<uint32_t>(copied));
     TEST_ASSERT_EQUAL_INT(0, std::memcmp(kExpected.data(), out.data(), kExpected.size()));
     TEST_ASSERT_EQUAL_UINT32(0U, s_ring.take_dropped());
 }
@@ -172,7 +177,8 @@ void test_tlog_truncates_with_ellipsis()
     std::array<uint8_t, fw::kLogTextMax> out{};
     size_t copied = 0U;
     TEST_ASSERT_TRUE(s_ring.pop(hdr, out, copied));
-    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(fw::kLogTextMax), static_cast<uint32_t>(hdr.len));
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(fw::kLogTextMax),
+                             static_cast<uint32_t>(hdr.len));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(fw::kLogTextMax), static_cast<uint32_t>(copied));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(fw::kLogTextMax), hdr.total);
     TEST_ASSERT_EQUAL_CHAR('.', static_cast<char>(out[copied - 1U]));
@@ -205,7 +211,8 @@ void test_tlog_hex_two_level_mask()
     std::array<uint8_t, fw::kLogHexMax> out{};
     size_t copied = 0U;
     TEST_ASSERT_TRUE(s_ring.pop(hdr, out, copied));
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::LogKind::kHex), static_cast<uint8_t>(hdr.kind));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::LogKind::kHex),
+                            static_cast<uint8_t>(hdr.kind));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(fw::kLogHexMax), static_cast<uint32_t>(hdr.len));
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kHexBytes), hdr.total);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(fw::kLogHexMax), static_cast<uint32_t>(copied));
@@ -291,7 +298,8 @@ void test_log_ring_full_drops_new_and_keeps_order()
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(i), out[0]);
     }
     TEST_ASSERT_FALSE(ring.pop(hdr, out, copied));
-    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kRecordsFit * kRecordBytes), ring.stats().max_used);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kRecordsFit * kRecordBytes),
+                             ring.stats().max_used);
 }
 
 void test_log_ring_wraps_across_end()
@@ -314,13 +322,15 @@ void test_log_ring_wraps_across_end()
 
     const auto wrapped = make_payload(7U);
     TEST_ASSERT_TRUE(ring.push(make_header(4U), wrapped));
-    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kRecordsFit * kRecordBytes), static_cast<uint32_t>(ring.used()));
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kRecordsFit * kRecordBytes),
+                             static_cast<uint32_t>(ring.used()));
     for (uint32_t i = 0U; i < kRecordsFit; ++i) {
         TEST_ASSERT_TRUE(ring.pop(hdr, out, copied));
         TEST_ASSERT_EQUAL_UINT32(i + 2U, hdr.t_ms);
         TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(kPayloadLen), static_cast<uint32_t>(copied));
         TEST_ASSERT_EQUAL_UINT8(seeds[i], out[0]);
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(seeds[i] + kPayloadLen - 1U), out[copied - 1U]);
+        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(seeds[i] + kPayloadLen - 1U),
+                                out[copied - 1U]);
     }
     TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(ring.used()));
 }
@@ -360,7 +370,8 @@ void test_log_ring_uses_injected_lock()
     ops.unlock = &spy_unlock;
     static std::array<uint8_t, kRingBytes> storage{};
     fw::LogRing ring{};
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk), static_cast<uint8_t>(ring.init(storage, ops)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::Result::kOk),
+                            static_cast<uint8_t>(ring.init(storage, ops)));
     const auto payload = make_payload(5U);
     TEST_ASSERT_TRUE(ring.push(make_header(1U), payload));
     uint32_t t_ms = 0U;
@@ -398,7 +409,8 @@ void test_log_ring_sink_receives_installed_context()
     size_t copied = 0U;
     TEST_ASSERT_TRUE(s_ring.pop(got, out, copied));
     TEST_ASSERT_EQUAL_UINT32(kTimestampMarker, got.t_ms);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::LogKind::kHex), static_cast<uint8_t>(got.kind));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(fw::LogKind::kHex),
+                            static_cast<uint8_t>(got.kind));
     TEST_ASSERT_EQUAL_UINT32(8U, static_cast<uint32_t>(copied));
     TEST_ASSERT_EQUAL_UINT8(8U, out[7]);
 }

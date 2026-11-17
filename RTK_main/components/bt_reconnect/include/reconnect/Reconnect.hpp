@@ -50,14 +50,16 @@ struct Action {
 
 /** 重连参数；configure() 会校验范围，非法值整组拒绝。 */
 struct Config {
-    uint32_t fast_window_ms = kDefFastWindowMs;         // 从 start 或掉线起算的快速重试窗口
-    uint32_t fast_retry_ms = kDefFastRetryMs;           // 快速窗口内的固定间隔
-    uint32_t backoff_min_ms = kDefBackoffMinMs;         // 窗口外退避起点
-    uint32_t backoff_max_ms = kDefBackoffMaxMs;         // 退避上限（翻倍直到上限）
-    uint8_t jitter_pct = kDefJitterPct;                 // 抖动 ±jitter_pct%，0 = 不抖动；> kMaxJitterPct 视为非法
-    uint32_t stable_online_ms = kDefStableOnlineMs;     // 在线满该时长才复位退避
-    uint8_t sdp_after_failures = kDefSdpAfterFailures;  // 有缓存 SCN 时，连续 connect 失败达到该次数才重新 SDP；0 非法
-    uint32_t attempt_timeout_ms = kDefAttemptTimeoutMs; // SDP 或 connect 发出后无结果的超时，按失败处理
+    uint32_t fast_window_ms = kDefFastWindowMs; // 从 start 或掉线起算的快速重试窗口
+    uint32_t fast_retry_ms = kDefFastRetryMs;   // 快速窗口内的固定间隔
+    uint32_t backoff_min_ms = kDefBackoffMinMs; // 窗口外退避起点
+    uint32_t backoff_max_ms = kDefBackoffMaxMs; // 退避上限（翻倍直到上限）
+    uint8_t jitter_pct = kDefJitterPct; // 抖动 ±jitter_pct%，0 = 不抖动；> kMaxJitterPct 视为非法
+    uint32_t stable_online_ms = kDefStableOnlineMs; // 在线满该时长才复位退避
+    uint8_t sdp_after_failures =
+        kDefSdpAfterFailures; // 有缓存 SCN 时，连续 connect 失败达到该次数才重新 SDP；0 非法
+    uint32_t attempt_timeout_ms =
+        kDefAttemptTimeoutMs; // SDP 或 connect 发出后无结果的超时，按失败处理
 };
 
 /** 累计统计；configure() 不清零，重新 start() 也不清零。 */

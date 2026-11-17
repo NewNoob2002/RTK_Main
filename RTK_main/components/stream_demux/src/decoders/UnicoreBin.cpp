@@ -83,7 +83,8 @@ uint32_t read_u32_le(std::span<const uint8_t> frame, std::size_t from) noexcept
 
     for (std::size_t idx = 0U; idx < kU32Bytes; ++idx) {
         // idx ≤ 3，窄化到 uint32_t 安全；移位量 = idx * 8 ≤ 24，uint32_t 内不溢出。
-        value |= static_cast<uint32_t>(frame[from + idx]) << (static_cast<uint32_t>(idx) * kBitsPerByte);
+        value |= static_cast<uint32_t>(frame[from + idx])
+                 << (static_cast<uint32_t>(idx) * kBitsPerByte);
     }
     return value;
 }
@@ -161,7 +162,11 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
             .hex(verdict.received >> kByteShift, 2U);
         break;
     case Reason::kTooLong:
-        text.literal("length ").decimal(verdict.total).literal(" exceeds ").decimal(kMaxFrame).literal(" bytes");
+        text.literal("length ")
+            .decimal(verdict.total)
+            .literal(" exceeds ")
+            .decimal(kMaxFrame)
+            .literal(" bytes");
         break;
     case Reason::kExtra:
         text.literal("frame longer than the declared ").decimal(verdict.total).literal(" bytes");

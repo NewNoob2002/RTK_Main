@@ -256,7 +256,8 @@ static void fake_dispatch(esp_spp_cb_event_t ev, const esp_spp_cb_param_t *param
     fake_enqueue(&job, sync);
 }
 
-static void fake_dispatch_gap(esp_bt_gap_cb_event_t ev, const esp_bt_gap_cb_param_t *param, bool sync)
+static void fake_dispatch_gap(esp_bt_gap_cb_event_t ev, const esp_bt_gap_cb_param_t *param,
+                              bool sync)
 {
     fake_job_t job;
 
@@ -938,7 +939,8 @@ esp_err_t esp_bt_gap_set_scan_mode(esp_bt_connection_mode_t c_mode, esp_bt_disco
     return ESP_OK;
 }
 
-esp_err_t esp_bt_gap_set_pin(esp_bt_pin_type_t pin_type, uint8_t pin_code_len, esp_bt_pin_code_t pin_code)
+esp_err_t esp_bt_gap_set_pin(esp_bt_pin_type_t pin_type, uint8_t pin_code_len,
+                             esp_bt_pin_code_t pin_code)
 {
     (void)pin_type;
     (void)pin_code_len;
@@ -956,7 +958,8 @@ esp_err_t esp_bt_gap_set_security_param(esp_bt_sp_param_t param_type, void *valu
     return ESP_OK;
 }
 
-esp_err_t esp_bt_gap_pin_reply(esp_bd_addr_t bd_addr, bool accept, uint8_t pin_code_len, esp_bt_pin_code_t pin_code)
+esp_err_t esp_bt_gap_pin_reply(esp_bd_addr_t bd_addr, bool accept, uint8_t pin_code_len,
+                               esp_bt_pin_code_t pin_code)
 {
     (void)accept;
     (void)pin_code_len;
@@ -1034,7 +1037,8 @@ esp_err_t esp_spp_deinit(void)
     return ESP_OK;
 }
 
-esp_err_t esp_spp_start_srv(esp_spp_sec_t sec_mask, esp_spp_role_t role, uint8_t local_scn, const char *name)
+esp_err_t esp_spp_start_srv(esp_spp_sec_t sec_mask, esp_spp_role_t role, uint8_t local_scn,
+                            const char *name)
 {
     esp_spp_cb_param_t param;
     fake_stage_t mode;

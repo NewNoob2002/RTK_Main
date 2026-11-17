@@ -33,7 +33,8 @@ bool tag_is(std::span<const uint8_t> frame, const char *tag) noexcept
 uint32_t Receiver::output_mask(Model) const noexcept
 {
     // 所有驱动都能输出的四类 NMEA；SATSINFO/HEADING 等厂家报文由驱动追加。
-    return bit(OutputMsg::kGga) | bit(OutputMsg::kRmc) | bit(OutputMsg::kGsa) | bit(OutputMsg::kGsv);
+    return bit(OutputMsg::kGga) | bit(OutputMsg::kRmc) | bit(OutputMsg::kGsa) |
+           bit(OutputMsg::kGsv);
 }
 
 const Receiver &Receiver::for_model(Model) const noexcept
@@ -42,12 +43,14 @@ const Receiver &Receiver::for_model(Model) const noexcept
     return *this;
 }
 
-fw::Status Receiver::build_output(OutputMsg, uint32_t, Model, const OutputPlan &, CmdBuf &) const noexcept
+fw::Status Receiver::build_output(OutputMsg, uint32_t, Model, const OutputPlan &,
+                                  CmdBuf &) const noexcept
 {
     return fw::Status::kNotSupported; // P3b 在驱动里实现
 }
 
-OutputMsg Receiver::classify_frame(const demux::Decoder &, std::span<const uint8_t> frame) const noexcept
+OutputMsg Receiver::classify_frame(const demux::Decoder &,
+                                   std::span<const uint8_t> frame) const noexcept
 {
     // 通用 NMEA：忽略 talker（GP/GN/BD…），只按 3 位语句名归类。
     // 厂家私有帧（#SATSINFOA 等）由此处返回 kNone，由对应驱动覆盖后追加。
@@ -82,8 +85,9 @@ size_t Receiver::frame_tag(const demux::Decoder &dec, std::span<const uint8_t> f
         return detail::tag_with_word(out, "NMEA ", frame, detail::kNmeaTagOffset);
     }
     if (name == "RTCM3" && frame.size() > detail::kRtcmTagOffset + 1U) {
-        const uint32_t msg = (static_cast<uint32_t>(frame[detail::kRtcmTagOffset]) << detail::kRtcmMsgShift) |
-                             (static_cast<uint32_t>(frame[detail::kRtcmTagOffset + 1U]) >> detail::kRtcmMsgShift);
+        const uint32_t msg =
+            (static_cast<uint32_t>(frame[detail::kRtcmTagOffset]) << detail::kRtcmMsgShift) |
+            (static_cast<uint32_t>(frame[detail::kRtcmTagOffset + 1U]) >> detail::kRtcmMsgShift);
         const size_t pos = detail::append_text(out, 0U, "RTCM3 ");
         return detail::append_uint(out, pos, msg & detail::kRtcmMsgMask);
     }
@@ -101,7 +105,8 @@ bool Receiver::build_readback(CmdBuf &) const noexcept
     return false; // P3c
 }
 
-size_t Receiver::match_readback(const demux::Decoder &, std::span<const uint8_t>, std::span<char>) const noexcept
+size_t Receiver::match_readback(const demux::Decoder &, std::span<const uint8_t>,
+                                std::span<char>) const noexcept
 {
     return 0U; // P3c
 }

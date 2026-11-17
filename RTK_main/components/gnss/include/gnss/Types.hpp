@@ -104,7 +104,17 @@ struct Fix {
 };
 
 /** 卫星系统；值与 NMEA 4.11 GSV 的 System ID 无关，仅本工程内部使用。 */
-enum class Constellation : uint8_t { kGps, kGlonass, kGalileo, kBeidou, kQzss, kNavic, kSbas, kOther, kCount };
+enum class Constellation : uint8_t {
+    kGps,
+    kGlonass,
+    kGalileo,
+    kBeidou,
+    kQzss,
+    kNavic,
+    kSbas,
+    kOther,
+    kCount
+};
 
 // 卫星表容量（UM980 全系统可见约 40–60）；63 使 sizeof(SatTable) = 512 = fw::kMaxSlotBytes（Slot 上限）。
 inline constexpr size_t kMaxSats = 63;

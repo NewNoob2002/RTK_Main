@@ -33,7 +33,8 @@ public:
             (trigger_level > storage.size())) {
             return fw::Status::kInvalidArg;
         }
-        handle_ = xStreamBufferCreateStatic(storage.size(), trigger_level, storage.data(), &buffer_);
+        handle_ =
+            xStreamBufferCreateStatic(storage.size(), trigger_level, storage.data(), &buffer_);
         if (handle_ == nullptr) {
             return fw::Status::kNoSpace;
         }

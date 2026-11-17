@@ -30,8 +30,8 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
                                   std::span<const uint8_t> payload) noexcept
 {
     size_t len = 0;
-    const fw::Status status =
-        proto::build_frame(reply.buf, msg_id, proto::sender::kDevice, proto::response_type(req_type), payload, len);
+    const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
+                                                 proto::response_type(req_type), payload, len);
     if (!is_ok(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
@@ -41,7 +41,8 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
 }
 
 /** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
-inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type, uint8_t value) noexcept
+inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type,
+                                   uint8_t value) noexcept
 {
     const std::array<uint8_t, 2> payload = {value, value};
     return reply_build(reply, msg_id, req_type, payload);
@@ -70,7 +71,8 @@ constexpr size_t kPairOfsCount = 0;
 constexpr size_t kPairOfsFirst = 1;
 constexpr size_t kPairQueryMax = kPairOfsFirst + (kMaxAlarms * kAddrLen);
 
-DispatchResult handle_pair(LinkManager &link, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+DispatchResult handle_pair(LinkManager &link, const proto::FrameView &frame, uint32_t now_ms,
+                           Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.empty()) {
@@ -100,7 +102,8 @@ DispatchResult handle_pair(LinkManager &link, const proto::FrameView &frame, uin
         }
     }
     const size_t len = kPairOfsFirst + (count * kAddrLen);
-    return reply_build(reply, frame.msg_id, frame.type, std::span<const uint8_t>(payload).first(len));
+    return reply_build(reply, frame.msg_id, frame.type,
+                       std::span<const uint8_t>(payload).first(len));
 }
 
 } // namespace
@@ -113,7 +116,8 @@ std::span<const Route> PairService::routes() noexcept
     // 与成员函数具有相同访问权限，因此 static_cast 之后可以取到私有引用；
     // 每个 self 都来自 table()（RouteTable{this, ...}），类型必然是本服务实例。
     struct Handlers {
-        static DispatchResult pair(void *self, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult pair(void *self, const proto::FrameView &frame, uint32_t now_ms,
+                                   Reply &reply) noexcept
         {
             auto *const service = static_cast<PairService *>(self);
             return handle_pair(service->link_, frame, now_ms, reply);

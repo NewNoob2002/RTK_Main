@@ -12,7 +12,8 @@
 
 namespace fw {
 
-inline constexpr size_t kCommandArgBytes = 32; // ≥ SN 最大 16 字节 + 0；以后更大的参数走 StoreKey/Pipe
+inline constexpr size_t kCommandArgBytes =
+    32; // ≥ SN 最大 16 字节 + 0；以后更大的参数走 StoreKey/Pipe
 
 /** 模块命令请求；target 为 ModuleId，verb 与 args 的含义由目标模块定义。 */
 struct Command {

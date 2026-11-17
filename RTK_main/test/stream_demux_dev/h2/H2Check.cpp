@@ -43,14 +43,16 @@ void check(bool ok, const char *what, std::size_t detail = 0U)
     }
 }
 
-demux::Step step_of(const demux::Decoder &decoder, std::initializer_list<uint8_t> bytes, std::size_t &need)
+demux::Step step_of(const demux::Decoder &decoder, std::initializer_list<uint8_t> bytes,
+                    std::size_t &need)
 {
     const std::span<const uint8_t> frame(bytes.begin(), bytes.size());
     return decoder.step(frame, need);
 }
 
 /** 逐前缀核对一条完整合法帧。 */
-void check_valid_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame, const char *name)
+void check_valid_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame,
+                       const char *name)
 {
     check(decoder.first_byte(frame[0]), name);
     for (std::size_t len = 1U; len < frame.size(); ++len) {
@@ -71,7 +73,8 @@ void check_valid_frame(const demux::Decoder &decoder, std::span<const uint8_t> f
 }
 
 /** 破坏倒数第 3 个字节（校验值/载荷）后，整段不得再被判为 kFrame。 */
-void check_corrupted(const demux::Decoder &decoder, std::span<const uint8_t> frame, const char *name)
+void check_corrupted(const demux::Decoder &decoder, std::span<const uint8_t> frame,
+                     const char *name)
 {
     std::array<uint8_t, 512> copy{};
     check(frame.size() <= copy.size(), name, frame.size());
@@ -80,11 +83,13 @@ void check_corrupted(const demux::Decoder &decoder, std::span<const uint8_t> fra
     }
     copy[frame.size() - 3U] = static_cast<uint8_t>(copy[frame.size() - 3U] ^ 0x01U);
     std::size_t need = 0U;
-    check(decoder.step(std::span<const uint8_t>(copy.data(), frame.size()), need) != demux::Step::kFrame, name,
-          frame.size());
+    check(decoder.step(std::span<const uint8_t>(copy.data(), frame.size()), need) !=
+              demux::Step::kFrame,
+          name, frame.size());
 }
 
-void check_reject(const demux::Decoder &decoder, std::initializer_list<uint8_t> bytes, const char *name)
+void check_reject(const demux::Decoder &decoder, std::initializer_list<uint8_t> bytes,
+                  const char *name)
 {
     std::size_t need = 0U;
     check(step_of(decoder, bytes, need) == demux::Step::kReject, name, bytes.size());
@@ -92,9 +97,11 @@ void check_reject(const demux::Decoder &decoder, std::initializer_list<uint8_t> 
 
 /** 无长度字段的 ASCII 协议：正文一直合法但永不结束，必须在 max_frame 之内拒绝且从不超限。 */
 /** 超长检查缓冲：须容纳被测解码器 max_frame 加 1 个越界探测字节（hash 解码器上限已由 2048 提到 4096）。 */
-constexpr std::size_t kOverflowBufBytes = std::max(demux::nmea::kMaxFrame, demux::unicore_hash::kMaxFrame) + 1U;
+constexpr std::size_t kOverflowBufBytes =
+    std::max(demux::nmea::kMaxFrame, demux::unicore_hash::kMaxFrame) + 1U;
 
-void check_length_overflow(const demux::Decoder &decoder, uint8_t lead, uint8_t second, const char *name)
+void check_length_overflow(const demux::Decoder &decoder, uint8_t lead, uint8_t second,
+                           const char *name)
 {
     static std::array<uint8_t, kOverflowBufBytes> buf{};
     if (decoder.max_frame >= buf.size()) {
@@ -109,7 +116,8 @@ void check_length_overflow(const demux::Decoder &decoder, uint8_t lead, uint8_t 
     for (std::size_t len = 2U; len <= decoder.max_frame; ++len) {
         buf[len] = 'A';
         std::size_t need = 0U;
-        const demux::Step result = decoder.step(std::span<const uint8_t>(buf.data(), len + 1U), need);
+        const demux::Step result =
+            decoder.step(std::span<const uint8_t>(buf.data(), len + 1U), need);
         if (result == demux::Step::kNeedMore) {
             check(need >= 1U, name, len);
             check((len + 1U + need) <= decoder.max_frame, name, len);
@@ -120,7 +128,8 @@ void check_length_overflow(const demux::Decoder &decoder, uint8_t lead, uint8_t 
             break;
         }
     }
-    check((rejected_at == decoder.max_frame) || ((rejected_at == 0U) && (last_need != 0U)), name, rejected_at);
+    check((rejected_at == decoder.max_frame) || ((rejected_at == 0U) && (last_need != 0U)), name,
+          rejected_at);
 }
 
 void check_crc()
@@ -132,8 +141,10 @@ void check_crc()
     check(demux::crc::crc32_novatel(text) == 0x2DFD2D88U, "crc32_novatel(\"123456789\")");
     check(demux::crc::crc32_novatel({}) == 0U, "crc32_novatel(\"\")");
     // 分段累计：f(b, f(a, init)) == f(a || b, init)。
-    check(demux::crc::crc24q(text.subspan(4U), demux::crc::crc24q(text.first(4U))) == 0xCDE703U, "crc24q 分段");
-    check(demux::crc::crc32_novatel(text.subspan(4U), demux::crc::crc32_novatel(text.first(4U))) == 0x2DFD2D88U,
+    check(demux::crc::crc24q(text.subspan(4U), demux::crc::crc24q(text.first(4U))) == 0xCDE703U,
+          "crc24q 分段");
+    check(demux::crc::crc32_novatel(text.subspan(4U), demux::crc::crc32_novatel(text.first(4U))) ==
+              0x2DFD2D88U,
           "crc32_novatel 分段");
     // 逐字节累计等价于整段。
     uint32_t acc = 0U;
@@ -159,7 +170,8 @@ void check_frame_view()
         check(view->sender == 0x00U, "view sender");
         check(view->type == 0x04U, "view type");
         check(view->payload.size() == 4U, "view payload 长度");
-        check((view->payload.size() == 4U) && (view->payload[0] == 0x01U) && (view->payload[3] == 0x04U),
+        check((view->payload.size() == 4U) && (view->payload[0] == 0x01U) &&
+                  (view->payload[3] == 0x04U),
               "view payload 内容");
     }
 
@@ -183,60 +195,78 @@ int main()
 {
     check_crc();
 
-    check_valid_frame(demux::rtcm3::kDecoder, std::span<const uint8_t>(kRtcm3_1005, sizeof(kRtcm3_1005)), "rtcm3 1005");
-    check_valid_frame(demux::rtcm3::kDecoder, std::span<const uint8_t>(kRtcm3_Empty, sizeof(kRtcm3_Empty)),
-                      "rtcm3 空载荷");
-    check_valid_frame(demux::nmea::kDecoder, std::span<const uint8_t>(kNmea_Gga, sizeof(kNmea_Gga)), "nmea GGA");
-    check_valid_frame(demux::nmea::kDecoder, std::span<const uint8_t>(kNmea_LowerHex, sizeof(kNmea_LowerHex)),
+    check_valid_frame(demux::rtcm3::kDecoder,
+                      std::span<const uint8_t>(kRtcm3_1005, sizeof(kRtcm3_1005)), "rtcm3 1005");
+    check_valid_frame(demux::rtcm3::kDecoder,
+                      std::span<const uint8_t>(kRtcm3_Empty, sizeof(kRtcm3_Empty)), "rtcm3 空载荷");
+    check_valid_frame(demux::nmea::kDecoder, std::span<const uint8_t>(kNmea_Gga, sizeof(kNmea_Gga)),
+                      "nmea GGA");
+    check_valid_frame(demux::nmea::kDecoder,
+                      std::span<const uint8_t>(kNmea_LowerHex, sizeof(kNmea_LowerHex)),
                       "nmea 小写十六进制");
-    check_valid_frame(demux::ubx::kDecoder, std::span<const uint8_t>(kUbxMonVer, sizeof(kUbxMonVer)), "ubx MON-VER");
-    check_valid_frame(demux::ubx::kDecoder, std::span<const uint8_t>(kUbxNavPvt, sizeof(kUbxNavPvt)), "ubx NAV-PVT");
-    check_valid_frame(demux::unicore_bin::kDecoder, std::span<const uint8_t>(kUcbin_Min, sizeof(kUcbin_Min)),
+    check_valid_frame(demux::ubx::kDecoder,
+                      std::span<const uint8_t>(kUbxMonVer, sizeof(kUbxMonVer)), "ubx MON-VER");
+    check_valid_frame(demux::ubx::kDecoder,
+                      std::span<const uint8_t>(kUbxNavPvt, sizeof(kUbxNavPvt)), "ubx NAV-PVT");
+    check_valid_frame(demux::unicore_bin::kDecoder,
+                      std::span<const uint8_t>(kUcbin_Min, sizeof(kUcbin_Min)),
                       "unicore_bin 最小帧");
-    check_valid_frame(demux::unicore_bin::kDecoder, std::span<const uint8_t>(kUcbin_Payload, sizeof(kUcbin_Payload)),
+    check_valid_frame(demux::unicore_bin::kDecoder,
+                      std::span<const uint8_t>(kUcbin_Payload, sizeof(kUcbin_Payload)),
                       "unicore_bin 带载荷");
-    check_valid_frame(demux::unicore_hash::kDecoder, std::span<const uint8_t>(kHash_Crc, sizeof(kHash_Crc)),
-                      "hash CRC 形式");
-    check_valid_frame(demux::unicore_hash::kDecoder, std::span<const uint8_t>(kHash_Xor, sizeof(kHash_Xor)),
-                      "hash XOR 形式");
-    check_valid_frame(proto::demux_frame::kDecoder, std::span<const uint8_t>(kProto_Data, sizeof(kProto_Data)),
-                      "产品帧 数据");
-    check_valid_frame(proto::demux_frame::kDecoder, std::span<const uint8_t>(kProto_Empty, sizeof(kProto_Empty)),
+    check_valid_frame(demux::unicore_hash::kDecoder,
+                      std::span<const uint8_t>(kHash_Crc, sizeof(kHash_Crc)), "hash CRC 形式");
+    check_valid_frame(demux::unicore_hash::kDecoder,
+                      std::span<const uint8_t>(kHash_Xor, sizeof(kHash_Xor)), "hash XOR 形式");
+    check_valid_frame(proto::demux_frame::kDecoder,
+                      std::span<const uint8_t>(kProto_Data, sizeof(kProto_Data)), "产品帧 数据");
+    check_valid_frame(proto::demux_frame::kDecoder,
+                      std::span<const uint8_t>(kProto_Empty, sizeof(kProto_Empty)),
                       "产品帧 空载荷");
-    check_valid_frame(proto::demux_frame::kDecoder, std::span<const uint8_t>(kProto_Max, sizeof(kProto_Max)),
-                      "产品帧 最大载荷");
+    check_valid_frame(proto::demux_frame::kDecoder,
+                      std::span<const uint8_t>(kProto_Max, sizeof(kProto_Max)), "产品帧 最大载荷");
 
-    check_corrupted(demux::rtcm3::kDecoder, std::span<const uint8_t>(kRtcm3_1005, sizeof(kRtcm3_1005)), "rtcm3 坏帧");
-    check_corrupted(demux::nmea::kDecoder, std::span<const uint8_t>(kNmea_Gga, sizeof(kNmea_Gga)), "nmea 坏帧");
-    check_corrupted(demux::ubx::kDecoder, std::span<const uint8_t>(kUbxNavPvt, sizeof(kUbxNavPvt)), "ubx 坏帧");
-    check_corrupted(demux::unicore_bin::kDecoder, std::span<const uint8_t>(kUcbin_Payload, sizeof(kUcbin_Payload)),
+    check_corrupted(demux::rtcm3::kDecoder,
+                    std::span<const uint8_t>(kRtcm3_1005, sizeof(kRtcm3_1005)), "rtcm3 坏帧");
+    check_corrupted(demux::nmea::kDecoder, std::span<const uint8_t>(kNmea_Gga, sizeof(kNmea_Gga)),
+                    "nmea 坏帧");
+    check_corrupted(demux::ubx::kDecoder, std::span<const uint8_t>(kUbxNavPvt, sizeof(kUbxNavPvt)),
+                    "ubx 坏帧");
+    check_corrupted(demux::unicore_bin::kDecoder,
+                    std::span<const uint8_t>(kUcbin_Payload, sizeof(kUcbin_Payload)),
                     "unicore_bin 坏帧");
-    check_corrupted(demux::unicore_hash::kDecoder, std::span<const uint8_t>(kHash_Crc, sizeof(kHash_Crc)), "hash 坏帧");
-    check_corrupted(proto::demux_frame::kDecoder, std::span<const uint8_t>(kProto_Data, sizeof(kProto_Data)),
-                    "产品帧 坏帧");
+    check_corrupted(demux::unicore_hash::kDecoder,
+                    std::span<const uint8_t>(kHash_Crc, sizeof(kHash_Crc)), "hash 坏帧");
+    check_corrupted(proto::demux_frame::kDecoder,
+                    std::span<const uint8_t>(kProto_Data, sizeof(kProto_Data)), "产品帧 坏帧");
 
     // 早拒绝点
     std::size_t need = 0U;
-    check(step_of(demux::rtcm3::kDecoder, {0xD3U}, need) == demux::Step::kNeedMore, "rtcm3 第 1 字节");
+    check(step_of(demux::rtcm3::kDecoder, {0xD3U}, need) == demux::Step::kNeedMore,
+          "rtcm3 第 1 字节");
     check(need == 1U, "rtcm3 第 1 字节 need");
     check_reject(demux::rtcm3::kDecoder, {0xD3U, 0x04U}, "rtcm3 保留位非 0");
-    check(step_of(demux::nmea::kDecoder, {0x24U}, need) == demux::Step::kNeedMore, "nmea 第 1 字节");
+    check(step_of(demux::nmea::kDecoder, {0x24U}, need) == demux::Step::kNeedMore,
+          "nmea 第 1 字节");
     check_reject(demux::nmea::kDecoder, {0x24U, 0x61U}, "nmea 第 2 字节小写");
     check_reject(demux::nmea::kDecoder, {0x24U, 0x47U, 0x01U}, "nmea 正文不可打印");
     check_reject(demux::nmea::kDecoder, {0x24U, 0x47U, 0x24U}, "nmea 正文含 '$'");
     check_reject(demux::ubx::kDecoder, {0xB5U, 0x61U}, "ubx 第 2 字节");
     check_reject(demux::ubx::kDecoder, {0xB5U, 0x62U, 0x01U, 0x02U, 0xFFU, 0xFFU}, "ubx 长度超限");
     check_reject(demux::unicore_bin::kDecoder, {0xAAU, 0x18U}, "unicore_bin 第 2 字节");
-    check_reject(demux::unicore_bin::kDecoder, {0xAAU, 0x44U, 0x18U}, "unicore_bin 第 3 字节（产品帧）");
-    check_reject(demux::unicore_bin::kDecoder, {0xAAU, 0x44U, 0xB5U, 0x00U, 0x01U, 0x00U, 0xFFU, 0xFFU},
-                 "unicore_bin 长度超限");
+    check_reject(demux::unicore_bin::kDecoder, {0xAAU, 0x44U, 0x18U},
+                 "unicore_bin 第 3 字节（产品帧）");
+    check_reject(demux::unicore_bin::kDecoder,
+                 {0xAAU, 0x44U, 0xB5U, 0x00U, 0x01U, 0x00U, 0xFFU, 0xFFU}, "unicore_bin 长度超限");
     check_reject(demux::unicore_hash::kDecoder, {0x23U, 0x61U}, "hash 第 2 字节小写");
     check_reject(demux::unicore_hash::kDecoder, {0x23U, 0x41U, 0x24U}, "hash 正文含 '$'");
     check_reject(demux::unicore_hash::kDecoder, {0x23U, 0x41U, 0x23U}, "hash 正文含 '#'");
-    check_reject(proto::demux_frame::kDecoder, {0xAAU, 0x44U, 0xB5U}, "产品帧 第 3 字节（Unicore）");
+    check_reject(proto::demux_frame::kDecoder, {0xAAU, 0x44U, 0xB5U},
+                 "产品帧 第 3 字节（Unicore）");
     check_reject(proto::demux_frame::kDecoder, {0xAAU, 0x44U, 0x18U, 0x15U}, "产品帧 头长字节");
     check_reject(proto::demux_frame::kDecoder,
-                 {0xAAU, 0x44U, 0x18U, 0x14U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x01U, 0x01U},
+                 {0xAAU, 0x44U, 0x18U, 0x14U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+                  0x00U, 0x01U, 0x01U},
                  "产品帧 payload_len 超限");
 
     // 帧长未知的 ASCII 协议：永不结束时必须在本协议 max_frame 处拒绝

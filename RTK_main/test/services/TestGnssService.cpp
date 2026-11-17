@@ -100,13 +100,15 @@ proto::ParseResult parse_reply_bytes(proto::FrameParser &parser, std::span<const
     return res;
 }
 
-void assert_reply_result(const Reply &reply, uint16_t msg_id, uint8_t expect_type, uint8_t expect_code)
+void assert_reply_result(const Reply &reply, uint16_t msg_id, uint8_t expect_type,
+                         uint8_t expect_code)
 {
     TEST_ASSERT_EQUAL_UINT(proto::kHeaderLen + 2U + proto::kCrcLen, reply.len);
     proto::FrameParser parser;
     proto::FrameView out{};
     const auto res = parse_reply_bytes(parser, reply.bytes(), out);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(proto::ParseResult::kFrame), static_cast<uint8_t>(res));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(proto::ParseResult::kFrame),
+                            static_cast<uint8_t>(res));
     TEST_ASSERT_EQUAL_HEX16(msg_id, out.msg_id);
     TEST_ASSERT_EQUAL_HEX8(proto::sender::kDevice, out.sender);
     TEST_ASSERT_EQUAL_HEX8(expect_type, out.type);
@@ -115,12 +117,14 @@ void assert_reply_result(const Reply &reply, uint16_t msg_id, uint8_t expect_typ
     TEST_ASSERT_EQUAL_HEX8(expect_code, out.payload[1]);
 }
 
-void assert_reply_payload(const Reply &reply, uint16_t msg_id, uint8_t expect_type, std::string_view expect_text)
+void assert_reply_payload(const Reply &reply, uint16_t msg_id, uint8_t expect_type,
+                          std::string_view expect_text)
 {
     proto::FrameParser parser;
     proto::FrameView out{};
     const auto res = parse_reply_bytes(parser, reply.bytes(), out);
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(proto::ParseResult::kFrame), static_cast<uint8_t>(res));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(proto::ParseResult::kFrame),
+                            static_cast<uint8_t>(res));
     TEST_ASSERT_EQUAL_HEX16(msg_id, out.msg_id);
     TEST_ASSERT_EQUAL_HEX8(proto::sender::kDevice, out.sender);
     TEST_ASSERT_EQUAL_HEX8(expect_type, out.type);
@@ -182,28 +186,30 @@ void test_subscription_and_capability_gate()
 
     Reply reply{};
     // ALARM 不可访问 PHONE 路由。
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kDenied),
-                            static_cast<uint8_t>(router.handle(
-                                Role::kAlarm, make_req(kMsgGga, proto::msg_type::kQuery, 1), kTimeBase, reply)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DispatchResult::kDenied),
+        static_cast<uint8_t>(router.handle(
+            Role::kAlarm, make_req(kMsgGga, proto::msg_type::kQuery, 1), kTimeBase, reply)));
 
     // 默认无航向能力，0x1F 订阅被拒绝且不置掩码。
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
-                            static_cast<uint8_t>(router.handle(
-                                Role::kPhone, make_req(kMsgHeading, proto::msg_type::kQuery, 1), kTimeBase, reply)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DispatchResult::kReply),
+        static_cast<uint8_t>(router.handle(
+            Role::kPhone, make_req(kMsgHeading, proto::msg_type::kQuery, 1), kTimeBase, reply)));
     assert_reply_result(reply, kMsgHeading, proto::msg_type::kQueryRes, kResultFail);
     TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
 
     // 接收机上报支持 HEADINGA 后 0x1F 订阅成功；0x05(SATSINFOA) 负周期 -5 -> 5000ms。
     gnss.set_supported_mask(core::services::kGnssDefaultSupportedMask | (1U << 2U));
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(DispatchResult::kReply),
-        static_cast<uint8_t>(
-            router.handle(Role::kPhone, make_req(kMsgHeading, proto::msg_type::kSet, 2), kTimeBase + kStepMs, reply)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
+                            static_cast<uint8_t>(router.handle(
+                                Role::kPhone, make_req(kMsgHeading, proto::msg_type::kSet, 2),
+                                kTimeBase + kStepMs, reply)));
     assert_reply_result(reply, kMsgHeading, proto::msg_type::kSetRes, kResultOk);
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(DispatchResult::kReply),
-        static_cast<uint8_t>(router.handle(Role::kPhone, make_req(kMsgSat, proto::msg_type::kQuery, kSec5),
-                                           kTimeBase + (2U * kStepMs), reply)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
+                            static_cast<uint8_t>(router.handle(
+                                Role::kPhone, make_req(kMsgSat, proto::msg_type::kQuery, kSec5),
+                                kTimeBase + (2U * kStepMs), reply)));
     assert_reply_result(reply, kMsgSat, proto::msg_type::kQueryRes, kResultOk);
     TEST_ASSERT_EQUAL_HEX32((1U << 1U) | (1U << 2U), gnss.active_mask());
     TEST_ASSERT_EQUAL_UINT32(5000U, gnss.period_ms(1U));
@@ -236,25 +242,26 @@ void test_unsupported_type_gate()
 
     Reply reply{};
     // 开机订阅：GSA 不支持 -> 02 02，掩码保持 0。
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
-                            static_cast<uint8_t>(router.handle(
-                                Role::kPhone, make_req(kMsgGsa, proto::msg_type::kQuery, 1), kTimeBase, reply)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DispatchResult::kReply),
+        static_cast<uint8_t>(router.handle(
+            Role::kPhone, make_req(kMsgGsa, proto::msg_type::kQuery, 1), kTimeBase, reply)));
     assert_reply_result(reply, kMsgGsa, proto::msg_type::kQueryRes, kResultFail);
     TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
 
     // 关闭分支也一样被拒（不支持的类型不存在可关的订阅）。
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(DispatchResult::kReply),
-        static_cast<uint8_t>(
-            router.handle(Role::kPhone, make_req(kMsgGsa, proto::msg_type::kQuery, 0), kTimeBase + kStepMs, reply)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
+                            static_cast<uint8_t>(router.handle(
+                                Role::kPhone, make_req(kMsgGsa, proto::msg_type::kQuery, 0),
+                                kTimeBase + kStepMs, reply)));
     assert_reply_result(reply, kMsgGsa, proto::msg_type::kQueryRes, kResultFail);
     TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
 
     // 支持的 GGA 正常订阅。
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(DispatchResult::kReply),
-        static_cast<uint8_t>(router.handle(Role::kPhone, make_req(kMsgGga, proto::msg_type::kSet, 1),
-                                           kTimeBase + (2U * kStepMs), reply)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
+                            static_cast<uint8_t>(router.handle(
+                                Role::kPhone, make_req(kMsgGga, proto::msg_type::kSet, 1),
+                                kTimeBase + (2U * kStepMs), reply)));
     assert_reply_result(reply, kMsgGga, proto::msg_type::kSetRes, kResultOk);
     TEST_ASSERT_EQUAL_HEX32(1U, gnss.active_mask());
 
@@ -281,31 +288,32 @@ void test_interval_zero_stops_and_queries_latest()
     TEST_ASSERT_TRUE(fw::is_ok(router.init(tables)));
 
     Reply reply{};
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
-                            static_cast<uint8_t>(router.handle(
-                                Role::kPhone, make_req(kMsgGga, proto::msg_type::kQuery, 1), kTimeBase, reply)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(DispatchResult::kReply),
+        static_cast<uint8_t>(router.handle(
+            Role::kPhone, make_req(kMsgGga, proto::msg_type::kQuery, 1), kTimeBase, reply)));
     TEST_ASSERT_EQUAL_HEX32(1U << 0U, gnss.active_mask());
 
     // interval=0：先关闭 0x04 订阅，再返回 <=256B 最新原句。
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(DispatchResult::kReply),
-        static_cast<uint8_t>(
-            router.handle(Role::kPhone, make_req(kMsgGga, proto::msg_type::kQuery, 0), kTimeBase + kStepMs, reply)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
+                            static_cast<uint8_t>(router.handle(
+                                Role::kPhone, make_req(kMsgGga, proto::msg_type::kQuery, 0),
+                                kTimeBase + kStepMs, reply)));
     TEST_ASSERT_EQUAL_HEX32(0U, gnss.active_mask());
     assert_reply_payload(reply, kMsgGga, proto::msg_type::kQueryRes, cache.sentences[0]);
 
     // 0x21(GST) 尚无缓存 -> 返回 02 02。
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(DispatchResult::kReply),
-        static_cast<uint8_t>(router.handle(Role::kPhone, make_req(kMsgGst, proto::msg_type::kQuery, 0),
-                                           kTimeBase + (2U * kStepMs), reply)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
+                            static_cast<uint8_t>(router.handle(
+                                Role::kPhone, make_req(kMsgGst, proto::msg_type::kQuery, 0),
+                                kTimeBase + (2U * kStepMs), reply)));
     assert_reply_result(reply, kMsgGst, proto::msg_type::kQueryRes, kResultFail);
 
     // 0x05(SATSINFOA) > 256B -> 返回 02 02 并递增 query_oversize。
-    TEST_ASSERT_EQUAL_UINT8(
-        static_cast<uint8_t>(DispatchResult::kReply),
-        static_cast<uint8_t>(router.handle(Role::kPhone, make_req(kMsgSat, proto::msg_type::kQuery, 0),
-                                           kTimeBase + (3U * kStepMs), reply)));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DispatchResult::kReply),
+                            static_cast<uint8_t>(router.handle(
+                                Role::kPhone, make_req(kMsgSat, proto::msg_type::kQuery, 0),
+                                kTimeBase + (3U * kStepMs), reply)));
     assert_reply_result(reply, kMsgSat, proto::msg_type::kQueryRes, kResultFail);
     TEST_ASSERT_EQUAL_UINT32(1U, gnss.query_oversize_count());
 }

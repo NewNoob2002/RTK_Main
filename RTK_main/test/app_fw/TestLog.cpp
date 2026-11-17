@@ -91,7 +91,8 @@ std::string format(const fw::LogHeader &hdr, std::string_view text)
 {
     std::array<char, fw::kLogLineMax> buf{};
     const size_t n = fw::log_format_line(
-        buf, hdr, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
+        buf, hdr,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
     return std::string(buf.data(), n);
 }
 
@@ -108,10 +109,14 @@ void test_lost_without_sink(void)
 
 void test_install_direct_validation(void)
 {
-    TEST_ASSERT_EQUAL(fw::Result::kInvalidArg, fw::log_install_direct(nullptr, &s_direct, &direct_clock));
-    TEST_ASSERT_EQUAL(fw::Result::kInvalidArg, fw::log_install_direct(&direct_sink, &s_direct, nullptr));
-    TEST_ASSERT_EQUAL(fw::Result::kOk, fw::log_install_direct(&direct_sink, &s_direct, &direct_clock));
-    TEST_ASSERT_EQUAL(fw::Result::kInvalidState, fw::log_install_direct(&direct_sink, &s_direct, &direct_clock));
+    TEST_ASSERT_EQUAL(fw::Result::kInvalidArg,
+                      fw::log_install_direct(nullptr, &s_direct, &direct_clock));
+    TEST_ASSERT_EQUAL(fw::Result::kInvalidArg,
+                      fw::log_install_direct(&direct_sink, &s_direct, nullptr));
+    TEST_ASSERT_EQUAL(fw::Result::kOk,
+                      fw::log_install_direct(&direct_sink, &s_direct, &direct_clock));
+    TEST_ASSERT_EQUAL(fw::Result::kInvalidState,
+                      fw::log_install_direct(&direct_sink, &s_direct, &direct_clock));
 }
 
 /** 默认所有类别 I：E/W/I 输出、D 过滤；与追踪掩码无关。 */
@@ -204,7 +209,8 @@ void test_ring_takes_precedence(void)
     TEST_ASSERT_EQUAL(fw::LogLevel::kWarn, hdr.level);
     TEST_ASSERT_EQUAL(fw::TraceCat::kStore, hdr.cat);
     TEST_ASSERT_EQUAL_UINT32(kTraceClockMs, hdr.t_ms);
-    TEST_ASSERT_EQUAL_STRING("save failed key=sn", std::string(out.begin(), out.begin() + copied).c_str());
+    TEST_ASSERT_EQUAL_STRING("save failed key=sn",
+                             std::string(out.begin(), out.begin() + copied).c_str());
     TEST_ASSERT_TRUE(s_ring.pop(hdr, out, copied));
     TEST_ASSERT_EQUAL(fw::LogLevel::kInfo, hdr.level); // tlog 等价 kInfo
     TEST_ASSERT_EQUAL_STRING("legacy 7", std::string(out.begin(), out.begin() + copied).c_str());
@@ -225,7 +231,8 @@ void test_format_line(void)
     std::array<char, 16U> small{};
     const std::string_view text = "0123456789abcdef";
     const size_t n = fw::log_format_line(
-        small, hdr, std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
+        small, hdr,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
     TEST_ASSERT_EQUAL_size_t(small.size(), n);
     TEST_ASSERT_EQUAL_CHAR('\r', small[n - 2U]);
     TEST_ASSERT_EQUAL_CHAR('\n', small[n - 1U]);

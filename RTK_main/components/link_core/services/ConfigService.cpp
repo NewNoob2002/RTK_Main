@@ -28,8 +28,8 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
                                   std::span<const uint8_t> payload) noexcept
 {
     size_t len = 0;
-    const fw::Status status =
-        proto::build_frame(reply.buf, msg_id, proto::sender::kDevice, proto::response_type(req_type), payload, len);
+    const fw::Status status = proto::build_frame(reply.buf, msg_id, proto::sender::kDevice,
+                                                 proto::response_type(req_type), payload, len);
     if (!is_ok(status)) {
         reply.len = 0;
         return DispatchResult::kNoReply;
@@ -39,7 +39,8 @@ inline DispatchResult reply_build(Reply &reply, uint16_t msg_id, uint8_t req_typ
 }
 
 /** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
-inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type, uint8_t value) noexcept
+inline DispatchResult reply_result(Reply &reply, uint16_t msg_id, uint8_t req_type,
+                                   uint8_t value) noexcept
 {
     const std::array<uint8_t, 2> payload = {value, value};
     return reply_build(reply, msg_id, req_type, payload);
@@ -64,7 +65,8 @@ constexpr uint16_t kIdWorkMode = 0x0007;
 constexpr uint16_t kIdRadio = 0x0014;
 constexpr uint16_t kIdLog = 0x0015;
 
-DispatchResult handle_work_mode(std::span<uint8_t> cfg, const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handle_work_mode(std::span<uint8_t> cfg, const proto::FrameView &frame,
+                                Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kWorkModeSetLen) {
@@ -78,7 +80,8 @@ DispatchResult handle_work_mode(std::span<uint8_t> cfg, const proto::FrameView &
     return reply_build(reply, frame.msg_id, frame.type, cfg);
 }
 
-DispatchResult handle_radio(std::span<uint8_t> cfg, const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handle_radio(std::span<uint8_t> cfg, const proto::FrameView &frame,
+                            Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kRadioSetMinLen) {
@@ -94,7 +97,8 @@ DispatchResult handle_radio(std::span<uint8_t> cfg, const proto::FrameView &fram
     return reply_build(reply, frame.msg_id, frame.type, cfg);
 }
 
-DispatchResult handle_log(std::span<uint8_t> cfg, const proto::FrameView &frame, Reply &reply) noexcept
+DispatchResult handle_log(std::span<uint8_t> cfg, const proto::FrameView &frame,
+                          Reply &reply) noexcept
 {
     if (frame.type == msg_type::kSet) {
         if (frame.payload.size() < kLogLen) {
@@ -147,13 +151,15 @@ std::span<const Route> ConfigService::routes() noexcept
             auto *const service = static_cast<ConfigService *>(self);
             return handle_work_mode(std::span<uint8_t>(service->work_mode_), frame, reply);
         }
-        static DispatchResult radio(void *self, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult radio(void *self, const proto::FrameView &frame, uint32_t now_ms,
+                                    Reply &reply) noexcept
         {
             static_cast<void>(now_ms);
             auto *const service = static_cast<ConfigService *>(self);
             return handle_radio(std::span<uint8_t>(service->radio_), frame, reply);
         }
-        static DispatchResult log(void *self, const proto::FrameView &frame, uint32_t now_ms, Reply &reply) noexcept
+        static DispatchResult log(void *self, const proto::FrameView &frame, uint32_t now_ms,
+                                  Reply &reply) noexcept
         {
             static_cast<void>(now_ms);
             auto *const service = static_cast<ConfigService *>(self);

@@ -26,7 +26,8 @@ int cmd_tmpl_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     const auto sys = app_context().data.system_status.read();
     const auto exec = app_context().data.exec_stats.read();
-    cli::out_printf("tmpl: bt=%s exec_rounds=%" PRIu32 "\n", sys.bt_ready ? "ready" : "down", exec.rounds);
+    cli::out_printf("tmpl: bt=%s exec_rounds=%" PRIu32 "\n", sys.bt_ready ? "ready" : "down",
+                    exec.rounds);
     return 0;
 }
 
@@ -37,7 +38,8 @@ int cmd_tmpl_limit(void * /*ctx*/, int argc, char **argv) noexcept
     }
     const std::span<char *const> args(argv, kLimitArgs);
     uint32_t limit_ms = 0U;
-    if (!cli::parse_u32(args[1], limit_ms) || (limit_ms == 0U) || (limit_ms > kTemplateMaxLimitMs)) {
+    if (!cli::parse_u32(args[1], limit_ms) || (limit_ms == 0U) ||
+        (limit_ms > kTemplateMaxLimitMs)) {
         // 1..60000 转 unsigned 安全。
         return cli::fail("limit 1-%u", static_cast<unsigned>(kTemplateMaxLimitMs));
     }
@@ -66,7 +68,8 @@ int cmd_tmpl(void *ctx, int argc, char **argv) noexcept
 }
 
 constexpr std::array<cli::Cmd, 1U> kTemplateCmds{{
-    {"tmpl", "tmpl <status|limit <ms>>: template module demo", "<status|limit <ms>>", cmd_tmpl, nullptr},
+    {"tmpl", "tmpl <status|limit <ms>>: template module demo", "<status|limit <ms>>", cmd_tmpl,
+     nullptr},
 }};
 } // namespace
 

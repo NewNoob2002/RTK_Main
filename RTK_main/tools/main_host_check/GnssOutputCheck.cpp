@@ -31,7 +31,9 @@ void test_output_plan() noexcept
     using app::data::GnssOutConfig;
     namespace gn = ::gnss;
 
-    const auto idx = [](gn::OutputMsg msg) { return static_cast<size_t>(static_cast<uint8_t>(msg)); };
+    const auto idx = [](gn::OutputMsg msg) {
+        return static_cast<size_t>(static_cast<uint8_t>(msg));
+    };
     const GnssOutConfig def = GnssOutConfig::defaults();
 
     // 默认配置、10 Hz、无 HEADINGA 能力：GGA/RMC/GSA/GST 跟频率，SATSINFOA 5 s，HEADINGA 不下发。
@@ -47,16 +49,19 @@ void test_output_plan() noexcept
     CHECK(plan.rate_hz == 10U);
 
     // 有双天线能力时 HEADINGA 才下发。
-    CHECK(app::data::make_output_plan(def, 10U, true, 2U, gn::cap::kHeading).period_ms[idx(gn::OutputMsg::kHeading)] ==
-          1000U);
+    CHECK(app::data::make_output_plan(def, 10U, true, 2U, gn::cap::kHeading)
+              .period_ms[idx(gn::OutputMsg::kHeading)] == 1000U);
 
     // 关掉 GSV 就是不下发（周期 0）。
-    CHECK(app::data::make_output_plan(def, 1U, false, 1U, 0U).period_ms[idx(gn::OutputMsg::kGsv)] == 0U);
+    CHECK(app::data::make_output_plan(def, 1U, false, 1U, 0U).period_ms[idx(gn::OutputMsg::kGsv)] ==
+          0U);
 
     // 掩码清零的语句不下发。
     GnssOutConfig no_gga = def;
     no_gga.mask = static_cast<uint8_t>(def.mask & ~0x01U);
-    CHECK(app::data::make_output_plan(no_gga, 1U, true, 2U, 0U).period_ms[idx(gn::OutputMsg::kGga)] == 0U);
+    CHECK(
+        app::data::make_output_plan(no_gga, 1U, true, 2U, 0U).period_ms[idx(gn::OutputMsg::kGga)] ==
+        0U);
 
     // 自定义间隔：正数是频率（>=50 ms），负数是周期秒，0 是关闭。
     GnssOutConfig custom = def;
@@ -178,7 +183,8 @@ void test_subscription_and_app_ring() noexcept
     uint32_t mask = 0U;
     std::array<uint32_t, app::data::kGnssAppMsgCount> read_periods{};
     sub.read_subscription(mask, read_periods);
-    CHECK((mask == ((1U << 0U) | (1U << 1U))) && (read_periods[0] == 1000U) && (read_periods[1] == 5000U));
+    CHECK((mask == ((1U << 0U) | (1U << 1U))) && (read_periods[0] == 1000U) &&
+          (read_periods[1] == 5000U));
 
     sub.add_tx_sent(0U);
     sub.add_skipped(0U);
@@ -233,7 +239,8 @@ void test_push_gate() noexcept
         const std::array<int32_t, 8> jitter{0, -30, 25, -5, 30, -28, 0, 12};
         uint32_t pushed = 0U;
         for (size_t i = 0; i < jitter.size(); ++i) {
-            const auto now = static_cast<uint32_t>(static_cast<int32_t>(5000U + (i * 1000U)) + jitter[i]);
+            const auto now =
+                static_cast<uint32_t>(static_cast<int32_t>(5000U + (i * 1000U)) + jitter[i]);
             if (gate.due(now, 1000U)) {
                 gate.on_pushed(now, 1000U);
                 ++pushed;

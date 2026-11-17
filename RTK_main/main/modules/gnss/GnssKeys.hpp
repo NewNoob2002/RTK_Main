@@ -50,7 +50,9 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .min = 0,
       .max = 255,
       .help = "last detected GNSS chip family",
-      .binding = {.obj = nullptr, .load = &GnssModule::load_family, .save = &GnssModule::save_family}},
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::load_family,
+                  .save = &GnssModule::save_family}},
      {.ns = "gnss",
       .key = "model",
       .type = fw::StoreType::kU8,
@@ -59,7 +61,9 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .min = 0,
       .max = 255,
       .help = "last detected GNSS model",
-      .binding = {.obj = nullptr, .load = &GnssModule::load_model, .save = &GnssModule::save_model}},
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::load_model,
+                  .save = &GnssModule::save_model}},
      {.ns = "gnss",
       .key = "baud",
       .type = fw::StoreType::kU32,
@@ -68,12 +72,14 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .min = 0,
       .max = 2000000,
       .help = "last detected GNSS UART baud",
-      .binding = {.obj = nullptr, .load = &GnssModule::load_baud, .save = &GnssModule::save_baud}}}};
+      .binding = {
+          .obj = nullptr, .load = &GnssModule::load_baud, .save = &GnssModule::save_baud}}}};
 
 static_assert(fw::valid(kConfigKeys[0]) && fw::valid(kConfigKeys[1]) && fw::valid(kConfigKeys[2]),
               "gnss.config 键必须合法");
 static_assert(fw::valid(kCacheKeys[0]) && fw::valid(kCacheKeys[1]) && fw::valid(kCacheKeys[2]),
               "gnss.cache 键必须合法");
-static_assert(fw::unique_keys(kConfigKeys) && fw::unique_keys(kCacheKeys), "gnss 键表不得有重复的 ns/key");
+static_assert(fw::unique_keys(kConfigKeys) && fw::unique_keys(kCacheKeys),
+              "gnss 键表不得有重复的 ns/key");
 
 } // namespace app::gnss_store

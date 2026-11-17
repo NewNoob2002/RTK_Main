@@ -61,8 +61,8 @@ void show_link() noexcept
     }
     if (store.whitelist_pending || (store.whitelist_error != ESP_OK)) {
         cli::print_kv("wl_sync", "%s, last error %s, failures %" PRIu32 ", retry %" PRIu32 " ms",
-                      store.whitelist_pending ? "pending" : "idle", esp_err_to_name(store.whitelist_error),
-                      store.failures, store.retry_ms);
+                      store.whitelist_pending ? "pending" : "idle",
+                      esp_err_to_name(store.whitelist_error), store.failures, store.retry_ms);
     }
 }
 
@@ -87,7 +87,8 @@ void show_group(const StoreGroup &group) noexcept
             size_t len = 0U;
             const esp_err_t err = store::read_blob(key, blob, len);
             if (err == ESP_OK) {
-                (void)std::snprintf(text.data(), text.size(), "blob(%uB)", static_cast<unsigned>(len));
+                (void)std::snprintf(text.data(), text.size(), "blob(%uB)",
+                                    static_cast<unsigned>(len));
             } else if (err == ESP_ERR_NVS_NOT_FOUND) {
                 (void)std::snprintf(text.data(), text.size(), "default");
             } else {
@@ -96,8 +97,9 @@ void show_group(const StoreGroup &group) noexcept
         } else {
             uint32_t value = 0U;
             const esp_err_t err = store::read_value(key, value);
-            const char *name =
-                ((err == ESP_OK) && (group.value_name != nullptr)) ? group.value_name(key.key, value) : nullptr;
+            const char *name = ((err == ESP_OK) && (group.value_name != nullptr))
+                                   ? group.value_name(key.key, value)
+                                   : nullptr;
             if (name != nullptr) {
                 (void)std::snprintf(text.data(), text.size(), "%" PRIu32 " (%s)", value, name);
             } else if (err == ESP_OK) {
@@ -108,8 +110,9 @@ void show_group(const StoreGroup &group) noexcept
                 (void)std::snprintf(text.data(), text.size(), "error");
             }
         }
-        cli::out_printf("  %-*.*s %-12s  %.*s\n", kNameWidth, static_cast<int>(key.key.size()), key.key.data(),
-                        text.data(), static_cast<int>(key.help.size()), key.help.data());
+        cli::out_printf("  %-*.*s %-12s  %.*s\n", kNameWidth, static_cast<int>(key.key.size()),
+                        key.key.data(), text.data(), static_cast<int>(key.help.size()),
+                        key.help.data());
     }
 }
 
@@ -125,11 +128,12 @@ void show_groups(std::string_view prefix) noexcept
 void show_build() noexcept
 {
     cli::print_section("build");
-    cli::print_kv("console", "UART%d %d baud", CONFIG_RTK_CONSOLE_UART_NUM, CONFIG_RTK_CONSOLE_UART_BAUD);
+    cli::print_kv("console", "UART%d %d baud", CONFIG_RTK_CONSOLE_UART_NUM,
+                  CONFIG_RTK_CONSOLE_UART_BAUD);
     cli::print_kv("trace", "%s", FW_TRACE_ENABLED ? "compiled in" : "compiled out");
 #if RTK_GNSS_ENABLED
-    cli::print_kv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", CONFIG_RTK_GNSS_UART_NUM, CONFIG_RTK_GNSS_RX_GPIO,
-                  CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_DEFAULT_BAUD);
+    cli::print_kv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", CONFIG_RTK_GNSS_UART_NUM,
+                  CONFIG_RTK_GNSS_RX_GPIO, CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_DEFAULT_BAUD);
     cli::print_kv("gnss_power", "GPIO%d active %s", CONFIG_RTK_GNSS_POWER_GPIO,
                   (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0) ? "high" : "low");
     cli::print_kv("gnss_port", "COM%d", CONFIG_RTK_GNSS_PORT);

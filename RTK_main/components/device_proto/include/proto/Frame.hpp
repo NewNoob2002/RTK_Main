@@ -74,8 +74,9 @@ struct FrameView {
  * 成功时 out_len = 20 + payload.size() + 4。
  * payload.size() > kMaxPayload → kInvalidArg；out 空间不足 → kNoSpace。失败时不写 out_len。
  */
-[[nodiscard]] fw::Status build_frame(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender, uint8_t type,
-                                     std::span<const uint8_t> payload, size_t &out_len) noexcept;
+[[nodiscard]] fw::Status build_frame(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender,
+                                     uint8_t type, std::span<const uint8_t> payload,
+                                     size_t &out_len) noexcept;
 
 /** 一次解析调用的结果：找到完整帧 / 需要更多字节 / 出错。 */
 enum class ParseResult : uint8_t {

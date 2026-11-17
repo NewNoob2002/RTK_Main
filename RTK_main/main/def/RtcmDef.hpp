@@ -32,8 +32,8 @@ enum class RtcmReject : uint8_t {
 // 事件码是 uint8_t 负载；会话号按 core::kTraceSessionMask 截到低 16 位。线程安全：只写 trace 环。
 inline void trace_rtcm(RtcmTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
-    fw::trace(fw::TraceCat::kRtcm, static_cast<uint8_t>(code), static_cast<uint16_t>(session & core::kTraceSessionMask),
-              a, b);
+    fw::trace(fw::TraceCat::kRtcm, static_cast<uint8_t>(code),
+              static_cast<uint16_t>(session & core::kTraceSessionMask), a, b);
 }
 
 // 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。

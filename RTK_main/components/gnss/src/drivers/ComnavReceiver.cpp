@@ -34,7 +34,8 @@ constexpr std::array<const char *, kOutputMsgCount> kOutputNames = {
 };
 
 // <OK 提示符应答（classify_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器。
-constexpr std::array<const demux::Decoder *, 2> kDecoders{&comnav::kPromptDecoder, &demux::unicore_hash::kDecoder};
+constexpr std::array<const demux::Decoder *, 2> kDecoders{&comnav::kPromptDecoder,
+                                                          &demux::unicore_hash::kDecoder};
 
 /** 应答行的判定原因，explain 与 step 共用同一份判定逻辑。 */
 enum class PromptReason : uint8_t {
@@ -262,8 +263,8 @@ bool ComnavReceiver::cmd_mode_rover(CmdBuf &out) noexcept
 bool ComnavReceiver::cmd_com_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
 {
     out.clear();
-    return out.append("COM COM") && ascii::append_uint(out, port) && out.append(" ") && ascii::append_uint(out, baud) &&
-           out.append("\r\n");
+    return out.append("COM COM") && ascii::append_uint(out, port) && out.append(" ") &&
+           ascii::append_uint(out, baud) && out.append("\r\n");
 }
 
 /**
@@ -275,11 +276,13 @@ bool ComnavReceiver::cmd_com_baud(CmdBuf &out, uint8_t port, uint32_t baud) noex
  * @retval true: 已写入完整命令。
  * @retval false: 周期粒度不合法或缓冲空间不足。
  */
-bool ComnavReceiver::cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t port, uint32_t period_ms) noexcept
+bool ComnavReceiver::cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t port,
+                                    uint32_t period_ms) noexcept
 {
     out.clear();
-    return out.append("LOG COM") && ascii::append_uint(out, port) && out.append(" ") && out.append(name) &&
-           out.append(" ONTIME ") && ascii::append_period(out, period_ms) && out.append("\r\n");
+    return out.append("LOG COM") && ascii::append_uint(out, port) && out.append(" ") &&
+           out.append(name) && out.append(" ONTIME ") && ascii::append_period(out, period_ms) &&
+           out.append("\r\n");
 }
 
 /**
@@ -293,8 +296,8 @@ bool ComnavReceiver::cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t 
 bool ComnavReceiver::cmd_unlog_msg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
 {
     out.clear();
-    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append(" ") && out.append(name) &&
-           out.append("\r\n");
+    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append(" ") &&
+           out.append(name) && out.append("\r\n");
 }
 
 /**
@@ -370,7 +373,8 @@ bool ComnavReceiver::match_probe(const demux::Decoder &dec, std::span<const uint
     }
     size_t pos = kVersionTag.size();
     std::span<const uint8_t> model_text{};
-    if (!ascii::next_quoted(frame, pos, model_text) || !ascii::quoted_starts_with(model_text, "K803")) {
+    if (!ascii::next_quoted(frame, pos, model_text) ||
+        !ascii::quoted_starts_with(model_text, "K803")) {
         return false;
     }
     out = ProbeResult{};
@@ -378,7 +382,8 @@ bool ComnavReceiver::match_probe(const demux::Decoder &dec, std::span<const uint
     return true;
 }
 
-bool ComnavReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
+bool ComnavReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg,
+                                ConfigStep &out) const noexcept
 {
     static_cast<void>(model); // 目前只覆盖 K803；报文输出改由输出阶段（build_output）下发
     // 表放在成员函数作用域内：步骤回调要调 protected 的 cmd_*，匿名命名空间的自由函数没有访问权。
@@ -455,8 +460,8 @@ uint32_t ComnavReceiver::output_mask(Model model) const noexcept
     return kGgaBit | kRmcBit | kGsaBit | kGsvBit;
 }
 
-fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
-                                        CmdBuf &out) const noexcept
+fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model,
+                                        const OutputPlan &plan, CmdBuf &out) const noexcept
 {
     const auto idx = static_cast<size_t>(static_cast<uint8_t>(msg));
     if ((msg == OutputMsg::kNone) || (idx >= kOutputNames.size())) {
@@ -467,8 +472,8 @@ fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model
     }
     const std::string_view name{kOutputNames[idx]};
     // period 0 = 关闭该类；旧 apply 旁路同样用 "UNLOG COMn <name>"。
-    const bool written =
-        (period_ms == 0U) ? cmd_unlog_msg(out, name, plan.port) : cmd_log_ontime(out, name, plan.port, period_ms);
+    const bool written = (period_ms == 0U) ? cmd_unlog_msg(out, name, plan.port)
+                                           : cmd_log_ontime(out, name, plan.port, period_ms);
     if (!written) {
         out.clear();
         return fw::Status::kInvalidArg;

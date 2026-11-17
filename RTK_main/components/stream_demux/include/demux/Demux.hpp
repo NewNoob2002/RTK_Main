@@ -38,7 +38,8 @@ public:
     Sink &operator=(const Sink &) = delete;
 
     /** 一条完整帧。index 为该解码器在 init 时解码器表中的下标。 */
-    virtual void on_frame(const Decoder &decoder, uint8_t index, std::span<const uint8_t> frame) noexcept = 0;
+    virtual void on_frame(const Decoder &decoder, uint8_t index,
+                          std::span<const uint8_t> frame) noexcept = 0;
 
     /**
      * 一段不属于任何已挂载协议的字节（按流顺序；同一段连续未知字节可能分多次回调）。
@@ -55,8 +56,8 @@ public:
      * 与 on_frame/on_unknown 相同的重入约束：回调中不得调用本实例的 init/feed/abort。实时路径的 Sink 应保持空操作
      * 或只记 trace() 事件。
      */
-    virtual void on_reject(const Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix, RejectCause cause,
-                           bool last) noexcept
+    virtual void on_reject(const Decoder &decoder, uint8_t index, std::span<const uint8_t> prefix,
+                           RejectCause cause, bool last) noexcept
     {
         static_cast<void>(decoder);
         static_cast<void>(index);
@@ -74,7 +75,7 @@ protected:
 enum class Error : uint8_t {
     kOk = 0,
     kInvalidArg, // 解码器表为空/超过 kMaxDecoders/含空指针或无效描述符、缓冲区小于最大 max_frame、尚未 init 成功
-    kReentry,    // 在本实例回调中调用了 init/feed/abort
+    kReentry, // 在本实例回调中调用了 init/feed/abort
 };
 
 /** 单个解码器的累计统计。 */
@@ -111,7 +112,8 @@ public:
      * decoders 下标越小优先级越高（同首字节时先尝试）；表本身、描述符、buf、sink 必须在实例生命周期内有效。
      * 失败时实例回到未初始化状态。线程安全：否。
      */
-    [[nodiscard]] Error init(std::span<const Decoder *const> decoders, std::span<uint8_t> buf, Sink &sink) noexcept;
+    [[nodiscard]] Error init(std::span<const Decoder *const> decoders, std::span<uint8_t> buf,
+                             Sink &sink) noexcept;
 
     /**
      * 喂入任意长度字节（可为空）。本调用内同步完成所有能完成的帧回调与未知字节回调。

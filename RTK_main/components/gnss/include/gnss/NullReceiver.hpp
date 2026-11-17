@@ -42,7 +42,8 @@ public:
     {
         return false;
     }
-    [[nodiscard]] bool rover_step(size_t, Model, const RoverConfig &, ConfigStep &) const noexcept override
+    [[nodiscard]] bool rover_step(size_t, Model, const RoverConfig &,
+                                  ConfigStep &) const noexcept override
     {
         return false;
     }
@@ -60,11 +61,13 @@ public:
     {
         return fw::Status::kNotSupported;
     }
-    [[nodiscard]] OutputMsg classify_frame(const demux::Decoder &, std::span<const uint8_t>) const noexcept override
+    [[nodiscard]] OutputMsg classify_frame(const demux::Decoder &,
+                                           std::span<const uint8_t>) const noexcept override
     {
         return OutputMsg::kNone;
     }
-    size_t frame_tag(const demux::Decoder &, std::span<const uint8_t>, std::span<char>) const noexcept override
+    size_t frame_tag(const demux::Decoder &, std::span<const uint8_t>,
+                     std::span<char>) const noexcept override
     {
         return 0U;
     }
@@ -72,7 +75,8 @@ public:
     {
         return false;
     }
-    size_t match_readback(const demux::Decoder &, std::span<const uint8_t>, std::span<char>) const noexcept override
+    size_t match_readback(const demux::Decoder &, std::span<const uint8_t>,
+                          std::span<char>) const noexcept override
     {
         return 0U;
     }

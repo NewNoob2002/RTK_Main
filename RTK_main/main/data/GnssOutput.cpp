@@ -143,20 +143,23 @@ gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, boo
             continue;
         }
         if (out.intervals[i] != dflt.intervals[i]) {
-            plan.period_ms[i] = core::services::GnssService::interval_to_period_ms(out.intervals[i]);
+            plan.period_ms[i] =
+                core::services::GnssService::interval_to_period_ms(out.intervals[i]);
             continue;
         }
         // 默认值：GGA/RMC/GSA/GST 跟定位频率（与 P3a 流动站脚本一致）；SATSINFOA 按 gnss/out 默认 5 s
         // （用户 2026-11-16 决定，偏离 P3a 脚本的 1 s）；HEADINGA 1 s 且仅双天线型号下发。
-        const bool locate =
-            (i == static_cast<size_t>(gnss::OutputMsg::kGga)) || (i == static_cast<size_t>(gnss::OutputMsg::kRmc)) ||
-            (i == static_cast<size_t>(gnss::OutputMsg::kGsa)) || (i == static_cast<size_t>(gnss::OutputMsg::kGst));
+        const bool locate = (i == static_cast<size_t>(gnss::OutputMsg::kGga)) ||
+                            (i == static_cast<size_t>(gnss::OutputMsg::kRmc)) ||
+                            (i == static_cast<size_t>(gnss::OutputMsg::kGsa)) ||
+                            (i == static_cast<size_t>(gnss::OutputMsg::kGst));
         if (locate) {
             plan.period_ms[i] = locate_period_ms;
         } else if (i == static_cast<size_t>(gnss::OutputMsg::kHeading)) {
             plan.period_ms[i] = ((caps & gnss::cap::kHeading) != 0U) ? kOneSecondMs : 0U;
         } else {
-            plan.period_ms[i] = core::services::GnssService::interval_to_period_ms(out.intervals[i]);
+            plan.period_ms[i] =
+                core::services::GnssService::interval_to_period_ms(out.intervals[i]);
         }
     }
     plan.period_ms[static_cast<size_t>(gnss::OutputMsg::kGsv)] = gsv ? kOneSecondMs : 0U;
@@ -201,7 +204,8 @@ bool GnssLatestCache::update(uint8_t type_idx, std::span<const uint8_t> frame) n
     return true;
 }
 
-core::services::GnssQueryResult GnssLatestCache::query(uint8_t type_idx, std::span<uint8_t> dst) noexcept
+core::services::GnssQueryResult GnssLatestCache::query(uint8_t type_idx,
+                                                       std::span<uint8_t> dst) noexcept
 {
     if (type_idx >= kGnssAppMsgCount) {
         return {};
@@ -238,16 +242,16 @@ std::array<GnssLatestSlotStats, kGnssAppMsgCount> GnssLatestCache::snapshot() co
     return out;
 }
 
-void GnssAppSubState::set_subscription(uint32_t active_mask,
-                                       const std::array<uint32_t, kGnssAppMsgCount> &periods_ms) noexcept
+void GnssAppSubState::set_subscription(
+    uint32_t active_mask, const std::array<uint32_t, kGnssAppMsgCount> &periods_ms) noexcept
 {
     const fw::LockGuard guard(lock_);
     state_.active_mask = active_mask;
     state_.periods_ms = periods_ms;
 }
 
-void GnssAppSubState::read_subscription(uint32_t &active_mask,
-                                        std::array<uint32_t, kGnssAppMsgCount> &periods_ms) const noexcept
+void GnssAppSubState::read_subscription(
+    uint32_t &active_mask, std::array<uint32_t, kGnssAppMsgCount> &periods_ms) const noexcept
 {
     const fw::LockGuard guard(lock_);
     active_mask = state_.active_mask;

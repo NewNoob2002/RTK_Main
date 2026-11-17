@@ -26,7 +26,8 @@ public:
     ~AlarmService() = default;
 
     /** 组 0x40 主动上报帧（type=PUSH，sender=DEV）；语义同 CommandDispatcher::build_status_push。 */
-    [[nodiscard]] bool build_status_push(uint16_t seq, uint32_t now_ms, Reply &reply) const noexcept;
+    [[nodiscard]] bool build_status_push(uint16_t seq, uint32_t now_ms,
+                                         Reply &reply) const noexcept;
 
     [[nodiscard]] static std::span<const Route> routes() noexcept;
     [[nodiscard]] RouteTable table() noexcept

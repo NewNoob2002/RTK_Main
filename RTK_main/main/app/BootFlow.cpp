@@ -86,12 +86,13 @@ bool enable_power_hold() noexcept
     return true;
 }
 
+// NOLINTBEGIN(misc-const-correctness): step_* 的 BootCtx & 形参由 BootStep::fn 签名固定
 /**
  * @brief  启动步骤 1：安装日志直写通道（此后启动日志带时间戳与类别），再做电源保持
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 成功；kFail 电源保持失败
  */
-app::BootResult step_power(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
+app::BootResult step_power(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
     (void)app::install_direct_log(); // 只会因重复安装失败，此时已有通道可用
@@ -103,7 +104,7 @@ app::BootResult step_power(app::BootCtx &ctx) noexcept // NOLINT(misc-const-corr
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是
  */
-app::BootResult step_banner(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
+app::BootResult step_banner(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
     const esp_reset_reason_t reason = esp_reset_reason();
@@ -125,7 +126,7 @@ app::BootResult step_banner(app::BootCtx &ctx) noexcept // NOLINT(misc-const-cor
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是
  */
-app::BootResult step_contexts(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
+app::BootResult step_contexts(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
     app::AppContext &self = app::app_context();
@@ -145,7 +146,7 @@ app::BootResult step_contexts(app::BootCtx &ctx) noexcept // NOLINT(misc-const-c
  * @note   REPL 到 boot() 末尾才 run：此前提示符/IDF 提示语若先出现，会与后续各步骤日志交错。
  *         UART 驱动重装必须在业务任务启动前完成，所以 init 留在这里而不是挪到末尾。
  */
-app::BootResult step_console(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
+app::BootResult step_console(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
     return app::init_console() ? app::BootResult::kOk : app::BootResult::kFail;
@@ -158,7 +159,8 @@ app::BootResult step_console(app::BootCtx &ctx) noexcept // NOLINT(misc-const-co
  */
 app::BootResult step_alloc(app::BootCtx &ctx) noexcept
 {
-    auto &bufs = *static_cast<app::BootBuffers *>(ctx.user); // user 只指向启动任务的栈上 BootBuffers。
+    auto &bufs =
+        *static_cast<app::BootBuffers *>(ctx.user); // user 只指向启动任务的栈上 BootBuffers。
     if (app::allocate_boot_buffers(bufs)) {
         return app::BootResult::kOk;
     }
@@ -239,7 +241,7 @@ app::BootResult step_storage(app::BootCtx &ctx) noexcept
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是；失败不可恢复，交由后续步骤暴露
  */
-app::BootResult step_system(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
+app::BootResult step_system(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
     app::app_context().system.prepare();
@@ -282,7 +284,7 @@ app::BootResult step_link(app::BootCtx &ctx) noexcept
  * @param  ctx: 启动上下文（读写 launched/reason）
  * @retval kOk 成功；kFail 启动失败；kSkipped 未编译 GNSS
  */
-app::BootResult step_io(app::BootCtx &ctx) noexcept // NOLINT(misc-const-correctness): 签名由 BootStep::fn 固定
+app::BootResult step_io(app::BootCtx &ctx) noexcept
 {
 #if RTK_GNSS_ENABLED
     const auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
@@ -321,6 +323,8 @@ app::BootResult step_started(app::BootCtx &ctx) noexcept
     self.boot_phase.store(app::BootPhase::kRunning, std::memory_order_release);
     return app::BootResult::kOk;
 }
+
+// NOLINTEND(misc-const-correctness)
 
 constexpr std::array<app::BootStep, 13U> kBootSteps{{
     {"power", &step_power, app::OnFail::kDegrade},
@@ -393,25 +397,29 @@ void print_boot_summary(std::span<const app::BootRecord> records) noexcept
     core::BtAddr address{};
     // 蓝牙已在链路执行器 init 中启用，此处取控制器地址；未启用时保持全零。
     if (const uint8_t *raw = esp_bt_dev_get_address(); raw != nullptr) {
-        static_assert(sizeof(address.bytes) == ESP_BD_ADDR_LEN, "controller address length must match BtAddr");
+        static_assert(sizeof(address.bytes) == ESP_BD_ADDR_LEN,
+                      "controller address length must match BtAddr");
         std::memcpy(address.bytes.data(), raw, sizeof(address.bytes));
     }
     std::array<char, app::kMacStrBuf> mac{};
     app::format_mac(address, mac);
-    FW_LOGI(fw::TraceCat::kSys, "bluetooth online, %s %s, %u/%u sessions", system.device_name.data(), mac.data(),
-            static_cast<unsigned>(sessions.count), static_cast<unsigned>(app::kMaxSessions));
+    FW_LOGI(fw::TraceCat::kSys, "bluetooth online, %s %s, %u/%u sessions",
+            system.device_name.data(), mac.data(), static_cast<unsigned>(sessions.count),
+            static_cast<unsigned>(app::kMaxSessions));
 #if RTK_GNSS_ENABLED
     const auto gnss = self.data.gnss_status.read();
     // 状态槽尚未被 GNSS 模块 poll 刷新时回落到 Kconfig 默认波特率。
-    const uint32_t baud = gnss.host_baud != 0U ? gnss.host_baud : static_cast<uint32_t>(CONFIG_RTK_GNSS_DEFAULT_BAUD);
+    const uint32_t baud =
+        gnss.host_baud != 0U ? gnss.host_baud : static_cast<uint32_t>(CONFIG_RTK_GNSS_DEFAULT_BAUD);
     FW_LOGI(fw::TraceCat::kSys, "<gnss> UART%d started, %u baud", CONFIG_RTK_GNSS_UART_NUM,
             static_cast<unsigned>(baud));
 #endif
-    const uint32_t total_ms = (records.back().start_ms + records.back().took_ms) - records.front().start_ms;
+    const uint32_t total_ms =
+        (records.back().start_ms + records.back().took_ms) - records.front().start_ms;
     const uint32_t free_heap = esp_get_free_heap_size();
     // 千位字节转 KB 十位小数；上限远小于 uint32。
-    FW_LOGI(fw::TraceCat::kSys, "boot done in %u ms, heap %u.%u KB free", static_cast<unsigned>(total_ms),
-            static_cast<unsigned>(free_heap / kBytesPerKb),
+    FW_LOGI(fw::TraceCat::kSys, "boot done in %u ms, heap %u.%u KB free",
+            static_cast<unsigned>(total_ms), static_cast<unsigned>(free_heap / kBytesPerKb),
             static_cast<unsigned>((free_heap % kBytesPerKb) * kTenthsPerKb / kBytesPerKb));
 }
 
@@ -444,7 +452,8 @@ void AppContext::boot() noexcept
             continue;
         }
         if (record.reason != nullptr) {
-            FW_LOGE(fw::TraceCat::kSys, "boot step %s failed: %s, console-only", record.name, record.reason);
+            FW_LOGE(fw::TraceCat::kSys, "boot step %s failed: %s, console-only", record.name,
+                    record.reason);
         } else {
             FW_LOGE(fw::TraceCat::kSys, "boot step %s failed, console-only", record.name);
         }

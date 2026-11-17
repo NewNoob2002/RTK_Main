@@ -13,7 +13,14 @@ namespace app {
 
 /** 链路模块命令动词（由 fw::Command 的 arg 携带）。 */
 /** kWhitelistAdd/kWhitelistDel 的 args 为 6 字节 MAC（core::kAddrLen）。 */
-enum class LinkVerb : uint8_t { kAlarmSet, kAlarmClear, kPair, kWhitelistClear, kWhitelistAdd, kWhitelistDel };
+enum class LinkVerb : uint8_t {
+    kAlarmSet,
+    kAlarmClear,
+    kPair,
+    kWhitelistClear,
+    kWhitelistAdd,
+    kWhitelistDel
+};
 
 // 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。
 [[nodiscard]] constexpr uint8_t verb(LinkVerb value) noexcept

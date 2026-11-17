@@ -19,7 +19,8 @@ constexpr size_t kFixQualityPayloadOffset = 4U;
 constexpr uint32_t kNowMs = 1000U;
 constexpr uint16_t kPushSeq = 0x002AU;
 
-bool parse_wire(proto::FrameParser &parser, std::span<const uint8_t> wire, proto::FrameView &out) noexcept
+bool parse_wire(proto::FrameParser &parser, std::span<const uint8_t> wire,
+                proto::FrameView &out) noexcept
 {
     parser.reset();
     for (const uint8_t byte : wire) {
@@ -68,8 +69,9 @@ void test_fix_quality_default_and_updates()
     query.type = proto::msg_type::kQuery;
     query.sender = proto::sender::kApp;
     reply.clear();
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::DispatchResult::kReply),
-                            static_cast<uint8_t>(router.handle(core::Role::kAlarm, query, kNowMs + 200U, reply)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(core::DispatchResult::kReply),
+        static_cast<uint8_t>(router.handle(core::Role::kAlarm, query, kNowMs + 200U, reply)));
     TEST_ASSERT_TRUE(parse_wire(parser, reply.bytes(), parsed));
     TEST_ASSERT_EQUAL_UINT(proto::alarm::kStatusLen, parsed.payload.size());
     TEST_ASSERT_EQUAL_UINT8(4U, parsed.payload[kFixQualityPayloadOffset]);
@@ -77,8 +79,9 @@ void test_fix_quality_default_and_updates()
     // 超时回退为 0xFF。
     dev.info().fix_quality = proto::alarm::kValueUnknown;
     reply.clear();
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(core::DispatchResult::kReply),
-                            static_cast<uint8_t>(router.handle(core::Role::kAlarm, query, kNowMs + 300U, reply)));
+    TEST_ASSERT_EQUAL_UINT8(
+        static_cast<uint8_t>(core::DispatchResult::kReply),
+        static_cast<uint8_t>(router.handle(core::Role::kAlarm, query, kNowMs + 300U, reply)));
     TEST_ASSERT_TRUE(parse_wire(parser, reply.bytes(), parsed));
     TEST_ASSERT_EQUAL_UINT8(proto::alarm::kValueUnknown, parsed.payload[kFixQualityPayloadOffset]);
 }

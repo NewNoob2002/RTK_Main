@@ -91,7 +91,8 @@ void spp_server_handle_data(esp_spp_cb_param_t *param)
 
         spp_server_evt_post(SPP_SERVER_EVT_RX_DROP, param->data_ind.handle, NULL, dropped);
         /* a = 本次丢弃字节，b = 缓冲已用字节。 */
-        spp_server_trace(SPP_SERVER_TRACE_RX_DROP, param->data_ind.handle, dropped, (uint32_t)avail);
+        spp_server_trace(SPP_SERVER_TRACE_RX_DROP, param->data_ind.handle, dropped,
+                         (uint32_t)avail);
     }
     if ((written != 0U) || (written < len)) {
         /* 必须在退出 portMUX 且发布流数据/事件之后唤醒 kLink，防止唤醒合并后睡死。 */
@@ -100,7 +101,8 @@ void spp_server_handle_data(esp_spp_cb_param_t *param)
 }
 
 /* 回调单生产者：DATA/RX_DROP 合并，生命周期由槽接纳背压保证队列容量。 */
-void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint8_t *addr, uint32_t dropped)
+void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint8_t *addr,
+                         uint32_t dropped)
 {
     spp_server_evt_t evt;
 
@@ -113,11 +115,13 @@ void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint
         for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
             spp_server_session_t *session = &s_spp.sessions[idx];
             if (session->in_use && (session->handle == handle)) {
-                bool *pending = (type == SPP_SERVER_EVT_RX_DROP) ? &session->drop_pending : &session->data_pending;
+                bool *pending = (type == SPP_SERVER_EVT_RX_DROP) ? &session->drop_pending
+                                                                 : &session->data_pending;
                 if (type == SPP_SERVER_EVT_RX_DROP) {
                     /* 饱和累计，避免长时间不 poll 时回绕成小数；保留每个 handle 的归属。 */
-                    session->rx_dropped =
-                        (dropped > (UINT32_MAX - session->rx_dropped)) ? UINT32_MAX : (session->rx_dropped + dropped);
+                    session->rx_dropped = (dropped > (UINT32_MAX - session->rx_dropped))
+                                              ? UINT32_MAX
+                                              : (session->rx_dropped + dropped);
                     session->rx_dropped_total = (dropped > (UINT32_MAX - session->rx_dropped_total))
                                                     ? UINT32_MAX
                                                     : (session->rx_dropped_total + dropped);
@@ -235,7 +239,8 @@ bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout_ms)
                 return true;
             }
             const TickType_t elapsed = xTaskGetTickCount() - start;
-            if ((elapsed >= budget) || (xQueueReceive(s_spp.rtos.evt_queue, evt, budget - elapsed) != pdTRUE)) {
+            if ((elapsed >= budget) ||
+                (xQueueReceive(s_spp.rtos.evt_queue, evt, budget - elapsed) != pdTRUE)) {
                 return spp_server_poll_rx_level(evt) || spp_server_poll_tx_space(evt);
             }
         }
@@ -247,7 +252,8 @@ bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout_ms)
         }
         taskENTER_CRITICAL(&s_spp_mux);
         for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-            if (s_spp.sessions[idx].lifecycle_pending && (s_spp.sessions[idx].handle == evt->handle)) {
+            if (s_spp.sessions[idx].lifecycle_pending &&
+                (s_spp.sessions[idx].handle == evt->handle)) {
                 if (evt->type == SPP_SERVER_EVT_CLOSE) {
                     s_spp.sessions[idx].lifecycle_pending = false;
                 } else if (evt->type == SPP_SERVER_EVT_DATA) {

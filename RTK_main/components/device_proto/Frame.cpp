@@ -64,8 +64,9 @@ fw::Status build_frame(std::span<uint8_t> out, uint16_t msg_id, uint8_t sender, 
 
     size_t c_out_len = 0;
     /* payload.size() ≤ kMaxPayload(256)，uint16_t 窄化安全 */
-    const dev_proto_err_t err = dev_proto_frame_build(out.data(), out.size(), msg_id, sender, type, payload.data(),
-                                                      static_cast<uint16_t>(payload.size()), &c_out_len);
+    const dev_proto_err_t err =
+        dev_proto_frame_build(out.data(), out.size(), msg_id, sender, type, payload.data(),
+                              static_cast<uint16_t>(payload.size()), &c_out_len);
     if (err != DEV_PROTO_OK) {
         return from_c_err(err);
     }
@@ -93,8 +94,9 @@ ParseResult FrameParser::feed(uint8_t byte, FrameView &frame) noexcept
     frame.type = c_frame.type;
     frame.protocol = c_frame.protocol;
     frame.interval = c_frame.interval;
-    frame.payload = (c_frame.payload != nullptr) ? std::span<const uint8_t>(c_frame.payload, c_frame.payload_len)
-                                                 : std::span<const uint8_t>();
+    frame.payload = (c_frame.payload != nullptr)
+                        ? std::span<const uint8_t>(c_frame.payload, c_frame.payload_len)
+                        : std::span<const uint8_t>();
     return ParseResult::kFrame;
 }
 

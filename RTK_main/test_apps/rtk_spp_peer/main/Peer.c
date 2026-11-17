@@ -211,7 +211,8 @@ static void execute_action(const peer_rc_action_t *act)
             (void)peer_rc_on_sdp_result(false, 0U, now_ms());
         }
     } else if (act->type == PEER_RC_ACT_CONNECT) {
-        if (!checked(esp_spp_connect(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_MASTER, act->scn, target), "connect")) {
+        if (!checked(esp_spp_connect(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_MASTER, act->scn, target),
+                     "connect")) {
             (void)peer_rc_on_connect_failed(now_ms());
         }
     }
@@ -234,7 +235,8 @@ static void start_reconnect_now(void)
     }
 }
 
-static void send_frame(uint16_t id, uint8_t sender, uint8_t type, const uint8_t *payload, size_t length)
+static void send_frame(uint16_t id, uint8_t sender, uint8_t type, const uint8_t *payload,
+                       size_t length)
 {
     uint8_t bytes[DEV_PROTO_MAX_FRAME] = {0};
     size_t count = 0;
@@ -242,7 +244,8 @@ static void send_frame(uint16_t id, uint8_t sender, uint8_t type, const uint8_t 
         ESP_LOGW(s_tag, "not connected");
         return;
     }
-    if (dev_proto_frame_build(bytes, sizeof(bytes), id, sender, type, payload, length, &count) != DEV_PROTO_OK) {
+    if (dev_proto_frame_build(bytes, sizeof(bytes), id, sender, type, payload, length, &count) !=
+        DEV_PROTO_OK) {
         ESP_LOGE(s_tag, "frame build failed");
         return;
     }
@@ -254,7 +257,8 @@ static void send_frame(uint16_t id, uint8_t sender, uint8_t type, const uint8_t 
 
 static void heartbeat(void)
 {
-    const dev_proto_alarm_heartbeat_t hb = {.seq = s_sequence++, .battery_pct = 80U, .local_state = 0U};
+    const dev_proto_alarm_heartbeat_t hb = {
+        .seq = s_sequence++, .battery_pct = 80U, .local_state = 0U};
     uint8_t payload[DEV_PROTO_ALARM_HEARTBEAT_LEN] = {0};
     const size_t count = dev_proto_alarm_encode_heartbeat(&hb, payload, sizeof(payload));
     send_frame(0x41U, DEV_PROTO_SENDER_ALARM, DEV_PROTO_TYPE_PUSH, payload, count);
@@ -268,19 +272,24 @@ static void receive_data(const peer_event_t *event)
     }
     for (size_t i = 0; i < event->length; i++) {
         dev_proto_frame_t frame = {0};
-        const dev_proto_parse_result_t result = dev_proto_parser_feed(&s_parser, event->data[i], &frame);
+        const dev_proto_parse_result_t result =
+            dev_proto_parser_feed(&s_parser, event->data[i], &frame);
         if (result == DEV_PROTO_PARSE_FRAME) {
             s_frames++;
             const uint32_t now = now_ms();
-            if ((frame.msg_id == 0x40U) && (frame.type == DEV_PROTO_TYPE_PUSH) && (frame.payload_len >= 16U)) {
-                const uint16_t seq = (uint16_t)((uint16_t)frame.payload[0] | ((uint16_t)frame.payload[1] << 8U));
+            if ((frame.msg_id == 0x40U) && (frame.type == DEV_PROTO_TYPE_PUSH) &&
+                (frame.payload_len >= 16U)) {
+                const uint16_t seq =
+                    (uint16_t)((uint16_t)frame.payload[0] | ((uint16_t)frame.payload[1] << 8U));
                 s_pushes++;
-                ESP_LOGI(s_tag, "PUSH seq=%u state=%u level=%u gap_ms=%" PRIu32, seq, frame.payload[2],
-                         frame.payload[3], s_last_push == 0U ? 0U : now - s_last_push);
+                ESP_LOGI(s_tag, "PUSH seq=%u state=%u level=%u gap_ms=%" PRIu32, seq,
+                         frame.payload[2], frame.payload[3],
+                         s_last_push == 0U ? 0U : now - s_last_push);
                 s_last_push = now;
             } else {
                 s_replies++;
-                ESP_LOGI(s_tag, "RX id=%04x type=%u payload=%u", frame.msg_id, frame.type, frame.payload_len);
+                ESP_LOGI(s_tag, "RX id=%04x type=%u payload=%u", frame.msg_id, frame.type,
+                         frame.payload_len);
             }
         } else if ((result == DEV_PROTO_PARSE_CRC_ERR) || (result == DEV_PROTO_PARSE_LEN_ERR)) {
             s_errors++;
@@ -302,7 +311,8 @@ static void process_event(const peer_event_t *event)
     case EV_DISC: {
         const bool ok = (event->status == ESP_SPP_SUCCESS) && (event->handle > 0U);
         // SCN 来自 SDK 的 uint8_t，记录到 uint32_t 后再转回，无损。
-        const peer_rc_action_t act = peer_rc_on_sdp_result(ok, ok ? (uint8_t)event->handle : 0U, now_ms());
+        const peer_rc_action_t act =
+            peer_rc_on_sdp_result(ok, ok ? (uint8_t)event->handle : 0U, now_ms());
         execute_action(&act);
         break;
     }
@@ -343,7 +353,8 @@ static void process_event(const peer_event_t *event)
         break;
     case EV_PIN: {
         esp_bt_pin_code_t pin = {'1', '2', '3', '4'};
-        checked(esp_bt_gap_pin_reply((uint8_t *)event->data, event->status == 0, 4, pin), "pin reply");
+        checked(esp_bt_gap_pin_reply((uint8_t *)event->data, event->status == 0, 4, pin),
+                "pin reply");
         break;
     }
     case EV_CONFIRM:
@@ -363,15 +374,16 @@ static void print_reconnect_status(void)
                  "RECONNECT state=%s target=%02x:%02x:%02x:%02x:%02x:%02x next_attempt_in=%" PRIu32
                  "ms attempts=%" PRIu32 " sdp=%" PRIu32 " failures=%" PRIu32 " connects=%" PRIu32
                  " disconnects=%" PRIu32 " last_delay=%" PRIu32 "ms",
-                 peer_rc_state_name(st.state), st.target[0], st.target[1], st.target[2], st.target[3], st.target[4],
-                 st.target[5], st.next_attempt_in_ms, st.attempts, st.sdp_queries, st.failures, st.connects,
-                 st.disconnects, st.last_delay_ms);
+                 peer_rc_state_name(st.state), st.target[0], st.target[1], st.target[2],
+                 st.target[3], st.target[4], st.target[5], st.next_attempt_in_ms, st.attempts,
+                 st.sdp_queries, st.failures, st.connects, st.disconnects, st.last_delay_ms);
     } else {
         ESP_LOGI(s_tag,
-                 "RECONNECT state=%s target=none next_attempt_in=%" PRIu32 "ms attempts=%" PRIu32 " sdp=%" PRIu32
-                 " failures=%" PRIu32 " connects=%" PRIu32 " disconnects=%" PRIu32 " last_delay=%" PRIu32 "ms",
-                 peer_rc_state_name(st.state), st.next_attempt_in_ms, st.attempts, st.sdp_queries, st.failures,
-                 st.connects, st.disconnects, st.last_delay_ms);
+                 "RECONNECT state=%s target=none next_attempt_in=%" PRIu32 "ms attempts=%" PRIu32
+                 " sdp=%" PRIu32 " failures=%" PRIu32 " connects=%" PRIu32 " disconnects=%" PRIu32
+                 " last_delay=%" PRIu32 "ms",
+                 peer_rc_state_name(st.state), st.next_attempt_in_ms, st.attempts, st.sdp_queries,
+                 st.failures, st.connects, st.disconnects, st.last_delay_ms);
     }
 }
 
@@ -389,7 +401,8 @@ static void handle_connect_cmd(const char *arg)
     unsigned int bytes[PEER_RC_ADDR_LEN] = {0};
     uint8_t mac[PEER_RC_ADDR_LEN] = {0};
     uint8_t old_mac[PEER_RC_ADDR_LEN] = {0};
-    if (sscanf(arg, "%x:%x:%x:%x:%x:%x", &bytes[0], &bytes[1], &bytes[2], &bytes[3], &bytes[4], &bytes[5]) != 6) {
+    if (sscanf(arg, "%x:%x:%x:%x:%x:%x", &bytes[0], &bytes[1], &bytes[2], &bytes[3], &bytes[4],
+               &bytes[5]) != 6) {
         ESP_LOGE(s_tag, "bad MAC");
         return;
     }
@@ -456,12 +469,13 @@ static void command(char *line)
         char *end = NULL;
         unsigned long id = strtoul(line + PEER_QUERY_PREFIX_LEN, &end, 16);
         if ((end != (line + PEER_QUERY_PREFIX_LEN)) && (*end == '\0') && (id <= UINT16_MAX)) {
-            send_frame((uint16_t)id, s_alarm ? DEV_PROTO_SENDER_ALARM : DEV_PROTO_SENDER_APP, DEV_PROTO_TYPE_QUERY,
-                       NULL, 0U); // 已检验 uint16_t 范围。
+            send_frame((uint16_t)id, s_alarm ? DEV_PROTO_SENDER_ALARM : DEV_PROTO_SENDER_APP,
+                       DEV_PROTO_TYPE_QUERY, NULL, 0U); // 已检验 uint16_t 范围。
         }
     } else if (strcmp(line, "stats") == 0) {
         ESP_LOGI(s_tag,
-                 "STATS handle=%" PRIu32 " frames=%" PRIu32 " pushes=%" PRIu32 " replies=%" PRIu32 " errors=%" PRIu32,
+                 "STATS handle=%" PRIu32 " frames=%" PRIu32 " pushes=%" PRIu32 " replies=%" PRIu32
+                 " errors=%" PRIu32,
                  s_handle, s_frames, s_pushes, s_replies, s_errors);
     } else {
         ESP_LOGW(
@@ -483,8 +497,8 @@ static void worker(void *unused)
         peer_rc_set_target(saved_mac);
         s_pending_autostart = true;
         s_alarm = true;
-        ESP_LOGI(s_tag, "loaded target %02x:%02x:%02x:%02x:%02x:%02x", saved_mac[0], saved_mac[1], saved_mac[2],
-                 saved_mac[3], saved_mac[4], saved_mac[5]);
+        ESP_LOGI(s_tag, "loaded target %02x:%02x:%02x:%02x:%02x:%02x", saved_mac[0], saved_mac[1],
+                 saved_mac[2], saved_mac[3], saved_mac[4], saved_mac[5]);
     }
 
     for (;;) {
@@ -508,7 +522,8 @@ static void worker(void *unused)
             }
         }
         const uint32_t now = now_ms();
-        if (s_spp_ready && s_pending_autostart && (now >= PEER_BOOT_HOLDOFF_MS) && peer_rc_has_target()) {
+        if (s_spp_ready && s_pending_autostart && (now >= PEER_BOOT_HOLDOFF_MS) &&
+            peer_rc_has_target()) {
             ESP_LOGI(s_tag, "autostart after holdoff");
             start_reconnect_now();
         }
@@ -516,7 +531,8 @@ static void worker(void *unused)
             const peer_rc_action_t act = peer_rc_poll(now);
             execute_action(&act);
         }
-        if ((s_handle != 0U) && s_alarm && s_heartbeat && ((now - s_last_heartbeat) >= PEER_HEARTBEAT_MS)) {
+        if ((s_handle != 0U) && s_alarm && s_heartbeat &&
+            ((now - s_last_heartbeat) >= PEER_HEARTBEAT_MS)) {
             heartbeat();
         }
     }
@@ -532,10 +548,12 @@ void app_main(void)
             nvs_err = nvs_flash_init();
         }
     }
-    if (!checked(nvs_err, "NVS init") || !checked(uart_driver_install(UART_NUM_0, 1024, 0, 0, NULL, 0), "UART")) {
+    if (!checked(nvs_err, "NVS init") ||
+        !checked(uart_driver_install(UART_NUM_0, 1024, 0, 0, NULL, 0), "UART")) {
         return;
     }
-    s_queue = xQueueCreateStatic(PEER_QUEUE, sizeof(peer_event_t), s_queue_storage, &s_queue_control);
+    s_queue =
+        xQueueCreateStatic(PEER_QUEUE, sizeof(peer_event_t), s_queue_storage, &s_queue_control);
     if (s_queue == NULL) {
         ESP_LOGE(s_tag, "queue failed");
         return;
@@ -556,7 +574,9 @@ void app_main(void)
         return;
     }
     esp_bt_io_cap_t capability = ESP_BT_IO_CAP_NONE;
-    if (!checked(esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &capability, sizeof(capability)), "SSP") ||
+    if (!checked(
+            esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &capability, sizeof(capability)),
+            "SSP") ||
         !checked(esp_bt_gap_set_device_name("RTK-HIL-Peer"), "name")) {
         return;
     }
@@ -565,8 +585,8 @@ void app_main(void)
         return;
     }
     // core1 运行测试调度，避开 core0 的 BTC 回调；IDF 栈单位为字节。
-    if (xTaskCreateStaticPinnedToCore(worker, "hil_peer", PEER_STACK, NULL, 5, s_task_stack, &s_task_control, 1) ==
-        NULL) {
+    if (xTaskCreateStaticPinnedToCore(worker, "hil_peer", PEER_STACK, NULL, 5, s_task_stack,
+                                      &s_task_control, 1) == NULL) {
         ESP_LOGE(s_tag, "worker failed");
     }
 }

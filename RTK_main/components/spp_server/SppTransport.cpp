@@ -14,7 +14,8 @@ spp_server_tx_token_t token_from(const core::ReplyCredit &credit) noexcept
 }
 } // namespace
 
-fw::Status SppTransport::reserve_reply(core::SessionHandle handle, core::ReplyCredit &credit) noexcept
+fw::Status SppTransport::reserve_reply(core::SessionHandle handle,
+                                       core::ReplyCredit &credit) noexcept
 {
     spp_server_tx_token_t token{};
     const fw::Status status = rtos::from_esp_err(spp_server_reply_reserve(handle, &token));
@@ -24,7 +25,8 @@ fw::Status SppTransport::reserve_reply(core::SessionHandle handle, core::ReplyCr
     return status;
 }
 
-fw::Status SppTransport::commit_reply(const core::ReplyCredit &credit, std::span<const uint8_t> data) noexcept
+fw::Status SppTransport::commit_reply(const core::ReplyCredit &credit,
+                                      std::span<const uint8_t> data) noexcept
 {
     const auto token = token_from(credit);
     return rtos::from_esp_err(spp_server_tx_commit(&token, data.data(), data.size()));
@@ -41,12 +43,14 @@ bool SppTransport::reply_ready(core::SessionHandle handle) const noexcept
     return spp_server_reply_ready(handle);
 }
 
-fw::Status SppTransport::push_latest(core::SessionHandle handle, std::span<const uint8_t> data) noexcept
+fw::Status SppTransport::push_latest(core::SessionHandle handle,
+                                     std::span<const uint8_t> data) noexcept
 {
     return rtos::from_esp_err(spp_server_push_latest(handle, data.data(), data.size()));
 }
 
-fw::Status SppTransport::write(core::SessionHandle handle, std::span<const uint8_t> data, uint32_t timeout_ms) noexcept
+fw::Status SppTransport::write(core::SessionHandle handle, std::span<const uint8_t> data,
+                               uint32_t timeout_ms) noexcept
 {
     /* 空 span 不调用驱动：C 接口要求 data 非 NULL 且 len > 0。 */
     if (data.empty()) {

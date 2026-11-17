@@ -47,7 +47,8 @@ public:
     /** CFG-MSGOUT-NMEA_ID_*_UART1 支持的 5 类（GGA/RMC/GSA/GST/GSV）；SATSINFOA/HEADINGA 不支持。 */
     [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
     /** CFG-MSGOUT VALSET（单键），值 = 每历元次数 round(period_ms*rate_hz/1000)；0 关闭。 */
-    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model,
+                                          const OutputPlan &plan,
                                           CmdBuf &out) const noexcept override;
 
 protected:
@@ -66,7 +67,8 @@ protected:
     // ---- 应答判定：只判帧结构与 ACK 类别，不看具体配置内容 ----
     [[nodiscard]] static size_t resp_payload_len(std::span<const uint8_t> frame) noexcept;
     [[nodiscard]] static bool resp_has_valid_ack(std::span<const uint8_t> frame) noexcept;
-    [[nodiscard]] static bool resp_ack_class_id(std::span<const uint8_t> frame, uint8_t cls, uint8_t id) noexcept;
+    [[nodiscard]] static bool resp_ack_class_id(std::span<const uint8_t> frame, uint8_t cls,
+                                                uint8_t id) noexcept;
 };
 
 /** ZED-F9P 基准型号叶子类：无覆盖，家族默认行为即 F9P 行为（name() 仍为 "ublox"）。 */

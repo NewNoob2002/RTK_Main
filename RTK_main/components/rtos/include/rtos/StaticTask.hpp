@@ -33,8 +33,8 @@ public:
     ~StaticTask() = default;
 
     /** 创建并启动静态任务；重复调用返回 kBusy，参数非法返回 kInvalidArg。 */
-    [[nodiscard]] fw::Status start(const char *name, uint32_t priority, BaseType_t core, Entry entry,
-                                   void *arg) noexcept
+    [[nodiscard]] fw::Status start(const char *name, uint32_t priority, BaseType_t core,
+                                   Entry entry, void *arg) noexcept
     {
         if (handle_ != nullptr) {
             return fw::Status::kBusy;
@@ -46,9 +46,9 @@ public:
         // 任务创建后可能立即运行，先填好入口参数再创建。
         entry_ = entry;
         arg_ = arg;
-        handle_ = xTaskCreateStaticPinnedToCore(&StaticTask::trampoline, name,
-                                                static_cast<configSTACK_DEPTH_TYPE>(kStackDepth), this,
-                                                static_cast<UBaseType_t>(priority), stack_.data(), &tcb_, core);
+        handle_ = xTaskCreateStaticPinnedToCore(
+            &StaticTask::trampoline, name, static_cast<configSTACK_DEPTH_TYPE>(kStackDepth), this,
+            static_cast<UBaseType_t>(priority), stack_.data(), &tcb_, core);
         if (handle_ == nullptr) {
             entry_ = nullptr;
             arg_ = nullptr;

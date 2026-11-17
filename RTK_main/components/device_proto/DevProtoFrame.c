@@ -212,8 +212,9 @@ uint32_t dev_proto_crc32(uint32_t crc, const uint8_t *data, size_t len)
     return ~value;
 }
 
-dev_proto_err_t dev_proto_frame_build(uint8_t *out, size_t out_size, uint16_t msg_id, uint8_t sender, uint8_t type,
-                                      const uint8_t *payload, uint16_t payload_len, size_t *out_len)
+dev_proto_err_t dev_proto_frame_build(uint8_t *out, size_t out_size, uint16_t msg_id,
+                                      uint8_t sender, uint8_t type, const uint8_t *payload,
+                                      uint16_t payload_len, size_t *out_len)
 {
     size_t need = 0U;
 
@@ -303,7 +304,8 @@ void dev_proto_parser_reset(dev_proto_parser_t *parser)
     parser_clear(parser);
 }
 
-dev_proto_parse_result_t dev_proto_parser_feed(dev_proto_parser_t *parser, uint8_t byte, dev_proto_frame_t *frame)
+dev_proto_parse_result_t dev_proto_parser_feed(dev_proto_parser_t *parser, uint8_t byte,
+                                               dev_proto_frame_t *frame)
 {
     dev_proto_parse_result_t result = DEV_PROTO_PARSE_NONE;
 

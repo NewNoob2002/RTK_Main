@@ -44,7 +44,8 @@ void spp_server_tx_wake(void)
         (void)xTaskNotifyGive(s_spp.rtos.worker);
     }
     if (s_spp.rtos.evt_group != NULL) {
-        (void)xEventGroupSetBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_WAKE(0) | SPP_SERVER_BIT_WAKE(1));
+        (void)xEventGroupSetBits(s_spp.rtos.evt_group,
+                                 SPP_SERVER_BIT_WAKE(0) | SPP_SERVER_BIT_WAKE(1));
     }
     if (post) {
         spp_server_notify_rx_wake();
@@ -53,12 +54,14 @@ void spp_server_tx_wake(void)
 
 void spp_server_tx_reclaim_locked(spp_server_session_t *session)
 {
-    if ((s_spp.stream_owner == (session->idx + 1U)) && s_spp.stream_unbind && (session->users == 0U)) {
+    if ((s_spp.stream_owner == (session->idx + 1U)) && s_spp.stream_unbind &&
+        (session->users == 0U)) {
         /* 旧流的回调也不能归还给未来 owner；解绑必须等旧流全部结算或 CLOSE。 */
         bool busy = false;
         for (uint32_t idx = 0U; idx < SPP_SERVER_INFLIGHT_MAX; ++idx) {
-            busy = busy || (s_spp.inflight[idx].active && (s_spp.inflight[idx].slot == session->idx) &&
-                            (s_spp.inflight[idx].channel == SPP_SERVER_CHANNEL_STREAM));
+            busy =
+                busy || (s_spp.inflight[idx].active && (s_spp.inflight[idx].slot == session->idx) &&
+                         (s_spp.inflight[idx].channel == SPP_SERVER_CHANNEL_STREAM));
         }
         if (!busy) {
             s_spp.tx_stats.cancelled += s_spp.stream.used;
@@ -98,7 +101,8 @@ void spp_server_tx_close_locked(spp_server_session_t *session)
 }
 
 /* 预留只改元数据；每通道一个未发布区间，不持有跨等待租约。 */
-static esp_err_t spp_server_reserve(uint32_t handle, size_t len, uint8_t channel, spp_server_tx_token_t *token)
+static esp_err_t spp_server_reserve(uint32_t handle, size_t len, uint8_t channel,
+                                    spp_server_tx_token_t *token)
 {
     esp_err_t result = ESP_ERR_NOT_FOUND;
     if ((token == NULL) || (len == 0U) || (len > SPP_SERVER_STREAM_CAPACITY)) {
@@ -126,7 +130,8 @@ static esp_err_t spp_server_reserve(uint32_t handle, size_t len, uint8_t channel
             /* len <=4096，uint16_t 足够；slot<2、channel<=1。 */
             ring->reserved = (uint16_t)len;
             ++ring->serial;
-            *token = (spp_server_tx_token_t){session->generation, ring->serial, (uint16_t)len, session->idx, channel};
+            *token = (spp_server_tx_token_t){session->generation, ring->serial, (uint16_t)len,
+                                             session->idx, channel};
             result = ESP_OK;
         } else {
             s_spp.tx_stats.paused++;
@@ -148,13 +153,16 @@ esp_err_t spp_server_stream_reserve(uint32_t handle, size_t len, spp_server_tx_t
 
 static spp_server_ring_t *spp_server_token_ring_locked(const spp_server_tx_token_t *token)
 {
-    if ((token == NULL) || (token->slot >= SPP_SERVER_MAX_SESSIONS) || (token->channel > SPP_SERVER_CHANNEL_STREAM)) {
+    if ((token == NULL) || (token->slot >= SPP_SERVER_MAX_SESSIONS) ||
+        (token->channel > SPP_SERVER_CHANNEL_STREAM)) {
         return NULL;
     }
     spp_server_session_t *session = &s_spp.sessions[token->slot];
-    spp_server_ring_t *ring = (token->channel == SPP_SERVER_CHANNEL_STREAM) ? &s_spp.stream : &session->reply;
-    if (!session->in_use || (session->generation != token->generation) || (ring->serial != token->serial) ||
-        (ring->reserved != token->capacity) || (token->capacity == 0U) ||
+    spp_server_ring_t *ring =
+        (token->channel == SPP_SERVER_CHANNEL_STREAM) ? &s_spp.stream : &session->reply;
+    if (!session->in_use || (session->generation != token->generation) ||
+        (ring->serial != token->serial) || (ring->reserved != token->capacity) ||
+        (token->capacity == 0U) ||
         ((token->channel == SPP_SERVER_CHANNEL_STREAM) &&
          ((s_spp.stream_owner != (token->slot + 1U)) || s_spp.stream_unbind))) {
         return NULL;
@@ -175,7 +183,8 @@ void spp_server_tx_cancel(const spp_server_tx_token_t *token)
 }
 
 /* 把 n 字节复制到环 pos 处（可跨环尾），返回下一写位置。 */
-static size_t spp_server_ring_copy(uint8_t *storage, size_t capacity, size_t pos, const uint8_t *src, size_t n)
+static size_t spp_server_ring_copy(uint8_t *storage, size_t capacity, size_t pos,
+                                   const uint8_t *src, size_t n)
 {
     const size_t first = (n <= (capacity - pos)) ? n : (capacity - pos);
     memcpy(storage + pos, src, first);
@@ -185,14 +194,15 @@ static size_t spp_server_ring_copy(uint8_t *storage, size_t capacity, size_t pos
 
 /* copy 的区间先固定，锁外 scatter copy，最后一次发布；CLOSE 期间不再接纳新 owner。
  * 两段按序拼成一条记录，句末位只标在第二段末尾，worker 不会在两段之间插入 reply。 */
-static esp_err_t spp_server_tx_commit_spans(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen,
-                                            const uint8_t *b, size_t blen)
+static esp_err_t spp_server_tx_commit_spans(const spp_server_tx_token_t *token, const uint8_t *a,
+                                            size_t alen, const uint8_t *b, size_t blen)
 {
     uint8_t *storage = NULL;
     size_t capacity = 0U;
     size_t tail = 0U;
     const size_t len = alen + blen;
-    if ((token == NULL) || (a == NULL) || (alen == 0U) || ((blen != 0U) && (b == NULL)) || (len > token->capacity)) {
+    if ((token == NULL) || (a == NULL) || (alen == 0U) || ((blen != 0U) && (b == NULL)) ||
+        (len > token->capacity)) {
         return ESP_ERR_INVALID_ARG;
     }
     taskENTER_CRITICAL(&s_spp_mux);
@@ -204,9 +214,10 @@ static esp_err_t spp_server_tx_commit_spans(const spp_server_tx_token_t *token, 
     spp_server_session_t *session = &s_spp.sessions[token->slot];
     ring->copying = true;
     session->users++;
-    capacity = (token->channel == SPP_SERVER_CHANNEL_STREAM) ? SPP_SERVER_STREAM_CAPACITY : SPP_SERVER_REPLY_CAPACITY;
-    storage =
-        (token->channel == SPP_SERVER_CHANNEL_STREAM) ? s_spp.storage.stream_buf : s_spp.storage.reply_buf[token->slot];
+    capacity = (token->channel == SPP_SERVER_CHANNEL_STREAM) ? SPP_SERVER_STREAM_CAPACITY
+                                                             : SPP_SERVER_REPLY_CAPACITY;
+    storage = (token->channel == SPP_SERVER_CHANNEL_STREAM) ? s_spp.storage.stream_buf
+                                                            : s_spp.storage.reply_buf[token->slot];
     tail = ((size_t)ring->head + ring->used) % capacity;
     taskEXIT_CRITICAL(&s_spp_mux);
 
@@ -252,8 +263,8 @@ esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t
     return spp_server_tx_commit_spans(token, data, len, NULL, 0U);
 }
 
-esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen, const uint8_t *b,
-                                size_t blen)
+esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen,
+                                const uint8_t *b, size_t blen)
 {
     if ((token == NULL) || (a == NULL) || (alen == 0U) || (b == NULL) || (blen == 0U)) {
         return ESP_ERR_INVALID_ARG;
@@ -309,7 +320,8 @@ bool spp_server_reply_ready(uint32_t handle)
     taskENTER_CRITICAL(&s_spp_mux);
     spp_server_session_t *session = spp_server_find_locked(handle);
     if (session != NULL) {
-        ready = !session->disconnect_pending && !session->reply.copying && (session->reply.reserved == 0U) &&
+        ready = !session->disconnect_pending && !session->reply.copying &&
+                (session->reply.reserved == 0U) &&
                 ((SPP_SERVER_REPLY_CAPACITY - session->reply.used) >= SPP_SERVER_REPLY_RESERVE);
     }
     taskEXIT_CRITICAL(&s_spp_mux);
@@ -357,7 +369,8 @@ static void spp_server_retire_locked(spp_server_session_t *session)
                 capacity = SPP_SERVER_STREAM_CAPACITY;
             }
             if (ring != NULL) {
-                ring->head = (uint16_t)(((size_t)ring->head + item->len) % capacity); /* 容量<=4096 */
+                ring->head =
+                    (uint16_t)(((size_t)ring->head + item->len) % capacity); /* 容量<=4096 */
                 ring->used -= item->len;
                 ring->issued -= item->len;
             }
@@ -429,9 +442,10 @@ static bool spp_server_worker_submit(void)
             uint8_t channel = SPP_SERVER_CHANNEL_REPLY;
             capacity = SPP_SERVER_REPLY_CAPACITY;
             storage = s_spp.storage.reply_buf[idx];
-            const bool stream =
-                (s_spp.stream_owner == (idx + 1U)) && !s_spp.stream_unbind && (s_spp.stream.used > s_spp.stream.issued);
-            if (stream && (s_spp.stream_active || ((ring->used == ring->issued) && (candidate->push_len == 0U)))) {
+            const bool stream = (s_spp.stream_owner == (idx + 1U)) && !s_spp.stream_unbind &&
+                                (s_spp.stream.used > s_spp.stream.issued);
+            if (stream && (s_spp.stream_active ||
+                           ((ring->used == ring->issued) && (candidate->push_len == 0U)))) {
                 ring = &s_spp.stream;
                 capacity = SPP_SERVER_STREAM_CAPACITY;
                 storage = s_spp.storage.stream_buf;
@@ -478,12 +492,14 @@ static bool spp_server_worker_submit(void)
         return false;
     }
     if (storage != NULL) {
-        const size_t first = (submitted.len <= (capacity - offset)) ? submitted.len : (capacity - offset);
+        const size_t first =
+            (submitted.len <= (capacity - offset)) ? submitted.len : (capacity - offset);
         memcpy(s_spp.storage.merge_buf, storage + offset, first);
         memcpy(s_spp.storage.merge_buf + first, storage, submitted.len - first);
     }
     /* 唯一 SDK write 调用；len<=1024，转 int 安全。SDK 深拷贝并可能阻塞 BTC 投递。 */
-    const esp_err_t result = esp_spp_write(submitted.handle, (int)submitted.len, s_spp.storage.merge_buf);
+    const esp_err_t result =
+        esp_spp_write(submitted.handle, (int)submitted.len, s_spp.storage.merge_buf);
     taskENTER_CRITICAL(&s_spp_mux);
     item->submitting = false;
     if (result != ESP_OK) {
@@ -500,7 +516,8 @@ static bool spp_server_worker_submit(void)
     taskEXIT_CRITICAL(&s_spp_mux);
     spp_server_session_release(session);
     if (result != ESP_OK) {
-        spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, submitted.handle, (uint32_t)result, (uint32_t)submitted.len);
+        spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, submitted.handle, (uint32_t)result,
+                         (uint32_t)submitted.len);
     }
     spp_server_tx_wake();
     return true;
@@ -534,8 +551,8 @@ static void spp_server_disconnect_process(void)
         session->disconnect_submitted = (err == ESP_OK);
         taskEXIT_CRITICAL(&s_spp_mux);
         if (err != ESP_OK) {
-            spp_server_trace(SPP_SERVER_TRACE_CTRL_ERR, handle, (uint32_t)SPP_SERVER_TRACE_CTRL_DISCONNECT,
-                             (uint32_t)err);
+            spp_server_trace(SPP_SERVER_TRACE_CTRL_ERR, handle,
+                             (uint32_t)SPP_SERVER_TRACE_CTRL_DISCONNECT, (uint32_t)err);
         }
     }
 }
@@ -577,8 +594,8 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
     TickType_t tick = 0U;
     bool matched = false;
     bool success = false;
-    const bool anonymous =
-        (param->write.handle == 0U) && (param->write.len == -1) && (param->write.status != ESP_SPP_SUCCESS);
+    const bool anonymous = (param->write.handle == 0U) && (param->write.len == -1) &&
+                           (param->write.status != ESP_SPP_SUCCESS);
     taskENTER_CRITICAL(&s_spp_mux);
     if (anonymous) {
         s_spp.tx_stats.anon_write_fail++;
@@ -592,12 +609,14 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
         }
     } else {
         spp_server_session_t *session = spp_server_find_locked(param->write.handle);
-        spp_server_inflight_t *item = (session != NULL) ? spp_server_oldest_locked(session->idx, true) : NULL;
+        spp_server_inflight_t *item =
+            (session != NULL) ? spp_server_oldest_locked(session->idx, true) : NULL;
         if ((item != NULL) && (item->generation == session->generation)) {
             matched = true;
             bytes = item->len;
             tick = item->tick;
-            success = (param->write.status == ESP_SPP_SUCCESS) && (param->write.len == (int)item->len);
+            success =
+                (param->write.status == ESP_SPP_SUCCESS) && (param->write.len == (int)item->len);
             item->done = true;
             item->result = success ? ESP_OK : ESP_FAIL;
             if (!success) {
@@ -612,15 +631,18 @@ void spp_server_handle_write(esp_spp_cb_param_t *param)
     }
     taskEXIT_CRITICAL(&s_spp_mux);
     if (anonymous) {
-        spp_server_trace(SPP_SERVER_TRACE_WRITE_ANON, 0U, (uint32_t)param->write.status, candidates);
+        spp_server_trace(SPP_SERVER_TRACE_WRITE_ANON, 0U, (uint32_t)param->write.status,
+                         candidates);
     } else if (!matched) {
         spp_server_trace(SPP_SERVER_TRACE_WRITE_STRAY, param->write.handle,
-                         (param->write.len > 0) ? (uint32_t)param->write.len : 0U, (uint32_t)param->write.status);
+                         (param->write.len > 0) ? (uint32_t)param->write.len : 0U,
+                         (uint32_t)param->write.status);
     } else if (success) {
         spp_server_trace(SPP_SERVER_TRACE_WRITE_DONE, param->write.handle, bytes,
                          (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount() - tick));
     } else {
-        spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, param->write.handle, (uint32_t)ESP_FAIL, bytes);
+        spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, param->write.handle, (uint32_t)ESP_FAIL,
+                         bytes);
     }
     spp_server_tx_wake();
 }
@@ -632,13 +654,14 @@ static bool spp_server_wait_change(uint8_t idx, TickType_t start, uint32_t timeo
     if (elapsed >= budget) {
         return false;
     }
-    (void)xEventGroupWaitBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_WAKE(idx), pdFALSE, pdFALSE, budget - elapsed);
+    (void)xEventGroupWaitBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_WAKE(idx), pdFALSE, pdFALSE,
+                              budget - elapsed);
     return true;
 }
 
 /* 同步兼容路径：每块等待真实完成；timeout 不撤回已接纳/已提交字节。 */
-static esp_err_t spp_server_write_chunk(spp_server_session_t *session, const uint8_t *data, size_t len,
-                                        TickType_t start, uint32_t timeout_ms)
+static esp_err_t spp_server_write_chunk(spp_server_session_t *session, const uint8_t *data,
+                                        size_t len, TickType_t start, uint32_t timeout_ms)
 {
     spp_server_tx_token_t token = {0};
     uint32_t target = 0U;
@@ -659,7 +682,8 @@ static esp_err_t spp_server_write_chunk(spp_server_session_t *session, const uin
         if ((xTaskGetTickCount() - start) >= pdMS_TO_TICKS(timeout_ms)) {
             return ESP_ERR_TIMEOUT;
         }
-        if (ready && (spp_server_reserve(session->handle, len, SPP_SERVER_CHANNEL_REPLY, &token) == ESP_OK)) {
+        if (ready && (spp_server_reserve(session->handle, len, SPP_SERVER_CHANNEL_REPLY, &token) ==
+                      ESP_OK)) {
             break;
         }
         if (!spp_server_wait_change(session->idx, start, timeout_ms)) {
@@ -704,7 +728,8 @@ esp_err_t spp_server_write(uint32_t handle, const uint8_t *data, size_t len, uin
     const TickType_t start = xTaskGetTickCount();
     esp_err_t result = ESP_OK;
     for (size_t offset = 0U; offset < len;) {
-        const size_t chunk = ((len - offset) < SPP_SERVER_TX_CHUNK) ? (len - offset) : SPP_SERVER_TX_CHUNK;
+        const size_t chunk =
+            ((len - offset) < SPP_SERVER_TX_CHUNK) ? (len - offset) : SPP_SERVER_TX_CHUNK;
         result = spp_server_write_chunk(session, data + offset, chunk, start, timeout_ms);
         if (result != ESP_OK) {
             break;

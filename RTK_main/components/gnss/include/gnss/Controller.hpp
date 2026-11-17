@@ -108,8 +108,9 @@ public:
      * plan 为初始输出计划（ADR-0012 §2.4），调用方可在运行期用 set_output_plan()/request_output() 更新。
      * 返回 false：receivers 或 bauds 为空、含 nullptr。
      */
-    [[nodiscard]] bool init(std::span<const Receiver *const> receivers, std::span<const uint32_t> bauds,
-                            const RoverConfig &cfg, const OutputPlan &plan, const Hint &hint,
+    [[nodiscard]] bool init(std::span<const Receiver *const> receivers,
+                            std::span<const uint32_t> bauds, const RoverConfig &cfg,
+                            const OutputPlan &plan, const Hint &hint,
                             const Timing &timing) noexcept;
 
     /** 从 kOff 开始：先断电 power_off_ms 再上电（电源复位），然后探测。 */
@@ -147,7 +148,8 @@ public:
     [[nodiscard]] Action poll(uint32_t now_ms) noexcept;
 
     /** 分流器识别出的一帧（任意协议）。用于应答匹配与静默检测。 */
-    void on_frame(const demux::Decoder &dec, std::span<const uint8_t> frame, uint32_t now_ms) noexcept;
+    void on_frame(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                  uint32_t now_ms) noexcept;
 
     [[nodiscard]] State state() const noexcept
     {

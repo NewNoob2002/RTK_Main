@@ -86,7 +86,8 @@ public:
      * 要求 max_record ≥ 1、max_record ≤ 65535、storage.size() ≥ 2 × (max_record + kFanoutHeaderBytes)，否则
      * kInvalidArg。 重复 init → kInvalidState。
      */
-    [[nodiscard]] Result init(std::span<uint8_t> storage, size_t max_record, const LockOps &lock) noexcept;
+    [[nodiscard]] Result init(std::span<uint8_t> storage, size_t max_record,
+                              const LockOps &lock) noexcept;
 
     /** 登记一个读者，返回 [0, kFanoutMaxReaders) 的 id；满了 → kNoSpace；未 init → kInvalidState。 */
     [[nodiscard]] Result attach(uint8_t &reader_id) noexcept;
@@ -116,7 +117,8 @@ public:
      * 启动前单线程、非 ISR；typed 容量为二次幂且 <2^31，max_record 为 1..65535。
      * 要求 max_record+3 <= cap，否则 kInvalidArg；重复初始化 kInvalidState。
      */
-    [[nodiscard]] Result init_typed(std::span<uint8_t> storage, size_t max_record, const LockOps &lock) noexcept;
+    [[nodiscard]] Result init_typed(std::span<uint8_t> storage, size_t max_record,
+                                    const LockOps &lock) noexcept;
     /** 读者任务、非 ISR；mask=0 不接收，attach 从 head 开始；满 kNoSpace。
      * generation 到 UINT32_MAX 的槽永久退役，全部空闲槽退役时 kInvalidState。
      */

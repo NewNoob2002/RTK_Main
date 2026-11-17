@@ -91,8 +91,9 @@ uint8_t dev_proto_response_type(uint8_t req_type);
  * out/out_len 为 NULL、payload 为 NULL 且 payload_len != 0、payload_len 超限 → DEV_PROTO_ERR_ARG；
  * out_size 不足 → DEV_PROTO_ERR_SPACE。失败时不写 *out_len，out 内容未定义。
  */
-dev_proto_err_t dev_proto_frame_build(uint8_t *out, size_t out_size, uint16_t msg_id, uint8_t sender, uint8_t type,
-                                      const uint8_t *payload, uint16_t payload_len, size_t *out_len);
+dev_proto_err_t dev_proto_frame_build(uint8_t *out, size_t out_size, uint16_t msg_id,
+                                      uint8_t sender, uint8_t type, const uint8_t *payload,
+                                      uint16_t payload_len, size_t *out_len);
 
 /** 清零全部状态（含错误计数）。parser 为 NULL 时不做任何事。 */
 void dev_proto_parser_init(dev_proto_parser_t *parser);
@@ -108,7 +109,8 @@ void dev_proto_parser_reset(dev_proto_parser_t *parser);
  * - 一帧收完：CRC 正确返回 FRAME 并填 *frame；否则 CRC_ERR，crc_errors+1。两者都回到寻找 0xAA。
  * parser 或 frame 为 NULL 时返回 NONE 且不改变状态。
  */
-dev_proto_parse_result_t dev_proto_parser_feed(dev_proto_parser_t *parser, uint8_t byte, dev_proto_frame_t *frame);
+dev_proto_parse_result_t dev_proto_parser_feed(dev_proto_parser_t *parser, uint8_t byte,
+                                               dev_proto_frame_t *frame);
 
 #ifdef __cplusplus
 }

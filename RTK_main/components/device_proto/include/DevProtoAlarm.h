@@ -48,16 +48,20 @@ typedef struct {
 } dev_proto_alarm_heartbeat_t;
 
 /** 按 §5 写 16 字节，返回写入字节数；参数为 NULL 或 out_size < 16 返回 0 且不写入。 */
-size_t dev_proto_alarm_encode_status(const dev_proto_alarm_status_t *status, uint8_t *out, size_t out_size);
+size_t dev_proto_alarm_encode_status(const dev_proto_alarm_status_t *status, uint8_t *out,
+                                     size_t out_size);
 
 /** len < 16 或指针为 NULL 返回 false；多余字节忽略。 */
-bool dev_proto_alarm_decode_status(const uint8_t *data, size_t len, dev_proto_alarm_status_t *status);
+bool dev_proto_alarm_decode_status(const uint8_t *data, size_t len,
+                                   dev_proto_alarm_status_t *status);
 
 /** 写 8 字节心跳（seq、电量、本地状态、4 字节 0），返回写入字节数；参数非法或空间不足返回 0 且不写入。 */
-size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *hb, uint8_t *out, size_t out_size);
+size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *hb, uint8_t *out,
+                                        size_t out_size);
 
 /** len < 8 或指针为 NULL 返回 false；多余字节忽略。 */
-bool dev_proto_alarm_decode_heartbeat(const uint8_t *data, size_t len, dev_proto_alarm_heartbeat_t *hb);
+bool dev_proto_alarm_decode_heartbeat(const uint8_t *data, size_t len,
+                                      dev_proto_alarm_heartbeat_t *hb);
 
 #ifdef __cplusplus
 }

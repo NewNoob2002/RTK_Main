@@ -41,19 +41,21 @@ enum class LogLevel : uint8_t {
 };
 
 struct LogHeader {
-    uint32_t t_ms = 0; // 记录时间（ms，环通路用 trace_install 的时钟，直写通路用 log_install_direct 的时钟）
+    uint32_t t_ms =
+        0; // 记录时间（ms，环通路用 trace_install 的时钟，直写通路用 log_install_direct 的时钟）
     TraceCat cat = TraceCat::kLink;
     LogKind kind = LogKind::kText;
     LogLevel level = LogLevel::kInfo; // kHex 记录沿用 kInfo（与同一调用点的文本句子配对）
     uint8_t reserved = 0;             // 保持 12 B 布局，写 0
     uint16_t len = 0;                 // payload 字节数
-    uint16_t total = 0;               // kHex：原始字节总数（≥ len，超过 65535 记 65535）；kText：等于 len
+    uint16_t total = 0; // kHex：原始字节总数（≥ len，超过 65535 记 65535）；kText：等于 len
 };
 inline constexpr std::size_t kLogHeaderBytes = 12U; // 环内每条记录的固定开销
 static_assert(sizeof(LogHeader) == kLogHeaderBytes, "LogHeader must stay 12 bytes");
 
 /** sink：把一条记录交给存储（通常是 LogRing::push）；必须非阻塞、可被多个任务并发调用（自行加锁）。 */
-using LogSinkFn = void (*)(void *ctx, const LogHeader &hdr, std::span<const uint8_t> payload) noexcept;
+using LogSinkFn = void (*)(void *ctx, const LogHeader &hdr,
+                           std::span<const uint8_t> payload) noexcept;
 
 /**
  * 安装文本通道 sink（启动阶段、单线程调用一次；时钟沿用 trace_install 注入的时钟，须先安装 trace）。

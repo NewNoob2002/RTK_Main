@@ -73,7 +73,8 @@ static void write_u32_le(uint8_t *buf, uint32_t value)
     }
 }
 
-size_t dev_proto_alarm_encode_status(const dev_proto_alarm_status_t *status, uint8_t *out, size_t out_size)
+size_t dev_proto_alarm_encode_status(const dev_proto_alarm_status_t *status, uint8_t *out,
+                                     size_t out_size)
 {
     if ((status == NULL) || (out == NULL) || (out_size < DEV_PROTO_ALARM_STATUS_LEN)) {
         return 0U;
@@ -89,11 +90,13 @@ size_t dev_proto_alarm_encode_status(const dev_proto_alarm_status_t *status, uin
     write_u32_le(&out[DEV_PROTO_ALARM_OFS_UPTIME], status->uptime_ms);
 
     /* 尾部保留 4 字节。 */
-    zero_bytes(&out[DEV_PROTO_ALARM_OFS_TAIL], DEV_PROTO_ALARM_STATUS_LEN - DEV_PROTO_ALARM_OFS_TAIL);
+    zero_bytes(&out[DEV_PROTO_ALARM_OFS_TAIL],
+               DEV_PROTO_ALARM_STATUS_LEN - DEV_PROTO_ALARM_OFS_TAIL);
     return DEV_PROTO_ALARM_STATUS_LEN;
 }
 
-bool dev_proto_alarm_decode_status(const uint8_t *data, size_t len, dev_proto_alarm_status_t *status)
+bool dev_proto_alarm_decode_status(const uint8_t *data, size_t len,
+                                   dev_proto_alarm_status_t *status)
 {
     if ((data == NULL) || (status == NULL) || (len < DEV_PROTO_ALARM_STATUS_LEN)) {
         return false;
@@ -109,7 +112,8 @@ bool dev_proto_alarm_decode_status(const uint8_t *data, size_t len, dev_proto_al
     return true;
 }
 
-size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *heartbeat, uint8_t *out, size_t out_size)
+size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *heartbeat, uint8_t *out,
+                                        size_t out_size)
 {
     if ((heartbeat == NULL) || (out == NULL) || (out_size < DEV_PROTO_ALARM_HEARTBEAT_LEN)) {
         return 0U;
@@ -125,7 +129,8 @@ size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *heart
     return DEV_PROTO_ALARM_HEARTBEAT_LEN;
 }
 
-bool dev_proto_alarm_decode_heartbeat(const uint8_t *data, size_t len, dev_proto_alarm_heartbeat_t *heartbeat)
+bool dev_proto_alarm_decode_heartbeat(const uint8_t *data, size_t len,
+                                      dev_proto_alarm_heartbeat_t *heartbeat)
 {
     if ((data == NULL) || (heartbeat == NULL) || (len < DEV_PROTO_ALARM_HEARTBEAT_LEN)) {
         return false;

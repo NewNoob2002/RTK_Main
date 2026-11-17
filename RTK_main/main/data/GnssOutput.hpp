@@ -22,8 +22,10 @@ inline constexpr size_t kGnssLatestTotalBytes = 6144U;                    // 4*2
 inline constexpr size_t kGnssMaxQueryBytes = 256U;
 inline constexpr uint8_t kGnssOutMaskAll = 0x3FU;
 
-inline constexpr std::array<size_t, kGnssAppMsgCount> kGnssLatestCaps = {256U, 4096U, 1024U, 256U, 256U, 256U};
-inline constexpr std::array<size_t, kGnssAppMsgCount> kGnssLatestOffsets = {0U, 256U, 4352U, 5376U, 5632U, 5888U};
+inline constexpr std::array<size_t, kGnssAppMsgCount> kGnssLatestCaps = {256U, 4096U, 1024U,
+                                                                         256U, 256U,  256U};
+inline constexpr std::array<size_t, kGnssAppMsgCount> kGnssLatestOffsets = {0U,    256U,  4352U,
+                                                                            5376U, 5632U, 5888U};
 
 /** 返回 type_idx（0..5）对应的可读语句短名。线程/ISR 安全：是。 */
 [[nodiscard]] const char *gnss_type_name(size_t type_idx) noexcept;
@@ -87,7 +89,8 @@ struct GnssOutConfig {
     [[nodiscard]] fw::Result encode(std::span<uint8_t> out, size_t &len) const noexcept;
 
     /** 从字节串反序列化并校验；非法返回 kInvalidArg 且不改 out。线程/ISR 安全：是。 */
-    [[nodiscard]] static fw::Result decode(std::span<const uint8_t> in, GnssOutConfig &out) noexcept;
+    [[nodiscard]] static fw::Result decode(std::span<const uint8_t> in,
+                                           GnssOutConfig &out) noexcept;
 };
 
 /**
@@ -101,8 +104,8 @@ struct GnssOutConfig {
  *  - GSV = gsv ? 1000 : 0。
  * 线程/ISR 安全：是（纯函数）。
  */
-[[nodiscard]] gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, bool gsv, uint8_t port,
-                                                uint32_t caps) noexcept;
+[[nodiscard]] gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, bool gsv,
+                                                uint8_t port, uint32_t caps) noexcept;
 
 struct GnssLatestSlotStats {
     uint16_t len = 0;
@@ -133,7 +136,8 @@ public:
     [[nodiscard]] bool update(uint8_t type_idx, std::span<const uint8_t> frame) noexcept;
 
     /** 读取 <=256 B 最新帧到 dst；超 256 B 时设 oversize=true 并计 query_oversize。线程安全：是（非 ISR）。 */
-    [[nodiscard]] core::services::GnssQueryResult query(uint8_t type_idx, std::span<uint8_t> dst) noexcept;
+    [[nodiscard]] core::services::GnssQueryResult query(uint8_t type_idx,
+                                                        std::span<uint8_t> dst) noexcept;
 
     /** 读取 6 类缓存与丢弃统计快照。线程安全：是（非 ISR）。 */
     [[nodiscard]] std::array<GnssLatestSlotStats, kGnssAppMsgCount> snapshot() const noexcept;
@@ -171,10 +175,12 @@ public:
     }
 
     /** kLink 更新活跃订阅掩码与 6 路生效周期（ms）。线程安全：是（非 ISR）。 */
-    void set_subscription(uint32_t active_mask, const std::array<uint32_t, kGnssAppMsgCount> &periods_ms) noexcept;
+    void set_subscription(uint32_t active_mask,
+                          const std::array<uint32_t, kGnssAppMsgCount> &periods_ms) noexcept;
 
     /** kIo 读取当前掩码与生效周期。线程安全：是（非 ISR）。 */
-    void read_subscription(uint32_t &active_mask, std::array<uint32_t, kGnssAppMsgCount> &periods_ms) const noexcept;
+    void read_subscription(uint32_t &active_mask,
+                           std::array<uint32_t, kGnssAppMsgCount> &periods_ms) const noexcept;
 
     /** kLink 记录一帧已提交至 SPP TX.stream。线程安全：是（非 ISR）。 */
     void add_tx_sent(uint8_t type_idx) noexcept;

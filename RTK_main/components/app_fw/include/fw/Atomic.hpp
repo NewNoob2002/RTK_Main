@@ -21,6 +21,7 @@ inline constexpr bool kNativeAtomics =
  * std::atomic<T> 在当前目标上是否可用于实时路径：有原生原子指令时必须无锁
  * （否则退回 libatomic 的锁实现），无原生原子指令时接受 IDF 的关中断模拟。
  */
-template <typename T> inline constexpr bool kAtomicUsable = !kNativeAtomics || std::atomic<T>::is_always_lock_free;
+template <typename T>
+inline constexpr bool kAtomicUsable = !kNativeAtomics || std::atomic<T>::is_always_lock_free;
 
 } // namespace fw

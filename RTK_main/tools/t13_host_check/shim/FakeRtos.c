@@ -76,8 +76,9 @@ static void *fake_task_main(void *arg)
     return NULL;
 }
 
-TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *name, uint32_t stack_depth, void *arg,
-                                           UBaseType_t priority, StackType_t *stack_buf, StaticTask_t *tcb,
+TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char *name,
+                                           uint32_t stack_depth, void *arg, UBaseType_t priority,
+                                           StackType_t *stack_buf, StaticTask_t *tcb,
                                            BaseType_t core)
 {
     (void)name;
@@ -141,7 +142,8 @@ uint32_t ulTaskNotifyTake(BaseType_t clear_count_on_exit, TickType_t ticks_to_wa
 
 /* ---------------- 队列 ---------------- */
 
-QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item_size, uint8_t *storage, StaticQueue_t *queue)
+QueueHandle_t xQueueCreateStatic(UBaseType_t length, UBaseType_t item_size, uint8_t *storage,
+                                 StaticQueue_t *queue)
 {
     if ((length == 0U) || (item_size == 0U) || (storage == NULL) || (queue == NULL)) {
         return NULL;
@@ -168,7 +170,8 @@ BaseType_t xQueueSend(QueueHandle_t queue, const void *item, TickType_t ticks_to
             return pdFALSE;
         }
     }
-    memcpy(queue->buf + (((queue->head + queue->count) % queue->capacity) * queue->item_size), item, queue->item_size);
+    memcpy(queue->buf + (((queue->head + queue->count) % queue->capacity) * queue->item_size), item,
+           queue->item_size);
     queue->count++;
     pthread_cond_signal(&queue->cond);
     pthread_mutex_unlock(&queue->lock);
@@ -219,8 +222,9 @@ EventGroupHandle_t xEventGroupCreateStatic(StaticEventGroup_t *group)
     return group;
 }
 
-EventBits_t xEventGroupWaitBits(EventGroupHandle_t group, EventBits_t bits, BaseType_t clear_on_exit,
-                                BaseType_t wait_for_all, TickType_t ticks_to_wait)
+EventBits_t xEventGroupWaitBits(EventGroupHandle_t group, EventBits_t bits,
+                                BaseType_t clear_on_exit, BaseType_t wait_for_all,
+                                TickType_t ticks_to_wait)
 {
     EventBits_t got = 0U;
 
@@ -289,7 +293,8 @@ void vEventGroupDelete(EventGroupHandle_t group)
 
 /* ---------------- 流缓冲（单写者/单读者，字节流） ---------------- */
 
-StreamBufferHandle_t xStreamBufferCreateStatic(size_t buffer_size, size_t trigger_level, uint8_t *storage,
+StreamBufferHandle_t xStreamBufferCreateStatic(size_t buffer_size, size_t trigger_level,
+                                               uint8_t *storage,
                                                StaticStreamBuffer_t *stream_buffer)
 {
     (void)trigger_level;
@@ -306,7 +311,8 @@ StreamBufferHandle_t xStreamBufferCreateStatic(size_t buffer_size, size_t trigge
     return stream_buffer;
 }
 
-size_t xStreamBufferSend(StreamBufferHandle_t stream_buffer, const void *data, size_t len, TickType_t ticks_to_wait)
+size_t xStreamBufferSend(StreamBufferHandle_t stream_buffer, const void *data, size_t len,
+                         TickType_t ticks_to_wait)
 {
     size_t written = 0U;
 
@@ -419,7 +425,8 @@ static void fake_read_pause_gate(void)
     pthread_mutex_unlock(&s_read_pause_lock);
 }
 
-size_t xStreamBufferReceive(StreamBufferHandle_t stream_buffer, void *data, size_t len, TickType_t ticks_to_wait)
+size_t xStreamBufferReceive(StreamBufferHandle_t stream_buffer, void *data, size_t len,
+                            TickType_t ticks_to_wait)
 {
     size_t got = 0U;
 

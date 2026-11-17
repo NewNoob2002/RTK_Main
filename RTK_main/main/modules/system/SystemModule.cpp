@@ -31,11 +31,13 @@ bool derive_sn_from_mac(std::span<const uint8_t, core::kAddrLen> mac,
 }
 bool build_device_name(std::string_view sn, std::span<char, kDeviceNameBuf> out) noexcept
 {
-    if (sn.empty() || sn.size() > NVS_STORE_SN_MAX || sn.find_first_of("\r\n") != std::string_view::npos) {
+    if (sn.empty() || sn.size() > NVS_STORE_SN_MAX ||
+        sn.find_first_of("\r\n") != std::string_view::npos) {
         return false;
     }
     // SN 最多 16 B，精度转换到 int 无损。
-    const int written = snprintf(out.data(), out.size(), "E1-Lite-%.*s", static_cast<int>(sn.size()), sn.data());
+    const int written =
+        snprintf(out.data(), out.size(), "E1-Lite-%.*s", static_cast<int>(sn.size()), sn.data());
     // written >= 0 时转换为 size_t 无损，之后按固定输出上限检查。
     if (written < 0 || static_cast<size_t>(written) > kDeviceNameMax) {
         out[0] = '\0';
@@ -69,8 +71,8 @@ void SystemModule::prepare() noexcept
         ctx().data.system_status.write(status_);
         return;
     }
-    FW_LOGI(fw::TraceCat::kSys, "sn=%s bt_name=%s policy=%s", status_.sn.data(), status_.device_name.data(),
-            policy_name(policy_from_config()));
+    FW_LOGI(fw::TraceCat::kSys, "sn=%s bt_name=%s policy=%s", status_.sn.data(),
+            status_.device_name.data(), policy_name(policy_from_config()));
     const esp_err_t error = spp_server_init(status_.device_name.data());
     status_.bt_ready = error == ESP_OK;
     if (error != ESP_OK) {

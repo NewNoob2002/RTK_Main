@@ -8,7 +8,8 @@
 namespace demux {
 
 struct Engine {
-    static bool config_valid(std::span<const Decoder *const> decoders, std::span<uint8_t> buf) noexcept
+    static bool config_valid(std::span<const Decoder *const> decoders,
+                             std::span<uint8_t> buf) noexcept
     {
         if (decoders.empty() || decoders.size() > kMaxDecoders) {
             return false;
@@ -16,8 +17,8 @@ struct Engine {
         constexpr std::size_t kMaxFrame = 65535;
         for (const Decoder *decoder : decoders) {
             if (decoder == nullptr || decoder->name == nullptr || decoder->first_byte == nullptr ||
-                decoder->step == nullptr || decoder->max_frame == 0 || decoder->max_frame > kMaxFrame ||
-                decoder->max_frame > buf.size()) {
+                decoder->step == nullptr || decoder->max_frame == 0 ||
+                decoder->max_frame > kMaxFrame || decoder->max_frame > buf.size()) {
                 return false;
             }
         }
@@ -71,8 +72,8 @@ struct Engine {
     }
 
     // 拒绝钩子：回调期间置 in_callback_，与 on_frame/on_unknown 的重入约束一致。
-    static void reject(Demux &dmx, uint8_t index, std::span<const uint8_t> prefix, RejectCause cause,
-                       bool last) noexcept
+    static void reject(Demux &dmx, uint8_t index, std::span<const uint8_t> prefix,
+                       RejectCause cause, bool last) noexcept
     {
         if (prefix.empty()) {
             return;
@@ -115,7 +116,8 @@ struct Engine {
             const Decoder &decoder = *dmx.decoders_[dmx.active_];
             const bool forced = reject_current;
             std::size_t need = 0;
-            const Step step = forced ? Step::kReject : decoder.step(buffered.subspan(start, prefix), need);
+            const Step step =
+                forced ? Step::kReject : decoder.step(buffered.subspan(start, prefix), need);
             reject_current = false;
             if (step == Step::kFrame) {
                 // 两次回调结束后才移动 buf，保证未知字节与帧的内容及输出顺序稳定。
@@ -185,7 +187,8 @@ struct Engine {
 };
 
 // 线程安全：同一实例须串行访问；ISR 安全，first_byte 必须满足冻结的纯函数契约。
-Error Demux::init(std::span<const Decoder *const> decoders, std::span<uint8_t> buf, Sink &sink) noexcept
+Error Demux::init(std::span<const Decoder *const> decoders, std::span<uint8_t> buf,
+                  Sink &sink) noexcept
 {
     if (in_callback_) {
         return Error::kReentry;
@@ -248,7 +251,8 @@ Error Demux::feed(std::span<const uint8_t> data) noexcept
             Engine::replay(*this, false);
         } else {
             const std::size_t count = std::min(data.size() - offset, need_);
-            std::memcpy(std::span{buf_, buf_size_}.subspan(len_).data(), data.subspan(offset).data(), count);
+            std::memcpy(std::span{buf_, buf_size_}.subspan(len_).data(),
+                        data.subspan(offset).data(), count);
             len_ += count;
             need_ -= count;
             offset += count;

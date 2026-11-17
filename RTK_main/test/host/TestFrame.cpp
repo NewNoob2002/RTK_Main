@@ -12,13 +12,13 @@ static constexpr std::array<uint8_t, 24> kFrameA = {0xAA, 0x44, 0x18, 0x14, 0x01
                                                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                                                     0x00, 0x00, 0x00, 0x00, 0x69, 0x17, 0x6E, 0x7E};
 // 设备设置应答 0x0004，payload 01 01
-static constexpr std::array<uint8_t, 26> kFrameB = {0xAA, 0x44, 0x18, 0x14, 0x04, 0x00, 0x00, 0x00, 0x00,
-                                                    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x03,
-                                                    0x00, 0x00, 0x01, 0x01, 0xC0, 0x20, 0xDA, 0x74};
+static constexpr std::array<uint8_t, 26> kFrameB = {
+    0xAA, 0x44, 0x18, 0x14, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x00, 0x01, 0x01, 0xC0, 0x20, 0xDA, 0x74};
 // 报警器心跳 0x0041，sender 3，type PUSH，payload 05 00 50 00 00 00 00 00
-static constexpr std::array<uint8_t, 32> kFrameC = {0xAA, 0x44, 0x18, 0x14, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                                    0x00, 0x08, 0x00, 0x00, 0x00, 0x03, 0x04, 0x00, 0x00, 0x05, 0x00,
-                                                    0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x34, 0x05, 0xAA};
+static constexpr std::array<uint8_t, 32> kFrameC = {
+    0xAA, 0x44, 0x18, 0x14, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x03, 0x04, 0x00, 0x00, 0x05, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x34, 0x05, 0xAA};
 
 static proto::FrameParser s_parser;
 
@@ -33,7 +33,8 @@ static void test_crc32_check_value()
     const std::array<uint8_t, 9> msg = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     TEST_ASSERT_EQUAL_HEX32(0xCBF43926U, proto::crc32(msg));
     const uint32_t part = proto::crc32(std::span<const uint8_t>(msg.data(), 4));
-    TEST_ASSERT_EQUAL_HEX32(0xCBF43926U, proto::crc32(std::span<const uint8_t>(msg.data() + 4, 5), part));
+    TEST_ASSERT_EQUAL_HEX32(0xCBF43926U,
+                            proto::crc32(std::span<const uint8_t>(msg.data() + 4, 5), part));
     TEST_ASSERT_EQUAL_HEX32(0x12345678U, proto::crc32({}, 0x12345678U));
 }
 
@@ -41,7 +42,8 @@ static void test_build_query_frame()
 {
     std::array<uint8_t, 64> out{};
     size_t len = 0;
-    TEST_ASSERT_TRUE(is_ok(proto::build_frame(out, 0x0001, proto::sender::kApp, proto::msg_type::kQuery, {}, len)));
+    TEST_ASSERT_TRUE(is_ok(
+        proto::build_frame(out, 0x0001, proto::sender::kApp, proto::msg_type::kQuery, {}, len)));
     TEST_ASSERT_EQUAL_UINT(kFrameA.size(), len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kFrameA.data(), out.data(), kFrameA.size());
 }
@@ -51,8 +53,8 @@ static void test_build_set_response()
     const std::array<uint8_t, 2> payload = {0x01, 0x01};
     std::array<uint8_t, 64> out{};
     size_t len = 0;
-    TEST_ASSERT_TRUE(
-        is_ok(proto::build_frame(out, 0x0004, proto::sender::kDevice, proto::msg_type::kSetRes, payload, len)));
+    TEST_ASSERT_TRUE(is_ok(proto::build_frame(out, 0x0004, proto::sender::kDevice,
+                                              proto::msg_type::kSetRes, payload, len)));
     TEST_ASSERT_EQUAL_UINT(kFrameB.size(), len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kFrameB.data(), out.data(), kFrameB.size());
 }
@@ -63,13 +65,14 @@ static void test_build_rejects_bad_args()
     static std::array<uint8_t, proto::kMaxFrame + 8> out{};
     size_t len = 0xABCD;
     TEST_ASSERT_EQUAL(fw::Status::kNoSpace,
-                      proto::build_frame(std::span<uint8_t>(out.data(), kFrameB.size() - 1), 0x0004, 1, 3,
-                                         std::span<const uint8_t>(big.data(), 2), len));
+                      proto::build_frame(std::span<uint8_t>(out.data(), kFrameB.size() - 1), 0x0004,
+                                         1, 3, std::span<const uint8_t>(big.data(), 2), len));
     TEST_ASSERT_EQUAL(fw::Status::kInvalidArg, proto::build_frame(out, 0x0004, 1, 3, big, len));
     TEST_ASSERT_EQUAL_UINT(0xABCD, len);
-    TEST_ASSERT_EQUAL(fw::Status::kOk,
-                      proto::build_frame(std::span<uint8_t>(out.data(), proto::kMaxFrame), 0x0004, 1, 3,
-                                         std::span<const uint8_t>(big.data(), proto::kMaxPayload), len));
+    TEST_ASSERT_EQUAL(
+        fw::Status::kOk,
+        proto::build_frame(std::span<uint8_t>(out.data(), proto::kMaxFrame), 0x0004, 1, 3,
+                           std::span<const uint8_t>(big.data(), proto::kMaxPayload), len));
     TEST_ASSERT_EQUAL_UINT(proto::kMaxFrame, len);
 }
 
@@ -143,13 +146,15 @@ static void test_parse_length_errors()
 {
     auto hdr = kFrameA;
     hdr[3] = 0x15;
-    TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, std::span<const uint8_t>(hdr.data(), 4)).length_errors);
+    TEST_ASSERT_EQUAL_INT(
+        1, test::feed_all(s_parser, std::span<const uint8_t>(hdr.data(), 4)).length_errors);
 
     s_parser = proto::FrameParser{};
     hdr = kFrameA;
     hdr[12] = 0x01; // payload_len = 257
     hdr[13] = 0x01;
-    TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, std::span<const uint8_t>(hdr.data(), 20)).length_errors);
+    TEST_ASSERT_EQUAL_INT(
+        1, test::feed_all(s_parser, std::span<const uint8_t>(hdr.data(), 20)).length_errors);
     TEST_ASSERT_EQUAL_UINT32(1, s_parser.length_errors());
     TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, kFrameA).frames);
 }
@@ -171,9 +176,11 @@ static void test_parse_max_payload()
 
 static void test_reset_drops_partial_frame()
 {
-    TEST_ASSERT_EQUAL_INT(0, test::feed_all(s_parser, std::span<const uint8_t>(kFrameA.data(), 10)).frames);
+    TEST_ASSERT_EQUAL_INT(
+        0, test::feed_all(s_parser, std::span<const uint8_t>(kFrameA.data(), 10)).frames);
     s_parser.reset();
-    TEST_ASSERT_EQUAL_INT(0, test::feed_all(s_parser, std::span<const uint8_t>(kFrameA.data() + 10, 14)).frames);
+    TEST_ASSERT_EQUAL_INT(
+        0, test::feed_all(s_parser, std::span<const uint8_t>(kFrameA.data() + 10, 14)).frames);
     TEST_ASSERT_EQUAL_INT(1, test::feed_all(s_parser, kFrameA).frames);
 }
 

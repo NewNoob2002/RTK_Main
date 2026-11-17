@@ -12,12 +12,12 @@
 #include "SppServerStorage.h"
 
 static int s_failures;
-#define CHECK(expr)                                                                                                    \
-    do {                                                                                                               \
-        if (!(expr)) {                                                                                                 \
-            fprintf(stderr, "FAIL %d: %s\n", __LINE__, #expr);                                                         \
-            ++s_failures;                                                                                              \
-        }                                                                                                              \
+#define CHECK(expr)                                                                                \
+    do {                                                                                           \
+        if (!(expr)) {                                                                             \
+            fprintf(stderr, "FAIL %d: %s\n", __LINE__, #expr);                                     \
+            ++s_failures;                                                                          \
+        }                                                                                          \
     } while (false)
 
 /* --wrap 仅拦截测试指定的外部源，确定性停在 stream 大复制中，不给产品增加测试钩子。 */
@@ -68,7 +68,8 @@ static uint8_t s_rx_buf[SPP_SERVER_MAX_SESSIONS][SPP_SERVER_RX_BUF_SIZE];
 static uint8_t s_reply_buf[SPP_SERVER_MAX_SESSIONS][SPP_SERVER_REPLY_CAPACITY];
 static uint8_t s_stream_buf[SPP_SERVER_STREAM_CAPACITY];
 static uint8_t s_merge_buf[SPP_SERVER_MERGE_CAPACITY];
-static _Alignas(uint32_t) StackType_t s_worker_stack[SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t)];
+static _Alignas(uint32_t)
+    StackType_t s_worker_stack[SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t)];
 
 static void init(void)
 {
@@ -237,8 +238,10 @@ static void stream_order(void)
     /* 两段提交：源环跨尾的记录按序拼成一条，目标环同样跨尾（head=37）。 */
     CHECK(spp_server_stream_reserve(0x11U, sizeof(stream), &token) == ESP_OK);
     CHECK(spp_server_tx_commit2(&token, stream, 1000U, stream + 1000U, 0U) == ESP_ERR_INVALID_ARG);
-    CHECK(spp_server_tx_commit2(&token, stream, 1000U, stream + 1000U, sizeof(stream)) == ESP_ERR_INVALID_ARG);
-    CHECK(spp_server_tx_commit2(&token, stream, 1000U, stream + 1000U, sizeof(stream) - 1000U) == ESP_OK);
+    CHECK(spp_server_tx_commit2(&token, stream, 1000U, stream + 1000U, sizeof(stream)) ==
+          ESP_ERR_INVALID_ARG);
+    CHECK(spp_server_tx_commit2(&token, stream, 1000U, stream + 1000U, sizeof(stream) - 1000U) ==
+          ESP_OK);
     for (int call = 11; call < 15; ++call) {
         CHECK(fake_wait_write_calls(call + 1, 1000U));
         CHECK(memcmp(fake_write_call_data(call), stream + (size_t)(call - 11) * 1024U, 1024U) == 0);
@@ -254,9 +257,11 @@ static void early_close(void)
     reply(0x11U, 0xAAU, 26U);
     CHECK(fake_write_gate_wait_entered(1000U));
     fake_emit_write(0x11U, 26, ESP_SPP_SUCCESS, false);
-    CHECK(stats().inflight == 1U && stats().completed == 0U); /* submitting 保留，不能提前复用 merge。 */
+    CHECK(stats().inflight == 1U &&
+          stats().completed == 0U); /* submitting 保留，不能提前复用 merge。 */
     fake_emit_write(0U, -1, ESP_SPP_NO_RESOURCE, false);
-    CHECK(stats().anon_write_fail == 1U && !spp_server_reply_ready(0x11U) && spp_server_reply_ready(0x22U));
+    CHECK(stats().anon_write_fail == 1U && !spp_server_reply_ready(0x11U) &&
+          spp_server_reply_ready(0x22U));
     fake_emit_close(0x11U);
     CHECK(event(SPP_SERVER_EVT_CLOSE, 0x11U));
     CHECK(stats().inflight == 1U);
@@ -333,7 +338,8 @@ static void errors(fake_write_mode_t mode)
     CHECK(fake_wait_disconnect_calls(1, 1000U));
     CHECK(fake_disconnect_handle(0) == 0x11U);
     CHECK(stats().errors == 1U && stats().completed == 0U && settled(0U));
-    CHECK(fake_write_call_count() == 1 && !spp_server_reply_ready(0x11U) && spp_server_reply_ready(0x22U));
+    CHECK(fake_write_call_count() == 1 && !spp_server_reply_ready(0x11U) &&
+          spp_server_reply_ready(0x22U));
     CHECK(spp_server_reply_reserve(0x11U, &token) == ESP_ERR_TIMEOUT);
     CHECK(spp_server_push_latest(0x11U, &push_byte, 1U) == ESP_ERR_NOT_FOUND);
     fake_set_write_mode(FAKE_WRITE_OK);
@@ -428,8 +434,9 @@ int main(int argc, char **argv)
     } else {
         return 2;
     }
-    printf("%s %s; session=%zu state=%zu inflight=%zu payload=%u\n", s_failures ? "FAIL" : "PASS", argv[1],
-           sizeof(spp_server_session_t), sizeof(spp_server_state_t), sizeof(spp_server_inflight_t),
+    printf("%s %s; session=%zu state=%zu inflight=%zu payload=%u\n", s_failures ? "FAIL" : "PASS",
+           argv[1], sizeof(spp_server_session_t), sizeof(spp_server_state_t),
+           sizeof(spp_server_inflight_t),
            2U * SPP_SERVER_REPLY_CAPACITY + SPP_SERVER_STREAM_CAPACITY + SPP_SERVER_MERGE_CAPACITY);
     return s_failures ? 1 : 0;
 }

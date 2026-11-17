@@ -35,8 +35,8 @@ const char *fault_reason_for(BootCtx &ctx, const char *name) noexcept
         return nullptr;
     }
     // "fault:" 加步骤名短于缓冲上限；写失败时退回常量，避免返回空原因。
-    const int written =
-        std::snprintf(ctx.fault_reason.data(), ctx.fault_reason.size(), "%s%s", boot_reason::kFaultPrefix, name);
+    const int written = std::snprintf(ctx.fault_reason.data(), ctx.fault_reason.size(), "%s%s",
+                                      boot_reason::kFaultPrefix, name);
     return (written > 0) ? ctx.fault_reason.data() : boot_reason::kFaultFallback;
 }
 
@@ -60,7 +60,8 @@ const char *boot_result_name(BootResult result) noexcept
     }
 }
 
-size_t run_boot_steps(std::span<const BootStep> steps, BootCtx &ctx, std::span<BootRecord> records) noexcept
+size_t run_boot_steps(std::span<const BootStep> steps, BootCtx &ctx,
+                      std::span<BootRecord> records) noexcept
 {
     size_t executed = 0U;
     const size_t limit = (steps.size() < records.size()) ? steps.size() : records.size();

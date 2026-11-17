@@ -27,9 +27,10 @@ namespace gnss::unicore {
 inline constexpr std::size_t kResponseMaxFrame = 256;
 [[nodiscard]] bool response_first_byte(uint8_t byte) noexcept;
 [[nodiscard]] demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
-[[nodiscard]] std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out) noexcept;
-inline constexpr demux::Decoder kResponseDecoder{"UnicoreResp", kResponseMaxFrame, &response_first_byte, &response_step,
-                                                 &explain_response};
+[[nodiscard]] std::size_t explain_response(std::span<const uint8_t> frame,
+                                           std::span<char> out) noexcept;
+inline constexpr demux::Decoder kResponseDecoder{
+    "UnicoreResp", kResponseMaxFrame, &response_first_byte, &response_step, &explain_response};
 
 } // namespace gnss::unicore
 
@@ -77,7 +78,8 @@ public:
     /** 基类默认 + SATSINFOA/GST；caps(model) 含 kHeading 时另加 HEADINGA。 */
     [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
     /** "<name> COMn <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）；HEADINGA 需 caps(model) 含 kHeading。 */
-    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
+    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model,
+                                          const OutputPlan &plan,
                                           CmdBuf &out) const noexcept override;
 
 protected:
@@ -119,10 +121,12 @@ protected:
 
     // ---- 应答解析：每个函数只判一件事 ----
     [[nodiscard]] static bool resp_has_valid_tail(std::span<const uint8_t> frame) noexcept;
-    [[nodiscard]] static std::optional<size_t> resp_find_tag(std::span<const uint8_t> frame) noexcept;
+    [[nodiscard]] static std::optional<size_t>
+    resp_find_tag(std::span<const uint8_t> frame) noexcept;
     [[nodiscard]] static bool resp_echo_matches(std::span<const uint8_t> frame, size_t tag_pos,
                                                 std::span<const uint8_t> sent) noexcept;
-    [[nodiscard]] static std::span<const uint8_t> resp_text(std::span<const uint8_t> frame, size_t tag_pos) noexcept;
+    [[nodiscard]] static std::span<const uint8_t> resp_text(std::span<const uint8_t> frame,
+                                                            size_t tag_pos) noexcept;
 };
 
 /** UM980/UM981 基准型号叶子类：无覆盖，家族默认行为即基准型号行为（name() 仍为 "unicore"）。 */

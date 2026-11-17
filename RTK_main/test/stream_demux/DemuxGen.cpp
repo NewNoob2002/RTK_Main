@@ -108,16 +108,20 @@ void write_u16_le(std::span<uint8_t> dst, std::size_t offset, uint16_t val) noex
 {
     // uint16_t 扩宽到 unsigned int 后移位，避免整型提升为有符号 int
     const auto u = static_cast<unsigned int>(val);
-    dst[offset + kOfsByte0] = static_cast<uint8_t>(u & kByteMask);              // 掩码后范围为 0..255
-    dst[offset + kOfsByte1] = static_cast<uint8_t>((u >> kShift8) & kByteMask); // 右移并掩码后范围为 0..255
+    dst[offset + kOfsByte0] = static_cast<uint8_t>(u & kByteMask); // 掩码后范围为 0..255
+    dst[offset + kOfsByte1] =
+        static_cast<uint8_t>((u >> kShift8) & kByteMask); // 右移并掩码后范围为 0..255
 }
 
 void write_u32_le(std::span<uint8_t> dst, std::size_t offset, uint32_t val) noexcept
 {
-    dst[offset + kOfsByte0] = static_cast<uint8_t>(val & kByteMask);               // 掩码后范围为 0..255
-    dst[offset + kOfsByte1] = static_cast<uint8_t>((val >> kShift8) & kByteMask);  // 掩码后范围为 0..255
-    dst[offset + kOfsByte2] = static_cast<uint8_t>((val >> kShift16) & kByteMask); // 掩码后范围为 0..255
-    dst[offset + kOfsByte3] = static_cast<uint8_t>((val >> kShift24) & kByteMask); // 掩码后范围为 0..255
+    dst[offset + kOfsByte0] = static_cast<uint8_t>(val & kByteMask); // 掩码后范围为 0..255
+    dst[offset + kOfsByte1] =
+        static_cast<uint8_t>((val >> kShift8) & kByteMask); // 掩码后范围为 0..255
+    dst[offset + kOfsByte2] =
+        static_cast<uint8_t>((val >> kShift16) & kByteMask); // 掩码后范围为 0..255
+    dst[offset + kOfsByte3] =
+        static_cast<uint8_t>((val >> kShift24) & kByteMask); // 掩码后范围为 0..255
 }
 
 uint32_t crc32_reflected_raw(uint32_t init, std::span<const uint8_t> data) noexcept
@@ -209,7 +213,8 @@ UbxChecksum ubx_checksum(std::span<const uint8_t> data) noexcept
     return UbxChecksum{static_cast<uint8_t>(a), static_cast<uint8_t>(b)};
 }
 
-bool gen_rtcm3(std::span<uint8_t> out, std::span<const uint8_t> payload, std::size_t &out_len) noexcept
+bool gen_rtcm3(std::span<uint8_t> out, std::span<const uint8_t> payload,
+               std::size_t &out_len) noexcept
 {
     if (payload.size() > kRtcm3MaxPayload) {
         return false;
@@ -230,14 +235,17 @@ bool gen_rtcm3(std::span<uint8_t> out, std::span<const uint8_t> payload, std::si
 
     const std::size_t body_len = kRtcm3HdrLen + payload.size();
     const uint32_t crc = crc24q(out.subspan(0, body_len));
-    out[body_len + kOfsByte0] = static_cast<uint8_t>((crc >> kShift16) & kByteMask); // 大端高字节，范围 0..255
-    out[body_len + kOfsByte1] = static_cast<uint8_t>((crc >> kShift8) & kByteMask);  // 大端中字节，范围 0..255
-    out[body_len + kOfsByte2] = static_cast<uint8_t>(crc & kByteMask);               // 大端低字节，范围 0..255
+    out[body_len + kOfsByte0] =
+        static_cast<uint8_t>((crc >> kShift16) & kByteMask); // 大端高字节，范围 0..255
+    out[body_len + kOfsByte1] =
+        static_cast<uint8_t>((crc >> kShift8) & kByteMask);            // 大端中字节，范围 0..255
+    out[body_len + kOfsByte2] = static_cast<uint8_t>(crc & kByteMask); // 大端低字节，范围 0..255
     out_len = total;
     return true;
 }
 
-bool gen_nmea(std::span<uint8_t> out, std::string_view body, bool lowercase_hex, std::size_t &out_len) noexcept
+bool gen_nmea(std::span<uint8_t> out, std::string_view body, bool lowercase_hex,
+              std::size_t &out_len) noexcept
 {
     if (body.empty() || (body.size() > (kNmeaMaxFrame - 1U - kNmeaTrailerLen))) {
         return false;
@@ -269,7 +277,8 @@ bool gen_nmea(std::span<uint8_t> out, std::string_view body, bool lowercase_hex,
     const std::size_t star_pos = 1U + body.size();
     out[star_pos] = static_cast<uint8_t>('*');
     // chk_u 右移 4 位后在 0..15
-    out[star_pos + kTrailerChkHi] = nibble_to_hex_byte(static_cast<uint8_t>(chk_u >> kNibbleBits), lowercase_hex);
+    out[star_pos + kTrailerChkHi] =
+        nibble_to_hex_byte(static_cast<uint8_t>(chk_u >> kNibbleBits), lowercase_hex);
     out[star_pos + kTrailerChkLo] = nibble_to_hex_byte(chk, lowercase_hex);
     out[star_pos + kTrailerCr] = static_cast<uint8_t>('\r');
     out[star_pos + kTrailerLf] = static_cast<uint8_t>('\n');
@@ -277,8 +286,8 @@ bool gen_nmea(std::span<uint8_t> out, std::string_view body, bool lowercase_hex,
     return true;
 }
 
-bool gen_ubx(std::span<uint8_t> out, uint8_t msg_class, uint8_t msg_id, std::span<const uint8_t> payload,
-             std::size_t &out_len) noexcept
+bool gen_ubx(std::span<uint8_t> out, uint8_t msg_class, uint8_t msg_id,
+             std::span<const uint8_t> payload, std::size_t &out_len) noexcept
 {
     if (payload.size() > kUbxMaxPayload) {
         return false;
@@ -297,15 +306,17 @@ bool gen_ubx(std::span<uint8_t> out, uint8_t msg_class, uint8_t msg_id, std::spa
     if (!payload.empty()) {
         std::copy(payload.begin(), payload.end(), out.subspan(kUbxHdrLen).begin());
     }
-    const UbxChecksum ck = ubx_checksum(out.subspan(kOfsUbxClass, kUbxHdrLen - kOfsUbxClass + payload.size()));
+    const UbxChecksum ck =
+        ubx_checksum(out.subspan(kOfsUbxClass, kUbxHdrLen - kOfsUbxClass + payload.size()));
     out[kUbxHdrLen + payload.size()] = ck.ck_a;
     out[kUbxHdrLen + payload.size() + 1U] = ck.ck_b;
     out_len = total;
     return true;
 }
 
-bool gen_unicore_bin(std::span<uint8_t> out, uint16_t msg_id, uint8_t cpu_idle, std::span<const uint8_t> hdr_rest_16,
-                     std::span<const uint8_t> payload, std::size_t &out_len) noexcept
+bool gen_unicore_bin(std::span<uint8_t> out, uint16_t msg_id, uint8_t cpu_idle,
+                     std::span<const uint8_t> hdr_rest_16, std::span<const uint8_t> payload,
+                     std::size_t &out_len) noexcept
 {
     if (payload.size() > kUnicoreBinMaxPayload) {
         return false;
@@ -361,7 +372,8 @@ bool gen_unicore_hash_crc32(std::span<uint8_t> out, std::string_view body, bool 
     out[star_pos] = static_cast<uint8_t>('*');
     for (std::size_t i = 0U; i < kHashCrcDigits; ++i) {
         // i 范围为 0..7，位移量范围为 28..0
-        const uint32_t shift = (static_cast<uint32_t>(kHashCrcDigits - 1U) - static_cast<uint32_t>(i)) * kNibbleBits;
+        const uint32_t shift =
+            (static_cast<uint32_t>(kHashCrcDigits - 1U) - static_cast<uint32_t>(i)) * kNibbleBits;
         // 掩码后范围为 0..15
         const auto nib = static_cast<uint8_t>((crc >> shift) & kNibbleMask);
         out[star_pos + 1U + i] = nibble_to_hex_byte(nib, lowercase_hex);
@@ -393,7 +405,8 @@ bool gen_unicore_hash_xor(std::span<uint8_t> out, std::string_view body, bool lo
     const std::size_t star_pos = 1U + body.size();
     out[star_pos] = static_cast<uint8_t>('*');
     // chk_u 右移 4 位后在 0..15
-    out[star_pos + kTrailerChkHi] = nibble_to_hex_byte(static_cast<uint8_t>(chk_u >> kNibbleBits), lowercase_hex);
+    out[star_pos + kTrailerChkHi] =
+        nibble_to_hex_byte(static_cast<uint8_t>(chk_u >> kNibbleBits), lowercase_hex);
     out[star_pos + kTrailerChkLo] = nibble_to_hex_byte(chk, lowercase_hex);
     out[star_pos + kTrailerCr] = static_cast<uint8_t>('\r');
     out[star_pos + kTrailerLf] = static_cast<uint8_t>('\n');

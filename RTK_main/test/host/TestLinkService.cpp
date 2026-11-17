@@ -34,10 +34,11 @@ struct Fixture {
     explicit Fixture(Policy policy, bool alarm_whitelisted)
     {
         const std::array<BtAddr, 1> wl = {kAlarmAddr};
-        link.init(policy, alarm_whitelisted ? std::span<const BtAddr>(wl) : std::span<const BtAddr>());
+        link.init(policy,
+                  alarm_whitelisted ? std::span<const BtAddr>(wl) : std::span<const BtAddr>());
         // J2b：原来的 CommandDispatcher 换成 4 个服务 + CommandRouter（组装方式与 main 一致）。
-        const std::array<core::RouteTable, 4> tables = {device.table(), config.table(), alarm_service.table(),
-                                                        pair.table()};
+        const std::array<core::RouteTable, 4> tables = {device.table(), config.table(),
+                                                        alarm_service.table(), pair.table()};
         TEST_ASSERT_TRUE(is_ok(router.init(tables)));
     }
     test::FakeTransport transport;
@@ -59,11 +60,13 @@ struct Bytes {
     {
         return {data.data(), len};
     }
-    void append(uint16_t msg_id, uint8_t sender, uint8_t type, std::span<const uint8_t> payload = {})
+    void append(uint16_t msg_id, uint8_t sender, uint8_t type,
+                std::span<const uint8_t> payload = {})
     {
         size_t n = 0;
-        TEST_ASSERT_TRUE(is_ok(proto::build_frame(std::span<uint8_t>(data.data() + len, data.size() - len), msg_id,
-                                                  sender, type, payload, n)));
+        TEST_ASSERT_TRUE(
+            is_ok(proto::build_frame(std::span<uint8_t>(data.data() + len, data.size() - len),
+                                     msg_id, sender, type, payload, n)));
         len += n;
     }
 };
@@ -81,7 +84,8 @@ constexpr std::array<uint8_t, 8> kHeartbeat = {0x05, 0x00, 0x50, 0x00, 0, 0, 0, 
 test::FeedResult written(const test::FakeTransport &t, size_t idx)
 {
     proto::FrameParser parser;
-    return test::feed_all(parser, std::span<const uint8_t>(t.writes[idx].data.data(), t.writes[idx].len));
+    return test::feed_all(parser,
+                          std::span<const uint8_t>(t.writes[idx].data.data(), t.writes[idx].len));
 }
 
 } // namespace

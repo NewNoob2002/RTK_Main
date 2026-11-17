@@ -128,7 +128,8 @@ fw::Status BootArena::allocate(const char *tag, size_t bytes, size_t align, void
         return fw::Status::kNoSpace;
     }
     std::memset(ptr, 0, bytes);
-    const size_t probed_size = (ops_.allocated_size != nullptr) ? ops_.allocated_size(ptr, ops_.ctx) : 0U;
+    const size_t probed_size =
+        (ops_.allocated_size != nullptr) ? ops_.allocated_size(ptr, ops_.ctx) : 0U;
     const size_t actual_bytes = (probed_size >= alloc_bytes) ? probed_size : alloc_bytes;
 
     entries_[count_] = BootAllocEntry{

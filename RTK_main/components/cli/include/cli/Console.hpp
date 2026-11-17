@@ -98,7 +98,8 @@ void print_usage(const char *group, std::span<const Verb> verbs) noexcept;
  * 登记一组的动词表，供 `help` 与 `help <组>` 显示（组名必须已经或将要经 add() 登记）。
  * 只保存指针；必须在 init/start 之前调用；超过 kMaxCmds → ESP_ERR_NO_MEM。
  */
-[[nodiscard]] esp_err_t add_verbs(const char *group, const char *summary, std::span<const Verb> verbs) noexcept;
+[[nodiscard]] esp_err_t add_verbs(const char *group, const char *summary,
+                                  std::span<const Verb> verbs) noexcept;
 
 /* ---- 分节输出辅助（status、sys 等使用，统一对齐与单位）---- */
 

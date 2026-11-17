@@ -81,15 +81,17 @@ void print_link_section() noexcept
     cli::print_kv("policy", "%s", policy_name(link.policy));
     cli::print_kv("pairing", "%s", link.pairing ? "open" : "closed");
     // 会话数与白名单数上限均不超过 kMaxAlarms/kMaxSessions，转换到 unsigned 无损。
-    cli::print_kv("sessions", "%u / %u", static_cast<unsigned>(sessions.count), static_cast<unsigned>(kMaxSessions));
+    cli::print_kv("sessions", "%u / %u", static_cast<unsigned>(sessions.count),
+                  static_cast<unsigned>(kMaxSessions));
     std::array<char, kMacStrBuf> mac_buf{};
     for (size_t idx = 0U; idx < sessions.count; ++idx) {
         const SessionSnapshot &session = sessions.entries[idx];
         format_mac(session.addr, mac_buf);
-        cli::print_kv("session", "handle=0x%08" PRIx32 " role=%s mac=%s", session.handle, role_name(session.role),
-                      mac_buf.data());
+        cli::print_kv("session", "handle=0x%08" PRIx32 " role=%s mac=%s", session.handle,
+                      role_name(session.role), mac_buf.data());
     }
-    cli::print_kv("whitelist", "%u (pending=%s, store=%s)", static_cast<unsigned>(link.whitelist_count),
+    cli::print_kv("whitelist", "%u (pending=%s, store=%s)",
+                  static_cast<unsigned>(link.whitelist_count),
                   store.whitelist_pending ? "yes" : "no", esp_err_to_name(store.whitelist_error));
     for (size_t idx = 0U; idx < link.whitelist_count; ++idx) {
         format_mac(link.whitelist[idx], mac_buf);
@@ -99,29 +101,39 @@ void print_link_section() noexcept
     cli::print_kv("alarm", "state=%u level=%u override=%s", static_cast<unsigned>(alarm.state),
                   static_cast<unsigned>(alarm.level), alarm.override ? "yes" : "no");
     if (heartbeat.present) {
-        cli::print_kv("heartbeat", "seq=%u battery=%u%% state=%u", static_cast<unsigned>(heartbeat.value.seq),
+        cli::print_kv("heartbeat", "seq=%u battery=%u%% state=%u",
+                      static_cast<unsigned>(heartbeat.value.seq),
                       static_cast<unsigned>(heartbeat.value.battery_pct),
                       static_cast<unsigned>(heartbeat.value.local_state));
     } else {
         cli::print_kv("heartbeat", "none");
     }
-    cli::print_kv(
-        "traffic", "rx=%" PRIu32 " tx=%" PRIu32 " push=%" PRIu32 " werr=%" PRIu32 " disc=%" PRIu32 " drop=%" PRIu32,
-        stats.frames_rx, stats.replies_tx, stats.pushes_tx, stats.write_errors, stats.disconnects, stats.rx_dropped);
+    cli::print_kv("traffic",
+                  "rx=%" PRIu32 " tx=%" PRIu32 " push=%" PRIu32 " werr=%" PRIu32 " disc=%" PRIu32
+                  " drop=%" PRIu32,
+                  stats.frames_rx, stats.replies_tx, stats.pushes_tx, stats.write_errors,
+                  stats.disconnects, stats.rx_dropped);
     cli::print_kv("parser", "crc_err=%" PRIu32 " len_err=%" PRIu32, stats.parser_crc_errors,
                   stats.parser_length_errors);
-    cli::print_kv("spp_tx", "accepted=%" PRIu32 " completed=%" PRIu32 " cancelled=%" PRIu32 " B errors=%" PRIu32,
+    cli::print_kv("spp_tx",
+                  "accepted=%" PRIu32 " completed=%" PRIu32 " cancelled=%" PRIu32
+                  " B errors=%" PRIu32,
                   stats.tx_accepted, stats.tx_completed, stats.tx_cancelled, stats.tx_errors);
-    cli::print_kv("spp_flow", "cong=%" PRIu32 " high_water=%" PRIu32 " B paused=%" PRIu32 " inflight=%" PRIu32,
+    cli::print_kv("spp_flow",
+                  "cong=%" PRIu32 " high_water=%" PRIu32 " B paused=%" PRIu32 " inflight=%" PRIu32,
                   stats.tx_cong, stats.tx_high_water, stats.tx_paused, stats.tx_inflight);
     cli::print_kv("spp_events",
-                  "anon_write_fail=%" PRIu32 " stray=%" PRIu32 " dispatch_pauses=%" PRIu32 " cancelled=%" PRIu32,
-                  stats.tx_anon_write_fail, stats.tx_stray_write, stats.dispatch_pauses, stats.dispatch_cancelled);
+                  "anon_write_fail=%" PRIu32 " stray=%" PRIu32 " dispatch_pauses=%" PRIu32
+                  " cancelled=%" PRIu32,
+                  stats.tx_anon_write_fail, stats.tx_stray_write, stats.dispatch_pauses,
+                  stats.dispatch_cancelled);
     cli::print_kv("spp_rx",
-                  "evt_drop=%" PRIu32 " wakes=%" PRIu32 " s0=%" PRIu32 "/%" PRIu32 "(drop=%" PRIu32 ") "
+                  "evt_drop=%" PRIu32 " wakes=%" PRIu32 " s0=%" PRIu32 "/%" PRIu32 "(drop=%" PRIu32
+                  ") "
                   "s1=%" PRIu32 "/%" PRIu32 "(drop=%" PRIu32 ")",
                   stats.evt_dropped, stats.rx_wake_calls, stats.rx_used[0], stats.rx_high_water[0],
-                  stats.rx_dropped_bytes[0], stats.rx_used[1], stats.rx_high_water[1], stats.rx_dropped_bytes[1]);
+                  stats.rx_dropped_bytes[0], stats.rx_used[1], stats.rx_high_water[1],
+                  stats.rx_dropped_bytes[1]);
 }
 
 void print_sys_section() noexcept
@@ -134,7 +146,8 @@ void print_sys_section() noexcept
     const uint64_t free_kib = kib_tenths(system.free_heap);
     const uint64_t min_kib = kib_tenths(system.min_free_heap);
     const int64_t uptime_us = esp_timer_get_time();
-    const uint64_t uptime_ms = (uptime_us >= 0) ? (static_cast<uint64_t>(uptime_us) / kUsPerMs) : 0ULL;
+    const uint64_t uptime_ms =
+        (uptime_us >= 0) ? (static_cast<uint64_t>(uptime_us) / kUsPerMs) : 0ULL;
 
     cli::print_section("sys");
     cli::print_kv("uptime", "%" PRIu64 " ms", uptime_ms);
@@ -182,12 +195,14 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     const uint64_t min_kib = kib_tenths(system.min_free_heap);
 
     cli::print_section("link");
-    cli::print_kv("state", "%s (bt=%s, policy=%s, pair=%s)", system.link_running ? "running" : "down",
-                  system.bt_ready ? "ready" : "err", policy_name(link.policy), link.pairing ? "open" : "closed");
+    cli::print_kv("state", "%s (bt=%s, policy=%s, pair=%s)",
+                  system.link_running ? "running" : "down", system.bt_ready ? "ready" : "err",
+                  policy_name(link.policy), link.pairing ? "open" : "closed");
     // 会话数/白名单/报警字段均为小无符号整数，转换到 unsigned 无损。
     cli::print_kv("sessions", "%u/%u  wl=%u  rx=%" PRIu32 "  tx=%" PRIu32 "  drop=%" PRIu32,
                   static_cast<unsigned>(sessions.count), static_cast<unsigned>(kMaxSessions),
-                  static_cast<unsigned>(link.whitelist_count), stats.frames_rx, stats.replies_tx, stats.rx_dropped);
+                  static_cast<unsigned>(link.whitelist_count), stats.frames_rx, stats.replies_tx,
+                  stats.rx_dropped);
     cli::print_kv("alarm", "state=%u  level=%u  override=%s", static_cast<unsigned>(alarm.state),
                   static_cast<unsigned>(alarm.level), alarm.override ? "yes" : "no");
 
@@ -195,8 +210,10 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::print_kv("forward", "%" PRIu32 " frames, %llu.%llu KB, %" PRIu32 " B/s", rtcm.frames,
                   static_cast<unsigned long long>(rtcm_kib / kTenthsPerUnit),
                   static_cast<unsigned long long>(rtcm_kib % kTenthsPerUnit), rtcm.bytes_per_sec);
-    cli::print_kv("errors", "role=%" PRIu32 "  unknown=%" PRIu32 " B  prod_rej=%" PRIu32 "  rtcm_rej=%" PRIu32,
-                  rtcm.rejected_role, demux.unknown_bytes, demux.product_rejects, demux.rtcm_rejects);
+    cli::print_kv(
+        "errors",
+        "role=%" PRIu32 "  unknown=%" PRIu32 " B  prod_rej=%" PRIu32 "  rtcm_rej=%" PRIu32,
+        rtcm.rejected_role, demux.unknown_bytes, demux.product_rejects, demux.rtcm_rejects);
 
     cli::print_section("sys");
     cli::print_kv("heap", "free=%llu.%llu KB  min=%llu.%llu KB",
@@ -204,7 +221,9 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
                   static_cast<unsigned long long>(free_kib % kTenthsPerUnit),
                   static_cast<unsigned long long>(min_kib / kTenthsPerUnit),
                   static_cast<unsigned long long>(min_kib % kTenthsPerUnit));
-    cli::print_kv("exec", "rounds=%" PRIu32 "  overruns=%" PRIu32 "  max_rnd=%" PRIu32 " ms  link_stk=%" PRIu32 " B",
+    cli::print_kv("exec",
+                  "rounds=%" PRIu32 "  overruns=%" PRIu32 "  max_rnd=%" PRIu32
+                  " ms  link_stk=%" PRIu32 " B",
                   exec.rounds, exec.overruns, exec.max_round_ms, exec.stack_free);
 #if RTK_GNSS_ENABLED
     const auto io_exec = data.io_exec_stats.read();
@@ -212,17 +231,21 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     const auto r_wr = data.gnss_app_ring.typed_writer_stats();
     const auto r_rd = data.gnss_app_ring.typed_reader_stats(0U);
     const auto sub = data.gnss_app_sub.snapshot();
-    cli::print_kv("io_exec", "rounds=%" PRIu32 "  overruns=%" PRIu32 "  max_rnd=%" PRIu32 " ms  io_stk=%" PRIu32 " B",
+    cli::print_kv("io_exec",
+                  "rounds=%" PRIu32 "  overruns=%" PRIu32 "  max_rnd=%" PRIu32
+                  " ms  io_stk=%" PRIu32 " B",
                   io_exec.rounds, io_exec.overruns, io_exec.max_round_ms, io_exec.stack_free);
     cli::print_section("gnss");
     cli::print_kv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::state_name(gnss.state),
                   ::gnss::model_name(gnss.model), gnss.host_baud);
-    cli::print_kv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B", gnss.pipe.pushed_frames,
-                  gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
+    cli::print_kv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B",
+                  gnss.pipe.pushed_frames, gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
     cli::print_kv("app_ring",
-                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 " rd=%" PRIu32 " drop=%" PRIu32 " qovsz=%" PRIu32,
-                  static_cast<unsigned>(kGnssAppRingBytes), r_wr.high_water_bytes, sub.active_mask, r_wr.base.records,
-                  r_rd.base.records, r_rd.base.dropped + r_wr.oversize_drop + r_wr.pinned_drop,
+                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 " rd=%" PRIu32
+                  " drop=%" PRIu32 " qovsz=%" PRIu32,
+                  static_cast<unsigned>(kGnssAppRingBytes), r_wr.high_water_bytes, sub.active_mask,
+                  r_wr.base.records, r_rd.base.records,
+                  r_rd.base.dropped + r_wr.oversize_drop + r_wr.pinned_drop,
                   sub.query_oversize_total);
     cli::print_kv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
 #endif
@@ -240,17 +263,19 @@ void print_gnss_section() noexcept
     cli::print_section("gnss");
     cli::print_kv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::state_name(gnss.state),
                   ::gnss::model_name(gnss.model), gnss.host_baud);
-    cli::print_kv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B", gnss.pipe.pushed_frames,
-                  gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
+    cli::print_kv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B",
+                  gnss.pipe.pushed_frames, gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
     cli::print_kv("app_ring",
-                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 "/%" PRIu32 "B overwr=%" PRIu32 " nosub=%" PRIu32
-                  " ovsz=%" PRIu32 " pin=%" PRIu32,
-                  static_cast<unsigned>(kGnssAppRingBytes), r_wr.high_water_bytes, sub.active_mask, r_wr.base.records,
-                  r_wr.base.bytes, r_wr.base.overwritten, r_wr.no_subscriber, r_wr.oversize_drop, r_wr.pinned_drop);
+                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 "/%" PRIu32
+                  "B overwr=%" PRIu32 " nosub=%" PRIu32 " ovsz=%" PRIu32 " pin=%" PRIu32,
+                  static_cast<unsigned>(kGnssAppRingBytes), r_wr.high_water_bytes, sub.active_mask,
+                  r_wr.base.records, r_wr.base.bytes, r_wr.base.overwritten, r_wr.no_subscriber,
+                  r_wr.oversize_drop, r_wr.pinned_drop);
     cli::print_kv("app_reader",
-                  "rec=%" PRIu32 "/%" PRIu32 "B drop=%" PRIu32 " filt=%" PRIu32 " pin=%" PRIu32 " qovsz=%" PRIu32,
-                  r_rd.base.records, r_rd.base.bytes, r_rd.base.dropped, r_rd.filtered, r_rd.pinned_drop,
-                  sub.query_oversize_total);
+                  "rec=%" PRIu32 "/%" PRIu32 "B drop=%" PRIu32 " filt=%" PRIu32 " pin=%" PRIu32
+                  " qovsz=%" PRIu32,
+                  r_rd.base.records, r_rd.base.bytes, r_rd.base.dropped, r_rd.filtered,
+                  r_rd.pinned_drop, sub.query_oversize_total);
     cli::print_kv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
 #else
     cli::print_section("gnss");
@@ -312,8 +337,10 @@ int cmd_log_level(void * /*ctx*/, int argc, char **argv) noexcept
         return cli::fail("usage: log level <tag|*> <E|W|I|N>");
     }
     const std::span<char *const> args(argv, kLogLevelArgs);
-    const std::string_view tag = (args[1] != nullptr) ? std::string_view{args[1]} : std::string_view{};
-    const std::string_view lvl = (args[2] != nullptr) ? std::string_view{args[2]} : std::string_view{};
+    const std::string_view tag =
+        (args[1] != nullptr) ? std::string_view{args[1]} : std::string_view{};
+    const std::string_view lvl =
+        (args[2] != nullptr) ? std::string_view{args[2]} : std::string_view{};
     if (tag.empty()) {
         return cli::fail("bad tag");
     }
@@ -365,15 +392,18 @@ int cmd_sys_info(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
 
     const int64_t uptime_us = esp_timer_get_time();
-    const uint64_t uptime_ms = (uptime_us >= 0) ? (static_cast<uint64_t>(uptime_us) / kUsPerMs) : 0ULL;
+    const uint64_t uptime_ms =
+        (uptime_us >= 0) ? (static_cast<uint64_t>(uptime_us) / kUsPerMs) : 0ULL;
     const uint64_t uptime_s = uptime_ms / kMsPerSec;
 
     cli::print_section("sys");
     // kAppVersion 长度远小于 int 上限，转换安全。
     cli::print_kv("version", "%.*s", static_cast<int>(kAppVersion.size()), kAppVersion.data());
     cli::print_kv("idf", "%s", esp_get_idf_version());
-    cli::print_kv("chip", "ESP32 rev %u.%u (%u cores)", static_cast<unsigned>(chip.revision / kChipRevDivisor),
-                  static_cast<unsigned>(chip.revision % kChipRevDivisor), static_cast<unsigned>(chip.cores));
+    cli::print_kv("chip", "ESP32 rev %u.%u (%u cores)",
+                  static_cast<unsigned>(chip.revision / kChipRevDivisor),
+                  static_cast<unsigned>(chip.revision % kChipRevDivisor),
+                  static_cast<unsigned>(chip.cores));
     cli::print_kv("bt_mac", "%s", (mac_err == ESP_OK) ? mac_buf.data() : esp_err_to_name(mac_err));
     cli::print_kv("sn", "%s", sys.sn.data());
     cli::print_kv("bt_name", "%s", sys.device_name.data());
@@ -400,7 +430,8 @@ int cmd_sys_heap(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::print_kv("free", "%zu B (%llu.%llu KB)", free_bytes,
                   static_cast<unsigned long long>(free_kib / kTenthsPerUnit),
                   static_cast<unsigned long long>(free_kib % kTenthsPerUnit));
-    cli::print_kv("min", "%zu B (%llu.%llu KB)", min_bytes, static_cast<unsigned long long>(min_kib / kTenthsPerUnit),
+    cli::print_kv("min", "%zu B (%llu.%llu KB)", min_bytes,
+                  static_cast<unsigned long long>(min_kib / kTenthsPerUnit),
                   static_cast<unsigned long long>(min_kib % kTenthsPerUnit));
     cli::print_kv("largest", "%zu B (%llu.%llu KB)", largest_bytes,
                   static_cast<unsigned long long>(largest_kib / kTenthsPerUnit),
@@ -421,8 +452,10 @@ int cmd_sys_mem(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     const auto bss_end = reinterpret_cast<uintptr_t>(&_bss_end);
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
     // ESP32 uintptr_t/size_t 同宽；边界顺序检查保证差值非负。
-    const size_t static_data_bytes = (data_end >= data_begin) ? static_cast<size_t>(data_end - data_begin) : 0U;
-    const size_t static_bss_bytes = (bss_end >= bss_begin) ? static_cast<size_t>(bss_end - bss_begin) : 0U;
+    const size_t static_data_bytes =
+        (data_end >= data_begin) ? static_cast<size_t>(data_end - data_begin) : 0U;
+    const size_t static_bss_bytes =
+        (bss_end >= bss_begin) ? static_cast<size_t>(bss_end - bss_begin) : 0U;
 
     std::array<MemoryHeapView, 4U> heaps{{
         {"internal_8bit", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, 0U, 0U, 0U, 0U},
@@ -541,11 +574,12 @@ int cmd_sys(void *ctx, int argc, char **argv) noexcept
 }
 
 constexpr std::array<cli::Cmd, 3U> kSystemCmds{{
-    {"status", "status [link|rtcm|gnss|sys|all]: system and link status", "[link|rtcm|gnss|sys|all]", cmd_status,
+    {"status", "status [link|rtcm|gnss|sys|all]: system and link status",
+     "[link|rtcm|gnss|sys|all]", cmd_status, nullptr},
+    {"log", "log level <tag|*> <E|W|I|N>: set IDF log level", "level <tag|*> <E|W|I|N>", cmd_log,
      nullptr},
-    {"log", "log level <tag|*> <E|W|I|N>: set IDF log level", "level <tag|*> <E|W|I|N>", cmd_log, nullptr},
-    {"sys", "sys <info|heap|mem|boot|tasks|reboot>: system diagnostics and reboot", "<info|heap|mem|boot|tasks|reboot>",
-     cmd_sys, nullptr},
+    {"sys", "sys <info|heap|mem|boot|tasks|reboot>: system diagnostics and reboot",
+     "<info|heap|mem|boot|tasks|reboot>", cmd_sys, nullptr},
 }};
 
 } // namespace

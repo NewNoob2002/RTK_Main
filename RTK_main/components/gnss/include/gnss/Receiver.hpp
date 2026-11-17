@@ -82,7 +82,7 @@ struct ConfigStep {
     CmdBuf cmd{};
     bool expect_reply = true;             // false：发送后不等待应答，直接进入下一步
     uint16_t timeout_ms = kStepTimeoutMs; // 等待应答时限
-    uint32_t switch_baud = 0;             // 非 0：本步确认（或无需确认时发送）后，主机 UART 改到此波特率
+    uint32_t switch_baud = 0; // 非 0：本步确认（或无需确认时发送）后，主机 UART 改到此波特率
 };
 
 /** 应答判定（原 gnss::Reply；按 CODING-STYLE 规则 4 改名，避免与 core::Reply 重名）。 */
@@ -130,7 +130,8 @@ public:
     /** 生成版本查询命令；返回 false 表示本驱动无法生成（控制器跳过该候选）。 */
     [[nodiscard]] virtual bool build_probe(CmdBuf &out) const noexcept = 0;
     /** frame 是否为版本查询的应答；是则填 out 并返回 true。dec 为分流器识别出的解码器。 */
-    [[nodiscard]] virtual bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+    [[nodiscard]] virtual bool match_probe(const demux::Decoder &dec,
+                                           std::span<const uint8_t> frame,
                                            ProbeResult &out) const noexcept = 0;
 
     // ---- 基础配置脚本（流动站模式、RTCM 输入口、波特率） ----
@@ -141,7 +142,8 @@ public:
     [[nodiscard]] virtual bool rover_step(size_t index, Model model, const RoverConfig &cfg,
                                           ConfigStep &out) const noexcept = 0;
     /** 判定 frame 是否为 sent（本步已发送的命令）的应答。 */
-    [[nodiscard]] virtual Ack classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+    [[nodiscard]] virtual Ack classify_reply(const demux::Decoder &dec,
+                                             std::span<const uint8_t> frame,
                                              std::span<const uint8_t> sent) const noexcept = 0;
 
     // ---- 报文输出（ADR-0012 §2.4；本卡只提供默认与掩码，build_output 在 P3b 实现） ----
@@ -149,7 +151,8 @@ public:
     [[nodiscard]] virtual uint32_t output_mask(Model model) const noexcept;
     /** 生成“把 msg 设为 period_ms（0 = 关闭）”的一条命令。不支持返回 kNotSupported。 */
     [[nodiscard]] virtual fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model,
-                                                  const OutputPlan &plan, CmdBuf &out) const noexcept;
+                                                  const OutputPlan &plan,
+                                                  CmdBuf &out) const noexcept;
     /** 把分流器给出的一帧归类为 OutputMsg；非 App 报文返回 OutputMsg::kNone。 */
     [[nodiscard]] virtual OutputMsg classify_frame(const demux::Decoder &dec,
                                                    std::span<const uint8_t> frame) const noexcept;

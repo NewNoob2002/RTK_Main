@@ -132,7 +132,8 @@ uint8_t xor8(std::span<const uint8_t> data) noexcept
 }
 
 /** 在 frame[last-window .. last] 内反向寻找最近的 '*'；窗口定长，因此 O(1)。 */
-bool find_star_reverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window, std::size_t &ofs) noexcept
+bool find_star_reverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window,
+                       std::size_t &ofs) noexcept
 {
     ofs = 0U;
     for (std::size_t back = 0U; (back <= window) && (back <= last); ++back) {
@@ -178,9 +179,9 @@ Verdict finish(std::span<const uint8_t> frame, std::size_t star) noexcept
     if ((len - 1U - star) == kStarOfsXor) {
         // 形式一：2 位十六进制 XOR，覆盖 '#' 与 '*' 之间。
         // 各十六进制位 ≤ 0x0F，左移 4 位后 ≤ 0xF0，结果 ≤ 0xFF，窄化安全。
-        const uint8_t checksum_rx =
-            static_cast<uint8_t>((static_cast<uint32_t>(hex_value(frame[star + 1U])) << kNibbleBits) |
-                                 static_cast<uint32_t>(hex_value(frame[star + 2U])));
+        const uint8_t checksum_rx = static_cast<uint8_t>(
+            (static_cast<uint32_t>(hex_value(frame[star + 1U])) << kNibbleBits) |
+            static_cast<uint32_t>(hex_value(frame[star + 2U])));
         const uint8_t checksum_calc = xor8(frame.subspan(1U, star - 1U));
         if (checksum_calc != checksum_rx) {
             Verdict bad = reject(Reason::kXorChecksum, star + 1U, checksum_rx);
@@ -204,7 +205,8 @@ Verdict finish(std::span<const uint8_t> frame, std::size_t star) noexcept
 }
 
 /** 未到结束符时，按新到字节相对 '*' 的偏移做 O(1) 预检（after_star ≥ 1，即当前字节不是 '*'）。 */
-bool mid_byte_ok(std::span<const uint8_t> frame, std::size_t last, std::size_t star, uint8_t new_byte) noexcept
+bool mid_byte_ok(std::span<const uint8_t> frame, std::size_t last, std::size_t star,
+                 uint8_t new_byte) noexcept
 {
     const std::size_t after_star = last - star;
 
@@ -313,10 +315,14 @@ void explain_verdict(const Verdict &verdict, demux::text_writer::TextWriter &tex
 {
     switch (verdict.reason) {
     case Reason::kSync:
-        text.literal("byte 0 is ").byte_value(static_cast<uint8_t>(verdict.received)).literal(", expected '#'");
+        text.literal("byte 0 is ")
+            .byte_value(static_cast<uint8_t>(verdict.received))
+            .literal(", expected '#'");
         break;
     case Reason::kSecond:
-        text.literal("byte 1 is ").byte_value(static_cast<uint8_t>(verdict.received)).literal(", not 'A'-'Z'");
+        text.literal("byte 1 is ")
+            .byte_value(static_cast<uint8_t>(verdict.received))
+            .literal(", not 'A'-'Z'");
         break;
     case Reason::kMissingStar:
         text.literal("no '*' before LF at offset ").decimal(verdict.offset);

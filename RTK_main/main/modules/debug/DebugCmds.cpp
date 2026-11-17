@@ -42,7 +42,8 @@ void print_cat_table() noexcept
         const bool on = (mask & fw::trace_bit(cat)) != 0U;
         const bool hex = (hex_mask & fw::trace_bit(cat)) != 0U;
         cli::out_printf("%-5s %-5s %c%-3s %s\n", debug::trace_cat_name(cat), on ? "on" : "off",
-                        fw::log_level_char(fw::log_cat_level(cat)), hex ? "+hx" : "", debug::trace_cat_summary(cat));
+                        fw::log_level_char(fw::log_cat_level(cat)), hex ? "+hx" : "",
+                        debug::trace_cat_summary(cat));
     }
 }
 
@@ -58,15 +59,18 @@ int cmd_list(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     const DebugModule &module = app_context().debug;
     const fw::TraceRingStats ring = module.ring_stats();
-    cli::out_printf("trace ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
-                    static_cast<unsigned>(DebugModule::kRingEvents), static_cast<unsigned>(module.ring_depth()),
-                    static_cast<unsigned long>(ring.pushed), static_cast<unsigned long>(ring.dropped),
-                    static_cast<unsigned>(ring.max_depth));
+    cli::out_printf(
+        "trace ring events=%u depth=%u pushed=%lu dropped=%lu max_depth=%u\n",
+        static_cast<unsigned>(DebugModule::kRingEvents), static_cast<unsigned>(module.ring_depth()),
+        static_cast<unsigned long>(ring.pushed), static_cast<unsigned long>(ring.dropped),
+        static_cast<unsigned>(ring.max_depth));
     const fw::LogRingStats log = module.log_ring_stats();
     cli::out_printf("log ring bytes=%u used=%u pushed=%lu dropped=%lu max_used=%u lost=%lu\n",
-                    static_cast<unsigned>(DebugModule::kLogRingBytes), static_cast<unsigned>(module.log_ring_used()),
+                    static_cast<unsigned>(DebugModule::kLogRingBytes),
+                    static_cast<unsigned>(module.log_ring_used()),
                     static_cast<unsigned long>(log.pushed), static_cast<unsigned long>(log.dropped),
-                    static_cast<unsigned>(log.max_used), static_cast<unsigned long>(fw::log_stats().lost));
+                    static_cast<unsigned>(log.max_used),
+                    static_cast<unsigned long>(fw::log_stats().lost));
     cli::out_printf("report period=%us%s\n", static_cast<unsigned>(module.report_period_s()),
                     (module.report_period_s() == 0U) ? " (off)" : "");
     print_cat_table();
@@ -163,7 +167,8 @@ int cmd_log(void * /*ctx*/, int argc, char **argv) noexcept
     if ((argc < 1) || (argv == nullptr)) {
         return cli::fail("usage: debug log [<category...|all> <e|w|i|d> [hex]]");
     }
-    std::span<char *const> args = std::span<char *const>(argv, static_cast<size_t>(argc)).subspan(1U);
+    std::span<char *const> args =
+        std::span<char *const>(argv, static_cast<size_t>(argc)).subspan(1U);
     if (args.empty()) {
         print_cat_table();
         return 0;
@@ -208,7 +213,8 @@ int cmd_report(void * /*ctx*/, int argc, char **argv) noexcept
         command.args[1] = 0U;
     } else {
         uint32_t seconds = 0U;
-        if (!cli::parse_u32(args[1], seconds) || (seconds < kReportMinSeconds) || (seconds > kReportMaxSeconds)) {
+        if (!cli::parse_u32(args[1], seconds) || (seconds < kReportMinSeconds) ||
+            (seconds > kReportMaxSeconds)) {
             return cli::fail("invalid period: %s", args[1]);
         }
         // seconds ≤ 3600，取低字节与次低字节都不会丢位。

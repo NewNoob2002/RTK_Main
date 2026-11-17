@@ -8,6 +8,10 @@ IndentWidth: 4
 TabWidth: 4
 UseTab: Never
 ColumnLimit: 100
+# 注释只调缩进不重排（ADR-0013 S2-B0）：重排会把多行中文注释并成一段并在句号后插空格，反而难读；超长注释由 S5 人工整理。
+ReflowComments: IndentOnly
+# 不拆字符串字面量：日志与命令文本要能整串 grep 到；超过列宽的字符串允许超出（ADR-0013 §2.1）。
+BreakStringLiterals: false
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterFunction: true        # otbs：函数定义花括号换行

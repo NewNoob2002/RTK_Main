@@ -17,7 +17,8 @@ namespace fw {
 
 namespace {
 
-[[maybe_unused]] constexpr uint32_t kCatCount = static_cast<uint32_t>(TraceCat::kCount); // 关闭追踪时不用
+[[maybe_unused]] constexpr uint32_t kCatCount =
+    static_cast<uint32_t>(TraceCat::kCount); // 关闭追踪时不用
 constexpr size_t kMinEventsInRing = 2U;
 
 // sink 用 release 发布、trace() 用 acquire 读取：保证 install 写入的 ctx 与 clock 先于 sink 可见。
@@ -41,7 +42,8 @@ Result trace_install(TraceSinkFn fn, void *ctx, TraceClockFn clock) noexcept
     s_sink_ctx = ctx;
     s_clock = clock;
     TraceSinkFn expected = nullptr;
-    if (!s_sink.compare_exchange_strong(expected, fn, std::memory_order_release, std::memory_order_relaxed)) {
+    if (!s_sink.compare_exchange_strong(expected, fn, std::memory_order_release,
+                                        std::memory_order_relaxed)) {
         return Result::kInvalidState;
     }
     return Result::kOk;

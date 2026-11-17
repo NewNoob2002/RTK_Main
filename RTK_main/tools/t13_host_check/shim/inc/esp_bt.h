@@ -30,10 +30,7 @@ typedef struct {
     int hci_uart_baudrate;
 } esp_bt_controller_config_t;
 
-#define BT_CONTROLLER_INIT_CONFIG_DEFAULT() \
-    {                                       \
-        "BTu", 4096, 8, 1, 921600           \
-    }
+#define BT_CONTROLLER_INIT_CONFIG_DEFAULT() {"BTu", 4096, 8, 1, 921600}
 
 esp_err_t esp_bt_controller_init(esp_bt_controller_config_t *cfg);
 esp_err_t esp_bt_controller_enable(esp_bt_mode_t mode);

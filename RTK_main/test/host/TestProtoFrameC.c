@@ -6,17 +6,19 @@
 #include "unity.h"
 
 /* App 查询 0x0001，无 payload */
-static uint8_t const g_frame_a[] = {0xAA, 0x44, 0x18, 0x14, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x69, 0x17, 0x6E, 0x7E};
+static uint8_t const g_frame_a[] = {0xAA, 0x44, 0x18, 0x14, 0x01, 0x00, 0x00, 0x00,
+                                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                    0x00, 0x00, 0x00, 0x00, 0x69, 0x17, 0x6E, 0x7E};
 
 /* 设备设置应答 0x0004，payload 01 01 */
-static uint8_t const g_frame_b[] = {0xAA, 0x44, 0x18, 0x14, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
-                                    0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x00, 0x01, 0x01, 0xC0, 0x20, 0xDA, 0x74};
+static uint8_t const g_frame_b[] = {0xAA, 0x44, 0x18, 0x14, 0x04, 0x00, 0x00, 0x00, 0x00,
+                                    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x03,
+                                    0x00, 0x00, 0x01, 0x01, 0xC0, 0x20, 0xDA, 0x74};
 
 /* 报警器心跳 0x0041，sender 3，type PUSH，payload 05 00 50 00 00 00 00 00 */
-static uint8_t const g_frame_c[] = {0xAA, 0x44, 0x18, 0x14, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                    0x00, 0x08, 0x00, 0x00, 0x00, 0x03, 0x04, 0x00, 0x00, 0x05, 0x00,
-                                    0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x34, 0x05, 0xAA};
+static uint8_t const g_frame_c[] = {
+    0xAA, 0x44, 0x18, 0x14, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x03, 0x04, 0x00, 0x00, 0x05, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x34, 0x05, 0xAA};
 
 static dev_proto_parser_t g_parser;
 
@@ -28,7 +30,8 @@ void setUp(void)
 void tearDown(void) {}
 
 /* 喂入整段数据，返回得到的帧数，最后一帧写入 p_last。 */
-static int feed_all(uint8_t const *p_data, size_t len, dev_proto_frame_t *p_last, int *p_crc_err, int *p_len_err)
+static int feed_all(uint8_t const *p_data, size_t len, dev_proto_frame_t *p_last, int *p_crc_err,
+                    int *p_len_err)
 {
     int frames = 0;
 
@@ -57,7 +60,8 @@ static void test_crc32_check_value(void)
 
     TEST_ASSERT_EQUAL_HEX32(0xCBF43926U, dev_proto_crc32(0U, msg, 9U));
     /* 分段累计 */
-    TEST_ASSERT_EQUAL_HEX32(0xCBF43926U, dev_proto_crc32(dev_proto_crc32(0U, msg, 4U), &msg[4], 5U));
+    TEST_ASSERT_EQUAL_HEX32(0xCBF43926U,
+                            dev_proto_crc32(dev_proto_crc32(0U, msg, 4U), &msg[4], 5U));
     TEST_ASSERT_EQUAL_HEX32(0x12345678U, dev_proto_crc32(0x12345678U, NULL, 0U));
 }
 
@@ -66,8 +70,9 @@ static void test_build_query_frame(void)
     uint8_t out[64];
     size_t out_len = 0U;
 
-    TEST_ASSERT_EQUAL(DEV_PROTO_OK, dev_proto_frame_build(out, sizeof(out), 0x0001U, DEV_PROTO_SENDER_APP,
-                                                          DEV_PROTO_TYPE_QUERY, NULL, 0U, &out_len));
+    TEST_ASSERT_EQUAL(DEV_PROTO_OK,
+                      dev_proto_frame_build(out, sizeof(out), 0x0001U, DEV_PROTO_SENDER_APP,
+                                            DEV_PROTO_TYPE_QUERY, NULL, 0U, &out_len));
     TEST_ASSERT_EQUAL_UINT(sizeof(g_frame_a), out_len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(g_frame_a, out, sizeof(g_frame_a));
 }
@@ -78,8 +83,9 @@ static void test_build_set_response(void)
     uint8_t out[64];
     size_t out_len = 0U;
 
-    TEST_ASSERT_EQUAL(DEV_PROTO_OK, dev_proto_frame_build(out, sizeof(out), 0x0004U, DEV_PROTO_SENDER_DEV,
-                                                          DEV_PROTO_TYPE_SET_RES, payload, 2U, &out_len));
+    TEST_ASSERT_EQUAL(DEV_PROTO_OK,
+                      dev_proto_frame_build(out, sizeof(out), 0x0004U, DEV_PROTO_SENDER_DEV,
+                                            DEV_PROTO_TYPE_SET_RES, payload, 2U, &out_len));
     TEST_ASSERT_EQUAL_UINT(sizeof(g_frame_b), out_len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(g_frame_b, out, sizeof(g_frame_b));
 }
@@ -92,20 +98,25 @@ static void test_build_rejects_bad_args(void)
 
     /* 空间正好差 1 字节 */
     TEST_ASSERT_EQUAL(DEV_PROTO_ERR_SPACE,
-                      dev_proto_frame_build(out, sizeof(g_frame_b) - 1U, 0x0004U, DEV_PROTO_SENDER_DEV,
+                      dev_proto_frame_build(out, sizeof(g_frame_b) - 1U, 0x0004U,
+                                            DEV_PROTO_SENDER_DEV, DEV_PROTO_TYPE_SET_RES, big, 2U,
+                                            &out_len));
+    TEST_ASSERT_EQUAL(DEV_PROTO_ERR_ARG,
+                      dev_proto_frame_build(out, sizeof(out), 0x0004U, DEV_PROTO_SENDER_DEV,
+                                            DEV_PROTO_TYPE_SET_RES, big, DEV_PROTO_MAX_PAYLOAD + 1U,
+                                            &out_len));
+    TEST_ASSERT_EQUAL(DEV_PROTO_ERR_ARG,
+                      dev_proto_frame_build(NULL, sizeof(out), 0x0004U, DEV_PROTO_SENDER_DEV,
                                             DEV_PROTO_TYPE_SET_RES, big, 2U, &out_len));
     TEST_ASSERT_EQUAL(DEV_PROTO_ERR_ARG,
-                      dev_proto_frame_build(out, sizeof(out), 0x0004U, DEV_PROTO_SENDER_DEV, DEV_PROTO_TYPE_SET_RES,
-                                            big, DEV_PROTO_MAX_PAYLOAD + 1U, &out_len));
-    TEST_ASSERT_EQUAL(DEV_PROTO_ERR_ARG, dev_proto_frame_build(NULL, sizeof(out), 0x0004U, DEV_PROTO_SENDER_DEV,
-                                                               DEV_PROTO_TYPE_SET_RES, big, 2U, &out_len));
-    TEST_ASSERT_EQUAL(DEV_PROTO_ERR_ARG, dev_proto_frame_build(out, sizeof(out), 0x0004U, DEV_PROTO_SENDER_DEV,
-                                                               DEV_PROTO_TYPE_SET_RES, NULL, 2U, &out_len));
+                      dev_proto_frame_build(out, sizeof(out), 0x0004U, DEV_PROTO_SENDER_DEV,
+                                            DEV_PROTO_TYPE_SET_RES, NULL, 2U, &out_len));
     TEST_ASSERT_EQUAL_UINT(0xABCDU, out_len);
     /* 最大 payload 正好可以组帧 */
     TEST_ASSERT_EQUAL(DEV_PROTO_OK,
                       dev_proto_frame_build(out, DEV_PROTO_MAX_FRAME, 0x0004U, DEV_PROTO_SENDER_DEV,
-                                            DEV_PROTO_TYPE_SET_RES, big, DEV_PROTO_MAX_PAYLOAD, &out_len));
+                                            DEV_PROTO_TYPE_SET_RES, big, DEV_PROTO_MAX_PAYLOAD,
+                                            &out_len));
     TEST_ASSERT_EQUAL_UINT(DEV_PROTO_MAX_FRAME, out_len);
 }
 
@@ -180,7 +191,8 @@ static void test_parse_split_across_feeds(void)
     /* 分三段到达，解析器状态必须保留（修正 5.4 每轮重建解析器的问题） */
     TEST_ASSERT_EQUAL_INT(0, feed_all(g_frame_c, 3U, &last, &crc_err, &len_err));
     TEST_ASSERT_EQUAL_INT(0, feed_all(&g_frame_c[3], 20U, &last, &crc_err, &len_err));
-    TEST_ASSERT_EQUAL_INT(1, feed_all(&g_frame_c[23], sizeof(g_frame_c) - 23U, &last, &crc_err, &len_err));
+    TEST_ASSERT_EQUAL_INT(
+        1, feed_all(&g_frame_c[23], sizeof(g_frame_c) - 23U, &last, &crc_err, &len_err));
 }
 
 static void test_parse_crc_error_then_recover(void)
@@ -238,8 +250,9 @@ static void test_parse_max_payload(void)
         payload[idx] = (uint8_t)idx; /* idx < 256，截断安全 */
     }
     TEST_ASSERT_EQUAL(DEV_PROTO_OK,
-                      dev_proto_frame_build(out, sizeof(out), 0x0007U, DEV_PROTO_SENDER_APP, DEV_PROTO_TYPE_SET,
-                                            payload, DEV_PROTO_MAX_PAYLOAD, &out_len));
+                      dev_proto_frame_build(out, sizeof(out), 0x0007U, DEV_PROTO_SENDER_APP,
+                                            DEV_PROTO_TYPE_SET, payload, DEV_PROTO_MAX_PAYLOAD,
+                                            &out_len));
     TEST_ASSERT_EQUAL_INT(1, feed_all(out, out_len, &last, &crc_err, &len_err));
     TEST_ASSERT_EQUAL_UINT16(DEV_PROTO_MAX_PAYLOAD, last.payload_len);
     TEST_ASSERT_EQUAL_HEX8_ARRAY(payload, last.payload, DEV_PROTO_MAX_PAYLOAD);
@@ -266,7 +279,8 @@ static void test_parser_reset_keeps_counters(void)
     (void)feed_all(g_frame_a, 10U, &last, &crc_err, &len_err); /* 留下半帧 */
     dev_proto_parser_reset(&g_parser);
     TEST_ASSERT_EQUAL_UINT32(1U, g_parser.crc_errors); /* 计数保留 */
-    TEST_ASSERT_EQUAL_INT(0, feed_all(&g_frame_a[10], sizeof(g_frame_a) - 10U, &last, &crc_err, &len_err));
+    TEST_ASSERT_EQUAL_INT(
+        0, feed_all(&g_frame_a[10], sizeof(g_frame_a) - 10U, &last, &crc_err, &len_err));
     TEST_ASSERT_EQUAL_INT(1, feed_all(g_frame_a, sizeof(g_frame_a), &last, &crc_err, &len_err));
     dev_proto_parser_init(&g_parser);
     TEST_ASSERT_EQUAL_UINT32(0U, g_parser.crc_errors); /* init 清零 */

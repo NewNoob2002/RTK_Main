@@ -29,7 +29,8 @@ inline constexpr uint32_t kRtcmMsgMask = 0x0FFFU;
 inline constexpr uint32_t kRtcmNibbleMask = 0x0FU;
 /** UBX class/id 位于同步字之后。 */
 inline constexpr size_t kUbxClassOffset = 2U;
-inline constexpr uint8_t kTagPrintableMin = 0x20U; // 空格也算可打印（命令名可能含空格，如 "UNLOG COM2"）
+inline constexpr uint8_t kTagPrintableMin =
+    0x20U; // 空格也算可打印（命令名可能含空格，如 "UNLOG COM2"）
 inline constexpr uint8_t kTagPrintableMax = 0x7EU;
 inline constexpr uint8_t kCommaByte = static_cast<uint8_t>(',');
 /** uint32 十进制最多 10 位；进制固定为 10（不用 printf 族）。 */
@@ -110,7 +111,8 @@ inline size_t append_uint(std::span<char> out, size_t pos, uint32_t value) noexc
 inline size_t append_hex2(std::span<char> out, size_t pos, uint8_t value) noexcept
 {
     constexpr std::string_view kDigits = "0123456789abcdef";
-    const auto high = static_cast<size_t>((static_cast<uint32_t>(value) >> kNibbleShift) & kRtcmNibbleMask);
+    const auto high =
+        static_cast<size_t>((static_cast<uint32_t>(value) >> kNibbleShift) & kRtcmNibbleMask);
     const auto low = static_cast<size_t>(static_cast<uint32_t>(value) & kRtcmNibbleMask);
     if ((pos + 2U) >= out.size()) {
         return pos;
@@ -122,8 +124,8 @@ inline size_t append_hex2(std::span<char> out, size_t pos, uint8_t value) noexce
 }
 
 /** 组成 "<prefix><frame[start..] 的可打印词>"，返回写入长度。 */
-inline size_t tag_with_word(std::span<char> out, std::string_view prefix, std::span<const uint8_t> frame,
-                            size_t start) noexcept
+inline size_t tag_with_word(std::span<char> out, std::string_view prefix,
+                            std::span<const uint8_t> frame, size_t start) noexcept
 {
     const size_t pos = append_text(out, 0U, prefix);
     if ((pos == 0U) || (pos + 1U) >= out.size()) {

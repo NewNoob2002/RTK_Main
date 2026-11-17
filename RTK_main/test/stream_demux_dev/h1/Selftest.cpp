@@ -103,7 +103,8 @@ public:
     std::size_t frames = 0;
     std::size_t unknown_calls = 0;
 
-    void on_frame(const demux::Decoder &decoder, uint8_t index, std::span<const uint8_t> bytes) noexcept override
+    void on_frame(const demux::Decoder &decoder, uint8_t index,
+                  std::span<const uint8_t> bytes) noexcept override
     {
         check(index < kDecoders.size());
         check(&decoder == kDecoders[index]);
@@ -154,7 +155,8 @@ std::array<uint8_t, 1024> oracle(std::span<const uint8_t> input)
         } else if (input[pos] == '!' && remaining >= 2 && input[pos + 1] == 'q') {
             count = 2;
             tag = 2;
-        } else if (input[pos] == '?' && remaining >= 4 && input[pos + 1] == 'x' && input[pos + 3] == 'Z') {
+        } else if (input[pos] == '?' && remaining >= 4 && input[pos + 1] == 'x' &&
+                   input[pos + 3] == 'Z') {
             count = 4;
             tag = 3;
         } else if (input[pos] == '*') {
@@ -166,7 +168,8 @@ std::array<uint8_t, 1024> oracle(std::span<const uint8_t> input)
     return tags;
 }
 
-void run_stream(std::span<const uint8_t> input, const std::array<uint8_t, 1024> &expected, std::size_t mode)
+void run_stream(std::span<const uint8_t> input, const std::array<uint8_t, 1024> &expected,
+                std::size_t mode)
 {
     demux::Demux dmx;
     std::array<uint8_t, 10> guarded{0xC1, 0, 0, 0, 0, 0, 0, 0, 0, 0xD2};
@@ -177,7 +180,8 @@ void run_stream(std::span<const uint8_t> input, const std::array<uint8_t, 1024> 
     check(s_first_calls >= kDecoders.size() * 256);
     s_first_calls = 0;
     for (std::size_t pos = 0; pos < input.size();) {
-        const std::size_t requested = mode == 0 ? input.size() : (mode == 1 ? 1 : random_word() % 17U + 1U);
+        const std::size_t requested =
+            mode == 0 ? input.size() : (mode == 1 ? 1 : random_word() % 17U + 1U);
         const std::size_t count = std::min(requested, input.size() - pos);
         check(dmx.feed({}) == demux::Error::kOk);
         check(dmx.feed(input.subspan(pos, count)) == demux::Error::kOk);
@@ -250,7 +254,8 @@ void check_api()
     check(dmx.abort() == demux::Error::kOk);
     check(dmx.init({}, buf, sink) == demux::Error::kInvalidArg);
     check(!dmx.busy() && dmx.stats().aborts == 0);
-    check(dmx.feed(kInput) == demux::Error::kInvalidArg && dmx.abort() == demux::Error::kInvalidArg);
+    check(dmx.feed(kInput) == demux::Error::kInvalidArg &&
+          dmx.abort() == demux::Error::kInvalidArg);
 }
 
 void check_bad_need()
@@ -293,7 +298,8 @@ void check_batching()
 
 class DefaultSink final : public demux::Sink {
 public:
-    void on_frame(const demux::Decoder &, uint8_t index, std::span<const uint8_t> bytes) noexcept override
+    void on_frame(const demux::Decoder &, uint8_t index,
+                  std::span<const uint8_t> bytes) noexcept override
     {
         last_index = index;
         check(bytes.size() == 1 && bytes[0] == '*');
@@ -312,7 +318,8 @@ void check_eighth_candidate()
     constexpr std::array<uint8_t, 3> kInput{'a', '*', 'b'};
     check(dmx.init(table, buf, sink) == demux::Error::kOk);
     check(dmx.feed(kInput) == demux::Error::kOk);
-    check(sink.last_index == 7 && dmx.stats().decoder[7].frames == 1 && dmx.stats().unknown_bytes == 2);
+    check(sink.last_index == 7 && dmx.stats().decoder[7].frames == 1 &&
+          dmx.stats().unknown_bytes == 2);
     demux::StaticDemux<kStar> fixed;
     static_assert(decltype(fixed)::kBufSize == 1 && decltype(fixed)::index_of<kStar>() == 0);
     check(fixed.init(sink) == demux::Error::kOk);
@@ -328,7 +335,8 @@ int main()
     check_bad_need();
     check_batching();
     check_eighth_candidate();
-    constexpr std::array<uint8_t, 14> kReplay{'!', 'q', '*', '?', 'x', 'a', 'Z', '!', 'q', '?', '!', 'q', '*', '?'};
+    constexpr std::array<uint8_t, 14> kReplay{'!', 'q', '*', '?', 'x', 'a', 'Z',
+                                              '!', 'q', '?', '!', 'q', '*', '?'};
     for (std::size_t mode = 0; mode < 3; ++mode) {
         run_stream(kReplay, oracle(kReplay), mode);
     }
@@ -345,5 +353,6 @@ int main()
             run_stream(bytes, expected, mode);
         }
     }
-    std::puts("H1 selftest PASS: API, replay, abort, reentry, invalid need, batching, 1000 streams x 3 chunk modes");
+    std::puts(
+        "H1 selftest PASS: API, replay, abort, reentry, invalid need, batching, 1000 streams x 3 chunk modes");
 }

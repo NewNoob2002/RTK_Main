@@ -37,8 +37,8 @@
  * @param  controller_enabled: 控制器已使能
  * @param  controller_inited: 控制器已初始化
  */
-static void spp_server_unwind(bool bluedroid_enabled, bool bluedroid_inited, bool controller_enabled,
-                              bool controller_inited)
+static void spp_server_unwind(bool bluedroid_enabled, bool bluedroid_inited,
+                              bool controller_enabled, bool controller_inited)
 {
     esp_err_t err = ESP_OK;
 
@@ -128,11 +128,12 @@ static esp_err_t spp_server_objects_create(void)
     for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
         /* idx < 2，uint8_t 窄化安全 */
         s_spp.sessions[idx].idx = (uint8_t)idx;
-        s_spp.sessions[idx].rx = xStreamBufferCreateStatic(SPP_SERVER_RX_BUF_SIZE, SPP_SERVER_STREAM_TRIGGER,
-                                                           s_spp.storage.rx_buf[idx], &s_spp.sessions[idx].rx_struct);
+        s_spp.sessions[idx].rx =
+            xStreamBufferCreateStatic(SPP_SERVER_RX_BUF_SIZE, SPP_SERVER_STREAM_TRIGGER,
+                                      s_spp.storage.rx_buf[idx], &s_spp.sessions[idx].rx_struct);
     }
-    if ((s_spp.rtos.evt_queue == NULL) || (s_spp.rtos.evt_group == NULL) || (s_spp.sessions[0].rx == NULL) ||
-        (s_spp.sessions[1].rx == NULL)) {
+    if ((s_spp.rtos.evt_queue == NULL) || (s_spp.rtos.evt_group == NULL) ||
+        (s_spp.sessions[0].rx == NULL) || (s_spp.sessions[1].rx == NULL)) {
         return ESP_ERR_NO_MEM;
     }
 
@@ -141,9 +142,9 @@ static esp_err_t spp_server_objects_create(void)
         /* bind_storage 已校验 worker_stack_bytes <= UINT32_MAX 且对齐，窄化无截断。 */
         const uint32_t stack_bytes = (uint32_t)s_spp.storage.worker_stack_bytes;
 
-        s_spp.rtos.worker = xTaskCreateStaticPinnedToCore(spp_server_worker, "spp_worker", stack_bytes, NULL,
-                                                          SPP_SERVER_WORKER_PRIORITY, s_spp.storage.worker_stack,
-                                                          &s_spp.worker_tcb, SPP_SERVER_WORKER_CORE);
+        s_spp.rtos.worker = xTaskCreateStaticPinnedToCore(
+            spp_server_worker, "spp_worker", stack_bytes, NULL, SPP_SERVER_WORKER_PRIORITY,
+            s_spp.storage.worker_stack, &s_spp.worker_tcb, SPP_SERVER_WORKER_CORE);
         if (s_spp.rtos.worker == NULL) {
             return ESP_ERR_NO_MEM;
         }
@@ -193,8 +194,8 @@ static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
     err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
     if (err != ESP_OK) {
         FW_CLOGE(FW_LOG_CAT_SPP, "controller enable: %s", esp_err_to_name(err));
-        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited, state->controller_enabled,
-                          state->controller_inited);
+        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited,
+                          state->controller_enabled, state->controller_inited);
         spp_server_hw_state_clear(state);
         return err;
     }
@@ -203,8 +204,8 @@ static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
     err = esp_bluedroid_init_with_cfg(&bd_cfg);
     if (err != ESP_OK) {
         FW_CLOGE(FW_LOG_CAT_SPP, "bluedroid init: %s", esp_err_to_name(err));
-        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited, state->controller_enabled,
-                          state->controller_inited);
+        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited,
+                          state->controller_enabled, state->controller_inited);
         spp_server_hw_state_clear(state);
         return err;
     }
@@ -213,8 +214,8 @@ static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
     err = esp_bluedroid_enable();
     if (err != ESP_OK) {
         FW_CLOGE(FW_LOG_CAT_SPP, "bluedroid enable: %s", esp_err_to_name(err));
-        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited, state->controller_enabled,
-                          state->controller_inited);
+        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited,
+                          state->controller_enabled, state->controller_inited);
         spp_server_hw_state_clear(state);
         return err;
     }
@@ -300,7 +301,8 @@ static esp_err_t spp_server_wait_stage(spp_server_stage_t stage, uint32_t timeou
         return ESP_ERR_INVALID_STATE;
     }
 
-    bits = xEventGroupWaitBits(s_spp.rtos.evt_group, bit, pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
+    bits =
+        xEventGroupWaitBits(s_spp.rtos.evt_group, bit, pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     if ((bits & bit) == 0U) {
         FW_CLOGE(FW_LOG_CAT_SPP, "stage 0x%" PRIx32 " timeout", (uint32_t)bit);
         return ESP_ERR_TIMEOUT;
@@ -314,7 +316,8 @@ static esp_err_t spp_server_wait_stage(spp_server_stage_t stage, uint32_t timeou
     taskEXIT_CRITICAL(&s_spp_mux);
     if (status != ESP_SPP_SUCCESS) {
         /* 回调里只记追踪；失败原因在这里（init 任务上下文）打印。 */
-        FW_CLOGE(FW_LOG_CAT_SPP, "stage 0x%" PRIx32 " failed, status %d", (uint32_t)bit, (int)status);
+        FW_CLOGE(FW_LOG_CAT_SPP, "stage 0x%" PRIx32 " failed, status %d", (uint32_t)bit,
+                 (int)status);
     }
     return (status == ESP_SPP_SUCCESS) ? ESP_OK : ESP_FAIL;
 }
@@ -392,14 +395,17 @@ esp_err_t spp_server_bind_storage(const spp_server_storage_t *storage)
         return ESP_ERR_INVALID_ARG;
     }
     for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-        if ((storage->rx_buf[idx] == NULL) || (storage->rx_buf_bytes[idx] < SPP_SERVER_RX_BUF_SIZE) ||
-            (storage->reply_buf[idx] == NULL) || (storage->reply_buf_bytes[idx] < SPP_SERVER_REPLY_CAPACITY)) {
+        if ((storage->rx_buf[idx] == NULL) ||
+            (storage->rx_buf_bytes[idx] < SPP_SERVER_RX_BUF_SIZE) ||
+            (storage->reply_buf[idx] == NULL) ||
+            (storage->reply_buf_bytes[idx] < SPP_SERVER_REPLY_CAPACITY)) {
             return ESP_ERR_INVALID_ARG;
         }
     }
     if ((storage->stream_buf == NULL) || (storage->stream_buf_bytes < SPP_SERVER_STREAM_CAPACITY) ||
         (storage->merge_buf == NULL) || (storage->merge_buf_bytes < SPP_SERVER_MERGE_CAPACITY) ||
-        (storage->worker_stack == NULL) || (storage->worker_stack_bytes < SPP_SERVER_WORKER_STACK_BYTES) ||
+        (storage->worker_stack == NULL) ||
+        (storage->worker_stack_bytes < SPP_SERVER_WORKER_STACK_BYTES) ||
         (storage->worker_stack_bytes > (size_t)UINT32_MAX) ||
         ((storage->worker_stack_bytes % sizeof(StackType_t)) != 0U) ||
         ((((uintptr_t)storage->worker_stack) % _Alignof(uint32_t)) != 0U)) {
@@ -411,8 +417,10 @@ esp_err_t spp_server_bind_storage(const spp_server_storage_t *storage)
         ((s_spp.rtos.worker != NULL) &&
          ((s_spp.storage.worker_stack != storage->worker_stack) ||
           (s_spp.storage.worker_stack_bytes != storage->worker_stack_bytes) ||
-          (s_spp.storage.stream_buf != storage->stream_buf) || (s_spp.storage.merge_buf != storage->merge_buf) ||
-          (s_spp.storage.rx_buf[0] != storage->rx_buf[0]) || (s_spp.storage.rx_buf[1] != storage->rx_buf[1]) ||
+          (s_spp.storage.stream_buf != storage->stream_buf) ||
+          (s_spp.storage.merge_buf != storage->merge_buf) ||
+          (s_spp.storage.rx_buf[0] != storage->rx_buf[0]) ||
+          (s_spp.storage.rx_buf[1] != storage->rx_buf[1]) ||
           (s_spp.storage.reply_buf[0] != storage->reply_buf[0]) ||
           (s_spp.storage.reply_buf[1] != storage->reply_buf[1])))) {
         taskEXIT_CRITICAL(&s_spp_mux);
@@ -457,7 +465,8 @@ esp_err_t spp_server_stop_boot(void)
             if (!stopped) {
                 vTaskDelay(1U);
             }
-        } while (!stopped && ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(SPP_SERVER_UNINIT_TIMEOUT_MS)));
+        } while (!stopped &&
+                 ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(SPP_SERVER_UNINIT_TIMEOUT_MS)));
         if (!stopped) {
             return ESP_ERR_TIMEOUT;
         }
@@ -541,7 +550,8 @@ esp_err_t spp_server_init(const char *name)
     s_spp.start_status = ESP_SPP_FAILURE;
     taskEXIT_CRITICAL(&s_spp_mux);
     if (s_spp.rtos.evt_group != NULL) {
-        (void)xEventGroupClearBits(s_spp.rtos.evt_group, SPP_SERVER_BIT_INIT_DONE | SPP_SERVER_BIT_START_DONE);
+        (void)xEventGroupClearBits(s_spp.rtos.evt_group,
+                                   SPP_SERVER_BIT_INIT_DONE | SPP_SERVER_BIT_START_DONE);
     }
 
     err = spp_server_hw_init(&hw_state);
@@ -552,8 +562,8 @@ esp_err_t spp_server_init(const char *name)
 
     err = spp_server_profile_init();
     if (err != ESP_OK) {
-        spp_server_unwind(hw_state.bluedroid_enabled, hw_state.bluedroid_inited, hw_state.controller_enabled,
-                          hw_state.controller_inited);
+        spp_server_unwind(hw_state.bluedroid_enabled, hw_state.bluedroid_inited,
+                          hw_state.controller_enabled, hw_state.controller_inited);
         spp_server_objects_delete();
         return err;
     }
@@ -562,8 +572,8 @@ esp_err_t spp_server_init(const char *name)
     if (err != ESP_OK) {
         /* 逆序清理：SPP → Bluedroid → 控制器 → RTOS 对象。 */
         spp_server_spp_deinit();
-        spp_server_unwind(hw_state.bluedroid_enabled, hw_state.bluedroid_inited, hw_state.controller_enabled,
-                          hw_state.controller_inited);
+        spp_server_unwind(hw_state.bluedroid_enabled, hw_state.bluedroid_inited,
+                          hw_state.controller_enabled, hw_state.controller_inited);
         spp_server_objects_delete();
         return err;
     }

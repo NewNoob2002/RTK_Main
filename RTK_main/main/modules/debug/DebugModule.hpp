@@ -171,9 +171,11 @@ private:
      * @param  out: 行缓冲（至少 fw::kLogLineMax 字节）
      * @param  cap: out 的容量
      */
-    void print_log_text(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out, size_t cap) noexcept;
+    void print_log_text(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
+                        size_t cap) noexcept;
     /** 输出一条十六进制日志记录：标题行 + 若干转储行。 */
-    void print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out, size_t cap) noexcept;
+    void print_log_hex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
+                       size_t cap) noexcept;
     /** 到点输出一行周期报告。 */
     void pump_report(uint32_t now_ms) noexcept;
     [[nodiscard]] AppContext &ctx() noexcept

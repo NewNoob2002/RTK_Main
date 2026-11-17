@@ -31,26 +31,27 @@ inline void print_memory_report(const rtos::BootArena &arena, size_t data_bytes,
 
     cli::print_section("boot_arena");
     cli::print_kv("state", "%s", rtos::BootArena::state_name(arena.state()));
-    cli::print_kv("requested", "%zu B  actual=%zu B  blocks=%zu/%zu", arena.total_bytes(), arena.total_actual_bytes(),
-                  arena.entries().size(), rtos::BootArena::kMaxEntries);
+    cli::print_kv("requested", "%zu B  actual=%zu B  blocks=%zu/%zu", arena.total_bytes(),
+                  arena.total_actual_bytes(), arena.entries().size(), rtos::BootArena::kMaxEntries);
     for (const auto &entry : arena.entries()) {
-        cli::out_printf("  %-20s req=%6zu B  act=%6zu B  align=%-2zu  caps=0x%" PRIx32 "  addr=%p\n",
-                        (entry.tag != nullptr) ? entry.tag : "?", entry.bytes, entry.actual_bytes, entry.align,
-                        entry.caps, entry.ptr);
+        cli::out_printf("  %-20s req=%6zu B  act=%6zu B  align=%-2zu  caps=0x%" PRIx32
+                        "  addr=%p\n",
+                        (entry.tag != nullptr) ? entry.tag : "?", entry.bytes, entry.actual_bytes,
+                        entry.align, entry.caps, entry.ptr);
     }
 
     cli::print_section("heap_caps");
     cli::out_printf("  note: capability views overlap; do not add them together\n");
     for (const auto &view : heaps) {
-        cli::print_kv(view.name, "total=%zu B  free=%zu B  min=%zu B  largest=%zu B", view.total, view.free,
-                      view.minimum, view.largest);
+        cli::print_kv(view.name, "total=%zu B  free=%zu B  min=%zu B  largest=%zu B", view.total,
+                      view.free, view.minimum, view.largest);
     }
     constexpr size_t kInternalMinBudget = size_t{80} * size_t{1024};
     constexpr size_t kInternalLargestBudget = size_t{32} * size_t{1024};
     const bool budget_ok = !heaps.empty() && heaps.front().minimum >= kInternalMinBudget &&
                            heaps.front().largest >= kInternalLargestBudget;
-    cli::print_kv("internal_budget", "%s (min>=%zu B, largest>=%zu B)", budget_ok ? "PASS" : "FAIL", kInternalMinBudget,
-                  kInternalLargestBudget);
+    cli::print_kv("internal_budget", "%s (min>=%zu B, largest>=%zu B)", budget_ok ? "PASS" : "FAIL",
+                  kInternalMinBudget, kInternalLargestBudget);
     cli::print_section("mode");
     if (arena.degraded()) {
         cli::print_kv("status", "degraded (console-only: %s)", arena.reason());
