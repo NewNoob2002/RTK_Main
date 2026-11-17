@@ -28,10 +28,10 @@
 - **禁止**：异常、RTTI、`dynamic_cast`、`typeid`；`std::function`；`<map>`、`<list>`、`<deque>`、`<unordered_*>`；iostream；`shared_ptr`；`<thread>`/`<mutex>`；`volatile` 用于同步；位域映射寄存器；`ESP_ERROR_CHECK` 用于可恢复错误；`(void)` 丢弃 `esp_err_t`。
 - **堆内存门禁**：`new`/`delete`/`malloc`/`free`、`<vector>`、`<string>` 按 `docs/CODING-STYLE.md` 的堆内存分级使用，须登记 `tools/g7b_check/heap_allowlist.txt`；placement new 不分配堆。ISR、蓝牙回调、链路任务每轮路径、发送任务禁止分配；只允许启动期一次性分配或非实时路径限量分配，并遵守失败处理要求。C 文件仍沿用上面的 `malloc`/`free` 禁令。
 - **允许**：`std::array`、`std::span`、`std::optional`、`std::string_view`、`<algorithm>` 中不分配的算法、`constexpr`/`constinit`、`enum class`、RAII、模板（实例数要少）、`core::FixedStr<N>`。
-- **类设计**：构造函数 `constexpr`、不失败、不访问硬件/RTOS/日志；硬件初始化放在显式的 `[[nodiscard]] init()`（CPP-010）。全局对象 `constinit`（CPP-020）。独占资源的类删除拷贝。虚函数只用于 ADR 指定的扩展点（`Transport`、`demux::Sink`、`gnss::Receiver` 驱动层次）：受保护非虚析构，不 `new`，实例为 `constinit` 静态对象；叶子类标 `final`，ADR 明确允许派生的类除外；继承不超过两层。
+- **类设计**：构造函数 `constexpr`、不失败、不访问硬件/RTOS/日志；硬件初始化放在显式的 `[[nodiscard]] init()`（CPP-010）。全局对象 `constinit`（CPP-020）。独占资源的类删除拷贝。虚函数只用于 ADR 指定的扩展点（`Transport`、`demux::Sink`、`gnss::Receiver` 驱动层次）：每个非叶子类（含 ADR 允许派生的家族类）受保护非虚析构，不写公有虚析构，不 `new`；只实例化 `final` 叶子类，实例为 `constinit` 静态对象；继承不超过两层。
 - **错误**：失败类型按 `docs/CODING-STYLE.md` 规则 1–4 选择（`bool` / `fw::Status` / `fw::Result`，`esp_err_t` 只在 IDF 边界），一律 `[[nodiscard]]`；新代码不用 `const char*` 表示失败原因。IDF 调用一律检查返回值（ESP-004），可用 `esp_check.h` 宏。ISR、C 回调蹦床、析构函数、移动操作标 `noexcept`。
 - **并发（ESP-001/003）**：SMP 临界区用 `portMUX_TYPE` + `taskENTER_CRITICAL(&mux)`，临界区内不调用 FreeRTOS API、不阻塞。IDF 任务栈单位是**字节**。任务一律静态创建、显式绑核，并在注释中写明理由。蓝牙回调中不阻塞、不解析、不打印数据内容。
-- **窄化转换**：每处 `static_cast` 都在注释中说明为什么数值范围安全；不用 C 风格转换（`-Wold-style-cast`）。
+- **类型转换**：窄化、符号变化、指针↔整数、枚举↔整数、`void *` 恢复类型的 `static_cast` 在注释中说明为什么安全，拓宽且同符号的不强制（细则见 `docs/CODING-STYLE.md` §4.5）；不用 C 风格转换（`-Wold-style-cast`）。
 - **注释**：用中文，必要的英文术语保留；解释原因、约束和副作用；每个公共函数注明线程/ISR 安全性。不注释掉代码。
 - **调试输出（ADR-0009）**：分三条通道，不得混用。
   - **实时路径**（链路任务、发送任务、蓝牙回调、ISR、执行器每轮）：只用 `fw::trace()`（C 驱动经 `spp_server_set_trace_hook`），不格式化、不产出文本；禁止新增 `ESP_LOG`/`printf`。

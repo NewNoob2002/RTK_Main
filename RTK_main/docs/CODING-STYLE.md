@@ -2,8 +2,8 @@
 
 本规范面向读代码和新增功能的人，依据 ADR-0008 §3、§4、§6–§9；C/C++ 分工沿用 ADR-0003。
 硬性门禁、依赖允许表、冻结范围和操作授权见 `AGENTS.md`，告警与格式配置仍由工具维护。
-R0 只建立规范：目录迁移由 R1 完成，模块类/跳板由 R2 实现，命名空间与 include 统一由 R3 完成，
-文件头清理由 R4 完成，驱动拆分由 R5 完成，模板由 R6 提供。下面的目标示例不表示现有接口已改动。
+R0–R6 迁移已全部完成，下文描述的是现行规则；与现状不一致的旧代码按「改到哪补到哪」处理，
+批量整改另立任务卡（见 ADR-0013 提议的可读性整改）。
 
 ## 1. 目录与文件
 
@@ -23,8 +23,8 @@ main/
   def/                          # LinkDef.hpp、RtcmDef.hpp、SystemDef.hpp
   modules/
     _template/                  # 模块、命令处理与新增模块说明
-    bt_link/                    # bt_link_module.*、BtLinkCmds.cpp、async_tx.*
-    rtcm/                       # rtcm_module.*、RtcmCmds.cpp、rtcm_sink.*
+    bt_link/                    # BtLinkModule.*、BtLinkCmds.cpp
+    rtcm/                       # RtcmModule.*、RtcmCmds.cpp、RtcmForwarder.*
     storage/
     system/
   support/                      # 与具体模块无关的控制台辅助等胶水
@@ -183,8 +183,10 @@ namespace unrelated_app {
 
 顺序为 public 类型/常量 → 构造 → 公开方法 → private 方法 → 数据成员。
 构造必须 `constexpr`、不失败、不访问硬件/RTOS/日志；初始化工作放在显式 `[[nodiscard]] init()`。
-独占资源的类删除拷贝，全局对象 `constinit`。运行期多态仍仅限 `Transport`、`demux::Sink`，
-采用受保护非虚析构与 `final` 实现；模块不增加虚函数。
+独占资源的类删除拷贝，全局对象 `constinit`。运行期多态仅限 `Transport`、`demux::Sink` 和
+`gnss::Receiver` 驱动层次（ADR-0012 §2.8）：每个非叶子类（基类、可派生的家族类）都用受保护非虚析构，
+只实例化 `final` 叶子类；不写公有虚析构（它会生成引用 `operator delete` 的删除析构函数）；继承不超过两层。
+模块不增加虚函数。
 
 ```cpp
 // 这样写（公开方法注释见第 6 节）
@@ -305,8 +307,10 @@ fw::Status apply(Settings settings); // 复制大对象
 
 ### 5.1 日志记录状态变化、错误与周期统计
 
-组件与应用模块统一用 `fw/Log.hpp`（C 组件用 `fw/LogC.h` 的 `FW_CLOG*`，ADR-0009 §2.12）：每个组件在私有头定义一行自己的宏，正文写 `事件 key=value`，
-类别名（`GNSS`、`LINK`…）由输出端加在行首，正文不再重复组件名。级别：
+组件与应用模块统一用 `fw/Log.hpp`（C 组件用 `fw/LogC.h` 的 `FW_CLOG*`，ADR-0009 §2.12）：调用处直接写 `FW_LOGx(fw::TraceCat::kXxx, ...)`。
+行格式见 ADR-0009 §2.12：`[t] [CAT] <sub> 句子`。类别名（`GNSS`、`LINK`…）由输出端加在行首，正文不再重复；
+正文以小写子标签 `<sub>` 开头（GNSS 用 `<sm>`/`<probe>`/`<cfg>`/`<out>`/`<uart>`/`<rx>`/`<rtcm>`/`<app>`，其他组件用自身名），
+后接一句完整的话；`k=v` 只用于列多个数值的清单；收发方向写 `TX`/`RX`。级别：
 
 - `E`：功能失效，需要人工处理（保存失败、初始化失败、不可恢复的协议错误）；
 - `W`：异常但已自动恢复或降级（重试、丢弃、回退）；
@@ -319,16 +323,11 @@ fw::Status apply(Settings settings); // 复制大对象
 禁止在固件自有代码中调用 `ESP_LOG*`/`printf` 输出日志；只允许 `esp_log_level_set`/`esp_log_set_vprintf` 控制 IDF 自身日志。
 
 ```cpp
-// 组件私有头（示例路径，仓库尚未新建此文件；需要时按组件命名建一个）
-// 例如 components/gnss/src/GnssLog.hpp
-#define GNSS_LOGW(...) FW_LOGW(fw::TraceCat::kGnss, __VA_ARGS__)
-#define GNSS_LOGI(...) FW_LOGI(fw::TraceCat::kGnss, __VA_ARGS__)
-
 // 这样写
-GNSS_LOGI("detected model=%s baud=%lu", model_name(m), baud);
-GNSS_LOGW("config step %u nack, retry=%u", step, retry);
+FW_LOGI(fw::TraceCat::kGnss, "<probe> Detected %s at %lu baud.", model_name(m), baud);
+FW_LOGW(fw::TraceCat::kGnss, "<cfg> Step %u was rejected, retry %u.", step, retry);
 // 不要这样写
-GNSS_LOGI("GNSS: begin poll"); // 每轮噪声，且重复类别名
+FW_LOGI(fw::TraceCat::kGnss, "GNSS: begin poll"); // 每轮噪声，重复类别名，无子标签
 ```
 
 ### 5.2 常量按用途分组并注明单位
@@ -400,12 +399,12 @@ volatile bool ready = false; // 不能建立跨核同步关系
 
 ## 6. 模块与注释
 
-### 6.1 模块类 + 模板跳板 + 一行清单注册（R2 目标）
+### 6.1 模块类 + 模板跳板 + 一行清单注册
 
 模块以类保存状态，按需要提供 `init`、`start`、`poll`、`command`。
 `fw::make_ops<T>()` 用 `if constexpr (requires { ... })` 检测成员，未提供的操作填 `nullptr`；
 框架内部生成静态跳板，业务方法不暴露 `void *self`。实例静态存储，零虚表、零堆。
-以下是目标形态示意，R0 不实现尚未存在的 `make_ops` 接口。
+实现见 `components/app_fw/include/fw/Module.hpp` 的 `make_ops`。
 
 ```cpp
 // 这样写：命名空间 app 中，fw 指通用 app_fw 组件
@@ -466,7 +465,8 @@ fw::Status init();
 
 **门禁**：`python3 -I tools/doc_check/doc_check.py --base <基线提交>` 检查相对基线新增或改动的函数，
 不合格即失败；`--report` 按组件统计覆盖率，`--list <路径前缀>` 列出某个组件的全部不合格函数。
-存量函数按组件分批补齐（Q1–Q5 任务卡），补齐前不要求一次改完，但改动到的函数必须补齐。
+改动到的函数必须补齐。存量缺口（2026-11-17 `--report`：1293 个函数中 315 个合格，24%）按 ADR-0013
+的分批任务卡补齐；全部补齐后 `--report` 合计 100% 成为最终门禁，此后不再只查增量。
 
 ## 7. 堆内存分级（ADR-0008 §8，2026-11-12 任务卡确认采用）
 
@@ -624,10 +624,10 @@ default:
 
 ## 10. 与 embedded-engineering 技能的对照（技能 v0.1）
 
-技能版本以 `SKILL.md` frontmatter 的 `metadata.version` 为准（源仓库 `/home/gtc/Desktop/workspace/Tools/Skills`）。Q1 审计读取的是 git `5cae6d9` 加当时尚未提交的工作区改动（含 CPPF-001/CPPF-002/DOC-001），这些改动随后定为 v0.1；单凭 `5cae6d9` 复现不出本表依据的规则。
+技能版本以 `SKILL.md` frontmatter 的 `metadata.version` 为准（源仓库 `/home/gtc/Desktop/workspace/Tools/Skills`，v0.1 = 提交 `3254fb6`）。Q1 审计读取的是 git `5cae6d9` 加当时尚未提交的工作区改动（含 CPPF-001/CPPF-002/DOC-001），这些改动随后定为 v0.1；单凭 `5cae6d9` 复现不出本表依据的规则。
 
 本表由 Q1 审计（2026-11-17）建立：只列对本工程适用或需要说明不适用的技能规则。状态取值：
-**覆盖**（已落地且有门禁/证据）、**有意偏离**（本工程规则更具体且有理由）、**缺口**（技能要求尚无对应做法，
+**覆盖**（已落地且有门禁/证据，全量代码证据由 Q4 复核，见 `docs/reports/Q4.md`）、**有意偏离**（本工程规则更具体且有理由）、**缺口**（技能要求尚无对应做法，
 Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**不适用**（本工程无该场景）。规则优先级见技能 `SKILL.md`：
 项目显式规则高于技能默认值，所以「有意偏离」不等于错误，但理由必须写在「依据或理由」列。
 
@@ -643,7 +643,7 @@ Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**�
 | GEN-008 | 向上游提交只用上游规格 | 本仓库无上游提交 | 不适用 | — |
 | GEN-009 | 外设等待有界、时钟在该阶段有效、tick 回绕安全 | BT 初始化按阶段位 + 超时；时间差用无符号运算 | 覆盖 | components/spp_server/SppServerInit.c、components/rtos/ |
 | GEN-010 | 校验外部输入的长度与范围 | 帧长在进缓冲前判上界 | 覆盖 | components/stream_demux/、components/device_proto/ |
-| DOC-001 | 新增自有函数都要 Doxygen，声明或定义写一处，类注释不算 | §6.2 强制（正文中文，项目规则优先） | 覆盖 | §6.2 |
+| DOC-001 | 新增自有函数都要 Doxygen（默认英文），声明或定义写一处，类注释不算 | §6.2 比技能更严：每个函数都要，正文中文；门禁只查增量，存量 1293 个中 315 个合格（24%，2026-11-17） | 缺口（存量）；正文语言为有意偏离 | §6.2；AGENTS.md §5 规定中文正文；存量按 ADR-0013 分批补齐 |
 | CPPF-001 | 布局按项目选定的风格 | 仓库 `.clang-format` | 有意偏离 | AGENTS.md §5：clang-format 为唯一门禁 |
 | CPPF-002 | 命名按项目风格 | §3 + ADR-0008 §9 | 覆盖 | §3 |
 | ARCH-007 | 驱动状态放设备上下文，分段初始化逐个查返回 | GNSS 驱动实例层次 + `init()` 返回 Status | 覆盖 | components/gnss/ |
@@ -678,11 +678,11 @@ Q1 待决提议的处理结果见 `docs/tasks/Q2-conformance-fixes.md`）、**�
 | CPP-007 | printf 只用于非实时路径，T0 禁 | `snprintf` 只出现在命令/日志格式化 | 覆盖 | §5.1 |
 | CPP-008 | 共享原子要 `static_assert(is_always_lock_free)` | 共享原子变量旁写 `static_assert(std::atomic<T>::is_always_lock_free)` | 覆盖 | main/AppContext.hpp、components/app_fw/src/（Q2） |
 | CPP-009 | 函数内静态的动态初始化受限 | 函数内静态与全局表须常量初始化；g7b 检查自有目标文件不得引用 `__cxa_guard_*` | 覆盖 | components/gnss/src/Registry.cpp、docs/acceptance.md G7b（Q2） |
-| CPP-010 | 全局/静态构造不访问硬件/RTOS/日志，显式 `init()` | `constexpr` 构造 + `[[nodiscard]] init()` | 覆盖 | §4.2 |
-| CPP-011 | 多态基类受保护非虚析构、实现类 `final` | 虚函数只限 `Transport`/`demux::Sink`/`gnss::Receiver` | 覆盖 | §4.3 |
+| CPP-010 | 全局/静态构造不访问硬件/RTOS/日志，显式 `init()` | `constexpr` 构造 + `[[nodiscard]] init()` | 覆盖 | §4.1 |
+| CPP-011 | 多态基类受保护非虚析构、实现类 `final` | 虚函数只限 `Transport`/`demux::Sink`/`gnss::Receiver`；非叶子类受保护非虚析构，只实例化 `final` 叶子 | 缺口（整改中） | §4.1；P3s 起 `UnicoreReceiver`/`UbloxReceiver`/`ComnavReceiver` 用公有虚析构且被直接实例化，整改见 ADR-0013 S1 |
 | CPP-012 | volatile 只用于 MMIO/DMA，不做复合运算 | 无 MMIO volatile | 覆盖 | — |
 | CPP-013 | ISR 向量 `extern "C"`、C 回调 `noexcept` 蹦床、跨边界类型 standard-layout | 无自有 ISR；BT 回调经 C 函数转发 | 覆盖 | components/spp_server/ |
-| CPP-014 | SDK 错误码在 bsp 层映射一次并检查 | `esp_err_t` 只在 IDF 边界，`rtos::from_esp_err` 映射 | 覆盖 | §4.5 |
+| CPP-014 | SDK 错误码在 bsp 层映射一次并检查 | `esp_err_t` 只在 IDF 边界，`rtos::from_esp_err` 映射 | 覆盖 | §4.4 |
 | CPP-015 | 自有代码开严格告警 + `-Werror`，第三方头用 `-isystem` | `rtk_strict_warnings()` + 组件选项集 | 覆盖 | cmake/strict_warnings.cmake |
 | CPP-017 | 不把位域用于寄存器映射 | 无位域映射 | 覆盖 | — |
 | CPP-020 | 全局用 `constinit`/`constexpr` | 执行器与模块表 `constinit` | 覆盖 | main/app/Executors.cpp |
