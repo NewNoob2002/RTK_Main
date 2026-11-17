@@ -80,6 +80,8 @@
   和 `readability-function-cognitive-complexity`（Threshold 25），不新增工具依赖。
 - 文件：不超过 500 行，门禁写进 `docs/acceptance.md`。确实以表为主的文件（解码表、命令表）可以超出，但要在
   `docs/acceptance.md` 按文件登记理由。
+- 阈值是审视触发线，不是硬切线：平铺分派、线性初始化序列、表定义、时序敏感路径等拆了反而难读的函数可以保留，
+  在签名行写行内 `NOLINT(readability-function-size): <理由>`，由 Architect 验收时逐条确认（S4 卡 §2.1）。
 - 拆分的方式：按职责拆成具名的小函数，或者把同一职责的函数移到新文件。不机械地按行数切段，
   也不为了凑行数引入 lambda 或宏。
 
