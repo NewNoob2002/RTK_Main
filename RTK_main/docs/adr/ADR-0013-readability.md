@@ -1,6 +1,6 @@
 # ADR-0013：可读性整改：命名、间接层、长度、注释
 
-状态：提议（2026-11-17，待用户批准）
+状态：提议（2026-11-17，待用户批准；§2.5 已批准，按 `docs/tasks/S1-receiver-leaves.md` 实施）
 关联：ADR-0008（代码组织）、ADR-0012 §2.8（驱动层次）、`docs/CODING-STYLE.md`、技能 embedded-engineering v0.1
 （`references/cpp/readable-cpp.md`，规则 CPPF-001/CPPF-002/DOC-001/CPP-011）。
 
