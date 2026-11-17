@@ -170,7 +170,8 @@ IDF v6.1 的 UART VFS（`esp_driver_uart/src/uart_vfs.c:227`）对每个字符�
 - **通路。** 启动第一步（`step_power`）即安装直写 sink，启动横幅、复位原因、各模块初始化结果与启动摘要都以 `[t] [SYS] …` 行按序出现在提示符之前；启动结束（摘要之后、REPL 之前）DebugModule 才把文本环挂上（`attach_log`），此后写环，由 trace_out 按时间与 trace 事件合并输出；环未安装（启动早期、追踪关闭的固件）时写 `log_install_direct` 安装的直写 sink（`main/app/ConsoleSetup.cpp`，同步写 `cli::out_write`）；两者都没有时丢弃并计入 `log_stats().lost`。两条通路共用 `fw::log_format_line`，行格式一致：`[   8.712] [GNSS] W: text`，I 级不带级别前缀；类别名用方括号隔开（2026-11-16 用户要求），trace 事件行同样是 `[t] [CAT] 句子`。
 - **记录头。** `LogHeader` 增加 `level` 与保留字节，`total` 由 uint32 收窄为 uint16，总长仍为 12 B（hex 转储原长上限 65535 足够，帧最长 4096）。
 - **新类别 `kSys`。** 启动、控制台、系统服务日志；`kTraceAllMask` 随 `kCount` 自动扩展。
-- **用法约束（CODING-STYLE §5.1）。** 日志记状态变化、错误与周期统计；默认 I 级可见，所以逐帧/逐句内容（NMEA 句子、拒收字节、未知字节）用 D；实时每轮路径、ISR、BT 回调任务只用 `trace()`。格式 `事件 key=value`，类别前缀由输出端加，正文不重复组件名。
+- **用法约束（CODING-STYLE §5.1）。** 日志记状态变化、错误与周期统计；默认 I 级可见，所以逐帧/逐句内容（NMEA 句子、拒收字节、未知字节）用 D；实时每轮路径、ISR、BT 回调任务只用 `trace()`。格式见 §2.11 与下一节的子组件标签（`[CAT] <子组件> 句子`）；只有确实是“名字=值”清单时才用 `k=v`，类别前缀由输出端加，正文不重复组件名。
+- **子组件标签（2026-11-16 补充，用户要求）。** 类别方括号之外，句子开头再用 `<子组件>` 标出产生该行的子范围（状态机、探测、配置等），行形如 `[  13.001] [GNSS] <cfg> TX "MODE ROVER"`；标签小写单词、语义固定，正文仍按 §2.11 以对象开头。GNSS 现有标签：`<sm>` 状态机、`<probe>` 方言/波特率探测、`<cfg>` 配置脚本步骤、`<out>` 报文输出与掩码、`<uart>` 串口与波特率、`<rx>` 接收侧解析/拒收/静默、`<rtcm>` RTCM 下行管道、`<app>` 应用订阅环。其他类别提到 GNSS 时用 `<gnss>`（如 `[SYS] <gnss> UART2 started, 115200 baud`、`[LINK] <gnss> app ring attach failed`）。方向词统一写 `TX`/`RX`（MCU 视角），不再用 `<-`/`->`：旧的 `<model> <- "cmd"` 会被读成“收到但未识别”，且探测命中前模型名只是 `unknown`。trace 句子表（`main/modules/debug/TraceText.cpp`）使用同一套标签。
 - **host。** 测试可调 `log_install_direct` 装捕获 sink 断言日志；未装时只计数，不写 stderr，测试输出保持干净。
 
 ## 3. 冻结接口（T0 由 Claude 写入）

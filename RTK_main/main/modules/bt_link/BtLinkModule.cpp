@@ -599,7 +599,7 @@ fw::Result BtLinkModule::init() noexcept
     gnss_service.set_mask_hook(&BtLinkModule::on_gnss_mask, this);
     gnss_reader_attached_ = fw::is_ok(ctx().data.gnss_app_ring.attach(0U, gnss_reader_id_));
     if (!gnss_reader_attached_) {
-        FW_LOGE(fw::TraceCat::kLink, "gnss app ring attach failed");
+        FW_LOGE(fw::TraceCat::kLink, "<gnss> app ring attach failed");
         return fw::Result::kInvalidState;
     }
     /* 路由表校验成功后才构造 LinkService，失败由执行器隔离。 */

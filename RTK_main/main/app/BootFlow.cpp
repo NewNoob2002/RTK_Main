@@ -361,7 +361,8 @@ void print_boot_summary(std::span<const app::BootRecord> records) noexcept
     const auto gnss = self.data.gnss_status.read();
     // 状态槽尚未被 GNSS 模块 poll 刷新时回落到 Kconfig 默认波特率。
     const uint32_t baud = gnss.host_baud != 0U ? gnss.host_baud : static_cast<uint32_t>(CONFIG_RTK_GNSS_DEFAULT_BAUD);
-    FW_LOGI(fw::TraceCat::kSys, "GNSS UART%d started, %u baud", CONFIG_RTK_GNSS_UART_NUM, static_cast<unsigned>(baud));
+    FW_LOGI(fw::TraceCat::kSys, "<gnss> UART%d started, %u baud", CONFIG_RTK_GNSS_UART_NUM,
+            static_cast<unsigned>(baud));
 #endif
     const uint32_t total_ms = (records.back().start_ms + records.back().took_ms) - records.front().start_ms;
     const uint32_t free_heap = esp_get_free_heap_size();
