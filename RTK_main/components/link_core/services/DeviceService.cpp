@@ -1,5 +1,6 @@
-// DeviceService 实现（ADR-0007 §3.3）：设备信息类指令 0x01/0x02/0x03/0x04/0x05/0x06/0x0D。
-// 各分支自 command_dispatcher.cpp 逐字节搬迁，应答内容与旧 CommandDispatcher 一致。
+// DeviceService 实现（ADR-0007 §3.3）：设备信息类指令 0x01/0x02/0x03/0x06/0x0D。
+// 线程安全：否，只由链路任务串行调用；非 ISR、不阻塞。
+// 堆：不分配（DeviceInfo 是成员，负载用栈上定长数组，应答复用调用方缓冲）。
 
 #include "core/services/DeviceService.hpp"
 
@@ -17,12 +18,18 @@ namespace core::services {
 
 namespace {
 
-// 通用结果码（phone_protocol.md §3；沿用旧 CommandDispatcher 的取值）。
+// 通用结果码（phone_protocol.md §3）。
 inline constexpr uint8_t kResultOk = 0x01;
 
 /**
- * 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
- * 组帧失败时把 reply.len 置 0 并返回 kNoReply（与旧 dispatcher 一致）。
+ * @brief 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ * @param[out] reply 复用缓冲；成功时写入帧并设置 len，失败时 len 置 0。
+ * @param msgId 请求的 msg_id，原样回填。
+ * @param reqType 请求的 type，用于映射应答 type。
+ * @param payload 应答负载。
+ * @retval DispatchResult::kReply 已组帧。
+ * @retval DispatchResult::kNoReply 组帧失败（缓冲不足等），reply.len 为 0。
+ * @note 不分配、不加锁；非 ISR 可调（纯缓冲写入）。
  */
 inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
                                  std::span<const uint8_t> payload) noexcept
@@ -38,7 +45,13 @@ inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
     return DispatchResult::kReply;
 }
 
-/** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
+/** @brief 结果码应答：§3 规定成功/失败都把同一字节写两遍。
+ *  @param[out] reply 复用缓冲，语义同 replyBuild。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @param value 结果码（本文件只用 kResultOk）。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
                                   uint8_t value) noexcept
 {
@@ -46,7 +59,12 @@ inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
     return replyBuild(reply, msgId, reqType, payload);
 }
 
-/** 成功应答（0x01 0x01）。 */
+/** @brief 成功应答（结果码 0x01 0x01）的快捷封装。
+ *  @param[out] reply 复用缓冲。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyOk(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
     return replyResult(reply, msgId, reqType, kResultOk);
@@ -77,6 +95,13 @@ constexpr std::array<uint8_t, kDevStateLen> kDevStatePayload = {
     0x03, 0x01, 0x81, 0x83, 0x81, 0x00, 0x00, 0x00, 0x00, 0x81, 0x81, 0x81, 0x00, 0x01,
 };
 
+/** @brief 0x01 设备信息：按 §4 字段顺序拼 120 B 负载（产品、SN、硬件/固件版本、板卡、电台等）。
+ *  @param info 设备信息，取各定长字符串视图。
+ *  @param frame 请求帧（PHONE、type=QUERY）。
+ *  @param[out] reply 应答缓冲。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。
+ *  @note 保留区与末尾未用字节填 0；不分配（负载在栈上）。 */
 DispatchResult handleDevInfo(const DeviceInfo &info, const proto::FrameView &frame,
                              Reply &reply) noexcept
 {
@@ -102,6 +127,12 @@ constexpr size_t kDevStateGnssOfs = 2;
 constexpr uint8_t kDevStateGnssRunning = 0x81;
 constexpr uint8_t kDevStateGnssPresent = 0x01;
 
+/** @brief 0x02 设备状态：固定 14 B 模板，仅第 2 字节按 GNSS 是否运行替换（0x81 运行 / 0x01 在场）。
+ *  @param info 设备信息，只取 gnssRunning。
+ *  @param frame 请求帧（PHONE、type=QUERY）。
+ *  @param[out] reply 应答缓冲。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 DispatchResult handleDevState(const DeviceInfo &info, const proto::FrameView &frame,
                               Reply &reply) noexcept
 {
@@ -110,6 +141,13 @@ DispatchResult handleDevState(const DeviceInfo &info, const proto::FrameView &fr
     return replyBuild(reply, frame.msgId, frame.type, payload);
 }
 
+/** @brief 0x03 电池/存储：按 §4 布局写是否供电、电量百分比与温度，其余字节填 0。
+ *  @param info 设备信息，取 onBattery/batteryPct/batteryTempC。
+ *  @param frame 请求帧（PHONE、type=QUERY）。
+ *  @param[out] reply 应答缓冲。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。
+ *  @note 温度按 int8_t 补码原样写入（-5 → 0xFB）。 */
 DispatchResult handleBattery(const DeviceInfo &info, const proto::FrameView &frame,
                              Reply &reply) noexcept
 {
@@ -125,6 +163,11 @@ DispatchResult handleBattery(const DeviceInfo &info, const proto::FrameView &fra
     return replyBuild(reply, frame.msgId, frame.type, payload);
 }
 
+/** @brief 0x06 卫星跟踪：查询回全 0 负载（跟踪数据尚未接入），其他 type 回成功结果码。
+ *  @param frame 请求帧（PHONE）。
+ *  @param[out] reply 应答缓冲。
+ *  @retval DispatchResult::kReply 已组帧（查询应答或结果码应答）。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 DispatchResult handleSatTrack(const proto::FrameView &frame, Reply &reply) noexcept
 {
     if (frame.type != msg_type::kQuery) {
@@ -134,10 +177,17 @@ DispatchResult handleSatTrack(const proto::FrameView &frame, Reply &reply) noexc
     return replyBuild(reply, frame.msgId, frame.type, payload);
 }
 
+/** @brief 0x0D COM 口：查询回波特率与协议字段，设置请求按协议不回复。
+ *  @param info 设备信息，取 comBaud。
+ *  @param frame 请求帧（PHONE）。
+ *  @param[out] reply 应答缓冲；非 QUERY 时不写入。
+ *  @retval DispatchResult::kReply 已组查询应答。
+ *  @retval DispatchResult::kNoReply type 非 QUERY（设置不回复），或组帧失败。
+ *  @note 结果字段固定为 0x01；参数 218 为固定值（§4）。 */
 DispatchResult handleCom(const DeviceInfo &info, const proto::FrameView &frame,
                          Reply &reply) noexcept
 {
-    // 5.4 行为：0x0D 设置不回复（§4）。
+    // 0x0D 设置请求不回复，只有查询应答（§4）。
     if (frame.type != msg_type::kQuery) {
         return DispatchResult::kNoReply;
     }
@@ -160,7 +210,7 @@ DispatchResult handleCom(const DeviceInfo &info, const proto::FrameView &frame,
 
 DeviceService::DeviceService() noexcept
 {
-    // 与旧 CommandDispatcher 构造函数相同的默认值（未列出的字段用 DeviceInfo 默认成员）。
+    // 出厂默认值（未列出的字段用 DeviceInfo 默认成员）。
     info_.product.assign("E1-Lite");
     info_.hwVer.assign("V1.1.0");
     info_.board.assign("UM980");

@@ -1,5 +1,6 @@
 // ConfigService 实现（ADR-0007 §3.3）：配置类指令 0x07 工作模式、0x14 电台、0x15 日志。
-// 各分支自 command_dispatcher.cpp 逐字节搬迁，读写语义与旧 CommandDispatcher 一致。
+// 线程安全：否，只由链路任务串行调用；非 ISR、不阻塞。
+// 堆：不分配（配置是定长成员，应答复用调用方的 Reply 缓冲）。
 
 #include "core/services/ConfigService.hpp"
 
@@ -16,13 +17,19 @@ namespace core::services {
 
 namespace {
 
-// 通用结果码（phone_protocol.md §3；沿用旧 CommandDispatcher 的取值）。
+// 通用结果码（phone_protocol.md §3：0x01 成功，0x02 失败）。
 inline constexpr uint8_t kResultOk = 0x01;
 inline constexpr uint8_t kResultFail = 0x02;
 
 /**
- * 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
- * 组帧失败时把 reply.len 置 0 并返回 kNoReply（与旧 dispatcher 一致）。
+ * @brief 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ * @param[out] reply 复用缓冲；成功时写入帧并设置 len，失败时 len 置 0。
+ * @param msgId 请求的 msg_id，原样回填。
+ * @param reqType 请求的 type，用于映射应答 type。
+ * @param payload 应答负载。
+ * @retval DispatchResult::kReply 已组帧。
+ * @retval DispatchResult::kNoReply 组帧失败（缓冲不足等），reply.len 为 0。
+ * @note 不分配、不加锁；非 ISR 可调（纯缓冲写入）。
  */
 inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
                                  std::span<const uint8_t> payload) noexcept
@@ -38,7 +45,13 @@ inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
     return DispatchResult::kReply;
 }
 
-/** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
+/** @brief 结果码应答：§3 规定成功/失败都把同一字节写两遍。
+ *  @param[out] reply 复用缓冲，语义同 replyBuild。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @param value 结果码（kResultOk/kResultFail）。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
                                   uint8_t value) noexcept
 {
@@ -46,13 +59,23 @@ inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
     return replyBuild(reply, msgId, reqType, payload);
 }
 
-/** 成功应答（0x01 0x01）。 */
+/** @brief 成功应答（结果码 0x01 0x01）的快捷封装。
+ *  @param[out] reply 复用缓冲。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyOk(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
     return replyResult(reply, msgId, reqType, kResultOk);
 }
 
-/** 失败应答（0x02 0x02）。 */
+/** @brief 失败应答（结果码 0x02 0x02）的快捷封装。
+ *  @param[out] reply 复用缓冲。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyFail(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
     return replyResult(reply, msgId, reqType, kResultFail);
@@ -65,6 +88,12 @@ constexpr uint16_t kIdWorkMode = 0x0007;
 constexpr uint16_t kIdRadio = 0x0014;
 constexpr uint16_t kIdLog = 0x0015;
 
+/** @brief 0x07 工作模式：SET 覆盖前 kWorkModeSetLen 字节，其他 type 回读当前值。
+ *  @param[out] cfg 服务持有的工作模式数组视图（长度必须 ≥ kWorkModeLen）。
+ *  @param frame 请求帧；SET 时负载不足 kWorkModeSetLen 一律回失败。
+ *  @param[out] reply 应答缓冲。
+ *  @retval DispatchResult::kReply 已组成功应答或读取应答。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 DispatchResult handleWorkMode(std::span<uint8_t> cfg, const proto::FrameView &frame,
                               Reply &reply) noexcept
 {
@@ -80,6 +109,13 @@ DispatchResult handleWorkMode(std::span<uint8_t> cfg, const proto::FrameView &fr
     return replyBuild(reply, frame.msgId, frame.type, cfg);
 }
 
+/** @brief 0x14 电台：SET 覆盖负载覆盖到的字节，其他 type 回读当前值。
+ *  @param[out] cfg 服务持有的电台配置数组视图（长度必须 ≥ kRadioLen）。
+ *  @param frame 请求帧；SET 时负载不足 kRadioSetMinLen 回失败。
+ *  @param[out] reply 应答缓冲。
+ *  @retval DispatchResult::kReply 已组成功应答或读取应答。
+ *  @retval DispatchResult::kNoReply 组帧失败。
+ *  @note SET 只写 min(负载长度, kRadioLen) 字节，未覆盖的尾部（如 [17]）保持原值。 */
 DispatchResult handleRadio(std::span<uint8_t> cfg, const proto::FrameView &frame,
                            Reply &reply) noexcept
 {
@@ -97,6 +133,12 @@ DispatchResult handleRadio(std::span<uint8_t> cfg, const proto::FrameView &frame
     return replyBuild(reply, frame.msgId, frame.type, cfg);
 }
 
+/** @brief 0x15 日志：SET 要求负载恰好覆盖 kLogLen 字节并整体覆盖，其他 type 回读当前值。
+ *  @param[out] cfg 服务持有的日志配置数组视图（长度必须 ≥ kLogLen）。
+ *  @param frame 请求帧；SET 时负载不足 kLogLen 回失败。
+ *  @param[out] reply 应答缓冲。
+ *  @retval DispatchResult::kReply 已组成功应答或读取应答。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 DispatchResult handleLog(std::span<uint8_t> cfg, const proto::FrameView &frame,
                          Reply &reply) noexcept
 {
@@ -116,7 +158,7 @@ DispatchResult handleLog(std::span<uint8_t> cfg, const proto::FrameView &frame,
 
 ConfigService::ConfigService() noexcept
 {
-    // 与旧 CommandDispatcher 构造函数相同：三块配置清零，电台模式字节取默认值。
+    // 三块配置清零，电台模式字节取默认值。
     work_mode_.fill(0);
     radio_.fill(0);
     radio_[kRadioModeOffset] = kRadioModeDefault;

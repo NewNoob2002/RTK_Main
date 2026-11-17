@@ -1,5 +1,6 @@
-// 有界小端字节读写器。粘滞错误：越界后 ok() 永久为 false，
-// 已写入字节保持不变，后续写入（读取）被忽略。多字节字段只经这里读写。
+// 有界小端字节读写器的实现；粘滞错误：越界后 ok() 永久为 false，已写字节不变，后续读写被忽略。
+// 每个实例只由一个任务使用，非线程安全；无阻塞、无分配，ISR 安全。
+// 不使用堆；多字节字段只经这里读写。
 
 #include "proto/Bytes.hpp"
 
@@ -121,6 +122,11 @@ std::span<const uint8_t> ByteWriter::written() const noexcept
 
 ByteReader::ByteReader(std::span<const uint8_t> buf) noexcept : buf_(buf) {}
 
+/**
+ * @brief  读一个字节
+ * @retval 读到的字节；已越界时返回 0 并置 !ok()
+ * @note   同名重载：定义处单独成块，避免与 ByteWriter::u8 混淆
+ */
 uint8_t ByteReader::u8() noexcept
 {
     if (!ok_ || (pos_ >= buf_.size())) {
@@ -132,6 +138,11 @@ uint8_t ByteReader::u8() noexcept
     return value;
 }
 
+/**
+ * @brief  以小端读 u16
+ * @retval 读到的值；越界部分按 0 计入并置 !ok()
+ * @note   同名重载：定义处单独成块，避免与 ByteWriter::u16 混淆
+ */
 uint16_t ByteReader::u16() noexcept
 {
     uint32_t value = 0;
@@ -142,6 +153,11 @@ uint16_t ByteReader::u16() noexcept
     return static_cast<uint16_t>(value);
 }
 
+/**
+ * @brief  以小端读 u32
+ * @retval 读到的值；越界部分按 0 计入并置 !ok()
+ * @note   同名重载：定义处单独成块，避免与 ByteWriter::u32 混淆
+ */
 uint32_t ByteReader::u32() noexcept
 {
     uint32_t value = 0;

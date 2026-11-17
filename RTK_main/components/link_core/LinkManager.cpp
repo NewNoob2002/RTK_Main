@@ -1,6 +1,6 @@
-// SPP 会话角色与策略管理（phone_protocol.md §2/§5，LinkManager.hpp 规则 1–4）。
-// 不调用传输层；需要断开的句柄经 Actions 返回给 LinkService。
-// 所有时间比较用无符号差值，容忍 32 位毫秒回绕。
+// SPP 会话角色与策略管理：准入、超时、配对窗口与白名单（规则 1–4 见 LinkManager.hpp）。
+// 不调用传输层，待断开句柄经 Actions 返回；仅链路任务调用，非 ISR。
+// 不分配堆、不阻塞；时间比较用无符号差值以容忍 32 位毫秒回绕。
 
 #include "core/LinkManager.hpp"
 #include "core/TraceCodes.hpp"
@@ -9,17 +9,25 @@ namespace core {
 
 namespace {
 
-// 事件参数统一用 uint32_t；底层类型为 uint8_t 的枚举转宽不收窄。
+/** @brief 把 Role 转成追踪事件参数（uint32_t），避免窄化告警。
+ *  @param role 待转换角色。
+ *  @return 角色的枚举数值。 */
 constexpr uint32_t roleValue(Role role) noexcept
 {
     return static_cast<uint32_t>(role);
 }
 
+/** @brief 把 LinkReason 转成追踪事件参数（uint32_t）。
+ *  @param reason 判定依据。
+ *  @return 枚举数值。 */
 constexpr uint32_t reasonValue(LinkReason reason) noexcept
 {
     return static_cast<uint32_t>(reason);
 }
 
+/** @brief 向 Actions 追加一个待断开句柄，按产生顺序排列。
+ *  @param[out] act 动作输出；容量用尽时静默丢弃该句柄（调用方保证不溢出）。
+ *  @param handle 待断开的会话句柄。 */
 void actionAdd(Actions &act, SessionHandle handle) noexcept
 {
     if (act.count < act.handles.size()) {
@@ -28,6 +36,10 @@ void actionAdd(Actions &act, SessionHandle handle) noexcept
     }
 }
 
+/** @brief 线性查找地址是否在白名单视图中。
+ *  @param list 地址视图（调用方保证范围有效）。
+ *  @param addr 待查地址。
+ *  @return true 存在；false 不存在或 list 为空。 */
 bool containsAddr(std::span<const BtAddr> list, const BtAddr &addr) noexcept
 {
     for (const BtAddr &entry : list) {
@@ -38,11 +50,21 @@ bool containsAddr(std::span<const BtAddr> list, const BtAddr &addr) noexcept
     return false;
 }
 
+/** @brief 判断 nowMs 距 thenMs 是否严格超过 limitMs（回绕安全）。
+ *  @param nowMs 当前时间（ms）。
+ *  @param thenMs 计时起点（ms）。
+ *  @param limitMs 时限（ms）。
+ *  @return true 表示已超过；相等不算超时。 */
 bool elapsedExceeds(uint32_t nowMs, uint32_t thenMs, uint32_t limitMs) noexcept
 {
     return static_cast<uint32_t>(nowMs - thenMs) > limitMs;
 }
 
+/** @brief 判断 nowMs 距 thenMs 是否达到 limitMs（回绕安全）。
+ *  @param nowMs 当前时间（ms）。
+ *  @param thenMs 计时起点（ms）。
+ *  @param limitMs 时限（ms）。
+ *  @return true 表示已到达（含相等），用于配对窗口关闭。 */
 bool elapsedReaches(uint32_t nowMs, uint32_t thenMs, uint32_t limitMs) noexcept
 {
     return static_cast<uint32_t>(nowMs - thenMs) >= limitMs;
@@ -50,6 +72,12 @@ bool elapsedReaches(uint32_t nowMs, uint32_t thenMs, uint32_t limitMs) noexcept
 
 } // namespace
 
+/**
+ * @brief 清空会话表与白名单，再按 policy 载入 alarms。
+ * @param policy 准入策略（kConcurrent / kPhonePreempt）。
+ * @param alarms 初始报警器地址；超出 kMaxAlarms 的部分忽略，其余项置零。
+ * @note 启动阶段单线程调用一次，非 ISR、不分配、不阻塞；会话表一并清空（等价于丢弃全部在线会话）。
+ */
 void LinkManager::init(Policy policy, std::span<const BtAddr> alarms) noexcept
 {
     sessions_.fill(Session{});
@@ -65,16 +93,8 @@ void LinkManager::init(Policy policy, std::span<const BtAddr> alarms) noexcept
     pair_start_ms_ = 0;
 }
 
-/**
- * @brief  连接建立：按准入规则决定角色并向链路回写动作
- * @param  handle: 新连接的会话句柄
- * @param  addr: 对端地址
- * @param  nowMs: 当前时间（ms）
- * @param[out] act: 对链路的动作输出
- * @retval 仲裁出的角色
- * @note   不拆（S4 §2.1）：准入规则 1→4 的顺序即内容，拆开要传 act/policy/白名单/手机在线四五个状态。
- */
-Role LinkManager::onOpen(SessionHandle handle, // NOLINT(readability-function-*): 见不拆说明
+// 准入规则 1→4 顺序即内容，拆开需传 act/policy/白名单/手机在线四五个状态（ADR-0013 §2.4）。
+Role LinkManager::onOpen(SessionHandle handle, // NOLINT(readability-function-*)
                          const BtAddr &addr, uint32_t nowMs, Actions &act) noexcept
 {
     act.clear();

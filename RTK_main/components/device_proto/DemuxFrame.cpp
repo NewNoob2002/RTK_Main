@@ -1,10 +1,6 @@
-// 产品 SPP 帧（AA 44 18）的分流器 C++ 解码器与线路帧 → 字段视图（ADR-0004 §4 / ADR-0005 §1）。
-// 判定规则与 dev_proto_parser_feed（components/device_proto/DevProtoFrame.c）完全一致：AA 44 18、
-// 头长字节 == 0x14、payloadLen（偏移 12，u16 LE）≤ DEV_PROTO_MAX_PAYLOAD、CRC-32 正确；
-// CRC 复用 proto::crc32（zlib 兼容，不另建实现）。
-// 早拒绝点：第 2 字节（44）、第 3 字节（18，与 Unicore 二进制 AA 44 B5 分开）、头长字节、payload 长度字段。
-// 长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
-// step 与 explain 共用 judge()，避免诊断文本与判定结论漂移。
+// 产品 SPP 帧（AA 44 18）的 demux::Decoder 实现与线路帧 → 字段视图；判定与 dev_proto_parser_feed 一致（ADR-0004 §4 / ADR-0005 §1）。
+// 纯函数、可重入、无静态可变状态，任意任务/ISR 可调用；无阻塞。
+// 不使用堆；CRC 复用 proto::crc32。
 
 #include "proto/DemuxFrame.hpp"
 
@@ -53,6 +49,12 @@ struct Verdict {
     std::size_t total = 0U;  // 长度类原因：声称的总长
 };
 
+/**
+ * @brief  构造一个只带原因的拒绝结论
+ * @param  reason: 拒绝原因
+ * @retval step 为 kReject、reason 为 reason 的结论
+ * @note   纯函数、无阻塞、ISR 安全
+ */
 Verdict reject(Reason reason) noexcept
 {
     Verdict verdict{};
@@ -61,6 +63,14 @@ Verdict reject(Reason reason) noexcept
     return verdict;
 }
 
+/**
+ * @brief  构造同步字节不符的拒绝结论
+ * @param  offset: 不符字节的 0 基偏移（诊断时显示为 offset+1）
+ * @param  expected: 期望字节
+ * @param  got: 实收字节
+ * @retval step 为 kReject、reason 为 kSync 的结论；received 低 8 位为 got、高 8 位为 expected
+ * @note   纯函数、无阻塞、ISR 安全
+ */
 Verdict rejectSync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
 {
     Verdict verdict = reject(Reason::kSync);
@@ -70,13 +80,25 @@ Verdict rejectSync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
     return verdict;
 }
 
-/** 小端 u16；调用方保证 from + 2 <= frame.size()。 */
+/**
+ * @brief  读小端 u16
+ * @param  frame: 字节缓冲
+ * @param  from: 起始偏移
+ * @retval 该偏移处的无符号 16 位值
+ * @note   不检查越界，调用方保证 from + 2 ≤ frame.size()；纯函数、ISR 安全
+ */
 uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     return (static_cast<uint32_t>(frame[from]) | (static_cast<uint32_t>(frame[from + 1U]) << 8U));
 }
 
-/** 小端 u32；调用方保证 from + 4 <= frame.size()。 */
+/**
+ * @brief  读小端 u32
+ * @param  frame: 字节缓冲
+ * @param  from: 起始偏移
+ * @retval 该偏移处的无符号 32 位值
+ * @note   不检查越界，调用方保证 from + 4 ≤ frame.size()；纯函数、ISR 安全
+ */
 uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     uint32_t value = 0U;
@@ -91,9 +113,10 @@ uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 
 /**
  * @brief  判定一帧：sync/头长/帧长/CRC
- * @param  frame: 候选帧（从同步字节开始）
- * @retval 判定结果；通过时 step 为 kFrame
- * @note   不拆（S4 §2.1）：协议早拒绝阶梯，sync/头长/帧长/CRC 次序本身是内容。
+ * @param  frame: 候选帧（从同步字节开始，可为任意长度前缀）
+ * @retval 结论：kFrame 表示整帧校验通过；kNeedMore 表示还需 verdict.need 字节；kReject 带原因与诊断字段
+ * @note   协议早拒绝阶梯：sync/头长/帧长/CRC 的次序本身是内容，拆开反而看不出拒绝顺序（ADR-0013 §2.4）。
+ *         纯函数、可重入、无阻塞、ISR 安全。
  */
 Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-function-*)
 {
@@ -166,6 +189,13 @@ Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-fun
     return good;
 }
 
+/**
+ * @brief  按 Verdict 的 reason/offset/received/total/computed 生成一句英文诊断
+ * @param  verdict: judge 产生的拒绝结论
+ * @param[out] text: 文本写入器；空间不足时 write 自行截断
+ * @retval 无
+ * @note   reason 为 kNone（或未知）时写 "rejected"；无分配、无阻塞、ISR 安全
+ */
 void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {

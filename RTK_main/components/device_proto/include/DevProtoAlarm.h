@@ -1,6 +1,6 @@
-// 报警器扩展消息 0x40（状态）/0x41（心跳）的 C 编解码，RTK 与报警器两端共用。
-// 线路格式见 docs/protocol/phone_protocol.md §5。线程安全：是（无状态）。ISR 安全：是。
-// 冻结接口（ADR-0003）。实现方不得修改。
+// 报警器扩展消息 0x40（状态）/0x41（心跳）的 C 编解码接口（冻结，ADR-0003），RTK 与报警器两端共用。
+// 无状态纯函数，任意任务可调用；无阻塞、无分配，ISR 安全。
+// 不使用堆；线路格式见 docs/protocol/phone_protocol.md §5。
 #pragma once
 
 #include <stdbool.h>
@@ -47,19 +47,51 @@ typedef struct {
     uint8_t local_state; /* 0 空闲，1 鸣响中，2 已静音 */
 } dev_proto_alarm_heartbeat_t;
 
-/** 按 §5 写 16 字节，返回写入字节数；参数为 NULL 或 out_size < 16 返回 0 且不写入。 */
+/**
+ * @brief  按 §5 布局编码 0x40 状态（16 字节，多字节字段小端）
+ * @param  status: 待编码的状态字段
+ * @param[out] out: 输出缓冲
+ * @param  out_size: out 的容量，单位字节
+ * @retval 16 成功，写入 DEV_PROTO_ALARM_STATUS_LEN 字节
+ * @retval 0  status/out 为 NULL 或 out_size < 16，此时不写入任何字节
+ * @note   保留字节与尾部 4 字节写 0；无阻塞、无分配、ISR 安全
+ */
 size_t dev_proto_alarm_encode_status(const dev_proto_alarm_status_t *status, uint8_t *out,
                                      size_t out_size);
 
-/** len < 16 或指针为 NULL 返回 false；多余字节忽略。 */
+/**
+ * @brief  按 §5 布局解码 0x40 状态
+ * @param  data: 收到的 payload（只读）
+ * @param  len:  data 的字节数，至少 16
+ * @param[out] status: 解析结果；返回 false 时不改动
+ * @retval true  长度足够，status 已填充
+ * @retval false data/status 为 NULL 或 len < 16
+ * @note   多余字节忽略；无阻塞、无分配、ISR 安全
+ */
 bool dev_proto_alarm_decode_status(const uint8_t *data, size_t len,
                                    dev_proto_alarm_status_t *status);
 
-/** 写 8 字节心跳（seq、电量、本地状态、4 字节 0），返回写入字节数；参数非法或空间不足返回 0 且不写入。 */
+/**
+ * @brief  按 §5 布局编码 0x41 心跳（8 字节：seq、电量、本地状态、4 字节 0）
+ * @param  hb: 待编码的心跳字段
+ * @param[out] out: 输出缓冲
+ * @param  out_size: out 的容量，单位字节
+ * @retval 8 成功，写入 DEV_PROTO_ALARM_HEARTBEAT_LEN 字节
+ * @retval 0 hb/out 为 NULL 或 out_size < 8，此时不写入任何字节
+ * @note   无阻塞、无分配、ISR 安全
+ */
 size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *hb, uint8_t *out,
                                         size_t out_size);
 
-/** len < 8 或指针为 NULL 返回 false；多余字节忽略。 */
+/**
+ * @brief  按 §5 布局解码 0x41 心跳
+ * @param  data: 收到的 payload（只读）
+ * @param  len:  data 的字节数，至少 8
+ * @param[out] hb: 解析结果；返回 false 时不改动
+ * @retval true  长度足够，hb 已填充
+ * @retval false data/hb 为 NULL 或 len < 8
+ * @note   多余字节忽略；无阻塞、无分配、ISR 安全
+ */
 bool dev_proto_alarm_decode_heartbeat(const uint8_t *data, size_t len,
                                       dev_proto_alarm_heartbeat_t *hb);
 

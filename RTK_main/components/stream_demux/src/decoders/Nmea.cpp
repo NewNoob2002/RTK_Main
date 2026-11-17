@@ -1,9 +1,6 @@
-// NMEA 0183 解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：
-// '$' | 第 2 字节 [A-Z0-9] | 正文可打印 ASCII 0x20–0x7E 且不含 '$' | '*' + 2 位十六进制 XOR | CR LF。
-// 早拒绝点：第 2 字节不是发送方标识；正文出现非法字符（不可打印、'$'）；'*' 之后不是十六进制/CR/LF。
-// 帧长未知，因此每字节只查“新到字节”与定长尾部窗口（5 B）内的 '*' 相对偏移，O(1) 且结论只依赖入参；
-// '\n' 到达时再整段复核正文并整段算 XOR，保证 kFrame 结论与调用历史无关。
-// step 与 explain 共用同一个 judge()，避免诊断文本与判定结论漂移。
+// NMEA 0183 解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：'$' | 第 2 字节 [A-Z0-9] | 正文可打印
+// ASCII 0x20–0x7E 且不含 '$' | '*' + 2 位十六进制 XOR | CR LF；同步/标识/正文/校验任一不符即早拒绝。
+// 纯函数、无堆、不阻塞：ISR 安全；帧长未知，step 每字节 O(1)，'\n' 到达时才整段复核（结论与调用历史无关）。
 
 #include "demux/decoders/Nmea.hpp"
 
@@ -67,28 +64,52 @@ struct Verdict {
     uint8_t computed = 0U;   // 校验类原因：算出的值
 };
 
+/**
+ * @brief  是否可打印 ASCII
+ * @param  byte: 待判定字节
+ * @retval true 在 0x20–0x7E 内；false 其余
+ */
 bool isPrintable(uint8_t byte) noexcept
 {
     return (byte >= kPrintableMin) && (byte <= kPrintableMax);
 }
 
+/**
+ * @brief  是否十六进制数字（大小写均可）
+ * @param  byte: 待判定字节
+ * @retval true 是 '0'–'9'、'A'–'F' 或 'a'–'f'；false 其余
+ */
 bool isHexDigit(uint8_t byte) noexcept
 {
     return ((byte >= kDigit0) && (byte <= kDigit9)) || ((byte >= kUpperA) && (byte <= kUpperF)) ||
            ((byte >= kLowerA) && (byte <= kLowerF));
 }
 
+/**
+ * @brief  是否大写字母
+ * @param  byte: 待判定字节
+ * @retval true 是 'A'–'Z'；false 其余
+ */
 bool isUpperAlpha(uint8_t byte) noexcept
 {
     return (byte >= kUpperA) && (byte <= kUpperZ);
 }
 
+/**
+ * @brief  是否大写字母或数字（发送方标识允许的字符集）
+ * @param  byte: 待判定字节
+ * @retval true 是 'A'–'Z' 或 '0'–'9'；false 其余
+ */
 bool isUpperAlnum(uint8_t byte) noexcept
 {
     return isUpperAlpha(byte) || ((byte >= kDigit0) && (byte <= kDigit9));
 }
 
-/** 调用方必须先经 isHexDigit() 判定；返回值 0..15。 */
+/**
+ * @brief  十六进制数字转数值
+ * @param  byte: 必须已经 isHexDigit() 判定通过（大小写均可）
+ * @retval 0..15；未判定通过的输入返回值无意义
+ */
 uint8_t hexValue(uint8_t byte) noexcept
 {
     if ((byte >= kDigit0) && (byte <= kDigit9)) {
@@ -103,12 +124,21 @@ uint8_t hexValue(uint8_t byte) noexcept
     return static_cast<uint8_t>((byte - kLowerA) + kHexAlphaBase);
 }
 
-/** 正文合法性：可打印且不含 '$'。 */
+/**
+ * @brief  正文合法性：可打印且不是 '$'
+ * @param  byte: 待判定字节
+ * @retval true 合法正文字节；false 非法
+ */
 bool isBody(uint8_t byte) noexcept
 {
     return isPrintable(byte) && (byte != kSyncByte);
 }
 
+/**
+ * @brief  逐字节异或（NMEA 校验和算法）
+ * @param  data: 参与异或的字节（'$' 与 '*' 之间）；为空时结果为 0
+ * @retval 8 位异或累积值
+ */
 uint8_t xor8(std::span<const uint8_t> data) noexcept
 {
     uint8_t acc = 0U;
@@ -120,7 +150,14 @@ uint8_t xor8(std::span<const uint8_t> data) noexcept
     return acc;
 }
 
-/** 在 frame[last-window .. last] 内反向寻找最近的 '*'；窗口定长，因此 O(1)。 */
+/**
+ * @brief  在 frame 末尾的定长窗口内反向寻找最近的 '*'
+ * @param  frame: 候选前缀，非空
+ * @param  last: 窗口末端下标（通常为最后一个字节的下标）
+ * @param  window: 最多向前搜索的字节数；窗口定长，因此 O(1)
+ * @param[out] ofs: 找到时写入 '*' 距 last 的回退字节数（0 表示 last 本身），未找到时写 0
+ * @retval true 窗口内存在 '*'；false 不存在
+ */
 bool findStarReverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window,
                      std::size_t &ofs) noexcept
 {
@@ -134,6 +171,13 @@ bool findStarReverse(std::span<const uint8_t> frame, std::size_t last, std::size
     return false;
 }
 
+/**
+ * @brief  构造一个 kReject 结论
+ * @param  reason: 拒绝原因
+ * @param  offset: 出错字节在候选前缀中的下标
+ * @param  byte: 该位置的原始字节，校验类原因用它记录“收到的值”
+ * @retval 结论（step=kReject，need 保持默认 1）
+ */
 Verdict reject(Reason reason, std::size_t offset, uint8_t byte = 0U) noexcept
 {
     Verdict verdict{};
@@ -144,7 +188,13 @@ Verdict reject(Reason reason, std::size_t offset, uint8_t byte = 0U) noexcept
     return verdict;
 }
 
-/** '\n' 到达时的整段复核：尾部结构、正文合法性、XOR 校验。 */
+/**
+ * @brief  '\n' 到达时的整段复核：尾部结构、正文合法性、XOR 校验
+ * @param  frame: 以 '\n' 结尾的候选语句，长度 ≥ 1
+ * @retval step=kReject 且 reason 给出具体位置（kShort/kNoCrByte/kHexByte/kMissingStar/kBody/kChecksum）
+ * @retval step=kNeedMore 且 reason=kNone 表示校验通过，由调用方改写为 kFrame（占位约定）
+ * @note   整段扫描 O(len)；纯函数，只依赖入参。
+ */
 Verdict finish(std::span<const uint8_t> frame) noexcept
 {
     const std::size_t len = frame.size();
@@ -187,7 +237,14 @@ Verdict finish(std::span<const uint8_t> frame) noexcept
     return Verdict{}; // step = kNeedMore 占位，由调用方改写
 }
 
-/** 判定：step 与 explain 的唯一事实来源。 */
+/**
+ * @brief  对候选前缀做完整判定：step 与 explain 的唯一事实来源
+ * @param  frame: 候选前缀，非空且 frame[0] 已通过 firstByte
+ * @retval step=kNeedMore（need 见 Verdict，帧长未知时恒为 1）
+ * @retval step=kFrame 语句完整且 XOR 校验通过
+ * @retval step=kReject 具体原因见 Verdict::reason
+ * @note   纯函数；通常路径只查新到字节与定长尾部窗口（O(1)），'\n' 分支才整段复核。
+ */
 Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
@@ -248,8 +305,8 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
 /**
  * @brief  把判定理由写成一句人读文本
  * @param  verdict: 判定结果
- * @param  text: 文本输出器
- * @note   不拆（S4 §2.1）：拒绝原因到一句话的文本映射表，每个 case 独立。
+ * @param[out] text: 文本输出器（空间不足时截断）
+ * @note   不拆（ADR-0013 §2.4）：拒绝原因到一句话的纯文本映射表，每个 case 独立、彼此无状态。
  */
 void explainVerdict(const Verdict &verdict, // NOLINT(readability-function-*)
                     demux::text_writer::TextWriter &text) noexcept

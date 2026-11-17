@@ -1,6 +1,6 @@
 /* 接收路径：BTC 回调把数据写进该会话的 StreamBuffer 并投递事件，链路任务用 poll_event/read 取走。
- * spp_server_handle_data / spp_server_evt_post 在 BTC 回调线程调用：只拷贝、非阻塞投递；
- * spp_server_poll_event / spp_server_read / spp_server_dropped_events 只允许链路任务（单一所有者）调用。 */
+ * 线程：handle_data/evt_post 在 BTC 回调线程（只拷贝、非阻塞投递）；poll_event/read/dropped_events 只允许链路任务。
+ * 堆与阻塞：无堆分配，接收缓冲由组合根外供；回调内不阻塞，poll_event 最长等 timeout_ms。 */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -100,15 +100,13 @@ void spp_server_handle_data(esp_spp_cb_param_t *param)
     }
 }
 
-/* 需持 s_spp_mux：DATA/RX_DROP 在会话内合并登记（RX_DROP 先饱和累计）。
- * 返回 false 表示已有同类事件未取走、本次已合并，调用方不必再入队。 */
 /**
- * @brief  投递前登记 pending 标志（合并同类事件）
+ * @brief  投递前登记 pending 标志（合并同类事件），RX_DROP 顺带饱和累计丢弃字节
  * @param  type: 事件类型
  * @param  handle: 会话句柄
  * @param  dropped: RX_DROP 累计的丢弃字节数
- * @retval true 已登记；false 该会话已有同类 pending（事件被合并）
- * @note   需持 s_spp_mux。
+ * @retval true 已登记；false 该会话已有同类 pending（本次事件被合并）
+ * @note  需持 s_spp_mux。
  */
 static bool spp_server_claim_pending_locked(spp_server_evt_type_t type, uint32_t handle,
                                             uint32_t dropped)
@@ -139,13 +137,12 @@ static bool spp_server_claim_pending_locked(spp_server_evt_type_t type, uint32_t
     return true;
 }
 
-/* 需持 s_spp_mux：队列满时撤销 pending 标记并返回累计丢弃数。 */
 /**
  * @brief  队列满时撤销刚登记的 pending 并累计丢弃
  * @param  type: 事件类型
  * @param  handle: 会话句柄
- * @retval 会话当前的累计丢弃字节数（用于事件内容）
- * @note   需持 s_spp_mux。
+ * @retval 会话当前的累计丢弃字节数（写入 RX_DROP 事件内容）
+ * @note  需持 s_spp_mux；DATA 丢失还会置 rx_data_missed，供 poll_event 的 level 兜底补发。
  */
 static uint32_t spp_server_clear_pending_locked(spp_server_evt_type_t type, uint32_t handle)
 {
@@ -172,15 +169,6 @@ static uint32_t spp_server_clear_pending_locked(spp_server_evt_type_t type, uint
     return total;
 }
 
-/* 回调单生产者：DATA/RX_DROP 合并，生命周期由槽接纳背压保证队列容量。 */
-/**
- * @brief  向事件队列投递一条事件，并维护会话的 pending 标志
- * @param  type: 事件类型
- * @param  handle: 会话句柄
- * @param  addr: 对端地址（仅 OPEN 使用，可为 NULL）
- * @param  dropped: DATA/RX_DROP 的丢弃字节数
- * @note   蓝牙回调与接收路径共用；队列满时回滚 pending 并记 trace，不阻塞。
- */
 void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint8_t *addr,
                          uint32_t dropped)
 {
@@ -220,7 +208,12 @@ void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint
     }
 }
 
-/* 队列满丢失 DATA/RX_DROP 时，由 level 状态在 poll_event 排空前兜底交付。 */
+/**
+ * @brief  从 level 状态补发一条 DATA/RX_DROP 事件（队列满丢失事件时的兜底）
+ * @param[out] evt: 命中的事件；未命中时不修改
+ * @retval true 已取出一条 level 事件并清掉对应 pending 位；false 没有待补发的事件
+ * @note  只在 poll_event 的调用者（链路任务）上下文执行；锁内查表并取走计数，不阻塞
+ */
 static bool spp_server_poll_rx_level(spp_server_evt_t *evt)
 {
     bool found = false;
@@ -253,7 +246,12 @@ static bool spp_server_poll_rx_level(spp_server_evt_t *evt)
     return found;
 }
 
-/* TX_SPACE 不占会话生命周期顺序；通知丢失时 level 仍可在阻塞前取出。 */
+/**
+ * @brief  从 level 状态补发一条 TX_SPACE 事件（唤醒通知丢失时的兜底）
+ * @param[out] evt: 命中的事件；未命中时不修改
+ * @retval true 已取出一条并清掉该会话的 tx_space 位；false 没有可发送空间的会话
+ * @note  只在 poll_event 的调用者（链路任务）上下文执行；TX_SPACE 不占会话生命周期顺序，锁内查表
+ */
 static bool spp_server_poll_tx_space(spp_server_evt_t *evt)
 {
     bool found = false;
@@ -271,11 +269,10 @@ static bool spp_server_poll_tx_space(spp_server_evt_t *evt)
     return found;
 }
 
-/* 取出事件后结算对应会话的 pending 位（RX_DROP 顺带取走累计丢弃数）。 */
 /**
  * @brief  事件交给消费者后结算会话的 pending 标志
- * @param  evt: 已取出的事件
- * @note   需持 s_spp_mux。
+ * @param[in,out] evt: 已取出的事件；RX_DROP 时把累计丢弃数写回 evt->dropped
+ * @note  需持 s_spp_mux；只处理 lifecycle_pending 且句柄匹配的会话，找不到时静默返回。
  */
 static void spp_server_settle_event(spp_server_evt_t *evt)
 {
@@ -302,12 +299,6 @@ static void spp_server_settle_event(spp_server_evt_t *evt)
     taskEXIT_CRITICAL(&s_spp_mux);
 }
 
-/**
- * @brief  客户端取事件：先结算 pending，再按类型填充会话数据
- * @param[out] evt: 事件输出
- * @param  timeout_ms: 等待毫秒数
- * @retval true 取到事件；false 超时或未初始化
- */
 bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout_ms)
 {
     if ((evt == NULL) || (!s_spp.initialized) || (s_spp.rtos.evt_queue == NULL)) {

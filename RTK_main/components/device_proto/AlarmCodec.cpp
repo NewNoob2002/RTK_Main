@@ -1,6 +1,6 @@
-// 报警器扩展消息 0x40/0x41 的 C++ 外观（ADR-0003）。
-// 协议逻辑全部在 DevProtoAlarm.c；本文件只做结构体逐字段转换与 span 包装。
-// 线程安全：是（无状态函数）。ISR 安全：是。
+// 报警器扩展消息 0x40/0x41 的 C++ 外观（ADR-0003）；协议逻辑在 DevProtoAlarm.c，本文件只做结构体转换。
+// 无状态函数，任意任务可调用，非阻塞、无分配，ISR 安全。
+// 不使用堆。
 
 #include "proto/AlarmCodec.hpp"
 
@@ -8,6 +8,12 @@ namespace proto::alarm {
 
 namespace {
 
+/**
+ * @brief  把 C++ Status 逐字段转成 C 结构
+ * @param  status: 源字段
+ * @retval 对应的 C 结构（未列出的字段由值初始化置 0）
+ * @note   纯字段拷贝、无阻塞、ISR 安全
+ */
 dev_proto_alarm_status_t toC(const Status &status) noexcept
 {
     dev_proto_alarm_status_t cStatus{};
@@ -21,6 +27,12 @@ dev_proto_alarm_status_t toC(const Status &status) noexcept
     return cStatus;
 }
 
+/**
+ * @brief  把 C 状态结构逐字段转成 C++ Status
+ * @param  cStatus: 源结构
+ * @retval 对应的 Status
+ * @note   纯字段拷贝、无阻塞、ISR 安全
+ */
 Status fromC(const dev_proto_alarm_status_t &cStatus) noexcept
 {
     Status status;
@@ -34,6 +46,12 @@ Status fromC(const dev_proto_alarm_status_t &cStatus) noexcept
     return status;
 }
 
+/**
+ * @brief  把 C++ Heartbeat 逐字段转成 C 结构
+ * @param  heartbeat: 源字段
+ * @retval 对应的 C 结构（未列出的字段由值初始化置 0）
+ * @note   纯字段拷贝、无阻塞、ISR 安全
+ */
 dev_proto_alarm_heartbeat_t toC(const Heartbeat &heartbeat) noexcept
 {
     dev_proto_alarm_heartbeat_t cHeartbeat{};
@@ -43,6 +61,12 @@ dev_proto_alarm_heartbeat_t toC(const Heartbeat &heartbeat) noexcept
     return cHeartbeat;
 }
 
+/**
+ * @brief  把 C 心跳结构逐字段转成 C++ Heartbeat
+ * @param  cHeartbeat: 源结构
+ * @retval 对应的 Heartbeat
+ * @note   纯字段拷贝、无阻塞、ISR 安全
+ */
 Heartbeat fromC(const dev_proto_alarm_heartbeat_t &cHeartbeat) noexcept
 {
     Heartbeat heartbeat;

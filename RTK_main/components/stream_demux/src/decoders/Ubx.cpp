@@ -1,8 +1,6 @@
-// u-blox UBX 解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：
-// B5 62 | class | id | len u16 LE（偏移 4）| 载荷 | CK_A CK_B（8 位 Fletcher，覆盖 class..载荷）。
-// 早拒绝点：第 2 字节不是 0x62；长度字段使总帧长超过 kMaxFrame；Fletcher 校验错。
-// 长度一确定就一次要求整段剩余字节，校验在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
-// step 与 explain 共用 judge()。
+// u-blox UBX 解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：B5 62 | class | id | len u16 LE（偏移 4）|
+// 载荷 | CK_A CK_B（8 位 Fletcher，覆盖 class..载荷）；第 2 字节错、长度使总长超 kMaxFrame、校验错均早拒绝。
+// 纯函数、无静态可变状态、无堆、不阻塞：可重入、ISR 安全；长度一确定就要整段剩余字节，校验在帧尾整段算。
 
 #include "demux/decoders/Ubx.hpp"
 
@@ -33,6 +31,7 @@ enum class Reason : uint8_t {
     kChecksum,
 };
 
+/** judge() 的结论：判定、原因、待补字节数与诊断数值。 */
 struct Verdict {
     Step step = Step::kNeedMore;
     Reason reason = Reason::kNone;
@@ -42,6 +41,11 @@ struct Verdict {
     uint32_t computed = 0U;
 };
 
+/**
+ * @brief  构造一个 kReject 结论
+ * @param  reason: 拒绝原因
+ * @retval 结论（step=kReject，need 保持默认 1，诊断数值由调用方补写）
+ */
 Verdict reject(Reason reason) noexcept
 {
     Verdict verdict{};
@@ -50,17 +54,26 @@ Verdict reject(Reason reason) noexcept
     return verdict;
 }
 
-/** 小端 u16；调用方保证 from + 2 <= frame.size()。 */
+/**
+ * @brief  读取小端 u16
+ * @param  frame: 候选前缀
+ * @param  from: 低位字节下标；调用方保证 from + 2 ≤ frame.size()
+ * @retval 组合出的 16 位值
+ */
 uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     return (static_cast<uint32_t>(frame[from]) | (static_cast<uint32_t>(frame[from + 1U]) << 8U));
 }
 
 /**
- * @brief  判定一帧：sync/长度/Fletcher 校验
- * @param  frame: 候选帧（从同步字节开始）
- * @retval 判定结果
- * @note   不拆（S4 §2.1）：协议早拒绝阶梯，sync/长度/Fletcher 校验次序本身是内容。
+ * @brief  判定一帧：同步字节、长度、Fletcher 校验
+ * @param  frame: 候选前缀，非空且 frame[0] 已通过 firstByte
+ * @retval step=kNeedMore 还不能下结论，need 为至少还要的字节数（长度未知时按头部补齐）
+ * @retval step=kFrame 长度与 8 位 Fletcher 校验都通过
+ * @retval step=kReject 同步字节 2 错（kSync）、长度超 kMaxFrame（kTooLong）、比声明长度长（kExtra）
+ *         或校验不符（kChecksum）
+ * @note   不拆（ADR-0013 §2.4）：协议早拒绝阶梯，sync/长度/校验的先后次序本身就是协议语义，
+ *         拆成多个函数只会让“先拒绝什么”更难看懂。
  */
 Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-function-*)
 {
@@ -127,6 +140,12 @@ Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-fun
     return good;
 }
 
+/**
+ * @brief  把判定理由写成一句人读文本
+ * @param  verdict: 判定结果
+ * @param[out] text: 文本输出器（空间不足时截断）
+ * @note   纯 switch 的文本映射，每个 case 独立无状态。
+ */
 void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {

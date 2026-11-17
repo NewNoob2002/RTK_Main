@@ -56,19 +56,39 @@ enum class AlarmTrace : uint8_t {
     kPushFail,  // a = 错误码
 };
 
-/** 带类型的便捷包装；参数求值昂贵时，调用方先用 fw::traceOn() 判断。 */
+/** @brief 发一条 link 类追踪事件。
+ *  @param code 事件码，决定 a/b 的含义（见 LinkTrace）。
+ *  @param session 会话句柄，只保留低 16 位。
+ *  @param a 事件参数 1。
+ *  @param b 事件参数 2。
+ *  @note 不分配、不阻塞、不加锁；禁止在 ISR 中调用（fw::trace 的约束）。参数求值昂贵时先用 fw::traceOn() 过滤。
+ */
 inline void traceLink(LinkTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kLink, static_cast<uint8_t>(code),
               static_cast<uint16_t>(session & kTraceSessionMask), a, b);
 }
 
+/** @brief 发一条 proto 类追踪事件。
+ *  @param code 事件码（见 ProtoTrace）。
+ *  @param session 会话句柄，只保留低 16 位。
+ *  @param a 事件参数 1。
+ *  @param b 事件参数 2。
+ *  @note 不分配、不阻塞、不加锁；禁止在 ISR 中调用。参数求值昂贵时先用 fw::traceOn() 过滤。
+ */
 inline void traceProto(ProtoTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kProto, static_cast<uint8_t>(code),
               static_cast<uint16_t>(session & kTraceSessionMask), a, b);
 }
 
+/** @brief 发一条 alarm 类追踪事件。
+ *  @param code 事件码（见 AlarmTrace）。
+ *  @param session 会话句柄，只保留低 16 位；无目标会话时传 0。
+ *  @param a 事件参数 1。
+ *  @param b 事件参数 2。
+ *  @note 不分配、不阻塞、不加锁；禁止在 ISR 中调用。参数求值昂贵时先用 fw::traceOn() 过滤。
+ */
 inline void traceAlarm(AlarmTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kAlarm, static_cast<uint8_t>(code),

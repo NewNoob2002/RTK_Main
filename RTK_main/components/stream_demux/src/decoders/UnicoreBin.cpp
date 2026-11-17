@@ -1,8 +1,6 @@
-// Unicore 二进制解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：
-// AA 44 B5 | 24 B 固定头（载荷长 u16 LE 在偏移 6）| 载荷 | CRC-32（0xEDB88320 反射、初值 0、不取反）4 B LE。
-// 早拒绝点：第 2 字节（44）、第 3 字节（B5，与同首字节的产品帧 AA 44 18 分开）；长度超限；CRC 错。
-// 长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。纯函数、可重入、无静态可变状态；ISR 安全。
-// step 与 explain 共用 judge()，避免诊断文本与判定结论漂移。
+// Unicore 二进制解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：AA 44 B5 | 24 B 固定头（载荷长 u16 LE
+// 在偏移 6）| 载荷 | CRC-32（0xEDB88320 反射、初值 0、不取反）4 B LE；同步字节 2/3、长度超限、CRC 错均早拒绝。
+// 纯函数、无静态可变状态、无堆、不阻塞：可重入、ISR 安全；长度确定后一次要求整段剩余字节，CRC 整段算。
 
 #include "demux/decoders/UnicoreBin.hpp"
 
@@ -44,6 +42,7 @@ enum class Reason : uint8_t {
     kCrc,
 };
 
+/** judge() 的结论：判定、原因、待补字节数与诊断数值。 */
 struct Verdict {
     Step step = Step::kNeedMore;
     Reason reason = Reason::kNone;
@@ -54,6 +53,11 @@ struct Verdict {
     std::size_t total = 0U;  // 长度类原因：声称的总长
 };
 
+/**
+ * @brief  构造一个 kReject 结论
+ * @param  reason: 拒绝原因
+ * @retval 结论（step=kReject，need 保持默认 1，诊断数值由调用方补写）
+ */
 Verdict reject(Reason reason) noexcept
 {
     Verdict verdict{};
@@ -62,6 +66,13 @@ Verdict reject(Reason reason) noexcept
     return verdict;
 }
 
+/**
+ * @brief  构造“同步字节不符”的 kReject 结论
+ * @param  offset: 出错的同步字节下标（0/1/2）
+ * @param  expected: 该位置期望的字节
+ * @param  got: 实际收到的字节
+ * @retval 结论；received 打包为 got | expected<<8，由 explainVerdict 拆开输出
+ */
 Verdict rejectSync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
 {
     Verdict verdict = reject(Reason::kSync);
@@ -70,13 +81,23 @@ Verdict rejectSync(uint8_t offset, uint8_t expected, uint8_t got) noexcept
     return verdict;
 }
 
-/** 小端 u16；调用方保证 from + 2 <= frame.size()。 */
+/**
+ * @brief  读取小端 u16
+ * @param  frame: 候选前缀
+ * @param  from: 低位字节下标；调用方保证 from + 2 ≤ frame.size()
+ * @retval 组合出的 16 位值
+ */
 uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     return (static_cast<uint32_t>(frame[from]) | (static_cast<uint32_t>(frame[from + 1U]) << 8U));
 }
 
-/** 小端 u32；调用方保证 from + 4 <= frame.size()。 */
+/**
+ * @brief  读取小端 u32
+ * @param  frame: 候选前缀
+ * @param  from: 最低位字节下标；调用方保证 from + 4 ≤ frame.size()
+ * @retval 组合出的 32 位值
+ */
 uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
 {
     uint32_t value = 0U;
@@ -89,6 +110,15 @@ uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
     return value;
 }
 
+/**
+ * @brief  判定一帧：三个同步字节、长度、CRC-32
+ * @param  frame: 候选前缀，非空且 frame[0] 已通过 firstByte
+ * @retval step=kNeedMore 还不能下结论，need 为至少还要的字节数（逐个同步字节与长度字段补齐）
+ * @retval step=kFrame 长度与 CRC-32 都通过
+ * @retval step=kReject 同步字节 2/3 不符（kSync）、长度超 kMaxFrame（kTooLong）、比声明长度长（kExtra）
+ *         或 CRC 不符（kCrc）
+ * @note   纯函数；长度字段一到就要求整段剩余字节（含 4 B CRC），CRC 整段一次算完。
+ */
 Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
@@ -150,6 +180,12 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return good;
 }
 
+/**
+ * @brief  把判定理由写成一句人读文本
+ * @param  verdict: 判定结果
+ * @param[out] text: 文本输出器（空间不足时截断）
+ * @note   纯 switch 的文本映射，每个 case 独立无状态。
+ */
 void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
@@ -212,7 +248,5 @@ std::size_t explain(std::span<const uint8_t> frame, std::span<char> out) noexcep
     explainVerdict(verdict, text);
     return text.finish();
 }
-
-/** 判定：step 与 explain 的唯一事实来源。 */
 
 } // namespace demux::unicore_bin

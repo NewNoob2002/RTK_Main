@@ -16,7 +16,13 @@ spp_server_session_t *spp_server_find_locked(uint32_t handle)
     return NULL;
 }
 
-/* 只取完整已发布句的前缀，清除已取句末位；跨句前优先回到 reply 调度。 */
+/**
+ * @brief  从流环中取出一段可发送前缀，遇到句末位即截断并清掉该位
+ * @param  offset: 流环内起始下标
+ * @param  available: 当前可读字节数
+ * @retval 本段长度（1..SPP_SERVER_MERGE_CAPACITY）；句末位出现在首字节时也返回 1
+ * @note  需持 s_spp_mux；跨句时置 stream_active=false，让调度优先回到 reply 通道
+ */
 static size_t spp_server_stream_chunk_locked(size_t offset, size_t available)
 {
     size_t len = (available < SPP_SERVER_MERGE_CAPACITY) ? available : SPP_SERVER_MERGE_CAPACITY;
@@ -34,7 +40,11 @@ static size_t spp_server_stream_chunk_locked(size_t offset, size_t available)
     return len;
 }
 
-/* 需持 s_spp_mux：返回第一个空闲在途槽，无空槽返回 NULL。 */
+/**
+ * @brief  取第一个空闲在途槽
+ * @retval 空闲的在途槽指针；四个槽都在用时 NULL
+ * @note  需持 s_spp_mux；只查不占，调用方负责填入 active 等字段
+ */
 static spp_server_inflight_t *spp_server_free_item_locked(void)
 {
     for (uint32_t idx = 0U; idx < SPP_SERVER_INFLIGHT_MAX; ++idx) {
@@ -55,14 +65,13 @@ typedef struct {
     spp_server_inflight_t submitted; /* 提交前快照 */
 } spp_server_submit_t;
 
-/* 需持 s_spp_mux：本会话本轮是否优先发流——owner 是本会话、未在解绑、有未发出的流数据；
- * 流未开始时要等 REPLY 写完且无 PUSH 待发，保证应答与流不交错。 */
 /**
  * @brief  判断本会话本轮是否改发流通道（而不是 REPLY/PUSH）
  * @param  idx: 会话槽位下标
  * @param  candidate: 候选会话（只读）
  * @retval true 可以；false 仍在应答或未绑定新流
- * @note   需持 s_spp_mux。
+ * @note  需持 s_spp_mux；条件是 owner 为本会话、未在解绑、有未发出的流数据；流未开始时要等
+ *        REPLY 写完且无 PUSH 待发，保证应答与流不交错。
  */
 static bool spp_server_stream_ready_locked(uint8_t idx, const spp_server_session_t *candidate)
 {
@@ -72,14 +81,13 @@ static bool spp_server_stream_ready_locked(uint8_t idx, const spp_server_session
             ((candidate->reply.used == candidate->reply.issued) && (candidate->push_len == 0U)));
 }
 
-/* 需持 s_spp_mux：按 tx_cursor 轮转挑会话/通道并占用在途槽；无候选返回 false。
- * now 由调用方在锁外取，临界区内不调用 FreeRTOS API。 */
 /**
  * @brief  选出发送任务本轮要提交的一块数据并占住在途槽
  * @param[out] out: 选中结果（会话、数据、容量、偏移与在途登记）
- * @param  now: 当前时钟节拍
- * @retval true 已选中；false 本轮无数据可发
- * @note   需持 s_spp_mux；PUSH 通道在此处已拷入 merge_buf，环形通道由调用方锁外合并。
+ * @param  now: 当前时钟节拍（调用方在锁外取）
+ * @retval true 已选中；false 本轮无数据可发（无空闲在途槽或所有会话都被跳过）
+ * @note  需持 s_spp_mux；按 tx_cursor 轮转挑会话/通道；PUSH 通道在此处已拷入 merge_buf，
+ *        环形通道由调用方锁外合并；临界区内不调用 FreeRTOS API。
  */
 static bool spp_server_pick_locked(spp_server_submit_t *out, TickType_t now)
 {
@@ -141,12 +149,12 @@ static bool spp_server_pick_locked(spp_server_submit_t *out, TickType_t now)
     return false;
 }
 
-/* 需持 s_spp_mux：把 SDK write 的同步结果记入在途槽并推进会话状态。 */
 /**
- * @brief  提交结果：成功则登记在途写，失败则置断开请求
- * @param  pick: 选中的提交结果
+ * @brief  把 SDK write 的同步结果记入在途槽并推进会话状态
+ * @param  pick: 选中的提交结果（item 的 submitting 在此清掉）
  * @param  result: esp_spp_write 的返回值
- * @note   需持 s_spp_mux。
+ * @note  需持 s_spp_mux；同步失败可能已部分入队，因此不续发尾部而是置该会话 disconnect_pending
+ *        （仅当代数未变、会话仍在册时）；最后调用 retire_locked 结算已完成的块。
  */
 static void spp_server_commit_locked(spp_server_submit_t *pick, esp_err_t result)
 {
@@ -164,12 +172,6 @@ static void spp_server_commit_locked(spp_server_submit_t *pick, esp_err_t result
     spp_server_retire_locked(pick->session);
 }
 
-/* worker 串行调用：merge 不被第二个 API 复用；回调早于返回也保留 submitting/users。 */
-/**
- * @brief  发送任务一轮：从选块到提交完整的数据通路
- * @retval true 本轮提交了数据；false 无数据可发
- * @note   任务上下文；锁内选块、锁外合并与写、锁内提交，锁不跨 esp_spp_write。
- */
 bool spp_server_worker_submit(void)
 {
     spp_server_submit_t pick = {0};
@@ -203,6 +205,15 @@ bool spp_server_worker_submit(void)
     return true;
 }
 
+/**
+ * @brief  在剩余预算内等待该会话的发送唤醒位
+ * @param  idx: 会话槽位下标
+ * @param  start: 调用方记录的起始节拍
+ * @param  timeout_ms: 总预算（ms）
+ * @retval false 预算已用完，没有等待
+ * @retval true 已等待（等待本身可能超时返回，调用方需要再判一次预算）
+ * @note  链路任务/写调用者上下文；xEventGroupWaitBits 会阻塞到唤醒或预算耗尽，非 ISR
+ */
 static bool spp_server_wait_change(uint8_t idx, TickType_t start, uint32_t timeout_ms)
 {
     const TickType_t elapsed = xTaskGetTickCount() - start;
@@ -215,7 +226,19 @@ static bool spp_server_wait_change(uint8_t idx, TickType_t start, uint32_t timeo
     return true;
 }
 
-/* 同步兼容路径：每块等待真实完成；timeout 不撤回已接纳/已提交字节。 */
+/**
+ * @brief  同步写一块：等到环内有空间并预留，提交后等到这块真正写完
+ * @param  session: 已登记的会话（调用方持有 users）
+ * @param  data: 待写数据
+ * @param  len: 本块长度，≤SPP_SERVER_TX_CHUNK
+ * @param  start: 整个 write 调用的起始节拍（预算跨块共享）
+ * @param  timeout_ms: 整个 write 调用的总预算（ms）
+ * @retval ESP_OK 本块已被 SDK 报告写完
+ * @retval ESP_ERR_TIMEOUT 预算用尽（预留在环内等待超时，或已提交但未等到完成）
+ * @retval ESP_ERR_INVALID_STATE 等待期间会话被断开或释放
+ * @retval 其他 提交失败的错误码，或等待期间 WRITE_EVT 上报的错误码
+ * @note  链路任务/写调用者上下文；阻塞等待真实完成，超时不撤回已接纳/已提交的字节
+ */
 static esp_err_t spp_server_write_chunk(spp_server_session_t *session, const uint8_t *data,
                                         size_t len, TickType_t start, uint32_t timeout_ms)
 {

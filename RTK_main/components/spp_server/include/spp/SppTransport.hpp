@@ -1,7 +1,6 @@
-// C SPP 驱动（SppServer.h）到 core::Transport 的 C++ 适配器，供 LinkService 使用。
-// 只做两件事：转调 C 函数；用 rtos::fromEspErr 映射错误码（CPP-014）。不持有状态。
-// 线程安全：与底层驱动相同，只允许链路任务调用。
-// 冻结接口（ADR-0003）。实现方不得修改。
+// C SPP 驱动（SppServer.h）到 core::Transport 的 C++ 适配器，供 LinkService 使用；只转调并映射错误码，不持状态。
+// 线程：与底层驱动相同，只允许链路任务调用，非 ISR。
+// 堆与阻塞：不分配堆；write 阻塞到写完或超时，其余接口不阻塞。冻结接口（ADR-0003）。
 #pragma once
 
 #include <cstdint>

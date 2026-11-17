@@ -1,7 +1,6 @@
-// 链路服务：传输事件 → 每会话解析器 → LinkManager → CommandRouter → 传输写回。
-// 纯逻辑，经 Transport 接口访问硬件；所有方法只由链路任务调用。
-// ADR-0007 J2b：分发改由 CommandRouter（服务路由表）完成，0x40 推送帧由 AlarmService 组帧；
-// 白名单脏标志、心跳记录、断开动作与错误计数逻辑与 J2a 之前逐行一致。
+// 链路服务：传输事件 → 每会话解析器 → LinkManager → CommandRouter → 传输写回（0x40 推送由 AlarmService 组帧）。
+// 线程安全：否，所有方法只由链路任务调用（引用对象无锁）；非 ISR、不阻塞。
+// 堆：不分配（槽位与应答缓冲都是成员）。
 
 #include "core/LinkService.hpp"
 #include "core/TraceCodes.hpp"
@@ -14,6 +13,10 @@ namespace core {
 
 namespace {
 
+/** @brief 判断动作表里是否含指定句柄。
+ *  @param act 待查的动作表。
+ *  @param handle 目标会话句柄。
+ *  @return true 命中；false 不在表中。 */
 bool actionsContain(const Actions &act, SessionHandle handle) noexcept
 {
     for (const SessionHandle entry : act.view()) {

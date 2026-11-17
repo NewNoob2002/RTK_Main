@@ -1,6 +1,6 @@
-// 线程安全：纯数据类型，无共享状态。
-// 冻结接口（ADR-0007 §3.5；内容自 ADR-0002 的 command_dispatcher.hpp 原样迁出，供 CommandRouter/services 与旧
-// dispatcher 共用）。 实现方不得修改。
+// 协议应答缓冲、设备信息字段与路由处理结果分类；CommandRouter/services 共用，内容自 ADR-0002 迁出。
+// 线程安全：纯数据类型，无共享状态，访问由持有方（链路任务）独占；不分配堆、不阻塞。
+// 冻结接口（ADR-0007 §3.5）。实现方不得修改。
 #pragma once
 
 #include <array>
@@ -20,14 +20,17 @@ template <size_t N> class FixedStr {
 public:
     constexpr FixedStr() noexcept = default;
 
-    /** 拷贝 min(text.size(), N) 字节，其余补 0。 */
+    /** @brief 以 text 填充本字段：拷贝前 N 字节，其余补 0。
+     *  @param text 源字符串；超过容量时静默截断，不报错也不置错误标志。
+     *  @note 纯值操作，不分配、不阻塞，任意上下文（含 ISR）可调用。 */
     constexpr void assign(std::string_view text) noexcept
     {
         for (size_t i = 0; i < N; ++i) {
             data_[i] = (i < text.size()) ? text[i] : '\0';
         }
     }
-    /** 到第一个 0 或 N 为止的视图。 */
+    /** @brief 取有效内容视图，遇到第一个 0 或字段边界即止。
+     *  @return 指向内部缓冲的只读视图（不含结尾 0）；字段全 0 时为空视图。 */
     [[nodiscard]] constexpr std::string_view view() const noexcept
     {
         size_t len = 0;
@@ -36,6 +39,8 @@ public:
         }
         return {data_.data(), len};
     }
+    /** @brief 字段容量。
+     *  @return 恒为模板参数 N（字节数）。 */
     [[nodiscard]] static constexpr size_t capacity() noexcept
     {
         return N;
@@ -47,8 +52,8 @@ private:
 
 inline constexpr uint32_t kDefaultComBaud = 115200; // 0x0D 应答中的默认波特率（5.4 实际值 UNKNOWN）
 
-// 设备信息（app 层填写；GNSS/电台/电池字段本阶段为预留占位）。
-/** 设备信息字段（SN、固件版本、设备名等）的唯一副本；由 DeviceService 持有，链路任务读写。 */
+/** 设备信息字段（SN、固件版本、设备名等）的唯一副本；由 DeviceService 持有，链路任务读写。
+    电台/电池等上位机可选字段在设备侧为占位值。 */
 struct DeviceInfo {
     FixedStr<8> product;
     FixedStr<16> sn;
@@ -95,12 +100,16 @@ struct Reply {
     bool whitelistChanged = false;                    // app 层需持久化白名单
     std::optional<proto::alarm::Heartbeat> heartbeat; // 收到 0x41 心跳
 
+    /** @brief 复位应答缓冲与副作用标志，准备组下一帧。
+     *  @note 只清长度与标志，不擦 buf 内容；不分配、不阻塞，仅链路任务调用。 */
     void clear() noexcept
     {
         len = 0;
         whitelistChanged = false;
         heartbeat.reset();
     }
+    /** @brief 取已组好的应答字节。
+     *  @return 指向 buf 前 len 字节的只读视图；未组帧时为空视图。 */
     [[nodiscard]] std::span<const uint8_t> bytes() const noexcept
     {
         return {buf.data(), len};

@@ -1,6 +1,6 @@
 /* GAP/SPP 回调分派：把 Bluedroid 事件转给各处理函数，记录认证结果并排队 PIN/CFM 应答。
- * 全部在 BTC 回调线程执行：只拷贝数据、记录状态、置事件位、非阻塞投递；
- * 不解析协议、不打印数据内容、不调用任何可能阻塞投递的 API。 */
+ * 线程：全部在 BTC 回调线程执行，只拷贝数据、记录状态、置事件位、非阻塞投递。
+ * 堆与阻塞：不分配堆；不解析/打印数据内容，不调用任何可能阻塞投递的 API。 */
 
 #include <stdint.h>
 
@@ -10,8 +10,11 @@
 
 #include "SppServerPriv.h"
 
-/* SPP 初始化结果：回调在 portMUX 下写状态、在临界区外置位，启动动作留给 init 任务。
- * 先写状态后置位，等待方拿到事件位后再在同一把锁下读取，因此迟到/早到两种顺序都拿到真实结果。 */
+/**
+ * @brief  记录 SPP INIT 阶段结果并置完成位
+ * @param  param: SDK 回调参数，只用 init.status
+ * @note   BTC 回调线程；先写状态后置位，等待方拿到事件位后在锁内读取，迟到/早到都取到真实结果
+ */
 static void spp_server_handle_init(esp_spp_cb_param_t *param)
 {
     taskENTER_CRITICAL(&s_spp_mux);
@@ -26,6 +29,11 @@ static void spp_server_handle_init(esp_spp_cb_param_t *param)
     }
 }
 
+/**
+ * @brief  记录 SPP START 阶段结果并置完成位（成功时上报 scn）
+ * @param  param: SDK 回调参数，用 start.status 与 start.scn
+ * @note   BTC 回调线程；只在置完成位之前写状态，不阻塞
+ */
 static void spp_server_handle_start(esp_spp_cb_param_t *param)
 {
     taskENTER_CRITICAL(&s_spp_mux);
@@ -44,6 +52,12 @@ static void spp_server_handle_start(esp_spp_cb_param_t *param)
     }
 }
 
+/**
+ * @brief  为新连接分配会话并投递 OPEN；无安全空槽时登记拒绝命令
+ * @param  param: SDK 回调参数，用 srv_open.status/handle/rem_bda
+ * @note   BTC 回调线程；此处不调用 esp_spp_disconnect（btc_transfer_context 可能无限阻塞），
+ *         改由发送任务执行；不做延后接纳，避免 CLOSE 后把死连接重新发布为会话
+ */
 static void spp_server_handle_srv_open(esp_spp_cb_param_t *param)
 {
     const uint32_t handle = param->srv_open.handle;
@@ -69,6 +83,11 @@ static void spp_server_handle_srv_open(esp_spp_cb_param_t *param)
     }
 }
 
+/**
+ * @brief  撤销待投递的拒绝命令，释放会话并在有生命周期时投递 CLOSE
+ * @param  param: SDK 回调参数，用 close.handle
+ * @note   BTC 回调线程；未发布过 OPEN 的连接不合成幽灵 CLOSE；不阻塞
+ */
 static void spp_server_handle_close(esp_spp_cb_param_t *param)
 {
     const uint32_t handle = param->close.handle;

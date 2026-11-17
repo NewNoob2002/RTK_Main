@@ -1,8 +1,6 @@
-// 手机/报警器 SPP 帧编解码的 C 实现（ADR-0003：协议核心用 C，C++ 外观委托到这里）。
-// 由 reference/c-v1/components/proto/proto_frame.c 移植：符号改为 dev_proto_*，布局改为
-// ESP-IDF Style，去掉 BARR-C 的 p_ 前缀；新增 dev_proto_parser_reset()。
-// 多字节字段逐字节小端读写，不对缓冲区做强转。CRC-32 使用逐位反射算法（与 zlib 等价）：
-// 单帧上限 280 B，开销可忽略，且比 1 KB 查表更省 Flash；已与 Python zlib.crc32 核对。
+// 手机/报警器 SPP 帧编解码的 C 实现（ADR-0003：协议核心用 C，C++ 外观委托到 proto/Frame.hpp）。
+// 解析器每会话一个实例、由链路任务独占调用，非线程安全；无阻塞、无分配，ISR 安全。
+// 不使用堆。CRC-32 用逐位反射算法（与 zlib 等价）：单帧 ≤ 280 B，比 1 KB 查表更省 Flash。
 
 #include "DevProtoFrame.h"
 
@@ -25,7 +23,12 @@
 #define DEV_PROTO_OFS_RESERVED_B (DEV_PROTO_OFS_MSG_LEN + DEV_PROTO_U16_BYTES)
 #define DEV_PROTO_LEN_RESERVED_B (DEV_PROTO_OFS_SENDER - DEV_PROTO_OFS_RESERVED_B)
 
-/* 从 idx = 0 起清零。 */
+/**
+ * @brief  从 buf[0] 起写 len 个 0
+ * @param[out] buf: 目标缓冲
+ * @param  len: 清零的字节数
+ * @note   调用方保证 buf 至少有 len 字节；无阻塞、ISR 安全
+ */
 static void zero_bytes(uint8_t *buf, size_t len)
 {
     for (size_t idx = 0U; idx < len; idx++) {
@@ -33,6 +36,12 @@ static void zero_bytes(uint8_t *buf, size_t len)
     }
 }
 
+/**
+ * @brief  从 buf 读一个小端 u16
+ * @param  buf: 至少 2 字节的只读缓冲
+ * @retval 读出的 16 位值（与主机字节序无关）
+ * @note   调用方保证长度足够；无阻塞、ISR 安全
+ */
 static uint16_t read_u16_le(const uint8_t *buf)
 {
     uint32_t value = 0U;
@@ -45,6 +54,12 @@ static uint16_t read_u16_le(const uint8_t *buf)
     return (uint16_t)value;
 }
 
+/**
+ * @brief  从 buf 读一个小端 u32
+ * @param  buf: 至少 4 字节的只读缓冲
+ * @retval 读出的 32 位值（与主机字节序无关）
+ * @note   调用方保证长度足够；无阻塞、ISR 安全
+ */
 static uint32_t read_u32_le(const uint8_t *buf)
 {
     uint32_t value = 0U;
@@ -56,6 +71,12 @@ static uint32_t read_u32_le(const uint8_t *buf)
     return value;
 }
 
+/**
+ * @brief  把 u16 以小端写入 buf
+ * @param[out] buf: 目标缓冲
+ * @param  value: 待写入的值
+ * @note   调用方保证 buf 至少 2 字节；无阻塞、ISR 安全
+ */
 static void write_u16_le(uint8_t *buf, uint16_t value)
 {
     for (uint32_t idx = 0U; idx < DEV_PROTO_U16_BYTES; idx++) {
@@ -64,6 +85,12 @@ static void write_u16_le(uint8_t *buf, uint16_t value)
     }
 }
 
+/**
+ * @brief  把 u32 以小端写入 buf
+ * @param[out] buf: 目标缓冲
+ * @param  value: 待写入的值
+ * @note   调用方保证 buf 至少 4 字节；无阻塞、ISR 安全
+ */
 static void write_u32_le(uint8_t *buf, uint32_t value)
 {
     for (uint32_t idx = 0U; idx < DEV_PROTO_U32_BYTES; idx++) {
@@ -72,7 +99,13 @@ static void write_u32_le(uint8_t *buf, uint32_t value)
     }
 }
 
-/* 单字节 CRC-32 更新（反射算法，与 zlib 等价）。 */
+/**
+ * @brief  用一个字节更新反射 CRC-32 的中间值
+ * @param  crc:  反射算法的内部状态（dev_proto_crc32 中的 ~crc 值）
+ * @param  byte: 新到的数据字节
+ * @retval 更新后的内部状态（仍为取反形式，由 dev_proto_crc32 最后再取反）
+ * @note   与 zlib 的逐位实现等价；无阻塞、ISR 安全
+ */
 static uint32_t crc32_update(uint32_t crc, uint8_t byte)
 {
     /* uint8_t 提升到 uint32_t 无损 */
@@ -88,14 +121,25 @@ static uint32_t crc32_update(uint32_t crc, uint8_t byte)
     return crc;
 }
 
-/* 丢弃半帧状态，保留错误计数。 */
+/**
+ * @brief  丢弃半帧进度（pos/expect 归零），保留错误计数
+ * @param  parser: 解析器实例（调用方保证非空）
+ * @note   已收字节留在 parser->buf 中但不再被引用；无阻塞、ISR 安全
+ */
 static void parser_clear(dev_proto_parser_t *parser)
 {
     parser->pos = 0U;
     parser->expect = 0U;
 }
 
-/* 同步阶段消费一个字节；返回 true 表示该字节已由同步阶段处理。 */
+/**
+ * @brief  同步阶段消费一个字节，负责 AA 44 18 的重叠匹配
+ * @param  parser: 解析器实例，pos 表示已匹配的同步字节数
+ * @param  byte:   新收到的线路字节
+ * @retval true  该字节已由同步阶段处理，调用方不要写入帧缓冲
+ * @retval false 同步已完成，调用方应把该字节写入 parser->buf
+ * @note   同步中途收到 0xAA 时保留为新帧首字节；无阻塞、ISR 安全
+ */
 static bool parser_sync_byte(dev_proto_parser_t *parser, uint8_t byte)
 {
     bool syncing = true;
@@ -138,7 +182,13 @@ static bool parser_sync_byte(dev_proto_parser_t *parser, uint8_t byte)
     return syncing;
 }
 
-/* 头长与 payload 长度检查；非错误时返回 DEV_PROTO_PARSE_NONE。 */
+/**
+ * @brief  在头长字节与 payload 长度字段收完时做长度检查
+ * @param  parser: 解析器实例
+ * @retval DEV_PROTO_PARSE_NONE    尚未到检查点，或长度合法
+ * @retval DEV_PROTO_PARSE_LEN_ERR 头长字节 != 0x14 或 payload_len 超限；已计数并丢弃半帧
+ * @note   检查点由 parser->pos 判定，其他位置直接返回 NONE；无阻塞、ISR 安全
+ */
 static dev_proto_parse_result_t parser_check_lengths(dev_proto_parser_t *parser)
 {
     if (parser->pos == DEV_PROTO_POS_HDR_LEN) {
@@ -163,7 +213,15 @@ static dev_proto_parse_result_t parser_check_lengths(dev_proto_parser_t *parser)
     return DEV_PROTO_PARSE_NONE;
 }
 
-/* 一帧收完时校验 CRC 并填充结果；帧未收完返回 DEV_PROTO_PARSE_NONE。 */
+/**
+ * @brief  一帧收完时校验 CRC 并填充结果
+ * @param  parser: 解析器实例
+ * @param[out] frame: CRC 正确时填充；失败或未收完时不改动
+ * @retval DEV_PROTO_PARSE_NONE    帧尚未收完
+ * @retval DEV_PROTO_PARSE_FRAME   CRC 正确，frame 已填充（payload 指向 parser->buf）
+ * @retval DEV_PROTO_PARSE_CRC_ERR CRC 错误，已计数并丢弃半帧
+ * @note   无论成功与否都会回到寻找 0xAA；无阻塞、ISR 安全
+ */
 static dev_proto_parse_result_t parser_finish(dev_proto_parser_t *parser, dev_proto_frame_t *frame)
 {
     size_t crc_ofs = 0U;

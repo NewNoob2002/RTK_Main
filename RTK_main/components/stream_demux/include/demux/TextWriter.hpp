@@ -1,7 +1,6 @@
-// 解码器诊断文本写入器（ADR-0005 §5 / ADR-0009 §2.11）：供各组件的 Decoder::explain 实现共用
-// （streamDemux 自带解码器、device_proto 的产品帧、gnss 的方言应答解码器）。不属于冻结接口。
-// 只写 ASCII；越界即停止增长（explain 契约允许截断），finish() 补 0 并返回实际长度。
-// 纯函数式使用：调用方持有输出 span，无全局状态，可重入、ISR 安全。
+// 解码器诊断文本写入器（ADR-0005 §5 / ADR-0009 §2.11）：供各组件的 Decoder::explain 实现共用（streamDemux
+// 自带解码器、device_proto 的产品帧、gnss 的方言应答解码器）。不属于冻结接口。
+// 只写 ASCII，越界即停止增长（explain 契约允许截断）；无全局状态、不阻塞、无堆：可重入、线程与 ISR 安全。
 
 #pragma once
 
@@ -26,11 +25,23 @@ constexpr uint8_t kPrintableMax = 0x7EU;
 
 } // namespace text
 
-/** 定宽十六进制/十进制数字与字面量拼接的有界写入器。 */
+/**
+ * @brief  定宽十六进制/十进制数字与字面量拼接的有界写入器
+ * @note   空间不足时静默丢弃后续字符，finish() 返回实际写入长度（即被截断）；无全局状态，可重入、ISR 安全。
+ */
 class TextWriter {
 public:
+    /**
+     * @brief  绑定输出缓冲（不写入任何内容）
+     * @param  out: 输出缓冲；超出其长度的写入被丢弃
+     */
     explicit TextWriter(std::span<char> out) noexcept : out_(out) {}
 
+    /**
+     * @brief  追加一段字面量
+     * @param  value: 待追加的字符序列，逐字符写入
+     * @retval *this，便于链式调用
+     */
     TextWriter &literal(std::string_view value) noexcept
     {
         for (const char ch : value) {
@@ -39,12 +50,22 @@ public:
         return *this;
     }
 
+    /**
+     * @brief  追加十进制的无符号数（最多 10 位，无前导 0）
+     * @param  value: 待转换的值；大于 32 位范围时按低 32 位截断
+     * @retval *this，便于链式调用
+     */
     TextWriter &decimal(std::size_t value) noexcept
     {
         return number(static_cast<uint32_t>(value), text::kDecimalBase, 0U);
     }
 
-    /** 写 "0x" + 至少 width 位大写十六进制。 */
+    /**
+     * @brief  写 "0x" + 至少 width 位大写十六进制
+     * @param  value: 待转换的值，按 32 位处理
+     * @param  width: 最小位数，不足时前导补 '0'（0 表示不补）
+     * @retval *this，便于链式调用
+     */
     TextWriter &hex(uint32_t value, uint8_t width) noexcept
     {
         put('0');
@@ -52,7 +73,11 @@ public:
         return number(value, text::kHexadecimalBase, width);
     }
 
-    /** 写一个原始字节的可见形式：可打印 ASCII 加引号，否则 0xNN。 */
+    /**
+     * @brief  写一个原始字节的可见形式：可打印 ASCII 加引号，否则 0xNN
+     * @param  value: 待写出的字节
+     * @retval *this，便于链式调用
+     */
     TextWriter &byteValue(uint8_t value) noexcept
     {
         if ((value >= text::kPrintableMin) && (value <= text::kPrintableMax)) {
@@ -64,7 +89,10 @@ public:
         return hex(static_cast<uint32_t>(value), 2U);
     }
 
-    /** 补 0 结束（空间不足则不写，按截断处理）并返回已写长度（不含 0）。 */
+    /**
+     * @brief  补 0 结束文本
+     * @retval 已写长度（不含结尾 0）；缓冲已满时没写 0，长度即缓冲容量
+     */
     std::size_t finish() noexcept
     {
         if (len_ < out_.size()) {
@@ -74,6 +102,10 @@ public:
     }
 
 private:
+    /**
+     * @brief  写入一个字符
+     * @param  ch: 字符；缓冲已满时静默丢弃
+     */
     void put(char ch) noexcept
     {
         if (len_ < out_.size()) {
@@ -82,6 +114,13 @@ private:
         }
     }
 
+    /**
+     * @brief  按给定进制写 value（低位先算、最后倒序输出），不足 width 位补 '0'
+     * @param  value: 待转换的 32 位无符号值；0 时输出 "0"
+     * @param  base: 进制（10 或 16）
+     * @param  width: 最小位数，0 表示不补
+     * @retval *this，便于链式调用
+     */
     TextWriter &number(uint32_t value, uint8_t base, uint8_t width) noexcept
     {
         std::array<char, text::kMaxDigits> digits{};

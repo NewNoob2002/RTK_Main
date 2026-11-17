@@ -1,5 +1,6 @@
-// PairService 实现（ADR-0007 §3.3）：配对/白名单指令 0x44（设置/查询/清除）。
-// 各分支自 command_dispatcher.cpp 逐字节搬迁，应答内容与旧 CommandDispatcher 一致。
+// PairService 实现（ADR-0007 §3.3）：配对/白名单指令 0x44（设置=开配对窗/清空白名单，查询=回条目）。
+// 线程安全：否，只由链路任务串行调用；非 ISR、不阻塞。
+// 堆：不分配（查询负载用栈上定长数组，应答复用调用方缓冲）。
 
 #include "core/services/PairService.hpp"
 
@@ -18,13 +19,19 @@ namespace core::services {
 
 namespace {
 
-// 通用结果码（phone_protocol.md §3；沿用旧 CommandDispatcher 的取值）。
+// 通用结果码（phone_protocol.md §3）。
 inline constexpr uint8_t kResultOk = 0x01;
 inline constexpr uint8_t kResultFail = 0x02;
 
 /**
- * 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
- * 组帧失败时把 reply.len 置 0 并返回 kNoReply（与旧 dispatcher 一致）。
+ * @brief 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ * @param[out] reply 复用缓冲；成功时写入帧并设置 len，失败时 len 置 0。
+ * @param msgId 请求的 msg_id，原样回填。
+ * @param reqType 请求的 type，用于映射应答 type。
+ * @param payload 应答负载。
+ * @retval DispatchResult::kReply 已组帧。
+ * @retval DispatchResult::kNoReply 组帧失败（缓冲不足等），reply.len 为 0。
+ * @note 不分配、不加锁；非 ISR 可调（纯缓冲写入）。
  */
 inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
                                  std::span<const uint8_t> payload) noexcept
@@ -40,7 +47,13 @@ inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
     return DispatchResult::kReply;
 }
 
-/** 结果码应答：§3 规定成功/失败都把同一字节写两遍。 */
+/** @brief 结果码应答：§3 规定成功/失败都把同一字节写两遍。
+ *  @param[out] reply 复用缓冲，语义同 replyBuild。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @param value 结果码（kResultOk/kResultFail）。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
                                   uint8_t value) noexcept
 {
@@ -48,13 +61,23 @@ inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
     return replyBuild(reply, msgId, reqType, payload);
 }
 
-/** 成功应答（0x01 0x01）。 */
+/** @brief 成功应答（结果码 0x01 0x01）的快捷封装。
+ *  @param[out] reply 复用缓冲。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyOk(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
     return replyResult(reply, msgId, reqType, kResultOk);
 }
 
-/** 失败应答（0x02 0x02）。 */
+/** @brief 失败应答（结果码 0x02 0x02）的快捷封装。
+ *  @param[out] reply 复用缓冲。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyFail(Reply &reply, uint16_t msgId, uint8_t reqType) noexcept
 {
     return replyResult(reply, msgId, reqType, kResultFail);
@@ -71,6 +94,14 @@ constexpr size_t kPairOfsCount = 0;
 constexpr size_t kPairOfsFirst = 1;
 constexpr size_t kPairQueryMax = kPairOfsFirst + (kMaxAlarms * kAddrLen);
 
+/** @brief 0x44 配对/白名单：SET 按动作开配对窗或清空白名单，其他 type 回当前白名单。
+ *  @param[out] link 白名单状态机（开窗、清零、读取）。
+ *  @param frame 请求帧（PHONE）；SET 时负载为空回失败，未知动作回失败。
+ *  @param nowMs 当前时间（ms），作为配对窗起点。
+ *  @param[out] reply 应答缓冲；清空白名单成功时置 whitelistChanged，供上层持久化。
+ *  @retval DispatchResult::kReply 已组帧（成功或失败结果码，或白名单查询应答）。
+ *  @retval DispatchResult::kNoReply 组帧失败。
+ *  @note 查询应答为 1 字节数量 + n×6 字节 MAC，最多 kMaxAlarms 条。 */
 DispatchResult handlePair(LinkManager &link, const proto::FrameView &frame, uint32_t nowMs,
                           Reply &reply) noexcept
 {

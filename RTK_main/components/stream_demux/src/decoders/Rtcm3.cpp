@@ -1,7 +1,6 @@
-// RTCM 3.x 解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：第 2 字节高 6 位保留位为 0、
-// 长度 10 bit、CRC-24Q 覆盖头 3 B + 载荷（3 B 大端）。长度一确定就一次要求整段剩余字节，CRC 在帧尾整段算。
-// 早拒绝点：第 2 字节保留位（这是与其它 0xD3 数据分开的唯一可靠信号）。
-// 纯函数、可重入、无静态可变状态；ISR 安全。step 与 explain 共用 judge()。
+// RTCM 3.x 解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：0xD3 | 第 2 字节高 6 位保留位为 0 且低 2 位
+// 是长度高 2 位 | 长度 10 bit | 载荷 | CRC-24Q（3 B 大端，覆盖头 3 B + 载荷）；保留位非 0 即早拒绝。
+// 纯函数、无静态可变状态、无堆、不阻塞：可重入、ISR 安全；长度一确定就要整段剩余字节，CRC 在帧尾整段算。
 
 #include "demux/decoders/Rtcm3.hpp"
 
@@ -35,6 +34,7 @@ enum class Reason : uint8_t {
     kCrc,
 };
 
+/** judge() 的结论：判定、原因、待补字节数与诊断数值。 */
 struct Verdict {
     Step step = Step::kNeedMore;
     Reason reason = Reason::kNone;
@@ -44,6 +44,11 @@ struct Verdict {
     std::size_t total = 0U;
 };
 
+/**
+ * @brief  构造一个 kReject 结论
+ * @param  reason: 拒绝原因
+ * @retval 结论（step=kReject，need 保持默认 1，诊断数值由调用方补写）
+ */
 Verdict reject(Reason reason) noexcept
 {
     Verdict verdict{};
@@ -52,6 +57,15 @@ Verdict reject(Reason reason) noexcept
     return verdict;
 }
 
+/**
+ * @brief  判定一帧：同步字节 / 保留位 / 长度 / CRC-24Q
+ * @param  frame: 候选前缀，非空且 frame[0] 已通过 firstByte
+ * @retval step=kNeedMore 还不能下结论，need 为至少还要的字节数（长度未知时为 1）
+ * @retval step=kFrame 长度与 CRC-24Q 都通过
+ * @retval step=kReject 同步字节错（kSync）、保留位非 0（kReserved）、比声明长度长（kExtra）
+ *         或 CRC 不符（kCrc）
+ * @note   纯函数；长度字段一到就要求整段剩余字节（含 3 B CRC），CRC 整段一次算完。
+ */
 Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
@@ -106,6 +120,12 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return good;
 }
 
+/**
+ * @brief  把判定理由写成一句人读文本
+ * @param  verdict: 判定结果
+ * @param[out] text: 文本输出器（空间不足时截断）
+ * @note   纯 switch 的文本映射，每个 case 独立无状态。
+ */
 void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {

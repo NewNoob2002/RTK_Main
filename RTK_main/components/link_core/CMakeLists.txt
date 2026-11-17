@@ -1,6 +1,6 @@
 # link_core 纯 C++ 组件（ADR-0002 §4，ADR-0007 §3.5）：依赖 device_proto、app_fw，支持 host g++。
 # 告警组按 AGENTS.md §3（纯组件全开）。
-# ADR-0007 J2b：旧 CommandDispatcher 已移入 reference/cpp-v3-dispatcher/，不参与构建。
+# ADR-0007 §3.5：旧 CommandDispatcher 已移入 reference/cpp-v3-dispatcher/，不参与构建。
 idf_component_register(
     SRCS "AlarmSource.cpp" "LinkManager.cpp" "LinkService.cpp"
          "CommandRouter.cpp"

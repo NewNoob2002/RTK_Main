@@ -1,5 +1,6 @@
 /* 蓝牙栈启停：控制器/Bluedroid 的初始化与逆序释放、GAP/SPP 协议注册。
- * 只在 spp_server_init() 的启动任务上下文执行（失败路径在此内部回滚）；不分配内存，非 ISR。 */
+ * 线程：只在 spp_server_init() 的启动/停止路径执行，失败路径在此内部回滚；绝不能在回调里调用。
+ * 堆与阻塞：不分配堆（缓冲由组合根外供）；经 btc_transfer_context 阻塞等待控制器/Bluedroid。 */
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
@@ -8,14 +9,7 @@
 
 #include "SppServerPriv.h"
 
-/**
- * @brief  逆序释放蓝牙栈：Bluedroid 先于控制器
- * @param  bluedroid_enabled: Bluedroid 已使能
- * @param  bluedroid_inited: Bluedroid 已初始化
- * @param  controller_enabled: 控制器已使能
- * @param  controller_inited: 控制器已初始化
- * @note   不拆（S4 §2.1）：逆序释放阶梯，每个阶段独立判错且只记日志。
- */
+/* 逆序释放阶梯：每个阶段的成败单独判定且只记日志，拆开反而难读（ADR-0013 §2.4）。 */
 void spp_server_unwind(bool bluedroid_enabled, // NOLINT(readability-function-*)
                        bool bluedroid_inited, bool controller_enabled, bool controller_inited)
 {
@@ -47,10 +41,6 @@ void spp_server_unwind(bool bluedroid_enabled, // NOLINT(readability-function-*)
     }
 }
 
-/**
- * @brief  清空蓝牙栈各阶段完成标志
- * @param[out] state: 阶段标志
- */
 void spp_server_hw_state_clear(spp_server_hw_state_t *state)
 {
     state->controller_inited = false;
@@ -59,12 +49,7 @@ void spp_server_hw_state_clear(spp_server_hw_state_t *state)
     state->bluedroid_enabled = false;
 }
 
-/**
- * @brief  初始化并使能控制器与 Bluedroid；失败时在内部逆序释放
- * @param[out] state: 各阶段完成标志
- * @retval ESP_OK 成功；其他为 IDF 错误码
- * @note   不拆（S4 §2.1）：线性初始化序列（控制器→使能→Bluedroid→使能），失败即回滚。
- */
+/* 线性初始化序列：控制器/蓝牙栈逐级启停，失败即回滚，拆开反而难读（ADR-0013 §2.4）。 */
 esp_err_t spp_server_hw_init(spp_server_hw_state_t *state) // NOLINT(readability-function-*)
 {
     esp_err_t err = ESP_OK;
@@ -117,11 +102,7 @@ esp_err_t spp_server_hw_init(spp_server_hw_state_t *state) // NOLINT(readability
     return ESP_OK;
 }
 
-/**
- * @brief  注册 GAP/SPP 回调、设置 SSP 参数并发起 SPP 初始化
- * @retval ESP_OK 成功；其他为 IDF 错误码（由调用方统一 unwind）
- * @note   不拆（S4 §2.1）：线性注册序列（GAP/SPP 回调→SSP 参数→SPP init），失败即由调用方回滚。
- */
+/* 线性注册序列：GAP/SPP 回调与 profile 参数一次配好，拆开反而难读（ADR-0013 §2.4）。 */
 esp_err_t spp_server_profile_init(void) // NOLINT(readability-function-*)
 {
     esp_err_t err = ESP_OK;

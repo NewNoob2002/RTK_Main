@@ -1,8 +1,6 @@
-// demux/Crc.hpp 的实现（ADR-0005 §1）：解码器共用的 CRC-24Q 与 NovAtel/Unicore 风格 CRC-32。
-// 两张 256 项表由 constexpr 函数在编译期生成（任务卡要求不得手抄），放只读存储：各 1 KB。
-// 逐位算法与查表算法等价，核对值 "123456789" → 0xCDE703（CRC-24Q）/ 0x2DFD2D88（CRC-32 反射），
-// 已用独立的 Python 逐位实现交叉核对（见 docs/reports/H2.md §3）。
-// 无静态可变状态、无浮点、无堆；两个函数都是纯函数，可对同一前缀重复调用。
+// demux/Crc.hpp 的实现（ADR-0005 §1）：解码器共用的 CRC-24Q 与 NovAtel/Unicore 风格 CRC-32；两张 256 项表由
+// constexpr 函数在编译期生成（各 1 KB，落 .rodata），核对值 "123456789" → 0xCDE703 / 0x2DFD2D88。
+// 纯函数、无静态可变状态、无浮点、无堆、不阻塞：线程与 ISR 安全，可对同一前缀重复调用。
 
 #include "demux/Crc.hpp"
 
@@ -24,7 +22,12 @@ constexpr std::size_t kTableSize = 256U;
 constexpr uint32_t kByteMask = 0xFFU;
 constexpr uint32_t kBitsPerByte = 8U;
 
-/** 单字节表的第 index 项：i << 16 对多项式迭代 8 次（非反射，结果 < 2^24）。 */
+/**
+ * @brief  计算 CRC-24Q 单字节表的第 index 项：index << 16 对多项式迭代 8 次
+ * @param  index: 表下标（0..255）
+ * @retval 24 位表项（非反射，结果 < 2^24）
+ * @note   constexpr，编译期求值；纯函数。
+ */
 constexpr uint32_t crc24qEntry(uint32_t index) noexcept
 {
     // index < 256，左移 16 位后 < 2^24，uint32_t 内不溢出。
@@ -40,7 +43,12 @@ constexpr uint32_t crc24qEntry(uint32_t index) noexcept
     return crc;
 }
 
-/** 单字节表的第 index 项：i 对反射多项式迭代 8 次。 */
+/**
+ * @brief  计算 CRC-32 单字节表的第 index 项：index 对反射多项式迭代 8 次
+ * @param  index: 表下标（0..255）
+ * @retval 32 位表项
+ * @note   constexpr，编译期求值；纯函数。
+ */
 constexpr uint32_t crc32Entry(uint32_t index) noexcept
 {
     uint32_t crc = index;
@@ -55,6 +63,10 @@ constexpr uint32_t crc32Entry(uint32_t index) noexcept
     return crc;
 }
 
+/**
+ * @brief  生成整张 CRC-24Q 单字节表
+ * @retval 256 项表；由下面的 static constexpr 变量在编译期求值后放只读存储
+ */
 constexpr std::array<uint32_t, kTableSize> makeCrc24qTable() noexcept
 {
     std::array<uint32_t, kTableSize> table{};
@@ -66,6 +78,10 @@ constexpr std::array<uint32_t, kTableSize> makeCrc24qTable() noexcept
     return table;
 }
 
+/**
+ * @brief  生成整张 CRC-32 单字节表
+ * @retval 256 项表；由下面的 static constexpr 变量在编译期求值后放只读存储
+ */
 constexpr std::array<uint32_t, kTableSize> makeCrc32Table() noexcept
 {
     std::array<uint32_t, kTableSize> table{};

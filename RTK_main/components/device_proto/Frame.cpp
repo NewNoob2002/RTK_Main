@@ -1,7 +1,6 @@
-// 手机/报警器 SPP 帧编解码的 C++ 外观（ADR-0003）。
-// 协议逻辑全部在 DevProtoFrame.c；本文件只做类型安全包装：span → 指针+长度、
-// dev_proto_err_t / dev_proto_parse_result_t → fw::Status / ParseResult、C 结构 → FrameView。
-// 线程安全：否（FrameParser 每会话一个实例，只由链路任务使用）。ISR 安全：是。
+// 手机/报警器 SPP 帧编解码的 C++ 外观（ADR-0003）：只做 span/status/视图转换，协议逻辑在 DevProtoFrame.c。
+// FrameParser 每会话一个实例、只由链路任务使用，非线程安全；无阻塞、无分配，ISR 安全。
+// 不使用堆。
 
 #include "proto/Frame.hpp"
 
@@ -9,6 +8,14 @@ namespace proto {
 
 namespace {
 
+/**
+ * @brief  把 C 层错误码映射为 fw::Status
+ * @param  err: DevProtoFrame.h 的错误码
+ * @retval fw::Status::kOk          DEV_PROTO_OK
+ * @retval fw::Status::kInvalidArg  DEV_PROTO_ERR_ARG 或未知值
+ * @retval fw::Status::kNoSpace     DEV_PROTO_ERR_SPACE
+ * @note   纯函数、ISR 安全
+ */
 fw::Status fromCErr(dev_proto_err_t err) noexcept
 {
     switch (err) {
@@ -23,6 +30,12 @@ fw::Status fromCErr(dev_proto_err_t err) noexcept
     }
 }
 
+/**
+ * @brief  把 C 层解析结果映射为 ParseResult
+ * @param  result: DevProtoFrame.h 的解析结果
+ * @retval 与输入一一对应的 ParseResult；未知值按 kNone（需要更多字节）处理
+ * @note   纯函数、ISR 安全
+ */
 ParseResult fromCResult(dev_proto_parse_result_t result) noexcept
 {
     switch (result) {

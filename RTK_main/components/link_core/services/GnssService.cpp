@@ -1,5 +1,5 @@
 // GnssService 实现（ADR-0011 §6）：PHONE 侧 0x04/0x05/0x1F/0x21/0x22/0x23 订阅与最新帧查询。
-// 线程安全：否（仅由链路任务单线程访问）。ISR 安全：否。
+// 线程安全：否（仅由链路任务单线程访问）。ISR 安全：否。堆：不分配（查询负载用栈上缓冲）。
 
 #include "core/services/GnssService.hpp"
 
@@ -44,6 +44,14 @@ constexpr std::array<MsgSpec, kGnssMsgCount> kMsgSpecs = {{
     {kIdGsa, 3000U},
 }};
 
+/** @brief 组应答帧：sender 固定为 DEV，type 经 responseType 映射（0x00→0x01，0x02→0x03，其他→0x05）。
+ *  @param[out] reply 复用缓冲；成功时写 buf/len，失败时 len 置 0。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @param payload 应答负载（0..proto::kMaxPayload 字节）。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 负载超过 kMaxPayload 或编码失败。
+ *  @note 不分配、不加锁；非 ISR 上下文调用。 */
 inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
                                  std::span<const uint8_t> payload) noexcept
 {
@@ -58,6 +66,13 @@ inline DispatchResult replyBuild(Reply &reply, uint16_t msgId, uint8_t reqType,
     return DispatchResult::kReply;
 }
 
+/** @brief 结果码应答：§3 规定成功/失败都把同一字节写两遍。
+ *  @param[out] reply 复用缓冲，语义同 replyBuild。
+ *  @param msgId 请求的 msg_id。
+ *  @param reqType 请求的 type。
+ *  @param value 结果码（kResultOk/kResultFail）。
+ *  @retval DispatchResult::kReply 已组帧。
+ *  @retval DispatchResult::kNoReply 组帧失败。 */
 inline DispatchResult replyResult(Reply &reply, uint16_t msgId, uint8_t reqType,
                                   uint8_t value) noexcept
 {

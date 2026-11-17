@@ -1,5 +1,6 @@
 // core::Transport 的 SPP 适配器（ADR-0003）：无状态，只转调 C 驱动并映射错误码。
-// 线程安全：与底层驱动相同，只允许链路任务调用。
+// 线程：与底层驱动相同，只允许链路任务调用。
+// 堆与阻塞：不分配堆；write 阻塞到写完或超时，其余接口不阻塞（reserve 可能计入环内重试）。
 
 #include "spp/SppTransport.hpp"
 
@@ -8,6 +9,12 @@
 
 namespace spp {
 namespace {
+/**
+ * @brief  把 core 层的回复凭证转成驱动的令牌结构
+ * @param  credit: 框架层保存的回复凭证
+ * @retval 字段一一对应的驱动令牌；不校验有效性
+ * @note  纯函数，任意上下文调用
+ */
 spp_server_tx_token_t tokenFrom(const core::ReplyCredit &credit) noexcept
 {
     return {credit.generation, credit.serial, credit.capacity, credit.slot, credit.channel};

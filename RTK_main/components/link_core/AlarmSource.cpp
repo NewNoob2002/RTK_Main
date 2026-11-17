@@ -1,5 +1,5 @@
-// 报警状态源：测试覆盖优先，其次围栏结果（phone_protocol.md §5）。
-// 只被链路任务调用（类本身无锁）；纯内存读写，不阻塞，非 ISR 安全。
+// 报警状态源实现：测试覆盖优先，其次围栏结果（phone_protocol.md §5）。
+// 只被链路任务调用（类本身无锁）；纯内存读写，不阻塞、非 ISR 安全、不分配堆。
 
 #include "core/AlarmSource.hpp"
 
@@ -15,6 +15,9 @@ using proto::alarm::kStateNormal;
 // 围栏报警（尚无覆盖时）的默认等级，与 §5 一致。
 constexpr uint8_t kFenceAlertLevel = 2U;
 
+/** @brief 判断状态值是否为协议允许的三种之一（正常/报警/无定位）。
+ *  @param state 待校验值。
+ *  @return true 合法；false 其他值。 */
 bool isValidState(uint8_t state) noexcept
 {
     return (state == kStateNormal) || (state == kStateAlert) || (state == kStateNoFix);

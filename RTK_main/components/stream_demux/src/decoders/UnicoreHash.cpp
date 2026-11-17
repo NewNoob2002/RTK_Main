@@ -1,10 +1,6 @@
-// Unicore Hash 语句解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：
-// '#' | 第 2 字节 [A-Z] | 正文可打印 ASCII 且不含 '#' '$' '*' | '*' 后 8 位十六进制 CRC-32（同 unicore_bin
-// 算法，覆盖 '#' 与 '*' 之间）或 2 位十六进制 XOR | CR LF。
-// 早拒绝点：第 2 字节不是大写字母；正文出现非法字符；'*' 之后的偏移不是该位置的十六进制/CR。
-// 帧长未知，因此每字节只查“新到字节”与定长尾部窗口（11 B）内的 '*' 相对偏移，O(1) 且结论只依赖入参；
-// '\n' 到达时按 '*' 的偏移（4 = XOR 形式 / 10 = CRC 形式）二选一，整段复核正文并整段算校验。
-// step 与 explain 共用 judge()，避免诊断文本与判定结论漂移。
+// Unicore Hash 语句解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：'#' | 第 2 字节 [A-Z] | 正文可打印
+// 且不含 '#' '$' '*' | '*' 后 8 位十六进制 CRC-32（同 unicore_bin 算法）或 2 位十六进制 XOR | CR LF。
+// 纯函数、无静态可变状态、无堆、不阻塞：ISR 安全；帧长未知，step 每字节 O(1)，'\n' 到达时才整段复核。
 
 #include "demux/decoders/UnicoreHash.hpp"
 
@@ -64,6 +60,7 @@ enum class Reason : uint8_t {
     kTooLong,
 };
 
+/** judge() 的结论：判定、原因、待补字节数与诊断数值。 */
 struct Verdict {
     Step step = Step::kNeedMore;
     Reason reason = Reason::kNone;
@@ -73,6 +70,13 @@ struct Verdict {
     uint32_t computed = 0U;  // 校验类原因：算出的值
 };
 
+/**
+ * @brief  构造一个 kReject 结论
+ * @param  reason: 拒绝原因
+ * @param  offset: 出错字节在候选前缀中的下标
+ * @param  byte: 该位置的原始字节，作为“收到的值”
+ * @retval 结论（step=kReject，need 保持默认 1）
+ */
 Verdict reject(Reason reason, std::size_t offset, uint8_t byte = 0U) noexcept
 {
     Verdict verdict{};
@@ -83,23 +87,42 @@ Verdict reject(Reason reason, std::size_t offset, uint8_t byte = 0U) noexcept
     return verdict;
 }
 
+/**
+ * @brief  是否可打印 ASCII
+ * @param  byte: 待判定字节
+ * @retval true 在 0x20–0x7E 内；false 其余
+ */
 bool isPrintable(uint8_t byte) noexcept
 {
     return (byte >= kPrintableMin) && (byte <= kPrintableMax);
 }
 
+/**
+ * @brief  是否十六进制数字（大小写均可）
+ * @param  byte: 待判定字节
+ * @retval true 是 '0'–'9'、'A'–'F' 或 'a'–'f'；false 其余
+ */
 bool isHexDigit(uint8_t byte) noexcept
 {
     return ((byte >= kDigit0) && (byte <= kDigit9)) || ((byte >= kUpperA) && (byte <= kUpperF)) ||
            ((byte >= kLowerA) && (byte <= kLowerF));
 }
 
+/**
+ * @brief  是否大写字母
+ * @param  byte: 待判定字节
+ * @retval true 是 'A'–'Z'；false 其余
+ */
 bool isUpperAlpha(uint8_t byte) noexcept
 {
     return (byte >= kUpperA) && (byte <= kUpperZ);
 }
 
-/** 调用方必须先经 isHexDigit() 判定；返回值 0..15。 */
+/**
+ * @brief  十六进制数字转数值
+ * @param  byte: 必须已经 isHexDigit() 判定通过（大小写均可）
+ * @retval 0..15；未判定通过的输入返回值无意义
+ */
 uint8_t hexValue(uint8_t byte) noexcept
 {
     if ((byte >= kDigit0) && (byte <= kDigit9)) {
@@ -114,12 +137,21 @@ uint8_t hexValue(uint8_t byte) noexcept
     return static_cast<uint8_t>((byte - kLowerA) + kHexAlphaBase);
 }
 
-/** Hash 正文比 NMEA 更严：可打印且不含 '#' '$' '*'。 */
+/**
+ * @brief  正文合法性（比 NMEA 更严）：可打印且不含 '#' '$' '*'
+ * @param  byte: 待判定字节
+ * @retval true 合法正文字节；false 非法
+ */
 bool isBody(uint8_t byte) noexcept
 {
     return isPrintable(byte) && (byte != kSyncByte) && (byte != kDollar) && (byte != kStar);
 }
 
+/**
+ * @brief  逐字节异或（XOR 形式校验和）
+ * @param  data: 参与异或的字节（'#' 与 '*' 之间）；为空时结果为 0
+ * @retval 8 位异或累积值
+ */
 uint8_t xor8(std::span<const uint8_t> data) noexcept
 {
     uint8_t acc = 0U;
@@ -131,7 +163,14 @@ uint8_t xor8(std::span<const uint8_t> data) noexcept
     return acc;
 }
 
-/** 在 frame[last-window .. last] 内反向寻找最近的 '*'；窗口定长，因此 O(1)。 */
+/**
+ * @brief  在 frame 末尾的定长窗口内反向寻找最近的 '*'
+ * @param  frame: 候选语句，非空
+ * @param  last: 窗口末端下标（此处为 '\n' 的下标）
+ * @param  window: 最多向前搜索的字节数；窗口定长，因此 O(1)
+ * @param[out] ofs: 找到时写入 '*' 距 last 的回退字节数（0 表示 last 本身），未找到时写 0
+ * @retval true 窗口内存在 '*'；false 不存在
+ */
 bool findStarReverse(std::span<const uint8_t> frame, std::size_t last, std::size_t window,
                      std::size_t &ofs) noexcept
 {
@@ -145,7 +184,13 @@ bool findStarReverse(std::span<const uint8_t> frame, std::size_t last, std::size
     return false;
 }
 
-/** 读 count 位大端十六进制（count ≤ 8）；调用方保证范围合法且都是十六进制字符。 */
+/**
+ * @brief  读 count 位大端十六进制并拼成整数
+ * @param  frame: 候选语句
+ * @param  from: 首个十六进制字符下标
+ * @param  count: 位数，≤ 8；调用方保证范围合法且都是十六进制字符
+ * @retval 拼出的 32 位值
+ */
 uint32_t readHexBe(std::span<const uint8_t> frame, std::size_t from, std::size_t count) noexcept
 {
     uint32_t value = 0U;
@@ -156,6 +201,13 @@ uint32_t readHexBe(std::span<const uint8_t> frame, std::size_t from, std::size_t
     return value;
 }
 
+/**
+ * @brief  检查一段字节是否全是十六进制字符
+ * @param  frame: 候选语句
+ * @param  from: 起始下标；调用方保证 from + count ≤ frame.size()
+ * @param  count: 检查的字节数
+ * @retval true 全是十六进制字符（含 count == 0 的空段）；false 至少一个不是
+ */
 bool allHex(std::span<const uint8_t> frame, std::size_t from, std::size_t count) noexcept
 {
     for (std::size_t idx = 0U; idx < count; ++idx) {
@@ -166,7 +218,14 @@ bool allHex(std::span<const uint8_t> frame, std::size_t from, std::size_t count)
     return true;
 }
 
-/** '\n' 到达时的整段复核：正文合法性 + 两种校验形式之一。star 为 '*' 的下标。 */
+/**
+ * @brief  语句结构已确定后的整段复核：正文合法性 + 按 '*'\''偏移二选一校验
+ * @param  frame: 从同步字节起到 '\n' 的候选语句
+ * @param  star: '*' 的下标（两种校验形式的尾部偏移都已由调用方确认）
+ * @retval step=kFrame 校验通过
+ * @retval step=kReject 正文非法（kBody）、XOR 不符（kXorChecksum）或 CRC 不符（kCrcChecksum）
+ * @note   整段 O(len)；纯函数，只依赖入参。
+ */
 Verdict finish(std::span<const uint8_t> frame, std::size_t star) noexcept
 {
     for (std::size_t idx = 1U; idx < star; ++idx) {
@@ -204,7 +263,15 @@ Verdict finish(std::span<const uint8_t> frame, std::size_t star) noexcept
     return good;
 }
 
-/** 未到结束符时，按新到字节相对 '*' 的偏移做 O(1) 预检（afterStar ≥ 1，即当前字节不是 '*'）。 */
+/**
+ * @brief  未到结束符时，按新到字节相对 '*' 的偏移做 O(1) 预检
+ * @param  frame: 累积中的候选语句
+ * @param  last: 新到字节下标
+ * @param  star: 最近的 '*' 下标（调用方已确认 star < last）
+ * @param  newByte: 新到字节（frame[last]）
+ * @retval true 该偏移上允许出现这个字节；false 应立刻按 kChecksumByte 拒绝
+ * @note   只看 1..9 的定长偏移与 frame[star+3] 一个标志位，O(1)。
+ */
 bool midByteOk(std::span<const uint8_t> frame, std::size_t last, std::size_t star,
                uint8_t newByte) noexcept
 {
@@ -240,7 +307,9 @@ bool midByteOk(std::span<const uint8_t> frame, std::size_t last, std::size_t sta
  * @brief  语句已结束（末字节为 '\n'）：定位 '*'、校验其偏移与 CR，再按 XOR/CRC 形式整段复核
  * @param  frame: 从同步字节起到 '\n' 的候选帧
  * @param  last: frame 末字节下标（'\n' 的位置）
- * @retval 判定结果；通过时 step 为 kFrame
+ * @retval step=kFrame 校验通过
+ * @retval step=kReject 缺 '*'（kMissingStar）、'*' 偏移不是 4/10（kStarOffset）、'\n' 前不是 CR（kNoCr）、
+ *         校验字段含非十六进制字符（kBadHex），或 finish() 报出的校验/正文错误
  * @note   只读入参，无副作用；由 judge() 在帧尾到达时调用。
  */
 Verdict judgeFinished(std::span<const uint8_t> frame, std::size_t last) noexcept
@@ -277,9 +346,12 @@ Verdict judgeFinished(std::span<const uint8_t> frame, std::size_t last) noexcept
 }
 
 /**
- * @brief  判定一帧：同步/长度/语句校验
- * @param  frame: 候选帧（从同步字节开始）
- * @retval 判定结果；通过时 step 为 kFrame
+ * @brief  判定一帧：同步字节、第 2 字节、长度上限、未结束时逐字节预检、结束时整段复核
+ * @param  frame: 候选前缀，非空且 frame[0] 已通过 firstByte
+ * @retval step=kNeedMore 还不能下结论，need 为至少还要的字节数（帧长未知时通常为 1）
+ * @retval step=kFrame 语句完整且 XOR 或 CRC-32 校验通过
+ * @retval step=kReject 具体原因见 Verdict::reason
+ * @note   纯函数；未到 '\n' 的路径只查新到字节与定长尾部窗口（O(1)），'\n' 分支整段复核。
  */
 Verdict judge(std::span<const uint8_t> frame) noexcept
 {
@@ -331,8 +403,8 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
 /**
  * @brief  把判定理由写成一句人读文本
  * @param  verdict: 判定结果
- * @param  text: 文本输出器
- * @note   不拆（S4 §2.1）：拒绝原因到一句话的文本映射表，每个 case 独立。
+ * @param[out] text: 文本输出器（空间不足时截断）
+ * @note   不拆（ADR-0013 §2.4）：拒绝原因到一句话的纯文本映射表，每个 case 独立、彼此无状态。
  */
 void explainVerdict(const Verdict &verdict, // NOLINT(readability-function-*)
                     demux::text_writer::TextWriter &text) noexcept

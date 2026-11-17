@@ -1,15 +1,11 @@
 /* 非阻塞 TX 字节环与令牌提交：reserve 占用窗口、commit 发布、cancel 归还；跨环尾回绕复制在此。
- * 链路任务调用（非 ISR）；所有状态在 s_spp_mux 临界区内推进，大复制在锁外。无分配。 */
+ * 线程：链路任务与发送任务调用（非 ISR）；所有状态在 s_spp_mux 临界区内推进。
+ * 堆与阻塞：无分配；大复制在锁外，锁内只记账，不调用 FreeRTOS/SDK。 */
 #include <stdint.h>
 #include <string.h>
 
 #include "SppServerPriv.h"
 
-/* level 与通知分离：通知可合并，poll_event 在等待前重查每槽 level。 */
-/**
- * @brief  有会话可写或流已空闲时唤醒发送任务
- * @note   中断安全：只置标志并投递事件/通知，不做写操作。
- */
 void spp_server_tx_wake(void)
 {
     bool post = false;
@@ -41,11 +37,6 @@ void spp_server_tx_wake(void)
     }
 }
 
-/**
- * @brief  结算会话在途写后重试解绑旧流
- * @param  session: 会话
- * @note   需持 s_spp_mux；旧流回调不能归还给未来的 owner。
- */
 void spp_server_tx_reclaim_locked(spp_server_session_t *session)
 {
     if ((s_spp.stream_owner == (session->idx + 1U)) && s_spp.stream_unbind &&
@@ -67,11 +58,6 @@ void spp_server_tx_reclaim_locked(spp_server_session_t *session)
     }
 }
 
-/**
- * @brief  关闭会话的发送状态：清预留与 PUSH 邮箱并记取消字节
- * @param  session: 会话
- * @note   需持 s_spp_mux。
- */
 void spp_server_tx_close_locked(spp_server_session_t *session)
 {
     s_spp.tx_stats.cancelled += session->reply.used + session->push_len;
@@ -140,24 +126,11 @@ esp_err_t spp_server_reserve(uint32_t handle, size_t len, uint8_t channel,
     return result;
 }
 
-/**
- * @brief  为一条应答预留发送空间
- * @param  handle: 会话句柄
- * @param[out] token: 预留凭证
- * @retval ESP_OK 成功；其他为失败原因
- */
 esp_err_t spp_server_reply_reserve(uint32_t handle, spp_server_tx_token_t *token)
 {
     return spp_server_reserve(handle, SPP_SERVER_REPLY_RESERVE, SPP_SERVER_CHANNEL_REPLY, token);
 }
 
-/**
- * @brief  为一块流数据预留发送空间
- * @param  handle: 会话句柄
- * @param  len: 字节数
- * @param[out] token: 预留凭证
- * @retval ESP_OK 成功；其他为失败原因
- */
 esp_err_t spp_server_stream_reserve(uint32_t handle, size_t len, spp_server_tx_token_t *token)
 {
     return spp_server_reserve(handle, len, SPP_SERVER_CHANNEL_STREAM, token);
@@ -188,10 +161,6 @@ static spp_server_ring_t *spp_server_token_ring_locked(const spp_server_tx_token
     return ring;
 }
 
-/**
- * @brief  撤销未提交的预留并唤醒发送任务
- * @param  token: 预留凭证
- */
 void spp_server_tx_cancel(const spp_server_tx_token_t *token)
 {
     taskENTER_CRITICAL(&s_spp_mux);
@@ -222,16 +191,19 @@ static size_t spp_server_ring_copy(uint8_t *storage, size_t capacity, size_t pos
     return (pos + n) % capacity;
 }
 
-/* copy 的区间先固定，锁外 scatter copy，最后一次发布；CLOSE 期间不再接纳新 owner。
- * 两段按序拼成一条记录，句末位只标在第二段末尾，worker 不会在两段之间插入 reply。 */
 /**
- * @brief  把两段数据原子提交到 token 预留的空间
+ * @brief  把两段数据原子提交到 token 预留的空间（两段按序拼成一条记录）
  * @param  token: 预留凭证
  * @param  a: 第一段数据
  * @param  alen: 第一段字节数
  * @param  b: 第二段数据（可为 NULL）
  * @param  blen: 第二段字节数
- * @retval ESP_OK 成功；其他为失败原因
+ * @retval ESP_OK 已发布到环
+ * @retval ESP_ERR_INVALID_ARG 参数无效或 len 超出 token 预留容量
+ * @retval ESP_ERR_INVALID_STATE token 失效（CLOSE 等）或该环正在另一次提交中
+ * @note   链路任务/发送任务调用；复制区间先固定，锁外 scatter copy，最后一次进锁发布
+ *         （stream 置句末位、reply 累加 tx_total，worker 不会在两段之间插入应答）；
+ *         copying 无论成败都清，否则槽永远不能再用；CLOSE 期间不再接纳新 owner。
  */
 static esp_err_t spp_server_tx_commit_spans(const spp_server_tx_token_t *token, const uint8_t *a,
                                             size_t alen, const uint8_t *b, size_t blen)
@@ -297,27 +269,11 @@ static esp_err_t spp_server_tx_commit_spans(const spp_server_tx_token_t *token, 
     return result;
 }
 
-/**
- * @brief  提交单段数据
- * @param  token: 预留凭证
- * @param  data: 数据
- * @param  len: 字节数
- * @retval ESP_OK 成功；其他为失败原因
- */
 esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t len)
 {
     return spp_server_tx_commit_spans(token, data, len, NULL, 0U);
 }
 
-/**
- * @brief  提交两段数据（头部与载荷分处两个缓冲）
- * @param  token: 预留凭证
- * @param  a: 第一段数据
- * @param  alen: 第一段字节数
- * @param  b: 第二段数据
- * @param  blen: 第二段字节数
- * @retval ESP_OK 成功；其他为失败原因
- */
 esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen,
                                 const uint8_t *b, size_t blen)
 {
@@ -327,12 +283,6 @@ esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_
     return spp_server_tx_commit_spans(token, a, alen, b, blen);
 }
 
-/**
- * @brief  绑定流归属并记录对端是否手机
- * @param  handle: 会话句柄
- * @param  phone: 是否手机会话
- * @retval ESP_OK 成功；ESP_ERR_NOT_FOUND 表示会话不存在
- */
 esp_err_t spp_server_stream_bind(uint32_t handle, bool phone)
 {
     esp_err_t result = ESP_ERR_NOT_FOUND;
@@ -355,13 +305,6 @@ esp_err_t spp_server_stream_bind(uint32_t handle, bool phone)
     return result;
 }
 
-/**
- * @brief  用最新一帧覆盖会话的 PUSH 邮箱
- * @param  handle: 会话句柄
- * @param  data: 帧数据（<= SPP_SERVER_PUSH_CAPACITY）
- * @param  len: 字节数
- * @retval ESP_OK 成功；其他为失败原因
- */
 esp_err_t spp_server_push_latest(uint32_t handle, const uint8_t *data, size_t len)
 {
     if ((data == NULL) || (len == 0U) || (len > SPP_SERVER_PUSH_CAPACITY)) {
@@ -382,11 +325,6 @@ esp_err_t spp_server_push_latest(uint32_t handle, const uint8_t *data, size_t le
     return result;
 }
 
-/**
- * @brief  会话当前是否还能接收一条应答
- * @param  handle: 会话句柄
- * @retval true 可以；false 断开中或剩余空间不足
- */
 bool spp_server_reply_ready(uint32_t handle)
 {
     bool ready = false;
@@ -401,10 +339,6 @@ bool spp_server_reply_ready(uint32_t handle)
     return ready;
 }
 
-/**
- * @brief  读取发送统计快照
- * @param[out] stats: 统计输出（NULL 时忽略）
- */
 void spp_server_tx_stats(spp_server_tx_stats_t *stats)
 {
     if (stats != NULL) {

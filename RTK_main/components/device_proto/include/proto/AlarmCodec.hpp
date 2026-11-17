@@ -1,6 +1,6 @@
-// 报警器扩展消息 0x40/0x41 编解码的 C++ 外观，实现委托给 C 接口 DevProtoAlarm.h。线路格式见
-// docs/protocol/phone_protocol.md §5。 本头文件同时供报警器固件复用。线程安全：是（无状态函数）。ISR 安全：是。
-// 冻结接口（ADR-0003）。实现方不得修改。
+// 报警器扩展消息 0x40/0x41 编解码的 C++ 外观（冻结，ADR-0003），实现委托给 DevProtoAlarm.h，
+// 同时供报警器固件复用。无状态函数，任意任务可调用；无阻塞、无分配，ISR 安全。
+// 不使用堆；线路格式见 docs/protocol/phone_protocol.md §5。
 #pragma once
 
 #include <cstddef>
@@ -50,16 +50,40 @@ struct Heartbeat {
     uint8_t localState = 0;
 };
 
-/** 按 §5 布局写 16 字节，返回写入字节数；out 不足 16 字节返回 0 且不写入。 */
+/**
+ * @brief  按 §5 布局编码 0x40 状态（16 字节，多字节字段小端）
+ * @param  status: 待编码的状态字段
+ * @param[out] out: 输出缓冲
+ * @retval 16 成功，写入 16 字节
+ * @retval 0  out 不足 16 字节，此时不写入
+ * @note   无阻塞、无分配、ISR 安全
+ */
 [[nodiscard]] size_t encodeStatus(const Status &status, std::span<uint8_t> out) noexcept;
 
-/** data 不足 8 字节返回 nullopt；多余字节忽略。 */
+/**
+ * @brief  按 §5 布局解码 0x41 心跳
+ * @param  data: 收到的 payload（只读）
+ * @retval 心跳字段；data 不足 8 字节时返回 std::nullopt
+ * @note   多余字节忽略；无阻塞、无分配、ISR 安全
+ */
 [[nodiscard]] std::optional<Heartbeat> decodeHeartbeat(std::span<const uint8_t> data) noexcept;
 
-/** 报警器侧复用：编码 0x41 心跳 8 字节；out 不足返回 0。 */
+/**
+ * @brief  按 §5 布局编码 0x41 心跳（8 字节，报警器侧复用）
+ * @param  heartbeat: 待编码的心跳字段
+ * @param[out] out: 输出缓冲
+ * @retval 8 成功，写入 8 字节
+ * @retval 0 out 不足 8 字节，此时不写入
+ * @note   无阻塞、无分配、ISR 安全
+ */
 [[nodiscard]] size_t encodeHeartbeat(const Heartbeat &heartbeat, std::span<uint8_t> out) noexcept;
 
-/** 报警器侧复用：解码 0x40 状态；data 不足 16 字节返回 nullopt。 */
+/**
+ * @brief  按 §5 布局解码 0x40 状态（报警器侧复用）
+ * @param  data: 收到的 payload（只读）
+ * @retval 状态字段；data 不足 16 字节时返回 std::nullopt
+ * @note   多余字节忽略；无阻塞、无分配、ISR 安全
+ */
 [[nodiscard]] std::optional<Status> decodeStatus(std::span<const uint8_t> data) noexcept;
 
 static_assert(kStatusLen == DEV_PROTO_ALARM_STATUS_LEN);

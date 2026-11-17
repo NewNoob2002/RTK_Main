@@ -1,7 +1,6 @@
 /* 会话槽与控制表的簿记：find/acquire/release/alloc/free、拥塞标志，以及控制表的登记与排空。
- * 控制表与会话表共用 s_spp_mux，放在同一文件便于审查锁范围（alloc 也要查控制表）。
- * find/alloc/free/set_congested/ctrl_add/ctrl_drop_reject 允许 BTC 回调线程调用：只改静态表，
- * 临界区外只做非阻塞唤醒；ctrl_process 只在发送任务上下文执行可能阻塞投递的 GAP 应答与断开。 */
+ * 线程：find/alloc/free/set_congested/ctrl_add/ctrl_drop_reject 在 BTC 回调线程，acquire/release 在链路/发送任务，ctrl_process 只在发送任务。
+ * 堆与阻塞：无堆分配；会话表与控制表共用 s_spp_mux，临界区内不调用 FreeRTOS/SDK，唤醒都在锁外。 */
 
 #include <stdint.h>
 #include <string.h>
@@ -18,7 +17,6 @@
 spp_server_state_t s_spp;
 portMUX_TYPE s_spp_mux = portMUX_INITIALIZER_UNLOCKED;
 
-/* 回调上下文使用：只查表，不登记 users（BTC 是 StreamBuffer 的唯一写者）。 */
 spp_server_session_t *spp_server_session_find(uint32_t handle)
 {
     spp_server_session_t *found = NULL;
@@ -34,7 +32,6 @@ spp_server_session_t *spp_server_session_find(uint32_t handle)
     return found;
 }
 
-/* 登记一个读者/写者；返回 NULL 表示句柄已失效。登记后该槽不会被复用或 reset。 */
 spp_server_session_t *spp_server_session_acquire(uint32_t handle)
 {
     spp_server_session_t *found = NULL;
@@ -51,7 +48,6 @@ spp_server_session_t *spp_server_session_acquire(uint32_t handle)
     return found;
 }
 
-/* 注销读者/写者。槽在 users 归零前不会被 SRV_OPEN 复用。 */
 void spp_server_session_release(spp_server_session_t *session)
 {
     if (session == NULL) {
@@ -66,7 +62,6 @@ void spp_server_session_release(spp_server_session_t *session)
     taskEXIT_CRITICAL(&s_spp_mux);
 }
 
-/* 需持 s_spp_mux：该 handle 的拒绝请求仍在表中（SDK 返回前不得接纳相同数字句柄）。 */
 /**
  * @brief  句柄是否正等待投递 REJECT
  * @param  handle: 会话句柄
@@ -84,7 +79,6 @@ static bool spp_server_reject_pending_locked(uint32_t handle)
     return false;
 }
 
-/* 需持 s_spp_mux：该 handle 仍有未退出的会话（生命周期在途、断开在途或有人在用）。 */
 /**
  * @brief  句柄是否已被在途会话占用（防止复用）
  * @param  handle: 会话句柄
@@ -104,7 +98,6 @@ static bool spp_server_live_handle_locked(uint32_t handle)
     return false;
 }
 
-/* 需持 s_spp_mux：占一个完全空闲的槽并置 reserving；无空闲槽返回 NULL。 */
 /**
  * @brief  找一个空闲槽并置 reserving，跳过正在退出的槽
  * @retval 预留到的槽；NULL 表示没有空闲槽
@@ -124,15 +117,6 @@ static spp_server_session_t *spp_server_reserve_locked(void)
     return NULL;
 }
 
-/* 分配空闲槽：要求无读者、无在途发送（否则 reset 会与读/写并发或复用未退出的会话）。
- * BTC 回调（快路径）与发送任务（延后重试）都会调用，用 reserving 串行化。 */
-/**
- * @brief  为新的蓝牙连接分配会话槽
- * @param  handle: 会话句柄
- * @param  addr: 对端地址（6 字节）
- * @retval 会话指针；NULL 表示拒绝（句柄重复或无空闲槽）
- * @note   两段临界区之间做 reset 与字段填充，期间槽位为 reserving 状态。
- */
 spp_server_session_t *spp_server_session_alloc(uint32_t handle, const uint8_t *addr)
 {
     spp_server_session_t *slot = NULL;
@@ -251,8 +235,6 @@ void spp_server_session_set_congested(uint32_t handle, bool congested)
     }
 }
 
-/* 登记一条控制请求；回调上下文调用，只改静态表并在临界区外非阻塞唤醒发送任务。
- * 表满返回 false（回调不能等待，只能丢弃并记录）。 */
 bool spp_server_ctrl_add(spp_server_ctrl_type_t type, uint32_t handle, const uint8_t *bda)
 {
     bool added = false;
@@ -292,8 +274,6 @@ bool spp_server_ctrl_add(spp_server_ctrl_type_t type, uint32_t handle, const uin
     return added;
 }
 
-/* 会话已关闭：撤销尚未执行的同句柄拒绝命令，避免稍后误断被复用的句柄。
- * 已由发送任务取走的命令无法撤销（窗口很小），见 ctrl_process 里的在册检查。 */
 void spp_server_ctrl_drop_reject(uint32_t handle)
 {
     taskENTER_CRITICAL(&s_spp_mux);
@@ -318,7 +298,6 @@ typedef struct {
     uint8_t bda[SPP_SERVER_ADDR_LEN];
 } spp_server_ctrl_request_t;
 
-/* 需持 s_spp_mux：该槽本轮是否可送出；可送时填充请求并推进重试状态。 */
 /**
  * @brief  从会话取出待投递的控制请求并标记在途
  * @param  slot: 会话槽位下标
@@ -352,7 +331,6 @@ static bool spp_server_ctrl_claim_locked(uint32_t slot, spp_server_ctrl_request_
     return true;
 }
 
-/* 无锁：把取走的请求交给 SDK。req 非 const——esp_bd_addr_t 是 uint8_t[6]，SDK 形参不是 const。 */
 /**
  * @brief  把控制请求投递给蓝牙栈
  * @param  req: 请求内容（esp_bd_addr_t 需要可写指针）
@@ -397,7 +375,6 @@ static esp_err_t spp_server_ctrl_deliver(spp_server_ctrl_request_t *req)
     return err;
 }
 
-/* 需持 s_spp_mux：按 SDK 结果结算 REJECT 槽（它留在表中等待重试或 closed）。 */
 /**
  * @brief  按投递结果结算控制请求的在途标志
  * @param  slot: 会话槽位下标

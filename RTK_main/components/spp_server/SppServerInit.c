@@ -1,6 +1,6 @@
 /* SPP 驱动的启动与回滚：控制器/Bluedroid/GAP/SPP 初始化、异步阶段等待、服务端启动与设备名。
- * 只在 main 的初始化上下文调用（spp_server_init / spp_server_get_local_addr）；esp_* 调用可能阻塞在
- * BTC 队列上，因此绝不能在 BTC 回调里调用。等待阶段完成位时会阻塞调用者，直到完成或超时。 */
+ * 线程：只在 main 的初始化上下文调用，绝不能在 BTC 回调里调用（esp_* 调用可能阻塞在 BTC 队列上）。
+ * 堆与阻塞：只用静态 RTOS 对象，无堆分配；等阶段完成位会阻塞到完成或超时（INIT 5 s / UNINIT 2 s）。 */
 
 #include <inttypes.h>
 #include <stddef.h>
@@ -30,8 +30,11 @@
 #define SPP_SERVER_INIT_TIMEOUT_MS   (5000U)
 #define SPP_SERVER_UNINIT_TIMEOUT_MS (2000U)
 
-/* 只在 init 失败路径调用：此时还没有会话，且 SPP/Bluedroid 已关闭，不会再进回调。
- * 发送任务不删除——它只等任务通知，留着可被下一次 init 复用（静态对象不回收）。 */
+/**
+ * @brief  回收会话槽、控制表、事件队列与事件组，发送任务保留给下次 init 复用
+ * @note  只在 init 的失败/停止路径调用：此时没有会话，SPP/Bluedroid 已关闭，不会再进回调；
+ *        静态对象的内存来自组合根外供缓冲，这里只复位状态与删除 RTOS 对象，不释放堆
+ */
 static void spp_server_objects_delete(void)
 {
     for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
@@ -66,7 +69,13 @@ static void spp_server_objects_delete(void)
     s_spp.initialized = false;
 }
 
-/* 创建静态 RTOS 对象与发送任务。发送任务跨 init 重试复用。 */
+/**
+ * @brief  复位静态状态并创建事件队列、事件组、各会话接收流与发送任务
+ * @retval ESP_OK 全部对象就绪（发送任务已存在时直接复用）
+ * @retval ESP_ERR_NO_MEM 静态队列/事件组/流缓冲创建失败，或发送任务创建失败
+ * @note  启动路径调用；复位在 s_spp_mux 内完成，避免与仍在运行的发送任务读到中间状态；
+ *        发送任务绑核 0、优先级 5，栈由组合根外供，跨 init 重试只创建一次
+ */
 static esp_err_t spp_server_objects_create(void)
 {
     /* 重试时发送任务仍在运行：会话/控制表的复位放在同一把锁下，避免与它读到中间状态。 */
@@ -114,6 +123,12 @@ static esp_err_t spp_server_objects_create(void)
     return ESP_OK;
 }
 
+/**
+ * @brief  把启动阶段映射成事件组完成位
+ * @param  stage: 启动阶段
+ * @retval 该阶段的完成位；UNINIT 及其它取值都映射到 UNINIT_DONE
+ * @note  纯函数，任意上下文调用
+ */
 static EventBits_t spp_server_stage_bit(spp_server_stage_t stage)
 {
     switch (stage) {
@@ -348,12 +363,7 @@ esp_err_t spp_server_stop_boot(void)
     return err;
 }
 
-/**
- * @brief  启动 SPP 服务端：蓝牙栈、协议、服务端与可发现模式
- * @param  name: 蓝牙设备名
- * @retval ESP_OK 成功；其他为失败阶段的 IDF 错误码（已回滚，之后只允许重启）
- * @note   不拆（S4 §2.1）：线性启动序列（静态对象→hw→profile→异步等待→服务端→设备名），失败即回滚。
- */
+/* 线性启动序列：每步失败即按逆序释放已获取的资源，拆开反而看不出顺序（ADR-0013 §2.4）。 */
 esp_err_t spp_server_init(const char *name) // NOLINT(readability-function-*)
 {
     esp_err_t err = ESP_OK;

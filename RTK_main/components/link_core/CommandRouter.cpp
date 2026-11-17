@@ -1,6 +1,6 @@
-// 协议指令路由实现（ADR-0007 §3.5）：启动时把各服务登记的 Route 表展开到固定容量索引，
-// 链路任务按 msgId 查找后调用对应 handler，替代旧 CommandDispatcher 的大 switch。
-// 判定顺序与旧 dispatcher 一致：未登记 → kNoReply（先于角色检查）→ 角色不在 RoleMask → kDenied → handler。
+// 协议指令路由实现（ADR-0007 §3.5）：把各服务登记的 Route 表展开到定长索引，按 msgId 查表调 handler。
+// 线程安全：init 于启动前单线程，handle 仅链路任务；非 ISR、不阻塞、不分配（表为定长数组）。
+// 判定顺序固定：未登记 → kNoReply（先于角色检查）→ 角色不符 → kDenied → handler。
 
 #include "core/CommandRouter.hpp"
 #include "core/TraceCodes.hpp"
@@ -11,13 +11,8 @@
 
 namespace core {
 
-/**
- * @brief  登记路由表：同执行器内 ModuleId 不可重复
- * @param  tables: 路由表数组
- * @retval fw::Status::kOk 成功；其他为非法输入或重复登记
- * @note   不拆（S4 §2.1）：单遍登记循环，合法性/重复/kMaxRoutes 都在循环内以 break 统一退出，拆开会复制状态传播。
- */
-fw::Status CommandRouter::init( // NOLINT(readability-function-*): 见 @note
+// 单遍登记循环：合法性/重复/kMaxRoutes 都在循环内以 break 统一退出，拆开会复制状态传播（ADR-0013 §2.4）。
+fw::Status CommandRouter::init( // NOLINT(readability-function-*)
     std::span<const RouteTable> tables) noexcept
 {
     if (inited_) {

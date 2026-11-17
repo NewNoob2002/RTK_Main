@@ -1,5 +1,6 @@
 /* 发送工作者任务、真实 WRITE_EVT 结算与普通断开重试；唯一调用 SDK write/disconnect 的地方。
- * 任务上下文轮询 + 回调上下文只改小状态；无分配，回调内不阻塞、不解析、不打印数据内容。 */
+ * 线程：任务上下文轮询并在锁外调 SDK；WRITE_EVT 结算在 BTC 回调线程，只改小状态。
+ * 堆与阻塞：无分配，回调内不阻塞、不解析、不打印数据内容；镜像缓冲由组合根外供。 */
 #include <stdint.h>
 #include <string.h>
 
@@ -126,11 +127,10 @@ void spp_server_worker(void *arg)
     }
 }
 
-/* 需持 s_spp_mux：匿名写失败时把每个在途块的会话（同 generation）请求断开，返回候选槽掩码。 */
 /**
- * @brief  匿名写失败：把同 generation 的会话全部置断开请求
- * @retval 已置位会话的候选掩码
- * @note   需持 s_spp_mux。
+ * @brief  匿名写失败：把每个在途块的会话（同 generation）全部置断开请求
+ * @retval 已置位会话的候选槽掩码（1<<slot），由调用方在锁外逐槽发起断开
+ * @note   需持 s_spp_mux；匿名失败回调无法定位句柄，只能按在途块整代作废
  */
 static uint32_t spp_server_mark_anon_fail_locked(void)
 {
@@ -148,13 +148,7 @@ static uint32_t spp_server_mark_anon_fail_locked(void)
     return candidates;
 }
 
-/* SDK 回调无 request id：仅匹配相同 handle 的最早待完成块；generation 保护本地槽复用，
- * 不能辨识 SDK 假设外的“旧 handle 回调恰在新 handle 同值在途”的重复事件。 */
-/**
- * @brief  写完成回调：结算在途块并唤醒发送任务
- * @param  param: spp_server_hw_init() 注册时启用的 IND 回调参数
- * @note   蓝牙回调上下文，不阻塞、不解析、不打印数据内容。
- */
+/* WRITE_EVT 的文档在 SppServerPriv.h；SDK 不能辨识“旧 handle 回调恰在新 handle 同值在途”的重复事件。 */
 void spp_server_handle_write(esp_spp_cb_param_t *param)
 {
     uint32_t candidates = 0U;

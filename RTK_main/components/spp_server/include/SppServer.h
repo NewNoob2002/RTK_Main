@@ -1,11 +1,6 @@
-// ESP-IDF Bluedroid 经典蓝牙 SPP 多会话服务端，C 实现（仅 SOC_BT_CLASSIC_SUPPORTED 目标）。
-// 线程模型：
-// - Bluedroid GAP/SPP 回调（BTC 任务）中只做：把数据拷进该会话的静态 StreamBuffer、更新拥塞标志、
-//   向静态事件队列非阻塞投递。不解析协议、不阻塞、不打印数据内容。
-// - poll_event/read/write/disconnect 只允许同一个链路任务调用（单一所有者）。
-// IDF v6.1 已核实（reference/c-v1/docs/reports/T04.md）：esp_spp_write 深拷贝；SRV_OPEN 后服务端继续监听，
-// 最多 ESP_SPP_MAX_SESSION(=2) 个会话；对端地址在 srv_open.rem_bda。
-// 冻结接口（ADR-0003）。实现方不得修改。
+// ESP-IDF Bluedroid 经典蓝牙 SPP 多会话服务端，C 实现（仅 SOC_BT_CLASSIC_SUPPORTED 目标），最多 2 个会话。
+// 线程：GAP/SPP 回调（BTC 任务）只拷贝数据、改状态、非阻塞投递；poll_event/read/write 只允许同一链路任务。
+// 堆与阻塞：无堆分配；回调内不阻塞，init/stop_boot 与 write 会阻塞等待 BTC 队列或事件。冻结接口（ADR-0003）。
 #pragma once
 
 #include <stdbool.h>
@@ -34,7 +29,7 @@ extern "C" {
 #define SPP_SERVER_EVENT_QUEUE_LEN (16U)
 #define SPP_SERVER_NAME_MAX        (31U) /* 设备名最大字节数（不含结尾 0） */
 #define SPP_SERVER_ADDR_LEN        (6U)
-#define SPP_SERVER_LEGACY_PIN      "1234" /* 旧设备 PIN_REQ 应答，与 5.4 注释一致 */
+#define SPP_SERVER_LEGACY_PIN      "1234" /* GAP PIN_REQ 的应答 PIN */
 
 typedef enum {
     SPP_SERVER_EVT_OPEN = 0, /* 新会话建立，addr 有效 */
@@ -52,22 +47,51 @@ typedef struct {
 } spp_server_evt_t;
 
 /**
- * 初始化控制器（BR/EDR only，释放 BLE 内存）、Bluedroid、GAP（SSP，IO 能力 NONE，CFM_REQ 自动确认，
- * PIN_REQ 回 SPP_SERVER_LEGACY_PIN）、SPP（ESP_SPP_MODE_CB）；在 SPP INIT 事件中启动服务端
- * （ESP_SPP_SEC_NONE，与 5.4 一致）、设置设备名、可连接+可发现。
- * name 为 NULL/空/超过 SPP_SERVER_NAME_MAX/含 '\n' 或 '\r' → ESP_ERR_INVALID_ARG；重复调用 → ESP_ERR_INVALID_STATE；
- * 其他步骤失败：按逆序释放已初始化部分，返回该步骤的错误码。
+ * @brief  初始化控制器（BR/EDR only，释放 BLE 内存）、Bluedroid、GAP(SSP) 与 SPP，启动服务端并可发现
+ * @param  name: 蓝牙设备名，1..SPP_SERVER_NAME_MAX 字节，不得含 '\n' 或 '\r'
+ * @retval ESP_OK 启动完成，服务端已可接受连接
+ * @retval ESP_ERR_INVALID_ARG name 为 NULL、空串、超长或含换行
+ * @retval ESP_ERR_INVALID_STATE 已初始化、未绑定外供存储，或已请求停止
+ * @retval 其他 失败步骤的 IDF 错误码；返回前已按逆序释放本次已初始化部分
+ * @note   只在启动任务调用；会阻塞等待 SPP INIT/START 事件（各 5 s）；非 ISR；不分配堆
+ * @note   GAP 用 IO 能力 NONE、CFM_REQ 自动确认、PIN_REQ 回 SPP_SERVER_LEGACY_PIN；SPP 用 ESP_SPP_MODE_CB
  */
 esp_err_t spp_server_init(const char *name);
 
-/** 等待事件，timeout_ms=0 不等待。有事件返回 true；未初始化或 evt 为 NULL 返回 false。 */
+/**
+ * @brief  等待并取出一条会话事件（生命周期事件优先）
+ * @param[out] evt: 事件输出；返回 false 时内容未定义
+ * @param  timeout_ms: 最长等待毫秒数，0 表示不等待
+ * @retval true 取到事件
+ * @retval false 超时、未初始化、队列未创建或 evt 为 NULL
+ * @note   只允许链路任务（唯一消费者）调用；最多阻塞 timeout_ms；队列无事件时按 RX/TX 水位补发事件；非 ISR
+ */
 bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout_ms);
 
-/** 从会话 StreamBuffer 非阻塞读取，返回字节数；未知句柄或参数非法返回 0。 */
+/**
+ * @brief  非阻塞读取会话接收缓冲
+ * @param  handle: 会话句柄
+ * @param[out] buf: 输出缓冲；只写返回值那么多个字节，其余不修改
+ * @param  size: buf 容量
+ * @retval 实际读到的字节数
+ * @retval 0 buf 为 NULL、size 为 0、句柄未知或当前无数据
+ * @note   只允许链路任务调用；不阻塞；登记期间该槽不会被复用或被新连接 reset
+ */
 size_t spp_server_read(uint32_t handle, uint8_t *buf, size_t size);
 
-/** 同步兼容发送：等真实 WRITE_EVT；全次共享 timeout_ms，超时不撤回已提交字节。
- * 只允许链路任务、非 ISR。未知句柄返回 NOT_FOUND；0 预算不提交，返回 TIMEOUT。
+/**
+ * @brief  同步兼容发送：按 TX_CHUNK 分块提交并等待每块的真实 WRITE_EVT
+ * @param  handle: 会话句柄
+ * @param  data: 数据，非 NULL
+ * @param  len: 字节数，须大于 0
+ * @param  timeout_ms: 全次共享的等待预算（0 时不提交即超时）
+ * @retval ESP_OK 全部字节已由 SDK 确认写出
+ * @retval ESP_ERR_INVALID_ARG data 为 NULL 或 len 为 0
+ * @retval ESP_ERR_INVALID_STATE 驱动/发送任务未就绪，或等待期间会话已断开
+ * @retval ESP_ERR_NOT_FOUND 句柄无对应会话
+ * @retval ESP_ERR_TIMEOUT 预算耗尽；已提交的字节不撤回
+ * @retval 其他 提交失败或该块的写完成错误码
+ * @note   只允许链路任务调用；会阻塞至多 timeout_ms；非 ISR；不解析数据内容
  */
 esp_err_t spp_server_write(uint32_t handle, const uint8_t *data, size_t len, uint32_t timeout_ms);
 
@@ -101,28 +125,104 @@ typedef struct {
     uint32_t inflight;
 } spp_server_tx_stats_t;
 
-/** 以下接口只允许链路任务、非 ISR；均不等待。reserve 满返回 TIMEOUT，失败零接纳。
- * reply 预留固定 280B，在 Router 之前调用；commit 只使用原预留，未用容量归还。
- * CLOSE 使凭证失效；commit 在锁外复制后原子发布，期间 users 阻止 CLOSE 后复用。
+/**
+ * @brief  为一条应答预留发射空间（固定 SPP_SERVER_REPLY_RESERVE 字节）
+ * @param  handle: 会话句柄
+ * @param[out] token: 预留凭证；失败时内容未定义
+ * @retval ESP_OK 预留成功，容量已记入 token
+ * @retval ESP_ERR_INVALID_ARG token 为 NULL
+ * @retval ESP_ERR_INVALID_STATE 驱动未初始化
+ * @retval ESP_ERR_NOT_FOUND 句柄无对应会话
+ * @retval ESP_ERR_TIMEOUT 断开中、正在复制、已有未提交预留或空闲不足（不接纳任何字节）
+ * @note   只允许链路任务、非 ISR；不阻塞；须在 Router 之前调用
  */
 esp_err_t spp_server_reply_reserve(uint32_t handle, spp_server_tx_token_t *token);
+
+/**
+ * @brief  用预留容量提交一条应答记录
+ * @param  token: reply_reserve 得到的凭证
+ * @param  data: 待发送数据，非 NULL
+ * @param  len: 字节数，须大于 0 且不超过凭证容量
+ * @retval ESP_OK 已在锁外复制并整条发布，待发送任务写出
+ * @retval ESP_ERR_INVALID_ARG token/data 为 NULL、len 为 0 或超过凭证容量
+ * @retval ESP_ERR_INVALID_STATE 凭证已失效（会话关闭、槽复用）或该环正在复制
+ * @note   只允许链路任务、非 ISR；复制在锁外（≤280 B），复制期间 users 阻止槽回收
+ * @note   发布前更新句末标记，发送任务不会看到半句；失败时预留不自动释放，由调用者 cancel
+ */
 esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t len);
-/** 两段视图拼成一条记录提交（源环跨尾时免中转缓冲）；alen+blen ≤ 预留容量，两段均须非空。
- * 语义同 tx_commit：成功即整条发布；失败时预留仍在，由调用者 cancel。 */
+
+/**
+ * @brief  把两段视图拼成一条记录提交（源环跨尾时免中转缓冲）
+ * @param  token: 预留凭证
+ * @param  a: 第一段，非 NULL
+ * @param  alen: 第一段字节数，须大于 0
+ * @param  b: 第二段，非 NULL
+ * @param  blen: 第二段字节数，须大于 0；alen+blen 不超过凭证容量
+ * @retval ESP_OK 整条已发布
+ * @retval ESP_ERR_INVALID_ARG 任一段为 NULL/空，或总长超过凭证容量
+ * @retval ESP_ERR_INVALID_STATE 凭证已失效或该环正在复制
+ * @note   语义同 tx_commit；失败时预留仍在，由调用者 cancel
+ */
 esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen,
                                 const uint8_t *b, size_t blen);
+
+/**
+ * @brief  释放未提交的预留并唤醒发送任务
+ * @param  token: 预留凭证；非法或已失效的凭证被忽略
+ * @note   只允许链路任务、非 ISR；不阻塞；正在复制的环不撤销
+ */
 void spp_server_tx_cancel(const spp_server_tx_token_t *token);
-/** PHONE 绑定由角色所有者维护；仅一个句柄可拥有唯一 stream；解绑等待当前 API/copy 退出。
- * reserve 按整条句长接纳，最大4096；不足时零接纳，调用者不能消费源句。
- * 复制可能跨环尾，锁外最多4096B；worker 仅在整句边界插入 reply。
+/**
+ * @brief  维护唯一 stream 所有者：手机侧由角色所有者绑定，解绑后不再接纳流数据
+ * @param  handle: 会话句柄
+ * @param  phone: true 请求绑定为 PHONE 流所有者，false 释放本会话的所有权
+ * @retval ESP_OK 已绑定、已解绑，或本就不是所有者（无操作）
+ * @retval ESP_ERR_NOT_FOUND 句柄无对应会话
+ * @retval ESP_ERR_TIMEOUT 已有其他句柄持有所有权（仅 phone=true 路径）
+ * @note   只允许链路任务、非 ISR；不阻塞；解绑只置位并回收已发布数据，在途复制由 users 保护
  */
 esp_err_t spp_server_stream_bind(uint32_t handle, bool phone);
+
+/**
+ * @brief  为一条完整流句预留发射空间（最大 SPP_SERVER_STREAM_CAPACITY）
+ * @param  handle: 会话句柄
+ * @param  len: 整句字节数，须大于 0 且不超过 SPP_SERVER_STREAM_CAPACITY
+ * @param[out] token: 预留凭证；失败时内容未定义
+ * @retval ESP_OK 预留成功
+ * @retval ESP_ERR_INVALID_ARG token 为 NULL、len 为 0 或超过 4096
+ * @retval ESP_ERR_INVALID_STATE 驱动未初始化、调用者不是流所有者或流正在解绑
+ * @retval ESP_ERR_NOT_FOUND 句柄无对应会话
+ * @retval ESP_ERR_TIMEOUT 断开中、正在复制、已有未提交预留或空闲不足（零接纳）
+ * @note   只允许链路任务、非 ISR；整句一次预留，发送任务只在句末插入应答
+ */
 esp_err_t spp_server_stream_reserve(uint32_t handle, size_t len, spp_server_tx_token_t *token);
-/** 最新推送至多40B，覆盖尚未提交的旧推送；不会覆盖 reply reservation。 */
+
+/**
+ * @brief  用最新一帧覆盖会话的 PUSH 邮箱
+ * @param  handle: 会话句柄
+ * @param  data: 帧数据，非 NULL，≤ SPP_SERVER_PUSH_CAPACITY
+ * @param  len: 字节数，须大于 0
+ * @retval ESP_OK 已写入邮箱并唤醒发送任务
+ * @retval ESP_ERR_INVALID_ARG data 为 NULL、len 为 0 或超过 40
+ * @retval ESP_ERR_NOT_FOUND 句柄无对应会话或正在断开
+ * @note   只允许链路任务、非 ISR；旧推送未发送即被覆盖并按取消计数；不占用 reply 预留
+ */
 esp_err_t spp_server_push_latest(uint32_t handle, const uint8_t *data, size_t len);
-/** reply 可预留的 level；TX_SPACE 只是合并通知，睡眠前必须重查此状态。 */
+
+/**
+ * @brief  查询现在能否预留一条应答
+ * @param  handle: 会话句柄
+ * @retval true 未断开、未在复制、无未提交预留且空闲不少于 SPP_SERVER_REPLY_RESERVE
+ * @retval false 上述任一条件不满足，或句柄无对应会话
+ * @note   TX_SPACE 只是合并通知，睡眠前须重新查询本状态；任意任务可调、不阻塞、非 ISR
+ */
 bool spp_server_reply_ready(uint32_t handle);
-/** 任意任务可读、非 ISR；锁内只拷贝小快照。 */
+
+/**
+ * @brief  读取 TX 累计统计快照
+ * @param[out] stats: 统计输出；为 NULL 时忽略
+ * @note   任意任务可读、非 ISR；锁内只拷贝小快照
+ */
 void spp_server_tx_stats(spp_server_tx_stats_t *stats);
 
 /** RX 累计与高水位快照；dropped_bytes 为会话生命期内累计丢字节。 */
@@ -143,28 +243,66 @@ typedef struct {
 /** RX 唤醒钩子：BTC DATA_IND 在离开 portMUX 后触发，只允许非阻塞唤醒（如任务通知）。 */
 typedef void (*spp_server_rx_wake_fn)(void *ctx);
 
-/** 安装/清除（NULL）RX 唤醒钩子；任意时刻可调用。 */
+/**
+ * @brief  安装或清除（fn 为 NULL）接收唤醒钩子
+ * @param  fn: 唤醒回调，`fn(ctx)` 形式调用；NULL 表示清除
+ * @param  ctx: 透传给回调的上下文
+ * @note   任意任务、任意时刻可调（含 init 之前）；指针存在 s_spp 之外，跨重连与重启重试保留
+ * @note   回调在 BTC 任务里、离开临界区之后执行，必须非阻塞且不做 I/O；不阻塞调用者
+ */
 void spp_server_set_rx_wake_hook(spp_server_rx_wake_fn fn, void *ctx);
 
-/** 查询指定或任意会话的 RX 水平状态（有待读数据或未消费的 RX_DROP/DATA 漏投递状态）；阻塞等待前须复查。 */
+/**
+ * @brief  查询指定会话是否有待读数据
+ * @param  handle: 会话句柄
+ * @retval true 缓冲有数据，或有尚未消费的漏投递/丢弃标记
+ * @retval false 无数据，或驱动未初始化、句柄无对应会话
+ * @note   任意任务可调、不阻塞、非 ISR；查询期间登记 users，槽不会被复用；阻塞等待前须复查
+ */
 bool spp_server_rx_ready(uint32_t handle);
+
+/**
+ * @brief  查询是否任一在用会话有待读数据
+ * @retval true 至少一个会话有数据或未消费的漏投递/丢弃标记
+ * @retval false 全部空闲，或驱动未初始化
+ * @note   任意任务可调、不阻塞、非 ISR
+ */
 bool spp_server_any_rx_ready(void);
 
-/** 任意任务可读、非 ISR；锁内只拷贝小快照。 */
+/**
+ * @brief  读取 RX 累计与高水位快照
+ * @param[out] stats: 统计输出，先清零；为 NULL 时直接返回
+ * @note   任意任务可读、非 ISR；锁内只拷贝标量，used 在登记 users 后从 StreamBuffer 取
+ */
 void spp_server_rx_stats(spp_server_rx_stats_t *stats);
 
-/** 请求断开；结果以 SPP_SERVER_EVT_CLOSE 事件返回。未知句柄 → ESP_ERR_NOT_FOUND。 */
+/**
+ * @brief  请求断开一个会话
+ * @param  handle: 会话句柄
+ * @retval ESP_OK 已置位断开请求；最终结果以 SPP_SERVER_EVT_CLOSE 事件返回
+ * @retval ESP_ERR_NOT_FOUND 句柄无对应会话
+ * @note   任意任务可调（重复请求仍返回 ESP_OK）；不阻塞、非 ISR；SDK 的断开调用由发送任务执行
+ */
 esp_err_t spp_server_disconnect(uint32_t handle);
 
-/** 本机 BT MAC（设备名后缀与日志用）。 */
+/**
+ * @brief  读取本机蓝牙 MAC（设备名后缀与日志用）
+ * @param[out] addr: 输出 SPP_SERVER_ADDR_LEN 字节；失败时不修改
+ * @retval ESP_OK 已拷贝
+ * @retval ESP_ERR_INVALID_ARG addr 为 NULL
+ * @retval ESP_ERR_INVALID_STATE 控制器未上电，拿不到本机地址
+ * @note   任意任务可调、不阻塞、非 ISR
+ */
 esp_err_t spp_server_get_local_addr(uint8_t addr[SPP_SERVER_ADDR_LEN]);
 
-/** 事件队列满被丢弃的事件数（诊断）。 */
+/**
+ * @brief  读取事件队列满时被丢弃的事件累计数（诊断）
+ * @retval 累计丢弃数
+ * @note   任意任务可调；锁内只读一个计数；非 ISR
+ */
 uint32_t spp_server_dropped_events(void);
 
-/* ---- 调试追踪钩子（ADR-0009 §2.2，类别 spp）---- */
-
-/** 驱动事件码；参数含义写在每个码后面。新增码只能追加在末尾。 */
+/** 调试追踪钩子（ADR-0009 §2.2，类别 spp）：驱动事件码，参数含义写在每个码后面；新增码只能追加在末尾。 */
 typedef enum {
     SPP_SERVER_TRACE_SRV_START = 0, /* 服务端启动：a = scn */
     SPP_SERVER_TRACE_CONG,          /* 拥塞状态变化：a = 1 拥塞 / 0 解除 */
@@ -204,7 +342,11 @@ typedef enum {
 typedef void (*spp_server_trace_fn)(spp_server_trace_code_t code, uint32_t handle, uint32_t a,
                                     uint32_t b);
 
-/** 安装/清除（NULL）钩子；任意时刻可调用（原子指针写）。未安装时驱动不产生任何追踪开销以外的工作。 */
+/**
+ * @brief  安装或清除（fn 为 NULL）调试追踪钩子
+ * @param  fn: 追踪回调，NULL 表示清除
+ * @note   任意任务、任意时刻可调；临界区内只写一个指针，读侧拷贝指针后在锁外调用；未安装时无额外开销
+ */
 void spp_server_set_trace_hook(spp_server_trace_fn fn);
 
 #ifdef __cplusplus

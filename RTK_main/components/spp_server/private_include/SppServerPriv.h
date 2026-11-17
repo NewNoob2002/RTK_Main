@@ -1,21 +1,6 @@
-/* spp_server 驱动的内部共享声明：私有类型、跨文件共享状态 s_spp、跨文件内部函数原型。
- * 本头只给 spp_server_*.c 用，不属于公共接口，组件外不得包含。
- *
- * 线程模型（对应 docs/reports/QA-E-REVIEW.md 第 1–4 项）：
- * - BTC 回调（spp_server_cb / spp_server_gap_cb）：只拷贝数据、记录完成状态、置事件位、非阻塞投递；
- *   不调用任何可能阻塞投递的 API。esp_spp_write / esp_spp_disconnect / esp_spp_start_srv 都经
- *   btc_transfer_context → btc_task_post(OSI_THREAD_MAX_TIMEOUT)（IDF btc_task.c:366），
- *   后者阻塞在 xQueueSend(portMAX_DELAY)，在回调里调用会把 BTC 任务自己锁死。
- * - 发送任务是唯一 SDK write/disconnect 调用者；最多4个在途块，跨会话轮转。
- *   API 前绑定描述符，API 返回前由 users 固定源区。匿名失败只请求候选会话断开。
- *   该任务还处理静态控制表：GAP 的 PIN/CFM 应答与“无安全空槽”的断开请求都从任务上下文执行
- *   （这些 API 经 btc_transfer_context 投递，回调里调用会阻塞 BTC 任务）。
- * - 链路任务（poll_event/read/write/disconnect 的调用者）：单一所有者；read/write 期间登记
- *   session->users，槽在读者/写者退出前不会被新连接复用，也不会被 reset。
- * - SRV_OPEN 只在 BTC 回调里分配一次槽：找不到 users==0 且无在途发送的安全空槽时，登记拒绝
- *   命令并由发送任务断开该连接；不做延后接纳（避免 CLOSE 后重现幽灵会话）。
- * 会话表、发送状态、控制表由 s_spp_mux 临界区保护；临界区内不调用 FreeRTOS API、不阻塞。
- */
+/* spp_server 驱动的内部共享声明：私有类型、唯一状态实例 s_spp、跨文件内部函数原型；只给本组件 .c 用。
+ * 线程：BTC 回调只拷贝/置状态并非阻塞投递（SDK 写/断开经 btc_transfer_context，回调里调用会锁死 BTC 任务）；发送任务是唯一 SDK write/disconnect 调用者；链路任务独占 poll/read/write。
+ * 堆与阻塞：状态与负载缓冲全部静态（缓冲由组合根外供）；s_spp_mux 临界区内不调用 FreeRTOS API、不阻塞。 */
 #pragma once
 
 #include "sdkconfig.h"
@@ -224,14 +209,20 @@ extern portMUX_TYPE s_spp_mux;
 
 /* ---- 追踪钩子（ADR-0009；SppServer.h 冻结接口 spp_server_set_trace_hook 的存储） ---- */
 
-/* 钩子函数指针：写侧在任务上下文安装，读侧在 BTC 回调/发送任务/链路任务里读取。
- * 用 s_spp_mux 临界区保护而不用 _Atomic：临界区只做一次指针读取（不阻塞、不调 FreeRTOS API），
- * 开销与原子读相当，而 C11 _Atomic 在本工程的两套主机前端（clang C11 / clangd 的 C++ 回退）上
- * 诊断不一致。所有调用点都必须在临界区之外（本文件的调用点已满足），否则 portENTER_CRITICAL
- * 在同一核上不可重入。 */
+/* 钩子函数指针：写侧在任务上下文安装，读侧在 BTC 回调/发送任务/链路任务里读取。用 s_spp_mux 临界区
+ * 保护而不用 _Atomic：临界区只做一次指针读取（不阻塞、不调 FreeRTOS API），开销与原子读相当，而 C11
+ * _Atomic 在本工程两套主机前端（clang C11 / clangd 的 C++ 回退）上诊断不一致。调用点都必须在临界区外。 */
 extern spp_server_trace_fn s_spp_trace;
 
-/* 非空才调用：先在本临界区取出函数指针，出临界区后再调用，避免钩子实现里再进临界区。 */
+/**
+ * @brief  追踪上报：取出钩子后在本文件之外调用，钩子为空时直接返回
+ * @param  code: 追踪类别（SPP_SERVER_TRACE_*）
+ * @param  handle: 相关蓝牙句柄或会话下标，无则 0
+ * @param  a: 第一个载荷，含义由 code 决定
+ * @param  b: 第二个载荷，含义由 code 决定
+ * @note  任意任务/BTC 回调、非 ISR；锁内只拷贝函数指针，调用在锁外（钩子实现里可以再进临界区）；
+ *        CONFIG_RTK_TRACE_ENABLE=n 时整个函数被编译成空操作
+ */
 static inline void spp_server_trace(spp_server_trace_code_t code, uint32_t handle, uint32_t a,
                                     uint32_t b)
 {
@@ -256,43 +247,166 @@ static inline void spp_server_trace(spp_server_trace_code_t code, uint32_t handl
 
 /* ---- 跨文件内部函数（每个注明了允许的调用上下文） ---- */
 
-/* SppServerSession.c：会话槽与控制表。
- * find/alloc/free/set_congested/ctrl_add/ctrl_drop_reject 允许 BTC 回调线程调用（只改静态表、非阻塞）；
- * acquire/release 由链路任务在读/写期间调用；ctrl_process 只在发送任务上下文调用。 */
+/* SppServerSession.c：会话槽与静态控制表。
+ * 线程：find/alloc/free/set_congested/ctrl_add/ctrl_drop_reject 由 BTC 回调线程调用；acquire/release 由链路任务
+ *       与发送任务调用；ctrl_process 只在发送任务上下文执行。
+ * 锁：以上函数只在 s_spp_mux 临界区内改静态表，临界区内不调用 FreeRTOS/SDK。 */
+
+/**
+ * @brief  按句柄查会话槽（不登记使用者）
+ * @param  handle: 蓝牙 SPP 句柄
+ * @retval 命中的会话槽指针；没有则 NULL
+ * @note  BTC 回调线程（BTC 是接收流的唯一写者）；返回的槽随时可能被释放，需要稳定引用请改用 acquire
+ */
 spp_server_session_t *spp_server_session_find(uint32_t handle);
+
+/**
+ * @brief  取会话并登记一个使用者，保证返回期间该槽不被复用
+ * @param  handle: 蓝牙 SPP 句柄
+ * @retval 已登记的会话槽；句柄未知或正被分配时 NULL
+ * @note  链路任务/发送任务；锁内登记，登记后该槽不会被复用或 reset，users 归零前 SRV_OPEN 也复用不了；
+ *        每次成功都要配对调用 release
+ */
 spp_server_session_t *spp_server_session_acquire(uint32_t handle);
+
+/**
+ * @brief  注销一个使用者，users 归零时回收该会话的发送状态
+ * @param  session: 已登记使用者持有的会话；NULL 直接返回
+ * @note  任意任务上下文；锁外唤醒发送任务，不阻塞
+ */
 void spp_server_session_release(spp_server_session_t *session);
+
+/**
+ * @brief  为新连接分配会话槽并记录对端地址
+ * @param  handle: 蓝牙 SPP 句柄
+ * @param  addr: 对端地址（6 字节）；NULL 表示槽内地址保持全零
+ * @retval 新槽；该句柄已有在途会话或待投递 REJECT、无空闲槽时 NULL
+ * @note  BTC 回调线程（唯一调用者是 SRV_OPEN 处理）；要求该槽无读者、无在途发送，用 reserving
+ *        串行化；两段临界区之间复位该槽的接收流缓冲，期间其它函数看到 reserving
+ */
 spp_server_session_t *spp_server_session_alloc(uint32_t handle, const uint8_t *addr);
+
+/**
+ * @brief  按句柄释放会话槽
+ * @param  handle: 蓝牙 SPP 句柄
+ * @retval true 找到并释放；false 该句柄当前没有会话
+ * @note  BTC 回调线程；锁外唤醒发送任务，不阻塞
+ */
 bool spp_server_session_free(uint32_t handle);
+
+/**
+ * @brief  记录 SDK 上报的链路拥塞状态并唤醒发送任务
+ * @param  handle: 蓝牙 SPP 句柄
+ * @param  congested: true 进入拥塞，false 解除
+ * @note  BTC 回调线程；状态没有真实变化时只唤醒不计入统计，不阻塞
+ */
 void spp_server_session_set_congested(uint32_t handle, bool congested);
+
+/**
+ * @brief  把一条控制命令放入静态控制表并唤醒发送任务
+ * @param  type: 命令类型（REJECT/PIN_REQ/CFM_REQ）
+ * @param  handle: 目标句柄，PIN/CFM 命令忽略
+ * @param  bda: 对端地址（6 字节），REJECT 可传 NULL
+ * @retval true 已入队或同句柄 REJECT 已在表中；false 表已满（回调上下文不能等待，调用方只能丢弃并记统计）
+ * @note  BTC/GAP 回调线程；只改静态表，锁外非阻塞唤醒发送任务；同句柄 REJECT 幂等，
+ *        已被取走并关闭的 REJECT 会重挂（rearmed）
+ */
 bool spp_server_ctrl_add(spp_server_ctrl_type_t type, uint32_t handle, const uint8_t *bda);
+
+/**
+ * @brief  撤销某句柄待发送的 REJECT 命令
+ * @param  handle: 蓝牙 SPP 句柄
+ * @note  BTC 回调线程（CLOSE 事件）；发送任务已取走并正在投递的命令置 closed，不再下发；撤销窗口
+ *        很小，ctrl_process 里还按会话在册状态复查
+ */
 void spp_server_ctrl_drop_reject(uint32_t handle);
+
+/**
+ * @brief  发送任务侧的控制命令处理：取一条、按类型下发、结算
+ * @note  只在发送任务上下文调用，一次处理一条；PIN/CFM 应答与 REJECT 断开都在这里执行
+ */
 void spp_server_ctrl_process(void);
 
-/* SppServerRx.c：BTC 回调线程的接收与事件投递。 */
+// ---- SppServerRx.c：接收流与事件投递，全部在 BTC 回调线程执行。
+
+/**
+ * @brief  投递一条接收事件（打开/关闭/数据/丢弃）
+ * @param  type: 事件类型
+ * @param  handle: 蓝牙 SPP 句柄
+ * @param  addr: 对端地址（6 字节），仅 OPEN 事件使用
+ * @param  dropped: 随事件交给读者的丢弃字节数（DATA 丢失时为丢掉的字节）
+ * @note  单生产者（BTC 回调），队列操作无需加锁；不阻塞：队列满时本次事件被丢弃并回滚 pending，
+ *        DATA/RX_DROP 的缺失由 poll_event 的 level 状态兜底补发；OPEN/CLOSE 之后唤醒读侧
+ */
 void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint8_t *addr,
                          uint32_t dropped);
+
+/**
+ * @brief  DATA_IND 处理：把负载拷进接收流并投递事件
+ * @param  param: SDK 回调参数，用 data_ind.handle/data/len
+ * @note  BTC 回调线程；只复制不解析；流缓冲剩余空间不足时整包丢弃并累计 dropped
+ */
 void spp_server_handle_data(esp_spp_cb_param_t *param);
+
+/**
+ * @brief  唤醒读侧（已注册的 rx 唤醒钩子 + poll_event 使用者）
+ * @note  BTC 回调线程/任意任务、非 ISR；锁内只取标志与钩子，调用在锁外
+ */
 void spp_server_notify_rx_wake(void);
 
-/* SppServerTx.c：发送任务的入口与 WRITE_EVT 结算（后者在 BTC 回调线程）。 */
+// ---- SppServerTx.c：发送任务主体与 WRITE_EVT 结算（后者在 BTC 回调线程）。
+
+/**
+ * @brief  发送任务主体：处理控制命令、选块、合并、唯一调用 SDK 写出、结算在途块
+ * @param  arg: 未使用
+ * @note  常驻任务（优先级 5、绑核 0、栈由组合根外供）；任务内不持锁调用 esp_spp_write/disconnect，
+ *        退出条件由 stop_boot 置位后唤醒
+ */
 void spp_server_worker(void *arg);
+
+/**
+ * @brief  WRITE_EVT 处理：结算 SDK 写出的块并推进队列
+ * @param  param: SDK 回调参数，用 write.handle/write.status
+ * @note  BTC 回调线程；只改静态状态，不阻塞，不调用 SDK 写接口、不解析/打印数据内容。
+ *        SDK 回调不带请求号，只匹配同 handle 最早待完成块，generation 防止本地槽复用串味；
+ *        handle==0 且 len==-1 的失败回调按匿名失败处理（会话整代置断开）
+ */
 void spp_server_handle_write(esp_spp_cb_param_t *param);
-/* 以下 locked 仅在 mux 内调用；reclaim 在 users 归零后解绑唯一 stream。 */
+
+/**
+ * @brief  会话关闭时的发送状态清理（需持 s_spp_mux）
+ * @param  session: 会话
+ * @note  临界区内调用；把在途块标记取消并归还环形空间，不调用 FreeRTOS/SDK
+ */
 void spp_server_tx_close_locked(spp_server_session_t *session);
+
+/**
+ * @brief  users 归零后回收会话的发送状态与 stream 占位（需持 s_spp_mux）
+ * @param  session: 会话
+ * @note  临界区内调用；解绑该会话占用的唯一 stream 环，不调用 FreeRTOS/SDK
+ */
 void spp_server_tx_reclaim_locked(spp_server_session_t *session);
-/* 任意任务/BTC、非 ISR；锁外合并投递 TX_SPACE 并唤醒 worker。 */
+
+/**
+ * @brief  合并投递 TX_SPACE 位并唤醒发送任务
+ * @note  任意任务/BTC 回调、非 ISR；锁内只置位去重，唤醒在锁外，不阻塞
+ */
 void spp_server_tx_wake(void);
 
-/* SppServerGap.c：两个 Bluedroid 回调的注册入口（BTC 回调线程调用）。 */
-/* 蓝牙栈各阶段完成标志；只在启动/停止路径读写。 */
+// ---- SppServerTxRing.c：环形空间、预留令牌与提交。reserve 走同步写路径，*_locked 只在 mux 内调用。
+
 /**
  * @brief  在指定通道上预留一段发送窗口（同步写路径直接调用；异步路径用 reply/stream_reserve）
  * @param  handle: 蓝牙 SPP 句柄
- * @param  len: 要预留的字节数
+ * @param  len: 要预留的字节数，1..SPP_SERVER_STREAM_CAPACITY
  * @param  channel: SPP_SERVER_CHANNEL_* 通道编号
- * @param[out] token: 返回的令牌，需 commit 或 cancel
- * @retval ESP_OK 预留成功；ESP_ERR_INVALID_STATE 会话不可用；ESP_ERR_NO_MEM 环形空间不足
+ * @param[out] token: 成功时写入句柄/通道/代数/序号/容量；失败时不被修改
+ * @retval ESP_OK 预留成功，环形空间已记账，必须 commit 或 cancel
+ * @retval ESP_ERR_INVALID_ARG token 为 NULL，或 len 为 0/超过 4096
+ * @retval ESP_ERR_INVALID_STATE 驱动未初始化；或 stream 通道归其它会话/已被解绑
+ * @retval ESP_ERR_NOT_FOUND 该句柄当前没有会话
+ * @retval ESP_ERR_TIMEOUT 会话断开中、正在提交、已有预留或环内空间不足（零接纳，计入 paused）
+ * @note  任意任务、非 ISR；只在锁内记账，不复制负载
  */
 esp_err_t spp_server_reserve(uint32_t handle, size_t len, uint8_t channel,
                              spp_server_tx_token_t *token);
@@ -313,8 +427,10 @@ spp_server_session_t *spp_server_find_locked(uint32_t handle);
 spp_server_inflight_t *spp_server_oldest_locked(uint8_t slot, bool pending_only);
 
 /**
- * @brief  发送任务一轮：选块、合并、写、提交（worker 调用）
- * @retval true 本轮提交了数据；false 无数据可发
+ * @brief  发送任务一轮：取控制命令以外的待发数据，合并后在锁外写出
+ * @retval true 本轮提交了数据；false 没有可发数据
+ * @note  只在发送任务上下文调用；锁内选块，esp_spp_write 在锁外；merge_buf 不会被第二个 API 复用，
+ *        回调早于返回也保留 submitting/users，未归零前槽不会被复用
  */
 bool spp_server_worker_submit(void);
 
@@ -337,27 +453,52 @@ typedef struct {
 } spp_server_hw_state_t;
 
 /**
- * @brief  逆序释放蓝牙栈：Bluedroid 先于控制器（失败只记日志）
+ * @brief  逆序释放仍处于已使能/已初始化状态的蓝牙栈阶段，Bluedroid 先于控制器
+ * @param  bluedroid_enabled: Bluedroid 已使能时先 esp_bluedroid_disable
+ * @param  bluedroid_inited: Bluedroid 已初始化时再 esp_bluedroid_deinit
+ * @param  controller_enabled: 控制器已使能时 esp_bt_controller_disable
+ * @param  controller_inited: 控制器已初始化时再 esp_bt_controller_deinit
+ * @note  启动/停止路径（调用方任务）调用；某一步失败只记日志并继续下一步，不阻塞等待
  */
 void spp_server_unwind(bool bluedroid_enabled, bool bluedroid_inited, bool controller_enabled,
                        bool controller_inited);
 
 /**
- * @brief  清零各阶段完成标志
+ * @brief  把蓝牙栈各阶段完成标志全部清零
+ * @param[out] state: 要清零的状态；所有字段写成 false
+ * @note  只在启动/停止路径读写该结构，无并发访问
  */
 void spp_server_hw_state_clear(spp_server_hw_state_t *state);
 
 /**
- * @brief  初始化并使能控制器与 Bluedroid；失败时内部逆序释放并清零 state
- * @retval ESP_OK 成功；其他为 IDF 错误码
+ * @brief  初始化并使能控制器与 Bluedroid
+ * @param[out] state: 阶段完成标志；每一步成功后置位，失败时内部逆序释放并清零
+ * @retval ESP_OK 控制器与 Bluedroid 均已初始化并使能
+ * @retval 其他 IDF 错误码 该步失败（此前成功的阶段已释放，state 已清零）
+ * @note  只能在 spp_server_init() 的启动路径调用；会经 btc_transfer_context 阻塞等待，耗时可到秒级
  */
 esp_err_t spp_server_hw_init(spp_server_hw_state_t *state);
 
 /**
  * @brief  注册 GAP/SPP 回调、设置 SSP 参数并发起 SPP 初始化
- * @retval ESP_OK 成功；其他为 IDF 错误码（由调用方统一 unwind）
+ * @retval ESP_OK 回调已注册且 SPP 初始化请求已提交
+ * @retval 其他 IDF 错误码 注册/配置失败，由调用方统一 unwind
+ * @note  只能在 spp_server_init() 的启动路径调用；初始化完成由 INIT_EVT 回调置位，不在此等待
  */
 esp_err_t spp_server_profile_init(void);
 
+/**
+ * @brief  SPP 事件入口（注册给 esp_spp_register_callback）
+ * @param  event: 事件类型，未处理的事件直接忽略
+ * @param  param: 事件参数；NULL 时直接返回
+ * @note  BTC 回调线程；只拷贝数据、改状态、置事件位、非阻塞投递，绝不调用 SDK 写/断开接口
+ */
 void spp_server_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
+
+/**
+ * @brief  GAP 事件入口（注册给 esp_bt_gap_register_callback）
+ * @param  event: 事件类型，只处理 AUTH_CMPL/PIN_REQ/CFM_REQ
+ * @param  param: 事件参数；NULL 时直接返回
+ * @note  BTC 回调线程；PIN/CFM 应答复制地址后交给发送任务执行，认证结果只记追踪
+ */
 void spp_server_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
