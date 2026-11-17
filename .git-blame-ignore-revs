@@ -3,3 +3,5 @@
 031f95871154dd6788b9f6843455a98b296727ac
 # S2-B1 app_fw/rtos/cli 改名
 2bad7da904f3c32d36470df21d42fa1419e4d43e
+# S2-B2 stream_demux/device_proto/link_core/bt_reconnect/spp_server/nvs_store 改名
+2c2670a496435ec5ec9d3bcd04e01bc956edc36f
