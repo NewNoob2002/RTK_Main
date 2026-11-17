@@ -242,6 +242,9 @@ static void test_caps()
                      gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz,
                      gnss::ublox_receiver().caps(gnss::Model::kZedF9p));
     TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, gnss::ublox_receiver().caps(gnss::Model::kZedF9p));
+    // 单型号驱动：for_model 对任何型号都返回自身（ADR-0012 §2.8）。
+    TEST_ASSERT_TRUE(&gnss::ublox_receiver().for_model(gnss::Model::kZedF9p) == &gnss::ublox_receiver());
+    TEST_ASSERT_TRUE(&gnss::ublox_receiver().for_model(gnss::Model::kUm982) == &gnss::ublox_receiver());
 }
 
 // ---- 黄金向量比对（ADR-0012 P3a 第 3 步）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----

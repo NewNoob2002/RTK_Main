@@ -163,6 +163,9 @@ void test_caps()
     TEST_ASSERT_TRUE((k803 & gnss::cap::kBase) != 0);
     TEST_ASSERT_EQUAL_UINT32(0, k803 & gnss::cap::kIns);
     TEST_ASSERT_EQUAL_UINT32(0, k803 & gnss::cap::kHeading);
+    // 单型号驱动：for_model 对任何型号都返回自身（ADR-0012 §2.8）。
+    TEST_ASSERT_TRUE(&gnss::comnav_receiver().for_model(gnss::Model::kK803) == &gnss::comnav_receiver());
+    TEST_ASSERT_TRUE(&gnss::comnav_receiver().for_model(gnss::Model::kUm982) == &gnss::comnav_receiver());
 }
 
 } // namespace

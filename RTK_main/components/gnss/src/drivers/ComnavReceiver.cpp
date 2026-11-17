@@ -1,5 +1,6 @@
 // ComNav K8（K803）驱动实现：NovAtel 风格命令与 "<OK/<ERROR" 应答（ADR-0010 §2.2，实验性、未经实物验证）。
-// 结构（P3r）：cmd:: 只生成一条完整命令，resp:: 只判应答类别，script 表把“第几步做什么”与流程分开。
+// 结构（P3s）：命令生成（cmd_*）与应答判定（resp_*）是 ComnavReceiver 的 protected static，子类可直接复用；
+// 脚本步骤的回调写在 rover_step 内（要取 protected 成员的地址，匿名命名空间的自由函数没有访问权）。
 // 线程/调用约束：纯函数，无全局可变状态，可重入、不阻塞。
 // 堆：不使用。注意：未取得官方手册，语法按公开的 NovAtel 兼容资料实现；改动前须先修订 ADR-0010 §2.2。
 #include "gnss/drivers/ComnavReceiver.hpp"
@@ -15,7 +16,7 @@
 #include "demux/decoders/UnicoreHash.hpp"
 #include "../AsciiCmd.hpp"
 
-namespace gnss::comnav {
+namespace gnss {
 namespace {
 
 constexpr uint8_t kPrompt = static_cast<uint8_t>('<');
@@ -32,125 +33,7 @@ constexpr std::array<const char *, kOutputMsgCount> kOutputNames = {
 };
 
 // <OK 提示符应答（classify_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器。
-constexpr std::array<const demux::Decoder *, 2> kDecoders{&kPromptDecoder, &demux::unicore_hash::kDecoder};
-
-/**
- * 命令库：每个函数只把一条完整命令（含 "\r\n"）写进 out，不关心什么时候发。
- * 失败一律返回 false（缓冲不足或参数无法表示），out 内容随即作废。
- */
-namespace cmd {
-
-/**
- * @brief 关闭该口全部输出："UNLOGALL COMn"。
- * @param out: 目标命令缓冲（先清空）。
- * @param port: 接收机端口号。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool unlog_all(CmdBuf &out, uint8_t port) noexcept
-{
-    out.clear();
-    return out.append("UNLOGALL COM") && ascii::append_uint(out, port) && out.append("\r\n");
-}
-
-/**
- * @brief 切到流动站模式："MODE ROVER"。
- * @param out: 目标命令缓冲（先清空）。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool mode_rover(CmdBuf &out) noexcept
-{
-    out.clear();
-    return out.append("MODE ROVER\r\n");
-}
-
-/**
- * @brief 改端口波特率："COM COMn <baud>"。
- * @param out: 目标命令缓冲（先清空）。
- * @param port: 接收机端口号。
- * @param baud: 目标波特率。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool com_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
-{
-    out.clear();
-    return out.append("COM COM") && ascii::append_uint(out, port) && out.append(" ") && ascii::append_uint(out, baud) &&
-           out.append("\r\n");
-}
-
-/**
- * @brief 以给定周期开启一类报文："LOG COMn <name> ONTIME <period>"。
- * @param out: 目标命令缓冲（先清空）。
- * @param name: 报文体名字（如 "GPGGA"）。
- * @param port: 接收机端口号。
- * @param period_ms: 周期（毫秒），必须是 10 ms 整数倍。
- * @retval true: 已写入完整命令。
- * @retval false: 周期粒度不合法或缓冲空间不足。
- */
-bool log_ontime(CmdBuf &out, std::string_view name, uint8_t port, uint32_t period_ms) noexcept
-{
-    out.clear();
-    return out.append("LOG COM") && ascii::append_uint(out, port) && out.append(" ") && out.append(name) &&
-           out.append(" ONTIME ") && ascii::append_period(out, period_ms) && out.append("\r\n");
-}
-
-/**
- * @brief 关闭一类报文："UNLOG COMn <name>"。
- * @param out: 目标命令缓冲（先清空）。
- * @param name: 报文体名字（如 "GPGSV"）。
- * @param port: 接收机端口号。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool unlog_msg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
-{
-    out.clear();
-    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append(" ") && out.append(name) &&
-           out.append("\r\n");
-}
-
-/**
- * @brief 探测用的版本查询："LOG VERSIONA ONCE"。
- * @param out: 目标命令缓冲（先清空）。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool version_query(CmdBuf &out) noexcept
-{
-    out.clear();
-    return out.append("LOG VERSIONA ONCE\r\n");
-}
-
-} // namespace cmd
-
-/** 应答库：只判“成功/失败”，具体文本不进主流程。 */
-namespace resp {
-
-/**
- * @brief 是否为确认应答（"<OK"）。
- * @param frame: 整帧字节。
- * @retval true: 以 "<OK" 开头。
- * @retval false: 其他。
- */
-bool is_ok(std::span<const uint8_t> frame) noexcept
-{
-    return ascii::starts_with(frame, "<OK");
-}
-
-/**
- * @brief 是否为拒绝应答（"<ERROR"）。
- * @param frame: 整帧字节。
- * @retval true: 以 "<ERROR" 开头。
- * @retval false: 其他。
- */
-bool is_error(std::span<const uint8_t> frame) noexcept
-{
-    return ascii::starts_with(frame, "<ERROR");
-}
-
-} // namespace resp
+constexpr std::array<const demux::Decoder *, 2> kDecoders{&comnav::kPromptDecoder, &demux::unicore_hash::kDecoder};
 
 /** 应答行的判定原因，explain 与 step 共用同一份判定逻辑。 */
 enum class PromptReason : uint8_t {
@@ -233,6 +116,11 @@ PromptVerdict judge(std::span<const uint8_t> frame) noexcept
     return verdict;
 }
 
+/**
+ * @brief 把判定原因写成一句英文（explain 契约）。
+ * @param verdict: judge 的结论。
+ * @param text: 输出文本写入器。
+ */
 void explain_verdict(const PromptVerdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
@@ -278,75 +166,27 @@ bool port_baud_enabled(const RoverConfig &cfg) noexcept
     return cfg.port_baud != 0U;
 }
 
-/**
- * @brief 第 0 步：先关掉全部输出，再由输出阶段按 OutputPlan 重新开启。
- * @param cfg: 流动站配置（用端口号）。
- * @param out: 输出步骤。
- * @retval true: 步骤可用。
- * @retval false: 命令生成失败。
- */
-bool step_unlog_all(const RoverConfig &cfg, ConfigStep &out) noexcept
-{
-    if (!cmd::unlog_all(out.cmd, cfg.port)) {
-        return false;
-    }
-    out.expect_reply = true;
-    out.timeout_ms = kConfigTimeoutMs;
-    out.switch_baud = 0;
-    return true;
-}
-
-/**
- * @brief 第 1 步：切到流动站模式。
- * @param cfg: 流动站配置（本步不使用）。
- * @param out: 输出步骤。
- * @retval true: 步骤可用。
- * @retval false: 命令生成失败。
- */
-bool step_mode_rover(const RoverConfig &cfg, ConfigStep &out) noexcept
-{
-    static_cast<void>(cfg);
-    if (!cmd::mode_rover(out.cmd)) {
-        return false;
-    }
-    out.expect_reply = true;
-    out.timeout_ms = kConfigTimeoutMs;
-    out.switch_baud = 0;
-    return true;
-}
-
-/**
- * @brief 第 2 步：改端口波特率；切换后不再按旧速率等待应答。
- * @param cfg: 流动站配置（用端口号与目标波特率）。
- * @param out: 输出步骤（switch_baud = 目标波特率）。
- * @retval true: 步骤可用。
- * @retval false: 命令生成失败。
- */
-bool step_port_baud(const RoverConfig &cfg, ConfigStep &out) noexcept
-{
-    if (!cmd::com_baud(out.cmd, cfg.port, cfg.port_baud)) {
-        return false;
-    }
-    out.expect_reply = false;
-    out.timeout_ms = kConfigTimeoutMs;
-    out.switch_baud = cfg.port_baud;
-    return true;
-}
-
-/** 基础脚本：顺序即配置顺序，可选步骤用 enabled 表达。 */
-constexpr std::array<ScriptStep, 3> kRoverScript{{
-    {&step_unlog_all, &always},
-    {&step_mode_rover, &always},
-    {&step_port_baud, &port_baud_enabled},
-}};
-
 } // namespace
 
+namespace comnav {
+
+/**
+ * @brief 提示符应答行的起始字节判定。
+ * @param byte: 待判字节。
+ * @retval true: 是 '<'。
+ * @retval false: 其他。
+ */
 bool prompt_first_byte(uint8_t byte) noexcept
 {
     return byte == kPrompt;
 }
 
+/**
+ * @brief 提示符应答行的成帧判定（demux 引擎每收到一字节调用，须 ISR 安全）。
+ * @param frame: 已收到的字节。
+ * @param need: 输出，至少还差多少字节（kNeedMore 时有效）。
+ * @retval step: kFrame / kNeedMore / kReject。
+ */
 demux::Step prompt_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
     const PromptVerdict verdict = judge(frame);
@@ -354,6 +194,12 @@ demux::Step prompt_step(std::span<const uint8_t> frame, std::size_t &need) noexc
     return verdict.step;
 }
 
+/**
+ * @brief 把拒绝原因写成一句英文（诊断为“not rejected”表示帧本身没问题）。
+ * @param frame: 已收到的字节。
+ * @param out: 输出缓冲。
+ * @retval len: 写入的字符数。
+ */
 std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) noexcept
 {
     demux::text_writer::TextWriter text(out);
@@ -368,12 +214,153 @@ std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) 
     return text.finish();
 }
 
-bool probe_cmd(CmdBuf &out) noexcept
+} // namespace comnav
+
+namespace {
+
+constinit const ComnavReceiver s_comnavReceiver{};
+
+} // namespace
+
+// ---- 命令库：每个函数只把一条完整命令（含 "\r\n"）写进 out，不关心什么时候发 ----
+
+/**
+ * @brief 关闭该口全部输出："UNLOGALL COMn"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param port: 接收机端口号。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool ComnavReceiver::cmd_unlog_all(CmdBuf &out, uint8_t port) noexcept
 {
-    return cmd::version_query(out);
+    out.clear();
+    return out.append("UNLOGALL COM") && ascii::append_uint(out, port) && out.append("\r\n");
 }
 
-bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
+/**
+ * @brief 切到流动站模式："MODE ROVER"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool ComnavReceiver::cmd_mode_rover(CmdBuf &out) noexcept
+{
+    out.clear();
+    return out.append("MODE ROVER\r\n");
+}
+
+/**
+ * @brief 改端口波特率："COM COMn <baud>"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param port: 接收机端口号。
+ * @param baud: 目标波特率。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool ComnavReceiver::cmd_com_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
+{
+    out.clear();
+    return out.append("COM COM") && ascii::append_uint(out, port) && out.append(" ") && ascii::append_uint(out, baud) &&
+           out.append("\r\n");
+}
+
+/**
+ * @brief 以给定周期开启一类报文："LOG COMn <name> ONTIME <period>"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param name: 报文体名字（如 "GPGGA"）。
+ * @param port: 接收机端口号。
+ * @param period_ms: 周期（毫秒），必须是 10 ms 整数倍。
+ * @retval true: 已写入完整命令。
+ * @retval false: 周期粒度不合法或缓冲空间不足。
+ */
+bool ComnavReceiver::cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t port, uint32_t period_ms) noexcept
+{
+    out.clear();
+    return out.append("LOG COM") && ascii::append_uint(out, port) && out.append(" ") && out.append(name) &&
+           out.append(" ONTIME ") && ascii::append_period(out, period_ms) && out.append("\r\n");
+}
+
+/**
+ * @brief 关闭一类报文："UNLOG COMn <name>"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param name: 报文体名字（如 "GPGSV"）。
+ * @param port: 接收机端口号。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool ComnavReceiver::cmd_unlog_msg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
+{
+    out.clear();
+    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append(" ") && out.append(name) &&
+           out.append("\r\n");
+}
+
+/**
+ * @brief 探测用的版本查询："LOG VERSIONA ONCE"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool ComnavReceiver::cmd_version_query(CmdBuf &out) noexcept
+{
+    out.clear();
+    return out.append("LOG VERSIONA ONCE\r\n");
+}
+
+// ---- 应答判定：只判“成功/失败”，具体文本不进主流程 ----
+
+/**
+ * @brief 是否为确认应答（"<OK"）。
+ * @param frame: 整帧字节。
+ * @retval true: 以 "<OK" 开头。
+ * @retval false: 其他。
+ */
+bool ComnavReceiver::resp_is_ok(std::span<const uint8_t> frame) noexcept
+{
+    return ascii::starts_with(frame, "<OK");
+}
+
+/**
+ * @brief 是否为拒绝应答（"<ERROR"）。
+ * @param frame: 整帧字节。
+ * @retval true: 以 "<ERROR" 开头。
+ * @retval false: 其他。
+ */
+bool ComnavReceiver::resp_is_error(std::span<const uint8_t> frame) noexcept
+{
+    return ascii::starts_with(frame, "<ERROR");
+}
+
+// ---- 驱动成员 ----
+
+Family ComnavReceiver::family() const noexcept
+{
+    return Family::kComnav;
+}
+
+std::string_view ComnavReceiver::name() const noexcept
+{
+    return "comnav";
+}
+
+std::span<const demux::Decoder *const> ComnavReceiver::decoders() const noexcept
+{
+    return kDecoders;
+}
+
+uint32_t ComnavReceiver::caps(Model model) const noexcept
+{
+    static_cast<void>(model); // 单型号：K803 有 RTCM 输入与基站能力
+    return cap::kRtcmIn | cap::kBase;
+}
+
+bool ComnavReceiver::build_probe(CmdBuf &out) const noexcept
+{
+    return cmd_version_query(out);
+}
+
+bool ComnavReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                 ProbeResult &out) const noexcept
 {
     if ((&dec != &demux::unicore_hash::kDecoder) || (frame.size() < kVersionTag.size()) ||
         !ascii::starts_with(frame, kVersionTag)) {
@@ -389,9 +376,43 @@ bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, Prob
     return true;
 }
 
-bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
+bool ComnavReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
 {
     static_cast<void>(model); // 目前只覆盖 K803；报文输出改由输出阶段（build_output）下发
+    // 表放在成员函数作用域内：步骤回调要调 protected 的 cmd_*，匿名命名空间的自由函数没有访问权。
+    static constexpr std::array<ScriptStep, 3> kRoverScript{{
+        {[](const RoverConfig &c, ConfigStep &o) noexcept {
+             if (!cmd_unlog_all(o.cmd, c.port)) {
+                 return false;
+             }
+             o.expect_reply = true;
+             o.timeout_ms = kConfigTimeoutMs;
+             o.switch_baud = 0;
+             return true;
+         },
+         &always},
+        {[](const RoverConfig &c, ConfigStep &o) noexcept {
+             static_cast<void>(c); // “MODE ROVER” 与配置无关
+             if (!cmd_mode_rover(o.cmd)) {
+                 return false;
+             }
+             o.expect_reply = true;
+             o.timeout_ms = kConfigTimeoutMs;
+             o.switch_baud = 0;
+             return true;
+         },
+         &always},
+        {[](const RoverConfig &c, ConfigStep &o) noexcept {
+             if (!cmd_com_baud(o.cmd, c.port, c.port_baud)) {
+                 return false;
+             }
+             o.expect_reply = false;
+             o.timeout_ms = kConfigTimeoutMs;
+             o.switch_baud = c.port_baud;
+             return true;
+         },
+         &port_baud_enabled},
+    }};
     size_t position = 0;
     for (const ScriptStep &step : kRoverScript) {
         if (!step.enabled(cfg)) {
@@ -405,75 +426,20 @@ bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &
     return false; // 脚本结束
 }
 
-Ack reply_ack(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t> sent) noexcept
-{
-    static_cast<void>(sent); // NovAtel 应答不回显命令，只判类别
-    if (&dec != &kPromptDecoder) {
-        return Ack::kNone;
-    }
-    if (resp::is_ok(frame)) {
-        return Ack::kAck;
-    }
-    if (resp::is_error(frame)) {
-        return Ack::kNack;
-    }
-    return Ack::kNone;
-}
-
-uint32_t model_caps(Model model) noexcept
-{
-    static_cast<void>(model); // 单型号：K803 有 RTCM 输入与基站能力
-    return cap::kRtcmIn | cap::kBase;
-}
-
-} // namespace gnss::comnav
-
-namespace gnss {
-
-namespace {
-constinit const ComnavReceiver s_comnavReceiver{};
-}
-
-Family ComnavReceiver::family() const noexcept
-{
-    return Family::kComnav;
-}
-
-std::string_view ComnavReceiver::name() const noexcept
-{
-    return "comnav";
-}
-
-std::span<const demux::Decoder *const> ComnavReceiver::decoders() const noexcept
-{
-    return comnav::kDecoders;
-}
-
-uint32_t ComnavReceiver::caps(Model model) const noexcept
-{
-    return comnav::model_caps(model);
-}
-
-bool ComnavReceiver::build_probe(CmdBuf &out) const noexcept
-{
-    return comnav::cmd::version_query(out);
-}
-
-bool ComnavReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                 ProbeResult &out) const noexcept
-{
-    return comnav::probe_match(dec, frame, out);
-}
-
-bool ComnavReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
-{
-    return comnav::script_step(index, model, cfg, out);
-}
-
 Ack ComnavReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                    std::span<const uint8_t> sent) const noexcept
 {
-    return comnav::reply_ack(dec, frame, sent);
+    static_cast<void>(sent); // NovAtel 应答不回显命令，只判类别
+    if (&dec != &comnav::kPromptDecoder) {
+        return Ack::kNone;
+    }
+    if (resp_is_ok(frame)) {
+        return Ack::kAck;
+    }
+    if (resp_is_error(frame)) {
+        return Ack::kNack;
+    }
+    return Ack::kNone;
 }
 
 uint32_t ComnavReceiver::output_mask(Model model) const noexcept
@@ -491,16 +457,16 @@ fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model
                                         CmdBuf &out) const noexcept
 {
     const auto idx = static_cast<size_t>(static_cast<uint8_t>(msg));
-    if ((msg == OutputMsg::kNone) || (idx >= comnav::kOutputNames.size())) {
+    if ((msg == OutputMsg::kNone) || (idx >= kOutputNames.size())) {
         return fw::Status::kInvalidArg;
     }
     if ((output_mask(model) & (1U << static_cast<uint32_t>(msg))) == 0U) {
         return fw::Status::kNotSupported;
     }
-    const std::string_view name{comnav::kOutputNames[idx]};
+    const std::string_view name{kOutputNames[idx]};
     // period 0 = 关闭该类；旧 apply 旁路同样用 "UNLOG COMn <name>"。
-    const bool written = (period_ms == 0U) ? comnav::cmd::unlog_msg(out, name, plan.port)
-                                           : comnav::cmd::log_ontime(out, name, plan.port, period_ms);
+    const bool written =
+        (period_ms == 0U) ? cmd_unlog_msg(out, name, plan.port) : cmd_log_ontime(out, name, plan.port, period_ms);
     if (!written) {
         out.clear();
         return fw::Status::kInvalidArg;

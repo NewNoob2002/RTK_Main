@@ -150,11 +150,15 @@ struct ControllerImpl {
         self.waiting_reply_ = false;
     }
 
-    /** @brief 探测命中：定格型号/能力并进入配置脚本。 */
+    /**
+     * @brief 探测命中：定格型号/能力并进入配置脚本。
+     * @param self: 控制器（读 detected_，写 caps/state_/phase_）。
+     */
     static void enter_configuring(Controller &self) noexcept
     {
+        // 能力必须问“具体型号的那个驱动”：家族驱动对 UM982 只报 UM980 能力（ADR-0012 §2.8）。
         self.detected_.caps =
-            self.probe_receiver_ != nullptr ? self.probe_receiver_->caps(self.detected_.probe.model) : 0U;
+            self.detected_.receiver != nullptr ? self.detected_.receiver->caps(self.detected_.probe.model) : 0U;
         self.state_ = State::kConfiguring;
         self.phase_ = 0;
         self.step_index_ = 0;
@@ -709,6 +713,12 @@ Action Controller::poll(uint32_t now_ms) noexcept
     return Action{};
 }
 
+/**
+ * @brief 把一帧协议数据交给当前阶段：探测时试匹配型号，等待应答时判 ACK/NACK。
+ * @param dec: 该帧的解码器。
+ * @param frame: 整帧字节。
+ * @param now_ms: 当前时间（只用于判“模块还在说话”）。
+ */
 void Controller::on_frame(const demux::Decoder &dec, std::span<const uint8_t> frame, uint32_t now_ms) noexcept
 {
     last_frame_ms_ = now_ms; // 任意协议帧都算“模块还在说话”
@@ -716,7 +726,8 @@ void Controller::on_frame(const demux::Decoder &dec, std::span<const uint8_t> fr
         ProbeResult result{};
         if (probe_receiver_->match_probe(dec, frame, result)) {
             detected_.probe = result;
-            detected_.receiver = probe_receiver_;
+            // 命中后换成该型号的驱动实例（家族驱动的 for_model 默认返回自身）。
+            detected_.receiver = &probe_receiver_->for_model(result.model);
             detected_.baud = host_baud_;
             probe_hit_ = true;
         }

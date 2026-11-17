@@ -29,9 +29,18 @@ inline constexpr demux::Decoder kPromptDecoder{"ComnavPrompt", kPromptMaxFrame, 
 namespace gnss {
 
 /** K803 驱动（定义在 src/drivers/ComnavReceiver.cpp）。 */
-class ComnavReceiver final : public Receiver {
+class ComnavReceiver : public Receiver {
 public:
     constexpr ComnavReceiver() noexcept = default;
+    // 去掉 final 后必须公开虚析构：基类 Receiver 的 protected 非虚析构会挡住命名空间作用域的对象定义，
+    // 且 -Wnon-virtual-dtor 视为错误（与 UnicoreReceiver 同一处理）。
+    // 驱动对象仍只在静态存储以 constinit 存活，从不 new/delete，故删除拷贝/移动。
+    virtual ~ComnavReceiver() = default;
+
+    ComnavReceiver(const ComnavReceiver &) = delete;
+    ComnavReceiver &operator=(const ComnavReceiver &) = delete;
+    ComnavReceiver(ComnavReceiver &&) = delete;
+    ComnavReceiver &operator=(ComnavReceiver &&) = delete;
 
     [[nodiscard]] Family family() const noexcept override;
     [[nodiscard]] std::string_view name() const noexcept override;
@@ -49,6 +58,21 @@ public:
     /** "LOG COMn <name> ONTIME <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）。 */
     [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
                                           CmdBuf &out) const noexcept override;
+
+protected:
+    // ---- 命令库：只往 out 写一条完整命令（含 \r\n，先清空），失败返回 false ----
+    [[nodiscard]] static bool cmd_unlog_all(CmdBuf &out, uint8_t port) noexcept;               // "UNLOGALL COMn"
+    [[nodiscard]] static bool cmd_mode_rover(CmdBuf &out) noexcept;                            // "MODE ROVER"
+    [[nodiscard]] static bool cmd_com_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept; // "COM COMn <baud>"
+    [[nodiscard]] static bool cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t port,
+                                             uint32_t period_ms) noexcept; // "LOG COMn <name> ONTIME <period>"
+    [[nodiscard]] static bool cmd_unlog_msg(CmdBuf &out, std::string_view name,
+                                            uint8_t port) noexcept;    // "UNLOG COMn <name>"
+    [[nodiscard]] static bool cmd_version_query(CmdBuf &out) noexcept; // "LOG VERSIONA ONCE"
+
+    // ---- 应答判定：只判成功/失败，具体文本不进主流程 ----
+    [[nodiscard]] static bool resp_is_ok(std::span<const uint8_t> frame) noexcept;    // 以 "<OK" 开头
+    [[nodiscard]] static bool resp_is_error(std::span<const uint8_t> frame) noexcept; // 以 "<ERROR" 开头
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */

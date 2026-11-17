@@ -1,6 +1,6 @@
 // Unicore N4（UM980/UM981/UM982）驱动实现：$command 应答解码、VERSIONA 探测、流动站配置脚本（ADR-0010 §2.2/§2.4）。
-// 结构（P3r）：cmd:: 只生成一条完整命令，resp:: 只判定应答的一部分，script 表把“第几步做什么”与流程分开；
-// 其余是成帧判定（judge 家族）与驱动成员实现。
+// 结构（P3s）：命令生成（cmd_*）、应答判定（resp_*）与脚本步骤（step_*）是 UnicoreReceiver 的 protected static，
+// 型号子类（Um982Receiver）直接复用；文件内匿名命名空间只留成帧判定（judge 家族）与型号识别。
 // 线程/调用约束：全部为纯函数（无全局可变状态），可从任意任务调用，不可阻塞；应答解码器亦可用于 ISR 安全的
 // demux 引擎（first_byte/step 只读入参）。
 // 堆：不使用。浮点：不使用（频率参数按手册写死为文本）。
@@ -18,7 +18,7 @@
 #include "../AsciiCmd.hpp"
 #include "../FrameTag.hpp"
 
-namespace gnss::unicore {
+namespace gnss {
 namespace {
 
 constexpr uint8_t kDollar = static_cast<uint8_t>('$');
@@ -35,179 +35,12 @@ constexpr std::size_t kStarFromEnd = ascii::kTailBytes;
 constexpr uint32_t kConfigTimeoutMs = 500U;
 
 // $command 应答（classify_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器，缺一则对应帧落入 unknown。
-constexpr std::array<const demux::Decoder *, 2> kDecoders{&kResponseDecoder, &demux::unicore_hash::kDecoder};
+constexpr std::array<const demux::Decoder *, 2> kDecoders{&unicore::kResponseDecoder, &demux::unicore_hash::kDecoder};
 
 /** 报文名字（下标 = OutputMsg）：与大写常量同名，便于与手册/日志对照。 */
 constexpr std::array<const char *, kOutputMsgCount> kOutputNames = {
     "GPGGA", "SATSINFOA", "HEADINGA", "GPGST", "GPRMC", "GPGSA", "GPGSV",
 };
-
-/**
- * 命令库：每个函数只把一条完整命令（含 "\r\n"）写进 out，不关心什么时候发。
- * 失败一律返回 false（缓冲不足或参数无法表示），out 内容随即作废。
- */
-namespace cmd {
-
-/**
- * @brief 关闭该口全部报文输出："UNLOG COMn"。
- * @param out: 目标命令缓冲（先清空）。
- * @param port: 接收机端口号（1..4）。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool unlog(CmdBuf &out, uint8_t port) noexcept
-{
-    out.clear();
-    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append("\r\n");
-}
-
-/**
- * @brief 切到流动站模式："MODE ROVER"。
- * @param out: 目标命令缓冲（先清空）。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool mode_rover(CmdBuf &out) noexcept
-{
-    out.clear();
-    return out.append("MODE ROVER\r\n");
-}
-
-/**
- * @brief 改端口波特率："CONFIG COMn <baud>"。
- * @param out: 目标命令缓冲（先清空）。
- * @param port: 接收机端口号。
- * @param baud: 目标波特率（如 921600）。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool config_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
-{
-    out.clear();
-    return out.append("CONFIG COM") && ascii::append_uint(out, port) && out.append(" ") &&
-           ascii::append_uint(out, baud) && out.append("\r\n");
-}
-
-/**
- * @brief 以给定周期开启一类报文："<name> COMn <period>"。
- * @param out: 目标命令缓冲（先清空）。
- * @param name: 报文体名字（如 "GPGGA"）。
- * @param port: 接收机端口号。
- * @param period_ms: 周期（毫秒），必须是 10 ms 整数倍。
- * @retval true: 已写入完整命令。
- * @retval false: 周期粒度不合法或缓冲空间不足。
- */
-bool log_msg(CmdBuf &out, std::string_view name, uint8_t port, uint32_t period_ms) noexcept
-{
-    out.clear();
-    return out.append(name) && out.append(" COM") && ascii::append_uint(out, port) && out.append(" ") &&
-           ascii::append_period(out, period_ms) && out.append("\r\n");
-}
-
-/**
- * @brief 关闭一类报文："UNLOG COMn <name>"。
- * @param out: 目标命令缓冲（先清空）。
- * @param name: 报文体名字（如 "GPGSV"）。
- * @param port: 接收机端口号。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool unlog_msg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
-{
-    out.clear();
-    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append(" ") && out.append(name) &&
-           out.append("\r\n");
-}
-
-/**
- * @brief 探测用的版本查询："VERSIONA"。
- * @param out: 目标命令缓冲（先清空）。
- * @retval true: 已写入完整命令。
- * @retval false: 缓冲空间不足。
- */
-bool version_query(CmdBuf &out) noexcept
-{
-    out.clear();
-    return out.append("VERSIONA\r\n");
-}
-
-} // namespace cmd
-
-/**
- * 应答库：每个函数只判一件事，组合起来才得出“这条应答是不是本步命令的、成功还是失败”。
- */
-namespace resp {
-
-/**
- * @brief 帧尾是否为合法的 "*hh\r\n"，且长度足够容纳最短应答。
- * @param frame: 整帧字节。
- * @retval true: 尾部结构与最小长度都满足。
- * @retval false: 结构不符或过短。
- */
-bool has_valid_tail(std::span<const uint8_t> frame) noexcept
-{
-    return (frame.size() >= (kCommandPrefix.size() + kMinReplyBytes)) && ascii::has_hex_tail(frame);
-}
-
-/**
- * @brief 找 ",response: " 的位置（命令回显与应答文本的分界）。
- * @param frame: 整帧字节。
- * @retval 位置: 标签起始下标。
- * @retval std::nullopt: 没有该标签（不是 $command 应答）。
- */
-std::optional<size_t> find_response_tag(std::span<const uint8_t> frame) noexcept
-{
-    for (size_t i = kCommandPrefix.size(); (i + kResponseTag.size()) <= frame.size(); ++i) {
-        if (ascii::starts_with(frame.subspan(i), kResponseTag)) {
-            return i;
-        }
-    }
-    return std::nullopt;
-}
-
-/**
- * @brief 帧里的回显是否就是本步发送的命令（忽略发送时的 CR/LF）。
- * @param frame: 整帧字节。
- * @param tag_pos: ",response: " 的起始下标。
- * @param sent: 本步发出的命令字节。
- * @retval true: 回显与 sent 逐字节相同。
- * @retval false: 长度或内容不同（属于别的命令的应答）。
- */
-bool echo_matches(std::span<const uint8_t> frame, size_t tag_pos, std::span<const uint8_t> sent) noexcept
-{
-    if (tag_pos < kCommandPrefix.size()) {
-        return false;
-    }
-    const size_t sent_len = ascii::strip_line_end(sent);
-    if ((tag_pos - kCommandPrefix.size()) != sent_len) {
-        return false;
-    }
-    return ascii::bytes_starts_with(frame.subspan(kCommandPrefix.size()), sent.first(sent_len));
-}
-
-/**
- * @brief 取应答文本（标签之后到 '*' 之前，去掉尾部空格）。
- * @param frame: 整帧字节。
- * @param tag_pos: ",response: " 的起始下标。
- * @retval span: 应答文本（可能为空）。
- */
-std::span<const uint8_t> response_text(std::span<const uint8_t> frame, size_t tag_pos) noexcept
-{
-    if (frame.size() < kStarFromEnd) {
-        return {};
-    }
-    const size_t begin = tag_pos + kResponseTag.size();
-    size_t end = frame.size() - kStarFromEnd;
-    while ((end > begin) && (frame[end - 1U] == static_cast<uint8_t>(' '))) {
-        --end;
-    }
-    if ((end <= begin) || (begin >= frame.size())) {
-        return {};
-    }
-    return frame.subspan(begin, end - begin);
-}
-
-} // namespace resp
 
 /** 应答帧的判定原因，explain 与 step 共用同一份判定逻辑。 */
 enum class ResponseReason : uint8_t {
@@ -412,7 +245,11 @@ ResponseVerdict judge(std::span<const uint8_t> frame) noexcept
     return complete();
 }
 
-/** 把判定原因写成一句英文（explain 契约）。 */
+/**
+ * @brief 把判定原因写成一句英文（explain 契约）。
+ * @param verdict: judge 的结论。
+ * @param text: 输出文本写入器。
+ */
 void explain_verdict(const ResponseVerdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
@@ -459,7 +296,12 @@ void explain_verdict(const ResponseVerdict &verdict, demux::text_writer::TextWri
     }
 }
 
-/** 把型号与固件版本写进探测结果（固件文本截断到 kVersionLen-1）。 */
+/**
+ * @brief 把型号与固件版本写进探测结果（固件文本截断到 kVersionLen-1）。
+ * @param model: 识别出的型号。
+ * @param fw_text: VERSIONA 里的固件文本。
+ * @param out: 输出探测结果。
+ */
 void fill_probe_result(Model model, std::span<const uint8_t> fw_text, ProbeResult &out) noexcept
 {
     out = ProbeResult{};
@@ -471,7 +313,12 @@ void fill_probe_result(Model model, std::span<const uint8_t> fw_text, ProbeResul
     out.fw_version[copy] = '\0';
 }
 
-/** 版本文本 → 型号：UM982 双天线、UM981 单天线带 IMU，其余 UM9xx 按 UM980 能力处理（ADR-0010 §2.2）。 */
+/**
+ * @brief 版本文本 → 型号：UM982 双天线、UM981 单天线带 IMU，其余 UM9xx 按 UM980 能力处理（ADR-0010 §2.2）。
+ * @param text: VERSIONA 里第一个引号字段。
+ * @retval model: 识别出的型号。
+ * @retval std::nullopt: 不是 Unicore N4 型号。
+ */
 std::optional<Model> model_from_text(std::span<const uint8_t> text) noexcept
 {
     if (ascii::quoted_equals(text, "UM982")) {
@@ -486,25 +333,240 @@ std::optional<Model> model_from_text(std::span<const uint8_t> text) noexcept
     return std::nullopt;
 }
 
-/** 脚本步骤构造函数：把第 index 步写进 out；返回 false 表示脚本已结束。 */
-using StepFn = bool (*)(const RoverConfig &cfg, ConfigStep &out) noexcept;
-/** 步骤是否需要参与脚本（false = 该配置下跳过，索引映射随之顺延）。 */
-using StepEnabledFn = bool (*)(const RoverConfig &cfg) noexcept;
+} // namespace
 
-struct ScriptStep {
-    StepFn build;
-    StepEnabledFn enabled;
-};
+namespace unicore {
 
-/** @brief 无条件参与。 */
-bool always(const RoverConfig &cfg) noexcept
+/**
+ * @brief $command 应答帧的起始字节判定。
+ * @param byte: 待判字节。
+ * @retval true: 是 '$'。
+ * @retval false: 其他。
+ */
+bool response_first_byte(uint8_t byte) noexcept
+{
+    return byte == kDollar;
+}
+
+/**
+ * @brief $command 应答帧的成帧判定（demux 引擎每收到一字节调用，须 ISR 安全）。
+ * @param frame: 已收到的字节。
+ * @param need: 输出，至少还差多少字节（kNeedMore 时有效）。
+ * @retval step: kFrame / kNeedMore / kReject。
+ */
+demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
+{
+    const ResponseVerdict verdict = judge(frame);
+    need = verdict.need;
+    return verdict.step;
+}
+
+/**
+ * @brief 把拒绝原因写成一句英文（诊断为“not rejected”表示帧本身没问题）。
+ * @param frame: 已收到的字节。
+ * @param out: 输出缓冲。
+ * @retval len: 写入的字符数。
+ */
+std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out) noexcept
+{
+    demux::text_writer::TextWriter text(out);
+    if (frame.empty()) {
+        return text.literal("empty prefix").finish();
+    }
+    const ResponseVerdict verdict = judge(frame);
+    if (verdict.step == demux::Step::kFrame) {
+        return text.literal("not rejected").finish();
+    }
+    explain_verdict(verdict, text);
+    return text.finish();
+}
+
+} // namespace unicore
+
+namespace {
+
+constinit const UnicoreReceiver s_unicoreReceiver{};
+constinit const Um982Receiver s_um982Receiver{};
+
+} // namespace
+
+// ---- 命令库：每个函数只把一条完整命令（含 "\r\n"）写进 out，不关心什么时候发 ----
+
+/**
+ * @brief 关闭该口全部报文输出："UNLOG COMn"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param port: 接收机端口号（1..4）。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool UnicoreReceiver::cmd_unlog(CmdBuf &out, uint8_t port) noexcept
+{
+    out.clear();
+    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append("\r\n");
+}
+
+/**
+ * @brief 切到流动站模式："MODE ROVER"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool UnicoreReceiver::cmd_mode_rover(CmdBuf &out) noexcept
+{
+    out.clear();
+    return out.append("MODE ROVER\r\n");
+}
+
+/**
+ * @brief 改端口波特率："CONFIG COMn <baud>"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param port: 接收机端口号。
+ * @param baud: 目标波特率（如 921600）。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool UnicoreReceiver::cmd_config_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
+{
+    out.clear();
+    return out.append("CONFIG COM") && ascii::append_uint(out, port) && out.append(" ") &&
+           ascii::append_uint(out, baud) && out.append("\r\n");
+}
+
+/**
+ * @brief 以给定周期开启一类报文："<name> COMn <period>"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param name: 报文体名字（如 "GPGGA"）。
+ * @param port: 接收机端口号。
+ * @param period_ms: 周期（毫秒），必须是 10 ms 整数倍。
+ * @retval true: 已写入完整命令。
+ * @retval false: 周期粒度不合法或缓冲空间不足。
+ */
+bool UnicoreReceiver::cmd_log_msg(CmdBuf &out, std::string_view name, uint8_t port, uint32_t period_ms) noexcept
+{
+    out.clear();
+    return out.append(name) && out.append(" COM") && ascii::append_uint(out, port) && out.append(" ") &&
+           ascii::append_period(out, period_ms) && out.append("\r\n");
+}
+
+/**
+ * @brief 关闭一类报文："UNLOG COMn <name>"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param name: 报文体名字（如 "GPGSV"）。
+ * @param port: 接收机端口号。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool UnicoreReceiver::cmd_unlog_msg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
+{
+    out.clear();
+    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append(" ") && out.append(name) &&
+           out.append("\r\n");
+}
+
+/**
+ * @brief 探测用的版本查询："VERSIONA"。
+ * @param out: 目标命令缓冲（先清空）。
+ * @retval true: 已写入完整命令。
+ * @retval false: 缓冲空间不足。
+ */
+bool UnicoreReceiver::cmd_version_query(CmdBuf &out) noexcept
+{
+    out.clear();
+    return out.append("VERSIONA\r\n");
+}
+
+// ---- 应答解析：每个函数只判一件事，组合起来才得出“这条应答是不是本步命令的、成功还是失败” ----
+
+/**
+ * @brief 帧尾是否为合法的 "*hh\r\n"，且长度足够容纳最短应答。
+ * @param frame: 整帧字节。
+ * @retval true: 尾部结构与最小长度都满足。
+ * @retval false: 结构不符或过短。
+ */
+bool UnicoreReceiver::resp_has_valid_tail(std::span<const uint8_t> frame) noexcept
+{
+    return (frame.size() >= (kCommandPrefix.size() + kMinReplyBytes)) && ascii::has_hex_tail(frame);
+}
+
+/**
+ * @brief 找 ",response: " 的位置（命令回显与应答文本的分界）。
+ * @param frame: 整帧字节。
+ * @retval 位置: 标签起始下标。
+ * @retval std::nullopt: 没有该标签（不是 $command 应答）。
+ */
+std::optional<size_t> UnicoreReceiver::resp_find_tag(std::span<const uint8_t> frame) noexcept
+{
+    for (size_t i = kCommandPrefix.size(); (i + kResponseTag.size()) <= frame.size(); ++i) {
+        if (ascii::starts_with(frame.subspan(i), kResponseTag)) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
+/**
+ * @brief 帧里的回显是否就是本步发送的命令（忽略发送时的 CR/LF）。
+ * @param frame: 整帧字节。
+ * @param tag_pos: ",response: " 的起始下标。
+ * @param sent: 本步发出的命令字节。
+ * @retval true: 回显与 sent 逐字节相同。
+ * @retval false: 长度或内容不同（属于别的命令的应答）。
+ */
+bool UnicoreReceiver::resp_echo_matches(std::span<const uint8_t> frame, size_t tag_pos,
+                                        std::span<const uint8_t> sent) noexcept
+{
+    if (tag_pos < kCommandPrefix.size()) {
+        return false;
+    }
+    const size_t sent_len = ascii::strip_line_end(sent);
+    if ((tag_pos - kCommandPrefix.size()) != sent_len) {
+        return false;
+    }
+    return ascii::bytes_starts_with(frame.subspan(kCommandPrefix.size()), sent.first(sent_len));
+}
+
+/**
+ * @brief 取应答文本（标签之后到 '*' 之前，去掉尾部空格）。
+ * @param frame: 整帧字节。
+ * @param tag_pos: ",response: " 的起始下标。
+ * @retval span: 应答文本（可能为空）。
+ */
+std::span<const uint8_t> UnicoreReceiver::resp_text(std::span<const uint8_t> frame, size_t tag_pos) noexcept
+{
+    if (frame.size() < kStarFromEnd) {
+        return {};
+    }
+    const size_t begin = tag_pos + kResponseTag.size();
+    size_t end = frame.size() - kStarFromEnd;
+    while ((end > begin) && (frame[end - 1U] == static_cast<uint8_t>(' '))) {
+        --end;
+    }
+    if ((end <= begin) || (begin >= frame.size())) {
+        return {};
+    }
+    return frame.subspan(begin, end - begin);
+}
+
+// ---- 基础脚本的步骤与启用条件 ----
+
+/**
+ * @brief 步骤启用条件：总是。
+ * @param cfg: 流动站配置（本判断不使用）。
+ * @retval true: 恒为 true。
+ */
+bool UnicoreReceiver::step_always(const RoverConfig &cfg) noexcept
 {
     static_cast<void>(cfg);
     return true;
 }
 
-/** @brief 仅在要求改波特率时参与（port_baud == 0 时脚本提前结束）。 */
-bool port_baud_enabled(const RoverConfig &cfg) noexcept
+/**
+ * @brief 步骤启用条件：cfg.port_baud != 0（为 0 时脚本提前结束）。
+ * @param cfg: 流动站配置。
+ * @retval true: 需要改波特率。
+ * @retval false: 不改波特率。
+ */
+bool UnicoreReceiver::step_if_port_baud(const RoverConfig &cfg) noexcept
 {
     return cfg.port_baud != 0U;
 }
@@ -516,9 +578,9 @@ bool port_baud_enabled(const RoverConfig &cfg) noexcept
  * @retval true: 步骤可用。
  * @retval false: 命令生成失败。
  */
-bool step_unlog_all(const RoverConfig &cfg, ConfigStep &out) noexcept
+bool UnicoreReceiver::step_unlog_all(const RoverConfig &cfg, ConfigStep &out) noexcept
 {
-    if (!cmd::unlog(out.cmd, cfg.port)) {
+    if (!cmd_unlog(out.cmd, cfg.port)) {
         return false;
     }
     out.expect_reply = true;
@@ -534,10 +596,10 @@ bool step_unlog_all(const RoverConfig &cfg, ConfigStep &out) noexcept
  * @retval true: 步骤可用。
  * @retval false: 命令生成失败。
  */
-bool step_mode_rover(const RoverConfig &cfg, ConfigStep &out) noexcept
+bool UnicoreReceiver::step_mode_rover(const RoverConfig &cfg, ConfigStep &out) noexcept
 {
     static_cast<void>(cfg);
-    if (!cmd::mode_rover(out.cmd)) {
+    if (!cmd_mode_rover(out.cmd)) {
         return false;
     }
     out.expect_reply = true;
@@ -553,9 +615,9 @@ bool step_mode_rover(const RoverConfig &cfg, ConfigStep &out) noexcept
  * @retval true: 步骤可用。
  * @retval false: 命令生成失败。
  */
-bool step_port_baud(const RoverConfig &cfg, ConfigStep &out) noexcept
+bool UnicoreReceiver::step_port_baud(const RoverConfig &cfg, ConfigStep &out) noexcept
 {
-    if (!cmd::config_baud(out.cmd, cfg.port, cfg.port_baud)) {
+    if (!cmd_config_baud(out.cmd, cfg.port, cfg.port_baud)) {
         return false;
     }
     out.expect_reply = false;
@@ -564,47 +626,49 @@ bool step_port_baud(const RoverConfig &cfg, ConfigStep &out) noexcept
     return true;
 }
 
-/** 基础脚本：顺序即探测/配置顺序，可选步骤用 enabled 表达。 */
-constexpr std::array<ScriptStep, 3> kRoverScript{{
-    {&step_unlog_all, &always},
-    {&step_mode_rover, &always},
-    {&step_port_baud, &port_baud_enabled},
-}};
+// ---- 驱动成员 ----
 
-} // namespace
-
-bool response_first_byte(uint8_t byte) noexcept
+Family UnicoreReceiver::family() const noexcept
 {
-    return byte == kDollar;
+    return Family::kUnicore;
 }
 
-demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
+std::string_view UnicoreReceiver::name() const noexcept
 {
-    const ResponseVerdict verdict = judge(frame);
-    need = verdict.need;
-    return verdict.step;
+    return "unicore";
 }
 
-std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out) noexcept
+std::span<const demux::Decoder *const> UnicoreReceiver::decoders() const noexcept
 {
-    demux::text_writer::TextWriter text(out);
-    if (frame.empty()) {
-        return text.literal("empty prefix").finish();
+    return kDecoders;
+}
+
+uint32_t UnicoreReceiver::caps(Model model) const noexcept
+{
+    switch (model) {
+    case Model::kUm981:
+        return cap::kRtcmIn | cap::kBase | cap::kIns | cap::kRate20Hz;
+    case Model::kUm982: // 家族视角：双天线能力由 Um982Receiver 追加（ADR-0012 §2.8）
+    case Model::kUm980:
+        return cap::kRtcmIn | cap::kBase | cap::kRate20Hz;
+    default:
+        return cap::kRtcmIn | cap::kBase; // 型号未知时给出保守能力
     }
-    const ResponseVerdict verdict = judge(frame);
-    if (verdict.step == demux::Step::kFrame) {
-        return text.literal("not rejected").finish();
-    }
-    explain_verdict(verdict, text);
-    return text.finish();
 }
 
-bool probe_cmd(CmdBuf &out) noexcept
+const Receiver &UnicoreReceiver::for_model(Model model) const noexcept
 {
-    return cmd::version_query(out);
+    // 双天线型号有单独驱动（多 kHeading 能力），其余型号就是家族驱动本身（ADR-0012 §2.8）。
+    return (model == Model::kUm982) ? um982_receiver() : *this;
 }
 
-bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
+bool UnicoreReceiver::build_probe(CmdBuf &out) const noexcept
+{
+    return cmd_version_query(out);
+}
+
+bool UnicoreReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                  ProbeResult &out) const noexcept
 {
     if ((&dec != &demux::unicore_hash::kDecoder) || (frame.size() < kVersionTag.size()) ||
         !ascii::starts_with(frame, kVersionTag)) {
@@ -626,11 +690,11 @@ bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, Prob
     return true;
 }
 
-bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
+bool UnicoreReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
 {
     static_cast<void>(model); // 基础脚本与型号无关；报文输出改由输出阶段（build_output）下发
     size_t position = 0;
-    for (const ScriptStep &step : kRoverScript) {
+    for (const ScriptStep &step : rover_script()) {
         if (!step.enabled(cfg)) {
             continue;
         }
@@ -642,94 +706,13 @@ bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &
     return false; // 脚本结束
 }
 
-Ack reply_ack(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t> sent) noexcept
-{
-    if (&dec != &kResponseDecoder) {
-        return Ack::kNone;
-    }
-    if (!resp::has_valid_tail(frame)) {
-        return Ack::kNone;
-    }
-    const std::optional<size_t> tag = resp::find_response_tag(frame);
-    if (!tag.has_value() || !resp::echo_matches(frame, *tag, sent)) {
-        return Ack::kNone; // 不是本步命令的应答
-    }
-    return ascii::quoted_equals(resp::response_text(frame, *tag), "OK") ? Ack::kAck : Ack::kNack;
-}
-
-uint32_t model_caps(Model model) noexcept
-{
-    switch (model) {
-    case Model::kUm982:
-        return cap::kRtcmIn | cap::kBase | cap::kHeading | cap::kRate20Hz;
-    case Model::kUm981:
-        return cap::kRtcmIn | cap::kBase | cap::kIns | cap::kRate20Hz;
-    case Model::kUm980:
-        return cap::kRtcmIn | cap::kBase | cap::kRate20Hz;
-    default:
-        return cap::kRtcmIn | cap::kBase; // 型号未知时给出保守能力
-    }
-}
-
-} // namespace gnss::unicore
-
-namespace gnss {
-
-namespace {
-constinit const UnicoreReceiver s_unicoreReceiver{};
-constinit const Um982Receiver s_um982Receiver{};
-} // namespace
-
-Family UnicoreReceiver::family() const noexcept
-{
-    return Family::kUnicore;
-}
-
-std::string_view UnicoreReceiver::name() const noexcept
-{
-    return "unicore";
-}
-
-std::span<const demux::Decoder *const> UnicoreReceiver::decoders() const noexcept
-{
-    return unicore::kDecoders;
-}
-
-uint32_t UnicoreReceiver::caps(Model model) const noexcept
-{
-    return unicore::model_caps(model);
-}
-
-const Receiver &UnicoreReceiver::for_model(Model model) const noexcept
-{
-    // 双天线型号有单独驱动（多 kHeading 能力），其余型号就是家族驱动本身（ADR-0012 §2.8）。
-    return (model == Model::kUm982) ? um982_receiver() : *this;
-}
-
-bool UnicoreReceiver::build_probe(CmdBuf &out) const noexcept
-{
-    return unicore::cmd::version_query(out);
-}
-
-bool UnicoreReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                  ProbeResult &out) const noexcept
-{
-    return unicore::probe_match(dec, frame, out);
-}
-
-bool UnicoreReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
-{
-    return unicore::script_step(index, model, cfg, out);
-}
-
 std::span<const UnicoreReceiver::ScriptStep> UnicoreReceiver::rover_script() const noexcept
 {
-    // 与 unicore::kRoverScript 同表：rover_step 目前经 unicore::script_step 走同一份步骤函数，
-    // 两处必须保持一致，避免型号子类覆盖脚本后行为分叉（ADR-0012 §2.8）。
+    // 表放在成员函数作用域内：ScriptStep 与步骤函数都是 protected，只有成员作用域才能取地址。
     static constexpr std::array<ScriptStep, 3> kScript{{
-        {&unicore::step_unlog_all, &unicore::always},
-        {&unicore::step_mode_rover, &unicore::always},
-        {&unicore::step_port_baud, &unicore::port_baud_enabled},
+        {&step_unlog_all, &step_always},
+        {&step_mode_rover, &step_always},
+        {&step_port_baud, &step_if_port_baud},
     }};
     return kScript;
 }
@@ -737,7 +720,17 @@ std::span<const UnicoreReceiver::ScriptStep> UnicoreReceiver::rover_script() con
 Ack UnicoreReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                     std::span<const uint8_t> sent) const noexcept
 {
-    return unicore::reply_ack(dec, frame, sent);
+    if (&dec != &unicore::kResponseDecoder) {
+        return Ack::kNone;
+    }
+    if (!resp_has_valid_tail(frame)) {
+        return Ack::kNone;
+    }
+    const std::optional<size_t> tag = resp_find_tag(frame);
+    if (!tag.has_value() || !resp_echo_matches(frame, *tag, sent)) {
+        return Ack::kNone; // 不是本步命令的应答
+    }
+    return ascii::quoted_equals(resp_text(frame, *tag), "OK") ? Ack::kAck : Ack::kNack;
 }
 
 OutputMsg UnicoreReceiver::classify_frame(const demux::Decoder &dec, std::span<const uint8_t> frame) const noexcept
@@ -773,7 +766,8 @@ uint32_t UnicoreReceiver::output_mask(Model model) const noexcept
     constexpr uint32_t kGstBit = 1U << static_cast<uint32_t>(OutputMsg::kGst);
     // UM9xx 都能输出 GPGST（旧脚本一直下发 GPGST），基线基类默认只含 GGA/RMC/GSA/GSV。
     uint32_t mask = Receiver::output_mask(model) | kSatsInfoBit | kGstBit;
-    if ((unicore::model_caps(model) & cap::kHeading) != 0U) {
+    // 经虚函数问能力：Um982Receiver 覆盖 caps() 后这里自动带上 HEADINGA。
+    if ((caps(model) & cap::kHeading) != 0U) {
         mask |= kHeadingBit; // 仅双天线型号（UM982）有 HEADINGA
     }
     return mask;
@@ -783,16 +777,17 @@ fw::Status UnicoreReceiver::build_output(OutputMsg msg, uint32_t period_ms, Mode
                                          CmdBuf &out) const noexcept
 {
     const auto idx = static_cast<size_t>(static_cast<uint8_t>(msg));
-    if ((msg == OutputMsg::kNone) || (idx >= unicore::kOutputNames.size())) {
+    if ((msg == OutputMsg::kNone) || (idx >= kOutputNames.size())) {
         return fw::Status::kInvalidArg;
     }
-    if ((msg == OutputMsg::kHeading) && ((unicore::model_caps(model) & cap::kHeading) == 0U)) {
+    // 同上：能力位判断走虚调用，型号子类只覆盖 caps() 就能放开 HEADINGA。
+    if ((msg == OutputMsg::kHeading) && ((caps(model) & cap::kHeading) == 0U)) {
         return fw::Status::kNotSupported; // 单天线型号没有 HEADINGA
     }
-    const std::string_view name{unicore::kOutputNames[idx]};
+    const std::string_view name{kOutputNames[idx]};
     // period 0 = 关闭该类；旧 apply 旁路同样用 "UNLOG COMn <name>"。
-    const bool written = (period_ms == 0U) ? unicore::cmd::unlog_msg(out, name, plan.port)
-                                           : unicore::cmd::log_msg(out, name, plan.port, period_ms);
+    const bool written =
+        (period_ms == 0U) ? cmd_unlog_msg(out, name, plan.port) : cmd_log_msg(out, name, plan.port, period_ms);
     if (!written) {
         out.clear();
         return fw::Status::kInvalidArg;

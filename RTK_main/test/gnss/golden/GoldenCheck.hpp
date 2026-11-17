@@ -141,10 +141,19 @@ inline size_t reply_mismatch(const gnss::Receiver &receiver, std::span<const gol
 }
 
 /** 能力位样本。 */
+/**
+ * @brief 逐条比对型号能力：期望值来自基线实现，型号差异由 for_model 选出的驱动负责（ADR-0012 §2.8）。
+ * @param receiver: 被测的家族驱动。
+ * @param cases: 黄金用例（model, caps）。
+ * @retval index: 第一个不匹配的下标。
+ * @retval kAllMatch: 全部一致。
+ */
 inline size_t caps_mismatch(const gnss::Receiver &receiver, std::span<const golden::CapsCase> cases) noexcept
 {
     for (size_t i = 0; i < cases.size(); ++i) {
-        if (receiver.caps(static_cast<gnss::Model>(cases[i].model)) != cases[i].caps) {
+        const auto model = static_cast<gnss::Model>(cases[i].model);
+        // 先换到该型号的驱动再看能力：家族驱动对 UM982 只报 UM980 能力。
+        if (receiver.for_model(model).caps(model) != cases[i].caps) {
             return i;
         }
     }

@@ -11,6 +11,7 @@
 #include "demux/Demux.hpp"
 #include "demux/decoders/UnicoreHash.hpp"
 #include "demux/StaticDemux.hpp"
+#include "gnss/Controller.hpp"
 #include "gnss/drivers/UnicoreReceiver.hpp"
 #include "unity.h"
 
@@ -223,13 +224,17 @@ static void test_build_output()
     TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kInvalidArg),
                       static_cast<int>(r.build_output(gnss::OutputMsg::kGga, 25, gnss::Model::kUm982, plan, cmd)));
 
-    // HEADINGA 只在双天线型号上可用。
+    // HEADINGA 只有双天线型号的驱动能下发：家族驱动即使拿到 kUm982 也按 UM980 处理（ADR-0012 §2.8）。
     TEST_ASSERT_EQUAL(
         static_cast<int>(fw::Status::kNotSupported),
-        static_cast<int>(r.build_output(gnss::OutputMsg::kHeading, 1000, gnss::Model::kUm980, plan, cmd)));
+        static_cast<int>(r.build_output(gnss::OutputMsg::kHeading, 1000, gnss::Model::kUm982, plan, cmd)));
+    TEST_ASSERT_BITS(static_cast<uint32_t>(1U << 2), 0U, r.output_mask(gnss::Model::kUm982));
+    const gnss::Receiver &dual = r.for_model(gnss::Model::kUm982);
+    TEST_ASSERT_BITS(static_cast<uint32_t>(1U << 2), static_cast<uint32_t>(1U << 2),
+                     dual.output_mask(gnss::Model::kUm982));
     TEST_ASSERT_EQUAL(
         static_cast<int>(fw::Status::kOk),
-        static_cast<int>(r.build_output(gnss::OutputMsg::kHeading, 1000, gnss::Model::kUm982, plan, cmd)));
+        static_cast<int>(dual.build_output(gnss::OutputMsg::kHeading, 1000, gnss::Model::kUm982, plan, cmd)));
     TEST_ASSERT_TRUE(text_equals(cmd.view(), "HEADINGA COM2 1\r\n"));
 
     // 端口来自输出计划。
@@ -340,11 +345,99 @@ static void test_real_um980_capture_through_receiver_decoders()
 
 void test_caps()
 {
+    const gnss::Receiver &family = gnss::unicore_receiver();
+    // 家族驱动描述 UM980/UM981 的能力；UM982 的 HEADING 能力在型号驱动上（ADR-0012 §2.8）。
+    TEST_ASSERT_BITS(gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz,
+                     gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz, family.caps(gnss::Model::kUm982));
+    TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, family.caps(gnss::Model::kUm982));
+    TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, family.caps(gnss::Model::kUm980));
+    TEST_ASSERT_BITS(gnss::cap::kIns, gnss::cap::kIns, family.caps(gnss::Model::kUm981));
+    // 换到型号驱动后才有 HEADING。
+    const gnss::Receiver &dual = family.for_model(gnss::Model::kUm982);
     TEST_ASSERT_BITS(gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kHeading | gnss::cap::kRate20Hz,
                      gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kHeading | gnss::cap::kRate20Hz,
-                     gnss::unicore_receiver().caps(gnss::Model::kUm982));
-    TEST_ASSERT_BITS(gnss::cap::kIns, gnss::cap::kIns, gnss::unicore_receiver().caps(gnss::Model::kUm981));
-    TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, gnss::unicore_receiver().caps(gnss::Model::kUm980));
+                     dual.caps(gnss::Model::kUm982));
+}
+
+/** ADR-0012 §2.8：只有实现上真有差异的型号才换驱动实例。 */
+void test_for_model_splits_models()
+{
+    const gnss::Receiver &family = gnss::unicore_receiver();
+    TEST_ASSERT_TRUE(&family.for_model(gnss::Model::kUm980) == &family);
+    TEST_ASSERT_TRUE(&family.for_model(gnss::Model::kUm981) == &family);
+    TEST_ASSERT_TRUE(&family.for_model(gnss::Model::kUnknown) == &family);
+    TEST_ASSERT_TRUE(&family.for_model(gnss::Model::kZedF9p) == &family);
+
+    const gnss::Receiver &dual = family.for_model(gnss::Model::kUm982);
+    TEST_ASSERT_TRUE(&dual == &gnss::um982_receiver());
+    TEST_ASSERT_TRUE(&dual.for_model(gnss::Model::kUm982) == &dual);
+    TEST_ASSERT_TRUE(&dual.for_model(gnss::Model::kUm980) == &dual);
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore), static_cast<int>(dual.family()));
+    TEST_ASSERT_TRUE(dual.name() == std::string_view{"unicore-um982"});
+
+    // 三款 UM98x 解同一个方言：解码器集合不变。
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(family.decoders().size()),
+                             static_cast<uint32_t>(dual.decoders().size()));
+}
+
+/**
+ * @brief 控制器探测命中后必须换成该型号的驱动（ADR-0012 §2.8）：
+ *        UM982 → um982_receiver() 且能力含 kHeading；UM980 → 家族驱动本身且无 kHeading。
+ */
+void test_controller_detects_model_driver()
+{
+    gnss::RoverConfig cfg{};
+    cfg.rate_hz = 1;
+    cfg.gsv = true;
+    cfg.port = 2;
+    // 时序取短值：只关心“命中后换了哪个驱动”。
+    constexpr uint32_t kPowerOffMs = 10;
+    constexpr uint32_t kBootMs = 20;
+    constexpr uint32_t kProbeTimeoutMs = 50;
+    constexpr uint32_t kProbeRounds = 2;
+    constexpr uint32_t kStepRetries = 1;
+    constexpr uint32_t kSilenceMs = 100;
+    constexpr uint32_t kRetryBackoffMs = 30;
+    gnss::Timing timing{};
+    timing.power_off_ms = kPowerOffMs;
+    timing.boot_ms = kBootMs;
+    timing.probe_timeout_ms = kProbeTimeoutMs;
+    timing.probe_rounds = static_cast<uint8_t>(kProbeRounds);
+    timing.step_retries = static_cast<uint8_t>(kStepRetries);
+    timing.silence_ms = kSilenceMs;
+    timing.retry_backoff_ms = kRetryBackoffMs;
+    const std::array<const gnss::Receiver *, 1> receivers{&gnss::unicore_receiver()};
+    const std::array<uint32_t, 1> bauds{115200};
+
+    const std::array<std::string, 2> replies{
+        std::string("#VERSIONA,96,GPS,FINE,2281,45803,0,0,18,10;\"UM982\",\"R4.10Build11233\",\"HRPT00-S10C-P\","
+                    "\"2310415000123\",\"R4.10.0\",\"ff\"*12345678"),
+        std::string("#VERSIONA,96,GPS,FINE,2281,45803,0,0,18,10;\"UM980\",\"R4.10Build11833\",\"HRPT00-S10C-P\","
+                    "\"2310415000123\",\"R4.10.0\",\"ff\"*12345678"),
+    };
+    const std::array<const gnss::Receiver *, 2> expected{&gnss::um982_receiver(), &gnss::unicore_receiver()};
+    const std::array<uint32_t, 2> heading{static_cast<uint32_t>(gnss::cap::kHeading), 0U};
+
+    for (size_t i = 0; i < replies.size(); ++i) {
+        gnss::Controller controller;
+        TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
+        uint32_t now = 0;
+        controller.start(now);
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Action::Kind::kPower), static_cast<int>(controller.poll(now).kind));
+        now += timing.power_off_ms;
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Action::Kind::kPower), static_cast<int>(controller.poll(now).kind));
+        now += timing.boot_ms;
+        TEST_ASSERT_TRUE(text_equals(controller.poll(now).bytes, "VERSIONA\r\n"));
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kProbing), static_cast<int>(controller.state()));
+
+        controller.on_frame(demux::unicore_hash::kDecoder, bytes_of(replies[i]), now);
+        TEST_ASSERT_TRUE(controller.detected().receiver == expected[i]);
+        // 能力在进入配置阶段时定格：caps 由 detected_.receiver 给出。
+        ++now;
+        TEST_ASSERT_TRUE(text_equals(controller.poll(now).bytes, "UNLOG COM2\r\n"));
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kConfiguring), static_cast<int>(controller.state()));
+        TEST_ASSERT_EQUAL_UINT32(heading[i], controller.detected().caps & gnss::cap::kHeading);
+    }
 }
 
 // ---- 黄金向量比对（ADR-0012 P3a/P3b）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----
@@ -385,6 +478,53 @@ static void test_golden_caps()
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch), static_cast<uint32_t>(bad));
 }
 
+/**
+ * @brief 在黄金向量的脚本步骤里找第一条 "HEADINGA …" 命令（基线脚本下发的原文）。
+ * @retval bytes: 该命令的字节；空表示黄金向量里没有 HEADINGA。
+ */
+static std::span<const uint8_t> golden_heading_command() noexcept
+{
+    constexpr std::string_view kName = "HEADINGA ";
+    for (const golden::Step &step : golden_Unicore::kSteps) {
+        const std::span<const uint8_t> bytes = step.bytes.view();
+        if (bytes.size() <= kName.size()) {
+            continue;
+        }
+        size_t same = 0;
+        while ((same < kName.size()) && (bytes[same] == static_cast<uint8_t>(kName[same]))) {
+            ++same;
+        }
+        if (same == kName.size()) {
+            return bytes;
+        }
+    }
+    return {};
+}
+
+/** ADR-0012 §2.8：UM982 驱动下发的 HEADINGA 必须与基线脚本的原文逐字节一致（端口取黄金用例里的那个）。 */
+static void test_golden_heading_through_model_driver()
+{
+    const std::span<const uint8_t> golden_heading = golden_heading_command();
+    TEST_ASSERT_TRUE(!golden_heading.empty());
+
+    // 端口号从黄金命令里取（"HEADINGA COM1 …" → 1），这样比对不受用例首例端口影响。
+    constexpr size_t kPortOffset = sizeof("HEADINGA COM") - 1U;
+    TEST_ASSERT_TRUE(golden_heading.size() > kPortOffset);
+    const uint8_t port_digit = golden_heading[kPortOffset];
+    TEST_ASSERT_TRUE((port_digit >= static_cast<uint8_t>('0')) && (port_digit <= static_cast<uint8_t>('9')));
+
+    gnss::OutputPlan plan{};
+    plan.port = static_cast<uint8_t>(port_digit - static_cast<uint8_t>('0'));
+    plan.rate_hz = 1;
+    gnss::CmdBuf cmd;
+    const gnss::Receiver &dual = gnss::unicore_receiver().for_model(gnss::Model::kUm982);
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(fw::Status::kOk),
+        static_cast<int>(dual.build_output(gnss::OutputMsg::kHeading, 1000, gnss::Model::kUm982, plan, cmd)));
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_heading.size()), static_cast<uint32_t>(cmd.view().size()));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(golden_heading.data(), cmd.view().data(), golden_heading.size());
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
@@ -393,6 +533,7 @@ int main(int, char **)
     RUN_TEST(test_golden_probe_match);
     RUN_TEST(test_golden_replies);
     RUN_TEST(test_golden_caps);
+    RUN_TEST(test_golden_heading_through_model_driver);
     RUN_TEST(test_response_streaming);
     RUN_TEST(test_response_rejects_and_window);
     RUN_TEST(test_build_probe);
@@ -403,5 +544,7 @@ int main(int, char **)
     RUN_TEST(test_coexists_with_nmea);
     RUN_TEST(test_real_um980_capture_through_receiver_decoders);
     RUN_TEST(test_caps);
+    RUN_TEST(test_for_model_splits_models);
+    RUN_TEST(test_controller_detects_model_driver);
     return UNITY_END();
 }

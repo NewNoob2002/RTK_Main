@@ -69,6 +69,15 @@ struct CommandSet {
 };
 
 /** 收集一个用例的完整命令集合：基础脚本 + 每个支持的语句一条下发命令。 */
+/**
+ * @brief 收集一个用例的完整命令集合：基础脚本 + 每个支持的语句一条下发命令。
+ * @param receiver: 被测的家族驱动（内部按用例型号经 for_model 换到具体驱动）。
+ * @param item: 黄金用例（型号/频率/端口/波特率）。
+ * @param out: 输出，命令集合。
+ * @param skip_disabled: true = 跳过 period 0 的语句（NMEA 驱动的开机首轮行为）。
+ * @retval true: 收集完成。
+ * @retval false: 命令生成失败或缓冲已满。
+ */
 inline bool collect_plan(const gnss::Receiver &receiver, const golden::RoverCase &item, CommandSet &out,
                          bool skip_disabled = true) noexcept
 {
@@ -78,11 +87,13 @@ inline bool collect_plan(const gnss::Receiver &receiver, const golden::RoverCase
     cfg.port = item.port;
     cfg.port_baud = item.port_baud;
     const auto model = static_cast<gnss::Model>(item.model);
+    // UM982 的 HEADINGA 只能由型号驱动下发：先换到该型号的驱动（家族驱动自身保持不变）。
+    const gnss::Receiver &driver = receiver.for_model(model);
 
     size_t index = 0U;
     for (;; ++index) {
         gnss::ConfigStep step{};
-        if (!receiver.rover_step(index, model, cfg, step)) {
+        if (!driver.rover_step(index, model, cfg, step)) {
             break;
         }
         if (!out.add(step.cmd)) {
@@ -99,7 +110,7 @@ inline bool collect_plan(const gnss::Receiver &receiver, const golden::RoverCase
         }
         const auto msg = static_cast<gnss::OutputMsg>(static_cast<uint8_t>(i));
         gnss::CmdBuf cmd;
-        const fw::Status st = receiver.build_output(msg, plan.period_ms[i], model, plan, cmd);
+        const fw::Status st = driver.build_output(msg, plan.period_ms[i], model, plan, cmd);
         if (st == fw::Status::kNotSupported) {
             continue;
         }

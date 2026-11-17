@@ -164,7 +164,8 @@ static void test_output_masks()
     if (kHasUnicore) {
         const uint32_t single = gnss::unicore_receiver().output_mask(gnss::Model::kUm980);
         TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 1) | (1U << 3), single); // + kSatsInfo + kGst
-        const uint32_t dual = gnss::unicore_receiver().output_mask(gnss::Model::kUm982);
+        // HEADINGA 只在型号驱动上出现：调用方须先 for_model（ADR-0012 §2.8）。
+        const uint32_t dual = gnss::unicore_receiver().for_model(gnss::Model::kUm982).output_mask(gnss::Model::kUm982);
         TEST_ASSERT_EQUAL_UINT32(base_mask | (1U << 1) | (1U << 2) | (1U << 3), dual); // + kHeading
     }
     if (kHasUblox) {

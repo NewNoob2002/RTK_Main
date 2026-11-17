@@ -1,6 +1,7 @@
 // u-blox F9（ZED-F9P）驱动实现：UBX-MON-VER 探测、CFG-VALSET 配置、ACK/NAK 匹配（ADR-0010 §2.2/§2.4）。
-// 结构（P3r）：cmd:: 只组一条完整 UBX 帧，resp:: 只判“是不是 ACK/NAK、ACK 的是哪条命令”，
-// script 表把“第几步做什么”与流程分开；UBX 二进制工具留在本文件内（ASCII 工具不适用）。
+// 结构（P3s）：命令生成（cmd_*）与应答判定（resp_*）是 UbloxReceiver 的 protected static，子类可直接复用；
+// 脚本步骤的回调写在 rover_step 内（要取 protected 成员的地址，匿名命名空间的自由函数没有访问权）。
+// 载荷写入器（Writer）与 CFG-VALSET 载荷拼接留在本文件内：Writer 是 .cpp 私有类型，不能出现在类声明里。
 // 线程/调用约束：纯函数，无全局可变状态，可重入、不阻塞。
 // 堆：不使用（命令在 CmdBuf 定长缓冲内构造）。
 // 键 ID 出处：u-blox F9 HPG 1.32 Interface Description，CFG-* 配置项键值表（MSGOUT NMEA 段、RATE 段、
@@ -17,7 +18,7 @@
 #include "../AsciiCmd.hpp"
 #include "../FrameTag.hpp"
 
-namespace gnss::ublox {
+namespace gnss {
 namespace {
 
 // UBX 帧头与消息 ID
@@ -79,6 +80,9 @@ constexpr uint8_t kMonVerPollCkA = 0x0E;
 constexpr uint8_t kMonVerPollCkB = 0x34;
 constexpr size_t kMonVerPollBytes = 8U;
 
+// MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（match_probe / classify_reply 均按 ubx 解码器判定）。
+constexpr std::array<const demux::Decoder *, 1> kDecoders{&demux::ubx::kDecoder};
+
 /** 载荷写入器：定长缓冲 + 写点下标（不用指针算术，越界即失败）。 */
 struct Writer {
     std::span<uint8_t> buf{};
@@ -134,12 +138,7 @@ struct Writer {
 };
 
 /**
- * 命令库：每个函数只组一条完整 UBX 帧（同步字 + class/id + 长度 + 载荷 + Fletcher 校验）。
- */
-namespace cmd {
-
-/**
- * @brief 累积 UBX Fletcher 校验。
+ * @brief 累积 UBX Fletcher 校验（命令库与应答判定共用，放在文件内）。
  * @param byte: 新字节。
  * @param ck_a: 入参与输出，校验字节 A。
  * @param ck_b: 入参与输出，校验字节 B。
@@ -148,39 +147,6 @@ void fletcher(uint8_t byte, uint8_t &ck_a, uint8_t &ck_b) noexcept
 {
     ck_a = static_cast<uint8_t>(ck_a + byte);
     ck_b = static_cast<uint8_t>(ck_b + ck_a);
-}
-
-/**
- * @brief 组装一帧 UBX：B5 62 | class | id | len(LE) | payload | CK_A CK_B（覆盖 class..payload）。
- * @param out: 目标命令缓冲（先清空）。
- * @param cls: 消息 class。
- * @param id: 消息 id。
- * @param payload: 载荷字节。
- * @retval true: 已写入完整帧。
- * @retval false: 载荷超长或缓冲不足。
- */
-bool build_frame(CmdBuf &out, uint8_t cls, uint8_t id, std::span<const uint8_t> payload) noexcept
-{
-    if (payload.size() > kMaxPayload) {
-        return false;
-    }
-    const std::array<uint8_t, kHeaderBytes> header{kSync1,
-                                                   kSync2,
-                                                   cls,
-                                                   id,
-                                                   static_cast<uint8_t>(payload.size() & kByteMask),
-                                                   static_cast<uint8_t>((payload.size() >> kShift1Byte) & kByteMask)};
-    uint8_t ck_a = 0;
-    uint8_t ck_b = 0;
-    for (size_t i = kSyncBytes; i < header.size(); ++i) {
-        fletcher(header[i], ck_a, ck_b);
-    }
-    for (const uint8_t b : payload) {
-        fletcher(b, ck_a, ck_b);
-    }
-    const std::array<uint8_t, kCrcBytes> checksum{ck_a, ck_b};
-    out.clear();
-    return out.append(header) && out.append(payload) && out.append(checksum);
 }
 
 /**
@@ -235,122 +201,6 @@ bool add_u4_item(Writer &writer, uint32_t key, uint32_t value) noexcept
     const size_t start = writer.pos;
     return writer.u32(key) && writer.u32(value) && ((writer.pos - start) == kU4ItemBytes);
 }
-
-/**
- * @brief 探测命令：UBX-MON-VER 轮询（长度 0、无载荷，校验和已算好）。
- * @param out: 目标命令缓冲（先清空）。
- * @retval true: 已写入完整帧。
- * @retval false: 缓冲空间不足。
- */
-bool poll_mon_ver(CmdBuf &out) noexcept
-{
-    out.clear();
-    return out.append(std::array<uint8_t, kMonVerPollBytes>{kSync1, kSync2, kClsMon, kIdMonVer, 0x00, 0x00,
-                                                            kMonVerPollCkA, kMonVerPollCkB});
-}
-
-/**
- * @brief 基础配置：CFG-RATE-MEAS + 打开 RTCM3X 输入协议 + 打开 NMEA 输出协议。
- * @param out: 目标命令缓冲。
- * @param period_ms: 导航周期（毫秒）。
- * @retval true: 已写入完整帧。
- * @retval false: 载荷或缓冲空间不足。
- */
-bool configure_receiver(CmdBuf &out, uint16_t period_ms) noexcept
-{
-    std::array<uint8_t, kValsetPayloadMax> payload{};
-    Writer writer{payload};
-    if (!begin_valset(writer) || !add_u2_item(writer, kKeyRateMeas, period_ms) ||
-        !add_u1_item(writer, kKeyUart1InprotRtcm3x, 1U) || !add_u1_item(writer, kKeyUart1OutprotNmea, 1U)) {
-        return false;
-    }
-    return build_frame(out, kClsCfg, kIdCfgValset, writer.view());
-}
-
-/**
- * @brief 改 UART1 波特率（单键 VALSET）。
- * @param out: 目标命令缓冲。
- * @param baud: 目标波特率。
- * @retval true: 已写入完整帧。
- * @retval false: 载荷或缓冲空间不足。
- */
-bool set_baudrate(CmdBuf &out, uint32_t baud) noexcept
-{
-    std::array<uint8_t, kValsetPayloadMax> payload{};
-    Writer writer{payload};
-    if (!begin_valset(writer) || !add_u4_item(writer, kKeyUart1Baudrate, baud)) {
-        return false;
-    }
-    return build_frame(out, kClsCfg, kIdCfgValset, writer.view());
-}
-
-/**
- * @brief 单键 CFG-MSGOUT VALSET：值 = 每历元输出次数（0 关闭）。
- * @param out: 目标命令缓冲。
- * @param key: CFG-MSGOUT-*_UART1 的键。
- * @param epochs: 每历元次数。
- * @retval true: 已写入完整帧。
- * @retval false: 载荷或缓冲空间不足。
- */
-bool valset_msgout(CmdBuf &out, uint32_t key, uint8_t epochs) noexcept
-{
-    std::array<uint8_t, kMsgoutPayloadMax> payload{};
-    Writer writer{payload};
-    if (!begin_valset(writer) || !add_u1_item(writer, key, epochs)) {
-        return false;
-    }
-    return build_frame(out, kClsCfg, kIdCfgValset, writer.view());
-}
-
-} // namespace cmd
-
-/** 应答库：只判帧结构与 ACK 类别，不看具体配置内容。 */
-namespace resp {
-
-/**
- * @brief UBX 帧的载荷长度（长度字段，小端）。
- * @param frame: 整帧字节。
- * @retval 长度: 载荷字节数；帧头不足时返回 0。
- */
-size_t payload_len(std::span<const uint8_t> frame) noexcept
-{
-    if (frame.size() < (kLenOffset + 2U)) {
-        return 0U;
-    }
-    return static_cast<size_t>(frame[kLenOffset]) | (static_cast<size_t>(frame[kLenOffset + 1U]) << kShift1Byte);
-}
-
-/**
- * @brief 是否为结构完整的 UBX-ACK-ACK / UBX-ACK-NAK。
- * @param frame: 整帧字节。
- * @retval true: class 0x05、id 0x00/0x01、载荷 2 字节、总长正好。
- * @retval false: 其他帧。
- */
-bool has_valid_ack(std::span<const uint8_t> frame) noexcept
-{
-    if ((frame.size() != (kHeaderBytes + kAckPayloadBytes + kCrcBytes)) || (frame[kClsOffset] != kClsAck)) {
-        return false;
-    }
-    if ((frame[kIdOffset] != kIdAck) && (frame[kIdOffset] != kIdNak)) {
-        return false;
-    }
-    return payload_len(frame) == kAckPayloadBytes;
-}
-
-/**
- * @brief ACK/NAK 载荷是否指向给定的 class/id（即“被 ACK 的是哪条命令”）。
- * @param frame: 已通过 has_valid_ack 的帧。
- * @param cls: 期望被应答的 class。
- * @param id: 期望被应答的 id。
- * @retval true: 载荷等于 cls/id。
- * @retval false: 其他命令的应答。
- */
-bool ack_class_id(std::span<const uint8_t> frame, uint8_t cls, uint8_t id) noexcept
-{
-    return (frame[kPayloadOffset] == cls) && (frame[kPayloadOffset + 1U] == id);
-}
-
-} // namespace resp
 
 /**
  * @brief 把 MON-VER 的文本项拷进定长缓冲（NUL 结尾，超长截断）。
@@ -459,115 +309,157 @@ uint16_t nav_period_ms(const RoverConfig &cfg) noexcept
     return period == 0U ? kDefaultPeriodMs : period;
 }
 
-/**
- * @brief 第 0 步：配置导航频率与串口协议。
- * @param cfg: 流动站配置。
- * @param out: 输出步骤。
- * @retval true: 步骤可用。
- * @retval false: 命令生成失败。
- */
-bool step_configure(const RoverConfig &cfg, ConfigStep &out) noexcept
-{
-    if (!cmd::configure_receiver(out.cmd, nav_period_ms(cfg))) {
-        return false;
-    }
-    out.expect_reply = true;
-    out.timeout_ms = kConfigTimeoutMs;
-    out.switch_baud = 0;
-    return true;
-}
-
-/**
- * @brief 第 1 步：改 UART1 波特率；改完旧速率不再有应答，直接切主机 UART。
- * @param cfg: 流动站配置（用 port_baud）。
- * @param out: 输出步骤（switch_baud = 目标波特率）。
- * @retval true: 步骤可用。
- * @retval false: 命令生成失败。
- */
-bool step_baud(const RoverConfig &cfg, ConfigStep &out) noexcept
-{
-    if (!cmd::set_baudrate(out.cmd, cfg.port_baud)) {
-        return false;
-    }
-    out.expect_reply = false;
-    out.timeout_ms = kConfigTimeoutMs;
-    out.switch_baud = cfg.port_baud;
-    return true;
-}
-
-/** 基础脚本：报文输出不再写进脚本（ADR-0012 §2.4），由输出阶段逐条 CFG-MSGOUT 下发。 */
-constexpr std::array<ScriptStep, 2> kRoverScript{{
-    {&step_configure, &always},
-    {&step_baud, &port_baud_enabled},
-}};
-
-} // namespace
-
-bool probe_cmd(CmdBuf &out) noexcept
-{
-    return cmd::poll_mon_ver(out);
-}
-
-bool probe_match(const demux::Decoder &dec, std::span<const uint8_t> frame, ProbeResult &out) noexcept
-{
-    if ((&dec != &demux::ubx::kDecoder) || (frame.size() < (kHeaderBytes + kCrcBytes))) {
-        return false;
-    }
-    if ((frame[kClsOffset] != kClsMon) || (frame[kIdOffset] != kIdMonVer)) {
-        return false;
-    }
-    const size_t len = resp::payload_len(frame);
-    if ((len < kMonVerMinLen) || (frame.size() < (kPayloadOffset + len + kCrcBytes))) {
-        return false;
-    }
-    return read_mon_ver(frame.subspan(kPayloadOffset, len), out);
-}
-
-bool script_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) noexcept
-{
-    static_cast<void>(model); // ZED-F9P 单型号，脚本与型号无关
-    size_t position = 0;
-    for (const ScriptStep &step : kRoverScript) {
-        if (!step.enabled(cfg)) {
-            continue;
-        }
-        if (position == index) {
-            return step.build(cfg, out);
-        }
-        ++position;
-    }
-    return false; // 脚本结束
-}
-
-Ack reply_ack(const demux::Decoder &dec, std::span<const uint8_t> frame, std::span<const uint8_t> sent) noexcept
-{
-    static_cast<void>(sent); // ACK/NAK 只回显 class/id，不回显命令文本
-    if (&dec != &demux::ubx::kDecoder) {
-        return Ack::kNone;
-    }
-    if (!resp::has_valid_ack(frame) || !resp::ack_class_id(frame, kClsCfg, kIdCfgValset)) {
-        return Ack::kNone; // 只认 CFG-VALSET（06 8A）的应答
-    }
-    return frame[kIdOffset] == kIdAck ? Ack::kAck : Ack::kNack;
-}
-
-uint32_t model_caps(Model model) noexcept
-{
-    if (model == Model::kZedF9p) {
-        return cap::kRtcmIn | cap::kBase | cap::kRate20Hz;
-    }
-    return cap::kRtcmIn | cap::kBase;
-}
-
-} // namespace gnss::ublox
-
-namespace gnss {
-
-namespace {
-// MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（match_probe / reply_ack 均按 ubx 解码器判定）。
-constexpr std::array<const demux::Decoder *, 1> kDecoders{&demux::ubx::kDecoder};
 constinit const UbloxReceiver s_ubloxReceiver{};
+
 } // namespace
+
+// ---- 命令库：每个函数只组一条完整 UBX 帧（同步字 + class/id + 长度 + 载荷 + Fletcher 校验） ----
+
+/**
+ * @brief 组装一帧 UBX：B5 62 | class | id | len(LE) | payload | CK_A CK_B（覆盖 class..payload）。
+ * @param out: 目标命令缓冲（先清空）。
+ * @param cls: 消息 class。
+ * @param id: 消息 id。
+ * @param payload: 载荷字节。
+ * @retval true: 已写入完整帧。
+ * @retval false: 载荷超长或缓冲不足。
+ */
+bool UbloxReceiver::cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id, std::span<const uint8_t> payload) noexcept
+{
+    if (payload.size() > kMaxPayload) {
+        return false;
+    }
+    const std::array<uint8_t, kHeaderBytes> header{kSync1,
+                                                   kSync2,
+                                                   cls,
+                                                   id,
+                                                   static_cast<uint8_t>(payload.size() & kByteMask),
+                                                   static_cast<uint8_t>((payload.size() >> kShift1Byte) & kByteMask)};
+    uint8_t ck_a = 0;
+    uint8_t ck_b = 0;
+    for (size_t i = kSyncBytes; i < header.size(); ++i) {
+        fletcher(header[i], ck_a, ck_b);
+    }
+    for (const uint8_t b : payload) {
+        fletcher(b, ck_a, ck_b);
+    }
+    const std::array<uint8_t, kCrcBytes> checksum{ck_a, ck_b};
+    out.clear();
+    return out.append(header) && out.append(payload) && out.append(checksum);
+}
+
+/**
+ * @brief 探测命令：UBX-MON-VER 轮询（长度 0、无载荷，校验和已算好）。
+ * @param out: 目标命令缓冲（先清空）。
+ * @retval true: 已写入完整帧。
+ * @retval false: 缓冲空间不足。
+ */
+bool UbloxReceiver::cmd_poll_mon_ver(CmdBuf &out) noexcept
+{
+    out.clear();
+    return out.append(std::array<uint8_t, kMonVerPollBytes>{kSync1, kSync2, kClsMon, kIdMonVer, 0x00, 0x00,
+                                                            kMonVerPollCkA, kMonVerPollCkB});
+}
+
+/**
+ * @brief 基础配置：CFG-RATE-MEAS + 打开 RTCM3X 输入协议 + 打开 NMEA 输出协议。
+ * @param out: 目标命令缓冲。
+ * @param period_ms: 导航周期（毫秒）。
+ * @retval true: 已写入完整帧。
+ * @retval false: 载荷或缓冲空间不足。
+ */
+bool UbloxReceiver::cmd_configure_receiver(CmdBuf &out, uint16_t period_ms) noexcept
+{
+    std::array<uint8_t, kValsetPayloadMax> payload{};
+    Writer writer{payload};
+    if (!begin_valset(writer) || !add_u2_item(writer, kKeyRateMeas, period_ms) ||
+        !add_u1_item(writer, kKeyUart1InprotRtcm3x, 1U) || !add_u1_item(writer, kKeyUart1OutprotNmea, 1U)) {
+        return false;
+    }
+    return cmd_build_frame(out, kClsCfg, kIdCfgValset, writer.view());
+}
+
+/**
+ * @brief 改 UART1 波特率（单键 VALSET）。
+ * @param out: 目标命令缓冲。
+ * @param baud: 目标波特率。
+ * @retval true: 已写入完整帧。
+ * @retval false: 载荷或缓冲空间不足。
+ */
+bool UbloxReceiver::cmd_set_baudrate(CmdBuf &out, uint32_t baud) noexcept
+{
+    std::array<uint8_t, kValsetPayloadMax> payload{};
+    Writer writer{payload};
+    if (!begin_valset(writer) || !add_u4_item(writer, kKeyUart1Baudrate, baud)) {
+        return false;
+    }
+    return cmd_build_frame(out, kClsCfg, kIdCfgValset, writer.view());
+}
+
+/**
+ * @brief 单键 CFG-MSGOUT VALSET：值 = 每历元输出次数（0 关闭）。
+ * @param out: 目标命令缓冲。
+ * @param key: CFG-MSGOUT-*_UART1 的键。
+ * @param epochs: 每历元次数。
+ * @retval true: 已写入完整帧。
+ * @retval false: 载荷或缓冲空间不足。
+ */
+bool UbloxReceiver::cmd_valset_msgout(CmdBuf &out, uint32_t key, uint8_t epochs) noexcept
+{
+    std::array<uint8_t, kMsgoutPayloadMax> payload{};
+    Writer writer{payload};
+    if (!begin_valset(writer) || !add_u1_item(writer, key, epochs)) {
+        return false;
+    }
+    return cmd_build_frame(out, kClsCfg, kIdCfgValset, writer.view());
+}
+
+// ---- 应答判定：只判帧结构与 ACK 类别，不看具体配置内容 ----
+
+/**
+ * @brief UBX 帧的载荷长度（长度字段，小端）。
+ * @param frame: 整帧字节。
+ * @retval 长度: 载荷字节数；帧头不足时返回 0。
+ */
+size_t UbloxReceiver::resp_payload_len(std::span<const uint8_t> frame) noexcept
+{
+    if (frame.size() < (kLenOffset + 2U)) {
+        return 0U;
+    }
+    return static_cast<size_t>(frame[kLenOffset]) | (static_cast<size_t>(frame[kLenOffset + 1U]) << kShift1Byte);
+}
+
+/**
+ * @brief 是否为结构完整的 UBX-ACK-ACK / UBX-ACK-NAK。
+ * @param frame: 整帧字节。
+ * @retval true: class 0x05、id 0x00/0x01、载荷 2 字节、总长正好。
+ * @retval false: 其他帧。
+ */
+bool UbloxReceiver::resp_has_valid_ack(std::span<const uint8_t> frame) noexcept
+{
+    if ((frame.size() != (kHeaderBytes + kAckPayloadBytes + kCrcBytes)) || (frame[kClsOffset] != kClsAck)) {
+        return false;
+    }
+    if ((frame[kIdOffset] != kIdAck) && (frame[kIdOffset] != kIdNak)) {
+        return false;
+    }
+    return resp_payload_len(frame) == kAckPayloadBytes;
+}
+
+/**
+ * @brief ACK/NAK 载荷是否指向给定的 class/id（即“被 ACK 的是哪条命令”）。
+ * @param frame: 已通过 resp_has_valid_ack 的帧。
+ * @param cls: 期望被应答的 class。
+ * @param id: 期望被应答的 id。
+ * @retval true: 载荷等于 cls/id。
+ * @retval false: 其他命令的应答。
+ */
+bool UbloxReceiver::resp_ack_class_id(std::span<const uint8_t> frame, uint8_t cls, uint8_t id) noexcept
+{
+    return (frame[kPayloadOffset] == cls) && (frame[kPayloadOffset + 1U] == id);
+}
+
+// ---- 驱动成员 ----
 
 Family UbloxReceiver::family() const noexcept
 {
@@ -586,29 +478,83 @@ std::span<const demux::Decoder *const> UbloxReceiver::decoders() const noexcept
 
 uint32_t UbloxReceiver::caps(Model model) const noexcept
 {
-    return ublox::model_caps(model);
+    if (model == Model::kZedF9p) {
+        return cap::kRtcmIn | cap::kBase | cap::kRate20Hz;
+    }
+    return cap::kRtcmIn | cap::kBase;
 }
 
 bool UbloxReceiver::build_probe(CmdBuf &out) const noexcept
 {
-    return ublox::cmd::poll_mon_ver(out);
+    return cmd_poll_mon_ver(out);
 }
 
 bool UbloxReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                 ProbeResult &out) const noexcept
 {
-    return ublox::probe_match(dec, frame, out);
+    if ((&dec != &demux::ubx::kDecoder) || (frame.size() < (kHeaderBytes + kCrcBytes))) {
+        return false;
+    }
+    if ((frame[kClsOffset] != kClsMon) || (frame[kIdOffset] != kIdMonVer)) {
+        return false;
+    }
+    const size_t len = resp_payload_len(frame);
+    if ((len < kMonVerMinLen) || (frame.size() < (kPayloadOffset + len + kCrcBytes))) {
+        return false;
+    }
+    return read_mon_ver(frame.subspan(kPayloadOffset, len), out);
 }
 
 bool UbloxReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg, ConfigStep &out) const noexcept
 {
-    return ublox::script_step(index, model, cfg, out);
+    static_cast<void>(model); // ZED-F9P 单型号，脚本与型号无关
+    // 表放在成员函数作用域内：步骤回调要调 protected 的 cmd_*，匿名命名空间的自由函数没有访问权。
+    static constexpr std::array<ScriptStep, 2> kRoverScript{{
+        {[](const RoverConfig &c, ConfigStep &o) noexcept {
+             if (!cmd_configure_receiver(o.cmd, nav_period_ms(c))) {
+                 return false;
+             }
+             o.expect_reply = true;
+             o.timeout_ms = kConfigTimeoutMs;
+             o.switch_baud = 0;
+             return true;
+         },
+         &always},
+        {[](const RoverConfig &c, ConfigStep &o) noexcept {
+             if (!cmd_set_baudrate(o.cmd, c.port_baud)) {
+                 return false;
+             }
+             o.expect_reply = false;
+             o.timeout_ms = kConfigTimeoutMs;
+             o.switch_baud = c.port_baud;
+             return true;
+         },
+         &port_baud_enabled},
+    }};
+    size_t position = 0;
+    for (const ScriptStep &step : kRoverScript) {
+        if (!step.enabled(cfg)) {
+            continue;
+        }
+        if (position == index) {
+            return step.build(cfg, out);
+        }
+        ++position;
+    }
+    return false; // 脚本结束
 }
 
 Ack UbloxReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                   std::span<const uint8_t> sent) const noexcept
 {
-    return ublox::reply_ack(dec, frame, sent);
+    static_cast<void>(sent); // ACK/NAK 只回显 class/id，不回显命令文本
+    if (&dec != &demux::ubx::kDecoder) {
+        return Ack::kNone;
+    }
+    if (!resp_has_valid_ack(frame) || !resp_ack_class_id(frame, kClsCfg, kIdCfgValset)) {
+        return Ack::kNone; // 只认 CFG-VALSET（06 8A）的应答
+    }
+    return frame[kIdOffset] == kIdAck ? Ack::kAck : Ack::kNack;
 }
 
 size_t UbloxReceiver::frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
@@ -642,19 +588,19 @@ fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model 
     uint32_t key = 0U;
     switch (msg) {
     case OutputMsg::kGga:
-        key = ublox::kKeyMsgoutGgaUart1;
+        key = kKeyMsgoutGgaUart1;
         break;
     case OutputMsg::kRmc:
-        key = ublox::kKeyMsgoutRmcUart1;
+        key = kKeyMsgoutRmcUart1;
         break;
     case OutputMsg::kGsa:
-        key = ublox::kKeyMsgoutGsaUart1;
+        key = kKeyMsgoutGsaUart1;
         break;
     case OutputMsg::kGst:
-        key = ublox::kKeyMsgoutGstUart1;
+        key = kKeyMsgoutGstUart1;
         break;
     case OutputMsg::kGsv:
-        key = ublox::kKeyMsgoutGsvUart1;
+        key = kKeyMsgoutGsvUart1;
         break;
     case OutputMsg::kSatsInfo:
     case OutputMsg::kHeading:
@@ -666,20 +612,20 @@ fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model 
     }
 
     // 值 = 每历元次数：round(period_ms * rate_hz / 1000)，0 关闭；算下来为 0 时按 1（最慢 1 历元一次）。
-    const uint32_t rate = (plan.rate_hz == 0U) ? ublox::kMinRateHz : static_cast<uint32_t>(plan.rate_hz);
+    const uint32_t rate = (plan.rate_hz == 0U) ? kMinRateHz : static_cast<uint32_t>(plan.rate_hz);
     uint32_t epochs = 0U;
     if (period_ms != 0U) {
         // period_ms 最大 128000、rate 最大 20，乘积 2.56e6 在 uint32_t 内，无需 64 位。
-        const uint32_t scaled = (period_ms * rate) + ublox::kHalfSecondMs;
-        epochs = scaled / ublox::kMsPerSecond;
+        const uint32_t scaled = (period_ms * rate) + kHalfSecondMs;
+        epochs = scaled / kMsPerSecond;
         if (epochs == 0U) {
             epochs = 1U;
         }
-        if (epochs > ublox::kMaxEpochsPerEpoch) {
+        if (epochs > kMaxEpochsPerEpoch) {
             return fw::Status::kInvalidArg; // 键类型是 U1，超出可表示范围视为不可实现参数
         }
     }
-    if (!ublox::cmd::valset_msgout(out, key, static_cast<uint8_t>(epochs))) {
+    if (!cmd_valset_msgout(out, key, static_cast<uint8_t>(epochs))) {
         out.clear();
         return fw::Status::kInvalidArg;
     }

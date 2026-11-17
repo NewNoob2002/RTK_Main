@@ -19,9 +19,18 @@
 namespace gnss {
 
 /** ZED-F9P 驱动（定义在 src/drivers/UbloxReceiver.cpp）；应答解码器使用 demux::ubx::kDecoder。 */
-class UbloxReceiver final : public Receiver {
+class UbloxReceiver : public Receiver {
 public:
     constexpr UbloxReceiver() noexcept = default;
+    // 去掉 final 后必须公开虚析构：基类 Receiver 的 protected 非虚析构会挡住命名空间作用域的对象定义，
+    // 且 -Wnon-virtual-dtor 视为错误（与 UnicoreReceiver 同一处理）。
+    // 驱动对象仍只在静态存储以 constinit 存活，从不 new/delete，故删除拷贝/移动。
+    virtual ~UbloxReceiver() = default;
+
+    UbloxReceiver(const UbloxReceiver &) = delete;
+    UbloxReceiver &operator=(const UbloxReceiver &) = delete;
+    UbloxReceiver(UbloxReceiver &&) = delete;
+    UbloxReceiver &operator=(UbloxReceiver &&) = delete;
 
     [[nodiscard]] Family family() const noexcept override;
     [[nodiscard]] std::string_view name() const noexcept override;
@@ -42,6 +51,20 @@ public:
     /** CFG-MSGOUT VALSET（单键），值 = 每历元次数 round(period_ms*rate_hz/1000)；0 关闭。 */
     [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model, const OutputPlan &plan,
                                           CmdBuf &out) const noexcept override;
+
+protected:
+    // ---- 命令库：每个函数只组一条完整 UBX 帧（sync + class/id + len + payload + Fletcher） ----
+    [[nodiscard]] static bool cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id,
+                                              std::span<const uint8_t> payload) noexcept;
+    [[nodiscard]] static bool cmd_poll_mon_ver(CmdBuf &out) noexcept; // UBX-MON-VER 轮询（空载荷）
+    [[nodiscard]] static bool cmd_configure_receiver(CmdBuf &out, uint16_t period_ms) noexcept;
+    [[nodiscard]] static bool cmd_set_baudrate(CmdBuf &out, uint32_t baud) noexcept;
+    [[nodiscard]] static bool cmd_valset_msgout(CmdBuf &out, uint32_t key, uint8_t epochs) noexcept;
+
+    // ---- 应答判定：只判帧结构与 ACK 类别，不看具体配置内容 ----
+    [[nodiscard]] static size_t resp_payload_len(std::span<const uint8_t> frame) noexcept;
+    [[nodiscard]] static bool resp_has_valid_ack(std::span<const uint8_t> frame) noexcept;
+    [[nodiscard]] static bool resp_ack_class_id(std::span<const uint8_t> frame, uint8_t cls, uint8_t id) noexcept;
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */
