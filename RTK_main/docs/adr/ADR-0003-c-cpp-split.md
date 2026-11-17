@@ -50,3 +50,16 @@ C 与 C++ 的边界只有一种形式：C 头文件（`#pragma once` + `extern "
 - `rtk_core/*.cpp`：不改。
 - `rtk_proto/Frame.cpp`、`AlarmCodec.cpp`：改写为调用 C 接口的薄外观（行为由 74 个 C++ 用例约束不变）。`Bytes.cpp`、`Status.cpp` 不改。
 - `rtk_os`：DeepSeek 起草的 RAII 头未经验收，在 T13 中完成并由 QA 审查。
+
+## 勘误 2026-11-17（组件改名后的当前名称）
+
+本节只订正名称与路径事实，不改变本 ADR 的语言分工决定；改名依据 ADR-0008 §9。随后 ADR-0005 又改变了分流器的语言分工
+（`stream_demux` 用 C++），以 ADR-0005 为准。
+
+| 本文旧名 | 当前名称 / 路径 |
+| --- | --- |
+| `rtk_proto`（C 核心 + C++ 外观） | `device_proto`：C 头 `components/device_proto/include/DevProtoFrame.h`、`DevProtoAlarm.h`；C++ 外观 `include/proto/Frame.hpp`、`AlarmCodec.hpp` |
+| `rtk_core`（C++） | `link_core`：`components/link_core/include/core/` |
+| `rtk_os`（C++） | `rtos`：`components/rtos/include/rtos/`、`fw/Status.hpp` 里的 `rtos::from_esp_err` |
+| `rtk_bt`（C 驱动 + C++ 适配器） | `spp_server`：C 头 `include/SppServer.h`、`boot_include/SppServerStorage.h`；适配器 `include/spp/SppTransport.hpp` |
+| `rtk_store`（C） | `nvs_store`：`components/nvs_store/NvsStore.c` |

@@ -277,3 +277,18 @@ LinkManager 白名单变化（配对成功 / wl clear）
 2. CommandRouter 与旧 dispatcher 的 golden 向量逐字节一致；main_host_check 两种策略全部通过。
 3. 资源：静态 DRAM 增量不超过 4 KB；链路任务栈余量不少于 1 KB；app 分区剩余不低于 55%；kLink 每轮 overrun 在正常负载下为 0。
 4. 上板：I3 表 4.1 和表 4.2 复测不低于基线；spp_stress 窗口 32 的速率不低于 145 rep/s；peer 复位后重连 p95 ≤ 3 s。
+
+## 勘误 2026-11-17（组件改名后的当前名称）
+
+本节只订正名称与路径事实，不改变本 ADR 的模块与服务拆分决定；改名依据 ADR-0008 §9。
+
+| 本文旧名 / 旧路径 | 当前名称 / 当前路径 |
+| --- | --- |
+| `rtk_core` | `link_core`（`core::`） |
+| `rtk_os`（含 `Executor.hpp`） | `rtos`：`components/rtos/include/rtos/Executor.hpp` |
+| `rtk_console` | `cli`（`cli::` / `include/cli/`） |
+| `rtk_bt` | `spp_server`（`spp::SppTransport`） |
+| `rtk_proto` | `device_proto`（`proto::`） |
+| `rtk_store` | `nvs_store` |
+| `main/AppData.hpp` | `main/data/AppData.hpp` |
+| `main/app_link.cpp`、`main/app_rtcm*`、`main/app_console*` | `main/modules/{bt_link,rtcm,debug,system,storage,gnss}/` 下的模块文件 |

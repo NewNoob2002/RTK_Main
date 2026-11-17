@@ -8,16 +8,16 @@
 | ID | 检查 | 命令 / 方法 | 通过标准 |
 | --- | --- | --- | --- |
 | G1 | 冻结文件未改 | `sha256sum -c docs/frozen.sha256` | 全部 OK |
-| G2 | host 单元测试 | `cmake -S test/host -B /tmp/rtk-host && cmake --build /tmp/rtk-host && ctest --test-dir /tmp/rtk-host` | 8/8 可执行文件，93 用例 0 失败（C 测试只链接 C 库） |
+| G2 | host 单元测试 | `cmake -S test/host -B builds/qa-host && cmake --build builds/qa-host && ctest --test-dir builds/qa-host` | 8/8 可执行文件，93 用例 0 失败（C 测试只链接 C 库） |
 | G2b | ASan/UBSan | 同上，加 `-fsanitize=address,undefined` | 0 失败，无 sanitizer 报告 |
-| G3 | 目标构建 | 干净构建目录 `idf.py -B /tmp/rtk-tgt build` | 退出码 0，0 warning |
+| G3 | 目标构建 | 干净构建目录 `idf.py -B builds/qa-tgt build` | 退出码 0，0 warning |
 | G3b | 双架构（ESP-008） | `test_apps/rtk_pure` 分别构建 esp32 与 esp32c3 | 两者都成功（BATCH-D 起） |
 | G4 | 体积 | `idf.py size`、`size-components` | app ≤ 1.2 MB；记录各组件占用 |
-| G5 | 格式 | `clang-format --dry-run --Werror` 检查全部自有 .cpp/.hpp；权威检查为 astyle_py 3.4.7 + IDF 规则 | clang-format 0 处差异；astyle 需用户授权联网，未授权时记 NOT_RUN |
-| G5b | 静态分析 | `python3 -I tools/tidy_check/tidy_check.py --host-build builds/host --idf-build build --test-app-build builds/rtk_pure-esp32`：覆盖 device_proto、link_core、test/host、main、spp_server、rtos、nvs_store、test_apps/rtk_pure；C++ 用根 `.clang-tidy` 及目录继承配置，C 用 `.clang-tidy-c` 加脚本内分区排除项；ESP 侧按 `.clangd` 方式过滤 GCC 专有选项 | 0 发现（2026-11-11 用户授权扩大范围；豁免只能是具名 NOLINT 并附理由，目录级放宽见各 `.clang-tidy` 注释） |
+| G5 | 格式 | `clang-format --style=file --dry-run --Werror` 检查全部自有 C/C++ 源文件（不含 `reference/`、`test/stream_demux_dev/h2/H2Vectors.h` 等生成物）；门禁为仓库 `.clang-format` | clang-format 0 处差异 |
+| G5b | 静态分析 | `python3 -I tools/tidy_check/tidy_check.py --host-build builds/qa-host --idf-build builds/qa-tgt --test-app-build builds/rtk_pure-esp32`：覆盖 device_proto、link_core、test/host、main、spp_server、rtos、nvs_store、test_apps/rtk_pure；C++ 用根 `.clang-tidy` 及目录继承配置，C 用 `.clang-tidy-c` 加脚本内分区排除项；ESP 侧按 `.clangd` 方式过滤 GCC 专有选项 | 0 发现（2026-11-11 用户授权扩大范围；豁免只能是具名 NOLINT 并附理由，目录级放宽见各 `.clang-tidy` 注释） |
 | G6 | 分层与语言边界 | `grep -rnE '#include ["<](esp_\|freertos/\|sdkconfig\|nvs)' components/device_proto components/link_core` 无输出；C 文件（`components/*/*.c`）不包含任何 `.hpp`；C 公共头都有 `extern "C"` 保护 | 全部满足 |
 | G7 | 禁用特性 | 自有源码中 grep `new \|delete \|malloc\|free(\|std::function\|<vector>\|<string>\|<map>\|throw\|typeid\|dynamic_cast\|volatile`（placement new 例外，逐条审查） | 无未解释的命中；堆相关命中须符合 `docs/CODING-STYLE.md` 分级、文件头档位与 G7b 源文件白名单（2026-11-12 随 ADR-0008 §8 同步），其余禁令不变 |
-| G7b | C++ 运行时（CPP-001/002/003） | `python3 -I tools/g7b_check/g7b_check.py --build build`；`cpp_cost.py --prefix xtensa-esp32-elf- check build/rtk_main.elf --tier T2` 只报告 | 自有目标文件中异常、RTTI 符号均为 0；堆符号仅在对应源文件已登记 `tools/g7b_check/heap_allowlist.txt` 时放行并列出，否则 FAIL。白名单每行是仓库相对源文件路径 + `#` 档位与理由，初始为空；通过 `compile_commands.json` 精确映射，禁止按同名文件或目录豁免。审查须符合 `docs/CODING-STYLE.md`：ISR、蓝牙回调、链路任务每轮路径、发送任务禁止分配；启动期一次性分配允许；非实时路径允许限量分配并处理失败；文件头注明档位（2026-11-12 由 ADR-0008 §8 修订）。全 ELF 的异常/RTTI 符号仍只能是白名单 6 个（`__cxa_begin_catch`、`__cxa_end_catch`、`std::bad_alloc`/`std::exception` 的 typeinfo 与 typeinfo name），且 map 拉入链必须为 IDF `nvs_encrypted_partition.cpp.obj` → libstdc++ `new_opvnt.o` → `eh_catch.o`/`new_opv.o` → `new_op.o` → `bad_alloc.o`；任何新增符号或链路变化判 FAIL（2026-11-11 裁决，证据见 `docs/reports/T14-REVIEW.md`、`docs/reports/G7B-DECISION.md`）。heap 类来自 IDF 蓝牙栈，只报告 |
+| G7b | C++ 运行时（CPP-001/002/003） | `python3 -I tools/g7b_check/g7b_check.py --build builds/qa-tgt`；`cpp_cost.py --prefix xtensa-esp32-elf- check builds/qa-tgt/rtk_main.elf --tier T2` 只报告 | 自有目标文件中异常、RTTI 符号均为 0；堆符号仅在对应源文件已登记 `tools/g7b_check/heap_allowlist.txt` 时放行并列出，否则 FAIL。白名单每行是仓库相对源文件路径 + `#` 档位与理由，初始为空；通过 `compile_commands.json` 精确映射，禁止按同名文件或目录豁免。审查须符合 `docs/CODING-STYLE.md`：ISR、蓝牙回调、链路任务每轮路径、发送任务禁止分配；启动期一次性分配允许；非实时路径允许限量分配并处理失败；文件头注明档位（2026-11-12 由 ADR-0008 §8 修订）。全 ELF 的异常/RTTI 符号仍只能是白名单 6 个（`__cxa_begin_catch`、`__cxa_end_catch`、`std::bad_alloc`/`std::exception` 的 typeinfo 与 typeinfo name），且 map 拉入链必须为 IDF `nvs_encrypted_partition.cpp.obj` → libstdc++ `new_opvnt.o` → `eh_catch.o`/`new_opv.o` → `new_op.o` → `bad_alloc.o`；任何新增符号或链路变化判 FAIL（2026-11-11 裁决，证据见 `docs/reports/T14-REVIEW.md`、`docs/reports/G7B-DECISION.md`）。heap 类来自 IDF 蓝牙栈，只报告 |
 | G8 | 代码审查 | 验收方逐条审查：ESP-001（portMUX）、ESP-003（字节栈/绑核）、ESP-004（esp_err_t）、CPP-009/010/011/013/014/020、回调不阻塞、单一所有者、有界等待、错误路径释放 | 没有未处理的 High 问题 |
 
 ## 2. 硬件在环（HIL，需用户明确授权烧录指定 E1 板后执行）

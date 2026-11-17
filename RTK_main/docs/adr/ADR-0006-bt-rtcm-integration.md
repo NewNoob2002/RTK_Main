@@ -41,3 +41,15 @@
 1. `idf.py build` 0 警告；`tools/main_host_check` 两种策略全部通过（含新增混合流用例）；`test/host` 8/8；`test/stream_demux` 4/4；冻结校验通过。
 2. 上板：RTCM-only、RTCM+产品请求混合两种负载下，板端 `rtcm.frames/bytes/crc32` 与发送端完全一致（未发生 `rx_dropped` 时）；
    产品请求 0 丢失、0 内容错误；记录 RTCM 吞吐上限、溢出点与产品 RTT 变化。
+
+## 勘误 2026-11-17（组件改名后的当前名称）
+
+本节只订正名称与路径事实，不改变本 ADR 的分流与转发决定。
+
+| 本文旧名 / 旧路径 | 当前名称 / 当前路径 |
+| --- | --- |
+| `main/app_link.cpp` 的 `drain_rx` | `main/modules/bt_link/BtLinkModule.cpp` |
+| `rtk_core` | `link_core`（`core::`） |
+| `rtk_bt` | `spp_server`（C 驱动 `SppServer.h` + 适配器 `spp/SppTransport.hpp`） |
+| `components/rtk_bt/Kconfig`、`rtk_bt_spp.h` | `components/spp_server/Kconfig`、`components/spp_server/include/SppServer.h` + `boot_include/SppServerStorage.h` |
+| `rtk_demux_feed()` | `demux::StaticDemux::feed()` |

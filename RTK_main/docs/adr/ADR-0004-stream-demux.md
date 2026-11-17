@@ -105,3 +105,15 @@
 3. 可移植性：`gcc -std=c11 -m32` 与（若本机可用）`arm-none-eabi-gcc -mcpu=cortex-m0plus -Os` 编译 `rtk_demux` 零告警；报告给出 xtensa 下 `.text/.rodata` 大小。
 4. `idf.py build` 通过（组件加入构建但未被 main 使用时以 `-Wl,--gc-sections` 去除，不影响现有固件）。
 5. `sha256sum -c docs/frozen.sha256` 通过（架构方先把本批新冻结头加入清单）。
+
+## 勘误 2026-11-17（分流器改为 C++ 后的当前名称）
+
+本节只订正名称与路径事实，不改变本 ADR 的分流语义。语言分工已由 ADR-0005 改为 C++，实现随之替换：
+
+| 本文旧名 / 旧路径 | 当前名称 / 当前路径 |
+| --- | --- |
+| `rtk_demux` 组件（C） | `stream_demux` 组件（C++）：`components/stream_demux/include/demux/{Demux,StaticDemux,Decoder,TextWriter,Crc}.hpp`、`include/demux/decoders/*.hpp`、`src/{Demux,Crc}.cpp` |
+| `rtk_demux_t` / `rtk_demux_feed()` / `rtk_demux_abort()` | `demux::StaticDemux` 实例与 `feed()` / `abort()` 成员（命名空间 `demux`） |
+| `rtk_proto_demux.h`、`rtk_proto_demux_decoder` | `proto/DemuxFrame.hpp`（`device_proto`），产品帧解码器在 `proto::demux_frame` |
+| `main/app_link.cpp` 的 `drain_rx` | `main/modules/bt_link/BtLinkModule.cpp` |
+| `rtk_proto_frame_view` | `proto/Frame.hpp` 的字段视图接口 |

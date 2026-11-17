@@ -82,3 +82,16 @@ C 版实现（BATCH-A 已通过独立验收；BATCH-B 只有实现方自报的�
 ## 9. 修订记录
 
 - **2026-11-12 冻结接口演进（追加，不改原有语义）**：`core::LinkManager` 新增 `whitelist_add(const BtAddr&)` / `whitelist_remove(const BtAddr&)`，返回 `core::WhitelistEdit{kDone,kUnchanged,kFull}`；remove 删除后条目前移保持顺序；两者与 `whitelist_clear()` 一致，不影响已连接会话的角色（断开重连后按新白名单判定）。`core::LinkTrace` 追加 `kWhitelistRemove`（a = 白名单数量）；手动 add 复用 `kWhitelistAdd`（handle = 0）。用途：控制台 `wl add/del <MAC>`（`LinkVerb::kWhitelistAdd/kWhitelistDel`，args = 6 字节 MAC，改动立即落 NVS）。用例：`test/host/TestLinkManager.cpp` `test_whitelist_add_remove_single`、`test_whitelist_add_full`。
+
+## 10. 勘误 2026-11-17（组件改名后的当前名称）
+
+本节只订正名称与路径事实，不改变第 2–9 节的决定；改名依据 ADR-0008 §9 的映射表。
+
+| 本文旧名 | 当前名称 | 当前路径 / 符号 |
+| --- | --- | --- |
+| `rtk_proto` | `device_proto` | C++ 外观 `proto::` / `include/proto/`；C 头 `DevProtoFrame.h`、`DevProtoAlarm.h` |
+| `rtk_core` | `link_core` | `core::` / `include/core/` |
+| `rtk_os` | `rtos` | `rtos::` / `include/rtos/`；`rtk_os::from_esp_err` 现为 `rtos::from_esp_err` |
+| `rtk_bt` | `spp_server` | C 驱动 `SppServer.h` + 适配器 `spp/SppTransport.hpp` |
+| `rtk_store` | `nvs_store` | 纯 C，`nvs_store_*` / `NVS_STORE_*` |
+| `rtk::Status` | `fw::Status` | 公共基础错误码移到 `app_fw`（`fw/Status.hpp`），`fw::is_ok` / `fw::to_string` 同理 |

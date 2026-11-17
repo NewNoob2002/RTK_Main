@@ -173,9 +173,9 @@ namespace unrelated_app {
 - 同一组常量如果本来就是“取值集合”，优先 `enum class`；如果是协议里的一张号码表、需要当整数用，放进命名空间也可以。
 - `.cpp` 中为跨组件长名写的 `namespace x = …` 别名允许，但只在 `.cpp` 局部使用，头文件不写；同一个别名在多个文件反复出现，说明命名空间该调整了。
 - 头文件不写 `using namespace`。
-- **类型名不跨组件重名（2026-11-16 规则 4）**：不同组件里语义不同的类型不用同一个名字（现存 `gnss::Reply` 与
-  `core::Reply`），否则调用点必须写 `::gnss::` 全限定、读者也分不清是哪个。新增类型先在全工程查重；存量
-  `gnss::Reply` 在 GNSS 驱动重构（P3，修订 ADR-0010）中改名。
+- **类型名不跨组件重名（2026-11-16 规则 4）**：不同组件里语义不同的类型不用同一个名字，否则调用点必须写
+  `::gnss::` 全限定、读者也分不清是哪个。新增类型先在全工程查重。存量 `gnss::Reply` 已在 GNSS 驱动重构
+  （P3）中改名为 `gnss::ReplyVerdict`（`components/gnss/include/gnss/Receiver.hpp`），与 `core::Reply` 不再重名。
 
 ## 4. 类与函数内容
 
@@ -319,7 +319,8 @@ fw::Status apply(Settings settings); // 复制大对象
 禁止在固件自有代码中调用 `ESP_LOG*`/`printf` 输出日志；只允许 `esp_log_level_set`/`esp_log_set_vprintf` 控制 IDF 自身日志。
 
 ```cpp
-// 组件私有头，例如 components/gnss/src/GnssLog.hpp
+// 组件私有头（示例路径，仓库尚未新建此文件；需要时按组件命名建一个）
+// 例如 components/gnss/src/GnssLog.hpp
 #define GNSS_LOGW(...) FW_LOGW(fw::TraceCat::kGnss, __VA_ARGS__)
 #define GNSS_LOGI(...) FW_LOGI(fw::TraceCat::kGnss, __VA_ARGS__)
 
@@ -570,7 +571,8 @@ value = (uint16_t)((uint32_t)data[0] | ((uint32_t)data[1] << 8U));
 ## 9. 格式与静态检查交给工具
 
 布局不在此重复维护：日常用仓库 `.clang-format`，C++ 静态检查用 `.clang-tidy`，C 用 `.clang-tidy-c`；
-权威格式门禁是 astyle_py 3.4.7 + IDF 规则文件，实现方不得联网下载/安装。
+权威格式门禁是 `clang-format --style=file`（仓库 `.clang-format`，用户 2026-11-13 决定）；IDF 的 astyle 规则与
+`.clang-format` 冲突（续行缩进、`T {x}` 空格），不得用 astyle 改写本仓库文件，仅可作参考。
 格式工具不能替代线程契约、命名语义、内存档位及错误路径审查；不得通过放宽告警或改冻结配置消除发现。
 
 ```sh
@@ -616,3 +618,89 @@ default:
 // 不要这样写：把参考工程的字符串订阅与命名一并照搬
 // node->subscribe("Power");  void onEvent(void *param);
 ```
+
+## 10. 与 embedded-engineering 技能的对照（技能 git 5cae6d9）
+
+本表由 Q1 审计（2026-11-17）建立：只列对本工程适用或需要说明不适用的技能规则。状态取值：
+**覆盖**（已落地且有门禁/证据）、**有意偏离**（本工程规则更具体且有理由）、**缺口**（技能要求尚无对应做法，
+具体待决提议见 `docs/reports/Q1.md` §5）、**不适用**（本工程无该场景）。规则优先级见技能 `SKILL.md`：
+项目显式规则高于技能默认值，所以「有意偏离」不等于错误，但理由必须写在「依据或理由」列。
+
+| 技能 Rule ID | 技能要求（一句话） | 本项目做法 | 状态 | 依据或理由 |
+| --- | --- | --- | --- | --- |
+| GEN-001 | 烧录/擦除/eFuse/量产密钥/执行器上电等不可逆动作需授权与恢复路径 | 授权边界写在 AGENTS §6；报告逐项记 PASS/FAIL/NOT_RUN/BLOCKED | 覆盖 | AGENTS.md §6 |
+| GEN-002 | 硬件事实须有仓库来源或数据手册，查不到写 UNKNOWN | AGENTS §1 事实表带来源列；PSRAM 记 UNKNOWN | 覆盖 | AGENTS.md §1 |
+| GEN-003 | 证据分 PASS/FAIL/NOT_RUN/BLOCKED，仿真不等于硬件 | 每份 `docs/reports/` 用同一套结论词，HIL 未授权记 NOT_RUN | 覆盖 | docs/acceptance.md |
+| GEN-004 | 提交不带 agent `Signed-off-by`，生成代码记录工具与模型并指定人类 owner | `Generated-by: pi + <模型>` trailer，禁止 Signed-off-by | 覆盖 | AGENTS.md §2 |
+| GEN-005 | 架构级改动走 Phase 1 审批 | ADR 由架构方批准后才落地 | 覆盖 | docs/adr/*.md |
+| GEN-006 | 测试基准来自规格，不取自实现输出 | 解码向量由脚本独立算 CRC/长度 | 覆盖 | test/stream_demux_dev/h2/gen_vectors.py |
+| GEN-007 | 厂商生成代码不重排、不进门禁 | `reference/` 只读不参与构建；生成物 `test/stream_demux_dev/h2/H2Vectors.h` 仍被格式门禁扫到 | 缺口 | Q1-A05 |
+| GEN-008 | 向上游提交只用上游规格 | 本仓库无上游提交 | 不适用 | — |
+| GEN-009 | 外设等待有界、时钟在该阶段有效、tick 回绕安全 | BT 初始化按阶段位 + 超时；时间差用无符号运算 | 覆盖 | components/spp_server/SppServerInit.c、components/rtos/ |
+| GEN-010 | 校验外部输入的长度与范围 | 帧长在进缓冲前判上界 | 覆盖 | components/stream_demux/、components/device_proto/ |
+| DOC-001 | 新增自有函数都要 Doxygen，声明或定义写一处，类注释不算 | §6.2 强制（正文中文，项目规则优先） | 覆盖 | §6.2 |
+| CPPF-001 | 布局按项目选定的风格 | 仓库 `.clang-format` | 有意偏离 | AGENTS.md §5：clang-format 为唯一门禁 |
+| CPPF-002 | 命名按项目风格 | §3 + ADR-0008 §9 | 覆盖 | §3 |
+| ARCH-007 | 驱动状态放设备上下文，分段初始化逐个查返回 | GNSS 驱动实例层次 + `init()` 返回 Status | 覆盖 | components/gnss/ |
+| C-001 | 不用 volatile 做任务同步 | §5.3 同款；现存一处双重检查 volatile（Q1-A06） | 覆盖 | §5.3 |
+| C-002 | 模块外部以外的函数/变量 static | 文件作用域 `s_` 静态放匿名命名空间 | 覆盖 | §3 |
+| C-003 | 不留注释掉的代码 | 审查项 | 覆盖 | — |
+| C-004 | 宽度敏感处用定宽整数 | 协议字段全定宽 | 覆盖 | components/device_proto/ |
+| C-005 | 不对有符号数做位运算 | 掩码一律 `uint32_t` | 覆盖 | main/AppContext.hpp |
+| C-006 | 不混用有/无符号比较与算术 | 纯组件开 `-Wsign-conversion`；IDF 组件靠 `rtk_strict_warnings` 重开 `-Wsign-compare` | 覆盖 | cmake/strict_warnings.cmake |
+| C-007 | 浮点不用 `==`/`!=` | 浮点只出现在日志格式化 | 覆盖 | — |
+| C-008 | 硬件/帧结构体注意对齐与位序 | 帧按字节解析，不做结构体强转 | 覆盖 | §8 |
+| C-009 | 少用参数宏，括号、单次求值、不做控制转移 | 日志宏族 + `MODULE_DEF` 注册 | 覆盖 | §6 |
+| C-010 | 使用前初始化、判空 | `{}` 初始化 + `constinit` | 覆盖 | §4 |
+| C-011 | 不在 if 条件里赋值 | 审查项 | 覆盖 | — |
+| C-012 | 每个 switch 都有 default | §8 强制 | 覆盖 | §8 |
+| C-013 | 有意 fallthrough 加注释 | `-Wimplicit-fallthrough` | 覆盖 | 组件编译选项 |
+| C-014 | 不用隐式函数声明 | `-Werror` | 覆盖 | — |
+| C-016 | 头文件用 `#ifndef` 保护 | 本项目用 `#pragma once` | 有意偏离 | 技能 ESP-006 已声明该例外 |
+| ISR-001/002/003/004/006 | ISR 只取事件、W1C 直接赋值、ISR↔任务靠队列/环形/通知、FromISR API、时间预算测量 | 自有代码无 ISR：UART/GPIO 全轮询 | 不适用 | — |
+| RTOS-001 | 周期任务用绝对延时 | 执行器按 `now - last >= period` 比较，无漂移 | 覆盖 | components/rtos/Executor.cpp |
+| RTOS-002 | 每任务栈预算、溢出检测、高水位测量 | 栈字节常量 + canary + `uxTaskGetStackHighWaterMark` | 覆盖 | main/AppContext.hpp、Executor::stats_ |
+| RTOS-003 | 内核对象静态创建，初始化后不再分配 | 任务/信号量静态；堆仅 BootAlloc 启动期 | 覆盖 | components/rtos/BootAlloc.cpp |
+| RTOS-004 | 一个外设/总线一个所有者任务 | link 执行器拥有 BT，io 执行器拥有 GNSS UART | 覆盖 | main/app/Executors.cpp |
+| RTOS-005 | 看门狗只在关键子系统推进后喂 | 每轮末尾喂，复位失败即停 | 覆盖 | components/rtos/Executor.cpp |
+| DMA-001/002 | D-cache 对齐、ISR 只通知 | 无 DMA | 不适用 | — |
+| CPP-001 | T0–T2 关异常/RTTI/cxa_atexit，ELF 内无异常运行时 | `-fno-exceptions -fno-rtti`；ELF 仅 6 个白名单符号 | 覆盖 | docs/acceptance.md G7b |
+| CPP-002 | 无 RTTI typeinfo | 同上 | 覆盖 | 同上 |
+| CPP-003 | 堆分档：实时路径禁止、T1 只启动期、T2 固定池或注入分配器 | §7 三档 + g7b 白名单；T2 没有注入分配器 API，靠白名单审查 | 缺口 | §7、tools/g7b_check/heap_allowlist.txt |
+| CPP-004 | 不用 `std::function` | 模块用 ops 结构体 + 静态蹦床 | 覆盖 | §6 |
+| CPP-005 | T0 不用分配容器，T1/T2 有界 | 只用 `std::array`/`std::span`/`std::string_view` | 覆盖 | §4 |
+| CPP-006 | 不用 iostream | 控制台走 `cli::out_printf` | 覆盖 | §5.1 |
+| CPP-007 | printf 只用于非实时路径，T0 禁 | `snprintf` 只出现在命令/日志格式化 | 覆盖 | §5.1 |
+| CPP-008 | 共享原子要 `static_assert(is_always_lock_free)` | 仅 `main/modules/bt_link/BtLinkModule.cpp` 一处 | 缺口 | main/AppContext.hpp、components/app_fw/ |
+| CPP-009 | 函数内静态的动态初始化受限 | `gnss::enabled_receivers()` 的 `kList` 仍是动态初始化 | 缺口 | components/gnss/src/Registry.cpp |
+| CPP-010 | 全局/静态构造不访问硬件/RTOS/日志，显式 `init()` | `constexpr` 构造 + `[[nodiscard]] init()` | 覆盖 | §4.2 |
+| CPP-011 | 多态基类受保护非虚析构、实现类 `final` | 虚函数只限 `Transport`/`demux::Sink`/`gnss::Receiver` | 覆盖 | §4.3 |
+| CPP-012 | volatile 只用于 MMIO/DMA，不做复合运算 | 无 MMIO volatile | 覆盖 | — |
+| CPP-013 | ISR 向量 `extern "C"`、C 回调 `noexcept` 蹦床、跨边界类型 standard-layout | 无自有 ISR；BT 回调经 C 函数转发 | 覆盖 | components/spp_server/ |
+| CPP-014 | SDK 错误码在 bsp 层映射一次并检查 | `esp_err_t` 只在 IDF 边界，`rtos::from_esp_err` 映射 | 覆盖 | §4.5 |
+| CPP-015 | 自有代码开严格告警 + `-Werror`，第三方头用 `-isystem` | `rtk_strict_warnings()` + 组件选项集 | 覆盖 | cmake/strict_warnings.cmake |
+| CPP-017 | 不把位域用于寄存器映射 | 无位域映射 | 覆盖 | — |
+| CPP-020 | 全局用 `constinit`/`constexpr` | 执行器与模块表 `constinit` | 覆盖 | main/app/Executors.cpp |
+| TEST-001 | 测试基线：MCU C 用 Ceedling 等；已有框架可延续 | host 用 Unity + CTest，目标侧用 IDF Unity | 覆盖 | test/、test_apps/ |
+| TEST-002 | 新增/修改的 C 公共函数要有测试（正常/参数错误/依赖错误/边界） | C 侧用例集中在 device_proto/stream_demux，nvs_store 无 host 测试 | 缺口 | Q1-B（见报告） |
+| TEST-004 | 报告 Flash/RAM 增量与 `cpp_cost.py diff` | 报告给镜像字节与基线差，未用 `cpp_cost.py diff` | 缺口 | docs/reports/P3c.md |
+| TEST-006 | C++ 公共函数同样要有测试 | 纯组件各有 host 测试目录 | 覆盖 | test/ |
+| FSM-001 | 每个状态都显式处理意外事件 | 重连/链路状态机的 switch 都有 default | 覆盖 | components/bt_reconnect/ |
+| PROTO-001 | 访问前校验帧长与剩余缓冲，校验通过才执行命令 | 解码器先校验长度/CRC 再交付 | 覆盖 | components/stream_demux/ |
+| PROTO-002 | 显式端序转换，不对齐缓冲不强转结构体 | 多字节字段逐字节小端读写 | 覆盖 | §8 |
+| ERR-001 | assert 只用于程序员错误，release 失败进安全态 | 全仓库无 `assert` | 覆盖 | Q1 审计 grep |
+| FAULT-001 | 启动记录复位原因，故障处理器写 noinit RAM/保留 flash | 记录并打印 `reset_reason`，无自有故障处理器 | 覆盖 | main/support/ResetReason.cpp |
+| DBG-001 | 调试器 halt/reset/flash/option bytes 属硬件动作需授权 | AGENTS §6 禁止 | 覆盖 | AGENTS.md §6 |
+| BOOT-001 | 跳转前校验镜像哈希 | 无自有 bootloader/现场升级 | 不适用 | — |
+| BOOT-002 | 掉电安全更新 + 回滚 | 分区表有 `ota_0`/`ota_1`，未开回滚、无更新流程 | 缺口 | partitions.csv、sdkconfig.defaults |
+| BOOT-003 | 反回滚计数器 | 同上 | 不适用 | — |
+| RV-001 | RISC-V 目标原子 RMW 走临界区 | 产品固件只构建 esp32；esp32c3 只做 `rtk_pure` 编译验证 | 不适用 | ADR-0002 §偏离 |
+| ESP-001 | SMP 临界区用自旋锁，临界区内不阻塞 | `portMUX_TYPE` + `taskENTER_CRITICAL` | 覆盖 | §5.3 |
+| ESP-002 | 关 cache 期间的 ISR 必须 IRAM 安全 | 无此类 ISR | 不适用 | — |
+| ESP-003 | 栈按字节、绑核并写明理由、单核降级 | 栈字节常量 + 每处绑核注释 | 覆盖 | main/AppContext.hpp、main/app/Executors.cpp |
+| ESP-004 | 每个 `esp_err_t` 都检查，可恢复错误不用 `ESP_ERROR_CHECK` | 无 `ESP_ERROR_CHECK`、无 `(void)` 丢弃 | 覆盖 | Q1 审计 grep |
+| ESP-005 | eFuse/Secure Boot/Flash Encryption/JTAG 关闭需授权 | AGENTS §6 禁止 efuse | 覆盖 | AGENTS.md §6 |
+| ESP-006 | IDF 风格：4 空格、函数花括号换行、120 列、`s_` 前缀、组件前缀、`#pragma once`、Astyle | 前五项已落地，格式工具改用仓库 `.clang-format` | 有意偏离 | AGENTS.md §5：astyle 与 `.clang-format` 冲突 |
+| ESP-007 | OTA 至少两个分区 + otadata + 开启回滚 + mark valid | 有 otadata/`ota_0`/`ota_1`，未开 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | 缺口 | partitions.csv、sdkconfig.defaults |
+| ESP-008 | Xtensa 与 RISC-V 都要能编，用 `CONFIG_IDF_TARGET_*`/`SOC_*` 隔离 | 产品固件只 esp32（经典蓝牙限制），纯组件经 `test_apps/rtk_pure` 双架构编译 | 有意偏离 | ADR-0002:70,76 |
+| ESP-009 | 用锁定版本的 IDF API，不关默认 `-Werror` | IDF v6.1 固定路径；仓库无 `dependencies.lock` | 缺口 | .gitignore 注释与现状不符 |

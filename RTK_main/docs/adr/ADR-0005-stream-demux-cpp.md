@@ -50,3 +50,14 @@ AGENTS.md §2 C++ 规则全部适用（C++20 子集；无异常/RTTI/堆/`std::f
 2. 每个源文件 × {`g++`, `g++ -m32`, `arm-none-eabi-g++ cortex-m0plus -Os`} 零告警；报告 xtensa 下各文件 `.text/.rodata`。
 3. 独立 CMake 下关闭任一 `STREAM_DEMUX_<协议>` 仍能构建（测试工程对应用例跳过或按开关裁剪）。
 4. `idf.py build` 通过；`test/host` 8/8 回归；`sha256sum -c docs/frozen.sha256` 通过。
+
+## 勘误 2026-11-17（组件改名后的当前名称）
+
+本节只订正名称与路径事实，不改变本 ADR 的分工决定；改名依据 ADR-0008 §9。
+
+| 本文旧名 / 旧路径 | 当前名称 / 当前路径 |
+| --- | --- |
+| `rtk_proto`（产品帧解码器宿主） | `device_proto`：`components/device_proto/include/proto/DemuxFrame.hpp`、`src/DemuxFrame.cpp` |
+| 命名空间 `rtk::proto::demux_frame` | `proto::demux_frame` |
+| `rtk_proto/CMakeLists.txt` | `components/device_proto/CMakeLists.txt` |
+| 分流器组件 `rtk_demux` | `stream_demux`（`demux::` / `include/demux/`） |
