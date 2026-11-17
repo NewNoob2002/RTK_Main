@@ -4,7 +4,9 @@
 # 启用的驱动以同名宏（=1）传给 src/Registry.cpp 生成 enabledReceivers()。
 set(_gnss_drivers UNICORE UBLOX COMNAV)
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/pascal_case.cmake)
-set(_gnss_srcs src/NmeaParser.cpp src/Controller.cpp src/Registry.cpp src/Receiver.cpp)
+set(_gnss_srcs src/NmeaParser.cpp src/NmeaParserNumeric.cpp src/NmeaParserPosition.cpp
+               src/NmeaParserSatellites.cpp src/Controller.cpp src/ControllerProbe.cpp src/ControllerConfigure.cpp
+               src/Registry.cpp src/Receiver.cpp)
 
 if(ESP_PLATFORM)
     set(_srcs ${_gnss_srcs})
@@ -14,6 +16,13 @@ if(ESP_PLATFORM)
             string(TOLOWER "${_d}" _l)
             rtk_pascal_case(_f "${_l}")
             list(APPEND _srcs "src/drivers/${_f}Receiver.cpp")
+            if(_d STREQUAL "UNICORE")
+                # Unicore 驱动按职责分三文件：型号/能力、应答解码、命令脚本（ADR-0013 §2.4）。
+                list(APPEND _srcs src/drivers/UnicoreResp.cpp src/drivers/UnicoreScript.cpp)
+            elseif(_d STREQUAL "UBLOX")
+                # u-blox 驱动分两文件：UBX 帧层/配置编码与驱动行为。
+                list(APPEND _srcs src/drivers/UbloxUbx.cpp)
+            endif()
             list(APPEND _defs "RTK_GNSS_DRV_${_d}=1")
         endif()
     endforeach()
@@ -34,6 +43,11 @@ else()
             string(TOLOWER "${_d}" _l)
             rtk_pascal_case(_f "${_l}")
             target_sources(gnss PRIVATE src/drivers/${_f}Receiver.cpp)
+            if(_d STREQUAL "UNICORE")
+                target_sources(gnss PRIVATE src/drivers/UnicoreResp.cpp src/drivers/UnicoreScript.cpp)
+            elseif(_d STREQUAL "UBLOX")
+                target_sources(gnss PRIVATE src/drivers/UbloxUbx.cpp)
+            endif()
             target_compile_definitions(gnss PRIVATE RTK_GNSS_DRV_${_d}=1)
         endif()
     endforeach()
