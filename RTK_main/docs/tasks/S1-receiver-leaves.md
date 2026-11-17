@@ -53,7 +53,7 @@ G7b 只好开豁免。本卡把家族类改成纯基类，实例全部换成 fin
 - 新增/改动函数按 CODING-STYLE §6.2 写 doxygen；文件头不写阶段号。
 
 ## 2 不做
-- 不改 `main/`、`Receiver.hpp`、`Registry.cpp`、`DriverList.inc`、Controller、Kconfig。
+- 不改 `main/`、`Receiver.hpp`、`Registry.cpp`、`DriverList.inc`（T0b 已由 Claude 把 type 列改成叶子类：`Um980Receiver`、`ZedF9pReceiver`、`K803Receiver`，Registry 的 `&detail::k##type` 因此直接取叶子实例）、Controller、Kconfig。
 - 不改 `docs/**`（`docs/reports/` 除外）、`docs/frozen.sha256`（Claude 重算）。
 - 不做 ADR-0013 的改名（S2）。
 
