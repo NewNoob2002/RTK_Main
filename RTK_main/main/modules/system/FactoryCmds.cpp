@@ -138,6 +138,7 @@ int wlEdit(bool add, int argc, char **argv) noexcept
     return report(op, result) ? 0 : cli::kCmdFail;
 }
 
+// 命令表项：签名由 cli::Cmd 固定；添加/删除白名单由同一个 wlEdit 的常量参数区分。
 int cmdWlAdd(void * /*ctx*/, int argc, char **argv) noexcept
 {
     return wlEdit(true, argc, argv);
@@ -245,6 +246,7 @@ constexpr std::array<cli::Verb, 10U> kFactoryVerbs{{
     {"alarm-clear", nullptr, "clear forced alarm state", cmdAlarmClear},
 }};
 
+// 命令表项：签名由 cli::Cmd 的处理器类型固定；默认动词 "status" 在此注入。
 int cmdFactory(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kFactoryVerbs, ctx, argc, argv, "status");

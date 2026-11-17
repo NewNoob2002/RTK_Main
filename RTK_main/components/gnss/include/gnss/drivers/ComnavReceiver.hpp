@@ -88,7 +88,4 @@ public:
     constexpr K803Receiver() noexcept = default;
 };
 
-/** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */
-[[nodiscard]] const Receiver &comnavReceiver() noexcept;
-
 } // namespace gnss

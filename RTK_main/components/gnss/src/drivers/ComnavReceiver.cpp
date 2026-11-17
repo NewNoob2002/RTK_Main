@@ -480,10 +480,4 @@ fw::Status ComnavReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model m
     return fw::Status::kOk;
 }
 
-/** @brief K803 叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
-const Receiver &comnavReceiver() noexcept
-{
-    return detail::kK803Receiver;
-}
-
 } // namespace gnss

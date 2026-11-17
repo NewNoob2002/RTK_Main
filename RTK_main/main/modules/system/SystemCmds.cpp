@@ -553,16 +553,19 @@ constexpr std::array<cli::Verb, 6U> kSysVerbs{{
     {"reboot", nullptr, "print OK, wait 100 ms and restart", cmdSysReboot},
 }};
 
+// 命令表项：签名由 cli::Cmd 的处理器类型固定；缺省动词 "overview" 在此注入。
 int cmdStatus(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kStatusVerbs, ctx, argc, argv, "overview");
 }
 
+// 命令表项：签名由 cli::Cmd 的处理器类型固定，本函数只转发表与上下文。
 int cmdLog(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kLogVerbs, ctx, argc, argv);
 }
 
+// 命令表项：签名由 cli::Cmd 的处理器类型固定，本函数只转发表与上下文。
 int cmdSys(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kSysVerbs, ctx, argc, argv);

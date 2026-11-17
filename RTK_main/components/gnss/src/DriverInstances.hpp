@@ -4,7 +4,7 @@
 #pragma once
 
 // 构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 RTK_GNSS_DRV_<D>（CMake 转为同名宏）。
-// GNSS_ENABLE_<D> 是 0/1 归一化结果，本文件与 DriverList.inc 的展开共用。
+// GNSS_ENABLE_<D> 是 0/1 归一化结果，本文件与 Registry.cpp 的驱动表共用。
 // NOLINTBEGIN(cppcoreguidelines-macro-usage): 0/1 构建开关须参与 #if，constexpr 不能用于预处理
 #if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
 #define GNSS_ENABLE_UNICORE 1

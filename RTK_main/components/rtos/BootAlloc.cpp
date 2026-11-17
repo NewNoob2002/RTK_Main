@@ -23,6 +23,7 @@ constexpr bool isPowerOfTwo(size_t value) noexcept
 #ifdef ESP_PLATFORM
 constexpr uint32_t kDefaultCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 
+// 平台默认分配器（ESP：内部 RAM 堆）：直接填入 BootAlloc::Allocator 的默认函数指针，不另包类。
 void *defaultAlloc(size_t align, size_t bytes, void * /*ctx*/) noexcept
 {
     return heap_caps_aligned_alloc(align, bytes, kDefaultCaps);
@@ -40,6 +41,7 @@ size_t defaultAllocatedSize(void *ptr, void * /*ctx*/) noexcept
 #else
 constexpr uint32_t kDefaultCaps = 0U;
 
+// 主机默认分配器（host 测试构建）：同上，作为 Allocator 的默认函数指针。
 void *defaultAlloc(size_t align, size_t bytes, void * /*ctx*/) noexcept
 {
     return std::aligned_alloc(align, bytes);

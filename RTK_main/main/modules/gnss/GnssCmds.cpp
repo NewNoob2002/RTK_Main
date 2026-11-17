@@ -617,6 +617,7 @@ constexpr std::array<cli::Verb, 9U> kGnssVerbs{{
 }};
 // clang-format on
 
+// 命令表项：签名由 cli::Cmd 的处理器类型固定；缺省动词 "status" 在此注入。
 int cmdGnss(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kGnssVerbs, ctx, argc, argv, "status");

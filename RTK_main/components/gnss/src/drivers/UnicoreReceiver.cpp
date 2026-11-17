@@ -716,7 +716,7 @@ uint32_t UnicoreReceiver::caps(Model model) const noexcept
 const Receiver &UnicoreReceiver::forModel(Model model) const noexcept
 {
     // 双天线型号有单独驱动（多 kHeading 能力），其余型号就是家族驱动本身（ADR-0012 §2.8）。
-    return (model == Model::kUm982) ? um982Receiver() : *this;
+    return (model == Model::kUm982) ? detail::kUm982Receiver : *this;
 }
 
 bool UnicoreReceiver::buildProbe(CmdBuf &out) const noexcept
@@ -896,17 +896,6 @@ uint32_t Um982Receiver::caps(Model model) const noexcept
 const Receiver &Um982Receiver::forModel(Model) const noexcept
 {
     return *this;
-}
-
-const Receiver &um982Receiver() noexcept
-{
-    return detail::kUm982Receiver;
-}
-
-/** @brief UM980/UM981 基准型号叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
-const Receiver &unicoreReceiver() noexcept
-{
-    return detail::kUm980Receiver;
 }
 
 } // namespace gnss

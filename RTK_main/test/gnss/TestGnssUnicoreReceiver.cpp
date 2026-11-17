@@ -24,6 +24,15 @@ static_assert(std::is_trivially_destructible_v<gnss::Um980Receiver>);
 static_assert(std::is_trivially_destructible_v<gnss::Um982Receiver>);
 
 namespace {
+// 驱动访问器已按 ADR-0013 §2.3 删除；测试经注册表取基准叶子实例。
+const gnss::Receiver &unicoreDrv() noexcept
+{
+    return *gnss::receiverFor(gnss::Family::kUnicore);
+}
+const gnss::Receiver &um982Drv() noexcept
+{
+    return gnss::receiverFor(gnss::Family::kUnicore)->forModel(gnss::Model::kUm982);
+}
 
 constexpr uint32_t kTestBaud = 921600U;
 constexpr unsigned kNibbleBits = 4U;
@@ -149,7 +158,7 @@ static void testResponseRejectsAndWindow()
 static void testBuildProbe()
 {
     gnss::CmdBuf cmd;
-    TEST_ASSERT_TRUE(gnss::unicoreReceiver().buildProbe(cmd));
+    TEST_ASSERT_TRUE(unicoreDrv().buildProbe(cmd));
     TEST_ASSERT_TRUE(textEquals(cmd.view(), "VERSIONA\r\n"));
 }
 
@@ -160,15 +169,13 @@ static void testMatchProbe()
         "\"2310415000123\",\"R4.10.0\",\"ff\"*12345678";
     const std::span<const uint8_t> frame = bytesOf(version);
     gnss::ProbeResult result{};
-    TEST_ASSERT_TRUE(
-        gnss::unicoreReceiver().matchProbe(demux::unicore_hash::kDecoder, frame, result));
+    TEST_ASSERT_TRUE(unicoreDrv().matchProbe(demux::unicore_hash::kDecoder, frame, result));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Model::kUm982), static_cast<int>(result.model));
     TEST_ASSERT_EQUAL_STRING("R4.10Build11233", result.fwVersion.data());
 
     const std::string other = "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"OEM719\",\"1\",\"2\"*12345678";
     const std::span<const uint8_t> otherFrame = bytesOf(other);
-    TEST_ASSERT_FALSE(
-        gnss::unicoreReceiver().matchProbe(demux::unicore_hash::kDecoder, otherFrame, result));
+    TEST_ASSERT_FALSE(unicoreDrv().matchProbe(demux::unicore_hash::kDecoder, otherFrame, result));
 }
 
 static void testRoverScript()
@@ -184,29 +191,29 @@ static void testRoverScript()
                                                    "CONFIG COM2 921600\r\n"};
     for (size_t i = 0; i < 2; ++i) {
         gnss::ConfigStep step{};
-        TEST_ASSERT_TRUE(gnss::unicoreReceiver().roverStep(i, gnss::Model::kUm982, cfg, step));
+        TEST_ASSERT_TRUE(unicoreDrv().roverStep(i, gnss::Model::kUm982, cfg, step));
         TEST_ASSERT_TRUE(textEquals(step.cmd.view(), expected[i]));
         TEST_ASSERT_TRUE(step.expectReply);
         TEST_ASSERT_EQUAL_UINT32(0, step.switchBaud);
     }
     gnss::ConfigStep last{};
-    TEST_ASSERT_TRUE(gnss::unicoreReceiver().roverStep(2, gnss::Model::kUm982, cfg, last));
+    TEST_ASSERT_TRUE(unicoreDrv().roverStep(2, gnss::Model::kUm982, cfg, last));
     TEST_ASSERT_TRUE(textEquals(last.cmd.view(), expected[2]));
     TEST_ASSERT_FALSE(last.expectReply);
     TEST_ASSERT_EQUAL_UINT32(kTestBaud, last.switchBaud);
 
     gnss::ConfigStep none{};
-    TEST_ASSERT_FALSE(gnss::unicoreReceiver().roverStep(3, gnss::Model::kUm982, cfg, none));
+    TEST_ASSERT_FALSE(unicoreDrv().roverStep(3, gnss::Model::kUm982, cfg, none));
 
     // 不改波特率时脚本只有两步。
     cfg.portBaud = 0;
-    TEST_ASSERT_FALSE(gnss::unicoreReceiver().roverStep(2, gnss::Model::kUm982, cfg, none));
+    TEST_ASSERT_FALSE(unicoreDrv().roverStep(2, gnss::Model::kUm982, cfg, none));
 }
 
 /** buildOutput：周期按 10 ms 粒度下发，0 表示关闭，HEADINGA 受能力位约束。 */
 static void testBuildOutput()
 {
-    const gnss::Receiver &r = gnss::unicoreReceiver();
+    const gnss::Receiver &r = unicoreDrv();
     gnss::OutputPlan plan{};
     plan.port = 2;
     gnss::CmdBuf cmd;
@@ -273,20 +280,20 @@ static void testMatchReply()
     const std::string sentText = "UNLOG COM2\r\n";
     const std::span<const uint8_t> sent = bytesOf(sentText);
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kAck),
-                      static_cast<int>(gnss::unicoreReceiver().classifyReply(
-                          gnss::unicore::kResponseDecoder, okFrame, sent)));
+                      static_cast<int>(unicoreDrv().classifyReply(gnss::unicore::kResponseDecoder,
+                                                                  okFrame, sent)));
 
     const std::string nak = commandReply("UNLOG COM2", "ERROR");
     const std::span<const uint8_t> nakFrame = bytesOf(nak);
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNack),
-                      static_cast<int>(gnss::unicoreReceiver().classifyReply(
-                          gnss::unicore::kResponseDecoder, nakFrame, sent)));
+                      static_cast<int>(unicoreDrv().classifyReply(gnss::unicore::kResponseDecoder,
+                                                                  nakFrame, sent)));
 
     const std::string other = commandReply("OTHER", "OK");
     const std::span<const uint8_t> otherFrame = bytesOf(other);
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNone),
-                      static_cast<int>(gnss::unicoreReceiver().classifyReply(
-                          gnss::unicore::kResponseDecoder, otherFrame, sent)));
+                      static_cast<int>(unicoreDrv().classifyReply(gnss::unicore::kResponseDecoder,
+                                                                  otherFrame, sent)));
 }
 
 static void testCoexistsWithNmea()
@@ -327,13 +334,13 @@ public:
             ++nmea;
         }
         gnss::ProbeResult r{};
-        if (gnss::unicoreReceiver().matchProbe(dec, frame, r)) {
+        if (unicoreDrv().matchProbe(dec, frame, r)) {
             probeHit = true;
             probe = r;
         }
         static constexpr std::string_view kSent = "VERSIONA\r\n";
         const std::span<const uint8_t> sent = bytesOf(kSent);
-        if (gnss::unicoreReceiver().classifyReply(dec, frame, sent) == gnss::Ack::kAck) {
+        if (unicoreDrv().classifyReply(dec, frame, sent) == gnss::Ack::kAck) {
             ++acks;
         }
     }
@@ -353,7 +360,7 @@ static void testRealUm980CaptureThroughReceiverDecoders()
     size_t count = 0;
     decoders[count++] = &demux::nmea::kDecoder;
     decoders[count++] = &demux::rtcm3::kDecoder;
-    for (const demux::Decoder *dec : gnss::unicoreReceiver().decoders()) {
+    for (const demux::Decoder *dec : unicoreDrv().decoders()) {
         decoders[count++] = dec;
     }
     static std::array<uint8_t, 4096> buf{};
@@ -377,7 +384,7 @@ static void testRealUm980CaptureThroughReceiverDecoders()
 
 void testCaps()
 {
-    const gnss::Receiver &family = gnss::unicoreReceiver();
+    const gnss::Receiver &family = unicoreDrv();
     // 家族驱动描述 UM980/UM981 的能力；UM982 的 HEADING 能力在型号驱动上（ADR-0012 §2.8）。
     TEST_ASSERT_BITS(gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz,
                      gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz,
@@ -396,14 +403,14 @@ void testCaps()
 /** ADR-0012 §2.8：只有实现上真有差异的型号才换驱动实例。 */
 void testForModelSplitsModels()
 {
-    const gnss::Receiver &family = gnss::unicoreReceiver();
+    const gnss::Receiver &family = unicoreDrv();
     TEST_ASSERT_TRUE(&family.forModel(gnss::Model::kUm980) == &family);
     TEST_ASSERT_TRUE(&family.forModel(gnss::Model::kUm981) == &family);
     TEST_ASSERT_TRUE(&family.forModel(gnss::Model::kUnknown) == &family);
     TEST_ASSERT_TRUE(&family.forModel(gnss::Model::kZedF9p) == &family);
 
     const gnss::Receiver &dual = family.forModel(gnss::Model::kUm982);
-    TEST_ASSERT_TRUE(&dual == &gnss::um982Receiver());
+    TEST_ASSERT_TRUE(&dual == &um982Drv());
     TEST_ASSERT_TRUE(&dual.forModel(gnss::Model::kUm982) == &dual);
     TEST_ASSERT_TRUE(&dual.forModel(gnss::Model::kUm980) == &dual);
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore), static_cast<int>(dual.family()));
@@ -416,7 +423,7 @@ void testForModelSplitsModels()
 
 /**
  * @brief 控制器探测命中后必须换成该型号的驱动（ADR-0012 §2.8）：
- *        UM982 → um982Receiver() 且能力含 kHeading；UM980 → 家族驱动本身且无 kHeading。
+ *        UM982 → um982Drv() 且能力含 kHeading；UM980 → 家族驱动本身且无 kHeading。
  */
 void testControllerDetectsModelDriver()
 {
@@ -440,7 +447,7 @@ void testControllerDetectsModelDriver()
     timing.stepRetries = static_cast<uint8_t>(kStepRetries);
     timing.silenceMs = kSilenceMs;
     timing.retryBackoffMs = kRetryBackoffMs;
-    const std::array<const gnss::Receiver *, 1> receivers{&gnss::unicoreReceiver()};
+    const std::array<const gnss::Receiver *, 1> receivers{&unicoreDrv()};
     const std::array<uint32_t, 1> bauds{115200};
 
     const std::array<std::string, 2> replies{
@@ -451,8 +458,7 @@ void testControllerDetectsModelDriver()
             "#VERSIONA,96,GPS,FINE,2281,45803,0,0,18,10;\"UM980\",\"R4.10Build11833\",\"HRPT00-S10C-P\","
             "\"2310415000123\",\"R4.10.0\",\"ff\"*12345678"),
     };
-    const std::array<const gnss::Receiver *, 2> expected{&gnss::um982Receiver(),
-                                                         &gnss::unicoreReceiver()};
+    const std::array<const gnss::Receiver *, 2> expected{&um982Drv(), &unicoreDrv()};
     const std::array<uint32_t, 2> heading{static_cast<uint32_t>(gnss::cap::kHeading), 0U};
 
     for (size_t i = 0; i < replies.size(); ++i) {
@@ -488,29 +494,29 @@ void testControllerDetectsModelDriver()
 
 static void testGoldenProbe()
 {
-    TEST_ASSERT_TRUE(golden_check::probeMatches(gnss::unicoreReceiver(), golden_Unicore::kProbe));
+    TEST_ASSERT_TRUE(golden_check::probeMatches(unicoreDrv(), golden_Unicore::kProbe));
 }
 
 /** P3b：基础脚本 + buildOutput 逐项下发，合起来的命令集合必须与基线脚本一致。 */
 static void testGoldenOutputPlan()
 {
-    const size_t bad = plan_check::planMismatch(gnss::unicoreReceiver(), golden_Unicore::kRover,
-                                                golden_Unicore::kSteps);
+    const size_t bad =
+        plan_check::planMismatch(unicoreDrv(), golden_Unicore::kRover, golden_Unicore::kSteps);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
                              static_cast<uint32_t>(bad));
 }
 
 static void testGoldenProbeMatch()
 {
-    const size_t bad = golden_check::probeMatchMismatch(
-        gnss::unicoreReceiver(), golden_Unicore::kProbeMatch, &gnss::unicore::kResponseDecoder);
+    const size_t bad = golden_check::probeMatchMismatch(unicoreDrv(), golden_Unicore::kProbeMatch,
+                                                        &gnss::unicore::kResponseDecoder);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
                              static_cast<uint32_t>(bad));
 }
 
 static void testGoldenReplies()
 {
-    const size_t bad = golden_check::replyMismatch(gnss::unicoreReceiver(), golden_Unicore::kReply,
+    const size_t bad = golden_check::replyMismatch(unicoreDrv(), golden_Unicore::kReply,
                                                    &gnss::unicore::kResponseDecoder);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
                              static_cast<uint32_t>(bad));
@@ -518,7 +524,7 @@ static void testGoldenReplies()
 
 static void testGoldenCaps()
 {
-    const size_t bad = golden_check::capsMismatch(gnss::unicoreReceiver(), golden_Unicore::kCaps);
+    const size_t bad = golden_check::capsMismatch(unicoreDrv(), golden_Unicore::kCaps);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
                              static_cast<uint32_t>(bad));
 }
@@ -563,7 +569,7 @@ static void testGoldenHeadingThroughModelDriver()
     plan.port = static_cast<uint8_t>(portDigit - static_cast<uint8_t>('0'));
     plan.rateHz = 1;
     gnss::CmdBuf cmd;
-    const gnss::Receiver &dual = gnss::unicoreReceiver().forModel(gnss::Model::kUm982);
+    const gnss::Receiver &dual = unicoreDrv().forModel(gnss::Model::kUm982);
     TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
                       static_cast<int>(dual.buildOutput(gnss::OutputMsg::kHeading, 1000,
                                                         gnss::Model::kUm982, plan, cmd)));

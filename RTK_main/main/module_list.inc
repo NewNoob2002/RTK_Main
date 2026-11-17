@@ -1,4 +1,10 @@
 // 模块声明与注册清单；类型、成员、名称、编号、执行器、周期在此保持同一顺序。
+// X-macro（ADR-0013 §2.3）：同一份清单生成 4 种产物，展开点全部在 main/ 内：
+//   main/AppContext.hpp    MODULE_DEF(...) +1                         → kModuleCount 计数
+//   main/AppContext.hpp    MODULE_DEF(...) type member{};             → AppContext 成员声明
+//   main/AppContext.hpp    MODULE_DEF(...) member.bindContext(*this); → bindContexts() 绑定
+//   main/app/Executors.cpp MODULE_DEF(...) {name,...}                 → kModules 模块表
+// 增删本文件条目后按 `rg -n 'module_list.inc' main/` 复核以上 4 处仍与之匹配。
 #ifndef MODULE_DEF
 #include "AppConfig.hpp" // RTK_GNSS_ENABLED
 #include "modules/bt_link/BtLinkModule.hpp"

@@ -17,6 +17,10 @@ static_assert(std::is_final_v<gnss::K803Receiver>);
 static_assert(std::is_trivially_destructible_v<gnss::K803Receiver>);
 
 namespace {
+const gnss::Receiver &comnavDrv() noexcept
+{
+    return *gnss::receiverFor(gnss::Family::kComnav);
+}
 
 constexpr uint32_t kTestBaud = 921600U;
 
@@ -67,7 +71,7 @@ void testPromptDecoder()
 void testBuildProbe()
 {
     gnss::CmdBuf cmd;
-    TEST_ASSERT_TRUE(gnss::comnavReceiver().buildProbe(cmd));
+    TEST_ASSERT_TRUE(comnavDrv().buildProbe(cmd));
     TEST_ASSERT_TRUE(textEquals(cmd.view(), "LOG VERSIONA ONCE\r\n"));
 }
 
@@ -76,14 +80,13 @@ void testMatchProbe()
     // VERSIONA 应答是 Unicore Hash 报文（'#' + crc32），不是 NMEA 的 '$'。
     const std::string frame = "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"K803\",\"1\",\"2\"*12345678\r\n";
     gnss::ProbeResult result{};
-    TEST_ASSERT_TRUE(
-        gnss::comnavReceiver().matchProbe(demux::unicore_hash::kDecoder, bytesOf(frame), result));
+    TEST_ASSERT_TRUE(comnavDrv().matchProbe(demux::unicore_hash::kDecoder, bytesOf(frame), result));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Model::kK803), static_cast<int>(result.model));
 
     const std::string other =
         "#VERSIONA,96,GPS,FINE,1,1,0,0,1,1;\"OEM719\",\"1\",\"2\"*12345678\r\n";
     TEST_ASSERT_FALSE(
-        gnss::comnavReceiver().matchProbe(demux::unicore_hash::kDecoder, bytesOf(other), result));
+        comnavDrv().matchProbe(demux::unicore_hash::kDecoder, bytesOf(other), result));
 }
 
 void testRoverScript()
@@ -99,29 +102,29 @@ void testRoverScript()
                                                    "COM COM2 921600\r\n"};
     for (size_t i = 0; i < 2; ++i) {
         gnss::ConfigStep step{};
-        TEST_ASSERT_TRUE(gnss::comnavReceiver().roverStep(i, gnss::Model::kK803, cfg, step));
+        TEST_ASSERT_TRUE(comnavDrv().roverStep(i, gnss::Model::kK803, cfg, step));
         TEST_ASSERT_TRUE(textEquals(step.cmd.view(), expected[i]));
         TEST_ASSERT_TRUE(step.expectReply);
         TEST_ASSERT_EQUAL_UINT32(0, step.switchBaud);
     }
     gnss::ConfigStep last{};
-    TEST_ASSERT_TRUE(gnss::comnavReceiver().roverStep(2, gnss::Model::kK803, cfg, last));
+    TEST_ASSERT_TRUE(comnavDrv().roverStep(2, gnss::Model::kK803, cfg, last));
     TEST_ASSERT_TRUE(textEquals(last.cmd.view(), expected[2]));
     TEST_ASSERT_FALSE(last.expectReply);
     TEST_ASSERT_EQUAL_UINT32(kTestBaud, last.switchBaud);
 
     gnss::ConfigStep none{};
-    TEST_ASSERT_FALSE(gnss::comnavReceiver().roverStep(3, gnss::Model::kK803, cfg, none));
+    TEST_ASSERT_FALSE(comnavDrv().roverStep(3, gnss::Model::kK803, cfg, none));
 
     // 不改波特率时脚本只有两步。
     cfg.portBaud = 0;
-    TEST_ASSERT_FALSE(gnss::comnavReceiver().roverStep(2, gnss::Model::kK803, cfg, none));
+    TEST_ASSERT_FALSE(comnavDrv().roverStep(2, gnss::Model::kK803, cfg, none));
 }
 
 /** buildOutput：LOG/UNLOG 两种写法，周期 10 ms 粒度。 */
 void testBuildOutput()
 {
-    const gnss::Receiver &r = gnss::comnavReceiver();
+    const gnss::Receiver &r = comnavDrv();
     gnss::OutputPlan plan{};
     plan.port = 2;
     gnss::CmdBuf cmd;
@@ -158,35 +161,33 @@ void testBuildOutput()
 void testMatchReply()
 {
     const std::string ok = "<OK\r\n";
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kAck),
-                      static_cast<int>(gnss::comnavReceiver().classifyReply(
-                          gnss::comnav::kPromptDecoder, bytesOf(ok), {})));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::Ack::kAck),
+        static_cast<int>(comnavDrv().classifyReply(gnss::comnav::kPromptDecoder, bytesOf(ok), {})));
     const std::string nak = "<ERROR\r\n";
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNack),
-                      static_cast<int>(gnss::comnavReceiver().classifyReply(
-                          gnss::comnav::kPromptDecoder, bytesOf(nak), {})));
+                      static_cast<int>(comnavDrv().classifyReply(gnss::comnav::kPromptDecoder,
+                                                                 bytesOf(nak), {})));
     const std::string other = "<WARNING\r\n";
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNone),
-                      static_cast<int>(gnss::comnavReceiver().classifyReply(
-                          gnss::comnav::kPromptDecoder, bytesOf(other), {})));
+                      static_cast<int>(comnavDrv().classifyReply(gnss::comnav::kPromptDecoder,
+                                                                 bytesOf(other), {})));
     // 其他解码器的帧不认。
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Ack::kNone),
-                      static_cast<int>(gnss::comnavReceiver().classifyReply(
-                          demux::unicore_hash::kDecoder, bytesOf(ok), {})));
+                      static_cast<int>(comnavDrv().classifyReply(demux::unicore_hash::kDecoder,
+                                                                 bytesOf(ok), {})));
 }
 
 void testCaps()
 {
-    const uint32_t k803 = gnss::comnavReceiver().caps(gnss::Model::kK803);
+    const uint32_t k803 = comnavDrv().caps(gnss::Model::kK803);
     TEST_ASSERT_TRUE((k803 & gnss::cap::kRtcmIn) != 0);
     TEST_ASSERT_TRUE((k803 & gnss::cap::kBase) != 0);
     TEST_ASSERT_EQUAL_UINT32(0, k803 & gnss::cap::kIns);
     TEST_ASSERT_EQUAL_UINT32(0, k803 & gnss::cap::kHeading);
     // 单型号驱动：forModel 对任何型号都返回自身（ADR-0012 §2.8）。
-    TEST_ASSERT_TRUE(&gnss::comnavReceiver().forModel(gnss::Model::kK803) ==
-                     &gnss::comnavReceiver());
-    TEST_ASSERT_TRUE(&gnss::comnavReceiver().forModel(gnss::Model::kUm982) ==
-                     &gnss::comnavReceiver());
+    TEST_ASSERT_TRUE(&comnavDrv().forModel(gnss::Model::kK803) == &comnavDrv());
+    TEST_ASSERT_TRUE(&comnavDrv().forModel(gnss::Model::kUm982) == &comnavDrv());
 }
 
 } // namespace
@@ -202,29 +203,29 @@ void tearDown() {}
 
 static void testGoldenProbe()
 {
-    TEST_ASSERT_TRUE(golden_check::probeMatches(gnss::comnavReceiver(), golden_Comnav::kProbe));
+    TEST_ASSERT_TRUE(golden_check::probeMatches(comnavDrv(), golden_Comnav::kProbe));
 }
 
 /** P3b：基础脚本 + buildOutput 逐项下发，合起来的命令集合必须与基线脚本一致。 */
 static void testGoldenOutputPlan()
 {
-    const size_t bad = plan_check::planMismatch(gnss::comnavReceiver(), golden_Comnav::kRover,
-                                                golden_Comnav::kSteps);
+    const size_t bad =
+        plan_check::planMismatch(comnavDrv(), golden_Comnav::kRover, golden_Comnav::kSteps);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
                              static_cast<uint32_t>(bad));
 }
 
 static void testGoldenProbeMatch()
 {
-    const size_t bad = golden_check::probeMatchMismatch(gnss::comnavReceiver(),
-                                                        golden_Comnav::kProbeMatch, nullptr);
+    const size_t bad =
+        golden_check::probeMatchMismatch(comnavDrv(), golden_Comnav::kProbeMatch, nullptr);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
                              static_cast<uint32_t>(bad));
 }
 
 static void testGoldenReplies()
 {
-    const size_t bad = golden_check::replyMismatch(gnss::comnavReceiver(), golden_Comnav::kReply,
+    const size_t bad = golden_check::replyMismatch(comnavDrv(), golden_Comnav::kReply,
                                                    &gnss::comnav::kPromptDecoder);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
                              static_cast<uint32_t>(bad));
@@ -232,7 +233,7 @@ static void testGoldenReplies()
 
 static void testGoldenCaps()
 {
-    const size_t bad = golden_check::capsMismatch(gnss::comnavReceiver(), golden_Comnav::kCaps);
+    const size_t bad = golden_check::capsMismatch(comnavDrv(), golden_Comnav::kCaps);
     TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
                              static_cast<uint32_t>(bad));
 }

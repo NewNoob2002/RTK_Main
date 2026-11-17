@@ -180,7 +180,7 @@ protected:
 };
 
 /**
- * 本次构建启用的驱动，顺序即探测优先级（DriverList.inc 的行序）。
+ * 本次构建启用的驱动，顺序即探测优先级（Registry.cpp 的 kReceivers 表序）。
  * 未编译进来的驱动不出现在表中。线程/ISR 安全：是（静态常量表）。
  */
 [[nodiscard]] std::span<const Receiver *const> enabledReceivers() noexcept;

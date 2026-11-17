@@ -648,10 +648,4 @@ fw::Status UbloxReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model mo
     return fw::Status::kOk;
 }
 
-/** @brief ZED-F9P 叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
-const Receiver &ubloxReceiver() noexcept
-{
-    return detail::kZedF9pReceiver;
-}
-
 } // namespace gnss

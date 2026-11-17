@@ -54,7 +54,7 @@ public:
     [[nodiscard]] std::span<const demux::Decoder *const> decoders() const noexcept override;
     /** UM980/UM981 能力；不含 kHeading（双天线由 Um982Receiver 覆盖）。 */
     [[nodiscard]] uint32_t caps(Model model) const noexcept override;
-    /** kUm982 → um982Receiver()，其余 → *this。 */
+    /** kUm982 → detail::kUm982Receiver，其余 → *this。 */
     [[nodiscard]] const Receiver &forModel(Model model) const noexcept override;
     [[nodiscard]] bool buildProbe(CmdBuf &out) const noexcept override;
     [[nodiscard]] bool matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
@@ -145,10 +145,5 @@ public:
     /** 型号驱动不再细分：返回 *this。 */
     [[nodiscard]] const Receiver &forModel(Model model) const noexcept override;
 };
-
-/** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */
-[[nodiscard]] const Receiver &unicoreReceiver() noexcept;
-/** UM982 型号驱动单例；一般经 unicoreReceiver().forModel(Model::kUm982) 取得。 */
-[[nodiscard]] const Receiver &um982Receiver() noexcept;
 
 } // namespace gnss

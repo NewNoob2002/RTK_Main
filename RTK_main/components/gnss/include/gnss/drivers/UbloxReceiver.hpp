@@ -77,7 +77,4 @@ public:
     constexpr ZedF9pReceiver() noexcept = default;
 };
 
-/** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */
-[[nodiscard]] const Receiver &ubloxReceiver() noexcept;
-
 } // namespace gnss

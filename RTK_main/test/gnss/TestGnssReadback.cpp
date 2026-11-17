@@ -24,6 +24,27 @@
 #endif
 
 namespace {
+// 驱动访问器已按 ADR-0013 §2.3 删除；测试经注册表取基准叶子实例。
+const gnss::Receiver &unicoreDrv() noexcept
+{
+    return *gnss::receiverFor(gnss::Family::kUnicore);
+}
+const gnss::Receiver &um982Drv() noexcept
+{
+    return gnss::receiverFor(gnss::Family::kUnicore)->forModel(gnss::Model::kUm982);
+}
+#if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
+const gnss::Receiver &ubloxDrv() noexcept
+{
+    return *gnss::receiverFor(gnss::Family::kUblox);
+}
+#endif
+#if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
+const gnss::Receiver &comnavDrv() noexcept
+{
+    return *gnss::receiverFor(gnss::Family::kComnav);
+}
+#endif
 
 constexpr unsigned kNibbleBits = 4U;
 constexpr unsigned kNibbleMask = 0x0FU;
@@ -346,10 +367,10 @@ static void testStandardChecksumConfigLineIsClaimedByNmea()
 static void testBuildReadbackWritesConfig()
 {
     gnss::CmdBuf cmd;
-    TEST_ASSERT_TRUE(gnss::unicoreReceiver().buildReadback(cmd));
+    TEST_ASSERT_TRUE(unicoreDrv().buildReadback(cmd));
     TEST_ASSERT_TRUE(bytesEqual(cmd.view(), kReadbackCommand));
     // Um982Receiver 继续同一条读回命令。
-    TEST_ASSERT_TRUE(gnss::um982Receiver().buildReadback(cmd));
+    TEST_ASSERT_TRUE(um982Drv().buildReadback(cmd));
     TEST_ASSERT_TRUE(bytesEqual(cmd.view(), kReadbackCommand));
 }
 
@@ -358,21 +379,21 @@ static void testMatchReadbackExtractsBody()
     std::array<char, kReadbackCapacity> out{};
     const std::string line = configLine("COM1,GPGGA,1");
     const size_t len =
-        gnss::unicoreReceiver().matchReadback(gnss::unicore::kResponseDecoder, bytesOf(line), out);
+        unicoreDrv().matchReadback(gnss::unicore::kResponseDecoder, bytesOf(line), out);
     TEST_ASSERT_EQUAL_UINT32(12U, static_cast<uint32_t>(len)); // "COM1,GPGGA,1"
     TEST_ASSERT_TRUE(charsEqual(std::span<const char>(out.data(), len), "COM1,GPGGA,1"));
 
     // $command,CONFIG,response: OK*.. 是命令应答，不是配置行。
     const std::string reply = commandReply("CONFIG", "OK");
-    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(gnss::unicoreReceiver().matchReadback(
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(unicoreDrv().matchReadback(
                                      gnss::unicore::kResponseDecoder, bytesOf(reply), out)));
     // 别的解码器交付的帧一律不算。
-    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(gnss::unicoreReceiver().matchReadback(
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(unicoreDrv().matchReadback(
                                      demux::nmea::kDecoder, bytesOf(line), out)));
     // 截断：正文比缓冲长时只写缓冲容量，返回值仍 > 0（调用方据此计数）。
     std::array<char, kSmallCapacity> small{};
     TEST_ASSERT_EQUAL_UINT32(kSmallCapacity,
-                             static_cast<uint32_t>(gnss::unicoreReceiver().matchReadback(
+                             static_cast<uint32_t>(unicoreDrv().matchReadback(
                                  gnss::unicore::kResponseDecoder, bytesOf(line), small)));
 }
 
@@ -381,10 +402,10 @@ static void testDriversWithoutReadback()
     gnss::CmdBuf cmd;
     TEST_ASSERT_FALSE(gnss::nullReceiver().buildReadback(cmd));
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
-    TEST_ASSERT_FALSE(gnss::ubloxReceiver().buildReadback(cmd));
+    TEST_ASSERT_FALSE(ubloxDrv().buildReadback(cmd));
 #endif
 #if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
-    TEST_ASSERT_FALSE(gnss::comnavReceiver().buildReadback(cmd));
+    TEST_ASSERT_FALSE(comnavDrv().buildReadback(cmd));
 #endif
 }
 
@@ -567,7 +588,7 @@ static void testReadbackRejectedBeforeRunning()
 {
     gnss::Controller ctl;
     static const std::array<uint32_t, 1U> bauds{kTestBaud};
-    const std::array<const gnss::Receiver *, 1U> receivers{&gnss::unicoreReceiver()};
+    const std::array<const gnss::Receiver *, 1U> receivers{&unicoreDrv()};
     const gnss::RoverConfig cfg = readbackRoverConfig();
     TEST_ASSERT_TRUE(ctl.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, fastTiming()));
 
@@ -584,7 +605,7 @@ static void testReadbackCollectsLinesUntilIdle()
 {
     gnss::Controller ctl;
     uint32_t now = 0U;
-    TEST_ASSERT_TRUE(initRunningController(ctl, gnss::unicoreReceiver(), now));
+    TEST_ASSERT_TRUE(initRunningController(ctl, unicoreDrv(), now));
     const uint32_t seqBefore = ctl.stats().readbackSeq;
 
     TEST_ASSERT_TRUE(ctl.requestReadback(now));
@@ -616,7 +637,7 @@ static void testReadbackIgnoresNmeaLines()
 {
     gnss::Controller ctl;
     uint32_t now = 0U;
-    TEST_ASSERT_TRUE(initRunningController(ctl, gnss::unicoreReceiver(), now));
+    TEST_ASSERT_TRUE(initRunningController(ctl, unicoreDrv(), now));
     const uint32_t seqBefore = ctl.stats().readbackSeq;
 
     TEST_ASSERT_TRUE(ctl.requestReadback(now));
@@ -635,7 +656,7 @@ static void testReadbackEndsOnTotalTimeout()
 {
     gnss::Controller ctl;
     uint32_t now = 0U;
-    TEST_ASSERT_TRUE(initRunningController(ctl, gnss::unicoreReceiver(), now));
+    TEST_ASSERT_TRUE(initRunningController(ctl, unicoreDrv(), now));
     const uint32_t start = now;
     TEST_ASSERT_TRUE(ctl.requestReadback(now));
     TEST_ASSERT_TRUE(isWrite(ctl.poll(now), "CONFIG\r\n"));
@@ -662,7 +683,7 @@ static void testUbloxRunStillRejectsReadback()
     gnss::Controller ctl;
     uint32_t now = 0U;
     // u-blox 脚本在 cfg.portBaud == 0 时只剩一条 VALSET，仍需真实 ACK 才能到 kRunning。
-    TEST_ASSERT_TRUE(initRunningController(ctl, gnss::ubloxReceiver(), now));
+    TEST_ASSERT_TRUE(initRunningController(ctl, ubloxDrv(), now));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(ctl.state()));
     TEST_ASSERT_FALSE(ctl.requestReadback(now));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(ctl.state()));

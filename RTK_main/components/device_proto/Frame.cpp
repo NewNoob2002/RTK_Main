@@ -41,6 +41,7 @@ ParseResult fromCResult(dev_proto_parse_result_t result) noexcept
 
 } // namespace
 
+// C 实现 dev_proto_crc32 的 C++ 外观（ADR-0003）：span → 指针 + 长度，供 link_core 跨组件调用。
 uint32_t crc32(std::span<const uint8_t> data, uint32_t crc) noexcept
 {
     return dev_proto_crc32(crc, data.data(), data.size());

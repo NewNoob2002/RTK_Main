@@ -45,6 +45,7 @@ constexpr std::array<cli::Verb, 2U> kRtcmVerbs{{
     {"reset", nullptr, "clear RTCM and demux statistics", cmdRtcmReset},
 }};
 
+// 命令表项：签名由 cli::Cmd 的处理器类型固定；默认动词/参数在此注入。
 int cmdRtcm(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kRtcmVerbs, ctx, argc, argv);

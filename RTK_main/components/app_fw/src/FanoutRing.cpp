@@ -374,6 +374,7 @@ Result FanoutRing::setMask(uint8_t readerId, FanoutMask mask) noexcept
     return Result::kOk;
 }
 
+// 类型化记录长度：把内部缓冲包装成 span 交给 readHeaderLen（类型适配，非纯转发）。
 uint16_t FanoutRing::typedLength(uint32_t pos) const noexcept
 {
     return readHeaderLen({buf_, cap_}, 0U, pos);
@@ -553,11 +554,13 @@ Result FanoutRing::finishLease(const FanoutLease &lease, bool consume) noexcept
     return Result::kOk;
 }
 
+// 租约提交（ADR-0013 §2.3 点名保留）：常量 true 表达落账语义，调用方无需记布尔含义。
 Result FanoutRing::commit(const FanoutLease &lease) noexcept
 {
     return finishLease(lease, true);
 }
 
+// 租约回滚（ADR-0013 §2.3 点名保留）：常量 false 表达回滚语义，与 commit 成对。
 Result FanoutRing::cancel(const FanoutLease &lease) noexcept
 {
     return finishLease(lease, false);

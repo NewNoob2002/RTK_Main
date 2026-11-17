@@ -41,6 +41,7 @@ constexpr uint32_t kApplyTimeoutMs = 5000U;
 /** 读回行缓冲：UnicoreResp 单帧上限 256 B，正文必小于它（ADR-0012 §2.7）。 */
 constexpr size_t kReadbackLineBytes = 256U;
 
+// kGnss 子事件包装：枚举 → uint8_t 载荷、session 恒 0（ADR-0009），参数求值昂贵时调用方先用 fw::traceOn()。
 void traceGnssSub(GnssSubTrace ev, uint32_t v0, uint32_t v1) noexcept
 {
     fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(ev), 0U, v0, v1);

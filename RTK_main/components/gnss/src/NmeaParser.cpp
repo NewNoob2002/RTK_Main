@@ -583,16 +583,6 @@ NumResult parseDiffAge(std::span<const uint8_t> field, uint16_t &out) noexcept
     return NumResult::kOk;
 }
 
-/** @brief 取下一个字段；语句提前结束时返回 false。
- * @param it: 字段迭代器
- * @param out: 输出字段
- * @retval false 表示语句已结束
- */
-bool takeField(FieldIter &it, std::span<const uint8_t> &out) noexcept
-{
-    return it.next(out);
-}
-
 /** @brief GGA 的 UTC 时间字段。
  * @param it: 字段迭代器
  * @param fix: 待更新的定位结果
@@ -601,7 +591,7 @@ bool takeField(FieldIter &it, std::span<const uint8_t> &out) noexcept
 bool takeTime(FieldIter &it, Fix &fix) noexcept
 {
     std::span<const uint8_t> f{};
-    return takeField(it, f) && (parseTime(f, fix.utc) != NumResult::kError);
+    return it.next(f) && (parseTime(f, fix.utc) != NumResult::kError);
 }
 
 /** @brief GGA 的经纬度 + 半球字段（两者都空表示未知，保持原值）。

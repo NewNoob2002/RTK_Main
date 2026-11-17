@@ -1,4 +1,4 @@
-// 驱动注册与型号元数据：按构建开关从 DriverList.inc 生成 enabledReceivers()（ADR-0012 §2.2/§2.3）。
+// 驱动注册与型号元数据：按构建开关组成探测优先级表 kReceivers，供 enabledReceivers() 查询（ADR-0012 §2.2/§2.3）。
 // 线程安全：是（返回命名空间作用域的常量初始化地址表，无运行期状态）；可在任意任务/ISR 取用。
 // 堆：不使用。构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 RTK_GNSS_DRV_<D>（CMake 转为同名宏）。
 #include <array>
@@ -15,12 +15,19 @@ namespace {
 
 constexpr size_t kEnabledCount = GNSS_ENABLE_UNICORE + GNSS_ENABLE_UBLOX + GNSS_ENABLE_COMNAV;
 
+// 顺序即探测优先级：Unicore → u-blox → ComNav。新增驱动在这里加一行，并在 DriverInstances.hpp 声明其实例。
 // 地址表在命名空间作用域做常量初始化（CPP-009）：不放进函数内静态，避免动态初始化与 __cxa_guard_*。
 // NOLINTNEXTLINE(readability-identifier-naming): 同 DriverInstances.hpp；constinit 数组被判为 GlobalVariable
 constinit const std::array<const Receiver *, kEnabledCount> kReceivers{
-#define GNSS_DRIVER(suffix, family_, type, accessor) &detail::k##type,
-#include "gnss/DriverList.inc"
-#undef GNSS_DRIVER
+#if GNSS_ENABLE_UNICORE
+    &detail::kUm980Receiver,
+#endif
+#if GNSS_ENABLE_UBLOX
+    &detail::kZedF9pReceiver,
+#endif
+#if GNSS_ENABLE_COMNAV
+    &detail::kK803Receiver,
+#endif
 };
 
 } // namespace

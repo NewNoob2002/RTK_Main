@@ -29,6 +29,26 @@
 
 namespace {
 
+// 驱动访问器已按 ADR-0013 §2.3 删除；测试经注册表取基准叶子实例。
+#if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
+const gnss::Receiver &unicoreDrv() noexcept
+{
+    return *gnss::receiverFor(gnss::Family::kUnicore);
+}
+#endif
+#if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
+const gnss::Receiver &ubloxDrv() noexcept
+{
+    return *gnss::receiverFor(gnss::Family::kUblox);
+}
+#endif
+#if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
+const gnss::Receiver &comnavDrv() noexcept
+{
+    return *gnss::receiverFor(gnss::Family::kComnav);
+}
+#endif
+
 std::span<const uint8_t> bytesOf(std::string_view text)
 {
     return std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size());
@@ -87,13 +107,13 @@ static void testNmeaClassification()
                                         &gnss::nullReceiver()};
     size_t count = 0;
 #if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
-    drivers[count++] = &gnss::unicoreReceiver();
+    drivers[count++] = &unicoreDrv();
 #endif
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
-    drivers[count++] = &gnss::ubloxReceiver();
+    drivers[count++] = &ubloxDrv();
 #endif
 #if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
-    drivers[count++] = &gnss::comnavReceiver();
+    drivers[count++] = &comnavDrv();
 #endif
 #if (defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE) ||                                     \
     (defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX) ||                                         \
@@ -120,16 +140,16 @@ static void testVendorFrames()
     const std::string_view heading =
         "#HEADINGA,97,GPS,FINE,2281,1,0,0,18,10;SOL_COMPUTED,12*12345678";
     const std::string_view other = "#VERSIONA,96,GPS*12345678";
-    TEST_ASSERT_TRUE(classifiesAs(gnss::unicoreReceiver(), demux::unicore_hash::kDecoder, sats,
+    TEST_ASSERT_TRUE(classifiesAs(unicoreDrv(), demux::unicore_hash::kDecoder, sats,
                                   gnss::OutputMsg::kSatsInfo));
-    TEST_ASSERT_TRUE(classifiesAs(gnss::unicoreReceiver(), demux::unicore_hash::kDecoder, heading,
+    TEST_ASSERT_TRUE(classifiesAs(unicoreDrv(), demux::unicore_hash::kDecoder, heading,
                                   gnss::OutputMsg::kHeading));
-    TEST_ASSERT_TRUE(classifiesAs(gnss::unicoreReceiver(), demux::unicore_hash::kDecoder, other,
-                                  gnss::OutputMsg::kNone));
+    TEST_ASSERT_TRUE(
+        classifiesAs(unicoreDrv(), demux::unicore_hash::kDecoder, other, gnss::OutputMsg::kNone));
 #endif
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
-    TEST_ASSERT_TRUE(classifiesAs(gnss::ubloxReceiver(), demux::unicore_hash::kDecoder, sats,
-                                  gnss::OutputMsg::kNone));
+    TEST_ASSERT_TRUE(
+        classifiesAs(ubloxDrv(), demux::unicore_hash::kDecoder, sats, gnss::OutputMsg::kNone));
 #endif
     // 未识别驱动（NullReceiver）对所有帧都是 kNone，保证探测失败后不会误投数据。
     TEST_ASSERT_TRUE(
@@ -148,24 +168,22 @@ static void testFrameTags()
     const uint8_t rtcm[] = {0xD3, 0x00, 0x05, 0x3E, 0xD0, 0x00, 0x00, 0x00, 0x00};
     // UBX 同步字 0xB5 0x62 + class 0x06 + id 0x8A。
     const uint8_t ubx[] = {0xB5, 0x62, 0x06, 0x8A, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};
-    TEST_ASSERT_TRUE(tagIs(gnss::unicoreReceiver(), demux::nmea::kDecoder, gga, "NMEA GNGGA"));
-    TEST_ASSERT_TRUE(
-        tagIs(gnss::unicoreReceiver(), demux::nmea::kDecoder, unknownNmea, "NMEA GNZDA"));
-    TEST_ASSERT_TRUE(tagIs(gnss::unicoreReceiver(), demux::rtcm3::kDecoder,
+    TEST_ASSERT_TRUE(tagIs(unicoreDrv(), demux::nmea::kDecoder, gga, "NMEA GNGGA"));
+    TEST_ASSERT_TRUE(tagIs(unicoreDrv(), demux::nmea::kDecoder, unknownNmea, "NMEA GNZDA"));
+    TEST_ASSERT_TRUE(tagIs(unicoreDrv(), demux::rtcm3::kDecoder,
                            std::string_view(reinterpret_cast<const char *>(rtcm), sizeof(rtcm)),
                            "RTCM3 1005"));
-    TEST_ASSERT_TRUE(tagIs(gnss::unicoreReceiver(), demux::ubx::kDecoder,
+    TEST_ASSERT_TRUE(tagIs(unicoreDrv(), demux::ubx::kDecoder,
                            std::string_view(reinterpret_cast<const char *>(ubx), sizeof(ubx)),
                            "UBX 0x06/0x8a"));
     const std::string_view sats = "#SATSINFOA,97,GPS*12345678";
-    TEST_ASSERT_TRUE(
-        tagIs(gnss::unicoreReceiver(), demux::unicore_hash::kDecoder, sats, "UNICORE SATSINFOA"));
+    TEST_ASSERT_TRUE(tagIs(unicoreDrv(), demux::unicore_hash::kDecoder, sats, "UNICORE SATSINFOA"));
     const std::string_view reply = "$command,UNLOG COM2,response: OK*1F\r\n";
-    TEST_ASSERT_TRUE(tagIs(gnss::unicoreReceiver(), gnss::unicore::kResponseDecoder, reply,
-                           "UNICORE_CMD UNLOG COM2"));
+    TEST_ASSERT_TRUE(
+        tagIs(unicoreDrv(), gnss::unicore::kResponseDecoder, reply, "UNICORE_CMD UNLOG COM2"));
 #endif
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
-    TEST_ASSERT_TRUE(tagIs(gnss::ubloxReceiver(), demux::nmea::kDecoder, gga, "NMEA GNGGA"));
+    TEST_ASSERT_TRUE(tagIs(ubloxDrv(), demux::nmea::kDecoder, gga, "NMEA GNGGA"));
 #endif
     // NullReceiver 不产标签（main 在未探测到时不打印帧内容）。
     char tag[32] = {};
@@ -180,19 +198,18 @@ static void testOutputMasks()
 #if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
     {
         const uint32_t baseMask = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 6); // GGA|RMC|GSA|GSV
-        const uint32_t single = gnss::unicoreReceiver().outputMask(gnss::Model::kUm980);
+        const uint32_t single = unicoreDrv().outputMask(gnss::Model::kUm980);
         TEST_ASSERT_EQUAL_UINT32(baseMask | (1U << 1) | (1U << 3), single); // + kSatsInfo + kGst
         // HEADINGA 只在型号驱动上出现：调用方须先 forModel（ADR-0012 §2.8）。
         const uint32_t dual =
-            gnss::unicoreReceiver().forModel(gnss::Model::kUm982).outputMask(gnss::Model::kUm982);
+            unicoreDrv().forModel(gnss::Model::kUm982).outputMask(gnss::Model::kUm982);
         TEST_ASSERT_EQUAL_UINT32(baseMask | (1U << 1) | (1U << 2) | (1U << 3), dual); // + kHeading
     }
 #endif
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
     {
         const uint32_t baseMask = (1U << 0) | (1U << 4) | (1U << 5) | (1U << 6); // GGA|RMC|GSA|GSV
-        TEST_ASSERT_EQUAL_UINT32(baseMask | (1U << 3),
-                                 gnss::ubloxReceiver().outputMask(gnss::Model::kZedF9p));
+        TEST_ASSERT_EQUAL_UINT32(baseMask | (1U << 3), ubloxDrv().outputMask(gnss::Model::kZedF9p));
     }
 #endif
 }

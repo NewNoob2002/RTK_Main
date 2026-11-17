@@ -147,11 +147,13 @@ struct Section {
     void (*show)() noexcept;
 };
 
+// 节选表项：签名由 Section::show 固定；节名在此注入。
 void showGnss() noexcept
 {
     showGroups("gnss");
 }
 
+// 节选表项（Section::show），同 showGnss。
 void showDebug() noexcept
 {
     showGroups("debug");
