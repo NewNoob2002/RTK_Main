@@ -264,16 +264,16 @@ int cmd_gnss_status(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     const auto st = app_context().data.gnss_status.read();
     cli::printSection("gnss");
     cli::printKv("enabled", "%s", st.enabled ? "yes" : "no");
-    cli::printKv("state", "%s", ::gnss::state_name(st.state));
-    cli::printKv("family", "%s", ::gnss::family_name(st.family));
-    cli::printKv("model", "%s", ::gnss::model_name(st.model));
+    cli::printKv("state", "%s", ::gnss::stateName(st.state));
+    cli::printKv("family", "%s", ::gnss::familyName(st.family));
+    cli::printKv("model", "%s", ::gnss::modelName(st.model));
     cli::printKv("fw", "%s", (st.fw_version[0] != '\0') ? st.fw_version.data() : "-");
     cli::printKv("baud", "%" PRIu32, st.host_baud);
     cli::printKv("caps", "0x%02" PRIX32, st.caps);
     cli::printKv("ctrl",
                  "probes=%" PRIu32 " steps=%" PRIu32 " nacks=%" PRIu32 " to=%" PRIu32
                  " reprobes=%" PRIu32 " fail=%" PRIu32,
-                 st.ctrl.probes_sent, st.ctrl.steps_sent, st.ctrl.step_nacks, st.ctrl.step_timeouts,
+                 st.ctrl.probesSent, st.ctrl.stepsSent, st.ctrl.stepNacks, st.ctrl.stepTimeouts,
                  st.ctrl.reprobes, st.ctrl.failures);
     cli::printKv("nmea",
                  "gga=%" PRIu32 " rmc=%" PRIu32 " gsa=%" PRIu32 " gsv=%" PRIu32 " ign=%" PRIu32
@@ -338,50 +338,50 @@ int cmd_gnss_fix(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::printKv("valid", "%s", fix.valid ? "yes" : "no");
     cli::printKv("quality", "%s (%u)", fix_quality_name(fix.quality),
                  static_cast<unsigned>(fix.quality));
-    if (fix.update_ms != 0U) {
+    if (fix.updateMs != 0U) {
         const uint32_t sec = fix.utc.ms / 1000U;
         const uint32_t ms = fix.utc.ms % 1000U;
         cli::printKv("utc", "%04u-%02u-%02u %02u:%02u:%02" PRIu32 ".%03" PRIu32, fix.utc.year,
                      fix.utc.month, fix.utc.day, fix.utc.hour, fix.utc.minute, sec, ms);
-        cli::printKv("age_ms", "%" PRIu32, now - fix.update_ms);
+        cli::printKv("age_ms", "%" PRIu32, now - fix.updateMs);
     } else {
         cli::printKv("utc", "-");
         cli::printKv("age_ms", "-");
     }
     std::array<char, kLatLonBufBytes> lat{};
     std::array<char, kLatLonBufBytes> lon{};
-    format_e9(fix.lat_e9, lat);
-    format_e9(fix.lon_e9, lon);
+    format_e9(fix.latE9, lat);
+    format_e9(fix.lonE9, lon);
     cli::printKv("lat_deg", "%s", lat.data());
     cli::printKv("lon_deg", "%s", lon.data());
 
     std::array<char, kMetersBufBytes> alt{};
     std::array<char, kMetersBufBytes> geoid{};
-    format_mm_as_meters(fix.alt_mm, alt);
-    format_mm_as_meters(fix.geoid_mm, geoid);
+    format_mm_as_meters(fix.altMm, alt);
+    format_mm_as_meters(fix.geoidMm, geoid);
     cli::printKv("alt_m", "%s (geoid %s)", alt.data(), geoid.data());
-    cli::printKv("sats_used", "%u", fix.sats_used);
+    cli::printKv("sats_used", "%u", fix.satsUsed);
 
     std::array<char, kDopBufBytes> hdop{};
     std::array<char, kDopBufBytes> pdop{};
     std::array<char, kDopBufBytes> vdop{};
-    format_x100(fix.hdop_x100, hdop);
-    format_x100(fix.pdop_x100, pdop);
-    format_x100(fix.vdop_x100, vdop);
+    format_x100(fix.hdopX100, hdop);
+    format_x100(fix.pdopX100, pdop);
+    format_x100(fix.vdopX100, vdop);
     cli::printKv("dop", "h=%s p=%s v=%s", hdop.data(), pdop.data(), vdop.data());
 
-    if (fix.diff_age_ds != ::gnss::kU16Unknown) {
-        const uint32_t age_whole = static_cast<uint32_t>(fix.diff_age_ds) / kTenthsBase;
-        const uint32_t age_tenths = static_cast<uint32_t>(fix.diff_age_ds) % kTenthsBase;
+    if (fix.diffAgeDs != ::gnss::kU16Unknown) {
+        const uint32_t age_whole = static_cast<uint32_t>(fix.diffAgeDs) / kTenthsBase;
+        const uint32_t age_tenths = static_cast<uint32_t>(fix.diffAgeDs) % kTenthsBase;
         cli::printKv("diff", "age=%" PRIu32 ".%" PRIu32 "s station=%u", age_whole, age_tenths,
-                     fix.diff_station);
+                     fix.diffStation);
     } else {
         cli::printKv("diff", "none");
     }
     std::array<char, kDopBufBytes> course{};
-    format_x100(fix.course_cdeg, course);
+    format_x100(fix.courseCdeg, course);
     cli::printKv("motion", "speed=%" PRIu32 ".%03" PRIu32 "m/s course=%sdeg",
-                 fix.speed_mmps / kMmPerMeter, fix.speed_mmps % kMmPerMeter, course.data());
+                 fix.speedMmps / kMmPerMeter, fix.speedMmps % kMmPerMeter, course.data());
     return 0;
 }
 
@@ -399,11 +399,11 @@ int cmd_gnss_sats(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     }
     cli::printSection("gnss_sats");
     cli::printKv("count", "%u (used=%" PRIu32 " update_ms=%" PRIu32 ")", table.count, used_count,
-                 table.update_ms);
+                 table.updateMs);
     for (uint8_t i = 0U; (i < table.count) && (i < table.sats.size()); ++i) {
         const auto &sat = table.sats[i];
         cli::outPrintf("  %s-%03u elev=%d az=%u snr=%u %s\n", constellation_name(sat.system),
-                       sat.prn, static_cast<int>(sat.elev_deg), sat.azim_deg, sat.snr_dbhz,
+                       sat.prn, static_cast<int>(sat.elevDeg), sat.azimDeg, sat.snrDbhz,
                        sat.used ? "*" : "-");
     }
     return 0;

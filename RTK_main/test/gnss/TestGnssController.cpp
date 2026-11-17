@@ -23,12 +23,12 @@ using gnss::Model;
 using gnss::ProbeResult;
 using gnss::RoverConfig;
 
-bool fake_first(uint8_t byte) noexcept
+bool fakeFirst(uint8_t byte) noexcept
 {
     return byte == '#';
 }
 
-demux::Step fake_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
+demux::Step fakeStep(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
     if (frame.empty()) {
         return demux::Step::kReject;
@@ -40,21 +40,21 @@ demux::Step fake_step(std::span<const uint8_t> frame, std::size_t &need) noexcep
     return demux::Step::kNeedMore;
 }
 
-constexpr demux::Decoder kFakeDecoder{"fake", 32, &fake_first, &fake_step};
+constexpr demux::Decoder kFakeDecoder{"fake", 32, &fakeFirst, &fakeStep};
 
-bool probe_a(CmdBuf &out) noexcept
+bool probeA(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append("VERSION\r\n");
 }
 
-bool probe_b(CmdBuf &out) noexcept
+bool probeB(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append("Q\r\n");
 }
 
-bool match_a(const demux::Decoder &, std::span<const uint8_t> frame, ProbeResult &out) noexcept
+bool matchA(const demux::Decoder &, std::span<const uint8_t> frame, ProbeResult &out) noexcept
 {
     if (frame.empty() || frame[0] != static_cast<uint8_t>('#')) {
         return false;
@@ -63,7 +63,7 @@ bool match_a(const demux::Decoder &, std::span<const uint8_t> frame, ProbeResult
     return true;
 }
 
-bool match_b(const demux::Decoder &, std::span<const uint8_t> frame, ProbeResult &out) noexcept
+bool matchB(const demux::Decoder &, std::span<const uint8_t> frame, ProbeResult &out) noexcept
 {
     if (frame.empty() || frame[0] != static_cast<uint8_t>('?')) {
         return false;
@@ -72,7 +72,7 @@ bool match_b(const demux::Decoder &, std::span<const uint8_t> frame, ProbeResult
     return true;
 }
 
-bool step_a(size_t index, Model, const RoverConfig &, ConfigStep &out) noexcept
+bool stepA(size_t index, Model, const RoverConfig &, ConfigStep &out) noexcept
 {
     out = ConfigStep{};
     if (index == 0) {
@@ -84,7 +84,7 @@ bool step_a(size_t index, Model, const RoverConfig &, ConfigStep &out) noexcept
     return false;
 }
 
-bool step_b(size_t index, Model, const RoverConfig &, ConfigStep &out) noexcept
+bool stepB(size_t index, Model, const RoverConfig &, ConfigStep &out) noexcept
 {
     out = ConfigStep{};
     if (index == 0) {
@@ -93,15 +93,15 @@ bool step_b(size_t index, Model, const RoverConfig &, ConfigStep &out) noexcept
     return false;
 }
 
-bool step_switch(size_t index, Model, const RoverConfig &, ConfigStep &out) noexcept
+bool stepSwitch(size_t index, Model, const RoverConfig &, ConfigStep &out) noexcept
 {
     out = ConfigStep{};
     if (index == 0) {
         if (!out.cmd.append("S0\r\n")) {
             return false;
         }
-        out.expect_reply = false;
-        out.switch_baud = 57600;
+        out.expectReply = false;
+        out.switchBaud = 57600;
         return true;
     }
     if (index == 1) {
@@ -110,7 +110,7 @@ bool step_switch(size_t index, Model, const RoverConfig &, ConfigStep &out) noex
     return false;
 }
 
-Ack fake_reply(std::span<const uint8_t> frame) noexcept
+Ack fakeReply(std::span<const uint8_t> frame) noexcept
 {
     if (frame.size() == 2 && frame[0] == static_cast<uint8_t>('O') &&
         frame[1] == static_cast<uint8_t>('K')) {
@@ -154,24 +154,24 @@ public:
     {
         return 0U;
     }
-    [[nodiscard]] bool build_probe(CmdBuf &out) const noexcept override
+    [[nodiscard]] bool buildProbe(CmdBuf &out) const noexcept override
     {
         return probe_(out);
     }
-    [[nodiscard]] bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                   ProbeResult &out) const noexcept override
+    [[nodiscard]] bool matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                  ProbeResult &out) const noexcept override
     {
         return match_(dec, frame, out);
     }
-    [[nodiscard]] bool rover_step(size_t index, Model model, const RoverConfig &cfg,
-                                  ConfigStep &out) const noexcept override
+    [[nodiscard]] bool roverStep(size_t index, Model model, const RoverConfig &cfg,
+                                 ConfigStep &out) const noexcept override
     {
         return step_(index, model, cfg, out);
     }
-    [[nodiscard]] Ack classify_reply(const demux::Decoder &, std::span<const uint8_t> frame,
-                                     std::span<const uint8_t>) const noexcept override
+    [[nodiscard]] Ack classifyReply(const demux::Decoder &, std::span<const uint8_t> frame,
+                                    std::span<const uint8_t>) const noexcept override
     {
-        return fake_reply(frame);
+        return fakeReply(frame);
     }
 
 private:
@@ -182,11 +182,11 @@ private:
     StepFn step_;
 };
 
-constinit const FakeReceiver kReceiverA{Family::kUnicore, "A", &probe_a, &match_a, &step_a};
-constinit const FakeReceiver kReceiverB{Family::kUblox, "B", &probe_b, &match_b, &step_b};
-constinit const FakeReceiver kReceiverS{Family::kComnav, "S", &probe_b, &match_b, &step_switch};
+constinit const FakeReceiver kReceiverA{Family::kUnicore, "A", &probeA, &matchA, &stepA};
+constinit const FakeReceiver kReceiverB{Family::kUblox, "B", &probeB, &matchB, &stepB};
+constinit const FakeReceiver kReceiverS{Family::kComnav, "S", &probeB, &matchB, &stepSwitch};
 
-bool bytes_equal(std::span<const uint8_t> data, const char *text)
+bool bytesEqual(std::span<const uint8_t> data, const char *text)
 {
     size_t len = 0;
     while (text[len] != '\0') {
@@ -198,44 +198,44 @@ bool bytes_equal(std::span<const uint8_t> data, const char *text)
     return len == data.size();
 }
 
-bool is_power(const Action &action, bool on)
+bool isPower(const Action &action, bool on)
 {
     return action.kind == Action::Kind::kPower && action.on == on;
 }
 
-bool is_write(const Action &action, const char *text)
+bool isWrite(const Action &action, const char *text)
 {
-    return action.kind == Action::Kind::kWrite && bytes_equal(action.bytes, text);
+    return action.kind == Action::Kind::kWrite && bytesEqual(action.bytes, text);
 }
 
-gnss::Timing fast_timing()
+gnss::Timing fastTiming()
 {
     gnss::Timing timing{};
-    timing.power_off_ms = 10;
-    timing.boot_ms = 20;
-    timing.probe_timeout_ms = 50;
-    timing.probe_rounds = 2;
-    timing.step_retries = 1;
-    timing.silence_ms = 100;
-    timing.retry_backoff_ms = 30;
+    timing.powerOffMs = 10;
+    timing.bootMs = 20;
+    timing.probeTimeoutMs = 50;
+    timing.probeRounds = 2;
+    timing.stepRetries = 1;
+    timing.silenceMs = 100;
+    timing.retryBackoffMs = 30;
     return timing;
 }
 
-RoverConfig rover_config()
+RoverConfig roverConfig()
 {
     RoverConfig cfg{};
-    cfg.rate_hz = 1;
+    cfg.rateHz = 1;
     cfg.gsv = true;
     cfg.port = 2;
     return cfg;
 }
 
-void power_up(Controller &controller, uint32_t &now)
+void powerUp(Controller &controller, uint32_t &now)
 {
     controller.start(now);
-    TEST_ASSERT_TRUE(is_power(controller.poll(now), false));
+    TEST_ASSERT_TRUE(isPower(controller.poll(now), false));
     now += 10;
-    TEST_ASSERT_TRUE(is_power(controller.poll(now), true));
+    TEST_ASSERT_TRUE(isPower(controller.poll(now), true));
     now += 20;
 }
 
@@ -243,7 +243,7 @@ void feed(Controller &controller, const char *frame, uint32_t now)
 {
     const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t *>(frame),
                                          std::string(frame).size());
-    controller.on_frame(kFakeDecoder, bytes, now);
+    controller.onFrame(kFakeDecoder, bytes, now);
 }
 
 } // namespace
@@ -251,30 +251,30 @@ void feed(Controller &controller, const char *frame, uint32_t now)
 void setUp() {}
 void tearDown() {}
 
-static void test_init_rejects_bad_arguments()
+static void testInitRejectsBadArguments()
 {
     Controller controller;
     RoverConfig cfg{};
     gnss::Timing timing{};
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    const std::array<const gnss::Receiver *, 1> with_null{nullptr};
+    const std::array<const gnss::Receiver *, 1> withNull{nullptr};
     const std::array<uint32_t, 1> zero{0};
 
     TEST_ASSERT_FALSE(controller.init({}, bauds, cfg, gnss::OutputPlan{}, {}, timing));
     TEST_ASSERT_FALSE(controller.init(receivers, {}, cfg, gnss::OutputPlan{}, {}, timing));
-    TEST_ASSERT_FALSE(controller.init(with_null, bauds, cfg, gnss::OutputPlan{}, {}, timing));
+    TEST_ASSERT_FALSE(controller.init(withNull, bauds, cfg, gnss::OutputPlan{}, {}, timing));
     TEST_ASSERT_FALSE(controller.init(receivers, zero, cfg, gnss::OutputPlan{}, {}, timing));
     TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 }
 
-static void test_full_flow_probe_configure_run_reprobe()
+static void testFullFlowProbeConfigureRunReprobe()
 {
     Controller controller;
-    RoverConfig cfg = rover_config();
+    RoverConfig cfg = roverConfig();
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    const gnss::Timing timing = fast_timing();
+    const gnss::Timing timing = fastTiming();
     TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
@@ -282,14 +282,14 @@ static void test_full_flow_probe_configure_run_reprobe()
     TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
                       static_cast<int>(controller.poll(now).kind));
 
-    power_up(controller, now);
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "VERSION\r\n"));
+    powerUp(controller, now);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "VERSION\r\n"));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kProbing),
                       static_cast<int>(controller.state()));
 
     feed(controller, "#VERSIONA,1", now);
     ++now;
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "A0\r\n"));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "A0\r\n"));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kConfiguring),
                       static_cast<int>(controller.state()));
     TEST_ASSERT_EQUAL(static_cast<int>(Model::kUm980),
@@ -298,7 +298,7 @@ static void test_full_flow_probe_configure_run_reprobe()
 
     feed(controller, "OK", now);
     ++now;
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "A1\r\n"));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "A1\r\n"));
 
     feed(controller, "OK", now);
     ++now;
@@ -306,7 +306,7 @@ static void test_full_flow_probe_configure_run_reprobe()
     TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone), static_cast<int>(action.kind));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning),
                       static_cast<int>(controller.state()));
-    TEST_ASSERT_EQUAL_UINT32(2, controller.stats().steps_sent);
+    TEST_ASSERT_EQUAL_UINT32(2, controller.stats().stepsSent);
 
     // 静默超时（>100 ms）→ 重新探测；任意帧刷新 last_frame。
     now += 50;
@@ -314,116 +314,116 @@ static void test_full_flow_probe_configure_run_reprobe()
     TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
                       static_cast<int>(controller.poll(now + 90).kind));
     now += 101;
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "VERSION\r\n"));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "VERSION\r\n"));
     TEST_ASSERT_EQUAL_UINT32(1, controller.stats().reprobes);
 
-    controller.request_reprobe(now);
+    controller.requestReprobe(now);
     TEST_ASSERT_EQUAL_UINT32(2, controller.stats().reprobes);
     TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kWrite),
                       static_cast<int>(controller.poll(now).kind));
 }
 
-static void test_probe_timeout_exhausts_rounds()
+static void testProbeTimeoutExhaustsRounds()
 {
     Controller controller;
-    RoverConfig cfg = rover_config();
+    RoverConfig cfg = roverConfig();
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    const gnss::Timing timing = fast_timing();
+    const gnss::Timing timing = fastTiming();
     TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
-    power_up(controller, now);
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "VERSION\r\n"));
+    powerUp(controller, now);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "VERSION\r\n"));
 
     now += 50; // 超时 → 第一轮结束，进入第二轮
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "VERSION\r\n"));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "VERSION\r\n"));
     now += 50; // 第二轮超时 → 失败
     TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
                       static_cast<int>(controller.poll(now).kind));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kFailed), static_cast<int>(controller.state()));
-    TEST_ASSERT_EQUAL_UINT32(2, controller.stats().probes_sent);
+    TEST_ASSERT_EQUAL_UINT32(2, controller.stats().probesSent);
     TEST_ASSERT_EQUAL_UINT32(1, controller.stats().failures);
 
     now += 29; // 退避未到
     TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
                       static_cast<int>(controller.poll(now).kind));
     now += 1; // 退避到 → 重新上电
-    TEST_ASSERT_TRUE(is_power(controller.poll(now), false));
+    TEST_ASSERT_TRUE(isPower(controller.poll(now), false));
 }
 
-static void test_nack_retries_then_fails()
+static void testNackRetriesThenFails()
 {
     Controller controller;
-    RoverConfig cfg = rover_config();
+    RoverConfig cfg = roverConfig();
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    const gnss::Timing timing = fast_timing();
+    const gnss::Timing timing = fastTiming();
     TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
-    power_up(controller, now);
+    powerUp(controller, now);
     (void)controller.poll(now);
     feed(controller, "#V", now);
     ++now;
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "A0\r\n"));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "A0\r\n"));
 
     feed(controller, "NO", now);
     ++now;
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "A0\r\n")); // 第一次重发
-    TEST_ASSERT_EQUAL_UINT32(1, controller.stats().step_nacks);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "A0\r\n")); // 第一次重发
+    TEST_ASSERT_EQUAL_UINT32(1, controller.stats().stepNacks);
 
     feed(controller, "NO", now);
     ++now;
     TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kNone),
                       static_cast<int>(controller.poll(now).kind));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kFailed), static_cast<int>(controller.state()));
-    TEST_ASSERT_EQUAL_UINT32(2, controller.stats().step_nacks);
+    TEST_ASSERT_EQUAL_UINT32(2, controller.stats().stepNacks);
     TEST_ASSERT_EQUAL_UINT32(1, controller.stats().failures);
 }
 
-static void test_step_timeout_retries()
+static void testStepTimeoutRetries()
 {
     Controller controller;
-    RoverConfig cfg = rover_config();
+    RoverConfig cfg = roverConfig();
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    const gnss::Timing timing = fast_timing();
+    const gnss::Timing timing = fastTiming();
     TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
-    power_up(controller, now);
+    powerUp(controller, now);
     (void)controller.poll(now);
     feed(controller, "#V", now);
     ++now;
     (void)controller.poll(now);
 
-    now += 500; // ConfigStep 默认 timeout_ms=500
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "A0\r\n"));
-    TEST_ASSERT_EQUAL_UINT32(1, controller.stats().step_timeouts);
+    now += 500; // ConfigStep 默认 timeoutMs=500
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "A0\r\n"));
+    TEST_ASSERT_EQUAL_UINT32(1, controller.stats().stepTimeouts);
 }
 
-static void test_baud_switch_step()
+static void testBaudSwitchStep()
 {
     Controller controller;
-    RoverConfig cfg = rover_config();
+    RoverConfig cfg = roverConfig();
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverS};
     const std::array<uint32_t, 1> bauds{115200};
-    const gnss::Timing timing = fast_timing();
+    const gnss::Timing timing = fastTiming();
     TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, timing));
 
     uint32_t now = 0;
-    power_up(controller, now);
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "Q\r\n"));
+    powerUp(controller, now);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "Q\r\n"));
     feed(controller, "?", now);
     ++now;
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "S0\r\n"));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "S0\r\n"));
 
-    const Action set_baud = controller.poll(now);
-    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kSetBaud), static_cast<int>(set_baud.kind));
-    TEST_ASSERT_EQUAL_UINT32(57600, set_baud.baud);
-    TEST_ASSERT_EQUAL_UINT32(57600, controller.host_baud());
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "S1\r\n"));
+    const Action setBaud = controller.poll(now);
+    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kSetBaud), static_cast<int>(setBaud.kind));
+    TEST_ASSERT_EQUAL_UINT32(57600, setBaud.baud);
+    TEST_ASSERT_EQUAL_UINT32(57600, controller.hostBaud());
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "S1\r\n"));
 
     feed(controller, "OK", now);
     ++now;
@@ -433,41 +433,41 @@ static void test_baud_switch_step()
     TEST_ASSERT_EQUAL_UINT32(57600, controller.detected().baud);
 }
 
-static void test_hint_is_probed_first()
+static void testHintIsProbedFirst()
 {
     Controller controller;
-    RoverConfig cfg = rover_config();
+    RoverConfig cfg = roverConfig();
     const std::array<const gnss::Receiver *, 2> receivers{&kReceiverA, &kReceiverB};
     const std::array<uint32_t, 2> bauds{115200, 9600};
-    const gnss::Timing timing = fast_timing();
+    const gnss::Timing timing = fastTiming();
     gnss::Hint hint{};
     hint.family = Family::kUblox;
     hint.baud = 9600;
     TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, hint, timing));
 
     uint32_t now = 0;
-    power_up(controller, now);
-    const Action set_baud = controller.poll(now);
-    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kSetBaud), static_cast<int>(set_baud.kind));
-    TEST_ASSERT_EQUAL_UINT32(9600, set_baud.baud);
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "Q\r\n")); // 先试提示的 u-blox
+    powerUp(controller, now);
+    const Action setBaud = controller.poll(now);
+    TEST_ASSERT_EQUAL(static_cast<int>(Action::Kind::kSetBaud), static_cast<int>(setBaud.kind));
+    TEST_ASSERT_EQUAL_UINT32(9600, setBaud.baud);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "Q\r\n")); // 先试提示的 u-blox
 }
 
-static void test_request_reconfigure()
+static void testRequestReconfigure()
 {
     Controller controller;
-    RoverConfig cfg = rover_config();
+    RoverConfig cfg = roverConfig();
     const std::array<const gnss::Receiver *, 1> receivers{&kReceiverA};
     const std::array<uint32_t, 1> bauds{115200};
-    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, fast_timing()));
+    TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, fastTiming()));
 
     uint32_t now = 0;
-    controller.request_reconfigure(now); // 尚未探测 → 等同 request_reprobe
+    controller.requestReconfigure(now); // 尚未探测 → 等同 requestReprobe
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kProbing),
                       static_cast<int>(controller.state()));
     TEST_ASSERT_EQUAL_UINT32(0, controller.stats().reprobes);
 
-    power_up(controller, now);
+    powerUp(controller, now);
     (void)controller.poll(now);
     feed(controller, "#V", now);
     ++now;
@@ -481,33 +481,33 @@ static void test_request_reconfigure()
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning),
                       static_cast<int>(controller.state()));
 
-    controller.request_reconfigure(now);
+    controller.requestReconfigure(now);
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kConfiguring),
                       static_cast<int>(controller.state()));
-    TEST_ASSERT_TRUE(is_write(controller.poll(now), "A0\r\n"));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "A0\r\n"));
 }
 
-static void test_state_names()
+static void testStateNames()
 {
-    TEST_ASSERT_EQUAL_STRING("off", gnss::state_name(gnss::State::kOff));
-    TEST_ASSERT_EQUAL_STRING("power-up", gnss::state_name(gnss::State::kPowerUp));
-    TEST_ASSERT_EQUAL_STRING("probing", gnss::state_name(gnss::State::kProbing));
-    TEST_ASSERT_EQUAL_STRING("configuring", gnss::state_name(gnss::State::kConfiguring));
-    TEST_ASSERT_EQUAL_STRING("running", gnss::state_name(gnss::State::kRunning));
-    TEST_ASSERT_EQUAL_STRING("failed", gnss::state_name(gnss::State::kFailed));
+    TEST_ASSERT_EQUAL_STRING("off", gnss::stateName(gnss::State::kOff));
+    TEST_ASSERT_EQUAL_STRING("power-up", gnss::stateName(gnss::State::kPowerUp));
+    TEST_ASSERT_EQUAL_STRING("probing", gnss::stateName(gnss::State::kProbing));
+    TEST_ASSERT_EQUAL_STRING("configuring", gnss::stateName(gnss::State::kConfiguring));
+    TEST_ASSERT_EQUAL_STRING("running", gnss::stateName(gnss::State::kRunning));
+    TEST_ASSERT_EQUAL_STRING("failed", gnss::stateName(gnss::State::kFailed));
 }
 
 int main(int, char **)
 {
     UNITY_BEGIN();
-    RUN_TEST(test_init_rejects_bad_arguments);
-    RUN_TEST(test_full_flow_probe_configure_run_reprobe);
-    RUN_TEST(test_probe_timeout_exhausts_rounds);
-    RUN_TEST(test_nack_retries_then_fails);
-    RUN_TEST(test_step_timeout_retries);
-    RUN_TEST(test_baud_switch_step);
-    RUN_TEST(test_hint_is_probed_first);
-    RUN_TEST(test_request_reconfigure);
-    RUN_TEST(test_state_names);
+    RUN_TEST(testInitRejectsBadArguments);
+    RUN_TEST(testFullFlowProbeConfigureRunReprobe);
+    RUN_TEST(testProbeTimeoutExhaustsRounds);
+    RUN_TEST(testNackRetriesThenFails);
+    RUN_TEST(testStepTimeoutRetries);
+    RUN_TEST(testBaudSwitchStep);
+    RUN_TEST(testHintIsProbedFirst);
+    RUN_TEST(testRequestReconfigure);
+    RUN_TEST(testStateNames);
     return UNITY_END();
 }

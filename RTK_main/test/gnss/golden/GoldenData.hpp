@@ -46,7 +46,7 @@ struct Bytes {
     }
 };
 
-/** 探测命令：ok=false 表示 build_probe() 当时返回 false。 */
+/** 探测命令：ok=false 表示 buildProbe() 当时返回 false。 */
 struct Probe {
     Bytes bytes{};
     bool ok = false;
@@ -55,23 +55,23 @@ struct Probe {
 /** 配置脚本中的一步（对应 gnss::ConfigStep）。 */
 struct Step {
     Bytes bytes{};
-    bool expect_reply = true;
-    uint16_t timeout_ms = 0;
-    uint32_t switch_baud = 0;
+    bool expectReply = true;
+    uint16_t timeoutMs = 0;
+    uint32_t switchBaud = 0;
 };
 
 /**
- * 一组 rover_step 入参（型号 × rate × gsv × port × baud）及其完整脚本。
- * steps 指向同一文件里的 kSteps，[step_first, step_first + step_count) 是本组合的步骤。
+ * 一组 roverStep 入参（型号 × rate × gsv × port × baud）及其完整脚本。
+ * steps 指向同一文件里的 kSteps，[stepFirst, stepFirst + stepCount) 是本组合的步骤。
  */
 struct RoverCase {
     uint8_t model = 0; // gnss::Model 的数值
-    uint8_t rate_hz = 0;
+    uint8_t rateHz = 0;
     bool gsv = false;
     uint8_t port = 0;
-    uint32_t port_baud = 0;
-    uint16_t step_first = 0;
-    uint8_t step_count = 0;
+    uint32_t portBaud = 0;
+    uint16_t stepFirst = 0;
+    uint8_t stepCount = 0;
 };
 
 /** 一个探测应答样本。fw 仅在 hit 为 true 时比较。 */

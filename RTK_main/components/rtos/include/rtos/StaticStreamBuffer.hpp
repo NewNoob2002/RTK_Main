@@ -1,5 +1,5 @@
 // 静态 StreamBuffer 包装：存储与控制块都在对象内部，init() 后不分配堆。
-// 回调中可用 timeout_ms=0 的非阻塞读写；构造 constexpr、不访问 RTOS。
+// 回调中可用 timeoutMs=0 的非阻塞读写；构造 constexpr、不访问 RTOS。
 #pragma once
 
 #include <array>
@@ -46,7 +46,7 @@ public:
         }
     }
 
-    /** 写入，返回实际写入字节数；回调中传 timeout_ms=0。 */
+    /** 写入，返回实际写入字节数；回调中传 timeoutMs=0。 */
     [[nodiscard]] size_t send(std::span<const uint8_t> data, uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || data.empty()) {
@@ -55,7 +55,7 @@ public:
         return xStreamBufferSend(handle_, data.data(), data.size(), pdMS_TO_TICKS(timeoutMs));
     }
 
-    /** 读取，返回实际读取字节数；timeout_ms=0 为非阻塞。 */
+    /** 读取，返回实际读取字节数；timeoutMs=0 为非阻塞。 */
     [[nodiscard]] size_t receive(std::span<uint8_t> out, uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || out.empty()) {

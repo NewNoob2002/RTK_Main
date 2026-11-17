@@ -1,6 +1,6 @@
 // ComNav K8（K803）驱动实现：NovAtel 风格命令与 "<OK/<ERROR" 应答（ADR-0010 §2.2，实验性、未经实物验证）。
 // 结构（P3s）：命令生成（cmd_*）与应答判定（resp_*）是 ComnavReceiver 的 protected static，子类可直接复用；
-// 脚本步骤的回调写在 rover_step 内（要取 protected 成员的地址，匿名命名空间的自由函数没有访问权）。
+// 脚本步骤的回调写在 roverStep 内（要取 protected 成员的地址，匿名命名空间的自由函数没有访问权）。
 // 线程/调用约束：纯函数，无全局可变状态，可重入、不阻塞。
 // 堆：不使用。注意：未取得官方手册，语法按公开的 NovAtel 兼容资料实现；改动前须先修订 ADR-0010 §2.2。
 #include "gnss/drivers/ComnavReceiver.hpp"
@@ -33,7 +33,7 @@ constexpr std::array<const char *, kOutputMsgCount> kOutputNames = {
     "GPGGA", "SATSINFOA", "HEADINGA", "GPGST", "GPRMC", "GPGSA", "GPGSV",
 };
 
-// <OK 提示符应答（classify_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器。
+// <OK 提示符应答（classifyReply）与 #VERSIONA 探测应答（matchProbe）各需一个解码器。
 constexpr std::array<const demux::Decoder *, 2> kDecoders{&comnav::kPromptDecoder,
                                                           &demux::unicore_hash::kDecoder};
 
@@ -75,14 +75,14 @@ PromptVerdict reject(PromptReason reason, std::size_t offset = 0, uint8_t byte =
  * @retval std::nullopt: 通过。
  * @retval verdict: 拒绝原因。
  */
-std::optional<PromptVerdict> check_line(std::span<const uint8_t> frame) noexcept
+std::optional<PromptVerdict> checkLine(std::span<const uint8_t> frame) noexcept
 {
     const size_t size = frame.size();
     if ((size < kMinPromptBytes) || (frame[size - 2U] != kCr)) {
         return reject(PromptReason::kNoCr, size - 1U, frame[size - 1U]);
     }
     for (size_t i = 1U; (i + 2U) < size; ++i) {
-        if (!ascii::is_printable(frame[i])) {
+        if (!ascii::isPrintable(frame[i])) {
             return reject(PromptReason::kBody, i, frame[i]);
         }
     }
@@ -101,7 +101,7 @@ PromptVerdict judge(std::span<const uint8_t> frame) noexcept
         return reject(PromptReason::kEmpty);
     }
     if (frame[size - 1U] == kLf) {
-        if (const std::optional<PromptVerdict> line = check_line(frame)) {
+        if (const std::optional<PromptVerdict> line = checkLine(frame)) {
             return *line;
         }
         PromptVerdict verdict{};
@@ -109,7 +109,7 @@ PromptVerdict judge(std::span<const uint8_t> frame) noexcept
         return verdict;
     }
     // 末字节是 '\r' 时只差 '\n'（分块读取常在 CR 后断开），仍属有效前缀。
-    if (!ascii::is_printable(frame[size - 1U]) && (frame[size - 1U] != kCr)) {
+    if (!ascii::isPrintable(frame[size - 1U]) && (frame[size - 1U] != kCr)) {
         return reject(PromptReason::kBody, size - 1U, frame[size - 1U]);
     }
     PromptVerdict verdict{};
@@ -123,7 +123,7 @@ PromptVerdict judge(std::span<const uint8_t> frame) noexcept
  * @param verdict: judge 的结论。
  * @param text: 输出文本写入器。
  */
-void explain_verdict(const PromptVerdict &verdict, demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const PromptVerdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case PromptReason::kEmpty:
@@ -162,10 +162,10 @@ bool always(const RoverConfig &cfg) noexcept
     return true;
 }
 
-/** @brief 仅在要求改波特率时参与（port_baud == 0 时脚本提前结束）。 */
-bool port_baud_enabled(const RoverConfig &cfg) noexcept
+/** @brief 仅在要求改波特率时参与（portBaud == 0 时脚本提前结束）。 */
+bool portBaudEnabled(const RoverConfig &cfg) noexcept
 {
-    return cfg.port_baud != 0U;
+    return cfg.portBaud != 0U;
 }
 
 } // namespace
@@ -178,7 +178,7 @@ namespace comnav {
  * @retval true: 是 '<'。
  * @retval false: 其他。
  */
-bool prompt_first_byte(uint8_t byte) noexcept
+bool promptFirstByte(uint8_t byte) noexcept
 {
     return byte == kPrompt;
 }
@@ -189,7 +189,7 @@ bool prompt_first_byte(uint8_t byte) noexcept
  * @param need: 输出，至少还差多少字节（kNeedMore 时有效）。
  * @retval step: kFrame / kNeedMore / kReject。
  */
-demux::Step prompt_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
+demux::Step promptStep(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
     const PromptVerdict verdict = judge(frame);
     need = verdict.need;
@@ -202,7 +202,7 @@ demux::Step prompt_step(std::span<const uint8_t> frame, std::size_t &need) noexc
  * @param out: 输出缓冲。
  * @retval len: 写入的字符数。
  */
-std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) noexcept
+std::size_t explainPrompt(std::span<const uint8_t> frame, std::span<char> out) noexcept
 {
     demux::text_writer::TextWriter text(out);
     if (frame.empty()) {
@@ -212,7 +212,7 @@ std::size_t explain_prompt(std::span<const uint8_t> frame, std::span<char> out) 
     if (verdict.step == demux::Step::kFrame) {
         return text.literal("not rejected").finish();
     }
-    explain_verdict(verdict, text);
+    explainVerdict(verdict, text);
     return text.finish();
 }
 
@@ -234,10 +234,10 @@ constinit const K803Receiver kK803Receiver{};
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool ComnavReceiver::cmd_unlog_all(CmdBuf &out, uint8_t port) noexcept
+bool ComnavReceiver::cmdUnlogAll(CmdBuf &out, uint8_t port) noexcept
 {
     out.clear();
-    return out.append("UNLOGALL COM") && ascii::append_uint(out, port) && out.append("\r\n");
+    return out.append("UNLOGALL COM") && ascii::appendUint(out, port) && out.append("\r\n");
 }
 
 /**
@@ -246,7 +246,7 @@ bool ComnavReceiver::cmd_unlog_all(CmdBuf &out, uint8_t port) noexcept
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool ComnavReceiver::cmd_mode_rover(CmdBuf &out) noexcept
+bool ComnavReceiver::cmdModeRover(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append("MODE ROVER\r\n");
@@ -260,11 +260,11 @@ bool ComnavReceiver::cmd_mode_rover(CmdBuf &out) noexcept
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool ComnavReceiver::cmd_com_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
+bool ComnavReceiver::cmdComBaud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
 {
     out.clear();
-    return out.append("COM COM") && ascii::append_uint(out, port) && out.append(" ") &&
-           ascii::append_uint(out, baud) && out.append("\r\n");
+    return out.append("COM COM") && ascii::appendUint(out, port) && out.append(" ") &&
+           ascii::appendUint(out, baud) && out.append("\r\n");
 }
 
 /**
@@ -272,16 +272,16 @@ bool ComnavReceiver::cmd_com_baud(CmdBuf &out, uint8_t port, uint32_t baud) noex
  * @param out: 目标命令缓冲（先清空）。
  * @param name: 报文体名字（如 "GPGGA"）。
  * @param port: 接收机端口号。
- * @param period_ms: 周期（毫秒），必须是 10 ms 整数倍。
+ * @param periodMs: 周期（毫秒），必须是 10 ms 整数倍。
  * @retval true: 已写入完整命令。
  * @retval false: 周期粒度不合法或缓冲空间不足。
  */
-bool ComnavReceiver::cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t port,
-                                    uint32_t period_ms) noexcept
+bool ComnavReceiver::cmdLogOntime(CmdBuf &out, std::string_view name, uint8_t port,
+                                  uint32_t periodMs) noexcept
 {
     out.clear();
-    return out.append("LOG COM") && ascii::append_uint(out, port) && out.append(" ") &&
-           out.append(name) && out.append(" ONTIME ") && ascii::append_period(out, period_ms) &&
+    return out.append("LOG COM") && ascii::appendUint(out, port) && out.append(" ") &&
+           out.append(name) && out.append(" ONTIME ") && ascii::appendPeriod(out, periodMs) &&
            out.append("\r\n");
 }
 
@@ -293,10 +293,10 @@ bool ComnavReceiver::cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t 
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool ComnavReceiver::cmd_unlog_msg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
+bool ComnavReceiver::cmdUnlogMsg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
 {
     out.clear();
-    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append(" ") &&
+    return out.append("UNLOG COM") && ascii::appendUint(out, port) && out.append(" ") &&
            out.append(name) && out.append("\r\n");
 }
 
@@ -306,7 +306,7 @@ bool ComnavReceiver::cmd_unlog_msg(CmdBuf &out, std::string_view name, uint8_t p
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool ComnavReceiver::cmd_version_query(CmdBuf &out) noexcept
+bool ComnavReceiver::cmdVersionQuery(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append("LOG VERSIONA ONCE\r\n");
@@ -320,9 +320,9 @@ bool ComnavReceiver::cmd_version_query(CmdBuf &out) noexcept
  * @retval true: 以 "<OK" 开头。
  * @retval false: 其他。
  */
-bool ComnavReceiver::resp_is_ok(std::span<const uint8_t> frame) noexcept
+bool ComnavReceiver::respIsOk(std::span<const uint8_t> frame) noexcept
 {
-    return ascii::starts_with(frame, "<OK");
+    return ascii::startsWith(frame, "<OK");
 }
 
 /**
@@ -331,9 +331,9 @@ bool ComnavReceiver::resp_is_ok(std::span<const uint8_t> frame) noexcept
  * @retval true: 以 "<ERROR" 开头。
  * @retval false: 其他。
  */
-bool ComnavReceiver::resp_is_error(std::span<const uint8_t> frame) noexcept
+bool ComnavReceiver::respIsError(std::span<const uint8_t> frame) noexcept
 {
-    return ascii::starts_with(frame, "<ERROR");
+    return ascii::startsWith(frame, "<ERROR");
 }
 
 // ---- 驱动成员 ----
@@ -359,22 +359,21 @@ uint32_t ComnavReceiver::caps(Model model) const noexcept
     return cap::kRtcmIn | cap::kBase;
 }
 
-bool ComnavReceiver::build_probe(CmdBuf &out) const noexcept
+bool ComnavReceiver::buildProbe(CmdBuf &out) const noexcept
 {
-    return cmd_version_query(out);
+    return cmdVersionQuery(out);
 }
 
-bool ComnavReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                 ProbeResult &out) const noexcept
+bool ComnavReceiver::matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                ProbeResult &out) const noexcept
 {
     if ((&dec != &demux::unicore_hash::kDecoder) || (frame.size() < kVersionTag.size()) ||
-        !ascii::starts_with(frame, kVersionTag)) {
+        !ascii::startsWith(frame, kVersionTag)) {
         return false;
     }
     size_t pos = kVersionTag.size();
-    std::span<const uint8_t> model_text{};
-    if (!ascii::next_quoted(frame, pos, model_text) ||
-        !ascii::quoted_starts_with(model_text, "K803")) {
+    std::span<const uint8_t> modelText{};
+    if (!ascii::nextQuoted(frame, pos, modelText) || !ascii::quotedStartsWith(modelText, "K803")) {
         return false;
     }
     out = ProbeResult{};
@@ -382,43 +381,43 @@ bool ComnavReceiver::match_probe(const demux::Decoder &dec, std::span<const uint
     return true;
 }
 
-bool ComnavReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg,
-                                ConfigStep &out) const noexcept
+bool ComnavReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
+                               ConfigStep &out) const noexcept
 {
-    static_cast<void>(model); // 目前只覆盖 K803；报文输出改由输出阶段（build_output）下发
+    static_cast<void>(model); // 目前只覆盖 K803；报文输出改由输出阶段（buildOutput）下发
     // 表放在成员函数作用域内：步骤回调要调 protected 的 cmd_*，匿名命名空间的自由函数没有访问权。
     static constexpr std::array<ScriptStep, 3> kRoverScript{{
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
-             if (!cmd_unlog_all(o.cmd, c.port)) {
+             if (!cmdUnlogAll(o.cmd, c.port)) {
                  return false;
              }
-             o.expect_reply = true;
-             o.timeout_ms = kConfigTimeoutMs;
-             o.switch_baud = 0;
+             o.expectReply = true;
+             o.timeoutMs = kConfigTimeoutMs;
+             o.switchBaud = 0;
              return true;
          },
          &always},
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
              static_cast<void>(c); // “MODE ROVER” 与配置无关
-             if (!cmd_mode_rover(o.cmd)) {
+             if (!cmdModeRover(o.cmd)) {
                  return false;
              }
-             o.expect_reply = true;
-             o.timeout_ms = kConfigTimeoutMs;
-             o.switch_baud = 0;
+             o.expectReply = true;
+             o.timeoutMs = kConfigTimeoutMs;
+             o.switchBaud = 0;
              return true;
          },
          &always},
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
-             if (!cmd_com_baud(o.cmd, c.port, c.port_baud)) {
+             if (!cmdComBaud(o.cmd, c.port, c.portBaud)) {
                  return false;
              }
-             o.expect_reply = false;
-             o.timeout_ms = kConfigTimeoutMs;
-             o.switch_baud = c.port_baud;
+             o.expectReply = false;
+             o.timeoutMs = kConfigTimeoutMs;
+             o.switchBaud = c.portBaud;
              return true;
          },
-         &port_baud_enabled},
+         &portBaudEnabled},
     }};
     size_t position = 0;
     for (const ScriptStep &step : kRoverScript) {
@@ -433,23 +432,23 @@ bool ComnavReceiver::rover_step(size_t index, Model model, const RoverConfig &cf
     return false; // 脚本结束
 }
 
-Ack ComnavReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                   std::span<const uint8_t> sent) const noexcept
+Ack ComnavReceiver::classifyReply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                  std::span<const uint8_t> sent) const noexcept
 {
     static_cast<void>(sent); // NovAtel 应答不回显命令，只判类别
     if (&dec != &comnav::kPromptDecoder) {
         return Ack::kNone;
     }
-    if (resp_is_ok(frame)) {
+    if (respIsOk(frame)) {
         return Ack::kAck;
     }
-    if (resp_is_error(frame)) {
+    if (respIsError(frame)) {
         return Ack::kNack;
     }
     return Ack::kNone;
 }
 
-uint32_t ComnavReceiver::output_mask(Model model) const noexcept
+uint32_t ComnavReceiver::outputMask(Model model) const noexcept
 {
     // K803 只能输出这四类 NMEA；SATSINFOA/HEADINGA/GST 一律 kNotSupported（与旧脚本一致）。
     constexpr uint32_t kGgaBit = 1U << static_cast<uint32_t>(OutputMsg::kGga);
@@ -460,20 +459,20 @@ uint32_t ComnavReceiver::output_mask(Model model) const noexcept
     return kGgaBit | kRmcBit | kGsaBit | kGsvBit;
 }
 
-fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model,
-                                        const OutputPlan &plan, CmdBuf &out) const noexcept
+fw::Status ComnavReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model model,
+                                       const OutputPlan &plan, CmdBuf &out) const noexcept
 {
     const auto idx = static_cast<size_t>(static_cast<uint8_t>(msg));
     if ((msg == OutputMsg::kNone) || (idx >= kOutputNames.size())) {
         return fw::Status::kInvalidArg;
     }
-    if ((output_mask(model) & (1U << static_cast<uint32_t>(msg))) == 0U) {
+    if ((outputMask(model) & (1U << static_cast<uint32_t>(msg))) == 0U) {
         return fw::Status::kNotSupported;
     }
     const std::string_view name{kOutputNames[idx]};
     // period 0 = 关闭该类；旧 apply 旁路同样用 "UNLOG COMn <name>"。
-    const bool written = (period_ms == 0U) ? cmd_unlog_msg(out, name, plan.port)
-                                           : cmd_log_ontime(out, name, plan.port, period_ms);
+    const bool written = (periodMs == 0U) ? cmdUnlogMsg(out, name, plan.port)
+                                          : cmdLogOntime(out, name, plan.port, periodMs);
     if (!written) {
         out.clear();
         return fw::Status::kInvalidArg;
@@ -482,7 +481,7 @@ fw::Status ComnavReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model
 }
 
 /** @brief K803 叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
-const Receiver &comnav_receiver() noexcept
+const Receiver &comnavReceiver() noexcept
 {
     return detail::kK803Receiver;
 }

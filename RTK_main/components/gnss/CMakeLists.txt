@@ -1,7 +1,7 @@
 # GNSS 纯逻辑组件（ADR-0012 §2.2）：NMEA 解析、驱动接口（Receiver 基类）、探测/配置状态机。
 # C++20、无 IDF 依赖，同一份 CMakeLists 既是 ESP-IDF 组件，也可被 host 测试 add_subdirectory()。
 # 驱动按开关选编：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 option RTK_GNSS_DRV_<D>；
-# 启用的驱动以同名宏（=1）传给 src/Registry.cpp 生成 enabled_receivers()。
+# 启用的驱动以同名宏（=1）传给 src/Registry.cpp 生成 enabledReceivers()。
 set(_gnss_drivers UNICORE UBLOX COMNAV)
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/pascal_case.cmake)
 set(_gnss_srcs src/NmeaParser.cpp src/Controller.cpp src/Registry.cpp src/Receiver.cpp)

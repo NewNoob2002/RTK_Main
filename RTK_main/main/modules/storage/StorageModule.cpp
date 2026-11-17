@@ -171,7 +171,7 @@ void StorageModule::mark_whitelist_dirty(std::span<const core::BtAddr> list,
     ctx().data.store_status.write(status_);
 }
 
-bool StorageModule::poll(uint32_t /*now_ms*/) noexcept
+bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
 {
     const uint32_t now = rtos::nowMs();
     if (!pending_ || now - changed_ms_ < kDebounceMs ||

@@ -45,7 +45,7 @@ enum class OutputMsg : uint8_t {
     kCount,
 };
 
-/** OutputMsg 的个数（不含 kNone），即 OutputPlan::period_ms 的长度。 */
+/** OutputMsg 的个数（不含 kNone），即 OutputPlan::periodMs 的长度。 */
 inline constexpr size_t kOutputMsgCount = static_cast<size_t>(OutputMsg::kCount);
 
 /** 型号能力位（ADR-0010 §2.3）。由驱动的 caps() 按型号给出。 */
@@ -88,19 +88,19 @@ struct Fix {
     bool valid = false; // GGA 质量非 0
     FixQuality quality = FixQuality::kUnknown;
     UtcTime utc{};
-    int64_t lat_e9 = 0;                 // 纬度，1e-9 度，北正
-    int64_t lon_e9 = 0;                 // 经度，1e-9 度，东正
-    int32_t alt_mm = 0;                 // 海拔（MSL），mm
-    int32_t geoid_mm = 0;               // 大地水准面差距，mm
-    uint8_t sats_used = 0;              // GGA 参与解算卫星数
-    uint16_t hdop_x100 = kU16Unknown;   // HDOP×100，0xFFFF 未知
-    uint16_t pdop_x100 = kU16Unknown;   // GSA PDOP×100
-    uint16_t vdop_x100 = kU16Unknown;   // GSA VDOP×100
-    uint16_t diff_age_ds = kU16Unknown; // 差分龄期，0.1 s，0xFFFF 无差分
-    uint16_t diff_station = kU16Unknown;
-    uint32_t speed_mmps = 0;  // RMC 对地速度，mm/s
-    uint16_t course_cdeg = 0; // RMC 航向，0.01 度
-    uint32_t update_ms = 0;   // 最近一次 GGA 到达时的本地 now_ms（由调用方传入）
+    int64_t latE9 = 0;                // 纬度，1e-9 度，北正
+    int64_t lonE9 = 0;                // 经度，1e-9 度，东正
+    int32_t altMm = 0;                // 海拔（MSL），mm
+    int32_t geoidMm = 0;              // 大地水准面差距，mm
+    uint8_t satsUsed = 0;             // GGA 参与解算卫星数
+    uint16_t hdopX100 = kU16Unknown;  // HDOP×100，0xFFFF 未知
+    uint16_t pdopX100 = kU16Unknown;  // GSA PDOP×100
+    uint16_t vdopX100 = kU16Unknown;  // GSA VDOP×100
+    uint16_t diffAgeDs = kU16Unknown; // 差分龄期，0.1 s，0xFFFF 无差分
+    uint16_t diffStation = kU16Unknown;
+    uint32_t speedMmps = 0;  // RMC 对地速度，mm/s
+    uint16_t courseCdeg = 0; // RMC 航向，0.01 度
+    uint32_t updateMs = 0;   // 最近一次 GGA 到达时的本地 nowMs（由调用方传入）
 };
 
 /** 卫星系统；值与 NMEA 4.11 GSV 的 System ID 无关，仅本工程内部使用。 */
@@ -123,9 +123,9 @@ inline constexpr size_t kMaxSats = 63;
 struct SatInfo {
     Constellation system = Constellation::kOther;
     uint8_t prn = 0;
-    int8_t elev_deg = 0;   // -90..90，未知 0
-    uint16_t azim_deg = 0; // 0..359
-    uint8_t snr_dbhz = 0;  // 0 = 未跟踪
+    int8_t elevDeg = 0;   // -90..90，未知 0
+    uint16_t azimDeg = 0; // 0..359
+    uint8_t snrDbhz = 0;  // 0 = 未跟踪
     bool used = false;
 };
 
@@ -133,21 +133,21 @@ struct SatInfo {
 struct SatTable {
     std::array<SatInfo, kMaxSats> sats{};
     uint8_t count = 0;
-    uint32_t update_ms = 0;
+    uint32_t updateMs = 0;
 };
 
 /** 型号的显示名（"UM980"、"ZED-F9P"……）；未知返回 "unknown"。线程/ISR 安全：是。 */
-[[nodiscard]] const char *model_name(Model model) noexcept;
+[[nodiscard]] const char *modelName(Model model) noexcept;
 /** 型号所属家族。线程/ISR 安全：是。 */
-[[nodiscard]] Family family_of(Model model) noexcept;
+[[nodiscard]] Family familyOf(Model model) noexcept;
 /** 家族的短名（"unicore"/"ublox"/"comnav"）；未知返回 "unknown"。线程/ISR 安全：是。 */
-[[nodiscard]] const char *family_name(Family family) noexcept;
+[[nodiscard]] const char *familyName(Family family) noexcept;
 /**
  * NVS 读回的范围校验：等价于 `value <= static_cast<uint8_t>(Family::kComnav)`，
  * 但不把最后一个枚举值写死在调用方（ADR-0012 §2.3）。线程/ISR 安全：是。
  */
-[[nodiscard]] std::optional<Family> family_from_u8(uint8_t value) noexcept;
+[[nodiscard]] std::optional<Family> familyFromU8(uint8_t value) noexcept;
 /** 同上，用于 Model。线程/ISR 安全：是。 */
-[[nodiscard]] std::optional<Model> model_from_u8(uint8_t value) noexcept;
+[[nodiscard]] std::optional<Model> modelFromU8(uint8_t value) noexcept;
 
 } // namespace gnss

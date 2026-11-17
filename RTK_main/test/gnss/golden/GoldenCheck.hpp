@@ -21,7 +21,7 @@ namespace golden_check {
 inline constexpr size_t kAllMatch = static_cast<size_t>(-1);
 
 /** 驱动头导出的私有解码器：只有 Unicore/ComNav 有，故用一张查表集中映射。 */
-inline const demux::Decoder *decoder_for(golden::DecoderKind kind) noexcept
+inline const demux::Decoder *decoderFor(golden::DecoderKind kind) noexcept
 {
     switch (kind) {
     case golden::DecoderKind::kNmea:
@@ -39,7 +39,7 @@ inline const demux::Decoder *decoder_for(golden::DecoderKind kind) noexcept
     }
 }
 
-inline bool same_bytes(std::span<const uint8_t> data, std::string_view expect) noexcept
+inline bool sameBytes(std::span<const uint8_t> data, std::string_view expect) noexcept
 {
     if (data.size() != expect.size()) {
         return false;
@@ -52,92 +52,92 @@ inline bool same_bytes(std::span<const uint8_t> data, std::string_view expect) n
     return true;
 }
 
-/** build_probe：字节与成功标志都要与基线一致。 */
-inline bool probe_matches(const gnss::Receiver &receiver, const golden::Probe &expect) noexcept
+/** buildProbe：字节与成功标志都要与基线一致。 */
+inline bool probeMatches(const gnss::Receiver &receiver, const golden::Probe &expect) noexcept
 {
     gnss::CmdBuf cmd;
-    const bool ok = receiver.build_probe(cmd);
+    const bool ok = receiver.buildProbe(cmd);
     if (ok != expect.ok) {
         return false;
     }
-    return !ok || same_bytes(cmd.view(), expect.bytes.sv());
+    return !ok || sameBytes(cmd.view(), expect.bytes.sv());
 }
 
-/** 全部 rover_step 组合；返回第一个不一致的 (case, step) 压缩下标，kAllMatch 表示全部一致。 */
-inline size_t steps_mismatch(const gnss::Receiver &receiver,
-                             std::span<const golden::RoverCase> cases,
-                             std::span<const golden::Step> steps) noexcept
+/** 全部 roverStep 组合；返回第一个不一致的 (case, step) 压缩下标，kAllMatch 表示全部一致。 */
+inline size_t stepsMismatch(const gnss::Receiver &receiver,
+                            std::span<const golden::RoverCase> cases,
+                            std::span<const golden::Step> steps) noexcept
 {
     for (size_t c = 0; c < cases.size(); ++c) {
         const golden::RoverCase &item = cases[c];
         gnss::RoverConfig cfg{};
-        cfg.rate_hz = item.rate_hz;
+        cfg.rateHz = item.rateHz;
         cfg.gsv = item.gsv;
         cfg.port = item.port;
-        cfg.port_baud = item.port_baud;
+        cfg.portBaud = item.portBaud;
         const auto model = static_cast<gnss::Model>(item.model);
-        for (size_t i = 0; i < item.step_count; ++i) {
+        for (size_t i = 0; i < item.stepCount; ++i) {
             gnss::ConfigStep step{};
-            if (!receiver.rover_step(i, model, cfg, step)) {
+            if (!receiver.roverStep(i, model, cfg, step)) {
                 return c * 1000U + i;
             }
-            const golden::Step &want = steps[static_cast<size_t>(item.step_first) + i];
-            if ((!same_bytes(step.cmd.view(), want.bytes.sv())) ||
-                (step.expect_reply != want.expect_reply) || (step.timeout_ms != want.timeout_ms) ||
-                (step.switch_baud != want.switch_baud)) {
+            const golden::Step &want = steps[static_cast<size_t>(item.stepFirst) + i];
+            if ((!sameBytes(step.cmd.view(), want.bytes.sv())) ||
+                (step.expectReply != want.expectReply) || (step.timeoutMs != want.timeoutMs) ||
+                (step.switchBaud != want.switchBaud)) {
                 return c * 1000U + i;
             }
         }
         // 脚本必须在这一步结束：多出一步就是行为变化。
         gnss::ConfigStep extra{};
-        if (receiver.rover_step(item.step_count, model, cfg, extra)) {
-            return c * 1000U + item.step_count;
+        if (receiver.roverStep(item.stepCount, model, cfg, extra)) {
+            return c * 1000U + item.stepCount;
         }
     }
     return kAllMatch;
 }
 
-/** 探测应答样本；resp_decoder 用于 kUnicoreResp，其余按 decoder_for 查表。 */
-inline size_t probe_match_mismatch(const gnss::Receiver &receiver,
-                                   std::span<const golden::ProbeMatchCase> cases,
-                                   const demux::Decoder *resp_decoder) noexcept
+/** 探测应答样本；respDecoder 用于 kUnicoreResp，其余按 decoderFor 查表。 */
+inline size_t probeMatchMismatch(const gnss::Receiver &receiver,
+                                 std::span<const golden::ProbeMatchCase> cases,
+                                 const demux::Decoder *respDecoder) noexcept
 {
     for (size_t i = 0; i < cases.size(); ++i) {
         const golden::ProbeMatchCase &item = cases[i];
         const demux::Decoder *dec = item.decoder == golden::DecoderKind::kUnicoreResp
-                                        ? resp_decoder
-                                        : decoder_for(item.decoder);
+                                        ? respDecoder
+                                        : decoderFor(item.decoder);
         if (dec == nullptr) {
             return i;
         }
         gnss::ProbeResult result{};
-        const bool hit = receiver.match_probe(*dec, item.frame.view(), result);
+        const bool hit = receiver.matchProbe(*dec, item.frame.view(), result);
         if (hit != item.hit) {
             return i;
         }
         if (hit && ((static_cast<uint8_t>(result.model) != item.model) ||
-                    (std::string_view(result.fw_version.data()) != item.fw.sv()))) {
+                    (std::string_view(result.fwVersion.data()) != item.fw.sv()))) {
             return i;
         }
     }
     return kAllMatch;
 }
 
-/** 应答判定样本；resp_decoder 同 probe_match_mismatch。 */
-inline size_t reply_mismatch(const gnss::Receiver &receiver,
-                             std::span<const golden::ReplyCase> cases,
-                             const demux::Decoder *prompt_decoder) noexcept
+/** 应答判定样本；respDecoder 同 probeMatchMismatch。 */
+inline size_t replyMismatch(const gnss::Receiver &receiver,
+                            std::span<const golden::ReplyCase> cases,
+                            const demux::Decoder *promptDecoder) noexcept
 {
     for (size_t i = 0; i < cases.size(); ++i) {
         const golden::ReplyCase &item = cases[i];
         // 驱动私有的应答解码器（Unicore 的 $command、ComNav 的提示符）由调用方传入。
         const bool vendor = (item.decoder == golden::DecoderKind::kComnavPrompt) ||
                             (item.decoder == golden::DecoderKind::kUnicoreResp);
-        const demux::Decoder *dec = vendor ? prompt_decoder : decoder_for(item.decoder);
+        const demux::Decoder *dec = vendor ? promptDecoder : decoderFor(item.decoder);
         if (dec == nullptr) {
             return i;
         }
-        const gnss::Ack ack = receiver.classify_reply(*dec, item.frame.view(), item.sent.view());
+        const gnss::Ack ack = receiver.classifyReply(*dec, item.frame.view(), item.sent.view());
         if (static_cast<uint8_t>(ack) != item.ack) {
             return i;
         }
@@ -147,19 +147,19 @@ inline size_t reply_mismatch(const gnss::Receiver &receiver,
 
 /** 能力位样本。 */
 /**
- * @brief 逐条比对型号能力：期望值来自基线实现，型号差异由 for_model 选出的驱动负责（ADR-0012 §2.8）。
+ * @brief 逐条比对型号能力：期望值来自基线实现，型号差异由 forModel 选出的驱动负责（ADR-0012 §2.8）。
  * @param receiver: 被测的家族驱动。
  * @param cases: 黄金用例（model, caps）。
  * @retval index: 第一个不匹配的下标。
  * @retval kAllMatch: 全部一致。
  */
-inline size_t caps_mismatch(const gnss::Receiver &receiver,
-                            std::span<const golden::CapsCase> cases) noexcept
+inline size_t capsMismatch(const gnss::Receiver &receiver,
+                           std::span<const golden::CapsCase> cases) noexcept
 {
     for (size_t i = 0; i < cases.size(); ++i) {
         const auto model = static_cast<gnss::Model>(cases[i].model);
         // 先换到该型号的驱动再看能力：家族驱动对 UM982 只报 UM980 能力。
-        if (receiver.for_model(model).caps(model) != cases[i].caps) {
+        if (receiver.forModel(model).caps(model) != cases[i].caps) {
             return i;
         }
     }

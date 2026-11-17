@@ -1,6 +1,6 @@
 // u-blox F9（ZED-F9P）驱动实现：UBX-MON-VER 探测、CFG-VALSET 配置、ACK/NAK 匹配（ADR-0010 §2.2/§2.4）。
 // 结构（P3s）：命令生成（cmd_*）与应答判定（resp_*）是 UbloxReceiver 的 protected static，子类可直接复用；
-// 脚本步骤的回调写在 rover_step 内（要取 protected 成员的地址，匿名命名空间的自由函数没有访问权）。
+// 脚本步骤的回调写在 roverStep 内（要取 protected 成员的地址，匿名命名空间的自由函数没有访问权）。
 // 载荷写入器（Writer）与 CFG-VALSET 载荷拼接留在本文件内：Writer 是 .cpp 私有类型，不能出现在类声明里。
 // 线程/调用约束：纯函数，无全局可变状态，可重入、不阻塞。
 // 堆：不使用（命令在 CmdBuf 定长缓冲内构造）。
@@ -81,7 +81,7 @@ constexpr uint8_t kMonVerPollCkA = 0x0E;
 constexpr uint8_t kMonVerPollCkB = 0x34;
 constexpr size_t kMonVerPollBytes = 8U;
 
-// MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（match_probe / classify_reply 均按 ubx 解码器判定）。
+// MON-VER 探测应答与 ACK/NAK 都是 UBX 帧（matchProbe / classifyReply 均按 ubx 解码器判定）。
 constexpr std::array<const demux::Decoder *, 1> kDecoders{&demux::ubx::kDecoder};
 
 /** 载荷写入器：定长缓冲 + 写点下标（不用指针算术，越界即失败）。 */
@@ -142,13 +142,13 @@ struct Writer {
 /**
  * @brief 累积 UBX Fletcher 校验（命令库与应答判定共用，放在文件内）。
  * @param byte: 新字节。
- * @param ck_a: 入参与输出，校验字节 A。
- * @param ck_b: 入参与输出，校验字节 B。
+ * @param ckA: 入参与输出，校验字节 A。
+ * @param ckB: 入参与输出，校验字节 B。
  */
-void fletcher(uint8_t byte, uint8_t &ck_a, uint8_t &ck_b) noexcept
+void fletcher(uint8_t byte, uint8_t &ckA, uint8_t &ckB) noexcept
 {
-    ck_a = static_cast<uint8_t>(ck_a + byte);
-    ck_b = static_cast<uint8_t>(ck_b + ck_a);
+    ckA = static_cast<uint8_t>(ckA + byte);
+    ckB = static_cast<uint8_t>(ckB + ckA);
 }
 
 /**
@@ -157,7 +157,7 @@ void fletcher(uint8_t byte, uint8_t &ck_a, uint8_t &ck_b) noexcept
  * @retval true: 写入成功。
  * @retval false: 空间不足。
  */
-bool begin_valset(Writer &writer) noexcept
+bool beginValset(Writer &writer) noexcept
 {
     return writer.u8(kVersetVersion) && writer.u8(kLayerRamBbr) && writer.u8(0x00) &&
            (writer.pos == kValsetHeadBytes);
@@ -171,7 +171,7 @@ bool begin_valset(Writer &writer) noexcept
  * @retval true: 写入成功。
  * @retval false: 空间不足。
  */
-bool add_u1_item(Writer &writer, uint32_t key, uint8_t value) noexcept
+bool addU1Item(Writer &writer, uint32_t key, uint8_t value) noexcept
 {
     const size_t start = writer.pos;
     return writer.u32(key) && writer.u8(value) && ((writer.pos - start) == kU1ItemBytes);
@@ -185,7 +185,7 @@ bool add_u1_item(Writer &writer, uint32_t key, uint8_t value) noexcept
  * @retval true: 写入成功。
  * @retval false: 空间不足。
  */
-bool add_u2_item(Writer &writer, uint32_t key, uint16_t value) noexcept
+bool addU2Item(Writer &writer, uint32_t key, uint16_t value) noexcept
 {
     const size_t start = writer.pos;
     return writer.u32(key) && writer.u16(value) && ((writer.pos - start) == kU2ItemBytes);
@@ -199,7 +199,7 @@ bool add_u2_item(Writer &writer, uint32_t key, uint16_t value) noexcept
  * @retval true: 写入成功。
  * @retval false: 空间不足。
  */
-bool add_u4_item(Writer &writer, uint32_t key, uint32_t value) noexcept
+bool addU4Item(Writer &writer, uint32_t key, uint32_t value) noexcept
 {
     const size_t start = writer.pos;
     return writer.u32(key) && writer.u32(value) && ((writer.pos - start) == kU4ItemBytes);
@@ -210,7 +210,7 @@ bool add_u4_item(Writer &writer, uint32_t key, uint32_t value) noexcept
  * @param text: 源文本（可能不满 30 字节，以 NUL 或长度结束）。
  * @param out: 输出缓冲（kVersionLen 字节）。
  */
-void copy_text(std::span<const uint8_t> text, std::array<char, kVersionLen> &out) noexcept
+void copyText(std::span<const uint8_t> text, std::array<char, kVersionLen> &out) noexcept
 {
     size_t len = 0;
     while ((len < text.size()) && (text[len] != 0)) {
@@ -231,10 +231,10 @@ void copy_text(std::span<const uint8_t> text, std::array<char, kVersionLen> &out
  * @retval true: 前缀匹配。
  * @retval false: 不匹配。
  */
-bool ext_text(std::span<const uint8_t> ext, std::string_view prefix,
-              std::span<const uint8_t> &tail) noexcept
+bool extText(std::span<const uint8_t> ext, std::string_view prefix,
+             std::span<const uint8_t> &tail) noexcept
 {
-    if (!ascii::starts_with(ext, prefix)) {
+    if (!ascii::startsWith(ext, prefix)) {
         return false;
     }
     tail = ext.subspan(prefix.size());
@@ -248,24 +248,24 @@ bool ext_text(std::span<const uint8_t> ext, std::string_view prefix,
  * @retval true: 找到 "MOD=ZED-F9P"。
  * @retval false: 不是 F9P（同家族其他型号不认作本驱动）。
  */
-bool read_mon_ver(std::span<const uint8_t> payload, ProbeResult &out) noexcept
+bool readMonVer(std::span<const uint8_t> payload, ProbeResult &out) noexcept
 {
     ProbeResult result{};
-    bool have_model = false;
+    bool haveModel = false;
     for (size_t off = kMonVerMinLen; (off + kMonVerExtBytes) <= payload.size();
          off += kMonVerExtBytes) {
         const std::span<const uint8_t> ext = payload.subspan(off, kMonVerExtBytes);
         std::span<const uint8_t> tail{};
-        if (ext_text(ext, "MOD=", tail)) {
-            if (!ascii::quoted_starts_with(tail, "ZED-F9P")) {
+        if (extText(ext, "MOD=", tail)) {
+            if (!ascii::quotedStartsWith(tail, "ZED-F9P")) {
                 return false;
             }
-            have_model = true;
-        } else if (ext_text(ext, "FWVER=", tail)) {
-            copy_text(tail, result.fw_version);
+            haveModel = true;
+        } else if (extText(ext, "FWVER=", tail)) {
+            copyText(tail, result.fwVersion);
         }
     }
-    if (!have_model) {
+    if (!haveModel) {
         return false;
     }
     result.model = Model::kZedF9p;
@@ -290,20 +290,20 @@ bool always(const RoverConfig &cfg) noexcept
     return true;
 }
 
-/** @brief 仅在要求改波特率时参与（port_baud == 0 时脚本提前结束）。 */
-bool port_baud_enabled(const RoverConfig &cfg) noexcept
+/** @brief 仅在要求改波特率时参与（portBaud == 0 时脚本提前结束）。 */
+bool portBaudEnabled(const RoverConfig &cfg) noexcept
 {
-    return cfg.port_baud != 0U;
+    return cfg.portBaud != 0U;
 }
 
 /**
  * @brief 把配置频率夹到驱动支持范围（1..20 Hz），并换算成导航周期毫秒。
  * @param cfg: 流动站配置。
- * @retval 周期: 导航周期（毫秒），rate_hz = 0 视为 1 Hz。
+ * @retval 周期: 导航周期（毫秒），rateHz = 0 视为 1 Hz。
  */
-uint16_t nav_period_ms(const RoverConfig &cfg) noexcept
+uint16_t navPeriodMs(const RoverConfig &cfg) noexcept
 {
-    uint8_t rate = cfg.rate_hz;
+    uint8_t rate = cfg.rateHz;
     if (rate == 0U) {
         rate = kMinRateHz;
     }
@@ -334,8 +334,8 @@ constinit const ZedF9pReceiver kZedF9pReceiver{};
  * @retval true: 已写入完整帧。
  * @retval false: 载荷超长或缓冲不足。
  */
-bool UbloxReceiver::cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id,
-                                    std::span<const uint8_t> payload) noexcept
+bool UbloxReceiver::cmdBuildFrame(CmdBuf &out, uint8_t cls, uint8_t id,
+                                  std::span<const uint8_t> payload) noexcept
 {
     if (payload.size() > kMaxPayload) {
         return false;
@@ -347,15 +347,15 @@ bool UbloxReceiver::cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id,
         id,
         static_cast<uint8_t>(payload.size() & kByteMask),
         static_cast<uint8_t>((payload.size() >> kShift1Byte) & kByteMask)};
-    uint8_t ck_a = 0;
-    uint8_t ck_b = 0;
+    uint8_t ckA = 0;
+    uint8_t ckB = 0;
     for (size_t i = kSyncBytes; i < header.size(); ++i) {
-        fletcher(header[i], ck_a, ck_b);
+        fletcher(header[i], ckA, ckB);
     }
     for (const uint8_t b : payload) {
-        fletcher(b, ck_a, ck_b);
+        fletcher(b, ckA, ckB);
     }
-    const std::array<uint8_t, kCrcBytes> checksum{ck_a, ck_b};
+    const std::array<uint8_t, kCrcBytes> checksum{ckA, ckB};
     out.clear();
     return out.append(header) && out.append(payload) && out.append(checksum);
 }
@@ -366,7 +366,7 @@ bool UbloxReceiver::cmd_build_frame(CmdBuf &out, uint8_t cls, uint8_t id,
  * @retval true: 已写入完整帧。
  * @retval false: 缓冲空间不足。
  */
-bool UbloxReceiver::cmd_poll_mon_ver(CmdBuf &out) noexcept
+bool UbloxReceiver::cmdPollMonVer(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append(std::array<uint8_t, kMonVerPollBytes>{
@@ -376,20 +376,20 @@ bool UbloxReceiver::cmd_poll_mon_ver(CmdBuf &out) noexcept
 /**
  * @brief 基础配置：CFG-RATE-MEAS + 打开 RTCM3X 输入协议 + 打开 NMEA 输出协议。
  * @param out: 目标命令缓冲。
- * @param period_ms: 导航周期（毫秒）。
+ * @param periodMs: 导航周期（毫秒）。
  * @retval true: 已写入完整帧。
  * @retval false: 载荷或缓冲空间不足。
  */
-bool UbloxReceiver::cmd_configure_receiver(CmdBuf &out, uint16_t period_ms) noexcept
+bool UbloxReceiver::cmdConfigureReceiver(CmdBuf &out, uint16_t periodMs) noexcept
 {
     std::array<uint8_t, kValsetPayloadMax> payload{};
     Writer writer{payload};
-    if (!begin_valset(writer) || !add_u2_item(writer, kKeyRateMeas, period_ms) ||
-        !add_u1_item(writer, kKeyUart1InprotRtcm3x, 1U) ||
-        !add_u1_item(writer, kKeyUart1OutprotNmea, 1U)) {
+    if (!beginValset(writer) || !addU2Item(writer, kKeyRateMeas, periodMs) ||
+        !addU1Item(writer, kKeyUart1InprotRtcm3x, 1U) ||
+        !addU1Item(writer, kKeyUart1OutprotNmea, 1U)) {
         return false;
     }
-    return cmd_build_frame(out, kClsCfg, kIdCfgValset, writer.view());
+    return cmdBuildFrame(out, kClsCfg, kIdCfgValset, writer.view());
 }
 
 /**
@@ -399,14 +399,14 @@ bool UbloxReceiver::cmd_configure_receiver(CmdBuf &out, uint16_t period_ms) noex
  * @retval true: 已写入完整帧。
  * @retval false: 载荷或缓冲空间不足。
  */
-bool UbloxReceiver::cmd_set_baudrate(CmdBuf &out, uint32_t baud) noexcept
+bool UbloxReceiver::cmdSetBaudrate(CmdBuf &out, uint32_t baud) noexcept
 {
     std::array<uint8_t, kValsetPayloadMax> payload{};
     Writer writer{payload};
-    if (!begin_valset(writer) || !add_u4_item(writer, kKeyUart1Baudrate, baud)) {
+    if (!beginValset(writer) || !addU4Item(writer, kKeyUart1Baudrate, baud)) {
         return false;
     }
-    return cmd_build_frame(out, kClsCfg, kIdCfgValset, writer.view());
+    return cmdBuildFrame(out, kClsCfg, kIdCfgValset, writer.view());
 }
 
 /**
@@ -417,14 +417,14 @@ bool UbloxReceiver::cmd_set_baudrate(CmdBuf &out, uint32_t baud) noexcept
  * @retval true: 已写入完整帧。
  * @retval false: 载荷或缓冲空间不足。
  */
-bool UbloxReceiver::cmd_valset_msgout(CmdBuf &out, uint32_t key, uint8_t epochs) noexcept
+bool UbloxReceiver::cmdValsetMsgout(CmdBuf &out, uint32_t key, uint8_t epochs) noexcept
 {
     std::array<uint8_t, kMsgoutPayloadMax> payload{};
     Writer writer{payload};
-    if (!begin_valset(writer) || !add_u1_item(writer, key, epochs)) {
+    if (!beginValset(writer) || !addU1Item(writer, key, epochs)) {
         return false;
     }
-    return cmd_build_frame(out, kClsCfg, kIdCfgValset, writer.view());
+    return cmdBuildFrame(out, kClsCfg, kIdCfgValset, writer.view());
 }
 
 // ---- 应答判定：只判帧结构与 ACK 类别，不看具体配置内容 ----
@@ -434,7 +434,7 @@ bool UbloxReceiver::cmd_valset_msgout(CmdBuf &out, uint32_t key, uint8_t epochs)
  * @param frame: 整帧字节。
  * @retval 长度: 载荷字节数；帧头不足时返回 0。
  */
-size_t UbloxReceiver::resp_payload_len(std::span<const uint8_t> frame) noexcept
+size_t UbloxReceiver::respPayloadLen(std::span<const uint8_t> frame) noexcept
 {
     if (frame.size() < (kLenOffset + 2U)) {
         return 0U;
@@ -449,7 +449,7 @@ size_t UbloxReceiver::resp_payload_len(std::span<const uint8_t> frame) noexcept
  * @retval true: class 0x05、id 0x00/0x01、载荷 2 字节、总长正好。
  * @retval false: 其他帧。
  */
-bool UbloxReceiver::resp_has_valid_ack(std::span<const uint8_t> frame) noexcept
+bool UbloxReceiver::respHasValidAck(std::span<const uint8_t> frame) noexcept
 {
     if ((frame.size() != (kHeaderBytes + kAckPayloadBytes + kCrcBytes)) ||
         (frame[kClsOffset] != kClsAck)) {
@@ -458,19 +458,18 @@ bool UbloxReceiver::resp_has_valid_ack(std::span<const uint8_t> frame) noexcept
     if ((frame[kIdOffset] != kIdAck) && (frame[kIdOffset] != kIdNak)) {
         return false;
     }
-    return resp_payload_len(frame) == kAckPayloadBytes;
+    return respPayloadLen(frame) == kAckPayloadBytes;
 }
 
 /**
  * @brief ACK/NAK 载荷是否指向给定的 class/id（即“被 ACK 的是哪条命令”）。
- * @param frame: 已通过 resp_has_valid_ack 的帧。
+ * @param frame: 已通过 respHasValidAck 的帧。
  * @param cls: 期望被应答的 class。
  * @param id: 期望被应答的 id。
  * @retval true: 载荷等于 cls/id。
  * @retval false: 其他命令的应答。
  */
-bool UbloxReceiver::resp_ack_class_id(std::span<const uint8_t> frame, uint8_t cls,
-                                      uint8_t id) noexcept
+bool UbloxReceiver::respAckClassId(std::span<const uint8_t> frame, uint8_t cls, uint8_t id) noexcept
 {
     return (frame[kPayloadOffset] == cls) && (frame[kPayloadOffset + 1U] == id);
 }
@@ -500,13 +499,13 @@ uint32_t UbloxReceiver::caps(Model model) const noexcept
     return cap::kRtcmIn | cap::kBase;
 }
 
-bool UbloxReceiver::build_probe(CmdBuf &out) const noexcept
+bool UbloxReceiver::buildProbe(CmdBuf &out) const noexcept
 {
-    return cmd_poll_mon_ver(out);
+    return cmdPollMonVer(out);
 }
 
-bool UbloxReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                ProbeResult &out) const noexcept
+bool UbloxReceiver::matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                               ProbeResult &out) const noexcept
 {
     if ((&dec != &demux::ubx::kDecoder) || (frame.size() < (kHeaderBytes + kCrcBytes))) {
         return false;
@@ -514,39 +513,39 @@ bool UbloxReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8
     if ((frame[kClsOffset] != kClsMon) || (frame[kIdOffset] != kIdMonVer)) {
         return false;
     }
-    const size_t len = resp_payload_len(frame);
+    const size_t len = respPayloadLen(frame);
     if ((len < kMonVerMinLen) || (frame.size() < (kPayloadOffset + len + kCrcBytes))) {
         return false;
     }
-    return read_mon_ver(frame.subspan(kPayloadOffset, len), out);
+    return readMonVer(frame.subspan(kPayloadOffset, len), out);
 }
 
-bool UbloxReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg,
-                               ConfigStep &out) const noexcept
+bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
+                              ConfigStep &out) const noexcept
 {
     static_cast<void>(model); // ZED-F9P 单型号，脚本与型号无关
     // 表放在成员函数作用域内：步骤回调要调 protected 的 cmd_*，匿名命名空间的自由函数没有访问权。
     static constexpr std::array<ScriptStep, 2> kRoverScript{{
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
-             if (!cmd_configure_receiver(o.cmd, nav_period_ms(c))) {
+             if (!cmdConfigureReceiver(o.cmd, navPeriodMs(c))) {
                  return false;
              }
-             o.expect_reply = true;
-             o.timeout_ms = kConfigTimeoutMs;
-             o.switch_baud = 0;
+             o.expectReply = true;
+             o.timeoutMs = kConfigTimeoutMs;
+             o.switchBaud = 0;
              return true;
          },
          &always},
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
-             if (!cmd_set_baudrate(o.cmd, c.port_baud)) {
+             if (!cmdSetBaudrate(o.cmd, c.portBaud)) {
                  return false;
              }
-             o.expect_reply = false;
-             o.timeout_ms = kConfigTimeoutMs;
-             o.switch_baud = c.port_baud;
+             o.expectReply = false;
+             o.timeoutMs = kConfigTimeoutMs;
+             o.switchBaud = c.portBaud;
              return true;
          },
-         &port_baud_enabled},
+         &portBaudEnabled},
     }};
     size_t position = 0;
     for (const ScriptStep &step : kRoverScript) {
@@ -561,32 +560,32 @@ bool UbloxReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg
     return false; // 脚本结束
 }
 
-Ack UbloxReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                  std::span<const uint8_t> sent) const noexcept
+Ack UbloxReceiver::classifyReply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                 std::span<const uint8_t> sent) const noexcept
 {
     static_cast<void>(sent); // ACK/NAK 只回显 class/id，不回显命令文本
     if (&dec != &demux::ubx::kDecoder) {
         return Ack::kNone;
     }
-    if (!resp_has_valid_ack(frame) || !resp_ack_class_id(frame, kClsCfg, kIdCfgValset)) {
+    if (!respHasValidAck(frame) || !respAckClassId(frame, kClsCfg, kIdCfgValset)) {
         return Ack::kNone; // 只认 CFG-VALSET（06 8A）的应答
     }
     return frame[kIdOffset] == kIdAck ? Ack::kAck : Ack::kNack;
 }
 
-size_t UbloxReceiver::frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                std::span<char> out) const noexcept
+size_t UbloxReceiver::frameTag(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                               std::span<char> out) const noexcept
 {
     if ((std::string_view{dec.name} == "UBX") && (frame.size() > (detail::kUbxClassOffset + 1U))) {
-        size_t pos = detail::append_text(out, 0U, "UBX 0x");
-        pos = detail::append_hex2(out, pos, frame[detail::kUbxClassOffset]);
-        pos = detail::append_text(out, pos, "/0x");
-        return detail::append_hex2(out, pos, frame[detail::kUbxClassOffset + 1U]);
+        size_t pos = detail::appendText(out, 0U, "UBX 0x");
+        pos = detail::appendHex2(out, pos, frame[detail::kUbxClassOffset]);
+        pos = detail::appendText(out, pos, "/0x");
+        return detail::appendHex2(out, pos, frame[detail::kUbxClassOffset + 1U]);
     }
-    return Receiver::frame_tag(dec, frame, out);
+    return Receiver::frameTag(dec, frame, out);
 }
 
-uint32_t UbloxReceiver::output_mask(Model model) const noexcept
+uint32_t UbloxReceiver::outputMask(Model model) const noexcept
 {
     // ZED-F9P 能输出这 5 类；SATSINFOA/HEADINGA 是 Unicore 私有帧，返回 kNotSupported。
     constexpr uint32_t kGgaBit = 1U << static_cast<uint32_t>(OutputMsg::kGga);
@@ -598,8 +597,8 @@ uint32_t UbloxReceiver::output_mask(Model model) const noexcept
     return kGgaBit | kGstBit | kRmcBit | kGsaBit | kGsvBit;
 }
 
-fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model,
-                                       const OutputPlan &plan, CmdBuf &out) const noexcept
+fw::Status UbloxReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model model,
+                                      const OutputPlan &plan, CmdBuf &out) const noexcept
 {
     static_cast<void>(model);
     uint32_t key = 0U;
@@ -628,12 +627,12 @@ fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model 
         return fw::Status::kInvalidArg;
     }
 
-    // 值 = 每历元次数：round(period_ms * rate_hz / 1000)，0 关闭；算下来为 0 时按 1（最慢 1 历元一次）。
-    const uint32_t rate = (plan.rate_hz == 0U) ? kMinRateHz : static_cast<uint32_t>(plan.rate_hz);
+    // 值 = 每历元次数：round(periodMs * rateHz / 1000)，0 关闭；算下来为 0 时按 1（最慢 1 历元一次）。
+    const uint32_t rate = (plan.rateHz == 0U) ? kMinRateHz : static_cast<uint32_t>(plan.rateHz);
     uint32_t epochs = 0U;
-    if (period_ms != 0U) {
-        // period_ms 最大 128000、rate 最大 20，乘积 2.56e6 在 uint32_t 内，无需 64 位。
-        const uint32_t scaled = (period_ms * rate) + kHalfSecondMs;
+    if (periodMs != 0U) {
+        // periodMs 最大 128000、rate 最大 20，乘积 2.56e6 在 uint32_t 内，无需 64 位。
+        const uint32_t scaled = (periodMs * rate) + kHalfSecondMs;
         epochs = scaled / kMsPerSecond;
         if (epochs == 0U) {
             epochs = 1U;
@@ -642,7 +641,7 @@ fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model 
             return fw::Status::kInvalidArg; // 键类型是 U1，超出可表示范围视为不可实现参数
         }
     }
-    if (!cmd_valset_msgout(out, key, static_cast<uint8_t>(epochs))) {
+    if (!cmdValsetMsgout(out, key, static_cast<uint8_t>(epochs))) {
         out.clear();
         return fw::Status::kInvalidArg;
     }
@@ -650,7 +649,7 @@ fw::Status UbloxReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model 
 }
 
 /** @brief ZED-F9P 叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
-const Receiver &ublox_receiver() noexcept
+const Receiver &ubloxReceiver() noexcept
 {
     return detail::kZedF9pReceiver;
 }

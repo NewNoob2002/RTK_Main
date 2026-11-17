@@ -1,5 +1,5 @@
 // 外供存储静态 StreamBuffer 包装：控制块在对象内部，存储区由启动期 boot_alloc() 注入。
-// 线程安全：单写者/单读者语义同 FreeRTOS StreamBuffer；timeout_ms=0 可用于非阻塞回调。ISR 安全：否。
+// 线程安全：单写者/单读者语义同 FreeRTOS StreamBuffer；timeoutMs=0 可用于非阻塞回调。ISR 安全：否。
 #pragma once
 
 #include <cstddef>
@@ -50,7 +50,7 @@ public:
         }
     }
 
-    /** 写入，返回实际写入字节数；回调中传 timeout_ms=0。 */
+    /** 写入，返回实际写入字节数；回调中传 timeoutMs=0。 */
     [[nodiscard]] size_t send(std::span<const uint8_t> data, uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || data.empty()) {
@@ -59,7 +59,7 @@ public:
         return xStreamBufferSend(handle_, data.data(), data.size(), pdMS_TO_TICKS(timeoutMs));
     }
 
-    /** 读取，返回实际读取字节数；timeout_ms=0 为非阻塞。 */
+    /** 读取，返回实际读取字节数；timeoutMs=0 为非阻塞。 */
     [[nodiscard]] size_t receive(std::span<uint8_t> out, uint32_t timeoutMs) noexcept
     {
         if ((handle_ == nullptr) || out.empty()) {

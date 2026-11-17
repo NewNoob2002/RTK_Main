@@ -119,7 +119,7 @@ constexpr uint32_t kSatKeySystemShift = 8U;
  * @param prn: 卫星编号
  * @retval 键值（system << 8 | prn）
  */
-uint16_t sat_key(Constellation system, uint8_t prn) noexcept
+uint16_t satKey(Constellation system, uint8_t prn) noexcept
 {
     // 星座枚举 < 8、prn < 256，合进 uint16 不会溢出。
     return static_cast<uint16_t>((static_cast<uint32_t>(system) << kSatKeySystemShift) |
@@ -131,7 +131,7 @@ uint16_t sat_key(Constellation system, uint8_t prn) noexcept
  * @param suffix: 3 字母消息名（GGA/RMC/GSA/GSV）
  * @retval true 表示匹配
  */
-bool addr_is(std::span<const uint8_t> addr, std::string_view suffix) noexcept
+bool addrIs(std::span<const uint8_t> addr, std::string_view suffix) noexcept
 {
     for (size_t i = 0; i < kAddrSuffixLen; ++i) {
         if (addr[addr.size() - kAddrSuffixLen + i] != static_cast<uint8_t>(suffix[i])) {
@@ -145,7 +145,7 @@ bool addr_is(std::span<const uint8_t> addr, std::string_view suffix) noexcept
  * @param c: 待判字节
  * @retval true 表示 '0'..'9'
  */
-bool is_digit(uint8_t c) noexcept
+bool isDigit(uint8_t c) noexcept
 {
     return c >= static_cast<uint8_t>('0') && c <= static_cast<uint8_t>('9');
 }
@@ -168,7 +168,7 @@ int64_t pow10(uint8_t n) noexcept
  * @param b: 除数（必须为正）
  * @retval a/b 的四舍五入结果
  */
-int64_t round_div(int64_t a, int64_t b) noexcept
+int64_t roundDiv(int64_t a, int64_t b) noexcept
 {
     if (a >= 0) {
         return (a + (b / 2)) / b;
@@ -177,31 +177,31 @@ int64_t round_div(int64_t a, int64_t b) noexcept
 }
 
 /** @brief 定标点数的分数位换算。
- * @param value: 带 from_frac 位小数的整数表示
- * @param from_frac: 当前小数位数
- * @param to_frac: 目标小数位数
- * @retval 带 to_frac 位小数的整数表示
+ * @param value: 带 fromFrac 位小数的整数表示
+ * @param fromFrac: 当前小数位数
+ * @param toFrac: 目标小数位数
+ * @retval 带 toFrac 位小数的整数表示
  */
-int64_t rescale(int64_t value, uint8_t from_frac, uint8_t to_frac) noexcept
+int64_t rescale(int64_t value, uint8_t fromFrac, uint8_t toFrac) noexcept
 {
-    if (from_frac == to_frac) {
+    if (fromFrac == toFrac) {
         return value;
     }
-    if (from_frac < to_frac) {
-        return value * pow10(static_cast<uint8_t>(to_frac - from_frac));
+    if (fromFrac < toFrac) {
+        return value * pow10(static_cast<uint8_t>(toFrac - fromFrac));
     }
-    return round_div(value, pow10(static_cast<uint8_t>(from_frac - to_frac)));
+    return roundDiv(value, pow10(static_cast<uint8_t>(fromFrac - toFrac)));
 }
 
 /** @brief 解析 [+-]?digits[.digits]，返回 10^frac_digits 定点值。
  * @param field: 单个 NMEA 字段
- * @param max_frac: 允许的最大小数位数
+ * @param maxFrac: 允许的最大小数位数
  * @param value: 输出定点值
  * @param frac: 输出实际小数位数
  * @retval kEmpty 空字段；kOk 成功；kError 格式错误
  */
-NumResult parse_fixed(std::span<const uint8_t> field, uint8_t max_frac, int64_t &value,
-                      uint8_t &frac) noexcept
+NumResult parseFixed(std::span<const uint8_t> field, uint8_t maxFrac, int64_t &value,
+                     uint8_t &frac) noexcept
 {
     if (field.empty()) {
         return NumResult::kEmpty;
@@ -216,38 +216,38 @@ NumResult parse_fixed(std::span<const uint8_t> field, uint8_t max_frac, int64_t 
         return NumResult::kError;
     }
     int64_t v = 0;
-    uint8_t frac_count = 0;
-    bool seen_dot = false;
-    bool seen_digit = false;
+    uint8_t fracCount = 0;
+    bool seenDot = false;
+    bool seenDigit = false;
     for (; pos < field.size(); ++pos) {
         const uint8_t c = field[pos];
         if (c == static_cast<uint8_t>('.')) {
-            if (seen_dot) {
+            if (seenDot) {
                 return NumResult::kError;
             }
-            seen_dot = true;
+            seenDot = true;
             continue;
         }
-        if (!is_digit(c)) {
+        if (!isDigit(c)) {
             return NumResult::kError;
         }
-        seen_digit = true;
-        if (seen_dot) {
-            if (frac_count >= max_frac) {
+        seenDigit = true;
+        if (seenDot) {
+            if (fracCount >= maxFrac) {
                 return NumResult::kError;
             }
-            ++frac_count;
+            ++fracCount;
         }
         if (v > (kMagnitudeCap - kMaxDigit64) / kDecimalRadix) {
             return NumResult::kError;
         }
         v = (v * kDecimalRadix) + static_cast<int64_t>(c - static_cast<uint8_t>('0'));
     }
-    if (!seen_digit) {
+    if (!seenDigit) {
         return NumResult::kError;
     }
     value = negative ? -v : v;
-    frac = frac_count;
+    frac = fracCount;
     return NumResult::kOk;
 }
 
@@ -256,14 +256,14 @@ NumResult parse_fixed(std::span<const uint8_t> field, uint8_t max_frac, int64_t 
  * @param value: 输出值
  * @retval kEmpty 空字段；kOk 成功；kError 格式或范围错误
  */
-NumResult parse_uint(std::span<const uint8_t> field, uint32_t &value) noexcept
+NumResult parseUint(std::span<const uint8_t> field, uint32_t &value) noexcept
 {
     if (field.empty()) {
         return NumResult::kEmpty;
     }
     uint32_t v = 0;
     for (const uint8_t c : field) {
-        if (!is_digit(c)) {
+        if (!isDigit(c)) {
             return NumResult::kError;
         }
         if (v > (kMaxUint32 - kMaxDigit32) / kDecimalRadix32) {
@@ -304,7 +304,7 @@ struct FieldIter {
  * @param c: 期望字符
  * @retval true 表示长度 1 且字符相同
  */
-bool field_equals(std::span<const uint8_t> field, char c) noexcept
+bool fieldEquals(std::span<const uint8_t> field, char c) noexcept
 {
     return field.size() == 1 && field[0] == static_cast<uint8_t>(c);
 }
@@ -315,7 +315,7 @@ bool field_equals(std::span<const uint8_t> field, char c) noexcept
  * @param  out: 输出星座
  * @retval true 认识该 ID；false 未知
  */
-bool sysid_to_constellation(uint32_t id, Constellation &out) noexcept
+bool sysidToConstellation(uint32_t id, Constellation &out) noexcept
 {
     switch (id) {
     case kSysIdGps:
@@ -347,7 +347,7 @@ bool sysid_to_constellation(uint32_t id, Constellation &out) noexcept
  * @param  out: 输出星座
  * @retval true 认识该 talker；false 未知
  */
-bool talker_to_constellation(std::span<const uint8_t> addr, Constellation &out) noexcept
+bool talkerToConstellation(std::span<const uint8_t> addr, Constellation &out) noexcept
 {
     if (addr.size() < kMinAddrLen) {
         return false;
@@ -386,7 +386,7 @@ bool talker_to_constellation(std::span<const uint8_t> addr, Constellation &out) 
  * @param c: 星座
  * @retval 数组索引
  */
-size_t constellation_index(Constellation c) noexcept
+size_t constellationIndex(Constellation c) noexcept
 {
     const size_t index = static_cast<size_t>(c);
     return index < static_cast<size_t>(Constellation::kCount)
@@ -396,26 +396,26 @@ size_t constellation_index(Constellation c) noexcept
 
 /** @brief 由 talker 与可选 System ID 字段确定星座。
  * @param addr: 地址字段
- * @param id_field: System ID 字段（可为空）
+ * @param idField: System ID 字段（可为空）
  * @param system: 输出的星座
  * @retval false 表示 System ID 存在但格式错误
  */
-bool resolve_system(std::span<const uint8_t> addr, std::span<const uint8_t> id_field,
-                    Constellation &system) noexcept
+bool resolveSystem(std::span<const uint8_t> addr, std::span<const uint8_t> idField,
+                   Constellation &system) noexcept
 {
-    bool have_system = talker_to_constellation(addr, system);
-    if (!id_field.empty()) {
+    bool haveSystem = talkerToConstellation(addr, system);
+    if (!idField.empty()) {
         uint32_t id = 0;
-        if (parse_uint(id_field, id) != NumResult::kOk) {
+        if (parseUint(idField, id) != NumResult::kOk) {
             return false;
         }
-        Constellation from_id = Constellation::kOther;
-        if (sysid_to_constellation(id, from_id)) {
-            system = from_id;
-            have_system = true;
+        Constellation fromId = Constellation::kOther;
+        if (sysidToConstellation(id, fromId)) {
+            system = fromId;
+            haveSystem = true;
         }
     }
-    if (!have_system) {
+    if (!haveSystem) {
         system = Constellation::kOther;
     }
     return true;
@@ -426,11 +426,11 @@ bool resolve_system(std::span<const uint8_t> addr, std::span<const uint8_t> id_f
  * @param utc: 输出的 UTC 时间
  * @retval kEmpty 空字段；kOk 成功；kError 格式或范围错误
  */
-NumResult parse_time(std::span<const uint8_t> field, UtcTime &utc) noexcept
+NumResult parseTime(std::span<const uint8_t> field, UtcTime &utc) noexcept
 {
     int64_t v = 0;
     uint8_t frac = 0;
-    const NumResult r = parse_fixed(field, kMaxTimeFracDigits, v, frac);
+    const NumResult r = parseFixed(field, kMaxTimeFracDigits, v, frac);
     if (r != NumResult::kOk) {
         return r;
     }
@@ -439,14 +439,14 @@ NumResult parse_time(std::span<const uint8_t> field, UtcTime &utc) noexcept
     }
     const int64_t scale = pow10(frac);
     const int64_t whole = v / scale;
-    const int64_t frac_part = v % scale;
+    const int64_t fracPart = v % scale;
     const int64_t hour = whole / kTimeHourDivisor;
     const int64_t minute = (whole / kTimeMinuteDivisor) % kTimeMinuteDivisor;
     const int64_t second = whole % kTimeMinuteDivisor;
     if (hour > kMaxHour || minute > kMaxMinute || second > kMaxSecond) {
         return NumResult::kError;
     }
-    const int64_t ms = (second * kMsPerSecond) + round_div(frac_part * kMsPerSecond, scale);
+    const int64_t ms = (second * kMsPerSecond) + roundDiv(fracPart * kMsPerSecond, scale);
     if (ms > kMaxMsInMinute) {
         return NumResult::kError;
     }
@@ -461,10 +461,10 @@ NumResult parse_time(std::span<const uint8_t> field, UtcTime &utc) noexcept
  * @param utc: 输出的 UTC 时间
  * @retval kEmpty 空字段；kOk 成功；kError 格式或范围错误
  */
-NumResult parse_date(std::span<const uint8_t> field, UtcTime &utc) noexcept
+NumResult parseDate(std::span<const uint8_t> field, UtcTime &utc) noexcept
 {
     uint32_t v = 0;
-    const NumResult r = parse_uint(field, v);
+    const NumResult r = parseUint(field, v);
     if (r != NumResult::kOk) {
         return r;
     }
@@ -485,15 +485,15 @@ NumResult parse_date(std::span<const uint8_t> field, UtcTime &utc) noexcept
 
 /** @brief ddmm.mmm → 1e-9 度。
  * @param field: 经纬度字段
- * @param is_longitude: true 表示经度（上限 180°）
+ * @param isLongitude: true 表示经度（上限 180°）
  * @param e9: 输出的 1e-9 度值
  * @retval kEmpty 空字段；kOk 成功；kError 格式或范围错误
  */
-NumResult parse_angle(std::span<const uint8_t> field, bool is_longitude, int64_t &e9) noexcept
+NumResult parseAngle(std::span<const uint8_t> field, bool isLongitude, int64_t &e9) noexcept
 {
     int64_t v = 0;
     uint8_t frac = 0;
-    const NumResult r = parse_fixed(field, kMaxAngleFracDigits, v, frac);
+    const NumResult r = parseFixed(field, kMaxAngleFracDigits, v, frac);
     if (r != NumResult::kOk) {
         return r;
     }
@@ -502,14 +502,14 @@ NumResult parse_angle(std::span<const uint8_t> field, bool is_longitude, int64_t
     }
     const int64_t scale = pow10(frac);
     const int64_t degree = v / (kDegreeUnit * scale);
-    const int64_t minute_scaled = v - (degree * kDegreeUnit * scale);
-    const int64_t limit_deg = is_longitude ? kMaxLongitudeDeg : kMaxLatitudeDeg;
-    if (degree > limit_deg || minute_scaled >= (kMinutesPerDegree * scale)) {
+    const int64_t minuteScaled = v - (degree * kDegreeUnit * scale);
+    const int64_t limitDeg = isLongitude ? kMaxLongitudeDeg : kMaxLatitudeDeg;
+    if (degree > limitDeg || minuteScaled >= (kMinutesPerDegree * scale)) {
         return NumResult::kError;
     }
-    const int64_t value = (degree * kE9PerDegree) +
-                          round_div(minute_scaled * kE9PerDegree, kMinutesPerDegree * scale);
-    if (value > (limit_deg * kE9PerDegree)) {
+    const int64_t value =
+        (degree * kE9PerDegree) + roundDiv(minuteScaled * kE9PerDegree, kMinutesPerDegree * scale);
+    if (value > (limitDeg * kE9PerDegree)) {
         return NumResult::kError;
     }
     e9 = value;
@@ -521,11 +521,11 @@ NumResult parse_angle(std::span<const uint8_t> field, bool is_longitude, int64_t
  * @param out: 输出的 ×100 值
  * @retval kEmpty 空字段；kOk 成功；kError 格式错误
  */
-NumResult parse_dop(std::span<const uint8_t> field, uint16_t &out) noexcept
+NumResult parseDop(std::span<const uint8_t> field, uint16_t &out) noexcept
 {
     int64_t v = 0;
     uint8_t frac = 0;
-    const NumResult r = parse_fixed(field, kMaxDopFracDigits, v, frac);
+    const NumResult r = parseFixed(field, kMaxDopFracDigits, v, frac);
     if (r == NumResult::kEmpty) {
         out = kU16Unknown;
         return r;
@@ -544,11 +544,11 @@ NumResult parse_dop(std::span<const uint8_t> field, uint16_t &out) noexcept
  * @param out: 输出的毫米值
  * @retval kEmpty 空字段；kOk 成功；kError 格式或范围错误
  */
-NumResult parse_mm(std::span<const uint8_t> field, int32_t &out) noexcept
+NumResult parseMm(std::span<const uint8_t> field, int32_t &out) noexcept
 {
     int64_t v = 0;
     uint8_t frac = 0;
-    const NumResult r = parse_fixed(field, kMaxMmFracDigits, v, frac);
+    const NumResult r = parseFixed(field, kMaxMmFracDigits, v, frac);
     if (r != NumResult::kOk) {
         return r;
     }
@@ -565,11 +565,11 @@ NumResult parse_mm(std::span<const uint8_t> field, int32_t &out) noexcept
  * @param out: 输出的 0.1 s 值
  * @retval kEmpty 空字段；kOk 成功；kError 格式错误
  */
-NumResult parse_diff_age(std::span<const uint8_t> field, uint16_t &out) noexcept
+NumResult parseDiffAge(std::span<const uint8_t> field, uint16_t &out) noexcept
 {
     int64_t v = 0;
     uint8_t frac = 0;
-    const NumResult r = parse_fixed(field, kMaxDiffAgeFracDigits, v, frac);
+    const NumResult r = parseFixed(field, kMaxDiffAgeFracDigits, v, frac);
     if (r == NumResult::kEmpty) {
         out = kU16Unknown;
         return r;
@@ -588,7 +588,7 @@ NumResult parse_diff_age(std::span<const uint8_t> field, uint16_t &out) noexcept
  * @param out: 输出字段
  * @retval false 表示语句已结束
  */
-bool take_field(FieldIter &it, std::span<const uint8_t> &out) noexcept
+bool takeField(FieldIter &it, std::span<const uint8_t> &out) noexcept
 {
     return it.next(out);
 }
@@ -598,10 +598,10 @@ bool take_field(FieldIter &it, std::span<const uint8_t> &out) noexcept
  * @param fix: 待更新的定位结果
  * @retval false 表示字段缺失或格式错误
  */
-bool take_time(FieldIter &it, Fix &fix) noexcept
+bool takeTime(FieldIter &it, Fix &fix) noexcept
 {
     std::span<const uint8_t> f{};
-    return take_field(it, f) && (parse_time(f, fix.utc) != NumResult::kError);
+    return takeField(it, f) && (parseTime(f, fix.utc) != NumResult::kError);
 }
 
 /** @brief GGA 的经纬度 + 半球字段（两者都空表示未知，保持原值）。
@@ -609,36 +609,36 @@ bool take_time(FieldIter &it, Fix &fix) noexcept
  * @param fix: 待更新的定位结果
  * @retval false 表示字段缺失或格式错误
  */
-bool take_position(FieldIter &it, Fix &fix) noexcept
+bool takePosition(FieldIter &it, Fix &fix) noexcept
 {
-    std::span<const uint8_t> lat_field{};
-    std::span<const uint8_t> ns_field{};
-    std::span<const uint8_t> lon_field{};
-    std::span<const uint8_t> ew_field{};
-    if (!it.next(lat_field) || !it.next(ns_field) || !it.next(lon_field) || !it.next(ew_field)) {
+    std::span<const uint8_t> latField{};
+    std::span<const uint8_t> nsField{};
+    std::span<const uint8_t> lonField{};
+    std::span<const uint8_t> ewField{};
+    if (!it.next(latField) || !it.next(nsField) || !it.next(lonField) || !it.next(ewField)) {
         return false;
     }
-    if (!lat_field.empty() || !ns_field.empty()) {
+    if (!latField.empty() || !nsField.empty()) {
         int64_t lat = 0;
-        if (parse_angle(lat_field, false, lat) != NumResult::kOk) {
+        if (parseAngle(latField, false, lat) != NumResult::kOk) {
             return false;
         }
-        const int sign = field_equals(ns_field, 'N') ? 1 : (field_equals(ns_field, 'S') ? -1 : 0);
+        const int sign = fieldEquals(nsField, 'N') ? 1 : (fieldEquals(nsField, 'S') ? -1 : 0);
         if (sign == 0) {
             return false;
         }
-        fix.lat_e9 = static_cast<int64_t>(sign) * lat;
+        fix.latE9 = static_cast<int64_t>(sign) * lat;
     }
-    if (!lon_field.empty() || !ew_field.empty()) {
+    if (!lonField.empty() || !ewField.empty()) {
         int64_t lon = 0;
-        if (parse_angle(lon_field, true, lon) != NumResult::kOk) {
+        if (parseAngle(lonField, true, lon) != NumResult::kOk) {
             return false;
         }
-        const int sign = field_equals(ew_field, 'E') ? 1 : (field_equals(ew_field, 'W') ? -1 : 0);
+        const int sign = fieldEquals(ewField, 'E') ? 1 : (fieldEquals(ewField, 'W') ? -1 : 0);
         if (sign == 0) {
             return false;
         }
-        fix.lon_e9 = static_cast<int64_t>(sign) * lon;
+        fix.lonE9 = static_cast<int64_t>(sign) * lon;
     }
     return true;
 }
@@ -648,20 +648,20 @@ bool take_position(FieldIter &it, Fix &fix) noexcept
  * @param fix: 待更新的定位结果
  * @retval false 表示字段缺失或格式错误
  */
-bool take_quality(FieldIter &it, Fix &fix) noexcept
+bool takeQuality(FieldIter &it, Fix &fix) noexcept
 {
     std::span<const uint8_t> f{};
     if (!it.next(f)) {
         return false;
     }
-    uint32_t quality_raw = 0;
-    const NumResult qr = parse_uint(f, quality_raw);
+    uint32_t qualityRaw = 0;
+    const NumResult qr = parseUint(f, qualityRaw);
     if (qr == NumResult::kError) {
         return false;
     }
     if (qr == NumResult::kOk) {
-        fix.quality = (quality_raw <= kMaxQuality)
-                          ? static_cast<FixQuality>(static_cast<uint8_t>(quality_raw))
+        fix.quality = (qualityRaw <= kMaxQuality)
+                          ? static_cast<FixQuality>(static_cast<uint8_t>(qualityRaw))
                           : FixQuality::kUnknown;
         fix.valid = fix.quality != FixQuality::kInvalid && fix.quality != FixQuality::kUnknown;
     } else {
@@ -669,16 +669,16 @@ bool take_quality(FieldIter &it, Fix &fix) noexcept
         fix.valid = false;
     }
 
-    uint32_t sats_raw = 0;
+    uint32_t satsRaw = 0;
     if (!it.next(f)) {
         return false;
     }
-    const NumResult sr = parse_uint(f, sats_raw);
+    const NumResult sr = parseUint(f, satsRaw);
     if (sr == NumResult::kError) {
         return false;
     }
     if (sr == NumResult::kOk) {
-        fix.sats_used = static_cast<uint8_t>(sats_raw > kMaxSatsUsed ? kMaxSatsUsed : sats_raw);
+        fix.satsUsed = static_cast<uint8_t>(satsRaw > kMaxSatsUsed ? kMaxSatsUsed : satsRaw);
     }
     return true;
 }
@@ -688,24 +688,24 @@ bool take_quality(FieldIter &it, Fix &fix) noexcept
  * @param fix: 待更新的定位结果
  * @retval false 表示字段缺失或格式错误
  */
-bool take_hdop(FieldIter &it, Fix &fix) noexcept
+bool takeHdop(FieldIter &it, Fix &fix) noexcept
 {
     std::span<const uint8_t> f{};
-    return it.next(f) && (parse_dop(f, fix.hdop_x100) != NumResult::kError);
+    return it.next(f) && (parseDop(f, fix.hdopX100) != NumResult::kError);
 }
 
 /** @brief GGA 的“数值 + 单位 M”字段对（高度/水准面差距）。
  * @param it: 字段迭代器
- * @param out_mm: 输出的毫米值
+ * @param outMm: 输出的毫米值
  * @retval false 表示字段缺失、格式错误或单位不是 'M'
  */
-bool take_altitude(FieldIter &it, int32_t &out_mm) noexcept
+bool takeAltitude(FieldIter &it, int32_t &outMm) noexcept
 {
     std::span<const uint8_t> f{};
-    if (!it.next(f) || (parse_mm(f, out_mm) == NumResult::kError)) {
+    if (!it.next(f) || (parseMm(f, outMm) == NumResult::kError)) {
         return false;
     }
-    return it.next(f) && (f.empty() || field_equals(f, 'M'));
+    return it.next(f) && (f.empty() || fieldEquals(f, 'M'));
 }
 
 /** @brief GGA 末尾的差分龄期与基准站号（部分接收机省略）。
@@ -713,19 +713,19 @@ bool take_altitude(FieldIter &it, int32_t &out_mm) noexcept
  * @param fix: 待更新的定位结果
  * @retval false 表示字段存在但格式错误
  */
-bool take_diff(FieldIter &it, Fix &fix) noexcept
+bool takeDiff(FieldIter &it, Fix &fix) noexcept
 {
     std::span<const uint8_t> f{};
-    if (it.next(f) && (parse_diff_age(f, fix.diff_age_ds) == NumResult::kError)) {
+    if (it.next(f) && (parseDiffAge(f, fix.diffAgeDs) == NumResult::kError)) {
         return false;
     }
     if (it.next(f)) {
         uint32_t station = 0;
-        const NumResult st = parse_uint(f, station);
+        const NumResult st = parseUint(f, station);
         if (st == NumResult::kError) {
             return false;
         }
-        fix.diff_station =
+        fix.diffStation =
             (st == NumResult::kOk)
                 ? static_cast<uint16_t>(station > kMaxDiffStation ? kMaxDiffStation : station)
                 : kU16Unknown;
@@ -740,22 +740,22 @@ bool take_diff(FieldIter &it, Fix &fix) noexcept
  * @param num: 输出的当前句号
  * @retval false 表示字段缺失或越界
  */
-bool take_gsv_header(const std::array<std::span<const uint8_t>, kGsvMaxFields> &fields,
-                     size_t count, uint32_t &total, uint32_t &num) noexcept
+bool takeGsvHeader(const std::array<std::span<const uint8_t>, kGsvMaxFields> &fields, size_t count,
+                   uint32_t &total, uint32_t &num) noexcept
 {
     if (count < kGsvMinFields) {
         return false;
     }
-    uint32_t in_view = 0;
-    if (parse_uint(fields[1], total) != NumResult::kOk ||
-        parse_uint(fields[2], num) != NumResult::kOk) {
+    uint32_t inView = 0;
+    if (parseUint(fields[1], total) != NumResult::kOk ||
+        parseUint(fields[2], num) != NumResult::kOk) {
         return false;
     }
     if (total == 0 || total > kGsvMaxSentences || num == 0 || num > total) {
         return false;
     }
     if (!fields[kGsvInViewField].empty() &&
-        parse_uint(fields[kGsvInViewField], in_view) == NumResult::kError) {
+        parseUint(fields[kGsvInViewField], inView) == NumResult::kError) {
         return false;
     }
     return true;
@@ -765,12 +765,11 @@ bool take_gsv_header(const std::array<std::span<const uint8_t>, kGsvMaxFields> &
  * @param fields: 已切分的字段
  * @param blocks: 数据块数（0..4）
  * @param sats: 输出的卫星数组
- * @param sat_count: 输出的有效卫星数
+ * @param satCount: 输出的有效卫星数
  * @retval false 表示某块字段格式或范围错误
  */
-bool take_gsv_blocks(const std::array<std::span<const uint8_t>, kGsvMaxFields> &fields,
-                     size_t blocks, std::array<SatInfo, kGsvMaxBlocks> &sats,
-                     size_t &sat_count) noexcept
+bool takeGsvBlocks(const std::array<std::span<const uint8_t>, kGsvMaxFields> &fields, size_t blocks,
+                   std::array<SatInfo, kGsvMaxBlocks> &sats, size_t &satCount) noexcept
 {
     for (size_t b = 0; b < blocks; ++b) {
         const size_t base = kGsvHeaderFields + (b * kGsvBlockFields);
@@ -779,23 +778,23 @@ bool take_gsv_blocks(const std::array<std::span<const uint8_t>, kGsvMaxFields> &
         }
         SatInfo sat{};
         uint32_t prn = 0;
-        if (parse_uint(fields[base], prn) != NumResult::kOk || prn > kMaxPrn) {
+        if (parseUint(fields[base], prn) != NumResult::kOk || prn > kMaxPrn) {
             return false;
         }
         sat.prn = static_cast<uint8_t>(prn);
         uint32_t elev = 0;
         uint32_t azim = 0;
         uint32_t snr = 0;
-        if (parse_uint(fields[base + 1], elev) == NumResult::kError ||
-            parse_uint(fields[base + 2], azim) == NumResult::kError ||
-            parse_uint(fields[base + kGsvSnrField], snr) == NumResult::kError) {
+        if (parseUint(fields[base + 1], elev) == NumResult::kError ||
+            parseUint(fields[base + 2], azim) == NumResult::kError ||
+            parseUint(fields[base + kGsvSnrField], snr) == NumResult::kError) {
             return false;
         }
-        sat.elev_deg = static_cast<int8_t>(elev > kMaxElevDeg ? kMaxElevDeg : elev);
-        sat.azim_deg = static_cast<uint16_t>(azim % kAzimModulo);
-        sat.snr_dbhz = static_cast<uint8_t>(snr > kMaxSnrDbhz ? kMaxSnrDbhz : snr);
-        sats[sat_count] = sat;
-        ++sat_count;
+        sat.elevDeg = static_cast<int8_t>(elev > kMaxElevDeg ? kMaxElevDeg : elev);
+        sat.azimDeg = static_cast<uint16_t>(azim % kAzimModulo);
+        sat.snrDbhz = static_cast<uint8_t>(snr > kMaxSnrDbhz ? kMaxSnrDbhz : snr);
+        sats[satCount] = sat;
+        ++satCount;
     }
     return true;
 }
@@ -803,14 +802,14 @@ bool take_gsv_blocks(const std::array<std::span<const uint8_t>, kGsvMaxFields> &
 /** @brief 把本轮 GSV 卫星并入 pending_（同 system+prn 覆盖，满表丢弃）。
  * @param pending: 待发布卫星表
  * @param sats: 本轮卫星
- * @param sat_count: 本轮有效卫星数
+ * @param satCount: 本轮有效卫星数
  * @param system: 本轮星座
  * @retval 无
  */
-void merge_gsv(SatTable &pending, const std::array<SatInfo, kGsvMaxBlocks> &sats, size_t sat_count,
-               Constellation system) noexcept
+void mergeGsv(SatTable &pending, const std::array<SatInfo, kGsvMaxBlocks> &sats, size_t satCount,
+              Constellation system) noexcept
 {
-    for (size_t i = 0; i < sat_count; ++i) {
+    for (size_t i = 0; i < satCount; ++i) {
         SatInfo sat = sats[i];
         sat.system = system;
         bool merged = false;
@@ -834,17 +833,17 @@ void merge_gsv(SatTable &pending, const std::array<SatInfo, kGsvMaxBlocks> &sats
 // 解析细节通过 friend 访问 NmeaParser 的私有状态；对外只暴露 feed()。
 struct NmeaImpl {
     static NmeaResult feed(NmeaParser &parser, std::span<const uint8_t> sentence,
-                           uint32_t now_ms) noexcept;
-    static NmeaResult parse_gga(NmeaParser &parser, std::span<const uint8_t> body,
-                                uint32_t now_ms) noexcept;
-    static NmeaResult parse_rmc(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
-    static NmeaResult parse_gsa(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
-    static NmeaResult parse_gsv(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
-    static bool publish(NmeaParser &parser, uint32_t now_ms) noexcept;
-    static void clear_field(SatInfo &sat) noexcept;
+                           uint32_t nowMs) noexcept;
+    static NmeaResult parseGga(NmeaParser &parser, std::span<const uint8_t> body,
+                               uint32_t nowMs) noexcept;
+    static NmeaResult parseRmc(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
+    static NmeaResult parseGsa(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
+    static NmeaResult parseGsv(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
+    static bool publish(NmeaParser &parser, uint32_t nowMs) noexcept;
+    static void clearField(SatInfo &sat) noexcept;
 };
 
-void NmeaImpl::clear_field(SatInfo &sat) noexcept
+void NmeaImpl::clearField(SatInfo &sat) noexcept
 {
     sat = SatInfo{};
 }
@@ -852,36 +851,36 @@ void NmeaImpl::clear_field(SatInfo &sat) noexcept
 /**
  * @brief  把本历元内已收齐（msg_num == total）的系统合并 used 标记后整表发布
  * @param  parser: 解析器状态
- * @param  now_ms: 当前时间（写入卫星表时间戳）
+ * @param  nowMs: 当前时间（写入卫星表时间戳）
  * @retval true 发生了发布；false 仍在等其余分条
  */
-bool NmeaImpl::publish(NmeaParser &parser, uint32_t now_ms) noexcept
+bool NmeaImpl::publish(NmeaParser &parser, uint32_t nowMs) noexcept
 {
-    bool any_done = false;
+    bool anyDone = false;
     for (const uint8_t done : parser.gsv_done_) {
         if (done != 0) {
-            any_done = true;
+            anyDone = true;
             break;
         }
     }
-    if (!any_done) {
+    if (!anyDone) {
         return false;
     }
 
     SatTable out{};
     for (size_t i = 0; i < parser.pending_.count && out.count < kMaxSats; ++i) {
         const SatInfo &src = parser.pending_.sats[i];
-        if (parser.gsv_done_[constellation_index(src.system)] == 0) {
+        if (parser.gsv_done_[constellationIndex(src.system)] == 0) {
             continue; // 该系统本轮未收齐，不发布半轮
         }
         out.sats[out.count] = src;
         ++out.count;
     }
-    out.update_ms = now_ms;
+    out.updateMs = nowMs;
 
     for (size_t i = 0; i < out.count; ++i) {
         SatInfo &sat = out.sats[i];
-        const uint16_t key = sat_key(sat.system, sat.prn);
+        const uint16_t key = satKey(sat.system, sat.prn);
         for (size_t k = 0; k < parser.used_count_ && k < parser.used_.size(); ++k) {
             if (parser.used_[k] == key) {
                 sat.used = true;
@@ -901,11 +900,11 @@ bool NmeaImpl::publish(NmeaParser &parser, uint32_t now_ms) noexcept
  * @brief  解析 GGA：UTC、经纬度、质量、HDOP、海拔/大地水准面、差分龄期
  * @param  parser: 解析器状态
  * @param  body: 去掉 '$'、校验和与行尾后的正文
- * @param  now_ms: 当前时间（写入定位时间戳）
+ * @param  nowMs: 当前时间（写入定位时间戳）
  * @retval kFix 已更新定位；kSatsReady 同时完成卫星表发布；kMalformed 字段不合法
  */
-NmeaResult NmeaImpl::parse_gga(NmeaParser &parser, std::span<const uint8_t> body,
-                               uint32_t now_ms) noexcept
+NmeaResult NmeaImpl::parseGga(NmeaParser &parser, std::span<const uint8_t> body,
+                              uint32_t nowMs) noexcept
 {
     FieldIter it{body};
     std::span<const uint8_t> f{};
@@ -914,16 +913,16 @@ NmeaResult NmeaImpl::parse_gga(NmeaParser &parser, std::span<const uint8_t> body
     }
 
     Fix fix = parser.fix_;
-    if (!take_time(it, fix) || !take_position(it, fix) || !take_quality(it, fix) ||
-        !take_hdop(it, fix) || !take_altitude(it, fix.alt_mm) || !take_altitude(it, fix.geoid_mm) ||
-        !take_diff(it, fix)) {
+    if (!takeTime(it, fix) || !takePosition(it, fix) || !takeQuality(it, fix) ||
+        !takeHdop(it, fix) || !takeAltitude(it, fix.altMm) || !takeAltitude(it, fix.geoidMm) ||
+        !takeDiff(it, fix)) {
         return NmeaResult::kMalformed;
     }
 
-    fix.update_ms = now_ms;
+    fix.updateMs = nowMs;
     parser.fix_ = fix;
     ++parser.stats_.gga;
-    return NmeaImpl::publish(parser, now_ms) ? NmeaResult::kSatsReady : NmeaResult::kFix;
+    return NmeaImpl::publish(parser, nowMs) ? NmeaResult::kSatsReady : NmeaResult::kFix;
 }
 
 /**
@@ -932,7 +931,7 @@ NmeaResult NmeaImpl::parse_gga(NmeaParser &parser, std::span<const uint8_t> body
  * @param  body: 去掉 '$'、校验和与行尾后的正文
  * @retval kAux 已更新辅助字段；kMalformed 字段不合法
  */
-NmeaResult NmeaImpl::parse_rmc(NmeaParser &parser, std::span<const uint8_t> body) noexcept
+NmeaResult NmeaImpl::parseRmc(NmeaParser &parser, std::span<const uint8_t> body) noexcept
 {
     std::array<std::span<const uint8_t>, kRmcMaxFields> fields{};
     size_t count = 0;
@@ -945,37 +944,37 @@ NmeaResult NmeaImpl::parse_rmc(NmeaParser &parser, std::span<const uint8_t> body
     }
 
     Fix fix = parser.fix_;
-    if (parse_time(fields[1], fix.utc) == NumResult::kError) {
+    if (parseTime(fields[1], fix.utc) == NumResult::kError) {
         return NmeaResult::kMalformed;
     }
-    if (!fields[2].empty() && !field_equals(fields[2], 'A') && !field_equals(fields[2], 'V')) {
+    if (!fields[2].empty() && !fieldEquals(fields[2], 'A') && !fieldEquals(fields[2], 'V')) {
         return NmeaResult::kMalformed;
     }
 
     int64_t knots = 0;
     uint8_t frac = 0;
-    const NumResult sp = parse_fixed(fields[7], kMaxKnotFracDigits, knots, frac);
+    const NumResult sp = parseFixed(fields[7], kMaxKnotFracDigits, knots, frac);
     if (sp == NumResult::kError) {
         return NmeaResult::kMalformed;
     }
     if (sp == NumResult::kOk) {
-        const int64_t milli_knots = rescale(knots, frac, kMaxKnotFracDigits);
-        const int64_t mmps = round_div(milli_knots * kMmPerNauticalMile, kSecondsPerHour);
-        fix.speed_mmps = (mmps < 0) ? 0U : static_cast<uint32_t>(mmps);
+        const int64_t milliKnots = rescale(knots, frac, kMaxKnotFracDigits);
+        const int64_t mmps = roundDiv(milliKnots * kMmPerNauticalMile, kSecondsPerHour);
+        fix.speedMmps = (mmps < 0) ? 0U : static_cast<uint32_t>(mmps);
     }
 
     int64_t course = 0;
-    const NumResult cr = parse_fixed(fields[8], kMaxCourseFracDigits, course, frac);
+    const NumResult cr = parseFixed(fields[8], kMaxCourseFracDigits, course, frac);
     if (cr == NumResult::kError) {
         return NmeaResult::kMalformed;
     }
     if (cr == NumResult::kOk) {
         const int64_t cdeg = rescale(course, frac, kCourseScale);
-        fix.course_cdeg =
+        fix.courseCdeg =
             (cdeg < 0) ? 0U : static_cast<uint16_t>(cdeg > kMaxCourseCdeg ? kMaxCourseCdeg : cdeg);
     }
 
-    if (parse_date(fields[kRmcDateField], fix.utc) == NumResult::kError) {
+    if (parseDate(fields[kRmcDateField], fix.utc) == NumResult::kError) {
         return NmeaResult::kMalformed;
     }
 
@@ -990,7 +989,7 @@ NmeaResult NmeaImpl::parse_rmc(NmeaParser &parser, std::span<const uint8_t> body
  * @param  body: 去掉 '$'、校验和与行尾后的正文
  * @retval kAux 已更新辅助字段；kMalformed 字段不合法
  */
-NmeaResult NmeaImpl::parse_gsa(NmeaParser &parser, std::span<const uint8_t> body) noexcept
+NmeaResult NmeaImpl::parseGsa(NmeaParser &parser, std::span<const uint8_t> body) noexcept
 {
     std::array<std::span<const uint8_t>, kGsaMaxFields> fields{};
     size_t count = 0;
@@ -1004,45 +1003,45 @@ NmeaResult NmeaImpl::parse_gsa(NmeaParser &parser, std::span<const uint8_t> body
     if (!fields[1].empty() && fields[1].size() != 1) {
         return NmeaResult::kMalformed;
     }
-    if (!fields[2].empty() && !field_equals(fields[2], '1') && !field_equals(fields[2], '2') &&
-        !field_equals(fields[2], '3')) {
+    if (!fields[2].empty() && !fieldEquals(fields[2], '1') && !fieldEquals(fields[2], '2') &&
+        !fieldEquals(fields[2], '3')) {
         return NmeaResult::kMalformed;
     }
 
     std::array<uint8_t, kGsaPrnCount> prns{};
-    size_t prn_count = 0;
+    size_t prnCount = 0;
     for (size_t i = kGsaPrnFirst; i < (kGsaPrnFirst + kGsaPrnCount); ++i) {
         if (fields[i].empty()) {
             continue;
         }
         uint32_t prn = 0;
-        if (parse_uint(fields[i], prn) != NumResult::kOk || prn > kMaxPrn) {
+        if (parseUint(fields[i], prn) != NumResult::kOk || prn > kMaxPrn) {
             return NmeaResult::kMalformed;
         }
-        prns[prn_count] = static_cast<uint8_t>(prn);
-        ++prn_count;
+        prns[prnCount] = static_cast<uint8_t>(prn);
+        ++prnCount;
     }
 
     Fix fix = parser.fix_;
-    if (parse_dop(fields[kGsaDopFirst], fix.pdop_x100) == NumResult::kError) {
+    if (parseDop(fields[kGsaDopFirst], fix.pdopX100) == NumResult::kError) {
         return NmeaResult::kMalformed;
     }
-    if (parse_dop(fields[kGsaDopFirst + 1U], fix.hdop_x100) == NumResult::kError) {
+    if (parseDop(fields[kGsaDopFirst + 1U], fix.hdopX100) == NumResult::kError) {
         return NmeaResult::kMalformed;
     }
-    if (parse_dop(fields[kGsaDopFirst + 2U], fix.vdop_x100) == NumResult::kError) {
+    if (parseDop(fields[kGsaDopFirst + 2U], fix.vdopX100) == NumResult::kError) {
         return NmeaResult::kMalformed;
     }
 
     Constellation system = Constellation::kOther;
-    const std::span<const uint8_t> id_field =
+    const std::span<const uint8_t> idField =
         (count > kGsaSystemIdIndex) ? fields[kGsaSystemIdIndex] : std::span<const uint8_t>{};
-    if (!resolve_system(fields[0], id_field, system)) {
+    if (!resolveSystem(fields[0], idField, system)) {
         return NmeaResult::kMalformed;
     }
 
-    for (size_t i = 0; i < prn_count && parser.used_count_ < parser.used_.size(); ++i) {
-        const uint16_t key = sat_key(system, prns[i]);
+    for (size_t i = 0; i < prnCount && parser.used_count_ < parser.used_.size(); ++i) {
+        const uint16_t key = satKey(system, prns[i]);
         bool duplicate = false;
         for (size_t k = 0; k < parser.used_count_; ++k) {
             if (parser.used_[k] == key) {
@@ -1067,7 +1066,7 @@ NmeaResult NmeaImpl::parse_gsa(NmeaParser &parser, std::span<const uint8_t> body
  * @param  body: 去掉 '$'、校验和与行尾后的正文
  * @retval kSatsPart 已累积；kMalformed 字段不合法
  */
-NmeaResult NmeaImpl::parse_gsv(NmeaParser &parser, std::span<const uint8_t> body) noexcept
+NmeaResult NmeaImpl::parseGsv(NmeaParser &parser, std::span<const uint8_t> body) noexcept
 {
     std::array<std::span<const uint8_t>, kGsvMaxFields> fields{};
     size_t count = 0;
@@ -1078,7 +1077,7 @@ NmeaResult NmeaImpl::parse_gsv(NmeaParser &parser, std::span<const uint8_t> body
 
     uint32_t total = 0;
     uint32_t num = 0;
-    if (!take_gsv_header(fields, count, total, num)) {
+    if (!takeGsvHeader(fields, count, total, num)) {
         return NmeaResult::kMalformed;
     }
 
@@ -1090,23 +1089,23 @@ NmeaResult NmeaImpl::parse_gsv(NmeaParser &parser, std::span<const uint8_t> body
     }
 
     std::array<SatInfo, kGsvMaxBlocks> sats{};
-    size_t sat_count = 0;
-    if (!take_gsv_blocks(fields, blocks, sats, sat_count)) {
+    size_t satCount = 0;
+    if (!takeGsvBlocks(fields, blocks, sats, satCount)) {
         return NmeaResult::kMalformed;
     }
 
     Constellation system = Constellation::kOther;
-    const std::span<const uint8_t> id_field =
+    const std::span<const uint8_t> idField =
         (extra == 1) ? fields[kGsvHeaderFields + (blocks * kGsvBlockFields)]
                      : std::span<const uint8_t>{};
-    if (!resolve_system(fields[0], id_field, system)) {
+    if (!resolveSystem(fields[0], idField, system)) {
         return NmeaResult::kMalformed;
     }
 
     // 全部字段校验通过后才修改状态，保证 malformed 不改任何状态。
-    merge_gsv(parser.pending_, sats, sat_count, system);
+    mergeGsv(parser.pending_, sats, satCount, system);
     if (num == total) {
-        parser.gsv_done_[constellation_index(system)] = 1;
+        parser.gsv_done_[constellationIndex(system)] = 1;
     }
     ++parser.stats_.gsv;
     return NmeaResult::kSatsPart;
@@ -1116,11 +1115,11 @@ NmeaResult NmeaImpl::parse_gsv(NmeaParser &parser, std::span<const uint8_t> body
  * @brief  校验一行完整语句并分派到对应消息解析
  * @param  parser: 解析器状态
  * @param  sentence: 完整语句（'$' 开头、'*hh\r\n' 结尾）
- * @param  now_ms: 当前时间
+ * @param  nowMs: 当前时间
  * @retval 解析结果；非 NMEA 语句返回 kIgnored，校验/形状错误返回 kMalformed
  */
 NmeaResult NmeaImpl::feed(NmeaParser &parser, std::span<const uint8_t> sentence,
-                          uint32_t now_ms) noexcept
+                          uint32_t nowMs) noexcept
 {
     // 输入由 demux::nmea 保证：'$'、正文、'*hh'、"\r\n"。这里再做最小防御。
     if (sentence.size() < kMinSentenceBytes || sentence[0] != static_cast<uint8_t>('$') ||
@@ -1142,14 +1141,14 @@ NmeaResult NmeaImpl::feed(NmeaParser &parser, std::span<const uint8_t> sentence,
     const std::span<const uint8_t> addr = body.first(comma);
 
     NmeaResult result = NmeaResult::kIgnored;
-    if (addr_is(addr, "GGA")) {
-        result = parse_gga(parser, body, now_ms);
-    } else if (addr_is(addr, "RMC")) {
-        result = parse_rmc(parser, body);
-    } else if (addr_is(addr, "GSA")) {
-        result = parse_gsa(parser, body);
-    } else if (addr_is(addr, "GSV")) {
-        result = parse_gsv(parser, body);
+    if (addrIs(addr, "GGA")) {
+        result = parseGga(parser, body, nowMs);
+    } else if (addrIs(addr, "RMC")) {
+        result = parseRmc(parser, body);
+    } else if (addrIs(addr, "GSA")) {
+        result = parseGsa(parser, body);
+    } else if (addrIs(addr, "GSV")) {
+        result = parseGsv(parser, body);
     }
     if (result == NmeaResult::kMalformed) {
         ++parser.stats_.malformed; // 字段级解析失败也计入 malformed（不只是帧形状错误）
@@ -1162,9 +1161,9 @@ NmeaResult NmeaImpl::feed(NmeaParser &parser, std::span<const uint8_t> sentence,
     return NmeaResult::kIgnored;
 }
 
-NmeaResult NmeaParser::feed(std::span<const uint8_t> sentence, uint32_t now_ms) noexcept
+NmeaResult NmeaParser::feed(std::span<const uint8_t> sentence, uint32_t nowMs) noexcept
 {
-    return NmeaImpl::feed(*this, sentence, now_ms);
+    return NmeaImpl::feed(*this, sentence, nowMs);
 }
 
 void NmeaParser::reset() noexcept

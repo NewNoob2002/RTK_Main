@@ -191,7 +191,7 @@ fw::Result GnssModule::init() noexcept
     // 成员默认零初始化以保证 AppContext 落入 .bss；未从 NVS 加载的项在此回填默认配置。
     auto &cfg = ensure_rover_cfg();
     if (!rate_loaded_) {
-        cfg.rate_hz = static_cast<uint8_t>(CONFIG_RTK_GNSS_RATE_HZ);
+        cfg.rateHz = static_cast<uint8_t>(CONFIG_RTK_GNSS_RATE_HZ);
     }
     if (!gsv_loaded_) {
         cfg.gsv = true;
@@ -215,7 +215,7 @@ fw::Result GnssModule::init() noexcept
     add_unique_decoder(decoders_, decoder_count_, &demux::nmea::kDecoder);
     add_unique_decoder(decoders_, decoder_count_, &demux::rtcm3::kDecoder);
     // 驱动私有解码器（UBX、Unicore # 帧、$command 应答等）由各驱动自己声明，顺序即探测优先级。
-    const std::span<const ::gnss::Receiver *const> receivers = ::gnss::enabled_receivers();
+    const std::span<const ::gnss::Receiver *const> receivers = ::gnss::enabledReceivers();
     for (const ::gnss::Receiver *receiver : receivers) {
         if (receiver == nullptr) {
             continue;
@@ -250,10 +250,10 @@ fw::Result GnssModule::init() noexcept
     }
 
     // 输出计划是唯一来源（ADR-0012 §2.4）：先按默认值给一份，探测到型号后再按 caps 重算。
-    controller().set_output_plan(data::make_output_plan(
-        out_cfg_, cfg.rate_hz, cfg.gsv, static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT), 0U));
+    controller().setOutputPlan(data::make_output_plan(
+        out_cfg_, cfg.rateHz, cfg.gsv, static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT), 0U));
     if (!controller().init(receivers, std::span<const uint32_t>{bauds_.data(), baud_count_}, cfg,
-                           controller().output_plan(), hint_, timing)) {
+                           controller().outputPlan(), hint_, timing)) {
         return init_failed(fw::Result::kInvalidState);
     }
 
@@ -469,7 +469,7 @@ void GnssModule::cmd_probe(uint32_t now_ms, fw::CommandResult &result) noexcept
     manual_reprobe_ = true;
     parser().reset();
     ctx().data.gnss_fix.write(::gnss::Fix{});
-    controller().request_reprobe(now_ms);
+    controller().requestReprobe(now_ms);
     poll_controller(now_ms);
     publish_status(now_ms);
     result.status = fw::Result::kOk;
@@ -516,15 +516,15 @@ void GnssModule::cmd_set_rate(const fw::Command &cmd, uint32_t now_ms,
     }
     if (controller().state() != ::gnss::State::kRunning) {
         // 与 kSetOut 一致：没有运行中的接收机可确认，直接落盘，下次配置完成时按新频率执行。
-        const uint8_t prev_rate = ensure_rover_cfg().rate_hz;
-        ensure_rover_cfg().rate_hz = cmd.args[0];
+        const uint8_t prev_rate = ensure_rover_cfg().rateHz;
+        ensure_rover_cfg().rateHz = cmd.args[0];
         const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
         if (!fw::isOk(save_res)) {
-            ensure_rover_cfg().rate_hz = prev_rate;
+            ensure_rover_cfg().rateHz = prev_rate;
             result.status = save_res;
             return;
         }
-        controller().set_output_plan(make_plan());
+        controller().setOutputPlan(make_plan());
         last_apply_ = GnssApply::kOk;
         ++apply_seq_;
         publish_status(now_ms);
@@ -532,13 +532,13 @@ void GnssModule::cmd_set_rate(const fw::Command &cmd, uint32_t now_ms,
         return;
     }
     // 两阶段提交（ADR-0012 §2.4）：先暂存并重配，成功后才写 NVS；失败由 tick_pending_apply 回滚。
-    pending_prev_rate_ = ensure_rover_cfg().rate_hz;
-    ensure_rover_cfg().rate_hz = cmd.args[0];
+    pending_prev_rate_ = ensure_rover_cfg().rateHz;
+    ensure_rover_cfg().rateHz = cmd.args[0];
     pending_apply_ = PendingApply::kRate;
-    pending_seq_ = controller().stats().output_seq + 1U;
+    pending_seq_ = controller().stats().outputSeq + 1U;
     pending_deadline_ms_ = now_ms + kApplyTimeoutMs;
-    controller().set_output_plan(make_plan());
-    controller().request_reconfigure(now_ms);
+    controller().setOutputPlan(make_plan());
+    controller().requestReconfigure(now_ms);
     poll_controller(now_ms);
     publish_status(now_ms);
     result.status = fw::Result::kOk;
@@ -578,7 +578,7 @@ void GnssModule::cmd_set_out(const fw::Command &cmd, uint32_t now_ms,
             result.status = save_res;
             return;
         }
-        controller().set_output_plan(make_plan());
+        controller().setOutputPlan(make_plan());
         last_apply_ = GnssApply::kOk;
         ++apply_seq_;
         publish_status(now_ms);
@@ -587,10 +587,10 @@ void GnssModule::cmd_set_out(const fw::Command &cmd, uint32_t now_ms,
     }
     pending_prev_out_ = prev;
     pending_apply_ = PendingApply::kOut;
-    pending_seq_ = controller().stats().output_seq + 1U;
+    pending_seq_ = controller().stats().outputSeq + 1U;
     pending_deadline_ms_ = now_ms + kApplyTimeoutMs;
-    controller().set_output_plan(make_plan());
-    static_cast<void>(controller().request_output(controller().output_plan(), now_ms));
+    controller().setOutputPlan(make_plan());
+    static_cast<void>(controller().requestOutput(controller().outputPlan(), now_ms));
     poll_controller(now_ms);
     publish_status(now_ms);
     result.status = fw::Result::kOk;
@@ -635,7 +635,7 @@ void GnssModule::handle_frame(const demux::Decoder &decoder,
 {
     // 文本日志不经中断路径：本函数只由 kIo 任务的 feed() 调用（ADR-0009 §2.11）。
     std::array<char, kLogTagBytes> tag{};
-    controller().receiver().frame_tag(decoder, frame, tag);
+    controller().receiver().frameTag(decoder, frame, tag);
     FW_LOGD(fw::TraceCat::kGnss, "<rx> %s, %lu bytes", tag.data(),
             static_cast<unsigned long>(frame.size()));
     fw::tlogHex(fw::TraceCat::kGnss, frame);
@@ -645,7 +645,7 @@ void GnssModule::handle_frame(const demux::Decoder &decoder,
     if (controller().state() == ::gnss::State::kReadback) {
         append_readback_line(decoder, frame);
     }
-    controller().on_frame(decoder, frame, now);
+    controller().onFrame(decoder, frame, now);
     if (&decoder == &demux::nmea::kDecoder) {
         const auto res = parser().feed(frame, now);
         if (res == ::gnss::NmeaResult::kFix) {
@@ -660,7 +660,7 @@ void GnssModule::handle_frame(const demux::Decoder &decoder,
     // ADR-0011 §5：6 类可订阅语句同步更新 6 KiB 最新帧缓存，并按会话掩码与周期写入 App typed FanoutRing。
     {
         // 分类交给驱动（ADR-0012 §2.6）：基类覆盖 5 类 NMEA，Unicore 另加 #SATSINFOA/#HEADINGA。
-        const ::gnss::OutputMsg cls = controller().receiver().classify_frame(decoder, frame);
+        const ::gnss::OutputMsg cls = controller().receiver().classifyFrame(decoder, frame);
         const auto idx = static_cast<size_t>(static_cast<uint8_t>(cls));
         if ((cls != ::gnss::OutputMsg::kNone) && (idx < data::kGnssAppMsgCount)) {
             const auto type_idx = static_cast<uint8_t>(idx);
@@ -729,7 +729,7 @@ void GnssModule::append_readback_line(const demux::Decoder &decoder,
 {
     std::array<char, kReadbackLineBytes> line{};
     // 留一格给 '\0'：下面按 %s 打 D 级日志，正文截断到 kReadbackLineBytes-1 才不会越界读。
-    const size_t len = controller().receiver().match_readback(
+    const size_t len = controller().receiver().matchReadback(
         decoder, frame, std::span<char>(line.data(), line.size() - 1U));
     if (len == 0U) {
         return;
@@ -759,13 +759,13 @@ void GnssModule::append_readback_line(const demux::Decoder &decoder,
 void GnssModule::start_readback(uint32_t now_ms, fw::CommandResult &result) noexcept
 {
     ::gnss::CmdBuf probe{};
-    // 先单独问一句驱动能力：request_readback() 把“不支持”与“状态不对”合为一个 false。
-    const bool supported = controller().receiver().build_readback(probe);
-    if (controller().request_readback(now_ms)) {
+    // 先单独问一句驱动能力：requestReadback() 把“不支持”与“状态不对”合为一个 false。
+    const bool supported = controller().receiver().buildReadback(probe);
+    if (controller().requestReadback(now_ms)) {
         readback_len_ = 0U;
         readback_lines_ = 0U;
         readback_truncated_ = false;
-        readback_base_seq_ = controller().stats().readback_seq;
+        readback_base_seq_ = controller().stats().readbackSeq;
         result.status = fw::Result::kOk;
         return;
     }
@@ -788,7 +788,7 @@ void GnssModule::start_readback(uint32_t now_ms, fw::CommandResult &result) noex
 void GnssModule::publish_readback(uint16_t lines, uint16_t len, bool supported, bool truncated,
                                   bool busy) noexcept
 {
-    const uint32_t stats_seq = controller().stats().readback_seq;
+    const uint32_t stats_seq = controller().stats().readbackSeq;
     const uint32_t seq = stats_seq > readback_pub_seq_ ? stats_seq : (readback_pub_seq_ + 1U);
     readback_pub_seq_ = seq;
     GnssReadback out{};
@@ -858,15 +858,15 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
                     static_cast<int>(text_len), cmd_text.data());
             const auto cur_stats = controller().stats();
             if ((st == ::gnss::State::kProbing) &&
-                (cur_stats.probes_sent > prev_ctrl_stats_.probes_sent)) {
+                (cur_stats.probesSent > prev_ctrl_stats_.probesSent)) {
                 trace_gnss(GnssTrace::kProbeSend,
-                           static_cast<uint32_t>(controller().probe_receiver().family()),
+                           static_cast<uint32_t>(controller().probeReceiver().family()),
                            host_baud_);
-                prev_ctrl_stats_.probes_sent = cur_stats.probes_sent;
+                prev_ctrl_stats_.probesSent = cur_stats.probesSent;
             } else if ((st == ::gnss::State::kConfiguring) &&
-                       (cur_stats.steps_sent > prev_ctrl_stats_.steps_sent)) {
-                const bool retried = (cur_stats.step_nacks > prev_ctrl_stats_.step_nacks) ||
-                                     (cur_stats.step_timeouts > prev_ctrl_stats_.step_timeouts);
+                       (cur_stats.stepsSent > prev_ctrl_stats_.stepsSent)) {
+                const bool retried = (cur_stats.stepNacks > prev_ctrl_stats_.stepNacks) ||
+                                     (cur_stats.stepTimeouts > prev_ctrl_stats_.stepTimeouts);
                 if (retried) {
                     ++step_retry_;
                 } else if (step_sent_once_) {
@@ -876,7 +876,7 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
                 }
                 step_sent_once_ = true;
                 trace_gnss(GnssTrace::kStepSend, step_idx_, step_retry_);
-                prev_ctrl_stats_.steps_sent = cur_stats.steps_sent;
+                prev_ctrl_stats_.stepsSent = cur_stats.stepsSent;
             }
             break;
         }
@@ -887,9 +887,9 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
     }
 
     update_controller_status();
-    // 读回收尾（ADR-0012 §2.7）：控制器已回 kRunning 并推进 readback_seq，这里发布一次结论。
-    if (controller().stats().readback_seq != readback_base_seq_) {
-        readback_base_seq_ = controller().stats().readback_seq;
+    // 读回收尾（ADR-0012 §2.7）：控制器已回 kRunning 并推进 readbackSeq，这里发布一次结论。
+    if (controller().stats().readbackSeq != readback_base_seq_) {
+        readback_base_seq_ = controller().stats().readbackSeq;
         FW_LOGI(fw::TraceCat::kGnss, "<cfg> Readback done, %u lines%s",
                 static_cast<unsigned>(readback_lines_), readback_truncated_ ? " (truncated)" : "");
         publish_readback(readback_lines_, readback_len_, true, readback_truncated_, false);
@@ -902,10 +902,10 @@ void GnssModule::poll_controller(uint32_t now_ms) noexcept
 void GnssModule::update_controller_status() noexcept
 {
     const auto cur_stats = controller().stats();
-    if (cur_stats.step_nacks > prev_ctrl_stats_.step_nacks) {
+    if (cur_stats.stepNacks > prev_ctrl_stats_.stepNacks) {
         trace_gnss(GnssTrace::kStepNack, step_idx_, 0U);
     }
-    if (cur_stats.step_timeouts > prev_ctrl_stats_.step_timeouts) {
+    if (cur_stats.stepTimeouts > prev_ctrl_stats_.stepTimeouts) {
         trace_gnss(GnssTrace::kStepTimeout, step_idx_, step_retry_ + 1U);
     }
 
@@ -913,15 +913,15 @@ void GnssModule::update_controller_status() noexcept
     if (cur_state != last_state_) {
         trace_gnss(GnssTrace::kState, static_cast<uint32_t>(cur_state),
                    static_cast<uint32_t>(last_state_));
-        FW_LOGI(fw::TraceCat::kGnss, "<sm> state %s -> %s", ::gnss::state_name(last_state_),
-                ::gnss::state_name(cur_state));
+        FW_LOGI(fw::TraceCat::kGnss, "<sm> state %s -> %s", ::gnss::stateName(last_state_),
+                ::gnss::stateName(cur_state));
         if ((last_state_ == ::gnss::State::kProbing) &&
             (cur_state == ::gnss::State::kConfiguring)) {
             const auto det = controller().detected();
             const uint32_t baud = (det.baud != 0U) ? det.baud : host_baud_;
             trace_gnss(GnssTrace::kProbeHit, static_cast<uint32_t>(det.probe.model), baud);
             FW_LOGI(fw::TraceCat::kGnss, "<probe> detected %s at %lu",
-                    ::gnss::model_name(det.probe.model), static_cast<unsigned long>(baud));
+                    ::gnss::modelName(det.probe.model), static_cast<unsigned long>(baud));
             step_idx_ = 0U;
             step_retry_ = 0U;
             step_sent_once_ = false;
@@ -932,11 +932,11 @@ void GnssModule::update_controller_status() noexcept
             }
             persist_detected_hint();
             // 型号与 caps 已知，输出计划按支持的语句位重算一次（ADR-0012 §2.4）。
-            controller().set_output_plan(make_plan());
+            controller().setOutputPlan(make_plan());
         } else if ((last_state_ == ::gnss::State::kRunning) &&
                    (cur_state == ::gnss::State::kProbing)) {
             if (!manual_reprobe_ && (cur_stats.reprobes > prev_ctrl_stats_.reprobes)) {
-                const uint32_t silence_ms = timing_.has_value() ? timing_->silence_ms : 0U;
+                const uint32_t silence_ms = timing_.has_value() ? timing_->silenceMs : 0U;
                 trace_gnss(GnssTrace::kSilence, silence_ms, 0U);
             }
             manual_reprobe_ = false;
@@ -1005,7 +1005,7 @@ bool GnssModule::pump_rtcm_pipe() noexcept
     uint8_t rate_hz = 0U;
     bool gsv = false;
     if (rover_cfg_.has_value()) {
-        rate_hz = rover_cfg_->rate_hz;
+        rate_hz = rover_cfg_->rateHz;
         gsv = rover_cfg_->gsv;
     }
     const uint32_t caps = controller().detected().caps;
@@ -1019,13 +1019,13 @@ void GnssModule::tick_pending_apply(uint32_t now_ms) noexcept
         return;
     }
     const auto stats = controller().stats();
-    const bool landed = stats.output_seq >= pending_seq_;
+    const bool landed = stats.outputSeq >= pending_seq_;
     // 超时按有符号差判断，毫秒计数回绕时仍成立。
     const bool timeout = static_cast<int32_t>(now_ms - pending_deadline_ms_) >= 0;
     if (!landed && !timeout) {
         return;
     }
-    if (landed && (stats.failed_mask == 0U)) {
+    if (landed && (stats.failedMask == 0U)) {
         const fw::Result save_res = ctx().storage.save_keys(gnss_store::kConfigKeys);
         last_apply_ = fw::isOk(save_res) ? GnssApply::kOk : GnssApply::kFailed;
     } else {
@@ -1034,11 +1034,11 @@ void GnssModule::tick_pending_apply(uint32_t now_ms) noexcept
             out_cfg_ = pending_prev_out_;
             ctx().data.gnss_out_cfg.write(out_cfg_);
         } else {
-            ensure_rover_cfg().rate_hz = pending_prev_rate_;
+            ensure_rover_cfg().rateHz = pending_prev_rate_;
         }
         last_apply_ = GnssApply::kRestored;
-        controller().set_output_plan(make_plan());
-        static_cast<void>(controller().request_output(controller().output_plan(), now_ms));
+        controller().setOutputPlan(make_plan());
+        static_cast<void>(controller().requestOutput(controller().outputPlan(), now_ms));
     }
     pending_apply_ = PendingApply::kNone;
     ++apply_seq_;
@@ -1054,27 +1054,27 @@ void GnssModule::publish_status(uint32_t now_ms) noexcept
     if (det.receiver != nullptr) {
         st.family = det.receiver->family();
         st.model = det.probe.model;
-        st.fw_version = det.probe.fw_version;
+        st.fw_version = det.probe.fwVersion;
         st.caps = det.caps;
     }
     st.host_baud = host_baud_;
     st.ctrl = controller().stats();
-    st.output_seq = st.ctrl.output_seq;
-    st.applied_mask = st.ctrl.applied_mask;
-    st.unsupported_mask = st.ctrl.unsupported_mask;
-    st.failed_mask = st.ctrl.failed_mask;
+    st.output_seq = st.ctrl.outputSeq;
+    st.applied_mask = st.ctrl.appliedMask;
+    st.unsupported_mask = st.ctrl.unsupportedMask;
+    st.failed_mask = st.ctrl.failedMask;
     st.last_apply = last_apply_;
     st.apply_seq = apply_seq_;
     static_assert(std::tuple_size_v<decltype(st.rx_period_ms)> == data::kGnssAppMsgCount);
-    const auto &plan = controller().output_plan();
+    const auto &plan = controller().outputPlan();
     for (size_t i = 0U; i < st.rx_period_ms.size(); ++i) {
-        st.rx_period_ms[i] = plan.period_ms[i];
+        st.rx_period_ms[i] = plan.periodMs[i];
     }
     // App 可见的支持位 = 驱动声明的语句位 & 本轮未报不支持 & 未失败（ADR-0012 §2.5）。
     if (det.receiver != nullptr) {
         constexpr uint32_t kAppBits = (1U << static_cast<uint32_t>(data::kGnssAppMsgCount)) - 1U;
-        const uint32_t declared = det.receiver->output_mask(det.probe.model) & kAppBits;
-        st.supported_mask = declared & ~st.ctrl.unsupported_mask & ~st.ctrl.failed_mask;
+        const uint32_t declared = det.receiver->outputMask(det.probe.model) & kAppBits;
+        st.supported_mask = declared & ~st.ctrl.unsupportedMask & ~st.ctrl.failedMask;
     }
     st.nmea = parser().stats();
     st.uart_rx_bytes = uart_rx_bytes_;
@@ -1143,8 +1143,8 @@ fw::Result GnssModule::load_family(void * /*obj*/, std::span<const uint8_t> in) 
     if (in.empty()) {
         return fw::Result::kInvalidArg;
     }
-    // 家族号越界（旧格式或损坏）由 family_from_u8() 报告，避免手工维护上限。
-    const std::optional<::gnss::Family> family = ::gnss::family_from_u8(in[0]);
+    // 家族号越界（旧格式或损坏）由 familyFromU8() 报告，避免手工维护上限。
+    const std::optional<::gnss::Family> family = ::gnss::familyFromU8(in[0]);
     if (!family.has_value()) {
         return fw::Result::kInvalidArg;
     }
@@ -1168,7 +1168,7 @@ fw::Result GnssModule::load_model(void * /*obj*/, std::span<const uint8_t> in) n
     if (in.empty()) {
         return fw::Result::kInvalidArg;
     }
-    const std::optional<::gnss::Model> model = ::gnss::model_from_u8(in[0]);
+    const std::optional<::gnss::Model> model = ::gnss::modelFromU8(in[0]);
     if (!model.has_value()) {
         return fw::Result::kInvalidArg;
     }
@@ -1215,7 +1215,7 @@ fw::Result GnssModule::load_rate(void * /*obj*/, std::span<const uint8_t> in) no
     if (in.empty() || !is_valid_rate_hz(in[0])) {
         return fw::Result::kInvalidArg;
     }
-    app_context().gnss.ensure_rover_cfg().rate_hz = in[0];
+    app_context().gnss.ensure_rover_cfg().rateHz = in[0];
     app_context().gnss.rate_loaded_ = true;
     return fw::Result::kOk;
 }
@@ -1227,7 +1227,7 @@ fw::Result GnssModule::save_rate(const void * /*obj*/, std::span<uint8_t> out, s
     }
     const auto &gnss = app_context().gnss;
     out[0] = (gnss.rate_loaded_ && gnss.rover_cfg_.has_value())
-                 ? gnss.rover_cfg_->rate_hz
+                 ? gnss.rover_cfg_->rateHz
                  : static_cast<uint8_t>(CONFIG_RTK_GNSS_RATE_HZ);
     len = 1U;
     return fw::Result::kOk;

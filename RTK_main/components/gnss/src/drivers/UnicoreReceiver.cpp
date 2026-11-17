@@ -37,7 +37,7 @@ constexpr std::size_t kMinReplyBytes = 6U;
 constexpr std::size_t kStarFromEnd = ascii::kTailBytes;
 constexpr uint32_t kConfigTimeoutMs = 500U;
 
-// $command 应答（classify_reply）与 #VERSIONA 探测应答（match_probe）各需一个解码器，缺一则对应帧落入 unknown。
+// $command 应答（classifyReply）与 #VERSIONA 探测应答（matchProbe）各需一个解码器，缺一则对应帧落入 unknown。
 constexpr std::array<const demux::Decoder *, 2> kDecoders{&unicore::kResponseDecoder,
                                                           &demux::unicore_hash::kDecoder};
 
@@ -92,15 +92,15 @@ ResponseVerdict reject(ResponseReason reason, std::size_t offset = 0, uint8_t re
  * @brief 构造“前缀字节不符”的拒绝结论（两种前缀都可能时给出两个期望字节）。
  * @param offset: 出问题的字节位置。
  * @param received: 实际读到的字节。
- * @param want_first: 第一个仍可能的期望字节（0 表示该候选已失效）。
- * @param want_second: 第二个仍可能的期望字节（0 表示没有）。
+ * @param wantFirst: 第一个仍可能的期望字节（0 表示该候选已失效）。
+ * @param wantSecond: 第二个仍可能的期望字节（0 表示没有）。
  * @retval verdict: step = kReject，reason = kPrefix。
  */
-ResponseVerdict reject_prefix(std::size_t offset, uint8_t received, uint8_t want_first,
-                              uint8_t want_second) noexcept
+ResponseVerdict rejectPrefix(std::size_t offset, uint8_t received, uint8_t wantFirst,
+                             uint8_t wantSecond) noexcept
 {
-    ResponseVerdict verdict = reject(ResponseReason::kPrefix, offset, received, want_first);
-    verdict.alt = want_second;
+    ResponseVerdict verdict = reject(ResponseReason::kPrefix, offset, received, wantFirst);
+    verdict.alt = wantSecond;
     return verdict;
 }
 
@@ -109,7 +109,7 @@ ResponseVerdict reject_prefix(std::size_t offset, uint8_t received, uint8_t want
  * @param need: 至少还差多少字节。
  * @retval verdict: step = kNeedMore。
  */
-ResponseVerdict need_more(std::size_t need) noexcept
+ResponseVerdict needMore(std::size_t need) noexcept
 {
     ResponseVerdict verdict{};
     verdict.step = demux::Step::kNeedMore;
@@ -137,42 +137,42 @@ ResponseVerdict complete() noexcept
  * @retval std::nullopt: 前缀完整且长度够，可继续看正文。
  * @retval verdict: 需要继续收取或直接拒绝。
  */
-std::optional<ResponseVerdict> check_prefix(std::span<const uint8_t> frame) noexcept
+std::optional<ResponseVerdict> checkPrefix(std::span<const uint8_t> frame) noexcept
 {
     const size_t size = frame.size();
     if (size == 0U) {
         return reject(ResponseReason::kEmpty);
     }
-    const size_t cmd_len = kCommandPrefix.size();
-    const size_t cfg_len = kConfigPrefix.size();
-    const size_t longest = cmd_len > cfg_len ? cmd_len : cfg_len;
+    const size_t cmdLen = kCommandPrefix.size();
+    const size_t cfgLen = kConfigPrefix.size();
+    const size_t longest = cmdLen > cfgLen ? cmdLen : cfgLen;
     const size_t compared = size < longest ? size : longest;
-    bool cmd_alive = true;
-    bool cfg_alive = true;
+    bool cmdAlive = true;
+    bool cfgAlive = true;
     for (size_t i = 0; i < compared; ++i) {
         const uint8_t byte = frame[i];
         // 前缀已走完的候选不再受本字节约束（视为仍然成立）。
-        const bool cmd_next =
-            cmd_alive && ((i >= cmd_len) || (byte == static_cast<uint8_t>(kCommandPrefix[i])));
-        const bool cfg_next =
-            cfg_alive && ((i >= cfg_len) || (byte == static_cast<uint8_t>(kConfigPrefix[i])));
-        if (!cmd_next && !cfg_next) {
+        const bool cmdNext =
+            cmdAlive && ((i >= cmdLen) || (byte == static_cast<uint8_t>(kCommandPrefix[i])));
+        const bool cfgNext =
+            cfgAlive && ((i >= cfgLen) || (byte == static_cast<uint8_t>(kConfigPrefix[i])));
+        if (!cmdNext && !cfgNext) {
             // 只有失配前仍成立的候选才参与“expected”文本，避免报出已排除的字节。
-            const uint8_t want_cmd =
-                (cmd_alive && (i < cmd_len)) ? static_cast<uint8_t>(kCommandPrefix[i]) : 0U;
-            const uint8_t want_cfg =
-                (cfg_alive && (i < cfg_len)) ? static_cast<uint8_t>(kConfigPrefix[i]) : 0U;
-            return reject_prefix(i, byte, want_cmd, want_cfg);
+            const uint8_t wantCmd =
+                (cmdAlive && (i < cmdLen)) ? static_cast<uint8_t>(kCommandPrefix[i]) : 0U;
+            const uint8_t wantCfg =
+                (cfgAlive && (i < cfgLen)) ? static_cast<uint8_t>(kConfigPrefix[i]) : 0U;
+            return rejectPrefix(i, byte, wantCmd, wantCfg);
         }
-        cmd_alive = cmd_next;
-        cfg_alive = cfg_next;
+        cmdAlive = cmdNext;
+        cfgAlive = cfgNext;
     }
     // 最小帧长按较长前缀（$command）计算：对 $CONFIG 只多要 1 字节，仍远小于真实读回行。
-    if (size < cmd_len) {
-        return need_more(cmd_len - size);
+    if (size < cmdLen) {
+        return needMore(cmdLen - size);
     }
-    if (size < (cmd_len + kMinReplyBytes)) {
-        return need_more((cmd_len + kMinReplyBytes) - size);
+    if (size < (cmdLen + kMinReplyBytes)) {
+        return needMore((cmdLen + kMinReplyBytes) - size);
     }
     return std::nullopt;
 }
@@ -180,20 +180,20 @@ std::optional<ResponseVerdict> check_prefix(std::span<const uint8_t> frame) noex
 /**
  * @brief 校验和是否匹配（标准 XOR，或 UM980 实测把 '$' 一并计入的变体）。
  * @param frame: 整帧字节。
- * @param star_pos: '*' 的下标。
+ * @param starPos: '*' 的下标。
  * @param received: 输出，帧内写的校验值。
  * @param computed: 输出，按报文体算出的校验值。
  * @retval true: 二者任一一致。
  * @retval false: 都不一致。
  */
-bool checksum_matches(std::span<const uint8_t> frame, std::size_t star_pos, uint8_t &received,
-                      uint8_t &computed) noexcept
+bool checksumMatches(std::span<const uint8_t> frame, std::size_t starPos, uint8_t &received,
+                     uint8_t &computed) noexcept
 {
-    computed = ascii::xor_checksum(frame, 1U, star_pos);
-    // hex_value 返回 uint8_t，整型提升为 int 后再移位属有符号位运算：先转 uint32_t（值域 0..15，安全）。
-    const uint32_t high = static_cast<uint32_t>(ascii::hex_value(frame[star_pos + 1U]))
+    computed = ascii::xorChecksum(frame, 1U, starPos);
+    // hexValue 返回 uint8_t，整型提升为 int 后再移位属有符号位运算：先转 uint32_t（值域 0..15，安全）。
+    const uint32_t high = static_cast<uint32_t>(ascii::hexValue(frame[starPos + 1U]))
                           << ascii::kHexShift;
-    const uint32_t low = static_cast<uint32_t>(ascii::hex_value(frame[star_pos + 2U]));
+    const uint32_t low = static_cast<uint32_t>(ascii::hexValue(frame[starPos + 2U]));
     received = static_cast<uint8_t>(high | low);
     if (computed == received) {
         return true;
@@ -209,22 +209,22 @@ bool checksum_matches(std::span<const uint8_t> frame, std::size_t star_pos, uint
  * @retval std::nullopt: 全部通过。
  * @retval verdict: 拒绝原因。
  */
-std::optional<ResponseVerdict> check_full_frame(std::span<const uint8_t> frame) noexcept
+std::optional<ResponseVerdict> checkFullFrame(std::span<const uint8_t> frame) noexcept
 {
     const size_t size = frame.size();
-    if (!ascii::has_hex_tail(frame)) {
+    if (!ascii::hasHexTail(frame)) {
         return reject(ResponseReason::kTail, size - 1U, frame[size - 1U]);
     }
-    const size_t star_pos = size - kStarFromEnd;
-    for (size_t i = 1U; i < star_pos; ++i) {
-        if (!ascii::is_body_byte(frame[i])) {
+    const size_t starPos = size - kStarFromEnd;
+    for (size_t i = 1U; i < starPos; ++i) {
+        if (!ascii::isBodyByte(frame[i])) {
             return reject(ResponseReason::kBody, i, frame[i]);
         }
     }
     uint8_t received = 0;
     uint8_t computed = 0;
-    if (!checksum_matches(frame, star_pos, received, computed)) {
-        return reject(ResponseReason::kChecksum, star_pos, received, computed);
+    if (!checksumMatches(frame, starPos, received, computed)) {
+        return reject(ResponseReason::kChecksum, starPos, received, computed);
     }
     return std::nullopt;
 }
@@ -235,37 +235,37 @@ std::optional<ResponseVerdict> check_full_frame(std::span<const uint8_t> frame) 
  * @retval std::nullopt: 不会出现（仅为与另外两个检查函数同签名）。
  * @retval verdict: 需要继续收取或直接拒绝。
  */
-std::optional<ResponseVerdict> check_partial_frame(std::span<const uint8_t> frame) noexcept
+std::optional<ResponseVerdict> checkPartialFrame(std::span<const uint8_t> frame) noexcept
 {
     const size_t size = frame.size();
-    size_t star_pos = size;
+    size_t starPos = size;
     const size_t window = size < kStarFromEnd ? size : kStarFromEnd;
     for (size_t k = 0; k < window; ++k) {
         if (frame[size - 1U - k] == kStar) {
-            star_pos = size - 1U - k;
+            starPos = size - 1U - k;
             break;
         }
     }
-    if (star_pos == size) {
+    if (starPos == size) {
         // 没有 '*' 时只校验最后一字节是否为合法报文体，避免把半个多字节字符判成帧。
-        if (!ascii::is_body_byte(frame[size - 1U])) {
+        if (!ascii::isBodyByte(frame[size - 1U])) {
             return reject(ResponseReason::kBody, size - 1U, frame[size - 1U]);
         }
-        return need_more(1U);
+        return needMore(1U);
     }
-    if ((size - star_pos) > kStarFromEnd) {
-        return reject(ResponseReason::kStarField, star_pos);
+    if ((size - starPos) > kStarFromEnd) {
+        return reject(ResponseReason::kStarField, starPos);
     }
-    for (size_t i = star_pos + 1U; i < size; ++i) {
+    for (size_t i = starPos + 1U; i < size; ++i) {
         const uint8_t c = frame[i];
-        if (!ascii::is_hex(c) && c != kCr && c != kLf) {
+        if (!ascii::isHex(c) && c != kCr && c != kLf) {
             return reject(ResponseReason::kStarByte, i, c);
         }
     }
-    if ((size - star_pos) >= kStarFromEnd) {
-        return reject(ResponseReason::kNoRoom, star_pos);
+    if ((size - starPos) >= kStarFromEnd) {
+        return reject(ResponseReason::kNoRoom, starPos);
     }
-    return need_more(kStarFromEnd - (size - star_pos));
+    return needMore(kStarFromEnd - (size - starPos));
 }
 
 /**
@@ -275,16 +275,16 @@ std::optional<ResponseVerdict> check_partial_frame(std::span<const uint8_t> fram
  */
 ResponseVerdict judge(std::span<const uint8_t> frame) noexcept
 {
-    if (const std::optional<ResponseVerdict> head = check_prefix(frame)) {
+    if (const std::optional<ResponseVerdict> head = checkPrefix(frame)) {
         return *head;
     }
     if (frame[frame.size() - 1U] == kLf) {
-        if (const std::optional<ResponseVerdict> tail = check_full_frame(frame)) {
+        if (const std::optional<ResponseVerdict> tail = checkFullFrame(frame)) {
             return *tail;
         }
         return complete();
     }
-    if (const std::optional<ResponseVerdict> partial = check_partial_frame(frame)) {
+    if (const std::optional<ResponseVerdict> partial = checkPartialFrame(frame)) {
         return *partial;
     }
     return complete();
@@ -295,7 +295,7 @@ ResponseVerdict judge(std::span<const uint8_t> frame) noexcept
  * @param verdict: judge 的结论。
  * @param text: 输出文本写入器。
  */
-void explain_verdict(const ResponseVerdict &verdict, demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const ResponseVerdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case ResponseReason::kEmpty:
@@ -352,18 +352,18 @@ void explain_verdict(const ResponseVerdict &verdict, demux::text_writer::TextWri
 /**
  * @brief 把型号与固件版本写进探测结果（固件文本截断到 kVersionLen-1）。
  * @param model: 识别出的型号。
- * @param fw_text: VERSIONA 里的固件文本。
+ * @param fwText: VERSIONA 里的固件文本。
  * @param out: 输出探测结果。
  */
-void fill_probe_result(Model model, std::span<const uint8_t> fw_text, ProbeResult &out) noexcept
+void fillProbeResult(Model model, std::span<const uint8_t> fwText, ProbeResult &out) noexcept
 {
     out = ProbeResult{};
     out.model = model;
-    const size_t copy = fw_text.size() < (kVersionLen - 1) ? fw_text.size() : (kVersionLen - 1);
+    const size_t copy = fwText.size() < (kVersionLen - 1) ? fwText.size() : (kVersionLen - 1);
     for (size_t i = 0; i < copy; ++i) {
-        out.fw_version[i] = static_cast<char>(fw_text[i]);
+        out.fwVersion[i] = static_cast<char>(fwText[i]);
     }
-    out.fw_version[copy] = '\0';
+    out.fwVersion[copy] = '\0';
 }
 
 /**
@@ -372,15 +372,15 @@ void fill_probe_result(Model model, std::span<const uint8_t> fw_text, ProbeResul
  * @retval model: 识别出的型号。
  * @retval std::nullopt: 不是 Unicore N4 型号。
  */
-std::optional<Model> model_from_text(std::span<const uint8_t> text) noexcept
+std::optional<Model> modelFromText(std::span<const uint8_t> text) noexcept
 {
-    if (ascii::quoted_equals(text, "UM982")) {
+    if (ascii::quotedEquals(text, "UM982")) {
         return Model::kUm982;
     }
-    if (ascii::quoted_equals(text, "UM981")) {
+    if (ascii::quotedEquals(text, "UM981")) {
         return Model::kUm981;
     }
-    if (ascii::quoted_equals(text, "UM980") || ascii::quoted_starts_with(text, "UM9")) {
+    if (ascii::quotedEquals(text, "UM980") || ascii::quotedStartsWith(text, "UM9")) {
         return Model::kUm980;
     }
     return std::nullopt;
@@ -396,7 +396,7 @@ namespace unicore {
  * @retval true: 是 '$'。
  * @retval false: 其他。
  */
-bool response_first_byte(uint8_t byte) noexcept
+bool responseFirstByte(uint8_t byte) noexcept
 {
     return byte == kDollar;
 }
@@ -407,7 +407,7 @@ bool response_first_byte(uint8_t byte) noexcept
  * @param need: 输出，至少还差多少字节（kNeedMore 时有效）。
  * @retval step: kFrame / kNeedMore / kReject。
  */
-demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noexcept
+demux::Step responseStep(std::span<const uint8_t> frame, std::size_t &need) noexcept
 {
     const ResponseVerdict verdict = judge(frame);
     need = verdict.need;
@@ -420,7 +420,7 @@ demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noe
  * @param out: 输出缓冲。
  * @retval len: 写入的字符数。
  */
-std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out) noexcept
+std::size_t explainResponse(std::span<const uint8_t> frame, std::span<char> out) noexcept
 {
     demux::text_writer::TextWriter text(out);
     if (frame.empty()) {
@@ -430,7 +430,7 @@ std::size_t explain_response(std::span<const uint8_t> frame, std::span<char> out
     if (verdict.step == demux::Step::kFrame) {
         return text.literal("not rejected").finish();
     }
-    explain_verdict(verdict, text);
+    explainVerdict(verdict, text);
     return text.finish();
 }
 
@@ -454,10 +454,10 @@ constinit const Um982Receiver kUm982Receiver{};
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool UnicoreReceiver::cmd_unlog(CmdBuf &out, uint8_t port) noexcept
+bool UnicoreReceiver::cmdUnlog(CmdBuf &out, uint8_t port) noexcept
 {
     out.clear();
-    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append("\r\n");
+    return out.append("UNLOG COM") && ascii::appendUint(out, port) && out.append("\r\n");
 }
 
 /**
@@ -466,7 +466,7 @@ bool UnicoreReceiver::cmd_unlog(CmdBuf &out, uint8_t port) noexcept
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool UnicoreReceiver::cmd_mode_rover(CmdBuf &out) noexcept
+bool UnicoreReceiver::cmdModeRover(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append("MODE ROVER\r\n");
@@ -480,11 +480,11 @@ bool UnicoreReceiver::cmd_mode_rover(CmdBuf &out) noexcept
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool UnicoreReceiver::cmd_config_baud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
+bool UnicoreReceiver::cmdConfigBaud(CmdBuf &out, uint8_t port, uint32_t baud) noexcept
 {
     out.clear();
-    return out.append("CONFIG COM") && ascii::append_uint(out, port) && out.append(" ") &&
-           ascii::append_uint(out, baud) && out.append("\r\n");
+    return out.append("CONFIG COM") && ascii::appendUint(out, port) && out.append(" ") &&
+           ascii::appendUint(out, baud) && out.append("\r\n");
 }
 
 /**
@@ -492,16 +492,16 @@ bool UnicoreReceiver::cmd_config_baud(CmdBuf &out, uint8_t port, uint32_t baud) 
  * @param out: 目标命令缓冲（先清空）。
  * @param name: 报文体名字（如 "GPGGA"）。
  * @param port: 接收机端口号。
- * @param period_ms: 周期（毫秒），必须是 10 ms 整数倍。
+ * @param periodMs: 周期（毫秒），必须是 10 ms 整数倍。
  * @retval true: 已写入完整命令。
  * @retval false: 周期粒度不合法或缓冲空间不足。
  */
-bool UnicoreReceiver::cmd_log_msg(CmdBuf &out, std::string_view name, uint8_t port,
-                                  uint32_t period_ms) noexcept
+bool UnicoreReceiver::cmdLogMsg(CmdBuf &out, std::string_view name, uint8_t port,
+                                uint32_t periodMs) noexcept
 {
     out.clear();
-    return out.append(name) && out.append(" COM") && ascii::append_uint(out, port) &&
-           out.append(" ") && ascii::append_period(out, period_ms) && out.append("\r\n");
+    return out.append(name) && out.append(" COM") && ascii::appendUint(out, port) &&
+           out.append(" ") && ascii::appendPeriod(out, periodMs) && out.append("\r\n");
 }
 
 /**
@@ -512,10 +512,10 @@ bool UnicoreReceiver::cmd_log_msg(CmdBuf &out, std::string_view name, uint8_t po
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool UnicoreReceiver::cmd_unlog_msg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
+bool UnicoreReceiver::cmdUnlogMsg(CmdBuf &out, std::string_view name, uint8_t port) noexcept
 {
     out.clear();
-    return out.append("UNLOG COM") && ascii::append_uint(out, port) && out.append(" ") &&
+    return out.append("UNLOG COM") && ascii::appendUint(out, port) && out.append(" ") &&
            out.append(name) && out.append("\r\n");
 }
 
@@ -525,7 +525,7 @@ bool UnicoreReceiver::cmd_unlog_msg(CmdBuf &out, std::string_view name, uint8_t 
  * @retval true: 已写入完整命令。
  * @retval false: 缓冲空间不足。
  */
-bool UnicoreReceiver::cmd_version_query(CmdBuf &out) noexcept
+bool UnicoreReceiver::cmdVersionQuery(CmdBuf &out) noexcept
 {
     out.clear();
     return out.append("VERSIONA\r\n");
@@ -539,9 +539,9 @@ bool UnicoreReceiver::cmd_version_query(CmdBuf &out) noexcept
  * @retval true: 尾部结构与最小长度都满足。
  * @retval false: 结构不符或过短。
  */
-bool UnicoreReceiver::resp_has_valid_tail(std::span<const uint8_t> frame) noexcept
+bool UnicoreReceiver::respHasValidTail(std::span<const uint8_t> frame) noexcept
 {
-    return (frame.size() >= (kCommandPrefix.size() + kMinReplyBytes)) && ascii::has_hex_tail(frame);
+    return (frame.size() >= (kCommandPrefix.size() + kMinReplyBytes)) && ascii::hasHexTail(frame);
 }
 
 /**
@@ -550,10 +550,10 @@ bool UnicoreReceiver::resp_has_valid_tail(std::span<const uint8_t> frame) noexce
  * @retval 位置: 标签起始下标。
  * @retval std::nullopt: 没有该标签（不是 $command 应答）。
  */
-std::optional<size_t> UnicoreReceiver::resp_find_tag(std::span<const uint8_t> frame) noexcept
+std::optional<size_t> UnicoreReceiver::respFindTag(std::span<const uint8_t> frame) noexcept
 {
     for (size_t i = kCommandPrefix.size(); (i + kResponseTag.size()) <= frame.size(); ++i) {
-        if (ascii::starts_with(frame.subspan(i), kResponseTag)) {
+        if (ascii::startsWith(frame.subspan(i), kResponseTag)) {
             return i;
         }
     }
@@ -563,37 +563,37 @@ std::optional<size_t> UnicoreReceiver::resp_find_tag(std::span<const uint8_t> fr
 /**
  * @brief 帧里的回显是否就是本步发送的命令（忽略发送时的 CR/LF）。
  * @param frame: 整帧字节。
- * @param tag_pos: ",response: " 的起始下标。
+ * @param tagPos: ",response: " 的起始下标。
  * @param sent: 本步发出的命令字节。
  * @retval true: 回显与 sent 逐字节相同。
  * @retval false: 长度或内容不同（属于别的命令的应答）。
  */
-bool UnicoreReceiver::resp_echo_matches(std::span<const uint8_t> frame, size_t tag_pos,
-                                        std::span<const uint8_t> sent) noexcept
+bool UnicoreReceiver::respEchoMatches(std::span<const uint8_t> frame, size_t tagPos,
+                                      std::span<const uint8_t> sent) noexcept
 {
-    if (tag_pos < kCommandPrefix.size()) {
+    if (tagPos < kCommandPrefix.size()) {
         return false;
     }
-    const size_t sent_len = ascii::strip_line_end(sent);
-    if ((tag_pos - kCommandPrefix.size()) != sent_len) {
+    const size_t sentLen = ascii::stripLineEnd(sent);
+    if ((tagPos - kCommandPrefix.size()) != sentLen) {
         return false;
     }
-    return ascii::bytes_starts_with(frame.subspan(kCommandPrefix.size()), sent.first(sent_len));
+    return ascii::bytesStartsWith(frame.subspan(kCommandPrefix.size()), sent.first(sentLen));
 }
 
 /**
  * @brief 取应答文本（标签之后到 '*' 之前，去掉尾部空格）。
  * @param frame: 整帧字节。
- * @param tag_pos: ",response: " 的起始下标。
+ * @param tagPos: ",response: " 的起始下标。
  * @retval span: 应答文本（可能为空）。
  */
-std::span<const uint8_t> UnicoreReceiver::resp_text(std::span<const uint8_t> frame,
-                                                    size_t tag_pos) noexcept
+std::span<const uint8_t> UnicoreReceiver::respText(std::span<const uint8_t> frame,
+                                                   size_t tagPos) noexcept
 {
     if (frame.size() < kStarFromEnd) {
         return {};
     }
-    const size_t begin = tag_pos + kResponseTag.size();
+    const size_t begin = tagPos + kResponseTag.size();
     size_t end = frame.size() - kStarFromEnd;
     while ((end > begin) && (frame[end - 1U] == static_cast<uint8_t>(' '))) {
         --end;
@@ -611,21 +611,21 @@ std::span<const uint8_t> UnicoreReceiver::resp_text(std::span<const uint8_t> fra
  * @param cfg: 流动站配置（本判断不使用）。
  * @retval true: 恒为 true。
  */
-bool UnicoreReceiver::step_always(const RoverConfig &cfg) noexcept
+bool UnicoreReceiver::stepAlways(const RoverConfig &cfg) noexcept
 {
     static_cast<void>(cfg);
     return true;
 }
 
 /**
- * @brief 步骤启用条件：cfg.port_baud != 0（为 0 时脚本提前结束）。
+ * @brief 步骤启用条件：cfg.portBaud != 0（为 0 时脚本提前结束）。
  * @param cfg: 流动站配置。
  * @retval true: 需要改波特率。
  * @retval false: 不改波特率。
  */
-bool UnicoreReceiver::step_if_port_baud(const RoverConfig &cfg) noexcept
+bool UnicoreReceiver::stepIfPortBaud(const RoverConfig &cfg) noexcept
 {
-    return cfg.port_baud != 0U;
+    return cfg.portBaud != 0U;
 }
 
 /**
@@ -635,14 +635,14 @@ bool UnicoreReceiver::step_if_port_baud(const RoverConfig &cfg) noexcept
  * @retval true: 步骤可用。
  * @retval false: 命令生成失败。
  */
-bool UnicoreReceiver::step_unlog_all(const RoverConfig &cfg, ConfigStep &out) noexcept
+bool UnicoreReceiver::stepUnlogAll(const RoverConfig &cfg, ConfigStep &out) noexcept
 {
-    if (!cmd_unlog(out.cmd, cfg.port)) {
+    if (!cmdUnlog(out.cmd, cfg.port)) {
         return false;
     }
-    out.expect_reply = true;
-    out.timeout_ms = kConfigTimeoutMs;
-    out.switch_baud = 0;
+    out.expectReply = true;
+    out.timeoutMs = kConfigTimeoutMs;
+    out.switchBaud = 0;
     return true;
 }
 
@@ -653,33 +653,33 @@ bool UnicoreReceiver::step_unlog_all(const RoverConfig &cfg, ConfigStep &out) no
  * @retval true: 步骤可用。
  * @retval false: 命令生成失败。
  */
-bool UnicoreReceiver::step_mode_rover(const RoverConfig &cfg, ConfigStep &out) noexcept
+bool UnicoreReceiver::stepModeRover(const RoverConfig &cfg, ConfigStep &out) noexcept
 {
     static_cast<void>(cfg);
-    if (!cmd_mode_rover(out.cmd)) {
+    if (!cmdModeRover(out.cmd)) {
         return false;
     }
-    out.expect_reply = true;
-    out.timeout_ms = kConfigTimeoutMs;
-    out.switch_baud = 0;
+    out.expectReply = true;
+    out.timeoutMs = kConfigTimeoutMs;
+    out.switchBaud = 0;
     return true;
 }
 
 /**
  * @brief 第 2 步：改端口波特率；手册要求切换后不再按旧速率等待应答。
  * @param cfg: 流动站配置（用端口号与目标波特率）。
- * @param out: 输出步骤（switch_baud = 目标波特率）。
+ * @param out: 输出步骤（switchBaud = 目标波特率）。
  * @retval true: 步骤可用。
  * @retval false: 命令生成失败。
  */
-bool UnicoreReceiver::step_port_baud(const RoverConfig &cfg, ConfigStep &out) noexcept
+bool UnicoreReceiver::stepPortBaud(const RoverConfig &cfg, ConfigStep &out) noexcept
 {
-    if (!cmd_config_baud(out.cmd, cfg.port, cfg.port_baud)) {
+    if (!cmdConfigBaud(out.cmd, cfg.port, cfg.portBaud)) {
         return false;
     }
-    out.expect_reply = false;
-    out.timeout_ms = kConfigTimeoutMs;
-    out.switch_baud = cfg.port_baud;
+    out.expectReply = false;
+    out.timeoutMs = kConfigTimeoutMs;
+    out.switchBaud = cfg.portBaud;
     return true;
 }
 
@@ -713,30 +713,30 @@ uint32_t UnicoreReceiver::caps(Model model) const noexcept
     }
 }
 
-const Receiver &UnicoreReceiver::for_model(Model model) const noexcept
+const Receiver &UnicoreReceiver::forModel(Model model) const noexcept
 {
     // 双天线型号有单独驱动（多 kHeading 能力），其余型号就是家族驱动本身（ADR-0012 §2.8）。
-    return (model == Model::kUm982) ? um982_receiver() : *this;
+    return (model == Model::kUm982) ? um982Receiver() : *this;
 }
 
-bool UnicoreReceiver::build_probe(CmdBuf &out) const noexcept
+bool UnicoreReceiver::buildProbe(CmdBuf &out) const noexcept
 {
-    return cmd_version_query(out);
+    return cmdVersionQuery(out);
 }
 
-bool UnicoreReceiver::build_readback(CmdBuf &out) const noexcept
+bool UnicoreReceiver::buildReadback(CmdBuf &out) const noexcept
 {
     out.clear();
     return out.append("CONFIG\r\n");
 }
 
-size_t UnicoreReceiver::match_readback(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                       std::span<char> out) const noexcept
+size_t UnicoreReceiver::matchReadback(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                      std::span<char> out) const noexcept
 {
     // 只认应答解码器交付的 $CONFIG 行：$command,CONFIG,response: OK*.. 是命令应答，不算配置行。
     if ((&dec != &unicore::kResponseDecoder) ||
         (frame.size() <= (kConfigPrefix.size() + kStarFromEnd)) ||
-        !ascii::starts_with(frame, kConfigPrefix)) {
+        !ascii::startsWith(frame, kConfigPrefix)) {
         return 0U;
     }
     const size_t begin = kConfigPrefix.size();
@@ -752,35 +752,35 @@ size_t UnicoreReceiver::match_readback(const demux::Decoder &dec, std::span<cons
     return copy;
 }
 
-bool UnicoreReceiver::match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                  ProbeResult &out) const noexcept
+bool UnicoreReceiver::matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                 ProbeResult &out) const noexcept
 {
     if ((&dec != &demux::unicore_hash::kDecoder) || (frame.size() < kVersionTag.size()) ||
-        !ascii::starts_with(frame, kVersionTag)) {
+        !ascii::startsWith(frame, kVersionTag)) {
         return false;
     }
     size_t pos = kVersionTag.size();
-    std::span<const uint8_t> model_text{};
-    if (!ascii::next_quoted(frame, pos, model_text)) {
+    std::span<const uint8_t> modelText{};
+    if (!ascii::nextQuoted(frame, pos, modelText)) {
         return false;
     }
-    const std::optional<Model> model = model_from_text(model_text);
+    const std::optional<Model> model = modelFromText(modelText);
     if (!model.has_value()) {
         return false;
     }
-    std::span<const uint8_t> fw_text{};
+    std::span<const uint8_t> fwText{};
     // 固件版本字段可选：旧固件没有它时只填型号。
-    static_cast<void>(ascii::next_quoted(frame, pos, fw_text));
-    fill_probe_result(*model, fw_text, out);
+    static_cast<void>(ascii::nextQuoted(frame, pos, fwText));
+    fillProbeResult(*model, fwText, out);
     return true;
 }
 
-bool UnicoreReceiver::rover_step(size_t index, Model model, const RoverConfig &cfg,
-                                 ConfigStep &out) const noexcept
+bool UnicoreReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
+                                ConfigStep &out) const noexcept
 {
-    static_cast<void>(model); // 基础脚本与型号无关；报文输出改由输出阶段（build_output）下发
+    static_cast<void>(model); // 基础脚本与型号无关；报文输出改由输出阶段（buildOutput）下发
     size_t position = 0;
-    for (const ScriptStep &step : rover_script()) {
+    for (const ScriptStep &step : roverScript()) {
         if (!step.enabled(cfg)) {
             continue;
         }
@@ -792,67 +792,67 @@ bool UnicoreReceiver::rover_step(size_t index, Model model, const RoverConfig &c
     return false; // 脚本结束
 }
 
-std::span<const UnicoreReceiver::ScriptStep> UnicoreReceiver::rover_script() const noexcept
+std::span<const UnicoreReceiver::ScriptStep> UnicoreReceiver::roverScript() const noexcept
 {
     // 表放在成员函数作用域内：ScriptStep 与步骤函数都是 protected，只有成员作用域才能取地址。
     static constexpr std::array<ScriptStep, 3> kScript{{
-        {&step_unlog_all, &step_always},
-        {&step_mode_rover, &step_always},
-        {&step_port_baud, &step_if_port_baud},
+        {&stepUnlogAll, &stepAlways},
+        {&stepModeRover, &stepAlways},
+        {&stepPortBaud, &stepIfPortBaud},
     }};
     return kScript;
 }
 
-Ack UnicoreReceiver::classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                    std::span<const uint8_t> sent) const noexcept
+Ack UnicoreReceiver::classifyReply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                   std::span<const uint8_t> sent) const noexcept
 {
     if (&dec != &unicore::kResponseDecoder) {
         return Ack::kNone;
     }
-    if (!resp_has_valid_tail(frame)) {
+    if (!respHasValidTail(frame)) {
         return Ack::kNone;
     }
-    const std::optional<size_t> tag = resp_find_tag(frame);
-    if (!tag.has_value() || !resp_echo_matches(frame, *tag, sent)) {
+    const std::optional<size_t> tag = respFindTag(frame);
+    if (!tag.has_value() || !respEchoMatches(frame, *tag, sent)) {
         return Ack::kNone; // 不是本步命令的应答
     }
-    return ascii::quoted_equals(resp_text(frame, *tag), "OK") ? Ack::kAck : Ack::kNack;
+    return ascii::quotedEquals(respText(frame, *tag), "OK") ? Ack::kAck : Ack::kNack;
 }
 
-OutputMsg UnicoreReceiver::classify_frame(const demux::Decoder &dec,
-                                          std::span<const uint8_t> frame) const noexcept
+OutputMsg UnicoreReceiver::classifyFrame(const demux::Decoder &dec,
+                                         std::span<const uint8_t> frame) const noexcept
 {
     // 厂家私有帧：其余（NMEA 等）交回基类，保持与 main 原 classify_gnss_sentence() 一致。
-    if (detail::starts_with(frame, "#SATSINFOA,")) {
+    if (detail::startsWith(frame, "#SATSINFOA,")) {
         return OutputMsg::kSatsInfo;
     }
-    if (detail::starts_with(frame, "#HEADINGA,")) {
+    if (detail::startsWith(frame, "#HEADINGA,")) {
         return OutputMsg::kHeading;
     }
-    return Receiver::classify_frame(dec, frame);
+    return Receiver::classifyFrame(dec, frame);
 }
 
-size_t UnicoreReceiver::frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                  std::span<char> out) const noexcept
+size_t UnicoreReceiver::frameTag(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                 std::span<char> out) const noexcept
 {
     const std::string_view name{dec.name};
     if (name == "UnicoreHash" && frame.size() > detail::kNmeaTagOffset) {
-        return detail::tag_with_word(out, "UNICORE ", frame, detail::kNmeaTagOffset);
+        return detail::tagWithWord(out, "UNICORE ", frame, detail::kNmeaTagOffset);
     }
     if (name == "UnicoreResp" && frame.size() > detail::kCommandTagOffset) {
         // "$command,<cmd>,response: ..."：命令名在第二个逗号之前。
-        return detail::tag_with_word(out, "UNICORE_CMD ", frame, detail::kCommandTagOffset);
+        return detail::tagWithWord(out, "UNICORE_CMD ", frame, detail::kCommandTagOffset);
     }
-    return Receiver::frame_tag(dec, frame, out);
+    return Receiver::frameTag(dec, frame, out);
 }
 
-uint32_t UnicoreReceiver::output_mask(Model model) const noexcept
+uint32_t UnicoreReceiver::outputMask(Model model) const noexcept
 {
     constexpr uint32_t kSatsInfoBit = 1U << static_cast<uint32_t>(OutputMsg::kSatsInfo);
     constexpr uint32_t kHeadingBit = 1U << static_cast<uint32_t>(OutputMsg::kHeading);
     constexpr uint32_t kGstBit = 1U << static_cast<uint32_t>(OutputMsg::kGst);
     // UM9xx 都能输出 GPGST（旧脚本一直下发 GPGST），基线基类默认只含 GGA/RMC/GSA/GSV。
-    uint32_t mask = Receiver::output_mask(model) | kSatsInfoBit | kGstBit;
+    uint32_t mask = Receiver::outputMask(model) | kSatsInfoBit | kGstBit;
     // 经虚函数问能力：Um982Receiver 覆盖 caps() 后这里自动带上 HEADINGA。
     if ((caps(model) & cap::kHeading) != 0U) {
         mask |= kHeadingBit; // 仅双天线型号（UM982）有 HEADINGA
@@ -860,8 +860,8 @@ uint32_t UnicoreReceiver::output_mask(Model model) const noexcept
     return mask;
 }
 
-fw::Status UnicoreReceiver::build_output(OutputMsg msg, uint32_t period_ms, Model model,
-                                         const OutputPlan &plan, CmdBuf &out) const noexcept
+fw::Status UnicoreReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model model,
+                                        const OutputPlan &plan, CmdBuf &out) const noexcept
 {
     const auto idx = static_cast<size_t>(static_cast<uint8_t>(msg));
     if ((msg == OutputMsg::kNone) || (idx >= kOutputNames.size())) {
@@ -873,8 +873,8 @@ fw::Status UnicoreReceiver::build_output(OutputMsg msg, uint32_t period_ms, Mode
     }
     const std::string_view name{kOutputNames[idx]};
     // period 0 = 关闭该类；旧 apply 旁路同样用 "UNLOG COMn <name>"。
-    const bool written = (period_ms == 0U) ? cmd_unlog_msg(out, name, plan.port)
-                                           : cmd_log_msg(out, name, plan.port, period_ms);
+    const bool written = (periodMs == 0U) ? cmdUnlogMsg(out, name, plan.port)
+                                          : cmdLogMsg(out, name, plan.port, periodMs);
     if (!written) {
         out.clear();
         return fw::Status::kInvalidArg;
@@ -893,18 +893,18 @@ uint32_t Um982Receiver::caps(Model model) const noexcept
     return UnicoreReceiver::caps(model) | cap::kHeading;
 }
 
-const Receiver &Um982Receiver::for_model(Model) const noexcept
+const Receiver &Um982Receiver::forModel(Model) const noexcept
 {
     return *this;
 }
 
-const Receiver &um982_receiver() noexcept
+const Receiver &um982Receiver() noexcept
 {
     return detail::kUm982Receiver;
 }
 
 /** @brief UM980/UM981 基准型号叶子单例。 @return constinit 实例的引用。 @note 无运行期状态，ISR 安全。 */
-const Receiver &unicore_receiver() noexcept
+const Receiver &unicoreReceiver() noexcept
 {
     return detail::kUm980Receiver;
 }

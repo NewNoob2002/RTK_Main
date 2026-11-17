@@ -455,9 +455,9 @@ void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
         gnss_fix_version_ = fix_ver;
         cached_fix = fix;
     }
-    const bool within_window = (now_ms - cached_fix.update_ms <= kGnssFixStaleMs) ||
-                               (cached_fix.update_ms - now_ms <= kGnssClockJitterMs);
-    const bool fix_fresh = cached_fix.valid && (cached_fix.update_ms != 0U) && within_window;
+    const bool within_window = (now_ms - cached_fix.updateMs <= kGnssFixStaleMs) ||
+                               (cached_fix.updateMs - now_ms <= kGnssClockJitterMs);
+    const bool fix_fresh = cached_fix.valid && (cached_fix.updateMs != 0U) && within_window;
     const uint8_t fix_q = (fix_fresh && (cached_fix.quality != ::gnss::FixQuality::kUnknown))
                               ? static_cast<uint8_t>(cached_fix.quality)
                               : proto::alarm::kValueUnknown;
@@ -469,7 +469,7 @@ void BtLinkModule::sync_gnss_info(uint32_t now_ms) noexcept
         gnss_status_version_ = status_ver;
         device_info.gnssRunning = gnss_st.enabled && (gnss_st.state == ::gnss::State::kRunning);
         if (gnss_st.model != ::gnss::Model::kUnknown) {
-            device_info.board.assign(::gnss::model_name(gnss_st.model));
+            device_info.board.assign(::gnss::modelName(gnss_st.model));
         }
         if (gnss_st.fw_version[0] != '\0') {
             device_info.boardFw.assign(std::string_view{gnss_st.fw_version.data()});
@@ -709,7 +709,7 @@ void BtLinkModule::wait(uint32_t max_ms) noexcept
     round_start_ms_ = rtos::nowMs();
 }
 
-bool BtLinkModule::poll(uint32_t /*now_ms*/) noexcept
+bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
 {
     /* 先消费复位和白名单变化，再按真实时钟推进 tick。 */
     apply_rtcm_reset();

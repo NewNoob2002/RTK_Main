@@ -33,50 +33,50 @@ public:
     {
         return 0U;
     }
-    [[nodiscard]] bool build_probe(CmdBuf &) const noexcept override
+    [[nodiscard]] bool buildProbe(CmdBuf &) const noexcept override
     {
         return false;
     }
-    [[nodiscard]] bool match_probe(const demux::Decoder &, std::span<const uint8_t>,
-                                   ProbeResult &) const noexcept override
+    [[nodiscard]] bool matchProbe(const demux::Decoder &, std::span<const uint8_t>,
+                                  ProbeResult &) const noexcept override
     {
         return false;
     }
-    [[nodiscard]] bool rover_step(size_t, Model, const RoverConfig &,
-                                  ConfigStep &) const noexcept override
+    [[nodiscard]] bool roverStep(size_t, Model, const RoverConfig &,
+                                 ConfigStep &) const noexcept override
     {
         return false;
     }
-    [[nodiscard]] Ack classify_reply(const demux::Decoder &, std::span<const uint8_t>,
-                                     std::span<const uint8_t>) const noexcept override
+    [[nodiscard]] Ack classifyReply(const demux::Decoder &, std::span<const uint8_t>,
+                                    std::span<const uint8_t>) const noexcept override
     {
         return Ack::kNone;
     }
-    [[nodiscard]] uint32_t output_mask(Model) const noexcept override
+    [[nodiscard]] uint32_t outputMask(Model) const noexcept override
     {
         return 0U;
     }
-    [[nodiscard]] fw::Status build_output(OutputMsg, uint32_t, Model, const OutputPlan &,
-                                          CmdBuf &) const noexcept override
+    [[nodiscard]] fw::Status buildOutput(OutputMsg, uint32_t, Model, const OutputPlan &,
+                                         CmdBuf &) const noexcept override
     {
         return fw::Status::kNotSupported;
     }
-    [[nodiscard]] OutputMsg classify_frame(const demux::Decoder &,
-                                           std::span<const uint8_t>) const noexcept override
+    [[nodiscard]] OutputMsg classifyFrame(const demux::Decoder &,
+                                          std::span<const uint8_t>) const noexcept override
     {
         return OutputMsg::kNone;
     }
-    size_t frame_tag(const demux::Decoder &, std::span<const uint8_t>,
-                     std::span<char>) const noexcept override
+    size_t frameTag(const demux::Decoder &, std::span<const uint8_t>,
+                    std::span<char>) const noexcept override
     {
         return 0U;
     }
-    [[nodiscard]] bool build_readback(CmdBuf &) const noexcept override
+    [[nodiscard]] bool buildReadback(CmdBuf &) const noexcept override
     {
         return false;
     }
-    size_t match_readback(const demux::Decoder &, std::span<const uint8_t>,
-                          std::span<char>) const noexcept override
+    size_t matchReadback(const demux::Decoder &, std::span<const uint8_t>,
+                         std::span<char>) const noexcept override
     {
         return 0U;
     }
@@ -87,7 +87,7 @@ inline constexpr NullReceiver kNullReceiver{};
 } // namespace detail
 
 /** 全局“无接收机”实例。线程/ISR 安全：是（只读）。 */
-inline const Receiver &null_receiver() noexcept
+inline const Receiver &nullReceiver() noexcept
 {
     return detail::kNullReceiver;
 }

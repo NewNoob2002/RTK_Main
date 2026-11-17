@@ -39,12 +39,12 @@ const char *gnss_cache_value_name(std::string_view key, uint32_t value) noexcept
     }
     const auto narrow = static_cast<uint8_t>(value);
     if (key == "family") {
-        const auto family = gnss::family_from_u8(narrow);
-        return family.has_value() ? gnss::family_name(*family) : nullptr;
+        const auto family = gnss::familyFromU8(narrow);
+        return family.has_value() ? gnss::familyName(*family) : nullptr;
     }
     if (key == "model") {
-        const auto model = gnss::model_from_u8(narrow);
-        return model.has_value() ? gnss::model_name(*model) : nullptr;
+        const auto model = gnss::modelFromU8(narrow);
+        return model.has_value() ? gnss::modelName(*model) : nullptr;
     }
     return nullptr;
 }

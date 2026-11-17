@@ -38,41 +38,41 @@ void test_output_plan() noexcept
 
     // 默认配置、10 Hz、无 HEADINGA 能力：GGA/RMC/GSA/GST 跟频率，SATSINFOA 5 s，HEADINGA 不下发。
     const gn::OutputPlan plan = app::data::make_output_plan(def, 10U, true, 2U, 0U);
-    CHECK(plan.period_ms[idx(gn::OutputMsg::kGga)] == 100U);
-    CHECK(plan.period_ms[idx(gn::OutputMsg::kSatsInfo)] == 5000U);
-    CHECK(plan.period_ms[idx(gn::OutputMsg::kHeading)] == 0U);
-    CHECK(plan.period_ms[idx(gn::OutputMsg::kGst)] == 100U);
-    CHECK(plan.period_ms[idx(gn::OutputMsg::kRmc)] == 100U);
-    CHECK(plan.period_ms[idx(gn::OutputMsg::kGsa)] == 100U);
-    CHECK(plan.period_ms[idx(gn::OutputMsg::kGsv)] == 1000U);
+    CHECK(plan.periodMs[idx(gn::OutputMsg::kGga)] == 100U);
+    CHECK(plan.periodMs[idx(gn::OutputMsg::kSatsInfo)] == 5000U);
+    CHECK(plan.periodMs[idx(gn::OutputMsg::kHeading)] == 0U);
+    CHECK(plan.periodMs[idx(gn::OutputMsg::kGst)] == 100U);
+    CHECK(plan.periodMs[idx(gn::OutputMsg::kRmc)] == 100U);
+    CHECK(plan.periodMs[idx(gn::OutputMsg::kGsa)] == 100U);
+    CHECK(plan.periodMs[idx(gn::OutputMsg::kGsv)] == 1000U);
     CHECK(plan.port == 2U);
-    CHECK(plan.rate_hz == 10U);
+    CHECK(plan.rateHz == 10U);
 
     // 有双天线能力时 HEADINGA 才下发。
     CHECK(app::data::make_output_plan(def, 10U, true, 2U, gn::cap::kHeading)
-              .period_ms[idx(gn::OutputMsg::kHeading)] == 1000U);
+              .periodMs[idx(gn::OutputMsg::kHeading)] == 1000U);
 
     // 关掉 GSV 就是不下发（周期 0）。
-    CHECK(app::data::make_output_plan(def, 1U, false, 1U, 0U).period_ms[idx(gn::OutputMsg::kGsv)] ==
+    CHECK(app::data::make_output_plan(def, 1U, false, 1U, 0U).periodMs[idx(gn::OutputMsg::kGsv)] ==
           0U);
 
     // 掩码清零的语句不下发。
     GnssOutConfig no_gga = def;
     no_gga.mask = static_cast<uint8_t>(def.mask & ~0x01U);
     CHECK(
-        app::data::make_output_plan(no_gga, 1U, true, 2U, 0U).period_ms[idx(gn::OutputMsg::kGga)] ==
+        app::data::make_output_plan(no_gga, 1U, true, 2U, 0U).periodMs[idx(gn::OutputMsg::kGga)] ==
         0U);
 
     // 自定义间隔：正数是频率（>=50 ms），负数是周期秒，0 是关闭。
     GnssOutConfig custom = def;
     custom.intervals = {2, -2, 1, 4, 0, -5};
     const gn::OutputPlan out = app::data::make_output_plan(custom, 1U, true, 2U, gn::cap::kHeading);
-    CHECK(out.period_ms[idx(gn::OutputMsg::kGga)] == 500U);
-    CHECK(out.period_ms[idx(gn::OutputMsg::kSatsInfo)] == 2000U);
-    CHECK(out.period_ms[idx(gn::OutputMsg::kHeading)] == 1000U);
-    CHECK(out.period_ms[idx(gn::OutputMsg::kGst)] == 250U);
-    CHECK(out.period_ms[idx(gn::OutputMsg::kRmc)] == 0U);
-    CHECK(out.period_ms[idx(gn::OutputMsg::kGsa)] == 5000U);
+    CHECK(out.periodMs[idx(gn::OutputMsg::kGga)] == 500U);
+    CHECK(out.periodMs[idx(gn::OutputMsg::kSatsInfo)] == 2000U);
+    CHECK(out.periodMs[idx(gn::OutputMsg::kHeading)] == 1000U);
+    CHECK(out.periodMs[idx(gn::OutputMsg::kGst)] == 250U);
+    CHECK(out.periodMs[idx(gn::OutputMsg::kRmc)] == 0U);
+    CHECK(out.periodMs[idx(gn::OutputMsg::kGsa)] == 5000U);
 }
 
 void test_out_config_and_nvs_blob() noexcept

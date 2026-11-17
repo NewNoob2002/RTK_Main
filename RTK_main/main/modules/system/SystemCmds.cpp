@@ -236,8 +236,8 @@ int cmd_status_overview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
                  " B",
                  io_exec.rounds, io_exec.overruns, io_exec.maxRoundMs, io_exec.stackFree);
     cli::printSection("gnss");
-    cli::printKv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::state_name(gnss.state),
-                 ::gnss::model_name(gnss.model), gnss.host_baud);
+    cli::printKv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::stateName(gnss.state),
+                 ::gnss::modelName(gnss.model), gnss.host_baud);
     cli::printKv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B",
                  gnss.pipe.pushed_frames, gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
     cli::printKv("app_ring",
@@ -260,8 +260,8 @@ void print_gnss_section() noexcept
     const auto r_rd = data.gnss_app_ring.typedReaderStats(0U);
     const auto sub = data.gnss_app_sub.snapshot();
     cli::printSection("gnss");
-    cli::printKv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::state_name(gnss.state),
-                 ::gnss::model_name(gnss.model), gnss.host_baud);
+    cli::printKv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::stateName(gnss.state),
+                 ::gnss::modelName(gnss.model), gnss.host_baud);
     cli::printKv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B",
                  gnss.pipe.pushed_frames, gnss.pipe.dropped_frames, gnss.pipe.written_bytes);
     cli::printKv("app_ring",

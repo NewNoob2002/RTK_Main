@@ -25,12 +25,12 @@ namespace gnss::unicore {
  * NMEA 校验和，这些行会被 nmea 认领、读回 0 行（P3c 报告 §4.1，HIL 确认）。
  */
 inline constexpr std::size_t kResponseMaxFrame = 256;
-[[nodiscard]] bool response_first_byte(uint8_t byte) noexcept;
-[[nodiscard]] demux::Step response_step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
-[[nodiscard]] std::size_t explain_response(std::span<const uint8_t> frame,
-                                           std::span<char> out) noexcept;
+[[nodiscard]] bool responseFirstByte(uint8_t byte) noexcept;
+[[nodiscard]] demux::Step responseStep(std::span<const uint8_t> frame, std::size_t &need) noexcept;
+[[nodiscard]] std::size_t explainResponse(std::span<const uint8_t> frame,
+                                          std::span<char> out) noexcept;
 inline constexpr demux::Decoder kResponseDecoder{
-    "UnicoreResp", kResponseMaxFrame, &response_first_byte, &response_step, &explain_response};
+    "UnicoreResp", kResponseMaxFrame, &responseFirstByte, &responseStep, &explainResponse};
 
 } // namespace gnss::unicore
 
@@ -54,33 +54,33 @@ public:
     [[nodiscard]] std::span<const demux::Decoder *const> decoders() const noexcept override;
     /** UM980/UM981 能力；不含 kHeading（双天线由 Um982Receiver 覆盖）。 */
     [[nodiscard]] uint32_t caps(Model model) const noexcept override;
-    /** kUm982 → um982_receiver()，其余 → *this。 */
-    [[nodiscard]] const Receiver &for_model(Model model) const noexcept override;
-    [[nodiscard]] bool build_probe(CmdBuf &out) const noexcept override;
-    [[nodiscard]] bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                   ProbeResult &out) const noexcept override;
+    /** kUm982 → um982Receiver()，其余 → *this。 */
+    [[nodiscard]] const Receiver &forModel(Model model) const noexcept override;
+    [[nodiscard]] bool buildProbe(CmdBuf &out) const noexcept override;
+    [[nodiscard]] bool matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                  ProbeResult &out) const noexcept override;
     /** 读回命令 "CONFIG"（ADR-0012 §2.7）：UM980 回一组 $CONFIG,<port>,<config>*hh 行。 */
-    [[nodiscard]] bool build_readback(CmdBuf &out) const noexcept override;
+    [[nodiscard]] bool buildReadback(CmdBuf &out) const noexcept override;
     /** 只认 UnicoreResp 交付的 $CONFIG 行，取 "$CONFIG," 与 "*" 之间的正文（超长截断）。 */
-    size_t match_readback(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                          std::span<char> out) const noexcept override;
-    /** 按 rover_script() 的表生成第 index 个启用步骤。 */
-    [[nodiscard]] bool rover_step(size_t index, Model model, const RoverConfig &cfg,
-                                  ConfigStep &out) const noexcept override;
-    [[nodiscard]] Ack classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                     std::span<const uint8_t> sent) const noexcept override;
+    size_t matchReadback(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                         std::span<char> out) const noexcept override;
+    /** 按 roverScript() 的表生成第 index 个启用步骤。 */
+    [[nodiscard]] bool roverStep(size_t index, Model model, const RoverConfig &cfg,
+                                 ConfigStep &out) const noexcept override;
+    [[nodiscard]] Ack classifyReply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                    std::span<const uint8_t> sent) const noexcept override;
     /** 基类默认（NMEA）+ #SATSINFOA / #HEADINGA（ADR-0012 §2.6）。 */
-    [[nodiscard]] OutputMsg classify_frame(const demux::Decoder &dec,
-                                           std::span<const uint8_t> frame) const noexcept override;
+    [[nodiscard]] OutputMsg classifyFrame(const demux::Decoder &dec,
+                                          std::span<const uint8_t> frame) const noexcept override;
     /** 基类默认 + "#VERSIONA"/"$command" 专用标签。 */
-    size_t frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                     std::span<char> out) const noexcept override;
+    size_t frameTag(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                    std::span<char> out) const noexcept override;
     /** 基类默认 + SATSINFOA/GST；caps(model) 含 kHeading 时另加 HEADINGA。 */
-    [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
+    [[nodiscard]] uint32_t outputMask(Model model) const noexcept override;
     /** "<name> COMn <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）；HEADINGA 需 caps(model) 含 kHeading。 */
-    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model,
-                                          const OutputPlan &plan,
-                                          CmdBuf &out) const noexcept override;
+    [[nodiscard]] fw::Status buildOutput(OutputMsg msg, uint32_t periodMs, Model model,
+                                         const OutputPlan &plan,
+                                         CmdBuf &out) const noexcept override;
 
 protected:
     // 家族基类不可直接实例化（CPP-011）：构造/析构 protected、析构非虚，保证可平凡析构且不生成删除析构。
@@ -94,39 +94,38 @@ protected:
     };
 
     /** 基础流动站脚本（UNLOG → MODE ROVER → [CONFIG 波特率]）；型号需要额外步骤时覆盖。 */
-    [[nodiscard]] virtual std::span<const ScriptStep> rover_script() const noexcept;
+    [[nodiscard]] virtual std::span<const ScriptStep> roverScript() const noexcept;
 
-    // ---- 基础脚本的步骤（rover_script() 内的函数局部表引用它们，子类脚本可复用） ----
+    // ---- 基础脚本的步骤（roverScript() 内的函数局部表引用它们，子类脚本可复用） ----
     /** 第 0 步 "UNLOG COMn"：先关掉全部输出，再由输出阶段按 OutputPlan 重新开启。 */
-    [[nodiscard]] static bool step_unlog_all(const RoverConfig &cfg, ConfigStep &out) noexcept;
+    [[nodiscard]] static bool stepUnlogAll(const RoverConfig &cfg, ConfigStep &out) noexcept;
     /** 第 1 步 "MODE ROVER"。 */
-    [[nodiscard]] static bool step_mode_rover(const RoverConfig &cfg, ConfigStep &out) noexcept;
+    [[nodiscard]] static bool stepModeRover(const RoverConfig &cfg, ConfigStep &out) noexcept;
     /** 第 2 步 "CONFIG COMn <baud>"：发送后不等应答，主机随即切换波特率。 */
-    [[nodiscard]] static bool step_port_baud(const RoverConfig &cfg, ConfigStep &out) noexcept;
+    [[nodiscard]] static bool stepPortBaud(const RoverConfig &cfg, ConfigStep &out) noexcept;
     /** 步骤启用条件：总是。 */
-    [[nodiscard]] static bool step_always(const RoverConfig &cfg) noexcept;
-    /** 步骤启用条件：cfg.port_baud != 0。 */
-    [[nodiscard]] static bool step_if_port_baud(const RoverConfig &cfg) noexcept;
+    [[nodiscard]] static bool stepAlways(const RoverConfig &cfg) noexcept;
+    /** 步骤启用条件：cfg.portBaud != 0。 */
+    [[nodiscard]] static bool stepIfPortBaud(const RoverConfig &cfg) noexcept;
 
     // ---- 命令库：只往 out 写一条完整命令（含 \r\n，先清空），失败返回 false ----
-    [[nodiscard]] static bool cmd_unlog(CmdBuf &out, uint8_t port) noexcept; // "UNLOG COMn"
-    [[nodiscard]] static bool cmd_mode_rover(CmdBuf &out) noexcept;          // "MODE ROVER"
-    [[nodiscard]] static bool cmd_config_baud(CmdBuf &out, uint8_t port,
-                                              uint32_t baud) noexcept; // "CONFIG COMn <baud>"
-    [[nodiscard]] static bool cmd_log_msg(CmdBuf &out, std::string_view name, uint8_t port,
-                                          uint32_t period_ms) noexcept; // "<name> COMn <period>"
-    [[nodiscard]] static bool cmd_unlog_msg(CmdBuf &out, std::string_view name,
-                                            uint8_t port) noexcept;    // "UNLOG COMn <name>"
-    [[nodiscard]] static bool cmd_version_query(CmdBuf &out) noexcept; // "VERSIONA"
+    [[nodiscard]] static bool cmdUnlog(CmdBuf &out, uint8_t port) noexcept; // "UNLOG COMn"
+    [[nodiscard]] static bool cmdModeRover(CmdBuf &out) noexcept;           // "MODE ROVER"
+    [[nodiscard]] static bool cmdConfigBaud(CmdBuf &out, uint8_t port,
+                                            uint32_t baud) noexcept; // "CONFIG COMn <baud>"
+    [[nodiscard]] static bool cmdLogMsg(CmdBuf &out, std::string_view name, uint8_t port,
+                                        uint32_t periodMs) noexcept; // "<name> COMn <period>"
+    [[nodiscard]] static bool cmdUnlogMsg(CmdBuf &out, std::string_view name,
+                                          uint8_t port) noexcept;    // "UNLOG COMn <name>"
+    [[nodiscard]] static bool cmdVersionQuery(CmdBuf &out) noexcept; // "VERSIONA"
 
     // ---- 应答解析：每个函数只判一件事 ----
-    [[nodiscard]] static bool resp_has_valid_tail(std::span<const uint8_t> frame) noexcept;
-    [[nodiscard]] static std::optional<size_t>
-    resp_find_tag(std::span<const uint8_t> frame) noexcept;
-    [[nodiscard]] static bool resp_echo_matches(std::span<const uint8_t> frame, size_t tag_pos,
-                                                std::span<const uint8_t> sent) noexcept;
-    [[nodiscard]] static std::span<const uint8_t> resp_text(std::span<const uint8_t> frame,
-                                                            size_t tag_pos) noexcept;
+    [[nodiscard]] static bool respHasValidTail(std::span<const uint8_t> frame) noexcept;
+    [[nodiscard]] static std::optional<size_t> respFindTag(std::span<const uint8_t> frame) noexcept;
+    [[nodiscard]] static bool respEchoMatches(std::span<const uint8_t> frame, size_t tagPos,
+                                              std::span<const uint8_t> sent) noexcept;
+    [[nodiscard]] static std::span<const uint8_t> respText(std::span<const uint8_t> frame,
+                                                           size_t tagPos) noexcept;
 };
 
 /** UM980/UM981 基准型号叶子类：无覆盖，家族默认行为即基准型号行为（name() 仍为 "unicore"）。 */
@@ -144,12 +143,12 @@ public:
     /** 家族能力 + kHeading。 */
     [[nodiscard]] uint32_t caps(Model model) const noexcept override;
     /** 型号驱动不再细分：返回 *this。 */
-    [[nodiscard]] const Receiver &for_model(Model model) const noexcept override;
+    [[nodiscard]] const Receiver &forModel(Model model) const noexcept override;
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */
-[[nodiscard]] const Receiver &unicore_receiver() noexcept;
-/** UM982 型号驱动单例；一般经 unicore_receiver().for_model(Model::kUm982) 取得。 */
-[[nodiscard]] const Receiver &um982_receiver() noexcept;
+[[nodiscard]] const Receiver &unicoreReceiver() noexcept;
+/** UM982 型号驱动单例；一般经 unicoreReceiver().forModel(Model::kUm982) 取得。 */
+[[nodiscard]] const Receiver &um982Receiver() noexcept;
 
 } // namespace gnss

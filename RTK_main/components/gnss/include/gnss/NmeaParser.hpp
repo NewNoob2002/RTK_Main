@@ -18,7 +18,7 @@ namespace gnss {
 enum class NmeaResult : uint8_t {
     kIgnored,   // 不关心的语句类型（如 VTG、ZDA）
     kFix,       // GGA 已更新 fix()
-    kAux,       // RMC/GSA 已更新 fix() 的辅助字段（不改 update_ms）
+    kAux,       // RMC/GSA 已更新 fix() 的辅助字段（不改 updateMs）
     kSatsPart,  // GSV 收到一部分，尚未成轮
     kSatsReady, // 一轮 GSV（所有系统）收齐，sats() 已整体替换
     kMalformed, // 字段数量/格式错误，未改变任何状态
@@ -42,11 +42,11 @@ public:
     NmeaParser &operator=(const NmeaParser &) = delete;
 
     /**
-     * 处理一条完整语句（含 $ 与 \r\n）。now_ms 写入 GGA 的 Fix::update_ms 与成轮的 SatTable::update_ms。
+     * 处理一条完整语句（含 $ 与 \r\n）。nowMs 写入 GGA 的 Fix::updateMs 与成轮的 SatTable::updateMs。
      * GSA used 标记：同一历元内收到的所有 GSA 的 PRN 并集，在下一次 kSatsReady 时合并进卫星表。
      * GSV 成轮判定：一个系统的“总条数”语句收齐算该系统完成；遇到 GGA（新历元）时把已完成的系统发布。
      */
-    NmeaResult feed(std::span<const uint8_t> sentence, uint32_t now_ms) noexcept;
+    NmeaResult feed(std::span<const uint8_t> sentence, uint32_t nowMs) noexcept;
 
     [[nodiscard]] const Fix &fix() const noexcept
     {

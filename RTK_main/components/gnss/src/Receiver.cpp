@@ -23,34 +23,34 @@ constexpr size_t kNmeaTagLen = 3U;    // "GGA"/"GSV"…
 constexpr size_t kNmeaCommaPos = 6U;
 constexpr size_t kNmeaHeaderLen = 7U;
 
-bool tag_is(std::span<const uint8_t> frame, const char *tag) noexcept
+bool tagIs(std::span<const uint8_t> frame, const char *tag) noexcept
 {
     return std::memcmp(frame.subspan(kNmeaTalkerEnd, kNmeaTagLen).data(), tag, kNmeaTagLen) == 0;
 }
 
 } // namespace
 
-uint32_t Receiver::output_mask(Model) const noexcept
+uint32_t Receiver::outputMask(Model) const noexcept
 {
     // 所有驱动都能输出的四类 NMEA；SATSINFO/HEADING 等厂家报文由驱动追加。
     return bit(OutputMsg::kGga) | bit(OutputMsg::kRmc) | bit(OutputMsg::kGsa) |
            bit(OutputMsg::kGsv);
 }
 
-const Receiver &Receiver::for_model(Model) const noexcept
+const Receiver &Receiver::forModel(Model) const noexcept
 {
     // 没有型号子类的驱动：型号就是自身（ADR-0012 §2.8）。
     return *this;
 }
 
-fw::Status Receiver::build_output(OutputMsg, uint32_t, Model, const OutputPlan &,
-                                  CmdBuf &) const noexcept
+fw::Status Receiver::buildOutput(OutputMsg, uint32_t, Model, const OutputPlan &,
+                                 CmdBuf &) const noexcept
 {
     return fw::Status::kNotSupported; // P3b 在驱动里实现
 }
 
-OutputMsg Receiver::classify_frame(const demux::Decoder &,
-                                   std::span<const uint8_t> frame) const noexcept
+OutputMsg Receiver::classifyFrame(const demux::Decoder &,
+                                  std::span<const uint8_t> frame) const noexcept
 {
     // 通用 NMEA：忽略 talker（GP/GN/BD…），只按 3 位语句名归类。
     // 厂家私有帧（#SATSINFOA 等）由此处返回 kNone，由对应驱动覆盖后追加。
@@ -58,55 +58,55 @@ OutputMsg Receiver::classify_frame(const demux::Decoder &,
         frame[kNmeaCommaPos] != static_cast<uint8_t>(',')) {
         return OutputMsg::kNone;
     }
-    if (tag_is(frame, "GGA")) {
+    if (tagIs(frame, "GGA")) {
         return OutputMsg::kGga;
     }
-    if (tag_is(frame, "GST")) {
+    if (tagIs(frame, "GST")) {
         return OutputMsg::kGst;
     }
-    if (tag_is(frame, "RMC")) {
+    if (tagIs(frame, "RMC")) {
         return OutputMsg::kRmc;
     }
-    if (tag_is(frame, "GSA")) {
+    if (tagIs(frame, "GSA")) {
         return OutputMsg::kGsa;
     }
-    if (tag_is(frame, "GSV")) {
+    if (tagIs(frame, "GSV")) {
         return OutputMsg::kGsv;
     }
     return OutputMsg::kNone;
 }
 
-size_t Receiver::frame_tag(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                           std::span<char> out) const noexcept
+size_t Receiver::frameTag(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                          std::span<char> out) const noexcept
 {
     // 与 main 原 describe_frame() 文本一致（P3b 替换后日志不变）。
     const std::string_view name{dec.name};
     if (name == "NMEA" && frame.size() > detail::kNmeaTagLen) {
-        return detail::tag_with_word(out, "NMEA ", frame, detail::kNmeaTagOffset);
+        return detail::tagWithWord(out, "NMEA ", frame, detail::kNmeaTagOffset);
     }
     if (name == "RTCM3" && frame.size() > detail::kRtcmTagOffset + 1U) {
         const uint32_t msg =
             (static_cast<uint32_t>(frame[detail::kRtcmTagOffset]) << detail::kRtcmMsgShift) |
             (static_cast<uint32_t>(frame[detail::kRtcmTagOffset + 1U]) >> detail::kRtcmMsgShift);
-        const size_t pos = detail::append_text(out, 0U, "RTCM3 ");
-        return detail::append_uint(out, pos, msg & detail::kRtcmMsgMask);
+        const size_t pos = detail::appendText(out, 0U, "RTCM3 ");
+        return detail::appendUint(out, pos, msg & detail::kRtcmMsgMask);
     }
     if (name == "UBX" && frame.size() > detail::kUbxClassOffset + 1U) {
-        size_t pos = detail::append_text(out, 0U, "UBX 0x");
-        pos = detail::append_hex2(out, pos, frame[detail::kUbxClassOffset]);
-        pos = detail::append_text(out, pos, "/0x");
-        return detail::append_hex2(out, pos, frame[detail::kUbxClassOffset + 1U]);
+        size_t pos = detail::appendText(out, 0U, "UBX 0x");
+        pos = detail::appendHex2(out, pos, frame[detail::kUbxClassOffset]);
+        pos = detail::appendText(out, pos, "/0x");
+        return detail::appendHex2(out, pos, frame[detail::kUbxClassOffset + 1U]);
     }
-    return detail::append_text(out, 0U, name);
+    return detail::appendText(out, 0U, name);
 }
 
-bool Receiver::build_readback(CmdBuf &) const noexcept
+bool Receiver::buildReadback(CmdBuf &) const noexcept
 {
     return false; // P3c
 }
 
-size_t Receiver::match_readback(const demux::Decoder &, std::span<const uint8_t>,
-                                std::span<char>) const noexcept
+size_t Receiver::matchReadback(const demux::Decoder &, std::span<const uint8_t>,
+                               std::span<char>) const noexcept
 {
     return 0U; // P3c
 }

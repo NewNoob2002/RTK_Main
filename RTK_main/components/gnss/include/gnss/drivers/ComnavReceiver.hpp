@@ -18,12 +18,12 @@ namespace gnss::comnav {
 
 /** "<OK\r\n" / "<ERROR:...\r\n" 等以 '<' 开头的应答行解码器（可打印 ASCII 直到 \r\n，无校验）。 */
 inline constexpr std::size_t kPromptMaxFrame = 128;
-[[nodiscard]] bool prompt_first_byte(uint8_t byte) noexcept;
-[[nodiscard]] demux::Step prompt_step(std::span<const uint8_t> frame, std::size_t &need) noexcept;
-[[nodiscard]] std::size_t explain_prompt(std::span<const uint8_t> frame,
-                                         std::span<char> out) noexcept;
-inline constexpr demux::Decoder kPromptDecoder{"ComnavPrompt", kPromptMaxFrame, &prompt_first_byte,
-                                               &prompt_step, &explain_prompt};
+[[nodiscard]] bool promptFirstByte(uint8_t byte) noexcept;
+[[nodiscard]] demux::Step promptStep(std::span<const uint8_t> frame, std::size_t &need) noexcept;
+[[nodiscard]] std::size_t explainPrompt(std::span<const uint8_t> frame,
+                                        std::span<char> out) noexcept;
+inline constexpr demux::Decoder kPromptDecoder{"ComnavPrompt", kPromptMaxFrame, &promptFirstByte,
+                                               &promptStep, &explainPrompt};
 
 } // namespace gnss::comnav
 
@@ -45,19 +45,19 @@ public:
     [[nodiscard]] std::string_view name() const noexcept override;
     [[nodiscard]] std::span<const demux::Decoder *const> decoders() const noexcept override;
     [[nodiscard]] uint32_t caps(Model model) const noexcept override;
-    [[nodiscard]] bool build_probe(CmdBuf &out) const noexcept override;
-    [[nodiscard]] bool match_probe(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                   ProbeResult &out) const noexcept override;
-    [[nodiscard]] bool rover_step(size_t index, Model model, const RoverConfig &cfg,
-                                  ConfigStep &out) const noexcept override;
-    [[nodiscard]] Ack classify_reply(const demux::Decoder &dec, std::span<const uint8_t> frame,
-                                     std::span<const uint8_t> sent) const noexcept override;
+    [[nodiscard]] bool buildProbe(CmdBuf &out) const noexcept override;
+    [[nodiscard]] bool matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                  ProbeResult &out) const noexcept override;
+    [[nodiscard]] bool roverStep(size_t index, Model model, const RoverConfig &cfg,
+                                 ConfigStep &out) const noexcept override;
+    [[nodiscard]] Ack classifyReply(const demux::Decoder &dec, std::span<const uint8_t> frame,
+                                    std::span<const uint8_t> sent) const noexcept override;
     /** K803 只能输出 GGA/RMC/GSA/GSV；SATSINFOA/HEADINGA/GST 不支持。 */
-    [[nodiscard]] uint32_t output_mask(Model model) const noexcept override;
+    [[nodiscard]] uint32_t outputMask(Model model) const noexcept override;
     /** "LOG COMn <name> ONTIME <period>" / "UNLOG COMn <name>"（ADR-0012 §2.4）。 */
-    [[nodiscard]] fw::Status build_output(OutputMsg msg, uint32_t period_ms, Model model,
-                                          const OutputPlan &plan,
-                                          CmdBuf &out) const noexcept override;
+    [[nodiscard]] fw::Status buildOutput(OutputMsg msg, uint32_t periodMs, Model model,
+                                         const OutputPlan &plan,
+                                         CmdBuf &out) const noexcept override;
 
 protected:
     // 家族基类不可直接实例化（CPP-011）：构造/析构 protected、析构非虚，保证可平凡析构且不生成删除析构。
@@ -65,21 +65,21 @@ protected:
     ~ComnavReceiver() = default;
 
     // ---- 命令库：只往 out 写一条完整命令（含 \r\n，先清空），失败返回 false ----
-    [[nodiscard]] static bool cmd_unlog_all(CmdBuf &out, uint8_t port) noexcept; // "UNLOGALL COMn"
-    [[nodiscard]] static bool cmd_mode_rover(CmdBuf &out) noexcept;              // "MODE ROVER"
-    [[nodiscard]] static bool cmd_com_baud(CmdBuf &out, uint8_t port,
-                                           uint32_t baud) noexcept; // "COM COMn <baud>"
+    [[nodiscard]] static bool cmdUnlogAll(CmdBuf &out, uint8_t port) noexcept; // "UNLOGALL COMn"
+    [[nodiscard]] static bool cmdModeRover(CmdBuf &out) noexcept;              // "MODE ROVER"
+    [[nodiscard]] static bool cmdComBaud(CmdBuf &out, uint8_t port,
+                                         uint32_t baud) noexcept; // "COM COMn <baud>"
     [[nodiscard]] static bool
-    cmd_log_ontime(CmdBuf &out, std::string_view name, uint8_t port,
-                   uint32_t period_ms) noexcept; // "LOG COMn <name> ONTIME <period>"
-    [[nodiscard]] static bool cmd_unlog_msg(CmdBuf &out, std::string_view name,
-                                            uint8_t port) noexcept;    // "UNLOG COMn <name>"
-    [[nodiscard]] static bool cmd_version_query(CmdBuf &out) noexcept; // "LOG VERSIONA ONCE"
+    cmdLogOntime(CmdBuf &out, std::string_view name, uint8_t port,
+                 uint32_t periodMs) noexcept; // "LOG COMn <name> ONTIME <period>"
+    [[nodiscard]] static bool cmdUnlogMsg(CmdBuf &out, std::string_view name,
+                                          uint8_t port) noexcept;    // "UNLOG COMn <name>"
+    [[nodiscard]] static bool cmdVersionQuery(CmdBuf &out) noexcept; // "LOG VERSIONA ONCE"
 
     // ---- 应答判定：只判成功/失败，具体文本不进主流程 ----
-    [[nodiscard]] static bool resp_is_ok(std::span<const uint8_t> frame) noexcept; // 以 "<OK" 开头
+    [[nodiscard]] static bool respIsOk(std::span<const uint8_t> frame) noexcept; // 以 "<OK" 开头
     [[nodiscard]] static bool
-    resp_is_error(std::span<const uint8_t> frame) noexcept; // 以 "<ERROR" 开头
+    respIsError(std::span<const uint8_t> frame) noexcept; // 以 "<ERROR" 开头
 };
 
 /** K803 基准型号叶子类：无覆盖，家族默认行为即 K803 行为（name() 仍为 "comnav"）。 */
@@ -89,6 +89,6 @@ public:
 };
 
 /** 驱动单例（.cpp 内 constinit 静态对象）。线程/ISR 安全：是（只读）。 */
-[[nodiscard]] const Receiver &comnav_receiver() noexcept;
+[[nodiscard]] const Receiver &comnavReceiver() noexcept;
 
 } // namespace gnss

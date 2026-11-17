@@ -139,11 +139,11 @@ gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, boo
     // 下标与 gnss::OutputMsg 一致（kGga=0 … kGsa=5），App 侧 6 项与驱动 7 项共用前缀。
     for (size_t i = 0; i < kGnssAppMsgCount; ++i) {
         if ((out.mask & (1U << i)) == 0U) {
-            plan.period_ms[i] = 0U;
+            plan.periodMs[i] = 0U;
             continue;
         }
         if (out.intervals[i] != dflt.intervals[i]) {
-            plan.period_ms[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
+            plan.periodMs[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
             continue;
         }
         // 默认值：GGA/RMC/GSA/GST 跟定位频率（与 P3a 流动站脚本一致）；SATSINFOA 按 gnss/out 默认 5 s
@@ -153,16 +153,16 @@ gnss::OutputPlan make_output_plan(const GnssOutConfig &out, uint8_t rate_hz, boo
                             (i == static_cast<size_t>(gnss::OutputMsg::kGsa)) ||
                             (i == static_cast<size_t>(gnss::OutputMsg::kGst));
         if (locate) {
-            plan.period_ms[i] = locate_period_ms;
+            plan.periodMs[i] = locate_period_ms;
         } else if (i == static_cast<size_t>(gnss::OutputMsg::kHeading)) {
-            plan.period_ms[i] = ((caps & gnss::cap::kHeading) != 0U) ? kOneSecondMs : 0U;
+            plan.periodMs[i] = ((caps & gnss::cap::kHeading) != 0U) ? kOneSecondMs : 0U;
         } else {
-            plan.period_ms[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
+            plan.periodMs[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
         }
     }
-    plan.period_ms[static_cast<size_t>(gnss::OutputMsg::kGsv)] = gsv ? kOneSecondMs : 0U;
+    plan.periodMs[static_cast<size_t>(gnss::OutputMsg::kGsv)] = gsv ? kOneSecondMs : 0U;
     plan.port = port;
-    plan.rate_hz = hz;
+    plan.rateHz = hz;
     return plan;
 }
 

@@ -1,4 +1,4 @@
-// 帧标签（frame_tag）的公共小工具：把帧里的可打印词与文本/数字拼进缓冲。
+// 帧标签（frameTag）的公共小工具：把帧里的可打印词与文本/数字拼进缓冲。
 // 不用 printf 族：帧标签在链路任务里生成，vsnprintf 代价高且触发 vararg 规范告警。
 // 仅组件内部使用（src/ 私有头），不参与公共接口。
 // 线程/ISR 安全：是（纯函数，不阻塞、不分配）。
@@ -22,7 +22,7 @@ inline constexpr size_t kCommandTagOffset = 9U;
 /** RTCM3 消息号占 12 位，起点为长度字段第 1 字节。 */
 inline constexpr size_t kRtcmTagOffset = 3U;
 inline constexpr uint32_t kRtcmMsgShift = 4U; // RTCM3 头：12 位消息号横跨两字节，高 8 位左移 4
-/** 半字节位宽（十六进制一位），append_hex2 用。 */
+/** 半字节位宽（十六进制一位），appendHex2 用。 */
 inline constexpr uint32_t kNibbleShift = 4U;
 inline constexpr uint32_t kRtcmMsgMask = 0x0FFFU;
 /** 半字节掩码（十六进制一位）。 */
@@ -38,7 +38,7 @@ inline constexpr size_t kMaxUint32Digits = 10U;
 inline constexpr uint32_t kDecimalRadix = 10U;
 
 /** 把 frame[start, size) 的 ASCII 名字拷进 out（最多 out.size()-1 字节），返回写入长度。 */
-inline size_t copy_word(std::span<const uint8_t> frame, size_t start, std::span<char> out) noexcept
+inline size_t copyWord(std::span<const uint8_t> frame, size_t start, std::span<char> out) noexcept
 {
     size_t len = 0U;
     for (size_t i = start; (i < frame.size()) && ((len + 1U) < out.size()); ++i) {
@@ -56,7 +56,7 @@ inline size_t copy_word(std::span<const uint8_t> frame, size_t start, std::span<
 }
 
 /** 把 text 追加到 out[pos..]，返回新的写入长度（缓冲不足时截断）。 */
-inline size_t append_text(std::span<char> out, size_t pos, std::string_view text) noexcept
+inline size_t appendText(std::span<char> out, size_t pos, std::string_view text) noexcept
 {
     for (const char ch : text) {
         if ((pos + 1U) >= out.size()) {
@@ -76,7 +76,7 @@ inline size_t append_text(std::span<char> out, size_t pos, std::string_view text
  * @param  value: 待写数值
  * @retval 新的写入长度（缓冲不足时截断）
  */
-inline size_t append_uint(std::span<char> out, size_t pos, uint32_t value) noexcept
+inline size_t appendUint(std::span<char> out, size_t pos, uint32_t value) noexcept
 {
     std::array<char, kMaxUint32Digits> digits{};
     size_t len = 0U;
@@ -108,7 +108,7 @@ inline size_t append_uint(std::span<char> out, size_t pos, uint32_t value) noexc
  * @param  value: 待写字节
  * @retval 新的写入长度（缓冲不足时保持 pos）
  */
-inline size_t append_hex2(std::span<char> out, size_t pos, uint8_t value) noexcept
+inline size_t appendHex2(std::span<char> out, size_t pos, uint8_t value) noexcept
 {
     constexpr std::string_view kDigits = "0123456789abcdef";
     const auto high =
@@ -124,14 +124,14 @@ inline size_t append_hex2(std::span<char> out, size_t pos, uint8_t value) noexce
 }
 
 /** 组成 "<prefix><frame[start..] 的可打印词>"，返回写入长度。 */
-inline size_t tag_with_word(std::span<char> out, std::string_view prefix,
-                            std::span<const uint8_t> frame, size_t start) noexcept
+inline size_t tagWithWord(std::span<char> out, std::string_view prefix,
+                          std::span<const uint8_t> frame, size_t start) noexcept
 {
-    const size_t pos = append_text(out, 0U, prefix);
+    const size_t pos = appendText(out, 0U, prefix);
     if ((pos == 0U) || (pos + 1U) >= out.size()) {
         return pos;
     }
-    return pos + copy_word(frame, start, out.subspan(pos));
+    return pos + copyWord(frame, start, out.subspan(pos));
 }
 
 /**
@@ -140,7 +140,7 @@ inline size_t tag_with_word(std::span<char> out, std::string_view prefix,
  * @param  prefix: 前缀文本
  * @retval true 命中；false 长度不足或不匹配
  */
-inline bool starts_with(std::span<const uint8_t> frame, std::string_view prefix) noexcept
+inline bool startsWith(std::span<const uint8_t> frame, std::string_view prefix) noexcept
 {
     size_t len = 0U;
     while (len < prefix.size()) {

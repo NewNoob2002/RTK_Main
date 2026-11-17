@@ -421,11 +421,11 @@ const char *result_text(uint32_t value) noexcept
 const char *gnss_family_text(uint32_t value) noexcept
 {
     // 家族名集中在 gnss 组件（ADR-0012 §2.2），越界保护也用它自己的取值范围。
-    const auto family = ::gnss::family_from_u8(static_cast<uint8_t>(value));
+    const auto family = ::gnss::familyFromU8(static_cast<uint8_t>(value));
     if (!family.has_value()) {
         return "?";
     }
-    return ::gnss::family_name(*family);
+    return ::gnss::familyName(*family);
 }
 #endif
 
@@ -465,16 +465,16 @@ void append_value(char *out, size_t cap, size_t &pos, TraceValue value,
         break;
 #if RTK_GNSS_ENABLED
     case TraceValue::kGnssStateA:
-        append(out, cap, pos, "%s", ::gnss::state_name(static_cast<::gnss::State>(ev.a)));
+        append(out, cap, pos, "%s", ::gnss::stateName(static_cast<::gnss::State>(ev.a)));
         break;
     case TraceValue::kGnssStateB:
-        append(out, cap, pos, "%s", ::gnss::state_name(static_cast<::gnss::State>(ev.b)));
+        append(out, cap, pos, "%s", ::gnss::stateName(static_cast<::gnss::State>(ev.b)));
         break;
     case TraceValue::kGnssFamilyA:
         append(out, cap, pos, "%s", gnss_family_text(ev.a));
         break;
     case TraceValue::kGnssModelA:
-        append(out, cap, pos, "%s", ::gnss::model_name(static_cast<::gnss::Model>(ev.a)));
+        append(out, cap, pos, "%s", ::gnss::modelName(static_cast<::gnss::Model>(ev.a)));
         break;
 #endif
     case TraceValue::kSppStageA:

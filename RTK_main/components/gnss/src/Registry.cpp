@@ -1,4 +1,4 @@
-// 驱动注册与型号元数据：按构建开关从 DriverList.inc 生成 enabled_receivers()（ADR-0012 §2.2/§2.3）。
+// 驱动注册与型号元数据：按构建开关从 DriverList.inc 生成 enabledReceivers()（ADR-0012 §2.2/§2.3）。
 // 线程安全：是（返回命名空间作用域的常量初始化地址表，无运行期状态）；可在任意任务/ISR 取用。
 // 堆：不使用。构建开关：IDF 下 CONFIG_RTK_GNSS_DRV_<D>，host 下 RTK_GNSS_DRV_<D>（CMake 转为同名宏）。
 #include <array>
@@ -29,14 +29,14 @@ constinit const std::array<const Receiver *, kEnabledCount> kReceivers{
  * @return 常量初始化数组的 span（Unicore → u-blox → ComNav，未启用的驱动不出现）。
  * @note 无运行期状态，可在任意任务/ISR 调用。
  */
-std::span<const Receiver *const> enabled_receivers() noexcept
+std::span<const Receiver *const> enabledReceivers() noexcept
 {
     return kReceivers;
 }
 
-const Receiver *receiver_for(Family family) noexcept
+const Receiver *receiverFor(Family family) noexcept
 {
-    for (const Receiver *receiver : enabled_receivers()) {
+    for (const Receiver *receiver : enabledReceivers()) {
         if (receiver->family() == family) {
             return receiver;
         }
@@ -44,7 +44,7 @@ const Receiver *receiver_for(Family family) noexcept
     return nullptr;
 }
 
-const char *model_name(Model model) noexcept
+const char *modelName(Model model) noexcept
 {
     switch (model) {
     case Model::kUm980:
@@ -63,7 +63,7 @@ const char *model_name(Model model) noexcept
     }
 }
 
-Family family_of(Model model) noexcept
+Family familyOf(Model model) noexcept
 {
     switch (model) {
     case Model::kUm980:
@@ -80,7 +80,7 @@ Family family_of(Model model) noexcept
     }
 }
 
-const char *family_name(Family family) noexcept
+const char *familyName(Family family) noexcept
 {
     switch (family) {
     case Family::kUnicore:
@@ -95,7 +95,7 @@ const char *family_name(Family family) noexcept
     }
 }
 
-std::optional<Family> family_from_u8(uint8_t value) noexcept
+std::optional<Family> familyFromU8(uint8_t value) noexcept
 {
     // NVS 里的家族号只可能来自本固件写入；越界值（旧格式/损坏）返回 nullopt，由调用方决定回落策略。
     switch (value) {
@@ -112,7 +112,7 @@ std::optional<Family> family_from_u8(uint8_t value) noexcept
     }
 }
 
-std::optional<Model> model_from_u8(uint8_t value) noexcept
+std::optional<Model> modelFromU8(uint8_t value) noexcept
 {
     switch (value) {
     case static_cast<uint8_t>(Model::kUm980):

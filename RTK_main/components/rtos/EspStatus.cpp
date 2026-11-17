@@ -1,5 +1,5 @@
 // ESP-IDF 错误码到 fw::Status 的唯一映射点（CPP-014），以及单调毫秒时钟。
-// 由各组件在 IDF 边界调用；from_esp_err 是纯映射，now_ms 只读 esp_timer，均不阻塞且 ISR 安全。
+// 由各组件在 IDF 边界调用；from_esp_err 是纯映射，nowMs 只读 esp_timer，均不阻塞且 ISR 安全。
 
 #include "rtos/EspStatus.hpp"
 

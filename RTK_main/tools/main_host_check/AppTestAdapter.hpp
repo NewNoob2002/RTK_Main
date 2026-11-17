@@ -207,7 +207,7 @@ void persist_whitelist(uint32_t now_ms, bool force = false)
         static_cast<void>(app_context().storage.poll(now_ms));
     }
 }
-void process_commands(uint32_t /*now_ms*/)
+void process_commands(uint32_t /*nowMs*/)
 {
     Command queued{};
     while (s_command_queue.receive(queued, 0)) {

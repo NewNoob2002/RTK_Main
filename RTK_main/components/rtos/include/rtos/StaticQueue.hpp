@@ -45,7 +45,7 @@ public:
         }
     }
 
-    /** 入队；timeout_ms=0 不等待。未初始化或超时返回 false。 */
+    /** 入队；timeoutMs=0 不等待。未初始化或超时返回 false。 */
     [[nodiscard]] bool send(const T &item, uint32_t timeoutMs) noexcept
     {
         if (handle_ == nullptr) {
@@ -54,7 +54,7 @@ public:
         return xQueueSend(handle_, &item, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
     }
 
-    /** 出队；timeout_ms=0 不等待。未初始化或超时返回 false。 */
+    /** 出队；timeoutMs=0 不等待。未初始化或超时返回 false。 */
     [[nodiscard]] bool receive(T &item, uint32_t timeoutMs) noexcept
     {
         if (handle_ == nullptr) {

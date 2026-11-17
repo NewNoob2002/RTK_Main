@@ -67,12 +67,12 @@ constexpr uint8_t kDollarSign = 0x24U;
 /**
  * @brief 拼一条带 XOR 校验的 `$...` 行
  * @param body: '$' 与 '*' 之间的全部字符
- * @param with_dollar: true 表示把 '$' 也计入校验（UM980 R4.10 的实测行为）
+ * @param withDollar: true 表示把 '$' 也计入校验（UM980 R4.10 的实测行为）
  * @retval line: 完整行，以 "\r\n" 结尾
  */
-std::string checksum_line(const std::string &body, bool with_dollar)
+std::string checksumLine(const std::string &body, bool withDollar)
 {
-    unsigned checksum = with_dollar ? static_cast<unsigned>(kDollarSign) : 0U;
+    unsigned checksum = withDollar ? static_cast<unsigned>(kDollarSign) : 0U;
     for (const char c : body) {
         checksum ^= static_cast<unsigned char>(c);
     }
@@ -89,9 +89,9 @@ std::string checksum_line(const std::string &body, bool with_dollar)
  * @param body: 端口与配置项（如 "COM1,GPGGA,1"）
  * @retval line: 完整读回行
  */
-std::string config_line(const std::string &body)
+std::string configLine(const std::string &body)
 {
-    return checksum_line("CONFIG," + body, false);
+    return checksumLine("CONFIG," + body, false);
 }
 
 /**
@@ -99,13 +99,13 @@ std::string config_line(const std::string &body)
  *
  * 这决定了分流器归属：NMEA 解码器只认标准 XOR，会拒掉这种行，随后重扫把整段交给下一个候选
  * （即 UnicoreResp）。反过来，用标准校验和拼行时 NMEA 会把它当成一条合法句交付，UnicoreResp 收不到——
- * 见 test_standard_checksum_config_line_is_claimed_by_nmea。
+ * 见 testStandardChecksumConfigLineIsClaimedByNmea。
  * @param body: 端口与配置项（如 "COM1,GPGGA,1"）
  * @retval line: 完整读回行（'$' 计入校验）
  */
-std::string captured_config_line(const std::string &body)
+std::string capturedConfigLine(const std::string &body)
 {
-    return checksum_line("CONFIG," + body, true);
+    return checksumLine("CONFIG," + body, true);
 }
 
 /**
@@ -114,19 +114,19 @@ std::string captured_config_line(const std::string &body)
  * @param text: 应答文本（OK / ERROR ...）
  * @retval line: 完整应答行
  */
-std::string command_reply(const std::string &echo, const std::string &text)
+std::string commandReply(const std::string &echo, const std::string &text)
 {
-    return checksum_line("command," + echo + ",response: " + text, false);
+    return checksumLine("command," + echo + ",response: " + text, false);
 }
 
 /** 测试里把字符串当只读字节看；span 无法引用字符数据，必须做一次重解释（见下方 NOLINT）。 */
-std::span<const uint8_t> bytes_of(std::string_view text)
+std::span<const uint8_t> bytesOf(std::string_view text)
 {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) 只读视图，不写入
     return std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size());
 }
 
-bool bytes_equal(std::span<const uint8_t> data, std::string_view text)
+bool bytesEqual(std::span<const uint8_t> data, std::string_view text)
 {
     if (data.size() != text.size()) {
         return false;
@@ -139,7 +139,7 @@ bool bytes_equal(std::span<const uint8_t> data, std::string_view text)
     return true;
 }
 
-bool chars_equal(std::span<const char> data, std::string_view text)
+bool charsEqual(std::span<const char> data, std::string_view text)
 {
     if (data.size() != text.size()) {
         return false;
@@ -170,9 +170,9 @@ public:
     {
         ++rejects;
         if (last) {
-            ++reject_bursts;
+            ++rejectBursts;
         }
-        last_cause = cause;
+        lastCause = cause;
     }
     void onUnknown(std::span<const uint8_t> bytes) noexcept override
     {
@@ -182,46 +182,46 @@ public:
     std::array<uint32_t, kCounters> counters{};
     uint32_t total = 0U;
     uint32_t rejects = 0U;
-    uint32_t reject_bursts = 0U;
+    uint32_t rejectBursts = 0U;
     size_t unknown = 0U;
-    demux::RejectCause last_cause = demux::RejectCause::kStep;
+    demux::RejectCause lastCause = demux::RejectCause::kStep;
 };
 
 /** 典型 UM980 读回现场：$CONFIG 行与 GNGGA 交错，末尾跟一条命令应答。 */
-std::string realistic_runtime_stream(size_t config_lines)
+std::string realisticRuntimeStream(size_t configLines)
 {
     std::string stream;
     static constexpr std::array<std::string_view, 3U> kPeriods{"1", "2", "3"};
-    for (size_t i = 0; i < config_lines; ++i) {
-        stream += captured_config_line("COM1,GPGGA," + std::string{kPeriods[i % kPeriods.size()]});
-        stream += checksum_line(
+    for (size_t i = 0; i < configLines; ++i) {
+        stream += capturedConfigLine("COM1,GPGGA," + std::string{kPeriods[i % kPeriods.size()]});
+        stream += checksumLine(
             "GNGGA,114533.00,2232.12345,N,11356.54321,E,1,12,1.0,10.0,M,-1.0,M,,", false);
     }
-    stream += command_reply("CONFIG", "OK");
+    stream += commandReply("CONFIG", "OK");
     return stream;
 }
 
 // ---------------------------------------------------------------- 解码器
 
-static void test_config_line_is_decoded()
+static void testConfigLineIsDecoded()
 {
-    const std::string line = config_line("COM1,GPGGA,1");
+    const std::string line = configLine("COM1,GPGGA,1");
     size_t need = 0;
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Step::kFrame),
-                      static_cast<int>(gnss::unicore::response_step(bytes_of(line), need)));
+                      static_cast<int>(gnss::unicore::responseStep(bytesOf(line), need)));
     std::array<char, 64U> why{};
     // 帧本身没问题时诊断文本就是 "not rejected"（与 explain_reject 的约定一致）。
-    const size_t why_len = gnss::unicore::explain_response(bytes_of(line), why);
-    TEST_ASSERT_TRUE(chars_equal(std::span<const char>(why.data(), why_len), "not rejected"));
-    TEST_ASSERT_TRUE(gnss::unicore::response_first_byte(static_cast<uint8_t>('$')));
+    const size_t whyLen = gnss::unicore::explainResponse(bytesOf(line), why);
+    TEST_ASSERT_TRUE(charsEqual(std::span<const char>(why.data(), whyLen), "not rejected"));
+    TEST_ASSERT_TRUE(gnss::unicore::responseFirstByte(static_cast<uint8_t>('$')));
 }
 
-static void test_decoder_still_takes_command_replies()
+static void testDecoderStillTakesCommandReplies()
 {
-    const std::string reply = command_reply("UNLOG COM2", "OK");
+    const std::string reply = commandReply("UNLOG COM2", "OK");
     size_t need = 0;
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Step::kFrame),
-                      static_cast<int>(gnss::unicore::response_step(bytes_of(reply), need)));
+                      static_cast<int>(gnss::unicore::responseStep(bytesOf(reply), need)));
 }
 
 /**
@@ -229,11 +229,11 @@ static void test_decoder_still_takes_command_replies()
  * @param frame: 合法帧
  * @retval bad: 只改了校验和字段的副本
  */
-std::string corrupt_checksum(const std::string &frame)
+std::string corruptChecksum(const std::string &frame)
 {
     static constexpr std::array<std::string_view, 3U> kCandidates{"00", "FF", "A5"};
-    std::string standard = checksum_line(frame.substr(1U, frame.find('*') - 1U), false);
-    const std::string dollar = checksum_line(frame.substr(1U, frame.find('*') - 1U), true);
+    std::string standard = checksumLine(frame.substr(1U, frame.find('*') - 1U), false);
+    const std::string dollar = checksumLine(frame.substr(1U, frame.find('*') - 1U), true);
     const size_t tail = frame.find('*') + 1U;
     for (const std::string_view candidate : kCandidates) {
         if ((standard.substr(tail, 2U) == candidate) || (dollar.substr(tail, 2U) == candidate)) {
@@ -246,56 +246,56 @@ std::string corrupt_checksum(const std::string &frame)
     return standard; // 不可达（三个候选不可能与被排除的两个值同时重复）
 }
 
-static void test_decoder_rejects_bad_config_frames()
+static void testDecoderRejectsBadConfigFrames()
 {
     size_t need = 0;
     // 校验和错：两种接受的变体都不匹配。
-    const std::string bad = corrupt_checksum(config_line("COM1,GPGGA,1"));
+    const std::string bad = corruptChecksum(configLine("COM1,GPGGA,1"));
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Step::kReject),
-                      static_cast<int>(gnss::unicore::response_step(bytes_of(bad), need)));
+                      static_cast<int>(gnss::unicore::responseStep(bytesOf(bad), need)));
 
     // 两个前缀都不成立。
-    const std::string wrong = checksum_line("CONFIX,COM1,GPGGA,1", false);
+    const std::string wrong = checksumLine("CONFIX,COM1,GPGGA,1", false);
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Step::kReject),
-                      static_cast<int>(gnss::unicore::response_step(bytes_of(wrong), need)));
+                      static_cast<int>(gnss::unicore::responseStep(bytesOf(wrong), need)));
 
     // 两种前缀都还可能成立时只报“还需要更多字节”。
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Step::kNeedMore),
-                      static_cast<int>(gnss::unicore::response_step(bytes_of("$CONF"), need)));
+                      static_cast<int>(gnss::unicore::responseStep(bytesOf("$CONF"), need)));
     TEST_ASSERT_GREATER_THAN_UINT32(0U, need);
 
     // 正文里出现 '$' 一律拒绝（与 $command 同一套规则）。
-    const std::string inner = checksum_line("CONFIG,COM1,$GPGGA,1", false);
+    const std::string inner = checksumLine("CONFIG,COM1,$GPGGA,1", false);
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Step::kReject),
-                      static_cast<int>(gnss::unicore::response_step(bytes_of(inner), need)));
+                      static_cast<int>(gnss::unicore::responseStep(bytesOf(inner), need)));
 }
 
 /**
  * @brief 超过单帧上限的读回行不得成帧（长度上限由分流器容量强制，见 Demux::Stats::overflows）
  */
-static void test_oversized_config_line_is_dropped()
+static void testOversizedConfigLineIsDropped()
 {
     std::string body = "CONFIG,";
     body.append(gnss::unicore::kResponseMaxFrame, '1');
-    const std::string line = checksum_line(body, true);
-    demux::StaticDemux<demux::nmea::kDecoder, gnss::unicore::kResponseDecoder> demux_engine;
+    const std::string line = checksumLine(body, true);
+    demux::StaticDemux<demux::nmea::kDecoder, gnss::unicore::kResponseDecoder> demuxEngine;
     CountingSink sink;
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk),
-                      static_cast<int>(demux_engine.init(sink)));
+                      static_cast<int>(demuxEngine.init(sink)));
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk),
-                      static_cast<int>(demux_engine.feed(bytes_of(line))));
+                      static_cast<int>(demuxEngine.feed(bytesOf(line))));
     TEST_ASSERT_EQUAL_UINT32(0U, sink.counters[1]);
-    TEST_ASSERT_GREATER_THAN_UINT32(0U, demux_engine.stats().overflows);
+    TEST_ASSERT_GREATER_THAN_UINT32(0U, demuxEngine.stats().overflows);
 }
 
-static void test_config_lines_coexist_with_nmea()
+static void testConfigLinesCoexistWithNmea()
 {
-    const std::string stream = realistic_runtime_stream(kRealisticConfigLines);
-    demux::StaticDemux<demux::nmea::kDecoder, gnss::unicore::kResponseDecoder> one_shot;
+    const std::string stream = realisticRuntimeStream(kRealisticConfigLines);
+    demux::StaticDemux<demux::nmea::kDecoder, gnss::unicore::kResponseDecoder> oneShot;
     CountingSink whole;
-    TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk), static_cast<int>(one_shot.init(whole)));
+    TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk), static_cast<int>(oneShot.init(whole)));
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk),
-                      static_cast<int>(one_shot.feed(bytes_of(stream))));
+                      static_cast<int>(oneShot.feed(bytesOf(stream))));
     TEST_ASSERT_EQUAL_UINT32(kRealisticConfigLines, whole.counters[0]); // GNGGA 归 nmea
     TEST_ASSERT_EQUAL_UINT32(kRealisticConfigLines + 1U,
                              whole.counters[1]); // $CONFIG 行 + 命令应答归 UnicoreResp
@@ -309,7 +309,7 @@ static void test_config_lines_coexist_with_nmea()
     demux::StaticDemux<demux::nmea::kDecoder, gnss::unicore::kResponseDecoder> dribble;
     CountingSink split;
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk), static_cast<int>(dribble.init(split)));
-    const std::span<const uint8_t> all = bytes_of(stream);
+    const std::span<const uint8_t> all = bytesOf(stream);
     for (size_t i = 0; i < all.size(); ++i) {
         TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk),
                           static_cast<int>(dribble.feed(all.subspan(i, 1U))));
@@ -325,17 +325,17 @@ static void test_config_lines_coexist_with_nmea()
  *
  * 分流器把 '$' 起点优先交给表内靠前的候选，而 NMEA 解码器并不限制 talker：`$CONFIG,...` 的
  * talker/type 都合法，校验和也标准，于是它成了 NMEA 帧，UnicoreResp 收不到。UM980 实测的读回行带
- * '$' 入校验的变体，NMEA 校验失败后重扫才落到 UnicoreResp——这就是上一条用例用 captured_config_line 的原因。
+ * '$' 入校验的变体，NMEA 校验失败后重扫才落到 UnicoreResp——这就是上一条用例用 capturedConfigLine 的原因。
  */
-static void test_standard_checksum_config_line_is_claimed_by_nmea()
+static void testStandardChecksumConfigLineIsClaimedByNmea()
 {
-    const std::string line = config_line("COM1,GPGGA,1");
-    demux::StaticDemux<demux::nmea::kDecoder, gnss::unicore::kResponseDecoder> demux_engine;
+    const std::string line = configLine("COM1,GPGGA,1");
+    demux::StaticDemux<demux::nmea::kDecoder, gnss::unicore::kResponseDecoder> demuxEngine;
     CountingSink sink;
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk),
-                      static_cast<int>(demux_engine.init(sink)));
+                      static_cast<int>(demuxEngine.init(sink)));
     TEST_ASSERT_EQUAL(static_cast<int>(demux::Error::kOk),
-                      static_cast<int>(demux_engine.feed(bytes_of(line))));
+                      static_cast<int>(demuxEngine.feed(bytesOf(line))));
     TEST_ASSERT_EQUAL_UINT32(1U, sink.counters[0]);
     TEST_ASSERT_EQUAL_UINT32(0U, sink.counters[1]);
     TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(sink.unknown));
@@ -343,82 +343,82 @@ static void test_standard_checksum_config_line_is_claimed_by_nmea()
 
 // ---------------------------------------------------------------- 驱动
 
-static void test_build_readback_writes_config()
+static void testBuildReadbackWritesConfig()
 {
     gnss::CmdBuf cmd;
-    TEST_ASSERT_TRUE(gnss::unicore_receiver().build_readback(cmd));
-    TEST_ASSERT_TRUE(bytes_equal(cmd.view(), kReadbackCommand));
+    TEST_ASSERT_TRUE(gnss::unicoreReceiver().buildReadback(cmd));
+    TEST_ASSERT_TRUE(bytesEqual(cmd.view(), kReadbackCommand));
     // Um982Receiver 继续同一条读回命令。
-    TEST_ASSERT_TRUE(gnss::um982_receiver().build_readback(cmd));
-    TEST_ASSERT_TRUE(bytes_equal(cmd.view(), kReadbackCommand));
+    TEST_ASSERT_TRUE(gnss::um982Receiver().buildReadback(cmd));
+    TEST_ASSERT_TRUE(bytesEqual(cmd.view(), kReadbackCommand));
 }
 
-static void test_match_readback_extracts_body()
+static void testMatchReadbackExtractsBody()
 {
     std::array<char, kReadbackCapacity> out{};
-    const std::string line = config_line("COM1,GPGGA,1");
-    const size_t len = gnss::unicore_receiver().match_readback(gnss::unicore::kResponseDecoder,
-                                                               bytes_of(line), out);
+    const std::string line = configLine("COM1,GPGGA,1");
+    const size_t len =
+        gnss::unicoreReceiver().matchReadback(gnss::unicore::kResponseDecoder, bytesOf(line), out);
     TEST_ASSERT_EQUAL_UINT32(12U, static_cast<uint32_t>(len)); // "COM1,GPGGA,1"
-    TEST_ASSERT_TRUE(chars_equal(std::span<const char>(out.data(), len), "COM1,GPGGA,1"));
+    TEST_ASSERT_TRUE(charsEqual(std::span<const char>(out.data(), len), "COM1,GPGGA,1"));
 
     // $command,CONFIG,response: OK*.. 是命令应答，不是配置行。
-    const std::string reply = command_reply("CONFIG", "OK");
-    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(gnss::unicore_receiver().match_readback(
-                                     gnss::unicore::kResponseDecoder, bytes_of(reply), out)));
+    const std::string reply = commandReply("CONFIG", "OK");
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(gnss::unicoreReceiver().matchReadback(
+                                     gnss::unicore::kResponseDecoder, bytesOf(reply), out)));
     // 别的解码器交付的帧一律不算。
-    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(gnss::unicore_receiver().match_readback(
-                                     demux::nmea::kDecoder, bytes_of(line), out)));
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(gnss::unicoreReceiver().matchReadback(
+                                     demux::nmea::kDecoder, bytesOf(line), out)));
     // 截断：正文比缓冲长时只写缓冲容量，返回值仍 > 0（调用方据此计数）。
     std::array<char, kSmallCapacity> small{};
     TEST_ASSERT_EQUAL_UINT32(kSmallCapacity,
-                             static_cast<uint32_t>(gnss::unicore_receiver().match_readback(
-                                 gnss::unicore::kResponseDecoder, bytes_of(line), small)));
+                             static_cast<uint32_t>(gnss::unicoreReceiver().matchReadback(
+                                 gnss::unicore::kResponseDecoder, bytesOf(line), small)));
 }
 
-static void test_drivers_without_readback()
+static void testDriversWithoutReadback()
 {
     gnss::CmdBuf cmd;
-    TEST_ASSERT_FALSE(gnss::null_receiver().build_readback(cmd));
+    TEST_ASSERT_FALSE(gnss::nullReceiver().buildReadback(cmd));
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
-    TEST_ASSERT_FALSE(gnss::ublox_receiver().build_readback(cmd));
+    TEST_ASSERT_FALSE(gnss::ubloxReceiver().buildReadback(cmd));
 #endif
 #if defined(RTK_GNSS_DRV_COMNAV) && RTK_GNSS_DRV_COMNAV
-    TEST_ASSERT_FALSE(gnss::comnav_receiver().build_readback(cmd));
+    TEST_ASSERT_FALSE(gnss::comnavReceiver().buildReadback(cmd));
 #endif
 }
 
 // ---------------------------------------------------------------- 控制器
 
-gnss::Timing fast_timing()
+gnss::Timing fastTiming()
 {
     gnss::Timing timing{};
-    timing.power_off_ms = kFastMs;
-    timing.boot_ms = kFastMs;
-    timing.probe_timeout_ms = static_cast<uint16_t>(kProbeTimeoutMs);
-    timing.probe_rounds = 2;
-    timing.step_retries = 1;
-    timing.silence_ms = kSilenceMs;
-    timing.retry_backoff_ms = kRetryBackoffMs;
+    timing.powerOffMs = kFastMs;
+    timing.bootMs = kFastMs;
+    timing.probeTimeoutMs = static_cast<uint16_t>(kProbeTimeoutMs);
+    timing.probeRounds = 2;
+    timing.stepRetries = 1;
+    timing.silenceMs = kSilenceMs;
+    timing.retryBackoffMs = kRetryBackoffMs;
     return timing;
 }
 
-gnss::RoverConfig readback_rover_config()
+gnss::RoverConfig readbackRoverConfig()
 {
     gnss::RoverConfig cfg{};
-    cfg.rate_hz = 1;
+    cfg.rateHz = 1;
     cfg.gsv = true;
     cfg.port = 2;
-    cfg.port_baud = 0; // 不切波特率：脚本只剩 UNLOG / MODE ROVER 两步
+    cfg.portBaud = 0; // 不切波特率：脚本只剩 UNLOG / MODE ROVER 两步
     return cfg;
 }
 
 void feed(gnss::Controller &ctl, const demux::Decoder &dec, const std::string &frame, uint32_t now)
 {
-    ctl.on_frame(dec, bytes_of(frame), now);
+    ctl.onFrame(dec, bytesOf(frame), now);
 }
 
-std::string sent_text(std::span<const uint8_t> bytes)
+std::string sentText(std::span<const uint8_t> bytes)
 {
     std::string out;
     for (size_t i = 0; i < bytes.size(); ++i) {
@@ -432,7 +432,7 @@ std::string sent_text(std::span<const uint8_t> bytes)
 
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
 /** 按文本宽度补 '\0' 的定长字段（UBX-MON-VER 的文本块）。 */
-void put_field(std::string &payload, std::string_view text, size_t width)
+void putField(std::string &payload, std::string_view text, size_t width)
 {
     for (size_t i = 0; i < width; ++i) {
         payload.push_back(i < text.size() ? text[i] : '\0');
@@ -440,7 +440,7 @@ void put_field(std::string &payload, std::string_view text, size_t width)
 }
 
 /** 给 UBX 帧补 Fletcher 校验并返回整帧文本。 */
-std::string ubx_frame(int8_t cls, int8_t id, const std::string &payload)
+std::string ubxFrame(int8_t cls, int8_t id, const std::string &payload)
 {
     std::string frame;
     frame.push_back(static_cast<char>(kUbxSync1));
@@ -450,21 +450,21 @@ std::string ubx_frame(int8_t cls, int8_t id, const std::string &payload)
     frame.push_back(static_cast<char>(payload.size() & kByteMask));
     frame.push_back(static_cast<char>((payload.size() >> 8U) & kByteMask));
     frame += payload;
-    uint8_t ck_a = 0;
-    uint8_t ck_b = 0;
+    uint8_t ckA = 0;
+    uint8_t ckB = 0;
     for (size_t i = 2U; i < frame.size(); ++i) {
         const auto byte = static_cast<uint8_t>(frame[i]);
-        ck_a = static_cast<uint8_t>(ck_a + byte);
-        ck_b = static_cast<uint8_t>(ck_b + ck_a);
+        ckA = static_cast<uint8_t>(ckA + byte);
+        ckB = static_cast<uint8_t>(ckB + ckA);
     }
-    frame.push_back(static_cast<char>(ck_a));
-    frame.push_back(static_cast<char>(ck_b));
+    frame.push_back(static_cast<char>(ckA));
+    frame.push_back(static_cast<char>(ckB));
     return frame;
 }
 #endif
 
 /** 探测应答：按驱动家族回一条“型号已知”的帧。 */
-void feed_probe_reply(gnss::Controller &ctl, const gnss::Receiver &receiver, uint32_t now)
+void feedProbeReply(gnss::Controller &ctl, const gnss::Receiver &receiver, uint32_t now)
 {
     if (receiver.family() == gnss::Family::kUnicore) {
         feed(
@@ -477,24 +477,24 @@ void feed_probe_reply(gnss::Controller &ctl, const gnss::Receiver &receiver, uin
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
     if (receiver.family() == gnss::Family::kUblox) {
         std::string payload;
-        put_field(payload, "EXT CORE 1.00 (61b2dd)", kUbxTextWidth);
-        put_field(payload, "00180000", kUbxExtWidth);
-        put_field(payload, "MOD=ZED-F9P", kUbxTextWidth);
-        put_field(payload, "FWVER=HPG 1.32", kUbxTextWidth);
+        putField(payload, "EXT CORE 1.00 (61b2dd)", kUbxTextWidth);
+        putField(payload, "00180000", kUbxExtWidth);
+        putField(payload, "MOD=ZED-F9P", kUbxTextWidth);
+        putField(payload, "FWVER=HPG 1.32", kUbxTextWidth);
         feed(ctl, demux::ubx::kDecoder,
-             ubx_frame(static_cast<int8_t>(kUbxClsMonVer), static_cast<int8_t>(kUbxIdMonVer),
-                       payload),
+             ubxFrame(static_cast<int8_t>(kUbxClsMonVer), static_cast<int8_t>(kUbxIdMonVer),
+                      payload),
              now);
     }
 #endif
 }
 
 /** 命令应答：unicore 回 $command,<echo>,response: OK；u-blox 回 ACK-ACK（带被确认的 cls/id）。 */
-void feed_command_reply(gnss::Controller &ctl, const gnss::Receiver &receiver,
-                        std::span<const uint8_t> sent, uint32_t now)
+void feedCommandReply(gnss::Controller &ctl, const gnss::Receiver &receiver,
+                      std::span<const uint8_t> sent, uint32_t now)
 {
     if (receiver.family() == gnss::Family::kUnicore) {
-        feed(ctl, gnss::unicore::kResponseDecoder, command_reply(sent_text(sent), "OK"), now);
+        feed(ctl, gnss::unicore::kResponseDecoder, commandReply(sentText(sent), "OK"), now);
         return;
     }
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
@@ -503,7 +503,7 @@ void feed_command_reply(gnss::Controller &ctl, const gnss::Receiver &receiver,
         payload.push_back(static_cast<char>(sent[kSentClassPos])); // 被确认消息的 class
         payload.push_back(static_cast<char>(sent[kSentIdPos]));    // 被确认消息的 id
         feed(ctl, demux::ubx::kDecoder,
-             ubx_frame(static_cast<int8_t>(kUbxClsAck), static_cast<int8_t>(kUbxIdAck), payload),
+             ubxFrame(static_cast<int8_t>(kUbxClsAck), static_cast<int8_t>(kUbxIdAck), payload),
              now);
     }
 #endif
@@ -517,7 +517,7 @@ void feed_command_reply(gnss::Controller &ctl, const gnss::Receiver &receiver,
  * @retval true: 到达 kRunning
  * @retval false: 步数耗尽仍未到达
  */
-bool drive_to_running(gnss::Controller &ctl, const gnss::Receiver &receiver, uint32_t &now)
+bool driveToRunning(gnss::Controller &ctl, const gnss::Receiver &receiver, uint32_t &now)
 {
     for (uint32_t guard = 0U; guard < kDriveGuard; ++guard) {
         if (ctl.state() == gnss::State::kRunning) {
@@ -529,9 +529,9 @@ bool drive_to_running(gnss::Controller &ctl, const gnss::Receiver &receiver, uin
             continue;
         }
         if (ctl.state() == gnss::State::kProbing) {
-            feed_probe_reply(ctl, receiver, now);
+            feedProbeReply(ctl, receiver, now);
         } else {
-            feed_command_reply(ctl, receiver, act.bytes, now);
+            feedCommandReply(ctl, receiver, act.bytes, now);
         }
     }
     return ctl.state() == gnss::State::kRunning;
@@ -545,60 +545,60 @@ bool drive_to_running(gnss::Controller &ctl, const gnss::Receiver &receiver, uin
  * @retval true: 已到 kRunning
  * @retval false: 初始化或推进失败
  */
-bool init_running_controller(gnss::Controller &ctl, const gnss::Receiver &receiver, uint32_t &now)
+bool initRunningController(gnss::Controller &ctl, const gnss::Receiver &receiver, uint32_t &now)
 {
     static const std::array<uint32_t, 1U> bauds{kTestBaud};
     const std::array<const gnss::Receiver *, 1U> receivers{&receiver};
-    const gnss::RoverConfig cfg = readback_rover_config();
-    if (!ctl.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, fast_timing())) {
+    const gnss::RoverConfig cfg = readbackRoverConfig();
+    if (!ctl.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, fastTiming())) {
         return false;
     }
     now = 0U;
     ctl.start(now);
-    return drive_to_running(ctl, receiver, now);
+    return driveToRunning(ctl, receiver, now);
 }
 
-bool is_write(const gnss::Action &action, std::string_view text)
+bool isWrite(const gnss::Action &action, std::string_view text)
 {
-    return (action.kind == gnss::Action::Kind::kWrite) && bytes_equal(action.bytes, text);
+    return (action.kind == gnss::Action::Kind::kWrite) && bytesEqual(action.bytes, text);
 }
 
-static void test_readback_rejected_before_running()
+static void testReadbackRejectedBeforeRunning()
 {
     gnss::Controller ctl;
     static const std::array<uint32_t, 1U> bauds{kTestBaud};
-    const std::array<const gnss::Receiver *, 1U> receivers{&gnss::unicore_receiver()};
-    const gnss::RoverConfig cfg = readback_rover_config();
-    TEST_ASSERT_TRUE(ctl.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, fast_timing()));
+    const std::array<const gnss::Receiver *, 1U> receivers{&gnss::unicoreReceiver()};
+    const gnss::RoverConfig cfg = readbackRoverConfig();
+    TEST_ASSERT_TRUE(ctl.init(receivers, bauds, cfg, gnss::OutputPlan{}, {}, fastTiming()));
 
     uint32_t now = 0U;
-    TEST_ASSERT_FALSE(ctl.request_readback(now));
+    TEST_ASSERT_FALSE(ctl.requestReadback(now));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kOff), static_cast<int>(ctl.state()));
 
     ctl.start(now);
-    TEST_ASSERT_FALSE(ctl.request_readback(now));
+    TEST_ASSERT_FALSE(ctl.requestReadback(now));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kPowerUp), static_cast<int>(ctl.state()));
 }
 
-static void test_readback_collects_lines_until_idle()
+static void testReadbackCollectsLinesUntilIdle()
 {
     gnss::Controller ctl;
     uint32_t now = 0U;
-    TEST_ASSERT_TRUE(init_running_controller(ctl, gnss::unicore_receiver(), now));
-    const uint32_t seq_before = ctl.stats().readback_seq;
+    TEST_ASSERT_TRUE(initRunningController(ctl, gnss::unicoreReceiver(), now));
+    const uint32_t seqBefore = ctl.stats().readbackSeq;
 
-    TEST_ASSERT_TRUE(ctl.request_readback(now));
+    TEST_ASSERT_TRUE(ctl.requestReadback(now));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kReadback), static_cast<int>(ctl.state()));
     // 下一轮 poll 把 CONFIG 写出去（与 kSend 同一条通道）。
-    TEST_ASSERT_TRUE(is_write(ctl.poll(now), "CONFIG\r\n"));
+    TEST_ASSERT_TRUE(isWrite(ctl.poll(now), "CONFIG\r\n"));
 
     now += kLineGapMs;
-    feed(ctl, gnss::unicore::kResponseDecoder, config_line("COM1,GPGGA,1"), now);
+    feed(ctl, gnss::unicore::kResponseDecoder, configLine("COM1,GPGGA,1"), now);
     now += kLineGapMs;
-    feed(ctl, gnss::unicore::kResponseDecoder, config_line("COM1,GPRMC,1"), now);
+    feed(ctl, gnss::unicore::kResponseDecoder, configLine("COM1,GPRMC,1"), now);
     now += kLineGapMs;
-    feed(ctl, gnss::unicore::kResponseDecoder, config_line("COM1,MODE,ROVER"), now);
-    TEST_ASSERT_EQUAL_UINT32(3U, ctl.stats().readback_lines);
+    feed(ctl, gnss::unicore::kResponseDecoder, configLine("COM1,MODE,ROVER"), now);
+    TEST_ASSERT_EQUAL_UINT32(3U, ctl.stats().readbackLines);
 
     // 行间静默未到 1 s：仍在读回。
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kReadback), static_cast<int>(ctl.state()));
@@ -608,66 +608,65 @@ static void test_readback_collects_lines_until_idle()
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Action::Kind::kNone),
                       static_cast<int>(ctl.poll(now + kIdleMs).kind));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(ctl.state()));
-    TEST_ASSERT_EQUAL_UINT32(seq_before + 1U, ctl.stats().readback_seq);
-    TEST_ASSERT_EQUAL_UINT32(3U, ctl.stats().readback_lines);
+    TEST_ASSERT_EQUAL_UINT32(seqBefore + 1U, ctl.stats().readbackSeq);
+    TEST_ASSERT_EQUAL_UINT32(3U, ctl.stats().readbackLines);
 }
 
-static void test_readback_ignores_nmea_lines()
+static void testReadbackIgnoresNmeaLines()
 {
     gnss::Controller ctl;
     uint32_t now = 0U;
-    TEST_ASSERT_TRUE(init_running_controller(ctl, gnss::unicore_receiver(), now));
-    const uint32_t seq_before = ctl.stats().readback_seq;
+    TEST_ASSERT_TRUE(initRunningController(ctl, gnss::unicoreReceiver(), now));
+    const uint32_t seqBefore = ctl.stats().readbackSeq;
 
-    TEST_ASSERT_TRUE(ctl.request_readback(now));
-    TEST_ASSERT_TRUE(is_write(ctl.poll(now), "CONFIG\r\n"));
+    TEST_ASSERT_TRUE(ctl.requestReadback(now));
+    TEST_ASSERT_TRUE(isWrite(ctl.poll(now), "CONFIG\r\n"));
     // NMEA 帧不算读回行，也不延长窗口：1 s 后照样收尾。
     feed(ctl, demux::nmea::kDecoder,
-         checksum_line("GNGGA,114533.00,,,N,,E,1,12,1.0,10.0,M,-1.0,M,,", false),
-         now + kNmeaOnlyMs);
-    TEST_ASSERT_EQUAL_UINT32(0U, ctl.stats().readback_lines);
+         checksumLine("GNGGA,114533.00,,,N,,E,1,12,1.0,10.0,M,-1.0,M,,", false), now + kNmeaOnlyMs);
+    TEST_ASSERT_EQUAL_UINT32(0U, ctl.stats().readbackLines);
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Action::Kind::kNone),
                       static_cast<int>(ctl.poll(now + kIdleMs).kind));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(ctl.state()));
-    TEST_ASSERT_EQUAL_UINT32(seq_before + 1U, ctl.stats().readback_seq);
+    TEST_ASSERT_EQUAL_UINT32(seqBefore + 1U, ctl.stats().readbackSeq);
 }
 
-static void test_readback_ends_on_total_timeout()
+static void testReadbackEndsOnTotalTimeout()
 {
     gnss::Controller ctl;
     uint32_t now = 0U;
-    TEST_ASSERT_TRUE(init_running_controller(ctl, gnss::unicore_receiver(), now));
+    TEST_ASSERT_TRUE(initRunningController(ctl, gnss::unicoreReceiver(), now));
     const uint32_t start = now;
-    TEST_ASSERT_TRUE(ctl.request_readback(now));
-    TEST_ASSERT_TRUE(is_write(ctl.poll(now), "CONFIG\r\n"));
+    TEST_ASSERT_TRUE(ctl.requestReadback(now));
+    TEST_ASSERT_TRUE(isWrite(ctl.poll(now), "CONFIG\r\n"));
 
     // 每 400 ms 一行：静默窗口永远不触发，只能由总时长（5 s）收尾。
     uint32_t lines = 0U;
     while (((now - start) + kLineStepMs) < kTotalMs) {
         now += kLineStepMs;
-        feed(ctl, gnss::unicore::kResponseDecoder, config_line("COM1,GPGGA,1"), now);
+        feed(ctl, gnss::unicore::kResponseDecoder, configLine("COM1,GPGGA,1"), now);
         ++lines;
         TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kReadback), static_cast<int>(ctl.state()));
         (void)ctl.poll(now);
     }
-    TEST_ASSERT_EQUAL_UINT32(lines, ctl.stats().readback_lines);
+    TEST_ASSERT_EQUAL_UINT32(lines, ctl.stats().readbackLines);
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kReadback), static_cast<int>(ctl.state()));
     (void)ctl.poll(start + kTotalMs + 1U);
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(ctl.state()));
-    TEST_ASSERT_EQUAL_UINT32(lines, ctl.stats().readback_lines);
+    TEST_ASSERT_EQUAL_UINT32(lines, ctl.stats().readbackLines);
 }
 
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
-static void test_ublox_run_still_rejects_readback()
+static void testUbloxRunStillRejectsReadback()
 {
     gnss::Controller ctl;
     uint32_t now = 0U;
-    // u-blox 脚本在 cfg.port_baud == 0 时只剩一条 VALSET，仍需真实 ACK 才能到 kRunning。
-    TEST_ASSERT_TRUE(init_running_controller(ctl, gnss::ublox_receiver(), now));
+    // u-blox 脚本在 cfg.portBaud == 0 时只剩一条 VALSET，仍需真实 ACK 才能到 kRunning。
+    TEST_ASSERT_TRUE(initRunningController(ctl, gnss::ubloxReceiver(), now));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(ctl.state()));
-    TEST_ASSERT_FALSE(ctl.request_readback(now));
+    TEST_ASSERT_FALSE(ctl.requestReadback(now));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(ctl.state()));
-    TEST_ASSERT_EQUAL_UINT32(0U, ctl.stats().readback_seq);
+    TEST_ASSERT_EQUAL_UINT32(0U, ctl.stats().readbackSeq);
 }
 #endif
 
@@ -680,22 +679,22 @@ int main(int, char **)
 {
     UNITY_BEGIN();
 #if defined(RTK_GNSS_DRV_UNICORE) && RTK_GNSS_DRV_UNICORE
-    RUN_TEST(test_config_line_is_decoded);
-    RUN_TEST(test_decoder_still_takes_command_replies);
-    RUN_TEST(test_decoder_rejects_bad_config_frames);
-    RUN_TEST(test_config_lines_coexist_with_nmea);
-    RUN_TEST(test_standard_checksum_config_line_is_claimed_by_nmea);
-    RUN_TEST(test_oversized_config_line_is_dropped);
-    RUN_TEST(test_build_readback_writes_config);
-    RUN_TEST(test_match_readback_extracts_body);
-    RUN_TEST(test_readback_rejected_before_running);
-    RUN_TEST(test_readback_collects_lines_until_idle);
-    RUN_TEST(test_readback_ignores_nmea_lines);
-    RUN_TEST(test_readback_ends_on_total_timeout);
+    RUN_TEST(testConfigLineIsDecoded);
+    RUN_TEST(testDecoderStillTakesCommandReplies);
+    RUN_TEST(testDecoderRejectsBadConfigFrames);
+    RUN_TEST(testConfigLinesCoexistWithNmea);
+    RUN_TEST(testStandardChecksumConfigLineIsClaimedByNmea);
+    RUN_TEST(testOversizedConfigLineIsDropped);
+    RUN_TEST(testBuildReadbackWritesConfig);
+    RUN_TEST(testMatchReadbackExtractsBody);
+    RUN_TEST(testReadbackRejectedBeforeRunning);
+    RUN_TEST(testReadbackCollectsLinesUntilIdle);
+    RUN_TEST(testReadbackIgnoresNmeaLines);
+    RUN_TEST(testReadbackEndsOnTotalTimeout);
 #endif
-    RUN_TEST(test_drivers_without_readback);
+    RUN_TEST(testDriversWithoutReadback);
 #if defined(RTK_GNSS_DRV_UBLOX) && RTK_GNSS_DRV_UBLOX
-    RUN_TEST(test_ublox_run_still_rejects_readback);
+    RUN_TEST(testUbloxRunStillRejectsReadback);
 #endif
     return UNITY_END();
 }

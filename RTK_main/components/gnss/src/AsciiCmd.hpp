@@ -20,7 +20,7 @@ inline constexpr uint8_t kPrintableMax = 0x7EU;
 /** 十进制写出时的最多位数（uint32 最大 10 位）。 */
 inline constexpr size_t kUintDigits = 10U;
 inline constexpr uint8_t kDecimalBase = 10U;
-/** 'A' 在十六进制中的数值，用于 hex_value。 */
+/** 'A' 在十六进制中的数值，用于 hexValue。 */
 inline constexpr uint8_t kHexDigitOffset = 10U;
 inline constexpr uint8_t kHexShift = 4U;
 /** 一秒的毫秒数与百分之一秒的毫秒数（周期文本换算用）。 */
@@ -41,7 +41,7 @@ inline constexpr char kLf = '\n';
  * @retval true: 是十六进制数字。
  * @retval false: 其他。
  */
-inline bool is_hex(uint8_t c) noexcept
+inline bool isHex(uint8_t c) noexcept
 {
     return ((c >= static_cast<uint8_t>('0')) && (c <= static_cast<uint8_t>('9'))) ||
            ((c >= static_cast<uint8_t>('A')) && (c <= static_cast<uint8_t>('F'))) ||
@@ -49,11 +49,11 @@ inline bool is_hex(uint8_t c) noexcept
 }
 
 /**
- * @brief 十六进制数字的数值（调用方须先用 is_hex 判定）。
+ * @brief 十六进制数字的数值（调用方须先用 isHex 判定）。
  * @param c: 十六进制数字字节。
  * @retval 0..15: 数值（非法字节按小写分支计算，不抛错）。
  */
-inline uint8_t hex_value(uint8_t c) noexcept
+inline uint8_t hexValue(uint8_t c) noexcept
 {
     if ((c >= static_cast<uint8_t>('0')) && (c <= static_cast<uint8_t>('9'))) {
         return static_cast<uint8_t>(c - static_cast<uint8_t>('0'));
@@ -70,7 +70,7 @@ inline uint8_t hex_value(uint8_t c) noexcept
  * @retval true: 可打印。
  * @retval false: 控制字符或非 ASCII。
  */
-inline bool is_printable(uint8_t c) noexcept
+inline bool isPrintable(uint8_t c) noexcept
 {
     return (c >= kPrintableMin) && (c <= kPrintableMax);
 }
@@ -81,10 +81,9 @@ inline bool is_printable(uint8_t c) noexcept
  * @retval true: 可作为报文体字节。
  * @retval false: 帧结构字符或不可打印。
  */
-inline bool is_body_byte(uint8_t c) noexcept
+inline bool isBodyByte(uint8_t c) noexcept
 {
-    return is_printable(c) && (c != static_cast<uint8_t>('$')) &&
-           (c != static_cast<uint8_t>(kStar));
+    return isPrintable(c) && (c != static_cast<uint8_t>('$')) && (c != static_cast<uint8_t>(kStar));
 }
 
 /**
@@ -94,7 +93,7 @@ inline bool is_body_byte(uint8_t c) noexcept
  * @retval true: 写入成功（或 value 为 0）。
  * @retval false: 缓冲空间不足，out 内容不变。
  */
-inline bool append_uint(CmdBuf &out, uint32_t value) noexcept
+inline bool appendUint(CmdBuf &out, uint32_t value) noexcept
 {
     std::array<uint8_t, kUintDigits> digits{};
     size_t count = 0;
@@ -114,23 +113,23 @@ inline bool append_uint(CmdBuf &out, uint32_t value) noexcept
 /**
  * @brief 把周期毫秒写成秒文本（"1"/"0.5"/"0.2"/"0.1"/"0.05"），接收机只接受 10 ms 整数倍。
  * @param out: 目标命令缓冲。
- * @param period_ms: 周期（毫秒）。
+ * @param periodMs: 周期（毫秒）。
  * @retval true: 写入成功。
  * @retval false: 不是 10 ms 整数倍，或缓冲空间不足。
  */
-inline bool append_period(CmdBuf &out, uint32_t period_ms) noexcept
+inline bool appendPeriod(CmdBuf &out, uint32_t periodMs) noexcept
 {
-    if ((period_ms % kMillisPerCentiSecond) != 0U) {
+    if ((periodMs % kMillisPerCentiSecond) != 0U) {
         return false;
     }
-    const uint32_t whole = period_ms / kMsPerSecond;
-    // period_ms 已是 10 ms 倍数，因此 (period_ms % 1000) / 10 必为整数百分位。
-    const uint32_t centi = (period_ms % kMsPerSecond) / kMillisPerCentiSecond;
+    const uint32_t whole = periodMs / kMsPerSecond;
+    // periodMs 已是 10 ms 倍数，因此 (periodMs % 1000) / 10 必为整数百分位。
+    const uint32_t centi = (periodMs % kMsPerSecond) / kMillisPerCentiSecond;
     if (whole == 0U) {
         if (!out.append("0")) {
             return false;
         }
-    } else if (!append_uint(out, whole)) {
+    } else if (!appendUint(out, whole)) {
         return false;
     }
     if (centi == 0U) {
@@ -141,12 +140,12 @@ inline bool append_period(CmdBuf &out, uint32_t period_ms) noexcept
     }
     // 只写有效数字：100 ms 写 "0.1"、500 ms 写 "0.5"、50 ms 写 "0.05"（与基线脚本一致）。
     if ((centi % kMillisPerCentiSecond) == 0U) {
-        return append_uint(out, centi / kMillisPerCentiSecond);
+        return appendUint(out, centi / kMillisPerCentiSecond);
     }
     if ((centi < kMillisPerCentiSecond) && !out.append("0")) {
         return false;
     }
-    return append_uint(out, centi);
+    return appendUint(out, centi);
 }
 
 /**
@@ -157,8 +156,8 @@ inline bool append_period(CmdBuf &out, uint32_t period_ms) noexcept
  * @retval true: 找到完整引号字段。
  * @retval false: 未闭合，或先遇到 '*'（校验段开始，说明没有该字段）。
  */
-inline bool next_quoted(std::span<const uint8_t> frame, size_t &pos,
-                        std::span<const uint8_t> &out) noexcept
+inline bool nextQuoted(std::span<const uint8_t> frame, size_t &pos,
+                       std::span<const uint8_t> &out) noexcept
 {
     while ((pos < frame.size()) && (frame[pos] != static_cast<uint8_t>(kQuote))) {
         if (frame[pos] == static_cast<uint8_t>(kStar)) {
@@ -189,7 +188,7 @@ inline bool next_quoted(std::span<const uint8_t> frame, size_t &pos,
  * @retval true: 长度与内容都相同。
  * @retval false: 任一不同。
  */
-inline bool quoted_equals(std::span<const uint8_t> field, std::string_view text) noexcept
+inline bool quotedEquals(std::span<const uint8_t> field, std::string_view text) noexcept
 {
     if (field.size() != text.size()) {
         return false;
@@ -209,7 +208,7 @@ inline bool quoted_equals(std::span<const uint8_t> field, std::string_view text)
  * @retval true: 前缀匹配（字段可更长）。
  * @retval false: 字段更短或任一字节不同。
  */
-inline bool quoted_starts_with(std::span<const uint8_t> field, std::string_view text) noexcept
+inline bool quotedStartsWith(std::span<const uint8_t> field, std::string_view text) noexcept
 {
     if (field.size() < text.size()) {
         return false;
@@ -229,9 +228,9 @@ inline bool quoted_starts_with(std::span<const uint8_t> field, std::string_view 
  * @retval true: 前缀匹配。
  * @retval false: 长度不足或字节不同。
  */
-inline bool starts_with(std::span<const uint8_t> text, std::string_view prefix) noexcept
+inline bool startsWith(std::span<const uint8_t> text, std::string_view prefix) noexcept
 {
-    return quoted_starts_with(text, prefix);
+    return quotedStartsWith(text, prefix);
 }
 
 /**
@@ -241,8 +240,7 @@ inline bool starts_with(std::span<const uint8_t> text, std::string_view prefix) 
  * @retval true: 前缀匹配。
  * @retval false: 长度不足或字节不同。
  */
-inline bool bytes_starts_with(std::span<const uint8_t> text,
-                              std::span<const uint8_t> prefix) noexcept
+inline bool bytesStartsWith(std::span<const uint8_t> text, std::span<const uint8_t> prefix) noexcept
 {
     if (text.size() < prefix.size()) {
         return false;
@@ -261,17 +259,17 @@ inline bool bytes_starts_with(std::span<const uint8_t> text,
  * @retval true: 以 "\r\n" 结尾，且终止符之前 5 字节为 '*' + 两位十六进制。
  * @retval false: 结构不符（长度不足或字节不对）。
  */
-inline bool has_hex_tail(std::span<const uint8_t> frame) noexcept
+inline bool hasHexTail(std::span<const uint8_t> frame) noexcept
 {
     const size_t size = frame.size();
     if (size < kTailBytes) {
         return false;
     }
-    const size_t star_pos = size - kTailBytes;
+    const size_t starPos = size - kTailBytes;
     return (frame[size - 1U] == static_cast<uint8_t>(kLf)) &&
            (frame[size - 2U] == static_cast<uint8_t>(kCr)) &&
-           (frame[star_pos] == static_cast<uint8_t>(kStar)) && is_hex(frame[star_pos + 1U]) &&
-           is_hex(frame[star_pos + 2U]);
+           (frame[starPos] == static_cast<uint8_t>(kStar)) && isHex(frame[starPos + 1U]) &&
+           isHex(frame[starPos + 2U]);
 }
 
 /**
@@ -279,7 +277,7 @@ inline bool has_hex_tail(std::span<const uint8_t> frame) noexcept
  * @param sent: 已发送的命令字节（可能带 "\r\n"）。
  * @retval 长度: sent 去掉尾部 CR/LF 后的字节数。
  */
-inline size_t strip_line_end(std::span<const uint8_t> sent) noexcept
+inline size_t stripLineEnd(std::span<const uint8_t> sent) noexcept
 {
     size_t len = sent.size();
     while ((len > 0U) && ((sent[len - 1U] == static_cast<uint8_t>(kCr)) ||
@@ -296,7 +294,7 @@ inline size_t strip_line_end(std::span<const uint8_t> sent) noexcept
  * @param end: 参与校验的终点（不含）。
  * @retval 值: XOR 结果（范围非法时按空区间处理，返回 0）。
  */
-inline uint8_t xor_checksum(std::span<const uint8_t> frame, size_t begin, size_t end) noexcept
+inline uint8_t xorChecksum(std::span<const uint8_t> frame, size_t begin, size_t end) noexcept
 {
     uint8_t checksum = 0;
     if ((begin >= end) || (end > frame.size())) {
