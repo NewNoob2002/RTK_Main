@@ -1,0 +1,8 @@
+# cli 组件的 C++ clang-tidy 配置：继承根 .clang-tidy（Q3，2026-11-17 纳入 G5b）。
+# 控制台输出 API 本身是 printf 风格（va_list/vsnprintf，格式与实参由 -Wformat 和
+# __attribute__((format)) 在编译期校验），日志宏 FW_LOGx 展开为 do { } while (0)；
+# 两类与 main/、components/rtos/ 的屏蔽同理。其余规则照常执行。
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-pro-type-vararg

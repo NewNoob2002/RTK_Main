@@ -2,8 +2,8 @@
 # RTK_main：取自 embedded-engineering assets/cpp/.clang-tidy，按 esp-idf profile 调整：
 #   - 文件作用域静态变量用 s_ 前缀（ESP-006）；HeaderFilterRegex 只覆盖本工程 C++ 头
 #     （.hpp/.hh/.hxx）；C 公共头交给 .clang-tidy-c，避免 C++ 命名规则误报。
-#   - 门禁只对纯 C++ 组件（device_proto、link_core）与 host 测试执行：本机 clang 无 Xtensa target，
-#     依赖 IDF 的翻译单元无法完整解析，改由编译告警 + 人工审查把关。
+#   - 门禁覆盖全部自有源文件（tools/tidy_check，Q3 2026-11-17）：依赖 IDF 的翻译单元用 idf.py 的编译数据库，
+#     按 .clangd 方式过滤 xtensa GCC 专有选项后解析；IDF 宏造成的噪声在对应目录的 .clang-tidy 屏蔽并写明理由。
 #
 # 关闭项及原因：
 #   bugprone-easily-swappable-parameters       寄存器/地址类接口大量同类型参数，噪声过大
@@ -53,6 +53,10 @@ CheckOptions:
   # span 是“指针 + 长度”，按值传递是惯用法（Core Guidelines F.16），不要改成 const 引用。
   performance-unnecessary-value-param.AllowedTypes: 'etl::span;std::span;pw::span;std::string_view;etl::string_view'
   readability-function-size.LineThreshold: 100
+  # 正整数字面量（如 1U << 0、x & 0x0F）不按“有符号操作数”报告：字面量非负，结果确定；
+  # 由整型提升产生的有符号操作数（uint8_t/uint16_t 参与位运算）仍报告（Q3，2026-11-17）。
+  bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true
+  hicpp-signed-bitwise.IgnorePositiveIntegerLiterals: true
   readability-magic-numbers.IgnoredIntegerValues: '0;1;2;8;16;32;64'
   readability-magic-numbers.IgnorePowersOf2IntegerValues: true
   # 命名（方案 A）：类型 CamelCase；函数/变量 lower_case；私有/受保护成员后缀 _；
