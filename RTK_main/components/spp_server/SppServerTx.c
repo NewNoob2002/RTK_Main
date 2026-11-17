@@ -6,11 +6,7 @@
 
 #include "SppServerPriv.h"
 
-#define SPP_SERVER_CHANNEL_REPLY  (0U)
-#define SPP_SERVER_CHANNEL_STREAM (1U)
-#define SPP_SERVER_CHANNEL_PUSH   (2U)
-
-static spp_server_session_t *spp_server_find_locked(uint32_t handle)
+spp_server_session_t *spp_server_find_locked(uint32_t handle)
 {
     for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; ++idx) {
         if (s_spp.sessions[idx].in_use && (s_spp.sessions[idx].handle == handle)) {
@@ -18,375 +14,6 @@ static spp_server_session_t *spp_server_find_locked(uint32_t handle)
         }
     }
     return NULL;
-}
-
-/* level 与通知分离：通知可合并，poll_event 在等待前重查每槽 level。 */
-void spp_server_tx_wake(void)
-{
-    bool post = false;
-    taskENTER_CRITICAL(&s_spp_mux);
-    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; ++idx) {
-        if (s_spp.sessions[idx].tx_space && !s_spp.tx_wake_pending) {
-            s_spp.tx_wake_pending = true;
-            post = true;
-        }
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    if (post && (s_spp.rtos.evt_queue != NULL)) {
-        const spp_server_evt_t evt = {.type = SPP_SERVER_EVT_TX_SPACE};
-        if (xQueueSend(s_spp.rtos.evt_queue, &evt, 0) != pdPASS) {
-            taskENTER_CRITICAL(&s_spp_mux);
-            s_spp.tx_wake_pending = false;
-            taskEXIT_CRITICAL(&s_spp_mux);
-        }
-    }
-    if (s_spp.rtos.worker != NULL) {
-        (void)xTaskNotifyGive(s_spp.rtos.worker);
-    }
-    if (s_spp.rtos.evt_group != NULL) {
-        (void)xEventGroupSetBits(s_spp.rtos.evt_group,
-                                 SPP_SERVER_BIT_WAKE(0) | SPP_SERVER_BIT_WAKE(1));
-    }
-    if (post) {
-        spp_server_notify_rx_wake();
-    }
-}
-
-void spp_server_tx_reclaim_locked(spp_server_session_t *session)
-{
-    if ((s_spp.stream_owner == (session->idx + 1U)) && s_spp.stream_unbind &&
-        (session->users == 0U)) {
-        /* 旧流的回调也不能归还给未来 owner；解绑必须等旧流全部结算或 CLOSE。 */
-        bool busy = false;
-        for (uint32_t idx = 0U; idx < SPP_SERVER_INFLIGHT_MAX; ++idx) {
-            busy =
-                busy || (s_spp.inflight[idx].active && (s_spp.inflight[idx].slot == session->idx) &&
-                         (s_spp.inflight[idx].channel == SPP_SERVER_CHANNEL_STREAM));
-        }
-        if (!busy) {
-            s_spp.tx_stats.cancelled += s_spp.stream.used;
-            memset(&s_spp.stream, 0, sizeof(s_spp.stream));
-            s_spp.stream_owner = 0U;
-            s_spp.stream_unbind = false;
-            s_spp.stream_active = false;
-        }
-    }
-}
-
-void spp_server_tx_close_locked(spp_server_session_t *session)
-{
-    s_spp.tx_stats.cancelled += session->reply.used + session->push_len;
-    session->reply.used = 0U;
-    session->reply.issued = 0U;
-    session->reply.reserved = 0U;
-    session->push_len = 0U;
-    session->tx_result = ESP_ERR_INVALID_STATE;
-    session->tx_space = false;
-    for (uint32_t idx = 0U; idx < SPP_SERVER_INFLIGHT_MAX; ++idx) {
-        spp_server_inflight_t *item = &s_spp.inflight[idx];
-        if (item->active && (item->slot == session->idx)) {
-            if (item->submitting) {
-                item->done = true; /* API 返回前仍固定描述符和 merge/users */
-            } else {
-                item->active = false;
-                s_spp.tx_stats.inflight--;
-            }
-        }
-    }
-    if (s_spp.stream_owner == (session->idx + 1U)) {
-        s_spp.stream_unbind = true;
-        s_spp.stream.reserved = 0U;
-    }
-    spp_server_tx_reclaim_locked(session);
-}
-
-/* 预留只改元数据；每通道一个未发布区间，不持有跨等待租约。 */
-static esp_err_t spp_server_reserve(uint32_t handle, size_t len, uint8_t channel,
-                                    spp_server_tx_token_t *token)
-{
-    esp_err_t result = ESP_ERR_NOT_FOUND;
-    if ((token == NULL) || (len == 0U) || (len > SPP_SERVER_STREAM_CAPACITY)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!s_spp.initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    taskENTER_CRITICAL(&s_spp_mux);
-    spp_server_session_t *session = spp_server_find_locked(handle);
-    if (session != NULL) {
-        spp_server_ring_t *ring = &session->reply;
-        size_t capacity = SPP_SERVER_REPLY_CAPACITY;
-        result = ESP_ERR_TIMEOUT;
-        if (channel == SPP_SERVER_CHANNEL_STREAM) {
-            if ((s_spp.stream_owner != (session->idx + 1U)) || s_spp.stream_unbind) {
-                taskEXIT_CRITICAL(&s_spp_mux);
-                return ESP_ERR_INVALID_STATE;
-            }
-            ring = &s_spp.stream;
-            capacity = SPP_SERVER_STREAM_CAPACITY;
-        }
-        if (!session->disconnect_pending && !ring->copying && (ring->reserved == 0U) &&
-            (len <= (capacity - ring->used))) {
-            /* len <=4096，uint16_t 足够；slot<2、channel<=1。 */
-            ring->reserved = (uint16_t)len;
-            ++ring->serial;
-            *token = (spp_server_tx_token_t){session->generation, ring->serial, (uint16_t)len,
-                                             session->idx, channel};
-            result = ESP_OK;
-        } else {
-            s_spp.tx_stats.paused++;
-        }
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    return result;
-}
-
-esp_err_t spp_server_reply_reserve(uint32_t handle, spp_server_tx_token_t *token)
-{
-    return spp_server_reserve(handle, SPP_SERVER_REPLY_RESERVE, SPP_SERVER_CHANNEL_REPLY, token);
-}
-
-esp_err_t spp_server_stream_reserve(uint32_t handle, size_t len, spp_server_tx_token_t *token)
-{
-    return spp_server_reserve(handle, len, SPP_SERVER_CHANNEL_STREAM, token);
-}
-
-static spp_server_ring_t *spp_server_token_ring_locked(const spp_server_tx_token_t *token)
-{
-    if ((token == NULL) || (token->slot >= SPP_SERVER_MAX_SESSIONS) ||
-        (token->channel > SPP_SERVER_CHANNEL_STREAM)) {
-        return NULL;
-    }
-    spp_server_session_t *session = &s_spp.sessions[token->slot];
-    spp_server_ring_t *ring =
-        (token->channel == SPP_SERVER_CHANNEL_STREAM) ? &s_spp.stream : &session->reply;
-    if (!session->in_use || (session->generation != token->generation) ||
-        (ring->serial != token->serial) || (ring->reserved != token->capacity) ||
-        (token->capacity == 0U) ||
-        ((token->channel == SPP_SERVER_CHANNEL_STREAM) &&
-         ((s_spp.stream_owner != (token->slot + 1U)) || s_spp.stream_unbind))) {
-        return NULL;
-    }
-    return ring;
-}
-
-void spp_server_tx_cancel(const spp_server_tx_token_t *token)
-{
-    taskENTER_CRITICAL(&s_spp_mux);
-    spp_server_ring_t *ring = spp_server_token_ring_locked(token);
-    if ((ring != NULL) && !ring->copying) {
-        ring->reserved = 0U;
-        s_spp.sessions[token->slot].tx_space = true;
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    spp_server_tx_wake();
-}
-
-/* 把 n 字节复制到环 pos 处（可跨环尾），返回下一写位置。 */
-static size_t spp_server_ring_copy(uint8_t *storage, size_t capacity, size_t pos,
-                                   const uint8_t *src, size_t n)
-{
-    const size_t first = (n <= (capacity - pos)) ? n : (capacity - pos);
-    memcpy(storage + pos, src, first);
-    memcpy(storage, src + first, n - first);
-    return (pos + n) % capacity;
-}
-
-/* copy 的区间先固定，锁外 scatter copy，最后一次发布；CLOSE 期间不再接纳新 owner。
- * 两段按序拼成一条记录，句末位只标在第二段末尾，worker 不会在两段之间插入 reply。 */
-static esp_err_t spp_server_tx_commit_spans(const spp_server_tx_token_t *token, const uint8_t *a,
-                                            size_t alen, const uint8_t *b, size_t blen)
-{
-    uint8_t *storage = NULL;
-    size_t capacity = 0U;
-    size_t tail = 0U;
-    const size_t len = alen + blen;
-    if ((token == NULL) || (a == NULL) || (alen == 0U) || ((blen != 0U) && (b == NULL)) ||
-        (len > token->capacity)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    taskENTER_CRITICAL(&s_spp_mux);
-    spp_server_ring_t *ring = spp_server_token_ring_locked(token);
-    if ((ring == NULL) || ring->copying) {
-        taskEXIT_CRITICAL(&s_spp_mux);
-        return ESP_ERR_INVALID_STATE;
-    }
-    spp_server_session_t *session = &s_spp.sessions[token->slot];
-    ring->copying = true;
-    session->users++;
-    capacity = (token->channel == SPP_SERVER_CHANNEL_STREAM) ? SPP_SERVER_STREAM_CAPACITY
-                                                             : SPP_SERVER_REPLY_CAPACITY;
-    storage = (token->channel == SPP_SERVER_CHANNEL_STREAM) ? s_spp.storage.stream_buf
-                                                            : s_spp.storage.reply_buf[token->slot];
-    tail = ((size_t)ring->head + ring->used) % capacity;
-    taskEXIT_CRITICAL(&s_spp_mux);
-
-    const size_t mid = spp_server_ring_copy(storage, capacity, tail, a, alen);
-    if (blen != 0U) {
-        (void)spp_server_ring_copy(storage, capacity, mid, b, blen);
-    }
-
-    esp_err_t result = ESP_ERR_INVALID_STATE;
-    taskENTER_CRITICAL(&s_spp_mux);
-    ring = spp_server_token_ring_locked(token);
-    if (ring != NULL) {
-        /* used+len<=容量<=4096；句末位在发布 used 前更新，worker 不会看到半句。 */
-        ring->used += (uint16_t)len;
-        ring->reserved = 0U;
-        if (token->channel == SPP_SERVER_CHANNEL_STREAM) {
-            const size_t end = (tail + len - 1U) % capacity;
-            s_spp.stream_ends[end / 8U] |= (uint8_t)(1U << (end % 8U));
-        } else {
-            session->tx_total += (uint32_t)len;
-        }
-        s_spp.tx_stats.accepted += (uint32_t)len;
-        if (ring->used > s_spp.tx_stats.high_water) {
-            s_spp.tx_stats.high_water = ring->used;
-        }
-        session->tx_space = true;
-        result = ESP_OK;
-    }
-    /* CLOSE 可使 token 失效；复制标志仍须清理，否则槽永远不能再用。 */
-    if (token->channel == SPP_SERVER_CHANNEL_STREAM) {
-        s_spp.stream.copying = false;
-    } else {
-        session->reply.copying = false;
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    spp_server_session_release(session);
-    spp_server_tx_wake();
-    return result;
-}
-
-esp_err_t spp_server_tx_commit(const spp_server_tx_token_t *token, const uint8_t *data, size_t len)
-{
-    return spp_server_tx_commit_spans(token, data, len, NULL, 0U);
-}
-
-esp_err_t spp_server_tx_commit2(const spp_server_tx_token_t *token, const uint8_t *a, size_t alen,
-                                const uint8_t *b, size_t blen)
-{
-    if ((token == NULL) || (a == NULL) || (alen == 0U) || (b == NULL) || (blen == 0U)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return spp_server_tx_commit_spans(token, a, alen, b, blen);
-}
-
-esp_err_t spp_server_stream_bind(uint32_t handle, bool phone)
-{
-    esp_err_t result = ESP_ERR_NOT_FOUND;
-    taskENTER_CRITICAL(&s_spp_mux);
-    spp_server_session_t *session = spp_server_find_locked(handle);
-    if (session != NULL) {
-        result = ESP_OK;
-        if (phone && (s_spp.stream_owner == 0U)) {
-            s_spp.stream_owner = session->idx + 1U;
-            memset(s_spp.stream_ends, 0, sizeof(s_spp.stream_ends));
-        } else if (phone && ((s_spp.stream_owner != (session->idx + 1U)) || s_spp.stream_unbind)) {
-            result = ESP_ERR_TIMEOUT;
-        } else if (!phone && (s_spp.stream_owner == (session->idx + 1U))) {
-            s_spp.stream_unbind = true;
-            s_spp.stream.reserved = 0U;
-            spp_server_tx_reclaim_locked(session);
-        }
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    return result;
-}
-
-esp_err_t spp_server_push_latest(uint32_t handle, const uint8_t *data, size_t len)
-{
-    if ((data == NULL) || (len == 0U) || (len > SPP_SERVER_PUSH_CAPACITY)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    esp_err_t result = ESP_ERR_NOT_FOUND;
-    taskENTER_CRITICAL(&s_spp_mux);
-    spp_server_session_t *session = spp_server_find_locked(handle);
-    if ((session != NULL) && !session->disconnect_pending) {
-        s_spp.tx_stats.cancelled += session->push_len;
-        memcpy(session->push, data, len);  /* <=40B，独立小邮箱，不占用 reply 预留 */
-        session->push_len = (uint16_t)len; /* len<=40 */
-        s_spp.tx_stats.accepted += (uint32_t)len;
-        result = ESP_OK;
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    spp_server_tx_wake();
-    return result;
-}
-
-bool spp_server_reply_ready(uint32_t handle)
-{
-    bool ready = false;
-    taskENTER_CRITICAL(&s_spp_mux);
-    spp_server_session_t *session = spp_server_find_locked(handle);
-    if (session != NULL) {
-        ready = !session->disconnect_pending && !session->reply.copying &&
-                (session->reply.reserved == 0U) &&
-                ((SPP_SERVER_REPLY_CAPACITY - session->reply.used) >= SPP_SERVER_REPLY_RESERVE);
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    return ready;
-}
-
-void spp_server_tx_stats(spp_server_tx_stats_t *stats)
-{
-    if (stats != NULL) {
-        taskENTER_CRITICAL(&s_spp_mux);
-        *stats = s_spp.tx_stats;
-        taskEXIT_CRITICAL(&s_spp_mux);
-    }
-}
-
-/* 只在 mux 内运行。SDK 按 handle 顺序完成；同步提交失败也排在旧描述符后退休，避免错误释放环头。 */
-static spp_server_inflight_t *spp_server_oldest_locked(uint8_t slot, bool pending_only)
-{
-    spp_server_inflight_t *oldest = NULL;
-    for (uint32_t idx = 0U; idx < SPP_SERVER_INFLIGHT_MAX; ++idx) {
-        spp_server_inflight_t *item = &s_spp.inflight[idx];
-        if (item->active && (item->slot == slot) && (!pending_only || !item->done) &&
-            ((oldest == NULL) || ((int32_t)(item->order - oldest->order) < 0))) {
-            oldest = item;
-        }
-    }
-    return oldest;
-}
-
-static void spp_server_retire_locked(spp_server_session_t *session)
-{
-    for (uint32_t count = 0U; count < SPP_SERVER_INFLIGHT_MAX; ++count) {
-        spp_server_inflight_t *item = spp_server_oldest_locked(session->idx, false);
-        if ((item == NULL) || !item->done || item->submitting) {
-            break;
-        }
-        if (session->in_use && (session->generation == item->generation)) {
-            spp_server_ring_t *ring = NULL;
-            size_t capacity = SPP_SERVER_REPLY_CAPACITY;
-            if (item->channel == SPP_SERVER_CHANNEL_REPLY) {
-                ring = &session->reply;
-                session->tx_done += item->len;
-            } else if (item->channel == SPP_SERVER_CHANNEL_STREAM) {
-                ring = &s_spp.stream;
-                capacity = SPP_SERVER_STREAM_CAPACITY;
-            }
-            if (ring != NULL) {
-                ring->head =
-                    (uint16_t)(((size_t)ring->head + item->len) % capacity); /* 容量<=4096 */
-                ring->used -= item->len;
-                ring->issued -= item->len;
-            }
-            if (item->result == ESP_OK) {
-                s_spp.tx_stats.completed += item->len;
-            } else {
-                s_spp.tx_stats.errors++;
-                session->tx_errors++;
-                session->tx_result = item->result;
-            }
-            session->tx_space = !session->disconnect_pending;
-        }
-        item->active = false;
-        s_spp.tx_stats.inflight--;
-    }
-    spp_server_tx_reclaim_locked(session);
 }
 
 /* 只取完整已发布句的前缀，清除已取句末位；跨句前优先回到 reply 调度。 */
@@ -418,233 +45,162 @@ static spp_server_inflight_t *spp_server_free_item_locked(void)
     return NULL;
 }
 
-/* worker 串行调用：merge 不被第二个 API 复用；回调早于返回也保留 submitting/users。 */
-static bool spp_server_worker_submit(void)
+/* worker 串行调用：本轮要写的一段；锁内填充，锁外只读。 */
+typedef struct {
+    spp_server_inflight_t *item;     /* 已占用的在途槽 */
+    spp_server_session_t *session;   /* 该槽所属会话（提交后必须 release） */
+    const uint8_t *storage;          /* 整段源区；PUSH 时已并入 merge_buf，为 NULL */
+    size_t capacity;                 /* 源环容量，用于跨尾回绕 */
+    size_t offset;                   /* 源区内起点 */
+    spp_server_inflight_t submitted; /* 提交前快照 */
+} spp_server_submit_t;
+
+/* 需持 s_spp_mux：本会话本轮是否优先发流——owner 是本会话、未在解绑、有未发出的流数据；
+ * 流未开始时要等 REPLY 写完且无 PUSH 待发，保证应答与流不交错。 */
+/**
+ * @brief  判断本会话本轮是否改发流通道（而不是 REPLY/PUSH）
+ * @param  idx: 会话槽位下标
+ * @param  candidate: 候选会话（只读）
+ * @retval true 可以；false 仍在应答或未绑定新流
+ * @note   需持 s_spp_mux。
+ */
+static bool spp_server_stream_ready_locked(uint8_t idx, const spp_server_session_t *candidate)
 {
-    spp_server_inflight_t *item = NULL;
-    spp_server_session_t *session = NULL;
-    const uint8_t *storage = NULL;
-    size_t capacity = 0U;
-    size_t offset = 0U;
-    /* 提交前快照：锁外 memcpy/API/trace 不再访问可能已被 retire 掉的在途描述符。 */
-    spp_server_inflight_t submitted = {0};
-    const TickType_t now = xTaskGetTickCount();
-    taskENTER_CRITICAL(&s_spp_mux);
-    item = spp_server_free_item_locked();
-    if (item != NULL) {
-        for (uint32_t step = 0U; step < SPP_SERVER_MAX_SESSIONS; ++step) {
-            const uint8_t idx = (s_spp.tx_cursor + step) % SPP_SERVER_MAX_SESSIONS; /* 余数<2 */
-            spp_server_session_t *candidate = &s_spp.sessions[idx];
-            if (!candidate->in_use || candidate->congested || candidate->disconnect_pending) {
-                continue;
-            }
-            spp_server_ring_t *ring = &candidate->reply;
-            uint8_t channel = SPP_SERVER_CHANNEL_REPLY;
-            capacity = SPP_SERVER_REPLY_CAPACITY;
-            storage = s_spp.storage.reply_buf[idx];
-            const bool stream = (s_spp.stream_owner == (idx + 1U)) && !s_spp.stream_unbind &&
-                                (s_spp.stream.used > s_spp.stream.issued);
-            if (stream && (s_spp.stream_active ||
-                           ((ring->used == ring->issued) && (candidate->push_len == 0U)))) {
-                ring = &s_spp.stream;
-                capacity = SPP_SERVER_STREAM_CAPACITY;
-                storage = s_spp.storage.stream_buf;
-                channel = SPP_SERVER_CHANNEL_STREAM;
-            }
-            size_t len = ring->used - ring->issued;
-            offset = ((size_t)ring->head + ring->issued) % capacity;
-            if (len == 0U) {
-                if (candidate->push_len == 0U) {
-                    continue;
-                }
-                len = candidate->push_len;
-                channel = SPP_SERVER_CHANNEL_PUSH;
-                memcpy(s_spp.storage.merge_buf, candidate->push, len); /* <=40B */
-                candidate->push_len = 0U;
-                storage = NULL;
-            } else if (channel == SPP_SERVER_CHANNEL_STREAM) {
-                len = spp_server_stream_chunk_locked(offset, len);
-            } else if (len > SPP_SERVER_MERGE_CAPACITY) {
-                len = SPP_SERVER_MERGE_CAPACITY;
-            }
-            if (channel != SPP_SERVER_CHANNEL_PUSH) {
-                ring->issued += (uint16_t)len; /* len<=1024 */
-            }
-            *item = (spp_server_inflight_t){.active = true,
-                                            .submitting = true,
-                                            .slot = idx,
-                                            .channel = channel,
-                                            .len = (uint16_t)len,
-                                            .generation = candidate->generation,
-                                            .handle = candidate->handle,
-                                            .order = ++s_spp.tx_order,
-                                            .tick = now};
-            candidate->users++;
-            submitted = *item;
-            s_spp.tx_stats.inflight++;
-            s_spp.tx_cursor = (idx + 1U) % SPP_SERVER_MAX_SESSIONS; /* 余数<2 */
-            session = candidate;
-            break;
-        }
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    if (session == NULL) {
+    return (s_spp.stream_owner == (idx + 1U)) && !s_spp.stream_unbind &&
+           (s_spp.stream.used > s_spp.stream.issued) &&
+           (s_spp.stream_active ||
+            ((candidate->reply.used == candidate->reply.issued) && (candidate->push_len == 0U)));
+}
+
+/* 需持 s_spp_mux：按 tx_cursor 轮转挑会话/通道并占用在途槽；无候选返回 false。
+ * now 由调用方在锁外取，临界区内不调用 FreeRTOS API。 */
+/**
+ * @brief  选出发送任务本轮要提交的一块数据并占住在途槽
+ * @param[out] out: 选中结果（会话、数据、容量、偏移与在途登记）
+ * @param  now: 当前时钟节拍
+ * @retval true 已选中；false 本轮无数据可发
+ * @note   需持 s_spp_mux；PUSH 通道在此处已拷入 merge_buf，环形通道由调用方锁外合并。
+ */
+static bool spp_server_pick_locked(spp_server_submit_t *out, TickType_t now)
+{
+    out->item = spp_server_free_item_locked();
+    if (out->item == NULL) {
         return false;
     }
-    if (storage != NULL) {
-        const size_t first =
-            (submitted.len <= (capacity - offset)) ? submitted.len : (capacity - offset);
-        memcpy(s_spp.storage.merge_buf, storage + offset, first);
-        memcpy(s_spp.storage.merge_buf + first, storage, submitted.len - first);
+    for (uint32_t step = 0U; step < SPP_SERVER_MAX_SESSIONS; ++step) {
+        const uint8_t idx = (s_spp.tx_cursor + step) % SPP_SERVER_MAX_SESSIONS; /* 余数<2 */
+        spp_server_session_t *candidate = &s_spp.sessions[idx];
+        if (!candidate->in_use || candidate->congested || candidate->disconnect_pending) {
+            continue;
+        }
+        spp_server_ring_t *ring = &candidate->reply;
+        uint8_t channel = SPP_SERVER_CHANNEL_REPLY;
+        out->capacity = SPP_SERVER_REPLY_CAPACITY;
+        out->storage = s_spp.storage.reply_buf[idx];
+        if (spp_server_stream_ready_locked(idx, candidate)) {
+            ring = &s_spp.stream;
+            out->capacity = SPP_SERVER_STREAM_CAPACITY;
+            out->storage = s_spp.storage.stream_buf;
+            channel = SPP_SERVER_CHANNEL_STREAM;
+        }
+        size_t len = ring->used - ring->issued;
+        out->offset = ((size_t)ring->head + ring->issued) % out->capacity;
+        if (len == 0U) {
+            if (candidate->push_len == 0U) {
+                continue;
+            }
+            len = candidate->push_len;
+            channel = SPP_SERVER_CHANNEL_PUSH;
+            memcpy(s_spp.storage.merge_buf, candidate->push, len); /* <=40B */
+            candidate->push_len = 0U;
+            out->storage = NULL;
+        } else if (channel == SPP_SERVER_CHANNEL_STREAM) {
+            len = spp_server_stream_chunk_locked(out->offset, len);
+        } else if (len > SPP_SERVER_MERGE_CAPACITY) {
+            len = SPP_SERVER_MERGE_CAPACITY;
+        }
+        if (channel != SPP_SERVER_CHANNEL_PUSH) {
+            ring->issued += (uint16_t)len; /* len<=1024 */
+        }
+        *out->item = (spp_server_inflight_t){.active = true,
+                                             .submitting = true,
+                                             .slot = idx,
+                                             .channel = channel,
+                                             .len = (uint16_t)len,
+                                             .generation = candidate->generation,
+                                             .handle = candidate->handle,
+                                             .order = ++s_spp.tx_order,
+                                             .tick = now};
+        candidate->users++;
+        out->submitted = *out->item;
+        s_spp.tx_stats.inflight++;
+        s_spp.tx_cursor = (idx + 1U) % SPP_SERVER_MAX_SESSIONS; /* 余数<2 */
+        out->session = candidate;
+        return true;
+    }
+    return false;
+}
+
+/* 需持 s_spp_mux：把 SDK write 的同步结果记入在途槽并推进会话状态。 */
+/**
+ * @brief  提交结果：成功则登记在途写，失败则置断开请求
+ * @param  pick: 选中的提交结果
+ * @param  result: esp_spp_write 的返回值
+ * @note   需持 s_spp_mux。
+ */
+static void spp_server_commit_locked(spp_server_submit_t *pick, esp_err_t result)
+{
+    pick->item->submitting = false;
+    if (result != ESP_OK) {
+        if (!pick->item->done) {
+            pick->item->done = true;
+            pick->item->result = result;
+        }
+        /* 同步提交失败可能已部分入队，不得继续续发尾部，立即关闭受影响会话。 */
+        if (pick->session->in_use && (pick->session->generation == pick->item->generation)) {
+            pick->session->disconnect_pending = true;
+        }
+    }
+    spp_server_retire_locked(pick->session);
+}
+
+/* worker 串行调用：merge 不被第二个 API 复用；回调早于返回也保留 submitting/users。 */
+/**
+ * @brief  发送任务一轮：从选块到提交完整的数据通路
+ * @retval true 本轮提交了数据；false 无数据可发
+ * @note   任务上下文；锁内选块、锁外合并与写、锁内提交，锁不跨 esp_spp_write。
+ */
+bool spp_server_worker_submit(void)
+{
+    spp_server_submit_t pick = {0};
+    const TickType_t now = xTaskGetTickCount();
+    taskENTER_CRITICAL(&s_spp_mux);
+    const bool found = spp_server_pick_locked(&pick, now);
+    taskEXIT_CRITICAL(&s_spp_mux);
+    if (!found) {
+        return false;
+    }
+    /* 锁外合并整段（跨环尾回绕）；PUSH 已在 pick 内并入 merge_buf。 */
+    if (pick.storage != NULL) {
+        const size_t first = (pick.submitted.len <= (pick.capacity - pick.offset))
+                                 ? pick.submitted.len
+                                 : (pick.capacity - pick.offset);
+        memcpy(s_spp.storage.merge_buf, pick.storage + pick.offset, first);
+        memcpy(s_spp.storage.merge_buf + first, pick.storage, pick.submitted.len - first);
     }
     /* 唯一 SDK write 调用；len<=1024，转 int 安全。SDK 深拷贝并可能阻塞 BTC 投递。 */
     const esp_err_t result =
-        esp_spp_write(submitted.handle, (int)submitted.len, s_spp.storage.merge_buf);
+        esp_spp_write(pick.submitted.handle, (int)pick.submitted.len, s_spp.storage.merge_buf);
     taskENTER_CRITICAL(&s_spp_mux);
-    item->submitting = false;
-    if (result != ESP_OK) {
-        if (!item->done) {
-            item->done = true;
-            item->result = result;
-        }
-        /* 同步提交失败可能已部分入队，不得继续续发尾部，立即关闭受影响会话。 */
-        if (session->in_use && (session->generation == item->generation)) {
-            session->disconnect_pending = true;
-        }
-    }
-    spp_server_retire_locked(session);
+    spp_server_commit_locked(&pick, result);
     taskEXIT_CRITICAL(&s_spp_mux);
-    spp_server_session_release(session);
+    spp_server_session_release(pick.session);
     if (result != ESP_OK) {
-        spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, submitted.handle, (uint32_t)result,
-                         (uint32_t)submitted.len);
+        spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, pick.submitted.handle, (uint32_t)result,
+                         (uint32_t)pick.submitted.len);
     }
     spp_server_tx_wake();
     return true;
-}
-
-/* 普通断开保留独立重试状态；只在 worker 内调用 SDK。 */
-static void spp_server_disconnect_process(void)
-{
-    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-        uint32_t handle = 0U;
-        bool submit = false;
-        const TickType_t now = xTaskGetTickCount();
-        taskENTER_CRITICAL(&s_spp_mux);
-        spp_server_session_t *session = &s_spp.sessions[idx];
-        submit = session->in_use && session->disconnect_pending && !session->disconnect_submitted &&
-                 (!session->disconnect_attempted ||
-                  ((now - session->disconnect_attempt) >= pdMS_TO_TICKS(SPP_SERVER_CTRL_RETRY_MS)));
-        if (submit) {
-            handle = session->handle;
-            session->disconnect_submitting = true;
-            session->disconnect_attempted = true;
-            session->disconnect_attempt = now;
-        }
-        taskEXIT_CRITICAL(&s_spp_mux);
-        if (!submit) {
-            continue;
-        }
-        const esp_err_t err = esp_spp_disconnect(handle);
-        taskENTER_CRITICAL(&s_spp_mux);
-        session->disconnect_submitting = false;
-        session->disconnect_submitted = (err == ESP_OK);
-        taskEXIT_CRITICAL(&s_spp_mux);
-        if (err != ESP_OK) {
-            spp_server_trace(SPP_SERVER_TRACE_CTRL_ERR, handle,
-                             (uint32_t)SPP_SERVER_TRACE_CTRL_DISCONNECT, (uint32_t)err);
-        }
-    }
-}
-
-void spp_server_worker(void *arg)
-{
-    (void)arg;
-    for (;;) {
-        bool stopped = false;
-        taskENTER_CRITICAL(&s_spp_mux);
-        stopped = s_spp.boot_stop_requested;
-        if (stopped) {
-            s_spp.boot_worker_stopped = true;
-        }
-        taskEXIT_CRITICAL(&s_spp_mux);
-        if (stopped) {
-            /* 启动失败后永久停泊；TCB/栈与回调存储保留至重启，不再提交 SDK 调用。 */
-            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            continue;
-        }
-        /* 每轮至多四次，控制请求不能被持续生产的数据饿死。满/CONG 时由通知唤醒，无忙轮询。 */
-        for (uint32_t count = 0U; count < SPP_SERVER_INFLIGHT_MAX; ++count) {
-            if (!spp_server_worker_submit()) {
-                break;
-            }
-        }
-        spp_server_ctrl_process();
-        spp_server_disconnect_process();
-        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(SPP_SERVER_CTRL_RETRY_MS));
-    }
-}
-
-/* SDK 回调无 request id：仅匹配相同 handle 的最早待完成块；generation 保护本地槽复用，
- * 不能辨识 SDK 假设外的“旧 handle 回调恰在新 handle 同值在途”的重复事件。 */
-void spp_server_handle_write(esp_spp_cb_param_t *param)
-{
-    uint32_t candidates = 0U;
-    uint32_t bytes = 0U;
-    TickType_t tick = 0U;
-    bool matched = false;
-    bool success = false;
-    const bool anonymous = (param->write.handle == 0U) && (param->write.len == -1) &&
-                           (param->write.status != ESP_SPP_SUCCESS);
-    taskENTER_CRITICAL(&s_spp_mux);
-    if (anonymous) {
-        s_spp.tx_stats.anon_write_fail++;
-        for (uint32_t idx = 0U; idx < SPP_SERVER_INFLIGHT_MAX; ++idx) {
-            const spp_server_inflight_t *item = &s_spp.inflight[idx];
-            if (item->active && s_spp.sessions[item->slot].in_use &&
-                (s_spp.sessions[item->slot].generation == item->generation)) {
-                s_spp.sessions[item->slot].disconnect_pending = true;
-                candidates |= 1U << item->slot;
-            }
-        }
-    } else {
-        spp_server_session_t *session = spp_server_find_locked(param->write.handle);
-        spp_server_inflight_t *item =
-            (session != NULL) ? spp_server_oldest_locked(session->idx, true) : NULL;
-        if ((item != NULL) && (item->generation == session->generation)) {
-            matched = true;
-            bytes = item->len;
-            tick = item->tick;
-            success =
-                (param->write.status == ESP_SPP_SUCCESS) && (param->write.len == (int)item->len);
-            item->done = true;
-            item->result = success ? ESP_OK : ESP_FAIL;
-            if (!success) {
-                /* 短写或失败状态不得盲目重发尾部，关闭受影响会话并报告。 */
-                session->disconnect_pending = true;
-            }
-            session->congested = param->write.cong;
-            spp_server_retire_locked(session);
-        } else {
-            s_spp.tx_stats.stray_write++;
-        }
-    }
-    taskEXIT_CRITICAL(&s_spp_mux);
-    if (anonymous) {
-        spp_server_trace(SPP_SERVER_TRACE_WRITE_ANON, 0U, (uint32_t)param->write.status,
-                         candidates);
-    } else if (!matched) {
-        spp_server_trace(SPP_SERVER_TRACE_WRITE_STRAY, param->write.handle,
-                         (param->write.len > 0) ? (uint32_t)param->write.len : 0U,
-                         (uint32_t)param->write.status);
-    } else if (success) {
-        spp_server_trace(SPP_SERVER_TRACE_WRITE_DONE, param->write.handle, bytes,
-                         (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount() - tick));
-    } else {
-        spp_server_trace(SPP_SERVER_TRACE_WRITE_ERR, param->write.handle, (uint32_t)ESP_FAIL,
-                         bytes);
-    }
-    spp_server_tx_wake();
 }
 
 static bool spp_server_wait_change(uint8_t idx, TickType_t start, uint32_t timeout_ms)

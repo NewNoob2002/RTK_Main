@@ -92,9 +92,16 @@ struct Engine {
         }
     }
 
-    // start 前是待合并输出的未知字节；prefix 按 need 递增，避免跳过缓冲区内部的帧尾。
-    // 返回时只保留一个尚待补全的候选；aborting 时半帧一律进入拒绝路径。
-    static void replay(Demux &dmx, bool aborting) noexcept
+    /**
+     * @brief  把已缓冲字节就地回放给解码器
+     * @param  dmx: 目标 Demux 实例
+     * @param  aborting: 为真时半帧一律进入拒绝路径
+     * @note   start 前是待合并输出的未知字节；prefix 按 need 递增，避免跳过缓冲区内部的帧尾。
+     *         返回时只保留一个尚待补全的候选。
+     * @note   不拆（S4 §2.1）：就地回放状态机，start/prefix/rejectCurrent 与候选、need、stats 交织，
+     *         拆出需 4 个以上出入参且回调顺序敏感。
+     */
+    static void replay(Demux &dmx, bool aborting) noexcept // NOLINT(readability-function-*)
     {
         std::size_t start = 0;
         std::size_t prefix = dmx.len_;

@@ -9,6 +9,8 @@
 #include <limits>
 #include <span>
 
+#include "FanoutRingRing.hpp"
+
 namespace fw {
 
 namespace {
@@ -16,6 +18,9 @@ namespace {
 constexpr size_t kByteMask = 0xFFU;
 constexpr size_t kBitsPerByte = 8U;
 constexpr size_t kMinRecordsInRing = 2U;
+
+using detail::readHeaderLen;
+using detail::ringPhys;
 constexpr uint32_t kTypedHeaderBytes =
     kFanoutTypedHeaderBytes; // 固定为 3，索引加法必须按 u32 回绕。
 
@@ -44,14 +49,6 @@ void rotateRingRight(std::span<uint8_t> ring, size_t shift) noexcept
     reverseSpan(ring, 0U, cap);
 }
 
-size_t ringPhys(uint32_t oldest, size_t cap, uint32_t pos) noexcept
-{
-    const size_t base =
-        static_cast<size_t>(oldest) % cap; // uint32_t 扩宽至 size_t 无损（32/64 位平台）
-    const size_t offset = static_cast<size_t>(pos - oldest);
-    return (base + offset) % cap;
-}
-
 void ringWrite(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos,
                std::span<const uint8_t> src) noexcept
 {
@@ -68,33 +65,6 @@ void ringWrite(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos,
         const std::span<const uint8_t> s1 = src.subspan(first);
         std::copy(s1.begin(), s1.end(), ring.begin());
     }
-}
-
-void ringRead(std::span<const uint8_t> ring, uint32_t oldest, uint32_t pos,
-              std::span<uint8_t> dst) noexcept
-{
-    if (dst.empty()) {
-        return;
-    }
-    const size_t cap = ring.size();
-    const size_t idx = ringPhys(oldest, cap, pos);
-    const size_t first = std::min(dst.size(), cap - idx);
-    const std::span<const uint8_t> s0 = ring.subspan(idx, first);
-    std::copy(s0.begin(), s0.end(), dst.begin());
-    if (first < dst.size()) {
-        const std::span<const uint8_t> s1 = ring.first(dst.size() - first);
-        const std::span<uint8_t> d1 = dst.subspan(first);
-        std::copy(s1.begin(), s1.end(), d1.begin());
-    }
-}
-
-uint16_t readHeaderLen(std::span<const uint8_t> ring, uint32_t oldest, uint32_t pos) noexcept
-{
-    std::array<uint8_t, kFanoutHeaderBytes> hdr{};
-    ringRead(ring, oldest, pos, hdr);
-    const uint16_t lo = static_cast<uint16_t>(hdr[0]);
-    const uint16_t hi = static_cast<uint16_t>(static_cast<uint16_t>(hdr[1]) << kBitsPerByte);
-    return static_cast<uint16_t>(lo | hi); // hdr[0..1] 均为 uint8_t，结果在 0..65535
 }
 
 void writeHeaderLen(std::span<uint8_t> ring, uint32_t oldest, uint32_t pos,
@@ -239,66 +209,6 @@ Result FanoutRing::write(std::span<const uint8_t> record) noexcept
     return Result::kOk;
 }
 
-Result FanoutRing::read(uint8_t readerId, std::span<uint8_t> out, size_t &len) noexcept
-{
-    len = 0U;
-    if (!inited_) {
-        return Result::kInvalidState;
-    }
-    if (typed_) {
-        return Result::kNotSupported;
-    }
-    if (readerId >= kFanoutMaxReaders) {
-        return Result::kInvalidArg;
-    }
-    const LockGuard guard(lock_);
-
-    Reader &reader = readers_[readerId];
-    if (!reader.attached) {
-        return Result::kInvalidArg;
-    }
-    if (reader.tail == head_) {
-        return Result::kNotFound;
-    }
-
-    const std::span<const uint8_t> ring(buf_, cap_);
-    const uint16_t payloadLen = readHeaderLen(ring, oldest_, reader.tail);
-    const size_t payloadSz = static_cast<size_t>(payloadLen);
-    len = payloadSz;
-    if (out.size() < payloadSz) {
-        return Result::kNoSpace;
-    }
-
-    const uint32_t payloadPos = reader.tail + static_cast<uint32_t>(kFanoutHeaderBytes);
-    ringRead(ring, oldest_, payloadPos, out.first(payloadSz));
-
-    reader.tail += static_cast<uint32_t>(kFanoutHeaderBytes + payloadSz);
-    ++reader.stats.records;
-    reader.stats.bytes += static_cast<uint32_t>(payloadSz);
-    return Result::kOk;
-}
-
-FanoutReaderStats FanoutRing::readerStats(uint8_t readerId) const noexcept
-{
-    if ((!inited_) || (readerId >= kFanoutMaxReaders)) {
-        return FanoutReaderStats{};
-    }
-    const LockGuard guard(lock_);
-    if (!readers_[readerId].attached) {
-        return FanoutReaderStats{};
-    }
-    return readers_[readerId].stats;
-}
-
-FanoutWriterStats FanoutRing::writerStats() const noexcept
-{
-    if (!inited_) {
-        return FanoutWriterStats{};
-    }
-    const LockGuard guard(lock_);
-    return wstats_;
-}
-
 Result FanoutRing::initTyped(std::span<uint8_t> storage, size_t maxRecord,
                              const LockOps &lock) noexcept
 {
@@ -372,18 +282,6 @@ Result FanoutRing::setMask(uint8_t readerId, FanoutMask mask) noexcept
     reader.mask = mask;
     reader.tail = head_;
     return Result::kOk;
-}
-
-// 类型化记录长度：把内部缓冲包装成 span 交给 readHeaderLen（类型适配，非纯转发）。
-uint16_t FanoutRing::typedLength(uint32_t pos) const noexcept
-{
-    return readHeaderLen({buf_, cap_}, 0U, pos);
-}
-
-uint8_t FanoutRing::typedType(uint32_t pos) const noexcept
-{
-    // cap 是 2 的幂且 <2^31；低位掩码在 u32 回绕前后保持同一物理位置。
-    return std::span<const uint8_t>(buf_, cap_)[(size_t{pos} + kFanoutHeaderBytes) & (cap_ - 1U)];
 }
 
 void FanoutRing::evictTyped() noexcept
@@ -564,30 +462,6 @@ Result FanoutRing::commit(const FanoutLease &lease) noexcept
 Result FanoutRing::cancel(const FanoutLease &lease) noexcept
 {
     return finishLease(lease, false);
-}
-
-FanoutTypedReaderStats FanoutRing::typedReaderStats(uint8_t readerId) const noexcept
-{
-    if (!inited_ || !typed_) {
-        return {};
-    }
-    const LockGuard guard(lock_);
-    if ((readerId >= readers_.size()) || !readers_[readerId].attached) {
-        return {};
-    }
-    const Reader &reader = readers_[readerId];
-    return {reader.stats, reader.filtered, reader.pinnedDrop};
-}
-
-FanoutTypedWriterStats FanoutRing::typedWriterStats() const noexcept
-{
-    if (!inited_ || !typed_) {
-        return {};
-    }
-    const LockGuard guard(lock_);
-    FanoutTypedWriterStats stats = typed_wstats_;
-    stats.base = wstats_;
-    return stats;
 }
 
 } // namespace fw

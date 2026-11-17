@@ -56,7 +56,13 @@ uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
     return (static_cast<uint32_t>(frame[from]) | (static_cast<uint32_t>(frame[from + 1U]) << 8U));
 }
 
-Verdict judge(std::span<const uint8_t> frame) noexcept
+/**
+ * @brief  判定一帧：sync/长度/Fletcher 校验
+ * @param  frame: 候选帧（从同步字节开始）
+ * @retval 判定结果
+ * @note   不拆（S4 §2.1）：协议早拒绝阶梯，sync/长度/Fletcher 校验次序本身是内容。
+ */
+Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-function-*)
 {
     Verdict verdict{};
     if (frame[0] != kSyncA) {

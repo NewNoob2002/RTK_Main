@@ -41,6 +41,59 @@ fw::CommandResult dispatchCommand(std::span<const fw::Module> modules, fw::Execu
     result.seq = command.seq;
     return result;
 }
+
+/**
+ * @brief  校验 init 的标量参数与静态存储尺寸
+ * @param  cfg: 执行器配置
+ * @param  storage: 队列、栈与 TCB 的静态存储
+ * @retval 满足全部约束返回 true；否则 false（调用方返回 kInvalidArg）
+ * @note   只读参数，无副作用；由 Executor::init 在创建队列前调用一次。
+ */
+bool initArgsValid(const ExecutorConfig &cfg, const ExecutorStorageView &storage) noexcept
+{
+    if (cfg.name == nullptr || std::string_view{cfg.name}.empty() || cfg.core < 0 ||
+        cfg.core >= configNUMBER_OF_CORES || cfg.priority >= configMAX_PRIORITIES) {
+        return false;
+    }
+    if (storage.stack.empty() ||
+        storage.stack.size_bytes() > std::numeric_limits<uint32_t>::max() ||
+        storage.tcb == nullptr || storage.cmdQueue == nullptr || storage.resultQueue == nullptr ||
+        storage.cmdQueue == storage.resultQueue || storage.queueDepth == 0U ||
+        storage.queueDepth > std::numeric_limits<UBaseType_t>::max()) {
+        return false;
+    }
+    // 队列深度不能超过调用方给出的静态队列区容量。
+    return storage.queueDepth <= storage.cmdArea.size() / sizeof(fw::Command) &&
+           storage.queueDepth <= storage.resultArea.size() / sizeof(fw::CommandResult);
+}
+
+/**
+ * @brief  校验模块表中属于本执行器的条目：数量上限、ops 非空、ModuleId 不重复
+ * @param  modules: 本执行器轮询的模块表
+ * @param  executor: 执行器编号
+ * @retval 满足约束返回 true
+ * @note   只读参数；只在启动期调用一次，O(n²) 可接受。
+ */
+bool moduleTableValid(std::span<const fw::Module> modules, fw::ExecutorId executor) noexcept
+{
+    if (modules.size() > kExecMaxModules) {
+        return false;
+    }
+    for (size_t i = 0; i < modules.size(); ++i) {
+        if (modules[i].executor != executor) {
+            continue;
+        }
+        if (modules[i].ops == nullptr) {
+            return false;
+        }
+        for (size_t j = 0; j < i; ++j) {
+            if (modules[j].executor == executor && modules[j].id == modules[i].id) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 } // namespace
 
 /**
@@ -56,29 +109,8 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
     if (inited_) {
         return fw::Status::kBusy;
     }
-    if (cfg.name == nullptr || std::string_view{cfg.name}.empty() ||
-        modules.size() > kExecMaxModules || cfg.core < 0 || cfg.core >= configNUMBER_OF_CORES ||
-        cfg.priority >= configMAX_PRIORITIES || storage.stack.empty() ||
-        storage.stack.size_bytes() > std::numeric_limits<uint32_t>::max() ||
-        storage.tcb == nullptr || storage.cmdQueue == nullptr || storage.resultQueue == nullptr ||
-        storage.cmdQueue == storage.resultQueue || storage.queueDepth == 0U ||
-        storage.queueDepth > std::numeric_limits<UBaseType_t>::max() ||
-        storage.queueDepth > storage.cmdArea.size() / sizeof(fw::Command) ||
-        storage.queueDepth > storage.resultArea.size() / sizeof(fw::CommandResult)) {
+    if (!initArgsValid(cfg, storage) || !moduleTableValid(modules, cfg.id)) {
         return fw::Status::kInvalidArg;
-    }
-    for (size_t i = 0; i < modules.size(); ++i) {
-        if (modules[i].executor != cfg.id) {
-            continue;
-        }
-        if (modules[i].ops == nullptr) {
-            return fw::Status::kInvalidArg;
-        }
-        for (size_t j = 0; j < i; ++j) {
-            if (modules[j].executor == cfg.id && modules[j].id == modules[i].id) {
-                return fw::Status::kInvalidArg;
-            }
-        }
     }
     // 长度已限制在 UBaseType_t 范围内；定长命令/结果的大小远小于该上限。
     cmd_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queueDepth), sizeof(fw::Command),
@@ -246,8 +278,9 @@ void Executor::taskEntry(void *arg) noexcept
 
 /**
  * @brief  执行器主循环：轮询模块、投递命令、喂看门狗，收到停止请求后退出
+ * @note   不拆（S4 §2.1）：每轮实时路径，等待→排空命令→轮询模块→统计→喂狗的顺序与 pending 标志构成单一状态机，拆出需 4 个以上出入参且辅助函数要改冻结头。
  */
-void Executor::run() noexcept
+void Executor::run() noexcept // NOLINT(readability-function-*)
 {
     bool watchdog = false;
     if (cfg_.watchdog) {

@@ -11,7 +11,14 @@
 
 namespace core {
 
-fw::Status CommandRouter::init(std::span<const RouteTable> tables) noexcept
+/**
+ * @brief  登记路由表：同执行器内 ModuleId 不可重复
+ * @param  tables: 路由表数组
+ * @retval fw::Status::kOk 成功；其他为非法输入或重复登记
+ * @note   不拆（S4 §2.1）：单遍登记循环，合法性/重复/kMaxRoutes 都在循环内以 break 统一退出，拆开会复制状态传播。
+ */
+fw::Status CommandRouter::init( // NOLINT(readability-function-*): 见 @note
+    std::span<const RouteTable> tables) noexcept
 {
     if (inited_) {
         // 重复初始化按契约返回 kBusy，且不改动已有索引。

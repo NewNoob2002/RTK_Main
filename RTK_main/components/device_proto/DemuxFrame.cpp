@@ -89,8 +89,13 @@ uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
     return value;
 }
 
-/** 判定：step 与 explain 的唯一事实来源。 */
-Verdict judge(std::span<const uint8_t> frame) noexcept
+/**
+ * @brief  判定一帧：sync/头长/帧长/CRC
+ * @param  frame: 候选帧（从同步字节开始）
+ * @retval 判定结果；通过时 step 为 kFrame
+ * @note   不拆（S4 §2.1）：协议早拒绝阶梯，sync/头长/帧长/CRC 次序本身是内容。
+ */
+Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-function-*)
 {
     Verdict verdict{};
     if (frame[0] != kSyncA) {

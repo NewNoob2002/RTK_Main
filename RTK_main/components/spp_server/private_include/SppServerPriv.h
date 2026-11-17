@@ -285,5 +285,79 @@ void spp_server_tx_reclaim_locked(spp_server_session_t *session);
 void spp_server_tx_wake(void);
 
 /* SppServerGap.c：两个 Bluedroid 回调的注册入口（BTC 回调线程调用）。 */
+/* 蓝牙栈各阶段完成标志；只在启动/停止路径读写。 */
+/**
+ * @brief  在指定通道上预留一段发送窗口（同步写路径直接调用；异步路径用 reply/stream_reserve）
+ * @param  handle: 蓝牙 SPP 句柄
+ * @param  len: 要预留的字节数
+ * @param  channel: SPP_SERVER_CHANNEL_* 通道编号
+ * @param[out] token: 返回的令牌，需 commit 或 cancel
+ * @retval ESP_OK 预留成功；ESP_ERR_INVALID_STATE 会话不可用；ESP_ERR_NO_MEM 环形空间不足
+ */
+esp_err_t spp_server_reserve(uint32_t handle, size_t len, uint8_t channel,
+                             spp_server_tx_token_t *token);
+
+/**
+ * @brief  按句柄查会话槽（需持 s_spp_mux）
+ * @param  handle: 蓝牙 SPP 句柄
+ * @retval 命中的会话槽；没有则 NULL
+ */
+spp_server_session_t *spp_server_find_locked(uint32_t handle);
+
+/**
+ * @brief  取会话最老的在途块（需持 s_spp_mux）
+ * @param  slot: 会话槽位下标
+ * @param  pending_only: 只统计尚未完成的块
+ * @retval 最老的块；没有则 NULL
+ */
+spp_server_inflight_t *spp_server_oldest_locked(uint8_t slot, bool pending_only);
+
+/**
+ * @brief  发送任务一轮：选块、合并、写、提交（worker 调用）
+ * @retval true 本轮提交了数据；false 无数据可发
+ */
+bool spp_server_worker_submit(void);
+
+/**
+ * @brief  结算会话已完成的在途块（需持 s_spp_mux）
+ * @param  session: 会话
+ */
+void spp_server_retire_locked(spp_server_session_t *session);
+
+/* 在途发送的通道编号（spp_server_inflight_t.channel）：应答/流/推送的择一顺序即这里的值。 */
+#define SPP_SERVER_CHANNEL_REPLY  (0U)
+#define SPP_SERVER_CHANNEL_STREAM (1U)
+#define SPP_SERVER_CHANNEL_PUSH   (2U)
+
+typedef struct {
+    bool controller_inited;
+    bool controller_enabled;
+    bool bluedroid_inited;
+    bool bluedroid_enabled;
+} spp_server_hw_state_t;
+
+/**
+ * @brief  逆序释放蓝牙栈：Bluedroid 先于控制器（失败只记日志）
+ */
+void spp_server_unwind(bool bluedroid_enabled, bool bluedroid_inited, bool controller_enabled,
+                       bool controller_inited);
+
+/**
+ * @brief  清零各阶段完成标志
+ */
+void spp_server_hw_state_clear(spp_server_hw_state_t *state);
+
+/**
+ * @brief  初始化并使能控制器与 Bluedroid；失败时内部逆序释放并清零 state
+ * @retval ESP_OK 成功；其他为 IDF 错误码
+ */
+esp_err_t spp_server_hw_init(spp_server_hw_state_t *state);
+
+/**
+ * @brief  注册 GAP/SPP 回调、设置 SSP 参数并发起 SPP 初始化
+ * @retval ESP_OK 成功；其他为 IDF 错误码（由调用方统一 unwind）
+ */
+esp_err_t spp_server_profile_init(void);
+
 void spp_server_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
 void spp_server_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);

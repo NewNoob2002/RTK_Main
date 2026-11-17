@@ -34,9 +34,12 @@ target_link_libraries(fake_idf PUBLIC fake_rtos)
 # IDF 依赖组件的 C 告警集编译。
 add_library(spp_server_driver STATIC
     "${PROJ_ROOT}/components/spp_server/SppServerInit.c"
+    "${PROJ_ROOT}/components/spp_server/SppServerInitBt.c"
     "${PROJ_ROOT}/components/spp_server/SppServerSession.c"
     "${PROJ_ROOT}/components/spp_server/SppServerRx.c"
     "${PROJ_ROOT}/components/spp_server/SppServerTx.c"
+    "${PROJ_ROOT}/components/spp_server/SppServerWorker.c"
+    "${PROJ_ROOT}/components/spp_server/SppServerTxRing.c"
     "${PROJ_ROOT}/components/spp_server/SppServerGap.c")
 target_include_directories(spp_server_driver PUBLIC "${SHIM_INC}" "${SPP_SERVER_INC}" "${SPP_SERVER_BOOT_INC}")
 target_include_directories(spp_server_driver PRIVATE "${SPP_SERVER_PRIV_INC}")

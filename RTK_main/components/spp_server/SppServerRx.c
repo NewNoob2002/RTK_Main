@@ -100,7 +100,87 @@ void spp_server_handle_data(esp_spp_cb_param_t *param)
     }
 }
 
+/* 需持 s_spp_mux：DATA/RX_DROP 在会话内合并登记（RX_DROP 先饱和累计）。
+ * 返回 false 表示已有同类事件未取走、本次已合并，调用方不必再入队。 */
+/**
+ * @brief  投递前登记 pending 标志（合并同类事件）
+ * @param  type: 事件类型
+ * @param  handle: 会话句柄
+ * @param  dropped: RX_DROP 累计的丢弃字节数
+ * @retval true 已登记；false 该会话已有同类 pending（事件被合并）
+ * @note   需持 s_spp_mux。
+ */
+static bool spp_server_claim_pending_locked(spp_server_evt_type_t type, uint32_t handle,
+                                            uint32_t dropped)
+{
+    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
+        spp_server_session_t *session = &s_spp.sessions[idx];
+        if (!session->in_use || (session->handle != handle)) {
+            continue;
+        }
+        bool *pending =
+            (type == SPP_SERVER_EVT_RX_DROP) ? &session->drop_pending : &session->data_pending;
+        if (type == SPP_SERVER_EVT_RX_DROP) {
+            /* 饱和累计，避免长时间不 poll 时回绕成小数；保留每个 handle 的归属。 */
+            session->rx_dropped = (dropped > (UINT32_MAX - session->rx_dropped))
+                                      ? UINT32_MAX
+                                      : (session->rx_dropped + dropped);
+            session->rx_dropped_total = (dropped > (UINT32_MAX - session->rx_dropped_total))
+                                            ? UINT32_MAX
+                                            : (session->rx_dropped_total + dropped);
+        }
+        if (*pending) {
+            return false;
+        }
+        *pending = true;
+        return true;
+    }
+    /* 没有会话：照常入队，由消费者按 handle 处理。 */
+    return true;
+}
+
+/* 需持 s_spp_mux：队列满时撤销 pending 标记并返回累计丢弃数。 */
+/**
+ * @brief  队列满时撤销刚登记的 pending 并累计丢弃
+ * @param  type: 事件类型
+ * @param  handle: 会话句柄
+ * @retval 会话当前的累计丢弃字节数（用于事件内容）
+ * @note   需持 s_spp_mux。
+ */
+static uint32_t spp_server_clear_pending_locked(spp_server_evt_type_t type, uint32_t handle)
+{
+    uint32_t total = 0U;
+
+    s_spp.evt_dropped++;
+    total = s_spp.evt_dropped;
+    if ((type != SPP_SERVER_EVT_DATA) && (type != SPP_SERVER_EVT_RX_DROP)) {
+        return total;
+    }
+    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
+        spp_server_session_t *session = &s_spp.sessions[idx];
+        if (!session->in_use || (session->handle != handle)) {
+            continue;
+        }
+        if (type == SPP_SERVER_EVT_DATA) {
+            session->rx_data_missed = true;
+            session->data_pending = false;
+        } else {
+            session->drop_pending = false;
+        }
+        break;
+    }
+    return total;
+}
+
 /* 回调单生产者：DATA/RX_DROP 合并，生命周期由槽接纳背压保证队列容量。 */
+/**
+ * @brief  向事件队列投递一条事件，并维护会话的 pending 标志
+ * @param  type: 事件类型
+ * @param  handle: 会话句柄
+ * @param  addr: 对端地址（仅 OPEN 使用，可为 NULL）
+ * @param  dropped: DATA/RX_DROP 的丢弃字节数
+ * @note   蓝牙回调与接收路径共用；队列满时回滚 pending 并记 trace，不阻塞。
+ */
 void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint8_t *addr,
                          uint32_t dropped)
 {
@@ -110,32 +190,14 @@ void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint
         return;
     }
 
-    taskENTER_CRITICAL(&s_spp_mux);
     if ((type == SPP_SERVER_EVT_RX_DROP) || (type == SPP_SERVER_EVT_DATA)) {
-        for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-            spp_server_session_t *session = &s_spp.sessions[idx];
-            if (session->in_use && (session->handle == handle)) {
-                bool *pending = (type == SPP_SERVER_EVT_RX_DROP) ? &session->drop_pending
-                                                                 : &session->data_pending;
-                if (type == SPP_SERVER_EVT_RX_DROP) {
-                    /* 饱和累计，避免长时间不 poll 时回绕成小数；保留每个 handle 的归属。 */
-                    session->rx_dropped = (dropped > (UINT32_MAX - session->rx_dropped))
-                                              ? UINT32_MAX
-                                              : (session->rx_dropped + dropped);
-                    session->rx_dropped_total = (dropped > (UINT32_MAX - session->rx_dropped_total))
-                                                    ? UINT32_MAX
-                                                    : (session->rx_dropped_total + dropped);
-                }
-                if (*pending) {
-                    taskEXIT_CRITICAL(&s_spp_mux);
-                    return;
-                }
-                *pending = true;
-                break;
-            }
+        taskENTER_CRITICAL(&s_spp_mux);
+        const bool claimed = spp_server_claim_pending_locked(type, handle, dropped);
+        taskEXIT_CRITICAL(&s_spp_mux);
+        if (!claimed) {
+            return;
         }
     }
-    taskEXIT_CRITICAL(&s_spp_mux);
 
     evt.type = type;
     evt.handle = handle;
@@ -148,22 +210,7 @@ void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint
         uint32_t total_dropped = 0U;
 
         taskENTER_CRITICAL(&s_spp_mux);
-        s_spp.evt_dropped++;
-        total_dropped = s_spp.evt_dropped;
-        if ((type == SPP_SERVER_EVT_DATA) || (type == SPP_SERVER_EVT_RX_DROP)) {
-            for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-                spp_server_session_t *session = &s_spp.sessions[idx];
-                if (session->in_use && (session->handle == handle)) {
-                    if (type == SPP_SERVER_EVT_DATA) {
-                        session->rx_data_missed = true;
-                        session->data_pending = false;
-                    } else {
-                        session->drop_pending = false;
-                    }
-                    break;
-                }
-            }
-        }
+        total_dropped = spp_server_clear_pending_locked(type, handle);
         taskEXIT_CRITICAL(&s_spp_mux);
         /* a = 被丢弃的事件类型，b = 累计丢弃数（只在临界区内读）。 */
         spp_server_trace(SPP_SERVER_TRACE_EVT_DROP, handle, (uint32_t)type, total_dropped);
@@ -224,6 +271,43 @@ static bool spp_server_poll_tx_space(spp_server_evt_t *evt)
     return found;
 }
 
+/* 取出事件后结算对应会话的 pending 位（RX_DROP 顺带取走累计丢弃数）。 */
+/**
+ * @brief  事件交给消费者后结算会话的 pending 标志
+ * @param  evt: 已取出的事件
+ * @note   需持 s_spp_mux。
+ */
+static void spp_server_settle_event(spp_server_evt_t *evt)
+{
+    taskENTER_CRITICAL(&s_spp_mux);
+    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
+        spp_server_session_t *session = &s_spp.sessions[idx];
+        if (!session->lifecycle_pending || (session->handle != evt->handle)) {
+            continue;
+        }
+        if (evt->type == SPP_SERVER_EVT_CLOSE) {
+            session->lifecycle_pending = false;
+        } else if (evt->type == SPP_SERVER_EVT_DATA) {
+            session->data_pending = false;
+            session->rx_data_missed = false;
+        } else if (evt->type == SPP_SERVER_EVT_RX_DROP) {
+            evt->dropped = session->rx_dropped;
+            session->rx_dropped = 0U;
+            session->drop_pending = false;
+        } else {
+            /* OPEN 等类型没有需要结算的 pending 位。 */
+        }
+        break;
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+}
+
+/**
+ * @brief  客户端取事件：先结算 pending，再按类型填充会话数据
+ * @param[out] evt: 事件输出
+ * @param  timeout_ms: 等待毫秒数
+ * @retval true 取到事件；false 超时或未初始化
+ */
 bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout_ms)
 {
     if ((evt == NULL) || (!s_spp.initialized) || (s_spp.rtos.evt_queue == NULL)) {
@@ -250,24 +334,7 @@ bool spp_server_poll_event(spp_server_evt_t *evt, uint32_t timeout_ms)
             taskEXIT_CRITICAL(&s_spp_mux);
             continue;
         }
-        taskENTER_CRITICAL(&s_spp_mux);
-        for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
-            if (s_spp.sessions[idx].lifecycle_pending &&
-                (s_spp.sessions[idx].handle == evt->handle)) {
-                if (evt->type == SPP_SERVER_EVT_CLOSE) {
-                    s_spp.sessions[idx].lifecycle_pending = false;
-                } else if (evt->type == SPP_SERVER_EVT_DATA) {
-                    s_spp.sessions[idx].data_pending = false;
-                    s_spp.sessions[idx].rx_data_missed = false;
-                } else if (evt->type == SPP_SERVER_EVT_RX_DROP) {
-                    evt->dropped = s_spp.sessions[idx].rx_dropped;
-                    s_spp.sessions[idx].rx_dropped = 0U;
-                    s_spp.sessions[idx].drop_pending = false;
-                }
-                break;
-            }
-        }
-        taskEXIT_CRITICAL(&s_spp_mux);
+        spp_server_settle_event(evt);
         return true;
     }
 }

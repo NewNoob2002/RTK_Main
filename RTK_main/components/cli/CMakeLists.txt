@@ -3,7 +3,7 @@
 # src/Reply.cpp 只用 C/C++ 标准库；src/Out.cpp 另用 FreeRTOS 静态递归互斥与 vTaskDelay（ESP_PLATFORM 分支）；
 # 两者都不含其他 IDF 头，host 测试直接编译。
 idf_component_register(
-    SRCS "src/Console.cpp" "src/Parse.cpp" "src/Reply.cpp" "src/Out.cpp"
+    SRCS "src/Console.cpp" "src/ConsoleUart.cpp" "src/Parse.cpp" "src/Reply.cpp" "src/Out.cpp"
     INCLUDE_DIRS "include"
     REQUIRES console esp_system esp_driver_uart app_fw
     PRIV_REQUIRES log freertos pthread)

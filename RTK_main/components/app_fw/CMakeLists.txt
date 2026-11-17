@@ -1,7 +1,7 @@
 # 应用框架（ADR-0007）：模块契约、Slot、LockOps、StoreKey、FanoutRing。纯 C++20，平台无关，
 # 同一份 CMakeLists 既是 ESP-IDF 组件，也可被 host 测试 add_subdirectory() 复用（同 stream_demux 模式）。
 # J4 在 _app_fw_srcs 中追加 src/FanoutRing.cpp；J7-b 追加 src/Trace.cpp；T4 追加 src/Tlog.cpp；L0 追加 src/Log.cpp。
-set(_app_fw_srcs "src/Status.cpp" "src/Result.cpp" "src/FanoutRing.cpp" "src/Trace.cpp" "src/Tlog.cpp" "src/Log.cpp")
+set(_app_fw_srcs "src/Status.cpp" "src/Result.cpp" "src/FanoutRing.cpp" "src/FanoutRingRead.cpp" "src/Trace.cpp" "src/Tlog.cpp" "src/Log.cpp")
 
 if(ESP_PLATFORM)
     idf_component_register(SRCS ${_app_fw_srcs} INCLUDE_DIRS "include")

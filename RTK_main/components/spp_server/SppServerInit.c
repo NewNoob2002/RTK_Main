@@ -30,44 +30,6 @@
 #define SPP_SERVER_INIT_TIMEOUT_MS   (5000U)
 #define SPP_SERVER_UNINIT_TIMEOUT_MS (2000U)
 
-/**
- * @brief  逆序释放蓝牙栈：Bluedroid 先于控制器
- * @param  bluedroid_enabled: Bluedroid 已使能
- * @param  bluedroid_inited: Bluedroid 已初始化
- * @param  controller_enabled: 控制器已使能
- * @param  controller_inited: 控制器已初始化
- */
-static void spp_server_unwind(bool bluedroid_enabled, bool bluedroid_inited,
-                              bool controller_enabled, bool controller_inited)
-{
-    esp_err_t err = ESP_OK;
-
-    if (bluedroid_enabled) {
-        err = esp_bluedroid_disable();
-        if (err != ESP_OK) {
-            FW_CLOGW(FW_LOG_CAT_SPP, "bluedroid disable: %s", esp_err_to_name(err));
-        }
-    }
-    if (bluedroid_inited) {
-        err = esp_bluedroid_deinit();
-        if (err != ESP_OK) {
-            FW_CLOGW(FW_LOG_CAT_SPP, "bluedroid deinit: %s", esp_err_to_name(err));
-        }
-    }
-    if (controller_enabled) {
-        err = esp_bt_controller_disable();
-        if (err != ESP_OK) {
-            FW_CLOGW(FW_LOG_CAT_SPP, "controller disable: %s", esp_err_to_name(err));
-        }
-    }
-    if (controller_inited) {
-        err = esp_bt_controller_deinit();
-        if (err != ESP_OK) {
-            FW_CLOGW(FW_LOG_CAT_SPP, "controller deinit: %s", esp_err_to_name(err));
-        }
-    }
-}
-
 /* 只在 init 失败路径调用：此时还没有会话，且 SPP/Bluedroid 已关闭，不会再进回调。
  * 发送任务不删除——它只等任务通知，留着可被下一次 init 复用（静态对象不回收）。 */
 static void spp_server_objects_delete(void)
@@ -149,125 +111,6 @@ static esp_err_t spp_server_objects_create(void)
             return ESP_ERR_NO_MEM;
         }
     }
-    return ESP_OK;
-}
-
-typedef struct {
-    bool controller_inited;
-    bool controller_enabled;
-    bool bluedroid_inited;
-    bool bluedroid_enabled;
-} spp_server_hw_state_t;
-
-static void spp_server_hw_state_clear(spp_server_hw_state_t *state)
-{
-    state->controller_inited = false;
-    state->controller_enabled = false;
-    state->bluedroid_inited = false;
-    state->bluedroid_enabled = false;
-}
-
-/**
- * @brief  初始化并使能控制器与 Bluedroid；失败时在内部逆序释放
- * @param[out] state: 各阶段完成标志
- * @retval ESP_OK 成功；其他为 IDF 错误码
- */
-static esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
-{
-    esp_err_t err = ESP_OK;
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    esp_bluedroid_config_t bd_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
-
-    err = esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "mem release: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = esp_bt_controller_init(&bt_cfg);
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "controller init: %s", esp_err_to_name(err));
-        return err;
-    }
-    state->controller_inited = true;
-
-    err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "controller enable: %s", esp_err_to_name(err));
-        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited,
-                          state->controller_enabled, state->controller_inited);
-        spp_server_hw_state_clear(state);
-        return err;
-    }
-    state->controller_enabled = true;
-
-    err = esp_bluedroid_init_with_cfg(&bd_cfg);
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "bluedroid init: %s", esp_err_to_name(err));
-        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited,
-                          state->controller_enabled, state->controller_inited);
-        spp_server_hw_state_clear(state);
-        return err;
-    }
-    state->bluedroid_inited = true;
-
-    err = esp_bluedroid_enable();
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "bluedroid enable: %s", esp_err_to_name(err));
-        spp_server_unwind(state->bluedroid_enabled, state->bluedroid_inited,
-                          state->controller_enabled, state->controller_inited);
-        spp_server_hw_state_clear(state);
-        return err;
-    }
-    state->bluedroid_enabled = true;
-
-    return ESP_OK;
-}
-
-/**
- * @brief  注册 GAP/SPP 回调、设置 SSP 参数并发起 SPP 初始化
- * @retval ESP_OK 成功；其他为 IDF 错误码（由调用方统一 unwind）
- */
-static esp_err_t spp_server_profile_init(void)
-{
-    esp_err_t err = ESP_OK;
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
-    esp_bt_pin_code_t pin_code = {0};
-    esp_spp_cfg_t spp_cfg = {0};
-
-    err = esp_bt_gap_register_callback(spp_server_gap_cb);
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "gap callback: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = esp_spp_register_callback(spp_server_cb);
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "spp callback: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(iocap));
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "set iocap: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = esp_bt_gap_set_pin(ESP_BT_PIN_TYPE_VARIABLE, 0, pin_code);
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "set pin: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    spp_cfg.mode = ESP_SPP_MODE_CB;
-    spp_cfg.enable_l2cap_ertm = true;
-    spp_cfg.tx_buffer_size = 0U;
-    err = esp_spp_enhanced_init(&spp_cfg);
-    if (err != ESP_OK) {
-        FW_CLOGE(FW_LOG_CAT_SPP, "spp init: %s", esp_err_to_name(err));
-        return err;
-    }
-
     return ESP_OK;
 }
 
@@ -509,8 +352,9 @@ esp_err_t spp_server_stop_boot(void)
  * @brief  启动 SPP 服务端：蓝牙栈、协议、服务端与可发现模式
  * @param  name: 蓝牙设备名
  * @retval ESP_OK 成功；其他为失败阶段的 IDF 错误码（已回滚，之后只允许重启）
+ * @note   不拆（S4 §2.1）：线性启动序列（静态对象→hw→profile→异步等待→服务端→设备名），失败即回滚。
  */
-esp_err_t spp_server_init(const char *name)
+esp_err_t spp_server_init(const char *name) // NOLINT(readability-function-*)
 {
     esp_err_t err = ESP_OK;
     spp_server_hw_state_t hw_state = {false, false, false, false};

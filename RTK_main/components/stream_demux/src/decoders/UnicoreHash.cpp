@@ -236,7 +236,51 @@ bool midByteOk(std::span<const uint8_t> frame, std::size_t last, std::size_t sta
     return false;
 }
 
-/** 判定：step 与 explain 的唯一事实来源。 */
+/**
+ * @brief  语句已结束（末字节为 '\n'）：定位 '*'、校验其偏移与 CR，再按 XOR/CRC 形式整段复核
+ * @param  frame: 从同步字节起到 '\n' 的候选帧
+ * @param  last: frame 末字节下标（'\n' 的位置）
+ * @retval 判定结果；通过时 step 为 kFrame
+ * @note   只读入参，无副作用；由 judge() 在帧尾到达时调用。
+ */
+Verdict judgeFinished(std::span<const uint8_t> frame, std::size_t last) noexcept
+{
+    std::size_t starOfs = 0U;
+    // 最近的 '*' 就是校验字段起点；两种形式的 '*' 偏移都是定值。
+    if (!findStarReverse(frame, last, kStarWindow, starOfs)) {
+        return reject(Reason::kMissingStar, last, frame[last]);
+    }
+    if ((starOfs != kStarOfsXor) && (starOfs != kStarOfsCrc)) {
+        return reject(Reason::kStarOffset, last - starOfs, frame[last - starOfs]);
+    }
+    if (frame[last - 1U] != kCr) {
+        return reject(Reason::kNoCr, last - 1U, frame[last - 1U]);
+    }
+    const std::size_t star = last - starOfs; // starOfs ≤ last，不越界
+    if (starOfs == kStarOfsXor) {
+        if (!isHexDigit(frame[star + 1U])) {
+            return reject(Reason::kBadHex, star + 1U, frame[star + 1U]);
+        }
+        if (!isHexDigit(frame[star + 2U])) {
+            return reject(Reason::kBadHex, star + 2U, frame[star + 2U]);
+        }
+    } else if (!allHex(frame, star + 1U, kCrcDigits)) {
+        for (std::size_t idx = 0U; idx < kCrcDigits; ++idx) {
+            if (!isHexDigit(frame[star + 1U + idx])) {
+                return reject(Reason::kBadHex, star + 1U + idx, frame[star + 1U + idx]);
+            }
+        }
+    } else {
+        // allHex 已通过，校验字段都是十六进制。
+    }
+    return finish(frame, star);
+}
+
+/**
+ * @brief  判定一帧：同步/长度/语句校验
+ * @param  frame: 候选帧（从同步字节开始）
+ * @retval 判定结果；通过时 step 为 kFrame
+ */
 Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
@@ -259,39 +303,12 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
         return verdict;
     }
 
-    std::size_t starOfs = 0U;
     if (newByte == kLf) {
-        // 最近的 '*' 就是校验字段起点；两种形式的 '*' 偏移都是定值。
-        if (!findStarReverse(frame, last, kStarWindow, starOfs)) {
-            return reject(Reason::kMissingStar, last, newByte);
-        }
-        if ((starOfs != kStarOfsXor) && (starOfs != kStarOfsCrc)) {
-            return reject(Reason::kStarOffset, last - starOfs, frame[last - starOfs]);
-        }
-        if (frame[last - 1U] != kCr) {
-            return reject(Reason::kNoCr, last - 1U, frame[last - 1U]);
-        }
-        const std::size_t star = last - starOfs; // starOfs ≤ last，不越界
-        if (starOfs == kStarOfsXor) {
-            if (!isHexDigit(frame[star + 1U])) {
-                return reject(Reason::kBadHex, star + 1U, frame[star + 1U]);
-            }
-            if (!isHexDigit(frame[star + 2U])) {
-                return reject(Reason::kBadHex, star + 2U, frame[star + 2U]);
-            }
-        } else if (!allHex(frame, star + 1U, kCrcDigits)) {
-            for (std::size_t idx = 0U; idx < kCrcDigits; ++idx) {
-                if (!isHexDigit(frame[star + 1U + idx])) {
-                    return reject(Reason::kBadHex, star + 1U + idx, frame[star + 1U + idx]);
-                }
-            }
-        } else {
-            // allHex 已通过，校验字段都是十六进制。
-        }
-        return finish(frame, star);
+        return judgeFinished(frame, last);
     }
 
     // 未到结束符：只查新到字节与其前面定长窗口内的 '*' 位置（O(1)）。
+    std::size_t starOfs = 0U;
     if (!findStarReverse(frame, last, kStarWindow, starOfs)) {
         if (!isBody(newByte)) {
             return reject(Reason::kBody, last, newByte);
@@ -311,7 +328,14 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return verdict;
 }
 
-void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+/**
+ * @brief  把判定理由写成一句人读文本
+ * @param  verdict: 判定结果
+ * @param  text: 文本输出器
+ * @note   不拆（S4 §2.1）：拒绝原因到一句话的文本映射表，每个 case 独立。
+ */
+void explainVerdict(const Verdict &verdict, // NOLINT(readability-function-*)
+                    demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:

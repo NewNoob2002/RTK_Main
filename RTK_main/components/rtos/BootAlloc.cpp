@@ -86,7 +86,17 @@ fw::Status BootArena::open(const BootAllocatorOps *ops) noexcept
     return fw::Status::kOk;
 }
 
-fw::Status BootArena::allocate(const char *tag, size_t bytes, size_t align, void *&outPtr) noexcept
+/**
+ * @brief  从启动期 arena 分配一块对齐内存
+ * @param  tag: 分配标签（只记首次，重名按失败处理）
+ * @param  bytes: 字节数
+ * @param  align: 对齐字节数
+ * @param[out] outPtr: 成功时返回分配地址
+ * @retval fw::Status::kOk 成功；其他为失败原因
+ * @note   不拆（S4 §2.1）：线性分配流程，状态→入参→重名→对齐→容量→分配→台账，顺序即契约。
+ */
+fw::Status BootArena::allocate(const char *tag, size_t bytes, // NOLINT(readability-function-*)
+                               size_t align, void *&outPtr) noexcept
 {
     outPtr = nullptr;
     if (state_ != ArenaState::kOpen) {

@@ -25,6 +25,7 @@ add_library(main_pure STATIC
     ${PROJ_ROOT}/components/app_fw/src/Status.cpp
     ${PROJ_ROOT}/components/app_fw/src/Result.cpp
     ${PROJ_ROOT}/components/app_fw/src/FanoutRing.cpp
+    ${PROJ_ROOT}/components/app_fw/src/FanoutRingRead.cpp
     ${PROJ_ROOT}/components/app_fw/src/Trace.cpp
     ${PROJ_ROOT}/components/app_fw/src/Tlog.cpp
     ${PROJ_ROOT}/components/app_fw/src/Log.cpp

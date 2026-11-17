@@ -65,8 +65,17 @@ void LinkManager::init(Policy policy, std::span<const BtAddr> alarms) noexcept
     pair_start_ms_ = 0;
 }
 
-Role LinkManager::onOpen(SessionHandle handle, const BtAddr &addr, uint32_t nowMs,
-                         Actions &act) noexcept
+/**
+ * @brief  连接建立：按准入规则决定角色并向链路回写动作
+ * @param  handle: 新连接的会话句柄
+ * @param  addr: 对端地址
+ * @param  nowMs: 当前时间（ms）
+ * @param[out] act: 对链路的动作输出
+ * @retval 仲裁出的角色
+ * @note   不拆（S4 §2.1）：准入规则 1→4 的顺序即内容，拆开要传 act/policy/白名单/手机在线四五个状态。
+ */
+Role LinkManager::onOpen(SessionHandle handle, // NOLINT(readability-function-*): 见不拆说明
+                         const BtAddr &addr, uint32_t nowMs, Actions &act) noexcept
 {
     act.clear();
 

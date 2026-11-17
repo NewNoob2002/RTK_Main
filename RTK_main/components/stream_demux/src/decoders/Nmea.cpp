@@ -245,7 +245,14 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return verdict;
 }
 
-void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
+/**
+ * @brief  把判定理由写成一句人读文本
+ * @param  verdict: 判定结果
+ * @param  text: 文本输出器
+ * @note   不拆（S4 §2.1）：拒绝原因到一句话的文本映射表，每个 case 独立。
+ */
+void explainVerdict(const Verdict &verdict, // NOLINT(readability-function-*)
+                    demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:
