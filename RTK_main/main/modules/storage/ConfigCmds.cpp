@@ -66,6 +66,10 @@ void show_link() noexcept
     }
 }
 
+/**
+ * @brief  打印一个持久化类别：每键一行“键名 当前值 说明”；数值键有显示名时打印为 "1 (unicore)"
+ * @param  group: 类别（名字、说明、键表、可空的数值显示名钩子）
+ */
 void show_group(const StoreGroup &group) noexcept
 {
     // 类别名长度为常量字面量，远小于 int 上限。
@@ -92,7 +96,11 @@ void show_group(const StoreGroup &group) noexcept
         } else {
             uint32_t value = 0U;
             const esp_err_t err = store::read_value(key, value);
-            if (err == ESP_OK) {
+            const char *name =
+                ((err == ESP_OK) && (group.value_name != nullptr)) ? group.value_name(key.key, value) : nullptr;
+            if (name != nullptr) {
+                (void)std::snprintf(text.data(), text.size(), "%" PRIu32 " (%s)", value, name);
+            } else if (err == ESP_OK) {
                 (void)std::snprintf(text.data(), text.size(), "%" PRIu32, value);
             } else if (err == ESP_ERR_NVS_NOT_FOUND) {
                 (void)std::snprintf(text.data(), text.size(), "default");
@@ -100,7 +108,7 @@ void show_group(const StoreGroup &group) noexcept
                 (void)std::snprintf(text.data(), text.size(), "error");
             }
         }
-        cli::out_printf("  %-*.*s %-10s  %.*s\n", kNameWidth, static_cast<int>(key.key.size()), key.key.data(),
+        cli::out_printf("  %-*.*s %-12s  %.*s\n", kNameWidth, static_cast<int>(key.key.size()), key.key.data(),
                         text.data(), static_cast<int>(key.help.size()), key.help.data());
     }
 }
