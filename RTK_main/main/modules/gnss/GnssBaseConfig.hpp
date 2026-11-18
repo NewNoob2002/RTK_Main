@@ -207,4 +207,20 @@ void encodeI32Le(int32_t val, std::span<uint8_t> out) noexcept;
 [[nodiscard]] const char *formatScaledInt(int64_t val, uint8_t decimals,
                                           std::span<char> buf) noexcept;
 
+/**
+ * @brief 判断 RTCM3 基站报文是否受当前接收机族支持（1033 仅 Unicore，1230 仅 u-blox）。
+ * @param id: RTCM3 报文号。
+ * @param family: 已探测接收机族；kUnknown 时两者均可选。
+ * @retval true: 支持或未探测到接收机族；false: 已探测族不支持。
+ */
+[[nodiscard]] bool isBaseRtcmSupportedForFamily(uint16_t id, ::gnss::Family family) noexcept;
+
+/**
+ * @brief 未探测到接收机族时返回族专用 RTCM3 报文后缀（" (Unicore)"/" (u-blox)"），其余返回 ""。
+ * @param id: RTCM3 报文号。
+ * @param family: 当前接收机族。
+ * @retval 静态说明后缀串。
+ */
+[[nodiscard]] const char *baseRtcmFamilyTag(uint16_t id, ::gnss::Family family) noexcept;
+
 } // namespace app

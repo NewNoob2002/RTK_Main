@@ -1,5 +1,5 @@
 // GNSS 工作模式与基站参数控制台命令：gnss mode / gnss base / gnss out rtcm（ADR-0014 §2.5/§2.6）。
-// 仅在 console REPL 任务调用，可写 NVS 与等执行器结论（有界等待），非 ISR。
+// 仅在 console REPL 任务调用，参数变更经 ioExecutor 提交到 kIo 落盘并有界等待，非 ISR。
 #include "modules/gnss/GnssCmdsPrivate.hpp"
 
 #include <array>
@@ -16,7 +16,7 @@
 #include "cli/Out.hpp"
 #include "def/GnssSubDef.hpp"
 #include "modules/gnss/GnssBaseConfig.hpp"
-#include "modules/gnss/GnssKeys.hpp"
+#include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssModule.hpp"
 #include "support/ConsoleSupport.hpp"
 
@@ -44,19 +44,43 @@ constexpr size_t kArgVal = 3U;
 constexpr size_t kArgExtra = 4U;
 
 /**
- * @brief 保存 gnss.base 全部键到 NVS。
- * @param cfg: 已修改的配置快照。
- * @retval true: 保存成功。
- * @retval false: 写入失败（已打印 ERR）。
+ * @brief 通过 ioExecutor 提交 kSetBase 子包到 kIo 更新内存并持久化 NVS。
+ * @param cmd: 已打包好的 kSetBase 子包命令。
+ * @retval true: 提交并持久化成功；false: 执行器不可用或写 NVS 失败（已打印 ERR）。
  */
-bool persistBaseKeys(const GnssBaseConfig &cfg) noexcept
+bool submitSetBase(const fw::Command &cmd) noexcept
 {
-    appContext().gnss.writeBaseConfig(cfg);
-    if (!fw::isOk(appContext().storage.saveKeys(gnss_store::kBaseKeys))) {
-        (void)cli::fail("failed to save gnss.base settings");
+    if (appContext().ioExecutor == nullptr) {
+        (void)cli::fail("gnss not running");
+        return false;
+    }
+    fw::CommandResult res{};
+    if (!submitRawTo(*appContext().ioExecutor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
+        return false;
+    }
+    if (!fw::isOk(res.status)) {
+        (void)cli::fail("failed to save gnss.base settings (%s)", fw::toString(res.status));
         return false;
     }
     return true;
+}
+
+/**
+ * @brief 按当前已探测接收机族过滤并打印基站 RTCM 输出列表。
+ * @param cfg: 当前 gnss.base 配置。
+ * @param family: 已探测接收机族；kUnknown 时显示两条并附带族标签。
+ */
+void printBaseRtcmRows(const GnssBaseConfig &cfg, ::gnss::Family family) noexcept
+{
+    for (size_t i = 0U; i < ::gnss::kBaseRtcmCount; ++i) {
+        const uint16_t msgId = ::gnss::kBaseRtcmIds[i];
+        if (!isBaseRtcmSupportedForFamily(msgId, family)) {
+            continue;
+        }
+        std::array<char, kRateTextBytes> rateBuf{};
+        cli::outPrintf("  RTCM%-5u %s%s\n", static_cast<unsigned>(msgId),
+                       formatRtcmRate(cfg.rtcmOut[i], rateBuf), baseRtcmFamilyTag(msgId, family));
+    }
 }
 
 /**
@@ -113,15 +137,16 @@ void printBaseSummary(const GnssBaseConfig &cfg) noexcept
                  formatScaledInt(cfg.fixLonE9, kLatLonDecimals, lonBuf),
                  formatScaledInt(cfg.fixHeightMm, kHeightDecimals, hBuf));
     cli::printKv("msm", "%u", static_cast<unsigned>(cfg.msm));
+    printBaseRtcmRows(cfg, appContext().data.gnssStatus.read().family);
 }
 
 /**
  * @brief 解析并更新 gnss base survey <s> <m> [timeout_s]。
  * @param args: 命令行参数切片。
- * @param cfg: 读入并更新的 gnss.base 配置。
+ * @param cfg: 读入的 gnss.base 配置。
  * @retval 0: 成功；非零: 已输出 ERR。
  */
-int handleBaseSurvey(std::span<char *const> args, GnssBaseConfig &cfg) noexcept
+int handleBaseSurvey(std::span<char *const> args, const GnssBaseConfig &cfg) noexcept
 {
     if ((args.size() != kSurveyMinArgs) && (args.size() != kSurveyMaxArgs)) {
         return cli::fail("usage: gnss base survey <s 5..3600> <m 0.1..10.0> [timeout_s]");
@@ -146,28 +171,26 @@ int handleBaseSurvey(std::span<char *const> args, GnssBaseConfig &cfg) noexcept
     if ((svyToS < (svyS + GnssBaseConfig::kMinSvyToMarginS)) || (svyToS > kMaxSvyToMarginS)) {
         return cli::fail("invalid timeout_s (must be >= s+10 and <= 3600)");
     }
-    cfg.baseType = BaseType::kSurvey;
-    cfg.svyS = static_cast<uint16_t>(svyS);
-    cfg.svyAccCm = static_cast<uint16_t>(accCmSigned);
-    cfg.svyToS = static_cast<uint16_t>(svyToS);
-    if (!persistBaseKeys(cfg)) {
+    const auto svySU16 = static_cast<uint16_t>(svyS);
+    const auto accCmU16 = static_cast<uint16_t>(accCmSigned);
+    const auto svyToSU16 = static_cast<uint16_t>(svyToS);
+    if (!submitSetBase(packGnssBaseSurvey(svySU16, accCmU16, svyToSU16))) {
         return cli::kCmdFail;
     }
-    cli::outPrintf("survey=%us acc=%u.%02um timeout=%us\n", static_cast<unsigned>(cfg.svyS),
-                   static_cast<unsigned>(cfg.svyAccCm / static_cast<uint16_t>(kCmScale)),
-                   static_cast<unsigned>(cfg.svyAccCm % static_cast<uint16_t>(kCmScale)),
-                   static_cast<unsigned>(cfg.svyToS));
-    printApplyHint(cfg);
+    cli::outPrintf("survey=%us acc=%u.%02um timeout=%us\n", static_cast<unsigned>(svySU16),
+                   static_cast<unsigned>(accCmU16 / static_cast<uint16_t>(kCmScale)),
+                   static_cast<unsigned>(accCmU16 % static_cast<uint16_t>(kCmScale)),
+                   static_cast<unsigned>(svyToSU16));
+    printApplyHint(appContext().gnss.readBaseConfig());
     return 0;
 }
 
 /**
  * @brief 解析并更新 gnss base fixed <lat> <lon> <h>。
  * @param args: 命令行参数切片。
- * @param cfg: 读入并更新的 gnss.base 配置。
  * @retval 0: 成功；非零: 已输出 ERR。
  */
-int handleBaseFixed(std::span<char *const> args, GnssBaseConfig &cfg) noexcept
+int handleBaseFixed(std::span<char *const> args) noexcept
 {
     if (args.size() != kFixedArgs) {
         return cli::fail("usage: gnss base fixed <lat> <lon> <h>");
@@ -187,19 +210,15 @@ int handleBaseFixed(std::span<char *const> args, GnssBaseConfig &cfg) noexcept
         (hMm < GnssBaseConfig::kMinHeightMm) || (hMm > GnssBaseConfig::kMaxHeightMm)) {
         return cli::fail("invalid height (-1000..100000 m)");
     }
-    cfg.baseType = BaseType::kFixed;
-    cfg.fixLatE9 = latE9;
-    cfg.fixLonE9 = lonE9;
-    cfg.fixHeightMm = static_cast<int32_t>(hMm);
-    if (!persistBaseKeys(cfg)) {
+    if (!submitSetBase(packGnssBaseFixed(latE9, lonE9, static_cast<int32_t>(hMm)))) {
         return cli::kCmdFail;
     }
-    printApplyHint(cfg);
+    printApplyHint(appContext().gnss.readBaseConfig());
     return 0;
 }
 
 /**
- * @brief 等待 gnss mode 首阶段切换确认并持久化 NVS mode。
+ * @brief 等待 gnss mode 首阶段切换确认并通过 kIo 持久化 NVS mode。
  * @param target: 目标模式。
  * @param beforeSeq: 下发前 WorkMode 序号。
  * @retval 0: 成功并已保存 NVS；非零: 拒绝/超时（已输出 ERR）。
@@ -213,9 +232,7 @@ int waitAndPersistMode(WorkModeKind target, uint32_t beforeSeq) noexcept
             if (cur.lastErr != WorkModeErr::kNone) {
                 return cli::fail("%s", workModeErrName(cur.lastErr));
             }
-            auto cfg = appContext().gnss.readBaseConfig();
-            cfg.mode = target;
-            if (!persistBaseKeys(cfg)) {
+            if (!submitSetBase(packGnssBaseMode(target))) {
                 return cli::kCmdFail;
             }
             cli::outPrintf("mode=%s state=%s\n", workModeName(target),
@@ -235,11 +252,7 @@ void printBaseRtcmShow(const GnssBaseConfig &cfg) noexcept
 {
     cli::printSection("gnss_out_rtcm");
     cli::printKv("msm", "%u", static_cast<unsigned>(cfg.msm));
-    for (size_t i = 0U; i < ::gnss::kBaseRtcmCount; ++i) {
-        std::array<char, kRateTextBytes> rateBuf{};
-        cli::outPrintf("  RTCM%-5u %s\n", static_cast<unsigned>(::gnss::kBaseRtcmIds[i]),
-                       formatRtcmRate(cfg.rtcmOut[i], rateBuf));
-    }
+    printBaseRtcmRows(cfg, appContext().data.gnssStatus.read().family);
 }
 
 } // namespace
@@ -274,12 +287,7 @@ int cmdGnssMode(void * /*ctx*/, int argc, char **argv) noexcept
 
     const auto beforeWm = appContext().data.gnssWorkMode.read();
     const auto ctrlState = appContext().data.gnssStatus.read().state;
-    fw::Command cmd{};
-    cmd.target = id(ModuleKind::kGnss);
-    cmd.verb = static_cast<uint8_t>(GnssSubVerb::kMode);
-    cmd.argLen = 2U;
-    cmd.args[0U] = static_cast<uint8_t>(*target);
-    cmd.args[1U] = 1U;
+    const fw::Command cmd = packGnssMode(*target, true);
     fw::CommandResult res{};
     if (!submitRawTo(*appContext().ioExecutor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
         return cli::kCmdFail;
@@ -292,9 +300,7 @@ int cmdGnssMode(void * /*ctx*/, int argc, char **argv) noexcept
     }
 
     if (ctrlState != ::gnss::State::kRunning) {
-        auto cfg = appContext().gnss.readBaseConfig();
-        cfg.mode = *target;
-        if (!persistBaseKeys(cfg)) {
+        if (!submitSetBase(packGnssBaseMode(*target))) {
             return cli::kCmdFail;
         }
         cli::outPrintf("mode=%s queued (waiting gnss running)\n", workModeName(*target));
@@ -312,7 +318,7 @@ int cmdGnssMode(void * /*ctx*/, int argc, char **argv) noexcept
  */
 int cmdGnssBase(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    auto cfg = appContext().gnss.readBaseConfig();
+    const auto cfg = appContext().gnss.readBaseConfig();
     if (argc == 1) {
         printBaseSummary(cfg);
         return 0;
@@ -326,9 +332,42 @@ int cmdGnssBase(void * /*ctx*/, int argc, char **argv) noexcept
         return handleBaseSurvey(args, cfg);
     }
     if (sub == "fixed") {
-        return handleBaseFixed(args, cfg);
+        return handleBaseFixed(args);
     }
     return cli::fail("usage: gnss base [survey <s> <m> [timeout_s]|fixed <lat> <lon> <h>]");
+}
+
+/**
+ * @brief 处理 gnss out rtcm <id> <hz|off> 单条报文速率修改并持久化。
+ * @param args: 命令行参数切片。
+ * @param cfg: 待更新的 gnss.base 配置。
+ * @retval 0: 成功；非零: 已输出 ERR。
+ */
+int handleOutRtcmRate(std::span<char *const> args, GnssBaseConfig &cfg) noexcept
+{
+    uint32_t msgId = 0U;
+    if (!cli::parseU32(args[kArgSub], msgId) || (msgId > UINT16_MAX)) {
+        return cli::fail("invalid rtcm message id");
+    }
+    const auto rtcmId = static_cast<uint16_t>(msgId);
+    const auto slot = GnssBaseConfig::rtcmSlot(rtcmId);
+    if (!slot.has_value()) {
+        return cli::fail("unsupported rtcm id");
+    }
+    const auto family = appContext().data.gnssStatus.read().family;
+    if (!isBaseRtcmSupportedForFamily(rtcmId, family)) {
+        return cli::fail("%u is not supported by this receiver", static_cast<unsigned>(rtcmId));
+    }
+    int8_t code = 0;
+    if (!parseRtcmRateArg(std::string_view{args[kArgVal]}, code)) {
+        return cli::fail("invalid rate (off|0.1|0.2|0.5|1|2|5)");
+    }
+    cfg.rtcmOut[*slot] = code;
+    if (!submitSetBase(packGnssBaseRtcm(cfg.msm, cfg.rtcmOut))) {
+        return cli::kCmdFail;
+    }
+    printApplyHint(appContext().gnss.readBaseConfig());
+    return 0;
 }
 
 /**
@@ -347,11 +386,12 @@ int cmdGnssOutRtcm(std::span<char *const> args) noexcept
     if ((args.size() == kRtcmDefaultArgs) && (std::string_view{args[kArgSub]} == "default")) {
         cfg.msm = GnssBaseConfig::kMsm4;
         cfg.rtcmOut = GnssBaseConfig::defaultRtcmOut(cfg.msm);
-        if (!persistBaseKeys(cfg)) {
+        if (!submitSetBase(packGnssBaseRtcm(cfg.msm, cfg.rtcmOut))) {
             return cli::kCmdFail;
         }
-        printBaseRtcmShow(cfg);
-        printApplyHint(cfg);
+        const auto updated = appContext().gnss.readBaseConfig();
+        printBaseRtcmShow(updated);
+        printApplyHint(updated);
         return 0;
     }
     if ((args.size() == kRtcmSetArgs) && (std::string_view{args[kArgSub]} == "msm")) {
@@ -361,32 +401,15 @@ int cmdGnssOutRtcm(std::span<char *const> args) noexcept
             return cli::fail("invalid msm version (4|7)");
         }
         cfg.applyMsm(ver);
-        if (!persistBaseKeys(cfg)) {
+        if (!submitSetBase(packGnssBaseRtcm(cfg.msm, cfg.rtcmOut))) {
             return cli::kCmdFail;
         }
         cli::outPrintf("msm=%u\n", static_cast<unsigned>(cfg.msm));
-        printApplyHint(cfg);
+        printApplyHint(appContext().gnss.readBaseConfig());
         return 0;
     }
     if (args.size() == kRtcmSetArgs) {
-        uint32_t id = 0U;
-        if (!cli::parseU32(args[kArgSub], id) || (id > UINT16_MAX)) {
-            return cli::fail("invalid rtcm message id");
-        }
-        const auto slot = GnssBaseConfig::rtcmSlot(static_cast<uint16_t>(id));
-        if (!slot.has_value()) {
-            return cli::fail("unsupported rtcm id");
-        }
-        int8_t code = 0;
-        if (!parseRtcmRateArg(std::string_view{args[kArgVal]}, code)) {
-            return cli::fail("invalid rate (off|0.1|0.2|0.5|1|2|5)");
-        }
-        cfg.rtcmOut[*slot] = code;
-        if (!persistBaseKeys(cfg)) {
-            return cli::kCmdFail;
-        }
-        printApplyHint(cfg);
-        return 0;
+        return handleOutRtcmRate(args, cfg);
     }
     return cli::fail("usage: gnss out rtcm [show|default|msm <4|7>|<id> <hz|off>]");
 }

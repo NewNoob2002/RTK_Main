@@ -25,6 +25,7 @@
 #include "def/GnssSubDef.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/Types.hpp"
+#include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssCmdsPrivate.hpp"
 #include "modules/gnss/GnssConsoleValue.hpp"
 #include "rtos/EspStatus.hpp"
@@ -387,17 +388,11 @@ int applyGnssOutArgs(std::span<char *const> args, data::GnssOutConfig &cfg) noex
  */
 int submitGnssOut(const data::GnssOutConfig &cfg) noexcept
 {
-    fw::Command cmd{};
-    cmd.target = id(ModuleKind::kGnss);
-    cmd.verb = static_cast<uint8_t>(GnssSubVerb::kSetOut);
-    std::array<uint8_t, data::GnssOutConfig::kBlobBytes> blob{};
-    size_t blobLen = 0U;
-    if (!fw::isOk(cfg.encode(std::span<uint8_t>{blob}, blobLen))) {
+    bool ok = false;
+    const fw::Command cmd = detail::packGnssOut(cfg, ok);
+    if (!ok) {
         return cli::fail("encode out config failed");
     }
-    static_assert(data::GnssOutConfig::kBlobBytes <= fw::kCommandArgBytes);
-    std::memcpy(cmd.args.data(), blob.data(), blobLen);
-    cmd.argLen = static_cast<uint8_t>(blobLen);
     return submitGnssAndWait(cmd) ? 0 : cli::kCmdFail;
 }
 
@@ -469,9 +464,7 @@ int cmdGnssConfig(void * /*ctx*/, int argc, char **argv) noexcept
         return cli::fail("gnss not running");
     }
     const uint32_t before = appContext().data.gnssReadback.read().seq;
-    fw::Command cmd{};
-    cmd.target = id(ModuleKind::kGnss);
-    cmd.verb = static_cast<uint8_t>(GnssSubVerb::kReadback);
+    const fw::Command cmd = detail::packGnssReadback();
     fw::CommandResult res{};
     if (!submitRawTo(*appContext().ioExecutor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
         return cli::kCmdFail;

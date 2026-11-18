@@ -296,59 +296,53 @@ public:
      */
     static fw::Result saveOut(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
 
-    /** @brief 从 NVS 加载 gnss.base/mode。 @note 仅启动期或持锁上下文，非 ISR。 */
-    [[nodiscard]] static fw::Result loadBaseMode(void *obj, std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/mode 到 NVS 编码。 */
-    [[nodiscard]] static fw::Result saveBaseMode(const void *obj, std::span<uint8_t> out,
-                                                 size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/base_type。 */
-    [[nodiscard]] static fw::Result loadBaseType(void *obj, std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/base_type 到 NVS 编码。 */
-    [[nodiscard]] static fw::Result saveBaseType(const void *obj, std::span<uint8_t> out,
-                                                 size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/svy_s。 */
-    [[nodiscard]] static fw::Result loadBaseSvyS(void *obj, std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/svy_s 到 NVS 编码。 */
-    [[nodiscard]] static fw::Result saveBaseSvyS(const void *obj, std::span<uint8_t> out,
-                                                 size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/svy_acc_cm。 */
-    [[nodiscard]] static fw::Result loadBaseSvyAccCm(void *obj,
-                                                     std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/svy_acc_cm 到 NVS 编码。 */
-    [[nodiscard]] static fw::Result saveBaseSvyAccCm(const void *obj, std::span<uint8_t> out,
-                                                     size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/svy_to_s。 */
-    [[nodiscard]] static fw::Result loadBaseSvyToS(void *obj, std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/svy_to_s 到 NVS 编码。 */
-    [[nodiscard]] static fw::Result saveBaseSvyToS(const void *obj, std::span<uint8_t> out,
-                                                   size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/fix_lat（8B i64 LE）。 */
-    [[nodiscard]] static fw::Result loadBaseFixLat(void *obj, std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/fix_lat。 */
-    [[nodiscard]] static fw::Result saveBaseFixLat(const void *obj, std::span<uint8_t> out,
-                                                   size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/fix_lon（8B i64 LE）。 */
-    [[nodiscard]] static fw::Result loadBaseFixLon(void *obj, std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/fix_lon。 */
-    [[nodiscard]] static fw::Result saveBaseFixLon(const void *obj, std::span<uint8_t> out,
-                                                   size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/fix_h_mm（4B i32 LE）。 */
-    [[nodiscard]] static fw::Result loadBaseFixHeight(void *obj,
-                                                      std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/fix_h_mm。 */
-    [[nodiscard]] static fw::Result saveBaseFixHeight(const void *obj, std::span<uint8_t> out,
-                                                      size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/rtcm_out（14B blob v1）。 */
-    [[nodiscard]] static fw::Result loadBaseRtcmOut(void *obj,
-                                                    std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/rtcm_out。 */
-    [[nodiscard]] static fw::Result saveBaseRtcmOut(const void *obj, std::span<uint8_t> out,
-                                                    size_t &len) noexcept;
-    /** @brief 从 NVS 加载 gnss.base/msm。 */
-    [[nodiscard]] static fw::Result loadBaseMsm(void *obj, std::span<const uint8_t> in) noexcept;
-    /** @brief 保存 gnss.base/msm。 */
-    [[nodiscard]] static fw::Result saveBaseMsm(const void *obj, std::span<uint8_t> out,
-                                                size_t &len) noexcept;
+    /**
+     * @brief 从 NVS 加载 gnss.base 组指定槽位的键值。
+     * @param slot: gnss_store::kBaseKeys 下标（0..9）。
+     * @param in: 小端标量或 blob 输入视图。
+     * @retval kOk: 加载成功；kInvalidArg: 槽位、长度或取值非法。
+     * @note 仅启动期或持锁上下文，不阻塞，非 ISR。
+     */
+    [[nodiscard]] static fw::Result loadBaseAt(size_t slot, std::span<const uint8_t> in) noexcept;
+
+    /**
+     * @brief 编码 gnss.base 组指定槽位供 NVS 持久化。
+     * @param slot: gnss_store::kBaseKeys 下标（0..9）。
+     * @param[out] out: 输出缓冲。
+     * @param[out] len: 写入字节数。
+     * @retval kOk: 写入成功；kNoSpace: 空间不足；kInvalidArg: 槽位非法。
+     * @note 仅 kIo 或持锁上下文，不阻塞，非 ISR。
+     */
+    [[nodiscard]] static fw::Result saveBaseAt(size_t slot, std::span<uint8_t> out,
+                                               size_t &len) noexcept;
+
+    /**
+     * @brief StoreKey NVS 加载静态包装回调（转发至 loadBaseAt）。
+     * @param obj: 未使用。
+     * @param in: 输入字节视图。
+     * @retval 同 loadBaseAt。
+     */
+    template <size_t Slot>
+    [[nodiscard]] static fw::Result loadBaseSlot(void *obj, std::span<const uint8_t> in) noexcept
+    {
+        static_cast<void>(obj);
+        return loadBaseAt(Slot, in);
+    }
+
+    /**
+     * @brief StoreKey NVS 保存静态包装回调（转发至 saveBaseAt）。
+     * @param obj: 未使用。
+     * @param[out] out: 输出缓冲。
+     * @param[out] len: 输出字节数。
+     * @retval 同 saveBaseAt。
+     */
+    template <size_t Slot>
+    [[nodiscard]] static fw::Result saveBaseSlot(const void *obj, std::span<uint8_t> out,
+                                                 size_t &len) noexcept
+    {
+        static_cast<void>(obj);
+        return saveBaseAt(Slot, out, len);
+    }
 
     /**
      * @brief 跨任务安全读取 gnss.base 完整配置副本
@@ -621,6 +615,8 @@ private:
     void cmdBaud(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
     /** @brief 处理 GnssSubVerb::kMode（工作模式切换）命令。 */
     void cmdMode(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
+    /** @brief 处理 GnssSubVerb::kSetBase（gnss.base 子包更新与持久化）命令。 */
+    void cmdSetBase(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /**
      * @brief 处理来自 GNSS RX 侧的一条 RTCM3 帧：通知自测并在 kBaseTx 且手机就绪时推入转发环
      * @param frame: 完整 RTCM3 线路帧字节

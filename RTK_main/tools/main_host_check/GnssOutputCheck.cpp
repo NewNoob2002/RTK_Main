@@ -22,6 +22,7 @@ extern "C" const char *esp_err_to_name(esp_err_t error)
 }
 
 void testGnssFactoryReset();
+void testBaseKeysAndCommandDispatch();
 
 namespace {
 
@@ -371,5 +372,6 @@ int main()
     testConsoleRates();
     testSaveCoalescing();
     testGnssFactoryReset();
+    testBaseKeysAndCommandDispatch();
     return 0;
 }

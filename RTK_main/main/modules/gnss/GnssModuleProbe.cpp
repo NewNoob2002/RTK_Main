@@ -26,6 +26,7 @@
 #include "fw/Tlog.hpp"
 #include "gnss/Receiver.hpp"
 #include "modules/gnss/GnssKeys.hpp"
+#include "modules/gnss/GnssTxLog.hpp"
 #include "modules/storage/StorageModule.hpp"
 #include "rtos/EspStatus.hpp"
 
@@ -306,24 +307,13 @@ void GnssModule::applyWriteAction(const ::gnss::Action &act) noexcept
     if (written < 0 || static_cast<size_t>(written) != act.bytes.size()) {
         controller().maintenanceIoFailed(rtos::nowMs());
     }
-    // 控制器下发的命令原文（去掉行尾 CR/LF）；探测阶段标 <probe>，其余标 <cfg>，
-    // 方向固定写 TX（MCU → 接收机）：旧格式 "model <- cmd" 容易被读成接收（ADR-0009 §2.12）。
-    std::size_t cmdLen = act.bytes.size();
-    while ((cmdLen > 0U) &&
-           ((act.bytes[cmdLen - 1U] == '\r') || (act.bytes[cmdLen - 1U] == '\n'))) {
-        --cmdLen;
-    }
-    // IDF action 的字节数有固定上限；逐字节转成 char 后保留命令原文供诊断。
-    std::array<char, ::gnss::kMaxCommand> cmdText{};
-    const size_t textLen = std::min(cmdLen, cmdText.size());
-    for (size_t i = 0U; i < textLen; ++i) {
-        cmdText[i] = std::bit_cast<char>(act.bytes[i]);
-    }
+    // 控制器下发的命令：探测阶段标 <probe>，其余标 <cfg>，方向固定写 TX（ADR-0009 §2.12）；
+    // 全可打印 ASCII 保留原文 "..."，二进制 UBX 输出前 16 字节十六进制摘要。
+    std::array<char, ::gnss::kMaxCommand + 16U> logText{};
+    static_cast<void>(detail::formatGnssTxLog(act.bytes, logText));
     const auto st = controller().state();
-    // textLen 不超过固定命令数组，远小于 INT_MAX。
-    FW_LOGI(fw::TraceCat::kGnss, "%s TX \"%.*s\"",
-            (st == ::gnss::State::kProbing) ? "<probe>" : "<cfg>", static_cast<int>(textLen),
-            cmdText.data());
+    FW_LOGI(fw::TraceCat::kGnss, "%s TX %s", (st == ::gnss::State::kProbing) ? "<probe>" : "<cfg>",
+            logText.data());
     const auto curStats = controller().stats();
     if ((st == ::gnss::State::kProbing) && (curStats.probesSent > prev_ctrl_stats_.probesSent)) {
         traceGnss(GnssTrace::kProbeSend,

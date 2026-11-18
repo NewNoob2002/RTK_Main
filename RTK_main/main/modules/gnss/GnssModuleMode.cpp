@@ -13,10 +13,62 @@
 #include "modules/gnss/GnssBaseConfig.hpp"
 #include "modules/gnss/GnssKeys.hpp"
 #include "modules/gnss/GnssModulePrivate.hpp"
+#include "modules/storage/StorageModule.hpp"
 #include "rtos/EspStatus.hpp"
 
 namespace app {
 namespace {
+
+/** @brief gnss.base 单个持久化键的编解码分类。 */
+enum class BaseFieldKind : uint8_t {
+    kWorkMode,
+    kBaseType,
+    kU16,
+    kI64Blob,
+    kI32Blob,
+    kRtcmOutBlob,
+    kMsm,
+};
+
+/** @brief gnss.base 字段描述表项（关联 NVS 槽位、编解码类别、范围与成员指针）。 */
+struct BaseFieldDesc {
+    size_t keyIdx = 0U;
+    BaseFieldKind kind = BaseFieldKind::kWorkMode;
+    int64_t minVal = 0;
+    int64_t maxVal = 0;
+    WorkModeKind GnssBaseConfig::*modePtr = nullptr;
+    BaseType GnssBaseConfig::*typePtr = nullptr;
+    uint16_t GnssBaseConfig::*u16Ptr = nullptr;
+    int64_t GnssBaseConfig::*i64Ptr = nullptr;
+    int32_t GnssBaseConfig::*i32Ptr = nullptr;
+    uint8_t GnssBaseConfig::*u8Ptr = nullptr;
+};
+
+constexpr std::array<BaseFieldDesc, gnss_store::kBaseKeys.size()> kBaseFieldDescs{{
+    {gnss_store::kBaseModeKeyIdx, BaseFieldKind::kWorkMode, 0,
+     static_cast<int64_t>(WorkModeKind::kBase), &GnssBaseConfig::mode},
+    {gnss_store::kBaseTypeKeyIdx, BaseFieldKind::kBaseType, 0,
+     static_cast<int64_t>(BaseType::kFixed), nullptr, &GnssBaseConfig::baseType},
+    {gnss_store::kBaseSvySKeyIdx, BaseFieldKind::kU16, GnssBaseConfig::kMinSvyS,
+     GnssBaseConfig::kMaxSvyS, nullptr, nullptr, &GnssBaseConfig::svyS},
+    {gnss_store::kBaseSvyAccCmKeyIdx, BaseFieldKind::kU16, GnssBaseConfig::kMinSvyAccCm,
+     GnssBaseConfig::kMaxSvyAccCm, nullptr, nullptr, &GnssBaseConfig::svyAccCm},
+    {gnss_store::kBaseSvyToSKeyIdx, BaseFieldKind::kU16, GnssBaseConfig::kMinSvyToS,
+     GnssBaseConfig::kMaxSvyToS, nullptr, nullptr, &GnssBaseConfig::svyToS},
+    {gnss_store::kBaseFixLatKeyIdx, BaseFieldKind::kI64Blob, -GnssBaseConfig::kMaxLatE9,
+     GnssBaseConfig::kMaxLatE9, nullptr, nullptr, nullptr, &GnssBaseConfig::fixLatE9},
+    {gnss_store::kBaseFixLonKeyIdx, BaseFieldKind::kI64Blob, -GnssBaseConfig::kMaxLonE9,
+     GnssBaseConfig::kMaxLonE9, nullptr, nullptr, nullptr, &GnssBaseConfig::fixLonE9},
+    {gnss_store::kBaseFixHMmKeyIdx, BaseFieldKind::kI32Blob, GnssBaseConfig::kMinHeightMm,
+     GnssBaseConfig::kMaxHeightMm, nullptr, nullptr, nullptr, nullptr,
+     &GnssBaseConfig::fixHeightMm},
+    {gnss_store::kBaseRtcmOutKeyIdx, BaseFieldKind::kRtcmOutBlob, 0, 0},
+    {gnss_store::kBaseMsmKeyIdx, BaseFieldKind::kMsm, GnssBaseConfig::kMsm4, GnssBaseConfig::kMsm7,
+     nullptr, nullptr, nullptr, nullptr, nullptr, &GnssBaseConfig::msm},
+}};
+
+static_assert(kBaseFieldDescs[gnss_store::kBaseModeKeyIdx].keyIdx == gnss_store::kBaseModeKeyIdx);
+static_assert(kBaseFieldDescs[gnss_store::kBaseMsmKeyIdx].keyIdx == gnss_store::kBaseMsmKeyIdx);
 
 /**
  * @brief 读 2 字节小端 u16。
@@ -41,6 +93,326 @@ void writeU16Le(uint16_t v, std::span<uint8_t> out) noexcept
     constexpr uint16_t kMask = 0xFFU;
     out[0U] = static_cast<uint8_t>(v & kMask);
     out[1U] = static_cast<uint8_t>((v >> kByteShift) & kMask);
+}
+
+/**
+ * @brief 解码 gnss.base 组 blob 类（fix_lat / fix_lon / fix_h_mm / rtcm_out）键值。
+ * @param desc: 字段描述。
+ * @param in: 输入字节。
+ * @param[out] parsed: 写入解码字段后的临时配置。
+ * @retval kOk: 合法；kInvalidArg: 长度或取值非法。
+ */
+fw::Result decodeBaseBlobField(const BaseFieldDesc &desc, std::span<const uint8_t> in,
+                               GnssBaseConfig &parsed) noexcept
+{
+    if (desc.kind == BaseFieldKind::kI64Blob) {
+        if (in.size() != GnssBaseConfig::kFixCoordBlobBytes) {
+            return fw::Result::kInvalidArg;
+        }
+        const int64_t v = decodeI64Le(in);
+        if ((v < desc.minVal) || (v > desc.maxVal)) {
+            return fw::Result::kInvalidArg;
+        }
+        parsed.*(desc.i64Ptr) = v;
+        return fw::Result::kOk;
+    }
+    if (desc.kind == BaseFieldKind::kI32Blob) {
+        if (in.size() != GnssBaseConfig::kFixHeightBlobBytes) {
+            return fw::Result::kInvalidArg;
+        }
+        const int32_t v = decodeI32Le(in);
+        if ((v < desc.minVal) || (v > desc.maxVal)) {
+            return fw::Result::kInvalidArg;
+        }
+        parsed.*(desc.i32Ptr) = v;
+        return fw::Result::kOk;
+    }
+    return parsed.decodeRtcmOut(in) ? fw::Result::kOk : fw::Result::kInvalidArg;
+}
+
+/**
+ * @brief 按描述表项解码单个 NVS 输入值并校验范围到临时结构。
+ * @param desc: 字段描述。
+ * @param in: 输入字节。
+ * @param[out] parsed: 写入解码字段后的临时配置。
+ * @retval kOk: 合法；kInvalidArg: 长度或范围非法。
+ */
+fw::Result decodeBaseField(const BaseFieldDesc &desc, std::span<const uint8_t> in,
+                           GnssBaseConfig &parsed) noexcept
+{
+    switch (desc.kind) {
+    case BaseFieldKind::kWorkMode:
+    case BaseFieldKind::kBaseType: {
+        if (in.empty() || (static_cast<int64_t>(in[0U]) > desc.maxVal)) {
+            return fw::Result::kInvalidArg;
+        }
+        if (desc.kind == BaseFieldKind::kWorkMode) {
+            parsed.*(desc.modePtr) = static_cast<WorkModeKind>(in[0U]);
+        } else {
+            parsed.*(desc.typePtr) = static_cast<BaseType>(in[0U]);
+        }
+        return fw::Result::kOk;
+    }
+    case BaseFieldKind::kU16: {
+        if (in.size() < sizeof(uint16_t)) {
+            return fw::Result::kInvalidArg;
+        }
+        const uint16_t v = readU16Le(in);
+        const auto vSigned = static_cast<int64_t>(v);
+        if ((vSigned < desc.minVal) || (vSigned > desc.maxVal)) {
+            return fw::Result::kInvalidArg;
+        }
+        parsed.*(desc.u16Ptr) = v;
+        return fw::Result::kOk;
+    }
+    case BaseFieldKind::kI64Blob:
+    case BaseFieldKind::kI32Blob:
+    case BaseFieldKind::kRtcmOutBlob:
+        return decodeBaseBlobField(desc, in, parsed);
+    case BaseFieldKind::kMsm:
+        if (in.empty() ||
+            ((in[0U] != GnssBaseConfig::kMsm4) && (in[0U] != GnssBaseConfig::kMsm7))) {
+            return fw::Result::kInvalidArg;
+        }
+        parsed.*(desc.u8Ptr) = in[0U];
+        return fw::Result::kOk;
+    default:
+        return fw::Result::kInvalidArg;
+    }
+}
+
+/**
+ * @brief 将已验证的单个字段从临时对象写入模块配置。
+ * @param desc: 字段描述。
+ * @param src: 已解码临时配置。
+ * @param[out] dst: 模块持有的目标配置。
+ */
+void assignBaseField(const BaseFieldDesc &desc, const GnssBaseConfig &src,
+                     GnssBaseConfig &dst) noexcept
+{
+    switch (desc.kind) {
+    case BaseFieldKind::kWorkMode:
+        dst.*(desc.modePtr) = src.*(desc.modePtr);
+        break;
+    case BaseFieldKind::kBaseType:
+        dst.*(desc.typePtr) = src.*(desc.typePtr);
+        break;
+    case BaseFieldKind::kU16:
+        dst.*(desc.u16Ptr) = src.*(desc.u16Ptr);
+        break;
+    case BaseFieldKind::kI64Blob:
+        dst.*(desc.i64Ptr) = src.*(desc.i64Ptr);
+        break;
+    case BaseFieldKind::kI32Blob:
+        dst.*(desc.i32Ptr) = src.*(desc.i32Ptr);
+        break;
+    case BaseFieldKind::kRtcmOutBlob:
+        dst.rtcmOut = src.rtcmOut;
+        break;
+    case BaseFieldKind::kMsm:
+        dst.*(desc.u8Ptr) = src.*(desc.u8Ptr);
+        break;
+    default:
+        break;
+    }
+}
+
+/**
+ * @brief 按描述表项将 GnssBaseConfig 字段编码到 NVS 输出缓冲。
+ * @param desc: 字段描述。
+ * @param cfg: 当前配置副本。
+ * @param[out] out: 输出缓冲区。
+ * @param[out] len: 写入字节数。
+ * @retval kOk: 写入成功；kNoSpace: 输出缓冲不足；kInvalidArg: 未知字段类型。
+ */
+fw::Result encodeBaseField(const BaseFieldDesc &desc, const GnssBaseConfig &cfg,
+                           std::span<uint8_t> out, size_t &len) noexcept
+{
+    switch (desc.kind) {
+    case BaseFieldKind::kWorkMode:
+    case BaseFieldKind::kBaseType:
+    case BaseFieldKind::kMsm:
+        if (out.empty()) {
+            return fw::Result::kNoSpace;
+        }
+        if (desc.kind == BaseFieldKind::kWorkMode) {
+            out[0U] = static_cast<uint8_t>(cfg.*(desc.modePtr));
+        } else if (desc.kind == BaseFieldKind::kBaseType) {
+            out[0U] = static_cast<uint8_t>(cfg.*(desc.typePtr));
+        } else {
+            out[0U] = cfg.*(desc.u8Ptr);
+        }
+        len = 1U;
+        return fw::Result::kOk;
+    case BaseFieldKind::kU16:
+        if (out.size() < sizeof(uint16_t)) {
+            return fw::Result::kNoSpace;
+        }
+        writeU16Le(cfg.*(desc.u16Ptr), out);
+        len = sizeof(uint16_t);
+        return fw::Result::kOk;
+    case BaseFieldKind::kI64Blob:
+        if (out.size() < GnssBaseConfig::kFixCoordBlobBytes) {
+            return fw::Result::kNoSpace;
+        }
+        encodeI64Le(cfg.*(desc.i64Ptr), out);
+        len = GnssBaseConfig::kFixCoordBlobBytes;
+        return fw::Result::kOk;
+    case BaseFieldKind::kI32Blob:
+        if (out.size() < GnssBaseConfig::kFixHeightBlobBytes) {
+            return fw::Result::kNoSpace;
+        }
+        encodeI32Le(cfg.*(desc.i32Ptr), out);
+        len = GnssBaseConfig::kFixHeightBlobBytes;
+        return fw::Result::kOk;
+    case BaseFieldKind::kRtcmOutBlob:
+        return cfg.encodeRtcmOut(out, len) ? fw::Result::kOk : fw::Result::kNoSpace;
+    default:
+        return fw::Result::kInvalidArg;
+    }
+}
+
+/**
+ * @brief 解析并校验 kSurvey 子包。
+ * @param args: 子包载荷。
+ * @param[out] cfg: 待更新配置。
+ * @retval true: 参数合法；false: 非法。
+ */
+bool decodeBaseSurveyPatch(std::span<const uint8_t> args, GnssBaseConfig &cfg) noexcept
+{
+    constexpr size_t kSurveyBytes = 8U;
+    if ((args.size() != kSurveyBytes) || (args[1U] != static_cast<uint8_t>(BaseType::kSurvey))) {
+        return false;
+    }
+    const uint16_t svyS = readU16Le(args.subspan(2U, 2U));
+    const uint16_t accCm = readU16Le(args.subspan(4U, 2U));
+    const uint16_t toS = readU16Le(args.subspan(6U, 2U));
+    if ((svyS < GnssBaseConfig::kMinSvyS) || (svyS > GnssBaseConfig::kMaxSvyS) ||
+        (accCm < GnssBaseConfig::kMinSvyAccCm) || (accCm > GnssBaseConfig::kMaxSvyAccCm) ||
+        (toS < (svyS + GnssBaseConfig::kMinSvyToMarginS)) || (toS > GnssBaseConfig::kMaxSvyToS)) {
+        return false;
+    }
+    cfg.baseType = BaseType::kSurvey;
+    cfg.svyS = svyS;
+    cfg.svyAccCm = accCm;
+    cfg.svyToS = toS;
+    return true;
+}
+
+/**
+ * @brief 解析并校验 kFixed 子包。
+ * @param args: 子包载荷。
+ * @param[out] cfg: 待更新配置。
+ * @retval true: 参数合法；false: 非法。
+ */
+bool decodeBaseFixedPatch(std::span<const uint8_t> args, GnssBaseConfig &cfg) noexcept
+{
+    constexpr size_t kFixedBytes = 22U;
+    if ((args.size() != kFixedBytes) || (args[1U] != static_cast<uint8_t>(BaseType::kFixed))) {
+        return false;
+    }
+    const int64_t lat = decodeI64Le(args.subspan(2U, GnssBaseConfig::kFixCoordBlobBytes));
+    const int64_t lon = decodeI64Le(args.subspan(10U, GnssBaseConfig::kFixCoordBlobBytes));
+    const int32_t hMm = decodeI32Le(args.subspan(18U, GnssBaseConfig::kFixHeightBlobBytes));
+    if ((lat < -GnssBaseConfig::kMaxLatE9) || (lat > GnssBaseConfig::kMaxLatE9) ||
+        (lon < -GnssBaseConfig::kMaxLonE9) || (lon > GnssBaseConfig::kMaxLonE9) ||
+        (hMm < GnssBaseConfig::kMinHeightMm) || (hMm > GnssBaseConfig::kMaxHeightMm)) {
+        return false;
+    }
+    cfg.baseType = BaseType::kFixed;
+    cfg.fixLatE9 = lat;
+    cfg.fixLonE9 = lon;
+    cfg.fixHeightMm = hMm;
+    return true;
+}
+
+/**
+ * @brief 解析并校验 kRtcm 子包。
+ * @param args: 子包载荷。
+ * @param[out] cfg: 待更新配置。
+ * @retval true: 参数合法；false: 非法。
+ */
+bool decodeBaseRtcmPatch(std::span<const uint8_t> args, GnssBaseConfig &cfg) noexcept
+{
+    constexpr size_t kRtcmBytes = 2U + ::gnss::kBaseRtcmCount;
+    if ((args.size() != kRtcmBytes) ||
+        ((args[1U] != GnssBaseConfig::kMsm4) && (args[1U] != GnssBaseConfig::kMsm7))) {
+        return false;
+    }
+    for (size_t i = 0U; i < ::gnss::kBaseRtcmCount; ++i) {
+        if (!GnssBaseConfig::isValidRateCode(static_cast<int8_t>(args[2U + i]))) {
+            return false;
+        }
+    }
+    cfg.msm = args[1U];
+    for (size_t i = 0U; i < ::gnss::kBaseRtcmCount; ++i) {
+        cfg.rtcmOut[i] = static_cast<int8_t>(args[2U + i]);
+    }
+    return true;
+}
+
+/**
+ * @brief 解析并校验 kSetBase 子包参数到 cfg。
+ * @param cmd: 待解码命令（verb == kSetBase）。
+ * @param[in,out] cfg: 待更新的配置副本。
+ * @retval true: 参数长度与范围合法；false: 非法参数。
+ */
+bool decodeBasePatch(const fw::Command &cmd, GnssBaseConfig &cfg) noexcept
+{
+    if (cmd.argLen == 0U) {
+        return false;
+    }
+    const auto args = std::span{cmd.args}.first(cmd.argLen);
+    switch (static_cast<BasePatchKind>(args[0U])) {
+    case BasePatchKind::kMode:
+        if ((args.size() != 2U) || (args[1U] > static_cast<uint8_t>(WorkModeKind::kBase))) {
+            return false;
+        }
+        cfg.mode = static_cast<WorkModeKind>(args[1U]);
+        return true;
+    case BasePatchKind::kSurvey:
+        return decodeBaseSurveyPatch(args, cfg);
+    case BasePatchKind::kFixed:
+        return decodeBaseFixedPatch(args, cfg);
+    case BasePatchKind::kRtcm:
+        return decodeBaseRtcmPatch(args, cfg);
+    default:
+        return false;
+    }
+}
+
+/**
+ * @brief 按子包种类将对应的 gnss.base 键切片写入 NVS。
+ * @param kind: 子包种类。
+ * @param storage: 存储模块引用。
+ * @retval kOk: 持久化成功；其他: 底层 NVS 写入失败。
+ */
+fw::Result persistBasePatchSlices(BasePatchKind kind, StorageModule &storage) noexcept
+{
+    constexpr size_t kModeKeyCount = 1U;
+    constexpr size_t kSurveyKeyCount = 4U;
+    constexpr size_t kFixedCoordKeyCount = 3U;
+    constexpr size_t kRtcmKeyCount = 2U;
+    const auto allKeys = std::span{gnss_store::kBaseKeys};
+    switch (kind) {
+    case BasePatchKind::kMode:
+        return storage.saveKeys(allKeys.subspan(gnss_store::kBaseModeKeyIdx, kModeKeyCount));
+    case BasePatchKind::kSurvey:
+        return storage.saveKeys(allKeys.subspan(gnss_store::kBaseTypeKeyIdx, kSurveyKeyCount));
+    case BasePatchKind::kFixed: {
+        const fw::Result first =
+            storage.saveKeys(allKeys.subspan(gnss_store::kBaseTypeKeyIdx, kModeKeyCount));
+        if (!fw::isOk(first)) {
+            return first;
+        }
+        return storage.saveKeys(
+            allKeys.subspan(gnss_store::kBaseFixLatKeyIdx, kFixedCoordKeyCount));
+    }
+    case BasePatchKind::kRtcm:
+        return storage.saveKeys(allKeys.subspan(gnss_store::kBaseRtcmOutKeyIdx, kRtcmKeyCount));
+    default:
+        return fw::Result::kInvalidArg;
+    }
 }
 
 /** @brief 仅在 GnssModule 初始化后加自旋锁（早于 data.init() 的单线程期直接访问）。 */
@@ -133,364 +505,65 @@ void GnssModule::initBaseDefaults() noexcept
 }
 
 /**
- * @brief 从 NVS 恢复 gnss.base/mode。
- * @param in: 1 字节编码。
- * @retval kOk: 加载成功；kInvalidArg: 值越界。
+ * @brief 从 NVS 恢复 gnss.base 组指定槽位的键值。
+ * @param slot: gnss_store::kBaseKeys 下标（0..9）。
+ * @param in: NVS 输入字节。
+ * @retval kOk: 加载成功；kInvalidArg: 槽位或取值非法。
  */
-fw::Result GnssModule::loadBaseMode(void * /*obj*/, std::span<const uint8_t> in) noexcept
+fw::Result GnssModule::loadBaseAt(size_t slot, std::span<const uint8_t> in) noexcept
 {
-    if (in.empty() || (in[0U] > static_cast<uint8_t>(WorkModeKind::kBase))) {
+    if (slot >= kBaseFieldDescs.size()) {
         return fw::Result::kInvalidArg;
+    }
+    const BaseFieldDesc &desc = kBaseFieldDescs[slot];
+    GnssBaseConfig parsed{};
+    const fw::Result status = decodeBaseField(desc, in, parsed);
+    if (!fw::isOk(status)) {
+        return status;
     }
     auto &gnss = appContext().gnss;
     const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().mode = static_cast<WorkModeKind>(in[0U]);
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseModeKeyIdx);
+    assignBaseField(desc, parsed, gnss.ensureBaseCfg());
+    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << slot);
     return fw::Result::kOk;
 }
 
 /**
- * @brief 编码 gnss.base/mode 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（1）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
+ * @brief 编码 gnss.base 组指定槽位供 NVS 持久化。
+ * @param slot: gnss_store::kBaseKeys 下标（0..9）。
+ * @param[out] out: 目标字节切片。
+ * @param[out] len: 写入字节数。
+ * @retval kOk: 写入成功；kNoSpace: 空间不足；kInvalidArg: 槽位非法。
  */
-fw::Result GnssModule::saveBaseMode(const void * /*obj*/, std::span<uint8_t> out,
-                                    size_t &len) noexcept
+fw::Result GnssModule::saveBaseAt(size_t slot, std::span<uint8_t> out, size_t &len) noexcept
 {
-    if (out.empty()) {
-        return fw::Result::kNoSpace;
-    }
-    out[0U] = static_cast<uint8_t>(appContext().gnss.readBaseConfig().mode);
-    len = 1U;
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/base_type。
- * @param in: 1 字节编码。
- * @retval kOk: 加载成功；kInvalidArg: 值越界。
- */
-fw::Result GnssModule::loadBaseType(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    if (in.empty() || (in[0U] > static_cast<uint8_t>(BaseType::kFixed))) {
+    if (slot >= kBaseFieldDescs.size()) {
         return fw::Result::kInvalidArg;
     }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().baseType = static_cast<BaseType>(in[0U]);
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseTypeKeyIdx);
-    return fw::Result::kOk;
+    const GnssBaseConfig cfg = appContext().gnss.readBaseConfig();
+    return encodeBaseField(kBaseFieldDescs[slot], cfg, out, len);
 }
 
 /**
- * @brief 编码 gnss.base/base_type 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（1）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
+ * @brief 在 kIo 任务内原子更新 gnss.base 字段并写入 NVS（失败回滚内存）。
+ * @param cmd: kSetBase 子包指令。
+ * @param[out] result: 返回 kOk / kInvalidArg / 底层存储错误。
  */
-fw::Result GnssModule::saveBaseType(const void * /*obj*/, std::span<uint8_t> out,
-                                    size_t &len) noexcept
+void GnssModule::cmdSetBase(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
-    if (out.empty()) {
-        return fw::Result::kNoSpace;
+    GnssBaseConfig next = readBaseConfig();
+    if (!decodeBasePatch(cmd, next)) {
+        result.status = fw::Result::kInvalidArg;
+        return;
     }
-    out[0U] = static_cast<uint8_t>(appContext().gnss.readBaseConfig().baseType);
-    len = 1U;
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/svy_s。
- * @param in: 2 字节小端 u16。
- * @retval kOk: 加载成功；kInvalidArg: 值越界或长度不足。
- */
-fw::Result GnssModule::loadBaseSvyS(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    if (in.size() < sizeof(uint16_t)) {
-        return fw::Result::kInvalidArg;
+    const GnssBaseConfig prev = readBaseConfig();
+    writeBaseConfig(next);
+    const auto kind = static_cast<BasePatchKind>(cmd.args[0U]);
+    const fw::Result saved = persistBasePatchSlices(kind, ctx().storage);
+    if (!fw::isOk(saved)) {
+        writeBaseConfig(prev);
     }
-    const uint16_t v = readU16Le(in);
-    if ((v < GnssBaseConfig::kMinSvyS) || (v > GnssBaseConfig::kMaxSvyS)) {
-        return fw::Result::kInvalidArg;
-    }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().svyS = v;
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseSvySKeyIdx);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 编码 gnss.base/svy_s 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（2）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
- */
-fw::Result GnssModule::saveBaseSvyS(const void * /*obj*/, std::span<uint8_t> out,
-                                    size_t &len) noexcept
-{
-    if (out.size() < sizeof(uint16_t)) {
-        return fw::Result::kNoSpace;
-    }
-    writeU16Le(appContext().gnss.readBaseConfig().svyS, out);
-    len = sizeof(uint16_t);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/svy_acc_cm。
- * @param in: 2 字节小端 u16。
- * @retval kOk: 加载成功；kInvalidArg: 值越界或长度不足。
- */
-fw::Result GnssModule::loadBaseSvyAccCm(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    if (in.size() < sizeof(uint16_t)) {
-        return fw::Result::kInvalidArg;
-    }
-    const uint16_t v = readU16Le(in);
-    if ((v < GnssBaseConfig::kMinSvyAccCm) || (v > GnssBaseConfig::kMaxSvyAccCm)) {
-        return fw::Result::kInvalidArg;
-    }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().svyAccCm = v;
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseSvyAccCmKeyIdx);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 编码 gnss.base/svy_acc_cm 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（2）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
- */
-fw::Result GnssModule::saveBaseSvyAccCm(const void * /*obj*/, std::span<uint8_t> out,
-                                        size_t &len) noexcept
-{
-    if (out.size() < sizeof(uint16_t)) {
-        return fw::Result::kNoSpace;
-    }
-    writeU16Le(appContext().gnss.readBaseConfig().svyAccCm, out);
-    len = sizeof(uint16_t);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/svy_to_s。
- * @param in: 2 字节小端 u16。
- * @retval kOk: 加载成功；kInvalidArg: 值越界或长度不足。
- */
-fw::Result GnssModule::loadBaseSvyToS(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    if (in.size() < sizeof(uint16_t)) {
-        return fw::Result::kInvalidArg;
-    }
-    const uint16_t v = readU16Le(in);
-    if ((v < GnssBaseConfig::kMinSvyToS) || (v > GnssBaseConfig::kMaxSvyToS)) {
-        return fw::Result::kInvalidArg;
-    }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().svyToS = v;
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseSvyToSKeyIdx);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 编码 gnss.base/svy_to_s 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（2）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
- */
-fw::Result GnssModule::saveBaseSvyToS(const void * /*obj*/, std::span<uint8_t> out,
-                                      size_t &len) noexcept
-{
-    if (out.size() < sizeof(uint16_t)) {
-        return fw::Result::kNoSpace;
-    }
-    writeU16Le(appContext().gnss.readBaseConfig().svyToS, out);
-    len = sizeof(uint16_t);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/fix_lat（8B i64 LE）。
- * @param in: 8 字节 blob。
- * @retval kOk: 加载成功；kInvalidArg: 长度或纬度范围非法。
- */
-fw::Result GnssModule::loadBaseFixLat(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    if (in.size() != GnssBaseConfig::kFixCoordBlobBytes) {
-        return fw::Result::kInvalidArg;
-    }
-    const int64_t v = decodeI64Le(in);
-    if ((v < -GnssBaseConfig::kMaxLatE9) || (v > GnssBaseConfig::kMaxLatE9)) {
-        return fw::Result::kInvalidArg;
-    }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().fixLatE9 = v;
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseFixLatKeyIdx);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 编码 gnss.base/fix_lat 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（8）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
- */
-fw::Result GnssModule::saveBaseFixLat(const void * /*obj*/, std::span<uint8_t> out,
-                                      size_t &len) noexcept
-{
-    if (out.size() < GnssBaseConfig::kFixCoordBlobBytes) {
-        return fw::Result::kNoSpace;
-    }
-    encodeI64Le(appContext().gnss.readBaseConfig().fixLatE9, out);
-    len = GnssBaseConfig::kFixCoordBlobBytes;
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/fix_lon（8B i64 LE）。
- * @param in: 8 字节 blob。
- * @retval kOk: 加载成功；kInvalidArg: 长度或经度范围非法。
- */
-fw::Result GnssModule::loadBaseFixLon(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    if (in.size() != GnssBaseConfig::kFixCoordBlobBytes) {
-        return fw::Result::kInvalidArg;
-    }
-    const int64_t v = decodeI64Le(in);
-    if ((v < -GnssBaseConfig::kMaxLonE9) || (v > GnssBaseConfig::kMaxLonE9)) {
-        return fw::Result::kInvalidArg;
-    }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().fixLonE9 = v;
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseFixLonKeyIdx);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 编码 gnss.base/fix_lon 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（8）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
- */
-fw::Result GnssModule::saveBaseFixLon(const void * /*obj*/, std::span<uint8_t> out,
-                                      size_t &len) noexcept
-{
-    if (out.size() < GnssBaseConfig::kFixCoordBlobBytes) {
-        return fw::Result::kNoSpace;
-    }
-    encodeI64Le(appContext().gnss.readBaseConfig().fixLonE9, out);
-    len = GnssBaseConfig::kFixCoordBlobBytes;
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/fix_h_mm（4B i32 LE）。
- * @param in: 4 字节 blob。
- * @retval kOk: 加载成功；kInvalidArg: 长度或高程范围非法。
- */
-fw::Result GnssModule::loadBaseFixHeight(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    if (in.size() != GnssBaseConfig::kFixHeightBlobBytes) {
-        return fw::Result::kInvalidArg;
-    }
-    const int32_t v = decodeI32Le(in);
-    if ((v < GnssBaseConfig::kMinHeightMm) || (v > GnssBaseConfig::kMaxHeightMm)) {
-        return fw::Result::kInvalidArg;
-    }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().fixHeightMm = v;
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseFixHMmKeyIdx);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 编码 gnss.base/fix_h_mm 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（4）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
- */
-fw::Result GnssModule::saveBaseFixHeight(const void * /*obj*/, std::span<uint8_t> out,
-                                         size_t &len) noexcept
-{
-    if (out.size() < GnssBaseConfig::kFixHeightBlobBytes) {
-        return fw::Result::kNoSpace;
-    }
-    encodeI32Le(appContext().gnss.readBaseConfig().fixHeightMm, out);
-    len = GnssBaseConfig::kFixHeightBlobBytes;
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/rtcm_out（14B blob v1）。
- * @param in: 14 字节 blob。
- * @retval kOk: 加载成功；kInvalidArg: 版本或内容非法。
- */
-fw::Result GnssModule::loadBaseRtcmOut(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    GnssBaseConfig tmp{};
-    if (!tmp.decodeRtcmOut(in)) {
-        return fw::Result::kInvalidArg;
-    }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().rtcmOut = tmp.rtcmOut;
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseRtcmOutKeyIdx);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 编码 gnss.base/rtcm_out 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（14）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
- */
-fw::Result GnssModule::saveBaseRtcmOut(const void * /*obj*/, std::span<uint8_t> out,
-                                       size_t &len) noexcept
-{
-    return appContext().gnss.readBaseConfig().encodeRtcmOut(out, len) ? fw::Result::kOk
-                                                                      : fw::Result::kNoSpace;
-}
-
-/**
- * @brief 从 NVS 恢复 gnss.base/msm。
- * @param in: 1 字节编码（4 或 7）。
- * @retval kOk: 加载成功；kInvalidArg: 非法版本。
- */
-fw::Result GnssModule::loadBaseMsm(void * /*obj*/, std::span<const uint8_t> in) noexcept
-{
-    if (in.empty() || ((in[0U] != GnssBaseConfig::kMsm4) && (in[0U] != GnssBaseConfig::kMsm7))) {
-        return fw::Result::kInvalidArg;
-    }
-    auto &gnss = appContext().gnss;
-    const OptionalMuxGuard guard(gnss.ctx().data.mux, gnss.initialized_);
-    gnss.ensureBaseCfg().msm = in[0U];
-    gnss.base_loaded_mask_ |= static_cast<uint16_t>(1U << gnss_store::kBaseMsmKeyIdx);
-    return fw::Result::kOk;
-}
-
-/**
- * @brief 编码 gnss.base/msm 供 NVS 持久化。
- * @param out: 目标字节切片。
- * @param len: 输出字节数（1）。
- * @retval kOk: 写入成功；kNoSpace: 空间不足。
- */
-fw::Result GnssModule::saveBaseMsm(const void * /*obj*/, std::span<uint8_t> out,
-                                   size_t &len) noexcept
-{
-    if (out.empty()) {
-        return fw::Result::kNoSpace;
-    }
-    out[0U] = appContext().gnss.readBaseConfig().msm;
-    len = 1U;
-    return fw::Result::kOk;
+    result.status = saved;
 }
 
 /**

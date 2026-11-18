@@ -10,6 +10,7 @@
 
 #include "AppContext.hpp"
 #include "cli/Out.hpp"
+#include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssConsoleValue.hpp"
 #include "modules/gnss/GnssKeys.hpp"
 #include "modules/gnss/GnssMaintenance.hpp"
@@ -107,13 +108,7 @@ int submitMaintenance(GnssMaintenanceVerb verb, const char *success, uint32_t ba
     if (context.ioExecutor == nullptr) {
         return cli::fail("gnss not running");
     }
-    fw::Command cmd{};
-    cmd.target = id(ModuleKind::kGnss);
-    cmd.verb = static_cast<uint8_t>(verb);
-    if (verb == GnssMaintenanceVerb::kBaud) {
-        cmd.argLen = sizeof(baud);
-        writeU32(baud, std::span{cmd.args}.first(sizeof(baud)));
-    }
+    const fw::Command cmd = packGnssMaintenance(verb, baud);
     fw::CommandResult result{};
     if (!submitRawTo(*context.ioExecutor, ModuleKind::kGnss, "gnss not running", cmd, result)) {
         return cli::kCmdFail;

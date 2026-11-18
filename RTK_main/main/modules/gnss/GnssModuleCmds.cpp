@@ -83,6 +83,12 @@ void GnssModule::dispatchStandardCmd(const fw::Command &cmd, uint32_t nowMs,
 static_assert(static_cast<uint8_t>(GnssSubVerb::kMode) >
                   static_cast<uint8_t>(GnssMaintenanceVerb::kBaud),
               "GnssSubVerb::kMode must not overlap GnssMaintenanceVerb");
+static_assert(static_cast<uint8_t>(GnssSubVerb::kSetBase) >
+                  static_cast<uint8_t>(GnssMaintenanceVerb::kBaud),
+              "GnssSubVerb::kSetBase must not overlap GnssMaintenanceVerb");
+static_assert(static_cast<uint8_t>(GnssSubVerb::kSetBase) >
+                  static_cast<uint8_t>(GnssSubVerb::kMode),
+              "GnssSubVerb::kSetBase must follow GnssSubVerb::kMode");
 static_assert(static_cast<uint8_t>(GnssSubVerb::kReadback) <
                   static_cast<uint8_t>(GnssMaintenanceVerb::kSave),
               "GnssSubVerb::kReadback must not overlap GnssMaintenanceVerb");
@@ -103,6 +109,10 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
     }
     if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kMode) {
         cmdMode(cmd, now, result);
+        return;
+    }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetBase) {
+        cmdSetBase(cmd, result);
         return;
     }
     if (baud_deferred_ || (controller().state() == ::gnss::State::kMaintenance &&

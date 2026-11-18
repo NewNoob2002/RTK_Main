@@ -503,4 +503,41 @@ const char *formatScaledInt(int64_t val, uint8_t decimals, std::span<char> buf) 
     return buf.data();
 }
 
+/**
+ * @brief 判断 RTCM3 基站报文是否受当前接收机族支持（1033 仅 Unicore，1230 仅 u-blox）。
+ * @param id: RTCM3 报文号。
+ * @param family: 已探测接收机族。
+ * @retval true: 受支持或尚未探测到接收机族；false: 另一族专属报文。
+ */
+bool isBaseRtcmSupportedForFamily(uint16_t id, ::gnss::Family family) noexcept
+{
+    if (id == ::gnss::kBaseRtcmIds[kSlot1033]) {
+        return (family == ::gnss::Family::kUnknown) || (family == ::gnss::Family::kUnicore);
+    }
+    if (id == ::gnss::kBaseRtcmIds[kSlot1230]) {
+        return (family == ::gnss::Family::kUnknown) || (family == ::gnss::Family::kUblox);
+    }
+    return true;
+}
+
+/**
+ * @brief 未探测到接收机族时为族专用 RTCM3 报文返回适用族标签。
+ * @param id: RTCM3 报文号。
+ * @param family: 当前接收机族。
+ * @retval 适用族标签或空串。
+ */
+const char *baseRtcmFamilyTag(uint16_t id, ::gnss::Family family) noexcept
+{
+    if (family != ::gnss::Family::kUnknown) {
+        return "";
+    }
+    if (id == ::gnss::kBaseRtcmIds[kSlot1033]) {
+        return " (Unicore)";
+    }
+    if (id == ::gnss::kBaseRtcmIds[kSlot1230]) {
+        return " (u-blox)";
+    }
+    return "";
+}
+
 } // namespace app

@@ -14,7 +14,19 @@ enum class GnssSubVerb : uint8_t {
     kSetOut = 4,
     kReadback = 5, // 控制台 gnss config：读回模块配置（ADR-0012 §2.7），无参数
     // 6..8 已被 GnssMaintenanceVerb（kSave/kFactoryReset/kBaud）占用，见 GnssModuleCmds.cpp 的 static_assert。
-    kMode = 9, // 工作模式切换：args[0] = WorkModeKind, args[1] = saveOnSuccess(0/1)
+    kMode = 9,     // 工作模式切换：args[0] = WorkModeKind, args[1] = saveOnSuccess(0/1)
+    kSetBase = 10, // 更新并持久化 gnss.base 字段子包：args[0] = BasePatchKind
+};
+
+/**
+ * gnss.base 更新命令子包种类（fw::kCommandArgBytes=32，完整配置 41 B 无法单包容纳，按变更块拆分）。
+ */
+enum class BasePatchKind : uint8_t {
+    kMode = 0,   // [0]=0, [1]=WorkModeKind (2 B)
+    kSurvey = 1, // [0]=1, [1]=BaseType(kSurvey), [2..3]=svyS, [4..5]=svyAccCm, [6..7]=svyToS (8 B)
+    kFixed =
+        2, // [0]=2, [1]=BaseType(kFixed), [2..9]=fixLatE9, [10..17]=fixLonE9, [18..21]=fixHeightMm (22 B)
+    kRtcm = 3, // [0]=3, [1]=msm, [2..13]=rtcmOut[12] (14 B)
 };
 
 /** GNSS 工作模式（NVS gnss/mode）。 */

@@ -10,6 +10,7 @@
 #include "AppContext.hpp"
 #include "def/GnssSubDef.hpp"
 #include "driver/uart.h"
+#include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssKeys.hpp"
 #include "rtos/EspStatus.hpp"
 
@@ -21,6 +22,8 @@ namespace {
 
 constinit app::AppContext s_initialContext{};
 constinit app::AppContext s_failureContext{};
+constinit app::AppContext s_dispatchContext{};
+constinit app::AppContext s_dispatchCmdContext{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -28,6 +31,8 @@ uint32_t s_receiverBaud = 460800;
 uint32_t s_readyAt = 0;
 unsigned s_baudCommands = 0;
 unsigned s_saveCommands = 0;
+unsigned s_fresetCommands = 0;
+unsigned s_modeBaseCommands = 0;
 bool s_applyBaud = true;
 bool s_rejectSave = false;
 bool s_expectBaudSave = false;
@@ -168,6 +173,7 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
         return static_cast<int>(len);
     }
     if (bytes == "FRESET\r\n") {
+        ++s_fresetCommands;
         s_readyAt = s_now + 3500U;
         s_receiverBaud = 115200U;
     } else if (bytes == "CONFIG COM2 115200\r\n" || bytes == "CONFIG COM2 460800\r\n") {
@@ -182,6 +188,9 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
             "#VERSIONA,0,GPS,UNKNOWN,0,0,0,0,0,249;\"UM980\",\"R4.10Build11833\",\"HRPT00-S10C-P\","
             "\"2310415000001-MD22A2244202679\",\"ff3b7c6f3c5fd90b\",\"2023/11/24\"*3f55fb4d\r\n";
     } else if (bytes.ends_with("\r\n")) {
+        if (bytes.starts_with("MODE BASE")) {
+            ++s_modeBaseCommands;
+        }
         const bool save = bytes == "SAVECONFIG\r\n";
         if (save) {
             ++s_saveCommands;
@@ -275,6 +284,159 @@ void testGnssFactoryReset()
     CHECK(s_hostBaud == 460800U && s_baudCommands == 1U && s_saveCommands == 0U);
     CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_OK && stored == 115200U);
     CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 460800U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+    nvs_close(nvs);
+}
+
+namespace {
+
+/**
+ * @brief 验证表驱动 gnss.base 10 个键 NVS 往返一致性及非法值回退行为。
+ * @param nvs: 已打开的测试 NVS 句柄。
+ */
+void testBaseKeysTableRoundTrip(nvs_handle_t nvs)
+{
+    app::GnssBaseConfig cfg = app::GnssBaseConfig::defaults();
+    cfg.mode = app::WorkModeKind::kBase;
+    cfg.baseType = app::BaseType::kFixed;
+    cfg.svyS = 123U;
+    cfg.svyAccCm = 450U;
+    cfg.svyToS = 600U;
+    cfg.fixLatE9 = -31234567890LL;
+    cfg.fixLonE9 = 121473701000LL;
+    cfg.fixHeightMm = -54321;
+    cfg.msm = app::GnssBaseConfig::kMsm7;
+    cfg.rtcmOut = app::GnssBaseConfig::defaultRtcmOut(app::GnssBaseConfig::kMsm7);
+    cfg.rtcmOut[0U] = -2;
+    cfg.rtcmOut[2U] = 1;
+
+    s_context->gnss.writeBaseConfig(cfg);
+    CHECK(fw::isOk(s_context->storage.saveKeys(app::gnss_store::kBaseKeys)));
+
+    s_context->gnss.writeBaseConfig(app::GnssBaseConfig::defaults());
+    const auto loaded = s_context->storage.loadKeys(app::gnss_store::kBaseKeys);
+    CHECK((loaded.saved == app::gnss_store::kBaseKeys.size()) && (loaded.failed == 0U));
+    const auto got = s_context->gnss.readBaseConfig();
+    CHECK((got.mode == cfg.mode) && (got.baseType == cfg.baseType));
+    CHECK((got.svyS == cfg.svyS) && (got.svyAccCm == cfg.svyAccCm) && (got.svyToS == cfg.svyToS));
+    CHECK((got.fixLatE9 == cfg.fixLatE9) && (got.fixLonE9 == cfg.fixLonE9) &&
+          (got.fixHeightMm == cfg.fixHeightMm));
+    CHECK((got.msm == cfg.msm) && (got.rtcmOut == cfg.rtcmOut));
+
+    // 非法 NVS 值（范围越界或长度/版本错误）不得污染有效配置，应报 failed 并回退默认。
+    CHECK(nvs_set_u8(nvs, "mode", 9U) == ESP_OK);
+    CHECK(nvs_set_u16(nvs, "svy_s", 2U) == ESP_OK);
+    const std::array<uint8_t, 4U> badLat{1U, 2U, 3U, 4U};
+    CHECK(nvs_set_blob(nvs, "fix_lat", badLat.data(), badLat.size()) == ESP_OK);
+    std::array<uint8_t, app::GnssBaseConfig::kRtcmOutBlobBytes> badRtcm{};
+    badRtcm[0U] = 99U;
+    CHECK(nvs_set_blob(nvs, "rtcm_out", badRtcm.data(), badRtcm.size()) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "msm", 5U) == ESP_OK);
+    s_context->gnss.writeBaseConfig(app::GnssBaseConfig::defaults());
+    const auto badLoad = s_context->storage.loadKeys(app::gnss_store::kBaseKeys);
+    CHECK(badLoad.failed == 5U);
+}
+
+/**
+ * @brief 验证控制台打包函数产生的命令经 GnssModule::onCommand 正确落到各处理分支。
+ * @param nvs: 已打开的测试 NVS 句柄。
+ */
+void testConsoleCommandDispatch(nvs_handle_t nvs)
+{
+    const auto runPack = [](const fw::Command &cmd) noexcept {
+        fw::CommandResult res{};
+        s_context->gnss.onCommand(cmd, res);
+        return res;
+    };
+
+    // 1. kSetBase（4 种分包子包）：各自校验并原子落盘，非法子包拒绝。
+    CHECK(fw::isOk(runPack(app::detail::packGnssBaseSurvey(45U, 200U, 300U)).status));
+    CHECK(runPack(app::detail::packGnssBaseSurvey(1U, 200U, 300U)).status ==
+          fw::Result::kInvalidArg);
+    uint16_t u16 = 0U;
+    CHECK(nvs_get_u16(nvs, "svy_s", &u16) == ESP_OK && u16 == 45U);
+    CHECK(fw::isOk(
+        runPack(app::detail::packGnssBaseFixed(31234567890LL, -121473701000LL, 12345)).status));
+    auto rtcm = app::GnssBaseConfig::defaultRtcmOut(app::GnssBaseConfig::kMsm7);
+    rtcm[0U] = -2;
+    CHECK(
+        fw::isOk(runPack(app::detail::packGnssBaseRtcm(app::GnssBaseConfig::kMsm7, rtcm)).status));
+    CHECK(fw::isOk(runPack(app::detail::packGnssBaseMode(app::WorkModeKind::kBase)).status));
+    const auto cfg = s_context->gnss.readBaseConfig();
+    CHECK((cfg.mode == app::WorkModeKind::kBase) && (cfg.baseType == app::BaseType::kFixed) &&
+          (cfg.msm == app::GnssBaseConfig::kMsm7) && (cfg.rtcmOut[0U] == -2));
+
+    // 2. gnss mode base / gnss out / gnss config / gnss baud / gnss save / gnss freset。
+    s_modeBaseCommands = 0U;
+    CHECK(fw::isOk(runPack(app::detail::packGnssMode(app::WorkModeKind::kBase, true)).status));
+    advance(500U);
+    CHECK(s_modeBaseCommands >= 1U);
+
+    auto outCfg = app::data::GnssOutConfig::defaults();
+    CHECK(fw::isOk(outCfg.applyInterval(0U, -5)));
+    bool packed = false;
+    CHECK(fw::isOk(runPack(app::detail::packGnssOut(outCfg, packed)).status) && packed);
+    advance(500U);
+    CHECK(s_context->data.gnssOutCfg.read().intervals == outCfg.intervals);
+
+    const uint32_t rbBefore = s_context->data.gnssReadback.read().seq;
+    CHECK(fw::isOk(runPack(app::detail::packGnssReadback()).status));
+    advance(2500U);
+    CHECK(s_context->data.gnssReadback.read().seq != rbBefore);
+
+    CHECK(
+        fw::isOk(runPack(app::detail::packGnssMaintenance(app::GnssMaintenanceVerb::kBaud, 460800U))
+                     .status));
+    advance(500U);
+    CHECK(s_hostBaud == 460800U);
+
+    const unsigned savesBefore = s_saveCommands;
+    CHECK(fw::isOk(
+        runPack(app::detail::packGnssMaintenance(app::GnssMaintenanceVerb::kSave)).status));
+    advance(100U);
+    CHECK(s_saveCommands == savesBefore + 1U);
+
+    const unsigned fresetsBefore = s_fresetCommands;
+    CHECK(fw::isOk(
+        runPack(app::detail::packGnssMaintenance(app::GnssMaintenanceVerb::kFactoryReset)).status));
+    CHECK(s_fresetCommands == fresetsBefore + 1U);
+    checkStoredDefaults(nvs);
+}
+
+} // namespace
+
+/**
+ * @brief 执行 gnss.base 表驱动往返及 console->onCommand 分流集成验证。
+ */
+void testBaseKeysAndCommandDispatch()
+{
+    std::array<uint8_t, app::GnssModule::kDemuxBufBytes> demux{};
+    std::array<uint8_t, app::kRtcmPipeBytes> pipe{};
+    s_context = &s_dispatchContext;
+    s_context->bindContexts();
+    CHECK(fw::isOk(s_context->gnss.bindStorage(demux)));
+    CHECK(fw::isOk(s_context->rtcmPipe.bindStorage(pipe)));
+
+    nvs_handle_t nvs = 0U;
+    CHECK(nvs_open("gnss", NVS_READWRITE, &nvs) == ESP_OK);
+    s_nvs = nvs;
+    startModule(nvs, 115200U, true);
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+
+    testBaseKeysTableRoundTrip(nvs);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 使用全新 AppContext 并恢复默认 gnss.base 键后测试命令打包 -> onCommand 分流。
+    s_context = &s_dispatchCmdContext;
+    s_context->bindContexts();
+    CHECK(fw::isOk(s_context->gnss.bindStorage(demux)));
+    CHECK(fw::isOk(s_context->rtcmPipe.bindStorage(pipe)));
+    s_context->gnss.writeBaseConfig(app::GnssBaseConfig::defaults());
+    CHECK(fw::isOk(s_context->storage.saveKeys(app::gnss_store::kBaseKeys)));
+    startModule(nvs, 115200U, true);
+    advance(3000U);
+    testConsoleCommandDispatch(nvs);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     nvs_close(nvs);
 }

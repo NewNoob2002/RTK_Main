@@ -13,6 +13,7 @@
 #include "gnss/Controller.hpp"
 #include "modules/gnss/GnssBaseConfig.hpp"
 #include "modules/gnss/GnssKeys.hpp"
+#include "modules/gnss/GnssTxLog.hpp"
 #include "modules/gnss/GnssWorkMode.hpp"
 
 namespace {
@@ -284,27 +285,112 @@ void testWorkModeTransitions() noexcept
     CHECK(!needSave);
 }
 
-/** @brief 测试 BaseRtcmRing 整帧边界、溢出整帧丢弃与清零语义。 */
+/** @brief 验证 BaseRtcmRing 恰好写满、跨末尾回绕读写与丢帧语义。 */
 void testBaseRtcmRing() noexcept
 {
     app::data::BaseRtcmRing ring{};
-    const std::array<uint8_t, 512U> frame{0xD3U, 0x01U, 0xFDU};
+    std::array<uint8_t, app::data::BaseRtcmRing::kMaxFrameBytes> maxFrame{};
+    for (size_t i = 0U; i < maxFrame.size(); ++i) {
+        maxFrame[i] = static_cast<uint8_t>((i * 7U + 3U) & 0xFFU);
+    }
+    std::array<uint8_t, 1001U> tailFit{};
+    for (size_t i = 0U; i < tailFit.size(); ++i) {
+        tailFit[i] = static_cast<uint8_t>(0xA5U ^ (i & 0xFFU));
+    }
     std::array<uint8_t, app::data::BaseRtcmRing::kMaxFrameBytes> out{};
     size_t outLen = 0U;
 
-    // 4096 B 容量最多容纳 7 条 514 B（2 + 512）记录 = 3598 B，第 8 条触发整帧丢弃并计数。
-    for (size_t i = 0U; i < 7U; ++i) {
-        CHECK(ring.push(frame));
-    }
-    CHECK(!ring.push(frame));
+    // 1. 恰好写满 4096 B：3*(2+1029) + 1*(2+1001) = 3093 + 1003 = 4096 B。
+    CHECK(ring.push(maxFrame));
+    CHECK(ring.push(maxFrame));
+    CHECK(ring.push(maxFrame));
+    CHECK(ring.push(tailFit));
+    const std::array<uint8_t, 1U> tiny{0xD3U};
+    CHECK(!ring.push(tiny));
     CHECK(ring.dropFrames() == 1U);
 
-    CHECK(ring.pop(out, outLen));
-    CHECK((outLen == 512U) && (out[0U] == 0xD3U));
-    CHECK(ring.push(frame)); // 释放空间后可继续推入整帧
+    // 弹出 1 条后释放 1031 B；先压 1 条让写游标停在末尾 4095 处（测试 2B 长度头+正文双重跨界）。
+    CHECK(ring.pop(out, outLen) && (outLen == maxFrame.size()));
+    CHECK(std::memcmp(out.data(), maxFrame.data(), maxFrame.size()) == 0);
+    std::array<uint8_t, 600U> wrapFrame{};
+    for (size_t i = 0U; i < wrapFrame.size(); ++i) {
+        wrapFrame[i] = static_cast<uint8_t>((i + 19U) & 0xFFU);
+    }
+    CHECK(ring.pop(out, outLen) && (outLen == maxFrame.size()));
+    CHECK(ring.pop(out, outLen) && (outLen == maxFrame.size()));
+    CHECK(ring.pop(out, outLen) && (outLen == tailFit.size()));
+    CHECK(std::memcmp(out.data(), tailFit.data(), tailFit.size()) == 0);
+
+    // 目前 head == tail == 4096%4096 == 0；先推进到 offset 4095，再写一条跨界帧。
+    std::array<uint8_t, 1020U> spacer{};
+    for (size_t i = 0U; i < 4U; ++i) {
+        CHECK(ring.push(spacer));
+        CHECK(ring.pop(out, outLen));
+    }
+    // 已走过 4*(2+1020) = 4088 B（距 4096 还剩 8 B）；再 push 一条 5 B 占 7 B，使 head=4095。
+    const std::array<uint8_t, 5U> pad5{1U, 2U, 3U, 4U, 5U};
+    CHECK(ring.push(pad5));
+    CHECK(ring.push(wrapFrame)); // 2B 长度头跨 4095->0，600B 正文紧随
+    CHECK(ring.pop(out, outLen) && (outLen == 5U));
+    CHECK(ring.pop(out, outLen) && (outLen == wrapFrame.size()));
+    CHECK(std::memcmp(out.data(), wrapFrame.data(), wrapFrame.size()) == 0);
+
+    // 再测一次“正文跨界”（长度头完全在末尾，正文跨越 4096->0 边界）。
     ring.clearFrames();
-    CHECK(!ring.pop(out, outLen));
-    CHECK(ring.dropFrames() == 1U);
+    const std::array<uint8_t, 50U> bodyCross{0xD3U, 0x00U, 0x32U, 0xAAU, 0x55U};
+    // 推入/弹出 80 条 49 B（每次前进 51 B，80*51=4080，剩余 16 B）。
+    const std::array<uint8_t, 49U> step49{0xD3U};
+    for (size_t i = 0U; i < 80U; ++i) {
+        CHECK(ring.push(step49));
+        CHECK(ring.pop(out, outLen));
+    }
+    CHECK(ring.push(bodyCross)); // 2B 头在 4080..4081，正文前 14B 在末尾、后 36B 回绕至 0..35
+    CHECK(ring.pop(out, outLen) && (outLen == bodyCross.size()));
+    CHECK(std::memcmp(out.data(), bodyCross.data(), bodyCross.size()) == 0);
+}
+
+/** @brief 验证 1033/1230 按接收机族过滤支持判断与未探测后缀标签。 */
+void testBaseRtcmFamilyFilter() noexcept
+{
+    CHECK(app::isBaseRtcmSupportedForFamily(1033U, gnss::Family::kUnknown));
+    CHECK(app::isBaseRtcmSupportedForFamily(1230U, gnss::Family::kUnknown));
+    CHECK(std::string_view{app::baseRtcmFamilyTag(1033U, gnss::Family::kUnknown)} == " (Unicore)");
+    CHECK(std::string_view{app::baseRtcmFamilyTag(1230U, gnss::Family::kUnknown)} == " (u-blox)");
+    CHECK(std::string_view{app::baseRtcmFamilyTag(1005U, gnss::Family::kUnknown)}.empty());
+
+    CHECK(app::isBaseRtcmSupportedForFamily(1033U, gnss::Family::kUnicore));
+    CHECK(!app::isBaseRtcmSupportedForFamily(1230U, gnss::Family::kUnicore));
+    CHECK(std::string_view{app::baseRtcmFamilyTag(1033U, gnss::Family::kUnicore)}.empty());
+
+    CHECK(!app::isBaseRtcmSupportedForFamily(1033U, gnss::Family::kUblox));
+    CHECK(app::isBaseRtcmSupportedForFamily(1230U, gnss::Family::kUblox));
+    CHECK(std::string_view{app::baseRtcmFamilyTag(1230U, gnss::Family::kUblox)}.empty());
+
+    CHECK(!app::isBaseRtcmSupportedForFamily(1033U, gnss::Family::kComnav));
+    CHECK(!app::isBaseRtcmSupportedForFamily(1230U, gnss::Family::kComnav));
+    CHECK(app::isBaseRtcmSupportedForFamily(1005U, gnss::Family::kComnav));
+}
+
+/** @brief 验证发送日志格式化对 ASCII 命令与二进制 UBX 十六进制的处理。 */
+void testTxLogFormatting() noexcept
+{
+    std::array<char, 192U> buf{};
+    const std::array<uint8_t, 12U> asciiCmd{'M', 'O', 'D', 'E', ' ',  'R',
+                                            'O', 'V', 'E', 'R', '\r', '\n'};
+    static_cast<void>(app::detail::formatGnssTxLog(asciiCmd, buf));
+    CHECK(std::string_view{buf.data()} == "\"MODE ROVER\"");
+
+    const std::array<uint8_t, 9U> ubx9{0xB5U, 0x62U, 0x06U, 0x8AU, 0x01U,
+                                       0x00U, 0x00U, 0x91U, 0xF0U};
+    static_cast<void>(app::detail::formatGnssTxLog(ubx9, buf));
+    CHECK(std::string_view{buf.data()} == "UBX 0x06 0x8A, 9 bytes: B5 62 06 8A 01 00 00 91 F0");
+
+    const std::array<uint8_t, 20U> ubx20{0xB5U, 0x62U, 0x06U, 0x8AU, 0x0CU, 0x00U, 0x01U,
+                                         0x01U, 0x00U, 0x00U, 0x10U, 0x00U, 0x91U, 0x20U,
+                                         0x01U, 0x22U, 0x33U, 0x44U, 0x55U, 0x66U};
+    static_cast<void>(app::detail::formatGnssTxLog(ubx20, buf));
+    CHECK(std::string_view{buf.data()} ==
+          "UBX 0x06 0x8A, 20 bytes: B5 62 06 8A 0C 00 01 01 00 00 10 00 91 20 01 22 ...");
 }
 
 } // namespace
@@ -314,5 +400,7 @@ int main()
     testBaseConfigCodecs();
     testWorkModeTransitions();
     testBaseRtcmRing();
+    testBaseRtcmFamilyFilter();
+    testTxLogFormatting();
     return 0;
 }

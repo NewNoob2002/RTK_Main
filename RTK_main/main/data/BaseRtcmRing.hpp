@@ -2,9 +2,11 @@
 // 线程安全：通过注入的 LockOps 保护全部读写；不分配堆、不阻塞，非 ISR。
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 
 #include "fw/Lock.hpp"
@@ -53,11 +55,9 @@ public:
         }
         const auto lenLo = static_cast<uint8_t>(frame.size() & kByteMask);
         const auto lenHi = static_cast<uint8_t>((frame.size() >> kByteShift) & kByteMask);
-        writeByteLocked(lenLo);
-        writeByteLocked(lenHi);
-        for (const uint8_t b : frame) {
-            writeByteLocked(b);
-        }
+        const std::array<uint8_t, kLenHeaderBytes> hdr{lenLo, lenHi};
+        writeLocked(hdr);
+        writeLocked(frame);
         used_ += need;
         return true;
     }
@@ -76,9 +76,10 @@ public:
         if (used_ < kLenHeaderBytes) {
             return false;
         }
-        const uint8_t lo = readByteLocked();
-        const uint8_t hi = readByteLocked();
-        const size_t len = static_cast<size_t>(lo) | (static_cast<size_t>(hi) << kByteShift);
+        std::array<uint8_t, kLenHeaderBytes> hdr{};
+        readLocked(hdr);
+        const size_t len =
+            static_cast<size_t>(hdr[0U]) | (static_cast<size_t>(hdr[1U]) << kByteShift);
         if ((len == 0U) || (len > kMaxFrameBytes) || (used_ < (kLenHeaderBytes + len)) ||
             (dst.size() < len)) {
             head_ = 0U;
@@ -87,9 +88,7 @@ public:
             ++dropFrames_;
             return false;
         }
-        for (size_t i = 0U; i < len; ++i) {
-            dst[i] = readByteLocked();
-        }
+        readLocked(dst.first(len));
         used_ -= (kLenHeaderBytes + len);
         outLen = len;
         return true;
@@ -118,24 +117,33 @@ public:
 
 private:
     /**
-     * @brief 在已持锁前提下写入单字节并前移写游标。
-     * @param b: 待写字节。
+     * @brief 在已持锁前提下用最多两段 std::memcpy 写入跨越环形边界的数据并前移写游标。
+     * @param src: 待写入的连续字节切片。
      */
-    void writeByteLocked(uint8_t b) noexcept
+    void writeLocked(std::span<const uint8_t> src) noexcept
     {
-        buf_[head_] = b;
-        head_ = (head_ + 1U) % kCap;
+        const size_t first = std::min(src.size(), kCap - head_);
+        std::memcpy(std::span{buf_}.subspan(head_, first).data(), src.data(), first);
+        const size_t rest = src.size() - first;
+        if (rest > 0U) {
+            std::memcpy(buf_.data(), src.subspan(first, rest).data(), rest);
+        }
+        head_ = (head_ + src.size()) % kCap;
     }
 
     /**
-     * @brief 在已持锁前提下读出单字节并前移读游标。
-     * @retval byte: 读出字节。
+     * @brief 在已持锁前提下用最多两段 std::memcpy 读出跨越环形边界的数据并前移读游标。
+     * @param dst: 目标连续字节切片。
      */
-    uint8_t readByteLocked() noexcept
+    void readLocked(std::span<uint8_t> dst) noexcept
     {
-        const uint8_t b = buf_[tail_];
-        tail_ = (tail_ + 1U) % kCap;
-        return b;
+        const size_t first = std::min(dst.size(), kCap - tail_);
+        std::memcpy(dst.data(), std::span{buf_}.subspan(tail_, first).data(), first);
+        const size_t rest = dst.size() - first;
+        if (rest > 0U) {
+            std::memcpy(dst.subspan(first, rest).data(), buf_.data(), rest);
+        }
+        tail_ = (tail_ + dst.size()) % kCap;
     }
 
     fw::LockOps lock_{};
