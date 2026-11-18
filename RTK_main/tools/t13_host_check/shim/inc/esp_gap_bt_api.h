@@ -77,3 +77,4 @@ esp_err_t esp_bt_gap_set_security_param(esp_bt_sp_param_t param_type, void *valu
 esp_err_t esp_bt_gap_pin_reply(esp_bd_addr_t bd_addr, bool accept, uint8_t pin_code_len,
                                esp_bt_pin_code_t pin_code);
 esp_err_t esp_bt_gap_ssp_confirm_reply(esp_bd_addr_t bd_addr, bool accept);
+esp_err_t esp_bt_gap_remove_bond_device(esp_bd_addr_t bd_addr);

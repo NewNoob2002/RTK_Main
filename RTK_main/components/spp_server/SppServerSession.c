@@ -516,6 +516,13 @@ static esp_err_t spp_server_ctrl_authorize(spp_server_ctrl_request_t *req)
     }
     const spp_server_pair_policy_t policy = spp_server_pair_policy(req->bda);
     if (req->type == SPP_SERVER_CTRL_PAIRED) {
+        if (policy == SPP_SERVER_PAIR_DENY) {
+            /* Just Works 配对由 Bluedroid 自动确认、不回调 CFM（btc_dm.c btc_dm_sp_cfm_req_evt），
+             * 这里是窗口外配对的兜底：删除刚生成的绑定，删除时栈会一并断开 ACL。
+             * 成功的 AUTH_CMPL 只在生成新链路密钥时上报，已绑定设备重连不会走到这里。 */
+            spp_server_pair_log(req->bda, "Pairing rejected from ", " (window closed)");
+            return esp_bt_gap_remove_bond_device(req->bda);
+        }
         if (policy == SPP_SERVER_PAIR_ALLOW || policy == SPP_SERVER_PAIR_CONFIRM) {
             spp_server_pair_log(req->bda, "Paired with ",
                                 " (use 'bt trust <MAC>' to trust as alarm)");

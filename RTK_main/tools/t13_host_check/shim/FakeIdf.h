@@ -62,6 +62,7 @@ void fake_emit_data(uint32_t handle, const uint8_t *data, uint16_t len);
 /* GAP 事件由独立假 BTC 线程投递；应答计数/bda 用于验证“不在回调线程里应答”。 */
 void fake_emit_gap_pin_req(const uint8_t bda[6]);
 void fake_emit_gap_cfm_req(const uint8_t bda[6]);
+void fake_emit_gap_auth_cmpl(const uint8_t bda[6]);
 int fake_pin_reply_count(void);
 bool fake_last_gap_accept(void);
 void fake_advance_ticks(uint32_t ticks);
@@ -69,6 +70,7 @@ int fake_ssp_confirm_count(void);
 const uint8_t *fake_last_gap_reply_bda(void);
 bool fake_wait_pin_reply(int count, uint32_t timeout_ms);
 bool fake_wait_ssp_confirm(int count, uint32_t timeout_ms);
+bool fake_wait_remove_bond(int count, uint32_t timeout_ms);
 bool fake_wait_disconnect_calls(int count, uint32_t timeout_ms);
 
 int fake_write_call_count(void);

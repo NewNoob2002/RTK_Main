@@ -314,7 +314,12 @@ void printGnssOutShow(const data::GnssOutConfig &cfg) noexcept
     for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
         const bool en = (cfg.mask & (1U << i)) != 0U;
         std::array<char, detail::kGnssRateTextBytes> rate{};
-        detail::formatGnssHz(en ? cfg.intervals[i] : int8_t{0}, rate);
+        if (en && data::followsFixRate(cfg, i)) {
+            // 默认间隔的定位类语句按 `gnss rate` 下发，显示数值会与实际不符。
+            std::snprintf(rate.data(), rate.size(), "fix rate");
+        } else {
+            detail::formatGnssHz(en ? cfg.intervals[i] : int8_t{0}, rate);
+        }
         uint32_t bit = 1U << i;
         constexpr uint32_t kSatsBit = 1U << static_cast<uint32_t>(::gnss::OutputMsg::kSatsInfo);
         constexpr uint32_t kGsvBit = 1U << static_cast<uint32_t>(::gnss::OutputMsg::kGsv);

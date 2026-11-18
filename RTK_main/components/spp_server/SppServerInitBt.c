@@ -111,7 +111,9 @@ esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
 esp_err_t spp_server_profile_init(void)
 {
     esp_err_t err = ESP_OK;
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
+    /* DisplayYesNo：手机走数字比较，CFM 请求回调到应用，配对窗口与 confirm 模式才能裁决；
+     * NoIO 对端（报警器）仍是 Just Works，由 AUTH_CMPL 兜底（SppServerSession.c）。 */
+    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
     esp_bt_pin_code_t pin_code = {0};
     esp_spp_cfg_t spp_cfg = {0};
 

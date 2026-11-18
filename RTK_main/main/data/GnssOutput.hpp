@@ -151,6 +151,24 @@ struct GnssOutConfig {
 };
 
 /**
+ * @brief 判断某条输出是否跟随定位频率（`gnss rate`）下发
+ * @param out: 输出配置
+ * @param index: App 输出下标（与 gnss::OutputMsg 前 6 项一致）
+ * @retval true GGA/RMC/GSA/GST 且取默认间隔：按定位频率下发，不按表内数值（ADR-0012 §2.4）
+ * @retval false 按表内间隔下发
+ * @note 纯函数，线程/ISR 安全；下发（makeOutputPlan）与控制台显示共用。
+ */
+[[nodiscard]] constexpr bool followsFixRate(const GnssOutConfig &out, size_t index) noexcept
+{
+    const bool locate = (index == static_cast<size_t>(gnss::OutputMsg::kGga)) ||
+                        (index == static_cast<size_t>(gnss::OutputMsg::kRmc)) ||
+                        (index == static_cast<size_t>(gnss::OutputMsg::kGsa)) ||
+                        (index == static_cast<size_t>(gnss::OutputMsg::kGst));
+    return locate && (index < kGnssAppMsgCount) &&
+           (out.intervals[index] == GnssOutConfig::defaults().intervals[index]);
+}
+
+/**
  * @brief 按统一配置生成接收机输出计划
  * @param out: 有效的持久化输出配置；关闭掩码位对应周期 0
  * @param rateHz: 定位频率，0 按 1 Hz 处理

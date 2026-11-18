@@ -813,6 +813,15 @@ static void sc_gap_pairing_window(void)
     fake_advance_ticks(30000U);
     CHECK(fake_wait_ssp_confirm(3, 2000U) && !fake_last_gap_accept());
     CHECK(!spp_server_pair_decide(true));
+
+    /* Just Works 由栈自动确认、不经 CFM：窗口外新绑定在 AUTH_CMPL 后删除；窗口内与白名单保留。 */
+    atomic_store_explicit(&s_pair_policy, SPP_SERVER_PAIR_DENY, memory_order_relaxed);
+    fake_emit_gap_auth_cmpl(other);
+    CHECK(fake_wait_remove_bond(1, 2000U));
+    fake_emit_gap_auth_cmpl(trusted);
+    atomic_store_explicit(&s_pair_policy, SPP_SERVER_PAIR_ALLOW, memory_order_relaxed);
+    fake_emit_gap_auth_cmpl(other);
+    CHECK(!fake_wait_remove_bond(2, 200U));
     CHECK(!fake_blocking_api_from_btc());
 }
 

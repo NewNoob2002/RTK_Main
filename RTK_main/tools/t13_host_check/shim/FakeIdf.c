@@ -71,6 +71,7 @@ static bool s_stage_sync;
 static fake_write_mode_t s_write_mode = FAKE_WRITE_OK;
 static int s_pin_reply_count;
 static int s_ssp_confirm_count;
+static int s_remove_bond_count;
 static bool s_last_gap_accept;
 static uint8_t s_last_gap_bda[6];
 static uint32_t s_write_block_ms = 0U;
@@ -303,6 +304,7 @@ void fake_reset(void)
     s_stage_sync = false;
     s_pin_reply_count = 0;
     s_ssp_confirm_count = 0;
+    s_remove_bond_count = 0;
     memset(s_last_gap_bda, 0, sizeof(s_last_gap_bda));
     memset(s_calls, 0, sizeof(s_calls));
     memset(s_all_data, 0, sizeof(s_all_data));
@@ -686,6 +688,11 @@ bool fake_wait_ssp_confirm(int count, uint32_t timeout_ms)
     return fake_wait_counter(&s_ssp_confirm_count, count, timeout_ms);
 }
 
+bool fake_wait_remove_bond(int count, uint32_t timeout_ms)
+{
+    return fake_wait_counter(&s_remove_bond_count, count, timeout_ms);
+}
+
 int fake_pin_reply_count(void)
 {
     int count = 0;
@@ -797,6 +804,16 @@ void fake_emit_gap_cfm_req(const uint8_t bda[6])
     memset(&param, 0, sizeof(param));
     memcpy(param.cfm_req.bda, bda, sizeof(esp_bd_addr_t));
     fake_dispatch_gap(ESP_BT_GAP_CFM_REQ_EVT, &param, false);
+}
+
+void fake_emit_gap_auth_cmpl(const uint8_t bda[6])
+{
+    esp_bt_gap_cb_param_t param;
+
+    memset(&param, 0, sizeof(param));
+    param.auth_cmpl.stat = ESP_BT_STATUS_SUCCESS;
+    memcpy(param.auth_cmpl.bda, bda, sizeof(esp_bd_addr_t));
+    fake_dispatch_gap(ESP_BT_GAP_AUTH_CMPL_EVT, &param, false);
 }
 
 /* ---------------- 日志 / 错误名 ---------------- */
@@ -993,6 +1010,18 @@ esp_err_t esp_bt_gap_ssp_confirm_reply(esp_bd_addr_t bd_addr, bool accept)
     pthread_cond_broadcast(&s_cond);
     pthread_mutex_unlock(&s_lock);
     fake_trace_add("ssp_confirm_reply");
+    return ESP_OK;
+}
+
+esp_err_t esp_bt_gap_remove_bond_device(esp_bd_addr_t bd_addr)
+{
+    fake_note_blocking_api();
+    pthread_mutex_lock(&s_lock);
+    s_remove_bond_count++;
+    memcpy(s_last_gap_bda, bd_addr, sizeof(s_last_gap_bda));
+    pthread_cond_broadcast(&s_cond);
+    pthread_mutex_unlock(&s_lock);
+    fake_trace_add("remove_bond_device");
     return ESP_OK;
 }
 

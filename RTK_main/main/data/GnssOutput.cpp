@@ -142,19 +142,14 @@ gnss::OutputPlan makeOutputPlan(const GnssOutConfig &out, uint8_t rateHz, bool g
             plan.periodMs[i] = 0U;
             continue;
         }
-        if (out.intervals[i] != dflt.intervals[i]) {
-            plan.periodMs[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
-            continue;
-        }
         // 默认值：GGA/RMC/GSA/GST 跟定位频率（ADR-0012 §2.4）；SATSINFOA 按 gnss/out 默认 5 s
         // （用户 2026-11-16 决定，接收机基础脚本为 1 s）；HEADINGA 1 s 且仅双天线型号下发。
-        const bool locate = (i == static_cast<size_t>(gnss::OutputMsg::kGga)) ||
-                            (i == static_cast<size_t>(gnss::OutputMsg::kRmc)) ||
-                            (i == static_cast<size_t>(gnss::OutputMsg::kGsa)) ||
-                            (i == static_cast<size_t>(gnss::OutputMsg::kGst));
+        const bool locate = followsFixRate(out, i);
+        const bool heading = (i == static_cast<size_t>(gnss::OutputMsg::kHeading)) &&
+                             (out.intervals[i] == dflt.intervals[i]);
         if (locate) {
             plan.periodMs[i] = locatePeriodMs;
-        } else if (i == static_cast<size_t>(gnss::OutputMsg::kHeading)) {
+        } else if (heading) {
             plan.periodMs[i] = ((caps & gnss::cap::kHeading) != 0U) ? kOneSecondMs : 0U;
         } else {
             plan.periodMs[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
