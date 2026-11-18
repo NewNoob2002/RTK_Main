@@ -65,3 +65,9 @@
 - HIL 通过（室内无星）：`gnss mode base` 下发 MODE ROVER + RTCM 报文集合 → survey-wait；重启后按 NVS 自动进基站；120 s 超时打 W 回移动站且 NVS 模式仍为 base；`gnss base fixed` → `MODE BASE <lat> <lon> <h>` → base-tx + SAVECONFIG；`gnss mode rover` → UNLOG 全部 RTCM + SAVECONFIG；`gnss freset yes` 后 gnss.base 恢复缺省。
 - 未验证：室外有星时 survey-in 完成、RTCM 经蓝牙推到手机（需天线与手机）。
 - 遗留（不阻塞）：`gnss out rtcm` 同时列出 1033 与 1230，未按接收机族隐藏不下发的那条；console 线程直接 `saveKeys`（与既有 kIo 保存方式不一致，NVS API 线程安全，风险低）；`GnssModuleMode.cpp` 20 个几乎相同的 load/save 函数可改为表驱动；`BaseRtcmRing` 在自旋锁内逐字节拷贝最长 1 KiB，可改 memcpy 分段；u-blox 探测日志 TX 打印了二进制（既有问题）。
+
+## 待外场 HIL（预留，2026-11-18 用户确认后续室外测试）
+
+- [ ] 室外有星：`gnss mode base`（survey 20 s / 1.5 m）→ survey-wait → survey → base-tx，接收机开始输出 1005；`gnss mode` 显示 hAcc 下降过程。
+- [ ] 基站 RTCM 经蓝牙推到手机（PHONE 会话）：手机收到 1005/MSM4/1033，`rtcm stats` 的 base_tx frames/bytes 增长、drop=0；手机断开时不阻塞 kIo。
+- [ ] 基站模式下手机发 RTCM：计入 `rejected_mode`，不写回接收机。
