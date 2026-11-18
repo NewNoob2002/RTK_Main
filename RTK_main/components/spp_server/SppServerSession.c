@@ -530,7 +530,17 @@ static esp_err_t spp_server_ctrl_authorize(spp_server_ctrl_request_t *req)
         return ESP_OK;
     }
     if (policy == SPP_SERVER_PAIR_CONFIRM && spp_server_pair_hold(req)) {
-        spp_server_pair_log(req->bda, "Pair request from ", ", accept with 'bt pair accept'");
+        if (req->type == SPP_SERVER_CTRL_CFM_REQ) {
+            /* 数字比较：手机显示同一 6 位码，操作者核对一致后再 accept，防止被旁边的设备抢配。 */
+            const uint8_t *addr = req->bda;
+            FW_CLOGI(FW_LOG_CAT_SPP,
+                     "Pair request from %02X:%02X:%02X:%02X:%02X:%02X, code %06lu, "
+                     "accept with 'bt pair accept' if the phone shows the same code",
+                     (unsigned)addr[0], (unsigned)addr[1], (unsigned)addr[2], (unsigned)addr[3],
+                     (unsigned)addr[4], (unsigned)addr[5], (unsigned long)req->handle);
+        } else {
+            spp_server_pair_log(req->bda, "Pair request from ", ", accept with 'bt pair accept'");
+        }
         return ESP_OK;
     }
     if (policy == SPP_SERVER_PAIR_DENY) {

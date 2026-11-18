@@ -154,7 +154,7 @@ typedef struct {
     bool attempted;
     TickType_t attempt;
     spp_server_ctrl_type_t type;
-    uint32_t handle; /* 仅 REJECT 使用 */
+    uint32_t handle; /* REJECT：会话句柄；CFM_REQ：数字比较码（000000..999999） */
     uint8_t bda[SPP_SERVER_ADDR_LEN];
 } spp_server_ctrl_t;
 
@@ -307,7 +307,7 @@ void spp_server_session_set_congested(uint32_t handle, bool congested);
 /**
  * @brief  把一条控制命令放入静态控制表并唤醒发送任务
  * @param  type: 命令类型（REJECT/PIN_REQ/CFM_REQ）
- * @param  handle: 目标句柄，PIN/CFM 命令忽略
+ * @param  handle: REJECT 为目标句柄；CFM_REQ 为数字比较码；其余忽略
  * @param  bda: 对端地址（6 字节），REJECT 可传 NULL
  * @retval true 已入队或同句柄 REJECT 已在表中；false 表已满（回调上下文不能等待，调用方只能丢弃并记统计）
  * @note  BTC/GAP 回调线程；只改静态表，锁外非阻塞唤醒发送任务；同句柄 REJECT 幂等，

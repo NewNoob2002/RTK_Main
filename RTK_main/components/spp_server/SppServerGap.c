@@ -171,7 +171,8 @@ void spp_server_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param
         break;
 
     case ESP_BT_GAP_CFM_REQ_EVT:
-        if (!spp_server_ctrl_add(SPP_SERVER_CTRL_CFM_REQ, 0U, param->cfm_req.bda)) {
+        if (!spp_server_ctrl_add(SPP_SERVER_CTRL_CFM_REQ, param->cfm_req.num_val,
+                                 param->cfm_req.bda)) {
             spp_server_trace(SPP_SERVER_TRACE_CTRL_FULL, 0U,
                              (uint32_t)SPP_SERVER_TRACE_CTRL_CONFIRM, 0U);
         }
