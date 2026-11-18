@@ -29,11 +29,12 @@
 | nvs | data/nvs | 0xA000 | 0x9000 | 用户数据，`freset` 清除 |
 | phy_init | data/phy | 0x13000 | 0x1000 | 保留 |
 | otadata | data/ota | 0x14000 | 0x2000 | 保留（本阶段无 OTA，ADR-0002 §9） |
-| ota_0 / ota_1 | app | 0x20000 / 0x1C0000 | 0x1A0000 | 不变 |
-| **nvs_fac** | data/nvs | 0x360000 | 0x6000 | **新增**：出厂数据，`freset` 不碰 |
-| **coredump** | data/coredump | 0x370000 | 0x10000 | **新增**：崩溃转储到 flash，`freset` 不碰 |
+| ota_0 / ota_1 | app | 0x20000 / 0x320000 | 0x300000 | 由 1.625 MB 放大到 3 MB（用户 2026-11-18：模块确认 8 MB 且后续沿用） |
+| **nvs_fac** | data/nvs | 0x620000 | 0x6000 | **新增**：出厂数据，`freset` 不碰 |
+| **coredump** | data/coredump | 0x630000 | 0x10000 | **新增**：崩溃转储到 flash，`freset` 不碰 |
 
-- 删除未使用的 `spiffs`（0x360000 起 0x19000）。0x380000 之后留空，暂不上 littlefs。
+- 删除未使用的 `spiffs`（原 0x360000 起 0x19000）。0x640000–0x7FFFFF（1.75 MB）留空，暂不上 littlefs。
+- nvs/phy_init/otadata 不动：老板子的用户数据（白名单、蓝牙绑定）升级后仍在。
 - 启用 `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH`；启动时若有转储，打一行 W `Core dump found`；读取命令〔提议〕`sys coredump`。
 
 ### 2.2 数据归属
