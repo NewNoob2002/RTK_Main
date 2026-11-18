@@ -1,0 +1,99 @@
+# RTK_main 门禁（RTK_main/docs/acceptance.md §1）。实际逻辑在 RTK_main/tools/ci/run_gates.sh，本地与 CI 共用。
+# host 作业用 Arch 容器，使工具链与开发机（CachyOS：GCC 16、clang-format 23、CMake 4）一致，避免格式门禁因版本差异误报；
+# idf 作业用官方 ESP-IDF v6.1 镜像。G5b clang-tidy 依赖本机 clang 版本，只在本地 run_gates.sh 跑。
+name: gates
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: host tests, format, doc_check, frozen
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    defaults:
+      run:
+        working-directory: RTK_main
+    steps:
+      - name: Install toolchain
+        working-directory: /
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git cmake ninja clang python uv
+          uv tool install lizard==1.26.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # 主机测试只用到 IDF 里的 Unity 源码（test/*/CMakeLists.txt 按 $IDF_PATH/components/unity/unity/src 找）；
+      # 不装整套 IDF，只取 IDF v6.1 子模块固定的同一提交。
+      - name: Fetch Unity (IDF v6.1 submodule commit)
+        working-directory: /
+        run: |
+          dir=/opt/idf-stub/components/unity/unity
+          git init -q "$dir"
+          git -C "$dir" fetch -q --depth 1 https://github.com/ThrowTheSwitch/Unity.git \
+            bf560290f6020737eafaa8b5cbd2177c3956c03f
+          git -C "$dir" checkout -q FETCH_HEAD
+          echo "IDF_PATH=/opt/idf-stub" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve doc_check base
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            base=${{ github.event.pull_request.base.sha }}
+          else
+            base=${{ github.event.before }}
+          fi
+          # 新分支首推或手动触发时 before 为全 0：退回到与 origin/main 的 merge-base，再不行用父提交。
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=$(git merge-base origin/main HEAD 2>/dev/null || true)
+          fi
+          if [ -z "$base" ] || [ "$base" = "$(git rev-parse HEAD)" ]; then
+            base=$(git rev-parse HEAD~1)
+          fi
+          echo "BASE=$base" >> "$GITHUB_ENV"
+      - name: Run host gates
+        run: tools/ci/run_gates.sh --skip-idf --base "$BASE" --prefix ci
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-gate-logs
+          path: RTK_main/builds/ci-logs/
+
+  idf:
+    name: ESP-IDF build, rtk_pure esp32/esp32c3, G7b
+    runs-on: ubuntu-24.04
+    container: espressif/idf:v6.1
+    defaults:
+      run:
+        shell: bash
+        working-directory: RTK_main
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run IDF gates
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          tools/ci/run_gates.sh --only-idf --base HEAD --prefix ci
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: idf-gate-logs
+          path: RTK_main/builds/ci-logs/
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtk_main-firmware
+          path: |
+            RTK_main/builds/ci-idf/rtk_main.bin
+            RTK_main/builds/ci-idf/rtk_main.elf
+            RTK_main/builds/ci-idf/bootloader/bootloader.bin
+            RTK_main/builds/ci-idf/partition_table/partition-table.bin
+            RTK_main/builds/ci-idf/flash_args

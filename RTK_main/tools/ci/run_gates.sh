@@ -4,6 +4,9 @@
 #   --base    doc_check 的基线提交（缺省 main 与 HEAD 的 merge-base）
 #   --prefix  构建目录名前缀，全部放 builds/<prefix>-*（缺省 ci）
 #   --skip-idf 跳过 IDF 目标构建与依赖它的 G5b/G7b（仅主机快速检查）
+#   --only-idf 只跑 IDF 目标构建与 G7b（GitHub Actions 的 ESP-IDF 容器作业用）
+#   --skip-tidy 跳过 G5b（clang-tidy 结果依赖本机 clang 版本，CI 容器不跑）
+# ESP-IDF 环境：优先 $IDF_PATH/export.sh，否则 ~/esp/esp-idf/export.sh。
 # 失败不中断：逐项记录 PASS/FAIL，最后汇总，有 FAIL 时退出码 1。日志在 builds/<prefix>-logs/。
 set -u -o pipefail
 
@@ -12,11 +15,15 @@ ROOT=$PWD
 BASE=""
 PREFIX=ci
 SKIP_IDF=0
+ONLY_IDF=0
+SKIP_TIDY=0
 while [ $# -gt 0 ]; do
     case "$1" in
     --base) BASE=$2; shift 2 ;;
     --prefix) PREFIX=$2; shift 2 ;;
     --skip-idf) SKIP_IDF=1; shift ;;
+    --only-idf) ONLY_IDF=1; shift ;;
+    --skip-tidy) SKIP_TIDY=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -72,6 +79,7 @@ fmt_check() {
         xargs clang-format --style=file --dry-run --Werror
 }
 
+if [ "$ONLY_IDF" -eq 0 ]; then
 gate G1-frozen sha256sum -c --quiet docs/frozen.sha256
 
 HOST_DIRS=(test/host test/app_fw test/services test/stream_demux test/bt_reconnect test/cli
@@ -87,10 +95,12 @@ gate G2b-gnss-all-asan host_suite_asan test/gnss "$PREFIX-gnss-all-asan" "${GNSS
 
 gate G5-format fmt_check
 gate G6-doc_check python3 -I tools/doc_check/doc_check.py --base "$BASE"
+fi
 
 if [ "$SKIP_IDF" -eq 0 ]; then
     # shellcheck disable=SC1091
-    . "$HOME/esp/esp-idf/export.sh" >/dev/null 2>&1 || { echo "ESP-IDF export failed" >&2; exit 2; }
+    . "${IDF_PATH:-$HOME/esp/esp-idf}/export.sh" >/dev/null 2>&1 ||
+        { echo "ESP-IDF export failed" >&2; exit 2; }
     gate G3-idf idf_build "$PREFIX-idf"
     mkdir -p "builds/$PREFIX-trace-off"
     echo "CONFIG_RTK_TRACE_ENABLE=n" >"builds/$PREFIX-trace-off/trace_off.defaults"
@@ -101,7 +111,8 @@ if [ "$SKIP_IDF" -eq 0 ]; then
         gate "G3b-rtk_pure-$t" idf_build "$PREFIX-rtk_pure-$t" -C test_apps/rtk_pure \
             -DIDF_TARGET="$t" -DSDKCONFIG="$ROOT/builds/$PREFIX-rtk_pure-$t/sdkconfig"
     done
-    gate G5b-tidy python3 -I tools/tidy_check/tidy_check.py --host-build "builds/$PREFIX-host" \
+    [ "$SKIP_TIDY" -eq 1 ] || [ "$ONLY_IDF" -eq 1 ] ||
+        gate G5b-tidy python3 -I tools/tidy_check/tidy_check.py --host-build "builds/$PREFIX-host" \
         --idf-build "builds/$PREFIX-idf" --gnss-build "builds/$PREFIX-gnss-all" \
         --nvs-build "builds/$PREFIX-nvs_store" --test-app-build "builds/$PREFIX-rtk_pure-esp32"
     gate G7b-runtime python3 -I tools/g7b_check/g7b_check.py --build "builds/$PREFIX-idf"

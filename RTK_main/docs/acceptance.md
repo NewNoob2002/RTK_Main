@@ -6,6 +6,7 @@
 ## 1. 软件门禁（每批次结束由验收方在独立构建目录重跑，不采信实现方报告）
 
 一键运行：`tools/ci/run_gates.sh [--base <rev>] [--prefix <名>]`（本地 CI，覆盖 G1、G2/G2b/G2c、G3/G3b、G5、G5b、G7b 与 doc_check；合并到 main 前必须全过）。G4 体积、G6/G7 审查、G8 代码审查仍由验收方人工完成。
+GitHub Actions（`.github/workflows/gates.yml`，push/PR 触发）调用同一脚本：host 作业（Arch 容器）跑 G1、G2/G2b/G2c、G5、doc_check；idf 作业（`espressif/idf:v6.1`）跑 G3/G3b、G7b 并上传固件。G5b clang-tidy 依赖本机 clang 版本，只在本地跑。
 
 | ID | 检查 | 命令 / 方法 | 通过标准 |
 | --- | --- | --- | --- |
