@@ -66,8 +66,10 @@
 ### 2.4 接收机配置持久化（修订 ADR-0010 §2.4）
 
 - **NVS 是唯一事实来源**；启动仍按 NVS 内容把配置写进接收机 RAM（保持“上电即确定”）。
-- **SAVECONFIG**：用户改动**成功应用到接收机之后**自动发一次 `SAVECONFIG`（u-blox：CFG-VALSET 写 BBR/Flash 层）；
-  另有手动 `gnss save`。启动流程本身**不**发 SAVECONFIG（不因每次上电磨损接收机 flash）。
+- **SAVECONFIG**（2026-11-18 用户修订）：只有**工作模式切换**（移动站↔基站/smartBase，涉及大量报文重配）成功后自动发一次
+  `SAVECONFIG`（u-blox：CFG-CFG 写 BBR/Flash）。单条或少量报文、频率、波特率等不改工作模式的修改**只写 ESP32 NVS**，
+  不保存到接收机；需要时用户手动 `gnss save`。启动流程本身**不**发 SAVECONFIG。
+  因 NVS 是唯一真源：开机探测成功后若接收机实际波特率与 NVS `gnss/baud` 不同，自动切到 NVS 波特率；输出/频率每次启动照常写 RAM。
 - 持久化的接收机设置：主机口波特率、接收机端口号、各报文速率、工作模式（rover / base / smartbase）、基站参数（§2.6）。
 - `gnss freset`：向接收机发出厂复位（Unicore `FRESET`；u-blox CFG-CFG clear），**同时**把 NVS 的 gnss 用户键恢复缺省，再重新探测。
 
@@ -112,14 +114,14 @@ gnss out default               # 恢复缺省
 - 分区表变更需要整片烧录（含分区表）；已出货板子上的 SN 靠 §2.2 迁移保住，`spiffs` 无数据可丢。
 - coredump 分区占 64 KB，换来现场崩溃可追。
 - 多一步早期加载，启动时间预计增加 <20 ms（C1 实测记录）。
-- ADR-0010 §2.4 “不 SAVECONFIG”改为“仅用户改动后 SAVECONFIG”。
+- ADR-0010 §2.4 “不 SAVECONFIG”改为“仅工作模式切换后自动 SAVECONFIG，其余手动 `gnss save`”。
 
 ## 4 实施计划（C 系列）
 
 | 卡 | 内容 | 依赖 |
 | --- | --- | --- |
 | C1 | 分区表 + coredump；`nvs_fac` 与 SN 迁移；`nvs_store_init` 只擦用户分区；存储启动日志（§2.3-4）；`config` 共用格式化 | — |
-| C2 | 接收机配置持久化（波特率/端口/模式键）、自动 SAVECONFIG + `gnss save`、`gnss freset`、统一 `gnss out`（Hz） | C1 |
+| C2 | 接收机配置持久化（波特率/端口/模式键）、`gnss save`（自动保存仅随 C5a 模式切换）、`gnss freset`、统一 `gnss out`（Hz） | C1 |
 | C3 | `stepEarlyConfig` 两段加载、`BootConfig` 校验、启动失败计数回退 | C1 |
 | C4 | `freset` / `factory erase`、诊断开关、蓝牙配对窗口 | C1、C3 |
 | C5a | 工作模式与基站 RTCM 报文集合 | C2 |
