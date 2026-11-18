@@ -60,6 +60,8 @@ fw::Result GnssModule::initObjects() noexcept
 
 fw::Result GnssModule::initPipelines() noexcept
 {
+    preferred_baud_ = ctx().bootConfig.gnssBaud;
+    initBaudCandidates();
     const fw::Result uartResult = initUart();
     if (!fw::isOk(uartResult)) {
         return uartResult;
@@ -80,7 +82,6 @@ fw::Result GnssModule::initPipelines() noexcept
     if (demuxErr != demux::Error::kOk) {
         return initFailed(fw::Result::kInvalidState);
     }
-    initBaudCandidates();
     return fw::Result::kOk;
 }
 
@@ -104,14 +105,8 @@ fw::Result GnssModule::startController() noexcept
         return initFailed(fw::Result::kInvalidState);
     }
     boot_baud_pending_ = preferred_baud_ != 0U;
-    // Controller 约定 UART 已处于 bauds.front()（NVS 首选速率），否则首批候选会在错误速率上空等。
-    host_baud_ = CONFIG_RTK_GNSS_DEFAULT_BAUD;
-    if (bauds_[0] != host_baud_) {
-        const fw::Result baudRes = applyBaud(bauds_[0]);
-        if (!fw::isOk(baudRes)) {
-            return initFailed(baudRes);
-        }
-    }
+    // initUart 已按同一候选首项配置端口。
+    host_baud_ = bauds_.front();
     last_state_ = controller().state();
     last_published_state_ = last_state_;
     prev_ctrl_stats_ = controller().stats();
@@ -162,7 +157,8 @@ fw::Result GnssModule::initUart() noexcept
     }
     uart_installed_ = true;
     const uart_config_t uartCfg{
-        .baud_rate = CONFIG_RTK_GNSS_DEFAULT_BAUD,
+        // 早期校验后的首选值最高 921600，转换为 IDF 的 int 无损。
+        .baud_rate = static_cast<int>(bauds_.front()),
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,

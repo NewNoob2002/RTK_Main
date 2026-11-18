@@ -8,6 +8,7 @@
 #include <span>
 
 #include "AppConfig.hpp"
+#include "app/BootConfig.hpp"
 #include "fw/Atomic.hpp"
 #include "data/AppData.hpp"
 #if RTK_GNSS_ENABLED
@@ -86,6 +87,7 @@ struct AppContext {
         ;
 
     rtos::BootArena bootArena{};
+    BootConfig bootConfig{};
     std::atomic<BootPhase> bootPhase{};
     std::atomic<uint32_t> bootArrived{};
     std::atomic<uint32_t> bootStopped{};

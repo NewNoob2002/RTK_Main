@@ -230,6 +230,17 @@ public:
     }
 
     /**
+     * @brief 使用早期读取并校验过的报告周期。
+     * @param seconds: 周期秒数，0 表示关闭。
+     * @note 仅启动任务在报告任务启动前调用，非 ISR。
+     */
+    void applyBootReport(uint16_t seconds) noexcept
+    {
+        report_s_ = seconds;
+        report_started_ = false;
+    }
+
+    /**
      * @brief 环统计快照（console 任务读取，内部已加锁，非 ISR）。
      * @retval trace 环累计统计快照
      * @note console 任务诊断读取；环查询内部加锁，非 ISR。

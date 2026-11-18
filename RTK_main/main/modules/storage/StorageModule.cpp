@@ -198,22 +198,41 @@ void StorageModule::loadSn() noexcept
 
 void StorageModule::loadKeyTables() noexcept
 {
+    const auto &boot = ctx().bootConfig;
     for (const StoreGroup &group : storeCatalog()) {
-        const StoreLoadCounts counts = loadKeys(group.keys);
+        const StoreLoadCounts counts = loadBootGroup(group);
         logLoadSummary(group, counts);
         if (!kBootVerbose && counts.failed == 0U) {
             continue;
         }
         for (const fw::StoreKey &key : group.keys) {
             std::array<char, store::kKeyLineBytes> line{};
-            store::formatKey(line, key, group.valueName);
+            store::formatKey(line, key, group.valueName, boot.safeDefaults || !boot.userNvsReady);
             FW_LOGI(fw::TraceCat::kStore, "%s", line.data());
         }
     }
 }
 
+StoreLoadCounts StorageModule::loadBootGroup(const StoreGroup &group) noexcept
+{
+    const auto &boot = ctx().bootConfig;
+    if (boot.safeDefaults || !boot.userNvsReady) {
+        return {.defaults = static_cast<uint32_t>(group.keys.size())}; // 固件目录只含少量键。
+    }
+    if (group.name == "debug") {
+        return boot.debugCounts;
+    }
+    if (group.name == "gnss.config" && !group.keys.empty()) {
+        // baud 是目录末项，已由 earlyConfig 读取。
+        const auto later = loadKeys(group.keys.first(group.keys.size() - 1U));
+        return {later.saved + boot.baudCounts.saved, later.defaults + boot.baudCounts.defaults,
+                later.failed + boot.baudCounts.failed};
+    }
+    return loadKeys(group.keys);
+}
+
 /**
- * @brief  初始化 NVS 并加载 SN、白名单与各模块键表
+ * @brief  加载 SN、白名单与后期模块键，沿用早期 NVS 初始化结果
  * @retval fw::Result::kOk 总是（加载失败使用缺省值）
  * @note   启动前单线程，非 ISR；同步读 NVS，幂等。
  */
@@ -223,15 +242,11 @@ fw::Result StorageModule::init() noexcept
         return fw::Result::kOk;
     }
     retry_ms_ = kRetryInitialMs;
-    /* 初始化后端，失败仍按原策略尝试加载并使用缺省值。 */
-    const esp_err_t init = nvs_store_init();
-    if (init != ESP_OK) {
-        FW_LOGE(fw::TraceCat::kStore, "store init failed: %s; use defaults", esp_err_to_name(init));
-    }
     logNvsUsage();
     loadSn();
-    loadWhitelist();
-    /* ADR-0009 §2.4 / ADR-0010 §2.10：启动时按目录加载所有类别的键表。 */
+    if (ctx().bootConfig.userNvsReady) {
+        loadWhitelist();
+    }
     loadKeyTables();
     /* 保持 LinkStatus、SystemStatus、初始化标记、StoreStatus 的写入顺序。 */
     ctx().data.linkStatus.write(whitelist_);

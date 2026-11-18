@@ -172,6 +172,9 @@ int cmdConfig(void * /*ctx*/, int argc, char **argv) noexcept
     if ((argc < 1) || (argc > static_cast<int>(kGroupArgs)) || (argv == nullptr)) {
         return cli::fail("usage: config [identity|link|gnss|debug|build]");
     }
+    if (appContext().bootConfig.safeDefaults) {
+        cli::printKv("boot_mode", "safe defaults");
+    }
     if (argc == 1) {
         for (const Section &section : kSections) {
             section.show();

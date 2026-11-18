@@ -3,6 +3,7 @@
 #pragma once
 #include <span>
 
+#include "app/BootConfig.hpp"
 #include "data/AppData.hpp"
 #include "fw/StoreKey.hpp"
 #include "cli/Console.hpp"
@@ -11,13 +12,7 @@
 namespace app {
 struct AppContext;
 struct ModuleTestAccess;
-
-/** 目录组的启动加载计数，缺键沿用模块初值。 */
-struct StoreLoadCounts {
-    uint32_t saved = 0U;
-    uint32_t defaults = 0U;
-    uint32_t failed = 0U;
-};
+struct StoreGroup;
 
 /** 存储模块（kLink 执行器）：SN 与白名单的 NVS 持久化与重试。 */
 class StorageModule final {
@@ -108,6 +103,8 @@ private:
      * @note 仅启动任务；可等待 NVS，单类失败不阻止后续加载，非 ISR。
      */
     void loadKeyTables() noexcept;
+    /** @brief 加载本组的后期键并合并早期统计。 @param group: 目录组。 @retval 启动加载计数。 */
+    [[nodiscard]] StoreLoadCounts loadBootGroup(const StoreGroup &group) noexcept;
     /**
      * @brief 从连续六字节地址行恢复模块白名单
      * @param in: 输入字节视图

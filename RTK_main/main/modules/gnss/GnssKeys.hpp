@@ -11,6 +11,9 @@
 
 namespace app::gnss_store {
 
+inline constexpr size_t kRateKeyIndex = 0U;
+inline constexpr size_t kOutKeyIndex = 2U;
+
 /**
  * @brief 校验设置命令允许的串口速率。
  * @param baud: 波特率。
@@ -101,6 +104,8 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .binding = {.obj = nullptr, .load = &GnssModule::loadBaud, .save = &GnssModule::saveBaud}}}};
 
 static_assert(std::ranges::all_of(kConfigKeys, fw::valid), "gnss.config 键必须合法");
+static_assert(kConfigKeys.back().key == "baud", "早期波特率键必须是 gnss.config 末项");
+static_assert(kConfigKeys[kRateKeyIndex].key == "rate" && kConfigKeys[kOutKeyIndex].key == "out");
 static_assert(fw::valid(kCacheKeys[0]) && fw::valid(kCacheKeys[1]) && fw::valid(kCacheKeys[2]),
               "gnss.cache 键必须合法");
 static_assert(fw::uniqueKeys(kConfigKeys) && fw::uniqueKeys(kCacheKeys),

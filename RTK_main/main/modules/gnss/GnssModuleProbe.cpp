@@ -205,7 +205,10 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
         return;
     }
     if (landed && (stats.failedMask == 0U)) {
-        const fw::Result saveRes = ctx().storage.saveKeys(gnss_store::kConfigKeys);
+        const size_t keyIndex = pending_apply_ == PendingApply::kRate ? gnss_store::kRateKeyIndex
+                                                                      : gnss_store::kOutKeyIndex;
+        const fw::Result saveRes =
+            ctx().storage.saveKeys(std::span{gnss_store::kConfigKeys}.subspan(keyIndex, 1U));
         last_apply_ = fw::isOk(saveRes) ? GnssApply::kOk : GnssApply::kFailed;
     } else {
         // 有语句失败或超时：NVS 保持旧值，界面与计划一起回滚到变更前。
@@ -241,6 +244,15 @@ fw::Result GnssModule::persistDetectedHint() noexcept
     hint_.baud = detBaud;
     // StorageModule::saveKeys 内部发 kStore trace；保留 hint_ 内存值避免每轮重复写盘。
     return ctx().storage.saveKeys(gnss_store::kCacheKeys);
+}
+
+void GnssModule::persistProbeHint() noexcept
+{
+    if (skip_hint_save_) {
+        skip_hint_save_ = false;
+    } else if (!boot_baud_pending_ && !ctx().bootConfig.safeDefaults) {
+        static_cast<void>(persistDetectedHint());
+    }
 }
 
 fw::Result GnssModule::applyPower(bool on) noexcept
@@ -352,11 +364,7 @@ void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur)
         if (step_sent_once_) {
             traceGnss(GnssTrace::kStepAck, step_idx_, 0U);
         }
-        if (skip_hint_save_) {
-            skip_hint_save_ = false;
-        } else if (!boot_baud_pending_) {
-            static_cast<void>(persistDetectedHint());
-        }
+        persistProbeHint();
         // 型号与 caps 已知，输出计划按支持的语句位重算一次（ADR-0012 §2.4）。
         controller().setOutputPlan(makePlan());
     } else if ((prev == ::gnss::State::kRunning) && (cur == ::gnss::State::kProbing)) {

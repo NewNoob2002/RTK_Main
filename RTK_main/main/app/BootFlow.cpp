@@ -1,4 +1,4 @@
-// 启动流程（ADR-0009）：13 步有序步骤表、降级/回滚/停机处理、横幅与单行摘要、步骤记录查询。
+// 启动流程（ADR-0009）：有序步骤表、降级/回滚/停机处理、横幅与单行摘要、步骤记录查询。
 // 线程：仅 app_main 的启动任务调用（boot()、各步骤函数）；非 ISR，可阻塞，启动期一次性完成。
 // 启动完成后 s_boot_records 只读，供 `sys boot` 与 RTK_BOOT_VERBOSE 查询。
 #include "app/App.hpp"
@@ -138,6 +138,18 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
         FW_LOGW(fw::TraceCat::kSys, "Core dump found, %u bytes", static_cast<unsigned>(size));
     }
 #endif
+    return app::BootResult::kOk;
+}
+
+/**
+ * @brief 在分配前应用早期 NVS 配置并记录启动尝试。
+ * @param ctx: 启动步骤上下文，本步不修改。
+ * @retval kOk 总是，存储不可用时继续使用缺省。
+ */
+app::BootResult stepEarlyConfig(app::BootCtx &ctx) noexcept
+{
+    (void)ctx;
+    app::loadEarlyConfig(app::appContext());
     return app::BootResult::kOk;
 }
 
@@ -346,13 +358,15 @@ app::BootResult stepStarted(app::BootCtx &ctx) noexcept
         return app::BootResult::kFail;
     }
     self.bootPhase.store(app::BootPhase::kRunning, std::memory_order_release);
+    app::clearBootFailures(self.bootConfig);
     return app::BootResult::kOk;
 }
 // NOLINTEND(misc-const-correctness)
 
-constexpr std::array<app::BootStep, 13U> kBootSteps{{
+constexpr std::array<app::BootStep, 14U> kBootSteps{{
     {"power", &stepPower, app::OnFail::kDegrade},
     {"banner", &stepBanner, app::OnFail::kDegrade},
+    {"earlyConfig", &stepEarlyConfig, app::OnFail::kDegrade},
     {"contexts", &stepContexts, app::OnFail::kDegrade},
     {"console", &stepConsole, app::OnFail::kDegrade},
     {"alloc", &stepAlloc, app::OnFail::kDegrade},

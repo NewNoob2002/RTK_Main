@@ -21,10 +21,11 @@ inline constexpr size_t kKeyLineBytes = 132U;
  * @param[out] out: 末尾带 NUL 的行缓冲。
  * @param key: 键定义。
  * @param valueName: 可空的数值显示名钩子。
+ * @param defaultsOnly: 显示启动缺省，无需读取 NVS。
  * @note 任务上下文，可等待 NVS，非 ISR。
  */
 void formatKey(std::span<char, kKeyLineBytes> out, const fw::StoreKey &key,
-               StoreValueName valueName) noexcept;
+               StoreValueName valueName, bool defaultsOnly = false) noexcept;
 
 /**
  * @brief 键的值宽度（字节）：u8/u16/u32 → 1/2/4；本轮不支持的类型返回 0。

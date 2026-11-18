@@ -194,13 +194,15 @@ esp_err_t writeBlob(const fw::StoreKey &key, std::span<const uint8_t> data) noex
 }
 
 void formatKey(std::span<char, kKeyLineBytes> out, const fw::StoreKey &key,
-               StoreValueName valueName) noexcept
+               StoreValueName valueName, bool defaultsOnly) noexcept
 {
     constexpr size_t kValueTextBytes = 24U;
     constexpr int kNameWidth = 14;
     std::array<char, kValueTextBytes> text{};
     esp_err_t error = ESP_OK;
-    if (key.type == fw::StoreType::kBlob) {
+    if (defaultsOnly) {
+        error = ESP_ERR_NVS_NOT_FOUND;
+    } else if (key.type == fw::StoreType::kBlob) {
         std::array<uint8_t, kMaxBlobKeyBytes> blob{};
         size_t len = 0U;
         error = readBlob(key, blob, len);

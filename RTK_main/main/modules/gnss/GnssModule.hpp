@@ -447,6 +447,11 @@ private:
      */
     fw::Result persistDetectedHint() noexcept;
     /**
+     * @brief 在接收机配置完成后按启动策略保存探测提示。
+     * @note 仅 kIo，可能写 NVS，非 ISR。
+     */
+    void persistProbeHint() noexcept;
+    /**
      * @brief 按动作给 GNSS 上电或断电
      * @param on: true 表示上电
      * @retval kOk 表示成功；其他为失败原因

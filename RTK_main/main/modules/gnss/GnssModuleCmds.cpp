@@ -134,7 +134,8 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
         // 与 kSetOut 一致：没有运行中的接收机可确认，直接落盘，下次配置完成时按新频率执行。
         const uint8_t prevRate = ensureRoverCfg().rateHz;
         ensureRoverCfg().rateHz = cmd.args[0];
-        const fw::Result saveRes = ctx().storage.saveKeys(gnss_store::kConfigKeys);
+        const fw::Result saveRes = ctx().storage.saveKeys(
+            std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kRateKeyIndex, 1U>());
         if (!fw::isOk(saveRes)) {
             ensureRoverCfg().rateHz = prevRate;
             result.status = saveRes;
@@ -179,7 +180,8 @@ void GnssModule::cmdSetOut(const fw::Command &cmd, uint32_t nowMs,
     if (controller().state() != ::gnss::State::kRunning &&
         controller().state() != ::gnss::State::kMaintenance) {
         // 未进入 kRunning 时没有可下发的输出阶段：直接落盘，下次配置完成时按新表重算计划。
-        const fw::Result saveRes = ctx().storage.saveKeys(gnss_store::kConfigKeys);
+        const fw::Result saveRes = ctx().storage.saveKeys(
+            std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
         if (!fw::isOk(saveRes)) {
             out_cfg_ = prev;
             ctx().data.gnssOutCfg.write(out_cfg_);

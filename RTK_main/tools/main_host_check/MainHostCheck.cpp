@@ -43,6 +43,8 @@ std::array<size_t, 64> s_write_sizes{};
 std::array<size_t, 64> s_store_at_write{};
 size_t s_store_calls = 0U;
 esp_err_t s_store_result = ESP_OK;
+esp_err_t s_nvs_init_result = ESP_OK;
+unsigned s_nvs_init_calls = 0U;
 size_t s_saved_count = 0U;
 app::WhitelistRaw s_saved{};
 std::array<std::array<uint8_t, 4096>, 2> s_input{};
@@ -822,7 +824,8 @@ void spp_server_rx_stats(spp_server_rx_stats_t *stats)
 }
 esp_err_t nvs_store_init(void)
 {
-    return ESP_OK;
+    ++s_nvs_init_calls;
+    return s_nvs_init_result;
 }
 esp_err_t nvs_store_get_sn(char *out, size_t size)
 {
@@ -1084,6 +1087,7 @@ struct StoreLogCapture {
     std::array<char, 1024U> console{};
     size_t logSize = 0U;
     size_t consoleSize = 0U;
+    size_t warnings = 0U;
 };
 
 constinit StoreLogCapture s_store_log{};
@@ -1101,6 +1105,7 @@ void captureStoreLog(void * /*ctx*/, const fw::LogHeader &hdr,
     auto &out = s_store_log.log;
     auto &size = s_store_log.logSize;
     if (hdr.cat == fw::TraceCat::kStore && payload.size() < out.size() - size) {
+        s_store_log.warnings += hdr.level == fw::LogLevel::kWarn ? 1U : 0U;
         std::memcpy(out.data() + size, payload.data(), payload.size());
         size += payload.size();
         out[size++] = '\n';
@@ -1144,6 +1149,7 @@ void storageStartup()
     CHECK(failed.saved == 1U && failed.defaults == keys.size() - 2U && failed.failed == 1U);
 
     CHECK(fw::isOk(fw::logInstallDirect(&captureStoreLog, nullptr, &rtos::nowMs)));
+    app::loadEarlyConfig(app::appContext());
     CHECK(fw::isOk(storage.init()));
     cli::setOutSink(&captureStoreConsole, false);
     char command[] = "config";
@@ -1154,13 +1160,92 @@ void storageStartup()
     cli::setOutSink(nullptr, false);
     const std::string_view log{s_store_log.log.data(), s_store_log.logSize};
     std::string_view console{s_store_log.console.data(), s_store_log.consoleSize};
-    CHECK(log.find("Could not load dbg/report: invalid_arg\n") != std::string_view::npos);
+    CHECK(log.find("Could not load dbg/report: invalid value 3601\n") != std::string_view::npos);
     CHECK(log.find("debug: 1 saved, 2 default\n") != std::string_view::npos);
     const size_t header = console.find('\n');
     CHECK(header != std::string_view::npos);
     if (header != std::string_view::npos) {
         console.remove_prefix(header + 1U);
         CHECK(!console.empty() && log.find(console) != std::string_view::npos);
+    }
+}
+
+/** @brief 验证启动计数、诊断校验、存储阶段只装载剩余键及不可用时的降级。 */
+void earlyConfig(unsigned previous, bool nvsAvailable)
+{
+    auto &context = app::appContext();
+    const auto &keys = app::debug::kKeys;
+    const auto &mask = keys[app::debug::kIdxMask];
+    const auto &report = keys[app::debug::kIdxReport];
+    const auto &hex = keys[app::debug::kIdxHex];
+    const auto &levels = keys[app::debug::kIdxLogLevel];
+    constexpr fw::StoreKey kFails{.ns = "boot",
+                                  .key = "fails",
+                                  .type = fw::StoreType::kU8,
+                                  .maxSize = 1U,
+                                  .max = 255,
+                                  .help = "boot count"};
+    constexpr uint32_t kSavedLevels = fw::logLevelsAll(fw::LogLevel::kWarn);
+    constexpr uint32_t kStoreInfo =
+        fw::traceBit(fw::TraceCat::kStore) *
+        (static_cast<uint32_t>(fw::LogLevel::kInfo) - static_cast<uint32_t>(fw::LogLevel::kWarn));
+    constexpr uint32_t kFixtureLevels =
+        kSavedLevels | (kStoreInfo << static_cast<unsigned>(fw::TraceCat::kStore));
+    CHECK(app::store::writeValue(mask, 1U) == ESP_OK);
+    CHECK(app::store::writeValue(report, 3601U) == ESP_OK);
+    CHECK(app::store::writeValue(hex, fw::kTraceAllMask + 1U) == ESP_OK);
+    CHECK(app::store::writeValue(levels, kFixtureLevels) == ESP_OK);
+    if (previous != 0U) {
+        CHECK(app::store::writeValue(kFails, previous) == ESP_OK);
+    }
+    s_nvs_init_result = nvsAvailable ? ESP_OK : ESP_FAIL;
+    CHECK(fw::isOk(fw::logInstallDirect(&captureStoreLog, nullptr, &rtos::nowMs)));
+    app::loadEarlyConfig(context);
+    const bool safeDefaults = previous >= 3U;
+    const bool readUser = nvsAvailable && !safeDefaults;
+    CHECK(context.bootConfig.userNvsReady == nvsAvailable);
+    CHECK(context.bootConfig.previousFailures == previous);
+    CHECK(context.bootConfig.safeDefaults == safeDefaults);
+    CHECK(context.bootConfig.traceMask == (readUser ? 1U : 0U));
+    CHECK(context.bootConfig.debugCounts.failed == (readUser ? 2U : 0U));
+    CHECK(fw::traceMask() == context.bootConfig.traceMask);
+    CHECK(fw::logLevels() == (readUser ? kFixtureLevels : fw::kLogLevelsDefault));
+    CHECK(fw::logHexMask() == 0U && context.debug.reportPeriodS() == 0U);
+    CHECK(s_store_log.warnings == (readUser ? 2U : safeDefaults ? 1U : 0U));
+    uint32_t failures = 0U;
+    if (nvsAvailable) {
+        CHECK(app::store::readValue(kFails, failures) == ESP_OK && failures == previous + 1U);
+    } else {
+        CHECK(app::store::readValue(kFails, failures) == ESP_ERR_NVS_NOT_FOUND);
+    }
+
+    CHECK(app::store::writeValue(mask, 2U) == ESP_OK);
+    CHECK(fw::isOk(context.storage.init()));
+    CHECK(s_nvs_init_calls == 1U);
+    CHECK(fw::traceMask() == (readUser ? 1U : 0U));
+    CHECK(context.debug.reportPeriodS() == 0U);
+    if (safeDefaults) {
+        uint32_t value = 0U;
+        CHECK(app::store::readValue(mask, value) == ESP_OK && value == 2U);
+        cli::setOutSink(&captureStoreConsole, false);
+        char command[] = "config";
+        char group[] = "debug";
+        std::array<char *, 2U> argv{command, group};
+        const auto &config = app::configCmds().front();
+        CHECK(config.handler(config.ctx, static_cast<int>(argv.size()), argv.data()) == 0);
+        cli::setOutSink(nullptr, false);
+        const std::string_view console{s_store_log.console.data(), s_store_log.consoleSize};
+        CHECK(console.find("safe defaults") != std::string_view::npos);
+    }
+    const std::string_view log{s_store_log.log.data(), s_store_log.logSize};
+    CHECK((log.find("Previous boot did not complete") != std::string_view::npos) ==
+          (previous != 0U));
+    CHECK((log.find("Boot failed 3 times, using default settings") != std::string_view::npos) ==
+          safeDefaults);
+    CHECK((log.find("store init failed") != std::string_view::npos) == !nvsAvailable);
+    app::clearBootFailures(context.bootConfig);
+    if (nvsAvailable) {
+        CHECK(app::store::readValue(kFails, failures) == ESP_OK && failures == 0U);
     }
 }
 
@@ -1196,6 +1281,14 @@ int main(int argc, const char **raw_args)
         storageBackoff();
     } else if (std::strcmp(argv[1], "storage_startup") == 0) {
         storageStartup();
+    } else if (std::strcmp(argv[1], "early_config_0") == 0) {
+        earlyConfig(0U, true);
+    } else if (std::strcmp(argv[1], "early_config_2") == 0) {
+        earlyConfig(2U, true);
+    } else if (std::strcmp(argv[1], "early_config_3") == 0) {
+        earlyConfig(3U, true);
+    } else if (std::strcmp(argv[1], "early_config_nvs_failure") == 0) {
+        earlyConfig(0U, false);
     } else if (std::strcmp(argv[1], "credit_window") == 0) {
         creditWindow();
     } else if (std::strcmp(argv[1], "rx_fairness") == 0) {

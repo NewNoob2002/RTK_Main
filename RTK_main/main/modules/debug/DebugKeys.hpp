@@ -8,7 +8,10 @@
 
 #include "fw/Log.hpp"
 #include "fw/StoreKey.hpp"
+
+#if FW_TRACE_ENABLED
 #include "modules/debug/DebugModule.hpp"
+#endif
 
 namespace app::debug {
 
@@ -28,7 +31,10 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
      .min = 0,
      .max = static_cast<int32_t>(fw::kTraceAllMask),
      .help = "enabled trace category mask",
-     .binding = {.obj = nullptr, .load = &DebugModule::loadMask, .save = &DebugModule::saveMask}},
+#if FW_TRACE_ENABLED
+     .binding = {.obj = nullptr, .load = &DebugModule::loadMask, .save = &DebugModule::saveMask}
+#endif
+    },
     {.ns = "dbg",
      .key = "report",
      .type = fw::StoreType::kU16,
@@ -37,9 +43,10 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
      .min = 0,
      .max = 3600,
      .help = "periodic report interval (s, 0 = off)",
-     .binding = {.obj = nullptr,
-                 .load = &DebugModule::loadReport,
-                 .save = &DebugModule::saveReport}},
+#if FW_TRACE_ENABLED
+     .binding = {.obj = nullptr, .load = &DebugModule::loadReport, .save = &DebugModule::saveReport}
+#endif
+    },
     {.ns = "dbg",
      .key = "hex",
      .type = fw::StoreType::kU32,
@@ -48,7 +55,10 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
      .min = 0,
      .max = static_cast<int32_t>(fw::kTraceAllMask),
      .help = "hex dump category mask",
-     .binding = {.obj = nullptr, .load = &DebugModule::loadHex, .save = &DebugModule::saveHex}},
+#if FW_TRACE_ENABLED
+     .binding = {.obj = nullptr, .load = &DebugModule::loadHex, .save = &DebugModule::saveHex}
+#endif
+    },
     {.ns = "dbg",
      .key = "loglv",
      .type = fw::StoreType::kU32,
@@ -57,7 +67,10 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
      .min = 0,
      .max = static_cast<int32_t>(fw::logLevelsAll(fw::LogLevel::kDebug)),
      .help = "per-category log level, 2 bits each (0=E 1=W 2=I 3=D)",
-     .binding = {.obj = nullptr, .load = &DebugModule::loadLoglv, .save = &DebugModule::saveLoglv}},
+#if FW_TRACE_ENABLED
+     .binding = {.obj = nullptr, .load = &DebugModule::loadLoglv, .save = &DebugModule::saveLoglv}
+#endif
+    },
 }};
 
 static_assert(fw::valid(kKeys[kIdxMask]), "dbg/mask 必须是合法 u32 键");

@@ -19,6 +19,7 @@ idf_component_register(
     SRCS "AppMain.cpp"
          "app/App.cpp"
          "app/BootBuffers.cpp"
+         "app/BootConfig.cpp"
          "app/BootFlow.cpp"
          "app/BootSteps.cpp"
          "app/ConsoleSetup.cpp"

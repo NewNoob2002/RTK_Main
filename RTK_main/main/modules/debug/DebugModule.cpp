@@ -114,7 +114,7 @@ fw::Status DebugModule::bindStorage(const StorageView &storage) noexcept
 }
 
 /**
- * @brief  安装 trace 环与 spp 钩子，从 NVS 恢复 trace 掩码、日志级别与报告周期
+ * @brief  安装 trace 环与 spp 钩子，沿用早期配置的诊断设置
  * @retval fw::Result::kOk 成功；kInvalidState 存储未绑定
  */
 fw::Result DebugModule::init() noexcept
@@ -142,8 +142,6 @@ fw::Result DebugModule::init() noexcept
         return logResult;
     }
     // 文本环此处只初始化；启动结束时 attachLog() 才安装（ADR-0009 §2.12），启动期日志走直写。
-    // storage 在启动早期就把 NVS 掩码写进全局原子量；这里不覆盖，避免丢掉已加载的设置。
-    fw::traceSetMask(fw::traceMask());
     spp_server_set_trace_hook(&sppTraceForward);
     installed_ = true;
     return fw::Result::kOk;
@@ -255,8 +253,7 @@ fw::Result DebugModule::loadReport(void * /*obj*/, std::span<const uint8_t> in) 
         return fw::Result::kInvalidArg;
     }
 #if FW_TRACE_ENABLED
-    appContext().debug.report_s_ = seconds;
-    appContext().debug.report_started_ = false;
+    appContext().debug.applyBootReport(seconds);
 #endif
     return fw::Result::kOk;
 }
