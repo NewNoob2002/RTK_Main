@@ -55,7 +55,7 @@ Unicore 型号判定：VERSIONA 第一个引号字段（"UM980"/"UM981"/"UM982"�
 
 `cap::kRtcmIn`（全部）、`kBase`（全部，第二阶段用）、`kHeading`（UM982）、`kIns`（UM981）、`kRate20Hz`（UM98x、F9P）。控制台与 DeviceInfo 显示；第一阶段只用于把 `RoverConfig::rateHz` 夹到支持范围。
 
-### 2.4 流动站配置（每次启动写 RAM；SAVECONFIG 见 ADR-0014 §2.4 修订：仅工作模式切换后自动保存，其余手动 gnss save）
+### 2.4 流动站配置（每次启动写 RAM；SAVECONFIG 见 ADR-0014 §2.4 修订：仅波特率变更与工作模式切换后自动保存，其余手动 gnss save）
 
 - 不写模块 flash：避免每次上电磨损，也避免与用户经 COM3 做的保存配置互相覆盖；代价是每次启动多约 1 s 配置时间。
 - Unicore（目标口 `COM<port>`，默认 COM2）：`UNLOG COM2` → `GPGGA COM2 <1/rate>` → `GPRMC COM2 <...>` → `GPGSA COM2 <...>` → `GPGSV COM2 <max(1, 1/rate)>`（`gsv=false` 时省略）→ `MODE ROVER` →（`portBaud≠0`）`CONFIG COM2 <baud>`，此步不等应答、发送后主机 UART 切到新波特率（`switchBaud`）。频率参数按手册：1/2/5/10/20 Hz → `1`/`0.5`/`0.2`/`0.1`/`0.05`。RTCM 输入端口自适应识别（手册 §1.2），无需命令。

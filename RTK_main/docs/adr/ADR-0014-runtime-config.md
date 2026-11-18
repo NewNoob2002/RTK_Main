@@ -66,10 +66,13 @@
 ### 2.4 接收机配置持久化（修订 ADR-0010 §2.4）
 
 - **NVS 是唯一事实来源**；启动仍按 NVS 内容把配置写进接收机 RAM（保持“上电即确定”）。
-- **SAVECONFIG**（2026-11-18 用户修订）：只有**工作模式切换**（移动站↔基站/smartBase，涉及大量报文重配）成功后自动发一次
-  `SAVECONFIG`（u-blox：CFG-CFG 写 BBR/Flash）。单条或少量报文、频率、波特率等不改工作模式的修改**只写 ESP32 NVS**，
-  不保存到接收机；需要时用户手动 `gnss save`。启动流程本身**不**发 SAVECONFIG。
-  因 NVS 是唯一真源：开机探测成功后若接收机实际波特率与 NVS `gnss/baud` 不同，自动切到 NVS 波特率；输出/频率每次启动照常写 RAM。
+- **SAVECONFIG**（2026-11-18 用户修订）：按“ESP32 每次启动能否自己重新下发”区分：
+  - 报文输出、定位频率：每次启动由 ESP32 按 NVS 写接收机 RAM → 修改**只写 NVS，不自动保存**到接收机。
+  - 连板口（COM2）波特率：ESP32 必须先连上接收机才能下发，接收机必须自己记住 → `gnss baud` 验证成功后**自动保存**一次。
+  - 工作模式切换（移动站↔基站/smartBase，大量报文）：成功后**自动保存**一次，接收机上电即处于正确模式。
+  - 其他 COM 口（经 `gnss send` 透传）：ESP32 不记录也不重放 → 只能手动 `gnss save`。
+  启动流程本身**不**发 SAVECONFIG。兜底：开机探测成功后若实际波特率与 NVS `gnss/baud` 不同（保存失败、外部改动、换模块），
+  自动切到 NVS 值并保存一次；失败只打 W、本次开机不再重试。
 - 持久化的接收机设置：主机口波特率、接收机端口号、各报文速率、工作模式（rover / base / smartbase）、基站参数（§2.6）。
 - `gnss freset`：向接收机发出厂复位（Unicore `FRESET`；u-blox CFG-CFG clear），**同时**把 NVS 的 gnss 用户键恢复缺省，再重新探测。
 
@@ -114,14 +117,14 @@ gnss out default               # 恢复缺省
 - 分区表变更需要整片烧录（含分区表）；已出货板子上的 SN 靠 §2.2 迁移保住，`spiffs` 无数据可丢。
 - coredump 分区占 64 KB，换来现场崩溃可追。
 - 多一步早期加载，启动时间预计增加 <20 ms（C1 实测记录）。
-- ADR-0010 §2.4 “不 SAVECONFIG”改为“仅工作模式切换后自动 SAVECONFIG，其余手动 `gnss save`”。
+- ADR-0010 §2.4 “不 SAVECONFIG”改为“仅连板口波特率变更与工作模式切换后自动 SAVECONFIG，其余手动 `gnss save`”。
 
 ## 4 实施计划（C 系列）
 
 | 卡 | 内容 | 依赖 |
 | --- | --- | --- |
 | C1 | 分区表 + coredump；`nvs_fac` 与 SN 迁移；`nvs_store_init` 只擦用户分区；存储启动日志（§2.3-4）；`config` 共用格式化 | — |
-| C2 | 接收机配置持久化（波特率/端口/模式键）、`gnss save`（自动保存仅随 C5a 模式切换）、`gnss freset`、统一 `gnss out`（Hz） | C1 |
+| C2 | 接收机配置持久化（波特率/端口/模式键）、`gnss save`（自动保存仅随波特率变更与 C5a 模式切换）、`gnss freset`、统一 `gnss out`（Hz） | C1 |
 | C3 | `stepEarlyConfig` 两段加载、`BootConfig` 校验、启动失败计数回退 | C1 |
 | C4 | `freset` / `factory erase`、诊断开关、蓝牙配对窗口 | C1、C3 |
 | C5a | 工作模式与基站 RTCM 报文集合 | C2 |

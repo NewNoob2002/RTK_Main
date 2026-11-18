@@ -23,7 +23,7 @@ ADR-0012（Receiver/Controller 契约，尤其 §2.4 输出计划、§2.7 读回
 
 ### 1.2 `gnss save`（main）
 
-> 2026-11-18 用户修订：out/rate/baud 等修改**不再自动 SAVECONFIG**，只写 NVS；自动保存只在工作模式切换（C5a）时做，本卡保留可复用的保存请求接口但不在任何现有命令后自动触发。开机探测到的波特率与 NVS `gnss/baud` 不同时自动切到 NVS 值。
+> 2026-11-18 用户修订（ADR-0014 §2.4）：out/rate 修改**不自动 SAVECONFIG**，只写 NVS；`gnss baud` 验证成功后**自动保存**（接收机必须自己记住连板口速率）；工作模式切换（C5a）复用同一保存接口。开机探测到的波特率与 NVS `gnss/baud` 不同时自动切到 NVS 值并保存，失败打 W 不重试。
 
 - 用户改动（`gnss out`、`gnss rate`、本卡新增的 `gnss baud`）**成功应用到接收机**并写 NVS 后，自动 `requestSave()` 一次；失败只记 W
   `<cfg> Receiver save failed (<原因>)`，不回滚已生效的设置。启动配置流程**不**发保存。
