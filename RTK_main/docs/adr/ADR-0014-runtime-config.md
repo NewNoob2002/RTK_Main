@@ -1,6 +1,6 @@
 # ADR-0014：运行期配置、出厂数据分区与恢复出厂
 
-状态：已批准（2026-11-18）。决定来自用户（2026-11-17）；标 **〔提议〕** 的细节由 Claude 补充，用户 2026-11-18 全部同意。由 C 系列任务卡实施（C1–C5，见 §4）
+状态：已批准（2026-11-18）。决定来自用户（2026-11-17）；标 **〔提议〕** 的细节由 Claude 补充，用户 2026-11-18 全部同意。由 C 系列任务卡实施（C1–C5，见 §4；截至 2026-11-18 C1–C5a 完成，C5b 暂停，C5c 待定）
 关联：ADR-0010 §2.4（流动站配置，本 ADR 修订）与 §2.10（NVS 目录）、ADR-0011（启动与内存）、ADR-0007（蓝牙会话）、
 `docs/protocol/alarm_protocol.md`（报警器协议，暂停中，不在本 ADR 范围）
 
@@ -128,15 +128,15 @@ gnss out default               # 恢复缺省
 
 ## 4 实施计划（C 系列）
 
-| 卡 | 内容 | 依赖 |
-| --- | --- | --- |
-| C1 | 分区表 + coredump；`nvs_fac` 与 SN 迁移；`nvs_store_init` 只擦用户分区；存储启动日志（§2.3-4）；`config` 共用格式化 | — |
-| C2 | 接收机配置持久化（波特率/端口/模式键）、`gnss save`（自动保存仅随波特率变更与 C5a 模式切换）、`gnss freset`、统一 `gnss out`（Hz） | C1 |
-| C3 | `stepEarlyConfig` 两段加载、`BootConfig` 校验、启动失败计数回退 | C1 |
-| C4 | `freset` / `factory erase`、诊断开关、蓝牙配对窗口 | C1、C3 |
-| C5a | 工作模式与基站 RTCM 报文集合 | C2 |
-| C5b | smartBase（4 站点、1 m） | C5a |
-| C5c | 其他输出去向（sink） | C5a，待用户再定 |
+| 卡 | 内容 | 依赖 | 状态 |
+| --- | --- | --- | --- |
+| C1 | 分区表 + coredump；`nvs_fac` 与 SN 迁移；`nvs_store_init` 只擦用户分区；存储启动日志（§2.3-4）；`config` 共用格式化 | — | 已完成（`e400e74`、`422a43a`） |
+| C2 | 接收机配置持久化（波特率/端口/模式键）、`gnss save`（自动保存仅随波特率变更与 C5a 模式切换）、`gnss freset`、统一 `gnss out`（Hz） | C1 | 已完成（`a2d70a1`、`df668f2`） |
+| C3 | `stepEarlyConfig` 两段加载、`BootConfig` 校验、启动失败计数回退 | C1 | 已完成（`bbc23f0`） |
+| C4 | `freset` / `factory erase`、诊断开关、蓝牙配对窗口 | C1、C3 | 已完成（`837d12d`、`b318f55`、`ee1b73c`） |
+| C5a | 工作模式与基站 RTCM 报文集合 | C2 | 已完成（`2f78b0e`；遗留清理 C5a2 `abf1178`）；外场 HIL 待测，见 `docs/reports/C5a.md` 末尾 |
+| C5b | smartBase（4 站点、1 m） | C5a | **暂停**（用户 2026-11-18） |
+| C5c | 其他输出去向（sink） | C5a，待用户再定 | 未开始，待用户定 sink 种类 |
 
 每张卡：主机测试覆盖新逻辑，IDF 构建 0 warning，G5b/G7b/format/doc_check 全过，上板 HIL；分区或 NVS 布局变化的卡附“老板子升级”实测
 （先烧旧固件写入 SN 和白名单，再烧新固件确认迁移）。

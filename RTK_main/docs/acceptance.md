@@ -5,10 +5,12 @@
 
 ## 1. 软件门禁（每批次结束由验收方在独立构建目录重跑，不采信实现方报告）
 
+一键运行：`tools/ci/run_gates.sh [--base <rev>] [--prefix <名>]`（本地 CI，覆盖 G1、G2/G2b/G2c、G3/G3b、G5、G5b、G7b 与 doc_check；合并到 main 前必须全过）。G4 体积、G6/G7 审查、G8 代码审查仍由验收方人工完成。
+
 | ID | 检查 | 命令 / 方法 | 通过标准 |
 | --- | --- | --- | --- |
 | G1 | 冻结文件未改 | `sha256sum -c docs/frozen.sha256` | 全部 OK |
-| G2 | host 单元测试 | `cmake -S test/host -B builds/qa-host && cmake --build builds/qa-host && ctest --test-dir builds/qa-host` | 8/8 可执行文件，93 用例 0 失败（C 测试只链接 C 库） |
+| G2 | host 单元测试 | `AGENTS.md` §5 列出的全部主机测试目录（含 `test/gnss` 全驱动）各自 cmake + ctest | 全部 ctest 0 失败（C 测试只链接 C 库） |
 | G2b | ASan/UBSan | 同上，加 `-fsanitize=address,undefined` | 0 失败，无 sanitizer 报告 |
 | G2c | NVS 出厂分区主机测试 | `cmake -S test/nvs_store -B builds/qa-nvs-store` 后 build 与 ctest，再用 `-fsanitize=address,undefined` 做独立构建和 ctest | 迁移、失败重试、回退及用户分区擦除隔离全部通过 |
 | G3 | 目标构建 | 干净构建目录 `idf.py -B builds/qa-tgt build` | 退出码 0，0 warning |

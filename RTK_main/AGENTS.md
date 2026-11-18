@@ -88,7 +88,8 @@ idf.py -B builds/<任务> build                               # 0 warning；另�
 idf.py -B builds/<任务> size
 # host 测试：以下每个目录都要普通构建 + ASan/UBSan 构建各跑一次
 #   test/host test/app_fw test/services test/stream_demux test/bt_reconnect test/cli test/gnss
-#   tools/main_host_check tools/t13_host_check
+#   test/nvs_store tools/main_host_check tools/t13_host_check
+#   test/gnss 另做全驱动构建：-DRTK_GNSS_DRV_COMNAV=ON -DRTK_GNSS_DRV_UBLOX=ON
 cmake -S <目录> -B builds/<任务>-<名> -G Ninja && cmake --build builds/<任务>-<名> && ctest --test-dir builds/<任务>-<名> --output-on-failure
 cmake -S <目录> -B builds/<任务>-<名>-asan -G Ninja \
       -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize=vptr -fno-omit-frame-pointer -g" \
@@ -98,6 +99,8 @@ sha256sum -c docs/frozen.sha256                              # 冻结输入未�
 clang-format --style=file --dry-run --Werror <改动的 C/C++ 文件>
 python3 -I tools/doc_check/doc_check.py --base <任务基线提交>
 ```
+
+合并到 `main` 前由 Architect 运行 `tools/ci/run_gates.sh --base <分支基线>`（本地 CI，一次跑完上述全部门禁，日志在 `builds/ci-logs/`）。
 
 构建目录约定：所有构建（idf 主工程、host、ASan、测试工程）一律放 `builds/<名称>/`，不得在仓库根或源码目录下新建 `build*`。
 
