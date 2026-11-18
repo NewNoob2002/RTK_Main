@@ -23,7 +23,7 @@ public:
     static constexpr std::size_t kBufSize = std::max({Ds.maxFrame...});
     static constexpr std::size_t kBufSizeMax = 65535U; // 单缓冲区上限（uint16 长度字段）
     static_assert(kBufSize >= 1 && kBufSize <= kBufSizeMax,
-                  "StaticDemux: max_frame 必须在 1..65535");
+                  "StaticDemux: maxFrame 必须在 1..65535");
 
     constexpr StaticDemux() noexcept = default;
     ~StaticDemux() = default;
@@ -99,7 +99,7 @@ public:
         // 视为常量表达式，模板实参比较在任何模式下都是编译期常量。
         constexpr std::array<bool, kCount> kMatch{std::is_same_v<Tag<D>, Tag<Ds>>...};
         static_assert((std::is_same_v<Tag<D>, Tag<Ds>> || ...),
-                      "StaticDemux::index_of: 解码器不在本实例中");
+                      "StaticDemux::indexOf: 解码器不在本实例中");
         for (std::size_t i = 0; i < kCount; ++i) {
             if (kMatch[i]) {
                 return static_cast<uint8_t>(i); // i < kCount ≤ 8

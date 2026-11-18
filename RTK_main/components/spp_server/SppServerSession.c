@@ -398,7 +398,7 @@ static void spp_server_ctrl_settle_locked(uint32_t slot, esp_err_t err)
 
 /**
  * @brief  每轮处理所有会话待投递的控制请求
- * @note   发送任务上下文；锁内取请求、锁外投递、锁内结算。
+ * @note   发送任务上下文；锁内取请求，锁外投递与追踪，只有 REJECT 需锁内结算。
  */
 void spp_server_ctrl_process(void)
 {
@@ -414,12 +414,11 @@ void spp_server_ctrl_process(void)
         }
 
         const esp_err_t err = spp_server_ctrl_deliver(&req);
-        if (req.type != SPP_SERVER_CTRL_REJECT) {
-            continue;
+        if (req.type == SPP_SERVER_CTRL_REJECT) {
+            taskENTER_CRITICAL(&s_spp_mux);
+            spp_server_ctrl_settle_locked(slot, err);
+            taskEXIT_CRITICAL(&s_spp_mux);
         }
-        taskENTER_CRITICAL(&s_spp_mux);
-        spp_server_ctrl_settle_locked(slot, err);
-        taskEXIT_CRITICAL(&s_spp_mux);
         if (err != ESP_OK) {
             /* 控制类型与追踪枚举一一对应（PIN/CONFIRM/REJECT），见 spp_server_trace_ctrl_t。 */
             spp_server_trace(SPP_SERVER_TRACE_CTRL_ERR, req.handle, (uint32_t)req.type,

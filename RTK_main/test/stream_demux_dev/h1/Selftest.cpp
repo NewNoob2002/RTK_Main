@@ -113,7 +113,7 @@ public:
         ++frames;
     }
 
-    void on_unknown(std::span<const uint8_t> bytes) noexcept override
+    void onUnknown(std::span<const uint8_t> bytes) noexcept override
     {
         capture(bytes, 0);
         ++unknown_calls;
@@ -193,7 +193,7 @@ void run_stream(std::span<const uint8_t> input, const std::array<uint8_t, 1024> 
     check(sink.tags == expected);
     check(guarded.front() == 0xC1 && guarded.back() == 0xD2);
     check(s_first_calls == 0);
-    std::size_t total = dmx.stats().unknown_bytes;
+    std::size_t total = dmx.stats().unknownBytes;
     for (const auto &stats : dmx.stats().decoder) {
         total += stats.bytes;
     }
@@ -222,14 +222,14 @@ void check_api()
     invalid.name = nullptr;
     check(dmx.init(std::span{table}.first(1), buf, sink) == demux::Error::kInvalidArg);
     invalid = kLong;
-    invalid.first_byte = nullptr;
+    invalid.firstByte = nullptr;
     check(dmx.init(std::span{table}.first(1), buf, sink) == demux::Error::kInvalidArg);
     invalid = kLong;
     invalid.step = nullptr;
     check(dmx.init(std::span{table}.first(1), buf, sink) == demux::Error::kInvalidArg);
     invalid = kLong;
-    for (std::size_t max_frame : {std::size_t{0}, std::size_t{65536}, SIZE_MAX}) {
-        invalid.max_frame = max_frame;
+    for (std::size_t maxFrame : {std::size_t{0}, std::size_t{65536}, SIZE_MAX}) {
+        invalid.maxFrame = maxFrame;
         check(dmx.init(std::span{table}.first(1), buf, sink) == demux::Error::kInvalidArg);
     }
     check(dmx.init(kDecoders, std::span{buf}.first(5), sink) == demux::Error::kInvalidArg);
@@ -244,13 +244,13 @@ void check_api()
     check(dmx.abort() == demux::Error::kOk);
     check(sink.frames == 2 && dmx.stats().aborts == 1);
     check(dmx.stats().decoder[0].rejects == 1 && dmx.stats().decoder[1].frames == 1);
-    check(dmx.stats().unknown_bytes == 2);
+    check(dmx.stats().unknownBytes == 2);
     check(dmx.abort() == demux::Error::kOk && dmx.stats().aborts == 1);
     sink.used = 0;
     check(dmx.init(kDecoders, buf, sink) == demux::Error::kOk);
     check(dmx.feed(kInput) == demux::Error::kOk);
-    dmx.reset_stats();
-    check(dmx.busy() && dmx.stats().unknown_bytes == 0);
+    dmx.resetStats();
+    check(dmx.busy() && dmx.stats().unknownBytes == 0);
     check(dmx.abort() == demux::Error::kOk);
     check(dmx.init({}, buf, sink) == demux::Error::kInvalidArg);
     check(!dmx.busy() && dmx.stats().aborts == 0);
@@ -275,7 +275,7 @@ void check_bad_need()
         check(dmx.feed(kInput) == demux::Error::kOk);
         check(!dmx.busy());
         check(dmx.stats().decoder[0].rejects == 1 && dmx.stats().resyncs == 1);
-        check(dmx.stats().unknown_bytes == 1);
+        check(dmx.stats().unknownBytes == 1);
         check(dmx.stats().overflows == (need >= 8 ? 1U : 0U));
     }
 }
@@ -319,9 +319,9 @@ void check_eighth_candidate()
     check(dmx.init(table, buf, sink) == demux::Error::kOk);
     check(dmx.feed(kInput) == demux::Error::kOk);
     check(sink.last_index == 7 && dmx.stats().decoder[7].frames == 1 &&
-          dmx.stats().unknown_bytes == 2);
+          dmx.stats().unknownBytes == 2);
     demux::StaticDemux<kStar> fixed;
-    static_assert(decltype(fixed)::kBufSize == 1 && decltype(fixed)::index_of<kStar>() == 0);
+    static_assert(decltype(fixed)::kBufSize == 1 && decltype(fixed)::indexOf<kStar>() == 0);
     check(fixed.init(sink) == demux::Error::kOk);
     check(fixed.feed(kInput) == demux::Error::kOk);
     check(fixed.abort() == demux::Error::kOk && !fixed.busy());

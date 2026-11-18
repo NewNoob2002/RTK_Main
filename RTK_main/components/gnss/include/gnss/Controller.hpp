@@ -187,7 +187,7 @@ public:
     /**
      * @brief  分流器识别出的一帧（任意协议），交给当前阶段处理
      * @param  dec: 该帧的解码器（协议名）
-     * @param  frame: 整帧字节（含帧头，不含分帧器剥离的同步字）
+     * @param  frame: 分流器交付的完整帧，包含协议同步或起始字节
      * @param  nowMs: 当前时间，只用于判“模块还在说话”
      * @note   探测阶段试匹配型号，等待应答时判 ACK/NACK；其余帧只刷新活动时间戳
      *         （kReadback 窗口例外：只有命中 matchReadback() 的行才刷新）
@@ -218,8 +218,8 @@ public:
     [[nodiscard]] const Receiver &receiver() const noexcept;
     /**
      * @brief  最近一次探测发送所用的驱动（追踪日志用）
-     * @retval 探测中为当前候选项；未在探测中时为 nullReceiver()
-     * @note   与 detected() 不同：探测失败也会保留最后一个候选项，因此可用来区分“发的是哪家的查询”
+     * @retval 最近一次发送查询的候选驱动；候选指针为空时返回 nullReceiver()
+     * @note   探测成功或失败后仍可保留最后一个候选项，供诊断查询发给了哪个家族。
      */
     [[nodiscard]] const Receiver &probeReceiver() const noexcept;
 

@@ -47,8 +47,8 @@ public:
      * @retval kFix GGA 已更新 fix()
      * @retval kAux RMC/GSA 已更新 fix() 的辅助字段（不改 updateMs）
      * @retval kSatsPart GSV 收到一部分，尚未成轮
-     * @retval kSatsReady 一轮 GSV 收齐，sats() 已整体替换
-     * @retval kMalformed 字段数量/格式错误，未改变任何状态
+     * @retval kSatsReady GGA 已更新 fix()，并把本轮已收齐的星座整体发布到 sats()
+     * @retval kMalformed 语句形状、字段数量或字段格式错误，累加 stats().malformed
      * @note   GSA used 标记：同一历元内收到的所有 GSA 的 PRN 并集，在下一次 kSatsReady 时合并进卫星表。
      *         GSV 成轮判定：一个系统的“总条数”语句收齐算该系统完成；遇到 GGA（新历元）时把已完成的
      *         系统发布。非线程安全，不阻塞。

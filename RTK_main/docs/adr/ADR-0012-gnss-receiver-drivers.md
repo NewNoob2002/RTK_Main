@@ -41,7 +41,8 @@ components/gnss（纯 C++20，无 IDF；依赖 stream_demux、app_fw）
   drivers/UnicoreReceiver.hpp   UM980/981/982（N4 平台 ASCII）
   drivers/UbloxReceiver.hpp     ZED-F9P（UBX VALSET）
   drivers/ComnavReceiver.hpp    K803（实验性，默认不编译）
-  DriverList.inc       驱动登记表（X-macro），唯一需要为新驱动改动的公共文件
+  src/Registry.cpp     按探测优先级排列的 constinit 驱动表
+  src/DriverInstances.hpp  驱动开关与基准叶子实例声明
   Controller.hpp       探测/配置/输出/监视状态机：持有 const Receiver*，不做 IO、不计时
   NmeaParser.hpp       不变
 main/modules/gnss      只依赖 gnss::Receiver 接口；不再 include 任何 drivers/* 或厂家解码器头
@@ -129,16 +130,12 @@ protected:
 
 ### 2.3 驱动登记、选择与缓存（修订 ADR-0010 §2.2 探测顺序、§2.8 Kconfig）
 
-**登记表** `components/gnss/include/gnss/DriverList.inc`（顺序即探测优先级）：
-
-```cpp
-// GNSS_DRIVER(Kconfig 后缀, 家族, 类型, 头文件)
-GNSS_DRIVER(UNICORE, kUnicore, UnicoreReceiver, "gnss/drivers/UnicoreReceiver.hpp")
-GNSS_DRIVER(UBLOX,   kUblox,   UbloxReceiver,   "gnss/drivers/UbloxReceiver.hpp")
-GNSS_DRIVER(COMNAV,  kComnav,  ComnavReceiver,  "gnss/drivers/ComnavReceiver.hpp")
-```
-
-`Registry.cpp` 展开它生成 `enabledReceivers()`（按 Kconfig 过滤）与 `receiverFor(Family)`。新增驱动 = 新建 `drivers/XxxReceiver.{hpp,cpp}` + 表中加一行 + Kconfig 加一项 + `Family` 追加枚举值；**main 不改**。
+**登记表（ADR-0013 §2.3）** 位于 `components/gnss/src/Registry.cpp`。文件作用域的 `constinit`
+数组直接保存基准叶子实例的地址，按 Unicore、u-blox、ComNav 的顺序探测。`DriverInstances.hpp`
+声明实例并归一化驱动开关。`enabledReceivers()` 返回启用项的只读视图，
+`receiverFor(Family)` 从中查找对应家族的基准驱动。
+新增家族时，在驱动源文件定义基准叶子实例，补齐 `DriverInstances.hpp` 的声明与开关及
+`Registry.cpp` 的登记项，并更新构建源文件表、Kconfig 和 `Family` 枚举。
 
 **Kconfig**（`components/gnss/Kconfig`）：
 | 选项 | 默认 | 说明 |
@@ -194,16 +191,16 @@ GNSS_DRIVER(COMNAV,  kComnav,  ComnavReceiver,  "gnss/drivers/ComnavReceiver.hpp
 
 用户要求命令/应答操作以类组织、型号差异用派生表达，而不是在家族驱动里继续堆 `switch (model)`。
 
-- **切换钩子。** `Receiver` 新增 `[[nodiscard]] virtual const Receiver &forModel(Model model) const noexcept;`，默认返回 `*this`。Controller 在 `matchProbe` 命中后令 `detected_.receiver = &probe_receiver_->forModel(result.model)`；此后配置、输出、应答判定、帧归类全部经型号驱动。`caps` 的发布同样改用 `detected_.receiver`。`enabledReceivers()` / `receiverFor(Family)` / DriverList.inc 仍按家族登记（探测与 NVS 提示只认家族），型号子类不进登记表。
+- **切换钩子。** `Receiver` 新增 `[[nodiscard]] virtual const Receiver &forModel(Model model) const noexcept;`，默认返回 `*this`。Controller 在 `matchProbe` 命中后令 `detected_.receiver = &probe_receiver_->forModel(result.model)`；此后配置、输出、应答判定、帧归类全部经型号驱动。`caps` 的发布同样改用 `detected_.receiver`。`Registry.cpp` 为每个家族登记一个基准叶子实例，供探测与 NVS 提示使用。
 - **家族驱动可派生。** 去掉 `final`；命令生成与应答解析改为 `protected static` 成员（`cmdUnlog`、`cmdModeRover`、`cmdConfigBaud`、`cmdLogMsg`、`cmdUnlogMsg`、`cmdVersionQuery`；`respHasValidTail`、`respFindTag`、`respEchoMatches`、`respText`），子类直接复用；型号差异点：`protected virtual roverScript()`（返回脚本步骤表，型号要加配置步骤时覆盖）与已有的公有虚函数 `caps(Model)`；`outputMask`、`buildOutput` 一律经 `caps()` 判断 HEADING 等能力，所以型号子类通常只需覆盖 `caps`。
-- **家族驱动只描述基准型号。** `UnicoreReceiver` 描述 UM980/UM981（UM981 的 `kIns` 能力位仍在 `model_caps` 内，等真正使用惯导时再建 `Um981Receiver`）；不再认 HEADING。`Um982Receiver final : public UnicoreReceiver`（同一 .cpp，`constinit` 静态实例，访问器 `um982Receiver()`）覆盖 `caps`（加 `kHeading`），HEADINGA 随之进入 `outputMask` 与 `buildOutput`。对家族驱动直接以 `Model::kUm982` 调用得到的是 UM980 能力，这是有意的：调用方必须先 `forModel`。
-- **规则。** 只在型号真有差异时派生；继承最多两层（Receiver → 家族 → 型号）；新增型号 = 子类 + 家族 `forModel` 一个分支，不改 Controller、main。u-blox、ComNav 本期只做“去 final + protected static 命令/应答”整理，不建子类。
+- **家族驱动只描述基准型号。** `UnicoreReceiver` 描述 UM980/UM981（UM981 的 `kIns` 能力位由 `UnicoreReceiver::caps()` 返回，等真正使用惯导时再建 `Um981Receiver`）。`Um982Receiver final : public UnicoreReceiver` 覆盖 `caps`，增加 `kHeading`，HEADINGA 随之进入 `outputMask` 与 `buildOutput`。先用 `receiverFor(Family::kUnicore)` 取得基准驱动，再用 `forModel(Model::kUm982)` 选择双天线驱动。
+- **规则。** 只在型号确有差异时增加专用实现，继承最多两层（Receiver → 家族 → 型号）。有差异的新型号通过子类和家族 `forModel()` 选择。u-blox 和 ComNav 的基准叶子直接复用家族行为。
 - **代价。** 每个子类一个 vtable（几十字节 flash）+ 一个静态实例（一个 vptr）。
-- **析构与叶子类（2026-11-17 修订，S1，ADR-0013 §2.5，CPP-011）。** 家族类 `UnicoreReceiver`、`UbloxReceiver`、`ComnavReceiver` 只作基类：构造函数与析构函数都是 `protected`，析构非虚，删除拷贝/移动，不能直接实例化。每个型号只实例化 `final` 叶子类的 `constinit` 静态对象：`Um980Receiver`（UM980/UM981 共用）、`Um982Receiver`、`ZedF9pReceiver`、`K803Receiver`。叶子类不改 `name()`（日志、NVS、golden 文本不变）。`unicoreReceiver()`/`ubloxReceiver()`/`comnavReceiver()` 返回各自的基准叶子实例；`forModel` 返回叶子实例。驱动对象全部平凡析构，不生成删除析构函数（`D0Ev`），G7b 不再需要相应豁免。
+- **析构与叶子类（2026-11-17 修订，S1，ADR-0013 §2.5，CPP-011）。** 家族类 `UnicoreReceiver`、`UbloxReceiver`、`ComnavReceiver` 只作基类：构造函数与析构函数都是 `protected`，析构非虚，删除拷贝/移动，不能直接实例化。驱动实例均为 `final` 叶子类的 `constinit` 静态对象：`Um980Receiver`（UM980/UM981 共用）、`Um982Receiver`、`ZedF9pReceiver`、`K803Receiver`。叶子类沿用家族的 `name()`（日志、NVS、golden 文本不变）。`receiverFor()` 查找已启用家族的基准叶子，`forModel()` 返回对应的叶子实例。驱动对象全部平凡析构，不生成删除析构函数（`D0Ev`），G7b 不再需要相应豁免。
 
 ## 3. 冻结接口（修订 ADR-0010 §3）
 
-- 新冻结：`components/gnss/include/gnss/{Receiver,NullReceiver}.hpp`、`gnss/DriverList.inc`、`gnss/drivers/*.hpp`
+- 新冻结：`components/gnss/include/gnss/{Receiver,NullReceiver}.hpp`、`gnss/drivers/*.hpp`
 - 修订：`gnss/Types.hpp`（OutputMsg、familyName、*_from_u8）、`gnss/Controller.hpp`（Receiver*、kOutput 阶段、requestOutput、stats 掩码；P3c：kReadback、requestReadback、readback 统计）、`demux/decoders/UnicoreResp.hpp`（`$CONFIG`）、`core/services/GnssService.hpp`（supported 掩码）、`main/def/GnssDef.hpp`（stats 字段）
 - 删除：`gnss/Dialect.hpp`、`gnss/dialects/*.hpp`
 - `docs/frozen.sha256` 同步重算

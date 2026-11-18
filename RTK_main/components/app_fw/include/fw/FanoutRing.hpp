@@ -87,7 +87,7 @@ public:
      * @retval Result::kOk 初始化成功
      * @retval Result::kInvalidArg 存储过小或过大、maxRecord 越界、锁表不成对
      * @retval Result::kInvalidState 已经初始化过
-     * @note   仅启动前单线程调用，非 ISR；持注入锁，不阻塞、不分配堆。
+     * @note   仅启动前单线程调用，非 ISR；仅绑定锁表，不阻塞、不分配堆。
      */
     [[nodiscard]] Result init(std::span<uint8_t> storage, size_t maxRecord,
                               const LockOps &lock) noexcept;
@@ -105,6 +105,7 @@ public:
      * @brief  注销读者，释放 id 供再次 attach。
      * @param  readerId: 要注销的读者 id。
      * @retval Result::kOk 注销成功
+     * @retval Result::kInvalidState 尚未初始化
      * @retval Result::kInvalidArg id 越界或该 id 未 attach
      * @retval Result::kBusy 该读者正持有租约
      * @note   任务上下文（非 ISR）；持注入锁，不阻塞。
@@ -147,7 +148,7 @@ public:
      * @retval Result::kOk 初始化成功
      * @retval Result::kInvalidArg 容量非 2 的幂、过小或超过 2^31，maxRecord 越界，锁表不成对
      * @retval Result::kInvalidState 已经初始化过
-     * @note   仅启动前单线程调用，非 ISR；持注入锁，不阻塞、不分配堆。
+     * @note   仅启动前单线程调用，非 ISR；仅绑定锁表，不阻塞、不分配堆。
      */
     [[nodiscard]] Result initTyped(std::span<uint8_t> storage, size_t maxRecord,
                                    const LockOps &lock) noexcept;
@@ -167,6 +168,7 @@ public:
      * @param  readerId: 本读者 id。
      * @param  mask: 新订阅位图（bit n = type n），0 表示暂停接收。
      * @retval Result::kOk 修改成功
+     * @retval Result::kInvalidState 尚未初始化
      * @retval Result::kInvalidArg id 越界或未 attach
      * @retval Result::kNotSupported 环为 legacy
      * @retval Result::kBusy 该读者正持有租约

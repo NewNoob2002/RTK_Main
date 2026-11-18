@@ -1,9 +1,9 @@
 // H2 自测（不交付、不参与构建；任务卡允许放 test/stream_demux_dev/h2/）。
 // 逐前缀驱动六个解码器（五个内置协议 + 产品帧），核对：
-//   1. step 契约：中间前缀一律 kNeedMore、need ≥ 1、len + need ≤ max_frame、need 不越过帧尾；
+//   1. step 契约：中间前缀一律 kNeedMore、need ≥ 1、len + need ≤ maxFrame、need 不越过帧尾；
 //   2. 纯函数性：同一前缀调用两次结论与 need 完全相同；
 //   3. 合法帧在整段长度上给出 kFrame；破坏末尾字节后不再给出 kFrame；
-//   4. 每个早拒绝点；长度超限时在 len + 1 > max_frame 处拒绝；
+//   4. 每个早拒绝点；长度超限时在 len + 1 > maxFrame 处拒绝；
 //   5. Crc.hpp 的核对值、分段累计；产品帧 frame_view 的字段与拒绝条件。
 
 #include <algorithm>
@@ -54,7 +54,7 @@ demux::Step step_of(const demux::Decoder &decoder, std::initializer_list<uint8_t
 void check_valid_frame(const demux::Decoder &decoder, std::span<const uint8_t> frame,
                        const char *name)
 {
-    check(decoder.first_byte(frame[0]), name);
+    check(decoder.firstByte(frame[0]), name);
     for (std::size_t len = 1U; len < frame.size(); ++len) {
         const std::span<const uint8_t> prefix = frame.first(len);
         std::size_t need_a = 0U;
@@ -64,7 +64,7 @@ void check_valid_frame(const demux::Decoder &decoder, std::span<const uint8_t> f
         check((res_a == res_b) && (need_a == need_b), name, len);
         check(res_a == demux::Step::kNeedMore, name, len);
         check(need_a >= 1U, name, len);
-        check((len + need_a) <= decoder.max_frame, name, len);
+        check((len + need_a) <= decoder.maxFrame, name, len);
         // 合法帧的每个前缀都不得要求超出该帧实际字节数。
         check((len + need_a) <= frame.size(), name, len);
     }
@@ -95,8 +95,8 @@ void check_reject(const demux::Decoder &decoder, std::initializer_list<uint8_t> 
     check(step_of(decoder, bytes, need) == demux::Step::kReject, name, bytes.size());
 }
 
-/** 无长度字段的 ASCII 协议：正文一直合法但永不结束，必须在 max_frame 之内拒绝且从不超限。 */
-/** 超长检查缓冲：须容纳被测解码器 max_frame 加 1 个越界探测字节（hash 解码器上限已由 2048 提到 4096）。 */
+/** 无长度字段的 ASCII 协议：正文一直合法但永不结束，必须在 maxFrame 之内拒绝且从不超限。 */
+/** 超长检查缓冲：须容纳被测解码器 maxFrame 加 1 个越界探测字节（hash 解码器上限已由 2048 提到 4096）。 */
 constexpr std::size_t kOverflowBufBytes =
     std::max(demux::nmea::kMaxFrame, demux::unicore_hash::kMaxFrame) + 1U;
 
@@ -104,8 +104,8 @@ void check_length_overflow(const demux::Decoder &decoder, uint8_t lead, uint8_t 
                            const char *name)
 {
     static std::array<uint8_t, kOverflowBufBytes> buf{};
-    if (decoder.max_frame >= buf.size()) {
-        check(false, name, decoder.max_frame); // 新解码器上限超出缓冲：报失败而不是越界
+    if (decoder.maxFrame >= buf.size()) {
+        check(false, name, decoder.maxFrame); // 新解码器上限超出缓冲：报失败而不是越界
         return;
     }
     buf.fill(0U);
@@ -113,14 +113,14 @@ void check_length_overflow(const demux::Decoder &decoder, uint8_t lead, uint8_t 
     buf[1] = second;
     std::size_t last_need = 0U;
     std::size_t rejected_at = 0U;
-    for (std::size_t len = 2U; len <= decoder.max_frame; ++len) {
+    for (std::size_t len = 2U; len <= decoder.maxFrame; ++len) {
         buf[len] = 'A';
         std::size_t need = 0U;
         const demux::Step result =
             decoder.step(std::span<const uint8_t>(buf.data(), len + 1U), need);
         if (result == demux::Step::kNeedMore) {
             check(need >= 1U, name, len);
-            check((len + 1U + need) <= decoder.max_frame, name, len);
+            check((len + 1U + need) <= decoder.maxFrame, name, len);
             last_need = need;
         } else {
             check(result == demux::Step::kReject, name, len);
@@ -128,7 +128,7 @@ void check_length_overflow(const demux::Decoder &decoder, uint8_t lead, uint8_t 
             break;
         }
     }
-    check((rejected_at == decoder.max_frame) || ((rejected_at == 0U) && (last_need != 0U)), name,
+    check((rejected_at == decoder.maxFrame) || ((rejected_at == 0U) && (last_need != 0U)), name,
           rejected_at);
 }
 
@@ -138,21 +138,21 @@ void check_crc()
     const std::span<const uint8_t> text(reinterpret_cast<const uint8_t *>(digits), 9U);
 
     check(demux::crc::crc24q(text) == 0xCDE703U, "crc24q(\"123456789\")");
-    check(demux::crc::crc32_novatel(text) == 0x2DFD2D88U, "crc32_novatel(\"123456789\")");
-    check(demux::crc::crc32_novatel({}) == 0U, "crc32_novatel(\"\")");
+    check(demux::crc::crc32Novatel(text) == 0x2DFD2D88U, "crc32Novatel(\"123456789\")");
+    check(demux::crc::crc32Novatel({}) == 0U, "crc32Novatel(\"\")");
     // 分段累计：f(b, f(a, init)) == f(a || b, init)。
     check(demux::crc::crc24q(text.subspan(4U), demux::crc::crc24q(text.first(4U))) == 0xCDE703U,
           "crc24q 分段");
-    check(demux::crc::crc32_novatel(text.subspan(4U), demux::crc::crc32_novatel(text.first(4U))) ==
+    check(demux::crc::crc32Novatel(text.subspan(4U), demux::crc::crc32Novatel(text.first(4U))) ==
               0x2DFD2D88U,
-          "crc32_novatel 分段");
+          "crc32Novatel 分段");
     // 逐字节累计等价于整段。
     uint32_t acc = 0U;
     for (const uint8_t byte : text) {
         const uint8_t one[1] = {byte};
-        acc = demux::crc::crc32_novatel(std::span<const uint8_t>(one, 1U), acc);
+        acc = demux::crc::crc32Novatel(std::span<const uint8_t>(one, 1U), acc);
     }
-    check(acc == 0x2DFD2D88U, "crc32_novatel 逐字节累计");
+    check(acc == 0x2DFD2D88U, "crc32Novatel 逐字节累计");
 }
 
 void check_frame_view()
@@ -166,7 +166,7 @@ void check_frame_view()
     const std::optional<proto::FrameView> view = proto::demux_frame::view(data);
     check(view.has_value(), "view 合法帧");
     if (view.has_value()) {
-        check(view->msg_id == 0x0002U, "view msg_id");
+        check(view->msgId == 0x0002U, "view msgId");
         check(view->sender == 0x00U, "view sender");
         check(view->type == 0x04U, "view type");
         check(view->payload.size() == 4U, "view payload 长度");
@@ -269,7 +269,7 @@ int main()
                   0x00U, 0x01U, 0x01U},
                  "产品帧 payload_len 超限");
 
-    // 帧长未知的 ASCII 协议：永不结束时必须在本协议 max_frame 处拒绝
+    // 帧长未知的 ASCII 协议：永不结束时必须在本协议 maxFrame 处拒绝
     check_length_overflow(demux::nmea::kDecoder, 0x24U, 0x47U, "nmea 超长");
     check_length_overflow(demux::unicore_hash::kDecoder, 0x23U, 0x41U, "hash 超长");
 

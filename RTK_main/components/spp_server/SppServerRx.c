@@ -141,7 +141,7 @@ static bool spp_server_claim_pending_locked(spp_server_evt_type_t type, uint32_t
  * @brief  队列满时撤销刚登记的 pending 并累计丢弃
  * @param  type: 事件类型
  * @param  handle: 会话句柄
- * @retval 会话当前的累计丢弃字节数（写入 RX_DROP 事件内容）
+ * @retval 驱动累计丢失的队列事件数，用于 trace。
  * @note  需持 s_spp_mux；DATA 丢失还会置 rx_data_missed，供 poll_event 的 level 兜底补发。
  */
 static uint32_t spp_server_clear_pending_locked(spp_server_evt_type_t type, uint32_t handle)
@@ -178,6 +178,7 @@ void spp_server_evt_post(spp_server_evt_type_t type, uint32_t handle, const uint
         return;
     }
 
+    /* OPEN/CLOSE 不操作 pending 标志，入队由 xQueueSend 自身的临界区保护。 */
     if ((type == SPP_SERVER_EVT_RX_DROP) || (type == SPP_SERVER_EVT_DATA)) {
         taskENTER_CRITICAL(&s_spp_mux);
         const bool claimed = spp_server_claim_pending_locked(type, handle, dropped);
@@ -272,7 +273,7 @@ static bool spp_server_poll_tx_space(spp_server_evt_t *evt)
 /**
  * @brief  事件交给消费者后结算会话的 pending 标志
  * @param[in,out] evt: 已取出的事件；RX_DROP 时把累计丢弃数写回 evt->dropped
- * @note  需持 s_spp_mux；只处理 lifecycle_pending 且句柄匹配的会话，找不到时静默返回。
+ * @note  函数内部持 s_spp_mux；只处理 lifecycle_pending 且句柄匹配的会话。
  */
 static void spp_server_settle_event(spp_server_evt_t *evt)
 {

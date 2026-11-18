@@ -145,18 +145,25 @@ void printSysSection() noexcept
 #endif
 }
 
+namespace {
+
+/** 首行输出前取得的链路概览数据。 */
+struct LinkOverview {
+    LinkStatus link;
+    Sessions sessions;
+    AlarmState alarm;
+    LinkStats stats;
+};
+
 /**
  * @brief  打印 link 概览段（状态、会话、报警）
- * @note 控制台命令上下文；读一次快照后顺序打印，不阻塞。
+ * @param system: 与 sys 段共享的系统快照
+ * @param overview: 首行输出前取得的链路快照
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
  */
-void printStatusLink() noexcept
+void printStatusLink(const SystemStatus &system, const LinkOverview &overview) noexcept
 {
-    const auto &data = appContext().data;
-    const auto system = data.systemStatus.read();
-    const auto link = data.linkStatus.read();
-    const auto sessions = data.sessions.read();
-    const auto alarm = data.alarmState.read();
-    const auto stats = data.linkStats.read();
+    const auto &[link, sessions, alarm, stats] = overview;
     cli::printSection("link");
     cli::printKv("state", "%s (bt=%s, policy=%s, pair=%s)", system.linkRunning ? "running" : "down",
                  system.btReady ? "ready" : "err", policyName(link.policy),
@@ -172,13 +179,12 @@ void printStatusLink() noexcept
 
 /**
  * @brief  打印 rtcm 概览段（转发量、速率与错误计数）
- * @note 控制台命令上下文；读一次快照后顺序打印，不阻塞。
+ * @param rtcm: 首行输出前取得的 RTCM 快照
+ * @param demux: 首行输出前取得的分流统计
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
  */
-void printStatusRtcm() noexcept
+void printStatusRtcm(const RtcmStats &rtcm, const DemuxStats &demux) noexcept
 {
-    const auto &data = appContext().data;
-    const auto rtcm = data.rtcmStats.read();
-    const auto demux = data.demuxStats.read();
     const uint64_t rtcmKib = kibTenths(rtcm.bytes);
     cli::printSection("rtcm");
     cli::printKv("forward", "%" PRIu32 " frames, %llu.%llu KB, %" PRIu32 " B/s", rtcm.frames,
@@ -191,13 +197,12 @@ void printStatusRtcm() noexcept
 
 /**
  * @brief  打印 sys 概览段（堆、执行器，GNSS 启用时附 io 执行器与 GNSS 环形）
- * @note 控制台命令上下文；读一次快照后顺序打印，不阻塞。
+ * @param system: 与 link 段共享的系统快照
+ * @param exec: 首行输出前取得的链路执行器快照
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR；GNSS 快照在链路执行器统计输出后读取。
  */
-void printStatusSys() noexcept
+void printStatusSys(const SystemStatus &system, const rtos::ExecStats &exec) noexcept
 {
-    const auto &data = appContext().data;
-    const auto system = data.systemStatus.read();
-    const auto exec = data.execStats.read();
     const uint64_t freeKib = kibTenths(system.freeHeap);
     const uint64_t minKib = kibTenths(system.minFreeHeap);
     cli::printSection("sys");
@@ -211,6 +216,7 @@ void printStatusSys() noexcept
                  " ms  link_stk=%" PRIu32 " B",
                  exec.rounds, exec.overruns, exec.maxRoundMs, exec.stackFree);
 #if RTK_GNSS_ENABLED
+    const auto &data = appContext().data;
     const auto ioExec = data.ioExecStats.read();
     const auto gnss = data.gnssStatus.read();
     const auto rWr = data.gnssAppRing.typedWriterStats();
@@ -235,14 +241,29 @@ void printStatusSys() noexcept
 #endif
 }
 
+} // namespace
+
 int cmdStatusOverview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: status [link|rtcm|sys|all]");
     }
-    printStatusLink();
-    printStatusRtcm();
-    printStatusSys();
+    // 控制台输出可能阻塞，先采样以便 link 和 sys 共用同一份系统状态。
+    const auto &data = appContext().data;
+    const auto system = data.systemStatus.read();
+    const LinkOverview overview{
+        .link = data.linkStatus.read(),
+        .sessions = data.sessions.read(),
+        .alarm = data.alarmState.read(),
+        .stats = data.linkStats.read(),
+    };
+    const auto rtcm = data.rtcmStats.read();
+    const auto demux = data.demuxStats.read();
+    const auto exec = data.execStats.read();
+
+    printStatusLink(system, overview);
+    printStatusRtcm(rtcm, demux);
+    printStatusSys(system, exec);
     return 0;
 }
 

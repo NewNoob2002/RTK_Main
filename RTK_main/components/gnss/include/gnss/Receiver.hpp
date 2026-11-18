@@ -120,9 +120,9 @@ struct OutputPlan {
 
 /**
  * 接收机驱动基类。实例定义在驱动的 .cpp 内（`constinit` 文件作用域静态对象），地址即身份；
- * 通过驱动头导出的访问器取得 `const Receiver &`。
+ * 用 receiverFor() 按家族取基准驱动；探测命中后用 forModel() 选对应型号的驱动。
  *
- * 默认实现（本卡可用到的）：outputMask = GGA|RMC|GSA|GSV；buildOutput = kNotSupported；
+ * 默认实现：outputMask = GGA|RMC|GSA|GSV；buildOutput = kNotSupported；
  * classifyFrame = 通用 NMEA（忽略 talker）；frameTag = 通用 NMEA/RTCM3 标签；
  * buildReadback = false；matchReadback = 0。
  *
