@@ -37,12 +37,23 @@ PARAM_TAG = re.compile(r"@param(?:\[[a-z,]+\])?\s+([A-Za-z_]\w*)")
 RET_TAG = re.compile(r"@(retval|return|returns)\b")
 
 
+def is_code_lizard():
+    """PATH 里的 lizard 是否为代码分析器：Arch 的 lizard 包是同名压缩工具，`--version` 不输出纯版本号。"""
+    if not shutil.which("lizard"):
+        return False
+    try:
+        ver = subprocess.run(["lizard", "--version"], capture_output=True, text=True, check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return re.fullmatch(r"\d+(\.\d+)+", ver.stdout.strip()) is not None
+
+
 def run_lizard(files):
     """调用 lizard 输出 CSV，返回 [(file, qualified_name, long_name, start, end)]。"""
     if not files:
         return []
-    exe = ["lizard"] if shutil.which("lizard") else ["uvx", "--offline", "lizard"]
-    cmd = exe + ["-l", "cpp", "-l", "c", "--csv"] + [str(f) for f in files]
+    exe = ["lizard"] if is_code_lizard() else ["uvx", "--offline", "lizard"]
+    cmd = exe +["-l", "cpp", "-l", "c", "--csv"] + [str(f) for f in files]
     try:
         out = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=False).stdout
     except FileNotFoundError:
