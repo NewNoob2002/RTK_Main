@@ -2,6 +2,8 @@
 // init 仅启动前；其余操作仅 kLink；均非 ISR。
 #pragma once
 
+#include "PairWindow.hpp"
+
 #include <array>
 #include <atomic>
 #include <optional>
@@ -79,6 +81,15 @@ public:
      * @note 仅所属模块执行器任务调用，非 ISR；涉及存储时可同步等待 NVS。
      */
     void onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+
+    /** @brief 安装 GAP 策略。 @note 启动任务在蓝牙初始化前调用。 */
+    void installPairingPolicy() noexcept;
+
+    /** @brief 查询配对窗口。 @param nowMs: 当前时间。 @retval 剩余时长及确认模式。 @note 可跨任务读取。 */
+    [[nodiscard]] core::PairWindowStatus pairStatus(uint32_t nowMs) const noexcept
+    {
+        return pair_window_.snapshot(nowMs);
+    }
     /**
      * @brief 仅 kLink，非 ISR；至多等待 maxMs，先处理生命周期事件。
      * @param maxMs: 最长等待时间（毫秒）
@@ -386,6 +397,11 @@ private:
     uint32_t round_start_ms_ = 0;
     DemuxStats retired_demux_{};
     core::LinkManager link_manager_{};
+    core::PairWindow pair_window_{};
+    portMUX_TYPE pair_mux_{};
+
+    /** @brief 处理控制台开窗请求。 @param cmd: 窗口参数。 @param result: 操作结果。 @note 仅 kLink。 */
+    void openPairing(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     std::optional<core::AlarmSource> alarm_{};
     std::optional<spp::SppTransport> transport_{};
     core::SessionHandle stream_handle_ = 0;

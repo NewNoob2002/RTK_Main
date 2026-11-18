@@ -87,6 +87,20 @@ esp_err_t nvs_store_get_alarms(uint8_t (*addrs)[NVS_STORE_ADDR_LEN], size_t max,
  */
 esp_err_t nvs_store_set_alarms(const uint8_t (*addrs)[NVS_STORE_ADDR_LEN], size_t count);
 
+/**
+ * @brief 擦除用户 NVS 分区。
+ * @retval ESP_OK 擦除完成；其他为底层错误码。
+ * @note 仅在持久化写入已停止的任务上下文调用，可阻塞，非 ISR。成功后重启。
+ */
+esp_err_t nvs_store_erase_user(void);
+
+/**
+ * @brief 擦除出厂 NVS 分区。
+ * @retval ESP_OK 擦除完成；其他为底层错误码。
+ * @note 仅在持久化写入已停止的任务上下文调用，可阻塞，非 ISR。成功后重启。
+ */
+esp_err_t nvs_store_erase_factory(void);
+
 #ifdef __cplusplus
 }
 #endif

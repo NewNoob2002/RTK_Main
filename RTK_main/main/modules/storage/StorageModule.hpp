@@ -17,6 +17,8 @@ struct StoreGroup;
 /** 存储模块（kLink 执行器）：SN 与白名单的 NVS 持久化与重试。 */
 class StorageModule final {
 public:
+    static constexpr uint8_t kEraseUser = 1U;
+    static constexpr uint8_t kEraseFactory = 2U;
     constexpr StorageModule() noexcept = default;
     /**
      * @brief 记录所属上下文，不初始化硬件或 RTOS
@@ -89,6 +91,8 @@ public:
     [[nodiscard]] fw::Result saveKeys(std::span<const fw::StoreKey> keys) noexcept;
 
 private:
+    /** @brief 排他擦除已确认的分区。 @param cmd: 擦除范围。 @param result: 返回操作结果。 @note 仅 kLink，可阻塞。 */
+    void eraseForReset(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     friend struct ModuleTestAccess;
     /**
      * @brief  从 NVS 读白名单；缺失或损坏时使用空表并记 W 级日志

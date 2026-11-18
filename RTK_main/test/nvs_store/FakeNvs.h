@@ -12,6 +12,7 @@ typedef enum {
     FAKE_NVS_FACTORY_INIT,
     FAKE_NVS_USER_INIT,
     FAKE_NVS_DIRTY_READ,
+    FAKE_NVS_ERASE,
 } fake_nvs_fault_t;
 
 void fake_nvs_inject(fake_nvs_fault_t fault);

@@ -1,6 +1,7 @@
 /* 主机回归用的 FreeRTOS 原语实现（真实阻塞语义，见 shim/inc/freertos/FreeRTOS.h 的说明）。 */
 #include "freertos/FreeRTOS.h"
 
+#include <stdatomic.h>
 #include <string.h>
 #include <time.h>
 
@@ -57,12 +58,20 @@ static bool fake_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *lock, Tic
     return pthread_cond_timedwait(cond, lock, &deadline) == 0;
 }
 
+static _Atomic uint32_t s_tick_offset;
+
+void fake_advance_ticks(uint32_t ticks)
+{
+    atomic_fetch_add_explicit(&s_tick_offset, ticks, memory_order_relaxed);
+}
+
 TickType_t xTaskGetTickCount(void)
 {
     struct timespec ts;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (TickType_t)(((uint64_t)ts.tv_sec * 1000ULL) + ((uint64_t)ts.tv_nsec / 1000000ULL));
+    return (TickType_t)(((uint64_t)ts.tv_sec * 1000ULL) + ((uint64_t)ts.tv_nsec / 1000000ULL)) +
+           atomic_load_explicit(&s_tick_offset, memory_order_relaxed);
 }
 
 /* ---------------- 任务与任务通知 ---------------- */

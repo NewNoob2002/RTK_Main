@@ -71,6 +71,7 @@ static bool s_stage_sync;
 static fake_write_mode_t s_write_mode = FAKE_WRITE_OK;
 static int s_pin_reply_count;
 static int s_ssp_confirm_count;
+static bool s_last_gap_accept;
 static uint8_t s_last_gap_bda[6];
 static uint32_t s_write_block_ms = 0U;
 static uint32_t s_disconnect_block_ms = 0U;
@@ -705,6 +706,14 @@ int fake_ssp_confirm_count(void)
     return count;
 }
 
+bool fake_last_gap_accept(void)
+{
+    pthread_mutex_lock(&s_lock);
+    const bool accept = s_last_gap_accept;
+    pthread_mutex_unlock(&s_lock);
+    return accept;
+}
+
 const uint8_t *fake_last_gap_reply_bda(void)
 {
     return s_last_gap_bda;
@@ -961,11 +970,11 @@ esp_err_t esp_bt_gap_set_security_param(esp_bt_sp_param_t param_type, void *valu
 esp_err_t esp_bt_gap_pin_reply(esp_bd_addr_t bd_addr, bool accept, uint8_t pin_code_len,
                                esp_bt_pin_code_t pin_code)
 {
-    (void)accept;
     (void)pin_code_len;
     (void)pin_code;
     fake_note_blocking_api();
     pthread_mutex_lock(&s_lock);
+    s_last_gap_accept = accept;
     s_pin_reply_count++;
     memcpy(s_last_gap_bda, bd_addr, sizeof(s_last_gap_bda));
     pthread_cond_broadcast(&s_cond);
@@ -976,9 +985,9 @@ esp_err_t esp_bt_gap_pin_reply(esp_bd_addr_t bd_addr, bool accept, uint8_t pin_c
 
 esp_err_t esp_bt_gap_ssp_confirm_reply(esp_bd_addr_t bd_addr, bool accept)
 {
-    (void)accept;
     fake_note_blocking_api();
     pthread_mutex_lock(&s_lock);
+    s_last_gap_accept = accept;
     s_ssp_confirm_count++;
     memcpy(s_last_gap_bda, bd_addr, sizeof(s_last_gap_bda));
     pthread_cond_broadcast(&s_cond);

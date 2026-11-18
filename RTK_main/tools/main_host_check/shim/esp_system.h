@@ -23,6 +23,7 @@ typedef enum {
     ESP_RST_CPU_LOCKUP
 } esp_reset_reason_t;
 esp_reset_reason_t esp_reset_reason(void);
+void esp_restart(void);
 uint32_t esp_get_free_heap_size(void);
 uint32_t esp_get_minimum_free_heap_size(void);
 #ifdef __cplusplus

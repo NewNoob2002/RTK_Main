@@ -13,6 +13,7 @@ extern "C" {
 #include "modules/gnss/GnssKeys.hpp"
 #include "modules/gnss/GnssModulePrivate.hpp"
 #include "modules/storage/StoreKeys.hpp"
+#include "modules/storage/StoreWriteGate.hpp"
 
 namespace app {
 namespace {
@@ -47,6 +48,10 @@ const char *saveFailureName(MaintenanceResult result) noexcept
  */
 fw::Result clearCache() noexcept
 {
+    const store::WriteGuard guard;
+    if (!guard.active()) {
+        return fw::Result::kBusy;
+    }
     nvs_handle_t handle = 0U;
     esp_err_t error = nvs_open("gnss", NVS_READWRITE, &handle);
     if (error != ESP_OK) {
@@ -200,7 +205,7 @@ void GnssModule::completeBaudMaintenance(const ::gnss::ControllerStats &stats,
         return;
     }
 
-    const uint32_t baud = boot_baud_in_flight_ ? preferred_baud_ : requested_baud_;
+    const uint32_t baud = requested_baud_;
     if (result == MaintenanceResult::kOk) {
         if (persistBaudAndSave(baud)) {
             return;
@@ -244,11 +249,13 @@ void GnssModule::completeMaintenance(uint32_t nowMs) noexcept
 void GnssModule::alignBootBaud() noexcept
 {
     boot_baud_pending_ = false;
-    if (controller().detected().baud == preferred_baud_) {
+    const uint32_t target = bauds_.front(); // 缺少用户键时与 UART 初始化共用 Kconfig 缺省。
+    if (controller().detected().baud == target) {
         static_cast<void>(persistDetectedHint());
         return;
     }
-    boot_baud_in_flight_ = controller().requestBaud(preferred_baud_);
+    requested_baud_ = target;
+    boot_baud_in_flight_ = controller().requestBaud(target);
 }
 
 void GnssModule::tickMaintenance() noexcept

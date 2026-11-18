@@ -13,6 +13,7 @@
 #include "def/StorageDef.hpp"
 #include "fw/Log.hpp"
 #include "modules/storage/StorageModule.hpp"
+#include "modules/storage/StoreWriteGate.hpp"
 
 /* NvsStore.h（冻结）没有整数键 API，这里直接使用 nvs.h。
  * 主机替身头不带 C++ 链接守卫，因此显式声明 C 链接；IDF 的 nvs.h 自带 extern "C"，嵌套无害。 */
@@ -125,6 +126,10 @@ esp_err_t readValue(const fw::StoreKey &key, uint32_t &value) noexcept
 
 esp_err_t writeValue(const fw::StoreKey &key, uint32_t value) noexcept
 {
+    const WriteGuard guard;
+    if (!guard.active()) {
+        return ESP_ERR_INVALID_STATE;
+    }
     Name ns{};
     Name name{};
     if (!namesOf(key, ns, name)) {
@@ -175,6 +180,10 @@ esp_err_t readBlob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len)
 
 esp_err_t writeBlob(const fw::StoreKey &key, std::span<const uint8_t> data) noexcept
 {
+    const WriteGuard guard;
+    if (!guard.active()) {
+        return ESP_ERR_INVALID_STATE;
+    }
     Name ns{};
     Name name{};
     if (!blobNamesOf(key, ns, name) || data.empty() || (data.size() > key.maxSize)) {

@@ -30,6 +30,7 @@ idf_component_register(
          "support/ResetReason.cpp"
          ${module_sources}
     INCLUDE_DIRS "."
+    PRIV_INCLUDE_DIRS "../components/link_core/private_include"
     PRIV_REQUIRES espcoredump
     REQUIRES app_fw device_proto link_core rtos spp_server nvs_store cli stream_demux gnss console esp_system esp_hw_support esp_driver_gpio esp_driver_uart freertos log)
 

@@ -19,7 +19,8 @@ enum class LinkVerb : uint8_t {
     kPair,
     kWhitelistClear,
     kWhitelistAdd,
-    kWhitelistDel
+    kWhitelistDel,
+    kPairClose
 };
 
 /**

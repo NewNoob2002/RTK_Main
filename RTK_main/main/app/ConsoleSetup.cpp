@@ -1,5 +1,7 @@
 // 控制台装配与启动阶段门控（ADR-0009）：命令表/动词表在 REPL 启动前一次性登记。
 // 线程：initConsole/runConsole 只在启动任务调用，gatedCommand 只在 console REPL 任务调用；非 ISR，不分配堆。
+#include "modules/bt_link/BtPairing.hpp"
+#include "modules/system/FactoryReset.hpp"
 #include "app/App.hpp"
 
 #include <array>
@@ -90,14 +92,14 @@ struct VerbGroupDef {
 bool registerCommandTables() noexcept
 {
     const std::array cmdTables{
-        systemCmds(),  linkCmds(), configCmds(), rtcmCmds(),
+        systemCmds(),  linkCmds(),         configCmds(), rtcmCmds(),
 #if RTK_GNSS_ENABLED
         gnssCmds(),
 #endif
 #if FW_TRACE_ENABLED
         debugCmds(),
 #endif
-        factoryCmds(),
+        factoryCmds(), factoryResetCmds(),
     };
     // 命令表地址在 init 后不可变；handler 经 phase 原子门控。
     size_t used = 0U;
@@ -143,6 +145,7 @@ bool registerVerbGroups() noexcept
 #if FW_TRACE_ENABLED
         VerbGroupDef{"debug", "trace categories, report and NVS", debugVerbs()},
 #endif
+        VerbGroupDef{"bt", "Bluetooth pairing and alarm trust", btVerbs()},
         VerbGroupDef{"factory", "production settings (hidden, needs unlock)", factoryVerbs()},
     };
     for (const auto &group : verbGroups) {

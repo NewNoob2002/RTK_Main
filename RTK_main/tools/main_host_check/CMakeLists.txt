@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 get_filename_component(PROJ_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+include_directories("${PROJ_ROOT}/components/link_core/private_include"
+                    "${PROJ_ROOT}/components/spp_server/boot_include")
 find_package(Threads REQUIRED)
 add_library(main_rtos STATIC ../t13_host_check/shim/FakeRtos.c)
 # NvsShim.c: storage 模块的通用键表直接用 nvs.h（冻结的 NvsStore.h 无整数 API）。
@@ -55,6 +57,8 @@ foreach(policy concurrent preempt)
         ${PROJ_ROOT}/main/data/AppData.cpp ${PROJ_ROOT}/main/app/BootConfig.cpp
         ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
         ${PROJ_ROOT}/main/modules/storage/ConfigCmds.cpp ${PROJ_ROOT}/main/support/ConsoleSupport.cpp
+        ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
+        ${PROJ_ROOT}/main/modules/system/FactoryReset.cpp
         ${PROJ_ROOT}/components/cli/src/Reply.cpp
         ${PROJ_ROOT}/components/rtos/Executor.cpp
         ${PROJ_ROOT}/main/modules/rtcm/RtcmModule.cpp
@@ -79,7 +83,8 @@ foreach(policy concurrent preempt)
     endif()
     foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup
-            early_config_0 early_config_2 early_config_3 early_config_nvs_failure)
+            early_config_0 early_config_2 early_config_3 early_config_nvs_failure
+            factory_reset pairing_window)
         add_test(NAME main_${policy}_${scenario} COMMAND main_${policy} ${scenario})
     endforeach()
 endforeach()
@@ -99,6 +104,7 @@ foreach(scenario lifecycle calls invalid)
 endforeach()
 
 add_executable(template_check TemplateCheck.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
     ${PROJ_ROOT}/main/modules/_template/TemplateModule.cpp
     ${PROJ_ROOT}/main/modules/_template/TemplateCmds.cpp
     ${PROJ_ROOT}/main/data/AppData.cpp

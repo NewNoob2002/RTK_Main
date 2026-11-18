@@ -63,6 +63,8 @@ void fake_emit_data(uint32_t handle, const uint8_t *data, uint16_t len);
 void fake_emit_gap_pin_req(const uint8_t bda[6]);
 void fake_emit_gap_cfm_req(const uint8_t bda[6]);
 int fake_pin_reply_count(void);
+bool fake_last_gap_accept(void);
+void fake_advance_ticks(uint32_t ticks);
 int fake_ssp_confirm_count(void);
 const uint8_t *fake_last_gap_reply_bda(void);
 bool fake_wait_pin_reply(int count, uint32_t timeout_ms);

@@ -177,8 +177,24 @@ esp_err_t nvs_flash_init_partition(const char *partition)
 
 esp_err_t nvs_flash_erase(void)
 {
+    if (take_fault(FAKE_NVS_ERASE)) {
+        return ESP_FAIL;
+    }
     ++s_erases;
     s_partitions[NVS_FAKE_USER] = (nvs_fake_partition_t){0};
+    return ESP_OK;
+}
+
+/** @brief 擦除出厂分区替身，与用户分区分离。 */
+esp_err_t nvs_flash_erase_partition(const char *partition)
+{
+    if (strcmp(partition, NVS_STORE_FACTORY_PARTITION) != 0) {
+        return ESP_ERR_NVS_PART_NOT_FOUND;
+    }
+    if (take_fault(FAKE_NVS_ERASE)) {
+        return ESP_FAIL;
+    }
+    s_partitions[NVS_FAKE_FACTORY] = (nvs_fake_partition_t){0};
     return ESP_OK;
 }
 

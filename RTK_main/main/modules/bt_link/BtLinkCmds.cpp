@@ -1,8 +1,9 @@
-// 链路模块控制台命令表（ADR-0009 §2.5/§2.10）：只读的 bt / alarm 状态。
-// 线程：仅在 console REPL 任务调用，非 ISR；只读 DataCenter。改状态的动作见 system/FactoryCmds.cpp。
+// 蓝牙状态、配对窗口与报警器白名单控制台。
+// 仅 console REPL 任务，非 ISR。变更经 kLink 或 SPP worker 执行。
 
 #include "modules/bt_link/BtLinkModule.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <cstddef>
@@ -11,6 +12,9 @@
 #include <span>
 
 #include "AppContext.hpp"
+#include "SppServerPairing.h"
+#include "modules/bt_link/BtPairing.hpp"
+#include "rtos/EspStatus.hpp"
 #include "cli/Out.hpp"
 #include "support/ConsoleSupport.hpp"
 
@@ -25,7 +29,7 @@ namespace {
  * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
  * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
  */
-int cmdBt(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int btStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: bt");
@@ -50,7 +54,6 @@ int cmdBt(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
                      macBuf.data(), session.handle);
     }
     if (link.pairing) {
-        // 配对窗口只由 factory pair 或手机 0x44 打开；这里只提示状态。
         cli::printKv("pairing", "open");
     }
     return 0;
@@ -88,13 +91,157 @@ int cmdAlarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-// 只保留只读状态命令（ADR-0009 §2.10）；改链路状态的动作都在隐藏的 factory 命令集里。
+/**
+ * @brief 向链路执行器投递配对窗口变更。
+ * @param seconds: 开窗秒数，0 关闭。
+ * @param confirm: 是否逐个确认。
+ * @retval 0 成功；其他已输出 ERR。
+ */
+int setPairing(uint32_t seconds, bool confirm = false) noexcept
+{
+    fw::Command cmd{};
+    cmd.target = id(ModuleKind::kBtLink);
+    cmd.verb = verb(seconds == 0U ? LinkVerb::kPairClose : LinkVerb::kPair);
+    if (seconds != 0U) {
+        constexpr size_t kArgsBytes = 3U;
+        constexpr size_t kModeIndex = 2U;
+        constexpr uint32_t kByteMask = 0xffU;
+        constexpr unsigned kByteBits = 8U;
+        cmd.args[0] = static_cast<uint8_t>(seconds & kByteMask);
+        cmd.args[1] = static_cast<uint8_t>(seconds >> kByteBits); // 最大 600 秒。
+        cmd.args[kModeIndex] = confirm ? 1U : 0U;
+        cmd.argLen = kArgsBytes;
+    }
+    if (!submit(cmd, "pair")) {
+        return cli::kCmdFail;
+    }
+    if (seconds == 0U) {
+        cli::outPrintf("pairing window closed\n");
+    } else {
+        cli::outPrintf("pairing window open for %u s%s\n", static_cast<unsigned>(seconds),
+                       confirm ? " (confirm)" : "");
+    }
+    return 0;
+}
+
+/**
+ * @brief 显示窗口状态，或解析开窗、关闭和回答配对请求。
+ * @param argc: 参数数。
+ * @param argv: 参数数组。
+ * @retval 0 成功；其他已输出 ERR。
+ */
+int cmdPair(void *, int argc, char **argv) noexcept
+{
+    const std::span<char *const> args{argv, static_cast<size_t>(argc)};
+    const auto tail = args.subspan(1U);
+    if (tail.empty()) {
+        const auto window = appContext().bt_link.pairStatus(rtos::nowMs());
+        if (window.remainingMs == 0U) {
+            cli::outPrintf("pairing window closed\n");
+        } else {
+            const auto seconds = (window.remainingMs + kPairMsPerSecond - 1U) / kPairMsPerSecond;
+            cli::outPrintf("pairing window open, %u s remaining%s\n",
+                           static_cast<unsigned>(seconds), window.confirm ? " (confirm)" : "");
+        }
+        return 0;
+    }
+    const std::string_view verb{tail.front()};
+    if (verb == "open") {
+        auto options = tail.subspan(1U);
+        const bool confirm = !options.empty() && std::string_view{options.back()} == "confirm";
+        if (confirm) {
+            options = options.first(options.size() - 1U);
+        }
+        uint32_t seconds = core::kPairWindowMs / kPairMsPerSecond;
+        if (options.size() > 1U || (!options.empty() && !cli::parseU32(options.front(), seconds)) ||
+            seconds < kPairMinSeconds || seconds > kPairMaxSeconds) {
+            return cli::fail("usage: bt pair open [10..600] [confirm]");
+        }
+        return setPairing(seconds, confirm);
+    }
+    if (tail.size() == 1U && verb == "close") {
+        return setPairing(0U);
+    }
+    if (tail.size() == 1U && (verb == "accept" || verb == "reject")) {
+        return spp_server_pair_decide(verb == "accept") ? 0 : cli::fail("no pending pair request");
+    }
+    return cli::fail("usage: bt pair [open [s] [confirm]|close|accept|reject]");
+}
+
+/** @brief 添加报警器信任地址。 @param argc: 参数数。 @param argv: 参数。 @retval 0 成功。 */
+int cmdTrust(void *, int argc, char **argv) noexcept
+{
+    const std::span<char *const> args{argv, static_cast<size_t>(argc)};
+    return args.size() == 2U ? editTrustedAlarm(true, args.back())
+                             : cli::fail("usage: bt trust <MAC>");
+}
+
+/** @brief 删除报警器信任地址。 @param argc: 参数数。 @param argv: 参数。 @retval 0 成功。 */
+int cmdUntrust(void *, int argc, char **argv) noexcept
+{
+    const std::span<char *const> args{argv, static_cast<size_t>(argc)};
+    return args.size() == 2U ? editTrustedAlarm(false, args.back())
+                             : cli::fail("usage: bt untrust <MAC>");
+}
+
+constexpr std::array<cli::Verb, 4U> kBtVerbs{{
+    {"status", nullptr, "show BT stack and sessions", btStatus},
+    {"pair", "[open [s] [confirm]|close|accept|reject]", "manage pairing authorization", cmdPair},
+    {"trust", "<MAC>", "add alarm to whitelist", cmdTrust},
+    {"untrust", "<MAC>", "remove alarm from whitelist", cmdUntrust},
+}};
+
+/** @brief 分派蓝牙动词。 @param ctx: 控制台上下文。 @param argc: 参数数。 @param argv: 参数。 @retval 0 成功。 */
+int cmdBt(void *ctx, int argc, char **argv) noexcept
+{
+    return cli::dispatch(kBtVerbs, ctx, argc, argv, "status");
+}
+
 constexpr std::array<cli::Cmd, 2U> kLinkCmds{{
-    {"bt", "bt: BT stack state and current sessions", nullptr, cmdBt, nullptr, false},
+    {"bt", "bt [status|pair|trust|untrust]: Bluetooth and pairing", "[verb]", cmdBt, nullptr,
+     false},
     {"alarm", "alarm: alarm state and latest heartbeat", nullptr, cmdAlarm, nullptr, false},
 }};
 
 } // namespace
+
+int openDefaultPairing() noexcept
+{
+    return setPairing(core::kPairWindowMs / kPairMsPerSecond);
+}
+
+int editTrustedAlarm(bool add, const char *macText) noexcept
+{
+    std::array<uint8_t, cli::kMacLen> mac{};
+    if (!cli::parseMac(macText, mac)) {
+        return cli::fail("bad MAC");
+    }
+    static_assert(cli::kMacLen == core::kAddrLen);
+    fw::Command cmd{};
+    cmd.target = id(ModuleKind::kBtLink);
+    cmd.verb = verb(add ? LinkVerb::kWhitelistAdd : LinkVerb::kWhitelistDel);
+    std::ranges::copy(mac, cmd.args.begin());
+    cmd.argLen = core::kAddrLen;
+    fw::CommandResult result{};
+    if (!submitRaw(cmd, result)) {
+        return cli::kCmdFail;
+    }
+    switch (result.status) {
+    case fw::Result::kInvalidState:
+        return cli::fail("already in whitelist");
+    case fw::Result::kNotFound:
+        return cli::fail("not in whitelist");
+    case fw::Result::kNoSpace:
+        return cli::fail("whitelist full (%u)", static_cast<unsigned>(kMaxAlarms));
+    default:
+        return report("whitelist", result) ? 0 : cli::kCmdFail;
+    }
+}
+
+std::span<const cli::Verb> btVerbs() noexcept
+{
+    return kBtVerbs;
+}
 
 std::span<const cli::Cmd> linkCmds() noexcept
 {

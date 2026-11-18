@@ -129,6 +129,21 @@ static void test_override(void)
 }
 
 /** @brief CTest 场景入口。 */
+static void test_explicit_erase(bool factory)
+{
+    fake_nvs_seed(true, k_factory);
+    CHECK(nvs_store_init() == ESP_OK);
+    fake_nvs_seed(false, k_legacy);
+    esp_err_t (*const erase)(void) = factory ? nvs_store_erase_factory : nvs_store_erase_user;
+    fake_nvs_inject(FAKE_NVS_ERASE);
+    CHECK(erase() == ESP_FAIL);
+    CHECK(fake_nvs_has_sn(true, k_factory) && fake_nvs_has_sn(false, k_legacy));
+    CHECK(erase() == ESP_OK);
+    CHECK(fake_nvs_has_sn(true, factory ? NULL : k_factory));
+    CHECK(fake_nvs_has_sn(false, factory ? k_legacy : NULL));
+}
+
+/** @brief CTest 场景入口。 */
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -153,6 +168,10 @@ int main(int argc, char **argv)
         test_override();
     } else if (strcmp(name, "commit_failure") == 0) {
         test_retry(FAKE_NVS_COMMIT);
+    } else if (strcmp(name, "erase_user") == 0) {
+        test_explicit_erase(false);
+    } else if (strcmp(name, "erase_factory") == 0) {
+        test_explicit_erase(true);
     } else {
         return EXIT_FAILURE;
     }

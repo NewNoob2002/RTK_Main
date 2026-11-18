@@ -158,6 +158,9 @@ void spp_server_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param
     case ESP_BT_GAP_AUTH_CMPL_EVT:
         /* 认证完成（成功与失败都记）：a = 状态码。 */
         spp_server_trace(SPP_SERVER_TRACE_AUTH, 0U, (uint32_t)param->auth_cmpl.stat, 0U);
+        if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
+            (void)spp_server_ctrl_add(SPP_SERVER_CTRL_PAIRED, 0U, param->auth_cmpl.bda);
+        }
         break;
 
     case ESP_BT_GAP_PIN_REQ_EVT:

@@ -104,7 +104,7 @@ fw::Result GnssModule::startController() noexcept
                            controller().outputPlan(), hint_, clock)) {
         return initFailed(fw::Result::kInvalidState);
     }
-    boot_baud_pending_ = preferred_baud_ != 0U;
+    boot_baud_pending_ = !ctx().bootConfig.safeDefaults && ctx().bootConfig.userNvsReady;
     // initUart 已按同一候选首项配置端口。
     host_baud_ = bauds_.front();
     last_state_ = controller().state();

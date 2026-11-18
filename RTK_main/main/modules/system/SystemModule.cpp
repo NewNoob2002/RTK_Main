@@ -76,6 +76,7 @@ void SystemModule::startBt() noexcept
     }
     FW_LOGI(fw::TraceCat::kSys, "sn=%s bt_name=%s policy=%s", status_.sn.data(),
             status_.deviceName.data(), policyName(policyFromConfig()));
+    ctx().bt_link.installPairingPolicy();
     const esp_err_t error = spp_server_init(status_.deviceName.data());
     status_.btReady = error == ESP_OK;
     if (error != ESP_OK) {

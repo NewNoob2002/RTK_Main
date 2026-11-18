@@ -15,6 +15,8 @@
 
 #include "AppContext.hpp"
 #include "cli/Out.hpp"
+#include "modules/bt_link/BtPairing.hpp"
+#include "modules/system/FactoryReset.hpp"
 #include "modules/storage/StorageModule.hpp"
 #include "support/ConsoleSupport.hpp"
 
@@ -24,7 +26,6 @@ namespace {
 
 constexpr uint8_t kAlarmStateMax = 2U;
 constexpr uint8_t kAlarmLevelMax = 3U;
-constexpr uint32_t kMsPerSecond = 1000U;
 constexpr size_t kTwoArgs = 2U;
 constexpr size_t kThreeArgs = 3U;
 
@@ -154,31 +155,7 @@ int wlEdit(bool add, int argc, char **argv) noexcept
         return cli::fail("usage: factory %s <MAC>", op);
     }
     const std::span<char *const> args(argv, kTwoArgs);
-    std::array<uint8_t, cli::kMacLen> mac{};
-    if (!cli::parseMac(args[1], mac)) {
-        return cli::fail("bad MAC");
-    }
-    static_assert(cli::kMacLen == core::kAddrLen, "MAC length mismatch");
-    fw::Command command{};
-    command.target = id(ModuleKind::kBtLink);
-    command.verb = verb(add ? LinkVerb::kWhitelistAdd : LinkVerb::kWhitelistDel);
-    std::copy(mac.begin(), mac.end(), command.args.begin());
-    command.argLen = static_cast<uint8_t>(core::kAddrLen);
-    fw::CommandResult result{};
-    if (!submitRaw(command, result)) {
-        return cli::kCmdFail;
-    }
-    switch (result.status) {
-    case fw::Result::kInvalidState:
-        return cli::fail("already in whitelist");
-    case fw::Result::kNotFound:
-        return cli::fail("not in whitelist");
-    case fw::Result::kNoSpace:
-        return cli::fail("whitelist full (%u)", static_cast<unsigned>(kMaxAlarms));
-    default:
-        break;
-    }
-    return report(op, result) ? 0 : cli::kCmdFail;
+    return editTrustedAlarm(add, args[1]);
 }
 
 /**
@@ -244,26 +221,7 @@ int cmdPair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     if (argc != 1) {
         return cli::fail("usage: factory pair");
     }
-    // LinkManager::pairOpen 接口冻结为固定窗口（kPairWindowMs）。
-    constexpr uint32_t kPairSeconds = core::kPairWindowMs / kMsPerSecond;
-    if (appContext().data.linkStatus.read().pairing) {
-        return cli::fail("pairing busy");
-    }
-    fw::Command command{};
-    command.target = id(ModuleKind::kBtLink);
-    command.verb = verb(LinkVerb::kPair);
-    fw::CommandResult result{};
-    if (!submitRaw(command, result)) {
-        return cli::kCmdFail;
-    }
-    if (result.status == fw::Result::kBusy) {
-        return cli::fail("pairing busy");
-    }
-    if (!report("pair", result)) {
-        return cli::kCmdFail;
-    }
-    cli::outPrintf("pairing window open for %u s\n", static_cast<unsigned>(kPairSeconds));
-    return 0;
+    return openDefaultPairing();
 }
 
 /**
@@ -321,8 +279,15 @@ int cmdAlarmClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return submit(command, "alarm-clear") ? 0 : cli::kCmdFail;
 }
 
-constexpr std::array<cli::Verb, 10U> kFactoryVerbs{{
+/** @brief 执行已解锁且显式确认的全分区重置。 @param argc: 参数数。 @param argv: 参数。 @retval 0 成功。 */
+int cmdErase(void *, int argc, char **argv) noexcept
+{
+    return requireUnlocked() ? confirmFactoryReset(argc, argv, true) : cli::kCmdFail;
+}
+
+constexpr std::array<cli::Verb, 11U> kFactoryVerbs{{
     {"status", nullptr, "show lock state", cmdStatus},
+    {"erase", "yes", "erase user and factory NVS, then restart", cmdErase},
     {"unlock", "<key>", "unlock factory commands until reboot", cmdUnlock},
     {"lock", nullptr, "lock factory commands", cmdLock},
     {"sn", "<value>", "write device SN (1-16 chars, reboot to apply)", cmdSn},

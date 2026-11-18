@@ -32,7 +32,7 @@ void BtLinkModule::publishLinkStatus(uint32_t nowMs) noexcept
     /* 按基线顺序发布链路、会话与报警状态。 */
     LinkStatus link{};
     link.policy = policyFromConfig();
-    link.pairing = link_manager_.isPairing();
+    link.pairing = pairStatus(nowMs).remainingMs != 0U;
     link.snapshotMs = nowMs;
     const auto list = link_manager_.whitelist();
     link.whitelistCount = std::min(list.size(), kMaxAlarms);
@@ -162,6 +162,7 @@ fw::Result BtLinkModule::init() noexcept
     /* 从持久化快照恢复策略，再按依赖顺序原地构造服务。 */
     const auto link = ctx().data.linkStatus.read();
     link_manager_.init(link.policy, std::span{link.whitelist}.first(link.whitelistCount));
+    core::bindPairWindow(link_manager_, &pair_window_);
     auto &alarm = alarm_.emplace();
     auto &deviceService = device_service_.emplace();
     deviceService.info().sn.assign(system.sn.data());
@@ -323,11 +324,10 @@ void BtLinkModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) 
         alarm_->clearOverride();
         break;
     case LinkVerb::kPair:
-        if (link_manager_.isPairing()) {
-            result.status = fw::Result::kBusy;
-        } else {
-            link_manager_.pairOpen(rtos::nowMs());
-        }
+        openPairing(cmd, result);
+        break;
+    case LinkVerb::kPairClose:
+        core::closePairWindow(pair_window_, rtos::nowMs());
         break;
     case LinkVerb::kWhitelistClear:
         clearWhitelist(result);

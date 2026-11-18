@@ -87,6 +87,7 @@ void startModule(nvs_handle_t handle, uint32_t preferred, bool applyBaud)
     CHECK(s_context->storage.loadKeys(app::gnss_store::kConfigKeys).failed == 0U);
     CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
     s_context->bootConfig.gnssBaud = preferred;
+    s_context->bootConfig.userNvsReady = true;
     CHECK(fw::isOk(s_context->gnss.init()));
     CHECK(s_hostBaud == preferred);
     CHECK(fw::isOk(s_context->gnss.start()));

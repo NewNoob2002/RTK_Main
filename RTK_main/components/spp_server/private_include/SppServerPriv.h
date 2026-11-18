@@ -31,6 +31,7 @@
 
 #include "SppServer.h"
 #include "SppServerStorage.h"
+#include "SppServerPairing.h"
 
 #define SPP_SERVER_TAG "spp_server"
 
@@ -130,9 +131,10 @@ typedef struct {
 } spp_server_session_t;
 
 typedef enum {
-    SPP_SERVER_CTRL_PIN_REQ = 0, /* GAP PIN_REQ：回固定 PIN */
-    SPP_SERVER_CTRL_CFM_REQ,     /* GAP CFM_REQ：自动确认 */
+    SPP_SERVER_CTRL_PIN_REQ = 0, /* GAP PIN_REQ */
+    SPP_SERVER_CTRL_CFM_REQ,     /* GAP CFM_REQ */
     SPP_SERVER_CTRL_REJECT,      /* SRV_OPEN 无安全空槽：断开该句柄 */
+    SPP_SERVER_CTRL_PAIRED,      /* GAP 认证成功，交给 worker 记录地址 */
 } spp_server_ctrl_type_t;
 
 /* CTRL_ERR 追踪直接把 ctrl_type 作为 spp_server_trace_ctrl_t 上报，两者取值必须一致。 */

@@ -1,5 +1,6 @@
 // 模块模板主机回归：验证 TemplateModule 接入 Executor 生命周期、CommandBus 路由与控制台命令表。
 #include "AppContext.hpp"
+#include "SppServerPairing.h"
 #include "modules/_template/TemplateModule.hpp"
 #include "fw/Module.hpp"
 #include "rtos/EspStatus.hpp"
@@ -438,6 +439,15 @@ uint32_t ulTaskNotifyTake(BaseType_t, TickType_t)
     return 0U;
 }
 esp_err_t nvs_store_init(void)
+{
+    return ESP_OK;
+}
+void spp_server_set_pair_query(spp_server_pair_query_t) {}
+esp_err_t nvs_store_erase_user(void)
+{
+    return ESP_OK;
+}
+esp_err_t nvs_store_erase_factory(void)
 {
     return ESP_OK;
 }

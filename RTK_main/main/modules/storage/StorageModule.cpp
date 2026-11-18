@@ -12,6 +12,7 @@
 #include "fw/Tlog.hpp"
 #include "modules/storage/StoreCatalog.hpp"
 #include "modules/storage/StoreKeys.hpp"
+#include "modules/storage/StoreWriteGate.hpp"
 #include "rtos/EspStatus.hpp"
 #include "sdkconfig.h"
 
@@ -277,6 +278,10 @@ bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
         (attempted_ && now - attempt_ms_ < retry_ms_)) {
         return false;
     }
+    const store::WriteGuard guard;
+    if (!guard.active()) {
+        return false;
+    }
     /* 完成去抖和退避后，同步序列化并写入白名单。 */
     WhitelistRaw raw{};
     size_t len = 0;
@@ -330,6 +335,11 @@ esp_err_t StorageModule::flushWhitelist(uint32_t nowMs) noexcept
 
 void StorageModule::saveSn(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
+    const store::WriteGuard guard;
+    if (!guard.active()) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
     const auto previous = sn_;
     result.status = snLoad(std::span{cmd.args}.first(cmd.argLen));
     if (!fw::isOk(result.status)) {
@@ -360,11 +370,38 @@ void StorageModule::saveSn(const fw::Command &cmd, fw::CommandResult &result) no
 
 void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
+    if (cmd.verb == kEraseUser || cmd.verb == kEraseFactory) {
+        eraseForReset(cmd, result);
+        return;
+    }
     if (cmd.verb != verb(StorageVerb::kSaveSn) || cmd.argLen > cmd.args.size()) {
         result.status = fw::Result::kInvalidArg;
         return;
     }
     /* 校验信封后交给 SN 保存流程。 */
     saveSn(cmd, result);
+}
+
+void StorageModule::eraseForReset(const fw::Command &cmd, fw::CommandResult &result) noexcept
+{
+    if (cmd.argLen != 0U) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    if (!store::closeWritesForErase()) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    // IDF 擦除时关闭该分区的所有句柄并卸载分区，Bluedroid 无法在重启前再写回绑定。
+    esp_err_t error = nvs_store_erase_user();
+    if (error == ESP_OK && cmd.verb == kEraseFactory) {
+        error = nvs_store_erase_factory();
+    }
+    result.detail = error;
+    result.status = error == ESP_OK ? fw::Result::kOk : fw::Result::kIoError;
+    if (error != ESP_OK) {
+        FW_LOGE(fw::TraceCat::kStore, "Factory reset erase failed: %s", esp_err_to_name(error));
+        store::reopenWrites();
+    }
 }
 } // namespace app

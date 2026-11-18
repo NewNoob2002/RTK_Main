@@ -25,6 +25,9 @@ extern "C" {
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "esp_system.h"
+#include "SppServerPairing.h"
+#include "modules/storage/StoreWriteGate.hpp"
+#include "modules/system/FactoryReset.hpp"
 
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
 namespace {
@@ -45,6 +48,11 @@ size_t s_store_calls = 0U;
 esp_err_t s_store_result = ESP_OK;
 esp_err_t s_nvs_init_result = ESP_OK;
 unsigned s_nvs_init_calls = 0U;
+unsigned s_user_erases = 0U;
+unsigned s_factory_erases = 0U;
+unsigned s_restarts = 0U;
+esp_err_t s_erase_result = ESP_OK;
+spp_server_pair_query_t s_pair_query = nullptr;
 size_t s_saved_count = 0U;
 app::WhitelistRaw s_saved{};
 std::array<std::array<uint8_t, 4096>, 2> s_input{};
@@ -681,7 +689,8 @@ void vTaskDelay(TickType_t ticks)
 }
 TaskHandle_t xTaskGetCurrentTaskHandle(void)
 {
-    return s_use_host_task ? &s_host_task : nullptr;
+    return fake_current_task != nullptr ? fake_current_task
+                                        : (s_use_host_task ? &s_host_task : nullptr);
 }
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t)
 {
@@ -822,6 +831,28 @@ void spp_server_rx_stats(spp_server_rx_stats_t *stats)
         stats->wake_calls = s_rx_wake_calls;
     }
 }
+void spp_server_set_pair_query(spp_server_pair_query_t query)
+{
+    s_pair_query = query;
+}
+
+void esp_restart(void)
+{
+    ++s_restarts;
+}
+
+esp_err_t nvs_store_erase_user(void)
+{
+    ++s_user_erases;
+    return s_erase_result;
+}
+
+esp_err_t nvs_store_erase_factory(void)
+{
+    ++s_factory_erases;
+    return ESP_OK;
+}
+
 esp_err_t nvs_store_init(void)
 {
     ++s_nvs_init_calls;
@@ -1249,6 +1280,91 @@ void earlyConfig(unsigned previous, bool nvsAvailable)
     }
 }
 
+/** @brief 经真实控制台处理器与执行器验证确认、排他与重启。 */
+void factoryReset()
+{
+    using namespace app;
+    auto &context = appContext();
+    context.data.init();
+    constexpr auto kStorage = id(ModuleKind::kStorage);
+    constexpr auto kLink = id(ExecKind::kLink);
+    static constexpr auto kOps = fw::makeOps<StorageModule>();
+    static const std::array<fw::Module, 1> kModules{{
+        {"storage", kStorage, kLink, 0U, &context.storage, &kOps},
+    }};
+    static constinit rtos::Executor sExecutor{};
+    static std::array<StackType_t, AppContext::kLinkStackBytes / sizeof(StackType_t)> sStack{};
+    context.linkExecutor = &sExecutor;
+    const rtos::ExecutorConfig cfg{.name = "reset_test", .id = kLink, .priority = 5U, .core = 1};
+    CHECK(fw::isOk(sExecutor.init(cfg, kModules, viewOf(context.linkStorage, sStack))));
+    CHECK(fw::isOk(sExecutor.start()));
+    cli::setOutSink(&captureStoreConsole, false);
+    char command[] = "freset";
+    char yes[] = "yes";
+    char no[] = "no";
+    std::array<char *, 2> args{command, no};
+    const auto &entry = factoryResetCmds().front();
+    CHECK(entry.handler(entry.ctx, 1, args.data()) == 0);
+    CHECK(entry.handler(entry.ctx, 2, args.data()) != 0 && s_user_erases == 0U);
+    args[1] = yes;
+    {
+        const store::WriteGuard busy;
+        CHECK(busy.active());
+        CHECK(entry.handler(entry.ctx, 2, args.data()) != 0 && s_user_erases == 0U);
+    }
+    s_erase_result = ESP_FAIL;
+    CHECK(entry.handler(entry.ctx, 2, args.data()) != 0);
+    CHECK(s_user_erases == 1U && s_factory_erases == 0U && s_restarts == 0U);
+    s_erase_result = ESP_OK;
+    CHECK(entry.handler(entry.ctx, 2, args.data()) == 0);
+    CHECK(s_user_erases == 2U && s_factory_erases == 0U && s_restarts == 1U);
+    const store::WriteGuard after;
+    CHECK(!after.active());
+    if (s_failures != 0) {
+        static_cast<void>(
+            std::fwrite(s_store_log.console.data(), 1U, s_store_log.consoleSize, stderr));
+    }
+    cli::setOutSink(nullptr, false);
+}
+
+/** @brief 应用开窗、GAP 查询和 LinkManager 角色转移共享同一个到期点。 */
+void pairingWindow()
+{
+    using namespace app;
+    const std::array whitelist{kOtherAlarm};
+    setup(whitelist);
+    auto &link = appContext().bt_link;
+    link.installPairingPolicy();
+    CHECK(s_pair_query(kPhone.bytes.data()) == SPP_SERVER_PAIR_DENY);
+    CHECK(s_pair_query(kOtherAlarm.bytes.data()) == SPP_SERVER_PAIR_TRUSTED);
+    s_link_manager.pairOpen(s_clock);
+    CHECK(link.pairStatus(s_clock).remainingMs == core::kPairWindowMs);
+    CHECK(s_pair_query(kPhone.bytes.data()) == SPP_SERVER_PAIR_ALLOW);
+    fw::Command cmd{.verb = verb(LinkVerb::kPair)};
+    cmd.args[0] = 0x58U;
+    cmd.args[1] = 0x02U;
+    cmd.args[2] = 1U;
+    cmd.argLen = 3U;
+    fw::CommandResult result{};
+    link.onCommand(cmd, result);
+    CHECK(fw::isOk(result.status));
+    CHECK(link.pairStatus(s_clock).remainingMs == 600000U);
+    CHECK(s_pair_query(kPhone.bytes.data()) == SPP_SERVER_PAIR_CONFIRM);
+    core::Actions actions{};
+    CHECK(s_link_manager.onOpen(1U, kPhone, s_clock, actions) == core::Role::kPhone);
+    s_clock += 599999U;
+    CHECK(s_link_manager.onOpen(2U, kAlarm, s_clock, actions) == core::Role::kPending);
+    ++s_clock;
+    CHECK(s_pair_query(kAlarm.bytes.data()) == SPP_SERVER_PAIR_DENY);
+    CHECK(s_link_manager.onFrame(2U, core::kHelloSender, core::kHelloMsgId, s_clock, actions) ==
+          core::Role::kNone);
+    s_link_manager.tick(s_clock, actions);
+    CHECK(!s_link_manager.isPairing());
+    s_link_manager.pairOpen(s_clock);
+    link.onCommand(fw::Command{.verb = verb(LinkVerb::kPairClose)}, result);
+    CHECK(s_pair_query(kPhone.bytes.data()) == SPP_SERVER_PAIR_DENY);
+}
+
 } // namespace
 
 int main(int argc, const char **raw_args)
@@ -1289,6 +1405,10 @@ int main(int argc, const char **raw_args)
         earlyConfig(3U, true);
     } else if (std::strcmp(argv[1], "early_config_nvs_failure") == 0) {
         earlyConfig(0U, false);
+    } else if (std::strcmp(argv[1], "factory_reset") == 0) {
+        factoryReset();
+    } else if (std::strcmp(argv[1], "pairing_window") == 0) {
+        pairingWindow();
     } else if (std::strcmp(argv[1], "credit_window") == 0) {
         creditWindow();
     } else if (std::strcmp(argv[1], "rx_fairness") == 0) {

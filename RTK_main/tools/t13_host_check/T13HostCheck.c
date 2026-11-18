@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h" /* 确定性读暂停钩子（fake_read_pause_*） */
 #include "FakeIdf.h"
 #include "SppServer.h"
+#include "SppServerPairing.h"
 #include "SppServerStorage.h"
 
 static int s_fail;
@@ -770,6 +771,51 @@ static void sc_gap_replies_from_task(void)
     CHECK(!fake_blocking_api_from_btc());
 }
 
+static _Atomic int s_pair_policy = SPP_SERVER_PAIR_DENY;
+
+static spp_server_pair_policy_t test_pair_policy(const uint8_t *addr)
+{
+    if (addr[0] == 0x98U) {
+        return SPP_SERVER_PAIR_TRUSTED;
+    }
+    return atomic_load_explicit(&s_pair_policy, memory_order_relaxed);
+}
+
+static void sc_gap_pairing_window(void)
+{
+    const uint8_t other[SPP_SERVER_ADDR_LEN] = {0xa1U};
+    const uint8_t trusted[SPP_SERVER_ADDR_LEN] = {0x98U};
+    spp_server_set_pair_query(&test_pair_policy);
+    bring_up();
+
+    fake_emit_gap_pin_req(other);
+    CHECK(fake_wait_pin_reply(1, 2000U) && !fake_last_gap_accept());
+    fake_emit_gap_pin_req(trusted);
+    CHECK(fake_wait_pin_reply(2, 2000U) && fake_last_gap_accept());
+
+    atomic_store_explicit(&s_pair_policy, SPP_SERVER_PAIR_CONFIRM, memory_order_relaxed);
+    fake_emit_gap_cfm_req(s_bda);
+    fake_emit_gap_pin_req(other);
+    CHECK(fake_wait_pin_reply(3, 2000U) && !fake_last_gap_accept());
+    CHECK(fake_ssp_confirm_count() == 0);
+    CHECK(spp_server_pair_decide(true));
+    CHECK(fake_wait_ssp_confirm(1, 2000U) && fake_last_gap_accept());
+
+    fake_emit_gap_cfm_req(s_bda);
+    fake_emit_gap_pin_req(other);
+    CHECK(fake_wait_pin_reply(4, 2000U) && !fake_last_gap_accept());
+    CHECK(spp_server_pair_decide(false));
+    CHECK(fake_wait_ssp_confirm(2, 2000U) && !fake_last_gap_accept());
+
+    fake_emit_gap_cfm_req(s_bda);
+    fake_emit_gap_pin_req(other);
+    CHECK(fake_wait_pin_reply(5, 2000U) && !fake_last_gap_accept());
+    fake_advance_ticks(30000U);
+    CHECK(fake_wait_ssp_confirm(3, 2000U) && !fake_last_gap_accept());
+    CHECK(!spp_server_pair_decide(true));
+    CHECK(!fake_blocking_api_from_btc());
+}
+
 /* 数据突发与未 poll 的重连不能让生命周期积压无界；跨槽严格按回调顺序交付。 */
 static void sc_lifecycle_burst_churn(void)
 {
@@ -1158,6 +1204,7 @@ static const scenario_t s_scenarios[] = {
     {"write_chunk_budget_shared", sc_write_chunk_budget_shared},
     {"unknown_handle_errors", sc_unknown_handle_errors},
     {"gap_replies_from_task", sc_gap_replies_from_task},
+    {"gap_pairing_window", sc_gap_pairing_window},
 };
 
 int main(int argc, char **argv)

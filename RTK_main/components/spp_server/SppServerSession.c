@@ -10,6 +10,7 @@
 #include "esp_spp_api.h"
 
 #include "SppServerPriv.h"
+#include "fw/LogC.h"
 
 #define SPP_SERVER_PIN_LEN (4U)
 
@@ -298,6 +299,112 @@ typedef struct {
     uint8_t bda[SPP_SERVER_ADDR_LEN];
 } spp_server_ctrl_request_t;
 
+#define SPP_SERVER_PAIR_CONFIRM_MS (30000U)
+
+typedef struct {
+    spp_server_ctrl_request_t req;
+    TickType_t start;
+    bool active;
+    bool decided;
+    bool accept;
+} spp_server_pair_pending_t;
+
+static spp_server_pair_pending_t s_pair_pending;
+static spp_server_pair_query_t s_pair_query;
+
+void spp_server_set_pair_query(spp_server_pair_query_t query)
+{
+    s_pair_query = query;
+}
+
+bool spp_server_pair_decide(bool accept)
+{
+    const TickType_t now = xTaskGetTickCount();
+    taskENTER_CRITICAL(&s_spp_mux);
+    const bool ready = s_pair_pending.active && !s_pair_pending.decided &&
+                       now - s_pair_pending.start < pdMS_TO_TICKS(SPP_SERVER_PAIR_CONFIRM_MS);
+    if (ready) {
+        s_pair_pending.decided = true;
+        s_pair_pending.accept = accept;
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+    if (ready) {
+        spp_server_tx_wake();
+    }
+    return ready;
+}
+
+/**
+ * @brief 查询应用授权。未安装查询的通用 SPP 调用方沿用此前行为。
+ * @param addr: 请求方地址。
+ * @retval 当前配对策略。
+ * @note 仅 worker，不阻塞。
+ */
+static spp_server_pair_policy_t spp_server_pair_policy(const uint8_t *addr)
+{
+    return s_pair_query != NULL ? s_pair_query(addr) : SPP_SERVER_PAIR_ALLOW;
+}
+
+/**
+ * @brief 写一行配对诊断。
+ * @param addr: 地址。
+ * @param prefix: 消息前缀。
+ * @param suffix: 消息后缀。
+ * @note 仅发送任务，BTC 回调不输出。
+ */
+static void spp_server_pair_log(const uint8_t *addr, const char *prefix, const char *suffix)
+{
+    FW_CLOGI(FW_LOG_CAT_SPP, "%s%02X:%02X:%02X:%02X:%02X:%02X%s", prefix, (unsigned)addr[0],
+             (unsigned)addr[1], (unsigned)addr[2], (unsigned)addr[3], (unsigned)addr[4],
+             (unsigned)addr[5], suffix);
+}
+
+/**
+ * @brief 在发送任务中尝试挂起一条配对请求。
+ * @param req: 带地址和 GAP 类型的请求。
+ * @retval true 已登记；false 已有待确认请求。
+ */
+static bool spp_server_pair_hold(const spp_server_ctrl_request_t *req)
+{
+    const TickType_t now = xTaskGetTickCount();
+    taskENTER_CRITICAL(&s_spp_mux);
+    const bool free_slot = !s_pair_pending.active;
+    if (free_slot) {
+        s_pair_pending = (spp_server_pair_pending_t){.req = *req, .start = now, .active = true};
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+    return free_slot;
+}
+
+/**
+ * @brief 取走手动判定、已经超时或窗口已经失效的请求。
+ * @param req: 输出请求副本。
+ * @param accept: 输出应答。
+ * @retval true 已取出；false 无需应答。
+ * @note 仅 worker 改写挂起地址和 active。查询应用时不持驱动锁。
+ */
+static bool spp_server_pair_take(spp_server_ctrl_request_t *req, bool *accept)
+{
+    if (!s_pair_pending.active) {
+        return false;
+    }
+    const bool window_open =
+        spp_server_pair_policy(s_pair_pending.req.bda) == SPP_SERVER_PAIR_CONFIRM;
+    const TickType_t now = xTaskGetTickCount();
+    taskENTER_CRITICAL(&s_spp_mux);
+    const bool live =
+        window_open && now - s_pair_pending.start < pdMS_TO_TICKS(SPP_SERVER_PAIR_CONFIRM_MS);
+    const bool ready = !live || s_pair_pending.decided;
+    if (ready) {
+        *req = s_pair_pending.req;
+        // 决定入口已校验 30 s，worker 被调度得稍晚仍应执行及时收到的接受。
+        *accept = window_open && s_pair_pending.decided && s_pair_pending.accept;
+        s_pair_pending.active = false;
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+    return ready;
+}
+
 /**
  * @brief  从会话取出待投递的控制请求并标记在途
  * @param  slot: 会话槽位下标
@@ -334,10 +441,11 @@ static bool spp_server_ctrl_claim_locked(uint32_t slot, spp_server_ctrl_request_
 /**
  * @brief  把控制请求投递给蓝牙栈
  * @param  req: 请求内容（esp_bd_addr_t 需要可写指针）
+ * @param  accept: GAP 应答结果，断开请求忽略此参数。
  * @retval ESP_OK 成功；其他为 IDF 错误码
  * @note   锁外调用，可能阻塞。
  */
-static esp_err_t spp_server_ctrl_deliver(spp_server_ctrl_request_t *req)
+static esp_err_t spp_server_ctrl_deliver(spp_server_ctrl_request_t *req, bool accept)
 {
     esp_err_t err = ESP_OK;
 
@@ -351,11 +459,11 @@ static esp_err_t spp_server_ctrl_deliver(spp_server_ctrl_request_t *req)
             pin_code[pin_idx] = (uint8_t)SPP_SERVER_LEGACY_PIN[pin_idx];
         }
 
-        err = esp_bt_gap_pin_reply(req->bda, true, SPP_SERVER_PIN_LEN, pin_code);
+        err = esp_bt_gap_pin_reply(req->bda, accept, accept ? SPP_SERVER_PIN_LEN : 0U, pin_code);
         break;
     }
     case SPP_SERVER_CTRL_CFM_REQ:
-        err = esp_bt_gap_ssp_confirm_reply(req->bda, true);
+        err = esp_bt_gap_ssp_confirm_reply(req->bda, accept);
         break;
     case SPP_SERVER_CTRL_REJECT:
         /* 取走后、断开前若同句柄已被新会话接纳（IDF 复用了句柄），放弃这次断开。 */
@@ -397,11 +505,54 @@ static void spp_server_ctrl_settle_locked(uint32_t slot, esp_err_t err)
 }
 
 /**
+ * @brief 在控制任务按当前策略应答请求或挂起等手动确认。
+ * @param req: 请求。
+ * @retval ESP_OK 已投递或挂起；其他为 GAP API 错误。
+ */
+static esp_err_t spp_server_ctrl_authorize(spp_server_ctrl_request_t *req)
+{
+    if (req->type == SPP_SERVER_CTRL_REJECT) {
+        return spp_server_ctrl_deliver(req, false);
+    }
+    const spp_server_pair_policy_t policy = spp_server_pair_policy(req->bda);
+    if (req->type == SPP_SERVER_CTRL_PAIRED) {
+        if (policy == SPP_SERVER_PAIR_ALLOW || policy == SPP_SERVER_PAIR_CONFIRM) {
+            spp_server_pair_log(req->bda, "Paired with ",
+                                " (use 'bt trust <MAC>' to trust as alarm)");
+        }
+        return ESP_OK;
+    }
+    if (policy == SPP_SERVER_PAIR_CONFIRM && spp_server_pair_hold(req)) {
+        spp_server_pair_log(req->bda, "Pair request from ", ", accept with 'bt pair accept'");
+        return ESP_OK;
+    }
+    if (policy == SPP_SERVER_PAIR_DENY) {
+        spp_server_pair_log(req->bda, "Pairing rejected from ", " (window closed)");
+    }
+    return spp_server_ctrl_deliver(req, policy == SPP_SERVER_PAIR_ALLOW ||
+                                            policy == SPP_SERVER_PAIR_TRUSTED);
+}
+
+/** @brief 投递已结束等待的 GAP 请求。 @note 仅 worker。 */
+static void spp_server_pair_process_pending(void)
+{
+    spp_server_ctrl_request_t req = {0};
+    bool accept = false;
+    if (spp_server_pair_take(&req, &accept)) {
+        const esp_err_t error = spp_server_ctrl_deliver(&req, accept);
+        if (error != ESP_OK) {
+            spp_server_trace(SPP_SERVER_TRACE_CTRL_ERR, 0U, (uint32_t)req.type, (uint32_t)error);
+        }
+    }
+}
+
+/**
  * @brief  每轮处理所有会话待投递的控制请求
  * @note   发送任务上下文；锁内取请求，锁外投递与追踪，只有 REJECT 需锁内结算。
  */
 void spp_server_ctrl_process(void)
 {
+    spp_server_pair_process_pending();
     for (uint32_t slot = 0U; slot < SPP_SERVER_CTRL_MAX; slot++) {
         spp_server_ctrl_request_t req = {0};
         const TickType_t now = xTaskGetTickCount();
@@ -413,7 +564,7 @@ void spp_server_ctrl_process(void)
             continue;
         }
 
-        const esp_err_t err = spp_server_ctrl_deliver(&req);
+        const esp_err_t err = spp_server_ctrl_authorize(&req);
         if (req.type == SPP_SERVER_CTRL_REJECT) {
             taskENTER_CRITICAL(&s_spp_mux);
             spp_server_ctrl_settle_locked(slot, err);

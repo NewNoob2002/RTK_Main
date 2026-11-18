@@ -4,10 +4,27 @@
 
 #include "core/LinkManager.hpp"
 #include "core/TraceCodes.hpp"
+#include "private_include/PairWindow.hpp"
 
 namespace core {
 
 namespace {
+
+constinit const LinkManager *s_pair_owner = nullptr;
+constinit PairWindow *s_pair_window = nullptr;
+
+/** @brief 查询已绑定的窗口。 @param manager: 链路管理器。 @retval 窗口地址或 nullptr。 @note 仅链路任务。 */
+PairWindow *pairWindow(const LinkManager &manager) noexcept
+{
+    return s_pair_owner == &manager ? s_pair_window : nullptr;
+}
+
+/** @brief 在帧处理时判断窗口。 @param manager: 链路管理器。 @param nowMs: 当前时间。 @retval true 窗口打开。 */
+bool pairOpenAt(const LinkManager &manager, uint32_t nowMs) noexcept
+{
+    const auto *window = pairWindow(manager);
+    return window != nullptr ? window->snapshot(nowMs).remainingMs != 0U : manager.isPairing();
+}
 
 /** @brief 把 Role 转成追踪事件参数（uint32_t），避免窄化告警。
  *  @param role 待转换角色。
@@ -71,6 +88,58 @@ bool elapsedReaches(uint32_t nowMs, uint32_t thenMs, uint32_t limitMs) noexcept
 }
 
 } // namespace
+
+void PairWindow::set(uint32_t nowMs, uint32_t durationMs, bool confirm) noexcept
+{
+    const fw::LockGuard guard(lock_);
+    start_ms_ = nowMs;
+    duration_ms_ = durationMs;
+    confirm_ = confirm;
+}
+
+PairWindowStatus PairWindow::snapshot(uint32_t nowMs) const noexcept
+{
+    const fw::LockGuard guard(lock_);
+    const uint32_t elapsed = nowMs - start_ms_;
+    if (elapsed >= duration_ms_) {
+        return {};
+    }
+    return {duration_ms_ - elapsed, confirm_};
+}
+
+bool PairWindow::active() const noexcept
+{
+    const fw::LockGuard guard(lock_);
+    return duration_ms_ != 0U;
+}
+
+bool PairWindow::expire(uint32_t nowMs) noexcept
+{
+    const fw::LockGuard guard(lock_);
+    if (duration_ms_ == 0U || nowMs - start_ms_ < duration_ms_) {
+        return false;
+    }
+    duration_ms_ = 0U;
+    return true;
+}
+
+void bindPairWindow(const LinkManager &manager, PairWindow *window) noexcept
+{
+    s_pair_owner = &manager;
+    s_pair_window = window;
+}
+
+void openPairWindow(PairWindow &window, uint32_t nowMs, uint32_t durationMs, bool confirm) noexcept
+{
+    window.set(nowMs, durationMs, confirm);
+    traceLink(LinkTrace::kPairOpen, 0, durationMs);
+}
+
+void closePairWindow(PairWindow &window, uint32_t nowMs) noexcept
+{
+    window.set(nowMs, 0U);
+    traceLink(LinkTrace::kPairClose, 0, 0U);
+}
 
 /**
  * @brief 清空会话表与白名单，再按 policy 载入 alarms。
@@ -154,7 +223,7 @@ Role LinkManager::onOpen(SessionHandle handle, const BtAddr &addr, uint32_t nowM
                 }
             }
         }
-    } else if (pairing_) {
+    } else if (pairOpenAt(*this, nowMs)) {
         // 规则 4 第二支：手机在线且配对窗口打开，等待 HELLO。
         role = Role::kPending;
         traceLink(LinkTrace::kOpen, handle, roleValue(role),
@@ -208,7 +277,7 @@ Role LinkManager::onFrame(SessionHandle handle, uint8_t sender, uint16_t msgId, 
         if (found->role == Role::kAlarm) {
             return Role::kAlarm;
         }
-        if (!pairing_) {
+        if (!pairOpenAt(*this, nowMs)) {
             // 配对窗口外的 HELLO：未授权报警器，断开。
             actionAdd(act, handle);
             found->inUse = false;
@@ -274,7 +343,11 @@ void LinkManager::tick(uint32_t nowMs, Actions &act) noexcept
         }
     }
 
-    if (pairing_ && elapsedReaches(nowMs, pair_start_ms_, kPairWindowMs)) {
+    if (auto *window = pairWindow(*this); window != nullptr) {
+        if (window->expire(nowMs)) {
+            traceLink(LinkTrace::kPairClose, 0, 1U);
+        }
+    } else if (pairing_ && elapsedReaches(nowMs, pair_start_ms_, kPairWindowMs)) {
         pairing_ = false;
         traceLink(LinkTrace::kPairClose, 0, 1);
     }
@@ -314,6 +387,10 @@ bool LinkManager::hasRole(Role role) const noexcept
 
 void LinkManager::pairOpen(uint32_t nowMs) noexcept
 {
+    if (auto *window = pairWindow(*this); window != nullptr) {
+        openPairWindow(*window, nowMs, kPairWindowMs, false);
+        return;
+    }
     pairing_ = true;
     pair_start_ms_ = nowMs;
     traceLink(LinkTrace::kPairOpen, 0, static_cast<uint32_t>(kPairWindowMs));
@@ -321,6 +398,9 @@ void LinkManager::pairOpen(uint32_t nowMs) noexcept
 
 bool LinkManager::isPairing() const noexcept
 {
+    if (const auto *window = pairWindow(*this); window != nullptr) {
+        return window->active();
+    }
     return pairing_;
 }
 

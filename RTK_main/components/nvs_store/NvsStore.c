@@ -230,6 +230,18 @@ bool nvs_store_factory_available(void)
     return s_factory_available;
 }
 
+esp_err_t nvs_store_erase_user(void)
+{
+    return nvs_flash_erase();
+}
+
+esp_err_t nvs_store_erase_factory(void)
+{
+    const esp_err_t error = nvs_flash_erase_partition(NVS_STORE_FACTORY_PARTITION);
+    s_factory_available = false; /* IDF 在擦除前关闭句柄并卸载分区。 */
+    return error;
+}
+
 esp_err_t nvs_store_get_sn(char *out, size_t out_size)
 {
     nvs_handle_t handle = 0;
