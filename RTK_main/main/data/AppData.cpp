@@ -33,6 +33,8 @@ void DataCenter::init() noexcept
     gnssReadback.bindLock(lock);
     gnssLatest.bindLock(lock);
     gnssAppSub.bindLock(lock);
+    gnssWorkMode.bindLock(lock);
+    baseRtcmRing.bindLock(lock);
 #endif
 }
 

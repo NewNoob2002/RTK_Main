@@ -16,11 +16,15 @@ struct RtcmStats {
     uint32_t crc32 = 0;
     uint16_t lastMsg = 0;
     uint32_t rejectedRole = 0;
+    uint32_t rejectedMode = 0;
     uint32_t bytesPerSec = 0;
     uint32_t pipeAcceptedFrames = 0;
     uint32_t pipeAcceptedBytes = 0;
     uint32_t pipeDroppedFrames = 0;
     uint32_t pipeDroppedBytes = 0;
+    uint32_t baseTxFrames = 0;
+    uint32_t baseTxBytes = 0;
+    uint32_t baseTxDrop = 0;
     uint32_t resetEpoch = 0;
 };
 

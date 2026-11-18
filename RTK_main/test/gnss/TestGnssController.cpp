@@ -189,6 +189,20 @@ public:
         out = ConfigStep{.expectReply = false, .switchBaud = baud};
         return out.cmd.append("BAUD\r\n");
     }
+    bool modeStep(const gnss::ModeRequest &, uint8_t idx, ConfigStep &out) const noexcept override
+    {
+        if (family_ != Family::kUnicore) {
+            return false;
+        }
+        out = ConfigStep{};
+        if (idx == 0U) {
+            return out.cmd.append("M0\r\n");
+        }
+        if (idx == 1U) {
+            return out.cmd.append("M1\r\n");
+        }
+        return false;
+    }
 
 private:
     Family family_;
@@ -623,6 +637,45 @@ static void testStateNames()
     TEST_ASSERT_EQUAL_STRING("failed", gnss::stateName(gnss::State::kFailed));
 }
 
+/** @brief C5a 多步模式切换：成功、NACK 重试后失败、unsupported。 */
+void testMaintenanceMode()
+{
+    Controller controller;
+    const RoverConfig cfg = roverConfig();
+    uint32_t now = 0U;
+    configureForMaintenance(controller, kReceiverA, cfg, now);
+    gnss::ModeRequest req{};
+    TEST_ASSERT_TRUE(controller.requestMode(req));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "M0\r\n"));
+    // 第 0 步超时一次后重试并成功，推进到第 1 步。
+    now += gnss::kStepTimeoutMs;
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "M0\r\n"));
+    feed(controller, "OK", ++now);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "M1\r\n"));
+    feed(controller, "OK", ++now);
+    TEST_ASSERT_EQUAL(Action::Kind::kNone, controller.poll(now).kind);
+    TEST_ASSERT_EQUAL(gnss::State::kRunning, controller.state());
+    TEST_ASSERT_EQUAL(gnss::Maintenance::kMode, controller.stats().maintenance);
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kOk, controller.stats().maintenanceResult);
+
+    // 连续 NACK 耗尽重试后返回 kNack。
+    TEST_ASSERT_TRUE(controller.requestMode(req));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "M0\r\n"));
+    feed(controller, "NO", ++now);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "M0\r\n"));
+    feed(controller, "NO", ++now);
+    TEST_ASSERT_EQUAL(Action::Kind::kNone, controller.poll(now).kind);
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kNack, controller.stats().maintenanceResult);
+
+    // 不支持模式切换的驱动返回 kUnsupported。
+    Controller ubloxCtrl;
+    uint32_t t2 = 0U;
+    configureForMaintenance(ubloxCtrl, kReceiverB, cfg, t2);
+    TEST_ASSERT_TRUE(ubloxCtrl.requestMode(req));
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kUnsupported, ubloxCtrl.stats().maintenanceResult);
+    TEST_ASSERT_EQUAL(gnss::State::kRunning, ubloxCtrl.state());
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
@@ -638,5 +691,6 @@ int main(int, char **)
     RUN_TEST(testMaintenanceSave);
     RUN_TEST(testMaintenanceBaud);
     RUN_TEST(testMaintenanceReset);
+    RUN_TEST(testMaintenanceMode);
     return UNITY_END();
 }

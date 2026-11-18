@@ -80,6 +80,14 @@ void BtLinkModule::handleRtcmFrame(core::SessionHandle handle,
                   static_cast<uint32_t>(wire.size()));
         return;
     }
+#if RTK_GNSS_ENABLED
+    if (ctx().data.gnssWorkMode.read().active) {
+        ++rtcm_snapshot_.rejectedMode;
+        traceRtcm(RtcmTrace::kReject, handle, static_cast<uint32_t>(RtcmReject::kMode),
+                  static_cast<uint32_t>(wire.size()));
+        return;
+    }
+#endif
     ++rtcm_snapshot_.frames;
     // wire 已由 RTCM 解码器校验，长度 <= 1029 B，转换到 uint32_t 无损。
     rtcm_snapshot_.bytes += static_cast<uint32_t>(wire.size());
@@ -316,6 +324,8 @@ void BtLinkModule::syncStream() noexcept
 {
     if (stream_handle_ != 0 && link_manager_.role(stream_handle_) != core::Role::kPhone) {
 #if RTK_GNSS_ENABLED
+        ctx().data.phoneStreamReady.store(false, std::memory_order_release);
+        ctx().data.baseRtcmRing.clearFrames();
         resetGnssStreamSession();
 #endif
         const esp_err_t status = spp_server_stream_bind(stream_handle_, false);
@@ -331,6 +341,9 @@ void BtLinkModule::syncStream() noexcept
                 const esp_err_t status = spp_server_stream_bind(entry.handle, true);
                 if (status == ESP_OK) {
                     stream_handle_ = entry.handle;
+#if RTK_GNSS_ENABLED
+                    ctx().data.phoneStreamReady.store(true, std::memory_order_release);
+#endif
                 }
                 // 旧 generation 的 copy/API 未退出时容量不可用，下轮重查，不另建 stream 或同步回退。
                 return;

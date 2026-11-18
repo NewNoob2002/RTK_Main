@@ -135,10 +135,13 @@ add_test(NAME template_module COMMAND template_check template_module)
 add_executable(gnss_output_check GnssOutputCheck.cpp
     GnssResetCheck.cpp
     ${PROJ_ROOT}/main/data/GnssOutput.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssBaseConfig.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssWorkMode.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModule.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleCmds.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleFrames.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleMaintenance.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModuleMode.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleProbe.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleStore.cpp
     ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp)
@@ -161,6 +164,26 @@ target_compile_definitions(gnss_output_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1 CO
     CONFIG_RTK_GNSS_RATE_HZ=1)
 target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim main_rtos gnss)
 add_test(NAME gnss_output COMMAND gnss_output_check)
+
+add_executable(gnss_mode_check GnssModeCheck.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssBaseConfig.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssWorkMode.cpp)
+target_include_directories(gnss_mode_check BEFORE PRIVATE shim)
+target_include_directories(gnss_mode_check PRIVATE ../t13_host_check/shim/inc
+    ${PROJ_ROOT}/main ${PROJ_ROOT}/components/rtos/include
+    ${PROJ_ROOT}/components/spp_server/include
+    ${PROJ_ROOT}/components/cli/include
+    ${PROJ_ROOT}/components/bt_reconnect/include
+    ${PROJ_ROOT}/components/nvs_store/include
+    ${PROJ_ROOT}/components/app_fw/include
+    ${PROJ_ROOT}/components/gnss/include
+    ${PROJ_ROOT}/components/stream_demux/include
+    ${PROJ_ROOT}/components/link_core/include)
+target_compile_options(gnss_mode_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
+    -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+target_compile_definitions(gnss_mode_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1 CONFIG_RTK_LOG_RING_BYTES=4096)
+target_link_libraries(gnss_mode_check PRIVATE main_pure main_rtos gnss)
+add_test(NAME gnss_mode COMMAND gnss_mode_check)
 
 # 编译真实组合根的内存计划；函数分节仅裁去 host 无法运行的硬件入口，不替换待测绑定/回滚逻辑。
 foreach(features on gnss_off trace_off all_off)

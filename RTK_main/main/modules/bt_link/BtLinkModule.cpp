@@ -290,12 +290,14 @@ bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
     syncStream();
 #if RTK_GNSS_ENABLED
     const bool gnssMore = drainGnssStream();
+    const bool baseMore = drainBaseRtcm();
 #else
     const bool gnssMore = false;
+    const bool baseMore = false;
 #endif
     collectWhitelistDirty();
     publishLink(rtos::nowMs());
-    bool pending = gnssMore;
+    bool pending = gnssMore || baseMore;
     for (const auto &entry : sessions_) {
         pending =
             pending || (entry.used && entry.demuxReady && !linkService().paused(entry.handle) &&

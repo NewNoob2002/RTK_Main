@@ -369,10 +369,84 @@ static void testConfiguredOutputPort()
     TEST_ASSERT_EQUAL_HEX8(0x01U, cmd.view()[7U]);
 }
 
+/** @brief 检查 VALSET 帧内是否包含指定键与 U4 值。 */
+static bool hasItemU4(const gnss::CmdBuf &cmd, uint32_t key, uint32_t value)
+{
+    const auto view = cmd.view();
+    if (view.size() < 18U) {
+        return false;
+    }
+    for (size_t i = 10U; i + 8U <= view.size() - 2U; ++i) {
+        const uint32_t k = static_cast<uint32_t>(view[i]) |
+                           (static_cast<uint32_t>(view[i + 1U]) << 8U) |
+                           (static_cast<uint32_t>(view[i + 2U]) << 16U) |
+                           (static_cast<uint32_t>(view[i + 3U]) << 24U);
+        const uint32_t v = static_cast<uint32_t>(view[i + 4U]) |
+                           (static_cast<uint32_t>(view[i + 5U]) << 8U) |
+                           (static_cast<uint32_t>(view[i + 6U]) << 16U) |
+                           (static_cast<uint32_t>(view[i + 7U]) << 24U);
+        if (k == key && v == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** @brief C5a 模式切换（TMODE-MODE / Survey / Fixed / RTCM MSGOUT）编码。 */
+static void testWorkModeSteps()
+{
+    const auto &driver = ubloxDrv();
+    gnss::ModeRequest req{};
+    req.port = 2U;
+    req.navRateHz = 1U;
+    req.useConfiguredPort = true;
+    req.surveySeconds = 20U;
+    req.surveyAccCm = 150U;
+    req.fixLatE9 = -31234567899LL;
+    req.fixLonE9 = 121473700012LL;
+    req.fixHeightMm = -1234;
+    req.rtcmPeriodMs = {1000U, 1000U, 10000U, 10000U, 1000U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+
+    gnss::ConfigStep step{};
+    req.action = gnss::ModeAction::kRover;
+    TEST_ASSERT_TRUE(driver.modeStep(req, 0U, step));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x20030001U, 0U, 1));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 1U, step));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x10760004U, 0U, 1)); // UART2 OUTPROT RTCM3X=0
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x209102BFU, 0U, 1)); // 1005 UART2=0
+    TEST_ASSERT_FALSE(driver.modeStep(req, 2U, step));
+
+    req.action = gnss::ModeAction::kBasePrep;
+    TEST_ASSERT_TRUE(driver.modeStep(req, 1U, step));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x10760004U, 1U, 1));  // UART2 OUTPROT RTCM3X=1
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x209102BFU, 1U, 1));  // 1005 UART2=1
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x20910305U, 10U, 1)); // 1230 UART2=10
+
+    req.action = gnss::ModeAction::kBaseSurvey;
+    TEST_ASSERT_TRUE(driver.modeStep(req, 0U, step));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x20030001U, 1U, 1));
+    TEST_ASSERT_TRUE(hasItemU4(step.cmd, 0x40030010U, 20U));
+    TEST_ASSERT_TRUE(hasItemU4(step.cmd, 0x40030011U, 15000U));
+    TEST_ASSERT_FALSE(driver.modeStep(req, 1U, step));
+
+    req.action = gnss::ModeAction::kBaseFixed;
+    TEST_ASSERT_TRUE(driver.modeStep(req, 0U, step));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x209102BFU, 1U, 1));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 1U, step));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x20030001U, 2U, 1)); // Fixed
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x20030002U, 1U, 1)); // LLH
+    TEST_ASSERT_TRUE(hasItemU4(step.cmd, 0x40030009U, static_cast<uint32_t>(-312345678)));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x2003000CU, static_cast<uint8_t>(int8_t{-99}), 1));
+    TEST_ASSERT_TRUE(hasItemU4(step.cmd, 0x4003000BU, static_cast<uint32_t>(-123)));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x2003000EU, static_cast<uint8_t>(int8_t{-40}), 1));
+    TEST_ASSERT_FALSE(driver.modeStep(req, 2U, step));
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
     RUN_TEST(testMaintenanceCommands);
+    RUN_TEST(testWorkModeSteps);
     RUN_TEST(testConfiguredOutputPort);
     RUN_TEST(testGoldenProbe);
     RUN_TEST(testGoldenOutputPlan);

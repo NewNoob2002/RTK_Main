@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -13,8 +14,10 @@
 #include "fw/Status.hpp"
 #include "AppConfig.hpp"
 #if RTK_GNSS_ENABLED
+#include "data/BaseRtcmRing.hpp"
 #include "data/GnssOutput.hpp"
 #include "def/GnssDef.hpp"
+#include "def/GnssSubDef.hpp"
 #endif
 #include "def/LinkDef.hpp"
 #include "def/RtcmDef.hpp"
@@ -138,6 +141,9 @@ struct DataCenter {
     fw::FanoutRing gnssAppRing{};
     GnssLatestCache gnssLatest{};
     GnssAppSubState gnssAppSub{};
+    ZeroInitSlot<GnssWorkModeStatus> gnssWorkMode{};
+    BaseRtcmRing baseRtcmRing{};
+    std::atomic<bool> phoneStreamReady{false};
 #endif
 
     portMUX_TYPE mux{};

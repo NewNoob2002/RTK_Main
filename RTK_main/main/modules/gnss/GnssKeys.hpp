@@ -7,6 +7,7 @@
 
 #include "data/GnssOutput.hpp"
 #include "fw/StoreKey.hpp"
+#include "modules/gnss/GnssBaseConfig.hpp"
 #include "modules/gnss/GnssModule.hpp"
 
 namespace app::gnss_store {
@@ -103,12 +104,137 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .help = "last detected GNSS UART baud",
       .binding = {.obj = nullptr, .load = &GnssModule::loadBaud, .save = &GnssModule::saveBaud}}}};
 
+inline constexpr size_t kBaseModeKeyIdx = 0U;
+inline constexpr size_t kBaseTypeKeyIdx = 1U;
+inline constexpr size_t kBaseSvySKeyIdx = 2U;
+inline constexpr size_t kBaseSvyAccCmKeyIdx = 3U;
+inline constexpr size_t kBaseSvyToSKeyIdx = 4U;
+inline constexpr size_t kBaseFixLatKeyIdx = 5U;
+inline constexpr size_t kBaseFixLonKeyIdx = 6U;
+inline constexpr size_t kBaseFixHMmKeyIdx = 7U;
+inline constexpr size_t kBaseRtcmOutKeyIdx = 8U;
+inline constexpr size_t kBaseMsmKeyIdx = 9U;
+
+// 工作模式与基站配置组 gnss.base（ADR-0014 §2.5/§2.6）。
+inline constexpr std::array<fw::StoreKey, 10U> kBaseKeys = {
+    {{.ns = "gnss",
+      .key = "mode",
+      .type = fw::StoreType::kU8,
+      .maxSize = 1U,
+      .flags = fw::store_flag::kConsole,
+      .min = 0,
+      .max = 2,
+      .help = "GNSS work mode (0=rover, 1=base, 2=smartbase)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseMode,
+                  .save = &GnssModule::saveBaseMode}},
+     {.ns = "gnss",
+      .key = "base_type",
+      .type = fw::StoreType::kU8,
+      .maxSize = 1U,
+      .flags = fw::store_flag::kConsole,
+      .min = 0,
+      .max = 1,
+      .help = "Base position source (0=survey, 1=fixed)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseType,
+                  .save = &GnssModule::saveBaseType}},
+     {.ns = "gnss",
+      .key = "svy_s",
+      .type = fw::StoreType::kU16,
+      .maxSize = 2U,
+      .flags = fw::store_flag::kConsole,
+      .min = GnssBaseConfig::kMinSvyS,
+      .max = GnssBaseConfig::kMaxSvyS,
+      .help = "Survey-in minimum duration (s)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseSvyS,
+                  .save = &GnssModule::saveBaseSvyS}},
+     {.ns = "gnss",
+      .key = "svy_acc_cm",
+      .type = fw::StoreType::kU16,
+      .maxSize = 2U,
+      .flags = fw::store_flag::kConsole,
+      .min = GnssBaseConfig::kMinSvyAccCm,
+      .max = GnssBaseConfig::kMaxSvyAccCm,
+      .help = "Survey-in accuracy threshold (cm)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseSvyAccCm,
+                  .save = &GnssModule::saveBaseSvyAccCm}},
+     {.ns = "gnss",
+      .key = "svy_to_s",
+      .type = fw::StoreType::kU16,
+      .maxSize = 2U,
+      .flags = fw::store_flag::kConsole,
+      .min = GnssBaseConfig::kMinSvyToS,
+      .max = GnssBaseConfig::kMaxSvyToS,
+      .help = "Survey-in total timeout (s)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseSvyToS,
+                  .save = &GnssModule::saveBaseSvyToS}},
+     {.ns = "gnss",
+      .key = "fix_lat",
+      .type = fw::StoreType::kBlob,
+      .maxSize = GnssBaseConfig::kFixCoordBlobBytes,
+      .flags = fw::store_flag::kConsole | fw::store_flag::kExport,
+      .min = 0,
+      .max = 0,
+      .help = "Fixed base latitude (int64 LE 1e-9 deg)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseFixLat,
+                  .save = &GnssModule::saveBaseFixLat}},
+     {.ns = "gnss",
+      .key = "fix_lon",
+      .type = fw::StoreType::kBlob,
+      .maxSize = GnssBaseConfig::kFixCoordBlobBytes,
+      .flags = fw::store_flag::kConsole | fw::store_flag::kExport,
+      .min = 0,
+      .max = 0,
+      .help = "Fixed base longitude (int64 LE 1e-9 deg)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseFixLon,
+                  .save = &GnssModule::saveBaseFixLon}},
+     {.ns = "gnss",
+      .key = "fix_h_mm",
+      .type = fw::StoreType::kBlob,
+      .maxSize = GnssBaseConfig::kFixHeightBlobBytes,
+      .flags = fw::store_flag::kConsole | fw::store_flag::kExport,
+      .min = 0,
+      .max = 0,
+      .help = "Fixed base ellipsoidal height (int32 LE mm)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseFixHeight,
+                  .save = &GnssModule::saveBaseFixHeight}},
+     {.ns = "gnss",
+      .key = "rtcm_out",
+      .type = fw::StoreType::kBlob,
+      .maxSize = GnssBaseConfig::kRtcmOutBlobBytes,
+      .flags = fw::store_flag::kConsole | fw::store_flag::kExport,
+      .min = 0,
+      .max = 0,
+      .help = "Base RTCM3 output rates (14B blob v1)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadBaseRtcmOut,
+                  .save = &GnssModule::saveBaseRtcmOut}},
+     {.ns = "gnss",
+      .key = "msm",
+      .type = fw::StoreType::kU8,
+      .maxSize = 1U,
+      .flags = fw::store_flag::kConsole,
+      .min = GnssBaseConfig::kMsm4,
+      .max = GnssBaseConfig::kMsm7,
+      .help = "Base MSM version (4 or 7)",
+      .binding = {
+          .obj = nullptr, .load = &GnssModule::loadBaseMsm, .save = &GnssModule::saveBaseMsm}}}};
+
 static_assert(std::ranges::all_of(kConfigKeys, fw::valid), "gnss.config 键必须合法");
+static_assert(std::ranges::all_of(kBaseKeys, fw::valid), "gnss.base 键必须合法");
 static_assert(kConfigKeys.back().key == "baud", "早期波特率键必须是 gnss.config 末项");
 static_assert(kConfigKeys[kRateKeyIndex].key == "rate" && kConfigKeys[kOutKeyIndex].key == "out");
 static_assert(fw::valid(kCacheKeys[0]) && fw::valid(kCacheKeys[1]) && fw::valid(kCacheKeys[2]),
               "gnss.cache 键必须合法");
-static_assert(fw::uniqueKeys(kConfigKeys) && fw::uniqueKeys(kCacheKeys),
+static_assert(fw::uniqueKeys(kConfigKeys) && fw::uniqueKeys(kCacheKeys) &&
+                  fw::uniqueKeys(kBaseKeys),
               "gnss 键表不得有重复的 ns/key");
 
 } // namespace app::gnss_store

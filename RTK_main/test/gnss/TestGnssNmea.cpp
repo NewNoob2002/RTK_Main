@@ -185,6 +185,42 @@ static void testTalkerConstellationMapping()
                       static_cast<int>(parser.sats().sats[0].system));
 }
 
+/** @brief GST 解析水平标准差（sqrt(lat^2 + lon^2) → cm）及空值/异常分支。 */
+static void testGstHorizontalAccuracy()
+{
+    gnss::NmeaParser parser;
+    TEST_ASSERT_EQUAL_UINT16(gnss::kU16Unknown, parser.fix().hAccCm);
+
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::NmeaResult::kAux),
+        static_cast<int>(feed(parser, "GNGST,024603.00,1.20,1.80,1.10,45.0,0.90,1.20,1.50", 10)));
+    TEST_ASSERT_EQUAL_UINT16(150U, parser.fix().hAccCm);
+    TEST_ASSERT_EQUAL_UINT32(1U, parser.stats().gst);
+
+    // 另一条 GPGST 验证整数四舍五入与计数累加。
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::NmeaResult::kAux),
+        static_cast<int>(feed(parser, "GPGST,024604.00,1.20,1.80,1.10,45.0,0.004,0.005,0.01", 20)));
+    TEST_ASSERT_EQUAL_UINT16(1U, parser.fix().hAccCm); // sqrt(4^2+5^2)=6 mm -> 1 cm
+    TEST_ASSERT_EQUAL_UINT32(2U, parser.stats().gst);
+
+    // 空误差字段清回 kU16Unknown。
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kAux),
+                      static_cast<int>(feed(parser, "GNGST,024605.00,1.20,,,,,", 30)));
+    TEST_ASSERT_EQUAL_UINT16(gnss::kU16Unknown, parser.fix().hAccCm);
+    TEST_ASSERT_EQUAL_UINT32(3U, parser.stats().gst);
+
+    // 非法负数与缺字段判定 malformed。
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(gnss::NmeaResult::kMalformed),
+        static_cast<int>(feed(parser, "GNGST,024606.00,1.20,1.80,1.10,45.0,-0.5,1.0,1.0", 40)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kMalformed),
+                      static_cast<int>(feed(parser, "GNGST,024606.00,1.20,1.80", 41)));
+
+    parser.reset();
+    TEST_ASSERT_EQUAL_UINT16(gnss::kU16Unknown, parser.fix().hAccCm);
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
@@ -197,5 +233,6 @@ int main(int, char **)
     RUN_TEST(testMalformedKeepsState);
     RUN_TEST(testIgnoredSentenceAndReset);
     RUN_TEST(testTalkerConstellationMapping);
+    RUN_TEST(testGstHorizontalAccuracy);
     return UNITY_END();
 }

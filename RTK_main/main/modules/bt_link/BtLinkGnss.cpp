@@ -41,6 +41,12 @@ void BtLinkModule::applyRtcmReset() noexcept
         reset_version_ = resetVersion;
         retired_demux_ = {};
         rtcm_snapshot_ = {};
+        rtcm_snapshot_.baseTxFrames = 0U;
+        rtcm_snapshot_.baseTxBytes = 0U;
+#if RTK_GNSS_ENABLED
+        base_rtcm_tx_drop_ = 0U;
+        base_rtcm_ring_drop_base_ = ctx().data.baseRtcmRing.dropFrames();
+#endif
         rtcm_snapshot_.resetEpoch = reset;
         for (auto &entry : sessions_) {
             if (entry.demux.has_value()) {
@@ -190,6 +196,43 @@ bool BtLinkModule::drainGnssStream() noexcept
         ctx().data.gnssAppSub.addTxSent(view.type);
     }
     return sentCount == kMaxGnssStreamRecordsPerPoll;
+}
+
+bool BtLinkModule::drainBaseRtcm() noexcept
+{
+    const uint32_t curRingDrop = ctx().data.baseRtcmRing.dropFrames();
+    const uint32_t ringDropDelta =
+        (curRingDrop >= base_rtcm_ring_drop_base_) ? (curRingDrop - base_rtcm_ring_drop_base_) : 0U;
+    rtcm_snapshot_.baseTxDrop = ringDropDelta + base_rtcm_tx_drop_;
+    if ((stream_handle_ == 0U) || (link_manager_.role(stream_handle_) != core::Role::kPhone)) {
+        return false;
+    }
+    constexpr size_t kMaxBaseFramesPerPoll = 16U;
+    size_t sentCount = 0U;
+    for (; sentCount < kMaxBaseFramesPerPoll; ++sentCount) {
+        size_t len = 0U;
+        if (!ctx().data.baseRtcmRing.pop(base_rtcm_scratch_, len)) {
+            break;
+        }
+        spp_server_tx_token_t token{};
+        if (spp_server_stream_reserve(stream_handle_, len, &token) != ESP_OK) {
+            ++base_rtcm_tx_drop_;
+            continue;
+        }
+        if (spp_server_tx_commit(&token, base_rtcm_scratch_.data(), len) != ESP_OK) {
+            spp_server_tx_cancel(&token);
+            ++base_rtcm_tx_drop_;
+            continue;
+        }
+        ++rtcm_snapshot_.baseTxFrames;
+        rtcm_snapshot_.baseTxBytes += static_cast<uint32_t>(len);
+    }
+    const uint32_t postRingDrop = ctx().data.baseRtcmRing.dropFrames();
+    const uint32_t postRingDelta = (postRingDrop >= base_rtcm_ring_drop_base_)
+                                       ? (postRingDrop - base_rtcm_ring_drop_base_)
+                                       : 0U;
+    rtcm_snapshot_.baseTxDrop = postRingDelta + base_rtcm_tx_drop_;
+    return sentCount == kMaxBaseFramesPerPoll;
 }
 #endif
 

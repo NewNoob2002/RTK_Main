@@ -137,6 +137,14 @@ bool Receiver::baudStep(uint8_t port, uint32_t baud, ConfigStep &out) const noex
     return false;
 }
 
+bool Receiver::modeStep(const ModeRequest &req, uint8_t idx, ConfigStep &out) const noexcept
+{
+    static_cast<void>(req);
+    static_cast<void>(idx);
+    static_cast<void>(out);
+    return false;
+}
+
 bool Receiver::buildReadback(CmdBuf &) const noexcept
 {
     return false; // 由具体驱动覆盖（ADR-0012 §2.7）

@@ -230,6 +230,14 @@ struct ControllerImpl {
             return Round::kDone;
         }
     }
+
+    /**
+     * @brief 处理工作模式多步维护命令的单步应答与重试。
+     * @param self: 控制器。
+     * @param nowMs: 当前时间。
+     * @retval action: 若进入下一步或重试则返回待发送动作，否则为空。
+     */
+    static Action handleModeAck(Controller &self, uint32_t nowMs) noexcept;
 };
 
 namespace detail {

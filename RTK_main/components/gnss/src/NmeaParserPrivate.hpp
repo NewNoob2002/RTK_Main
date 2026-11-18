@@ -170,6 +170,7 @@ struct NmeaImpl {
     static NmeaResult parseRmc(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
     static NmeaResult parseGsa(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
     static NmeaResult parseGsv(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
+    static NmeaResult parseGst(NmeaParser &parser, std::span<const uint8_t> body) noexcept;
     static bool publish(NmeaParser &parser, uint32_t nowMs) noexcept;
     static void mergeUsed(NmeaParser &parser, Constellation system,
                           const std::array<uint8_t, detail::kGsaPrnCount> &prns,

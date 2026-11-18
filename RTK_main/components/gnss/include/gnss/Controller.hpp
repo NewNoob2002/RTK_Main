@@ -68,7 +68,7 @@ struct Timing {
 };
 
 /** 一次性维护操作。 */
-enum class Maintenance : uint8_t { kSave, kFactoryReset, kBaud };
+enum class Maintenance : uint8_t { kSave, kFactoryReset, kBaud, kMode };
 /** 最近一次维护操作的结果。 */
 enum class MaintenanceResult : uint8_t { kOk, kNack, kTimeout, kUnsupported, kIoError };
 
@@ -187,6 +187,13 @@ public:
      * @note 仅控制器所属任务调用。
      */
     [[nodiscard]] bool requestBaud(uint32_t baud) noexcept;
+    /**
+     * @brief 请求执行工作模式或基站 RTCM 配置分步脚本（复用 kMaintenance 通道）。
+     * @param req: 模式动作与参数。
+     * @retval true 已受理（或立即发布了 kUnsupported），结果由 maintenanceSeq 发布；false 当前忙。
+     * @note 仅控制器所属任务调用，不阻塞。
+     */
+    [[nodiscard]] bool requestMode(const ModeRequest &req) noexcept;
     /**
      * @brief 告知维护期间 UART 动作失败。
      * @param nowMs: 当前时间。
@@ -326,6 +333,9 @@ private:
     Maintenance pending_maintenance_ = Maintenance::kSave;
     MaintenanceResult restore_result_ = MaintenanceResult::kTimeout;
     uint32_t maintenance_old_baud_ = 0U;
+    ModeRequest mode_request_{};
+    uint8_t mode_step_index_ = 0U;
+    uint8_t mode_step_tries_ = 0U;
 
     /** @brief 进入维护状态或即时发布不支持。 @param kind: 操作类型。 @param baud: 可选波特率。 @retval true 已受理；false 当前忙。 */
     [[nodiscard]] bool beginMaintenance(Maintenance kind, uint32_t baud) noexcept;

@@ -25,6 +25,29 @@ bool Controller::requestBaud(uint32_t baud) noexcept
     return beginMaintenance(Maintenance::kBaud, baud);
 }
 
+bool Controller::requestMode(const ModeRequest &req) noexcept
+{
+    if ((state_ != State::kRunning) || (detected_.receiver == nullptr) || (cfg_ == nullptr)) {
+        return false;
+    }
+    pending_maintenance_ = Maintenance::kMode;
+    mode_request_ = req;
+    mode_step_index_ = 0U;
+    mode_step_tries_ = 0U;
+    step_ = ConfigStep{};
+    if (!receiver().modeStep(mode_request_, 0U, step_)) {
+        finishMaintenance(MaintenanceResult::kUnsupported);
+        return true;
+    }
+    maintenance_old_baud_ = host_baud_;
+    maintenance_phase_ = MaintenancePhase::kSend;
+    reply_ok_ = false;
+    reply_nack_ = false;
+    probe_hit_ = false;
+    state_ = State::kMaintenance;
+    return true;
+}
+
 void Controller::setProbePreferences(const Hint &hint, std::span<const uint32_t> bauds) noexcept
 {
     hint_ = hint;
@@ -118,6 +141,9 @@ Action Controller::pollMaintenance(uint32_t nowMs) noexcept
         break;
     case MaintenancePhase::kAwaitAck:
         if (reply_nack_ || reply_ok_ || detail::reached(nowMs, deadline_ms_)) {
+            if (pending_maintenance_ == Maintenance::kMode) {
+                return ControllerImpl::handleModeAck(*this, nowMs);
+            }
             finishMaintenance(
                 reply_nack_ ? MaintenanceResult::kNack
                             : (reply_ok_ ? MaintenanceResult::kOk : MaintenanceResult::kTimeout));
@@ -179,6 +205,45 @@ void Controller::onMaintenanceFrame(const demux::Decoder &dec,
         probe_hit_ = probe_hit_ || (receiver().matchProbe(dec, frame, result) &&
                                     result.model == detected_.probe.model);
     }
+}
+
+/**
+ * @brief 处理工作模式多步维护命令的单步应答与重试。
+ * @param self: 控制器。
+ * @param nowMs: 当前时间。
+ * @retval action: 若进入下一步或重试则返回待发送动作，否则为空。
+ */
+Action ControllerImpl::handleModeAck(Controller &self, uint32_t nowMs) noexcept
+{
+    const bool ok = self.reply_ok_ && !self.reply_nack_;
+    if (!ok) {
+        if (self.reply_nack_) {
+            ++self.stats_.stepNacks;
+        } else {
+            ++self.stats_.stepTimeouts;
+        }
+        if (self.mode_step_tries_ < self.timing_.stepRetries) {
+            ++self.mode_step_tries_;
+            self.maintenance_phase_ = Controller::MaintenancePhase::kSend;
+            self.reply_ok_ = false;
+            self.reply_nack_ = false;
+            return self.pollMaintenance(nowMs);
+        }
+        self.finishMaintenance(self.reply_nack_ ? MaintenanceResult::kNack
+                                                : MaintenanceResult::kTimeout);
+        return {};
+    }
+    ++self.mode_step_index_;
+    self.mode_step_tries_ = 0U;
+    self.step_ = ConfigStep{};
+    if (self.receiver().modeStep(self.mode_request_, self.mode_step_index_, self.step_)) {
+        self.maintenance_phase_ = Controller::MaintenancePhase::kSend;
+        self.reply_ok_ = false;
+        self.reply_nack_ = false;
+        return self.pollMaintenance(nowMs);
+    }
+    self.finishMaintenance(MaintenanceResult::kOk);
+    return {};
 }
 
 } // namespace gnss

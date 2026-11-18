@@ -133,6 +133,8 @@ NmeaResult NmeaImpl::feed(NmeaParser &parser, std::span<const uint8_t> sentence,
         result = parseGsa(parser, body);
     } else if (addrIs(addr, "GSV")) {
         result = parseGsv(parser, body);
+    } else if (addrIs(addr, "GST")) {
+        result = parseGst(parser, body);
     }
     if (result == NmeaResult::kMalformed) {
         ++parser.stats_.malformed; // 字段级解析失败也计入 malformed（不只是帧形状错误）

@@ -26,10 +26,14 @@ void RtcmModule::takeSnapshot(const RtcmLinkSnapshot &snap, RtcmStats &next) con
         next.crc32 = snap.crc32;
         next.lastMsg = snap.lastMsg;
         next.rejectedRole = snap.rejectedRole;
+        next.rejectedMode = snap.rejectedMode;
         next.pipeAcceptedFrames = snap.pipeAcceptedFrames;
         next.pipeAcceptedBytes = snap.pipeAcceptedBytes;
         next.pipeDroppedFrames = snap.pipeDroppedFrames;
         next.pipeDroppedBytes = snap.pipeDroppedBytes;
+        next.baseTxFrames = snap.baseTxFrames;
+        next.baseTxBytes = snap.baseTxBytes;
+        next.baseTxDrop = snap.baseTxDrop;
         return;
     }
     // bt_link 尚未执行新一轮 reset 切换时，按 reset 时基线扣减增量，避免回滚旧累计。
@@ -37,6 +41,9 @@ void RtcmModule::takeSnapshot(const RtcmLinkSnapshot &snap, RtcmStats &next) con
     next.bytes = (snap.bytes >= baseline_.bytes) ? (snap.bytes - baseline_.bytes) : 0U;
     next.rejectedRole = (snap.rejectedRole >= baseline_.rejectedRole)
                             ? (snap.rejectedRole - baseline_.rejectedRole)
+                            : 0U;
+    next.rejectedMode = (snap.rejectedMode >= baseline_.rejectedMode)
+                            ? (snap.rejectedMode - baseline_.rejectedMode)
                             : 0U;
     next.pipeAcceptedFrames = (snap.pipeAcceptedFrames >= baseline_.pipeAcceptedFrames)
                                   ? (snap.pipeAcceptedFrames - baseline_.pipeAcceptedFrames)
@@ -50,6 +57,14 @@ void RtcmModule::takeSnapshot(const RtcmLinkSnapshot &snap, RtcmStats &next) con
     next.pipeDroppedBytes = (snap.pipeDroppedBytes >= baseline_.pipeDroppedBytes)
                                 ? (snap.pipeDroppedBytes - baseline_.pipeDroppedBytes)
                                 : 0U;
+    next.baseTxFrames = (snap.baseTxFrames >= baseline_.baseTxFrames)
+                            ? (snap.baseTxFrames - baseline_.baseTxFrames)
+                            : 0U;
+    next.baseTxBytes = (snap.baseTxBytes >= baseline_.baseTxBytes)
+                           ? (snap.baseTxBytes - baseline_.baseTxBytes)
+                           : 0U;
+    next.baseTxDrop =
+        (snap.baseTxDrop >= baseline_.baseTxDrop) ? (snap.baseTxDrop - baseline_.baseTxDrop) : 0U;
     next.crc32 = 0U;
     next.lastMsg = 0U;
 }
@@ -81,14 +96,16 @@ bool RtcmModule::poll(uint32_t nowMs) noexcept
     takeSnapshot(ctx().bt_link.rtcmSnapshot(), next);
     next.resetEpoch = reset_epoch_;
 
-    const bool changed = (next.frames != stats_.frames) || (next.bytes != stats_.bytes) ||
-                         (next.crc32 != stats_.crc32) || (next.lastMsg != stats_.lastMsg) ||
-                         (next.rejectedRole != stats_.rejectedRole) ||
-                         (next.pipeAcceptedFrames != stats_.pipeAcceptedFrames) ||
-                         (next.pipeAcceptedBytes != stats_.pipeAcceptedBytes) ||
-                         (next.pipeDroppedFrames != stats_.pipeDroppedFrames) ||
-                         (next.pipeDroppedBytes != stats_.pipeDroppedBytes) ||
-                         (next.resetEpoch != stats_.resetEpoch);
+    const bool changed =
+        (next.frames != stats_.frames) || (next.bytes != stats_.bytes) ||
+        (next.crc32 != stats_.crc32) || (next.lastMsg != stats_.lastMsg) ||
+        (next.rejectedRole != stats_.rejectedRole) || (next.rejectedMode != stats_.rejectedMode) ||
+        (next.pipeAcceptedFrames != stats_.pipeAcceptedFrames) ||
+        (next.pipeAcceptedBytes != stats_.pipeAcceptedBytes) ||
+        (next.pipeDroppedFrames != stats_.pipeDroppedFrames) ||
+        (next.pipeDroppedBytes != stats_.pipeDroppedBytes) ||
+        (next.baseTxFrames != stats_.baseTxFrames) || (next.baseTxBytes != stats_.baseTxBytes) ||
+        (next.baseTxDrop != stats_.baseTxDrop) || (next.resetEpoch != stats_.resetEpoch);
     const bool rateRolled = refreshRate(nowMs, next);
     if (!changed && !rateRolled) {
         return false;

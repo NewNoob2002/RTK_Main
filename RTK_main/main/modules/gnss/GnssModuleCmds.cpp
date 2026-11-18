@@ -35,6 +35,58 @@ namespace app {
 using detail::isValidRateHz;
 using detail::traceGnssSub;
 
+/**
+ * @brief 分派常规 GNSS 命令与扩展子命令（已在 kRunning 或允许状态下）。
+ * @param cmd: 待执行指令。
+ * @param nowMs: 当前时间。
+ * @param result: 命令执行结果。
+ */
+void GnssModule::dispatchStandardCmd(const fw::Command &cmd, uint32_t nowMs,
+                                     fw::CommandResult &result) noexcept
+{
+    switch (static_cast<GnssVerb>(cmd.verb)) {
+    case GnssVerb::kProbe:
+        if (cmd.argLen != 0U) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+        cmdProbe(nowMs, result);
+        return;
+    case GnssVerb::kReset:
+        if (cmd.argLen != 0U) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+        cmdReset(nowMs, result);
+        return;
+    case GnssVerb::kSetRate:
+        cmdSetRate(cmd, nowMs, result);
+        return;
+    case GnssVerb::kSend:
+        sendRaw(cmd, result);
+        return;
+    default:
+        break;
+    }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetOut) {
+        cmdSetOut(cmd, nowMs, result);
+        return;
+    }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kReadback) {
+        startReadback(nowMs, result);
+        return;
+    }
+    result.status = fw::Result::kNotSupported;
+}
+
+// 三组命令字共用 cmd.verb 一个字节，onCommand 先按维护命令分流；编号重叠会把别的命令当成维护命令。
+static_assert(static_cast<uint8_t>(GnssSubVerb::kMode) >
+                  static_cast<uint8_t>(GnssMaintenanceVerb::kBaud),
+              "GnssSubVerb::kMode must not overlap GnssMaintenanceVerb");
+static_assert(static_cast<uint8_t>(GnssSubVerb::kReadback) <
+                  static_cast<uint8_t>(GnssMaintenanceVerb::kSave),
+              "GnssSubVerb::kReadback must not overlap GnssMaintenanceVerb");
+
 void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (!initialized_) {
@@ -49,6 +101,10 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
         cmdMaintenance(cmd, now, result);
         return;
     }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kMode) {
+        cmdMode(cmd, now, result);
+        return;
+    }
     if (baud_deferred_ || (controller().state() == ::gnss::State::kMaintenance &&
                            (active_maintenance_ != ::gnss::Maintenance::kSave ||
                             (cmd.verb != static_cast<uint8_t>(GnssVerb::kSetRate) &&
@@ -56,39 +112,7 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
         result.status = fw::Result::kBusy;
         return;
     }
-    switch (static_cast<GnssVerb>(cmd.verb)) {
-    case GnssVerb::kProbe:
-        if (cmd.argLen != 0U) {
-            result.status = fw::Result::kInvalidArg;
-            return;
-        }
-        cmdProbe(now, result);
-        return;
-    case GnssVerb::kReset:
-        if (cmd.argLen != 0U) {
-            result.status = fw::Result::kInvalidArg;
-            return;
-        }
-        cmdReset(now, result);
-        return;
-    case GnssVerb::kSetRate:
-        cmdSetRate(cmd, now, result);
-        return;
-    case GnssVerb::kSend:
-        sendRaw(cmd, result);
-        return;
-    default:
-        break;
-    }
-    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetOut) {
-        cmdSetOut(cmd, now, result);
-        return;
-    }
-    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kReadback) {
-        startReadback(now, result);
-        return;
-    }
-    result.status = fw::Result::kNotSupported;
+    dispatchStandardCmd(cmd, now, result);
 }
 
 void GnssModule::cmdProbe(uint32_t nowMs, fw::CommandResult &result) noexcept

@@ -36,6 +36,63 @@ constexpr uint8_t kMaxCourseFracDigits = 4U;
 constexpr uint8_t kCourseScale = 2U;
 constexpr uint32_t kMaxCourseCdeg = 35999U;
 
+// GST：lat_err/lon_err 按米→毫米，合成水平标准差后转厘米。
+constexpr size_t kGstMaxFields = 9U;
+constexpr size_t kGstMinFields = 8U;
+constexpr size_t kGstLatErrField = 6U;
+constexpr size_t kGstLonErrField = 7U;
+constexpr uint8_t kGstMaxFracDigits = 6U;
+constexpr uint8_t kGstMmScale = 3U;
+constexpr int64_t kMaxGstAxisMm = 1000000LL; // 1 km：超过该值水平精度必已超出 uint16_t 厘米上限
+constexpr uint64_t kMmPerCm = 10ULL;
+
+/**
+ * @brief 计算非负 64 位整数的整数平方根（向下取整）。
+ * @param n: 被开方数。
+ * @retval res: floor(sqrt(n))。
+ */
+uint64_t isqrt64(uint64_t n) noexcept
+{
+    constexpr unsigned kMaxIsqrtBitShift = 62U;
+    uint64_t res = 0ULL;
+    uint64_t bit = 1ULL << kMaxIsqrtBitShift;
+    while (bit > n) {
+        bit >>= 2U;
+    }
+    while (bit != 0ULL) {
+        if (n >= res + bit) {
+            n -= res + bit;
+            res = (res >> 1U) + bit;
+        } else {
+            res >>= 1U;
+        }
+        bit >>= 2U;
+    }
+    return res;
+}
+
+/**
+ * @brief 解析 GST 单轴误差字段为毫米（非负，饱和到 kMaxGstAxisMm）。
+ * @param field: 误差字段（单位米）。
+ * @param outMm: 输出毫米值（仅返回 kOk 时有效）。
+ * @retval kEmpty 空字段；kOk 成功；kError 格式非法或为负。
+ */
+NumResult parseGstAxisMm(std::span<const uint8_t> field, int64_t &outMm) noexcept
+{
+    int64_t val = 0;
+    uint8_t frac = 0;
+    const NumResult r = parseFixed(field, kGstMaxFracDigits, val, frac);
+    if (r != NumResult::kOk) {
+        return r;
+    }
+    if (val < 0) {
+        return NumResult::kError;
+    }
+    const int64_t mm = rescale(val, frac, kGstMmScale);
+    outMm = (mm > kMaxGstAxisMm) ? kMaxGstAxisMm : mm;
+    return NumResult::kOk;
+}
+
 /** @brief GGA 的 UTC 时间字段。
  * @param it: 字段迭代器
  * @param fix: 待更新的定位结果
@@ -262,6 +319,44 @@ NmeaResult NmeaImpl::parseRmc(NmeaParser &parser, std::span<const uint8_t> body)
 
     parser.fix_ = fix;
     ++parser.stats_.rmc;
+    return NmeaResult::kAux;
+}
+
+/**
+ * @brief 解析 GST：水平定位误差标准差（sqrt(lat^2 + lon^2) → 厘米）。
+ * @param parser: 解析器状态。
+ * @param body: 去掉 '$'、校验和与行尾后的正文。
+ * @retval kAux 已更新辅助字段；kMalformed 字段不合法。
+ */
+NmeaResult NmeaImpl::parseGst(NmeaParser &parser, std::span<const uint8_t> body) noexcept
+{
+    std::array<std::span<const uint8_t>, kGstMaxFields> fields{};
+    size_t count = 0;
+    FieldIter it{body};
+    while (count < fields.size() && it.next(fields[count])) {
+        ++count;
+    }
+    if (count < kGstMinFields) {
+        return NmeaResult::kMalformed;
+    }
+    int64_t latMm = 0;
+    int64_t lonMm = 0;
+    const NumResult rLat = parseGstAxisMm(fields[kGstLatErrField], latMm);
+    const NumResult rLon = parseGstAxisMm(fields[kGstLonErrField], lonMm);
+    if (rLat == NumResult::kError || rLon == NumResult::kError) {
+        return NmeaResult::kMalformed;
+    }
+    if (rLat == NumResult::kOk && rLon == NumResult::kOk) {
+        const uint64_t sq = (static_cast<uint64_t>(latMm) * static_cast<uint64_t>(latMm)) +
+                            (static_cast<uint64_t>(lonMm) * static_cast<uint64_t>(lonMm));
+        const uint64_t mm = isqrt64(sq);
+        const uint64_t cm = (mm + (kMmPerCm / 2ULL)) / kMmPerCm;
+        constexpr uint64_t kMaxValidCm = static_cast<uint64_t>(kU16Unknown) - 1ULL;
+        parser.fix_.hAccCm = static_cast<uint16_t>(cm > kMaxValidCm ? kMaxValidCm : cm);
+    } else {
+        parser.fix_.hAccCm = kU16Unknown;
+    }
+    ++parser.stats_.gst;
     return NmeaResult::kAux;
 }
 

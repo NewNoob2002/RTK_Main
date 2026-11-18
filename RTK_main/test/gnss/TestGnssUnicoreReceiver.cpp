@@ -590,10 +590,66 @@ static void testMaintenanceCommands()
     TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "CONFIG COM2 460800\r\n"));
 }
 
+/** @brief C5a 模式切换与基站 RTCM 命令的字节级合约。 */
+static void testWorkModeSteps()
+{
+    const auto &driver = unicoreDrv();
+    gnss::ModeRequest req{};
+    req.port = 2U;
+    req.rtcmPeriodMs = {1000U, 0U, 10000U, 10000U, 1000U, 1000U, 1000U, 1000U, 0U, 0U, 0U, 0U};
+    gnss::ConfigStep step{};
+
+    // kRover：MODE ROVER + 11 条 UNLOG COM2 RTCM*（跳过 1230）。
+    req.action = gnss::ModeAction::kRover;
+    TEST_ASSERT_TRUE(driver.modeStep(req, 0U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "MODE ROVER\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 1U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "UNLOG COM2 RTCM1005\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 3U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "UNLOG COM2 RTCM1033\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 4U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "UNLOG COM2 RTCM1074\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 11U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "UNLOG COM2 RTCM1127\r\n"));
+    TEST_ASSERT_FALSE(driver.modeStep(req, 12U, step));
+
+    // kBasePrep：MODE ROVER + RTCM 开关配置。
+    req.action = gnss::ModeAction::kBasePrep;
+    TEST_ASSERT_TRUE(driver.modeStep(req, 0U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "MODE ROVER\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 1U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "RTCM1005 COM2 1\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 2U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "UNLOG COM2 RTCM1006\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 3U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "RTCM1033 COM2 10\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 4U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "RTCM1074 COM2 1\r\n"));
+
+    // kBaseSurvey：MODE BASE TIME <s>。
+    req.action = gnss::ModeAction::kBaseSurvey;
+    req.surveySeconds = 25U;
+    TEST_ASSERT_TRUE(driver.modeStep(req, 0U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "MODE BASE TIME 25\r\n"));
+    TEST_ASSERT_FALSE(driver.modeStep(req, 1U, step));
+
+    // kBaseFixed：定点经纬度与高度无浮点精确输出 + RTCM 开关。
+    req.action = gnss::ModeAction::kBaseFixed;
+    req.fixLatE9 = -31234567890LL;
+    req.fixLonE9 = 121005000000LL;
+    req.fixHeightMm = -1234;
+    TEST_ASSERT_TRUE(driver.modeStep(req, 0U, step));
+    TEST_ASSERT_TRUE(
+        textEquals(step.cmd.view(), "MODE BASE -31.234567890 121.005000000 -1.234\r\n"));
+    TEST_ASSERT_TRUE(driver.modeStep(req, 1U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "RTCM1005 COM2 1\r\n"));
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
     RUN_TEST(testMaintenanceCommands);
+    RUN_TEST(testWorkModeSteps);
     RUN_TEST(testGoldenProbe);
     RUN_TEST(testGoldenOutputPlan);
     RUN_TEST(testGoldenProbeMatch);

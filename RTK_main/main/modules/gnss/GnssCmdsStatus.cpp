@@ -27,6 +27,7 @@
 #include "def/GnssSubDef.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/Types.hpp"
+#include "modules/gnss/GnssBaseConfig.hpp"
 #include "modules/gnss/GnssCmdsPrivate.hpp"
 #include "rtos/EspStatus.hpp"
 #include "support/ConsoleSupport.hpp"
@@ -67,10 +68,22 @@ void printGnssCore(const GnssStatus &st) noexcept
                  st.ctrl.probesSent, st.ctrl.stepsSent, st.ctrl.stepNacks, st.ctrl.stepTimeouts,
                  st.ctrl.reprobes, st.ctrl.failures);
     cli::printKv("nmea",
-                 "gga=%" PRIu32 " rmc=%" PRIu32 " gsa=%" PRIu32 " gsv=%" PRIu32 " ign=%" PRIu32
-                 " bad=%" PRIu32,
-                 st.nmea.gga, st.nmea.rmc, st.nmea.gsa, st.nmea.gsv, st.nmea.ignored,
+                 "gga=%" PRIu32 " rmc=%" PRIu32 " gsa=%" PRIu32 " gsv=%" PRIu32 " gst=%" PRIu32
+                 " ign=%" PRIu32 " bad=%" PRIu32,
+                 st.nmea.gga, st.nmea.rmc, st.nmea.gsa, st.nmea.gsv, st.nmea.gst, st.nmea.ignored,
                  st.nmea.malformed);
+    const auto wm = appContext().data.gnssWorkMode.read();
+    const auto bcfg = appContext().gnss.readBaseConfig();
+    if (wm.hAccCm != ::gnss::kU16Unknown) {
+        cli::printKv("mode", "%s (state=%s base_type=%s elapsed=%us hAcc=%ucm)",
+                     workModeName(bcfg.mode), workModeStateName(wm.state),
+                     baseTypeName(bcfg.baseType), static_cast<unsigned>(wm.elapsedS),
+                     static_cast<unsigned>(wm.hAccCm));
+    } else {
+        cli::printKv("mode", "%s (state=%s base_type=%s elapsed=%us hAcc=-)",
+                     workModeName(bcfg.mode), workModeStateName(wm.state),
+                     baseTypeName(bcfg.baseType), static_cast<unsigned>(wm.elapsedS));
+    }
     cli::printKv("uart", "rx=%" PRIu32 " tx=%" PRIu32, st.uartRxBytes, st.uartTxBytes);
     cli::printKv("demux", "unknown=%" PRIu32 " resyncs=%" PRIu32, st.demuxUnknown, st.demuxResyncs);
     cli::printKv("output",

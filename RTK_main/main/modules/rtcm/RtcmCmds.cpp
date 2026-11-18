@@ -77,6 +77,46 @@ constexpr std::array<cli::Cmd, 1U> kRtcmCmds{{
     {"rtcm", "rtcm <stats|reset>: RTCM forwarding statistics", "<stats|reset>", cmdRtcm, nullptr},
 }};
 
+/**
+ * @brief 打印供 HIL 脚本匹配的 RTCM 单行机器可读摘要。
+ * @param rtcm: RTCM 转发统计。
+ * @param demux: 分流拒绝统计。
+ * @param stats: 链路统计。
+ * @note 仅 console REPL 任务，可阻塞输出，非 ISR。
+ */
+void printRtcmSummaryLines(const RtcmStats &rtcm, const DemuxStats &demux,
+                           const LinkStats &stats) noexcept
+{
+    // 保留 ADR-0006 §2 逐字格式行，供 tools/hil/spp_rtcm_mix.py 正则匹配。
+    cli::outPrintf("rtcm: frames=%" PRIu32 " bytes=%" PRIu32 " crc32=0x%08" PRIX32
+                   " last_msg=%" PRIu16 " rejected_role=%" PRIu32 " unknown_bytes=%" PRIu32
+                   " product_rejects=%" PRIu32 " rtcm_rejects=%" PRIu32 "\n",
+                   rtcm.frames, rtcm.bytes, rtcm.crc32, rtcm.lastMsg, rtcm.rejectedRole,
+                   demux.unknownBytes, demux.productRejects, demux.rtcmRejects);
+    cli::outPrintf("stats: frames_rx=%" PRIu32 " replies_tx=%" PRIu32 " write_errors=%" PRIu32
+                   " pushes_tx=%" PRIu32 " disconnects=%" PRIu32 " rx_dropped=%" PRIu32 "\n",
+                   stats.framesRx, stats.repliesTx, stats.writeErrors, stats.pushesTx,
+                   stats.disconnects, stats.rxDropped);
+#if RTK_GNSS_ENABLED
+    const auto pipeStats = appContext().rtcmPipe.stats();
+    const auto pipeIo = appContext().rtcmPipe.ioStats();
+    cli::outPrintf("rtcm_pipe: accepted=%" PRIu32 "/%" PRIu32 " dropped=%" PRIu32 "/%" PRIu32
+                   " written=%" PRIu32 " pending=%" PRIu32 " discarded=%" PRIu32
+                   " uart_err=%" PRIu32 " epoch=%" PRIu32 "\n",
+                   rtcm.pipeAcceptedFrames, rtcm.pipeAcceptedBytes, rtcm.pipeDroppedFrames,
+                   rtcm.pipeDroppedBytes, pipeStats.writtenBytes, pipeIo.pendingBytes,
+                   pipeIo.discardedBytes, pipeIo.uartWriteErrors, rtcm.resetEpoch);
+    cli::outPrintf("base_tx: frames=%" PRIu32 " bytes=%" PRIu32 " drop=%" PRIu32
+                   " rejected_mode=%" PRIu32 "\n",
+                   rtcm.baseTxFrames, rtcm.baseTxBytes, rtcm.baseTxDrop, rtcm.rejectedMode);
+#else
+    cli::outPrintf("rtcm_pipe: accepted=%" PRIu32 "/%" PRIu32 " dropped=%" PRIu32 "/%" PRIu32
+                   " epoch=%" PRIu32 "\n",
+                   rtcm.pipeAcceptedFrames, rtcm.pipeAcceptedBytes, rtcm.pipeDroppedFrames,
+                   rtcm.pipeDroppedBytes, rtcm.resetEpoch);
+#endif
+}
+
 } // namespace
 
 void printRtcmStatus() noexcept
@@ -96,6 +136,9 @@ void printRtcmStatus() noexcept
     cli::printKv("crc32", "0x%08" PRIX32, rtcm.crc32);
     cli::printKv("last_msg", "%" PRIu16, rtcm.lastMsg);
     cli::printKv("rejected_role", "%" PRIu32, rtcm.rejectedRole);
+    cli::printKv("rejected_mode", "%" PRIu32, rtcm.rejectedMode);
+    cli::printKv("base_tx", "%" PRIu32 " frames / %" PRIu32 " B (drop=%" PRIu32 ")",
+                 rtcm.baseTxFrames, rtcm.baseTxBytes, rtcm.baseTxDrop);
     cli::printKv("unknown_bytes", "%" PRIu32 " B", demux.unknownBytes);
     cli::printKv("prod_rejects", "%" PRIu32, demux.productRejects);
     cli::printKv("rtcm_rejects", "%" PRIu32, demux.rtcmRejects);
@@ -113,30 +156,7 @@ void printRtcmStatus() noexcept
                  pipeStats.writtenBytes, pipeIo.pendingBytes, pipeIo.discardedBytes,
                  pipeIo.uartWriteErrors, pipeIo.paused ? "yes" : "no");
 #endif
-
-    // 保留 ADR-0006 §2 逐字格式行，供 tools/hil/spp_rtcm_mix.py 正则匹配。
-    cli::outPrintf("rtcm: frames=%" PRIu32 " bytes=%" PRIu32 " crc32=0x%08" PRIX32
-                   " last_msg=%" PRIu16 " rejected_role=%" PRIu32 " unknown_bytes=%" PRIu32
-                   " product_rejects=%" PRIu32 " rtcm_rejects=%" PRIu32 "\n",
-                   rtcm.frames, rtcm.bytes, rtcm.crc32, rtcm.lastMsg, rtcm.rejectedRole,
-                   demux.unknownBytes, demux.productRejects, demux.rtcmRejects);
-    cli::outPrintf("stats: frames_rx=%" PRIu32 " replies_tx=%" PRIu32 " write_errors=%" PRIu32
-                   " pushes_tx=%" PRIu32 " disconnects=%" PRIu32 " rx_dropped=%" PRIu32 "\n",
-                   stats.framesRx, stats.repliesTx, stats.writeErrors, stats.pushesTx,
-                   stats.disconnects, stats.rxDropped);
-#if RTK_GNSS_ENABLED
-    cli::outPrintf("rtcm_pipe: accepted=%" PRIu32 "/%" PRIu32 " dropped=%" PRIu32 "/%" PRIu32
-                   " written=%" PRIu32 " pending=%" PRIu32 " discarded=%" PRIu32
-                   " uart_err=%" PRIu32 " epoch=%" PRIu32 "\n",
-                   rtcm.pipeAcceptedFrames, rtcm.pipeAcceptedBytes, rtcm.pipeDroppedFrames,
-                   rtcm.pipeDroppedBytes, pipeStats.writtenBytes, pipeIo.pendingBytes,
-                   pipeIo.discardedBytes, pipeIo.uartWriteErrors, rtcm.resetEpoch);
-#else
-    cli::outPrintf("rtcm_pipe: accepted=%" PRIu32 "/%" PRIu32 " dropped=%" PRIu32 "/%" PRIu32
-                   " epoch=%" PRIu32 "\n",
-                   rtcm.pipeAcceptedFrames, rtcm.pipeAcceptedBytes, rtcm.pipeDroppedFrames,
-                   rtcm.pipeDroppedBytes, rtcm.resetEpoch);
-#endif
+    printRtcmSummaryLines(rtcm, demux, stats);
 }
 
 std::span<const cli::Cmd> rtcmCmds() noexcept

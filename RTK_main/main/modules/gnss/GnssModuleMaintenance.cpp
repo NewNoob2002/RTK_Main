@@ -159,9 +159,19 @@ fw::Result GnssModule::resetStoredSettings() noexcept
     parser().reset();
     ctx().data.gnssFix.write(::gnss::Fix{});
     ctx().data.gnssSats.write(::gnss::SatTable{});
+    writeBaseConfig(GnssBaseConfig::defaults());
+    if (work_mode_.has_value()) {
+        auto &wm = *work_mode_;
+        wm.reset();
+        ctx().data.gnssWorkMode.write(wm.status());
+    }
     const auto saved = ctx().storage.saveKeys(gnss_store::kConfigKeys);
+    const auto savedBase = ctx().storage.saveKeys(gnss_store::kBaseKeys);
     const auto cleared = clearCache();
-    return fw::isOk(saved) ? cleared : saved;
+    if (!fw::isOk(saved)) {
+        return saved;
+    }
+    return fw::isOk(savedBase) ? cleared : savedBase;
 }
 
 bool GnssModule::persistBaudAndSave(uint32_t baud) noexcept
@@ -229,6 +239,8 @@ void GnssModule::completeMaintenance(uint32_t nowMs) noexcept
     completed_maintenance_seq_ = stats.maintenanceSeq;
     if (baud_save_in_flight_ || stats.maintenance == Maintenance::kBaud) {
         completeBaudMaintenance(stats, previousSeq);
+    } else if (stats.maintenance == Maintenance::kMode) {
+        // 工作模式步骤由 GnssWorkMode::poll() 直接读取 maintenanceSeq 消费。
     } else if (auto_save_in_flight_) {
         if (stats.maintenanceResult != MaintenanceResult::kOk) {
             FW_LOGW(fw::TraceCat::kGnss, "<cfg> Receiver save failed (%s)",

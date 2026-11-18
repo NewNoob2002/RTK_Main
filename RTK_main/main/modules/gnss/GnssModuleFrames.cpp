@@ -77,6 +77,72 @@ demux::Demux &GnssModule::streamDemux() noexcept
     return *demux_;
 }
 
+/**
+ * @brief 处理来自 GNSS RX 侧的一条 RTCM3 帧，触发自测观察并推入基站转发环。
+ * @param frame: 完整 RTCM3 线路帧字节。
+ */
+void GnssModule::handleRxRtcmFrame(std::span<const uint8_t> frame) noexcept
+{
+    constexpr size_t kMinRtcmMsgBytes = 5U;
+    constexpr size_t kHeaderBytes = 3U;
+    constexpr unsigned kRtcmMsgShift = 4U;
+    uint16_t msgId = 0U;
+    if (frame.size() >= kMinRtcmMsgBytes) {
+        msgId = static_cast<uint16_t>(
+            (static_cast<uint32_t>(frame[kHeaderBytes]) << kRtcmMsgShift) |
+            (static_cast<uint32_t>(frame[kHeaderBytes + 1U]) >> kRtcmMsgShift));
+    }
+    if (work_mode_.has_value()) {
+        auto &wm = *work_mode_;
+        wm.onRtcmFrame(msgId);
+        if (wm.shouldForwardRtcm() && ctx().data.phoneStreamReady.load(std::memory_order_acquire)) {
+            static_cast<void>(ctx().data.baseRtcmRing.push(frame));
+        }
+    }
+}
+
+/**
+ * @brief 更新 6 KiB 最新句缓存并按订阅掩码与降采样闸门向 App FanoutRing 推送语句。
+ * @param decoder: 命中解码器。
+ * @param frame: 完整帧字节。
+ * @param now: 当前单调时间（ms）。
+ */
+void GnssModule::publishAppFrame(const demux::Decoder &decoder, std::span<const uint8_t> frame,
+                                 uint32_t now) noexcept
+{
+    const ::gnss::OutputMsg cls = controller().receiver().classifyFrame(decoder, frame);
+    const auto idx = static_cast<size_t>(static_cast<uint8_t>(cls));
+    if ((cls == ::gnss::OutputMsg::kNone) || (idx >= data::kGnssAppMsgCount)) {
+        return;
+    }
+    const auto typeIdx = static_cast<uint8_t>(idx);
+    if (!ctx().data.gnssLatest.update(typeIdx, frame)) {
+        traceGnssSub(GnssSubTrace::kAppDrop, 2U, typeIdx);
+    }
+    uint32_t activeMask = 0U;
+    std::array<uint32_t, data::kGnssAppMsgCount> periodsMs{};
+    ctx().data.gnssAppSub.readSubscription(activeMask, periodsMs);
+    if ((activeMask & (1U << typeIdx)) == 0U) {
+        // 无订阅者：FanoutRing::write 只计 noSubscriber，不写入环形缓冲；闸门复位，重新订阅后首句立即推送。
+        static_cast<void>(ctx().data.gnssAppRing.write(typeIdx, frame));
+        push_gates_[typeIdx].reset();
+        return;
+    }
+    const uint32_t period = periodsMs[typeIdx];
+    auto &gate = push_gates_[typeIdx];
+    if (!gate.due(now, period)) {
+        ctx().data.gnssAppSub.addSkipped(typeIdx);
+        return;
+    }
+    const fw::Result wres = ctx().data.gnssAppRing.write(typeIdx, frame);
+    if (fw::isOk(wres)) {
+        gate.onPushed(now, period);
+    } else if (wres == fw::Result::kInvalidArg) {
+        ctx().data.gnssAppSub.addRingOversize(typeIdx);
+        traceGnssSub(GnssSubTrace::kAppDrop, 0U, typeIdx);
+    }
+}
+
 void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept
 {
     // 文本日志不经中断路径：本函数只由 kIo 任务的 feed() 调用（ADR-0009 §2.11）。
@@ -94,49 +160,18 @@ void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint
     controller().onFrame(decoder, frame, now);
     if (&decoder == &demux::nmea::kDecoder) {
         const auto res = parser().feed(frame, now);
-        if (res == ::gnss::NmeaResult::kFix) {
+        if ((res == ::gnss::NmeaResult::kFix) || (res == ::gnss::NmeaResult::kAux)) {
             ctx().data.gnssFix.write(parser().fix());
         } else if (res == ::gnss::NmeaResult::kSatsReady) {
             // GGA 触发卫星轮发布时已在同一次 feed() 中更新 fix_（G-A §4.1），须同步刷新定位槽。
             ctx().data.gnssFix.write(parser().fix());
             ctx().data.gnssSats.write(parser().sats());
         }
+    } else if (&decoder == &demux::rtcm3::kDecoder) {
+        handleRxRtcmFrame(frame);
     }
-
-    // ADR-0011 §5：6 类可订阅语句同步更新 6 KiB 最新帧缓存，并按会话掩码与周期写入 App typed FanoutRing。
-    {
-        // 分类交给驱动（ADR-0012 §2.6）：基类覆盖 5 类 NMEA，Unicore 另加 #SATSINFOA/#HEADINGA。
-        const ::gnss::OutputMsg cls = controller().receiver().classifyFrame(decoder, frame);
-        const auto idx = static_cast<size_t>(static_cast<uint8_t>(cls));
-        if ((cls != ::gnss::OutputMsg::kNone) && (idx < data::kGnssAppMsgCount)) {
-            const auto typeIdx = static_cast<uint8_t>(idx);
-            if (!ctx().data.gnssLatest.update(typeIdx, frame)) {
-                traceGnssSub(GnssSubTrace::kAppDrop, 2U, typeIdx);
-            }
-            uint32_t activeMask = 0U;
-            std::array<uint32_t, data::kGnssAppMsgCount> periodsMs{};
-            ctx().data.gnssAppSub.readSubscription(activeMask, periodsMs);
-            if ((activeMask & (1U << typeIdx)) == 0U) {
-                // 无订阅者：FanoutRing::write 只计 noSubscriber，不写入环形缓冲；闸门复位，重新订阅后首句立即推送。
-                static_cast<void>(ctx().data.gnssAppRing.write(typeIdx, frame));
-                push_gates_[typeIdx].reset();
-            } else {
-                const uint32_t period = periodsMs[typeIdx];
-                auto &gate = push_gates_[typeIdx];
-                if (!gate.due(now, period)) {
-                    ctx().data.gnssAppSub.addSkipped(typeIdx);
-                } else {
-                    const fw::Result wres = ctx().data.gnssAppRing.write(typeIdx, frame);
-                    if (fw::isOk(wres)) {
-                        gate.onPushed(now, period);
-                    } else if (wres == fw::Result::kInvalidArg) {
-                        ctx().data.gnssAppSub.addRingOversize(typeIdx);
-                        traceGnssSub(GnssSubTrace::kAppDrop, 0U, typeIdx);
-                    }
-                }
-            }
-        }
-    }
+    // ADR-0011 §5：6 类可订阅语句同步更新 6 KiB 最新帧缓存与 App 扇出环。
+    publishAppFrame(decoder, frame, now);
 }
 
 void GnssModule::handleReject(const demux::Decoder &decoder, std::span<const uint8_t> prefix,

@@ -413,6 +413,9 @@ int cmdGnssOut(void * /*ctx*/, int argc, char **argv) noexcept
     const std::span<char *const> args{(argv != nullptr) ? argv : nullptr,
                                       ((argv != nullptr) && (argc > 0)) ? static_cast<size_t>(argc)
                                                                         : 0U};
+    if ((args.size() >= 2U) && (std::string_view{args[1]} == "rtcm")) {
+        return detail::cmdGnssOutRtcm(args);
+    }
     auto cfg = appContext().data.gnssOutCfg.read();
     if ((args.size() <= 1U) || ((args.size() == 2U) && (std::string_view{args[1]} == "show"))) {
         printGnssOutShow(cfg);
@@ -485,14 +488,16 @@ int cmdGnssConfig(void * /*ctx*/, int argc, char **argv) noexcept
 }
 
 // clang-format off
-constexpr std::array<cli::Verb, 12U> kGnssVerbs{{
+constexpr std::array<cli::Verb, 14U> kGnssVerbs{{
     {"status", nullptr, "GNSS status, stats and pipe", &cmdGnssStatus},
     {"fix", nullptr, "latest position/quality fix", &cmdGnssFix},
     {"sats", nullptr, "visible satellites table", &cmdGnssSats},
     {"probe", nullptr, "re-probe without power cycle", &cmdGnssProbe},
     {"reset", nullptr, "power cycle and re-probe", &cmdGnssReset},
     {"rate", "<hz>", "shortcut: position messages rate (see gnss out)", &cmdGnssRate},
-    {"out", "[show|default|<msg|all> <val>]", "set/show receiver output rates in Hz", &cmdGnssOut},
+    {"out", "[show|default|rtcm|<msg|all> <val>]", "set/show receiver & base RTCM output rates", &cmdGnssOut},
+    {"mode", "[rover|base|smartbase]", "show or switch work mode", &detail::cmdGnssMode},
+    {"base", "[survey|fixed]", "show or configure base station parameters", &detail::cmdGnssBase},
     {"config", nullptr, "read back receiver config", &cmdGnssConfig},
     {"baud", "<bps>", "change connected port and ESP32 UART together, store in ESP32 NVS", &detail::cmdGnssBaud},
     {"save", nullptr, "manually persist the current receiver configuration", &detail::cmdGnssSave},

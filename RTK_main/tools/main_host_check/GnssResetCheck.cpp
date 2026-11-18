@@ -110,6 +110,13 @@ void checkStoredDefaults(nvs_handle_t handle)
     CHECK(fw::isOk(decltype(out)::decode(bytes, out)));
     CHECK(out.intervals == decltype(out)::defaults().intervals);
     CHECK(out.mask == decltype(out)::defaults().mask);
+    CHECK(nvs_get_u8(handle, "mode", &value) == ESP_OK && value == 0U);
+    CHECK(nvs_get_u8(handle, "base_type", &value) == ESP_OK && value == 0U);
+    uint16_t u16Val = 0U;
+    CHECK(nvs_get_u16(handle, "svy_s", &u16Val) == ESP_OK && u16Val == 20U);
+    CHECK(nvs_get_u16(handle, "svy_acc_cm", &u16Val) == ESP_OK && u16Val == 150U);
+    CHECK(nvs_get_u16(handle, "svy_to_s", &u16Val) == ESP_OK && u16Val == 120U);
+    CHECK(nvs_get_u8(handle, "msm", &value) == ESP_OK && value == 4U);
 }
 
 } // namespace

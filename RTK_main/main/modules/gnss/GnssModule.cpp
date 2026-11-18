@@ -42,7 +42,9 @@ fw::Result GnssModule::initObjects() noexcept
     parser_.emplace();
     controller_.emplace();
     timing_.emplace();
+    work_mode_.emplace();
     // 成员默认零初始化以保证 AppContext 落入 .bss；未从 NVS 加载的项在此回填默认配置。
+    initBaseDefaults();
     auto &cfg = ensureRoverCfg();
     if (!rate_loaded_) {
         cfg.rateHz = static_cast<uint8_t>(CONFIG_RTK_GNSS_RATE_HZ);
@@ -270,6 +272,7 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     pollController(nowMs);
     tickPendingApply(nowMs);
     tickMaintenance();
+    pollWorkMode(nowMs);
     const bool txProgress = pumpRtcmPipe();
 
     const auto curState = controller().state();
@@ -292,8 +295,10 @@ bool GnssModule::pumpRtcmPipe() noexcept
     if (st == ::gnss::State::kMaintenance && active_maintenance_ != ::gnss::Maintenance::kSave) {
         return false; // 切速与复位期间保留待发数据，避免旧波特率字节混入维护命令。
     }
-    const bool allowTx = (st == ::gnss::State::kRunning) || (st == ::gnss::State::kConfiguring) ||
-                         (st == ::gnss::State::kProbing) || (st == ::gnss::State::kMaintenance);
+    const bool baseBlocksRx = work_mode_.has_value() && work_mode_->isBaseActive();
+    const bool allowTx =
+        !baseBlocksRx && ((st == ::gnss::State::kRunning) || (st == ::gnss::State::kConfiguring) ||
+                          (st == ::gnss::State::kProbing) || (st == ::gnss::State::kMaintenance));
     if (!allowTx) {
         if (rtcm_tx_len_ > rtcm_tx_off_) {
             ctx().rtcmPipe.noteDiscarded(rtcm_tx_len_ - rtcm_tx_off_);

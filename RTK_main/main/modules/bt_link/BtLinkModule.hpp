@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #if RTK_GNSS_ENABLED
 #include "core/services/GnssService.hpp"
+#include "data/BaseRtcmRing.hpp"
 #include "fw/FanoutRing.hpp"
 #include "gnss/Types.hpp"
 #endif
@@ -331,6 +332,13 @@ private:
      */
     [[nodiscard]] bool drainGnssStream() noexcept;
     /**
+     * @brief 从 BaseRtcmRing 弹出基站 RTCM3 帧并经 PHONE 流通道下发；失败丢整帧并计数。
+     * @retval true 本轮达到批量上限，可能仍有待发帧
+     * @retval false 环空或无有效 PHONE 会话
+     * @note 仅 kLink，非 ISR，不阻塞。
+     */
+    [[nodiscard]] bool drainBaseRtcm() noexcept;
+    /**
      * @brief 读取一次 GNSS 最新语句查询
      * @param ctx: BtLinkModule 实例
      * @param msgId: 协议消息号
@@ -429,6 +437,9 @@ private:
     uint32_t gnss_fix_version_ = 0;
     uint32_t gnss_status_version_ = 0;
     std::optional<::gnss::Fix> cached_gnss_fix_{};
+    uint32_t base_rtcm_tx_drop_ = 0U;
+    uint32_t base_rtcm_ring_drop_base_ = 0U;
+    std::array<uint8_t, data::BaseRtcmRing::kMaxFrameBytes> base_rtcm_scratch_{};
 #endif
 };
 /**

@@ -13,6 +13,55 @@ namespace app {
 enum class GnssSubVerb : uint8_t {
     kSetOut = 4,
     kReadback = 5, // 控制台 gnss config：读回模块配置（ADR-0012 §2.7），无参数
+    // 6..8 已被 GnssMaintenanceVerb（kSave/kFactoryReset/kBaud）占用，见 GnssModuleCmds.cpp 的 static_assert。
+    kMode = 9, // 工作模式切换：args[0] = WorkModeKind, args[1] = saveOnSuccess(0/1)
+};
+
+/** GNSS 工作模式（NVS gnss/mode）。 */
+enum class WorkModeKind : uint8_t {
+    kRover = 0,
+    kBase = 1,
+    kSmartBase = 2,
+};
+
+/** 基站坐标来源（NVS gnss/base_type）。 */
+enum class BaseType : uint8_t {
+    kSurvey = 0,
+    kFixed = 1,
+};
+
+/** 上层工作模式状态机状态（仅 main/modules/gnss/GnssWorkMode 维护）。 */
+enum class WorkModeState : uint8_t {
+    kRover = 0,
+    kBaseConfig = 1,
+    kSurveyWait = 2,
+    kSurvey = 3,
+    kBaseTx = 4,
+    kFallback = 5,
+};
+
+/** 上层工作模式最近错误原因。 */
+enum class WorkModeErr : uint8_t {
+    kNone = 0,
+    kUnsupported = 1,
+    kNack = 2,
+    kTimeout = 3,
+    kSurveyTimeout = 4,
+    kInvalidConfig = 5,
+};
+
+inline constexpr uint16_t kWorkModeHAccUnknown = 0xFFFFU;
+
+/** 跨任务发布的工作模式状态快照（DataCenter::gnssWorkMode）。 */
+struct GnssWorkModeStatus {
+    WorkModeKind mode = WorkModeKind::kRover;
+    BaseType baseType = BaseType::kSurvey;
+    WorkModeState state = WorkModeState::kRover;
+    WorkModeErr lastErr = WorkModeErr::kNone;
+    uint16_t elapsedS = 0;
+    uint16_t hAccCm = kWorkModeHAccUnknown;
+    uint32_t seq = 0;
+    bool active = false;
 };
 
 /**

@@ -120,6 +120,37 @@ struct OutputPlan {
     bool useConfiguredPort = false; // u-blox 消息键跟随 port
 };
 
+/** 基站可配置的 RTCM3 报文编号表（顺序固定，下标用于 ModeRequest::rtcmPeriodMs）。 */
+inline constexpr std::array<uint16_t, 12U> kBaseRtcmIds = {
+    1005U, 1006U, 1033U, 1230U, 1074U, 1084U, 1094U, 1124U, 1077U, 1087U, 1097U, 1127U,
+};
+inline constexpr size_t kBaseRtcmCount = kBaseRtcmIds.size();
+
+/** 工作模式切换子动作（由上层 WorkMode 状态机分阶段请求）。 */
+enum class ModeAction : uint8_t {
+    kRover = 0,      // 切到流动站模式并关闭基站 RTCM 输出
+    kBasePrep = 1,   // 基站准备：重置旧模式（回 rover）并下发基站 RTCM 报文周期
+    kBaseSurvey = 2, // 启动自测平均（survey-in）
+    kBaseFixed = 3,  // 固定坐标基站（下发基站 RTCM 报文周期与固定坐标）
+};
+
+inline constexpr uint16_t kDefaultSurveySeconds = 20U;
+inline constexpr uint16_t kDefaultSurveyAccCm = 150U;
+
+/** 工作模式切换参数（纯数据，由 main 的 WorkMode 生成并交给 Controller::requestMode）。 */
+struct ModeRequest {
+    ModeAction action = ModeAction::kRover;
+    uint8_t port = 2U;
+    uint8_t navRateHz = 1U;
+    bool useConfiguredPort = true;
+    uint16_t surveySeconds = kDefaultSurveySeconds;
+    uint16_t surveyAccCm = kDefaultSurveyAccCm;
+    int64_t fixLatE9 = 0;
+    int64_t fixLonE9 = 0;
+    int32_t fixHeightMm = 0;
+    std::array<uint32_t, kBaseRtcmCount> rtcmPeriodMs{};
+};
+
 /**
  * 接收机驱动基类。实例定义在驱动的 .cpp 内（`constinit` 文件作用域静态对象），地址即身份；
  * 用 receiverFor() 按家族取基准驱动；探测命中后用 forModel() 选对应型号的驱动。
@@ -213,6 +244,16 @@ public:
      * @note 只读驱动，不阻塞。
      */
     [[nodiscard]] virtual bool baudStep(uint8_t port, uint32_t baud,
+                                        ConfigStep &out) const noexcept;
+    /**
+     * @brief 生成工作模式切换及基站 RTCM 开关的第 idx 步（C5a）。
+     * @param req: 模式切换请求与参数。
+     * @param idx: 步骤序号（从 0 开始）。
+     * @param[out] out: 本步命令与应答策略。
+     * @retval true 已生成本步；false idx==0 表示驱动不支持，idx>0 表示脚本结束。
+     * @note 只读纯函数，不阻塞，ISR 安全。
+     */
+    [[nodiscard]] virtual bool modeStep(const ModeRequest &req, uint8_t idx,
                                         ConfigStep &out) const noexcept;
 
     // ---- 配置读回（ADR-0012 §2.7；基类不支持，由驱动覆盖） ----

@@ -28,6 +28,7 @@ struct NmeaStats {
     uint32_t rmc = 0;
     uint32_t gsa = 0;
     uint32_t gsv = 0;
+    uint32_t gst = 0;
     uint32_t ignored = 0;
     uint32_t malformed = 0;
 };

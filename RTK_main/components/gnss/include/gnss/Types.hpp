@@ -101,9 +101,10 @@ struct Fix {
     uint16_t vdopX100 = kU16Unknown;  // GSA VDOP×100
     uint16_t diffAgeDs = kU16Unknown; // 差分龄期，0.1 s，0xFFFF 无差分
     uint16_t diffStation = kU16Unknown;
-    uint32_t speedMmps = 0;  // RMC 对地速度，mm/s
-    uint16_t courseCdeg = 0; // RMC 航向，0.01 度
-    uint32_t updateMs = 0;   // 最近一次 GGA 到达时的本地 nowMs（由调用方传入）
+    uint32_t speedMmps = 0;        // RMC 对地速度，mm/s
+    uint16_t courseCdeg = 0;       // RMC 航向，0.01 度
+    uint32_t updateMs = 0;         // 最近一次 GGA 到达时的本地 nowMs（由调用方传入）
+    uint16_t hAccCm = kU16Unknown; // GST 水平精度（cm），0xFFFF 未知
 };
 
 /** 卫星系统；值与 NMEA 4.11 GSV 的 System ID 无关，仅本工程内部使用。 */

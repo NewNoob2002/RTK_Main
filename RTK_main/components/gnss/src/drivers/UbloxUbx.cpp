@@ -149,6 +149,81 @@ bool addU4Item(Writer &writer, uint32_t key, uint32_t value) noexcept
     const size_t start = writer.pos;
     return writer.u32(key) && writer.u32(value) && ((writer.pos - start) == ublox::kU4ItemBytes);
 }
+
+/**
+ * @brief 追加一个 I1 键值项（键 4 字节 + 有符号 1 字节）。
+ * @param writer: 载荷写入器。
+ * @param key: 配置键。
+ * @param value: 有符号值。
+ * @retval true: 写入成功。
+ * @retval false: 空间不足。
+ */
+bool addI1Item(Writer &writer, uint32_t key, int8_t value) noexcept
+{
+    return addU1Item(writer, key, static_cast<uint8_t>(value));
+}
+
+/**
+ * @brief 追加一个 I4 键值项（键 4 字节 + 有符号 4 字节）。
+ * @param writer: 载荷写入器。
+ * @param key: 配置键。
+ * @param value: 有符号值。
+ * @retval true: 写入成功。
+ * @retval false: 空间不足。
+ */
+bool addI4Item(Writer &writer, uint32_t key, int32_t value) noexcept
+{
+    return addU4Item(writer, key, static_cast<uint32_t>(value));
+}
+
+constexpr uint8_t kTmodeDisabled = 0U;
+constexpr uint8_t kTmodeSurveyIn = 1U;
+constexpr uint8_t kTmodeFixed = 2U;
+constexpr uint8_t kTmodePosLlh = 1U;
+constexpr uint32_t kCmTo01Mm = 100U;
+constexpr uint32_t kFixedPosAcc01Mm = 100U; // 10 mm
+constexpr int64_t kE9PerE7 = 100;
+constexpr int32_t kMmPerCm = 10;
+constexpr int32_t k01MmPerMm = 10;
+
+// 与 kBaseRtcmIds 1:1 对应的 F9P UART1 MSGOUT 键（0 = F9P 不支持）。
+constexpr std::array<uint32_t, kBaseRtcmCount> kUbloxRtcmUart1Keys{
+    ublox::kKeyMsgoutRtcm1005Uart1, // 1005
+    0U,                             // 1006
+    0U,                             // 1033
+    ublox::kKeyMsgoutRtcm1230Uart1, // 1230
+    ublox::kKeyMsgoutRtcm1074Uart1, // 1074
+    ublox::kKeyMsgoutRtcm1084Uart1, // 1084
+    ublox::kKeyMsgoutRtcm1094Uart1, // 1094
+    ublox::kKeyMsgoutRtcm1124Uart1, // 1124
+    ublox::kKeyMsgoutRtcm1077Uart1, // 1077
+    ublox::kKeyMsgoutRtcm1087Uart1, // 1087
+    ublox::kKeyMsgoutRtcm1097Uart1, // 1097
+    ublox::kKeyMsgoutRtcm1127Uart1, // 1127
+};
+
+/**
+ * @brief 将基站 RTCM 周期（毫秒）换算为 F9P 每历元发送间隔。
+ * @param periodMs: 周期（0 表示关闭）。
+ * @param navRateHz: 导航率（Hz）。
+ * @retval epochs: 0..255，每 epochs 个导航历元发送 1 次。
+ */
+uint8_t rtcmPeriodToEpochs(uint32_t periodMs, uint8_t navRateHz) noexcept
+{
+    if (periodMs == 0U) {
+        return 0U;
+    }
+    const uint32_t rate = (navRateHz == 0U) ? ublox::kMinRateHz : static_cast<uint32_t>(navRateHz);
+    const uint64_t scaled = (static_cast<uint64_t>(periodMs) * rate) + ublox::kHalfSecondMs;
+    uint64_t epochs = scaled / ublox::kMsPerSecond;
+    if (epochs == 0ULL) {
+        epochs = 1ULL;
+    }
+    if (epochs > ublox::kMaxEpochsPerEpoch) {
+        epochs = ublox::kMaxEpochsPerEpoch;
+    }
+    return static_cast<uint8_t>(epochs);
+}
 } // namespace
 
 // ---- 命令库：每个函数只组一条完整 UBX 帧（同步字 + class/id + 长度 + 载荷 + Fletcher 校验） ----
@@ -410,6 +485,112 @@ bool UbloxReceiver::baudStep(uint8_t port, uint32_t baud, ConfigStep &out) const
     // 切速只改 RAM 层，接收机持久化由手动保存触发。
     return beginValset(writer, ublox::kLayerRam) && addU4Item(writer, key, baud) &&
            cmdBuildFrame(out.cmd, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
+}
+
+/**
+ * @brief 向 CFG-VALSET 载荷写入 RTCM 输出协议开关与各基站 RTCM MSGOUT 频率。
+ * @param writer: 载荷写入器。
+ * @param req: 工作模式请求。
+ * @param port: 目标端口（1 或 2）。
+ * @param enable: true 启用并按请求写周期，false 全关。
+ * @retval true: 写入成功。
+ * @retval false: 载荷空间不足。
+ */
+static bool fillRtcmMsgoutPayload(Writer &writer, const ModeRequest &req, uint8_t port,
+                                  bool enable) noexcept
+{
+    const uint32_t outprotKey =
+        (port == 2U) ? ublox::kKeyUart2OutprotRtcm3x : ublox::kKeyUart1OutprotRtcm3x;
+    if (!beginValset(writer, ublox::kLayerRam) ||
+        !addU1Item(writer, outprotKey, enable ? 1U : 0U)) {
+        return false;
+    }
+    for (size_t i = 0U; i < kBaseRtcmCount; ++i) {
+        uint32_t key = kUbloxRtcmUart1Keys[i];
+        if (key == 0U) {
+            continue;
+        }
+        if (port == 2U) {
+            ++key;
+        }
+        const uint8_t epochs = enable ? rtcmPeriodToEpochs(req.rtcmPeriodMs[i], req.navRateHz) : 0U;
+        if (!addU1Item(writer, key, epochs)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief 向 CFG-VALSET 载荷写入固定坐标基站（TMODE=2）的 LLH 高精度字段。
+ * @param writer: 载荷写入器。
+ * @param req: 工作模式请求。
+ * @retval true: 写入成功。
+ * @retval false: 载荷空间不足。
+ */
+static bool fillTmodeFixedPayload(Writer &writer, const ModeRequest &req) noexcept
+{
+    const auto latE7 = static_cast<int32_t>(req.fixLatE9 / kE9PerE7);
+    const auto latHp = static_cast<int8_t>(req.fixLatE9 % kE9PerE7);
+    const auto lonE7 = static_cast<int32_t>(req.fixLonE9 / kE9PerE7);
+    const auto lonHp = static_cast<int8_t>(req.fixLonE9 % kE9PerE7);
+    const int32_t heightCm = req.fixHeightMm / kMmPerCm;
+    const auto heightHp = static_cast<int8_t>((req.fixHeightMm % kMmPerCm) * k01MmPerMm);
+    return beginValset(writer, ublox::kLayerRam) &&
+           addU1Item(writer, ublox::kKeyTmodeMode, kTmodeFixed) &&
+           addU1Item(writer, ublox::kKeyTmodePosType, kTmodePosLlh) &&
+           addI4Item(writer, ublox::kKeyTmodeLat, latE7) &&
+           addI1Item(writer, ublox::kKeyTmodeLatHp, latHp) &&
+           addI4Item(writer, ublox::kKeyTmodeLon, lonE7) &&
+           addI1Item(writer, ublox::kKeyTmodeLonHp, lonHp) &&
+           addI4Item(writer, ublox::kKeyTmodeHeight, heightCm) &&
+           addI1Item(writer, ublox::kKeyTmodeHeightHp, heightHp) &&
+           addU4Item(writer, ublox::kKeyTmodeFixedPosAcc, kFixedPosAcc01Mm);
+}
+
+bool UbloxReceiver::modeStep(const ModeRequest &req, uint8_t idx, ConfigStep &out) const noexcept
+{
+    const uint8_t port = req.useConfiguredPort ? req.port : 1U;
+    if ((port != 1U) && (port != 2U)) {
+        return false;
+    }
+    std::array<uint8_t, ublox::kValsetPayloadMax> payload{};
+    Writer writer{payload};
+    bool ok = false;
+    switch (req.action) {
+    case ModeAction::kRover:
+    case ModeAction::kBasePrep:
+        if (idx == 0U) {
+            ok = beginValset(writer, ublox::kLayerRam) &&
+                 addU1Item(writer, ublox::kKeyTmodeMode, kTmodeDisabled);
+        } else if (idx == 1U) {
+            ok = fillRtcmMsgoutPayload(writer, req, port, req.action == ModeAction::kBasePrep);
+        }
+        break;
+    case ModeAction::kBaseSurvey:
+        if ((idx == 0U) && (req.surveySeconds != 0U)) {
+            const uint32_t acc01Mm = static_cast<uint32_t>(req.surveyAccCm) * kCmTo01Mm;
+            ok = beginValset(writer, ublox::kLayerRam) &&
+                 addU1Item(writer, ublox::kKeyTmodeMode, kTmodeSurveyIn) &&
+                 addU4Item(writer, ublox::kKeyTmodeSvinMinDur, req.surveySeconds) &&
+                 addU4Item(writer, ublox::kKeyTmodeSvinAccLimit, acc01Mm);
+        }
+        break;
+    case ModeAction::kBaseFixed:
+        if (idx == 0U) {
+            ok = fillRtcmMsgoutPayload(writer, req, port, true);
+        } else if (idx == 1U) {
+            ok = fillTmodeFixedPayload(writer, req);
+        }
+        break;
+    default:
+        break;
+    }
+    if (!ok) {
+        return false;
+    }
+    out = ConfigStep{.timeoutMs = ublox::kConfigTimeoutMs};
+    return cmdBuildFrame(out.cmd, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
 }
 
 } // namespace gnss

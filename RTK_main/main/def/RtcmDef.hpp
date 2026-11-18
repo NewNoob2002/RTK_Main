@@ -27,6 +27,7 @@ enum class RtcmTrace : uint8_t {
 enum class RtcmReject : uint8_t {
     kRole = 0,     // 会话不是手机角色，不转发 RTCM
     kCapacity = 1, // 预留兼容值（改为直推管道后不再使用批次缓存）
+    kMode = 2,     // GNSS 处于基准站模式，拒绝手机侧注入的 RTCM
 };
 
 /**
@@ -73,10 +74,14 @@ struct RtcmLinkSnapshot {
     uint32_t crc32 = 0;
     uint16_t lastMsg = 0;
     uint32_t rejectedRole = 0;
+    uint32_t rejectedMode = 0;
     uint32_t pipeAcceptedFrames = 0;
     uint32_t pipeAcceptedBytes = 0;
     uint32_t pipeDroppedFrames = 0;
     uint32_t pipeDroppedBytes = 0;
+    uint32_t baseTxFrames = 0;
+    uint32_t baseTxBytes = 0;
+    uint32_t baseTxDrop = 0;
     uint32_t resetEpoch = 0;
 };
 

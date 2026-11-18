@@ -10,7 +10,9 @@
 #include <span>
 #include <type_traits>
 
+#include "modules/gnss/GnssBaseConfig.hpp"
 #include "modules/gnss/GnssMaintenance.hpp"
+#include "modules/gnss/GnssWorkMode.hpp"
 #include "cli/Console.hpp"
 #include "data/GnssOutput.hpp"
 #include "def/GnssDef.hpp"
@@ -294,6 +296,68 @@ public:
      */
     static fw::Result saveOut(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
 
+    /** @brief 从 NVS 加载 gnss.base/mode。 @note 仅启动期或持锁上下文，非 ISR。 */
+    [[nodiscard]] static fw::Result loadBaseMode(void *obj, std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/mode 到 NVS 编码。 */
+    [[nodiscard]] static fw::Result saveBaseMode(const void *obj, std::span<uint8_t> out,
+                                                 size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/base_type。 */
+    [[nodiscard]] static fw::Result loadBaseType(void *obj, std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/base_type 到 NVS 编码。 */
+    [[nodiscard]] static fw::Result saveBaseType(const void *obj, std::span<uint8_t> out,
+                                                 size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/svy_s。 */
+    [[nodiscard]] static fw::Result loadBaseSvyS(void *obj, std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/svy_s 到 NVS 编码。 */
+    [[nodiscard]] static fw::Result saveBaseSvyS(const void *obj, std::span<uint8_t> out,
+                                                 size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/svy_acc_cm。 */
+    [[nodiscard]] static fw::Result loadBaseSvyAccCm(void *obj,
+                                                     std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/svy_acc_cm 到 NVS 编码。 */
+    [[nodiscard]] static fw::Result saveBaseSvyAccCm(const void *obj, std::span<uint8_t> out,
+                                                     size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/svy_to_s。 */
+    [[nodiscard]] static fw::Result loadBaseSvyToS(void *obj, std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/svy_to_s 到 NVS 编码。 */
+    [[nodiscard]] static fw::Result saveBaseSvyToS(const void *obj, std::span<uint8_t> out,
+                                                   size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/fix_lat（8B i64 LE）。 */
+    [[nodiscard]] static fw::Result loadBaseFixLat(void *obj, std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/fix_lat。 */
+    [[nodiscard]] static fw::Result saveBaseFixLat(const void *obj, std::span<uint8_t> out,
+                                                   size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/fix_lon（8B i64 LE）。 */
+    [[nodiscard]] static fw::Result loadBaseFixLon(void *obj, std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/fix_lon。 */
+    [[nodiscard]] static fw::Result saveBaseFixLon(const void *obj, std::span<uint8_t> out,
+                                                   size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/fix_h_mm（4B i32 LE）。 */
+    [[nodiscard]] static fw::Result loadBaseFixHeight(void *obj,
+                                                      std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/fix_h_mm。 */
+    [[nodiscard]] static fw::Result saveBaseFixHeight(const void *obj, std::span<uint8_t> out,
+                                                      size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/rtcm_out（14B blob v1）。 */
+    [[nodiscard]] static fw::Result loadBaseRtcmOut(void *obj,
+                                                    std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/rtcm_out。 */
+    [[nodiscard]] static fw::Result saveBaseRtcmOut(const void *obj, std::span<uint8_t> out,
+                                                    size_t &len) noexcept;
+    /** @brief 从 NVS 加载 gnss.base/msm。 */
+    [[nodiscard]] static fw::Result loadBaseMsm(void *obj, std::span<const uint8_t> in) noexcept;
+    /** @brief 保存 gnss.base/msm。 */
+    [[nodiscard]] static fw::Result saveBaseMsm(const void *obj, std::span<uint8_t> out,
+                                                size_t &len) noexcept;
+
+    /**
+     * @brief 跨任务安全读取 gnss.base 完整配置副本
+     * @retval 当前生效的 gnss.base 配置副本
+     */
+    [[nodiscard]] GnssBaseConfig readBaseConfig() noexcept;
+    /** @brief 跨任务安全更新 gnss.base 配置（先拷贝或修改再提交）。 */
+    void writeBaseConfig(const GnssBaseConfig &cfg) noexcept;
+
 private:
     class DemuxSink final : public demux::Sink {
     public:
@@ -555,6 +619,44 @@ private:
     void beginPendingApply(uint32_t nowMs) noexcept;
     /** @brief 校验并开始用户波特率变更。 @param cmd: 请求。 @param nowMs: 当前时间。 @param result: 受理结果。 */
     void cmdBaud(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
+    /** @brief 处理 GnssSubVerb::kMode（工作模式切换）命令。 */
+    void cmdMode(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
+    /**
+     * @brief 处理来自 GNSS RX 侧的一条 RTCM3 帧：通知自测并在 kBaseTx 且手机就绪时推入转发环
+     * @param frame: 完整 RTCM3 线路帧字节
+     */
+    void handleRxRtcmFrame(std::span<const uint8_t> frame) noexcept;
+    /**
+     * @brief 更新 6 KiB 最新句缓存并按订阅掩码向 App FanoutRing 推送可订阅语句
+     * @param decoder: 命中解码器
+     * @param frame: 完整帧字节
+     * @param now: 当前单调时间（ms）
+     */
+    void publishAppFrame(const demux::Decoder &decoder, std::span<const uint8_t> frame,
+                         uint32_t now) noexcept;
+    /**
+     * @brief 分派常规 GNSS 动词与扩展子命令
+     * @param cmd: 待执行指令
+     * @param nowMs: 当前单调时间（ms）
+     * @param result: 执行结果输出
+     */
+    void dispatchStandardCmd(const fw::Command &cmd, uint32_t nowMs,
+                             fw::CommandResult &result) noexcept;
+    /** @brief 回填未从 NVS 加载的 gnss.base 默认配置项。 */
+    void initBaseDefaults() noexcept;
+    /** @brief 驱动工作模式状态机并发布 gnssWorkMode 快照及 SAVECONFIG 请求。 */
+    void pollWorkMode(uint32_t nowMs) noexcept;
+    /**
+     * @brief 懒构造返回底层 base_cfg_ 引用（外部须持有自旋锁或单线程期）
+     * @retval 已就位的 GnssBaseConfig 可写引用
+     */
+    GnssBaseConfig &ensureBaseCfg() noexcept
+    {
+        if (!base_cfg_.has_value()) {
+            base_cfg_.emplace();
+        }
+        return *base_cfg_;
+    }
     /**
      * @brief 把一个控制器动作落到 UART（上电/改波特率/下发报文）
      * @param act: 控制器给出的动作
@@ -600,6 +702,9 @@ private:
     std::optional<::gnss::Timing> timing_{};
     std::optional<::gnss::RoverConfig> rover_cfg_{};
     data::GnssOutConfig out_cfg_{};
+    std::optional<GnssBaseConfig> base_cfg_{};
+    uint16_t base_loaded_mask_ = 0U;
+    std::optional<GnssWorkMode> work_mode_{};
     /** 待落地的变更：等控制器 outputSeq 前进后再决定写 NVS 还是回滚。 */
     enum class PendingApply : uint8_t {
         kNone = 0,

@@ -377,6 +377,12 @@ void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur)
     } else {
         // 其余迁移（断电/失败/读回）没有额外副作用。
     }
+    if (((cur == ::gnss::State::kPowerUp) || (cur == ::gnss::State::kProbing)) &&
+        work_mode_.has_value()) {
+        auto &wm = *work_mode_;
+        wm.onControllerReprobe();
+        ctx().data.gnssWorkMode.write(wm.status());
+    }
 }
 
 } // namespace app

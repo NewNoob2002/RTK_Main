@@ -38,7 +38,7 @@ inline constexpr size_t kClsOffset = 2U;
 inline constexpr size_t kPayloadOffset = 6U;
 inline constexpr size_t kMaxPayload = 0xFFFFU;
 inline constexpr size_t kValsetHeadBytes = 3U;
-inline constexpr size_t kValsetPayloadMax = 64U;
+inline constexpr size_t kValsetPayloadMax = 80U;
 inline constexpr size_t kMsgoutPayloadMax = 16U;
 inline constexpr size_t kU1ItemBytes = 5U;
 inline constexpr size_t kU2ItemBytes = 6U;
@@ -54,15 +54,42 @@ inline constexpr uint32_t kMsPerSecond = 1000U;
 inline constexpr uint32_t kHalfSecondMs = kMsPerSecond / 2U;
 
 // 键 ID（见文件头出处）
-inline constexpr uint32_t kKeyRateMeas = 0x30210001U;          // CFG-RATE-MEAS, U2
-inline constexpr uint32_t kKeyUart1InprotRtcm3x = 0x10730004U; // CFG-UART1INPROT-RTCM3X, L
-inline constexpr uint32_t kKeyUart1OutprotNmea = 0x10740002U;  // CFG-UART1OUTPROT-NMEA, L
-inline constexpr uint32_t kKeyMsgoutGgaUart1 = 0x209100BBU;    // CFG-MSGOUT-NMEA_ID_GGA_UART1, U1
-inline constexpr uint32_t kKeyMsgoutRmcUart1 = 0x209100ACU;    // CFG-MSGOUT-NMEA_ID_RMC_UART1, U1
-inline constexpr uint32_t kKeyMsgoutGsaUart1 = 0x209100BFU;    // CFG-MSGOUT-NMEA_ID_GSA_UART1, U1
-inline constexpr uint32_t kKeyMsgoutGsvUart1 = 0x209100C3U;    // CFG-MSGOUT-NMEA_ID_GSV_UART1, U1
-inline constexpr uint32_t kKeyMsgoutGstUart1 = 0x209100D4U;    // CFG-MSGOUT-NMEA_ID_GST_UART1, U1
-inline constexpr uint32_t kKeyUart1Baudrate = 0x40520001U;     // CFG-UART1-BAUDRATE, U4
+inline constexpr uint32_t kKeyRateMeas = 0x30210001U;           // CFG-RATE-MEAS, U2
+inline constexpr uint32_t kKeyUart1InprotRtcm3x = 0x10730004U;  // CFG-UART1INPROT-RTCM3X, L
+inline constexpr uint32_t kKeyUart1OutprotNmea = 0x10740002U;   // CFG-UART1OUTPROT-NMEA, L
+inline constexpr uint32_t kKeyMsgoutGgaUart1 = 0x209100BBU;     // CFG-MSGOUT-NMEA_ID_GGA_UART1, U1
+inline constexpr uint32_t kKeyMsgoutRmcUart1 = 0x209100ACU;     // CFG-MSGOUT-NMEA_ID_RMC_UART1, U1
+inline constexpr uint32_t kKeyMsgoutGsaUart1 = 0x209100BFU;     // CFG-MSGOUT-NMEA_ID_GSA_UART1, U1
+inline constexpr uint32_t kKeyMsgoutGsvUart1 = 0x209100C3U;     // CFG-MSGOUT-NMEA_ID_GSV_UART1, U1
+inline constexpr uint32_t kKeyMsgoutGstUart1 = 0x209100D4U;     // CFG-MSGOUT-NMEA_ID_GST_UART1, U1
+inline constexpr uint32_t kKeyUart1Baudrate = 0x40520001U;      // CFG-UART1-BAUDRATE, U4
+inline constexpr uint32_t kKeyUart1OutprotRtcm3x = 0x10740004U; // CFG-UART1OUTPROT-RTCM3X, L
+inline constexpr uint32_t kKeyUart2OutprotRtcm3x = 0x10760004U; // CFG-UART2OUTPROT-RTCM3X, L
+
+// TMODE3 / Time Mode 键 ID（UBX-22008968 §6.9.25）
+inline constexpr uint32_t kKeyTmodeMode = 0x20030001U;         // E1: 0=Disabled,1=SurveyIn,2=Fixed
+inline constexpr uint32_t kKeyTmodePosType = 0x20030002U;      // E1: 0=ECEF,1=LLH
+inline constexpr uint32_t kKeyTmodeLat = 0x40030009U;          // I4, 1e-7 deg
+inline constexpr uint32_t kKeyTmodeLon = 0x4003000AU;          // I4, 1e-7 deg
+inline constexpr uint32_t kKeyTmodeHeight = 0x4003000BU;       // I4, cm
+inline constexpr uint32_t kKeyTmodeLatHp = 0x2003000CU;        // I1, 1e-9 deg
+inline constexpr uint32_t kKeyTmodeLonHp = 0x2003000DU;        // I1, 1e-9 deg
+inline constexpr uint32_t kKeyTmodeHeightHp = 0x2003000EU;     // I1, 0.1 mm
+inline constexpr uint32_t kKeyTmodeFixedPosAcc = 0x4003000FU;  // U4, 0.1 mm
+inline constexpr uint32_t kKeyTmodeSvinMinDur = 0x40030010U;   // U4, s
+inline constexpr uint32_t kKeyTmodeSvinAccLimit = 0x40030011U; // U4, 0.1 mm
+
+// 基站 RTCM3 MSGOUT UART1 键（UART2 = UART1 + 1；UBX-22008968 §6.9.14）
+inline constexpr uint32_t kKeyMsgoutRtcm1005Uart1 = 0x209102BEU;
+inline constexpr uint32_t kKeyMsgoutRtcm1230Uart1 = 0x20910304U;
+inline constexpr uint32_t kKeyMsgoutRtcm1074Uart1 = 0x2091035FU;
+inline constexpr uint32_t kKeyMsgoutRtcm1084Uart1 = 0x20910364U;
+inline constexpr uint32_t kKeyMsgoutRtcm1094Uart1 = 0x20910369U;
+inline constexpr uint32_t kKeyMsgoutRtcm1124Uart1 = 0x2091036EU;
+inline constexpr uint32_t kKeyMsgoutRtcm1077Uart1 = 0x209102CDU;
+inline constexpr uint32_t kKeyMsgoutRtcm1087Uart1 = 0x209102D2U;
+inline constexpr uint32_t kKeyMsgoutRtcm1097Uart1 = 0x2091030EU;
+inline constexpr uint32_t kKeyMsgoutRtcm1127Uart1 = 0x2091034AU;
 
 /** MON-VER 轮询帧（空载荷）已算好的 Fletcher 校验：载荷为空，校验只覆盖 class/id/len。 */
 inline constexpr uint8_t kMonVerPollCkA = 0x0E;

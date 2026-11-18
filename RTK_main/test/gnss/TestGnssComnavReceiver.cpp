@@ -247,6 +247,8 @@ static void testMaintenanceCommands()
     TEST_ASSERT_TRUE(driver.baudStep(2U, 460800U, step));
     TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "COM COM2 460800\r\n"));
     TEST_ASSERT_FALSE(driver.factoryResetStep(2U, {}, step));
+    gnss::ModeRequest req{};
+    TEST_ASSERT_FALSE(driver.modeStep(req, 0U, step));
 }
 
 int main(int, char **)

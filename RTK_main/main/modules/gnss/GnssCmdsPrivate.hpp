@@ -185,6 +185,12 @@ int cmdGnssSave(void *, int argc, char **) noexcept;
 int cmdGnssFactoryReset(void *, int argc, char **argv) noexcept;
 /** @brief 控制台同步修改 GNSS 波特率。 @param argc: 参数数。 @param argv: 参数。 @retval 0 成功；其他为 ERR。 */
 int cmdGnssBaud(void *, int argc, char **argv) noexcept;
+/** @brief 控制台切换或查询 GNSS 工作模式（rover/base/smartbase）。 */
+int cmdGnssMode(void *, int argc, char **argv) noexcept;
+/** @brief 控制台查询或配置基站参数（survey/fixed）。 */
+int cmdGnssBase(void *, int argc, char **argv) noexcept;
+/** @brief 控制台查询或配置基站 RTCM 输出速率及 MSM 版本。 */
+int cmdGnssOutRtcm(std::span<char *const> args) noexcept;
 
 } // namespace detail
 
