@@ -109,6 +109,30 @@ fw::Result GnssModule::saveBaud(const void * /*obj*/, std::span<uint8_t> out, si
     return fw::Result::kOk;
 }
 
+fw::Result GnssModule::loadUserBaud(void *, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != sizeof(uint32_t)) {
+        return fw::Result::kInvalidArg;
+    }
+    const uint32_t baud = readU32(in);
+    if (!gnss_store::validUserBaud(baud) && baud != CONFIG_RTK_GNSS_DEFAULT_BAUD) {
+        return fw::Result::kInvalidArg;
+    }
+    appContext().gnss.preferred_baud_ = baud;
+    return fw::Result::kOk;
+}
+
+fw::Result GnssModule::saveUserBaud(const void *, std::span<uint8_t> out, size_t &len) noexcept
+{
+    if (out.size() < sizeof(uint32_t)) {
+        return fw::Result::kNoSpace;
+    }
+    const uint32_t baud = appContext().gnss.preferred_baud_;
+    writeU32(baud == 0U ? CONFIG_RTK_GNSS_DEFAULT_BAUD : baud, out);
+    len = sizeof(uint32_t);
+    return fw::Result::kOk;
+}
+
 fw::Result GnssModule::loadRate(void * /*obj*/, std::span<const uint8_t> in) noexcept
 {
     if (in.empty() || !isValidRateHz(in[0])) {

@@ -4,7 +4,6 @@
 #include "modules/gnss/GnssModule.hpp"
 
 #include <array>
-#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -21,13 +20,13 @@
 #include "AppContext.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
-#include "core/services/GnssService.hpp"
 #include "data/GnssOutput.hpp"
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/Types.hpp"
 #include "modules/gnss/GnssCmdsPrivate.hpp"
+#include "modules/gnss/GnssConsoleValue.hpp"
 #include "rtos/EspStatus.hpp"
 #include "support/ConsoleSupport.hpp"
 
@@ -37,12 +36,9 @@ using detail::kAppMsgNames;
 
 namespace {
 
-constexpr int32_t kMinSignedInterval = -128;
-constexpr int32_t kMaxSignedInterval = 127;
 /** 等待变更判定的轮询间隔与上限：须长于 GnssModule 的 kApplyTimeoutMs（5 s，频率重配含基础脚本）。 */
 constexpr uint32_t kApplyPollMs = 50U;
 constexpr uint32_t kApplyPollRounds = 120U;
-constexpr int kDecimalBase = 10;
 constexpr int kOutSetArgc = 3;
 
 /**
@@ -57,6 +53,9 @@ constexpr int kOutSetArgc = 3;
 bool parseMsgIndex(std::string_view name, uint8_t &outIdx, bool &isAll) noexcept
 {
     isAll = false;
+    if (name == "gsv") {
+        name = "sats";
+    }
     if (name == "all") {
         isAll = true;
         return true;
@@ -68,29 +67,6 @@ bool parseMsgIndex(std::string_view name, uint8_t &outIdx, bool &isAll) noexcept
         }
     }
     return false;
-}
-
-/**
- * @brief 解析十进制有符号 8 位周期
- * @param text: 零结尾周期文本，可为空
- * @param outVal: 周期输出，失败不变
- * @retval true 已更新 outVal
- * @retval false 空串、非法尾部或超出 -128..127，outVal 不变
- * @note 仅 console REPL 任务，不阻塞，非 ISR。
- */
-bool parseI8Range(const char *text, int8_t &outVal) noexcept
-{
-    if ((text == nullptr) || (*text == '\0')) {
-        return false;
-    }
-    char *end = nullptr;
-    const long val = std::strtol(text, &end, kDecimalBase);
-    if ((end == text) || (*end != '\0') || (val < kMinSignedInterval) ||
-        (val > kMaxSignedInterval)) {
-        return false;
-    }
-    outVal = static_cast<int8_t>(val);
-    return true;
 }
 
 /**
@@ -147,7 +123,16 @@ bool reportOutputPlan(const GnssStatus &before, const GnssStatus &after) noexcep
         } else if ((((after.appliedMask | before.appliedMask) & bit) != 0U) &&
                    (after.rxPeriodMs[i] != 0U)) {
             // applied 位也包含已 ACK 的关闭命令（UNLOG），是否在输出看计划周期。
-            cli::outPrintf("  %-8s on %" PRIu32 "ms\n", kAppMsgNames[i], after.rxPeriodMs[i]);
+            constexpr uint32_t kMsPerSecond = 1000U;
+            const uint32_t periodMs = after.rxPeriodMs[i];
+            // 计划来自 int8 间隔或定位频率，频率或整秒周期可还原为 int8。
+            const auto interval =
+                periodMs <= kMsPerSecond
+                    ? static_cast<int8_t>(kMsPerSecond / periodMs)
+                    : static_cast<int8_t>(-static_cast<int32_t>(periodMs / kMsPerSecond));
+            std::array<char, detail::kGnssRateTextBytes> rate{};
+            detail::formatGnssHz(interval, rate);
+            cli::outPrintf("  %-8s on %s\n", kAppMsgNames[i], rate.data());
             continue;
         }
         cli::outPrintf("  %-8s %s\n", kAppMsgNames[i], state);
@@ -304,6 +289,13 @@ int cmdGnssSend(void * /*ctx*/, int argc, char **argv) noexcept
     if (pos == 0U) {
         return cli::fail("empty command");
     }
+    // 按字符查看命令字节。
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const auto *command = reinterpret_cast<const char *>(cmd.args.data());
+    const std::string_view text{command, pos};
+    if (detail::changesConnectedGnssBaud(text, CONFIG_RTK_GNSS_PORT)) {
+        return cli::fail("use gnss baud for the connected port");
+    }
     cmd.argLen = static_cast<uint8_t>(pos);
     return submitGnss(cmd) ? 0 : cli::kCmdFail;
 }
@@ -318,24 +310,32 @@ void printGnssOutShow(const data::GnssOutConfig &cfg) noexcept
     cli::printSection("gnss_out");
     cli::printKv("mask", "0x%02X", static_cast<unsigned>(cfg.mask));
     const GnssStatus st = appContext().data.gnssStatus.read();
+    cli::outPrintf("  msg      rate          receiver\n");
     for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
         const bool en = (cfg.mask & (1U << i)) != 0U;
-        const uint32_t period = core::services::GnssService::intervalToPeriodMs(cfg.intervals[i]);
-        const uint32_t bit = 1U << i;
-        const char *applied = (st.appliedMask & bit) != 0U ? "on" : "-";
+        std::array<char, detail::kGnssRateTextBytes> rate{};
+        detail::formatGnssHz(en ? cfg.intervals[i] : int8_t{0}, rate);
+        uint32_t bit = 1U << i;
+        constexpr uint32_t kSatsBit = 1U << static_cast<uint32_t>(::gnss::OutputMsg::kSatsInfo);
+        constexpr uint32_t kGsvBit = 1U << static_cast<uint32_t>(::gnss::OutputMsg::kGsv);
+        if (bit == kSatsBit && (st.unsupportedMask & kSatsBit) != 0U) {
+            bit = kGsvBit;
+        }
+        const char *applied = "-";
+        if ((st.appliedMask & bit) != 0U) {
+            applied = en ? "on" : "off";
+        }
         if ((st.unsupportedMask & bit) != 0U) {
             applied = "unsupported";
         } else if ((st.failedMask & bit) != 0U) {
             applied = "failed";
         }
-        cli::outPrintf("  %-8s %s interval=%d push=%" PRIu32 "ms rx=%" PRIu32 "ms receiver=%s\n",
-                       kAppMsgNames[i], en ? "on" : "off", static_cast<int>(cfg.intervals[i]),
-                       period, st.rxPeriodMs[i], applied);
+        cli::outPrintf("  %-8s %-13s %s\n", kAppMsgNames[i], rate.data(), applied);
     }
 }
 
 /**
- * @brief 解析 `gnss out` 的写入形式并更新配置（default 或 <msg|all> <off|-128..127>）
+ * @brief 解析 `gnss out` 的写入形式并更新配置（default 或 <msg|all> <Hz|off>）
  * @param args: 完整参数（含命令名）
  * @param cfg: 输出，更新后的配置
  * @return 0: 成功；其他: 已打印 ERR 的失败码
@@ -352,20 +352,23 @@ int applyGnssOutArgs(std::span<char *const> args, data::GnssOutConfig &cfg) noex
             return cli::fail("invalid msg (gga|sats|heading|gst|rmc|gsa|all)");
         }
         const std::string_view argVal{args[2]};
-        const bool turnOff = (argVal == "off");
         int8_t iv = 0;
-        if (!turnOff && !parseI8Range(args[2], iv)) {
-            return cli::fail("invalid interval (-128..127 or off)");
+        if (!detail::parseGnssHz(argVal, iv)) {
+            return cli::fail("invalid rate (Hz: 1/2/5/10/20 or 1/n)");
+        }
+        // +1 是旧配置中随定位频率的缺省值，显式 1 Hz 用等价的 1 秒周期表示。
+        if (iv == 1) {
+            iv = -1;
         }
         const size_t begin = isAll ? 0U : idx;
         const size_t end = isAll ? data::kGnssAppMsgCount : (static_cast<size_t>(idx) + 1U);
         for (size_t i = begin; i < end; ++i) {
-            if (!fw::isOk(cfg.applyInterval(i, turnOff ? int8_t{0} : iv))) {
+            if (!fw::isOk(cfg.applyInterval(i, iv))) {
                 return cli::fail("unsupported interval");
             }
         }
     } else {
-        return cli::fail("usage: gnss out [show|default|<msg|all> <off|-128..127>]");
+        return cli::fail("usage: gnss out [show|default|<msg|all> <Hz|off>]");
     }
 
     return 0;
@@ -477,16 +480,19 @@ int cmdGnssConfig(void * /*ctx*/, int argc, char **argv) noexcept
 }
 
 // clang-format off
-constexpr std::array<cli::Verb, 9U> kGnssVerbs{{
+constexpr std::array<cli::Verb, 12U> kGnssVerbs{{
     {"status", nullptr, "GNSS status, stats and pipe", &cmdGnssStatus},
     {"fix", nullptr, "latest position/quality fix", &cmdGnssFix},
     {"sats", nullptr, "visible satellites table", &cmdGnssSats},
     {"probe", nullptr, "re-probe without power cycle", &cmdGnssProbe},
     {"reset", nullptr, "power cycle and re-probe", &cmdGnssReset},
-    {"rate", "<hz>", "set output rate (1|2|5|10|20)", &cmdGnssRate},
-    {"out", "[show|default|<msg|all> <val>]", "set/show default receiver output", &cmdGnssOut},
+    {"rate", "<hz>", "shortcut: position messages rate (see gnss out)", &cmdGnssRate},
+    {"out", "[show|default|<msg|all> <val>]", "set/show receiver output rates in Hz", &cmdGnssOut},
     {"config", nullptr, "read back receiver config", &cmdGnssConfig},
-    {"send", "<text>", "send raw command line to GNSS", &cmdGnssSend},
+    {"baud", "<bps>", "change connected port and ESP32 UART together, store in ESP32 NVS", &detail::cmdGnssBaud},
+    {"save", nullptr, "manually persist the current receiver configuration", &detail::cmdGnssSave},
+    {"freset", "yes", "reset receiver and GNSS settings", &detail::cmdGnssFactoryReset},
+    {"send", "<text>", "configure other COM ports, then gnss save; use gnss baud for the connected port", &cmdGnssSend},
 }};
 // clang-format on
 

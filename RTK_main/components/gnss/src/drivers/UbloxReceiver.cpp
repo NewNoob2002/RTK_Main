@@ -217,7 +217,9 @@ bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
     // 表放在成员函数作用域内：步骤回调要调 protected 的 cmd_*，匿名命名空间的自由函数没有访问权。
     static constexpr std::array<ScriptStep, 2> kRoverScript{{
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
-             if (!cmdConfigureReceiver(o.cmd, navPeriodMs(c))) {
+             const uint16_t periodMs = navPeriodMs(c);
+             if (!(c.useConfiguredPort ? cmdConfigurePort(o.cmd, periodMs, c.port)
+                                       : cmdConfigureReceiver(o.cmd, periodMs))) {
                  return false;
              }
              o.expectReply = true;
@@ -227,6 +229,9 @@ bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
          },
          &always},
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
+             if (c.useConfiguredPort) {
+                 return detail::kZedF9pReceiver.baudStep(c.port, c.portBaud, o);
+             }
              if (!cmdSetBaudrate(o.cmd, c.portBaud)) {
                  return false;
              }
@@ -253,12 +258,16 @@ bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
 Ack UbloxReceiver::classifyReply(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                  std::span<const uint8_t> sent) const noexcept
 {
-    static_cast<void>(sent); // ACK/NAK 只回显 class/id，不回显命令文本
     if (&dec != &demux::ubx::kDecoder) {
         return Ack::kNone;
     }
-    if (!respHasValidAck(frame) || !respAckClassId(frame, ublox::kClsCfg, ublox::kIdCfgValset)) {
-        return Ack::kNone; // 只认 CFG-VALSET（06 8A）的应答
+    // 旧调用可传空命令来判 CFG-VALSET；维护命令按发送帧匹配 class/id。
+    const bool cfgCfg = sent.size() > ublox::kIdOffset &&
+                        sent[ublox::kClsOffset] == ublox::kClsCfg &&
+                        sent[ublox::kIdOffset] == ublox::kIdCfgCfg;
+    const uint8_t id = cfgCfg ? ublox::kIdCfgCfg : ublox::kIdCfgValset;
+    if (!respHasValidAck(frame) || !respAckClassId(frame, ublox::kClsCfg, id)) {
+        return Ack::kNone;
     }
     return frame[ublox::kIdOffset] == ublox::kIdAck ? Ack::kAck : Ack::kNack;
 }
@@ -332,7 +341,14 @@ fw::Status UbloxReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model mo
             return fw::Status::kInvalidArg; // 键类型是 U1，超出可表示范围视为不可实现参数
         }
     }
-    if (!cmdValsetMsgout(out, key, static_cast<uint8_t>(epochs))) {
+    // UBX-22008968 §6.9.14：这些 NMEA UART2 项的 ID 紧随对应 UART1 项。
+    if (plan.useConfiguredPort && plan.port == 2U) {
+        ++key;
+    }
+    const auto value = static_cast<uint8_t>(epochs); // 上面已验证 U1 上限。
+    const bool built = plan.useConfiguredPort ? cmdValsetU1(out, ublox::kLayerRam, key, value)
+                                              : cmdValsetMsgout(out, key, value);
+    if (!built) {
         out.clear();
         return fw::Status::kInvalidArg;
     }

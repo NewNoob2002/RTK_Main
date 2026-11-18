@@ -49,6 +49,13 @@ public:
                                          const OutputPlan &plan,
                                          CmdBuf &out) const noexcept override;
 
+    [[nodiscard]] bool saveStep(ConfigStep &out) const noexcept override;
+    [[nodiscard]] bool factoryResetStep(uint8_t port, const ProbeResult &detected,
+                                        ConfigStep &out) const noexcept override;
+    [[nodiscard]] bool buildFactoryResetProbe(uint8_t port, CmdBuf &out) const noexcept override;
+    [[nodiscard]] bool baudStep(uint8_t port, uint32_t baud,
+                                ConfigStep &out) const noexcept override;
+
 protected:
     // 家族基类不可直接实例化（CPP-011）：构造/析构 protected、析构非虚，保证可平凡析构且不生成删除析构。
     constexpr UbloxReceiver() noexcept = default;
@@ -59,8 +66,12 @@ protected:
                                             std::span<const uint8_t> payload) noexcept;
     [[nodiscard]] static bool cmdPollMonVer(CmdBuf &out) noexcept; // UBX-MON-VER 轮询（空载荷）
     [[nodiscard]] static bool cmdConfigureReceiver(CmdBuf &out, uint16_t periodMs) noexcept;
+    [[nodiscard]] static bool cmdConfigurePort(CmdBuf &out, uint16_t periodMs,
+                                               uint8_t port) noexcept;
     [[nodiscard]] static bool cmdSetBaudrate(CmdBuf &out, uint32_t baud) noexcept;
     [[nodiscard]] static bool cmdValsetMsgout(CmdBuf &out, uint32_t key, uint8_t epochs) noexcept;
+    [[nodiscard]] static bool cmdValsetU1(CmdBuf &out, uint8_t layer, uint32_t key,
+                                          uint8_t value) noexcept;
 
     // ---- 应答判定：只判帧结构与 ACK 类别，不看具体配置内容 ----
     [[nodiscard]] static size_t respPayloadLen(std::span<const uint8_t> frame) noexcept;

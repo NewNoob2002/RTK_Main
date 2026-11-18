@@ -100,6 +100,17 @@ static shim_nvs_entry_t *find_entry(nvs_handle_t handle, const char *key)
     return NULL;
 }
 
+/** @brief 删除测试命名空间中的键。 */
+esp_err_t nvs_erase_key(nvs_handle_t handle, const char *key)
+{
+    shim_nvs_entry_t *entry = find_entry(handle, key);
+    if (entry == NULL) {
+        return ESP_ERR_NVS_NOT_FOUND;
+    }
+    *entry = (shim_nvs_entry_t){0};
+    return ESP_OK;
+}
+
 static esp_err_t read_value(nvs_handle_t handle, const char *key, uint32_t *out_value)
 {
     const shim_nvs_entry_t *entry = find_entry(handle, key);

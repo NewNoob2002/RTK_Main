@@ -2,6 +2,7 @@
 // storeCatalog）。 常量表，可被 storage 在启动早期遍历；非 ISR，无副作用。
 #pragma once
 
+#include <algorithm>
 #include <array>
 
 #include "data/GnssOutput.hpp"
@@ -10,8 +11,25 @@
 
 namespace app::gnss_store {
 
+/**
+ * @brief 校验设置命令允许的串口速率。
+ * @param baud: 波特率。
+ * @retval true 支持；false 其他。
+ */
+constexpr bool validUserBaud(uint32_t baud) noexcept
+{
+    constexpr std::array<uint32_t, 8U> kSupported{9600U,   19200U,  38400U,  57600U,
+                                                  115200U, 230400U, 460800U, 921600U};
+    for (const uint32_t candidate : kSupported) {
+        if (baud == candidate) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // 用户配置组 gnss.config：测量速率、GSV 开关与统一输出配置（gnss/out）。
-inline constexpr std::array<fw::StoreKey, 3U> kConfigKeys = {
+inline constexpr std::array<fw::StoreKey, 4U> kConfigKeys = {
     {{.ns = "gnss",
       .key = "rate",
       .type = fw::StoreType::kU8,
@@ -38,7 +56,17 @@ inline constexpr std::array<fw::StoreKey, 3U> kConfigKeys = {
       .min = 0,
       .max = 0,
       .help = "GNSS receiver & app output defaults (blob v1)",
-      .binding = {.obj = nullptr, .load = &GnssModule::loadOut, .save = &GnssModule::saveOut}}}};
+      .binding = {.obj = nullptr, .load = &GnssModule::loadOut, .save = &GnssModule::saveOut}},
+     {.ns = "gnss",
+      .key = "baud",
+      .type = fw::StoreType::kU32,
+      .maxSize = 4U,
+      .flags = fw::store_flag::kConsole,
+      .min = 9600,
+      .max = 921600,
+      .help = "GNSS receiver UART baud",
+      .binding = {
+          .obj = nullptr, .load = &GnssModule::loadUserBaud, .save = &GnssModule::saveUserBaud}}}};
 
 // 探测缓存组 gnss.cache：上次识别到的芯片族/型号/波特率，只作下次启动探测的提示，不是用户配置。
 inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
@@ -63,7 +91,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .help = "last detected GNSS model",
       .binding = {.obj = nullptr, .load = &GnssModule::loadModel, .save = &GnssModule::saveModel}},
      {.ns = "gnss",
-      .key = "baud",
+      .key = "cache_baud",
       .type = fw::StoreType::kU32,
       .maxSize = 4U,
       .flags = 0U,
@@ -72,8 +100,7 @@ inline constexpr std::array<fw::StoreKey, 3U> kCacheKeys = {
       .help = "last detected GNSS UART baud",
       .binding = {.obj = nullptr, .load = &GnssModule::loadBaud, .save = &GnssModule::saveBaud}}}};
 
-static_assert(fw::valid(kConfigKeys[0]) && fw::valid(kConfigKeys[1]) && fw::valid(kConfigKeys[2]),
-              "gnss.config 键必须合法");
+static_assert(std::ranges::all_of(kConfigKeys, fw::valid), "gnss.config 键必须合法");
 static_assert(fw::valid(kCacheKeys[0]) && fw::valid(kCacheKeys[1]) && fw::valid(kCacheKeys[2]),
               "gnss.cache 键必须合法");
 static_assert(fw::uniqueKeys(kConfigKeys) && fw::uniqueKeys(kCacheKeys),

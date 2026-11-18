@@ -140,7 +140,7 @@ ControllerImpl::Round ControllerImpl::onPowerUp(Controller &self, uint32_t nowMs
 }
 
 /**
- * @brief kProbing：phase 0 下发探测命令，phase 1 等应答或超时换候选。
+ * @brief kProbing：复位后先等启动窗口，再下发探测、等应答或超时换候选。
  * @param self: 控制器。
  * @param nowMs: 当前时间。
  * @param out: 输出动作。
@@ -150,6 +150,12 @@ ControllerImpl::Round ControllerImpl::onPowerUp(Controller &self, uint32_t nowMs
 ControllerImpl::Round ControllerImpl::onProbing(Controller &self, uint32_t nowMs,
                                                 Action &out) noexcept
 {
+    if (self.phase_ == kProbeBootWaitPhase) {
+        if (!reached(nowMs, self.deadline_ms_)) {
+            return Round::kDone;
+        }
+        self.phase_ = 0U;
+    }
     if (self.phase_ == 0) {
         return probeStart(self, nowMs, out);
     }
@@ -192,7 +198,13 @@ ControllerImpl::Round ControllerImpl::probeStart(Controller &self, uint32_t nowM
     }
     self.probe_receiver_ = candidate.receiver;
     self.probe_cmd_.clear();
-    if (!candidate.receiver->buildProbe(self.probe_cmd_)) {
+    // 复位后的 UART2 可能在第一轮仍未启动，每轮都在出厂速率重试协议恢复。
+    const bool factoryProbe = self.factory_reset_probe_ && candidate.baud == self.hint_.baud &&
+                              candidate.receiver->family() == self.hint_.family;
+    const bool built =
+        factoryProbe ? candidate.receiver->buildFactoryResetProbe(self.cfg_->port, self.probe_cmd_)
+                     : candidate.receiver->buildProbe(self.probe_cmd_);
+    if (!built) {
         ++self.probe_index_; // 驱动自身无法生成查询命令：跳过该组合
         return Round::kAgain;
     }
@@ -218,6 +230,7 @@ ControllerImpl::Round ControllerImpl::probeAwait(Controller &self, uint32_t nowM
 {
     static_cast<void>(out);
     if (self.probe_hit_) {
+        self.factory_reset_probe_ = false;
         // onFrame() 已把型号与波特率写进 detected_，这里只做状态迁移。
         enterConfiguring(self);
         return Round::kAgain;

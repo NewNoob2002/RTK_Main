@@ -12,12 +12,16 @@
 #include "data/GnssOutput.hpp"
 #include "fw/FanoutRing.hpp"
 #include "modules/storage/StoreKeys.hpp"
+#include "modules/gnss/GnssConsoleValue.hpp"
+#include "modules/gnss/GnssMaintenance.hpp"
 
 /** @brief 供真实存储键表引用的主机错误名。 */
 extern "C" const char *esp_err_to_name(esp_err_t error)
 {
     return error == ESP_OK ? "OK" : "FAIL";
 }
+
+void testGnssFactoryReset();
 
 namespace {
 
@@ -50,7 +54,7 @@ void testOutputPlan() noexcept
     CHECK(plan.periodMs[idx(gn::OutputMsg::kGst)] == 100U);
     CHECK(plan.periodMs[idx(gn::OutputMsg::kRmc)] == 100U);
     CHECK(plan.periodMs[idx(gn::OutputMsg::kGsa)] == 100U);
-    CHECK(plan.periodMs[idx(gn::OutputMsg::kGsv)] == 1000U);
+    CHECK(plan.periodMs[idx(gn::OutputMsg::kGsv)] == 5000U);
     CHECK(plan.port == 2U);
     CHECK(plan.rateHz == 10U);
 
@@ -74,10 +78,15 @@ void testOutputPlan() noexcept
     const gn::OutputPlan out = app::data::makeOutputPlan(custom, 1U, true, 2U, gn::cap::kHeading);
     CHECK(out.periodMs[idx(gn::OutputMsg::kGga)] == 500U);
     CHECK(out.periodMs[idx(gn::OutputMsg::kSatsInfo)] == 2000U);
+    CHECK(out.periodMs[idx(gn::OutputMsg::kGsv)] == 2000U);
     CHECK(out.periodMs[idx(gn::OutputMsg::kHeading)] == 1000U);
     CHECK(out.periodMs[idx(gn::OutputMsg::kGst)] == 250U);
     CHECK(out.periodMs[idx(gn::OutputMsg::kRmc)] == 0U);
     CHECK(out.periodMs[idx(gn::OutputMsg::kGsa)] == 5000U);
+
+    custom.intervals[0] = -1; // 显式 1 Hz，定位频率 10 Hz 时仍保持一秒。
+    CHECK(app::data::makeOutputPlan(custom, 10U, true, 2U, 0U).periodMs[idx(gn::OutputMsg::kGga)] ==
+          1000U);
 }
 
 void testOutConfigAndNvsBlob() noexcept
@@ -287,6 +296,69 @@ void testPushGate() noexcept
     }
 }
 
+/** @brief 验证 Hz 文本、协议间隔和命令保护的边界。 */
+void testConsoleRates()
+{
+    using app::detail::formatGnssHz;
+    using app::detail::parseGnssHz;
+    int8_t interval = 0;
+    CHECK(parseGnssHz("0.2", interval) && interval == -5);
+    CHECK(parseGnssHz("1/127", interval) && interval == -127);
+    CHECK(parseGnssHz("20", interval) && interval == 20);
+    CHECK(parseGnssHz("off", interval) && interval == 0);
+    std::array<char, app::detail::kGnssRateTextBytes> display{};
+    CHECK(parseGnssHz("0.2", interval));
+    formatGnssHz(interval, display);
+    CHECK(std::string_view{display.data()} == "1/5 Hz");
+    formatGnssHz(-3, display);
+    CHECK(std::string_view{display.data()} == "1/3 Hz");
+    formatGnssHz(-1, display);
+    CHECK(std::string_view{display.data()} == "1 Hz");
+    formatGnssHz(1, display);
+    CHECK(std::string_view{display.data()} == "1 Hz");
+    formatGnssHz(0, display);
+    CHECK(std::string_view{display.data()} == "off");
+    for (const auto text :
+         {"-1", "0.3", "0.7", "1/128", "1/0", "1/1", "NaN", "3", "0.001", "0.200x"}) {
+        CHECK(!parseGnssHz(text, interval));
+    }
+    for (int period = 2; period <= 127; ++period) {
+        std::array<char, app::detail::kGnssRateTextBytes> text{};
+        formatGnssHz(static_cast<int8_t>(-period), text);
+        std::string_view value{text.data()};
+        CHECK(value.ends_with(" Hz"));
+        value.remove_suffix(3U);
+        CHECK(parseGnssHz(value, interval) && interval == -period);
+    }
+
+    using app::detail::changesConnectedGnssBaud;
+    CHECK(changesConnectedGnssBaud("CoNfIg\tCOM2 460800 8 n 1", 2U));
+    CHECK(changesConnectedGnssBaud("  COM com2 115200", 2U));
+    CHECK(changesConnectedGnssBaud("COM 115200", 2U));
+    CHECK(changesConnectedGnssBaud("$PUBX,41,2,0007,0003,19200,0*26", 2U));
+    CHECK(!changesConnectedGnssBaud("$PUBX,41,1,0007,0003,19200,0*25", 2U));
+    CHECK(!changesConnectedGnssBaud("CONFIG COM1 460800", 2U));
+    CHECK(!changesConnectedGnssBaud("COM COM3 115200", 2U));
+    CHECK(!changesConnectedGnssBaud("CONFIG COM2", 2U));
+}
+
+/** @brief 多次排队只补发一次，清除后可以继续接收下一轮。 */
+void testSaveCoalescing()
+{
+    app::GnssSaveQueue queue;
+    CHECK(!queue.take(true));
+    queue.request();
+    CHECK(queue.take(true));
+    queue.request();
+    queue.request();
+    CHECK(!queue.take(false));
+    CHECK(queue.take(true));
+    CHECK(!queue.take(true));
+    queue.request();
+    queue.clear();
+    CHECK(!queue.take(true));
+}
+
 } // namespace
 
 int main()
@@ -296,5 +368,8 @@ int main()
     testLatestCacheAndQueryCaps();
     testSubscriptionAndAppRing();
     testPushGate();
+    testConsoleRates();
+    testSaveCoalescing();
+    testGnssFactoryReset();
     return 0;
 }

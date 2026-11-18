@@ -23,6 +23,7 @@ enum class State : uint8_t {
     kFailed,      // 探测/配置用尽重试，等待 retryBackoffMs 后从 kPowerUp 重来
     kOutput,      // 基础脚本完成后逐项下发/关闭报文输出（ADR-0012 §2.4）
     kReadback,    // 运行中读回模块配置（ADR-0012 §2.7），结束后回 kRunning
+    kMaintenance, // 一次性保存、复位或串口切换。
 };
 
 /** poll() 要求调用方执行的动作。 */
@@ -66,6 +67,11 @@ struct Timing {
     uint32_t retryBackoffMs = kTimingRetryBackoffMs;
 };
 
+/** 一次性维护操作。 */
+enum class Maintenance : uint8_t { kSave, kFactoryReset, kBaud };
+/** 最近一次维护操作的结果。 */
+enum class MaintenanceResult : uint8_t { kOk, kNack, kTimeout, kUnsupported, kIoError };
+
 /** 控制器统计（控制台 gnss status 打印）。 */
 struct ControllerStats {
     uint32_t probesSent = 0;
@@ -83,6 +89,9 @@ struct ControllerStats {
     // 最近一次配置读回（ADR-0012 §2.7）。
     uint32_t readbackLines = 0; // 本轮 matchReadback() 命中的行数
     uint32_t readbackSeq = 0;   // 每次读回结束（静默超时/总超时/不支持）时 +1
+    uint32_t maintenanceSeq = 0;
+    Maintenance maintenance = Maintenance::kSave;
+    MaintenanceResult maintenanceResult = MaintenanceResult::kOk;
 };
 
 /** 探测成功后的结论（供 main 写 NVS 与 DeviceInfo）。 */
@@ -159,6 +168,38 @@ public:
      *         控制器只计数与计时。非线程安全，不阻塞。
      */
     [[nodiscard]] bool requestReadback(uint32_t nowMs) noexcept;
+    /**
+     * @brief 请求保存当前接收机配置。
+     * @retval true 已受理，结果由 maintenanceSeq 发布；false 当前忙。
+     * @note 仅控制器所属任务调用。
+     */
+    [[nodiscard]] bool requestSave() noexcept;
+    /**
+     * @brief 请求恢复接收机出厂设置，命令写出后启动普通探测。
+     * @retval true 已受理，UART 下发结果由 maintenanceSeq 发布；false 当前忙。
+     * @note 仅控制器所属任务调用。
+     */
+    [[nodiscard]] bool requestFactoryReset() noexcept;
+    /**
+     * @brief 请求改波特率，新波特率上收到版本帧才确认。
+     * @param baud: 目标波特率。
+     * @retval true 已受理，结果由 maintenanceSeq 发布；false 当前忙。
+     * @note 仅控制器所属任务调用。
+     */
+    [[nodiscard]] bool requestBaud(uint32_t baud) noexcept;
+    /**
+     * @brief 告知维护期间 UART 动作失败。
+     * @param nowMs: 当前时间。
+     * @note 仅控制器所属任务调用；波特率切换失败后回旧速率重探。
+     */
+    void maintenanceIoFailed(uint32_t nowMs) noexcept;
+    /**
+     * @brief 更新通用探测的首选组合与候选速率表。
+     * @param hint: 首选组合。
+     * @param bauds: 非空的持久候选表。
+     * @note 仅控制器所属任务调用。
+     */
+    void setProbePreferences(const Hint &hint, std::span<const uint32_t> bauds) noexcept;
     /**
      * @brief  更新输出计划，不触发任何动作
      * @param  plan: 新计划（探测到型号后 caps 才确定，main 每轮按最新配置重算）
@@ -268,8 +309,36 @@ private:
     CmdBuf probe_cmd_{};  // 当前探测命令（bytes 来源）
     CmdBuf output_cmd_{}; // 当前输出命令（bytes 来源）
     const Receiver *probe_receiver_ = nullptr;
+    bool factory_reset_probe_ = false; // 出厂波特率上的同家族候选需要复位后的探测序列
     Detected detected_{};
     ControllerStats stats_{};
+
+    enum class MaintenancePhase : uint8_t {
+        kSend,
+        kResetSent,
+        kAwaitAck,
+        kSwitch,
+        kProbe,
+        kAwaitProbe,
+        kRestore
+    };
+    MaintenancePhase maintenance_phase_ = MaintenancePhase::kSend;
+    Maintenance pending_maintenance_ = Maintenance::kSave;
+    MaintenanceResult restore_result_ = MaintenanceResult::kTimeout;
+    uint32_t maintenance_old_baud_ = 0U;
+
+    /** @brief 进入维护状态或即时发布不支持。 @param kind: 操作类型。 @param baud: 可选波特率。 @retval true 已受理；false 当前忙。 */
+    [[nodiscard]] bool beginMaintenance(Maintenance kind, uint32_t baud) noexcept;
+    /** @brief 发布维护结果并退出维护。 @param result: 操作结果。 */
+    void finishMaintenance(MaintenanceResult result) noexcept;
+    /** @brief 推进维护动作。 @param nowMs: 当前时间。 @retval 下一动作。 */
+    [[nodiscard]] Action pollMaintenance(uint32_t nowMs) noexcept;
+    /** @brief 验证切速后的接收机。 @param nowMs: 当前时间。 @retval 探测写动作或空动作。 */
+    [[nodiscard]] Action pollMaintenanceProbe(uint32_t nowMs) noexcept;
+    /** @brief 消费维护应答。 @param dec: 帧解码器。 @param frame: 完整帧。 */
+    void onMaintenanceFrame(const demux::Decoder &dec, std::span<const uint8_t> frame) noexcept;
+    /** @brief 波特率确认失败后选择旧速率。 @param result: 失败结果。 */
+    void restoreMaintenanceBaud(MaintenanceResult result) noexcept;
 
     friend struct ControllerImpl; // 实现细节在 src/Controller.cpp
 };

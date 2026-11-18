@@ -183,4 +183,26 @@ bool UnicoreReceiver::stepPortBaud(const RoverConfig &cfg, ConfigStep &out) noex
     return true;
 }
 
+bool UnicoreReceiver::saveStep(ConfigStep &out) const noexcept
+{
+    constexpr uint16_t kSaveTimeoutMs = 1800U;
+    out = ConfigStep{.timeoutMs = kSaveTimeoutMs};
+    return out.cmd.append("SAVECONFIG\r\n");
+}
+
+bool UnicoreReceiver::factoryResetStep(uint8_t port, const ProbeResult &,
+                                       ConfigStep &out) const noexcept
+{
+    static_cast<void>(port);
+    constexpr uint32_t kFactoryBaud = 115200U;
+    out = ConfigStep{.expectReply = false, .switchBaud = kFactoryBaud};
+    return out.cmd.append("FRESET\r\n");
+}
+
+bool UnicoreReceiver::baudStep(uint8_t port, uint32_t baud, ConfigStep &out) const noexcept
+{
+    out = ConfigStep{.expectReply = false, .switchBaud = baud};
+    return cmdConfigBaud(out.cmd, port, baud);
+}
+
 } // namespace gnss

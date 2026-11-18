@@ -237,9 +237,22 @@ static void testGoldenCaps()
                              static_cast<uint32_t>(bad));
 }
 
+/** @brief C2 一次性命令的字节级合约。 */
+static void testMaintenanceCommands()
+{
+    const auto &driver = comnavDrv();
+    gnss::ConfigStep step{};
+    TEST_ASSERT_TRUE(driver.saveStep(step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "SAVECONFIG\r\n"));
+    TEST_ASSERT_TRUE(driver.baudStep(2U, 460800U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "COM COM2 460800\r\n"));
+    TEST_ASSERT_FALSE(driver.factoryResetStep(2U, {}, step));
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
+    RUN_TEST(testMaintenanceCommands);
     RUN_TEST(testGoldenProbe);
     RUN_TEST(testGoldenOutputPlan);
     RUN_TEST(testGoldenProbeMatch);

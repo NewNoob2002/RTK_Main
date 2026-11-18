@@ -174,6 +174,22 @@ public:
         return fakeReply(frame);
     }
 
+    bool saveStep(ConfigStep &out) const noexcept override
+    {
+        out = ConfigStep{};
+        return family_ == Family::kUnicore && out.cmd.append("SAVE\r\n");
+    }
+    bool factoryResetStep(uint8_t, const ProbeResult &, ConfigStep &out) const noexcept override
+    {
+        out = ConfigStep{.expectReply = false, .switchBaud = 115200U};
+        return out.cmd.append("RESET\r\n");
+    }
+    bool baudStep(uint8_t, uint32_t baud, ConfigStep &out) const noexcept override
+    {
+        out = ConfigStep{.expectReply = false, .switchBaud = baud};
+        return out.cmd.append("BAUD\r\n");
+    }
+
 private:
     Family family_;
     const char *name_;
@@ -487,6 +503,116 @@ static void testRequestReconfigure()
     TEST_ASSERT_TRUE(isWrite(controller.poll(now), "A0\r\n"));
 }
 
+/** @brief 让假接收机探测并完成基础配置。 */
+void configureForMaintenance(Controller &controller, const FakeReceiver &receiver,
+                             const RoverConfig &cfg, uint32_t &now)
+{
+    static constexpr std::array<uint32_t, 1> kBauds{115200U};
+    static constexpr std::array<const gnss::Receiver *, 1> kReceiversA{&kReceiverA};
+    static constexpr std::array<const gnss::Receiver *, 1> kReceiversB{&kReceiverB};
+    const bool unicore = &receiver == &kReceiverA;
+    TEST_ASSERT_TRUE(controller.init(unicore ? kReceiversA : kReceiversB, kBauds, cfg,
+                                     gnss::OutputPlan{}, {}, fastTiming()));
+    TEST_ASSERT_FALSE(controller.requestSave());
+    TEST_ASSERT_FALSE(controller.requestFactoryReset());
+    TEST_ASSERT_FALSE(controller.requestBaud(460800U));
+    controller.requestReprobe(now);
+    TEST_ASSERT_EQUAL(Action::Kind::kWrite, controller.poll(now).kind);
+    feed(controller, unicore ? "#V" : "?V", ++now);
+    TEST_ASSERT_EQUAL(Action::Kind::kWrite, controller.poll(now).kind);
+    feed(controller, "OK", ++now);
+    if (unicore) {
+        TEST_ASSERT_EQUAL(Action::Kind::kWrite, controller.poll(now).kind);
+        feed(controller, "OK", ++now);
+    }
+    (void)controller.poll(now);
+    TEST_ASSERT_EQUAL(gnss::State::kRunning, controller.state());
+}
+
+/** @brief 保存 ACK、NACK、超时与重复请求。 */
+void testMaintenanceSave()
+{
+    Controller controller;
+    const RoverConfig cfg = roverConfig();
+    uint32_t now = 0U;
+    configureForMaintenance(controller, kReceiverA, cfg, now);
+    TEST_ASSERT_TRUE(controller.requestSave());
+    TEST_ASSERT_FALSE(controller.requestSave());
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "SAVE\r\n"));
+    feed(controller, "OK", ++now);
+    (void)controller.poll(now);
+    TEST_ASSERT_EQUAL_UINT32(1U, controller.stats().maintenanceSeq);
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kOk, controller.stats().maintenanceResult);
+
+    TEST_ASSERT_TRUE(controller.requestSave());
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "SAVE\r\n"));
+    feed(controller, "NO", ++now);
+    (void)controller.poll(now);
+    TEST_ASSERT_EQUAL_UINT32(2U, controller.stats().maintenanceSeq);
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kNack, controller.stats().maintenanceResult);
+
+    TEST_ASSERT_TRUE(controller.requestSave());
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "SAVE\r\n"));
+    (void)controller.poll(now + gnss::kStepTimeoutMs);
+    TEST_ASSERT_EQUAL_UINT32(3U, controller.stats().maintenanceSeq);
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kTimeout, controller.stats().maintenanceResult);
+}
+
+/** @brief 验证目标速率探测成功、失败回旧速率并重新探测。 */
+void testMaintenanceBaud()
+{
+    Controller controller;
+    const RoverConfig cfg = roverConfig();
+    uint32_t now = 0U;
+    configureForMaintenance(controller, kReceiverA, cfg, now);
+    TEST_ASSERT_TRUE(controller.requestBaud(460800U));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "BAUD\r\n"));
+    now += 100U;
+    TEST_ASSERT_EQUAL_UINT32(460800U, controller.poll(now).baud);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "VERSION\r\n"));
+    feed(controller, "#V", ++now);
+    (void)controller.poll(now);
+    TEST_ASSERT_EQUAL_UINT32(460800U, controller.detected().baud);
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kOk, controller.stats().maintenanceResult);
+
+    TEST_ASSERT_TRUE(controller.requestBaud(921600U));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "BAUD\r\n"));
+    now += 100U;
+    TEST_ASSERT_EQUAL_UINT32(921600U, controller.poll(now).baud);
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "VERSION\r\n"));
+    now += 700U;
+    (void)controller.poll(now);
+    TEST_ASSERT_EQUAL_UINT32(460800U, controller.poll(now).baud);
+    TEST_ASSERT_EQUAL(gnss::State::kProbing, controller.state());
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kTimeout, controller.stats().maintenanceResult);
+}
+
+/** @brief 不支持的保存，以及复位确认后进入通用重探。 */
+void testMaintenanceReset()
+{
+    Controller controller;
+    const RoverConfig cfg = roverConfig();
+    uint32_t now = 0U;
+    configureForMaintenance(controller, kReceiverB, cfg, now);
+    TEST_ASSERT_TRUE(controller.requestSave());
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kUnsupported, controller.stats().maintenanceResult);
+    TEST_ASSERT_TRUE(controller.requestFactoryReset());
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "RESET\r\n"));
+    TEST_ASSERT_EQUAL(Action::Kind::kNone, controller.poll(now).kind);
+    TEST_ASSERT_EQUAL(gnss::State::kProbing, controller.state());
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kOk, controller.stats().maintenanceResult);
+    TEST_ASSERT_EQUAL_UINT32(2U, controller.stats().maintenanceSeq);
+    now += fastTiming().bootMs;
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "Q\r\n"));
+    now += fastTiming().probeTimeoutMs;
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "Q\r\n"));
+    feed(controller, "?V", ++now);
+    TEST_ASSERT_EQUAL(Action::Kind::kWrite, controller.poll(now).kind);
+    feed(controller, "OK", ++now);
+    (void)controller.poll(now);
+    TEST_ASSERT_EQUAL(gnss::State::kRunning, controller.state());
+}
+
 static void testStateNames()
 {
     TEST_ASSERT_EQUAL_STRING("off", gnss::stateName(gnss::State::kOff));
@@ -509,5 +635,8 @@ int main(int, char **)
     RUN_TEST(testHintIsProbedFirst);
     RUN_TEST(testRequestReconfigure);
     RUN_TEST(testStateNames);
+    RUN_TEST(testMaintenanceSave);
+    RUN_TEST(testMaintenanceBaud);
+    RUN_TEST(testMaintenanceReset);
     return UNITY_END();
 }

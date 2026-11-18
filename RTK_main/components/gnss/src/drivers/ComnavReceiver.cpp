@@ -486,4 +486,17 @@ fw::Status ComnavReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model m
     return fw::Status::kOk;
 }
 
+bool ComnavReceiver::saveStep(ConfigStep &out) const noexcept
+{
+    constexpr uint16_t kSaveTimeoutMs = 1800U;
+    out = ConfigStep{.timeoutMs = kSaveTimeoutMs};
+    return out.cmd.append("SAVECONFIG\r\n");
+}
+
+bool ComnavReceiver::baudStep(uint8_t port, uint32_t baud, ConfigStep &out) const noexcept
+{
+    out = ConfigStep{.expectReply = false, .switchBaud = baud};
+    return cmdComBaud(out.cmd, port, baud);
+}
+
 } // namespace gnss

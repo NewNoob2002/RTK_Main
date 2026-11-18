@@ -160,9 +160,12 @@ gnss::OutputPlan makeOutputPlan(const GnssOutConfig &out, uint8_t rateHz, bool g
             plan.periodMs[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
         }
     }
-    plan.periodMs[static_cast<size_t>(gnss::OutputMsg::kGsv)] = gsv ? kOneSecondMs : 0U;
+    // 控制台 sats/gsv 共用卫星输出周期。旧 gsv 开关仍可单独关闭 NMEA GSV。
+    plan.periodMs[static_cast<size_t>(gnss::OutputMsg::kGsv)] =
+        gsv ? plan.periodMs[static_cast<size_t>(gnss::OutputMsg::kSatsInfo)] : 0U;
     plan.port = port;
     plan.rateHz = hz;
+    plan.useConfiguredPort = true;
     return plan;
 }
 

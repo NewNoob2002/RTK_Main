@@ -12,6 +12,7 @@ namespace gnss::ublox {
 inline constexpr uint8_t kSync1 = 0xB5;
 inline constexpr uint8_t kSync2 = 0x62;
 inline constexpr uint8_t kClsCfg = 0x06;
+inline constexpr uint8_t kIdCfgCfg = 0x09;
 inline constexpr uint8_t kIdCfgValset = 0x8A;
 inline constexpr uint8_t kClsAck = 0x05;
 inline constexpr uint8_t kIdAck = 0x01;
@@ -20,6 +21,7 @@ inline constexpr uint8_t kClsMon = 0x0A;
 inline constexpr uint8_t kIdMonVer = 0x04;
 // 配置层：RAM | BBR（ADR-0010 §2.4 不写模块 flash）
 inline constexpr uint8_t kLayerRamBbr = 0x03;
+inline constexpr uint8_t kLayerRam = 0x01U;
 inline constexpr uint8_t kVersetVersion = 0x00;
 inline constexpr uint8_t kByteMask = 0xFFU;
 // 小端拼接的移位位数（每字节 8 位）。

@@ -15,6 +15,8 @@ target_include_directories(main_nvs_shim PUBLIC shim)
 target_include_directories(main_rtos PUBLIC ../t13_host_check/shim/inc)
 target_link_libraries(main_rtos PUBLIC Threads::Threads)
 add_subdirectory(${PROJ_ROOT}/components/stream_demux stream_demux_build)
+add_subdirectory(${PROJ_ROOT}/components/app_fw app_fw_build)
+add_subdirectory(${PROJ_ROOT}/components/gnss gnss_build)
 add_library(main_pure STATIC
     ${PROJ_ROOT}/components/device_proto/DevProtoFrame.c
     ${PROJ_ROOT}/components/device_proto/DevProtoAlarm.c
@@ -123,11 +125,19 @@ target_link_libraries(template_check PRIVATE main_pure main_nvs_shim)
 add_test(NAME template_module COMMAND template_check template_module)
 
 add_executable(gnss_output_check GnssOutputCheck.cpp
+    GnssResetCheck.cpp
     ${PROJ_ROOT}/main/data/GnssOutput.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModule.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModuleCmds.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModuleFrames.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModuleMaintenance.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModuleProbe.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModuleStore.cpp
     ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp)
 target_include_directories(gnss_output_check BEFORE PRIVATE shim)
 target_include_directories(gnss_output_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/main ${PROJ_ROOT}/components/rtos/include
+    ${PROJ_ROOT}/components/spp_server/include
     ${PROJ_ROOT}/components/cli/include
     ${PROJ_ROOT}/components/bt_reconnect/include
     ${PROJ_ROOT}/components/nvs_store/include
@@ -137,7 +147,11 @@ target_include_directories(gnss_output_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/components/link_core/include)
 target_compile_options(gnss_output_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
-target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim)
+target_compile_definitions(gnss_output_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1 CONFIG_RTK_LOG_RING_BYTES=4096
+    CONFIG_RTK_GNSS_UART_NUM=2 CONFIG_RTK_GNSS_RX_GPIO=16 CONFIG_RTK_GNSS_TX_GPIO=17
+    CONFIG_RTK_GNSS_POWER_GPIO=-1 CONFIG_RTK_GNSS_PORT=2 CONFIG_RTK_GNSS_DEFAULT_BAUD=115200
+    CONFIG_RTK_GNSS_RATE_HZ=1)
+target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim main_rtos gnss)
 add_test(NAME gnss_output COMMAND gnss_output_check)
 
 # 编译真实组合根的内存计划；函数分节仅裁去 host 无法运行的硬件入口，不替换待测绑定/回滚逻辑。

@@ -37,14 +37,21 @@ using detail::toResult;
 
 void GnssModule::pollController(uint32_t nowMs) noexcept
 {
+    const uint32_t maintenanceSeq = controller().stats().maintenanceSeq;
     for (size_t iter = 0U; iter < kMaxActionsPerPoll; ++iter) {
         const ::gnss::Action act = controller().poll(nowMs);
         if (act.kind == ::gnss::Action::Kind::kNone) {
             break;
         }
         applyAction(act);
+        if (controller().stats().maintenanceSeq != maintenanceSeq) {
+            break;
+        }
     }
     updateControllerStatus();
+    if (controller().stats().maintenanceSeq != completed_maintenance_seq_) {
+        completeMaintenance(nowMs);
+    }
     finishReadbackIfDone();
 }
 
@@ -61,11 +68,21 @@ void GnssModule::applyAction(const ::gnss::Action &act) noexcept
     }
     case ::gnss::Action::Kind::kSetBaud: {
         const uint32_t oldBaud = host_baud_;
+        const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
+        // 9600 bps 下 1024 B 的 TX 队列最多约 1.07 s；必须等旧速率字节发完。
+        constexpr uint32_t kUartDrainMs = 1200U;
+        if (controller().state() == ::gnss::State::kMaintenance &&
+            uart_wait_tx_done(port, pdMS_TO_TICKS(kUartDrainMs)) != ESP_OK) {
+            controller().maintenanceIoFailed(rtos::nowMs());
+            break;
+        }
         const fw::Result err = applyBaud(act.baud);
         if (fw::isOk(err)) {
             traceGnss(GnssTrace::kBaud, act.baud, oldBaud);
             FW_LOGI(fw::TraceCat::kGnss, "<uart> baud %lu (was %lu)",
                     static_cast<unsigned long>(act.baud), static_cast<unsigned long>(oldBaud));
+        } else {
+            controller().maintenanceIoFailed(rtos::nowMs());
         }
         break;
     }
@@ -174,8 +191,14 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
     if (pending_apply_ == PendingApply::kNone) {
         return;
     }
+    if (apply_deferred_) {
+        if (controller().state() == ::gnss::State::kRunning) {
+            beginPendingApply(nowMs);
+        }
+        return;
+    }
     const auto stats = controller().stats();
-    const bool landed = stats.outputSeq >= pending_seq_;
+    const bool landed = stats.outputSeq == pending_seq_;
     // 超时按有符号差判断，毫秒计数回绕时仍成立。
     const bool timeout = static_cast<int32_t>(nowMs - pending_deadline_ms_) >= 0;
     if (!landed && !timeout) {
@@ -201,25 +224,23 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
     publishStatus(nowMs);
 }
 
-void GnssModule::persistDetectedHint() noexcept
+fw::Result GnssModule::persistDetectedHint() noexcept
 {
     const auto &det = controller().detected();
     if (det.receiver == nullptr) {
-        return;
+        return fw::Result::kOk;
     }
     const ::gnss::Family detFamily = det.receiver->family();
     const ::gnss::Model detModel = det.probe.model;
     const uint32_t detBaud = (det.baud != 0U) ? det.baud : host_baud_;
     if ((detFamily == hint_.family) && (detModel == hint_.model) && (detBaud == hint_.baud)) {
-        return;
+        return fw::Result::kOk;
     }
     hint_.family = detFamily;
     hint_.model = detModel;
     hint_.baud = detBaud;
-    const fw::Result saveRes = ctx().storage.saveKeys(gnss_store::kCacheKeys);
-    if (!fw::isOk(saveRes)) {
-        // StorageModule::saveKeys 内部已发 kStore trace；此处保留 hint_ 内存值避免每轮重复写盘。
-    }
+    // StorageModule::saveKeys 内部发 kStore trace；保留 hint_ 内存值避免每轮重复写盘。
+    return ctx().storage.saveKeys(gnss_store::kCacheKeys);
 }
 
 fw::Result GnssModule::applyPower(bool on) noexcept
@@ -269,6 +290,9 @@ void GnssModule::applyWriteAction(const ::gnss::Action &act) noexcept
     const int written = uart_write_bytes(port, act.bytes.data(), act.bytes.size());
     if (written > 0) {
         uart_tx_bytes_ += static_cast<uint32_t>(written);
+    }
+    if (written < 0 || static_cast<size_t>(written) != act.bytes.size()) {
+        controller().maintenanceIoFailed(rtos::nowMs());
     }
     // 控制器下发的命令原文（去掉行尾 CR/LF）；探测阶段标 <probe>，其余标 <cfg>，
     // 方向固定写 TX（MCU → 接收机）：旧格式 "model <- cmd" 容易被读成接收（ADR-0009 §2.12）。
@@ -328,7 +352,11 @@ void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur)
         if (step_sent_once_) {
             traceGnss(GnssTrace::kStepAck, step_idx_, 0U);
         }
-        persistDetectedHint();
+        if (skip_hint_save_) {
+            skip_hint_save_ = false;
+        } else if (!boot_baud_pending_) {
+            static_cast<void>(persistDetectedHint());
+        }
         // 型号与 caps 已知，输出计划按支持的语句位重算一次（ADR-0012 §2.4）。
         controller().setOutputPlan(makePlan());
     } else if ((prev == ::gnss::State::kRunning) && (cur == ::gnss::State::kProbing)) {

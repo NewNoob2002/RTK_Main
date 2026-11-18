@@ -12,6 +12,8 @@
 namespace gnss {
 
 struct ControllerImpl {
+    static constexpr uint8_t kProbeBootWaitPhase = 2U;
+
     /** 一轮分派的结果：kAgain = 状态已迁移，需要重新分派；kDone = 本轮有结论（out 可能为空动作）。 */
     enum class Round : uint8_t {
         kAgain,

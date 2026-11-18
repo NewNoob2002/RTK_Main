@@ -51,6 +51,7 @@ fw::Result GnssModule::initObjects() noexcept
         cfg.gsv = true;
     }
     cfg.port = static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT);
+    cfg.useConfiguredPort = true;
     if (!out_cfg_.isValid()) {
         out_cfg_ = data::GnssOutConfig::defaults();
     }
@@ -95,11 +96,22 @@ fw::Result GnssModule::startController() noexcept
     // 输出计划是唯一来源（ADR-0012 §2.4）：先按默认值给一份，探测到型号后再按 caps 重算。
     controller().setOutputPlan(data::makeOutputPlan(
         out_cfg_, cfg.rateHz, cfg.gsv, static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT), 0U));
+    if (hint_.baud == 0U) {
+        hint_.baud = preferred_baud_;
+    }
     if (!controller().init(receivers, std::span<const uint32_t>{bauds_.data(), baud_count_}, cfg,
                            controller().outputPlan(), hint_, clock)) {
         return initFailed(fw::Result::kInvalidState);
     }
+    boot_baud_pending_ = preferred_baud_ != 0U;
+    // Controller 约定 UART 已处于 bauds.front()（NVS 首选速率），否则首批候选会在错误速率上空等。
     host_baud_ = CONFIG_RTK_GNSS_DEFAULT_BAUD;
+    if (bauds_[0] != host_baud_) {
+        const fw::Result baudRes = applyBaud(bauds_[0]);
+        if (!fw::isOk(baudRes)) {
+            return initFailed(baudRes);
+        }
+    }
     last_state_ = controller().state();
     last_published_state_ = last_state_;
     prev_ctrl_stats_ = controller().stats();
@@ -261,6 +273,7 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     }
     pollController(nowMs);
     tickPendingApply(nowMs);
+    tickMaintenance();
     const bool txProgress = pumpRtcmPipe();
 
     const auto curState = controller().state();
@@ -280,8 +293,11 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
 bool GnssModule::pumpRtcmPipe() noexcept
 {
     const auto st = controller().state();
+    if (st == ::gnss::State::kMaintenance && active_maintenance_ != ::gnss::Maintenance::kSave) {
+        return false; // 切速与复位期间保留待发数据，避免旧波特率字节混入维护命令。
+    }
     const bool allowTx = (st == ::gnss::State::kRunning) || (st == ::gnss::State::kConfiguring) ||
-                         (st == ::gnss::State::kProbing);
+                         (st == ::gnss::State::kProbing) || (st == ::gnss::State::kMaintenance);
     if (!allowTx) {
         if (rtcm_tx_len_ > rtcm_tx_off_) {
             ctx().rtcmPipe.noteDiscarded(rtcm_tx_len_ - rtcm_tx_off_);
@@ -345,6 +361,10 @@ void GnssModule::publishStatus(uint32_t nowMs) noexcept
     }
     st.hostBaud = host_baud_;
     st.ctrl = controller().stats();
+    // 自动保存可能先于控制台的下一次轮询完成，保留上次手动操作的结果。
+    st.ctrl.maintenanceSeq = console_maintenance_seq_;
+    st.ctrl.maintenance = console_maintenance_;
+    st.ctrl.maintenanceResult = console_maintenance_result_;
     st.outputSeq = st.ctrl.outputSeq;
     st.appliedMask = st.ctrl.appliedMask;
     st.unsupportedMask = st.ctrl.unsupportedMask;
@@ -393,17 +413,19 @@ void GnssModule::registerDecoders(std::span<const ::gnss::Receiver *const> recei
 
 void GnssModule::initBaudCandidates() noexcept
 {
-    constexpr std::array<uint32_t, kMaxBaudCandidates> kCandidateBauds{{
-        CONFIG_RTK_GNSS_DEFAULT_BAUD,
+    const std::array<uint32_t, kMaxBaudCandidates> candidatesInOrder{
+        preferred_baud_ == 0U ? CONFIG_RTK_GNSS_DEFAULT_BAUD : preferred_baud_,
         115200U,
         460800U,
         921600U,
         230400U,
         38400U,
         9600U,
-    }};
+        19200U,
+        57600U,
+    };
     baud_count_ = 0U;
-    for (const uint32_t baud : kCandidateBauds) {
+    for (const uint32_t baud : candidatesInOrder) {
         const auto candidates = std::span{bauds_}.first(baud_count_);
         if (std::find(candidates.begin(), candidates.end(), baud) == candidates.end()) {
             bauds_[baud_count_] = baud;

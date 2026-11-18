@@ -577,9 +577,23 @@ static void testGoldenHeadingThroughModelDriver()
     TEST_ASSERT_EQUAL_UINT8_ARRAY(goldenHeading.data(), cmd.view().data(), goldenHeading.size());
 }
 
+/** @brief C2 一次性命令的字节级合约。 */
+static void testMaintenanceCommands()
+{
+    const auto &driver = unicoreDrv();
+    gnss::ConfigStep step{};
+    TEST_ASSERT_TRUE(driver.saveStep(step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "SAVECONFIG\r\n"));
+    TEST_ASSERT_TRUE(driver.factoryResetStep(2U, {}, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "FRESET\r\n"));
+    TEST_ASSERT_TRUE(driver.baudStep(2U, 460800U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "CONFIG COM2 460800\r\n"));
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
+    RUN_TEST(testMaintenanceCommands);
     RUN_TEST(testGoldenProbe);
     RUN_TEST(testGoldenOutputPlan);
     RUN_TEST(testGoldenProbeMatch);

@@ -178,4 +178,14 @@ int cmdGnssFix(void *ctx, int argc, char **argv) noexcept;
  */
 int cmdGnssSats(void *ctx, int argc, char **argv) noexcept;
 
+namespace detail {
+/** @brief 控制台保存一次接收机配置。 @param argc: 参数数。 @retval 0 成功；其他为 ERR。 */
+int cmdGnssSave(void *, int argc, char **) noexcept;
+/** @brief 控制台恢复 GNSS 缺省。 @param argc: 参数数。 @param argv: 参数。 @retval 0 成功；其他为 ERR。 */
+int cmdGnssFactoryReset(void *, int argc, char **argv) noexcept;
+/** @brief 控制台同步修改 GNSS 波特率。 @param argc: 参数数。 @param argv: 参数。 @retval 0 成功；其他为 ERR。 */
+int cmdGnssBaud(void *, int argc, char **argv) noexcept;
+
+} // namespace detail
+
 } // namespace app

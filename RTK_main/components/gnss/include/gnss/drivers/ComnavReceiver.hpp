@@ -58,6 +58,10 @@ public:
                                          const OutputPlan &plan,
                                          CmdBuf &out) const noexcept override;
 
+    [[nodiscard]] bool saveStep(ConfigStep &out) const noexcept override;
+    [[nodiscard]] bool baudStep(uint8_t port, uint32_t baud,
+                                ConfigStep &out) const noexcept override;
+
 protected:
     // 家族基类不可直接实例化（CPP-011）：构造/析构 protected、析构非虚，保证可平凡析构且不生成删除析构。
     constexpr ComnavReceiver() noexcept = default;

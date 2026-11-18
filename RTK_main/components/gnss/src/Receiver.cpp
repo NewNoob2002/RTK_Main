@@ -111,6 +111,32 @@ size_t Receiver::frameTag(const demux::Decoder &dec, std::span<const uint8_t> fr
     return detail::appendText(out, 0U, name);
 }
 
+bool Receiver::saveStep(ConfigStep &out) const noexcept
+{
+    static_cast<void>(out);
+    return false;
+}
+
+bool Receiver::factoryResetStep(uint8_t port, const ProbeResult &, ConfigStep &out) const noexcept
+{
+    static_cast<void>(port);
+    static_cast<void>(out);
+    return false;
+}
+
+bool Receiver::buildFactoryResetProbe(uint8_t, CmdBuf &out) const noexcept
+{
+    return buildProbe(out);
+}
+
+bool Receiver::baudStep(uint8_t port, uint32_t baud, ConfigStep &out) const noexcept
+{
+    static_cast<void>(port);
+    static_cast<void>(baud);
+    static_cast<void>(out);
+    return false;
+}
+
 bool Receiver::buildReadback(CmdBuf &) const noexcept
 {
     return false; // 由具体驱动覆盖（ADR-0012 §2.7）

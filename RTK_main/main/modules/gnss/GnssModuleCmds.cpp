@@ -26,13 +26,13 @@
 #include "fw/Tlog.hpp"
 #include "gnss/Receiver.hpp"
 #include "modules/gnss/GnssKeys.hpp"
+#include "modules/gnss/GnssConsoleValue.hpp"
 #include "modules/storage/StorageModule.hpp"
 #include "rtos/EspStatus.hpp"
 
 namespace app {
 
 using detail::isValidRateHz;
-using detail::kApplyTimeoutMs;
 using detail::traceGnssSub;
 
 void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
@@ -42,6 +42,20 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
         return;
     }
     const uint32_t now = rtos::nowMs();
+    const auto maintenanceVerb = static_cast<GnssMaintenanceVerb>(cmd.verb);
+    if (maintenanceVerb == GnssMaintenanceVerb::kSave ||
+        maintenanceVerb == GnssMaintenanceVerb::kFactoryReset ||
+        maintenanceVerb == GnssMaintenanceVerb::kBaud) {
+        cmdMaintenance(cmd, now, result);
+        return;
+    }
+    if (baud_deferred_ || (controller().state() == ::gnss::State::kMaintenance &&
+                           (active_maintenance_ != ::gnss::Maintenance::kSave ||
+                            (cmd.verb != static_cast<uint8_t>(GnssVerb::kSetRate) &&
+                             cmd.verb != static_cast<uint8_t>(GnssSubVerb::kSetOut))))) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
     switch (static_cast<GnssVerb>(cmd.verb)) {
     case GnssVerb::kProbe:
         if (cmd.argLen != 0U) {
@@ -115,7 +129,8 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
         result.status = fw::Result::kBusy;
         return;
     }
-    if (controller().state() != ::gnss::State::kRunning) {
+    if (controller().state() != ::gnss::State::kRunning &&
+        controller().state() != ::gnss::State::kMaintenance) {
         // 与 kSetOut 一致：没有运行中的接收机可确认，直接落盘，下次配置完成时按新频率执行。
         const uint8_t prevRate = ensureRoverCfg().rateHz;
         ensureRoverCfg().rateHz = cmd.args[0];
@@ -136,12 +151,10 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
     pending_prev_rate_ = ensureRoverCfg().rateHz;
     ensureRoverCfg().rateHz = cmd.args[0];
     pending_apply_ = PendingApply::kRate;
-    pending_seq_ = controller().stats().outputSeq + 1U;
-    pending_deadline_ms_ = nowMs + kApplyTimeoutMs;
-    controller().setOutputPlan(makePlan());
-    controller().requestReconfigure(nowMs);
-    pollController(nowMs);
-    publishStatus(nowMs);
+    apply_deferred_ = controller().state() == ::gnss::State::kMaintenance;
+    if (!apply_deferred_) {
+        beginPendingApply(nowMs);
+    }
     result.status = fw::Result::kOk;
 }
 
@@ -163,7 +176,8 @@ void GnssModule::cmdSetOut(const fw::Command &cmd, uint32_t nowMs,
     out_cfg_ = next;
     ctx().data.gnssOutCfg.write(out_cfg_);
     traceGnssSub(GnssSubTrace::kOutCfg, out_cfg_.mask, 0U);
-    if (controller().state() != ::gnss::State::kRunning) {
+    if (controller().state() != ::gnss::State::kRunning &&
+        controller().state() != ::gnss::State::kMaintenance) {
         // 未进入 kRunning 时没有可下发的输出阶段：直接落盘，下次配置完成时按新表重算计划。
         const fw::Result saveRes = ctx().storage.saveKeys(gnss_store::kConfigKeys);
         if (!fw::isOk(saveRes)) {
@@ -181,12 +195,10 @@ void GnssModule::cmdSetOut(const fw::Command &cmd, uint32_t nowMs,
     }
     pending_prev_out_ = prev;
     pending_apply_ = PendingApply::kOut;
-    pending_seq_ = controller().stats().outputSeq + 1U;
-    pending_deadline_ms_ = nowMs + kApplyTimeoutMs;
-    controller().setOutputPlan(makePlan());
-    static_cast<void>(controller().requestOutput(controller().outputPlan(), nowMs));
-    pollController(nowMs);
-    publishStatus(nowMs);
+    apply_deferred_ = controller().state() == ::gnss::State::kMaintenance;
+    if (!apply_deferred_) {
+        beginPendingApply(nowMs);
+    }
     result.status = fw::Result::kOk;
 }
 
@@ -198,6 +210,16 @@ void GnssModule::sendRaw(const fw::Command &cmd, fw::CommandResult &result) noex
         return;
     }
     if ((cmd.argLen == 0U) || (cmd.argLen > cmd.args.size())) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    // 按字符查看命令字节。
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    const auto *command = reinterpret_cast<const char *>(cmd.args.data());
+    const std::string_view text{command, cmd.argLen};
+    if (text.find_first_of("\r\n") != std::string_view::npos ||
+        text.find('\0') != std::string_view::npos ||
+        detail::changesConnectedGnssBaud(text, CONFIG_RTK_GNSS_PORT)) {
         result.status = fw::Result::kInvalidArg;
         return;
     }

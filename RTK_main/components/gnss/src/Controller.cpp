@@ -58,11 +58,13 @@ bool Controller::init(std::span<const Receiver *const> receivers, std::span<cons
     probe_hit_ = false;
     detected_ = Detected{};
     stats_ = ControllerStats{};
+    factory_reset_probe_ = false;
     return true;
 }
 
 void Controller::start(uint32_t nowMs) noexcept
 {
+    factory_reset_probe_ = false;
     state_ = State::kPowerUp;
     phase_ = 0;
     probe_index_ = 0;
@@ -84,6 +86,7 @@ void Controller::stop(uint32_t nowMs) noexcept
 
 void Controller::requestReprobe(uint32_t nowMs) noexcept
 {
+    factory_reset_probe_ = false;
     if (state_ != State::kOff) {
         ++stats_.reprobes;
     }
@@ -154,6 +157,9 @@ bool Controller::requestReadback(uint32_t nowMs) noexcept
 
 Action Controller::poll(uint32_t nowMs) noexcept
 {
+    if (state_ == State::kMaintenance) {
+        return pollMaintenance(nowMs);
+    }
     Action action{};
     for (uint8_t guard = 0; guard < kPollGuardRounds; ++guard) {
         action = Action{};
@@ -178,6 +184,10 @@ void Controller::onFrame(const demux::Decoder &dec, std::span<const uint8_t> fra
         return;
     }
     last_frame_ms_ = nowMs; // 任意协议帧都算“模块还在说话”
+    if (state_ == State::kMaintenance) {
+        onMaintenanceFrame(dec, frame);
+        return;
+    }
     if ((state_ == State::kProbing) && (phase_ == 1) && (probe_receiver_ != nullptr)) {
         ProbeResult result{};
         if (probe_receiver_->matchProbe(dec, frame, result)) {
@@ -231,6 +241,8 @@ const char *stateName(State state) noexcept
         return "output";
     case State::kReadback:
         return "readback";
+    case State::kMaintenance:
+        return "maintenance";
     default:
         return "unknown";
     }

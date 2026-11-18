@@ -303,9 +303,77 @@ static void testGoldenCaps()
                              static_cast<uint32_t>(bad));
 }
 
+/** @brief C2 一次性命令的字节级合约。 */
+static void testMaintenanceCommands()
+{
+    const auto &driver = ubloxDrv();
+    gnss::ConfigStep step{};
+    TEST_ASSERT_TRUE(driver.saveStep(step));
+    {
+        constexpr std::array<uint8_t, 21U> kExpected{0xb5, 0x62, 0x6, 0x9, 0xd, 0x0,  0x0,
+                                                     0x0,  0x0,  0x0, 0x1, 0x0, 0x0,  0x0,
+                                                     0x0,  0x0,  0x0, 0x0, 0x3, 0x20, 0xc5};
+        TEST_ASSERT_EQUAL_UINT32(kExpected.size(), step.cmd.len);
+        TEST_ASSERT_EQUAL_HEX8_ARRAY(kExpected.data(), step.cmd.data.data(), kExpected.size());
+    }
+    TEST_ASSERT_TRUE(driver.factoryResetStep(1U, {}, step));
+    {
+        constexpr std::array<uint8_t, 21U> kExpected{0xb5, 0x62, 0x6, 0x9, 0xd, 0x0,  0x1,
+                                                     0x0,  0x0,  0x0, 0x0, 0x0, 0x0,  0x0,
+                                                     0x1,  0x0,  0x0, 0x0, 0x3, 0x21, 0xce};
+        TEST_ASSERT_EQUAL_UINT32(kExpected.size(), step.cmd.len);
+        TEST_ASSERT_EQUAL_HEX8_ARRAY(kExpected.data(), step.cmd.data.data(), kExpected.size());
+    }
+    TEST_ASSERT_TRUE(driver.baudStep(2U, 460800U, step));
+    {
+        constexpr std::array<uint8_t, 20U> kExpected{0xb5, 0x62, 0x6, 0x8a, 0xc,  0x0,  0x0,
+                                                     0x1,  0x0,  0x0, 0x1,  0x0,  0x53, 0x40,
+                                                     0x0,  0x8,  0x7, 0x0,  0x40, 0x89};
+        TEST_ASSERT_EQUAL_UINT32(kExpected.size(), step.cmd.len);
+        TEST_ASSERT_EQUAL_HEX8_ARRAY(kExpected.data(), step.cmd.data.data(), kExpected.size());
+    }
+    TEST_ASSERT_FALSE(driver.factoryResetStep(2U, {}, step));
+    const auto frame = monVer("ZED-F9P", "HPG 1.32");
+    gnss::ProbeResult detected{};
+    TEST_ASSERT_TRUE(driver.matchProbe(demux::ubx::kDecoder, frame, detected));
+    TEST_ASSERT_TRUE(driver.factoryResetStep(2U, detected, step));
+    TEST_ASSERT_EQUAL_UINT32(38400U, step.switchBaud);
+    gnss::CmdBuf recovery{};
+    TEST_ASSERT_TRUE(driver.buildFactoryResetProbe(2U, recovery));
+    constexpr std::array<uint8_t, 25U> kRecovery{
+        0xb5, 0x62, 0x06, 0x8a, 0x09, 0x00, 0x00, 0x03, 0x00, 0x00, 0x01, 0x00, 0x76,
+        0x10, 0x01, 0x24, 0xc9, 0xb5, 0x62, 0x0a, 0x04, 0x00, 0x00, 0x0e, 0x34};
+    TEST_ASSERT_EQUAL_UINT32(kRecovery.size(), recovery.len);
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(kRecovery.data(), recovery.data.data(), kRecovery.size());
+}
+
+/** @brief 默认接线口在 UART2 时，基础与输出脚本都使用 UART2 键。 */
+static void testConfiguredOutputPort()
+{
+    const auto &driver = ubloxDrv();
+    gnss::RoverConfig cfg{};
+    cfg.useConfiguredPort = true;
+    gnss::ConfigStep step{};
+    TEST_ASSERT_TRUE(driver.roverStep(0U, gnss::Model::kZedF9p, cfg, step));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x10750004U, 1U, 1));
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x10760002U, 1U, 1));
+    TEST_ASSERT_EQUAL_HEX8(0x01U, step.cmd.view()[7U]); // RAM only.
+    TEST_ASSERT_FALSE(hasItem(step.cmd, 0x10740002U, 1U, 1));
+
+    gnss::OutputPlan plan{};
+    plan.useConfiguredPort = true;
+    gnss::CmdBuf cmd{};
+    TEST_ASSERT_TRUE(fw::isOk(
+        driver.buildOutput(gnss::OutputMsg::kGsv, 5000U, gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(hasItem(cmd, 0x209100C4U, 5U, 1));
+    TEST_ASSERT_EQUAL_HEX8(0x01U, cmd.view()[7U]);
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
+    RUN_TEST(testMaintenanceCommands);
+    RUN_TEST(testConfiguredOutputPort);
     RUN_TEST(testGoldenProbe);
     RUN_TEST(testGoldenOutputPlan);
     RUN_TEST(testGoldenProbeMatch);

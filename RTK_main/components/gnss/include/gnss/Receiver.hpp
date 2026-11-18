@@ -84,10 +84,11 @@ struct ProbeResult {
 
 /** 流动站配置参数（ADR-0010 §2.4）。 */
 struct RoverConfig {
-    uint8_t rateHz = 1;    // 定位输出频率：1/2/5/10/20（驱动把不支持的值向下取到支持值）
-    bool gsv = true;       // 是否输出 GSV（卫星表），GSV 与 GGA 同频率或 1 Hz 取较小者
-    uint8_t port = 2;      // 模块上连接 ESP32 的串口编号（UM980 COM2；F9P UART1=1）
-    uint32_t portBaud = 0; // 0 = 不改波特率；否则配置末尾切换到此波特率
+    uint8_t rateHz = 1;             // 定位输出频率：1/2/5/10/20（驱动把不支持的值向下取到支持值）
+    bool gsv = true;                // 是否输出 GSV（卫星表），GSV 与 GGA 同频率或 1 Hz 取较小者
+    uint8_t port = 2;               // 模块上连接 ESP32 的串口编号（UM980 COM2；F9P UART1=1）
+    uint32_t portBaud = 0;          // 0 = 不改波特率；否则配置末尾切换到此波特率
+    bool useConfiguredPort = false; // u-blox 默认保留旧 UART1 脚本，板级调用方显式选择接线口
 };
 
 /** 配置步骤默认等待应答时限。 */
@@ -114,8 +115,9 @@ enum class Ack : uint8_t {
  */
 struct OutputPlan {
     std::array<uint32_t, kOutputMsgCount> periodMs{};
-    uint8_t port = 2;   // 模块上接 ESP32 的口号（UM980 COM2；F9P UART1=1）
-    uint8_t rateHz = 1; // 导航频率（u-blox 需要把周期换算成每历元次数）
+    uint8_t port = 2;               // 模块上接 ESP32 的口号（UM980 COM2；F9P UART1=1）
+    uint8_t rateHz = 1;             // 导航频率（u-blox 需要把周期换算成每历元次数）
+    bool useConfiguredPort = false; // u-blox 消息键跟随 port
 };
 
 /**
@@ -176,6 +178,42 @@ public:
     /** 日志用的短标签（"NMEA GNGGA"、"RTCM3 1005"），写入 out，返回长度（不含 NUL）。 */
     virtual size_t frameTag(const demux::Decoder &dec, std::span<const uint8_t> frame,
                             std::span<char> out) const noexcept;
+
+    /**
+     * @brief 生成保存当前配置的步骤。
+     * @param out: 命令与应答策略。
+     * @retval true 已生成；false 不支持。
+     * @note 只读驱动，不阻塞。
+     */
+    [[nodiscard]] virtual bool saveStep(ConfigStep &out) const noexcept;
+    /**
+     * @brief 生成恢复出厂的步骤。
+     * @param port: 当前连接的接收机端口。
+     * @param detected: 接收机当前型号与固件版本。
+     * @param out: 命令与复位后波特率。
+     * @retval true 已生成；false 不支持。
+     * @note 只读驱动，不阻塞。
+     */
+    [[nodiscard]] virtual bool factoryResetStep(uint8_t port, const ProbeResult &detected,
+                                                ConfigStep &out) const noexcept;
+    /**
+     * @brief 生成复位后的版本探测，必要时先恢复接线口的应答协议。
+     * @param port: 当前连接的接收机端口。
+     * @param out: 写出的指令。
+     * @retval true 已生成；false 不支持。
+     * @note 只读驱动，不阻塞。
+     */
+    [[nodiscard]] virtual bool buildFactoryResetProbe(uint8_t port, CmdBuf &out) const noexcept;
+    /**
+     * @brief 生成改串口波特率的步骤。
+     * @param port: 当前连接的接收机端口。
+     * @param baud: 目标波特率。
+     * @param out: 命令与切换参数。
+     * @retval true 已生成；false 不支持。
+     * @note 只读驱动，不阻塞。
+     */
+    [[nodiscard]] virtual bool baudStep(uint8_t port, uint32_t baud,
+                                        ConfigStep &out) const noexcept;
 
     // ---- 配置读回（ADR-0012 §2.7；基类不支持，由驱动覆盖） ----
     /** 生成查询模块当前配置的命令；不支持返回 false。 */

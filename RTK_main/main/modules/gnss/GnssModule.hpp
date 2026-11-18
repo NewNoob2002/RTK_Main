@@ -10,6 +10,7 @@
 #include <span>
 #include <type_traits>
 
+#include "modules/gnss/GnssMaintenance.hpp"
 #include "cli/Console.hpp"
 #include "data/GnssOutput.hpp"
 #include "def/GnssDef.hpp"
@@ -33,8 +34,14 @@ public:
     static constexpr size_t kUartRxBufBytes = 4096U;
     static constexpr size_t kUartTxBufBytes = 1024U;
     static constexpr size_t kRtcmTxChunkBytes = 512U;
-    static constexpr size_t kMaxBaudCandidates = 7U;
+    static constexpr size_t kMaxBaudCandidates = 9U;
     static constexpr uint32_t kStatusPeriodMs = 500U;
+
+    /** @brief 安排工作模式切换后的接收机持久化。 @note 仅 kIo，多个请求合并成一次待发。 */
+    void requestReceiverSave() noexcept
+    {
+        save_queue_.request();
+    }
 
     constexpr GnssModule() noexcept = default;
     /**
@@ -213,6 +220,12 @@ public:
      * @note 仅启动期加载或 kIo 串行路径，不阻塞，非 ISR。
      */
     static fw::Result loadBaud(void *obj, std::span<const uint8_t> in) noexcept;
+
+    /** @brief 加载用户波特率。 @param in: 小端 u32。 @retval kOk 已加载；其他为无效值。 */
+    [[nodiscard]] static fw::Result loadUserBaud(void *, std::span<const uint8_t> in) noexcept;
+    /** @brief 编码用户波特率。 @param out: 输出缓冲。 @param len: 已编码长度。 @retval kOk 已编码；其他为缓冲不足。 */
+    [[nodiscard]] static fw::Result saveUserBaud(const void *, std::span<uint8_t> out,
+                                                 size_t &len) noexcept;
     /**
      * @brief 把探测波特率编码供 NVS 保存
      * @param obj: 未使用；通过 appContext().gnss 定位单例
@@ -429,9 +442,10 @@ private:
     void publishStatus(uint32_t nowMs) noexcept;
     /**
      * @brief 把探测到的驱动信息落库
+     * @retval kOk 已落库或提示未变；其他为存储错误。
      * @note 仅启动期或 kIo 串行路径，非 ISR；不分配堆。
      */
-    void persistDetectedHint() noexcept;
+    fw::Result persistDetectedHint() noexcept;
     /**
      * @brief 按动作给 GNSS 上电或断电
      * @param on: true 表示上电
@@ -513,6 +527,29 @@ private:
      * @note 仅启动期或 kIo 串行路径，非 ISR；不分配堆。
      */
     void tickPendingApply(uint32_t nowMs) noexcept;
+
+    /** @brief 受理一次性命令。 @param cmd: 命令。 @param nowMs: 当前时间。 @param result: 受理状态和完成序号。 */
+    void cmdMaintenance(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
+    /** @brief 尝试启动暂缓的切速或自动保存。 @note 仅 kIo。 */
+    void tickMaintenance() noexcept;
+    /** @brief 探测成功后按 NVS 波特率尝试同步一次。 @note 仅 kIo。 */
+    void alignBootBaud() noexcept;
+    /** @brief 写入已确认的波特率及探测缓存，随后请求接收机保存。 @param baud: 已确认的速率。 @retval true 保存请求已受理。 */
+    [[nodiscard]] bool persistBaudAndSave(uint32_t baud) noexcept;
+    /** @brief 公布本次手动维护结果。 @param seq: 请求序号。 @param kind: 操作。 @param result: 操作结果。 */
+    void setConsoleMaintenanceResult(uint32_t seq, ::gnss::Maintenance kind,
+                                     ::gnss::MaintenanceResult result) noexcept;
+    /** @brief 完成切速或切速后的保存。 @param stats: 本次结果。 @param previousSeq: 切速结果的序号。 */
+    void completeBaudMaintenance(const ::gnss::ControllerStats &stats,
+                                 uint32_t previousSeq) noexcept;
+    /** @brief 处理本轮完成的维护操作并公布结果。 @param nowMs: 当前时间。 @note 仅 kIo。 */
+    void completeMaintenance(uint32_t nowMs) noexcept;
+    /** @brief 将逻辑缺省设置写入 NVS 并清理探测缓存。 @retval kOk 成功；其他为存储错误。 */
+    [[nodiscard]] fw::Result resetStoredSettings() noexcept;
+    /** @brief 推进待启动的配置变更。 @param nowMs: 当前时间。 */
+    void beginPendingApply(uint32_t nowMs) noexcept;
+    /** @brief 校验并开始用户波特率变更。 @param cmd: 请求。 @param nowMs: 当前时间。 @param result: 受理结果。 */
+    void cmdBaud(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
     /**
      * @brief 把一个控制器动作落到 UART（上电/改波特率/下发报文）
      * @param act: 控制器给出的动作
@@ -564,6 +601,21 @@ private:
         kOut = 1,
         kRate = 2,
     };
+    GnssSaveQueue save_queue_{};
+    ::gnss::Maintenance active_maintenance_ = ::gnss::Maintenance::kSave;
+    uint32_t completed_maintenance_seq_ = 0U;
+    uint32_t console_maintenance_seq_ = 0U;
+    ::gnss::Maintenance console_maintenance_ = ::gnss::Maintenance::kSave;
+    ::gnss::MaintenanceResult console_maintenance_result_ = ::gnss::MaintenanceResult::kOk;
+    uint32_t preferred_baud_ = 0U;
+    bool boot_baud_pending_ = false;
+    bool boot_baud_in_flight_ = false;
+    bool baud_save_in_flight_ = false;
+    uint32_t requested_baud_ = 0U;
+    bool auto_save_in_flight_ = false;
+    bool apply_deferred_ = false;
+    bool baud_deferred_ = false;
+    bool skip_hint_save_ = false;
     PendingApply pending_apply_ = PendingApply::kNone;
     GnssApply last_apply_ = GnssApply::kNone;
     uint32_t apply_seq_ = 0U;
