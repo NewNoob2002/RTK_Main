@@ -96,6 +96,13 @@ gnss out default               # 恢复缺省
 - 基站 RTCM 报文集合用户可选：1005/1006/1033、MSM4 或 MSM7（1074/1084/1094/1124 … 或 1077/1087/1097/1127 …）、1230、星历；
   存 `gnss.base`。输出去向（sink 枚举）第一阶段只有蓝牙 SPP。
 - 基站坐标：手工输入或测量（survey-in）。
+- 工作模式状态机（2026-11-18 用户批准，C5a）：GNSS 模块内独立的小状态机（与 Controller 链路状态机分开），
+  唯一入口 `requestMode()`（控制台、蓝牙 App、smartBase 都只提交请求，由 kIo 任务在 poll 中切换）；定位质量不进状态机。
+  状态：`kRover` → `kBaseConfig` →（测量）`kSurveyWait`（等水平精度）→ `kSurvey`（接收机自测平均）→ `kBaseTx`；固定坐标直接 `kBaseConfig` → `kBaseTx`；
+  失败/超时 → 回退 `kRover` 并打 W（NVS 中的模式不改，下次开机再试）。接收机命令由驱动提供（同 C2 saveStep），经 Controller `kMaintenance` 下发。
+- survey-in 缺省（用户 2026-11-18，存 NVS、可配置）：平均 **20 s**、起测水平精度 **≤1.5 m**、总超时 **120 s** 后回退移动站。
+- 基站 RTCM 缺省集合（参照 SparkFun RTK Everywhere UM980/ZED 缺省）：1005 1 Hz、MSM4（1074/1084/1094/1124）1 Hz、1033 0.1 Hz（Unicore）/ 1230 0.1 Hz（u-blox）。
+  命令：`gnss mode rover|base|smartbase`、`gnss base survey <s> <m> [timeout_s]`、`gnss base fixed <lat> <lon> <h>`、`gnss out rtcm ...`。
 - **smartBase**：最多 4 个已记录站点；开机定位后若与某站点距离 ≤1 m，自动以该坐标启动基站；都不匹配 → 运行配置的缺省模式。
   控制台或手机 App 可随时切换。
 
