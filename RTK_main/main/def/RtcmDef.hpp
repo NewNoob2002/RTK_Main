@@ -55,7 +55,11 @@ inline void traceRtcm(RtcmTrace code, uint32_t session, uint32_t a = 0, uint32_t
     return static_cast<uint8_t>(value);
 }
 
-/** 分流器统计快照，只保留要展示的三项计数。 */
+/**
+ * 分流器统计快照，只保留要展示的三项计数。
+ * *Rejects 是该解码器“放弃候选”的累计次数：判帧拒绝、超长、契约违规、abort() 丢半帧都计入
+ * （ADR-0004 §2），即“以该解码器起头但最终没成帧”的次数，不只是校验失败；具体原因看 TRACE 的 reject 行。
+ */
 struct DemuxStats {
     uint32_t unknownBytes = 0;
     uint32_t productRejects = 0;

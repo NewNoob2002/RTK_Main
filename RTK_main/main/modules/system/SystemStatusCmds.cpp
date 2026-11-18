@@ -237,7 +237,7 @@ void printStatusSys(const SystemStatus &system, const rtos::ExecStats &exec) noe
                  static_cast<unsigned>(kGnssAppRingBytes), rWr.highWaterBytes, sub.activeMask,
                  rWr.base.records, rRd.base.records,
                  rRd.base.dropped + rWr.oversizeDrop + rWr.pinnedDrop, sub.queryOversizeTotal);
-    cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
+    cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated", kStaticObsReservedBytes);
 #endif
 }
 
@@ -295,7 +295,7 @@ void printGnssSection() noexcept
                  " qovsz=%" PRIu32,
                  rRd.base.records, rRd.base.bytes, rRd.base.dropped, rRd.filtered, rRd.pinnedDrop,
                  sub.queryOversizeTotal);
-    cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
+    cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated", kStaticObsReservedBytes);
 #else
     cli::printSection("gnss");
     cli::printKv("state", "disabled");

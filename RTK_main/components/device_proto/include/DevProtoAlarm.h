@@ -73,27 +73,27 @@ bool dev_proto_alarm_decode_status(const uint8_t *data, size_t len,
 
 /**
  * @brief  按 §5 布局编码 0x41 心跳（8 字节：seq、电量、本地状态、4 字节 0）
- * @param  hb: 待编码的心跳字段
+ * @param  heartbeat: 待编码的心跳字段
  * @param[out] out: 输出缓冲
  * @param  out_size: out 的容量，单位字节
  * @retval 8 成功，写入 DEV_PROTO_ALARM_HEARTBEAT_LEN 字节
- * @retval 0 hb/out 为 NULL 或 out_size < 8，此时不写入任何字节
+ * @retval 0 heartbeat/out 为 NULL 或 out_size < 8，此时不写入任何字节
  * @note   无阻塞、无分配、ISR 安全
  */
-size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *hb, uint8_t *out,
+size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *heartbeat, uint8_t *out,
                                         size_t out_size);
 
 /**
  * @brief  按 §5 布局解码 0x41 心跳
  * @param  data: 收到的 payload（只读）
  * @param  len:  data 的字节数，至少 8
- * @param[out] hb: 解析结果；返回 false 时不改动
- * @retval true  长度足够，hb 已填充
- * @retval false data/hb 为 NULL 或 len < 8
+ * @param[out] heartbeat: 解析结果；返回 false 时不改动
+ * @retval true  长度足够，heartbeat 已填充
+ * @retval false data/heartbeat 为 NULL 或 len < 8
  * @note   多余字节忽略；无阻塞、无分配、ISR 安全
  */
 bool dev_proto_alarm_decode_heartbeat(const uint8_t *data, size_t len,
-                                      dev_proto_alarm_heartbeat_t *hb);
+                                      dev_proto_alarm_heartbeat_t *heartbeat);
 
 #ifdef __cplusplus
 }

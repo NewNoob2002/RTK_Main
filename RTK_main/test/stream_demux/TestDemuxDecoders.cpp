@@ -968,6 +968,9 @@ static void testExplainRtcm3()
     static constexpr std::array<uint8_t, 7> kBadCrc{0xD3U, 0x00U, 0x01U, 0x3CU,
                                                     0x00U, 0x00U, 0x00U};
     assertExplain(demux::rtcm3::kDecoder, kBadCrc, "bad CRC-24Q, received 0x000000");
+    // 首字节错时打印实际收到的字节，而不是期望值（judge 直接调用时可达）。
+    static constexpr std::array<uint8_t, 1> kBadSync{0x55U};
+    assertExplain(demux::rtcm3::kDecoder, kBadSync, "byte 0 is 0x55, expected 0xD3");
 #endif
 }
 
@@ -976,6 +979,8 @@ static void testExplainUbx()
 #if STREAM_DEMUX_UBX
     static constexpr std::array<uint8_t, 2> kBadSync{0xB5U, 0x00U};
     assertExplain(demux::ubx::kDecoder, kBadSync, "sync byte 2 is 0x00, expected 0x62");
+    static constexpr std::array<uint8_t, 1> kBadSync1{0x55U};
+    assertExplain(demux::ubx::kDecoder, kBadSync1, "sync byte 1 is 0x55, expected 0xB5");
     static constexpr std::array<uint8_t, 8> kBadCk{0xB5U, 0x62U, 0x01U, 0x07U,
                                                    0x00U, 0x00U, 0x00U, 0x00U};
     assertExplain(demux::ubx::kDecoder, kBadCk, "bad checksum, received 0x0000");

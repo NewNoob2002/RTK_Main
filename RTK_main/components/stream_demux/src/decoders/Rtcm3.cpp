@@ -70,7 +70,9 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
     if (frame[0] != kSyncByte) {
-        return reject(Reason::kSync);
+        Verdict bad = reject(Reason::kSync);
+        bad.received = frame[0];
+        return bad;
     }
     if (frame.size() < kSyncLen + 1U) {
         verdict.need = (kSyncLen + 1U) - frame.size();
@@ -130,9 +132,7 @@ void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text
 {
     switch (verdict.reason) {
     case Reason::kSync:
-        text.literal("byte 0 is ")
-            .hex(static_cast<uint32_t>(kSyncByte), 2U)
-            .literal(", expected 0xD3");
+        text.literal("byte 0 is ").hex(verdict.received, 2U).literal(", expected 0xD3");
         break;
     case Reason::kReserved:
         text.literal("reserved bits set in byte 1: ").hex(verdict.received, 2U);

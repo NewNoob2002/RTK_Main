@@ -119,7 +119,7 @@ void printGnssAppRing() noexcept
                        sub.skipped[i], sub.ringOversize[i], static_cast<unsigned>(latest[i].len),
                        latest[i].updates, latest[i].oversizeDrops);
     }
-    cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
+    cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated", kStaticObsReservedBytes);
 }
 
 int cmdGnssStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept

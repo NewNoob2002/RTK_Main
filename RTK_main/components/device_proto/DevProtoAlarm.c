@@ -141,7 +141,7 @@ bool dev_proto_alarm_decode_status(const uint8_t *data, size_t len,
 
 /**
  * @brief  按 §5 布局编码 0x41 心跳（8 字节）
- * @param  heartbeat: 待编码的心跳字段（头文件声明中名为 hb）
+ * @param  heartbeat: 待编码的心跳字段
  * @param[out] out: 输出缓冲
  * @param  out_size: out 的容量，单位字节
  * @retval 8 成功，尾部 4 字节写 0
@@ -169,7 +169,7 @@ size_t dev_proto_alarm_encode_heartbeat(const dev_proto_alarm_heartbeat_t *heart
  * @brief  按 §5 布局解码 0x41 心跳
  * @param  data: 收到的 payload（只读）
  * @param  len: data 的字节数，至少 8
- * @param[out] heartbeat: 解析结果（头文件声明中名为 hb）；返回 false 时不改动
+ * @param[out] heartbeat: 解析结果；返回 false 时不改动
  * @retval true  长度足够，heartbeat 已填充
  * @retval false data/heartbeat 为 NULL 或 len < 8
  * @note   多余字节忽略；无阻塞、无分配、ISR 安全

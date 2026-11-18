@@ -38,7 +38,7 @@ struct Verdict {
     std::size_t need = 1U;
     std::size_t total = 0U;
     uint32_t received = 0U; // 校验类原因：收到的 CK_A | CK_B<<8
-    uint32_t computed = 0U;
+    uint32_t computed = 0U; // kSync：期望的同步字节
 };
 
 /**
@@ -71,7 +71,7 @@ uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
  * @param  frame: 候选前缀，非空且 frame[0] 已通过 firstByte
  * @retval step=kNeedMore 还不能下结论，need 为至少还要的字节数（长度未知时按头部补齐）
  * @retval step=kFrame 长度与 8 位 Fletcher 校验都通过
- * @retval step=kReject 同步字节 2 错（kSync）、长度超 kMaxFrame（kTooLong）、比声明长度长（kExtra）
+ * @retval step=kReject 同步字节错（kSync）、长度超 kMaxFrame（kTooLong）、比声明长度长（kExtra）
  *         或校验不符（kChecksum）
  * @note   不拆（ADR-0013 §2.4）：协议早拒绝阶梯，sync/长度/校验的先后次序本身就是协议语义，
  *         拆成多个函数只会让“先拒绝什么”更难看懂。
@@ -80,7 +80,10 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
     if (frame[0] != kSyncA) {
-        return reject(Reason::kSync);
+        Verdict bad = reject(Reason::kSync);
+        bad.received = frame[0];
+        bad.computed = kSyncA;
+        return bad;
     }
     if (frame.size() < kSyncLen) {
         verdict.need = kSyncLen - frame.size();
@@ -89,6 +92,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     if (frame[1] != kSyncB) {
         Verdict bad = reject(Reason::kSync);
         bad.received = frame[1];
+        bad.computed = kSyncB;
         return bad;
     }
     if (frame.size() < kHdrLen) {
@@ -152,7 +156,11 @@ void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text
 {
     switch (verdict.reason) {
     case Reason::kSync:
-        text.literal("sync byte 2 is ").hex(verdict.received, 2U).literal(", expected 0x62");
+        // 期望值区分是第 1 还是第 2 个同步字节。
+        text.literal(verdict.computed == kSyncA ? "sync byte 1 is " : "sync byte 2 is ")
+            .hex(verdict.received, 2U)
+            .literal(", expected ")
+            .hex(verdict.computed, 2U);
         break;
     case Reason::kTooLong:
         text.literal("length ")
