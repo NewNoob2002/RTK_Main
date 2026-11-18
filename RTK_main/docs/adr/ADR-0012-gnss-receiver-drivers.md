@@ -198,6 +198,17 @@ protected:
 - **代价。** 每个子类一个 vtable（几十字节 flash）+ 一个静态实例（一个 vptr）。
 - **析构与叶子类（2026-11-17 修订，S1，ADR-0013 §2.5，CPP-011）。** 家族类 `UnicoreReceiver`、`UbloxReceiver`、`ComnavReceiver` 只作基类：构造函数与析构函数都是 `protected`，析构非虚，删除拷贝/移动，不能直接实例化。驱动实例均为 `final` 叶子类的 `constinit` 静态对象：`Um980Receiver`（UM980/UM981 共用）、`Um982Receiver`、`ZedF9pReceiver`、`K803Receiver`。叶子类沿用家族的 `name()`（日志、NVS、golden 文本不变）。`receiverFor()` 查找已启用家族的基准叶子，`forModel()` 返回对应的叶子实例。驱动对象全部平凡析构，不生成删除析构函数（`D0Ev`），G7b 不再需要相应豁免。
 
+### 2.9 CM680（2026-11-18 修订，G-CM680；P2 v1.41 实板）
+
+- **证据。** P2 v1.41 实板（`/dev/ttyACM0`，固件 a2deda2）在 921600 baud 回 `$command,VERSIONA,response: OK*45` 与
+  `#VERSIONA,99,GPS,FINE,...;"CM680","CM680_SDK.1.2.5a_GNSS.1.1.9",...*489EA8BF`。三帧离线复算：CM680 的 CRC-32
+  （`crc32Novatel`，init 0）覆盖**含**首字节 `#` 的 `#..*` 之前全部字节；UM980 从 `#` 之后开始。旧 P2 V2.7 固件对 CM680
+  使用与 UM980 相同的命令集。
+- **决定。** `unicore_hash` 解码器对 CRC 形式同时接受两种覆盖范围（先算 UM980 的，不符再算含 `#` 的）；错配概率约
+  2^-32，XOR 形式不变。`Model` 追加 `kCm680`（值 6，NVS 兼容），家族 Unicore；`modelFromText` 精确匹配 `"CM680"`；
+  能力与命令按 UM980（`forModel` 返回 `kUm980Receiver`），实板逐项验证前不另建子类。确有差异时按 §2.8 增加子类。
+- **冻结。** `gnss/Types.hpp` 追加枚举值（Architect 修改并重算 `docs/frozen.sha256`）。
+
 ## 3. 冻结接口（修订 ADR-0010 §3）
 
 - 新冻结：`components/gnss/include/gnss/{Receiver,NullReceiver}.hpp`、`gnss/drivers/*.hpp`

@@ -26,6 +26,7 @@ enum class Model : uint8_t {
     kUm982,
     kZedF9p,
     kK803,
+    kCm680, // Unicore 指令集兼容；NVS 按数值保存，只能追加（ADR-0012 §2.9）。
 };
 
 /**
