@@ -59,6 +59,8 @@ const char *modelName(Model model) noexcept
         return "ZED-F9P";
     case Model::kK803:
         return "K803";
+    case Model::kCm680:
+        return "CM680";
     case Model::kUnknown:
     default:
         return "unknown";
@@ -71,6 +73,7 @@ Family familyOf(Model model) noexcept
     case Model::kUm980:
     case Model::kUm981:
     case Model::kUm982:
+    case Model::kCm680:
         return Family::kUnicore;
     case Model::kZedF9p:
         return Family::kUblox;
@@ -127,6 +130,8 @@ std::optional<Model> modelFromU8(uint8_t value) noexcept
         return Model::kZedF9p;
     case static_cast<uint8_t>(Model::kK803):
         return Model::kK803;
+    case static_cast<uint8_t>(Model::kCm680):
+        return Model::kCm680;
     case static_cast<uint8_t>(Model::kUnknown):
         return Model::kUnknown;
     default:

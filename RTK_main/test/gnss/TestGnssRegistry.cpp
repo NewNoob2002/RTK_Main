@@ -40,6 +40,7 @@ static void testModelNames()
     TEST_ASSERT_EQUAL_STRING("UM982", gnss::modelName(gnss::Model::kUm982));
     TEST_ASSERT_EQUAL_STRING("ZED-F9P", gnss::modelName(gnss::Model::kZedF9p));
     TEST_ASSERT_EQUAL_STRING("K803", gnss::modelName(gnss::Model::kK803));
+    TEST_ASSERT_EQUAL_STRING("CM680", gnss::modelName(gnss::Model::kCm680));
     TEST_ASSERT_EQUAL_STRING("unknown", gnss::modelName(gnss::Model::kUnknown));
 }
 
@@ -51,6 +52,8 @@ static void testFamilyOf()
                       static_cast<int>(gnss::familyOf(gnss::Model::kUm981)));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
                       static_cast<int>(gnss::familyOf(gnss::Model::kUm982)));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
+                      static_cast<int>(gnss::familyOf(gnss::Model::kCm680)));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUblox),
                       static_cast<int>(gnss::familyOf(gnss::Model::kZedF9p)));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kComnav),
@@ -117,8 +120,10 @@ static void testU8Boundaries()
     TEST_ASSERT_EQUAL(
         static_cast<int>(gnss::Model::kK803),
         static_cast<int>(gnss::modelFromU8(static_cast<uint8_t>(gnss::Model::kK803)).value()));
-    TEST_ASSERT_FALSE(gnss::modelFromU8(6U).has_value());
-    TEST_ASSERT_FALSE(gnss::modelFromU8(0xFFU).has_value());
+    TEST_ASSERT_EQUAL_UINT8(6U, static_cast<uint8_t>(gnss::Model::kCm680));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Model::kCm680),
+                      static_cast<int>(gnss::modelFromU8(6U).value()));
+    TEST_ASSERT_FALSE(gnss::modelFromU8(7U).has_value());
     TEST_ASSERT_FALSE(gnss::modelFromU8(0xFFU).has_value());
 }
 

@@ -38,6 +38,7 @@
 #include "demux/decoders/UnicoreBin.hpp"
 #endif
 #if STREAM_DEMUX_UNICORE_HASH
+#include "../fixtures/Cm680Version.hpp"
 #include "demux/decoders/UnicoreHash.hpp"
 #endif
 #include "DemuxGen.hpp"
@@ -1013,6 +1014,40 @@ static void testExplainUnicoreHash()
 #endif
 }
 
+#if STREAM_DEMUX_UNICORE_HASH
+/** @brief 逐字节回放 CM680 实板帧，验证有效帧及 CRC 损坏诊断；单线程测试。 */
+static void testUnicoreHashCm680()
+{
+    const auto &decoder = demux::unicore_hash::kDecoder;
+    const std::array decoders{&decoder};
+    const std::span<uint8_t> work(s_work_buf);
+    for (const std::string_view captured : gnss_test::kCm680VersionFrames) {
+        const auto frame = work.first(captured.size());
+        copySvToSpan(captured, frame);
+        s_sink.reset();
+        TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.init(decoders, s_demux_buf, s_sink));
+        for (std::size_t i = 0U; i < frame.size(); ++i) {
+            TEST_ASSERT_EQUAL(demux::Error::kOk, s_dmx.feed(frame.subspan(i, 1U)));
+        }
+        TEST_ASSERT_EQUAL_UINT(1U, s_sink.frameCount);
+        TEST_ASSERT_EQUAL_PTR(&decoder, s_sink.frames[0].decoder);
+        TEST_ASSERT_EQUAL_UINT(frame.size(), s_sink.frames[0].len);
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(frame.data(), s_sink.frames[0].data.data(), frame.size());
+        TEST_ASSERT_EQUAL_UINT32(0U, s_dmx.stats().decoder[0].rejects);
+    }
+
+    const auto captured = gnss_test::kCm680VersionFrames.front();
+    const auto badFrame = work.first(captured.size());
+    copySvToSpan(captured, badFrame);
+    badFrame[captured.find('*') + 1U] = '5'; // 0x489EA8BF → 0x589EA8BF，只翻转一个 CRC 位。
+    runDemuxFeedAndAbort(decoders, badFrame);
+    TEST_ASSERT_EQUAL_UINT(0U, s_sink.frameCount);
+    TEST_ASSERT_EQUAL_UINT32(1U, s_dmx.stats().decoder[0].rejects);
+    // 不含 '#' 的旧范围由独立的 CRC-32 计算得到 0x05053BD7。
+    assertExplain(decoder, badFrame, "bad CRC32, received 0x589EA8BF, computed 0x05053BD7");
+}
+#endif
+
 static void testExplainProductFrame()
 {
     static constexpr std::array<uint8_t, 2> kBadSync{0xAAU, 0x00U};
@@ -1039,6 +1074,7 @@ int main()
 #endif
 #if STREAM_DEMUX_UNICORE_HASH
     RUN_TEST(testUnicoreHashValidEarlyRejectCharsCaseAndLen);
+    RUN_TEST(testUnicoreHashCm680);
 #endif
     RUN_TEST(testProductDemuxAndFrameView);
 #if STREAM_DEMUX_NMEA

@@ -14,6 +14,7 @@
 #include "demux/StaticDemux.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/drivers/UnicoreReceiver.hpp"
+#include "../fixtures/Cm680Version.hpp"
 #include "unity.h"
 
 // 驱动层次约束（ADR-0012 §2.8、CPP-011）：家族基类不可直接实例化；型号只实例化平凡析构的 final 叶子类。
@@ -177,6 +178,29 @@ static void testMatchProbe()
     TEST_ASSERT_FALSE(unicoreDrv().matchProbe(demux::unicore_hash::kDecoder, otherFrame, result));
 }
 
+/** @brief 实板 CM680 版本帧须精确识别，保留版本文本；单线程测试。 */
+static void testMatchCm680()
+{
+    using gnss::Model;
+    const auto &decoder = demux::unicore_hash::kDecoder;
+    const auto &driver = unicoreDrv();
+    gnss::ProbeResult result{};
+    TEST_ASSERT_TRUE(
+        driver.matchProbe(decoder, bytesOf(gnss_test::kCm680VersionFrames.front()), result));
+    TEST_ASSERT_EQUAL(static_cast<int>(Model::kCm680), static_cast<int>(result.model));
+    TEST_ASSERT_TRUE(std::string_view{result.fwVersion.data()}.starts_with("CM680_SDK.1.2.5a"));
+    TEST_ASSERT_EQUAL_UINT32(driver.caps(Model::kUm980), driver.caps(Model::kCm680));
+    TEST_ASSERT_EQUAL_PTR(&driver.forModel(Model::kUm980), &driver.forModel(Model::kCm680));
+    TEST_ASSERT_EQUAL_PTR(&driver, &um982Drv().forModel(Model::kCm680));
+
+    for (const std::string_view model : {"CM681", "CMX", "CM680A"}) {
+        std::string frame{gnss_test::kCm680VersionFrames.front()};
+        // matchProbe 的输入已由分流器判定，直接替换首个带引号字段即可测试型号匹配。
+        frame.replace(frame.find("\"CM680\"") + 1U, std::string_view{"CM680"}.size(), model);
+        TEST_ASSERT_FALSE(driver.matchProbe(decoder, bytesOf(frame), result));
+    }
+}
+
 static void testRoverScript()
 {
     gnss::RoverConfig cfg{};
@@ -207,6 +231,67 @@ static void testRoverScript()
     // 不改波特率时脚本只有两步。
     cfg.portBaud = 0;
     TEST_ASSERT_FALSE(unicoreDrv().roverStep(2, gnss::Model::kUm982, cfg, none));
+}
+
+/** @brief 验证 COM1 的清空命令与 CM680 的输出能力；单线程主机测试。 */
+static void testCm680Configuration()
+{
+    using gnss::Model;
+    using gnss::OutputMsg;
+    const auto &driver = unicoreDrv();
+    const gnss::RoverConfig cfg{.port = 1U};
+    gnss::ConfigStep step{};
+    TEST_ASSERT_TRUE(driver.roverStep(0U, Model::kCm680, cfg, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "UNLOGALL COM1\r\n"));
+    TEST_ASSERT_TRUE(step.expectReply);
+    TEST_ASSERT_EQUAL_UINT32(0U, step.switchBaud);
+    TEST_ASSERT_TRUE(driver.roverStep(0U, Model::kUm980, cfg, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "UNLOG COM1\r\n"));
+
+    constexpr uint32_t kSatsInfoBit = 1U << static_cast<uint32_t>(OutputMsg::kSatsInfo);
+    constexpr uint32_t kGstBit = 1U << static_cast<uint32_t>(OutputMsg::kGst);
+    constexpr uint32_t kGsvBit = 1U << static_cast<uint32_t>(OutputMsg::kGsv);
+    TEST_ASSERT_EQUAL_UINT32(driver.outputMask(Model::kUm980) & ~kSatsInfoBit,
+                             driver.outputMask(Model::kCm680));
+    TEST_ASSERT_BITS(kSatsInfoBit | kGstBit | kGsvBit, kGstBit | kGsvBit,
+                     driver.outputMask(Model::kCm680));
+    const gnss::OutputPlan plan{.port = 1U};
+    for (const uint32_t periodMs : {0U, 1000U}) {
+        gnss::CmdBuf cmd{};
+        TEST_ASSERT_EQUAL(
+            fw::Status::kNotSupported,
+            driver.buildOutput(OutputMsg::kSatsInfo, periodMs, Model::kCm680, plan, cmd));
+        TEST_ASSERT_TRUE(cmd.view().empty());
+    }
+}
+
+/** @brief 验证 CM680 只钳制 GSA 亚秒周期；单线程主机测试。 */
+static void testCm680GsaPeriod()
+{
+    using gnss::Model;
+    using gnss::OutputMsg;
+    struct Case {
+        Model model;
+        OutputMsg msg;
+        uint32_t periodMs;
+        std::string_view expected;
+    };
+    constexpr std::array kCases{
+        Case{Model::kCm680, OutputMsg::kGsa, 100U, "GPGSA COM1 1\r\n"},
+        Case{Model::kCm680, OutputMsg::kGsa, 50U, "GPGSA COM1 1\r\n"},
+        Case{Model::kUm980, OutputMsg::kGsa, 100U, "GPGSA COM1 0.1\r\n"},
+        Case{Model::kCm680, OutputMsg::kGga, 100U, "GPGGA COM1 0.1\r\n"},
+        Case{Model::kCm680, OutputMsg::kGsa, 0U, "UNLOG COM1 GPGSA\r\n"},
+        Case{Model::kCm680, OutputMsg::kGsa, 1000U, "GPGSA COM1 1\r\n"},
+        Case{Model::kCm680, OutputMsg::kGsa, 2000U, "GPGSA COM1 2\r\n"},
+    };
+    const gnss::OutputPlan plan{.port = 1U};
+    for (const Case &test : kCases) {
+        gnss::CmdBuf cmd{};
+        TEST_ASSERT_EQUAL(fw::Status::kOk,
+                          unicoreDrv().buildOutput(test.msg, test.periodMs, test.model, plan, cmd));
+        TEST_ASSERT_TRUE(textEquals(cmd.view(), test.expected));
+    }
 }
 
 /** buildOutput：周期按 10 ms 粒度下发，0 表示关闭，HEADINGA 受能力位约束。 */
@@ -660,7 +745,10 @@ int main(int, char **)
     RUN_TEST(testResponseRejectsAndWindow);
     RUN_TEST(testBuildProbe);
     RUN_TEST(testMatchProbe);
+    RUN_TEST(testMatchCm680);
     RUN_TEST(testRoverScript);
+    RUN_TEST(testCm680Configuration);
+    RUN_TEST(testCm680GsaPeriod);
     RUN_TEST(testBuildOutput);
     RUN_TEST(testMatchReply);
     RUN_TEST(testCoexistsWithNmea);

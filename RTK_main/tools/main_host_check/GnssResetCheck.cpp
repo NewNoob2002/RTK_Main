@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+#include "../../test/fixtures/Cm680Version.hpp"
+
 #include "AppContext.hpp"
 #include "board/BoardProfile.hpp"
 #include "def/GnssSubDef.hpp"
@@ -35,6 +37,7 @@ unsigned s_baudCommands = 0;
 unsigned s_gpioChanges = 0;
 unsigned s_gpioConfigs = 0;
 bool s_p2 = false;
+bool s_sentSatsInfo = false;
 unsigned s_saveCommands = 0;
 unsigned s_fresetCommands = 0;
 unsigned s_modeBaseCommands = 0;
@@ -83,13 +86,14 @@ void startModule(nvs_handle_t handle, uint32_t preferred, bool applyBaud, bool p
     s_gpioChanges = 0U;
     s_gpioConfigs = 0U;
     s_p2 = p2;
+    s_sentSatsInfo = false;
     s_saveCommands = 0U;
     s_applyBaud = applyBaud;
     CHECK(nvs_set_u32(handle, "baud", preferred) == ESP_OK);
     CHECK(nvs_set_u32(handle, "cache_baud", 460800U) == ESP_OK);
     CHECK(nvs_set_u8(handle, "family", static_cast<uint8_t>(gnss::Family::kUnicore)) == ESP_OK);
     CHECK(nvs_set_u8(handle, "model", static_cast<uint8_t>(gnss::Model::kUm980)) == ESP_OK);
-    CHECK(nvs_set_u8(handle, "rate", 5U) == ESP_OK);
+    CHECK(nvs_set_u8(handle, "rate", p2 ? 1U : 5U) == ESP_OK);
     CHECK(nvs_set_u8(handle, "gsv", 0U) == ESP_OK);
     auto out = app::data::GnssOutConfig::defaults();
     CHECK(fw::isOk(out.applyInterval(0U, -3)));
@@ -217,10 +221,18 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
             s_expectBaudSave = true;
         }
     } else if (bytes == "VERSIONA\r\n") {
-        // 来自 TestGnssUnicoreReceiver 的 UM980 实机 VERSIONA 样本。
-        s_rx +=
+        constexpr std::string_view kUm980Version =
             "#VERSIONA,0,GPS,UNKNOWN,0,0,0,0,0,249;\"UM980\",\"R4.10Build11833\",\"HRPT00-S10C-P\","
             "\"2310415000001-MD22A2244202679\",\"ff3b7c6f3c5fd90b\",\"2023/11/24\"*3f55fb4d\r\n";
+        if (s_p2) {
+            s_rx += "$command,VERSIONA,response: OK*45\r\n";
+            s_rx += gnss_test::kCm680VersionFrames.front();
+        } else {
+            s_rx += kUm980Version;
+        }
+    } else if (s_p2 && bytes == "UNLOG COM1\r\n") {
+        s_rx += "$command,UNLOG COM1,response: ERROR*0D\r\n"
+                "$command,LOG COM1,response: ERROR*16\r\n";
     } else if (bytes.ends_with("\r\n")) {
         if (bytes.starts_with("MODE BASE")) {
             ++s_modeBaseCommands;
@@ -236,10 +248,18 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
                 s_expectBaudSave = false;
             }
         }
+        const bool satsInfo = s_p2 && bytes.find("SATSINFOA") != std::string_view::npos;
+        s_sentSatsInfo = s_sentSatsInfo || satsInfo;
+        if (satsInfo && bytes.starts_with("SATSINFOA ")) {
+            s_rx += "PARSING FAILD NO MATCHING FUNC SATSINFOA\r\n";
+            return static_cast<int>(len);
+        }
+        const bool subsecondGsa = s_p2 && bytes.starts_with("GPGSA COM1 0.");
         std::string reply{"command,"};
         reply += bytes.substr(0, bytes.size() - 2U);
-        reply += save && s_rejectSave ? ",response: ERROR" : ",response: OK";
-        unsigned checksum = 0;
+        const bool reject = satsInfo || subsecondGsa || (save && s_rejectSave);
+        reply += reject ? ",response: ERROR" : ",response: OK";
+        unsigned checksum = s_p2 ? static_cast<unsigned>('$') : 0U;
         for (char ch : reply) {
             checksum ^= static_cast<unsigned char>(ch);
         }
@@ -437,6 +457,32 @@ void testConsoleCommandDispatch(nvs_handle_t nvs)
     checkStoredDefaults(nvs);
 }
 
+/**
+ * @brief 用会拒绝亚秒 GSA 的 CM680 替身验证 rate 10 完成配置和持久化。
+ * @param nvs: 已打开的 GNSS NVS 替身句柄。
+ * @note 单线程主机测试。
+ */
+void testCm680Rate10(nvs_handle_t nvs)
+{
+    constexpr size_t kGsaIndex = static_cast<size_t>(gnss::OutputMsg::kGsa);
+    const uint32_t before = s_context->data.gnssStatus.read().applySeq;
+    fw::Command cmd{};
+    cmd.target = app::id(app::ModuleKind::kGnss);
+    cmd.verb = static_cast<uint8_t>(app::GnssVerb::kSetRate);
+    cmd.argLen = 1U;
+    cmd.args[0] = 10U;
+    fw::CommandResult result{};
+    s_context->gnss.onCommand(cmd, result);
+    CHECK(fw::isOk(result.status));
+    advance(500U);
+    const auto status = s_context->data.gnssStatus.read();
+    CHECK(status.applySeq != before && status.lastApply == app::GnssApply::kOk);
+    CHECK(status.state == gnss::State::kRunning && status.failedMask == 0U);
+    CHECK(status.rxPeriodMs[kGsaIndex] == 100U);
+    uint8_t storedRate = 0U;
+    CHECK(nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK && storedRate == 10U);
+}
+
 } // namespace
 
 /**
@@ -470,7 +516,14 @@ void testBaseKeysAndCommandDispatch()
     CHECK(fw::isOk(s_context->storage.saveKeys(app::gnss_store::kBaseKeys)));
     startModule(nvs, 115200U, true, true);
     advance(3000U);
+    const auto status = s_context->data.gnssStatus.read();
+    CHECK(status.state == gnss::State::kRunning && status.model == gnss::Model::kCm680);
+    uint8_t cachedModel = 0U;
+    CHECK(nvs_get_u8(nvs, "model", &cachedModel) == ESP_OK && cachedModel == 6U);
+    CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
+    testCm680Rate10(nvs);
     testConsoleCommandDispatch(nvs);
+    CHECK(!s_sentSatsInfo);
     CHECK(s_gpioConfigs == 0U && s_gpioChanges == 0U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     nvs_close(nvs);

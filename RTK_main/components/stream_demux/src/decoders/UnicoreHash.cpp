@@ -1,5 +1,6 @@
 // Unicore Hash 语句解码器（ADR-0004 §4 判定规则 / ADR-0005 §1 实现位置）：'#' | 第 2 字节 [A-Z] | 正文可打印
 // 且不含 '#' '$' '*' | '*' 后 8 位十六进制 CRC-32（同 unicore_bin 算法）或 2 位十六进制 XOR | CR LF。
+// ADR-0012 §2.9：CRC 优先校验 UM980 的 '#' 后至 '*' 前的字节，再尝试 CM680 含首字节 '#' 的范围。
 // 纯函数、无静态可变状态、无堆、不阻塞：ISR 安全；帧长未知，step 每字节 O(1)，'\n' 到达时才整段复核。
 
 #include "demux/decoders/UnicoreHash.hpp"
@@ -251,7 +252,7 @@ Verdict finish(std::span<const uint8_t> frame, std::size_t star) noexcept
         // 形式二：8 位十六进制 CRC-32，与 Unicore 二进制相同的算法。
         const uint32_t checksumRx = readHexBe(frame, star + 1U, kCrcDigits);
         const uint32_t checksumCalc = crc::crc32Novatel(frame.subspan(1U, star - 1U));
-        if (checksumCalc != checksumRx) {
+        if (checksumCalc != checksumRx && crc::crc32Novatel(frame.first(star)) != checksumRx) {
             Verdict bad = reject(Reason::kCrcChecksum, star + 1U, 0U);
             bad.received = checksumRx;
             bad.computed = checksumCalc;
