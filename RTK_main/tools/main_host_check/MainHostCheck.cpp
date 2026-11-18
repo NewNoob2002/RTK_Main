@@ -17,7 +17,11 @@ extern "C" {
 
 #include "AppTestAdapter.hpp"
 #include "modules/debug/TraceText.hpp"
+#include "modules/debug/DebugKeys.hpp"
 #include "modules/gnss/RtcmPipe.hpp"
+#include "modules/storage/StoreKeys.hpp"
+#include "cli/Out.hpp"
+#include "fw/Log.hpp"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "esp_system.h"
@@ -1073,6 +1077,95 @@ void rtcmPipeDirectAndIoStats()
     CHECK(io.discardedBytes == (256U + 128U + (3087U - 512U)));
 }
 
+namespace {
+
+struct StoreLogCapture {
+    std::array<char, 2048U> log{};
+    std::array<char, 1024U> console{};
+    size_t logSize = 0U;
+    size_t consoleSize = 0U;
+};
+
+constinit StoreLogCapture s_store_log{};
+
+/**
+ * @brief 收集同一个主机测试中的启动存储日志。
+ * @param ctx: 未使用。
+ * @param hdr: 日志分类与级别。
+ * @param payload: 日志正文。
+ * @note 单线程主机测试。
+ */
+void captureStoreLog(void * /*ctx*/, const fw::LogHeader &hdr,
+                     std::span<const uint8_t> payload) noexcept
+{
+    auto &out = s_store_log.log;
+    auto &size = s_store_log.logSize;
+    if (hdr.cat == fw::TraceCat::kStore && payload.size() < out.size() - size) {
+        std::memcpy(out.data() + size, payload.data(), payload.size());
+        size += payload.size();
+        out[size++] = '\n';
+    }
+}
+
+/**
+ * @brief 收集 config 命令写入控制台的文本。
+ * @param text: 待输出字节。
+ * @param len: 字节数。
+ * @note 单线程主机测试。
+ */
+void captureStoreConsole(const char *text, size_t len) noexcept
+{
+    auto &out = s_store_log.console;
+    auto &size = s_store_log.consoleSize;
+    if (len <= out.size() - size) {
+        std::memcpy(out.data() + size, text, len);
+        size += len;
+    }
+}
+
+/**
+ * @brief 校验目录加载分类与 config、启动日志的逐键格式一致性。
+ * @note 单线程主机场景，每次在新进程运行。
+ */
+void storageStartup()
+{
+    auto &storage = app::appContext().storage;
+    const auto &keys = app::debug::kKeys;
+    const auto defaults = storage.loadKeys(keys);
+    CHECK(defaults.saved == 0U && defaults.defaults == keys.size() && defaults.failed == 0U);
+
+    CHECK(app::store::writeValue(keys[app::debug::kIdxMask], 1U) == ESP_OK);
+    const auto partial = storage.loadKeys(keys);
+    CHECK(partial.saved == 1U && partial.defaults == keys.size() - 1U && partial.failed == 0U);
+
+    const auto &report = keys[app::debug::kIdxReport];
+    CHECK(app::store::writeValue(report, static_cast<uint32_t>(report.max) + 1U) == ESP_OK);
+    const auto failed = storage.loadKeys(keys);
+    CHECK(failed.saved == 1U && failed.defaults == keys.size() - 2U && failed.failed == 1U);
+
+    CHECK(fw::isOk(fw::logInstallDirect(&captureStoreLog, nullptr, &rtos::nowMs)));
+    CHECK(fw::isOk(storage.init()));
+    cli::setOutSink(&captureStoreConsole, false);
+    char command[] = "config";
+    char group[] = "debug";
+    std::array<char *, 2U> argv{command, group};
+    const auto &config = app::configCmds().front();
+    CHECK(config.handler(config.ctx, static_cast<int>(argv.size()), argv.data()) == 0);
+    cli::setOutSink(nullptr, false);
+    const std::string_view log{s_store_log.log.data(), s_store_log.logSize};
+    std::string_view console{s_store_log.console.data(), s_store_log.consoleSize};
+    CHECK(log.find("Could not load dbg/report: invalid_arg\n") != std::string_view::npos);
+    CHECK(log.find("debug: 1 saved, 2 default\n") != std::string_view::npos);
+    const size_t header = console.find('\n');
+    CHECK(header != std::string_view::npos);
+    if (header != std::string_view::npos) {
+        console.remove_prefix(header + 1U);
+        CHECK(!console.empty() && log.find(console) != std::string_view::npos);
+    }
+}
+
+} // namespace
+
 int main(int argc, const char **raw_args)
 {
     const std::span<const char *> argv{raw_args,
@@ -1101,6 +1194,8 @@ int main(int argc, const char **raw_args)
         saveRecovery();
     } else if (std::strcmp(argv[1], "storage_backoff") == 0) {
         storageBackoff();
+    } else if (std::strcmp(argv[1], "storage_startup") == 0) {
+        storageStartup();
     } else if (std::strcmp(argv[1], "credit_window") == 0) {
         creditWindow();
     } else if (std::strcmp(argv[1], "rx_fairness") == 0) {

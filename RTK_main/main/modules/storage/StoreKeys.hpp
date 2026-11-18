@@ -5,13 +5,26 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 #include "esp_err.h"
 #include "fw/StoreKey.hpp"
+#include "modules/storage/StoreCatalog.hpp"
 
 namespace app::store {
 
 inline constexpr size_t kMaxBlobKeyBytes = 64U;
+inline constexpr size_t kKeyLineBytes = 132U;
+
+/**
+ * @brief 将一个持久化键读出并格式化为 config 和启动日志共用的一行。
+ * @param[out] out: 末尾带 NUL 的行缓冲。
+ * @param key: 键定义。
+ * @param valueName: 可空的数值显示名钩子。
+ * @note 任务上下文，可等待 NVS，非 ISR。
+ */
+void formatKey(std::span<char, kKeyLineBytes> out, const fw::StoreKey &key,
+               StoreValueName valueName) noexcept;
 
 /**
  * @brief 键的值宽度（字节）：u8/u16/u32 → 1/2/4；本轮不支持的类型返回 0。
@@ -28,7 +41,7 @@ inline constexpr size_t kMaxBlobKeyBytes = 64U;
  * @param value: 值输出；打开前失败保持原值，u8/u16 读取失败可能置 0
  * @retval ESP_OK 已读取
  * @retval ESP_ERR_INVALID_ARG 键类型或名称非法
- * @retval ESP_ERR_NVS_NOT_FOUND 命名空间打开失败或键不存在
+ * @retval ESP_ERR_NVS_NOT_FOUND 命名空间或键不存在
  * @retval 其他 NVS 读取错误
  * @note 任意任务，NVS 内部同步，可阻塞，非 ISR。
  */
@@ -52,7 +65,7 @@ inline constexpr size_t kMaxBlobKeyBytes = 64U;
  * @param[out] len: 入口清零，仅成功时更新为实际长度
  * @retval ESP_OK 已读取，len 为实际长度
  * @retval ESP_ERR_INVALID_ARG 键非法或输出不足 maxSize
- * @retval ESP_ERR_NVS_NOT_FOUND 命名空间打开失败或键不存在
+ * @retval ESP_ERR_NVS_NOT_FOUND 命名空间或键不存在
  * @retval 其他 NVS 读取错误
  * @note 任意任务，NVS 内部同步，可阻塞，非 ISR。
  */

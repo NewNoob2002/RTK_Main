@@ -1,8 +1,9 @@
-// NVS 持久化：设备 SN 与报警器白名单；命名空间 "rtk"，键 "sn"（字符串）、"alarm_wl"（n×6 字节 blob）。
+// NVS 持久化：出厂分区 fac/sn 保存设备 SN，用户分区 rtk/alarm_wl 保存报警器白名单。
 // 仅由启动流程与存储执行器任务串行调用，二者不并发；不可在 ISR 中调用；nvs_* 调用会阻塞。
 // 不分配堆（读白名单用固定 24 字节栈缓冲）。冻结接口（ADR-0003）。
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -12,23 +13,35 @@
 extern "C" {
 #endif
 
-#define NVS_STORE_SN_MAX    (16U) /* 不含结尾 0 */
-#define NVS_STORE_ALARM_MAX (4U)
-#define NVS_STORE_ADDR_LEN  (6U)
+#define NVS_STORE_SN_MAX            (16U) /* 不含结尾 0 */
+#define NVS_STORE_ALARM_MAX         (4U)
+#define NVS_STORE_ADDR_LEN          (6U)
+#define NVS_STORE_FACTORY_PARTITION "nvs_fac"
+#define NVS_STORE_FACTORY_NAMESPACE "fac"
+#define NVS_STORE_KEY_REG           "reg"
+#define NVS_STORE_REG_MAX           (64U) /* 注册码预留槽位容量（字节） */
 
 /**
- * @brief  初始化 NVS 分区；分区无空页或版本不符时擦除后重试一次
- * @retval ESP_OK 初始化成功
+ * @brief  初始化用户与出厂 NVS，尝试迁移旧 SN；只对用户分区执行擦除重试
+ * @retval ESP_OK 用户分区初始化成功；出厂分区状态另行查询
  * @retval ESP_ERR_NVS_NO_FREE_PAGES 擦除或重试后仍无空页
  * @retval ESP_ERR_NVS_NEW_VERSION_FOUND 擦除或重试后版本仍不符
  * @retval 其他 nvs_flash_erase/nvs_flash_init 的错误码（已记 E 级日志）
- * @note   只在启动期单线程调用；非 ISR 安全；会阻塞；分支内的擦除会丢失分区全部数据
+ * @note   只在启动期单线程调用；非 ISR，会阻塞；用户分区擦除会清空该分区数据。
  */
 esp_err_t nvs_store_init(void);
 
 /**
- * @brief  读取设备 SN 字符串
- * @param[out] out: 输出缓冲；成功时为 0 结尾字符串，检查参数后即清空，参数非法时不写入
+ * @brief  查询出厂分区最近一次初始化结果
+ * @retval true 出厂分区可用
+ * @retval false 未初始化或初始化失败
+ * @note   启动线程在 init 后读取，后续任务只读；不阻塞，非 ISR。
+ */
+bool nvs_store_factory_available(void);
+
+/**
+ * @brief  读取 fac/sn；出厂分区不可用或迁移待重试时读旧的 rtk/sn
+ * @param[out] out: 成功时为 0 结尾字符串；失败时有可写字节则清零 out[0]
  * @param  out_size: out 的字节容量，必须 ≥ NVS_STORE_SN_MAX + 1
  * @retval ESP_OK 读到长度 1..NVS_STORE_SN_MAX 的 SN
  * @retval ESP_ERR_INVALID_ARG out 为 NULL 或 out_size 过小
@@ -40,11 +53,12 @@ esp_err_t nvs_store_init(void);
 esp_err_t nvs_store_get_sn(char *out, size_t out_size);
 
 /**
- * @brief  写入设备 SN，覆盖旧值
+ * @brief  写入出厂分区 fac/sn，覆盖旧值
  * @param  sn: 非空 0 结尾字符串，长度 1..NVS_STORE_SN_MAX
  * @retval ESP_OK 已写入并 commit
  * @retval ESP_ERR_INVALID_ARG sn 为 NULL、空串或超长
- * @retval 其他 nvs_open/nvs_set_str/nvs_commit 错误码；未 commit 时 flash 中旧值不变
+ * @retval ESP_ERR_INVALID_STATE 出厂分区不可用
+ * @retval 其他 NVS 打开、写入或提交错误码
  * @note   非 ISR 安全；nvs 调用与 commit 会阻塞；不分配堆
  */
 esp_err_t nvs_store_set_sn(const char *sn);

@@ -8,12 +8,10 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <span>
 #include <string_view>
 
 #include "esp_err.h"
-#include "nvs.h" // ESP_ERR_NVS_NOT_FOUND
 #include "sdkconfig.h"
 
 #include "AppConfig.hpp"
@@ -29,7 +27,6 @@ namespace app {
 namespace {
 
 constexpr size_t kGroupArgs = 2U;
-constexpr int kNameWidth = 14; // 键名列宽，与 cli::printKv 一致
 
 /**
  * @brief 显示身份与设备名
@@ -88,39 +85,9 @@ void showGroup(const StoreGroup &group) noexcept
         return;
     }
     for (const fw::StoreKey &key : group.keys) {
-        constexpr size_t kTextBufBytes = 24U;
-        std::array<char, kTextBufBytes> text{};
-        if (key.type == fw::StoreType::kBlob) {
-            std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
-            size_t len = 0U;
-            const esp_err_t err = store::readBlob(key, blob, len);
-            if (err == ESP_OK) {
-                (void)std::snprintf(text.data(), text.size(), "blob(%uB)",
-                                    static_cast<unsigned>(len));
-            } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-                (void)std::snprintf(text.data(), text.size(), "default");
-            } else {
-                (void)std::snprintf(text.data(), text.size(), "error");
-            }
-        } else {
-            uint32_t value = 0U;
-            const esp_err_t err = store::readValue(key, value);
-            const char *name = ((err == ESP_OK) && (group.valueName != nullptr))
-                                   ? group.valueName(key.key, value)
-                                   : nullptr;
-            if (name != nullptr) {
-                (void)std::snprintf(text.data(), text.size(), "%" PRIu32 " (%s)", value, name);
-            } else if (err == ESP_OK) {
-                (void)std::snprintf(text.data(), text.size(), "%" PRIu32, value);
-            } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-                (void)std::snprintf(text.data(), text.size(), "default");
-            } else {
-                (void)std::snprintf(text.data(), text.size(), "error");
-            }
-        }
-        cli::outPrintf("  %-*.*s %-12s  %.*s\n", kNameWidth, static_cast<int>(key.key.size()),
-                       key.key.data(), text.data(), static_cast<int>(key.help.size()),
-                       key.help.data());
+        std::array<char, store::kKeyLineBytes> line{};
+        store::formatKey(line, key, group.valueName);
+        cli::outPrintf("%s\n", line.data());
     }
 }
 

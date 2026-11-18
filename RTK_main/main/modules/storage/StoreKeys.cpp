@@ -3,11 +3,15 @@
 
 #include "modules/storage/StoreKeys.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cinttypes>
+#include <cstdio>
 #include <cstring>
 #include <string_view>
 
 #include "def/StorageDef.hpp"
+#include "fw/Log.hpp"
 #include "modules/storage/StorageModule.hpp"
 
 /* NvsStore.h（冻结）没有整数键 API，这里直接使用 nvs.h。
@@ -102,8 +106,7 @@ esp_err_t readValue(const fw::StoreKey &key, uint32_t &value) noexcept
     nvs_handle_t handle = 0;
     esp_err_t error = nvs_open(ns.data(), NVS_READONLY, &handle);
     if (error != ESP_OK) {
-        // 命名空间还不存在：等同于“从未保存过”。
-        return ESP_ERR_NVS_NOT_FOUND;
+        return error;
     }
     if (key.type == fw::StoreType::kU32) {
         error = nvs_get_u32(handle, name.data(), &value);
@@ -159,7 +162,7 @@ esp_err_t readBlob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len)
     nvs_handle_t handle = 0;
     esp_err_t error = nvs_open(ns.data(), NVS_READONLY, &handle);
     if (error != ESP_OK) {
-        return ESP_ERR_NVS_NOT_FOUND;
+        return error;
     }
     size_t req = out.size();
     error = nvs_get_blob(handle, name.data(), out.data(), &req);
@@ -190,6 +193,46 @@ esp_err_t writeBlob(const fw::StoreKey &key, std::span<const uint8_t> data) noex
     return error;
 }
 
+void formatKey(std::span<char, kKeyLineBytes> out, const fw::StoreKey &key,
+               StoreValueName valueName) noexcept
+{
+    constexpr size_t kValueTextBytes = 24U;
+    constexpr int kNameWidth = 14;
+    std::array<char, kValueTextBytes> text{};
+    esp_err_t error = ESP_OK;
+    if (key.type == fw::StoreType::kBlob) {
+        std::array<uint8_t, kMaxBlobKeyBytes> blob{};
+        size_t len = 0U;
+        error = readBlob(key, blob, len);
+        if (error == ESP_OK) {
+            (void)std::snprintf(text.data(), text.size(), "blob(%zuB)", len);
+        }
+    } else {
+        uint32_t value = 0U;
+        error = readValue(key, value);
+        if (error == ESP_OK) {
+            const char *name = (valueName != nullptr) ? valueName(key.key, value) : nullptr;
+            if (name == nullptr) {
+                (void)std::snprintf(text.data(), text.size(), "%" PRIu32, value);
+            } else {
+                (void)std::snprintf(text.data(), text.size(), "%" PRIu32 " (%s)", value, name);
+            }
+        }
+    }
+    if (error != ESP_OK) {
+        (void)std::snprintf(text.data(), text.size(), "%s",
+                            error == ESP_ERR_NVS_NOT_FOUND ? "default" : "error");
+    }
+
+    // 精度受输出缓冲长度约束，转换为 int 安全。
+    constexpr size_t kPrecisionMax = kKeyLineBytes - 1U;
+    const int keyLen = static_cast<int>(std::min(key.key.size(), kPrecisionMax));
+    const int helpLen = static_cast<int>(std::min(key.help.size(), kPrecisionMax));
+    (void)std::snprintf(out.data(), out.size(), "  %-*.*s = %-12s  %.*s", kNameWidth, keyLen,
+                        key.key.empty() ? "" : key.key.data(), text.data(), helpLen,
+                        key.help.empty() ? "" : key.help.data());
+}
+
 } // namespace app::store
 
 namespace app {
@@ -205,54 +248,87 @@ fw::Result mapStoreError(esp_err_t error) noexcept
     return (error == ESP_ERR_INVALID_ARG) ? fw::Result::kInvalidArg : fw::Result::kIoError;
 }
 
+namespace {
+
+enum class LoadOutcome : uint8_t { kSaved, kDefault, kFailed };
+
 /**
- * @brief 加载一个 blob 键并交给模块的绑定函数
- * @param key: 键定义（binding.load 已由调用方确认非空）
- * @retval kOk: 已加载；kNotFound: 从未保存；其他: 失败类型
- * @note 仅 storage 任务启动期调用；栈上缓冲，不分配堆。
+ * @brief 记录一个加载失败的键。
+ * @param key: 键定义。
+ * @param error: NVS 或绑定错误名称。
+ * @note 仅启动任务，输出可阻塞，非 ISR。
  */
-fw::Result loadBlobKey(const fw::StoreKey &key) noexcept
+void warnLoadKey(const fw::StoreKey &key, const char *error) noexcept
 {
-    if ((key.maxSize == 0U) || (key.maxSize > store::kMaxBlobKeyBytes)) {
-        return fw::Result::kInvalidArg;
-    }
-    std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
-    size_t len = 0U;
-    const esp_err_t error = store::readBlob(key, std::span<uint8_t>{blob}.first(key.maxSize), len);
-    if (error == ESP_ERR_NVS_NOT_FOUND) {
-        return fw::Result::kNotFound;
-    }
-    if (error != ESP_OK) {
-        return mapStoreError(error);
-    }
-    return key.binding.load(key.binding.obj, std::span<const uint8_t>{blob}.first(len));
+    // NVS 名字上限 15 字节；无效键也只记录有界前缀。
+    const int nsLen = static_cast<int>(std::min(key.ns.size(), fw::kStoreNameMax));
+    const int keyLen = static_cast<int>(std::min(key.key.size(), fw::kStoreNameMax));
+    FW_LOGW(fw::TraceCat::kStore, "Could not load %.*s/%.*s: %s", nsLen,
+            key.ns.empty() ? "" : key.ns.data(), keyLen, key.key.empty() ? "" : key.key.data(),
+            error);
 }
 
 /**
- * @brief 加载一个标量键（1–4 字节小端）并交给模块的绑定函数
- * @param key: 键定义（binding.load 已由调用方确认非空）
- * @retval kOk: 已加载；kNotFound: 从未保存（保持模块缺省值）；其他: 失败类型
- * @note 仅 storage 任务启动期调用；不分配堆。
+ * @brief 处理单键读取结果，成功时把字节交给绑定。
+ * @param key: 键定义。
+ * @param error: 原始 NVS 读取结果。
+ * @param bytes: 成功时读取的字节。
+ * @retval 保存值已应用、键缺失或加载失败。
+ * @note 仅启动任务，输出可阻塞，非 ISR。
  */
-fw::Result loadValueKey(const fw::StoreKey &key) noexcept
+LoadOutcome applyStoredKey(const fw::StoreKey &key, esp_err_t error,
+                           std::span<const uint8_t> bytes) noexcept
+{
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        return LoadOutcome::kDefault;
+    }
+    if (error != ESP_OK) {
+        warnLoadKey(key, esp_err_to_name(error));
+        return LoadOutcome::kFailed;
+    }
+    const auto applied = key.binding.load(key.binding.obj, bytes);
+    if (!fw::isOk(applied)) {
+        warnLoadKey(key, fw::toString(applied));
+        return LoadOutcome::kFailed;
+    }
+    return LoadOutcome::kSaved;
+}
+
+/**
+ * @brief 加载一个 blob 键并交给绑定。
+ * @param key: 键定义，binding.load 已验证。
+ * @retval 保存值已应用、键缺失或加载失败。
+ * @note 仅启动任务，可阻塞，非 ISR。
+ */
+LoadOutcome loadBlobKey(const fw::StoreKey &key) noexcept
+{
+    std::array<uint8_t, store::kMaxBlobKeyBytes> blob{};
+    size_t len = 0U;
+    const esp_err_t error = store::readBlob(key, blob, len);
+    return applyStoredKey(key, error, std::span{blob}.first(len));
+}
+
+/**
+ * @brief 读取标量键并以小端字节序交给绑定。
+ * @param key: 键定义，binding.load 已验证。
+ * @retval 保存值已应用、键缺失或加载失败。
+ * @note 仅启动任务，可阻塞，非 ISR。
+ */
+LoadOutcome loadValueKey(const fw::StoreKey &key) noexcept
 {
     const size_t width = store::valueWidth(key.type);
     uint32_t value = 0U;
     const esp_err_t error = store::readValue(key, value);
-    if (error == ESP_ERR_NVS_NOT_FOUND) {
-        return fw::Result::kNotFound;
-    }
-    if (error != ESP_OK) {
-        return mapStoreError(error);
-    }
     std::array<uint8_t, store::kMaxKeyWidth> bytes{};
     for (size_t index = 0U; index < width; ++index) {
         // value 为 32 位、width ≤ 4，移位与掩码都不会越界。
         bytes[index] =
             static_cast<uint8_t>((value >> (store::kBitsPerByte * index)) & store::kByteMask);
     }
-    return key.binding.load(key.binding.obj, std::span<const uint8_t>{bytes}.first(width));
+    return applyStoredKey(key, error, std::span{bytes}.first(width));
 }
+
+} // namespace
 
 /**
  * @brief 让模块编码一个 blob 键并写回 NVS
@@ -303,25 +379,34 @@ fw::Result saveValueKey(const fw::StoreKey &key) noexcept
     return (error == ESP_OK) ? fw::Result::kOk : mapStoreError(error);
 }
 
-fw::Result StorageModule::loadKeys(std::span<const fw::StoreKey> keys) noexcept
+StoreLoadCounts StorageModule::loadKeys(std::span<const fw::StoreKey> keys) noexcept
 {
-    fw::Result overall = fw::Result::kOk;
-    uint32_t loaded = 0U;
+    StoreLoadCounts counts{};
     for (const fw::StoreKey &key : keys) {
         if (key.binding.load == nullptr) {
-            overall = fw::Result::kInvalidArg;
+            warnLoadKey(key, fw::toString(fw::Result::kInvalidArg));
+            ++counts.failed;
             continue;
         }
-        const fw::Result applied =
+        const LoadOutcome outcome =
             (key.type == fw::StoreType::kBlob) ? loadBlobKey(key) : loadValueKey(key);
-        if (!fw::isOk(applied)) {
-            overall = applied;
-            continue;
+        switch (outcome) {
+        case LoadOutcome::kSaved:
+            ++counts.saved;
+            break;
+        case LoadOutcome::kDefault:
+            ++counts.defaults;
+            break;
+        case LoadOutcome::kFailed:
+            ++counts.failed;
+            break;
+        default:
+            break;
         }
-        ++loaded;
     }
-    traceStore(StoreTrace::kLoad, static_cast<uint32_t>(overall), loaded);
-    return overall;
+    const auto result = counts.failed == 0U ? fw::Result::kOk : fw::Result::kIoError;
+    traceStore(StoreTrace::kLoad, static_cast<uint32_t>(result), counts.saved);
+    return counts;
 }
 
 fw::Result StorageModule::saveKeys(std::span<const fw::StoreKey> keys) noexcept

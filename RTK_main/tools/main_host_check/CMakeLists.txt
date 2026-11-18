@@ -51,6 +51,9 @@ enable_testing()
 foreach(policy concurrent preempt)
     add_executable(main_${policy} MainHostCheck.cpp ${PROJ_ROOT}/main/modules/rtcm/RtcmForwarder.cpp
         ${PROJ_ROOT}/main/data/AppData.cpp ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
+        ${PROJ_ROOT}/main/modules/storage/ConfigCmds.cpp ${PROJ_ROOT}/main/support/ConsoleSupport.cpp
+        ${PROJ_ROOT}/components/cli/src/Reply.cpp
+        ${PROJ_ROOT}/components/rtos/Executor.cpp
         ${PROJ_ROOT}/main/modules/rtcm/RtcmModule.cpp
         # storage 的通用键表引用 DebugModule 的绑定函数，因此链接真实的 debug 模块。
         ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/DebugModuleLog.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp ${PROJ_ROOT}/main/modules/debug/TraceTextValues.cpp
@@ -65,13 +68,14 @@ foreach(policy concurrent preempt)
     target_compile_options(main_${policy} PRIVATE -fno-exceptions -fno-rtti
         -Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
     # host 检查不跑 Kconfig：给出与 main/Kconfig.projbuild 默认值一致的文本日志环容量（ADR-0009 §2.11）。
-    target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096)
+    target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096
+        CONFIG_RTK_CONSOLE_UART_NUM=0 CONFIG_RTK_CONSOLE_UART_BAUD=2000000)
     target_link_libraries(main_${policy} PRIVATE main_pure main_rtos main_nvs_shim)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
     foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
-            rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget)
+            rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup)
         add_test(NAME main_${policy}_${scenario} COMMAND main_${policy} ${scenario})
     endforeach()
 endforeach()

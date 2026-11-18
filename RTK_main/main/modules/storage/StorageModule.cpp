@@ -3,14 +3,21 @@
 #include "modules/storage/StorageModule.hpp"
 #include "AppContext.hpp"
 #include <algorithm>
+#include <array>
+#include <cinttypes>
 #include <cstring>
 #include <string_view>
 #include "def/StorageDef.hpp"
 #include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
-#include "nvs.h" // ESP_ERR_NVS_NOT_FOUND：区分“未设置 SN”与真正的读取错误
 #include "modules/storage/StoreCatalog.hpp"
+#include "modules/storage/StoreKeys.hpp"
 #include "rtos/EspStatus.hpp"
+#include "sdkconfig.h"
+
+extern "C" {
+#include "nvs.h"
+}
 
 namespace app {
 namespace {
@@ -18,6 +25,81 @@ constexpr uint32_t kDebounceMs = 500;
 constexpr uint32_t kRetryMaxMs = 30000;
 using WhitelistRaw = std::array<std::array<uint8_t, core::kAddrLen>, kMaxAlarms>;
 static_assert(sizeof(WhitelistRaw) == kMaxAlarms * NVS_STORE_ADDR_LEN);
+
+#if defined(CONFIG_RTK_BOOT_VERBOSE) && CONFIG_RTK_BOOT_VERBOSE
+constexpr bool kBootVerbose = true;
+#else
+constexpr bool kBootVerbose = false;
+#endif
+
+/**
+ * @brief 显示两个分区的 NVS 条目用量。
+ * @note 仅启动任务，可等待 NVS 和日志输出，非 ISR。
+ */
+void logNvsUsage() noexcept
+{
+    nvs_stats_t user{};
+    nvs_stats_t factory{};
+    const auto userErr = nvs_get_stats(nullptr, &user);
+    const auto factoryErr = nvs_get_stats(NVS_STORE_FACTORY_PARTITION, &factory);
+    if (userErr == ESP_OK && factoryErr == ESP_OK) {
+        FW_LOGI(fw::TraceCat::kStore, "NVS used %zu of %zu entries (nvs), %zu of %zu (nvs_fac)",
+                user.used_entries, user.total_entries, factory.used_entries, factory.total_entries);
+    } else if (userErr == ESP_OK) {
+        FW_LOGI(fw::TraceCat::kStore, "NVS used %zu of %zu entries (nvs), unavailable (nvs_fac)",
+                user.used_entries, user.total_entries);
+    } else if (factoryErr == ESP_OK) {
+        FW_LOGI(fw::TraceCat::kStore, "NVS unavailable (nvs), used %zu of %zu entries (nvs_fac)",
+                factory.used_entries, factory.total_entries);
+    } else {
+        FW_LOGI(fw::TraceCat::kStore, "NVS usage unavailable (nvs and nvs_fac)");
+    }
+}
+
+/**
+ * @brief 读取目录中有显示名的缓存值。
+ * @param group: 目录组。
+ * @param name: 要显示的键名。
+ * @retval 静态显示名，缺失、不可读或没有名称时为 nullptr。
+ * @note 仅启动任务，可阻塞，非 ISR。
+ */
+const char *cachedName(const StoreGroup &group, std::string_view name) noexcept
+{
+    for (const fw::StoreKey &key : group.keys) {
+        if (key.key == name) {
+            uint32_t value = 0U;
+            if (store::readValue(key, value) == ESP_OK) {
+                return group.valueName(key.key, value);
+            }
+            break;
+        }
+    }
+    return nullptr;
+}
+
+/**
+ * @brief 输出目录组的加载摘要，GNSS 缓存附家族和型号名。
+ * @param group: 目录组。
+ * @param counts: 该组加载结果。
+ * @note 仅启动任务，可阻塞，非 ISR。
+ */
+void logLoadSummary(const StoreGroup &group, const StoreLoadCounts &counts) noexcept
+{
+    // 组名来自目录的短常量，转换为 printf 精度无损。
+    if (group.valueName != nullptr && counts.saved != 0U) {
+        const char *family = cachedName(group, "family");
+        const char *model = cachedName(group, "model");
+        if (family != nullptr || model != nullptr) {
+            FW_LOGI(fw::TraceCat::kStore, "%.*s: %" PRIu32 " saved, %" PRIu32 " default (%s, %s)",
+                    static_cast<int>(group.name.size()), group.name.data(), counts.saved,
+                    counts.defaults, family != nullptr ? family : "-",
+                    model != nullptr ? model : "-");
+            return;
+        }
+    }
+    FW_LOGI(fw::TraceCat::kStore, "%.*s: %" PRIu32 " saved, %" PRIu32 " default",
+            static_cast<int>(group.name.size()), group.name.data(), counts.saved, counts.defaults);
+}
 } // namespace
 
 fw::Result StorageModule::whitelistLoad(std::span<const uint8_t> in) noexcept
@@ -77,7 +159,9 @@ void StorageModule::loadWhitelist() noexcept
     auto *rows = reinterpret_cast<uint8_t (*)[NVS_STORE_ADDR_LEN]>(raw.data());
     const esp_err_t error = nvs_store_get_alarms(rows, kMaxAlarms, &count);
     if (error != ESP_OK || count > kMaxAlarms) {
-        FW_LOGW(fw::TraceCat::kStore, "load whitelist failed: %s", esp_err_to_name(error));
+        const auto failure = (error != ESP_OK) ? error : ESP_ERR_INVALID_SIZE;
+        FW_LOGW(fw::TraceCat::kStore, "Whitelist unavailable: %s, using empty list",
+                esp_err_to_name(failure));
         return;
     }
     /* 按冻结的逐行字节布局反序列化，失败保持空表。 */
@@ -85,39 +169,45 @@ void StorageModule::loadWhitelist() noexcept
     std::memcpy(bytes.data(), raw.data(), count * core::kAddrLen);
     const auto loaded = whitelistLoad(std::span{bytes}.first(count * core::kAddrLen));
     if (!fw::isOk(loaded)) {
-        FW_LOGW(fw::TraceCat::kStore, "invalid whitelist; use empty list");
+        FW_LOGW(fw::TraceCat::kStore, "Whitelist invalid, using empty list");
+    } else {
+        FW_LOGI(fw::TraceCat::kStore, "Whitelist loaded, %zu entries", count);
     }
 }
 
 void StorageModule::loadSn() noexcept
 {
     std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
-    const esp_err_t snError = nvs_store_get_sn(sn.data(), sn.size());
-    if (snError != ESP_OK) {
-        if (snError == ESP_ERR_NVS_NOT_FOUND) {
-            // 未写入 SN 是出厂前的正常状态，不当作错误呈现。
-            FW_LOGI(fw::TraceCat::kStore, "no SN set; name derived from BT MAC");
-        } else {
-            FW_LOGW(fw::TraceCat::kStore, "SN read failed: %s; name derived from BT MAC",
-                    esp_err_to_name(snError));
+    status_.snError = nvs_store_get_sn(sn.data(), sn.size());
+    if (status_.snError == ESP_OK) {
+        std::array<uint8_t, NVS_STORE_SN_MAX + 1U> bytes{};
+        std::memcpy(bytes.data(), sn.data(), sn.size());
+        if (!fw::isOk(snLoad(std::span{bytes}.first(std::strlen(sn.data()))))) {
+            status_.snError = ESP_ERR_INVALID_ARG;
         }
-        return;
     }
-    /* 验证 SN 后保存到模块，供后续 BT 名称初始化使用。 */
-    std::array<uint8_t, NVS_STORE_SN_MAX + 1U> bytes{};
-    std::memcpy(bytes.data(), sn.data(), sn.size());
-    const auto status = snLoad(std::span{bytes}.first(std::strlen(sn.data())));
-    if (!fw::isOk(status)) {
-        FW_LOGW(fw::TraceCat::kStore, "invalid sn; derive from BT MAC");
+    if (status_.snError == ESP_OK) {
+        FW_LOGI(fw::TraceCat::kStore, "SN loaded: %s", sn_.data());
+    } else if (status_.snError == ESP_ERR_NVS_NOT_FOUND) {
+        FW_LOGI(fw::TraceCat::kStore, "SN not set, name derived from BT MAC");
+    } else {
+        FW_LOGW(fw::TraceCat::kStore, "SN unavailable: %s, name derived from BT MAC",
+                esp_err_to_name(status_.snError));
     }
 }
 
 void StorageModule::loadKeyTables() noexcept
 {
     for (const StoreGroup &group : storeCatalog()) {
-        // 失败详情已由 loadKeys 的 kStore 事件覆盖；启动早期不额外打印。
-        if (!fw::isOk(loadKeys(group.keys))) {
+        const StoreLoadCounts counts = loadKeys(group.keys);
+        logLoadSummary(group, counts);
+        if (!kBootVerbose && counts.failed == 0U) {
             continue;
+        }
+        for (const fw::StoreKey &key : group.keys) {
+            std::array<char, store::kKeyLineBytes> line{};
+            store::formatKey(line, key, group.valueName);
+            FW_LOGI(fw::TraceCat::kStore, "%s", line.data());
         }
     }
 }
@@ -138,8 +228,9 @@ fw::Result StorageModule::init() noexcept
     if (init != ESP_OK) {
         FW_LOGE(fw::TraceCat::kStore, "store init failed: %s; use defaults", esp_err_to_name(init));
     }
-    loadWhitelist();
+    logNvsUsage();
     loadSn();
+    loadWhitelist();
     /* ADR-0009 §2.4 / ADR-0010 §2.10：启动时按目录加载所有类别的键表。 */
     loadKeyTables();
     /* 保持 LinkStatus、SystemStatus、初始化标记、StoreStatus 的写入顺序。 */

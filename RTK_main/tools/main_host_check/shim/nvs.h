@@ -21,6 +21,12 @@ typedef enum {
     NVS_READWRITE = 1,
 } nvs_open_mode_t;
 
+typedef struct {
+    size_t used_entries;
+    size_t total_entries;
+} nvs_stats_t;
+
+esp_err_t nvs_get_stats(const char *part_name, nvs_stats_t *stats);
 esp_err_t nvs_open(const char *name, nvs_open_mode_t open_mode, nvs_handle_t *out_handle);
 void nvs_close(nvs_handle_t handle);
 esp_err_t nvs_commit(nvs_handle_t handle);

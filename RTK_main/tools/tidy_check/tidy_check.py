@@ -11,12 +11,13 @@ gnss 是纯组件，IDF 只启用树内默认驱动，ComNav 不在 ESP 数据�
 全驱动构建的编译数据库（host 语言标准与配置），保证每个驱动都被分析到。
 纯组件（device_proto/link_core/app_fw/bt_reconnect/stream_demux）若在 host 数据库里已有条目就用它
 （同一份源、同一配置、能完整解析），否则回落到 ESP 数据库。
-覆盖率自检：components/** 与 main/** 下全部 .c/.cpp（排除组件内 test/ 与生成物）必须被某个 job 覆盖，
+覆盖率自检：components/**、main/** 和 test/nvs_store/** 下全部 .c/.cpp 必须有 job（排除组件内 test/ 与生成物），
 或登记在 EXCLUDED 表（附理由），否则退出码 2。
 
 用法（先 . ~/esp/esp-idf/export.sh，并已构建 builds/host、idf.py build 与 test/gnss）：
   python3 -I tools/tidy_check/tidy_check.py [--host-build builds/host] [--idf-build build]
-      [--gnss-build builds/gnss] [--test-app-build builds/rtk_pure-esp32] [--jobs N]
+      [--gnss-build builds/gnss] [--nvs-build builds/qa-nvs-store]
+      [--test-app-build builds/rtk_pure-esp32] [--jobs N]
 退出码：0 PASS；1 有发现；2 工具或输入错误（含覆盖率不全）。
 """
 
@@ -65,7 +66,7 @@ EXCLUDED = {
 }
 
 # 自有源文件根：覆盖率自检与 job 构造共用。
-OWNED_ROOTS = ("components", "main")
+OWNED_ROOTS = ("components", "main", "test/nvs_store")
 # 自有源文件中不参与产品构建的子目录段（组件内测试、生成物）。
 SKIP_SEGMENTS = ("test", "golden")
 
@@ -82,13 +83,13 @@ def sources(*globs):
 
 
 def owned_sources():
-    """列举 components/** 与 main/** 下的自有 C/C++ 源文件（排除组件内 test/ 与生成物）。"""
+    """列举覆盖根下的 C/C++ 文件（组件内 test/ 与生成物除外）。"""
     out = []
     for base in OWNED_ROOTS:
         for p in sorted((ROOT / base).rglob("*")):
             if p.suffix not in (".c", ".cpp") or not p.is_file():
                 continue
-            if any(part in SKIP_SEGMENTS for part in p.relative_to(ROOT).parts[:-1]):
+            if any(part in SKIP_SEGMENTS for part in p.relative_to(ROOT / base).parts[:-1]):
                 continue
             out.append(p)
     return out
@@ -170,6 +171,8 @@ def main():
     ap.add_argument("--idf-build", default="build")
     ap.add_argument("--gnss-build", default="builds/gnss",
                     help="test/gnss 全驱动构建目录（需要 compile_commands.json）")
+    ap.add_argument("--nvs-build", default="builds/qa-nvs-store",
+                    help="test/nvs_store 主机构建目录（需要 compile_commands.json）")
     ap.add_argument("--test-app-build", default="builds/rtk_pure-esp32",
                     help="T15 测试应用的 esp32 构建目录；不存在时跳过并提示")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
@@ -180,6 +183,7 @@ def main():
         return 2
     host_db = ROOT / args.host_build
     gnss_db = ROOT / args.gnss_build
+    nvs_db = ROOT / args.nvs_build
     host_cc = host_db / "compile_commands.json"
     if not host_cc.is_file():
         print(f"ERROR: 缺少 {host_db}/compile_commands.json", file=sys.stderr)
@@ -187,6 +191,7 @@ def main():
     try:
         host_files = db_files(host_db)
         gnss_files = db_files(gnss_db)
+        nvs_files = db_files(nvs_db)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -228,6 +233,9 @@ def main():
         for p in sources("test/host/*.cpp", "test/host/*.c"):
             add(p, p.suffix == ".c", C_EXTRA_CHECKS["host_test"] if p.suffix == ".c" else (),
                 db=host_db if str(p.resolve()) in host_files else esp_db)
+        for p in sources("test/nvs_store/**/*.c", "test/nvs_store/**/*.cpp"):
+            add(p, p.suffix == ".c", C_EXTRA_CHECKS["host_test"] if p.suffix == ".c" else (),
+                db=nvs_db)
         for p in sources("components/device_proto/*.cpp", "components/device_proto/*.c",
                          "components/link_core/*.cpp", "components/link_core/services/*.cpp",
                          "components/app_fw/src/*.cpp", "components/bt_reconnect/src/*.cpp",
@@ -248,7 +256,7 @@ def main():
             for p in sources("test_apps/rtk_pure/main/*.c"):
                 add(p, True, C_EXTRA_CHECKS["app_test"], db=app_db)
 
-        files_by_db = {host_db: host_files, gnss_db: gnss_files, esp_db: esp_files,
+        files_by_db = {host_db: host_files, gnss_db: gnss_files, nvs_db: nvs_files, esp_db: esp_files,
                        app_db: app_files}
         missing = [str(j[0].relative_to(ROOT)) for j in jobs
                    if str(j[0].resolve()) not in files_by_db[j[1]]]

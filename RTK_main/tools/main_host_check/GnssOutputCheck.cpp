@@ -13,6 +13,12 @@
 #include "fw/FanoutRing.hpp"
 #include "modules/storage/StoreKeys.hpp"
 
+/** @brief 供真实存储键表引用的主机错误名。 */
+extern "C" const char *esp_err_to_name(esp_err_t error)
+{
+    return error == ESP_OK ? "OK" : "FAIL";
+}
+
 namespace {
 
 void check_impl(bool cond, const char *expr, int line) noexcept

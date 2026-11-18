@@ -23,6 +23,14 @@ static char s_ns_names[SHIM_NVS_MAX_NS][SHIM_NVS_NAME_MAX];
 static int s_ns_used[SHIM_NVS_MAX_NS];
 static shim_nvs_entry_t s_entries[SHIM_NVS_MAX_NS][SHIM_NVS_MAX_ENTRIES];
 
+/** @brief 提供启动日志用的主机替身统计。 */
+esp_err_t nvs_get_stats(const char *part_name, nvs_stats_t *stats)
+{
+    (void)part_name;
+    *stats = (nvs_stats_t){.total_entries = SHIM_NVS_MAX_ENTRIES};
+    return ESP_OK;
+}
+
 static int copy_name(char *out, const char *in)
 {
     if ((in == NULL) || (strlen(in) >= SHIM_NVS_NAME_MAX)) {

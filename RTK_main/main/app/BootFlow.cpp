@@ -11,6 +11,7 @@
 
 #include "driver/gpio.h"
 #include "esp_bt_device.h"
+#include "esp_core_dump.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "fw/Log.hpp"
@@ -110,7 +111,7 @@ app::BootResult stepPower(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 2：横幅与复位原因；PANIC/看门狗/欠压用 W 级
+ * @brief  启动步骤 2：横幅、复位原因与 flash 崩溃转储提示
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是
  */
@@ -128,6 +129,15 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
     } else {
         FW_LOGI(fw::TraceCat::kSys, "reset reason %s", name);
     }
+#if defined(CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH)
+    size_t address = 0U;
+    size_t size = 0U;
+    const esp_err_t dumpErr = esp_core_dump_image_get(&address, &size);
+    if (dumpErr == ESP_OK) {
+        // 转储大小受 64 KiB 分区限制，转换到 unsigned 安全。
+        FW_LOGW(fw::TraceCat::kSys, "Core dump found, %u bytes", static_cast<unsigned>(size));
+    }
+#endif
     return app::BootResult::kOk;
 }
 

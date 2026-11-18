@@ -11,6 +11,14 @@
 namespace app {
 struct AppContext;
 struct ModuleTestAccess;
+
+/** 目录组的启动加载计数，缺键沿用模块初值。 */
+struct StoreLoadCounts {
+    uint32_t saved = 0U;
+    uint32_t defaults = 0U;
+    uint32_t failed = 0U;
+};
+
 /** 存储模块（kLink 执行器）：SN 与白名单的 NVS 持久化与重试。 */
 class StorageModule final {
 public:
@@ -73,10 +81,10 @@ public:
     /**
      * @brief 逐个加载键表（blob 与标量分派给上面的单键函数）
      * @param keys: 键表
-     * @retval kOk: 全部成功；其他: 最后一个失败键的类型（既有语义）
+     * @retval 本组已恢复、缺省与加载失败的键数；失败键各记一条 W。
      * @note 仅 storage 任务启动期调用；非 ISR，不分配堆。
      */
-    [[nodiscard]] fw::Result loadKeys(std::span<const fw::StoreKey> keys) noexcept;
+    [[nodiscard]] StoreLoadCounts loadKeys(std::span<const fw::StoreKey> keys) noexcept;
     /**
      * @brief 逐个保存键表（blob 与标量分派给上面的单键函数）
      * @param keys: 键表
