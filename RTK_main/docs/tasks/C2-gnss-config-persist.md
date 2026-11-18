@@ -39,7 +39,11 @@ ADR-0012（Receiver/Controller 契约，尤其 §2.4 输出计划、§2.7 读回
 - 新键 `gnss/baud`（u32，取值 9600/19200/38400/57600/115200/230400/460800/921600，缺省 = Kconfig 当前值），进 `gnss.config` 组。
 - `gnss baud <n>`：接收机运行中 → 发改口波特率命令（Unicore `CONFIG COMx <n>`；u-blox CFG-VALSET UARTx BAUDRATE；ComNav 按手册）→
   主机 UART 切到新波特率 → 在新波特率上重新探测；成功后写 NVS + 自动保存；失败（探测不到）→ 切回旧波特率重新探测，NVS 不变，打印失败。
-- 启动时探测候选表把 NVS 值排在最前（缓存提示之后）。接收机端口号仍是 Kconfig `RTK_GNSS_PORT`（硬件接线），本卡不做可配置，报告注明。
+- 启动时探测候选表把 NVS 值排在最前（缓存提示之后）。
+- 端口约定（用户 2026-11-18）：`RTK_GNSS_PORT`（COM2）是接收机连到本板 ESP32 的口，保持 Kconfig、不做运行期配置；所有 gnss 命令不带端口时
+  都作用于这个口（输出、波特率、保存）。`gnss baud` 只改这个口，并且 ESP32 侧 UART 必须同步切换后再继续通信。
+- 其他 COM 口（COM1/COM3 …）不建专门命令：用户用 `gnss send <原始命令>` 经 COM2 透传配置，再 `gnss save`（或由本卡的自动保存覆盖不到时手动）落盘。
+  `gnss send` 若下发的是改 COM2 自身波特率的命令（如 `CONFIG COM2 <n>`），必须拒绝并提示改用 `gnss baud`，防止 ESP32 失联；帮助文本写明这两条。
 
 ### 1.5 统一 `gnss out`（单位 Hz）
 
