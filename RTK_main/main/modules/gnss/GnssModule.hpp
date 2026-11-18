@@ -553,6 +553,8 @@ private:
     /** 上一次已上报的未知字节计数，用于按增量输出 `GNSS N unknown bytes dropped`（§2.11）。 */
     uint32_t prev_unknown_bytes_ = 0U;
     ::gnss::Hint hint_{};
+    /** 探测命中后置位，首次回到 kRunning（配置与输出阶段都完成）时保存提示并清零。 */
+    bool detect_pending_ = false;
     std::optional<::gnss::Timing> timing_{};
     std::optional<::gnss::RoverConfig> rover_cfg_{};
     data::GnssOutConfig out_cfg_{};

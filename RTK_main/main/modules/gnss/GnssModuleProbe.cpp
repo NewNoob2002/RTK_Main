@@ -321,7 +321,10 @@ void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur)
         step_idx_ = 0U;
         step_retry_ = 0U;
         step_sent_once_ = false;
-    } else if ((prev == ::gnss::State::kConfiguring) && (cur == ::gnss::State::kRunning)) {
+        detect_pending_ = true;
+    } else if ((cur == ::gnss::State::kRunning) && detect_pending_) {
+        // 探测后要经过 kConfiguring → kOutput → kRunning，只看 configuring→running 会漏掉（P3b 起）。
+        detect_pending_ = false;
         if (step_sent_once_) {
             traceGnss(GnssTrace::kStepAck, step_idx_, 0U);
         }
