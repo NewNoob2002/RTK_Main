@@ -16,6 +16,7 @@
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 #include "cli/Out.hpp"
 #include "fw/Trace.hpp" // FW_TRACE_ENABLED
 #include "modules/storage/StoreCatalog.hpp"
@@ -116,11 +117,20 @@ void showBuild() noexcept
                  CONFIG_RTK_CONSOLE_UART_BAUD);
     cli::printKv("trace", "%s", FW_TRACE_ENABLED ? "compiled in" : "compiled out");
 #if RTK_GNSS_ENABLED
-    cli::printKv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", CONFIG_RTK_GNSS_UART_NUM,
-                 CONFIG_RTK_GNSS_RX_GPIO, CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_DEFAULT_BAUD);
-    cli::printKv("gnss_power", "GPIO%d active %s", CONFIG_RTK_GNSS_POWER_GPIO,
-                 (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0) ? "high" : "low");
-    cli::printKv("gnss_port", "COM%d", CONFIG_RTK_GNSS_PORT);
+    if (appContext().boardProfile == nullptr) {
+        cli::printKv("gnss", "board unknown");
+        return;
+    }
+    const auto &pins = board::current().gnss;
+    cli::printKv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", pins.uart, pins.rxGpio,
+                 pins.txGpio, CONFIG_RTK_GNSS_DEFAULT_BAUD);
+    if (pins.powerGpio >= 0) {
+        cli::printKv("gnss_power", "GPIO%d active %s", pins.powerGpio,
+                     pins.powerActiveHigh ? "high" : "low");
+    } else {
+        cli::printKv("gnss_power", "none");
+    }
+    cli::printKv("gnss_port", "COM%d", board::gnssReceiverPort());
 #else
     cli::printKv("gnss", "disabled");
 #endif

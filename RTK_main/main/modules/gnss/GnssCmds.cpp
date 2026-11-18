@@ -18,6 +18,7 @@
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
 #include "data/GnssOutput.hpp"
@@ -294,7 +295,7 @@ int cmdGnssSend(void * /*ctx*/, int argc, char **argv) noexcept
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     const auto *command = reinterpret_cast<const char *>(cmd.args.data());
     const std::string_view text{command, pos};
-    if (detail::changesConnectedGnssBaud(text, CONFIG_RTK_GNSS_PORT)) {
+    if (detail::changesConnectedGnssBaud(text, board::gnssReceiverPort())) {
         return cli::fail("use gnss baud for the connected port");
     }
     cmd.argLen = static_cast<uint8_t>(pos);

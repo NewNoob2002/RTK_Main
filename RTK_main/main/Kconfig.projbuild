@@ -1,5 +1,19 @@
 menu "RTK_main"
 
+    choice RTK_BOARD
+        prompt "Board profile"
+        default RTK_BOARD_AUTO
+
+        config RTK_BOARD_AUTO
+            bool "Identify using GPIO35"
+
+        config RTK_BOARD_FORCE_E1_DEVKIT
+            bool "Force E1 DevKit (bench only)"
+
+        config RTK_BOARD_FORCE_P2_V141
+            bool "Force P2 v1.41 (bench only)"
+    endchoice
+
     choice RTK_LINK_POLICY
         prompt "SPP link policy"
         default RTK_LINK_POLICY_CONCURRENT
@@ -60,7 +74,7 @@ menu "RTK_main"
         string "Force a boot step to fail (HIL only, R8a)"
         default ""
         help
-            仅用于台架验证启动降级路径：填步骤名（power/banner/contexts/console/alloc/bind/seal/
+            仅用于台架验证启动降级路径：填步骤名（identify/power/banner/earlyConfig/contexts/console/alloc/bind/seal/
             debug/storage/system/link/io/started）时该步不执行并返回失败，原因记为 ``fault:<step>``。
             留空即正常启动。不得在产品固件中填写。
 
@@ -95,29 +109,6 @@ menu "RTK_main"
             range 1 2
             default 2
 
-        config RTK_GNSS_RX_GPIO
-            int "ESP32 RX GPIO (module TX)"
-            depends on RTK_GNSS_ENABLE
-            range 0 39
-            default 16
-
-        config RTK_GNSS_TX_GPIO
-            int "ESP32 TX GPIO (module RX)"
-            depends on RTK_GNSS_ENABLE
-            range 0 33
-            default 17
-
-        config RTK_GNSS_POWER_GPIO
-            int "Module power control GPIO (-1 = none)"
-            depends on RTK_GNSS_ENABLE
-            range -1 33
-            default 25
-
-        config RTK_GNSS_POWER_ACTIVE_HIGH
-            bool "Power GPIO active high"
-            depends on RTK_GNSS_ENABLE
-            default y
-
         config RTK_GNSS_DEFAULT_BAUD
             int "Default module baud rate (first probe, no NVS record)"
             depends on RTK_GNSS_ENABLE
@@ -125,7 +116,7 @@ menu "RTK_main"
             default 115200
 
         config RTK_GNSS_PORT
-            int "Module-side port number wired to ESP32 (UM980 COM2 = 2)"
+            int "E1 bench receiver port wired to ESP32 (UM980 COM2 = 2)"
             depends on RTK_GNSS_ENABLE
             range 1 3
             default 2

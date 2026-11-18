@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
 #include "demux/decoders/Nmea.hpp"
@@ -255,7 +256,7 @@ void GnssModule::sendRaw(const fw::Command &cmd, fw::CommandResult &result) noex
     const std::string_view text{command, cmd.argLen};
     if (text.find_first_of("\r\n") != std::string_view::npos ||
         text.find('\0') != std::string_view::npos ||
-        detail::changesConnectedGnssBaud(text, CONFIG_RTK_GNSS_PORT)) {
+        detail::changesConnectedGnssBaud(text, board::gnssReceiverPort())) {
         result.status = fw::Result::kInvalidArg;
         return;
     }

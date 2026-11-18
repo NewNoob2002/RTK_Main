@@ -19,6 +19,10 @@
 
 namespace app {
 
+namespace board {
+struct Profile;
+}
+
 /** 执行器非栈控制块存储（TCB 与命令/结果静态队列）；任务栈由启动期 boot_alloc 外供（ADR-0011 §7）。 */
 template <size_t QueueDepth> struct ExecutorControlStorage {
     static_assert(QueueDepth > 0U, "queue depth must be > 0");
@@ -88,6 +92,7 @@ struct AppContext {
 
     rtos::BootArena bootArena{};
     BootConfig bootConfig{};
+    const board::Profile *boardProfile = nullptr; // 启动任务发布，之后只读。
     std::atomic<BootPhase> bootPhase{};
     std::atomic<uint32_t> bootArrived{};
     std::atomic<uint32_t> bootStopped{};

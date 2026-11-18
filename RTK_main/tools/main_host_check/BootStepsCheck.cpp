@@ -215,6 +215,34 @@ void testRecordBounds() noexcept
     CHECK(std::string_view{app::bootResultName(app::BootResult::kFail)} == "fail");
 }
 
+/**
+ * @brief 用生产表验证启动顺序以及识别失败后停止后续步骤
+ * @note 单线程主机测试，非 ISR。
+ */
+void testIdentifyFailure() noexcept
+{
+    resetFake();
+#define BOOT_STEP(name, fn, policy) app::BootStep{#name, &stepOk, app::OnFail::policy},
+    std::array steps{
+#include "app/BootStepList.inc"
+    };
+#undef BOOT_STEP
+    CHECK(steps.size() == 15U);
+    CHECK(std::string_view{steps[0].name} == "identify");
+    CHECK(std::string_view{steps[1].name} == "power");
+    CHECK(std::string_view{steps[2].name} == "banner");
+    CHECK(std::string_view{steps[3].name} == "earlyConfig");
+    steps[0].fn = &stepFail;
+    std::array<app::BootRecord, app::kMaxBootSteps> records{};
+    app::BootCtx ctx{};
+    ctx.hooks = &kFakeHooks;
+    CHECK(app::runBootSteps(steps, ctx, records) == 1U);
+    CHECK(records[0].result == app::BootResult::kFail);
+    CHECK(records[1].result == app::BootResult::kPending);
+    CHECK(s_fake.degradeCalls == 1U);
+    CHECK(s_fake.calls[0] == 0U);
+}
+
 } // namespace
 
 int main()
@@ -224,6 +252,7 @@ int main()
     testContinueKeepsGoing();
     testFaultInjection();
     testRecordBounds();
+    testIdentifyFailure();
     if (s_failures != 0) {
         std::printf("boot_steps_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;

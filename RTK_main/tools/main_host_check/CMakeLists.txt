@@ -134,6 +134,8 @@ add_test(NAME template_module COMMAND template_check template_module)
 
 add_executable(gnss_output_check GnssOutputCheck.cpp
     GnssResetCheck.cpp
+    ${PROJ_ROOT}/main/board/BoardCurrent.cpp
+    ${PROJ_ROOT}/main/board/BoardProfile.cpp
     ${PROJ_ROOT}/main/data/GnssOutput.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssBaseConfig.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssWorkMode.cpp
@@ -159,8 +161,7 @@ target_include_directories(gnss_output_check PRIVATE ../t13_host_check/shim/inc
 target_compile_options(gnss_output_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 target_compile_definitions(gnss_output_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1 CONFIG_RTK_LOG_RING_BYTES=4096
-    CONFIG_RTK_GNSS_UART_NUM=2 CONFIG_RTK_GNSS_RX_GPIO=16 CONFIG_RTK_GNSS_TX_GPIO=17
-    CONFIG_RTK_GNSS_POWER_GPIO=-1 CONFIG_RTK_GNSS_PORT=2 CONFIG_RTK_GNSS_DEFAULT_BAUD=115200
+    CONFIG_RTK_GNSS_UART_NUM=2 CONFIG_RTK_GNSS_PORT=2 CONFIG_RTK_GNSS_DEFAULT_BAUD=115200
     CONFIG_RTK_GNSS_RATE_HZ=1)
 target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim main_rtos gnss)
 add_test(NAME gnss_output COMMAND gnss_output_check)
@@ -231,3 +232,11 @@ target_include_directories(boot_steps_check PRIVATE ${PROJ_ROOT}/main)
 target_compile_options(boot_steps_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 add_test(NAME boot_steps COMMAND boot_steps_check)
+
+add_executable(board_profile_check BoardProfileCheck.cpp ${PROJ_ROOT}/main/board/BoardProfile.cpp)
+target_include_directories(board_profile_check PRIVATE ${PROJ_ROOT}/main)
+target_compile_definitions(board_profile_check PRIVATE CONFIG_RTK_GNSS_UART_NUM=2)
+target_compile_options(board_profile_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
+    -Wimplicit-fallthrough -Wswitch-default -Wundef)
+add_test(NAME board_profile_check COMMAND board_profile_check)

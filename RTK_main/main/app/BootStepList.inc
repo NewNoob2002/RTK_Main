@@ -1,0 +1,17 @@
+// 生产启动步骤顺序和失败策略，主机测试用相同表项代入替身。
+// 本文件只声明步骤，调用线程约束见 BootSteps.hpp。
+BOOT_STEP(identify, stepIdentify, kDegrade)
+BOOT_STEP(power, stepPower, kDegrade)
+BOOT_STEP(banner, stepBanner, kDegrade)
+BOOT_STEP(earlyConfig, stepEarlyConfig, kDegrade)
+BOOT_STEP(contexts, stepContexts, kDegrade)
+BOOT_STEP(console, stepConsole, kDegrade)
+BOOT_STEP(alloc, stepAlloc, kDegrade)
+BOOT_STEP(bind, stepBind, kDegrade)
+BOOT_STEP(seal, stepSeal, kDegrade)
+BOOT_STEP(debug, stepDebug, kDegrade)
+BOOT_STEP(storage, stepStorage, kDegrade)
+BOOT_STEP(system, stepSystem, kDegrade)
+BOOT_STEP(link, stepLink, kDegrade)
+BOOT_STEP(io, stepIo, kDegrade)
+BOOT_STEP(started, stepStarted, kDegrade)

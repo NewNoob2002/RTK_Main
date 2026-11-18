@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
 #include "demux/decoders/Nmea.hpp"
@@ -52,7 +53,7 @@ fw::Result GnssModule::initObjects() noexcept
     if (!gsv_loaded_) {
         cfg.gsv = true;
     }
-    cfg.port = static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT);
+    cfg.port = board::gnssReceiverPort();
     cfg.useConfiguredPort = true;
     if (!out_cfg_.isValid()) {
         out_cfg_ = data::GnssOutConfig::defaults();
@@ -97,8 +98,7 @@ fw::Result GnssModule::startController() noexcept
     const ::gnss::Timing &clock = *timing_;
     const std::span<const ::gnss::Receiver *const> receivers = ::gnss::enabledReceivers();
     // 输出计划是唯一来源（ADR-0012 §2.4）：先按默认值给一份，探测到型号后再按 caps 重算。
-    controller().setOutputPlan(data::makeOutputPlan(
-        out_cfg_, cfg.rateHz, cfg.gsv, static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT), 0U));
+    controller().setOutputPlan(data::makeOutputPlan(out_cfg_, cfg.rateHz, cfg.gsv, cfg.port, 0U));
     if (hint_.baud == 0U) {
         hint_.baud = preferred_baud_;
     }
@@ -150,8 +150,12 @@ fw::Result GnssModule::init() noexcept
 
 fw::Result GnssModule::initUart() noexcept
 {
-    // Kconfig UART 号限制为 0..2，缓冲区常量均小于 INT_MAX，三处转换安全。
-    const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
+    const auto &pins = board::current().gnss;
+    if (pins.uart != CONFIG_RTK_GNSS_UART_NUM) {
+        return fw::Result::kInvalidState;
+    }
+    // UART 号已验证，缓冲区常量均小于 INT_MAX，三处转换安全。
+    const auto port = static_cast<uart_port_t>(pins.uart);
     const esp_err_t drvErr = uart_driver_install(port, static_cast<int>(kUartRxBufBytes),
                                                  static_cast<int>(kUartTxBufBytes), 0, nullptr, 0);
     if (drvErr != ESP_OK) {
@@ -174,21 +178,23 @@ fw::Result GnssModule::initUart() noexcept
     if (cfgErr != ESP_OK) {
         return initFailed(toResult(rtos::fromEspErr(cfgErr)));
     }
-    const esp_err_t pinErr = uart_set_pin(port, CONFIG_RTK_GNSS_TX_GPIO, CONFIG_RTK_GNSS_RX_GPIO,
-                                          UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    const esp_err_t pinErr =
+        uart_set_pin(port, pins.txGpio, pins.rxGpio, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (pinErr != ESP_OK) {
         return initFailed(toResult(rtos::fromEspErr(pinErr)));
     }
-#if CONFIG_RTK_GNSS_POWER_GPIO >= 0
-    // Kconfig GPIO 限制为 0..39，枚举转换与 64 位移位安全。
-    const auto powerPin = static_cast<gpio_num_t>(CONFIG_RTK_GNSS_POWER_GPIO);
-    const uint32_t offLevel = (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0) ? 0U : 1U;
+    if (pins.powerGpio < 0) {
+        return fw::Result::kOk;
+    }
+    // 配置表中的电源脚是已核实的输出 GPIO，枚举与位掩码转换安全。
+    const auto powerPin = static_cast<gpio_num_t>(pins.powerGpio);
+    const uint32_t offLevel = pins.powerActiveHigh ? 0U : 1U;
     const esp_err_t levelErr = gpio_set_level(powerPin, offLevel);
     if (levelErr != ESP_OK) {
         return initFailed(toResult(rtos::fromEspErr(levelErr)));
     }
     gpio_config_t powerCfg{};
-    powerCfg.pin_bit_mask = 1ULL << static_cast<unsigned>(CONFIG_RTK_GNSS_POWER_GPIO);
+    powerCfg.pin_bit_mask = 1ULL << static_cast<unsigned>(pins.powerGpio);
     powerCfg.mode = GPIO_MODE_OUTPUT;
     powerCfg.pull_up_en = GPIO_PULLUP_DISABLE;
     powerCfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -197,7 +203,6 @@ fw::Result GnssModule::initUart() noexcept
     if (gpioErr != ESP_OK) {
         return initFailed(toResult(rtos::fromEspErr(gpioErr)));
     }
-#endif
     return fw::Result::kOk;
 }
 

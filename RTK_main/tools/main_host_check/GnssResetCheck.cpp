@@ -8,7 +8,9 @@
 #include <string_view>
 
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 #include "def/GnssSubDef.hpp"
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssKeys.hpp"
@@ -30,6 +32,9 @@ uint32_t s_hostBaud = 0;
 uint32_t s_receiverBaud = 460800;
 uint32_t s_readyAt = 0;
 unsigned s_baudCommands = 0;
+unsigned s_gpioChanges = 0;
+unsigned s_gpioConfigs = 0;
+bool s_p2 = false;
 unsigned s_saveCommands = 0;
 unsigned s_fresetCommands = 0;
 unsigned s_modeBaseCommands = 0;
@@ -69,12 +74,15 @@ fw::CommandResult command(uint8_t verb, std::span<const uint8_t> args = {})
     return result;
 }
 
-void startModule(nvs_handle_t handle, uint32_t preferred, bool applyBaud)
+void startModule(nvs_handle_t handle, uint32_t preferred, bool applyBaud, bool p2 = false)
 {
     s_rx.clear();
     s_readyAt = 0U;
     s_receiverBaud = 460800U;
     s_baudCommands = 0U;
+    s_gpioChanges = 0U;
+    s_gpioConfigs = 0U;
+    s_p2 = p2;
     s_saveCommands = 0U;
     s_applyBaud = applyBaud;
     CHECK(nvs_set_u32(handle, "baud", preferred) == ESP_OK);
@@ -93,8 +101,13 @@ void startModule(nvs_handle_t handle, uint32_t preferred, bool applyBaud)
     CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
     s_context->bootConfig.gnssBaud = preferred;
     s_context->bootConfig.userNvsReady = true;
+    const auto id = p2 ? app::board::BoardId::kP2V141 : app::board::BoardId::kE1DevKit;
+    s_context->boardProfile = app::board::byId(id);
+    CHECK(s_context->boardProfile != nullptr);
     CHECK(fw::isOk(s_context->gnss.init()));
     CHECK(s_hostBaud == preferred);
+    CHECK(s_gpioConfigs == (p2 ? 0U : 1U));
+    CHECK(s_gpioChanges == (p2 ? 0U : 1U));
     CHECK(fw::isOk(s_context->gnss.start()));
 }
 
@@ -143,6 +156,25 @@ extern "C" void vTaskDelay(TickType_t ticks)
     s_now += ticks;
 }
 
+/** @brief 验证 E1 电源只驱动 GPIO25。 */
+esp_err_t gpio_set_level(gpio_num_t gpio, uint32_t level)
+{
+    CHECK(!s_p2 && gpio == 25 && level <= 1U);
+    if (s_gpioChanges == 0U) {
+        CHECK(level == 0U);
+    }
+    ++s_gpioChanges;
+    return ESP_OK;
+}
+
+/** @brief 验证 E1 GPIO25 的输出配置。 */
+esp_err_t gpio_config(const gpio_config_t *config)
+{
+    CHECK(!s_p2 && config->pin_bit_mask == (1ULL << 25U) && config->mode == GPIO_MODE_OUTPUT);
+    ++s_gpioConfigs;
+    return ESP_OK;
+}
+
 esp_err_t uart_set_baudrate(uart_port_t, uint32_t baud)
 {
     s_hostBaud = baud;
@@ -172,14 +204,16 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
     if (s_hostBaud != s_receiverBaud || s_now < s_readyAt) {
         return static_cast<int>(len);
     }
+    const std::string_view baudDefault = s_p2 ? "CONFIG COM1 115200\r\n" : "CONFIG COM2 115200\r\n";
+    const std::string_view baudFast = s_p2 ? "CONFIG COM1 460800\r\n" : "CONFIG COM2 460800\r\n";
     if (bytes == "FRESET\r\n") {
         ++s_fresetCommands;
         s_readyAt = s_now + 3500U;
         s_receiverBaud = 115200U;
-    } else if (bytes == "CONFIG COM2 115200\r\n" || bytes == "CONFIG COM2 460800\r\n") {
+    } else if (bytes == baudDefault || bytes == baudFast) {
         ++s_baudCommands;
         if (s_applyBaud) {
-            s_receiverBaud = bytes == "CONFIG COM2 115200\r\n" ? 115200U : 460800U;
+            s_receiverBaud = bytes == baudDefault ? 115200U : 460800U;
             s_expectBaudSave = true;
         }
     } else if (bytes == "VERSIONA\r\n") {
@@ -434,9 +468,10 @@ void testBaseKeysAndCommandDispatch()
     CHECK(fw::isOk(s_context->rtcmPipe.bindStorage(pipe)));
     s_context->gnss.writeBaseConfig(app::GnssBaseConfig::defaults());
     CHECK(fw::isOk(s_context->storage.saveKeys(app::gnss_store::kBaseKeys)));
-    startModule(nvs, 115200U, true);
+    startModule(nvs, 115200U, true, true);
     advance(3000U);
     testConsoleCommandDispatch(nvs);
+    CHECK(s_gpioConfigs == 0U && s_gpioChanges == 0U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     nvs_close(nvs);
 }

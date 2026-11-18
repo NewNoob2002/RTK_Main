@@ -11,6 +11,7 @@
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 #include "cli/Out.hpp"
 #include "modules/rtcm/RtcmModule.hpp"
 #include "support/ConsoleSupport.hpp"
@@ -120,6 +121,8 @@ void printSysSection() noexcept
     const uint64_t uptimeMs = (uptimeUs >= 0) ? (static_cast<uint64_t>(uptimeUs) / kUsPerMs) : 0ULL;
 
     cli::printSection("sys");
+    const auto *profile = appContext().boardProfile;
+    cli::printKv("board", "%s", profile != nullptr ? profile->name : "unknown");
     cli::printKv("uptime", "%" PRIu64 " ms", uptimeMs);
     cli::printKv("heap_free", "%" PRIu32 " B (%llu.%llu KB)", system.freeHeap,
                  static_cast<unsigned long long>(freeKib / kTenthsPerUnit),
@@ -206,6 +209,8 @@ void printStatusSys(const SystemStatus &system, const rtos::ExecStats &exec) noe
     const uint64_t freeKib = kibTenths(system.freeHeap);
     const uint64_t minKib = kibTenths(system.minFreeHeap);
     cli::printSection("sys");
+    const auto *profile = appContext().boardProfile;
+    cli::printKv("board", "%s", profile != nullptr ? profile->name : "unknown");
     cli::printKv("heap", "free=%llu.%llu KB  min=%llu.%llu KB",
                  static_cast<unsigned long long>(freeKib / kTenthsPerUnit),
                  static_cast<unsigned long long>(freeKib % kTenthsPerUnit),

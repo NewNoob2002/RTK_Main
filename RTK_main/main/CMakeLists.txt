@@ -1,6 +1,6 @@
 # 组合根与组件注册（ADR-0002 §4）。C 驱动 + C++ 应用（ADR-0003）。
 # esp_hw_support：esp_read_mac；esp_system：复位原因/堆/TWDT；console：UART0 REPL。
-# esp_driver_gpio：用户授权的 GPIO26 电源保持。esp_driver_uart：debug 模块整行写控制台 UART。
+# esp_adc / esp_driver_gpio：板型识别与电源保持。esp_driver_uart：控制台与 GNSS。
 # 模块源码按目录发现；IDF 的依赖扫描以脚本模式运行，不能使用 CONFIGURE_DEPENDS。
 if(NOT CMAKE_SCRIPT_MODE_FILE)
     file(GLOB_RECURSE module_sources CONFIGURE_DEPENDS "modules/*.cpp")
@@ -24,6 +24,9 @@ idf_component_register(
          "app/BootSteps.cpp"
          "app/ConsoleSetup.cpp"
          "app/Executors.cpp"
+         "board/BoardCurrent.cpp"
+         "board/BoardProfile.cpp"
+         "board/BoardStartup.cpp"
          "data/AppData.cpp"
          "data/GnssOutput.cpp"
          "support/ConsoleSupport.cpp"
@@ -31,7 +34,7 @@ idf_component_register(
          ${module_sources}
     INCLUDE_DIRS "."
     PRIV_INCLUDE_DIRS "../components/link_core/private_include"
-    PRIV_REQUIRES espcoredump
+    PRIV_REQUIRES espcoredump esp_adc
     REQUIRES app_fw device_proto link_core rtos spp_server nvs_store cli stream_demux gnss console esp_system esp_hw_support esp_driver_gpio esp_driver_uart freertos log)
 
 # IDF 宏会触发 -Wold-style-cast/-Wconversion/-Wundef，本项目对其他依赖 IDF 的组件

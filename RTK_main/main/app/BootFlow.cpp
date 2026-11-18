@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
+#include <string_view>
 
-#include "driver/gpio.h"
 #include "esp_bt_device.h"
 #include "esp_core_dump.h"
 #include "esp_err.h"
@@ -21,6 +21,8 @@
 #include "app/BootBuffers.hpp"
 #include "app/BootReport.hpp"
 #include "app/BootReasons.hpp"
+#include "board/BoardProfile.hpp"
+#include "board/BoardStartup.hpp"
 #include "core/Types.hpp"
 #include "support/ConsoleSupport.hpp"
 #include "support/ResetReason.hpp"
@@ -71,47 +73,39 @@ app::BootHeap heapHook() noexcept
     return heap;
 }
 
-/**
- * @brief  拉高电源保持脚，松开按键后仍保持供电
- * @retval true 成功；false GPIO 配置失败（已记 E 级日志）
- */
-bool enablePowerHold() noexcept
-{
-    // 保留基线 GPIO26 高有效的电源保持逻辑；本任务不执行硬件动作。
-    const esp_err_t levelErr = gpio_set_level(GPIO_NUM_26, 1U);
-    if (levelErr != ESP_OK) {
-        FW_LOGE(fw::TraceCat::kSys, "power hold level failed: %s", esp_err_to_name(levelErr));
-        return false;
-    }
-    gpio_config_t powerHold{};
-    powerHold.pin_bit_mask = 1ULL << GPIO_NUM_26;
-    powerHold.mode = GPIO_MODE_OUTPUT;
-    powerHold.pull_up_en = GPIO_PULLUP_DISABLE;
-    powerHold.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    powerHold.intr_type = GPIO_INTR_DISABLE;
-    const esp_err_t powerErr = gpio_config(&powerHold);
-    if (powerErr != ESP_OK) {
-        FW_LOGE(fw::TraceCat::kSys, "power hold init failed: %s", esp_err_to_name(powerErr));
-        return false;
-    }
-    return true;
-}
-
 // NOLINTBEGIN(misc-const-correctness): step* 的 BootCtx & 形参由 BootStep::fn 签名固定
 /**
- * @brief  启动步骤 1：安装日志直写通道（此后启动日志带时间戳与类别），再做电源保持
- * @param  ctx: 启动上下文（未用）
- * @retval kOk 成功；kFail 电源保持失败
+ * @brief 安装日志直写通道、识别板型并设置安全输出
+ * @param ctx: 启动上下文，本步不修改
+ * @retval kOk 识别完成
+ * @retval kFail 识别或初始化失败
+ * @note 仅启动任务，非 ISR。
+ */
+app::BootResult stepIdentify(app::BootCtx &ctx) noexcept
+{
+    static_cast<void>(ctx);
+    static_cast<void>(app::installDirectLog()); // 重复安装时原通道仍可用。
+    return fw::isOk(app::board::identify(app::appContext().boardProfile)) ? app::BootResult::kOk
+                                                                          : app::BootResult::kFail;
+}
+
+/**
+ * @brief 按已识别板型执行电源保持
+ * @param ctx: 启动上下文，本步不修改
+ * @retval kOk 电源保持成功或无需保持
+ * @retval kFail 电源保持失败
+ * @note 仅启动任务，可阻塞，非 ISR。
  */
 app::BootResult stepPower(app::BootCtx &ctx) noexcept
 {
-    (void)ctx;
-    (void)app::installDirectLog(); // 只会因重复安装失败，此时已有通道可用
-    return enablePowerHold() ? app::BootResult::kOk : app::BootResult::kFail;
+    static_cast<void>(ctx);
+    return fw::isOk(app::board::enablePowerHold(app::board::current().powerHold))
+               ? app::BootResult::kOk
+               : app::BootResult::kFail;
 }
 
 /**
- * @brief  启动步骤 2：横幅、复位原因与 flash 崩溃转储提示
+ * @brief  启动步骤：横幅、复位原因与 flash 崩溃转储提示
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是
  */
@@ -123,6 +117,7 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
     // 版本串短于 int 上限，精度转换安全。
     FW_LOGI(fw::TraceCat::kSys, "E1-Lite RTK_main %.*s", static_cast<int>(app::kAppVersion.size()),
             app::kAppVersion.data());
+    FW_LOGI(fw::TraceCat::kSys, "board %s", app::board::current().name);
     if ((reason == ESP_RST_PANIC) || (reason == ESP_RST_INT_WDT) || (reason == ESP_RST_TASK_WDT) ||
         (reason == ESP_RST_BROWNOUT)) {
         FW_LOGW(fw::TraceCat::kSys, "reset reason %s", name);
@@ -154,7 +149,7 @@ app::BootResult stepEarlyConfig(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 3：绑定数据主题共享锁与执行器指针（启动顺序：contexts 先于 console）
+ * @brief  启动步骤：绑定数据主题共享锁与执行器指针（启动顺序：contexts 先于 console）
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是
  */
@@ -172,7 +167,7 @@ app::BootResult stepContexts(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 4：只建立控制台输出通道并登记命令，不放行 REPL
+ * @brief  启动步骤：只建立控制台输出通道并登记命令，不放行 REPL
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 成功；kFail 控制台初始化失败
  * @note   REPL 到 boot() 末尾才 run：此前提示符/IDF 提示语若先出现，会与后续各步骤日志交错。
@@ -185,7 +180,7 @@ app::BootResult stepConsole(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 5：按固定 owner 顺序一次性分配数据通路与栈缓冲
+ * @brief  启动步骤：按固定 owner 顺序一次性分配数据通路与栈缓冲
  * @param  ctx: 启动上下文（读写 user/reason）
  * @retval kOk 成功；kFail 分配失败（原因已写 ctx.reason，未封存可回滚）
  */
@@ -202,7 +197,7 @@ app::BootResult stepAlloc(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 6：把缓冲交给各 C 驱动；失败时按 ADR-0011 §7 语义回滚已绑定部分
+ * @brief  启动步骤：把缓冲交给各 C 驱动；失败时按 ADR-0011 §7 语义回滚已绑定部分
  * @param  ctx: 启动上下文（读写 user/reason）
  * @retval kOk 成功；kFail 绑定失败
  */
@@ -219,7 +214,7 @@ app::BootResult stepBind(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 7：封存分配器；失败时回滚绑定（SEALED 后无法释放块）
+ * @brief  启动步骤：封存分配器；失败时回滚绑定（SEALED 后无法释放块）
  * @param  ctx: 启动上下文（读 user，写 reason）
  * @retval kOk 成功；kFail 封存失败
  */
@@ -235,7 +230,7 @@ app::BootResult stepSeal(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 8：安装 trace 全局 sink（编译关闭时记 kSkipped，不从表里删除）
+ * @brief  启动步骤：安装 trace 全局 sink（编译关闭时记 kSkipped，不从表里删除）
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 成功；kSkipped 未编译 trace；kFail sink 安装失败
  */
@@ -255,7 +250,7 @@ app::BootResult stepDebug(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 9：加载 NVS/SN；必须先于 BT 初始化，执行器再次 init 时为幂等
+ * @brief  启动步骤：加载 NVS/SN；必须先于 BT 初始化，执行器再次 init 时为幂等
  * @param  ctx: 启动上下文（写 reason）
  * @retval kOk 成功；kFail 存储初始化失败
  */
@@ -269,7 +264,7 @@ app::BootResult stepStorage(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 10：系统模块准备（SN/蓝牙名/策略，写 systemStatus）
+ * @brief  启动步骤：系统模块准备（SN/蓝牙名/策略，写 systemStatus）
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是；失败不可恢复，交由后续步骤暴露
  */
@@ -298,7 +293,7 @@ void markTraceLaunched(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 11：链路执行器初始化、启动并等待首批模块就绪
+ * @brief  启动步骤：链路执行器初始化、启动并等待首批模块就绪
  * @param  ctx: 启动上下文（读写 launched/reason/stopRequired）
  * @retval kOk 成功；kFail 启动失败（需停机回滚）
  */
@@ -317,7 +312,7 @@ app::BootResult stepLink(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 12：IO 执行器（GNSS）；编译关闭时记 kSkipped
+ * @brief  启动步骤：IO 执行器（GNSS）；编译关闭时记 kSkipped
  * @param  ctx: 启动上下文（读写 launched/reason）
  * @retval kOk 成功；kFail 启动失败；kSkipped 未编译 GNSS
  */
@@ -338,7 +333,7 @@ app::BootResult stepIo(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 13：等待全部消费者到达启动屏障并放行
+ * @brief  启动步骤：等待全部消费者到达启动屏障并放行
  * @param  ctx: 启动上下文（读写 reason/stopRequired）
  * @retval kOk 成功；kFail 屏障等待失败
  */
@@ -363,22 +358,13 @@ app::BootResult stepStarted(app::BootCtx &ctx) noexcept
 }
 // NOLINTEND(misc-const-correctness)
 
-constexpr std::array<app::BootStep, 14U> kBootSteps{{
-    {"power", &stepPower, app::OnFail::kDegrade},
-    {"banner", &stepBanner, app::OnFail::kDegrade},
-    {"earlyConfig", &stepEarlyConfig, app::OnFail::kDegrade},
-    {"contexts", &stepContexts, app::OnFail::kDegrade},
-    {"console", &stepConsole, app::OnFail::kDegrade},
-    {"alloc", &stepAlloc, app::OnFail::kDegrade},
-    {"bind", &stepBind, app::OnFail::kDegrade},
-    {"seal", &stepSeal, app::OnFail::kDegrade},
-    {"debug", &stepDebug, app::OnFail::kDegrade},
-    {"storage", &stepStorage, app::OnFail::kDegrade},
-    {"system", &stepSystem, app::OnFail::kDegrade},
-    {"link", &stepLink, app::OnFail::kDegrade},
-    {"io", &stepIo, app::OnFail::kDegrade},
-    {"started", &stepStarted, app::OnFail::kDegrade},
-}};
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): 与 BootStepsCheck 共用生产步骤表。
+#define BOOT_STEP(name, fn, policy) app::BootStep{#name, &(fn), app::OnFail::policy},
+constexpr std::array kBootSteps{
+#include "app/BootStepList.inc"
+};
+#undef BOOT_STEP
+static_assert(kBootSteps.size() <= app::kMaxBootSteps);
 
 constinit std::array<app::BootRecord, std::size(kBootSteps)> s_boot_records{};
 size_t s_boot_executed{};
@@ -487,7 +473,9 @@ void AppContext::boot() noexcept
     ctx.faultStep = kFaultStep;
     s_boot_executed = runBootSteps(kBootSteps, ctx, s_boot_records);
     const auto executed = std::span{s_boot_records}.first(s_boot_executed);
+    bool consoleReached = false;
     for (const BootRecord &record : executed) {
+        consoleReached = consoleReached || std::string_view{record.name} == "console";
         if (record.result != BootResult::kFail) {
             continue;
         }
@@ -496,6 +484,10 @@ void AppContext::boot() noexcept
                     record.reason);
         } else {
             FW_LOGE(fw::TraceCat::kSys, "boot step %s failed, console-only", record.name);
+        }
+        // 早于 console 的失败也要提供 USB 供电下的诊断；不重新执行业务初始化。
+        if (!consoleReached && !initConsole()) {
+            return;
         }
         attachDebugLog();
         runConsole(); // 降级同样放行 REPL：console-only 阶段仍可用诊断命令

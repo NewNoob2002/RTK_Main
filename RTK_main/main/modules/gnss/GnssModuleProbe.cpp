@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
 #include "demux/decoders/Nmea.hpp"
@@ -258,15 +259,14 @@ void GnssModule::persistProbeHint() noexcept
 
 fw::Result GnssModule::applyPower(bool on) noexcept
 {
-#if CONFIG_RTK_GNSS_POWER_GPIO >= 0
-    const auto powerPin = static_cast<gpio_num_t>(CONFIG_RTK_GNSS_POWER_GPIO);
-    const bool activeHigh = (CONFIG_RTK_GNSS_POWER_ACTIVE_HIGH != 0);
-    const uint32_t level = (on == activeHigh) ? 1U : 0U;
+    const auto &pins = board::current().gnss;
+    if (pins.powerGpio < 0) {
+        return fw::Result::kOk;
+    }
+    // 非负的电源脚由板型表限定为已核实的输出 GPIO。
+    const auto powerPin = static_cast<gpio_num_t>(pins.powerGpio);
+    const uint32_t level = (on == pins.powerActiveHigh) ? 1U : 0U;
     return toResult(rtos::fromEspErr(gpio_set_level(powerPin, level)));
-#else
-    static_cast<void>(on);
-    return fw::Result::kOk;
-#endif
 }
 
 fw::Result GnssModule::applyBaud(uint32_t baud) noexcept
@@ -293,8 +293,7 @@ fw::Result GnssModule::applyBaud(uint32_t baud) noexcept
         gsv = rover_cfg_->gsv;
     }
     const uint32_t caps = controller().detected().caps;
-    return data::makeOutputPlan(out_cfg_, rateHz, gsv, static_cast<uint8_t>(CONFIG_RTK_GNSS_PORT),
-                                caps);
+    return data::makeOutputPlan(out_cfg_, rateHz, gsv, board::gnssReceiverPort(), caps);
 }
 
 void GnssModule::applyWriteAction(const ::gnss::Action &act) noexcept

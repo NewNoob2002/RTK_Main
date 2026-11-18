@@ -16,7 +16,7 @@
 2. **识别步骤 `identify`**：`kBootSteps` 第一项，`OnFail::kDegrade`。
    - 把 `installDirectLog()` 从 `stepPower` 移到这里，先装日志再读 ADC。
    - ADC1 oneshot 读 GPIO35（ADC1_CH7），12 dB、12 bit、line fitting 校准；丢首次，8 次平均，换算 mV；读完释放 ADC 句柄
-     （或说明为何保留）。校准不可用 → 理想线性换算 + 一行 W。
+     （或说明为何保留）。eFuse 无 Vref → line fitting + 标称 Vref + 一行 W（Architect 验收修订）。
    - Kconfig `RTK_BOARD`（choice，`main/Kconfig.projbuild`）：`RTK_BOARD_AUTO`（默认）/ `RTK_BOARD_FORCE_E1_DEVKIT` /
      `RTK_BOARD_FORCE_P2_V141`。强制时仍读一次并打印 mV，不据此判断。
    - 成功：打 I `board <name> id=<mV> mV`（强制时加 `(forced)`），把 `const board::Profile *` 存入 `AppContext`，
