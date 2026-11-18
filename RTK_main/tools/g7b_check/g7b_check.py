@@ -221,7 +221,7 @@ def main():
                                     f"（源文件：{source or 'UNKNOWN'}，未登记白名单）")
 
         # 1b. 守卫（CPP-009）：覆盖编译数据库中映射到仓库源码的全部目标文件。
-        # 自有目录已由 main/ 与 components/* 列举（Q3），这里仍扫全部数据库映射对象，
+        # 自有目录已由 main/ 与 components/* 列举，这里仍扫全部数据库映射对象，
         # 覆盖 ESP 侧未编译、但出现在 host/测试数据库里的自有源文件。
         sources = object_sources(build) if sources is None else sources
         scanned = {obj.resolve() for obj in own_objs}

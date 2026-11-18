@@ -35,12 +35,6 @@ using detail::isValidRateHz;
 using detail::kApplyTimeoutMs;
 using detail::traceGnssSub;
 
-/**
- * @brief 处理一条应用层指令（kProbe/kReset/kSetRate/kSend/kSetOut/kReadback）
- * @param cmd: 指令（verb 为 GnssVerb 或 GnssSubVerb）
- * @param result: 输出，执行结果；不支持的子命令返回 kNotSupported
- * @note 在 IO 执行器任务里调用，不阻塞；读回子命令只发起请求，结果由 AppData 发布
- */
 void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (!initialized_) {
@@ -83,12 +77,6 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
     result.status = fw::Result::kNotSupported;
 }
 
-/**
- * @brief  gnss probe：标记人工重探，清空最近定位并让控制器重新探测
- * @param  nowMs: 当前时间
- * @param  result: 写入命令结果（kOk）
- * @note   仅 kIo 调用，非阻塞。
- */
 void GnssModule::cmdProbe(uint32_t nowMs, fw::CommandResult &result) noexcept
 {
     // 人工重探：清空最近定位，避免旧定位在重探期间被当成当前值发布。
@@ -101,12 +89,6 @@ void GnssModule::cmdProbe(uint32_t nowMs, fw::CommandResult &result) noexcept
     result.status = fw::Result::kOk;
 }
 
-/**
- * @brief  gnss reset：清空最近定位后停再启动控制器
- * @param  nowMs: 当前时间
- * @param  result: 写入命令结果（kOk）
- * @note   仅 kIo 调用，非阻塞。
- */
 void GnssModule::cmdReset(uint32_t nowMs, fw::CommandResult &result) noexcept
 {
     // 人工复位：先清空定位再停/启控制器，重配流程由控制器自己推进。
@@ -121,13 +103,6 @@ void GnssModule::cmdReset(uint32_t nowMs, fw::CommandResult &result) noexcept
     result.status = fw::Result::kOk;
 }
 
-/**
- * @brief  gnss rate：两阶段提交更新输出频率（ADR-0012 §2.4）
- * @param  cmd: 指令，args[0] 必须是支持的频率
- * @param  nowMs: 当前时间
- * @param  result: 写入命令结果（kInvalidArg / kBusy / 落盘错误 / kOk）
- * @note   仅 kIo 调用，非阻塞；NVS 写只在非 kRunning 的直落盘路径发生。
- */
 void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
                             fw::CommandResult &result) noexcept
 {
@@ -170,13 +145,6 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
     result.status = fw::Result::kOk;
 }
 
-/**
- * @brief  gnss setout：两阶段提交更新输出表
- * @param  cmd: 指令，args 为 GnssOutConfig 编码块
- * @param  nowMs: 当前时间
- * @param  result: 写入命令结果（kInvalidArg / kBusy / 落盘错误 / kOk）
- * @note   仅 kIo 调用，非阻塞。
- */
 void GnssModule::cmdSetOut(const fw::Command &cmd, uint32_t nowMs,
                            fw::CommandResult &result) noexcept
 {
@@ -222,12 +190,6 @@ void GnssModule::cmdSetOut(const fw::Command &cmd, uint32_t nowMs,
     result.status = fw::Result::kOk;
 }
 
-/**
- * @brief 把原始字节直接写入 GNSS UART
- * @param cmd: cmd 见调用点
- * @param result: result 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void GnssModule::sendRaw(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     const auto st = controller().state();

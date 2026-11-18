@@ -1,4 +1,4 @@
-// 启动期外供缓冲的分配、绑定与回滚实现（R8a，自 AppMain.cpp 原样迁入）：owner 顺序、对齐与容量按 K5。
+// 启动期外供缓冲的分配、绑定与回滚实现（ADR-0011 §7）：owner 顺序、对齐与容量按 ADR-0011 §7。
 // 线程：仅启动任务调用一次，非 ISR；分配走 BootArena 的内部 8-bit 堆，失败路径必须释放已申请块。
 #include "app/BootBuffers.hpp"
 #include "app/BootReasons.hpp"
@@ -22,7 +22,12 @@ namespace app {
 
 namespace {
 
-/** 组合根单例；本文件只在启动期访问，避免把 s_app 暴露到其他翻译单元。 */
+/**
+ * @brief 取得启动期使用的组合根
+ * @retval 固件唯一上下文引用
+ * @note 仅启动任务调用，不阻塞，非 ISR。
+ * @note 组合根单例；本文件只在启动期访问，避免把 s_app 暴露到其他翻译单元。
+ */
 AppContext &self() noexcept
 {
     return appContext();
@@ -30,15 +35,8 @@ AppContext &self() noexcept
 
 } // namespace
 
-/**
- * @brief  从启动分配器一次性申请各模块的运行缓冲
- * @param[out] out: 申请到的缓冲
- * @param  ops: 分配器操作表（host 测试可注入）
- * @retval true 全部成功；false 任一失败（已回滚并记录原因）
- * @note 不拆（S4 §2.1）：启动期线性分配台账，每项只有名字与对齐差异，顺序即布局。
- */
-bool allocateBootBuffers(BootBuffers &out, // NOLINT(readability-function-size)
-                         const rtos::BootAllocatorOps *ops) noexcept
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) noexcept
 {
     if (!fw::isOk(self().bootArena.open(ops))) {
         (void)self().bootArena.abort(boot_reason::kAllocOpen);
@@ -136,6 +134,7 @@ bool allocateBootBuffers(BootBuffers &out, // NOLINT(readability-function-size)
 #endif
     return true;
 }
+// NOLINTEND(readability-function-size)
 
 const char *bindBootBuffers(const BootBuffers &bufs) noexcept
 {

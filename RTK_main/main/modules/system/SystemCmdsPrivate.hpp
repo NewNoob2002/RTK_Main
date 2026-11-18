@@ -46,19 +46,59 @@ uint64_t kibTenths(uint64_t bytes) noexcept;
  */
 int cmdStatusOverview(void *ctx, int argc, char **argv) noexcept;
 
-/** @brief 打印 link 段状态 */
+/**
+ * @brief 显示链路状态
+ * @param ctx: 回调上下文
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 已显示
+ * @retval 非零 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 int cmdStatusLink(void *ctx, int argc, char **argv) noexcept;
 
-/** @brief 打印 rtcm 段状态 */
+/**
+ * @brief 显示 RTCM 状态
+ * @param ctx: 回调上下文
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 已显示
+ * @retval 非零 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 int cmdStatusRtcm(void *ctx, int argc, char **argv) noexcept;
 
-/** @brief 打印 gnss 段状态 */
+/**
+ * @brief 显示 GNSS 状态
+ * @param ctx: 回调上下文
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 已显示
+ * @retval 非零 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 int cmdStatusGnss(void *ctx, int argc, char **argv) noexcept;
 
-/** @brief 打印 sys 段状态 */
+/**
+ * @brief 显示系统状态
+ * @param ctx: 回调上下文
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 已显示
+ * @retval 非零 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 int cmdStatusSys(void *ctx, int argc, char **argv) noexcept;
 
-/** @brief 打印全部段状态 */
+/**
+ * @brief 显示全部状态段
+ * @param ctx: 回调上下文
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 已显示
+ * @retval 非零 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 int cmdStatusAll(void *ctx, int argc, char **argv) noexcept;
 
 } // namespace app::detail

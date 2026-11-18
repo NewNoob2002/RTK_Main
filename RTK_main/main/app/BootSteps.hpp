@@ -1,4 +1,4 @@
-// 启动步骤表与执行器（ADR-0009/R8a）：按表执行有序启动步骤，逐项记录结果、耗时与堆快照。
+// 启动步骤表与执行器（ADR-0009）：按表执行有序启动步骤，逐项记录结果、耗时与堆快照。
 // 线程：仅启动任务在 app_main 阶段调用一次，非 ISR；执行器本身不分配、不阻塞、不打印。
 #pragma once
 
@@ -15,7 +15,12 @@ enum class BootResult : uint8_t { kPending = 0, kOk, kSkipped, kAbsent, kFail };
 /** 失败后的处理方式：kDegrade 停止后续步骤并进入 console-only；kContinue 只记录，继续下一步。 */
 enum class OnFail : uint8_t { kDegrade = 0, kContinue };
 
-/** 结果的可读名（sys boot 与启动摘要共用）；纯函数，线程/ISR 安全。 */
+/**
+ * @brief 结果的可读名（sys boot 与启动摘要共用）；纯函数，线程/ISR 安全。
+ * @param[out] result: 步骤结果
+ * @retval 结果对应的静态短名；未知枚举值返回 unknown
+ * @note 纯函数，线程/ISR 安全。
+ */
 [[nodiscard]] const char *bootResultName(BootResult result) noexcept;
 
 /** 故障注入原因缓冲：容纳 "fault:" 加最长步骤名。 */
@@ -70,8 +75,12 @@ struct BootRecord {
 };
 
 /**
- * 依序执行步骤并写记录；kDegrade 失败时调用 hooks->onDegrade 后停止，剩余记录保持 kPending。
- * 返回已写入的记录数（= 实际执行到第几步）。不分配、不阻塞、不打印；非 ISR。
+ * @brief 依序执行步骤并写记录；kDegrade 失败时调用 hooks->onDegrade 后停止，剩余记录保持 kPending。 返回已写入的记录数（= 实际执行到第几步）。不分配、不阻塞、不打印；非 ISR。
+ * @param steps: 按依赖顺序排列的步骤表
+ * @param ctx: 跨步骤上下文；失败原因与降级状态在此传递
+ * @param records: 记录输出；仅已执行的前缀被覆盖
+ * @retval 实际执行并写入的记录数，不超过两张表的较小长度
+ * @note 仅启动任务；本体不分配、不打印，阻塞性由注入步骤与钩子决定，非 ISR。
  */
 size_t runBootSteps(std::span<const BootStep> steps, BootCtx &ctx,
                     std::span<BootRecord> records) noexcept;

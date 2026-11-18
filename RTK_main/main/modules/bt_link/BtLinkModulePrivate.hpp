@@ -24,8 +24,9 @@ inline constexpr size_t kMaxGnssFlushRecords = 64U;
 #endif
 /** setAlarm 命令的参数字节数（level + override）。 */
 inline constexpr size_t kAlarmArgBytes = 2;
-// RTCM3 线路帧：1 B 前导 + 2 B 长度，载荷首 12 bit 为消息号，尾 3 B 为 CRC24Q。
-/** RTCM3 线路帧最小字节数。 */
+/** RTCM3 线路帧最小字节数。
+ * @note RTCM3 线路帧：1 B 前导 + 2 B 长度，载荷首 12 bit 为消息号，尾 3 B 为 CRC24Q。
+ */
 inline constexpr size_t kMinRtcmMessageBytes = 8;
 /** RTCM3 载荷（消息号）在帧内的偏移。 */
 inline constexpr size_t kRtcmPayloadOffset = 3;

@@ -9,3 +9,7 @@ Checks: >
   -cppcoreguidelines-pro-type-vararg,
   -hicpp-signed-bitwise,
   -bugprone-signed-bitwise
+# 模块注册清单 MODULE_DEF 与功能开关 RTK_GNSS_ENABLED 必须是宏（X-macro 展开 / #if）；按精确名放行，其他宏仍报告。
+# 选项会覆盖根配置的同名项，故重复根配置的日志宏名单。
+CheckOptions:
+  cppcoreguidelines-macro-usage.AllowedRegexp: '^(FW_LOG_(AT|MAX_LEVEL)|FW_LOG[EWID]|FW_TRACE_ENABLED|MODULE_DEF|RTK_GNSS_ENABLED)$'

@@ -68,15 +68,12 @@ fw::Result StorageModule::snSave(std::span<uint8_t> out, size_t &len) const noex
     return fw::Result::kOk;
 }
 
-/**
- * @brief  从 NVS 读白名单；缺失或损坏时使用空表并记 W 级日志
- */
 void StorageModule::loadWhitelist() noexcept
 {
     WhitelistRaw raw{};
     size_t count = 0;
     // 冻结 C API 使用指向 6 B 行的指针；std::array 布局由 static_assert 保证。
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays): 冻结 C ABI
     auto *rows = reinterpret_cast<uint8_t (*)[NVS_STORE_ADDR_LEN]>(raw.data());
     const esp_err_t error = nvs_store_get_alarms(rows, kMaxAlarms, &count);
     if (error != ESP_OK || count > kMaxAlarms) {
@@ -92,9 +89,6 @@ void StorageModule::loadWhitelist() noexcept
     }
 }
 
-/**
- * @brief  从 NVS 读 SN；缺失时由 BT MAC 派生设备名
- */
 void StorageModule::loadSn() noexcept
 {
     std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
@@ -189,7 +183,7 @@ bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
     }
     std::memcpy(raw.data(), out.data(), len);
     // 冻结 C API 的连续 6 B 行布局与 raw 相同。
-    // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays): 冻结 C ABI
     const esp_err_t error = nvs_store_set_alarms(
         reinterpret_cast<const uint8_t (*)[NVS_STORE_ADDR_LEN]>(raw.data()), len / core::kAddrLen);
     // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)

@@ -94,8 +94,9 @@ void LinkManager::init(Policy policy, std::span<const BtAddr> alarms) noexcept
 }
 
 // 准入规则 1→4 顺序即内容，拆开需传 act/policy/白名单/手机在线四五个状态（ADR-0013 §2.4）。
-Role LinkManager::onOpen(SessionHandle handle, // NOLINT(readability-function-*)
-                         const BtAddr &addr, uint32_t nowMs, Actions &act) noexcept
+// NOLINTBEGIN(readability-function-size, readability-function-cognitive-complexity): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+Role LinkManager::onOpen(SessionHandle handle, const BtAddr &addr, uint32_t nowMs,
+                         Actions &act) noexcept
 {
     act.clear();
 
@@ -172,6 +173,7 @@ Role LinkManager::onOpen(SessionHandle handle, // NOLINT(readability-function-*)
     session.lastRxMs = nowMs;
     return role;
 }
+// NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
 
 void LinkManager::onClose(SessionHandle handle) noexcept
 {

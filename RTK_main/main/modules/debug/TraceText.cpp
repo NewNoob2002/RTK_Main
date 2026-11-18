@@ -297,12 +297,29 @@ constexpr std::array<const char *, kCatCount> kCatSummaries = {{
     "boot, console and system service logs",
 }};
 
-// 追加一段文本；写满时停在末尾并保持 0 结尾。
+/**
+ * @brief 比较占位符名称是否匹配
+ * @param a: 模板中的键视图
+ * @param b: 字段表中的非空零结尾键
+ * @retval true 内容相同
+ * @retval false 内容不同
+ * @note 仅 trace_out 任务，不阻塞，非 ISR。
+ */
 bool keyEquals(std::string_view a, const char *b) noexcept
 {
     return a == std::string_view(b);
 }
 
+/**
+ * @brief 渲染匹配字段，未知键原样保留占位符
+ * @param out: 输出缓冲或结果
+ * @param cap: 输出缓冲容量（字节）
+ * @param pos: 当前写入位置，按实际长度推进
+ * @param key: 模板中的占位符键
+ * @param fields: 字段描述表
+ * @param ev: 追踪事件
+ * @note 仅 trace_out 任务，不阻塞，非 ISR。
+ */
 void renderField(char *out, size_t cap, size_t &pos, std::string_view key,
                  std::span<const TraceField> fields, const fw::TraceEvent &ev) noexcept
 {
@@ -315,7 +332,16 @@ void renderField(char *out, size_t cap, size_t &pos, std::string_view key,
     append(out, cap, pos, "{%.*s}", static_cast<int>(key.size()), key.data());
 }
 
-/** 按句子模板渲染一行；未闭合或空的 {} 原样输出，便于发现模板写错。 */
+/**
+ * @brief 按句子模板渲染一行；未闭合或空的 {} 原样输出，便于发现模板写错。
+ * @param sentence: 句子模板
+ * @param fields: 字段描述表
+ * @param ev: 追踪事件
+ * @param out: 输出缓冲或结果
+ * @param cap: 输出缓冲容量（字节）
+ * @param pos: 当前写入位置，按实际长度推进
+ * @note 仅 trace_out 任务，不阻塞，非 ISR；输出按 cap 截断。
+ */
 void renderSentence(std::string_view sentence, std::span<const TraceField> fields,
                     const fw::TraceEvent &ev, char *out, size_t cap, size_t &pos) noexcept
 {

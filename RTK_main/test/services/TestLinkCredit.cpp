@@ -1,4 +1,4 @@
-// K2：路由副作用须在reply信用取得后恰好执行一次，满窗口与CLOSE不能重放。
+// 路由副作用须在reply信用取得后恰好执行一次，满窗口与CLOSE不能重放。
 // 单线程host测试；纯组件，不访问硬件、不分配堆。
 #include <array>
 #include <cstddef>

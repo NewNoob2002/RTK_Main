@@ -1,4 +1,4 @@
-# J2a：CommandRouter 与 4 个服务的 host 测试（ADR-0007 §8、任务卡 J2a）。
+# CommandRouter 与 4 个服务的 host 测试（ADR-0007 §8）。
 # 独立 CMake 工程；Unity 取自 ESP-IDF 自带副本（与 test/host 相同的做法与告警组）。
 # 普通构建与 ASan/UBSan 构建都要通过：
 #   cmake -S test/services -B builds/services && cmake --build builds/services
@@ -28,7 +28,7 @@ endif()
 set(PROJ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 set(LINK_CORE_DIR ${PROJ_ROOT}/components/link_core)
 set(DEV_PROTO_DIR ${PROJ_ROOT}/components/device_proto)
-# J2b：旧 CommandDispatcher 已退役；R7a 只在构建目录适配其命名空间/include，reference 原件不改。
+# 旧 CommandDispatcher 已退役；只在构建目录适配其命名空间/include，reference 原件不改。
 include(${PROJ_ROOT}/cmake/pascal_case.cmake)
 set(REF_SOURCE ${PROJ_ROOT}/reference/cpp-v3-dispatcher)
 set(REF_GOLDEN ${CMAKE_CURRENT_BINARY_DIR}/golden)
@@ -53,7 +53,7 @@ foreach(relative command_dispatcher.cpp ${REF_LEGACY_PREFIX}/core/command_dispat
             string(REPLACE "${_inc}" "#include \"${_dir}/${_pascal}.hpp\"" content "${content}")
         endif()
     endforeach()
-    # ADR-0013 S2（S2-rename.md B2）：工程 C++ 符号已改 lowerCamelCase，而退役参考实现的原件不改，
+    # ADR-0013 §2.1：工程 C++ 符号已改 lowerCamelCase，而退役参考实现的原件不改，
     # 故生成期按本次改名表做子串替换（string(REPLACE) 不分词边界）。长名在前，避免 handle_work_mode 里的 work_mode 先被替换；
     # 替换只改标识符，逻辑、字符串与字节布局保持参考实现原样。
     foreach(_rename IN ITEMS

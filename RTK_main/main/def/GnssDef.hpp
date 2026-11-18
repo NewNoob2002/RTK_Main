@@ -40,7 +40,14 @@ enum class GnssTrace : uint8_t {
     kBaud = 9,        // a=新波特率，b=旧波特率
 };
 
-/** 记录 kGnss 事件；session 固定 0。线程：任意任务，非 ISR。 */
+/**
+ * @brief 记录一条 GNSS 子事件
+ * @param code: 子事件码
+ * @param a: 事件第一个数值字段
+ * @param b: 事件第二个数值字段
+ * @note 任务路径调用，线程安全、不分配、不格式化；非 ISR。
+ * @note 记录 kGnss 事件；session 固定 0。线程：任意任务，非 ISR。
+ */
 inline void traceGnss(GnssTrace code, uint32_t a, uint32_t b) noexcept
 {
     fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(code), 0U, a, b);

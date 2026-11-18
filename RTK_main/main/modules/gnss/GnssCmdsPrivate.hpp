@@ -22,7 +22,7 @@ inline constexpr int32_t kMmPerMeter = 1000;
 inline constexpr uint32_t kPercentBase = 100U;
 /** 十分之一单位（航向 0.1°）换算基数。 */
 inline constexpr uint32_t kTenthsBase = 10U;
-/** `obs_ring` 未分配时报告给操作者的预留字节数（K6）。 */
+/** `obs_ring` 未分配时报告给操作者的预留字节数。 */
 inline constexpr uint32_t kStaticObsReservedBytes = 16384U;
 /** 经纬度文本缓冲（形如 `-123.123456789`）。 */
 inline constexpr size_t kLatLonBufBytes = 24U;
@@ -97,7 +97,7 @@ inline const char *constellationName(::gnss::Constellation sys) noexcept
 /**
  * @brief 1e-9 度定点转 ±ddd.ddddddddd 文本
  * @param val: 定点值
- * @param out: 输出缓冲，至少 kLatLonBufBytes
+ * @param[out] out: 输出缓冲，至少 kLatLonBufBytes
  * @note 仅供 console 打印，不参与实时路径。
  */
 inline void formatE9(int64_t val, std::span<char, kLatLonBufBytes> out) noexcept
@@ -113,7 +113,7 @@ inline void formatE9(int64_t val, std::span<char, kLatLonBufBytes> out) noexcept
 /**
  * @brief 毫米整型转 ±ddd.ddd 米的文本
  * @param mm: 毫米值
- * @param out: 输出缓冲，至少 kMetersBufBytes
+ * @param[out] out: 输出缓冲，至少 kMetersBufBytes
  * @note 仅供 console 打印，不参与实时路径。
  */
 inline void formatMmAsMeters(int32_t mm, std::span<char, kMetersBufBytes> out) noexcept
@@ -129,7 +129,7 @@ inline void formatMmAsMeters(int32_t mm, std::span<char, kMetersBufBytes> out) n
 /**
  * @brief 百分之一单位转 `xx.yy` 文本（未知值打印 unknown）
  * @param val: 百分之一单位值
- * @param out: 输出缓冲，至少 kDopBufBytes
+ * @param[out] out: 输出缓冲，至少 kDopBufBytes
  * @note 仅供 console 打印，不参与实时路径。
  */
 inline void formatX100(uint16_t val, std::span<char, kDopBufBytes> out) noexcept
@@ -147,11 +147,35 @@ inline void formatX100(uint16_t val, std::span<char, kDopBufBytes> out) noexcept
 
 namespace app {
 
-/** `gnss status` 处理器（定义在 GnssCmdsStatus.cpp）。 */
+/**
+ * @brief 显示 GNSS 状态
+ * @param ctx: 回调上下文
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 已显示
+ * @retval 非零 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 int cmdGnssStatus(void *ctx, int argc, char **argv) noexcept;
-/** `gnss fix` 处理器（定义在 GnssCmdsStatus.cpp）。 */
+/**
+ * @brief 显示最近定位解
+ * @param ctx: 回调上下文
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 已显示
+ * @retval 非零 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 int cmdGnssFix(void *ctx, int argc, char **argv) noexcept;
-/** `gnss sats` 处理器（定义在 GnssCmdsStatus.cpp）。 */
+/**
+ * @brief 显示卫星列表
+ * @param ctx: 回调上下文
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 已显示
+ * @retval 非零 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 int cmdGnssSats(void *ctx, int argc, char **argv) noexcept;
 
 } // namespace app

@@ -36,7 +36,7 @@ struct Fixture {
         const std::array<BtAddr, 1> wl = {kAlarmAddr};
         link.init(policy,
                   alarmWhitelisted ? std::span<const BtAddr>(wl) : std::span<const BtAddr>());
-        // J2b：原来的 CommandDispatcher 换成 4 个服务 + CommandRouter（组装方式与 main 一致）。
+        // ADR-0007 §3.5：原来的 CommandDispatcher 换成 4 个服务 + CommandRouter（组装方式与 main 一致）。
         const std::array<core::RouteTable, 4> tables = {device.table(), config.table(),
                                                         alarmService.table(), pair.table()};
         TEST_ASSERT_TRUE(isOk(router.init(tables)));

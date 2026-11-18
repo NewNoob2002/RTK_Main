@@ -78,7 +78,8 @@ void installUartSink() noexcept
 
 // UART 驱动替换的步骤顺序（排空→删驱动→参数→引脚→安装→VFS 行尾）即内容，每步失败即返回；
 // 经典 ESP32 没有 UART DMA，长输出靠大 TX 环形 + 中断搬运，避免命令任务阻塞在 FIFO 上（ADR-0013 §2.4）。
-esp_err_t enableUartTxBuffer() noexcept // NOLINT(readability-function-*): 线性序列
+// NOLINTBEGIN(readability-function-size, readability-function-cognitive-complexity): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+esp_err_t enableUartTxBuffer() noexcept
 {
 #if CONFIG_RTK_CONSOLE_UART_TX_BUF > 0
     // Kconfig range 0..2 保证端口号合法；uart_port_t 是枚举，转 static_cast 不改变数值。
@@ -108,7 +109,7 @@ esp_err_t enableUartTxBuffer() noexcept // NOLINT(readability-function-*): 线�
     cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
 #if SOC_UART_SUPPORT_REF_TICK
     // 与 IDF uart_vfs_dev_port_init 的选择一致：<= 1 MHz 用 REF_TICK，更高波特率必须用 APB（DEFAULT）。
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-union-access): IDF 以匿名 union 提供时钟字段，只能直接访问
+    // IDF 以匿名 union 提供时钟字段，只能直接访问。
     cfg.source_clk = (kBaudRate > kRefTickMaxBaud) ? UART_SCLK_DEFAULT : UART_SCLK_REF_TICK;
 #else
     cfg.source_clk = UART_SCLK_DEFAULT;
@@ -147,6 +148,7 @@ esp_err_t enableUartTxBuffer() noexcept // NOLINT(readability-function-*): 线�
 #endif
     return ESP_OK;
 }
+// NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
 #endif
 
 } // namespace detail

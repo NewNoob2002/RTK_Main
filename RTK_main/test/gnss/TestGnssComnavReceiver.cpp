@@ -11,7 +11,7 @@
 #include "gnss/drivers/ComnavReceiver.hpp"
 #include "unity.h"
 
-// S1（ADR-0012 §2.8、CPP-011）：家族基类不可直接实例化；型号只实例化平凡析构的 final 叶子类。
+// 驱动层次约束（ADR-0012 §2.8、CPP-011）：家族基类不可直接实例化；型号只实例化平凡析构的 final 叶子类。
 static_assert(!std::is_constructible_v<gnss::ComnavReceiver>);
 static_assert(std::is_final_v<gnss::K803Receiver>);
 static_assert(std::is_trivially_destructible_v<gnss::K803Receiver>);
@@ -40,7 +40,6 @@ bool textEquals(std::span<const uint8_t> data, std::string_view text)
 /** 测试里把字符串当只读字节看；span 无法引用字符数据，必须做一次重解释。 */
 std::span<const uint8_t> bytesOf(std::string_view text)
 {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) 只读视图，不写入
     return std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size());
 }
 
@@ -97,7 +96,7 @@ void testRoverScript()
     cfg.port = 2;
     cfg.portBaud = kTestBaud;
 
-    // P3b 之后基础脚本只剩三步：语句输出改由 buildOutput 逐项下发（ADR-0012 §2.4）。
+    // 输出计划拆分后基础脚本只剩三步：语句输出改由 buildOutput 逐项下发（ADR-0012 §2.4）。
     const std::array<std::string_view, 3> expected{"UNLOGALL COM2\r\n", "MODE ROVER\r\n",
                                                    "COM COM2 921600\r\n"};
     for (size_t i = 0; i < 2; ++i) {
@@ -196,7 +195,7 @@ void setUp() {}
 
 void tearDown() {}
 
-// ---- 黄金向量比对（ADR-0012 P3a 第 3 步）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----
+// ---- 黄金向量比对（ADR-0012 §2.4）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----
 #include "GoldenCheck.hpp"
 #include "GoldenComnav.inc"
 #include "PlanCheck.hpp"
@@ -206,7 +205,7 @@ static void testGoldenProbe()
     TEST_ASSERT_TRUE(golden_check::probeMatches(comnavDrv(), golden_Comnav::kProbe));
 }
 
-/** P3b：基础脚本 + buildOutput 逐项下发，合起来的命令集合必须与基线脚本一致。 */
+/** 基础脚本 + buildOutput 逐项下发，合起来的命令集合必须与基线脚本一致。 */
 static void testGoldenOutputPlan()
 {
     const size_t bad =

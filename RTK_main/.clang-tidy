@@ -2,7 +2,7 @@
 # RTK_main：取自 embedded-engineering assets/cpp/.clang-tidy，按 esp-idf profile 调整：
 #   - 文件作用域静态变量用 s_ 前缀（ESP-006）；HeaderFilterRegex 只覆盖本工程 C++ 头
 #     （.hpp/.hh/.hxx）；C 公共头交给 .clang-tidy-c，避免 C++ 命名规则误报。
-#   - 门禁覆盖全部自有源文件（tools/tidy_check，Q3 2026-11-17）：依赖 IDF 的翻译单元用 idf.py 的编译数据库，
+#   - 门禁覆盖全部自有源文件（tools/tidy_check）：依赖 IDF 的翻译单元用 idf.py 的编译数据库，
 #     按 .clangd 方式过滤 xtensa GCC 专有选项后解析；IDF 宏造成的噪声在对应目录的 .clang-tidy 屏蔽并写明理由。
 #
 # 关闭项及原因：
@@ -50,6 +50,9 @@ Checks: >
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/RTK_main/(components|main|test)/.*\.(hpp|hh|hxx)$'
 CheckOptions:
+  # 框架公共头在各组件/冻结测试的 TU 内也会被检查，按精确宏名共享放行，保留其他宏检查。
+  # 日志宏须在编译期裁掉调用；两个构建开关须可由 -D 与 #if 使用（ADR-0009）。
+  cppcoreguidelines-macro-usage.AllowedRegexp: '^(FW_LOG_(AT|MAX_LEVEL)|FW_LOG[EWID]|FW_TRACE_ENABLED)$'
   cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted: true
   # span 是“指针 + 长度”，按值传递是惯用法（Core Guidelines F.16），不要改成 const 引用。
   performance-unnecessary-value-param.AllowedTypes: 'etl::span;std::span;pw::span;std::string_view;etl::string_view'
@@ -58,7 +61,7 @@ CheckOptions:
   readability-function-size.LineThreshold: 60
   readability-function-cognitive-complexity.Threshold: 25
   # 正整数字面量（如 1U << 0、x & 0x0F）不按“有符号操作数”报告：字面量非负，结果确定；
-  # 由整型提升产生的有符号操作数（uint8_t/uint16_t 参与位运算）仍报告（Q3，2026-11-17）。
+  # 由整型提升产生的有符号操作数（uint8_t/uint16_t 参与位运算）仍报告。
   bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true
   hicpp-signed-bitwise.IgnorePositiveIntegerLiterals: true
   readability-magic-numbers.IgnoredIntegerValues: '0;1;2;8;16;32;64'
@@ -67,7 +70,7 @@ CheckOptions:
   # 私有/受保护成员后缀 _；常量、constexpr、命名空间作用域只读对象 k 前缀；
   # 可变全局/文件作用域变量保持 s_ + lower_case（用户 2026-11-17 决定；AGENTS.md §2：放进匿名命名空间，不用 g_）；宏全大写。
   # clang-tidy 把匿名命名空间中的变量归为 GlobalVariable，因此 GlobalVariablePrefix 为 s_。
-  # C 代码另有 .clang-tidy-c；C++ 里声明的 C 接口名由 *IgnoredRegexp 放行（S2 填写，带注释）。
+  # C 代码另有 .clang-tidy-c；C++ 里声明的 C 接口名由 *IgnoredRegexp 放行（带注释）。
   readability-identifier-naming.NamespaceCase: lower_case
   readability-identifier-naming.ClassCase: CamelCase
   readability-identifier-naming.StructCase: CamelCase

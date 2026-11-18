@@ -10,8 +10,9 @@
 #include "SppServerPriv.h"
 
 /* 逆序释放阶梯：每个阶段的成败单独判定且只记日志，拆开反而难读（ADR-0013 §2.4）。 */
-void spp_server_unwind(bool bluedroid_enabled, // NOLINT(readability-function-*)
-                       bool bluedroid_inited, bool controller_enabled, bool controller_inited)
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+void spp_server_unwind(bool bluedroid_enabled, bool bluedroid_inited, bool controller_enabled,
+                       bool controller_inited)
 {
     esp_err_t err = ESP_OK;
 
@@ -40,6 +41,7 @@ void spp_server_unwind(bool bluedroid_enabled, // NOLINT(readability-function-*)
         }
     }
 }
+// NOLINTEND(readability-function-size)
 
 void spp_server_hw_state_clear(spp_server_hw_state_t *state)
 {
@@ -50,7 +52,8 @@ void spp_server_hw_state_clear(spp_server_hw_state_t *state)
 }
 
 /* 线性初始化序列：控制器/蓝牙栈逐级启停，失败即回滚，拆开反而难读（ADR-0013 §2.4）。 */
-esp_err_t spp_server_hw_init(spp_server_hw_state_t *state) // NOLINT(readability-function-*)
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+esp_err_t spp_server_hw_init(spp_server_hw_state_t *state)
 {
     esp_err_t err = ESP_OK;
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
@@ -101,9 +104,11 @@ esp_err_t spp_server_hw_init(spp_server_hw_state_t *state) // NOLINT(readability
 
     return ESP_OK;
 }
+// NOLINTEND(readability-function-size)
 
 /* 线性注册序列：GAP/SPP 回调与 profile 参数一次配好，拆开反而难读（ADR-0013 §2.4）。 */
-esp_err_t spp_server_profile_init(void) // NOLINT(readability-function-*)
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+esp_err_t spp_server_profile_init(void)
 {
     esp_err_t err = ESP_OK;
     esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
@@ -145,3 +150,4 @@ esp_err_t spp_server_profile_init(void) // NOLINT(readability-function-*)
 
     return ESP_OK;
 }
+// NOLINTEND(readability-function-size)

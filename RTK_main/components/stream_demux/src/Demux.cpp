@@ -147,6 +147,7 @@ struct Engine {
         }
     }
 
+    // NOLINTBEGIN(readability-function-size, readability-function-cognitive-complexity): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
     /**
      * @brief  把已缓冲字节就地回放给解码器，直到只剩一个待补全的候选（或全部输出完毕）
      * @param  dmx: 目标实例
@@ -157,7 +158,7 @@ struct Engine {
      * @note   不拆（ADR-0013 §2.4）：就地回放状态机，start/prefix/rejectCurrent 与候选、need、stats
      *         交织，拆出需 4 个以上出入参且回调顺序敏感。
      */
-    static void replay(Demux &dmx, bool aborting) noexcept // NOLINT(readability-function-*)
+    static void replay(Demux &dmx, bool aborting) noexcept
     {
         std::size_t start = 0;
         std::size_t prefix = dmx.len_;
@@ -247,6 +248,7 @@ struct Engine {
         dmx.len_ = 0;
         idle(dmx);
     }
+    // NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
 };
 
 /**

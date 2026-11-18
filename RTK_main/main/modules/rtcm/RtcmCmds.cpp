@@ -20,6 +20,13 @@ namespace {
 constexpr uint64_t kBytesPerKib = 1024ULL;
 constexpr uint64_t kTenthsPerUnit = 10ULL;
 
+/**
+ * @brief 打印 RTCM 转发统计
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdRtcmStats(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -29,6 +36,13 @@ int cmdRtcmStats(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 提交 RTCM 统计清零命令
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdRtcmReset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -45,7 +59,15 @@ constexpr std::array<cli::Verb, 2U> kRtcmVerbs{{
     {"reset", nullptr, "clear RTCM and demux statistics", cmdRtcmReset},
 }};
 
-// 命令表项：签名由 cli::Cmd 的处理器类型固定；默认动词/参数在此注入。
+/**
+ * @brief 分派 RTCM 子命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ * @note 命令表项：签名由 cli::Cmd 的处理器类型固定；默认动词/参数在此注入。
+ */
 int cmdRtcm(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kRtcmVerbs, ctx, argc, argv);

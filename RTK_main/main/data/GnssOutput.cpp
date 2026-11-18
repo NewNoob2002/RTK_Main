@@ -1,4 +1,4 @@
-// GNSS App 数据通路辅助实现（K4 / ADR-0011）：6 KiB 最新帧缓存、GnssOutConfig 编解码、输出计划、订阅统计。
+// GNSS App 数据通路辅助实现（ADR-0011）：6 KiB 最新帧缓存、GnssOutConfig 编解码、输出计划、订阅统计。
 // 线程安全：GnssLatestCache 与 GnssAppSubState 使用注入锁；其余为纯函数。ISR 安全：否（带锁路径不可入 ISR）。
 
 #include "data/GnssOutput.hpp"
@@ -146,8 +146,8 @@ gnss::OutputPlan makeOutputPlan(const GnssOutConfig &out, uint8_t rateHz, bool g
             plan.periodMs[i] = core::services::GnssService::intervalToPeriodMs(out.intervals[i]);
             continue;
         }
-        // 默认值：GGA/RMC/GSA/GST 跟定位频率（与 P3a 流动站脚本一致）；SATSINFOA 按 gnss/out 默认 5 s
-        // （用户 2026-11-16 决定，偏离 P3a 脚本的 1 s）；HEADINGA 1 s 且仅双天线型号下发。
+        // 默认值：GGA/RMC/GSA/GST 跟定位频率（ADR-0012 §2.4）；SATSINFOA 按 gnss/out 默认 5 s
+        // （用户 2026-11-16 决定，接收机基础脚本为 1 s）；HEADINGA 1 s 且仅双天线型号下发。
         const bool locate = (i == static_cast<size_t>(gnss::OutputMsg::kGga)) ||
                             (i == static_cast<size_t>(gnss::OutputMsg::kRmc)) ||
                             (i == static_cast<size_t>(gnss::OutputMsg::kGsa)) ||
@@ -166,6 +166,13 @@ gnss::OutputPlan makeOutputPlan(const GnssOutConfig &out, uint8_t rateHz, bool g
     return plan;
 }
 
+/**
+ * @brief 绑定外供 6 KiB 缓冲并清零长度与统计；buf 须非空且 ≥ kGnssLatestTotalBytes。线程安全：仅启动前。
+ * @param buf: 外供缓存，生命周期覆盖读写者
+ * @retval kOk 缓存已绑定并清零统计
+ * @retval kInvalidArg 缓冲为空或不足 6 KiB
+ * @note 仅启动前单线程调用；内部使用已绑定锁，非 ISR。
+ */
 fw::Status GnssLatestCache::init(std::span<uint8_t> buf) noexcept
 {
     if ((buf.data() == nullptr) || (buf.size() < kGnssLatestTotalBytes)) {

@@ -32,16 +32,31 @@ public:
     RtcmForwarder &operator=(const RtcmForwarder &) = delete;
     ~RtcmForwarder() noexcept = default;
 
-    /** 仅接收分流器已校验的完整 RTCM 线路帧。线程安全：否；仅链路任务，非 ISR。 */
+    /**
+     * @brief 仅接收分流器已校验的完整 RTCM 线路帧。线程安全：否；仅链路任务，非 ISR。
+     * @param role: 帧来源会话角色
+     * @param wire: 已校验的线路帧字节
+     * @note 仅 kLink，非 ISR、非阻塞；拒绝非 PHONE 来源。
+     */
     void forward(core::Role role, std::span<const uint8_t> wire) noexcept;
 
-    /** 清零全部 RTCM 计数与累计 CRC。线程安全：否；仅链路任务，非 ISR。 */
+    /**
+     * @brief 清零全部 RTCM 计数与累计 CRC。线程安全：否；仅链路任务，非 ISR。
+     */
     void reset() noexcept;
 
-    /** 更新最近窗口测得的吞吐速率（字节/秒）。线程安全：否；仅链路任务，非 ISR。 */
+    /**
+     * @brief 更新最近窗口测得的吞吐速率（字节/秒）。线程安全：否；仅链路任务，非 ISR。
+     * @param bps: 最近窗口吞吐（字节/秒）
+     * @note 仅 kLink，非 ISR、非阻塞。
+     */
     void setBytesPerSec(uint32_t bps) noexcept;
 
-    /** 线程安全：否；仅链路任务，非 ISR。跨任务查询须使用 data::kRtcmStats 主题。 */
+    /**
+     * @brief 线程安全：否；仅链路任务，非 ISR。跨任务查询须使用 data::kRtcmStats 主题。
+     * @retval 当前累计统计的只读引用
+     * @note 仅 kLink，非 ISR、非阻塞；跨任务读主题快照。
+     */
     [[nodiscard]] const RtcmStats &stats() const noexcept;
 
 private:

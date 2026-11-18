@@ -33,10 +33,6 @@ using detail::kMaxGnssFlushRecords;
 using detail::kMaxGnssStreamRecordsPerPoll;
 #endif
 
-/**
- * @brief 处理 RTCM 复位请求（版本号变化时清空转发器与解复用器）
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::applyRtcmReset() noexcept
 {
     uint32_t resetVersion = 0;
@@ -57,11 +53,6 @@ void BtLinkModule::applyRtcmReset() noexcept
 }
 
 #if RTK_GNSS_ENABLED
-/**
- * @brief 把 GNSS 定位状态同步到 DataCenter（供对端查询）
- * @param nowMs: 单调毫秒时间戳
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::syncGnssInfo(uint32_t nowMs) noexcept
 {
     if (!device_service_.has_value()) {
@@ -103,14 +94,6 @@ void BtLinkModule::syncGnssInfo(uint32_t nowMs) noexcept
     }
 }
 
-/**
- * @brief 处理对端的 GNSS 查询请求
- * @param ctx: cli 上下文（未用）
- * @param msgId: msgId 见调用点
- * @param dst: dst 见调用点
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 core::services::GnssQueryResult BtLinkModule::onGnssQuery(void *ctx, uint16_t msgId,
                                                           std::span<uint8_t> dst) noexcept
 {
@@ -132,12 +115,6 @@ core::services::GnssQueryResult BtLinkModule::onGnssQuery(void *ctx, uint16_t ms
     return res;
 }
 
-/**
- * @brief 处理对端的 GNSS 输出掩码设置
- * @param ctx: cli 上下文（未用）
- * @param mask: mask 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::onGnssMask(void *ctx, uint32_t mask) noexcept
 {
     auto *self = static_cast<BtLinkModule *>(ctx);
@@ -158,10 +135,6 @@ void BtLinkModule::onGnssMask(void *ctx, uint32_t mask) noexcept
               (mask == 0U) ? 1U : 0U);
 }
 
-/**
- * @brief 把 GNSS 流绑定会话标记为待重绑
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::resetGnssStreamSession() noexcept
 {
     if (gnss_service_.has_value()) {
@@ -180,11 +153,6 @@ void BtLinkModule::resetGnssStreamSession() noexcept
     }
 }
 
-/**
- * @brief 把 GNSS 流记录推给绑定会话，返回是否还有剩余
- * @retval true 表示成功/命中
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 bool BtLinkModule::drainGnssStream() noexcept
 {
     if (!gnss_reader_attached_ || (stream_handle_ == 0U) ||

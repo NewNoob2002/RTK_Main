@@ -26,11 +26,6 @@ static_assert(fw::kAtomicUsable<TaskHandle_t>, "wake_task_ must be lock-free");
 
 namespace app {
 
-/**
- * @brief 发布链路策略/配对/白名单快照
- * @param nowMs: 本次快照时间
- * @note 仅 kLink 任务；非阻塞、不分配堆。
- */
 void BtLinkModule::publishLinkStatus(uint32_t nowMs) noexcept
 {
 
@@ -45,10 +40,6 @@ void BtLinkModule::publishLinkStatus(uint32_t nowMs) noexcept
     ctx().data.linkStatus.write(link);
 }
 
-/**
- * @brief 发布当前会话表（句柄、角色、对端地址）
- * @note 仅 kLink 任务；只读会话表，非阻塞。
- */
 void BtLinkModule::publishSessions() noexcept
 {
     Sessions sessions{};
@@ -61,10 +52,6 @@ void BtLinkModule::publishSessions() noexcept
     ctx().data.sessions.write(sessions);
 }
 
-/**
- * @brief 发布报警状态；无报警时写空快照
- * @note 仅 kLink 任务；非阻塞。
- */
 void BtLinkModule::publishAlarmState() noexcept
 {
     if (alarm_.has_value()) {
@@ -75,10 +62,6 @@ void BtLinkModule::publishAlarmState() noexcept
     }
 }
 
-/**
- * @brief 发布发送、心跳与分流统计（顺序与基线一致）
- * @note 仅 kLink 任务；spp_server_*_stats 只读快照，非阻塞。
- */
 void BtLinkModule::publishStats() noexcept
 {
     /* 继续发布发送、心跳与分流统计，顺序不变。 */
@@ -115,10 +98,6 @@ void BtLinkModule::publishStats() noexcept
         {heartbeat.has_value(), heartbeat.value_or(proto::alarm::Heartbeat{})});
 }
 
-/**
- * @brief 汇总各会话分流器统计并在增量变化时上报重同步/未知字节
- * @note 仅 kLink 任务；每轮取一次增量，避免在逐字节 feed 路径上读统计。
- */
 void BtLinkModule::publishDemuxStats() noexcept
 {
     DemuxStats demux = retired_demux_;
@@ -142,11 +121,6 @@ void BtLinkModule::publishDemuxStats() noexcept
     ctx().data.demuxStats.write(demux);
 }
 
-/**
- * @brief 发布链路、会话、报警与统计快照（每轮一次，顺序固定）
- * @param nowMs: 本次快照时间
- * @note 仅 kLink 任务；非阻塞、非 ISR。
- */
 void BtLinkModule::publishLink(uint32_t nowMs) noexcept
 {
     /* 按基线顺序发布链路、会话与报警状态。 */
@@ -172,7 +146,7 @@ core::LinkService &BtLinkModule::linkService() noexcept
 }
 
 /**
- * @brief  构造链路服务并启动 SPP 服务端
+ * @brief  原地构造链路服务并安装接收唤醒钩子
  * @retval fw::Result::kOk 成功；其他为失败原因（已记 E 级日志）
  * @note   启动前单线程，非 ISR，不分配堆。
  */

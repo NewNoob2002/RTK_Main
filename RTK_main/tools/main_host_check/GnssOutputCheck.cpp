@@ -1,4 +1,4 @@
-// host 验证：K4 GNSS 输出配置（gnss/out blob）、输出计划推导、最新句缓存与超限查询、订阅降采样与断连清空。
+// host 验证：GNSS 输出配置（gnss/out blob）、输出计划推导、最新句缓存与超限查询、订阅降采样与断连清空。
 // 线程：仅主机单线程测试运行，不依赖 FreeRTOS 或硬件。
 
 #include <array>
@@ -25,7 +25,7 @@ void check_impl(bool cond, const char *expr, int line) noexcept
 
 #define CHECK(expr) check_impl((expr), #expr, __LINE__)
 
-/** P3b：输出计划由面板配置 + 频率推导（ADR-0012 §2.4）；语句分类改由驱动 classifyFrame() 负责。 */
+/** 输出计划由面板配置 + 频率推导（ADR-0012 §2.4）；语句分类改由驱动 classifyFrame() 负责。 */
 void testOutputPlan() noexcept
 {
     using app::data::GnssOutConfig;

@@ -11,7 +11,17 @@ struct AppContext;
 class SystemModule final {
 public:
     constexpr SystemModule() noexcept = default;
+    /**
+     * @brief 记录所属上下文，不初始化硬件或 RTOS
+     * @param context: 所属应用上下文，生命周期须覆盖模块
+     * @note 仅对象构造时调用，不分配、不阻塞；非 ISR。
+     */
     constexpr explicit SystemModule(AppContext &context) noexcept : context_(&context) {}
+    /**
+     * @brief 绑定模块所属上下文
+     * @param context: 所属应用上下文，生命周期须覆盖模块
+     * @note 仅消费者启动前单线程调用；不分配、不阻塞，非 ISR。
+     */
     void bindContext(AppContext &context) noexcept
     {
         context_ = &context;
@@ -21,17 +31,35 @@ public:
     SystemModule &operator=(const SystemModule &) = delete;
     SystemModule(SystemModule &&) = delete;
     SystemModule &operator=(SystemModule &&) = delete;
-    /** 启动前单线程，非 ISR；解析 SN、生成设备名并同步初始化 BT，失败仍发布状态。 */
+    /**
+     * @brief  计算设备名与身份信息并发布到 DataCenter（BT 启动前调用）
+     * @note 仅启动期单线程调用；顺序为先身份后蓝牙，二者都不在 ISR。
+     */
     void prepare() noexcept;
-    /** 仅 kLink，非 ISR、非阻塞；发布系统和执行器状态，返回 false。 */
+    /**
+     * @brief 仅 kLink，非 ISR、非阻塞；发布系统和执行器状态，返回 false。
+     * @param nowMs: 当前单调时间（毫秒）
+     * @retval false 总是，无需立即再轮询
+     */
     [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
 
 private:
-    /** 读取并回填身份信息（SN 缺失时用 MAC 派生）；仅启动期，非阻塞日志。 */
+    /**
+     * @brief 读取并回填身份信息（SN 缺失时用蓝牙 MAC 派生，失败退化为 "0000"）
+     * @note 仅启动期单线程调用；esp_read_mac 非 ISR，不阻塞控制台。
+     */
     void fillIdentity() noexcept;
-    /** 校验 SN、生成 BT 名并启动 SPP 服务；仅启动期，可阻塞。 */
+    /**
+     * @brief 校验 SN、生成 BT 名并启动 SPP 服务，结果写回 systemStatus
+     * @note 仅启动期单线程调用；spp_server_init 可阻塞（蓝牙控制器启动）。
+     */
     void startBt() noexcept;
 
+    /**
+     * @brief 取得已绑定的应用上下文
+     * @retval 模块所属上下文引用
+     * @note 仅模块所属任务调用；须已 bindContext，非 ISR，不阻塞。
+     */
     [[nodiscard]] AppContext &ctx() noexcept
     {
         return *context_;
@@ -40,19 +68,60 @@ private:
     AppContext *context_ = nullptr;
     SystemStatus status_{};
 };
-// 纯函数，线程/ISR 安全。
+/**
+ * @brief 从蓝牙 MAC 尾两字节派生四位十六进制 SN
+ * @param mac: 六字节蓝牙地址
+ * @param[out] out: SN 输出，至少可容纳四字符与终止符
+ * @retval true 总是，已写入四位 SN 与终止符
+ * @note 纯计算，线程/ISR 安全，不阻塞。
+ */
 [[nodiscard]] bool deriveSnFromMac(std::span<const uint8_t, core::kAddrLen> mac,
                                    std::span<char, NVS_STORE_SN_MAX + 1U> out) noexcept;
-/** 按 SN 生成设备名（无 SN 时用回退名）；写入 out 并返回是否成功。 */
+/**
+ * @brief 按合法 SN 生成蓝牙设备名
+ * @param sn: 序列号视图
+ * @param[out] out: 设备名输出；SN 校验失败不变，格式化失败首字节清零
+ * @retval true 名称已生成
+ * @retval false SN 为空、过长、含换行或格式化失败
+ * @note 纯计算，线程/ISR 安全，不阻塞。
+ */
 [[nodiscard]] bool buildDeviceName(std::string_view sn,
                                    std::span<char, kDeviceNameBuf> out) noexcept;
-/** 系统模块的控制台命令表（status/log/sys）；静态存储，进程期有效。 */
+/**
+ * @brief 取得系统命令表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ */
 [[nodiscard]] std::span<const cli::Cmd> systemCmds() noexcept;
-/** status/log/sys 子命令动词表，供 cli::addVerbs 登记。 */
+/**
+ * @brief 取得状态子命令动词表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ */
 [[nodiscard]] std::span<const cli::Verb> statusVerbs() noexcept;
+/**
+ * @brief 取得日志子命令动词表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ */
 [[nodiscard]] std::span<const cli::Verb> logVerbs() noexcept;
+/**
+ * @brief 取得系统诊断子命令动词表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ */
 [[nodiscard]] std::span<const cli::Verb> sysVerbs() noexcept;
-/** 隐藏的 factory 命令表与动词表（ADR-0009 §2.10）；help 列表不显示。 */
+/**
+ * @brief 取得工厂命令表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ * @note 隐藏的 factory 命令表与动词表（ADR-0009 §2.10）；help 列表不显示。
+ */
 [[nodiscard]] std::span<const cli::Cmd> factoryCmds() noexcept;
+/**
+ * @brief 取得工厂子命令动词表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ */
 [[nodiscard]] std::span<const cli::Verb> factoryVerbs() noexcept;
 } // namespace app

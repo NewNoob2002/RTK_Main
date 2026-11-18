@@ -1,4 +1,4 @@
-// K2 非阻塞发送回归：真实驱动与有门闩的 SDK/RTOS 替身。
+// 非阻塞发送信用回归：真实驱动与有门闩的 SDK/RTOS 替身。
 // 每个场景独立进程；pthread 只用于 host，禁止连接硬件。
 #include <pthread.h>
 #include <stdbool.h>

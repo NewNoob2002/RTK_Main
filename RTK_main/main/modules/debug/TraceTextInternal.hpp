@@ -13,7 +13,7 @@ namespace app::debug::detail {
 
 /**
  * @brief 追加一段定长文本并保持 0 结尾
- * @param out: 输出缓冲
+ * @param[out] out: 输出缓冲
  * @param cap: 缓冲容量
  * @param pos: 当前写入位置（原地推进）
  * @param fmt: printf 风格格式
@@ -24,14 +24,13 @@ inline void append(char *out, size_t cap, size_t &pos, const char *fmt, ...) noe
     if ((out == nullptr) || (cap == 0U) || (pos >= (cap - 1U))) {
         return;
     }
-    // 理由（下面三处 NOLINT）：C 可变参数只能走裸指针——va_list 在 x86_64 上就是数组类型、
+    // C ABI 约束：C 可变参数只能走裸指针——va_list 在 x86_64 上就是数组类型、
     // vsnprintf 不接受 span；越界已由上面的 pos 检查排除，写入长度由返回值夹紧。
     va_list args;
-    va_start(args,
-             fmt); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay): va_list 即数组
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    va_start(args, fmt);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     const int written = vsnprintf(&out[pos], cap - pos, fmt, args);
-    va_end(args); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay): va_list 即数组
+    va_end(args);
     if (written <= 0) {
         return;
     }
@@ -40,13 +39,14 @@ inline void append(char *out, size_t cap, size_t &pos, const char *fmt, ...) noe
     pos = (len < (cap - pos)) ? (pos + len) : (cap - 1U);
 }
 
-/** 按字段值类型渲染一段文本（平铺 18 分支映射）。
- * @param out: 输出缓冲
+/**
+ * @brief 按字段值类型渲染一段文本（平铺 18 分支格式映射）
+ * @param[out] out: 输出缓冲
  * @param cap: 缓冲容量
  * @param pos: 当前写入位置（原地推进）
  * @param value: 值类型
- * @param ev: 事件本体（取 a/b/session 等）
- * @note 仅 DebugModule 输出任务；不分配堆。
+ * @param ev: 事件本体
+ * @note 仅 trace_out 输出任务，非 ISR；不分配堆。
  */
 void appendValue(char *out, size_t cap, size_t &pos, TraceValue value,
                  const fw::TraceEvent &ev) noexcept;

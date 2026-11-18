@@ -648,7 +648,6 @@ void testConcurrentReaderStats()
 
 int main()
 {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) host 报告对象布局，格式与 size_t 匹配。
     std::printf("K1 sizeof FanoutRing=%zu Reader=%zu FanoutLease=%zu FanoutView=%zu\n",
                 sizeof(fw::FanoutRing), fw::FanoutRingTestAccess::readerSize(),
                 sizeof(fw::FanoutLease), sizeof(fw::FanoutView));

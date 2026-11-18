@@ -198,6 +198,14 @@ int cmdLog(void * /*ctx*/, int argc, char **argv) noexcept
     return 0;
 }
 
+/**
+ * @brief 查询或设置周期报告间隔
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdReport(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != 2) || (argv == nullptr)) {
@@ -224,6 +232,13 @@ int cmdReport(void * /*ctx*/, int argc, char **argv) noexcept
     return submit(command, "debug report") ? 0 : cli::kCmdFail;
 }
 
+/**
+ * @brief 保存调试设置到 NVS
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdSave(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {

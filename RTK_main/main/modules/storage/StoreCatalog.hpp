@@ -25,7 +25,11 @@ struct StoreGroup {
     StoreValueName valueName = nullptr; // 可空：数值键不需要显示名
 };
 
-/** 全部类别，按显示顺序排列。 */
+/**
+ * @brief 全部类别，按显示顺序排列。
+ * @retval 按显示顺序排列的静态持久化类别表
+ * @note 只读常量表；线程/ISR 安全，不分配、不阻塞。
+ */
 [[nodiscard]] std::span<const StoreGroup> storeCatalog() noexcept;
 
 } // namespace app

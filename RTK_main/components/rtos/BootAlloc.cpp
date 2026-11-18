@@ -127,8 +127,8 @@ fw::Status BootArena::open(const BootAllocatorOps *ops) noexcept
 }
 
 // 不拆（ADR-0013 §2.4 的保留例外）：状态→入参→重名→对齐→容量→分配→台账，顺序即契约。
-fw::Status BootArena::allocate(const char *tag, size_t bytes, // NOLINT(readability-function-*)
-                               size_t align, void *&outPtr) noexcept
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+fw::Status BootArena::allocate(const char *tag, size_t bytes, size_t align, void *&outPtr) noexcept
 {
     outPtr = nullptr;
     if (state_ != ArenaState::kOpen) {
@@ -191,6 +191,7 @@ fw::Status BootArena::allocate(const char *tag, size_t bytes, // NOLINT(readabil
     outPtr = ptr;
     return fw::Status::kOk;
 }
+// NOLINTEND(readability-function-size)
 
 fw::Status BootArena::seal() noexcept
 {

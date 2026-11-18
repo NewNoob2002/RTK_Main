@@ -1,4 +1,4 @@
-// 系统状态打印组：link/rtcm/gnss/sys 各段与聚合打印（S4 B3 按职责从 SystemCmds.cpp 拆出）。
+// 系统状态打印组：link/rtcm/gnss/sys 各段与聚合打印。
 // 仅 console REPL 任务；逐行写控制台，读 DataCenter 快照，不分配堆、非 ISR。
 
 #include <array>
@@ -25,14 +25,13 @@ uint64_t kibTenths(uint64_t bytes) noexcept
     return (bytes * kTenthsPerUnit) / kBytesPerKib;
 }
 
-// 不拆（S4 §2.1）：读取一份快照后顺序打印；拆开要么重复读快照（同一段报告内数值可能不一致），
-// 要么传 6 个以上参数。
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
 /**
- * @brief 打印链路段（会话、白名单、告警）
- * @param size: size 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ * @brief 打印链路、会话、白名单与告警快照
+ * @note 仅 console REPL 任务；输出可阻塞，非 ISR。不拆（ADR-0013 §2.4）：同段报告共享快照，拆分需重复采样或传递六个以上参数。
+ * @note 不拆（ADR-0013 §2.4）：读取一份快照后顺序打印；拆开要么重复读快照（同一段报告内数值可能不一致）， 要么传 6 个以上参数。
  */
-void printLinkSection() noexcept // NOLINT(readability-function-size)
+void printLinkSection() noexcept
 {
     const auto &data = appContext().data;
     const auto system = data.systemStatus.read();
@@ -102,6 +101,7 @@ void printLinkSection() noexcept // NOLINT(readability-function-size)
         stats.evtDropped, stats.rxWakeCalls, stats.rxUsed[0], stats.rxHighWater[0],
         stats.rxDroppedBytes[0], stats.rxUsed[1], stats.rxHighWater[1], stats.rxDroppedBytes[1]);
 }
+// NOLINTEND(readability-function-size)
 
 /**
  * @brief 打印系统段（堆、运行时长、执行器）
@@ -281,11 +281,6 @@ void printGnssSection() noexcept
 #endif
 }
 
-/**
- * @brief 打印 link 段状态
- * @param argc: 参数个数
- * @retval 0 表示成功
- */
 int cmdStatusLink(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -295,11 +290,6 @@ int cmdStatusLink(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-/**
- * @brief 打印 rtcm 段状态
- * @param argc: 参数个数
- * @retval 0 表示成功
- */
 int cmdStatusRtcm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -309,11 +299,6 @@ int cmdStatusRtcm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-/**
- * @brief 打印 gnss 段状态
- * @param argc: 参数个数
- * @retval 0 表示成功
- */
 int cmdStatusGnss(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -323,11 +308,6 @@ int cmdStatusGnss(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-/**
- * @brief 打印 sys 段状态
- * @param argc: 参数个数
- * @retval 0 表示成功
- */
 int cmdStatusSys(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -337,11 +317,6 @@ int cmdStatusSys(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-/**
- * @brief 打印全部段状态
- * @param argc: 参数个数
- * @retval 0 表示成功
- */
 int cmdStatusAll(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {

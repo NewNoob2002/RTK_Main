@@ -35,14 +35,28 @@ constexpr uint32_t kReportMinSeconds = 0U;
 constexpr uint32_t kReportMaxSeconds = 3600U;
 constexpr uint32_t kMsPerSecond = 1000U;
 constexpr uint32_t kBytesPerUnit = 1024U;
-// SPP 驱动的追踪码 → fw::trace(kSpp, …)。驱动只给数值，翻译与格式化推迟到输出任务。
+/**
+ * @brief 把 C 驱动的追踪字段转发给统一追踪环
+ * @param code: 驱动追踪码
+ * @param handle: 句柄，保留低位作为追踪会话号
+ * @param a: 事件第一个数值字段
+ * @param b: 事件第二个数值字段
+ * @note SPP 任务回调；不分配、不阻塞、不格式化，非 ISR。
+ * @note SPP 驱动的追踪码 → fw::trace(kSpp, …)。驱动只给数值，翻译与格式化推迟到输出任务。
+ */
 void sppTraceForward(spp_server_trace_code_t code, uint32_t handle, uint32_t a, uint32_t b) noexcept
 {
     fw::trace(fw::TraceCat::kSpp, static_cast<uint8_t>(code),
               static_cast<uint16_t>(handle & core::kTraceSessionMask), a, b);
 }
 
-/** 小端读取 u16；buf 长度已由调用方按键宽校验。 */
+/**
+ * @brief 读取已校验长度的两字节小端整数
+ * @param in: 输入字节视图
+ * @retval 小端 u16 数值
+ * @note 纯函数，线程/ISR 安全；调用方保证至少 2 字节。
+ * @note 小端读取 u16；buf 长度已由调用方按键宽校验。
+ */
 uint16_t readU16(std::span<const uint8_t> in) noexcept
 {
     // 两字节索引都在 in.size() ≥ 2 的前提下，移位结果仍在 16 位内。
@@ -50,7 +64,6 @@ uint16_t readU16(std::span<const uint8_t> in) noexcept
                                  static_cast<uint16_t>(static_cast<uint16_t>(in[1]) << 8U));
 }
 
-/** 小端读取 u32。 */
 uint32_t readU32(std::span<const uint8_t> in) noexcept
 {
     const uint32_t lo = static_cast<uint32_t>(readU16(in.first(2U)));
@@ -58,6 +71,12 @@ uint32_t readU32(std::span<const uint8_t> in) noexcept
     return (hi << 16U) | lo;
 }
 
+/**
+ * @brief 按小端写出两字节整数
+ * @param value: 待转换或写入的值
+ * @param out: 输出缓冲或结果
+ * @note 纯函数，线程/ISR 安全；调用方保证至少 2 字节。
+ */
 void writeU16(uint16_t value, std::span<uint8_t> out) noexcept
 {
     out[0] = static_cast<uint8_t>(value & kByteMask);

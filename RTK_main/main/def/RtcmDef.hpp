@@ -26,17 +26,30 @@ enum class RtcmTrace : uint8_t {
 /** RTCM 帧被丢弃的原因。 */
 enum class RtcmReject : uint8_t {
     kRole = 0,     // 会话不是手机角色，不转发 RTCM
-    kCapacity = 1, // 预留兼容值（K3 直推管道后不再使用批次缓存）
+    kCapacity = 1, // 预留兼容值（改为直推管道后不再使用批次缓存）
 };
 
-// 事件码是 uint8_t 负载；会话号按 core::kTraceSessionMask 截到低 16 位。线程安全：只写 trace 环。
+/**
+ * @brief 记录一条 RTCM 子事件
+ * @param code: 子事件码
+ * @param session: 会话号，按追踪字段宽度截取
+ * @param a: 事件第一个数值字段
+ * @param b: 事件第二个数值字段
+ * @note 仅 kLink 任务调用，不分配、不格式化；非 ISR。
+ * @note 事件码是 uint8_t 负载；会话号按 core::kTraceSessionMask 截到低 16 位。线程安全：只写 trace 环。
+ */
 inline void traceRtcm(RtcmTrace code, uint32_t session, uint32_t a = 0, uint32_t b = 0) noexcept
 {
     fw::trace(fw::TraceCat::kRtcm, static_cast<uint8_t>(code),
               static_cast<uint16_t>(session & core::kTraceSessionMask), a, b);
 }
 
-// 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。
+/**
+ * @brief 读取命令动词的数值编号
+ * @param value: 待转换或写入的值
+ * @retval 与枚举底层值相同的 uint8_t 动词
+ * @note 纯函数，线程/ISR 安全。
+ */
 [[nodiscard]] constexpr uint8_t verb(RtcmVerb value) noexcept
 {
     return static_cast<uint8_t>(value);

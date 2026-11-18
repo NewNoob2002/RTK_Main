@@ -296,11 +296,12 @@ void Executor::taskEntry(void *arg) noexcept
     self.run();
 }
 
+// NOLINTBEGIN(readability-function-size, readability-function-cognitive-complexity): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
 /**
  * @brief  执行器主循环：等命令、轮询模块、喂看门狗，永不返回
  * @note   不拆（ADR-0013 §2.4 的保留例外）：每轮实时路径，等待→排空命令→轮询模块→统计→喂狗的顺序与 pending 标志构成单一状态机，拆出需 4 个以上出入参且辅助函数要改冻结头。
  */
-void Executor::run() noexcept // NOLINT(readability-function-*): 单轮实时状态机，见上方 @note
+void Executor::run() noexcept
 {
     bool watchdog = false;
     if (cfg_.watchdog) {
@@ -378,4 +379,5 @@ void Executor::run() noexcept // NOLINT(readability-function-*): 单轮实时状
         vTaskDelay(cfg_.yieldTicks);
     }
 }
+// NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
 } // namespace rtos

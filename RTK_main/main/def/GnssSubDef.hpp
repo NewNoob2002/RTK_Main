@@ -1,4 +1,4 @@
-// GNSS App 数据通路（K4 / ADR-0011）扩展命令字与只追加追踪事件码；不修改冻结的 def/GnssDef.hpp。
+// GNSS App 数据通路（ADR-0011）扩展命令字与只追加追踪事件码；不修改冻结的 def/GnssDef.hpp。
 // 线程安全：纯常量与数据结构定义。ISR 安全：是。
 #pragma once
 
@@ -7,7 +7,7 @@
 namespace app {
 
 /**
- * 投递给 GnssModule 的 K4 扩展命令字（接续 def/GnssDef.hpp 中 GnssVerb 0..3，从 4 起编）。
+ * 投递给 GnssModule 的 扩展命令字（接续 def/GnssDef.hpp 中 GnssVerb 0..3，从 4 起编）。
  * args[0..7] 按 GnssOutConfig::kBlobBytes 布局编码。
  */
 enum class GnssSubVerb : uint8_t {
@@ -16,7 +16,7 @@ enum class GnssSubVerb : uint8_t {
 };
 
 /**
- * TraceCat::kGnss 的 K4 追加追踪事件码（接续 def/GnssDef.hpp 中 GnssTrace 0..9，从 10 起编，不重排旧码）。
+ * TraceCat::kGnss 的 追加追踪事件码（接续 def/GnssDef.hpp 中 GnssTrace 0..9，从 10 起编，不重排旧码）。
  */
 enum class GnssSubTrace : uint8_t {
     kAppMask = 10, // val0 = 订阅掩码，val1 = 变化来源（0=App订阅/查询，1=会话断开归零）

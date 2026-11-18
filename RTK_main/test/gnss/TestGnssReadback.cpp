@@ -143,7 +143,6 @@ std::string commandReply(const std::string &echo, const std::string &text)
 /** 测试里把字符串当只读字节看；span 无法引用字符数据，必须做一次重解释（见下方 NOLINT）。 */
 std::span<const uint8_t> bytesOf(std::string_view text)
 {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) 只读视图，不写入
     return std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(text.data()), text.size());
 }
 

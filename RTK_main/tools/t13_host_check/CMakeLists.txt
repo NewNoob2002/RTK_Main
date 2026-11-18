@@ -1,4 +1,4 @@
-# T13 驱动级回归：用 host 替身（FreeRTOS + IDF）编译真实的 components/spp_server/spp_server_*.c。
+# 驱动级回归：用 host 替身（FreeRTOS + IDF）编译真实的 components/spp_server/spp_server_*.c。
 # 不参与固件构建，也不进 test/host（test/host 属冻结输入），单独一个 CMake 工程：
 #   cmake -S tools/t13_host_check -B builds/t13 && cmake --build builds/t13
 #   ctest --test-dir builds/t13 --output-on-failure
@@ -30,7 +30,7 @@ add_library(fake_idf STATIC shim/FakeIdf.c)
 target_include_directories(fake_idf PUBLIC "${SHIM_INC}" "${APP_FW_INC}")
 target_link_libraries(fake_idf PUBLIC fake_rtos)
 
-# 被检查的真实源码：与固件同一份文件（ADR-0008 R5 拆成 5 个职责文件），按 AGENTS.md 对
+# 被检查的真实源码：与固件同一份文件（ADR-0008 §8 拆成 5 个职责文件），按 AGENTS.md 对
 # IDF 依赖组件的 C 告警集编译。
 add_library(spp_server_driver STATIC
     "${PROJ_ROOT}/components/spp_server/SppServerInit.c"

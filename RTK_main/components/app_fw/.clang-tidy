@@ -1,0 +1,7 @@
+# 日志/追踪开关须预处理；C 可变参数 ABI 使用 va_list 与 vsnprintf 的裸指针，多个实现共用。
+# 格式与参数仍由编译期 format 属性检查；其余自有代码继续执行根规则。
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay

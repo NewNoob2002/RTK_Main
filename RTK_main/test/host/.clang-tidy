@@ -7,7 +7,7 @@
 #   bugprone/hicpp-signed-bitwise                    测试按小端从 uint8_t 组装期望值（整型提升为 int），被测代码已覆盖该规则
 #   misc-const-correctness                           冻结测试中的局部结果变量；不影响被测代码，被测代码仍执行该规则
 #   readability-function-cognitive-complexity        单个用例按场景顺序铺开（逐条断言即用例内容），拆分反而藏掉失败定位；产品代码仍执行该规则
-#                                                    （S4-B3 打开该检查后露出 2 个冻结用例，需 Architect 重算 frozen 哈希）
+#                                                    （ADR-0013 §2.4：冻结用例按完整场景保留）
 InheritParentConfig: true
 Checks: >
   -readability-magic-numbers,

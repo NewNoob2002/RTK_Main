@@ -130,7 +130,6 @@ void testTlogRespectsCategoryMask()
     // 类别日志级别低于 I 时 tlog 连格式化都不做，环里不应出现记录（ADR-0009 §2.12：与追踪掩码无关）。
     fw::logSetCatLevel(fw::TraceCat::kGnss, fw::LogLevel::kWarn);
     // tlog 是冻结的 printf 风格接口（ADR-0009 §3），无法改成模板 vararg。
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     fw::tlog(fw::TraceCat::kGnss, "should be dropped");
     TEST_ASSERT_EQUAL_UINT32(0U, s_ring.stats().pushed);
 
@@ -144,7 +143,6 @@ void testTlogTextRecordFields()
     drainRing();
     fw::traceSetMask(fw::traceBit(fw::TraceCat::kGnss));
     const uint32_t before = s_clock_value;
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     fw::tlog(fw::TraceCat::kGnss, "NMEA %s, %u bytes\n", "GNGGA", kBytesMarker);
 
     fw::LogHeader hdr{};
@@ -170,7 +168,6 @@ void testTlogTruncatesWithEllipsis()
     drainRing();
     std::array<char, kLongTextLen + 1U> longFmt{};
     std::memset(longFmt.data(), 'x', kLongTextLen);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     fw::tlog(fw::TraceCat::kGnss, "%s", longFmt.data());
 
     fw::LogHeader hdr{};

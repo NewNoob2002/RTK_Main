@@ -38,12 +38,6 @@ using detail::readU32;
 using detail::traceGnssSub;
 using detail::writeU32;
 
-/**
- * @brief 加载已探测的星座族
- * @param in: 输入字节
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::loadFamily(void * /*obj*/, std::span<const uint8_t> in) noexcept
 {
     if (in.empty()) {
@@ -58,13 +52,6 @@ fw::Result GnssModule::loadFamily(void * /*obj*/, std::span<const uint8_t> in) n
     return fw::Result::kOk;
 }
 
-/**
- * @brief 保存探测到的星座族
- * @param out: 输出缓冲
- * @param len: 字节数
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::saveFamily(const void * /*obj*/, std::span<uint8_t> out,
                                   size_t &len) noexcept
 {
@@ -76,12 +63,6 @@ fw::Result GnssModule::saveFamily(const void * /*obj*/, std::span<uint8_t> out,
     return fw::Result::kOk;
 }
 
-/**
- * @brief 加载已探测的型号
- * @param in: 输入字节
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::loadModel(void * /*obj*/, std::span<const uint8_t> in) noexcept
 {
     if (in.empty()) {
@@ -95,13 +76,6 @@ fw::Result GnssModule::loadModel(void * /*obj*/, std::span<const uint8_t> in) no
     return fw::Result::kOk;
 }
 
-/**
- * @brief 保存探测到的型号
- * @param out: 输出缓冲
- * @param len: 字节数
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::saveModel(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
 {
     if (out.empty()) {
@@ -112,12 +86,6 @@ fw::Result GnssModule::saveModel(const void * /*obj*/, std::span<uint8_t> out, s
     return fw::Result::kOk;
 }
 
-/**
- * @brief 加载已探测的波特率
- * @param in: 输入字节
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::loadBaud(void * /*obj*/, std::span<const uint8_t> in) noexcept
 {
     if (in.size() < 4U) {
@@ -131,13 +99,6 @@ fw::Result GnssModule::loadBaud(void * /*obj*/, std::span<const uint8_t> in) noe
     return fw::Result::kOk;
 }
 
-/**
- * @brief 保存探测到的波特率
- * @param out: 输出缓冲
- * @param len: 字节数
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::saveBaud(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
 {
     if (out.size() < 4U) {
@@ -148,12 +109,6 @@ fw::Result GnssModule::saveBaud(const void * /*obj*/, std::span<uint8_t> out, si
     return fw::Result::kOk;
 }
 
-/**
- * @brief 加载输出频率
- * @param in: 输入字节
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::loadRate(void * /*obj*/, std::span<const uint8_t> in) noexcept
 {
     if (in.empty() || !isValidRateHz(in[0])) {
@@ -164,13 +119,6 @@ fw::Result GnssModule::loadRate(void * /*obj*/, std::span<const uint8_t> in) noe
     return fw::Result::kOk;
 }
 
-/**
- * @brief 保存输出频率
- * @param out: 输出缓冲
- * @param len: 字节数
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::saveRate(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
 {
     if (out.empty()) {
@@ -184,12 +132,6 @@ fw::Result GnssModule::saveRate(const void * /*obj*/, std::span<uint8_t> out, si
     return fw::Result::kOk;
 }
 
-/**
- * @brief 加载 GSV 卫星表开关
- * @param in: 输入字节
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::loadGsv(void * /*obj*/, std::span<const uint8_t> in) noexcept
 {
     if (in.empty() || (in[0] > 1U)) {
@@ -200,13 +142,6 @@ fw::Result GnssModule::loadGsv(void * /*obj*/, std::span<const uint8_t> in) noex
     return fw::Result::kOk;
 }
 
-/**
- * @brief 保存 GSV 卫星表开关
- * @param out: 输出缓冲
- * @param len: 字节数
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::saveGsv(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
 {
     if (out.empty()) {
@@ -219,12 +154,6 @@ fw::Result GnssModule::saveGsv(const void * /*obj*/, std::span<uint8_t> out, siz
     return fw::Result::kOk;
 }
 
-/**
- * @brief 加载输出配置
- * @param in: 输入字节
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::loadOut(void * /*obj*/, std::span<const uint8_t> in) noexcept
 {
     data::GnssOutConfig parsed{};
@@ -240,13 +169,6 @@ fw::Result GnssModule::loadOut(void * /*obj*/, std::span<const uint8_t> in) noex
     return fw::Result::kOk;
 }
 
-/**
- * @brief 保存输出配置
- * @param out: 输出缓冲
- * @param len: 字节数
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::saveOut(const void * /*obj*/, std::span<uint8_t> out, size_t &len) noexcept
 {
     const auto &cfg = appContext().gnss.out_cfg_;

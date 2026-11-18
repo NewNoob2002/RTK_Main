@@ -20,7 +20,14 @@ struct MemoryHeapView {
     size_t largest;
 };
 
-// heaps 第一项固定为 INTERNAL|8BIT；调用者在启动阶段结束后收集各能力视图。
+/**
+ * @brief 打印静态段、启动分配台账与能力堆预算
+ * @param arena: 启动分配台账
+ * @param dataBytes: .data 段字节数
+ * @param bssBytes: .bss 段字节数
+ * @param heaps: 重叠能力堆视图；首项须为 INTERNAL|8BIT
+ * @note 仅启动完成后的 console 或单线程 host；arena 须封存或终止，输出可阻塞，非 ISR。
+ */
 inline void printMemoryReport(const rtos::BootArena &arena, size_t dataBytes, size_t bssBytes,
                               std::span<const MemoryHeapView> heaps) noexcept
 {

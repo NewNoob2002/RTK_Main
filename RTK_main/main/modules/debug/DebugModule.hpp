@@ -39,7 +39,7 @@ public:
     static constexpr uint32_t kPollPeriodMs = 20;
     /** 单行事件文本上限，超长由 formatEvent 截断。 */
     static constexpr size_t kLineBytes = 192;
-    /** 输出任务栈；T3 上板 7 类全开、40 KB/s 负载下实测占用约 1.7 KB（HWM 2412/4096），取 3 KB 留约 1.3 KB 余量。 */
+    /** 输出任务栈；上板 7 类全开、40 KB/s 负载下实测占用约 1.7 KB（HWM 2412/4096），取 3 KB 留约 1.3 KB 余量。 */
     static constexpr size_t kTaskStackBytes = 3072;
     /**
      * 文本日志环容量（字节，Kconfig 默认 4096）：变长记录，容纳 GNSS 句子与十六进制转储。
@@ -52,7 +52,17 @@ public:
     static constexpr size_t kHexLineBytes = 128;
 
     constexpr DebugModule() noexcept = default;
+    /**
+     * @brief 记录所属上下文，不初始化硬件或 RTOS
+     * @param context: 所属应用上下文，生命周期须覆盖模块
+     * @note 仅对象构造时调用，不分配、不阻塞；非 ISR。
+     */
     constexpr explicit DebugModule(AppContext &context) noexcept : context_(&context) {}
+    /**
+     * @brief 绑定模块所属上下文
+     * @param context: 所属应用上下文，生命周期须覆盖模块
+     * @note 仅消费者启动前单线程调用；不分配、不阻塞，非 ISR。
+     */
     void bindContext(AppContext &context) noexcept
     {
         context_ = &context;
@@ -63,17 +73,29 @@ public:
     DebugModule(DebugModule &&) = delete;
     DebugModule &operator=(DebugModule &&) = delete;
 
-    /** 启动前单线程：绑定启动期外供存储视图；未满足容量要求返回 kInvalidArg。 */
+    /**
+     * @brief 启动前单线程：绑定启动期外供存储视图；未满足容量要求返回 kInvalidArg。
+     * @param storage: 外供存储，生命周期覆盖所有消费者
+     * @retval kOk 已绑定满足容量的视图
+     * @retval kInvalidState 环已安装或任务已运行
+     * @retval kInvalidArg 任一存储为空或不足
+     * @note 仅启动前单线程，非 ISR；不分配、不阻塞。
+     */
     [[nodiscard]] fw::Status bindStorage(const StorageView &storage) noexcept;
 
-    /** 仅启动绑定回滚、消费者尚未启动时调用；清除全部外供引用，非 ISR。 */
+    /**
+     * @brief 仅启动绑定回滚、消费者尚未启动时调用；清除全部外供引用，非 ISR。
+     * @note 仅启动绑定回滚、消费者尚未启动时调用；不阻塞，非 ISR。
+     */
     void unbindStorage() noexcept
     {
         storage_ = {};
         storage_bound_ = false;
     }
 
-    /** 启动前单线程：初始化两个环、安装 trace sink 与 SPP 钩子。幂等，重复调用返回 kOk；未绑定存储返回 kInvalidState。
+    /**
+     * @brief  安装 trace 环与 spp 钩子，从 NVS 恢复 trace 掩码、日志级别与报告周期
+     * @retval fw::Result::kOk 成功；kInvalidState 存储未绑定
      */
     [[nodiscard]] fw::Result init() noexcept;
 
@@ -86,28 +108,99 @@ public:
      */
     [[nodiscard]] fw::Result attachLog() noexcept;
 
-    /** 创建静态输出任务；重复调用返回 kBusy。仅执行器启动阶段调用。 */
+    /**
+     * @brief 创建静态输出任务；重复调用返回 kBusy。仅执行器启动阶段调用。
+     * @retval kOk 输出任务已创建
+     * @retval kInvalidState 尚未初始化或绑定存储
+     * @retval kBusy 输出任务已运行
+     * @retval kNoSpace 静态任务创建失败
+     * @retval kInvalidArg 任务参数不合法
+     * @note 仅执行器启动阶段，非 ISR；栈与控制块均外供，不分配堆。
+     */
     [[nodiscard]] fw::Result start() noexcept;
 
-    /** 组合根单线程在 link 启动确认后读取，非 ISR。 */
+    /**
+     * @brief 组合根单线程在 link 启动确认后读取，非 ISR。
+     * @retval true 输出任务已创建
+     * @retval false 输出任务未创建
+     * @note 仅组合根在启动屏障后读取，不阻塞，非 ISR。
+     */
     [[nodiscard]] bool taskRunning() const noexcept
     {
         return task_.running();
     }
 
-    /** 仅 kLink：debug report/save 动词。 */
+    /**
+     * @brief 仅 kLink：debug report/save 动词。
+     * @param cmd: 待处理指令
+     * @param[out] result: 执行结果输出
+     * @note 仅所属模块执行器任务调用，非 ISR；涉及存储时可同步等待 NVS。
+     */
     void onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
-    /** 本模块登记的持久化键（ADR-0009 §2.4），由 storage 模块在启动时加载。 */
+    /**
+     * @brief 本模块登记的持久化键（ADR-0009 §2.4），由 storage 模块在启动时加载。
+     * @retval 静态持久化键表，生命周期覆盖固件
+     * @note 启动期由 storage 读取；不分配、不阻塞，非 ISR。
+     */
     [[nodiscard]] static std::span<const fw::StoreKey> keys() noexcept;
 
-    // 以下四个适配 fw::StoreBinding：obj 由 storage 传入，但表是 constexpr、无法保存实例地址，
-    // 因此统一经 appContext() 定位唯一实例（模块是单例）。
+    /**
+     * @brief 从小端字节应用追踪类别掩码
+     * @param obj: 未使用；通过全局状态或单例应用
+     * @param in: 4 字节小端编码
+     * @retval kOk 已应用
+     * @retval kInvalidArg 长度不符
+     * @note 仅启动期存储加载路径，非 ISR，不阻塞。
+     */
     static fw::Result loadMask(void *obj, std::span<const uint8_t> in) noexcept;
+    /**
+     * @brief 把追踪类别掩码编码为小端字节
+     * @param obj: 未使用；读取全局状态或单例
+     * @param[out] out: 至少 4 字节的输出缓冲
+     * @param[out] len: 成功置 4，失败不变
+     * @retval kOk 已写入并设置 len
+     * @retval kNoSpace 输出容量不足，len 不变
+     * @note 仅 kLink 存储路径，非 ISR，不阻塞。
+     */
     static fw::Result saveMask(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    /**
+     * @brief 从小端字节应用周期报告秒数
+     * @param obj: 未使用；通过全局状态或单例应用
+     * @param in: 2 字节小端编码
+     * @retval kOk 已应用
+     * @retval kInvalidArg 长度不符或秒数超过 3600
+     * @note 仅启动期存储加载路径，非 ISR，不阻塞。
+     */
     static fw::Result loadReport(void *obj, std::span<const uint8_t> in) noexcept;
+    /**
+     * @brief 把周期报告秒数编码为小端字节
+     * @param obj: 未使用；读取全局状态或单例
+     * @param[out] out: 至少 2 字节的输出缓冲
+     * @param[out] len: 成功置 2，失败不变
+     * @retval kOk 已写入并设置 len
+     * @retval kNoSpace 输出容量不足，len 不变
+     * @note 仅 kLink 存储路径，非 ISR，不阻塞。
+     */
     static fw::Result saveReport(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    /**
+     * @brief 从小端字节应用十六进制输出掩码
+     * @param obj: 未使用；通过全局状态或单例应用
+     * @param in: 4 字节小端编码
+     * @retval kOk 已应用
+     * @retval kInvalidArg 长度不符
+     * @note 仅启动期存储加载路径，非 ISR，不阻塞。
+     */
     static fw::Result loadHex(void *obj, std::span<const uint8_t> in) noexcept;
+    /**
+     * @brief 把十六进制输出掩码编码为小端字节
+     * @param obj: 未使用；读取全局状态或单例
+     * @param[out] out: 至少 4 字节的输出缓冲
+     * @param[out] len: 成功置 4，失败不变
+     * @retval kOk 已写入并设置 len
+     * @retval kNoSpace 输出容量不足，len 不变
+     * @note 仅 kLink 存储路径，非 ISR，不阻塞。
+     */
     static fw::Result saveHex(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
     /**
      * @brief  NVS dbg/loglv → 各类别日志级别（打包表，每类别 2 bit）
@@ -119,65 +212,123 @@ public:
     /**
      * @brief  各类别日志级别 → NVS dbg/loglv
      * @param  obj: 未用（单例）
-     * @param  out: 输出缓冲（≥ 4 字节）
+     * @param[out] out: 输出缓冲（≥ 4 字节）
      * @param[out] len: 写入字节数
      * @retval kOk 成功；kNoSpace 缓冲不足
      */
     static fw::Result saveLoglv(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
 
-    /** 报告周期（秒，0 = 关闭）。跨任务读，非 ISR。 */
+    /**
+     * @brief 报告周期（秒，0 = 关闭）。跨任务读，非 ISR。
+     * @retval 报告周期（秒），0 表示关闭
+     * @note console 任务诊断读取；环查询内部加锁，非 ISR。
+     */
     [[nodiscard]] uint16_t reportPeriodS() const noexcept
     {
         // 32 位对齐的单字读取在 ESP32 上是原子的；仅用于人为读取的控制台输出。
         return report_s_;
     }
 
-    /** 环统计快照（console 任务读取，内部已加锁，非 ISR）。 */
+    /**
+     * @brief 环统计快照（console 任务读取，内部已加锁，非 ISR）。
+     * @retval trace 环累计统计快照
+     * @note console 任务诊断读取；环查询内部加锁，非 ISR。
+     */
     [[nodiscard]] fw::TraceRingStats ringStats() const noexcept
     {
         return ring_.stats();
     }
 
-    /** 环中待输出事件数（console 任务读取，内部已加锁，非 ISR）。 */
+    /**
+     * @brief 环中待输出事件数（console 任务读取，内部已加锁，非 ISR）。
+     * @retval trace 环待输出事件数
+     * @note console 任务诊断读取；环查询内部加锁，非 ISR。
+     */
     [[nodiscard]] size_t ringDepth() const noexcept
     {
         return ring_.depth();
     }
 
-    /** 文本日志环统计快照（console 任务读取，内部已加锁，非 ISR）。 */
+    /**
+     * @brief 文本日志环统计快照（console 任务读取，内部已加锁，非 ISR）。
+     * @retval 文本日志环累计统计快照
+     * @note console 任务诊断读取；环查询内部加锁，非 ISR。
+     */
     [[nodiscard]] fw::LogRingStats logRingStats() const noexcept
     {
         return log_ring_.stats();
     }
 
-    /** 文本日志环已用字节数（console 任务读取，内部已加锁，非 ISR）。 */
+    /**
+     * @brief 文本日志环已用字节数（console 任务读取，内部已加锁，非 ISR）。
+     * @retval 文本日志环已用字节数
+     * @note console 任务诊断读取；环查询内部加锁，非 ISR。
+     */
     [[nodiscard]] size_t logRingUsed() const noexcept
     {
         return log_ring_.used();
     }
 
 private:
+    /**
+     * @brief 等待启动屏障后进入唯一输出循环
+     * @param arg: DebugModule 实例，空指针时直接结束任务
+     * @note 仅 trace_out 任务，可阻塞；退出路径删除当前任务，非 ISR。
+     */
     static void taskEntry(void *arg) noexcept;
-    /** 输出任务主循环：取事件、打印丢弃计数、按周期报告。 */
+    /**
+     * @brief 输出任务主循环：取事件、打印丢弃计数、按周期报告。
+     * @note 仅 trace_out 任务，永久循环并按负载让出 tick，非 ISR。
+     */
     void run() noexcept;
-    /** 按时间戳合并输出两个环，非空返回 true 表示本轮打印过事件。 */
+    /**
+     * @brief 按时间顺序合并输出 trace 与文本日志
+     * @param line: 行格式化缓冲
+     * @param cap: 行缓冲容量（字节）
+     * @retval true 本轮输出过事件或丢弃提示
+     * @retval false 本轮无输出
+     * @note 仅 trace_out；输出可等待控制台锁，非 ISR。
+     */
     bool pumpEvents(char *line, size_t cap) noexcept;
-    /** 打印两个环的丢弃计数（有增量时），返回是否有输出。 */
+    /**
+     * @brief 打印两个环的丢弃计数（有增量时），返回是否有输出。
+     * @param[out] out: 输出缓冲或结果
+     * @param cap: 输出缓冲容量（字节）
+     * @retval true 本轮输出过丢弃计数
+     * @retval false 两个环均无新增丢弃
+     * @note 仅 trace_out 任务，可等待控制台锁，非 ISR。
+     */
     bool pumpDrops(char *out, size_t cap) noexcept;
     /**
      * @brief  输出一条文本日志记录：`[ts] CAT 句子`（非 I 级带 `E:`/`W:`/`D:` 前缀）
      * @param  hdr: 记录头
      * @param  payload: 文本（不含换行）
-     * @param  out: 行缓冲（至少 fw::kLogLineMax 字节）
+     * @param[out] out: 行缓冲（至少 fw::kLogLineMax 字节）
      * @param  cap: out 的容量
      */
     void printLogText(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
                       size_t cap) noexcept;
-    /** 输出一条十六进制日志记录：标题行 + 若干转储行。 */
+    /**
+     * @brief 以十六进制转储打印一段载荷（每行 16 字节 + ASCII 列）
+     * @param hdr: 事件头（只用 total 判断是否截断）
+     * @param payload: 已截断的载荷
+     * @param[out] out: 尾部提示文本缓冲
+     * @param cap: out 容量
+     * @note 仅 console REPL 任务；逐行写控制台，不分配堆。
+     */
     void printLogHex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
                      size_t cap) noexcept;
-    /** 到点输出一行周期报告。 */
+    /**
+     * @brief 到点输出一行周期报告。
+     * @param nowMs: 当前单调时间（毫秒）
+     * @note 仅 trace_out 任务，可等待控制台锁，非 ISR。
+     */
     void pumpReport(uint32_t nowMs) noexcept;
+    /**
+     * @brief 取得已绑定的应用上下文
+     * @retval 模块所属上下文引用
+     * @note 仅模块所属任务调用；须已 bindContext，非 ISR，不阻塞。
+     */
     [[nodiscard]] AppContext &ctx() noexcept
     {
         return *context_;
@@ -202,10 +353,18 @@ private:
     uint32_t last_prod_frames_ = 0;
 };
 
-/** debug 命令表。 */
+/**
+ * @brief 取得调试命令表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ */
 [[nodiscard]] std::span<const cli::Cmd> debugCmds() noexcept;
 
-/** debug 子命令动词表，供 cli::addVerbs 登记。 */
+/**
+ * @brief 取得调试子命令动词表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ */
 [[nodiscard]] std::span<const cli::Verb> debugVerbs() noexcept;
 
 } // namespace app

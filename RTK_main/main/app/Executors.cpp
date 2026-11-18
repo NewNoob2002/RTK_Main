@@ -1,4 +1,4 @@
-// 执行器装配（R8a，自 AppMain.cpp 迁入）：静态模块表、链路/IO 执行器配置与消费者启停。
+// 执行器装配（ADR-0009）：静态模块表、链路/IO 执行器配置与消费者启停。
 // 线程：startLink/startIo/waitStarted/stopBootTasks 只在启动任务调用，可阻塞；
 //       kModules 与配置表为静态存储，启动完成后只读。不分配堆。
 #include "app/App.hpp"
@@ -16,10 +16,9 @@ namespace {
 
 template <typename T> constexpr auto kModuleOps = fw::makeOps<T>();
 // 编号由 id() 保证无窄化；对象与操作表同为静态存储。
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, readability-identifier-naming)
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays): 长度由 module_list.inc 展开推导
 constinit const fw::Module kModules[]{
 // X-macro 生成异构对象的注册项，constexpr 函数无法替代清单展开。
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define MODULE_DEF(type, member, name, kind, executor, period)                                     \
     {name,                                                                                         \
      app::id(app::ModuleKind::kind),                                                               \
@@ -80,6 +79,14 @@ constexpr rtos::ExecutorConfig kLinkConfig{
     .waitCtx = nullptr,
 };
 
+/**
+ * @brief 检查指定执行器的全部模块是否初始化成功
+ * @param executor: 被检查的执行器
+ * @param id: 执行器编号
+ * @retval true 全部就绪或没有匹配模块
+ * @retval false 至少一个模块未就绪
+ * @note 仅启动任务读取，非 ISR，不阻塞。
+ */
 bool modulesReady(const rtos::Executor &executor, fw::ExecutorId id) noexcept
 {
     for (const auto &module : kModules) {

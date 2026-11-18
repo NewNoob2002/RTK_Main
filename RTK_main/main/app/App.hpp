@@ -1,4 +1,4 @@
-// 组合根内部接口（R8a）：控制台命令门控、启动阶段推进、启动记录查询与消费者启停。
+// 组合根内部接口（ADR-0009）：控制台命令门控、启动阶段推进、启动记录查询与消费者启停。
 // 线程：仅启动任务、console REPL 任务或执行器任务调用各自的声明；非 ISR。
 #pragma once
 
@@ -26,17 +26,36 @@ struct GatedCommand {
     bool safe = false; // console-only 阶段是否放行
 };
 
-/** 门控 handler：kStarting/kStopping 拒绝全部命令，kConsoleOnly 只放行 safe 组，kRunning 全部放行。 */
+/**
+ * @brief 按启动阶段放行或拒绝控制台命令
+ * @param ctx: 指向启动期固定的 GatedCommand
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 handler 成功
+ * @retval 非零 启动门控拒绝或 handler 失败
+ * @note 仅 console REPL 任务；可能随 handler 阻塞，非 ISR。
+ * @note 门控 handler：kStarting/kStopping 拒绝全部命令，kConsoleOnly 只放行 safe 组，kRunning 全部放行。
+ */
 int gatedCommand(void *ctx, int argc, char **argv) noexcept;
 
-/** 进入 kConsoleOnly 阶段（启动失败后只留诊断命令）。 */
+/**
+ * @brief 把启动阶段切到仅诊断控制台模式
+ * @note 仅启动任务调用；原子发布，不阻塞，非 ISR。
+ */
 void setConsoleOnly() noexcept;
 
-/** 已执行的启动步骤记录；boot 返回后只读，boot 之前为空。 */
+/**
+ * @brief 取得已执行的启动步骤记录
+ * @retval 启动前为空，启动后为只读记录视图
+ * @note 启动完成后由 console 任务读取，非 ISR；记录存储活过启动任务。
+ */
 [[nodiscard]] std::span<const BootRecord> bootRecords() noexcept;
 
 #if defined(ESP_PLATFORM)
-/** 把静态执行器实例绑定到组合根（contexts 步骤调用，先于任何执行器使用）。 */
+/**
+ * @brief 把静态执行器实例绑定到组合根
+ * @note 仅启动前单线程调用，先于任何执行器访问；非 ISR，不阻塞。
+ */
 void bindExecutors() noexcept;
 
 /**
@@ -59,18 +78,42 @@ void bindExecutors() noexcept;
  */
 void runConsole() noexcept;
 
-/** 启动链路执行器并等待首批模块就绪；成功返回 nullptr，失败返回降级原因字符串。 */
+/**
+ * @brief 启动链路执行器并等待首批模块就绪；成功返回 nullptr，失败返回降级原因字符串。
+ * @param linkStack: 外供链路任务栈，须活到重启
+ * @param launched: 已创建任务位掩码，任务创建成功即追加链路位
+ * @retval nullptr 启动成功
+ * @retval 非空 链路初始化、任务创建或模块启动失败原因
+ * @note 仅启动任务；等待屏障可阻塞至 5 s，非 ISR。
+ */
 [[nodiscard]] const char *startLink(std::span<StackType_t> linkStack, uint32_t &launched) noexcept;
 
 #if RTK_GNSS_ENABLED
-/** 启动 IO 执行器并等待首批模块就绪；成功返回 nullptr，失败返回降级原因字符串。 */
+/**
+ * @brief 启动 IO 执行器并等待首批模块就绪；成功返回 nullptr，失败返回降级原因字符串。
+ * @param ioStack: 外供 IO 任务栈，须活到重启
+ * @param launched: 已创建任务位掩码，任务创建成功即追加 IO 位
+ * @retval nullptr 启动成功
+ * @retval 非空 IO 初始化、任务创建或模块启动失败原因
+ * @note 仅启动任务；等待屏障可阻塞至 5 s，非 ISR。
+ */
 [[nodiscard]] const char *startIo(std::span<StackType_t> ioStack, uint32_t &launched) noexcept;
 #endif
 
-/** 等待已启动任务到达启动屏障；超时记录 task_start_timeout 并返回 false。 */
+/**
+ * @brief 等待指定任务到达启动屏障
+ * @param bits: 要等待的任务位掩码
+ * @retval true 指定任务全部到达
+ * @retval false 等待达到 5 s 上限
+ * @note 仅启动任务，可阻塞，非 ISR。
+ */
 [[nodiscard]] bool waitStarted(uint32_t bits) noexcept;
 
-/** 撤销启动：等待已启动任务停稳后停止 GNSS UART 与 SPP，并置 console-only；SEALED 块始终保留。 */
+/**
+ * @brief 撤销启动：等待已启动任务停稳后停止 GNSS UART 与 SPP，并置 console-only；SEALED 块始终保留。
+ * @param launched: 必须确认停稳的已创建任务位掩码
+ * @note 仅启动任务；停稳等待至多 5 s，超时保留驱动和存储；非 ISR。
+ */
 void stopBootTasks(uint32_t launched) noexcept;
 #endif // ESP_PLATFORM
 

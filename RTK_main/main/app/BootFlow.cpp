@@ -1,4 +1,4 @@
-// 启动流程（R8a）：13 步有序步骤表、降级/回滚/停机处理、横幅与单行摘要、步骤记录查询。
+// 启动流程（ADR-0009）：13 步有序步骤表、降级/回滚/停机处理、横幅与单行摘要、步骤记录查询。
 // 线程：仅 app_main 的启动任务调用（boot()、各步骤函数）；非 ISR，可阻塞，启动期一次性完成。
 // 启动完成后 s_boot_records 只读，供 `sys boot` 与 RTK_BOOT_VERBOSE 查询。
 #include "app/App.hpp"
@@ -45,12 +45,22 @@ constexpr int64_t kUsPerMs = 1000;
 constexpr uint32_t kTenthsPerKb = 10U;
 constexpr uint32_t kBytesPerKb = 1024U;
 
+/**
+ * @brief 采样启动步骤使用的单调时钟
+ * @retval 当前单调时间（毫秒）
+ * @note 仅启动任务，非 ISR，不阻塞。
+ */
 uint32_t nowMsHook() noexcept
 {
     // 启动至今的毫秒数远小于 uint32 上限（约 49 天），截断安全。
     return static_cast<uint32_t>(esp_timer_get_time() / kUsPerMs);
 }
 
+/**
+ * @brief 采样内部 8-bit 堆容量
+ * @retval 空闲、历史最小空闲与最大可分配块（字节）
+ * @note 仅启动任务，非 ISR。
+ */
 app::BootHeap heapHook() noexcept
 {
     app::BootHeap heap{};
@@ -86,7 +96,7 @@ bool enablePowerHold() noexcept
     return true;
 }
 
-// NOLINTBEGIN(misc-const-correctness): step_* 的 BootCtx & 形参由 BootStep::fn 签名固定
+// NOLINTBEGIN(misc-const-correctness): step* 的 BootCtx & 形参由 BootStep::fn 签名固定
 /**
  * @brief  启动步骤 1：安装日志直写通道（此后启动日志带时间戳与类别），再做电源保持
  * @param  ctx: 启动上下文（未用）
@@ -122,7 +132,7 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 3：绑定数据主题共享锁与执行器指针（K5 顺序：contexts 先于 console）
+ * @brief  启动步骤 3：绑定数据主题共享锁与执行器指针（启动顺序：contexts 先于 console）
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是
  */
@@ -170,7 +180,7 @@ app::BootResult stepAlloc(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤 6：把缓冲交给各 C 驱动；失败时按 K5 语义回滚已绑定部分
+ * @brief  启动步骤 6：把缓冲交给各 C 驱动；失败时按 ADR-0011 §7 语义回滚已绑定部分
  * @param  ctx: 启动上下文（读写 user/reason）
  * @retval kOk 成功；kFail 绑定失败
  */
@@ -248,7 +258,12 @@ app::BootResult stepSystem(app::BootCtx &ctx) noexcept
     return app::BootResult::kOk;
 }
 
-/** trace_out 任务在 debug 步骤已启动；进入任务启动阶段前计入 launched，失败停机时一并等待它停稳。 */
+/**
+ * @brief 在输出任务已创建时登记启动掩码
+ * @param ctx: 启动上下文，launched 可追加 trace 位
+ * @note 仅启动任务，非 ISR，不阻塞。
+ * @note trace_out 任务在 debug 步骤已启动；进入任务启动阶段前计入 launched，失败停机时一并等待它停稳。
+ */
 void markTraceLaunched(app::BootCtx &ctx) noexcept
 {
 #if FW_TRACE_ENABLED
@@ -267,7 +282,7 @@ void markTraceLaunched(app::BootCtx &ctx) noexcept
  */
 app::BootResult stepLink(app::BootCtx &ctx) noexcept
 {
-    // 与 K5 一致：从这里起任何失败（含 launched==0）都走 stopBootTasks，撤销 GNSS/SPP 启动状态。
+    // 按启动回滚约束：从这里起任何失败（含 launched==0）都走 stopBootTasks，撤销 GNSS/SPP 启动状态。
     ctx.stopRequired = true;
     markTraceLaunched(ctx);
     const auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
@@ -323,7 +338,6 @@ app::BootResult stepStarted(app::BootCtx &ctx) noexcept
     self.bootPhase.store(app::BootPhase::kRunning, std::memory_order_release);
     return app::BootResult::kOk;
 }
-
 // NOLINTEND(misc-const-correctness)
 
 constexpr std::array<app::BootStep, 13U> kBootSteps{{
@@ -345,9 +359,15 @@ constexpr std::array<app::BootStep, 13U> kBootSteps{{
 constinit std::array<app::BootRecord, std::size(kBootSteps)> s_boot_records{};
 size_t s_boot_executed{};
 
-/** 降级处理：记录原因；进入任务启动阶段后停机（K5 语义），未封存时回滚绑定，否则只留 console-only。 */
-// NOLINTNEXTLINE(misc-const-correctness): 由 BootStep::onDegrade 固定
-void handleDegrade(app::BootCtx &ctx, const char *reason) noexcept
+/**
+ * @brief 按已启动的消费者决定停机或回滚
+ * @param ctx: 启动上下文，携带任务掩码与外供缓冲
+ * @param reason: 诊断原因，须活过使用方
+ * @note 仅启动任务，可等待任务停稳，非 ISR。
+ */
+void handleDegrade(
+    app::BootCtx &ctx, // NOLINT(misc-const-correctness): 由 BootStep::onDegrade 签名固定
+    const char *reason) noexcept
 {
     app::AppContext &self = app::appContext();
     if (reason != nullptr) {
@@ -359,7 +379,7 @@ void handleDegrade(app::BootCtx &ctx, const char *reason) noexcept
         return;
     }
     if ((self.bootArena.state() == rtos::ArenaState::kOpen) && (ctx.user != nullptr)) {
-        // 故障注入跳过 bind/seal 步骤体时分配器仍为 OPEN：与 K5 一致先解绑再 abort，不留下半绑定的块。
+        // 故障注入跳过 bind/seal 步骤体时分配器仍为 OPEN：按启动回滚约束先解绑再 abort，不留下半绑定的块。
         app::rollbackBootBindings(*static_cast<app::BootBuffers *>(ctx.user),
                                   (reason != nullptr) ? reason : app::boot_reason::kAllocAbort);
     }
@@ -432,10 +452,6 @@ std::span<const BootRecord> bootRecords() noexcept
     return std::span{s_boot_records}.first(s_boot_executed);
 }
 
-/**
- * @brief  按步骤表完成启动；任一步失败则回滚并降级为 console-only，最后启动 REPL
- * @note   只在 app_main 任务调用一次。
- */
 void AppContext::boot() noexcept
 {
     BootBuffers bufs{};

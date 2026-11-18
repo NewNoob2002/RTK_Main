@@ -47,7 +47,7 @@ inline constexpr std::array<fw::StoreKey, 4U> kKeys = {{
      .flags = fw::store_flag::kConsole,
      .min = 0,
      .max = static_cast<int32_t>(fw::kTraceAllMask),
-     .help = "hex dump category mask (tlog_hex)",
+     .help = "hex dump category mask",
      .binding = {.obj = nullptr, .load = &DebugModule::loadHex, .save = &DebugModule::saveHex}},
     {.ns = "dbg",
      .key = "loglv",

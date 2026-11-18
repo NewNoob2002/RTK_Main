@@ -70,7 +70,7 @@ OWNED_ROOTS = ("components", "main")
 SKIP_SEGMENTS = ("test", "golden")
 
 # 冻结的 test/host/CMakeLists.txt 不编译 device_proto/DemuxFrame.cpp（该文件由 t13_host_check 目标链接），
-# 因此它在 host 编译数据库里没有条目；Q3 起按 job 构造规则回落到 ESP 数据库（该文件属于 device_proto 组件，
+# 因此它在 host 编译数据库里没有条目；按 job 构造规则回落到 ESP 数据库（该文件属于 device_proto 组件，
 # 在 idf.py 构建中有条目），不再手工补包含路径。
 
 

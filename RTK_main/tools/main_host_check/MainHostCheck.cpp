@@ -23,7 +23,6 @@ extern "C" {
 #include "esp_system.h"
 
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
-// NOLINTBEGIN(readability-magic-numbers)
 namespace {
 uint32_t s_clock = 100U;
 uint32_t s_write_delay = 0U;
@@ -271,7 +270,7 @@ void rxFairness()
     uint32_t tick = s_clock;
     const uint32_t start = s_clock;
     link_round(tick);
-    // K3 支持单轮多帧连续消费，受 512B 字节预算限制而不是 1 帧上限。
+    // 支持单轮多帧连续消费，受 512B 字节预算限制而不是 1 帧上限。
     CHECK(s_write_calls > 1U && s_clock == start);
     CHECK(s_sessions[0].drainPending && s_input_offset[0] < s_input_size[0]);
     Command cmd{};
@@ -444,7 +443,7 @@ void rtcmMix()
     event(SPP_SERVER_EVT_DATA, 1);
     uint32_t tick = s_clock;
     link_round(tick);
-    // K3 支持单轮多帧连续 feed（<=512B）：混杂的 2 条产品帧与 2 条 RTCM 帧在同一轮直推完成。
+    // 支持单轮多帧连续 feed（<=512B）：混杂的 2 条产品帧与 2 条 RTCM 帧在同一轮直推完成。
     CHECK(s_write_calls == 2 && s_service->stats().framesRx == 2);
     checkReply(0, 1);
     checkReply(1, 2);
@@ -842,7 +841,6 @@ esp_err_t nvs_store_set_alarms(const uint8_t (*alarms)[NVS_STORE_ADDR_LEN], size
         const std::span rows{alarms, count};
         for (size_t idx = 0U; idx < count; ++idx) {
             // C ABI 二维数组行交给 memcpy，长度固定为 NVS_STORE_ADDR_LEN。
-            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
             std::memcpy(s_saved[idx].data(), rows[idx], NVS_STORE_ADDR_LEN);
         }
     }
@@ -918,7 +916,7 @@ void creditWindow()
           s_service->stats().dispatchCancelled == 1U);
 }
 
-// K3：验证 RX level 兜底、paused replyReady 复查与 BTC 通知唤醒（不依赖轮询睡死）。
+// 验证 RX level 兜底、paused replyReady 复查与 BTC 通知唤醒（不依赖轮询睡死）。
 void rxWakeLevelRecheck()
 {
     using namespace app;
@@ -981,7 +979,7 @@ void rxWakeLevelRecheck()
     CHECK(s_service->stats().framesRx == 3U && s_write_calls == 3U);
 }
 
-// K3：验证 512B 读缓冲尾切片保留、单会话暂停不阻塞另一会话、以及 CLOSE 清理。
+// 验证 512B 读缓冲尾切片保留、单会话暂停不阻塞另一会话、以及 CLOSE 清理。
 void rx512PartialAndPauseIsolation()
 {
     using namespace app;
@@ -1039,7 +1037,7 @@ void rx512PartialAndPauseIsolation()
           s_service->stats().dispatchCancelled == 1U);
 }
 
-// K3：验证 RtcmPipe 4096B 直推满帧整帧丢弃与 kIo 写状态统计契约。
+// 验证 RtcmPipe 4096B 直推满帧整帧丢弃与 kIo 写状态统计契约。
 void rtcmPipeDirectAndIoStats()
 {
     app::RtcmPipe pipe;
@@ -1093,7 +1091,7 @@ int main(int argc, const char **raw_args)
 #endif
         CHECK(!snap.btReady && !snap.linkRunning);
     } else if (std::strcmp(argv[1], "debug_cat_names") == 0) {
-        // 控制台习惯输小写，表里是大写短名：两种写法都必须解析（T4 上板发现小写被拒）。
+        // 控制台习惯输小写，表里是大写短名：两种写法都必须解析（上板发现小写被拒）。
         fw::TraceCat cat = fw::TraceCat::kLink;
         CHECK(app::debug::parseCat("gnss", cat) && cat == fw::TraceCat::kGnss);
         CHECK(app::debug::parseCat("GNSS", cat) && cat == fw::TraceCat::kGnss);
@@ -1136,4 +1134,3 @@ int main(int argc, const char **raw_args)
     std::puts(argv[1]);
     return s_failures ? 1 : 0;
 }
-// NOLINTEND(readability-magic-numbers)

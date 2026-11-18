@@ -1,4 +1,4 @@
-// 复位原因短名实现（R8a）：与 sys info 的 reset_reason 字段共用。
+// 复位原因短名实现（ADR-0009）：与 sys info 的 reset_reason 字段共用。
 // 线程：任意任务与启动期可调用；纯函数、无状态，ISR 安全。
 #include "support/ResetReason.hpp"
 

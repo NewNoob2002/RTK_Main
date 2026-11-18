@@ -1,4 +1,4 @@
-/* T15：纯 C 公共接口冒烟测试；全部状态由当前用例独占，无堆分配。
+/* 纯 C 公共接口冒烟测试；全部状态由当前用例独占，无堆分配。
  */
 #include "DevProtoFrame.h"
 #include "DevProtoAlarm.h"

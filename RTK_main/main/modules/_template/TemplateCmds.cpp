@@ -19,6 +19,13 @@ constexpr size_t kBitsPerByte = 8U;
 // 复制模板后，在 AppConfig.hpp 新增 ModuleKind，并改为 id(ModuleKind::k<Name>)。
 constexpr fw::ModuleId kTargetPlaceholder = 0xFFU;
 
+/**
+ * @brief 显示模板依赖的系统状态
+ * @param argc: 参数数量
+ * @retval 0 成功
+ * @retval 非零 参数或提交失败，已输出 ERR
+ * @note 仅 console REPL 任务，可等待执行器或控制台输出，非 ISR。
+ */
 int cmdTmplStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -31,6 +38,14 @@ int cmdTmplStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 校验并提交模板周期设置
+ * @param argc: 参数数量
+ * @param argv: 参数数组
+ * @retval 0 成功
+ * @retval 非零 参数或提交失败，已输出 ERR
+ * @note 仅 console REPL 任务，可等待执行器或控制台输出，非 ISR。
+ */
 int cmdTmplLimit(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != static_cast<int>(kLimitArgs)) || (argv == nullptr)) {
@@ -59,8 +74,16 @@ constexpr std::array<cli::Verb, 2U> kTemplateVerbs{{
     {"limit", "<ms>", "set poll step limit (1-60000 ms)", cmdTmplLimit},
 }};
 
-// esp_console_cmd_func_with_context_t 签名为 int(void *, int, char **)，不可改为 char *const *。
-// NOLINTNEXTLINE(misc-const-correctness)
+/**
+ * @brief 分派模板子命令
+ * @note 处理器 ABI 固定为 int(void *, int, char **)，不可添加参数 const。
+ * @param ctx: 处理器上下文
+ * @param argc: 参数数量
+ * @param argv: 参数数组
+ * @retval 0 成功
+ * @retval 非零 参数或提交失败，已输出 ERR
+ * @note 仅 console REPL 任务，可等待执行器或控制台输出，非 ISR。
+ */
 int cmdTmpl(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kTemplateVerbs, ctx, argc, argv);

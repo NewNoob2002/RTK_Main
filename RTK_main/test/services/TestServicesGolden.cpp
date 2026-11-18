@@ -1,4 +1,4 @@
-// golden 等价测试（ADR-0007 §9 门禁 2、任务卡 J2a）：同一输入同时喂旧 CommandDispatcher 与
+// golden 等价测试（ADR-0007 §9 门禁 2）：同一输入同时喂旧 CommandDispatcher 与
 // CommandRouter + 4 个服务，比较 DispatchResult、reply.bytes()、whitelistChanged、heartbeat，
 // 以及 AlarmService::buildStatusPush 与旧 buildStatusPush 的字节。
 // 一侧发现不一致时以旧实现为准修改服务，不得修改本测试的期望。
@@ -9,7 +9,7 @@
 #include <span>
 #include <string_view>
 
-// 旧实现已于 J2b 退役：下面这行经 -I reference/cpp-v3-dispatcher 指向 reference/ 里的只读基准（内容未改）。
+// 旧实现已退役：下面这行经 -I reference/cpp-v3-dispatcher 指向 reference/ 里的只读基准（内容未改）。
 #include "core/command_dispatcher.hpp"
 #include "core/CommandRouter.hpp"
 #include "core/services/AlarmService.hpp"
@@ -59,7 +59,7 @@ constexpr uint32_t kDeviceNowMs = 2000;
 constexpr uint32_t kConfigNowMs = 3000;
 constexpr uint32_t kAlarmNowMs = 4000;
 
-// 4 张表合计 13 条路由（设备 5 + 配置 3 + 报警 4 + 配对 1）；0x04/0x05 在 K4 移交 GnssService。
+// 4 张表合计 13 条路由（设备 5 + 配置 3 + 报警 4 + 配对 1）；0x04/0x05 已移交 GnssService。
 constexpr size_t kRouteCount = 13;
 
 constexpr SessionHandle kPhoneHandle = 0x81;

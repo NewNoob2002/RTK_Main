@@ -1,0 +1,4 @@
+# 追踪文本的 C 可变参数格式化需 va_list 数组退化；容量和返回长度由 append 校验。
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay

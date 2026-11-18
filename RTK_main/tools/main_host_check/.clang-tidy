@@ -1,0 +1,6 @@
+# host 回归断言保留数值 oracle；setjmp 的 C 数组 ABI 与固定格式诊断跨多个测试文件共用。
+InheritParentConfig: true
+Checks: >
+  -readability-magic-numbers,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-type-vararg

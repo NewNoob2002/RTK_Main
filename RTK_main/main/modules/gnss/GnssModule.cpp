@@ -35,11 +35,6 @@ using detail::addUniqueDecoder;
 using detail::toResult;
 using detail::traceGnssSub;
 
-/**
- * @brief 构造子对象并回填未被 NVS 覆盖的默认配置
- * @retval kOk: 子对象已就绪；其他: 保留给上位调用方
- * @note 仅 IO 任务启动期调用；emplace 不分配堆（成员已在 .bss）。
- */
 fw::Result GnssModule::initObjects() noexcept
 {
     sink_.emplace(this);
@@ -62,11 +57,6 @@ fw::Result GnssModule::initObjects() noexcept
     return fw::Result::kOk;
 }
 
-/**
- * @brief 起 UART、RTCM 管道、解码器表与分流器，并算出候选波特率
- * @retval kOk: 通路就绪；其他: 已回滚并记录失败原因
- * @note 仅启动期单线程调用；UART 安装可阻塞，非 ISR。
- */
 fw::Result GnssModule::initPipelines() noexcept
 {
     const fw::Result uartResult = initUart();
@@ -93,11 +83,6 @@ fw::Result GnssModule::initPipelines() noexcept
     return fw::Result::kOk;
 }
 
-/**
- * @brief 用默认输出计划启动控制器并发布初始状态
- * @retval kOk: 控制器已启动；其他: 已回滚并记录失败原因
- * @note 仅启动期单线程调用；非阻塞、不分配堆。
- */
 fw::Result GnssModule::startController() noexcept
 {
     const auto &cfg = ensureRoverCfg();
@@ -124,9 +109,13 @@ fw::Result GnssModule::startController() noexcept
 }
 
 /**
- * @brief 初始化 GNSS 模块（UART、分流、控制器）
- * @retval kOk: 已就绪；其他: 失败原因（已回滚）
- * @note 仅 IO 任务启动期调用；可阻塞（UART 安装），非 ISR。
+ * @brief 初始化 UART、分流器与控制器
+ * @retval kOk 已初始化或重复调用
+ * @retval kInvalidState 上下文、外供存储或控制对象状态不合法
+ * @retval kInvalidArg UART/GPIO 或管道参数不合法
+ * @retval kNoSpace 驱动或管道创建资源不足
+ * @retval kIoError IDF 操作失败；清理失败时优先返回清理错误
+ * @note 仅启动前单线程调用；UART 安装可阻塞，非 ISR。
  */
 fw::Result GnssModule::init() noexcept
 {
@@ -236,10 +225,6 @@ fw::Result GnssModule::start() noexcept
     return fw::Result::kOk;
 }
 
-/**
- * @brief  等 UART 数据或命令事件，最长 maxMs
- * @param  maxMs: 最长等待（ms）
- */
 void GnssModule::wait(uint32_t maxMs) noexcept
 {
     if (!initialized_) {
@@ -390,11 +375,6 @@ void GnssModule::publishStatus(uint32_t nowMs) noexcept
     last_published_state_ = st.state;
 }
 
-/**
- * @brief 登记基础解码器与各驱动私有解码器（顺序即探测优先级）
- * @param receivers: 编译期启用的接收机实例表（可为空表）
- * @note 仅 init() 调用；重复登记同一解码器会被跳过。
- */
 void GnssModule::registerDecoders(std::span<const ::gnss::Receiver *const> receivers) noexcept
 {
     decoder_count_ = 0U;
@@ -411,10 +391,6 @@ void GnssModule::registerDecoders(std::span<const ::gnss::Receiver *const> recei
     }
 }
 
-/**
- * @brief 生成探测用的候选波特率表：默认值优先，其后按从快到慢回退
- * @note 仅 init() 调用；重复值只保留一次，顺序即尝试顺序。
- */
 void GnssModule::initBaudCandidates() noexcept
 {
     constexpr std::array<uint32_t, kMaxBaudCandidates> kCandidateBauds{{

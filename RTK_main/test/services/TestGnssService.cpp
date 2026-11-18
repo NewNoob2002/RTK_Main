@@ -1,4 +1,4 @@
-// GnssService 单元测试（K4 / ADR-0011）：6 路路由、interval 换算、支持位掩码门限（ADR-0012 §2.5）、<=256B 查询、>256B
+// GnssService 单元测试（ADR-0011）：6 路路由、interval 换算、支持位掩码门限（ADR-0012 §2.5）、<=256B 查询、>256B
 // 计数与重连归零。
 
 #include <array>

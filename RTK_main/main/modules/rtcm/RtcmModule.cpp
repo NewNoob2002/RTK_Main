@@ -8,11 +8,6 @@ namespace {
 constexpr uint32_t kRateWindowMs = 1000U;
 constexpr uint64_t kMsPerSecond = 1000ULL;
 } // namespace
-/**
- * @brief 首个 poll 轮次初始化速率窗口
- * @param nowMs: 当前毫秒
- * @note 仅 kLink 任务；非阻塞、不分配堆。
- */
 void RtcmModule::startRateWindow(uint32_t nowMs) noexcept
 {
     if (rate_started_) {
@@ -23,12 +18,6 @@ void RtcmModule::startRateWindow(uint32_t nowMs) noexcept
     rate_window_bytes_ = stats_.bytes;
 }
 
-/**
- * @brief 按统计世代把 bt_link 快照折算成 next
- * @param snap: bt_link 侧累计快照
- * @param next: 输出，本轮的累计值
- * @note 仅 kLink 任务；世代一致时直接采用，否则按 reset 基线扣减，避免回滚旧累计。
- */
 void RtcmModule::takeSnapshot(const RtcmLinkSnapshot &snap, RtcmStats &next) const noexcept
 {
     if (snap.resetEpoch == reset_epoch_) {
@@ -65,13 +54,6 @@ void RtcmModule::takeSnapshot(const RtcmLinkSnapshot &snap, RtcmStats &next) con
     next.lastMsg = 0U;
 }
 
-/**
- * @brief 速率窗口到期时刷新 bytesPerSec
- * @param nowMs: 当前毫秒
- * @param next: 输入输出，本轮累计与速率
- * @retval true: 速率已变化（需发布）；false: 未到期或速率未变
- * @note 仅 kLink 任务；elapsed ≥ 1000 保证换算不溢出。
- */
 bool RtcmModule::refreshRate(uint32_t nowMs, RtcmStats &next) noexcept
 {
     const uint32_t elapsed = nowMs - rate_window_ms_;
@@ -92,12 +74,6 @@ bool RtcmModule::refreshRate(uint32_t nowMs, RtcmStats &next) noexcept
     return true;
 }
 
-/**
- * @brief 每轮把 bt_link 累计折算进 RtcmStats 并在变化时发布（ADR-0006 兼容字段）
- * @param nowMs: 当前毫秒
- * @retval 恒 false（无跨轮积压）
- * @note 仅 kLink 任务；非阻塞、非 ISR、不分配堆。
- */
 bool RtcmModule::poll(uint32_t nowMs) noexcept
 {
     startRateWindow(nowMs);

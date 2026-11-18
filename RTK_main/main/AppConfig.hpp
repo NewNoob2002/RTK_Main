@@ -27,7 +27,6 @@ inline constexpr size_t kLinkRxBufBytes = 512U;
 
 // 统一宏（host 与 CONFIG_RTK_GNSS_ENABLE=n 下均为 0），避免各处重复判断 defined。
 #if defined(CONFIG_RTK_GNSS_ENABLE) && CONFIG_RTK_GNSS_ENABLE
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): 全仓以 #if 条件编译使用，constexpr 不能参与预处理
 #define RTK_GNSS_ENABLED 1
 #else
 #define RTK_GNSS_ENABLED 0
@@ -51,17 +50,33 @@ enum class ModuleKind : uint8_t { kBtLink, kRtcm, kStorage, kSystem, kSystemMode
 /** 执行器编号；链路与 GNSS IO 分别绑核运行。 */
 enum class ExecKind : uint8_t { kLink, kIo };
 
-// 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。
+/**
+ * @brief 读取模块或执行器的数值编号
+ * @param value: 待转换或写入的值
+ * @retval 与枚举底层值相同的 uint8_t 编号
+ * @note 纯函数，线程/ISR 安全。
+ */
 [[nodiscard]] constexpr uint8_t id(ModuleKind value) noexcept
 {
     return static_cast<uint8_t>(value);
 }
+/**
+ * @brief 读取模块或执行器的数值编号
+ * @param value: 待转换或写入的值
+ * @retval 与枚举底层值相同的 uint8_t 编号
+ * @note 纯函数，线程/ISR 安全。
+ */
 [[nodiscard]] constexpr uint8_t id(ExecKind value) noexcept
 {
     return static_cast<uint8_t>(value);
 }
 
-// 线程/ISR 安全：纯函数。
+/**
+ * @brief 读取构建配置选定的蓝牙会话策略
+ * @retval kPhonePreempt 手机抢占配置
+ * @retval kConcurrent 其他配置
+ * @note 纯函数，线程/ISR 安全。
+ */
 [[nodiscard]] constexpr core::Policy policyFromConfig() noexcept
 {
 #if defined(CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT)
@@ -70,6 +85,13 @@ enum class ExecKind : uint8_t { kLink, kIo };
     return core::Policy::kConcurrent;
 #endif
 }
+/**
+ * @brief 取得会话策略的显示名
+ * @param policy: 待显示的策略
+ * @retval PHONE_PREEMPT 手机抢占策略
+ * @retval CONCURRENT 其余值
+ * @note 纯函数，线程/ISR 安全。
+ */
 [[nodiscard]] inline const char *policyName(core::Policy policy) noexcept
 {
     return policy == core::Policy::kPhonePreempt ? "PHONE_PREEMPT" : "CONCURRENT";

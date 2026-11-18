@@ -45,6 +45,15 @@ constexpr uint32_t kApplyPollRounds = 120U;
 constexpr int kDecimalBase = 10;
 constexpr int kOutSetArgc = 3;
 
+/**
+ * @brief 解析语句名或 all
+ * @param name: 语句名或 all
+ * @param outIdx: 单类下标输出；all 或失败时不改
+ * @param isAll: 是否为 all；失败时为 false
+ * @retval true 名称有效
+ * @retval false 名称未知，outIdx 不变
+ * @note 仅 console REPL 任务，不阻塞，非 ISR。
+ */
 bool parseMsgIndex(std::string_view name, uint8_t &outIdx, bool &isAll) noexcept
 {
     isAll = false;
@@ -61,6 +70,14 @@ bool parseMsgIndex(std::string_view name, uint8_t &outIdx, bool &isAll) noexcept
     return false;
 }
 
+/**
+ * @brief 解析十进制有符号 8 位周期
+ * @param text: 零结尾周期文本，可为空
+ * @param outVal: 周期输出，失败不变
+ * @retval true 已更新 outVal
+ * @retval false 空串、非法尾部或超出 -128..127，outVal 不变
+ * @note 仅 console REPL 任务，不阻塞，非 ISR。
+ */
 bool parseI8Range(const char *text, int8_t &outVal) noexcept
 {
     if ((text == nullptr) || (*text == '\0')) {
@@ -76,6 +93,13 @@ bool parseI8Range(const char *text, int8_t &outVal) noexcept
     return true;
 }
 
+/**
+ * @brief 把 GNSS 执行结果转成控制台诊断
+ * @param res: 执行结果
+ * @retval true 状态为 kOk
+ * @retval false 执行失败，已打印错误
+ * @note 仅 console REPL 任务；输出可阻塞，非 ISR。
+ */
 bool reportGnssResult(const fw::CommandResult &res) noexcept
 {
     switch (res.status) {
@@ -101,7 +125,14 @@ bool reportGnssResult(const fw::CommandResult &res) noexcept
 
 bool submitGnss(const fw::Command &cmd) noexcept;
 
-/** 打印本轮输出计划的逐项结果；成功返回 true。 */
+/**
+ * @brief 打印本轮输出计划的逐项结果；成功返回 true。
+ * @param before: 提交前状态，用于识别输出关闭
+ * @param after: 提交后输出计划与应用结果
+ * @retval true 本轮没有失败语句
+ * @retval false 至少一条语句失败
+ * @note 仅 console REPL 任务；输出可阻塞，非 ISR。
+ */
 bool reportOutputPlan(const GnssStatus &before, const GnssStatus &after) noexcept
 {
     bool ok = true;
@@ -125,8 +156,11 @@ bool reportOutputPlan(const GnssStatus &before, const GnssStatus &after) noexcep
 }
 
 /**
- * 提交命令并等待两阶段提交判定（applySeq 前进），再按 lastApply 给 OK/ERR。
- * 仅在 console REPL 任务调用；阻塞轮询，最长 6 s（不阻塞 kIo）。
+ * @brief 提交命令并等待两阶段提交判定（applySeq 前进），再按 lastApply 给 OK/ERR。 仅在 console REPL 任务调用；阻塞轮询，最长 6 s（不阻塞 kIo）。
+ * @param cmd: 待处理指令
+ * @retval true 提交、应用与落盘均成功
+ * @retval false 未运行、提交失败、被拒、落盘失败或等待超时
+ * @note 仅 console REPL 任务；提交后最多轮询 6 s，不阻塞 kIo，非 ISR。
  */
 bool submitGnssAndWait(const fw::Command &cmd) noexcept
 {
@@ -153,6 +187,13 @@ bool submitGnssAndWait(const fw::Command &cmd) noexcept
     return false;
 }
 
+/**
+ * @brief 向 IO 执行器提交 GNSS 命令并打印失败原因
+ * @param cmd: 待处理指令
+ * @retval true 已提交且命令返回 kOk
+ * @retval false 执行器不可用、提交失败或命令失败
+ * @note 仅 console REPL 任务；等待执行器结果，非 ISR。
+ */
 bool submitGnss(const fw::Command &cmd) noexcept
 {
     if (appContext().ioExecutor == nullptr) {
@@ -166,6 +207,13 @@ bool submitGnss(const fw::Command &cmd) noexcept
     return reportGnssResult(res);
 }
 
+/**
+ * @brief 提交人工 GNSS 重探命令
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdGnssProbe(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -177,6 +225,13 @@ int cmdGnssProbe(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return submitGnss(cmd) ? 0 : cli::kCmdFail;
 }
 
+/**
+ * @brief 提交 GNSS 控制器重启命令
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdGnssReset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -188,6 +243,14 @@ int cmdGnssReset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return submitGnss(cmd) ? 0 : cli::kCmdFail;
 }
 
+/**
+ * @brief 校验并提交 GNSS 定位频率变更
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdGnssRate(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != 2) || (argv == nullptr)) {
@@ -206,6 +269,14 @@ int cmdGnssRate(void * /*ctx*/, int argc, char **argv) noexcept
     return submitGnssAndWait(cmd) ? 0 : cli::kCmdFail;
 }
 
+/**
+ * @brief 拼接并提交原始 GNSS 命令文本
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdGnssSend(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 2) || (argv == nullptr)) {
@@ -419,7 +490,15 @@ constexpr std::array<cli::Verb, 9U> kGnssVerbs{{
 }};
 // clang-format on
 
-// 命令表项：签名由 cli::Cmd 的处理器类型固定；缺省动词 "status" 在此注入。
+/**
+ * @brief 分派 GNSS 子命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ * @note 命令表项：签名由 cli::Cmd 的处理器类型固定；缺省动词 "status" 在此注入。
+ */
 int cmdGnss(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kGnssVerbs, ctx, argc, argv, "status");

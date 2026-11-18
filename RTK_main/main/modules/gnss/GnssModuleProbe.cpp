@@ -35,11 +35,6 @@ using detail::kMaxActionsPerPoll;
 using detail::kReadbackLineBytes;
 using detail::toResult;
 
-/**
- * @brief 跑一轮控制器状态机并把动作落到 UART，收尾时检测读回窗口结束
- * @param nowMs: 单调时间（毫秒）
- * @note 在模块任务里调用，最多 kMaxActionsPerPoll 次动作，不阻塞
- */
 void GnssModule::pollController(uint32_t nowMs) noexcept
 {
     for (size_t iter = 0U; iter < kMaxActionsPerPoll; ++iter) {
@@ -53,11 +48,6 @@ void GnssModule::pollController(uint32_t nowMs) noexcept
     finishReadbackIfDone();
 }
 
-/**
- * @brief 把一个控制器动作落到 UART（上电/改波特率/下发报文）
- * @param act: 控制器给出的动作
- * @note 在模块任务里调用，阻塞在 UART 写队列上，非 ISR
- */
 void GnssModule::applyAction(const ::gnss::Action &act) noexcept
 {
     switch (act.kind) {
@@ -88,10 +78,6 @@ void GnssModule::applyAction(const ::gnss::Action &act) noexcept
     }
 }
 
-/**
- * @brief 读回收尾（ADR-0012 §2.7）：控制器回 kRunning 并推进 readbackSeq 后发布一次结论
- * @note 在模块任务里调用，非阻塞
- */
 void GnssModule::finishReadbackIfDone() noexcept
 {
     if (controller().stats().readbackSeq == readback_base_seq_) {
@@ -103,9 +89,6 @@ void GnssModule::finishReadbackIfDone() noexcept
     publishReadback(readback_lines_, readback_len_, true, readback_truncated_, false);
 }
 
-/**
- * @brief  把控制器状态变化与探测结果记为 I 级日志并更新快照
- */
 void GnssModule::updateControllerStatus() noexcept
 {
     const auto curStats = controller().stats();
@@ -127,15 +110,6 @@ void GnssModule::updateControllerStatus() noexcept
     prev_ctrl_stats_ = curStats;
 }
 
-/**
- * @brief 读回期间把一帧转成一行文本追加到 gnssReadbackText（ADR-0012 §2.7）。
- *
- * 交接缓冲是唯一的跳任务载体：kIo 在读回进行中逐行追加，控制台看到 gnssReadback.seq 变化后按 len 读取，
- * 读写不重叠（见 AppData.hpp 该成员的注释），因此不需要锁。
- * @param decoder: 该帧的解码器。
- * @param frame: 整帧字节。
- * @note 仅 kIo 调用，非阻塞，不分配。
- */
 void GnssModule::appendReadbackLine(const demux::Decoder &decoder,
                                     std::span<const uint8_t> frame) noexcept
 {
@@ -162,12 +136,6 @@ void GnssModule::appendReadbackLine(const demux::Decoder &decoder,
     readback_len_ = static_cast<uint16_t>(used + len + 1U);
 }
 
-/**
- * @brief 发起一次配置读回，并把被拒原因就地发布（ADR-0012 §2.7）。
- * @param nowMs: 当前时间。
- * @param result: 写入命令结果（kOk / kBusy / kNotSupported）。
- * @note 仅 kIo 调用；被拒时立即发布结论，控制台不必等到超时。
- */
 void GnssModule::startReadback(uint32_t nowMs, fw::CommandResult &result) noexcept
 {
     ::gnss::CmdBuf probe{};
@@ -185,18 +153,6 @@ void GnssModule::startReadback(uint32_t nowMs, fw::CommandResult &result) noexce
     result.status = supported ? fw::Result::kBusy : fw::Result::kNotSupported;
 }
 
-/**
- * @brief 发布一次读回结论，seq 严格递增（ADR-0012 §2.7）。
- *
- * 失败路径按卡要求“预支” stats+1，成功路径用 stats 原值，两者可能撞车；取 max(上一发布+1) 保证控制台
- * “等 seq 变化”的判定不会漏掉任何一次结论。
- * @param lines: 命中行数。
- * @param len: 文本有效字节。
- * @param supported: 驱动是否支持读回。
- * @param truncated: 是否有行因容量不足被丢弃。
- * @param busy: 是否因状态不对被拒。
- * @note 仅 kIo 调用。
- */
 void GnssModule::publishReadback(uint16_t lines, uint16_t len, bool supported, bool truncated,
                                  bool busy) noexcept
 {
@@ -213,11 +169,6 @@ void GnssModule::publishReadback(uint16_t lines, uint16_t len, bool supported, b
     ctx().data.gnssReadback.write(out);
 }
 
-/**
- * @brief 推进待应用配置的超时计时
- * @param nowMs: 单调毫秒时间戳
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
 {
     if (pending_apply_ == PendingApply::kNone) {
@@ -250,10 +201,6 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
     publishStatus(nowMs);
 }
 
-/**
- * @brief 把探测到的驱动信息落库
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void GnssModule::persistDetectedHint() noexcept
 {
     const auto &det = controller().detected();
@@ -275,12 +222,6 @@ void GnssModule::persistDetectedHint() noexcept
     }
 }
 
-/**
- * @brief 按动作给 GNSS 上电或断电
- * @param on: true 表示上电
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::applyPower(bool on) noexcept
 {
 #if CONFIG_RTK_GNSS_POWER_GPIO >= 0
@@ -294,12 +235,6 @@ fw::Result GnssModule::applyPower(bool on) noexcept
 #endif
 }
 
-/**
- * @brief 切换 GNSS UART 波特率
- * @param baud: 波特率
- * @retval kOk 表示成功；其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 fw::Result GnssModule::applyBaud(uint32_t baud) noexcept
 {
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
@@ -315,11 +250,6 @@ fw::Result GnssModule::applyBaud(uint32_t baud) noexcept
     return fw::Result::kOk;
 }
 
-/**
- * @brief 按输出配置生成报文输出计划
- * @retval 生成的输出计划
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 ::gnss::OutputPlan GnssModule::makePlan() noexcept
 {
     uint8_t rateHz = 0U;
@@ -333,11 +263,6 @@ fw::Result GnssModule::applyBaud(uint32_t baud) noexcept
                                 caps);
 }
 
-/**
- * @brief  把控制器下发的一条 UART 写动作落到串口，并记录探测/配置进度
- * @param  act: 控制器动作（kind 必为 kWrite）
- * @note   仅 kIo 调用；写失败只记日志，不改状态机。
- */
 void GnssModule::applyWriteAction(const ::gnss::Action &act) noexcept
 {
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
@@ -385,12 +310,6 @@ void GnssModule::applyWriteAction(const ::gnss::Action &act) noexcept
     }
 }
 
-/**
- * @brief  状态迁移的副作用：探测结果、步进计数与输出计划重算
- * @param  prev: 迁移前状态
- * @param  cur: 迁移后状态
- * @note   仅 kIo 调用；只在 prev != cur 时调用一次。
- */
 void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur) noexcept
 {
     if ((prev == ::gnss::State::kProbing) && (cur == ::gnss::State::kConfiguring)) {

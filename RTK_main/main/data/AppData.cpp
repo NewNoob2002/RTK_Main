@@ -5,9 +5,6 @@
 #include <new>
 
 namespace app::data {
-/**
- * @brief  初始化共享自旋锁并把全部主题槽绑定到它；启动前单线程调用一次
- */
 void DataCenter::init() noexcept
 {
     /* 启动前初始化自旋锁，并将所有主题绑定到上下文持有的同一把锁。 */

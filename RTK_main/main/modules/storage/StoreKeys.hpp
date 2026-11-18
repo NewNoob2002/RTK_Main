@@ -13,20 +13,61 @@ namespace app::store {
 
 inline constexpr size_t kMaxBlobKeyBytes = 64U;
 
-/** 键的值宽度（字节）：u8/u16/u32 → 1/2/4；本轮不支持的类型返回 0。 */
+/**
+ * @brief 键的值宽度（字节）：u8/u16/u32 → 1/2/4；本轮不支持的类型返回 0。
+ * @param type: 持久化值类型
+ * @retval 1/2/4 对应 u8/u16/u32
+ * @retval 0 其他类型
+ * @note 纯函数，线程/ISR 安全，不阻塞。
+ */
 [[nodiscard]] size_t valueWidth(fw::StoreType type) noexcept;
 
-/** 读一个整数键。命名空间或键不存在 → ESP_ERR_NVS_NOT_FOUND；类型不支持/名字非法 → ESP_ERR_INVALID_ARG。 */
+/**
+ * @brief 读一个整数键。命名空间或键不存在 → ESP_ERR_NVS_NOT_FOUND；类型不支持/名字非法 → ESP_ERR_INVALID_ARG。
+ * @param key: 持久化键定义
+ * @param value: 值输出；打开前失败保持原值，u8/u16 读取失败可能置 0
+ * @retval ESP_OK 已读取
+ * @retval ESP_ERR_INVALID_ARG 键类型或名称非法
+ * @retval ESP_ERR_NVS_NOT_FOUND 命名空间打开失败或键不存在
+ * @retval 其他 NVS 读取错误
+ * @note 任意任务，NVS 内部同步，可阻塞，非 ISR。
+ */
 [[nodiscard]] esp_err_t readValue(const fw::StoreKey &key, uint32_t &value) noexcept;
 
-/** 写一个整数键并提交；value 超出该键宽度的高位被忽略。错误同 readValue，另含后端写错误。 */
+/**
+ * @brief 写一个整数键并提交；value 超出该键宽度的高位被忽略。错误同 readValue，另含后端写错误。
+ * @param key: 持久化键定义
+ * @param value: 待转换或写入的值
+ * @retval ESP_OK 已写入并提交
+ * @retval ESP_ERR_INVALID_ARG 键类型或名称非法
+ * @retval 其他 NVS 打开、写入或提交错误
+ * @note 任意任务，NVS 内部同步，可阻塞，非 ISR。
+ */
 [[nodiscard]] esp_err_t writeValue(const fw::StoreKey &key, uint32_t value) noexcept;
 
-/** 读一个 Blob 键到 out（len 返回实际读取字节数）。 */
+/**
+ * @brief 读一个 Blob 键到 out（len 返回实际读取字节数）。
+ * @param key: 持久化键定义
+ * @param[out] out: Blob 输出，后端读取失败时内容不作保证
+ * @param[out] len: 入口清零，仅成功时更新为实际长度
+ * @retval ESP_OK 已读取，len 为实际长度
+ * @retval ESP_ERR_INVALID_ARG 键非法或输出不足 maxSize
+ * @retval ESP_ERR_NVS_NOT_FOUND 命名空间打开失败或键不存在
+ * @retval 其他 NVS 读取错误
+ * @note 任意任务，NVS 内部同步，可阻塞，非 ISR。
+ */
 [[nodiscard]] esp_err_t readBlob(const fw::StoreKey &key, std::span<uint8_t> out,
                                  size_t &len) noexcept;
 
-/** 写一个 Blob 键并提交。 */
+/**
+ * @brief 写一个 Blob 键并提交。
+ * @param key: 持久化键定义
+ * @param data: 待存储 Blob 字节
+ * @retval ESP_OK 已写入并提交
+ * @retval ESP_ERR_INVALID_ARG 键非法、数据为空或超 maxSize
+ * @retval 其他 NVS 打开、写入或提交错误
+ * @note 任意任务，NVS 内部同步，可阻塞，非 ISR。
+ */
 [[nodiscard]] esp_err_t writeBlob(const fw::StoreKey &key, std::span<const uint8_t> data) noexcept;
 
 } // namespace app::store

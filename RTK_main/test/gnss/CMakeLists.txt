@@ -1,4 +1,4 @@
-# GNSS 纯逻辑组件 host 测试工程（ADR-0010/ADR-0012，G-A 与 P3a 交付）。
+# GNSS 纯逻辑组件 host 测试工程（ADR-0010/ADR-0012）。
 # 独立 CMake 工程，不修改冻结的 test/host/ 与 components/gnss/CMakeLists.txt。
 # 驱动开关与组件同名（RTK_GNSS_DRV_<D>），并在测试侧转成 0/1 宏，便于按开关裁剪用例。
 cmake_minimum_required(VERSION 3.22)
@@ -75,7 +75,7 @@ if(RTK_GNSS_DRV_COMNAV)
     list(APPEND _gnss_tests test_gnss_comnav_receiver)
 endif()
 include(${PROJ_ROOT}/cmake/pascal_case.cmake)
-# 黄金向量生成器（ADR-0012 P3a 第 1 步）：在基线 4cf1320 的 ADR-0010 Dialect 接口上运行一次，导出
+# 黄金向量生成器（ADR-0012 §2.4）：在基线 4cf1320 的 ADR-0010 Dialect 接口上运行一次，导出
 # golden/Golden<Family>.inc。ADR-0012 删除 Dialect 后本目标不再构建，保留产物为唯一事实来源。
 if(EXISTS ${PROJ_ROOT}/components/gnss/include/gnss/Dialect.hpp)
     add_executable(golden_gen golden/GoldenGen.cpp)

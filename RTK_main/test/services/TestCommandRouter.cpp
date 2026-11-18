@@ -1,4 +1,4 @@
-// CommandRouter 单元测试（ADR-0007 §3.5、任务卡 J2a）：init 的错误码、查找顺序、handle 先 clear()。
+// CommandRouter 单元测试（ADR-0007 §3.5）：init 的错误码、查找顺序、handle 先 clear()。
 #include <array>
 #include <cstddef>
 #include <cstdint>

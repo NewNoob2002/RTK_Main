@@ -1,4 +1,4 @@
-// 追踪事件值格式化：把字段值按类型翻成文本（S4 B3 按职责从 TraceText.cpp 拆出）。
+// 追踪事件值格式化：把字段值按类型翻成文本。
 // 线程：仅 DebugModule 输出任务调用（唯一格式化者），非 ISR；无堆、无阻塞、不调用日志。
 
 #include "modules/debug/TraceText.hpp"
@@ -173,18 +173,10 @@ namespace detail {
 
 using detail::append;
 
-// 不拆（S4 §2.1）：平铺的 18 分支格式映射，拆开只是把 case 搬到别处。
-/**
- * @brief 按字段值类型渲染一段文本（平铺 18 分支格式映射）
- * @param out: 输出缓冲
- * @param cap: 缓冲容量
- * @param pos: 当前写入位置（原地推进）
- * @param value: 值类型
- * @param ev: 事件本体
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
-void appendValue(char *out, size_t cap, size_t &pos, // NOLINT(readability-function-size)
-                 TraceValue value, const fw::TraceEvent &ev) noexcept
+// 不拆（ADR-0013 §2.4）：平铺的 18 分支格式映射，拆开只是把 case 搬到别处。
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+void appendValue(char *out, size_t cap, size_t &pos, TraceValue value,
+                 const fw::TraceEvent &ev) noexcept
 {
     switch (value) {
     case TraceValue::kDecA:
@@ -247,6 +239,7 @@ void appendValue(char *out, size_t cap, size_t &pos, // NOLINT(readability-funct
         break;
     }
 }
+// NOLINTEND(readability-function-size)
 
 /** 渲染 {key} 占位符：在字段表里按键名查找并用对应方式输出；查不到则原样保留。 */
 

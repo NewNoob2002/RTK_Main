@@ -1,4 +1,4 @@
-// 启动步骤表的文本输出（R8a）：启动摘要与 `sys boot` 共用同一格式，避免两处漂移。
+// 启动步骤表的文本输出（ADR-0009）：启动摘要与 `sys boot` 共用同一格式，避免两处漂移。
 // 线程：仅启动任务（放行前）或 console REPL 任务调用；非 ISR，不分配堆。
 #pragma once
 
@@ -12,8 +12,9 @@
 namespace app {
 
 /**
- * 打印步骤记录、总计与最慢步骤。
- * 每行一次 outWrite，保证整行原子；reason 为空时省略尾段。
+ * @brief 打印步骤记录、总计与最慢步骤。 每行一次 outWrite，保证整行原子；reason 为空时省略尾段。
+ * @param records: 启动步骤记录视图
+ * @note 仅启动任务或 console REPL 任务，输出可等待控制台锁，非 ISR。
  */
 inline void printBootTable(std::span<const BootRecord> records) noexcept
 {

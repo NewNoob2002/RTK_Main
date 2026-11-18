@@ -1,4 +1,4 @@
-// 应用组合根单例与启动屏障实现（R8a）：AppContext 全零静态存储，awaitBoot 供执行器任务等待放行。
+// 应用组合根单例与启动屏障实现（ADR-0009）：AppContext 全零静态存储，awaitBoot 供执行器任务等待放行。
 // 线程：appContext() 任意任务可调用；awaitBoot 只在执行器/trace 任务内调用，可阻塞，非 ISR。
 #include "AppContext.hpp"
 

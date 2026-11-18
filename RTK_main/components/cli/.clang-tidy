@@ -5,4 +5,6 @@
 InheritParentConfig: true
 Checks: >
   -cppcoreguidelines-avoid-do-while,
-  -cppcoreguidelines-pro-type-vararg
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-pro-type-union-access
+# UART 的 IDF source_clk 是匿名 union 字段，与 rtos/main 同类边界。

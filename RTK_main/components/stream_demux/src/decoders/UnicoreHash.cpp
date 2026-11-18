@@ -400,14 +400,14 @@ Verdict judge(std::span<const uint8_t> frame) noexcept
     return verdict;
 }
 
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
 /**
  * @brief  把判定理由写成一句人读文本
  * @param  verdict: 判定结果
  * @param[out] text: 文本输出器（空间不足时截断）
  * @note   不拆（ADR-0013 §2.4）：拒绝原因到一句话的纯文本映射表，每个 case 独立、彼此无状态。
  */
-void explainVerdict(const Verdict &verdict, // NOLINT(readability-function-*)
-                    demux::text_writer::TextWriter &text) noexcept
+void explainVerdict(const Verdict &verdict, demux::text_writer::TextWriter &text) noexcept
 {
     switch (verdict.reason) {
     case Reason::kSync:
@@ -476,6 +476,7 @@ void explainVerdict(const Verdict &verdict, // NOLINT(readability-function-*)
         break;
     }
 }
+// NOLINTEND(readability-function-size)
 
 } // namespace
 

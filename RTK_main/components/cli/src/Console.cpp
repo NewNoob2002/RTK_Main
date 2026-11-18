@@ -338,7 +338,8 @@ esp_err_t addVerbs(const char *group, const char *summary, std::span<const Verb>
 }
 
 // 线性初始化序列，拆开反而难读（ADR-0013 §2.4）。
-esp_err_t init(const char *prompt) noexcept // NOLINT(readability-function-*): 线性序列
+// NOLINTBEGIN(readability-function-size, readability-function-cognitive-complexity): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+esp_err_t init(const char *prompt) noexcept
 {
     if (s_started) {
         return ESP_ERR_INVALID_STATE;
@@ -427,6 +428,7 @@ esp_err_t init(const char *prompt) noexcept // NOLINT(readability-function-*): �
     s_started = true;
     return ESP_OK;
 }
+// NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
 
 esp_err_t run() noexcept
 {

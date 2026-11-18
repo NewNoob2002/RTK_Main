@@ -1,7 +1,6 @@
-// 隐藏的 factory 命令集（ADR-0009 §2.10）：改生产配置或强制状态的动作（SN、白名单、配对窗口、报警覆盖）。
-// 不出现在 help 列表；除 status/unlock/lock 外必须先 `factory unlock <key>`（Kconfig RTK_FACTORY_KEY），
-// 解锁状态只在内存中，重启或 `factory lock` 后恢复锁定。
-// 线程：仅在 console REPL 任务调用（串行），解锁标志无需同步；改状态的动作经 Executor::call 投递。
+// 隐藏工厂命令：SN、白名单、配对窗口与报警覆盖（ADR-0009 §2.10）。
+// 仅 console REPL 任务，非 ISR；状态变更经执行器投递，可阻塞。
+// 除 status/unlock/lock 外须解锁；标志仅在内存中，重启或 lock 恢复锁定；本文件不分配堆。
 
 #include "modules/system/SystemModule.hpp"
 
@@ -31,7 +30,12 @@ constexpr size_t kThreeArgs = 3U;
 
 bool s_unlocked = false; // 只在 console 任务读写
 
-/** 受保护动词的统一入口检查；锁定时给出原因并返回 false。 */
+/**
+ * @brief 受保护动词的统一入口检查；锁定时给出原因并返回 false。
+ * @retval true 工厂入口已解锁
+ * @retval false 尚未解锁，已打印错误
+ * @note 仅 console REPL 任务，非 ISR；输出可阻塞。
+ */
 bool requireUnlocked() noexcept
 {
     if (!s_unlocked) {
@@ -41,6 +45,13 @@ bool requireUnlocked() noexcept
     return true;
 }
 
+/**
+ * @brief 显示工厂入口的解锁状态与当前身份
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -51,6 +62,14 @@ int cmdStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 校验口令并解锁工厂入口
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdUnlock(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != static_cast<int>(kTwoArgs)) || (argv == nullptr)) {
@@ -66,6 +85,13 @@ int cmdUnlock(void * /*ctx*/, int argc, char **argv) noexcept
     return 0;
 }
 
+/**
+ * @brief 锁定工厂入口
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdLock(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -75,6 +101,14 @@ int cmdLock(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 查询或保存设备序列号
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdSn(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if (!requireUnlocked()) {
@@ -101,6 +135,15 @@ int cmdSn(void * /*ctx*/, int argc, char **argv) noexcept
     return 0;
 }
 
+/**
+ * @brief 校验地址并提交白名单增删命令
+ * @param add: true 添加；false 删除
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval cli::kCmdFail 参数非法、未解锁或提交失败
+ * @note 仅 console REPL 任务，可等待执行器/NVS，非 ISR。
+ */
 int wlEdit(bool add, int argc, char **argv) noexcept
 {
     const char *const op = add ? "wl-add" : "wl-del";
@@ -138,17 +181,40 @@ int wlEdit(bool add, int argc, char **argv) noexcept
     return report(op, result) ? 0 : cli::kCmdFail;
 }
 
-// 命令表项：签名由 cli::Cmd 固定；添加/删除白名单由同一个 wlEdit 的常量参数区分。
+/**
+ * @brief 提交白名单添加命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ * @note 命令表项：签名由 cli::Cmd 固定；添加/删除白名单由同一个 wlEdit 的常量参数区分。
+ */
 int cmdWlAdd(void * /*ctx*/, int argc, char **argv) noexcept
 {
     return wlEdit(true, argc, argv);
 }
 
+/**
+ * @brief 提交白名单删除命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdWlDel(void * /*ctx*/, int argc, char **argv) noexcept
 {
     return wlEdit(false, argc, argv);
 }
 
+/**
+ * @brief 提交白名单清空命令
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdWlClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (!requireUnlocked()) {
@@ -163,6 +229,13 @@ int cmdWlClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return submit(command, "wl-clear") ? 0 : cli::kCmdFail;
 }
 
+/**
+ * @brief 查询或设置配对窗口
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdPair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (!requireUnlocked()) {
@@ -193,6 +266,14 @@ int cmdPair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 提交报警状态设置命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdAlarmSet(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if (!requireUnlocked()) {
@@ -219,6 +300,13 @@ int cmdAlarmSet(void * /*ctx*/, int argc, char **argv) noexcept
     return submit(command, "alarm-set") ? 0 : cli::kCmdFail;
 }
 
+/**
+ * @brief 提交报警清除命令
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdAlarmClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (!requireUnlocked()) {
@@ -246,7 +334,15 @@ constexpr std::array<cli::Verb, 10U> kFactoryVerbs{{
     {"alarm-clear", nullptr, "clear forced alarm state", cmdAlarmClear},
 }};
 
-// 命令表项：签名由 cli::Cmd 的处理器类型固定；默认动词 "status" 在此注入。
+/**
+ * @brief 分派工厂设置子命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ * @note 命令表项：签名由 cli::Cmd 的处理器类型固定；默认动词 "status" 在此注入。
+ */
 int cmdFactory(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kFactoryVerbs, ctx, argc, argv, "status");

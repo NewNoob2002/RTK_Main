@@ -31,7 +31,6 @@ bool AppContext::awaitBoot(BootTask, bool) noexcept
 } // namespace app
 
 // 测试向量直接表达时刻、指令号与预期值，便于对照生命周期断言。
-// NOLINTBEGIN(readability-magic-numbers)
 namespace {
 constexpr fw::ModuleId kTemplateId = 10U;
 constexpr size_t kBitsPerByte = 8U;
@@ -60,8 +59,7 @@ void pump()
     const TaskHandle_t previous = s_current;
     s_current = s_created;
     s_rounds = 0U;
-    if (setjmp(s_return) ==
-        0) { // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay) -- setjmp C
+    if (setjmp(s_return) == 0) {
         // ABI，测试用来结束执行器无限循环。
         s_created->fn(s_created->arg);
     }
@@ -347,7 +345,6 @@ void vTaskDelay(TickType_t ticks)
     s_clock += ticks;
     if (++s_rounds == s_round_limit) {
         // C ABI：配对 pump() 的 setjmp，测试用来结束执行器无限循环。
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
         std::longjmp(s_return, 1);
     }
 }
@@ -477,4 +474,3 @@ int main(int argc, const char **raw_args)
     std::puts(argv[1]);
     return (s_failures == 0) ? 0 : 1;
 }
-// NOLINTEND(readability-magic-numbers)

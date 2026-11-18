@@ -168,7 +168,7 @@ typedef struct {
     TaskHandle_t worker;
 } spp_server_rtos_t;
 
-/* 全部跨文件共享的可变状态（ADR-0008 R5）：唯一实例 s_spp，唯一定义点在 SppServerSession.c。
+/* 全部跨文件共享的可变状态（ADR-0008 §8）：唯一实例 s_spp，唯一定义点在 SppServerSession.c。
  * 7 块大负载缓冲由组合根通过 spp_server_bind_storage() 外供注入，控制块留在 .bss。 */
 typedef struct {
     spp_server_session_t sessions[SPP_SERVER_MAX_SESSIONS];

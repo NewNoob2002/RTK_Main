@@ -95,11 +95,11 @@ FanoutWriterStats FanoutRing::writerStats() const noexcept
     return wstats_;
 }
 
-// 类型化记录长度：把内部缓冲包装成 span 交给 readHeaderLen（类型适配，非纯转发）。
 /**
  * @brief  读取指定环位置的记录长度
  * @param  pos: 环内位置
  * @retval 记录长度；越界或数据不足时为 0
+ * @note 类型化记录长度：把内部缓冲包装成 span 交给 readHeaderLen（类型适配，非纯转发）。
  */
 uint16_t FanoutRing::typedLength(uint32_t pos) const noexcept
 {

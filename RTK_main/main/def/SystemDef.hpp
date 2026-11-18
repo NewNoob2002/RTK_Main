@@ -23,7 +23,12 @@ static_assert(static_cast<uint8_t>(ExecTrace::kCallDrop) == 1U,
 /** 系统模块命令动词。 */
 enum class SystemVerb : uint8_t { kPublish };
 
-// 底层类型均为 uint8_t；这些编号转换不会收窄。线程/ISR 安全：纯函数。
+/**
+ * @brief 读取命令动词的数值编号
+ * @param value: 待转换或写入的值
+ * @retval 与枚举底层值相同的 uint8_t 动词
+ * @note 纯函数，线程/ISR 安全。
+ */
 [[nodiscard]] constexpr uint8_t verb(SystemVerb value) noexcept
 {
     return static_cast<uint8_t>(value);

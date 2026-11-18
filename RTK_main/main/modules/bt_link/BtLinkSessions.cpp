@@ -40,13 +40,6 @@ using detail::kRoundBudgetMs;
 using detail::kRtcmMsgShiftBits;
 using detail::kRtcmPayloadOffset;
 
-/**
- * @brief 把本 sink 绑定到模块实例
- * @param owner: owner 见调用点
- * @param handle: 会话句柄
- * @retval 无返回值（嵌套类方法的返回类型解析限制，此处显式标注 void）
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::SessionSink::bind(BtLinkModule &owner, core::SessionHandle handle) noexcept
 {
     owner_ = &owner;
@@ -78,12 +71,6 @@ void BtLinkModule::SessionSink::onFrame(const demux::Decoder &decoder, uint8_t i
     owner_->handleRtcmFrame(handle_, wire);
 }
 
-/**
- * @brief 处理一帧 RTCM（转发给会话与统计）
- * @param handle: 会话句柄
- * @param wire: wire 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::handleRtcmFrame(core::SessionHandle handle,
                                    std::span<const uint8_t> wire) noexcept
 {
@@ -119,12 +106,6 @@ void BtLinkModule::handleRtcmFrame(core::SessionHandle handle,
 #endif
 }
 
-/**
- * @brief 按句柄查找会话槽
- * @param handle: 会话句柄
- * @retval 返回对象指针，可能为空
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 BtLinkModule::SessionEntry *BtLinkModule::sessionFind(core::SessionHandle handle) noexcept
 {
     for (auto &entry : sessions_) {
@@ -200,10 +181,6 @@ void BtLinkModule::sessionRecord(core::SessionHandle handle, const core::BtAddr 
             handle & kHandleDisplayMask);
 }
 
-/**
- * @brief 把白名单变更标记落库
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::collectWhitelistDirty() noexcept
 {
     if (linkService().consumeWhitelistDirty()) {
@@ -211,12 +188,6 @@ void BtLinkModule::collectWhitelistDirty() noexcept
     }
 }
 
-/**
- * @brief 处理 SPP 会话打开事件
- * @param evt: SPP 事件
- * @param nowMs: 单调毫秒时间戳
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::handleOpen(const spp_server_evt_t &evt, uint32_t nowMs) noexcept
 {
     core::BtAddr addr{};
@@ -228,11 +199,6 @@ void BtLinkModule::handleOpen(const spp_server_evt_t &evt, uint32_t nowMs) noexc
     linkService().onOpen(evt.handle, addr, nowMs);
 }
 
-/**
- * @brief 处理 SPP 会话关闭事件
- * @param handle: 会话句柄
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::handleClose(core::SessionHandle handle) noexcept
 {
     const auto *entry = sessionFind(handle);
@@ -248,11 +214,6 @@ void BtLinkModule::handleClose(core::SessionHandle handle) noexcept
     sessionForget(handle);
 }
 
-/**
- * @brief 处理 SPP 收到的数据事件
- * @param handle: 会话句柄
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::handleData(core::SessionHandle handle) noexcept
 {
     if (auto *entry = sessionFind(handle); entry != nullptr && entry->demuxReady) {
@@ -260,12 +221,6 @@ void BtLinkModule::handleData(core::SessionHandle handle) noexcept
     }
 }
 
-/**
- * @brief 处理一条 SPP 事件（按类型分发）
- * @param evt: SPP 事件
- * @param nowMs: 单调毫秒时间戳
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::handleEvent(const spp_server_evt_t &evt, uint32_t nowMs) noexcept
 {
     switch (evt.type) {
@@ -327,15 +282,6 @@ bool BtLinkModule::feedOne(SessionEntry &entry, size_t &budget, uint32_t roundSt
     return false;
 }
 
-/**
- * @brief 把一个会话的接收缓冲喂给解复用器
- * @param entry: entry 见调用点
- * @param index: index 见调用点
- * @param budget: budget 见调用点
- * @param roundStartMs: roundStartMs 见调用点
- * @retval true 表示成功/命中
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 bool BtLinkModule::drainSession(SessionEntry &entry, size_t index, size_t &budget,
                                 uint32_t roundStartMs) noexcept
 {
@@ -353,11 +299,6 @@ bool BtLinkModule::drainSession(SessionEntry &entry, size_t index, size_t &budge
     return false;
 }
 
-/**
- * @brief 排空 SPP 服务端事件队列
- * @param roundStartMs: roundStartMs 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::drainRx(uint32_t roundStartMs) noexcept
 {
     size_t budget = kRxBudgetBytes;
@@ -371,10 +312,6 @@ void BtLinkModule::drainRx(uint32_t roundStartMs) noexcept
     }
 }
 
-/**
- * @brief 把会话与 RTCM 流通道对齐
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::syncStream() noexcept
 {
     if (stream_handle_ != 0 && link_manager_.role(stream_handle_) != core::Role::kPhone) {
@@ -402,12 +339,6 @@ void BtLinkModule::syncStream() noexcept
     }
 }
 
-/**
- * @brief 执行 alarm set 命令
- * @param cmd: cmd 见调用点
- * @param result: result 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::setAlarm(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (!alarm_.has_value()) {
@@ -418,11 +349,6 @@ void BtLinkModule::setAlarm(const fw::Command &cmd, fw::CommandResult &result) n
     }
 }
 
-/**
- * @brief 执行 whitelist clear 命令
- * @param result: result 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::clearWhitelist(fw::CommandResult &result) noexcept
 {
     /* 清除内存白名单并同步持久化，回执携带原后端错误码。 */
@@ -430,11 +356,6 @@ void BtLinkModule::clearWhitelist(fw::CommandResult &result) noexcept
     persistWhitelist(result);
 }
 
-/**
- * @brief 把白名单写入 NVS
- * @param result: result 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::persistWhitelist(fw::CommandResult &result) noexcept
 {
     /* 控制台改动立即落盘（不走 HELLO 学习的延迟合并），回执携带原后端错误码。 */
@@ -445,13 +366,6 @@ void BtLinkModule::persistWhitelist(fw::CommandResult &result) noexcept
     }
 }
 
-/**
- * @brief 执行白名单增删命令
- * @param cmd: cmd 见调用点
- * @param add: add 见调用点
- * @param result: result 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 void BtLinkModule::editWhitelist(const fw::Command &cmd, bool add,
                                  fw::CommandResult &result) noexcept
 {

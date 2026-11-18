@@ -57,6 +57,14 @@ using detail::kRebootDelayMs;
 using detail::kTenthsPerUnit;
 using detail::kUsPerMs;
 
+/**
+ * @brief 查询或设置 IDF 日志级别
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdLogLevel(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc != static_cast<int>(kLogLevelArgs)) || (argv == nullptr)) {
@@ -99,6 +107,13 @@ int cmdLogLevel(void * /*ctx*/, int argc, char **argv) noexcept
     return 0;
 }
 
+/**
+ * @brief 打印版本、重启原因与身份信息
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdSysInfo(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -137,6 +152,13 @@ int cmdSysInfo(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 打印当前与历史最小堆容量
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdSysHeap(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -164,13 +186,20 @@ int cmdSysHeap(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 打印静态段和启动内存台账
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdSysMem(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: sys mem");
     }
     // 链接脚本符号是边界地址，不是同一 C++ 数组；先转 uintptr_t 再计算字节差。
-    // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast): 链接脚本边界符号必须转换为地址数值。
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast): 链接脚本符号取地址
     const auto dataBegin = reinterpret_cast<uintptr_t>(&_data_start);
     const auto dataEnd = reinterpret_cast<uintptr_t>(&_data_end);
     const auto bssBegin = reinterpret_cast<uintptr_t>(&_bss_start);
@@ -198,6 +227,12 @@ int cmdSysMem(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 打印指定任务的栈余量与状态
+ * @param label: 显示任务名
+ * @param handle: SPP 会话句柄
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
 void printTaskRow(const char *label, TaskHandle_t handle) noexcept
 {
     if (handle == nullptr) {
@@ -217,6 +252,13 @@ void printTaskRow(const char *label, TaskHandle_t handle) noexcept
     cli::printKv(label, "core=%-3s prio=%-2u stack_hwm=%lu B", coreBuf.data(), prio, hwmBytes);
 }
 
+/**
+ * @brief 打印任务栈余量
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdSysTasks(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -239,6 +281,13 @@ int cmdSysTasks(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 打印已执行的启动步骤记录
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdSysBoot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -249,6 +298,13 @@ int cmdSysBoot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 确认后重启固件
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdSysReboot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -283,19 +339,43 @@ constexpr std::array<cli::Verb, 6U> kSysVerbs{{
     {"reboot", nullptr, "print OK, wait 100 ms and restart", cmdSysReboot},
 }};
 
-// 命令表项：签名由 cli::Cmd 的处理器类型固定；缺省动词 "overview" 在此注入。
+/**
+ * @brief 分派系统与链路状态子命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ * @note 命令表项：签名由 cli::Cmd 的处理器类型固定；缺省动词 "overview" 在此注入。
+ */
 int cmdStatus(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kStatusVerbs, ctx, argc, argv, "overview");
 }
 
-// 命令表项：签名由 cli::Cmd 的处理器类型固定，本函数只转发表与上下文。
+/**
+ * @brief 分派日志级别子命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ * @note 命令表项：签名由 cli::Cmd 的处理器类型固定，本函数只转发表与上下文。
+ */
 int cmdLog(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kLogVerbs, ctx, argc, argv);
 }
 
-// 命令表项：签名由 cli::Cmd 的处理器类型固定，本函数只转发表与上下文。
+/**
+ * @brief 分派系统诊断子命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ * @note 命令表项：签名由 cli::Cmd 的处理器类型固定，本函数只转发表与上下文。
+ */
 int cmdSys(void *ctx, int argc, char **argv) noexcept
 {
     return cli::dispatch(kSysVerbs, ctx, argc, argv);

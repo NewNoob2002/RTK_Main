@@ -15,7 +15,6 @@
 // 其他构建（host 测试、外部工程）未定义时默认开启。
 #ifndef FW_TRACE_ENABLED
 // 必须是宏：CMake 以 -D 传入，且 Tlog.hpp 等需在预处理阶段据此选择内联空实现。
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define FW_TRACE_ENABLED 1
 #endif
 

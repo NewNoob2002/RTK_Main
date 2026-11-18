@@ -1,4 +1,4 @@
-// 黄金向量 ComNav（ADR-0012 P3a）：由 test/gnss/golden/GoldenGen.cpp 在基线 4cf1320 的
+// 黄金向量 ComNav（ADR-0012 §2.4）：由 test/gnss/golden/GoldenGen.cpp 在基线 4cf1320 的
 // ADR-0010 方言实现（ComNav）上导出。测试只读；不得为迁就新实现修改本文件。
 // 家族标签 Comnav。
 // 组合数：rover 108，步骤 666；样本：探测 4，应答 5；能力位 2。

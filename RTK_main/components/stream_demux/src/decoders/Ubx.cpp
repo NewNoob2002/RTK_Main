@@ -65,6 +65,7 @@ uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
     return (static_cast<uint32_t>(frame[from]) | (static_cast<uint32_t>(frame[from + 1U]) << 8U));
 }
 
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
 /**
  * @brief  判定一帧：同步字节、长度、Fletcher 校验
  * @param  frame: 候选前缀，非空且 frame[0] 已通过 firstByte
@@ -75,7 +76,7 @@ uint32_t readU16Le(std::span<const uint8_t> frame, std::size_t from) noexcept
  * @note   不拆（ADR-0013 §2.4）：协议早拒绝阶梯，sync/长度/校验的先后次序本身就是协议语义，
  *         拆成多个函数只会让“先拒绝什么”更难看懂。
  */
-Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-function-*)
+Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
     if (frame[0] != kSyncA) {
@@ -139,6 +140,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-fun
     good.step = Step::kFrame;
     return good;
 }
+// NOLINTEND(readability-function-size)
 
 /**
  * @brief  把判定理由写成一句人读文本

@@ -162,12 +162,10 @@ bool logHexOn(TraceCat cat) noexcept
 void tlog(TraceCat cat, const char *fmt, ...) noexcept
 {
     // 冻结接口保留给已有调用点：语义等同 FW_LOGI（ADR-0009 §2.12），格式化与通路选择统一在 Log.cpp。
-    // NOLINTBEGIN(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     va_list ap;
     va_start(ap, fmt);
     vlogLine(LogLevel::kInfo, cat, fmt, ap);
     va_end(ap);
-    // NOLINTEND(cppcoreguidelines-pro-type-vararg, cppcoreguidelines-pro-bounds-array-to-pointer-decay)
 }
 
 void tlogHex(TraceCat cat, std::span<const uint8_t> bytes) noexcept

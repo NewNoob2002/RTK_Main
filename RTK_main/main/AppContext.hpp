@@ -28,6 +28,13 @@ template <size_t QueueDepth> struct ExecutorControlStorage {
     StaticQueue_t resultQueue{};
 };
 
+/**
+ * @brief 把执行器控制存储与外供栈组合成视图
+ * @param st: 静态控制块与队列存储
+ * @param stack: 外供任务栈（IDF 单位为字节），须覆盖任务生命周期
+ * @retval 引用 st 与 stack 的执行器存储视图
+ * @note 仅启动前单线程；不分配、不阻塞，非 ISR。
+ */
 template <size_t D>
 [[nodiscard]] inline rtos::ExecutorStorageView viewOf(ExecutorControlStorage<D> &st,
                                                       std::span<StackType_t> stack) noexcept
@@ -52,7 +59,13 @@ enum class BootTask : uint8_t {
     kTrace = 1U << 2U, ///< trace_out 任务
 };
 
-/** BootTask → 掩码位；掩码仍为 uint32_t 以便原子 fetch_or。 */
+/**
+ * @brief 取得启动屏障中的任务掩码位
+ * @param task: 启动屏障任务
+ * @retval task 对应的 uint32_t 掩码位
+ * @note 纯函数，线程/ISR 安全。
+ * @note BootTask → 掩码位；掩码仍为 uint32_t 以便原子 fetch_or。
+ */
 [[nodiscard]] constexpr uint32_t taskBit(BootTask task) noexcept
 {
     return static_cast<uint32_t>(task);
@@ -66,7 +79,7 @@ struct AppContext {
 #endif
     static constexpr size_t kModuleCount = 0
 // X-macro 生成计数表达式，函数无法展开注册清单；前导 + 不可单独加括号。
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage, bugprone-macro-parentheses)
+// NOLINTNEXTLINE(bugprone-macro-parentheses)
 #define MODULE_DEF(type, member, name, kind, executor, period) +1
 #include "module_list.inc"
 #undef MODULE_DEF
@@ -77,17 +90,23 @@ struct AppContext {
     std::atomic<uint32_t> bootArrived{};
     std::atomic<uint32_t> bootStopped{};
 
-    /** 启动任务门控：执行器/trace 任务等待组合根放行；失败返回前退订 TWDT 并确认停稳，非 ISR。 */
+    /**
+     * @brief 等待启动阶段放行或确认当前任务停稳
+     * @param task: 当前任务的屏障位
+     * @param watchdog: 是否在等待中喂狗并在停止时退订
+     * @retval true 已进入 kRunning，可继续工作
+     * @retval false 启动已停止或降级，调用方须退出任务
+     * @note 仅执行器或 trace 任务调用；按 tick 阻塞，非 ISR。
+     */
     [[nodiscard]] bool awaitBoot(BootTask task, bool watchdog) noexcept;
 
     /**
-     * 固件入口（R8a）：按有序步骤表完成启动，失败时按步骤语义降级/回滚/停机。
-     * 仅 app_main 的启动任务调用一次，可阻塞；返回后控制台可用。
+     * @brief  按步骤表完成启动；任一步失败则回滚并降级为 console-only，最后启动 REPL
+     * @note   只在 app_main 任务调用一次。
      */
     void boot() noexcept;
     data::DataCenter data{};
 // X-macro 生成异构成员声明（全零默认初值落 .bss），constexpr 函数不能替代。
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define MODULE_DEF(type, member, name, kind, executor, period) type member{};
 #include "module_list.inc"
 #undef MODULE_DEF
@@ -100,17 +119,25 @@ struct AppContext {
     RtcmPipe rtcmPipe{};
 #endif
 
-    /** 启动前单线程调用：把各模块的上下文指针绑定到本实例。 */
+    /**
+     * @brief 把模块的上下文指针绑定到本实例
+     * @note 仅启动前单线程调用，不阻塞，非 ISR。
+
+     */
     void bindContexts() noexcept
     {
 // X-macro 批量绑定成员上下文指针，避免手写遗漏。
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define MODULE_DEF(type, member, name, kind, executor, period) member.bindContext(*this);
 #include "module_list.inc"
 #undef MODULE_DEF
     }
 };
 
-/** 返回固件全生命周期的上下文；无阻塞、无分配，非 ISR；成员访问遵守各模块契约。 */
+/**
+ * @brief 取得固件唯一的应用上下文
+ * @retval 全生命周期有效的上下文引用
+ * @note 任意任务可调用；不阻塞、不分配，非 ISR；成员访问遵守模块契约。
+
+ */
 [[nodiscard]] AppContext &appContext() noexcept;
 } // namespace app

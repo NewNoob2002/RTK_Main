@@ -1,4 +1,4 @@
-/* T13 驱动级回归：直接链接真实的 components/spp_server/spp_server_*.c，用真实阻塞语义的
+/* 驱动级回归：直接链接真实的 components/spp_server/spp_server_*.c，用真实阻塞语义的
  * FreeRTOS 替身和可编排的假 IDF（BTC 线程投递回调）覆盖 QA-E-REVIEW 第 1–4 项与复审反馈。
  * 每个场景独立进程运行（驱动只有 init、没有 deinit 公共接口），用法：t13_host_check <场景名>。
  *
@@ -416,7 +416,7 @@ static void sc_write_timeout_budget(void)
     CHECK(spp_server_write(0x11U, payload, sizeof(payload), 1000U) == ESP_OK);
 }
 
-/* #3/K2：WRITE_EVT 的 status 与回报长度错误必须返回失败，并请求断开受影响会话而不影响对端。 */
+/* 发送信用校验：WRITE_EVT 的 status 与回报长度错误必须返回失败，并请求断开受影响会话而不影响对端。 */
 static void sc_write_status_propagation(void)
 {
     static const fake_write_mode_t modes[] = {FAKE_WRITE_FAIL, FAKE_WRITE_NO_RESOURCE,
@@ -441,7 +441,7 @@ static void sc_write_status_propagation(void)
     }
 }
 
-/* #3/K2：提交阶段直接失败时把错误返回给调用方、不等待完成事件，并断开受影响会话。 */
+/* 发送信用校验：提交阶段直接失败时把错误返回给调用方、不等待完成事件，并断开受影响会话。 */
 static void sc_write_submit_error(void)
 {
     uint8_t payload[8];
@@ -992,7 +992,7 @@ static void sc_rx_wake_cb(void *ctx)
     atomic_fetch_add(calls, 1);
 }
 
-/* K3：验证 RX 唤醒钩子在 portMUX 外触发、level/stats 统计准确、且队列满时不丢数据与掉包状态。 */
+/* 验证 RX 唤醒钩子在 portMUX 外触发、level/stats 统计准确、且队列满时不丢数据与掉包状态。 */
 static void sc_rx_wake_level_and_stats(void)
 {
     atomic_int hook_calls = 0;

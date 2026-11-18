@@ -27,7 +27,15 @@ constexpr uint32_t kBitsPerByte = 8U;
 
 using Name = std::array<char, fw::kStoreNameMax + 1U>;
 
-/* StoreKey 的 ns/key 只是视图，NVS 需要 0 结尾的名字；超长直接拒绝。 */
+/**
+ * @brief 为 NVS 名称生成零结尾副本
+ * @param in: 输入字节视图
+ * @param out: 输出缓冲或结果
+ * @retval true 名称有效且已复制
+ * @retval false 名称空或过长，输出不变
+ * @note 纯计算，不分配、不阻塞，线程/ISR 安全。
+ * @note StoreKey 的 ns/key 只是视图，NVS 需要 0 结尾的名字；超长直接拒绝。
+ */
 bool copyName(std::string_view in, Name &out) noexcept
 {
     if (in.empty() || (in.size() > fw::kStoreNameMax)) {
@@ -38,12 +46,30 @@ bool copyName(std::string_view in, Name &out) noexcept
     return true;
 }
 
+/**
+ * @brief 校验整数键并复制命名空间与键名
+ * @param key: 持久化键定义
+ * @param ns: 命名空间输出
+ * @param name: 键名输出
+ * @retval true 整数键与名称均有效
+ * @retval false 任一校验失败；输出可能部分更新
+ * @note 纯计算，不分配、不阻塞，线程/ISR 安全。
+ */
 bool namesOf(const fw::StoreKey &key, Name &ns, Name &name) noexcept
 {
     return fw::valid(key) && (valueWidth(key.type) != 0U) && copyName(key.ns, ns) &&
            copyName(key.key, name);
 }
 
+/**
+ * @brief 校验 Blob 键容量并复制名称
+ * @param key: 持久化键定义
+ * @param ns: 命名空间输出
+ * @param name: 键名输出
+ * @retval true Blob 键与名称均有效
+ * @retval false 任一校验失败；输出可能部分更新
+ * @note 纯计算，不分配、不阻塞，线程/ISR 安全。
+ */
 bool blobNamesOf(const fw::StoreKey &key, Name &ns, Name &name) noexcept
 {
     return fw::valid(key) && (key.type == fw::StoreType::kBlob) && (key.maxSize > 0U) &&
@@ -171,7 +197,8 @@ namespace app {
 /**
  * @brief 把 NVS 错误码映射成框架错误码
  * @param error: NVS 返回码
- * @retval kOk 表示成功；其他为失败原因
+ * @retval kInvalidArg 参数错误
+ * @retval kIoError 其他传入错误码
  */
 fw::Result mapStoreError(esp_err_t error) noexcept
 {
@@ -276,12 +303,6 @@ fw::Result saveValueKey(const fw::StoreKey &key) noexcept
     return (error == ESP_OK) ? fw::Result::kOk : mapStoreError(error);
 }
 
-/**
- * @brief 逐个加载键表（blob 与标量分派给上面的单键函数）
- * @param keys: 键表
- * @retval kOk: 全部成功；其他: 最后一个失败键的类型（既有语义）
- * @note 仅 storage 任务启动期调用；非 ISR，不分配堆。
- */
 fw::Result StorageModule::loadKeys(std::span<const fw::StoreKey> keys) noexcept
 {
     fw::Result overall = fw::Result::kOk;
@@ -303,12 +324,6 @@ fw::Result StorageModule::loadKeys(std::span<const fw::StoreKey> keys) noexcept
     return overall;
 }
 
-/**
- * @brief 逐个保存键表（blob 与标量分派给上面的单键函数）
- * @param keys: 键表
- * @retval kOk: 全部成功；其他: 最后一个失败键的类型（既有语义）
- * @note 仅 storage 任务调用；非 ISR，不分配堆。
- */
 fw::Result StorageModule::saveKeys(std::span<const fw::StoreKey> keys) noexcept
 {
     fw::Result overall = fw::Result::kOk;

@@ -15,7 +15,17 @@ struct ModuleTestAccess;
 class StorageModule final {
 public:
     constexpr StorageModule() noexcept = default;
+    /**
+     * @brief 记录所属上下文，不初始化硬件或 RTOS
+     * @param context: 所属应用上下文，生命周期须覆盖模块
+     * @note 仅对象构造时调用，不分配、不阻塞；非 ISR。
+     */
     constexpr explicit StorageModule(AppContext &context) noexcept : context_(&context) {}
+    /**
+     * @brief 绑定模块所属上下文
+     * @param context: 所属应用上下文，生命周期须覆盖模块
+     * @note 仅消费者启动前单线程调用；不分配、不阻塞，非 ISR。
+     */
     void bindContext(AppContext &context) noexcept
     {
         context_ = &context;
@@ -25,7 +35,11 @@ public:
     StorageModule &operator=(const StorageModule &) = delete;
     StorageModule(StorageModule &&) = delete;
     StorageModule &operator=(StorageModule &&) = delete;
-    /** 启动前单线程，非 ISR；同步读取 NVS，幂等且加载失败时使用缺省值。 */
+    /**
+     * @brief  初始化 NVS 并加载 SN、白名单与各模块键表
+     * @retval fw::Result::kOk 总是（加载失败使用缺省值）
+     * @note   启动前单线程，非 ISR；同步读 NVS，幂等。
+     */
     [[nodiscard]] fw::Result init() noexcept;
     /**
      * @brief  处理挂起的白名单保存（去抖与失败重试）
@@ -34,26 +48,91 @@ public:
      * @note   仅 kLink，非 ISR；可同步写 NVS；失败记 W/E 级日志。
      */
     [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
-    /** 仅 kLink，非 ISR；同步保存 SN，结果写入 result。 */
+    /**
+     * @brief 仅 kLink，非 ISR；同步保存 SN，结果写入 result。
+     * @param cmd: 待处理指令
+     * @param[out] result: 执行结果输出
+     * @note 仅所属模块执行器任务调用，非 ISR；涉及存储时可同步等待 NVS。
+     */
     void onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept;
-    /** 仅 kLink，非 ISR、非阻塞；登记白名单变化并重启去抖。 */
+    /**
+     * @brief 仅 kLink，非 ISR、非阻塞；登记白名单变化并重启去抖。
+     * @param list: 新白名单，超容量部分忽略
+     * @param nowMs: 当前单调时间（毫秒）
+     * @note 仅 kLink，不阻塞，非 ISR；重新开始去抖且保留失败退避。
+     */
     void markWhitelistDirty(std::span<const core::BtAddr> list, uint32_t nowMs) noexcept;
-    /** 仅 kLink，非 ISR；跳过去抖同步写 NVS，返回后端错误。 */
+    /**
+     * @brief 仅 kLink，非 ISR；跳过去抖同步写 NVS，返回后端错误。
+     * @param nowMs: 当前单调时间（毫秒）
+     * @retval 最近一次白名单写入的底层 esp_err_t；无待写时保持旧结果
+     * @note 仅 kLink；跳过去抖同步调用 poll，可等待 NVS，非 ISR。
+     */
     [[nodiscard]] esp_err_t flushWhitelist(uint32_t nowMs) noexcept;
 
-    /** 按 fw::StoreKey 表读 NVS（启动前或仅 kLink，非 ISR）；缺键返回 kNotFound。 */
+    /**
+     * @brief 逐个加载键表（blob 与标量分派给上面的单键函数）
+     * @param keys: 键表
+     * @retval kOk: 全部成功；其他: 最后一个失败键的类型（既有语义）
+     * @note 仅 storage 任务启动期调用；非 ISR，不分配堆。
+     */
     [[nodiscard]] fw::Result loadKeys(std::span<const fw::StoreKey> keys) noexcept;
-    /** 按 fw::StoreKey 表同步写 NVS（仅 kLink，非 ISR）；任一键失败即返回该错误。 */
+    /**
+     * @brief 逐个保存键表（blob 与标量分派给上面的单键函数）
+     * @param keys: 键表
+     * @retval kOk: 全部成功；其他: 最后一个失败键的类型（既有语义）
+     * @note 仅 storage 任务调用；非 ISR，不分配堆。
+     */
     [[nodiscard]] fw::Result saveKeys(std::span<const fw::StoreKey> keys) noexcept;
 
 private:
     friend struct ModuleTestAccess;
+    /**
+     * @brief  从 NVS 读白名单；缺失或损坏时使用空表并记 W 级日志
+     */
     void loadWhitelist() noexcept;
+    /**
+     * @brief  从 NVS 读 SN；缺失时由 BT MAC 派生设备名
+     */
     void loadSn() noexcept;
+    /**
+     * @brief 按持久化目录加载各模块键表
+     * @note 仅启动任务；可等待 NVS，单类失败不阻止后续加载，非 ISR。
+     */
     void loadKeyTables() noexcept;
+    /**
+     * @brief 从连续六字节地址行恢复模块白名单
+     * @param in: 输入字节视图
+     * @retval kOk 已更新白名单
+     * @retval kInvalidArg 长度不是六字节整数倍或超容量，旧值不变
+     * @note 仅启动期或 kLink 串行调用，不阻塞，非 ISR。
+     */
     [[nodiscard]] fw::Result whitelistLoad(std::span<const uint8_t> in) noexcept;
+    /**
+     * @brief 把模块白名单编码为连续地址行
+     * @param[out] out: 输出缓冲或结果
+     * @param[out] len: 始终写入所需字节数
+     * @retval kOk 已写入 len 字节
+     * @retval kNoSpace 输出不足，len 为所需长度
+     * @note 仅 kLink 或启动前调用，不阻塞，非 ISR。
+     */
     [[nodiscard]] fw::Result whitelistSave(std::span<uint8_t> out, size_t &len) const noexcept;
+    /**
+     * @brief 校验并恢复模块内的序列号
+     * @param in: 输入字节视图
+     * @retval kOk 已更新模块 SN
+     * @retval kInvalidArg 空值、过长、含零字节或换行，旧值不变
+     * @note 仅 kLink 或启动前串行调用，不阻塞，非 ISR。
+     */
     [[nodiscard]] fw::Result snLoad(std::span<const uint8_t> in) noexcept;
+    /**
+     * @brief 把模块序列号编码为不带终止符的字节串
+     * @param[out] out: 输出缓冲或结果
+     * @param[out] len: 始终写入所需字节数
+     * @retval kOk 已写入 len 字节
+     * @retval kNoSpace 输出不足，len 为所需长度
+     * @note 仅 kLink 或启动前调用，不阻塞，非 ISR。
+     */
     [[nodiscard]] fw::Result snSave(std::span<uint8_t> out, size_t &len) const noexcept;
     /**
      * @brief  执行 SN 写入命令：校验后写 NVS，失败保留旧值
@@ -62,6 +141,11 @@ private:
      */
     void saveSn(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
+    /**
+     * @brief 取得已绑定的应用上下文
+     * @retval 模块所属上下文引用
+     * @note 仅模块所属任务调用；须已 bindContext，非 ISR，不阻塞。
+     */
     [[nodiscard]] AppContext &ctx() noexcept
     {
         return *context_;
@@ -79,6 +163,10 @@ private:
     LinkStatus whitelist_{};
     std::array<char, NVS_STORE_SN_MAX + 1U> sn_{};
 };
-/** `config` 只读查看命令表；静态存储，进程期有效。 */
+/**
+ * @brief 取得配置命令表
+ * @retval 固件生命周期有效的静态只读表视图
+ * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
+ */
 [[nodiscard]] std::span<const cli::Cmd> configCmds() noexcept;
 } // namespace app

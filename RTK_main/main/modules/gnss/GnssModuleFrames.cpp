@@ -53,11 +53,6 @@ void GnssModule::DemuxSink::onReject(const demux::Decoder &decoder, uint8_t /*in
     }
 }
 
-/**
- * @brief 返回 GNSS 控制器引用
- * @retval 控制器引用（生命周期由模块持有）
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 ::gnss::Controller &GnssModule::controller() noexcept
 {
     if (!controller_.has_value()) {
@@ -66,11 +61,6 @@ void GnssModule::DemuxSink::onReject(const demux::Decoder &decoder, uint8_t /*in
     return *controller_;
 }
 
-/**
- * @brief 返回 NMEA 解析器引用
- * @retval 解析器引用（生命周期由模块持有）
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 ::gnss::NmeaParser &GnssModule::parser() noexcept
 {
     if (!parser_.has_value()) {
@@ -79,11 +69,6 @@ void GnssModule::DemuxSink::onReject(const demux::Decoder &decoder, uint8_t /*in
     return *parser_;
 }
 
-/**
- * @brief 返回 GNSS 字节流解复用器引用
- * @retval 解复用器引用（生命周期由模块持有）
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 demux::Demux &GnssModule::streamDemux() noexcept
 {
     if (!demux_.has_value()) {
@@ -92,11 +77,6 @@ demux::Demux &GnssModule::streamDemux() noexcept
     return *demux_;
 }
 
-/**
- * @brief  处理分流器交付的一帧：喂控制器、应用输出，并记 D 级帧日志
- * @param  decoder: 识别出该帧的解码器
- * @param  frame: 完整帧字节
- */
 void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept
 {
     // 文本日志不经中断路径：本函数只由 kIo 任务的 feed() 调用（ADR-0009 §2.11）。
@@ -159,13 +139,6 @@ void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint
     }
 }
 
-/**
- * @brief  分流器拒收字节：记 D 级日志与可选 hex 转储
- * @param  decoder: 拒收的解码器
- * @param  prefix: 被拒收的字节
- * @param  cause: 拒收原因
- * @param  last: 是否为本次重同步的最后一个拒收
- */
 void GnssModule::handleReject(const demux::Decoder &decoder, std::span<const uint8_t> prefix,
                               demux::RejectCause cause, bool last) noexcept
 {

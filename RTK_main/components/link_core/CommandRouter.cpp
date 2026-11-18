@@ -12,8 +12,8 @@
 namespace core {
 
 // 单遍登记循环：合法性/重复/kMaxRoutes 都在循环内以 break 统一退出，拆开会复制状态传播（ADR-0013 §2.4）。
-fw::Status CommandRouter::init( // NOLINT(readability-function-*)
-    std::span<const RouteTable> tables) noexcept
+// NOLINTBEGIN(readability-function-size, readability-function-cognitive-complexity): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+fw::Status CommandRouter::init(std::span<const RouteTable> tables) noexcept
 {
     if (inited_) {
         // 重复初始化按契约返回 kBusy，且不改动已有索引。
@@ -68,6 +68,7 @@ fw::Status CommandRouter::init( // NOLINT(readability-function-*)
     inited_ = true;
     return status;
 }
+// NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
 
 DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, uint32_t nowMs,
                                      Reply &reply) noexcept

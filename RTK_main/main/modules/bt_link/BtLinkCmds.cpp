@@ -18,6 +18,13 @@ namespace app {
 
 namespace {
 
+/**
+ * @brief 显示蓝牙会话与链路状态
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdBt(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -49,6 +56,13 @@ int cmdBt(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
+/**
+ * @brief 显示报警状态与最近心跳
+ * @param argc: 命令参数个数（含动词）
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdAlarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {

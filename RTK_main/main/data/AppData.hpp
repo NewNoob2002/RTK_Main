@@ -27,6 +27,11 @@ namespace app::data {
 template <typename T> class ZeroInitSlot {
 public:
     constexpr ZeroInitSlot() noexcept = default;
+    /**
+     * @brief 构造延迟槽并绑定跨任务锁
+     * @param lock: 跨任务同步操作表
+     * @note 仅启动前单线程调用，不阻塞，非 ISR。
+     */
     void bindLock(fw::LockOps lock) noexcept
     {
         if (!slot_.has_value()) {
@@ -34,16 +39,32 @@ public:
         }
         slot_->bindLock(lock);
     }
+    /**
+     * @brief 更新已构造槽，未构造时忽略
+     * @param value: 待转换或写入的值
+     * @note 绑定后支持跨任务调用，内部加锁，非 ISR。
+     */
     void write(const T &value) noexcept
     {
         if (slot_.has_value()) {
             slot_->write(value);
         }
     }
+    /**
+     * @brief 读取槽快照，未构造时返回零初值
+     * @retval 槽快照；未绑定时为 T{}
+     * @note 绑定后支持跨任务调用，内部加锁，非 ISR。
+     */
     [[nodiscard]] T read() const noexcept
     {
         return slot_.has_value() ? slot_->read() : T{};
     }
+    /**
+     * @brief 读取槽快照，未构造时返回零初值
+     * @param[out] versionOut: 版本输出；未构造时置 0
+     * @retval 槽快照；未绑定时为 T{}
+     * @note 绑定后支持跨任务调用，内部加锁，非 ISR。
+     */
     [[nodiscard]] T read(uint32_t &versionOut) const noexcept
     {
         if (!slot_.has_value()) {
@@ -52,6 +73,11 @@ public:
         }
         return slot_->read(versionOut);
     }
+    /**
+     * @brief 读取槽版本号
+     * @retval 当前版本；未构造时为 0
+     * @note 绑定后支持跨任务调用，内部加锁，非 ISR。
+     */
     [[nodiscard]] uint32_t version() const noexcept
     {
         return slot_.has_value() ? slot_->version() : 0U;
@@ -65,13 +91,25 @@ private:
 
 /** 跨任务共享的主题集合；init() 绑定同一把锁后各 Slot 支持跨任务读写，非 ISR。 */
 struct DataCenter {
-    /** 启动前单线程初始化自旋锁并绑定全部主题；不阻塞，非 ISR，无错误返回。 */
+    /**
+     * @brief  初始化共享自旋锁并把全部主题槽绑定到它；启动前单线程调用一次
+     */
     void init() noexcept;
 #if RTK_GNSS_ENABLED
-    /** 启动前绑定外供 GNSS App 环形区与最新帧缓存（须在 init() 之后调用）。 */
+    /**
+     * @brief 启动前绑定外供 GNSS App 环形区与最新帧缓存（须在 init() 之后调用）。
+     * @param appRingBuf: GNSS App 多读环形存储，容量须匹配配置
+     * @param latestBuf: 最新帧缓存，至少 kGnssLatestTotalBytes 字节
+     * @retval kOk 两个数据缓冲均初始化成功
+     * @retval kInvalidArg 环或缓存存储不满足容量要求
+     * @note 仅 DataCenter::init 后、消费者启动前单线程调用，非 ISR。
+     */
     [[nodiscard]] fw::Status initGnssBuffers(std::span<uint8_t> appRingBuf,
                                              std::span<uint8_t> latestBuf) noexcept;
-    /** 仅启动绑定回滚、消费者尚未启动时调用；清除全部 GNSS 外供引用，非 ISR。 */
+    /**
+     * @brief 仅启动绑定回滚、消费者尚未启动时调用；清除全部 GNSS 外供引用，非 ISR。
+     * @note 仅启动绑定回滚、消费者尚未启动时调用；原地重建不分配堆，非 ISR。
+     */
     void unbindGnssBuffers() noexcept;
 #endif
 

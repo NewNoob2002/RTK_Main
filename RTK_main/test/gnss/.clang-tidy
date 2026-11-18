@@ -1,0 +1,4 @@
+# 驱动黄金字节测试把只读字符串视为字节，不写入原存储；跨多个驱动测试共用。
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-pro-type-reinterpret-cast

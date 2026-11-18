@@ -1,4 +1,4 @@
-// 帧归类与帧标签的等价性测试（ADR-0012 §2.2）：classifyFrame() 必须与 P3a 之前 main 的
+// 帧归类与帧标签的等价性测试（ADR-0012 §2.2）：classifyFrame() 必须与 旧版 main 的
 // classify_gnss_sentence() 判定一致，frameTag() 必须与 main 原 describe_frame() 的文本一致。
 // 逐条用例的内联期望值来自基线 main/data/GnssOutput.cpp 与 main/modules/gnss/GnssModule.cpp 的实现。
 // 线程/ISR 安全：本文件只调用纯函数。

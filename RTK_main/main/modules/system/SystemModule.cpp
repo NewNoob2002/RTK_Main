@@ -46,10 +46,6 @@ bool buildDeviceName(std::string_view sn, std::span<char, kDeviceNameBuf> out) n
     return true;
 }
 
-/**
- * @brief 读取并回填身份信息（SN 缺失时用蓝牙 MAC 派生，失败退化为 "0000"）
- * @note 仅启动期单线程调用；esp_read_mac 非 ISR，不阻塞控制台。
- */
 void SystemModule::fillIdentity() noexcept
 {
     /* 读取持久化 SN 和启动期堆状态。 */
@@ -70,10 +66,6 @@ void SystemModule::fillIdentity() noexcept
     }
 }
 
-/**
- * @brief 校验 SN、生成 BT 名并启动 SPP 服务，结果写回 systemStatus
- * @note 仅启动期单线程调用；spp_server_init 可阻塞（蓝牙控制器启动）。
- */
 void SystemModule::startBt() noexcept
 {
     /* 名称校验通过后才启动 BT，失败仍发布状态供控制台读取。 */
@@ -92,10 +84,6 @@ void SystemModule::startBt() noexcept
     ctx().data.systemStatus.write(status_);
 }
 
-/**
- * @brief  计算设备名与身份信息并发布到 DataCenter（BT 启动前调用）
- * @note 仅启动期单线程调用；顺序为先身份后蓝牙，二者都不在 ISR。
- */
 void SystemModule::prepare() noexcept
 {
     fillIdentity();

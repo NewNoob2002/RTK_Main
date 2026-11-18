@@ -88,7 +88,6 @@ void check(bool passed, const char *expression,
            std::source_location location = std::source_location::current())
 {
     if (!passed) {
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): host 断言的固定格式错误报告。
         std::fprintf(stderr, "CHECK FAILED (%s:%u): %s\n", location.file_name(), location.line(),
                      expression);
         std::abort();
@@ -98,7 +97,7 @@ void check(bool passed, const char *expression,
 #define CHECK(cond) check((cond), #cond)
 
 // 数字是故障位置、边界值和协议测试向量；host 替身手动分配/释放用来核对 arena 的释放责任。
-// NOLINTBEGIN(readability-magic-numbers, cppcoreguidelines-no-malloc)
+// NOLINTBEGIN(cppcoreguidelines-no-malloc): 注入失败的 host 分配器必须调用 malloc/free 模拟后端。
 namespace {
 
 struct FaultAllocCtx {
@@ -301,7 +300,6 @@ void testProductionAllocationPlan() noexcept
     CHECK(hasGnss == bool(RTK_GNSS_ENABLED));
     CHECK(hasTrace == bool(FW_TRACE_ENABLED));
     CHECK(requested == app::s_app.bootArena.totalBytes());
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): host 计划结果使用固定格式报告。
     std::printf("boot plan: owners=%zu requested=%zu actual=%zu gnss=%d trace=%d\n", owners,
                 requested, app::s_app.bootArena.totalActualBytes(), RTK_GNSS_ENABLED,
                 FW_TRACE_ENABLED);
@@ -319,7 +317,6 @@ void testProductionAllocationPlan() noexcept
         CHECK(app::s_app.bootArena.state() == rtos::ArenaState::kAborted);
         CHECK(app::s_app.bootArena.entries().empty());
         std::array<char, rtos::BootArena::kMaxReasonBytes> expected{};
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): 构造受限长的预期错误文本。
         std::snprintf(expected.data(), expected.size(), "boot_alloc:%s", names[fail]);
         CHECK(std::string_view{app::s_app.bootArena.reason()} == expected.data());
         resetTestArena();
@@ -568,7 +565,7 @@ void testConsumerStorageBindings() noexcept
 
 } // namespace
 
-// NOLINTEND(readability-magic-numbers, cppcoreguidelines-no-malloc)
+// NOLINTEND(cppcoreguidelines-no-malloc)
 int main()
 {
     testArenaLifecycleAndValidation();

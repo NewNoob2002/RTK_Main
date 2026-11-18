@@ -122,12 +122,6 @@ void printGnssAppRing() noexcept
     cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated (K6)", kStaticObsReservedBytes);
 }
 
-/**
- * @brief 打印 GNSS 状态
- * @param argc: 参数个数
- * @retval 0 表示成功
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 int cmdGnssStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -139,12 +133,6 @@ int cmdGnssStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-/**
- * @brief 打印当前定位解
- * @param argc: 参数个数
- * @retval 0 表示成功
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 int cmdGnssFix(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
@@ -203,12 +191,6 @@ int cmdGnssFix(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-/**
- * @brief 打印卫星表
- * @param argc: 参数个数
- * @retval 0 表示成功
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 int cmdGnssSats(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {

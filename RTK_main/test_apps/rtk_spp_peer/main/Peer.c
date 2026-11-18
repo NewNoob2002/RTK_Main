@@ -33,7 +33,7 @@
 #define PEER_CONNECT_PREFIX_LEN 8U
 #define PEER_QUERY_PREFIX_LEN   6U
 /* 复位后首连推迟：RTK 端 LSTO 为 5 s（supv_to 8000 × 0.625 ms），旧 ACL 未释放前发起的连接
- * 会卡约 20 s 才以 HCI 0x08 失败（J5 §3）。推迟到 LSTO 之后首连即可成功。 */
+ * 会卡约 20 s 才以 HCI 0x08 失败（实测连接超时）。推迟到 LSTO 之后首连即可成功。 */
 #define PEER_BOOT_HOLDOFF_MS 5500U
 /* Page 超时 4096 × 0.625 ms = 2.56 s（默认 5.12 s），对方不在时更快失败进入退避。 */
 #define PEER_PAGE_TIMEOUT_SLOTS 4096U

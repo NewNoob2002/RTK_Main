@@ -31,6 +31,10 @@ namespace {
 constexpr size_t kGroupArgs = 2U;
 constexpr int kNameWidth = 14; // 键名列宽，与 cli::printKv 一致
 
+/**
+ * @brief 显示身份与设备名
+ * @note 仅 console REPL 任务；输出和 NVS 访问可阻塞，非 ISR。
+ */
 void showIdentity() noexcept
 {
     const auto &data = appContext().data;
@@ -44,6 +48,10 @@ void showIdentity() noexcept
     }
 }
 
+/**
+ * @brief 显示链路策略与白名单
+ * @note 仅 console REPL 任务；输出和 NVS 访问可阻塞，非 ISR。
+ */
 void showLink() noexcept
 {
     const auto &data = appContext().data;
@@ -116,6 +124,11 @@ void showGroup(const StoreGroup &group) noexcept
     }
 }
 
+/**
+ * @brief 列出全部持久化类别
+ * @param prefix: 类别名前缀筛选，空串表示全部
+ * @note 仅 console REPL 任务；输出和 NVS 访问可阻塞，非 ISR。
+ */
 void showGroups(std::string_view prefix) noexcept
 {
     for (const StoreGroup &group : storeCatalog()) {
@@ -125,6 +138,10 @@ void showGroups(std::string_view prefix) noexcept
     }
 }
 
+/**
+ * @brief 显示当前固件构建配置
+ * @note 仅 console REPL 任务；输出和 NVS 访问可阻塞，非 ISR。
+ */
 void showBuild() noexcept
 {
     cli::printSection("build");
@@ -147,13 +164,21 @@ struct Section {
     void (*show)() noexcept;
 };
 
-// 节选表项：签名由 Section::show 固定；节名在此注入。
+/**
+ * @brief 显示 GNSS 持久化配置
+ * @note 仅 console REPL 任务；输出和 NVS 访问可阻塞，非 ISR。
+ * @note 节选表项：签名由 Section::show 固定；节名在此注入。
+ */
 void showGnss() noexcept
 {
     showGroups("gnss");
 }
 
-// 节选表项（Section::show），同 showGnss。
+/**
+ * @brief 显示调试持久化配置
+ * @note 仅 console REPL 任务；输出和 NVS 访问可阻塞，非 ISR。
+ * @note 节选表项（Section::show），同 showGnss。
+ */
 void showDebug() noexcept
 {
     showGroups("debug");
@@ -167,6 +192,14 @@ constexpr std::array<Section, 5U> kSections{{
     {"build", showBuild},
 }};
 
+/**
+ * @brief 按类别显示持久化配置
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 命令成功
+ * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务；可等待输出或执行器，非 ISR。
+ */
 int cmdConfig(void * /*ctx*/, int argc, char **argv) noexcept
 {
     if ((argc < 1) || (argc > static_cast<int>(kGroupArgs)) || (argv == nullptr)) {

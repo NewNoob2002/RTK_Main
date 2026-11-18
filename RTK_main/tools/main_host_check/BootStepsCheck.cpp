@@ -25,7 +25,6 @@ void check(bool ok, const char *expr) noexcept
 #define CHECK(cond) check((cond), #cond)
 
 // 数字是步骤下标、边界记录数与注入的时间/堆快照；由上方具名常量与数组下标表达，仍属测试向量。
-// NOLINTBEGIN(readability-magic-numbers)
 
 /** 注入用的起点毫秒、每次读表的步进与堆快照，断言按这三组常数计算。 */
 constexpr uint32_t kBaseMs = 100U;
@@ -215,8 +214,6 @@ void testRecordBounds() noexcept
     CHECK(std::string_view{app::bootResultName(app::BootResult::kSkipped)} == "skipped");
     CHECK(std::string_view{app::bootResultName(app::BootResult::kFail)} == "fail");
 }
-
-// NOLINTEND(readability-magic-numbers)
 
 } // namespace
 

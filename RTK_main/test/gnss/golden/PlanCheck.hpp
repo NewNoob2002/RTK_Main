@@ -1,5 +1,5 @@
-// P3b 黄金等价比对：基础脚本 + buildOutput 逐句下发，合起来必须与 P3a 基线脚本的命令集合一致。
-// 基线（ADR-0012 P3a 之前的 Dialect）把语句输出写死在 rover 脚本里；P3b 拆成"基础脚本 3 步 + 每句一条命令"，
+// 输出计划黄金等价比对：基础脚本 + buildOutput 逐句下发，合起来必须与方言基线脚本的命令集合一致。
+// 基线（ADR-0012 §2.4 之前的 Dialect）把语句输出写死在 rover 脚本里；当前拆成"基础脚本 3 步 + 每句一条命令"，
 // 因此这里按多重集比较：只要基线出现过的那条命令，新实现也必须恰好出现一次，且不多不少。
 // 只用普通函数（不依赖 Unity 宏），三个驱动的测试文件共用；返回第一个不一致的下标，kAllMatch 表示全部一致。
 // 线程/ISR 安全：纯函数（只读输入，栈上构造命令）。
@@ -351,7 +351,7 @@ inline size_t ubxPlanMismatch(const gnss::Receiver &receiver,
                           wantCount)) {
             return c;
         }
-        // GSV 的历元数在 P3b 由周期换算（周期 1 s × 频率），基线固定写 1；这是 ADR-0012 §2.4 期望的行为差异，
+        // GSV 的历元数由输出计划周期换算（周期 1 s × 频率），基线固定写 1；这是 ADR-0012 §2.4 期望的行为差异，
         // 其余键仍逐对比较（未出现等价于 0）。
         gotCount =
             dropKey(std::span<std::pair<uint32_t, uint32_t>>{got.data(), gotCount}, kKeyGsvUart1);

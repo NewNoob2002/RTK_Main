@@ -16,13 +16,13 @@ enum class ExecTrace : uint8_t {
     kWdtResetFail = 3, // 任务看门狗喂狗失败（此后本任务不再喂狗）：a = esp_err_t
 };
 
-// session 恒为 0：执行器与蓝牙会话无关。
 /**
  * @brief  写一条执行器 trace 事件
  * @param  code: 事件码
  * @param  a: 事件负载 a，含义随 code
  * @param  b: 事件负载 b，含义随 code
  * @note   任务上下文调用；不可在 ISR 调用；不阻塞、不分配
+ * @note session 恒为 0：执行器与蓝牙会话无关。
  */
 inline void traceExec(ExecTrace code, uint32_t a = 0, uint32_t b = 0) noexcept
 {

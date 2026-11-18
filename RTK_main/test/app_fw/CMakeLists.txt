@@ -1,4 +1,4 @@
-# app_fw 纯 C++20 组件 host 单元测试工程（ADR-0007，J4 交付）。
+# app_fw 纯 C++20 组件 host 单元测试工程（ADR-0007）。
 # 覆盖 Result、LockGuard、Slot、StoreKey、FanoutRing、trace/TraceRing、tlog/LogRing、Log（分级日志）；
 # 另建 app_fw_off（FW_TRACE_ENABLED=0）验证追踪关闭时 tlog 编译路径；支持普通构建与 ASan/UBSan 构建。
 cmake_minimum_required(VERSION 3.22)

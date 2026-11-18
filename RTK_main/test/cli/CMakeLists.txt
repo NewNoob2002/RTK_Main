@@ -1,4 +1,4 @@
-# cli 参数解析与回执辅助 host 单元测试工程（ADR-0007 J3 / ADR-0009 T1a）。
+# cli 参数解析与回执辅助 host 单元测试工程（ADR-0007 §4 / ADR-0009 §2.5）。
 # 支持普通构建与 ASan/UBSan 构建。
 cmake_minimum_required(VERSION 3.22)
 project(cli_tests C CXX)

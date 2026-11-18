@@ -44,7 +44,6 @@ void testTlogIsNoopWhenDisabled()
     // 十六进制通通关闭：即使两级掩码都置位也不认为打开。
     TEST_ASSERT_FALSE(fw::logHexOn(fw::TraceCat::kGnss));
 
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     fw::tlog(fw::TraceCat::kGnss, "must not reach the ring: %u", kMarker);
     const std::array<uint8_t, 4U> bytes{0U, 1U, 2U, 3U};
     fw::tlogHex(fw::TraceCat::kGnss, bytes);

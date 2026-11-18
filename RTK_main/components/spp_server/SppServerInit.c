@@ -226,6 +226,7 @@ static esp_err_t spp_server_bringup(void)
     return ESP_OK;
 }
 
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
 /**
  * @brief  发起 SPP 反初始化并等 UNINIT_EVT；超时只告警（没有回滚手段）
  */
@@ -364,7 +365,7 @@ esp_err_t spp_server_stop_boot(void)
 }
 
 /* 线性启动序列：每步失败即按逆序释放已获取的资源，拆开反而看不出顺序（ADR-0013 §2.4）。 */
-esp_err_t spp_server_init(const char *name) // NOLINT(readability-function-*)
+esp_err_t spp_server_init(const char *name)
 {
     esp_err_t err = ESP_OK;
     spp_server_hw_state_t hw_state = {false, false, false, false};
@@ -435,6 +436,7 @@ esp_err_t spp_server_init(const char *name) // NOLINT(readability-function-*)
     s_spp.initialized = true;
     return ESP_OK;
 }
+// NOLINTEND(readability-function-size)
 
 esp_err_t spp_server_get_local_addr(uint8_t addr[SPP_SERVER_ADDR_LEN])
 {

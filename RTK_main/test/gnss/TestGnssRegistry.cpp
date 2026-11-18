@@ -122,7 +122,7 @@ static void testU8Boundaries()
     TEST_ASSERT_FALSE(gnss::modelFromU8(0xFFU).has_value());
 }
 
-// familyName 覆盖全部枚举值（main 的追踪文本依赖它，P3a 替换了 main 的 switch）。
+// familyName 覆盖全部枚举值（main 的追踪文本依赖它，驱动接入后替换了 main 的 switch）。
 static void testFamilyNames()
 {
     TEST_ASSERT_EQUAL_STRING("unknown", gnss::familyName(gnss::Family::kUnknown));

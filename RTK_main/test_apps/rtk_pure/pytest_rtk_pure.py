@@ -1,4 +1,4 @@
-# T15：仅定义上板入口；执行需要另行授权烧录与串口访问。
+# 仅定义上板入口；执行需要另行授权烧录与串口访问。
 import pytest
 from pytest_embedded import Dut
 from pytest_embedded_idf.utils import idf_parametrize

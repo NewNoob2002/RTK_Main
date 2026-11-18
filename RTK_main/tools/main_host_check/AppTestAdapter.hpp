@@ -1,12 +1,11 @@
 // 原有场景的接线适配：调用真实模块，旧测试的断言字段只在此处由主题装配。
 #pragma once
 // 保留基线白盒场景对会话/预读状态的检查；不额外编译此 cpp，避免重复定义。
-// NOLINTNEXTLINE(bugprone-suspicious-include)
+// NOLINTBEGIN(bugprone-suspicious-include): 白盒适配需直接包含实现，不再单独编译这些 cpp。
 #include "../../main/modules/bt_link/BtLinkModule.cpp"
-// NOLINTNEXTLINE(bugprone-suspicious-include)
 #include "../../main/modules/bt_link/BtLinkSessions.cpp"
-// NOLINTNEXTLINE(bugprone-suspicious-include)
 #include "../../main/modules/bt_link/BtLinkGnss.cpp"
+// NOLINTEND(bugprone-suspicious-include)
 #include "../../main/modules/rtcm/RtcmModule.hpp"
 #include "../../main/modules/storage/StorageModule.hpp"
 #include "rtos/StaticQueue.hpp"

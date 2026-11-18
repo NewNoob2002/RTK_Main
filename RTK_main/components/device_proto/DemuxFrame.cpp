@@ -111,6 +111,7 @@ uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
     return value;
 }
 
+// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
 /**
  * @brief  判定一帧：sync/头长/帧长/CRC
  * @param  frame: 候选帧（从同步字节开始，可为任意长度前缀）
@@ -118,7 +119,7 @@ uint32_t readU32Le(std::span<const uint8_t> frame, std::size_t from) noexcept
  * @note   协议早拒绝阶梯：sync/头长/帧长/CRC 的次序本身是内容，拆开反而看不出拒绝顺序（ADR-0013 §2.4）。
  *         纯函数、可重入、无阻塞、ISR 安全。
  */
-Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-function-*)
+Verdict judge(std::span<const uint8_t> frame) noexcept
 {
     Verdict verdict{};
     if (frame[0] != kSyncA) {
@@ -188,6 +189,7 @@ Verdict judge(std::span<const uint8_t> frame) noexcept // NOLINT(readability-fun
     good.step = demux::Step::kFrame;
     return good;
 }
+// NOLINTEND(readability-function-size)
 
 /**
  * @brief  按 Verdict 的 reason/offset/received/total/computed 生成一句英文诊断

@@ -1,4 +1,4 @@
-// 调试日志输出：文本行、十六进制转储与事件抽取（S4 B3 按职责从 DebugModule.cpp 拆出）。
+// 调试日志输出：文本行、十六进制转储与事件抽取。
 // 仅 console REPL 任务与 trace_out 输出任务；逐行写控制台，读日志环形缓冲，不分配堆、非 ISR。
 
 #include <array>
@@ -93,14 +93,6 @@ size_t formatHexLine(std::span<char> dump, std::span<const uint8_t> line, size_t
 
 } // namespace
 
-/**
- * @brief 以十六进制转储打印一段载荷（每行 16 字节 + ASCII 列）
- * @param hdr: 事件头（只用 total 判断是否截断）
- * @param payload: 已截断的载荷
- * @param out: 尾部提示文本缓冲
- * @param cap: out 容量
- * @note 仅 console REPL 任务；逐行写控制台，不分配堆。
- */
 void DebugModule::printLogHex(const fw::LogHeader &hdr, std::span<const uint8_t> payload, char *out,
                               size_t cap) noexcept
 {
@@ -122,13 +114,6 @@ void DebugModule::printLogHex(const fw::LogHeader &hdr, std::span<const uint8_t>
     }
 }
 
-/**
- * @brief 把追踪环与日志环按时间戳合并输出
- * @param line: 本行字节
- * @param cap: 缓冲容量
- * @retval true 表示成功/命中
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
- */
 bool DebugModule::pumpEvents(char *line, size_t cap) noexcept
 {
     std::array<char, kLineBytes + kLinePrefixBytes> out{};

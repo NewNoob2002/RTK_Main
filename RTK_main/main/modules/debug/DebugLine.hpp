@@ -12,7 +12,7 @@ namespace app::detail {
 /**
  * @brief 整行写控制台（经 cli 统一出口）
  * @param text: 待写文本
- * @param len: 字节数
+ * @param[out] len: 字节数
  * @note console REPL 任务；阻塞在控制台锁上，ISR 不可用。
  */
 inline void writeLine(const char *text, size_t len) noexcept

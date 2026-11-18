@@ -1,9 +1,9 @@
-// 黄金向量生成器（ADR-0012 P3a 第 1 步）：用**未修改的** ADR-0010 方言接口（gnss::Dialect）导出
+// 黄金向量生成器（ADR-0012 §2.4）：用**未修改的** ADR-0010 方言接口（gnss::Dialect）导出
 // 探测命令、全部 roverStep 组合、应答判定样本与能力位，写到 test/gnss/golden/Golden<Family>.inc。
 // 只用一次：在基线 4cf1320 上运行，产物固化提交；ADR-0012 删除 Dialect 接口后本文件不再参与构建，
 // 保留在 golden/ 下作为向量来源的凭证（不要改造成用 Receiver 重新生成，那会失去独立基线）。
 // 线程/调用约束：单线程命令行工具，可阻塞写文件；不访问硬件。
-// 构建方式（基线代码，P3a 前的方言开关名）：见 docs/reports/P3a.md 第 1 节命令记录。
+// 构建方式（基线代码使用旧方言开关名）：从基线 4cf1320 的构建记录追溯。
 //   cmake --build builds/p3a-golden --target golden_gen && builds/p3a-golden/golden_gen test/gnss/golden
 // 堆：开发者工具，使用 std::string/std::vector，不在固件内。
 #include <array>
@@ -375,7 +375,7 @@ bool write_family(const gnss::Dialect &dialect, const std::string &dir)
     }
     std::fprintf(
         file,
-        "// 黄金向量 %s（ADR-0012 P3a）：由 test/gnss/golden/GoldenGen.cpp 在基线 4cf1320 的\n",
+        "// 黄金向量 %s（ADR-0012 §2.4）：由 test/gnss/golden/GoldenGen.cpp 在基线 4cf1320 的\n",
         dialect.name);
     std::fprintf(file, "// ADR-0010 方言实现（%s）上导出。测试只读；不得为迁就新实现修改本文件。\n",
                  dialect.name);

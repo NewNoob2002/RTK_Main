@@ -1,4 +1,4 @@
-# T15：引入纯组件 device_proto、link_core 及其依赖 app_fw、stream_demux；IDF 基础组件与 Unity 由依赖闭包提供。
+# 引入纯组件 device_proto、link_core 及其依赖 app_fw、stream_demux；IDF 基础组件与 Unity 由依赖闭包提供。
 cmake_minimum_required(VERSION 3.22)
 
 set(EXTRA_COMPONENT_DIRS ../../components/device_proto ../../components/link_core

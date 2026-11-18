@@ -11,7 +11,7 @@
 #include "gnss/drivers/UbloxReceiver.hpp"
 #include "unity.h"
 
-// S1（ADR-0012 §2.8、CPP-011）：家族基类不可直接实例化；型号只实例化平凡析构的 final 叶子类。
+// 驱动层次约束（ADR-0012 §2.8、CPP-011）：家族基类不可直接实例化；型号只实例化平凡析构的 final 叶子类。
 static_assert(!std::is_constructible_v<gnss::UbloxReceiver>);
 static_assert(std::is_final_v<gnss::ZedF9pReceiver>);
 static_assert(std::is_trivially_destructible_v<gnss::ZedF9pReceiver>);
@@ -158,7 +158,7 @@ static void testRoverScript()
     cfg.gsv = true;
     cfg.portBaud = kTestBaud;
 
-    // P3b 之后基础脚本只剩两步：语句输出改由 buildOutput 逐项下发（ADR-0012 §2.4）。
+    // 输出计划拆分后基础脚本只剩两步：语句输出改由 buildOutput 逐项下发（ADR-0012 §2.4）。
     gnss::ConfigStep step{};
     TEST_ASSERT_TRUE(ubloxDrv().roverStep(0, gnss::Model::kZedF9p, cfg, step));
     TEST_ASSERT_TRUE(step.expectReply);
@@ -262,7 +262,7 @@ static void testCaps()
     TEST_ASSERT_TRUE(&ubloxDrv().forModel(gnss::Model::kUm982) == &ubloxDrv());
 }
 
-// ---- 黄金向量比对（ADR-0012 P3a 第 3 步）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----
+// ---- 黄金向量比对（ADR-0012 §2.4）：与基线 4cf1320 上未修改的方言实现逐字节一致 ----
 #include "GoldenCheck.hpp"
 #include "GoldenUblox.inc"
 #include "PlanCheck.hpp"
@@ -272,7 +272,7 @@ static void testGoldenProbe()
     TEST_ASSERT_TRUE(golden_check::probeMatches(ubloxDrv(), golden_Ublox::kProbe));
 }
 
-/** P3b：基础脚本 + buildOutput 逐项下发，合起来必须与基线脚本一致（按 VALSET 键值对比较）。 */
+/** 基础脚本 + buildOutput 逐项下发，合起来必须与基线脚本一致（按 VALSET 键值对比较）。 */
 static void testGoldenOutputPlan()
 {
     const size_t bad =

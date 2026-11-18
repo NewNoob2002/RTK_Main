@@ -1,4 +1,4 @@
-// GNSS App 数据通路（K4 / ADR-0011）：6 KiB 最新帧缓存、统一输出配置与输出计划、跨任务订阅状态。
+// GNSS App 数据通路（ADR-0011）：6 KiB 最新帧缓存、统一输出配置与输出计划、跨任务订阅状态。
 // 线程安全：GnssLatestCache 与 GnssAppSubState 通过注入的 LockOps 保护（DataCenter::mux）；classify/GnssOutConfig
 // 为纯函数/值对象。ISR 安全：否。
 #pragma once
@@ -27,10 +27,18 @@ inline constexpr std::array<size_t, kGnssAppMsgCount> kGnssLatestCaps = {256U, 4
 inline constexpr std::array<size_t, kGnssAppMsgCount> kGnssLatestOffsets = {0U,    256U,  4352U,
                                                                             5376U, 5632U, 5888U};
 
-/** 返回 typeIdx（0..5）对应的可读语句短名。线程/ISR 安全：是。 */
+/**
+ * @brief 返回 typeIdx（0..5）对应的可读语句短名。线程/ISR 安全：是。
+ * @param typeIdx: App 语句下标（0..5）
+ * @retval 下标对应语句的静态短名；越界返回 ?
+ */
 [[nodiscard]] const char *gnssTypeName(size_t typeIdx) noexcept;
 
-/** 返回协议 msgId 对应的 typeIdx（0..5）；未知返回 std::nullopt。线程/ISR 安全：是。 */
+/**
+ * @brief 返回协议 msgId 对应的 typeIdx（0..5）；未知返回 std::nullopt。线程/ISR 安全：是。
+ * @param msgId: 协议消息 ID
+ * @retval 已知消息的下标；未知消息返回 std::nullopt
+ */
 [[nodiscard]] std::optional<uint8_t> gnssTypeFromMsgId(uint16_t msgId) noexcept;
 
 /**
@@ -46,9 +54,26 @@ struct GnssPushGate {
     uint32_t anchorMs = 0U;
     bool armed = false;
 
-    /** periodMs=0 表示每条都推；返回 true 时调用者应写入，写成功后调用 onPushed()。 */
+    /**
+     * @brief periodMs=0 表示每条都推；返回 true 时调用者应写入，写成功后调用 onPushed()。
+     * @param nowMs: 当前单调时间（毫秒）
+     * @param periodMs: 周期（毫秒），0 表示每条放行
+     * @retval true 首帧、无周期或已到放行窗口
+     * @retval false 尚未到放行窗口
+     * @note 仅 kIo 任务，非 ISR；成功写入后再调用 onPushed。
+     */
     [[nodiscard]] bool due(uint32_t nowMs, uint32_t periodMs) const noexcept;
+    /**
+     * @brief 提交成功后推进订阅节流锚点
+     * @param nowMs: 当前单调时间（毫秒）
+     * @param periodMs: 周期（毫秒），0 表示每条放行
+     * @note 仅 kIo 任务，非 ISR，不阻塞；只在写入成功后调用。
+     */
     void onPushed(uint32_t nowMs, uint32_t periodMs) noexcept;
+    /**
+     * @brief 清除订阅节流锚点的启用状态
+     * @note 仅 kIo 任务，非 ISR，不阻塞。
+     */
     void reset() noexcept
     {
         armed = false;
@@ -70,6 +95,11 @@ struct GnssOutConfig {
     uint8_t mask = 0U;
     std::array<int8_t, kGnssAppMsgCount> intervals{};
 
+    /**
+     * @brief 取得默认 GNSS 输出配置
+     * @retval 版本 1、六类输出全开及默认周期的值对象
+     * @note 纯函数，线程/ISR 安全。
+     */
     [[nodiscard]] static constexpr GnssOutConfig defaults() noexcept
     {
         return {
@@ -79,30 +109,56 @@ struct GnssOutConfig {
         };
     }
 
-    /** 校验版本、保留掩码位与已启用语句的 interval 合法性。线程/ISR 安全：是。 */
+    /**
+     * @brief 校验版本、保留掩码位与已启用语句的 interval 合法性。线程/ISR 安全：是。
+     * @retval true 版本、保留位与已启用周期均合法
+     * @retval false 任一校验不通过
+     * @note 只读值对象；无并发修改时线程/ISR 安全。
+     */
     [[nodiscard]] bool isValid() const noexcept;
 
-    /** 按统一规则设置或关闭某类语句（interval==0 关闭该类输出，!=0 开启并校验）。线程/ISR 安全：是。 */
+    /**
+     * @brief 设置或关闭一类输出语句
+     * @param typeIdx: App 语句下标（0..5）
+     * @param interval: 协议有符号周期，0 关闭
+     * @retval kOk 已更新
+     * @retval kInvalidArg 下标越界，配置不变
+     * @note 只改值对象，不阻塞；调用方串行写入。
+     */
     [[nodiscard]] fw::Result applyInterval(size_t typeIdx, int8_t interval) noexcept;
 
-    /** 序列化到固定 8 B 缓冲。线程/ISR 安全：是。 */
+    /**
+     * @brief 序列化到固定 8 B 缓冲。线程/ISR 安全：是。
+     * @param[out] out: 输出缓冲或结果
+     * @param[out] len: 成功置 8，失败保持原值
+     * @retval kOk 已写入固定 8 字节并设置 len
+     * @retval kInvalidArg 配置非法，输出不变
+     * @retval kNoSpace 输出不足 8 字节，输出不变
+     * @note 值对象操作，不分配、不阻塞；无并发修改时线程/ISR 安全。
+     */
     [[nodiscard]] fw::Result encode(std::span<uint8_t> out, size_t &len) const noexcept;
 
-    /** 从字节串反序列化并校验；非法返回 kInvalidArg 且不改 out。线程/ISR 安全：是。 */
+    /**
+     * @brief 从字节串反序列化并校验；非法返回 kInvalidArg 且不改 out。线程/ISR 安全：是。
+     * @param in: 输入字节视图
+     * @param[out] out: 配置输出，失败不变
+     * @retval kOk 解码并更新 out
+     * @retval kInvalidArg 长度或配置非法，out 不变
+     * @note 纯计算，不分配、不阻塞；无共享写入时线程/ISR 安全。
+     */
     [[nodiscard]] static fw::Result decode(std::span<const uint8_t> in,
                                            GnssOutConfig &out) noexcept;
 };
 
 /**
- * 由 NVS 输出配置生成一次输出计划（ADR-0012 §2.4，单一来源）。
- *
- * 逐项规则（下标即 gnss::OutputMsg = App typeIdx）：
- *  - mask 位关 → 0（驱动据此下发 UNLOG / VALSET 0）；
- *  - interval 等于 GnssOutConfig::defaults() 的同项值：GGA/RMC/GSA/GST = 1000/rateHz（与 P3a 流动站脚本一致），
- *    SATSINFOA = intervalToPeriodMs（默认 5 s，偏离 P3a 脚本的 1 s），HEADINGA = 1000（无 cap::kHeading 时为 0）；
- *  - 否则 → GnssService::intervalToPeriodMs(interval)，按用户设置生效；
- *  - GSV = gsv ? 1000 : 0。
- * 线程/ISR 安全：是（纯函数）。
+ * @brief 按统一配置生成接收机输出计划
+ * @param out: 有效的持久化输出配置；关闭掩码位对应周期 0
+ * @param rateHz: 定位频率，0 按 1 Hz 处理
+ * @param gsv: 是否输出 1 Hz GSV
+ * @param port: 设备输出端口
+ * @param caps: 接收机能力掩码
+ * @retval 带端口、定位频率与七类语句周期的输出计划
+ * @note 纯计算，线程/ISR 安全。默认 GGA/RMC/GSA/GST 跟定位频率；SATSINFOA 为 5 s；HEADINGA 仅有能力时为 1 s；GSV 由 gsv 决定。
  */
 [[nodiscard]] gnss::OutputPlan makeOutputPlan(const GnssOutConfig &out, uint8_t rateHz, bool gsv,
                                               uint8_t port, uint32_t caps) noexcept;
@@ -123,23 +179,52 @@ public:
     GnssLatestCache(const GnssLatestCache &) = delete;
     GnssLatestCache &operator=(const GnssLatestCache &) = delete;
 
-    /** 启动前绑定跨任务锁。线程安全：仅启动前。 */
+    /**
+     * @brief 启动前绑定跨任务锁。线程安全：仅启动前。
+     * @param lock: 跨任务同步操作表
+     * @note 仅启动前单线程调用，不阻塞，非 ISR。
+     */
     void bindLock(fw::LockOps lock) noexcept
     {
         lock_ = lock;
     }
 
-    /** 绑定外供 6 KiB 缓冲并清零长度与统计；buf 须非空且 ≥ kGnssLatestTotalBytes。线程安全：仅启动前。 */
+    /**
+     * @brief 绑定外供 6 KiB 缓冲并清零长度与统计；buf 须非空且 ≥ kGnssLatestTotalBytes。线程安全：仅启动前。
+     * @param buf: 外供缓存，生命周期覆盖读写者
+     * @retval kOk 缓存已绑定并清零统计
+     * @retval kInvalidArg 缓冲为空或不足 6 KiB
+     * @note 仅启动前单线程调用；内部使用已绑定锁，非 ISR。
+     */
     [[nodiscard]] fw::Status init(std::span<uint8_t> buf) noexcept;
 
-    /** 写入最新一条帧；超每类上限时丢弃并计 oversizeDrops，返回 false。线程安全：是（非 ISR）。 */
+    /**
+     * @brief 写入最新一条帧；超每类上限时丢弃并计 oversizeDrops，返回 false。线程安全：是（非 ISR）。
+     * @param typeIdx: App 语句下标（0..5）
+     * @param frame: 完整帧字节
+     * @retval true 最新帧已更新
+     * @retval false 下标非法、帧为空、缓存未绑定或帧超容量
+     * @note 内部加锁，跨任务安全，非 ISR；超长帧计数并保持旧帧。
+     */
     [[nodiscard]] bool update(uint8_t typeIdx, std::span<const uint8_t> frame) noexcept;
 
-    /** 读取 <=256 B 最新帧到 dst；超 256 B 时设 oversize=true 并计 queryOversize。线程安全：是（非 ISR）。 */
+    /**
+     * @brief 读取 <=256 B 最新帧到 dst；超 256 B 时设 oversize=true 并计 queryOversize。线程安全：是（非 ISR）。
+     * @param typeIdx: App 语句下标（0..5）
+     * @param[out] dst: 最新帧输出，失败不变
+     * @retval ok=true 已复制最新帧
+     * @retval oversize=true 帧超过 256 B 或目标容量，目标不变
+     * @retval 空结果 下标非法、未初始化或无帧，目标不变
+     * @note 内部加锁，跨任务安全，非 ISR。
+     */
     [[nodiscard]] core::services::GnssQueryResult query(uint8_t typeIdx,
                                                         std::span<uint8_t> dst) noexcept;
 
-    /** 读取 6 类缓存与丢弃统计快照。线程安全：是（非 ISR）。 */
+    /**
+     * @brief 读取 6 类缓存与丢弃统计快照。线程安全：是（非 ISR）。
+     * @retval 内部加锁复制的当前统计快照
+     * @note 跨任务安全，内部加锁，非 ISR。
+     */
     [[nodiscard]] std::array<GnssLatestSlotStats, kGnssAppMsgCount> snapshot() const noexcept;
 
 private:
@@ -168,33 +253,67 @@ public:
     GnssAppSubState(const GnssAppSubState &) = delete;
     GnssAppSubState &operator=(const GnssAppSubState &) = delete;
 
-    /** 启动前绑定跨任务锁。线程安全：仅启动前。 */
+    /**
+     * @brief 启动前绑定跨任务锁。线程安全：仅启动前。
+     * @param lock: 跨任务同步操作表
+     * @note 仅启动前单线程调用，不阻塞，非 ISR。
+     */
     void bindLock(fw::LockOps lock) noexcept
     {
         lock_ = lock;
     }
 
-    /** kLink 更新活跃订阅掩码与 6 路生效周期（ms）。线程安全：是（非 ISR）。 */
+    /**
+     * @brief kLink 更新活跃订阅掩码与 6 路生效周期（ms）。线程安全：是（非 ISR）。
+     * @param activeMask: 活跃订阅位掩码
+     * @param periodsMs: 六类语句的实际周期（毫秒）
+     * @note 仅 kLink 写入，内部加锁，非 ISR。
+     */
     void setSubscription(uint32_t activeMask,
                          const std::array<uint32_t, kGnssAppMsgCount> &periodsMs) noexcept;
 
-    /** kIo 读取当前掩码与生效周期。线程安全：是（非 ISR）。 */
+    /**
+     * @brief kIo 读取当前掩码与生效周期。线程安全：是（非 ISR）。
+     * @param activeMask: 当前订阅位掩码输出
+     * @param periodsMs: 当前六类周期输出（毫秒）
+     * @note 仅 kIo 读取，内部加锁，非 ISR。
+     */
     void readSubscription(uint32_t &activeMask,
                           std::array<uint32_t, kGnssAppMsgCount> &periodsMs) const noexcept;
 
-    /** kLink 记录一帧已提交至 SPP TX.stream。线程安全：是（非 ISR）。 */
+    /**
+     * @brief kLink 记录一帧已提交至 SPP TX.stream。线程安全：是（非 ISR）。
+     * @param typeIdx: App 语句下标（0..5）
+     * @note 内部加锁，越界下标忽略；发送计数由 kLink、跳过与超长计数由 kIo 更新，非 ISR。
+     */
     void addTxSent(uint8_t typeIdx) noexcept;
 
-    /** kIo 记录一帧因无订阅或周期节流跳过入环。线程安全：是（非 ISR）。 */
+    /**
+     * @brief kIo 记录一帧因无订阅或周期节流跳过入环。线程安全：是（非 ISR）。
+     * @param typeIdx: App 语句下标（0..5）
+     * @note 内部加锁，越界下标忽略；发送计数由 kLink、跳过与超长计数由 kIo 更新，非 ISR。
+     */
     void addSkipped(uint8_t typeIdx) noexcept;
 
-    /** kIo 记录一帧因超 App 环单条载荷上限（>cap-3）被 writer 丢弃。线程安全：是（非 ISR）。 */
+    /**
+     * @brief kIo 记录一帧因超 App 环单条载荷上限（>cap-3）被 writer 丢弃。线程安全：是（非 ISR）。
+     * @param typeIdx: App 语句下标（0..5）
+     * @note 内部加锁，越界下标忽略；发送计数由 kLink、跳过与超长计数由 kIo 更新，非 ISR。
+     */
     void addRingOversize(uint8_t typeIdx) noexcept;
 
-    /** kLink 同步当前 queryOversize 累计值。线程安全：是（非 ISR）。 */
+    /**
+     * @brief kLink 同步当前 queryOversize 累计值。线程安全：是（非 ISR）。
+     * @param total: 查询超长累计值
+     * @note 仅 kLink 写入，内部加锁，非 ISR。
+     */
     void setQueryOversizeTotal(uint32_t total) noexcept;
 
-    /** 读取完整快照，供 status / gnss status 展示。线程安全：是（非 ISR）。 */
+    /**
+     * @brief 读取完整快照，供 status / gnss status 展示。线程安全：是（非 ISR）。
+     * @retval 内部加锁复制的当前统计快照
+     * @note 跨任务安全，内部加锁，非 ISR。
+     */
     [[nodiscard]] GnssAppSubSnapshot snapshot() const noexcept;
 
 private:

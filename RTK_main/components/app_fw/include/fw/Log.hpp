@@ -15,7 +15,6 @@
 
 /** 编译期最高日志级别：0=E 1=W 2=I 3=D；ESP-IDF 下由 CONFIG_RTK_LOG_LEVEL 经 CMake 定义。 */
 #ifndef FW_LOG_MAX_LEVEL
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): 须是宏，CMake 以 -D 覆盖，且与 C 头 fw/LogC.h 共用
 #define FW_LOG_MAX_LEVEL 3
 #endif
 
@@ -165,7 +164,6 @@ std::size_t logFormatLine(std::span<char> out, const LogHeader &hdr,
 } // namespace fw
 
 // 宏而非函数：高于 kLogMaxLevel 的调用连同参数求值一起编译掉。
-// NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define FW_LOG_AT(level, cat, ...)                                                                 \
     do {                                                                                           \
         if constexpr ((level) <= ::fw::kLogMaxLevel) {                                             \
@@ -176,4 +174,3 @@ std::size_t logFormatLine(std::span<char> out, const LogHeader &hdr,
 #define FW_LOGW(cat, ...) FW_LOG_AT(::fw::LogLevel::kWarn, cat, __VA_ARGS__)
 #define FW_LOGI(cat, ...) FW_LOG_AT(::fw::LogLevel::kInfo, cat, __VA_ARGS__)
 #define FW_LOGD(cat, ...) FW_LOG_AT(::fw::LogLevel::kDebug, cat, __VA_ARGS__)
-// NOLINTEND(cppcoreguidelines-macro-usage)

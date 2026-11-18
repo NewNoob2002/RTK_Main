@@ -28,13 +28,13 @@ inline constexpr uint32_t kApplyTimeoutMs = 5000U;
 /** 读回行缓冲：UnicoreResp 单帧上限 256 B，正文必小于它（ADR-0012 §2.7）。 */
 inline constexpr size_t kReadbackLineBytes = 256U;
 
-// kGnss 子事件包装：枚举 → uint8_t 载荷、session 恒 0（ADR-0009），参数求值昂贵时调用方先用 fw::traceOn()。
 /**
  * @brief 记录一条 GNSS 子类追踪事件
  * @param ev: 事件本体
  * @param v0: v0 见调用点
  * @param v1: v1 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ * @note 仅启动期或 kIo 串行路径，非 ISR；不分配堆。
+ * @note kGnss 子事件包装：枚举 → uint8_t 载荷、session 恒 0（ADR-0009），参数求值昂贵时调用方先用 fw::traceOn()。
  */
 inline void traceGnssSub(GnssSubTrace ev, uint32_t v0, uint32_t v1) noexcept
 {
@@ -70,7 +70,7 @@ inline constexpr size_t kRejectReasonBytes = 96U;
  * @brief 判断输出频率是否在允许范围内
  * @param hz: hz 见调用点
  * @retval true 表示成功/命中
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ * @note 仅启动期或 kIo 串行路径，非 ISR；不分配堆。
  */
 inline bool isValidRateHz(uint8_t hz) noexcept
 {
@@ -82,7 +82,7 @@ inline bool isValidRateHz(uint8_t hz) noexcept
  * @brief 把控制器结果码转成框架错误码
  * @param s: s 见调用点
  * @retval kOk 表示成功，其他为失败原因
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ * @note 仅启动期或 kIo 串行路径，非 ISR；不分配堆。
  */
 inline fw::Result toResult(fw::Status s) noexcept
 {
@@ -114,7 +114,7 @@ inline fw::Result toResult(fw::Status s) noexcept
  * @brief 按小端读出 4 字节无符号数
  * @param in: 输入字节
  * @retval 按小端读出的数值
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ * @note 仅启动期或 kIo 串行路径，非 ISR；不分配堆。
  */
 inline uint32_t readU32(std::span<const uint8_t> in) noexcept
 {
@@ -129,8 +129,8 @@ inline uint32_t readU32(std::span<const uint8_t> in) noexcept
 /**
  * @brief 按小端写入 4 字节无符号数
  * @param value: 值类型
- * @param out: 输出缓冲
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ * @param[out] out: 输出缓冲
+ * @note 仅启动期或 kIo 串行路径，非 ISR；不分配堆。
  */
 inline void writeU32(uint32_t value, std::span<uint8_t> out) noexcept
 {
@@ -142,10 +142,10 @@ inline void writeU32(uint32_t value, std::span<uint8_t> out) noexcept
 
 /**
  * @brief 登记解码器（重复则跳过）
- * @param out: 输出缓冲
+ * @param[out] out: 输出缓冲
  * @param count: count 见调用点
  * @param dec: dec 见调用点
- * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ * @note 仅启动期或 kIo 串行路径，非 ISR；不分配堆。
  */
 inline void addUniqueDecoder(std::array<const demux::Decoder *, demux::kMaxDecoders> &out,
                              size_t &count, const demux::Decoder *dec) noexcept

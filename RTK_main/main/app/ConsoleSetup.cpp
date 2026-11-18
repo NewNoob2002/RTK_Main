@@ -1,4 +1,4 @@
-// 控制台装配与启动阶段门控（R8a，自 AppMain.cpp 迁入）：命令表/动词表在 REPL 启动前一次性登记。
+// 控制台装配与启动阶段门控（ADR-0009）：命令表/动词表在 REPL 启动前一次性登记。
 // 线程：initConsole/runConsole 只在启动任务调用，gatedCommand 只在 console REPL 任务调用；非 ISR，不分配堆。
 #include "app/App.hpp"
 
@@ -25,10 +25,10 @@ constinit std::array<cli::Cmd, cli::kMaxCmds> s_gated_commands{};
  * @param  ctx: 未用
  * @param  hdr: 记录头
  * @param  payload: 文本（不含换行）
- * @note   任意任务调用；格式化缓冲在调用方栈上（kLogLineMax 字节），cli::outWrite 内部加锁。
+ * @note   任意任务调用，非 ISR；格式化缓冲在调用方栈上（kLogLineMax 字节），cli::outWrite 内部加锁。
  */
-// NOLINTNEXTLINE(misc-const-correctness): LogSinkFn 固定为 void *ctx
-void directLogSink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
+void directLogSink(void *ctx, // NOLINT(misc-const-correctness): LogSinkFn 固定为 void *ctx
+                   const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
 {
     static_cast<void>(ctx);
     std::array<char, fw::kLogLineMax> line{};
@@ -41,8 +41,16 @@ void directLogSink(void *ctx, const fw::LogHeader &hdr, std::span<const uint8_t>
 
 namespace app {
 
-// NOLINTNEXTLINE(misc-const-correctness): cli::Handler 的固定 ABI 要求 void*，gate 本身只读。
-int gatedCommand(void *ctx, int argc, char **argv) noexcept
+/**
+ * @brief 按启动阶段放行或拒绝控制台命令
+ * @param argc: 命令参数个数（含动词）
+ * @param argv: 命令参数数组
+ * @retval 0 handler 成功
+ * @retval 非零 启动门控拒绝或 handler 失败
+ * @note 仅 console REPL 任务；可能随 handler 阻塞，非 ISR。
+ */
+int gatedCommand(void *ctx, // NOLINT(misc-const-correctness): cli::Handler 固定 ABI 要求 void *ctx
+                 int argc, char **argv) noexcept
 {
     const auto &gate = *static_cast<const GatedCommand *>(ctx); // ctx 只指向组合根的静态命令 gate。
     const auto phase = appContext().bootPhase.load(std::memory_order_acquire);
@@ -147,11 +155,6 @@ bool registerVerbGroups() noexcept
     return true;
 }
 
-/**
- * @brief 建立控制台：登记命令与动词表、初始化 REPL、压低启动期 IDF 日志
- * @retval true: 控制台可用；false: 任一登记/初始化失败（降级为无控制台）
- * @note 仅启动期单线程调用；非 ISR，不阻塞。
- */
 bool initConsole() noexcept
 {
     constexpr const char *kConsolePrompt = "console> ";

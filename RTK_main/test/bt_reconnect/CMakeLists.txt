@@ -1,4 +1,4 @@
-# bt_reconnect 纯 C++20 组件 host 单元测试工程（ADR-0007 §5，J4 交付）。
+# bt_reconnect 纯 C++20 组件 host 单元测试工程（ADR-0007 §5）。
 # 支持普通构建与 ASan/UBSan 构建。
 cmake_minimum_required(VERSION 3.22)
 project(bt_reconnect_tests C CXX)
