@@ -16,6 +16,7 @@
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
+#include "app/ConsoleProfile.hpp"
 #include "board/BoardProfile.hpp"
 #include "cli/Out.hpp"
 #include "fw/Trace.hpp" // FW_TRACE_ENABLED
@@ -115,6 +116,7 @@ void showBuild() noexcept
     cli::printSection("build");
     cli::printKv("console", "UART%d %d baud", CONFIG_RTK_CONSOLE_UART_NUM,
                  CONFIG_RTK_CONSOLE_UART_BAUD);
+    cli::outPrintf("console profile %s\n", kConsoleProfileName);
     cli::printKv("trace", "%s", FW_TRACE_ENABLED ? "compiled in" : "compiled out");
 #if RTK_GNSS_ENABLED
     if (appContext().boardProfile == nullptr) {

@@ -21,6 +21,7 @@
 #include "app/BootBuffers.hpp"
 #include "app/BootReport.hpp"
 #include "app/BootReasons.hpp"
+#include "app/ConsoleProfile.hpp"
 #include "board/BoardProfile.hpp"
 #include "board/BoardStartup.hpp"
 #include "core/Types.hpp"
@@ -117,7 +118,8 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
     // 版本串短于 int 上限，精度转换安全。
     FW_LOGI(fw::TraceCat::kSys, "E1-Lite RTK_main %.*s", static_cast<int>(app::kAppVersion.size()),
             app::kAppVersion.data());
-    FW_LOGI(fw::TraceCat::kSys, "board %s", app::board::current().name);
+    FW_LOGI(fw::TraceCat::kSys, "board %s, console profile %s", app::board::current().name,
+            app::kConsoleProfileName);
     if ((reason == ESP_RST_PANIC) || (reason == ESP_RST_INT_WDT) || (reason == ESP_RST_TASK_WDT) ||
         (reason == ESP_RST_BROWNOUT)) {
         FW_LOGW(fw::TraceCat::kSys, "reset reason %s", name);
@@ -167,7 +169,7 @@ app::BootResult stepContexts(app::BootCtx &ctx) noexcept
 }
 
 /**
- * @brief  启动步骤：只建立控制台输出通道并登记命令，不放行 REPL
+ * @brief 按构建档位准备控制台，保留 NONE 档位的步骤记录
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 成功；kFail 控制台初始化失败
  * @note   REPL 到 boot() 末尾才 run：此前提示符/IDF 提示语若先出现，会与后续各步骤日志交错。
@@ -176,7 +178,12 @@ app::BootResult stepContexts(app::BootCtx &ctx) noexcept
 app::BootResult stepConsole(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
-    return app::initConsole() ? app::BootResult::kOk : app::BootResult::kFail;
+    if constexpr (app::kConsoleProfile == app::ConsoleProfile::kNone) {
+        FW_LOGI(fw::TraceCat::kSys, "console disabled (profile none)");
+        return app::BootResult::kOk;
+    } else {
+        return app::initConsole() ? app::BootResult::kOk : app::BootResult::kFail;
+    }
 }
 
 /**
@@ -485,12 +492,8 @@ void AppContext::boot() noexcept
         } else {
             FW_LOGE(fw::TraceCat::kSys, "boot step %s failed, console-only", record.name);
         }
-        // 早于 console 的失败也要提供 USB 供电下的诊断；不重新执行业务初始化。
-        if (!consoleReached && !initConsole()) {
-            return;
-        }
-        attachDebugLog();
-        runConsole(); // 降级同样放行 REPL：console-only 阶段仍可用诊断命令
+        finishDegradedConsole<kConsoleProfile, &initConsole, &attachDebugLog, &runConsole>(
+            consoleReached);
         return;
     }
     printBootSummary(executed);
@@ -498,7 +501,9 @@ void AppContext::boot() noexcept
         printBootTable(executed);
     }
     attachDebugLog();
-    runConsole(); // 最后一步：摘要之后才出现提示符
+    if constexpr (kConsoleProfile != ConsoleProfile::kNone) {
+        runConsole(); // 最后一步：摘要之后才出现提示符
+    }
 }
 
 } // namespace app

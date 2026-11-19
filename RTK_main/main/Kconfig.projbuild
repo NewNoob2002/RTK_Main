@@ -87,6 +87,25 @@ menu "RTK_main"
             以及 IDF 默认关闭的 unused-parameter、sign-compare（见 cmake/strict_warnings.cmake）。
             只影响本工程代码，不影响 IDF 自身组件。
 
+    choice RTK_CONSOLE_PROFILE
+        prompt "Console build profile"
+        default RTK_CONSOLE_PROFILE_DEV
+        help
+            ADR-0016 控制台构建档位，在编译时选择。
+            DEV 保留完整开发控制台（默认）。
+            PRODUCTION 保留诊断、隐藏的 factory 工厂配置和 freset。
+            NONE 只保留串口日志，不启动 REPL。
+
+        config RTK_CONSOLE_PROFILE_DEV
+            bool "DEV: development console"
+
+        config RTK_CONSOLE_PROFILE_PRODUCTION
+            bool "PRODUCTION: diagnostics and factory console"
+
+        config RTK_CONSOLE_PROFILE_NONE
+            bool "NONE: UART logging only"
+    endchoice
+
     config RTK_FACTORY_KEY
         string "Factory console unlock key"
         default "rtk-factory"

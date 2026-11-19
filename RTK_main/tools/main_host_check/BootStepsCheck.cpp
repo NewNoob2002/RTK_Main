@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "app/BootSteps.hpp"
+#include "app/ConsoleProfile.hpp"
 
 namespace {
 
@@ -40,6 +41,7 @@ struct Fake {
     uint32_t now = kBaseMs;
     app::BootHeap heap{kHeapSnapshot};
     uint32_t degradeCalls = 0U;
+    uint32_t consoleCalls = 0U;
     const char *degradeReason = nullptr;
     std::array<uint32_t, kCallSlots> calls{};
 };
@@ -69,6 +71,7 @@ void resetFake() noexcept
     s_fake.now = kBaseMs;
     s_fake.heap = kHeapSnapshot;
     s_fake.degradeCalls = 0U;
+    s_fake.consoleCalls = 0U;
     s_fake.degradeReason = nullptr;
     s_fake.calls.fill(0U);
 }
@@ -243,6 +246,43 @@ void testIdentifyFailure() noexcept
     CHECK(s_fake.calls[0] == 0U);
 }
 
+/**
+ * @brief 验证 NONE 保留 console 步骤且早期、晚期故障均跳过控制台钩子
+ * @note 单线程主机测试，非 ISR。
+ */
+void testNoneDegradesWithoutConsole() noexcept
+{
+#define BOOT_STEP(name, fn, policy) app::BootStep{#name, &stepOk, app::OnFail::policy},
+    constexpr std::array kSteps{
+#include "app/BootStepList.inc"
+    };
+#undef BOOT_STEP
+    CHECK(std::string_view{kSteps[5].name} == "console");
+
+    for (const char *faultStep : {"power", "alloc"}) {
+        resetFake();
+        std::array<app::BootRecord, app::kMaxBootSteps> records{};
+        app::BootCtx ctx{};
+        ctx.hooks = &kFakeHooks;
+        ctx.faultStep = faultStep;
+        const auto executed = app::runBootSteps(kSteps, ctx, records);
+        const auto last = records[executed - 1U];
+        CHECK(std::string_view{last.name} == faultStep);
+        CHECK(last.result == app::BootResult::kFail);
+        CHECK(s_fake.degradeCalls == 1U);
+        const bool consoleReached = records[5].result == app::BootResult::kOk;
+        CHECK(consoleReached == (std::string_view{faultStep} == "alloc"));
+        app::finishDegradedConsole<app::ConsoleProfile::kNone,
+                                   []() noexcept {
+                                       ++s_fake.consoleCalls;
+                                       return true;
+                                   },
+                                   []() noexcept { ++s_fake.consoleCalls; },
+                                   []() noexcept { ++s_fake.consoleCalls; }>(consoleReached);
+        CHECK(s_fake.consoleCalls == 0U);
+    }
+}
+
 } // namespace
 
 int main()
@@ -253,6 +293,7 @@ int main()
     testFaultInjection();
     testRecordBounds();
     testIdentifyFailure();
+    testNoneDegradesWithoutConsole();
     if (s_failures != 0) {
         std::printf("boot_steps_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;

@@ -233,6 +233,11 @@ target_compile_options(boot_steps_check PRIVATE -fno-exceptions -fno-rtti -Wall 
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 add_test(NAME boot_steps COMMAND boot_steps_check)
 
+add_executable(console_profile_check ConsoleProfileCheck.cpp)
+target_include_directories(console_profile_check PRIVATE ${PROJ_ROOT}/main)
+target_compile_options(console_profile_check PRIVATE -Wall -Wextra -Werror -Wshadow)
+add_test(NAME console_profile_check COMMAND console_profile_check)
+
 add_executable(board_profile_check BoardProfileCheck.cpp ${PROJ_ROOT}/main/board/BoardProfile.cpp)
 target_include_directories(board_profile_check PRIVATE ${PROJ_ROOT}/main)
 target_compile_definitions(board_profile_check PRIVATE CONFIG_RTK_GNSS_UART_NUM=2)
