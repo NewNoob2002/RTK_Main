@@ -134,6 +134,16 @@ menu "RTK_main"
             range 9600 921600
             default 115200
 
+        config RTK_GNSS_TARGET_BAUD
+            int "Target runtime module baud rate after probe (no user NVS override)"
+            depends on RTK_GNSS_ENABLE
+            range 9600 921600
+            default 460800
+            help
+                探测成功后的默认运行波特率（仅修改运行态，不发送 SAVECONFIG）。
+                须取 validUserBaud 支持的标准速率（9600/19200/38400/57600/115200/230400/460800/921600）；
+                用户经 gnss baud <n> 写入 NVS gnss/baud（非 0）时优先使用用户值。
+
         config RTK_GNSS_PORT
             int "E1 bench receiver port wired to ESP32 (UM980 COM2 = 2)"
             depends on RTK_GNSS_ENABLE

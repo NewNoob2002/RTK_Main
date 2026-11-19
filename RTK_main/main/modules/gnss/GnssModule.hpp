@@ -595,10 +595,29 @@ private:
 
     /** @brief 受理一次性命令。 @param cmd: 命令。 @param nowMs: 当前时间。 @param result: 受理状态和完成序号。 */
     void cmdMaintenance(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
-    /** @brief 尝试启动暂缓的切速或自动保存。 @note 仅 kIo。 */
-    void tickMaintenance() noexcept;
-    /** @brief 探测成功后按 NVS 波特率尝试同步一次。 @note 仅 kIo。 */
-    void alignBootBaud() noexcept;
+    /**
+     * @brief 尝试启动暂缓的切速或自动保存。
+     * @param nowMs: 当前单调时间（ms）。
+     * @note 仅 kIo 调用，非 ISR。
+     */
+    void tickMaintenance(uint32_t nowMs) noexcept;
+    /**
+     * @brief 计算探测成功后的目标运行波特率（用户 NVS gnss/baud 优先于 RTK_GNSS_TARGET_BAUD）。
+     * @retval 目标波特率（bps）。
+     * @note 仅 kIo 或启动前单线程调用，不阻塞、非 ISR。
+     */
+    [[nodiscard]] uint32_t targetBaud() const noexcept;
+    /**
+     * @brief 探测成功后按目标运行波特率尝试同步一次（仅运行态，不发 SAVECONFIG）。
+     * @param nowMs: 当前单调时间（ms）。
+     * @note 仅 kIo 调用，非 ISR。
+     */
+    void alignBootBaud(uint32_t nowMs) noexcept;
+    /**
+     * @brief 按当前检测结果刷新内存与 NVS 探测提示，并同步控制器候选偏好。
+     * @note 仅 kIo 调用；安全缺省或 NVS 未就绪时只刷新内存提示，不写 NVS。
+     */
+    void syncBootHint() noexcept;
     /** @brief 写入已确认的波特率及探测缓存，随后请求接收机保存。 @param baud: 已确认的速率。 @retval true 保存请求已受理。 */
     [[nodiscard]] bool persistBaudAndSave(uint32_t baud) noexcept;
     /** @brief 公布本次手动维护结果。 @param seq: 请求序号。 @param kind: 操作。 @param result: 操作结果。 */
@@ -607,6 +626,13 @@ private:
     /** @brief 完成切速或切速后的保存。 @param stats: 本次结果。 @param previousSeq: 切速结果的序号。 */
     void completeBaudMaintenance(const ::gnss::ControllerStats &stats,
                                  uint32_t previousSeq) noexcept;
+    /**
+     * @brief 处理启动运行切速的完成结果（成功只更新缓存，失败记 trace 与 baud_fail）。
+     * @param baud: 本次目标波特率。
+     * @param result: 控制器返回的切速结果。
+     * @note 仅 kIo 调用，非 ISR。
+     */
+    void completeBootBaudMaintenance(uint32_t baud, ::gnss::MaintenanceResult result) noexcept;
     /** @brief 处理本轮完成的维护操作并公布结果。 @param nowMs: 当前时间。 @note 仅 kIo。 */
     void completeMaintenance(uint32_t nowMs) noexcept;
     /** @brief 将逻辑缺省设置写入 NVS 并清理探测缓存。 @retval kOk 成功；其他为存储错误。 */
@@ -749,6 +775,7 @@ private:
     ::gnss::Maintenance console_maintenance_ = ::gnss::Maintenance::kSave;
     ::gnss::MaintenanceResult console_maintenance_result_ = ::gnss::MaintenanceResult::kOk;
     uint32_t preferred_baud_ = 0U;
+    uint32_t baud_fail_count_ = 0U;
     bool boot_baud_pending_ = false;
     bool boot_baud_in_flight_ = false;
     bool baud_save_in_flight_ = false;

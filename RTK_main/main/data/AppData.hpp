@@ -9,6 +9,7 @@
 #include <span>
 #include <type_traits>
 
+#include "fw/Atomic.hpp"
 #include "fw/FanoutRing.hpp"
 #include "fw/Command.hpp"
 #include "fw/Slot.hpp"
@@ -161,6 +162,8 @@ struct DataCenter {
     ZeroInitSlot<GnssWorkModeStatus> gnssWorkMode{};
     BaseRtcmRing baseRtcmRing{};
     std::atomic<bool> phoneStreamReady{false};
+    std::atomic<uint32_t> gnssBaudFailCount{0U}; // 启动切速失败计数（kIo 写，console 读）
+    static_assert(fw::kAtomicUsable<uint32_t>, "GNSS 切速失败计数原子须无锁");
 #endif
 
     portMUX_TYPE mux{};

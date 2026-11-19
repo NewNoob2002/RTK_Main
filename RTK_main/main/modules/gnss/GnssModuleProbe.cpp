@@ -257,7 +257,8 @@ void GnssModule::persistProbeHint() noexcept
 {
     if (skip_hint_save_) {
         skip_hint_save_ = false;
-    } else if (!boot_baud_pending_ && !ctx().bootConfig.safeDefaults) {
+    } else if (!boot_baud_pending_ && !ctx().bootConfig.safeDefaults &&
+               ctx().bootConfig.userNvsReady) {
         static_cast<void>(persistDetectedHint());
     }
 }

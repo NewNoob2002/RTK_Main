@@ -60,7 +60,8 @@ void printGnssCore(const GnssStatus &st) noexcept
     cli::printKv("family", "%s", ::gnss::familyName(st.family));
     cli::printKv("model", "%s", ::gnss::modelName(st.model));
     cli::printKv("fw", "%s", (st.fwVersion[0] != '\0') ? st.fwVersion.data() : "-");
-    cli::printKv("baud", "%" PRIu32, st.hostBaud);
+    cli::printKv("baud", "%" PRIu32 "  baud_fail=%" PRIu32, st.hostBaud,
+                 appContext().data.gnssBaudFailCount.load(std::memory_order_relaxed));
     cli::printKv("caps", "0x%02" PRIX32, st.caps);
     cli::printKv("ctrl",
                  "probes=%" PRIu32 " steps=%" PRIu32 " nacks=%" PRIu32 " to=%" PRIu32

@@ -43,10 +43,10 @@ const char *saveFailureName(MaintenanceResult result) noexcept
 }
 
 /**
- * @brief 删除 GNSS 探测缓存。
+ * @brief 删除 GNSS 探测缓存与用户波特率覆盖键。
  * @retval 存储结果，键缺失视为成功。
  */
-fw::Result clearCache() noexcept
+fw::Result clearCacheAndUserBaud() noexcept
 {
     const store::WriteGuard guard;
     if (!guard.active()) {
@@ -64,6 +64,15 @@ fw::Result clearCache() noexcept
         if (erased != ESP_OK && erased != ESP_ERR_NVS_NOT_FOUND) {
             error = erased;
             break;
+        }
+    }
+    if (error == ESP_OK) {
+        // 擦除用户波特率覆盖，确保下次启动回到 RTK_GNSS_TARGET_BAUD。
+        const auto &baudKey = gnss_store::kConfigKeys.back();
+        const esp_err_t erased = nvs_erase_key(
+            handle, baudKey.key.data()); // NOLINT(bugprone-suspicious-stringview-data-usage)
+        if (erased != ESP_OK && erased != ESP_ERR_NVS_NOT_FOUND) {
+            error = erased;
         }
     }
     if (error == ESP_OK) {
@@ -165,9 +174,11 @@ fw::Result GnssModule::resetStoredSettings() noexcept
         wm.reset();
         ctx().data.gnssWorkMode.write(wm.status());
     }
-    const auto saved = ctx().storage.saveKeys(gnss_store::kConfigKeys);
+    // 仅保存 rate/gsv/out 缺省；gnss/baud 作为用户覆盖键一并擦除。
+    const auto saved = ctx().storage.saveKeys(
+        std::span{gnss_store::kConfigKeys}.first(gnss_store::kConfigKeys.size() - 1U));
     const auto savedBase = ctx().storage.saveKeys(gnss_store::kBaseKeys);
-    const auto cleared = clearCache();
+    const auto cleared = clearCacheAndUserBaud();
     if (!fw::isOk(saved)) {
         return saved;
     }
@@ -198,6 +209,42 @@ void GnssModule::setConsoleMaintenanceResult(uint32_t seq, Maintenance kind,
     console_maintenance_result_ = result;
 }
 
+void GnssModule::syncBootHint() noexcept
+{
+    if (!ctx().bootConfig.safeDefaults && ctx().bootConfig.userNvsReady) {
+        static_cast<void>(persistDetectedHint());
+    } else {
+        const auto &det = controller().detected();
+        if (det.receiver != nullptr) {
+            hint_.family = det.receiver->family();
+            hint_.model = det.probe.model;
+            hint_.baud = (det.baud != 0U) ? det.baud : host_baud_;
+        }
+    }
+    controller().setProbePreferences(hint_, std::span{bauds_}.first(baud_count_));
+}
+
+void GnssModule::completeBootBaudMaintenance(uint32_t baud, MaintenanceResult result) noexcept
+{
+    boot_baud_in_flight_ = false;
+    if (result == MaintenanceResult::kOk) {
+        // 启动切速仅修改运行波特率：不写 NVS gnss/baud，不发送 SAVECONFIG，只更新 gnss.cache。
+        syncBootHint();
+        FW_LOGI(fw::TraceCat::kGnss, "<cfg> Startup baud switched to %lu (runtime only)",
+                static_cast<unsigned long>(baud));
+        return;
+    }
+    ++baud_fail_count_;
+    ctx().data.gnssBaudFailCount.store(baud_fail_count_, std::memory_order_relaxed);
+    detail::traceGnssSub(GnssSubTrace::kBaudFail, baud, static_cast<uint32_t>(result));
+    FW_LOGW(fw::TraceCat::kGnss, "<cfg> Startup baud switch to %lu failed (%s)",
+            static_cast<unsigned long>(baud), saveFailureName(result));
+    // NACK/不支持留在 kRunning，此时补写实际速率到 gnss.cache；超时回退由重探结束时写回。
+    if (controller().state() == ::gnss::State::kRunning) {
+        syncBootHint();
+    }
+}
+
 void GnssModule::completeBaudMaintenance(const ::gnss::ControllerStats &stats,
                                          uint32_t previousSeq) noexcept
 {
@@ -208,28 +255,23 @@ void GnssModule::completeBaudMaintenance(const ::gnss::ControllerStats &stats,
             FW_LOGW(fw::TraceCat::kGnss, "<cfg> baud applied, receiver save failed (%s)",
                     saveFailureName(result));
         }
-        if (!boot_baud_in_flight_) {
-            setConsoleMaintenanceResult(previousSeq, Maintenance::kBaud, MaintenanceResult::kOk);
-        }
-        boot_baud_in_flight_ = false;
+        setConsoleMaintenanceResult(previousSeq, Maintenance::kBaud, MaintenanceResult::kOk);
         return;
     }
 
     const uint32_t baud = requested_baud_;
+    if (boot_baud_in_flight_) {
+        completeBootBaudMaintenance(baud, result);
+        return;
+    }
+
     if (result == MaintenanceResult::kOk) {
         if (persistBaudAndSave(baud)) {
             return;
         }
         result = MaintenanceResult::kIoError;
     }
-    if (boot_baud_in_flight_) {
-        boot_baud_in_flight_ = false;
-        skip_hint_save_ = controller().state() == ::gnss::State::kProbing;
-        FW_LOGW(fw::TraceCat::kGnss, "<cfg> Startup baud alignment failed (%s)",
-                saveFailureName(result));
-    } else {
-        setConsoleMaintenanceResult(stats.maintenanceSeq, Maintenance::kBaud, result);
-    }
+    setConsoleMaintenanceResult(stats.maintenanceSeq, Maintenance::kBaud, result);
 }
 
 void GnssModule::completeMaintenance(uint32_t nowMs) noexcept
@@ -258,26 +300,36 @@ void GnssModule::completeMaintenance(uint32_t nowMs) noexcept
     publishStatus(nowMs);
 }
 
-void GnssModule::alignBootBaud() noexcept
+uint32_t GnssModule::targetBaud() const noexcept
+{
+    return (preferred_baud_ != 0U) ? preferred_baud_ : kGnssTargetBaud;
+}
+
+void GnssModule::alignBootBaud(uint32_t nowMs) noexcept
 {
     boot_baud_pending_ = false;
-    const uint32_t target = bauds_.front(); // 缺少用户键时与 UART 初始化共用 Kconfig 缺省。
+    const uint32_t target = targetBaud();
     if (controller().detected().baud == target) {
-        static_cast<void>(persistDetectedHint());
+        syncBootHint();
         return;
     }
     requested_baud_ = target;
     boot_baud_in_flight_ = controller().requestBaud(target);
+    if (boot_baud_in_flight_) {
+        active_maintenance_ = Maintenance::kBaud;
+        pollController(nowMs);
+    } else {
+        syncBootHint();
+    }
 }
 
-void GnssModule::tickMaintenance() noexcept
+void GnssModule::tickMaintenance(uint32_t nowMs) noexcept
 {
     if (controller().stats().maintenanceSeq != completed_maintenance_seq_) {
         return;
     }
     if (boot_baud_pending_ && controller().state() == ::gnss::State::kRunning) {
-        alignBootBaud();
-        active_maintenance_ = Maintenance::kBaud;
+        alignBootBaud(nowMs);
         return;
     }
     if (baud_deferred_ && controller().state() == ::gnss::State::kRunning) {

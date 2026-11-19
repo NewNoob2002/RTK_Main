@@ -82,9 +82,10 @@ struct GnssWorkModeStatus {
  * TraceCat::kGnss 的 追加追踪事件码（接续 def/GnssDef.hpp 中 GnssTrace 0..9，从 10 起编，不重排旧码）。
  */
 enum class GnssSubTrace : uint8_t {
-    kAppMask = 10, // val0 = 订阅掩码，val1 = 变化来源（0=App订阅/查询，1=会话断开归零）
-    kAppDrop = 11, // val0 = 丢弃源（0=App环超长，1=查询超256B，2=最新帧缓存超限），val1 = typeIdx
-    kOutCfg = 12,  // val0 = 启用掩码，val1 = 状态（0=加载/生效，1=回退默认）
+    kAppMask = 10,  // val0 = 订阅掩码，val1 = 变化来源（0=App订阅/查询，1=会话断开归零）
+    kAppDrop = 11,  // val0 = 丢弃源（0=App环超长，1=查询超256B，2=最新帧缓存超限），val1 = typeIdx
+    kOutCfg = 12,   // val0 = 启用掩码，val1 = 状态（0=加载/生效，1=回退默认）
+    kBaudFail = 13, // val0 = 目标波特率，val1 = gnss::MaintenanceResult
 };
 
 } // namespace app

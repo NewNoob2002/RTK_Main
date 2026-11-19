@@ -38,6 +38,12 @@ inline constexpr size_t kGnssAppRingBytes = static_cast<size_t>(CONFIG_RTK_GNSS_
 inline constexpr size_t kGnssAppRingBytes = 4096U;
 #endif
 
+#if defined(CONFIG_RTK_GNSS_TARGET_BAUD)
+inline constexpr uint32_t kGnssTargetBaud = static_cast<uint32_t>(CONFIG_RTK_GNSS_TARGET_BAUD);
+#else
+inline constexpr uint32_t kGnssTargetBaud = 460800U;
+#endif
+
 #if defined(CONFIG_RTK_GNSS_STATIC_OBS_ENABLE) && CONFIG_RTK_GNSS_STATIC_OBS_ENABLE
 inline constexpr bool kGnssStaticObsEnabled = true;
 #else
