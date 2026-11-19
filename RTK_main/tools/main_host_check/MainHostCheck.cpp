@@ -1546,6 +1546,7 @@ void checkSystemPrepare()
     ctx.boardProfile = board::byId(board::BoardId::kP2V141);
     ctx.data.systemStatus.write(SystemStatus{});
     ctx.system.prepare();
+    ctx.system.startBt(); // W1：BT 模式下由启动流程在 prepare() 之后调用。
     auto st = ctx.data.systemStatus.read();
     CHECK(st.btReady && s_spp_init_calls == 1U);
     CHECK(std::string_view{st.sn.data()} == "B5F2");
@@ -1558,6 +1559,7 @@ void checkSystemPrepare()
     ctx.boardProfile = board::byId(board::BoardId::kE1DevKit);
     ctx.data.systemStatus.write(preset);
     ctx.system.prepare();
+    ctx.system.startBt(); // W1：BT 模式下由启动流程在 prepare() 之后调用。
     st = ctx.data.systemStatus.read();
     CHECK(st.btReady && s_spp_init_calls == 2U);
     CHECK(std::string_view{st.deviceName.data()} == "E1-9988");
@@ -1568,6 +1570,7 @@ void checkSystemPrepare()
     ctx.boardProfile = nullptr;
     ctx.data.systemStatus.write(SystemStatus{});
     ctx.system.prepare();
+    ctx.system.startBt(); // W1：BT 模式下由启动流程在 prepare() 之后调用。
     st = ctx.data.systemStatus.read();
     CHECK(st.btReady && s_spp_init_calls == 3U);
     CHECK(std::string_view{st.sn.data()} == "0000");
@@ -1582,6 +1585,7 @@ void checkSystemPrepare()
     ctx.boardProfile = &kLongProduct;
     ctx.data.systemStatus.write(longSn);
     ctx.system.prepare();
+    ctx.system.startBt(); // W1：BT 模式下由启动流程在 prepare() 之后调用。
     st = ctx.data.systemStatus.read();
     CHECK(!st.btReady && s_spp_init_calls == 3U);
     CHECK(st.deviceName[0] == '\0');
