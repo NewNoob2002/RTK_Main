@@ -47,8 +47,19 @@ fw::Result GnssModule::initObjects() noexcept
     controller_.emplace();
     timing_.emplace();
     work_mode_.emplace();
+    auto &gate = gga_gate_.emplace();
     // 成员默认零初始化以保证 AppContext 落入 .bss；未从 NVS 加载的项在此回填默认配置。
     initBaseDefaults();
+    if (!gga_gate_enabled_loaded_) {
+        gga_gate_cfg_.enabled = false;
+        gga_gate_enabled_loaded_ = true;
+    }
+    if (!gga_gate_min_sats_loaded_) {
+        gga_gate_cfg_.minSats = ::gnss::GgaGateConfig::kDefaultMinSats;
+        gga_gate_min_sats_loaded_ = true;
+    }
+    static_cast<void>(gate.setConfig(gga_gate_cfg_));
+    publishGgaGateStatus();
     auto &cfg = ensureRoverCfg();
     if (!rate_loaded_) {
         cfg.rateHz = static_cast<uint8_t>(CONFIG_RTK_GNSS_RATE_HZ);
@@ -110,6 +121,8 @@ fw::Result GnssModule::startController() noexcept
         return initFailed(fw::Result::kInvalidState);
     }
     boot_baud_pending_ = true;
+    boot_baud_in_flight_ = false;
+    boot_baud_save_in_flight_ = false;
     baud_fail_count_ = 0U;
     ctx().data.gnssBaudFailCount.store(0U, std::memory_order_relaxed);
     // initUart 已按同一候选首项配置端口。
@@ -280,6 +293,7 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     if (!initialized_) {
         return false;
     }
+    tickGgaGateSave(nowMs);
     if (pollPhonePpp(nowMs)) {
         const bool hadFullRx = (last_rx_bytes_ == kUartReadChunkBytes);
         last_rx_bytes_ = 0U;

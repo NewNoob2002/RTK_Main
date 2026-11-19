@@ -14,6 +14,8 @@ namespace app::gnss_store {
 
 inline constexpr size_t kRateKeyIndex = 0U;
 inline constexpr size_t kOutKeyIndex = 2U;
+inline constexpr size_t kGgaGateKeyIndex = 3U;
+inline constexpr size_t kGgaMinSatsKeyIndex = 4U;
 
 /**
  * @brief 校验设置命令允许的串口速率。
@@ -32,8 +34,8 @@ constexpr bool validUserBaud(uint32_t baud) noexcept
     return false;
 }
 
-// 用户配置组 gnss.config：测量速率、GSV 开关与统一输出配置（gnss/out）。
-inline constexpr std::array<fw::StoreKey, 4U> kConfigKeys = {
+// 用户配置组 gnss.config：测量速率、GSV 开关、统一输出配置（gnss/out）、GGA 质量门控与波特率。
+inline constexpr std::array<fw::StoreKey, 6U> kConfigKeys = {
     {{.ns = "gnss",
       .key = "rate",
       .type = fw::StoreType::kU8,
@@ -61,6 +63,28 @@ inline constexpr std::array<fw::StoreKey, 4U> kConfigKeys = {
       .max = 0,
       .help = "GNSS receiver & app output defaults (blob v1)",
       .binding = {.obj = nullptr, .load = &GnssModule::loadOut, .save = &GnssModule::saveOut}},
+     {.ns = "gnss",
+      .key = "gga_gate",
+      .type = fw::StoreType::kU8,
+      .maxSize = 1U,
+      .flags = fw::store_flag::kConsole | fw::store_flag::kExport,
+      .min = 0,
+      .max = 1,
+      .help = "GGA quality gate enable (0/1)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadGgaGate,
+                  .save = &GnssModule::saveGgaGate}},
+     {.ns = "gnss",
+      .key = "gga_min_sats",
+      .type = fw::StoreType::kU8,
+      .maxSize = 1U,
+      .flags = fw::store_flag::kConsole | fw::store_flag::kExport,
+      .min = 0,
+      .max = ::gnss::GgaGateConfig::kMaxMinSats,
+      .help = "GGA quality gate minimum satellites (0-40)",
+      .binding = {.obj = nullptr,
+                  .load = &GnssModule::loadGgaMinSats,
+                  .save = &GnssModule::saveGgaMinSats}},
      {.ns = "gnss",
       .key = "baud",
       .type = fw::StoreType::kU32,
@@ -231,7 +255,9 @@ inline constexpr std::array<fw::StoreKey, 10U> kBaseKeys = {
 static_assert(std::ranges::all_of(kConfigKeys, fw::valid), "gnss.config 键必须合法");
 static_assert(std::ranges::all_of(kBaseKeys, fw::valid), "gnss.base 键必须合法");
 static_assert(kConfigKeys.back().key == "baud", "早期波特率键必须是 gnss.config 末项");
-static_assert(kConfigKeys[kRateKeyIndex].key == "rate" && kConfigKeys[kOutKeyIndex].key == "out");
+static_assert(kConfigKeys[kRateKeyIndex].key == "rate" && kConfigKeys[kOutKeyIndex].key == "out" &&
+              kConfigKeys[kGgaGateKeyIndex].key == "gga_gate" &&
+              kConfigKeys[kGgaMinSatsKeyIndex].key == "gga_min_sats");
 static_assert(fw::valid(kCacheKeys[0]) && fw::valid(kCacheKeys[1]) && fw::valid(kCacheKeys[2]),
               "gnss.cache 键必须合法");
 static_assert(fw::uniqueKeys(kConfigKeys) && fw::uniqueKeys(kCacheKeys) &&

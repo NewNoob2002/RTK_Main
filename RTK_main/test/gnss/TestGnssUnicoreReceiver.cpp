@@ -179,20 +179,29 @@ static void testMatchProbe()
     TEST_ASSERT_FALSE(unicoreDrv().matchProbe(demux::unicore_hash::kDecoder, otherFrame, result));
 }
 
-/** @brief 实板 CM680 版本帧须精确识别，保留版本文本；单线程测试。 */
+/** @brief 实板 CM680 版本帧须精确识别，并切到 Optisens 叶子类；单线程测试。 */
 static void testMatchCm680()
 {
     using gnss::Model;
     const auto &decoder = demux::unicore_hash::kDecoder;
     const auto &driver = unicoreDrv();
+    const gnss::Receiver *optisens = gnss::receiverFor(gnss::Family::kOptisens);
+    TEST_ASSERT_NOT_NULL(optisens);
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kOptisens),
+                      static_cast<int>(optisens->family()));
+    TEST_ASSERT_TRUE(optisens->name() == std::string_view{"optisens"});
+
     gnss::ProbeResult result{};
     TEST_ASSERT_TRUE(
         driver.matchProbe(decoder, bytesOf(gnss_test::kCm680VersionFrames.front()), result));
     TEST_ASSERT_EQUAL(static_cast<int>(Model::kCm680), static_cast<int>(result.model));
     TEST_ASSERT_TRUE(std::string_view{result.fwVersion.data()}.starts_with("CM680_SDK.1.2.5a"));
     TEST_ASSERT_EQUAL_UINT32(driver.caps(Model::kUm980), driver.caps(Model::kCm680));
-    TEST_ASSERT_EQUAL_PTR(&driver.forModel(Model::kUm980), &driver.forModel(Model::kCm680));
-    TEST_ASSERT_EQUAL_PTR(&driver, &um982Drv().forModel(Model::kCm680));
+    TEST_ASSERT_EQUAL_PTR(optisens, &driver.forModel(Model::kCm680));
+    TEST_ASSERT_EQUAL_PTR(optisens, &um982Drv().forModel(Model::kCm680));
+    TEST_ASSERT_EQUAL_PTR(optisens, &optisens->forModel(Model::kCm680));
+    TEST_ASSERT_EQUAL_PTR(&driver, &optisens->forModel(Model::kUm980));
+    TEST_ASSERT_EQUAL_PTR(&um982Drv(), &optisens->forModel(Model::kUm982));
 
     for (const std::string_view model : {"CM681", "CMX", "CM680A"}) {
         std::string frame{gnss_test::kCm680VersionFrames.front()};
@@ -778,7 +787,7 @@ void testPppSequence()
     TEST_ASSERT_TRUE(tx.empty() && !sequence.active());
 }
 
-/** @brief 验证 PPP 型号支持判定（UM98x 支持，CM680 及其余型号不支持）。 */
+/** @brief 验证 PPP 与 0x06 截止角/星座型号支持判定（CM680 支持 SatMask、不支持 PPP）。 */
 static void testSupportsPpp()
 {
     TEST_ASSERT_TRUE(gnss::supportsPpp(gnss::Model::kUm980));
@@ -788,6 +797,14 @@ static void testSupportsPpp()
     TEST_ASSERT_FALSE(gnss::supportsPpp(gnss::Model::kZedF9p));
     TEST_ASSERT_FALSE(gnss::supportsPpp(gnss::Model::kK803));
     TEST_ASSERT_FALSE(gnss::supportsPpp(gnss::Model::kUnknown));
+
+    TEST_ASSERT_TRUE(gnss::supportsSatMask(gnss::Model::kUm980));
+    TEST_ASSERT_TRUE(gnss::supportsSatMask(gnss::Model::kUm981));
+    TEST_ASSERT_TRUE(gnss::supportsSatMask(gnss::Model::kUm982));
+    TEST_ASSERT_TRUE(gnss::supportsSatMask(gnss::Model::kCm680));
+    TEST_ASSERT_FALSE(gnss::supportsSatMask(gnss::Model::kZedF9p));
+    TEST_ASSERT_FALSE(gnss::supportsSatMask(gnss::Model::kK803));
+    TEST_ASSERT_FALSE(gnss::supportsSatMask(gnss::Model::kUnknown));
 }
 
 /** @brief 验证 0x06 截止角/星座脚本顺序、NACK 中断、超时与非法截止角拒绝。 */
@@ -866,6 +883,66 @@ static void testCm680BaudScriptNoSave()
     TEST_ASSERT_FALSE(driver.roverStep(expected.size(), gnss::Model::kCm680, cfg, step));
 }
 
+/**
+ * @brief 验证 CM680 探测：无缓存一次命中、新缓存(4,6)首候选命中、旧缓存(1,6)命中并切到 Optisens。
+ * @note 单线程主机测试。
+ */
+static void testCm680ProbeHints()
+{
+    gnss::RoverConfig cfg{};
+    cfg.rateHz = 1;
+    cfg.gsv = true;
+    cfg.port = 1;
+    gnss::Timing timing{};
+    timing.powerOffMs = 10U;
+    timing.bootMs = 20U;
+    timing.probeTimeoutMs = 50U;
+    timing.probeRounds = 2U;
+    timing.stepRetries = 1U;
+    timing.silenceMs = 100U;
+    timing.retryBackoffMs = 30U;
+    const std::array<const gnss::Receiver *, 1> receivers{&unicoreDrv()};
+    const std::array<uint32_t, 2> bauds{115200U, 460800U};
+    const gnss::Receiver *optisens = gnss::receiverFor(gnss::Family::kOptisens);
+    TEST_ASSERT_NOT_NULL(optisens);
+
+    const auto runProbe = [&](const gnss::Hint &hint, uint32_t expectedBaud) {
+        gnss::Controller controller;
+        TEST_ASSERT_TRUE(controller.init(receivers, bauds, cfg, gnss::OutputPlan{}, hint, timing));
+        uint32_t now = 0U;
+        controller.start(now);
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Action::Kind::kPower),
+                          static_cast<int>(controller.poll(now).kind));
+        now += timing.powerOffMs;
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Action::Kind::kPower),
+                          static_cast<int>(controller.poll(now).kind));
+        now += timing.bootMs;
+        gnss::Action act = controller.poll(now);
+        if (act.kind == gnss::Action::Kind::kSetBaud) {
+            TEST_ASSERT_EQUAL_UINT32(expectedBaud, act.baud);
+            act = controller.poll(now);
+        }
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Action::Kind::kWrite), static_cast<int>(act.kind));
+        TEST_ASSERT_TRUE(textEquals(act.bytes, "VERSIONA\r\n"));
+        TEST_ASSERT_EQUAL_UINT32(1U, controller.stats().probesSent);
+        controller.onFrame(demux::unicore_hash::kDecoder,
+                           bytesOf(gnss_test::kCm680VersionFrames.front()), now);
+        TEST_ASSERT_EQUAL_PTR(optisens, controller.detected().receiver);
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kOptisens),
+                          static_cast<int>(controller.receiver().family()));
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Model::kCm680),
+                          static_cast<int>(controller.detected().probe.model));
+        TEST_ASSERT_EQUAL_UINT32(expectedBaud, controller.detected().baud);
+    };
+
+    // 1. 无缓存冷启动：首候选 115200 一次命中 CM680/optisens。
+    runProbe(gnss::Hint{}, 115200U);
+    // 2. 新缓存 family=4(kOptisens) model=6(kCm680) baud=460800：首候选即切 460800 并一次命中。
+    runProbe(gnss::Hint{gnss::Family::kOptisens, gnss::Model::kCm680, 460800U}, 460800U);
+    // 3. 旧缓存 family=1(kUnicore) model=6(kCm680) baud=460800：复用 VERSIONA 命中并切到 Optisens。
+    runProbe(gnss::Hint{gnss::Family::kUnicore, gnss::Model::kCm680, 460800U}, 460800U);
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
@@ -874,6 +951,7 @@ int main(int, char **)
     RUN_TEST(testSatMaskSequence);
     RUN_TEST(testMaintenanceCommands);
     RUN_TEST(testCm680BaudScriptNoSave);
+    RUN_TEST(testCm680ProbeHints);
     RUN_TEST(testWorkModeSteps);
     RUN_TEST(testGoldenProbe);
     RUN_TEST(testGoldenOutputPlan);

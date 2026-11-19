@@ -18,6 +18,21 @@ enum class GnssSubVerb : uint8_t {
     kSetBase = 10,     // 更新并持久化 gnss.base 字段子包：args[0] = BasePatchKind
     kPhonePpp = 11,    // 手机 0x33 Survey：args[0] = 0/1。
     kPhoneSatCfg = 12, // 手机 0x06 Survey：args[0..5] = {cutoffDeg, gps, glo, bds, gal, sbas}。
+    kSetGgaGate =
+        13, // Q1 GGA 质量门控：args[0]=flags(bit0=改开关,bit1=改min_sats), [1]=en, [2]=minSats
+};
+
+inline constexpr uint8_t kGgaGateFlagEnabled = 1U << 0U;
+inline constexpr uint8_t kGgaGateFlagMinSats = 1U << 1U;
+inline constexpr uint8_t kGgaGateCmdArgLen = 3U;
+
+/** 跨任务发布的 GGA 质量门控状态与计数快照（DataCenter::ggaGateStatus）。 */
+struct GgaGateStatus {
+    bool enabled = false;
+    bool blocked = false;
+    uint8_t minSats = 0U;
+    uint32_t ggaBlocked = 0U;
+    uint32_t gateTrans = 0U;
 };
 
 /**

@@ -4,6 +4,7 @@
 #include "modules/gnss/GnssModule.hpp"
 
 #include <array>
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -18,6 +19,7 @@
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
+#include "app/ConsoleProfile.hpp"
 #include "board/BoardProfile.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
@@ -481,8 +483,109 @@ int cmdGnssConfig(void * /*ctx*/, int argc, char **argv) noexcept
     return cli::fail("timeout");
 }
 
+/**
+ * @brief 解析 `gnss gate` 的 min_sats 十进制参数（0..40）
+ * @param text: 命令行参数文本
+ * @param[out] out: 成功时写入卫星数阈值
+ * @retval true 合法整数且在 0..40 范围内
+ * @retval false 空串、含非数字或越界
+ * @note 纯解析辅助，不阻塞，非 ISR。
+ */
+bool parseGgaGateMinSats(std::string_view text, uint8_t &out) noexcept
+{
+    constexpr uint32_t kDecimalBase = 10U;
+    if (text.empty()) {
+        return false;
+    }
+    uint32_t value = 0U;
+    for (const char ch : text) {
+        if ((ch < '0') || (ch > '9')) {
+            return false;
+        }
+        value = (value * kDecimalBase) + static_cast<uint32_t>(ch - '0');
+        if (value > ::gnss::GgaGateConfig::kMaxMinSats) {
+            return false;
+        }
+    }
+    // 上面已限制 value <= kMaxMinSats(40)，窄化到 uint8_t 安全。
+    out = static_cast<uint8_t>(value);
+    return true;
+}
+
+/**
+ * @brief 打印当前 GGA 质量门控配置与运行态计数
+ * @note 仅 console REPL 任务，从 DataCenter 读取快照，非 ISR。
+ */
+void printGgaGateStatus() noexcept
+{
+    const auto gate = appContext().data.ggaGateStatus.read();
+    cli::printSection("gnss_gate");
+    cli::printKv("gga_gate", "%s", gate.enabled ? "on" : "off");
+    cli::printKv("min_sats", "%u", static_cast<unsigned>(gate.minSats));
+    cli::printKv("blocked", "%s", gate.blocked ? "yes" : "no");
+    cli::printKv("gga_blocked", "%" PRIu32, gate.ggaBlocked);
+    cli::printKv("gate_trans", "%" PRIu32, gate.gateTrans);
+}
+
+/**
+ * @brief `gnss gate [on|off] [min_sats <n>]`：查询或配置 GGA 质量门控
+ * @param argc: 参数个数（1 表示仅查询）
+ * @param argv: 参数向量
+ * @retval 0 成功
+ * @retval cli::kCmdFail 参数非法、权限不足或模块执行失败
+ * @note 仅 console REPL 任务；写操作经 ioExecutor 投递到 kIo 并触发 NVS 去抖保存。
+ */
+int cmdGnssGate(void * /*ctx*/, int argc, char **argv) noexcept
+{
+    const std::span<char *const> args{(argv != nullptr) ? argv : nullptr,
+                                      ((argv != nullptr) && (argc > 0)) ? static_cast<size_t>(argc)
+                                                                        : 0U};
+    if (args.size() <= 1U) {
+        printGgaGateStatus();
+        return 0;
+    }
+    if constexpr (kConsoleProfile != ConsoleProfile::kDev) {
+        return cli::fail("read-only in production");
+    }
+    bool setEnabled = false;
+    bool enabled = false;
+    bool setMinSats = false;
+    uint8_t minSats = 0U;
+    for (size_t i = 1U; i < args.size(); ++i) {
+        const std::string_view tok{(args[i] != nullptr) ? args[i] : ""};
+        if ((tok == "on") || (tok == "off")) {
+            if (setEnabled) {
+                return cli::fail("usage: gnss gate [on|off] [min_sats <n>]");
+            }
+            setEnabled = true;
+            enabled = (tok == "on");
+        } else if (tok == "min_sats") {
+            if (setMinSats || ((i + 1U) >= args.size()) || (args[i + 1U] == nullptr)) {
+                return cli::fail("usage: gnss gate [on|off] [min_sats <n>]");
+            }
+            ++i;
+            if (!parseGgaGateMinSats(args[i], minSats)) {
+                return cli::fail("min_sats must be 0..40");
+            }
+            setMinSats = true;
+        } else {
+            return cli::fail("usage: gnss gate [on|off] [min_sats <n>]");
+        }
+    }
+    if (appContext().ioExecutor == nullptr) {
+        return cli::fail("gnss not running");
+    }
+    const fw::Command cmd = detail::packGnssGate(setEnabled, enabled, setMinSats, minSats);
+    fw::CommandResult res{};
+    if (!submitRawTo(*appContext().ioExecutor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
+        return cli::kCmdFail;
+    }
+    printGgaGateStatus();
+    return 0;
+}
+
 // clang-format off
-constexpr std::array<cli::Verb, 14U> kGnssVerbs{{
+constexpr std::array<cli::Verb, 15U> kGnssVerbs{{
     {"status", nullptr, "GNSS status, stats and pipe", &cmdGnssStatus},
     {"fix", nullptr, "latest position/quality fix", &cmdGnssFix},
     {"sats", nullptr, "visible satellites table", &cmdGnssSats},
@@ -490,6 +593,7 @@ constexpr std::array<cli::Verb, 14U> kGnssVerbs{{
     {"reset", nullptr, "power cycle and re-probe", &cmdGnssReset},
     {"rate", "<hz>", "shortcut: position messages rate (see gnss out)", &cmdGnssRate},
     {"out", "[show|default|rtcm|<msg|all> <val>]", "set/show receiver & base RTCM output rates", &cmdGnssOut},
+    {"gate", "[on|off] [min_sats <n>]", "show or configure GGA quality gate", &cmdGnssGate},
     {"mode", "[rover|base|smartbase]", "show or switch work mode", &detail::cmdGnssMode},
     {"base", "[survey|fixed]", "show or configure base station parameters", &detail::cmdGnssBase},
     {"config", nullptr, "read back receiver config", &cmdGnssConfig},

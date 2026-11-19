@@ -64,6 +64,34 @@ inline void packU32Le(uint32_t v, std::span<uint8_t> out) noexcept
 }
 
 /**
+ * @brief 打包 gnss gate 质量门控配置命令（3 B：flags, enabled, minSats）。
+ * @param setEnabled: 是否修改开关。
+ * @param enabled: 新开关值。
+ * @param setMinSats: 是否修改最低卫星数。
+ * @param minSats: 新最低卫星数（0..40）。
+ * @retval cmd: kSetGgaGate 命令。
+ */
+[[nodiscard]] inline fw::Command packGnssGate(bool setEnabled, bool enabled, bool setMinSats,
+                                              uint8_t minSats) noexcept
+{
+    fw::Command cmd{};
+    cmd.target = id(ModuleKind::kGnss);
+    cmd.verb = static_cast<uint8_t>(GnssSubVerb::kSetGgaGate);
+    cmd.argLen = kGgaGateCmdArgLen;
+    uint8_t flags = 0U;
+    if (setEnabled) {
+        flags = static_cast<uint8_t>(flags | kGgaGateFlagEnabled);
+    }
+    if (setMinSats) {
+        flags = static_cast<uint8_t>(flags | kGgaGateFlagMinSats);
+    }
+    cmd.args[0U] = flags;
+    cmd.args[1U] = enabled ? 1U : 0U;
+    cmd.args[2U] = minSats;
+    return cmd;
+}
+
+/**
  * @brief 打包 gnss config 读回命令。
  * @retval cmd: kReadback 命令。
  */

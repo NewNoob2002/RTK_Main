@@ -79,6 +79,7 @@ namespace detail {
 
 constinit const Um980Receiver kUm980Receiver{};
 constinit const Um982Receiver kUm982Receiver{};
+constinit const Cm680Receiver kCm680Receiver{};
 
 } // namespace detail
 
@@ -114,15 +115,15 @@ uint32_t UnicoreReceiver::caps(Model model) const noexcept
 }
 
 /**
- * @brief 按型号选用 Unicore 驱动实例
+ * @brief 按型号选用 Unicore 或 Optisens 驱动实例
  * @param model: 探测得到的型号
- * @retval CM680 用 UM980 实例，UM982 用双天线实例，其余沿用当前实例
+ * @retval CM680 用 Optisens CM680 实例，UM982 用双天线实例，其余沿用当前实例
  * @note 只读，线程/ISR 安全。
  */
 const Receiver &UnicoreReceiver::forModel(Model model) const noexcept
 {
     if (model == Model::kCm680) {
-        return detail::kUm980Receiver;
+        return detail::kCm680Receiver;
     }
     // 双天线型号有单独驱动（多 kHeading 能力），其余 UM9xx 沿用家族驱动（ADR-0012 §2.8）。
     return (model == Model::kUm982) ? detail::kUm982Receiver : *this;
@@ -340,16 +341,34 @@ uint32_t Um982Receiver::caps(Model model) const noexcept
 }
 
 /**
- * @brief 双天线实例收到 CM680 型号查询时转给 UM980 实例
+ * @brief 双天线实例收到 CM680 型号查询时转给 Optisens CM680 实例
  * @param model: 探测得到的型号
- * @retval CM680 用 UM980 实例，其余沿用当前实例
+ * @retval CM680 用 Optisens CM680 实例，其余沿用当前实例
  * @note 只读，线程/ISR 安全。
  */
 const Receiver &Um982Receiver::forModel(Model model) const noexcept
 {
     if (model == Model::kCm680) {
-        return detail::kUm980Receiver;
+        return detail::kCm680Receiver;
     }
     return *this;
+}
+
+Family Cm680Receiver::family() const noexcept
+{
+    return Family::kOptisens;
+}
+
+std::string_view Cm680Receiver::name() const noexcept
+{
+    return "optisens";
+}
+
+const Receiver &Cm680Receiver::forModel(Model model) const noexcept
+{
+    if (model == Model::kCm680) {
+        return *this;
+    }
+    return detail::kUm980Receiver.forModel(model);
 }
 } // namespace gnss

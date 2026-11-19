@@ -184,6 +184,11 @@ core::services::GnssQueryResult BtLinkModule::onGnssQuery(void *ctx, uint16_t ms
         return {};
     }
     const auto typeIdx = static_cast<uint8_t>(*idx);
+    if ((typeIdx == static_cast<uint8_t>(::gnss::OutputMsg::kGga)) &&
+        !self->ctx().data.ggaAllowed()) {
+        // Q1：GGA 质量门控阻断期间，0x04 查询回失败（GnssService 编码 02 02）。
+        return {};
+    }
     const auto res = self->ctx().data.gnssLatest.query(typeIdx, dst);
     if (res.oversize) {
         // queryOversize 在 GnssService 内于本回调返回后自增，先累加 1 再写快照避免少计当前次。
@@ -244,6 +249,12 @@ bool BtLinkModule::drainGnssStream() noexcept
         }
         const size_t total = view.first.size() + view.second.size();
         if ((total == 0U) || (total > kGnssStreamMaxRecord)) {
+            static_cast<void>(ctx().data.gnssAppRing.commit(view.lease));
+            continue;
+        }
+        if ((view.type == static_cast<uint8_t>(::gnss::OutputMsg::kGga)) &&
+            !ctx().data.ggaAllowed()) {
+            // Q1：若门控已切为阻断，丢弃环中残余 GGA，不向蓝牙输出。
             static_cast<void>(ctx().data.gnssAppRing.commit(view.lease));
             continue;
         }

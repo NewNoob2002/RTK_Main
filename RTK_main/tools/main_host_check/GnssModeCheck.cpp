@@ -362,6 +362,10 @@ void testBaseRtcmFamilyFilter() noexcept
     CHECK(!app::isBaseRtcmSupportedForFamily(1230U, gnss::Family::kUnicore));
     CHECK(std::string_view{app::baseRtcmFamilyTag(1033U, gnss::Family::kUnicore)}.empty());
 
+    CHECK(app::isBaseRtcmSupportedForFamily(1033U, gnss::Family::kOptisens));
+    CHECK(!app::isBaseRtcmSupportedForFamily(1230U, gnss::Family::kOptisens));
+    CHECK(std::string_view{app::baseRtcmFamilyTag(1033U, gnss::Family::kOptisens)}.empty());
+
     CHECK(!app::isBaseRtcmSupportedForFamily(1033U, gnss::Family::kUblox));
     CHECK(app::isBaseRtcmSupportedForFamily(1230U, gnss::Family::kUblox));
     CHECK(std::string_view{app::baseRtcmFamilyTag(1230U, gnss::Family::kUblox)}.empty());

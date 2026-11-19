@@ -100,6 +100,12 @@ void printGnssCore(const GnssStatus &st) noexcept
                  "B",
                  st.pipe.pushedFrames, st.pipe.pushedBytes, st.pipe.droppedFrames,
                  st.pipe.droppedBytes, st.pipe.writtenBytes);
+    const auto gate = appContext().data.ggaGateStatus.read();
+    cli::printKv("gate",
+                 "gga_gate=%s  min_sats=%u  blocked=%s  gga_blocked=%" PRIu32
+                 "  gate_trans=%" PRIu32,
+                 gate.enabled ? "on" : "off", static_cast<unsigned>(gate.minSats),
+                 gate.blocked ? "yes" : "no", gate.ggaBlocked, gate.gateTrans);
 }
 
 /**

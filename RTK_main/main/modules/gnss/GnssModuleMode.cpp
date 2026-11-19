@@ -606,8 +606,8 @@ void GnssModule::pollWorkMode(uint32_t nowMs) noexcept
         return;
     }
     auto &wm = *work_mode_;
-    // 启动波特率对齐未完成前先让出控制器，避免 modeStep 干扰首次波特率对齐与提示保存。
-    if (boot_baud_pending_ || boot_baud_in_flight_) {
+    // 启动波特率对齐与随后的模块保存未完成前先让出控制器，避免 modeStep 与之交叠。
+    if (boot_baud_pending_ || boot_baud_in_flight_ || boot_baud_save_in_flight_) {
         return;
     }
     const auto cfgSnapshot = readBaseConfig();

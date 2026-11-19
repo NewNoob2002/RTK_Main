@@ -31,7 +31,7 @@ constinit app::AppContext s_failureContext{};
 constinit app::AppContext s_dispatchContext{};
 constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
-constinit std::array<app::AppContext, 7U> s_targetBaudContexts{};
+constinit std::array<app::AppContext, 12U> s_targetBaudContexts{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -52,6 +52,9 @@ bool s_rejectBaud = false;
 bool s_rejectSave = false;
 bool s_rejectSatMask = false;
 bool s_expectBaudSave = false;
+bool s_bootBaudMode = false;
+bool s_verifiedAfterBaud = false;
+bool s_saveAfterVerify = false;
 uint32_t s_baudFailTraces = 0U;
 uint32_t s_lastBaudFailTarget = 0U;
 uint32_t s_lastBaudFailResult = 0U;
@@ -112,6 +115,10 @@ void startModule(nvs_handle_t handle, uint32_t preferred, bool applyBaud, bool p
     s_sentSatsInfo = false;
     s_saveCommands = 0U;
     s_applyBaud = applyBaud;
+    s_expectBaudSave = false;
+    s_bootBaudMode = false;
+    s_verifiedAfterBaud = false;
+    s_saveAfterVerify = false;
     CHECK(nvs_set_u32(handle, "baud", preferred) == ESP_OK);
     CHECK(nvs_set_u32(handle, "cache_baud", 460800U) == ESP_OK);
     CHECK(nvs_set_u8(handle, "family", static_cast<uint8_t>(gnss::Family::kUnicore)) == ESP_OK);
@@ -255,8 +262,11 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
             s_receiverBaud =
                 (bytes == baudDefault) ? 115200U : ((bytes == baudMid) ? 230400U : 460800U);
             s_expectBaudSave = true;
+            s_verifiedAfterBaud = false;
+            s_saveAfterVerify = false;
         }
     } else if (bytes == "VERSIONA\r\n") {
+        s_verifiedAfterBaud = true;
         constexpr std::string_view kUm980Version =
             "#VERSIONA,0,GPS,UNKNOWN,0,0,0,0,0,249;\"UM980\",\"R4.10Build11833\",\"HRPT00-S10C-P\","
             "\"2310415000001-MD22A2244202679\",\"ff3b7c6f3c5fd90b\",\"2023/11/24\"*3f55fb4d\r\n";
@@ -282,9 +292,13 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
         const bool save = bytes == "SAVECONFIG\r\n";
         if (save) {
             ++s_saveCommands;
+            s_saveAfterVerify = s_verifiedAfterBaud;
             if (s_expectBaudSave) {
                 uint32_t stored = 0U;
-                CHECK(nvs_get_u32(s_nvs, "baud", &stored) == ESP_OK && stored == s_receiverBaud);
+                if (!s_bootBaudMode) {
+                    CHECK(nvs_get_u32(s_nvs, "baud", &stored) == ESP_OK &&
+                          stored == s_receiverBaud);
+                }
                 CHECK(nvs_get_u32(s_nvs, "cache_baud", &stored) == ESP_OK &&
                       stored == s_receiverBaud);
                 s_expectBaudSave = false;
@@ -328,8 +342,9 @@ void testGnssFactoryReset()
     startModule(nvs, 115200U, true);
     advance(3000U);
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
-    // 启动切速仅改运行态，不发 SAVECONFIG。
-    CHECK(s_hostBaud == 115200U && s_baudCommands == 1U && s_saveCommands == 0U);
+    // G-baud-save：启动从 460800 切到 115200 成功后发送一次 SAVECONFIG（在切速验证之后）。
+    CHECK(s_hostBaud == 115200U && s_baudCommands == 1U && s_saveCommands == 1U &&
+          s_saveAfterVerify);
 
     const std::array<uint8_t, 1> rate{2U};
     CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kSetRate), rate).status));
@@ -343,7 +358,7 @@ void testGnssFactoryReset()
     CHECK(fw::isOk(out.encode(outBytes, len)));
     CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssSubVerb::kSetOut), outBytes).status));
     advance(500U);
-    CHECK(s_context->data.gnssOutCfg.read().intervals == out.intervals && s_saveCommands == 0U);
+    CHECK(s_context->data.gnssOutCfg.read().intervals == out.intervals && s_saveCommands == 1U);
 
     constexpr std::array<uint8_t, 4> kBaud460800{0x00U, 0x08U, 0x07U, 0x00U};
     s_rejectSave = true;
@@ -352,7 +367,7 @@ void testGnssFactoryReset()
     advance(500U);
     uint32_t stored = 0U;
     CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_OK && stored == 460800U);
-    CHECK(s_hostBaud == 460800U && s_saveCommands == 1U);
+    CHECK(s_hostBaud == 460800U && s_saveCommands == 2U);
     CHECK(s_context->data.gnssStatus.read().ctrl.maintenanceResult == gnss::MaintenanceResult::kOk);
     s_rejectSave = false;
 
@@ -365,11 +380,11 @@ void testGnssFactoryReset()
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kProbing);
     advance(8000U);
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
-    CHECK(s_hostBaud == 115200U && s_saveCommands == 1U);
+    CHECK(s_hostBaud == 115200U && s_saveCommands == 2U);
     checkStoredDefaults(nvs);
     CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssMaintenanceVerb::kSave)).status));
     advance(100U);
-    CHECK(s_saveCommands == 2U);
+    CHECK(s_saveCommands == 3U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
     s_context = &s_failureContext;
@@ -661,8 +676,11 @@ void testBaseKeysAndCommandDispatch()
     startModule(nvs, 115200U, true, true);
     advance(3000U);
     const auto status = s_context->data.gnssStatus.read();
-    CHECK(status.state == gnss::State::kRunning && status.model == gnss::Model::kCm680);
+    CHECK(status.state == gnss::State::kRunning && status.family == gnss::Family::kOptisens &&
+          status.model == gnss::Model::kCm680);
+    uint8_t cachedFamily = 0U;
     uint8_t cachedModel = 0U;
+    CHECK(nvs_get_u8(nvs, "family", &cachedFamily) == ESP_OK && cachedFamily == 4U);
     CHECK(nvs_get_u8(nvs, "model", &cachedModel) == ESP_OK && cachedModel == 6U);
     CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
     testCm680Rate10(nvs);
@@ -733,6 +751,9 @@ void bootP2TargetCase(size_t slot, nvs_handle_t nvs, std::span<uint8_t> demux,
     s_applyBaud = applyBaud;
     s_rejectBaud = rejectBaud;
     s_expectBaudSave = false;
+    s_bootBaudMode = true;
+    s_verifiedAfterBaud = false;
+    s_saveAfterVerify = false;
     if (userBaud != 0U) {
         CHECK(nvs_set_u32(nvs, "baud", userBaud) == ESP_OK);
     } else {
@@ -767,39 +788,44 @@ void testGnssTargetBaudPolicy()
     CHECK(fw::isOk(installed) || (installed == fw::Result::kInvalidState));
     fw::traceSetMask(fw::traceBit(fw::TraceCat::kGnss));
 
-    // 1. 首次冷启动（无 NVS gnss/baud 与缓存，CM680 出厂 115200）→ 自动切运行态 460800、不发 SAVECONFIG、hint 记 460800。
+    // 1. 首次冷启动（无 NVS gnss/baud 与缓存，CM680 出厂 115200）→ 自动切 460800、验证后发 1 次 SAVECONFIG、不写 gnss/baud、hint 记 460800 与 family=4。
     eraseGnssBaudAndCache(nvs);
     bootP2TargetCase(0U, nvs, demux, pipe, 115200U, 0U, true, false);
     advance(3000U);
     auto st = s_context->data.gnssStatus.read();
     uint32_t stored = 0U;
-    CHECK(st.state == gnss::State::kRunning && st.model == gnss::Model::kCm680);
+    uint8_t storedFamily = 0U;
+    CHECK(st.state == gnss::State::kRunning && st.family == gnss::Family::kOptisens &&
+          st.model == gnss::Model::kCm680);
     CHECK(st.hostBaud == 460800U && s_hostBaud == 460800U && s_receiverBaud == 460800U);
-    CHECK(s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(s_baudCommands == 1U && s_saveCommands == 1U && s_saveAfterVerify);
     CHECK(s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 0U);
     CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_ERR_NVS_NOT_FOUND);
     CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 460800U);
+    CHECK(nvs_get_u8(nvs, "family", &storedFamily) == ESP_OK && storedFamily == 4U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
-    // 2. ESP32 单独复位（模块未掉电仍在 460800，cache_baud=460800）→ 第一候选即命中，目标等于当前不切换。
+    // 2. ESP32 单独复位（新缓存 family=4 model=6 cache_baud=460800，模块仍在 460800）→ 第一候选即命中，目标等于当前不切换、不发 SAVECONFIG。
     bootP2TargetCase(1U, nvs, demux, pipe, 460800U, 0U, true, false);
     advance(2500U);
     st = s_context->data.gnssStatus.read();
-    CHECK(st.state == gnss::State::kRunning && st.hostBaud == 460800U);
+    CHECK(st.state == gnss::State::kRunning && st.family == gnss::Family::kOptisens &&
+          st.model == gnss::Model::kCm680 && st.hostBaud == 460800U);
     CHECK(st.ctrl.probesSent == 1U && s_baudCommands == 0U && s_saveCommands == 0U);
     CHECK(s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 0U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
-    // 3. 模块掉电冷启动（cache_baud 仍为 460800，模块回出厂 115200）→ 候选表 115200 命中后切回 460800，无 SAVECONFIG。
+    // 3. 模块掉电冷启动（cache_baud 仍为 460800，模块回出厂 115200）→ 候选表 115200 命中后切回 460800，验证后发 1 次 SAVECONFIG。
     bootP2TargetCase(2U, nvs, demux, pipe, 115200U, 0U, true, false);
     advance(3000U);
     st = s_context->data.gnssStatus.read();
     CHECK(st.state == gnss::State::kRunning && st.hostBaud == 460800U && s_receiverBaud == 460800U);
-    CHECK(st.ctrl.probesSent == 3U && s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(st.ctrl.probesSent == 3U && s_baudCommands == 1U && s_saveCommands == 1U &&
+          s_saveAfterVerify);
     CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 460800U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
-    // 4a. 用户 NVS gnss/baud=115200 覆盖 Kconfig（目标 115200 == 当前 115200）→ 不切换。
+    // 4a. 用户 NVS gnss/baud=115200 覆盖 Kconfig（目标 115200 == 当前 115200）→ 不切换、不发 SAVECONFIG。
     eraseGnssBaudAndCache(nvs);
     bootP2TargetCase(3U, nvs, demux, pipe, 115200U, 115200U, true, false);
     advance(2500U);
@@ -809,13 +835,13 @@ void testGnssTargetBaudPolicy()
     CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 115200U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
-    // 4b. 用户 NVS gnss/baud=230400 覆盖 Kconfig（模块在 115200）→ 切运行态 230400，无 SAVECONFIG，hint 记 230400。
+    // 4b. 用户 NVS gnss/baud=230400 覆盖 Kconfig（模块在 115200）→ 切 230400，验证后发 1 次 SAVECONFIG，hint 记 230400。
     eraseGnssBaudAndCache(nvs);
     bootP2TargetCase(4U, nvs, demux, pipe, 115200U, 230400U, true, false);
     advance(3000U);
     st = s_context->data.gnssStatus.read();
     CHECK(st.state == gnss::State::kRunning && st.hostBaud == 230400U && s_receiverBaud == 230400U);
-    CHECK(s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(s_baudCommands == 1U && s_saveCommands == 1U && s_saveAfterVerify);
     CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 230400U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
@@ -854,7 +880,132 @@ void testGnssTargetBaudPolicy()
     CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 115200U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
+    // 7. 旧缓存迁移（现网已存 family=1 model=6 cache_baud=460800）：正确识别为 CM680/optisens，并把 NVS 缓存更新为 family=4。
+    eraseGnssBaudAndCache(nvs);
+    CHECK(nvs_set_u8(nvs, "family", static_cast<uint8_t>(gnss::Family::kUnicore)) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "model", static_cast<uint8_t>(gnss::Model::kCm680)) == ESP_OK);
+    CHECK(nvs_set_u32(nvs, "cache_baud", 460800U) == ESP_OK);
+    CHECK(nvs_commit(nvs) == ESP_OK);
+    bootP2TargetCase(7U, nvs, demux, pipe, 460800U, 0U, true, false);
+    advance(2500U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.family == gnss::Family::kOptisens &&
+          st.model == gnss::Model::kCm680 && st.hostBaud == 460800U);
+    CHECK(nvs_get_u8(nvs, "family", &storedFamily) == ESP_OK && storedFamily == 4U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 8. 新缓存（family=4 model=6 cache_baud=460800）重启首候选即命中，0 次 SAVECONFIG。
+    bootP2TargetCase(8U, nvs, demux, pipe, 460800U, 0U, true, false);
+    advance(2500U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.family == gnss::Family::kOptisens &&
+          st.model == gnss::Model::kCm680 && st.ctrl.probesSent == 1U && s_saveCommands == 0U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 9. G-baud-save：冷启动 115200 切 460800 成功但 SAVECONFIG 返回 NACK → baud_fail 不变、保持 460800、状态 running、不写 gnss/baud。
+    eraseGnssBaudAndCache(nvs);
+    s_rejectSave = true;
+    bootP2TargetCase(11U, nvs, demux, pipe, 115200U, 0U, true, false);
+    advance(3500U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.hostBaud == 460800U && s_receiverBaud == 460800U);
+    CHECK(s_baudCommands == 1U && s_saveCommands == 1U && s_saveAfterVerify);
+    CHECK(s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 0U);
+    CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_ERR_NVS_NOT_FOUND);
+    CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 460800U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+    s_rejectSave = false;
+
     s_rejectBaud = false;
+    s_bootBaudMode = false;
     fw::traceSetMask(0U);
+    nvs_close(nvs);
+}
+
+/**
+ * @brief 验证 Q1 GGA 质量门控的模块级联动：立即生效、去抖落盘、阻断丢弃/RMC 放行、3 连续达标恢复与 NVS 重启回读。
+ * @note 单线程主机测试。
+ */
+void testGgaGateNvsAndModuleFlow()
+{
+    std::array<uint8_t, app::GnssModule::kDemuxBufBytes> demux{};
+    std::array<uint8_t, app::kRtcmPipeBytes> pipe{};
+    std::array<uint8_t, app::data::kGnssLatestTotalBytes> latestBuf{};
+    nvs_handle_t nvs = 0U;
+    CHECK(nvs_open("gnss", NVS_READWRITE, &nvs) == ESP_OK);
+    s_nvs = nvs;
+
+    eraseGnssBaudAndCache(nvs);
+    for (const char *key : {"gga_gate", "gga_min_sats"}) {
+        const esp_err_t err = nvs_erase_key(nvs, key);
+        CHECK((err == ESP_OK) || (err == ESP_ERR_NVS_NOT_FOUND));
+    }
+    CHECK(nvs_commit(nvs) == ESP_OK);
+
+    // 1. 冷启动默认关闭、min_sats=8。
+    bootP2TargetCase(9U, nvs, demux, pipe, 115200U, 0U, true, false);
+    s_context->data.gnssLatest.bindLock({});
+    CHECK(fw::isOk(s_context->data.gnssLatest.init(latestBuf)));
+    advance(3000U);
+    auto gateSt = s_context->data.ggaGateStatus.read();
+    CHECK(!gateSt.enabled && !gateSt.blocked && (gateSt.minSats == 8U));
+    CHECK(s_context->gnss.ggaAllowed());
+
+    // 2. 下发 kSetGgaGate(on, min_sats=12)：立即生效，去抖 500 ms 前不写盘，之后写盘。
+    const fw::Command gateCmd = app::detail::packGnssGate(true, true, true, 12U);
+    fw::CommandResult gateRes{};
+    s_context->gnss.onCommand(gateCmd, gateRes);
+    CHECK(fw::isOk(gateRes.status));
+    gateSt = s_context->data.ggaGateStatus.read();
+    CHECK(gateSt.enabled && !gateSt.blocked && (gateSt.minSats == 12U));
+    uint8_t nvsVal = 0U;
+    advance(200U);
+    CHECK(nvs_get_u8(nvs, "gga_gate", &nvsVal) == ESP_ERR_NVS_NOT_FOUND);
+    advance(500U);
+    CHECK(nvs_get_u8(nvs, "gga_gate", &nvsVal) == ESP_OK && nvsVal == 1U);
+    CHECK(nvs_get_u8(nvs, "gga_min_sats", &nvsVal) == ESP_OK && nvsVal == 12U);
+
+    // 3. 喂入低卫星 GGA（10 < 12）与有效 RMC：GGA 被阻断且不写入最新缓存，RMC 照常写入。
+    constexpr std::string_view kBadGga =
+        "$GNGGA,080000.00,3112.34567,N,12123.45678,E,4,10,0.8,15.2,M,-5.0,M,1.0,0001*7F\r\n";
+    constexpr std::string_view kGoodGga =
+        "$GNGGA,080001.00,3112.34567,N,12123.45678,E,4,12,0.8,15.2,M,-5.0,M,1.0,0001*7C\r\n";
+    constexpr std::string_view kRmc =
+        "$GNRMC,080000.00,A,3112.34567,N,12123.45678,E,0.0,0.0,191126,,,A*4D\r\n";
+    s_rx += kBadGga;
+    s_rx += kRmc;
+    advance(60U);
+    gateSt = s_context->data.ggaGateStatus.read();
+    CHECK(gateSt.blocked && !s_context->gnss.ggaAllowed());
+    CHECK((gateSt.ggaBlocked == 1U) && (gateSt.gateTrans == 1U));
+    std::array<uint8_t, proto::kMaxPayload> qbuf{};
+    const auto ggaQ1 =
+        s_context->data.gnssLatest.query(static_cast<uint8_t>(gnss::OutputMsg::kGga), qbuf);
+    CHECK(!ggaQ1.ok);
+    const auto rmcQ =
+        s_context->data.gnssLatest.query(static_cast<uint8_t>(gnss::OutputMsg::kRmc), qbuf);
+    CHECK(rmcQ.ok && (rmcQ.len == kRmc.size()));
+
+    // 4. 喂入连续 3 条达标 GGA：前 2 条仍阻断，第 3 条放行并更新最新缓存。
+    s_rx += kGoodGga;
+    s_rx += kGoodGga;
+    advance(60U);
+    gateSt = s_context->data.ggaGateStatus.read();
+    CHECK(gateSt.blocked && (gateSt.ggaBlocked == 3U) && (gateSt.gateTrans == 1U));
+    s_rx += kGoodGga;
+    advance(60U);
+    gateSt = s_context->data.ggaGateStatus.read();
+    CHECK(!gateSt.blocked && s_context->gnss.ggaAllowed());
+    CHECK((gateSt.ggaBlocked == 3U) && (gateSt.gateTrans == 2U));
+    const auto ggaQ2 =
+        s_context->data.gnssLatest.query(static_cast<uint8_t>(gnss::OutputMsg::kGga), qbuf);
+    CHECK(ggaQ2.ok && (ggaQ2.len == kGoodGga.size()));
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 5. 重启新模块实例：从 NVS 回读 gga_gate=1, gga_min_sats=12 并自动生效。
+    bootP2TargetCase(10U, nvs, demux, pipe, 460800U, 0U, true, false);
+    gateSt = s_context->data.ggaGateStatus.read();
+    CHECK(gateSt.enabled && !gateSt.blocked && (gateSt.minSats == 12U));
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
     nvs_close(nvs);
 }

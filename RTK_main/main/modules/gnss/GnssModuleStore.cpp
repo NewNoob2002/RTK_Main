@@ -200,4 +200,86 @@ fw::Result GnssModule::saveOut(const void * /*obj*/, std::span<uint8_t> out, siz
     return effective.encode(out, len);
 }
 
+void GnssModule::publishGgaGateStatus() noexcept
+{
+    const auto st =
+        gga_gate_.has_value()
+            ? gga_gate_->stats()
+            : ::gnss::GgaGateStats{
+                  .enabled = gga_gate_cfg_.enabled,
+                  .blocked = false,
+                  .minSats = gga_gate_min_sats_loaded_ ? gga_gate_cfg_.minSats
+                                                       : ::gnss::GgaGateConfig::kDefaultMinSats,
+                  .ggaBlocked = 0U,
+                  .gateTrans = 0U,
+              };
+    ctx().data.ggaGateStatus.write({
+        .enabled = st.enabled,
+        .blocked = st.blocked,
+        .minSats = st.minSats,
+        .ggaBlocked = st.ggaBlocked,
+        .gateTrans = st.gateTrans,
+    });
+    ctx().data.ggaAllowedFlag.store(!st.enabled || !st.blocked, std::memory_order_release);
+}
+
+fw::Result GnssModule::loadGgaGate(void * /*obj*/, std::span<const uint8_t> in) noexcept
+{
+    if (in.empty() || (in[0] > 1U)) {
+        return fw::Result::kInvalidArg;
+    }
+    auto &gnss = appContext().gnss;
+    gnss.gga_gate_cfg_.enabled = (in[0] != 0U);
+    gnss.gga_gate_enabled_loaded_ = true;
+    if (gnss.gga_gate_.has_value()) {
+        if (!gnss.gga_gate_min_sats_loaded_) {
+            gnss.gga_gate_cfg_.minSats = ::gnss::GgaGateConfig::kDefaultMinSats;
+            gnss.gga_gate_min_sats_loaded_ = true;
+        }
+        static_cast<void>(gnss.gga_gate_->setConfig(gnss.gga_gate_cfg_));
+        gnss.publishGgaGateStatus();
+    }
+    return fw::Result::kOk;
+}
+
+fw::Result GnssModule::saveGgaGate(const void * /*obj*/, std::span<uint8_t> out,
+                                   size_t &len) noexcept
+{
+    if (out.empty()) {
+        return fw::Result::kInvalidArg;
+    }
+    const auto &gnss = appContext().gnss;
+    out[0] = (gnss.gga_gate_enabled_loaded_ && gnss.gga_gate_cfg_.enabled) ? 1U : 0U;
+    len = 1U;
+    return fw::Result::kOk;
+}
+
+fw::Result GnssModule::loadGgaMinSats(void * /*obj*/, std::span<const uint8_t> in) noexcept
+{
+    if (in.empty() || (in[0] > ::gnss::GgaGateConfig::kMaxMinSats)) {
+        return fw::Result::kInvalidArg;
+    }
+    auto &gnss = appContext().gnss;
+    gnss.gga_gate_cfg_.minSats = in[0];
+    gnss.gga_gate_min_sats_loaded_ = true;
+    if (gnss.gga_gate_.has_value()) {
+        static_cast<void>(gnss.gga_gate_->setConfig(gnss.gga_gate_cfg_));
+        gnss.publishGgaGateStatus();
+    }
+    return fw::Result::kOk;
+}
+
+fw::Result GnssModule::saveGgaMinSats(const void * /*obj*/, std::span<uint8_t> out,
+                                      size_t &len) noexcept
+{
+    if (out.empty()) {
+        return fw::Result::kInvalidArg;
+    }
+    const auto &gnss = appContext().gnss;
+    out[0] = gnss.gga_gate_min_sats_loaded_ ? gnss.gga_gate_cfg_.minSats
+                                            : ::gnss::GgaGateConfig::kDefaultMinSats;
+    len = 1U;
+    return fw::Result::kOk;
+}
+
 } // namespace app

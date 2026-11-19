@@ -52,13 +52,14 @@ class MockState:
         self.wl_version: int = 0
         self.start_time = time.monotonic()
         self.whitelist = ["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"]
-        self.config: dict[str, int | str] = {
+        self.config: dict[str, object] = {
             "gnss.rate": 10,
             "gnss.out.gga": 100,
             "gnss.out.gsa": 1000,
             "gnss.out.gsv": 1000,
             "gnss.out.gst": 1000,
             "gnss.out.rmc": 100,
+            "gga_gate": {"enabled": False, "min_sats": 8},
             "bt.pair_next": 0,
             "factory.sn": "P2A0001",
         }
@@ -482,6 +483,40 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
             ws_send_json(sock, send_lock, cfg)
             return False
 
+        if key == "gnss.gga_gate.enabled":
+            if val not in VALID_BOOL:
+                ws_send_json(
+                    sock,
+                    send_lock,
+                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
+                )
+                return False
+            with self.state.lock:
+                gate = dict(self.state.config["gga_gate"])
+                gate["enabled"] = val == "1"
+                self.state.config["gga_gate"] = gate
+                cfg = {"t": "config", **self.state.config}
+            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
+            ws_send_json(sock, send_lock, cfg)
+            return False
+
+        if key == "gnss.gga_gate.min_sats":
+            if not re.fullmatch(r"0|[1-9][0-9]*", val) or int(val) > 40:
+                ws_send_json(
+                    sock,
+                    send_lock,
+                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
+                )
+                return False
+            with self.state.lock:
+                gate = dict(self.state.config["gga_gate"])
+                gate["min_sats"] = int(val)
+                self.state.config["gga_gate"] = gate
+                cfg = {"t": "config", **self.state.config}
+            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
+            ws_send_json(sock, send_lock, cfg)
+            return False
+
         if key in CONST_KEYS:
             if self.state.no_const:
                 ws_send_json(
@@ -814,6 +849,26 @@ def run_selftest(ui_dir: pathlib.Path) -> int:
 
         c.send_json({"t": "cmd", "id": 24, "name": "save"})
         assert c.recv_until("ack") == {"t": "ack", "id": 24, "ok": True}
+
+        # Q1 GGA quality gate config & validation
+        c.send_json({"t": "set", "id": 26, "key": "gnss.gga_gate.enabled", "value": "1"})
+        assert c.recv_until("ack") == {"t": "ack", "id": 26, "ok": True}
+        assert c.recv_until("config")["gga_gate"] == {"enabled": True, "min_sats": 8}
+
+        c.send_json({"t": "set", "id": 27, "key": "gnss.gga_gate.min_sats", "value": "12"})
+        assert c.recv_until("ack") == {"t": "ack", "id": 27, "ok": True}
+        assert c.recv_until("config")["gga_gate"] == {"enabled": True, "min_sats": 12}
+
+        for bad_idx, bad_val in enumerate(("-1", "41", "08", "abc"), start=28):
+            c.send_json(
+                {"t": "set", "id": bad_idx, "key": "gnss.gga_gate.min_sats", "value": bad_val}
+            )
+            assert c.recv_until("ack") == {
+                "t": "ack",
+                "id": bad_idx,
+                "ok": False,
+                "err": "bad_value",
+            }
 
         c.send_json({"t": "cmd", "id": 25, "name": "exit"})
         assert c.recv_until("ack") == {"t": "ack", "id": 25, "ok": True}

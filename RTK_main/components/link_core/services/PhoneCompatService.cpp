@@ -46,6 +46,7 @@ constexpr uint16_t kJsonServerId = 0x32U;
 constexpr uint16_t kFenceListId = 0x60U;
 constexpr uint16_t kFenceDetailId = 0x61U;
 constexpr uint16_t kFenceEditId = 0x62U;
+// TODO(Q1): Configure app 的 GGA 质量门控配置消息等待 app 团队定义消息 ID 与负载格式后再接入。
 
 constexpr size_t kSatOfsCutoff = 1U;
 constexpr size_t kSatOfsGps = 4U;

@@ -161,9 +161,23 @@ struct DataCenter {
     GnssAppSubState gnssAppSub{};
     ZeroInitSlot<GnssWorkModeStatus> gnssWorkMode{};
     BaseRtcmRing baseRtcmRing{};
+    fw::Slot<GgaGateStatus> ggaGateStatus{};
+    std::atomic<bool> ggaAllowedFlag{true};
+    static_assert(fw::kAtomicUsable<bool>, "GGA 质量门控放行标志原子须无锁");
     std::atomic<bool> phoneStreamReady{false};
     std::atomic<uint32_t> gnssBaudFailCount{0U}; // 启动切速失败计数（kIo 写，console 读）
     static_assert(fw::kAtomicUsable<uint32_t>, "GNSS 切速失败计数原子须无锁");
+
+    /**
+     * @brief  查询当前 GGA 质量门控是否允许输出 GGA（蓝牙直传、0x04 query 与将来 4G NTRIP 共用）
+     * @retval true 门控关闭或当前处于放行态
+     * @retval false 门控开启且当前处于阻断态
+     * @note   无锁原子读取，任意任务或 ISR 安全，不阻塞。
+     */
+    [[nodiscard]] bool ggaAllowed() const noexcept
+    {
+        return ggaAllowedFlag.load(std::memory_order_acquire);
+    }
 #endif
 
     portMUX_TYPE mux{};

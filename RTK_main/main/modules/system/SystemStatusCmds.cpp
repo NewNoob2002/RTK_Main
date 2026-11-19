@@ -237,6 +237,12 @@ void printStatusSys(const SystemStatus &system, const rtos::ExecStats &exec) noe
                  data.gnssBaudFailCount.load(std::memory_order_relaxed));
     cli::printKv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B",
                  gnss.pipe.pushedFrames, gnss.pipe.droppedFrames, gnss.pipe.writtenBytes);
+    const auto gate = data.ggaGateStatus.read();
+    cli::printKv("gate",
+                 "gga_gate=%s  min_sats=%u  blocked=%s  gga_blocked=%" PRIu32
+                 "  gate_trans=%" PRIu32,
+                 gate.enabled ? "on" : "off", static_cast<unsigned>(gate.minSats),
+                 gate.blocked ? "yes" : "no", gate.ggaBlocked, gate.gateTrans);
     cli::printKv("app_ring",
                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 " rd=%" PRIu32 " drop=%" PRIu32
                  " gga_drop=%" PRIu32 " qovsz=%" PRIu32,
@@ -292,6 +298,12 @@ void printGnssSection() noexcept
                  data.gnssBaudFailCount.load(std::memory_order_relaxed));
     cli::printKv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B",
                  gnss.pipe.pushedFrames, gnss.pipe.droppedFrames, gnss.pipe.writtenBytes);
+    const auto gate = data.ggaGateStatus.read();
+    cli::printKv("gate",
+                 "gga_gate=%s  min_sats=%u  blocked=%s  gga_blocked=%" PRIu32
+                 "  gate_trans=%" PRIu32,
+                 gate.enabled ? "on" : "off", static_cast<unsigned>(gate.minSats),
+                 gate.blocked ? "yes" : "no", gate.ggaBlocked, gate.gateTrans);
     cli::printKv("app_ring",
                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 "/%" PRIu32 "B overwr=%" PRIu32
                  " nosub=%" PRIu32 " ovsz=%" PRIu32 " pin=%" PRIu32 " gga_drop=%" PRIu32,

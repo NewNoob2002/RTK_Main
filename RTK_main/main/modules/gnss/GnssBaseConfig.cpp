@@ -504,7 +504,7 @@ const char *formatScaledInt(int64_t val, uint8_t decimals, std::span<char> buf) 
 }
 
 /**
- * @brief 判断 RTCM3 基站报文是否受当前接收机族支持（1033 仅 Unicore，1230 仅 u-blox）。
+ * @brief 判断 RTCM3 基站报文是否受当前接收机族支持（1033 仅 Unicore/Optisens，1230 仅 u-blox）。
  * @param id: RTCM3 报文号。
  * @param family: 已探测接收机族。
  * @retval true: 受支持或尚未探测到接收机族；false: 另一族专属报文。
@@ -512,7 +512,9 @@ const char *formatScaledInt(int64_t val, uint8_t decimals, std::span<char> buf) 
 bool isBaseRtcmSupportedForFamily(uint16_t id, ::gnss::Family family) noexcept
 {
     if (id == ::gnss::kBaseRtcmIds[kSlot1033]) {
-        return (family == ::gnss::Family::kUnknown) || (family == ::gnss::Family::kUnicore);
+        // Optisens CM680 复用 Unicore 基站 RTCM 脚本，支持 1033；此处仅有家族上下文（无型号），保留家族比较。
+        return (family == ::gnss::Family::kUnknown) || (family == ::gnss::Family::kUnicore) ||
+               (family == ::gnss::Family::kOptisens);
     }
     if (id == ::gnss::kBaseRtcmIds[kSlot1230]) {
         return (family == ::gnss::Family::kUnknown) || (family == ::gnss::Family::kUblox);

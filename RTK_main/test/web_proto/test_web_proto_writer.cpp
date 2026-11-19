@@ -218,6 +218,26 @@ void testClearReuse()
     TEST_ASSERT_EQUAL_STRING(R"({"t":"bye"})", render(writer).c_str());
 }
 
+/**
+ * @brief  校验 config 帧输出嵌套对象 gga_gate:{enabled,min_sats} 的 JSON 格式
+ * @note   单线程主机测试
+ */
+void testConfigGgaGateNestedObject()
+{
+    web::JsonWriter writer;
+    TEST_ASSERT_TRUE(writer.beginObject());
+    TEST_ASSERT_TRUE(writer.writeString("t", "config"));
+    TEST_ASSERT_TRUE(writer.writeInt("gnss.rate", 10));
+    TEST_ASSERT_TRUE(writer.beginNested("gga_gate"));
+    TEST_ASSERT_TRUE(writer.writeBool("enabled", true));
+    TEST_ASSERT_TRUE(writer.writeInt("min_sats", 8));
+    TEST_ASSERT_TRUE(writer.endNested());
+    TEST_ASSERT_TRUE(writer.endObject());
+    TEST_ASSERT_EQUAL_STRING(
+        R"({"t":"config","gnss.rate":10,"gga_gate":{"enabled":true,"min_sats":8}})",
+        render(writer).c_str());
+}
+
 } // namespace
 
 void setUp() {}
@@ -239,5 +259,6 @@ int main(void)
     RUN_TEST(testCapacityOverflow);
     RUN_TEST(testExactCapacityWithEscaping);
     RUN_TEST(testClearReuse);
+    RUN_TEST(testConfigGgaGateNestedObject);
     return UNITY_END();
 }

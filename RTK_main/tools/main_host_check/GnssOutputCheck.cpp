@@ -26,6 +26,7 @@ void testGnssFactoryReset();
 void testGnssPhonePpp();
 void testBaseKeysAndCommandDispatch();
 void testGnssTargetBaudPolicy();
+void testGgaGateNvsAndModuleFlow();
 
 namespace {
 
@@ -541,5 +542,6 @@ int main()
     testBaseKeysAndCommandDispatch();
     testGnssPhonePpp();
     testGnssTargetBaudPolicy();
+    testGgaGateNvsAndModuleFlow();
     return 0;
 }

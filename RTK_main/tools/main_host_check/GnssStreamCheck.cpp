@@ -392,7 +392,7 @@ void testAlarmNoPushAndSupportedMaskIntersection() noexcept
     app::GnssStatus st{};
     st.enabled = true;
     st.state = ::gnss::State::kRunning;
-    st.family = ::gnss::Family::kUnicore;
+    st.family = ::gnss::Family::kOptisens;
     st.model = ::gnss::Model::kCm680;
     // 假设接收机不支持 GST(bit 3)：仅支持 GGA(0)|RMC(4)|GSA(5)|GSV(6) = 0x71。
     st.supportedMask = 0x71U;
@@ -417,6 +417,75 @@ void testAlarmNoPushAndSupportedMaskIntersection() noexcept
     pushFrame(1U, 0x0041U, proto::sender::kAlarm, proto::msg_type::kPush, 0, helloPayload);
     stepLink();
     CHECK(data2.gnssAppSub.snapshot().activeMask == 0U);
+}
+
+/** @brief 场景 5（Q1）：GGA 质量门控阻断时 0x04 query 回 02 02 且直传丢弃 GGA、照常推送 GSV。 */
+void testGgaQualityGateQueryAndStream() noexcept
+{
+    initTestApp(false);
+    auto &data = app::appContext().data;
+
+    pushOpen(1U, kPhoneAddr);
+    stepLink();
+
+    constexpr std::string_view kGga =
+        "$GNGGA,123519.00,4807.038,N,01131.000,E,4,12,0.7,545.4,M,46.9,M,1.0,0000*62\r\n";
+    constexpr std::string_view kGsv = "$GPGSV,1,1,04,01,40,083,46,02,17,308,41*74\r\n";
+    const std::span<const uint8_t> ggaBytes{reinterpret_cast<const uint8_t *>(kGga.data()),
+                                            kGga.size()};
+    const std::span<const uint8_t> gsvBytes{reinterpret_cast<const uint8_t *>(kGsv.data()),
+                                            kGsv.size()};
+    CHECK(data.gnssLatest.update(static_cast<uint8_t>(::gnss::OutputMsg::kGga), ggaBytes));
+
+    // 1. 门控阻断：0x04 query 回 02 02；直传环中的 GGA 被丢弃，GSV 照常推出。
+    data.ggaAllowedFlag.store(false, std::memory_order_release);
+    const size_t txBeforeBlockStream = s_tx_count;
+    CHECK(data.gnssAppRing.write(static_cast<uint8_t>(::gnss::OutputMsg::kGga), ggaBytes) ==
+          fw::Result::kOk);
+    CHECK(data.gnssAppRing.write(static_cast<uint8_t>(::gnss::OutputMsg::kGsv), gsvBytes) ==
+          fw::Result::kOk);
+    stepLink();
+    CHECK(countStreamTx(txBeforeBlockStream, 1U) == 1U);
+    CHECK(s_tx_log[txBeforeBlockStream].len == kGsv.size());
+    CHECK(std::memcmp(s_tx_log[txBeforeBlockStream].bytes.data(), kGsv.data(), kGsv.size()) == 0);
+
+    const auto decodeReply = [](const FakeTxRecord &rec, proto::FrameParser &parser,
+                                proto::FrameView &view) noexcept -> bool {
+        parser.reset();
+        for (size_t i = 0U; i < rec.len; ++i) {
+            if (parser.feed(rec.bytes[i], view) == proto::ParseResult::kFrame) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const size_t txBeforeBlockedQuery = s_tx_count;
+    pushFrame(1U, 0x0004U, proto::sender::kApp, proto::msg_type::kQuery, 0);
+    stepLink();
+    CHECK(s_tx_count > txBeforeBlockedQuery);
+    const auto &blockedReply = s_tx_log[txBeforeBlockedQuery];
+    CHECK(!blockedReply.isStream);
+    proto::FrameParser parser{};
+    proto::FrameView blockedView{};
+    CHECK(decodeReply(blockedReply, parser, blockedView));
+    CHECK(blockedView.msgId == 0x0004U);
+    CHECK(blockedView.payload.size() == 2U);
+    CHECK((blockedView.payload[0] == 0x02U) && (blockedView.payload[1] == 0x02U));
+
+    // 2. 门控放行：0x04 query 正常返回最新 GGA。
+    data.ggaAllowedFlag.store(true, std::memory_order_release);
+    const size_t txBeforeAllowedQuery = s_tx_count;
+    pushFrame(1U, 0x0004U, proto::sender::kApp, proto::msg_type::kQuery, 0);
+    stepLink();
+    CHECK(s_tx_count > txBeforeAllowedQuery);
+    const auto &allowedReply = s_tx_log[txBeforeAllowedQuery];
+    CHECK(!allowedReply.isStream);
+    proto::FrameView allowedView{};
+    CHECK(decodeReply(allowedReply, parser, allowedView));
+    CHECK(allowedView.msgId == 0x0004U);
+    CHECK(allowedView.payload.size() == kGga.size());
+    CHECK(std::memcmp(allowedView.payload.data(), kGga.data(), kGga.size()) == 0);
 }
 
 } // namespace
@@ -650,6 +719,7 @@ int main()
     testNavFirstFrameDisablesDefaultPush();
     testSurveyIntervalZeroKeepsDefaultPush();
     testAlarmNoPushAndSupportedMaskIntersection();
+    testGgaQualityGateQueryAndStream();
     if (s_failures != 0) {
         std::fprintf(stderr, "GnssStreamCheck: %d failure(s)\n", s_failures);
         return 1;

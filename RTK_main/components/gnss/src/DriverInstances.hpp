@@ -41,6 +41,7 @@ namespace gnss::detail {
 #if GNSS_ENABLE_UNICORE
 extern const Um980Receiver kUm980Receiver; ///< UM980/UM981 叶子单例（定义在 UnicoreReceiver.cpp）。
 extern const Um982Receiver kUm982Receiver; ///< UM982 双天线叶子单例（同文件）。
+extern const Cm680Receiver kCm680Receiver; ///< Optisens CM680 叶子单例（同文件）。
 #endif
 #if GNSS_ENABLE_UBLOX
 extern const ZedF9pReceiver kZedF9pReceiver; ///< ZED-F9P 叶子单例（定义在 UbloxReceiver.cpp）。

@@ -42,6 +42,9 @@ void DataCenter::init() noexcept
     gnssAppSub.bindLock(lock);
     gnssWorkMode.bindLock(lock);
     baseRtcmRing.bindLock(lock);
+    ggaGateStatus.bindLock(lock);
+    ggaGateStatus.write(GgaGateStatus{.enabled = false, .blocked = false, .minSats = 8U});
+    ggaAllowedFlag.store(true, std::memory_order_release);
 #endif
 }
 
