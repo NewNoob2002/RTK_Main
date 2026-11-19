@@ -9,7 +9,7 @@
 
 1. **SoftAP**（仅 `RadioMode::kWifiConfig`）：SSID = `systemStatus.deviceName`（`P2-<SN>`），WPA2-PSK，口令 Kconfig
    `RTK_WIFI_AP_PASSWORD`（默认 `12345678`，编译期 `static_assert` 8–63 字符），信道 `RTK_WIFI_AP_CHANNEL`（默认 1，1–11），
-   最多 2 个终端，`192.168.4.1/24` + DHCP。新 Kconfig 放 `main/Kconfig.projbuild` 的 `RTK_WIFI_CONFIG_ENABLE` 下。
+   最多 2 个终端，AP IP `192.168.10.12/24`（网关同址）+ DHCP（用户 2026-11-19 指定，不用 IDF 默认 192.168.4.1，需 `esp_netif_dhcps_stop`→`esp_netif_set_ip_info`→`esp_netif_dhcps_start`）。新 Kconfig 放 `main/Kconfig.projbuild` 的 `RTK_WIFI_CONFIG_ENABLE` 下。
 2. **空闲回落**：`RTK_WIFI_IDLE_EXIT_S`（默认 300，60–3600）：无终端连上满该时长、或最后一个终端断开满该时长 →
    推 `bye{reason:"idle"}` 后复用 W1 的请求接口切回 `kBluetooth` 并重启。
 3. **HTTP/WS**：`esp_http_server`，1 个监听任务固定 core 0，最多 3 个套接字；`GET /` 返回构建期 gzip 的 `main/web/ui/` 单页
@@ -43,6 +43,6 @@
 ## 3 交付
 
 - 报告 `docs/reports/W2-web-server.md`：改动表、heap/IRAM/镜像大小、gzip 页面大小、偏离与 §文档待改。
-- Architect HIL（P2）：`radio wifi` → 手机/电脑连 `P2-<SN>` → 打开 `http://192.168.4.1/` → 状态 1 Hz、空闲堆 ≥ 40 KB；
+- Architect HIL（P2）：`radio wifi` → 手机/电脑连 `P2-<SN>` → 打开 `http://192.168.10.12/` → 状态 1 Hz、空闲堆 ≥ 40 KB；
   页面打开 GGA 门控并改 `min_sats` → 控制台 `gnss status` 显示一致 → “退出”回 BT 后设置仍在；白名单增删 BT 模式下生效；
   无终端 300 s 自动回 BT。
