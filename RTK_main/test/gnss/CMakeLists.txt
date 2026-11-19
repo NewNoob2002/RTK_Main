@@ -62,7 +62,7 @@ endforeach()
 enable_testing()
 # 驱动用例随开关裁剪：关闭的驱动不编进 gnss，测试也不能引用其 x_receiver() 符号。
 set(_gnss_tests test_gnss_nmea test_gnss_controller test_gnss_registry test_gnss_null_receiver
-    test_gnss_classify)
+    test_gnss_classify test_gnss_gga_gate)
 if(RTK_GNSS_DRV_UNICORE)
     list(APPEND _gnss_tests test_gnss_unicore_receiver)
     # $CONFIG 读回与控制器读回窗口（ADR-0012 §2.7）；u-blox 用例内部按开关裁剪。
@@ -95,6 +95,7 @@ foreach(name IN LISTS _gnss_tests)
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
 
+target_include_directories(test_gnss_gga_gate PRIVATE ${PROJ_ROOT}/components/gnss/private_include)
 if(RTK_GNSS_DRV_UNICORE)
     target_include_directories(test_gnss_unicore_receiver PRIVATE ${PROJ_ROOT}/components/gnss/private_include)
 endif()

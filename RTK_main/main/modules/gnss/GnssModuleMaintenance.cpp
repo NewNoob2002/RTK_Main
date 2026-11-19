@@ -43,6 +43,23 @@ const char *saveFailureName(MaintenanceResult result) noexcept
 }
 
 /**
+ * @brief 记录启动切速后模块保存的结果（失败不计入 baud_fail、不回退波特率）。
+ * @param baud: 已切换的目标波特率。
+ * @param result: 接收机保存结果。
+ * @note 仅 kIo 调用，不阻塞。
+ */
+void logBootBaudSaveResult(uint32_t baud, MaintenanceResult result) noexcept
+{
+    if (result == MaintenanceResult::kOk) {
+        FW_LOGI(fw::TraceCat::kGnss, "<cfg> Startup baud %lu saved to receiver",
+                static_cast<unsigned long>(baud));
+    } else if (result != MaintenanceResult::kUnsupported) {
+        traceGnss(GnssTrace::kStepNack, 0U, static_cast<uint32_t>(result));
+        FW_LOGW(fw::TraceCat::kGnss, "<cfg> Receiver save failed (%s)", saveFailureName(result));
+    }
+}
+
+/**
  * @brief 删除 GNSS 探测缓存与用户波特率覆盖键。
  * @retval 存储结果，键缺失视为成功。
  */
@@ -159,6 +176,16 @@ fw::Result GnssModule::resetStoredSettings() noexcept
     preferred_baud_ = 0U;
     out_cfg_ = data::GnssOutConfig::defaults();
     ctx().data.gnssOutCfg.write(out_cfg_);
+    gga_gate_cfg_ = ::gnss::GgaGateConfig::defaults();
+    gga_gate_enabled_loaded_ = true;
+    gga_gate_min_sats_loaded_ = true;
+    gga_gate_save_pending_ = false;
+    gga_gate_save_retry_ms_ = 0U;
+    if (gga_gate_.has_value()) {
+        gga_gate_->reset();
+        static_cast<void>(gga_gate_->setConfig(gga_gate_cfg_));
+    }
+    publishGgaGateStatus();
     save_queue_.clear();
     hint_ = {};
     skip_hint_save_ = true;
@@ -228,9 +255,13 @@ void GnssModule::completeBootBaudMaintenance(uint32_t baud, MaintenanceResult re
 {
     boot_baud_in_flight_ = false;
     if (result == MaintenanceResult::kOk) {
-        // 启动切速仅修改运行波特率：不写 NVS gnss/baud，不发送 SAVECONFIG，只更新 gnss.cache。
+        // 启动切速仅更新运行波特率与 gnss.cache（不写用户覆盖键 gnss/baud），随后请求一次模块 Flash 保存（G-baud-save）。
         syncBootHint();
-        FW_LOGI(fw::TraceCat::kGnss, "<cfg> Startup baud switched to %lu (runtime only)",
+        boot_baud_save_in_flight_ = controller().requestSave();
+        if (boot_baud_save_in_flight_) {
+            active_maintenance_ = Maintenance::kSave;
+        }
+        FW_LOGI(fw::TraceCat::kGnss, "<cfg> Startup baud switched to %lu",
                 static_cast<unsigned long>(baud));
         return;
     }
@@ -279,7 +310,10 @@ void GnssModule::completeMaintenance(uint32_t nowMs) noexcept
     const auto stats = controller().stats();
     const uint32_t previousSeq = completed_maintenance_seq_;
     completed_maintenance_seq_ = stats.maintenanceSeq;
-    if (baud_save_in_flight_ || stats.maintenance == Maintenance::kBaud) {
+    if (boot_baud_save_in_flight_) {
+        boot_baud_save_in_flight_ = false;
+        logBootBaudSaveResult(requested_baud_, stats.maintenanceResult);
+    } else if (baud_save_in_flight_ || stats.maintenance == Maintenance::kBaud) {
         completeBaudMaintenance(stats, previousSeq);
     } else if (stats.maintenance == Maintenance::kMode) {
         // 工作模式步骤由 GnssWorkMode::poll() 直接读取 maintenanceSeq 消费。

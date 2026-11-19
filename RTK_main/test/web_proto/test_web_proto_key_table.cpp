@@ -31,9 +31,13 @@ void assertBadValue(const char *key, std::string_view text)
                       static_cast<int>(web::validateValue(*spec, text, out)));
 }
 
+/**
+ * @brief  校验键表总数、名称唯一性与未知键返回空指针
+ * @note   单线程主机测试
+ */
 void testTableShape()
 {
-    TEST_ASSERT_EQUAL_size_t(14, web::kKeyTable.size());
+    TEST_ASSERT_EQUAL_size_t(16, web::kKeyTable.size());
     for (size_t i = 0; i < web::kKeyTable.size(); ++i) {
         for (size_t j = i + 1; j < web::kKeyTable.size(); ++j) {
             TEST_ASSERT_TRUE(web::kKeyTable[i].name != web::kKeyTable[j].name);
@@ -137,6 +141,10 @@ void testSnValues()
     }
 }
 
+/**
+ * @brief  校验全表每个键各有一条合法与一条非法样例
+ * @note   单线程主机测试
+ */
 void testEveryKeyAcceptsAndRejects()
 {
     // 每个键各一条合法、一条非法值：防止个别表项接错验证器时测试仍然通过。
@@ -145,13 +153,15 @@ void testEveryKeyAcceptsAndRejects()
         const char *good;
         const char *bad;
     };
-    constexpr std::array<KeyCase, 14> cases{{
+    constexpr std::array<KeyCase, 16> cases{{
         {"gnss.rate", "20", "3"},
         {"gnss.out.gga", "1000", "25"},
         {"gnss.out.gsa", "500", "101"},
         {"gnss.out.gsv", "200", "1001"},
         {"gnss.out.gst", "100", "1"},
         {"gnss.out.rmc", "50", "1000.0"},
+        {"gnss.gga_gate.enabled", "1", "true"},
+        {"gnss.gga_gate.min_sats", "8", "41"},
         {"gnss.const.gps", "1", "2"},
         {"gnss.const.bds", "0", "true"},
         {"gnss.const.glo", "1", ""},
@@ -168,13 +178,33 @@ void testEveryKeyAcceptsAndRejects()
         web::CanonicalValue value;
         TEST_ASSERT_EQUAL(static_cast<int>(web::ErrorCode::kNone),
                           static_cast<int>(web::validateValue(*spec, entry.good, value)));
-        const bool integerKind =
-            spec->kind == web::KeyKind::kEnum || spec->kind == web::KeyKind::kBool;
+        const bool integerKind = spec->kind == web::KeyKind::kEnum ||
+                                 spec->kind == web::KeyKind::kBool ||
+                                 spec->kind == web::KeyKind::kIntRange;
         TEST_ASSERT_EQUAL(
             static_cast<int>(integerKind ? web::ValueKind::kInt : web::ValueKind::kBytes),
             static_cast<int>(value.kind));
         TEST_ASSERT_EQUAL(static_cast<int>(web::ErrorCode::kBadValue),
                           static_cast<int>(web::validateValue(*spec, entry.bad, value)));
+    }
+}
+
+/**
+ * @brief  校验 GGA 质量门控键的合法边界（0..40）与越界/非法输入拒绝
+ * @note   单线程主机测试
+ */
+void testGgaGateKeys()
+{
+    TEST_ASSERT_EQUAL_INT32(0, validate("gnss.gga_gate.enabled", "0").number);
+    TEST_ASSERT_EQUAL_INT32(1, validate("gnss.gga_gate.enabled", "1").number);
+    assertBadValue("gnss.gga_gate.enabled", "2");
+    assertBadValue("gnss.gga_gate.enabled", "on");
+
+    TEST_ASSERT_EQUAL_INT32(0, validate("gnss.gga_gate.min_sats", "0").number);
+    TEST_ASSERT_EQUAL_INT32(8, validate("gnss.gga_gate.min_sats", "8").number);
+    TEST_ASSERT_EQUAL_INT32(40, validate("gnss.gga_gate.min_sats", "40").number);
+    for (const char *bad : {"-1", "-0", "41", "100", "08", "", " 8", "8 ", "8.0", "abc"}) {
+        assertBadValue("gnss.gga_gate.min_sats", bad);
     }
 }
 
@@ -271,6 +301,7 @@ int main(void)
     RUN_TEST(testMacValues);
     RUN_TEST(testSnValues);
     RUN_TEST(testEveryKeyAcceptsAndRejects);
+    RUN_TEST(testGgaGateKeys);
     RUN_TEST(testFailureKeepsPreviousValue);
     RUN_TEST(testNegativeZeroRejected);
     RUN_TEST(testResultMapping);

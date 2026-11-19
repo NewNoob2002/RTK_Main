@@ -132,6 +132,14 @@ void GnssModule::publishAppFrame(const demux::Decoder &decoder, std::span<const 
     if ((cls == ::gnss::OutputMsg::kNone) || (idx >= data::kGnssAppMsgCount)) {
         return;
     }
+    if ((cls == ::gnss::OutputMsg::kGga) && gga_gate_.has_value()) {
+        const bool pass = gga_gate_->evaluate(frame);
+        publishGgaGateStatus();
+        if (!pass) {
+            // Q1：阻断期间直接丢弃 GGA，不更新最新帧缓存、不推入 App 环、不缓存不补发。
+            return;
+        }
+    }
     const auto typeIdx = static_cast<uint8_t>(idx);
     if (!ctx().data.gnssLatest.update(typeIdx, frame)) {
         traceGnssSub(GnssSubTrace::kAppDrop, 2U, typeIdx);

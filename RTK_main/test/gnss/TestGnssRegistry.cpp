@@ -44,6 +44,10 @@ static void testModelNames()
     TEST_ASSERT_EQUAL_STRING("unknown", gnss::modelName(gnss::Model::kUnknown));
 }
 
+/**
+ * @brief  校验型号到家族的映射表（含 CM680 归属 Optisens）
+ * @note   单线程主机测试
+ */
 static void testFamilyOf()
 {
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
@@ -52,7 +56,7 @@ static void testFamilyOf()
                       static_cast<int>(gnss::familyOf(gnss::Model::kUm981)));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
                       static_cast<int>(gnss::familyOf(gnss::Model::kUm982)));
-    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUnicore),
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kOptisens),
                       static_cast<int>(gnss::familyOf(gnss::Model::kCm680)));
     TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kUblox),
                       static_cast<int>(gnss::familyOf(gnss::Model::kZedF9p)));
@@ -62,6 +66,10 @@ static void testFamilyOf()
                       static_cast<int>(gnss::familyOf(gnss::Model::kUnknown)));
 }
 
+/**
+ * @brief  校验构建开关与 enabledReceivers()/receiverFor() 的一致性（Optisens 随 Unicore 启用且不增加探测表项）
+ * @note   单线程主机测试
+ */
 static void testEnabledReceiversMatchBuildFlags()
 {
     const std::span<const gnss::Receiver *const> receivers = gnss::enabledReceivers();
@@ -92,10 +100,21 @@ static void testEnabledReceiversMatchBuildFlags()
         TEST_ASSERT_EQUAL(static_cast<int>(kExpectedFront),
                           static_cast<int>(receivers.front()->family()));
     }
+    if (kExpectedUnicore != 0U) {
+        const gnss::Receiver *optisens = gnss::receiverFor(gnss::Family::kOptisens);
+        TEST_ASSERT_NOT_NULL(optisens);
+        TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kOptisens),
+                          static_cast<int>(optisens->family()));
+        TEST_ASSERT_TRUE(optisens->name() == std::string_view{"optisens"});
+        TEST_ASSERT_TRUE(optisens->decoders().size() > 0U);
+    }
     TEST_ASSERT_NULL(gnss::receiverFor(gnss::Family::kUnknown));
 }
 
-// familyFromU8/modelFromU8：合法值往返一致，越界回落到 kUnknown（NVS 旧值/未来值）。
+/**
+ * @brief  校验 familyFromU8/modelFromU8 合法往返与越界边界（NVS 兼容）
+ * @note   单线程主机测试
+ */
 static void testU8Boundaries()
 {
     TEST_ASSERT_EQUAL(
@@ -107,11 +126,14 @@ static void testU8Boundaries()
     TEST_ASSERT_EQUAL(
         static_cast<int>(gnss::Family::kComnav),
         static_cast<int>(gnss::familyFromU8(static_cast<uint8_t>(gnss::Family::kComnav)).value()));
+    TEST_ASSERT_EQUAL_UINT8(4U, static_cast<uint8_t>(gnss::Family::kOptisens));
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::Family::kOptisens),
+                      static_cast<int>(gnss::familyFromU8(4U).value()));
     TEST_ASSERT_EQUAL(
         static_cast<int>(gnss::Family::kUnknown),
         static_cast<int>(gnss::familyFromU8(static_cast<uint8_t>(gnss::Family::kUnknown)).value()));
     // 越界（旧格式/损坏的 NVS 值）必须显式报告无效，而不是静默当成某个家族。
-    TEST_ASSERT_FALSE(gnss::familyFromU8(4U).has_value());
+    TEST_ASSERT_FALSE(gnss::familyFromU8(5U).has_value());
     TEST_ASSERT_FALSE(gnss::familyFromU8(0xFFU).has_value());
 
     TEST_ASSERT_EQUAL(
@@ -127,19 +149,28 @@ static void testU8Boundaries()
     TEST_ASSERT_FALSE(gnss::modelFromU8(0xFFU).has_value());
 }
 
-// familyName 覆盖全部枚举值（main 的追踪文本依赖它，驱动接入后替换了 main 的 switch）。
+/**
+ * @brief  校验 familyName 覆盖全部枚举值（含 kOptisens）
+ * @note   单线程主机测试
+ */
 static void testFamilyNames()
 {
     TEST_ASSERT_EQUAL_STRING("unknown", gnss::familyName(gnss::Family::kUnknown));
     TEST_ASSERT_EQUAL_STRING("unicore", gnss::familyName(gnss::Family::kUnicore));
     TEST_ASSERT_EQUAL_STRING("ublox", gnss::familyName(gnss::Family::kUblox));
     TEST_ASSERT_EQUAL_STRING("comnav", gnss::familyName(gnss::Family::kComnav));
+    TEST_ASSERT_EQUAL_STRING("optisens", gnss::familyName(gnss::Family::kOptisens));
 }
 
+/**
+ * @brief  校验未启用驱动的家族经 receiverFor 返回 nullptr
+ * @note   单线程主机测试
+ */
 static void testDisabledFamilyNotFound()
 {
     if (kExpectedUnicore == 0) {
         TEST_ASSERT_NULL(gnss::receiverFor(gnss::Family::kUnicore));
+        TEST_ASSERT_NULL(gnss::receiverFor(gnss::Family::kOptisens));
     }
     if (kExpectedUblox == 0) {
         TEST_ASSERT_NULL(gnss::receiverFor(gnss::Family::kUblox));

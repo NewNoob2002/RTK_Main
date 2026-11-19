@@ -43,6 +43,12 @@ const Receiver *receiverFor(Family family) noexcept
             return receiver;
         }
     }
+#if GNSS_ENABLE_UNICORE
+    // Optisens CM680 随 Unicore 驱动启用，但不单占探测表项（共用 VERSIONA 探测命令）。
+    if (family == Family::kOptisens) {
+        return &detail::kCm680Receiver;
+    }
+#endif
     return nullptr;
 }
 
@@ -73,8 +79,9 @@ Family familyOf(Model model) noexcept
     case Model::kUm980:
     case Model::kUm981:
     case Model::kUm982:
-    case Model::kCm680:
         return Family::kUnicore;
+    case Model::kCm680:
+        return Family::kOptisens;
     case Model::kZedF9p:
         return Family::kUblox;
     case Model::kK803:
@@ -94,6 +101,8 @@ const char *familyName(Family family) noexcept
         return "ublox";
     case Family::kComnav:
         return "comnav";
+    case Family::kOptisens:
+        return "optisens";
     case Family::kUnknown:
     default:
         return "unknown";
@@ -110,6 +119,8 @@ std::optional<Family> familyFromU8(uint8_t value) noexcept
         return Family::kUblox;
     case static_cast<uint8_t>(Family::kComnav):
         return Family::kComnav;
+    case static_cast<uint8_t>(Family::kOptisens):
+        return Family::kOptisens;
     case static_cast<uint8_t>(Family::kUnknown):
         return Family::kUnknown;
     default:

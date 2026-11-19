@@ -24,7 +24,7 @@ struct Candidate {
  * @brief 从启用驱动里取出与提示同家族的那个（提示组合在探测顺序里排最前）。
  * @param receivers: 启用的驱动表。
  * @param hint: 上次探测的提示。
- * @retval 指针: 同家族驱动；无提示或未启用时 nullptr。
+ * @retval 指针: 同家族或复用同一探测命令的驱动；无提示或未启用时 nullptr。
  */
 const Receiver *hintReceiver(std::span<const Receiver *const> receivers, const Hint &hint) noexcept
 {
@@ -34,6 +34,16 @@ const Receiver *hintReceiver(std::span<const Receiver *const> receivers, const H
     for (const Receiver *receiver : receivers) {
         if (receiver != nullptr && receiver->family() == hint.family) {
             return receiver;
+        }
+    }
+    // Optisens CM680 与 Unicore 共用 VERSIONA 探测帧，不单独占 enabledReceivers() 表项，
+    // 避免冷启动多跑一轮；缓存命中 kOptisens 时通过已启用的 Unicore 驱动映射到 CM680 实例。
+    if (hint.family == Family::kOptisens) {
+        for (const Receiver *receiver : receivers) {
+            if (receiver != nullptr && receiver->family() == Family::kUnicore) {
+                const Receiver &mapped = receiver->forModel(Model::kCm680);
+                return (mapped.family() == Family::kOptisens) ? &mapped : receiver;
+            }
         }
     }
     return nullptr;

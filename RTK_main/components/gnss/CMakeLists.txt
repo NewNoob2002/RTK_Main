@@ -6,7 +6,7 @@ set(_gnss_drivers UNICORE UBLOX COMNAV)
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/pascal_case.cmake)
 set(_gnss_srcs src/NmeaParser.cpp src/NmeaParserNumeric.cpp src/NmeaParserPosition.cpp
                src/NmeaParserSatellites.cpp src/Controller.cpp src/ControllerProbe.cpp src/ControllerConfigure.cpp src/ControllerMaintenance.cpp
-               src/Registry.cpp src/Receiver.cpp src/PppSequence.cpp)
+               src/Registry.cpp src/Receiver.cpp src/PppSequence.cpp src/GgaQualityGate.cpp)
 
 if(ESP_PLATFORM)
     set(_srcs ${_gnss_srcs})

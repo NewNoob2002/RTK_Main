@@ -39,6 +39,22 @@ bool supportsPpp(Model model) noexcept
     }
 }
 
+bool supportsSatMask(Model model) noexcept
+{
+    switch (model) {
+    case Model::kUm980:
+    case Model::kUm981:
+    case Model::kUm982:
+    case Model::kCm680:
+        return true;
+    case Model::kZedF9p:
+    case Model::kK803:
+    case Model::kUnknown:
+    default:
+        return false;
+    }
+}
+
 void PppSequence::start(bool enabled) noexcept
 {
     commands_ = enabled ? std::span<const std::string_view>{kEnable}

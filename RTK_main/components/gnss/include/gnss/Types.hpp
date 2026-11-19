@@ -13,9 +13,10 @@ namespace gnss {
 /** 命令方言家族；同一家族共用命令语法与应答格式（ADR-0010 §2.2）。顺序即 NVS 存储值，只能追加。 */
 enum class Family : uint8_t {
     kUnknown = 0,
-    kUnicore, // UM980/UM981/UM982 等 N4 平台：ASCII 命令 + "$command,...,response: OK" 应答
-    kUblox,   // ZED-F9P 等 M9/F9 代：UBX CFG-VALSET/ACK
-    kComnav,  // 司南 K803 等：NovAtel 风格 ASCII（实验性，手册未核实）
+    kUnicore,  // UM980/UM981/UM982 等 N4 平台：ASCII 命令 + "$command,...,response: OK" 应答
+    kUblox,    // ZED-F9P 等 M9/F9 代：UBX CFG-VALSET/ACK
+    kComnav,   // 司南 K803 等：NovAtel 风格 ASCII（实验性，手册未核实）
+    kOptisens, // Optisens CM680：与 Unicore N4 命令集兼容的独立厂商家族（ADR-0012 §2.9 修订 B）
 };
 
 /** 具体型号；顺序即 NVS 存储值，只能追加。 */
@@ -26,7 +27,7 @@ enum class Model : uint8_t {
     kUm982,
     kZedF9p,
     kK803,
-    kCm680, // Unicore 指令集兼容；NVS 按数值保存，只能追加（ADR-0012 §2.9）。
+    kCm680, // Optisens 家族，Unicore 指令集兼容；NVS 按数值保存，只能追加（ADR-0012 §2.9）。
 };
 
 /**
@@ -158,12 +159,12 @@ struct SatTable {
 /**
  * @brief  家族的短名
  * @param  family: 家族枚举
- * @retval 静态字符串（"unicore"/"ublox"/"comnav"）；未知或越界返回 "unknown"
+ * @retval 静态字符串（"unicore"/"ublox"/"comnav"/"optisens"）；未知或越界返回 "unknown"
  * @note   线程/ISR 安全：是（只读常量）
  */
 [[nodiscard]] const char *familyName(Family family) noexcept;
 /**
- * @brief  NVS 读回的范围校验：等价于 `value <= static_cast<uint8_t>(Family::kComnav)`，
+ * @brief  NVS 读回的范围校验：等价于 `value <= static_cast<uint8_t>(Family::kOptisens)`，
  *         但不把最后一个枚举值写死在调用方（ADR-0012 §2.3）
  * @param  value: NVS 中的原始字节
  * @retval 对应的 Family；越界值（旧格式/损坏）返回 std::nullopt，由调用方决定回落策略

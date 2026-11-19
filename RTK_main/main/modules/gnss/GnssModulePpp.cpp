@@ -29,7 +29,8 @@ namespace {
 bool GnssModule::canStartPhonePpp() noexcept
 {
     return controller().state() == ::gnss::State::kRunning && !boot_baud_pending_ &&
-           !baud_deferred_ && pending_apply_ == PendingApply::kNone &&
+           !boot_baud_in_flight_ && !boot_baud_save_in_flight_ && !baud_deferred_ &&
+           pending_apply_ == PendingApply::kNone &&
            !(work_mode_.has_value() && work_mode_->inFlight());
 }
 
@@ -58,7 +59,7 @@ void GnssModule::cmdPhoneSatCfg(const fw::Command &cmd, fw::CommandResult &resul
         result.status = fw::Result::kInvalidArg;
     } else if (!canStartPhonePpp()) {
         result.status = fw::Result::kBusy;
-    } else if (controller().receiver().family() != ::gnss::Family::kUnicore) {
+    } else if (!::gnss::supportsSatMask(controller().detected().probe.model)) {
         result.status = fw::Result::kNotSupported;
     } else if (!ctx().bootConfig.userNvsReady || ctx().bootConfig.safeDefaults) {
         result.status = fw::Result::kInvalidState;
@@ -111,7 +112,7 @@ void GnssModule::startPendingPhoneConfig() noexcept
     if (phone_sat_replay_) {
         phone_sat_replay_ = false;
         const auto saved = ctx().data.phoneSatConfig.read();
-        if (saved.has_value() && (controller().receiver().family() == ::gnss::Family::kUnicore)) {
+        if (saved.has_value() && ::gnss::supportsSatMask(controller().detected().probe.model)) {
             static_cast<void>(phone_sat_.start(toSatMaskConfig(*saved)));
             return;
         }

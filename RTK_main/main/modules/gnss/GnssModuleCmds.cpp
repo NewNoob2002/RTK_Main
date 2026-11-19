@@ -101,6 +101,10 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
         result.status = fw::Result::kInvalidState;
         return;
     }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetGgaGate) {
+        cmdSetGgaGate(cmd, rtos::nowMs(), result);
+        return;
+    }
     if (phone_ppp_.active() || phone_sat_.active()) {
         result.status = fw::Result::kBusy;
         return;
@@ -289,6 +293,86 @@ void GnssModule::sendRaw(const fw::Command &cmd, fw::CommandResult &result) noex
     // 驱动返回非负写入字节数，最大为 line.size()，uint32_t 足以表示。
     uart_tx_bytes_ += static_cast<uint32_t>(written);
     result.status = fw::Result::kOk;
+}
+
+bool GnssModule::ggaAllowed() const noexcept
+{
+    return (context_ != nullptr) ? context_->data.ggaAllowed() : true;
+}
+
+void GnssModule::cmdSetGgaGate(const fw::Command &cmd, uint32_t nowMs,
+                               fw::CommandResult &result) noexcept
+{
+    constexpr uint8_t kValidFlags = kGgaGateFlagEnabled | kGgaGateFlagMinSats;
+    if ((cmd.argLen != kGgaGateCmdArgLen) || (cmd.args[0] == 0U) ||
+        ((cmd.args[0] & ~kValidFlags) != 0U)) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    ::gnss::GgaGateConfig next = gga_gate_cfg_;
+    if (!gga_gate_min_sats_loaded_) {
+        next.minSats = ::gnss::GgaGateConfig::kDefaultMinSats;
+    }
+    if ((cmd.args[0] & kGgaGateFlagEnabled) != 0U) {
+        if (cmd.args[1] > 1U) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+        next.enabled = (cmd.args[1] != 0U);
+    }
+    if ((cmd.args[0] & kGgaGateFlagMinSats) != 0U) {
+        if (cmd.args[2] > ::gnss::GgaGateConfig::kMaxMinSats) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+        next.minSats = cmd.args[2];
+    }
+    if (!gga_gate_.has_value() || !gga_gate_->setConfig(next)) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    gga_gate_cfg_ = next;
+    gga_gate_enabled_loaded_ = true;
+    gga_gate_min_sats_loaded_ = true;
+    publishGgaGateStatus();
+    gga_gate_save_pending_ = true;
+    gga_gate_save_changed_ms_ = nowMs;
+    gga_gate_save_retry_ms_ = 0U;
+    result.status = fw::Result::kOk;
+}
+
+void GnssModule::tickGgaGateSave(uint32_t nowMs) noexcept
+{
+    constexpr uint32_t kGgaGateDebounceMs = 500U;
+    constexpr uint32_t kGgaGateRetryInitialMs = 1000U;
+    constexpr uint32_t kGgaGateRetryMaxMs = 30000U;
+    if (!gga_gate_save_pending_) {
+        return;
+    }
+    if ((nowMs - gga_gate_save_changed_ms_) < kGgaGateDebounceMs) {
+        return;
+    }
+    if ((gga_gate_save_retry_ms_ != 0U) &&
+        ((nowMs - gga_gate_save_attempt_ms_) < gga_gate_save_retry_ms_)) {
+        return;
+    }
+    if (!ctx().bootConfig.userNvsReady || ctx().bootConfig.safeDefaults) {
+        gga_gate_save_pending_ = false;
+        return;
+    }
+    const fw::Result res = ctx().storage.saveKeys(
+        std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kGgaGateKeyIndex, 2U>());
+    if (fw::isOk(res)) {
+        gga_gate_save_pending_ = false;
+        gga_gate_save_retry_ms_ = 0U;
+    } else {
+        gga_gate_save_attempt_ms_ = nowMs;
+        gga_gate_save_retry_ms_ = (gga_gate_save_retry_ms_ == 0U)
+                                      ? kGgaGateRetryInitialMs
+                                      : std::min(gga_gate_save_retry_ms_ * 2U, kGgaGateRetryMaxMs);
+        FW_LOGW(fw::TraceCat::kGnss, "<cfg> GGA gate save failed (%s), retry in %lu ms",
+                fw::toString(res), static_cast<unsigned long>(gga_gate_save_retry_ms_));
+    }
 }
 
 } // namespace app

@@ -106,7 +106,7 @@ bool phoneStartSatConfig(void *ctx, const core::SatTrackConfig &cfg) noexcept
     const auto status = data.gnssStatus.read();
     const auto previous = data.phoneSatCommand.read().seq;
     if ((previous != data.phoneSatResult.read().seq) || !status.enabled ||
-        (status.family != ::gnss::Family::kUnicore)) {
+        !::gnss::supportsSatMask(status.model)) {
         return false;
     }
     fw::Command command{};

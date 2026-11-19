@@ -21,6 +21,7 @@
 #include "fw/Result.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/NmeaParser.hpp"
+#include "GgaQualityGate.hpp"
 #include "PhoneCompatService.hpp"
 #include "PppSequence.hpp"
 
@@ -297,6 +298,51 @@ public:
      * @note 仅 kIo 串行路径，不阻塞，非 ISR。
      */
     static fw::Result saveOut(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    /**
+     * @brief 从 NVS 编码恢复 GGA 质量门控开关
+     * @param obj: 未使用；通过 appContext().gnss 定位单例
+     * @param in: 1 字节值（0/1）
+     * @retval kOk 已应用
+     * @retval kInvalidArg 输入不足或数值越界
+     * @note 仅启动期加载或 kIo 串行路径，不阻塞，非 ISR。
+     */
+    static fw::Result loadGgaGate(void *obj, std::span<const uint8_t> in) noexcept;
+    /**
+     * @brief 把 GGA 质量门控开关编码供 NVS 保存
+     * @param obj: 未使用；通过 appContext().gnss 定位单例
+     * @param[out] out: 输出缓冲
+     * @param[out] len: 成功为 1，失败不变
+     * @retval kOk 已写入并更新 len
+     * @retval kInvalidArg 输出不足，len 不变
+     * @note 仅 kIo 串行路径，不阻塞，非 ISR。
+     */
+    static fw::Result saveGgaGate(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    /**
+     * @brief 从 NVS 编码恢复 GGA 质量门控最低卫星数
+     * @param obj: 未使用；通过 appContext().gnss 定位单例
+     * @param in: 1 字节值（0..40）
+     * @retval kOk 已应用
+     * @retval kInvalidArg 输入不足或数值越界
+     * @note 仅启动期加载或 kIo 串行路径，不阻塞，非 ISR。
+     */
+    static fw::Result loadGgaMinSats(void *obj, std::span<const uint8_t> in) noexcept;
+    /**
+     * @brief 把 GGA 质量门控最低卫星数编码供 NVS 保存
+     * @param obj: 未使用；通过 appContext().gnss 定位单例
+     * @param[out] out: 输出缓冲
+     * @param[out] len: 成功为 1，失败不变
+     * @retval kOk 已写入并更新 len
+     * @retval kInvalidArg 输出不足，len 不变
+     * @note 仅 kIo 串行路径，不阻塞，非 ISR。
+     */
+    static fw::Result saveGgaMinSats(const void *obj, std::span<uint8_t> out, size_t &len) noexcept;
+    /**
+     * @brief 查询当前 GGA 质量门控是否允许输出 GGA（蓝牙直传/查询与将来 4G NTRIP 共用）
+     * @retval true 允许输出 GGA
+     * @retval false 当前处于阻断态，应丢弃 GGA
+     * @note 无锁原子读取，任意任务安全，不阻塞。
+     */
+    [[nodiscard]] bool ggaAllowed() const noexcept;
 
     /**
      * @brief 从 NVS 加载 gnss.base 组指定槽位的键值。
@@ -760,6 +806,22 @@ private:
     /** @brief 查询配置通道是否空闲。 @retval true PPP 或 0x06 可启动。 @note 仅 kIo。 */
     [[nodiscard]] bool canStartPhonePpp() noexcept;
 
+    /** @brief 处理 GGA 质量门控配置命令并安排去抖落盘。 @param cmd: 门控配置命令。 @param nowMs: 当前时钟。 @param[out] result: 执行结果。 @note 仅 kIo。 */
+    void cmdSetGgaGate(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
+    /** @brief 推进 GGA 质量门控配置的去抖 NVS 保存与失败重试。 @param nowMs: 当前时钟。 @note 仅 kIo，写 NVS 可阻塞。 */
+    void tickGgaGateSave(uint32_t nowMs) noexcept;
+    /** @brief 将 GGA 质量门控状态快照与放行原子标志发布到 DataCenter。 @note 仅 kIo 或启动初始化。 */
+    void publishGgaGateStatus() noexcept;
+
+    std::optional<::gnss::GgaQualityGate> gga_gate_{};
+    ::gnss::GgaGateConfig gga_gate_cfg_{};
+    bool gga_gate_enabled_loaded_ = false;
+    bool gga_gate_min_sats_loaded_ = false;
+    bool gga_gate_save_pending_ = false;
+    uint32_t gga_gate_save_changed_ms_ = 0U;
+    uint32_t gga_gate_save_attempt_ms_ = 0U;
+    uint32_t gga_gate_save_retry_ms_ = 0U;
+
     ::gnss::PppSequence phone_ppp_{};
     uint32_t phone_ppp_seq_ = 0U;
     bool phone_ppp_enabled_ = false;
@@ -778,6 +840,7 @@ private:
     uint32_t baud_fail_count_ = 0U;
     bool boot_baud_pending_ = false;
     bool boot_baud_in_flight_ = false;
+    bool boot_baud_save_in_flight_ = false;
     bool baud_save_in_flight_ = false;
     uint32_t requested_baud_ = 0U;
     bool auto_save_in_flight_ = false;

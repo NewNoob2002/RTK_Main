@@ -205,6 +205,27 @@ ErrorCode validateSn(std::string_view text, CanonicalValue &out) noexcept
     return ErrorCode::kNone;
 }
 
+/**
+ * @brief  校验闭区间整数键的取值范围。
+ * @param  minValue: 最小允许值（含）。
+ * @param  maxValue: 最大允许值（含）。
+ * @param  text:     文本值。
+ * @param[out] out: 成功时提交规范整数；失败保持原内容。
+ * @retval kNone     通过
+ * @retval kBadValue 格式错误或越界
+ */
+ErrorCode validateIntRange(int32_t minValue, int32_t maxValue, std::string_view text,
+                           CanonicalValue &out) noexcept
+{
+    int32_t number = 0;
+    if (!parseStrictInt(text, number) || number < minValue || number > maxValue) {
+        return ErrorCode::kBadValue;
+    }
+    out.kind = ValueKind::kInt;
+    out.number = number;
+    return ErrorCode::kNone;
+}
+
 } // namespace
 
 const KeySpec *findKey(std::string_view name) noexcept
@@ -228,6 +249,8 @@ ErrorCode validateValue(const KeySpec &spec, std::string_view text, CanonicalVal
         return validateSn(text, out);
     case KeyKind::kBool:
         return validateBool(text, out);
+    case KeyKind::kIntRange:
+        return validateIntRange(spec.minValue, spec.maxValue, text, out);
     default:
         return ErrorCode::kBadValue;
     }

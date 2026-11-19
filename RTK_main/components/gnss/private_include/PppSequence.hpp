@@ -21,6 +21,15 @@ namespace gnss {
  */
 [[nodiscard]] bool supportsPpp(Model model) noexcept;
 
+/**
+ * @brief 判断指定接收机型号是否支持 0x06 截止角/星座开关脚本（MASK/UNMASK/CONFIG SBAS）。
+ * @param model: 探测得到的接收机型号。
+ * @retval true UM980/UM981/UM982 与兼容 Unicore 指令集的 CM680 支持。
+ * @retval false 其他或未知型号不支持。
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] bool supportsSatMask(Model model) noexcept;
+
 class PppSequence final {
 public:
     static constexpr uint32_t kReplyMs = 1000U;

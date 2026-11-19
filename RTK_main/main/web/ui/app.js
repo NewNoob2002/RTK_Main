@@ -123,6 +123,8 @@
     setControlsEnabled(false);
     syncRateSeg("");
     $("const-box").classList.add("hide");
+    $("cfg-gga-gate").checked = false;
+    $("cfg-gga-min-sats").value = "8";
     $("d-sn").textContent = "--";
     $("fac-sn").value = "";
     $("bt-wl").replaceChildren();
@@ -226,6 +228,16 @@
       }
     }
     $("const-box").classList.toggle("hide", !hasConst);
+
+    if (Object.prototype.hasOwnProperty.call(cfg, "gga_gate") && cfg.gga_gate &&
+        typeof cfg.gga_gate === "object") {
+      if (typeof cfg.gga_gate.enabled === "boolean") {
+        $("cfg-gga-gate").checked = cfg.gga_gate.enabled;
+      }
+      if (typeof cfg.gga_gate.min_sats === "number") {
+        $("cfg-gga-min-sats").value = String(cfg.gga_gate.min_sats);
+      }
+    }
 
     if (Object.prototype.hasOwnProperty.call(cfg, "factory.sn")) {
       var sn = String(cfg["factory.sn"] || "");
@@ -448,6 +460,23 @@
         sendReq({ t: "set", key: key, value: this.checked ? "1" : "0" }, $("msg-gnss"));
       });
     }
+
+    $("cfg-gga-gate").addEventListener("change", function () {
+      sendReq(
+        { t: "set", key: "gnss.gga_gate.enabled", value: this.checked ? "1" : "0" },
+        $("msg-gnss")
+      );
+    });
+
+    $("cfg-gga-min-sats").addEventListener("change", function () {
+      var raw = this.value.trim();
+      if (!/^(0|[1-9][0-9]*)$/.test(raw) || Number(raw) > 40) {
+        setMsg($("msg-gnss"), false, "Min satellites must be an integer between 0 and 40");
+        syncControls(lastConfig);
+        return;
+      }
+      sendReq({ t: "set", key: "gnss.gga_gate.min_sats", value: raw }, $("msg-gnss"));
+    });
 
     $("btn-gnss-save").addEventListener("click", function () {
       sendReq({ t: "cmd", name: "save" }, $("msg-gnss"));

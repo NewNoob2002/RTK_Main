@@ -52,7 +52,7 @@ public:
     [[nodiscard]] std::span<const demux::Decoder *const> decoders() const noexcept override;
     /** UM980/UM981 能力；不含 kHeading（双天线由 Um982Receiver 覆盖）。 */
     [[nodiscard]] uint32_t caps(Model model) const noexcept override;
-    /** kUm982 → detail::kUm982Receiver，其余 → *this。 */
+    /** kCm680 → detail::kCm680Receiver，kUm982 → detail::kUm982Receiver，其余 → *this。 */
     [[nodiscard]] const Receiver &forModel(Model model) const noexcept override;
     [[nodiscard]] bool buildProbe(CmdBuf &out) const noexcept override;
     [[nodiscard]] bool matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
@@ -149,7 +149,33 @@ public:
     [[nodiscard]] std::string_view name() const noexcept override; // "unicore-um982"
     /** 家族能力 + kHeading。 */
     [[nodiscard]] uint32_t caps(Model model) const noexcept override;
-    /** 型号驱动不再细分：返回 *this。 */
+    /** kCm680 → detail::kCm680Receiver，其余返回 *this。 */
+    [[nodiscard]] const Receiver &forModel(Model model) const noexcept override;
+};
+
+/** Optisens CM680 叶子类：归属 kOptisens 家族，命令/应答/波特率与 CRC 全部复用 UnicoreReceiver（ADR-0012 §2.9 修订 B）。 */
+class Cm680Receiver final : public UnicoreReceiver {
+public:
+    constexpr Cm680Receiver() noexcept = default;
+
+    /**
+     * @brief  返回 CM680 所属厂商家族
+     * @retval Family::kOptisens
+     * @note   纯函数，线程/ISR 安全
+     */
+    [[nodiscard]] Family family() const noexcept override;
+    /**
+     * @brief  返回 Optisens 驱动诊断名
+     * @retval "optisens"
+     * @note   纯函数，线程/ISR 安全
+     */
+    [[nodiscard]] std::string_view name() const noexcept override;
+    /**
+     * @brief  按探测型号返回对应叶子类实例
+     * @param  model: 探测得到的型号
+     * @retval kCm680 返回 *this；其余型号交由 Unicore 基准驱动分派
+     * @note   纯函数，线程/ISR 安全
+     */
     [[nodiscard]] const Receiver &forModel(Model model) const noexcept override;
 };
 
