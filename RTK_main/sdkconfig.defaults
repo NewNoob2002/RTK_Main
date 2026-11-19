@@ -51,3 +51,6 @@ CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
 # C++（ADR-0002，T2）：与 IDF v6.1 默认值一致，显式写出以免被改动（CPP-001/002）
 CONFIG_COMPILER_CXX_EXCEPTIONS=n
 CONFIG_COMPILER_CXX_RTTI=n
+
+# 蓝牙 HCI 日志只保留错误：手机频繁切换 sniff/active 时 Bluedroid 以 WARNING 打印每次 mode change，刷屏且无诊断价值（2026-11-19 P2 HIL）
+CONFIG_BT_LOG_HCI_TRACE_LEVEL_ERROR=y
