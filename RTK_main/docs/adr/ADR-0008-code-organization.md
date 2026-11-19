@@ -163,5 +163,5 @@ RTK_main/
 1. 不使用 ESP-IDF 已有组件名（`bt`、`console`、`log` 等），否则会覆盖 IDF 组件。
 2. 顶层命名空间不与 POSIX 函数同名（`alarm`、`link`、`sync` 等）；嵌套使用（`proto::alarm`）可以。
 3. C 前缀用完整组件名，不用裸 `spp_`（Bluedroid 已有 `spp_*`/`btc_spp_*`）。
-4. **不改**：NVS 命名空间 `"rtk"` 与键 `"sn"`、`"alarm_wl"`；蓝牙名 `E1-Lite-xxxx`；协议字节；Kconfig 选项名 `CONFIG_RTK_*`（改名会让现有 sdkconfig 失效，菜单标题可改）。
+4. **不改**：NVS 命名空间 `"rtk"` 与键 `"sn"`、`"alarm_wl"`；蓝牙名格式由 N1 改为 `<product>-<SN>`（2026-11-19）；协议字节；Kconfig 选项名 `CONFIG_RTK_*`（改名会让现有 sdkconfig 失效，菜单标题可改）。
 5. 分两步：R7a 组件目录 + 命名空间 + include 根；R7b C 标识符前缀 + 日志 tag + 任务名。每步固件尺寸除符号字符串外一致，全部主机测试通过，冻结清单重算。

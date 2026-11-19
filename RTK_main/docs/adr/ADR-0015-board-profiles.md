@@ -88,7 +88,7 @@ P2 无保持脚。GPIO4（`TELL_MCU_KEY`）经 Q16 模拟按键按下，电源�
 
 ### 2.6 不变
 
-- 蓝牙名 `E1-Lite-<SN>`、NVS 命名空间 `"rtk"`、产品 Kconfig 前缀 `RTK_*` 不变（AGENTS.md §2）。是否按板改蓝牙名另行决定。
+- 蓝牙名按板卡产品名 `<product>-<SN>`（N1，2026-11-19）；NVS 命名空间 `"rtk"`、产品 Kconfig 前缀 `RTK_*` 不变（AGENTS.md §2）。是否按板改蓝牙名另行决定。
 - 模块清单 `module_list.inc` 仍编译期决定。按 `features` 在运行期跳过模块的机制，等第一个 P2 专有模块（4G/OLED/充电）
   落地时由对应任务卡引入（YAGNI）。
 

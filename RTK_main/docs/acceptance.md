@@ -31,7 +31,7 @@ GitHub Actions（`.github/workflows/gates.yml`，push/PR 触发）调用同一�
 | ID | 场景 | 步骤 | 通过标准 |
 | --- | --- | --- | --- |
 | HIL-0 | test_apps/rtk_pure 上板 | pytest-embedded 运行冒烟用例 | 全部 PASS |
-| HIL-1 | 广播与手机连接 | 上电，手机搜索 | 名称 `E1-Lite-<SN>`，无多余字符；免 PIN 配对；`status` 显示 1 个 PHONE |
+| HIL-1 | 广播与手机连接 | 上电，手机搜索 | 名称 `<product>-<SN>`（P2 为 `P2-<SN>`），无多余字符；免 PIN 配对；`status` 显示 1 个 PHONE |
 | HIL-2 | 手机 App 兼容 | 用现有 App 查询 0x01/0x02/0x03/0x07/0x0D/0x14/0x15，并设置 0x07/0x14 | App 正常显示，无超时；设置后再次查询，回显一致 |
 | HIL-3 | 手机与报警器同时在线（scatternet） | 手机连接后，报警器开机自动连接；保持 30 min，期间手机持续查询 | 两个会话一直在线；0x40 推送间隔 1000±200 ms；手机应答 ≤ 100 ms。**不通过则把 `RTK_LINK_POLICY` 切换为 PHONE_PREEMPT，并做 HIL-3b** |
 | HIL-3b | 手机优先降级 | PHONE_PREEMPT 下重复 HIL-3 | 手机接入时报警器被断开；手机断开后报警器 ≤ 15 s 内自动回连 |

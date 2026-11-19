@@ -60,7 +60,7 @@ ADR-0015（P2 板级识别）、ADR-0016 Q1（量产需要控制台以外的工�
 
 ### 2.3 Wi-Fi 与 HTTP
 
-- SoftAP：SSID 与蓝牙名相同（`E1-Lite-XXXX`），信道 1–11 中固定一个，最多 2 个终端，IP `192.168.4.1/24`，DHCP 服务开启。
+- SoftAP：SSID 与蓝牙名相同（`<product>-<SN>`，如 `P2-B5F2`），信道 1–11 中固定一个，最多 2 个终端，IP `192.168.4.1/24`，DHCP 服务开启。
   WPA2-PSK，**所有设备同一个口令**（§7 Q3），由 Kconfig `RTK_WIFI_AP_PASSWORD` 给出（8–63 个字符，编译期
   `static_assert` 检查长度）；默认值 `12345678`（用户 2026-11-19 指定的量产口令）。
   工厂分组另需解锁口令（与控制台 `factory unlock` 相同）。

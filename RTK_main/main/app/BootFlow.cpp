@@ -116,7 +116,7 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
     const esp_reset_reason_t reason = esp_reset_reason();
     const char *name = app::resetReasonName(reason);
     // 版本串短于 int 上限，精度转换安全。
-    FW_LOGI(fw::TraceCat::kSys, "E1-Lite RTK_main %.*s", static_cast<int>(app::kAppVersion.size()),
+    FW_LOGI(fw::TraceCat::kSys, "RTK_main %.*s", static_cast<int>(app::kAppVersion.size()),
             app::kAppVersion.data());
     FW_LOGI(fw::TraceCat::kSys, "board %s, console profile %s", app::board::current().name,
             app::kConsoleProfileName);

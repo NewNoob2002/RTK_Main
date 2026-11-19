@@ -141,7 +141,7 @@ void PublishLink(uint32_t now_ms);
 
 ADR-0008 §9 的对照如下。组件按用途命名，统一名称不改变职责与可复用性。
 公共基础错误码位于 `app_fw` 的 `fw/Status.hpp`，使用 `fw::Status`、`fw::isOk`、`fw::toString`，枚举值及字符串映射不变。
-C 头文件名与符号前缀取组件前缀（`dev_proto_*`、`spp_server_*`、`nvs_store_*`）；NVS 命名空间 `"rtk"`、键值、蓝牙名与 `RTK_*` Kconfig 选项保持不变。
+C 头文件名与符号前缀取组件前缀（`dev_proto_*`、`spp_server_*`、`nvs_store_*`）；NVS 命名空间 `"rtk"`、键值与 `RTK_*` Kconfig 选项保持不变。
 
 | 组件目录 | 命名空间 | C++ include 根 |
 | --- | --- | --- |
