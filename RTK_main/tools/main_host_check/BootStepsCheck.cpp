@@ -1,13 +1,16 @@
 // Host 单元测试（R8a）：启动步骤执行器的结果分类、降级中断、继续语义、故障注入与记录边界。
 // 线程：单线程测试进程，非 ISR。
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <span>
 #include <string_view>
 
 #include "app/BootSteps.hpp"
+#include "app/ConsoleProfile.hpp"
 
 namespace {
 
@@ -40,6 +43,9 @@ struct Fake {
     uint32_t now = kBaseMs;
     app::BootHeap heap{kHeapSnapshot};
     uint32_t degradeCalls = 0U;
+    bool consoleInitSucceeds = false;
+    size_t consoleCallCount = 0U;
+    std::array<char, 3U> consoleCalls{};
     const char *degradeReason = nullptr;
     std::array<uint32_t, kCallSlots> calls{};
 };
@@ -69,6 +75,7 @@ void resetFake() noexcept
     s_fake.now = kBaseMs;
     s_fake.heap = kHeapSnapshot;
     s_fake.degradeCalls = 0U;
+    s_fake.consoleCallCount = 0U;
     s_fake.degradeReason = nullptr;
     s_fake.calls.fill(0U);
 }
@@ -243,6 +250,76 @@ void testIdentifyFailure() noexcept
     CHECK(s_fake.calls[0] == 0U);
 }
 
+/**
+ * @brief 将一次控制台钩子调用写入顺序记录，超出预期容量则累计失败
+ * @param call: I 表示 init、A 表示 attach、R 表示 run
+ * @note 单线程主机测试，非 ISR。
+ */
+void recordConsoleCall(char call) noexcept
+{
+    CHECK(s_fake.consoleCallCount < s_fake.consoleCalls.size());
+    if (s_fake.consoleCallCount < s_fake.consoleCalls.size()) {
+        s_fake.consoleCalls[s_fake.consoleCallCount++] = call;
+    }
+}
+
+/**
+ * @brief 用生产步骤表验证各档位遇到故障时的控制台钩子调用顺序
+ * @note 单线程主机测试，非 ISR。
+ */
+template <app::ConsoleProfile Profile> void testConsoleDegrade() noexcept
+{
+#define BOOT_STEP(name, fn, policy) app::BootStep{#name, &stepOk, app::OnFail::policy},
+    constexpr std::array kSteps{
+#include "app/BootStepList.inc"
+    };
+#undef BOOT_STEP
+    CHECK(std::ranges::any_of(kSteps, [](const app::BootStep &step) {
+        return std::string_view{step.name} == "console";
+    }));
+
+    struct ConsoleFault {
+        const char *step;
+        bool initSucceeds;
+        bool consoleReached;
+        std::string_view replCalls;
+    };
+    constexpr std::array kFaults{
+        ConsoleFault{"power", true, false, "IAR"},
+        ConsoleFault{"power", false, false, "I"},
+        ConsoleFault{"console", false, true, "AR"},
+        ConsoleFault{"alloc", false, true, "AR"},
+    };
+    for (const auto &fault : kFaults) {
+        resetFake();
+        s_fake.consoleInitSucceeds = fault.initSucceeds;
+        std::array<app::BootRecord, app::kMaxBootSteps> records{};
+        app::BootCtx ctx{};
+        ctx.hooks = &kFakeHooks;
+        ctx.faultStep = fault.step;
+        const auto executed = app::runBootSteps(kSteps, ctx, records);
+        const auto prefix = std::span{records}.first(executed);
+        CHECK(!prefix.empty() && std::string_view{prefix.back().name} == fault.step);
+        CHECK(!prefix.empty() && prefix.back().result == app::BootResult::kFail);
+        CHECK(s_fake.degradeCalls == 1U);
+        const bool consoleReached = std::ranges::any_of(prefix, [](const app::BootRecord &record) {
+            return std::string_view{record.name} == "console";
+        });
+        CHECK(consoleReached == fault.consoleReached);
+        app::finishDegradedConsole<Profile,
+                                   []() noexcept {
+                                       recordConsoleCall('I');
+                                       return s_fake.consoleInitSucceeds;
+                                   },
+                                   []() noexcept { recordConsoleCall('A'); },
+                                   []() noexcept { recordConsoleCall('R'); }>(consoleReached);
+        const std::string_view calls{s_fake.consoleCalls.data(), s_fake.consoleCallCount};
+        const auto expected =
+            Profile == app::ConsoleProfile::kNone ? std::string_view{} : fault.replCalls;
+        CHECK(calls == expected);
+    }
+}
+
 } // namespace
 
 int main()
@@ -253,6 +330,9 @@ int main()
     testFaultInjection();
     testRecordBounds();
     testIdentifyFailure();
+    testConsoleDegrade<app::ConsoleProfile::kDev>();
+    testConsoleDegrade<app::ConsoleProfile::kProduction>();
+    testConsoleDegrade<app::ConsoleProfile::kNone>();
     if (s_failures != 0) {
         std::printf("boot_steps_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;

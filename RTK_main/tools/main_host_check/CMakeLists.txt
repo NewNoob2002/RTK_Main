@@ -233,6 +233,27 @@ target_compile_options(boot_steps_check PRIVATE -fno-exceptions -fno-rtti -Wall 
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 add_test(NAME boot_steps COMMAND boot_steps_check)
 
+# 主机分别验证无 Kconfig 选择时的 DEV 回退，以及显式 PRODUCTION/NONE 映射。
+foreach(profile Dev Production None)
+    string(TOUPPER "${profile}" profile_config)
+    string(TOLOWER "${profile}" profile_name)
+    set(profile_target console_profile_check)
+    if(NOT profile STREQUAL "Dev")
+        string(APPEND profile_target "_${profile_name}")
+    endif()
+    add_executable(${profile_target} ConsoleProfileCheck.cpp)
+    target_include_directories(${profile_target} PRIVATE ${PROJ_ROOT}/main)
+    target_compile_definitions(${profile_target} PRIVATE
+        EXPECTED_CONSOLE_PROFILE=k${profile} EXPECTED_CONSOLE_PROFILE_NAME="${profile_name}")
+    if(NOT profile STREQUAL "Dev")
+        target_compile_definitions(${profile_target} PRIVATE CONFIG_RTK_CONSOLE_PROFILE_${profile_config}=1)
+    endif()
+    target_compile_options(${profile_target} PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+        -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
+        -Wimplicit-fallthrough -Wswitch-default -Wundef)
+    add_test(NAME ${profile_target} COMMAND ${profile_target})
+endforeach()
+
 add_executable(board_profile_check BoardProfileCheck.cpp ${PROJ_ROOT}/main/board/BoardProfile.cpp)
 target_include_directories(board_profile_check PRIVATE ${PROJ_ROOT}/main)
 target_compile_definitions(board_profile_check PRIVATE CONFIG_RTK_GNSS_UART_NUM=2)

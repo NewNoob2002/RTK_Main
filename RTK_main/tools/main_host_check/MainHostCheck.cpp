@@ -1199,6 +1199,16 @@ void storageStartup()
         console.remove_prefix(header + 1U);
         CHECK(!console.empty() && log.find(console) != std::string_view::npos);
     }
+
+    s_store_log.consoleSize = 0U;
+    char buildGroup[] = "build";
+    argv[1] = buildGroup;
+    cli::setOutSink(&captureStoreConsole, false);
+    CHECK(config.handler(config.ctx, static_cast<int>(argv.size()), argv.data()) == 0);
+    cli::setOutSink(nullptr, false);
+    const std::string_view build{s_store_log.console.data(), s_store_log.consoleSize};
+    CHECK(build.starts_with("[build]\n  console        UART0 2000000 baud\n"
+                            "  console_profile dev\n"));
 }
 
 /** @brief 验证启动计数、诊断校验、存储阶段只装载剩余键及不可用时的降级。 */

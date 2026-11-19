@@ -107,6 +107,12 @@ if [ "$SKIP_IDF" -eq 0 ]; then
     gate G3-idf-trace-off idf_build "$PREFIX-trace-off" \
         -DSDKCONFIG="$ROOT/builds/$PREFIX-trace-off/sdkconfig" \
         -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;builds/$PREFIX-trace-off/trace_off.defaults"
+    gate G3-idf-production idf_build "$PREFIX-production" \
+        -DSDKCONFIG="$ROOT/builds/$PREFIX-production/sdkconfig" \
+        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;configs/production.defaults"
+    gate G3-idf-console-none idf_build "$PREFIX-console-none" \
+        -DSDKCONFIG="$ROOT/builds/$PREFIX-console-none/sdkconfig" \
+        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;configs/console-none.defaults"
     for t in esp32 esp32c3; do
         gate "G3b-rtk_pure-$t" idf_build "$PREFIX-rtk_pure-$t" -C test_apps/rtk_pure \
             -DIDF_TARGET="$t" -DSDKCONFIG="$ROOT/builds/$PREFIX-rtk_pure-$t/sdkconfig"

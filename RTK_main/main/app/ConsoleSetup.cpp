@@ -4,6 +4,7 @@
 #include "modules/system/FactoryReset.hpp"
 #include "app/App.hpp"
 
+#include <algorithm>
 #include <array>
 #include <span>
 #include <string_view>
@@ -12,6 +13,7 @@
 #include "esp_log.h"
 
 #include "AppContext.hpp"
+#include "app/ConsoleRegistration.hpp"
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
 #include "rtos/EspStatus.hpp"
@@ -81,41 +83,84 @@ bool installDirectLog() noexcept
 struct VerbGroupDef {
     const char *name;
     const char *summary;
-    std::span<const cli::Verb> verbs;
+    std::span<const cli::Verb> (*verbs)() noexcept;
 };
 
 /**
- * @brief 登记全部命令表，并把 handler 包进 phase 门控
- * @retval true: 全部登记成功；false: 表超容量或 cli::add 失败（已记日志）
+ * @brief 查询名字表中启用的登记项
+ * @param names: 按构建档位生成的名字表，空项标记为禁用
+ * @param name: 待查询的命令或动词组名
+ * @retval true 名字有效且当前档位启用
+ * @retval false 名字为空或未启用
+ * @note 纯查询，可在任意任务或 ISR 调用。
+ */
+constexpr bool isEnabled(std::span<const std::string_view> names, std::string_view name) noexcept
+{
+    return !name.empty() && std::ranges::find(names, name) != names.end();
+}
+
+/**
+ * @brief 把命令表中启用的命令追加到启动阶段门控表
+ * @param table: 模块提供的原始命令表
+ * @param names: 当前档位的命令名字表
+ * @param[out] used: 已写入的条目数，容量不足时保留已写入的前缀
+ * @retval true 表中启用的命令已全部追加
+ * @retval false 门控表容量不足
+ * @note 仅启动任务在 REPL 放行前调用，非 ISR，不阻塞。
+ */
+bool appendGatedCommands(std::span<const cli::Cmd> table, std::span<const std::string_view> names,
+                         size_t &used) noexcept
+{
+    for (const auto &command : table) {
+        if (!isEnabled(names, command.name)) {
+            continue;
+        }
+        if (used >= s_gated_commands.size()) {
+            return false;
+        }
+        s_command_gates[used] = {command.handler, command.ctx,
+                                 console_registration::isSafe(command.name)};
+        s_gated_commands[used] = command;
+        s_gated_commands[used].handler = &gatedCommand;
+        s_gated_commands[used].ctx = &s_command_gates[used];
+        ++used;
+    }
+    return true;
+}
+
+/**
+ * @brief 登记当前档位的命令，并把 handler 包进 phase 门控
+ * @retval true 登记成功
+ * @retval false 表超容量或 cli::add 失败
  * @note 仅启动期单线程调用；输出通道先于业务堆分配建立。
  */
 bool registerCommandTables() noexcept
 {
-    const std::array cmdTables{
-        systemCmds(),  linkCmds(),         configCmds(), rtcmCmds(),
+    constexpr auto kNames =
+        console_registration::commandNames(kConsoleProfile, RTK_GNSS_ENABLED, FW_TRACE_ENABLED);
+    constexpr auto kEnabled = [names = kNames](std::string_view name) {
+        return isEnabled(names, name);
+    };
+    // 在编译时去掉关闭的表引用，使链接器可以回收对应处理函数。
+    constexpr std::array kCmdTables{
+        (kEnabled("status") || kEnabled("log") || kEnabled("sys")) ? &systemCmds : nullptr,
+        (kEnabled("bt") || kEnabled("alarm")) ? &linkCmds : nullptr,
+        kEnabled("config") ? &configCmds : nullptr,
+        kEnabled("rtcm") ? &rtcmCmds : nullptr,
 #if RTK_GNSS_ENABLED
-        gnssCmds(),
+        kEnabled("gnss") ? &gnssCmds : nullptr,
 #endif
 #if FW_TRACE_ENABLED
-        debugCmds(),
+        kEnabled("debug") ? &debugCmds : nullptr,
 #endif
-        factoryCmds(), factoryResetCmds(),
+        kEnabled("factory") ? &factoryCmds : nullptr,
+        kEnabled("freset") ? &factoryResetCmds : nullptr,
     };
     // 命令表地址在 init 后不可变；handler 经 phase 原子门控。
     size_t used = 0U;
-    for (const auto table : cmdTables) {
-        for (const auto &command : table) {
-            if (used >= s_gated_commands.size()) {
-                return false;
-            }
-            const std::string_view name{command.name};
-            s_command_gates[used] = {command.handler, command.ctx,
-                                     name == "status" || name == "log" || name == "sys" ||
-                                         name == "config"};
-            s_gated_commands[used] = command;
-            s_gated_commands[used].handler = &gatedCommand;
-            s_gated_commands[used].ctx = &s_command_gates[used];
-            ++used;
+    for (const auto table : kCmdTables) {
+        if (table != nullptr && !appendGatedCommands(table(), kNames, used)) {
+            return false;
         }
     }
     if (cli::add(std::span{s_gated_commands}.first(used)) != ESP_OK) {
@@ -126,30 +171,37 @@ bool registerCommandTables() noexcept
 }
 
 /**
- * @brief 登记全部动词组供 help / help <group> 展示
- * @retval true: 全部登记成功；false: cli::addVerbs 失败（已记日志）
+ * @brief 登记当前档位的动词组供 help / help <group> 展示
+ * @retval true 登记成功
+ * @retval false cli::addVerbs 失败（已记日志）
  * @note 仅启动期单线程调用；必须在 cli::init 之前完成。
  */
 bool registerVerbGroups() noexcept
 {
-    // 动词表与命令表不是一一对应（system 命令表提供 status/log/sys 三组，link/config 没有动词组），
-    // 因此保持两张清单，避免 X-macro 编码出虚假的对应关系。
-    const std::array verbGroups{
-        VerbGroupDef{"status", "system and link status (default overview)", statusVerbs()},
-        VerbGroupDef{"log", "runtime IDF log level", logVerbs()},
-        VerbGroupDef{"sys", "system info, heap, mem, tasks, boot and reboot", sysVerbs()},
-        VerbGroupDef{"rtcm", "RTCM forwarding stats and reset", rtcmVerbs()},
+    constexpr auto kNames =
+        console_registration::verbGroupNames(kConsoleProfile, RTK_GNSS_ENABLED, FW_TRACE_ENABLED);
+    constexpr auto kGroup = [names = kNames](const char *name, const char *summary, auto verbs) {
+        return isEnabled(names, name) ? VerbGroupDef{name, summary, verbs} : VerbGroupDef{};
+    };
+    constexpr std::array kVerbGroups{
+        kGroup("status", "system and link status (default overview)", &statusVerbs),
+        kGroup("log", "runtime IDF log level", &logVerbs),
+        kGroup("sys", "system info, heap, mem, tasks, boot and reboot", &sysVerbs),
+        kGroup("rtcm", "RTCM forwarding stats and reset", &rtcmVerbs),
 #if RTK_GNSS_ENABLED
-        VerbGroupDef{"gnss", "GNSS receiver control and telemetry", gnssVerbs()},
+        kGroup("gnss", "GNSS receiver control and telemetry", &gnssVerbs),
 #endif
 #if FW_TRACE_ENABLED
-        VerbGroupDef{"debug", "trace categories, report and NVS", debugVerbs()},
+        kGroup("debug", "trace categories, report and NVS", &debugVerbs),
 #endif
-        VerbGroupDef{"bt", "Bluetooth pairing and alarm trust", btVerbs()},
-        VerbGroupDef{"factory", "production settings (hidden, needs unlock)", factoryVerbs()},
+        kGroup("bt", "Bluetooth pairing and alarm trust", &btVerbs),
+        kGroup("factory", "production settings (hidden, needs unlock)", &factoryVerbs),
     };
-    for (const auto &group : verbGroups) {
-        const esp_err_t verbsErr = cli::addVerbs(group.name, group.summary, group.verbs);
+    for (const auto &group : kVerbGroups) {
+        if (group.verbs == nullptr) {
+            continue;
+        }
+        const esp_err_t verbsErr = cli::addVerbs(group.name, group.summary, group.verbs());
         if (verbsErr != ESP_OK) {
             FW_LOGE(fw::TraceCat::kSys, "console verbs failed: %s", esp_err_to_name(verbsErr));
             return false;

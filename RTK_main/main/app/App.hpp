@@ -66,14 +66,14 @@ void bindExecutors() noexcept;
 [[nodiscard]] bool installDirectLog() noexcept;
 
 /**
- * @brief  建立控制台输出通道并登记全部命令表（来自各模块清单），REPL 任务创建但不放行。
+ * @brief 建立控制台输出通道并登记当前档位的命令，REPL 任务创建但不放行。
  * @retval false 失败（由 console 步骤降级）
  * @note   启动任务调用，须早于任何业务任务（会重装 UART0 驱动）。
  */
 [[nodiscard]] bool initConsole() noexcept;
 
 /**
- * @brief  放行 REPL：打印提示符、开始接收命令。启动流程最后调用，成功与降级路径都会走到。
+ * @brief 放行 REPL，供 DEV 和 PRODUCTION 在启动成功或降级时调用。
  * @note   initConsole 失败时只记录错误。
  */
 void runConsole() noexcept;
