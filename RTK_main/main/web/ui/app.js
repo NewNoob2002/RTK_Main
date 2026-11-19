@@ -1,25 +1,27 @@
 (function () {
   "use strict";
 
-  var PERIODS = [
-    ["0", "关闭 (0)"],
-    ["50", "50 ms"],
-    ["100", "100 ms"],
-    ["200", "200 ms"],
-    ["500", "500 ms"],
-    ["1000", "1000 ms"]
+  var OUT_RATES = [
+    ["0", "Off", 0],
+    ["1000", "1 Hz", 1],
+    ["500", "2 Hz", 2],
+    ["200", "5 Hz", 5],
+    ["100", "10 Hz", 10],
+    ["50", "20 Hz", 20]
   ];
 
+  var OUT_IDS = ["cfg-gga", "cfg-gsa", "cfg-gsv", "cfg-gst", "cfg-rmc"];
+
   var ERR_MAP = {
-    bad_json: "报文格式错误 (bad_json)",
-    too_long: "报文过长 (too_long)",
-    unknown_key: "未知配置项 (unknown_key)",
-    bad_value: "参数值无效 (bad_value)",
-    locked: "工厂模式未解锁 (locked)",
-    busy: "设备忙，请稍后重试 (busy)",
-    unsupported: "当前设备不支持 (unsupported)",
-    failed: "执行失败 (failed)",
-    timeout: "操作超时 (timeout)"
+    bad_json: "Invalid message format (bad_json)",
+    too_long: "Message too long (too_long)",
+    unknown_key: "Unknown setting (unknown_key)",
+    bad_value: "Invalid value (bad_value)",
+    locked: "Factory mode locked (locked)",
+    busy: "Device busy, try again (busy)",
+    unsupported: "Unsupported by device (unsupported)",
+    failed: "Operation failed (failed)",
+    timeout: "Request timed out (timeout)"
   };
 
   var ws = null;
@@ -74,13 +76,13 @@
   }
 
   function initSelects() {
-    var ids = ["cfg-gga", "cfg-gsa", "cfg-gsv", "cfg-gst", "cfg-rmc"];
-    for (var i = 0; i < ids.length; i++) {
-      var sel = $(ids[i]);
-      for (var j = 0; j < PERIODS.length; j++) {
+    for (var i = 0; i < OUT_IDS.length; i++) {
+      var sel = $(OUT_IDS[i]);
+      for (var j = 0; j < OUT_RATES.length; j++) {
         var opt = document.createElement("option");
-        opt.value = PERIODS[j][0];
-        opt.textContent = PERIODS[j][1];
+        opt.value = OUT_RATES[j][0];
+        opt.textContent = OUT_RATES[j][1];
+        opt.setAttribute("data-hz", String(OUT_RATES[j][2]));
         sel.appendChild(opt);
       }
     }
@@ -119,6 +121,7 @@
     lastConfig = {};
     setFactoryUnlocked(false);
     setControlsEnabled(false);
+    syncRateSeg("");
     $("const-box").classList.add("hide");
     $("d-sn").textContent = "--";
     $("fac-sn").value = "";
@@ -140,7 +143,7 @@
     cur.payload.id = nextId();
     var raw = JSON.stringify(cur.payload);
     if (utf8Bytes(raw) > MAX_FRAME_BYTES) {
-      setMsg(cur.msgEl, false, "失败: " + ERR_MAP.too_long);
+      setMsg(cur.msgEl, false, "Failed: " + ERR_MAP.too_long);
       syncControls(lastConfig);
       pump();
       return;
@@ -151,8 +154,8 @@
       ackTimer = null;
       if (inflight !== cur) return;
       inflight = null;
-      setMsg(cur.msgEl, false, "失败: " + ERR_MAP.timeout);
-      notifyDropped(queue, "未发送：请求超时，正在重连", cur.msgEl);
+      setMsg(cur.msgEl, false, "Failed: " + ERR_MAP.timeout);
+      notifyDropped(queue, "Not sent: request timed out, reconnecting", cur.msgEl);
       queue = [];
       syncControls(lastConfig);
       if (ws) ws.close();
@@ -162,16 +165,36 @@
 
   function sendReq(payload, msgEl, onOk) {
     if (byeReceived || rebootPending) {
-      setMsg(msgEl, false, "设备已重启，请关闭本页");
+      setMsg(msgEl, false, "Device rebooted, you may close this page");
       return;
     }
     if (!ws || ws.readyState !== 1 || !helloOk) {
-      setMsg(msgEl, false, "未连接到设备");
+      setMsg(msgEl, false, "Not connected to device");
       return;
     }
-    setMsg(msgEl, true, "正在发送...");
+    setMsg(msgEl, true, "Sending...");
     queue.push({ payload: payload, msgEl: msgEl, onOk: onOk || null });
     pump();
+  }
+
+  function syncOutRateLimits(rateVal) {
+    var rate = Number(rateVal);
+    for (var i = 0; i < OUT_IDS.length; i++) {
+      var opts = $(OUT_IDS[i]).options;
+      for (var j = 0; j < opts.length; j++) {
+        var hz = Number(opts[j].getAttribute("data-hz"));
+        opts[j].disabled = rate > 0 && hz > rate;
+      }
+    }
+    var hint = $("out-rate-hint");
+    if (!hint) return;
+    if (rate > 0 && rate < 20) {
+      hint.textContent = "Output rates above " + rate + " Hz are disabled (limited by positioning rate).";
+    } else if (rate >= 20) {
+      hint.textContent = "Output rates cannot exceed positioning rate (" + rate + " Hz).";
+    } else {
+      hint.textContent = "Output rates faster than positioning rate are disabled.";
+    }
   }
 
   function syncRateSeg(val) {
@@ -179,6 +202,7 @@
     for (var i = 0; i < btns.length; i++) {
       btns[i].classList.toggle("active", btns[i].getAttribute("data-rate") === String(val));
     }
+    syncOutRateLimits(val);
   }
 
   function syncControls(cfg) {
@@ -232,7 +256,7 @@
         var btn = document.createElement("button");
         btn.type = "button";
         btn.className = "btn btn-danger";
-        btn.textContent = "删除";
+        btn.textContent = "Remove";
         btn.addEventListener("click", function () {
           sendReq(
             { t: "set", key: "bt.wl.del", value: mac },
@@ -288,7 +312,7 @@
         var d = msg.dev;
         $("d-up").textContent = d.uptime_s !== undefined ? fmtUptime(d.uptime_s) : "--";
         if (d.heap_free !== undefined) {
-          var minTxt = d.heap_min !== undefined ? " (最低 " + fmtKb(d.heap_min) + ")" : "";
+          var minTxt = d.heap_min !== undefined ? " (min " + fmtKb(d.heap_min) + ")" : "";
           $("d-heap").textContent = fmtKb(d.heap_free) + minTxt;
         } else {
           $("d-heap").textContent = "--";
@@ -301,9 +325,9 @@
         $("g-model").textContent = (g.model !== undefined || g.fw !== undefined)
           ? ((g.model || "--") + " / " + (g.fw || "--")) : "--";
         $("g-fix").textContent = g.fix !== undefined ? g.fix : "--";
-        $("chip-fix").textContent = "定位: " + (g.fix !== undefined ? g.fix : "--");
+        $("chip-fix").textContent = "Fix: " + (g.fix !== undefined ? g.fix : "--");
         $("g-sats").textContent = g.sats !== undefined ? String(g.sats) : "--";
-        $("chip-sats").textContent = "卫星: " + (g.sats !== undefined ? String(g.sats) : "--");
+        $("chip-sats").textContent = "Sats: " + (g.sats !== undefined ? String(g.sats) : "--");
         $("g-hacc").textContent = g.hacc_mm !== undefined ? g.hacc_mm + " mm" : "--";
         $("g-hz").textContent = g.hz !== undefined ? g.hz + " Hz" : "--";
       }
@@ -319,16 +343,16 @@
       var cur = inflight;
       inflight = null;
       if (msg.ok) {
-        setMsg(cur.msgEl, true, "操作成功");
+        setMsg(cur.msgEl, true, "Success");
         if (cur.onOk) cur.onOk();
         if (cur.payload.t === "cmd" && (cur.payload.name === "exit" || cur.payload.name === "freset")) {
           rebootPending = true;
-          notifyDropped(queue, "未发送：设备即将重启", cur.msgEl);
+          notifyDropped(queue, "Not sent: device is rebooting", cur.msgEl);
           queue = [];
           return;
         }
       } else {
-        setMsg(cur.msgEl, false, "失败: " + (ERR_MAP[msg.err] || msg.err || "unknown"));
+        setMsg(cur.msgEl, false, "Failed: " + (ERR_MAP[msg.err] || msg.err || "unknown"));
         syncControls(lastConfig);
       }
       pump();
@@ -341,10 +365,10 @@
         clearTimeout(reconnTimer);
         reconnTimer = null;
       }
-      setConn("warn", "设备已重启");
+      setConn("warn", "Device rebooted");
       var txt = msg.reason === "freset"
-        ? "设备已恢复出厂设置并重启，可以关闭本页"
-        : "设备已切回蓝牙模式，可以关闭本页";
+        ? "Factory reset complete. Device is rebooting; you may close this page."
+        : "Device switched back to Bluetooth mode. You may close this page.";
       showBanner("ok", txt);
       if (ws) ws.close();
     }
@@ -358,11 +382,11 @@
     }
     var host = location.host || "192.168.4.1";
     var proto = location.protocol === "https:" ? "wss://" : "ws://";
-    setConn("warn", "正在连接...");
+    setConn("warn", "Connecting...");
     ws = new WebSocket(proto + host + "/ws");
 
     ws.onopen = function () {
-      setConn("ok", "已连接");
+      setConn("ok", "Connected");
       hideBanner();
     };
 
@@ -378,9 +402,9 @@
       ws = null;
       resetSessionState();
       if (byeReceived) return;
-      notifyDropped(dropped, "未发送：连接已断开", null);
-      setConn("err", "连接断开，2 秒后重连");
-      showBanner("warn", "WebSocket 连接已断开，正在尝试重新连接...");
+      notifyDropped(dropped, "Not sent: connection lost", null);
+      setConn("err", "Disconnected, reconnecting in 2s");
+      showBanner("warn", "WebSocket disconnected. Attempting to reconnect...");
       reconnTimer = setTimeout(connect, 2000);
     };
 
@@ -432,7 +456,7 @@
     $("btn-wl-add").addEventListener("click", function () {
       var mac = $("bt-mac").value.trim().toUpperCase();
       if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(mac)) {
-        setMsg($("msg-bt"), false, "请输入有效 MAC 地址，例如 AA:BB:CC:DD:EE:FF");
+        setMsg($("msg-bt"), false, "Enter a valid MAC address, e.g. AA:BB:CC:DD:EE:FF");
         return;
       }
       sendReq({ t: "set", key: "bt.wl.add", value: mac }, $("msg-bt"), function () {
@@ -443,7 +467,7 @@
     $("btn-unlock").addEventListener("click", function () {
       var tok = $("fac-token").value;
       if (!tok) {
-        setMsg($("msg-fac"), false, "请输入解锁口令");
+        setMsg($("msg-fac"), false, "Enter unlock token");
         return;
       }
       sendReq({ t: "unlock", token: tok }, $("msg-fac"), function () {
@@ -455,14 +479,14 @@
     $("btn-sn").addEventListener("click", function () {
       var sn = $("fac-sn").value.trim();
       if (!/^[0-9A-Za-z-]{1,16}$/.test(sn)) {
-        setMsg($("msg-fac"), false, "SN 须为 1-16 位字母、数字或连字符");
+        setMsg($("msg-fac"), false, "SN must be 1-16 alphanumeric characters or hyphens");
         return;
       }
       sendReq({ t: "set", key: "factory.sn", value: sn }, $("msg-fac"));
     });
 
     $("btn-freset").addEventListener("click", function () {
-      if (!confirm("确认恢复出厂设置？设备将清除配置并重启。")) return;
+      if (!confirm("Confirm factory reset? All settings will be cleared and the device will reboot.")) return;
       sendReq({ t: "cmd", name: "freset" }, $("msg-fac"));
     });
 

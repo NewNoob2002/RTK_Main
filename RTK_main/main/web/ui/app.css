@@ -159,6 +159,12 @@ html,body{
   font-size:13px;
   margin-bottom:8px;
 }
+.hint{
+  font-size:12px;
+  color:var(--muted);
+  margin:-4px 0 10px;
+  line-height:1.4;
+}
 .seg{
   display:grid;
   grid-template-columns:repeat(5,1fr);
@@ -222,6 +228,9 @@ select:focus,input:focus{
   outline:none;
   border-color:var(--accent);
   box-shadow:0 0 0 2px rgba(131,202,152,.22);
+}
+select option:disabled{
+  color:#6c737d;
 }
 .switches{
   display:grid;
