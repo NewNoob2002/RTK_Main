@@ -1,9 +1,10 @@
 // 执行器装配（ADR-0009）：静态模块表、链路/IO 执行器配置与消费者启停。
 // 线程：startLink/startIo/waitStarted/stopBootTasks 只在启动任务调用，可阻塞；
-//       kModules 与配置表为静态存储，启动完成后只读。不分配堆。
+//       模块表与配置表为静态只读存储。不分配堆。
 #include "app/App.hpp"
 #include "app/BootReasons.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 
@@ -15,20 +16,52 @@
 namespace {
 
 template <typename T> constexpr auto kModuleOps = fw::makeOps<T>();
-// 编号由 id() 保证无窄化；对象与操作表同为静态存储。
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays): 长度由 module_list.inc 展开推导
-constinit const fw::Module kModules[]{
-// X-macro 生成异构对象的注册项，constexpr 函数无法替代清单展开。
-#define MODULE_DEF(type, member, name, kind, executor, period)                                     \
-    {name,                                                                                         \
-     app::id(app::ModuleKind::kind),                                                               \
-     app::id(app::ExecKind::executor),                                                             \
-     period,                                                                                       \
-     &app::s_app.member,                                                                           \
-     &kModuleOps<app::type>},
+
+/**
+ * @brief 按启动模式生成执行器的静态模块表
+ * @retval 仅包含已启用模块的定长数组
+ * @note 仅编译期调用。
+ */
+template <app::RadioMode Mode> consteval auto makeModules() noexcept
+{
+    constexpr std::array kEnabled{
+#define MODULE_DEF(type, member, name, kind, executor, period, enable)                             \
+    app::moduleEnabled(Mode, app::ModuleEnable::enable),
 #include "module_list.inc"
 #undef MODULE_DEF
-};
+    };
+    // count 的结果不超过静态模块表长度，转为无符号安全。
+    std::array<fw::Module, static_cast<size_t>(std::ranges::count(kEnabled, true))> modules{};
+    size_t index = 0U;
+// X-macro 生成异构对象的注册项，constexpr 函数无法替代清单展开。
+#define MODULE_DEF(type, member, name, kind, executor, period, enable)                             \
+    if constexpr (app::moduleEnabled(Mode, app::ModuleEnable::enable)) {                           \
+        modules[index++] = {name,                                                                  \
+                            app::id(app::ModuleKind::kind),                                        \
+                            app::id(app::ExecKind::executor),                                      \
+                            period,                                                                \
+                            &app::s_app.member,                                                    \
+                            &kModuleOps<app::type>};                                               \
+    }
+#include "module_list.inc"
+#undef MODULE_DEF
+    return modules;
+}
+
+constexpr auto kBtModules = makeModules<app::RadioMode::kBluetooth>();
+constexpr auto kWifiModules = makeModules<app::RadioMode::kWifiConfig>();
+
+/**
+ * @brief 取得本次启动交给执行器的模块表
+ * @retval 固件全生命周期有效的静态表视图
+ * @note 仅启动任务在模式选定后调用，非 ISR，不阻塞。
+ */
+std::span<const fw::Module> activeModules() noexcept
+{
+    return app::s_app.radioMode == app::RadioMode::kBluetooth
+               ? std::span<const fw::Module>{kBtModules}
+               : std::span<const fw::Module>{kWifiModules};
+}
 
 constinit rtos::Executor s_link_executor{};
 #if RTK_GNSS_ENABLED
@@ -74,7 +107,13 @@ constexpr rtos::ExecutorConfig kLinkConfig{
                 vTaskDelete(nullptr);
                 return;
             }
-            app::s_app.bt_link.wait(maxMs);
+            if (app::s_app.radioMode == app::RadioMode::kBluetooth) {
+                app::s_app.bt_link.wait(maxMs);
+            } else if (maxMs != 0U) {
+                // 没有 SPP 可唤醒执行器，按执行器给出的空闲等待间隔处理命令与存储工作。
+                const TickType_t ticks = pdMS_TO_TICKS(maxMs);
+                vTaskDelay(ticks == 0U ? 1U : ticks);
+            }
         },
     .waitCtx = nullptr,
 };
@@ -89,7 +128,7 @@ constexpr rtos::ExecutorConfig kLinkConfig{
  */
 bool modulesReady(const rtos::Executor &executor, fw::ExecutorId id) noexcept
 {
-    for (const auto &module : kModules) {
+    for (const auto &module : activeModules()) {
         if ((module.executor == id) && !executor.moduleOk(module.id)) {
             return false;
         }
@@ -123,10 +162,10 @@ bool waitStarted(uint32_t bits) noexcept
 
 const char *startLink(std::span<StackType_t> linkStack, uint32_t &launched) noexcept
 {
-    const auto initialized =
-        s_app.linkExecutor->init(kLinkConfig, kModules, app::viewOf(s_app.linkStorage, linkStack));
+    const auto initialized = s_app.linkExecutor->init(kLinkConfig, activeModules(),
+                                                      app::viewOf(s_app.linkStorage, linkStack));
     if (!fw::isOk(initialized) || !modulesReady(*s_app.linkExecutor, kLinkConfig.id) ||
-        !s_app.data.systemStatus.read().btReady) {
+        (s_app.radioMode == RadioMode::kBluetooth && !s_app.data.systemStatus.read().btReady)) {
         return boot_reason::kLinkInit;
     }
     if (!fw::isOk(s_app.linkExecutor->start())) {
@@ -143,7 +182,7 @@ const char *startLink(std::span<StackType_t> linkStack, uint32_t &launched) noex
 const char *startIo(std::span<StackType_t> ioStack, uint32_t &launched) noexcept
 {
     const auto initialized =
-        s_app.ioExecutor->init(kIoConfig, kModules, app::viewOf(s_app.ioStorage, ioStack));
+        s_app.ioExecutor->init(kIoConfig, activeModules(), app::viewOf(s_app.ioStorage, ioStack));
     if (!fw::isOk(initialized) || !modulesReady(*s_app.ioExecutor, kIoConfig.id)) {
         return boot_reason::kIoInit;
     }
@@ -176,7 +215,7 @@ void stopBootTasks(uint32_t launched) noexcept
         s_app.bootArena.setDegradedReason(boot_reason::kStopGnss);
     }
 #endif
-    if (spp_server_stop_boot() != ESP_OK) {
+    if (s_app.radioMode == RadioMode::kBluetooth && spp_server_stop_boot() != ESP_OK) {
         s_app.bootArena.setDegradedReason(boot_reason::kStopSpp);
     }
     // SEALED 块始终保留至重启；SDK 停机失败或迟到回调也不回收其存储。

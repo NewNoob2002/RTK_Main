@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "esp_bt_device.h"
+#include "esp_bt.h"
 #include "esp_core_dump.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -151,6 +152,38 @@ app::BootResult stepEarlyConfig(app::BootCtx &ctx) noexcept
 }
 
 /**
+ * @brief 消费一次性射频请求，选择启动模式并归还 Wi-Fi 配置模式的 BTDM 内存
+ * @param ctx: 启动上下文，释放失败时写入诊断原因
+ * @retval kOk 已选择启动模式
+ * @retval kFail BTDM 内存释放失败，进入降级路径
+ * @note 仅启动任务，非 ISR，在绑定和初始化蓝牙之前调用。
+ * @note kWifiConfig 中释放 BTDM 内存后，本次启动禁止调用任何 esp_bt_* 控制器或设备 API。
+ */
+app::BootResult stepRadio(app::BootCtx &ctx) noexcept
+{
+    auto &self = app::appContext();
+    const auto selection = app::consumeRadioRequest();
+    self.radioMode = selection.mode;
+    self.radioReason = selection.reason;
+    FW_LOGI(fw::TraceCat::kSys, "radio=%s reason=%s", app::radioModeName(selection.mode),
+            app::radioReasonName(selection.reason));
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE)
+    if (selection.mode == app::RadioMode::kWifiConfig) {
+        const esp_err_t error = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+        if (error != ESP_OK) {
+            FW_LOGE(fw::TraceCat::kSys, "release BTDM controller failed: %s",
+                    esp_err_to_name(error));
+            ctx.reason = app::boot_reason::kReleaseBtMemory;
+            return app::BootResult::kFail;
+        }
+    }
+#else
+    static_cast<void>(ctx);
+#endif
+    return app::BootResult::kOk;
+}
+
+/**
  * @brief  启动步骤：绑定数据主题共享锁与执行器指针（启动顺序：contexts 先于 console）
  * @param  ctx: 启动上下文（未用）
  * @retval kOk 总是
@@ -278,7 +311,11 @@ app::BootResult stepStorage(app::BootCtx &ctx) noexcept
 app::BootResult stepSystem(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
-    app::appContext().system.prepare();
+    auto &self = app::appContext();
+    self.system.prepare();
+    if (self.radioMode == app::RadioMode::kBluetooth) {
+        self.system.startBt();
+    }
     return app::BootResult::kOk;
 }
 
@@ -420,19 +457,19 @@ void attachDebugLog() noexcept
 }
 
 /**
- * @brief  成功路径的启动摘要（SYS I 级日志）；数据全部来自 DataCenter，不额外探测硬件
- * @param  records: 已执行的启动步骤记录（用于总耗时）
+ * @brief 输出已启动的蓝牙名称、地址、会话和白名单
+ * @param self: 已启动的应用上下文
+ * @param system: 系统状态快照
+ * @note 仅启动任务，仅在 BT 模式调用，非 ISR。
  */
-void printBootSummary(std::span<const app::BootRecord> records) noexcept
+void printBluetoothSummary(const app::AppContext &self, const app::SystemStatus &system) noexcept
 {
-    const app::AppContext &self = app::appContext();
-    const auto system = self.data.systemStatus.read();
     const auto sessions = self.data.sessions.read();
     const auto link = self.data.linkStatus.read();
     FW_LOGI(fw::TraceCat::kSys, "storage online, SN %s, whitelist %u", system.sn.data(),
             static_cast<unsigned>(link.whitelistCount));
     core::BtAddr address{};
-    // 蓝牙已在链路执行器 init 中启用，此处取控制器地址；未启用时保持全零。
+    // 蓝牙已在系统步骤中启用；SDK 未返回地址时保持全零。
     if (const uint8_t *raw = esp_bt_dev_get_address(); raw != nullptr) {
         static_assert(sizeof(address.bytes) == ESP_BD_ADDR_LEN,
                       "controller address length must match BtAddr");
@@ -443,6 +480,22 @@ void printBootSummary(std::span<const app::BootRecord> records) noexcept
     FW_LOGI(fw::TraceCat::kSys, "bluetooth online, %s %s, %u/%u sessions", system.deviceName.data(),
             mac.data(), static_cast<unsigned>(sessions.count),
             static_cast<unsigned>(app::kMaxSessions));
+}
+
+/**
+ * @brief 输出成功启动的外设和内存摘要
+ * @param records: 已执行的启动步骤记录（用于总耗时）
+ * @note 仅启动任务，非 ISR。
+ */
+void printBootSummary(std::span<const app::BootRecord> records) noexcept
+{
+    const app::AppContext &self = app::appContext();
+    const auto system = self.data.systemStatus.read();
+    if (self.radioMode == app::RadioMode::kBluetooth) {
+        printBluetoothSummary(self, system);
+    } else {
+        FW_LOGI(fw::TraceCat::kSys, "storage online, SN %s", system.sn.data());
+    }
 #if RTK_GNSS_ENABLED
     const auto gnss = self.data.gnssStatus.read();
     // 状态槽尚未被 GNSS 模块 poll 刷新时回落到 Kconfig 默认波特率。

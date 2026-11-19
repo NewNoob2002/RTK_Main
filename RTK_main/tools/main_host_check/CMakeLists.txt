@@ -279,6 +279,13 @@ target_compile_options(boot_steps_check PRIVATE -fno-exceptions -fno-rtti -Wall 
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 add_test(NAME boot_steps COMMAND boot_steps_check)
 
+add_executable(radio_mode_check RadioModeCheck.cpp ${PROJ_ROOT}/main/app/RadioMode.cpp)
+target_include_directories(radio_mode_check PRIVATE ${PROJ_ROOT}/main)
+target_compile_options(radio_mode_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
+    -Wimplicit-fallthrough -Wswitch-default -Wundef)
+add_test(NAME radio_mode_check COMMAND radio_mode_check)
+
 # 主机分别验证无 Kconfig 选择时的 DEV 回退，以及显式 PRODUCTION/NONE 映射。
 foreach(profile Dev Production None)
     string(TOUPPER "${profile}" profile_config)

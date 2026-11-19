@@ -234,11 +234,14 @@ void testIdentifyFailure() noexcept
 #include "app/BootStepList.inc"
     };
 #undef BOOT_STEP
-    CHECK(steps.size() == 15U);
+    CHECK(steps.size() == 16U);
     CHECK(std::string_view{steps[0].name} == "identify");
     CHECK(std::string_view{steps[1].name} == "power");
     CHECK(std::string_view{steps[2].name} == "banner");
     CHECK(std::string_view{steps[3].name} == "earlyConfig");
+    CHECK(std::string_view{steps[4].name} == "radio");
+    CHECK(steps[4].onFail == app::OnFail::kDegrade);
+    CHECK(std::string_view{steps[5].name} == "contexts");
     steps[0].fn = &stepFail;
     std::array<app::BootRecord, app::kMaxBootSteps> records{};
     app::BootCtx ctx{};

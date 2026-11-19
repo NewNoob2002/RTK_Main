@@ -68,6 +68,9 @@ int btStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
  */
 int cmdAlarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
+    if (!requireBluetooth()) {
+        return cli::kCmdFail;
+    }
     if (argc != 1) {
         return cli::fail("usage: alarm");
     }
@@ -194,7 +197,7 @@ constexpr std::array<cli::Verb, 4U> kBtVerbs{{
 /** @brief 分派蓝牙动词。 @param ctx: 控制台上下文。 @param argc: 参数数。 @param argv: 参数。 @retval 0 成功。 */
 int cmdBt(void *ctx, int argc, char **argv) noexcept
 {
-    return cli::dispatch(kBtVerbs, ctx, argc, argv, "status");
+    return requireBluetooth() ? cli::dispatch(kBtVerbs, ctx, argc, argv, "status") : cli::kCmdFail;
 }
 
 constexpr std::array<cli::Cmd, 2U> kLinkCmds{{

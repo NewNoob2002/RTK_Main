@@ -37,6 +37,11 @@ public:
      */
     void prepare() noexcept;
     /**
+     * @brief 用已准备的设备名启动 SPP 服务，结果写回 systemStatus
+     * @note 仅启动期在 prepare 之后调用；可阻塞，非 ISR。
+     */
+    void startBt() noexcept;
+    /**
      * @brief 仅 kLink，非 ISR、非阻塞；发布系统和执行器状态，返回 false。
      * @param nowMs: 当前单调时间（毫秒）
      * @retval false 总是，无需立即再轮询
@@ -49,11 +54,6 @@ private:
      * @note 仅启动期单线程调用；esp_read_mac 非 ISR，不阻塞控制台。
      */
     void fillIdentity() noexcept;
-    /**
-     * @brief 校验 SN、生成 BT 名并启动 SPP 服务，结果写回 systemStatus
-     * @note 仅启动期单线程调用；spp_server_init 可阻塞（蓝牙控制器启动）。
-     */
-    void startBt() noexcept;
 
     /**
      * @brief 取得已绑定的应用上下文

@@ -53,7 +53,7 @@
    ```
 2. 在 `#else` 区域添加一行 6 参数宏展开：
    ```cpp
-   MODULE_DEF(DemoModule, demo, "demo", kDemo, kLink, 0)
+   MODULE_DEF(DemoModule, demo, "demo", kDemo, kLink, 0, kAlways)
    ```
 
 各列含义与顺序约束：

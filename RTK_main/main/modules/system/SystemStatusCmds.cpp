@@ -110,9 +110,9 @@ void printLinkSection() noexcept
  */
 void printSysSection() noexcept
 {
-    const auto &data = appContext().data;
+    const auto &self = appContext();
+    const auto &data = self.data;
     const auto system = data.systemStatus.read();
-    const auto link = data.linkStatus.read();
     const auto exec = data.execStats.read();
 
     const uint64_t freeKib = kibTenths(system.freeHeap);
@@ -121,8 +121,10 @@ void printSysSection() noexcept
     const uint64_t uptimeMs = (uptimeUs >= 0) ? (static_cast<uint64_t>(uptimeUs) / kUsPerMs) : 0ULL;
 
     cli::printSection("sys");
-    const auto *profile = appContext().boardProfile;
+    const auto *profile = self.boardProfile;
     cli::printKv("board", "%s", profile != nullptr ? profile->name : "unknown");
+    cli::outPrintf("  radio=%s reason=%s\n", radioModeName(self.radioMode),
+                   radioReasonName(self.radioReason));
     cli::printKv("uptime", "%" PRIu64 " ms", uptimeMs);
     cli::printKv("heap_free", "%" PRIu32 " B (%llu.%llu KB)", system.freeHeap,
                  static_cast<unsigned long long>(freeKib / kTenthsPerUnit),
@@ -130,7 +132,9 @@ void printSysSection() noexcept
     cli::printKv("heap_min", "%" PRIu32 " B (%llu.%llu KB)", system.minFreeHeap,
                  static_cast<unsigned long long>(minKib / kTenthsPerUnit),
                  static_cast<unsigned long long>(minKib % kTenthsPerUnit));
-    cli::printKv("snapshot_ms", "%" PRIu32 " ms", link.snapshotMs);
+    if (self.radioMode == RadioMode::kBluetooth) {
+        cli::printKv("snapshot_ms", "%" PRIu32 " ms", data.linkStatus.read().snapshotMs);
+    }
     cli::printKv("exec_rounds", "%" PRIu32, exec.rounds);
     cli::printKv("exec_overruns", "%" PRIu32, exec.overruns);
     cli::printKv("exec_max_rnd", "%" PRIu32 " ms", exec.maxRoundMs);
@@ -149,6 +153,18 @@ void printSysSection() noexcept
 }
 
 namespace {
+
+/**
+ * @brief 在组合状态报告中标记不可用的蓝牙与 RTCM 段
+ * @note 仅 console REPL 任务，输出可阻塞，非 ISR。
+ */
+void printWifiLinkStatus() noexcept
+{
+    cli::printSection("link");
+    cli::printKv("state", "%s", kUnavailableInWifi);
+    cli::printSection("rtcm");
+    cli::printKv("state", "%s", kUnavailableInWifi);
+}
 
 /** 首行输出前取得的链路概览数据。 */
 struct LinkOverview {
@@ -264,6 +280,12 @@ int cmdStatusOverview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     // 控制台输出可能阻塞，先采样以便 link 和 sys 共用同一份系统状态。
     const auto &data = appContext().data;
     const auto system = data.systemStatus.read();
+    const auto exec = data.execStats.read();
+    if (appContext().radioMode == RadioMode::kWifiConfig) {
+        printWifiLinkStatus();
+        printStatusSys(system, exec);
+        return 0;
+    }
     const LinkOverview overview{
         .link = data.linkStatus.read(),
         .sessions = data.sessions.read(),
@@ -272,7 +294,6 @@ int cmdStatusOverview(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     };
     const auto rtcm = data.rtcmStats.read();
     const auto demux = data.demuxStats.read();
-    const auto exec = data.execStats.read();
 
     printStatusLink(system, overview);
     printStatusRtcm(rtcm, demux);
@@ -327,6 +348,9 @@ int cmdStatusLink(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     if (argc != 1) {
         return cli::fail("usage: status link");
     }
+    if (!requireBluetooth()) {
+        return cli::kCmdFail;
+    }
     printLinkSection();
     return 0;
 }
@@ -335,6 +359,9 @@ int cmdStatusRtcm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: status rtcm");
+    }
+    if (!requireBluetooth()) {
+        return cli::kCmdFail;
     }
     printRtcmStatus();
     return 0;
@@ -363,8 +390,12 @@ int cmdStatusAll(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     if (argc != 1) {
         return cli::fail("usage: status all");
     }
-    printLinkSection();
-    printRtcmStatus();
+    if (appContext().radioMode == RadioMode::kBluetooth) {
+        printLinkSection();
+        printRtcmStatus();
+    } else {
+        printWifiLinkStatus();
+    }
     printGnssSection();
     printSysSection();
     return 0;

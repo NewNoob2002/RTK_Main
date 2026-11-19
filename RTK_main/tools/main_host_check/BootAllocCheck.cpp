@@ -323,6 +323,31 @@ void testProductionAllocationPlan() noexcept
     }
 }
 
+/**
+ * @brief 验证 Wi-Fi 配置模式跳过 SPP 缓冲并保留 GNSS 所需的存储
+ * @note 单线程主机测试，非 ISR。
+ */
+void testWifiAllocationPlan() noexcept
+{
+    app::s_app.radioMode = app::RadioMode::kWifiConfig;
+    FaultAllocCtx ctx{};
+    auto ops = makeOps(ctx);
+    app::BootBuffers buffers{};
+    CHECK(app::allocateBootBuffers(buffers, &ops));
+    for (const auto &entry : app::s_app.bootArena.entries()) {
+        const std::string_view tag{entry.tag};
+        CHECK(!tag.starts_with("spp.") && tag != "task.spp_worker");
+    }
+#if RTK_GNSS_ENABLED
+    CHECK(!buffers.gnssDemux.empty() && !buffers.rtcmPipe.empty());
+#endif
+    CHECK(app::bindBootBuffers(buffers) == nullptr);
+    app::rollbackBootBindings(buffers, "test:wifi");
+    CHECK(ctx.liveAllocs == 0U);
+    resetTestArena();
+    app::s_app.radioMode = app::RadioMode::kBluetooth;
+}
+
 void testBindingRollbackAndSealedLifetime() noexcept
 {
     constexpr size_t kStages = 1U + (FW_TRACE_ENABLED ? 1U : 0U) + (RTK_GNSS_ENABLED ? 3U : 0U);
@@ -571,6 +596,7 @@ int main()
     testArenaLifecycleAndValidation();
     testArenaMaxEntriesAndFaultInjection();
     testProductionAllocationPlan();
+    testWifiAllocationPlan();
     testBindingRollbackAndSealedLifetime();
     testConsoleGateAndTaskAdmission();
     testMemoryReport();

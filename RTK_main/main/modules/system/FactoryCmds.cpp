@@ -148,7 +148,7 @@ int cmdSn(void * /*ctx*/, int argc, char **argv) noexcept
 int wlEdit(bool add, int argc, char **argv) noexcept
 {
     const char *const op = add ? "wl-add" : "wl-del";
-    if (!requireUnlocked()) {
+    if (!requireBluetooth() || !requireUnlocked()) {
         return cli::kCmdFail;
     }
     if ((argc != static_cast<int>(kTwoArgs)) || (argv == nullptr)) {
@@ -194,7 +194,7 @@ int cmdWlDel(void * /*ctx*/, int argc, char **argv) noexcept
  */
 int cmdWlClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
-    if (!requireUnlocked()) {
+    if (!requireBluetooth() || !requireUnlocked()) {
         return cli::kCmdFail;
     }
     if (argc != 1) {
@@ -215,7 +215,7 @@ int cmdWlClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
  */
 int cmdPair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
-    if (!requireUnlocked()) {
+    if (!requireBluetooth() || !requireUnlocked()) {
         return cli::kCmdFail;
     }
     if (argc != 1) {
@@ -234,7 +234,7 @@ int cmdPair(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
  */
 int cmdAlarmSet(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    if (!requireUnlocked()) {
+    if (!requireBluetooth() || !requireUnlocked()) {
         return cli::kCmdFail;
     }
     if ((argc != static_cast<int>(kThreeArgs)) || (argv == nullptr)) {
@@ -267,7 +267,7 @@ int cmdAlarmSet(void * /*ctx*/, int argc, char **argv) noexcept
  */
 int cmdAlarmClear(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
-    if (!requireUnlocked()) {
+    if (!requireBluetooth() || !requireUnlocked()) {
         return cli::kCmdFail;
     }
     if (argc != 1) {

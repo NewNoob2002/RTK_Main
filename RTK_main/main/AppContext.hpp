@@ -9,6 +9,7 @@
 
 #include "AppConfig.hpp"
 #include "app/BootConfig.hpp"
+#include "app/RadioMode.hpp"
 #include "fw/Atomic.hpp"
 #include "data/AppData.hpp"
 #if RTK_GNSS_ENABLED
@@ -85,13 +86,15 @@ struct AppContext {
     static constexpr size_t kModuleCount = 0
 // X-macro 生成计数表达式，函数无法展开注册清单；前导 + 不可单独加括号。
 // NOLINTNEXTLINE(bugprone-macro-parentheses)
-#define MODULE_DEF(type, member, name, kind, executor, period) +1
+#define MODULE_DEF(type, member, name, kind, executor, period, enable) +1
 #include "module_list.inc"
 #undef MODULE_DEF
         ;
 
     rtos::BootArena bootArena{};
     BootConfig bootConfig{};
+    RadioMode radioMode = RadioMode::kBluetooth; // 启动任务在绑定上下文前写入，随后只读。
+    std::optional<RadioReason> radioReason{};
     const board::Profile *boardProfile = nullptr; // 启动任务发布，之后只读。
     std::atomic<BootPhase> bootPhase{};
     std::atomic<uint32_t> bootArrived{};
@@ -114,7 +117,7 @@ struct AppContext {
     void boot() noexcept;
     data::DataCenter data{};
 // X-macro 生成异构成员声明（全零默认初值落 .bss），constexpr 函数不能替代。
-#define MODULE_DEF(type, member, name, kind, executor, period) type member{};
+#define MODULE_DEF(type, member, name, kind, executor, period, enable) type member{};
 #include "module_list.inc"
 #undef MODULE_DEF
     // 执行器本体含冻结非零默认成员（next_seq_/stats_mux_），由 AppMain.cpp 独立定义并以指针绑定，避免拖入 .data。
@@ -127,14 +130,17 @@ struct AppContext {
 #endif
 
     /**
-     * @brief 把模块的上下文指针绑定到本实例
+     * @brief 把当前启动模式启用的模块绑定到本实例
      * @note 仅启动前单线程调用，不阻塞，非 ISR。
 
      */
     void bindContexts() noexcept
     {
 // X-macro 批量绑定成员上下文指针，避免手写遗漏。
-#define MODULE_DEF(type, member, name, kind, executor, period) member.bindContext(*this);
+#define MODULE_DEF(type, member, name, kind, executor, period, enable)                             \
+    if (moduleEnabled(radioMode, ModuleEnable::enable)) {                                          \
+        (member).bindContext(*this);                                                               \
+    }
 #include "module_list.inc"
 #undef MODULE_DEF
     }

@@ -14,6 +14,7 @@ inline constexpr const char *kBindGnss = "bind:gnss";
 inline constexpr const char *kRollbackSppInUse = "rollback:spp_in_use";
 
 // 模块初始化步骤（BootFlow）
+inline constexpr const char *kReleaseBtMemory = "radio:bt_mem_release";
 inline constexpr const char *kDebugInit = "debug_init";
 inline constexpr const char *kStorageInit = "storage_init";
 inline constexpr const char *kTaskStartTimeout = "task_start_timeout";

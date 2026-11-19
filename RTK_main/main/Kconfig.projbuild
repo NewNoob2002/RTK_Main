@@ -74,7 +74,7 @@ menu "RTK_main"
         string "Force a boot step to fail (HIL only, R8a)"
         default ""
         help
-            仅用于台架验证启动降级路径：填步骤名（identify/power/banner/earlyConfig/contexts/console/alloc/bind/seal/
+            仅用于台架验证启动降级路径：填步骤名（identify/power/banner/earlyConfig/radio/contexts/console/alloc/bind/seal/
             debug/storage/system/link/io/started）时该步不执行并返回失败，原因记为 ``fault:<step>``。
             留空即正常启动。不得在产品固件中填写。
 
@@ -113,6 +113,13 @@ menu "RTK_main"
             Key for the hidden `factory unlock <key>` console command (ADR-0009 §2.10).
             Factory commands write production settings (SN, alarm whitelist) or force
             alarm state; keep the key out of customer documentation.
+
+    config RTK_WIFI_CONFIG_ENABLE
+        bool "Enable Wi-Fi configuration radio mode (ADR-0017)"
+        default y
+        help
+            Allow selecting Wi-Fi configuration mode at the next software restart.
+            Disable to boot in Bluetooth mode and omit the radio console command.
 
     menu "GNSS (ADR-0010)"
 

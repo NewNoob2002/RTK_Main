@@ -25,7 +25,7 @@ enum class OnFail : uint8_t { kDegrade = 0, kContinue };
 
 /** 故障注入原因缓冲：容纳 "fault:" 加最长步骤名。 */
 inline constexpr size_t kBootReasonBytes = 40U;
-/** 步骤表容量上限；生产表 15 项，用于固定 BootRecord 存储边界。 */
+/** 步骤表容量上限；生产表 16 项，用于固定 BootRecord 存储边界。 */
 inline constexpr size_t kMaxBootSteps = 16U;
 
 /** 一次堆快照，单位字节。 */

@@ -70,7 +70,7 @@ constexpr std::array<cli::Verb, 2U> kRtcmVerbs{{
  */
 int cmdRtcm(void *ctx, int argc, char **argv) noexcept
 {
-    return cli::dispatch(kRtcmVerbs, ctx, argc, argv);
+    return requireBluetooth() ? cli::dispatch(kRtcmVerbs, ctx, argc, argv) : cli::kCmdFail;
 }
 
 constexpr std::array<cli::Cmd, 1U> kRtcmCmds{{

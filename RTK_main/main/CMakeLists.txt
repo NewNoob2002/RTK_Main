@@ -24,6 +24,7 @@ idf_component_register(
          "app/BootSteps.cpp"
          "app/ConsoleSetup.cpp"
          "app/Executors.cpp"
+         "app/RadioMode.cpp"
          "board/BoardCurrent.cpp"
          "board/BoardProfile.cpp"
          "board/BoardStartup.cpp"
@@ -35,7 +36,7 @@ idf_component_register(
          ${module_sources}
     INCLUDE_DIRS "."
     PRIV_INCLUDE_DIRS "../components/link_core/private_include" "../components/gnss/private_include"
-    PRIV_REQUIRES espcoredump esp_adc
+    PRIV_REQUIRES espcoredump esp_adc bt
     REQUIRES app_fw device_proto link_core rtos spp_server nvs_store cli stream_demux gnss console esp_system esp_hw_support esp_driver_gpio esp_driver_uart freertos log)
 
 # IDF 宏会触发 -Wold-style-cast/-Wconversion/-Wundef，本项目对其他依赖 IDF 的组件

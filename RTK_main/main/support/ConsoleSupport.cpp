@@ -15,6 +15,15 @@
 
 namespace app {
 
+bool requireBluetooth() noexcept
+{
+    if (appContext().radioMode == RadioMode::kWifiConfig) {
+        static_cast<void>(cli::fail("%s", kUnavailableInWifi));
+        return false;
+    }
+    return true;
+}
+
 const char *roleName(core::Role role) noexcept
 {
     switch (role) {
@@ -98,12 +107,17 @@ bool submitRawTo(rtos::Executor &executor, ModuleKind module, const char *downMs
 
 bool submitRaw(const fw::Command &command, fw::CommandResult &out) noexcept
 {
+    // ModuleKind 与 fw::ModuleId 使用同一编号。未登记的目标由 moduleOk 拒绝。
+    const auto target = static_cast<ModuleKind>(command.target);
+    const bool bluetoothTarget = target == ModuleKind::kBtLink || target == ModuleKind::kRtcm;
+    if (bluetoothTarget && !requireBluetooth()) {
+        return false;
+    }
     if (appContext().linkExecutor == nullptr) {
         (void)cli::fail("link not running");
         return false;
     }
-    return submitRawTo(*appContext().linkExecutor, ModuleKind::kBtLink, "link not running", command,
-                       out);
+    return submitRawTo(*appContext().linkExecutor, target, "link not running", command, out);
 }
 
 bool submit(const fw::Command &command, const char *what) noexcept

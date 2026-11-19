@@ -75,8 +75,9 @@ idf_build() {
 }
 
 fmt_check() {
-    git ls-files '*.c' '*.cpp' '*.h' '*.hpp' | grep -v -e '^reference/' -e 'H2Vectors.h' |
-        xargs clang-format --style=file --dry-run --Werror
+    git ls-files --cached --others --exclude-standard -z -- '*.c' '*.cpp' '*.h' '*.hpp' |
+        grep -zv -e '^reference/' -e 'H2Vectors.h' |
+        xargs -0 clang-format --style=file --dry-run --Werror
 }
 
 if [ "$ONLY_IDF" -eq 0 ]; then
@@ -107,6 +108,11 @@ if [ "$SKIP_IDF" -eq 0 ]; then
     gate G3-idf-trace-off idf_build "$PREFIX-trace-off" \
         -DSDKCONFIG="$ROOT/builds/$PREFIX-trace-off/sdkconfig" \
         -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;builds/$PREFIX-trace-off/trace_off.defaults"
+    mkdir -p "builds/$PREFIX-wifi-off"
+    echo "CONFIG_RTK_WIFI_CONFIG_ENABLE=n" >"builds/$PREFIX-wifi-off/wifi_off.defaults"
+    gate G3-idf-wifi-off idf_build "$PREFIX-wifi-off" \
+        -DSDKCONFIG="$ROOT/builds/$PREFIX-wifi-off/sdkconfig" \
+        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;builds/$PREFIX-wifi-off/wifi_off.defaults"
     gate G3-idf-production idf_build "$PREFIX-production" \
         -DSDKCONFIG="$ROOT/builds/$PREFIX-production/sdkconfig" \
         -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;configs/production.defaults"

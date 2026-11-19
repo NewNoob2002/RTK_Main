@@ -21,7 +21,7 @@ using namespace std::string_view_literals;
  */
 [[nodiscard]] constexpr bool isSafe(std::string_view name) noexcept
 {
-    constexpr std::array kSafeNames{"status"sv, "log"sv, "sys"sv, "config"sv};
+    constexpr std::array kSafeNames{"status"sv, "log"sv, "sys"sv, "config"sv, "radio"sv};
     return std::ranges::find(kSafeNames, name) != kSafeNames.end();
 }
 
@@ -30,10 +30,11 @@ using namespace std::string_view_literals;
  * @param profile: 构建档位
  * @param gnssEnabled: 是否编译 GNSS 模块
  * @param traceEnabled: 是否编译追踪模块
+ * @param wifiConfigEnabled: 是否允许切换到 Wi-Fi 配置模式
  * @retval 定长名字表，空项表示该命令关闭
  */
 [[nodiscard]] constexpr auto commandNames(ConsoleProfile profile, bool gnssEnabled,
-                                          bool traceEnabled) noexcept
+                                          bool traceEnabled, bool wifiConfigEnabled) noexcept
 {
     constexpr std::string_view kDisabled{};
     const bool repl = profile != ConsoleProfile::kNone;
@@ -50,6 +51,7 @@ using namespace std::string_view_literals;
         dev && traceEnabled ? "debug"sv : kDisabled,
         repl ? "factory"sv : kDisabled,
         repl ? "freset"sv : kDisabled,
+        dev && wifiConfigEnabled ? "radio"sv : kDisabled,
     };
 }
 
@@ -58,10 +60,11 @@ using namespace std::string_view_literals;
  * @param profile: 构建档位
  * @param gnssEnabled: 是否编译 GNSS 模块
  * @param traceEnabled: 是否编译追踪模块
+ * @param wifiConfigEnabled: 是否允许切换到 Wi-Fi 配置模式
  * @retval 定长名字表，空项表示该动词组关闭
  */
 [[nodiscard]] constexpr auto verbGroupNames(ConsoleProfile profile, bool gnssEnabled,
-                                            bool traceEnabled) noexcept
+                                            bool traceEnabled, bool wifiConfigEnabled) noexcept
 {
     constexpr std::string_view kDisabled{};
     const bool repl = profile != ConsoleProfile::kNone;
@@ -75,6 +78,7 @@ using namespace std::string_view_literals;
         dev && traceEnabled ? "debug"sv : kDisabled,
         dev ? "bt"sv : kDisabled,
         repl ? "factory"sv : kDisabled,
+        dev && wifiConfigEnabled ? "radio"sv : kDisabled,
     };
 }
 

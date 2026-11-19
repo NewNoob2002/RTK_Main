@@ -10,6 +10,15 @@
 namespace app {
 
 inline constexpr size_t kMacStrBuf = 18U;
+inline constexpr const char *kUnavailableInWifi = "unavailable in wifi mode";
+
+/**
+ * @brief 检查控制台操作在当前射频模式下是否可用
+ * @retval true 当前为蓝牙模式
+ * @retval false 当前为 Wi-Fi 配置模式，已输出 ERR
+ * @note 仅 console REPL 任务，非 ISR，输出可阻塞。
+ */
+[[nodiscard]] bool requireBluetooth() noexcept;
 
 /**
  * @brief 角色的可读名（NONE/PHONE/ALARM/PENDING）。
@@ -58,7 +67,7 @@ void formatMac(const core::BtAddr &addr, std::span<char, kMacStrBuf> out) noexce
  * @param command: 待投递指令
  * @param[out] out: 原始命令结果，仅 true 时可用
  * @retval true 已收到链路执行器结果，状态见 out
- * @retval false 链路不可用或调用失败，out 不保证有效
+ * @retval false 目标或执行器不可用，或调用失败，out 不保证有效
  * @note 仅 console REPL 任务，可等待 kCommandTimeoutMs，非 ISR。
  */
 [[nodiscard]] bool submitRaw(const fw::Command &command, fw::CommandResult &out) noexcept;

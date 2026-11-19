@@ -1,5 +1,5 @@
-// 系统模块实现：prepare() 解析 SN、生成设备名并初始化蓝牙，poll() 发布系统/执行器状态。
-// prepare() 只在启动期由 BootFlow 调用；poll() 与命令在 kLink 任务；蓝牙/NVS/日志调用可阻塞，非 ISR 安全。
+// 系统模块实现：prepare() 解析 SN 并生成设备名，startBt() 初始化蓝牙，poll() 发布系统与执行器状态。
+// prepare()/startBt() 由启动任务调用；poll() 在 kLink 任务；蓝牙/NVS/日志调用可阻塞，非 ISR 安全。
 #include "modules/system/SystemModule.hpp"
 #include "AppContext.hpp"
 #include "board/BoardProfile.hpp"
@@ -76,12 +76,7 @@ void SystemModule::fillIdentity() noexcept
 
 void SystemModule::startBt() noexcept
 {
-    /* 名称校验通过后才启动 BT，失败仍发布状态供控制台读取。 */
-    if (!buildDeviceName(board::productName(ctx().boardProfile), status_.sn.data(),
-                         status_.deviceName)) {
-        status_.btReady = false;
-        FW_LOGE(fw::TraceCat::kSys, "invalid product or SN for BT name");
-        ctx().data.systemStatus.write(status_);
+    if (status_.deviceName.front() == '\0') {
         return;
     }
     FW_LOGI(fw::TraceCat::kSys, "sn=%s bt_name=%s policy=%s", status_.sn.data(),
@@ -98,7 +93,14 @@ void SystemModule::startBt() noexcept
 void SystemModule::prepare() noexcept
 {
     fillIdentity();
-    startBt();
+    // 设备名供蓝牙广播与 Wi-Fi 热点 SSID 共用，在 prepare() 生成。
+    if (!buildDeviceName(board::productName(ctx().boardProfile), status_.sn.data(),
+                         status_.deviceName)) {
+        status_.deviceName.front() = '\0';
+        status_.btReady = false;
+        FW_LOGE(fw::TraceCat::kSys, "invalid product or SN for device name");
+    }
+    ctx().data.systemStatus.write(status_);
 }
 
 bool SystemModule::poll(uint32_t /*nowMs*/) noexcept

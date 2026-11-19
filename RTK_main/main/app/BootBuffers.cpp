@@ -53,6 +53,11 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
 
     constexpr size_t kStackAlign = 16U;
     constexpr size_t kBufAlign = 4U;
+    const bool bluetooth = self().radioMode == RadioMode::kBluetooth;
+    const auto allocSpp = [bluetooth](const char *tag, size_t size, std::span<uint8_t> &buf) {
+        return !bluetooth ||
+               fw::isOk(self().bootArena.allocArray<uint8_t>(tag, size, buf, kBufAlign));
+    };
 
     if (!fw::isOk(self().bootArena.allocArray<StackType_t>(
             "task.link", AppContext::kLinkStackBytes / sizeof(StackType_t), out.linkStack,
@@ -66,9 +71,9 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
         return failAlloc("task.io");
     }
 #endif
-    if (!fw::isOk(self().bootArena.allocArray<StackType_t>(
-            "task.spp_worker", SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t),
-            out.sppWorkerStack, kStackAlign))) {
+    if (bluetooth && !fw::isOk(self().bootArena.allocArray<StackType_t>(
+                         "task.spp_worker", SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t),
+                         out.sppWorkerStack, kStackAlign))) {
         return failAlloc("task.spp_worker");
     }
 #if FW_TRACE_ENABLED
@@ -78,12 +83,10 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
         return failAlloc("task.trace_out");
     }
 #endif
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("spp.rx.0", SPP_SERVER_RX_BUF_SIZE,
-                                                       out.sppRx0, kBufAlign))) {
+    if (!allocSpp("spp.rx.0", SPP_SERVER_RX_BUF_SIZE, out.sppRx0)) {
         return failAlloc("spp.rx.0");
     }
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("spp.rx.1", SPP_SERVER_RX_BUF_SIZE,
-                                                       out.sppRx1, kBufAlign))) {
+    if (!allocSpp("spp.rx.1", SPP_SERVER_RX_BUF_SIZE, out.sppRx1)) {
         return failAlloc("spp.rx.1");
     }
 #if FW_TRACE_ENABLED
@@ -106,20 +109,16 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
         return failAlloc("rtcm.pipe");
     }
 #endif
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("spp.tx.reply.0", SPP_SERVER_REPLY_CAPACITY,
-                                                       out.sppReply0, kBufAlign))) {
+    if (!allocSpp("spp.tx.reply.0", SPP_SERVER_REPLY_CAPACITY, out.sppReply0)) {
         return failAlloc("spp.tx.reply.0");
     }
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("spp.tx.reply.1", SPP_SERVER_REPLY_CAPACITY,
-                                                       out.sppReply1, kBufAlign))) {
+    if (!allocSpp("spp.tx.reply.1", SPP_SERVER_REPLY_CAPACITY, out.sppReply1)) {
         return failAlloc("spp.tx.reply.1");
     }
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>(
-            "spp.tx.stream.phone", SPP_SERVER_STREAM_CAPACITY, out.sppStream, kBufAlign))) {
+    if (!allocSpp("spp.tx.stream.phone", SPP_SERVER_STREAM_CAPACITY, out.sppStream)) {
         return failAlloc("spp.tx.stream.phone");
     }
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("spp.tx.merge", SPP_SERVER_MERGE_CAPACITY,
-                                                       out.sppMerge, kBufAlign))) {
+    if (!allocSpp("spp.tx.merge", SPP_SERVER_MERGE_CAPACITY, out.sppMerge)) {
         return failAlloc("spp.tx.merge");
     }
 #if RTK_GNSS_ENABLED
@@ -155,7 +154,7 @@ const char *bindBootBuffers(const BootBuffers &bufs) noexcept
         .worker_stack = bufs.sppWorkerStack.data(),
         .worker_stack_bytes = bufs.sppWorkerStack.size_bytes(),
     };
-    if (spp_server_bind_storage(&storage) != ESP_OK) {
+    if (self().radioMode == RadioMode::kBluetooth && spp_server_bind_storage(&storage) != ESP_OK) {
         return boot_reason::kBindSpp;
     }
 #if RTK_GNSS_ENABLED
@@ -178,7 +177,8 @@ void rollbackBootBindings(BootBuffers &bufs, const char *reason) noexcept
     self().rtcmPipe.unbindStorage();
     self().data.unbindGnssBuffers();
 #endif
-    const esp_err_t unbound = spp_server_unbind_storage();
+    const esp_err_t unbound =
+        self().radioMode == RadioMode::kBluetooth ? spp_server_unbind_storage() : ESP_OK;
     bufs = {};
     if (unbound != ESP_OK) {
         // 若约束被破坏、C worker 已存在，保留全部块，绝不释放它可能使用的栈/缓冲。
