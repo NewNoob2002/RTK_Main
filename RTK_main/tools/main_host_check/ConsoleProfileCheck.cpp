@@ -23,11 +23,16 @@ constexpr std::array kProdCommands{"status"sv, "log"sv,     "sys"sv,
 constexpr std::array kDevGroups{"status"sv, "log"sv,   "sys"sv, "rtcm"sv,
                                 "gnss"sv,   "debug"sv, "bt"sv,  "factory"sv};
 constexpr std::array kProdGroups{"status"sv, "log"sv, "sys"sv, "factory"sv};
+constexpr std::array kDevGroupsWithoutGnssOrTrace{"status"sv, "log"sv, "sys"sv,
+                                                  "rtcm"sv,   "bt"sv,  "factory"sv};
 constexpr std::array kSafe{"status"sv, "log"sv, "sys"sv, "config"sv};
 constexpr std::array<std::string_view, 0U> kNone{};
 
 constexpr auto kRegistered =
     std::views::filter([](std::string_view name) { return !name.empty(); });
+
+static_assert(app::kConsoleProfile == ConsoleProfile::EXPECTED_CONSOLE_PROFILE);
+static_assert(std::string_view{app::kConsoleProfileName} == EXPECTED_CONSOLE_PROFILE_NAME);
 
 static_assert(std::ranges::equal(commandNames(ConsoleProfile::kDev, true, true) | kRegistered,
                                  kDevCommands));
@@ -41,6 +46,14 @@ static_assert(std::ranges::equal(verbGroupNames(ConsoleProfile::kDev, true, true
 static_assert(std::ranges::equal(verbGroupNames(ConsoleProfile::kProduction, false, false) |
                                      kRegistered,
                                  kProdGroups));
+static_assert(std::ranges::equal(verbGroupNames(ConsoleProfile::kProduction, true, false) |
+                                     kRegistered,
+                                 kProdGroups));
+static_assert(std::ranges::equal(verbGroupNames(ConsoleProfile::kProduction, true, true) |
+                                     kRegistered,
+                                 kProdGroups));
+static_assert(std::ranges::equal(verbGroupNames(ConsoleProfile::kDev, false, false) | kRegistered,
+                                 kDevGroupsWithoutGnssOrTrace));
 static_assert(std::ranges::equal(verbGroupNames(ConsoleProfile::kNone, true, true) | kRegistered,
                                  kNone));
 static_assert(std::ranges::equal(kDevCommands | std::views::filter(isSafe), kSafe));

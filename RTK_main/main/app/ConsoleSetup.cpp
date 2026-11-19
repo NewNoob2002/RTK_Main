@@ -4,6 +4,7 @@
 #include "modules/system/FactoryReset.hpp"
 #include "app/App.hpp"
 
+#include <algorithm>
 #include <array>
 #include <span>
 #include <string_view>
@@ -86,6 +87,48 @@ struct VerbGroupDef {
 };
 
 /**
+ * @brief 查询名字表中启用的登记项
+ * @param names: 按构建档位生成的名字表，空项标记为禁用
+ * @param name: 待查询的命令或动词组名
+ * @retval true 名字有效且当前档位启用
+ * @retval false 名字为空或未启用
+ * @note 纯查询，可在任意任务或 ISR 调用。
+ */
+constexpr bool isEnabled(std::span<const std::string_view> names, std::string_view name) noexcept
+{
+    return !name.empty() && std::ranges::find(names, name) != names.end();
+}
+
+/**
+ * @brief 把命令表中启用的命令追加到启动阶段门控表
+ * @param table: 模块提供的原始命令表
+ * @param names: 当前档位的命令名字表
+ * @param[out] used: 已写入的条目数，容量不足时保留已写入的前缀
+ * @retval true 表中启用的命令已全部追加
+ * @retval false 门控表容量不足
+ * @note 仅启动任务在 REPL 放行前调用，非 ISR，不阻塞。
+ */
+bool appendGatedCommands(std::span<const cli::Cmd> table, std::span<const std::string_view> names,
+                         size_t &used) noexcept
+{
+    for (const auto &command : table) {
+        if (!isEnabled(names, command.name)) {
+            continue;
+        }
+        if (used >= s_gated_commands.size()) {
+            return false;
+        }
+        s_command_gates[used] = {command.handler, command.ctx,
+                                 console_registration::isSafe(command.name)};
+        s_gated_commands[used] = command;
+        s_gated_commands[used].handler = &gatedCommand;
+        s_gated_commands[used].ctx = &s_command_gates[used];
+        ++used;
+    }
+    return true;
+}
+
+/**
  * @brief 登记当前档位的命令，并把 handler 包进 phase 门控
  * @retval true 登记成功
  * @retval false 表超容量或 cli::add 失败
@@ -96,40 +139,28 @@ bool registerCommandTables() noexcept
     constexpr auto kNames =
         console_registration::commandNames(kConsoleProfile, RTK_GNSS_ENABLED, FW_TRACE_ENABLED);
     constexpr auto kEnabled = [names = kNames](std::string_view name) {
-        return std::ranges::find(names, name) != names.end();
+        return isEnabled(names, name);
     };
     // 在编译时去掉关闭的表引用，使链接器可以回收对应处理函数。
-    constexpr std::span<const cli::Cmd> kNoCommands{};
-    const std::array cmdTables{
-        kEnabled("status") ? systemCmds() : kNoCommands,
-        kEnabled("bt") ? linkCmds() : kNoCommands,
-        kEnabled("config") ? configCmds() : kNoCommands,
-        kEnabled("rtcm") ? rtcmCmds() : kNoCommands,
+    constexpr std::array kCmdTables{
+        (kEnabled("status") || kEnabled("log") || kEnabled("sys")) ? &systemCmds : nullptr,
+        (kEnabled("bt") || kEnabled("alarm")) ? &linkCmds : nullptr,
+        kEnabled("config") ? &configCmds : nullptr,
+        kEnabled("rtcm") ? &rtcmCmds : nullptr,
 #if RTK_GNSS_ENABLED
-        kEnabled("gnss") ? gnssCmds() : kNoCommands,
+        kEnabled("gnss") ? &gnssCmds : nullptr,
 #endif
 #if FW_TRACE_ENABLED
-        kEnabled("debug") ? debugCmds() : kNoCommands,
+        kEnabled("debug") ? &debugCmds : nullptr,
 #endif
-        kEnabled("factory") ? factoryCmds() : kNoCommands,
-        kEnabled("freset") ? factoryResetCmds() : kNoCommands,
+        kEnabled("factory") ? &factoryCmds : nullptr,
+        kEnabled("freset") ? &factoryResetCmds : nullptr,
     };
     // 命令表地址在 init 后不可变；handler 经 phase 原子门控。
     size_t used = 0U;
-    for (const auto table : cmdTables) {
-        for (const auto &command : table) {
-            if (!kEnabled(command.name)) {
-                continue;
-            }
-            if (used >= s_gated_commands.size()) {
-                return false;
-            }
-            s_command_gates[used] = {command.handler, command.ctx,
-                                     console_registration::isSafe(command.name)};
-            s_gated_commands[used] = command;
-            s_gated_commands[used].handler = &gatedCommand;
-            s_gated_commands[used].ctx = &s_command_gates[used];
-            ++used;
+    for (const auto table : kCmdTables) {
+        if (table != nullptr && !appendGatedCommands(table(), kNames, used)) {
+            return false;
         }
     }
     if (cli::add(std::span{s_gated_commands}.first(used)) != ESP_OK) {
@@ -150,9 +181,7 @@ bool registerVerbGroups() noexcept
     constexpr auto kNames =
         console_registration::verbGroupNames(kConsoleProfile, RTK_GNSS_ENABLED, FW_TRACE_ENABLED);
     constexpr auto kGroup = [names = kNames](const char *name, const char *summary, auto verbs) {
-        return VerbGroupDef{
-            name, summary,
-            std::ranges::find(names, std::string_view{name}) != names.end() ? verbs : nullptr};
+        return isEnabled(names, name) ? VerbGroupDef{name, summary, verbs} : VerbGroupDef{};
     };
     constexpr std::array kVerbGroups{
         kGroup("status", "system and link status (default overview)", &statusVerbs),
