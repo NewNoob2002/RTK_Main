@@ -45,6 +45,7 @@ struct PowerHold {
 struct Profile {
     BoardId id = BoardId::kUnknown;
     const char *name = "unknown";
+    const char *product = "RTK";
     uint32_t idMinMv = 0U;
     uint32_t idMaxMv = 0U;
     GnssPins gnss{};
@@ -52,6 +53,20 @@ struct Profile {
     std::span<const SafeOutput> safeOutputs{};
     uint8_t features = 0U;
 };
+
+/**
+ * @brief 取得板级配置对应的产品短名（未识别时回退为 `"RTK"`）
+ * @param profile: 板级配置指针，可为 nullptr
+ * @retval 非空产品短名（如 `"P2"`、`"E1"`、`"RTK"`）
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] constexpr const char *productName(const Profile *profile) noexcept
+{
+    if (profile != nullptr && profile->product != nullptr) {
+        return profile->product;
+    }
+    return Profile{}.product;
+}
 
 /**
  * @brief 取得所有已登记板型

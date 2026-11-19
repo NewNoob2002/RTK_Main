@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
 
 #include "board/BoardProfile.hpp"
 
@@ -35,6 +36,7 @@ void checkProfiles() noexcept
     CHECK(all.size() == 2U);
     for (const Profile &profile : all) {
         CHECK(byId(profile.id) == &profile);
+        CHECK(profile.product != nullptr && std::string_view{profile.product}.size() > 0U);
         CHECK(profile.gnss.uart == CONFIG_RTK_GNSS_UART_NUM);
         if (profile.id == BoardId::kE1DevKit) {
             CHECK(profile.idMinMv == 0U && profile.idMaxMv == 0U);
@@ -60,11 +62,21 @@ void checkProfiles() noexcept
         }
     }
     CHECK(byId(BoardId::kUnknown) == nullptr);
+    constexpr Profile kUnknown{};
+    CHECK(std::string_view{kUnknown.product} == "RTK");
+    CHECK(std::string_view{productName(nullptr)} == "RTK");
+    constexpr Profile kNullProduct{.product = nullptr};
+    CHECK(std::string_view{productName(&kNullProduct)} == "RTK");
+    const Profile *e1 = byId(BoardId::kE1DevKit);
+    CHECK(e1 != nullptr && std::string_view{e1->product} == "E1");
+    CHECK(std::string_view{productName(e1)} == "E1");
     const Profile *p2 = byId(BoardId::kP2V141);
     CHECK(p2 != nullptr);
     if (p2 == nullptr) {
         return;
     }
+    CHECK(std::string_view{p2->product} == "P2");
+    CHECK(std::string_view{productName(p2)} == "P2");
     CHECK(p2->gnss.receiverPort == 1U && p2->gnss.powerGpio == -1);
     constexpr std::array kOutputs{SafeOutput{13, true}, SafeOutput{15, false},
                                   SafeOutput{23, false}, SafeOutput{26, false},

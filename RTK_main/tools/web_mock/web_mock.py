@@ -227,7 +227,7 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                 "proto": 1,
                 "board": "P2",
                 "fw": "0.1.0-mock",
-                "bt_name": "E1-Lite-A1B2",
+                "bt_name": "P2-A1B2",
                 "console": "dev",
                 "factory": unlocked,
             }

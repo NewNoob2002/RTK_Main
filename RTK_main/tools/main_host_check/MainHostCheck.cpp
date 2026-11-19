@@ -16,6 +16,7 @@ extern "C" {
 }
 
 #include "AppTestAdapter.hpp"
+#include "board/BoardProfile.hpp"
 #include "modules/debug/TraceText.hpp"
 #include "modules/debug/DebugKeys.hpp"
 #include "modules/gnss/RtcmPipe.hpp"
@@ -23,11 +24,13 @@ extern "C" {
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_task_wdt.h"
 #include "esp_system.h"
 #include "SppServerPairing.h"
 #include "modules/storage/StoreWriteGate.hpp"
 #include "modules/system/FactoryReset.hpp"
+#include "modules/system/SystemModule.hpp"
 
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
 namespace {
@@ -52,6 +55,11 @@ unsigned s_user_erases = 0U;
 unsigned s_factory_erases = 0U;
 unsigned s_restarts = 0U;
 esp_err_t s_erase_result = ESP_OK;
+std::array<uint8_t, core::kAddrLen> s_bt_mac{0x10U, 0x20U, 0x30U, 0x40U, 0xB5U, 0xF2U};
+esp_err_t s_bt_mac_result = ESP_OK;
+esp_err_t s_spp_init_result = ESP_OK;
+unsigned s_spp_init_calls = 0U;
+std::array<char, app::kDeviceNameBuf> s_spp_init_name{};
 spp_server_pair_query_t s_pair_query = nullptr;
 size_t s_saved_count = 0U;
 app::WhitelistRaw s_saved{};
@@ -670,6 +678,27 @@ uint32_t esp_get_free_heap_size(void)
 uint32_t esp_get_minimum_free_heap_size(void)
 {
     return 0U;
+}
+esp_err_t esp_read_mac(uint8_t *mac, esp_mac_type_t type)
+{
+    if (mac == nullptr || type != ESP_MAC_BT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_bt_mac_result != ESP_OK) {
+        return s_bt_mac_result;
+    }
+    std::memcpy(mac, s_bt_mac.data(), s_bt_mac.size());
+    return ESP_OK;
+}
+esp_err_t spp_server_init(const char *device_name)
+{
+    ++s_spp_init_calls;
+    s_spp_init_name.fill('\0');
+    if (device_name != nullptr) {
+        static_cast<void>(
+            std::snprintf(s_spp_init_name.data(), s_spp_init_name.size(), "%s", device_name));
+    }
+    return s_spp_init_result;
 }
 esp_err_t esp_task_wdt_add(TaskHandle_t)
 {
@@ -1375,6 +1404,159 @@ void pairingWindow()
     CHECK(s_pair_query(kPhone.bytes.data()) == SPP_SERVER_PAIR_DENY);
 }
 
+/**
+ * @brief 验证 buildDeviceName 与 deriveSnFromMac 的 P2/E1/unknown、空值、换行与超长边界
+ * @note 单线程主机测试，非 ISR。
+ */
+void checkDeviceNamePure()
+{
+    using namespace app;
+    std::array<char, kDeviceNameBuf> name{};
+    CHECK(buildDeviceName(board::productName(board::byId(board::BoardId::kP2V141)), "B5F2", name));
+    CHECK(std::string_view{name.data()} == "P2-B5F2");
+    CHECK(
+        buildDeviceName(board::productName(board::byId(board::BoardId::kE1DevKit)), "A1B2", name));
+    CHECK(std::string_view{name.data()} == "E1-A1B2");
+    CHECK(buildDeviceName(board::productName(nullptr), "0000", name));
+    CHECK(std::string_view{name.data()} == "RTK-0000");
+
+    // 空 SN、空产品名、换行与 SN 超 16 B 均拒绝，且不改写既有输出。
+    CHECK(!buildDeviceName("P2", "", name));
+    CHECK(std::string_view{name.data()} == "RTK-0000");
+    CHECK(!buildDeviceName("", "B5F2", name));
+    CHECK(!buildDeviceName("P2\n", "B5F2", name));
+    CHECK(!buildDeviceName("P2", "B5\rF2", name));
+    CHECK(!buildDeviceName("P2", "12345678901234567", name));
+
+    // 恰好 31 B 成功；32 B 及产品名本身超限返回 false 且首字节清零。
+    CHECK(buildDeviceName("PRODUCT_14CHAR", "1234567890123456", name));
+    CHECK(std::string_view{name.data()} == "PRODUCT_14CHAR-1234567890123456");
+    CHECK(!buildDeviceName("PRODUCT_15CHARS", "1234567890123456", name));
+    CHECK(name[0] == '\0');
+    name[0] = 'X';
+    CHECK(!buildDeviceName("1234567890123456789012345678901", "1", name));
+    CHECK(name[0] == '\0');
+
+    std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
+    const std::array<uint8_t, core::kAddrLen> mac{0xAAU, 0xBBU, 0xCCU, 0xDDU, 0xB5U, 0xF2U};
+    CHECK(deriveSnFromMac(mac, sn));
+    CHECK(std::string_view{sn.data()} == "B5F2");
+}
+
+/**
+ * @brief 验证 SystemModule::prepare() 的 P2/E1/unknown 命名、MAC 派生、失败回退与超长拒绝
+ * @note 单线程主机测试，非 ISR。
+ */
+void checkSystemPrepare()
+{
+    using namespace app;
+    auto &ctx = appContext();
+    ctx.data.init();
+
+    // P2 + 无 NVS SN：取 BT MAC 尾两字节派生 B5F2 → P2-B5F2。
+    s_spp_init_calls = 0U;
+    s_spp_init_result = ESP_OK;
+    s_bt_mac = {0x10U, 0x20U, 0x30U, 0x40U, 0xB5U, 0xF2U};
+    s_bt_mac_result = ESP_OK;
+    ctx.boardProfile = board::byId(board::BoardId::kP2V141);
+    ctx.data.systemStatus.write(SystemStatus{});
+    ctx.system.prepare();
+    auto st = ctx.data.systemStatus.read();
+    CHECK(st.btReady && s_spp_init_calls == 1U);
+    CHECK(std::string_view{st.sn.data()} == "B5F2");
+    CHECK(std::string_view{st.deviceName.data()} == "P2-B5F2");
+    CHECK(std::string_view{s_spp_init_name.data()} == "P2-B5F2");
+
+    // E1 + 已有 NVS SN：直接使用 SN → E1-9988。
+    SystemStatus preset{};
+    static_cast<void>(std::snprintf(preset.sn.data(), preset.sn.size(), "%s", "9988"));
+    ctx.boardProfile = board::byId(board::BoardId::kE1DevKit);
+    ctx.data.systemStatus.write(preset);
+    ctx.system.prepare();
+    st = ctx.data.systemStatus.read();
+    CHECK(st.btReady && s_spp_init_calls == 2U);
+    CHECK(std::string_view{st.deviceName.data()} == "E1-9988");
+    CHECK(std::string_view{s_spp_init_name.data()} == "E1-9988");
+
+    // unknown 板型 + MAC 读取失败：SN 回退 0000，产品回退 RTK → RTK-0000。
+    s_bt_mac_result = ESP_FAIL;
+    ctx.boardProfile = nullptr;
+    ctx.data.systemStatus.write(SystemStatus{});
+    ctx.system.prepare();
+    st = ctx.data.systemStatus.read();
+    CHECK(st.btReady && s_spp_init_calls == 3U);
+    CHECK(std::string_view{st.sn.data()} == "0000");
+    CHECK(std::string_view{st.deviceName.data()} == "RTK-0000");
+    CHECK(std::string_view{s_spp_init_name.data()} == "RTK-0000");
+
+    // 总长超过 kDeviceNameMax：拒绝启动 SPP 且 btReady 保持 false。
+    constexpr board::Profile kLongProduct{
+        .id = board::BoardId::kUnknown, .name = "long", .product = "PRODUCT_15CHARS"};
+    SystemStatus longSn{};
+    static_cast<void>(std::snprintf(longSn.sn.data(), longSn.sn.size(), "%s", "1234567890123456"));
+    ctx.boardProfile = &kLongProduct;
+    ctx.data.systemStatus.write(longSn);
+    ctx.system.prepare();
+    st = ctx.data.systemStatus.read();
+    CHECK(!st.btReady && s_spp_init_calls == 3U);
+    CHECK(st.deviceName[0] == '\0');
+}
+
+/**
+ * @brief 验证 BtLinkModule::init() 将指定板型的产品名注入 0x0001 设备信息应答的 product 字段
+ * @param profile: 待注入的板型配置指针，nullptr 表示 unknown
+ * @param expected: 期望在 0x0001 应答偏移 0 处读到的产品短名
+ * @note 单线程主机测试，每进程调用一次，非 ISR。
+ */
+void checkDevInfoProduct(const app::board::Profile *profile, std::string_view expected)
+{
+    using namespace app;
+    s_write_calls = 0U;
+    s_input_size.fill(0U);
+    s_input_offset.fill(0U);
+    s_event_size = 0U;
+    s_event_offset = 0U;
+    s_tx_used.fill(0U);
+    s_tx_reserved.fill(false);
+    appContext().boardProfile = profile;
+    setup();
+    open(1U, kPhone);
+    append(0U, 0x0001U, 0U, proto::msg_type::kQuery);
+    dirty(0U);
+    uint32_t tick = s_clock;
+    link_round(tick);
+    CHECK(s_write_calls == 1U);
+    if (s_write_calls == 1U) {
+        proto::FrameParser parser{};
+        proto::FrameView reply{};
+        bool gotFrame = false;
+        for (size_t i = 0U; i < s_write_sizes[0]; ++i) {
+            if (parser.feed(s_write_bytes[0][i], reply) == proto::ParseResult::kFrame) {
+                gotFrame = true;
+            }
+        }
+        CHECK(gotFrame && reply.msgId == 0x0001U && reply.payload.size() == core::kDevInfoLen);
+        if (gotFrame && reply.payload.size() == core::kDevInfoLen) {
+            std::array<char, 8> raw{};
+            std::memcpy(raw.data(), reply.payload.data(), raw.size());
+            const size_t len = strnlen(raw.data(), raw.size());
+            const std::string_view actual{raw.data(), len};
+            CHECK(actual == expected);
+        }
+    }
+}
+
+/**
+ * @brief 汇总执行设备名与 P2 产品名注入相关主机测试
+ * @note 单线程主机测试，非 ISR。
+ */
+void deviceName()
+{
+    checkDeviceNamePure();
+    checkSystemPrepare();
+    checkDevInfoProduct(app::board::byId(app::board::BoardId::kP2V141), "P2");
+}
+
 } // namespace
 
 int main(int argc, const char **raw_args)
@@ -1419,6 +1601,12 @@ int main(int argc, const char **raw_args)
         factoryReset();
     } else if (std::strcmp(argv[1], "pairing_window") == 0) {
         pairingWindow();
+    } else if (std::strcmp(argv[1], "device_name") == 0) {
+        deviceName();
+    } else if (std::strcmp(argv[1], "device_name_e1") == 0) {
+        checkDevInfoProduct(app::board::byId(app::board::BoardId::kE1DevKit), "E1");
+    } else if (std::strcmp(argv[1], "device_name_unknown") == 0) {
+        checkDevInfoProduct(nullptr, "RTK");
     } else if (std::strcmp(argv[1], "credit_window") == 0) {
         creditWindow();
     } else if (std::strcmp(argv[1], "rx_fairness") == 0) {

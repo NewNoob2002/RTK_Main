@@ -2,6 +2,7 @@
 // prepare() 只在启动期由 BootFlow 调用；poll() 与命令在 kLink 任务；蓝牙/NVS/日志调用可阻塞，非 ISR 安全。
 #include "modules/system/SystemModule.hpp"
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 #include <cstdio>
 #include "fw/Log.hpp"
 #include "esp_mac.h"
@@ -29,15 +30,22 @@ bool deriveSnFromMac(std::span<const uint8_t, core::kAddrLen> mac,
     out[nibbles.size()] = '\0';
     return true;
 }
-bool buildDeviceName(std::string_view sn, std::span<char, kDeviceNameBuf> out) noexcept
+bool buildDeviceName(std::string_view product, std::string_view sn,
+                     std::span<char, kDeviceNameBuf> out) noexcept
 {
-    if (sn.empty() || sn.size() > NVS_STORE_SN_MAX ||
-        sn.find_first_of("\r\n") != std::string_view::npos) {
+    if (product.empty() || product.find_first_of("\r\n") != std::string_view::npos || sn.empty() ||
+        sn.size() > NVS_STORE_SN_MAX || sn.find_first_of("\r\n") != std::string_view::npos) {
         return false;
     }
-    // SN 最多 16 B，精度转换到 int 无损。
+    // 总长含连字符 '-'，超限先截断判错，避免 product.size() 转 int 溢出。
+    if (product.size() >= kDeviceNameMax || sn.size() > kDeviceNameMax - 1U - product.size()) {
+        out[0] = '\0';
+        return false;
+    }
+    // product 与 sn 均小于 kDeviceNameMax（31 B），精度转换到 int 无损。
     const int written =
-        snprintf(out.data(), out.size(), "E1-Lite-%.*s", static_cast<int>(sn.size()), sn.data());
+        snprintf(out.data(), out.size(), "%.*s-%.*s", static_cast<int>(product.size()),
+                 product.data(), static_cast<int>(sn.size()), sn.data());
     // written >= 0 时转换为 size_t 无损，之后按固定输出上限检查。
     if (written < 0 || static_cast<size_t>(written) > kDeviceNameMax) {
         out[0] = '\0';
@@ -69,8 +77,10 @@ void SystemModule::fillIdentity() noexcept
 void SystemModule::startBt() noexcept
 {
     /* 名称校验通过后才启动 BT，失败仍发布状态供控制台读取。 */
-    if (!buildDeviceName(status_.sn.data(), status_.deviceName)) {
-        FW_LOGE(fw::TraceCat::kSys, "invalid SN for BT name");
+    if (!buildDeviceName(board::productName(ctx().boardProfile), status_.sn.data(),
+                         status_.deviceName)) {
+        status_.btReady = false;
+        FW_LOGE(fw::TraceCat::kSys, "invalid product or SN for BT name");
         ctx().data.systemStatus.write(status_);
         return;
     }

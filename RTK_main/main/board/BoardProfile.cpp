@@ -21,6 +21,7 @@ constexpr uint8_t kP2Features =
 constexpr std::array kProfiles{
     Profile{.id = BoardId::kP2V141,
             .name = "P2 v1.41",
+            .product = "P2",
             .idMinMv = 1500U,
             .idMaxMv = 1800U,
             .gnss = {.uart = 2, .rxGpio = 16, .txGpio = 17, .receiverPort = 1U},
@@ -34,6 +35,7 @@ constexpr std::array kProfiles{
     Profile{
         .id = BoardId::kE1DevKit,
         .name = "E1 DevKit",
+        .product = "E1",
         .gnss = {.uart = 2, .rxGpio = 16, .txGpio = 17, .powerGpio = 25, .powerActiveHigh = true},
         .powerHold = {.kind = HoldKind::kLatchGpio, .latch = {26, true}}},
 };
