@@ -78,14 +78,15 @@ private:
 [[nodiscard]] bool deriveSnFromMac(std::span<const uint8_t, core::kAddrLen> mac,
                                    std::span<char, NVS_STORE_SN_MAX + 1U> out) noexcept;
 /**
- * @brief 按合法 SN 生成蓝牙设备名
+ * @brief 按产品名与合法 SN 生成蓝牙设备名（`<product>-<SN>`）
+ * @param product: 产品短名视图（如 `"P2"`、`"E1"`、`"RTK"`）
  * @param sn: 序列号视图
- * @param[out] out: 设备名输出；SN 校验失败不变，格式化失败首字节清零
+ * @param[out] out: 设备名输出；输入校验失败不变，超长或格式化失败首字节清零
  * @retval true 名称已生成
- * @retval false SN 为空、过长、含换行或格式化失败
+ * @retval false 产品名或 SN 为空、含换行、SN 超长、总长超限或格式化失败
  * @note 纯计算，线程/ISR 安全，不阻塞。
  */
-[[nodiscard]] bool buildDeviceName(std::string_view sn,
+[[nodiscard]] bool buildDeviceName(std::string_view product, std::string_view sn,
                                    std::span<char, kDeviceNameBuf> out) noexcept;
 /**
  * @brief 取得系统命令表

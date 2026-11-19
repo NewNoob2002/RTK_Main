@@ -3,6 +3,7 @@
 #include "modules/bt_link/BtLinkModule.hpp"
 #include "modules/bt_link/BtLinkModulePrivate.hpp"
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -165,6 +166,7 @@ fw::Result BtLinkModule::init() noexcept
     core::bindPairWindow(link_manager_, &pair_window_);
     auto &alarm = alarm_.emplace();
     auto &deviceService = device_service_.emplace();
+    deviceService.info().product.assign(board::productName(ctx().boardProfile));
     deviceService.info().sn.assign(system.sn.data());
     deviceService.info().fwVer.assign(kAppVersion);
     auto &configService = config_service_.emplace();
