@@ -24,6 +24,10 @@ CONFIG_BT_SPP_ENABLED=y
 CONFIG_BT_BLE_ENABLED=n
 CONFIG_BT_BLUEDROID_PINNED_TO_CORE_0=y
 
+# ADR-0017：Wi-Fi 网页配置模式（与蓝牙按启动互斥，不同时运行，故不开软件共存）。
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+CONFIG_HTTPD_WS_SUPPORT=y
+
 # 控制台串口（ADR-0009 §2.4）：2 Mbaud + 8 KB TX 环形缓冲，长输出不阻塞命令任务。
 # ESP_CONSOLE_UART_BAUDRATE 只在 CUSTOM 变体下可写（esp_stdio/Kconfig:150 的 prompt 条件），
 # 因此这里用 CUSTOM + UART0 + ESP32 默认引脚 1/3；波特率必须与 RTK 的一致，否则输出乱码。
