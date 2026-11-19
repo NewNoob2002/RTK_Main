@@ -269,10 +269,16 @@ void GnssModule::wait(uint32_t maxMs) noexcept
     }
 }
 
+/** @brief 推进 GNSS 状态机与数据通路。 @param nowMs: 单调时钟。 @retval true UART 或管道可能仍有积压。 */
 bool GnssModule::poll(uint32_t nowMs) noexcept
 {
     if (!initialized_) {
         return false;
+    }
+    if (pollPhonePpp(nowMs)) {
+        const bool hadFullRx = (last_rx_bytes_ == kUartReadChunkBytes);
+        last_rx_bytes_ = 0U;
+        return hadFullRx;
     }
     pollController(nowMs);
     tickPendingApply(nowMs);
@@ -382,10 +388,10 @@ void GnssModule::publishStatus(uint32_t nowMs) noexcept
     for (size_t i = 0U; i < st.rxPeriodMs.size(); ++i) {
         st.rxPeriodMs[i] = plan.periodMs[i];
     }
-    // App 可见的支持位 = 驱动声明的语句位 & 本轮未报不支持 & 未失败（ADR-0012 §2.5）。
+    // App 可见的支持位 = 驱动声明的语句位（含 bit 6 GSV，供默认 NMEA 直传取交集）& 未报不支持 & 未失败（ADR-0012 §2.5 / P1 Rev B）。
     if (det.receiver != nullptr) {
-        constexpr uint32_t kAppBits = (1U << static_cast<uint32_t>(data::kGnssAppMsgCount)) - 1U;
-        const uint32_t declared = det.receiver->outputMask(det.probe.model) & kAppBits;
+        constexpr uint32_t kOutBits = (1U << static_cast<uint32_t>(::gnss::kOutputMsgCount)) - 1U;
+        const uint32_t declared = det.receiver->outputMask(det.probe.model) & kOutBits;
         st.supportedMask = declared & ~st.ctrl.unsupportedMask & ~st.ctrl.failedMask;
     }
     st.nmea = parser().stats();

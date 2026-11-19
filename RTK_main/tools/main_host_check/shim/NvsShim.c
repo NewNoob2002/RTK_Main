@@ -8,7 +8,7 @@
 #define SHIM_NVS_MAX_ENTRIES 32
 #define SHIM_NVS_MAX_NS      4
 #define SHIM_NVS_NAME_MAX    16
-#define SHIM_NVS_BLOB_MAX    64
+#define SHIM_NVS_BLOB_MAX    128
 
 typedef struct {
     char key[SHIM_NVS_NAME_MAX];

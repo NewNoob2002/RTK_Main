@@ -31,6 +31,13 @@ using detail::kGnssClockJitterMs;
 using detail::kGnssFixStaleMs;
 using detail::kMaxGnssFlushRecords;
 using detail::kMaxGnssStreamRecordsPerPoll;
+
+// PHONE 会话连接即推的默认 NMEA 掩码（P1 Rev B）：GGA/GST/RMC/GSA/GSV。
+constexpr uint32_t kDefaultNmeaPushMask = (1U << static_cast<uint32_t>(::gnss::OutputMsg::kGga)) |
+                                          (1U << static_cast<uint32_t>(::gnss::OutputMsg::kGst)) |
+                                          (1U << static_cast<uint32_t>(::gnss::OutputMsg::kRmc)) |
+                                          (1U << static_cast<uint32_t>(::gnss::OutputMsg::kGsa)) |
+                                          (1U << static_cast<uint32_t>(::gnss::OutputMsg::kGsv));
 #endif
 
 void BtLinkModule::applyRtcmReset() noexcept
@@ -90,6 +97,8 @@ void BtLinkModule::syncGnssInfo(uint32_t nowMs) noexcept
         deviceInfo.gnssRunning = gnssSt.enabled && (gnssSt.state == ::gnss::State::kRunning);
         if (gnssSt.model != ::gnss::Model::kUnknown) {
             deviceInfo.board.assign(::gnss::modelName(gnssSt.model));
+            gnss_supported_known_ = true;
+            gnss_supported_mask_ = gnssSt.supportedMask;
         }
         if (gnssSt.fwVersion[0] != '\0') {
             deviceInfo.boardFw.assign(std::string_view{gnssSt.fwVersion.data()});
@@ -97,6 +106,72 @@ void BtLinkModule::syncGnssInfo(uint32_t nowMs) noexcept
         if (gnss_service_.has_value()) {
             gnss_service_->setSupportedMask(gnssSt.supportedMask);
         }
+        if (gnss_default_push_) {
+            applyGnssStreamMask();
+        }
+    }
+}
+
+uint32_t BtLinkModule::effectiveSupportedMask() const noexcept
+{
+    constexpr uint32_t kFallbackSupported = core::services::kGnssDefaultSupportedMask |
+                                            (1U << static_cast<uint32_t>(::gnss::OutputMsg::kGsv));
+    return gnss_supported_known_ ? gnss_supported_mask_ : kFallbackSupported;
+}
+
+void BtLinkModule::applyGnssStreamMask() noexcept
+{
+    const uint32_t defaultMask =
+        gnss_default_push_ ? (kDefaultNmeaPushMask & effectiveSupportedMask()) : 0U;
+    const uint32_t explicitMask = gnss_service_.has_value() ? gnss_service_->activeMask() : 0U;
+    const uint32_t effectiveMask = defaultMask | explicitMask;
+    if (gnss_reader_attached_ && (effectiveMask != gnss_applied_mask_)) {
+        gnss_applied_mask_ = effectiveMask;
+        static_cast<void>(ctx().data.gnssAppRing.setMask(gnss_reader_id_, effectiveMask));
+        fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppMask), 0U,
+                  effectiveMask, (effectiveMask == 0U) ? 1U : 0U);
+    }
+    std::array<uint32_t, core::services::kGnssMsgCount> periodsMs{};
+    if (gnss_service_.has_value()) {
+        for (size_t i = 0U; i < core::services::kGnssMsgCount; ++i) {
+            // 仅显式订阅的语句按其 interval 节流；默认直传语句周期为 0（沿用模块输出）。
+            if ((explicitMask & (1U << i)) != 0U) {
+                periodsMs[i] = gnss_service_->periodMs(i);
+            }
+        }
+    }
+    ctx().data.gnssAppSub.setSubscription(effectiveMask, periodsMs);
+}
+
+void BtLinkModule::onPhoneSessionOpen(core::SessionHandle handle) noexcept
+{
+    if (phone_session_handle_ != 0U) {
+        resetGnssStreamSession();
+    }
+    phone_session_handle_ = handle;
+    gnss_default_push_ = true;
+    gnss_explicit_sub_ = false;
+    applyGnssStreamMask();
+}
+
+void BtLinkModule::onPhoneProductFrame(core::SessionHandle handle,
+                                       std::span<const uint8_t> wire) noexcept
+{
+    if ((handle != phone_session_handle_) || (wire.size() <= proto::kOfsSender) ||
+        (link_manager_.role(handle) != core::Role::kPhone)) {
+        return;
+    }
+    if ((wire[proto::kOfsSender] == proto::sender::kApp) && gnss_default_push_ &&
+        !gnss_explicit_sub_) {
+        gnss_default_push_ = false;
+        applyGnssStreamMask();
+    }
+}
+
+void BtLinkModule::recheckPhoneSessionRole(core::SessionHandle handle) noexcept
+{
+    if ((handle == phone_session_handle_) && (link_manager_.role(handle) != core::Role::kPhone)) {
+        resetGnssStreamSession();
     }
 }
 
@@ -127,25 +202,21 @@ void BtLinkModule::onGnssMask(void *ctx, uint32_t mask) noexcept
     if (self == nullptr) {
         return;
     }
-    if (self->gnss_reader_attached_) {
-        static_cast<void>(self->ctx().data.gnssAppRing.setMask(self->gnss_reader_id_, mask));
+    if (mask != 0U) {
+        self->gnss_explicit_sub_ = true;
     }
-    std::array<uint32_t, core::services::kGnssMsgCount> periodsMs{};
-    if (self->gnss_service_.has_value()) {
-        for (size_t i = 0U; i < core::services::kGnssMsgCount; ++i) {
-            periodsMs[i] = self->gnss_service_->periodMs(i);
-        }
-    }
-    self->ctx().data.gnssAppSub.setSubscription(mask, periodsMs);
-    fw::trace(fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kAppMask), 0U, mask,
-              (mask == 0U) ? 1U : 0U);
+    self->applyGnssStreamMask();
 }
 
 void BtLinkModule::resetGnssStreamSession() noexcept
 {
+    phone_session_handle_ = 0U;
+    gnss_default_push_ = false;
+    gnss_explicit_sub_ = false;
     if (gnss_service_.has_value()) {
         gnss_service_->resetSession();
     }
+    applyGnssStreamMask();
     if (!gnss_reader_attached_) {
         return;
     }

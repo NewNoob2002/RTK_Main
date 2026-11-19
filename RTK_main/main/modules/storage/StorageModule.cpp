@@ -271,9 +271,15 @@ void StorageModule::markWhitelistDirty(std::span<const core::BtAddr> list, uint3
     ctx().data.storeStatus.write(status_);
 }
 
+/**
+ * @brief 推进用户设置的去抖与写入重试。
+ * @retval false 等待下一轮时钟推进。
+ * @note 仅 kLink，写 NVS 可阻塞，非 ISR。
+ */
 bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
 {
     const uint32_t now = rtos::nowMs();
+    pollPhoneBlobs(now);
     if (!pending_ || now - changed_ms_ < kDebounceMs ||
         (attempted_ && now - attempt_ms_ < retry_ms_)) {
         return false;
@@ -322,6 +328,197 @@ bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
     status_.whitelistPending = pending_;
     ctx().data.storeStatus.write(status_);
     return false;
+}
+
+fw::Result StorageModule::loadPhoneHeight(void *, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != core::AntennaHeight{}.size() ||
+        !core::validAntennaHeight(in.first<core::kAntennaHeightBytes>())) {
+        return fw::Result::kInvalidArg;
+    }
+    auto &storage = appContext().storage;
+    std::copy(in.begin(), in.end(), storage.phone_height_.begin());
+    storage.phone_height_state_.known = true;
+    return fw::Result::kOk;
+}
+
+fw::Result StorageModule::loadPhonePpp(void *, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != 1U || in.front() > 1U) {
+        return fw::Result::kInvalidArg;
+    }
+    appContext().data.phonePppEnabled.write(in.front() != 0U);
+    return fw::Result::kOk;
+}
+
+fw::Result StorageModule::loadPhoneSatCfg(void *, std::span<const uint8_t> in) noexcept
+{
+    const auto decoded = core::decodeSatTrackConfig(in);
+    if (!decoded.has_value()) {
+        return fw::Result::kInvalidArg;
+    }
+    appContext().data.phoneSatConfig.write(decoded);
+    return fw::Result::kOk;
+}
+
+fw::Result StorageModule::loadPhonePn(void *, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != core::kPhonePnBytes) {
+        return fw::Result::kInvalidArg;
+    }
+    auto &storage = appContext().storage;
+    std::copy(in.begin(), in.end(), storage.phone_pn_.begin());
+    storage.phone_pn_state_.known = true;
+    return fw::Result::kOk;
+}
+
+fw::Result StorageModule::loadPhoneNtrip(void *, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != core::kPhoneNtripBytes) {
+        return fw::Result::kInvalidArg;
+    }
+    auto &storage = appContext().storage;
+    std::copy(in.begin(), in.end(), storage.phone_ntrip_.begin());
+    storage.phone_ntrip_state_.known = true;
+    return fw::Result::kOk;
+}
+
+fw::Result StorageModule::loadPhoneJsonSrv(void *, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != core::kPhoneJsonServerBytes) {
+        return fw::Result::kInvalidArg;
+    }
+    auto &storage = appContext().storage;
+    std::copy(in.begin(), in.end(), storage.phone_json_srv_.begin());
+    storage.phone_json_srv_state_.known = true;
+    return fw::Result::kOk;
+}
+
+fw::Result StorageModule::loadPhoneTb(void *, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != core::kPhoneThingsboardBytes) {
+        return fw::Result::kInvalidArg;
+    }
+    auto &storage = appContext().storage;
+    std::copy(in.begin(), in.end(), storage.phone_tb_.begin());
+    storage.phone_tb_state_.known = true;
+    return fw::Result::kOk;
+}
+
+bool StorageModule::setPhoneBlob(std::span<uint8_t> dst, DebouncedState &state,
+                                 std::span<const uint8_t> value, uint32_t nowMs) noexcept
+{
+    const auto &boot = ctx().bootConfig;
+    const store::WriteGuard guard;
+    if (!boot.userNvsReady || boot.safeDefaults || !guard.active() ||
+        (dst.size() != value.size())) {
+        return false;
+    }
+    if (!state.known || !std::equal(dst.begin(), dst.end(), value.begin())) {
+        state.known = true;
+        std::copy(value.begin(), value.end(), dst.begin());
+        state.pending = true;
+        state.changedMs = nowMs;
+        traceStore(StoreTrace::kDebounce, kDebounceMs);
+    }
+    return true;
+}
+
+void StorageModule::pollPhoneBlob(const fw::StoreKey &key, std::span<const uint8_t> data,
+                                  DebouncedState &state, uint32_t nowMs, const char *label) noexcept
+{
+    if (!state.pending || (nowMs - state.changedMs < kDebounceMs) ||
+        (nowMs - state.attemptMs < state.retryMs)) {
+        return;
+    }
+    const auto error = store::writeBlob(key, data);
+    if (error == ESP_OK) {
+        state.pending = false;
+        state.retryMs = 0U;
+        traceStore(StoreTrace::kSave, static_cast<uint32_t>(fw::Result::kOk), 1U);
+    } else {
+        state.attemptMs = rtos::nowMs();
+        state.retryMs =
+            state.retryMs == 0U ? kRetryInitialMs : std::min(state.retryMs * 2U, kRetryMaxMs);
+        FW_LOGW(fw::TraceCat::kStore, "%s save failed (%s)", label, esp_err_to_name(error));
+    }
+}
+
+void StorageModule::pollPhoneBlobs(uint32_t nowMs) noexcept
+{
+    pollPhoneBlob(store::kPhoneHeightKey, phone_height_, phone_height_state_, nowMs,
+                  "antenna height");
+    pollPhoneBlob(store::kPhonePnKey, phone_pn_, phone_pn_state_, nowMs, "pn");
+    pollPhoneBlob(store::kPhoneNtripKey, phone_ntrip_, phone_ntrip_state_, nowMs, "ntrip");
+    pollPhoneBlob(store::kPhoneJsonSrvKey, phone_json_srv_, phone_json_srv_state_, nowMs,
+                  "json server");
+    pollPhoneBlob(store::kPhoneTbKey, phone_tb_, phone_tb_state_, nowMs, "thingsboard");
+}
+
+bool StorageModule::setPhoneHeight(const core::AntennaHeight &height, uint32_t nowMs) noexcept
+{
+    return setPhoneBlob(phone_height_, phone_height_state_, height, nowMs);
+}
+
+core::PhoneSnPn StorageModule::phoneSnPn() const noexcept
+{
+    core::PhoneSnPn out{};
+    const size_t snLen = std::min(std::strlen(sn_.data()), core::kPhoneSnBytes);
+    std::memcpy(out.data(), sn_.data(), snLen);
+    std::copy(phone_pn_.begin(), phone_pn_.end(),
+              std::span<uint8_t>{out}.subspan(core::kPhoneSnBytes).begin());
+    return out;
+}
+
+bool StorageModule::setPhoneSnPn(const core::PhoneSnPn &snPn, uint32_t nowMs) noexcept
+{
+    const auto &boot = ctx().bootConfig;
+    if (!boot.userNvsReady || boot.safeDefaults) {
+        return false;
+    }
+    const auto snField = std::span<const uint8_t>{snPn}.first(core::kPhoneSnBytes);
+    const auto pnField = std::span<const uint8_t>{snPn}.subspan(core::kPhoneSnBytes);
+    size_t snLen = 0U;
+    while ((snLen < snField.size()) && (snField[snLen] != 0U)) {
+        ++snLen;
+    }
+    for (const uint8_t ch : pnField) {
+        if (ch == 0U) {
+            break;
+        }
+        if ((ch == '\r') || (ch == '\n')) {
+            return false;
+        }
+    }
+    fw::Command cmd{};
+    cmd.target = id(ModuleKind::kStorage);
+    cmd.verb = verb(StorageVerb::kSaveSn);
+    // snLen <= core::kPhoneSnBytes(16) <= fw::kCommandArgBytes(32)，缩窄安全。
+    cmd.argLen = static_cast<uint8_t>(snLen);
+    std::copy_n(snField.begin(), snLen, cmd.args.begin());
+    fw::CommandResult result{};
+    saveSn(cmd, result);
+    if (!fw::isOk(result.status)) {
+        return false;
+    }
+    return setPhoneBlob(phone_pn_, phone_pn_state_, pnField, nowMs);
+}
+
+bool StorageModule::setPhoneNtrip(const core::PhoneNtripConfig &cfg, uint32_t nowMs) noexcept
+{
+    return setPhoneBlob(phone_ntrip_, phone_ntrip_state_, cfg, nowMs);
+}
+
+bool StorageModule::setPhoneJsonServer(const core::PhoneJsonServerConfig &cfg,
+                                       uint32_t nowMs) noexcept
+{
+    return setPhoneBlob(phone_json_srv_, phone_json_srv_state_, cfg, nowMs);
+}
+
+bool StorageModule::setPhoneThingsboard(const core::PhoneThingsboardConfig &cfg,
+                                        uint32_t nowMs) noexcept
+{
+    return setPhoneBlob(phone_tb_, phone_tb_state_, cfg, nowMs);
 }
 
 esp_err_t StorageModule::flushWhitelist(uint32_t nowMs) noexcept

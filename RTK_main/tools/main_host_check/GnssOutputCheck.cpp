@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "core/services/GnssService.hpp"
+#include "data/GnssAppRing.hpp"
 #include "data/GnssOutput.hpp"
 #include "fw/FanoutRing.hpp"
 #include "modules/storage/StoreKeys.hpp"
@@ -22,6 +23,7 @@ extern "C" const char *esp_err_to_name(esp_err_t error)
 }
 
 void testGnssFactoryReset();
+void testGnssPhonePpp();
 void testBaseKeysAndCommandDispatch();
 
 namespace {
@@ -343,6 +345,168 @@ void testConsoleRates()
     CHECK(!changesConnectedGnssBaud("CONFIG COM2", 2U));
 }
 
+/** @brief 验证 GnssAppRing 满环淘汰优先级（GSV→GSA→GST→RMC→GGA）、GGA 保留与 gga_drop 统计。 */
+void testGnssAppRingPriority() noexcept
+{
+    constexpr uint8_t kGga = static_cast<uint8_t>(::gnss::OutputMsg::kGga);
+    constexpr uint8_t kGst = static_cast<uint8_t>(::gnss::OutputMsg::kGst);
+    constexpr uint8_t kRmc = static_cast<uint8_t>(::gnss::OutputMsg::kRmc);
+    constexpr uint8_t kGsa = static_cast<uint8_t>(::gnss::OutputMsg::kGsa);
+    constexpr uint8_t kGsv = static_cast<uint8_t>(::gnss::OutputMsg::kGsv);
+    constexpr fw::FanoutMask kNmeaMask =
+        (1U << kGga) | (1U << kGst) | (1U << kRmc) | (1U << kGsa) | (1U << kGsv);
+
+    // 1. 4096 B 满环混合压测：严格按 GSV → GSA → GST → RMC 淘汰，GGA 全部保留且 gga_drop == 0。
+    {
+        std::array<uint8_t, 4096U> storage{};
+        app::data::GnssAppRing ring{};
+        const size_t maxPayload = storage.size() - fw::kFanoutTypedHeaderBytes;
+        CHECK(fw::isOk(ring.initTyped(storage, maxPayload, fw::kNoLock)));
+        uint8_t rid = 0U;
+        CHECK(fw::isOk(ring.attach(kNmeaMask, rid)));
+
+        // 先验证单条最大记录（4093 B）可写入、4094 B 拒收并计 oversizeDrop。
+        static std::array<uint8_t, 4094U> bigBuf{};
+        bigBuf.fill(static_cast<uint8_t>('X'));
+        CHECK(ring.write(kGga, std::span<const uint8_t>{bigBuf}.first(4093U)) == fw::Result::kOk);
+        fw::FanoutView bigView{};
+        CHECK(fw::isOk(ring.peek(rid, bigView)));
+        CHECK((bigView.type == kGga) && (bigView.first.size() == 4093U) && bigView.second.empty());
+        CHECK(fw::isOk(ring.commit(bigView.lease)));
+        CHECK(ring.write(kGga, bigBuf) == fw::Result::kInvalidArg);
+        CHECK(ring.typedWriterStats().oversizeDrop == 1U);
+
+        // 连续写入 40 组 (GGA/RMC/GST/GSA/GSV)，每条 80 B（每组 5*83=415 B，40 组约 16.6 KB >> 4 KB）。
+        // 40 条 GGA 共 40*83=3320 B < 4096 B，应全部保留，剩余空间留给最新 RMC，GSV/GSA/GST 全被淘汰。
+        std::array<uint8_t, 80U> pkt{};
+        for (uint8_t seq = 0U; seq < 40U; ++seq) {
+            for (const uint8_t type : {kGga, kRmc, kGst, kGsa, kGsv}) {
+                pkt.fill(seq);
+                pkt[0] = type;
+                const fw::Result res = ring.write(type, pkt);
+                if (type == kGga) {
+                    CHECK(res == fw::Result::kOk);
+                } else {
+                    CHECK((res == fw::Result::kOk) || (res == fw::Result::kNoSpace));
+                }
+            }
+        }
+        CHECK(ring.ggaDropCount() == 0U);
+        CHECK(ring.typedReaderStats(rid).base.dropped > 0U);
+
+        uint32_t ggaCount = 0U;
+        uint32_t rmcCount = 0U;
+        uint32_t gstCount = 0U;
+        uint32_t gsaCount = 0U;
+        uint32_t gsvCount = 0U;
+        uint8_t expectedGgaSeq = 0U;
+        fw::FanoutView view{};
+        while (fw::isOk(ring.peek(rid, view))) {
+            CHECK(view.first.size() == pkt.size());
+            if (view.type == kGga) {
+                CHECK(view.first[1] == expectedGgaSeq);
+                ++expectedGgaSeq;
+                ++ggaCount;
+            } else if (view.type == kRmc) {
+                ++rmcCount;
+            } else if (view.type == kGst) {
+                ++gstCount;
+            } else if (view.type == kGsa) {
+                ++gsaCount;
+            } else if (view.type == kGsv) {
+                ++gsvCount;
+            }
+            CHECK(fw::isOk(ring.commit(view.lease)));
+        }
+        CHECK(ggaCount == 40U);
+        CHECK(gsvCount == 0U);
+        CHECK(gsaCount == 0U);
+        CHECK(gstCount == 0U);
+        CHECK(rmcCount > 0U);
+    }
+
+    // 2. 精确逐步淘汰顺序：5 条记录占满小环，随后每写入一条新 GGA，淘汰顺序严格为 GSV → GSA → GST → RMC → GGA。
+    {
+        // 每条 20 B 负载 + 3 B 头 = 23 B；5 条共 115 B，总容量 120 B（仅剩 5 B，不够再放第 6 条）。
+        std::array<uint8_t, 120U> smallStorage{};
+        app::data::GnssAppRing ring{};
+        CHECK(fw::isOk(ring.initTyped(
+            smallStorage, smallStorage.size() - fw::kFanoutTypedHeaderBytes, fw::kNoLock)));
+        uint8_t rid = 0U;
+        CHECK(fw::isOk(ring.attach(kNmeaMask, rid)));
+
+        std::array<uint8_t, 20U> rec{};
+        const std::array<uint8_t, 5U> initialOrder = {kGga, kRmc, kGst, kGsa, kGsv};
+        for (size_t i = 0U; i < initialOrder.size(); ++i) {
+            rec.fill(static_cast<uint8_t>(i));
+            CHECK(ring.write(initialOrder[i], rec) == fw::Result::kOk);
+        }
+
+        // 再写 4 条 GGA：依次淘汰 GSV、GSA、GST、RMC，gga_drop 始终为 0。
+        for (uint8_t step = 0U; step < 4U; ++step) {
+            rec.fill(static_cast<uint8_t>(10U + step));
+            CHECK(ring.write(kGga, rec) == fw::Result::kOk);
+            CHECK(ring.ggaDropCount() == 0U);
+        }
+
+        // 此时环内 5 条全为 GGA：再尝试写入 GSV/GSA/GST/RMC，必须全部拒收（kNoSpace）且 gga_drop == 0。
+        for (const uint8_t lowType : {kGsv, kGsa, kGst, kRmc}) {
+            rec.fill(0xEEU);
+            CHECK(ring.write(lowType, rec) == fw::Result::kNoSpace);
+            CHECK(ring.ggaDropCount() == 0U);
+        }
+
+        // 环已全为 GGA 时再写入第 6 条 GGA：淘汰最旧一条 GGA，gga_drop == 1。
+        rec.fill(99U);
+        CHECK(ring.write(kGga, rec) == fw::Result::kOk);
+        CHECK(ring.ggaDropCount() == 1U);
+
+        // 读出剩余 5 条：应为 step=0..3 的 GGA 以及最后的 99（最旧的 0 号 GGA 已被淘汰）。
+        const std::array<uint8_t, 5U> expectedSeqs = {10U, 11U, 12U, 13U, 99U};
+        for (const uint8_t expected : expectedSeqs) {
+            fw::FanoutView view{};
+            CHECK(fw::isOk(ring.peek(rid, view)));
+            CHECK((view.type == kGga) && (view.first[0] == expected));
+            CHECK(fw::isOk(ring.commit(view.lease)));
+        }
+        fw::FanoutView emptyView{};
+        CHECK(ring.peek(rid, emptyView) == fw::Result::kNotFound);
+    }
+
+    // 3. 读侧 pin 保护：第一条被 pin 时，满环淘汰只作用于 pin 区之后，不破坏已 pin 字节。
+    {
+        std::array<uint8_t, 120U> smallStorage{};
+        app::data::GnssAppRing ring{};
+        CHECK(fw::isOk(ring.initTyped(
+            smallStorage, smallStorage.size() - fw::kFanoutTypedHeaderBytes, fw::kNoLock)));
+        uint8_t rid = 0U;
+        CHECK(fw::isOk(ring.attach(kNmeaMask, rid)));
+
+        std::array<uint8_t, 20U> rec{};
+        rec.fill(0xAAU);
+        CHECK(ring.write(kGsv, rec) == fw::Result::kOk); // 首条为 GSV，随后 pin 住。
+        rec.fill(0xBBU);
+        CHECK(ring.write(kGsv, rec) == fw::Result::kOk);
+        rec.fill(0xCCU);
+        CHECK(ring.write(kGga, rec) == fw::Result::kOk);
+        rec.fill(0xDDU);
+        CHECK(ring.write(kGga, rec) == fw::Result::kOk);
+        rec.fill(0xEEU);
+        CHECK(ring.write(kGga, rec) == fw::Result::kOk);
+
+        fw::FanoutView pinned{};
+        CHECK(fw::isOk(ring.peek(rid, pinned)));
+        CHECK((pinned.type == kGsv) && (pinned.first[0] == 0xAAU));
+
+        // 写入新 GGA：首条 GSV 被 pin 保护，只能淘汰第 2 条 GSV（0xBB），首条字节不受破坏。
+        rec.fill(0x55U);
+        CHECK(ring.write(kGga, rec) == fw::Result::kOk);
+        CHECK(ring.ggaDropCount() == 0U);
+        CHECK(pinned.first[0] == 0xAAU);
+        CHECK(fw::isOk(ring.commit(pinned.lease)));
+    }
+}
+
 /** @brief 多次排队只补发一次，清除后可以继续接收下一轮。 */
 void testSaveCoalescing()
 {
@@ -368,10 +532,12 @@ int main()
     testOutConfigAndNvsBlob();
     testLatestCacheAndQueryCaps();
     testSubscriptionAndAppRing();
+    testGnssAppRingPriority();
     testPushGate();
     testConsoleRates();
     testSaveCoalescing();
     testGnssFactoryReset();
     testBaseKeysAndCommandDispatch();
+    testGnssPhonePpp();
     return 0;
 }

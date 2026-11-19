@@ -21,6 +21,7 @@
 namespace core {
 
 inline constexpr uint32_t kWriteTimeoutMs = 200;
+inline constexpr size_t kMaxDeferredReplies = 4;
 
 /** 链路服务累计统计；只由链路任务写入。 */
 struct LinkStats {
@@ -98,11 +99,17 @@ public:
     void onRxDropped(uint32_t count) noexcept;
 
     /**
-     * @brief 周期调用：执行 LinkManager 的断开动作，并按周期向所有 ALARM 推送 0x40 状态帧。
+     * @brief 周期调用：执行 LinkManager 的断开动作、轮询已就绪的延迟应答，并按周期向所有 ALARM 推送 0x40 状态帧。
      * @param nowMs 当前时间（ms）。
      * @note 建议每 100 ms 调用一次（LinkManager 与推送周期都按此推进）；首次调用视为推送到期；
      *       推送 seq 每轮 +1，单帧失败只记 writeErrors 并继续下一个会话。非 ISR、不阻塞。 */
     void tick(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 轮询所有挂起的延迟应答；就绪时使用原会话预留额度发送，未填充帧时释放额度。
+     * @param nowMs 当前时间（ms）。
+     * @note 仅链路任务调用，非 ISR、不阻塞；tick() 内也会自动调用。 */
+    void pollDeferred(uint32_t nowMs) noexcept;
 
     /** @brief 读取并清除白名单脏标志。
      *  @return true 表示自上次调用以来白名单或角色变化，调用方应持久化 LinkManager::whitelist()。 */
@@ -129,6 +136,29 @@ private:
         proto::FrameView frame{}; // payload 指向 parser，pending 期间不再 feed
         bool pending = false;
     };
+
+    struct DeferredEntry {
+        bool active = false;
+        SessionHandle handle = 0;
+        uint16_t msgId = 0;
+        ReplyCredit credit{};
+        bool hasCredit = false;
+        DeferredHook hook{};
+    };
+
+    /** @brief 取消指定会话全部挂起的延迟应答，释放 credit 并通知服务。
+     *  @param handle 正在断开或关闭的会话句柄。
+     *  @note 仅链路任务调用，非 ISR、不阻塞。 */
+    void cancelDeferred(SessionHandle handle) noexcept;
+
+    /** @brief 登记一条延迟应答；槽满或回调为空时释放 credit 并通知取消。
+     *  @param handle 来源会话句柄。
+     *  @param msgId 请求 msg_id。
+     *  @param credit 已预留的应答额度。
+     *  @param hook 服务提供的轮询/取消回调。
+     *  @note 仅链路任务调用，非 ISR、不阻塞。 */
+    void registerDeferred(SessionHandle handle, uint16_t msgId, const ReplyCredit &credit,
+                          const DeferredHook &hook) noexcept;
 
     /** @brief 执行 LinkManager 要求断开的所有句柄：断开传输、退役其解析器错误计数并清 pending。
      *  @param act LinkManager 最近一次调用填写的断开动作。
@@ -161,6 +191,7 @@ private:
     CommandRouter &router_;
     const services::AlarmService &alarm_;
     std::array<Slot, kMaxSessions> slots_{};
+    std::array<DeferredEntry, kMaxDeferredReplies> deferred_{};
     Reply reply_{}; // 复用的应答缓冲（避免占用链路任务栈）
     LinkStats stats_{};
     std::optional<proto::alarm::Heartbeat> last_hb_{};

@@ -2,6 +2,8 @@
 // 只含常量表与纯查询函数，无运行期状态；可在任何任务读取，ISR 安全。
 
 #include "modules/storage/StoreCatalog.hpp"
+#include "modules/storage/StorageModule.hpp"
+#include "modules/storage/StoreKeys.hpp"
 
 #include <array>
 #include <cstdint>
@@ -95,10 +97,34 @@ constexpr std::span<const fw::StoreKey> kDebug{debug::kKeys};
 constexpr std::span<const fw::StoreKey> kDebug{};
 #endif
 
-constexpr std::array<StoreGroup, 4U> kCatalog{{
+/**
+ * @brief 为目录键附加启动加载回调。
+ * @param key: NVS 键。
+ * @param load: 加载回调。
+ * @retval 含有加载回调的键定义。
+ */
+constexpr fw::StoreKey withLoader(fw::StoreKey key, decltype(fw::StoreBinding::load) load) noexcept
+{
+    key.binding.load = load;
+    return key;
+}
+
+constexpr std::array kPhoneKeys{
+    withLoader(store::kPhoneHeightKey, &StorageModule::loadPhoneHeight),
+    withLoader(store::kPhonePppKey, &StorageModule::loadPhonePpp),
+    withLoader(store::kPhoneSatCfgKey, &StorageModule::loadPhoneSatCfg),
+    withLoader(store::kPhonePnKey, &StorageModule::loadPhonePn),
+    withLoader(store::kPhoneNtripKey, &StorageModule::loadPhoneNtrip),
+    withLoader(store::kPhoneJsonSrvKey, &StorageModule::loadPhoneJsonSrv),
+    withLoader(store::kPhoneTbKey, &StorageModule::loadPhoneTb),
+};
+static_assert(fw::uniqueKeys(kPhoneKeys));
+
+constexpr std::array<StoreGroup, 5U> kCatalog{{
     {"gnss.config", "GNSS user settings", kGnssConfig, nullptr},
     {"gnss.base", "GNSS work mode & base settings", kGnssBase, kGnssBaseNames},
     {"gnss.cache", "last detected GNSS receiver (probe hint)", kGnssCache, kGnssCacheNames},
+    {"phone", "phone protocol settings", kPhoneKeys, nullptr},
     {"debug", "trace settings", kDebug, nullptr},
 }};
 

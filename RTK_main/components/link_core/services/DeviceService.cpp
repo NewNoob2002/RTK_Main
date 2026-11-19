@@ -227,6 +227,12 @@ const DeviceInfo &DeviceService::info() const noexcept
     return info_;
 }
 
+void DeviceService::setSatTrackSurveyHook(SatTrackSurveyFn fn, void *ctx) noexcept
+{
+    sat_survey_fn_ = fn;
+    sat_survey_ctx_ = ctx;
+}
+
 std::span<const Route> DeviceService::routes() noexcept
 {
     // 冻结头没有暴露 info_ 的转发入口，而 handler 只拿到 void* self。局部类定义在成员函数内，
@@ -251,10 +257,20 @@ std::span<const Route> DeviceService::routes() noexcept
             static_cast<void>(nowMs);
             return handleBattery(static_cast<DeviceService *>(self)->info(), frame, reply);
         }
-        static DispatchResult satTrack(void *, const proto::FrameView &frame, uint32_t nowMs,
+        /** @brief 0x06 卫星跟踪路由入口：Survey App 走注入钩子，Nav App 维持占位应答。
+         *  @param self 指向 DeviceService 实例。
+         *  @param frame 请求帧。
+         *  @param nowMs 当前时间（ms）。
+         *  @param[out] reply 应答缓冲。
+         *  @retval 路由分发结果。 */
+        static DispatchResult satTrack(void *self, const proto::FrameView &frame, uint32_t nowMs,
                                        Reply &reply) noexcept
         {
-            static_cast<void>(nowMs);
+            const auto *service = static_cast<const DeviceService *>(self);
+            if ((appKindFromSender(frame.sender) == AppKind::kSurvey) &&
+                (service->sat_survey_fn_ != nullptr)) {
+                return service->sat_survey_fn_(service->sat_survey_ctx_, frame, nowMs, reply);
+            }
             return handleSatTrack(frame, reply);
         }
         static DispatchResult com(void *self, const proto::FrameView &frame, uint32_t nowMs,

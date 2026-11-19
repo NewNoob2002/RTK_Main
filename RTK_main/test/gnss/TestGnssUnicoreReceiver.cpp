@@ -16,6 +16,7 @@
 #include "gnss/drivers/UnicoreReceiver.hpp"
 #include "../fixtures/Cm680Version.hpp"
 #include "unity.h"
+#include "PppSequence.hpp"
 
 // 驱动层次约束（ADR-0012 §2.8、CPP-011）：家族基类不可直接实例化；型号只实例化平凡析构的 final 叶子类。
 static_assert(!std::is_constructible_v<gnss::UnicoreReceiver>);
@@ -730,9 +731,121 @@ static void testWorkModeSteps()
     TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "RTCM1005 COM2 1\r\n"));
 }
 
+/**
+ * @brief 验证 PPP 开关的串口命令顺序、回显匹配与失败即停。
+ * @note 单线程主机测试。
+ */
+void testPppSequence()
+{
+    const auto &driver = unicoreDrv().forModel(gnss::Model::kCm680);
+    const auto *decoder = &gnss::unicore::kResponseDecoder;
+    gnss::PppSequence sequence;
+    std::span<const uint8_t> tx;
+    uint32_t now = 100U;
+    constexpr std::array<std::string_view, 5U> kEnable{
+        "CONFIG SBAS DISABLE", "CONFIG SIGNALGROUP 2", "CONFIG PPP ENABLE E6-HAS",
+        "CONFIG PPP CONVERGE 15 25", "SAVECONFIG"};
+    const auto ackAll = [&](bool enabled, std::span<const std::string_view> steps) {
+        sequence.start(enabled);
+        for (const auto step : steps) {
+            TEST_ASSERT_FALSE(sequence.poll(now++, tx).has_value());
+            TEST_ASSERT_TRUE(textEquals(tx, std::string{step} + "\r\n"));
+            const auto unrelated = commandReply("VERSIONA", "OK");
+            sequence.onFrame(driver, *decoder, bytesOf(unrelated), now);
+            TEST_ASSERT_FALSE(sequence.poll(now++, tx).has_value());
+            TEST_ASSERT_TRUE(tx.empty());
+            const auto response = commandReply(std::string{step}, "OK");
+            sequence.onFrame(driver, *decoder, bytesOf(response), now);
+        }
+        TEST_ASSERT_TRUE(sequence.poll(now++, tx) == fw::Result::kOk);
+        TEST_ASSERT_TRUE(tx.empty());
+    };
+    ackAll(true, kEnable);
+    constexpr std::array<std::string_view, 2U> kDisable{"CONFIG PPP DISABLE", "SAVECONFIG"};
+    ackAll(false, kDisable);
+
+    sequence.start(true);
+    TEST_ASSERT_FALSE(sequence.poll(now++, tx).has_value());
+    const auto nack = commandReply("CONFIG SBAS DISABLE", "ERROR");
+    sequence.onFrame(driver, *decoder, bytesOf(nack), now);
+    TEST_ASSERT_TRUE(sequence.poll(now++, tx) == fw::Result::kIoError);
+    TEST_ASSERT_TRUE(tx.empty() && !sequence.active());
+
+    sequence.start(false);
+    TEST_ASSERT_FALSE(sequence.poll(now, tx).has_value());
+    now += gnss::PppSequence::kReplyMs;
+    TEST_ASSERT_TRUE(sequence.poll(now, tx) == fw::Result::kTimeout);
+    TEST_ASSERT_TRUE(tx.empty() && !sequence.active());
+}
+
+/** @brief 验证 PPP 型号支持判定（UM98x 支持，CM680 及其余型号不支持）。 */
+static void testSupportsPpp()
+{
+    TEST_ASSERT_TRUE(gnss::supportsPpp(gnss::Model::kUm980));
+    TEST_ASSERT_TRUE(gnss::supportsPpp(gnss::Model::kUm981));
+    TEST_ASSERT_TRUE(gnss::supportsPpp(gnss::Model::kUm982));
+    TEST_ASSERT_FALSE(gnss::supportsPpp(gnss::Model::kCm680));
+    TEST_ASSERT_FALSE(gnss::supportsPpp(gnss::Model::kZedF9p));
+    TEST_ASSERT_FALSE(gnss::supportsPpp(gnss::Model::kK803));
+    TEST_ASSERT_FALSE(gnss::supportsPpp(gnss::Model::kUnknown));
+}
+
+/** @brief 验证 0x06 截止角/星座脚本顺序、NACK 中断、超时与非法截止角拒绝。 */
+static void testSatMaskSequence()
+{
+    const auto &driver = unicoreDrv().forModel(gnss::Model::kCm680);
+    const auto *decoder = &gnss::unicore::kResponseDecoder;
+    gnss::SatMaskSequence sequence{};
+    std::span<const uint8_t> tx{};
+    uint32_t now = 200U;
+
+    const gnss::SatMaskConfig invalidCfg{.cutoffDeg = 91U};
+    TEST_ASSERT_FALSE(sequence.start(invalidCfg));
+    TEST_ASSERT_FALSE(sequence.active());
+
+    const gnss::SatMaskConfig cfg{
+        .cutoffDeg = 12U, .gps = true, .glo = false, .bds = true, .gal = false, .sbas = true};
+    constexpr std::array<std::string_view, 6U> kExpected{
+        "MASK 12", "UNMASK GPS", "MASK GLO", "UNMASK BDS", "MASK GAL", "CONFIG SBAS ENABLE AUTO"};
+    TEST_ASSERT_TRUE(sequence.start(cfg));
+    for (const auto step : kExpected) {
+        TEST_ASSERT_FALSE(sequence.poll(now++, tx).has_value());
+        TEST_ASSERT_TRUE(textEquals(tx, std::string{step} + "\r\n"));
+        const auto response = commandReply(std::string{step}, "OK");
+        sequence.onFrame(driver, *decoder, bytesOf(response), now);
+    }
+    TEST_ASSERT_TRUE(sequence.poll(now++, tx) == fw::Result::kOk);
+    TEST_ASSERT_TRUE(tx.empty() && !sequence.active());
+
+    // NACK 在中途立即中止，不再发出后续步骤
+    const gnss::SatMaskConfig disableAll{
+        .cutoffDeg = 5U, .gps = false, .glo = false, .bds = false, .gal = false, .sbas = false};
+    TEST_ASSERT_TRUE(sequence.start(disableAll));
+    TEST_ASSERT_FALSE(sequence.poll(now++, tx).has_value());
+    TEST_ASSERT_TRUE(textEquals(tx, "MASK 5\r\n"));
+    const auto okStep0 = commandReply("MASK 5", "OK");
+    sequence.onFrame(driver, *decoder, bytesOf(okStep0), now);
+    TEST_ASSERT_FALSE(sequence.poll(now++, tx).has_value());
+    TEST_ASSERT_TRUE(textEquals(tx, "MASK GPS\r\n"));
+    const auto nackStep1 = commandReply("MASK GPS", "ERROR");
+    sequence.onFrame(driver, *decoder, bytesOf(nackStep1), now);
+    TEST_ASSERT_TRUE(sequence.poll(now++, tx) == fw::Result::kIoError);
+    TEST_ASSERT_TRUE(tx.empty() && !sequence.active());
+
+    // 单步超时中止
+    TEST_ASSERT_TRUE(sequence.start(disableAll));
+    TEST_ASSERT_FALSE(sequence.poll(now, tx).has_value());
+    now += gnss::SatMaskSequence::kReplyMs;
+    TEST_ASSERT_TRUE(sequence.poll(now, tx) == fw::Result::kTimeout);
+    TEST_ASSERT_TRUE(tx.empty() && !sequence.active());
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
+    RUN_TEST(testPppSequence);
+    RUN_TEST(testSupportsPpp);
+    RUN_TEST(testSatMaskSequence);
     RUN_TEST(testMaintenanceCommands);
     RUN_TEST(testWorkModeSteps);
     RUN_TEST(testGoldenProbe);

@@ -36,4 +36,20 @@ enum class Policy : uint8_t {
     kPhonePreempt,   // 手机接入时踢掉报警器；手机在线时拒绝报警器
 };
 
+/** 手机端 App 类型：按帧头 sender 字段区分（不改变会话 Role 判定）。 */
+enum class AppKind : uint8_t {
+    kNav = 0, // sender == 0x00（Nav / Configure App）
+    kSurvey,  // 其它非报警器 sender（Survey App）
+};
+
+/** @brief 从帧头 sender 字段推导手机 App 类型。
+ *  @param sender 请求帧头 sender 字节。
+ *  @retval AppKind::kNav sender == 0x00（Nav/Configure App）。
+ *  @retval AppKind::kSurvey 其它 sender 字节（Survey App）。
+ *  @note 纯函数，线程/ISR 安全；仅在 Role::kPhone 会话中用于区分应答格式。 */
+[[nodiscard]] constexpr AppKind appKindFromSender(uint8_t sender) noexcept
+{
+    return (sender == 0x00U) ? AppKind::kNav : AppKind::kSurvey;
+}
+
 } // namespace core

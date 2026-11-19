@@ -10,11 +10,13 @@
 #include <type_traits>
 
 #include "fw/FanoutRing.hpp"
+#include "fw/Command.hpp"
 #include "fw/Slot.hpp"
 #include "fw/Status.hpp"
 #include "AppConfig.hpp"
 #if RTK_GNSS_ENABLED
 #include "data/BaseRtcmRing.hpp"
+#include "data/GnssAppRing.hpp"
 #include "data/GnssOutput.hpp"
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
@@ -24,8 +26,16 @@
 #include "def/StorageDef.hpp"
 #include "def/SystemDef.hpp"
 #include "modules/rtcm/RtcmForwarder.hpp"
+#include "PhoneCompatService.hpp"
+#include "proto/Frame.hpp"
 
 namespace app::data {
+
+/** 手机 0x0A Nav GSV 查询缓存（单句 <= proto::kMaxPayload）。 */
+struct LatestGsv {
+    std::array<uint8_t, proto::kMaxPayload> bytes{};
+    uint16_t len = 0U;
+};
 /** 零初值延迟槽包装：静态存储落 .bss，在 DataCenter::init() 时原地构造并绑定锁（ADR-0011 §7）。 */
 template <typename T> class ZeroInitSlot {
 public:
@@ -128,7 +138,14 @@ struct DataCenter {
     fw::Slot<SystemStatus> systemStatus{};
     fw::Slot<SystemMode> systemMode{};
     fw::Slot<uint32_t> rtcmReset{};
+    fw::Slot<std::optional<bool>> phonePppEnabled{};                // 启动恢复后由 kIo 写入。
+    fw::Slot<std::optional<core::SatTrackConfig>> phoneSatConfig{}; // 启动恢复后由 kIo 写入。
 #if RTK_GNSS_ENABLED
+    fw::Slot<fw::Command> phonePppCommand{};      // kLink 投递，一个请求在途。
+    fw::Slot<fw::CommandResult> phonePppResult{}; // kIo 完成时带回相同 seq。
+    fw::Slot<fw::Command> phoneSatCommand{};      // kLink 投递 0x06，一个请求在途。
+    fw::Slot<fw::CommandResult> phoneSatResult{}; // kIo 完成 0x06 时带回相同 seq。
+    ZeroInitSlot<LatestGsv> gnssLatestGsv{};      // 0x0A Nav GSV 最近单句缓存。
     fw::Slot<rtos::ExecStats> ioExecStats{};
     fw::Slot<GnssStatus> gnssStatus{};
     ZeroInitSlot<gnss::Fix> gnssFix{};
@@ -138,7 +155,7 @@ struct DataCenter {
     // 读回文本交接缓冲（ADR-0012 §2.7）：只有 kIo 在读回进行中写，写完后才 write(gnssReadback) 发布；
     // 控制台在看到 gnssReadback.seq 变化后按 len 读取。下一次读回只能由控制台在读完后发起，故读写不重叠、无需加锁。
     std::array<char, kGnssReadbackBytes> gnssReadbackText{};
-    fw::FanoutRing gnssAppRing{};
+    GnssAppRing gnssAppRing{};
     GnssLatestCache gnssLatest{};
     GnssAppSubState gnssAppSub{};
     ZeroInitSlot<GnssWorkModeStatus> gnssWorkMode{};

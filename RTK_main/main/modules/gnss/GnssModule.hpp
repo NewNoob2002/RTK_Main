@@ -21,6 +21,8 @@
 #include "fw/Result.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/NmeaParser.hpp"
+#include "PhoneCompatService.hpp"
+#include "PppSequence.hpp"
 
 namespace app {
 struct AppContext;
@@ -708,6 +710,39 @@ private:
         kRate = 2,
     };
     GnssSaveQueue save_queue_{};
+    /** @brief 受理手机 PPP 命令。 @param cmd: PPP 开关请求。 @param[out] result: 受理结果。 @note 仅 kIo。 */
+    void cmdPhonePpp(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+
+    /** @brief 受理手机 0x06 截止角/星座配置命令。 @param cmd: 6 B 配置请求。 @param[out] result: 受理结果。 @note 仅 kIo。 */
+    void cmdPhoneSatCfg(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+
+    /** @brief 推进手机 PPP/0x06 命令或上电重放。 @param nowMs: 当前时钟。 @retval true 本轮独占 UART。 @note 仅 kIo。 */
+    [[nodiscard]] bool pollPhonePpp(uint32_t nowMs) noexcept;
+
+    /** @brief 发布 PPP 结束状态。 @param status: 执行结果。 @note 仅 kIo，成功手机请求可写 NVS。 */
+    void finishPhonePpp(fw::Result status) noexcept;
+
+    /** @brief 发布 0x06 卫星配置结束状态。 @param status: 执行结果。 @note 仅 kIo，成功手机请求可写 NVS。 */
+    void finishPhoneSatCfg(fw::Result status) noexcept;
+
+    /** @brief 拉取 kLink 投递的待执行手机命令或触发上电重放。 @note 仅 kIo。 */
+    void startPendingPhoneConfig() noexcept;
+
+    /** @brief 写一条手机配置脚本命令到 GNSS UART。 @param tx: 待发字节。 @retval true 全部写入成功。 @note 仅 kIo。 */
+    [[nodiscard]] bool writePhoneTx(std::span<const uint8_t> tx) noexcept;
+
+    /** @brief 查询配置通道是否空闲。 @retval true PPP 或 0x06 可启动。 @note 仅 kIo。 */
+    [[nodiscard]] bool canStartPhonePpp() noexcept;
+
+    ::gnss::PppSequence phone_ppp_{};
+    uint32_t phone_ppp_seq_ = 0U;
+    bool phone_ppp_enabled_ = false;
+    bool phone_ppp_replay_ = false;
+    ::gnss::SatMaskSequence phone_sat_{};
+    uint32_t phone_sat_seq_ = 0U;
+    core::SatTrackConfig phone_sat_cfg_{};
+    bool phone_sat_replay_ = false;
+
     ::gnss::Maintenance active_maintenance_ = ::gnss::Maintenance::kSave;
     uint32_t completed_maintenance_seq_ = 0U;
     uint32_t console_maintenance_seq_ = 0U;

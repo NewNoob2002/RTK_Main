@@ -8,6 +8,7 @@
 #include <atomic>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <type_traits>
 
 #include "AppConfig.hpp"
@@ -26,6 +27,7 @@
 #include "cli/Console.hpp"
 #include "core/AlarmSource.hpp"
 #include "core/CommandRouter.hpp"
+#include "PhoneCompatService.hpp"
 #include "core/LinkManager.hpp"
 #include "core/LinkService.hpp"
 #include "core/services/AlarmService.hpp"
@@ -107,7 +109,24 @@ public:
         return rtcm_snapshot_;
     }
 
+    /** @brief 读取当前对外上报的设备 SN（0x01/0x08 共用）。 @retval SN 视图。 @note 仅 kLink。 */
+    [[nodiscard]] std::string_view deviceSn() const noexcept;
+
+    /** @brief 更新内存中 DeviceInfo 的 SN（0x08 保存成功后同步）。 @param sn: 新 SN 视图。 @note 仅 kLink。 */
+    void updateDeviceSn(std::string_view sn) noexcept;
+
+    /** @brief 安排延迟 >=200 ms 的恢复出厂或重启（0x1E）。 @param factoryReset: 是否擦除用户 NVS。 @param reboot: 是否重启。 @param nowMs: 当前时钟。 @retval true 已安排。 @note 仅 kLink。 */
+    [[nodiscard]] bool schedulePhoneReset(bool factoryReset, bool reboot, uint32_t nowMs) noexcept;
+
 private:
+    enum class PendingReset : uint8_t {
+        kNone = 0,
+        kReboot = 1,
+        kFactory = 2,
+    };
+
+    /** @brief 检查到期的 0x1E 恢复出厂或重启请求并执行。 @param nowMs: 当前时钟。 @note 仅 kLink。 */
+    void pollPhoneReset(uint32_t nowMs) noexcept;
     friend struct ModuleTestAccess;
     using SessionDemux = demux::StaticDemux<proto::demux_frame::kDecoder, demux::rtcm3::kDecoder>;
     static constexpr uint8_t kProductIndex = SessionDemux::indexOf<proto::demux_frame::kDecoder>();
@@ -320,10 +339,40 @@ private:
      */
     void syncGnssInfo(uint32_t nowMs) noexcept;
     /**
-     * @brief 把 GNSS 流绑定会话标记为待重绑
+     * @brief 把 GNSS 流绑定会话标记为待重绑并清零默认直传与显式订阅
      * @note 仅启动期或 kLink 串行路径，非 ISR；不分配堆。
      */
     void resetGnssStreamSession() noexcept;
+    /**
+     * @brief 返回当前生效的接收机支持语句位图（未探测前按默认能力集回退）
+     * @retval bit 0..6 对应 gnss::OutputMsg；不修改状态。
+     * @note 仅 kLink，非 ISR，不阻塞。
+     */
+    [[nodiscard]] uint32_t effectiveSupportedMask() const noexcept;
+    /**
+     * @brief 汇总默认直传与显式订阅位图并同步到 App 环与跨任务订阅状态
+     * @note 仅 kLink，非 ISR，不阻塞；仅在有效掩码变化时调用 gnssAppRing.setMask。
+     */
+    void applyGnssStreamMask() noexcept;
+    /**
+     * @brief 新 PHONE 会话建立时立即开启默认 NMEA 直传（无需等待首帧）
+     * @param handle: 新建立的 PHONE 会话句柄
+     * @note 仅 kLink，非 ISR，不阻塞。
+     */
+    void onPhoneSessionOpen(core::SessionHandle handle) noexcept;
+    /**
+     * @brief PHONE 会话收到产品帧时检查 Nav 首帧（sender==0x00），若未显式订阅则关闭默认直传
+     * @param handle: 来源会话句柄
+     * @param wire: 已通过分流校验的完整产品帧
+     * @note 仅 kLink，非 ISR，不阻塞。
+     */
+    void onPhoneProductFrame(core::SessionHandle handle, std::span<const uint8_t> wire) noexcept;
+    /**
+     * @brief 帧派发后复核当前 PHONE 会话角色；若已转为 ALARM（HELLO 配对）则关闭直传
+     * @param handle: 来源会话句柄
+     * @note 仅 kLink，非 ISR，不阻塞。
+     */
+    void recheckPhoneSessionRole(core::SessionHandle handle) noexcept;
     /**
      * @brief 把 App 环记录提交给当前手机会话
      * @retval true 本轮已处理满预算，可能仍有记录
@@ -422,9 +471,18 @@ private:
     std::optional<core::services::GnssService> gnss_service_{};
     uint8_t gnss_reader_id_ = 0U;
     bool gnss_reader_attached_ = false;
-    // App 环单条记录上限；跨环尾记录经 spp_server_tx_commit2 两段提交。
+    core::SessionHandle phone_session_handle_ = 0U;
+    bool gnss_default_push_ = false;
+    bool gnss_explicit_sub_ = false;
+    bool gnss_supported_known_ = false;
+    uint32_t gnss_supported_mask_ = 0U;
+    uint32_t gnss_applied_mask_ = 0U;
+    // App 环单条记录上限；单段连续提交至 SPP TX.stream。
     static constexpr size_t kGnssStreamMaxRecord = kGnssAppRingBytes - fw::kFanoutTypedHeaderBytes;
 #endif
+    core::services::PhoneCompatService phone_compat_{};
+    PendingReset pending_reset_ = PendingReset::kNone;
+    uint32_t pending_reset_at_ms_ = 0U;
     core::CommandRouter router_{};
     std::optional<core::LinkService> service_{};
     std::array<SessionEntry, kMaxSessions> sessions_{};

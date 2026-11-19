@@ -6,8 +6,9 @@ idf_component_register(
          "CommandRouter.cpp"
          "services/DeviceService.cpp" "services/ConfigService.cpp"
          "services/AlarmService.cpp" "services/PairService.cpp"
-         "services/GnssService.cpp"
+         "services/GnssService.cpp" "services/PhoneCompatService.cpp"
     INCLUDE_DIRS "include"
+    PRIV_INCLUDE_DIRS "private_include"
     REQUIRES device_proto app_fw)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

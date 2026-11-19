@@ -108,6 +108,7 @@ void GnssModule::finishReadbackIfDone() noexcept
     publishReadback(readback_lines_, readback_len_, true, readback_truncated_, false);
 }
 
+/** @brief 发布控制器迁移诊断并标记待重放设置。 @note 仅 kIo。 */
 void GnssModule::updateControllerStatus() noexcept
 {
     const auto curStats = controller().stats();
@@ -119,6 +120,10 @@ void GnssModule::updateControllerStatus() noexcept
     }
     const auto curState = controller().state();
     if (curState != last_state_) {
+        if (curState == ::gnss::State::kConfiguring) {
+            phone_ppp_replay_ = true;
+            phone_sat_replay_ = true;
+        }
         traceGnss(GnssTrace::kState, static_cast<uint32_t>(curState),
                   static_cast<uint32_t>(last_state_));
         FW_LOGI(fw::TraceCat::kGnss, "<sm> state %s -> %s", ::gnss::stateName(last_state_),
