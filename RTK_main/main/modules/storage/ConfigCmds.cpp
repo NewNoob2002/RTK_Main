@@ -124,8 +124,9 @@ void showBuild() noexcept
         return;
     }
     const auto &pins = board::current().gnss;
-    cli::printKv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, %d baud", pins.uart, pins.rxGpio,
-                 pins.txGpio, CONFIG_RTK_GNSS_DEFAULT_BAUD);
+    cli::printKv("gnss_uart", "UART%d RX GPIO%d TX GPIO%d, probe %d / target %" PRIu32 " baud",
+                 pins.uart, pins.rxGpio, pins.txGpio, CONFIG_RTK_GNSS_DEFAULT_BAUD,
+                 kGnssTargetBaud);
     if (pins.powerGpio >= 0) {
         cli::printKv("gnss_power", "GPIO%d active %s", pins.powerGpio,
                      pins.powerActiveHigh ? "high" : "low");

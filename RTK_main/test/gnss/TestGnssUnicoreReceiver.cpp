@@ -840,6 +840,32 @@ static void testSatMaskSequence()
     TEST_ASSERT_TRUE(tx.empty() && !sequence.active());
 }
 
+/** @brief 验证 CM680 的默认脚本与 460800 切速步不含 SAVECONFIG。 */
+static void testCm680BaudScriptNoSave()
+{
+    const auto &driver = unicoreDrv().forModel(gnss::Model::kCm680);
+    gnss::ConfigStep step{};
+    TEST_ASSERT_TRUE(driver.baudStep(1U, 460800U, step));
+    TEST_ASSERT_TRUE(textEquals(step.cmd.view(), "CONFIG COM1 460800\r\n"));
+    TEST_ASSERT_FALSE(step.expectReply);
+    TEST_ASSERT_EQUAL_UINT32(460800U, step.switchBaud);
+
+    gnss::RoverConfig cfg{};
+    cfg.port = 1U;
+    cfg.portBaud = 460800U;
+    const std::array<std::string_view, 3U> expected{
+        "UNLOGALL COM1\r\n",
+        "MODE ROVER\r\n",
+        "CONFIG COM1 460800\r\n",
+    };
+    for (size_t i = 0U; i < expected.size(); ++i) {
+        TEST_ASSERT_TRUE(driver.roverStep(i, gnss::Model::kCm680, cfg, step));
+        TEST_ASSERT_TRUE(textEquals(step.cmd.view(), expected[i]));
+        TEST_ASSERT_FALSE(textEquals(step.cmd.view(), "SAVECONFIG\r\n"));
+    }
+    TEST_ASSERT_FALSE(driver.roverStep(expected.size(), gnss::Model::kCm680, cfg, step));
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
@@ -847,6 +873,7 @@ int main(int, char **)
     RUN_TEST(testSupportsPpp);
     RUN_TEST(testSatMaskSequence);
     RUN_TEST(testMaintenanceCommands);
+    RUN_TEST(testCm680BaudScriptNoSave);
     RUN_TEST(testWorkModeSteps);
     RUN_TEST(testGoldenProbe);
     RUN_TEST(testGoldenOutputPlan);

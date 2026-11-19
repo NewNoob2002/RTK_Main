@@ -168,7 +168,7 @@ target_compile_options(gnss_output_check PRIVATE -fno-exceptions -fno-rtti -Wall
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 target_compile_definitions(gnss_output_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1 CONFIG_RTK_LOG_RING_BYTES=4096
     CONFIG_RTK_GNSS_UART_NUM=2 CONFIG_RTK_GNSS_PORT=2 CONFIG_RTK_GNSS_DEFAULT_BAUD=115200
-    CONFIG_RTK_GNSS_RATE_HZ=1)
+    CONFIG_RTK_GNSS_TARGET_BAUD=460800 CONFIG_RTK_GNSS_RATE_HZ=1)
 target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim main_rtos gnss)
 add_test(NAME gnss_output COMMAND gnss_output_check)
 
@@ -207,7 +207,7 @@ target_compile_options(gnss_stream_check PRIVATE -ffunction-sections -fdata-sect
 target_link_options(gnss_stream_check PRIVATE -Wl,--gc-sections)
 target_compile_definitions(gnss_stream_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1
     CONFIG_RTK_LOG_RING_BYTES=4096 CONFIG_RTK_GNSS_UART_NUM=2 CONFIG_RTK_GNSS_PORT=2
-    CONFIG_RTK_GNSS_DEFAULT_BAUD=115200 CONFIG_RTK_GNSS_RATE_HZ=1)
+    CONFIG_RTK_GNSS_DEFAULT_BAUD=115200 CONFIG_RTK_GNSS_TARGET_BAUD=460800 CONFIG_RTK_GNSS_RATE_HZ=1)
 target_link_libraries(gnss_stream_check PRIVATE main_pure main_rtos main_nvs_shim gnss)
 add_test(NAME gnss_stream COMMAND gnss_stream_check)
 

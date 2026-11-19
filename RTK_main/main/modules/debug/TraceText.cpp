@@ -137,11 +137,13 @@ constexpr std::array<TraceField, 2U> kGnssAppDrop = {
     {{"kind", TraceValue::kDecA}, {"type", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 2U> kGnssOutCfg = {
     {{"mask", TraceValue::kHexA}, {"saved", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kGnssBaudFail = {
+    {{"baud", TraceValue::kDecA}, {"result", TraceValue::kDecB}}};
 #endif
 
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
 #if RTK_GNSS_ENABLED
-constexpr std::array<TraceText, 60U> kTable = {{
+constexpr std::array<TraceText, 61U> kTable = {{
 #else
 constexpr std::array<TraceText, 47U> kTable = {{
 #endif
@@ -277,6 +279,9 @@ constexpr std::array<TraceText, 47U> kTable = {{
      "<app> drop kind={kind} type={type}", std::span<const TraceField>(kGnssAppDrop)},
     {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kOutCfg),
      "<out> mask={mask} saved={saved}", std::span<const TraceField>(kGnssOutCfg)},
+    {fw::TraceCat::kGnss, static_cast<uint8_t>(GnssSubTrace::kBaudFail),
+     "<cfg> startup baud {baud} failed (result={result})",
+     std::span<const TraceField>(kGnssBaudFail)},
 #endif
 }};
 

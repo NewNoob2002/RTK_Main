@@ -32,6 +32,9 @@
 
 namespace app {
 
+static_assert(gnss_store::validUserBaud(kGnssTargetBaud),
+              "RTK_GNSS_TARGET_BAUD must be a supported baud rate");
+
 using detail::addUniqueDecoder;
 using detail::toResult;
 using detail::traceGnssSub;
@@ -106,7 +109,9 @@ fw::Result GnssModule::startController() noexcept
                            controller().outputPlan(), hint_, clock)) {
         return initFailed(fw::Result::kInvalidState);
     }
-    boot_baud_pending_ = !ctx().bootConfig.safeDefaults && ctx().bootConfig.userNvsReady;
+    boot_baud_pending_ = true;
+    baud_fail_count_ = 0U;
+    ctx().data.gnssBaudFailCount.store(0U, std::memory_order_relaxed);
     // initUart 已按同一候选首项配置端口。
     host_baud_ = bauds_.front();
     last_state_ = controller().state();
@@ -282,7 +287,7 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     }
     pollController(nowMs);
     tickPendingApply(nowMs);
-    tickMaintenance();
+    tickMaintenance(nowMs);
     pollWorkMode(nowMs);
     const bool txProgress = pumpRtcmPipe();
 

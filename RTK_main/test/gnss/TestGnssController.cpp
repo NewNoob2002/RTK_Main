@@ -186,6 +186,9 @@ public:
     }
     bool baudStep(uint8_t, uint32_t baud, ConfigStep &out) const noexcept override
     {
+        if (family_ == Family::kUblox) {
+            return false;
+        }
         out = ConfigStep{.expectReply = false, .switchBaud = baud};
         return out.cmd.append("BAUD\r\n");
     }
@@ -676,6 +679,30 @@ void testMaintenanceMode()
     TEST_ASSERT_EQUAL(gnss::State::kRunning, ubloxCtrl.state());
 }
 
+/** @brief 验证切速 NACK 与不支持驱动均保持旧速率且不卡死。 */
+void testMaintenanceBaudNackAndUnsupported()
+{
+    Controller controller;
+    const RoverConfig cfg = roverConfig();
+    uint32_t now = 0U;
+    configureForMaintenance(controller, kReceiverA, cfg, now);
+    TEST_ASSERT_TRUE(controller.requestBaud(460800U));
+    TEST_ASSERT_TRUE(isWrite(controller.poll(now), "BAUD\r\n"));
+    feed(controller, "NO", ++now);
+    TEST_ASSERT_EQUAL(Action::Kind::kNone, controller.poll(now).kind);
+    TEST_ASSERT_EQUAL(gnss::State::kRunning, controller.state());
+    TEST_ASSERT_EQUAL_UINT32(115200U, controller.hostBaud());
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kNack, controller.stats().maintenanceResult);
+
+    Controller unsupported;
+    uint32_t t2 = 0U;
+    configureForMaintenance(unsupported, kReceiverB, cfg, t2);
+    TEST_ASSERT_TRUE(unsupported.requestBaud(460800U));
+    TEST_ASSERT_EQUAL(gnss::State::kRunning, unsupported.state());
+    TEST_ASSERT_EQUAL_UINT32(115200U, unsupported.hostBaud());
+    TEST_ASSERT_EQUAL(gnss::MaintenanceResult::kUnsupported, unsupported.stats().maintenanceResult);
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
@@ -690,6 +717,7 @@ int main(int, char **)
     RUN_TEST(testStateNames);
     RUN_TEST(testMaintenanceSave);
     RUN_TEST(testMaintenanceBaud);
+    RUN_TEST(testMaintenanceBaudNackAndUnsupported);
     RUN_TEST(testMaintenanceReset);
     RUN_TEST(testMaintenanceMode);
     return UNITY_END();

@@ -232,8 +232,9 @@ void printStatusSys(const SystemStatus &system, const rtos::ExecStats &exec) noe
                  " B",
                  ioExec.rounds, ioExec.overruns, ioExec.maxRoundMs, ioExec.stackFree);
     cli::printSection("gnss");
-    cli::printKv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::stateName(gnss.state),
-                 ::gnss::modelName(gnss.model), gnss.hostBaud);
+    cli::printKv("state", "%s  model=%s  baud=%" PRIu32 "  baud_fail=%" PRIu32,
+                 ::gnss::stateName(gnss.state), ::gnss::modelName(gnss.model), gnss.hostBaud,
+                 data.gnssBaudFailCount.load(std::memory_order_relaxed));
     cli::printKv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B",
                  gnss.pipe.pushedFrames, gnss.pipe.droppedFrames, gnss.pipe.writtenBytes);
     cli::printKv("app_ring",
@@ -286,8 +287,9 @@ void printGnssSection() noexcept
     const auto rRd = data.gnssAppRing.typedReaderStats(0U);
     const auto sub = data.gnssAppSub.snapshot();
     cli::printSection("gnss");
-    cli::printKv("state", "%s  model=%s  baud=%" PRIu32, ::gnss::stateName(gnss.state),
-                 ::gnss::modelName(gnss.model), gnss.hostBaud);
+    cli::printKv("state", "%s  model=%s  baud=%" PRIu32 "  baud_fail=%" PRIu32,
+                 ::gnss::stateName(gnss.state), ::gnss::modelName(gnss.model), gnss.hostBaud,
+                 data.gnssBaudFailCount.load(std::memory_order_relaxed));
     cli::printKv("pipe", "push=%" PRIu32 "  drop=%" PRIu32 "  written=%" PRIu32 " B",
                  gnss.pipe.pushedFrames, gnss.pipe.droppedFrames, gnss.pipe.writtenBytes);
     cli::printKv("app_ring",

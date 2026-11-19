@@ -14,6 +14,7 @@
 #include "def/GnssSubDef.hpp"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "fw/Trace.hpp"
 #include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssKeys.hpp"
 #include "modules/storage/StoreKeys.hpp"
@@ -30,6 +31,7 @@ constinit app::AppContext s_failureContext{};
 constinit app::AppContext s_dispatchContext{};
 constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
+constinit std::array<app::AppContext, 7U> s_targetBaudContexts{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -46,11 +48,27 @@ unsigned s_modeBaseCommands = 0;
 unsigned s_pppCommands = 0;
 unsigned s_satMaskCommands = 0;
 bool s_applyBaud = true;
+bool s_rejectBaud = false;
 bool s_rejectSave = false;
 bool s_rejectSatMask = false;
 bool s_expectBaudSave = false;
+uint32_t s_baudFailTraces = 0U;
+uint32_t s_lastBaudFailTarget = 0U;
+uint32_t s_lastBaudFailResult = 0U;
 nvs_handle_t s_nvs = 0U;
 std::string s_rx;
+
+/** @brief 捕获测试期间发出的 GNSS 切速失败 trace 事件。 @param ctx: 未使用。 @param ev: 追踪事件。 @note 单线程主机测试。 */
+void captureBaudTrace(void *ctx, const fw::TraceEvent &ev) noexcept
+{
+    static_cast<void>(ctx);
+    if ((ev.cat == fw::TraceCat::kGnss) &&
+        (ev.code == static_cast<uint8_t>(app::GnssSubTrace::kBaudFail))) {
+        ++s_baudFailTraces;
+        s_lastBaudFailTarget = ev.a;
+        s_lastBaudFailResult = ev.b;
+    }
+}
 
 void check(bool ok, const char *expr, int line)
 {
@@ -124,7 +142,7 @@ void checkStoredDefaults(nvs_handle_t handle)
 {
     uint32_t baud = 0U;
     uint8_t value = 0U;
-    CHECK(nvs_get_u32(handle, "baud", &baud) == ESP_OK && baud == 115200U);
+    CHECK(nvs_get_u32(handle, "baud", &baud) == ESP_ERR_NVS_NOT_FOUND);
     CHECK(nvs_get_u8(handle, "rate", &value) == ESP_OK && value == 1U);
     CHECK(nvs_get_u8(handle, "gsv", &value) == ESP_OK && value == 1U);
     CHECK(nvs_get_u8(handle, "family", &value) == ESP_ERR_NVS_NOT_FOUND);
@@ -214,15 +232,28 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
         return static_cast<int>(len);
     }
     const std::string_view baudDefault = s_p2 ? "CONFIG COM1 115200\r\n" : "CONFIG COM2 115200\r\n";
+    const std::string_view baudMid = s_p2 ? "CONFIG COM1 230400\r\n" : "CONFIG COM2 230400\r\n";
     const std::string_view baudFast = s_p2 ? "CONFIG COM1 460800\r\n" : "CONFIG COM2 460800\r\n";
     if (bytes == "FRESET\r\n") {
         ++s_fresetCommands;
         s_readyAt = s_now + 3500U;
         s_receiverBaud = 115200U;
-    } else if (bytes == baudDefault || bytes == baudFast) {
+    } else if (bytes == baudDefault || bytes == baudMid || bytes == baudFast) {
         ++s_baudCommands;
-        if (s_applyBaud) {
-            s_receiverBaud = bytes == baudDefault ? 115200U : 460800U;
+        if (s_rejectBaud) {
+            std::string reply{"command,"};
+            reply += bytes.substr(0, bytes.size() - 2U);
+            reply += ",response: ERROR";
+            unsigned checksum = s_p2 ? static_cast<unsigned>('$') : 0U;
+            for (char ch : reply) {
+                checksum ^= static_cast<unsigned char>(ch);
+            }
+            std::array<char, 6> suffix{};
+            (void)std::snprintf(suffix.data(), suffix.size(), "*%02X\r\n", checksum);
+            s_rx += "$" + reply + suffix.data();
+        } else if (s_applyBaud) {
+            s_receiverBaud =
+                (bytes == baudDefault) ? 115200U : ((bytes == baudMid) ? 230400U : 460800U);
             s_expectBaudSave = true;
         }
     } else if (bytes == "VERSIONA\r\n") {
@@ -297,7 +328,8 @@ void testGnssFactoryReset()
     startModule(nvs, 115200U, true);
     advance(3000U);
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
-    CHECK(s_hostBaud == 115200U && s_baudCommands == 1U && s_saveCommands == 1U);
+    // 启动切速仅改运行态，不发 SAVECONFIG。
+    CHECK(s_hostBaud == 115200U && s_baudCommands == 1U && s_saveCommands == 0U);
 
     const std::array<uint8_t, 1> rate{2U};
     CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kSetRate), rate).status));
@@ -311,7 +343,7 @@ void testGnssFactoryReset()
     CHECK(fw::isOk(out.encode(outBytes, len)));
     CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssSubVerb::kSetOut), outBytes).status));
     advance(500U);
-    CHECK(s_context->data.gnssOutCfg.read().intervals == out.intervals && s_saveCommands == 1U);
+    CHECK(s_context->data.gnssOutCfg.read().intervals == out.intervals && s_saveCommands == 0U);
 
     constexpr std::array<uint8_t, 4> kBaud460800{0x00U, 0x08U, 0x07U, 0x00U};
     s_rejectSave = true;
@@ -320,7 +352,7 @@ void testGnssFactoryReset()
     advance(500U);
     uint32_t stored = 0U;
     CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_OK && stored == 460800U);
-    CHECK(s_hostBaud == 460800U && s_saveCommands == 2U);
+    CHECK(s_hostBaud == 460800U && s_saveCommands == 1U);
     CHECK(s_context->data.gnssStatus.read().ctrl.maintenanceResult == gnss::MaintenanceResult::kOk);
     s_rejectSave = false;
 
@@ -333,11 +365,11 @@ void testGnssFactoryReset()
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kProbing);
     advance(8000U);
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
-    CHECK(s_hostBaud == 115200U && s_saveCommands == 2U);
+    CHECK(s_hostBaud == 115200U && s_saveCommands == 1U);
     checkStoredDefaults(nvs);
     CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssMaintenanceVerb::kSave)).status));
     advance(100U);
-    CHECK(s_saveCommands == 3U);
+    CHECK(s_saveCommands == 2U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
     s_context = &s_failureContext;
@@ -348,6 +380,7 @@ void testGnssFactoryReset()
     advance(4000U);
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
     CHECK(s_hostBaud == 460800U && s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 1U);
     CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_OK && stored == 115200U);
     CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 460800U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
@@ -649,5 +682,179 @@ void testBaseKeysAndCommandDispatch()
     CHECK(!s_sentSatsInfo);
     CHECK(s_gpioConfigs == 0U && s_gpioChanges == 0U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
+    nvs_close(nvs);
+}
+
+namespace {
+
+/**
+ * @brief 擦除 GNSS 命名空间下的探测缓存与用户波特率覆盖键。
+ * @param nvs: 已打开的 NVS 句柄。
+ * @note 仅单线程主机测试调用。
+ */
+void eraseGnssBaudAndCache(nvs_handle_t nvs)
+{
+    for (const char *key : {"baud", "family", "model", "cache_baud"}) {
+        const esp_err_t err = nvs_erase_key(nvs, key);
+        CHECK((err == ESP_OK) || (err == ESP_ERR_NVS_NOT_FOUND));
+    }
+    CHECK(nvs_commit(nvs) == ESP_OK);
+}
+
+/**
+ * @brief 在独立 AppContext 上以给定接收机速率与 NVS 覆盖启动 P2(CM680) GNSS 模块。
+ * @param slot: s_targetBaudContexts 数组下标。
+ * @param nvs: 已打开的 NVS 句柄。
+ * @param demux: 外供分流区。
+ * @param pipe: 外供 RTCM 管道区。
+ * @param receiverBaud: 模拟接收机当前串口波特率。
+ * @param userBaud: 用户 NVS gnss/baud 值（0 表示不设置）。
+ * @param applyBaud: 接收机是否响应改速命令。
+ * @param rejectBaud: 接收机是否对改速命令返回 ERROR。
+ * @note 仅单线程主机测试调用。
+ */
+void bootP2TargetCase(size_t slot, nvs_handle_t nvs, std::span<uint8_t> demux,
+                      std::span<uint8_t> pipe, uint32_t receiverBaud, uint32_t userBaud,
+                      bool applyBaud, bool rejectBaud)
+{
+    s_context = &s_targetBaudContexts[slot];
+    s_context->bindContexts();
+    CHECK(fw::isOk(s_context->gnss.bindStorage(demux)));
+    CHECK(fw::isOk(s_context->rtcmPipe.bindStorage(pipe)));
+    s_rx.clear();
+    s_readyAt = 0U;
+    s_receiverBaud = receiverBaud;
+    s_baudCommands = 0U;
+    s_saveCommands = 0U;
+    s_gpioChanges = 0U;
+    s_gpioConfigs = 0U;
+    s_p2 = true;
+    s_sentSatsInfo = false;
+    s_applyBaud = applyBaud;
+    s_rejectBaud = rejectBaud;
+    s_expectBaudSave = false;
+    if (userBaud != 0U) {
+        CHECK(nvs_set_u32(nvs, "baud", userBaud) == ESP_OK);
+    } else {
+        const esp_err_t err = nvs_erase_key(nvs, "baud");
+        CHECK((err == ESP_OK) || (err == ESP_ERR_NVS_NOT_FOUND));
+    }
+    CHECK(nvs_commit(nvs) == ESP_OK);
+    CHECK(s_context->storage.loadKeys(app::gnss_store::kConfigKeys).failed == 0U);
+    CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
+    s_context->bootConfig.gnssBaud = userBaud;
+    s_context->bootConfig.userNvsReady = true;
+    s_context->boardProfile = app::board::byId(app::board::BoardId::kP2V141);
+    CHECK(s_context->boardProfile != nullptr);
+    CHECK(fw::isOk(s_context->gnss.init()));
+    CHECK(fw::isOk(s_context->gnss.start()));
+}
+
+} // namespace
+
+/**
+ * @brief 验证 G-baud460k 启动运行切速策略：默认 460800 不写 SAVECONFIG、同速不切、NVS 覆盖、冷热重探与失败单次回退。
+ * @note 单线程主机测试。
+ */
+void testGnssTargetBaudPolicy()
+{
+    std::array<uint8_t, app::GnssModule::kDemuxBufBytes> demux{};
+    std::array<uint8_t, app::kRtcmPipeBytes> pipe{};
+    nvs_handle_t nvs = 0U;
+    CHECK(nvs_open("gnss", NVS_READWRITE, &nvs) == ESP_OK);
+    s_nvs = nvs;
+    const fw::Result installed = fw::traceInstall(&captureBaudTrace, nullptr, &rtos::nowMs);
+    CHECK(fw::isOk(installed) || (installed == fw::Result::kInvalidState));
+    fw::traceSetMask(fw::traceBit(fw::TraceCat::kGnss));
+
+    // 1. 首次冷启动（无 NVS gnss/baud 与缓存，CM680 出厂 115200）→ 自动切运行态 460800、不发 SAVECONFIG、hint 记 460800。
+    eraseGnssBaudAndCache(nvs);
+    bootP2TargetCase(0U, nvs, demux, pipe, 115200U, 0U, true, false);
+    advance(3000U);
+    auto st = s_context->data.gnssStatus.read();
+    uint32_t stored = 0U;
+    CHECK(st.state == gnss::State::kRunning && st.model == gnss::Model::kCm680);
+    CHECK(st.hostBaud == 460800U && s_hostBaud == 460800U && s_receiverBaud == 460800U);
+    CHECK(s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 0U);
+    CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_ERR_NVS_NOT_FOUND);
+    CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 460800U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 2. ESP32 单独复位（模块未掉电仍在 460800，cache_baud=460800）→ 第一候选即命中，目标等于当前不切换。
+    bootP2TargetCase(1U, nvs, demux, pipe, 460800U, 0U, true, false);
+    advance(2500U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.hostBaud == 460800U);
+    CHECK(st.ctrl.probesSent == 1U && s_baudCommands == 0U && s_saveCommands == 0U);
+    CHECK(s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 0U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 3. 模块掉电冷启动（cache_baud 仍为 460800，模块回出厂 115200）→ 候选表 115200 命中后切回 460800，无 SAVECONFIG。
+    bootP2TargetCase(2U, nvs, demux, pipe, 115200U, 0U, true, false);
+    advance(3000U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.hostBaud == 460800U && s_receiverBaud == 460800U);
+    CHECK(st.ctrl.probesSent == 3U && s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 460800U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 4a. 用户 NVS gnss/baud=115200 覆盖 Kconfig（目标 115200 == 当前 115200）→ 不切换。
+    eraseGnssBaudAndCache(nvs);
+    bootP2TargetCase(3U, nvs, demux, pipe, 115200U, 115200U, true, false);
+    advance(2500U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.hostBaud == 115200U);
+    CHECK(s_baudCommands == 0U && s_saveCommands == 0U);
+    CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 115200U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 4b. 用户 NVS gnss/baud=230400 覆盖 Kconfig（模块在 115200）→ 切运行态 230400，无 SAVECONFIG，hint 记 230400。
+    eraseGnssBaudAndCache(nvs);
+    bootP2TargetCase(4U, nvs, demux, pipe, 115200U, 230400U, true, false);
+    advance(3000U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.hostBaud == 230400U && s_receiverBaud == 230400U);
+    CHECK(s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 230400U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 5. 切速后探测超时：回退 115200 重探一次，记 trace 与 baud_fail=1，不重复尝试，hint 记实际 115200。
+    eraseGnssBaudAndCache(nvs);
+    s_baudFailTraces = 0U;
+    s_lastBaudFailTarget = 0U;
+    s_lastBaudFailResult = 0U;
+    bootP2TargetCase(5U, nvs, demux, pipe, 115200U, 0U, false, false);
+    advance(4500U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.hostBaud == 115200U);
+    CHECK(s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 1U);
+    CHECK(s_baudFailTraces == 1U && s_lastBaudFailTarget == 460800U &&
+          s_lastBaudFailResult == static_cast<uint32_t>(gnss::MaintenanceResult::kTimeout));
+    CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 115200U);
+    advance(3000U);
+    CHECK(s_baudCommands == 1U &&
+          s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 1U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 6. 接收机显式拒绝（NACK）：保持 115200 不卡死，记 trace 与 baud_fail=1，hint 记 115200。
+    eraseGnssBaudAndCache(nvs);
+    s_baudFailTraces = 0U;
+    s_lastBaudFailTarget = 0U;
+    s_lastBaudFailResult = 0U;
+    bootP2TargetCase(6U, nvs, demux, pipe, 115200U, 0U, false, true);
+    advance(3500U);
+    st = s_context->data.gnssStatus.read();
+    CHECK(st.state == gnss::State::kRunning && st.hostBaud == 115200U);
+    CHECK(s_baudCommands == 1U && s_saveCommands == 0U);
+    CHECK(s_context->data.gnssBaudFailCount.load(std::memory_order_relaxed) == 1U);
+    CHECK(s_baudFailTraces == 1U && s_lastBaudFailTarget == 460800U &&
+          s_lastBaudFailResult == static_cast<uint32_t>(gnss::MaintenanceResult::kNack));
+    CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 115200U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    s_rejectBaud = false;
+    fw::traceSetMask(0U);
     nvs_close(nvs);
 }

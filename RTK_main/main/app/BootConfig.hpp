@@ -19,7 +19,7 @@ struct BootConfig {
     uint32_t traceMask = 0U;
     uint32_t hexMask = 0U;
     uint32_t logLevels = 0U;
-    uint32_t gnssBaud = 0U; // 0 代表 Kconfig 缺省，不触发 C2 启动切速。
+    uint32_t gnssBaud = 0U; // 0 代表未配置用户波特率，启动后切到 RTK_GNSS_TARGET_BAUD。
     StoreLoadCounts debugCounts{};
     StoreLoadCounts baudCounts{};
     uint16_t reportSeconds = 0U;

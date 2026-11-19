@@ -25,6 +25,7 @@ extern "C" const char *esp_err_to_name(esp_err_t error)
 void testGnssFactoryReset();
 void testGnssPhonePpp();
 void testBaseKeysAndCommandDispatch();
+void testGnssTargetBaudPolicy();
 
 namespace {
 
@@ -539,5 +540,6 @@ int main()
     testGnssFactoryReset();
     testBaseKeysAndCommandDispatch();
     testGnssPhonePpp();
+    testGnssTargetBaudPolicy();
     return 0;
 }
