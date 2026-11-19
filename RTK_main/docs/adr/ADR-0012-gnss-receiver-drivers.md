@@ -208,6 +208,7 @@ protected:
   2^-32，XOR 形式不变。`Model` 追加 `kCm680`（值 6，NVS 兼容），家族 Unicore；`modelFromText` 精确匹配 `"CM680"`；
   能力与命令按 UM980（`forModel` 返回 `kUm980Receiver`），实板逐项验证前不另建子类。确有差异时按 §2.8 增加子类。
 - **冻结。** `gnss/Types.hpp` 追加枚举值（Architect 修改并重算 `docs/frozen.sha256`）。
+- **修订 B（2026-11-19，G-optisens）。** CM680 厂商为 Optisens，`Family` 追加 `kOptisens`（值 4，NVS 兼容），`familyOf(kCm680)` 改为 `kOptisens`，显示名 `optisens`。命令/应答/CRC 仍复用 Unicore 家族实现（叶子类继承或组合，不复制）。行为差异按能力位/型号判断，不再依赖家族比较。旧缓存 `family=1 model=6` 允许首候选落空一次后迁移。任务卡 `docs/tasks/G-optisens-family.md`。
 
 ## 3. 冻结接口（修订 ADR-0010 §3）
 
