@@ -38,6 +38,9 @@ GitHub Actions（`.github/workflows/gates.yml`，push/PR 触发）调用同一�
 | HIL-4 | 报警链路 | 手机发 0x42 设为 ALERT/3；关闭报警器后再开 | 报警器 ≤ 1.5 s 鸣响；RTK 在 3 s 内断开静默的报警会话；报警器重开后自动回连并恢复状态 |
 | HIL-5 | 配对与持久化 | 清空白名单 → `pair` → 报警器发 HELLO → 断电重启 | 重启后报警器直接被识别为 ALARM；配对窗口外的未知 HELLO 被断开 |
 | HIL-6 | 资源 | 两个会话在线 10 min 后执行 `status` | 最小空闲堆 ≥ 80 KB；链路任务栈余量 ≥ 30 %；CRC 错误计数不持续增长；TWDT 不触发 |
+| HIL-7 | GNSS 波特率（G-baud460k/G-baud-save） | `gnss freset yes` → ESP32 复位 → 冷上电 | 复位后 115200 探测命中→`CONFIG COM1 460800`→`SAVECONFIG` 一次；冷上电首候选 460800 命中，无切速、无保存；`baud_fail=0` |
+| HIL-8 | GGA 质量门控（Q1） | `gnss gate on min_sats 40`，观察 `gnss status`；手机 0x04 查询；`gnss gate off`；断电重启 | 开启后 `blocked=yes`、`gga_blocked` 增长、GST/RMC/GSA/GSV 照常推送、0x04 回 `02 02`；关闭后立即 `blocked=no`；设置掉电保持；PRODUCTION 档只读 |
+| HIL-9 | Optisens 家族（G-optisens） | 旧缓存 `family=1 model=6` 板子重启 | `gnss status` 显示 `family optisens`；`config gnss` 显示 `family = 4 (optisens)` |
 
 ## 3. 报告
 

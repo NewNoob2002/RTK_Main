@@ -15,7 +15,7 @@
 | `t` | 时机 | 字段 |
 |---|---|---|
 | `hello` | 连接后第一帧 | `proto`(=1)、`board`、`fw`、`bt_name`、`console`（dev/production/none）、`factory`（是否已解锁，bool） |
-| `config` | `hello` 之后、任一 `set` 成功之后 | 见 §4 全部可改键的当前值（扁平：`"gnss.rate":10`） |
+| `config` | `hello` 之后、任一 `set` 成功之后 | 见 §4 全部可改键的当前值（扁平：`"gnss.rate":10`）；例外：Q1 门控为嵌套对象 `"gga_gate":{"enabled":false,"min_sats":8}` |
 | `status` | 每 1 s；只带有变化的组 | `dev:{uptime_s,heap_free,heap_min,reset}`、`gnss:{state,model,fw,fix,sats,hacc_mm,hz}`、`bt:{whitelist:[...]}` |
 | `ack` | 每条请求一个 | `id`（回显）、`ok`、失败时 `err`（§5） |
 | `bye` | 设备即将重启 | `reason`（`exit`/`idle`/`freset`） |
@@ -43,6 +43,8 @@
 | `bt.wl.add` `bt.wl.del` | MAC `AA:BB:CC:DD:EE:FF` | `LinkVerb::kWhitelistAdd/Del` | 只写不读，结果见 `status.bt.whitelist` |
 | `bt.pair_next` | `0` `1` | 新：下次蓝牙启动时开配对窗口 | W5 定实现 |
 | `factory.sn` | 1–16 个 `[0-9A-Za-z-]` | 同控制台 `factory sn` | 需解锁 |
+| `gnss.gga_gate.enabled` | `0` `1` | `GnssSubVerb::kSetGgaGate`（Q1） | GGA 质量门控开关，默认 `0`，保存到 NVS |
+| `gnss.gga_gate.min_sats` | `0`–`40` 十进制整数 | `GnssSubVerb::kSetGgaGate`（Q1） | 默认 `8`；越界或带前导零返回 `bad_value` |
 
 ## 5 错误码 `err`
 
