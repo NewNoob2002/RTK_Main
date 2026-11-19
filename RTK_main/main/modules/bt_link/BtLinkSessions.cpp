@@ -62,10 +62,16 @@ void BtLinkModule::SessionSink::onFrame(const demux::Decoder &decoder, uint8_t i
         return;
     }
     if (index == kProductIndex) {
+#if RTK_GNSS_ENABLED
+        owner_->onPhoneProductFrame(handle_, wire);
+#endif
         if (owner_->linkService().onData(handle_, wire, rtos::nowMs()) == 0U) {
             core::traceProto(core::ProtoTrace::kReplyError, handle_,
                              static_cast<uint32_t>(fw::Result::kBusy), 0U);
         }
+#if RTK_GNSS_ENABLED
+        owner_->recheckPhoneSessionRole(handle_);
+#endif
         return;
     }
     owner_->handleRtcmFrame(handle_, wire);
@@ -205,6 +211,11 @@ void BtLinkModule::handleOpen(const spp_server_evt_t &evt, uint32_t nowMs) noexc
     /* 会话元数据必须先于 LinkService 的 OPEN 可见。 */
     sessionRecord(evt.handle, addr);
     linkService().onOpen(evt.handle, addr, nowMs);
+#if RTK_GNSS_ENABLED
+    if (link_manager_.role(evt.handle) == core::Role::kPhone) {
+        onPhoneSessionOpen(evt.handle);
+    }
+#endif
 }
 
 void BtLinkModule::handleClose(core::SessionHandle handle) noexcept
@@ -220,6 +231,11 @@ void BtLinkModule::handleClose(core::SessionHandle handle) noexcept
     }
     linkService().onClose(handle);
     sessionForget(handle);
+#if RTK_GNSS_ENABLED
+    if (handle == phone_session_handle_) {
+        resetGnssStreamSession();
+    }
+#endif
 }
 
 void BtLinkModule::handleData(core::SessionHandle handle) noexcept
@@ -326,7 +342,9 @@ void BtLinkModule::syncStream() noexcept
 #if RTK_GNSS_ENABLED
         ctx().data.phoneStreamReady.store(false, std::memory_order_release);
         ctx().data.baseRtcmRing.clearFrames();
-        resetGnssStreamSession();
+        if (phone_session_handle_ == stream_handle_) {
+            resetGnssStreamSession();
+        }
 #endif
         const esp_err_t status = spp_server_stream_bind(stream_handle_, false);
         // CLOSE 已回收时 NOT_FOUND 等价于已解绑；其余失败保留句柄下轮重查。

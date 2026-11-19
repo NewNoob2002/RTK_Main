@@ -8,6 +8,7 @@
 #include "fw/StoreKey.hpp"
 #include "cli/Console.hpp"
 #include "NvsStore.h"
+#include "PhoneCompatService.hpp"
 
 namespace app {
 struct AppContext;
@@ -90,7 +91,101 @@ public:
      */
     [[nodiscard]] fw::Result saveKeys(std::span<const fw::StoreKey> keys) noexcept;
 
+    /** @brief 读取当前天线高。 @retval 小端字节。 @note 仅 kLink。 */
+    [[nodiscard]] core::AntennaHeight phoneHeight() const noexcept
+    {
+        return phone_height_;
+    }
+
+    /** @brief 登记已校验天线高。 @param height: 小端字节。 @param nowMs: 去抖起点。 @retval true 已登记。 @note 仅 kLink。 */
+    [[nodiscard]] bool setPhoneHeight(const core::AntennaHeight &height, uint32_t nowMs) noexcept;
+
+    /** @brief 读取当前 SN 与 PN（[0..15]SN [16..31]PN）。 @retval 32 B 组合字段。 @note 仅 kLink。 */
+    [[nodiscard]] core::PhoneSnPn phoneSnPn() const noexcept;
+
+    /** @brief 保存 SN（同步复用 kSaveSn 逻辑）并登记去抖写入 PN。 @param snPn: 32 B 组合字段。 @param nowMs: 去抖起点。 @retval true 保存成功。 @note 仅 kLink，写 SN 可阻塞。 */
+    [[nodiscard]] bool setPhoneSnPn(const core::PhoneSnPn &snPn, uint32_t nowMs) noexcept;
+
+    /** @brief 读取当前 NTRIP 配置（0x12）。 @retval 112 B 配置块。 @note 仅 kLink。 */
+    [[nodiscard]] core::PhoneNtripConfig phoneNtrip() const noexcept
+    {
+        return phone_ntrip_;
+    }
+
+    /** @brief 登记 NTRIP 配置（RAM+NVS 去抖）。 @param cfg: 112 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 @note 仅 kLink。 */
+    [[nodiscard]] bool setPhoneNtrip(const core::PhoneNtripConfig &cfg, uint32_t nowMs) noexcept;
+
+    /** @brief 读取当前 JSON 服务器配置（0x32 Nav）。 @retval 42 B 配置块。 @note 仅 kLink。 */
+    [[nodiscard]] core::PhoneJsonServerConfig phoneJsonServer() const noexcept
+    {
+        return phone_json_srv_;
+    }
+
+    /** @brief 登记 JSON 服务器配置（RAM+NVS 去抖）。 @param cfg: 42 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 @note 仅 kLink。 */
+    [[nodiscard]] bool setPhoneJsonServer(const core::PhoneJsonServerConfig &cfg,
+                                          uint32_t nowMs) noexcept;
+
+    /** @brief 读取当前 Thingsboard 配置（0x33 Nav）。 @retval 86 B 配置块。 @note 仅 kLink。 */
+    [[nodiscard]] core::PhoneThingsboardConfig phoneThingsboard() const noexcept
+    {
+        return phone_tb_;
+    }
+
+    /** @brief 登记 Thingsboard 配置（RAM+NVS 去抖）。 @param cfg: 86 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 @note 仅 kLink。 */
+    [[nodiscard]] bool setPhoneThingsboard(const core::PhoneThingsboardConfig &cfg,
+                                           uint32_t nowMs) noexcept;
+
+    /** @brief 从 NVS 恢复天线高。 @param in: 小端字节。 @retval 加载结果。 @note 仅启动。 */
+    [[nodiscard]] static fw::Result loadPhoneHeight(void *, std::span<const uint8_t> in) noexcept;
+
+    /** @brief 从 NVS 恢复 PPP。 @param in: 开关字节。 @retval 加载结果。 @note 仅启动。 */
+    [[nodiscard]] static fw::Result loadPhonePpp(void *, std::span<const uint8_t> in) noexcept;
+
+    /** @brief 从 NVS 恢复 0x06 截止角/星座配置。 @param in: 6 B 编码。 @retval 加载结果。 @note 仅启动。 */
+    [[nodiscard]] static fw::Result loadPhoneSatCfg(void *, std::span<const uint8_t> in) noexcept;
+
+    /** @brief 从 NVS 恢复 0x08 PN。 @param in: 16 B 定长字节。 @retval 加载结果。 @note 仅启动。 */
+    [[nodiscard]] static fw::Result loadPhonePn(void *, std::span<const uint8_t> in) noexcept;
+
+    /** @brief 从 NVS 恢复 0x12 NTRIP 配置。 @param in: 112 B 配置块。 @retval 加载结果。 @note 仅启动。 */
+    [[nodiscard]] static fw::Result loadPhoneNtrip(void *, std::span<const uint8_t> in) noexcept;
+
+    /** @brief 从 NVS 恢复 0x32 JSON 服务器配置。 @param in: 42 B 配置块。 @retval 加载结果。 @note 仅启动。 */
+    [[nodiscard]] static fw::Result loadPhoneJsonSrv(void *, std::span<const uint8_t> in) noexcept;
+
+    /** @brief 从 NVS 恢复 0x33 Nav Thingsboard 配置。 @param in: 86 B 配置块。 @retval 加载结果。 @note 仅启动。 */
+    [[nodiscard]] static fw::Result loadPhoneTb(void *, std::span<const uint8_t> in) noexcept;
+
 private:
+    struct DebouncedState {
+        bool known = false;
+        bool pending = false;
+        uint32_t changedMs = 0U;
+        uint32_t attemptMs = 0U;
+        uint32_t retryMs = 0U;
+    };
+
+    /** @brief 更新去抖 Blob 的内存值并启动 500 ms 去抖计时。 @param dst: 模块内目标缓冲。 @param state: 去抖状态。 @param value: 新字节内容。 @param nowMs: 当前时钟。 @retval true 已登记。 */
+    [[nodiscard]] bool setPhoneBlob(std::span<uint8_t> dst, DebouncedState &state,
+                                    std::span<const uint8_t> value, uint32_t nowMs) noexcept;
+
+    /** @brief 按去抖与退避窗口保存一个手机 Blob 键。 @param key: NVS 键定义。 @param data: 待写字节。 @param state: 去抖状态。 @param nowMs: 当前时钟。 @param label: 日志名称。 */
+    void pollPhoneBlob(const fw::StoreKey &key, std::span<const uint8_t> data,
+                       DebouncedState &state, uint32_t nowMs, const char *label) noexcept;
+
+    /** @brief 推进全部手机 Blob 键的去抖写盘。 @param nowMs: 当前单调时钟。 @note 仅 kLink。 */
+    void pollPhoneBlobs(uint32_t nowMs) noexcept;
+
+    core::AntennaHeight phone_height_{};
+    DebouncedState phone_height_state_{};
+    core::PhonePn phone_pn_{};
+    DebouncedState phone_pn_state_{};
+    core::PhoneNtripConfig phone_ntrip_{};
+    DebouncedState phone_ntrip_state_{};
+    core::PhoneJsonServerConfig phone_json_srv_{};
+    DebouncedState phone_json_srv_state_{};
+    core::PhoneThingsboardConfig phone_tb_{};
+    DebouncedState phone_tb_state_{};
     /** @brief 排他擦除已确认的分区。 @param cmd: 擦除范围。 @param result: 返回操作结果。 @note 仅 kLink，可阻塞。 */
     void eraseForReset(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     friend struct ModuleTestAccess;

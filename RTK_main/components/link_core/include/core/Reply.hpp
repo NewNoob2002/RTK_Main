@@ -10,6 +10,7 @@
 #include <span>
 #include <string_view>
 
+#include "core/Types.hpp"
 #include "proto/AlarmCodec.hpp"
 #include "proto/Frame.hpp"
 
@@ -91,14 +92,31 @@ enum class DispatchResult : uint8_t {
     kReply = 0, // reply 中有应答帧，发回同一会话
     kNoReply,   // 已处理或按协议不回复
     kDenied,    // 该角色无权执行此命令，不回复
+    kDeferred,  // 应答延后生成；由 LinkService 持有 credit 并轮询发送
 };
 
-/** 复用的应答缓冲与副作用结果（白名单变更、心跳）；链路任务独占，不跨任务共享。 */
+struct Reply;
+
+/** 延迟应答的轮询回调：就绪时填好 reply 并返回 true；仍在等待返回 false。 */
+using DeferredPollFn = bool (*)(void *ctx, uint32_t nowMs, Reply &reply) noexcept;
+/** 延迟应答的取消回调：会话断开或槽满时通知服务清理挂起态（可为空）。 */
+using DeferredCancelFn = void (*)(void *ctx) noexcept;
+
+/** 一次延迟应答的回调绑定；由 handler 返回 DispatchResult::kDeferred 时写入 Reply::deferred。 */
+struct DeferredHook {
+    void *ctx = nullptr;
+    DeferredPollFn poll = nullptr;
+    DeferredCancelFn cancel = nullptr;
+};
+
+/** 复用的应答缓冲与副作用结果（白名单变更、心跳、延迟应答）；链路任务独占，不跨任务共享。 */
 struct Reply {
     std::array<uint8_t, proto::kMaxFrame> buf{};
     size_t len = 0;
     bool whitelistChanged = false;                    // app 层需持久化白名单
     std::optional<proto::alarm::Heartbeat> heartbeat; // 收到 0x41 心跳
+    AppKind appKind = AppKind::kNav;                  // 当前请求帧对应的手机 App 类型
+    DeferredHook deferred{};                          // DispatchResult::kDeferred 时有效
 
     /** @brief 复位应答缓冲与副作用标志，准备组下一帧。
      *  @note 只清长度与标志，不擦 buf 内容；不分配、不阻塞，仅链路任务调用。 */
@@ -107,6 +125,8 @@ struct Reply {
         len = 0;
         whitelistChanged = false;
         heartbeat.reset();
+        appKind = AppKind::kNav;
+        deferred = {};
     }
     /** @brief 取已组好的应答字节。
      *  @return 指向 buf 前 len 字节的只读视图；未组帧时为空视图。 */

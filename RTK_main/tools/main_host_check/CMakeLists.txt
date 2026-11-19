@@ -7,7 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 get_filename_component(PROJ_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 include_directories("${PROJ_ROOT}/components/link_core/private_include"
-                    "${PROJ_ROOT}/components/spp_server/boot_include")
+                    "${PROJ_ROOT}/components/spp_server/boot_include"
+                    "${PROJ_ROOT}/components/gnss/private_include")
 find_package(Threads REQUIRED)
 add_library(main_rtos STATIC ../t13_host_check/shim/FakeRtos.c)
 # NvsShim.c: storage 模块的通用键表直接用 nvs.h（冻结的 NvsStore.h 无整数 API）。
@@ -42,6 +43,7 @@ add_library(main_pure STATIC
     ${PROJ_ROOT}/components/link_core/services/AlarmService.cpp
     ${PROJ_ROOT}/components/link_core/services/PairService.cpp
     ${PROJ_ROOT}/components/link_core/services/GnssService.cpp
+    ${PROJ_ROOT}/components/link_core/services/PhoneCompatService.cpp
     ${PROJ_ROOT}/components/link_core/LinkService.cpp)
 target_include_directories(main_pure PUBLIC
     ${PROJ_ROOT}/components/app_fw/include
@@ -82,7 +84,7 @@ foreach(policy concurrent preempt)
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
     foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
-            rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup
+            rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window)
         add_test(NAME main_${policy}_${scenario} COMMAND main_${policy} ${scenario})
@@ -136,6 +138,7 @@ add_executable(gnss_output_check GnssOutputCheck.cpp
     GnssResetCheck.cpp
     ${PROJ_ROOT}/main/board/BoardCurrent.cpp
     ${PROJ_ROOT}/main/board/BoardProfile.cpp
+    ${PROJ_ROOT}/main/data/GnssAppRing.cpp
     ${PROJ_ROOT}/main/data/GnssOutput.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssBaseConfig.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssWorkMode.cpp
@@ -143,6 +146,7 @@ add_executable(gnss_output_check GnssOutputCheck.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleCmds.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleFrames.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleMaintenance.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModulePpp.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleMode.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleProbe.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleStore.cpp
@@ -165,6 +169,45 @@ target_compile_definitions(gnss_output_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1 CO
     CONFIG_RTK_GNSS_RATE_HZ=1)
 target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim main_rtos gnss)
 add_test(NAME gnss_output COMMAND gnss_output_check)
+
+add_executable(gnss_stream_check GnssStreamCheck.cpp
+    ${PROJ_ROOT}/main/board/BoardCurrent.cpp
+    ${PROJ_ROOT}/main/board/BoardProfile.cpp
+    ${PROJ_ROOT}/main/data/AppData.cpp
+    ${PROJ_ROOT}/main/data/GnssAppRing.cpp
+    ${PROJ_ROOT}/main/data/GnssOutput.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/BtLinkModule.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/BtLinkSessions.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/BtLinkGnss.cpp
+    ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssBaseConfig.cpp
+    ${PROJ_ROOT}/main/modules/gnss/GnssModuleStore.cpp
+    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp
+    ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp
+    ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
+    ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp
+    ${PROJ_ROOT}/main/modules/debug/DebugModuleLog.cpp
+    ${PROJ_ROOT}/main/modules/debug/TraceText.cpp
+    ${PROJ_ROOT}/main/modules/debug/TraceTextValues.cpp
+    ${PROJ_ROOT}/components/spp_server/SppTransport.cpp)
+target_include_directories(gnss_stream_check BEFORE PRIVATE shim)
+target_include_directories(gnss_stream_check PRIVATE ../t13_host_check/shim/inc
+    ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
+    ${PROJ_ROOT}/components/cli/include
+    ${PROJ_ROOT}/components/gnss/include
+    ${PROJ_ROOT}/components/bt_reconnect/include
+    ${PROJ_ROOT}/components/nvs_store/include
+    ${PROJ_ROOT}/components/rtos/include
+    ${PROJ_ROOT}/components/app_fw/include)
+target_compile_options(gnss_stream_check PRIVATE -ffunction-sections -fdata-sections -fno-exceptions
+    -fno-rtti -Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
+    -Wimplicit-fallthrough)
+target_link_options(gnss_stream_check PRIVATE -Wl,--gc-sections)
+target_compile_definitions(gnss_stream_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1
+    CONFIG_RTK_LOG_RING_BYTES=4096 CONFIG_RTK_GNSS_UART_NUM=2 CONFIG_RTK_GNSS_PORT=2
+    CONFIG_RTK_GNSS_DEFAULT_BAUD=115200 CONFIG_RTK_GNSS_RATE_HZ=1)
+target_link_libraries(gnss_stream_check PRIVATE main_pure main_rtos main_nvs_shim gnss)
+add_test(NAME gnss_stream COMMAND gnss_stream_check)
 
 add_executable(gnss_mode_check GnssModeCheck.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssBaseConfig.cpp
@@ -196,6 +239,7 @@ foreach(features on gnss_off trace_off all_off)
         ${PROJ_ROOT}/main/app/ConsoleSetup.cpp
         ${PROJ_ROOT}/components/rtos/BootAlloc.cpp
         ${PROJ_ROOT}/main/data/AppData.cpp
+        ${PROJ_ROOT}/main/data/GnssAppRing.cpp
         ${PROJ_ROOT}/main/data/GnssOutput.cpp
         ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/DebugModuleLog.cpp
         ${PROJ_ROOT}/main/modules/debug/TraceText.cpp ${PROJ_ROOT}/main/modules/debug/TraceTextValues.cpp

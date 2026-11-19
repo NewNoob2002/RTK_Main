@@ -16,6 +16,7 @@
 #include "driver/uart.h"
 #include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssKeys.hpp"
+#include "modules/storage/StoreKeys.hpp"
 #include "rtos/EspStatus.hpp"
 
 extern "C" {
@@ -27,6 +28,7 @@ namespace {
 constinit app::AppContext s_initialContext{};
 constinit app::AppContext s_failureContext{};
 constinit app::AppContext s_dispatchContext{};
+constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
@@ -41,8 +43,11 @@ bool s_sentSatsInfo = false;
 unsigned s_saveCommands = 0;
 unsigned s_fresetCommands = 0;
 unsigned s_modeBaseCommands = 0;
+unsigned s_pppCommands = 0;
+unsigned s_satMaskCommands = 0;
 bool s_applyBaud = true;
 bool s_rejectSave = false;
+bool s_rejectSatMask = false;
 bool s_expectBaudSave = false;
 nvs_handle_t s_nvs = 0U;
 std::string s_rx;
@@ -237,6 +242,12 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
         if (bytes.starts_with("MODE BASE")) {
             ++s_modeBaseCommands;
         }
+        if (bytes.starts_with("CONFIG PPP") || bytes.starts_with("CONFIG SIGNALGROUP")) {
+            ++s_pppCommands;
+        }
+        if (bytes.starts_with("MASK ") || bytes.starts_with("UNMASK ")) {
+            ++s_satMaskCommands;
+        }
         const bool save = bytes == "SAVECONFIG\r\n";
         if (save) {
             ++s_saveCommands;
@@ -257,7 +268,8 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
         const bool subsecondGsa = s_p2 && bytes.starts_with("GPGSA COM1 0.");
         std::string reply{"command,"};
         reply += bytes.substr(0, bytes.size() - 2U);
-        const bool reject = satsInfo || subsecondGsa || (save && s_rejectSave);
+        const bool rejectSat = s_rejectSatMask && (bytes == "MASK GLO\r\n");
+        const bool reject = satsInfo || subsecondGsa || (save && s_rejectSave) || rejectSat;
         reply += reject ? ",response: ERROR" : ",response: OK";
         unsigned checksum = s_p2 ? static_cast<unsigned>('$') : 0U;
         for (char ch : reply) {
@@ -338,6 +350,105 @@ void testGnssFactoryReset()
     CHECK(s_hostBaud == 460800U && s_baudCommands == 1U && s_saveCommands == 0U);
     CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_OK && stored == 115200U);
     CHECK(nvs_get_u32(nvs, "cache_baud", &stored) == ESP_OK && stored == 460800U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+    nvs_close(nvs);
+}
+
+/** @brief 用真实 kIo 模块验证 PPP 成功提交、失败保留 NVS 与重探重放。 @note 主机单线程。 */
+void testGnssPhonePpp()
+{
+    std::array<uint8_t, app::GnssModule::kDemuxBufBytes> demux{};
+    std::array<uint8_t, app::kRtcmPipeBytes> pipe{};
+    s_context = &s_pppContext;
+    s_context->bindContexts();
+    s_context->data.gnssLatestGsv.bindLock({});
+    CHECK(fw::isOk(s_context->gnss.bindStorage(demux)));
+    CHECK(fw::isOk(s_context->rtcmPipe.bindStorage(pipe)));
+    nvs_handle_t nvs = 0U;
+    CHECK(nvs_open("gnss", NVS_READWRITE, &nvs) == ESP_OK);
+    s_nvs = nvs;
+    startModule(nvs, 460800U, true);
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+
+    fw::Command request{};
+    request.verb = static_cast<uint8_t>(app::GnssSubVerb::kPhonePpp);
+    request.argLen = 1U;
+    request.seq = 1U;
+    request.args[0] = 1U;
+    s_context->data.phonePppCommand.write(request);
+    advance(20U);
+    CHECK(s_context->data.phonePppResult.read().seq == 0U);
+    advance(200U);
+    const auto enabled = s_context->data.phonePppResult.read();
+    CHECK(enabled.seq == request.seq && enabled.status == fw::Result::kOk);
+    CHECK(s_context->data.phonePppEnabled.read() == true);
+    uint32_t stored = 0U;
+    CHECK(app::store::readValue(app::store::kPhonePppKey, stored) == ESP_OK && stored == 1U);
+
+    s_rejectSave = true;
+    request.seq = 2U;
+    request.args[0] = 0U;
+    s_context->data.phonePppCommand.write(request);
+    advance(200U);
+    s_rejectSave = false;
+    const auto rejected = s_context->data.phonePppResult.read();
+    CHECK(rejected.seq == request.seq && rejected.status == fw::Result::kIoError);
+    CHECK(s_context->data.phonePppEnabled.read() == true);
+    CHECK(app::store::readValue(app::store::kPhonePppKey, stored) == ESP_OK && stored == 1U);
+
+    const auto saves = s_saveCommands;
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kProbe)).status));
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    CHECK(s_saveCommands == saves + 1U);
+    CHECK(s_context->data.phonePppResult.read().seq == request.seq);
+
+    // 0x06 截止角/星座：成功写入 NVS、NACK 保留旧值、重探后重放。
+    const core::SatTrackConfig satOk{
+        .cutoffDeg = 10U, .gps = 1U, .glo = 0U, .bds = 1U, .gal = 1U, .sbas = 0U};
+    fw::Command satCmd{};
+    satCmd.verb = static_cast<uint8_t>(app::GnssSubVerb::kPhoneSatCfg);
+    satCmd.seq = 1U;
+    const auto satEncoded = core::encodeSatTrackConfig(satOk);
+    satCmd.argLen = static_cast<uint8_t>(satEncoded.size());
+    std::copy(satEncoded.begin(), satEncoded.end(), satCmd.args.begin());
+    s_satMaskCommands = 0U;
+    s_context->data.phoneSatCommand.write(satCmd);
+    advance(300U);
+    const auto satDone = s_context->data.phoneSatResult.read();
+    CHECK(satDone.seq == satCmd.seq && satDone.status == fw::Result::kOk);
+    CHECK(s_satMaskCommands == 5U);
+    CHECK(s_context->data.phoneSatConfig.read() == satOk);
+    std::array<uint8_t, core::kSatConfigBlobBytes> storedSat{};
+    size_t storedSatLen = 0U;
+    CHECK(app::store::readBlob(app::store::kPhoneSatCfgKey, storedSat, storedSatLen) == ESP_OK);
+    CHECK(storedSatLen == satEncoded.size() && storedSat == satEncoded);
+
+    // NACK 失败时保留旧 NVS 值
+    s_rejectSatMask = true;
+    satCmd.seq = 2U;
+    satCmd.args[0] = 20U;
+    s_context->data.phoneSatCommand.write(satCmd);
+    advance(300U);
+    s_rejectSatMask = false;
+    const auto satFail = s_context->data.phoneSatResult.read();
+    CHECK(satFail.seq == satCmd.seq && satFail.status == fw::Result::kIoError);
+    CHECK(s_context->data.phoneSatConfig.read() == satOk);
+
+    // 重探后重放 0x06 配置，并验证 GSV 单句缓存
+    const unsigned satBeforeReprobe = s_satMaskCommands;
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kProbe)).status));
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    CHECK(s_satMaskCommands == satBeforeReprobe + 5U);
+    constexpr std::string_view kGsvSample = "$GPGSV,1,1,01,01,45,120,42*4D\r\n";
+    s_rx += kGsvSample;
+    advance(40U);
+    const auto gsv = s_context->data.gnssLatestGsv.read();
+    CHECK(gsv.len == kGsvSample.size() &&
+          std::memcmp(gsv.bytes.data(), kGsvSample.data(), gsv.len) == 0);
+
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     nvs_close(nvs);
 }
@@ -522,6 +633,18 @@ void testBaseKeysAndCommandDispatch()
     CHECK(nvs_get_u8(nvs, "model", &cachedModel) == ESP_OK && cachedModel == 6U);
     CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
     testCm680Rate10(nvs);
+    // CM680 不支持 PPP：重放与命令均不下发任何 CONFIG PPP / CONFIG SIGNALGROUP。
+    s_pppCommands = 0U;
+    fw::Command cm680Ppp{};
+    cm680Ppp.verb = static_cast<uint8_t>(app::GnssSubVerb::kPhonePpp);
+    cm680Ppp.seq = 1U;
+    cm680Ppp.argLen = 1U;
+    cm680Ppp.args[0] = 1U;
+    s_context->data.phonePppCommand.write(cm680Ppp);
+    advance(100U);
+    const auto cm680PppRes = s_context->data.phonePppResult.read();
+    CHECK(cm680PppRes.seq == cm680Ppp.seq && cm680PppRes.status == fw::Result::kNotSupported);
+    CHECK(s_pppCommands == 0U);
     testConsoleCommandDispatch(nvs);
     CHECK(!s_sentSatsInfo);
     CHECK(s_gpioConfigs == 0U && s_gpioChanges == 0U);

@@ -10,6 +10,10 @@
 
 namespace core::services {
 
+/** Survey App 的 0x06 截止角/星座处理钩子（Nav App 仍走 DeviceService 占位应答）。 */
+using SatTrackSurveyFn = DispatchResult (*)(void *ctx, const proto::FrameView &frame,
+                                            uint32_t nowMs, Reply &reply) noexcept;
+
 /** 设备信息类指令服务（0x01–0x06/0x0D）：持有 DeviceInfo 副本；仅链路任务调用。 */
 class DeviceService {
 public:
@@ -30,6 +34,12 @@ public:
      *  @return 内部 DeviceInfo 的常量引用；本对象存活期间有效。 */
     [[nodiscard]] const DeviceInfo &info() const noexcept;
 
+    /** @brief 绑定 Survey App 的 0x06 截止角/星座处理器；为 nullptr 时回退占位应答。
+     *  @param fn 处理回调，可为空。
+     *  @param ctx 透传给回调的上下文指针。
+     *  @note 仅启动期或链路任务调用，不分配、不阻塞，非 ISR。 */
+    void setSatTrackSurveyHook(SatTrackSurveyFn fn, void *ctx) noexcept;
+
     /** @brief 本服务负责的 0x01/0x02/0x03/0x06/0x0D 静态路由表。
      *  @return 指向静态数组的视图，内容只读且与实例无关；不得修改。 */
     [[nodiscard]] static std::span<const Route> routes() noexcept;
@@ -43,6 +53,8 @@ public:
 
 private:
     DeviceInfo info_{};
+    SatTrackSurveyFn sat_survey_fn_ = nullptr;
+    void *sat_survey_ctx_ = nullptr;
 };
 
 } // namespace core::services

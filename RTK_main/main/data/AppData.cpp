@@ -24,7 +24,14 @@ void DataCenter::init() noexcept
     systemStatus.bindLock(lock);
     systemMode.bindLock(lock);
     rtcmReset.bindLock(lock);
+    phonePppEnabled.bindLock(lock);
+    phoneSatConfig.bindLock(lock);
 #if RTK_GNSS_ENABLED
+    phonePppCommand.bindLock(lock);
+    phonePppResult.bindLock(lock);
+    phoneSatCommand.bindLock(lock);
+    phoneSatResult.bindLock(lock);
+    gnssLatestGsv.bindLock(lock);
     ioExecStats.bindLock(lock);
     gnssStatus.bindLock(lock);
     gnssFix.bindLock(lock);
@@ -60,8 +67,8 @@ void DataCenter::unbindGnssBuffers() noexcept
 {
     // 未启动消费者时重建不可拷贝控制对象；不保留即将 abort 的地址，也不裸清对象内存。
     // placement new 仅在原存储重建控制对象，不申请堆；外供块由 arena 随后统一释放。
-    gnssAppRing.~FanoutRing();
-    ::new (static_cast<void *>(&gnssAppRing)) fw::FanoutRing{};
+    gnssAppRing.~GnssAppRing();
+    ::new (static_cast<void *>(&gnssAppRing)) GnssAppRing{};
     gnssLatest.~GnssLatestCache();
     ::new (static_cast<void *>(&gnssLatest)) GnssLatestCache{};
     gnssLatest.bindLock(rtos::spinLockOps(mux));

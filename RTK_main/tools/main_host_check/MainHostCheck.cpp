@@ -20,6 +20,7 @@ extern "C" {
 #include "modules/debug/DebugKeys.hpp"
 #include "modules/gnss/RtcmPipe.hpp"
 #include "modules/storage/StoreKeys.hpp"
+#include "modules/storage/StoreCatalog.hpp"
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
 #include "esp_log.h"
@@ -1211,6 +1212,90 @@ void storageStartup()
                             "  console_profile dev\n"));
 }
 
+/** @brief 验证天线高去抖与 NVS 重读，以及 PPP 启动恢复。 */
+void phoneNvsReadback()
+{
+    auto &context = app::appContext();
+    auto &storage = context.storage;
+    context.data.init();
+    app::loadEarlyConfig(context);
+    CHECK(fw::isOk(storage.init()));
+    CHECK(storage.phoneHeight() == core::AntennaHeight{});
+    CHECK(!context.data.phonePppEnabled.read().has_value());
+
+    constexpr core::AntennaHeight kHeight{0, 0, 0, 0, 0, 0, 0xF8, 0x3F};
+    CHECK(storage.setPhoneHeight(kHeight, s_clock));
+    const auto group = std::ranges::find(app::storeCatalog(), "phone", &app::StoreGroup::name);
+    CHECK(group != app::storeCatalog().end());
+    const auto keys = group->keys;
+    CHECK(storage.loadKeys(keys).defaults == keys.size());
+    core::PhoneSnPn snPn{};
+    std::memcpy(snPn.data(), "RTK20260001", 11U);
+    std::memcpy(snPn.data() + core::kPhoneSnBytes, "1000190000002001", 16U);
+    CHECK(storage.setPhoneSnPn(snPn, s_clock));
+    core::PhoneNtripConfig ntrip{};
+    ntrip[1U] = 1U;
+    ntrip[8U] = 'n';
+    ntrip[108U] = 3U;
+    CHECK(storage.setPhoneNtrip(ntrip, s_clock));
+    core::PhoneJsonServerConfig jsonSrv{};
+    jsonSrv[0U] = 'j';
+    jsonSrv[36U] = 1U;
+    CHECK(storage.setPhoneJsonServer(jsonSrv, s_clock));
+    core::PhoneThingsboardConfig tb{};
+    tb[0U] = 1U;
+    tb[2U] = 't';
+    tb[85U] = 7U;
+    CHECK(storage.setPhoneThingsboard(tb, s_clock));
+
+    s_clock += 499U;
+    static_cast<void>(storage.poll(s_clock));
+    CHECK(storage.loadKeys(keys).defaults == keys.size());
+    s_clock += 1U;
+    static_cast<void>(storage.poll(s_clock));
+    CHECK(app::store::writeValue(app::store::kPhonePppKey, 1U) == ESP_OK);
+    const core::SatTrackConfig satCfg{
+        .cutoffDeg = 12U, .gps = 1U, .glo = 0U, .bds = 1U, .gal = 1U, .sbas = 1U};
+    CHECK(app::store::writeBlob(app::store::kPhoneSatCfgKey, core::encodeSatTrackConfig(satCfg)) ==
+          ESP_OK);
+
+    // 清空内存值后通过 StoreCatalog 重新回读，验证全部 7 个手机键完整持久化。
+    CHECK(storage.setPhoneHeight(core::AntennaHeight{}, s_clock));
+    CHECK(storage.setPhoneNtrip(core::PhoneNtripConfig{}, s_clock));
+    CHECK(storage.setPhoneJsonServer(core::PhoneJsonServerConfig{}, s_clock));
+    CHECK(storage.setPhoneThingsboard(core::PhoneThingsboardConfig{}, s_clock));
+    context.data.phoneSatConfig.write(std::nullopt);
+    const auto loaded = storage.loadKeys(keys);
+    CHECK(loaded.saved == keys.size() && loaded.failed == 0U);
+    CHECK(storage.phoneHeight() == kHeight);
+    CHECK(context.data.phonePppEnabled.read() == true);
+    CHECK(context.data.phoneSatConfig.read() == satCfg);
+    CHECK(storage.phoneSnPn() == snPn);
+    CHECK(storage.phoneNtrip() == ntrip);
+    CHECK(storage.phoneJsonServer() == jsonSrv);
+    CHECK(storage.phoneThingsboard() == tb);
+
+    // 验证 0x1E 延迟 >=200 ms 才执行重启与恢复出厂（先让应答发出）。
+    auto sys = context.data.systemStatus.read();
+    sys.btReady = true;
+    context.data.systemStatus.write(sys);
+    CHECK(fw::isOk(context.bt_link.init()));
+    s_restarts = 0U;
+    s_user_erases = 0U;
+    CHECK(context.bt_link.schedulePhoneReset(false, true, s_clock));
+    s_clock += 249U;
+    static_cast<void>(context.bt_link.poll(s_clock));
+    CHECK(s_restarts == 0U && s_user_erases == 0U);
+    s_clock += 1U;
+    static_cast<void>(context.bt_link.poll(s_clock));
+    CHECK(s_restarts == 1U && s_user_erases == 0U);
+
+    CHECK(context.bt_link.schedulePhoneReset(true, false, s_clock));
+    s_clock += 250U;
+    static_cast<void>(context.bt_link.poll(s_clock));
+    CHECK(s_restarts == 2U && s_user_erases == 1U);
+}
+
 /** @brief 验证启动计数、诊断校验、存储阶段只装载剩余键及不可用时的降级。 */
 void earlyConfig(unsigned previous, bool nvsAvailable)
 {
@@ -1407,6 +1492,8 @@ int main(int argc, const char **raw_args)
         storageBackoff();
     } else if (std::strcmp(argv[1], "storage_startup") == 0) {
         storageStartup();
+    } else if (std::strcmp(argv[1], "phone_nvs_readback") == 0) {
+        phoneNvsReadback();
     } else if (std::strcmp(argv[1], "early_config_0") == 0) {
         earlyConfig(0U, true);
     } else if (std::strcmp(argv[1], "early_config_2") == 0) {

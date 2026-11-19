@@ -443,6 +443,8 @@ esp_err_t nvs_store_init(void)
     return ESP_OK;
 }
 void spp_server_set_pair_query(spp_server_pair_query_t) {}
+void esp_restart(void) {}
+
 esp_err_t nvs_store_erase_user(void)
 {
     return ESP_OK;

@@ -156,7 +156,8 @@ add_library(link_svc STATIC
     ${LINK_CORE_DIR}/services/ConfigService.cpp
     ${LINK_CORE_DIR}/services/AlarmService.cpp
     ${LINK_CORE_DIR}/services/PairService.cpp
-    ${LINK_CORE_DIR}/services/GnssService.cpp)
+    ${LINK_CORE_DIR}/services/GnssService.cpp
+    ${LINK_CORE_DIR}/services/PhoneCompatService.cpp)
 target_include_directories(link_svc PUBLIC
     ${PROJ_ROOT}/components/app_fw/include
     ${DEV_PROTO_DIR}/include
@@ -170,7 +171,7 @@ target_compile_options(link_svc PRIVATE ${PROJ_CXX_STRICT})
 
 enable_testing()
 foreach(name test_command_router test_services_golden test_gnss_service test_link_trace test_alarm_fix_quality
-             test_link_credit)
+             test_link_credit test_phone_compat)
     rtk_pascal_case(_f "${name}")
     add_executable(${name} ${_f}.cpp)
     target_link_libraries(${name} link_svc unity)
@@ -180,3 +181,5 @@ endforeach()
 
 # golden 测试包含构建目录中的退役 dispatcher 头。
 target_include_directories(test_services_golden PRIVATE ${REF_GOLDEN})
+
+target_include_directories(test_phone_compat PRIVATE ${LINK_CORE_DIR}/private_include)

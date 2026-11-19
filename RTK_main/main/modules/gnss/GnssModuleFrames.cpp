@@ -111,6 +111,23 @@ void GnssModule::publishAppFrame(const demux::Decoder &decoder, std::span<const 
                                  uint32_t now) noexcept
 {
     const ::gnss::OutputMsg cls = controller().receiver().classifyFrame(decoder, frame);
+    if (cls == ::gnss::OutputMsg::kGsv) {
+        if (!frame.empty() && (frame.size() <= proto::kMaxPayload)) {
+            data::LatestGsv gsv{};
+            std::copy(frame.begin(), frame.end(), gsv.bytes.begin());
+            // 已校验 frame.size() <= proto::kMaxPayload(256)，缩窄到 uint16_t 无损。
+            gsv.len = static_cast<uint16_t>(frame.size());
+            ctx().data.gnssLatestGsv.write(gsv);
+        }
+        uint32_t activeMask = 0U;
+        std::array<uint32_t, data::kGnssAppMsgCount> periodsMs{};
+        ctx().data.gnssAppSub.readSubscription(activeMask, periodsMs);
+        constexpr uint8_t kGsvType = static_cast<uint8_t>(::gnss::OutputMsg::kGsv);
+        if ((activeMask & (1U << kGsvType)) != 0U) {
+            static_cast<void>(ctx().data.gnssAppRing.write(kGsvType, frame));
+        }
+        return;
+    }
     const auto idx = static_cast<size_t>(static_cast<uint8_t>(cls));
     if ((cls == ::gnss::OutputMsg::kNone) || (idx >= data::kGnssAppMsgCount)) {
         return;
@@ -143,6 +160,7 @@ void GnssModule::publishAppFrame(const demux::Decoder &decoder, std::span<const 
     }
 }
 
+/** @brief 分发接收机帧。 @param decoder: 帧来源。 @param frame: 已校验的帧。 @note 仅 kIo。 */
 void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept
 {
     // 文本日志不经中断路径：本函数只由 kIo 任务的 feed() 调用（ADR-0009 §2.11）。
@@ -157,6 +175,8 @@ void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint
     if (controller().state() == ::gnss::State::kReadback) {
         appendReadbackLine(decoder, frame);
     }
+    phone_ppp_.onFrame(controller().receiver(), decoder, frame, now);
+    phone_sat_.onFrame(controller().receiver(), decoder, frame, now);
     controller().onFrame(decoder, frame, now);
     if (&decoder == &demux::nmea::kDecoder) {
         const auto res = parser().feed(frame, now);

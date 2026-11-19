@@ -238,10 +238,11 @@ void printStatusSys(const SystemStatus &system, const rtos::ExecStats &exec) noe
                  gnss.pipe.pushedFrames, gnss.pipe.droppedFrames, gnss.pipe.writtenBytes);
     cli::printKv("app_ring",
                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 " rd=%" PRIu32 " drop=%" PRIu32
-                 " qovsz=%" PRIu32,
+                 " gga_drop=%" PRIu32 " qovsz=%" PRIu32,
                  static_cast<unsigned>(kGnssAppRingBytes), rWr.highWaterBytes, sub.activeMask,
                  rWr.base.records, rRd.base.records,
-                 rRd.base.dropped + rWr.oversizeDrop + rWr.pinnedDrop, sub.queryOversizeTotal);
+                 rRd.base.dropped + rWr.oversizeDrop + rWr.pinnedDrop,
+                 data.gnssAppRing.ggaDropCount(), sub.queryOversizeTotal);
     cli::printKv("obs_ring", "reserved=%" PRIu32 "B not allocated", kStaticObsReservedBytes);
 #endif
 }
@@ -291,10 +292,10 @@ void printGnssSection() noexcept
                  gnss.pipe.pushedFrames, gnss.pipe.droppedFrames, gnss.pipe.writtenBytes);
     cli::printKv("app_ring",
                  "cap=%uB hwm=%zuB mask=0x%02" PRIX32 " wr=%" PRIu32 "/%" PRIu32 "B overwr=%" PRIu32
-                 " nosub=%" PRIu32 " ovsz=%" PRIu32 " pin=%" PRIu32,
+                 " nosub=%" PRIu32 " ovsz=%" PRIu32 " pin=%" PRIu32 " gga_drop=%" PRIu32,
                  static_cast<unsigned>(kGnssAppRingBytes), rWr.highWaterBytes, sub.activeMask,
                  rWr.base.records, rWr.base.bytes, rWr.base.overwritten, rWr.noSubscriber,
-                 rWr.oversizeDrop, rWr.pinnedDrop);
+                 rWr.oversizeDrop, rWr.pinnedDrop, data.gnssAppRing.ggaDropCount());
     cli::printKv("app_reader",
                  "rec=%" PRIu32 "/%" PRIu32 "B drop=%" PRIu32 " filt=%" PRIu32 " pin=%" PRIu32
                  " qovsz=%" PRIu32,

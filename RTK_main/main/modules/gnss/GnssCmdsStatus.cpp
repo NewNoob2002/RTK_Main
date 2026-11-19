@@ -114,10 +114,10 @@ void printGnssAppRing() noexcept
     const auto latest = data.gnssLatest.snapshot();
     cli::printKv("app_ring",
                  "cap=%uB hwm=%zuB wr=%" PRIu32 "/%" PRIu32 "B overwr=%" PRIu32 " nosub=%" PRIu32
-                 " ovsz=%" PRIu32 " pin=%" PRIu32,
+                 " ovsz=%" PRIu32 " pin=%" PRIu32 " gga_drop=%" PRIu32,
                  static_cast<unsigned>(kGnssAppRingBytes), rWr.highWaterBytes, rWr.base.records,
                  rWr.base.bytes, rWr.base.overwritten, rWr.noSubscriber, rWr.oversizeDrop,
-                 rWr.pinnedDrop);
+                 rWr.pinnedDrop, data.gnssAppRing.ggaDropCount());
     cli::printKv("app_reader",
                  "mask=0x%02" PRIX32 " rec=%" PRIu32 "/%" PRIu32 "B drop=%" PRIu32 " filt=%" PRIu32
                  " pin=%" PRIu32,

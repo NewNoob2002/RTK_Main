@@ -34,9 +34,76 @@ LinkService::LinkService(Transport &transport, LinkManager &link, CommandRouter 
     : transport_(transport), link_(link), router_(router), alarm_(alarm)
 {}
 
+void LinkService::cancelDeferred(SessionHandle handle) noexcept
+{
+    for (DeferredEntry &entry : deferred_) {
+        if (!entry.active || (entry.handle != handle)) {
+            continue;
+        }
+        const DeferredHook hook = entry.hook;
+        const ReplyCredit credit = entry.credit;
+        const bool hasCredit = entry.hasCredit;
+        entry = DeferredEntry{};
+        if (hasCredit) {
+            transport_.cancelReply(credit);
+        }
+        if (hook.cancel != nullptr) {
+            hook.cancel(hook.ctx);
+        }
+    }
+}
+
+void LinkService::registerDeferred(SessionHandle handle, uint16_t msgId, const ReplyCredit &credit,
+                                   const DeferredHook &hook) noexcept
+{
+    if (hook.poll != nullptr) {
+        for (DeferredEntry &entry : deferred_) {
+            if (!entry.active) {
+                entry.active = true;
+                entry.handle = handle;
+                entry.msgId = msgId;
+                entry.credit = credit;
+                entry.hasCredit = transport_.supportsCredit();
+                entry.hook = hook;
+                return;
+            }
+        }
+    }
+    if (transport_.supportsCredit()) {
+        transport_.cancelReply(credit);
+    }
+    if (hook.cancel != nullptr) {
+        hook.cancel(hook.ctx);
+    }
+}
+
+void LinkService::pollDeferred(uint32_t nowMs) noexcept
+{
+    for (DeferredEntry &entry : deferred_) {
+        if (!entry.active) {
+            continue;
+        }
+        reply_.clear();
+        if (!entry.hook.poll(entry.hook.ctx, nowMs, reply_)) {
+            continue;
+        }
+        const SessionHandle handle = entry.handle;
+        const uint16_t msgId = entry.msgId;
+        const ReplyCredit credit = entry.credit;
+        const bool hasCredit = entry.hasCredit;
+        entry = DeferredEntry{};
+        if (reply_.len > 0U) {
+            sendReply(handle, credit, msgId);
+        } else if (hasCredit) {
+            transport_.cancelReply(credit);
+        }
+    }
+}
+
 void LinkService::apply(const Actions &act) noexcept
 {
     for (const SessionHandle handle : act.view()) {
+        cancelDeferred(handle);
         ++stats_.disconnects;
         const fw::Status status = transport_.disconnect(handle);
         // 断开失败不回滚本地状态：传输层随后仍会报告关闭事件，onClose 对未知句柄幂等。
@@ -91,6 +158,7 @@ void LinkService::onOpen(SessionHandle handle, const BtAddr &addr, uint32_t nowM
 
 void LinkService::onClose(SessionHandle handle) noexcept
 {
+    cancelDeferred(handle);
     link_.onClose(handle);
 
     Slot *slot = findSlot(handle);
@@ -122,6 +190,13 @@ void LinkService::sendReply(SessionHandle handle, const ReplyCredit &credit,
     }
 }
 
+/**
+ * @brief 为协议帧预留额度并派发，PPP 完成前保留该额度。
+ * @param slot: 已收到完整帧的会话槽。
+ * @param nowMs: 当前单调时钟。
+ * @retval true 请求已执行或已取消。
+ * @retval false 额度不足，等待后续恢复。
+ */
 bool LinkService::dispatchPending(Slot &slot, uint32_t nowMs) noexcept
 {
     ReplyCredit credit{};
@@ -157,6 +232,8 @@ bool LinkService::dispatchPending(Slot &slot, uint32_t nowMs) noexcept
     const DispatchResult result = router_.handle(roleAfter, slot.frame, nowMs, reply_);
     if (result == DispatchResult::kReply) {
         sendReply(handle, credit, slot.frame.msgId);
+    } else if (result == DispatchResult::kDeferred) {
+        registerDeferred(handle, slot.frame.msgId, credit, reply_.deferred);
     } else if (transport_.supportsCredit()) {
         transport_.cancelReply(credit);
     }
@@ -234,6 +311,7 @@ void LinkService::tick(uint32_t nowMs) noexcept
     Actions act;
     link_.tick(nowMs, act);
     apply(act);
+    pollDeferred(nowMs);
 
     const bool due = (!pushed_once_) ||
                      (static_cast<uint32_t>(nowMs - last_push_ms_) >= proto::alarm::kPushPeriodMs);

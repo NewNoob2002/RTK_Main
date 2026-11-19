@@ -94,3 +94,7 @@ foreach(name IN LISTS _gnss_tests)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})
     add_test(NAME ${name} COMMAND ${name})
 endforeach()
+
+if(RTK_GNSS_DRV_UNICORE)
+    target_include_directories(test_gnss_unicore_receiver PRIVATE ${PROJ_ROOT}/components/gnss/private_include)
+endif()

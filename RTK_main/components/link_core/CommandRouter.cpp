@@ -91,6 +91,7 @@ DispatchResult CommandRouter::handle(Role role, const proto::FrameView &frame, u
                        static_cast<uint32_t>(role));
             return DispatchResult::kDenied;
         }
+        reply.appKind = appKindFromSender(frame.sender);
         return entry.handler(entry.self, frame, nowMs, reply);
     }
     // 未登记 ID（含 5.4 保留 ID）不回复，先于角色检查。

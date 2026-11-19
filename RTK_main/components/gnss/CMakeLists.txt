@@ -6,7 +6,7 @@ set(_gnss_drivers UNICORE UBLOX COMNAV)
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/pascal_case.cmake)
 set(_gnss_srcs src/NmeaParser.cpp src/NmeaParserNumeric.cpp src/NmeaParserPosition.cpp
                src/NmeaParserSatellites.cpp src/Controller.cpp src/ControllerProbe.cpp src/ControllerConfigure.cpp src/ControllerMaintenance.cpp
-               src/Registry.cpp src/Receiver.cpp)
+               src/Registry.cpp src/Receiver.cpp src/PppSequence.cpp)
 
 if(ESP_PLATFORM)
     set(_srcs ${_gnss_srcs})
@@ -56,6 +56,8 @@ else()
     target_compile_features(gnss PUBLIC cxx_std_20)
     set(_gnss_target gnss)
 endif()
+
+target_include_directories(${_gnss_target} PRIVATE private_include)
 
 # 纯组件告警集（AGENTS.md §3），与 stream_demux 相同。
 target_compile_options(${_gnss_target} PRIVATE

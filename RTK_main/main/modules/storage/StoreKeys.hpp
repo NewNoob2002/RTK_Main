@@ -13,7 +13,62 @@
 
 namespace app::store {
 
-inline constexpr size_t kMaxBlobKeyBytes = 64U;
+inline constexpr fw::StoreKey kPhoneHeightKey{
+    .ns = "rtk",
+    .key = "ant_height",
+    .type = fw::StoreType::kBlob,
+    .maxSize = 8U,
+    .help = "Antenna height (binary64 LE, m)",
+};
+inline constexpr fw::StoreKey kPhonePppKey{
+    .ns = "rtk",
+    .key = "ppp_enable",
+    .type = fw::StoreType::kU8,
+    .maxSize = 1U,
+    .min = 0,
+    .max = 1,
+    .help = "Unicore PPP setting (0/1)",
+};
+inline constexpr fw::StoreKey kPhoneSatCfgKey{
+    .ns = "rtk",
+    .key = "sat_cfg",
+    .type = fw::StoreType::kBlob,
+    .maxSize = 6U,
+    .help = "Cutoff angle and GNSS constellation mask",
+};
+inline constexpr fw::StoreKey kPhonePnKey{
+    .ns = "rtk",
+    .key = "pn",
+    .type = fw::StoreType::kBlob,
+    .maxSize = 16U,
+    .help = "Device part number (0x08 Nav)",
+};
+inline constexpr fw::StoreKey kPhoneNtripKey{
+    .ns = "rtk",
+    .key = "ntrip_cfg",
+    .type = fw::StoreType::kBlob,
+    .maxSize = 112U,
+    .help = "NTRIP config blob (0x12)",
+};
+inline constexpr fw::StoreKey kPhoneJsonSrvKey{
+    .ns = "rtk",
+    .key = "json_srv",
+    .type = fw::StoreType::kBlob,
+    .maxSize = 42U,
+    .help = "JSON server config blob (0x32 Nav)",
+};
+inline constexpr fw::StoreKey kPhoneTbKey{
+    .ns = "rtk",
+    .key = "tb_cfg",
+    .type = fw::StoreType::kBlob,
+    .maxSize = 86U,
+    .help = "Thingsboard config blob (0x33 Nav)",
+};
+static_assert(fw::valid(kPhoneHeightKey) && fw::valid(kPhonePppKey) && fw::valid(kPhoneSatCfgKey) &&
+              fw::valid(kPhonePnKey) && fw::valid(kPhoneNtripKey) && fw::valid(kPhoneJsonSrvKey) &&
+              fw::valid(kPhoneTbKey));
+
+inline constexpr size_t kMaxBlobKeyBytes = 128U;
 inline constexpr size_t kKeyLineBytes = 132U;
 
 /**

@@ -94,10 +94,23 @@ static_assert(static_cast<uint8_t>(GnssSubVerb::kReadback) <
                   static_cast<uint8_t>(GnssMaintenanceVerb::kSave),
               "GnssSubVerb::kReadback must not overlap GnssMaintenanceVerb");
 
+/** @brief 派发 kIo 命令，PPP 运行期间独占串口。 @param cmd: 请求。 @param[out] result: 受理结果。 */
 void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (!initialized_) {
         result.status = fw::Result::kInvalidState;
+        return;
+    }
+    if (phone_ppp_.active() || phone_sat_.active()) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kPhonePpp) {
+        cmdPhonePpp(cmd, result);
+        return;
+    }
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kPhoneSatCfg) {
+        cmdPhoneSatCfg(cmd, result);
         return;
     }
     const uint32_t now = rtos::nowMs();
