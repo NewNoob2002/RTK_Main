@@ -1,6 +1,6 @@
 # G-optisens：CM680 归入 Optisens 家族
 
-- 基线：main `0da0929`（G-baud460k 已合并）
+- 基线：main `7d3c803`（G-baud460k 已合并）
 - 分支：`feat/gnss-optisens-q1`（与 Q1 同一实施者、同一工作树，先做本卡再做 Q1）
 - 构建前缀：`builds/gq-*`
 - 关联：ADR-0012 §2.8/§2.9（本卡追加 §2.9 修订 B）
@@ -36,7 +36,7 @@ CM680（P2 v1.41 实板，固件 `CM680_SDK.1.2.5a_GNSS.1.1.9`）由 Optisens �
 
 ## 3 验收
 
-- `tools/ci/run_gates.sh --base 0da0929 --prefix gq` 除 G1（仅授权文件）外全 PASS。
+- `tools/ci/run_gates.sh --base 7d3c803 --prefix gq` 除 G1（仅授权文件）外全 PASS。
 - 报告 `docs/reports/G-optisens-family.md`：改动清单、全部 `kUnicore` 判断点处置表、探测时序说明、门禁结果。
 - HIL 由 Architect 执行：`gnss status` 显示 `family optisens`；旧缓存板子一次重启后 `config gnss` 显示 `family = 4 (optisens)`；
   460800 切换、20 Hz、基站 RTCM 不回退。
