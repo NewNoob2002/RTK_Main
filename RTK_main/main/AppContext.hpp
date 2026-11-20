@@ -24,19 +24,18 @@ namespace board {
 struct Profile;
 }
 
-/** 执行器非栈控制块存储（TCB 与命令/结果静态队列）；任务栈由启动期 boot_alloc 外供（ADR-0011 §7）。 */
+/** 执行器非栈控制块存储（TCB、命令静态队列与异步完成表）；任务栈由启动期 boot_alloc 外供（ADR-0011 §7）。 */
 template <size_t QueueDepth> struct ExecutorControlStorage {
     static_assert(QueueDepth > 0U, "queue depth must be > 0");
     StaticTask_t tcb{};
     std::array<uint8_t, QueueDepth * sizeof(fw::Command)> cmdArea{};
     StaticQueue_t cmdQueue{};
-    std::array<uint8_t, QueueDepth * sizeof(fw::CommandResult)> resultArea{};
-    StaticQueue_t resultQueue{};
+    std::array<rtos::PendingSlot, rtos::kMaxPending> pending{};
 };
 
 /**
  * @brief 把执行器控制存储与外供栈组合成视图
- * @param st: 静态控制块与队列存储
+ * @param st: 静态控制块、队列与完成表存储
  * @param stack: 外供任务栈（IDF 单位为字节），须覆盖任务生命周期
  * @retval 引用 st 与 stack 的执行器存储视图
  * @note 仅启动前单线程；不分配、不阻塞，非 ISR。
@@ -45,8 +44,7 @@ template <size_t D>
 [[nodiscard]] inline rtos::ExecutorStorageView viewOf(ExecutorControlStorage<D> &st,
                                                       std::span<StackType_t> stack) noexcept
 {
-    return rtos::ExecutorStorageView{stack,         &st.tcb,         st.cmdArea, &st.cmdQueue,
-                                     st.resultArea, &st.resultQueue, D};
+    return rtos::ExecutorStorageView{stack, &st.tcb, st.cmdArea, &st.cmdQueue, st.pending, D};
 }
 
 // 底层用 uint32_t：Xtensa LX6 没有 8 位原子 RMW，std::atomic<uint8_t> 会退回 libatomic 的锁实现（CPP-008）；

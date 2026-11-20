@@ -434,8 +434,14 @@ void spp_server_rx_stats(spp_server_rx_stats_t *stats)
     }
 }
 void xTaskNotifyGive(TaskHandle_t) {}
-uint32_t ulTaskNotifyTake(BaseType_t, TickType_t)
+uint32_t ulTaskNotifyTake(BaseType_t, TickType_t ticks)
 {
+    CHECK(s_critical == 0);
+    if (s_pump_receive && (s_current == nullptr) && (ticks != 0U)) {
+        pump();
+        return 1U;
+    }
+    s_clock += ticks;
     return 0U;
 }
 esp_err_t nvs_store_init(void)

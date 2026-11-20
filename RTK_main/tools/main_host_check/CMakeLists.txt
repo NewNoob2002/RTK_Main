@@ -104,8 +104,22 @@ target_include_directories(executor_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/components/app_fw/include)
 target_compile_options(executor_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
-foreach(scenario lifecycle calls invalid)
+foreach(scenario lifecycle calls async invalid)
     add_test(NAME executor_${scenario} COMMAND executor_check ${scenario})
+endforeach()
+
+add_executable(executor_async_check ExecutorAsyncCheck.cpp ${PROJ_ROOT}/components/rtos/Executor.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Trace.cpp ${PROJ_ROOT}/components/app_fw/src/Tlog.cpp
+    ${PROJ_ROOT}/components/app_fw/src/Log.cpp)
+target_include_directories(executor_async_check BEFORE PRIVATE shim)
+target_include_directories(executor_async_check PRIVATE ../t13_host_check/shim/inc
+    ${PROJ_ROOT}/components/rtos/include ${PROJ_ROOT}/components/device_proto/include
+    ${PROJ_ROOT}/components/app_fw/include)
+target_compile_options(executor_async_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
+    -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+target_link_libraries(executor_async_check PRIVATE main_rtos)
+foreach(scenario multi_producer_post concurrent_call cancel_stress)
+    add_test(NAME executor_async_${scenario} COMMAND executor_async_check ${scenario})
 endforeach()
 
 add_executable(template_check TemplateCheck.cpp
