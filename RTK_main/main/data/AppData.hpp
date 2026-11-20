@@ -103,6 +103,30 @@ private:
     std::optional<fw::Slot<T>> slot_{};
 };
 
+/** 网页 → GNSS 跨执行器异步命令阶段（kIo 写回，kLink 消费）。 */
+enum class WebGnssPhase : uint8_t {
+    kIdle = 0,
+    kAccepted,  // kIo 已受理，正在等待两阶段 apply / maintenance / NVS 保存完成
+    kDone,      // kIo 已产出最终结果（status/detail 与 seq 一一对应）
+    kCancelled, // kIo 在执行前检测到取消序号，已跳过执行
+};
+
+/** 网页 → GNSS 跨执行器命令结果（由 kIo 按命令 seq 精确绑定发布，防止与控制台交错串单）。 */
+struct WebGnssOutcome {
+    uint32_t seq = 0U;
+    WebGnssPhase phase = WebGnssPhase::kIdle;
+    fw::Result status = fw::Result::kOk;
+    int32_t detail = 0;
+};
+
+// 底层用 uint32_t：Xtensa LX6 无 8 位无锁原子 RMW，改成 1 字节会引入 libatomic 锁（CPP-008）。
+// NOLINTNEXTLINE(performance-enum-size): 无锁原子要求 32 位底层类型。
+enum class GgaGatePersist : uint32_t {
+    kClean = 0U,
+    kPending = 1U,
+    kFailed = 2U,
+};
+
 /** 跨任务共享的主题集合；init() 绑定同一把锁后各 Slot 支持跨任务读写，非 ISR。 */
 struct DataCenter {
     /**
@@ -146,7 +170,12 @@ struct DataCenter {
     fw::Slot<fw::CommandResult> phonePppResult{}; // kIo 完成时带回相同 seq。
     fw::Slot<fw::Command> phoneSatCommand{};      // kLink 投递 0x06，一个请求在途。
     fw::Slot<fw::CommandResult> phoneSatResult{}; // kIo 完成 0x06 时带回相同 seq。
-    ZeroInitSlot<LatestGsv> gnssLatestGsv{};      // 0x0A Nav GSV 最近单句缓存。
+    fw::Slot<fw::Command> webGnssCommand{};     // kLink（WebModule）投递 GNSS 配置命令，单条在途。
+    fw::Slot<WebGnssOutcome> webGnssOutcome{};  // kIo（GnssModule）按 seq 回传受理/完成/取消结果。
+    std::atomic<uint32_t> webGnssCancelSeq{0U}; // kLink 超时取消序号（kLink 写，kIo 执行前核对）。
+    std::atomic<uint32_t> webGnssFlushGgaSeq{0U};     // kLink 退出前触发 GGA 门控立即落盘序号。
+    std::atomic<uint32_t> webGnssFlushGgaDoneSeq{0U}; // kIo 完成对应立即落盘请求后回写序号。
+    ZeroInitSlot<LatestGsv> gnssLatestGsv{};          // 0x0A Nav GSV 最近单句缓存。
     fw::Slot<rtos::ExecStats> ioExecStats{};
     fw::Slot<GnssStatus> gnssStatus{};
     ZeroInitSlot<gnss::Fix> gnssFix{};
@@ -166,7 +195,12 @@ struct DataCenter {
     static_assert(fw::kAtomicUsable<bool>, "GGA 质量门控放行标志原子须无锁");
     std::atomic<bool> phoneStreamReady{false};
     std::atomic<uint32_t> gnssBaudFailCount{0U}; // 启动切速失败计数（kIo 写，console 读）
+    std::atomic<uint32_t> gnssRateHz{
+        0U}; // 当前 GNSS 定位频率（Hz，kIo 写，kLink 读；0 表示未初始化）
+    std::atomic<GgaGatePersist> ggaGatePersist{
+        GgaGatePersist::kClean}; // GGA 门控 NVS 持久化状态（kIo 写，kLink 读）
     static_assert(fw::kAtomicUsable<uint32_t>, "GNSS 切速失败计数原子须无锁");
+    static_assert(fw::kAtomicUsable<GgaGatePersist>, "GGA 门控持久化状态原子须无锁");
 
     /**
      * @brief  查询当前 GGA 质量门控是否允许输出 GGA（蓝牙直传、0x04 query 与将来 4G NTRIP 共用）

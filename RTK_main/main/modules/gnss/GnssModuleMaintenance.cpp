@@ -330,6 +330,14 @@ void GnssModule::completeMaintenance(uint32_t nowMs) noexcept
             result = MaintenanceResult::kIoError;
         }
         setConsoleMaintenanceResult(stats.maintenanceSeq, stats.maintenance, result);
+        if ((webMaintSeq_ != 0U) && (stats.maintenanceSeq == webMaintTarget_)) {
+            const fw::Result webRes =
+                (result == MaintenanceResult::kOk) ? fw::Result::kOk : fw::Result::kIoError;
+            ctx().data.webGnssOutcome.write(
+                {webMaintSeq_, data::WebGnssPhase::kDone, webRes, static_cast<int32_t>(result)});
+            webMaintSeq_ = 0U;
+            webMaintTarget_ = 0U;
+        }
     }
     publishStatus(nowMs);
 }

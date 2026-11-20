@@ -63,7 +63,9 @@ fw::Result GnssModule::initObjects() noexcept
     auto &cfg = ensureRoverCfg();
     if (!rate_loaded_) {
         cfg.rateHz = static_cast<uint8_t>(CONFIG_RTK_GNSS_RATE_HZ);
+        rate_loaded_ = true;
     }
+    ctx().data.gnssRateHz.store(cfg.rateHz, std::memory_order_release);
     if (!gsv_loaded_) {
         cfg.gsv = true;
     }
@@ -293,7 +295,8 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     if (!initialized_) {
         return false;
     }
-    tickGgaGateSave(nowMs);
+    pollWebCommand(nowMs);
+    tickGgaGateSave(nowMs, false);
     if (pollPhonePpp(nowMs)) {
         const bool hadFullRx = (last_rx_bytes_ == kUartReadChunkBytes);
         last_rx_bytes_ = 0U;
@@ -421,9 +424,85 @@ void GnssModule::publishStatus(uint32_t nowMs) noexcept
     st.demuxResyncs = dstats.resyncs;
     st.pipe = ctx().rtcmPipe.stats();
 
+    ctx().data.gnssRateHz.store(ensureRoverCfg().rateHz, std::memory_order_release);
     ctx().data.gnssStatus.write(st);
     last_status_ms_ = nowMs;
     last_published_state_ = st.state;
+}
+
+void GnssModule::bindWebCommandOutcome(const fw::Command &webCmd,
+                                       const fw::CommandResult &result) noexcept
+{
+    const bool isSetRateOrOut = (webCmd.verb == static_cast<uint8_t>(GnssVerb::kSetRate)) ||
+                                (webCmd.verb == static_cast<uint8_t>(GnssSubVerb::kSetOut));
+    const bool isSaveMaint = (webCmd.verb == static_cast<uint8_t>(GnssMaintenanceVerb::kSave));
+    const bool isGgaGate = (webCmd.verb == static_cast<uint8_t>(GnssSubVerb::kSetGgaGate));
+    if (isSetRateOrOut && (pending_apply_ != PendingApply::kNone)) {
+        webApplySeq_ = webCmd.seq;
+        ctx().data.webGnssOutcome.write(
+            {webCmd.seq, data::WebGnssPhase::kAccepted, fw::Result::kOk, 0});
+        return;
+    }
+    if (isSaveMaint) {
+        webMaintSeq_ = webCmd.seq;
+        webMaintTarget_ = std::bit_cast<uint32_t>(result.detail);
+        ctx().data.webGnssOutcome.write(
+            {webCmd.seq, data::WebGnssPhase::kAccepted, fw::Result::kOk, result.detail});
+        return;
+    }
+    if (isGgaGate) {
+        if (!ctx().bootConfig.userNvsReady || ctx().bootConfig.safeDefaults) {
+            gga_gate_save_pending_ = false;
+            ctx().data.ggaGatePersist.store(data::GgaGatePersist::kFailed,
+                                            std::memory_order_release);
+            ctx().data.webGnssOutcome.write(
+                {webCmd.seq, data::WebGnssPhase::kDone, fw::Result::kInvalidState, 0});
+            return;
+        }
+        webGgaSeq_ = webCmd.seq;
+        ctx().data.webGnssOutcome.write(
+            {webCmd.seq, data::WebGnssPhase::kAccepted, fw::Result::kOk, 0});
+        return;
+    }
+    ctx().data.webGnssOutcome.write(
+        {webCmd.seq, data::WebGnssPhase::kDone, fw::Result::kOk, result.detail});
+}
+
+void GnssModule::pollWebCommand(uint32_t nowMs) noexcept
+{
+    const uint32_t flushSeq = ctx().data.webGnssFlushGgaSeq.load(std::memory_order_acquire);
+    if (flushSeq != lastWebFlushGgaSeq_) {
+        lastWebFlushGgaSeq_ = flushSeq;
+        if (gga_gate_save_pending_) {
+            tickGgaGateSave(nowMs, true);
+        }
+        ctx().data.webGnssFlushGgaDoneSeq.store(flushSeq, std::memory_order_release);
+    }
+
+    const auto webCmd = ctx().data.webGnssCommand.read();
+    if ((webCmd.seq == 0U) || (webCmd.seq == lastWebCmdSeq_)) {
+        return;
+    }
+    lastWebCmdSeq_ = webCmd.seq;
+    if (ctx().data.webGnssCancelSeq.load(std::memory_order_acquire) == webCmd.seq) {
+        ctx().data.webGnssOutcome.write(
+            {webCmd.seq, data::WebGnssPhase::kCancelled, fw::Result::kTimeout, 0});
+        return;
+    }
+    if ((webCmd.verb == static_cast<uint8_t>(GnssSubVerb::kSetGgaGate)) && (webGgaSeq_ != 0U)) {
+        ctx().data.webGnssOutcome.write(
+            {webCmd.seq, data::WebGnssPhase::kDone, fw::Result::kBusy, 0});
+        return;
+    }
+
+    fw::CommandResult result{.seq = webCmd.seq, .status = fw::Result::kOk, .detail = 0};
+    onCommand(webCmd, result);
+    if (!fw::isOk(result.status)) {
+        ctx().data.webGnssOutcome.write(
+            {webCmd.seq, data::WebGnssPhase::kDone, result.status, result.detail});
+        return;
+    }
+    bindWebCommandOutcome(webCmd, result);
 }
 
 void GnssModule::registerDecoders(std::span<const ::gnss::Receiver *const> receivers) noexcept

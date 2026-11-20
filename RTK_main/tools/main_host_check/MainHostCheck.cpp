@@ -13,6 +13,7 @@ extern "C" {
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs.h"
 }
 
 #include "AppTestAdapter.hpp"
@@ -914,9 +915,15 @@ esp_err_t nvs_store_set_alarms(const uint8_t (*alarms)[NVS_STORE_ADDR_LEN], size
     }
     return s_store_result;
 }
-esp_err_t nvs_store_get_alarms(uint8_t (*)[NVS_STORE_ADDR_LEN], size_t, size_t *count)
+esp_err_t nvs_store_get_alarms(uint8_t (*alarms)[NVS_STORE_ADDR_LEN], size_t maxCount,
+                               size_t *count)
 {
-    *count = 0U;
+    const size_t n = std::min(s_saved_count, maxCount);
+    const std::span rows{alarms, n};
+    for (size_t idx = 0U; idx < n; ++idx) {
+        std::memcpy(rows[idx], s_saved[idx].data(), NVS_STORE_ADDR_LEN);
+    }
+    *count = n;
     return ESP_OK;
 }
 }
@@ -1490,6 +1497,127 @@ void pairingWindow()
 }
 
 /**
+ * @brief 验证 S2：Wi-Fi 模式下经 storage 写白名单与 pair_next，重启进入 BT 模式读到同一白名单且 pair_next 仅生效一次
+ * @note 单线程主机测试，非 ISR。
+ */
+void webS2StorageBt()
+{
+    using namespace app;
+    auto &context = appContext();
+    context.data.init();
+    loadEarlyConfig(context);
+    context.radioMode = RadioMode::kWifiConfig;
+    s_saved_count = 0U;
+    s_saved = {};
+    s_store_result = ESP_OK;
+
+    // 1. Wi-Fi 模式启动（不启动 bt_link）：经 storage 写白名单与 pair_next。
+    CHECK(fw::isOk(context.storage.init()));
+    CHECK(context.data.linkStatus.read().whitelistCount == 0U);
+    CHECK(!context.storage.btPairNext());
+
+    const auto makeWlCmd = [](StorageVerb v, const core::BtAddr &addr) {
+        fw::Command cmd{};
+        cmd.target = id(ModuleKind::kStorage);
+        cmd.verb = verb(v);
+        cmd.argLen = static_cast<uint8_t>(core::kAddrLen);
+        std::copy(addr.bytes.begin(), addr.bytes.end(), cmd.args.begin());
+        return cmd;
+    };
+    const core::BtAddr kThirdAlarm{{21U, 22U, 23U, 24U, 25U, 26U}};
+    const core::BtAddr kFourthAlarm{{31U, 32U, 33U, 34U, 35U, 36U}};
+    const core::BtAddr kFifthAlarm{{41U, 42U, 43U, 44U, 45U, 46U}};
+
+    fw::CommandResult res{};
+    context.storage.onCommand(makeWlCmd(StorageVerb::kWhitelistAdd, kAlarm), res);
+    CHECK(res.status == fw::Result::kOk);
+    context.storage.onCommand(makeWlCmd(StorageVerb::kWhitelistAdd, kAlarm), res);
+    CHECK(res.status == fw::Result::kInvalidState);
+    context.storage.onCommand(makeWlCmd(StorageVerb::kWhitelistAdd, kOtherAlarm), res);
+    CHECK(res.status == fw::Result::kOk);
+    context.storage.onCommand(makeWlCmd(StorageVerb::kWhitelistAdd, kThirdAlarm), res);
+    CHECK(res.status == fw::Result::kOk);
+    context.storage.onCommand(makeWlCmd(StorageVerb::kWhitelistAdd, kFourthAlarm), res);
+    CHECK(res.status == fw::Result::kOk);
+    context.storage.onCommand(makeWlCmd(StorageVerb::kWhitelistAdd, kFifthAlarm), res);
+    CHECK(res.status == fw::Result::kNoSpace);
+
+    context.storage.onCommand(makeWlCmd(StorageVerb::kWhitelistDel, kAlarm), res);
+    CHECK(res.status == fw::Result::kOk);
+    context.storage.onCommand(makeWlCmd(StorageVerb::kWhitelistDel, kAlarm), res);
+    CHECK(res.status == fw::Result::kNotFound);
+
+    const auto wifiLink = context.data.linkStatus.read();
+    CHECK(wifiLink.whitelistCount == 3U);
+    CHECK(wifiLink.whitelist[0] == kOtherAlarm);
+    CHECK(wifiLink.whitelist[1] == kThirdAlarm);
+    CHECK(wifiLink.whitelist[2] == kFourthAlarm);
+
+    fw::Command pairCmd{};
+    pairCmd.target = id(ModuleKind::kStorage);
+    pairCmd.verb = verb(StorageVerb::kSetPairNext);
+    pairCmd.argLen = 1U;
+    pairCmd.args[0] = 1U;
+    context.storage.onCommand(pairCmd, res);
+    CHECK(res.status == fw::Result::kOk);
+    CHECK(context.storage.btPairNext());
+    CHECK(context.data.storeStatus.read().btPairNext);
+
+    // 2. 模拟首次重启进入 BT 模式但 NVS 清零失败：保留 pair_next 待重试且本次不开配对窗口（P2 #7）。
+    ModuleTestAccess::resetStorageForReboot();
+    context.radioMode = RadioMode::kBluetooth;
+    CHECK(fw::isOk(context.storage.init()));
+    CHECK(context.storage.btPairNext());
+    auto sys = context.data.systemStatus.read();
+    sys.btReady = true;
+    context.data.systemStatus.write(sys);
+    nvs_shim_set_write_fail(ESP_FAIL);
+    context.bt_link.installPairingPolicy();
+    CHECK(fw::isOk(context.bt_link.init()));
+    nvs_shim_set_write_fail(ESP_OK);
+    CHECK(context.bt_link.pairStatus(s_clock).remainingMs == 0U);
+    CHECK(context.storage.btPairNext());
+    uint32_t persistedPairNext = 99U;
+    CHECK(store::readValue(store::kBtPairNextKey, persistedPairNext) == ESP_OK);
+    CHECK(persistedPairNext == 1U);
+
+    // 3. 模拟 NVS 恢复后再次重启进入 BT 模式：读到同一白名单，先清零持久化再自动开启配对窗口。
+    ModuleTestAccess::resetStorageForReboot();
+    ModuleTestAccess::resetBtLinkForReboot();
+    context.radioMode = RadioMode::kBluetooth;
+    CHECK(fw::isOk(context.storage.init()));
+    CHECK(context.storage.btPairNext());
+    sys = context.data.systemStatus.read();
+    sys.btReady = true;
+    context.data.systemStatus.write(sys);
+    context.bt_link.installPairingPolicy();
+    CHECK(fw::isOk(context.bt_link.init()));
+
+    const auto btWl = s_link_manager.whitelist();
+    CHECK(btWl.size() == 3U);
+    CHECK(btWl[0] == kOtherAlarm && btWl[1] == kThirdAlarm && btWl[2] == kFourthAlarm);
+    CHECK(context.bt_link.pairStatus(s_clock).remainingMs == core::kPairWindowMs);
+    CHECK(!context.storage.btPairNext());
+    persistedPairNext = 99U;
+    CHECK(store::readValue(store::kBtPairNextKey, persistedPairNext) == ESP_OK);
+    CHECK(persistedPairNext == 0U);
+
+    // 4. 模拟第三次 BT 重启：pair_next 已清零，不再自动开窗；白名单保持不变。
+    ModuleTestAccess::resetStorageForReboot();
+    ModuleTestAccess::resetBtLinkForReboot();
+    CHECK(fw::isOk(context.storage.init()));
+    CHECK(!context.storage.btPairNext());
+    sys = context.data.systemStatus.read();
+    sys.btReady = true;
+    context.data.systemStatus.write(sys);
+    context.bt_link.installPairingPolicy();
+    CHECK(fw::isOk(context.bt_link.init()));
+    CHECK(context.bt_link.pairStatus(s_clock).remainingMs == 0U);
+    const auto btWl2 = s_link_manager.whitelist();
+    CHECK(btWl2.size() == 3U && btWl2[0] == kOtherAlarm);
+}
+
+/**
  * @brief 验证 buildDeviceName 与 deriveSnFromMac 的 P2/E1/unknown、空值、换行与超长边界
  * @note 单线程主机测试，非 ISR。
  */
@@ -1692,6 +1820,8 @@ int main(int argc, const char **raw_args)
         factoryReset();
     } else if (std::strcmp(argv[1], "pairing_window") == 0) {
         pairingWindow();
+    } else if (std::strcmp(argv[1], "web_s2_storage_bt") == 0) {
+        webS2StorageBt();
     } else if (std::strcmp(argv[1], "device_name") == 0) {
         deviceName();
     } else if (std::strcmp(argv[1], "device_name_e1") == 0) {

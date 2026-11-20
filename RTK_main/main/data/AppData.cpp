@@ -31,6 +31,8 @@ void DataCenter::init() noexcept
     phonePppResult.bindLock(lock);
     phoneSatCommand.bindLock(lock);
     phoneSatResult.bindLock(lock);
+    webGnssCommand.bindLock(lock);
+    webGnssOutcome.bindLock(lock);
     gnssLatestGsv.bindLock(lock);
     ioExecStats.bindLock(lock);
     gnssStatus.bindLock(lock);

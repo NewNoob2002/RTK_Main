@@ -800,6 +800,21 @@ private:
     /** @brief 拉取 kLink 投递的待执行手机命令或触发上电重放。 @note 仅 kIo。 */
     void startPendingPhoneConfig() noexcept;
 
+    /**
+     * @brief 消费 kLink（WebModule）经 DataCenter 投递的单条 GNSS 命令与立即落盘请求
+     * @param nowMs: 当前单调时钟（ms）
+     * @note 仅 kIo 调用，非阻塞、非 ISR；通过 onCommand 复用同一校验与执行路径，并按 seq 绑定异步结果。
+     */
+    void pollWebCommand(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 为已受理的网页 GNSS 命令绑定异步结果或发布同步完成结论
+     * @param webCmd: 已由 onCommand 受理的网页命令
+     * @param result: onCommand 输出的受理结果
+     * @note 仅 kIo 在 pollWebCommand 内调用，非阻塞、非 ISR。
+     */
+    void bindWebCommandOutcome(const fw::Command &webCmd, const fw::CommandResult &result) noexcept;
+
     /** @brief 写一条手机配置脚本命令到 GNSS UART。 @param tx: 待发字节。 @retval true 全部写入成功。 @note 仅 kIo。 */
     [[nodiscard]] bool writePhoneTx(std::span<const uint8_t> tx) noexcept;
 
@@ -808,8 +823,13 @@ private:
 
     /** @brief 处理 GGA 质量门控配置命令并安排去抖落盘。 @param cmd: 门控配置命令。 @param nowMs: 当前时钟。 @param[out] result: 执行结果。 @note 仅 kIo。 */
     void cmdSetGgaGate(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
-    /** @brief 推进 GGA 质量门控配置的去抖 NVS 保存与失败重试。 @param nowMs: 当前时钟。 @note 仅 kIo，写 NVS 可阻塞。 */
-    void tickGgaGateSave(uint32_t nowMs) noexcept;
+    /**
+     * @brief 推进 GGA 质量门控配置的去抖 NVS 保存与失败重试
+     * @param nowMs: 当前时钟（ms）
+     * @param forceImmediate: true 时跳过 500 ms 去抖与退避立即尝试写盘（供网页退出前确认持久化）
+     * @note 仅 kIo，写 NVS 可阻塞。
+     */
+    void tickGgaGateSave(uint32_t nowMs, bool forceImmediate) noexcept;
     /** @brief 将 GGA 质量门控状态快照与放行原子标志发布到 DataCenter。 @note 仅 kIo 或启动初始化。 */
     void publishGgaGateStatus() noexcept;
 
@@ -821,6 +841,12 @@ private:
     uint32_t gga_gate_save_changed_ms_ = 0U;
     uint32_t gga_gate_save_attempt_ms_ = 0U;
     uint32_t gga_gate_save_retry_ms_ = 0U;
+    uint32_t lastWebCmdSeq_ = 0U;
+    uint32_t webApplySeq_ = 0U;
+    uint32_t webMaintSeq_ = 0U;
+    uint32_t webMaintTarget_ = 0U;
+    uint32_t webGgaSeq_ = 0U;
+    uint32_t lastWebFlushGgaSeq_ = 0U;
 
     ::gnss::PppSequence phone_ppp_{};
     uint32_t phone_ppp_seq_ = 0U;

@@ -121,6 +121,31 @@ menu "RTK_main"
             Allow selecting Wi-Fi configuration mode at the next software restart.
             Disable to boot in Bluetooth mode and omit the radio console command.
 
+    config RTK_WIFI_AP_PASSWORD
+        string "Wi-Fi SoftAP WPA2-PSK password (8-63 chars)"
+        depends on RTK_WIFI_CONFIG_ENABLE
+        default "12345678"
+        help
+            WPA2-PSK passphrase for the configuration SoftAP (ADR-0017 §2.3).
+            Must be 8-63 characters; verified at compile time with static_assert.
+
+    config RTK_WIFI_AP_CHANNEL
+        int "Wi-Fi SoftAP channel (1-11)"
+        depends on RTK_WIFI_CONFIG_ENABLE
+        range 1 11
+        default 1
+        help
+            2.4 GHz Wi-Fi channel for the configuration SoftAP.
+
+    config RTK_WIFI_IDLE_EXIT_S
+        int "Wi-Fi config mode idle exit timeout (seconds)"
+        depends on RTK_WIFI_CONFIG_ENABLE
+        range 60 3600
+        default 300
+        help
+            Automatically switch back to Bluetooth mode and restart after this many
+            seconds with no station connected to the SoftAP.
+
     menu "GNSS (ADR-0010)"
 
         config RTK_GNSS_ENABLE

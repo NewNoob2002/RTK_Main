@@ -141,11 +141,28 @@ constexpr std::array<TraceField, 2U> kGnssBaudFail = {
     {{"baud", TraceValue::kDecA}, {"result", TraceValue::kDecB}}};
 #endif
 
+constexpr std::array<TraceField, 2U> kWebSession = {
+    {{"fd", TraceValue::kDecA}, {"gen", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kWebReject = {
+    {{"why", TraceValue::kDecA}, {"val", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kWebBusy = {
+    {{"fd", TraceValue::kDecA}, {"id", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kWebFdErr = {
+    {{"fd", TraceValue::kDecA}, {"err", TraceValue::kHexB}}};
+constexpr std::array<TraceField, 2U> kWebQueueErr = {
+    {{"err", TraceValue::kHexA}, {"pending", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kWebIdleTrigger = {
+    {{"idle_s", TraceValue::kDecA}, {"seq", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kWebIdleAbort = {
+    {{"sta", TraceValue::kDecA}, {"seq", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kWebReboot = {
+    {{"kind", TraceValue::kDecA}, {"reason", TraceValue::kDecB}}};
+
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
 #if RTK_GNSS_ENABLED
-constexpr std::array<TraceText, 61U> kTable = {{
+constexpr std::array<TraceText, 71U> kTable = {{
 #else
-constexpr std::array<TraceText, 47U> kTable = {{
+constexpr std::array<TraceText, 57U> kTable = {{
 #endif
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen),
      "session {h} opened as {role} ({why})", std::span<const TraceField>(kLinkOpen)},
@@ -283,6 +300,27 @@ constexpr std::array<TraceText, 47U> kTable = {{
      "<cfg> startup baud {baud} failed (result={result})",
      std::span<const TraceField>(kGnssBaudFail)},
 #endif
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kWsConnect),
+     "<web> ws connect fd={fd} gen={gen}", std::span<const TraceField>(kWebSession)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kWsDisconnect),
+     "<web> ws disconnect fd={fd} gen={gen}", std::span<const TraceField>(kWebSession)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kWsReject),
+     "<web> ws reject why={why} val={val}", std::span<const TraceField>(kWebReject)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kWsBusy),
+     "<web> ws rx full busy fd={fd} id={id}", std::span<const TraceField>(kWebBusy)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kWsTxErr),
+     "<web> ws tx failed fd={fd} err={err}", std::span<const TraceField>(kWebFdErr)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kWsCloseErr),
+     "<web> ws close failed fd={fd} err={err}", std::span<const TraceField>(kWebFdErr)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kWsQueueErr),
+     "<web> httpd_queue_work failed err={err} pending={pending}",
+     std::span<const TraceField>(kWebQueueErr)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kIdleTrigger),
+     "<web> idle timeout {idle_s}s seq={seq}", std::span<const TraceField>(kWebIdleTrigger)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kIdleAbort),
+     "<web> idle reboot aborted sta={sta} seq={seq}", std::span<const TraceField>(kWebIdleAbort)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kRebootCommit),
+     "<web> reboot commit kind={kind} reason={reason}", std::span<const TraceField>(kWebReboot)},
 }};
 
 // 类别短名必须大写（ADR-0009 §2.11）；顺序与 fw::TraceCat 枚举一致。

@@ -231,6 +231,12 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
     }
     pending_apply_ = PendingApply::kNone;
     ++apply_seq_;
+    if (webApplySeq_ != 0U) {
+        const fw::Result webRes =
+            (last_apply_ == GnssApply::kOk) ? fw::Result::kOk : fw::Result::kIoError;
+        ctx().data.webGnssOutcome.write({webApplySeq_, data::WebGnssPhase::kDone, webRes, 0});
+        webApplySeq_ = 0U;
+    }
     publishStatus(nowMs);
 }
 

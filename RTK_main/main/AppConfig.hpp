@@ -6,6 +6,10 @@
 #include <cstdint>
 #include <string_view>
 
+#if defined(ESP_PLATFORM)
+#include "sdkconfig.h"
+#endif
+
 #include "core/Types.hpp"
 #include "rtos/Executor.hpp" // IWYU pragma: keep（冻结头中的 app 名称须在产品命名空间出现前解析）
 #include "rtos/SpinLock.hpp" // IWYU pragma: keep
@@ -52,7 +56,16 @@ inline constexpr bool kGnssStaticObsEnabled = false;
 inline constexpr size_t kGnssObsReservedBytes = 16384U;
 
 /** 模块编号（注册清单使用）；枚举顺序即 ID，勿插入或重排。 */
-enum class ModuleKind : uint8_t { kBtLink, kRtcm, kStorage, kSystem, kSystemMode, kDebug, kGnss };
+enum class ModuleKind : uint8_t {
+    kBtLink,
+    kRtcm,
+    kStorage,
+    kSystem,
+    kSystemMode,
+    kDebug,
+    kGnss,
+    kWeb
+};
 /** 执行器编号；链路与 GNSS IO 分别绑核运行。 */
 enum class ExecKind : uint8_t { kLink, kIo };
 

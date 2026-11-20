@@ -27,6 +27,7 @@ void testGnssPhonePpp();
 void testBaseKeysAndCommandDispatch();
 void testGnssTargetBaudPolicy();
 void testGgaGateNvsAndModuleFlow();
+void testWebGnssBridgeAndGgaPersist();
 
 namespace {
 
@@ -543,5 +544,6 @@ int main()
     testGnssPhonePpp();
     testGnssTargetBaudPolicy();
     testGgaGateNvsAndModuleFlow();
+    testWebGnssBridgeAndGgaPersist();
     return 0;
 }

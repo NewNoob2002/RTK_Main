@@ -11,6 +11,7 @@ inline constexpr const char *kAllocAbort = "boot_alloc:abort";
 inline constexpr const char *kBindDebug = "bind:debug";
 inline constexpr const char *kBindSpp = "bind:spp";
 inline constexpr const char *kBindGnss = "bind:gnss";
+inline constexpr const char *kBindWeb = "bind:web";
 inline constexpr const char *kRollbackSppInUse = "rollback:spp_in_use";
 
 // 模块初始化步骤（BootFlow）

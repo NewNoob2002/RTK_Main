@@ -207,12 +207,37 @@
     syncOutRateLimits(val);
   }
 
+  function syncSelectValue(sel, val) {
+    var existing = sel.querySelector('option[data-custom="1"]');
+    var hasStd = false;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i] !== existing && sel.options[i].value === val) {
+        hasStd = true;
+        break;
+      }
+    }
+    if (hasStd) {
+      if (existing) sel.removeChild(existing);
+      sel.value = val;
+      return;
+    }
+    if (!existing) {
+      existing = document.createElement("option");
+      existing.setAttribute("data-custom", "1");
+      sel.appendChild(existing);
+    }
+    var ms = Number(val);
+    existing.value = val;
+    existing.textContent = (ms >= 1000 && ms % 1000 === 0) ? ("1/" + (ms / 1000) + " Hz") : (val + " ms");
+    sel.value = val;
+  }
+
   function syncControls(cfg) {
     var sels = document.querySelectorAll("select[data-key]");
     for (var i = 0; i < sels.length; i++) {
       var k = sels[i].getAttribute("data-key");
       if (Object.prototype.hasOwnProperty.call(cfg, k)) {
-        sels[i].value = String(cfg[k]);
+        syncSelectValue(sels[i], String(cfg[k]));
       }
     }
     if (Object.prototype.hasOwnProperty.call(cfg, "gnss.rate")) {
@@ -392,7 +417,7 @@
       clearTimeout(reconnTimer);
       reconnTimer = null;
     }
-    var host = location.host || "192.168.4.1";
+    var host = location.host || "192.168.10.12";
     var proto = location.protocol === "https:" ? "wss://" : "ws://";
     setConn("warn", "Connecting...");
     ws = new WebSocket(proto + host + "/ws");
@@ -476,10 +501,6 @@
         return;
       }
       sendReq({ t: "set", key: "gnss.gga_gate.min_sats", value: raw }, $("msg-gnss"));
-    });
-
-    $("btn-gnss-save").addEventListener("click", function () {
-      sendReq({ t: "cmd", name: "save" }, $("msg-gnss"));
     });
 
     $("btn-wl-add").addEventListener("click", function () {

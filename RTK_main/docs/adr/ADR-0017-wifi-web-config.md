@@ -11,7 +11,7 @@ ADR-0015（P2 板级识别）、ADR-0016 Q1（量产需要控制台以外的工�
 - ADR-0016 Q1：P2 量产固件用 PRODUCTION 控制台，但 UART0 不对用户引出；SN、白名单、配对窗口的写入需要别的通道。
   用户（2026-11-19）选网页：设备开 Wi-Fi 热点，浏览器打开配置页，查看控制台能看到的状态并修改配置。
 - 参考旧 P2 V2.7 `AP-Config/`：深色单页（背景 `#272b30`、卡片 `#262626`、强调色 `#83ca98`、最大宽 600 px、
-  可折叠分组按钮），GNSS 星座勾选、NMEA 各语句频率下拉、保存/退出、固件上传；WebSocket `ws://192.168.4.1/ws`，
+  可折叠分组按钮），GNSS 星座勾选、NMEA 各语句频率下拉、保存/退出、固件上传；WebSocket `ws://192.168.10.12/ws`，
   报文为 `id,value,` 平铺 CSV。页面依赖 bootstrap + jQuery（未压缩约 380 KB）。
 - 旧固件的射频切换教训（`P2_V2.7/Bluetooth.ino`、`screen.ino`）：
   1. 运行中 `SerialBT.end()` 之后再 `begin()`，手机一连就 `assert failed: hash_map_set hash_map.c:129`，
@@ -60,7 +60,7 @@ ADR-0015（P2 板级识别）、ADR-0016 Q1（量产需要控制台以外的工�
 
 ### 2.3 Wi-Fi 与 HTTP
 
-- SoftAP：SSID 与蓝牙名相同（`<product>-<SN>`，如 `P2-B5F2`），信道 1–11 中固定一个，最多 2 个终端，IP `192.168.4.1/24`，DHCP 服务开启。
+- SoftAP：SSID 与蓝牙名相同（`<product>-<SN>`，如 `P2-B5F2`），信道 1–11 中固定一个，最多 2 个终端，IP `192.168.10.12/24`（用户 2026-11-19 指定），DHCP 服务开启。
   WPA2-PSK，**所有设备同一个口令**（§7 Q3），由 Kconfig `RTK_WIFI_AP_PASSWORD` 给出（8–63 个字符，编译期
   `static_assert` 检查长度）；默认值 `12345678`（用户 2026-11-19 指定的量产口令）。
   工厂分组另需解锁口令（与控制台 `factory unlock` 相同）。

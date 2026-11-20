@@ -22,6 +22,13 @@ typedef struct {
 static char s_ns_names[SHIM_NVS_MAX_NS][SHIM_NVS_NAME_MAX];
 static int s_ns_used[SHIM_NVS_MAX_NS];
 static shim_nvs_entry_t s_entries[SHIM_NVS_MAX_NS][SHIM_NVS_MAX_ENTRIES];
+static esp_err_t s_write_fail = ESP_OK;
+
+/** @brief 主机测试注入 NVS 写失败（ESP_OK 恢复正常写入）。 */
+void nvs_shim_set_write_fail(esp_err_t err)
+{
+    s_write_fail = err;
+}
 
 /** @brief 提供启动日志用的主机替身统计。 */
 esp_err_t nvs_get_stats(const char *part_name, nvs_stats_t *stats)
@@ -82,7 +89,7 @@ void nvs_close(nvs_handle_t handle)
 esp_err_t nvs_commit(nvs_handle_t handle)
 {
     (void)handle;
-    return ESP_OK;
+    return s_write_fail;
 }
 
 static shim_nvs_entry_t *find_entry(nvs_handle_t handle, const char *key)
@@ -183,16 +190,25 @@ esp_err_t nvs_get_u32(nvs_handle_t handle, const char *key, uint32_t *out_value)
 
 esp_err_t nvs_set_u8(nvs_handle_t handle, const char *key, uint8_t value)
 {
+    if (s_write_fail != ESP_OK) {
+        return s_write_fail;
+    }
     return write_value(handle, key, (uint32_t)value);
 }
 
 esp_err_t nvs_set_u16(nvs_handle_t handle, const char *key, uint16_t value)
 {
+    if (s_write_fail != ESP_OK) {
+        return s_write_fail;
+    }
     return write_value(handle, key, (uint32_t)value);
 }
 
 esp_err_t nvs_set_u32(nvs_handle_t handle, const char *key, uint32_t value)
 {
+    if (s_write_fail != ESP_OK) {
+        return s_write_fail;
+    }
     return write_value(handle, key, value);
 }
 

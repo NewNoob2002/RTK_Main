@@ -7,6 +7,9 @@
 
 #include "AppConfig.hpp" // RTK_GNSS_ENABLED；并带入 StackType_t（经 rtos/Executor.hpp）
 #include "fw/Trace.hpp"  // FW_TRACE_ENABLED、fw::TraceEvent
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+#include "modules/web/WebMailbox.hpp"
+#endif
 #include "rtos/BootAlloc.hpp"
 
 namespace app {
@@ -32,6 +35,9 @@ struct BootBuffers {
     std::span<StackType_t> traceTaskStack{};
     std::span<fw::TraceEvent> traceRing{};
     std::span<uint8_t> logRing{};
+#endif
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    std::span<web_cfg::WebFrame> webFrames{};
 #endif
 };
 

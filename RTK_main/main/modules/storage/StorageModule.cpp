@@ -101,6 +101,44 @@ void logLoadSummary(const StoreGroup &group, const StoreLoadCounts &counts) noex
     FW_LOGI(fw::TraceCat::kStore, "%.*s: %" PRIu32 " saved, %" PRIu32 " default",
             static_cast<int>(group.name.size()), group.name.data(), counts.saved, counts.defaults);
 }
+/**
+ * @brief 在内存白名单中执行单条添加或删除（不含 NVS 写入）
+ * @param list: 待修改的白名单状态
+ * @param addr: 目标 6 字节 MAC
+ * @param add: true 添加，false 删除
+ * @retval kOk 列表已更新
+ * @retval kInvalidState 添加时地址已存在
+ * @retval kNoSpace 添加时列表已满
+ * @retval kNotFound 删除时地址不存在
+ * @note 纯内存操作，不阻塞，非 ISR。
+ */
+fw::Result mutateWhitelist(LinkStatus &list, const core::BtAddr &addr, bool add) noexcept
+{
+    const auto entries = std::span{list.whitelist}.first(list.whitelistCount);
+    const auto found = std::ranges::find(entries, addr);
+    if (add) {
+        if (found != entries.end()) {
+            return fw::Result::kInvalidState;
+        }
+        if (list.whitelistCount >= kMaxAlarms) {
+            return fw::Result::kNoSpace;
+        }
+        list.whitelist[list.whitelistCount++] = addr;
+        return fw::Result::kOk;
+    }
+    if (found == entries.end()) {
+        return fw::Result::kNotFound;
+    }
+    // found 落在 [begin, end) 内，索引差值非负且小于 kMaxAlarms。
+    const auto removeIdx = static_cast<size_t>(found - entries.begin());
+    for (size_t i = removeIdx + 1U; i < list.whitelistCount; ++i) {
+        list.whitelist[i - 1U] = list.whitelist[i];
+    }
+    --list.whitelistCount;
+    list.whitelist[list.whitelistCount] = core::BtAddr{};
+    return fw::Result::kOk;
+}
+
 } // namespace
 
 fw::Result StorageModule::whitelistLoad(std::span<const uint8_t> in) noexcept
@@ -255,6 +293,7 @@ fw::Result StorageModule::init() noexcept
     system.sn = sn_;
     ctx().data.systemStatus.write(system);
     initialized_ = true;
+    status_.btPairNext = bt_pair_next_;
     ctx().data.storeStatus.write(status_);
     return fw::Result::kOk;
 }
@@ -403,6 +442,43 @@ fw::Result StorageModule::loadPhoneTb(void *, std::span<const uint8_t> in) noexc
     std::copy(in.begin(), in.end(), storage.phone_tb_.begin());
     storage.phone_tb_state_.known = true;
     return fw::Result::kOk;
+}
+
+fw::Result StorageModule::loadBtPairNext(void * /*obj*/, std::span<const uint8_t> in) noexcept
+{
+    if (in.size() != 1U || in.front() > 1U) {
+        return fw::Result::kInvalidArg;
+    }
+    appContext().storage.bt_pair_next_ = (in.front() != 0U);
+    return fw::Result::kOk;
+}
+
+std::string_view StorageModule::sn() const noexcept
+{
+    return std::string_view{sn_.data(), std::strlen(sn_.data())};
+}
+
+bool StorageModule::consumeBtPairNext() noexcept
+{
+    if (!bt_pair_next_ || (context_ == nullptr)) {
+        return false;
+    }
+    const auto &boot = ctx().bootConfig;
+    if (!boot.userNvsReady || boot.safeDefaults) {
+        FW_LOGW(fw::TraceCat::kStore, "bt.pair_next clear skipped: user NVS unavailable");
+        return false;
+    }
+    // 先确认 NVS 清零持久化，再清 RAM 标志并允许开窗，防止掉电/写失败导致跨重启重复开窗。
+    const esp_err_t error = store::writeValue(store::kBtPairNextKey, 0U);
+    if (error != ESP_OK) {
+        FW_LOGW(fw::TraceCat::kStore, "bt.pair_next clear failed (%s); pairing window deferred",
+                esp_err_to_name(error));
+        return false;
+    }
+    bt_pair_next_ = false;
+    status_.btPairNext = false;
+    ctx().data.storeStatus.write(status_);
+    return true;
 }
 
 bool StorageModule::setPhoneBlob(std::span<uint8_t> dst, DebouncedState &state,
@@ -565,18 +641,138 @@ void StorageModule::saveSn(const fw::Command &cmd, fw::CommandResult &result) no
     ctx().data.storeStatus.write(status_);
 }
 
+esp_err_t StorageModule::writeWhitelistNow() const noexcept
+{
+    WhitelistRaw raw{};
+    size_t len = 0U;
+    std::array<uint8_t, kMaxAlarms * core::kAddrLen> out{};
+    const auto serialized = whitelistSave(out, len);
+    if (!fw::isOk(serialized)) {
+        FW_LOGE(fw::TraceCat::kStore, "whitelist not saved, serialization failed (%s)",
+                fw::toString(serialized));
+        return ESP_ERR_INVALID_SIZE;
+    }
+    std::memcpy(raw.data(), out.data(), len);
+    // 冻结 C API 的连续 6 B 行布局与 raw 相同。
+    // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays): 冻结 C ABI
+    return nvs_store_set_alarms(reinterpret_cast<const uint8_t (*)[NVS_STORE_ADDR_LEN]>(raw.data()),
+                                len / core::kAddrLen);
+    // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast, cppcoreguidelines-avoid-c-arrays)
+}
+
+void StorageModule::editWhitelistCmd(const fw::Command &cmd, bool add,
+                                     fw::CommandResult &result) noexcept
+{
+    if (cmd.argLen != core::kAddrLen) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    const store::WriteGuard guard;
+    if (!guard.active()) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    const auto &boot = ctx().bootConfig;
+    if (!boot.userNvsReady || boot.safeDefaults) {
+        result.status = fw::Result::kInvalidState;
+        return;
+    }
+    core::BtAddr addr{};
+    std::copy_n(cmd.args.begin(), core::kAddrLen, addr.bytes.begin());
+    const LinkStatus previous = whitelist_;
+    result.status = mutateWhitelist(whitelist_, addr, add);
+    if (!fw::isOk(result.status)) {
+        return;
+    }
+    const esp_err_t error = writeWhitelistNow();
+    status_.whitelistError = error;
+    result.detail = error;
+    if (error != ESP_OK) {
+        whitelist_ = previous;
+        result.status = fw::Result::kIoError;
+        FW_LOGE(fw::TraceCat::kStore, "whitelist command save failed (%s), previous list kept",
+                esp_err_to_name(error));
+        ctx().data.storeStatus.write(status_);
+        return;
+    }
+    pending_ = false;
+    attempted_ = false;
+    retry_ms_ = kRetryInitialMs;
+    status_.whitelistPending = false;
+    status_.retryMs = 0U;
+    ctx().data.linkStatus.write(whitelist_);
+    ctx().data.storeStatus.write(status_);
+    result.status = fw::Result::kOk;
+}
+
+void StorageModule::setPairNextCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept
+{
+    if ((cmd.argLen != 1U) || (cmd.args[0] > 1U)) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    const store::WriteGuard guard;
+    if (!guard.active()) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    const auto &boot = ctx().bootConfig;
+    if (!boot.userNvsReady || boot.safeDefaults) {
+        result.status = fw::Result::kInvalidState;
+        return;
+    }
+    const uint32_t value = cmd.args[0];
+    const esp_err_t error = store::writeValue(store::kBtPairNextKey, value);
+    result.detail = error;
+    if (error != ESP_OK) {
+        result.status = fw::Result::kIoError;
+        FW_LOGE(fw::TraceCat::kStore, "bt.pair_next save failed (%s)", esp_err_to_name(error));
+        return;
+    }
+    bt_pair_next_ = (value != 0U);
+    status_.btPairNext = bt_pair_next_;
+    ctx().data.storeStatus.write(status_);
+    result.status = fw::Result::kOk;
+}
+
+static_assert(verb(StorageVerb::kSaveSn) != StorageModule::kEraseUser &&
+                  verb(StorageVerb::kSaveSn) != StorageModule::kEraseFactory &&
+                  verb(StorageVerb::kWhitelistAdd) != StorageModule::kEraseUser &&
+                  verb(StorageVerb::kWhitelistAdd) != StorageModule::kEraseFactory &&
+                  verb(StorageVerb::kWhitelistDel) != StorageModule::kEraseUser &&
+                  verb(StorageVerb::kWhitelistDel) != StorageModule::kEraseFactory &&
+                  verb(StorageVerb::kSetPairNext) != StorageModule::kEraseUser &&
+                  verb(StorageVerb::kSetPairNext) != StorageModule::kEraseFactory,
+              "StorageVerb values must not collide with kEraseUser/kEraseFactory");
+
 void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
+    if (cmd.argLen > cmd.args.size()) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
     if (cmd.verb == kEraseUser || cmd.verb == kEraseFactory) {
         eraseForReset(cmd, result);
         return;
     }
-    if (cmd.verb != verb(StorageVerb::kSaveSn) || cmd.argLen > cmd.args.size()) {
+    // verb 来源为 uint8_t，与 StorageVerb 底层类型相同；未知动词由 default 拒绝。
+    switch (static_cast<StorageVerb>(cmd.verb)) {
+    case StorageVerb::kSaveSn:
+        saveSn(cmd, result);
+        break;
+    case StorageVerb::kWhitelistAdd:
+        editWhitelistCmd(cmd, true, result);
+        break;
+    case StorageVerb::kWhitelistDel:
+        editWhitelistCmd(cmd, false, result);
+        break;
+    case StorageVerb::kSetPairNext:
+        setPairNextCmd(cmd, result);
+        break;
+    default:
         result.status = fw::Result::kInvalidArg;
-        return;
+        break;
     }
-    /* 校验信封后交给 SN 保存流程。 */
-    saveSn(cmd, result);
 }
 
 void StorageModule::eraseForReset(const fw::Command &cmd, fw::CommandResult &result) noexcept
