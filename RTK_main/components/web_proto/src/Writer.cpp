@@ -52,7 +52,7 @@ bool JsonWriter::beginNested(std::string_view key) noexcept
 
 bool JsonWriter::endNested() noexcept
 {
-    if (depth_ != kMaxDepth) {
+    if (depth_ <= 1U) {
         return fail();
     }
     if (!append('}')) {
@@ -113,6 +113,19 @@ bool JsonWriter::writeStringArray(std::string_view key,
             return false;
         }
         if (!appendEscaped(values[i])) {
+            return false;
+        }
+    }
+    return append(']');
+}
+
+bool JsonWriter::writeIntArray(std::string_view key, std::span<const int32_t> values) noexcept
+{
+    if (!memberPrefix(key) || !append('[')) {
+        return false;
+    }
+    for (size_t i = 0U; i < values.size(); ++i) {
+        if ((i != 0U && !append(',')) || !appendInt(values[i])) {
             return false;
         }
     }

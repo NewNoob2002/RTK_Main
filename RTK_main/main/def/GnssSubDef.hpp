@@ -20,6 +20,11 @@ enum class GnssSubVerb : uint8_t {
     kPhoneSatCfg = 12, // 手机 0x06 Survey：args[0..5] = {cutoffDeg, gps, glo, bds, gal, sbas}。
     kSetGgaGate =
         13, // Q1 GGA 质量门控：args[0]=flags(bit0=改开关,bit1=改min_sats), [1]=en, [2]=minSats
+    kApplyRate = 14,
+    kPatchOutput = 15,
+    kApplyGgaGate = 16,
+    kSaveReceiver = 17,
+    kFlushGgaGate = 18,
 };
 
 inline constexpr uint8_t kGgaGateFlagEnabled = 1U << 0U;

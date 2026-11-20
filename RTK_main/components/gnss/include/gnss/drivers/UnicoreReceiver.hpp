@@ -158,6 +158,10 @@ class Cm680Receiver final : public UnicoreReceiver {
 public:
     constexpr Cm680Receiver() noexcept = default;
 
+    [[nodiscard]] std::span<const uint8_t> navRatesHz(Model model) const noexcept override;
+    [[nodiscard]] std::span<const uint16_t> outputPeriodsMs(OutputMsg msg,
+                                                            Model model) const noexcept override;
+
     /**
      * @brief  返回 CM680 所属厂商家族
      * @retval Family::kOptisens

@@ -292,6 +292,7 @@ fw::Result StorageModule::init() noexcept
     SystemStatus system{};
     system.sn = sn_;
     ctx().data.systemStatus.write(system);
+    publishSettingsSn();
     initialized_ = true;
     status_.btPairNext = bt_pair_next_;
     ctx().data.storeStatus.write(status_);
@@ -606,6 +607,17 @@ esp_err_t StorageModule::flushWhitelist(uint32_t nowMs) noexcept
     return status_.whitelistError;
 }
 
+void StorageModule::publishSettingsSn() noexcept
+{
+    settings::Value value{.kind = settings::ValueKind::kString};
+    const auto serial = sn();
+    const size_t len = std::min(serial.size(), value.text.size());
+    std::copy_n(serial.begin(), len, value.text.begin());
+    // SN 有效字符数最多 16，能够无损转换。
+    value.textLen = static_cast<uint8_t>(len);
+    ctx().data.settingsSn.write(value);
+}
+
 void StorageModule::saveSn(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     const store::WriteGuard guard;
@@ -633,7 +645,10 @@ void StorageModule::saveSn(const fw::Command &cmd, fw::CommandResult &result) no
     status_.snError = error;
     result.detail = error;
     result.status = error == ESP_OK ? fw::Result::kOk : fw::Result::kIoError;
-    if (error != ESP_OK) {
+    if (error == ESP_OK) {
+        publishSettingsSn();
+        ctx().data.configRev.fetch_add(1U, std::memory_order_release);
+    } else {
         sn_ = previous;
         FW_LOGE(fw::TraceCat::kStore, "serial number save failed (%s), previous value kept",
                 esp_err_to_name(error));
@@ -759,7 +774,7 @@ void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result)
     switch (static_cast<StorageVerb>(cmd.verb)) {
     case StorageVerb::kSaveSn:
         saveSn(cmd, result);
-        break;
+        return;
     case StorageVerb::kWhitelistAdd:
         editWhitelistCmd(cmd, true, result);
         break;
@@ -772,6 +787,9 @@ void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result)
     default:
         result.status = fw::Result::kInvalidArg;
         break;
+    }
+    if (fw::isOk(result.status)) {
+        ctx().data.configRev.fetch_add(1U, std::memory_order_release);
     }
 }
 

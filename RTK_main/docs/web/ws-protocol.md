@@ -14,11 +14,17 @@
 
 | `t` | 时机 | 字段 |
 |---|---|---|
-| `hello` | 连接后第一帧 | `proto`(=1)、`board`、`fw`、`bt_name`、`console`（dev/production/none）、`factory`（是否已解锁，bool） |
+| `hello` | 连接后第一帧 | `proto`(=1)、`board`、`fw`、`bt_name`、`console`（dev/production/none）、`factory`（是否已解锁，bool）、`caps`（当前取值域） |
+| `caps` | 能力或有效周期变化后 | `caps`（完整替换上一份能力对象） |
 | `config` | `hello` 之后、任一 `set` 成功之后 | 见 §4 全部可改键的当前值（扁平：`"gnss.rate":10`）；例外：Q1 门控为嵌套对象 `"gga_gate":{"enabled":false,"min_sats":8}` |
 | `status` | 每 1 s；只带有变化的组 | `dev:{uptime_s,heap_free,heap_min,reset}`、`gnss:{state,model,fw,fix,sats,hacc_mm,hz}`、`bt:{whitelist:[...]}` |
 | `ack` | 每条请求一个 | `id`（回显）、`ok`、失败时 `err`（§5） |
 | `bye` | 设备即将重启 | `reason`（`exit`/`idle`/`freset`） |
+
+`caps` 以 §4 的点分键名索引允许值。例如 `"gnss.out.gsv":[0,1000,5000]` 表示关闭、1 Hz、0.2 Hz。
+布尔键用 `[0,1]`，整数范围用 `{"min":0,"max":40}`，文本键的 `min` 和 `max` 为字符数范围。
+设备省略暂不可配置的键，网页据此隐藏控件。定位频率改变后，设备重新发布受当前定位频率限制的输出周期集合。
+能力对象允许嵌套范围和整数数组。协议版本仍为 1，旧网页可忽略新增字段和帧。
 
 `gnss.state` 取值：`off probing configuring running failed maintenance`；`gnss.fix`：`none single dgps float fixed`。
 数值不可得时省略该字段。

@@ -15,6 +15,8 @@
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
 #include "app/ConsoleProfile.hpp"
+#include "app/SettingsBackend.hpp"
+#include "def/GnssSubDef.hpp"
 #include "board/BoardProfile.hpp"
 #include "def/StorageDef.hpp"
 #include "def/SystemDef.hpp"
@@ -28,15 +30,14 @@
 namespace app {
 namespace {
 
-constexpr uint32_t kGnssAcceptTimeoutMs = 2000U;
-constexpr uint32_t kGnssDoneTimeoutMs = 6000U;
+constexpr uint32_t kSetTimeoutMs = 2000U;
+constexpr uint32_t kSaveTimeoutMs = 6000U;
 constexpr uint32_t kExitFlushTimeoutMs = 1500U;
 constexpr uint32_t kRebootSocketGraceMs = 100U;
 constexpr uint32_t kRebootMaxWaitMs = 500U;
 constexpr int64_t kUsPerSecond = 1000000;
 constexpr uint32_t kMsPerSecond = 1000U;
 constexpr int32_t kMmPerCm = 10;
-constexpr uint32_t kMaxGnssRateHz = 20U;
 
 /**
  * @brief 发出一条网页模块 kSys 实时追踪事件
@@ -76,28 +77,6 @@ std::string_view cstrView(std::span<const char> buf) noexcept
         ++len;
     }
     return std::string_view{buf.data(), len};
-}
-
-/**
- * @brief 将 GNSS 维护操作结果映射为协议 §5 错误码
- * @param result: 控制器返回的维护结果
- * @retval 对应 web::ErrorCode
- * @note 纯函数，线程/ISR 安全。
- */
-web::ErrorCode fromMaintResult(::gnss::MaintenanceResult result) noexcept
-{
-    switch (result) {
-    case ::gnss::MaintenanceResult::kOk:
-        return web::ErrorCode::kNone;
-    case ::gnss::MaintenanceResult::kUnsupported:
-        return web::ErrorCode::kUnsupported;
-    case ::gnss::MaintenanceResult::kTimeout:
-        return web::ErrorCode::kTimeout;
-    case ::gnss::MaintenanceResult::kNack:
-    case ::gnss::MaintenanceResult::kIoError:
-    default:
-        return web::ErrorCode::kFailed;
-    }
 }
 
 /**
@@ -171,30 +150,6 @@ void WebModule::drainCtrlEvents() noexcept
             unregisterClient(evt.fd, evt.gen);
         }
     }
-}
-
-web_cfg::ConfigSnapshot WebModule::sampleConfig() noexcept
-{
-    web_cfg::ConfigSnapshot snap{};
-    const auto sys = ctx().data.systemStatus.read();
-    const auto storedSn = ctx().storage.sn();
-    snap.sn = storedSn.empty() ? cstrView(sys.sn) : storedSn;
-    snap.btPairNext = ctx().storage.btPairNext();
-#if RTK_GNSS_ENABLED
-    const uint32_t rate = ctx().data.gnssRateHz.load(std::memory_order_acquire);
-    const uint32_t effectiveRate =
-        (rate != 0U) ? rate : static_cast<uint32_t>(CONFIG_RTK_GNSS_RATE_HZ);
-    // 有效定位频率为 1..20，窄化到 uint8_t 安全。
-    snap.gnssRateHz = static_cast<uint8_t>(std::min(effectiveRate, kMaxGnssRateHz));
-    snap.gnssOut = ctx().data.gnssOutCfg.read();
-    const auto gate = ctx().data.ggaGateStatus.read();
-    snap.ggaGateEnabled = gate.enabled;
-    snap.ggaGateMinSats = gate.minSats;
-#else
-    snap.gnssRateHz = 1U;
-    snap.gnssOut = data::GnssOutConfig::defaults();
-#endif
-    return snap;
 }
 
 web_cfg::StatusSnapshot WebModule::sampleStatus(uint32_t nowMs) noexcept
@@ -279,7 +234,7 @@ bool WebModule::pollPendingDeliveries() noexcept
             }
         }
         if (slot.pendingConfig) {
-            const size_t len = web_cfg::buildConfigFrame(sampleConfig(), encodeBuf);
+            const size_t len = web_cfg::buildConfigFrame(ctx().settings, encodeBuf);
             if ((len > 0U) &&
                 enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
                 slot.pendingConfig = false;
@@ -342,17 +297,21 @@ bool WebModule::pollInitialSync(uint32_t nowMs) noexcept
                 .console = kConsoleProfileName,
                 .factoryUnlocked = slot.unlocked,
             };
-            const size_t len = web_cfg::buildHelloFrame(hello, encodeBuf);
+            uint32_t version = 0U;
+            const auto caps = ctx().data.gnssCaps.read(version);
+            const size_t len =
+                web_cfg::buildHelloFrame(hello, ctx().settings, caps, caps.enabled, encodeBuf);
             if ((len > 0U) &&
                 enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
                 slot.syncStage = SyncStage::kSendConfig;
+                slot.capsVersion = version;
             } else {
                 morePending = true;
                 continue;
             }
         }
         if (slot.syncStage == SyncStage::kSendConfig) {
-            const size_t len = web_cfg::buildConfigFrame(sampleConfig(), encodeBuf);
+            const size_t len = web_cfg::buildConfigFrame(ctx().settings, encodeBuf);
             if ((len > 0U) &&
                 enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
                 slot.syncStage = SyncStage::kSendStatus;
@@ -393,7 +352,7 @@ void WebModule::sendAck(ClientSlot &client, uint16_t reqId, web::ErrorCode error
 void WebModule::broadcastConfig() noexcept
 {
     auto &encodeBuf = klinkEncodeFrame_->data;
-    const size_t len = web_cfg::buildConfigFrame(sampleConfig(), encodeBuf);
+    const size_t len = web_cfg::buildConfigFrame(ctx().settings, encodeBuf);
     if (len == 0U) {
         return;
     }
@@ -512,35 +471,18 @@ void WebModule::handleUnlockReq(ClientSlot &client, const web::Request &req) noe
 void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32_t nowMs) noexcept
 {
     if (req.name == "save") {
-#if RTK_GNSS_ENABLED
-        const fw::Command cmd = detail::packGnssMaintenance(GnssMaintenanceVerb::kSave);
-        startInflightGnss(client, req.id, cmd, false, true, nowMs);
-#else
-        sendAck(client, req.id, web::ErrorCode::kUnsupported);
-#endif
+        postMaintenance(client, req.id, settings::Owner::kGnss,
+                        static_cast<uint8_t>(GnssSubVerb::kSaveReceiver), RequestKind::kSave,
+                        nowMs);
         return;
     }
     if (req.name == "exit") {
 #if RTK_GNSS_ENABLED
-        const auto persist = ctx().data.ggaGatePersist.load(std::memory_order_acquire);
-        if (persist != data::GgaGatePersist::kClean) {
-            if ((ctx().ioExecutor == nullptr) || !ctx().ioExecutor->running() ||
-                !ctx().ioExecutor->moduleOk(id(ModuleKind::kGnss))) {
-                sendAck(client, req.id, web::ErrorCode::kFailed);
-                return;
-            }
-            nextFlushGgaSeq_ = (nextFlushGgaSeq_ == std::numeric_limits<uint32_t>::max())
-                                   ? 1U
-                                   : (nextFlushGgaSeq_ + 1U);
-            inflight_ = InflightRequest{
-                .stage = InflightStage::kWaitExitFlush,
-                .fd = client.fd,
-                .gen = client.gen,
-                .reqId = req.id,
-                .cmdSeq = nextFlushGgaSeq_,
-                .startedMs = nowMs,
-            };
-            ctx().data.webGnssFlushGgaSeq.store(nextFlushGgaSeq_, std::memory_order_release);
+        if (ctx().data.ggaGatePersist.load(std::memory_order_acquire) !=
+            data::GgaGatePersist::kClean) {
+            postMaintenance(client, req.id, settings::Owner::kGnss,
+                            static_cast<uint8_t>(GnssSubVerb::kFlushGgaGate), RequestKind::kExit,
+                            nowMs);
             return;
         }
 #endif
@@ -553,16 +495,8 @@ void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32
             sendAck(client, req.id, web::ErrorCode::kLocked);
             return;
         }
-        fw::Command cmd{};
-        cmd.target = id(ModuleKind::kStorage);
-        cmd.verb = StorageModule::kEraseUser;
-        fw::CommandResult result{};
-        ctx().storage.onCommand(cmd, result);
-        const auto err = web::fromResult(result.status);
-        sendAck(client, req.id, err);
-        if (err == web::ErrorCode::kNone) {
-            scheduleReboot(RebootKind::kFreset, "freset", nowMs);
-        }
+        postMaintenance(client, req.id, settings::Owner::kStorage, StorageModule::kEraseUser,
+                        RequestKind::kFreset, nowMs);
         return;
     }
     sendAck(client, req.id, web::ErrorCode::kUnsupported);
@@ -570,175 +504,109 @@ void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32
 
 void WebModule::handleSetReq(ClientSlot &client, const web::Request &req, uint32_t nowMs) noexcept
 {
-#if RTK_GNSS_ENABLED
-    const data::GnssOutConfig curOut = ctx().data.gnssOutCfg.read();
-#else
-    const data::GnssOutConfig curOut = data::GnssOutConfig::defaults();
-#endif
-    const auto plan = web_cfg::translateSetRequest(req.key, req.value, client.unlocked, curOut);
-    if (plan.error != web::ErrorCode::kNone) {
-        sendAck(client, req.id, plan.error);
+    settings::Ticket ticket{};
+    const auto error =
+        ctx().settings.set(req.key, req.value, settings::Caller::kWeb, ticket, client.unlocked);
+    if (error != settings::Error::kOk) {
+        sendAck(client, req.id, web_cfg::fromSettingsError(error));
         return;
     }
-    if (plan.target == web_cfg::CommandTarget::kStorage) {
-        fw::CommandResult result{};
-        ctx().storage.onCommand(plan.command, result);
-        const auto err = web::fromResult(result.status);
-        sendAck(client, req.id, err);
-        if (err == web::ErrorCode::kNone) {
-            broadcastConfig();
-            if (plan.notifyBtStatus) {
-                pollStatusPush(nowMs, true);
-            }
-        }
-        return;
-    }
-    if (plan.target == web_cfg::CommandTarget::kGnss) {
-#if RTK_GNSS_ENABLED
-        startInflightGnss(client, req.id, plan.command, true, false, nowMs);
-#else
-        sendAck(client, req.id, web::ErrorCode::kUnsupported);
-#endif
-        return;
-    }
-    sendAck(client, req.id, web::ErrorCode::kFailed);
+    trackRequest(client, req.id, ticket, RequestKind::kSet, nowMs);
 }
 
-void WebModule::startInflightGnss(ClientSlot &client, uint16_t reqId, const fw::Command &cmd,
-                                  bool isSet, bool isMaint, uint32_t nowMs) noexcept
+void WebModule::trackRequest(const ClientSlot &client, uint16_t reqId, settings::Ticket ticket,
+                             RequestKind kind, uint32_t nowMs) noexcept
 {
-#if RTK_GNSS_ENABLED
-    if ((ctx().ioExecutor == nullptr) || !ctx().ioExecutor->running() ||
-        !ctx().ioExecutor->moduleOk(id(ModuleKind::kGnss))) {
-        sendAck(client, reqId, web::ErrorCode::kFailed);
-        return;
-    }
-    nextGnssSeq_ =
-        (nextGnssSeq_ == std::numeric_limits<uint32_t>::max()) ? 1U : (nextGnssSeq_ + 1U);
-    fw::Command queued = cmd;
-    queued.seq = nextGnssSeq_;
-    inflight_ = InflightRequest{
-        .stage = InflightStage::kWaitAccept,
-        .fd = client.fd,
-        .gen = client.gen,
-        .reqId = reqId,
-        .cmdSeq = queued.seq,
-        .startedMs = nowMs,
-        .isSet = isSet,
-        .isMaint = isMaint,
-        .ackSent = false,
-    };
-    ctx().data.webGnssCommand.write(queued);
-#else
-    static_cast<void>(cmd);
-    static_cast<void>(isSet);
-    static_cast<void>(isMaint);
-    static_cast<void>(nowMs);
-    sendAck(client, reqId, web::ErrorCode::kUnsupported);
-#endif
+    inflight_ = {.ticket = ticket,
+                 .fd = client.fd,
+                 .gen = client.gen,
+                 .reqId = reqId,
+                 .startedMs = nowMs,
+                 .kind = kind};
 }
 
-void WebModule::finishInflightGnss(web::ErrorCode error, bool clearInflight) noexcept
+void WebModule::postMaintenance(ClientSlot &client, uint16_t reqId, settings::Owner owner,
+                                uint8_t verb, RequestKind kind, uint32_t nowMs) noexcept
 {
-    const int fd = inflight_.fd;
-    const uint32_t gen = inflight_.gen;
-    const uint16_t reqId = inflight_.reqId;
-    const bool isSet = inflight_.isSet;
-    const bool ackAlreadySent = inflight_.ackSent;
-    if (clearInflight) {
-        inflight_ = InflightRequest{};
-    } else {
-        inflight_.ackSent = true;
-        inflight_.stage = InflightStage::kWaitCleanup;
+    const fw::Command cmd{.verb = verb};
+    settings::Ticket ticket{};
+    const auto posted = postSettingCommand(&ctx(), owner, cmd, settings::Caller::kWeb, ticket);
+    if (!fw::isOk(posted)) {
+        sendAck(client, reqId, web::fromResult(posted));
+        return;
     }
-    if (!ackAlreadySent) {
-        if (auto *client = findClient(fd, gen); client != nullptr) {
-            sendAck(*client, reqId, error);
-        }
-    }
-    if (isSet && (error == web::ErrorCode::kNone)) {
-        broadcastConfig();
-    }
+    trackRequest(client, reqId, ticket, kind, nowMs);
 }
 
-void WebModule::pollExitFlush(uint32_t nowMs) noexcept
+void WebModule::pollInflight(uint32_t nowMs) noexcept
 {
-#if RTK_GNSS_ENABLED
-    const uint32_t elapsed = nowMs - inflight_.startedMs;
-    const uint32_t doneSeq = ctx().data.webGnssFlushGgaDoneSeq.load(std::memory_order_acquire);
-    if (doneSeq == inflight_.cmdSeq) {
-        const int fd = inflight_.fd;
-        const uint32_t gen = inflight_.gen;
-        const uint16_t reqId = inflight_.reqId;
-        inflight_ = InflightRequest{};
-        const auto persist = ctx().data.ggaGatePersist.load(std::memory_order_acquire);
-        auto *client = findClient(fd, gen);
-        if (persist == data::GgaGatePersist::kClean) {
-            if (client != nullptr) {
-                sendAck(*client, reqId, web::ErrorCode::kNone);
-            }
-            scheduleReboot(RebootKind::kExit, "exit", nowMs);
-        } else if (client != nullptr) {
-            sendAck(*client, reqId, web::ErrorCode::kFailed);
+    const auto request = inflight_;
+    if (request.ticket.seq == 0U) {
+        return;
+    }
+    fw::CommandResult result{};
+    const auto state = ctx().settings.poll(request.ticket, result);
+    auto error = web::fromResult(result.status);
+    if (state == settings::PollState::kPending) {
+        uint32_t timeout = kSetTimeoutMs;
+        if (request.kind == RequestKind::kSave) {
+            timeout = kSaveTimeoutMs;
+        } else if (request.kind == RequestKind::kExit) {
+            timeout = kExitFlushTimeoutMs;
         }
-        return;
-    }
-    if (elapsed >= kExitFlushTimeoutMs) {
-        const int fd = inflight_.fd;
-        const uint32_t gen = inflight_.gen;
-        const uint16_t reqId = inflight_.reqId;
-        inflight_ = InflightRequest{};
-        if (auto *client = findClient(fd, gen); client != nullptr) {
-            sendAck(*client, reqId, web::ErrorCode::kFailed);
-        }
-    }
-#else
-    static_cast<void>(nowMs);
-#endif
-}
-
-void WebModule::pollInflightGnss(uint32_t nowMs) noexcept
-{
-#if RTK_GNSS_ENABLED
-    if (inflight_.stage == InflightStage::kIdle) {
-        return;
-    }
-    if (inflight_.stage == InflightStage::kWaitExitFlush) {
-        pollExitFlush(nowMs);
-        return;
-    }
-    const auto out = ctx().data.webGnssOutcome.read();
-    if (out.seq == inflight_.cmdSeq) {
-        if (out.phase == data::WebGnssPhase::kCancelled) {
-            inflight_ = InflightRequest{};
+        if ((nowMs - request.startedMs) < timeout) {
             return;
         }
-        if (out.phase == data::WebGnssPhase::kDone) {
-            const web::ErrorCode err =
-                inflight_.isMaint
-                    ? fromMaintResult(static_cast<::gnss::MaintenanceResult>(out.detail))
-                    : web::fromResult(out.status);
-            finishInflightGnss(err, true);
-            return;
-        }
-        if ((out.phase == data::WebGnssPhase::kAccepted) &&
-            (inflight_.stage == InflightStage::kWaitAccept)) {
-            inflight_.stage = InflightStage::kWaitDone;
-        }
+        ctx().settings.cancel(request.ticket);
+        error =
+            request.kind == RequestKind::kExit ? web::ErrorCode::kFailed : web::ErrorCode::kTimeout;
+    } else if (state != settings::PollState::kDone) {
+        error = web::ErrorCode::kFailed;
     }
-    const uint32_t elapsed = nowMs - inflight_.startedMs;
-    if ((inflight_.stage == InflightStage::kWaitAccept) && (elapsed >= kGnssAcceptTimeoutMs)) {
-        // 通知 kIo 在执行前取消该序号，并在 kIo 确认消费或取消前保持背压不释放槽位。
-        ctx().data.webGnssCancelSeq.store(inflight_.cmdSeq, std::memory_order_release);
-        finishInflightGnss(web::ErrorCode::kTimeout, false);
+    inflight_ = {};
+    if (auto *client = findClient(request.fd, request.gen); client != nullptr) {
+        sendAck(*client, request.reqId, error);
+    }
+    if (error != web::ErrorCode::kNone) {
         return;
     }
-    if ((inflight_.stage == InflightStage::kWaitDone) && (elapsed >= kGnssDoneTimeoutMs)) {
-        finishInflightGnss(web::ErrorCode::kTimeout, false);
+    if (request.kind == RequestKind::kExit) {
+        scheduleReboot(RebootKind::kExit, "exit", nowMs);
+    } else if (request.kind == RequestKind::kFreset) {
+        scheduleReboot(RebootKind::kFreset, "freset", nowMs);
+    } else if (request.kind == RequestKind::kSet &&
+               request.ticket.owner == settings::Owner::kStorage) {
+        pollStatusPush(nowMs, true);
     }
-#else
-    static_cast<void>(nowMs);
-#endif
+}
+
+bool WebModule::pollCapsPush() noexcept
+{
+    uint32_t version = 0U;
+    const auto caps = ctx().data.gnssCaps.read(version);
+    bool more = false;
+    size_t len = 0U;
+    auto &buf = klinkEncodeFrame_->data;
+    for (auto &slot : clients_) {
+        if (!slot.active || slot.syncStage != SyncStage::kReady || slot.capsVersion == version) {
+            continue;
+        }
+        if (len == 0U) {
+            len = web_cfg::buildCapsFrame(ctx().settings, caps, caps.enabled, buf);
+        }
+        if (len == 0U) {
+            // 编码失败属于该版本的固定结果，只在能力更新后重试。
+            slot.capsVersion = version;
+            continue;
+        }
+        if (!slot.pendingAck &&
+            enqueueTx(slot.fd, slot.gen, std::span<const char>{buf}.first(len))) {
+            slot.capsVersion = version;
+        } else {
+            more = true;
+        }
+    }
+    return more;
 }
 
 bool WebModule::pollRxFrame(uint32_t nowMs) noexcept
@@ -760,7 +628,7 @@ bool WebModule::pollRxFrame(uint32_t nowMs) noexcept
         sendAck(*client, parsedReq_.id, parseErr);
         return true;
     }
-    if (inflight_.stage != InflightStage::kIdle) {
+    if (inflight_.ticket.seq != 0U) {
         sendAck(*client, parsedReq_.id, web::ErrorCode::kBusy);
         return true;
     }
@@ -834,8 +702,14 @@ bool WebModule::poll(uint32_t nowMs) noexcept
         return false;
     }
     const bool deliveryPending = pollPendingDeliveries();
-    pollInflightGnss(nowMs);
+    pollInflight(nowMs);
+    const uint32_t configRev = ctx().data.configRev.load(std::memory_order_acquire);
+    if (configVersion_ != configRev) {
+        configVersion_ = configRev;
+        broadcastConfig();
+    }
     const bool syncMore = pollInitialSync(nowMs);
+    const bool capsPending = pollCapsPush();
     const bool rxConsumed = pollRxFrame(nowMs);
     pollStatusPush(nowMs, false);
 
@@ -848,7 +722,7 @@ bool WebModule::poll(uint32_t nowMs) noexcept
         scheduleReboot(RebootKind::kIdle, "idle", nowMs, actSeq);
         return false;
     }
-    return deliveryPending || syncMore || (rxConsumed && !rxMailbox_.empty());
+    return deliveryPending || syncMore || capsPending || (rxConsumed && !rxMailbox_.empty());
 }
 
 } // namespace app

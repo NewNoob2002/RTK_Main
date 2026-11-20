@@ -15,7 +15,7 @@ namespace web {
 constexpr size_t kMaxJsonBytes = 1024;
 
 /**
- * 逐字段构造 JSON 对象（根对象 + 一层嵌套），只输出完整帧。
+ * 逐字段构造 JSON 对象（根对象 + 最多两层嵌套），只输出完整帧。
  *
  * 使用约束：带可变状态，同一个对象只能由单个任务使用（典型为网页模块任务），
  * 不可在 ISR 中调用；不阻塞、不分配堆。任何写入失败都会置失败态，
@@ -41,10 +41,10 @@ public:
     [[nodiscard]] bool beginObject() noexcept;
 
     /**
-     * @brief  在根对象内开始一层嵌套对象（`"key":{`）。
+     * @brief  在当前对象内开始子对象（`"key":{`）。
      * @param  key: 成员名。
      * @retval true  成功
-     * @retval false 未在对象内、已嵌套一层、缓冲不足或已失败
+     * @retval false 未在对象内、达到深度上限、缓冲不足或已失败
      * @note   单任务使用，非 ISR 安全。
      */
     [[nodiscard]] bool beginNested(std::string_view key) noexcept;
@@ -115,8 +115,12 @@ public:
      */
     [[nodiscard]] size_t finish(std::span<char> out) noexcept;
 
+    /** @brief 写入整数数组。 @param key: 字段名。 @param values: 元素。 @retval 是否成功。 @note 单任务，非 ISR。 */
+    [[nodiscard]] bool writeIntArray(std::string_view key,
+                                     std::span<const int32_t> values) noexcept;
+
 private:
-    static constexpr size_t kMaxDepth = 2; // 根对象 + 一层嵌套
+    static constexpr size_t kMaxDepth = 3; // 根对象、caps 对象与闭区间
 
     /**
      * @brief  追加一个字节到暂存。

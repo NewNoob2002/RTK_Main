@@ -20,6 +20,8 @@ void DataCenter::init() noexcept
     rtcmStats.bindLock(lock);
     demuxStats.bindLock(lock);
     storeStatus.bindLock(lock);
+    gnssCaps.bindLock(lock);
+    settingsSn.bindLock(lock);
     execStats.bindLock(lock);
     systemStatus.bindLock(lock);
     systemMode.bindLock(lock);
@@ -31,8 +33,6 @@ void DataCenter::init() noexcept
     phonePppResult.bindLock(lock);
     phoneSatCommand.bindLock(lock);
     phoneSatResult.bindLock(lock);
-    webGnssCommand.bindLock(lock);
-    webGnssOutcome.bindLock(lock);
     gnssLatestGsv.bindLock(lock);
     ioExecStats.bindLock(lock);
     gnssStatus.bindLock(lock);

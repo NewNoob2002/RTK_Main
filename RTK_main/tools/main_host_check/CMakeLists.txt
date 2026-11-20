@@ -19,6 +19,8 @@ target_include_directories(main_rtos PUBLIC ../t13_host_check/shim/inc)
 target_link_libraries(main_rtos PUBLIC Threads::Threads)
 add_subdirectory(${PROJ_ROOT}/components/stream_demux stream_demux_build)
 add_subdirectory(${PROJ_ROOT}/components/app_fw app_fw_build)
+add_subdirectory(${PROJ_ROOT}/components/settings settings_build)
+include_directories(${PROJ_ROOT}/components/settings/include)
 add_subdirectory(${PROJ_ROOT}/components/gnss gnss_build)
 add_subdirectory(${PROJ_ROOT}/components/web_proto web_proto_build)
 add_library(main_pure STATIC
@@ -153,6 +155,7 @@ add_test(NAME template_module COMMAND template_check template_module)
 
 add_executable(gnss_output_check GnssOutputCheck.cpp
     GnssResetCheck.cpp
+    ${PROJ_ROOT}/components/rtos/Executor.cpp
     ${PROJ_ROOT}/main/board/BoardCurrent.cpp
     ${PROJ_ROOT}/main/board/BoardProfile.cpp
     ${PROJ_ROOT}/main/data/GnssAppRing.cpp
@@ -184,7 +187,7 @@ target_compile_options(gnss_output_check PRIVATE -fno-exceptions -fno-rtti -Wall
 target_compile_definitions(gnss_output_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1 CONFIG_RTK_LOG_RING_BYTES=4096
     CONFIG_RTK_GNSS_UART_NUM=2 CONFIG_RTK_GNSS_PORT=2 CONFIG_RTK_GNSS_DEFAULT_BAUD=115200
     CONFIG_RTK_GNSS_TARGET_BAUD=460800 CONFIG_RTK_GNSS_RATE_HZ=1)
-target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim main_rtos gnss)
+target_link_libraries(gnss_output_check PRIVATE main_pure main_nvs_shim main_rtos gnss settings)
 add_test(NAME gnss_output COMMAND gnss_output_check)
 
 add_executable(gnss_stream_check GnssStreamCheck.cpp
@@ -348,10 +351,11 @@ target_include_directories(web_server_check PRIVATE
 target_compile_options(web_server_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
     -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
     -Wimplicit-fallthrough -Wswitch-default -Wundef)
-target_link_libraries(web_server_check PRIVATE main_pure web_proto gnss Threads::Threads)
+target_link_libraries(web_server_check PRIVATE main_pure settings web_proto gnss Threads::Threads)
 add_test(NAME web_server_check COMMAND web_server_check)
 
 add_executable(web_module_check WebModuleCheck.cpp
+    ${PROJ_ROOT}/main/app/SettingsBackend.cpp
     ${PROJ_ROOT}/main/modules/web/WebServer.cpp
     ${PROJ_ROOT}/main/modules/web/WebModule.cpp
     ${PROJ_ROOT}/main/modules/web/WebLogic.cpp
@@ -394,5 +398,5 @@ target_compile_options(web_module_check PRIVATE -ffunction-sections -fdata-secti
     -fno-rtti -Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
     -Wimplicit-fallthrough)
 target_link_options(web_module_check PRIVATE -Wl,--gc-sections)
-target_link_libraries(web_module_check PRIVATE main_pure web_proto gnss main_rtos)
+target_link_libraries(web_module_check PRIVATE main_pure settings web_proto gnss main_rtos)
 add_test(NAME web_module_check COMMAND web_module_check)

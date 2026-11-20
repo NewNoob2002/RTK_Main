@@ -17,6 +17,7 @@
 #endif
 #include "module_list.inc"
 #include "rtos/BootAlloc.hpp"
+#include "settings/Service.hpp"
 
 namespace app {
 
@@ -89,6 +90,7 @@ struct AppContext {
 #undef MODULE_DEF
         ;
 
+    settings::Service settings{};
     rtos::BootArena bootArena{};
     BootConfig bootConfig{};
     RadioMode radioMode = RadioMode::kBluetooth; // 启动任务在绑定上下文前写入，随后只读。

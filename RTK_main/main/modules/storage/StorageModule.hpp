@@ -280,6 +280,9 @@ private:
      * @param[out] result: 执行结果
      */
     void saveSn(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+
+    /** @brief 发布 SN 快照。 @note 启动阶段或 kLink 调用，非 ISR。 */
+    void publishSettingsSn() noexcept;
     /**
      * @brief  执行 Wi-Fi 配置模式下的白名单增删命令并同步写 NVS（S2）
      * @param  cmd: 命令（args[0..5] 为 6 字节 MAC）

@@ -9,6 +9,17 @@
 #include "FrameTag.hpp"
 
 namespace gnss {
+
+std::span<const uint8_t> Receiver::navRatesHz(Model /*model*/) const noexcept
+{
+    return {};
+}
+
+std::span<const uint16_t> Receiver::outputPeriodsMs(OutputMsg /*msg*/,
+                                                    Model /*model*/) const noexcept
+{
+    return {};
+}
 namespace {
 
 /**

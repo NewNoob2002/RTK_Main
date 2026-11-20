@@ -11,6 +11,8 @@
 #include "core/services/GnssService.hpp"
 #include "data/GnssAppRing.hpp"
 #include "data/GnssOutput.hpp"
+#include "esp_task_wdt.h"
+#include "freertos/task.h"
 #include "fw/FanoutRing.hpp"
 #include "modules/storage/StoreKeys.hpp"
 #include "modules/gnss/GnssConsoleValue.hpp"
@@ -22,12 +24,36 @@ extern "C" const char *esp_err_to_name(esp_err_t error)
     return error == ESP_OK ? "OK" : "FAIL";
 }
 
+/** @brief 返回测试线程当前绑定的 FreeRTOS 任务句柄。 @retval 当前句柄。 */
+extern "C" TaskHandle_t xTaskGetCurrentTaskHandle(void)
+{
+    return fake_current_task;
+}
+
+/** @brief 在主机上模拟空闲栈查询。 @param task: 未使用。 @retval 0。 */
+extern "C" UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t /*task*/)
+{
+    return 0U;
+}
+
+/** @brief 在主机上模拟看门狗订阅。 @param task: 未使用。 @retval ESP_OK。 */
+extern "C" esp_err_t esp_task_wdt_add(TaskHandle_t /*task*/)
+{
+    return ESP_OK;
+}
+
+/** @brief 在主机上模拟喂狗。 @retval ESP_OK。 */
+extern "C" esp_err_t esp_task_wdt_reset(void)
+{
+    return ESP_OK;
+}
+
 void testGnssFactoryReset();
 void testGnssPhonePpp();
 void testBaseKeysAndCommandDispatch();
 void testGnssTargetBaudPolicy();
 void testGgaGateNvsAndModuleFlow();
-void testWebGnssBridgeAndGgaPersist();
+void testGnssSettingsBusAndGgaPersist();
 
 namespace {
 
@@ -544,6 +570,6 @@ int main()
     testGnssPhonePpp();
     testGnssTargetBaudPolicy();
     testGgaGateNvsAndModuleFlow();
-    testWebGnssBridgeAndGgaPersist();
+    testGnssSettingsBusAndGgaPersist();
     return 0;
 }
