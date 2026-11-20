@@ -16,6 +16,9 @@
 #if RTK_GNSS_ENABLED
 #include "modules/gnss/GnssModule.hpp"
 #endif
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+#include "modules/web/WebModule.hpp"
+#endif
 #include "SppServerStorage.h"
 
 namespace app {
@@ -32,6 +35,24 @@ AppContext &self() noexcept
 {
     return appContext();
 }
+
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+/**
+ * @brief 仅在 Wi-Fi 配置模式下从 BootArena 申请网页模块外供帧数组
+ * @param[out] out: 写入申请到的 webFrames 视图
+ * @retval true 无需申请（非 Wi-Fi 模式）或申请成功
+ * @retval false 申请失败
+ * @note 仅启动任务调用，不阻塞，非 ISR。
+ */
+[[nodiscard]] bool allocWebBootFrames(BootBuffers &out) noexcept
+{
+    if (self().radioMode != RadioMode::kWifiConfig) {
+        return true;
+    }
+    return fw::isOk(self().bootArena.allocArray<web_cfg::WebFrame>(
+        "web.frames", WebModule::kTotalFrames, out.webFrames, alignof(web_cfg::WebFrame)));
+}
+#endif
 
 } // namespace
 
@@ -131,6 +152,11 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
         return failAlloc("gnss.latest");
     }
 #endif
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    if (!allocWebBootFrames(out)) {
+        return failAlloc("web.frames");
+    }
+#endif
     return true;
 }
 // NOLINTEND(readability-function-size)
@@ -164,11 +190,22 @@ const char *bindBootBuffers(const BootBuffers &bufs) noexcept
         return boot_reason::kBindGnss;
     }
 #endif
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    if ((self().radioMode == RadioMode::kWifiConfig) &&
+        !fw::isOk(self().web.bindStorage(bufs.webFrames))) {
+        return boot_reason::kBindWeb;
+    }
+#endif
     return nullptr;
 }
 
 void rollbackBootBindings(BootBuffers &bufs, const char *reason) noexcept
 {
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    if (self().radioMode == RadioMode::kWifiConfig) {
+        self().web.unbindStorage();
+    }
+#endif
 #if FW_TRACE_ENABLED
     self().debug.unbindStorage();
 #endif

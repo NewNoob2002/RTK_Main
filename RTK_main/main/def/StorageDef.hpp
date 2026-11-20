@@ -10,8 +10,13 @@
 
 namespace app {
 
-/** 存储模块命令动词。 */
-enum class StorageVerb : uint8_t { kSaveSn };
+/** 存储模块命令动词（1/2 由 StorageModule::kEraseUser / kEraseFactory 占用）。 */
+enum class StorageVerb : uint8_t {
+    kSaveSn = 0U,
+    kWhitelistAdd = 3U,
+    kWhitelistDel = 4U,
+    kSetPairNext = 5U,
+};
 
 /** kStore 追踪事件码（ADR-0009）；结果是 fw::Result 的数值，控制台按表解释。 */
 enum class StoreTrace : uint8_t {
@@ -45,13 +50,14 @@ inline void traceStore(StoreTrace code, uint32_t a = 0, uint32_t b = 0) noexcept
     return static_cast<uint8_t>(value);
 }
 
-/** NVS 写入状态快照（白名单去抖与 SN 错误码）。 */
+/** NVS 写入状态快照（白名单去抖、SN 错误码与下次蓝牙配对开窗标志）。 */
 struct StoreStatus {
     bool whitelistPending = false;
     esp_err_t whitelistError = ESP_OK;
     uint32_t failures = 0;
     uint32_t retryMs = 0;
     esp_err_t snError = ESP_OK;
+    bool btPairNext = false;
 };
 
 } // namespace app

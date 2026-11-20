@@ -88,6 +88,21 @@ struct ModuleTestAccess {
     {
         static_cast<void>(appContext().rtcm.poll(rtos::nowMs()));
     }
+    static void resetStorageForReboot() noexcept
+    {
+        auto &storage = appContext().storage;
+        storage.initialized_ = false;
+        storage.whitelist_ = {};
+        storage.bt_pair_next_ = false;
+        storage.status_ = {};
+    }
+    static void resetBtLinkForReboot() noexcept
+    {
+        auto &link = appContext().bt_link;
+        link.~BtLinkModule();
+        ::new (static_cast<void *>(&link)) BtLinkModule{};
+        link.bindContext(appContext());
+    }
 };
 namespace {
 constexpr size_t kRxBudgetBytes = ModuleTestAccess::kRxBudgetBytes;

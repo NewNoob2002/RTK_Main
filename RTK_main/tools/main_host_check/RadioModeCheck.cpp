@@ -12,9 +12,10 @@ using app::ModuleEnable;
 using app::RadioMode;
 using app::RadioReason;
 
-// 验证包含 GNSS 和 trace 的完整清单，仅使用注册项名称和启用条件。
+// 验证包含 GNSS、trace 和 Wi-Fi 配置的完整清单，仅使用注册项名称和启用条件。
 #define RTK_GNSS_ENABLED                                               1
 #define FW_TRACE_ENABLED                                               1
+#define CONFIG_RTK_WIFI_CONFIG_ENABLE                                  1
 #define MODULE_DEF(type, member, name, kind, executor, period, enable) {name, ModuleEnable::enable},
 struct ModuleEntry {
     std::string_view name;
@@ -24,6 +25,7 @@ constexpr auto kModules = std::to_array<ModuleEntry>({
 #include "module_list.inc"
 });
 #undef MODULE_DEF
+#undef CONFIG_RTK_WIFI_CONFIG_ENABLE
 #undef FW_TRACE_ENABLED
 #undef RTK_GNSS_ENABLED
 
@@ -46,10 +48,10 @@ consteval auto enabledNames(RadioMode mode) noexcept
 }
 
 static_assert(enabledNames(RadioMode::kBluetooth) ==
-              std::array<std::string_view, 6U>{"bt_link", "rtcm", "storage", "system", "gnss",
+              std::array<std::string_view, 7U>{"bt_link", "rtcm", "storage", "system", "gnss",
                                                "debug"});
 static_assert(enabledNames(RadioMode::kWifiConfig) ==
-              std::array<std::string_view, 6U>{"storage", "system", "gnss", "debug"});
+              std::array<std::string_view, 7U>{"storage", "system", "web", "gnss", "debug"});
 static_assert(!app::moduleEnabled(RadioMode::kBluetooth, ModuleEnable::kWifiOnly));
 static_assert(app::moduleEnabled(RadioMode::kWifiConfig, ModuleEnable::kWifiOnly));
 

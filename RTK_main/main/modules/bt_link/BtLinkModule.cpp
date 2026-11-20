@@ -498,6 +498,10 @@ fw::Result BtLinkModule::init() noexcept
     }
     service_.emplace(*transport_, link_manager_, router_, alarmService);
     spp_server_set_rx_wake_hook(&BtLinkModule::onRxWake, this);
+    if (ctx().storage.consumeBtPairNext()) {
+        link_manager_.pairOpen(rtos::nowMs());
+        FW_LOGI(fw::TraceCat::kLink, "bt.pair_next consumed, pairing window opened");
+    }
     return fw::Result::kOk;
 }
 

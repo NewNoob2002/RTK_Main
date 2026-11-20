@@ -20,6 +20,20 @@ static_assert(static_cast<uint8_t>(ExecTrace::kRoundOverrun) == 0U,
 static_assert(static_cast<uint8_t>(ExecTrace::kCallDrop) == 1U,
               "kExec 码值与 rtos/ExecTrace.hpp 不一致");
 
+/** kSys 网页配置模块实时追踪事件码（ADR-0009 §2.1：kLink 轮询与 httpd 回调禁格式化日志）。 */
+enum class WebTrace : uint8_t {
+    kWsConnect = 0,    // a=fd, b=gen
+    kWsDisconnect = 1, // a=fd, b=gen
+    kWsReject = 2,     // a=reason(1=unreg,2=frag,3=binary,4=too_long,5=ctrl_full), b=fd_or_len
+    kWsBusy = 3,       // a=fd, b=reqId
+    kWsTxErr = 4,      // a=fd, b=esp_err
+    kWsCloseErr = 5,   // a=fd, b=esp_err
+    kWsQueueErr = 6,   // a=esp_err, b=pending
+    kIdleTrigger = 7,  // a=idle_s, b=act_seq
+    kIdleAbort = 8,    // a=sta_count, b=act_seq
+    kRebootCommit = 9, // a=kind, b=reason
+};
+
 /** 系统模块命令动词。 */
 enum class SystemVerb : uint8_t { kPublish };
 

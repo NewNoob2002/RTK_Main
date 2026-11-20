@@ -41,3 +41,6 @@ esp_err_t nvs_set_u8(nvs_handle_t handle, const char *key, uint8_t value);
 esp_err_t nvs_set_u16(nvs_handle_t handle, const char *key, uint16_t value);
 esp_err_t nvs_set_u32(nvs_handle_t handle, const char *key, uint32_t value);
 esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *value, size_t length);
+
+/* 主机测试故障注入：非 ESP_OK 时使后续 NVS 写入/提交返回该错误。 */
+void nvs_shim_set_write_fail(esp_err_t err);

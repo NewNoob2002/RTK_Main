@@ -120,11 +120,17 @@ constexpr std::array kPhoneKeys{
 };
 static_assert(fw::uniqueKeys(kPhoneKeys));
 
-constexpr std::array<StoreGroup, 5U> kCatalog{{
+constexpr std::array kBtKeys{
+    withLoader(store::kBtPairNextKey, &StorageModule::loadBtPairNext),
+};
+static_assert(fw::uniqueKeys(kBtKeys));
+
+constexpr std::array<StoreGroup, 6U> kCatalog{{
     {"gnss.config", "GNSS user settings", kGnssConfig, nullptr},
     {"gnss.base", "GNSS work mode & base settings", kGnssBase, kGnssBaseNames},
     {"gnss.cache", "last detected GNSS receiver (probe hint)", kGnssCache, kGnssCacheNames},
     {"phone", "phone protocol settings", kPhoneKeys, nullptr},
+    {"bt", "Bluetooth startup settings", kBtKeys, nullptr},
     {"debug", "trace settings", kDebug, nullptr},
 }};
 

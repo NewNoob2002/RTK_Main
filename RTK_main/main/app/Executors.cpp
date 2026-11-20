@@ -218,6 +218,11 @@ void stopBootTasks(uint32_t launched) noexcept
     if (s_app.radioMode == RadioMode::kBluetooth && spp_server_stop_boot() != ESP_OK) {
         s_app.bootArena.setDegradedReason(boot_reason::kStopSpp);
     }
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    if (s_app.radioMode == RadioMode::kWifiConfig) {
+        s_app.web.stopBoot();
+    }
+#endif
     // SEALED 块始终保留至重启；SDK 停机失败或迟到回调也不回收其存储。
     setConsoleOnly();
 }

@@ -64,9 +64,18 @@ inline constexpr fw::StoreKey kPhoneTbKey{
     .maxSize = 86U,
     .help = "Thingsboard config blob (0x33 Nav)",
 };
+inline constexpr fw::StoreKey kBtPairNextKey{
+    .ns = "rtk",
+    .key = "pair_next",
+    .type = fw::StoreType::kU8,
+    .maxSize = 1U,
+    .min = 0,
+    .max = 1,
+    .help = "Open BT pairing window on next BT boot (0/1)",
+};
 static_assert(fw::valid(kPhoneHeightKey) && fw::valid(kPhonePppKey) && fw::valid(kPhoneSatCfgKey) &&
               fw::valid(kPhonePnKey) && fw::valid(kPhoneNtripKey) && fw::valid(kPhoneJsonSrvKey) &&
-              fw::valid(kPhoneTbKey));
+              fw::valid(kPhoneTbKey) && fw::valid(kBtPairNextKey));
 
 inline constexpr size_t kMaxBlobKeyBytes = 128U;
 inline constexpr size_t kKeyLineBytes = 132U;

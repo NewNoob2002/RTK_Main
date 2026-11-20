@@ -338,10 +338,11 @@ void GnssModule::cmdSetGgaGate(const fw::Command &cmd, uint32_t nowMs,
     gga_gate_save_pending_ = true;
     gga_gate_save_changed_ms_ = nowMs;
     gga_gate_save_retry_ms_ = 0U;
+    ctx().data.ggaGatePersist.store(data::GgaGatePersist::kPending, std::memory_order_release);
     result.status = fw::Result::kOk;
 }
 
-void GnssModule::tickGgaGateSave(uint32_t nowMs) noexcept
+void GnssModule::tickGgaGateSave(uint32_t nowMs, bool forceImmediate) noexcept
 {
     constexpr uint32_t kGgaGateDebounceMs = 500U;
     constexpr uint32_t kGgaGateRetryInitialMs = 1000U;
@@ -349,15 +350,23 @@ void GnssModule::tickGgaGateSave(uint32_t nowMs) noexcept
     if (!gga_gate_save_pending_) {
         return;
     }
-    if ((nowMs - gga_gate_save_changed_ms_) < kGgaGateDebounceMs) {
-        return;
-    }
-    if ((gga_gate_save_retry_ms_ != 0U) &&
-        ((nowMs - gga_gate_save_attempt_ms_) < gga_gate_save_retry_ms_)) {
-        return;
+    if (!forceImmediate) {
+        if ((nowMs - gga_gate_save_changed_ms_) < kGgaGateDebounceMs) {
+            return;
+        }
+        if ((gga_gate_save_retry_ms_ != 0U) &&
+            ((nowMs - gga_gate_save_attempt_ms_) < gga_gate_save_retry_ms_)) {
+            return;
+        }
     }
     if (!ctx().bootConfig.userNvsReady || ctx().bootConfig.safeDefaults) {
         gga_gate_save_pending_ = false;
+        ctx().data.ggaGatePersist.store(data::GgaGatePersist::kFailed, std::memory_order_release);
+        if (webGgaSeq_ != 0U) {
+            ctx().data.webGnssOutcome.write(
+                {webGgaSeq_, data::WebGnssPhase::kDone, fw::Result::kInvalidState, 0});
+            webGgaSeq_ = 0U;
+        }
         return;
     }
     const fw::Result res = ctx().storage.saveKeys(
@@ -365,11 +374,22 @@ void GnssModule::tickGgaGateSave(uint32_t nowMs) noexcept
     if (fw::isOk(res)) {
         gga_gate_save_pending_ = false;
         gga_gate_save_retry_ms_ = 0U;
+        ctx().data.ggaGatePersist.store(data::GgaGatePersist::kClean, std::memory_order_release);
+        if (webGgaSeq_ != 0U) {
+            ctx().data.webGnssOutcome.write(
+                {webGgaSeq_, data::WebGnssPhase::kDone, fw::Result::kOk, 0});
+            webGgaSeq_ = 0U;
+        }
     } else {
         gga_gate_save_attempt_ms_ = nowMs;
         gga_gate_save_retry_ms_ = (gga_gate_save_retry_ms_ == 0U)
                                       ? kGgaGateRetryInitialMs
                                       : std::min(gga_gate_save_retry_ms_ * 2U, kGgaGateRetryMaxMs);
+        ctx().data.ggaGatePersist.store(data::GgaGatePersist::kFailed, std::memory_order_release);
+        if (webGgaSeq_ != 0U) {
+            ctx().data.webGnssOutcome.write({webGgaSeq_, data::WebGnssPhase::kDone, res, 0});
+            webGgaSeq_ = 0U;
+        }
         FW_LOGW(fw::TraceCat::kGnss, "<cfg> GGA gate save failed (%s), retry in %lu ms",
                 fw::toString(res), static_cast<unsigned long>(gga_gate_save_retry_ms_));
     }

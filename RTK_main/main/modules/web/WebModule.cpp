@@ -1,0 +1,854 @@
+// Wi-Fi 配置模式网页服务模块（kLink 侧）：会话管理、请求分派、GNSS 异步落地、1 Hz 状态推送与空闲回落。
+// 仅 kLink 执行器任务调用（poll()），不阻塞、不分配堆，非 ISR 安全；实时路径仅用 fw::trace。
+// 堆档位：禁止区；全部帧缓冲由 BootArena 仅在 kWifiConfig 模式下外供。
+#include "modules/web/WebModule.hpp"
+
+#include <algorithm>
+#include <cstring>
+#include <limits>
+#include <span>
+
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "sdkconfig.h"
+
+#include "AppConfig.hpp"
+#include "AppContext.hpp"
+#include "app/ConsoleProfile.hpp"
+#include "board/BoardProfile.hpp"
+#include "def/StorageDef.hpp"
+#include "def/SystemDef.hpp"
+#include "fw/Trace.hpp"
+#include "modules/gnss/GnssCmdPack.hpp"
+#include "modules/gnss/GnssMaintenance.hpp"
+#include "modules/storage/StorageModule.hpp"
+#include "support/ResetReason.hpp"
+#include "web_proto/Error.hpp"
+
+namespace app {
+namespace {
+
+constexpr uint32_t kGnssAcceptTimeoutMs = 2000U;
+constexpr uint32_t kGnssDoneTimeoutMs = 6000U;
+constexpr uint32_t kExitFlushTimeoutMs = 1500U;
+constexpr uint32_t kRebootSocketGraceMs = 100U;
+constexpr uint32_t kRebootMaxWaitMs = 500U;
+constexpr int64_t kUsPerSecond = 1000000;
+constexpr uint32_t kMsPerSecond = 1000U;
+constexpr int32_t kMmPerCm = 10;
+constexpr uint32_t kMaxGnssRateHz = 20U;
+
+/**
+ * @brief 发出一条网页模块 kSys 实时追踪事件
+ * @param code: WebTrace 事件码
+ * @param a: 参数 a
+ * @param b: 参数 b
+ * @note 实时路径安全，不格式化、不分配堆，非 ISR。
+ */
+void traceWeb(WebTrace code, uint32_t a, uint32_t b) noexcept
+{
+    fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(code), 0U, a, b);
+}
+
+/**
+ * @brief 将 uint32_t 字节数安全钳制到 int32_t 范围供 JSON 输出
+ * @param value: 无符号 32 位数值
+ * @retval 钳制后的 int32_t 数值
+ * @note 纯函数，线程/ISR 安全。
+ */
+int32_t clampToI32(uint32_t value) noexcept
+{
+    constexpr uint32_t kMaxI32 = static_cast<uint32_t>(std::numeric_limits<int32_t>::max());
+    // 钳制在 [0, INT32_MAX] 后转有符号无损。
+    return static_cast<int32_t>(std::min(value, kMaxI32));
+}
+
+/**
+ * @brief 取定长 C 字符串数组的有效视图
+ * @param buf: 含终止符或定长字符数组
+ * @retval 截至首个 '\0' 的视图
+ * @note 纯函数，线程/ISR 安全。
+ */
+std::string_view cstrView(std::span<const char> buf) noexcept
+{
+    size_t len = 0U;
+    while ((len < buf.size()) && (buf[len] != '\0')) {
+        ++len;
+    }
+    return std::string_view{buf.data(), len};
+}
+
+/**
+ * @brief 将 GNSS 维护操作结果映射为协议 §5 错误码
+ * @param result: 控制器返回的维护结果
+ * @retval 对应 web::ErrorCode
+ * @note 纯函数，线程/ISR 安全。
+ */
+web::ErrorCode fromMaintResult(::gnss::MaintenanceResult result) noexcept
+{
+    switch (result) {
+    case ::gnss::MaintenanceResult::kOk:
+        return web::ErrorCode::kNone;
+    case ::gnss::MaintenanceResult::kUnsupported:
+        return web::ErrorCode::kUnsupported;
+    case ::gnss::MaintenanceResult::kTimeout:
+        return web::ErrorCode::kTimeout;
+    case ::gnss::MaintenanceResult::kNack:
+    case ::gnss::MaintenanceResult::kIoError:
+    default:
+        return web::ErrorCode::kFailed;
+    }
+}
+
+/**
+ * @brief 复制短字符串到定长 char 数组并保证 NUL 结尾
+ * @param src: 源文本视图
+ * @param[out] dst: 目标定长数组
+ * @note 纯内存复制，不阻塞。
+ */
+void copyBounded(std::string_view src, std::span<char> dst) noexcept
+{
+    if (dst.empty()) {
+        return;
+    }
+    const size_t n = std::min(src.size(), dst.size() - 1U);
+    if (n > 0U) {
+        std::memcpy(dst.data(), src.data(), n);
+    }
+    dst[n] = '\0';
+}
+
+} // namespace
+
+WebModule::ClientSlot *WebModule::findClient(int fd, uint32_t gen) noexcept
+{
+    for (auto &slot : clients_) {
+        if (slot.active && (slot.fd == fd) && (slot.gen == gen)) {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
+void WebModule::registerClient(int fd, uint32_t gen) noexcept
+{
+    // 清理同 fd 的历史残余槽位，避免 fd 复用后旧解锁/同步态串联。
+    for (auto &slot : clients_) {
+        if (slot.active && (slot.fd == fd)) {
+            slot = ClientSlot{};
+        }
+    }
+    for (auto &slot : clients_) {
+        if (!slot.active) {
+            slot = ClientSlot{};
+            slot.active = true;
+            slot.fd = fd;
+            slot.gen = gen;
+            slot.syncStage = SyncStage::kSendHello;
+            traceWeb(WebTrace::kWsConnect, static_cast<uint32_t>(fd), gen);
+            return;
+        }
+    }
+}
+
+void WebModule::unregisterClient(int fd, uint32_t gen) noexcept
+{
+    auto *slot = findClient(fd, gen);
+    if (slot == nullptr) {
+        return;
+    }
+    traceWeb(WebTrace::kWsDisconnect, static_cast<uint32_t>(fd), gen);
+    *slot = ClientSlot{};
+}
+
+void WebModule::drainCtrlEvents() noexcept
+{
+    web_cfg::WebCtrlEvent evt{};
+    while (ctrlMailbox_.tryPop(evt)) {
+        if (evt.kind == web_cfg::WebCtrlEvent::Kind::kConnect) {
+            registerClient(evt.fd, evt.gen);
+        } else if (evt.kind == web_cfg::WebCtrlEvent::Kind::kDisconnect) {
+            unregisterClient(evt.fd, evt.gen);
+        }
+    }
+}
+
+web_cfg::ConfigSnapshot WebModule::sampleConfig() noexcept
+{
+    web_cfg::ConfigSnapshot snap{};
+    const auto sys = ctx().data.systemStatus.read();
+    const auto storedSn = ctx().storage.sn();
+    snap.sn = storedSn.empty() ? cstrView(sys.sn) : storedSn;
+    snap.btPairNext = ctx().storage.btPairNext();
+#if RTK_GNSS_ENABLED
+    const uint32_t rate = ctx().data.gnssRateHz.load(std::memory_order_acquire);
+    const uint32_t effectiveRate =
+        (rate != 0U) ? rate : static_cast<uint32_t>(CONFIG_RTK_GNSS_RATE_HZ);
+    // 有效定位频率为 1..20，窄化到 uint8_t 安全。
+    snap.gnssRateHz = static_cast<uint8_t>(std::min(effectiveRate, kMaxGnssRateHz));
+    snap.gnssOut = ctx().data.gnssOutCfg.read();
+    const auto gate = ctx().data.ggaGateStatus.read();
+    snap.ggaGateEnabled = gate.enabled;
+    snap.ggaGateMinSats = gate.minSats;
+#else
+    snap.gnssRateHz = 1U;
+    snap.gnssOut = data::GnssOutConfig::defaults();
+#endif
+    return snap;
+}
+
+web_cfg::StatusSnapshot WebModule::sampleStatus(uint32_t nowMs) noexcept
+{
+    web_cfg::StatusSnapshot snap{};
+    const auto sys = ctx().data.systemStatus.read();
+    const int64_t upSec = esp_timer_get_time() / kUsPerSecond;
+    // 单次运行秒数远小于 INT32_MAX（约 68 年），转换安全。
+    snap.dev.uptimeS = (upSec > 0) ? static_cast<int32_t>(upSec) : 0;
+    snap.dev.heapFree = clampToI32(sys.freeHeap);
+    snap.dev.heapMin = clampToI32(sys.minFreeHeap);
+    snap.dev.reset = resetReasonName(esp_reset_reason());
+
+    const auto link = ctx().data.linkStatus.read();
+    snap.bt.whitelistCount = std::min(link.whitelistCount, kMaxAlarms);
+    std::copy_n(link.whitelist.begin(), snap.bt.whitelistCount, snap.bt.whitelist.begin());
+
+#if RTK_GNSS_ENABLED
+    const auto gnss = ctx().data.gnssStatus.read();
+    const auto fix = ctx().data.gnssFix.read();
+    snap.gnss.state = web_cfg::webGnssStateName(gnss.state);
+    if (gnss.model != ::gnss::Model::kUnknown) {
+        copyBounded(::gnss::modelName(gnss.model), snap.gnss.model);
+        snap.gnss.hasModel = true;
+    }
+    const auto fwView = cstrView(gnss.fwVersion);
+    if (!fwView.empty()) {
+        copyBounded(fwView, snap.gnss.fw);
+        snap.gnss.hasFw = true;
+    }
+    snap.gnss.fix = web_cfg::webGnssFixName(fix);
+    if (fix.valid || (fix.updateMs != 0U)) {
+        snap.gnss.sats = static_cast<int32_t>(fix.satsUsed);
+        snap.gnss.hasSats = true;
+    }
+    if (fix.hAccCm != ::gnss::kU16Unknown) {
+        snap.gnss.haccMm = static_cast<int32_t>(fix.hAccCm) * kMmPerCm;
+        snap.gnss.hasHacc = true;
+    }
+    if (gnss.state == ::gnss::State::kRunning) {
+        const uint32_t elapsedMs = nowMs - lastGgaSampleMs_;
+        if (ggaSampleValid_ && (elapsedMs >= (kStatusPeriodMs / 2U))) {
+            const uint32_t deltaGga = gnss.nmea.gga - lastGgaCount_;
+            const uint32_t hz = ((deltaGga * kMsPerSecond) + (elapsedMs / 2U)) / elapsedMs;
+            snap.gnss.hz = clampToI32(hz);
+            snap.gnss.hasHz = true;
+            lastGgaCount_ = gnss.nmea.gga;
+            lastGgaSampleMs_ = nowMs;
+        } else if (!ggaSampleValid_) {
+            lastGgaCount_ = gnss.nmea.gga;
+            lastGgaSampleMs_ = nowMs;
+            ggaSampleValid_ = true;
+        }
+    } else {
+        ggaSampleValid_ = false;
+    }
+#else
+    static_cast<void>(nowMs);
+    snap.gnss.state = "off";
+    snap.gnss.fix = "none";
+#endif
+    return snap;
+}
+
+bool WebModule::pollPendingDeliveries() noexcept
+{
+    bool stillPending = false;
+    auto &encodeBuf = klinkEncodeFrame_->data;
+    for (auto &slot : clients_) {
+        if (!slot.active) {
+            continue;
+        }
+        if (slot.pendingAck) {
+            const size_t len =
+                web_cfg::buildAckFrame(slot.pendingAckId, slot.pendingAckErr, encodeBuf);
+            if ((len > 0U) &&
+                enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
+                slot.pendingAck = false;
+            } else {
+                stillPending = true;
+                continue;
+            }
+        }
+        if (slot.pendingConfig) {
+            const size_t len = web_cfg::buildConfigFrame(sampleConfig(), encodeBuf);
+            if ((len > 0U) &&
+                enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
+                slot.pendingConfig = false;
+            } else {
+                stillPending = true;
+                continue;
+            }
+        }
+        if (slot.pendingBye) {
+            const size_t len = web_cfg::buildByeFrame(rebootByeReason_, encodeBuf);
+            if ((len > 0U) &&
+                enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
+                slot.pendingBye = false;
+            } else {
+                stillPending = true;
+            }
+        }
+    }
+    return stillPending;
+}
+
+bool WebModule::hasPendingCtrlBeforeRx() const noexcept
+{
+    for (const auto &slot : clients_) {
+        if (!slot.active) {
+            continue;
+        }
+        if ((slot.syncStage == SyncStage::kSendHello) ||
+            (slot.syncStage == SyncStage::kSendConfig) || slot.pendingAck) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WebModule::hasPendingAckOrBye() const noexcept
+{
+    for (const auto &slot : clients_) {
+        if (slot.active && (slot.pendingAck || slot.pendingBye)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool WebModule::pollInitialSync(uint32_t nowMs) noexcept
+{
+    bool morePending = false;
+    auto &encodeBuf = klinkEncodeFrame_->data;
+    for (auto &slot : clients_) {
+        if (!slot.active || (slot.syncStage == SyncStage::kReady)) {
+            continue;
+        }
+        if (slot.syncStage == SyncStage::kSendHello) {
+            const auto sys = ctx().data.systemStatus.read();
+            const web_cfg::HelloSnapshot hello{
+                .board = board::current().name,
+                .fw = kAppVersion,
+                .btName = cstrView(sys.deviceName),
+                .console = kConsoleProfileName,
+                .factoryUnlocked = slot.unlocked,
+            };
+            const size_t len = web_cfg::buildHelloFrame(hello, encodeBuf);
+            if ((len > 0U) &&
+                enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
+                slot.syncStage = SyncStage::kSendConfig;
+            } else {
+                morePending = true;
+                continue;
+            }
+        }
+        if (slot.syncStage == SyncStage::kSendConfig) {
+            const size_t len = web_cfg::buildConfigFrame(sampleConfig(), encodeBuf);
+            if ((len > 0U) &&
+                enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
+                slot.syncStage = SyncStage::kSendStatus;
+            } else {
+                morePending = true;
+                continue;
+            }
+        }
+        if (slot.syncStage == SyncStage::kSendStatus) {
+            const auto status = sampleStatus(nowMs);
+            const size_t len = web_cfg::buildStatusFrame(status, nullptr, encodeBuf);
+            if ((len > 0U) &&
+                enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
+                slot.lastStatus = status;
+                slot.hasLastStatus = true;
+                slot.syncStage = SyncStage::kReady;
+            } else {
+                morePending = true;
+            }
+        }
+    }
+    return morePending;
+}
+
+void WebModule::sendAck(ClientSlot &client, uint16_t reqId, web::ErrorCode error) noexcept
+{
+    auto &encodeBuf = klinkEncodeFrame_->data;
+    const size_t len = web_cfg::buildAckFrame(reqId, error, encodeBuf);
+    if ((len > 0U) && !client.pendingAck &&
+        enqueueTx(client.fd, client.gen, std::span<const char>{encodeBuf}.first(len))) {
+        return;
+    }
+    client.pendingAck = true;
+    client.pendingAckId = reqId;
+    client.pendingAckErr = error;
+}
+
+void WebModule::broadcastConfig() noexcept
+{
+    auto &encodeBuf = klinkEncodeFrame_->data;
+    const size_t len = web_cfg::buildConfigFrame(sampleConfig(), encodeBuf);
+    if (len == 0U) {
+        return;
+    }
+    const auto frame = std::span<const char>{encodeBuf}.first(len);
+    for (auto &slot : clients_) {
+        if (!slot.active || (slot.syncStage == SyncStage::kSendHello) ||
+            (slot.syncStage == SyncStage::kSendConfig)) {
+            continue;
+        }
+        if (slot.pendingAck || !enqueueTx(slot.fd, slot.gen, frame)) {
+            slot.pendingConfig = true;
+        }
+    }
+}
+
+void WebModule::scheduleReboot(RebootKind kind, std::string_view reasonText, uint32_t nowMs,
+                               uint32_t idleActSeq) noexcept
+{
+    if (pendingReboot_ != RebootKind::kNone) {
+        return;
+    }
+    pendingReboot_ = kind;
+    rebootByeReason_ = reasonText;
+    rebootRequestedMs_ = nowMs;
+    rebootDrainDoneMs_ = 0U;
+    idleRebootActSeq_ = idleActSeq;
+    rebootTxCommitted_ = false;
+    rebootDrainDone_ = false;
+    for (auto &slot : clients_) {
+        if (slot.active) {
+            slot.pendingBye = true;
+        }
+    }
+    static_cast<void>(pollPendingDeliveries());
+    if (!hasPendingAckOrBye()) {
+        rebootWaitTxSeq_ = txEnqueuedSeq_.load(std::memory_order_acquire);
+        rebootTxCommitted_ = true;
+    }
+}
+
+bool WebModule::tryAbortIdleReboot(uint32_t nowMs) noexcept
+{
+    if (pendingReboot_ != RebootKind::kIdle) {
+        return false;
+    }
+    const uint32_t staSnap = staState_.load(std::memory_order_acquire);
+    if (web_cfg::canCommitIdleExit(staSnap, idleRebootActSeq_)) {
+        return false;
+    }
+    traceWeb(WebTrace::kIdleAbort, web_cfg::staStateCount(staSnap), web_cfg::staStateSeq(staSnap));
+    pendingReboot_ = RebootKind::kNone;
+    rebootTxCommitted_ = false;
+    rebootDrainDone_ = false;
+    for (auto &slot : clients_) {
+        slot.pendingBye = false;
+    }
+    static_cast<void>(
+        idleTimer_.tick(web_cfg::staStateCount(staSnap), web_cfg::staStateSeq(staSnap), nowMs));
+    return true;
+}
+
+bool WebModule::pollPendingReboot(uint32_t nowMs) noexcept
+{
+    if (pendingReboot_ == RebootKind::kNone) {
+        return false;
+    }
+    if (tryAbortIdleReboot(nowMs)) {
+        return false;
+    }
+    static_cast<void>(pollPendingDeliveries());
+    if (!txMailbox_.empty() && !txWorkQueued_.load(std::memory_order_acquire)) {
+        scheduleTxDrain();
+    }
+    if (!rebootTxCommitted_ && !hasPendingAckOrBye()) {
+        rebootWaitTxSeq_ = txEnqueuedSeq_.load(std::memory_order_acquire);
+        rebootTxCommitted_ = true;
+    }
+    const uint32_t elapsed = nowMs - rebootRequestedMs_;
+    const bool txDone = rebootTxCommitted_ &&
+                        (static_cast<int32_t>(txCompletedSeq_.load(std::memory_order_acquire) -
+                                              rebootWaitTxSeq_) >= 0);
+    if (txDone && !rebootDrainDone_) {
+        rebootDrainDone_ = true;
+        rebootDrainDoneMs_ = nowMs;
+    }
+    const bool graceDone =
+        rebootDrainDone_ && ((nowMs - rebootDrainDoneMs_) >= kRebootSocketGraceMs);
+    if (!graceDone && (elapsed < kRebootMaxWaitMs)) {
+        return true;
+    }
+    if (tryAbortIdleReboot(nowMs)) {
+        return false;
+    }
+    if (pendingReboot_ == RebootKind::kFreset) {
+        traceWeb(WebTrace::kRebootCommit, static_cast<uint32_t>(pendingReboot_), 0U);
+        esp_restart();
+    }
+    const RadioReason reason =
+        (pendingReboot_ == RebootKind::kIdle) ? RadioReason::kIdle : RadioReason::kWebExit;
+    traceWeb(WebTrace::kRebootCommit, static_cast<uint32_t>(pendingReboot_),
+             static_cast<uint32_t>(reason));
+    requestRadioMode(RadioMode::kBluetooth, reason);
+}
+
+void WebModule::handleUnlockReq(ClientSlot &client, const web::Request &req) noexcept
+{
+    if (req.token == std::string_view{CONFIG_RTK_FACTORY_KEY}) {
+        client.unlocked = true;
+        sendAck(client, req.id, web::ErrorCode::kNone);
+        return;
+    }
+    client.unlocked = false;
+    sendAck(client, req.id, web::ErrorCode::kBadValue);
+}
+
+void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32_t nowMs) noexcept
+{
+    if (req.name == "save") {
+#if RTK_GNSS_ENABLED
+        const fw::Command cmd = detail::packGnssMaintenance(GnssMaintenanceVerb::kSave);
+        startInflightGnss(client, req.id, cmd, false, true, nowMs);
+#else
+        sendAck(client, req.id, web::ErrorCode::kUnsupported);
+#endif
+        return;
+    }
+    if (req.name == "exit") {
+#if RTK_GNSS_ENABLED
+        const auto persist = ctx().data.ggaGatePersist.load(std::memory_order_acquire);
+        if (persist != data::GgaGatePersist::kClean) {
+            if ((ctx().ioExecutor == nullptr) || !ctx().ioExecutor->running() ||
+                !ctx().ioExecutor->moduleOk(id(ModuleKind::kGnss))) {
+                sendAck(client, req.id, web::ErrorCode::kFailed);
+                return;
+            }
+            nextFlushGgaSeq_ = (nextFlushGgaSeq_ == std::numeric_limits<uint32_t>::max())
+                                   ? 1U
+                                   : (nextFlushGgaSeq_ + 1U);
+            inflight_ = InflightRequest{
+                .stage = InflightStage::kWaitExitFlush,
+                .fd = client.fd,
+                .gen = client.gen,
+                .reqId = req.id,
+                .cmdSeq = nextFlushGgaSeq_,
+                .startedMs = nowMs,
+            };
+            ctx().data.webGnssFlushGgaSeq.store(nextFlushGgaSeq_, std::memory_order_release);
+            return;
+        }
+#endif
+        sendAck(client, req.id, web::ErrorCode::kNone);
+        scheduleReboot(RebootKind::kExit, "exit", nowMs);
+        return;
+    }
+    if (req.name == "freset") {
+        if (!client.unlocked) {
+            sendAck(client, req.id, web::ErrorCode::kLocked);
+            return;
+        }
+        fw::Command cmd{};
+        cmd.target = id(ModuleKind::kStorage);
+        cmd.verb = StorageModule::kEraseUser;
+        fw::CommandResult result{};
+        ctx().storage.onCommand(cmd, result);
+        const auto err = web::fromResult(result.status);
+        sendAck(client, req.id, err);
+        if (err == web::ErrorCode::kNone) {
+            scheduleReboot(RebootKind::kFreset, "freset", nowMs);
+        }
+        return;
+    }
+    sendAck(client, req.id, web::ErrorCode::kUnsupported);
+}
+
+void WebModule::handleSetReq(ClientSlot &client, const web::Request &req, uint32_t nowMs) noexcept
+{
+#if RTK_GNSS_ENABLED
+    const data::GnssOutConfig curOut = ctx().data.gnssOutCfg.read();
+#else
+    const data::GnssOutConfig curOut = data::GnssOutConfig::defaults();
+#endif
+    const auto plan = web_cfg::translateSetRequest(req.key, req.value, client.unlocked, curOut);
+    if (plan.error != web::ErrorCode::kNone) {
+        sendAck(client, req.id, plan.error);
+        return;
+    }
+    if (plan.target == web_cfg::CommandTarget::kStorage) {
+        fw::CommandResult result{};
+        ctx().storage.onCommand(plan.command, result);
+        const auto err = web::fromResult(result.status);
+        sendAck(client, req.id, err);
+        if (err == web::ErrorCode::kNone) {
+            broadcastConfig();
+            if (plan.notifyBtStatus) {
+                pollStatusPush(nowMs, true);
+            }
+        }
+        return;
+    }
+    if (plan.target == web_cfg::CommandTarget::kGnss) {
+#if RTK_GNSS_ENABLED
+        startInflightGnss(client, req.id, plan.command, true, false, nowMs);
+#else
+        sendAck(client, req.id, web::ErrorCode::kUnsupported);
+#endif
+        return;
+    }
+    sendAck(client, req.id, web::ErrorCode::kFailed);
+}
+
+void WebModule::startInflightGnss(ClientSlot &client, uint16_t reqId, const fw::Command &cmd,
+                                  bool isSet, bool isMaint, uint32_t nowMs) noexcept
+{
+#if RTK_GNSS_ENABLED
+    if ((ctx().ioExecutor == nullptr) || !ctx().ioExecutor->running() ||
+        !ctx().ioExecutor->moduleOk(id(ModuleKind::kGnss))) {
+        sendAck(client, reqId, web::ErrorCode::kFailed);
+        return;
+    }
+    nextGnssSeq_ =
+        (nextGnssSeq_ == std::numeric_limits<uint32_t>::max()) ? 1U : (nextGnssSeq_ + 1U);
+    fw::Command queued = cmd;
+    queued.seq = nextGnssSeq_;
+    inflight_ = InflightRequest{
+        .stage = InflightStage::kWaitAccept,
+        .fd = client.fd,
+        .gen = client.gen,
+        .reqId = reqId,
+        .cmdSeq = queued.seq,
+        .startedMs = nowMs,
+        .isSet = isSet,
+        .isMaint = isMaint,
+        .ackSent = false,
+    };
+    ctx().data.webGnssCommand.write(queued);
+#else
+    static_cast<void>(cmd);
+    static_cast<void>(isSet);
+    static_cast<void>(isMaint);
+    static_cast<void>(nowMs);
+    sendAck(client, reqId, web::ErrorCode::kUnsupported);
+#endif
+}
+
+void WebModule::finishInflightGnss(web::ErrorCode error, bool clearInflight) noexcept
+{
+    const int fd = inflight_.fd;
+    const uint32_t gen = inflight_.gen;
+    const uint16_t reqId = inflight_.reqId;
+    const bool isSet = inflight_.isSet;
+    const bool ackAlreadySent = inflight_.ackSent;
+    if (clearInflight) {
+        inflight_ = InflightRequest{};
+    } else {
+        inflight_.ackSent = true;
+        inflight_.stage = InflightStage::kWaitCleanup;
+    }
+    if (!ackAlreadySent) {
+        if (auto *client = findClient(fd, gen); client != nullptr) {
+            sendAck(*client, reqId, error);
+        }
+    }
+    if (isSet && (error == web::ErrorCode::kNone)) {
+        broadcastConfig();
+    }
+}
+
+void WebModule::pollExitFlush(uint32_t nowMs) noexcept
+{
+#if RTK_GNSS_ENABLED
+    const uint32_t elapsed = nowMs - inflight_.startedMs;
+    const uint32_t doneSeq = ctx().data.webGnssFlushGgaDoneSeq.load(std::memory_order_acquire);
+    if (doneSeq == inflight_.cmdSeq) {
+        const int fd = inflight_.fd;
+        const uint32_t gen = inflight_.gen;
+        const uint16_t reqId = inflight_.reqId;
+        inflight_ = InflightRequest{};
+        const auto persist = ctx().data.ggaGatePersist.load(std::memory_order_acquire);
+        auto *client = findClient(fd, gen);
+        if (persist == data::GgaGatePersist::kClean) {
+            if (client != nullptr) {
+                sendAck(*client, reqId, web::ErrorCode::kNone);
+            }
+            scheduleReboot(RebootKind::kExit, "exit", nowMs);
+        } else if (client != nullptr) {
+            sendAck(*client, reqId, web::ErrorCode::kFailed);
+        }
+        return;
+    }
+    if (elapsed >= kExitFlushTimeoutMs) {
+        const int fd = inflight_.fd;
+        const uint32_t gen = inflight_.gen;
+        const uint16_t reqId = inflight_.reqId;
+        inflight_ = InflightRequest{};
+        if (auto *client = findClient(fd, gen); client != nullptr) {
+            sendAck(*client, reqId, web::ErrorCode::kFailed);
+        }
+    }
+#else
+    static_cast<void>(nowMs);
+#endif
+}
+
+void WebModule::pollInflightGnss(uint32_t nowMs) noexcept
+{
+#if RTK_GNSS_ENABLED
+    if (inflight_.stage == InflightStage::kIdle) {
+        return;
+    }
+    if (inflight_.stage == InflightStage::kWaitExitFlush) {
+        pollExitFlush(nowMs);
+        return;
+    }
+    const auto out = ctx().data.webGnssOutcome.read();
+    if (out.seq == inflight_.cmdSeq) {
+        if (out.phase == data::WebGnssPhase::kCancelled) {
+            inflight_ = InflightRequest{};
+            return;
+        }
+        if (out.phase == data::WebGnssPhase::kDone) {
+            const web::ErrorCode err =
+                inflight_.isMaint
+                    ? fromMaintResult(static_cast<::gnss::MaintenanceResult>(out.detail))
+                    : web::fromResult(out.status);
+            finishInflightGnss(err, true);
+            return;
+        }
+        if ((out.phase == data::WebGnssPhase::kAccepted) &&
+            (inflight_.stage == InflightStage::kWaitAccept)) {
+            inflight_.stage = InflightStage::kWaitDone;
+        }
+    }
+    const uint32_t elapsed = nowMs - inflight_.startedMs;
+    if ((inflight_.stage == InflightStage::kWaitAccept) && (elapsed >= kGnssAcceptTimeoutMs)) {
+        // 通知 kIo 在执行前取消该序号，并在 kIo 确认消费或取消前保持背压不释放槽位。
+        ctx().data.webGnssCancelSeq.store(inflight_.cmdSeq, std::memory_order_release);
+        finishInflightGnss(web::ErrorCode::kTimeout, false);
+        return;
+    }
+    if ((inflight_.stage == InflightStage::kWaitDone) && (elapsed >= kGnssDoneTimeoutMs)) {
+        finishInflightGnss(web::ErrorCode::kTimeout, false);
+    }
+#else
+    static_cast<void>(nowMs);
+#endif
+}
+
+bool WebModule::pollRxFrame(uint32_t nowMs) noexcept
+{
+    if (hasPendingCtrlBeforeRx()) {
+        return !rxMailbox_.empty();
+    }
+    auto &rxFrame = *klinkRxFrame_;
+    if (!rxMailbox_.tryPop(rxFrame)) {
+        return false;
+    }
+    auto *client = findClient(rxFrame.fd, rxFrame.gen);
+    if (client == nullptr) {
+        return true;
+    }
+    const auto raw = std::span<const char>{rxFrame.data}.first(rxFrame.len);
+    const web::ErrorCode parseErr = web::parseRequest(raw, parsedReq_);
+    if (parseErr != web::ErrorCode::kNone) {
+        sendAck(*client, parsedReq_.id, parseErr);
+        return true;
+    }
+    if (inflight_.stage != InflightStage::kIdle) {
+        sendAck(*client, parsedReq_.id, web::ErrorCode::kBusy);
+        return true;
+    }
+    switch (parsedReq_.type) {
+    case web::RequestType::kUnlock:
+        handleUnlockReq(*client, parsedReq_);
+        break;
+    case web::RequestType::kCmd:
+        handleCmdReq(*client, parsedReq_, nowMs);
+        break;
+    case web::RequestType::kSet:
+        handleSetReq(*client, parsedReq_, nowMs);
+        break;
+    default:
+        sendAck(*client, parsedReq_.id, web::ErrorCode::kBadJson);
+        break;
+    }
+    return true;
+}
+
+void WebModule::pollStatusPush(uint32_t nowMs, bool forceNow) noexcept
+{
+    if (!forceNow && ((nowMs - lastStatusMs_) < kStatusPeriodMs)) {
+        return;
+    }
+    if (!forceNow) {
+        lastStatusMs_ = nowMs;
+    }
+    bool anyReady = false;
+    for (const auto &slot : clients_) {
+        if (slot.active && (slot.syncStage == SyncStage::kReady)) {
+            anyReady = true;
+            break;
+        }
+    }
+    if (!anyReady) {
+        return;
+    }
+    const auto cur = sampleStatus(nowMs);
+    auto &encodeBuf = klinkEncodeFrame_->data;
+    for (auto &slot : clients_) {
+        if (!slot.active || (slot.syncStage != SyncStage::kReady)) {
+            continue;
+        }
+        // 为 ack/config/bye 预留发送槽位，防止 1 Hz 状态推送挤占必达响应。
+        if (txMailbox_.freeSlots() <= kTxReservedCtrlSlots) {
+            break;
+        }
+        const web_cfg::StatusSnapshot *prev = slot.hasLastStatus ? &slot.lastStatus : nullptr;
+        const size_t len = web_cfg::buildStatusFrame(cur, prev, encodeBuf);
+        if (len == 0U) {
+            continue;
+        }
+        if (enqueueTx(slot.fd, slot.gen, std::span<const char>{encodeBuf}.first(len))) {
+            slot.lastStatus = cur;
+            slot.hasLastStatus = true;
+        }
+    }
+}
+
+bool WebModule::poll(uint32_t nowMs) noexcept
+{
+    if (!initialized_) {
+        return false;
+    }
+    drainCtrlEvents();
+    if (!txMailbox_.empty() && !txWorkQueued_.load(std::memory_order_acquire)) {
+        scheduleTxDrain();
+    }
+    if (pollPendingReboot(nowMs)) {
+        return false;
+    }
+    const bool deliveryPending = pollPendingDeliveries();
+    pollInflightGnss(nowMs);
+    const bool syncMore = pollInitialSync(nowMs);
+    const bool rxConsumed = pollRxFrame(nowMs);
+    pollStatusPush(nowMs, false);
+
+    const uint32_t staSnap = staState_.load(std::memory_order_acquire);
+    const uint32_t staCount = web_cfg::staStateCount(staSnap);
+    const uint32_t actSeq = web_cfg::staStateSeq(staSnap);
+    if ((pendingReboot_ == RebootKind::kNone) && idleTimer_.tick(staCount, actSeq, nowMs)) {
+        traceWeb(WebTrace::kIdleTrigger, static_cast<uint32_t>(CONFIG_RTK_WIFI_IDLE_EXIT_S),
+                 actSeq);
+        scheduleReboot(RebootKind::kIdle, "idle", nowMs, actSeq);
+        return false;
+    }
+    return deliveryPending || syncMore || (rxConsumed && !rxMailbox_.empty());
+}
+
+} // namespace app

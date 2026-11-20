@@ -156,6 +156,42 @@ public:
     /** @brief 从 NVS 恢复 0x33 Nav Thingsboard 配置。 @param in: 86 B 配置块。 @retval 加载结果。 @note 仅启动。 */
     [[nodiscard]] static fw::Result loadPhoneTb(void *, std::span<const uint8_t> in) noexcept;
 
+    /**
+     * @brief 从 NVS 恢复下次蓝牙启动开配对窗口标志（S2）
+     * @param obj: 未使用，通过 appContext().storage 定位单例
+     * @param in: 1 字节值（0 或 1）
+     * @retval kOk 已恢复标志
+     * @retval kInvalidArg 长度或取值非法
+     * @note 仅启动期加载路径调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] static fw::Result loadBtPairNext(void *obj, std::span<const uint8_t> in) noexcept;
+
+    /**
+     * @brief 读取当前持久化 SN 文本（未写入 NVS 时为空视图）
+     * @retval 当前已加载或保存的 SN 字符串视图
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] std::string_view sn() const noexcept;
+
+    /**
+     * @brief 读取下次蓝牙启动是否自动开配对窗口的当前标志
+     * @retval true 下次蓝牙启动将打开配对窗口
+     * @retval false 未设置
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool btPairNext() const noexcept
+    {
+        return bt_pair_next_;
+    }
+
+    /**
+     * @brief 消费一次 bt.pair_next 标志：若置位则清除内存与 NVS 中的记录并返回 true
+     * @retval true 本次消费了已置位的标志，调用方应开启配对窗口
+     * @retval false 标志未置位
+     * @note 仅启动期或 kLink 串行路径调用（供 BtLinkModule::init）；清 NVS 可阻塞，非 ISR。
+     */
+    [[nodiscard]] bool consumeBtPairNext() noexcept;
+
 private:
     struct DebouncedState {
         bool known = false;
@@ -244,6 +280,28 @@ private:
      * @param[out] result: 执行结果
      */
     void saveSn(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  执行 Wi-Fi 配置模式下的白名单增删命令并同步写 NVS（S2）
+     * @param  cmd: 命令（args[0..5] 为 6 字节 MAC）
+     * @param  add: true 添加，false 删除
+     * @param[out] result: 执行结果（kOk/kInvalidArg/kInvalidState/kNotFound/kNoSpace/kBusy/kIoError）
+     * @note   仅 kLink 调用，同步写 NVS 可阻塞，非 ISR。
+     */
+    void editWhitelistCmd(const fw::Command &cmd, bool add, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  执行 bt.pair_next 写入命令并同步写 NVS（S2）
+     * @param  cmd: 命令（args[0] 为 0 或 1）
+     * @param[out] result: 执行结果（kOk/kInvalidArg/kInvalidState/kBusy/kIoError）
+     * @note   仅 kLink 调用，同步写 NVS 可阻塞，非 ISR。
+     */
+    void setPairNextCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  同步把当前内存白名单写入 NVS（供 S2 命令与去抖共享）
+     * @retval ESP_OK 写入成功
+     * @retval 其他 NVS 错误码
+     * @note   调用方须持有 store::WriteGuard；仅 kLink，可阻塞，非 ISR。
+     */
+    [[nodiscard]] esp_err_t writeWhitelistNow() const noexcept;
 
     /**
      * @brief 取得已绑定的应用上下文
@@ -266,6 +324,7 @@ private:
     StoreStatus status_{};
     LinkStatus whitelist_{};
     std::array<char, NVS_STORE_SN_MAX + 1U> sn_{};
+    bool bt_pair_next_ = false;
 };
 /**
  * @brief 取得配置命令表

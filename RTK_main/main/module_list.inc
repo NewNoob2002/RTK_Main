@@ -14,6 +14,9 @@
 #include "modules/rtcm/RtcmModule.hpp"
 #include "modules/storage/StorageModule.hpp"
 #include "modules/system/SystemModule.hpp"
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+#include "modules/web/WebModule.hpp"
+#endif
 #else
 // MODULE_DEF(类型, 成员, 名称, ModuleKind, ExecKind, poll_period_ms, ModuleEnable)
 MODULE_DEF(BtLinkModule, bt_link, "bt_link", kBtLink, kLink, 0, kBtOnly)
@@ -21,6 +24,9 @@ MODULE_DEF(RtcmModule, rtcm, "rtcm", kRtcm, kLink, 0, kBtOnly)
 // storage.init 必须先于 system.prepare（读取身份）；执行器再次 init 时为幂等。
 MODULE_DEF(StorageModule, storage, "storage", kStorage, kLink, 0, kAlways)
 MODULE_DEF(SystemModule, system, "system", kSystem, kLink, 0, kAlways)
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+MODULE_DEF(WebModule, web, "web", kWeb, kLink, 0, kWifiOnly)
+#endif
 #if RTK_GNSS_ENABLED
 MODULE_DEF(GnssModule, gnss, "gnss", kGnss, kIo, 0, kAlways)
 #endif

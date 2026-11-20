@@ -2,186 +2,32 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RTK Device Configuration</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>RTK Configuration</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div class="wrap">
-  <header class="hero">
-    <img class="logo" src="logo.png" width="236" height="40" alt="SingularXYZ">
-    <div class="subline" id="hdr-sub">RTK Configuration · --</div>
-  </header>
-
-  <div class="chips">
-    <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn-txt">Connecting...</span></span>
-    <span class="pill" id="chip-fix">Fix: --</span>
-    <span class="pill" id="chip-sats">Sats: --</span>
-    <span class="pill pill-accent">Wi-Fi Config</span>
+<header class="top">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>
+    <span class="word">Singular<b>XYZ</b></span>
+    <span class="dev" id="dev-name">--</span>
   </div>
-
-  <div class="banner" id="banner"></div>
-
-  <section class="card" id="sec-dev">
-    <button type="button" class="card-btn" data-toggle="sec-dev">
-      <span>Device Info</span>
-      <svg class="caret" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.2 5.8 8 10.6l4.8-4.8-.9-.9L8 8.8 4.1 4.9z"/></svg>
-    </button>
-    <div class="card-collapse"><div class="card-inner"><div class="card-body">
-      <div class="kv">
-        <span class="k">Board</span><span class="v" id="d-board">--</span>
-        <span class="k">Firmware</span><span class="v" id="d-fw">--</span>
-        <span class="k">SN</span><span class="v" id="d-sn">--</span>
-        <span class="k">Bluetooth</span><span class="v" id="d-bt">--</span>
-        <span class="k">Radio Mode</span><span class="v" id="d-radio">Wi-Fi Config</span>
-        <span class="k">Uptime</span><span class="v" id="d-up">--</span>
-        <span class="k">Free Heap</span><span class="v" id="d-heap">--</span>
-        <span class="k">Reset Reason</span><span class="v" id="d-reset">--</span>
-      </div>
-    </div></div></div>
-  </section>
-
-  <section class="card" id="sec-gnss">
-    <button type="button" class="card-btn" data-toggle="sec-gnss">
-      <span>GNSS Config &amp; Status</span>
-      <svg class="caret" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.2 5.8 8 10.6l4.8-4.8-.9-.9L8 8.8 4.1 4.9z"/></svg>
-    </button>
-    <div class="card-collapse"><div class="card-inner"><div class="card-body">
-      <div class="kv">
-        <span class="k">Module State</span><span class="v" id="g-state">--</span>
-        <span class="k">Model / FW</span><span class="v" id="g-model">--</span>
-        <span class="k">Fix Type</span><span class="v" id="g-fix">--</span>
-        <span class="k">Satellites</span><span class="v" id="g-sats">--</span>
-        <span class="k">Horiz. Acc.</span><span class="v" id="g-hacc">--</span>
-        <span class="k">Actual Rate</span><span class="v" id="g-hz">--</span>
-      </div>
-      <div class="divider"></div>
-      <span class="fld-lbl">Positioning Rate (Hz)</span>
-      <div class="seg" id="rate-seg" role="group" aria-label="Positioning Rate">
-        <button type="button" class="seg-btn" data-rate="1">1 Hz</button>
-        <button type="button" class="seg-btn" data-rate="2">2 Hz</button>
-        <button type="button" class="seg-btn" data-rate="5">5 Hz</button>
-        <button type="button" class="seg-btn" data-rate="10">10 Hz</button>
-        <button type="button" class="seg-btn" data-rate="20">20 Hz</button>
-      </div>
-      <select id="cfg-rate" data-key="gnss.rate" class="hide" aria-hidden="true">
-        <option value="1">1 Hz</option>
-        <option value="2">2 Hz</option>
-        <option value="5">5 Hz</option>
-        <option value="10">10 Hz</option>
-        <option value="20">20 Hz</option>
-      </select>
-      <div class="hint" id="out-rate-hint">Output rates faster than positioning rate are disabled.</div>
-      <div class="row">
-        <label for="cfg-gga">GGA output</label>
-        <select id="cfg-gga" data-key="gnss.out.gga"></select>
-      </div>
-      <div class="row">
-        <label for="cfg-gsa">GSA output</label>
-        <select id="cfg-gsa" data-key="gnss.out.gsa"></select>
-      </div>
-      <div class="row">
-        <label for="cfg-gsv">GSV output</label>
-        <select id="cfg-gsv" data-key="gnss.out.gsv"></select>
-      </div>
-      <div class="row">
-        <label for="cfg-gst">GST output</label>
-        <select id="cfg-gst" data-key="gnss.out.gst"></select>
-      </div>
-      <div class="row">
-        <label for="cfg-rmc">RMC output</label>
-        <select id="cfg-rmc" data-key="gnss.out.rmc"></select>
-      </div>
-      <div class="divider"></div>
-      <span class="fld-lbl">GGA Quality Gate</span>
-      <div class="row">
-        <label for="cfg-gga-gate">Enable GGA Quality Gate</label>
-        <span class="sw"><input type="checkbox" id="cfg-gga-gate"><span class="sw-track"></span></span>
-      </div>
-      <div class="row">
-        <label for="cfg-gga-min-sats">Min Satellites (0-40)</label>
-        <input type="number" id="cfg-gga-min-sats" min="0" max="40" step="1" value="8">
-      </div>
-      <div id="const-box" class="hide">
-        <div class="divider"></div>
-        <span class="fld-lbl">Constellations</span>
-        <div class="switches">
-          <label class="sw-card"><span>GPS</span><span class="sw"><input type="checkbox" data-const="gnss.const.gps"><span class="sw-track"></span></span></label>
-          <label class="sw-card"><span>BDS</span><span class="sw"><input type="checkbox" data-const="gnss.const.bds"><span class="sw-track"></span></span></label>
-          <label class="sw-card"><span>GLO</span><span class="sw"><input type="checkbox" data-const="gnss.const.glo"><span class="sw-track"></span></span></label>
-          <label class="sw-card"><span>GAL</span><span class="sw"><input type="checkbox" data-const="gnss.const.gal"><span class="sw-track"></span></span></label>
-        </div>
-      </div>
-      <button type="button" class="btn btn-full" id="btn-gnss-save">Save GNSS Config to Module</button>
-      <div class="msg" id="msg-gnss"></div>
-    </div></div></div>
-  </section>
-
-  <section class="card collapsed" id="sec-bt">
-    <button type="button" class="card-btn" data-toggle="sec-bt">
-      <span>Bluetooth Whitelist &amp; Pairing</span>
-      <svg class="caret" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.2 5.8 8 10.6l4.8-4.8-.9-.9L8 8.8 4.1 4.9z"/></svg>
-    </button>
-    <div class="card-collapse"><div class="card-inner"><div class="card-body">
-      <span class="fld-lbl">Whitelist</span>
-      <ul class="wl-list" id="bt-wl"></ul>
-      <div class="wl-empty hide" id="bt-wl-empty">Whitelist is empty</div>
-      <div class="row">
-        <input type="text" class="input-grow" id="bt-mac" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17">
-        <button type="button" class="btn" id="btn-wl-add">Add</button>
-      </div>
-      <div class="divider"></div>
-      <div class="row">
-        <label for="cfg-pair">Open pairing window on next BT boot</label>
-        <select id="cfg-pair" data-key="bt.pair_next">
-          <option value="0">Off</option>
-          <option value="1">On</option>
-        </select>
-      </div>
-      <div class="msg" id="msg-bt"></div>
-    </div></div></div>
-  </section>
-
-  <section class="card collapsed" id="sec-fac">
-    <button type="button" class="card-btn" data-toggle="sec-fac">
-      <span>Factory Config</span>
-      <svg class="caret" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.2 5.8 8 10.6l4.8-4.8-.9-.9L8 8.8 4.1 4.9z"/></svg>
-    </button>
-    <div class="card-collapse"><div class="card-inner"><div class="card-body">
-      <div id="fac-locked">
-        <div class="row">
-          <input type="password" class="input-grow" id="fac-token" placeholder="Enter factory unlock token">
-          <button type="button" class="btn" id="btn-unlock">Unlock</button>
-        </div>
-      </div>
-      <div id="fac-unlocked" class="hide">
-        <div class="row">
-          <input type="text" class="input-grow" id="fac-sn" placeholder="SN (1-16 chars: A-Z, 0-9, -)" maxlength="16">
-          <button type="button" class="btn" id="btn-sn">Write SN</button>
-        </div>
-        <div class="divider"></div>
-        <button type="button" class="btn btn-danger btn-full" id="btn-freset">Factory Reset</button>
-      </div>
-      <div class="msg" id="msg-fac"></div>
-    </div></div></div>
-  </section>
-
-  <section class="card collapsed" id="sec-sys">
-    <button type="button" class="card-btn" data-toggle="sec-sys">
-      <span>System &amp; Exit</span>
-      <svg class="caret" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.2 5.8 8 10.6l4.8-4.8-.9-.9L8 8.8 4.1 4.9z"/></svg>
-    </button>
-    <div class="card-collapse"><div class="card-inner"><div class="card-body">
-      <div class="kv">
-        <span class="k">Board / FW</span><span class="v" id="s-info">--</span>
-        <span class="k">Console Level</span><span class="v" id="s-con">--</span>
-      </div>
-      <div class="divider"></div>
-      <button type="button" class="btn btn-ghost btn-full" id="btn-exit">Exit Web Config &amp; Return to Bluetooth</button>
-      <div class="msg" id="msg-sys"></div>
-    </div></div></div>
-  </section>
-</div>
+  <div class="bar" role="status" aria-live="polite">
+    <span class="pill" id="p-conn"><i class="dot"></i><span>Connecting</span></span>
+    <span class="pill" id="p-fix">Fix --</span>
+    <span class="pill" id="p-sats">Sats --</span>
+    <span class="pill bad" id="p-gate" hidden>GGA held</span>
+  </div>
+</header>
+<div class="banner" id="banner" hidden></div>
+<main class="grid">
+  <div class="col" id="col-a"></div>
+  <div class="col" id="col-b"></div>
+</main>
+<footer class="foot">Wi-Fi configuration mode · changes apply immediately and are kept after restart</footer>
+<div class="toasts" id="toasts" aria-live="assertive"></div>
 <script src="app.js"></script>
 </body>
 </html>
