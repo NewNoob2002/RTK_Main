@@ -170,7 +170,7 @@ web_cfg::StatusSnapshot WebModule::sampleStatus(uint32_t nowMs) noexcept
 #if RTK_GNSS_ENABLED
     const auto gnss = ctx().data.gnssStatus.read();
     const auto fix = ctx().data.gnssFix.read();
-    snap.gnss.state = web_cfg::webGnssStateName(gnss.state);
+    snap.gnss.state = web_cfg::gnssStateName(gnss.state);
     if (gnss.model != ::gnss::Model::kUnknown) {
         copyBounded(::gnss::modelName(gnss.model), snap.gnss.model);
         snap.gnss.hasModel = true;
@@ -180,7 +180,7 @@ web_cfg::StatusSnapshot WebModule::sampleStatus(uint32_t nowMs) noexcept
         copyBounded(fwView, snap.gnss.fw);
         snap.gnss.hasFw = true;
     }
-    snap.gnss.fix = web_cfg::webGnssFixName(fix);
+    snap.gnss.fix = web_cfg::gnssFixName(fix);
     if (fix.valid || (fix.updateMs != 0U)) {
         snap.gnss.sats = static_cast<int32_t>(fix.satsUsed);
         snap.gnss.hasSats = true;

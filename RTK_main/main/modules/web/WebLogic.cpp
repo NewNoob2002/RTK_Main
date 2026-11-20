@@ -127,7 +127,7 @@ bool writeBtGroup(web::JsonWriter &writer, const BtWebStatus &bt) noexcept
 
 } // namespace
 
-const char *webGnssStateName(::gnss::State state) noexcept
+const char *gnssStateName(::gnss::State state) noexcept
 {
     switch (state) {
     case ::gnss::State::kOff:
@@ -149,7 +149,7 @@ const char *webGnssStateName(::gnss::State state) noexcept
     }
 }
 
-const char *webGnssFixName(const ::gnss::Fix &fix) noexcept
+const char *gnssFixName(const ::gnss::Fix &fix) noexcept
 {
     if (!fix.valid) {
         return "none";
@@ -187,7 +187,10 @@ bool writeSetting(web::JsonWriter &writer, std::string_view key,
         return writer.writeBool(key, value.boolVal);
     case settings::ValueKind::kString:
         return writer.writeString(key, value.textView());
+    case settings::ValueKind::kBytes:
     default:
+        // kBytes 仅用于手机专用键（如 phone.sn_pn），由 buildConfigFrame 的 access::kWeb 过滤排除；
+        // 显式归入拒绝分支防止将来放宽权限时误输出二进制字段。
         return false;
     }
 }
@@ -287,7 +290,7 @@ size_t buildConfigFrame(const settings::Service &service, std::span<char> out) n
     constexpr std::string_view kGatePrefix = "gnss.gga_gate.";
     service.forEach([&](const settings::KeySpec &spec) noexcept {
         settings::Value value{};
-        if (!ok || !service.get(spec.id, value)) {
+        if (!ok || (spec.access & settings::access::kWeb) == 0U || !service.get(spec.id, value)) {
             return;
         }
         if (spec.name.starts_with(kGatePrefix)) {

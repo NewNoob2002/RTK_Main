@@ -14,10 +14,11 @@ enum class GnssSubVerb : uint8_t {
     kSetOut = 4,
     kReadback = 5, // 控制台 gnss config：读回模块配置（ADR-0012 §2.7），无参数
     // 6..8 已被 GnssMaintenanceVerb（kSave/kFactoryReset/kBaud）占用，见 GnssModuleCmds.cpp 的 static_assert。
-    kMode = 9,         // 工作模式切换：args[0] = WorkModeKind, args[1] = saveOnSuccess(0/1)
-    kSetBase = 10,     // 更新并持久化 gnss.base 字段子包：args[0] = BasePatchKind
-    kPhonePpp = 11,    // 手机 0x33 Survey：args[0] = 0/1。
-    kPhoneSatCfg = 12, // 手机 0x06 Survey：args[0..5] = {cutoffDeg, gps, glo, bds, gal, sbas}。
+    kMode = 9,      // 工作模式切换：args[0] = WorkModeKind, args[1] = saveOnSuccess(0/1)
+    kSetBase = 10,  // 更新并持久化 gnss.base 字段子包：args[0] = BasePatchKind
+    kApplyPpp = 11, // 接收机 PPP 开关：args[0] = 0/1。
+    kApplySatTrack =
+        12, // 截止角与跟踪星座配置：args[0..5] = {cutoffDeg, gps, glo, bds, gal, sbas}。
     kSetGgaGate =
         13, // Q1 GGA 质量门控：args[0]=flags(bit0=改开关,bit1=改min_sats), [1]=en, [2]=minSats
     kApplyRate = 14,

@@ -8,10 +8,14 @@
 #include <cstdio>
 
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "AppContext.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
+#include "rtos/EspStatus.hpp"
+#include "settings/Service.hpp"
 
 namespace app {
 
@@ -127,6 +131,62 @@ bool submit(const fw::Command &command, const char *what) noexcept
         return false;
     }
     return report(what, result);
+}
+
+const char *settingsErrorText(settings::Error error) noexcept
+{
+    switch (error) {
+    case settings::Error::kOk:
+        return "ok";
+    case settings::Error::kUnknownKey:
+        return "unknown key";
+    case settings::Error::kBadValue:
+        return "bad value";
+    case settings::Error::kLocked:
+        return "locked";
+    case settings::Error::kBusy:
+        return "busy";
+    case settings::Error::kUnsupported:
+        return "unsupported";
+    case settings::Error::kTimeout:
+        return "timeout";
+    case settings::Error::kFailed:
+    default:
+        return "failed";
+    }
+}
+
+bool submitSetting(std::string_view key, std::string_view value, bool factoryUnlocked,
+                   uint32_t timeoutMs, fw::CommandResult &out, settings::Error &errOut) noexcept
+{
+    constexpr uint32_t kPollStepMs = 20U;
+    out = {};
+    settings::Ticket ticket{};
+    auto &service = appContext().settings;
+    const settings::Error postErr =
+        service.set(key, value, settings::Caller::kConsole, ticket, factoryUnlocked);
+    if (postErr != settings::Error::kOk) {
+        errOut = postErr;
+        return false;
+    }
+    const uint32_t startMs = rtos::nowMs();
+    for (;;) {
+        const auto state = service.poll(ticket, out);
+        if (state == settings::PollState::kDone) {
+            errOut = settings::fromResult(out.status);
+            return fw::isOk(out.status);
+        }
+        if (state != settings::PollState::kPending) {
+            errOut = settings::Error::kFailed;
+            return false;
+        }
+        if ((rtos::nowMs() - startMs) >= timeoutMs) {
+            service.cancel(ticket);
+            errOut = settings::Error::kTimeout;
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(kPollStepMs));
+    }
 }
 
 } // namespace app

@@ -6,6 +6,7 @@
 #include "board/BoardProfile.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cinttypes>
 #include <cstring>
@@ -14,10 +15,6 @@
 #include "fw/Tlog.hpp"
 #include "core/LinkService.hpp"
 #include "esp_system.h"
-#if RTK_GNSS_ENABLED
-#include "def/GnssSubDef.hpp"
-#include "PppSequence.hpp"
-#endif
 #include "proto/Frame.hpp"
 #include "rtos/EspStatus.hpp"
 
@@ -26,116 +23,148 @@
 static_assert(proto::kMaxFrame <= SPP_SERVER_REPLY_RESERVE,
               "reply reserve must cover a full protocol frame");
 static_assert(fw::kAtomicUsable<TaskHandle_t>, "wake_task_ must be lock-free");
+static_assert(core::kSatCapGps == settings::const_bit::kGps &&
+                  core::kSatCapBds == settings::const_bit::kBds &&
+                  core::kSatCapGlo == settings::const_bit::kGlo &&
+                  core::kSatCapGal == settings::const_bit::kGal &&
+                  core::kSatCapSbas == settings::const_bit::kSbas,
+              "PhoneCompatService constellation cap bits must match settings::const_bit");
 
 namespace app {
 namespace {
 
 constexpr uint32_t kPhoneResetDelayMs = 250U; // >= 200 ms，确保 0x1E 应答发出后再执行复位
 constexpr uint32_t kPhoneResetPollMs = 50U;
+constexpr size_t kSatTrackTextBuf = 24U;
+constexpr uint8_t kHexNibbleMask = 0x0FU;
+constexpr unsigned kHexHighShift = 4U;
 
-/** @brief 读取手机天线高（0x24）。 @param ctx: AppContext 指针。 @retval 8 B 小端字节。 */
-core::AntennaHeight phoneReadHeight(const void *ctx) noexcept
+/** @brief 解析单个十六进制字符。 @param ch: ASCII 字符。 @param[out] out: 0..15。 @retval true 合法。 */
+bool parseHexNibble(char ch, uint8_t &out) noexcept
 {
-    return static_cast<const AppContext *>(ctx)->storage.phoneHeight();
-}
-
-/** @brief 登记手机天线高（0x24）。 @param ctx: AppContext 指针。 @param height: 8 B 小端字节。 @param nowMs: 去抖起点。 @retval true 已登记。 */
-bool phoneSetHeight(void *ctx, const core::AntennaHeight &height, uint32_t nowMs) noexcept
-{
-    return static_cast<AppContext *>(ctx)->storage.setPhoneHeight(height, nowMs);
-}
-
-/** @brief 查询当前接收机是否支持 PPP（0x33 Survey）。 @param ctx: AppContext 指针。 @retval true 支持。 */
-bool phonePppSupported(const void *ctx) noexcept
-{
-#if RTK_GNSS_ENABLED
-    const auto status = static_cast<const AppContext *>(ctx)->data.gnssStatus.read();
-    return status.enabled && ::gnss::supportsPpp(status.model);
-#else
-    static_cast<void>(ctx);
+    constexpr uint8_t kHexAlphaBase = 10U;
+    if ((ch >= '0') && (ch <= '9')) {
+        out = static_cast<uint8_t>(ch - '0');
+        return true;
+    }
+    if ((ch >= 'A') && (ch <= 'F')) {
+        out = static_cast<uint8_t>(kHexAlphaBase + (ch - 'A'));
+        return true;
+    }
+    if ((ch >= 'a') && (ch <= 'f')) {
+        out = static_cast<uint8_t>(kHexAlphaBase + (ch - 'a'));
+        return true;
+    }
     return false;
-#endif
 }
 
-/** @brief 读取当前 PPP 开关（不支持时恒返回 false）。 @param ctx: AppContext 指针。 @retval PPP 状态。 */
-bool phoneReadPpp(const void *ctx) noexcept
+/** @brief 将定长字节编码为大写十六进制文本。 @param bytes: 输入字节。 @param[out] out: 输出缓冲。 @retval 编码视图。 */
+std::string_view encodeHexUpper(std::span<const uint8_t> bytes, std::span<char> out) noexcept
 {
-    if (!phonePppSupported(ctx)) {
+    constexpr std::string_view kHex = "0123456789ABCDEF";
+    if (bytes.size() * 2U > out.size()) {
+        return {};
+    }
+    size_t pos = 0U;
+    for (const uint8_t byte : bytes) {
+        out[pos++] = kHex[static_cast<size_t>((byte >> kHexHighShift) & kHexNibbleMask)];
+        out[pos++] = kHex[static_cast<size_t>(byte & kHexNibbleMask)];
+    }
+    return std::string_view{out.data(), pos};
+}
+
+/** @brief 将定长十六进制文本解码到字节缓冲。 @param text: 十六进制串。 @param[out] out: 输出字节。 @retval true 长度匹配且字符合法。 */
+bool decodeHexFixed(std::string_view text, std::span<uint8_t> out) noexcept
+{
+    if (text.size() != out.size() * 2U) {
         return false;
     }
-    return static_cast<const AppContext *>(ctx)->data.phonePppEnabled.read().value_or(false);
+    for (size_t i = 0U; i < out.size(); ++i) {
+        uint8_t hi = 0U;
+        uint8_t lo = 0U;
+        if (!parseHexNibble(text[i * 2U], hi) || !parseHexNibble(text[(i * 2U) + 1U], lo)) {
+            return false;
+        }
+        out[i] = static_cast<uint8_t>((hi << kHexHighShift) | lo);
+    }
+    return true;
 }
+
+/** @brief 解析逗号分隔的 6 项卫星跟踪配置文本。 @param text: "<cutoff>,<gps>,<glo>,<bds>,<gal>,<sbas>"。 @param[out] out: 配置结果。 @retval true 解析成功。 */
+bool parseSatTrackText(std::string_view text, core::SatTrackConfig &out) noexcept
+{
+    constexpr size_t kFieldCount = 6U;
+    constexpr uint32_t kDecimalBase = 10U;
+    std::array<uint8_t, kFieldCount> fields{};
+    std::string_view rest = text;
+    for (size_t idx = 0U; idx < kFieldCount; ++idx) {
+        const size_t sep = rest.find(',');
+        const bool isLast = (idx + 1U) == kFieldCount;
+        if (isLast != (sep == std::string_view::npos)) {
+            return false;
+        }
+        const std::string_view part = isLast ? rest : rest.substr(0U, sep);
+        if (part.empty()) {
+            return false;
+        }
+        uint32_t val = 0U;
+        for (const char ch : part) {
+            if ((ch < '0') || (ch > '9')) {
+                return false;
+            }
+            val = (val * kDecimalBase) + static_cast<uint32_t>(ch - '0');
+            if (val > UINT8_MAX) {
+                return false;
+            }
+        }
+        // 已检查 val <= UINT8_MAX，缩窄到 uint8_t 无损。
+        fields[idx] = static_cast<uint8_t>(val);
+        if (!isLast) {
+            rest.remove_prefix(sep + 1U);
+        }
+    }
+    const auto decoded = core::decodeSatTrackConfig(fields);
+    if (!decoded.has_value()) {
+        return false;
+    }
+    out = *decoded;
+    return true;
+}
+
+/** @brief 轮询一条 settings::Service 异步凭据。 @param settings: 设置服务。 @param[in,out] ticket: 凭据（完成时清零）。 @retval 空表示进行中，布尔表示最终成败。 */
+std::optional<bool> pollTicket(const settings::Service &settings, settings::Ticket &ticket) noexcept
+{
+    if (ticket.seq == 0U) {
+        return false;
+    }
+    fw::CommandResult res{};
+    const auto state = settings.poll(ticket, res);
+    if (state == settings::PollState::kPending) {
+        return std::nullopt;
+    }
+    ticket = {};
+    return (state == settings::PollState::kDone) && fw::isOk(res.status);
+}
+
+/** @brief 取消一条在途 settings::Service 异步凭据。 @param settings: 设置服务。 @param[in,out] ticket: 凭据。 */
+void cancelTicket(const settings::Service &settings, settings::Ticket &ticket) noexcept
+{
+    if (ticket.seq != 0U) {
+        settings.cancel(ticket);
+        ticket = {};
+    }
+}
+
+} // namespace
 
 #if RTK_GNSS_ENABLED
-/** @brief 投递 PPP 开关命令到 kIo（不支持时直接返回 false，不发命令）。 @param ctx: AppContext 指针。 @param enabled: 开关值。 @retval true 已投递。 */
-bool phoneStartPpp(void *ctx, bool enabled) noexcept
+size_t BtLinkModule::onReadLatestGsv(const void *ctx, std::span<uint8_t> dst) noexcept
 {
-    if (!phonePppSupported(ctx)) {
-        return false;
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr)) {
+        return 0U;
     }
-    auto &data = static_cast<AppContext *>(ctx)->data;
-    const auto previous = data.phonePppCommand.read().seq;
-    if (previous != data.phonePppResult.read().seq) {
-        return false;
-    }
-    fw::Command command{};
-    command.target = id(ModuleKind::kGnss);
-    command.verb = static_cast<uint8_t>(GnssSubVerb::kPhonePpp);
-    command.seq = previous == UINT32_MAX ? 1U : previous + 1U;
-    command.argLen = 1U;
-    command.args[0] = enabled ? 1U : 0U;
-    data.phonePppCommand.write(command);
-    return true;
-}
-
-/** @brief 轮询 kIo 的 PPP 执行结果。 @param ctx: AppContext 指针。 @retval 完成时返回成败，否则为空。 */
-std::optional<bool> phonePppResult(const void *ctx) noexcept
-{
-    const auto &data = static_cast<const AppContext *>(ctx)->data;
-    const auto result = data.phonePppResult.read();
-    if (result.seq != data.phonePppCommand.read().seq) {
-        return std::nullopt;
-    }
-    return fw::isOk(result.status);
-}
-
-/** @brief 投递 0x06 截止角/星座配置到 kIo。 @param ctx: AppContext 指针。 @param cfg: 合法配置。 @retval true 已投递。 */
-bool phoneStartSatConfig(void *ctx, const core::SatTrackConfig &cfg) noexcept
-{
-    auto &data = static_cast<AppContext *>(ctx)->data;
-    const auto status = data.gnssStatus.read();
-    const auto previous = data.phoneSatCommand.read().seq;
-    if ((previous != data.phoneSatResult.read().seq) || !status.enabled ||
-        !::gnss::supportsSatMask(status.model)) {
-        return false;
-    }
-    fw::Command command{};
-    command.target = id(ModuleKind::kGnss);
-    command.verb = static_cast<uint8_t>(GnssSubVerb::kPhoneSatCfg);
-    command.seq = previous == UINT32_MAX ? 1U : previous + 1U;
-    const auto encoded = core::encodeSatTrackConfig(cfg);
-    // encoded.size() == 6 <= fw::kCommandArgBytes(32)，缩窄安全。
-    command.argLen = static_cast<uint8_t>(encoded.size());
-    std::copy(encoded.begin(), encoded.end(), command.args.begin());
-    data.phoneSatCommand.write(command);
-    return true;
-}
-
-/** @brief 轮询 kIo 的 0x06 卫星配置执行结果。 @param ctx: AppContext 指针。 @retval 完成时返回成败，否则为空。 */
-std::optional<bool> phoneSatConfigResult(const void *ctx) noexcept
-{
-    const auto &data = static_cast<const AppContext *>(ctx)->data;
-    const auto result = data.phoneSatResult.read();
-    if (result.seq != data.phoneSatCommand.read().seq) {
-        return std::nullopt;
-    }
-    return fw::isOk(result.status);
-}
-
-/** @brief 读取最近单句 GSV 原文（0x0A Nav）。 @param ctx: AppContext 指针。 @param[out] dst: 输出缓冲。 @retval 有效字节数。 */
-size_t phoneReadLatestGsv(const void *ctx, std::span<uint8_t> dst) noexcept
-{
-    const auto gsv = static_cast<const AppContext *>(ctx)->data.gnssLatestGsv.read();
+    const auto gsv = self->context_->data.gnssLatestGsv.read();
     if ((gsv.len == 0U) || (gsv.len > dst.size()) || (gsv.len > gsv.bytes.size())) {
         return 0U;
     }
@@ -144,123 +173,301 @@ size_t phoneReadLatestGsv(const void *ctx, std::span<uint8_t> dst) noexcept
 }
 #endif
 
-/** @brief 读取已保存或默认的 0x06 卫星配置。 @param ctx: AppContext 指针。 @retval 卫星配置。 */
-core::SatTrackConfig phoneReadSatConfig(const void *ctx) noexcept
+core::PhoneNtripConfig BtLinkModule::onReadNtrip(const void *ctx) noexcept
 {
-    return static_cast<const AppContext *>(ctx)->data.phoneSatConfig.read().value_or(
-        core::SatTrackConfig::defaults());
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    return ((self != nullptr) && (self->context_ != nullptr)) ? self->context_->storage.phoneNtrip()
+                                                              : core::PhoneNtripConfig{};
 }
 
-/** @brief 读取 0x08 Nav SN/PN（SN 未写 NVS 时回退当前派生 SN）。 @param ctx: AppContext 指针。 @retval 32 B 组合字段。 */
-core::PhoneSnPn phoneReadSnPn(const void *ctx) noexcept
+bool BtLinkModule::onSetNtrip(
+    void *ctx, // NOLINT(misc-const-correctness): PhoneCompatOps 固定为 void *ctx
+    const core::PhoneNtripConfig &cfg, uint32_t nowMs) noexcept
 {
-    const auto &context = *static_cast<const AppContext *>(ctx);
-    auto out = context.storage.phoneSnPn();
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    return (self != nullptr) && (self->context_ != nullptr) &&
+           self->context_->storage.setPhoneNtrip(cfg, nowMs);
+}
+
+core::PhoneJsonServerConfig BtLinkModule::onReadJsonServer(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    return ((self != nullptr) && (self->context_ != nullptr))
+               ? self->context_->storage.phoneJsonServer()
+               : core::PhoneJsonServerConfig{};
+}
+
+bool BtLinkModule::onSetJsonServer(
+    void *ctx, // NOLINT(misc-const-correctness): PhoneCompatOps 固定为 void *ctx
+    const core::PhoneJsonServerConfig &cfg, uint32_t nowMs) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    return (self != nullptr) && (self->context_ != nullptr) &&
+           self->context_->storage.setPhoneJsonServer(cfg, nowMs);
+}
+
+core::PhoneThingsboardConfig BtLinkModule::onReadThingsboard(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    return ((self != nullptr) && (self->context_ != nullptr))
+               ? self->context_->storage.phoneThingsboard()
+               : core::PhoneThingsboardConfig{};
+}
+
+bool BtLinkModule::onSetThingsboard(
+    void *ctx, // NOLINT(misc-const-correctness): PhoneCompatOps 固定为 void *ctx
+    const core::PhoneThingsboardConfig &cfg, uint32_t nowMs) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    return (self != nullptr) && (self->context_ != nullptr) &&
+           self->context_->storage.setPhoneThingsboard(cfg, nowMs);
+}
+
+bool BtLinkModule::onScheduleReset(void *ctx, bool factoryReset, bool reboot,
+                                   uint32_t nowMs) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    return (self != nullptr) && self->schedulePhoneReset(factoryReset, reboot, nowMs);
+}
+
+core::AntennaHeight BtLinkModule::onReadHeight(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    core::AntennaHeight height{};
+    settings::Value value{};
+    if ((self != nullptr) && (self->context_ != nullptr) &&
+        self->context_->settings.get("phone.height", value)) {
+        static_cast<void>(decodeHexFixed(value.textView(), height));
+    }
+    return height;
+}
+
+bool BtLinkModule::onStartHeight(void *ctx, const core::AntennaHeight &height) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr) || (self->height_ticket_.seq != 0U)) {
+        return false;
+    }
+    std::array<char, core::kAntennaHeightBytes * 2U> hex{};
+    const auto text = encodeHexUpper(height, hex);
+    const auto err = self->context_->settings.set("phone.height", text, settings::Caller::kPhone,
+                                                  self->height_ticket_);
+    return err == settings::Error::kOk;
+}
+
+std::optional<bool> BtLinkModule::onHeightResult(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr)) {
+        return false;
+    }
+    return pollTicket(self->context_->settings, self->height_ticket_);
+}
+
+void BtLinkModule::onCancelHeight(void *ctx) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self != nullptr) && (self->context_ != nullptr)) {
+        cancelTicket(self->context_->settings, self->height_ticket_);
+    }
+}
+
+bool BtLinkModule::onPppSupported(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    settings::Domain dom{};
+    return (self != nullptr) && (self->context_ != nullptr) &&
+           self->context_->settings.domain("gnss.ppp", dom) && dom.supported;
+}
+
+bool BtLinkModule::onReadPpp(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    settings::Value value{};
+    return (self != nullptr) && (self->context_ != nullptr) &&
+           self->context_->settings.get("gnss.ppp", value) && value.boolVal;
+}
+
+bool BtLinkModule::onStartPpp(void *ctx, bool enabled) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr) || (self->ppp_ticket_.seq != 0U)) {
+        return false;
+    }
+    const auto err = self->context_->settings.set("gnss.ppp", enabled ? "1" : "0",
+                                                  settings::Caller::kPhone, self->ppp_ticket_);
+    return err == settings::Error::kOk;
+}
+
+std::optional<bool> BtLinkModule::onPppResult(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr)) {
+        return false;
+    }
+    return pollTicket(self->context_->settings, self->ppp_ticket_);
+}
+
+void BtLinkModule::onCancelPpp(void *ctx) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self != nullptr) && (self->context_ != nullptr)) {
+        cancelTicket(self->context_->settings, self->ppp_ticket_);
+    }
+}
+
+uint8_t BtLinkModule::onSatCapsMask(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    settings::Domain dom{};
+    if ((self == nullptr) || (self->context_ == nullptr) ||
+        !self->context_->settings.domain("gnss.sat_track", dom) || !dom.supported) {
+        return 0U;
+    }
+    return dom.mask;
+}
+
+core::SatTrackConfig BtLinkModule::onReadSatConfig(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    settings::Value value{};
+    core::SatTrackConfig cfg = core::SatTrackConfig::defaults();
+    if ((self != nullptr) && (self->context_ != nullptr) &&
+        self->context_->settings.get("gnss.sat_track", value)) {
+        static_cast<void>(parseSatTrackText(value.textView(), cfg));
+    }
+    return cfg;
+}
+
+bool BtLinkModule::onStartSatConfig(void *ctx, const core::SatTrackConfig &cfg) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr) || (self->sat_ticket_.seq != 0U)) {
+        return false;
+    }
+    std::array<char, kSatTrackTextBuf> buf{};
+    const int written =
+        std::snprintf(buf.data(), buf.size(), "%u,%u,%u,%u,%u,%u",
+                      static_cast<unsigned>(cfg.cutoffDeg), static_cast<unsigned>(cfg.gps),
+                      static_cast<unsigned>(cfg.glo), static_cast<unsigned>(cfg.bds),
+                      static_cast<unsigned>(cfg.gal), static_cast<unsigned>(cfg.sbas));
+    if (written <= 0 || static_cast<size_t>(written) >= buf.size()) {
+        return false;
+    }
+    const std::string_view text{buf.data(), static_cast<size_t>(written)};
+    const auto err = self->context_->settings.set("gnss.sat_track", text, settings::Caller::kPhone,
+                                                  self->sat_ticket_);
+    return err == settings::Error::kOk;
+}
+
+std::optional<bool> BtLinkModule::onSatConfigResult(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr)) {
+        return false;
+    }
+    return pollTicket(self->context_->settings, self->sat_ticket_);
+}
+
+void BtLinkModule::onCancelSatConfig(void *ctx) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self != nullptr) && (self->context_ != nullptr)) {
+        cancelTicket(self->context_->settings, self->sat_ticket_);
+    }
+}
+
+core::PhoneSnPn BtLinkModule::onReadSnPn(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    core::PhoneSnPn out{};
+    if ((self == nullptr) || (self->context_ == nullptr)) {
+        return out;
+    }
+    settings::Value value{};
+    if (self->context_->settings.get("phone.sn_pn", value) &&
+        (value.kind == settings::ValueKind::kBytes) && (value.textLen == core::kPhoneSnPnBytes)) {
+        std::memcpy(out.data(), value.text.data(), core::kPhoneSnPnBytes);
+    }
     if (out[0U] == 0U) {
-        const auto sn = context.bt_link.deviceSn();
+        const auto sn = self->deviceSn();
         const size_t copyLen = std::min(sn.size(), core::kPhoneSnBytes);
         std::memcpy(out.data(), sn.data(), copyLen);
     }
     return out;
 }
 
-/** @brief 保存 0x08 Nav SN/PN 并同步内存 DeviceInfo.sn。 @param ctx: AppContext 指针。 @param snPn: 32 B 组合字段。 @param nowMs: 去抖起点。 @retval true 已保存。 */
-bool phoneSetSnPn(void *ctx, const core::PhoneSnPn &snPn, uint32_t nowMs) noexcept
+bool BtLinkModule::onStartSnPn(void *ctx, const core::PhoneSnPn &snPn) noexcept
 {
-    auto &context = *static_cast<AppContext *>(ctx);
-    if (!context.storage.setPhoneSnPn(snPn, nowMs)) {
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr) || (self->snpn_ticket_.seq != 0U)) {
         return false;
     }
-    size_t snLen = 0U;
-    while ((snLen < core::kPhoneSnBytes) && (snPn[snLen] != 0U)) {
-        ++snLen;
+    std::array<char, core::kPhoneSnPnBytes * 2U> hex{};
+    const auto text = encodeHexUpper(snPn, hex);
+    const auto err = self->context_->settings.set("phone.sn_pn", text, settings::Caller::kPhone,
+                                                  self->snpn_ticket_);
+    return err == settings::Error::kOk;
+}
+
+std::optional<bool> BtLinkModule::onSnPnResult(const void *ctx) noexcept
+{
+    const auto *self = static_cast<const BtLinkModule *>(ctx);
+    if ((self == nullptr) || (self->context_ == nullptr)) {
+        return false;
     }
-    // 仅在 kLink 上更新，按字节视图构造有效 SN 字符串。
-    std::array<char, core::kPhoneSnBytes> snChars{};
-    for (size_t i = 0U; i < snLen; ++i) {
-        snChars[i] = static_cast<char>(snPn[i]);
+    const auto res = pollTicket(self->context_->settings, self->snpn_ticket_);
+    if (res.has_value() && *res) {
+        settings::Value snVal{};
+        if (self->context_->settings.get("factory.sn", snVal)) {
+            self->context_->bt_link.updateDeviceSn(snVal.textView());
+        }
     }
-    context.bt_link.updateDeviceSn(std::string_view{snChars.data(), snLen});
-    return true;
+    return res;
 }
 
-/** @brief 读取 0x12 NTRIP 配置。 @param ctx: AppContext 指针。 @retval 112 B 配置块。 */
-core::PhoneNtripConfig phoneReadNtrip(const void *ctx) noexcept
+void BtLinkModule::onCancelSnPn(void *ctx) noexcept
 {
-    return static_cast<const AppContext *>(ctx)->storage.phoneNtrip();
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self != nullptr) && (self->context_ != nullptr)) {
+        cancelTicket(self->context_->settings, self->snpn_ticket_);
+    }
 }
 
-/** @brief 保存 0x12 NTRIP 配置。 @param ctx: AppContext 指针。 @param cfg: 112 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 */
-bool phoneSetNtrip(void *ctx, const core::PhoneNtripConfig &cfg, uint32_t nowMs) noexcept
-{
-    return static_cast<AppContext *>(ctx)->storage.setPhoneNtrip(cfg, nowMs);
-}
-
-/** @brief 读取 0x32 JSON 服务器配置。 @param ctx: AppContext 指针。 @retval 42 B 配置块。 */
-core::PhoneJsonServerConfig phoneReadJsonServer(const void *ctx) noexcept
-{
-    return static_cast<const AppContext *>(ctx)->storage.phoneJsonServer();
-}
-
-/** @brief 保存 0x32 JSON 服务器配置。 @param ctx: AppContext 指针。 @param cfg: 42 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 */
-bool phoneSetJsonServer(void *ctx, const core::PhoneJsonServerConfig &cfg, uint32_t nowMs) noexcept
-{
-    return static_cast<AppContext *>(ctx)->storage.setPhoneJsonServer(cfg, nowMs);
-}
-
-/** @brief 读取 0x33 Nav Thingsboard 配置。 @param ctx: AppContext 指针。 @retval 86 B 配置块。 */
-core::PhoneThingsboardConfig phoneReadThingsboard(const void *ctx) noexcept
-{
-    return static_cast<const AppContext *>(ctx)->storage.phoneThingsboard();
-}
-
-/** @brief 保存 0x33 Nav Thingsboard 配置。 @param ctx: AppContext 指针。 @param cfg: 86 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 */
-bool phoneSetThingsboard(void *ctx, const core::PhoneThingsboardConfig &cfg,
-                         uint32_t nowMs) noexcept
-{
-    return static_cast<AppContext *>(ctx)->storage.setPhoneThingsboard(cfg, nowMs);
-}
-
-/** @brief 登记 0x1E 延迟恢复出厂或重启。 @param ctx: AppContext 指针。 @param factoryReset: 是否擦除用户 NVS。 @param reboot: 是否重启。 @param nowMs: 当前时钟。 @retval true 已受理。 */
-bool phoneScheduleReset(void *ctx, bool factoryReset, bool reboot, uint32_t nowMs) noexcept
-{
-    return static_cast<AppContext *>(ctx)->bt_link.schedulePhoneReset(factoryReset, reboot, nowMs);
-}
-
-/** @brief 绑定手机设置到应用存储、GNSS 与复位逻辑。 @param context: 同寿命上下文。 @retval 手机服务回调。 */
-core::services::PhoneCompatOps phoneCompatOps(AppContext &context) noexcept
+core::services::PhoneCompatOps BtLinkModule::makePhoneCompatOps() noexcept
 {
     return {
-        .ctx = &context,
-        .readHeight = &phoneReadHeight,
-        .setHeight = &phoneSetHeight,
-        .pppSupported = &phonePppSupported,
-        .readPpp = &phoneReadPpp,
+        .ctx = this,
+        .readHeight = &BtLinkModule::onReadHeight,
+        .startHeight = &BtLinkModule::onStartHeight,
+        .heightResult = &BtLinkModule::onHeightResult,
+        .cancelHeight = &BtLinkModule::onCancelHeight,
+        .pppSupported = &BtLinkModule::onPppSupported,
+        .readPpp = &BtLinkModule::onReadPpp,
+        .startPpp = &BtLinkModule::onStartPpp,
+        .pppResult = &BtLinkModule::onPppResult,
+        .cancelPpp = &BtLinkModule::onCancelPpp,
+        .satCapsMask = &BtLinkModule::onSatCapsMask,
+        .readSatConfig = &BtLinkModule::onReadSatConfig,
+        .startSatConfig = &BtLinkModule::onStartSatConfig,
+        .satConfigResult = &BtLinkModule::onSatConfigResult,
+        .cancelSatConfig = &BtLinkModule::onCancelSatConfig,
+        .readSnPn = &BtLinkModule::onReadSnPn,
+        .startSnPn = &BtLinkModule::onStartSnPn,
+        .snPnResult = &BtLinkModule::onSnPnResult,
+        .cancelSnPn = &BtLinkModule::onCancelSnPn,
 #if RTK_GNSS_ENABLED
-        .startPpp = &phoneStartPpp,
-        .pppResult = &phonePppResult,
+        .readLatestGsv = &BtLinkModule::onReadLatestGsv,
 #endif
-        .readSatConfig = &phoneReadSatConfig,
-#if RTK_GNSS_ENABLED
-        .startSatConfig = &phoneStartSatConfig,
-        .satConfigResult = &phoneSatConfigResult,
-#endif
-        .readSnPn = &phoneReadSnPn,
-        .setSnPn = &phoneSetSnPn,
-#if RTK_GNSS_ENABLED
-        .readLatestGsv = &phoneReadLatestGsv,
-#endif
-        .readNtrip = &phoneReadNtrip,
-        .setNtrip = &phoneSetNtrip,
-        .readJsonServer = &phoneReadJsonServer,
-        .setJsonServer = &phoneSetJsonServer,
-        .readThingsboard = &phoneReadThingsboard,
-        .setThingsboard = &phoneSetThingsboard,
-        .scheduleReset = &phoneScheduleReset,
+        .readNtrip = &BtLinkModule::onReadNtrip,
+        .setNtrip = &BtLinkModule::onSetNtrip,
+        .readJsonServer = &BtLinkModule::onReadJsonServer,
+        .setJsonServer = &BtLinkModule::onSetJsonServer,
+        .readThingsboard = &BtLinkModule::onReadThingsboard,
+        .setThingsboard = &BtLinkModule::onSetThingsboard,
+        .scheduleReset = &BtLinkModule::onScheduleReset,
     };
 }
-
-} // namespace
 
 std::string_view BtLinkModule::deviceSn() const noexcept
 {
@@ -464,7 +671,7 @@ fw::Result BtLinkModule::init() noexcept
     deviceService.setSatTrackSurveyHook(&core::services::PhoneCompatService::handleSurveySatTrack,
                                         &phone_compat_);
     auto &configService = config_service_.emplace();
-    phone_compat_.ops = phoneCompatOps(ctx());
+    phone_compat_.ops = makePhoneCompatOps();
     auto &alarmService = alarm_service_.emplace(alarm, link_manager_, deviceService.info());
     auto &pairService = pair_service_.emplace(link_manager_);
 #if RTK_GNSS_ENABLED
@@ -560,9 +767,9 @@ void BtLinkModule::wait(uint32_t maxMs) noexcept
     static_cast<void>(ulTaskNotifyTake(pdTRUE, 0U));
     if (!pollAndCheckReady(rtos::nowMs()) && (maxMs > 0U)) {
         if (!pollAndCheckReady(rtos::nowMs())) {
-            const uint32_t boundedMs = (pending_reset_ != PendingReset::kNone)
-                                           ? std::min(maxMs, kPhoneResetPollMs)
-                                           : maxMs;
+            const bool fastPoll = (pending_reset_ != PendingReset::kNone) ||
+                                  (ppp_ticket_.seq != 0U) || (sat_ticket_.seq != 0U);
+            const uint32_t boundedMs = fastPoll ? std::min(maxMs, kPhoneResetPollMs) : maxMs;
             const TickType_t ticks = pdMS_TO_TICKS(boundedMs);
             const TickType_t waitTicks = (ticks == 0U) ? 1U : ticks;
             static_cast<void>(ulTaskNotifyTake(pdTRUE, waitTicks));
@@ -605,7 +812,8 @@ bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
     collectWhitelistDirty();
     publishLink(rtos::nowMs());
     pollPhoneReset(rtos::nowMs());
-    bool pending = gnssMore || baseMore;
+    // 自投递给同执行器 StorageModule 的设置凭据在途时立即返回 true，促使其在下一轮即刻出队。
+    bool pending = gnssMore || baseMore || (height_ticket_.seq != 0U) || (snpn_ticket_.seq != 0U);
     for (const auto &entry : sessions_) {
         pending =
             pending || (entry.used && entry.demuxReady && !linkService().paused(entry.handle) &&

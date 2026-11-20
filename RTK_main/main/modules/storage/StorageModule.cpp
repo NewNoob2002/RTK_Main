@@ -293,6 +293,8 @@ fw::Result StorageModule::init() noexcept
     system.sn = sn_;
     ctx().data.systemStatus.write(system);
     publishSettingsSn();
+    ctx().data.phoneHeight.write(phone_height_);
+    ctx().data.phonePn.write(phone_pn_);
     initialized_ = true;
     status_.btPairNext = bt_pair_next_;
     ctx().data.storeStatus.write(status_);
@@ -379,6 +381,7 @@ fw::Result StorageModule::loadPhoneHeight(void *, std::span<const uint8_t> in) n
     auto &storage = appContext().storage;
     std::copy(in.begin(), in.end(), storage.phone_height_.begin());
     storage.phone_height_state_.known = true;
+    appContext().data.phoneHeight.write(storage.phone_height_);
     return fw::Result::kOk;
 }
 
@@ -387,7 +390,7 @@ fw::Result StorageModule::loadPhonePpp(void *, std::span<const uint8_t> in) noex
     if (in.size() != 1U || in.front() > 1U) {
         return fw::Result::kInvalidArg;
     }
-    appContext().data.phonePppEnabled.write(in.front() != 0U);
+    appContext().data.gnssPppEnabled.write(in.front() != 0U);
     return fw::Result::kOk;
 }
 
@@ -397,7 +400,7 @@ fw::Result StorageModule::loadPhoneSatCfg(void *, std::span<const uint8_t> in) n
     if (!decoded.has_value()) {
         return fw::Result::kInvalidArg;
     }
-    appContext().data.phoneSatConfig.write(decoded);
+    appContext().data.gnssSatTrack.write(decoded);
     return fw::Result::kOk;
 }
 
@@ -409,6 +412,7 @@ fw::Result StorageModule::loadPhonePn(void *, std::span<const uint8_t> in) noexc
     auto &storage = appContext().storage;
     std::copy(in.begin(), in.end(), storage.phone_pn_.begin());
     storage.phone_pn_state_.known = true;
+    appContext().data.phonePn.write(storage.phone_pn_);
     return fw::Result::kOk;
 }
 
@@ -534,7 +538,11 @@ void StorageModule::pollPhoneBlobs(uint32_t nowMs) noexcept
 
 bool StorageModule::setPhoneHeight(const core::AntennaHeight &height, uint32_t nowMs) noexcept
 {
-    return setPhoneBlob(phone_height_, phone_height_state_, height, nowMs);
+    if (!setPhoneBlob(phone_height_, phone_height_state_, height, nowMs)) {
+        return false;
+    }
+    ctx().data.phoneHeight.write(phone_height_);
+    return true;
 }
 
 core::PhoneSnPn StorageModule::phoneSnPn() const noexcept
@@ -578,7 +586,11 @@ bool StorageModule::setPhoneSnPn(const core::PhoneSnPn &snPn, uint32_t nowMs) no
     if (!fw::isOk(result.status)) {
         return false;
     }
-    return setPhoneBlob(phone_pn_, phone_pn_state_, pnField, nowMs);
+    if (!setPhoneBlob(phone_pn_, phone_pn_state_, pnField, nowMs)) {
+        return false;
+    }
+    ctx().data.phonePn.write(phone_pn_);
+    return true;
 }
 
 bool StorageModule::setPhoneNtrip(const core::PhoneNtripConfig &cfg, uint32_t nowMs) noexcept
@@ -750,6 +762,75 @@ void StorageModule::setPairNextCmd(const fw::Command &cmd, fw::CommandResult &re
     result.status = fw::Result::kOk;
 }
 
+void StorageModule::setHeightCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept
+{
+    if (cmd.argLen != core::kAntennaHeightBytes) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    core::AntennaHeight height{};
+    std::copy_n(cmd.args.begin(), core::kAntennaHeightBytes, height.begin());
+    if (!core::validAntennaHeight(height)) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    const auto &boot = ctx().bootConfig;
+    if (!boot.userNvsReady || boot.safeDefaults) {
+        result.status = fw::Result::kInvalidState;
+        return;
+    }
+    if (!setPhoneHeight(height, rtos::nowMs())) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    result.status = fw::Result::kOk;
+}
+
+void StorageModule::setSnPnCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept
+{
+    if (cmd.argLen != core::kPhoneSnPnBytes) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    const auto &boot = ctx().bootConfig;
+    if (!boot.userNvsReady || boot.safeDefaults) {
+        result.status = fw::Result::kInvalidState;
+        return;
+    }
+    const auto snField = std::span<const uint8_t>{cmd.args}.first(core::kPhoneSnBytes);
+    const auto pnField =
+        std::span<const uint8_t>{cmd.args}.subspan(core::kPhoneSnBytes, core::kPhonePnBytes);
+    size_t snLen = 0U;
+    while ((snLen < snField.size()) && (snField[snLen] != 0U)) {
+        ++snLen;
+    }
+    for (const uint8_t ch : pnField) {
+        if (ch == 0U) {
+            break;
+        }
+        if ((ch == '\r') || (ch == '\n')) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+    }
+    fw::Command snCmd{};
+    snCmd.target = id(ModuleKind::kStorage);
+    snCmd.verb = verb(StorageVerb::kSaveSn);
+    // snLen <= core::kPhoneSnBytes(16) <= fw::kCommandArgBytes(32)，缩窄安全。
+    snCmd.argLen = static_cast<uint8_t>(snLen);
+    std::copy_n(snField.begin(), snLen, snCmd.args.begin());
+    saveSn(snCmd, result);
+    if (!fw::isOk(result.status)) {
+        return;
+    }
+    if (!setPhoneBlob(phone_pn_, phone_pn_state_, pnField, rtos::nowMs())) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    ctx().data.phonePn.write(phone_pn_);
+    result.status = fw::Result::kOk;
+}
+
 static_assert(verb(StorageVerb::kSaveSn) != StorageModule::kEraseUser &&
                   verb(StorageVerb::kSaveSn) != StorageModule::kEraseFactory &&
                   verb(StorageVerb::kWhitelistAdd) != StorageModule::kEraseUser &&
@@ -757,7 +838,11 @@ static_assert(verb(StorageVerb::kSaveSn) != StorageModule::kEraseUser &&
                   verb(StorageVerb::kWhitelistDel) != StorageModule::kEraseUser &&
                   verb(StorageVerb::kWhitelistDel) != StorageModule::kEraseFactory &&
                   verb(StorageVerb::kSetPairNext) != StorageModule::kEraseUser &&
-                  verb(StorageVerb::kSetPairNext) != StorageModule::kEraseFactory,
+                  verb(StorageVerb::kSetPairNext) != StorageModule::kEraseFactory &&
+                  verb(StorageVerb::kSetHeight) != StorageModule::kEraseUser &&
+                  verb(StorageVerb::kSetHeight) != StorageModule::kEraseFactory &&
+                  verb(StorageVerb::kSetSnPn) != StorageModule::kEraseUser &&
+                  verb(StorageVerb::kSetSnPn) != StorageModule::kEraseFactory,
               "StorageVerb values must not collide with kEraseUser/kEraseFactory");
 
 void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
@@ -784,6 +869,12 @@ void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result)
     case StorageVerb::kSetPairNext:
         setPairNextCmd(cmd, result);
         break;
+    case StorageVerb::kSetHeight:
+        setHeightCmd(cmd, result);
+        break;
+    case StorageVerb::kSetSnPn:
+        setSnPnCmd(cmd, result);
+        return;
     default:
         result.status = fw::Result::kInvalidArg;
         break;

@@ -4,8 +4,10 @@
 
 #include <cstddef>
 #include <span>
+#include <string_view>
 
 #include "data/AppData.hpp"
+#include "settings/Types.hpp"
 
 namespace app {
 
@@ -80,5 +82,29 @@ void formatMac(const core::BtAddr &addr, std::span<char, kMacStrBuf> out) noexce
  * @note 仅 console REPL 任务，可等待 kCommandTimeoutMs，非 ISR。
  */
 [[nodiscard]] bool submit(const fw::Command &command, const char *what) noexcept;
+
+/**
+ * @brief 将 settings::Error 转为简短可读错误文本
+ * @param error: 设置服务错误码
+ * @retval 静态错误说明字符串
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] const char *settingsErrorText(settings::Error error) noexcept;
+
+/**
+ * @brief 经 settings::Service 投递配置并轮询等待完成（仅 console REPL 任务）
+ * @param key: 设置键名
+ * @param value: 文本编码值
+ * @param factoryUnlocked: 当前工厂解锁状态
+ * @param timeoutMs: 最长等待时间（毫秒）
+ * @param[out] out: 执行器完成时的命令结果（仅完成时更新）
+ * @param[out] errOut: 服务受理、执行映射或超时错误码
+ * @retval true 受理并执行成功（errOut == settings::Error::kOk）
+ * @retval false 校验、权限、投递、执行失败或超时
+ * @note 仅 console REPL 任务，轮询间隔 20 ms，超时自动 cancel；非 ISR。
+ */
+[[nodiscard]] bool submitSetting(std::string_view key, std::string_view value, bool factoryUnlocked,
+                                 uint32_t timeoutMs, fw::CommandResult &out,
+                                 settings::Error &errOut) noexcept;
 
 } // namespace app

@@ -53,12 +53,12 @@ settings::Error validateWithCaps(const char *key, const settings::GnssCaps &caps
 }
 
 /**
- * @brief  校验注册表形状：16 项、键名唯一、KeyId 与下标一致、未知键返回空
+ * @brief  校验注册表形状：20 项、键名唯一、KeyId 与下标一致、未知键返回空
  */
 void testRegistryShape()
 {
     const auto table = settings::keyTable();
-    TEST_ASSERT_EQUAL_size_t(16U, table.size());
+    TEST_ASSERT_EQUAL_size_t(20U, table.size());
     for (size_t i = 0U; i < table.size(); ++i) {
         TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(i), static_cast<uint8_t>(table[i].id));
         TEST_ASSERT_NOT_NULL(table[i].domain);
@@ -190,6 +190,83 @@ void testPeriodMsToInterval()
     TEST_ASSERT_FALSE(settings::periodMsToInterval(128000, iv));
 }
 
+/**
+ * @brief  校验 SV3 新增手机/GNSS 键（gnss.ppp/gnss.sat_track/phone.height/phone.sn_pn）校验与域约束
+ */
+void testPhoneAndSatTrackKeys()
+{
+    auto caps = makeCm680Caps10Hz();
+    caps.pppSupported = false;
+    caps.constMask = settings::const_bit::kGps | settings::const_bit::kBds |
+                     settings::const_bit::kGlo | settings::const_bit::kGal |
+                     settings::const_bit::kSbas;
+    settings::CanonicalValue out{};
+
+    // CM680 不支持 PPP，domain.supported == false；UM98x 开启后合法 0/1。
+    {
+        const auto *spec = settings::findKey("gnss.ppp");
+        TEST_ASSERT_NOT_NULL(spec);
+        settings::Domain dom{};
+        spec->domain(caps, true, dom);
+        TEST_ASSERT_FALSE(dom.supported);
+        caps.pppSupported = true;
+        spec->domain(caps, true, dom);
+        TEST_ASSERT_TRUE(dom.supported);
+        TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                          static_cast<int>(settings::validateValue(*spec, dom, "1", out)));
+        TEST_ASSERT_EQUAL_INT32(1, out.number);
+        TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                          static_cast<int>(settings::validateValue(*spec, dom, "2", out)));
+    }
+
+    // gnss.sat_track：截止角 0..90，且仅允许 dom.mask 支持的星座置 1。
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(validateWithCaps("gnss.sat_track", caps, "15,1,0,1,1,1", out)));
+    TEST_ASSERT_EQUAL_UINT8(6U, out.size);
+    TEST_ASSERT_EQUAL_UINT8(15U, out.bytes[0]);
+    TEST_ASSERT_EQUAL_UINT8(1U, out.bytes[1]);
+    TEST_ASSERT_EQUAL_UINT8(0U, out.bytes[2]);
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kBadValue),
+        static_cast<int>(validateWithCaps("gnss.sat_track", caps, "91,1,1,1,1,1", out)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kBadValue),
+        static_cast<int>(validateWithCaps("gnss.sat_track", caps, "10,1,1,1,1", out)));
+    caps.constMask = settings::const_bit::kGps | settings::const_bit::kBds;
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kBadValue),
+        static_cast<int>(validateWithCaps("gnss.sat_track", caps, "10,1,1,1,0,0", out)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(validateWithCaps("gnss.sat_track", caps, "10,1,0,1,0,0", out)));
+
+    // phone.height：16 hex chars -> 8 B 小端双精度，范围 [0.0, 10.0]。
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(validateWithCaps("phone.height", caps, "000000000000F83F", out)));
+    TEST_ASSERT_EQUAL_UINT8(8U, out.size);
+    TEST_ASSERT_EQUAL_UINT8(0x3FU, out.bytes[7]);
+    // 11.0 m / -1.0 m / NaN / 长度不对 必须拒绝。
+    for (const char *bad : {"0000000000002640", "000000000000F0BF", "000000000000F87F", "0000"}) {
+        TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                          static_cast<int>(validateWithCaps("phone.height", caps, bad, out)));
+    }
+
+    // phone.sn_pn：64 hex chars -> 32 B（[0..15] 非空 SN + [16..31] PN，禁止 \r\n）。
+    const char *goodSnPn = "534E3132000000000000000000000000"
+                           "504E3031000000000000000000000000";
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("phone.sn_pn", caps, goodSnPn, out)));
+    TEST_ASSERT_EQUAL_UINT8(32U, out.size);
+    TEST_ASSERT_EQUAL_UINT8('S', out.bytes[0]);
+    TEST_ASSERT_EQUAL_UINT8('P', out.bytes[16]);
+    const char *emptySn = "00000000000000000000000000000000"
+                          "504E3031000000000000000000000000";
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(validateWithCaps("phone.sn_pn", caps, emptySn, out)));
+}
+
 } // namespace
 
 /** @brief Unity 每用例前置钩子。 */
@@ -209,5 +286,6 @@ int main()
     RUN_TEST(testEnumAndDynamicDomains);
     RUN_TEST(testBoolRangeMacSnAndFailurePreservation);
     RUN_TEST(testPeriodMsToInterval);
+    RUN_TEST(testPhoneAndSatTrackKeys);
     return UNITY_END();
 }

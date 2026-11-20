@@ -53,14 +53,23 @@ constexpr size_t kResetLen = 4U;
 
 struct Store {
     core::AntennaHeight height{};
+    std::optional<bool> heightDone{};
+    unsigned heightRequests = 0U;
+    unsigned heightCancels = 0U;
     bool pppSupported = true;
     bool ppp = false;
     std::optional<bool> pppDone{};
     unsigned pppRequests = 0U;
+    unsigned pppCancels = 0U;
+    uint8_t satCapsMask = core::kSatCapAll;
     core::SatTrackConfig sat{};
     std::optional<bool> satDone{};
     unsigned satRequests = 0U;
+    unsigned satCancels = 0U;
     core::PhoneSnPn snPn{};
+    std::optional<bool> snPnDone{};
+    unsigned snPnRequests = 0U;
+    unsigned snPnCancels = 0U;
     std::string_view gsv{};
     core::PhoneNtripConfig ntrip{};
     core::PhoneJsonServerConfig jsonSrv{};
@@ -78,11 +87,17 @@ core::services::PhoneCompatOps makeOps(Store &store)
         .ctx = &store,
         .readHeight =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->height; },
-        .setHeight =
-            [](void *ctx, const core::AntennaHeight &height, uint32_t) noexcept {
-                static_cast<Store *>(ctx)->height = height;
+        .startHeight =
+            [](void *ctx, const core::AntennaHeight &height) noexcept {
+                auto &state = *static_cast<Store *>(ctx);
+                ++state.heightRequests;
+                state.height = height;
+                state.heightDone.reset();
                 return true;
             },
+        .heightResult =
+            [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->heightDone; },
+        .cancelHeight = [](void *ctx) noexcept { ++static_cast<Store *>(ctx)->heightCancels; },
         .pppSupported =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->pppSupported; },
         .readPpp = [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->ppp; },
@@ -96,6 +111,9 @@ core::services::PhoneCompatOps makeOps(Store &store)
             },
         .pppResult =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->pppDone; },
+        .cancelPpp = [](void *ctx) noexcept { ++static_cast<Store *>(ctx)->pppCancels; },
+        .satCapsMask =
+            [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->satCapsMask; },
         .readSatConfig =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->sat; },
         .startSatConfig =
@@ -108,12 +126,19 @@ core::services::PhoneCompatOps makeOps(Store &store)
             },
         .satConfigResult =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->satDone; },
+        .cancelSatConfig = [](void *ctx) noexcept { ++static_cast<Store *>(ctx)->satCancels; },
         .readSnPn = [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->snPn; },
-        .setSnPn =
-            [](void *ctx, const core::PhoneSnPn &snPn, uint32_t) noexcept {
-                static_cast<Store *>(ctx)->snPn = snPn;
+        .startSnPn =
+            [](void *ctx, const core::PhoneSnPn &snPn) noexcept {
+                auto &state = *static_cast<Store *>(ctx);
+                ++state.snPnRequests;
+                state.snPn = snPn;
+                state.snPnDone.reset();
                 return true;
             },
+        .snPnResult =
+            [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->snPnDone; },
+        .cancelSnPn = [](void *ctx) noexcept { ++static_cast<Store *>(ctx)->snPnCancels; },
         .readLatestGsv = [](const void *ctx, std::span<uint8_t> dst) noexcept -> size_t {
             const auto text = static_cast<const Store *>(ctx)->gsv;
             if (text.empty() || (text.size() > dst.size())) {
@@ -228,11 +253,11 @@ void testSharedMessagesBothApps()
         f.expectReply(sender, kReserved13, kQuery, {}, kQueryRes,
                       std::array<uint8_t, kReserved13Len>{});
 
-        // 0x24 天线高
+        // 0x24 天线高（Query 同步返回，合法 Set 走异步 kDeferred）
         std::array<uint8_t, kHeightReplyLen> heightOut{};
         f.store.height = {};
         f.expectReply(sender, kHeight, kQuery, {}, kQueryRes, heightOut);
-        f.expectReply(sender, kHeight, kSet, kOneAndHalf, kSetRes, kOk);
+        f.store.height = kOneAndHalf;
         std::copy(kOneAndHalf.begin(), kOneAndHalf.end(), heightOut.begin());
         f.expectReply(sender, kHeight, kQuery, {}, kQueryRes, heightOut);
 
@@ -267,14 +292,14 @@ void testNavOnlyMessagesBothApps()
 {
     RouterFixture f;
 
-    // 0x08 SN/PN
+    // 0x08 SN/PN（短包同步回 02 02，合法 Set 走异步 kDeferred，Query 回 48 B）
     core::PhoneSnPn snPn{};
     std::memcpy(snPn.data(), "SN123456", 8U);
     std::memcpy(snPn.data() + core::kPhoneSnBytes, "1000190000002000", 16U);
+    f.store.snPn = snPn;
     std::array<uint8_t, kSnPnReplyLen> snPnOut{};
     std::copy(snPn.begin(), snPn.end(), snPnOut.begin());
     f.expectReply(kNav, kSnPn, kSet, std::span{snPn}.first(10U), kSetRes, kFail);
-    f.expectReply(kNav, kSnPn, kSet, snPn, kSetRes, kOk);
     f.expectReply(kNav, kSnPn, kQuery, {}, kQueryRes, snPnOut);
     f.expectNoReply(kSurvey, kSnPn, kQuery);
     f.expectNoReply(kSurvey, kSnPn, kSet, snPn);
@@ -350,6 +375,18 @@ void testDualAppMessagesAndPppGate()
     expectedSat[7U] = 1U;
     expectedSat[8U] = 1U;
     f.expectReply(kSurvey, kSatTrack, kQuery, {}, kQueryRes, expectedSat);
+
+    // 0x06 Survey 按 gnssCaps 能力掩码应答：部分能力按位遮蔽；无能力（capsMask==0）时 query 保持旧行为返回存储/默认值，set 仍拒收。
+    f.store.satCapsMask = core::kSatCapGps | core::kSatCapBds;
+    auto maskedSat = expectedSat;
+    maskedSat[7U] = 0U; // GAL 未在能力掩码内
+    maskedSat[8U] = 0U; // SBAS 未在能力掩码内
+    f.expectReply(kSurvey, kSatTrack, kQuery, {}, kQueryRes, maskedSat);
+    f.store.satCapsMask = 0U;
+    f.expectReply(kSurvey, kSatTrack, kQuery, {}, kQueryRes, expectedSat);
+    f.expectReply(kSurvey, kSatTrack, kSet, expectedSat, kSetRes, kFail);
+    TEST_ASSERT_EQUAL_UINT(0U, f.store.satRequests);
+    f.store.satCapsMask = core::kSatCapAll;
 
     // 0x06 Survey 非法截止角与短包直接回 02 02 且不下发命令
     auto badSat = expectedSat;
@@ -493,7 +530,31 @@ void testDeferredRepliesAndDisconnectCancel()
     TEST_ASSERT_EQUAL_UINT(0U, transport.reservedCount);
     checkReply(std::span{transport.frame}.first(transport.len), kSatTrack, kSetRes, kOk);
 
-    // 3. 断开会话时释放所有挂起 credit 并清理服务等待标志，重连后可继续发起新请求
+    // 3. 0x24 天线高与 0x08 Nav SN/PN 经 settings::Service 异步延迟应答
+    send(kHeight, kOneAndHalf, 7U);
+    TEST_ASSERT_EQUAL_UINT(1U, transport.reservedCount);
+    TEST_ASSERT_EQUAL_UINT(1U, store.heightRequests);
+    store.heightDone = true;
+    link.pollDeferred(7U);
+    TEST_ASSERT_EQUAL_UINT(0U, transport.reservedCount);
+    checkReply(std::span{transport.frame}.first(transport.len), kHeight, kSetRes, kOk);
+
+    core::PhoneSnPn snPn{};
+    std::memcpy(snPn.data(), "SN123456", 8U);
+    std::memcpy(snPn.data() + core::kPhoneSnBytes, "1000190000002000", 16U);
+    {
+        size_t len = 0U;
+        TEST_ASSERT_TRUE(fw::isOk(proto::buildFrame(wire, kSnPn, kNav, kSet, snPn, len)));
+        TEST_ASSERT_EQUAL_UINT(len, link.onData(kHandle, std::span{wire}.first(len), 7U));
+    }
+    TEST_ASSERT_EQUAL_UINT(1U, transport.reservedCount);
+    TEST_ASSERT_EQUAL_UINT(1U, store.snPnRequests);
+    store.snPnDone = true;
+    link.pollDeferred(7U);
+    TEST_ASSERT_EQUAL_UINT(0U, transport.reservedCount);
+    checkReply(std::span{transport.frame}.first(transport.len), kSnPn, kSetRes, kOk);
+
+    // 4. 断开会话时释放所有挂起 credit、调用 cancel 钩子并清理服务等待标志，重连后可继续发起新请求
     send(kPppOrTb, std::array<uint8_t, 1U>{1U}, 8U);
     send(kSatTrack, satPayload, 9U);
     TEST_ASSERT_EQUAL_UINT(2U, transport.reservedCount);
@@ -501,6 +562,8 @@ void testDeferredRepliesAndDisconnectCancel()
     link.onClose(kHandle);
     TEST_ASSERT_EQUAL_UINT(0U, transport.reservedCount);
     TEST_ASSERT_EQUAL_UINT(cancelsBefore + 2U, transport.cancelCount);
+    TEST_ASSERT_EQUAL_UINT(1U, store.pppCancels);
+    TEST_ASSERT_EQUAL_UINT(1U, store.satCancels);
     TEST_ASSERT_FALSE(phone.pppWaiting);
     TEST_ASSERT_FALSE(phone.satWaiting);
 

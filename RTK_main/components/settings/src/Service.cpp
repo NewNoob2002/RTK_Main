@@ -2,7 +2,61 @@
 // 任意任务可调用（依赖后端锁与执行器 post/poll/cancel 线程安全）；不阻塞、不分配堆，非 ISR。
 #include "settings/Service.hpp"
 
+#include <array>
+
 namespace settings {
+namespace {
+
+/** @brief 严格解析非负十进制整数（不允许符号、前导零或空白）。 @param text: 文本输入。 @param[out] out: 输出值。 @retval 是否合法。 */
+bool parseStrictUnsigned(std::string_view text, int32_t &out) noexcept
+{
+    constexpr uint32_t kDecimalBase = 10U;
+    constexpr uint32_t kMaxPeriodMs = 127000U;
+    if (text.empty() || ((text.size() > 1U) && (text[0] == '0'))) {
+        return false;
+    }
+    uint32_t acc = 0U;
+    for (const char ch : text) {
+        if ((ch < '0') || (ch > '9')) {
+            return false;
+        }
+        acc = (acc * kDecimalBase) + static_cast<uint32_t>(ch - '0');
+        if (acc > kMaxPeriodMs) {
+            return false;
+        }
+    }
+    // 已限制 acc <= 127000，转有符号 int32_t 无损。
+    out = static_cast<int32_t>(acc);
+    return true;
+}
+
+/** @brief GNSS 尚未探测完成时，按静态合法范围校验 rate 或单条输出周期（SV3 P2-1/P2-2）。 @param spec: 键定义。 @param value: 文本值。 @param[out] out: 规范值。 @retval kOk 通过；kBadValue 非法；kUnsupported 非此类键。 */
+Error validateGnssPreProbe(const KeySpec &spec, std::string_view value,
+                           CanonicalValue &out) noexcept
+{
+    if (spec.id == KeyId::kGnssRate) {
+        constexpr std::array<int32_t, 5U> kStaticRates{1, 2, 5, 10, 20};
+        Domain fallback{.kind = KeyKind::kEnum, .supported = true};
+        for (size_t i = 0U; i < kStaticRates.size(); ++i) {
+            fallback.enumValues[i] = kStaticRates[i];
+        }
+        fallback.enumCount = static_cast<uint8_t>(kStaticRates.size());
+        return validateValue(spec, fallback, value, out);
+    }
+    if ((spec.id >= KeyId::kGnssOutGga) && (spec.id <= KeyId::kGnssOutRmc)) {
+        int32_t periodMs = 0;
+        int8_t iv = 0;
+        if (!parseStrictUnsigned(value, periodMs) || !periodMsToInterval(periodMs, iv)) {
+            return Error::kBadValue;
+        }
+        out.kind = CanonicalKind::kInt;
+        out.number = periodMs;
+        return Error::kOk;
+    }
+    return Error::kUnsupported;
+}
+
+} // namespace
 
 /** @brief 读取接收机能力。 @retval 后端快照或空能力。 @note 任意任务，非 ISR。 */
 GnssCaps Service::readGnssCaps() const noexcept
@@ -34,14 +88,27 @@ Error Service::set(std::string_view key, std::string_view value, Caller caller, 
     if (((spec->access & access::kNeedsUnlock) != 0U) && !factoryUnlocked) {
         return Error::kLocked;
     }
+    const GnssCaps caps = readGnssCaps();
+    const bool gnssEnabled = isGnssEnabled();
     Domain dom{};
-    if (!domain(spec->id, dom) || !dom.supported) {
+    if (spec->domain == nullptr) {
         return Error::kUnsupported;
     }
+    spec->domain(caps, gnssEnabled, dom);
     CanonicalValue canonical{};
-    const Error valErr = validateValue(*spec, dom, value, canonical);
-    if (valErr != Error::kOk) {
-        return valErr;
+    if (dom.supported) {
+        const Error valErr = validateValue(*spec, dom, value, canonical);
+        if (valErr != Error::kOk) {
+            return valErr;
+        }
+    } else if (gnssEnabled && !caps.valid) {
+        // 接收机尚未探测完成前，gnss.rate / gnss.out.* 仅按静态合法范围放行，与旧版预存 NVS 行为一致。
+        const Error preErr = validateGnssPreProbe(*spec, value, canonical);
+        if (preErr != Error::kOk) {
+            return preErr;
+        }
+    } else {
+        return Error::kUnsupported;
     }
     if (spec->encode == nullptr) {
         return Error::kUnsupported;

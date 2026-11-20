@@ -124,8 +124,8 @@ void GnssModule::updateControllerStatus() noexcept
     const auto curState = controller().state();
     if (curState != last_state_) {
         if (curState == ::gnss::State::kConfiguring) {
-            phone_ppp_replay_ = true;
-            phone_sat_replay_ = true;
+            ppp_replay_ = true;
+            sat_replay_ = true;
         }
         traceGnss(GnssTrace::kState, static_cast<uint32_t>(curState),
                   static_cast<uint32_t>(last_state_));
@@ -340,6 +340,13 @@ void GnssModule::publishCaps() noexcept
             }
             domain.supported = domain.count != 0U;
         }
+        caps.pppSupported = ::gnss::supportsPpp(model);
+        caps.constMask =
+            ::gnss::supportsSatMask(model)
+                ? static_cast<uint8_t>(settings::const_bit::kGps | settings::const_bit::kBds |
+                                       settings::const_bit::kGlo | settings::const_bit::kGal |
+                                       settings::const_bit::kSbas)
+                : 0U;
     }
     if (!caps.sameCaps(ctx().data.gnssCaps.read())) {
         ctx().data.gnssCaps.write(caps);

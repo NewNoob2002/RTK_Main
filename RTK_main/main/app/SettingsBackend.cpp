@@ -2,6 +2,8 @@
 // 绑定仅启动任务调用。后端操作使用 Slot 和执行器同步机制，非 ISR。
 #include "app/SettingsBackend.hpp"
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 
 #include "def/GnssSubDef.hpp"
 
@@ -22,10 +24,14 @@ static_assert(settings::kVerbStorageSaveSn == verb(StorageVerb::kSaveSn));
 static_assert(settings::kVerbStorageWhitelistAdd == verb(StorageVerb::kWhitelistAdd));
 static_assert(settings::kVerbStorageWhitelistDel == verb(StorageVerb::kWhitelistDel));
 static_assert(settings::kVerbStorageSetPairNext == verb(StorageVerb::kSetPairNext));
+static_assert(settings::kVerbStorageSetHeight == verb(StorageVerb::kSetHeight));
+static_assert(settings::kVerbStorageSetSnPn == verb(StorageVerb::kSetSnPn));
 #if RTK_GNSS_ENABLED
 static_assert(settings::kVerbGnssSetRate == static_cast<uint8_t>(GnssSubVerb::kApplyRate));
 static_assert(settings::kVerbGnssSetOut == static_cast<uint8_t>(GnssSubVerb::kPatchOutput));
 static_assert(settings::kVerbGnssSetGgaGate == static_cast<uint8_t>(GnssSubVerb::kApplyGgaGate));
+static_assert(settings::kVerbGnssSetPpp == static_cast<uint8_t>(GnssSubVerb::kApplyPpp));
+static_assert(settings::kVerbGnssSetSatTrack == static_cast<uint8_t>(GnssSubVerb::kApplySatTrack));
 static_assert(settings::kGgaGateFlagEnabled == kGgaGateFlagEnabled);
 static_assert(settings::kGgaGateFlagMinSats == kGgaGateFlagMinSats);
 static_assert(settings::kGgaGateCmdArgLen == kGgaGateCmdArgLen);
@@ -129,6 +135,74 @@ uint32_t currentPeriod(const data::DataCenter &data, gnss::OutputMsg msg) noexce
                : core::services::GnssService::intervalToPeriodMs(config.intervals[index]);
 }
 
+/** @brief 将字节数组编码为大写十六进制字符串。 @param bytes: 输入字节。 @param[out] out: 输出字符缓冲。 @retval 写入字符数。 */
+uint8_t formatHexUpper(std::span<const uint8_t> bytes, std::span<char> out) noexcept
+{
+    constexpr std::string_view kHex = "0123456789ABCDEF";
+    constexpr uint8_t kNibbleMask = 0x0FU;
+    constexpr unsigned kNibbleShift = 4U;
+    if (bytes.size() * 2U > out.size()) {
+        return 0U;
+    }
+    size_t pos = 0U;
+    for (const uint8_t byte : bytes) {
+        out[pos++] = kHex[static_cast<size_t>((byte >> kNibbleShift) & kNibbleMask)];
+        out[pos++] = kHex[static_cast<size_t>(byte & kNibbleMask)];
+    }
+    // 调用方固定传 8 B 天线高（pos == 16 <= UINT8_MAX），缩窄无损。
+    return static_cast<uint8_t>(pos);
+}
+
+/** @brief 读取手机/星座扩展键的当前快照（gnss.ppp/gnss.sat_track/phone.height/phone.sn_pn）。 @param data: 共享主题。 @param key: 键编号。 @param[out] out: 输出值。 @retval 是否命中并成功填充。 */
+bool getExtendedSetting(const data::DataCenter &data, KeyId key, Value &out) noexcept
+{
+    switch (key) {
+    case KeyId::kGnssPpp: {
+        const auto caps = data.gnssCaps.read();
+        out = {.kind = ValueKind::kBool,
+               .boolVal =
+                   caps.enabled && caps.pppSupported && data.gnssPppEnabled.read().value_or(false)};
+        return true;
+    }
+    case KeyId::kGnssSatTrack: {
+        const auto cfg = data.gnssSatTrack.read().value_or(core::SatTrackConfig::defaults());
+        out = {.kind = ValueKind::kString};
+        const int written =
+            std::snprintf(out.text.data(), out.text.size(), "%u,%u,%u,%u,%u,%u",
+                          static_cast<unsigned>(cfg.cutoffDeg), static_cast<unsigned>(cfg.gps),
+                          static_cast<unsigned>(cfg.glo), static_cast<unsigned>(cfg.bds),
+                          static_cast<unsigned>(cfg.gal), static_cast<unsigned>(cfg.sbas));
+        if (written <= 0 || static_cast<size_t>(written) >= out.text.size()) {
+            return false;
+        }
+        // 最大输出为 "90,1,1,1,1,1"（12 字节），缩窄到 uint8_t 无损。
+        out.textLen = static_cast<uint8_t>(written);
+        return true;
+    }
+    case KeyId::kPhoneHeight: {
+        const auto height = data.phoneHeight.read();
+        out = {.kind = ValueKind::kString};
+        out.textLen = formatHexUpper(height, out.text);
+        return out.textLen == core::kAntennaHeightBytes * 2U;
+    }
+    case KeyId::kPhoneSnPn: {
+        const auto sn = data.settingsSn.read();
+        const auto pn = data.phonePn.read();
+        out = {.kind = ValueKind::kBytes};
+        const size_t snLen = std::min(static_cast<size_t>(sn.textLen), core::kPhoneSnBytes);
+        if (snLen > 0U) {
+            std::memcpy(out.text.data(), sn.text.data(), snLen);
+        }
+        std::memcpy(std::span{out.text}.subspan(core::kPhoneSnBytes).data(), pn.data(), pn.size());
+        // kPhoneSnPnBytes 固定为 32，缩窄到 uint8_t 无损。
+        out.textLen = static_cast<uint8_t>(core::kPhoneSnPnBytes);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
 /** @brief 从已发布快照读取当前配置值。 @param ctx: 后端。 @param key: 键编号。 @param[out] out: 值。 @retval 是否提供该值。 */
 bool getSetting(void *ctx, KeyId key, Value &out) noexcept
 {
@@ -159,6 +233,11 @@ bool getSetting(void *ctx, KeyId key, Value &out) noexcept
         out = data.settingsSn.read();
         out.kind = ValueKind::kString;
         return true;
+    case KeyId::kGnssPpp:
+    case KeyId::kGnssSatTrack:
+    case KeyId::kPhoneHeight:
+    case KeyId::kPhoneSnPn:
+        return getExtendedSetting(data, key, out);
     default:
         break;
     }

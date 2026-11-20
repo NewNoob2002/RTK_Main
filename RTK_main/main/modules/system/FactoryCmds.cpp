@@ -123,14 +123,24 @@ int cmdSn(void * /*ctx*/, int argc, char **argv) noexcept
     if ((len == 0U) || (len > NVS_STORE_SN_MAX) || (std::strpbrk(args[1], "\r\n") != nullptr)) {
         return cli::fail("bad sn (1-%u bytes)", static_cast<unsigned>(NVS_STORE_SN_MAX));
     }
-    fw::Command command{};
-    command.target = id(ModuleKind::kStorage);
-    command.verb = verb(StorageVerb::kSaveSn);
-    // len 已校验在 1..NVS_STORE_SN_MAX(16) 范围，缩窄到 uint8_t 无损。
-    command.argLen = static_cast<uint8_t>(len);
-    std::memcpy(command.args.data(), args[1], len);
-    if (!submit(command, "factory sn")) {
-        return cli::kCmdFail;
+    fw::CommandResult result{};
+    settings::Error err = settings::Error::kOk;
+    if (!submitSetting("factory.sn", std::string_view{args[1], len}, s_unlocked, kCommandTimeoutMs,
+                       result, err)) {
+        if (err == settings::Error::kTimeout) {
+            return cli::fail("no response");
+        }
+        if (err == settings::Error::kUnsupported) {
+            return cli::fail("link not running");
+        }
+        if (err == settings::Error::kLocked) {
+            return cli::fail("locked (factory unlock <key>)");
+        }
+        if (result.status != fw::Result::kOk) {
+            static_cast<void>(report("factory sn", result));
+            return cli::kCmdFail;
+        }
+        return cli::fail("invalid argument");
     }
     cli::outPrintf("sn saved; reboot to apply\n");
     return 0;

@@ -1257,7 +1257,7 @@ void phoneNvsReadback()
     app::loadEarlyConfig(context);
     CHECK(fw::isOk(storage.init()));
     CHECK(storage.phoneHeight() == core::AntennaHeight{});
-    CHECK(!context.data.phonePppEnabled.read().has_value());
+    CHECK(!context.data.gnssPppEnabled.read().has_value());
 
     constexpr core::AntennaHeight kHeight{0, 0, 0, 0, 0, 0, 0xF8, 0x3F};
     CHECK(storage.setPhoneHeight(kHeight, s_clock));
@@ -1300,12 +1300,13 @@ void phoneNvsReadback()
     CHECK(storage.setPhoneNtrip(core::PhoneNtripConfig{}, s_clock));
     CHECK(storage.setPhoneJsonServer(core::PhoneJsonServerConfig{}, s_clock));
     CHECK(storage.setPhoneThingsboard(core::PhoneThingsboardConfig{}, s_clock));
-    context.data.phoneSatConfig.write(std::nullopt);
+    context.data.gnssSatTrack.write(std::nullopt);
     const auto loaded = storage.loadKeys(keys);
     CHECK(loaded.saved == keys.size() && loaded.failed == 0U);
     CHECK(storage.phoneHeight() == kHeight);
-    CHECK(context.data.phonePppEnabled.read() == true);
-    CHECK(context.data.phoneSatConfig.read() == satCfg);
+    CHECK(context.data.phoneHeight.read() == kHeight);
+    CHECK(context.data.gnssPppEnabled.read() == true);
+    CHECK(context.data.gnssSatTrack.read() == satCfg);
     CHECK(storage.phoneSnPn() == snPn);
     CHECK(storage.phoneNtrip() == ntrip);
     CHECK(storage.phoneJsonServer() == jsonSrv);

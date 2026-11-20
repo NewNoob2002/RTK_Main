@@ -55,7 +55,7 @@ constinit app::AppContext s_failureContext{};
 constinit app::AppContext s_dispatchContext{};
 constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
-constinit std::array<app::AppContext, 14U> s_targetBaudContexts{};
+constinit std::array<app::AppContext, 15U> s_targetBaudContexts{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -426,7 +426,7 @@ void testGnssFactoryReset()
     nvs_close(nvs);
 }
 
-/** @brief 用真实 kIo 模块验证 PPP 成功提交、失败保留 NVS 与重探重放。 @note 主机单线程。 */
+/** @brief 用真实 kIo 模块与执行器验证 PPP/0x06 延迟结单、失败保留 NVS 与重探重放。 @note 主机单线程。 */
 void testGnssPhonePpp()
 {
     std::array<uint8_t, app::GnssModule::kDemuxBufBytes> demux{};
@@ -442,31 +442,55 @@ void testGnssPhonePpp()
     startModule(nvs, 460800U, true);
     advance(3000U);
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    const auto um980Caps = s_context->data.gnssCaps.read();
+    CHECK(um980Caps.valid && um980Caps.pppSupported && (um980Caps.constMask == 0x1FU));
 
-    fw::Command request{};
-    request.verb = static_cast<uint8_t>(app::GnssSubVerb::kPhonePpp);
-    request.argLen = 1U;
-    request.seq = 1U;
+    rtos::Executor executor{};
+    app::ExecutorControlStorage<4U> control{};
+    std::array<StackType_t, 256U> stack{};
+    const auto execId = app::id(app::ExecKind::kIo);
+    const auto target = app::id(app::ModuleKind::kGnss);
+    fw::ModuleOps ops{};
+    ops.onCommand = [](void *self, const fw::Command &cmd, fw::CommandResult &out) noexcept {
+        static_cast<app::GnssModule *>(self)->onCommand(cmd, out);
+    };
+    const std::array modules{fw::Module{
+        .name = "gnss", .id = target, .executor = execId, .self = &s_context->gnss, .ops = &ops}};
+    CHECK(fw::isOk(executor.init({.name = "io", .id = execId, .priority = 9U}, modules,
+                                 app::viewOf(control, stack))));
+    s_context->ioExecutor = &executor;
+    rtos::ExecutorTestAccess::bind(executor, &control.tcb);
+
+    auto postPhone = [&](const fw::Command &cmd) {
+        rtos::Ticket ticket{};
+        CHECK(fw::isOk(executor.post(cmd, rtos::Caller::kPhone, ticket)));
+        return ticket;
+    };
+
+    fw::Command request{
+        .target = target, .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplyPpp), .argLen = 1U};
     request.args[0] = 1U;
-    s_context->data.phonePppCommand.write(request);
+    const auto pppOn = postPhone(request);
+    rtos::ExecutorTestAccess::drain(executor);
+    fw::CommandResult pollRes{};
     advance(20U);
-    CHECK(s_context->data.phonePppResult.read().seq == 0U);
+    CHECK(executor.poll(pppOn, pollRes) == rtos::PollState::kPending);
     advance(200U);
-    const auto enabled = s_context->data.phonePppResult.read();
-    CHECK(enabled.seq == request.seq && enabled.status == fw::Result::kOk);
-    CHECK(s_context->data.phonePppEnabled.read() == true);
+    CHECK(executor.poll(pppOn, pollRes) == rtos::PollState::kDone);
+    CHECK(pollRes.seq == pppOn.seq && pollRes.status == fw::Result::kOk);
+    CHECK(s_context->data.gnssPppEnabled.read() == true);
     uint32_t stored = 0U;
     CHECK(app::store::readValue(app::store::kPhonePppKey, stored) == ESP_OK && stored == 1U);
 
     s_rejectSave = true;
-    request.seq = 2U;
     request.args[0] = 0U;
-    s_context->data.phonePppCommand.write(request);
+    const auto pppOffFail = postPhone(request);
+    rtos::ExecutorTestAccess::drain(executor);
     advance(200U);
     s_rejectSave = false;
-    const auto rejected = s_context->data.phonePppResult.read();
-    CHECK(rejected.seq == request.seq && rejected.status == fw::Result::kIoError);
-    CHECK(s_context->data.phonePppEnabled.read() == true);
+    CHECK(executor.poll(pppOffFail, pollRes) == rtos::PollState::kDone);
+    CHECK(pollRes.seq == pppOffFail.seq && pollRes.status == fw::Result::kIoError);
+    CHECK(s_context->data.gnssPppEnabled.read() == true);
     CHECK(app::store::readValue(app::store::kPhonePppKey, stored) == ESP_OK && stored == 1U);
 
     const auto saves = s_saveCommands;
@@ -474,24 +498,24 @@ void testGnssPhonePpp()
     advance(3000U);
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
     CHECK(s_saveCommands == saves + 1U);
-    CHECK(s_context->data.phonePppResult.read().seq == request.seq);
 
     // 0x06 截止角/星座：成功写入 NVS、NACK 保留旧值、重探后重放。
     const core::SatTrackConfig satOk{
         .cutoffDeg = 10U, .gps = 1U, .glo = 0U, .bds = 1U, .gal = 1U, .sbas = 0U};
-    fw::Command satCmd{};
-    satCmd.verb = static_cast<uint8_t>(app::GnssSubVerb::kPhoneSatCfg);
-    satCmd.seq = 1U;
+    fw::Command satCmd{.target = target,
+                       .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack)};
     const auto satEncoded = core::encodeSatTrackConfig(satOk);
     satCmd.argLen = static_cast<uint8_t>(satEncoded.size());
     std::copy(satEncoded.begin(), satEncoded.end(), satCmd.args.begin());
     s_satMaskCommands = 0U;
-    s_context->data.phoneSatCommand.write(satCmd);
+    const auto satTicket = postPhone(satCmd);
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(satTicket, pollRes) == rtos::PollState::kPending);
     advance(300U);
-    const auto satDone = s_context->data.phoneSatResult.read();
-    CHECK(satDone.seq == satCmd.seq && satDone.status == fw::Result::kOk);
+    CHECK(executor.poll(satTicket, pollRes) == rtos::PollState::kDone);
+    CHECK(pollRes.seq == satTicket.seq && pollRes.status == fw::Result::kOk);
     CHECK(s_satMaskCommands == 5U);
-    CHECK(s_context->data.phoneSatConfig.read() == satOk);
+    CHECK(s_context->data.gnssSatTrack.read() == satOk);
     std::array<uint8_t, core::kSatConfigBlobBytes> storedSat{};
     size_t storedSatLen = 0U;
     CHECK(app::store::readBlob(app::store::kPhoneSatCfgKey, storedSat, storedSatLen) == ESP_OK);
@@ -499,14 +523,14 @@ void testGnssPhonePpp()
 
     // NACK 失败时保留旧 NVS 值
     s_rejectSatMask = true;
-    satCmd.seq = 2U;
     satCmd.args[0] = 20U;
-    s_context->data.phoneSatCommand.write(satCmd);
+    const auto satFailTicket = postPhone(satCmd);
+    rtos::ExecutorTestAccess::drain(executor);
     advance(300U);
     s_rejectSatMask = false;
-    const auto satFail = s_context->data.phoneSatResult.read();
-    CHECK(satFail.seq == satCmd.seq && satFail.status == fw::Result::kIoError);
-    CHECK(s_context->data.phoneSatConfig.read() == satOk);
+    CHECK(executor.poll(satFailTicket, pollRes) == rtos::PollState::kDone);
+    CHECK(pollRes.seq == satFailTicket.seq && pollRes.status == fw::Result::kIoError);
+    CHECK(s_context->data.gnssSatTrack.read() == satOk);
 
     // 重探后重放 0x06 配置，并验证 GSV 单句缓存
     const unsigned satBeforeReprobe = s_satMaskCommands;
@@ -521,6 +545,8 @@ void testGnssPhonePpp()
     CHECK(gsv.len == kGsvSample.size() &&
           std::memcmp(gsv.bytes.data(), kGsvSample.data(), gsv.len) == 0);
 
+    rtos::ExecutorTestAccess::bind(executor, nullptr);
+    s_context->ioExecutor = nullptr;
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     nvs_close(nvs);
 }
@@ -708,17 +734,18 @@ void testBaseKeysAndCommandDispatch()
     CHECK(nvs_get_u8(nvs, "model", &cachedModel) == ESP_OK && cachedModel == 6U);
     CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
     testCm680Rate10(nvs);
-    // CM680 不支持 PPP：重放与命令均不下发任何 CONFIG PPP / CONFIG SIGNALGROUP。
+    // CM680 不支持 PPP 但支持 MASK/UNMASK（含 SBAS）：gnssCaps 与命令结果一致且不下发 CONFIG PPP。
+    const auto cm680Caps = s_context->data.gnssCaps.read();
+    CHECK(cm680Caps.valid && !cm680Caps.pppSupported && (cm680Caps.constMask == 0x1FU));
     s_pppCommands = 0U;
     fw::Command cm680Ppp{};
-    cm680Ppp.verb = static_cast<uint8_t>(app::GnssSubVerb::kPhonePpp);
+    cm680Ppp.verb = static_cast<uint8_t>(app::GnssSubVerb::kApplyPpp);
     cm680Ppp.seq = 1U;
     cm680Ppp.argLen = 1U;
     cm680Ppp.args[0] = 1U;
-    s_context->data.phonePppCommand.write(cm680Ppp);
-    advance(100U);
-    const auto cm680PppRes = s_context->data.phonePppResult.read();
-    CHECK(cm680PppRes.seq == cm680Ppp.seq && cm680PppRes.status == fw::Result::kNotSupported);
+    fw::CommandResult cm680PppRes{};
+    s_context->gnss.onCommand(cm680Ppp, cm680PppRes);
+    CHECK(cm680PppRes.status == fw::Result::kNotSupported);
     CHECK(s_pppCommands == 0U);
     testConsoleCommandDispatch(nvs);
     CHECK(!s_sentSatsInfo);
@@ -1205,8 +1232,87 @@ void testGnssSettingsBusAndGgaPersist()
     advance(500U);
     expectDone(savedAfterReset, fw::Result::kOk);
 
+    // P2-1/P2-2 窗口 1：kMaintenance（kSave 在途）期间 kApplyRate / kPatchOutput 走延迟两阶段提交而非 kBusy。
+    const auto maintSave1 = post(save);
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(maintSave1, result) == rtos::PollState::kPending);
+    const uint32_t applySeqBeforeMaintRate = s_context->data.gnssStatus.read().applySeq;
+    const auto maintRate = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 2U));
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(maintRate, result) == rtos::PollState::kPending);
+    advance(500U);
+    expectDone(maintSave1, fw::Result::kOk);
+    expectDone(maintRate, fw::Result::kOk);
+    CHECK(s_context->data.gnssStatus.read().applySeq != applySeqBeforeMaintRate);
+    CHECK(s_context->data.gnssCaps.read().navRateHz == 2U);
+    CHECK((nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK) && (storedRate == 2U));
+
+    const auto maintSave2 = post(save);
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(maintSave2, result) == rtos::PollState::kPending);
+    fw::Command patchGga{.target = target,
+                         .verb = static_cast<uint8_t>(app::GnssSubVerb::kPatchOutput),
+                         .argLen = 2U};
+    patchGga.args[0] = static_cast<uint8_t>(gnss::OutputMsg::kGga);
+    patchGga.args[1] = static_cast<uint8_t>(int8_t{2}); // 500 ms (2 Hz)
+    const auto maintOut = post(patchGga);
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(maintOut, result) == rtos::PollState::kPending);
+    advance(500U);
+    expectDone(maintSave2, fw::Result::kOk);
+    expectDone(maintOut, fw::Result::kOk);
+    CHECK(s_context->data.gnssOutCfg.read().intervals[0U] == 2);
+
     rtos::ExecutorTestAccess::bind(executor, nullptr);
     s_context->ioExecutor = nullptr;
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // P2-1/P2-2 窗口 2：探测未完成（model == kUnknown，state != kRunning）时，
+    // kApplyRate / kPatchOutput 立即落盘、推进 applySeq 并返回 kOk（与旧版一致）。
+    bootP2TargetCase(14U, nvs, demux, pipe, 115200U, 0U, true, false);
+    CHECK(s_context->data.gnssStatus.read().state != gnss::State::kRunning);
+    CHECK(!s_context->data.gnssCaps.read().valid);
+    {
+        rtos::Executor preExec{};
+        app::ExecutorControlStorage<4U> preControl{};
+        std::array<StackType_t, 256U> preStack{};
+        const std::array preMods{fw::Module{.name = "gnss",
+                                            .id = target,
+                                            .executor = execId,
+                                            .self = &s_context->gnss,
+                                            .ops = &ops}};
+        CHECK(fw::isOk(preExec.init({.name = "io", .id = execId, .priority = 9U}, preMods,
+                                    app::viewOf(preControl, preStack))));
+        s_context->ioExecutor = &preExec;
+        rtos::ExecutorTestAccess::bind(preExec, &preControl.tcb);
+
+        const uint32_t seqBeforeRate = s_context->data.gnssStatus.read().applySeq;
+        rtos::Ticket preRateTicket{};
+        CHECK(fw::isOk(preExec.post(makeRateCmd(app::GnssSubVerb::kApplyRate, 5U),
+                                    rtos::Caller::kConsole, preRateTicket)));
+        rtos::ExecutorTestAccess::drain(preExec);
+        CHECK(preExec.poll(preRateTicket, result) == rtos::PollState::kDone);
+        CHECK(result.status == fw::Result::kOk);
+        CHECK(s_context->data.gnssStatus.read().applySeq != seqBeforeRate);
+        CHECK((nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK) && (storedRate == 5U));
+
+        const uint32_t seqBeforeOut = s_context->data.gnssStatus.read().applySeq;
+        fw::Command prePatch{.target = target,
+                             .verb = static_cast<uint8_t>(app::GnssSubVerb::kPatchOutput),
+                             .argLen = 2U};
+        prePatch.args[0] = static_cast<uint8_t>(gnss::OutputMsg::kGga);
+        prePatch.args[1] = static_cast<uint8_t>(int8_t{-5}); // 5000 ms (1/5 Hz)
+        rtos::Ticket preOutTicket{};
+        CHECK(fw::isOk(preExec.post(prePatch, rtos::Caller::kConsole, preOutTicket)));
+        rtos::ExecutorTestAccess::drain(preExec);
+        CHECK(preExec.poll(preOutTicket, result) == rtos::PollState::kDone);
+        CHECK(result.status == fw::Result::kOk);
+        CHECK(s_context->data.gnssStatus.read().applySeq != seqBeforeOut);
+        CHECK(s_context->data.gnssOutCfg.read().intervals[0U] == -5);
+
+        rtos::ExecutorTestAccess::bind(preExec, nullptr);
+        s_context->ioExecutor = nullptr;
+    }
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     // 低定位频率启动时保留合法的高频偏好，超表的旧周期回落到最慢档。
     constexpr auto kGga = static_cast<size_t>(gnss::OutputMsg::kGga);

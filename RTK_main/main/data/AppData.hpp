@@ -151,14 +151,12 @@ struct DataCenter {
     fw::Slot<SystemStatus> systemStatus{};
     fw::Slot<SystemMode> systemMode{};
     fw::Slot<uint32_t> rtcmReset{};
-    fw::Slot<std::optional<bool>> phonePppEnabled{};                // 启动恢复后由 kIo 写入。
-    fw::Slot<std::optional<core::SatTrackConfig>> phoneSatConfig{}; // 启动恢复后由 kIo 写入。
+    fw::Slot<std::optional<bool>> gnssPppEnabled{};               // 启动恢复或设置成功后写入。
+    fw::Slot<std::optional<core::SatTrackConfig>> gnssSatTrack{}; // 启动恢复或设置成功后写入。
+    fw::Slot<core::AntennaHeight> phoneHeight{};                  // 天线高 8 B 小端双精度。
+    fw::Slot<core::PhonePn> phonePn{};                            // 设备 PN 16 B 定长字段。
 #if RTK_GNSS_ENABLED
-    fw::Slot<fw::Command> phonePppCommand{};      // kLink 投递，一个请求在途。
-    fw::Slot<fw::CommandResult> phonePppResult{}; // kIo 完成时带回相同 seq。
-    fw::Slot<fw::Command> phoneSatCommand{};      // kLink 投递 0x06，一个请求在途。
-    fw::Slot<fw::CommandResult> phoneSatResult{}; // kIo 完成 0x06 时带回相同 seq。
-    ZeroInitSlot<LatestGsv> gnssLatestGsv{};      // 0x0A Nav GSV 最近单句缓存。
+    ZeroInitSlot<LatestGsv> gnssLatestGsv{}; // 0x0A Nav GSV 最近单句缓存。
     fw::Slot<rtos::ExecStats> ioExecStats{};
     fw::Slot<GnssStatus> gnssStatus{};
     ZeroInitSlot<gnss::Fix> gnssFix{};

@@ -35,6 +35,7 @@
 #include "core/services/DeviceService.hpp"
 #include "core/services/PairService.hpp"
 #include "proto/DemuxFrame.hpp"
+#include "settings/Types.hpp"
 #include "SppServer.h"
 
 namespace app {
@@ -127,6 +128,66 @@ private:
 
     /** @brief 检查到期的 0x1E 恢复出厂或重启请求并执行。 @param nowMs: 当前时钟。 @note 仅 kLink。 */
     void pollPhoneReset(uint32_t nowMs) noexcept;
+    /** @brief 构造 PhoneCompatService 回调表，将配置类操作接入 settings::Service。 @retval 手机兼容回调表。 @note 仅 init 调用。 */
+    [[nodiscard]] core::services::PhoneCompatOps makePhoneCompatOps() noexcept;
+    /** @brief 手机 0x24 读取天线高。 @param ctx: BtLinkModule 指针。 @retval 8 B 小端双精度。 */
+    [[nodiscard]] static core::AntennaHeight onReadHeight(const void *ctx) noexcept;
+    /** @brief 手机 0x24 异步投递天线高设置。 @param ctx: BtLinkModule 指针。 @param height: 8 B 小端字节。 @retval true 已投递。 */
+    [[nodiscard]] static bool onStartHeight(void *ctx, const core::AntennaHeight &height) noexcept;
+    /** @brief 手机 0x24 轮询天线高设置结果。 @param ctx: BtLinkModule 指针。 @retval 完成时返回成败。 */
+    [[nodiscard]] static std::optional<bool> onHeightResult(const void *ctx) noexcept;
+    /** @brief 手机 0x24 取消天线高在途凭据。 @param ctx: BtLinkModule 指针。 */
+    static void onCancelHeight(void *ctx) noexcept;
+    /** @brief 手机 0x33 查询接收机是否支持 PPP。 @param ctx: BtLinkModule 指针。 @retval true 支持。 */
+    [[nodiscard]] static bool onPppSupported(const void *ctx) noexcept;
+    /** @brief 手机 0x33 读取当前 PPP 开关。 @param ctx: BtLinkModule 指针。 @retval PPP 状态。 */
+    [[nodiscard]] static bool onReadPpp(const void *ctx) noexcept;
+    /** @brief 手机 0x33 异步投递 PPP 设置。 @param ctx: BtLinkModule 指针。 @param enabled: 开关值。 @retval true 已投递。 */
+    [[nodiscard]] static bool onStartPpp(void *ctx, bool enabled) noexcept;
+    /** @brief 手机 0x33 轮询 PPP 设置结果。 @param ctx: BtLinkModule 指针。 @retval 完成时返回成败。 */
+    [[nodiscard]] static std::optional<bool> onPppResult(const void *ctx) noexcept;
+    /** @brief 手机 0x33 取消 PPP 在途凭据。 @param ctx: BtLinkModule 指针。 */
+    static void onCancelPpp(void *ctx) noexcept;
+    /** @brief 手机 0x06 读取支持的星座能力掩码。 @param ctx: BtLinkModule 指针。 @retval 能力位图。 */
+    [[nodiscard]] static uint8_t onSatCapsMask(const void *ctx) noexcept;
+    /** @brief 手机 0x06 读取当前截止角与星座配置。 @param ctx: BtLinkModule 指针。 @retval 卫星配置。 */
+    [[nodiscard]] static core::SatTrackConfig onReadSatConfig(const void *ctx) noexcept;
+    /** @brief 手机 0x06 异步投递卫星配置。 @param ctx: BtLinkModule 指针。 @param cfg: 合法配置。 @retval true 已投递。 */
+    [[nodiscard]] static bool onStartSatConfig(void *ctx, const core::SatTrackConfig &cfg) noexcept;
+    /** @brief 手机 0x06 轮询卫星配置结果。 @param ctx: BtLinkModule 指针。 @retval 完成时返回成败。 */
+    [[nodiscard]] static std::optional<bool> onSatConfigResult(const void *ctx) noexcept;
+    /** @brief 手机 0x06 取消卫星配置在途凭据。 @param ctx: BtLinkModule 指针。 */
+    static void onCancelSatConfig(void *ctx) noexcept;
+    /** @brief 手机 0x08 读取当前 SN/PN。 @param ctx: BtLinkModule 指针。 @retval 32 B 组合字段。 */
+    [[nodiscard]] static core::PhoneSnPn onReadSnPn(const void *ctx) noexcept;
+    /** @brief 手机 0x08 异步投递 SN/PN 设置。 @param ctx: BtLinkModule 指针。 @param snPn: 32 B 组合字段。 @retval true 已投递。 */
+    [[nodiscard]] static bool onStartSnPn(void *ctx, const core::PhoneSnPn &snPn) noexcept;
+    /** @brief 手机 0x08 轮询 SN/PN 设置结果并同步内存 SN。 @param ctx: BtLinkModule 指针。 @retval 完成时返回成败。 */
+    [[nodiscard]] static std::optional<bool> onSnPnResult(const void *ctx) noexcept;
+    /** @brief 手机 0x08 取消 SN/PN 在途凭据。 @param ctx: BtLinkModule 指针。 */
+    static void onCancelSnPn(void *ctx) noexcept;
+#if RTK_GNSS_ENABLED
+    /** @brief 手机 0x0A Nav 读取最近单句 GSV 原文。 @param ctx: BtLinkModule 指针。 @param[out] dst: 输出缓冲。 @retval 有效字节数。 */
+    [[nodiscard]] static size_t onReadLatestGsv(const void *ctx, std::span<uint8_t> dst) noexcept;
+#endif
+    /** @brief 手机 0x12 读取 NTRIP 配置。 @param ctx: BtLinkModule 指针。 @retval 112 B 配置块。 */
+    [[nodiscard]] static core::PhoneNtripConfig onReadNtrip(const void *ctx) noexcept;
+    /** @brief 手机 0x12 保存 NTRIP 配置。 @param ctx: BtLinkModule 指针。 @param cfg: 112 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 */
+    [[nodiscard]] static bool onSetNtrip(void *ctx, const core::PhoneNtripConfig &cfg,
+                                         uint32_t nowMs) noexcept;
+    /** @brief 手机 0x32 Nav 读取 JSON 服务器配置。 @param ctx: BtLinkModule 指针。 @retval 42 B 配置块。 */
+    [[nodiscard]] static core::PhoneJsonServerConfig onReadJsonServer(const void *ctx) noexcept;
+    /** @brief 手机 0x32 Nav 保存 JSON 服务器配置。 @param ctx: BtLinkModule 指针。 @param cfg: 42 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 */
+    [[nodiscard]] static bool onSetJsonServer(void *ctx, const core::PhoneJsonServerConfig &cfg,
+                                              uint32_t nowMs) noexcept;
+    /** @brief 手机 0x33 Nav 读取 Thingsboard 配置。 @param ctx: BtLinkModule 指针。 @retval 86 B 配置块。 */
+    [[nodiscard]] static core::PhoneThingsboardConfig onReadThingsboard(const void *ctx) noexcept;
+    /** @brief 手机 0x33 Nav 保存 Thingsboard 配置。 @param ctx: BtLinkModule 指针。 @param cfg: 86 B 配置块。 @param nowMs: 去抖起点。 @retval true 已登记。 */
+    [[nodiscard]] static bool onSetThingsboard(void *ctx, const core::PhoneThingsboardConfig &cfg,
+                                               uint32_t nowMs) noexcept;
+    /** @brief 手机 0x1E 登记延迟恢复出厂或重启。 @param ctx: BtLinkModule 指针。 @param factoryReset: 是否擦除用户 NVS。 @param reboot: 是否重启。 @param nowMs: 当前时钟。 @retval true 已受理。 */
+    [[nodiscard]] static bool onScheduleReset(void *ctx, bool factoryReset, bool reboot,
+                                              uint32_t nowMs) noexcept;
     friend struct ModuleTestAccess;
     using SessionDemux = demux::StaticDemux<proto::demux_frame::kDecoder, demux::rtcm3::kDecoder>;
     static constexpr uint8_t kProductIndex = SessionDemux::indexOf<proto::demux_frame::kDecoder>();
@@ -481,6 +542,11 @@ private:
     static constexpr size_t kGnssStreamMaxRecord = kGnssAppRingBytes - fw::kFanoutTypedHeaderBytes;
 #endif
     core::services::PhoneCompatService phone_compat_{};
+    // PhoneCompatOps 异步设置凭据，仅 kLink 读写；poll 回调仅读 const void*，此处按逻辑状态管理。
+    mutable settings::Ticket height_ticket_{};
+    mutable settings::Ticket ppp_ticket_{};
+    mutable settings::Ticket sat_ticket_{};
+    mutable settings::Ticket snpn_ticket_{};
     PendingReset pending_reset_ = PendingReset::kNone;
     uint32_t pending_reset_at_ms_ = 0U;
     core::CommandRouter router_{};

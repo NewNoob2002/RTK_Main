@@ -111,16 +111,16 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
         cmdSetGgaGate(cmd, rtos::nowMs(), result);
         return;
     }
-    if (phone_ppp_.active() || phone_sat_.active()) {
+    if (ppp_seq_.active() || sat_seq_.active()) {
         result.status = fw::Result::kBusy;
         return;
     }
-    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kPhonePpp) {
-        cmdPhonePpp(cmd, result);
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kApplyPpp) {
+        cmdApplyPpp(cmd, result);
         return;
     }
-    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kPhoneSatCfg) {
-        cmdPhoneSatCfg(cmd, result);
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kApplySatTrack) {
+        cmdApplySatTrack(cmd, result);
         return;
     }
     const uint32_t now = rtos::nowMs();
@@ -175,21 +175,33 @@ void GnssModule::cmdSetting(const fw::Command &cmd, uint32_t nowMs,
         cmdApplyGgaGate(cmd, result);
         return;
     }
-    if (phone_ppp_.active() || phone_sat_.active() || baud_deferred_ ||
-        pending_apply_ != PendingApply::kNone || controller().state() != ::gnss::State::kRunning) {
+    if (ppp_seq_.active() || sat_seq_.active() || baud_deferred_ ||
+        pending_apply_ != PendingApply::kNone) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    const auto st = controller().state();
+    if (verb == GnssSubVerb::kSaveReceiver) {
+        if (st != ::gnss::State::kRunning) {
+            result.status = fw::Result::kBusy;
+            return;
+        }
+        cmdMaintenance(cmd, nowMs, result);
+        return;
+    }
+    if ((st == ::gnss::State::kMaintenance) &&
+        (active_maintenance_ != ::gnss::Maintenance::kSave)) {
         result.status = fw::Result::kBusy;
         return;
     }
     const auto model = controller().detected().probe.model;
-    if (verb == GnssSubVerb::kSaveReceiver) {
-        cmdMaintenance(cmd, nowMs, result);
-        return;
-    }
     if (verb == GnssSubVerb::kApplyRate) {
-        const auto rates = controller().receiver().navRatesHz(model);
-        if (cmd.argLen != 1U || std::ranges::find(rates, cmd.args[0]) == rates.end()) {
-            result.status = fw::Result::kInvalidArg;
-            return;
+        if (model != ::gnss::Model::kUnknown) {
+            const auto rates = controller().receiver().navRatesHz(model);
+            if (cmd.argLen != 1U || std::ranges::find(rates, cmd.args[0]) == rates.end()) {
+                result.status = fw::Result::kInvalidArg;
+                return;
+            }
         }
         cmdSetRate(cmd, nowMs, result);
     } else {
@@ -213,14 +225,17 @@ void GnssModule::cmdPatchOutput(const fw::Command &cmd, uint32_t nowMs,
     // 已验证下标处于 OutputMsg 共用前缀，间隔按二补码还原。
     const auto msg = static_cast<::gnss::OutputMsg>(cmd.args[0]);
     const auto interval = std::bit_cast<int8_t>(cmd.args[1]);
-    const auto periods = controller().receiver().outputPeriodsMs(outputCapabilityMsg(msg), model);
-    const uint32_t period = core::services::GnssService::intervalToPeriodMs(interval);
-    const uint32_t fixPeriod = kMsPerSecond / std::max(ensureRoverCfg().rateHz, uint8_t{1U});
-    const bool gsvDisabled = msg == ::gnss::OutputMsg::kSatsInfo && !ensureRoverCfg().gsv;
-    if ((period != 0U && (period < fixPeriod || gsvDisabled)) ||
-        std::ranges::find(periods, period) == periods.end()) {
-        result.status = fw::Result::kInvalidArg;
-        return;
+    if (model != ::gnss::Model::kUnknown) {
+        const auto periods =
+            controller().receiver().outputPeriodsMs(outputCapabilityMsg(msg), model);
+        const uint32_t period = core::services::GnssService::intervalToPeriodMs(interval);
+        const uint32_t fixPeriod = kMsPerSecond / std::max(ensureRoverCfg().rateHz, uint8_t{1U});
+        const bool gsvDisabled = msg == ::gnss::OutputMsg::kSatsInfo && !ensureRoverCfg().gsv;
+        if ((period != 0U && (period < fixPeriod || gsvDisabled)) ||
+            std::ranges::find(periods, period) == periods.end()) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
     }
     auto next = out_cfg_;
     result.status = next.applyInterval(cmd.args[0], interval);
@@ -255,6 +270,14 @@ void GnssModule::abortPendingSettings() noexcept
     completeSetting(applyTicketSeq_, fw::Result::kInvalidState);
     completeSetting(maintenanceTicketSeq_, fw::Result::kInvalidState);
     maintenanceTicketTarget_ = 0U;
+    if (ppp_seq_.active()) {
+        ppp_seq_ = {};
+    }
+    completeSetting(ppp_ticket_seq_, fw::Result::kInvalidState);
+    if (sat_seq_.active()) {
+        sat_seq_ = {};
+    }
+    completeSetting(sat_ticket_seq_, fw::Result::kInvalidState);
 }
 
 void GnssModule::cmdProbe(uint32_t nowMs, fw::CommandResult &result) noexcept
