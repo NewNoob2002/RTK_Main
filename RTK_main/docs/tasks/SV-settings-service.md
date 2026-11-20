@@ -2,7 +2,7 @@
 
 - 依据：ADR-0018（全文，尤其 §2.2–§2.5）；用户 2026-11-20 要求：网页可选项与设备能力一致；配置不依赖控制台；
   为 4G（NTRIP/MQTT）等更多调用方统一接口。
-- 前置：W2（含 W8 网页 e0a3001）合入 main 并通过 HIL。本卡基线 = 届时 main，Architect 派发时填写 commit。
+- 前置：W2（含 W8 网页 e0a3001）合入 main 并通过 HIL。本卡基线 = main `8c28078`（W2+W8 已合入；W2 的蓝牙 RTCM 10 分钟负载测试仍待做）。
 - 分支 `feat/sv-settings`，工作树 `RTK_Main-sv`，构建前缀 `builds/sv1-*` / `sv2-*` / `sv3-*`。
 - **三段顺序实施，每段单独交报告 `docs/reports/SV<n>.md`，Architect 验收后才开始下一段。**
 - 执行者不提交、不烧录、不连串口；HIL 由 Architect 做。
