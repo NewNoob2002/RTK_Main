@@ -29,6 +29,26 @@ CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
 CONFIG_HTTPD_WS_SUPPORT=y
 CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 
+# H1c Wi-Fi/lwIP 内存档（依据 ESP-IDF v6.1.1 api-guides/wifi-driver/wifi-performance-and-power-save.html
+# “How to Configure Parameters”表的 Memory saving 档：TCP 吞吐约 30 Mbit/s，远高于配置页约 1 KB/s 的需求）。
+# 静态 RX 缓冲在 esp_wifi_init() 时从堆分配，10→6 省 6400 B；手册要求开启 AMPDU 时不得低于 6。
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+# 动态 RX/TX 缓冲只限制峰值；手册 Memory saving 档取 12。
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=12
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=12
+# RX_BA_WIN 保持 6（= Memory saving 档，且 ≤ min(2×静态 RX, 动态 RX)）。
+# TCP 发送缓冲和接收窗口沿用默认 5760 B，已小于该档的 12 KB。
+# SoftAP 只用 WPA2-PSK，不需要 SAE/OWE 代码与运行期内存。
+CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=n
+CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT=n
+CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA=n
+CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_SOFTAP=n
+# 固件只用 IPv4（SoftAP 192.168.x）；手册 lwip.html：关 IPv6 省启动 2 KB、协议栈运行时 7 KB RAM。
+CONFIG_LWIP_IPV6=n
+# lwip.html 建议按需减少 socket；httpd 要求 LWIP_MAX_SOCKETS >= max_open_sockets(3) + 3，取 8 留 2 个余量。
+CONFIG_LWIP_MAX_SOCKETS=8
+# Wi-Fi/lwIP IRAM 优化保持开启（手册各档均开启）；管理帧缓冲与 TCP/IP 邮箱保持默认。
+
 # 控制台串口（ADR-0009 §2.4）：2 Mbaud + 8 KB TX 环形缓冲，长输出不阻塞命令任务。
 # ESP_CONSOLE_UART_BAUDRATE 只在 CUSTOM 变体下可写（esp_stdio/Kconfig:150 的 prompt 条件），
 # 因此这里用 CUSTOM + UART0 + ESP32 默认引脚 1/3；波特率必须与 RTK 的一致，否则输出乱码。

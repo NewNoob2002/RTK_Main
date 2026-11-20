@@ -25,6 +25,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
@@ -56,6 +57,12 @@ using detail::kMsPerSec;
 using detail::kRebootDelayMs;
 using detail::kTenthsPerUnit;
 using detail::kUsPerMs;
+
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE)
+constexpr bool kWifiConfigEnabled = true;
+#else
+constexpr bool kWifiConfigEnabled = false;
+#endif
 
 /**
  * @brief 查询或设置 IDF 日志级别
@@ -183,6 +190,7 @@ int cmdSysHeap(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::printKv("largest", "%zu B (%llu.%llu KB)", largestBytes,
                  static_cast<unsigned long long>(largestKib / kTenthsPerUnit),
                  static_cast<unsigned long long>(largestKib % kTenthsPerUnit));
+    printInternalHeapBudget(minBytes, largestBytes, kWifiConfigEnabled);
     return 0;
 }
 
@@ -223,7 +231,8 @@ int cmdSysMem(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
         view.minimum = heap_caps_get_minimum_free_size(view.caps);
         view.largest = heap_caps_get_largest_free_block(view.caps);
     }
-    printMemoryReport(appContext().bootArena, staticDataBytes, staticBssBytes, heaps);
+    printMemoryReport(appContext().bootArena, staticDataBytes, staticBssBytes, heaps,
+                      kWifiConfigEnabled);
     return 0;
 }
 
