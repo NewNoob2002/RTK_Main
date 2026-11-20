@@ -3,6 +3,7 @@
 //       模块表与配置表为静态只读存储。不分配堆。
 #include "app/App.hpp"
 #include "app/BootReasons.hpp"
+#include "app/SettingsBackend.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -143,6 +144,7 @@ namespace app {
 void bindExecutors() noexcept
 {
     s_app.linkExecutor = &s_link_executor;
+    bindSettings(s_app);
 #if RTK_GNSS_ENABLED
     s_app.ioExecutor = &s_io_executor;
 #endif

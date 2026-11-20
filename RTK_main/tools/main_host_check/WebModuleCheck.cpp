@@ -22,6 +22,7 @@
 #include "esp_wifi.h"
 
 #include "AppContext.hpp"
+#include "app/SettingsBackend.hpp"
 #include "board/BoardProfile.hpp"
 #include "def/StorageDef.hpp"
 #include "modules/web/WebModule.hpp"
@@ -207,14 +208,8 @@ void resetHarness()
     s_ctx.data.systemStatus.write(sys);
     s_ctx.data.gnssRateHz.store(1U, std::memory_order_release);
     s_ctx.data.ggaGatePersist.store(app::data::GgaGatePersist::kClean, std::memory_order_release);
-    s_ctx.data.webGnssCancelSeq.store(0U, std::memory_order_release);
-    s_ctx.data.webGnssFlushGgaSeq.store(0U, std::memory_order_release);
-    s_ctx.data.webGnssFlushGgaDoneSeq.store(0U, std::memory_order_release);
-    s_ctx.data.webGnssCommand.write(fw::Command{});
-    s_ctx.data.webGnssOutcome.write(app::data::WebGnssOutcome{});
-
-    // 构造一个已运行的伪 ioExecutor 视图（仅需 running() 与 moduleOk(kGnss) 为真）。
     s_ctx.ioExecutor = &s_ioExec;
+    app::bindSettings(s_ctx);
     s_ctx.web.bindContext(s_ctx);
     assert(fw::isOk(s_ctx.web.bindStorage(s_webFrames)));
     assert(fw::isOk(s_ctx.web.init()));
@@ -767,6 +762,35 @@ void testIdleAbortAndExitGgaGate()
     s_ctx.web.unbindStorage();
 }
 
+/** @brief 验证初次同步后只发送变化版本的能力帧。 */
+void testCapsUpdates()
+{
+    resetHarness();
+    s_ctx.data.gnssCaps.write({});
+    assert(simulateIdfV61WsHandshake(1005) == ESP_OK);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent[0].payload.find(R"("gnss.out.gsv")") == std::string::npos);
+
+    settings::GnssCaps caps{.valid = true, .enabled = true};
+    caps.outPeriods[static_cast<size_t>(settings::OutKeyIndex::kGsv)] = {{0, 1000, 5000}, 3U, true};
+    s_ctx.data.gnssCaps.write(caps);
+    s_httpd.sent.clear();
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.size() == 1U);
+    const auto &payload = s_httpd.sent[0].payload;
+    assert(payload.starts_with(R"({"t":"caps","caps":{)"));
+    assert(payload.find(R"("gnss.out.gsv":[0,1000,5000])") != std::string::npos);
+
+    s_httpd.sent.clear();
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.empty());
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
 } // namespace
 
 /**
@@ -780,6 +804,7 @@ int main()
     testFramingAndConfigBeforeAck();
     testSessionGenAndBackpressure();
     testIdleAbortAndExitGgaGate();
+    testCapsUpdates();
     std::puts("PASS web_module_check");
     return 0;
 }

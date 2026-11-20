@@ -51,6 +51,7 @@
 | `components/rtos` | device_proto、app_fw、freertos、esp_timer、log、esp_system（看门狗） | link_core 以上 |
 | `components/gnss`（通用 C++20，ADR-0012） | stream_demux、app_fw | 任何 IDF/FreeRTOS/平台头、main |
 | `components/web_proto`（通用 C++20，ADR-0017 §2.5） | app_fw | 任何 IDF/FreeRTOS/平台头、main |
+| `components/settings`（通用 C++20，ADR-0018 §2.3） | app_fw | 任何 IDF/FreeRTOS/平台头、main |
 | `components/cli`（ADR-0007） | console、esp_system、driver/串口相关 IDF 组件、app_fw（框架基座） | app_fw 以外的自有组件（保持可复用） |
 | `components/spp_server`（C 驱动 + C++ 适配器） | link_core、rtos、app_fw、bt | nvs_store、main；C 驱动文件不得包含任何 C++ 头 |
 | `components/nvs_store`（C） | nvs_flash、log、app_fw（框架基座，仅 `fw/LogC.h`） | app_fw 以外的自有组件 |
@@ -58,7 +59,7 @@
 
 **框架基座（Q2 决定）**：`app_fw` 是框架基座，任何自有组件都可以 REQUIRES 它；`app_fw` 自身不依赖任何组件。表中“禁止其他自有组件”一律不含 app_fw。
 
-纯组件（stream_demux、device_proto、link_core、app_fw、bt_reconnect、gnss、web_proto）必须能在 host 上用 g++ 编译并有 host 测试。C/C++ 文件名一律 `PascalCase`（CODING-STYLE §3.1）；改名须同步所有 host 测试 CMake。
+纯组件（stream_demux、device_proto、link_core、app_fw、bt_reconnect、gnss、web_proto、settings）必须能在 host 上用 g++ 编译并有 host 测试。C/C++ 文件名一律 `PascalCase`（CODING-STYLE §3.1）；改名须同步所有 host 测试 CMake。
 ADR-0007 新增的纯组件（app_fw、bt_reconnect）与 link_core 的 `services/`、`command_router` 按 `stream_demux` 的 CMakeLists 模式（`if(ESP_PLATFORM)` 分支）同时支持 IDF 与 host，各自的 host 测试放在 `test/app_fw`、`test/bt_reconnect`、`test/services`（由实现方新建，不冻结；须支持普通与 ASan/UBSan 构建）。
 
 自有组件的 `CMakeLists.txt` 加编译选项（C 文件用 `$<$<COMPILE_LANGUAGE:C>:...>` 区分）：

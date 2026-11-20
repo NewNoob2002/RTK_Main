@@ -122,27 +122,19 @@ private:
         uint16_t pendingAckId = 0U;
         web::ErrorCode pendingAckErr = web::ErrorCode::kNone;
         bool pendingConfig = false;
+        uint32_t capsVersion = 0U;
         bool pendingBye = false;
     };
 
-    enum class InflightStage : uint8_t {
-        kIdle = 0,
-        kWaitAccept,
-        kWaitDone,
-        kWaitCleanup,
-        kWaitExitFlush,
-    };
+    enum class RequestKind : uint8_t { kSet, kSave, kExit, kFreset };
 
     struct InflightRequest {
-        InflightStage stage = InflightStage::kIdle;
+        settings::Ticket ticket{};
         int fd = 0;
         uint32_t gen = 0U;
         uint16_t reqId = 0U;
-        uint32_t cmdSeq = 0U;
         uint32_t startedMs = 0U;
-        bool isSet = false;
-        bool isMaint = false;
-        bool ackSent = false;
+        RequestKind kind = RequestKind::kSet;
     };
 
     enum class RebootKind : uint8_t {
@@ -392,40 +384,16 @@ private:
      */
     void handleSetReq(ClientSlot &client, const web::Request &req, uint32_t nowMs) noexcept;
 
-    /**
-     * @brief 向 kIo 投递一条异步 GNSS 命令并登记在途请求（携带会话代号）
-     * @param client: 请求来源客户端槽位
-     * @param reqId: 浏览器请求 ID
-     * @param cmd: 已构造的 GNSS fw::Command
-     * @param isSet: 是否为 set（成功后需推送 config）
-     * @param isMaint: 是否为维护保存命令（按 detail 映射维护错误码）
-     * @param nowMs: 当前单调时间（ms）
-     * @note 仅 kLink 任务调用，不阻塞。
-     */
-    void startInflightGnss(ClientSlot &client, uint16_t reqId, const fw::Command &cmd, bool isSet,
-                           bool isMaint, uint32_t nowMs) noexcept;
+    /** @brief 记录本会话在途命令。 @param client: 会话。 @param reqId: 请求号。 @param ticket: 凭据。 @param kind: 请求类型。 @param nowMs: 时钟。 @note 仅 kLink。 */
+    void trackRequest(const ClientSlot &client, uint16_t reqId, settings::Ticket ticket,
+                      RequestKind kind, uint32_t nowMs) noexcept;
 
-    /**
-     * @brief 轮询在途 GNSS 异步命令与退出前 GGA 门控落盘确认
-     * @param nowMs: 当前单调时间（ms）
-     * @note 仅 kLink 任务调用，不阻塞。
-     */
-    void pollInflightGnss(uint32_t nowMs) noexcept;
+    /** @brief 投递维护命令并跟踪结果。 @param client: 会话。 @param reqId: 请求号。 @param owner: 目标模块。 @param verb: 命令字。 @param kind: 请求类型。 @param nowMs: 时钟。 @note 仅 kLink。 */
+    void postMaintenance(ClientSlot &client, uint16_t reqId, settings::Owner owner, uint8_t verb,
+                         RequestKind kind, uint32_t nowMs) noexcept;
 
-    /**
-     * @brief 轮询 `cmd exit` 发起的 GGA 门控立即落盘确认
-     * @param nowMs: 当前单调时间（ms）
-     * @note 仅 kLink 任务调用，不阻塞。
-     */
-    void pollExitFlush(uint32_t nowMs) noexcept;
-
-    /**
-     * @brief 结束在途 GNSS 请求并回发 ack（校验会话代号；成功 set 后广播 config）
-     * @param error: 协议错误码（kNone 表示成功）
-     * @param clearInflight: true 立即清空在途槽；false 仅回发超时 ack 并转 kWaitCleanup 维持背压
-     * @note 仅 kLink 任务调用。
-     */
-    void finishInflightGnss(web::ErrorCode error, bool clearInflight) noexcept;
+    /** @brief 收取异步结果或取消超时请求。 @param nowMs: 时钟。 @note 仅 kLink。 */
+    void pollInflight(uint32_t nowMs) noexcept;
 
     /**
      * @brief 每 1 s 采样状态并向已完成初始同步的客户端推送变化分组（为控制帧预留 TX 槽位）
@@ -435,12 +403,8 @@ private:
      */
     void pollStatusPush(uint32_t nowMs, bool forceNow) noexcept;
 
-    /**
-     * @brief 采样当前 `config` 快照
-     * @retval 填充好的 ConfigSnapshot
-     * @note 仅 kLink 任务调用。
-     */
-    [[nodiscard]] web_cfg::ConfigSnapshot sampleConfig() noexcept;
+    /** @brief 向已同步会话推送能力变化。 @retval 邮箱尚有待发能力帧。 @note 仅 kLink。 */
+    [[nodiscard]] bool pollCapsPush() noexcept;
 
     /**
      * @brief 采样当前 `status` 快照（含 1 Hz GGA 实际频率估算）
@@ -525,8 +489,7 @@ private:
     std::array<ClientSlot, kMaxWsClients> clients_{};
     web::Request parsedReq_{};
     InflightRequest inflight_{};
-    uint32_t nextGnssSeq_ = 0U;
-    uint32_t nextFlushGgaSeq_ = 0U;
+    uint32_t configVersion_ = 0U;
     uint32_t lastStatusMs_ = 0U;
     uint32_t lastGgaCount_ = 0U;
     uint32_t lastGgaSampleMs_ = 0U;

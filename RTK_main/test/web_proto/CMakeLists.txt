@@ -1,5 +1,5 @@
 # web_proto 纯 C++20 组件 host 单元测试工程（ADR-0017 §2.5）。
-# 覆盖请求解析、JSON 输出器、键表与错误码映射；支持普通构建与 ASan/UBSan 构建。
+# 覆盖请求解析、JSON 输出器与错误码映射；支持普通构建与 ASan/UBSan 构建。
 cmake_minimum_required(VERSION 3.22)
 project(web_proto_tests C CXX)
 
@@ -38,7 +38,7 @@ target_compile_options(web_proto PRIVATE -fno-exceptions -fno-rtti)
 
 enable_testing()
 
-foreach(name test_web_proto_request test_web_proto_writer test_web_proto_key_table)
+foreach(name test_web_proto_request test_web_proto_writer test_web_proto_error)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} web_proto unity)
     target_compile_options(${name} PRIVATE ${PROJ_CXX_STRICT})

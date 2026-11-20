@@ -21,8 +21,6 @@ MAX_FRAME_BYTES = 1024
 MAC_RE = re.compile(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
 SN_RE = re.compile(r"[0-9A-Za-z-]{1,16}")
 
-VALID_RATES = {"1", "2", "5", "10", "20"}
-VALID_PERIODS = {"0", "50", "100", "200", "500", "1000"}
 VALID_BOOL = {"0", "1"}
 NMEA_KEYS = {
     "gnss.out.gga",
@@ -42,10 +40,12 @@ CONST_KEYS = {
 class MockState:
     """Shared mutable device state for the mock server."""
 
-    def __init__(self, unlock_token: str = "123456", no_const: bool = False) -> None:
+    def __init__(self, unlock_token: str = "123456", no_const: bool = False,
+                 caps_cm680: bool = False) -> None:
         self.lock = threading.Lock()
         self.unlock_token = unlock_token
-        self.no_const = no_const
+        self.no_const = no_const or caps_cm680
+        self.caps_cm680 = caps_cm680
         self.force_err: str | None = None
         self.drop_ack_key: str | None = None
         self.gnss_none: bool = False
@@ -63,7 +63,9 @@ class MockState:
             "bt.pair_next": 0,
             "factory.sn": "P2A0001",
         }
-        if not no_const:
+        if caps_cm680:
+            self.config["gnss.out.gsv"] = 5000
+        if not self.no_const:
             self.config.update(
                 {
                     "gnss.const.gps": 1,
@@ -72,6 +74,36 @@ class MockState:
                     "gnss.const.gal": 1,
                 }
             )
+
+
+    def caps(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "bt.wl.add": {"min": 17, "max": 17},
+            "bt.wl.del": {"min": 17, "max": 17},
+            "bt.pair_next": [0, 1],
+            "factory.sn": {"min": 1, "max": 16},
+        }
+        if self.gnss_none:
+            return result
+        result.update({
+            "gnss.rate": [1, 2, 5, 10] if self.caps_cm680 else [1, 2, 5, 10, 20],
+            "gnss.gga_gate.enabled": [0, 1],
+            "gnss.gga_gate.min_sats": {"min": 0, "max": 40},
+        })
+        min_period = 1000 // int(self.config["gnss.rate"])
+        for key in NMEA_KEYS:
+            candidates = [1000, 500, 200, 100, 50]
+            if self.caps_cm680:
+                if key == "gnss.out.gsa":
+                    candidates = [1000]
+                elif key == "gnss.out.gsv":
+                    candidates = [1000, 5000]
+                else:
+                    candidates = [1000, 500, 200, 100]
+            result[key] = [0, *(p for p in candidates if p >= min_period)]
+        if not self.no_const:
+            result.update({key: [0, 1] for key in CONST_KEYS})
+        return result
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -225,6 +257,7 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         with self.state.lock:
             hello = {
                 "t": "hello",
+                "caps": self.state.caps(),
                 "proto": 1,
                 "board": "P2",
                 "fw": "0.1.0-mock",
@@ -454,7 +487,7 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
             return False
 
         if key == "gnss.rate":
-            if val not in VALID_RATES:
+            if val not in {str(v) for v in self.state.caps().get(key, [])}:
                 ws_send_json(
                     sock,
                     send_lock,
@@ -466,10 +499,11 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                 cfg = {"t": "config", **self.state.config}
             ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
             ws_send_json(sock, send_lock, cfg)
+            ws_send_json(sock, send_lock, {"t": "caps", "caps": self.state.caps()})
             return False
 
         if key in NMEA_KEYS:
-            if val not in VALID_PERIODS:
+            if val not in {str(v) for v in self.state.caps().get(key, [])}:
                 ws_send_json(
                     sock,
                     send_lock,
@@ -695,9 +729,9 @@ class _WsClient:
         self.sock.close()
 
 
-def run_selftest(ui_dir: pathlib.Path) -> int:
+def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
     """Run automated protocol + HTTP self-tests."""
-    state = MockState(unlock_token="123456", no_const=False)
+    state = MockState(unlock_token="123456", caps_cm680=caps_cm680)
 
     class Handler(MockHandler):
         pass
@@ -730,6 +764,15 @@ def run_selftest(ui_dir: pathlib.Path) -> int:
         assert "gnss.rate" in cfg
         st = c.recv_until("status")
         assert "dev" in st and "gnss" in st and "bt" in st
+        if caps_cm680:
+            assert hello["caps"]["gnss.out.gsv"] == [0, 1000, 5000]
+            assert cfg["gnss.out.gsv"] == 5000
+            c.send_json({"t": "set", "id": 2, "key": "gnss.out.gsa", "value": "100"})
+            assert c.recv_until("ack") == {"t": "ack", "id": 2, "ok": False, "err": "bad_value"}
+            c.send_json({"t": "set", "id": 3, "key": "gnss.rate", "value": "1"})
+            assert c.recv_until("ack") == {"t": "ack", "id": 3, "ok": True}
+            assert c.recv_until("config")["gnss.rate"] == 1
+            assert c.recv_until("caps")["caps"]["gnss.out.gga"] == [0, 1000]
 
         # 3. ws-protocol.md §6 example 1: set gnss.rate=10
         c.send_json({"t": "set", "id": 7, "key": "gnss.rate", "value": "10"})
@@ -920,13 +963,15 @@ def main() -> int:
         help="Report fix=none and omit sats/hacc_mm/hz in GNSS status",
     )
     parser.add_argument("--selftest", action="store_true", help="Run self-test and exit")
+    parser.add_argument("--caps-cm680", action="store_true", help="Use verified CM680 capabilities")
     args = parser.parse_args()
 
     ui_dir = repo_root / "main" / "web" / "ui"
     if args.selftest:
-        return run_selftest(ui_dir)
+        return run_selftest(ui_dir, args.caps_cm680)
 
-    state = MockState(unlock_token=args.unlock_token, no_const=args.no_const)
+    state = MockState(unlock_token=args.unlock_token, no_const=args.no_const,
+                      caps_cm680=args.caps_cm680)
     state.force_err = args.force_err
     state.drop_ack_key = args.drop_ack
     state.gnss_none = args.gnss_none

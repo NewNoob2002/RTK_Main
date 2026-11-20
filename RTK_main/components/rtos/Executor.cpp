@@ -1,5 +1,5 @@
-// Executor 实现：静态任务主循环（等待→命令分派→按周期 poll→统计→喂狗→让出），线程模型见 Executor.hpp。
-// 只在执行器自己的任务中运行；不分配堆、不在 ISR 中调用。
+// Executor 实现：静态任务主循环（等待→命令分派→按周期 poll→统计→喂狗→让出）与异步完成表。
+// run/processCommand/complete 只在执行器自己的任务中运行；post/poll/cancel/call 任意任务可调；不分配堆、非 ISR。
 #include "rtos/Executor.hpp"
 
 #include <limits>
@@ -61,7 +61,7 @@ fw::CommandResult dispatchCommand(std::span<const fw::Module> modules, fw::Execu
 /**
  * @brief  校验 init 的标量参数与静态存储尺寸
  * @param  cfg: 执行器配置
- * @param  storage: 队列、栈与 TCB 的静态存储
+ * @param  storage: 队列、完成表、栈与 TCB 的静态存储
  * @retval 满足全部约束返回 true；否则 false（调用方返回 kInvalidArg）
  * @note   只读参数，无副作用；由 Executor::init 在创建队列前调用一次。
  */
@@ -73,14 +73,13 @@ bool initArgsValid(const ExecutorConfig &cfg, const ExecutorStorageView &storage
     }
     if (storage.stack.empty() ||
         storage.stack.size_bytes() > std::numeric_limits<uint32_t>::max() ||
-        storage.tcb == nullptr || storage.cmdQueue == nullptr || storage.resultQueue == nullptr ||
-        storage.cmdQueue == storage.resultQueue || storage.queueDepth == 0U ||
-        storage.queueDepth > std::numeric_limits<UBaseType_t>::max()) {
+        storage.tcb == nullptr || storage.cmdQueue == nullptr || storage.queueDepth == 0U ||
+        storage.queueDepth > std::numeric_limits<UBaseType_t>::max() ||
+        storage.pending.size() != kMaxPending) {
         return false;
     }
     // 队列深度不能超过调用方给出的静态队列区容量。
-    return storage.queueDepth <= storage.cmdArea.size() / sizeof(fw::Command) &&
-           storage.queueDepth <= storage.resultArea.size() / sizeof(fw::CommandResult);
+    return storage.queueDepth <= storage.cmdArea.size() / sizeof(fw::Command);
 }
 
 /**
@@ -110,13 +109,33 @@ bool moduleTableValid(std::span<const fw::Module> modules, fw::ExecutorId execut
     }
     return true;
 }
+
+/**
+ * @brief  判断目标模块是否注册在本执行器上
+ * @param  modules: 本执行器保存的模块表
+ * @param  executor: 本执行器编号
+ * @param  target: 目标模块编号
+ * @retval true 找到匹配模块；false 未注册
+ * @note   只读 init 后不变的元数据；任意任务可调用
+ */
+bool hasTargetModule(std::span<const fw::Module> modules, fw::ExecutorId executor,
+                     fw::ModuleId target) noexcept
+{
+    for (const auto &module : modules) {
+        if (module.executor == executor && module.id == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 /**
- * @brief  创建命令/结果队列后逐个调用本执行器模块的 ops->init（公开契约见头文件声明）
+ * @brief  创建命令队列并清空完成表后逐个调用本执行器模块的 ops->init（公开契约见头文件声明）
  * @param  cfg: 任务名、优先级、核、等待/预算/让出等配置
  * @param  modules: 模块表，必须指向静态存储（执行器保存该 span）
- * @param  storage: 队列、栈与 TCB 的静态存储
+ * @param  storage: 队列、完成表、栈与 TCB 的静态存储
  * @retval fw::Status::kOk 校验与队列创建完成；个别模块 init 失败只标记为不可用
  * @retval fw::Status::kInvalidArg 参数非法（name 为空、尺寸不足、模块数超限、ModuleId 重复、ops 为空）
  * @retval fw::Status::kBusy 重复调用
@@ -132,20 +151,14 @@ fw::Status Executor::init(const ExecutorConfig &cfg, std::span<const fw::Module>
     if (!initArgsValid(cfg, storage) || !moduleTableValid(modules, cfg.id)) {
         return fw::Status::kInvalidArg;
     }
-    // 长度已限制在 UBaseType_t 范围内；定长命令/结果的大小远小于该上限。
+    // 长度已限制在 UBaseType_t 范围内；定长命令的大小远小于该上限。
     cmd_q_ = xQueueCreateStatic(static_cast<UBaseType_t>(storage.queueDepth), sizeof(fw::Command),
                                 storage.cmdArea.data(), storage.cmdQueue);
     if (cmd_q_ == nullptr) {
         return fw::Status::kNoSpace;
     }
-    // 同上，队列深度已经过范围检查。
-    result_q_ =
-        xQueueCreateStatic(static_cast<UBaseType_t>(storage.queueDepth), sizeof(fw::CommandResult),
-                           storage.resultArea.data(), storage.resultQueue);
-    if (result_q_ == nullptr) {
-        vQueueDelete(cmd_q_);
-        cmd_q_ = nullptr;
-        return fw::Status::kNoSpace;
+    for (auto &slot : storage.pending) {
+        slot = PendingSlot{};
     }
     cfg_ = cfg;
     modules_ = modules;
@@ -214,52 +227,284 @@ bool Executor::moduleOk(fw::ModuleId id) const noexcept
     return false;
 }
 
-fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result,
-                          uint32_t timeoutMs) noexcept
+/**
+ * @brief  在持有 stats_mux_ 临界区时按 seq 查找非空闲完成表项
+ * @param  seq: 目标命令序号
+ * @retval 找到的槽位指针；未找到返回 nullptr
+ * @note   调用方必须已持有 stats_mux_；不阻塞、不调用 FreeRTOS API
+ */
+PendingSlot *Executor::findSlotLocked(uint32_t seq) noexcept
+{
+    if (seq == 0U) {
+        return nullptr;
+    }
+    for (auto &slot : storage_.pending) {
+        if (slot.state != PendingState::kFree && slot.seq == seq) {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
+/**
+ * @brief  在持有 stats_mux_ 临界区时分配单调递增且跳过 0 与在途冲突的新序号
+ * @retval 非零且不与当前完成表项冲突的命令序号
+ * @note   调用方必须已持有 stats_mux_；至多循环 kMaxPending + 1 次
+ */
+uint32_t Executor::allocSeqLocked() noexcept
+{
+    // 完成表最多 kMaxPending 项，最多探测 kMaxPending + 1 次必能找到不冲突的非零序号。
+    for (size_t attempt = 0; attempt <= kMaxPending; ++attempt) {
+        if (next_seq_ == 0U) {
+            next_seq_ = 1U;
+        }
+        const uint32_t candidate = next_seq_;
+        ++next_seq_;
+        if (next_seq_ == 0U) {
+            next_seq_ = 1U;
+        }
+        if (findSlotLocked(candidate) == nullptr) {
+            return candidate;
+        }
+    }
+    return 1U;
+}
+
+/**
+ * @brief  占完成表槽位并入队命令的公共实现（供 post 与 call 复用）
+ * @param  cmd: 待执行命令
+ * @param  caller: 调用方身份
+ * @param  waiter: 同步等待任务句柄（异步 post 为 nullptr）
+ * @param  dropTraceArg: 满队/满表时的 trace 负载 b（post 传 0，call 传 timeoutMs）
+ * @param[out] out: 成功时写入凭据；失败时重置为无效凭据
+ * @retval fw::Result::kOk 成功入队
+ * @retval fw::Result::kInvalidState 执行器未运行
+ * @retval fw::Result::kNotFound 目标模块不存在
+ * @retval fw::Result::kBusy 完成表满或命令队列满
+ * @note   任意任务可调用；不阻塞，临界区内不调用 FreeRTOS API
+ */
+fw::Result Executor::postInternal(const fw::Command &cmd, Caller caller, TaskHandle_t waiter,
+                                  uint32_t dropTraceArg, Ticket &out) noexcept
+{
+    out = Ticket{};
+    if (!running()) {
+        return fw::Result::kInvalidState;
+    }
+    if (!hasTargetModule(modules_, cfg_.id, cmd.target)) {
+        return fw::Result::kNotFound;
+    }
+    size_t slotIdx = kMaxPending;
+    uint32_t seq = 0U;
+    {
+        const CriticalSection guard(stats_mux_);
+        for (size_t i = 0; i < storage_.pending.size(); ++i) {
+            if (storage_.pending[i].state == PendingState::kFree) {
+                slotIdx = i;
+                seq = allocSeqLocked();
+                auto &slot = storage_.pending[i];
+                slot.seq = seq;
+                slot.result = fw::CommandResult{seq, fw::Result::kOk, 0};
+                slot.waiterTask = waiter;
+                slot.caller = caller;
+                slot.state = PendingState::kQueued;
+                break;
+            }
+        }
+    }
+    if (slotIdx == kMaxPending) {
+        traceExec(ExecTrace::kCallDrop, static_cast<uint32_t>(cmd.target), dropTraceArg);
+        return fw::Result::kBusy;
+    }
+    fw::Command queued = cmd;
+    queued.seq = seq;
+    if (xQueueSend(cmd_q_, &queued, 0) != pdTRUE) {
+        {
+            const CriticalSection guard(stats_mux_);
+            auto &slot = storage_.pending[slotIdx];
+            if (slot.seq == seq && slot.state == PendingState::kQueued) {
+                slot = PendingSlot{};
+            }
+        }
+        traceExec(ExecTrace::kCallDrop, static_cast<uint32_t>(cmd.target), dropTraceArg);
+        return fw::Result::kBusy;
+    }
+    out.seq = seq;
+    // slotIdx < kMaxPending < UINT8_MAX，窄化到 uint8_t 安全。
+    out.slot = static_cast<uint8_t>(slotIdx);
+    return fw::Result::kOk;
+}
+
+fw::Result Executor::post(const fw::Command &cmd, Caller caller, Ticket &out) noexcept
+{
+    return postInternal(cmd, caller, nullptr, 0U, out);
+}
+
+PollState Executor::poll(const Ticket &t, fw::CommandResult &out) noexcept
+{
+    if (!inited_ || t.seq == 0U || t.slot >= storage_.pending.size()) {
+        return PollState::kInvalid;
+    }
+    const CriticalSection guard(stats_mux_);
+    auto &slot = storage_.pending[t.slot];
+    if (slot.seq != t.seq) {
+        return PollState::kInvalid;
+    }
+    switch (slot.state) {
+    case PendingState::kQueued:
+    case PendingState::kRunning:
+        return PollState::kPending;
+    case PendingState::kDone:
+        out = slot.result;
+        slot = PendingSlot{};
+        return PollState::kDone;
+    case PendingState::kCancelled:
+        return PollState::kCancelled;
+    case PendingState::kFree:
+    default:
+        return PollState::kInvalid;
+    }
+}
+
+void Executor::cancel(const Ticket &t) noexcept
+{
+    if (!inited_ || t.seq == 0U || t.slot >= storage_.pending.size()) {
+        return;
+    }
+    const CriticalSection guard(stats_mux_);
+    auto &slot = storage_.pending[t.slot];
+    if (slot.seq != t.seq) {
+        return;
+    }
+    switch (slot.state) {
+    case PendingState::kQueued:
+    case PendingState::kRunning:
+        slot.state = PendingState::kCancelled;
+        slot.waiterTask = nullptr;
+        break;
+    case PendingState::kDone:
+        // 结果已就绪但调用方放弃取走，直接释放槽位避免泄漏。
+        slot = PendingSlot{};
+        break;
+    case PendingState::kCancelled:
+    case PendingState::kFree:
+    default:
+        break;
+    }
+}
+
+/**
+ * @brief  写入命令最终结果并按需唤醒同步等待任务，或在已取消时丢弃并释放槽位
+ * @param  seq: 命令序号
+ * @param  result: 命令执行结果
+ * @note   只在执行器任务内调用；临界区外执行 traceExec 与 xTaskNotifyGive
+ */
+void Executor::finishCommand(uint32_t seq, const fw::CommandResult &result) noexcept
+{
+    TaskHandle_t waiter = nullptr;
+    bool dropped = false;
+    {
+        const CriticalSection guard(stats_mux_);
+        PendingSlot *const slot = findSlotLocked(seq);
+        if (slot != nullptr && slot->state == PendingState::kCancelled) {
+            *slot = PendingSlot{};
+        } else if (slot != nullptr && slot->state == PendingState::kRunning) {
+            slot->result = result;
+            // seq 是执行器契约，模块不得覆盖它。
+            slot->result.seq = seq;
+            slot->state = PendingState::kDone;
+            waiter = slot->waiterTask;
+            slot->waiterTask = nullptr;
+        } else {
+            dropped = true;
+            ++stats_.resultDrops;
+        }
+    }
+    if (dropped) {
+        traceExec(ExecTrace::kResultDrop, seq, 1U);
+    }
+    if (waiter != nullptr) {
+        xTaskNotifyGive(waiter);
+    }
+}
+
+void Executor::complete(uint32_t seq, const fw::CommandResult &r) noexcept
 {
     TaskHandle_t owner = nullptr;
     {
         const CriticalSection guard(stats_mux_);
         owner = task_;
     }
-    if (owner == nullptr || owner == xTaskGetCurrentTaskHandle()) {
+    if (seq == 0U || owner == nullptr || owner != xTaskGetCurrentTaskHandle()) {
+        return;
+    }
+    finishCommand(seq, r);
+}
+
+fw::Result Executor::call(const fw::Command &cmd, fw::CommandResult &result,
+                          uint32_t timeoutMs) noexcept
+{
+    const TaskHandle_t current = xTaskGetCurrentTaskHandle();
+    TaskHandle_t owner = nullptr;
+    {
+        const CriticalSection guard(stats_mux_);
+        owner = task_;
+    }
+    if (owner == nullptr || owner == current) {
         return fw::Result::kInvalidState;
     }
-    bool found = false;
-    for (const auto &module : modules_) {
-        found = found || (module.executor == cfg_.id && module.id == cmd.target);
-    }
-    if (!found) {
-        return fw::Result::kNotFound;
-    }
-    fw::CommandResult stale{};
-    while (xQueueReceive(result_q_, &stale, 0) == pdTRUE) {
-    }
-    fw::Command queued = cmd;
-    queued.seq = next_seq_++;
-    if (next_seq_ == 0U) {
-        next_seq_ = 1U;
+    Ticket ticket{};
+    const fw::Result posted = postInternal(cmd, Caller::kConsole, current, timeoutMs, ticket);
+    if (!fw::isOk(posted)) {
+        return posted;
     }
     const uint32_t begin = nowMs();
-    if (xQueueSend(cmd_q_, &queued, 0) != pdTRUE) {
-        // 队列满：调用方任务上下文，记事件后立即返回 kBusy（不阻塞、不重试）。
-        traceExec(ExecTrace::kCallDrop, static_cast<uint32_t>(cmd.target), timeoutMs);
-        return fw::Result::kBusy;
-    }
     for (;;) {
-        const uint32_t elapsed = nowMs() - begin;
-        fw::CommandResult received{};
-        if (xQueueReceive(result_q_, &received,
-                          waitTicks(elapsed < timeoutMs ? timeoutMs - elapsed : 0U)) != pdTRUE) {
-            return fw::Result::kTimeout;
-        }
-        if (received.seq == queued.seq) {
-            result = received;
+        const PollState state = poll(ticket, result);
+        if (state == PollState::kDone) {
             return fw::Result::kOk;
         }
-        if ((nowMs() - begin) >= timeoutMs) {
+        if (state != PollState::kPending) {
             return fw::Result::kTimeout;
         }
+        const uint32_t elapsed = nowMs() - begin;
+        if (elapsed >= timeoutMs) {
+            cancel(ticket);
+            return fw::Result::kTimeout;
+        }
+        // 阻塞等待执行器在 finishCommand 中 xTaskNotifyGive；允许旧通知提前返回并在下一轮复查 poll()。
+        static_cast<void>(ulTaskNotifyTake(pdTRUE, waitTicks(timeoutMs - elapsed)));
+    }
+}
+
+/**
+ * @brief  处理从命令队列取出的一条命令：已取消则跳过并释放，否则分派并在非延迟时立即完成
+ * @param  command: 从 cmd_q_ 取出的命令
+ * @param[out] commands: 已分派命令计数器，实际分派时加一
+ * @note   只在执行器任务内调用；不持有临界区时调用模块 onCommand
+ */
+void Executor::processCommand(const fw::Command &command, uint32_t &commands) noexcept
+{
+    bool skipped = false;
+    {
+        const CriticalSection guard(stats_mux_);
+        PendingSlot *const slot = findSlotLocked(command.seq);
+        if (slot != nullptr) {
+            if (slot->state == PendingState::kCancelled) {
+                *slot = PendingSlot{};
+                skipped = true;
+            } else if (slot->state == PendingState::kQueued) {
+                slot->state = PendingState::kRunning;
+            }
+        }
+    }
+    if (skipped) {
+        return;
+    }
+    // available 只由本任务在 start 阶段修改；运行中为只读，不存在并发写者。
+    const auto result = dispatchCommand(modules_, cfg_.id, ok_, command);
+    ++commands;
+    if (result.detail != fw::kDetailDeferred) {
+        finishCommand(command.seq, result);
     }
 }
 
@@ -299,7 +544,7 @@ void Executor::taskEntry(void *arg) noexcept
 // NOLINTBEGIN(readability-function-size, readability-function-cognitive-complexity): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
 /**
  * @brief  执行器主循环：等命令、轮询模块、喂看门狗，永不返回
- * @note   不拆（ADR-0013 §2.4 的保留例外）：每轮实时路径，等待→排空命令→轮询模块→统计→喂狗的顺序与 pending 标志构成单一状态机，拆出需 4 个以上出入参且辅助函数要改冻结头。
+ * @note   不拆（ADR-0013 §2.4 的保留例外）：每轮实时路径，等待→排空命令→轮询模块→统计→喂狗的顺序与 pending 标志构成单一状态机。
  */
 void Executor::run() noexcept
 {
@@ -323,21 +568,9 @@ void Executor::run() noexcept
         }
         const uint32_t begin = nowMs();
         uint32_t commands = 0;
-        uint32_t drops = 0;
         while (received || xQueueReceive(cmd_q_, &command, 0) == pdTRUE) {
             received = false;
-            // available 只由本任务在 start 阶段修改；运行中为只读，不存在并发写者。
-            const auto result = dispatchCommand(modules_, cfg_.id, ok_, command);
-            if (xQueueSend(result_q_, &result, 0) != pdTRUE) {
-                fw::CommandResult old{};
-                if (xQueueReceive(result_q_, &old, 0) == pdTRUE) {
-                    ++drops;
-                }
-                if (xQueueSend(result_q_, &result, 0) != pdTRUE) {
-                    traceExec(ExecTrace::kResultDrop, result.seq, drops);
-                }
-            }
-            ++commands;
+            processCommand(command, commands);
         }
         pending = false;
         for (size_t i = 0; i < modules_.size(); ++i) {
@@ -366,7 +599,6 @@ void Executor::run() noexcept
                 stats_.maxRoundMs = duration;
             }
             stats_.commands += commands;
-            stats_.resultDrops += drops;
             stats_.stackFree = stackFree;
         }
         if (watchdog) {

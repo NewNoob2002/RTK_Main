@@ -1,7 +1,7 @@
 # 网页配置 WebSocket 协议解析/输出/键表（ADR-0017 §2.5，docs/web/ws-protocol.md）。
 # 纯 C++20、无 IDF/FreeRTOS 头、不分配堆：同一份 CMakeLists 既是 ESP-IDF 组件，
 # 也可被 host 测试 add_subdirectory() 复用（同 stream_demux/app_fw 模式）。
-set(_web_proto_srcs "src/Error.cpp" "src/Request.cpp" "src/Writer.cpp" "src/KeyTable.cpp")
+set(_web_proto_srcs "src/Error.cpp" "src/Request.cpp" "src/Writer.cpp")
 
 if(ESP_PLATFORM)
     idf_component_register(SRCS ${_web_proto_srcs} INCLUDE_DIRS "include" REQUIRES app_fw)

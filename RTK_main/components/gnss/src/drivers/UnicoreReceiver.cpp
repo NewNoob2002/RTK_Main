@@ -107,10 +107,10 @@ uint32_t UnicoreReceiver::caps(Model model) const noexcept
         return cap::kRtcmIn | cap::kBase | cap::kIns | cap::kRate20Hz;
     case Model::kUm982: // 家族视角：双天线能力由 Um982Receiver 追加（ADR-0012 §2.8）
     case Model::kUm980:
-    case Model::kCm680:
         return cap::kRtcmIn | cap::kBase | cap::kRate20Hz;
+    case Model::kCm680: // 手册未确认 20 Hz。
     default:
-        return cap::kRtcmIn | cap::kBase; // 型号未知时给出保守能力
+        return cap::kRtcmIn | cap::kBase;
     }
 }
 
@@ -291,7 +291,7 @@ uint32_t UnicoreReceiver::outputMask(Model model) const noexcept
 /**
  * @brief 生成一条开启或关闭报文输出的命令。
  * @param msg: 报文类型。
- * @param periodMs: 请求周期，0 表示关闭，CM680 的 GSA 亚秒周期按 1 s 发送。
+ * @param periodMs: 请求周期，0 表示关闭，CM680 不支持亚秒 GSA。
  * @param model: 接收机型号。
  * @param plan: 提供接收机连接端口。
  * @param[out] out: 命令缓冲。
@@ -313,15 +313,13 @@ fw::Status UnicoreReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model 
         return fw::Status::kNotSupported;
     }
     const std::string_view name{kOutputNames[idx]};
-    // P2 实测 CM680 对 GSA 的 0.1/0.2/0.5 s 返回 ERROR，1 s 返回 OK（G-CM680 修订 B）。
-    uint32_t wirePeriodMs = periodMs;
+    // CM680 实测不接受亚秒 GSA。旧 NVS 值由应用在启动时恢复。
     if (model == Model::kCm680 && msg == OutputMsg::kGsa && periodMs != 0U &&
         periodMs < ascii::kMsPerSecond) {
-        wirePeriodMs = ascii::kMsPerSecond;
+        return fw::Status::kInvalidArg;
     }
-    // period 0 = 关闭该类；旧 apply 旁路同样用 "UNLOG COMn <name>"。
-    const bool written = (wirePeriodMs == 0U) ? cmdUnlogMsg(out, name, plan.port)
-                                              : cmdLogMsg(out, name, plan.port, wirePeriodMs);
+    const bool written = (periodMs == 0U) ? cmdUnlogMsg(out, name, plan.port)
+                                          : cmdLogMsg(out, name, plan.port, periodMs);
     if (!written) {
         out.clear();
         return fw::Status::kInvalidArg;
@@ -352,6 +350,37 @@ const Receiver &Um982Receiver::forModel(Model model) const noexcept
         return detail::kCm680Receiver;
     }
     return *this;
+}
+
+/** @brief 返回 CM680 协议 V1.2.8 表 1-1 明列的定位输出频率。 @param model: 型号。 @retval 静态频率集合。 */
+std::span<const uint8_t> Cm680Receiver::navRatesHz(Model model) const noexcept
+{
+    static constexpr std::array<uint8_t, 4U> kRates{1U, 2U, 5U, 10U};
+    return model == Model::kCm680 ? std::span<const uint8_t>{kRates} : std::span<const uint8_t>{};
+}
+
+/** @brief 返回 CM680 已确认的周期。 @param msg: 报文。 @param model: 型号。 @retval 毫秒周期集合。 */
+std::span<const uint16_t> Cm680Receiver::outputPeriodsMs(OutputMsg msg, Model model) const noexcept
+{
+    static constexpr std::array<uint16_t, 5U> kTimed{0U, 100U, 200U, 500U, 1000U};
+    static constexpr std::array<uint16_t, 2U> kSecond{0U, 1000U};
+    // V1.2.8 §6.2 给出 GSV 1 s，ADR-0018 §1 记录 5 s 实测。
+    static constexpr std::array<uint16_t, 3U> kGsv{0U, 1000U, 5000U};
+    if (model != Model::kCm680) {
+        return {};
+    }
+    switch (msg) {
+    case OutputMsg::kGga:
+    case OutputMsg::kGst:
+    case OutputMsg::kRmc:
+        return kTimed;
+    case OutputMsg::kGsa:
+        return kSecond;
+    case OutputMsg::kGsv:
+        return kGsv;
+    default:
+        return {};
+    }
 }
 
 Family Cm680Receiver::family() const noexcept

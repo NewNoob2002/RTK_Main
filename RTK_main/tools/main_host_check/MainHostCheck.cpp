@@ -1429,6 +1429,16 @@ void factoryReset()
     const rtos::ExecutorConfig cfg{.name = "reset_test", .id = kLink, .priority = 5U, .core = 1};
     CHECK(fw::isOk(sExecutor.init(cfg, kModules, viewOf(context.linkStorage, sStack))));
     CHECK(fw::isOk(sExecutor.start()));
+    pthread_mutex_init(&s_host_task.lock, nullptr);
+    pthread_condattr_t condAttr{};
+    pthread_condattr_init(&condAttr);
+    pthread_condattr_setclock(&condAttr, CLOCK_MONOTONIC);
+    pthread_cond_init(&s_host_task.cond, &condAttr);
+    pthread_condattr_destroy(&condAttr);
+    s_host_task.notif = 0U;
+    s_host_task.started = true;
+    fake_current_task = &s_host_task;
+    s_use_host_task = true;
     cli::setOutSink(&captureStoreConsole, false);
     char command[] = "freset";
     char yes[] = "yes";
@@ -1451,6 +1461,8 @@ void factoryReset()
     CHECK(s_user_erases == 2U && s_factory_erases == 0U && s_restarts == 1U);
     const store::WriteGuard after;
     CHECK(!after.active());
+    s_use_host_task = false;
+    fake_current_task = nullptr;
     if (s_failures != 0) {
         static_cast<void>(
             std::fwrite(s_store_log.console.data(), 1U, s_store_log.consoleSize, stderr));

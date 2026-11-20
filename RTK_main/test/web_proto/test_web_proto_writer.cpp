@@ -141,7 +141,8 @@ void testInvalidSequences()
     web::JsonWriter deep;
     TEST_ASSERT_TRUE(deep.beginObject());
     TEST_ASSERT_TRUE(deep.beginNested("a"));
-    TEST_ASSERT_FALSE(deep.beginNested("b"));
+    TEST_ASSERT_TRUE(deep.beginNested("b"));
+    TEST_ASSERT_FALSE(deep.beginNested("c"));
 
     web::JsonWriter wrongEnd;
     TEST_ASSERT_TRUE(wrongEnd.beginObject());
@@ -151,8 +152,13 @@ void testInvalidSequences()
     web::JsonWriter closed;
     TEST_ASSERT_TRUE(closed.beginObject());
     TEST_ASSERT_TRUE(closed.beginNested("a"));
+    TEST_ASSERT_TRUE(closed.beginNested("b"));
+    constexpr std::array<int32_t, 3U> kPeriods{0, 1000, 5000};
+    TEST_ASSERT_TRUE(closed.writeIntArray("periods", kPeriods));
+    TEST_ASSERT_TRUE(closed.endNested());
     TEST_ASSERT_TRUE(closed.endNested());
     TEST_ASSERT_TRUE(closed.endObject());
+    TEST_ASSERT_TRUE(render(closed) == R"({"a":{"b":{"periods":[0,1000,5000]}}})");
     TEST_ASSERT_FALSE(closed.beginObject());
 }
 

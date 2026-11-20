@@ -99,11 +99,30 @@ fw::Result clearCacheAndUserBaud() noexcept
     return error == ESP_OK ? fw::Result::kOk : fw::Result::kIoError;
 }
 
+/** @brief 映射接收机维护结果。 @param result: 控制器结果。 @retval 通用命令状态。 */
+fw::Result maintenanceStatus(MaintenanceResult result) noexcept
+{
+    switch (result) {
+    case MaintenanceResult::kOk:
+        return fw::Result::kOk;
+    case MaintenanceResult::kUnsupported:
+        return fw::Result::kNotSupported;
+    case MaintenanceResult::kTimeout:
+        return fw::Result::kTimeout;
+    default:
+        return fw::Result::kIoError;
+    }
+}
+
 } // namespace
 
 void GnssModule::cmdMaintenance(const fw::Command &cmd, uint32_t nowMs,
                                 fw::CommandResult &result) noexcept
 {
+    if (auto_save_in_flight_ || boot_baud_save_in_flight_ || maintenanceTicketSeq_ != 0U) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
     const auto verb = static_cast<GnssMaintenanceVerb>(cmd.verb);
     if (verb == GnssMaintenanceVerb::kBaud) {
         cmdBaud(cmd, nowMs, result);
@@ -128,6 +147,12 @@ void GnssModule::cmdMaintenance(const fw::Command &cmd, uint32_t nowMs,
     }
     active_maintenance_ = reset ? Maintenance::kFactoryReset : Maintenance::kSave;
     result.detail = std::bit_cast<int32_t>(seq);
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSaveReceiver) {
+        // 某些驱动在同一轮给出结果，先登记凭据再推进状态机。
+        maintenanceTicketSeq_ = cmd.seq;
+        maintenanceTicketTarget_ = seq;
+        result.detail = fw::kDetailDeferred;
+    }
     result.status = fw::Result::kOk;
     pollController(nowMs);
 }
@@ -330,13 +355,8 @@ void GnssModule::completeMaintenance(uint32_t nowMs) noexcept
             result = MaintenanceResult::kIoError;
         }
         setConsoleMaintenanceResult(stats.maintenanceSeq, stats.maintenance, result);
-        if ((webMaintSeq_ != 0U) && (stats.maintenanceSeq == webMaintTarget_)) {
-            const fw::Result webRes =
-                (result == MaintenanceResult::kOk) ? fw::Result::kOk : fw::Result::kIoError;
-            ctx().data.webGnssOutcome.write(
-                {webMaintSeq_, data::WebGnssPhase::kDone, webRes, static_cast<int32_t>(result)});
-            webMaintSeq_ = 0U;
-            webMaintTarget_ = 0U;
+        if (maintenanceTicketSeq_ != 0U && stats.maintenanceSeq == maintenanceTicketTarget_) {
+            completeSetting(maintenanceTicketSeq_, maintenanceStatus(result));
         }
     }
     publishStatus(nowMs);

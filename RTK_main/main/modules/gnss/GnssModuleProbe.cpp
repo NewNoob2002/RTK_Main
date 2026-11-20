@@ -32,6 +32,9 @@
 #include "rtos/EspStatus.hpp"
 
 namespace app {
+namespace {
+constexpr uint32_t kMsPerSecond = 1000U;
+} // namespace
 
 using detail::kMaxActionsPerPoll;
 using detail::kReadbackLineBytes;
@@ -211,33 +214,43 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
     if (!landed && !timeout) {
         return;
     }
+    fw::Result saveRes = fw::Result::kIoError;
     if (landed && (stats.failedMask == 0U)) {
         const size_t keyIndex = pending_apply_ == PendingApply::kRate ? gnss_store::kRateKeyIndex
                                                                       : gnss_store::kOutKeyIndex;
-        const fw::Result saveRes =
-            ctx().storage.saveKeys(std::span{gnss_store::kConfigKeys}.subspan(keyIndex, 1U));
-        last_apply_ = fw::isOk(saveRes) ? GnssApply::kOk : GnssApply::kFailed;
+        saveRes = ctx().storage.saveKeys(std::span{gnss_store::kConfigKeys}.subspan(keyIndex, 1U));
+    }
+    if (fw::isOk(saveRes)) {
+        last_apply_ = GnssApply::kOk;
+        pending_apply_ = PendingApply::kNone;
+        ++apply_seq_;
     } else {
         // 有语句失败或超时：NVS 保持旧值，界面与计划一起回滚到变更前。
-        if (pending_apply_ == PendingApply::kOut) {
-            out_cfg_ = pending_prev_out_;
-            ctx().data.gnssOutCfg.write(out_cfg_);
-        } else {
-            ensureRoverCfg().rateHz = pending_prev_rate_;
-        }
-        last_apply_ = GnssApply::kRestored;
+        restorePendingApply();
         controller().setOutputPlan(makePlan());
         static_cast<void>(controller().requestOutput(controller().outputPlan(), nowMs));
     }
-    pending_apply_ = PendingApply::kNone;
-    ++apply_seq_;
-    if (webApplySeq_ != 0U) {
-        const fw::Result webRes =
-            (last_apply_ == GnssApply::kOk) ? fw::Result::kOk : fw::Result::kIoError;
-        ctx().data.webGnssOutcome.write({webApplySeq_, data::WebGnssPhase::kDone, webRes, 0});
-        webApplySeq_ = 0U;
-    }
     publishStatus(nowMs);
+    if (fw::isOk(saveRes)) {
+        ctx().data.configRev.fetch_add(1U, std::memory_order_release);
+    }
+    completeSetting(applyTicketSeq_, saveRes);
+}
+
+void GnssModule::restorePendingApply() noexcept
+{
+    if (pending_apply_ == PendingApply::kOut) {
+        out_cfg_ = pending_prev_out_;
+        ctx().data.gnssOutCfg.write(out_cfg_);
+    } else {
+        ensureRoverCfg().rateHz = pending_prev_rate_;
+    }
+    pending_apply_ = PendingApply::kNone;
+    apply_deferred_ = false;
+    pending_seq_ = 0U;
+    pending_deadline_ms_ = 0U;
+    last_apply_ = GnssApply::kRestored;
+    ++apply_seq_;
 }
 
 fw::Result GnssModule::persistDetectedHint() noexcept
@@ -296,6 +309,108 @@ fw::Result GnssModule::applyBaud(uint32_t baud) noexcept
     return fw::Result::kOk;
 }
 
+void GnssModule::publishCaps() noexcept
+{
+    const auto model = controller().detected().probe.model;
+    settings::GnssCaps caps{.enabled = initialized_};
+    if (model != ::gnss::Model::kUnknown) {
+        const auto &receiver = controller().receiver();
+        caps.valid = true;
+        // 两阶段提交期间保持已确认的定位频率。
+        caps.navRateHz =
+            pending_apply_ == PendingApply::kRate ? pending_prev_rate_ : ensureRoverCfg().rateHz;
+        for (const auto rate : receiver.navRatesHz(model)) {
+            if (caps.navRateCount < caps.navRatesHz.size()) {
+                caps.navRatesHz[caps.navRateCount++] = rate;
+            }
+        }
+        constexpr std::array kMessages{::gnss::OutputMsg::kGga, ::gnss::OutputMsg::kGsa,
+                                       ::gnss::OutputMsg::kGsv, ::gnss::OutputMsg::kGst,
+                                       ::gnss::OutputMsg::kRmc};
+        const uint32_t minPeriod = kMsPerSecond / std::max(caps.navRateHz, uint8_t{1U});
+        for (size_t i = 0U; i < kMessages.size(); ++i) {
+            auto &domain = caps.outPeriods[i];
+            const bool gsvDisabled =
+                kMessages[i] == ::gnss::OutputMsg::kGsv && !ensureRoverCfg().gsv;
+            for (const auto period : receiver.outputPeriodsMs(kMessages[i], model)) {
+                if ((period == 0U || (!gsvDisabled && period >= minPeriod)) &&
+                    domain.count < domain.values.size()) {
+                    domain.values[domain.count++] = period;
+                }
+            }
+            domain.supported = domain.count != 0U;
+        }
+    }
+    if (!caps.sameCaps(ctx().data.gnssCaps.read())) {
+        ctx().data.gnssCaps.write(caps);
+    }
+}
+
+void GnssModule::restoreSettingsForModel() noexcept
+{
+    const auto model = controller().detected().probe.model;
+    const auto &receiver = controller().receiver();
+    const auto rates = receiver.navRatesHz(model);
+    if (restoredSettings_ || rates.empty()) {
+        return;
+    }
+    restoredSettings_ = true;
+    auto &rate = ensureRoverCfg().rateHz;
+    if (std::ranges::find(rates, rate) == rates.end()) {
+        const auto upper = std::ranges::upper_bound(rates, rate);
+        const auto restored = upper == rates.begin() ? rates.front() : *(upper - 1);
+        FW_LOGW(fw::TraceCat::kGnss, "<cfg> restored GNSS rate %u as %u Hz",
+                static_cast<unsigned>(rate), static_cast<unsigned>(restored));
+        rate = restored;
+    }
+
+    restoreOutputPeriods();
+}
+
+::gnss::OutputMsg GnssModule::outputCapabilityMsg(::gnss::OutputMsg msg) noexcept
+{
+    constexpr uint32_t kSatsInfoBit = 1U << static_cast<uint8_t>(::gnss::OutputMsg::kSatsInfo);
+    const auto model = controller().detected().probe.model;
+    if (msg == ::gnss::OutputMsg::kSatsInfo &&
+        (controller().receiver().outputMask(model) & kSatsInfoBit) == 0U) {
+        return ::gnss::OutputMsg::kGsv;
+    }
+    return msg;
+}
+
+void GnssModule::restoreOutputPeriods() noexcept
+{
+    const auto model = controller().detected().probe.model;
+    const auto &receiver = controller().receiver();
+    for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
+        if ((out_cfg_.mask & (1U << i)) == 0U || data::followsFixRate(out_cfg_, i)) {
+            continue;
+        }
+        // App 语句下标与 OutputMsg 的前缀一致。
+        const auto msg = outputCapabilityMsg(static_cast<::gnss::OutputMsg>(i));
+        const auto periods = receiver.outputPeriodsMs(msg, model);
+        const uint32_t period =
+            core::services::GnssService::intervalToPeriodMs(out_cfg_.intervals[i]);
+        const auto slower = std::ranges::lower_bound(periods, period);
+        if (periods.empty() || (slower != periods.end() && *slower == period)) {
+            continue;
+        }
+        const uint16_t restored = slower == periods.end() ? periods.back() : *slower;
+        int8_t interval = 0;
+        // 驱动能力表里的值应能由输出配置编码。若未来添加不可编码值，回到关闭。
+        if (!settings::periodMsToInterval(static_cast<int32_t>(restored), interval)) {
+            interval = 0;
+        }
+        if (fw::isOk(out_cfg_.applyInterval(i, interval))) {
+            FW_LOGW(fw::TraceCat::kGnss, "<cfg> restored GNSS output[%u] from %lu to %lu ms",
+                    static_cast<unsigned>(i), static_cast<unsigned long>(period),
+                    static_cast<unsigned long>(
+                        core::services::GnssService::intervalToPeriodMs(interval)));
+        }
+    }
+    ctx().data.gnssOutCfg.write(out_cfg_);
+}
+
 ::gnss::OutputPlan GnssModule::makePlan() noexcept
 {
     uint8_t rateHz = 0U;
@@ -305,7 +420,22 @@ fw::Result GnssModule::applyBaud(uint32_t baud) noexcept
         gsv = rover_cfg_->gsv;
     }
     const uint32_t caps = controller().detected().caps;
-    return data::makeOutputPlan(out_cfg_, rateHz, gsv, board::gnssReceiverPort(), caps);
+    auto plan = data::makeOutputPlan(out_cfg_, rateHz, gsv, board::gnssReceiverPort(), caps);
+    const auto model = controller().detected().probe.model;
+    if (model == ::gnss::Model::kCm680) {
+        const uint32_t minPeriod = kMsPerSecond / plan.rateHz;
+        for (auto &period : plan.periodMs) {
+            if (period != 0U) {
+                period = std::max(period, minPeriod);
+            }
+        }
+        constexpr auto kGsa = static_cast<size_t>(::gnss::OutputMsg::kGsa);
+        // 自适应 GSA 的默认规则是 1 Hz。显式值仍由驱动校验。
+        if (plan.periodMs[kGsa] != 0U && data::followsFixRate(out_cfg_, kGsa)) {
+            plan.periodMs[kGsa] = kMsPerSecond;
+        }
+    }
+    return plan;
 }
 
 void GnssModule::applyWriteAction(const ::gnss::Action &act) noexcept
@@ -359,6 +489,8 @@ void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur)
         step_retry_ = 0U;
         step_sent_once_ = false;
         detect_pending_ = true;
+        restoreSettingsForModel();
+        controller().setOutputPlan(makePlan());
     } else if ((cur == ::gnss::State::kRunning) && detect_pending_) {
         // 探测后要经过 kConfiguring → kOutput → kRunning，只看 configuring→running 会漏掉（P3b 起）。
         detect_pending_ = false;

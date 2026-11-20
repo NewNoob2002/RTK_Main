@@ -169,6 +169,13 @@ public:
     /** 本驱动需要额外挂到 UART 分流器上的解码器（NMEA、RTCM3 由 main 固定挂载，按地址去重）。 */
     [[nodiscard]] virtual std::span<const demux::Decoder *const> decoders() const noexcept = 0;
     [[nodiscard]] virtual uint32_t caps(Model model) const noexcept = 0;
+
+    /** @brief 查询手册确认的定位频率。 @param model: 已识别型号。 @retval 静态频率集合，空表示待确认。 @note 线程/ISR 安全。 */
+    [[nodiscard]] virtual std::span<const uint8_t> navRatesHz(Model model) const noexcept;
+
+    /** @brief 查询硬件已确认的输出周期。 @param msg: 输出语句。 @param model: 已识别型号。 @retval 静态毫秒集合，0 表示关闭，空表示待确认。 @note 线程/ISR 安全。 */
+    [[nodiscard]] virtual std::span<const uint16_t> outputPeriodsMs(OutputMsg msg,
+                                                                    Model model) const noexcept;
     /**
      * @brief  探测得到型号后取该型号的驱动（ADR-0012 §2.8）
      * @param  model: matchProbe 给出的型号

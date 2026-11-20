@@ -22,8 +22,6 @@
     timeout: "No response within 2 s, reverted", disconnected: "Connection lost"
   };
   const FIX = { none: ["NONE", "bad"], single: ["SINGLE", "warn"], dgps: ["DGPS", "info"], float: ["FLOAT", "info"], fixed: ["FIXED", "ok"] };
-  const RATES = [["1", "1 Hz"], ["2", "2 Hz"], ["5", "5 Hz"], ["10", "10 Hz"], ["20", "20 Hz"]];
-  const OUT = [["0", "Off"], ["1000", "1 Hz"], ["500", "2 Hz"], ["200", "5 Hz"], ["100", "10 Hz"], ["50", "20 Hz"]];
   const MAC_RE = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/;
   const SN_RE = /^[0-9A-Za-z-]{1,16}$/;
   const ICONS = {
@@ -43,6 +41,7 @@
   let attempt = 0;
   let retryTimer = null;
   let hello = {};
+  let caps = {};
   let config = {};
   const status = { dev: {}, gnss: {}, bt: {} };
   let unlocked = false;
@@ -131,7 +130,6 @@
   }
 
   const val = (key) => (has(optimistic, key) ? optimistic[key] : cfgVal(key));
-  const rateHz = () => Number(val("gnss.rate")) || 20;
   const keyBusy = (key) => (inflight && inflight.o.key === key) || queue.some((r) => r.o.key === key);
 
   function gateHeld() {
@@ -141,21 +139,19 @@
   }
 
   // ---------------------------------------------------------------- SCHEMA
-  const outField = (n) => ({ type: "select", key: "gnss.out." + n, label: n.toUpperCase(), opts: OUT,
-    optOff: (v) => v !== "0" && 1000 / Number(v) > rateHz() });
+  const outField = (n) => ({ type: "select", key: "gnss.out." + n, label: n.toUpperCase() });
   const constField = (k, l) => ({ type: "switch", key: "gnss.const." + k, label: l });
 
   const SCHEMA = [
     { id: "gnss", col: "a", title: "GNSS", icon: "gnss", badge: gnssBadge, items: [
       { type: "tiles" },
       { type: "kv", rows: [["Module", () => dash(status.gnss.state)], ["Model / FW", () => dash(status.gnss.model) + " / " + dash(status.gnss.fw)]] },
-      { type: "heading", text: "Positioning rate" },
-      { type: "seg", key: "gnss.rate", label: "Positioning rate", opts: RATES },
-      { type: "heading", text: "NMEA output" },
+      { type: "heading", text: "Positioning rate", prefix: "gnss.rate" },
+      { type: "seg", key: "gnss.rate", label: "Positioning rate" },
+      { type: "heading", text: "NMEA output", prefix: "gnss.out." },
       { type: "group", cls: "cols", items: ["gga", "gsa", "gsv", "gst", "rmc"].map(outField) },
-      { type: "hint", text: () => "Outputs faster than the positioning rate (" + rateHz() + " Hz) are unavailable." },
-      { type: "heading", text: "Constellations" },
-      { type: "group", cls: "cols", empty: "Constellation selection is not supported by this receiver.",
+      { type: "heading", text: "Constellations", prefix: "gnss.const." },
+      { type: "group", cls: "cols",
         items: [constField("gps", "GPS"), constField("bds", "BeiDou"), constField("glo", "GLONASS"), constField("gal", "Galileo")] }
     ] },
     { id: "gate", col: "a", title: "GGA quality gate", icon: "gate", badge: gateBadge, items: [
@@ -212,10 +208,12 @@
 
   /** 设置成功提示里显示的值文本：选项取显示名，开关显示 On/Off。 */
   function showVal(f, v) {
-    if (f.opts) {
-      const o = f.opts.find((x) => x[0] === v);
-      if (o) return o[1];
+    if (f.type === "select") {
+      if (v === "0") return "Off";
+      const hz = Math.trunc(100000 / Number(v)) / 100;
+      return hz + " Hz";
     }
+    if (f.type === "seg") return v + " Hz";
     if (f.type === "switch") return v === "1" ? "On" : "Off";
     return v;
   }
@@ -231,37 +229,68 @@
     return reg(f, h("label", { class: "row" }, [label(f), h("span", { class: "sw" }, [inp, h("i")])]), [inp], (v) => { inp.checked = v === "1"; });
   };
 
+  function optionValues(key) {
+    return Array.isArray(caps[key]) ? caps[key].map(String) : [];
+  }
+
   W.select = (f) => {
-    const sel = h("select", { "aria-label": f.label, onchange: () => setKey(f, sel.value) },
-      f.opts.map((o) => h("option", { value: o[0], text: o[1] })));
+    const sel = h("select", { "aria-label": f.label, onchange: () => setKey(f, sel.value) });
+    let shown = "";
     return reg(f, h("div", { class: "row" }, [label(f), sel]), [sel], (v) => {
-      Array.prototype.forEach.call(sel.options, (o) => { o.disabled = !!(f.optOff && f.optOff(o.value)); });
+      const values = optionValues(f.key);
+      const signature = values.join(",");
+      if (signature !== shown) {
+        shown = signature;
+        sel.replaceChildren(...values.map((value) => h("option", { value, text: showVal(f, value) })));
+      }
       sel.value = v;
     });
   };
 
   W.seg = (f) => {
-    const btns = f.opts.map((o) => h("button", { type: "button", text: o[1], "aria-pressed": "false", onclick: () => setKey(f, o[0]) }));
-    const row = h("div", { class: "seg", role: "group", "aria-label": f.label }, btns);
-    return reg(f, row, btns, (v) => btns.forEach((b, i) => b.setAttribute("aria-pressed", String(f.opts[i][0] === v))));
+    const btns = [];
+    const row = h("div", { class: "seg", role: "group", "aria-label": f.label });
+    let shown = "";
+    return reg(f, row, btns, (v) => {
+      const values = optionValues(f.key);
+      const signature = values.join(",");
+      if (signature !== shown) {
+        shown = signature;
+        btns.splice(0, btns.length, ...values.map((value) => h("button", {
+          type: "button", text: showVal(f, value), onclick: () => setKey(f, value)
+        })));
+        row.replaceChildren(...btns);
+      }
+      btns.forEach((b, i) => b.setAttribute("aria-pressed", String(values[i] === v)));
+    });
   };
 
   W.stepper = (f) => {
     const inp = h("input", { type: "number", inputmode: "numeric", min: f.min, max: f.max, step: 1, "aria-label": f.label });
     let timer = null;
+    const bounds = () => {
+      const domain = caps[f.key];
+      if (domain && Number.isInteger(domain.min) && Number.isInteger(domain.max) && domain.min <= domain.max) {
+        return domain;
+      }
+      return f;
+    };
     const commit = () => {
       clearTimeout(timer);
       timer = null;
+      if (!has(caps, f.key)) return;
+      const { min, max } = bounds();
       const n = Number(inp.value);
-      if (inp.value === "" || !Number.isInteger(n) || n < f.min || n > f.max) {
-        toast(f.label + ": enter " + f.min + "–" + f.max, "err");
+      if (inp.value === "" || !Number.isInteger(n) || n < min || n > max) {
+        toast(f.label + ": enter " + min + "–" + max, "err");
         inp.value = val(f.key) || "";
         return;
       }
       setKey(f, String(n));
     };
     const bump = (d) => {
-      const n = Math.min(f.max, Math.max(f.min, (Number(inp.value) || 0) + d));
+      const { min, max } = bounds();
+      const n = Math.min(max, Math.max(min, (Number(inp.value) || 0) + d));
       inp.value = String(n);
       clearTimeout(timer);
       timer = setTimeout(commit, 700); // 连点时合并为一次设置
@@ -271,7 +300,12 @@
     const minus = h("button", { type: "button", text: "−", "aria-label": "Decrease", onclick: () => bump(-1) });
     const plus = h("button", { type: "button", text: "+", "aria-label": "Increase", onclick: () => bump(1) });
     return reg(f, h("div", { class: "row" }, [label(f), h("div", { class: "step" }, [minus, inp, plus])]), [inp, minus, plus],
-      (v) => { if (document.activeElement !== inp && !timer) inp.value = v; });
+      (v) => {
+        const { min, max } = bounds();
+        inp.min = min;
+        inp.max = max;
+        if (document.activeElement !== inp && !timer) inp.value = v;
+      });
   };
 
   W.group = (f) => {
@@ -286,7 +320,11 @@
     return h("div", null, [box, note]);
   };
 
-  W.heading = (f) => h("h3", { class: "gh", text: f.text });
+  W.heading = (f) => {
+    const title = h("h3", { class: "gh", text: f.text });
+    if (f.prefix) views.push(() => { title.hidden = !Object.keys(caps).some((key) => key.startsWith(f.prefix)); });
+    return title;
+  };
 
   W.hint = (f) => {
     const p = h("p", { class: "hint" });
@@ -469,7 +507,7 @@
     document.body.classList.toggle("offline", !ready && !leaving);
     fields.forEach((x) => {
       const v = val(x.f.key);
-      x.row.hidden = configured && v === undefined;
+      x.row.hidden = !has(caps, x.f.key) || (configured && v === undefined);
       if (v !== undefined) x.apply(v);
       const unsup = !!unsupported[x.f.key];
       const busy = keyBusy(x.f.key);
@@ -577,11 +615,16 @@
     switch (m.t) {
       case "hello":
         hello = m;
+        caps = m.caps || {};
         unlocked = !!m.factory;
         ready = true;
         attempt = 0;
         banner("");
         setConn("ok", "Connected");
+        break;
+      case "caps":
+        caps = m.caps || {};
+        Object.keys(unsupported).forEach((key) => delete unsupported[key]);
         break;
       case "config":
         config = m;

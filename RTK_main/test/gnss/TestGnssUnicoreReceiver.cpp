@@ -196,7 +196,7 @@ static void testMatchCm680()
         driver.matchProbe(decoder, bytesOf(gnss_test::kCm680VersionFrames.front()), result));
     TEST_ASSERT_EQUAL(static_cast<int>(Model::kCm680), static_cast<int>(result.model));
     TEST_ASSERT_TRUE(std::string_view{result.fwVersion.data()}.starts_with("CM680_SDK.1.2.5a"));
-    TEST_ASSERT_EQUAL_UINT32(driver.caps(Model::kUm980), driver.caps(Model::kCm680));
+    TEST_ASSERT_EQUAL_UINT32(gnss::cap::kRtcmIn | gnss::cap::kBase, driver.caps(Model::kCm680));
     TEST_ASSERT_EQUAL_PTR(optisens, &driver.forModel(Model::kCm680));
     TEST_ASSERT_EQUAL_PTR(optisens, &um982Drv().forModel(Model::kCm680));
     TEST_ASSERT_EQUAL_PTR(optisens, &optisens->forModel(Model::kCm680));
@@ -275,7 +275,7 @@ static void testCm680Configuration()
     }
 }
 
-/** @brief 验证 CM680 只钳制 GSA 亚秒周期；单线程主机测试。 */
+/** @brief 验证 CM680 拒绝亚秒 GSA，保留有效周期；单线程主机测试。 */
 static void testCm680GsaPeriod()
 {
     using gnss::Model;
@@ -287,8 +287,8 @@ static void testCm680GsaPeriod()
         std::string_view expected;
     };
     constexpr std::array kCases{
-        Case{Model::kCm680, OutputMsg::kGsa, 100U, "GPGSA COM1 1\r\n"},
-        Case{Model::kCm680, OutputMsg::kGsa, 50U, "GPGSA COM1 1\r\n"},
+        Case{Model::kCm680, OutputMsg::kGsa, 100U, {}},
+        Case{Model::kCm680, OutputMsg::kGsa, 50U, {}},
         Case{Model::kUm980, OutputMsg::kGsa, 100U, "GPGSA COM1 0.1\r\n"},
         Case{Model::kCm680, OutputMsg::kGga, 100U, "GPGGA COM1 0.1\r\n"},
         Case{Model::kCm680, OutputMsg::kGsa, 0U, "UNLOG COM1 GPGSA\r\n"},
@@ -298,8 +298,10 @@ static void testCm680GsaPeriod()
     const gnss::OutputPlan plan{.port = 1U};
     for (const Case &test : kCases) {
         gnss::CmdBuf cmd{};
-        TEST_ASSERT_EQUAL(fw::Status::kOk,
-                          unicoreDrv().buildOutput(test.msg, test.periodMs, test.model, plan, cmd));
+        const auto result =
+            unicoreDrv().buildOutput(test.msg, test.periodMs, test.model, plan, cmd);
+        TEST_ASSERT_EQUAL(test.expected.empty() ? fw::Status::kInvalidArg : fw::Status::kOk,
+                          result);
         TEST_ASSERT_TRUE(textEquals(cmd.view(), test.expected));
     }
 }
@@ -486,6 +488,13 @@ void testCaps()
     TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, family.caps(gnss::Model::kUm982));
     TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, family.caps(gnss::Model::kUm980));
     TEST_ASSERT_BITS(gnss::cap::kIns, gnss::cap::kIns, family.caps(gnss::Model::kUm981));
+    const auto &cm680 = family.forModel(gnss::Model::kCm680);
+    TEST_ASSERT_BITS(gnss::cap::kRate20Hz, 0U, cm680.caps(gnss::Model::kCm680));
+    TEST_ASSERT_TRUE(
+        cm680.outputPeriodsMs(gnss::OutputMsg::kSatsInfo, gnss::Model::kCm680).empty());
+    const auto gsv = cm680.outputPeriodsMs(gnss::OutputMsg::kGsv, gnss::Model::kCm680);
+    TEST_ASSERT_EQUAL_size_t(3U, gsv.size());
+    TEST_ASSERT_EQUAL_UINT16(5000U, gsv.back());
     // 换到型号驱动后才有 HEADING。
     const gnss::Receiver &dual = family.forModel(gnss::Model::kUm982);
     TEST_ASSERT_BITS(

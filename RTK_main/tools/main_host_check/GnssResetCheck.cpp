@@ -24,6 +24,30 @@ extern "C" {
 #include "nvs.h"
 }
 
+namespace rtos {
+
+/** 以测试线程模拟 kIo，并手动推进真实执行器队列。 */
+struct ExecutorTestAccess {
+    /** @brief 绑定测试线程为执行器所有者。 @param exec: 测试执行器。 @param owner: 测试 TCB。 */
+    static void bind(Executor &exec, TaskHandle_t owner) noexcept
+    {
+        exec.task_ = owner;
+        fake_current_task = owner;
+    }
+
+    /** @brief 消费本轮排队命令。 @param exec: 测试执行器。 */
+    static void drain(Executor &exec) noexcept
+    {
+        fw::Command cmd{};
+        uint32_t count = 0U;
+        while (xQueueReceive(exec.cmd_q_, &cmd, 0) == pdTRUE) {
+            exec.processCommand(cmd, count);
+        }
+    }
+};
+
+} // namespace rtos
+
 namespace {
 
 constinit app::AppContext s_initialContext{};
@@ -31,7 +55,7 @@ constinit app::AppContext s_failureContext{};
 constinit app::AppContext s_dispatchContext{};
 constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
-constinit std::array<app::AppContext, 13U> s_targetBaudContexts{};
+constinit std::array<app::AppContext, 14U> s_targetBaudContexts{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -637,7 +661,7 @@ void testCm680Rate10(nvs_handle_t nvs)
     const auto status = s_context->data.gnssStatus.read();
     CHECK(status.applySeq != before && status.lastApply == app::GnssApply::kOk);
     CHECK(status.state == gnss::State::kRunning && status.failedMask == 0U);
-    CHECK(status.rxPeriodMs[kGsaIndex] == 100U);
+    CHECK(status.rxPeriodMs[kGsaIndex] == 1000U);
     uint8_t storedRate = 0U;
     CHECK(nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK && storedRate == 10U);
 }
@@ -1011,10 +1035,10 @@ void testGgaGateNvsAndModuleFlow()
 }
 
 /**
- * @brief 验证网页→GNSS 桥接：控制台交错不串单、超时取消不执行、GGA 门控 NVS 失败/禁写回报与退出立即落盘。
+ * @brief 验证 GNSS 关键设置的异步结单、网页单键落盘、失败回滚和控制台门控去抖。
  * @note 单线程主机测试，覆盖交叉评审 P1 #3、P1 #4、P2 #6。
  */
-void testWebGnssBridgeAndGgaPersist()
+void testGnssSettingsBusAndGgaPersist()
 {
     std::array<uint8_t, app::GnssModule::kDemuxBufBytes> demux{};
     std::array<uint8_t, app::kRtcmPipeBytes> pipe{};
@@ -1033,92 +1057,177 @@ void testWebGnssBridgeAndGgaPersist()
     advance(3000U);
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
 
-    auto makeRateCmd = [](uint32_t seq, uint8_t hz) {
-        fw::Command cmd{};
-        cmd.target = app::id(app::ModuleKind::kGnss);
-        cmd.verb = static_cast<uint8_t>(app::GnssVerb::kSetRate);
-        cmd.seq = seq;
-        cmd.argLen = 1U;
+    rtos::Executor executor{};
+    app::ExecutorControlStorage<4U> control{};
+    std::array<StackType_t, 256U> stack{};
+    const auto execId = app::id(app::ExecKind::kIo);
+    const auto target = app::id(app::ModuleKind::kGnss);
+    fw::ModuleOps ops{};
+    ops.onCommand = [](void *self, const fw::Command &cmd, fw::CommandResult &out) noexcept {
+        static_cast<app::GnssModule *>(self)->onCommand(cmd, out);
+    };
+    const std::array modules{fw::Module{
+        .name = "gnss", .id = target, .executor = execId, .self = &s_context->gnss, .ops = &ops}};
+    CHECK(fw::isOk(executor.init({.name = "io", .id = execId, .priority = 9U}, modules,
+                                 app::viewOf(control, stack))));
+    s_context->ioExecutor = &executor;
+    rtos::ExecutorTestAccess::bind(executor, &control.tcb);
+
+    auto makeRateCmd = [target](app::GnssSubVerb verb, uint8_t hz) {
+        fw::Command cmd{.target = target, .verb = static_cast<uint8_t>(verb), .argLen = 1U};
         cmd.args[0] = hz;
         return cmd;
     };
+    auto post = [&](const fw::Command &cmd) {
+        rtos::Ticket ticket{};
+        CHECK(fw::isOk(executor.post(cmd, rtos::Caller::kWeb, ticket)));
+        return ticket;
+    };
+    fw::CommandResult result{};
+    auto expectDone = [&](const rtos::Ticket &ticket, fw::Result status) {
+        CHECK(executor.poll(ticket, result) == rtos::PollState::kDone);
+        CHECK(result.seq == ticket.seq && result.status == status);
+    };
 
-    // 1. 控制台先发起 kSetRate(5) 在途，此时网页提交 kSetRate(10) 须按自身 seq 返回 kBusy，
-    //    且控制台应用完成推进全局 applySeq 时不得误写成网页成功（P1 #3）。
-    fw::CommandResult consoleRes{};
-    s_context->gnss.onCommand(makeRateCmd(0U, 5U), consoleRes);
-    CHECK(fw::isOk(consoleRes.status));
-    s_context->data.webGnssCommand.write(makeRateCmd(1U, 10U));
-    advance(20U);
-    auto out = s_context->data.webGnssOutcome.read();
-    CHECK((out.seq == 1U) && (out.phase == app::data::WebGnssPhase::kDone) &&
-          (out.status == fw::Result::kBusy));
-    const uint32_t applyBefore = s_context->data.gnssStatus.read().applySeq;
+    // 控制台的在途变更不能被另一个凭据误认成自己的结果。
+    auto console = makeRateCmd(app::GnssSubVerb::kApplyRate, 5U);
+    console.verb = static_cast<uint8_t>(app::GnssVerb::kSetRate);
+    s_context->gnss.onCommand(console, result);
+    CHECK(fw::isOk(result.status));
+    const auto busy = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 10U));
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(busy, fw::Result::kBusy);
     advance(500U);
-    CHECK(s_context->data.gnssStatus.read().applySeq != applyBefore);
-    out = s_context->data.webGnssOutcome.read();
-    CHECK((out.seq == 1U) && (out.status == fw::Result::kBusy));
 
-    // 2. 控制台完成后网页再提交 kSetRate(10) (seq=2)：先回 kAccepted，重配落盘后按 seq=2 回 kDone/kOk。
-    s_context->data.webGnssCommand.write(makeRateCmd(2U, 10U));
-    advance(20U);
-    out = s_context->data.webGnssOutcome.read();
-    CHECK((out.seq == 2U) && (out.phase == app::data::WebGnssPhase::kAccepted));
+    // 网页等候实际写入 NVS，并在完成后看到更新过的能力。
+    const auto rate = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 10U));
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(rate, result) == rtos::PollState::kPending);
     advance(500U);
-    out = s_context->data.webGnssOutcome.read();
-    CHECK((out.seq == 2U) && (out.phase == app::data::WebGnssPhase::kDone) &&
-          (out.status == fw::Result::kOk));
+    expectDone(rate, fw::Result::kOk);
+    CHECK(s_context->data.gnssCaps.read().navRateHz == 10U);
     uint8_t storedRate = 0U;
     CHECK((nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK) && (storedRate == 10U));
 
-    // 3. 超时取消语义（P2 #6）：kIo 消费前已写入 webGnssCancelSeq=3 → 跳过执行并回 kCancelled。
-    s_context->data.webGnssCommand.write(makeRateCmd(3U, 2U));
-    s_context->data.webGnssCancelSeq.store(3U, std::memory_order_release);
-    advance(20U);
-    out = s_context->data.webGnssOutcome.read();
-    CHECK((out.seq == 3U) && (out.phase == app::data::WebGnssPhase::kCancelled));
+    const auto cancelled = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 2U));
+    executor.cancel(cancelled);
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(cancelled, result) == rtos::PollState::kInvalid);
     CHECK(s_context->data.gnssRateHz.load(std::memory_order_acquire) == 10U);
 
-    // 4. GGA 门控 NVS 写失败（P1 #4）：网页提交 kSetGgaGate(on, 11) (seq=4)，NVS 故障时回错误且标记 kFailed；
-    //    NVS 恢复后触发 webGnssFlushGgaSeq 立即落盘成功，状态回到 kClean。
-    nvs_shim_set_write_fail(ESP_FAIL);
-    fw::Command gateCmd = app::detail::packGnssGate(true, true, true, 11U);
-    gateCmd.seq = 4U;
-    s_context->data.webGnssCommand.write(gateCmd);
-    advance(20U);
-    out = s_context->data.webGnssOutcome.read();
-    CHECK((out.seq == 4U) && (out.phase == app::data::WebGnssPhase::kAccepted));
-    advance(600U);
-    out = s_context->data.webGnssOutcome.read();
-    CHECK((out.seq == 4U) && (out.phase == app::data::WebGnssPhase::kDone) &&
-          !fw::isOk(out.status));
-    CHECK(s_context->data.ggaGatePersist.load(std::memory_order_acquire) ==
-          app::data::GgaGatePersist::kFailed);
+    const auto badRate = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 20U));
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(badRate, fw::Result::kInvalidArg);
 
-    nvs_shim_set_write_fail(ESP_OK);
-    s_context->data.webGnssFlushGgaSeq.store(1U, std::memory_order_release);
-    advance(20U);
-    CHECK(s_context->data.webGnssFlushGgaDoneSeq.load(std::memory_order_acquire) == 1U);
-    CHECK(s_context->data.ggaGatePersist.load(std::memory_order_acquire) ==
-          app::data::GgaGatePersist::kClean);
+    // 网页单键落盘在同一轮完成。门控开关与阈值相互独立。
+    fw::Command gateCmd = app::detail::packGnssGate(true, true, false, 0U);
+    gateCmd.verb = static_cast<uint8_t>(app::GnssSubVerb::kApplyGgaGate);
+    const auto gate = post(gateCmd);
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(gate, fw::Result::kOk);
     uint8_t nvsGate = 0U;
     uint8_t nvsMin = 0U;
     CHECK((nvs_get_u8(nvs, "gga_gate", &nvsGate) == ESP_OK) && (nvsGate == 1U));
-    CHECK((nvs_get_u8(nvs, "gga_min_sats", &nvsMin) == ESP_OK) && (nvsMin == 11U));
+    CHECK(nvs_get_u8(nvs, "gga_min_sats", &nvsMin) == ESP_ERR_NVS_NOT_FOUND);
 
-    // 5. 禁写模式（safeDefaults=true）下提交 GGA 门控：直接回报 kInvalidState 且持久化态为 kFailed。
-    s_context->bootConfig.safeDefaults = true;
-    fw::Command gateCmd2 = app::detail::packGnssGate(true, false, true, 8U);
-    gateCmd2.seq = 5U;
-    s_context->data.webGnssCommand.write(gateCmd2);
-    advance(20U);
-    out = s_context->data.webGnssOutcome.read();
-    CHECK((out.seq == 5U) && (out.phase == app::data::WebGnssPhase::kDone) &&
-          (out.status == fw::Result::kInvalidState));
+    const auto badGga =
+        "$GNGGA,080000.00,3112.34567,N,12123.45678,E,4,10,0.8,15.2,M,-5.0,M,1.0,0001*7F\r\n";
+    // 先把阈值设为 11，确认门控处于阻断，再验证失败的关闭操作无副作用。
+    auto threshold = app::detail::packGnssGate(false, false, true, 11U);
+    threshold.verb = gateCmd.verb;
+    const auto minSats = post(threshold);
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(minSats, fw::Result::kOk);
+    s_rx += badGga;
+    advance(60U);
+    const auto beforeGate = s_context->data.ggaGateStatus.read();
+    CHECK(beforeGate.enabled && beforeGate.blocked && !s_context->gnss.ggaAllowed());
+    const uint32_t rev = s_context->data.configRev.load(std::memory_order_acquire);
+
+    nvs_shim_set_write_fail(ESP_FAIL);
+    gateCmd.args[1] = 0U;
+    const auto failed = post(gateCmd);
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(failed, fw::Result::kIoError);
+    nvs_shim_set_write_fail(ESP_OK);
+    advance(1600U);
+    const auto afterGate = s_context->data.ggaGateStatus.read();
+    CHECK(afterGate.enabled && afterGate.blocked && !s_context->gnss.ggaAllowed());
+    CHECK(afterGate.minSats == beforeGate.minSats && afterGate.gateTrans == beforeGate.gateTrans);
+    CHECK(s_context->data.configRev.load(std::memory_order_acquire) == rev);
     CHECK(s_context->data.ggaGatePersist.load(std::memory_order_acquire) ==
-          app::data::GgaGatePersist::kFailed);
+          app::data::GgaGatePersist::kClean);
+    CHECK((nvs_get_u8(nvs, "gga_gate", &nvsGate) == ESP_OK) && (nvsGate == 1U));
+
+    s_context->bootConfig.safeDefaults = true;
+    const auto readonly = post(gateCmd);
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(readonly, fw::Result::kInvalidState);
     s_context->bootConfig.safeDefaults = false;
 
+    // 控制台仍去抖，退出命令可立即保存已存在的去抖修改。
+    auto consoleGate = app::detail::packGnssGate(true, false, true, 9U);
+    s_context->gnss.onCommand(consoleGate, result);
+    CHECK(fw::isOk(result.status));
+    CHECK((nvs_get_u8(nvs, "gga_min_sats", &nvsMin) == ESP_OK) && (nvsMin == 11U));
+    const auto flush =
+        post({.target = target, .verb = static_cast<uint8_t>(app::GnssSubVerb::kFlushGgaGate)});
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(flush, fw::Result::kOk);
+    CHECK((nvs_get_u8(nvs, "gga_gate", &nvsGate) == ESP_OK) && (nvsGate == 0U));
+    CHECK((nvs_get_u8(nvs, "gga_min_sats", &nvsMin) == ESP_OK) && (nvsMin == 9U));
+
+    // 未完成的频率设置被重探立即终止，重探后的输出计划使用旧配置。
+    const auto interruptedRate = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 2U));
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(interruptedRate, result) == rtos::PollState::kPending);
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kProbe)).status));
+    expectDone(interruptedRate, fw::Result::kInvalidState);
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    CHECK(s_context->data.gnssCaps.read().navRateHz == 10U);
+    CHECK((nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK) && (storedRate == 10U));
+
+    // 保存期间第二条维护命令回忙，复位立即终止第一条。
+    const fw::Command save{.target = target,
+                           .verb = static_cast<uint8_t>(app::GnssSubVerb::kSaveReceiver)};
+    const auto interruptedSave = post(save);
+    const auto overlappingSave = post(save);
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(interruptedSave, result) == rtos::PollState::kPending);
+    expectDone(overlappingSave, fw::Result::kBusy);
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kReset)).status));
+    expectDone(interruptedSave, fw::Result::kInvalidState);
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    const auto savedAfterReset = post(save);
+    rtos::ExecutorTestAccess::drain(executor);
+    advance(500U);
+    expectDone(savedAfterReset, fw::Result::kOk);
+
+    rtos::ExecutorTestAccess::bind(executor, nullptr);
+    s_context->ioExecutor = nullptr;
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+    // 低定位频率启动时保留合法的高频偏好，超表的旧周期回落到最慢档。
+    constexpr auto kGga = static_cast<size_t>(gnss::OutputMsg::kGga);
+    constexpr auto kRmc = static_cast<size_t>(gnss::OutputMsg::kRmc);
+    auto out = app::data::GnssOutConfig::defaults();
+    CHECK(fw::isOk(out.applyInterval(kGga, -2)));
+    CHECK(fw::isOk(out.applyInterval(kRmc, 5)));
+    std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> blob{};
+    size_t len = 0U;
+    CHECK(fw::isOk(out.encode(blob, len)));
+    CHECK(nvs_set_blob(nvs, "out", blob.data(), len) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "rate", 1U) == ESP_OK);
+    CHECK(nvs_commit(nvs) == ESP_OK);
+
+    bootP2TargetCase(13U, nvs, demux, pipe, 460800U, 0U, true, false);
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    const auto restored = s_context->data.gnssOutCfg.read();
+    CHECK(restored.intervals[kGga] == -1 && restored.intervals[kRmc] == 5);
+    CHECK(s_context->data.gnssStatus.read().rxPeriodMs[kGga] == 1000U);
+    CHECK(s_context->data.gnssStatus.read().rxPeriodMs[kRmc] == 1000U);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     nvs_close(nvs);
 }

@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include "fw/Atomic.hpp"
+#include "settings/Types.hpp"
 #include "fw/FanoutRing.hpp"
 #include "fw/Command.hpp"
 #include "fw/Slot.hpp"
@@ -103,22 +104,6 @@ private:
     std::optional<fw::Slot<T>> slot_{};
 };
 
-/** 网页 → GNSS 跨执行器异步命令阶段（kIo 写回，kLink 消费）。 */
-enum class WebGnssPhase : uint8_t {
-    kIdle = 0,
-    kAccepted,  // kIo 已受理，正在等待两阶段 apply / maintenance / NVS 保存完成
-    kDone,      // kIo 已产出最终结果（status/detail 与 seq 一一对应）
-    kCancelled, // kIo 在执行前检测到取消序号，已跳过执行
-};
-
-/** 网页 → GNSS 跨执行器命令结果（由 kIo 按命令 seq 精确绑定发布，防止与控制台交错串单）。 */
-struct WebGnssOutcome {
-    uint32_t seq = 0U;
-    WebGnssPhase phase = WebGnssPhase::kIdle;
-    fw::Result status = fw::Result::kOk;
-    int32_t detail = 0;
-};
-
 // 底层用 uint32_t：Xtensa LX6 无 8 位无锁原子 RMW，改成 1 字节会引入 libatomic 锁（CPP-008）。
 // NOLINTNEXTLINE(performance-enum-size): 无锁原子要求 32 位底层类型。
 enum class GgaGatePersist : uint32_t {
@@ -151,6 +136,9 @@ struct DataCenter {
     void unbindGnssBuffers() noexcept;
 #endif
 
+    fw::Slot<settings::GnssCaps> gnssCaps{};
+    fw::Slot<settings::Value> settingsSn{};
+    std::atomic<uint32_t> configRev{0U};
     ZeroInitSlot<LinkStatus> linkStatus{};
     fw::Slot<Sessions> sessions{};
     fw::Slot<AlarmState> alarmState{};
@@ -170,12 +158,7 @@ struct DataCenter {
     fw::Slot<fw::CommandResult> phonePppResult{}; // kIo 完成时带回相同 seq。
     fw::Slot<fw::Command> phoneSatCommand{};      // kLink 投递 0x06，一个请求在途。
     fw::Slot<fw::CommandResult> phoneSatResult{}; // kIo 完成 0x06 时带回相同 seq。
-    fw::Slot<fw::Command> webGnssCommand{};     // kLink（WebModule）投递 GNSS 配置命令，单条在途。
-    fw::Slot<WebGnssOutcome> webGnssOutcome{};  // kIo（GnssModule）按 seq 回传受理/完成/取消结果。
-    std::atomic<uint32_t> webGnssCancelSeq{0U}; // kLink 超时取消序号（kLink 写，kIo 执行前核对）。
-    std::atomic<uint32_t> webGnssFlushGgaSeq{0U};     // kLink 退出前触发 GGA 门控立即落盘序号。
-    std::atomic<uint32_t> webGnssFlushGgaDoneSeq{0U}; // kIo 完成对应立即落盘请求后回写序号。
-    ZeroInitSlot<LatestGsv> gnssLatestGsv{};          // 0x0A Nav GSV 最近单句缓存。
+    ZeroInitSlot<LatestGsv> gnssLatestGsv{};      // 0x0A Nav GSV 最近单句缓存。
     fw::Slot<rtos::ExecStats> ioExecStats{};
     fw::Slot<GnssStatus> gnssStatus{};
     ZeroInitSlot<gnss::Fix> gnssFix{};

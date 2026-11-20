@@ -130,142 +130,6 @@ void testMailbox()
 }
 
 /**
- * @brief 验证协议 §4 全部可改键的翻译、越界 bad_value、未解锁 locked 与未知键 unknown_key
- * @note 主机单线程测试。
- */
-void testSetTranslation()
-{
-    const auto baseOut = data::GnssOutConfig::defaults();
-
-    // gnss.rate
-    {
-        const auto plan = translateSetRequest("gnss.rate", "10", false, baseOut);
-        assert(plan.error == web::ErrorCode::kNone);
-        assert(plan.target == CommandTarget::kGnss && plan.waitGnssApply);
-        assert(plan.command.target == id(ModuleKind::kGnss));
-        assert(plan.command.verb == static_cast<uint8_t>(GnssVerb::kSetRate));
-        assert(plan.command.argLen == 1U && plan.command.args[0] == 10U);
-
-        assert(translateSetRequest("gnss.rate", "3", false, baseOut).error ==
-               web::ErrorCode::kBadValue);
-    }
-
-    // gnss.out.*（5 条语句）
-    struct OutCase {
-        std::string_view key;
-        std::string_view val;
-        size_t idx;
-        int8_t expectInterval;
-        bool expectEnabled;
-    };
-    const std::array<OutCase, 6U> outCases{{
-        {"gnss.out.gga", "100", static_cast<size_t>(::gnss::OutputMsg::kGga), 10, true},
-        {"gnss.out.gsa", "1000", static_cast<size_t>(::gnss::OutputMsg::kGsa), -1, true},
-        {"gnss.out.gsv", "0", static_cast<size_t>(::gnss::OutputMsg::kSatsInfo), 0, false},
-        {"gnss.out.gst", "500", static_cast<size_t>(::gnss::OutputMsg::kGst), 2, true},
-        {"gnss.out.rmc", "50", static_cast<size_t>(::gnss::OutputMsg::kRmc), 20, true},
-        {"gnss.out.rmc", "200", static_cast<size_t>(::gnss::OutputMsg::kRmc), 5, true},
-    }};
-    for (const auto &c : outCases) {
-        const auto plan = translateSetRequest(c.key, c.val, false, baseOut);
-        assert(plan.error == web::ErrorCode::kNone);
-        assert(plan.target == CommandTarget::kGnss && plan.waitGnssApply);
-        assert(plan.command.verb == static_cast<uint8_t>(GnssSubVerb::kSetOut));
-        assert(plan.command.argLen == data::GnssOutConfig::kBlobBytes);
-        data::GnssOutConfig decoded{};
-        assert(fw::isOk(data::GnssOutConfig::decode(
-            std::span<const uint8_t>{plan.command.args}.first(plan.command.argLen), decoded)));
-        const bool bitOn = (decoded.mask & (1U << c.idx)) != 0U;
-        assert(bitOn == c.expectEnabled);
-        assert(decoded.intervals[c.idx] == c.expectInterval);
-    }
-    assert(translateSetRequest("gnss.out.gga", "150", false, baseOut).error ==
-           web::ErrorCode::kBadValue);
-
-    // Q1 GGA 质量门控两键 + 越界/前导零 bad_value
-    {
-        const auto en = translateSetRequest("gnss.gga_gate.enabled", "1", false, baseOut);
-        assert(en.error == web::ErrorCode::kNone && en.target == CommandTarget::kGnss &&
-               !en.waitGnssApply);
-        assert(en.command.verb == static_cast<uint8_t>(GnssSubVerb::kSetGgaGate));
-        assert(en.command.argLen == kGgaGateCmdArgLen);
-        assert(en.command.args[0] == kGgaGateFlagEnabled && en.command.args[1] == 1U);
-
-        const auto dis = translateSetRequest("gnss.gga_gate.enabled", "0", false, baseOut);
-        assert(dis.error == web::ErrorCode::kNone && dis.command.args[0] == kGgaGateFlagEnabled &&
-               dis.command.args[1] == 0U);
-        assert(translateSetRequest("gnss.gga_gate.enabled", "2", false, baseOut).error ==
-               web::ErrorCode::kBadValue);
-
-        const auto min0 = translateSetRequest("gnss.gga_gate.min_sats", "0", false, baseOut);
-        assert(min0.error == web::ErrorCode::kNone && min0.command.args[0] == kGgaGateFlagMinSats &&
-               min0.command.args[2] == 0U);
-        const auto min40 = translateSetRequest("gnss.gga_gate.min_sats", "40", false, baseOut);
-        assert(min40.error == web::ErrorCode::kNone &&
-               min40.command.args[0] == kGgaGateFlagMinSats && min40.command.args[2] == 40U);
-        assert(translateSetRequest("gnss.gga_gate.min_sats", "41", false, baseOut).error ==
-               web::ErrorCode::kBadValue);
-        assert(translateSetRequest("gnss.gga_gate.min_sats", "-1", false, baseOut).error ==
-               web::ErrorCode::kBadValue);
-        assert(translateSetRequest("gnss.gga_gate.min_sats", "08", false, baseOut).error ==
-               web::ErrorCode::kBadValue);
-    }
-
-    // gnss.const.* -> unsupported
-    for (const std::string_view ck :
-         {"gnss.const.gps", "gnss.const.bds", "gnss.const.glo", "gnss.const.gal"}) {
-        assert(translateSetRequest(ck, "1", false, baseOut).error == web::ErrorCode::kUnsupported);
-    }
-
-    // bt.wl.add / bt.wl.del
-    {
-        const auto add = translateSetRequest("bt.wl.add", "AA:BB:CC:DD:EE:01", false, baseOut);
-        assert(add.error == web::ErrorCode::kNone && add.target == CommandTarget::kStorage &&
-               add.notifyBtStatus);
-        assert(add.command.target == id(ModuleKind::kStorage));
-        assert(add.command.verb == verb(StorageVerb::kWhitelistAdd));
-        assert(add.command.argLen == core::kAddrLen);
-        assert(add.command.args[0] == 0xAAU && add.command.args[5] == 0x01U);
-
-        const auto del = translateSetRequest("bt.wl.del", "aa:bb:cc:dd:ee:01", false, baseOut);
-        assert(del.error == web::ErrorCode::kNone && del.target == CommandTarget::kStorage &&
-               del.notifyBtStatus);
-        assert(del.command.verb == verb(StorageVerb::kWhitelistDel));
-        assert(del.command.args[0] == 0xAAU && del.command.args[5] == 0x01U);
-
-        assert(translateSetRequest("bt.wl.add", "AA:BB:CC", false, baseOut).error ==
-               web::ErrorCode::kBadValue);
-    }
-
-    // bt.pair_next
-    {
-        const auto pn = translateSetRequest("bt.pair_next", "1", false, baseOut);
-        assert(pn.error == web::ErrorCode::kNone && pn.target == CommandTarget::kStorage);
-        assert(pn.command.verb == verb(StorageVerb::kSetPairNext));
-        assert(pn.command.argLen == 1U && pn.command.args[0] == 1U);
-        assert(translateSetRequest("bt.pair_next", "2", false, baseOut).error ==
-               web::ErrorCode::kBadValue);
-    }
-
-    // factory.sn（锁定 -> locked；解锁后有效 -> kSaveSn；非法 -> bad_value）
-    {
-        assert(translateSetRequest("factory.sn", "P2A0001", false, baseOut).error ==
-               web::ErrorCode::kLocked);
-        const auto ok = translateSetRequest("factory.sn", "P2A0001", true, baseOut);
-        assert(ok.error == web::ErrorCode::kNone && ok.target == CommandTarget::kStorage);
-        assert(ok.command.verb == verb(StorageVerb::kSaveSn));
-        assert(ok.command.argLen == 7U);
-        assert(std::memcmp(ok.command.args.data(), "P2A0001", 7U) == 0);
-        assert(translateSetRequest("factory.sn", "BAD SN!", true, baseOut).error ==
-               web::ErrorCode::kBadValue);
-    }
-
-    // 未知键
-    assert(translateSetRequest("no.such.key", "1", true, baseOut).error ==
-           web::ErrorCode::kUnknownKey);
-}
-
-/**
  * @brief 验证 hello/config/status/ack/bye 帧与 ws-protocol.md 一致，以及 status 分组差分
  * @note 主机单线程测试。
  */
@@ -273,30 +137,54 @@ void testJsonFramesAndDiff()
 {
     std::array<char, web::kMaxFrameBytes> buf{};
 
+    settings::Service service{};
+    service.bindBackend({.get = [](void *, settings::KeyId id, settings::Value &out) noexcept {
+        switch (id) {
+        case settings::KeyId::kGnssRate:
+            out = {.number = 10};
+            return true;
+        case settings::KeyId::kGnssOutGsv:
+            out = {.number = 5000};
+            return true;
+        case settings::KeyId::kBtPairNext:
+            out = {.kind = settings::ValueKind::kBool, .boolVal = true};
+            return true;
+        case settings::KeyId::kGnssGgaGateEnabled:
+            out = {.kind = settings::ValueKind::kBool, .boolVal = true};
+            return true;
+        case settings::KeyId::kGnssGgaGateMinSats:
+            out = {.number = 12};
+            return true;
+        default:
+            return false;
+        }
+    }});
+    settings::GnssCaps caps{.valid = true,
+                            .enabled = true,
+                            .navRateHz = 10U,
+                            .navRatesHz = {1U, 2U, 5U, 10U},
+                            .navRateCount = 4U};
+    caps.outPeriods[static_cast<size_t>(settings::OutKeyIndex::kGsv)] = {
+        {0U, 1000U, 5000U}, 3U, true};
+
     // hello
     const size_t helloLen = buildHelloFrame({.board = "P2",
                                              .fw = "6.1.0-dev",
                                              .btName = "P2-B5F2",
                                              .console = "dev",
                                              .factoryUnlocked = false},
-                                            buf);
-    assert(
-        std::string_view(buf.data(), helloLen) ==
-        R"({"t":"hello","proto":1,"board":"P2","fw":"6.1.0-dev","bt_name":"P2-B5F2","console":"dev","factory":false})");
+                                            service, caps, true, buf);
+    const std::string_view hello(buf.data(), helloLen);
+    assert(hello.starts_with(
+        R"({"t":"hello","proto":1,"board":"P2","fw":"6.1.0-dev","bt_name":"P2-B5F2","console":"dev","factory":false,"caps":{)"));
+    assert(hello.find(R"("gnss.out.gsv":[0,1000,5000])") != std::string_view::npos);
+    assert(hello.find(R"("gnss.gga_gate.min_sats":{"min":0,"max":40})") != std::string_view::npos);
+    assert(hello.find("gnss.const") == std::string_view::npos);
 
-    // config（含扁平键与嵌套 gga_gate 对象）
-    auto outCfg = data::GnssOutConfig::defaults();
-    assert(fw::isOk(outCfg.applyInterval(static_cast<size_t>(::gnss::OutputMsg::kSatsInfo), -1)));
-    const size_t cfgLen = buildConfigFrame({.gnssRateHz = 10U,
-                                            .gnssOut = outCfg,
-                                            .ggaGateEnabled = true,
-                                            .ggaGateMinSats = 12U,
-                                            .btPairNext = true,
-                                            .sn = "P2A0001"},
-                                           buf);
+    const size_t cfgLen = buildConfigFrame(service, buf);
     assert(
         std::string_view(buf.data(), cfgLen) ==
-        R"({"t":"config","gnss.rate":10,"gnss.out.gga":100,"gnss.out.gsa":100,"gnss.out.gsv":1000,"gnss.out.gst":100,"gnss.out.rmc":100,"gga_gate":{"enabled":true,"min_sats":12},"bt.pair_next":1,"factory.sn":"P2A0001"})");
+        R"({"t":"config","gnss.rate":10,"gnss.out.gsv":5000,"gga_gate":{"enabled":true,"min_sats":12},"bt.pair_next":1})");
 
     // status 全量 + 差分（只发变化组）+ 可选字段省略
     StatusSnapshot s1{};
@@ -421,7 +309,6 @@ void testIdleTimer()
 int main()
 {
     testMailbox();
-    testSetTranslation();
     testJsonFramesAndDiff();
     testIdleTimer();
     std::puts("PASS web_server_check");

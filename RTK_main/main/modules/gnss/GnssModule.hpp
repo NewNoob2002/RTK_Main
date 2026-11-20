@@ -800,26 +800,45 @@ private:
     /** @brief 拉取 kLink 投递的待执行手机命令或触发上电重放。 @note 仅 kIo。 */
     void startPendingPhoneConfig() noexcept;
 
-    /**
-     * @brief 消费 kLink（WebModule）经 DataCenter 投递的单条 GNSS 命令与立即落盘请求
-     * @param nowMs: 当前单调时钟（ms）
-     * @note 仅 kIo 调用，非阻塞、非 ISR；通过 onCommand 复用同一校验与执行路径，并按 seq 绑定异步结果。
-     */
-    void pollWebCommand(uint32_t nowMs) noexcept;
+    /** @brief 执行设置服务与维护命令。 @param cmd: 请求。 @param nowMs: 时钟。 @param[out] result: 受理结果。 @note 仅 kIo。 */
+    void cmdSetting(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
 
-    /**
-     * @brief 为已受理的网页 GNSS 命令绑定异步结果或发布同步完成结论
-     * @param webCmd: 已由 onCommand 受理的网页命令
-     * @param result: onCommand 输出的受理结果
-     * @note 仅 kIo 在 pollWebCommand 内调用，非阻塞、非 ISR。
-     */
-    void bindWebCommandOutcome(const fw::Command &webCmd, const fw::CommandResult &result) noexcept;
+    /** @brief 校验并应用单项周期补丁。 @param cmd: 请求。 @param nowMs: 时钟。 @param[out] result: 受理结果。 @note 仅 kIo。 */
+    void cmdPatchOutput(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
+
+    /** @brief 用执行器完成表回传结果。 @param seq: 凭据序号。 @param status: 执行结果。 @note 仅 kIo。 */
+    void completeSetting(uint32_t &seq, fw::Result status) noexcept;
+
+    /** @brief 回滚未落盘的输出配置。 @note 仅 kIo，重配由调用方触发。 */
+    void restorePendingApply() noexcept;
+
+    /** @brief 重探或复位前恢复配置并结单。 @note 仅 kIo。 */
+    void abortPendingSettings() noexcept;
+
+    /** @brief 按驱动能力将 App 卫星输出槽位映射到实际语句。 @param msg: App 语句。 @retval 驱动语句。 @note 仅 kIo。 */
+    [[nodiscard]] ::gnss::OutputMsg outputCapabilityMsg(::gnss::OutputMsg msg) noexcept;
+
+    /** @brief 首次识别后恢复该型号可执行的旧 NVS 值。 @note 仅 kIo。 */
+    void restoreSettingsForModel() noexcept;
+
+    /** @brief 恢复已保存的旧输出周期。 @note 仅 kIo。 */
+    void restoreOutputPeriods() noexcept;
+
+    /** @brief 发布当前型号和定位频率对应的取值域。 @note 仅 kIo。 */
+    void publishCaps() noexcept;
 
     /** @brief 写一条手机配置脚本命令到 GNSS UART。 @param tx: 待发字节。 @retval true 全部写入成功。 @note 仅 kIo。 */
     [[nodiscard]] bool writePhoneTx(std::span<const uint8_t> tx) noexcept;
 
     /** @brief 查询配置通道是否空闲。 @retval true PPP 或 0x06 可启动。 @note 仅 kIo。 */
     [[nodiscard]] bool canStartPhonePpp() noexcept;
+
+    /** @brief 解析 GGA 门控修改。 @param cmd: 门控命令。 @param[out] next: 新配置。 @retval 是否有效。 @note 仅 kIo。 */
+    [[nodiscard]] bool decodeGgaGateChange(const fw::Command &cmd,
+                                           ::gnss::GgaGateConfig &next) const noexcept;
+
+    /** @brief 单键持久化后发布网页门控修改。 @param cmd: 门控命令。 @param[out] result: 执行结果。 @note 仅 kIo，写 NVS 可阻塞。 */
+    void cmdApplyGgaGate(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
     /** @brief 处理 GGA 质量门控配置命令并安排去抖落盘。 @param cmd: 门控配置命令。 @param nowMs: 当前时钟。 @param[out] result: 执行结果。 @note 仅 kIo。 */
     void cmdSetGgaGate(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
@@ -841,12 +860,10 @@ private:
     uint32_t gga_gate_save_changed_ms_ = 0U;
     uint32_t gga_gate_save_attempt_ms_ = 0U;
     uint32_t gga_gate_save_retry_ms_ = 0U;
-    uint32_t lastWebCmdSeq_ = 0U;
-    uint32_t webApplySeq_ = 0U;
-    uint32_t webMaintSeq_ = 0U;
-    uint32_t webMaintTarget_ = 0U;
-    uint32_t webGgaSeq_ = 0U;
-    uint32_t lastWebFlushGgaSeq_ = 0U;
+    bool restoredSettings_ = false;
+    uint32_t applyTicketSeq_ = 0U;
+    uint32_t maintenanceTicketSeq_ = 0U;
+    uint32_t maintenanceTicketTarget_ = 0U;
 
     ::gnss::PppSequence phone_ppp_{};
     uint32_t phone_ppp_seq_ = 0U;

@@ -29,6 +29,7 @@
 #include "modules/gnss/GnssKeys.hpp"
 #include "modules/gnss/GnssConsoleValue.hpp"
 #include "modules/storage/StorageModule.hpp"
+#include "modules/storage/StoreKeys.hpp"
 #include "rtos/EspStatus.hpp"
 
 namespace app {
@@ -101,6 +102,11 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
         result.status = fw::Result::kInvalidState;
         return;
     }
+    if (cmd.verb >= static_cast<uint8_t>(GnssSubVerb::kApplyRate) &&
+        cmd.verb <= static_cast<uint8_t>(GnssSubVerb::kFlushGgaGate)) {
+        cmdSetting(cmd, rtos::nowMs(), result);
+        return;
+    }
     if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetGgaGate) {
         cmdSetGgaGate(cmd, rtos::nowMs(), result);
         return;
@@ -133,6 +139,12 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
         cmdSetBase(cmd, result);
         return;
     }
+    const bool restart = cmd.verb == static_cast<uint8_t>(GnssVerb::kProbe) ||
+                         cmd.verb == static_cast<uint8_t>(GnssVerb::kReset);
+    if (restart && (applyTicketSeq_ != 0U || maintenanceTicketSeq_ != 0U)) {
+        dispatchStandardCmd(cmd, now, result);
+        return;
+    }
     if (baud_deferred_ || (controller().state() == ::gnss::State::kMaintenance &&
                            (active_maintenance_ != ::gnss::Maintenance::kSave ||
                             (cmd.verb != static_cast<uint8_t>(GnssVerb::kSetRate) &&
@@ -143,8 +155,111 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
     dispatchStandardCmd(cmd, now, result);
 }
 
+void GnssModule::cmdSetting(const fw::Command &cmd, uint32_t nowMs,
+                            fw::CommandResult &result) noexcept
+{
+    const auto verb = static_cast<GnssSubVerb>(cmd.verb);
+    if (verb == GnssSubVerb::kFlushGgaGate) {
+        if (cmd.argLen != 0U) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+        tickGgaGateSave(nowMs, true);
+        result.status = ctx().data.ggaGatePersist.load(std::memory_order_acquire) ==
+                                data::GgaGatePersist::kClean
+                            ? fw::Result::kOk
+                            : fw::Result::kIoError;
+        return;
+    }
+    if (verb == GnssSubVerb::kApplyGgaGate) {
+        cmdApplyGgaGate(cmd, result);
+        return;
+    }
+    if (phone_ppp_.active() || phone_sat_.active() || baud_deferred_ ||
+        pending_apply_ != PendingApply::kNone || controller().state() != ::gnss::State::kRunning) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    const auto model = controller().detected().probe.model;
+    if (verb == GnssSubVerb::kSaveReceiver) {
+        cmdMaintenance(cmd, nowMs, result);
+        return;
+    }
+    if (verb == GnssSubVerb::kApplyRate) {
+        const auto rates = controller().receiver().navRatesHz(model);
+        if (cmd.argLen != 1U || std::ranges::find(rates, cmd.args[0]) == rates.end()) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+        cmdSetRate(cmd, nowMs, result);
+    } else {
+        cmdPatchOutput(cmd, nowMs, result);
+    }
+    if (fw::isOk(result.status) && pending_apply_ != PendingApply::kNone) {
+        applyTicketSeq_ = cmd.seq;
+        result.detail = fw::kDetailDeferred;
+    }
+}
+
+void GnssModule::cmdPatchOutput(const fw::Command &cmd, uint32_t nowMs,
+                                fw::CommandResult &result) noexcept
+{
+    constexpr uint32_t kMsPerSecond = 1000U;
+    const auto model = controller().detected().probe.model;
+    if (cmd.argLen != 2U || cmd.args[0] >= data::kGnssAppMsgCount) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    // 已验证下标处于 OutputMsg 共用前缀，间隔按二补码还原。
+    const auto msg = static_cast<::gnss::OutputMsg>(cmd.args[0]);
+    const auto interval = std::bit_cast<int8_t>(cmd.args[1]);
+    const auto periods = controller().receiver().outputPeriodsMs(outputCapabilityMsg(msg), model);
+    const uint32_t period = core::services::GnssService::intervalToPeriodMs(interval);
+    const uint32_t fixPeriod = kMsPerSecond / std::max(ensureRoverCfg().rateHz, uint8_t{1U});
+    const bool gsvDisabled = msg == ::gnss::OutputMsg::kSatsInfo && !ensureRoverCfg().gsv;
+    if ((period != 0U && (period < fixPeriod || gsvDisabled)) ||
+        std::ranges::find(periods, period) == periods.end()) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    auto next = out_cfg_;
+    result.status = next.applyInterval(cmd.args[0], interval);
+    if (!fw::isOk(result.status)) {
+        return;
+    }
+    fw::Command patched{};
+    size_t encodedLen = 0U;
+    if (!fw::isOk(next.encode(patched.args, encodedLen))) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    // encode 成功时固定写入 8 字节。
+    patched.argLen = static_cast<uint8_t>(encodedLen);
+    cmdSetOut(patched, nowMs, result);
+}
+
+void GnssModule::completeSetting(uint32_t &seq, fw::Result status) noexcept
+{
+    if (seq != 0U && ctx().ioExecutor != nullptr) {
+        ctx().ioExecutor->complete(seq, {.seq = seq, .status = status});
+    }
+    seq = 0U;
+}
+
+void GnssModule::abortPendingSettings() noexcept
+{
+    if (pending_apply_ != PendingApply::kNone) {
+        restorePendingApply();
+        controller().setOutputPlan(makePlan());
+    }
+    completeSetting(applyTicketSeq_, fw::Result::kInvalidState);
+    completeSetting(maintenanceTicketSeq_, fw::Result::kInvalidState);
+    maintenanceTicketTarget_ = 0U;
+}
+
 void GnssModule::cmdProbe(uint32_t nowMs, fw::CommandResult &result) noexcept
 {
+    abortPendingSettings();
     // 人工重探：清空最近定位，避免旧定位在重探期间被当成当前值发布。
     manual_reprobe_ = true;
     parser().reset();
@@ -157,6 +272,7 @@ void GnssModule::cmdProbe(uint32_t nowMs, fw::CommandResult &result) noexcept
 
 void GnssModule::cmdReset(uint32_t nowMs, fw::CommandResult &result) noexcept
 {
+    abortPendingSettings();
     // 人工复位：先清空定位再停/启控制器，重配流程由控制器自己推进。
     manual_reprobe_ = true;
     parser().reset();
@@ -197,6 +313,7 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
         last_apply_ = GnssApply::kOk;
         ++apply_seq_;
         publishStatus(nowMs);
+        ctx().data.configRev.fetch_add(1U, std::memory_order_release);
         result.status = fw::Result::kOk;
         return;
     }
@@ -244,6 +361,7 @@ void GnssModule::cmdSetOut(const fw::Command &cmd, uint32_t nowMs,
         last_apply_ = GnssApply::kOk;
         ++apply_seq_;
         publishStatus(nowMs);
+        ctx().data.configRev.fetch_add(1U, std::memory_order_release);
         result.status = fw::Result::kOk;
         return;
     }
@@ -300,34 +418,74 @@ bool GnssModule::ggaAllowed() const noexcept
     return (context_ != nullptr) ? context_->data.ggaAllowed() : true;
 }
 
-void GnssModule::cmdSetGgaGate(const fw::Command &cmd, uint32_t nowMs,
-                               fw::CommandResult &result) noexcept
+bool GnssModule::decodeGgaGateChange(const fw::Command &cmd,
+                                     ::gnss::GgaGateConfig &next) const noexcept
 {
     constexpr uint8_t kValidFlags = kGgaGateFlagEnabled | kGgaGateFlagMinSats;
     if ((cmd.argLen != kGgaGateCmdArgLen) || (cmd.args[0] == 0U) ||
         ((cmd.args[0] & ~kValidFlags) != 0U)) {
-        result.status = fw::Result::kInvalidArg;
-        return;
+        return false;
     }
-    ::gnss::GgaGateConfig next = gga_gate_cfg_;
+    next = gga_gate_cfg_;
     if (!gga_gate_min_sats_loaded_) {
         next.minSats = ::gnss::GgaGateConfig::kDefaultMinSats;
     }
     if ((cmd.args[0] & kGgaGateFlagEnabled) != 0U) {
         if (cmd.args[1] > 1U) {
-            result.status = fw::Result::kInvalidArg;
-            return;
+            return false;
         }
         next.enabled = (cmd.args[1] != 0U);
     }
     if ((cmd.args[0] & kGgaGateFlagMinSats) != 0U) {
         if (cmd.args[2] > ::gnss::GgaGateConfig::kMaxMinSats) {
-            result.status = fw::Result::kInvalidArg;
-            return;
+            return false;
         }
         next.minSats = cmd.args[2];
     }
-    if (!gga_gate_.has_value() || !gga_gate_->setConfig(next)) {
+    return true;
+}
+
+void GnssModule::cmdApplyGgaGate(const fw::Command &cmd, fw::CommandResult &result) noexcept
+{
+    if (!ctx().bootConfig.userNvsReady || ctx().bootConfig.safeDefaults) {
+        result.status = fw::Result::kInvalidState;
+        return;
+    }
+    ::gnss::GgaGateConfig next{};
+    const bool changeEnabled = cmd.args[0] == kGgaGateFlagEnabled;
+    if ((!changeEnabled && cmd.args[0] != kGgaGateFlagMinSats) || !gga_gate_.has_value() ||
+        !decodeGgaGateChange(cmd, next)) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    // 在副本上应用配置，避免 NVS 写失败改变拦截状态或连续达标计数。
+    auto gate = *gga_gate_;
+    if (!gate.setConfig(next)) {
+        result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    const size_t key =
+        changeEnabled ? gnss_store::kGgaGateKeyIndex : gnss_store::kGgaMinSatsKeyIndex;
+    const uint32_t value = changeEnabled ? static_cast<uint32_t>(next.enabled) : next.minSats;
+    const esp_err_t error = store::writeValue(gnss_store::kConfigKeys[key], value);
+    if (error != ESP_OK) {
+        result.status = detail::toResult(rtos::fromEspErr(error));
+        return;
+    }
+    gga_gate_cfg_ = next;
+    *gga_gate_ = gate;
+    gga_gate_enabled_loaded_ = true;
+    gga_gate_min_sats_loaded_ = true;
+    publishGgaGateStatus();
+    ctx().data.configRev.fetch_add(1U, std::memory_order_release);
+    result.status = fw::Result::kOk;
+}
+
+void GnssModule::cmdSetGgaGate(const fw::Command &cmd, uint32_t nowMs,
+                               fw::CommandResult &result) noexcept
+{
+    ::gnss::GgaGateConfig next{};
+    if (!gga_gate_.has_value() || !decodeGgaGateChange(cmd, next) || !gga_gate_->setConfig(next)) {
         result.status = fw::Result::kInvalidArg;
         return;
     }
@@ -362,11 +520,6 @@ void GnssModule::tickGgaGateSave(uint32_t nowMs, bool forceImmediate) noexcept
     if (!ctx().bootConfig.userNvsReady || ctx().bootConfig.safeDefaults) {
         gga_gate_save_pending_ = false;
         ctx().data.ggaGatePersist.store(data::GgaGatePersist::kFailed, std::memory_order_release);
-        if (webGgaSeq_ != 0U) {
-            ctx().data.webGnssOutcome.write(
-                {webGgaSeq_, data::WebGnssPhase::kDone, fw::Result::kInvalidState, 0});
-            webGgaSeq_ = 0U;
-        }
         return;
     }
     const fw::Result res = ctx().storage.saveKeys(
@@ -375,21 +528,13 @@ void GnssModule::tickGgaGateSave(uint32_t nowMs, bool forceImmediate) noexcept
         gga_gate_save_pending_ = false;
         gga_gate_save_retry_ms_ = 0U;
         ctx().data.ggaGatePersist.store(data::GgaGatePersist::kClean, std::memory_order_release);
-        if (webGgaSeq_ != 0U) {
-            ctx().data.webGnssOutcome.write(
-                {webGgaSeq_, data::WebGnssPhase::kDone, fw::Result::kOk, 0});
-            webGgaSeq_ = 0U;
-        }
+        ctx().data.configRev.fetch_add(1U, std::memory_order_release);
     } else {
         gga_gate_save_attempt_ms_ = nowMs;
         gga_gate_save_retry_ms_ = (gga_gate_save_retry_ms_ == 0U)
                                       ? kGgaGateRetryInitialMs
                                       : std::min(gga_gate_save_retry_ms_ * 2U, kGgaGateRetryMaxMs);
         ctx().data.ggaGatePersist.store(data::GgaGatePersist::kFailed, std::memory_order_release);
-        if (webGgaSeq_ != 0U) {
-            ctx().data.webGnssOutcome.write({webGgaSeq_, data::WebGnssPhase::kDone, res, 0});
-            webGgaSeq_ = 0U;
-        }
         FW_LOGW(fw::TraceCat::kGnss, "<cfg> GGA gate save failed (%s), retry in %lu ms",
                 fw::toString(res), static_cast<unsigned long>(gga_gate_save_retry_ms_));
     }
