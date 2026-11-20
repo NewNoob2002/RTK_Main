@@ -20,6 +20,7 @@ import argparse
 import collections
 import csv
 import io
+import os
 import re
 import shutil
 import subprocess
@@ -187,7 +188,12 @@ def check_function(f, hdr_index):
         return []
     block = doc_block_before(lines, start - 1)
     if block is None or "@brief" not in block:
-        for hpath, i in hdr_index.get(component_of(path)).get(short, []):
+        # 同名函数可能出现在组件内多个头文件；按与定义文件同目录、再按 rglob 顺序匹配，
+        # 避免文件系统遍历顺序不同导致误配到别的类的同名声明（如多个 init()）。
+        def_dir = os.path.dirname(path)
+        cands = sorted(hdr_index.get(component_of(path)).get(short, []),
+                       key=lambda c: os.path.dirname(c[0]) != def_dir)
+        for hpath, i in cands:
             decl = " ".join(lines_of(hpath)[i : i + 4])
             hb = doc_block_before(lines_of(hpath), i)
             if hb and "@brief" in hb:
