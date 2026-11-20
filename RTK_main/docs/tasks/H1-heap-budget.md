@@ -34,7 +34,7 @@
 W2 HIL 第 7 步（BT RTCM 负载）仍未做，在本卡一起完成：
 - `kBluetooth` 模式：手机连接，持续下发 RTCM，GNSS 1 Hz 输出，运行 10 min，`sys mem` min ≥ 40,960 B、largest ≥ 32,768 B，任务余栈不持续下降，无 TWDT。
 - `kWifiConfig` 模式：1 个浏览器打开页面，1 Hz 状态推送，运行 10 min，记录 free/min/largest（门槛同上）。
-- 结果写进 docs/reports/H1.md 的“Architect 验收”一节。
+- 结果写进 docs/reports/HB.md 的“Architect 验收”一节。
 
 ## 3 H1c Wi-Fi 配置模式运行期调优（不明显影响性能）
 
@@ -77,5 +77,5 @@ W2 HIL 第 7 步（BT RTCM 负载）仍未做，在本卡一起完成：
 
 - `tools/ci/run_gates.sh --base 8c28078 --prefix h1` 全部 PASS（G1-frozen 中 sdkconfig.defaults 的偏离属于预期，在报告中说明）。
 - `esp_idf_size --archives --diff` 对比 8c28078：BT 模式静态 DRAM 变化 ≤ 100 B。
-- 报告 docs/reports/H1.md：门槛改动、host 测试结果、调优候选项逐项表（原理/风险/堆收益/性能数据/取舍）、上板步骤、“文档待改”一节。
-- 不提交、不烧录；打印 `H1 DONE`。OMP 交叉评审写 docs/reports/H1-review-omp.md。
+- 报告 docs/reports/HB.md：门槛改动、host 测试结果、调优候选项逐项表（原理/风险/堆收益/性能数据/取舍）、上板步骤、“文档待改”一节。
+- 不提交、不烧录；打印 `H1 DONE`（报告文件名 HB 避开旧 H1 解复用任务）。OMP 交叉评审写 docs/reports/HB-review-omp.md。

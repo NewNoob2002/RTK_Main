@@ -70,3 +70,31 @@
    - `OVERFLOW_DROPPED`：板端 `rx_dropped` 增量 `> 0`（RX StreamBuffer 溢出丢字节），此时 `rtcm` 计数与 `crc32` 不匹配属于预期现象；用于定位流控/缓冲区溢出拐点（此时产品请求仍应尽量 0 丢失）。
    - `FAIL`：未发生 `rx_dropped` 却出现 RTCM 计数/`crc32` 不一致、产品请求丢失或内容错误、或出现 `rejected_role != 0`。
    - 退出码：无 `FAIL` 返回 `0`，存在 `FAIL` 返回 `1`，连接/串口/参数错误返回 `2`。
+
+## Wi-Fi 配置负载 `web_load.py`
+
+离线自检使用 Python 3 标准库。台架运行使用 curl 和 IDF Python 环境中的
+`websockets`（已验证 17.3）。让主机连接设备 SoftAP 后运行。
+
+```sh
+python3 -I tools/hil/web_load.py --selftest
+~/.espressif/python_env/idf6.1_py3.13_env/bin/python -I tools/hil/web_load.py \
+    --duration 600 --json-out builds/h1-logs/p2-baseline.json
+```
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--host` | `192.168.10.12` | 设备地址 |
+| `--stage` | `all` | 运行全部阶段，或单选 `home`、`status`、`ack` |
+| `--duration` | `600` | 从首个周期状态帧开始计时的秒数 |
+| `--json-out` | 无 | 将标准输出中的 JSON 同时写到指定路径 |
+| `--selftest` | 关闭 | 离线自检 |
+
+`home` 和 `ack` 各采样 20 次，输出中位数和 P90，单位为毫秒。`status` 按相邻状态帧的
+到达间隔统计缺帧，超过 1.5 s 时累计 `round(gap_s) - 1`，全量帧到首个周期帧也按此规则。
+采样满 `--duration` 后按 `missing` 判定，非零为 `FAIL`。`uptime_jumps` 记录
+`dev.uptime_s` 增量大于 1 的次数，供排查时参考。周期帧的 uptime 须递增，首个周期帧
+允许与全量帧同秒。WS 断开、设备发送 `bye` 或 5 s 内未收到状态帧时判 `FAIL`，
+原因见 `error`。配置往返交替保存 GGA
+最低卫星数的相邻值与原值，异常时会尝试恢复。板端堆和双客户端验收步骤见
+[HB.md](../../docs/reports/HB.md)。

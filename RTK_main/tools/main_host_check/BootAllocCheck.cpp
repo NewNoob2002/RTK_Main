@@ -451,6 +451,10 @@ void memorySink(const char *text, size_t bytes) noexcept
     s_memory_output_size += bytes;
 }
 
+/**
+ * @brief 验证两种构建的堆门槛、诊断格式及降级原因
+ * @note 仅单线程 host 测试调用，会更换全局控制台输出端。
+ */
 void testMemoryReport() noexcept
 {
     FaultAllocCtx ctx{};
@@ -467,25 +471,45 @@ void testMemoryReport() noexcept
         {"default", 8U, 200000U, 100000U, 81920U, 32768U},
     }};
     cli::setOutSink(&memorySink, false);
-    app::printMemoryReport(arena, 100U, 200U, heaps);
+    app::printMemoryReport(arena, 100U, 200U, heaps, false);
     std::string_view output{s_memory_output.data(), s_memory_output_size};
     CHECK(output.find("test.owner") != output.npos && output.find("actual=272 B") != output.npos);
     CHECK(output.find("caps=0x") != output.npos && output.find("views overlap") != output.npos);
-    CHECK(output.find("PASS (min>=81920 B, largest>=32768 B)") != output.npos);
     CHECK(output.find("normal") != output.npos);
-    s_memory_output_size = 0U;
-    heaps.front().minimum = 81919U;
     arena.setDegradedReason("test:startup");
-    app::printMemoryReport(arena, 100U, 200U, heaps);
-    output = {s_memory_output.data(), s_memory_output_size};
-    CHECK(output.find("FAIL (min>=81920 B, largest>=32768 B)") != output.npos);
-    CHECK(output.find("console-only: test:startup") != output.npos);
+    struct BudgetCase {
+        bool wifiEnabled;
+        size_t minimum;
+        size_t largest;
+        const char *verdict;
+    };
+    constexpr std::array<BudgetCase, 6U> kCases{{
+        {false, 81920U, 32768U, "PASS (min>=81920 B, largest>=32768 B)"},
+        {false, 81919U, 32768U, "FAIL (min>=81920 B, largest>=32768 B)"},
+        {false, 81920U, 32767U, "FAIL (min>=81920 B, largest>=32768 B)"},
+        {true, 40960U, 32768U, "PASS (min>=40960 B, largest>=32768 B)"},
+        {true, 40959U, 32768U, "FAIL (min>=40960 B, largest>=32768 B)"},
+        {true, 40960U, 32767U, "FAIL (min>=40960 B, largest>=32768 B)"},
+    }};
+    for (const auto &test : kCases) {
+        s_memory_output_size = 0U;
+        heaps.front().minimum = test.minimum;
+        heaps.front().largest = test.largest;
+        app::printMemoryReport(arena, 100U, 200U, heaps, test.wifiEnabled);
+        output = {s_memory_output.data(), s_memory_output_size};
+        CHECK(output.find(test.verdict) != output.npos);
+        CHECK(output.find(test.wifiEnabled ? "adr0017" : "adr0011") != output.npos);
+        CHECK(output.find("console-only: test:startup") != output.npos);
+    }
     s_memory_output_size = 0U;
-    heaps.front().minimum = 81920U;
-    heaps.front().largest = 32767U;
-    app::printMemoryReport(arena, 100U, 200U, heaps);
+    app::printMemoryReport(arena, 100U, 200U, {}, true);
     output = {s_memory_output.data(), s_memory_output_size};
-    CHECK(output.find("FAIL (min>=81920 B, largest>=32768 B)") != output.npos);
+    CHECK(output.find("FAIL (min>=40960 B, largest>=32768 B)") != output.npos);
+    CHECK(output.find("adr0017") != output.npos);
+    constexpr auto kWifiBudget = app::internalHeapBudget(true);
+    constexpr auto kBtBudget = app::internalHeapBudget(false);
+    static_assert(kWifiBudget.minimum == 40960U && kWifiBudget.largest == 32768U);
+    static_assert(kBtBudget.minimum == 81920U && kBtBudget.largest == 32768U);
     cli::setOutSink(nullptr, false);
     faultFree(block.data(), &ctx);
 }
