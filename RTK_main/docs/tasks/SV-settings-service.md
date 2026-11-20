@@ -22,7 +22,7 @@
 
 1. 在 `rtos::Executor` 增加（签名可微调，须在报告说明）：
    ```cpp
-   enum class Caller : uint8_t { kConsole, kWeb, kPhone, kInternal, kMqtt /* 预留 */ };
+   enum class Caller : uint8_t { kConsole, kWeb, kPhone, kInternal, kMqtt /* 预留：仅电子围栏键，ADR-0018 §6 Q2 */ };
    struct Ticket { uint32_t seq = 0; uint8_t slot = 0xFF; };
    enum class PollState : uint8_t { kPending, kDone, kCancelled, kInvalid };
    fw::Result post(const fw::Command &cmd, Caller caller, Ticket &out) noexcept;
