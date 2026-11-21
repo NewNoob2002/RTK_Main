@@ -183,8 +183,8 @@ void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint
     if (controller().state() == ::gnss::State::kReadback) {
         appendReadbackLine(decoder, frame);
     }
-    phone_ppp_.onFrame(controller().receiver(), decoder, frame, now);
-    phone_sat_.onFrame(controller().receiver(), decoder, frame, now);
+    ppp_seq_.onFrame(controller().receiver(), decoder, frame, now);
+    sat_seq_.onFrame(controller().receiver(), decoder, frame, now);
     controller().onFrame(decoder, frame, now);
     if (&decoder == &demux::nmea::kDecoder) {
         const auto res = parser().feed(frame, now);

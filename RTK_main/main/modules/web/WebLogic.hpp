@@ -80,7 +80,7 @@ struct StatusSnapshot {
  * @retval off/probing/configuring/running/failed/maintenance 之一
  * @note 纯函数，线程/ISR 安全。
  */
-[[nodiscard]] const char *webGnssStateName(::gnss::State state) noexcept;
+[[nodiscard]] const char *gnssStateName(::gnss::State state) noexcept;
 
 /**
  * @brief 将 GNSS 定位解映射为 ws-protocol.md §2 规定的定位类型名
@@ -88,7 +88,7 @@ struct StatusSnapshot {
  * @retval none/single/dgps/float/fixed 之一
  * @note 纯函数，线程/ISR 安全。
  */
-[[nodiscard]] const char *webGnssFixName(const ::gnss::Fix &fix) noexcept;
+[[nodiscard]] const char *gnssFixName(const ::gnss::Fix &fix) noexcept;
 
 /**
  * @brief 编码 `hello` 文本帧

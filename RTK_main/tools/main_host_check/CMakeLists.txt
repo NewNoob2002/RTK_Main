@@ -84,7 +84,7 @@ foreach(policy concurrent preempt)
     # host 检查不跑 Kconfig：给出与 main/Kconfig.projbuild 默认值一致的文本日志环容量（ADR-0009 §2.11）。
     target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096
         CONFIG_RTK_CONSOLE_UART_NUM=0 CONFIG_RTK_CONSOLE_UART_BAUD=2000000)
-    target_link_libraries(main_${policy} PRIVATE main_pure main_rtos main_nvs_shim)
+    target_link_libraries(main_${policy} PRIVATE main_pure main_rtos main_nvs_shim settings)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
@@ -150,7 +150,7 @@ target_include_directories(template_check PRIVATE ../t13_host_check/shim/inc
 target_compile_options(template_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
     -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 target_compile_definitions(template_check PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096)
-target_link_libraries(template_check PRIVATE main_pure main_nvs_shim)
+target_link_libraries(template_check PRIVATE main_pure main_nvs_shim settings)
 add_test(NAME template_module COMMAND template_check template_module)
 
 add_executable(gnss_output_check GnssOutputCheck.cpp
@@ -226,7 +226,7 @@ target_link_options(gnss_stream_check PRIVATE -Wl,--gc-sections)
 target_compile_definitions(gnss_stream_check PRIVATE CONFIG_RTK_GNSS_ENABLE=1
     CONFIG_RTK_LOG_RING_BYTES=4096 CONFIG_RTK_GNSS_UART_NUM=2 CONFIG_RTK_GNSS_PORT=2
     CONFIG_RTK_GNSS_DEFAULT_BAUD=115200 CONFIG_RTK_GNSS_TARGET_BAUD=460800 CONFIG_RTK_GNSS_RATE_HZ=1)
-target_link_libraries(gnss_stream_check PRIVATE main_pure main_rtos main_nvs_shim gnss)
+target_link_libraries(gnss_stream_check PRIVATE main_pure main_rtos main_nvs_shim gnss settings)
 add_test(NAME gnss_stream COMMAND gnss_stream_check)
 
 add_executable(gnss_mode_check GnssModeCheck.cpp

@@ -103,9 +103,6 @@ public:
     /** @brief 读取当前 SN 与 PN（[0..15]SN [16..31]PN）。 @retval 32 B 组合字段。 @note 仅 kLink。 */
     [[nodiscard]] core::PhoneSnPn phoneSnPn() const noexcept;
 
-    /** @brief 保存 SN（同步复用 kSaveSn 逻辑）并登记去抖写入 PN。 @param snPn: 32 B 组合字段。 @param nowMs: 去抖起点。 @retval true 保存成功。 @note 仅 kLink，写 SN 可阻塞。 */
-    [[nodiscard]] bool setPhoneSnPn(const core::PhoneSnPn &snPn, uint32_t nowMs) noexcept;
-
     /** @brief 读取当前 NTRIP 配置（0x12）。 @retval 112 B 配置块。 @note 仅 kLink。 */
     [[nodiscard]] core::PhoneNtripConfig phoneNtrip() const noexcept
     {
@@ -298,6 +295,20 @@ private:
      * @note   仅 kLink 调用，同步写 NVS 可阻塞，非 ISR。
      */
     void setPairNextCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  执行 phone.height 写入命令并安排去抖落盘（SV3）
+     * @param  cmd: 命令（args[0..7] 为 8 字节 IEEE 754 小端双精度）
+     * @param[out] result: 执行结果（kOk/kInvalidArg/kInvalidState/kBusy）
+     * @note   仅 kLink 调用，非阻塞，非 ISR。
+     */
+    void setHeightCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /**
+     * @brief  执行 phone.sn_pn 写入命令：同步保存 SN 并去抖保存 PN（SV3）
+     * @param  cmd: 命令（args[0..15] 为 SN，args[16..31] 为 PN）
+     * @param[out] result: 执行结果（kOk/kInvalidArg/kInvalidState/kBusy/kIoError）
+     * @note   仅 kLink 调用，写 SN 可阻塞，非 ISR。
+     */
+    void setSnPnCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /**
      * @brief  同步把当前内存白名单写入 NVS（供 S2 命令与去抖共享）
      * @retval ESP_OK 写入成功

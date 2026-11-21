@@ -124,6 +124,9 @@ if [ "$SKIP_IDF" -eq 0 ]; then
     gate G3-idf-console-none idf_build "$PREFIX-console-none" \
         -DSDKCONFIG="$ROOT/builds/$PREFIX-console-none/sdkconfig" \
         -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;configs/console-none.defaults"
+    gate G3-idf-none-wifi idf_build "$PREFIX-none-wifi" \
+        -DSDKCONFIG="$ROOT/builds/$PREFIX-none-wifi/sdkconfig" \
+        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;configs/none-wifi.defaults"
     for t in esp32 esp32c3; do
         gate "G3b-rtk_pure-$t" idf_build "$PREFIX-rtk_pure-$t" -C test_apps/rtk_pure \
             -DIDF_TARGET="$t" -DSDKCONFIG="$ROOT/builds/$PREFIX-rtk_pure-$t/sdkconfig"
@@ -133,6 +136,7 @@ if [ "$SKIP_IDF" -eq 0 ]; then
         --idf-build "builds/$PREFIX-idf" --gnss-build "builds/$PREFIX-gnss-all" \
         --nvs-build "builds/$PREFIX-nvs_store" --test-app-build "builds/$PREFIX-rtk_pure-esp32"
     gate G7b-runtime python3 -I tools/g7b_check/g7b_check.py --build "builds/$PREFIX-idf"
+    gate G7c-no-cli-deps python3 -I tools/ci/check_no_cli_deps.py --build "builds/$PREFIX-none-wifi"
     [ -f "builds/$PREFIX-idf/rtk_main.bin" ] &&
         echo "rtk_main.bin $(stat -c %s "builds/$PREFIX-idf/rtk_main.bin") B"
 fi

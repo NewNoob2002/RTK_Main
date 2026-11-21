@@ -125,4 +125,11 @@ private:
  * @note 启动任务登记时读取；不分配、不阻塞，非 ISR。
  */
 [[nodiscard]] std::span<const cli::Verb> factoryVerbs() noexcept;
+/**
+ * @brief 查询工厂命令是否已解锁（仅 console REPL 任务）
+ * @retval true 已解锁
+ * @retval false 已锁定
+ * @note 仅 console REPL 任务调用，不阻塞，非 ISR。
+ */
+[[nodiscard]] bool factoryUnlocked() noexcept;
 } // namespace app

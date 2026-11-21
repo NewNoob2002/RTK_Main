@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -25,15 +26,38 @@ constexpr size_t kAppIdxGst = 3U;
 constexpr size_t kAppIdxRmc = 4U;
 constexpr size_t kAppIdxGsa = 5U;
 
+constexpr uint8_t kMinPrintableAscii = 0x20U;
+constexpr uint8_t kMinVisibleAscii = 0x21U;
+constexpr uint8_t kMaxVisibleAscii = 0x7EU;
+
 /**
- * @brief  判断字符是否为 ASCII 字母或数字
- * @param  c: 待判断字符
- * @retval true  '0'..'9'、'A'..'Z' 或 'a'..'z'
- * @retval false 其余字符
+ * @brief  判断字节是否为可见 ASCII（0x21..0x7E，不含空格与控制字符）
+ * @param  byte: 待判断字节
+ * @retval true  可见 ASCII
+ * @retval false 空格、控制字符或非 ASCII
  */
-bool isAsciiAlnum(char c) noexcept
+bool isVisibleAscii(uint8_t byte) noexcept
 {
-    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    return (byte >= kMinVisibleAscii) && (byte <= kMaxVisibleAscii);
+}
+
+/**
+ * @brief  校验 SN 字节串（长度 1..kMaxSnBytes，全为可见 ASCII 0x21..0x7E）
+ * @param  bytes: 待校验 SN 字节切片
+ * @retval true  合法 SN
+ * @retval false 为空、超长或含空格/控制字符/非 ASCII
+ */
+bool isValidSnBytes(std::span<const uint8_t> bytes) noexcept
+{
+    if (bytes.empty() || (bytes.size() > kMaxSnBytes)) {
+        return false;
+    }
+    for (const uint8_t byte : bytes) {
+        if (!isVisibleAscii(byte)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
@@ -212,7 +236,7 @@ Error validateMac(std::string_view text, CanonicalValue &out) noexcept
 }
 
 /**
- * @brief  校验 SN 文本（1–16 个 [0-9A-Za-z-]）
+ * @brief  校验 SN 文本（1–16 个可见 ASCII 0x21..0x7E，不含空格与控制字符）
  * @param  text:    文本输入
  * @param[out] out: 成功时写入字符字节串；失败保持原内容
  * @retval Error::kOk       通过
@@ -223,18 +247,157 @@ Error validateSn(std::string_view text, CanonicalValue &out) noexcept
     if (text.empty() || text.size() > kMaxSnBytes) {
         return Error::kBadValue;
     }
-    for (const char c : text) {
-        if (!isAsciiAlnum(c) && c != '-') {
+    std::array<uint8_t, kMaxSnBytes> buf{};
+    for (size_t i = 0U; i < text.size(); ++i) {
+        buf[i] = static_cast<uint8_t>(text[i]);
+    }
+    if (!isValidSnBytes(std::span<const uint8_t>{buf.data(), text.size()})) {
+        return Error::kBadValue;
+    }
+    out.bytes.fill(0U);
+    std::copy_n(buf.begin(), text.size(), out.bytes.begin());
+    out.kind = CanonicalKind::kBytes;
+    out.size = static_cast<uint8_t>(text.size());
+    return Error::kOk;
+}
+
+/**
+ * @brief  解析定长十六进制文本到目标字节切片（大小写不敏感）
+ * @param  text: 十六进制文本（长度须等于 2 * dst.size()）
+ * @param[out] dst: 目标字节切片
+ * @retval true  全部字符合法并写入 dst
+ * @retval false 长度不符或含非十六进制字符
+ */
+bool parseFixedHex(std::string_view text, std::span<uint8_t> dst) noexcept
+{
+    if (text.size() != (dst.size() * 2U)) {
+        return false;
+    }
+    for (size_t i = 0U; i < dst.size(); ++i) {
+        const int hi = hexValue(text[i * 2U]);
+        const int lo = hexValue(text[(i * 2U) + 1U]);
+        if ((hi < 0) || (lo < 0)) {
+            return false;
+        }
+        // 半字节在 0..15 范围内，拼接后窄化到 uint8_t 安全。
+        dst[i] =
+            static_cast<uint8_t>((static_cast<uint32_t>(hi) << 4U) | static_cast<uint32_t>(lo));
+    }
+    return true;
+}
+
+/**
+ * @brief  校验卫星跟踪设置（"<cutoffDeg>,<gps>,<glo>,<bds>,<gal>,<sbas>"）并核对星座能力掩码
+ * @param  dom:  当前卫星跟踪取值域（mask 为允许启用的星座位掩码）
+ * @param  text: 逗号分隔的 6 个整数
+ * @param[out] out: 成功时写入 6 字节规范值；失败保持原内容
+ * @retval Error::kOk       校验通过
+ * @retval Error::kBadValue 格式错误、越界或尝试开启硬件不支持的星座
+ */
+Error validateSatTrack(const Domain &dom, std::string_view text, CanonicalValue &out) noexcept
+{
+    std::array<int32_t, kSatTrackBytes> fields{};
+    std::string_view rest = text;
+    for (size_t i = 0U; i < kSatTrackBytes; ++i) {
+        const size_t sep = rest.find(',');
+        const bool last = (i + 1U) == kSatTrackBytes;
+        if (last ? (sep != std::string_view::npos) : (sep == std::string_view::npos)) {
+            return Error::kBadValue;
+        }
+        const std::string_view part = last ? rest : rest.substr(0U, sep);
+        if (!parseStrictInt(part, fields[i])) {
+            return Error::kBadValue;
+        }
+        if (!last) {
+            rest.remove_prefix(sep + 1U);
+        }
+    }
+    if ((fields[0] < 0) || (fields[0] > kSatCutoffMaxDeg)) {
+        return Error::kBadValue;
+    }
+    constexpr std::array<uint8_t, 5U> kBits{
+        const_bit::kGps, const_bit::kGlo, const_bit::kBds, const_bit::kGal, const_bit::kSbas,
+    };
+    for (size_t i = 0U; i < kBits.size(); ++i) {
+        const int32_t flag = fields[i + 1U];
+        if ((flag != 0) && (flag != 1)) {
+            return Error::kBadValue;
+        }
+        if ((flag == 1) && ((dom.mask & kBits[i]) == 0U)) {
             return Error::kBadValue;
         }
     }
     out.bytes.fill(0U);
-    for (size_t i = 0U; i < text.size(); ++i) {
-        // 已检查全部字符为可见 ASCII，转 uint8_t 无损。
-        out.bytes[i] = static_cast<uint8_t>(text[i]);
+    for (size_t i = 0U; i < kSatTrackBytes; ++i) {
+        // 已验证 cutoff 在 0..90、星座在 0..1，窄化到 uint8_t 安全。
+        out.bytes[i] = static_cast<uint8_t>(fields[i]);
     }
     out.kind = CanonicalKind::kBytes;
-    out.size = static_cast<uint8_t>(text.size());
+    out.size = static_cast<uint8_t>(kSatTrackBytes);
+    return Error::kOk;
+}
+
+/**
+ * @brief  校验手机天线高（16 位十六进制，小端 IEEE 754 binary64，范围 0..10 m）
+ * @param  text: 16 位十六进制字符串
+ * @param[out] out: 成功时写入 8 字节规范值；失败保持原内容
+ * @retval Error::kOk       校验通过
+ * @retval Error::kBadValue 长度、十六进制格式或数值越界/NaN/Inf
+ */
+Error validateHeight(std::string_view text, CanonicalValue &out) noexcept
+{
+    static_assert(std::numeric_limits<double>::is_iec559 && sizeof(double) == kHeightBytes);
+    std::array<uint8_t, kHeightBytes> raw{};
+    if (!parseFixedHex(text, raw)) {
+        return Error::kBadValue;
+    }
+    uint64_t bits = 0U;
+    for (size_t i = 0U; i < kHeightBytes; ++i) {
+        bits |= static_cast<uint64_t>(raw[i]) << (i * 8U);
+    }
+    constexpr double kMaxHeightMeters = 10.0;
+    const auto meters = std::bit_cast<double>(bits);
+    if (!(meters >= 0.0 && meters <= kMaxHeightMeters)) {
+        return Error::kBadValue;
+    }
+    out.bytes.fill(0U);
+    std::copy_n(raw.begin(), kHeightBytes, out.bytes.begin());
+    out.kind = CanonicalKind::kBytes;
+    out.size = static_cast<uint8_t>(kHeightBytes);
+    return Error::kOk;
+}
+
+/**
+ * @brief  校验手机 0x08 Nav SN+PN 组合字段（64 位十六进制，前 16 B 为 SN，后 16 B 为 PN）
+ * @param  text: 64 位十六进制字符串
+ * @param[out] out: 成功时写入 32 字节规范值；失败保持原内容
+ * @retval Error::kOk       校验通过
+ * @retval Error::kBadValue 格式错误、SN 非可见 ASCII 或 PN 含控制字符
+ */
+Error validateSnPn(std::string_view text, CanonicalValue &out) noexcept
+{
+    std::array<uint8_t, kSnPnBytes> raw{};
+    if (!parseFixedHex(text, raw)) {
+        return Error::kBadValue;
+    }
+    size_t snLen = 0U;
+    while ((snLen < kMaxSnBytes) && (raw[snLen] != 0U)) {
+        ++snLen;
+    }
+    if (!isValidSnBytes(std::span<const uint8_t>{raw.data(), snLen})) {
+        return Error::kBadValue;
+    }
+    for (size_t i = kMaxSnBytes; i < kSnPnBytes; ++i) {
+        if (raw[i] == 0U) {
+            break;
+        }
+        if ((raw[i] < kMinPrintableAscii) || (raw[i] > kMaxVisibleAscii)) {
+            return Error::kBadValue;
+        }
+    }
+    std::copy_n(raw.begin(), kSnPnBytes, out.bytes.begin());
+    out.kind = CanonicalKind::kBytes;
+    out.size = static_cast<uint8_t>(kSnPnBytes);
     return Error::kOk;
 }
 
@@ -367,6 +530,60 @@ void domainStaticSn(const GnssCaps &caps, bool gnssEnabled, Domain &out) noexcep
     static_cast<void>(caps);
     static_cast<void>(gnssEnabled);
     out = Domain{.kind = KeyKind::kSn, .supported = true, .minValue = 1, .maxValue = kMaxSnBytes};
+}
+
+/**
+ * @brief  生成 `gnss.ppp` 的动态取值域（由接收机型号能力决定，CM680 不支持）
+ * @param  caps:        当前 GNSS 能力快照
+ * @param  gnssEnabled: 固件是否启用 GNSS
+ * @param[out] out:     取值域输出
+ */
+void domainGnssPpp(const GnssCaps &caps, bool gnssEnabled, Domain &out) noexcept
+{
+    out =
+        Domain{.kind = KeyKind::kBool, .supported = gnssEnabled && caps.valid && caps.pppSupported};
+}
+
+/**
+ * @brief  生成 `gnss.sat_track`（0x06 截止角与星座开关）的动态取值域
+ * @param  caps:        当前 GNSS 能力快照
+ * @param  gnssEnabled: 固件是否启用 GNSS
+ * @param[out] out:     取值域输出（mask 保存支持的星座掩码）
+ */
+void domainGnssSatTrack(const GnssCaps &caps, bool gnssEnabled, Domain &out) noexcept
+{
+    const bool supported = gnssEnabled && caps.valid && (caps.constMask != 0U);
+    out = Domain{.kind = KeyKind::kSatTrack,
+                 .supported = supported,
+                 .mask = supported ? caps.constMask : uint8_t{0U},
+                 .minValue = 0,
+                 .maxValue = kSatCutoffMaxDeg};
+}
+
+/**
+ * @brief  生成 `phone.height` 的静态取值域
+ * @param  caps:        未使用
+ * @param  gnssEnabled: 未使用
+ * @param[out] out:     取值域输出
+ */
+void domainStaticHeight(const GnssCaps &caps, bool gnssEnabled, Domain &out) noexcept
+{
+    static_cast<void>(caps);
+    static_cast<void>(gnssEnabled);
+    out = Domain{.kind = KeyKind::kHeight, .supported = true};
+}
+
+/**
+ * @brief  生成 `phone.sn_pn` 的静态取值域
+ * @param  caps:        未使用
+ * @param  gnssEnabled: 未使用
+ * @param[out] out:     取值域输出
+ */
+void domainStaticSnPn(const GnssCaps &caps, bool gnssEnabled, Domain &out) noexcept
+{
+    static_cast<void>(caps);
+    static_cast<void>(gnssEnabled);
+    out = Domain{.kind = KeyKind::kSnPn, .supported = true};
 }
 
 // ---- 命令编码器 ----
@@ -514,7 +731,47 @@ bool encodeFactorySn(const CanonicalValue &val, fw::Command &cmd) noexcept
     return true;
 }
 
-/** 全部 16 个已登记设置键的编译期注册表（下标与 KeyId 一一对应）。 */
+/**
+ * @brief  编码 `gnss.ppp` → `GnssSubVerb::kApplyPpp`（1 字节 0/1）
+ * @param  val: 0/1 布尔整数
+ * @param[out] cmd: 输出命令
+ * @retval true  编码成功
+ * @retval false 参数类型错误
+ */
+bool encodeGnssPpp(const CanonicalValue &val, fw::Command &cmd) noexcept
+{
+    if (val.kind != CanonicalKind::kInt) {
+        return false;
+    }
+    cmd.verb = kVerbGnssSetPpp;
+    cmd.argLen = 1U;
+    cmd.args[0] = (val.number != 0) ? 1U : 0U;
+    return true;
+}
+
+/**
+ * @brief  编码定长字节类规范值到命令参数
+ * @tparam Verb: 目标模块动词
+ * @tparam ExpectedBytes: 期望字节长度
+ * @param  val: 字节规范值
+ * @param[out] cmd: 输出命令
+ * @retval true  编码成功
+ * @retval false 类型或长度不符
+ */
+template <uint8_t Verb, size_t ExpectedBytes>
+bool encodeFixedBytes(const CanonicalValue &val, fw::Command &cmd) noexcept
+{
+    static_assert(ExpectedBytes <= fw::kCommandArgBytes, "payload exceeds fw::Command::args");
+    if ((val.kind != CanonicalKind::kBytes) || (val.size != ExpectedBytes)) {
+        return false;
+    }
+    cmd.verb = Verb;
+    cmd.argLen = static_cast<uint8_t>(ExpectedBytes);
+    std::copy_n(val.bytes.begin(), ExpectedBytes, cmd.args.begin());
+    return true;
+}
+
+/** 全部已登记设置键的编译期注册表（下标与 KeyId 一一对应）。 */
 constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount)> kRegistry{{
     {KeyId::kGnssRate, "gnss.rate", KeyKind::kEnum, Owner::kGnss, kVerbGnssSetRate, &encodeGnssRate,
      &domainGnssRate, PersistKind::kNvs, access::kStandardAll, true},
@@ -558,6 +815,17 @@ constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount)> kRegistry{{
     {KeyId::kFactorySn, "factory.sn", KeyKind::kSn, Owner::kStorage, kVerbStorageSaveSn,
      &encodeFactorySn, &domainStaticSn, PersistKind::kNvs,
      static_cast<uint8_t>(access::kLocalOnly | access::kNeedsUnlock), true},
+    {KeyId::kGnssPpp, "gnss.ppp", KeyKind::kBool, Owner::kGnss, kVerbGnssSetPpp, &encodeGnssPpp,
+     &domainGnssPpp, PersistKind::kNvs, access::kPhoneAndLocal, true},
+    {KeyId::kGnssSatTrack, "gnss.sat_track", KeyKind::kSatTrack, Owner::kGnss, kVerbGnssSetSatTrack,
+     &encodeFixedBytes<kVerbGnssSetSatTrack, kSatTrackBytes>, &domainGnssSatTrack,
+     PersistKind::kNvs, access::kPhoneAndLocal, true},
+    {KeyId::kPhoneHeight, "phone.height", KeyKind::kHeight, Owner::kStorage, kVerbStorageSetHeight,
+     &encodeFixedBytes<kVerbStorageSetHeight, kHeightBytes>, &domainStaticHeight, PersistKind::kNvs,
+     access::kPhoneAndLocal, true},
+    {KeyId::kPhoneSnPn, "phone.sn_pn", KeyKind::kSnPn, Owner::kStorage, kVerbStorageSetSnPn,
+     &encodeFixedBytes<kVerbStorageSetSnPn, kSnPnBytes>, &domainStaticSnPn, PersistKind::kNvs,
+     access::kPhoneInternal, true},
 }};
 
 } // namespace
@@ -603,6 +871,12 @@ Error validateValue(const KeySpec &spec, const Domain &dom, std::string_view tex
         return validateMac(text, out);
     case KeyKind::kSn:
         return validateSn(text, out);
+    case KeyKind::kSatTrack:
+        return validateSatTrack(dom, text, out);
+    case KeyKind::kHeight:
+        return validateHeight(text, out);
+    case KeyKind::kSnPn:
+        return validateSnPn(text, out);
     default:
         return Error::kBadValue;
     }

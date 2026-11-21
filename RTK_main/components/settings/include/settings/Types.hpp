@@ -26,11 +26,22 @@ inline constexpr size_t kOutKeyCount = 5U;
 inline constexpr size_t kMaxSnBytes = 16U;
 /** 蓝牙 MAC 字节数。 */
 inline constexpr size_t kMacBytes = 6U;
+/** 天线高二进制字节数（IEEE 754 binary64 LE）。 */
+inline constexpr size_t kHeightBytes = 8U;
+/** 手机 0x08 Nav SN+PN 组合字段字节数（16 B SN + 16 B PN）。 */
+inline constexpr size_t kSnPnBytes = 32U;
+/** 规范值与快照值的最大字节数（对齐 fw::kCommandArgBytes）。 */
+inline constexpr size_t kMaxCanonicalBytes = fw::kCommandArgBytes;
+/** 卫星跟踪（0x06 Survey）截止角最大值（度）与编码字节数。 */
+inline constexpr int32_t kSatCutoffMaxDeg = 90;
+inline constexpr size_t kSatTrackBytes = 6U;
 /** GGA 质量门控最低卫星数闭区间范围。 */
 inline constexpr int32_t kGgaGateMinSatsMin = 0;
 inline constexpr int32_t kGgaGateMinSatsMax = 40;
 
 /** 目标模块命令动词常量（由 main 侧 static_assert 保证与 GnssVerb/GnssSubVerb/StorageVerb 一致）。 */
+inline constexpr uint8_t kVerbGnssSetPpp = 11U;
+inline constexpr uint8_t kVerbGnssSetSatTrack = 12U;
 inline constexpr uint8_t kVerbGnssSetRate = 14U;
 inline constexpr uint8_t kVerbGnssSetOut = 15U;
 inline constexpr uint8_t kVerbGnssSetGgaGate = 16U;
@@ -38,6 +49,8 @@ inline constexpr uint8_t kVerbStorageSaveSn = 0U;
 inline constexpr uint8_t kVerbStorageWhitelistAdd = 3U;
 inline constexpr uint8_t kVerbStorageWhitelistDel = 4U;
 inline constexpr uint8_t kVerbStorageSetPairNext = 5U;
+inline constexpr uint8_t kVerbStorageSetHeight = 6U;
+inline constexpr uint8_t kVerbStorageSetSnPn = 7U;
 
 /** GGA 质量门控子命令标志位（与 app::kGgaGateFlag* 一致）。 */
 inline constexpr uint8_t kGgaGateFlagEnabled = 1U << 0U;
@@ -94,6 +107,9 @@ enum class KeyKind : uint8_t {
     kBool,
     kMac,
     kSn,
+    kSatTrack, // "<cutoffDeg>,<gps>,<glo>,<bds>,<gal>,<sbas>"
+    kHeight,   // 16 位十六进制（8 B 小端 IEEE 754 binary64，0..10 m）
+    kSnPn,     // 64 位十六进制（16 B SN + 16 B PN）
 };
 
 /** 持久化策略（ADR-0018 §2.3）。 */
@@ -111,8 +127,10 @@ inline constexpr uint8_t kPhone = 1U << 2U;
 inline constexpr uint8_t kInternal = 1U << 3U;
 inline constexpr uint8_t kMqtt = 1U << 4U;
 inline constexpr uint8_t kNeedsUnlock = 1U << 7U;
-inline constexpr uint8_t kStandardAll = 0x0FU; // console, web, phone, internal
-inline constexpr uint8_t kLocalOnly = 0x0BU;   // console, web, internal
+inline constexpr uint8_t kStandardAll = 0x0FU;   // console, web, phone, internal
+inline constexpr uint8_t kLocalOnly = 0x0BU;     // console, web, internal
+inline constexpr uint8_t kPhoneAndLocal = 0x0DU; // console, phone, internal（非网页键）
+inline constexpr uint8_t kPhoneInternal = 0x0CU; // phone, internal
 } // namespace access
 
 /** 注册表中全部已知设置键的固定编号（顺序即网页与注册表遍历顺序）。 */
@@ -133,6 +151,10 @@ enum class KeyId : uint8_t {
     kBtWlDel,
     kBtPairNext,
     kFactorySn,
+    kGnssPpp,
+    kGnssSatTrack,
+    kPhoneHeight,
+    kPhoneSnPn,
     kCount,
 };
 
@@ -145,12 +167,13 @@ enum class OutKeyIndex : uint8_t {
     kRmc = 4,
 };
 
-/** 星座能力掩码位（GnssCaps::constMask，v1 暂全 0）。 */
+/** 星座能力掩码位（GnssCaps::constMask）。 */
 namespace const_bit {
 inline constexpr uint8_t kGps = 1U << 0U;
 inline constexpr uint8_t kBds = 1U << 1U;
 inline constexpr uint8_t kGlo = 1U << 2U;
 inline constexpr uint8_t kGal = 1U << 3U;
+inline constexpr uint8_t kSbas = 1U << 4U;
 } // namespace const_bit
 
 /** 单个 GNSS 输出语句在当前定位频率下的有效周期集合（ms，含 0=关闭）。 */
@@ -166,6 +189,7 @@ struct PeriodDomain final {
 struct GnssCaps final {
     bool valid = false;
     bool enabled = false;
+    bool pppSupported = false;
     uint8_t navRateHz = 0U;
     std::array<uint8_t, kMaxRateOptions> navRatesHz{};
     uint8_t navRateCount = 0U;
@@ -182,9 +206,9 @@ struct GnssCaps final {
     [[nodiscard]] constexpr bool sameCaps(const GnssCaps &other) const noexcept
     {
         return (enabled == other.enabled) && (valid == other.valid) &&
-               (navRateHz == other.navRateHz) && (navRateCount == other.navRateCount) &&
-               (navRatesHz == other.navRatesHz) && (outPeriods == other.outPeriods) &&
-               (constMask == other.constMask);
+               (pppSupported == other.pppSupported) && (navRateHz == other.navRateHz) &&
+               (navRateCount == other.navRateCount) && (navRatesHz == other.navRatesHz) &&
+               (outPeriods == other.outPeriods) && (constMask == other.constMask);
     }
 };
 
@@ -194,6 +218,7 @@ struct Domain final {
     bool supported = false;
     std::array<int32_t, kMaxDomainValues> enumValues{};
     uint8_t enumCount = 0U;
+    uint8_t mask = 0U;
     int32_t minValue = 0;
     int32_t maxValue = 0;
 
@@ -218,7 +243,7 @@ enum class CanonicalKind : uint8_t {
 struct CanonicalValue final {
     CanonicalKind kind = CanonicalKind::kInt;
     int32_t number = 0;
-    std::array<uint8_t, kMaxSnBytes> bytes{};
+    std::array<uint8_t, kMaxCanonicalBytes> bytes{};
     uint8_t size = 0U;
 };
 
@@ -227,6 +252,7 @@ enum class ValueKind : uint8_t {
     kInt = 0,
     kBool,
     kString,
+    kBytes,
 };
 
 /** Service::get 读出的当前设置值快照。 */
@@ -234,7 +260,7 @@ struct Value final {
     ValueKind kind = ValueKind::kInt;
     int32_t number = 0;
     bool boolVal = false;
-    std::array<char, kMaxSnBytes> text{};
+    std::array<char, kMaxCanonicalBytes> text{};
     uint8_t textLen = 0U;
 
     /**

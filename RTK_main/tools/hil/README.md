@@ -98,3 +98,22 @@ python3 -I tools/hil/web_load.py --selftest
 原因见 `error`。配置往返交替保存 GGA
 最低卫星数的相邻值与原值，异常时会尝试恢复。板端堆和双客户端验收步骤见
 [HB.md](../../docs/reports/HB.md)。
+
+## SV3 手机设置延迟应答 `spp_sv3_phone.py`
+
+以 PHONE 角色连接 SPP，验证 0x06/0x33/0x24/0x08 的延迟应答、非法值立即 `02 02`、
+设置中途断线（默认 9 轮，超过 `kMaxDeferredReplies=6`）后仍可设置，以及 0x28 Wi-Fi
+网页配置。主机需先与设备配对（设备侧 `bt pair open 120`，`bluetoothctl pair` 并确认 passkey）。
+结束时恢复原值。
+
+```sh
+P=~/.espressif/python_env/idf6.1_py3.14_env/bin/python
+$P -u -I tools/hil/spp_sv3_phone.py <MAC> [--sn <SN>] [--ppp-supported]
+$P -u -I tools/hil/spp_sv3_phone.py <MAC> --persist state.json   # 保留测试值
+# 重启设备后：
+$P -u -I tools/hil/spp_sv3_phone.py <MAC> --verify state.json    # 检查持久化并恢复
+$P -u -I tools/hil/spp_sv3_phone.py <MAC> --wifi                 # 0x28，最后设备重启进入 Wi-Fi
+```
+
+`--ppp-supported` 用于 UM98x；CM680 不支持 PPP，0x33 设置应立即回 `02 02`。
+`--wifi` 最后一项通过重连失败判定蓝牙已关闭（BlueZ 对已复位设备常要等监督超时才报断开）。

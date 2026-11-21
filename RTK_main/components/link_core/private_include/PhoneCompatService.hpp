@@ -16,6 +16,15 @@ inline constexpr uint16_t kPhoneSatTrackId = 0x06U;
 inline constexpr uint16_t kPhonePppId = 0x33U;
 inline constexpr uint8_t kSatDefaultCutoffDeg = 15U;
 inline constexpr uint8_t kSatMaxCutoffDeg = 90U;
+inline constexpr uint8_t kSatCapGps = 1U << 0U;
+inline constexpr uint8_t kSatCapBds = 1U << 1U;
+inline constexpr uint8_t kSatCapGlo = 1U << 2U;
+inline constexpr uint8_t kSatCapGal = 1U << 3U;
+inline constexpr uint8_t kSatCapSbas = 1U << 4U;
+inline constexpr uint8_t kSatCapAll =
+    static_cast<uint8_t>(static_cast<unsigned>(kSatCapGps) | static_cast<unsigned>(kSatCapBds) |
+                         static_cast<unsigned>(kSatCapGlo) | static_cast<unsigned>(kSatCapGal) |
+                         static_cast<unsigned>(kSatCapSbas));
 inline constexpr size_t kAntennaHeightBytes = 8U;
 inline constexpr size_t kSatConfigBlobBytes = 6U;
 inline constexpr size_t kPhoneSnBytes = 16U;
@@ -100,16 +109,23 @@ namespace services {
 struct PhoneCompatOps {
     void *ctx = nullptr;
     AntennaHeight (*readHeight)(const void *) noexcept = nullptr;
-    bool (*setHeight)(void *, const AntennaHeight &, uint32_t) noexcept = nullptr;
+    bool (*startHeight)(void *, const AntennaHeight &) noexcept = nullptr;
+    std::optional<bool> (*heightResult)(const void *) noexcept = nullptr;
+    void (*cancelHeight)(void *) noexcept = nullptr;
     bool (*pppSupported)(const void *) noexcept = nullptr;
     bool (*readPpp)(const void *) noexcept = nullptr;
     bool (*startPpp)(void *, bool) noexcept = nullptr;
     std::optional<bool> (*pppResult)(const void *) noexcept = nullptr;
+    void (*cancelPpp)(void *) noexcept = nullptr;
+    uint8_t (*satCapsMask)(const void *) noexcept = nullptr;
     SatTrackConfig (*readSatConfig)(const void *) noexcept = nullptr;
     bool (*startSatConfig)(void *, const SatTrackConfig &) noexcept = nullptr;
     std::optional<bool> (*satConfigResult)(const void *) noexcept = nullptr;
+    void (*cancelSatConfig)(void *) noexcept = nullptr;
     PhoneSnPn (*readSnPn)(const void *) noexcept = nullptr;
-    bool (*setSnPn)(void *, const PhoneSnPn &, uint32_t) noexcept = nullptr;
+    bool (*startSnPn)(void *, const PhoneSnPn &) noexcept = nullptr;
+    std::optional<bool> (*snPnResult)(const void *) noexcept = nullptr;
+    void (*cancelSnPn)(void *) noexcept = nullptr;
     size_t (*readLatestGsv)(const void *, std::span<uint8_t>) noexcept = nullptr;
     PhoneNtripConfig (*readNtrip)(const void *) noexcept = nullptr;
     bool (*setNtrip)(void *, const PhoneNtripConfig &, uint32_t) noexcept = nullptr;
@@ -118,12 +134,16 @@ struct PhoneCompatOps {
     PhoneThingsboardConfig (*readThingsboard)(const void *) noexcept = nullptr;
     bool (*setThingsboard)(void *, const PhoneThingsboardConfig &, uint32_t) noexcept = nullptr;
     bool (*scheduleReset)(void *, bool, bool, uint32_t) noexcept = nullptr;
+    bool (*wifiConfigSupported)(const void *) noexcept = nullptr;
+    bool (*scheduleWifiConfig)(void *, uint32_t) noexcept = nullptr;
 };
 
 struct PhoneCompatService {
     PhoneCompatOps ops{};
     bool pppWaiting = false;
     bool satWaiting = false;
+    bool heightWaiting = false;
+    bool snPnWaiting = false;
 
     /** @brief 返回只允许 PHONE 访问的路由表。 @retval 路由表与本实例。 */
     [[nodiscard]] RouteTable table() noexcept;

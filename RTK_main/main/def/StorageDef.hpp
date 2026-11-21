@@ -16,6 +16,8 @@ enum class StorageVerb : uint8_t {
     kWhitelistAdd = 3U,
     kWhitelistDel = 4U,
     kSetPairNext = 5U,
+    kSetHeight = 6U,
+    kSetSnPn = 7U,
 };
 
 /** kStore 追踪事件码（ADR-0009）；结果是 fw::Result 的数值，控制台按表解释。 */

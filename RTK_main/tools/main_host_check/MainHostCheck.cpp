@@ -34,6 +34,14 @@ extern "C" {
 #include "modules/system/FactoryReset.hpp"
 #include "modules/system/SystemModule.hpp"
 
+namespace app {
+/** @brief 主机测试桩：未链接 FactoryCmds 时默认工厂命令保持锁定。 @retval false 总是。 */
+bool factoryUnlocked() noexcept
+{
+    return false;
+}
+} // namespace app
+
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
 namespace {
 uint32_t s_clock = 100U;
@@ -1257,7 +1265,7 @@ void phoneNvsReadback()
     app::loadEarlyConfig(context);
     CHECK(fw::isOk(storage.init()));
     CHECK(storage.phoneHeight() == core::AntennaHeight{});
-    CHECK(!context.data.phonePppEnabled.read().has_value());
+    CHECK(!context.data.gnssPppEnabled.read().has_value());
 
     constexpr core::AntennaHeight kHeight{0, 0, 0, 0, 0, 0, 0xF8, 0x3F};
     CHECK(storage.setPhoneHeight(kHeight, s_clock));
@@ -1268,7 +1276,14 @@ void phoneNvsReadback()
     core::PhoneSnPn snPn{};
     std::memcpy(snPn.data(), "RTK20260001", 11U);
     std::memcpy(snPn.data() + core::kPhoneSnBytes, "1000190000002001", 16U);
-    CHECK(storage.setPhoneSnPn(snPn, s_clock));
+    fw::Command snPnCmd{};
+    snPnCmd.target = app::id(app::ModuleKind::kStorage);
+    snPnCmd.verb = app::verb(app::StorageVerb::kSetSnPn);
+    snPnCmd.argLen = static_cast<uint8_t>(snPn.size());
+    std::copy(snPn.begin(), snPn.end(), snPnCmd.args.begin());
+    fw::CommandResult snPnRes{};
+    storage.onCommand(snPnCmd, snPnRes);
+    CHECK(fw::isOk(snPnRes.status));
     core::PhoneNtripConfig ntrip{};
     ntrip[1U] = 1U;
     ntrip[8U] = 'n';
@@ -1300,12 +1315,13 @@ void phoneNvsReadback()
     CHECK(storage.setPhoneNtrip(core::PhoneNtripConfig{}, s_clock));
     CHECK(storage.setPhoneJsonServer(core::PhoneJsonServerConfig{}, s_clock));
     CHECK(storage.setPhoneThingsboard(core::PhoneThingsboardConfig{}, s_clock));
-    context.data.phoneSatConfig.write(std::nullopt);
+    context.data.gnssSatTrack.write(std::nullopt);
     const auto loaded = storage.loadKeys(keys);
     CHECK(loaded.saved == keys.size() && loaded.failed == 0U);
     CHECK(storage.phoneHeight() == kHeight);
-    CHECK(context.data.phonePppEnabled.read() == true);
-    CHECK(context.data.phoneSatConfig.read() == satCfg);
+    CHECK(context.data.phoneHeight.read() == kHeight);
+    CHECK(context.data.gnssPppEnabled.read() == true);
+    CHECK(context.data.gnssSatTrack.read() == satCfg);
     CHECK(storage.phoneSnPn() == snPn);
     CHECK(storage.phoneNtrip() == ntrip);
     CHECK(storage.phoneJsonServer() == jsonSrv);

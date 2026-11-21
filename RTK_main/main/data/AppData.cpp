@@ -26,13 +26,11 @@ void DataCenter::init() noexcept
     systemStatus.bindLock(lock);
     systemMode.bindLock(lock);
     rtcmReset.bindLock(lock);
-    phonePppEnabled.bindLock(lock);
-    phoneSatConfig.bindLock(lock);
+    gnssPppEnabled.bindLock(lock);
+    gnssSatTrack.bindLock(lock);
+    phoneHeight.bindLock(lock);
+    phonePn.bindLock(lock);
 #if RTK_GNSS_ENABLED
-    phonePppCommand.bindLock(lock);
-    phonePppResult.bindLock(lock);
-    phoneSatCommand.bindLock(lock);
-    phoneSatResult.bindLock(lock);
     gnssLatestGsv.bindLock(lock);
     ioExecStats.bindLock(lock);
     gnssStatus.bindLock(lock);

@@ -296,7 +296,7 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
         return false;
     }
     tickGgaGateSave(nowMs, false);
-    if (pollPhonePpp(nowMs)) {
+    if (pollPppAndSat(nowMs)) {
         const bool hadFullRx = (last_rx_bytes_ == kUartReadChunkBytes);
         last_rx_bytes_ = 0U;
         return hadFullRx;

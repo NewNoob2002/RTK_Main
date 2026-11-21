@@ -238,14 +238,99 @@ void testGetDomainAndForEach()
     TEST_ASSERT_EQUAL_INT32(0, d.minValue);
     TEST_ASSERT_EQUAL_INT32(40, d.maxValue);
 
-    // 禁用 GNSS 时，GGA 门控也变为不支持。
+    // 禁用 GNSS 时，GGA 门控与预探测静态回退均变为不支持。
     st.gnssEnabled = false;
     TEST_ASSERT_TRUE(svc.domain("gnss.gga_gate.enabled", d));
     TEST_ASSERT_FALSE(d.supported);
+    settings::Ticket t{};
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kUnsupported),
+                      static_cast<int>(svc.set("gnss.rate", "5", settings::Caller::kConsole, t)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kUnsupported),
+        static_cast<int>(svc.set("gnss.out.gga", "1000", settings::Caller::kConsole, t)));
+
+    // 探测未完成（gnssEnabled && !caps.valid）时：domain 仍为 false（隐藏网页 caps），
+    // 但 set() 对 gnss.rate / gnss.out.* 按静态范围校验放行（P2-1/P2-2），对 gnss.ppp 仍报 unsupported。
+    st.gnssEnabled = true;
+    st.caps = settings::GnssCaps{};
+    TEST_ASSERT_TRUE(svc.domain("gnss.rate", d));
+    TEST_ASSERT_FALSE(d.supported);
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("gnss.rate", "20", settings::Caller::kConsole, t)));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbGnssSetRate, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(20U, st.lastCmd.args[0]);
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(svc.set("gnss.rate", "3", settings::Caller::kConsole, t)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(svc.set("gnss.out.gga", "5000", settings::Caller::kConsole, t)));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbGnssSetOut, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_INT8(-5, static_cast<int8_t>(st.lastCmd.args[1]));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kBadValue),
+        static_cast<int>(svc.set("gnss.out.gga", "150", settings::Caller::kConsole, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kUnsupported),
+                      static_cast<int>(svc.set("gnss.ppp", "1", settings::Caller::kPhone, t)));
 
     size_t count = 0U;
     svc.forEach([&count](const settings::KeySpec &) { ++count; });
-    TEST_ASSERT_EQUAL_size_t(16U, count);
+    TEST_ASSERT_EQUAL_size_t(20U, count);
+}
+
+/**
+ * @brief  校验 SV3 手机来源（Caller::kPhone）权限与网页隔离（phone.* 不允许 kWeb）
+ */
+void testPhoneCallerPermissionsAndEncoding()
+{
+    MockBackendState st{};
+    st.caps = makeCm680Caps();
+    st.caps.pppSupported = true;
+    st.caps.constMask = settings::const_bit::kGps | settings::const_bit::kBds |
+                        settings::const_bit::kGlo | settings::const_bit::kGal |
+                        settings::const_bit::kSbas;
+    settings::Service svc{};
+    bindMock(st, svc);
+
+    settings::Ticket t{};
+    // 网页不能直接写 phone.height / phone.sn_pn / gnss.ppp / gnss.sat_track。
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kLocked),
+        static_cast<int>(svc.set("phone.height", "000000000000F83F", settings::Caller::kWeb, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kLocked),
+                      static_cast<int>(svc.set("gnss.ppp", "1", settings::Caller::kWeb, t)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kLocked),
+        static_cast<int>(svc.set("gnss.sat_track", "10,1,1,1,1,1", settings::Caller::kWeb, t)));
+
+    // 手机来源允许写 gnss.ppp / gnss.sat_track / phone.height / phone.sn_pn。
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("gnss.ppp", "1", settings::Caller::kPhone, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kGnss), static_cast<int>(st.lastOwner));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbGnssSetPpp, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(1U, st.lastCmd.argLen);
+    TEST_ASSERT_EQUAL_UINT8(1U, st.lastCmd.args[0]);
+
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(svc.set("gnss.sat_track", "12,1,0,1,1,0", settings::Caller::kPhone, t)));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbGnssSetSatTrack, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(6U, st.lastCmd.argLen);
+    TEST_ASSERT_EQUAL_UINT8(12U, st.lastCmd.args[0]);
+
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(svc.set("phone.height", "000000000000F83F", settings::Caller::kPhone, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kStorage), static_cast<int>(st.lastOwner));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbStorageSetHeight, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(8U, st.lastCmd.argLen);
+
+    const char *snPnHex = "534E3031000000000000000000000000"
+                          "504E3031000000000000000000000000";
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(svc.set("phone.sn_pn", snPnHex, settings::Caller::kPhone, t)));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbStorageSetSnPn, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(32U, st.lastCmd.argLen);
 }
 
 } // namespace
@@ -266,5 +351,6 @@ int main()
     RUN_TEST(testPermissionsAndFactoryLock);
     RUN_TEST(testValidationEncodingAndErrors);
     RUN_TEST(testGetDomainAndForEach);
+    RUN_TEST(testPhoneCallerPermissionsAndEncoding);
     return UNITY_END();
 }

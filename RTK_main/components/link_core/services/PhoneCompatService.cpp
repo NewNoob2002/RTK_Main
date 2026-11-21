@@ -41,12 +41,13 @@ constexpr uint16_t kHeightId = 0x24U;
 constexpr uint16_t kInsId = 0x25U;
 constexpr uint16_t kAlignId = 0x26U;
 constexpr uint16_t kHandNetId = 0x27U;
+constexpr uint16_t kWifiCtlId = 0x28U;
 constexpr uint16_t kBaseInfoId = 0x29U;
 constexpr uint16_t kJsonServerId = 0x32U;
 constexpr uint16_t kFenceListId = 0x60U;
 constexpr uint16_t kFenceDetailId = 0x61U;
 constexpr uint16_t kFenceEditId = 0x62U;
-// TODO(Q1): Configure app 的 GGA 质量门控配置消息等待 app 团队定义消息 ID 与负载格式后再接入。
+// TODO(SV3/Q1): Configure App 的 GGA 质量门控配置报文等待 App 团队定义报文 ID 与负载格式后再经 settings::Service(Caller::kPhone) 接入。
 
 constexpr size_t kSatOfsCutoff = 1U;
 constexpr size_t kSatOfsGps = 4U;
@@ -68,7 +69,13 @@ constexpr size_t kAlignReplyLen = 4U;
 constexpr size_t kJsonServerMinSetLen = 38U;
 constexpr size_t kPppReplyLen = 4U;
 constexpr size_t kFenceListReplyLen = 1U;
-constexpr size_t kRouteCount = 18U;
+constexpr size_t kWifiReplyLen = 8U;
+constexpr size_t kWifiOfsState = 0U;
+constexpr size_t kWifiOfsIp = 1U;
+constexpr uint8_t kWifiOpen = 1U;
+// SoftAP 固定地址，与 main/modules/web/WebServer.cpp:55 的 192.168.10.12/24 保持一致。
+constexpr std::array<uint8_t, 4U> kWifiApIp{192U, 168U, 10U, 12U};
+constexpr size_t kRouteCount = 19U;
 
 constexpr std::array<uint8_t, 2U> kOk{1U, 1U};
 constexpr std::array<uint8_t, 2U> kFail{2U, 2U};
@@ -144,12 +151,16 @@ bool pollPppDeferred(void *ctx, uint32_t nowMs, Reply &reply) noexcept
 }
 
 /**
- * @brief 取消挂起的 PPP 延迟应答状态。
+ * @brief 取消挂起的 PPP 延迟应答状态并通知底层撤销异步凭据。
  * @param ctx: PhoneCompatService 实例指针。
  */
 void cancelPppDeferred(void *ctx) noexcept
 {
-    serviceOf(ctx).pppWaiting = false;
+    auto &service = serviceOf(ctx);
+    service.pppWaiting = false;
+    if (service.ops.cancelPpp != nullptr) {
+        service.ops.cancelPpp(service.ops.ctx);
+    }
 }
 
 /**
@@ -180,29 +191,113 @@ bool pollSatDeferred(void *ctx, uint32_t nowMs, Reply &reply) noexcept
 }
 
 /**
- * @brief 取消挂起的 0x06 延迟应答状态。
+ * @brief 取消挂起的 0x06 延迟应答状态并通知底层撤销异步凭据。
  * @param ctx: PhoneCompatService 实例指针。
  */
 void cancelSatDeferred(void *ctx) noexcept
 {
-    serviceOf(ctx).satWaiting = false;
+    auto &service = serviceOf(ctx);
+    service.satWaiting = false;
+    if (service.ops.cancelSatConfig != nullptr) {
+        service.ops.cancelSatConfig(service.ops.ctx);
+    }
 }
 
 /**
- * @brief 0x08 Nav SN/PN 查询与设置（48 B 负载：[0..15]SN [16..31]PN）。
+ * @brief 轮询延迟的 0x24 天线高设置应答并在完成时组帧。
+ * @param ctx: PhoneCompatService 实例指针。
+ * @param nowMs: 当前单调时钟（未用）。
+ * @param[out] reply: 应答缓冲。
+ * @retval true 已完成并组帧。
+ * @retval false 仍在等待设置服务执行。
+ */
+bool pollHeightDeferred(void *ctx, uint32_t nowMs, Reply &reply) noexcept
+{
+    static_cast<void>(nowMs);
+    auto &service = serviceOf(ctx);
+    if (service.ops.heightResult == nullptr) {
+        service.heightWaiting = false;
+        static_cast<void>(buildMsg(kHeightId, proto::msg_type::kSetRes, kFail, reply));
+        return true;
+    }
+    const auto done = service.ops.heightResult(service.ops.ctx);
+    if (!done.has_value()) {
+        return false;
+    }
+    service.heightWaiting = false;
+    static_cast<void>(buildMsg(kHeightId, proto::msg_type::kSetRes, *done ? kOk : kFail, reply));
+    return true;
+}
+
+/**
+ * @brief 取消挂起的 0x24 延迟应答状态并撤销异步凭据。
+ * @param ctx: PhoneCompatService 实例指针。
+ */
+void cancelHeightDeferred(void *ctx) noexcept
+{
+    auto &service = serviceOf(ctx);
+    service.heightWaiting = false;
+    if (service.ops.cancelHeight != nullptr) {
+        service.ops.cancelHeight(service.ops.ctx);
+    }
+}
+
+/**
+ * @brief 轮询延迟的 0x08 SN/PN 设置应答并在完成时组帧。
+ * @param ctx: PhoneCompatService 实例指针。
+ * @param nowMs: 当前单调时钟（未用）。
+ * @param[out] reply: 应答缓冲。
+ * @retval true 已完成并组帧。
+ * @retval false 仍在等待设置服务执行。
+ */
+bool pollSnPnDeferred(void *ctx, uint32_t nowMs, Reply &reply) noexcept
+{
+    static_cast<void>(nowMs);
+    auto &service = serviceOf(ctx);
+    if (service.ops.snPnResult == nullptr) {
+        service.snPnWaiting = false;
+        static_cast<void>(buildMsg(kSnPnId, proto::msg_type::kSetRes, kFail, reply));
+        return true;
+    }
+    const auto done = service.ops.snPnResult(service.ops.ctx);
+    if (!done.has_value()) {
+        return false;
+    }
+    service.snPnWaiting = false;
+    static_cast<void>(buildMsg(kSnPnId, proto::msg_type::kSetRes, *done ? kOk : kFail, reply));
+    return true;
+}
+
+/**
+ * @brief 取消挂起的 0x08 延迟应答状态并撤销异步凭据。
+ * @param ctx: PhoneCompatService 实例指针。
+ */
+void cancelSnPnDeferred(void *ctx) noexcept
+{
+    auto &service = serviceOf(ctx);
+    service.snPnWaiting = false;
+    if (service.ops.cancelSnPn != nullptr) {
+        service.ops.cancelSnPn(service.ops.ctx);
+    }
+}
+
+/**
+ * @brief 0x08 Nav SN/PN 查询与异步设置（48 B 负载：[0..15]SN [16..31]PN）。
  * @param self: PhoneCompatService 实例。
  * @param frame: 请求帧。
- * @param nowMs: 去抖时间戳（ms）。
- * @param[out] reply: 应答缓冲。
+ * @param nowMs: 当前单调时钟（未用）。
+ * @param[out] reply: 应答缓冲或延迟应答钩子。
  * @retval 路由分发结果。
  */
 DispatchResult handleSnPn(void *self, const proto::FrameView &frame, uint32_t nowMs,
                           Reply &reply) noexcept
 {
+    static_cast<void>(nowMs);
     if (appKindFromSender(frame.sender) != AppKind::kNav) {
         return DispatchResult::kNoReply;
     }
-    const auto &ops = serviceOf(self).ops;
+    auto &service = serviceOf(self);
+    const auto &ops = service.ops;
     if (frame.type == proto::msg_type::kQuery) {
         std::array<uint8_t, kSnPnReplyLen> payload{};
         if (ops.readSnPn != nullptr) {
@@ -214,13 +309,18 @@ DispatchResult handleSnPn(void *self, const proto::FrameView &frame, uint32_t no
     if (frame.type != proto::msg_type::kSet) {
         return DispatchResult::kDenied;
     }
-    if ((frame.payload.size() < kPhoneSnPnBytes) || (ops.setSnPn == nullptr)) {
+    if ((frame.payload.size() < kPhoneSnPnBytes) || service.snPnWaiting ||
+        (ops.startSnPn == nullptr)) {
         return build(frame, proto::msg_type::kSetRes, kFail, reply);
     }
     PhoneSnPn snPn{};
     std::copy_n(frame.payload.begin(), snPn.size(), snPn.begin());
-    const bool ok = ops.setSnPn(ops.ctx, snPn, nowMs);
-    return build(frame, proto::msg_type::kSetRes, ok ? kOk : kFail, reply);
+    if (!ops.startSnPn(ops.ctx, snPn)) {
+        return build(frame, proto::msg_type::kSetRes, kFail, reply);
+    }
+    service.snPnWaiting = true;
+    reply.deferred = DeferredHook{&service, &pollSnPnDeferred, &cancelSnPnDeferred};
+    return DispatchResult::kDeferred;
 }
 
 /**
@@ -374,17 +474,58 @@ DispatchResult handleReset(void *self, const proto::FrameView &frame, uint32_t n
 }
 
 /**
- * @brief 0x24 回读或登记新的天线高。
+ * @brief 0x28 Wi-Fi 网页配置控制（沿用 E1-5.4 normal-version 报文格式）。
+ * @param self: PhoneCompatService 实例。
+ * @param frame: 请求帧；SET 负载 [0]=1 开启，[1..4] 为 5.4 的 wifiDomain（固定 IP，忽略）。
+ * @param nowMs: 当前单调时钟（ms）。
+ * @param[out] reply: 应答缓冲。
+ * @retval 路由分发结果。
+ * @note 查询应答 8 B：[0] 状态（本次启动在蓝牙模式，恒为 0），[1..4] SoftAP IP；
+ *       不支持 Wi-Fi 的构建 IP 全 0。开启时先应答 01 01，再由链路模块延迟重启进入 Wi-Fi 模式。
+ */
+DispatchResult handleWifiCtl(void *self, const proto::FrameView &frame, uint32_t nowMs,
+                             Reply &reply) noexcept
+{
+    const auto &ops = serviceOf(self).ops;
+    const bool supported = (ops.wifiConfigSupported != nullptr) && ops.wifiConfigSupported(ops.ctx);
+    if (frame.type == proto::msg_type::kQuery) {
+        std::array<uint8_t, kWifiReplyLen> payload{};
+        payload[kWifiOfsState] = 0U;
+        if (supported) {
+            std::ranges::copy(kWifiApIp, std::span{payload}.subspan(kWifiOfsIp).begin());
+        }
+        return build(frame, proto::msg_type::kQueryRes, payload, reply);
+    }
+    if (frame.type != proto::msg_type::kSet) {
+        return DispatchResult::kDenied;
+    }
+    if (frame.payload.empty()) {
+        return build(frame, proto::msg_type::kSetRes, kFail, reply);
+    }
+    if (frame.payload[kWifiOfsState] == 0U) {
+        // 已处于蓝牙模式，关闭请求无事可做。
+        return build(frame, proto::msg_type::kSetRes, kOk, reply);
+    }
+    const bool scheduled = supported && (frame.payload[kWifiOfsState] == kWifiOpen) &&
+                           (ops.scheduleWifiConfig != nullptr) &&
+                           ops.scheduleWifiConfig(ops.ctx, nowMs);
+    return build(frame, proto::msg_type::kSetRes, scheduled ? kOk : kFail, reply);
+}
+
+/**
+ * @brief 0x24 回读或异步登记新的天线高。
  * @param self: PhoneCompatService 实例。
  * @param frame: 手机请求。
- * @param nowMs: 去抖起点。
- * @param[out] reply: 应答缓冲。
+ * @param nowMs: 当前单调时钟（未用）。
+ * @param[out] reply: 应答缓冲或延迟应答钩子。
  * @retval 路由应答结果。
  */
 DispatchResult handleHeight(void *self, const proto::FrameView &frame, uint32_t nowMs,
                             Reply &reply) noexcept
 {
-    const auto &ops = serviceOf(self).ops;
+    static_cast<void>(nowMs);
+    auto &service = serviceOf(self);
+    const auto &ops = service.ops;
     if (frame.type == proto::msg_type::kQuery) {
         std::array<uint8_t, kHeightReplyLen> payload{};
         if (ops.readHeight != nullptr) {
@@ -397,12 +538,17 @@ DispatchResult handleHeight(void *self, const proto::FrameView &frame, uint32_t 
         return DispatchResult::kDenied;
     }
     AntennaHeight value{};
-    if ((frame.payload.size() < value.size()) || (ops.setHeight == nullptr)) {
+    if ((frame.payload.size() < value.size()) || service.heightWaiting ||
+        (ops.startHeight == nullptr)) {
         return build(frame, proto::msg_type::kSetRes, kFail, reply);
     }
     std::copy_n(frame.payload.begin(), value.size(), value.begin());
-    const bool ok = validAntennaHeight(value) && ops.setHeight(ops.ctx, value, nowMs);
-    return build(frame, proto::msg_type::kSetRes, ok ? kOk : kFail, reply);
+    if (!validAntennaHeight(value) || !ops.startHeight(ops.ctx, value)) {
+        return build(frame, proto::msg_type::kSetRes, kFail, reply);
+    }
+    service.heightWaiting = true;
+    reply.deferred = DeferredHook{&service, &pollHeightDeferred, &cancelHeightDeferred};
+    return DispatchResult::kDeferred;
 }
 
 /**
@@ -595,6 +741,28 @@ DispatchResult handleFenceUnsupported(void *, const proto::FrameView &frame, uin
     return DispatchResult::kDenied;
 }
 
+/** @brief 按接收机星座能力掩码填充 0x06 Survey 查询应答载荷（无能力掩码时保持旧行为返回存储/默认值）。 @param ops: 手机回调表。 @param capsMask: 支持的星座能力位图。 @param[out] payload: 12 字节应答载荷。 */
+void fillSatTrackQueryPayload(const PhoneCompatOps &ops, uint8_t capsMask,
+                              std::array<uint8_t, kSatTrackLen> &payload) noexcept
+{
+    const SatTrackConfig cfg =
+        (ops.readSatConfig != nullptr) ? ops.readSatConfig(ops.ctx) : SatTrackConfig::defaults();
+    payload[kSatOfsCutoff] = cfg.cutoffDeg;
+    if (capsMask == 0U) {
+        payload[kSatOfsGps] = cfg.gps;
+        payload[kSatOfsGlo] = cfg.glo;
+        payload[kSatOfsBds] = cfg.bds;
+        payload[kSatOfsGal] = cfg.gal;
+        payload[kSatOfsSbas] = cfg.sbas;
+        return;
+    }
+    payload[kSatOfsGps] = ((capsMask & kSatCapGps) != 0U) ? cfg.gps : 0U;
+    payload[kSatOfsGlo] = ((capsMask & kSatCapGlo) != 0U) ? cfg.glo : 0U;
+    payload[kSatOfsBds] = ((capsMask & kSatCapBds) != 0U) ? cfg.bds : 0U;
+    payload[kSatOfsGal] = ((capsMask & kSatCapGal) != 0U) ? cfg.gal : 0U;
+    payload[kSatOfsSbas] = ((capsMask & kSatCapSbas) != 0U) ? cfg.sbas : 0U;
+}
+
 } // namespace
 
 DispatchResult PhoneCompatService::handleSurveySatTrack(void *self, const proto::FrameView &frame,
@@ -602,22 +770,16 @@ DispatchResult PhoneCompatService::handleSurveySatTrack(void *self, const proto:
 {
     auto &service = serviceOf(self);
     const auto &ops = service.ops;
+    const uint8_t capsMask = (ops.satCapsMask != nullptr) ? ops.satCapsMask(ops.ctx) : kSatCapAll;
     if (frame.type == proto::msg_type::kQuery) {
-        const SatTrackConfig cfg = (ops.readSatConfig != nullptr) ? ops.readSatConfig(ops.ctx)
-                                                                  : SatTrackConfig::defaults();
         std::array<uint8_t, kSatTrackLen> payload{};
-        payload[kSatOfsCutoff] = cfg.cutoffDeg;
-        payload[kSatOfsGps] = cfg.gps;
-        payload[kSatOfsGlo] = cfg.glo;
-        payload[kSatOfsBds] = cfg.bds;
-        payload[kSatOfsGal] = cfg.gal;
-        payload[kSatOfsSbas] = cfg.sbas;
+        fillSatTrackQueryPayload(ops, capsMask, payload);
         return build(frame, proto::msg_type::kQueryRes, payload, reply);
     }
     if (frame.type != proto::msg_type::kSet) {
         return DispatchResult::kDenied;
     }
-    if (frame.payload.size() < kSatMinSetLen) {
+    if ((capsMask == 0U) || (frame.payload.size() < kSatMinSetLen)) {
         return build(frame, proto::msg_type::kSetRes, kFail, reply);
     }
     const SatTrackConfig cfg{
@@ -652,6 +814,7 @@ RouteTable PhoneCompatService::table() noexcept
         {kInsId, kRolePhone, &handleSetZero},
         {kAlignId, kRolePhone, &handleAlign},
         {kHandNetId, kRolePhone, &handleSetZero},
+        {kWifiCtlId, kRolePhone, &handleWifiCtl},
         {kBaseInfoId, kRolePhone, &handleBaseInfo},
         {kJsonServerId, kRolePhone, &handleJsonServer},
         {kPhonePppId, kRolePhone, &handlePppOrThingsboard},

@@ -37,6 +37,21 @@ namespace app {
 using detail::isValidRateHz;
 using detail::traceGnssSub;
 
+namespace {
+
+/**
+ * @brief 判断控制器是否处于配置/输出/读回瞬态（此时不可直写 NVS，须返回 kBusy）。
+ * @param state: 控制器当前状态。
+ * @retval true 处于瞬态。
+ */
+[[nodiscard]] bool isTransientApplyState(::gnss::State state) noexcept
+{
+    return (state == ::gnss::State::kConfiguring) || (state == ::gnss::State::kOutput) ||
+           (state == ::gnss::State::kReadback);
+}
+
+} // namespace
+
 /**
  * @brief 分派常规 GNSS 命令与扩展子命令（已在 kRunning 或允许状态下）。
  * @param cmd: 待执行指令。
@@ -95,35 +110,41 @@ static_assert(static_cast<uint8_t>(GnssSubVerb::kReadback) <
                   static_cast<uint8_t>(GnssMaintenanceVerb::kSave),
               "GnssSubVerb::kReadback must not overlap GnssMaintenanceVerb");
 
-/** @brief 派发 kIo 命令，PPP 运行期间独占串口。 @param cmd: 请求。 @param[out] result: 受理结果。 */
+/** @brief 派发 kIo 命令，PPP/星座序列运行期间独占串口（允许 kProbe/kReset 打断）。 @param cmd: 请求。 @param[out] result: 受理结果。 */
 void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (!initialized_) {
         result.status = fw::Result::kInvalidState;
         return;
     }
+    const uint32_t now = rtos::nowMs();
     if (cmd.verb >= static_cast<uint8_t>(GnssSubVerb::kApplyRate) &&
         cmd.verb <= static_cast<uint8_t>(GnssSubVerb::kFlushGgaGate)) {
-        cmdSetting(cmd, rtos::nowMs(), result);
+        cmdSetting(cmd, now, result);
         return;
     }
     if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kSetGgaGate) {
-        cmdSetGgaGate(cmd, rtos::nowMs(), result);
+        cmdSetGgaGate(cmd, now, result);
         return;
     }
-    if (phone_ppp_.active() || phone_sat_.active()) {
+    const bool restart = cmd.verb == static_cast<uint8_t>(GnssVerb::kProbe) ||
+                         cmd.verb == static_cast<uint8_t>(GnssVerb::kReset);
+    if (restart && (ppp_seq_.active() || sat_seq_.active())) {
+        dispatchStandardCmd(cmd, now, result);
+        return;
+    }
+    if (ppp_seq_.active() || sat_seq_.active()) {
         result.status = fw::Result::kBusy;
         return;
     }
-    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kPhonePpp) {
-        cmdPhonePpp(cmd, result);
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kApplyPpp) {
+        cmdApplyPpp(cmd, result);
         return;
     }
-    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kPhoneSatCfg) {
-        cmdPhoneSatCfg(cmd, result);
+    if (static_cast<GnssSubVerb>(cmd.verb) == GnssSubVerb::kApplySatTrack) {
+        cmdApplySatTrack(cmd, result);
         return;
     }
-    const uint32_t now = rtos::nowMs();
     const auto maintenanceVerb = static_cast<GnssMaintenanceVerb>(cmd.verb);
     if (maintenanceVerb == GnssMaintenanceVerb::kSave ||
         maintenanceVerb == GnssMaintenanceVerb::kFactoryReset ||
@@ -139,8 +160,6 @@ void GnssModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) no
         cmdSetBase(cmd, result);
         return;
     }
-    const bool restart = cmd.verb == static_cast<uint8_t>(GnssVerb::kProbe) ||
-                         cmd.verb == static_cast<uint8_t>(GnssVerb::kReset);
     if (restart && (applyTicketSeq_ != 0U || maintenanceTicketSeq_ != 0U)) {
         dispatchStandardCmd(cmd, now, result);
         return;
@@ -175,21 +194,33 @@ void GnssModule::cmdSetting(const fw::Command &cmd, uint32_t nowMs,
         cmdApplyGgaGate(cmd, result);
         return;
     }
-    if (phone_ppp_.active() || phone_sat_.active() || baud_deferred_ ||
-        pending_apply_ != PendingApply::kNone || controller().state() != ::gnss::State::kRunning) {
+    if (ppp_seq_.active() || sat_seq_.active() || baud_deferred_ ||
+        pending_apply_ != PendingApply::kNone) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    const auto st = controller().state();
+    if (verb == GnssSubVerb::kSaveReceiver) {
+        if (st != ::gnss::State::kRunning) {
+            result.status = fw::Result::kBusy;
+            return;
+        }
+        cmdMaintenance(cmd, nowMs, result);
+        return;
+    }
+    if ((st == ::gnss::State::kMaintenance) &&
+        (active_maintenance_ != ::gnss::Maintenance::kSave)) {
         result.status = fw::Result::kBusy;
         return;
     }
     const auto model = controller().detected().probe.model;
-    if (verb == GnssSubVerb::kSaveReceiver) {
-        cmdMaintenance(cmd, nowMs, result);
-        return;
-    }
     if (verb == GnssSubVerb::kApplyRate) {
-        const auto rates = controller().receiver().navRatesHz(model);
-        if (cmd.argLen != 1U || std::ranges::find(rates, cmd.args[0]) == rates.end()) {
-            result.status = fw::Result::kInvalidArg;
-            return;
+        if (model != ::gnss::Model::kUnknown) {
+            const auto rates = controller().receiver().navRatesHz(model);
+            if (cmd.argLen != 1U || std::ranges::find(rates, cmd.args[0]) == rates.end()) {
+                result.status = fw::Result::kInvalidArg;
+                return;
+            }
         }
         cmdSetRate(cmd, nowMs, result);
     } else {
@@ -213,14 +244,17 @@ void GnssModule::cmdPatchOutput(const fw::Command &cmd, uint32_t nowMs,
     // 已验证下标处于 OutputMsg 共用前缀，间隔按二补码还原。
     const auto msg = static_cast<::gnss::OutputMsg>(cmd.args[0]);
     const auto interval = std::bit_cast<int8_t>(cmd.args[1]);
-    const auto periods = controller().receiver().outputPeriodsMs(outputCapabilityMsg(msg), model);
-    const uint32_t period = core::services::GnssService::intervalToPeriodMs(interval);
-    const uint32_t fixPeriod = kMsPerSecond / std::max(ensureRoverCfg().rateHz, uint8_t{1U});
-    const bool gsvDisabled = msg == ::gnss::OutputMsg::kSatsInfo && !ensureRoverCfg().gsv;
-    if ((period != 0U && (period < fixPeriod || gsvDisabled)) ||
-        std::ranges::find(periods, period) == periods.end()) {
-        result.status = fw::Result::kInvalidArg;
-        return;
+    if (model != ::gnss::Model::kUnknown) {
+        const auto periods =
+            controller().receiver().outputPeriodsMs(outputCapabilityMsg(msg), model);
+        const uint32_t period = core::services::GnssService::intervalToPeriodMs(interval);
+        const uint32_t fixPeriod = kMsPerSecond / std::max(ensureRoverCfg().rateHz, uint8_t{1U});
+        const bool gsvDisabled = msg == ::gnss::OutputMsg::kSatsInfo && !ensureRoverCfg().gsv;
+        if ((period != 0U && (period < fixPeriod || gsvDisabled)) ||
+            std::ranges::find(periods, period) == periods.end()) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
     }
     auto next = out_cfg_;
     result.status = next.applyInterval(cmd.args[0], interval);
@@ -255,6 +289,14 @@ void GnssModule::abortPendingSettings() noexcept
     completeSetting(applyTicketSeq_, fw::Result::kInvalidState);
     completeSetting(maintenanceTicketSeq_, fw::Result::kInvalidState);
     maintenanceTicketTarget_ = 0U;
+    if (ppp_seq_.active()) {
+        ppp_seq_ = {};
+    }
+    completeSetting(ppp_ticket_seq_, fw::Result::kInvalidState);
+    if (sat_seq_.active()) {
+        sat_seq_ = {};
+    }
+    completeSetting(sat_ticket_seq_, fw::Result::kInvalidState);
 }
 
 void GnssModule::cmdProbe(uint32_t nowMs, fw::CommandResult &result) noexcept
@@ -297,9 +339,13 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
         result.status = fw::Result::kBusy;
         return;
     }
-    if (controller().state() != ::gnss::State::kRunning &&
-        controller().state() != ::gnss::State::kMaintenance) {
-        // 与 kSetOut 一致：没有运行中的接收机可确认，直接落盘，下次配置完成时按新频率执行。
+    const auto st = controller().state();
+    if (isTransientApplyState(st)) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
+    if (st != ::gnss::State::kRunning && st != ::gnss::State::kMaintenance) {
+        // 与 kSetOut 一致：kOff/kPowerUp/kProbing/kFailed 无运行中接收机，直接落盘，下次配置按新频率执行。
         const uint8_t prevRate = ensureRoverCfg().rateHz;
         ensureRoverCfg().rateHz = cmd.args[0];
         const fw::Result saveRes = ctx().storage.saveKeys(
@@ -342,13 +388,17 @@ void GnssModule::cmdSetOut(const fw::Command &cmd, uint32_t nowMs,
         result.status = fw::Result::kBusy;
         return;
     }
+    const auto st = controller().state();
+    if (isTransientApplyState(st)) {
+        result.status = fw::Result::kBusy;
+        return;
+    }
     const data::GnssOutConfig prev = out_cfg_;
     out_cfg_ = next;
     ctx().data.gnssOutCfg.write(out_cfg_);
     traceGnssSub(GnssSubTrace::kOutCfg, out_cfg_.mask, 0U);
-    if (controller().state() != ::gnss::State::kRunning &&
-        controller().state() != ::gnss::State::kMaintenance) {
-        // 未进入 kRunning 时没有可下发的输出阶段：直接落盘，下次配置完成时按新表重算计划。
+    if (st != ::gnss::State::kRunning && st != ::gnss::State::kMaintenance) {
+        // kOff/kPowerUp/kProbing/kFailed 无可下发的输出阶段：直接落盘，下次配置完成时按新表重算计划。
         const fw::Result saveRes = ctx().storage.saveKeys(
             std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
         if (!fw::isOk(saveRes)) {

@@ -24,6 +24,7 @@ constexpr uint16_t kHeight = 0x24U;
 constexpr uint16_t kIns = 0x25U;
 constexpr uint16_t kAlign = 0x26U;
 constexpr uint16_t kHandNet = 0x27U;
+constexpr uint16_t kWifiCtl = 0x28U;
 constexpr uint16_t kBaseInfo = 0x29U;
 constexpr uint16_t kJsonServer = 0x32U;
 constexpr uint16_t kPppOrTb = 0x33U;
@@ -53,14 +54,23 @@ constexpr size_t kResetLen = 4U;
 
 struct Store {
     core::AntennaHeight height{};
+    std::optional<bool> heightDone{};
+    unsigned heightRequests = 0U;
+    unsigned heightCancels = 0U;
     bool pppSupported = true;
     bool ppp = false;
     std::optional<bool> pppDone{};
     unsigned pppRequests = 0U;
+    unsigned pppCancels = 0U;
+    uint8_t satCapsMask = core::kSatCapAll;
     core::SatTrackConfig sat{};
     std::optional<bool> satDone{};
     unsigned satRequests = 0U;
+    unsigned satCancels = 0U;
     core::PhoneSnPn snPn{};
+    std::optional<bool> snPnDone{};
+    unsigned snPnRequests = 0U;
+    unsigned snPnCancels = 0U;
     std::string_view gsv{};
     core::PhoneNtripConfig ntrip{};
     core::PhoneJsonServerConfig jsonSrv{};
@@ -69,6 +79,10 @@ struct Store {
     bool lastFactory = false;
     bool lastReboot = false;
     uint32_t lastResetNow = 0U;
+    bool wifiSupported = true;
+    bool wifiAccept = true;
+    unsigned wifiCalls = 0U;
+    uint32_t lastWifiNow = 0U;
 };
 
 /** @brief 构造手机回调替身。 @param store: 测试状态。 @retval 回调表。 */
@@ -78,11 +92,17 @@ core::services::PhoneCompatOps makeOps(Store &store)
         .ctx = &store,
         .readHeight =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->height; },
-        .setHeight =
-            [](void *ctx, const core::AntennaHeight &height, uint32_t) noexcept {
-                static_cast<Store *>(ctx)->height = height;
+        .startHeight =
+            [](void *ctx, const core::AntennaHeight &height) noexcept {
+                auto &state = *static_cast<Store *>(ctx);
+                ++state.heightRequests;
+                state.height = height;
+                state.heightDone.reset();
                 return true;
             },
+        .heightResult =
+            [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->heightDone; },
+        .cancelHeight = [](void *ctx) noexcept { ++static_cast<Store *>(ctx)->heightCancels; },
         .pppSupported =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->pppSupported; },
         .readPpp = [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->ppp; },
@@ -96,6 +116,9 @@ core::services::PhoneCompatOps makeOps(Store &store)
             },
         .pppResult =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->pppDone; },
+        .cancelPpp = [](void *ctx) noexcept { ++static_cast<Store *>(ctx)->pppCancels; },
+        .satCapsMask =
+            [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->satCapsMask; },
         .readSatConfig =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->sat; },
         .startSatConfig =
@@ -108,12 +131,19 @@ core::services::PhoneCompatOps makeOps(Store &store)
             },
         .satConfigResult =
             [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->satDone; },
+        .cancelSatConfig = [](void *ctx) noexcept { ++static_cast<Store *>(ctx)->satCancels; },
         .readSnPn = [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->snPn; },
-        .setSnPn =
-            [](void *ctx, const core::PhoneSnPn &snPn, uint32_t) noexcept {
-                static_cast<Store *>(ctx)->snPn = snPn;
+        .startSnPn =
+            [](void *ctx, const core::PhoneSnPn &snPn) noexcept {
+                auto &state = *static_cast<Store *>(ctx);
+                ++state.snPnRequests;
+                state.snPn = snPn;
+                state.snPnDone.reset();
                 return true;
             },
+        .snPnResult =
+            [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->snPnDone; },
+        .cancelSnPn = [](void *ctx) noexcept { ++static_cast<Store *>(ctx)->snPnCancels; },
         .readLatestGsv = [](const void *ctx, std::span<uint8_t> dst) noexcept -> size_t {
             const auto text = static_cast<const Store *>(ctx)->gsv;
             if (text.empty() || (text.size() > dst.size())) {
@@ -151,6 +181,15 @@ core::services::PhoneCompatOps makeOps(Store &store)
                 state.lastReboot = reboot;
                 state.lastResetNow = nowMs;
                 return true;
+            },
+        .wifiConfigSupported =
+            [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->wifiSupported; },
+        .scheduleWifiConfig =
+            [](void *ctx, uint32_t nowMs) noexcept {
+                auto &state = *static_cast<Store *>(ctx);
+                ++state.wifiCalls;
+                state.lastWifiNow = nowMs;
+                return state.wifiAccept;
             },
     };
 }
@@ -228,11 +267,11 @@ void testSharedMessagesBothApps()
         f.expectReply(sender, kReserved13, kQuery, {}, kQueryRes,
                       std::array<uint8_t, kReserved13Len>{});
 
-        // 0x24 天线高
+        // 0x24 天线高（Query 同步返回，合法 Set 走异步 kDeferred）
         std::array<uint8_t, kHeightReplyLen> heightOut{};
         f.store.height = {};
         f.expectReply(sender, kHeight, kQuery, {}, kQueryRes, heightOut);
-        f.expectReply(sender, kHeight, kSet, kOneAndHalf, kSetRes, kOk);
+        f.store.height = kOneAndHalf;
         std::copy(kOneAndHalf.begin(), kOneAndHalf.end(), heightOut.begin());
         f.expectReply(sender, kHeight, kQuery, {}, kQueryRes, heightOut);
 
@@ -243,8 +282,8 @@ void testSharedMessagesBothApps()
         f.expectReply(sender, kHandNet, kSet, {}, kSetRes, kZero2);
         f.expectReply(sender, kBaseInfo, kSet, {}, kSetRes, kOk);
 
-        // 0x28/0x30/0x34/0x36 仍不回复
-        for (const uint16_t msg : std::array<uint16_t, 4U>{0x28U, 0x30U, 0x34U, 0x36U}) {
+        // 0x30/0x34/0x36 仍不回复
+        for (const uint16_t msg : std::array<uint16_t, 3U>{0x30U, 0x34U, 0x36U}) {
             f.expectNoReply(sender, msg, kQuery);
         }
     }
@@ -267,14 +306,14 @@ void testNavOnlyMessagesBothApps()
 {
     RouterFixture f;
 
-    // 0x08 SN/PN
+    // 0x08 SN/PN（短包同步回 02 02，合法 Set 走异步 kDeferred，Query 回 48 B）
     core::PhoneSnPn snPn{};
     std::memcpy(snPn.data(), "SN123456", 8U);
     std::memcpy(snPn.data() + core::kPhoneSnBytes, "1000190000002000", 16U);
+    f.store.snPn = snPn;
     std::array<uint8_t, kSnPnReplyLen> snPnOut{};
     std::copy(snPn.begin(), snPn.end(), snPnOut.begin());
     f.expectReply(kNav, kSnPn, kSet, std::span{snPn}.first(10U), kSetRes, kFail);
-    f.expectReply(kNav, kSnPn, kSet, snPn, kSetRes, kOk);
     f.expectReply(kNav, kSnPn, kQuery, {}, kQueryRes, snPnOut);
     f.expectNoReply(kSurvey, kSnPn, kQuery);
     f.expectNoReply(kSurvey, kSnPn, kSet, snPn);
@@ -350,6 +389,18 @@ void testDualAppMessagesAndPppGate()
     expectedSat[7U] = 1U;
     expectedSat[8U] = 1U;
     f.expectReply(kSurvey, kSatTrack, kQuery, {}, kQueryRes, expectedSat);
+
+    // 0x06 Survey 按 gnssCaps 能力掩码应答：部分能力按位遮蔽；无能力（capsMask==0）时 query 保持旧行为返回存储/默认值，set 仍拒收。
+    f.store.satCapsMask = core::kSatCapGps | core::kSatCapBds;
+    auto maskedSat = expectedSat;
+    maskedSat[7U] = 0U; // GAL 未在能力掩码内
+    maskedSat[8U] = 0U; // SBAS 未在能力掩码内
+    f.expectReply(kSurvey, kSatTrack, kQuery, {}, kQueryRes, maskedSat);
+    f.store.satCapsMask = 0U;
+    f.expectReply(kSurvey, kSatTrack, kQuery, {}, kQueryRes, expectedSat);
+    f.expectReply(kSurvey, kSatTrack, kSet, expectedSat, kSetRes, kFail);
+    TEST_ASSERT_EQUAL_UINT(0U, f.store.satRequests);
+    f.store.satCapsMask = core::kSatCapAll;
 
     // 0x06 Survey 非法截止角与短包直接回 02 02 且不下发命令
     auto badSat = expectedSat;
@@ -493,7 +544,31 @@ void testDeferredRepliesAndDisconnectCancel()
     TEST_ASSERT_EQUAL_UINT(0U, transport.reservedCount);
     checkReply(std::span{transport.frame}.first(transport.len), kSatTrack, kSetRes, kOk);
 
-    // 3. 断开会话时释放所有挂起 credit 并清理服务等待标志，重连后可继续发起新请求
+    // 3. 0x24 天线高与 0x08 Nav SN/PN 经 settings::Service 异步延迟应答
+    send(kHeight, kOneAndHalf, 7U);
+    TEST_ASSERT_EQUAL_UINT(1U, transport.reservedCount);
+    TEST_ASSERT_EQUAL_UINT(1U, store.heightRequests);
+    store.heightDone = true;
+    link.pollDeferred(7U);
+    TEST_ASSERT_EQUAL_UINT(0U, transport.reservedCount);
+    checkReply(std::span{transport.frame}.first(transport.len), kHeight, kSetRes, kOk);
+
+    core::PhoneSnPn snPn{};
+    std::memcpy(snPn.data(), "SN123456", 8U);
+    std::memcpy(snPn.data() + core::kPhoneSnBytes, "1000190000002000", 16U);
+    {
+        size_t len = 0U;
+        TEST_ASSERT_TRUE(fw::isOk(proto::buildFrame(wire, kSnPn, kNav, kSet, snPn, len)));
+        TEST_ASSERT_EQUAL_UINT(len, link.onData(kHandle, std::span{wire}.first(len), 7U));
+    }
+    TEST_ASSERT_EQUAL_UINT(1U, transport.reservedCount);
+    TEST_ASSERT_EQUAL_UINT(1U, store.snPnRequests);
+    store.snPnDone = true;
+    link.pollDeferred(7U);
+    TEST_ASSERT_EQUAL_UINT(0U, transport.reservedCount);
+    checkReply(std::span{transport.frame}.first(transport.len), kSnPn, kSetRes, kOk);
+
+    // 4. 断开会话时释放所有挂起 credit、调用 cancel 钩子并清理服务等待标志，重连后可继续发起新请求
     send(kPppOrTb, std::array<uint8_t, 1U>{1U}, 8U);
     send(kSatTrack, satPayload, 9U);
     TEST_ASSERT_EQUAL_UINT(2U, transport.reservedCount);
@@ -501,6 +576,8 @@ void testDeferredRepliesAndDisconnectCancel()
     link.onClose(kHandle);
     TEST_ASSERT_EQUAL_UINT(0U, transport.reservedCount);
     TEST_ASSERT_EQUAL_UINT(cancelsBefore + 2U, transport.cancelCount);
+    TEST_ASSERT_EQUAL_UINT(1U, store.pppCancels);
+    TEST_ASSERT_EQUAL_UINT(1U, store.satCancels);
     TEST_ASSERT_FALSE(phone.pppWaiting);
     TEST_ASSERT_FALSE(phone.satWaiting);
 
@@ -518,6 +595,37 @@ void testDeferredRepliesAndDisconnectCancel()
 extern "C" void setUp() {}
 extern "C" void tearDown() {}
 
+/** @brief 覆盖 0x28 Wi-Fi 网页配置：查询状态+IP、开启登记延迟重启、关闭/非法/不支持/重复。 */
+void testWifiControl()
+{
+    RouterFixture f{};
+    constexpr std::array<uint8_t, 8U> kOffWithIp{0U, 192U, 168U, 10U, 12U, 0U, 0U, 0U};
+    for (const uint8_t sender : {kNav, kSurvey}) {
+        f.expectReply(sender, kWifiCtl, kQuery, {}, kQueryRes, kOffWithIp);
+    }
+    // 关闭：已在蓝牙模式，直接 OK，不登记重启。
+    f.expectReply(kNav, kWifiCtl, kSet, std::array<uint8_t, 5U>{0U, 0U, 0U, 0U, 0U}, kSetRes, kOk);
+    f.expectReply(kNav, kWifiCtl, kSet, {}, kSetRes, kFail);
+    f.expectReply(kNav, kWifiCtl, kSet, std::array<uint8_t, 1U>{2U}, kSetRes, kFail);
+    TEST_ASSERT_EQUAL_UINT(0U, f.store.wifiCalls);
+    // 开启：负载 [1..4] wifiDomain 忽略。
+    f.expectReply(kNav, kWifiCtl, kSet, std::array<uint8_t, 5U>{1U, 192U, 168U, 4U, 1U}, kSetRes,
+                  kOk, 700U);
+    TEST_ASSERT_EQUAL_UINT(1U, f.store.wifiCalls);
+    TEST_ASSERT_EQUAL_UINT32(700U, f.store.lastWifiNow);
+    // 已有待执行的复位/切换时链路模块拒绝。
+    f.store.wifiAccept = false;
+    f.expectReply(kSurvey, kWifiCtl, kSet, std::array<uint8_t, 1U>{1U}, kSetRes, kFail);
+    // 无 Wi-Fi 的构建：查询 IP 全 0，开启失败且不调用登记。
+    f.store.wifiSupported = false;
+    f.store.wifiAccept = true;
+    f.expectReply(kNav, kWifiCtl, kQuery, {}, kQueryRes, std::array<uint8_t, 8U>{});
+    f.expectReply(kNav, kWifiCtl, kSet, std::array<uint8_t, 1U>{1U}, kSetRes, kFail);
+    TEST_ASSERT_EQUAL_UINT(2U, f.store.wifiCalls);
+    TEST_ASSERT_TRUE(f.router.handle(core::Role::kAlarm, {.msgId = kWifiCtl}, 0U, f.reply) ==
+                     core::DispatchResult::kDenied);
+}
+
 /** @brief 执行手机兼容路由与延迟应答主机测试。 @retval Unity 结果。 */
 int main()
 {
@@ -526,5 +634,6 @@ int main()
     RUN_TEST(testNavOnlyMessagesBothApps);
     RUN_TEST(testDualAppMessagesAndPppGate);
     RUN_TEST(testDeferredRepliesAndDisconnectCancel);
+    RUN_TEST(testWifiControl);
     return UNITY_END();
 }

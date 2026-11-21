@@ -782,23 +782,23 @@ private:
         kRate = 2,
     };
     GnssSaveQueue save_queue_{};
-    /** @brief 受理手机 PPP 命令。 @param cmd: PPP 开关请求。 @param[out] result: 受理结果。 @note 仅 kIo。 */
-    void cmdPhonePpp(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /** @brief 受理 PPP 开关设置命令（延迟结单）。 @param cmd: PPP 开关请求。 @param[out] result: 受理结果。 @note 仅 kIo。 */
+    void cmdApplyPpp(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
-    /** @brief 受理手机 0x06 截止角/星座配置命令。 @param cmd: 6 B 配置请求。 @param[out] result: 受理结果。 @note 仅 kIo。 */
-    void cmdPhoneSatCfg(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /** @brief 受理截止角/星座配置设置命令（延迟结单）。 @param cmd: 6 B 配置请求。 @param[out] result: 受理结果。 @note 仅 kIo。 */
+    void cmdApplySatTrack(const fw::Command &cmd, fw::CommandResult &result) noexcept;
 
-    /** @brief 推进手机 PPP/0x06 命令或上电重放。 @param nowMs: 当前时钟。 @retval true 本轮独占 UART。 @note 仅 kIo。 */
-    [[nodiscard]] bool pollPhonePpp(uint32_t nowMs) noexcept;
+    /** @brief 推进 PPP/星座脚本或上电重放。 @param nowMs: 当前时钟。 @retval true 本轮独占 UART。 @note 仅 kIo。 */
+    [[nodiscard]] bool pollPppAndSat(uint32_t nowMs) noexcept;
 
-    /** @brief 发布 PPP 结束状态。 @param status: 执行结果。 @note 仅 kIo，成功手机请求可写 NVS。 */
-    void finishPhonePpp(fw::Result status) noexcept;
+    /** @brief 结束 PPP 脚本并按结果落盘与结单。 @param status: 执行结果。 @note 仅 kIo，成功请求可写 NVS。 */
+    void finishPpp(fw::Result status) noexcept;
 
-    /** @brief 发布 0x06 卫星配置结束状态。 @param status: 执行结果。 @note 仅 kIo，成功手机请求可写 NVS。 */
-    void finishPhoneSatCfg(fw::Result status) noexcept;
+    /** @brief 结束星座配置脚本并按结果落盘与结单。 @param status: 执行结果。 @note 仅 kIo，成功请求可写 NVS。 */
+    void finishSatTrack(fw::Result status) noexcept;
 
-    /** @brief 拉取 kLink 投递的待执行手机命令或触发上电重放。 @note 仅 kIo。 */
-    void startPendingPhoneConfig() noexcept;
+    /** @brief 触发上电或重配置后的 PPP/星座重放。 @note 仅 kIo。 */
+    void startPendingReplay() noexcept;
 
     /** @brief 执行设置服务与维护命令。 @param cmd: 请求。 @param nowMs: 时钟。 @param[out] result: 受理结果。 @note 仅 kIo。 */
     void cmdSetting(const fw::Command &cmd, uint32_t nowMs, fw::CommandResult &result) noexcept;
@@ -821,17 +821,20 @@ private:
     /** @brief 首次识别后恢复该型号可执行的旧 NVS 值。 @note 仅 kIo。 */
     void restoreSettingsForModel() noexcept;
 
+    /** @brief 将按型号回退后的定位频率写回 NVS 并推进配置版本。 @note 仅 kIo，写 NVS 可阻塞。 */
+    void persistRestoredRate() noexcept;
+
     /** @brief 恢复已保存的旧输出周期。 @note 仅 kIo。 */
     void restoreOutputPeriods() noexcept;
 
     /** @brief 发布当前型号和定位频率对应的取值域。 @note 仅 kIo。 */
     void publishCaps() noexcept;
 
-    /** @brief 写一条手机配置脚本命令到 GNSS UART。 @param tx: 待发字节。 @retval true 全部写入成功。 @note 仅 kIo。 */
-    [[nodiscard]] bool writePhoneTx(std::span<const uint8_t> tx) noexcept;
+    /** @brief 写一条配置脚本命令到 GNSS UART。 @param tx: 待发字节。 @retval true 全部写入成功。 @note 仅 kIo。 */
+    [[nodiscard]] bool writeSeqTx(std::span<const uint8_t> tx) noexcept;
 
-    /** @brief 查询配置通道是否空闲。 @retval true PPP 或 0x06 可启动。 @note 仅 kIo。 */
-    [[nodiscard]] bool canStartPhonePpp() noexcept;
+    /** @brief 查询配置通道是否空闲。 @retval true PPP 或星座脚本可启动。 @note 仅 kIo。 */
+    [[nodiscard]] bool canStartSeq() noexcept;
 
     /** @brief 解析 GGA 门控修改。 @param cmd: 门控命令。 @param[out] next: 新配置。 @retval 是否有效。 @note 仅 kIo。 */
     [[nodiscard]] bool decodeGgaGateChange(const fw::Command &cmd,
@@ -865,14 +868,14 @@ private:
     uint32_t maintenanceTicketSeq_ = 0U;
     uint32_t maintenanceTicketTarget_ = 0U;
 
-    ::gnss::PppSequence phone_ppp_{};
-    uint32_t phone_ppp_seq_ = 0U;
-    bool phone_ppp_enabled_ = false;
-    bool phone_ppp_replay_ = false;
-    ::gnss::SatMaskSequence phone_sat_{};
-    uint32_t phone_sat_seq_ = 0U;
-    core::SatTrackConfig phone_sat_cfg_{};
-    bool phone_sat_replay_ = false;
+    ::gnss::PppSequence ppp_seq_{};
+    uint32_t ppp_ticket_seq_ = 0U;
+    bool ppp_target_enabled_ = false;
+    bool ppp_replay_ = false;
+    ::gnss::SatMaskSequence sat_seq_{};
+    uint32_t sat_ticket_seq_ = 0U;
+    core::SatTrackConfig sat_target_cfg_{};
+    bool sat_replay_ = false;
 
     ::gnss::Maintenance active_maintenance_ = ::gnss::Maintenance::kSave;
     uint32_t completed_maintenance_seq_ = 0U;

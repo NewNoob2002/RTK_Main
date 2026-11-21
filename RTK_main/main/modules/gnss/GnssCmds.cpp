@@ -23,6 +23,7 @@
 #include "board/BoardProfile.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
+#include "core/services/GnssService.hpp"
 #include "data/GnssOutput.hpp"
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
@@ -43,7 +44,23 @@ namespace {
 /** 等待变更判定的轮询间隔与上限：须长于 GnssModule 的 kApplyTimeoutMs（5 s，频率重配含基础脚本）。 */
 constexpr uint32_t kApplyPollMs = 50U;
 constexpr uint32_t kApplyPollRounds = 120U;
+constexpr uint32_t kSettingApplyTimeoutMs = kApplyPollMs * kApplyPollRounds;
 constexpr int kOutSetArgc = 3;
+constexpr size_t kSettingValueBufBytes = 16U;
+
+/**
+ * @brief 将单类 App 语句下标映射到 settings::Service 键名
+ * @param idx: App 消息下标（0..5）
+ * @retval 对应设置键名；heading 无单独键时返回空视图
+ * @note 纯函数，线程/ISR 安全。
+ */
+std::string_view outSettingKeyForIndex(uint8_t idx) noexcept
+{
+    constexpr std::array<std::string_view, data::kGnssAppMsgCount> kOutKeys{
+        "gnss.out.gga", "gnss.out.gsv", "", "gnss.out.gst", "gnss.out.rmc", "gnss.out.gsa",
+    };
+    return (idx < kOutKeys.size()) ? kOutKeys[idx] : std::string_view{};
+}
 
 /**
  * @brief 解析语句名或 all
@@ -233,6 +250,51 @@ int cmdGnssReset(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 }
 
 /**
+ * @brief 汇总经 settings::Service 下发 GNSS 输出/频率变更的结果并按既有格式输出
+ * @param before: 提交前的 GNSS 状态快照
+ * @param res: 执行器返回的命令结果
+ * @param err: 设置服务映射后的错误码
+ * @retval true 生效并已打印输出计划
+ * @retval false 失败并已按既有文本打印 ERR
+ * @note 仅 console REPL 任务，非 ISR。
+ */
+bool reportGnssSettingApply(const GnssStatus &before, const fw::CommandResult &res,
+                            settings::Error err) noexcept
+{
+    if (err == settings::Error::kOk) {
+        const GnssStatus after = appContext().data.gnssStatus.read();
+        return reportOutputPlan(before, after);
+    }
+    if (err == settings::Error::kTimeout) {
+        static_cast<void>(cli::fail("gnss output apply timeout"));
+        return false;
+    }
+    if (err == settings::Error::kBusy) {
+        static_cast<void>(cli::fail("gnss busy"));
+        return false;
+    }
+    if (err == settings::Error::kBadValue) {
+        static_cast<void>(cli::fail("invalid argument"));
+        return false;
+    }
+    if (err == settings::Error::kUnsupported) {
+        static_cast<void>(cli::fail(
+            appContext().data.gnssCaps.read().enabled ? "gnss not ready" : "gnss not running"));
+        return false;
+    }
+    const GnssStatus after = appContext().data.gnssStatus.read();
+    if ((after.applySeq != before.applySeq) && (after.lastApply == GnssApply::kRestored)) {
+        static_cast<void>(cli::fail("receiver rejected output change, reverted"));
+        return false;
+    }
+    if (res.status != fw::Result::kOk) {
+        return reportGnssResult(res);
+    }
+    static_cast<void>(cli::fail("gnss not ready"));
+    return false;
+}
+
+/**
  * @brief 校验并提交 GNSS 定位频率变更
  * @param argc: 命令参数个数（含动词）
  * @param argv: 命令参数数组
@@ -250,12 +312,21 @@ int cmdGnssRate(void * /*ctx*/, int argc, char **argv) noexcept
     if (!cli::parseU8(args[1], hz)) {
         return cli::fail("invalid rate: %s", args[1]);
     }
-    fw::Command cmd{};
-    cmd.target = id(ModuleKind::kGnss);
-    cmd.verb = static_cast<uint8_t>(GnssVerb::kSetRate);
-    cmd.argLen = 1U;
-    cmd.args[0] = hz;
-    return submitGnssAndWait(cmd) ? 0 : cli::kCmdFail;
+    if (appContext().ioExecutor == nullptr) {
+        return cli::fail("gnss not running");
+    }
+    const GnssStatus before = appContext().data.gnssStatus.read();
+    std::array<char, kSettingValueBufBytes> valBuf{};
+    const int len = std::snprintf(valBuf.data(), valBuf.size(), "%u", static_cast<unsigned>(hz));
+    if ((len <= 0) || (static_cast<size_t>(len) >= valBuf.size())) {
+        return cli::fail("invalid rate: %s", args[1]);
+    }
+    fw::CommandResult res{};
+    settings::Error err = settings::Error::kOk;
+    static_cast<void>(submitSetting("gnss.rate",
+                                    std::string_view{valBuf.data(), static_cast<size_t>(len)},
+                                    false, kSettingApplyTimeoutMs, res, err));
+    return reportGnssSettingApply(before, res, err) ? 0 : cli::kCmdFail;
 }
 
 /**
@@ -400,6 +471,54 @@ int submitGnssOut(const data::GnssOutConfig &cfg) noexcept
 }
 
 /**
+ * @brief 尝试经 settings::Service 处理单项语句输出设置（gga/gsa/gsv/sats/gst/rmc）
+ * @param args: 命令行参数视图
+ * @param[out] rcOut: 已处理时的命令返回码
+ * @retval true 已由设置服务接管处理
+ * @retval false 属于 default/all/heading 或参数个数不匹配，回落原有路径
+ * @note 仅 console REPL 任务，可阻塞等待设置完成，非 ISR。
+ */
+bool trySetSingleOutViaSettings(std::span<char *const> args, int &rcOut) noexcept
+{
+    if ((args.size() != static_cast<size_t>(kOutSetArgc)) || (args[1] == nullptr) ||
+        (args[2] == nullptr)) {
+        return false;
+    }
+    uint8_t idx = 0U;
+    bool isAll = false;
+    if (!parseMsgIndex(std::string_view{args[1]}, idx, isAll) || isAll) {
+        return false;
+    }
+    const std::string_view key = outSettingKeyForIndex(idx);
+    if (key.empty()) {
+        return false;
+    }
+    int8_t iv = 0;
+    if (!detail::parseGnssHz(std::string_view{args[2]}, iv)) {
+        rcOut = cli::fail("invalid rate (Hz: 1/2/5/10/20 or 1/n)");
+        return true;
+    }
+    if (appContext().ioExecutor == nullptr) {
+        rcOut = cli::fail("gnss not running");
+        return true;
+    }
+    const uint32_t periodMs = core::services::GnssService::intervalToPeriodMs(iv);
+    std::array<char, kSettingValueBufBytes> valBuf{};
+    const int len = std::snprintf(valBuf.data(), valBuf.size(), "%" PRIu32, periodMs);
+    if ((len <= 0) || (static_cast<size_t>(len) >= valBuf.size())) {
+        rcOut = cli::fail("unsupported interval");
+        return true;
+    }
+    const GnssStatus before = appContext().data.gnssStatus.read();
+    fw::CommandResult res{};
+    settings::Error err = settings::Error::kOk;
+    static_cast<void>(submitSetting(key, std::string_view{valBuf.data(), static_cast<size_t>(len)},
+                                    false, kSettingApplyTimeoutMs, res, err));
+    rcOut = reportGnssSettingApply(before, res, err) ? 0 : cli::kCmdFail;
+    return true;
+}
+
+/**
  * @brief 查询或设置 GNSS 输出配置
  * @param argc: 参数个数
  * @param argv: 参数数组
@@ -418,6 +537,10 @@ int cmdGnssOut(void * /*ctx*/, int argc, char **argv) noexcept
     if ((args.size() <= 1U) || ((args.size() == 2U) && (std::string_view{args[1]} == "show"))) {
         printGnssOutShow(cfg);
         return 0;
+    }
+    int settingRc = 0;
+    if (trySetSingleOutViaSettings(args, settingRc)) {
+        return settingRc;
     }
     const int rc = applyGnssOutArgs(args, cfg);
     if (rc != 0) {
@@ -528,12 +651,81 @@ void printGgaGateStatus() noexcept
 }
 
 /**
+ * @brief 解析 `gnss gate [on|off] [min_sats <n>]` 写命令参数
+ * @param args: 命令行参数视图（长度 > 1）
+ * @param[out] setEnabled: 是否修改开关
+ * @param[out] enabled: 目标开关状态
+ * @param[out] setMinSats: 是否修改最低卫星数
+ * @param[out] minSats: 目标最低卫星数
+ * @retval true 参数合法
+ * @retval false 参数非法，已输出 ERR
+ * @note 仅 console REPL 任务，非 ISR。
+ */
+bool parseGnssGateArgs(std::span<char *const> args, bool &setEnabled, bool &enabled,
+                       bool &setMinSats, uint8_t &minSats) noexcept
+{
+    for (size_t i = 1U; i < args.size(); ++i) {
+        const std::string_view tok{(args[i] != nullptr) ? args[i] : ""};
+        if ((tok == "on") || (tok == "off")) {
+            if (setEnabled) {
+                static_cast<void>(cli::fail("usage: gnss gate [on|off] [min_sats <n>]"));
+                return false;
+            }
+            setEnabled = true;
+            enabled = (tok == "on");
+        } else if (tok == "min_sats") {
+            if (setMinSats || ((i + 1U) >= args.size()) || (args[i + 1U] == nullptr)) {
+                static_cast<void>(cli::fail("usage: gnss gate [on|off] [min_sats <n>]"));
+                return false;
+            }
+            ++i;
+            if (!parseGgaGateMinSats(args[i], minSats)) {
+                static_cast<void>(cli::fail("min_sats must be 0..40"));
+                return false;
+            }
+            setMinSats = true;
+        } else {
+            static_cast<void>(cli::fail("usage: gnss gate [on|off] [min_sats <n>]"));
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief 经 settings::Service 写入单个 GGA 门控键并按既有文本报故障
+ * @param key: 设置键名
+ * @param val: 文本值
+ * @retval true 设置成功
+ * @retval false 失败，已输出 ERR
+ * @note 仅 console REPL 任务，可阻塞等待结果，非 ISR。
+ */
+bool applyGnssGateSetting(std::string_view key, std::string_view val) noexcept
+{
+    fw::CommandResult res{};
+    settings::Error err = settings::Error::kOk;
+    if (submitSetting(key, val, false, kCommandTimeoutMs, res, err)) {
+        return true;
+    }
+    if (err == settings::Error::kTimeout) {
+        static_cast<void>(cli::fail("no response"));
+    } else if (err == settings::Error::kUnsupported) {
+        static_cast<void>(cli::fail("gnss not running"));
+    } else if (res.status != fw::Result::kOk) {
+        static_cast<void>(reportGnssResult(res));
+    } else {
+        static_cast<void>(cli::fail("%s", settingsErrorText(err)));
+    }
+    return false;
+}
+
+/**
  * @brief `gnss gate [on|off] [min_sats <n>]`：查询或配置 GGA 质量门控
  * @param argc: 参数个数（1 表示仅查询）
  * @param argv: 参数向量
  * @retval 0 成功
  * @retval cli::kCmdFail 参数非法、权限不足或模块执行失败
- * @note 仅 console REPL 任务；写操作经 ioExecutor 投递到 kIo 并触发 NVS 去抖保存。
+ * @note 仅 console REPL 任务；写操作经 settings::Service 投递到 kIo 并落盘。
  */
 int cmdGnssGate(void * /*ctx*/, int argc, char **argv) noexcept
 {
@@ -551,33 +743,37 @@ int cmdGnssGate(void * /*ctx*/, int argc, char **argv) noexcept
     bool enabled = false;
     bool setMinSats = false;
     uint8_t minSats = 0U;
-    for (size_t i = 1U; i < args.size(); ++i) {
-        const std::string_view tok{(args[i] != nullptr) ? args[i] : ""};
-        if ((tok == "on") || (tok == "off")) {
-            if (setEnabled) {
-                return cli::fail("usage: gnss gate [on|off] [min_sats <n>]");
-            }
-            setEnabled = true;
-            enabled = (tok == "on");
-        } else if (tok == "min_sats") {
-            if (setMinSats || ((i + 1U) >= args.size()) || (args[i + 1U] == nullptr)) {
-                return cli::fail("usage: gnss gate [on|off] [min_sats <n>]");
-            }
-            ++i;
-            if (!parseGgaGateMinSats(args[i], minSats)) {
-                return cli::fail("min_sats must be 0..40");
-            }
-            setMinSats = true;
-        } else {
-            return cli::fail("usage: gnss gate [on|off] [min_sats <n>]");
-        }
+    if (!parseGnssGateArgs(args, setEnabled, enabled, setMinSats, minSats)) {
+        return cli::kCmdFail;
     }
     if (appContext().ioExecutor == nullptr) {
         return cli::fail("gnss not running");
     }
-    const fw::Command cmd = detail::packGnssGate(setEnabled, enabled, setMinSats, minSats);
-    fw::CommandResult res{};
-    if (!submitRawTo(*appContext().ioExecutor, ModuleKind::kGnss, "gnss not running", cmd, res)) {
+    const uint8_t prevMinSats = appContext().data.ggaGateStatus.read().minSats;
+    if (setMinSats) {
+        std::array<char, kSettingValueBufBytes> valBuf{};
+        const int len =
+            std::snprintf(valBuf.data(), valBuf.size(), "%u", static_cast<unsigned>(minSats));
+        if ((len <= 0) || (static_cast<size_t>(len) >= valBuf.size()) ||
+            !applyGnssGateSetting("gnss.gga_gate.min_sats",
+                                  std::string_view{valBuf.data(), static_cast<size_t>(len)})) {
+            return cli::kCmdFail;
+        }
+    }
+    if (setEnabled && !applyGnssGateSetting("gnss.gga_gate.enabled", enabled ? "1" : "0")) {
+        if (setMinSats && (prevMinSats != minSats)) {
+            std::array<char, kSettingValueBufBytes> rollbackBuf{};
+            const int rlen = std::snprintf(rollbackBuf.data(), rollbackBuf.size(), "%u",
+                                           static_cast<unsigned>(prevMinSats));
+            if ((rlen > 0) && (static_cast<size_t>(rlen) < rollbackBuf.size())) {
+                fw::CommandResult rollbackRes{};
+                settings::Error rollbackErr = settings::Error::kOk;
+                static_cast<void>(
+                    submitSetting("gnss.gga_gate.min_sats",
+                                  std::string_view{rollbackBuf.data(), static_cast<size_t>(rlen)},
+                                  false, kCommandTimeoutMs, rollbackRes, rollbackErr));
+            }
+        }
         return cli::kCmdFail;
     }
     printGgaGateStatus();

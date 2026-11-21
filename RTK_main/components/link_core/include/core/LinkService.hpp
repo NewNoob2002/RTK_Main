@@ -21,7 +21,7 @@
 namespace core {
 
 inline constexpr uint32_t kWriteTimeoutMs = 200;
-inline constexpr size_t kMaxDeferredReplies = 4;
+inline constexpr size_t kMaxDeferredReplies = 6;
 
 /** 链路服务累计统计；只由链路任务写入。 */
 struct LinkStats {

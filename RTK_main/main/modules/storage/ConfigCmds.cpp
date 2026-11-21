@@ -22,6 +22,8 @@
 #include "fw/Trace.hpp" // FW_TRACE_ENABLED
 #include "modules/storage/StoreCatalog.hpp"
 #include "modules/storage/StoreKeys.hpp"
+#include "modules/system/SystemModule.hpp"
+#include "settings/Registry.hpp"
 #include "support/ConsoleSupport.hpp"
 
 namespace app {
@@ -29,6 +31,11 @@ namespace app {
 namespace {
 
 constexpr size_t kGroupArgs = 2U;
+constexpr size_t kGetArgs = 3U;
+constexpr size_t kSetArgs = 4U;
+constexpr size_t kKeyArgIndex = 2U;
+constexpr size_t kValArgIndex = 3U;
+constexpr uint32_t kSettingTimeoutMs = 6000U;
 
 /**
  * @brief 显示身份与设备名
@@ -173,7 +180,85 @@ constexpr std::array<Section, 5U> kSections{{
 }};
 
 /**
- * @brief 按类别显示持久化配置
+ * @brief 按键名读取并打印设置服务中的当前值（`config get <key>`）
+ * @param args: 命令行参数视图
+ * @retval 0 已输出当前值
+ * @retval 非零 参数或键无效，已输出 ERR
+ * @note 仅 console REPL 任务，读 DataCenter 快照，非 ISR。
+ */
+int cmdConfigGet(std::span<char *const> args) noexcept
+{
+    if ((args.size() != kGetArgs) || (args[2] == nullptr)) {
+        return cli::fail("usage: config get <key>");
+    }
+    const std::string_view key{args[2]};
+    const auto &service = appContext().settings;
+    if (settings::findKey(key) == nullptr) {
+        return cli::fail("unknown key: %s", args[2]);
+    }
+    settings::Value value{};
+    if (!service.get(key, value)) {
+        return cli::fail("unreadable key: %s", args[2]);
+    }
+    switch (value.kind) {
+    case settings::ValueKind::kInt:
+        cli::outPrintf("%s=%" PRId32 "\n", args[2], value.number);
+        return 0;
+    case settings::ValueKind::kBool:
+        cli::outPrintf("%s=%d\n", args[2], value.boolVal ? 1 : 0);
+        return 0;
+    case settings::ValueKind::kString:
+        // textLen <= 32，转换为 printf 精度无损。
+        cli::outPrintf("%s=%.*s\n", args[2], static_cast<int>(value.textLen), value.text.data());
+        return 0;
+    case settings::ValueKind::kBytes: {
+        constexpr std::string_view kHex = "0123456789ABCDEF";
+        constexpr uint8_t kNibbleMask = 0x0FU;
+        constexpr unsigned kHighShift = 4U;
+        std::array<char, (settings::kMaxCanonicalBytes * 2U) + 1U> hex{};
+        size_t pos = 0U;
+        const size_t count = std::min(static_cast<size_t>(value.textLen), value.text.size());
+        for (size_t i = 0U; i < count; ++i) {
+            const auto byte = static_cast<uint8_t>(value.text[i]);
+            hex[pos++] = kHex[static_cast<size_t>((byte >> kHighShift) & kNibbleMask)];
+            hex[pos++] = kHex[static_cast<size_t>(byte & kNibbleMask)];
+        }
+        hex[pos] = '\0';
+        cli::outPrintf("%s=%s\n", args[2], hex.data());
+        return 0;
+    }
+    default:
+        return cli::fail("unreadable key: %s", args[2]);
+    }
+}
+
+/**
+ * @brief 经设置服务写入单个配置键（`config set <key> <value>`，仅 DEV 档可用）
+ * @param args: 命令行参数视图
+ * @retval 0 设置成功
+ * @retval 非零 参数、权限、校验或执行失败，已输出 ERR
+ * @note 仅 console REPL 任务，轮询等待最长 kSettingTimeoutMs，非 ISR。
+ */
+int cmdConfigSet(std::span<char *const> args) noexcept
+{
+    if constexpr (kConsoleProfile != ConsoleProfile::kDev) {
+        return cli::fail("read-only in production");
+    }
+    if ((args.size() != kSetArgs) || (args[kKeyArgIndex] == nullptr) ||
+        (args[kValArgIndex] == nullptr)) {
+        return cli::fail("usage: config set <key> <value>");
+    }
+    fw::CommandResult result{};
+    settings::Error err = settings::Error::kOk;
+    if (!submitSetting(args[kKeyArgIndex], args[kValArgIndex], factoryUnlocked(), kSettingTimeoutMs,
+                       result, err)) {
+        return cli::fail("%s", settingsErrorText(err));
+    }
+    return 0;
+}
+
+/**
+ * @brief 按类别显示持久化配置，或经设置服务读写单键（`config get/set`）
  * @param argc: 命令参数个数（含动词）
  * @param argv: 命令参数数组
  * @retval 0 命令成功
@@ -182,19 +267,32 @@ constexpr std::array<Section, 5U> kSections{{
  */
 int cmdConfig(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    if ((argc < 1) || (argc > static_cast<int>(kGroupArgs)) || (argv == nullptr)) {
+    if ((argc < 1) || (argv == nullptr)) {
+        return cli::fail("usage: config [identity|link|gnss|debug|build|get|set]");
+    }
+    // argc >= 1 已校验，转 size_t 无损。
+    const std::span<char *const> args{argv, static_cast<size_t>(argc)};
+    if (args.size() >= kGroupArgs) {
+        const std::string_view sub{(args[1] != nullptr) ? args[1] : ""};
+        if (sub == "get") {
+            return cmdConfigGet(args);
+        }
+        if (sub == "set") {
+            return cmdConfigSet(args);
+        }
+    }
+    if (args.size() > kGroupArgs) {
         return cli::fail("usage: config [identity|link|gnss|debug|build]");
     }
     if (appContext().bootConfig.safeDefaults) {
         cli::printKv("boot_mode", "safe defaults");
     }
-    if (argc == 1) {
+    if (args.size() == 1U) {
         for (const Section &section : kSections) {
             section.show();
         }
         return 0;
     }
-    const std::span<char *const> args(argv, kGroupArgs);
     const std::string_view want{args[1]};
     for (const Section &section : kSections) {
         if (section.name == want) {
@@ -206,8 +304,9 @@ int cmdConfig(void * /*ctx*/, int argc, char **argv) noexcept
 }
 
 constexpr std::array<cli::Cmd, 1U> kConfigCmds{{
-    {"config", "config [identity|link|gnss|debug|build]: show saved settings (read-only)",
-     "[identity|link|gnss|debug|build]", cmdConfig, nullptr, false},
+    {"config",
+     "config [identity|link|gnss|debug|build|get <k>|set <k> <v>]: show or set saved settings",
+     "[identity|link|gnss|debug|build|get|set]", cmdConfig, nullptr, false},
 }};
 
 } // namespace

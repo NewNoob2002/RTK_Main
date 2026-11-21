@@ -33,7 +33,7 @@ struct KeySpec final {
 };
 
 /**
- * @brief  返回编译期常量键注册表（全部 16 个已登记设置键）
+ * @brief  返回编译期常量键注册表（全部已登记设置键）
  * @retval 指向静态 constexpr 数组的只读视图
  * @note   纯函数，线程/ISR 安全，不分配堆。
  */
