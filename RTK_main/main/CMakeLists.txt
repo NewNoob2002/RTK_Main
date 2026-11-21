@@ -26,20 +26,26 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
     # ADR-0017 §4：关闭 Wi-Fi 配置模式时不编译 web 模块、不嵌入页面、不链入 Wi-Fi（G3-idf-wifi-off）。
     if(NOT web_config_enabled)
         list(FILTER module_sources EXCLUDE REGEX "(^|/)modules/web/")
-    elseif(NOT CMAKE_BUILD_EARLY_EXPANSION)
-        set(web_ui_dir "${CMAKE_CURRENT_LIST_DIR}/web/ui")
-        set(web_pack_script "${CMAKE_CURRENT_LIST_DIR}/../tools/web_mock/pack.py")
-        add_custom_command(
-            OUTPUT "${web_ui_gz}"
-            COMMAND python3 "${web_pack_script}" --ui-dir "${web_ui_dir}" --out "${web_ui_gz}"
-            DEPENDS "${web_pack_script}"
-                    "${web_ui_dir}/index.html"
-                    "${web_ui_dir}/app.css"
-                    "${web_ui_dir}/app.js"
-                    "${web_ui_dir}/logo.png"
-            COMMENT "Packing and gzipping web UI (<= 24 KB)"
-            VERBATIM)
-        set(web_embed_files "${web_ui_gz}")
+    else()
+        # W7 F8：关闭强制门户时不编译 WebDns.cpp。
+        if(DEFINED CONFIG_RTK_WIFI_CAPTIVE_PORTAL AND NOT CONFIG_RTK_WIFI_CAPTIVE_PORTAL)
+            list(FILTER module_sources EXCLUDE REGEX "(^|/)modules/web/WebDns\\.cpp$")
+        endif()
+        if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+            set(web_ui_dir "${CMAKE_CURRENT_LIST_DIR}/web/ui")
+            set(web_pack_script "${CMAKE_CURRENT_LIST_DIR}/../tools/web_mock/pack.py")
+            add_custom_command(
+                OUTPUT "${web_ui_gz}"
+                COMMAND python3 "${web_pack_script}" --ui-dir "${web_ui_dir}" --out "${web_ui_gz}"
+                DEPENDS "${web_pack_script}"
+                        "${web_ui_dir}/index.html"
+                        "${web_ui_dir}/app.css"
+                        "${web_ui_dir}/app.js"
+                        "${web_ui_dir}/logo.png"
+                COMMENT "Packing and gzipping web UI (<= 24 KB)"
+                VERBATIM)
+            set(web_embed_files "${web_ui_gz}")
+        endif()
     endif()
 endif()
 idf_component_register(

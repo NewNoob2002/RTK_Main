@@ -694,6 +694,11 @@ bool WebModule::poll(uint32_t nowMs) noexcept
     if (!initialized_) {
         return false;
     }
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    const bool dnsMore = pollDns(nowMs);
+#else
+    constexpr bool dnsMore = false;
+#endif
     drainCtrlEvents();
     if (!txMailbox_.empty() && !txWorkQueued_.load(std::memory_order_acquire)) {
         scheduleTxDrain();
@@ -722,7 +727,8 @@ bool WebModule::poll(uint32_t nowMs) noexcept
         scheduleReboot(RebootKind::kIdle, "idle", nowMs, actSeq);
         return false;
     }
-    return deliveryPending || syncMore || capsPending || (rxConsumed && !rxMailbox_.empty());
+    return dnsMore || deliveryPending || syncMore || capsPending ||
+           (rxConsumed && !rxMailbox_.empty());
 }
 
 } // namespace app

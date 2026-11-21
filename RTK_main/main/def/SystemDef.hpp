@@ -32,6 +32,7 @@ enum class WebTrace : uint8_t {
     kIdleTrigger = 7,  // a=idle_s, b=act_seq
     kIdleAbort = 8,    // a=sta_count, b=act_seq
     kRebootCommit = 9, // a=kind, b=reason
+    kDnsErr = 10,      // a=op(1=rx,2=tx), b=errno
 };
 
 /** 系统模块命令动词。 */

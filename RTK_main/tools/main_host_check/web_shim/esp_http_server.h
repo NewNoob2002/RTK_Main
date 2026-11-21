@@ -30,7 +30,17 @@ typedef struct httpd_req {
     void *aux;
     void *user_ctx;
     int sockfd;
+    const char *host;
 } httpd_req_t;
+
+typedef enum {
+    HTTPD_500_INTERNAL_SERVER_ERROR = 0,
+    HTTPD_400_BAD_REQUEST,
+    HTTPD_404_NOT_FOUND,
+    HTTPD_ERR_CODE_MAX,
+} httpd_err_code_t;
+
+typedef esp_err_t (*httpd_err_handler_func_t)(httpd_req_t *req, httpd_err_code_t error);
 
 typedef struct {
     int core_id;
@@ -81,12 +91,18 @@ typedef struct httpd_ws_frame {
 esp_err_t httpd_start(httpd_handle_t *handle, const httpd_config_t *config);
 esp_err_t httpd_stop(httpd_handle_t handle);
 esp_err_t httpd_register_uri_handler(httpd_handle_t handle, const httpd_uri_t *uri_handler);
+esp_err_t httpd_register_err_handler(httpd_handle_t handle, httpd_err_code_t error,
+                                     httpd_err_handler_func_t handler_fn);
 void *httpd_get_global_user_ctx(httpd_handle_t handle);
 int httpd_req_to_sockfd(httpd_req_t *r);
+size_t httpd_req_get_hdr_value_len(httpd_req_t *r, const char *field);
+esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *r, const char *field, char *val,
+                                      size_t val_size);
 esp_err_t httpd_resp_set_status(httpd_req_t *r, const char *status);
 esp_err_t httpd_resp_set_type(httpd_req_t *r, const char *type);
 esp_err_t httpd_resp_set_hdr(httpd_req_t *r, const char *field, const char *value);
 esp_err_t httpd_resp_send(httpd_req_t *r, const char *buf, ssize_t buf_len);
+esp_err_t httpd_resp_send_err(httpd_req_t *req, httpd_err_code_t error, const char *msg);
 esp_err_t httpd_ws_recv_frame(httpd_req_t *req, httpd_ws_frame_t *pkt, size_t max_len);
 esp_err_t httpd_ws_send_frame(httpd_req_t *req, httpd_ws_frame_t *pkt);
 esp_err_t httpd_ws_send_frame_async(httpd_handle_t hd, int fd, httpd_ws_frame_t *frame);

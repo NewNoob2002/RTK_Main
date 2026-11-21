@@ -146,6 +146,15 @@ menu "RTK_main"
             Automatically switch back to Bluetooth mode and restart after this many
             seconds with no station connected to the SoftAP.
 
+    config RTK_WIFI_CAPTIVE_PORTAL
+        bool "Enable captive portal in Wi-Fi config mode (W7)"
+        depends on RTK_WIFI_CONFIG_ENABLE
+        default y
+        help
+            Enable DHCP option 114 (RFC 8910), UDP 53 DNS hijacking, OS connectivity
+            probe 302 redirects, and Host header canonicalization in Wi-Fi config mode.
+            Disable to omit DNS/option 114 and return 404 for unknown HTTP paths.
+
     menu "GNSS (ADR-0010)"
 
         config RTK_GNSS_ENABLE

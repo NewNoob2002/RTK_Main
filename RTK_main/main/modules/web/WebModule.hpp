@@ -14,11 +14,13 @@
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_netif.h"
+#include "sdkconfig.h"
 
 #include "app/RadioMode.hpp"
 #include "fw/Atomic.hpp"
 #include "fw/Result.hpp"
 #include "fw/Status.hpp"
+#include "modules/web/WebDns.hpp"
 #include "modules/web/WebIdleTimer.hpp"
 #include "modules/web/WebLogic.hpp"
 #include "modules/web/WebMailbox.hpp"
@@ -192,15 +194,56 @@ private:
     [[nodiscard]] fw::Result startSoftApWifi(std::string_view ssid) noexcept;
 
     /**
-     * @brief 启动 esp_http_server（core 0，max_open_sockets=3）并注册 /、/favicon.ico 与 /ws
+     * @brief 启动 esp_http_server（core 0，max_open_sockets=3）并注册 /、/favicon.ico、/ws 及门户路由
      * @retval fw::Result::kOk httpd 已启动
      * @retval 其他 IDF 错误映射结果
      * @note 仅启动任务调用，可阻塞，非 ISR。
      */
     [[nodiscard]] fw::Result startHttpd() noexcept;
 
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
     /**
-     * @brief 停止并回收 httpd、Wi-Fi 事件与 SoftAP 资源（httpd 停机失败时保留句柄与资源）
+     * @brief 创建并绑定非阻塞 UDP 53 强制门户 DNS 套接字（不输出格式化日志，可用于启动与运行期重试）
+     * @param[out] errNo: 失败时写入对应 errno；成功时写 0
+     * @retval fw::Result::kOk DNS 套接字就绪
+     * @retval fw::Result::kIoError 套接字创建、非阻塞设置或绑定失败
+     * @note 启动任务或 kLink 任务均可调用，不阻塞、不分配堆，非 ISR。
+     */
+    [[nodiscard]] fw::Result startDns(int &errNo) noexcept;
+
+    /**
+     * @brief 关闭强制门户 DNS 套接字并按 lwip_close 结果维护句柄状态
+     * @note 启动任务或 kLink 任务调用，不阻塞、不分配堆，非 ISR；失败仅走 fw::trace。
+     */
+    void closeDnsSocket() noexcept;
+
+    /**
+     * @brief 非阻塞轮询 UDP 53 强制门户 DNS 套接字（每轮最多处理 4 包，错误后按 >=1 s 间隔重试）
+     * @param nowMs: 当前单调时间（ms）
+     * @retval true 本轮打满 4 包预算，可能仍有待处理查询
+     * @retval false 当前无更多可读查询或发生错误
+     * @note 仅 kLink 任务调用，不阻塞、不分配堆，非 ISR；异常仅走 fw::trace。
+     */
+    [[nodiscard]] bool pollDns(uint32_t nowMs) noexcept;
+#endif
+
+    /**
+     * @brief 复位邮箱、会话、原子计数器与协议状态，为 init 启动网络服务准备干净初态
+     * @note 仅启动任务在 init() 阶段调用，不阻塞、不分配堆，非 ISR。
+     */
+    void resetRuntimeState() noexcept;
+
+    /**
+     * @brief 按顺序启动 SoftAP netif、httpd、可选门户 DNS（失败降级）与 SoftAP 发射
+     * @param ssid: SoftAP SSID
+     * @retval fw::Result::kOk 网络栈就绪
+     * @retval 其他 启动失败（已调用 teardownServer 回滚）
+     * @note 仅启动任务在 init() 阶段调用，可阻塞，非 ISR。
+     */
+    [[nodiscard]] fw::Result startNetworkStack(std::string_view ssid) noexcept;
+
+    /**
+     * @brief 停止并回收 httpd、DNS 套接字、Wi-Fi 事件与 SoftAP 资源（httpd 停机失败时保留句柄与资源）
      * @note 仅启动失败回滚或 stopBoot 调用，可阻塞，非 ISR。
      */
     void teardownServer() noexcept;
@@ -246,6 +289,27 @@ private:
      * @note 仅 httpd 线程调用，不访问模块可变业务状态。
      */
     static esp_err_t handleFaviconGet(httpd_req_t *req) noexcept;
+
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    /**
+     * @brief 强制门户系统探测路径处理器：返回 302 Found 重定向至 http://192.168.10.12/
+     * @param req: HTTP 请求对象
+     * @retval ESP_OK 重定向响应已发送
+     * @retval 其他 发送错误
+     * @note 仅 httpd 线程调用，不访问模块可变业务状态。
+     */
+    static esp_err_t handleCaptiveRedirect(httpd_req_t *req) noexcept;
+
+    /**
+     * @brief 404 错误处理器：未匹配 GET 请求 302 重定向至配置页，非 GET 返回 404
+     * @param req: HTTP 请求对象
+     * @param err: httpd 错误码（HTTPD_404_NOT_FOUND）
+     * @retval ESP_OK 响应已发送
+     * @retval 其他 发送错误或关闭连接
+     * @note 仅 httpd 线程调用，不访问模块可变业务状态。
+     */
+    static esp_err_t handleNotFound(httpd_req_t *req, httpd_err_code_t err) noexcept;
+#endif
 
     /**
      * @brief `/ws` 握手完成回调（IDF v6.1 唯一连接通知）：分配会话代号并投递 kConnect
@@ -466,6 +530,14 @@ private:
     esp_netif_t *apNetif_ = nullptr;
     esp_event_handler_instance_t wifiEventHandle_ = nullptr;
     httpd_handle_t httpd_ = nullptr;
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    bool dnsOpen_ = false;
+    bool dnsRetryArmed_ = false;
+    int dnsSock_ = 0;
+    uint32_t lastDnsRetryMs_ = 0U;
+    std::array<uint8_t, web_cfg::kDnsMaxPacketBytes> dnsRxBuf_{};
+    std::array<uint8_t, web_cfg::kDnsMaxPacketBytes> dnsTxBuf_{};
+#endif
 
     // 跨任务通信状态（零初值；帧槽位由 BootArena 仅在 kWifiConfig 模式下外供）。
     std::atomic<uint32_t> staState_{0U}; // 低 4 位为终端数，高 28 位为活动序号（一致快照）。

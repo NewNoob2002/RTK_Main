@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,9 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "sdkconfig.h"
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+#include "lwip/sockets.h"
+#endif
 
 #include "AppContext.hpp"
 #include "def/SystemDef.hpp"
@@ -49,7 +53,8 @@ constexpr uint32_t kMinIdleExitS = 60U;
 constexpr uint32_t kMaxIdleExitS = 3600U;
 constexpr uint8_t kMaxStations = 2U;
 constexpr uint16_t kMaxHttpSockets = 3U;
-constexpr uint16_t kMaxUriHandlers = 4U;
+constexpr uint16_t kBaseUriHandlers = 3U; // /, /favicon.ico, /ws
+constexpr uint16_t kUriHandlerMargin = 2U;
 constexpr uint32_t kMsPerSecond = 1000U;
 
 // SoftAP 固定地址 192.168.10.12/24（用户 2026-11-19 指定，网关同址）。
@@ -59,6 +64,40 @@ constexpr uint8_t kApIpC = 10U;
 constexpr uint8_t kApIpD = 12U;
 constexpr uint8_t kApMaskHigh = 255U;
 constexpr uint8_t kApMaskLow = 0U;
+
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+constexpr std::array<uint8_t, 4U> kApIpv4 = {kApIpA, kApIpB, kApIpC, kApIpD};
+constexpr std::string_view kApHost = "192.168.10.12";
+constexpr std::string_view kApHostPort80 = "192.168.10.12:80";
+constexpr const char *kCaptivePortalUrl = "http://192.168.10.12/";
+constexpr size_t kCaptivePortalUriBufBytes = 22U; // B，"http://192.168.10.12/" + NUL
+// ESP-IDF esp_netif_dhcps_option(ESP_NETIF_CAPTIVEPORTAL_URI) 只保存指针（esp_netif.h:580），须静态存储。
+constinit std::array<char, kCaptivePortalUriBufBytes> s_captive_portal_uri = {
+    'h', 't', 't', 'p', ':', '/', '/', '1', '9', '2', '.',
+    '1', '6', '8', '.', '1', '0', '.', '1', '2', '/', '\0',
+};
+constexpr uint32_t kCaptivePortalUriLen = static_cast<uint32_t>(s_captive_portal_uri.size() - 1U);
+constexpr size_t kMaxDnsPacketsPerPoll = 4U;
+constexpr uint32_t kDnsRetryIntervalMs = 1000U; // ms，DNS 异常关闭后在 poll 中的重试间隔
+constexpr uint32_t kDnsErrOpRx = 1U;
+constexpr uint32_t kDnsErrOpTx = 2U;
+constexpr uint32_t kDnsErrOpInit = 3U;
+constexpr uint32_t kDnsErrOpClose = 4U;
+
+constexpr std::array<const char *, 7U> kCaptiveProbePaths = {
+    "/generate_204",
+    "/gen_204",
+    "/hotspot-detect.html",
+    "/library/test/success.html",
+    "/connecttest.txt",
+    "/ncsi.txt",
+    "/redirect",
+};
+constexpr uint16_t kMaxUriHandlers =
+    kBaseUriHandlers + static_cast<uint16_t>(kCaptiveProbePaths.size()) + kUriHandlerMargin;
+#else
+constexpr uint16_t kMaxUriHandlers = kBaseUriHandlers + kUriHandlerMargin;
+#endif
 
 // RFC 6455 关闭码（大端两字节）：1003 Unsupported Data、1009 Message Too Big。
 constexpr uint8_t kWsCloseUnsupportedHi = 0x03U;
@@ -223,7 +262,7 @@ void sendWsBusyAck(httpd_req_t *req, uint16_t reqId) noexcept
 }
 
 /**
- * @brief 配置 SoftAP 静态 IP 192.168.10.12/24 并重启 DHCP 服务
+ * @brief 配置 SoftAP 静态 IP 192.168.10.12/24、DHCP 选项 114 并重启 DHCP 服务
  * @param netif: SoftAP 对应的 esp_netif 句柄
  * @retval ESP_OK 配置成功
  * @retval 其他 IDF 错误码
@@ -243,8 +282,97 @@ esp_err_t configureApIpAndDhcp(esp_netif_t *netif) noexcept
     if (err != ESP_OK) {
         return err;
     }
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    err = esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI,
+                                 s_captive_portal_uri.data(), kCaptivePortalUriLen);
+    if (err != ESP_OK) {
+        return err;
+    }
+#endif
     return esp_netif_dhcps_start(netif);
 }
+
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+/**
+ * @brief 校验 HTTP 请求的 Host 头是否为规范地址 192.168.10.12 或 192.168.10.12:80
+ * @param req: HTTP 请求对象
+ * @retval true Host 头为规范地址
+ * @retval false Host 头缺失或不匹配
+ * @note 仅 httpd 线程调用，不分配堆，仅使用栈上定长缓冲。
+ */
+[[nodiscard]] bool isCanonicalApHost(httpd_req_t *req) noexcept
+{
+    const size_t hostLen = httpd_req_get_hdr_value_len(req, "Host");
+    if ((hostLen != kApHost.size()) && (hostLen != kApHostPort80.size())) {
+        return false;
+    }
+    std::array<char, kApHostPort80.size() + 1U> hostBuf{};
+    if (httpd_req_get_hdr_value_str(req, "Host", hostBuf.data(), hostBuf.size()) != ESP_OK) {
+        return false;
+    }
+    const std::string_view host{hostBuf.data(), hostLen};
+    return (host == kApHost) || (host == kApHostPort80);
+}
+
+/**
+ * @brief 发送 302 Found 强制门户重定向响应（空体 + Cache-Control: no-store）
+ * @param req: HTTP 请求对象
+ * @retval ESP_OK 响应已发送
+ * @retval 其他 发送错误
+ * @note 仅 httpd 线程调用，不访问模块可变业务状态。
+ */
+esp_err_t sendCaptiveRedirect(httpd_req_t *req) noexcept
+{
+    esp_err_t err = httpd_resp_set_status(req, "302 Found");
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_resp_set_hdr(req, "Location", kCaptivePortalUrl);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    if (err != ESP_OK) {
+        return err;
+    }
+    return httpd_resp_send(req, nullptr, 0);
+}
+
+using HttpdUriHandlerFn = esp_err_t (*)(httpd_req_t *);
+
+/**
+ * @brief 注册强制门户系统探测路径与 404 重定向处理器
+ * @param httpd: 已启动的 httpd 句柄
+ * @param self: WebModule 实例指针
+ * @param probeHandler: 系统探测路径的 302 处理回调
+ * @param notFoundHandler: 404 错误处理回调
+ * @retval ESP_OK 全部注册成功
+ * @retval 其他 注册失败错误码
+ * @note 仅启动任务调用，非 ISR。
+ */
+esp_err_t registerCaptivePortalHandlers(httpd_handle_t httpd, WebModule *self,
+                                        HttpdUriHandlerFn probeHandler,
+                                        httpd_err_handler_func_t notFoundHandler) noexcept
+{
+    for (const char *path : kCaptiveProbePaths) {
+        const httpd_uri_t probeUri{
+            .uri = path,
+            .method = HTTP_GET,
+            .handler = probeHandler,
+            .user_ctx = self,
+            .is_websocket = false,
+            .handle_ws_control_frames = false,
+            .supported_subprotocol = nullptr,
+            .ws_post_handshake_cb = nullptr,
+        };
+        const esp_err_t err = httpd_register_uri_handler(httpd, &probeUri);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return httpd_register_err_handler(httpd, HTTPD_404_NOT_FOUND, notFoundHandler);
+}
+#endif
 
 } // namespace
 
@@ -301,6 +429,11 @@ void WebModule::onWifiEvent(void *arg, esp_event_base_t /*base*/, int32_t eventI
 
 esp_err_t WebModule::handleRootGet(httpd_req_t *req) noexcept
 {
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    if (!isCanonicalApHost(req)) {
+        return sendCaptiveRedirect(req);
+    }
+#endif
     esp_err_t err = httpd_resp_set_type(req, "text/html; charset=utf-8");
     if (err != ESP_OK) {
         return err;
@@ -326,6 +459,23 @@ esp_err_t WebModule::handleFaviconGet(httpd_req_t *req) noexcept
     }
     return httpd_resp_send(req, nullptr, 0);
 }
+
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+esp_err_t WebModule::handleCaptiveRedirect(httpd_req_t *req) noexcept
+{
+    return sendCaptiveRedirect(req);
+}
+
+esp_err_t WebModule::handleNotFound(httpd_req_t *req, httpd_err_code_t /*err*/) noexcept
+{
+    if (req->method == HTTP_GET) {
+        return sendCaptiveRedirect(req);
+    }
+    // 非 GET 保持 IDF 原生 404 关闭连接语义（返回非 ESP_OK 触发底层关连接）。
+    const esp_err_t sendErr = httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not Found");
+    return (sendErr != ESP_OK) ? sendErr : ESP_FAIL;
+}
+#endif
 
 esp_err_t WebModule::handleWsPostHandshake(httpd_req_t *req) noexcept
 {
@@ -618,14 +768,137 @@ fw::Result WebModule::startHttpd() noexcept
     if (err == ESP_OK) {
         err = httpd_register_uri_handler(httpd_, &wsUri);
     }
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    if (err == ESP_OK) {
+        err = registerCaptivePortalHandlers(httpd_, this, &WebModule::handleCaptiveRedirect,
+                                            &WebModule::handleNotFound);
+    }
+#endif
     if (err != ESP_OK) {
         return failInit("URI register", err);
     }
     return fw::Result::kOk;
 }
 
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+fw::Result WebModule::startDns(int &errNo) noexcept
+{
+    errNo = 0;
+    const int fd = lwip_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) {
+        errNo = errno;
+        return fw::Result::kIoError;
+    }
+    const int reuse = 1;
+    static_cast<void>(lwip_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)));
+    const int flags = lwip_fcntl(fd, F_GETFL, 0);
+    if ((flags < 0) || (lwip_fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)) {
+        errNo = errno;
+        if (lwip_close(fd) < 0) {
+            traceWeb(WebTrace::kDnsErr, kDnsErrOpClose, static_cast<uint32_t>(errno));
+        }
+        return fw::Result::kIoError;
+    }
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(web_cfg::kDnsPort);
+    // BSD/lwIP socket API 需要 const sockaddr *，sockaddr_in 为标准 IPv4 地址类型。
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    if (lwip_bind(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) < 0) {
+        errNo = errno;
+        if (lwip_close(fd) < 0) {
+            traceWeb(WebTrace::kDnsErr, kDnsErrOpClose, static_cast<uint32_t>(errno));
+        }
+        return fw::Result::kIoError;
+    }
+    dnsSock_ = fd;
+    dnsOpen_ = true;
+    return fw::Result::kOk;
+}
+
+void WebModule::closeDnsSocket() noexcept
+{
+    if (!dnsOpen_) {
+        return;
+    }
+    if (lwip_close(dnsSock_) < 0) {
+        const int errNo = errno;
+        traceWeb(WebTrace::kDnsErr, kDnsErrOpClose, static_cast<uint32_t>(errNo));
+        // 仅当句柄已无效（EBADF）时视作已关闭；其他错误保留句柄以便后续再次关闭。
+        if (errNo != EBADF) {
+            return;
+        }
+    }
+    dnsSock_ = 0;
+    dnsOpen_ = false;
+}
+
+bool WebModule::pollDns(uint32_t nowMs) noexcept
+{
+    if (!dnsOpen_) {
+        if (dnsRetryArmed_ && ((nowMs - lastDnsRetryMs_) >= kDnsRetryIntervalMs)) {
+            lastDnsRetryMs_ = nowMs;
+            int retryErr = 0;
+            if (fw::isOk(startDns(retryErr))) {
+                dnsRetryArmed_ = false;
+            }
+        }
+        return false;
+    }
+    size_t handled = 0U;
+    while (handled < kMaxDnsPacketsPerPoll) {
+        sockaddr_in peer{};
+        iovec iov{};
+        iov.iov_base = dnsRxBuf_.data();
+        iov.iov_len = dnsRxBuf_.size();
+        msghdr msg{};
+        msg.msg_name = &peer;
+        msg.msg_namelen = sizeof(peer);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        const ssize_t rxLen = lwip_recvmsg(dnsSock_, &msg, 0);
+        if (rxLen < 0) {
+            const int errNo = errno;
+            if ((errNo != EAGAIN) && (errNo != EWOULDBLOCK)) {
+                traceWeb(WebTrace::kDnsErr, kDnsErrOpRx, static_cast<uint32_t>(errNo));
+                closeDnsSocket();
+                dnsRetryArmed_ = true;
+                lastDnsRetryMs_ = nowMs;
+            }
+            return false;
+        }
+        ++handled;
+        // 超长（>512 B）报文由 lwIP 置位 MSG_TRUNC，静默丢弃并仍计入本轮 4 包预算。
+        if (((msg.msg_flags & MSG_TRUNC) != 0) || (rxLen == 0)) {
+            continue;
+        }
+        // rxLen > 0 且 <= dnsRxBuf_.size()（512），转 size_t 无损。
+        const auto req = std::span<const uint8_t>{dnsRxBuf_.data(), static_cast<size_t>(rxLen)};
+        const size_t replyLen = web_cfg::buildDnsReply(req, kApIpv4, dnsTxBuf_);
+        if (replyLen == 0U) {
+            continue;
+        }
+        // BSD/lwIP sendto 需要 const sockaddr * 指定对端 IPv4 地址。
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        const auto *peerAddr = reinterpret_cast<const sockaddr *>(&peer);
+        const ssize_t txLen =
+            lwip_sendto(dnsSock_, dnsTxBuf_.data(), replyLen, 0, peerAddr, msg.msg_namelen);
+        if (txLen < 0) {
+            traceWeb(WebTrace::kDnsErr, kDnsErrOpTx, static_cast<uint32_t>(errno));
+        }
+    }
+    return true;
+}
+#endif
+
 void WebModule::teardownServer() noexcept
 {
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    // 无论 httpd_stop 成功与否都先关闭 DNS 套接字，避免 UDP 53 泄漏。
+    dnsRetryArmed_ = false;
+    closeDnsSocket();
+#endif
     if (httpd_ != nullptr) {
         const esp_err_t stopErr = httpd_stop(httpd_);
         if (stopErr != ESP_OK) {
@@ -707,20 +980,8 @@ void WebModule::unbindStorage() noexcept
     storageBound_ = false;
 }
 
-fw::Result WebModule::init() noexcept
+void WebModule::resetRuntimeState() noexcept
 {
-    if (initialized_) {
-        return fw::Result::kOk;
-    }
-    if ((context_ == nullptr) || !storageBound_ || (ctx().radioMode != RadioMode::kWifiConfig)) {
-        return fw::Result::kInvalidState;
-    }
-    const auto sys = ctx().data.systemStatus.read();
-    const std::string_view ssid{sys.deviceName.data(), std::strlen(sys.deviceName.data())};
-    if (ssid.empty()) {
-        FW_LOGE(fw::TraceCat::kSys, "<web> empty deviceName, cannot start SoftAP");
-        return fw::Result::kInvalidState;
-    }
     rxMailbox_.clear();
     txMailbox_.clear();
     ctrlMailbox_.clear();
@@ -736,27 +997,79 @@ fw::Result WebModule::init() noexcept
     rebootTxCommitted_ = false;
     rebootDrainDone_ = false;
     ggaSampleValid_ = false;
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    dnsRetryArmed_ = false;
+#endif
+}
 
+fw::Result WebModule::startNetworkStack(std::string_view ssid) noexcept
+{
+    // F1：先完成 netif/DHCP、httpd（含全部 URI/404 注册）与 DNS 绑定，最后再启动 SoftAP 发射，
+    // 消除 IDF httpd_uri.c 注册表项写入与客户端并发请求之间的竞态。
     fw::Result step = initSoftApNetif();
-    if (fw::isOk(step)) {
-        step = startSoftApWifi(ssid);
-    }
-    if (fw::isOk(step)) {
-        step = startHttpd();
-    }
     if (!fw::isOk(step)) {
         teardownServer();
         return step;
     }
+    step = startHttpd();
+    if (!fw::isOk(step)) {
+        teardownServer();
+        return step;
+    }
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    int dnsErr = 0;
+    if (!fw::isOk(startDns(dnsErr))) {
+        // F2：DNS 启动失败仅降级门户 DNS，不拆掉 Wi-Fi 配置模式（httpd/302/option114 继续工作）。
+        traceWeb(WebTrace::kDnsErr, kDnsErrOpInit, static_cast<uint32_t>(dnsErr));
+        FW_LOGW(fw::TraceCat::kSys,
+                "<web> captive DNS start failed (errno=%d); continuing without DNS", dnsErr);
+        dnsRetryArmed_ = true;
+    }
+#endif
+    step = startSoftApWifi(ssid);
+    if (!fw::isOk(step)) {
+        teardownServer();
+        return step;
+    }
+    return fw::Result::kOk;
+}
+
+fw::Result WebModule::init() noexcept
+{
+    if (initialized_) {
+        return fw::Result::kOk;
+    }
+    if ((context_ == nullptr) || !storageBound_ || (ctx().radioMode != RadioMode::kWifiConfig)) {
+        return fw::Result::kInvalidState;
+    }
+    const auto sys = ctx().data.systemStatus.read();
+    const std::string_view ssid{sys.deviceName.data(), std::strlen(sys.deviceName.data())};
+    if (ssid.empty()) {
+        FW_LOGE(fw::TraceCat::kSys, "<web> empty deviceName, cannot start SoftAP");
+        return fw::Result::kInvalidState;
+    }
+    resetRuntimeState();
+    const fw::Result step = startNetworkStack(ssid);
+    if (!fw::isOk(step)) {
+        return step;
+    }
     const uint32_t now = rtos::nowMs();
     lastStatusMs_ = now;
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    lastDnsRetryMs_ = now;
+#endif
     idleTimer_.start(now, static_cast<uint32_t>(CONFIG_RTK_WIFI_IDLE_EXIT_S) * kMsPerSecond);
     initialized_ = true;
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    const char *const portalState = dnsOpen_ ? "on" : "degraded";
+#else
+    constexpr const char *portalState = "off";
+#endif
     FW_LOGI(fw::TraceCat::kSys,
-            "<web> SoftAP %.*s up at 192.168.10.12/24, ch=%u, idle=%us, ui=%zuB gz",
+            "<web> SoftAP %.*s up at 192.168.10.12/24, ch=%u, idle=%us, portal=%s, ui=%zuB gz",
             static_cast<int>(ssid.size()), ssid.data(),
             static_cast<unsigned>(CONFIG_RTK_WIFI_AP_CHANNEL),
-            static_cast<unsigned>(CONFIG_RTK_WIFI_IDLE_EXIT_S), embeddedPageBytes());
+            static_cast<unsigned>(CONFIG_RTK_WIFI_IDLE_EXIT_S), portalState, embeddedPageBytes());
     return fw::Result::kOk;
 }
 
