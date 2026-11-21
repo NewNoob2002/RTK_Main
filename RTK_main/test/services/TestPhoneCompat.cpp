@@ -24,6 +24,7 @@ constexpr uint16_t kHeight = 0x24U;
 constexpr uint16_t kIns = 0x25U;
 constexpr uint16_t kAlign = 0x26U;
 constexpr uint16_t kHandNet = 0x27U;
+constexpr uint16_t kWifiCtl = 0x28U;
 constexpr uint16_t kBaseInfo = 0x29U;
 constexpr uint16_t kJsonServer = 0x32U;
 constexpr uint16_t kPppOrTb = 0x33U;
@@ -78,6 +79,10 @@ struct Store {
     bool lastFactory = false;
     bool lastReboot = false;
     uint32_t lastResetNow = 0U;
+    bool wifiSupported = true;
+    bool wifiAccept = true;
+    unsigned wifiCalls = 0U;
+    uint32_t lastWifiNow = 0U;
 };
 
 /** @brief 构造手机回调替身。 @param store: 测试状态。 @retval 回调表。 */
@@ -177,6 +182,15 @@ core::services::PhoneCompatOps makeOps(Store &store)
                 state.lastResetNow = nowMs;
                 return true;
             },
+        .wifiConfigSupported =
+            [](const void *ctx) noexcept { return static_cast<const Store *>(ctx)->wifiSupported; },
+        .scheduleWifiConfig =
+            [](void *ctx, uint32_t nowMs) noexcept {
+                auto &state = *static_cast<Store *>(ctx);
+                ++state.wifiCalls;
+                state.lastWifiNow = nowMs;
+                return state.wifiAccept;
+            },
     };
 }
 
@@ -268,8 +282,8 @@ void testSharedMessagesBothApps()
         f.expectReply(sender, kHandNet, kSet, {}, kSetRes, kZero2);
         f.expectReply(sender, kBaseInfo, kSet, {}, kSetRes, kOk);
 
-        // 0x28/0x30/0x34/0x36 仍不回复
-        for (const uint16_t msg : std::array<uint16_t, 4U>{0x28U, 0x30U, 0x34U, 0x36U}) {
+        // 0x30/0x34/0x36 仍不回复
+        for (const uint16_t msg : std::array<uint16_t, 3U>{0x30U, 0x34U, 0x36U}) {
             f.expectNoReply(sender, msg, kQuery);
         }
     }
@@ -581,6 +595,37 @@ void testDeferredRepliesAndDisconnectCancel()
 extern "C" void setUp() {}
 extern "C" void tearDown() {}
 
+/** @brief 覆盖 0x28 Wi-Fi 网页配置：查询状态+IP、开启登记延迟重启、关闭/非法/不支持/重复。 */
+void testWifiControl()
+{
+    RouterFixture f{};
+    constexpr std::array<uint8_t, 8U> kOffWithIp{0U, 192U, 168U, 10U, 12U, 0U, 0U, 0U};
+    for (const uint8_t sender : {kNav, kSurvey}) {
+        f.expectReply(sender, kWifiCtl, kQuery, {}, kQueryRes, kOffWithIp);
+    }
+    // 关闭：已在蓝牙模式，直接 OK，不登记重启。
+    f.expectReply(kNav, kWifiCtl, kSet, std::array<uint8_t, 5U>{0U, 0U, 0U, 0U, 0U}, kSetRes, kOk);
+    f.expectReply(kNav, kWifiCtl, kSet, {}, kSetRes, kFail);
+    f.expectReply(kNav, kWifiCtl, kSet, std::array<uint8_t, 1U>{2U}, kSetRes, kFail);
+    TEST_ASSERT_EQUAL_UINT(0U, f.store.wifiCalls);
+    // 开启：负载 [1..4] wifiDomain 忽略。
+    f.expectReply(kNav, kWifiCtl, kSet, std::array<uint8_t, 5U>{1U, 192U, 168U, 4U, 1U}, kSetRes,
+                  kOk, 700U);
+    TEST_ASSERT_EQUAL_UINT(1U, f.store.wifiCalls);
+    TEST_ASSERT_EQUAL_UINT32(700U, f.store.lastWifiNow);
+    // 已有待执行的复位/切换时链路模块拒绝。
+    f.store.wifiAccept = false;
+    f.expectReply(kSurvey, kWifiCtl, kSet, std::array<uint8_t, 1U>{1U}, kSetRes, kFail);
+    // 无 Wi-Fi 的构建：查询 IP 全 0，开启失败且不调用登记。
+    f.store.wifiSupported = false;
+    f.store.wifiAccept = true;
+    f.expectReply(kNav, kWifiCtl, kQuery, {}, kQueryRes, std::array<uint8_t, 8U>{});
+    f.expectReply(kNav, kWifiCtl, kSet, std::array<uint8_t, 1U>{1U}, kSetRes, kFail);
+    TEST_ASSERT_EQUAL_UINT(2U, f.store.wifiCalls);
+    TEST_ASSERT_TRUE(f.router.handle(core::Role::kAlarm, {.msgId = kWifiCtl}, 0U, f.reply) ==
+                     core::DispatchResult::kDenied);
+}
+
 /** @brief 执行手机兼容路由与延迟应答主机测试。 @retval Unity 结果。 */
 int main()
 {
@@ -589,5 +634,6 @@ int main()
     RUN_TEST(testNavOnlyMessagesBothApps);
     RUN_TEST(testDualAppMessagesAndPppGate);
     RUN_TEST(testDeferredRepliesAndDisconnectCancel);
+    RUN_TEST(testWifiControl);
     return UNITY_END();
 }

@@ -134,6 +134,8 @@ struct PhoneCompatOps {
     PhoneThingsboardConfig (*readThingsboard)(const void *) noexcept = nullptr;
     bool (*setThingsboard)(void *, const PhoneThingsboardConfig &, uint32_t) noexcept = nullptr;
     bool (*scheduleReset)(void *, bool, bool, uint32_t) noexcept = nullptr;
+    bool (*wifiConfigSupported)(const void *) noexcept = nullptr;
+    bool (*scheduleWifiConfig)(void *, uint32_t) noexcept = nullptr;
 };
 
 struct PhoneCompatService {

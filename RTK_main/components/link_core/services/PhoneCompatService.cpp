@@ -41,6 +41,7 @@ constexpr uint16_t kHeightId = 0x24U;
 constexpr uint16_t kInsId = 0x25U;
 constexpr uint16_t kAlignId = 0x26U;
 constexpr uint16_t kHandNetId = 0x27U;
+constexpr uint16_t kWifiCtlId = 0x28U;
 constexpr uint16_t kBaseInfoId = 0x29U;
 constexpr uint16_t kJsonServerId = 0x32U;
 constexpr uint16_t kFenceListId = 0x60U;
@@ -68,7 +69,13 @@ constexpr size_t kAlignReplyLen = 4U;
 constexpr size_t kJsonServerMinSetLen = 38U;
 constexpr size_t kPppReplyLen = 4U;
 constexpr size_t kFenceListReplyLen = 1U;
-constexpr size_t kRouteCount = 18U;
+constexpr size_t kWifiReplyLen = 8U;
+constexpr size_t kWifiOfsState = 0U;
+constexpr size_t kWifiOfsIp = 1U;
+constexpr uint8_t kWifiOpen = 1U;
+// SoftAP 固定地址，与 main/modules/web/WebServer.cpp:55 的 192.168.10.12/24 保持一致。
+constexpr std::array<uint8_t, 4U> kWifiApIp{192U, 168U, 10U, 12U};
+constexpr size_t kRouteCount = 19U;
 
 constexpr std::array<uint8_t, 2U> kOk{1U, 1U};
 constexpr std::array<uint8_t, 2U> kFail{2U, 2U};
@@ -467,6 +474,45 @@ DispatchResult handleReset(void *self, const proto::FrameView &frame, uint32_t n
 }
 
 /**
+ * @brief 0x28 Wi-Fi 网页配置控制（沿用 E1-5.4 normal-version 报文格式）。
+ * @param self: PhoneCompatService 实例。
+ * @param frame: 请求帧；SET 负载 [0]=1 开启，[1..4] 为 5.4 的 wifiDomain（固定 IP，忽略）。
+ * @param nowMs: 当前单调时钟（ms）。
+ * @param[out] reply: 应答缓冲。
+ * @retval 路由分发结果。
+ * @note 查询应答 8 B：[0] 状态（本次启动在蓝牙模式，恒为 0），[1..4] SoftAP IP；
+ *       不支持 Wi-Fi 的构建 IP 全 0。开启时先应答 01 01，再由链路模块延迟重启进入 Wi-Fi 模式。
+ */
+DispatchResult handleWifiCtl(void *self, const proto::FrameView &frame, uint32_t nowMs,
+                             Reply &reply) noexcept
+{
+    const auto &ops = serviceOf(self).ops;
+    const bool supported = (ops.wifiConfigSupported != nullptr) && ops.wifiConfigSupported(ops.ctx);
+    if (frame.type == proto::msg_type::kQuery) {
+        std::array<uint8_t, kWifiReplyLen> payload{};
+        payload[kWifiOfsState] = 0U;
+        if (supported) {
+            std::ranges::copy(kWifiApIp, std::span{payload}.subspan(kWifiOfsIp).begin());
+        }
+        return build(frame, proto::msg_type::kQueryRes, payload, reply);
+    }
+    if (frame.type != proto::msg_type::kSet) {
+        return DispatchResult::kDenied;
+    }
+    if (frame.payload.empty()) {
+        return build(frame, proto::msg_type::kSetRes, kFail, reply);
+    }
+    if (frame.payload[kWifiOfsState] == 0U) {
+        // 已处于蓝牙模式，关闭请求无事可做。
+        return build(frame, proto::msg_type::kSetRes, kOk, reply);
+    }
+    const bool scheduled = supported && (frame.payload[kWifiOfsState] == kWifiOpen) &&
+                           (ops.scheduleWifiConfig != nullptr) &&
+                           ops.scheduleWifiConfig(ops.ctx, nowMs);
+    return build(frame, proto::msg_type::kSetRes, scheduled ? kOk : kFail, reply);
+}
+
+/**
  * @brief 0x24 回读或异步登记新的天线高。
  * @param self: PhoneCompatService 实例。
  * @param frame: 手机请求。
@@ -768,6 +814,7 @@ RouteTable PhoneCompatService::table() noexcept
         {kInsId, kRolePhone, &handleSetZero},
         {kAlignId, kRolePhone, &handleAlign},
         {kHandNetId, kRolePhone, &handleSetZero},
+        {kWifiCtlId, kRolePhone, &handleWifiCtl},
         {kBaseInfoId, kRolePhone, &handleBaseInfo},
         {kJsonServerId, kRolePhone, &handleJsonServer},
         {kPhonePppId, kRolePhone, &handlePppOrThingsboard},

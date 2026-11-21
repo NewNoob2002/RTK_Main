@@ -124,10 +124,13 @@ private:
         kNone = 0,
         kReboot = 1,
         kFactory = 2,
+        kWifiConfig = 3,
     };
 
     /** @brief 检查到期的 0x1E 恢复出厂或重启请求并执行。 @param nowMs: 当前时钟。 @note 仅 kLink。 */
     void pollPhoneReset(uint32_t nowMs) noexcept;
+    /** @brief 0x28 到期：写入 kWifiConfig 单次启动记录并重启（不支持 Wi-Fi 的构建只记日志后返回，由调用方 esp_restart）。 @note 仅 kLink。 */
+    static void restartIntoWifiConfig() noexcept;
     /** @brief 检测配置版本号变化并从 settings 同步 DeviceInfo.sn（0x01/0x02）。 @note 仅 kLink。 */
     void syncDeviceSn() noexcept;
     /** @brief 查询是否有手机兼容异步设置凭据在途。 @param localOnly: true 仅查同执行器凭据（height/snpn）。 @retval true 有在途凭据。 @note 仅 kLink。 */
@@ -192,6 +195,10 @@ private:
     /** @brief 手机 0x1E 登记延迟恢复出厂或重启。 @param ctx: BtLinkModule 指针。 @param factoryReset: 是否擦除用户 NVS。 @param reboot: 是否重启。 @param nowMs: 当前时钟。 @retval true 已受理。 */
     [[nodiscard]] static bool onScheduleReset(void *ctx, bool factoryReset, bool reboot,
                                               uint32_t nowMs) noexcept;
+    /** @brief 手机 0x28 查询本构建是否带 Wi-Fi 网页配置。 @param ctx: 未用。 @retval true 支持。 */
+    [[nodiscard]] static bool onWifiConfigSupported(const void *ctx) noexcept;
+    /** @brief 手机 0x28 登记延迟重启进入 Wi-Fi 网页配置。 @param ctx: BtLinkModule 指针。 @param nowMs: 当前时钟。 @retval true 已受理。 */
+    [[nodiscard]] static bool onScheduleWifiConfig(void *ctx, uint32_t nowMs) noexcept;
     friend struct ModuleTestAccess;
     using SessionDemux = demux::StaticDemux<proto::demux_frame::kDecoder, demux::rtcm3::kDecoder>;
     static constexpr uint8_t kProductIndex = SessionDemux::indexOf<proto::demux_frame::kDecoder>();

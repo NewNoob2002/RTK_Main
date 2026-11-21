@@ -15,6 +15,9 @@
 #include "fw/Tlog.hpp"
 #include "core/LinkService.hpp"
 #include "esp_system.h"
+#if defined(ESP_PLATFORM)
+#include "sdkconfig.h"
+#endif
 #include "proto/Frame.hpp"
 #include "rtos/EspStatus.hpp"
 
@@ -228,6 +231,28 @@ bool BtLinkModule::onScheduleReset(void *ctx, bool factoryReset, bool reboot,
 {
     auto *self = static_cast<BtLinkModule *>(ctx);
     return (self != nullptr) && self->schedulePhoneReset(factoryReset, reboot, nowMs);
+}
+
+bool BtLinkModule::onWifiConfigSupported([[maybe_unused]] const void *ctx) noexcept
+{
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE)
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool BtLinkModule::onScheduleWifiConfig(void *ctx, uint32_t nowMs) noexcept
+{
+    auto *self = static_cast<BtLinkModule *>(ctx);
+    if ((self == nullptr) || !onWifiConfigSupported(ctx) ||
+        (self->pending_reset_ != PendingReset::kNone)) {
+        return false;
+    }
+    // 与 0x1E 共用延迟，先让 01 01 应答经 SPP 发出再重启（ADR-0017 §2.2）。
+    self->pending_reset_ = PendingReset::kWifiConfig;
+    self->pending_reset_at_ms_ = nowMs + kPhoneResetDelayMs;
+    return true;
 }
 
 core::AntennaHeight BtLinkModule::onReadHeight(const void *ctx) noexcept
@@ -466,6 +491,8 @@ core::services::PhoneCompatOps BtLinkModule::makePhoneCompatOps() noexcept
         .readThingsboard = &BtLinkModule::onReadThingsboard,
         .setThingsboard = &BtLinkModule::onSetThingsboard,
         .scheduleReset = &BtLinkModule::onScheduleReset,
+        .wifiConfigSupported = &BtLinkModule::onWifiConfigSupported,
+        .scheduleWifiConfig = &BtLinkModule::onScheduleWifiConfig,
     };
 }
 
@@ -524,6 +551,14 @@ bool BtLinkModule::schedulePhoneReset(bool factoryReset, bool reboot, uint32_t n
     return true;
 }
 
+void BtLinkModule::restartIntoWifiConfig() noexcept
+{
+    FW_LOGI(fw::TraceCat::kSys, "Phone requested Wi-Fi config, restarting");
+#if defined(ESP_PLATFORM) && defined(CONFIG_RTK_WIFI_CONFIG_ENABLE)
+    app::requestRadioMode(app::RadioMode::kWifiConfig, app::RadioReason::kPhone);
+#endif
+}
+
 void BtLinkModule::pollPhoneReset(uint32_t nowMs) noexcept
 {
     if (pending_reset_ == PendingReset::kNone) {
@@ -547,6 +582,8 @@ void BtLinkModule::pollPhoneReset(uint32_t nowMs) noexcept
             return;
         }
         FW_LOGI(fw::TraceCat::kStore, "Factory reset done, restarting");
+    } else if (action == PendingReset::kWifiConfig) {
+        restartIntoWifiConfig();
     } else {
         FW_LOGI(fw::TraceCat::kSys, "Phone reboot requested, restarting");
     }
