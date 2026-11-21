@@ -66,7 +66,16 @@ ADR-0015（P2 板级识别）、ADR-0016 Q1（量产需要控制台以外的工�
   工厂分组另需解锁口令（与控制台 `factory unlock` 相同）。
 - `esp_http_server`（IDF 自带，开 `CONFIG_HTTPD_WS_SUPPORT`），1 个监听任务，固定在 core 0，最多 3 个套接字。
   它和 lwIP 在 IDF 内部分配堆，与 Bluedroid 一样记入 G7b 白名单；本工程代码不分配堆。
-- 路由：`GET /` 返回 gzip 压缩的单页；`GET /ws` 升级为 WebSocket；其余 404。可选 DNS 劫持做强制门户（W2 视资源决定）。
+- 路由：`GET /` 返回 gzip 压缩的单页；`GET /ws` 升级为 WebSocket；其余 404（门户开启时未知 GET 改为 302，见下）。
+- 强制门户（W7，Kconfig `RTK_WIFI_CAPTIVE_PORTAL`，默认 y）：DHCP option 114 给 `http://192.168.10.12/`（非 RFC 8908
+  CAPPORT API，仅兼容提示）；UDP 53 非阻塞 DNS 劫持在 `WebModule::poll`（`kLink`）每轮最多 4 包，A 一律回
+  `192.168.10.12` TTL 60 s，AAAA/其他类型回 NOERROR 空应答，EDNS0 OPT 严格校验，超长/畸形包丢弃；系统探测路径与未知 GET
+  302 到 `http://192.168.10.12/`，`GET /` 的 Host 不是本机（`192.168.10.12[:80]`）时 302 规范化，`/favicon.ico` 204。
+  - 2026-11-21 实机 HIL（P2 v1.41，`b15075b`+W7）：Windows、Android、iPhone 连热点均自动弹出门户并显示配置页。
+  - 连上后各系统仍显示“需要登录/验证”：本固件对探测 URL 永远回 302，从不回“成功”应答。这与 SparkFun RTK Everywhere
+    做法相同（`WebServer.ino:1441-1467` 恒 302），保持该行为。“确认后放行”（按客户端 IP 回 204/`Success`，记为 W7b）
+    暂不做：Android 在“已连接无互联网”时可能离开热点或改走移动数据，配置会话又短（退出或空闲 300 s 回蓝牙）；
+    若用户反馈 iPhone 取消登录页后断开或无法在 Safari 中使用，再立卡。
 
 ### 2.4 网页（参考旧样式重写）
 
@@ -125,7 +134,8 @@ ADR-0015（P2 板级识别）、ADR-0016 Q1（量产需要控制台以外的工�
 ## 4 构建与冻结文件
 
 - 打开 Wi-Fi / httpd / WS 需改 `sdkconfig.defaults`（冻结），由 Architect 在 W0/W1 提交并重算 `docs/frozen.sha256`。
-- 新 Kconfig：`RTK_WIFI_CONFIG_ENABLE`（默认 y）、`RTK_WIFI_IDLE_EXIT_S`、`RTK_WIFI_AP_CHANNEL`、`RTK_WIFI_AP_PASSWORD`。
+- 新 Kconfig：`RTK_WIFI_CONFIG_ENABLE`（默认 y）、`RTK_WIFI_IDLE_EXIT_S`、`RTK_WIFI_AP_CHANNEL`、`RTK_WIFI_AP_PASSWORD`、
+  `RTK_WIFI_CAPTIVE_PORTAL`（默认 y，依赖 `RTK_WIFI_CONFIG_ENABLE`；关闭时 DNS/门户代码与格式串零残留）。
   关掉 `RTK_WIFI_CONFIG_ENABLE` 时不链入 Wi-Fi，镜像与现状一致（新增门禁 `G3-idf-wifi-off`）。
 - 分区表不改；OTA 槽已存在但本版不用。
 

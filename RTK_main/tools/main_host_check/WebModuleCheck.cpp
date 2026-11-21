@@ -20,6 +20,8 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "lwip/sockets.h"
+#include "sdkconfig.h"
 
 #include "AppContext.hpp"
 #include "app/SettingsBackend.hpp"
@@ -48,6 +50,7 @@ struct SentFrame {
 struct MockHttpdState {
     httpd_config_t config{};
     std::vector<httpd_uri_t> uris{};
+    httpd_err_handler_func_t err404Handler = nullptr;
     bool running = false;
     bool failStop = false;
     bool failQueueWorkOnce = false;
@@ -59,6 +62,28 @@ struct MockHttpdState {
     httpd_work_fn_t pendingWork = nullptr;
     void *pendingWorkArg = nullptr;
 
+    // DHCP 选项 114 与有序调用序列捕获（F1 / F10）。
+    bool dhcpsRunning = false;
+    int dhcpsOptionCalls = 0;
+    bool dhcpsOptionSetWhileStopped = false;
+    const void *captivePortalUriPtr = nullptr;
+    std::string captivePortalUri{};
+    std::vector<std::string> callOrder{};
+
+    // DNS 套接字替身状态与故障注入（F2 / F3 / F5）。
+    int dnsSocketCalls = 0;
+    int dnsCloseCalls = 0;
+    bool dnsOpen = false;
+    bool dnsNonBlock = false;
+    uint16_t dnsBoundPort = 0U;
+    bool failDnsSocket = false;
+    bool failDnsFcntl = false;
+    bool failDnsBind = false;
+    bool failDnsCloseOnce = false;
+    int failDnsRecvErrno = 0;
+    std::vector<std::vector<uint8_t>> dnsRxQueue{};
+    std::vector<std::vector<uint8_t>> dnsTxSent{};
+
     esp_event_handler_t wifiHandler = nullptr;
     void *wifiHandlerArg = nullptr;
 
@@ -69,7 +94,10 @@ struct MockHttpdState {
     // HTTP 响应捕获。
     std::string lastRespStatus{};
     std::string lastRespType{};
+    std::string lastRespLocation{};
+    std::string lastRespCacheControl{};
     std::string lastRespBody{};
+    int lastRespErrCode = -1;
 
     // 发送帧记录（同步与异步）。
     std::vector<SentFrame> sent{};
@@ -260,16 +288,65 @@ void esp_netif_destroy_default_wifi(void * /*esp_netif*/)
 {
     ++s_httpd.netifDestroyCalls;
 }
+/**
+ * @brief 模拟停止 DHCP 服务并记录有序调用点
+ * @param esp_netif: 网络接口句柄（未使用）
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t esp_netif_dhcps_stop(esp_netif_t * /*esp_netif*/)
 {
+    s_httpd.dhcpsRunning = false;
+    s_httpd.callOrder.emplace_back("dhcps_stop");
     return ESP_OK;
 }
+
+/**
+ * @brief 模拟设置 SoftAP 静态 IP
+ * @param esp_netif: 网络接口句柄（未使用）
+ * @param info: IP 信息（未使用）
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t esp_netif_set_ip_info(esp_netif_t * /*esp_netif*/, const esp_netif_ip_info_t * /*info*/)
 {
     return ESP_OK;
 }
+
+/**
+ * @brief 模拟设置 DHCP 选项并记录选项 114 指针、内容与调用顺序
+ * @param esp_netif: 网络接口句柄（未使用）
+ * @param opt_op: 操作类型
+ * @param opt_id: 选项编号
+ * @param opt_val: 选项值指针
+ * @param opt_len: 选项长度
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
+esp_err_t esp_netif_dhcps_option(esp_netif_t * /*esp_netif*/, esp_netif_dhcp_option_mode_t opt_op,
+                                 esp_netif_dhcp_option_id_t opt_id, void *opt_val, uint32_t opt_len)
+{
+    ++s_httpd.dhcpsOptionCalls;
+    if ((opt_op == ESP_NETIF_OP_SET) && (opt_id == ESP_NETIF_CAPTIVEPORTAL_URI) &&
+        (opt_val != nullptr)) {
+        s_httpd.dhcpsOptionSetWhileStopped = !s_httpd.dhcpsRunning;
+        s_httpd.captivePortalUriPtr = opt_val;
+        s_httpd.captivePortalUri.assign(static_cast<const char *>(opt_val), opt_len);
+        s_httpd.callOrder.emplace_back("dhcps_option_114");
+    }
+    return ESP_OK;
+}
+
+/**
+ * @brief 模拟启动 DHCP 服务并记录有序调用点
+ * @param esp_netif: 网络接口句柄（未使用）
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t esp_netif_dhcps_start(esp_netif_t * /*esp_netif*/)
 {
+    s_httpd.dhcpsRunning = true;
+    s_httpd.callOrder.emplace_back("dhcps_start");
     return ESP_OK;
 }
 
@@ -313,8 +390,14 @@ esp_err_t esp_wifi_set_config(wifi_interface_t /*ifx*/, wifi_config_t * /*conf*/
 {
     return ESP_OK;
 }
+/**
+ * @brief 模拟启动 Wi-Fi SoftAP 发射并记录启动顺序
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t esp_wifi_start(void)
 {
+    s_httpd.callOrder.emplace_back("wifi_start");
     return ESP_OK;
 }
 esp_err_t esp_wifi_stop(void)
@@ -323,10 +406,18 @@ esp_err_t esp_wifi_stop(void)
     return ESP_OK;
 }
 
+/**
+ * @brief 模拟启动 httpd 并记录调用顺序
+ * @param[out] handle: 返回替身句柄
+ * @param config: httpd 配置
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t httpd_start(httpd_handle_t *handle, const httpd_config_t *config)
 {
     s_httpd.config = *config;
     s_httpd.running = true;
+    s_httpd.callOrder.emplace_back("httpd_start");
     *handle = &s_httpd;
     return ESP_OK;
 }
@@ -337,6 +428,8 @@ esp_err_t httpd_stop(httpd_handle_t /*handle*/)
         return ESP_FAIL;
     }
     s_httpd.running = false;
+    s_httpd.uris.clear();
+    s_httpd.err404Handler = nullptr;
     // 严格复现 IDF v6.1 httpd_main.c:612-618：global_user_ctx_free_fn 为空则断言失败（真实硬件会 free 静态对象）。
     if (s_httpd.config.global_user_ctx != nullptr) {
         assert(s_httpd.config.global_user_ctx_free_fn != nullptr);
@@ -347,39 +440,163 @@ esp_err_t httpd_stop(httpd_handle_t /*handle*/)
     return ESP_OK;
 }
 
+/**
+ * @brief 模拟注册 URI 处理器并断言未超出 max_uri_handlers
+ * @param handle: httpd 句柄（未使用）
+ * @param uri_handler: 待注册的 URI 配置
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t httpd_register_uri_handler(httpd_handle_t /*handle*/, const httpd_uri_t *uri_handler)
 {
+    assert(s_httpd.uris.size() < s_httpd.config.max_uri_handlers);
     s_httpd.uris.push_back(*uri_handler);
+    s_httpd.callOrder.emplace_back("httpd_register_uri");
     return ESP_OK;
 }
 
+/**
+ * @brief 模拟注册 HTTP 错误处理器
+ * @param handle: httpd 句柄（未使用）
+ * @param error: HTTP 错误码
+ * @param handler_fn: 处理回调
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
+esp_err_t httpd_register_err_handler(httpd_handle_t /*handle*/, httpd_err_code_t error,
+                                     httpd_err_handler_func_t handler_fn)
+{
+    if (error == HTTPD_404_NOT_FOUND) {
+        s_httpd.err404Handler = handler_fn;
+        s_httpd.callOrder.emplace_back("httpd_register_err");
+    }
+    return ESP_OK;
+}
+
+/**
+ * @brief 返回 httpd 全局上下文指针
+ * @param handle: httpd 句柄（未使用）
+ * @retval 全局上下文指针
+ * @note 主机测试桩。
+ */
 void *httpd_get_global_user_ctx(httpd_handle_t /*handle*/)
 {
     return s_httpd.config.global_user_ctx;
 }
 
+/**
+ * @brief 取得请求对应的套接字描述符
+ * @param r: HTTP 请求对象
+ * @retval 套接字描述符
+ * @note 主机测试桩。
+ */
 int httpd_req_to_sockfd(httpd_req_t *r)
 {
     return r->sockfd;
 }
 
+/**
+ * @brief 读取请求头字段长度（当前支持 Host）
+ * @param r: HTTP 请求对象
+ * @param field: 请求头字段名
+ * @retval 字段值字节长度；未找到返回 0
+ * @note 主机测试桩。
+ */
+size_t httpd_req_get_hdr_value_len(httpd_req_t *r, const char *field)
+{
+    if ((r == nullptr) || (field == nullptr)) {
+        return 0U;
+    }
+    if ((std::strcmp(field, "Host") == 0) && (r->host != nullptr)) {
+        return std::strlen(r->host);
+    }
+    return 0U;
+}
+
+/**
+ * @brief 读取请求头字段值字符串（当前支持 Host）
+ * @param r: HTTP 请求对象
+ * @param field: 请求头字段名
+ * @param[out] val: 输出缓冲
+ * @param val_size: 输出缓冲容量
+ * @retval ESP_OK 读取成功
+ * @retval ESP_ERR_NOT_FOUND 字段不存在
+ * @retval ESP_ERR_INVALID_ARG 参数非法
+ * @retval ESP_FAIL 缓冲不足发生截断
+ * @note 主机测试桩。
+ */
+esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *r, const char *field, char *val, size_t val_size)
+{
+    if ((r == nullptr) || (field == nullptr) || (val == nullptr) || (val_size == 0U)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((std::strcmp(field, "Host") != 0) || (r->host == nullptr)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    const size_t len = std::strlen(r->host);
+    if ((len + 1U) > val_size) {
+        std::memcpy(val, r->host, val_size - 1U);
+        val[val_size - 1U] = '\0';
+        return ESP_FAIL;
+    }
+    std::memcpy(val, r->host, len + 1U);
+    return ESP_OK;
+}
+
+/**
+ * @brief 记录 HTTP 响应状态行
+ * @param r: HTTP 请求对象（未使用）
+ * @param status: 状态字符串
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t httpd_resp_set_status(httpd_req_t * /*r*/, const char *status)
 {
     s_httpd.lastRespStatus = status;
     return ESP_OK;
 }
 
+/**
+ * @brief 记录 HTTP 响应 Content-Type
+ * @param r: HTTP 请求对象（未使用）
+ * @param type: MIME 类型字符串
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t httpd_resp_set_type(httpd_req_t * /*r*/, const char *type)
 {
     s_httpd.lastRespType = type;
     return ESP_OK;
 }
 
-esp_err_t httpd_resp_set_hdr(httpd_req_t * /*r*/, const char * /*field*/, const char * /*value*/)
+/**
+ * @brief 记录 HTTP 响应扩展头（Location / Cache-Control）
+ * @param r: HTTP 请求对象（未使用）
+ * @param field: 头字段名
+ * @param value: 头字段值
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
+esp_err_t httpd_resp_set_hdr(httpd_req_t * /*r*/, const char *field, const char *value)
 {
+    if ((field != nullptr) && (value != nullptr)) {
+        if (std::strcmp(field, "Location") == 0) {
+            s_httpd.lastRespLocation = value;
+        } else if (std::strcmp(field, "Cache-Control") == 0) {
+            s_httpd.lastRespCacheControl = value;
+        }
+    }
     return ESP_OK;
 }
 
+/**
+ * @brief 记录 HTTP 响应体
+ * @param r: HTTP 请求对象（未使用）
+ * @param buf: 响应体指针
+ * @param buf_len: 响应体长度
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
 esp_err_t httpd_resp_send(httpd_req_t * /*r*/, const char *buf, ssize_t buf_len)
 {
     if ((buf != nullptr) && (buf_len > 0)) {
@@ -388,6 +605,180 @@ esp_err_t httpd_resp_send(httpd_req_t * /*r*/, const char *buf, ssize_t buf_len)
         s_httpd.lastRespBody.clear();
     }
     return ESP_OK;
+}
+
+/**
+ * @brief 记录 HTTP 错误响应码与消息
+ * @param req: HTTP 请求对象（未使用）
+ * @param error: HTTP 错误码
+ * @param msg: 错误文本
+ * @retval ESP_OK 始终成功
+ * @note 主机测试桩。
+ */
+esp_err_t httpd_resp_send_err(httpd_req_t * /*req*/, httpd_err_code_t error, const char *msg)
+{
+    s_httpd.lastRespErrCode = static_cast<int>(error);
+    s_httpd.lastRespBody = (msg != nullptr) ? msg : "";
+    return ESP_OK;
+}
+
+/**
+ * @brief 模拟创建 lwIP UDP 套接字（支持故障注入）
+ * @param domain: 地址族（未使用）
+ * @param type: 套接字类型（未使用）
+ * @param protocol: 协议号（未使用）
+ * @retval 42 创建成功
+ * @retval -1 注入失败（errno=ENOMEM）
+ * @note 主机测试桩。
+ */
+int lwip_socket(int /*domain*/, int /*type*/, int /*protocol*/)
+{
+    ++s_httpd.dnsSocketCalls;
+    if (s_httpd.failDnsSocket) {
+        errno = ENOMEM;
+        return -1;
+    }
+    s_httpd.dnsOpen = true;
+    return 42;
+}
+
+/**
+ * @brief 模拟设置 lwIP 套接字选项
+ * @param s: 套接字描述符（未使用）
+ * @param level: 选项层级（未使用）
+ * @param optname: 选项名（未使用）
+ * @param optval: 选项值（未使用）
+ * @param optlen: 选项长度（未使用）
+ * @retval 0 始终成功
+ * @note 主机测试桩。
+ */
+int lwip_setsockopt(int /*s*/, int /*level*/, int /*optname*/, const void * /*optval*/,
+                    socklen_t /*optlen*/)
+{
+    return 0;
+}
+
+/**
+ * @brief 模拟设置 lwIP 套接字非阻塞标志（支持故障注入）
+ * @param s: 套接字描述符（未使用）
+ * @param cmd: fcntl 命令
+ * @param val: 标志值
+ * @retval 0 成功
+ * @retval -1 注入失败（errno=EIO）
+ * @note 主机测试桩。
+ */
+int lwip_fcntl(int /*s*/, int cmd, int val)
+{
+    if (s_httpd.failDnsFcntl) {
+        errno = EIO;
+        return -1;
+    }
+    if (cmd == F_GETFL) {
+        return 0;
+    }
+    if ((cmd == F_SETFL) && ((val & O_NONBLOCK) != 0)) {
+        s_httpd.dnsNonBlock = true;
+    }
+    return 0;
+}
+
+/**
+ * @brief 模拟绑定 lwIP UDP 端口并记录有序调用点（支持故障注入）
+ * @param s: 套接字描述符（未使用）
+ * @param name: 绑定地址
+ * @param namelen: 地址长度（未使用）
+ * @retval 0 成功
+ * @retval -1 注入失败（errno=EADDRINUSE）
+ * @note 主机测试桩。
+ */
+int lwip_bind(int /*s*/, const struct sockaddr *name, socklen_t /*namelen*/)
+{
+    if (s_httpd.failDnsBind) {
+        errno = EADDRINUSE;
+        return -1;
+    }
+    const auto *in = reinterpret_cast<const struct sockaddr_in *>(name);
+    s_httpd.dnsBoundPort = ntohs(in->sin_port);
+    s_httpd.callOrder.emplace_back("dns_bind");
+    return 0;
+}
+
+/**
+ * @brief 模拟非阻塞 lwip_recvmsg（超长时按 lwIP 行为置位 MSG_TRUNC，支持接收错误注入）
+ * @param s: 套接字描述符（未使用）
+ * @param[inout] message: 消息头（接收对端地址、数据与 msg_flags）
+ * @param flags: 接收标志（未使用）
+ * @retval >=0 实际拷贝字节数
+ * @retval -1 无数据（EAGAIN）或注入错误
+ * @note 主机测试桩。
+ */
+ssize_t lwip_recvmsg(int /*s*/, struct msghdr *message, int /*flags*/)
+{
+    if (s_httpd.failDnsRecvErrno != 0) {
+        errno = s_httpd.failDnsRecvErrno;
+        s_httpd.failDnsRecvErrno = 0;
+        return -1;
+    }
+    if (s_httpd.dnsRxQueue.empty()) {
+        errno = EAGAIN;
+        return -1;
+    }
+    auto pkt = std::move(s_httpd.dnsRxQueue.front());
+    s_httpd.dnsRxQueue.erase(s_httpd.dnsRxQueue.begin());
+    message->msg_flags = 0;
+    const size_t cap = message->msg_iov[0].iov_len;
+    const size_t n = std::min(cap, pkt.size());
+    std::memcpy(message->msg_iov[0].iov_base, pkt.data(), n);
+    if (pkt.size() > cap) {
+        message->msg_flags |= MSG_TRUNC;
+    }
+    if ((message->msg_name != nullptr) && (message->msg_namelen >= sizeof(struct sockaddr_in))) {
+        auto *in = reinterpret_cast<struct sockaddr_in *>(message->msg_name);
+        *in = {};
+        in->sin_family = AF_INET;
+        in->sin_port = htons(53000U);
+        in->sin_addr.s_addr = htonl(0xC0A80A02U);
+        message->msg_namelen = sizeof(struct sockaddr_in);
+    }
+    return static_cast<ssize_t>(n);
+}
+
+/**
+ * @brief 模拟发送 UDP 应答并记录发送载荷
+ * @param s: 套接字描述符（未使用）
+ * @param dataptr: 发送数据指针
+ * @param size: 发送字节数
+ * @param flags: 发送标志（未使用）
+ * @param to: 目标地址（未使用）
+ * @param tolen: 目标地址长度（未使用）
+ * @retval 实际发送字节数
+ * @note 主机测试桩。
+ */
+ssize_t lwip_sendto(int /*s*/, const void *dataptr, size_t size, int /*flags*/,
+                    const struct sockaddr * /*to*/, socklen_t /*tolen*/)
+{
+    const auto *bytes = static_cast<const uint8_t *>(dataptr);
+    s_httpd.dnsTxSent.emplace_back(bytes, bytes + size);
+    return static_cast<ssize_t>(size);
+}
+
+/**
+ * @brief 模拟关闭 lwIP 套接字（支持单次失败注入）
+ * @param s: 套接字描述符（未使用）
+ * @retval 0 关闭成功
+ * @retval -1 注入失败（errno=EIO）
+ * @note 主机测试桩。
+ */
+int lwip_close(int /*s*/)
+{
+    ++s_httpd.dnsCloseCalls;
+    if (s_httpd.failDnsCloseOnce) {
+        s_httpd.failDnsCloseOnce = false;
+        errno = EIO;
+        return -1;
+    }
+    s_httpd.dnsOpen = false;
+    return 0;
 }
 
 esp_err_t httpd_ws_recv_frame(httpd_req_t * /*req*/, httpd_ws_frame_t *pkt, size_t max_len)
@@ -527,6 +918,7 @@ void testHandshakeFaviconAndStopLifecycle()
     const auto *root = findUri("/");
     assert(root != nullptr);
     httpd_req_t rootReq{};
+    rootReq.host = "192.168.10.12";
     assert(root->handler(&rootReq) == ESP_OK);
     assert(s_httpd.lastRespBody == "<gz-ui>");
 
@@ -791,6 +1183,235 @@ void testCapsUpdates()
     s_ctx.web.unbindStorage();
 }
 
+/**
+ * @brief 6. 验证强制门户：启动顺序（F1）、DHCP 114（F10）、探测 302、404（F7）、Host（F6）、DNS 降级/截断/重连（F2/F3/F5）与 Kconfig 开关
+ * @note 分别在 CONFIG_RTK_WIFI_CAPTIVE_PORTAL=1 与 =0 两种编译下验证对应行为。
+ */
+void testCaptivePortal()
+{
+    resetHarness();
+
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    // 1. F1/F10：验证有序调用——dhcps_stop < option_114 < dhcps_start < httpd_start < 全部注册 < dns_bind < wifi_start。
+    const auto findCallIdx = [](std::string_view tag, bool last) -> size_t {
+        size_t found = SIZE_MAX;
+        for (size_t i = 0U; i < s_httpd.callOrder.size(); ++i) {
+            if (s_httpd.callOrder[i] == tag) {
+                found = i;
+                if (!last) {
+                    return found;
+                }
+            }
+        }
+        return found;
+    };
+    const size_t idxStop = findCallIdx("dhcps_stop", false);
+    const size_t idxOpt114 = findCallIdx("dhcps_option_114", false);
+    const size_t idxStart = findCallIdx("dhcps_start", false);
+    const size_t idxHttpd = findCallIdx("httpd_start", false);
+    const size_t idxLastUri = findCallIdx("httpd_register_uri", true);
+    const size_t idxErr404 = findCallIdx("httpd_register_err", false);
+    const size_t idxDnsBind = findCallIdx("dns_bind", false);
+    const size_t idxWifiStart = findCallIdx("wifi_start", false);
+    assert((idxStop < idxOpt114) && (idxOpt114 < idxStart) && (idxStart < idxHttpd));
+    assert((idxHttpd < idxLastUri) && (idxLastUri < idxErr404) && (idxErr404 < idxDnsBind));
+    assert((idxDnsBind < idxWifiStart) && (idxWifiStart == (s_httpd.callOrder.size() - 1U)));
+
+    // 读回静态 URI 指针，确认 init 返回后仍指向 NUL 结尾的 "http://192.168.10.12/"。
+    assert(s_httpd.dhcpsOptionCalls == 1);
+    assert(s_httpd.dhcpsOptionSetWhileStopped);
+    assert(s_httpd.captivePortalUri == "http://192.168.10.12/");
+    assert(s_httpd.captivePortalUriPtr != nullptr);
+    assert(std::string_view{static_cast<const char *>(s_httpd.captivePortalUriPtr)} ==
+           "http://192.168.10.12/");
+
+    // 2. max_uri_handlers 留 2 个余量（3 基础 + 7 探测 + 2 = 12），且 404 处理器已注册。
+    assert(s_httpd.uris.size() == 10U);
+    assert(s_httpd.config.max_uri_handlers == 12U);
+    assert(s_httpd.err404Handler != nullptr);
+
+    // 3. 全部 7 个系统探测路径均回 302 Found + Location + Cache-Control: no-store + 空体。
+    const std::array<const char *, 7U> probePaths = {
+        "/generate_204",
+        "/gen_204",
+        "/hotspot-detect.html",
+        "/library/test/success.html",
+        "/connecttest.txt",
+        "/ncsi.txt",
+        "/redirect",
+    };
+    for (const char *path : probePaths) {
+        const auto *u = findUri(path);
+        assert(u != nullptr);
+        s_httpd.lastRespStatus.clear();
+        s_httpd.lastRespLocation.clear();
+        s_httpd.lastRespCacheControl.clear();
+        s_httpd.lastRespBody = "dirty";
+        httpd_req_t req{};
+        req.method = HTTP_GET;
+        req.uri = path;
+        assert(u->handler(&req) == ESP_OK);
+        assert(s_httpd.lastRespStatus == "302 Found");
+        assert(s_httpd.lastRespLocation == "http://192.168.10.12/");
+        assert(s_httpd.lastRespCacheControl == "no-store");
+        assert(s_httpd.lastRespBody.empty());
+    }
+
+    // 4. F7：404 错误处理器：未匹配 GET 302 到根页；非 GET 发 404 并返回 ESP_FAIL 保持关闭连接语义。
+    {
+        s_httpd.lastRespStatus.clear();
+        s_httpd.lastRespLocation.clear();
+        s_httpd.lastRespCacheControl.clear();
+        s_httpd.lastRespBody = "dirty";
+        httpd_req_t getReq{};
+        getReq.method = HTTP_GET;
+        getReq.uri = "/anything";
+        assert(s_httpd.err404Handler(&getReq, HTTPD_404_NOT_FOUND) == ESP_OK);
+        assert(s_httpd.lastRespStatus == "302 Found");
+        assert(s_httpd.lastRespLocation == "http://192.168.10.12/");
+        assert(s_httpd.lastRespCacheControl == "no-store");
+        assert(s_httpd.lastRespBody.empty());
+
+        s_httpd.lastRespErrCode = -1;
+        httpd_req_t postReq{};
+        postReq.method = HTTP_POST;
+        postReq.uri = "/anything";
+        assert(s_httpd.err404Handler(&postReq, HTTPD_404_NOT_FOUND) == ESP_FAIL);
+        assert(s_httpd.lastRespErrCode == static_cast<int>(HTTPD_404_NOT_FOUND));
+    }
+
+    // 5. F6：GET / Host 校验：缺失或非规范 Host 均 302；192.168.10.12 与 192.168.10.12:80 正常返回页面。
+    const auto *root = findUri("/");
+    assert(root != nullptr);
+    for (const char *badHost : std::array<const char *, 4U>{
+             nullptr, "captive.apple.com", "192.168.10.13", "192.168.10.12:8080"}) {
+        s_httpd.lastRespStatus.clear();
+        s_httpd.lastRespLocation.clear();
+        s_httpd.lastRespCacheControl.clear();
+        s_httpd.lastRespBody = "dirty";
+        httpd_req_t req{};
+        req.method = HTTP_GET;
+        req.uri = "/";
+        req.host = badHost;
+        assert(root->handler(&req) == ESP_OK);
+        assert(s_httpd.lastRespStatus == "302 Found");
+        assert(s_httpd.lastRespLocation == "http://192.168.10.12/");
+        assert(s_httpd.lastRespCacheControl == "no-store");
+        assert(s_httpd.lastRespBody.empty());
+    }
+    for (const char *goodHost : std::array<const char *, 2U>{"192.168.10.12", "192.168.10.12:80"}) {
+        s_httpd.lastRespBody.clear();
+        httpd_req_t goodReq{};
+        goodReq.method = HTTP_GET;
+        goodReq.uri = "/";
+        goodReq.host = goodHost;
+        assert(root->handler(&goodReq) == ESP_OK);
+        assert(s_httpd.lastRespBody == "<gz-ui>");
+    }
+
+    // 6. F3：DNS 套接字：UDP 53 非阻塞，每轮最多 4 包；512 B 合法 EDNS0 接受，513 B（MSG_TRUNC）丢弃且计入 4 包额度。
+    assert(s_httpd.dnsSocketCalls == 1 && s_httpd.dnsOpen && s_httpd.dnsNonBlock &&
+           s_httpd.dnsBoundPort == 53U);
+    const std::vector<uint8_t> aQ = {
+        0x11U, 0x22U, 0x01U, 0x00U, 0x00U, 0x01U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x01U, 'a',   0x03U, 'c',   'o',   'm',   0x00U, 0x00U, 0x01U, 0x00U, 0x01U,
+    };
+    std::vector<uint8_t> aaaaQ = aQ;
+    aaaaQ[20] = 28U; // AAAA
+    // 恰好 512 B 的合法 EDNS0 查询（23 B 头+问句 + 11 B OPT 头 + 478 B OPT RDATA = 512 B），应答为 23+16+11=50 B。
+    std::vector<uint8_t> pkt512 = aQ;
+    pkt512[11] = 1U;
+    pkt512.insert(pkt512.end(),
+                  {0U, 0U, 41U, 0x02U, 0x00U, 0U, 0U, 0U, 0U, 0x01U, 0xDEU}); // RDLENGTH=478
+    pkt512.insert(pkt512.end(), 478U, 0x5AU);
+    assert(pkt512.size() == 512U);
+    // 513 B 超长报文：lwip_recvmsg 置 MSG_TRUNC，接收层丢弃但仍消耗 1 个轮询包额度。
+    std::vector<uint8_t> pkt513 = pkt512;
+    pkt513.push_back(0xFFU);
+    assert(pkt513.size() == 513U);
+
+    s_httpd.dnsRxQueue = {aQ, aaaaQ, pkt513, pkt512, aQ};
+    // 第 1 轮 poll 消费前 4 包（发 3 条应答：aQ、aaaaQ、pkt512；pkt513 截断丢弃），打满 4 包返回 true。
+    assert(s_ctx.web.poll(s_nowMs));
+    assert(s_httpd.dnsRxQueue.size() == 1U);
+    assert(s_httpd.dnsTxSent.size() == 3U);
+    assert(s_httpd.dnsTxSent[0].size() == (aQ.size() + 16U));
+    assert(s_httpd.dnsTxSent[1].size() == aaaaQ.size());
+    assert(s_httpd.dnsTxSent[2].size() == (aQ.size() + 16U + 11U));
+    // 第 2 轮 poll 消费剩余第 5 包后返回 false。
+    assert(!s_ctx.web.poll(s_nowMs));
+    assert(s_httpd.dnsRxQueue.empty());
+    assert(s_httpd.dnsTxSent.size() == 4U);
+
+    // 7. F5：接收非 EAGAIN 错误关闭 DNS 套接字，1000 ms 内不重试，满 1000 ms 自动重开并恢复服务。
+    s_httpd.failDnsRecvErrno = EIO;
+    assert(!s_ctx.web.poll(s_nowMs));
+    assert(!s_httpd.dnsOpen && (s_httpd.dnsCloseCalls == 1));
+    const int callsAfterClose = s_httpd.dnsSocketCalls;
+    s_nowMs += 999U;
+    assert(!s_ctx.web.poll(s_nowMs));
+    assert(!s_httpd.dnsOpen && (s_httpd.dnsSocketCalls == callsAfterClose));
+    s_nowMs += 1U;
+    assert(!s_ctx.web.poll(s_nowMs));
+    assert(s_httpd.dnsOpen && (s_httpd.dnsSocketCalls == (callsAfterClose + 1)));
+
+    // 8. F5：httpd_stop 失败时仍关闭 DNS 套接字；lwip_close 失败一次保留状态，再次停机关闭成功并可重新 init。
+    s_httpd.failStop = true;
+    s_httpd.failDnsCloseOnce = true;
+    s_ctx.web.stopBoot();
+    assert(s_httpd.dnsOpen); // close 失败保留句柄状态。
+    s_ctx.web.stopBoot();
+    assert(!s_httpd.dnsOpen); // 即使 httpd_stop 仍失败，DNS 套接字已关闭。
+    s_httpd.failStop = false;
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+
+    // 重新 bindStorage + init 验证关停后可再次完整启动。
+    assert(fw::isOk(s_ctx.web.bindStorage(s_webFrames)));
+    assert(fw::isOk(s_ctx.web.init()));
+    assert(s_httpd.dnsOpen);
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+
+    // 9. F2：startDns 在 socket / fcntl / bind 任一环节失败时仅降级 DNS，不拆掉 Wi-Fi/httpd/302/option 114。
+    for (int mode = 0; mode < 3; ++mode) {
+        s_httpd = MockHttpdState{};
+        s_httpd.failDnsSocket = (mode == 0);
+        s_httpd.failDnsFcntl = (mode == 1);
+        s_httpd.failDnsBind = (mode == 2);
+        assert(fw::isOk(s_ctx.web.bindStorage(s_webFrames)));
+        assert(fw::isOk(s_ctx.web.init()));
+        assert(!s_httpd.dnsOpen);
+        assert(s_httpd.running && (s_httpd.dhcpsOptionCalls == 1) &&
+               (findUri("/generate_204") != nullptr));
+        s_ctx.web.stopBoot();
+        s_ctx.web.unbindStorage();
+    }
+#else
+    // Kconfig 关闭门户：不设 option 114、不开 DNS、不注册探测路径与 404 处理器（未知路径回默认 404）。
+    assert(s_httpd.dhcpsOptionCalls == 0);
+    assert((s_httpd.dnsSocketCalls == 0) && !s_httpd.dnsOpen);
+    assert(s_httpd.uris.size() == 3U);
+    assert(s_httpd.config.max_uri_handlers == 5U);
+    assert(s_httpd.err404Handler == nullptr);
+    assert(findUri("/generate_204") == nullptr);
+
+    // 关闭门户时 GET / 不做 Host 重定向。
+    const auto *root = findUri("/");
+    assert(root != nullptr);
+    httpd_req_t req{};
+    req.method = HTTP_GET;
+    req.uri = "/";
+    req.host = nullptr;
+    assert(root->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody == "<gz-ui>");
+
+    s_ctx.web.stopBoot();
+    assert(s_httpd.dnsCloseCalls == 0);
+    s_ctx.web.unbindStorage();
+#endif
+}
+
 } // namespace
 
 /**
@@ -805,6 +1426,7 @@ int main()
     testSessionGenAndBackpressure();
     testIdleAbortAndExitGgaGate();
     testCapsUpdates();
+    testCaptivePortal();
     std::puts("PASS web_module_check");
     return 0;
 }

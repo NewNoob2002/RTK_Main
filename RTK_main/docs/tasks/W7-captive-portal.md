@@ -1,7 +1,7 @@
 # W7：Wi-Fi 配置模式强制门户（Captive Portal）
 
 - 依据：ADR-0017 §2.2–§2.6；用户 2026-11-20 要求：手机/电脑连上 `P2-<SN>` 热点后自动弹出配置页。
-- 前置：W2 Revision A 合入 main 并通过 HIL（本卡基线 = 届时 main，Architect 派发时填写 commit）。
+- 基线：main `b15075b`（含 W2/W8、SV3、手机 0x28 Wi-Fi 入口），2026-11-21 派发。
 - 分支 `feat/w7-captive-portal`，工作树 `RTK_Main-w7`，构建前缀 `builds/w7-*`。
 - 执行者不提交、不烧录、不连串口；HIL 由 Architect 做。
 - 本卡取代 W2 卡 §1.3 “不做 DNS 劫持”的约定；ADR-0017 由 Architect 在合入时补记。
@@ -34,6 +34,14 @@
 - HTTP：每个探测路径 302 + Location；未知路径 302；`/`、`/ws`、`/favicon.ico` 行为不变；错误 Host 302；
 - Kconfig 关闭门户时不注册 DNS、不设 option 114、未知路径回 404；`G3-idf-wifi-off` 仍不链入 Wi-Fi；
 - 门禁全 PASS（G1 不涉及冻结文件；若必须改冻结文件，先停下在报告说明）。
+
+## 2.1 执行者须知
+
+- 环境：`unset IDF_PATH; . $HOME/esp/esp-idf/export.sh`；门禁 `bash tools/ci/run_gates.sh --prefix w7`，须 40+ 项全 PASS。
+- 现状：`main/modules/web/WebServer.cpp:575` `cfg.max_uri_handlers = kMaxUriHandlers`，当前注册 `/`、`/favicon.ico`、`/ws`；
+  `main/web/ui/app.js:667` 已用 `location.host`，确认即可，勿重写页面。
+- 新增函数须带中文 Doxygen 注释（G6 doc_check）；不新增依赖；不改冻结文件（`docs/frozen.sha256`）。
+- 无法实现或需偏离本卡时停下，写入报告“偏离”节，不要自行扩大范围。
 
 ## 3 交付
 

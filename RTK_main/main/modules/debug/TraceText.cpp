@@ -157,13 +157,24 @@ constexpr std::array<TraceField, 2U> kWebIdleAbort = {
     {{"sta", TraceValue::kDecA}, {"seq", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 2U> kWebReboot = {
     {{"kind", TraceValue::kDecA}, {"reason", TraceValue::kDecB}}};
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+constexpr std::array<TraceField, 2U> kWebDnsErr = {
+    {{"op", TraceValue::kDecA}, {"err", TraceValue::kDecB}}};
+#endif
 
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
+constexpr size_t kBaseTraceCount = 57U;
 #if RTK_GNSS_ENABLED
-constexpr std::array<TraceText, 71U> kTable = {{
+constexpr size_t kGnssTraceCount = 14U;
 #else
-constexpr std::array<TraceText, 57U> kTable = {{
+constexpr size_t kGnssTraceCount = 0U;
 #endif
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+constexpr size_t kPortalTraceCount = 1U;
+#else
+constexpr size_t kPortalTraceCount = 0U;
+#endif
+constexpr std::array<TraceText, kBaseTraceCount + kGnssTraceCount + kPortalTraceCount> kTable = {{
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen),
      "session {h} opened as {role} ({why})", std::span<const TraceField>(kLinkOpen)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kClose),
@@ -321,6 +332,10 @@ constexpr std::array<TraceText, 57U> kTable = {{
      "<web> idle reboot aborted sta={sta} seq={seq}", std::span<const TraceField>(kWebIdleAbort)},
     {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kRebootCommit),
      "<web> reboot commit kind={kind} reason={reason}", std::span<const TraceField>(kWebReboot)},
+#if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kDnsErr),
+     "<web> dns socket error op={op} errno={err}", std::span<const TraceField>(kWebDnsErr)},
+#endif
 }};
 
 // 类别短名必须大写（ADR-0009 §2.11）；顺序与 fw::TraceCat 枚举一致。

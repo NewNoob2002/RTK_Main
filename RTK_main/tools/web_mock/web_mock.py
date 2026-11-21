@@ -4,6 +4,7 @@
 import argparse
 import base64
 import hashlib
+import http.client
 import http.server
 import json
 import pathlib
@@ -35,6 +36,15 @@ CONST_KEYS = {
     "gnss.const.glo",
     "gnss.const.gal",
 }
+CAPTIVE_PROBE_PATHS = (
+    "/generate_204",
+    "/gen_204",
+    "/hotspot-detect.html",
+    "/library/test/success.html",
+    "/connecttest.txt",
+    "/ncsi.txt",
+    "/redirect",
+)
 
 
 class MockState:
@@ -199,14 +209,36 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     ui_dir: pathlib.Path
     state: MockState
+    canonical_host: str = ""
 
     def log_message(self, fmt: str, *args) -> None:
         pass
+
+    def _portal_location(self) -> str:
+        if self.canonical_host:
+            return f"http://{self.canonical_host}/"
+        host, port = self.server.server_address[:2]
+        return f"http://{host}:{port}/"
+
+    def _send_captive_redirect(self) -> None:
+        self.send_response(302, "Found")
+        self.send_header("Location", self._portal_location())
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/ws":
             self._handle_ws()
+            return
+        if path == "/favicon.ico":
+            self.send_response(204, "No Content")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path in CAPTIVE_PROBE_PATHS:
+            self._send_captive_redirect()
             return
 
         routes = {
@@ -216,8 +248,14 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
             "/logo.png": ("logo.png", "image/png"),
         }
         if path not in routes:
-            self.send_error(404, "Not Found")
+            self._send_captive_redirect()
             return
+
+        if path == "/" and self.canonical_host:
+            req_host = (self.headers.get("Host") or "").strip()
+            if req_host != self.canonical_host:
+                self._send_captive_redirect()
+                return
 
         fname, ctype = routes[path]
         fpath = self.ui_dir / fname
@@ -729,8 +767,20 @@ class _WsClient:
         self.sock.close()
 
 
+def resolve_canonical_host(bind_host: str, actual_port: int, canonical_host: str | None) -> str:
+    """根据绑定地址、实际端口与显式参数确定强制门户规范 Host。"""
+    if canonical_host:
+        return canonical_host
+    host = "127.0.0.1" if bind_host in ("", "0.0.0.0") else bind_host
+    return f"{host}:{actual_port}"
+
+
 def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
     """Run automated protocol + HTTP self-tests."""
+    # 验证 0.0.0.0 回退与显式 --canonical-host 逻辑（与 CLI 共用同一函数）。
+    assert resolve_canonical_host("0.0.0.0", 8080, None) == "127.0.0.1:8080"
+    assert resolve_canonical_host("0.0.0.0", 8080, "192.168.10.12") == "192.168.10.12"
+
     state = MockState(unlock_token="123456", caps_cm680=caps_cm680)
 
     class Handler(MockHandler):
@@ -741,20 +791,40 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = srv.server_address[1]
+    Handler.canonical_host = resolve_canonical_host("127.0.0.1", port, None)
     th = threading.Thread(target=srv.serve_forever, daemon=True)
     th.start()
 
     try:
-        # 1. HTTP static files
+        # 1. HTTP 静态资源与强制门户 302 重定向校验
         for path, code in [("/", 200), ("/app.css", 200), ("/app.js", 200), ("/logo.png", 200)]:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as resp:
                 assert resp.status == code
                 assert len(resp.read()) > 0
+
+        expected_loc = f"http://{Handler.canonical_host}/"
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
         try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/nonexistent")
-            raise AssertionError("Expected 404")
-        except urllib.error.HTTPError as e:
-            assert e.code == 404
+            conn.request("GET", "/favicon.ico", headers={"Host": Handler.canonical_host})
+            resp = conn.getresponse()
+            assert resp.status == 204 and resp.read() == b""
+
+            for probe_path in (*CAPTIVE_PROBE_PATHS, "/nonexistent"):
+                conn.request("GET", probe_path, headers={"Host": "connectivitycheck.gstatic.com"})
+                resp = conn.getresponse()
+                body = resp.read()
+                assert resp.status == 302, f"{probe_path}: got {resp.status}"
+                assert resp.getheader("Location") == expected_loc, f"{probe_path}: bad Location"
+                assert resp.getheader("Cache-Control") == "no-store", f"{probe_path}: bad Cache-Control"
+                assert body == b"", f"{probe_path}: non-empty body"
+
+            # GET / 携带非规范 Host 时应 302 重定向到规范根页
+            conn.request("GET", "/", headers={"Host": "captive.apple.com"})
+            resp = conn.getresponse()
+            assert resp.status == 302 and resp.getheader("Location") == expected_loc
+            assert resp.getheader("Cache-Control") == "no-store" and resp.read() == b""
+        finally:
+            conn.close()
 
         # 2. Initial hello / config / status
         c = _WsClient("127.0.0.1", port)
@@ -964,6 +1034,11 @@ def main() -> int:
     )
     parser.add_argument("--selftest", action="store_true", help="Run self-test and exit")
     parser.add_argument("--caps-cm680", action="store_true", help="Use verified CM680 capabilities")
+    parser.add_argument(
+        "--canonical-host",
+        default=None,
+        help="强制门户 302 目标规范 Host（默认使用绑定地址与实际端口，0.0.0.0 回退为 127.0.0.1）",
+    )
     args = parser.parse_args()
 
     ui_dir = repo_root / "main" / "web" / "ui"
@@ -983,7 +1058,9 @@ def main() -> int:
     Handler.state = state
 
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Serving {ui_dir} at http://{args.host}:{args.port}/ (ws://.../ws)")
+    actual_port = srv.server_address[1]
+    Handler.canonical_host = resolve_canonical_host(args.host, actual_port, args.canonical_host)
+    print(f"Serving {ui_dir} at http://{args.host}:{actual_port}/ (ws://.../ws)")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

@@ -13,7 +13,7 @@
 2. **空闲回落**：`RTK_WIFI_IDLE_EXIT_S`（默认 300，60–3600）：无终端连上满该时长、或最后一个终端断开满该时长 →
    推 `bye{reason:"idle"}` 后复用 W1 的请求接口切回 `kBluetooth` 并重启。
 3. **HTTP/WS**：`esp_http_server`，1 个监听任务固定 core 0，最多 3 个套接字；`GET /` 返回构建期 gzip 的 `main/web/ui/` 单页
-   （CMake 调 Python 标准库 gzip，`EMBED_FILES`，gzip 后 ≤ 24 KB，超限构建失败）；`GET /ws` 升级；其余 404。不做 DNS 劫持。
+   （CMake 调 Python 标准库 gzip，`EMBED_FILES`，gzip 后 ≤ 24 KB，超限构建失败）；`GET /ws` 升级；其余 404。不做 DNS 劫持（已由 `docs/tasks/W7-captive-portal.md` 取代）。
 4. **新模块 `web`**：`module_list.inc` 登记 `kWifiOnly`、执行器 `kLink`。httpd 回调线程**不得**直接读写模块状态：
    收到的帧拷进静态 SPSC/邮箱（≤ 1 KB/帧，满则回 `busy`），由 `web` 模块 `poll()` 在 kLink 解析处理；发送用
    `httpd_ws_send_frame_async`，帧缓冲静态。本工程代码不分配堆（IDF/lwIP 内部分配记入 G7b 白名单，同 Bluedroid）。

@@ -45,7 +45,7 @@ CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA=n
 CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_SOFTAP=n
 # 固件只用 IPv4（SoftAP 192.168.x）；手册 lwip.html：关 IPv6 省启动 2 KB、协议栈运行时 7 KB RAM。
 CONFIG_LWIP_IPV6=n
-# lwip.html 建议按需减少 socket；httpd 要求 LWIP_MAX_SOCKETS >= max_open_sockets(3) + 3，取 8 留 2 个余量。
+# lwip.html 建议按需减少 socket；httpd 要求 LWIP_MAX_SOCKETS >= max_open_sockets(3) + 3；W7 门户 DNS 另占 1 个 UDP，合计 7/8，余 1。
 CONFIG_LWIP_MAX_SOCKETS=8
 # Wi-Fi/lwIP IRAM 优化保持开启（手册各档均开启）；管理帧缓冲与 TCP/IP 邮箱保持默认。
 

@@ -1,5 +1,6 @@
 // 主机回归：验证网页配置模块的 SPSC 帧邮箱、set 命令翻译、JSON 编码/状态差分与空闲回落计时。
 // 主机测试（含多线程 SPSC 压力与 ASan/UBSan），非 ISR。
+#include "modules/web/WebDns.hpp"
 #include "modules/web/WebIdleTimer.hpp"
 #include "modules/web/WebLogic.hpp"
 #include "modules/web/WebMailbox.hpp"
@@ -10,8 +11,10 @@
 #include <cstdio>
 #include <cstring>
 #include <span>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
@@ -299,6 +302,207 @@ void testIdleTimer()
     assert(!canCommitIdleExit(packStaState(0U, 9U), 7U));
 }
 
+/**
+ * @brief 按 RFC 1035 构造单问句 DNS 查询报文供测试使用
+ * @param id: 事务 ID
+ * @param flags: 标志位（如 0x0100 表示 RD=1）
+ * @param qdCount: QDCOUNT 字段值
+ * @param labels: 域名标签列表（空列表表示根域）
+ * @param qtype: 查询类型（1=A, 28=AAAA 等）
+ * @param qclass: 查询类（1=IN）
+ * @retval 构造好的原始字节序列
+ * @note 主机测试辅助函数。
+ */
+std::vector<uint8_t> makeDnsQuery(uint16_t id, uint16_t flags, uint16_t qdCount,
+                                  std::span<const std::string_view> labels, uint16_t qtype,
+                                  uint16_t qclass)
+{
+    std::vector<uint8_t> pkt(12U, 0U);
+    pkt[0] = static_cast<uint8_t>((id >> 8U) & 0xFFU);
+    pkt[1] = static_cast<uint8_t>(id & 0xFFU);
+    pkt[2] = static_cast<uint8_t>((flags >> 8U) & 0xFFU);
+    pkt[3] = static_cast<uint8_t>(flags & 0xFFU);
+    pkt[4] = static_cast<uint8_t>((qdCount >> 8U) & 0xFFU);
+    pkt[5] = static_cast<uint8_t>(qdCount & 0xFFU);
+    for (const auto label : labels) {
+        pkt.push_back(static_cast<uint8_t>(label.size()));
+        for (const char ch : label) {
+            pkt.push_back(static_cast<uint8_t>(ch));
+        }
+    }
+    pkt.push_back(0U);
+    pkt.push_back(static_cast<uint8_t>((qtype >> 8U) & 0xFFU));
+    pkt.push_back(static_cast<uint8_t>(qtype & 0xFFU));
+    pkt.push_back(static_cast<uint8_t>((qclass >> 8U) & 0xFFU));
+    pkt.push_back(static_cast<uint8_t>(qclass & 0xFFU));
+    return pkt;
+}
+
+/**
+ * @brief 验证强制门户 DNS 编解码：A 应答、AAAA/其他 NOERROR 空应答与各类畸形报文丢弃
+ * @note 主机单线程测试，配合 ASan/UBSan 覆盖边界检查。
+ */
+void testDnsCodec()
+{
+    constexpr std::array<uint8_t, 4U> kPortalIp = {192U, 168U, 10U, 12U};
+    std::array<uint8_t, kDnsMaxPacketBytes> reply{};
+
+    // 1. 正常 A 查询（多标签域名，RD=1）→ 应答 192.168.10.12，TTL 60 s，NOERROR。
+    const std::array<std::string_view, 3U> hostLabels = {"connectivitycheck", "gstatic", "com"};
+    const auto aQuery = makeDnsQuery(0x1234U, 0x0100U, 1U, hostLabels, 1U, 1U);
+    const size_t aLen = buildDnsReply(aQuery, kPortalIp, reply);
+    assert(aLen == (aQuery.size() + 16U));
+    assert((reply[0] == 0x12U) && (reply[1] == 0x34U));   // ID
+    assert((reply[2] == 0x85U) && (reply[3] == 0x00U));   // QR=1, AA=1, RD=1, RCODE=0
+    assert((reply[4] == 0x00U) && (reply[5] == 0x01U));   // QDCOUNT=1
+    assert((reply[6] == 0x00U) && (reply[7] == 0x01U));   // ANCOUNT=1
+    assert((reply[8] == 0x00U) && (reply[9] == 0x00U));   // NSCOUNT=0
+    assert((reply[10] == 0x00U) && (reply[11] == 0x00U)); // ARCOUNT=0
+    const size_t ans = aQuery.size();
+    assert((reply[ans] == 0xC0U) && (reply[ans + 1U] == 0x0CU));      // 指针指向偏移 12
+    assert((reply[ans + 2U] == 0x00U) && (reply[ans + 3U] == 0x01U)); // TYPE=A
+    assert((reply[ans + 4U] == 0x00U) && (reply[ans + 5U] == 0x01U)); // CLASS=IN
+    assert((reply[ans + 6U] == 0x00U) && (reply[ans + 7U] == 0x00U) && (reply[ans + 8U] == 0x00U) &&
+           (reply[ans + 9U] == 60U));                                   // TTL=60
+    assert((reply[ans + 10U] == 0x00U) && (reply[ans + 11U] == 0x04U)); // RDLENGTH=4
+    assert((reply[ans + 12U] == 192U) && (reply[ans + 13U] == 168U) && (reply[ans + 14U] == 10U) &&
+           (reply[ans + 15U] == 12U));
+
+    // 1b. 带合法 EDNS0 OPT 附加节的 A 查询（ARCOUNT=1）应回带最小 OPT（根名、type 41、UDP 512、flags 0、RDLEN 0）且 ARCOUNT=1。
+    auto ednsQuery = makeDnsQuery(0x2222U, 0x0000U, 1U, hostLabels, 1U, 1U);
+    ednsQuery[11] = 1U; // ARCOUNT=1
+    const std::array<uint8_t, 11U> optRec = {0U, 0U, 41U, 0x04U, 0xD0U, 0U, 0U, 0U, 0U, 0U, 0U};
+    ednsQuery.insert(ednsQuery.end(), optRec.begin(), optRec.end());
+    const size_t ednsLen = buildDnsReply(ednsQuery, kPortalIp, reply);
+    assert(ednsLen == (aQuery.size() + 16U + 11U));
+    assert((reply[2] == 0x84U) && (reply[3] == 0x00U));   // RD=0 保留
+    assert((reply[6] == 0x00U) && (reply[7] == 0x01U));   // ANCOUNT=1
+    assert((reply[10] == 0x00U) && (reply[11] == 0x01U)); // ARCOUNT=1
+    const size_t optOff = aQuery.size() + 16U;
+    assert(reply[optOff] == 0x00U);                                         // 根名
+    assert((reply[optOff + 1U] == 0x00U) && (reply[optOff + 2U] == 41U));   // TYPE=41 OPT
+    assert((reply[optOff + 3U] == 0x02U) && (reply[optOff + 4U] == 0x00U)); // UDP=512
+    assert((reply[optOff + 5U] == 0x00U) && (reply[optOff + 6U] == 0x00U) &&
+           (reply[optOff + 7U] == 0x00U) && (reply[optOff + 8U] == 0x00U));  // ext/ver/flags=0
+    assert((reply[optOff + 9U] == 0x00U) && (reply[optOff + 10U] == 0x00U)); // RDLENGTH=0
+
+    // 1c. 带 RDATA 的合法 OPT（含 4 字节选项载荷）与 AAAA + OPT 均合法且应答回最小 OPT。
+    auto ednsWithData = makeDnsQuery(0x2223U, 0x0100U, 1U, hostLabels, 28U, 1U);
+    ednsWithData[11] = 1U;
+    const std::array<uint8_t, 15U> optWithData = {0U, 0U, 41U, 0x05U, 0xC0U, 0U,    0U,   0U,
+                                                  0U, 0U, 4U,  0xAAU, 0xBBU, 0xCCU, 0xDDU};
+    ednsWithData.insert(ednsWithData.end(), optWithData.begin(), optWithData.end());
+    const size_t aaaaOptLen = buildDnsReply(ednsWithData, kPortalIp, reply);
+    assert(aaaaOptLen == (aQuery.size() + 11U));
+    assert((reply[6] == 0x00U) && (reply[7] == 0x00U));   // ANCOUNT=0
+    assert((reply[10] == 0x00U) && (reply[11] == 0x01U)); // ARCOUNT=1
+
+    // 1d. 255 B 合法域名边界（64+64+64+62+1=255 B）通过，256 B 域名（64+64+64+63+1=256 B）拒绝。
+    const std::string lbl63(63U, 'a');
+    const std::string lbl61(61U, 'b');
+    const std::string lbl62(62U, 'c');
+    const std::array<std::string_view, 4U> maxName255 = {lbl63, lbl63, lbl63, lbl61};
+    const auto q255 = makeDnsQuery(0x3333U, 0x0100U, 1U, maxName255, 1U, 1U);
+    assert(buildDnsReply(q255, kPortalIp, reply) == (q255.size() + 16U));
+    const std::array<std::string_view, 4U> overName256 = {lbl63, lbl63, lbl63, lbl62};
+    const auto q256 = makeDnsQuery(0x3334U, 0x0100U, 1U, overName256, 1U, 1U);
+    assert(buildDnsReply(q256, kPortalIp, reply) == 0U);
+
+    // 2. AAAA（28）与其他类型（HTTPS=65, TXT=16）→ NOERROR 空应答（ANCOUNT=0）。
+    for (const uint16_t qtype : std::array<uint16_t, 3U>{28U, 65U, 16U}) {
+        const auto q = makeDnsQuery(0x5678U, 0x0100U, 1U, hostLabels, qtype, 1U);
+        const size_t len = buildDnsReply(q, kPortalIp, reply);
+        assert(len == q.size());
+        assert((reply[2] == 0x85U) && (reply[3] == 0x00U)); // NOERROR
+        assert((reply[6] == 0x00U) && (reply[7] == 0x00U)); // ANCOUNT=0
+    }
+
+    // 3. 畸形报文全部丢弃（返回 0）且无越界：
+    // 3a. 过短 / 截断报文。
+    assert(buildDnsReply({}, kPortalIp, reply) == 0U);
+    assert(buildDnsReply(std::span<const uint8_t>{aQuery}.first(11U), kPortalIp, reply) == 0U);
+    assert(buildDnsReply(std::span<const uint8_t>{aQuery}.first(16U), kPortalIp, reply) == 0U);
+    assert(buildDnsReply(std::span<const uint8_t>{aQuery}.first(aQuery.size() - 1U), kPortalIp,
+                         reply) == 0U);
+    assert(buildDnsReply(std::span<const uint8_t>{aQuery}.first(aQuery.size() - 4U), kPortalIp,
+                         reply) == 0U);
+
+    // 3b. QDCOUNT != 1（0 或 2）。
+    assert(buildDnsReply(makeDnsQuery(1U, 0x0100U, 0U, hostLabels, 1U, 1U), kPortalIp, reply) ==
+           0U);
+    assert(buildDnsReply(makeDnsQuery(1U, 0x0100U, 2U, hostLabels, 1U, 1U), kPortalIp, reply) ==
+           0U);
+
+    // 3c. QR=1（已是应答）、OPCODE!=0、TC=1、ANCOUNT!=0、NSCOUNT!=0。
+    assert(buildDnsReply(makeDnsQuery(1U, 0x8100U, 1U, hostLabels, 1U, 1U), kPortalIp, reply) ==
+           0U);
+    assert(buildDnsReply(makeDnsQuery(1U, 0x0800U, 1U, hostLabels, 1U, 1U), kPortalIp, reply) ==
+           0U);
+    assert(buildDnsReply(makeDnsQuery(1U, 0x0200U, 1U, hostLabels, 1U, 1U), kPortalIp, reply) ==
+           0U);
+    auto badAn = aQuery;
+    badAn[7] = 1U;
+    assert(buildDnsReply(badAn, kPortalIp, reply) == 0U);
+    auto badNs = aQuery;
+    badNs[9] = 1U;
+    assert(buildDnsReply(badNs, kPortalIp, reply) == 0U);
+
+    // 3d. 附加段严格校验（F4）：尾部垃圾、ARCOUNT 缺记录、ARCOUNT=2、OPT 截断、非根名/非 OPT、RDLENGTH 越界。
+    auto trailingGarbage = aQuery;
+    trailingGarbage.push_back(0x00U); // ARCOUNT=0 但有尾部垃圾
+    assert(buildDnsReply(trailingGarbage, kPortalIp, reply) == 0U);
+
+    auto arMissing = aQuery;
+    arMissing[11] = 1U; // ARCOUNT=1 但缺少 OPT 记录
+    assert(buildDnsReply(arMissing, kPortalIp, reply) == 0U);
+
+    auto arTwo = ednsQuery;
+    arTwo[11] = 2U; // ARCOUNT=2 不允许
+    assert(buildDnsReply(arTwo, kPortalIp, reply) == 0U);
+
+    auto optTrunc = ednsQuery;
+    optTrunc.pop_back(); // OPT 仅 10 B（截断）
+    assert(buildDnsReply(optTrunc, kPortalIp, reply) == 0U);
+
+    auto optBadName = ednsQuery;
+    optBadName[aQuery.size()] = 0x01U; // OPT 非根名
+    assert(buildDnsReply(optBadName, kPortalIp, reply) == 0U);
+
+    auto optBadType = ednsQuery;
+    optBadType[aQuery.size() + 2U] = 1U; // TYPE=A 而非 41(OPT)
+    assert(buildDnsReply(optBadType, kPortalIp, reply) == 0U);
+
+    auto optRdOver = ednsQuery;
+    optRdOver[aQuery.size() + 10U] = 1U; // RDLENGTH=1 但无 RDATA（越界）
+    assert(buildDnsReply(optRdOver, kPortalIp, reply) == 0U);
+
+    auto optTrailing = ednsQuery;
+    optTrailing.push_back(0xFFU); // OPT RDLENGTH=0 但尾部多出垃圾字节
+    assert(buildDnsReply(optTrailing, kPortalIp, reply) == 0U);
+
+    // 3e. 标签长度越界（声明长度大于剩余字节）。
+    auto badLabelLen = aQuery;
+    badLabelLen[12] = 63U;
+    assert(buildDnsReply(badLabelLen, kPortalIp, reply) == 0U);
+
+    // 3f. 压缩指针（0xC0 0x0C）与保留标签位（0x40/0x80）一律拒绝不跟随。
+    std::vector<uint8_t> ptrPkt(18U, 0U);
+    ptrPkt[5] = 1U;
+    ptrPkt[12] = 0xC0U;
+    ptrPkt[13] = 0x0CU;
+    ptrPkt[15] = 1U;
+    ptrPkt[17] = 1U;
+    assert(buildDnsReply(ptrPkt, kPortalIp, reply) == 0U);
+    ptrPkt[12] = 0x40U;
+    assert(buildDnsReply(ptrPkt, kPortalIp, reply) == 0U);
+
+    // 3g. 超长报文（> 512 B）与输出缓冲不足。
+    std::vector<uint8_t> oversize(kDnsMaxPacketBytes + 1U, 0U);
+    oversize[5] = 1U;
+    assert(buildDnsReply(oversize, kPortalIp, reply) == 0U);
+    assert(buildDnsReply(aQuery, kPortalIp, std::span<uint8_t>{reply}.first(64U)) == 0U);
+}
+
 } // namespace
 
 /**
@@ -311,6 +515,7 @@ int main()
     testMailbox();
     testJsonFramesAndDiff();
     testIdleTimer();
+    testDnsCodec();
     std::puts("PASS web_server_check");
     return 0;
 }

@@ -334,6 +334,7 @@ target_compile_options(board_profile_check PRIVATE -fno-exceptions -fno-rtti -Wa
 add_test(NAME board_profile_check COMMAND board_profile_check)
 
 add_executable(web_server_check WebServerCheck.cpp
+    ${PROJ_ROOT}/main/modules/web/WebDns.cpp
     ${PROJ_ROOT}/main/modules/web/WebIdleTimer.cpp
     ${PROJ_ROOT}/main/modules/web/WebLogic.cpp
     ${PROJ_ROOT}/main/data/GnssOutput.cpp)
@@ -354,49 +355,61 @@ target_compile_options(web_server_check PRIVATE -fno-exceptions -fno-rtti -Wall 
 target_link_libraries(web_server_check PRIVATE main_pure settings web_proto gnss Threads::Threads)
 add_test(NAME web_server_check COMMAND web_server_check)
 
-add_executable(web_module_check WebModuleCheck.cpp
-    ${PROJ_ROOT}/main/app/SettingsBackend.cpp
-    ${PROJ_ROOT}/main/modules/web/WebServer.cpp
-    ${PROJ_ROOT}/main/modules/web/WebModule.cpp
-    ${PROJ_ROOT}/main/modules/web/WebLogic.cpp
-    ${PROJ_ROOT}/main/modules/web/WebIdleTimer.cpp
-    ${PROJ_ROOT}/main/data/AppData.cpp
-    ${PROJ_ROOT}/main/data/GnssOutput.cpp
-    ${PROJ_ROOT}/main/data/GnssAppRing.cpp
-    ${PROJ_ROOT}/main/board/BoardCurrent.cpp
-    ${PROJ_ROOT}/main/board/BoardProfile.cpp
-    ${PROJ_ROOT}/main/support/ResetReason.cpp
-    ${PROJ_ROOT}/components/rtos/Executor.cpp)
-target_include_directories(web_module_check BEFORE PRIVATE web_shim shim)
-target_include_directories(web_module_check PRIVATE
-    ../t13_host_check/shim/inc
-    ${PROJ_ROOT}/main
-    ${PROJ_ROOT}/components/app_fw/include
-    ${PROJ_ROOT}/components/bt_reconnect/include
-    ${PROJ_ROOT}/components/cli/include
-    ${PROJ_ROOT}/components/device_proto/include
-    ${PROJ_ROOT}/components/gnss/include
-    ${PROJ_ROOT}/components/link_core/include
-    ${PROJ_ROOT}/components/nvs_store/include
-    ${PROJ_ROOT}/components/rtos/include
-    ${PROJ_ROOT}/components/spp_server/include
-    ${PROJ_ROOT}/components/stream_demux/include
-    ${PROJ_ROOT}/components/web_proto/include)
-target_compile_definitions(web_module_check PRIVATE
-    CONFIG_RTK_WIFI_CONFIG_ENABLE=1
-    CONFIG_RTK_WIFI_AP_PASSWORD="12345678"
-    CONFIG_RTK_WIFI_AP_CHANNEL=1
-    CONFIG_RTK_WIFI_IDLE_EXIT_S=300
-    CONFIG_RTK_FACTORY_KEY="123456"
-    CONFIG_HTTPD_WS_SUPPORT=1
-    CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=1
-    CONFIG_RTK_GNSS_ENABLE=1
-    CONFIG_RTK_GNSS_PORT=2
-    CONFIG_RTK_GNSS_RATE_HZ=1
-    CONFIG_RTK_LOG_RING_BYTES=4096)
-target_compile_options(web_module_check PRIVATE -ffunction-sections -fdata-sections -fno-exceptions
-    -fno-rtti -Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
-    -Wimplicit-fallthrough)
-target_link_options(web_module_check PRIVATE -Wl,--gc-sections)
-target_link_libraries(web_module_check PRIVATE main_pure settings web_proto gnss main_rtos)
-add_test(NAME web_module_check COMMAND web_module_check)
+foreach(portal_mode on off)
+    set(web_target web_module_check)
+    set(portal_def 1)
+    set(web_dns_src ${PROJ_ROOT}/main/modules/web/WebDns.cpp)
+    if(portal_mode STREQUAL "off")
+        set(web_target web_module_portal_off_check)
+        set(portal_def 0)
+        set(web_dns_src "")
+    endif()
+    add_executable(${web_target} WebModuleCheck.cpp
+        ${PROJ_ROOT}/main/app/SettingsBackend.cpp
+        ${web_dns_src}
+        ${PROJ_ROOT}/main/modules/web/WebServer.cpp
+        ${PROJ_ROOT}/main/modules/web/WebModule.cpp
+        ${PROJ_ROOT}/main/modules/web/WebLogic.cpp
+        ${PROJ_ROOT}/main/modules/web/WebIdleTimer.cpp
+        ${PROJ_ROOT}/main/data/AppData.cpp
+        ${PROJ_ROOT}/main/data/GnssOutput.cpp
+        ${PROJ_ROOT}/main/data/GnssAppRing.cpp
+        ${PROJ_ROOT}/main/board/BoardCurrent.cpp
+        ${PROJ_ROOT}/main/board/BoardProfile.cpp
+        ${PROJ_ROOT}/main/support/ResetReason.cpp
+        ${PROJ_ROOT}/components/rtos/Executor.cpp)
+    target_include_directories(${web_target} BEFORE PRIVATE web_shim shim)
+    target_include_directories(${web_target} PRIVATE
+        ../t13_host_check/shim/inc
+        ${PROJ_ROOT}/main
+        ${PROJ_ROOT}/components/app_fw/include
+        ${PROJ_ROOT}/components/bt_reconnect/include
+        ${PROJ_ROOT}/components/cli/include
+        ${PROJ_ROOT}/components/device_proto/include
+        ${PROJ_ROOT}/components/gnss/include
+        ${PROJ_ROOT}/components/link_core/include
+        ${PROJ_ROOT}/components/nvs_store/include
+        ${PROJ_ROOT}/components/rtos/include
+        ${PROJ_ROOT}/components/spp_server/include
+        ${PROJ_ROOT}/components/stream_demux/include
+        ${PROJ_ROOT}/components/web_proto/include)
+    target_compile_definitions(${web_target} PRIVATE
+        CONFIG_RTK_WIFI_CONFIG_ENABLE=1
+        CONFIG_RTK_WIFI_CAPTIVE_PORTAL=${portal_def}
+        CONFIG_RTK_WIFI_AP_PASSWORD="12345678"
+        CONFIG_RTK_WIFI_AP_CHANNEL=1
+        CONFIG_RTK_WIFI_IDLE_EXIT_S=300
+        CONFIG_RTK_FACTORY_KEY="123456"
+        CONFIG_HTTPD_WS_SUPPORT=1
+        CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=1
+        CONFIG_RTK_GNSS_ENABLE=1
+        CONFIG_RTK_GNSS_PORT=2
+        CONFIG_RTK_GNSS_RATE_HZ=1
+        CONFIG_RTK_LOG_RING_BYTES=4096)
+    target_compile_options(${web_target} PRIVATE -ffunction-sections -fdata-sections -fno-exceptions
+        -fno-rtti -Wall -Wextra -Werror -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
+        -Wimplicit-fallthrough)
+    target_link_options(${web_target} PRIVATE -Wl,--gc-sections)
+    target_link_libraries(${web_target} PRIVATE main_pure settings web_proto gnss main_rtos)
+    add_test(NAME ${web_target} COMMAND ${web_target})
+endforeach()
