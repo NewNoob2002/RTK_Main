@@ -23,11 +23,14 @@ from pathlib import Path
 FORBIDDEN_OBJ_RE = re.compile(
     r"(?:^|[^A-Za-z0-9_])("
     r"cli::|"
+    r"cli::outPrintf\(|"
     r"esp_console_|"
     r"linenoise|"
     r"app::initConsole|"
     r"app::runConsole|"
     r"app::gatedCommand|"
+    r"app::submitSetting\(|"
+    r"app::settingsErrorText\(|"
     r"app::[a-zA-Z0-9_]*Cmds\("
     r")"
 )
@@ -46,12 +49,15 @@ FORBIDDEN_ELF_RE = re.compile(
     r"cli::addVerbs\(|"
     r"cli::dispatch\(|"
     r"cli::fail\(|"
+    r"cli::outPrintf\(|"
     r"esp_console_init\b|"
     r"esp_console_cmd_register\b|"
     r"linenoise\b|"
     r"app::initConsole\(|"
     r"app::runConsole\(|"
     r"app::gatedCommand\(|"
+    r"app::submitSetting\(|"
+    r"app::settingsErrorText\(|"
     r"app::configCmds\(|"
     r"app::gnssCmds\(|"
     r"app::factoryCmds\(|"
@@ -109,41 +115,49 @@ def check_sdkconfig(build_dir: Path) -> list[str]:
     return errors
 
 
-def collect_group_objs(build_dir: Path) -> dict[str, list[Path]]:
+def collect_group_objs(build_dir: Path) -> tuple[dict[str, list[Path]], list[str]]:
     idf_dir = build_dir / "esp-idf"
+    missing: list[str] = []
+
+    bt_link_dir = idf_dir / "main" / "CMakeFiles" / "__idf_main.dir" / "modules" / "bt_link"
+    phone_explicit = [
+        bt_link_dir / name
+        for name in (
+            "BtLinkModule.cpp.obj",
+            "BtLinkSessions.cpp.obj",
+            "BtLinkGnss.cpp.obj",
+            "BtPairing.cpp.obj",
+        )
+    ]
+    phone_objs: list[Path] = []
+    for path in phone_explicit:
+        if path.is_file():
+            phone_objs.append(path)
+        else:
+            missing.append(f"[phone] missing required object file: {path}")
+
+    backend_obj = (
+        idf_dir / "main" / "CMakeFiles" / "__idf_main.dir" / "app" / "SettingsBackend.cpp.obj"
+    )
+    settings_objs = sorted((idf_dir / "settings").rglob("*.obj"))
+    if backend_obj.is_file():
+        settings_objs.append(backend_obj)
+    else:
+        missing.append(f"[settings] missing required object file: {backend_obj}")
+
     groups = {
         "web": (
             sorted((idf_dir / "main" / "CMakeFiles" / "__idf_main.dir" / "modules" / "web").glob("*.obj"))
             + sorted((idf_dir / "web_proto").rglob("*.obj"))
         ),
-        "phone": (
-            [
-                idf_dir / "main" / "CMakeFiles" / "__idf_main.dir" / "modules" / "bt_link" / name
-                for name in (
-                    "BtLinkModule.cpp.obj",
-                    "BtLinkSessions.cpp.obj",
-                    "BtLinkGnss.cpp.obj",
-                    "BtPairing.cpp.obj",
-                )
-                if (idf_dir / "main" / "CMakeFiles" / "__idf_main.dir" / "modules" / "bt_link" / name).is_file()
-            ]
-            + sorted((idf_dir / "link_core").rglob("*.obj"))
-        ),
-        "settings": (
-            sorted((idf_dir / "settings").rglob("*.obj"))
-            + [
-                p
-                for p in [idf_dir / "main" / "CMakeFiles" / "__idf_main.dir" / "app" / "SettingsBackend.cpp.obj"]
-                if p.is_file()
-            ]
-        ),
+        "phone": phone_objs + sorted((idf_dir / "link_core").rglob("*.obj")),
+        "settings": settings_objs,
     }
-    return groups
+    return groups, missing
 
 
 def check_objects(nm_bin: str, build_dir: Path) -> list[str]:
-    errors: list[str] = []
-    groups = collect_group_objs(build_dir)
+    groups, errors = collect_group_objs(build_dir)
     for group, objs in groups.items():
         if not objs:
             errors.append(f"no object files found for group '{group}' under {build_dir}")

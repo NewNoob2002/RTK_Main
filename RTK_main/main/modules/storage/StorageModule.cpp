@@ -555,44 +555,6 @@ core::PhoneSnPn StorageModule::phoneSnPn() const noexcept
     return out;
 }
 
-bool StorageModule::setPhoneSnPn(const core::PhoneSnPn &snPn, uint32_t nowMs) noexcept
-{
-    const auto &boot = ctx().bootConfig;
-    if (!boot.userNvsReady || boot.safeDefaults) {
-        return false;
-    }
-    const auto snField = std::span<const uint8_t>{snPn}.first(core::kPhoneSnBytes);
-    const auto pnField = std::span<const uint8_t>{snPn}.subspan(core::kPhoneSnBytes);
-    size_t snLen = 0U;
-    while ((snLen < snField.size()) && (snField[snLen] != 0U)) {
-        ++snLen;
-    }
-    for (const uint8_t ch : pnField) {
-        if (ch == 0U) {
-            break;
-        }
-        if ((ch == '\r') || (ch == '\n')) {
-            return false;
-        }
-    }
-    fw::Command cmd{};
-    cmd.target = id(ModuleKind::kStorage);
-    cmd.verb = verb(StorageVerb::kSaveSn);
-    // snLen <= core::kPhoneSnBytes(16) <= fw::kCommandArgBytes(32)，缩窄安全。
-    cmd.argLen = static_cast<uint8_t>(snLen);
-    std::copy_n(snField.begin(), snLen, cmd.args.begin());
-    fw::CommandResult result{};
-    saveSn(cmd, result);
-    if (!fw::isOk(result.status)) {
-        return false;
-    }
-    if (!setPhoneBlob(phone_pn_, phone_pn_state_, pnField, nowMs)) {
-        return false;
-    }
-    ctx().data.phonePn.write(phone_pn_);
-    return true;
-}
-
 bool StorageModule::setPhoneNtrip(const core::PhoneNtripConfig &cfg, uint32_t nowMs) noexcept
 {
     return setPhoneBlob(phone_ntrip_, phone_ntrip_state_, cfg, nowMs);
@@ -804,14 +766,23 @@ void StorageModule::setSnPnCmd(const fw::Command &cmd, fw::CommandResult &result
     while ((snLen < snField.size()) && (snField[snLen] != 0U)) {
         ++snLen;
     }
+    constexpr uint8_t kMinPrintableAscii = 0x20U;
+    constexpr uint8_t kMaxPrintableAscii = 0x7EU;
     for (const uint8_t ch : pnField) {
         if (ch == 0U) {
             break;
         }
-        if ((ch == '\r') || (ch == '\n')) {
+        if ((ch < kMinPrintableAscii) || (ch > kMaxPrintableAscii)) {
             result.status = fw::Result::kInvalidArg;
             return;
         }
+    }
+    // 先暂存 PN 去抖状态，避免 saveSn 落盘后 setPhoneBlob 失败导致 SN/PN 失步；saveSn 失败时回滚 RAM。
+    const core::PhonePn prevPn = phone_pn_;
+    const DebouncedState prevPnState = phone_pn_state_;
+    if (!setPhoneBlob(phone_pn_, phone_pn_state_, pnField, rtos::nowMs())) {
+        result.status = fw::Result::kBusy;
+        return;
     }
     fw::Command snCmd{};
     snCmd.target = id(ModuleKind::kStorage);
@@ -821,10 +792,8 @@ void StorageModule::setSnPnCmd(const fw::Command &cmd, fw::CommandResult &result
     std::copy_n(snField.begin(), snLen, snCmd.args.begin());
     saveSn(snCmd, result);
     if (!fw::isOk(result.status)) {
-        return;
-    }
-    if (!setPhoneBlob(phone_pn_, phone_pn_state_, pnField, rtos::nowMs())) {
-        result.status = fw::Result::kBusy;
+        phone_pn_ = prevPn;
+        phone_pn_state_ = prevPnState;
         return;
     }
     ctx().data.phonePn.write(phone_pn_);

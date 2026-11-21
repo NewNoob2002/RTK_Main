@@ -103,9 +103,6 @@ public:
     /** @brief 读取当前 SN 与 PN（[0..15]SN [16..31]PN）。 @retval 32 B 组合字段。 @note 仅 kLink。 */
     [[nodiscard]] core::PhoneSnPn phoneSnPn() const noexcept;
 
-    /** @brief 保存 SN（同步复用 kSaveSn 逻辑）并登记去抖写入 PN。 @param snPn: 32 B 组合字段。 @param nowMs: 去抖起点。 @retval true 保存成功。 @note 仅 kLink，写 SN 可阻塞。 */
-    [[nodiscard]] bool setPhoneSnPn(const core::PhoneSnPn &snPn, uint32_t nowMs) noexcept;
-
     /** @brief 读取当前 NTRIP 配置（0x12）。 @retval 112 B 配置块。 @note 仅 kLink。 */
     [[nodiscard]] core::PhoneNtripConfig phoneNtrip() const noexcept
     {

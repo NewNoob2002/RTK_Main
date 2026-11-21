@@ -253,7 +253,7 @@ void testPhoneAndSatTrackKeys()
                           static_cast<int>(validateWithCaps("phone.height", caps, bad, out)));
     }
 
-    // phone.sn_pn：64 hex chars -> 32 B（[0..15] 非空 SN + [16..31] PN，禁止 \r\n）。
+    // phone.sn_pn：64 hex chars -> 32 B（[0..15] 可见 ASCII SN + [16..31] 无控制字符 PN）。
     const char *goodSnPn = "534E3132000000000000000000000000"
                            "504E3031000000000000000000000000";
     TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
@@ -265,6 +265,39 @@ void testPhoneAndSatTrackKeys()
                           "504E3031000000000000000000000000";
     TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
                       static_cast<int>(validateWithCaps("phone.sn_pn", caps, emptySn, out)));
+
+    // T3：factory.sn 与 phone.sn_pn 共享可见 ASCII 0x21..0x7E 规则，PN 亦拒控制字符。
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("factory.sn", caps, "RTK_2026.01", out)));
+    const char *rtkSnPn = "52544B5F323032362E30310000000000"
+                          "504E3031000000000000000000000000";
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("phone.sn_pn", caps, rtkSnPn, out)));
+    for (const std::string_view badSn :
+         {std::string_view{"RTK\r1", 5U}, std::string_view{"RTK 1", 5U},
+          std::string_view{"RTK\x01"
+                           "1",
+                           5U}}) {
+        TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                          static_cast<int>(validateWithCaps("factory.sn", caps, badSn, out)));
+    }
+    for (const char *badSnPn : {
+             // SN 含 \r (0x0D)
+             "52544B0D310000000000000000000000"
+             "504E3031000000000000000000000000",
+             // SN 含空格 (0x20)
+             "52544B20310000000000000000000000"
+             "504E3031000000000000000000000000",
+             // SN 含控制字符 0x01
+             "52544B01310000000000000000000000"
+             "504E3031000000000000000000000000",
+             // PN 含控制字符 0x01
+             "52544B5F323032362E30310000000000"
+             "504E0131000000000000000000000000",
+         }) {
+        TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                          static_cast<int>(validateWithCaps("phone.sn_pn", caps, badSnPn, out)));
+    }
 }
 
 } // namespace

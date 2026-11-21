@@ -26,15 +26,38 @@ constexpr size_t kAppIdxGst = 3U;
 constexpr size_t kAppIdxRmc = 4U;
 constexpr size_t kAppIdxGsa = 5U;
 
+constexpr uint8_t kMinPrintableAscii = 0x20U;
+constexpr uint8_t kMinVisibleAscii = 0x21U;
+constexpr uint8_t kMaxVisibleAscii = 0x7EU;
+
 /**
- * @brief  判断字符是否为 ASCII 字母或数字
- * @param  c: 待判断字符
- * @retval true  '0'..'9'、'A'..'Z' 或 'a'..'z'
- * @retval false 其余字符
+ * @brief  判断字节是否为可见 ASCII（0x21..0x7E，不含空格与控制字符）
+ * @param  byte: 待判断字节
+ * @retval true  可见 ASCII
+ * @retval false 空格、控制字符或非 ASCII
  */
-bool isAsciiAlnum(char c) noexcept
+bool isVisibleAscii(uint8_t byte) noexcept
 {
-    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    return (byte >= kMinVisibleAscii) && (byte <= kMaxVisibleAscii);
+}
+
+/**
+ * @brief  校验 SN 字节串（长度 1..kMaxSnBytes，全为可见 ASCII 0x21..0x7E）
+ * @param  bytes: 待校验 SN 字节切片
+ * @retval true  合法 SN
+ * @retval false 为空、超长或含空格/控制字符/非 ASCII
+ */
+bool isValidSnBytes(std::span<const uint8_t> bytes) noexcept
+{
+    if (bytes.empty() || (bytes.size() > kMaxSnBytes)) {
+        return false;
+    }
+    for (const uint8_t byte : bytes) {
+        if (!isVisibleAscii(byte)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
@@ -213,7 +236,7 @@ Error validateMac(std::string_view text, CanonicalValue &out) noexcept
 }
 
 /**
- * @brief  校验 SN 文本（1–16 个 [0-9A-Za-z-]）
+ * @brief  校验 SN 文本（1–16 个可见 ASCII 0x21..0x7E，不含空格与控制字符）
  * @param  text:    文本输入
  * @param[out] out: 成功时写入字符字节串；失败保持原内容
  * @retval Error::kOk       通过
@@ -224,16 +247,15 @@ Error validateSn(std::string_view text, CanonicalValue &out) noexcept
     if (text.empty() || text.size() > kMaxSnBytes) {
         return Error::kBadValue;
     }
-    for (const char c : text) {
-        if (!isAsciiAlnum(c) && c != '-') {
-            return Error::kBadValue;
-        }
+    std::array<uint8_t, kMaxSnBytes> buf{};
+    for (size_t i = 0U; i < text.size(); ++i) {
+        buf[i] = static_cast<uint8_t>(text[i]);
+    }
+    if (!isValidSnBytes(std::span<const uint8_t>{buf.data(), text.size()})) {
+        return Error::kBadValue;
     }
     out.bytes.fill(0U);
-    for (size_t i = 0U; i < text.size(); ++i) {
-        // 已检查全部字符为可见 ASCII，转 uint8_t 无损。
-        out.bytes[i] = static_cast<uint8_t>(text[i]);
-    }
+    std::copy_n(buf.begin(), text.size(), out.bytes.begin());
     out.kind = CanonicalKind::kBytes;
     out.size = static_cast<uint8_t>(text.size());
     return Error::kOk;
@@ -350,7 +372,7 @@ Error validateHeight(std::string_view text, CanonicalValue &out) noexcept
  * @param  text: 64 位十六进制字符串
  * @param[out] out: 成功时写入 32 字节规范值；失败保持原内容
  * @retval Error::kOk       校验通过
- * @retval Error::kBadValue 格式错误、SN 为空或 SN/PN 含换行符
+ * @retval Error::kBadValue 格式错误、SN 非可见 ASCII 或 PN 含控制字符
  */
 Error validateSnPn(std::string_view text, CanonicalValue &out) noexcept
 {
@@ -360,19 +382,16 @@ Error validateSnPn(std::string_view text, CanonicalValue &out) noexcept
     }
     size_t snLen = 0U;
     while ((snLen < kMaxSnBytes) && (raw[snLen] != 0U)) {
-        if ((raw[snLen] == '\r') || (raw[snLen] == '\n')) {
-            return Error::kBadValue;
-        }
         ++snLen;
     }
-    if (snLen == 0U) {
+    if (!isValidSnBytes(std::span<const uint8_t>{raw.data(), snLen})) {
         return Error::kBadValue;
     }
     for (size_t i = kMaxSnBytes; i < kSnPnBytes; ++i) {
         if (raw[i] == 0U) {
             break;
         }
-        if ((raw[i] == '\r') || (raw[i] == '\n')) {
+        if ((raw[i] < kMinPrintableAscii) || (raw[i] > kMaxVisibleAscii)) {
             return Error::kBadValue;
         }
     }

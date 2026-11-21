@@ -55,7 +55,7 @@ constinit app::AppContext s_failureContext{};
 constinit app::AppContext s_dispatchContext{};
 constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
-constinit std::array<app::AppContext, 15U> s_targetBaudContexts{};
+constinit std::array<app::AppContext, 16U> s_targetBaudContexts{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -544,6 +544,27 @@ void testGnssPhonePpp()
     const auto gsv = s_context->data.gnssLatestGsv.read();
     CHECK(gsv.len == kGsvSample.size() &&
           std::memcmp(gsv.bytes.data(), kGsvSample.data(), gsv.len) == 0);
+
+    // T2：PPP 与星座序列在途时 kProbe 必须能打断序列并以 kInvalidState 结单。
+    request.args[0] = 0U;
+    const auto pppAbort = postPhone(request);
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(pppAbort, pollRes) == rtos::PollState::kPending);
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kProbe)).status));
+    CHECK(executor.poll(pppAbort, pollRes) == rtos::PollState::kDone);
+    CHECK(pollRes.seq == pppAbort.seq && pollRes.status == fw::Result::kInvalidState);
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+
+    satCmd.args[0] = 15U;
+    const auto satAbort = postPhone(satCmd);
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(satAbort, pollRes) == rtos::PollState::kPending);
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kProbe)).status));
+    CHECK(executor.poll(satAbort, pollRes) == rtos::PollState::kDone);
+    CHECK(pollRes.seq == satAbort.seq && pollRes.status == fw::Result::kInvalidState);
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
 
     rtos::ExecutorTestAccess::bind(executor, nullptr);
     s_context->ioExecutor = nullptr;
@@ -1263,6 +1284,34 @@ void testGnssSettingsBusAndGgaPersist()
     expectDone(maintOut, fw::Result::kOk);
     CHECK(s_context->data.gnssOutCfg.read().intervals[0U] == 2);
 
+    // T1：kReadback 与 kConfiguring 瞬态下 kApplyRate / kSetRate 必须返回 kBusy 且不改 NVS。
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssSubVerb::kReadback)).status));
+    advance(20U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kReadback);
+    const auto rbRateTicket = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 5U));
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(rbRateTicket, fw::Result::kBusy);
+    const std::array<uint8_t, 1U> legacyRate5{5U};
+    CHECK(command(static_cast<uint8_t>(app::GnssVerb::kSetRate), legacyRate5).status ==
+          fw::Result::kBusy);
+    CHECK((nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK) && (storedRate == 2U));
+    advance(2500U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kProbe)).status));
+    for (int step = 0;
+         step < 150 && s_context->data.gnssStatus.read().state != gnss::State::kConfiguring;
+         ++step) {
+        advance(20U);
+    }
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kConfiguring);
+    const auto cfgRateTicket = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 5U));
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(cfgRateTicket, fw::Result::kBusy);
+    CHECK((nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK) && (storedRate == 2U));
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+
     rtos::ExecutorTestAccess::bind(executor, nullptr);
     s_context->ioExecutor = nullptr;
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
@@ -1334,6 +1383,17 @@ void testGnssSettingsBusAndGgaPersist()
     CHECK(restored.intervals[kGga] == -1 && restored.intervals[kRmc] == 5);
     CHECK(s_context->data.gnssStatus.read().rxPeriodMs[kGga] == 1000U);
     CHECK(s_context->data.gnssStatus.read().rxPeriodMs[kRmc] == 1000U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // T5：预存 20 Hz 但探测型号（CM680）最高支持 10 Hz → 回退到 10 Hz 且回写修正 NVS。
+    CHECK(nvs_set_u8(nvs, "rate", 20U) == ESP_OK);
+    CHECK(nvs_commit(nvs) == ESP_OK);
+    bootP2TargetCase(15U, nvs, demux, pipe, 460800U, 0U, true, false);
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    CHECK(s_context->data.gnssCaps.read().navRateHz == 10U);
+    CHECK(s_context->data.gnssRateHz.load(std::memory_order_acquire) == 10U);
+    CHECK((nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK) && (storedRate == 10U));
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     nvs_close(nvs);
 }

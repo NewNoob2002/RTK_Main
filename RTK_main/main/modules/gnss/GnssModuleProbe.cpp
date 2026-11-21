@@ -353,15 +353,29 @@ void GnssModule::publishCaps() noexcept
     }
 }
 
+void GnssModule::persistRestoredRate() noexcept
+{
+    if (ctx().bootConfig.safeDefaults || !ctx().bootConfig.userNvsReady) {
+        return;
+    }
+    const fw::Result saveRes = ctx().storage.saveKeys(
+        std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kRateKeyIndex, 1U>());
+    if (fw::isOk(saveRes)) {
+        ctx().data.configRev.fetch_add(1U, std::memory_order_release);
+    } else {
+        FW_LOGW(fw::TraceCat::kGnss, "<cfg> persist restored GNSS rate failed (%s)",
+                fw::toString(saveRes));
+    }
+}
+
 void GnssModule::restoreSettingsForModel() noexcept
 {
     const auto model = controller().detected().probe.model;
     const auto &receiver = controller().receiver();
     const auto rates = receiver.navRatesHz(model);
-    if (restoredSettings_ || rates.empty()) {
+    if (rates.empty()) {
         return;
     }
-    restoredSettings_ = true;
     auto &rate = ensureRoverCfg().rateHz;
     if (std::ranges::find(rates, rate) == rates.end()) {
         const auto upper = std::ranges::upper_bound(rates, rate);
@@ -369,7 +383,12 @@ void GnssModule::restoreSettingsForModel() noexcept
         FW_LOGW(fw::TraceCat::kGnss, "<cfg> restored GNSS rate %u as %u Hz",
                 static_cast<unsigned>(rate), static_cast<unsigned>(restored));
         rate = restored;
+        persistRestoredRate();
     }
+    if (restoredSettings_) {
+        return;
+    }
+    restoredSettings_ = true;
 
     restoreOutputPeriods();
 }

@@ -821,6 +821,9 @@ private:
     /** @brief 首次识别后恢复该型号可执行的旧 NVS 值。 @note 仅 kIo。 */
     void restoreSettingsForModel() noexcept;
 
+    /** @brief 将按型号回退后的定位频率写回 NVS 并推进配置版本。 @note 仅 kIo，写 NVS 可阻塞。 */
+    void persistRestoredRate() noexcept;
+
     /** @brief 恢复已保存的旧输出周期。 @note 仅 kIo。 */
     void restoreOutputPeriods() noexcept;
 

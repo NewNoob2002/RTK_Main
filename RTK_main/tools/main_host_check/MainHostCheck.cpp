@@ -34,6 +34,14 @@ extern "C" {
 #include "modules/system/FactoryReset.hpp"
 #include "modules/system/SystemModule.hpp"
 
+namespace app {
+/** @brief 主机测试桩：未链接 FactoryCmds 时默认工厂命令保持锁定。 @retval false 总是。 */
+bool factoryUnlocked() noexcept
+{
+    return false;
+}
+} // namespace app
+
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
 namespace {
 uint32_t s_clock = 100U;
@@ -1268,7 +1276,14 @@ void phoneNvsReadback()
     core::PhoneSnPn snPn{};
     std::memcpy(snPn.data(), "RTK20260001", 11U);
     std::memcpy(snPn.data() + core::kPhoneSnBytes, "1000190000002001", 16U);
-    CHECK(storage.setPhoneSnPn(snPn, s_clock));
+    fw::Command snPnCmd{};
+    snPnCmd.target = app::id(app::ModuleKind::kStorage);
+    snPnCmd.verb = app::verb(app::StorageVerb::kSetSnPn);
+    snPnCmd.argLen = static_cast<uint8_t>(snPn.size());
+    std::copy(snPn.begin(), snPn.end(), snPnCmd.args.begin());
+    fw::CommandResult snPnRes{};
+    storage.onCommand(snPnCmd, snPnRes);
+    CHECK(fw::isOk(snPnRes.status));
     core::PhoneNtripConfig ntrip{};
     ntrip[1U] = 1U;
     ntrip[8U] = 'n';

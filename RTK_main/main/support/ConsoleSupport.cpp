@@ -149,7 +149,7 @@ const char *settingsErrorText(settings::Error error) noexcept
     case settings::Error::kUnsupported:
         return "unsupported";
     case settings::Error::kTimeout:
-        return "timeout";
+        return "timeout (may have been applied)";
     case settings::Error::kFailed:
     default:
         return "failed";

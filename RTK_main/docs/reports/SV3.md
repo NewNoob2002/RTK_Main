@@ -141,3 +141,18 @@ $ rg "phonePpp|phoneSat|webGnss" main components
 - 冻结清单：P3-4 采纳，`components/settings/include/settings/{Registry,Service,Types}.hpp` 补录 `docs/frozen.sha256`；`LinkService.hpp`（`kMaxDeferredReplies` 4→6）重算。
 - 门禁：Architect 独立重跑 `run_gates.sh --base 5915dd6 --prefix sv3c`，40 passed, 0 failed（`rtk_main.bin` 1,451,568 B）。
 - 未做：上板 HIL（控制台冒烟、手机 0x06/0x33/0x24/0x08、NONE+Wi-Fi 网页配置），由用户按 §7 步骤执行；通过前不合入 main。
+
+## 10. 二轮修复（T1–T10）
+
+| 编号 | 改动摘要 |
+| --- | --- |
+| T1 | `GnssModuleCmds.cpp` 的 `cmdSetRate` / `cmdSetOut` 在 `kConfiguring` / `kOutput` / `kReadback` 瞬态返回 `kBusy`（不再直写 NVS 导致接收机与 NVS 失步）；`kOff`/`kPowerUp`/`kProbing`/`kFailed` 保持直写 NVS。补齐 `GnssResetCheck` 回归。 |
+| T2 | `GnssModuleCmds.cpp` 的 `onCommand` 在 `ppp_seq_`/`sat_seq_` 忙守卫之前放行 `kProbe`/`kReset` 进入 `dispatchStandardCmd`，使 `abortPendingSettings()` 正常中止序列并以 `kInvalidState` 结单。补齐 `GnssResetCheck` 回归。 |
+| T3 | `components/settings/src/Registry.cpp` 统一 `factory.sn` 与 `phone.sn_pn` SN 段校验为可见 ASCII `0x21..0x7E`（长度 `1..16`），PN 段同样拒控制字符；`FactoryCmds.cpp` 前置检查保持 `"bad sn"` 并与新规则一致。补齐 `TestSettingsRegistry` 回归。 |
+| T4 | `BtLinkModule::poll` 检测 `configRev` 变化后按需从 `settings.get("factory.sn")` 同步 `DeviceInfo.sn`（无变化仅原子读比较）；`StorageModule::setSnPnCmd` 改为先校验并暂存 PN 去抖状态、再执行 `saveSn`（失败回滚 RAM PN 状态），消除 SN 落盘而 PN 报 `kBusy` 失步。 |
+| T5 | `GnssModuleProbe.cpp` 的 `restoreSettingsForModel` 在探测出型号不支持当前频率并回退到最近较低值后，同步写回 NVS 并递增 `configRev`（重探同样生效）。补齐 `GnssResetCheck` 20 Hz→10 Hz 回归。 |
+| T6 | `tools/ci/check_no_cli_deps.py` 对显式列出的 `bt_link/*.obj` 与 `SettingsBackend.cpp.obj` 缺失报 error（不再静默跳过）；`FORBIDDEN_OBJ_RE`/`FORBIDDEN_ELF_RE` 增检 `app::submitSetting(`、`app::settingsErrorText(`、`cli::outPrintf(`。 |
+| T7 | `SystemModule.hpp` / `FactoryCmds.cpp` 暴露 `factoryUnlocked()` 只读查询；`ConfigCmds.cpp` `cmdConfigSet` 传入当前工厂解锁状态，不再硬编码 `false`。 |
+| T8 | `FactoryCmds.cpp` `cmdSn` 将 `kUnsupported` 报错由 `"link not running"` 改为 `"settings unavailable"`；`ConsoleSupport.cpp` 将 `settings::Error::kTimeout` 文本改为 `"timeout (may have been applied)"`。 |
+| T9 | `GnssCmds.cpp` `cmdGnssGate` 双键提交时若第二键（`enabled`）失败，自动将第一键（`min_sats`）回滚至原值并报错。 |
+| T10 | 清理全仓无生产调用者的 `StorageModule::setPhoneSnPn`（`MainHostCheck` 改经 `StorageVerb::kSetSnPn` 验证，`setPhoneHeight` 因 `setHeightCmd` 使用予以保留）；`BtLinkModule::wait()` 与 `poll()` 合并使用 `hasPendingTicket()`，并注明 50 ms 上限与 `kLink` `idleWaitMs=20` 的关系。 |

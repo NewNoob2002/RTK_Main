@@ -749,6 +749,7 @@ int cmdGnssGate(void * /*ctx*/, int argc, char **argv) noexcept
     if (appContext().ioExecutor == nullptr) {
         return cli::fail("gnss not running");
     }
+    const uint8_t prevMinSats = appContext().data.ggaGateStatus.read().minSats;
     if (setMinSats) {
         std::array<char, kSettingValueBufBytes> valBuf{};
         const int len =
@@ -760,6 +761,19 @@ int cmdGnssGate(void * /*ctx*/, int argc, char **argv) noexcept
         }
     }
     if (setEnabled && !applyGnssGateSetting("gnss.gga_gate.enabled", enabled ? "1" : "0")) {
+        if (setMinSats && (prevMinSats != minSats)) {
+            std::array<char, kSettingValueBufBytes> rollbackBuf{};
+            const int rlen = std::snprintf(rollbackBuf.data(), rollbackBuf.size(), "%u",
+                                           static_cast<unsigned>(prevMinSats));
+            if ((rlen > 0) && (static_cast<size_t>(rlen) < rollbackBuf.size())) {
+                fw::CommandResult rollbackRes{};
+                settings::Error rollbackErr = settings::Error::kOk;
+                static_cast<void>(
+                    submitSetting("gnss.gga_gate.min_sats",
+                                  std::string_view{rollbackBuf.data(), static_cast<size_t>(rlen)},
+                                  false, kCommandTimeoutMs, rollbackRes, rollbackErr));
+            }
+        }
         return cli::kCmdFail;
     }
     printGgaGateStatus();

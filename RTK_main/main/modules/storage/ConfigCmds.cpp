@@ -22,6 +22,7 @@
 #include "fw/Trace.hpp" // FW_TRACE_ENABLED
 #include "modules/storage/StoreCatalog.hpp"
 #include "modules/storage/StoreKeys.hpp"
+#include "modules/system/SystemModule.hpp"
 #include "settings/Registry.hpp"
 #include "support/ConsoleSupport.hpp"
 
@@ -249,8 +250,8 @@ int cmdConfigSet(std::span<char *const> args) noexcept
     }
     fw::CommandResult result{};
     settings::Error err = settings::Error::kOk;
-    if (!submitSetting(args[kKeyArgIndex], args[kValArgIndex], false, kSettingTimeoutMs, result,
-                       err)) {
+    if (!submitSetting(args[kKeyArgIndex], args[kValArgIndex], factoryUnlocked(), kSettingTimeoutMs,
+                       result, err)) {
         return cli::fail("%s", settingsErrorText(err));
     }
     return 0;

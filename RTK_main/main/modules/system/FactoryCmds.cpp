@@ -119,19 +119,28 @@ int cmdSn(void * /*ctx*/, int argc, char **argv) noexcept
         return cli::fail("usage: factory sn <value>");
     }
     const std::span<char *const> args(argv, kTwoArgs);
-    const size_t len = std::strlen(args[1]);
-    if ((len == 0U) || (len > NVS_STORE_SN_MAX) || (std::strpbrk(args[1], "\r\n") != nullptr)) {
+    const std::string_view sn{args[1]};
+    constexpr uint8_t kMinVisibleAscii = 0x21U;
+    constexpr uint8_t kMaxVisibleAscii = 0x7EU;
+    bool validSn = !sn.empty() && (sn.size() <= NVS_STORE_SN_MAX);
+    for (const char raw : sn) {
+        const auto ch = static_cast<uint8_t>(raw);
+        if ((ch < kMinVisibleAscii) || (ch > kMaxVisibleAscii)) {
+            validSn = false;
+            break;
+        }
+    }
+    if (!validSn) {
         return cli::fail("bad sn (1-%u bytes)", static_cast<unsigned>(NVS_STORE_SN_MAX));
     }
     fw::CommandResult result{};
     settings::Error err = settings::Error::kOk;
-    if (!submitSetting("factory.sn", std::string_view{args[1], len}, s_unlocked, kCommandTimeoutMs,
-                       result, err)) {
+    if (!submitSetting("factory.sn", sn, s_unlocked, kCommandTimeoutMs, result, err)) {
         if (err == settings::Error::kTimeout) {
             return cli::fail("no response");
         }
         if (err == settings::Error::kUnsupported) {
-            return cli::fail("link not running");
+            return cli::fail("settings unavailable");
         }
         if (err == settings::Error::kLocked) {
             return cli::fail("locked (factory unlock <key>)");
@@ -338,6 +347,11 @@ std::span<const cli::Cmd> factoryCmds() noexcept
 std::span<const cli::Verb> factoryVerbs() noexcept
 {
     return kFactoryVerbs;
+}
+
+bool factoryUnlocked() noexcept
+{
+    return s_unlocked;
 }
 
 } // namespace app

@@ -128,6 +128,10 @@ private:
 
     /** @brief 检查到期的 0x1E 恢复出厂或重启请求并执行。 @param nowMs: 当前时钟。 @note 仅 kLink。 */
     void pollPhoneReset(uint32_t nowMs) noexcept;
+    /** @brief 检测配置版本号变化并从 settings 同步 DeviceInfo.sn（0x01/0x02）。 @note 仅 kLink。 */
+    void syncDeviceSn() noexcept;
+    /** @brief 查询是否有手机兼容异步设置凭据在途。 @param localOnly: true 仅查同执行器凭据（height/snpn）。 @retval true 有在途凭据。 @note 仅 kLink。 */
+    [[nodiscard]] bool hasPendingTicket(bool localOnly = false) const noexcept;
     /** @brief 构造 PhoneCompatService 回调表，将配置类操作接入 settings::Service。 @retval 手机兼容回调表。 @note 仅 init 调用。 */
     [[nodiscard]] core::services::PhoneCompatOps makePhoneCompatOps() noexcept;
     /** @brief 手机 0x24 读取天线高。 @param ctx: BtLinkModule 指针。 @retval 8 B 小端双精度。 */
@@ -549,6 +553,7 @@ private:
     mutable settings::Ticket snpn_ticket_{};
     PendingReset pending_reset_ = PendingReset::kNone;
     uint32_t pending_reset_at_ms_ = 0U;
+    uint32_t last_config_rev_ = 0U;
     core::CommandRouter router_{};
     std::optional<core::LinkService> service_{};
     std::array<SessionEntry, kMaxSessions> sessions_{};

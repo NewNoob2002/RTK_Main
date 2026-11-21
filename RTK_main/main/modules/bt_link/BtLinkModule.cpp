@@ -481,6 +481,33 @@ void BtLinkModule::updateDeviceSn(std::string_view sn) noexcept
     }
 }
 
+void BtLinkModule::syncDeviceSn() noexcept
+{
+    if (context_ == nullptr) {
+        return;
+    }
+    const uint32_t rev = ctx().data.configRev.load(std::memory_order_acquire);
+    if (rev == last_config_rev_) {
+        return;
+    }
+    last_config_rev_ = rev;
+    settings::Value snVal{};
+    if (ctx().settings.get("factory.sn", snVal)) {
+        const auto sn = snVal.textView();
+        if (!sn.empty() && (sn != deviceSn())) {
+            updateDeviceSn(sn);
+        }
+    }
+}
+
+bool BtLinkModule::hasPendingTicket(bool localOnly) const noexcept
+{
+    if ((height_ticket_.seq != 0U) || (snpn_ticket_.seq != 0U)) {
+        return true;
+    }
+    return !localOnly && ((ppp_ticket_.seq != 0U) || (sat_ticket_.seq != 0U));
+}
+
 bool BtLinkModule::schedulePhoneReset(bool factoryReset, bool reboot, uint32_t nowMs) noexcept
 {
     if (pending_reset_ != PendingReset::kNone) {
@@ -667,6 +694,7 @@ fw::Result BtLinkModule::init() noexcept
     auto &deviceService = device_service_.emplace();
     deviceService.info().product.assign(board::productName(ctx().boardProfile));
     deviceService.info().sn.assign(system.sn.data());
+    last_config_rev_ = ctx().data.configRev.load(std::memory_order_acquire);
     deviceService.info().fwVer.assign(kAppVersion);
     deviceService.setSatTrackSurveyHook(&core::services::PhoneCompatService::handleSurveySatTrack,
                                         &phone_compat_);
@@ -767,8 +795,8 @@ void BtLinkModule::wait(uint32_t maxMs) noexcept
     static_cast<void>(ulTaskNotifyTake(pdTRUE, 0U));
     if (!pollAndCheckReady(rtos::nowMs()) && (maxMs > 0U)) {
         if (!pollAndCheckReady(rtos::nowMs())) {
-            const bool fastPoll = (pending_reset_ != PendingReset::kNone) ||
-                                  (ppp_ticket_.seq != 0U) || (sat_ticket_.seq != 0U);
+            // 防御性收窄等待上限至 50 ms（独立于当前 kLink idleWaitMs=20 配置，避免未来调大空闲等待时拖慢轮询）。
+            const bool fastPoll = (pending_reset_ != PendingReset::kNone) || hasPendingTicket();
             const uint32_t boundedMs = fastPoll ? std::min(maxMs, kPhoneResetPollMs) : maxMs;
             const TickType_t ticks = pdMS_TO_TICKS(boundedMs);
             const TickType_t waitTicks = (ticks == 0U) ? 1U : ticks;
@@ -781,8 +809,9 @@ void BtLinkModule::wait(uint32_t maxMs) noexcept
 
 bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
 {
-    /* 先消费复位和白名单变化，再按真实时钟推进 tick。 */
+    /* 先消费复位、SN 变更和白名单变化，再按真实时钟推进 tick。 */
     applyRtcmReset();
+    syncDeviceSn();
     collectWhitelistDirty();
     const uint32_t now = rtos::nowMs();
 #if RTK_GNSS_ENABLED
@@ -812,8 +841,9 @@ bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
     collectWhitelistDirty();
     publishLink(rtos::nowMs());
     pollPhoneReset(rtos::nowMs());
-    // 自投递给同执行器 StorageModule 的设置凭据在途时立即返回 true，促使其在下一轮即刻出队。
-    bool pending = gnssMore || baseMore || (height_ticket_.seq != 0U) || (snpn_ticket_.seq != 0U);
+    // 自投递给同执行器 StorageModule 的设置凭据在途时立即返回 true，促使其在下一轮即刻出队；
+    // 跨执行器 kIo 凭据（PPP/星座）不在本队列，避免 kLink 空转。
+    bool pending = gnssMore || baseMore || hasPendingTicket(true);
     for (const auto &entry : sessions_) {
         pending =
             pending || (entry.used && entry.demuxReady && !linkService().paused(entry.handle) &&
