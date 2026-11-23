@@ -28,12 +28,12 @@
 | W0–W8 | Wi-Fi 网页配置：按启动互斥的射频模式、SoftAP + httpd/WS、`web_proto`、网页前端与离线 mock、强制门户、页面重做 | 0017 | `4023131`～`f66389e` |
 | H1、HB | 按构建计算堆预算，按官方文档调整 Wi-Fi/lwIP 内存 | 0017 | `37aafb4` |
 | SV1–SV3 | 执行器异步命令总线；设置服务；手机与控制台改走设置服务；0x28 手机进入网页配置 | 0018 | `1105c35`、`a74bf94`、`5bd560f`、`489e2f7` |
+| B2 | P2 电源键长按关机、关机序列（保存 → 静默 → 断电）、SGM41513 I2C USB 检测与充电待机；2026-11-23 P2 v1.41 主路径 HIL PASS（报告 `docs/reports/B2-power-key.md` §9） | 0015 | `612ff8a`、`65c2863`、合入 `00f73c2` |
 
 ## 2. 进行中与未开始
 
 | 项 | 状态 |
 | --- | --- |
-| B2 电源键长按与关机流程 | 已在分支 `feat/b2-power-key` 实现（`612ff8a`），任务卡 `docs/tasks/B2-power-key-shutdown.md`；2026-11-23 P2 v1.41 主路径 HIL PASS（`65c2863` 报告 §9，硬关断 NOT_RUN），待合入 |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | 未立项，需新 ADR，必须走 ADR-0018 的服务与总线 |
@@ -45,5 +45,6 @@
 - G-CM680：RTCM 注入未测；所有 RTCM 共用最后一个周期、`nmea bad` 每 5 s 加 1 的原因未查明、`unlog com1` 返回 ERROR。
 - W0：CM680 星座 MASK/UNMASK 未验证，`gnss.const.*` 暂不支持。
 - B1：E1 强制档与未知 ID 路径未测。
+- B2：固件卡死时 10 s 硬关断 NOT_RUN；3V3/GPIO4/U3 波形未用仪表测；SGM41513 REG00–REG0B 位核对、`senseOnMv` 与硬关断时长校准、注入类项（按键毛刺、U3 30 s 未掉电回退、BT 拥塞、NVS 错误）未测；BT 关机时 SPP CLOSE 日志晚于 `device powered down` 约 0.49 s。
 - HB：关闭 Wi-Fi 的构建最小空闲堆 80,776 B，低于 81,920 B 预算，用户已接受（该构建不发布）。
 - 多张实现卡（C1–C4、P1、N1、G-baud*、Q1 门控、W1）的报告只有实现方结论 NOT_RUN，此后的整机 HIL 没有逐卡单独记录。

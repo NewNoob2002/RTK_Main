@@ -129,5 +129,5 @@ ID 窗口登记：
 | 卡 | 内容 | 状态 |
 | --- | --- | --- |
 | B1 | 配置表 + `identify` 步骤 + P2 电源保持 + 安全电平 + GNSS 引脚改读配置表 | 待实施 |
-| B2 | P2 按键与关机（§2.4 关机协议），卡 `docs/tasks/B2-power-key-shutdown.md` | 已实现，分支 `feat/b2-power-key`（`612ff8a`）；2026-11-23 主路径 HIL PASS，待合入 |
+| B2 | P2 按键与关机（§2.4 关机协议），卡 `docs/tasks/B2-power-key-shutdown.md` | 已实现，分支 `feat/b2-power-key`（`612ff8a`）；2026-11-23 主路径 HIL PASS，已合入 main（`00f73c2`） |
 | 后续 | 4G、OLED、充电/电池、蜂鸣器/马达/LED、IMU；引入按 `features` 启停模块 | 未开始 |
