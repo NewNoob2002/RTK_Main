@@ -1,9 +1,0 @@
-{
-  "snapshot_files": 96,
-  "changed_files": [],
-  "candidate_check": "8/8 sha256sum checks passed",
-  "herdr_tab": "wF:t4",
-  "herdr_pane": "wF:pE",
-  "agent": "rtk-omp-deepseek",
-  "model": "magpie/workbuddy/deepseek-v4.1-flash"
-}

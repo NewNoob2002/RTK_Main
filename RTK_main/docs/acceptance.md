@@ -24,9 +24,9 @@ GitHub Actions（`.github/workflows/gates.yml`，push/PR 触发）调用同一�
 | G7b | C++ 运行时（CPP-001/002/003） | `python3 -I tools/g7b_check/g7b_check.py --build builds/qa-tgt`；`cpp_cost.py --prefix xtensa-esp32-elf- check builds/qa-tgt/rtk_main.elf --tier T2` 只报告 | 自有目标文件中异常、RTTI 符号均为 0；自有目标文件不得引用 `__cxa_guard_acquire/__cxa_guard_release/__cxa_guard_abort`（函数内静态必须常量初始化，技能 CPP-009，Q2 起）；自有目标文件 = `main` 与 `components/` 下全部组件（Q3 起由目录列举得出，不再手写清单）。堆符号仅在对应源文件已登记 `tools/g7b_check/heap_allowlist.txt` 时放行并列出，否则 FAIL；`operator delete`（`_ZdlPv*`/`_ZdaPv*`）与 `new`/`malloc` 一样没有例外（S1 起取消 Q3 的删除析构函数豁免：驱动层次改为受保护非虚析构 + `final` 叶子类，ADR-0012 §2.8）。白名单每行是仓库相对源文件路径 + `#` 档位与理由，初始为空；通过 `compile_commands.json` 精确映射，禁止按同名文件或目录豁免。审查须符合 `docs/CODING-STYLE.md`：ISR、蓝牙回调、链路任务每轮路径、发送任务禁止分配；启动期一次性分配允许；非实时路径允许限量分配并处理失败；文件头注明档位（2026-11-12 由 ADR-0008 §8 修订）。全 ELF 的异常/RTTI 符号仍只能是白名单 6 个（`__cxa_begin_catch`、`__cxa_end_catch`、`std::bad_alloc`/`std::exception` 的 typeinfo 与 typeinfo name），且 map 拉入链必须为 IDF `nvs_encrypted_partition.cpp.obj` → libstdc++ `new_opvnt.o` → `eh_catch.o`/`new_opv.o` → `new_op.o` → `bad_alloc.o`；任何新增符号或链路变化判 FAIL（2026-11-11 裁决，证据见 `docs/reports/T14-REVIEW.md`、`docs/reports/G7B-DECISION.md`）。heap 类来自 IDF 蓝牙栈，只报告 |
 | G8 | 代码审查 | 验收方逐条审查：ESP-001（portMUX）、ESP-003（字节栈/绑核）、ESP-004（esp_err_t）、CPP-009/010/011/013/014/020、回调不阻塞、单一所有者、有界等待、错误路径释放 | 没有未处理的 High 问题 |
 
-## 2. 硬件在环（HIL，需用户明确授权烧录指定 E1 板后执行）
+## 2. 硬件在环（HIL，需用户明确授权烧录指定板后执行）
 
-前置：授权 `idf.py -p <port> flash monitor` 到指定板；确认引脚 26 的电源保持问题（ADR-0001 §6 WARNING）。
+前置：授权 `idf.py -p <port> flash monitor` 到指定板。目标板为 P2 v1.41（板型识别与电源保持见 ADR-0015）；E1 仅作测试板。
 
 | ID | 场景 | 步骤 | 通过标准 |
 | --- | --- | --- | --- |

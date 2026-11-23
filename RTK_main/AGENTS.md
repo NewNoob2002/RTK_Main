@@ -7,12 +7,12 @@
 | 项 | 值 | 来源 |
 | --- | --- | --- |
 | 芯片 | ESP32（经典款，Xtensa LX6 双核），rev ≥ 3.1，8 MB Flash，PSRAM `UNKNOWN`（不得依赖） | `../../E1-5.4/sdkconfig` |
-| SDK | ESP-IDF v6.1，路径 `~/esp/esp-idf`；C++ 默认 gnu++26，异常/RTTI 默认关闭 | `git describe`；`tools/cmake/build.cmake:208`；`Kconfig:560,580` |
+| SDK | ESP-IDF v6.1，路径 `~/esp/esp-idf-v6.1`（`IDF_PATH`）；C++ 默认 gnu++26，异常/RTTI 默认关闭 | `git describe`；`tools/cmake/build.cmake:208`；`Kconfig:560,580` |
 | 工具链 | xtensa-esp-elf / riscv32-esp-elf GCC 15.2 | `~/.espressif/tools` |
 | 蓝牙 | Bluedroid，仅经典蓝牙 SPP，最多 2 会话；`esp_spp_write` 深拷贝；对端地址在 `srv_open.rem_bda` | `reference/c-v1/docs/reports/T04.md`（附 IDF 文件:行号） |
 | 经典蓝牙目标 | 只有 esp32 可用（esp32s31 为 preview，且无控制器库） | `soc_caps.h`；`components/bt/controller/` |
 | 参考 | `../../E1-5.4`（Arduino 旧固件，只读）；`reference/c-v1/`（C 版实现，只读，不参与构建） | — |
-| 板级引脚 | 已使用：UART0 console（2 Mbaud）；GNSS UART2 RX16/TX17、GNSS 电源 GPIO25（Kconfig `RTK_GNSS_*`，ADR-0010）；电源保持 GPIO26（`main/app/BootFlow.cpp`）。其余 5.4 引脚见 `reference/c-v1/ADR-0001-architecture.md` §6，未经 ADR 不得驱动 | `main/Kconfig.projbuild` |
+| 板级引脚 | 已使用：UART0 console（2 Mbaud）；GNSS UART2 RX16/TX17（Kconfig `RTK_GNSS_*`，ADR-0010）。目标板 P2 v1.41：板型 ID 分压 GPIO35，电源键 GPIO4 模拟保持、GPIO25 检测；E1 测试板：GNSS 电源 GPIO25、电源保持 GPIO26（ADR-0015，`main/board/BoardProfile.cpp`）。其余 5.4 引脚见 `reference/c-v1/ADR-0001-architecture.md` §6，未经 ADR 不得驱动 | `main/Kconfig.projbuild`、`main/board/BoardProfile.cpp` |
 
 查不到的硬件事实写 `UNKNOWN` 并停下报告，不得猜测寄存器、引脚或 API。
 
@@ -85,7 +85,9 @@ ADR-0007 新增的纯组件（app_fw、bt_reconnect）与 link_core 的 `service
 ## 5. 命令
 
 ```sh
-. ~/esp/esp-idf/export.sh >/dev/null                       # 每个新 shell 先执行
+# 系统 Python 为 3.14，需指定 IDF 自带的 3.13 环境，否则 export.sh 失败
+export IDF_PATH=~/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf6.1_py3.13_env
+. "$IDF_PATH"/export.sh >/dev/null                         # 每个新 shell 先执行
 idf.py -B builds/<任务> build                               # 0 warning；另用 -DSDKCONFIG_DEFAULTS 加 CONFIG_RTK_TRACE_ENABLE=n 再编一份
 idf.py -B builds/<任务> size
 # host 测试：以下每个目录都要普通构建 + ASan/UBSan 构建各跑一次
