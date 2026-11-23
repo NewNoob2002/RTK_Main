@@ -3,7 +3,7 @@
 - 任务卡：`docs/tasks/B2-power-key-shutdown.md`
 - 补充修复单：C1–C6（2026-11-21 板测发现 P2 v1.41 GPIO39 nPG 不可用 → 改用 SGM41513 I2C 检测 USB 在位 + 移植 V2.7 充电参数 + 修复关机 GPIO 冲突告警）
 - 分支：`feat/b2-power-key`（基线 `main d6db196`）
-- 结论：实现与全部自动门禁 **40/40 PASS**（`--prefix b2fix`），冻结清单 0 改动；实板确认项待 Architect 在 P2 v1.41 上验证（`NOT_RUN`）。
+- 结论：实现与全部自动门禁 **40/40 PASS**（`--prefix b2fix`），冻结清单 0 改动；Architect 于 2026-11-23 在 P2 v1.41 上完成主路径实板验证（见 §9），硬关断与若干注入类待验项仍 `NOT_RUN`。
 
 ## 1. 改动文件
 
@@ -216,3 +216,29 @@ A3 的 ESP-IDF v6.1 GAP API 只确认 BTC 入队。应用层 OPEN 拒绝和 SPP 
 | G7b / G7c | PASS | 运行期符号和无控制台档 CLI 依赖检查通过。 |
 | `idf.py -B builds/b2fix4-idf size`、`esp_idf_size --diff` | PASS | 以最终构建产物统计，资源数据见上表。 |
 | 实板 HIL | NOT_RUN | 规则禁止烧录与连串口，待 Architect 实板验证。 |
+
+## 9. Architect 实板 HIL（2026-11-23）
+
+- 板卡：P2 v1.41（`id=1631–1633 mV`），CM680 GNSS，SN `20261121`；固件 `612ff8a`，`idf.py -B builds/b2-hil build`，2 Mbaud 烧录 `/dev/ttyACM0`。
+- 串口：USB-TTL 带一键烧录自动复位电路，打开端口时改动 DTR/RTS 会复位（电池供电时会直接掉电）。不改 DTR/RTS 直接打开端口不复位（`uptime` 连续），本次全部观测均用此方式。
+- 判据只来自串口日志与命令回读；3V3 电压、GPIO4/U3 波形未用仪表测量。
+
+| # | 场景 | 供电 | 结果 | 证据 |
+|---|---|---|---|---|
+| 1 | 关机状态插 USB → 充电待机 | USB | PASS | `power_on=charge sense=128 mV usb=1 src=i2c`，`radio skipped (charge standby)`，`u3_on=0`，`charger reg08=0x54` |
+| 2 | 待机长按 → 正常开机 | USB | PASS | `power hold ok sense=2593 mV after 29 ms`，蓝牙上线，CM680 115200 探测成功 |
+| 3 | 正常运行长按关机（USB 在位） | USB | PASS | `power off reason=key usb=1` → `device powered down`（+44 ms）→ `u3 down with usb, restarting`（+420 ms）→ `power_on=charge` 待机 |
+| 4 | 正常运行 `power off`（USB 在位） | USB | PASS | `reason=console` → `device powered down` → 约 2.9 s 后 `u3 down with usb, restarting` → 待机；无 `gpio: conflict found` |
+| 5 | 待机拔 USB → 完全关机 | 电池 | PASS（仅串口） | 拔出后命令无响应 |
+| 6 | 电池按键开机 | 电池 | PASS | < 1 s 短按不开机（串口无任何输出，含 ROM）；约 1.5 s 单次按压开机，`power_on=key sense=2388–2392 mV usb=0` |
+| 7 | 电池长按 2.5 s 关机 | 电池 | PASS（仅串口） | `power off reason=key usb=0` → `device powered down`（+44 ms）→ `E BOD: Brownout detector was triggered`（电源跌落，预期）→ 命令无响应 |
+| 8 | 关机前设置保持 | 电池 | PASS | `config set phone.height 000000000000F83F`（1.5）→ 长按关机 → 开机读回 1.5；已恢复原值 `79E9263108ACFE3F`（1.917） |
+| 9 | 蓝牙 SPP 连接中长按关机 | 电池 | PASS | `sessions 1 / 2`（PHONE `68:58:A0:EC:C0:7E`）；`power off reason=key usb=0` → `device powered down` → `BT_RFCOMM ... Closed (res: 19)`（`PORT_CLOSED`）；手机侧显示正常断开、无数据 |
+| 10 | 固件卡死时 10 s 硬关断 | 电池 | NOT_RUN | 本固件无挂死注入命令 |
+
+- 观察项：
+  1. U3 关断耗时与关机触发方式有关：按键路径用户仍在按压，`device powered down` 后约 0.42 s 关断；`power off` 路径由 GPIO4 模拟按压，约 2.9 s 关断。与 ADR-0015 估计的 U3 约 3 s 连续按压关断一致，可据此更新 ADR-0015 §2.4。
+  2. 蓝牙场景 RFCOMM 关闭日志在 `device powered down` 之后约 0.49 s 才出现（任务卡要求 `kQuiesce` 先断开 SPP）。手机侧为正常断开，推测为 CLOSE 事件回调滞后；若需严格顺序，应让 `kQuiesce` 等待 SPP CLOSE 事件后再打 `device powered down`。
+  3. 开机 `power status` 的 `key_count short=0 long=0`，开机按压不计入按键计数。
+  4. 串口复位不会关 U3：正常模式下端口复位后仍以 `power_on=key` 重新进入正常模式。
+- 仍未验证：§5 第 1、2、5 项（REG00–REG0B 全量位核对、REG02/REG03 编码、`senseOnMv` 与硬关断时长校准）；第二、三轮待验项中的毛刺/2490 ms 边界注入、U3 30 s 未掉电回退、BT/BTC 拥塞、Web exit 并发、NVS 错误注入、日志交付时差、`sys reboot` 并发。
