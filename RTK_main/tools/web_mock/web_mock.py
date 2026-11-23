@@ -25,6 +25,7 @@ OTA_CHIP_ID_ESP32 = 0x0000
 OTA_DESC_MAGIC = 0xABCD5432
 OTA_DEFAULT_MAX = 0x1E0000  # partitions.csv ota_0/ota_1 大小
 OTA_RECV_TIMEOUT_S = 30.0
+OTA_TOTAL_TIMEOUT_S = 150.0
 OTA_DRAIN_TIMEOUT_S = 0.25
 OTA_ERR_HTTP: dict[str, int] = {
     "busy": 409,
@@ -141,6 +142,7 @@ class MockState:
         self.ota_slow_kbps: float = ota_slow_kbps
         self.ota_reboot_ms: int = 1500
         self.ota_recv_timeout_s: float = OTA_RECV_TIMEOUT_S
+        self.ota_total_timeout_s: float = OTA_TOTAL_TIMEOUT_S
         self.ota_drain_timeout_s: float = OTA_DRAIN_TIMEOUT_S
         self.no_ota: bool = no_ota
         self.ws_clients: set[socket.socket] = set()
@@ -502,6 +504,8 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                 slow_kbps = self.state.ota_slow_kbps
                 reboot_ms = self.state.ota_reboot_ms
                 recv_timeout_s = self.state.ota_recv_timeout_s
+                total_timeout_s = self.state.ota_total_timeout_s
+                total_deadline = time.monotonic() + total_timeout_s
         if already_busy:
             drained = self._drain_small_body(parsed_cl or 0)
             try:
@@ -555,9 +559,13 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
             t0 = time.monotonic()
 
             while received < parsed_cl:
+                total_rem = total_deadline - time.monotonic()
+                if total_rem <= 0:
+                    fail("timeout", 0, drain=False)
+                    return
                 want = min(chunk_sz, parsed_cl - received)
                 try:
-                    chunk, timed_out = self._read_body_chunk(want, recv_timeout_s)
+                    chunk, timed_out = self._read_body_chunk(want, min(recv_timeout_s, total_rem))
                 except OSError:
                     fail("aborted", 0, drain=False)
                     return
@@ -568,6 +576,9 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                     fail("aborted", 0, drain=False)
                     return
                 received += len(chunk)
+                if time.monotonic() >= total_deadline:
+                    fail("timeout", 0, drain=False)
+                    return
                 if not header_checked:
                     need = OTA_HDR_BYTES - len(hdr)
                     hdr.extend(chunk[:need])
@@ -585,7 +596,16 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                     elapsed = time.monotonic() - t0
                     expected = received / (slow_kbps * 1024.0)
                     if expected > elapsed:
-                        time.sleep(expected - elapsed)
+                        sleep_s = expected - elapsed
+                        rem_after = total_deadline - time.monotonic()
+                        if rem_after <= 0:
+                            fail("timeout", 0, drain=False)
+                            return
+                        if sleep_s >= rem_after:
+                            time.sleep(rem_after)
+                            fail("timeout", 0, drain=False)
+                            return
+                        time.sleep(sleep_s)
 
             if forced_err in ("validate", "timeout", "flash", "aborted"):
                 fail(forced_err, 0, drain=True)
@@ -1493,6 +1513,45 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
         }
         _, _, rb_post_to = http_req("GET", "/ota/info")
         assert json.loads(rb_post_to.decode("utf-8"))["busy"] is False
+
+        # 8d-4. Steady trickle (< recv timeout per chunk) exceeding total deadline -> 408 timeout
+        with state.lock:
+            state.ota_recv_timeout_s = 2.0
+            state.ota_total_timeout_s = 0.45
+        s_trickle = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+        try:
+            trickle_hdr = (
+                b"POST /ota HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/octet-stream\r\n"
+                b"Content-Length: 4096\r\n\r\n"
+            )
+            s_trickle.sendall(trickle_hdr + valid_bin[:OTA_HDR_BYTES])
+            sent_off = OTA_HDR_BYTES
+            for _ in range(8):
+                time.sleep(0.08)
+                try:
+                    s_trickle.sendall(valid_bin[sent_off : sent_off + 64])
+                    sent_off += 64
+                except OSError:
+                    break
+            trickle_resp = b""
+            while True:
+                ch = s_trickle.recv(4096)
+                if not ch:
+                    break
+                trickle_resp += ch
+        finally:
+            s_trickle.close()
+            with state.lock:
+                state.ota_recv_timeout_s = OTA_RECV_TIMEOUT_S
+                state.ota_total_timeout_s = OTA_TOTAL_TIMEOUT_S
+        assert b" 408 " in trickle_resp.split(b"\r\n", 1)[0], f"Expected 408, got {trickle_resp!r}"
+        assert json.loads(trickle_resp.split(b"\r\n\r\n", 1)[1].decode("utf-8")) == {
+            "ok": False,
+            "err": "timeout",
+        }
+        _, _, rb_post_trickle = http_req("GET", "/ota/info")
+        assert json.loads(rb_post_trickle.decode("utf-8"))["busy"] is False
 
         # 8e. Every --ota-err code maps to exact HTTP status + JSON
         for err_code, http_status in OTA_ERR_HTTP.items():

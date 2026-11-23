@@ -31,9 +31,10 @@
 | otadata | data/ota | 0x14000 | 0x2000 | 保留（本阶段无 OTA，ADR-0002 §9） |
 | ota_0 / ota_1 | app | 0x20000 / 0x200000 | 0x1E0000 | 1.875 MB；2026-11-18 曾放大到 3 MB（按 8 MB），2026-11-23 改回，见下 |
 | **nvs_fac** | data/nvs | 0x3E0000 | 0x6000 | **新增**：出厂数据，`freset` 不碰 |
+| **fence** | data/undefined | 0x3E6000 | 0x8000 | **新增（2026-11-23，预留）**：电子围栏存储（REQ-004），2×16 KB 双槽轮换写，格式另立 ADR；`freset` 行为随该 ADR 定 |
 | **coredump** | data/coredump | 0x3F0000 | 0x10000 | **新增**：崩溃转储到 flash，`freset` 不碰 |
 
-- 删除未使用的 `spiffs`（原 0x360000 起 0x19000）。0x3E6000–0x3EFFFF 留空。
+- 删除未使用的 `spiffs`（原 0x360000 起 0x19000）。0x3EE000–0x3EFFFF（8 KB）留空。`fence` 在 OTA 发布前预留，因为分区表只能串口烧录更新、OTA 改不了。
 - 2026-11-23 修订（用户选定）：带 F9P 的 P2 实测 4 MB flash，8 MB 头导致 `spi_flash` 探测失败、启动循环。所有产品改用同一张 4 MB 表（8 MB 板子用 4 MB 头同样启动），app 槽 1.875 MB（与旧 P2 一致），镜像约 1.52 MB。nvs/phy/otadata 位置不变；nvs_fac/coredump 移位，8 MB 老板子上原 0x620000/0x630000 的内容不再读取。
 - nvs/phy_init/otadata 不动：老板子的用户数据（白名单、蓝牙绑定）升级后仍在。
 - 启用 `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH`；启动时若有转储，打一行 W `Core dump found`；读取命令〔提议〕`sys coredump`。

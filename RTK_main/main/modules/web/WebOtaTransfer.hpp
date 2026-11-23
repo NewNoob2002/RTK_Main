@@ -21,6 +21,8 @@ inline constexpr size_t kVersionOffset = kAppDescOffset + 16U;
 inline constexpr size_t kProjectOffset = kAppDescOffset + 48U;
 inline constexpr size_t kTextBytes = 32U; // B，app desc version / project_name
 inline constexpr uint32_t kTimeoutMs = 30000U;
+// 低于浏览器端 OTA_TOTAL_MS=180000（main/web/ui/app.js），保证 408 能在客户端超时前送达。
+inline constexpr uint32_t kTotalTimeoutMs = 150000U;
 inline constexpr uint32_t kRebootMs = 1500U;
 
 enum class UploadCode : uint8_t {
@@ -100,31 +102,56 @@ struct TransferResult {
 }
 
 /**
- * @brief 接收一段有界数据，连续无进展 30 s 或中止时返回
+ * @brief 判断自起点以来的单调耗时是否达到上限
+ * @param startMs: 起始单调时钟（ms）
+ * @param nowMs: 当前单调时钟（ms）
+ * @param limitMs: 时长上限（ms），小于 uint32_t 时钟周期
+ * @retval true 已达到或超过上限
+ * @retval false 尚未超时
+ * @note 使用 uint32_t 无符号差值处理回绕。
+ */
+[[nodiscard]] constexpr bool elapsedAtLeast(uint32_t startMs, uint32_t nowMs,
+                                            uint32_t limitMs) noexcept
+{
+    return nowMs - startMs >= limitMs;
+}
+
+/**
+ * @brief 接收一段有界数据，连续无进展超时、总时长超限或中止时返回
  * @param io: 接收、时钟和停止请求操作
  * @param dst: 当次需要填满的缓冲视图
  * @param[in,out] received: 加上已实际收到的字节数
+ * @param startMs: 本次上传准入时的单调毫秒起点
  * @retval kOk 此段接收完成
- * @retval kTimeout 自上次进展以来连续超时
+ * @retval kTimeout 连续无进展达到 kTimeoutMs 或总耗时达到 kTotalTimeoutMs
  * @retval kAborted 关机或接收端断开
  * @note 仅上传所有者调用，可等待 IO；dst 必须非空。
  */
 template <typename Io>
-[[nodiscard]] UploadCode receiveBlock(Io &io, std::span<char> dst, size_t &received) noexcept
+[[nodiscard]] UploadCode receiveBlock(Io &io, std::span<char> dst, size_t &received,
+                                      uint32_t startMs) noexcept
 {
     uint32_t progressMs = io.nowMs();
     while (!dst.empty()) {
         if (io.stopRequested()) {
             return UploadCode::kAborted;
         }
+        if (elapsedAtLeast(startMs, io.nowMs(), kTotalTimeoutMs)) {
+            return UploadCode::kTimeout;
+        }
         const auto rx = io.receive(dst);
+        const uint32_t now = io.nowMs();
         if (rx.bytes != 0U && rx.bytes <= dst.size()) {
             received += rx.bytes;
             dst = dst.subspan(rx.bytes);
-            progressMs = io.nowMs();
+            progressMs = now;
+            if (elapsedAtLeast(startMs, now, kTotalTimeoutMs)) {
+                return io.stopRequested() ? UploadCode::kAborted : UploadCode::kTimeout;
+            }
         } else if (!rx.timedOut) {
             return UploadCode::kAborted;
-        } else if (io.nowMs() - progressMs >= kTimeoutMs) {
+        } else if (elapsedAtLeast(progressMs, now, kTimeoutMs) ||
+                   elapsedAtLeast(startMs, now, kTotalTimeoutMs)) {
             return io.stopRequested() ? UploadCode::kAborted : UploadCode::kTimeout;
         }
     }
@@ -137,16 +164,17 @@ template <typename Io>
  * @param buffer: 外供接收缓冲，至少容纳头部
  * @param length: 已验证的请求长度，须大于头部
  * @param project: 运行镜像 project_name
+ * @param startMs: 本次上传准入时的单调毫秒起点
  * @retval 上传结果、接收总字节数与已解析版本
  * @note 仅上传所有者调用，可等待 IO/Flash；提交是唯一修改启动槽的步骤。
  */
 template <typename Io>
 [[nodiscard]] TransferResult transfer(Io &io, std::span<char> buffer, size_t length,
-                                      std::string_view project) noexcept
+                                      std::string_view project, uint32_t startMs) noexcept
 {
     TransferResult result{};
     auto block = buffer.first(kHeaderBytes);
-    result.code = receiveBlock(io, block, result.received);
+    result.code = receiveBlock(io, block, result.received, startMs);
     if (result.code != UploadCode::kOk) {
         return result;
     }
@@ -160,12 +188,16 @@ template <typename Io>
             result.code = UploadCode::kAborted;
             break;
         }
+        if (elapsedAtLeast(startMs, io.nowMs(), kTotalTimeoutMs)) {
+            result.code = UploadCode::kTimeout;
+            break;
+        }
         result.code = io.write(block);
         if (result.code != UploadCode::kOk || result.received == length) {
             break;
         }
         block = buffer.first(std::min(buffer.size(), length - result.received));
-        result.code = receiveBlock(io, block, result.received);
+        result.code = receiveBlock(io, block, result.received, startMs);
     }
     if (result.code == UploadCode::kOk) {
         result.code = io.stopRequested() ? UploadCode::kAborted : io.end(length);

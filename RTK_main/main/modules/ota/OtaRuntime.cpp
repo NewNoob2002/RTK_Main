@@ -21,6 +21,7 @@ constinit std::atomic<Operation> s_operation{Operation::kIdle};
 constinit std::atomic<const char *> s_last_upload{"none"};
 constinit std::atomic<bool> s_confirmation_armed{false};
 constinit uint32_t s_boot_ready_ms = 0U; // 启动任务在发布 s_confirmation_armed 前写一次。
+constinit std::atomic<bool> s_other_slot_dirty{false};
 
 } // namespace
 
@@ -55,6 +56,31 @@ const char *stateName(esp_ota_img_states_t state) noexcept
     default:
         return "undefined";
     }
+}
+
+void markOtherSlotDirty() noexcept
+{
+    s_other_slot_dirty.store(true, std::memory_order_release);
+}
+
+void clearOtherSlotDirty() noexcept
+{
+    s_other_slot_dirty.store(false, std::memory_order_release);
+}
+
+std::optional<std::string_view> otherSlotVersion(const esp_partition_t *part,
+                                                 esp_app_desc_t &desc) noexcept
+{
+    if (part == nullptr) {
+        return std::nullopt;
+    }
+    const bool stateDefined = partitionState(part) != ESP_OTA_IMG_UNDEFINED;
+    const bool dirty = s_other_slot_dirty.load(std::memory_order_acquire);
+    if (!otherSlotVersionReadable(stateDefined, dirty) ||
+        esp_ota_get_partition_description(part, &desc) != ESP_OK) {
+        return std::nullopt;
+    }
+    return imageText(desc.version);
 }
 
 bool beginOperation(Operation op) noexcept
