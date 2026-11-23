@@ -1,11 +1,11 @@
-# 8 MB flash 布局（ADR-0014 §2.1）：nvs/phy/otadata 位置沿用 E1-5.4 以保住老板子用户数据；app 槽各 3 MB；
-# 0x640000 起 1.75 MB 留空给以后的文件系统或日志。
+# 4 MB flash 布局（ADR-0014 §2.1，2026-11-23 修订）：带 F9P 的 P2 实测为 4 MB flash，所有产品共用此表
+# （8 MB 板子同样能启动，多出的空间不用）。nvs/phy/otadata 位置沿用 E1-5.4 以保住老板子用户数据；app 槽各 1.875 MB。
 # Name,   Type, SubType, Offset,  Size, Flags
 # Note: if you change the phy_init or app partition offset, make sure to change the offset in Kconfig.projbuild
 nvs,      data, nvs,     0xA000,  0x9000,
 phy_init, data, phy,           ,  0x1000,
 otadata,  data, ota,           ,  0x2000,
-ota_0,    app,  ota_0,   0x20000, 0x300000,
-ota_1,    app,  ota_1,   0x320000, 0x300000,
-nvs_fac,  data, nvs,     0x620000, 0x6000,
-coredump, data, coredump,0x630000, 0x10000,
+ota_0,    app,  ota_0,   0x20000, 0x1E0000,
+ota_1,    app,  ota_1,   0x200000, 0x1E0000,
+nvs_fac,  data, nvs,     0x3E0000, 0x6000,
+coredump, data, coredump,0x3F0000, 0x10000,

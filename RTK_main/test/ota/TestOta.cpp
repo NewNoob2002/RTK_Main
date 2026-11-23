@@ -18,7 +18,7 @@ using app::web_ota::ReceiveResult;
 using app::web_ota::transfer;
 using app::web_ota::UploadCode;
 
-constexpr size_t kSlotBytes = 3145728U;
+constexpr size_t kSlotBytes = 0x1E0000U;
 constexpr size_t kImageBytes = 4200U;
 constexpr std::string_view kProject = "rtk_main";
 constexpr std::string_view kVersion = "6.0.0";
@@ -248,14 +248,14 @@ void testHttpContract()
     const size_t len = renderInfo(info, storage);
     assert((
         std::string_view{storage.data(), len} ==
-        R"({"running":"6.1.0-dev","project":"rtk_main","part":"ota_0","state":"valid","other":"6.0.0","max":3145728,"busy":false})"));
+        R"({"running":"6.1.0-dev","project":"rtk_main","part":"ota_0","state":"valid","other":"6.0.0","max":1966080,"busy":false})"));
     auto noOther = info;
     noOther.other.reset();
     noOther.busy = true;
     const size_t nullLen = renderInfo(noOther, storage);
     assert((
         std::string_view{storage.data(), nullLen} ==
-        R"({"running":"6.1.0-dev","project":"rtk_main","part":"ota_0","state":"valid","other":null,"max":3145728,"busy":true})"));
+        R"({"running":"6.1.0-dev","project":"rtk_main","part":"ota_0","state":"valid","other":null,"max":1966080,"busy":true})"));
     assert(renderInfo(noOther, std::span{storage}.first(nullLen - 1U)) == 0U);
     assert(renderInfo(noOther, std::span{storage}.first(nullLen)) == nullLen);
 

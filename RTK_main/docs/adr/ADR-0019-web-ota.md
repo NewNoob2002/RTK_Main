@@ -1,7 +1,7 @@
 # ADR-0019：网页固件升级（OTA）与回滚
 
 状态：**已批准**（2026-11-23，用户答复 §7 Q1–Q2）。由 O 系列任务卡实施（见 §6）。
-关联：ADR-0002 §9（OTA 延后，本 ADR 解除）、ADR-0014 §2.1（分区与 3 MB app 槽）、ADR-0017（Wi-Fi 网页配置）、
+关联：ADR-0002 §9（OTA 延后，本 ADR 解除）、ADR-0014 §2.1（分区与 1.875 MB app 槽，2026-11-23 由 3 MB 改回）、ADR-0017（Wi-Fi 网页配置）、
 ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 
 > 命名：O = OTA。
@@ -11,7 +11,7 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 - 旧 P2（`P2_V3.1_IDF/main/user_src/user_web_from.c:144` `cgi_bin_update_handler`）：`POST /upload` 接收 multipart，
   在 httpd 回调里 `esp_ota_begin(OTA_WITH_SEQUENTIAL_WRITES)` → `esp_ota_write` → `esp_ota_end` → `esp_ota_set_boot_partition`，
   按文件名比较版本号，升级期间停 4G 任务，OLED 显示进度；启动时无条件 `esp_ota_mark_app_valid_cancel_rollback()`（回滚未开，等于无回滚）。
-- 本工程现状：`partitions.csv` 已有 `otadata`、`ota_0`、`ota_1`（各 0x300000）；Wi-Fi 配置模式（ADR-0017）已有 SoftAP + httpd
+- 本工程现状：`partitions.csv` 已有 `otadata`、`ota_0`、`ota_1`（各 0x1E0000）；Wi-Fi 配置模式（ADR-0017）已有 SoftAP + httpd
   （core 0，3 个套接字）+ WS；手机 0x1D 是固定回失败的占位（`components/link_core/services/PhoneCompatService.cpp:437`）。
 - 固件为多产品单镜像（启动时按 GPIO35 识别板型），因此镜像不需要按板型区分。
 
@@ -37,7 +37,7 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 
 | 方法 / 路径 | 请求 | 应答 |
 |---|---|---|
-| `GET /ota/info` | — | `200`，JSON：`{"running":"<ver>","project":"rtk_main","part":"ota_0","state":"valid","other":"<ver>"\|null,"max":3145728,"busy":false}` |
+| `GET /ota/info` | — | `200`，JSON：`{"running":"<ver>","project":"rtk_main","part":"ota_0","state":"valid","other":"<ver>"\|null,"max":1966080,"busy":false}` |
 | `POST /ota` | 体为原始 `.bin`（`Content-Type: application/octet-stream`，必须有 `Content-Length`；**不用 multipart**） | 见下表 |
 
 - `state` 取 `esp_ota_img_states_t` 的小写名去前缀：`new`/`pending_verify`/`valid`/`invalid`/`aborted`/`undefined`；`other` 为另一个 app 槽
@@ -63,7 +63,7 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 ### 2.4 设备端实现约束
 
 - 写入在 httpd 回调（core 0，httpd 任务）内同步流式完成：`esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, ...)`，按块
-  `httpd_req_recv` → `esp_ota_write`。**禁止** `OTA_SIZE_UNKNOWN`/传入整包大小（会一次擦 3 MB，阻塞数十秒且关 cache）。
+  `httpd_req_recv` → `esp_ota_write`。**禁止** `OTA_SIZE_UNKNOWN`/传入整包大小（会一次擦整个槽，阻塞数十秒且关 cache）。
 - 接收缓冲 ≤ 2 KB，不放 httpd 任务栈（默认 4 KB 栈），不新增常驻 `.bss`：从启动内存池按 `kWifiConfig` 模式申请
   （参照 `BootBuffers::webFrames`），蓝牙模式不占内存。本工程代码不新增堆分配；`esp_ota_*` 内部分配记入 G7b 白名单说明。
 - 并发：同一时刻只允许一个上传（原子标志）；上传期间：
@@ -115,8 +115,8 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 
 - 蓝牙模式：DRAM 静态增量 ≤ 256 B；空闲堆不得下降（门槛同 ADR-0017 §3）。
 - Wi-Fi 模式：升级过程中空闲堆最低 ≥ 30 KB（`esp_ota_begin` 与 lwIP 接收缓冲在 IDF 内部分配）。
-- IRAM 余量 ≥ 8 KB；镜像大小增量报告即可（槽 3 MB，现约 1.5 MB）。
-- 3 MB 槽 / 1.5 MB 镜像：升级时间目标 ≤ 60 s（实测记入报告，不作硬门槛）。
+- IRAM 余量 ≥ 8 KB；镜像大小增量报告即可（槽 1.875 MB，现约 1.52 MB）。
+- 1.875 MB 槽 / 1.52 MB 镜像：升级时间目标 ≤ 60 s（实测记入报告，不作硬门槛）。
 
 ## 4 构建与冻结文件
 

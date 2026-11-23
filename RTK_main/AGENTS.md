@@ -6,7 +6,7 @@
 
 | 项 | 值 | 来源 |
 | --- | --- | --- |
-| 芯片 | ESP32（经典款，Xtensa LX6 双核），rev ≥ 3.1，8 MB Flash，PSRAM `UNKNOWN`（不得依赖） | `../../E1-5.4/sdkconfig` |
+| 芯片 | ESP32（经典款，Xtensa LX6 双核），rev ≥ 1.0，4 MB Flash（8 MB 板子兼容），PSRAM `UNKNOWN`（不得依赖） | `../../E1-5.4/sdkconfig` |
 | SDK | ESP-IDF v6.1，路径 `~/esp/esp-idf-v6.1`（`IDF_PATH`）；C++ 默认 gnu++26，异常/RTTI 默认关闭 | `git describe`；`tools/cmake/build.cmake:208`；`Kconfig:560,580` |
 | 工具链 | xtensa-esp-elf / riscv32-esp-elf GCC 15.2 | `~/.espressif/tools` |
 | 蓝牙 | Bluedroid，仅经典蓝牙 SPP，最多 2 会话；`esp_spp_write` 深拷贝；对端地址在 `srv_open.rem_bda` | `reference/c-v1/docs/reports/T04.md`（附 IDF 文件:行号） |

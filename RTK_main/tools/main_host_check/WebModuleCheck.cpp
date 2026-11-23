@@ -150,8 +150,8 @@ struct MockOtaState {
 };
 
 MockOtaState s_ota{};
-constexpr esp_partition_t kRunningSlot{.address = 0x10000U, .size = 0x300000U, .label = "ota_0"};
-constexpr esp_partition_t kOtherSlot{.address = 0x310000U, .size = 0x300000U, .label = "ota_1"};
+constexpr esp_partition_t kRunningSlot{.address = 0x20000U, .size = 0x1E0000U, .label = "ota_0"};
+constexpr esp_partition_t kOtherSlot{.address = 0x200000U, .size = 0x1E0000U, .label = "ota_1"};
 alignas(esp_app_desc_t) std::array<std::byte, app::web_ota::kBufferBytes + 1U> s_otaBuffer{};
 #endif
 
@@ -1798,7 +1798,7 @@ void testOtaHttpContract()
     assert(s_httpd.lastRespStatus == "200 OK" && s_httpd.lastRespType == "application/json");
     assert(
         s_httpd.lastRespBody ==
-        R"({"running":"host-test","project":"rtk_main","part":"ota_0","state":"valid","other":"6.0","max":3145728,"busy":false})");
+        R"({"running":"host-test","project":"rtk_main","part":"ota_0","state":"valid","other":"6.0","max":1966080,"busy":false})");
     s_ota.otherReadable = false;
     assert(uri->handler(&req) == ESP_OK);
     assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);

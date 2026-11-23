@@ -23,7 +23,7 @@ OTA_HDR_BYTES = 288
 OTA_IMG_MAGIC = 0xE9
 OTA_CHIP_ID_ESP32 = 0x0000
 OTA_DESC_MAGIC = 0xABCD5432
-OTA_DEFAULT_MAX = 3 * 1024 * 1024
+OTA_DEFAULT_MAX = 0x1E0000  # partitions.csv ota_0/ota_1 大小
 OTA_RECV_TIMEOUT_S = 30.0
 OTA_DRAIN_TIMEOUT_S = 0.25
 OTA_ERR_HTTP: dict[str, int] = {
@@ -1752,7 +1752,7 @@ def main() -> int:
         "--ota-max",
         type=int,
         default=OTA_DEFAULT_MAX,
-        help="Target OTA partition max size in bytes (default 3145728)",
+        help="Target OTA partition max size in bytes (default 1966080)",
     )
     parser.add_argument(
         "--no-ota",
