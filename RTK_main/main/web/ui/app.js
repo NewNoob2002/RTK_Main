@@ -24,12 +24,37 @@
   const FIX = { none: ["NONE", "bad"], single: ["SINGLE", "warn"], dgps: ["DGPS", "info"], float: ["FLOAT", "info"], fixed: ["FIXED", "ok"] };
   const MAC_RE = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/;
   const SN_RE = /^[0-9A-Za-z-]{1,16}$/;
+  const OTA_HDR_BYTES = 288;
+  const OTA_IMG_MAGIC = 0xE9;
+  const OTA_DESC_MAGIC = 0xABCD5432;
+  const OTA_STALL_MS = 45000;
+  const OTA_TOTAL_MS = 180000;
+  const OTA_STATE = {
+    valid: "已确认 (valid)",
+    pending_verify: "待确认 (pending_verify)",
+    "new": "新镜像 (new)",
+    invalid: "无效 (invalid)",
+    aborted: "已中止 (aborted)",
+    "undefined": "未定义 (undefined)"
+  };
+  const OTA_ERR = {
+    busy: "设备忙或正在关机，请稍后再试",
+    state: "新固件尚未确认（启动后约 30 s 再试）",
+    length: "请求缺少长度或文件为空",
+    too_large: "固件过大，超过分区容量上限",
+    bad_image: "固件头校验失败，不是本设备固件",
+    validate: "固件校验失败（文件可能损坏）",
+    timeout: "上传超时，设备长时间未收到数据",
+    flash: "写入 Flash 失败，设备仍运行原固件",
+    aborted: "升级已中止（设备正在关机或连接中断）"
+  };
   const ICONS = {
     gnss: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8",
     gate: "M12 3l8 3v6c0 5-3.5 8-8 9c-4.5-1-8-4-8-9V6zM9 12l2 2l4-4",
     dev: "M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1M10 18h4",
     bt: "M7 7l10 10l-5 4V3l5 4L7 17",
     fac: "M6 11h12v10H6zM9 11V7a3 3 0 0 1 6 0v4",
+    ota: "M12 16V4M7 9l5-5l5 5M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2",
     sys: "M12 3v8M6.3 6.3a8 8 0 1 0 11.4 0"
   };
 
@@ -38,6 +63,10 @@
   let ready = false;     // 收到 hello 之后为 true
   let configured = false; // 收到过 config
   let leaving = false;   // 收到 bye 或已发出 exit/freset
+  let otaUploading = false; // 固件上传进行中
+  let otaDone = false;   // 固件上传成功，等待重启
+  let otaInfo = null;    // GET /ota/info 返回对象
+  let otaStatus = "loading"; // loading | ready | unsupported
   let attempt = 0;
   let retryTimer = null;
   let hello = {};
@@ -105,7 +134,75 @@
   }
 
   const kb = (b) => (typeof b === "number" ? (b / 1024).toFixed(1) + " KB" : "--");
+  const fmtSize = (b) => (typeof b !== "number" ? "--" : b >= 1048576 ? (b / 1048576).toFixed(2) + " MB" : b >= 1024 ? (b / 1024).toFixed(1) + " KB" : b + " B");
   const dash = (v, unit) => (v === undefined || v === null || v === "" ? "--" : String(v) + (unit || ""));
+
+  /** 从 Uint8Array 指定区间提取到首个 \0（不含）为止的有界字节切片。 */
+  function readCBytes(u8, off, len) {
+    let end = off;
+    const lim = Math.min(off + len, u8.length);
+    while (end < lim && u8[end] !== 0) end += 1;
+    return u8.subarray(off, end);
+  }
+
+  /** 按统一 UTF-8 策略解码（保留 BOM，非法/截断字节按最大合法前缀替换为单个 U+FFFD），与 mock 一致。 */
+  function decodeUtf8(u8) {
+    if (typeof TextDecoder === "function") return new TextDecoder("utf-8", { ignoreBOM: true }).decode(u8);
+    let out = "";
+    for (let i = 0; i < u8.length;) {
+      const b0 = u8[i];
+      if (b0 < 0x80) { out += String.fromCharCode(b0); i += 1; continue; }
+      let need = 0, lo = 0x80, hi = 0xBF, cp = 0;
+      if (b0 >= 0xC2 && b0 <= 0xDF) { need = 1; cp = b0 & 0x1F; }
+      else if (b0 >= 0xE0 && b0 <= 0xEF) { need = 2; cp = b0 & 0x0F; if (b0 === 0xE0) lo = 0xA0; else if (b0 === 0xED) hi = 0x9F; }
+      else if (b0 >= 0xF0 && b0 <= 0xF4) { need = 3; cp = b0 & 0x07; if (b0 === 0xF0) lo = 0x90; else if (b0 === 0xF4) hi = 0x8F; }
+      else { out += "\uFFFD"; i += 1; continue; }
+      let j = 1;
+      for (; j <= need && i + j < u8.length; j += 1) {
+        const bj = u8[i + j];
+        if (bj < lo || bj > hi) break;
+        cp = (cp << 6) | (bj & 0x3F);
+        lo = 0x80; hi = 0xBF;
+      }
+      if (j > need) {
+        if (cp <= 0xFFFF) out += String.fromCharCode(cp);
+        else { const v = cp - 0x10000; out += String.fromCharCode(0xD800 | (v >> 10), 0xDC00 | (v & 0x3FF)); }
+        i += need + 1;
+      } else {
+        out += "\uFFFD";
+        i += j;
+      }
+    }
+    return out;
+  }
+
+  /** 将字符串编码为 UTF-8 原始字节（用于精确比较 project_name）。 */
+  function strToUtf8Bytes(s) {
+    if (typeof TextEncoder === "function") return new TextEncoder().encode(s);
+    const raw = unescape(encodeURIComponent(s));
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  function bytesEq(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  /** 解析 ESP-IDF 固件镜像头与 esp_app_desc_t（偏移 0/32/48/80）。 */
+  function parseOtaHeader(buf) {
+    if (!buf || buf.byteLength < OTA_HDR_BYTES) return null;
+    const u8 = new Uint8Array(buf);
+    if (u8[0] !== OTA_IMG_MAGIC) return null;
+    const dv = new DataView(buf);
+    if (dv.getUint32(32, true) !== OTA_DESC_MAGIC) return null;
+    return {
+      version: decodeUtf8(readCBytes(u8, 48, 32)),
+      projectBytes: readCBytes(u8, 80, 32)
+    };
+  }
 
   // ---------------------------------------------------------------- 配置读取
   /** 读设备 config 中的值，统一成字符串；嵌套的 gga_gate 映射到 gnss.gga_gate.* 键。 */
@@ -131,6 +228,7 @@
 
   const val = (key) => (has(optimistic, key) ? optimistic[key] : cfgVal(key));
   const keyBusy = (key) => (inflight && inflight.o.key === key) || queue.some((r) => r.o.key === key);
+  const wsPending = () => !!(inflight || queue.length);
 
   function gateHeld() {
     if (val("gnss.gga_gate.enabled") !== "1") return false;
@@ -173,6 +271,9 @@
     { id: "fac", col: "b", title: "Factory", icon: "fac", closed: true, badge: () => (unlocked ? ["UNLOCKED", "warn"] : ["LOCKED", ""]), items: [
       { type: "factory" }
     ] },
+    { id: "ota", col: "b", title: "固件升级", icon: "ota", badge: otaBadge, items: [
+      { type: "ota" }
+    ] },
     { id: "sys", col: "b", title: "System", icon: "sys", items: [
       { type: "kv", rows: [["Console", () => dash(hello.console)]] },
       { type: "action", text: "Exit and return to Bluetooth", cls: "pri", cmd: "exit", hint: "Stops the Wi-Fi access point and restarts the receiver in Bluetooth mode." }
@@ -191,6 +292,15 @@
   function btBadge() {
     const wl = status.bt.whitelist;
     return Array.isArray(wl) ? [wl.length + " paired", ""] : null;
+  }
+  function otaBadge() {
+    if (otaUploading) return ["升级中", "warn"];
+    if (otaDone) return ["已完成", "ok"];
+    if (otaStatus === "unsupported") return ["不支持", ""];
+    if (!otaInfo) return null;
+    if (otaInfo.state === "pending_verify") return ["待确认", "warn"];
+    if (otaInfo.busy) return ["忙", "warn"];
+    return otaInfo.part ? [otaInfo.part, ""] : null;
   }
 
   // ---------------------------------------------------------------- 设置项通用部分
@@ -278,7 +388,7 @@
     const commit = () => {
       clearTimeout(timer);
       timer = null;
-      if (!has(caps, f.key)) return;
+      if (!has(caps, f.key) || !ready || leaving || otaUploading || otaDone) return;
       const { min, max } = bounds();
       const n = Number(inp.value);
       if (inp.value === "" || !Number.isInteger(n) || n < min || n > max) {
@@ -363,20 +473,22 @@
   };
 
   /** 二次确认按钮：第一次点击进入 3 s 倒计时，期间再点才执行。 */
-  function confirmBtn(text, cls, fire) {
+  function confirmBtn(text, cls, fire, armText) {
     let left = 0;
     let timer = null;
+    const prompt = armText || "Tap again to confirm";
     const b = h("button", { type: "button", class: "btn full " + cls, text });
     const reset = () => { clearInterval(timer); timer = null; b.textContent = text; b.classList.remove("arm"); };
+    b._reset = reset;
     b.addEventListener("click", () => {
       if (!timer) {
         left = 3;
         b.classList.add("arm");
-        b.textContent = "Tap again to confirm (" + left + ")";
+        b.textContent = prompt + " (" + left + ")";
         timer = setInterval(() => {
           left -= 1;
           if (left <= 0) reset();
-          else b.textContent = "Tap again to confirm (" + left + ")";
+          else b.textContent = prompt + " (" + left + ")";
         }, 1000);
         return;
       }
@@ -387,12 +499,20 @@
   }
 
   function command(name, btn, okText) {
-    request({ t: "cmd", name }, { btn, okText, ok: () => { leaving = true; banner("The receiver is restarting. You can close this page."); } });
+    request({ t: "cmd", name }, {
+      btn,
+      okText,
+      ok: () => {
+        if (otaUploading || otaDone) return;
+        leaving = true;
+        banner("The receiver is restarting. You can close this page.");
+      }
+    });
   }
 
   W.action = (f) => {
     const b = confirmBtn(f.text, f.cls, () => command(f.cmd, b, "Restarting…"));
-    views.push(() => { b.disabled = !ready || leaving; });
+    views.push(() => { b.disabled = !ready || leaving || otaUploading; });
     return h("div", null, [b, h("p", { class: "hint", text: f.hint })]);
   };
 
@@ -411,7 +531,7 @@
     inp.addEventListener("input", () => {
       inp.value = fmtMac(inp.value);
       inp.classList.toggle("bad", inp.value.length === 17 && !MAC_RE.test(inp.value));
-      add.disabled = !ready || leaving || !MAC_RE.test(inp.value);
+      add.disabled = !ready || leaving || otaUploading || !MAC_RE.test(inp.value);
     });
     const doAdd = () => {
       const mac = inp.value;
@@ -422,17 +542,21 @@
     add.addEventListener("click", doAdd);
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") doAdd(); });
     views.push(() => {
+      const off = !ready || leaving || otaUploading;
       const wl = status.bt.whitelist;
       const sig = JSON.stringify(wl || null) + ready;
-      add.disabled = !ready || leaving || !MAC_RE.test(inp.value);
-      inp.disabled = !ready || leaving;
-      if (sig === shown) return;
+      add.disabled = off || !MAC_RE.test(inp.value);
+      inp.disabled = off;
+      if (sig === shown) {
+        list.querySelectorAll("button").forEach((b) => { b.disabled = off; });
+        return;
+      }
       shown = sig;
       list.textContent = "";
       if (!Array.isArray(wl)) list.appendChild(h("li", { class: "empty", text: "--" }));
       else if (!wl.length) list.appendChild(h("li", { class: "empty", text: "Empty — any phone may connect while pairing is open." }));
       else wl.forEach((mac) => {
-        const rm = h("button", { type: "button", class: "btn sm danger", text: "Remove", "aria-label": "Remove " + mac });
+        const rm = h("button", { type: "button", class: "btn sm danger", text: "Remove", disabled: off, "aria-label": "Remove " + mac });
         rm.addEventListener("click", () => request({ t: "set", key: "bt.wl.del", value: mac }, { btn: rm, label: "Whitelist", okText: mac + " removed" }));
         list.appendChild(h("li", null, [h("span", { text: mac }), rm]));
       });
@@ -456,7 +580,7 @@
     const snTip = h("p", { class: "hint", text: "1–16 characters: letters, digits and '-'." });
     sn.addEventListener("input", () => {
       sn.classList.toggle("bad", sn.value !== "" && !SN_RE.test(sn.value));
-      snBtn.disabled = !SN_RE.test(sn.value) || sn.value === cfgVal("factory.sn");
+      snBtn.disabled = !ready || leaving || otaUploading || !SN_RE.test(sn.value) || sn.value === cfgVal("factory.sn");
     });
     snBtn.addEventListener("click", () => {
       if (!SN_RE.test(sn.value)) return;
@@ -467,7 +591,7 @@
       h("h3", { class: "gh", text: "Reset" }), reset, h("p", { class: "hint", text: "Erases all settings and restarts the receiver." })]);
 
     views.push(() => {
-      const off = !ready || leaving;
+      const off = !ready || leaving || otaUploading;
       lockedBox.hidden = unlocked;
       openBox.hidden = !unlocked;
       tok.disabled = unlockBtn.disabled = off;
@@ -477,6 +601,207 @@
       reset.disabled = off;
     });
     return h("div", null, [lockedBox, openBox]);
+  };
+
+  W.ota = () => {
+    let selectedFile = null;
+    let fileValid = false;
+    let pickSeq = 0;
+
+    const note = h("p", { class: "note", text: "正在获取固件信息…" });
+    const infoKv = W.kv({ rows: [
+      ["当前版本", () => dash(otaInfo && otaInfo.running)],
+      ["运行分区", () => dash(otaInfo && otaInfo.part)],
+      ["状态", () => (otaInfo && otaInfo.state ? (OTA_STATE[otaInfo.state] || otaInfo.state) : "--")],
+      ["另一槽版本", () => (!otaInfo ? "--" : (otaInfo.other === null || otaInfo.other === undefined || otaInfo.other === "" ? "无" : String(otaInfo.other)))]
+    ] });
+    const fileInp = h("input", { type: "file", accept: ".bin", class: "ota-file", "aria-label": "选择固件文件" });
+    const cmpLine = h("p", { class: "ota-msg", hidden: true });
+    const sameHint = h("p", { class: "ota-msg warn", text: "版本相同", hidden: true });
+    const errLine = h("p", { class: "ota-msg", hidden: true });
+    const progFill = h("div", { class: "prog-fill" });
+    const progLeft = h("span", { text: "0%" });
+    const progRight = h("span", { text: "" });
+    const progBox = h("div", { class: "prog", hidden: true }, [
+      h("div", { class: "prog-bar" }, [progFill]),
+      h("div", { class: "prog-txt" }, [progLeft, progRight])
+    ]);
+    const setMsg = (el, text, cls) => {
+      el.hidden = !text;
+      el.textContent = text || "";
+      el.className = "ota-msg" + (cls ? " " + cls : "");
+    };
+    const setProg = (pct, leftText, rightText) => {
+      progBox.hidden = false;
+      progFill.style.width = pct + "%";
+      progLeft.textContent = leftText;
+      progRight.textContent = rightText || "";
+    };
+    const uploadBtn = confirmBtn("上传并升级固件", "pri", () => startUpload(), "再次点击确认：将替换当前固件");
+    const tip = h("p", { class: "hint", text: "确认后将替换当前固件，升级期间请勿断电或断开热点。" });
+    const panel = h("div", { hidden: true }, [infoKv, fileInp, cmpLine, sameHint, progBox, errLine, uploadBtn, tip]);
+
+    fileInp.addEventListener("change", () => {
+      pickSeq += 1;
+      const seq = pickSeq;
+      uploadBtn._reset();
+      selectedFile = null;
+      fileValid = false;
+      progBox.hidden = true;
+      setMsg(cmpLine, "", "");
+      sameHint.hidden = true;
+      setMsg(errLine, "", "");
+      refresh();
+      const file = fileInp.files && fileInp.files[0];
+      if (!file || !otaInfo) return;
+
+      const reader = new FileReader();
+      reader.onerror = () => {
+        if (seq !== pickSeq) return;
+        setMsg(errLine, "无法读取所选文件", "bad");
+        refresh();
+      };
+      reader.onload = () => {
+        if (seq !== pickSeq) return;
+        const parsed = parseOtaHeader(reader.result);
+        const hdrOk = !!(parsed && file.size > OTA_HDR_BYTES && bytesEq(parsed.projectBytes, strToUtf8Bytes(otaInfo.project)));
+        const maxBytes = typeof otaInfo.max === "number" ? otaInfo.max : 0;
+        const sizeOk = !(maxBytes > 0 && file.size > maxBytes);
+        if (!hdrOk && !sizeOk) {
+          setMsg(errLine, "文件过大（" + fmtSize(file.size) + "，上限 " + fmtSize(maxBytes) + "）且不是本设备固件", "bad");
+        } else if (!hdrOk) {
+          setMsg(errLine, "不是本设备固件", "bad");
+        } else if (!sizeOk) {
+          setMsg(errLine, "文件过大（" + fmtSize(file.size) + "，上限 " + fmtSize(maxBytes) + "）", "bad");
+        } else {
+          selectedFile = file;
+          fileValid = true;
+          const curVer = otaInfo.running || "(未知)";
+          const newVer = parsed.version || "(未知)";
+          setMsg(cmpLine, "当前 " + curVer + " → 新 " + newVer + "（" + fmtSize(file.size) + "）", "");
+          sameHint.hidden = parsed.version !== otaInfo.running;
+        }
+        refresh();
+      };
+      reader.readAsArrayBuffer(file.slice(0, OTA_HDR_BYTES));
+    });
+
+    function finishUpload(ok, msg) {
+      otaUploading = false;
+      if (ok) {
+        otaDone = true;
+        leaving = true;
+        clearTimeout(retryTimer);
+        setProg(100, "100% · 升级完成", fmtSize(selectedFile ? selectedFile.size : 0));
+        setMsg(errLine, msg, "ok");
+        banner(msg);
+        toast(msg, "ok");
+        setConn("ok", "Rebooting");
+      } else {
+        progBox.hidden = true;
+        progFill.style.width = "0%";
+        progLeft.textContent = "0%";
+        progRight.textContent = "";
+        setMsg(errLine, msg, "bad");
+        toast(msg, "err");
+        if (!ws && !leaving) connect();
+      }
+      refresh();
+    }
+
+    function startUpload() {
+      if (!fileValid || !selectedFile || otaUploading || otaDone || leaving || wsPending()) return;
+      const file = selectedFile;
+      clearTimeout(retryTimer);
+      retryTimer = null;
+      otaUploading = true;
+      setMsg(errLine, "", "");
+      setProg(0, "0% · 正在上传…", "0 B / " + fmtSize(file.size));
+      refresh();
+
+      const xhr = new XMLHttpRequest();
+      let settled = false;
+      let stallTimer = null;
+      let lastLoaded = -1;
+      const timeoutMsg = "上传超时，未收到设备应答，请确认设备状态后重试";
+      const clearWatch = () => { clearTimeout(stallTimer); stallTimer = null; };
+      const armWatch = () => {
+        clearWatch();
+        stallTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          clearWatch();
+          try { xhr.abort(); } catch (_e) { /* 忽略中止异常 */ }
+          finishUpload(false, timeoutMsg);
+        }, OTA_STALL_MS);
+      };
+
+      xhr.open("POST", "/ota", true);
+      xhr.timeout = OTA_TOTAL_MS;
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.upload.onprogress = (e) => {
+        if (!otaUploading || settled) return;
+        if (typeof e.loaded === "number" && e.loaded > lastLoaded) {
+          lastLoaded = e.loaded;
+          armWatch();
+        }
+        const total = e.lengthComputable && e.total > 0 ? e.total : file.size;
+        const pct = total > 0 ? Math.min(100, Math.round((e.loaded * 100) / total)) : 0;
+        setProg(pct, pct >= 100 ? "100% · 正在校验…" : pct + "% · 正在上传…", fmtSize(e.loaded) + " / " + fmtSize(total));
+      };
+      xhr.onload = () => {
+        if (settled) return;
+        settled = true;
+        clearWatch();
+        let res = null;
+        try { res = JSON.parse(xhr.responseText); } catch (_e) { /* 非 JSON 应答 */ }
+        if (xhr.status === 200 && res && res.ok === true) {
+          const ms = typeof res.reboot_ms === "number" && res.reboot_ms > 0 ? res.reboot_ms : 1500;
+          const sec = ms % 1000 === 0 ? String(ms / 1000) : String(Number((ms / 1000).toFixed(1)));
+          finishUpload(true, "升级完成，设备将在约 " + sec + " 秒后重启进入蓝牙模式，热点会断开");
+          return;
+        }
+        const code = res && typeof res.err === "string" ? res.err : "";
+        const text = OTA_ERR[code] || ("升级失败（" + (code || ("HTTP " + xhr.status)) + "）");
+        finishUpload(false, text);
+      };
+      xhr.ontimeout = () => {
+        if (settled) return;
+        settled = true;
+        clearWatch();
+        finishUpload(false, timeoutMsg);
+      };
+      xhr.onerror = () => {
+        if (settled) return;
+        settled = true;
+        clearWatch();
+        finishUpload(false, "连接中断，设备仍运行原固件");
+      };
+      xhr.onabort = () => {
+        if (settled) return;
+        settled = true;
+        clearWatch();
+        finishUpload(false, "连接中断，设备仍运行原固件");
+      };
+      armWatch();
+      xhr.send(file);
+    }
+
+    views.push(() => {
+      if (otaStatus === "ready" && otaInfo) {
+        note.hidden = true;
+        panel.hidden = false;
+      } else {
+        note.hidden = false;
+        note.textContent = otaStatus === "unsupported" ? "设备不支持网页升级" : "正在获取固件信息…";
+        panel.hidden = true;
+      }
+      const locked = otaUploading || otaDone || leaving;
+      fileInp.disabled = locked;
+      uploadBtn.disabled = locked || !fileValid || wsPending();
+      if (uploadBtn.disabled) uploadBtn._reset();
+    });
+    return h("div", null, [note, panel]);
   };
 
   // ---------------------------------------------------------------- 卡片
@@ -503,8 +828,8 @@
 
   // ---------------------------------------------------------------- 刷新
   function refresh() {
-    const off = !ready || leaving;
-    document.body.classList.toggle("offline", !ready && !leaving);
+    const off = !ready || leaving || otaUploading;
+    document.body.classList.toggle("offline", !ready && !leaving && !otaUploading);
     fields.forEach((x) => {
       const v = val(x.f.key);
       x.row.hidden = !has(caps, x.f.key) || (configured && v === undefined);
@@ -555,7 +880,7 @@
 
   // ---------------------------------------------------------------- 请求队列
   function request(payload, o) {
-    if (!ready || leaving) { toast("Not connected", "err"); return; }
+    if (!ready || leaving || otaUploading) { toast(otaUploading ? "固件升级中，暂不可修改设置" : "Not connected", "err"); return; }
     if (o.key) optimistic[o.key] = payload.value;
     if (o.btn) o.btn.disabled = true;
     queue.push({ payload, o });
@@ -564,7 +889,7 @@
   }
 
   function pump() {
-    if (inflight || !queue.length || !ws || ws.readyState !== 1) return;
+    if (inflight || !queue.length || !ws || ws.readyState !== 1 || otaUploading || otaDone || leaving) return;
     const r = queue.shift();
     reqId = (reqId % 65535) + 1;
     r.payload.id = reqId;
@@ -607,11 +932,12 @@
     const all = (inflight ? [inflight] : []).concat(queue.splice(0));
     inflight = null;
     all.forEach((r) => settle(r, "disconnected", true));
-    if (all.length) toast("Connection lost, pending changes were not applied", "err");
+    if (all.length && !otaUploading) toast("Connection lost, pending changes were not applied", "err");
   }
 
   // ---------------------------------------------------------------- 消息
   function onMessage(m) {
+    if (otaDone) return;
     switch (m.t) {
       case "hello":
         hello = m;
@@ -645,6 +971,7 @@
         return;
       }
       case "bye":
+        if (otaUploading) return;
         leaving = true;
         dropAll();
         banner(m.reason === "freset" ? "Factory reset done. The receiver is restarting; you can close this page."
@@ -659,10 +986,37 @@
     refresh();
   }
 
+  // ---------------------------------------------------------------- OTA 信息查询
+  function fetchOtaInfo() {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", "/ota/info", true);
+    xhr.timeout = 5000;
+    const fail = () => {
+      otaInfo = null;
+      otaStatus = "unsupported";
+      refresh();
+    };
+    xhr.onload = () => {
+      if (xhr.status !== 200) { fail(); return; }
+      let d = null;
+      try { d = JSON.parse(xhr.responseText); } catch (_e) { fail(); return; }
+      if (!d || typeof d.running !== "string" || typeof d.project !== "string" || typeof d.max !== "number") {
+        fail();
+        return;
+      }
+      otaInfo = d;
+      otaStatus = "ready";
+      refresh();
+    };
+    xhr.onerror = fail;
+    xhr.ontimeout = fail;
+    xhr.send();
+  }
+
   // ---------------------------------------------------------------- 连接
   function connect() {
     clearTimeout(retryTimer);
-    if (leaving) return;
+    if (leaving || otaUploading) return;
     setConn("warn", attempt ? "Reconnecting" : "Connecting");
     const host = location.host || "192.168.10.12";
     let s;
@@ -685,12 +1039,17 @@
       ready = false;
       unlocked = false; // 协议：断开即失效
       dropAll();
-      if (!leaving) retry();
+      if (otaUploading) {
+        setConn("warn", "Upgrading");
+      } else if (!leaving) {
+        retry();
+      }
       refresh();
     };
   }
 
   function retry() {
+    if (leaving || otaUploading) return;
     const d = BACKOFF_S[Math.min(attempt, BACKOFF_S.length - 1)];
     attempt += 1;
     setConn("bad", "Offline · retry in " + d + " s");
@@ -700,5 +1059,6 @@
 
   buildCards();
   refresh();
+  fetchOtaInfo();
   connect();
 })();
