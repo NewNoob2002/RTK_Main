@@ -1,6 +1,7 @@
 # RTK_main 默认配置（冻结输入）。来源：E1-5.4/sdkconfig 中已在硬件上验证的项 + IDF v6.1 bt_spp_acceptor 示例。
 CONFIG_IDF_TARGET="esp32"
-CONFIG_ESP32_REV_MIN_3_1=y
+# 最低芯片版本取产品中最旧的芯片：带 F9P 的 P2 实测 ESP32-D0WD v1.0（esptool chip-id，2026-11-23）。
+CONFIG_ESP32_REV_MIN_1=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
