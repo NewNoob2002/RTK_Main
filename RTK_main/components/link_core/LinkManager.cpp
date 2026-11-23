@@ -129,6 +129,13 @@ void bindPairWindow(const LinkManager &manager, PairWindow *window) noexcept
     s_pair_window = window;
 }
 
+/** @brief 查询白名单写入准入。 @param manager: 链路管理器。 @retval true 可写入。 @note 仅 kLink。 */
+bool admitWhitelistWrite(const LinkManager &manager) noexcept
+{
+    const auto *window = pairWindow(manager);
+    return window == nullptr || window->admitWhitelistWrite();
+}
+
 void openPairWindow(PairWindow &window, uint32_t nowMs, uint32_t durationMs, bool confirm) noexcept
 {
     window.set(nowMs, durationMs, confirm);
@@ -287,7 +294,7 @@ Role LinkManager::onFrame(SessionHandle handle, uint8_t sender, uint16_t msgId, 
         }
         if (!containsAddr(std::span<const BtAddr>(alarms_.data(), alarm_count_), found->addr)) {
             // 白名单已满：拒绝并断开。
-            if (alarm_count_ >= kMaxAlarms) {
+            if (alarm_count_ >= kMaxAlarms || !admitWhitelistWrite(*this)) {
                 actionAdd(act, handle);
                 const Role rejected = found->role;
                 found->inUse = false;

@@ -42,6 +42,24 @@ struct PowerHold {
     uint32_t holdTimeoutMs = 0U;
 };
 
+struct PowerKey {
+    int keyDetectGpio = -1;
+    int usbDetectGpio = -1;
+    int chgStatGpio = -1;
+    bool keyActiveLow = true;
+    bool usbActiveLow = true;
+    bool chgActiveLow = true;
+};
+
+struct ChargerPins {
+    int i2cPort = -1; // -1 表示本板无 I2C 充电芯片，不初始化 I2C
+    int sdaGpio = -1;
+    int sclGpio = -1;
+    uint8_t addr = 0U;     // 7-bit I2C 地址（P2: SGM41513 = 0x1A）
+    uint8_t ichgCode = 0U; // REG02[5:0] 充电电流编码（V2.7: 51）
+    uint8_t reg03 = 0U;    // REG03 预充/终止电流目标值（V2.7: 0xF8）
+};
+
 struct Profile {
     BoardId id = BoardId::kUnknown;
     const char *name = "unknown";
@@ -50,6 +68,8 @@ struct Profile {
     uint32_t idMaxMv = 0U;
     GnssPins gnss{};
     PowerHold powerHold{};
+    PowerKey powerKey{};
+    ChargerPins charger{};
     std::span<const SafeOutput> safeOutputs{};
     uint8_t features = 0U;
 };
@@ -90,6 +110,19 @@ struct Profile {
  * @note 纯函数，线程/ISR 安全。
  */
 [[nodiscard]] const Profile *byId(BoardId id) noexcept;
+
+/**
+ * @brief 选择 kLink 的空闲等待上限
+ * @param hold: 当前板型的电源保持配置
+ * @retval 空闲等待毫秒数，P2 需在 10 ms 内采样按键
+ * @note 纯函数，可跨任务调用。
+ */
+[[nodiscard]] constexpr uint32_t linkIdleWaitMs(const PowerHold &hold) noexcept
+{
+    constexpr uint32_t kPowerKeyPollMs = 10U;
+    constexpr uint32_t kDefaultLinkWaitMs = 20U;
+    return hold.kind == HoldKind::kKeyEmulate ? kPowerKeyPollMs : kDefaultLinkWaitMs;
+}
 
 enum class HoldDecision : uint8_t { kContinue, kHeld, kTimeout };
 

@@ -481,7 +481,7 @@ esp_err_t WebModule::handleWsPostHandshake(httpd_req_t *req) noexcept
 {
     // user_ctx 在 URI 注册时固定传入 WebModule 实例指针。
     auto *self = static_cast<WebModule *>(req->user_ctx);
-    if (self == nullptr) {
+    if (self == nullptr || self->powerPauseRequested_.load(std::memory_order_acquire)) {
         return ESP_FAIL;
     }
     const int fd = httpd_req_to_sockfd(req);
@@ -519,7 +519,7 @@ esp_err_t WebModule::handleWs(httpd_req_t *req) noexcept
 {
     // user_ctx 在 URI 注册时固定传入 WebModule 实例指针。
     auto *self = static_cast<WebModule *>(req->user_ctx);
-    if (self == nullptr) {
+    if (self == nullptr || self->powerPauseRequested_.load(std::memory_order_acquire)) {
         return ESP_FAIL;
     }
     const int fd = httpd_req_to_sockfd(req);
@@ -989,10 +989,15 @@ void WebModule::resetRuntimeState() noexcept
     nextSessionGen_ = 0U;
     staState_.store(0U, std::memory_order_relaxed);
     txWorkQueued_.store(false, std::memory_order_relaxed);
+    powerPauseRequested_.store(false, std::memory_order_relaxed);
+    powerPaused_.store(false, std::memory_order_relaxed);
+    powerModeQueued_.store(false, std::memory_order_relaxed);
+    powerModeAttempted_ = false;
     txEnqueuedSeq_.store(0U, std::memory_order_relaxed);
     txCompletedSeq_.store(0U, std::memory_order_relaxed);
     clients_.fill(ClientSlot{});
     inflight_ = InflightRequest{};
+    pendingExit_ = {};
     pendingReboot_ = RebootKind::kNone;
     rebootTxCommitted_ = false;
     rebootDrainDone_ = false;
@@ -1071,6 +1076,56 @@ fw::Result WebModule::init() noexcept
             static_cast<unsigned>(CONFIG_RTK_WIFI_AP_CHANNEL),
             static_cast<unsigned>(CONFIG_RTK_WIFI_IDLE_EXIT_S), portalState, embeddedPageBytes());
     return fw::Result::kOk;
+}
+
+void WebModule::setPowerPaused(bool paused) noexcept
+{
+    powerPauseRequested_.store(paused, std::memory_order_release);
+    schedulePowerMode();
+}
+
+bool WebModule::powerPauseDone() const noexcept
+{
+    return powerPaused_.load(std::memory_order_acquire) &&
+           !powerModeQueued_.load(std::memory_order_acquire);
+}
+
+void WebModule::schedulePowerMode() noexcept
+{
+#if defined(CONFIG_HTTPD_QUEUE_WORK_BLOCKING) && CONFIG_HTTPD_QUEUE_WORK_BLOCKING
+#error "Power quiesce requires a non-blocking HTTP work queue"
+#endif
+    constexpr uint32_t kRetryMs = 100U;
+    const auto now = rtos::nowMs();
+    if (!initialized_ || powerModeQueued_.load(std::memory_order_acquire) ||
+        powerPauseRequested_.load(std::memory_order_acquire) ==
+            powerPaused_.load(std::memory_order_acquire) ||
+        (powerModeAttempted_ && now - powerModeAttemptMs_ < kRetryMs)) {
+        return;
+    }
+    powerModeAttempted_ = true;
+    powerModeAttemptMs_ = now;
+    powerModeQueued_.store(true, std::memory_order_release);
+    if (httpd_queue_work(httpd_, &WebModule::onPowerModeWork, this) != ESP_OK) {
+        powerModeQueued_.store(false, std::memory_order_release);
+    }
+}
+
+void WebModule::onPowerModeWork(void *arg) noexcept
+{
+    // httpd 原样传回排队时登记的静态模块指针。
+    auto &self = *static_cast<WebModule *>(arg);
+    const bool paused = self.powerPauseRequested_.load(std::memory_order_acquire);
+    if (paused != self.powerPaused_.load(std::memory_order_acquire)) {
+        const esp_err_t err = esp_wifi_set_mode(paused ? WIFI_MODE_NULL : WIFI_MODE_AP);
+        if (err == ESP_OK) {
+            self.powerPaused_.store(paused, std::memory_order_release);
+        } else {
+            FW_LOGW(fw::TraceCat::kSys, "power SoftAP mode switch failed: %s",
+                    esp_err_to_name(err));
+        }
+    }
+    self.powerModeQueued_.store(false, std::memory_order_release);
 }
 
 void WebModule::stopBoot() noexcept

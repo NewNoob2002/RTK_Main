@@ -4,6 +4,7 @@
 #include "app/App.hpp"
 #include "app/BootReasons.hpp"
 #include "app/SettingsBackend.hpp"
+#include "board/BoardProfile.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -23,11 +24,11 @@ template <typename T> constexpr auto kModuleOps = fw::makeOps<T>();
  * @retval 仅包含已启用模块的定长数组
  * @note 仅编译期调用。
  */
-template <app::RadioMode Mode> consteval auto makeModules() noexcept
+template <app::board::BootMode Boot, app::RadioMode Mode> consteval auto makeModules() noexcept
 {
     constexpr std::array kEnabled{
 #define MODULE_DEF(type, member, name, kind, executor, period, enable)                             \
-    app::moduleEnabled(Mode, app::ModuleEnable::enable),
+    app::moduleEnabled(Boot, Mode, app::ModuleEnable::enable),
 #include "module_list.inc"
 #undef MODULE_DEF
     };
@@ -36,7 +37,7 @@ template <app::RadioMode Mode> consteval auto makeModules() noexcept
     size_t index = 0U;
 // X-macro 生成异构对象的注册项，constexpr 函数无法替代清单展开。
 #define MODULE_DEF(type, member, name, kind, executor, period, enable)                             \
-    if constexpr (app::moduleEnabled(Mode, app::ModuleEnable::enable)) {                           \
+    if constexpr (app::moduleEnabled(Boot, Mode, app::ModuleEnable::enable)) {                     \
         modules[index++] = {name,                                                                  \
                             app::id(app::ModuleKind::kind),                                        \
                             app::id(app::ExecKind::executor),                                      \
@@ -49,8 +50,12 @@ template <app::RadioMode Mode> consteval auto makeModules() noexcept
     return modules;
 }
 
-constexpr auto kBtModules = makeModules<app::RadioMode::kBluetooth>();
-constexpr auto kWifiModules = makeModules<app::RadioMode::kWifiConfig>();
+constexpr auto kBtModules =
+    makeModules<app::board::BootMode::kNormal, app::RadioMode::kBluetooth>();
+constexpr auto kWifiModules =
+    makeModules<app::board::BootMode::kNormal, app::RadioMode::kWifiConfig>();
+constexpr auto kChargeStandbyModules =
+    makeModules<app::board::BootMode::kChargeStandby, app::RadioMode::kBluetooth>();
 
 /**
  * @brief 取得本次启动交给执行器的模块表
@@ -59,6 +64,9 @@ constexpr auto kWifiModules = makeModules<app::RadioMode::kWifiConfig>();
  */
 std::span<const fw::Module> activeModules() noexcept
 {
+    if (app::s_app.bootMode == app::board::BootMode::kChargeStandby) {
+        return std::span<const fw::Module>{kChargeStandbyModules};
+    }
     return app::s_app.radioMode == app::RadioMode::kBluetooth
                ? std::span<const fw::Module>{kBtModules}
                : std::span<const fw::Module>{kWifiModules};
@@ -108,10 +116,11 @@ constexpr rtos::ExecutorConfig kLinkConfig{
                 vTaskDelete(nullptr);
                 return;
             }
-            if (app::s_app.radioMode == app::RadioMode::kBluetooth) {
+            if ((app::s_app.bootMode == app::board::BootMode::kNormal) &&
+                (app::s_app.radioMode == app::RadioMode::kBluetooth)) {
                 app::s_app.bt_link.wait(maxMs);
             } else if (maxMs != 0U) {
-                // 没有 SPP 可唤醒执行器，按执行器给出的空闲等待间隔处理命令与存储工作。
+                // 没有 SPP 可唤醒执行器，按执行器给出的空闲等待间隔处理命令、按键与存储工作。
                 const TickType_t ticks = pdMS_TO_TICKS(maxMs);
                 vTaskDelay(ticks == 0U ? 1U : ticks);
             }
@@ -164,10 +173,14 @@ bool waitStarted(uint32_t bits) noexcept
 
 const char *startLink(std::span<StackType_t> linkStack, uint32_t &launched) noexcept
 {
-    const auto initialized = s_app.linkExecutor->init(kLinkConfig, activeModules(),
+    auto config = kLinkConfig;
+    config.idleWaitMs = board::linkIdleWaitMs(board::current().powerHold);
+    const auto initialized = s_app.linkExecutor->init(config, activeModules(),
                                                       app::viewOf(s_app.linkStorage, linkStack));
+    const bool btMode =
+        (s_app.bootMode == board::BootMode::kNormal) && (s_app.radioMode == RadioMode::kBluetooth);
     if (!fw::isOk(initialized) || !modulesReady(*s_app.linkExecutor, kLinkConfig.id) ||
-        (s_app.radioMode == RadioMode::kBluetooth && !s_app.data.systemStatus.read().btReady)) {
+        (btMode && !s_app.data.systemStatus.read().btReady)) {
         return boot_reason::kLinkInit;
     }
     if (!fw::isOk(s_app.linkExecutor->start())) {
@@ -212,16 +225,18 @@ void stopBootTasks(uint32_t launched) noexcept
         }
         vTaskDelay(1U);
     }
+    const bool normal = s_app.bootMode == board::BootMode::kNormal;
 #if RTK_GNSS_ENABLED
-    if (!fw::isOk(s_app.gnss.stopBoot())) {
+    if (normal && !fw::isOk(s_app.gnss.stopBoot())) {
         s_app.bootArena.setDegradedReason(boot_reason::kStopGnss);
     }
 #endif
-    if (s_app.radioMode == RadioMode::kBluetooth && spp_server_stop_boot() != ESP_OK) {
+    if (normal && (s_app.radioMode == RadioMode::kBluetooth) &&
+        (spp_server_stop_boot() != ESP_OK)) {
         s_app.bootArena.setDegradedReason(boot_reason::kStopSpp);
     }
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    if (s_app.radioMode == RadioMode::kWifiConfig) {
+    if (normal && (s_app.radioMode == RadioMode::kWifiConfig)) {
         s_app.web.stopBoot();
     }
 #endif

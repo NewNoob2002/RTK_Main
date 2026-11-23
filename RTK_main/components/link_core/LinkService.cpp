@@ -218,7 +218,7 @@ bool LinkService::dispatchPending(Slot &slot, uint32_t nowMs) noexcept
     }
     // 只有容量已固定才推进角色/路由；清 pending 后绝不因提交失败重跑副作用。
     slot.pending = false;
-    const Role roleBefore = link_.role(handle);
+    const size_t whitelistBefore = link_.whitelist().size();
     Actions act;
     const Role roleAfter = link_.onFrame(handle, slot.frame.sender, slot.frame.msgId, nowMs, act);
     const bool currentDisconnected = actionsContain(act, handle);
@@ -240,7 +240,7 @@ bool LinkService::dispatchPending(Slot &slot, uint32_t nowMs) noexcept
     if (reply_.heartbeat.has_value()) {
         last_hb_ = reply_.heartbeat;
     }
-    if (reply_.whitelistChanged || ((roleAfter == Role::kAlarm) && (roleBefore != Role::kAlarm))) {
+    if (reply_.whitelistChanged || link_.whitelist().size() != whitelistBefore) {
         whitelist_dirty_ = true;
     }
     return true;

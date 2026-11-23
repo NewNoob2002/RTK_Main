@@ -852,6 +852,9 @@ private:
      * @note 仅 kIo，写 NVS 可阻塞。
      */
     void tickGgaGateSave(uint32_t nowMs, bool forceImmediate) noexcept;
+
+    /** @brief 发布实际 GNSS 待写状态，包含 GGA 写入失败后的退避。 @note 仅 kIo，非 ISR。 */
+    void publishPendingNvs() noexcept;
     /** @brief 将 GGA 质量门控状态快照与放行原子标志发布到 DataCenter。 @note 仅 kIo 或启动初始化。 */
     void publishGgaGateStatus() noexcept;
 

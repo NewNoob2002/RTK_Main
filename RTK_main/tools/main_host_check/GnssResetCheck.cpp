@@ -18,6 +18,7 @@
 #include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssKeys.hpp"
 #include "modules/storage/StoreKeys.hpp"
+#include "modules/storage/StoreWriteGate.hpp"
 #include "rtos/EspStatus.hpp"
 
 extern "C" {
@@ -388,9 +389,18 @@ void testGnssFactoryReset()
     s_rejectSave = true;
     const auto result = command(static_cast<uint8_t>(app::GnssMaintenanceVerb::kBaud), kBaud460800);
     CHECK(fw::isOk(result.status));
+    CHECK(s_context->data.gnssPendingNvs.load(std::memory_order_acquire));
+    // 接收机可完成切速，但超过保存期限不得启动 NVS 提交。
+    app::store::startPowerSave(s_now - app::board::kShutdownSaveTimeoutMs);
     advance(500U);
     uint32_t stored = 0U;
+    CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_OK && stored == 115200U);
+    CHECK(s_hostBaud == 460800U && s_saveCommands == 1U);
+    CHECK(s_context->data.gnssPendingNvs.load(std::memory_order_acquire));
+    app::store::resumePowerSave();
+    advance(500U);
     CHECK(nvs_get_u32(nvs, "baud", &stored) == ESP_OK && stored == 460800U);
+    CHECK(!s_context->data.gnssPendingNvs.load(std::memory_order_acquire));
     CHECK(s_hostBaud == 460800U && s_saveCommands == 2U);
     CHECK(s_context->data.gnssStatus.read().ctrl.maintenanceResult == gnss::MaintenanceResult::kOk);
     s_rejectSave = false;
@@ -1224,6 +1234,33 @@ void testGnssSettingsBusAndGgaPersist()
     expectDone(flush, fw::Result::kOk);
     CHECK((nvs_get_u8(nvs, "gga_gate", &nvsGate) == ESP_OK) && (nvsGate == 0U));
     CHECK((nvs_get_u8(nvs, "gga_min_sats", &nvsMin) == ESP_OK) && (nvsMin == 9U));
+
+    // 写失败后的去抖配置仍在关机待写快照中，队尾冲刷跳过退避。
+    consoleGate = app::detail::packGnssGate(false, false, true, 8U);
+    s_context->gnss.onCommand(consoleGate, result);
+    CHECK(fw::isOk(result.status));
+    nvs_shim_set_write_fail(ESP_FAIL);
+    advance(520U);
+    CHECK(s_context->data.ggaGatePersist.load(std::memory_order_acquire) ==
+          app::data::GgaGatePersist::kFailed);
+    CHECK(s_context->data.gnssPendingNvs.load(std::memory_order_acquire));
+    nvs_shim_set_write_fail(ESP_OK);
+    app::store::startPowerSave(s_now - app::board::kShutdownSaveTimeoutMs);
+    advance(1000U);
+    CHECK(s_context->data.gnssPendingNvs.load(std::memory_order_acquire));
+    CHECK((nvs_get_u8(nvs, "gga_min_sats", &nvsMin) == ESP_OK) && (nvsMin == 9U));
+    const auto expiredFlush =
+        post({.target = target, .verb = static_cast<uint8_t>(app::GnssSubVerb::kFlushGgaGate)});
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(expiredFlush, fw::Result::kIoError);
+    CHECK((nvs_get_u8(nvs, "gga_min_sats", &nvsMin) == ESP_OK) && (nvsMin == 9U));
+    app::store::resumePowerSave();
+    const auto shutdownFlush =
+        post({.target = target, .verb = static_cast<uint8_t>(app::GnssSubVerb::kFlushGgaGate)});
+    rtos::ExecutorTestAccess::drain(executor);
+    expectDone(shutdownFlush, fw::Result::kOk);
+    CHECK(!s_context->data.gnssPendingNvs.load(std::memory_order_acquire));
+    CHECK((nvs_get_u8(nvs, "gga_min_sats", &nvsMin) == ESP_OK) && (nvsMin == 8U));
 
     // 未完成的频率设置被重探立即终止，重探后的输出计划使用旧配置。
     const auto interruptedRate = post(makeRateCmd(app::GnssSubVerb::kApplyRate, 2U));

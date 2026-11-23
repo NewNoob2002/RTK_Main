@@ -25,7 +25,11 @@
 
 #include "AppContext.hpp"
 #include "app/SettingsBackend.hpp"
+#include "app/PowerRequests.hpp"
 #include "board/BoardProfile.hpp"
+#include "board/BoardStartup.hpp"
+#include "board/Charger.hpp"
+#include "driver/gpio.h"
 #include "def/StorageDef.hpp"
 #include "modules/web/WebModule.hpp"
 #include "rtos/EspStatus.hpp"
@@ -57,6 +61,7 @@ struct MockHttpdState {
     int globalCtxFreeCalls = 0;
     int closeCalls = 0;
     int wifiStopCalls = 0;
+    wifi_mode_t wifiMode = WIFI_MODE_NULL;
     int netifDestroyCalls = 0;
     int queueWorkCalls = 0;
     httpd_work_fn_t pendingWork = nullptr;
@@ -106,6 +111,7 @@ struct MockHttpdState {
 
 MockHttpdState s_httpd{};
 uint32_t s_nowMs = 1000U;
+bool s_powerKeyDriven = false;
 std::string s_mockSn = "B5F2";
 bool s_mockPairNext = false;
 fw::Result s_mockStorageResult = fw::Result::kOk;
@@ -215,6 +221,7 @@ void simulateWifiEvent(int32_t eventId)
 
 void resetHarness()
 {
+    app::power::s_power_requests.releaseAction();
     s_httpd = MockHttpdState{};
     s_nowMs = 1000U;
     s_mockSn = "B5F2";
@@ -382,8 +389,9 @@ esp_err_t esp_wifi_set_storage(wifi_storage_t /*storage*/)
 {
     return ESP_OK;
 }
-esp_err_t esp_wifi_set_mode(wifi_mode_t /*mode*/)
+esp_err_t esp_wifi_set_mode(wifi_mode_t mode)
 {
+    s_httpd.wifiMode = mode;
     return ESP_OK;
 }
 esp_err_t esp_wifi_set_config(wifi_interface_t /*ifx*/, wifi_config_t * /*conf*/)
@@ -852,6 +860,26 @@ esp_err_t httpd_queue_work(httpd_handle_t /*handle*/, httpd_work_fn_t work, void
 } // extern "C"
 
 // ---- 最小 C++ 依赖桩 ----
+/** @brief 提供 U3 高、物理按键松开的输入。 @param gpio: 输入引脚。 @retval 数字输入。 */
+int gpio_get_level(gpio_num_t gpio)
+{
+    return gpio == 2 ? 0 : 1;
+}
+
+/** @brief 保存 GPIO4 目标。 @param gpio: 输出引脚。 @param level: 数字输出。 @retval SDK 结果。 */
+esp_err_t gpio_set_level(gpio_num_t gpio, uint32_t level)
+{
+    assert(gpio == 4);
+    s_powerKeyDriven = level != 0U;
+    return ESP_OK;
+}
+
+/** @brief 模拟 GPIO 输入配置。 @retval SDK 结果。 */
+esp_err_t gpio_config(const gpio_config_t *)
+{
+    return ESP_OK;
+}
+
 namespace rtos {
 uint32_t nowMs() noexcept
 {
@@ -875,6 +903,62 @@ AppContext &appContext() noexcept
 {
     return s_ctx;
 }
+
+/** @brief 模拟蓝牙静默只允许发生在 BT 模式。 @param paused: 暂停请求。 */
+void BtLinkModule::setPowerPaused(bool paused) noexcept
+{
+    static_cast<void>(paused);
+    assert(false);
+}
+
+/** @brief 提供未启用蓝牙的设置状态。 @param localOnly: 是否仅查询本执行器。 @retval false 蓝牙未运行。 */
+bool BtLinkModule::hasPendingTicket(bool localOnly) const noexcept
+{
+    static_cast<void>(localOnly);
+    return false;
+}
+
+/** @brief 提供未启用蓝牙的静默结果。 @retval false 蓝牙未运行。 */
+bool BtLinkModule::powerPauseDone() const noexcept
+{
+    return false;
+}
+
+/** @brief 提供无延迟写的存储状态。 @retval false 本用例无存储待写。 */
+bool StorageModule::hasPendingWrites() const noexcept
+{
+    return false;
+}
+
+/** @brief 本用例没有需要加急的存储写。 */
+void StorageModule::expeditePendingWrites() noexcept {}
+
+/** @brief 填写空的待写摘要。 @param[out] out: 摘要缓冲。 */
+void StorageModule::formatPendingSummary(std::span<char> out) const noexcept
+{
+    assert(!out.empty());
+    out.front() = '\0';
+}
+
+namespace board {
+
+/** @brief 模拟外设进入安全电平。 @retval kOk 成功。 */
+fw::Status setSafeOutputLevels(const Profile &) noexcept
+{
+    return fw::Status::kOk;
+}
+
+namespace charger {
+
+/** @brief 提供 USB 在位的有效样本。 @param[out] status: 样本缓存。 @retval kOk 成功。 */
+fw::Status refreshInputStatus(ChargerInputStatus &status) noexcept
+{
+    status = decodeSgmReg08(kSgmReg08PgBit);
+    return fw::Status::kOk;
+}
+
+} // namespace charger
+} // namespace board
 
 std::string_view StorageModule::sn() const noexcept
 {
@@ -1154,6 +1238,72 @@ void testIdleAbortAndExitGgaGate()
     s_ctx.web.unbindStorage();
 }
 
+/** @brief 关机屏蔽 Web exit，HTTP 任务静默 SoftAP 并在关机回退后恢复。 */
+void testShutdownArbitrationAndSoftApResume()
+{
+    using namespace app;
+    resetHarness();
+    assert(simulateIdfV61WsHandshake(1005) == ESP_OK);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    auto &requests = power::s_power_requests;
+    s_httpd.sent.clear();
+
+    assert(simulateWsFrame(1005, HTTPD_WS_TYPE_TEXT, true,
+                           R"({"t":"cmd","id":30,"name":"exit"})") == ESP_OK);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.empty());
+    s_ctx.ioExecutor = nullptr; // 本场景没有启动 GNSS 执行器。
+    s_ctx.power.bindContext(s_ctx);
+    assert(fw::isOk(s_ctx.power.init()));
+    assert(power::requestShutdown(board::ShutdownReason::kKey));
+    s_nowMs += 10U;
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_rebootCalls == 0 && !s_httpd.sent.empty());
+    assert(s_httpd.sent.front().payload == R"({"t":"ack","id":30,"ok":false,"err":"busy"})");
+
+    assert(simulateWsFrame(1005, HTTPD_WS_TYPE_TEXT, true,
+                           R"({"t":"cmd","id":31,"name":"exit"})") == ESP_OK);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.back().payload == R"({"t":"ack","id":31,"ok":false,"err":"busy"})");
+
+    s_httpd.failQueueWorkOnce = true;
+    for (unsigned i = 0U; i < 3U; ++i) {
+        s_nowMs += 10U;
+        static_cast<void>(s_ctx.power.poll(s_nowMs));
+    }
+    assert(s_ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
+    assert(!s_ctx.web.powerPauseDone());
+    assert(s_httpd.wifiMode == WIFI_MODE_AP);
+    s_nowMs += 100U;
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    assert(!s_ctx.web.powerPauseDone());
+    runPendingWork();
+    assert(s_ctx.web.powerPauseDone());
+    assert(s_httpd.wifiMode == WIFI_MODE_NULL && s_httpd.running && s_httpd.wifiStopCalls == 0);
+
+    static_cast<void>(s_ctx.power.poll(s_nowMs));
+    assert(s_ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
+    assert(s_powerKeyDriven);
+    s_nowMs += board::kShutdownCutTimeoutMs;
+    static_cast<void>(s_ctx.power.poll(s_nowMs));
+    assert(!s_powerKeyDriven && requests.canScheduleRestart());
+    runPendingWork();
+    assert(!s_ctx.web.powerPauseDone());
+    assert(s_httpd.wifiMode == WIFI_MODE_AP && s_httpd.running);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_rebootCalls == 0);
+    assert(std::ranges::none_of(s_httpd.sent, [](const auto &frame) {
+        return frame.payload == R"({"t":"bye","reason":"exit"})";
+    }));
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
 /** @brief 验证初次同步后只发送变化版本的能力帧。 */
 void testCapsUpdates()
 {
@@ -1375,6 +1525,7 @@ void testCaptivePortal()
 
     // 9. F2：startDns 在 socket / fcntl / bind 任一环节失败时仅降级 DNS，不拆掉 Wi-Fi/httpd/302/option 114。
     for (int mode = 0; mode < 3; ++mode) {
+        app::power::s_power_requests.releaseAction();
         s_httpd = MockHttpdState{};
         s_httpd.failDnsSocket = (mode == 0);
         s_httpd.failDnsFcntl = (mode == 1);
@@ -1425,6 +1576,7 @@ int main()
     testFramingAndConfigBeforeAck();
     testSessionGenAndBackpressure();
     testIdleAbortAndExitGgaGate();
+    testShutdownArbitrationAndSoftApResume();
     testCapsUpdates();
     testCaptivePortal();
     std::puts("PASS web_module_check");

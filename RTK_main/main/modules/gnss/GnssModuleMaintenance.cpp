@@ -191,6 +191,7 @@ void GnssModule::cmdBaud(const fw::Command &cmd, uint32_t nowMs, fw::CommandResu
         active_maintenance_ = Maintenance::kBaud;
         pollController(nowMs);
     }
+    publishPendingNvs();
 }
 
 fw::Result GnssModule::resetStoredSettings() noexcept
@@ -333,6 +334,11 @@ void GnssModule::completeBaudMaintenance(const ::gnss::ControllerStats &stats,
 void GnssModule::completeMaintenance(uint32_t nowMs) noexcept
 {
     const auto stats = controller().stats();
+    // 保留已完成的接收机切速结论，恢复正常运行后再提交 NVS。
+    if (stats.maintenance == Maintenance::kBaud &&
+        stats.maintenanceResult == MaintenanceResult::kOk && !store::canStartWrite()) {
+        return;
+    }
     const uint32_t previousSeq = completed_maintenance_seq_;
     completed_maintenance_seq_ = stats.maintenanceSeq;
     if (boot_baud_save_in_flight_) {

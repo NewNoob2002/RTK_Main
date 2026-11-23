@@ -4,6 +4,7 @@
 #include "modules/bt_link/BtLinkModulePrivate.hpp"
 #include "AppContext.hpp"
 #include "board/BoardProfile.hpp"
+#include "app/PowerRequests.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -15,6 +16,7 @@
 #include "fw/Tlog.hpp"
 #include "core/LinkService.hpp"
 #include "esp_system.h"
+#include "SppServerPairing.h"
 #if defined(ESP_PLATFORM)
 #include "sdkconfig.h"
 #endif
@@ -188,7 +190,8 @@ bool BtLinkModule::onSetNtrip(
     const core::PhoneNtripConfig &cfg, uint32_t nowMs) noexcept
 {
     const auto *self = static_cast<const BtLinkModule *>(ctx);
-    return (self != nullptr) && (self->context_ != nullptr) &&
+    const power::SettingAdmission admission;
+    return admission.admitted() && (self != nullptr) && (self->context_ != nullptr) &&
            self->context_->storage.setPhoneNtrip(cfg, nowMs);
 }
 
@@ -205,7 +208,8 @@ bool BtLinkModule::onSetJsonServer(
     const core::PhoneJsonServerConfig &cfg, uint32_t nowMs) noexcept
 {
     const auto *self = static_cast<const BtLinkModule *>(ctx);
-    return (self != nullptr) && (self->context_ != nullptr) &&
+    const power::SettingAdmission admission;
+    return admission.admitted() && (self != nullptr) && (self->context_ != nullptr) &&
            self->context_->storage.setPhoneJsonServer(cfg, nowMs);
 }
 
@@ -222,7 +226,8 @@ bool BtLinkModule::onSetThingsboard(
     const core::PhoneThingsboardConfig &cfg, uint32_t nowMs) noexcept
 {
     const auto *self = static_cast<const BtLinkModule *>(ctx);
-    return (self != nullptr) && (self->context_ != nullptr) &&
+    const power::SettingAdmission admission;
+    return admission.admitted() && (self != nullptr) && (self->context_ != nullptr) &&
            self->context_->storage.setPhoneThingsboard(cfg, nowMs);
 }
 
@@ -246,7 +251,8 @@ bool BtLinkModule::onScheduleWifiConfig(void *ctx, uint32_t nowMs) noexcept
 {
     auto *self = static_cast<BtLinkModule *>(ctx);
     if ((self == nullptr) || !onWifiConfigSupported(ctx) ||
-        (self->pending_reset_ != PendingReset::kNone)) {
+        (self->pending_reset_ != PendingReset::kNone) ||
+        !power::s_power_requests.canScheduleRestart()) {
         return false;
     }
     // 与 0x1E 共用延迟，先让 01 01 应答经 SPP 发出再重启（ADR-0017 §2.2）。
@@ -535,9 +541,56 @@ bool BtLinkModule::hasPendingTicket(bool localOnly) const noexcept
     return !localOnly && ((ppp_ticket_.seq != 0U) || (sat_ticket_.seq != 0U));
 }
 
+void BtLinkModule::setPowerPaused(bool paused) noexcept
+{
+    powerPaused_ = paused;
+    applyPowerScanMode(rtos::nowMs());
+    if (!paused) {
+        return;
+    }
+    for (const SessionEntry &entry : sessions_) {
+        if (!entry.used) {
+            continue;
+        }
+        const esp_err_t err = spp_server_disconnect(entry.handle);
+        if ((err != ESP_OK) && (err != ESP_ERR_NOT_FOUND)) {
+            FW_LOGW(fw::TraceCat::kLink, "shutdown disconnect 0x%08" PRIx32 " failed: %s",
+                    entry.handle, esp_err_to_name(err));
+        }
+    }
+}
+
+void BtLinkModule::applyPowerScanMode(uint32_t nowMs) noexcept
+{
+    constexpr uint32_t kScanRetryMs = 100U;
+    if ((!scanPending_ && scanSubmittedPaused_ == powerPaused_) ||
+        (scanFailed_ && nowMs - scanFailedMs_ < kScanRetryMs)) {
+        return;
+    }
+    const esp_err_t err = spp_server_scan_pause(powerPaused_);
+    scanPending_ = err == ESP_ERR_NOT_FINISHED;
+    scanFailed_ = !scanPending_ && err != ESP_OK;
+    if (err == ESP_OK) {
+        // GAP API 仅确认入队；应用层 OPEN 拒绝与会话 CLOSE 另行生效。
+        scanSubmittedPaused_ = powerPaused_;
+    } else if (scanFailed_) {
+        scanFailedMs_ = nowMs;
+        fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kBtScanSubmitError), 0U,
+                  static_cast<uint32_t>(err), 0U); // esp_err_t 错误码保留底层位模式。
+    }
+}
+
+bool BtLinkModule::powerPauseDone() const noexcept
+{
+    if (!powerPaused_ || !scanSubmittedPaused_ || scanPending_) {
+        return false;
+    }
+    return std::ranges::none_of(sessions_, [](const SessionEntry &entry) { return entry.used; });
+}
+
 bool BtLinkModule::schedulePhoneReset(bool factoryReset, bool reboot, uint32_t nowMs) noexcept
 {
-    if (pending_reset_ != PendingReset::kNone) {
+    if (pending_reset_ != PendingReset::kNone || !power::s_power_requests.canScheduleRestart()) {
         return false;
     }
     if (factoryReset) {
@@ -564,28 +617,43 @@ void BtLinkModule::pollPhoneReset(uint32_t nowMs) noexcept
     if (pending_reset_ == PendingReset::kNone) {
         return;
     }
+    if (!power::s_power_requests.canScheduleRestart()) {
+        pending_reset_ = PendingReset::kNone;
+        return;
+    }
     // 有符号差值判断到期，容忍 32 位毫秒回绕。
     if (static_cast<int32_t>(nowMs - pending_reset_at_ms_) < 0) {
         return;
     }
     const PendingReset action = pending_reset_;
     pending_reset_ = PendingReset::kNone;
-    if (action == PendingReset::kFactory) {
+    if (!power::s_power_requests.claimRestart()) {
+        return;
+    }
+    switch (action) {
+    case PendingReset::kFactory: {
         fw::Command cmd{};
         cmd.target = id(ModuleKind::kStorage);
         cmd.verb = StorageModule::kEraseUser;
         fw::CommandResult result{};
         ctx().storage.onCommand(cmd, result);
         if (!fw::isOk(result.status)) {
+            power::s_power_requests.releaseAction();
             FW_LOGW(fw::TraceCat::kStore, "Phone factory reset failed (%s)",
                     fw::toString(result.status));
             return;
         }
         FW_LOGI(fw::TraceCat::kStore, "Factory reset done, restarting");
-    } else if (action == PendingReset::kWifiConfig) {
+        break;
+    }
+    case PendingReset::kWifiConfig:
         restartIntoWifiConfig();
-    } else {
+        break;
+    case PendingReset::kReboot:
+    case PendingReset::kNone:
+    default:
         FW_LOGI(fw::TraceCat::kSys, "Phone reboot requested, restarting");
+        break;
     }
     esp_restart();
 }
@@ -724,9 +792,7 @@ fw::Result BtLinkModule::init() noexcept
         return fw::Result::kInvalidState;
     }
     /* 从持久化快照恢复策略，再按依赖顺序原地构造服务。 */
-    const auto link = ctx().data.linkStatus.read();
-    link_manager_.init(link.policy, std::span{link.whitelist}.first(link.whitelistCount));
-    core::bindPairWindow(link_manager_, &pair_window_);
+    initLinkManager();
     auto &alarm = alarm_.emplace();
     auto &deviceService = device_service_.emplace();
     deviceService.info().product.assign(board::productName(ctx().boardProfile));
@@ -851,6 +917,7 @@ bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
     syncDeviceSn();
     collectWhitelistDirty();
     const uint32_t now = rtos::nowMs();
+    applyPowerScanMode(now);
 #if RTK_GNSS_ENABLED
     syncGnssInfo(now);
 #endif
@@ -867,6 +934,7 @@ bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
     }
     /* 按预算接收并直推 RTCM，再绑定并排空 PHONE GNSS 流，最后发布链路统计。 */
     drainRx(round_start_ms_);
+    collectWhitelistDirty();
     syncStream();
 #if RTK_GNSS_ENABLED
     const bool gnssMore = drainGnssStream();
@@ -875,7 +943,6 @@ bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
     const bool gnssMore = false;
     const bool baseMore = false;
 #endif
-    collectWhitelistDirty();
     publishLink(rtos::nowMs());
     pollPhoneReset(rtos::nowMs());
     // 自投递给同执行器 StorageModule 的设置凭据在途时立即返回 true，促使其在下一轮即刻出队；

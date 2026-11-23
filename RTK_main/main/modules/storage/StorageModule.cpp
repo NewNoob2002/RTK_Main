@@ -1,6 +1,7 @@
 // 存储模块实现：启动加载 SN/白名单与目录中的键表、白名单变化去抖写回、SN 保存命令（只在 kLink 任务或启动前调用）。
 // 通用键表的 NVS 读写在 StoreKeys.cpp。
 #include "modules/storage/StorageModule.hpp"
+#include "app/PowerRequests.hpp"
 #include "AppContext.hpp"
 #include <algorithm>
 #include <array>
@@ -320,9 +321,12 @@ void StorageModule::markWhitelistDirty(std::span<const core::BtAddr> list, uint3
  */
 bool StorageModule::poll(uint32_t /*nowMs*/) noexcept
 {
+    if (!store::canStartWrite()) {
+        return false;
+    }
+    pollPhoneBlobs(rtos::nowMs());
     const uint32_t now = rtos::nowMs();
-    pollPhoneBlobs(now);
-    if (!pending_ || now - changed_ms_ < kDebounceMs ||
+    if (!pending_ || (!powerSave_ && now - changed_ms_ < kDebounceMs) ||
         (attempted_ && now - attempt_ms_ < retry_ms_)) {
         return false;
     }
@@ -508,7 +512,8 @@ bool StorageModule::setPhoneBlob(std::span<uint8_t> dst, DebouncedState &state,
 void StorageModule::pollPhoneBlob(const fw::StoreKey &key, std::span<const uint8_t> data,
                                   DebouncedState &state, uint32_t nowMs, const char *label) noexcept
 {
-    if (!state.pending || (nowMs - state.changedMs < kDebounceMs) ||
+    if (!state.pending || !store::canStartWrite() ||
+        (!powerSave_ && nowMs - state.changedMs < kDebounceMs) ||
         (nowMs - state.attemptMs < state.retryMs)) {
         return;
     }
@@ -574,11 +579,74 @@ bool StorageModule::setPhoneThingsboard(const core::PhoneThingsboardConfig &cfg,
 
 esp_err_t StorageModule::flushWhitelist(uint32_t nowMs) noexcept
 {
+    if (!store::canStartWrite()) {
+        return ESP_ERR_INVALID_STATE;
+    }
     /* 显式命令跳过去抖和退避，并返回实际后端结果。 */
     changed_ms_ = nowMs - kDebounceMs;
     attempted_ = false;
     static_cast<void>(poll(nowMs));
     return status_.whitelistError;
+}
+
+bool StorageModule::hasPendingWrites() const noexcept
+{
+    return pending_ || phone_height_state_.pending || phone_pn_state_.pending ||
+           phone_ntrip_state_.pending || phone_json_srv_state_.pending || phone_tb_state_.pending;
+}
+
+void StorageModule::expeditePendingWrites() noexcept
+{
+    powerSave_ = true;
+    attempted_ = false;
+    phone_height_state_.retryMs = 0U;
+    phone_pn_state_.retryMs = 0U;
+    phone_ntrip_state_.retryMs = 0U;
+    phone_json_srv_state_.retryMs = 0U;
+    phone_tb_state_.retryMs = 0U;
+}
+
+void StorageModule::formatPendingSummary(std::span<char> out) const noexcept
+{
+    if (out.empty()) {
+        return;
+    }
+    out[0] = '\0';
+    size_t pos = 0U;
+    const auto appendItem = [&out, &pos](std::string_view name) noexcept {
+        if (pos + 1U >= out.size()) {
+            return;
+        }
+        if (pos > 0U) {
+            out[pos++] = ',';
+        }
+        const size_t avail = out.size() - 1U - pos;
+        const size_t n = std::min(avail, name.size());
+        std::copy_n(name.begin(), n, out.subspan(pos).begin());
+        pos += n;
+        out[pos] = '\0';
+    };
+    if (pending_) {
+        appendItem("whitelist");
+    }
+    if (phone_height_state_.pending) {
+        appendItem("phone.height");
+    }
+    if (phone_pn_state_.pending) {
+        appendItem("phone.pn");
+    }
+    if (phone_ntrip_state_.pending) {
+        appendItem("phone.ntrip");
+    }
+    if (phone_json_srv_state_.pending) {
+        appendItem("phone.json_srv");
+    }
+    if (phone_tb_state_.pending) {
+        appendItem("phone.tb");
+    }
+    if (pos == 0U) {
+        appendItem("none");
+    }
 }
 
 void StorageModule::publishSettingsSn() noexcept
@@ -818,6 +886,21 @@ void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result)
 {
     if (cmd.argLen > cmd.args.size()) {
         result.status = fw::Result::kInvalidArg;
+        return;
+    }
+    if (cmd.verb == kSaveFence) {
+        result.status = cmd.argLen == 0U ? fw::Result::kOk : fw::Result::kInvalidArg;
+        return;
+    }
+    if (cmd.verb == kEraseUserForWeb) {
+        if (!power::s_power_requests.claimRestart()) {
+            result.status = fw::Result::kBusy;
+            return;
+        }
+        eraseForReset(cmd, result);
+        if (!fw::isOk(result.status)) {
+            power::s_power_requests.releaseAction();
+        }
         return;
     }
     if (cmd.verb == kEraseUser || cmd.verb == kEraseFactory) {

@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 
 #include "AppContext.hpp"
+#include "app/PowerRequests.hpp"
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
 #include "modules/system/SystemCmdsPrivate.hpp"
@@ -29,18 +30,24 @@ int runReset(bool factory) noexcept
     if (executor == nullptr || !executor->running() || !executor->moduleOk(kStorage)) {
         return cli::fail("storage not running");
     }
+    if (!power::s_power_requests.claimRestart()) {
+        return cli::fail("power action already in progress");
+    }
     fw::Command command{};
     command.target = kStorage;
     command.verb = factory ? StorageModule::kEraseFactory : StorageModule::kEraseUser;
     fw::CommandResult result{};
     constexpr uint32_t kEraseWaitMs = 15000U;
     if (!fw::isOk(executor->call(command, result, kEraseWaitMs))) {
+        power::s_power_requests.releaseAction();
         return cli::fail("no response from storage");
     }
     if (result.status == fw::Result::kBusy) {
+        power::s_power_requests.releaseAction();
         return cli::fail("storage busy");
     }
     if (!fw::isOk(result.status)) {
+        power::s_power_requests.releaseAction();
         return cli::fail("factory reset failed: %s", esp_err_to_name(result.detail));
     }
     FW_LOGI(fw::TraceCat::kStore, "Factory reset done, restarting");

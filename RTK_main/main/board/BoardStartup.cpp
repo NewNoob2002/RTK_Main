@@ -15,6 +15,7 @@
 #include "sdkconfig.h"
 
 #include "board/BoardProfile.hpp"
+#include "board/Charger.hpp"
 
 namespace app::board {
 namespace {
@@ -289,7 +290,154 @@ private:
     return fw::Status::kOk;
 }
 
+/**
+ * @brief 配置输入脚（无内部上下拉）并读取当前逻辑状态
+ * @param gpio: 引脚编号，小于 0 时视为无效
+ * @param activeLow: true 表示低电平有效
+ * @param[out] active: 读取成功时写入逻辑有效状态
+ * @retval ESP_OK 读取完成
+ * @retval 其他 SDK GPIO 配置错误
+ * @note 仅启动任务调用，非 ISR。
+ */
+[[nodiscard]] esp_err_t readInputPin(int gpio, bool activeLow, bool &active) noexcept
+{
+    if (gpio < 0) {
+        active = false;
+        return ESP_OK;
+    }
+    const gpio_config_t config{.pin_bit_mask = 1ULL << static_cast<unsigned>(gpio),
+                               .mode = GPIO_MODE_INPUT,
+                               .pull_up_en = GPIO_PULLUP_DISABLE,
+                               .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                               .intr_type = GPIO_INTR_DISABLE};
+    const esp_err_t err = gpio_config(&config);
+    if (err != ESP_OK) {
+        return err;
+    }
+    // 调用方只传板级表已登记的 GPIO，枚举转换安全。
+    const int level = gpio_get_level(static_cast<gpio_num_t>(gpio));
+    active = activeLow ? (level == 0) : (level != 0);
+    return ESP_OK;
+}
+
+/**
+ * @brief 拉 GPIO4 之前用 ADC2 单次采样 GPIO25（U3 OUT）电压
+ * @param senseGpio: 检测引脚编号
+ * @param[out] mv: 成功时写入电压（mV）
+ * @retval ESP_OK 采样成功
+ * @retval 其他 SDK ADC 错误
+ * @note 仅启动任务在蓝牙/Wi-Fi 启动前调用，返回时释放 ADC2，非 ISR。
+ */
+[[nodiscard]] esp_err_t readSenseOnce(int senseGpio, uint32_t &mv) noexcept
+{
+    BootAdc adc{};
+    adc_unit_t unit{};
+    adc_channel_t channel{};
+    esp_err_t err = adc_oneshot_io_to_channel(senseGpio, &unit, &channel);
+    if (err == ESP_OK) {
+        err = adc.init(unit, channel);
+    }
+    int raw = 0;
+    if (err == ESP_OK) {
+        err = adc.read(raw);
+    }
+    if (err == ESP_OK) {
+        err = adc.toMv(raw, mv);
+    }
+    return err;
+}
+
+/**
+ * @brief 启动早期初始化 SGM41513 并应用 V2.7 充电参数，同时读取输入状态（失败只记告警不阻断开机）
+ * @param pins: 板级充电芯片配置
+ * @retval I2C 读取成功时 ok=true 的输入状态；未配置或失败时 ok=false
+ * @note 仅启动任务调用，可在 I2C 初始化与传输时阻塞，非 ISR。
+ */
+[[nodiscard]] ChargerInputStatus initChargerAtBoot(const ChargerPins &pins) noexcept
+{
+    if (pins.i2cPort < 0) {
+        return ChargerInputStatus{};
+    }
+    const fw::Status initSt = charger::init(pins);
+    if (!fw::isOk(initSt)) {
+        FW_LOGW(fw::TraceCat::kSys, "charger init failed (%s), falling back to STAT pin",
+                fw::toString(initSt));
+        return ChargerInputStatus{};
+    }
+    const fw::Status paramSt = charger::applyChargeParams(pins);
+    if (!fw::isOk(paramSt)) {
+        FW_LOGW(fw::TraceCat::kSys, "charger charge params apply failed (%s)",
+                fw::toString(paramSt));
+    }
+    ChargerInputStatus status{};
+    static_cast<void>(
+        charger::refreshInputStatus(status)); // 启动分支统一根据缓存有效位退化到 STAT。
+    if (!status.ok) {
+        FW_LOGW(fw::TraceCat::kSys, "charger REG08 read failed, falling back to STAT pin");
+    }
+    return status;
+}
+
+/**
+ * @brief 按启动分支决策执行 P2 电源保持或进入充电待机
+ * @param hold: 板级电源保持配置
+ * @param action: 启动分支决策结果
+ * @param initialMv: 拉高按键前测得的 GPIO25 电压（mV）
+ * @param usb: 综合 I2C 与 STAT 后的 USB 检测结论
+ * @param[out] bootMode: 输出运行档
+ * @param[out] reason: 输出开机原因
+ * @retval kOk 保持完成或进入充电待机
+ * @retval 其他 保持失败错误码
+ * @note 仅启动任务调用，非 ISR。
+ */
+[[nodiscard]] fw::Status executePowerOnAction(const PowerHold &hold, PowerOnAction action,
+                                              uint32_t initialMv, const UsbDetection &usb,
+                                              BootMode &bootMode, PowerOnReason &reason) noexcept
+{
+    switch (action) {
+    case PowerOnAction::kChargeStandby:
+        bootMode = BootMode::kChargeStandby;
+        reason = PowerOnReason::kCharge;
+        FW_LOGI(fw::TraceCat::kSys, "power_on=charge sense=%" PRIu32 " mV usb=1 src=%s", initialMv,
+                usbSourceName(usb.source));
+        return fw::Status::kOk;
+    case PowerOnAction::kHoldRecoverWarn:
+        reason = PowerOnReason::kKey;
+        FW_LOGW(fw::TraceCat::kSys,
+                "power_on=key sense=%" PRIu32 " mV low without usb (src=%s), forcing hold",
+                initialMv, usbSourceName(usb.source));
+        return emulateKey(hold);
+    case PowerOnAction::kHoldConfirm:
+    default:
+        reason = PowerOnReason::kKey;
+        FW_LOGI(fw::TraceCat::kSys, "power_on=key sense=%" PRIu32 " mV usb=%u src=%s", initialMv,
+                usb.present ? 1U : 0U, usbSourceName(usb.source));
+        return emulateKey(hold);
+    }
+}
+
 } // namespace
+
+fw::Status applySafeOutputs(const Profile &profile) noexcept
+{
+    return setSafeOutputs(profile);
+}
+
+fw::Status setSafeOutputLevels(const Profile &profile) noexcept
+{
+    fw::Status status = fw::Status::kOk;
+    for (const SafeOutput &output : profile.safeOutputs) {
+        // 引脚已在启动识别阶段经 setSafeOutputs 配为输出，仅刷新电平避免重复 gpio_config 告警。
+        const esp_err_t err =
+            gpio_set_level(static_cast<gpio_num_t>(output.gpio), output.high ? 1U : 0U);
+        if (err != ESP_OK) {
+            FW_LOGE(fw::TraceCat::kSys, "board safe level GPIO%d failed: %s", output.gpio,
+                    esp_err_to_name(err));
+            status = fw::Status::kIoError;
+        }
+    }
+    return status;
+}
 
 fw::Status identify(const Profile *&selected) noexcept
 {
@@ -349,6 +497,55 @@ fw::Status enablePowerHold(const PowerHold &hold) noexcept
     default:
         return fw::Status::kInvalidArg;
     }
+}
+
+fw::Status startupPower(const PowerHold &hold, const PowerKey &key, const ChargerPins &chargerPins,
+                        BootMode &bootMode, PowerOnReason &reason) noexcept
+{
+    bootMode = BootMode::kNormal;
+    if (hold.kind != HoldKind::kKeyEmulate) {
+        reason = hold.kind == HoldKind::kLatchGpio ? PowerOnReason::kLatch : PowerOnReason::kKey;
+        return enablePowerHold(hold);
+    }
+
+    // 无论进入充电待机还是正常开机，先配置 SGM41513 充电参数并读输入状态（失败退化到 STAT）。
+    // 已知限制：若 I2C 故障且电池已充满（STAT 高），插充电器仍会按无 USB 走全功能开机。
+    ChargerInputStatus i2cStatus = initChargerAtBoot(chargerPins);
+
+    uint32_t initialMv = 0U;
+    esp_err_t err = readSenseOnce(hold.senseGpio, initialMv);
+    if (err != ESP_OK) {
+        FW_LOGE(fw::TraceCat::kSys, "power initial sense read failed: %s", esp_err_to_name(err));
+        return fw::Status::kIoError;
+    }
+    const auto readUsb = [&]() noexcept {
+        bool statActive = false;
+        const auto statErr = readInputPin(key.chgStatGpio, key.chgActiveLow, statActive);
+        return decideUsbPresent(i2cStatus, statActive, statErr == ESP_OK && key.chgStatGpio >= 0);
+    };
+    const UsbDetection firstUsb = readUsb();
+    const bool senseHigh = initialMv >= hold.senseOnMv;
+    const UsbDetection usb = waitForBootUsb(
+        senseHigh, firstUsb, rtos::nowMs,
+        [](uint32_t delayMs) noexcept {
+            const TickType_t ticks = pdMS_TO_TICKS(delayMs);
+            vTaskDelay(ticks == 0U ? 1U : ticks);
+        },
+        [&]() noexcept {
+            static_cast<void>(
+                charger::refreshInputStatus(i2cStatus)); // 样本有效位决定是否退化到 STAT。
+            return readUsb();
+        });
+    if (!senseHigh && !firstUsb.present) {
+        // 等待充电输入识别期间，物理按键可能已将 U3 打开。
+        err = readSenseOnce(hold.senseGpio, initialMv);
+        if (err != ESP_OK) {
+            FW_LOGE(fw::TraceCat::kSys, "power sense reread failed: %s", esp_err_to_name(err));
+            return fw::Status::kIoError;
+        }
+    }
+    return executePowerOnAction(hold, decidePowerOn(initialMv >= hold.senseOnMv, usb.present),
+                                initialMv, usb, bootMode, reason);
 }
 
 } // namespace app::board

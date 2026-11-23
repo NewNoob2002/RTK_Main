@@ -150,6 +150,7 @@ struct DataCenter {
     fw::Slot<rtos::ExecStats> execStats{};
     fw::Slot<SystemStatus> systemStatus{};
     fw::Slot<SystemMode> systemMode{};
+    fw::Slot<PowerSnapshot> powerStatus{};
     fw::Slot<uint32_t> rtcmReset{};
     fw::Slot<std::optional<bool>> gnssPppEnabled{};               // 启动恢复或设置成功后写入。
     fw::Slot<std::optional<core::SatTrackConfig>> gnssSatTrack{}; // 启动恢复或设置成功后写入。
@@ -179,9 +180,11 @@ struct DataCenter {
     std::atomic<uint32_t> gnssRateHz{
         0U}; // 当前 GNSS 定位频率（Hz，kIo 写，kLink 读；0 表示未初始化）
     std::atomic<GgaGatePersist> ggaGatePersist{
-        GgaGatePersist::kClean}; // GGA 门控 NVS 持久化状态（kIo 写，kLink 读）
+        GgaGatePersist::kClean};             // GGA 门控 NVS 持久化状态（kIo 写，kLink 读）
+    std::atomic<bool> gnssPendingNvs{false}; // GNSS 待落盘状态（kIo 写，kLink 关机等待读）
     static_assert(fw::kAtomicUsable<uint32_t>, "GNSS 切速失败计数原子须无锁");
     static_assert(fw::kAtomicUsable<GgaGatePersist>, "GGA 门控持久化状态原子须无锁");
+    static_assert(fw::kAtomicUsable<bool>, "GNSS 待落盘标志原子须无锁");
 
     /**
      * @brief  查询当前 GGA 质量门控是否允许输出 GGA（蓝牙直传、0x04 query 与将来 4G NTRIP 共用）

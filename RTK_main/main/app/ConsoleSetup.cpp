@@ -15,6 +15,7 @@
 
 #include "AppContext.hpp"
 #include "app/ConsoleRegistration.hpp"
+#include "app/PowerRequests.hpp"
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
 #include "rtos/EspStatus.hpp"
@@ -60,6 +61,9 @@ int cmdRadioSwitch(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: radio %s", app::radioModeName(Mode));
+    }
+    if (!app::power::s_power_requests.claimRestart()) {
+        return cli::fail("power action already in progress");
     }
     constexpr uint32_t kDrainTimeoutMs = 500U;
     constexpr uint32_t kAckTimeoutMs = 50U;
@@ -258,6 +262,7 @@ bool registerCommandTables() noexcept
 #endif
         kEnabled("factory") ? &factoryCmds : nullptr,
         kEnabled("freset") ? &factoryResetCmds : nullptr,
+        kEnabled("power") ? &powerCmds : nullptr,
         kEnabled("radio") ? &radioCmds : nullptr,
     };
     // 命令表地址在 init 后不可变；handler 经 phase 原子门控。
@@ -300,6 +305,7 @@ bool registerVerbGroups() noexcept
 #endif
         kGroup("bt", "Bluetooth pairing and alarm trust", &btVerbs),
         kGroup("factory", "production settings (hidden, needs unlock)", &factoryVerbs),
+        kGroup("power", "power key status and clean shutdown", &powerVerbs),
         kGroup("radio", "radio mode and restart", &radioVerbs),
     };
     for (const auto &group : kVerbGroups) {

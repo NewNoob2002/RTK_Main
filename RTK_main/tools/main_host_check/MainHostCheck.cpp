@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <semaphore>
+#include "support/ConsoleSupport.hpp"
 
 extern "C" {
 #include "esp_err.h"
@@ -17,7 +19,12 @@ extern "C" {
 }
 
 #include "AppTestAdapter.hpp"
+#include "app/PowerRequests.hpp"
 #include "board/BoardProfile.hpp"
+#include "board/BoardStartup.hpp"
+#include "board/Charger.hpp"
+#include "driver/gpio.h"
+#include "def/GnssSubDef.hpp"
 #include "modules/debug/TraceText.hpp"
 #include "modules/debug/DebugKeys.hpp"
 #include "modules/gnss/RtcmPipe.hpp"
@@ -44,7 +51,7 @@ bool factoryUnlocked() noexcept
 
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
 namespace {
-uint32_t s_clock = 100U;
+std::atomic<uint32_t> s_clock{100U};
 uint32_t s_write_delay = 0U;
 std::array<size_t, 2> s_tx_used{};
 std::array<bool, 2> s_tx_reserved{};
@@ -86,6 +93,16 @@ void *s_rx_wake_ctx = nullptr;
 uint32_t s_rx_wake_calls = 0U;
 StaticTask_t s_host_task{};
 bool s_use_host_task = false;
+std::array<int, 40U> s_gpioLevels{};
+unsigned s_gpio4Presses = 0U;
+bool s_chargerBusy = false;
+uint8_t s_chargerReg = app::board::kSgmReg08PgBit;
+unsigned s_chargerReads = 0U;
+esp_err_t s_scanResult = ESP_OK;
+bool s_scanModePaused = false;
+unsigned s_scanCalls = 0U;
+void (*s_consoleDelay)() noexcept = nullptr;
+unsigned s_disconnectCalls = 0U;
 int s_failures = 0;
 constexpr core::BtAddr kPhone{{1, 2, 3, 4, 5, 6}};
 constexpr core::BtAddr kAlarm{{7, 8, 9, 10, 11, 12}};
@@ -281,6 +298,385 @@ void storageBackoff()
     CHECK(!s_whitelist_pending && s_saved_count == 0U);
     CHECK(appContext().data.storeStatus.read().failures == 8U &&
           appContext().data.storeStatus.read().retryMs == 0U);
+}
+
+/** @brief 关机首次冲刷缩短去抖，连续轮询保留本次失败的退避。 */
+void powerSaveBackoff()
+{
+    using namespace app;
+    setup();
+    auto &storage = appContext().storage;
+    storage.markWhitelistDirty(std::array{kAlarm}, s_clock);
+    s_store_result = ESP_FAIL;
+    CHECK(power::s_power_requests.requestShutdown(board::BootMode::kNormal,
+                                                  board::ShutdownReason::kKey));
+    static_cast<void>(storage.poll(s_clock));
+    CHECK(s_store_calls == 0U);
+    storage.expeditePendingWrites();
+    static_cast<void>(storage.poll(s_clock));
+    CHECK(s_store_calls == 1U && storage.hasPendingWrites());
+    for (unsigned step = 0U; step < 99U; ++step) {
+        s_clock += 10U;
+        static_cast<void>(storage.poll(s_clock));
+    }
+    CHECK(s_store_calls == 1U && storage.hasPendingWrites());
+    s_store_result = ESP_OK;
+    s_clock += 10U;
+    static_cast<void>(storage.poll(s_clock));
+    CHECK(s_store_calls == 2U && !storage.hasPendingWrites());
+    power::s_power_requests.releaseAction();
+}
+
+/** @brief 配置真实电源模块，GPIO、充电芯片和时间由主机提供。 @param mode: 本次运行档。 */
+void setupPower(app::board::BootMode mode)
+{
+    using namespace app;
+    setup();
+    auto &ctx = appContext();
+    ctx.boardProfile = board::byId(board::BoardId::kP2V141);
+    ctx.bootMode = mode;
+    s_gpioLevels[18] = 1;
+    CHECK(fw::isOk(ctx.power.init()));
+}
+
+/** @brief 按固定周期推进真实电源模块。 @param ticks: 轮数，每轮间隔 10 ms。 */
+void pollPower(unsigned ticks)
+{
+    for (unsigned n = 0U; n < ticks && s_restarts == 0U; ++n) {
+        s_clock += 10U;
+        static_cast<void>(app::appContext().power.poll(s_clock));
+    }
+}
+
+/** @brief 验证待机拒绝关机、保持超时释放 GPIO4、再次长按成功后才重启。 */
+void powerStandby()
+{
+    using namespace app;
+    setupPower(board::BootMode::kChargeStandby);
+    CHECK(!power::requestShutdown(board::ShutdownReason::kConsole));
+    pollPower(4U);
+    CHECK(s_gpio4Presses == 0U);
+    s_gpioLevels[18] = 0;
+    pollPower(251U);
+    CHECK(s_gpioLevels[4] == 1 && s_gpio4Presses == 1U && s_restarts == 0U);
+    pollPower(500U);
+    CHECK(s_gpioLevels[4] == 0 && s_restarts == 0U);
+    s_gpioLevels[18] = 1;
+    pollPower(4U);
+    s_gpioLevels[18] = 0;
+    pollPower(251U);
+    CHECK(s_gpioLevels[4] == 1 && s_gpio4Presses == 2U);
+    s_gpioLevels[25] = 1;
+    pollPower(3U);
+    CHECK(s_gpioLevels[4] == 0 && s_restarts == 0U);
+    CHECK(!power::s_power_requests.claimRestart());
+    pollPower(15U);
+    CHECK(s_restarts == 1U);
+}
+
+struct ExecutorRound {
+    std::binary_semaphore ready{0};
+    std::binary_semaphore run{0};
+    std::array<uint8_t, 8> verbs{};
+    size_t count = 0U;
+};
+
+constinit ExecutorRound s_linkRound{};
+constinit ExecutorRound s_ioRound{};
+
+/** @brief 暂停执行器在本轮出队前。 @param ctx: 测试轮次控制。 @param maxMs: 执行器等待预算。 */
+void waitExecutorRound(void *ctx, uint32_t maxMs) noexcept
+{
+    static_cast<void>(maxMs);
+    // 两个测试执行器各绑定其对应的控制对象。
+    auto &round = *static_cast<ExecutorRound *>(ctx);
+    round.ready.release();
+    round.run.acquire();
+}
+
+/** @brief 放行一个完整轮次并等到下轮边界。 @param round: 测试轮次控制。 */
+void runExecutorRound(ExecutorRound &round)
+{
+    round.run.release();
+    round.ready.acquire();
+}
+
+/** @brief 用真实队列验证关机保存栅栏的 FIFO、等待以及超时取消。 @param timeout: 注入 kIo 超时。 */
+void powerNoReopen(bool timeout)
+{
+    using namespace app;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    constexpr auto kLink = id(ExecKind::kLink);
+    constexpr auto kIo = id(ExecKind::kIo);
+    constexpr auto kSetOut = static_cast<uint8_t>(GnssSubVerb::kSetOut);
+    constexpr auto kSetGga = static_cast<uint8_t>(GnssSubVerb::kSetGgaGate);
+    constexpr auto kFlushGga = static_cast<uint8_t>(GnssSubVerb::kFlushGgaGate);
+    constexpr auto kTrust = verb(LinkVerb::kWhitelistAdd);
+    static constexpr fw::ModuleOps kLinkOps{
+        nullptr, nullptr, nullptr,
+        [](void *, const fw::Command &cmd, fw::CommandResult &result) noexcept {
+            s_linkRound.verbs.at(s_linkRound.count++) = cmd.verb;
+            if (cmd.target == id(ModuleKind::kStorage)) {
+                appContext().storage.onCommand(cmd, result);
+            } else {
+                appContext().bt_link.onCommand(cmd, result);
+            }
+        }};
+    static constexpr fw::ModuleOps kIoOps{
+        nullptr, nullptr, nullptr,
+        [](void *, const fw::Command &cmd, fw::CommandResult &) noexcept {
+            s_ioRound.verbs.at(s_ioRound.count++) = cmd.verb;
+        }};
+    static constinit std::array<fw::Module, 3> modules{{
+        {"store", id(ModuleKind::kStorage), kLink, 0U, nullptr, &kLinkOps},
+        {"link", id(ModuleKind::kBtLink), kLink, 0U, nullptr, &kLinkOps},
+        {"gnss", id(ModuleKind::kGnss), kIo, 0U, nullptr, &kIoOps},
+    }};
+    static constinit rtos::Executor link{};
+    static constinit rtos::Executor io{};
+    static constinit rtos::ExecutorStorage<4096, 8> linkStorage{};
+    static constinit rtos::ExecutorStorage<4096, 8> ioStorage{};
+    const rtos::ExecutorConfig linkCfg{.name = "save_link",
+                                       .id = kLink,
+                                       .yieldTicks = 0U,
+                                       .wait = &waitExecutorRound,
+                                       .waitCtx = &s_linkRound};
+    const rtos::ExecutorConfig ioCfg{.name = "save_io",
+                                     .id = kIo,
+                                     .yieldTicks = 0U,
+                                     .wait = &waitExecutorRound,
+                                     .waitCtx = &s_ioRound};
+    CHECK(fw::isOk(ctx.storage.init()));
+    CHECK(fw::isOk(link.init(linkCfg, modules, viewOf(linkStorage))));
+    CHECK(fw::isOk(io.init(ioCfg, modules, viewOf(ioStorage))));
+    CHECK(fw::isOk(link.start()));
+    CHECK(fw::isOk(io.start()));
+    s_linkRound.ready.acquire();
+    s_ioRound.ready.acquire();
+    ctx.linkExecutor = &link;
+    ctx.ioExecutor = &io;
+    s_gpioLevels[25] = 1;
+
+    // 控制台已准入的信任命令在等待回执期间关闭设置门。命令必须仍能落盘。
+    fw::Command trust{.target = id(ModuleKind::kBtLink), .verb = kTrust, .argLen = core::kAddrLen};
+    std::ranges::copy(kAlarm.bytes, trust.args.begin());
+    fw::CommandResult result{};
+    s_consoleDelay = +[]() noexcept {
+        CHECK(power::s_power_requests.settingsSubmitted());
+        CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+        pollPower(3U); // 发出两个队尾凭据，队列消费由测试控制。
+        CHECK(appContext().data.powerStatus.read().shutdownStage == board::ShutdownStage::kSave);
+        runExecutorRound(s_linkRound);
+    };
+
+    rtos::Ticket gga{};
+    CHECK(fw::isOk(io.post(fw::Command{.target = id(ModuleKind::kGnss), .verb = kSetGga},
+                           rtos::Caller::kWeb, gga)));
+    CHECK(submitRawTo(link, ModuleKind::kBtLink, nullptr, trust, result));
+    CHECK(fw::isOk(result.status) && s_saved_count == 1U && s_saved[0] == kAlarm.bytes);
+    CHECK(!submitRawTo(link, ModuleKind::kBtLink, nullptr, trust, result));
+    CHECK(!submitRawTo(io, ModuleKind::kGnss, nullptr,
+                       fw::Command{.target = id(ModuleKind::kGnss), .verb = kSetGga}, result));
+    CHECK(!submitRawTo(io, ModuleKind::kGnss, nullptr,
+                       fw::Command{.target = id(ModuleKind::kGnss), .verb = kSetOut}, result));
+    CHECK(s_linkRound.count == 2U && s_linkRound.verbs[0] == kTrust &&
+          s_linkRound.verbs[1] == StorageModule::kSaveFence);
+    CHECK(s_gpio4Presses == 0U && s_restarts == 0U);
+
+    if (timeout) {
+        pollPower(100U);
+        CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
+    }
+    runExecutorRound(s_ioRound);
+    CHECK(io.poll(gga, result) == rtos::PollState::kDone);
+    CHECK(s_ioRound.count == (timeout ? 1U : 2U) && s_ioRound.verbs[0] == kSetGga);
+    CHECK(timeout || s_ioRound.verbs[1] == kFlushGga);
+    s_gpioLevels[25] = 0;
+    pollPower(35U);
+    CHECK(s_gpio4Presses == 0U && s_restarts == 1U);
+}
+
+/** @brief 交给 UART 前观察最后一条日志已离开环。 @param text: 待输出文本。 @param len: 文本长度。 */
+void observeLastPowerLog(const char *text, size_t len) noexcept
+{
+    if (std::string_view{text, len}.find("restarting") == std::string_view::npos) {
+        return;
+    }
+    auto &ctx = app::appContext();
+    CHECK(ctx.debug.logRingUsed() == 0U && !ctx.debug.logOutputIdle());
+    pollPower(3U);
+    CHECK(s_restarts == 0U);
+}
+
+/** @brief 模拟日志任务在 pop 与提交 UART 之间被抢占。 */
+void powerLogDrain()
+{
+    using namespace app;
+    setupPower(board::BootMode::kChargeStandby);
+    auto &debug = appContext().debug;
+    std::array<fw::TraceEvent, DebugModule::kRingEvents> trace{};
+    std::array<uint8_t, DebugModule::kLogRingBytes> log{};
+    std::array<StackType_t, DebugModule::kTaskStackBytes / sizeof(StackType_t)> stack{};
+    CHECK(fw::isOk(debug.bindStorage({trace, log, stack})));
+    CHECK(fw::isOk(debug.init()));
+    CHECK(fw::isOk(debug.attachLog()));
+    pollPower(4U);
+    s_gpioLevels[18] = 0;
+    pollPower(251U);
+    s_gpioLevels[25] = 1;
+    pollPower(3U);
+    CHECK(s_restarts == 0U && !debug.logOutputIdle());
+    cli::setOutSink(&observeLastPowerLog, false);
+    CHECK(ModuleTestAccess::pumpLogs());
+    cli::setOutSink(nullptr, false);
+    CHECK(debug.logOutputIdle() && s_restarts == 0U);
+    pollPower(1U);
+    CHECK(s_restarts == 1U);
+}
+
+/** @brief 复现切断入口 REG08 争用，检查下一轮重试且无 GPIO4 高沿。 */
+void powerBusyAtCut()
+{
+    using namespace app;
+    s_chargerReg = 0U;
+    s_gpioLevels[2] = 1;
+    s_gpioLevels[25] = 1;
+    setupPower(board::BootMode::kNormal);
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    pollPower(3U);
+    CHECK(appContext().data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
+    s_chargerReg = board::kSgmReg08PgBit;
+    s_gpioLevels[25] = 0;
+    s_chargerBusy = true;
+    pollPower(4U);
+    CHECK(appContext().data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
+    CHECK(s_gpioLevels[4] == 0 && s_gpio4Presses == 0U && s_restarts == 0U);
+    const auto reads = s_chargerReads;
+    s_chargerBusy = false;
+    pollPower(1U);
+    CHECK(s_chargerReads == reads + 1U && appContext().data.powerStatus.read().usbPresent);
+    pollPower(15U);
+    CHECK(s_gpio4Presses == 0U && s_restarts == 1U);
+}
+
+/** @brief 验证保存截止先拦重试，扫描提交拥塞下仍断电，30 s 后恢复写和 BT。 */
+void powerTimeoutRecovery()
+{
+    using namespace app;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    s_gpioLevels[25] = 1;
+    s_scanResult = ESP_ERR_NOT_FINISHED;
+    ctx.storage.markWhitelistDirty(std::array{kAlarm}, s_clock);
+    s_store_result = ESP_FAIL;
+    CHECK(power::requestShutdown(board::ShutdownReason::kKey));
+    pollPower(2U);
+    const uint32_t saveStart = s_clock;
+    static_cast<void>(ctx.storage.poll(saveStart));
+    CHECK(s_store_calls == 1U && ctx.storage.hasPendingWrites());
+    // Storage 先轮询，精确到保存截止 tick 时重试恰好到期。
+    s_clock = saveStart + board::kShutdownSaveTimeoutMs;
+    s_store_result = ESP_OK;
+    static_cast<void>(ctx.storage.poll(s_clock));
+    CHECK(s_store_calls == 1U && ctx.storage.hasPendingWrites());
+    static_cast<void>(ctx.power.poll(s_clock));
+    CHECK(!ctx.bt_link.powerPauseDone() && s_scanCalls == 1U);
+    open(1U, kPhone);
+    CHECK(s_disconnectCalls == 1U);
+    pollPower(15U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
+    CHECK(s_gpioLevels[4] == 1 && s_restarts == 0U);
+    static_cast<void>(ctx.storage.poll(s_clock));
+    CHECK(s_store_calls == 1U);
+    const uint32_t cutStart = s_clock;
+    s_clock = cutStart + board::kShutdownCutTimeoutMs - 10U;
+    static_cast<void>(ctx.power.poll(s_clock));
+    CHECK(s_gpioLevels[4] == 1);
+    pollPower(1U);
+    CHECK(s_gpioLevels[4] == 0 &&
+          ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kIdle);
+    CHECK(s_restarts == 0U && power::s_power_requests.canScheduleRestart());
+    s_scanResult = ESP_OK;
+    static_cast<void>(ctx.bt_link.poll(s_clock));
+    CHECK(!s_scanModePaused);
+    open(1U, kPhone);
+    CHECK(s_disconnectCalls == 1U);
+    static_cast<void>(ctx.storage.poll(s_clock));
+    CHECK(s_store_calls == 2U && !ctx.storage.hasPendingWrites());
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    pollPower(3U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
+    CHECK(s_scanModePaused);
+}
+
+/** @brief 白名单清表实际走手机协议，验证失败码、RAM 和已写 NVS。 @param admitted: 关门前发送。 */
+void powerPhoneWhitelist(bool admitted)
+{
+    using namespace app;
+    s_saved[0] = kAlarm.bytes;
+    s_saved_count = 1U;
+    setup(std::array{kAlarm});
+    appContext().bootConfig.userNvsReady = true;
+    open(1U, kPhone);
+    if (!admitted) {
+        CHECK(power::s_power_requests.requestShutdown(board::BootMode::kNormal,
+                                                      board::ShutdownReason::kKey));
+    }
+    const std::array<uint8_t, 1> clear{0U};
+    append(0U, 0x44U, 0U, proto::msg_type::kSet, clear);
+    dirty(0U);
+    uint32_t tick = s_clock;
+    link_round(tick);
+    CHECK(s_write_calls == 1U);
+    proto::FrameParser parser{};
+    proto::FrameView reply{};
+    for (const uint8_t byte : std::span{s_write_bytes[0]}.first(s_write_sizes[0])) {
+        static_cast<void>(parser.feed(byte, reply));
+    }
+    const uint8_t expected = admitted ? 1U : 2U;
+    CHECK(reply.msgId == 0x44U && reply.payload.size() == 2U && reply.payload[0] == expected &&
+          reply.payload[1] == expected);
+    CHECK(s_link_manager.whitelist().empty() == admitted);
+    CHECK(s_whitelist_pending == admitted && power::s_power_requests.settingsSubmitted());
+    if (admitted) {
+        CHECK(power::s_power_requests.requestShutdown(board::BootMode::kNormal,
+                                                      board::ShutdownReason::kKey));
+    }
+    persistWhitelist(s_clock, admitted);
+    CHECK(s_store_calls == (admitted ? 1U : 0U));
+    CHECK(s_saved_count == (admitted ? 0U : 1U));
+
+    s_link_manager.pairOpen(s_clock);
+    open(2U, kOtherAlarm);
+    std::array<uint8_t, 8U> hello{};
+    append(1U, core::kHelloMsgId, proto::sender::kAlarm, proto::msg_type::kPush, hello);
+    dirty(1U);
+    link_round(tick);
+    CHECK(s_link_manager.whitelist().size() == s_saved_count && !s_whitelist_pending);
+    CHECK(!ModuleTestAccess::phoneBlobWrites(s_clock));
+    CHECK(!appContext().storage.hasPendingWrites());
+}
+
+/** @brief 蓝牙静默等待 CLOSE、拒绝晚到 OPEN，关机回退后接受新连接。 */
+void powerBtPause()
+{
+    using namespace app;
+    setup();
+    auto &link = appContext().bt_link;
+    open(1U, kPhone);
+    link.setPowerPaused(true);
+    CHECK(s_disconnectCalls == 1U);
+    CHECK(!link.powerPauseDone());
+    open(2U, kOtherAlarm);
+    CHECK(s_disconnectCalls == 2U);
+    event(SPP_SERVER_EVT_CLOSE, 1U);
+    link.wait(0U);
+    CHECK(link.powerPauseDone());
+    link.setPowerPaused(false);
+    open(1U, kPhone);
+    CHECK(s_disconnectCalls == 2U);
+    CHECK(!link.powerPauseDone());
 }
 
 void rxFairness()
@@ -725,6 +1121,11 @@ void vTaskDelete(TaskHandle_t)
 void vTaskDelay(TickType_t ticks)
 {
     s_clock += ticks;
+    if (ticks != 0U && s_consoleDelay != nullptr && fake_current_task == nullptr) {
+        const auto callback = s_consoleDelay;
+        s_consoleDelay = nullptr;
+        callback();
+    }
 }
 TaskHandle_t xTaskGetCurrentTaskHandle(void)
 {
@@ -840,8 +1241,19 @@ void spp_server_tx_stats(spp_server_tx_stats_t *stats)
 {
     *stats = {};
 }
+/** @brief 模拟 GAP 投递结果。 @param paused: 目标扫描模式。 @retval SDK 投递结果。 */
+extern "C" esp_err_t spp_server_scan_pause(bool paused)
+{
+    ++s_scanCalls;
+    if (s_scanResult == ESP_OK) {
+        s_scanModePaused = paused;
+    }
+    return s_scanResult;
+}
+
 esp_err_t spp_server_disconnect(uint32_t)
 {
+    ++s_disconnectCalls;
     return ESP_OK;
 }
 /* host 无 SPP 驱动：追踪钩子与 RX 查询/唤醒替身。 */
@@ -878,6 +1290,7 @@ void spp_server_set_pair_query(spp_server_pair_query_t query)
 void esp_restart(void)
 {
     ++s_restarts;
+    app::power::s_power_requests.releaseAction();
 }
 
 esp_err_t nvs_store_erase_user(void)
@@ -1334,6 +1747,17 @@ void phoneNvsReadback()
     CHECK(fw::isOk(context.bt_link.init()));
     s_restarts = 0U;
     s_user_erases = 0U;
+    CHECK(context.bt_link.schedulePhoneReset(false, true, s_clock));
+    auto &requests = app::power::s_power_requests;
+    using app::board::BootMode;
+    using app::board::ShutdownReason;
+    CHECK(requests.requestShutdown(BootMode::kNormal, ShutdownReason::kKey));
+    CHECK(!context.bt_link.schedulePhoneReset(true, false, s_clock));
+    s_clock += 250U;
+    static_cast<void>(context.bt_link.poll(s_clock));
+    CHECK(s_restarts == 0U && s_user_erases == 0U);
+    requests.releaseAction();
+
     CHECK(context.bt_link.schedulePhoneReset(false, true, s_clock));
     s_clock += 249U;
     static_cast<void>(context.bt_link.poll(s_clock));
@@ -1804,6 +2228,53 @@ void deviceName()
 
 } // namespace
 
+/** @brief 读取主机模拟的 GPIO。 @param gpio: 板表引脚。 @retval 采样电平。 */
+int gpio_get_level(gpio_num_t gpio)
+{
+    return s_gpioLevels.at(static_cast<size_t>(gpio));
+}
+
+/** @brief 记录 GPIO4 模拟按压。 @param gpio: 板表引脚。 @param level: 目标电平。 @retval ESP_OK 成功。 */
+esp_err_t gpio_set_level(gpio_num_t gpio, uint32_t level)
+{
+    s_gpioLevels.at(static_cast<size_t>(gpio)) = level != 0U ? 1 : 0;
+    if (gpio == 4 && level != 0U) {
+        ++s_gpio4Presses;
+    }
+    return ESP_OK;
+}
+
+/** @brief 模拟成功配置 GPIO。 @retval ESP_OK 成功。 */
+esp_err_t gpio_config(const gpio_config_t *)
+{
+    return ESP_OK;
+}
+
+namespace app::board {
+
+/** @brief 模拟外设回到安全电平。 @retval kOk 成功。 */
+fw::Status setSafeOutputLevels(const Profile &) noexcept
+{
+    s_gpioLevels[4] = 0;
+    return fw::Status::kOk;
+}
+
+namespace charger {
+
+/** @brief 提供 USB 在位的充电芯片样本。 @param[out] last: 成功样本。 */
+fw::Status refreshInputStatus(ChargerInputStatus &last) noexcept
+{
+    ++s_chargerReads;
+    if (s_chargerBusy) {
+        return fw::Status::kBusy;
+    }
+    last = decodeSgmReg08(s_chargerReg);
+    return fw::Status::kOk;
+}
+
+} // namespace charger
+} // namespace app::board
+
 int main(int argc, const char **raw_args)
 {
     const std::span<const char *> argv{raw_args,
@@ -1832,6 +2303,26 @@ int main(int argc, const char **raw_args)
         saveRecovery();
     } else if (std::strcmp(argv[1], "storage_backoff") == 0) {
         storageBackoff();
+    } else if (std::strcmp(argv[1], "power_save_backoff") == 0) {
+        powerSaveBackoff();
+    } else if (std::strcmp(argv[1], "power_standby") == 0) {
+        powerStandby();
+    } else if (std::strcmp(argv[1], "power_log_drain") == 0) {
+        powerLogDrain();
+    } else if (std::strcmp(argv[1], "power_busy_at_cut") == 0) {
+        powerBusyAtCut();
+    } else if (std::strcmp(argv[1], "power_timeout_recovery") == 0) {
+        powerTimeoutRecovery();
+    } else if (std::strcmp(argv[1], "power_phone_whitelist_closed") == 0) {
+        powerPhoneWhitelist(false);
+    } else if (std::strcmp(argv[1], "power_phone_whitelist_admitted") == 0) {
+        powerPhoneWhitelist(true);
+    } else if (std::strcmp(argv[1], "power_bt_pause") == 0) {
+        powerBtPause();
+    } else if (std::strcmp(argv[1], "power_no_reopen") == 0) {
+        powerNoReopen(false);
+    } else if (std::strcmp(argv[1], "power_fence_timeout") == 0) {
+        powerNoReopen(true);
     } else if (std::strcmp(argv[1], "storage_startup") == 0) {
         storageStartup();
     } else if (std::strcmp(argv[1], "phone_nvs_readback") == 0) {

@@ -11,6 +11,7 @@
 #if RTK_GNSS_ENABLED
 #include "modules/gnss/GnssModule.hpp"
 #endif
+#include "modules/power/PowerModule.hpp"
 #include "modules/rtcm/RtcmModule.hpp"
 #include "modules/storage/StorageModule.hpp"
 #include "modules/system/SystemModule.hpp"
@@ -24,11 +25,12 @@ MODULE_DEF(RtcmModule, rtcm, "rtcm", kRtcm, kLink, 0, kBtOnly)
 // storage.init 必须先于 system.prepare（读取身份）；执行器再次 init 时为幂等。
 MODULE_DEF(StorageModule, storage, "storage", kStorage, kLink, 0, kAlways)
 MODULE_DEF(SystemModule, system, "system", kSystem, kLink, 0, kAlways)
+MODULE_DEF(PowerModule, power, "power", kPower, kLink, 10, kAlways)
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
 MODULE_DEF(WebModule, web, "web", kWeb, kLink, 0, kWifiOnly)
 #endif
 #if RTK_GNSS_ENABLED
-MODULE_DEF(GnssModule, gnss, "gnss", kGnss, kIo, 0, kAlways)
+MODULE_DEF(GnssModule, gnss, "gnss", kGnss, kIo, 0, kNormalOnly)
 #endif
 // debug 必须在 link 执行器内：追踪环由它的输出任务独占读取，命令也在这里改状态。
 // 追踪关闭（CONFIG_RTK_TRACE_ENABLE=n）时不登记（ADR-0009 §2.6）；FW_TRACE_ENABLED 由上方 fw/Trace.hpp 定义。

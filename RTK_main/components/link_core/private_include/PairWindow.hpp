@@ -22,6 +22,19 @@ public:
         lock_ = lock;
     }
 
+    /** @brief 绑定白名单写入准入。 @param begin: kLink 调用的准入函数。 @param ctx: 回调上下文。 @note 启动时绑定。 */
+    void bindWhitelistAdmission(bool (*begin)(void *) noexcept, void *ctx) noexcept
+    {
+        beginWhitelist_ = begin;
+        whitelistCtx_ = ctx;
+    }
+
+    /** @brief 检查白名单写入准入。 @retval true 可变更。 @note 仅 kLink。 */
+    [[nodiscard]] bool admitWhitelistWrite() const noexcept
+    {
+        return beginWhitelist_ == nullptr || beginWhitelist_(whitelistCtx_);
+    }
+
     /** @brief 设置窗口。 @param nowMs: 时钟。 @param durationMs: 0 关闭。 @param confirm: 逐个确认。 */
     void set(uint32_t nowMs, uint32_t durationMs, bool confirm = false) noexcept;
 
@@ -35,6 +48,8 @@ public:
     [[nodiscard]] bool active() const noexcept;
 
 private:
+    bool (*beginWhitelist_)(void *) noexcept = nullptr;
+    void *whitelistCtx_ = nullptr;
     fw::LockOps lock_{};
     uint32_t start_ms_ = 0U;
     uint32_t duration_ms_ = 0U;
@@ -43,6 +58,9 @@ private:
 
 /** @brief 绑定应用唯一的链路窗口。 @param manager: 链路管理器。 @param window: 同寿命窗口，空指针解除绑定。 @note 仅启动。 */
 void bindPairWindow(const LinkManager &manager, PairWindow *window) noexcept;
+
+/** @brief 检查协议白名单变更的准入。 @param manager: 链路管理器。 @retval true 可变更。 @note 仅 kLink。 */
+[[nodiscard]] bool admitWhitelistWrite(const LinkManager &manager) noexcept;
 
 /** @brief 开窗并追踪。 @param window: 已绑定窗口。 @param nowMs: 时钟。 @param durationMs: 窗口时长。 @param confirm: 逐个确认。 */
 void openPairWindow(PairWindow &window, uint32_t nowMs, uint32_t durationMs, bool confirm) noexcept;

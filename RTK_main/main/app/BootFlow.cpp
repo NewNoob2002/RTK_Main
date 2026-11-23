@@ -101,7 +101,10 @@ app::BootResult stepIdentify(app::BootCtx &ctx) noexcept
 app::BootResult stepPower(app::BootCtx &ctx) noexcept
 {
     static_cast<void>(ctx);
-    return fw::isOk(app::board::enablePowerHold(app::board::current().powerHold))
+    auto &self = app::appContext();
+    const auto &profile = app::board::current();
+    return fw::isOk(app::board::startupPower(profile.powerHold, profile.powerKey, profile.charger,
+                                             self.bootMode, self.powerOnReason))
                ? app::BootResult::kOk
                : app::BootResult::kFail;
 }
@@ -162,6 +165,11 @@ app::BootResult stepEarlyConfig(app::BootCtx &ctx) noexcept
 app::BootResult stepRadio(app::BootCtx &ctx) noexcept
 {
     auto &self = app::appContext();
+    if (self.bootMode == app::board::BootMode::kChargeStandby) {
+        static_cast<void>(ctx);
+        FW_LOGI(fw::TraceCat::kSys, "radio skipped (charge standby)");
+        return app::BootResult::kSkipped;
+    }
     const auto selection = app::consumeRadioRequest();
     self.radioMode = selection.mode;
     self.radioReason = selection.reason;
@@ -313,7 +321,8 @@ app::BootResult stepSystem(app::BootCtx &ctx) noexcept
     (void)ctx;
     auto &self = app::appContext();
     self.system.prepare();
-    if (self.radioMode == app::RadioMode::kBluetooth) {
+    if ((self.bootMode == app::board::BootMode::kNormal) &&
+        (self.radioMode == app::RadioMode::kBluetooth)) {
         self.system.startBt();
     }
     return app::BootResult::kOk;
@@ -363,6 +372,10 @@ app::BootResult stepLink(app::BootCtx &ctx) noexcept
 app::BootResult stepIo(app::BootCtx &ctx) noexcept
 {
 #if RTK_GNSS_ENABLED
+    if (app::appContext().bootMode == app::board::BootMode::kChargeStandby) {
+        static_cast<void>(ctx);
+        return app::BootResult::kSkipped;
+    }
     const auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
     const char *error = app::startIo(bufs.ioStack, ctx.launched);
     if (error == nullptr) {
@@ -491,18 +504,23 @@ void printBootSummary(std::span<const app::BootRecord> records) noexcept
 {
     const app::AppContext &self = app::appContext();
     const auto system = self.data.systemStatus.read();
-    if (self.radioMode == app::RadioMode::kBluetooth) {
+    if (self.bootMode == app::board::BootMode::kChargeStandby) {
+        FW_LOGI(fw::TraceCat::kSys, "charge standby online, SN %s", system.sn.data());
+    } else if (self.radioMode == app::RadioMode::kBluetooth) {
         printBluetoothSummary(self, system);
     } else {
         FW_LOGI(fw::TraceCat::kSys, "storage online, SN %s", system.sn.data());
     }
 #if RTK_GNSS_ENABLED
-    const auto gnss = self.data.gnssStatus.read();
-    // 状态槽尚未被 GNSS 模块 poll 刷新时回落到 Kconfig 默认波特率。
-    const uint32_t baud =
-        gnss.hostBaud != 0U ? gnss.hostBaud : static_cast<uint32_t>(CONFIG_RTK_GNSS_DEFAULT_BAUD);
-    FW_LOGI(fw::TraceCat::kSys, "<gnss> UART%d started, %u baud", CONFIG_RTK_GNSS_UART_NUM,
-            static_cast<unsigned>(baud));
+    if (self.bootMode == app::board::BootMode::kNormal) {
+        const auto gnss = self.data.gnssStatus.read();
+        // 状态槽尚未被 GNSS 模块 poll 刷新时回落到 Kconfig 默认波特率。
+        const uint32_t baud = gnss.hostBaud != 0U
+                                  ? gnss.hostBaud
+                                  : static_cast<uint32_t>(CONFIG_RTK_GNSS_DEFAULT_BAUD);
+        FW_LOGI(fw::TraceCat::kSys, "<gnss> UART%d started, %u baud", CONFIG_RTK_GNSS_UART_NUM,
+                static_cast<unsigned>(baud));
+    }
 #endif
     const uint32_t totalMs =
         (records.back().startMs + records.back().tookMs) - records.front().startMs;

@@ -59,7 +59,8 @@ enable_testing()
 # 同一真实组合根分别编译两种 Kconfig 分支，产品不增加测试开关或可替换调度框架。
 foreach(policy concurrent preempt)
     add_executable(main_${policy} MainHostCheck.cpp ${PROJ_ROOT}/main/modules/rtcm/RtcmForwarder.cpp
-        ${PROJ_ROOT}/main/board/BoardProfile.cpp
+        ${PROJ_ROOT}/main/board/BoardProfile.cpp ${PROJ_ROOT}/main/board/BoardCurrent.cpp
+        ${PROJ_ROOT}/main/board/PowerLogic.cpp ${PROJ_ROOT}/main/modules/power/PowerModule.cpp
         ${PROJ_ROOT}/main/data/AppData.cpp ${PROJ_ROOT}/main/app/BootConfig.cpp
         ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
         ${PROJ_ROOT}/main/modules/storage/ConfigCmds.cpp ${PROJ_ROOT}/main/support/ConsoleSupport.cpp
@@ -88,7 +89,7 @@ foreach(policy concurrent preempt)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
-    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
+    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_no_reopen power_fence_timeout power_log_drain power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window web_s2_storage_bt device_name device_name_e1 device_name_unknown)
@@ -145,6 +146,7 @@ target_include_directories(template_check BEFORE PRIVATE shim)
 target_include_directories(template_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/main ${PROJ_ROOT}/components/spp_server/include
     ${PROJ_ROOT}/components/cli/include
+    ${PROJ_ROOT}/components/gnss/include
     ${PROJ_ROOT}/components/nvs_store/include ${PROJ_ROOT}/components/rtos/include
     ${PROJ_ROOT}/components/app_fw/include)
 target_compile_options(template_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror -Wshadow
@@ -298,7 +300,7 @@ target_compile_options(boot_steps_check PRIVATE -fno-exceptions -fno-rtti -Wall 
 add_test(NAME boot_steps COMMAND boot_steps_check)
 
 add_executable(radio_mode_check RadioModeCheck.cpp ${PROJ_ROOT}/main/app/RadioMode.cpp)
-target_include_directories(radio_mode_check PRIVATE ${PROJ_ROOT}/main)
+target_include_directories(radio_mode_check PRIVATE ${PROJ_ROOT}/main ${PROJ_ROOT}/components/app_fw/include)
 target_compile_options(radio_mode_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
     -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
     -Wimplicit-fallthrough -Wswitch-default -Wundef)
@@ -326,12 +328,20 @@ foreach(profile Dev Production None)
 endforeach()
 
 add_executable(board_profile_check BoardProfileCheck.cpp ${PROJ_ROOT}/main/board/BoardProfile.cpp)
-target_include_directories(board_profile_check PRIVATE ${PROJ_ROOT}/main)
+target_include_directories(board_profile_check PRIVATE ${PROJ_ROOT}/main ${PROJ_ROOT}/components/app_fw/include)
 target_compile_definitions(board_profile_check PRIVATE CONFIG_RTK_GNSS_UART_NUM=2)
 target_compile_options(board_profile_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
     -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
     -Wimplicit-fallthrough -Wswitch-default -Wundef)
 add_test(NAME board_profile_check COMMAND board_profile_check)
+
+add_executable(power_logic_check PowerLogicCheck.cpp ${PROJ_ROOT}/main/board/PowerLogic.cpp)
+target_include_directories(power_logic_check PRIVATE ${PROJ_ROOT}/main
+    ${PROJ_ROOT}/components/app_fw/include)
+target_compile_options(power_logic_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
+    -Wimplicit-fallthrough -Wswitch-default -Wundef)
+add_test(NAME power_logic_check COMMAND power_logic_check)
 
 add_executable(web_server_check WebServerCheck.cpp
     ${PROJ_ROOT}/main/modules/web/WebDns.cpp
@@ -366,6 +376,8 @@ foreach(portal_mode on off)
     endif()
     add_executable(${web_target} WebModuleCheck.cpp
         ${PROJ_ROOT}/main/app/SettingsBackend.cpp
+        ${PROJ_ROOT}/main/board/PowerLogic.cpp
+        ${PROJ_ROOT}/main/modules/power/PowerModule.cpp
         ${web_dns_src}
         ${PROJ_ROOT}/main/modules/web/WebServer.cpp
         ${PROJ_ROOT}/main/modules/web/WebModule.cpp

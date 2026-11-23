@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "def/GnssSubDef.hpp"
+#include "app/PowerRequests.hpp"
 
 #include "AppContext.hpp"
 
@@ -276,6 +277,10 @@ bool gnssEnabled(void *ctx) noexcept
 fw::Result postSettingCommand(void *ctx, Owner owner, const fw::Command &cmd, Caller caller,
                               settings::Ticket &out) noexcept
 {
+    const power::SettingAdmission admission;
+    if (!admission.admitted()) {
+        return fw::Result::kBusy;
+    }
     auto *executor = executorFor(context(ctx), owner);
     if (executor == nullptr) {
         return fw::Result::kNotSupported;

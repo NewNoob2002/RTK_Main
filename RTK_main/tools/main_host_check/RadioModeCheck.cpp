@@ -30,30 +30,38 @@ constexpr auto kModules = std::to_array<ModuleEntry>({
 #undef RTK_GNSS_ENABLED
 
 /**
- * @brief 取出给定射频模式启用的模块名
- * @param mode: 待检查的模式
+ * @brief 取出给定启动档与射频模式启用的模块名
+ * @param bootMode: 启动运行档
+ * @param mode: 待检查的射频模式
  * @retval 按生产顺序排列的模块名，末尾空项表示跳过的条目
  * @note 仅编译期调用。
  */
-consteval auto enabledNames(RadioMode mode) noexcept
+consteval auto enabledNames(app::board::BootMode bootMode, RadioMode mode) noexcept
 {
     std::array<std::string_view, kModules.size()> names{};
     size_t used = 0U;
     for (const auto &module : kModules) {
-        if (app::moduleEnabled(mode, module.enable)) {
+        if (app::moduleEnabled(bootMode, mode, module.enable)) {
             names[used++] = module.name;
         }
     }
     return names;
 }
 
-static_assert(enabledNames(RadioMode::kBluetooth) ==
-              std::array<std::string_view, 7U>{"bt_link", "rtcm", "storage", "system", "gnss",
+static_assert(enabledNames(app::board::BootMode::kNormal, RadioMode::kBluetooth) ==
+              std::array<std::string_view, 8U>{"bt_link", "rtcm", "storage", "system", "power",
+                                               "gnss", "debug"});
+static_assert(enabledNames(app::board::BootMode::kNormal, RadioMode::kWifiConfig) ==
+              std::array<std::string_view, 8U>{"storage", "system", "power", "web", "gnss",
                                                "debug"});
-static_assert(enabledNames(RadioMode::kWifiConfig) ==
-              std::array<std::string_view, 7U>{"storage", "system", "web", "gnss", "debug"});
+static_assert(enabledNames(app::board::BootMode::kChargeStandby, RadioMode::kBluetooth) ==
+              std::array<std::string_view, 8U>{"storage", "system", "power", "debug"});
+static_assert(enabledNames(app::board::BootMode::kChargeStandby, RadioMode::kWifiConfig) ==
+              std::array<std::string_view, 8U>{"storage", "system", "power", "debug"});
 static_assert(!app::moduleEnabled(RadioMode::kBluetooth, ModuleEnable::kWifiOnly));
 static_assert(app::moduleEnabled(RadioMode::kWifiConfig, ModuleEnable::kWifiOnly));
+static_assert(!app::moduleEnabled(app::board::BootMode::kChargeStandby, RadioMode::kBluetooth,
+                                  ModuleEnable::kNormalOnly));
 
 /**
  * @brief 检查回退路径选择蓝牙且无请求原因

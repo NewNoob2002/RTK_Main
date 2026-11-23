@@ -162,8 +162,18 @@ constexpr std::array<TraceField, 2U> kWebDnsErr = {
     {{"op", TraceValue::kDecA}, {"err", TraceValue::kDecB}}};
 #endif
 
+constexpr std::array<TraceField, 2U> kPowerKeyShort = {
+    {{"count", TraceValue::kDecA}, {"held_ms", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kPowerKeyLong = {
+    {{"count", TraceValue::kDecA}, {"mode", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 2U> kPowerStage = {
+    {{"stage", TraceValue::kDecA}, {"reason", TraceValue::kDecB}}};
+constexpr std::array<TraceField, 1U> kPowerBtScanError = {{{"err", TraceValue::kHexA}}};
+constexpr std::array<TraceField, 2U> kPowerAbort = {
+    {{"reason", TraceValue::kDecA}, {"elapsed_ms", TraceValue::kDecB}}};
+
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
-constexpr size_t kBaseTraceCount = 57U;
+constexpr size_t kBaseTraceCount = 62U;
 #if RTK_GNSS_ENABLED
 constexpr size_t kGnssTraceCount = 14U;
 #else
@@ -336,6 +346,18 @@ constexpr std::array<TraceText, kBaseTraceCount + kGnssTraceCount + kPortalTrace
     {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kDnsErr),
      "<web> dns socket error op={op} errno={err}", std::span<const TraceField>(kWebDnsErr)},
 #endif
+    {fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyShort),
+     "<power> key short count={count} held={held_ms} ms",
+     std::span<const TraceField>(kPowerKeyShort)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyLong),
+     "<power> key long count={count} mode={mode}", std::span<const TraceField>(kPowerKeyLong)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kShutdownStage),
+     "<power> shutdown stage={stage} reason={reason}", std::span<const TraceField>(kPowerStage)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kShutdownAbort),
+     "<power> shutdown aborted reason={reason} elapsed={elapsed_ms} ms",
+     std::span<const TraceField>(kPowerAbort)},
+    {fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kBtScanSubmitError),
+     "<power> BT scan submission failed err={err}", std::span<const TraceField>(kPowerBtScanError)},
 }};
 
 // 类别短名必须大写（ADR-0009 §2.11）；顺序与 fw::TraceCat 枚举一致。

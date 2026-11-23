@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 
 #include "AppContext.hpp"
+#include "modules/storage/StoreWriteGate.hpp"
 #include "board/BoardProfile.hpp"
 #include "def/GnssDef.hpp"
 #include "def/GnssSubDef.hpp"
@@ -184,6 +185,7 @@ void GnssModule::cmdSetting(const fw::Command &cmd, uint32_t nowMs,
             return;
         }
         tickGgaGateSave(nowMs, true);
+        publishPendingNvs();
         result.status = ctx().data.ggaGatePersist.load(std::memory_order_acquire) ==
                                 data::GgaGatePersist::kClean
                             ? fw::Result::kOk
@@ -555,7 +557,7 @@ void GnssModule::tickGgaGateSave(uint32_t nowMs, bool forceImmediate) noexcept
     constexpr uint32_t kGgaGateDebounceMs = 500U;
     constexpr uint32_t kGgaGateRetryInitialMs = 1000U;
     constexpr uint32_t kGgaGateRetryMaxMs = 30000U;
-    if (!gga_gate_save_pending_) {
+    if (!gga_gate_save_pending_ || !store::canStartWrite()) {
         return;
     }
     if (!forceImmediate) {
