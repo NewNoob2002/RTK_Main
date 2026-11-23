@@ -26,7 +26,7 @@ GitHub Actions（`.github/workflows/gates.yml`，push/PR 触发）调用同一�
 
 ## 2. 硬件在环（HIL，需用户明确授权烧录指定板后执行）
 
-前置：授权 `idf.py -p <port> flash monitor` 到指定板。目标板为 P2 v1.41（板型识别与电源保持见 ADR-0015）；E1 仅作测试板。
+前置：授权 `idf.py -p <port> flash monitor` 到指定板。固件面向多产品，按启动识别的产品配置运行；目前已适配 P2 v1.41（产品识别与电源保持见 ADR-0015），HIL 在受影响的产品板上执行；E1 仅作测试板。
 
 | ID | 场景 | 步骤 | 通过标准 |
 | --- | --- | --- | --- |

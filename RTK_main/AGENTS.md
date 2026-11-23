@@ -12,7 +12,7 @@
 | 蓝牙 | Bluedroid，仅经典蓝牙 SPP，最多 2 会话；`esp_spp_write` 深拷贝；对端地址在 `srv_open.rem_bda` | `reference/c-v1/docs/reports/T04.md`（附 IDF 文件:行号） |
 | 经典蓝牙目标 | 只有 esp32 可用（esp32s31 为 preview，且无控制器库） | `soc_caps.h`；`components/bt/controller/` |
 | 参考 | `../../E1-5.4`（Arduino 旧固件，只读）；`reference/c-v1/`（C 版实现，只读，不参与构建） | — |
-| 板级引脚 | 已使用：UART0 console（2 Mbaud）；GNSS UART2 RX16/TX17（Kconfig `RTK_GNSS_*`，ADR-0010）。目标板 P2 v1.41：板型 ID 分压 GPIO35，电源键 GPIO4 模拟保持、GPIO25 检测；E1 测试板：GNSS 电源 GPIO25、电源保持 GPIO26（ADR-0015，`main/board/BoardProfile.cpp`）。其余 5.4 引脚见 `reference/c-v1/ADR-0001-architecture.md` §6，未经 ADR 不得驱动 | `main/Kconfig.projbuild`、`main/board/BoardProfile.cpp` |
+| 板级引脚 | 已使用：UART0 console（2 Mbaud）；GNSS UART2 RX16/TX17（Kconfig `RTK_GNSS_*`，ADR-0010）。固件面向多产品，启动时经 GPIO35 ID 分压识别产品/版本并选用对应配置表；已适配 P2 v1.41：电源键 GPIO4 模拟保持、GPIO25 检测；E1 测试板：GNSS 电源 GPIO25、电源保持 GPIO26（ADR-0015，`main/board/BoardProfile.cpp`）。其余 5.4 引脚见 `reference/c-v1/ADR-0001-architecture.md` §6，未经 ADR 不得驱动 | `main/Kconfig.projbuild`、`main/board/BoardProfile.cpp` |
 
 查不到的硬件事实写 `UNKNOWN` 并停下报告，不得猜测寄存器、引脚或 API。
 

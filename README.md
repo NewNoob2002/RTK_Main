@@ -1,6 +1,6 @@
 # RTK_Main
 
-RTK 接收机主控固件。运行在经典 ESP32 上，管理 GNSS 接收机，并通过经典蓝牙 SPP 与手机 App、报警器通信：
+RTK 接收机主控平台固件，面向多个产品：启动时先识别产品与硬件版本，再按该产品的配置表驱动引脚和模块。运行在经典 ESP32 上，管理 GNSS 接收机，并通过经典蓝牙 SPP 与手机 App、报警器通信：
 转发 NMEA，接收 RTCM 差分数据并直通给接收机，处理设备配置。另有 Wi-Fi 网页配置模式。
 
 本仓库主体是 [`RTK_main/`](RTK_main/)。[`ExternalSpeak/`](#externalspeak) 是某一产品外接功放的独立测试固件，不参与主固件构建。
@@ -27,8 +27,8 @@ RTK_Main/
 | 项 | 值 |
 | --- | --- |
 | 芯片 | ESP32 经典款（Xtensa LX6 双核），rev ≥ 3.1，8 MB Flash，不依赖 PSRAM |
-| 目标板 | P2 v1.41（原理图 `RTK_main/docs/hardware/P2/schematic/p2v1.41.pdf`）。E1 只作测试板 |
-| 板型识别 | GPIO35 上的 ID 分压，启动时读取并选择板型参数（ADR-0015） |
+| 已适配产品 | P2 v1.41（原理图 `RTK_main/docs/hardware/P2/schematic/p2v1.41.pdf`），为首个适配产品；E1 只作测试板。新产品在 `BoardProfile.cpp` 配置表登记，产品级差异另立 ADR |
+| 产品识别 | GPIO35 上的 ID 分压，启动第一步读取并选择产品/版本配置，未知 ID 只进控制台（ADR-0015） |
 | GNSS | UART2 RX16/TX17；支持 Unicore UM980/UM982、u-blox、ComNav、Optisens CM680，启动时自动探测 |
 | 蓝牙 | Bluedroid 经典蓝牙 SPP，最多 2 个会话；设备名 `<产品>-<SN>`，如 `P2-B5F2` |
 | 控制台 | UART0，2 Mbaud |
@@ -128,7 +128,7 @@ cmake -S test/host -B builds/qa-host && cmake --build builds/qa-host && ctest --
 ## 开发流程
 
 新功能不直接在 `main` 上开发：每张任务卡一个特性分支（或 worktree），由实现代理完成后交叉评审，
-Architect 复跑门禁并做 P2 台架验收后合入。任务卡与报告格式见 `RTK_main/AGENTS.md` §6、§7。
+Architect 复跑门禁并在受影响的产品板上做台架验收后合入。任务卡与报告格式见 `RTK_main/AGENTS.md` §6、§7。
 
 ## ExternalSpeak
 
