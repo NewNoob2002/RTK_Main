@@ -506,7 +506,7 @@ async function waitUntil(pred, timeoutMs = 4000, msg = "timeout") {
 }
 
 function extractParsedVersion(otaCard) {
-  const m = otaCard.textContent.match(/当前 0\.1\.0-mock → 新 (.*)（/);
+  const m = otaCard.textContent.match(/Current 0\.1\.0-mock → new (.*) \(/);
   assert(m, `expected parsed version transition in card text: ${otaCard.textContent}`);
   return m[1];
 }
@@ -519,11 +519,11 @@ async function runTests() {
     const env = createDomEnv(m.port);
     try {
       const otaCard = env.ids["col-b"].children.find((c) => c.id === "card-ota");
-      await waitUntil(() => otaCard.textContent.includes("设备不支持网页升级"), 3000, "unsupported msg");
+      await waitUntil(() => otaCard.textContent.includes("This receiver does not support web updates"), 3000, "unsupported msg");
       await waitUntil(() => env.ids["p-conn"].textContent.includes("Connected"), 3000, "ws connected");
       const sysCard = env.ids["col-b"].children.find((c) => c.id === "card-sys");
       assert(!sysCard.querySelector("button").disabled, "other cards remain enabled when OTA unsupported");
-      console.log("PASS 1: Legacy firmware 404 -> '设备不支持网页升级', other cards unaffected");
+      console.log("PASS 1: Legacy firmware 404 -> 'This receiver does not support web updates', other cards unaffected");
     } finally {
       env.cleanup();
       await stopMock(m.proc);
@@ -541,7 +541,7 @@ async function runTests() {
       const otaCardNoTd = envNoTd.ids["col-b"].children.find((c) => c.id === "card-ota");
       await waitUntil(() => otaCard.textContent.includes("0.1.0-mock") && otaCardNoTd.textContent.includes("0.1.0-mock"), 3000, "info loaded");
       const dds = otaCard.querySelectorAll("dd").map((d) => d.textContent);
-      assert(dds[0] === "0.1.0-mock" && dds[1] === "ota_0" && dds[2].includes("valid") && dds[3] === "无", `bad initial kv: ${JSON.stringify(dds)}`);
+      assert(dds[0] === "0.1.0-mock" && dds[1] === "ota_0" && dds[2].includes("valid") && dds[3] === "None", `bad initial kv: ${JSON.stringify(dds)}`);
 
       const fileInp = otaCard.querySelector("input");
       const uploadBtn = otaCard.querySelector("button");
@@ -556,21 +556,21 @@ async function runTests() {
 
       // 2a. Short 287 B & exact 288 B
       await pick(fileInp, buildBin("6.2.0", "rtk_main", 287));
-      assert(otaCard.textContent.includes("不是本设备固件") && uploadBtn.disabled, "287 B rejected");
+      assert(otaCard.textContent.includes("Not firmware for this receiver") && uploadBtn.disabled, "287 B rejected");
       await pick(fileInp, buildBin("6.2.0", "rtk_main", 288));
-      assert(otaCard.textContent.includes("不是本设备固件") && uploadBtn.disabled, "288 B rejected");
+      assert(otaCard.textContent.includes("Not firmware for this receiver") && uploadBtn.disabled, "288 B rejected");
 
       // 2b. Bad magic / desc / project / BOM+project
       await pick(fileInp, buildBin("6.2.0", "rtk_main", 4096, { imgMagic: 0x00 }));
-      assert(otaCard.textContent.includes("不是本设备固件") && uploadBtn.disabled, "bad 0xE9 rejected");
+      assert(otaCard.textContent.includes("Not firmware for this receiver") && uploadBtn.disabled, "bad 0xE9 rejected");
       await pick(fileInp, buildBin("6.2.0", "rtk_main", 4096, { descMagic: 0x11223344 }));
-      assert(otaCard.textContent.includes("不是本设备固件") && uploadBtn.disabled, "bad desc magic rejected");
+      assert(otaCard.textContent.includes("Not firmware for this receiver") && uploadBtn.disabled, "bad desc magic rejected");
       await pick(fileInp, buildBin("6.2.0", "wrong_proj", 4096));
-      assert(otaCard.textContent.includes("不是本设备固件") && uploadBtn.disabled, "wrong project rejected");
+      assert(otaCard.textContent.includes("Not firmware for this receiver") && uploadBtn.disabled, "wrong project rejected");
       await pick(fileInp, buildBin("6.2.0", "", 4096, { rawProject: Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from("rtk_main")]) }));
-      assert(otaCard.textContent.includes("不是本设备固件") && uploadBtn.disabled, "BOM+project must be rejected");
+      assert(otaCard.textContent.includes("Not firmware for this receiver") && uploadBtn.disabled, "BOM+project must be rejected");
       await pick(fileInpNoTd, buildBin("6.2.0", "", 4096, { rawProject: Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from("rtk_main")]) }));
-      assert(otaCardNoTd.textContent.includes("不是本设备固件"), "BOM+project must be rejected without TextDecoder");
+      assert(otaCardNoTd.textContent.includes("Not firmware for this receiver"), "BOM+project must be rejected without TextDecoder");
 
       // 2c. UTF-8 parity between native TextDecoder and fallback: invalid bytes, truncated multi-byte sequences,
       //     non-continuation bytes after valid prefixes, overlong/surrogate/out-of-range, valid multi-byte + BOM
@@ -600,14 +600,14 @@ async function runTests() {
       // 2d. 32 B without NUL in version -> bounded to 32 chars, no bleed into project_name
       const v32 = "V".repeat(32);
       await pick(fileInp, buildBin("", "rtk_main", 4096, { rawVersion: Buffer.from(v32, "ascii") }));
-      assert(otaCard.textContent.includes(`新 ${v32}（`) && !otaCard.textContent.includes(`${v32}rtk_main`), `32 B no-NUL bleed: ${otaCard.textContent}`);
+      assert(otaCard.textContent.includes(`new ${v32} (`) && !otaCard.textContent.includes(`${v32}rtk_main`), `32 B no-NUL bleed: ${otaCard.textContent}`);
 
       // 2e. Oversized & same version
       await pick(fileInp, buildBin("6.2.0", "rtk_main", 20000));
-      assert(otaCard.textContent.includes("文件过大") && uploadBtn.disabled, "oversized rejected");
+      assert(otaCard.textContent.includes("File too large") && uploadBtn.disabled, "oversized rejected");
       await pick(fileInp, buildBin("0.1.0-mock", "rtk_main", 4096));
-      assert(otaCard.textContent.includes("当前 0.1.0-mock → 新 0.1.0-mock") && !uploadBtn.disabled, "same version shown");
-      assert(otaCard.querySelectorAll(".ota-msg").some((e) => !e.hidden && e.textContent === "版本相同"), "same version hint shown");
+      assert(otaCard.textContent.includes("Current 0.1.0-mock → new 0.1.0-mock") && !uploadBtn.disabled, "same version shown");
+      assert(otaCard.querySelectorAll(".ota-msg").some((e) => !e.hidden && e.textContent === "Same version"), "same version hint shown");
 
       // 2f. Finding 9: re-selecting file MUST disable uploadBtn immediately before FileReader finishes
       env.stateOpts.delayFileReaderMs = 100;
@@ -615,7 +615,7 @@ async function runTests() {
       fileInp.dispatch("change");
       assert(uploadBtn.disabled, "uploadBtn MUST be disabled immediately on re-select before FileReader finishes");
       uploadBtn.click(); // Must not arm while disabled
-      assert(!uploadBtn.textContent.includes("将替换当前固件"), "disabled uploadBtn must not arm");
+      assert(!uploadBtn.textContent.includes("replaces current firmware"), "disabled uploadBtn must not arm");
       await waitUntil(() => !uploadBtn.disabled && otaCard.textContent.includes("6.2.1"), 1000, "re-select completes");
 
       console.log("PASS 2: Header edge vectors (287/288B, BOM, invalid/truncated UTF-8 parity, 32B no-NUL), oversized, same-ver, re-select lock");
@@ -685,7 +685,7 @@ async function runTests() {
       await waitUntil(() => !uploadBtn.disabled, 1000, "file valid");
 
       uploadBtn.click(); // arm
-      assert(uploadBtn.textContent.includes("将替换当前固件"), `arm text=${uploadBtn.textContent}`);
+      assert(uploadBtn.textContent.includes("replaces current firmware"), `arm text=${uploadBtn.textContent}`);
       uploadBtn.click(); // start
 
       await sleep(60);
@@ -719,9 +719,9 @@ async function runTests() {
       assert(env.ids["banner"].hidden, `banner should stay hidden during upload, got: ${env.ids["banner"].textContent}`);
 
       // Wait for completion
-      await waitUntil(() => otaCard.textContent.includes("升级完成，设备将在约"), 5000, "upload completion");
+      await waitUntil(() => otaCard.textContent.includes("Update complete. The receiver restarts"), 5000, "upload completion");
       assert(env.xhrProgressEvents.length >= 4, `expected progress events, got ${env.xhrProgressEvents.length}`);
-      assert(env.ids["banner"].textContent.includes("升级完成，设备将在约 1.5 秒后重启进入蓝牙模式，热点会断开"), `banner=${env.ids["banner"].textContent}`);
+      assert(env.ids["banner"].textContent.includes("Update complete. The receiver restarts in Bluetooth mode in about 1.5 s and the access point closes"), `banner=${env.ids["banner"].textContent}`);
       assert(!env.root.classList.contains("offline"), "should not gray out as offline");
 
       // Verify mock reboot actually disconnects observer WS (not timeout)
@@ -737,15 +737,15 @@ async function runTests() {
   // 5. All 9 --ota-err codes end-to-end + progress bar hidden on failure
   currentCase = "5_ota_err_codes";
   const expectedErrSubstr = {
-    busy: "设备忙",
-    state: "尚未确认",
-    length: "缺少长度",
-    too_large: "过大",
-    bad_image: "头校验失败",
-    validate: "校验失败",
-    timeout: "超时",
+    busy: "Receiver is busy",
+    state: "not confirmed yet",
+    length: "no length",
+    too_large: "larger than the partition",
+    bad_image: "header check failed",
+    validate: "verification failed",
+    timeout: "stopped getting data",
     flash: "Flash",
-    aborted: "中止",
+    aborted: "Update aborted",
   };
   for (const [code, expectText] of Object.entries(expectedErrSubstr)) {
     currentCase = `5_ota_err_${code}`;
@@ -788,10 +788,10 @@ async function runTests() {
       await waitUntil(() => !uploadBtn.disabled, 1000, "file valid");
       uploadBtn.click();
       uploadBtn.click();
-      await waitUntil(() => otaCard.textContent.includes("连接中断，设备仍运行原固件"), 3000, "onerror text");
+      await waitUntil(() => otaCard.textContent.includes("Connection lost, the receiver is still running the old firmware"), 3000, "onerror text");
       assert(progBox.hidden, "progress bar must hide on onerror");
       assert(!fileInp.disabled && !uploadBtn.disabled, "controls re-enabled after onerror");
-      console.log("PASS 6: XHR onerror -> '连接中断，设备仍运行原固件', progress cleared, controls re-enabled");
+      console.log("PASS 6: XHR onerror -> 'Connection lost, the receiver is still running the old firmware', progress cleared, controls re-enabled");
     } finally {
       env.cleanup();
       await stopMock(m.proc);
@@ -820,7 +820,7 @@ async function runTests() {
 
       // Drop WS during stalled upload -> must auto-reconnect once watchdog unlocks!
       env.wsInstances[0].close();
-      await waitUntil(() => otaCard.textContent.includes("确认设备状态"), 2000, "watchdog timeout message");
+      await waitUntil(() => otaCard.textContent.includes("Check the receiver"), 2000, "watchdog timeout message");
       assert(progBox.hidden, "progress bar hidden after watchdog timeout");
       assert(!fileInp.disabled && !uploadBtn.disabled, "OTA controls unlocked after watchdog timeout");
       await waitUntil(() => env.wsInstances.length >= 2 && env.ids["p-conn"].textContent.includes("Connected"), 3000, "WS reconnected after timeout");
@@ -846,7 +846,7 @@ async function runTests() {
       await waitUntil(() => !uploadBtn.disabled, 1000, "file valid");
       uploadBtn.click();
       uploadBtn.click();
-      await waitUntil(() => otaCard.textContent.includes("确认设备状态"), 2000, "xhr.ontimeout message");
+      await waitUntil(() => otaCard.textContent.includes("Check the receiver"), 2000, "xhr.ontimeout message");
       assert(progBox.hidden && !fileInp.disabled && !uploadBtn.disabled, "xhr.ontimeout unlocked UI and hid progress");
       console.log("PASS 7b: XHR ontimeout unlocks UI, clears progress, shows device-status prompt");
     } finally {

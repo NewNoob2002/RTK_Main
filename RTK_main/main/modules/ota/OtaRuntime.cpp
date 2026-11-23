@@ -145,7 +145,8 @@ namespace app {
 
 std::string_view appVersion() noexcept
 {
-    return ota::imageText(esp_app_get_description()->version);
+    // PROJECT_VERSION 由根 CMakeLists.txt 与 PROJECT_VER 同源定义，等于运行镜像描述符中的版本。
+    return PROJECT_VERSION;
 }
 
 } // namespace app

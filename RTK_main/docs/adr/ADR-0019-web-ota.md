@@ -95,6 +95,8 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 - 当前 `kAppVersion`（`main/AppConfig.hpp`，手写 `"6.1.0-dev"`）与 `esp_app_desc_t.version`（IDF 默认取 `git describe`）不一致。
   O1 改为单一来源：工程 `CMakeLists.txt` 设置 `PROJECT_VER`，运行期 `kAppVersion` 与网页、控制台、`/ota/info` 显示的版本
   都等于 `esp_app_get_description()->version`。
+- 2026-11-23 修订（用户）：版本号不沿用 IDF 风格的 `6.1.0-dev`，改为 `V3.1.0`（接旧 P2 `V3.0.1`）。根 `CMakeLists.txt` 的
+  `RTK_FW_VERSION` 同时设 `PROJECT_VER` 与全局 C 宏 `PROJECT_VERSION`；`appVersion()` 返回该宏。
 
 ### 2.7 控制台（DEV 档）
 

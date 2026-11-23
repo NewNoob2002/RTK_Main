@@ -30,23 +30,23 @@
   const OTA_STALL_MS = 45000;
   const OTA_TOTAL_MS = 180000;
   const OTA_STATE = {
-    valid: "已确认 (valid)",
-    pending_verify: "待确认 (pending_verify)",
-    "new": "新镜像 (new)",
-    invalid: "无效 (invalid)",
-    aborted: "已中止 (aborted)",
-    "undefined": "未定义 (undefined)"
+    valid: "Confirmed (valid)",
+    pending_verify: "Awaiting confirmation (pending_verify)",
+    "new": "New image (new)",
+    invalid: "Invalid (invalid)",
+    aborted: "Aborted (aborted)",
+    "undefined": "Empty (undefined)"
   };
   const OTA_ERR = {
-    busy: "设备忙或正在关机，请稍后再试",
-    state: "新固件尚未确认（启动后约 30 s 再试）",
-    length: "请求缺少长度或文件为空",
-    too_large: "固件过大，超过分区容量上限",
-    bad_image: "固件头校验失败，不是本设备固件",
-    validate: "固件校验失败（文件可能损坏）",
-    timeout: "上传超时，设备长时间未收到数据",
-    flash: "写入 Flash 失败，设备仍运行原固件",
-    aborted: "升级已中止（设备正在关机或连接中断）"
+    busy: "Receiver is busy or shutting down, try again later",
+    state: "New firmware is not confirmed yet, try again about 30 s after boot",
+    length: "Request has no length or the file is empty",
+    too_large: "Firmware is larger than the partition limit",
+    bad_image: "Image header check failed, not firmware for this receiver",
+    validate: "Firmware verification failed (file may be corrupted)",
+    timeout: "Upload timed out, the receiver stopped getting data",
+    flash: "Flash write failed, the receiver is still running the old firmware",
+    aborted: "Update aborted (receiver shutting down or connection lost)"
   };
   const ICONS = {
     gnss: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8",
@@ -271,7 +271,7 @@
     { id: "fac", col: "b", title: "Factory", icon: "fac", closed: true, badge: () => (unlocked ? ["UNLOCKED", "warn"] : ["LOCKED", ""]), items: [
       { type: "factory" }
     ] },
-    { id: "ota", col: "b", title: "固件升级", icon: "ota", badge: otaBadge, items: [
+    { id: "ota", col: "b", title: "Firmware update", icon: "ota", badge: otaBadge, items: [
       { type: "ota" }
     ] },
     { id: "sys", col: "b", title: "System", icon: "sys", items: [
@@ -294,12 +294,12 @@
     return Array.isArray(wl) ? [wl.length + " paired", ""] : null;
   }
   function otaBadge() {
-    if (otaUploading) return ["升级中", "warn"];
-    if (otaDone) return ["已完成", "ok"];
-    if (otaStatus === "unsupported") return ["不支持", ""];
+    if (otaUploading) return ["UPDATING", "warn"];
+    if (otaDone) return ["DONE", "ok"];
+    if (otaStatus === "unsupported") return ["UNSUPPORTED", ""];
     if (!otaInfo) return null;
-    if (otaInfo.state === "pending_verify") return ["待确认", "warn"];
-    if (otaInfo.busy) return ["忙", "warn"];
+    if (otaInfo.state === "pending_verify") return ["PENDING", "warn"];
+    if (otaInfo.busy) return ["BUSY", "warn"];
     return otaInfo.part ? [otaInfo.part, ""] : null;
   }
 
@@ -608,16 +608,16 @@
     let fileValid = false;
     let pickSeq = 0;
 
-    const note = h("p", { class: "note", text: "正在获取固件信息…" });
+    const note = h("p", { class: "note", text: "Reading firmware info…" });
     const infoKv = W.kv({ rows: [
-      ["当前版本", () => dash(otaInfo && otaInfo.running)],
-      ["运行分区", () => dash(otaInfo && otaInfo.part)],
-      ["状态", () => (otaInfo && otaInfo.state ? (OTA_STATE[otaInfo.state] || otaInfo.state) : "--")],
-      ["另一槽版本", () => (!otaInfo ? "--" : (otaInfo.other === null || otaInfo.other === undefined || otaInfo.other === "" ? "无" : String(otaInfo.other)))]
+      ["Current version", () => dash(otaInfo && otaInfo.running)],
+      ["Running partition", () => dash(otaInfo && otaInfo.part)],
+      ["State", () => (otaInfo && otaInfo.state ? (OTA_STATE[otaInfo.state] || otaInfo.state) : "--")],
+      ["Other slot version", () => (!otaInfo ? "--" : (otaInfo.other === null || otaInfo.other === undefined || otaInfo.other === "" ? "None" : String(otaInfo.other)))]
     ] });
-    const fileInp = h("input", { type: "file", accept: ".bin", class: "ota-file", "aria-label": "选择固件文件" });
+    const fileInp = h("input", { type: "file", accept: ".bin", class: "ota-file", "aria-label": "Choose firmware file" });
     const cmpLine = h("p", { class: "ota-msg", hidden: true });
-    const sameHint = h("p", { class: "ota-msg warn", text: "版本相同", hidden: true });
+    const sameHint = h("p", { class: "ota-msg warn", text: "Same version", hidden: true });
     const errLine = h("p", { class: "ota-msg", hidden: true });
     const progFill = h("div", { class: "prog-fill" });
     const progLeft = h("span", { text: "0%" });
@@ -637,8 +637,8 @@
       progLeft.textContent = leftText;
       progRight.textContent = rightText || "";
     };
-    const uploadBtn = confirmBtn("上传并升级固件", "pri", () => startUpload(), "再次点击确认：将替换当前固件");
-    const tip = h("p", { class: "hint", text: "确认后将替换当前固件，升级期间请勿断电或断开热点。" });
+    const uploadBtn = confirmBtn("Upload and update", "pri", () => startUpload(), "Tap again to confirm: replaces current firmware");
+    const tip = h("p", { class: "hint", text: "This replaces the current firmware. Keep the receiver powered and stay on its Wi-Fi until it restarts." });
     const panel = h("div", { hidden: true }, [infoKv, fileInp, cmpLine, sameHint, progBox, errLine, uploadBtn, tip]);
 
     fileInp.addEventListener("change", () => {
@@ -658,7 +658,7 @@
       const reader = new FileReader();
       reader.onerror = () => {
         if (seq !== pickSeq) return;
-        setMsg(errLine, "无法读取所选文件", "bad");
+        setMsg(errLine, "Cannot read the selected file", "bad");
         refresh();
       };
       reader.onload = () => {
@@ -668,17 +668,17 @@
         const maxBytes = typeof otaInfo.max === "number" ? otaInfo.max : 0;
         const sizeOk = !(maxBytes > 0 && file.size > maxBytes);
         if (!hdrOk && !sizeOk) {
-          setMsg(errLine, "文件过大（" + fmtSize(file.size) + "，上限 " + fmtSize(maxBytes) + "）且不是本设备固件", "bad");
+          setMsg(errLine, "File too large (" + fmtSize(file.size) + ", limit " + fmtSize(maxBytes) + "). Not firmware for this receiver", "bad");
         } else if (!hdrOk) {
-          setMsg(errLine, "不是本设备固件", "bad");
+          setMsg(errLine, "Not firmware for this receiver", "bad");
         } else if (!sizeOk) {
-          setMsg(errLine, "文件过大（" + fmtSize(file.size) + "，上限 " + fmtSize(maxBytes) + "）", "bad");
+          setMsg(errLine, "File too large (" + fmtSize(file.size) + ", limit " + fmtSize(maxBytes) + ")", "bad");
         } else {
           selectedFile = file;
           fileValid = true;
-          const curVer = otaInfo.running || "(未知)";
-          const newVer = parsed.version || "(未知)";
-          setMsg(cmpLine, "当前 " + curVer + " → 新 " + newVer + "（" + fmtSize(file.size) + "）", "");
+          const curVer = otaInfo.running || "(unknown)";
+          const newVer = parsed.version || "(unknown)";
+          setMsg(cmpLine, "Current " + curVer + " → new " + newVer + " (" + fmtSize(file.size) + ")", "");
           sameHint.hidden = parsed.version !== otaInfo.running;
         }
         refresh();
@@ -692,7 +692,7 @@
         otaDone = true;
         leaving = true;
         clearTimeout(retryTimer);
-        setProg(100, "100% · 升级完成", fmtSize(selectedFile ? selectedFile.size : 0));
+        setProg(100, "100% · Update complete", fmtSize(selectedFile ? selectedFile.size : 0));
         setMsg(errLine, msg, "ok");
         banner(msg);
         toast(msg, "ok");
@@ -716,14 +716,14 @@
       retryTimer = null;
       otaUploading = true;
       setMsg(errLine, "", "");
-      setProg(0, "0% · 正在上传…", "0 B / " + fmtSize(file.size));
+      setProg(0, "0% · Uploading…", "0 B / " + fmtSize(file.size));
       refresh();
 
       const xhr = new XMLHttpRequest();
       let settled = false;
       let stallTimer = null;
       let lastLoaded = -1;
-      const timeoutMsg = "上传超时，未收到设备应答，请确认设备状态后重试";
+      const timeoutMsg = "Upload timed out with no reply. Check the receiver and try again";
       const clearWatch = () => { clearTimeout(stallTimer); stallTimer = null; };
       const armWatch = () => {
         clearWatch();
@@ -747,7 +747,7 @@
         }
         const total = e.lengthComputable && e.total > 0 ? e.total : file.size;
         const pct = total > 0 ? Math.min(100, Math.round((e.loaded * 100) / total)) : 0;
-        setProg(pct, pct >= 100 ? "100% · 正在校验…" : pct + "% · 正在上传…", fmtSize(e.loaded) + " / " + fmtSize(total));
+        setProg(pct, pct >= 100 ? "100% · Verifying…" : pct + "% · Uploading…", fmtSize(e.loaded) + " / " + fmtSize(total));
       };
       xhr.onload = () => {
         if (settled) return;
@@ -758,11 +758,11 @@
         if (xhr.status === 200 && res && res.ok === true) {
           const ms = typeof res.reboot_ms === "number" && res.reboot_ms > 0 ? res.reboot_ms : 1500;
           const sec = ms % 1000 === 0 ? String(ms / 1000) : String(Number((ms / 1000).toFixed(1)));
-          finishUpload(true, "升级完成，设备将在约 " + sec + " 秒后重启进入蓝牙模式，热点会断开");
+          finishUpload(true, "Update complete. The receiver restarts in Bluetooth mode in about " + sec + " s and the access point closes");
           return;
         }
         const code = res && typeof res.err === "string" ? res.err : "";
-        const text = OTA_ERR[code] || ("升级失败（" + (code || ("HTTP " + xhr.status)) + "）");
+        const text = OTA_ERR[code] || ("Update failed (" + (code || ("HTTP " + xhr.status)) + ")");
         finishUpload(false, text);
       };
       xhr.ontimeout = () => {
@@ -775,13 +775,13 @@
         if (settled) return;
         settled = true;
         clearWatch();
-        finishUpload(false, "连接中断，设备仍运行原固件");
+        finishUpload(false, "Connection lost, the receiver is still running the old firmware");
       };
       xhr.onabort = () => {
         if (settled) return;
         settled = true;
         clearWatch();
-        finishUpload(false, "连接中断，设备仍运行原固件");
+        finishUpload(false, "Connection lost, the receiver is still running the old firmware");
       };
       armWatch();
       xhr.send(file);
@@ -793,7 +793,7 @@
         panel.hidden = false;
       } else {
         note.hidden = false;
-        note.textContent = otaStatus === "unsupported" ? "设备不支持网页升级" : "正在获取固件信息…";
+        note.textContent = otaStatus === "unsupported" ? "This receiver does not support web updates" : "Reading firmware info…";
         panel.hidden = true;
       }
       const locked = otaUploading || otaDone || leaving;
@@ -880,7 +880,7 @@
 
   // ---------------------------------------------------------------- 请求队列
   function request(payload, o) {
-    if (!ready || leaving || otaUploading) { toast(otaUploading ? "固件升级中，暂不可修改设置" : "Not connected", "err"); return; }
+    if (!ready || leaving || otaUploading) { toast(otaUploading ? "Firmware update in progress, settings are locked" : "Not connected", "err"); return; }
     if (o.key) optimistic[o.key] = payload.value;
     if (o.btn) o.btn.disabled = true;
     queue.push({ payload, o });
