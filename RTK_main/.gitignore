@@ -27,16 +27,9 @@ pytest_embedded_log/
 *~
 .DS_Store
 
-# 板上整片/分区读出的备份含 NVS（蓝牙绑定信息等），只留在本地
-docs/reports/logs/**/*.bin
 # 主机/交叉编译中间产物与可执行文件（开发探针目录）
 *.o
 *.su
-reference/c-demux-v1/test/demux_dev/g1/*
-!reference/c-demux-v1/test/demux_dev/g1/*.c
-!reference/c-demux-v1/test/demux_dev/g1/*.h
-!reference/c-demux-v1/test/demux_dev/g1/*.md
-!reference/c-demux-v1/test/demux_dev/g1/*.txt
 test/stream_demux_dev/h1/*
 !test/stream_demux_dev/h1/*.c
 !test/stream_demux_dev/h1/*.h

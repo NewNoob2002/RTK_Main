@@ -26,7 +26,7 @@ C 与 C++ 的边界只有一种形式：C 头文件（`#pragma once` + `extern "
 | `main` | C++ | — | 组合根、链路任务、控制台（ADR-0002 的 T14 要求不变） |
 | 未来：`rtk_gnss`、`rtk_radio`、`rtk_power`、`rtk_led` | C 驱动（需要状态机/聚合时上层用 C++） | 预留 | 不在本阶段 |
 
-作废：ADR-0002 中的 `rtk/bt/spp_server.hpp`、`rtk/store/settings_store.hpp` 及 DeepSeek 的 C++ 草稿，移入 `reference/cpp-v2-draft/`。
+作废：ADR-0002 中的 `rtk/bt/spp_server.hpp`、`rtk/store/settings_store.hpp` 及 DeepSeek 的 C++ 草稿，曾移入 `reference/cpp-v2-draft/`，2026-11-23 已删除（见 git 历史）。
 
 ## 3. 规范
 

@@ -1,4 +1,0 @@
-{
-  "result": "PASS",
-  "snapshot": "status\r\nlink: running\r\nbt: ready\r\npolicy: CONCURRENT\r\nsessions: 1\r\n  handle=0x00000081 role=ALARM mac=08:D1:F9:DD:3E:E6\r\nwhitelist: 1 pending=no store=ESP_OK\r\n  08:D1:F9:DD:3E:E6\r\npairing: closed\r\nalarm: state=1 level=3 override=yes\r\nstats: frames_rx=4106 replies_tx=3325 write_errors=2 pushes_tx=734 disconnects=2 rx_dropped=0\r\nparser: crc_errors=1 length_errors=0\r\nheartbeat: seq=777 battery=80 state=0\r\nheap: free=165336 min=159008 link_stack_hwm=4432 snapshot_ms=841902\r\nrtk>  W (842395) BT_RFCOMM: port_rfc_closed RFCOMM connection in server:1 state 3 closed: Closed (res: 19)\r\n"
-}

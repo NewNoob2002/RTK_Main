@@ -97,4 +97,4 @@ ADR-0015（P2 板级识别）。
 
 ## 5 分步
 
-- **D1**：档位 Kconfig、三档登记/启动/降级行为、叠加文件、两个新门禁、横幅与 `config build` 字段、§3 实测表、HIL（Architect）。
+- **D1**：档位 Kconfig、三档登记/启动/降级行为、叠加文件、两个新门禁、横幅与 `config build` 字段、§3 实测表、HIL（Architect）。已完成（`b4d5488`、`3efe097`，P2 上 DEV/PRODUCTION/NONE 与故障降级 HIL 通过）。

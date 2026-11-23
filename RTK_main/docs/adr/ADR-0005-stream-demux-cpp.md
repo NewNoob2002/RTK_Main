@@ -4,7 +4,7 @@
 - 修订范围：ADR-0004 §2 的语言/接口/组件名、§4 的描述符名称、§8 分工。**ADR-0004 §3 引擎参考语义、不变量 I1–I4、§4 各协议判定规则与 maxFrame、§5–§7 方向不变，继续有效。**
 - 修订 ADR-0003：“字节级编解码用 C”不再适用于分流器；`rtk_proto` 既有 C 核心不动。
 - 修订 2026-11-11（H4）：`StaticDemux::indexOf` 改用模板实参等价性比较（H3 报告：GCC 16 `-fsanitize=undefined` 下跨 TU `inline constexpr` 对象地址比较不是常量表达式），接口不变。
-- C 版实现（BATCH-G，已通过 G4 验收）归档到 `reference/c-demux-v1/`，作参考实现与测试向量来源。
+- C 版实现（BATCH-G，已通过 G4 验收）曾归档到 `reference/c-demux-v1/`，测试已移植到 `test/stream_demux/` 后于 2026-11-23 删除（见 git 历史）。
 
 ## 1. 组件与命名
 

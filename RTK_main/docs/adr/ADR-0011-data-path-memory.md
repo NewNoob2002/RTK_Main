@@ -1,7 +1,7 @@
 # ADR-0011：数据通路与内存整合
 
-- 状态：**ACCEPTED（待实施）**；用户已确认设计决定，实施任务仍需单独下达。
-- 输入：[起草任务书](../tasks/ADR-0011-brief.md)、[修订指令](../tasks/ADR-0011-revise.md)。本轮只修订本 ADR、K1～K5 卡和摘要；不修改代码、既有冻结文档或 `docs/frozen.sha256`，不 commit、不连接串口。
+- 状态：**已实施**（K1 `5fa2861`、K2 `a26ac33`、K3 `0127fd1`、K4 `17aeeab`、K5 `1e03c15`）。
+- 输入：起草任务书与修订指令（已归档，见 git 历史）。
 - 前置：ADR-0003 的 C/C++ 分工、ADR-0007 的执行器/数据中心/服务边界、ADR-0009 的诊断出口、ADR-0010 的 GNSS 控制器。
 - 适用硬件：任务书已确认的经典 ESP32、无 PSRAM、BR/EDR SPP。没有获得 SPI/SD 引脚、卡型号、观测命令的新硬件事实。
 - 实施顺序：K1 → K2 → K3 → K4 → K5；K6 仅未来占位。§12 决定已接受；各卡须在冻结契约定稿并单独下达后实施。
@@ -525,18 +525,18 @@ python3 tools/hil/spp_stress.py F8:B3:B7:25:D8:B2 --mode upwin --window-bytes 30
 
 | 卡 | 重点 | 冻结变更提案 |
 | --- | --- | --- |
-| [K1](../tasks/K1-fanout-ring.md) | typed FanoutRing、租约、host回归 | `components/app_fw/include/fw/FanoutRing.hpp`；ADR-0007 §3.6-1 |
-| [K2](../tasks/K2-spp-nonblocking-tx.md) | 多在途TX、reply credit、删async_tx | `components/spp_server/include/SppServer.h`、`components/spp_server/include/spp/SppTransport.hpp`、`components/link_core/include/core/Transport.hpp`、`components/link_core/include/core/LinkService.hpp`；若扩展纯逻辑trace编号则 `components/link_core/include/core/TraceCodes.hpp`；ADR-0007/0009相关契约 |
-| [K3](../tasks/K3-rtcm-rx-path.md) | RTCM直通、RX通知/512B、公平 | 在K2已批准的 `SppServer.h` 中定稿wake/RX统计契约；ADR-0007/0010通路描述 |
-| [K4](../tasks/K4-gnss-app-ring.md) | App环、订阅/配置/NVS、取代G-C相关部分 | `components/stream_demux/include/demux/decoders/UnicoreHash.hpp`；新增 `components/link_core/include/core/services/GnssService.hpp`；如服务注册确需更改 `components/link_core/include/core/CommandRouter.hpp` 必须再列明；ADR-0010 §2.9、G-C、phone_protocol；需要方言公共数据表时先报告具体文件 |
-| [K5](../tasks/K5-boot-memory.md) | boot_alloc、sys mem、s_app .bss | 新增rtos RAII头按AGENTS例外；C storage契约修订 `SppServer.h`；ADR-0009内存指标/命令与CODING-STYLE启动堆说明如有冲突由架构方修订 |
+| K1（`5fa2861`） | typed FanoutRing、租约、host回归 | `components/app_fw/include/fw/FanoutRing.hpp`；ADR-0007 §3.6-1 |
+| K2（`a26ac33`） | 多在途TX、reply credit、删async_tx | `components/spp_server/include/SppServer.h`、`components/spp_server/include/spp/SppTransport.hpp`、`components/link_core/include/core/Transport.hpp`、`components/link_core/include/core/LinkService.hpp`；若扩展纯逻辑trace编号则 `components/link_core/include/core/TraceCodes.hpp`；ADR-0007/0009相关契约 |
+| K3（`0127fd1`） | RTCM直通、RX通知/512B、公平 | 在K2已批准的 `SppServer.h` 中定稿wake/RX统计契约；ADR-0007/0010通路描述 |
+| K4（`17aeeab`） | App环、订阅/配置/NVS、取代G-C相关部分 | `components/stream_demux/include/demux/decoders/UnicoreHash.hpp`；新增 `components/link_core/include/core/services/GnssService.hpp`；如服务注册确需更改 `components/link_core/include/core/CommandRouter.hpp` 必须再列明；ADR-0010 §2.9、G-C、phone_protocol；需要方言公共数据表时先报告具体文件 |
+| K5（`1e03c15`） | boot_alloc、sys mem、s_app .bss | 新增rtos RAII头按AGENTS例外；C storage契约修订 `SppServer.h`；ADR-0009内存指标/命令与CODING-STYLE启动堆说明如有冲突由架构方修订 |
 | K6（未来） | SPI SD与静态观测记录 | 无本期修改/分配/硬件动作；待观测命令和板级信息后另立卡 |
 
-所有卡报告 `docs/reports/K<N>.md`，逐项PASS/FAIL/NOT_RUN/BLOCKED、命令/日志、内存实测、契约偏离和未决问题。禁止commit/push、串口/硬件操作、安装下载，授权未覆盖的冻结改动先停该项并继续独立工作。
+各卡报告当时写入 `docs/reports/K<N>.md`（已于 2026-11-23 归档删除，见 git 历史），逐项PASS/FAIL/NOT_RUN/BLOCKED、命令/日志、内存实测、契约偏离和未决问题。禁止commit/push、串口/硬件操作、安装下载，授权未覆盖的冻结改动先停该项并继续独立工作。
 
 ## 12. 已决定（用户审查确认）
 
-以下决定来自[修订指令](../tasks/ADR-0011-revise.md)，已同步正文、内存账、任务卡和验收；本轮只改文档，实施另行下达。
+以下决定来自修订指令，已同步正文、内存账、任务卡和验收；本轮只改文档，实施另行下达。
 
 | 项 | 已决定 | 理由 / 验收影响 |
 | --- | --- | --- |

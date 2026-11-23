@@ -1,6 +1,6 @@
 # ADR-0008 代码组织与编码规范重整（参考 X-TRACK）
 
-状态：Proposed（分支 `refactor/xtrack-style`）
+状态：已实施（R0–R8a 已合入 main，`719580f`～`7850095`）
 日期：2026-11-12
 
 ## 1. 背景
