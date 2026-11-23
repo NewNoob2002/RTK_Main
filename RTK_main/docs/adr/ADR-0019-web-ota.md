@@ -41,7 +41,7 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 | `POST /ota` | 体为原始 `.bin`（`Content-Type: application/octet-stream`，必须有 `Content-Length`；**不用 multipart**） | 见下表 |
 
 - `state` 取 `esp_ota_img_states_t` 的小写名去前缀：`new`/`pending_verify`/`valid`/`invalid`/`aborted`/`undefined`；`other` 为另一个 app 槽
-  `esp_ota_get_partition_description` 的 `version`，读不到为 `null`；`max` 为下一个更新分区的字节数。
+  `esp_ota_get_partition_description` 的 `version`，读不到、该槽状态为 `undefined` 或查询失败、或本次启动已对该槽 `esp_ota_begin` 但未成功提交时为 `null`（控制台 `ota status` 显示 `-`；2026-11-23 HIL F-OTHER 修订）；`max` 为下一个更新分区的字节数。
 - `POST /ota` 应答一律 `Content-Type: application/json`，体为 `{"ok":true,"ver":"<新版本>","reboot_ms":1500}` 或 `{"ok":false,"err":"<码>"}`：
 
 | HTTP | `err` | 含义 |
@@ -53,7 +53,7 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 | 413 | `too_large` | 超过目标分区大小 |
 | 400 | `bad_image` | §2.2 第 1 条头校验失败 |
 | 400 | `validate` | `esp_ota_end` 校验失败（`ESP_ERR_OTA_VALIDATE_FAILED`） |
-| 408 | `timeout` | 接收连续超时（累计 ≥ 30 s 无数据） |
+| 408 | `timeout` | 接收连续超时（累计 ≥ 30 s 无数据），或自准入起总上传时长超过 150 s（`web_ota::kTotalTimeoutMs`，低于浏览器 `OTA_TOTAL_MS=180000`；2026-11-23 HIL F-CONC 修订） |
 | 500 | `flash` | `esp_ota_begin`/`write`/`set_boot_partition` 失败 |
 | 503 | `aborted` | 上传中被关机请求中止，或客户端断开（断开时应答可能无法送达） |
 
@@ -66,7 +66,7 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
   `httpd_req_recv` → `esp_ota_write`。**禁止** `OTA_SIZE_UNKNOWN`/传入整包大小（会一次擦整个槽，阻塞数十秒且关 cache）。
 - 接收缓冲 ≤ 2 KB，不放 httpd 任务栈（默认 4 KB 栈），不新增常驻 `.bss`：从启动内存池按 `kWifiConfig` 模式申请
   （参照 `BootBuffers::webFrames`），蓝牙模式不占内存。本工程代码不新增堆分配；`esp_ota_*` 内部分配记入 G7b 白名单说明。
-- 并发：同一时刻只允许一个上传（原子标志）；上传期间：
+- 并发：同一时刻只允许一个上传（原子标志）。httpd 是单任务，同步接收期间不会派发其他请求：并发的第二个 `POST /ota` 或 `GET /ota/info` 要等当前上传结束才被处理，`409 busy` 只会回给准入完成后才到达的请求（如成功后等待重启的 1500 ms 内）。150 s 总时限保证被并发连接拖慢的上传在有界时间内以 408 结束并恢复服务（2026-11-23 HIL F-CONC）。上传期间：
   - Wi-Fi 空闲回落计时（`WebIdleTimer`）暂停，上传结束后从头计时；
   - WS `set`/`cmd` 请求回 `ack ok:false err:"busy"`（不进设置服务）；
   - 电源关机请求（ADR-0015 / B2 的 `kQuiesce` 阶段）置中止标志，httpd 回调在下一块前 `esp_ota_abort()` 并回 503；

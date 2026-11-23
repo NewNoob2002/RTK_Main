@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -21,6 +22,22 @@ enum class Operation : uint8_t { kIdle, kUpload, kConfirm, kRollback };
 
 /** @brief 取得契约状态名。 @param state: IDF OTA 槽状态。 @retval 静态的小写名称。 @note 不阻塞。 */
 [[nodiscard]] const char *stateName(esp_ota_img_states_t state) noexcept;
+
+/** @brief 标记另一槽已开始写入，在成功提交前抑制其版本显示。 @note 仅 httpd 调用，不阻塞。 */
+void markOtherSlotDirty() noexcept;
+
+/** @brief 清除另一槽的未完成写入标记。 @note 仅 httpd 成功提交后调用，不阻塞。 */
+void clearOtherSlotDirty() noexcept;
+
+/**
+ * @brief 读取另一应用槽的可信版本号；状态未定义、查询失败或本次启动写入未完成时返回空
+ * @param part: 另一应用槽指针，可空
+ * @param[out] desc: 调用方提供的描述符缓冲；返回非空时其 version 字段有效
+ * @retval 指向 desc.version 的版本视图；不可信或不可读时返回 std::nullopt
+ * @note 可访问 Flash；返回值生命周期与 desc 一致。
+ */
+[[nodiscard]] std::optional<std::string_view> otherSlotVersion(const esp_partition_t *part,
+                                                               esp_app_desc_t &desc) noexcept;
 
 /** @brief 尝试独占 OTA 状态修改。 @param op: 非空闲操作。 @retval true 已取得。 @retval false 其他操作占用。 @note 不阻塞。 */
 [[nodiscard]] bool beginOperation(Operation op) noexcept;

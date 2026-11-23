@@ -10,10 +10,14 @@
 namespace {
 
 using app::ota::BootOutcome;
+using app::ota::otherSlotVersionReadable;
 using app::ota::RollbackAction;
 using app::ota::rollbackAction;
 using app::web_ota::checkHeader;
 using app::web_ota::checkLength;
+using app::web_ota::elapsedAtLeast;
+using app::web_ota::kTimeoutMs;
+using app::web_ota::kTotalTimeoutMs;
 using app::web_ota::ReceiveResult;
 using app::web_ota::transfer;
 using app::web_ota::UploadCode;
@@ -51,6 +55,13 @@ static_assert(rollbackAction(true, BootOutcome::kReady, kNearWrapMs, 29988U, kVa
               RollbackAction::kNone);
 static_assert(rollbackAction(true, BootOutcome::kReady, kNearWrapMs, 29989U, kValidDelayMs) ==
               RollbackAction::kConfirm);
+static_assert(otherSlotVersionReadable(true, false));
+static_assert(!otherSlotVersionReadable(false, false));
+static_assert(!otherSlotVersionReadable(true, true));
+static_assert(!otherSlotVersionReadable(false, true));
+static_assert(kTotalTimeoutMs == 150000U);
+static_assert(!elapsedAtLeast(kNearWrapMs, kNearWrapMs + kTotalTimeoutMs - 1U, kTotalTimeoutMs));
+static_assert(elapsedAtLeast(kNearWrapMs, kNearWrapMs + kTotalTimeoutMs, kTotalTimeoutMs));
 
 /** @brief 构造与 ADR 及 IDF 镜像格式相符的线格式样本。 @retval 固定长度镜像测试数据。 */
 std::array<char, kImageBytes> makeImage()
@@ -90,11 +101,14 @@ struct FakeOtaIo {
     size_t input = 0U;
     size_t written = 0U;
     uint32_t timeMs = 0U;
+    uint32_t stepMs = 1000U;
+    size_t maxChunk = 127U;
     unsigned calls = 0U;
     unsigned armedAtCall = std::numeric_limits<unsigned>::max();
     unsigned dropAtCall = std::numeric_limits<unsigned>::max();
     unsigned nextProgressCall = 0U;
     unsigned stallAfterProgress = 0U;
+    unsigned timeoutAtCall = 0U;
     bool began = false;
     bool ended = false;
     bool committed = false;
@@ -108,18 +122,18 @@ struct FakeOtaIo {
     ReceiveResult receive(std::span<char> dst)
     {
         ++calls;
-        timeMs += 5000U;
+        timeMs += stepMs;
         if (calls >= dropAtCall) {
             return {};
         }
-        if (calls < nextProgressCall) {
+        if (calls < nextProgressCall || calls == timeoutAtCall) {
             return {.timedOut = true};
         }
         if (stallAfterProgress != 0U) {
             nextProgressCall = calls + stallAfterProgress;
         }
         // 测试接收上限刻意不与头部或 flash 分块对齐。
-        const size_t len = std::min({dst.size(), image.size() - input, size_t{127}});
+        const size_t len = std::min({dst.size(), image.size() - input, maxChunk});
         std::ranges::copy(std::span{image}.subspan(input, len), dst.begin());
         input += len;
         return {.bytes = len};
@@ -177,62 +191,109 @@ void testTransfer()
 {
     std::array<char, 2048> storage{};
     FakeOtaIo io{};
-    auto out = transfer(io, storage, kImageBytes, kProject);
+    auto out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kOk && out.received == kImageBytes && io.committed);
     assert(std::string_view{out.version.data()} == kVersion);
 
     io = {};
     io.image[80] = 'x';
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kBadImage && out.received == 288U && !io.began);
 
     io = {};
     io.beginCode = UploadCode::kFlash;
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kFlash && io.began && io.written == 0U && !io.ended);
 
     io = {};
     io.writeCode = UploadCode::kFlash;
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kFlash && !io.ended && !io.committed);
 
     io = {};
     io.endCode = UploadCode::kValidate;
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kValidate && io.ended && !io.committed);
 
     io = {};
     io.commitCode = UploadCode::kFlash;
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kFlash && io.committed);
 
     io = {};
     io.armedAtCall = 4U;
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kAborted && io.written == 288U && !io.ended);
 
     io = {};
     io.abortAtEnd = true;
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kAborted && io.ended && !io.committed);
 
     io = {};
     io.dropAtCall = 2U;
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
     assert(out.code == UploadCode::kAborted && out.received == 127U && !io.began);
 
     io = {};
     io.timeMs = UINT32_MAX - 2000U;
+    io.stepMs = 5000U;
     io.nextProgressCall = 7U;
     const auto start = io.nowMs();
-    out = transfer(io, storage, kImageBytes, kProject);
+    out = transfer(io, storage, kImageBytes, kProject, start);
     assert(out.code == UploadCode::kTimeout && out.received == 0U && !io.began);
-    assert(io.nowMs() - start == 30000U);
+    assert(io.nowMs() - start == kTimeoutMs);
 
     io = {};
-    io.stallAfterProgress = 5U; // 每次进展后超时四次；累积总耗时远超 30 s。
-    out = transfer(io, storage, kImageBytes, kProject);
-    assert(out.code == UploadCode::kOk && io.committed && io.nowMs() > 30000U);
+    io.stepMs = 1000U;
+    io.stallAfterProgress = 3U; // 每次进展后超时两次；累积总耗时超 30 s 但低于 150 s。
+    out = transfer(io, storage, kImageBytes, kProject, io.nowMs());
+    assert(out.code == UploadCode::kOk && io.committed && io.nowMs() > kTimeoutMs &&
+           io.nowMs() < kTotalTimeoutMs);
+
+    // 持续慢滴（每 5 s 均有进展，永不触发 30 s 无进展超时），超过 150 s 总时限时终止。
+    io = {};
+    io.stepMs = 5000U;
+    const auto trickleStart = io.nowMs();
+    out = transfer(io, storage, kImageBytes, kProject, trickleStart);
+    assert(out.code == UploadCode::kTimeout && io.began && !io.ended && !io.committed);
+    assert(io.nowMs() - trickleStart == kTotalTimeoutMs);
+
+    // 毫秒时钟回绕场景下的总时限触发。
+    io = {};
+    io.timeMs = UINT32_MAX - 50000U;
+    io.stepMs = 5000U;
+    const auto wrapStart = io.nowMs();
+    out = transfer(io, storage, kImageBytes, kProject, wrapStart);
+    assert(out.code == UploadCode::kTimeout && io.began && !io.ended && !io.committed);
+    assert(io.nowMs() - wrapStart == kTotalTimeoutMs);
+
+    // 头部阶段持续慢滴触发总时限，不进入 esp_ota_begin。
+    io = {};
+    io.stepMs = 10000U;
+    io.maxChunk = 10U;
+    const auto headerStart = io.nowMs();
+    out = transfer(io, storage, kImageBytes, kProject, headerStart);
+    assert(out.code == UploadCode::kTimeout && !io.began && out.received == 150U);
+    assert(io.nowMs() - headerStart == kTotalTimeoutMs);
+
+    // 单次 recv 超时分支（无进展仅 5 s < 30 s）触碰总时限 150 s。
+    io = {};
+    io.stepMs = 5000U;
+    io.timeoutAtCall = 30U;
+    const auto recvTimeoutStart = io.nowMs();
+    out = transfer(io, storage, kImageBytes, kProject, recvTimeoutStart);
+    assert(out.code == UploadCode::kTimeout && io.began && !io.ended && !io.committed);
+    assert(io.nowMs() - recvTimeoutStart == kTotalTimeoutMs);
+
+    // 准入时间早于 transfer 入口（模拟前置延迟），总时限自准入点起算。
+    io = {};
+    io.timeMs = 200000U;
+    io.stepMs = 5000U;
+    const uint32_t admitStart = io.nowMs() - 140000U;
+    out = transfer(io, storage, kImageBytes, kProject, admitStart);
+    assert(out.code == UploadCode::kTimeout && !io.began && io.calls == 2U);
+    assert(io.nowMs() - admitStart == kTotalTimeoutMs);
 }
 
 /** @brief 核对 §2.3 的字段顺序、JSON 字节及全部错误状态。 @note 主机测试单线程。 */

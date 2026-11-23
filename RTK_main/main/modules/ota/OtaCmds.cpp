@@ -32,10 +32,7 @@ int cmdOtaStatus(void *, int argc, char **) noexcept
     const auto *other = esp_ota_get_next_update_partition(running);
     esp_app_desc_t desc{};
     const auto version = appVersion();
-    const auto otherVersion =
-        other != nullptr && esp_ota_get_partition_description(other, &desc) == ESP_OK
-            ? ota::imageText(desc.version)
-            : std::string_view{"-"};
+    const auto otherVersion = ota::otherSlotVersion(other, desc).value_or("-");
     cli::printSection("ota");
     // 两处描述符版本字段都是最多 32 B，精度转换无损。
     cli::printKv("running", "%s state=%s version=%.*s",

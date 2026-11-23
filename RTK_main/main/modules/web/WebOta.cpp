@@ -211,7 +211,11 @@ public:
         if (err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
             return UploadCode::kState;
         }
-        return err == ESP_OK ? UploadCode::kOk : UploadCode::kFlash;
+        if (err != ESP_OK) {
+            return UploadCode::kFlash;
+        }
+        ota::markOtherSlotDirty();
+        return UploadCode::kOk;
     }
 
     /** @brief 写一块镜像。 @param src: 已收齐的数据。 @retval kOk 已写入。 @retval kFlash 写入失败。 */
@@ -253,6 +257,7 @@ public:
             power::s_power_requests.releaseAction();
             return UploadCode::kFlash;
         }
+        ota::clearOtherSlotDirty();
         return UploadCode::kOk;
     }
 
@@ -280,11 +285,12 @@ private:
  * @param io: 已独占的 OTA 会话
  * @param buffer: BootArena 外供收包缓冲
  * @param length: 解析后的声明长度
+ * @param startMs: 本次上传准入时的单调毫秒起点
  * @retval 流或前置检查结果
  * @note 仅 httpd；不在失败路径设置启动槽。
  */
 [[nodiscard]] TransferResult runUpload(httpd_req_t *req, OtaUploadIo &io, std::span<char> buffer,
-                                       uint64_t length) noexcept
+                                       uint64_t length, uint32_t startMs) noexcept
 {
     if (ota::partitionState(esp_ota_get_running_partition()) == ESP_OTA_IMG_PENDING_VERIFY) {
         return {.code = UploadCode::kState};
@@ -308,13 +314,14 @@ private:
     timeval previous{};
     socklen_t previousSize = sizeof(previous);
     const timeval wait{.tv_sec = kReceiveWaitS, .tv_usec = 0};
-    // 缩短单次等待以尽早观察关机；流式状态机仍按 30 s 无进展判超时。
+    // 缩短单次等待以尽早观察关机；流式状态机按 30 s 无进展与 150 s 总时长判超时。
     if (fd < 0 || lwip_getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &previous, &previousSize) != 0 ||
         lwip_setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof(wait)) != 0) {
         return {.code = UploadCode::kFlash};
     }
-    const auto result = web_ota::transfer(io, buffer, req->content_len,
-                                          ota::imageText(esp_app_get_description()->project_name));
+    const auto result =
+        web_ota::transfer(io, buffer, req->content_len,
+                          ota::imageText(esp_app_get_description()->project_name), startMs);
     // 失败后会关闭会话；成功后短暂保留连接直到计划重启。
     if (result.code == UploadCode::kOk &&
         lwip_setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &previous, previousSize) != 0) {
@@ -387,17 +394,16 @@ private:
 {
     // 在字节数组内构造 SDK 对象。HTTP 回调串行，GET 结束后 POST 才能使用该存储。
     auto *desc = ::new (scratch.data()) esp_app_desc_t;
-    const bool hasOther =
-        other != nullptr && esp_ota_get_partition_description(other, desc) == ESP_OK;
-    const auto len = web_ota::renderInfo(
-        {.running = appVersion(),
-         .project = ota::imageText(esp_app_get_description()->project_name),
-         .part = ota::imageText(running.label),
-         .state = ota::stateName(ota::partitionState(&running)),
-         .other = hasOther ? std::optional{ota::imageText(desc->version)} : std::nullopt,
-         .max = other != nullptr ? other->size : 0U,
-         .busy = ota::uploadBusy()},
-        out);
+    const auto otherVersion = ota::otherSlotVersion(other, *desc);
+    const auto len =
+        web_ota::renderInfo({.running = appVersion(),
+                             .project = ota::imageText(esp_app_get_description()->project_name),
+                             .part = ota::imageText(running.label),
+                             .state = ota::stateName(ota::partitionState(&running)),
+                             .other = otherVersion,
+                             .max = other != nullptr ? other->size : 0U,
+                             .busy = ota::uploadBusy()},
+                            out);
     desc->~esp_app_desc_t();
     return len;
 }
@@ -471,8 +477,8 @@ esp_err_t WebModule::handleOtaPost(httpd_req_t *req) noexcept
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): char 可访问字节数组的对象表示。
     const std::span<char> buffer{reinterpret_cast<char *>(self.otaBuffer_.data()),
                                  self.otaBuffer_.size_bytes()};
-    const auto result =
-        admitted ? runUpload(req, io, buffer, length) : TransferResult{.code = UploadCode::kBusy};
+    const auto result = admitted ? runUpload(req, io, buffer, length, startMs)
+                                 : TransferResult{.code = UploadCode::kBusy};
     if (result.code != UploadCode::kOk) {
         io.abort();
     }

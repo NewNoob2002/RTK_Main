@@ -144,6 +144,8 @@ struct MockOtaState {
     size_t written = 0U;
     const esp_partition_t *bootPartition = nullptr;
     bool otherReadable = true;
+    esp_ota_img_states_t otherState = ESP_OTA_IMG_VALID;
+    esp_err_t otherStateErr = ESP_OK;
     bool backpressure = false;
     long receiveWaitS = 5L;
     std::string wireReply{};
@@ -264,6 +266,7 @@ void resetHarness()
     s_httpd = MockHttpdState{};
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
     s_ota = {};
+    app::ota::clearOtherSlotDirty();
     s_ctx.bootPhase.store(app::BootPhase::kRunning, std::memory_order_relaxed);
 #endif
     s_nowMs = 1000U;
@@ -590,9 +593,16 @@ const esp_partition_t *esp_ota_get_next_update_partition(const esp_partition_t *
     return &kOtherSlot;
 }
 
-/** @brief 模拟运行槽状态。 @param state: 输出状态。 @retval ESP_OK 已返回。 */
-esp_err_t esp_ota_get_state_partition(const esp_partition_t *, esp_ota_img_states_t *state)
+/** @brief 模拟运行槽与另一槽状态。 @param part: 查询分区。 @param state: 输出状态。 @retval ESP_OK 已返回，或返回注入错误。 */
+esp_err_t esp_ota_get_state_partition(const esp_partition_t *part, esp_ota_img_states_t *state)
 {
+    if (part == &kOtherSlot) {
+        if (s_ota.otherStateErr != ESP_OK) {
+            return s_ota.otherStateErr;
+        }
+        *state = s_ota.otherState;
+        return ESP_OK;
+    }
     *state = ESP_OTA_IMG_VALID;
     return ESP_OK;
 }
@@ -1943,6 +1953,71 @@ void testOtaReboot()
     s_ctx.web.stopBoot();
     s_ctx.web.unbindStorage();
 }
+
+/** @brief 验证 F-OTHER 另一槽版本抑制规则与 F-CONC 150 s 总时限清理。 */
+void testOtaOtherSlotAndTotalTimeout()
+{
+    resetHarness();
+    const auto *uri = findUri("/ota/info");
+    assert(uri != nullptr);
+    httpd_req_t req{};
+    req.handle = &s_httpd;
+    req.user_ctx = uri->user_ctx;
+    esp_app_desc_t desc{};
+
+    // 1. 另一槽状态为 UNDEFINED 时，即使描述符可读也抑制版本显示。
+    s_ota.otherReadable = true;
+    s_ota.otherState = ESP_OTA_IMG_UNDEFINED;
+    assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);
+
+    // 2. 另一槽状态查询失败时同样抑制版本显示。
+    s_ota.otherState = ESP_OTA_IMG_VALID;
+    s_ota.otherStateErr = ESP_ERR_NOT_FOUND;
+    assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);
+    s_ota.otherStateErr = ESP_OK;
+
+    // 3. 另一槽有效且干净时正常报告版本。
+    assert(app::ota::otherSlotVersion(&kOtherSlot, desc) == std::string_view{"6.0"});
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":"6.0")") != std::string::npos);
+
+    // 4. 上传进入 esp_ota_begin 后中止：即使另一槽 otadata 仍为 VALID 且头可读，RAM 脏标志仍抑制版本。
+    const auto image = otaImage();
+    s_ota.body = std::span{image}.first(app::web_ota::kHeaderBytes);
+    assert(postOta() == ESP_FAIL && s_ota.aborted == 1 && !app::ota::uploadBusy());
+    assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);
+
+    // 5. F-CONC：正文阶段总耗时达到 150 s 返回 408 timeout 并清理句柄与忙标志。
+    s_ota.aborted = 0;
+    s_ota.written = 0U;
+    s_ota.wireReply.clear();
+    s_ota.body = std::span{image}.first(app::web_ota::kHeaderBytes);
+    s_ota.onReceive = [] { s_nowMs += app::web_ota::kTotalTimeoutMs; };
+    assert(postOta() == ESP_FAIL && s_ota.aborted == 1 && !app::ota::uploadBusy());
+    assert(s_ota.wireReply.starts_with("HTTP/1.1 408 Request Timeout\r\n"));
+    assert(s_ota.wireReply.ends_with("\r\n\r\n"
+                                     R"({"ok":false,"err":"timeout"})"));
+    assert(std::string_view{app::ota::lastUpload()} == "timeout");
+    assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
+
+    // 6. 后续上传成功提交后清除脏标志，恢复另一槽版本报告。
+    s_ota.body = image;
+    s_ota.written = 0U;
+    assert(postOta() == ESP_OK && s_ota.bootPartition == &kOtherSlot);
+    assert(app::ota::otherSlotVersion(&kOtherSlot, desc) == std::string_view{"6.0"});
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":"6.0")") != std::string::npos);
+
+    app::ota::endOperation();
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
 #endif
 
 } // namespace
@@ -1965,6 +2040,7 @@ int main()
     testOtaHttpContract();
     testOtaQuiesceAndWebBusy();
     testOtaReboot();
+    testOtaOtherSlotAndTotalTimeout();
 #endif
     std::puts("PASS web_module_check");
     return 0;
