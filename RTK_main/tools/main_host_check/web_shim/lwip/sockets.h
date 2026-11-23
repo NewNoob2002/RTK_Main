@@ -13,12 +13,14 @@ extern "C" {
 #endif
 
 int lwip_socket(int domain, int type, int protocol);
+int lwip_getsockopt(int s, int level, int optname, void *optval, socklen_t *optlen);
 int lwip_setsockopt(int s, int level, int optname, const void *optval, socklen_t optlen);
 int lwip_fcntl(int s, int cmd, int val);
 int lwip_bind(int s, const struct sockaddr *name, socklen_t namelen);
 ssize_t lwip_recvfrom(int s, void *mem, size_t len, int flags, struct sockaddr *from,
                       socklen_t *fromlen);
 ssize_t lwip_recvmsg(int s, struct msghdr *message, int flags);
+ssize_t lwip_send(int s, const void *dataptr, size_t size, int flags);
 ssize_t lwip_sendto(int s, const void *dataptr, size_t size, int flags, const struct sockaddr *to,
                     socklen_t tolen);
 int lwip_close(int s);

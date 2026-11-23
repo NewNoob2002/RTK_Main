@@ -16,18 +16,20 @@ using app::console_registration::isSafe;
 using app::console_registration::verbGroupNames;
 using namespace std::string_view_literals;
 
-constexpr std::array kDevCommands{"status"sv, "log"sv,   "sys"sv,  "bt"sv,    "alarm"sv,
-                                  "config"sv, "rtcm"sv,  "gnss"sv, "debug"sv, "factory"sv,
-                                  "freset"sv, "power"sv, "radio"sv};
+constexpr std::array kDevCommands{"status"sv, "log"sv,   "sys"sv,   "bt"sv,    "alarm"sv,
+                                  "config"sv, "rtcm"sv,  "gnss"sv,  "debug"sv, "factory"sv,
+                                  "freset"sv, "power"sv, "radio"sv, "ota"sv};
 constexpr std::array kProdCommands{"status"sv, "log"sv,     "sys"sv,
                                    "config"sv, "factory"sv, "freset"sv};
-constexpr std::array kDevGroups{"status"sv, "log"sv, "sys"sv,     "rtcm"sv,  "gnss"sv,
-                                "debug"sv,  "bt"sv,  "factory"sv, "power"sv, "radio"sv};
+constexpr std::array kDevGroups{"status"sv, "log"sv,     "sys"sv,   "rtcm"sv,  "gnss"sv, "debug"sv,
+                                "bt"sv,     "factory"sv, "power"sv, "radio"sv, "ota"sv};
 constexpr std::array kProdGroups{"status"sv, "log"sv, "sys"sv, "factory"sv};
-constexpr std::array kDevGroupsWithoutGnssOrTrace{"status"sv, "log"sv,     "sys"sv,   "rtcm"sv,
-                                                  "bt"sv,     "factory"sv, "power"sv, "radio"sv};
+constexpr std::array kDevGroupsWithoutGnssOrTrace{
+    "status"sv, "log"sv, "sys"sv, "rtcm"sv, "bt"sv, "factory"sv, "power"sv, "radio"sv, "ota"sv};
 constexpr std::array kSafe{"status"sv, "log"sv, "sys"sv, "config"sv, "radio"sv};
 constexpr std::array<std::string_view, 0U> kNone{};
+
+constexpr auto kNoRadio = std::views::filter([](std::string_view name) { return name != "radio"; });
 
 constexpr auto kRegistered =
     std::views::filter([](std::string_view name) { return !name.empty(); });
@@ -66,14 +68,15 @@ static_assert(std::ranges::equal(kProdCommands | std::views::filter(isSafe),
 static_assert(!isSafe("unknown"));
 static_assert(std::ranges::equal(commandNames(ConsoleProfile::kDev, true, true, false) |
                                      kRegistered,
-                                 std::span{kDevCommands}.first<kDevCommands.size() - 1U>()));
+                                 kDevCommands | kNoRadio));
 static_assert(std::ranges::equal(verbGroupNames(ConsoleProfile::kDev, true, true, false) |
                                      kRegistered,
-                                 std::span{kDevGroups}.first<kDevGroups.size() - 1U>()));
-static_assert(
-    std::ranges::equal(commandNames(ConsoleProfile::kDev, false, false, true) | kRegistered,
-                       std::array{"status"sv, "log"sv, "sys"sv, "bt"sv, "alarm"sv, "config"sv,
-                                  "rtcm"sv, "factory"sv, "freset"sv, "power"sv, "radio"sv}));
+                                 kDevGroups | kNoRadio));
+static_assert(std::ranges::equal(commandNames(ConsoleProfile::kDev, false, false, true) |
+                                     kRegistered,
+                                 std::array{"status"sv, "log"sv, "sys"sv, "bt"sv, "alarm"sv,
+                                            "config"sv, "rtcm"sv, "factory"sv, "freset"sv,
+                                            "power"sv, "radio"sv, "ota"sv}));
 
 } // namespace
 

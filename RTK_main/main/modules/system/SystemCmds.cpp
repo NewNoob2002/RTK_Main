@@ -145,8 +145,9 @@ int cmdSysInfo(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     const uint64_t uptimeS = uptimeMs / kMsPerSec;
 
     cli::printSection("sys");
-    // kAppVersion 长度远小于 int 上限，转换安全。
-    cli::printKv("version", "%.*s", static_cast<int>(kAppVersion.size()), kAppVersion.data());
+    const auto version = appVersion();
+    // 版本字段最多 32 B，精度转换无损。
+    cli::printKv("version", "%.*s", static_cast<int>(version.size()), version.data());
     cli::printKv("idf", "%s", esp_get_idf_version());
     cli::printKv("chip", "ESP32 rev %u.%u (%u cores)",
                  static_cast<unsigned>(chip.revision / kChipRevDivisor),

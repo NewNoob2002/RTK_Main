@@ -2,6 +2,7 @@
 // 线程：仅启动任务调用，绑定/回滚须在消费者任务启动前完成，非 ISR。
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -39,6 +40,9 @@ struct BootBuffers {
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
     std::span<web_cfg::WebFrame> webFrames{};
 #endif
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    std::span<std::byte> webOta{};
+#endif
 };
 
 /**
@@ -52,10 +56,10 @@ struct BootBuffers {
                                        const rtos::BootAllocatorOps *ops = nullptr) noexcept;
 
 /**
- * @brief 把已申请的块绑定到各消费者；成功返回 nullptr，失败返回 bind:debug/bind:spp/bind:gnss。
+ * @brief 把已申请的块绑定到各消费者；成功返回 nullptr，失败返回绑定诊断原因。
  * @param bufs: 已分配且尚未封存的存储视图
  * @retval nullptr 所有消费者绑定成功
- * @retval 非空 debug、SPP 或 GNSS 绑定失败原因
+ * @retval 非空 消费者绑定失败原因
  * @note 仅启动前单线程；失败可能已有部分绑定，须调用回滚；非 ISR。
  */
 [[nodiscard]] const char *bindBootBuffers(const BootBuffers &bufs) noexcept;

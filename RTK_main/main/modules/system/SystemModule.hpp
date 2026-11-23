@@ -42,7 +42,8 @@ public:
      */
     void startBt() noexcept;
     /**
-     * @brief 仅 kLink，非 ISR、非阻塞；发布系统和执行器状态，返回 false。
+     * @brief 发布系统和执行器状态，待确认镜像达到延时后确认
+     * @note 仅 kLink，非 ISR；一次性确认可能访问 Flash。
      * @param nowMs: 当前单调时间（毫秒）
      * @retval false 总是，无需立即再轮询
      */

@@ -285,6 +285,18 @@ foreach(features on gnss_off trace_off all_off)
     if(features STREQUAL "on" OR features STREQUAL "trace_off")
         target_compile_definitions(${boot_target} PRIVATE CONFIG_RTK_GNSS_ENABLE=1)
     endif()
+    if(features STREQUAL "on")
+        target_sources(${boot_target} PRIVATE
+            ${PROJ_ROOT}/main/modules/web/WebServer.cpp
+            ${PROJ_ROOT}/main/modules/web/WebOta.cpp)
+        target_include_directories(${boot_target} BEFORE PRIVATE web_shim)
+        target_include_directories(${boot_target} PRIVATE ${PROJ_ROOT}/components/web_proto/include)
+        target_compile_definitions(${boot_target} PRIVATE CONFIG_RTK_WIFI_CONFIG_ENABLE=1
+            CONFIG_RTK_WIFI_CAPTIVE_PORTAL=0 CONFIG_RTK_OTA_ENABLE=1
+            CONFIG_SOC_BT_CLASSIC_SUPPORTED=1)
+    else()
+        target_compile_definitions(${boot_target} PRIVATE CONFIG_RTK_OTA_ENABLE=0)
+    endif()
     if(features STREQUAL "trace_off" OR features STREQUAL "all_off")
         target_compile_definitions(${boot_target} PRIVATE FW_TRACE_ENABLED=0)
     endif()
@@ -368,10 +380,15 @@ add_test(NAME web_server_check COMMAND web_server_check)
 foreach(portal_mode on off)
     set(web_target web_module_check)
     set(portal_def 1)
+    set(ota_def 1)
+    set(web_ota_src ${PROJ_ROOT}/main/modules/web/WebOta.cpp
+        ${PROJ_ROOT}/main/modules/ota/OtaRuntime.cpp)
     set(web_dns_src ${PROJ_ROOT}/main/modules/web/WebDns.cpp)
     if(portal_mode STREQUAL "off")
         set(web_target web_module_portal_off_check)
         set(portal_def 0)
+        set(ota_def 0)
+        set(web_ota_src "")
         set(web_dns_src "")
     endif()
     add_executable(${web_target} WebModuleCheck.cpp
@@ -379,6 +396,7 @@ foreach(portal_mode on off)
         ${PROJ_ROOT}/main/board/PowerLogic.cpp
         ${PROJ_ROOT}/main/modules/power/PowerModule.cpp
         ${web_dns_src}
+        ${web_ota_src}
         ${PROJ_ROOT}/main/modules/web/WebServer.cpp
         ${PROJ_ROOT}/main/modules/web/WebModule.cpp
         ${PROJ_ROOT}/main/modules/web/WebLogic.cpp
@@ -408,6 +426,8 @@ foreach(portal_mode on off)
     target_compile_definitions(${web_target} PRIVATE
         CONFIG_RTK_WIFI_CONFIG_ENABLE=1
         CONFIG_RTK_WIFI_CAPTIVE_PORTAL=${portal_def}
+        CONFIG_RTK_OTA_ENABLE=${ota_def}
+        CONFIG_RTK_OTA_VALID_DELAY_S=30
         CONFIG_RTK_WIFI_AP_PASSWORD="12345678"
         CONFIG_RTK_WIFI_AP_CHANNEL=1
         CONFIG_RTK_WIFI_IDLE_EXIT_S=300

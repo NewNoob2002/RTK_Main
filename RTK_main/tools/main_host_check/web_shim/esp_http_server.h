@@ -31,6 +31,8 @@ typedef struct httpd_req {
     void *user_ctx;
     int sockfd;
     const char *host;
+    const char *content_length;
+    const char *content_type;
 } httpd_req_t;
 
 typedef enum {
@@ -41,6 +43,9 @@ typedef enum {
 } httpd_err_code_t;
 
 typedef esp_err_t (*httpd_err_handler_func_t)(httpd_req_t *req, httpd_err_code_t error);
+
+#define HTTPD_SOCK_ERR_TIMEOUT  (-3)
+#define ESP_ERR_HTTPD_RESP_SEND 0xb006
 
 typedef struct {
     int core_id;
@@ -95,6 +100,7 @@ esp_err_t httpd_register_err_handler(httpd_handle_t handle, httpd_err_code_t err
                                      httpd_err_handler_func_t handler_fn);
 void *httpd_get_global_user_ctx(httpd_handle_t handle);
 int httpd_req_to_sockfd(httpd_req_t *r);
+int httpd_req_recv(httpd_req_t *r, char *buf, size_t len);
 size_t httpd_req_get_hdr_value_len(httpd_req_t *r, const char *field);
 esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *r, const char *field, char *val,
                                       size_t val_size);

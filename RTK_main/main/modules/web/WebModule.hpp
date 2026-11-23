@@ -1,6 +1,6 @@
 // Wi-Fi 配置模式网页服务模块（ADR-0017 W2/W5/S2，登记为 kWifiOnly / kLink）。
 // init()/stopBoot() 由启动任务调用；poll() 仅由 kLink 任务调用，不阻塞、不分配堆，非 ISR。
-// httpd 回调线程仅通过无锁 SPSC 邮箱（rxMailbox_/ctrlMailbox_/txMailbox_）与本模块交互。
+// httpd 回调通过 SPSC 邮箱和原子标志与 kLink 交互。
 // 堆档位：禁止区；大帧槽位由 BootArena 仅在 kWifiConfig 模式下外供，成员全零初值落入 .bss。
 #pragma once
 
@@ -68,6 +68,11 @@ public:
      */
     [[nodiscard]] fw::Status bindStorage(std::span<web_cfg::WebFrame> frames) noexcept;
 
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    /** @brief 绑定 OTA 接收及槽查询工作区。 @param buffer: BootArena 外供 2 KiB，至少按 esp_app_desc_t 对齐。 @retval kOk 成功。 @retval kInvalidArg 容量或对齐错误。 @retval kInvalidState 服务已启动。 @note 仅启动任务，非 ISR。 */
+    [[nodiscard]] fw::Status bindOtaStorage(std::span<std::byte> buffer) noexcept;
+#endif
+
     /**
      * @brief 启动绑定回滚时解除外供帧缓冲引用（仅消费者尚未启动且 httpd 未存活时调用）
      * @note 仅启动任务回滚阶段调用，不阻塞，非 ISR。
@@ -92,7 +97,7 @@ public:
     /** @brief 更新关机期 Web 暂停请求。 @param paused: 是否静默。 @note 仅 kLink，非阻塞。 */
     void setPowerPaused(bool paused) noexcept;
 
-    /** @brief 查询 Web 是否已静默。 @retval true SoftAP 已关闭。 @note 仅 kLink，非阻塞。 */
+    /** @brief 查询 Web 是否已静默。 @retval true OTA 已停止且 SoftAP 已关闭。 @retval false 仍在暂停。 @note 仅 kLink，非阻塞。 */
     [[nodiscard]] bool powerPauseDone() const noexcept;
 
     /**
@@ -167,6 +172,7 @@ private:
         kExit,
         kIdle,
         kFreset,
+        kOta,
     };
 
     static_assert(fw::kAtomicUsable<uint32_t>, "Wi-Fi station and TX counters must be lock-free");
@@ -518,7 +524,7 @@ private:
 
     /**
      * @brief 向全部活跃客户端安排 `bye` 帧并启动有界重启等待
-     * @param kind: 重启类型（exit / idle / freset）
+     * @param kind: 重启类型（exit / idle / freset / ota，OTA 使用独立 HTTP 回执）
      * @param reasonText: 协议 `bye.reason` 文本
      * @param nowMs: 当前单调时间（ms）
      * @param idleActSeq: kind==kIdle 时记录排定时刻的站点活动序号，供提交前复核
@@ -548,6 +554,15 @@ private:
      */
     [[nodiscard]] bool pollPendingReboot(uint32_t nowMs) noexcept;
 
+    /**
+     * @brief 推进空闲计时，上传期间暂停，结束后重新计时
+     * @param nowMs: 当前单调时间（ms）
+     * @retval true 到期且已排定空闲重启
+     * @retval false 本轮未排定空闲重启
+     * @note 仅 kLink 调用，不阻塞。
+     */
+    [[nodiscard]] bool pollIdleExit(uint32_t nowMs) noexcept;
+
     AppContext *context_ = nullptr;
     /**
      * @brief 在 httpd 任务切换 SoftAP，保留服务器供关机失败恢复
@@ -576,8 +591,6 @@ private:
     bool dnsRetryArmed_ = false;
     int dnsSock_ = 0;
     uint32_t lastDnsRetryMs_ = 0U;
-    std::array<uint8_t, web_cfg::kDnsMaxPacketBytes> dnsRxBuf_{};
-    std::array<uint8_t, web_cfg::kDnsMaxPacketBytes> dnsTxBuf_{};
 #endif
 
     // 跨任务通信状态（零初值；帧槽位由 BootArena 仅在 kWifiConfig 模式下外供）。
@@ -589,6 +602,21 @@ private:
     web_cfg::WebFrameMailboxView txMailbox_{};
     web_cfg::WebCtrlMailbox<kCtrlMailboxCap> ctrlMailbox_{};
     bool storageBound_ = false;
+
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    /** @brief 注册两条精确 OTA 路由。 @retval ESP_OK 注册成功。 @retval 其他 IDF 错误。 @note 仅启动任务，SoftAP 发射前。 */
+    [[nodiscard]] esp_err_t registerOtaHandlers() noexcept;
+
+    /** @brief 发送运行及另一槽的 OTA 信息。 @param req: HTTP 请求。 @retval ESP_OK 已应答。 @retval 其他 HTTPD 错误。 @note 仅 httpd。 */
+    [[nodiscard]] static esp_err_t handleOtaInfo(httpd_req_t *req) noexcept;
+
+    /** @brief 同步接收并写入镜像。 @param req: HTTP 请求。 @retval ESP_OK 已成功应答。 @retval 其他 HTTPD 关闭连接。 @note 仅 httpd，可阻塞。 */
+    [[nodiscard]] static esp_err_t handleOtaPost(httpd_req_t *req) noexcept;
+
+    std::span<std::byte> otaBuffer_{};            // httpd 独占，由启动任务绑定。
+    std::atomic<bool> otaIdleReset_{false};       // 一次完整上传可能发生在相邻两轮 kLink 之间。
+    std::atomic<bool> otaRebootRequested_{false}; // httpd 在发送应答之后发布。
+#endif
 
     // httpd 线程独占会话表与外供收发帧指针。
     std::array<HttpdSession, kMaxWsClients> httpdSessions_{};

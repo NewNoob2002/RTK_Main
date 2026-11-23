@@ -34,6 +34,7 @@ enum class WebTrace : uint8_t {
     kIdleAbort = 8,    // a=sta_count, b=act_seq
     kRebootCommit = 9, // a=kind, b=reason
     kDnsErr = 10,      // a=op(1=rx,2=tx), b=errno
+    kOtaWrite = 11,    // a=bytes
 };
 
 /** kSys 电源按键与关机状态机实时追踪事件码（与 WebTrace 共享 kSys，码段从 32 起）。 */
@@ -44,7 +45,8 @@ enum class PowerTrace : uint8_t {
     kShutdownAbort = 35,     // a=reason, b=elapsed_ms
     kBtScanSubmitError = 36, // a=esp_err_t
 };
-static_assert(static_cast<uint8_t>(PowerTrace::kKeyShort) > static_cast<uint8_t>(WebTrace::kDnsErr),
+static_assert(static_cast<uint8_t>(PowerTrace::kKeyShort) >
+                  static_cast<uint8_t>(WebTrace::kOtaWrite),
               "PowerTrace codes must not overlap WebTrace");
 
 /** 系统模块命令动词。 */
