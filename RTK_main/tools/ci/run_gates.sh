@@ -89,7 +89,7 @@ if [ "$ONLY_IDF" -eq 0 ]; then
 gate G1-frozen sha256sum -c --quiet docs/frozen.sha256
 
 HOST_DIRS=(test/host test/app_fw test/services test/stream_demux test/bt_reconnect test/cli
-    test/gnss test/nvs_store test/web_proto test/settings tools/main_host_check tools/t13_host_check)
+    test/gnss test/nvs_store test/web_proto test/settings test/ota tools/main_host_check tools/t13_host_check)
 for d in "${HOST_DIRS[@]}"; do
     n=$(basename "$d")
     gate "G2-$n" host_suite "$d" "$PREFIX-$n"
@@ -118,6 +118,11 @@ if [ "$SKIP_IDF" -eq 0 ]; then
     gate G3-idf-wifi-off idf_build "$PREFIX-wifi-off" \
         -DSDKCONFIG="$ROOT/builds/$PREFIX-wifi-off/sdkconfig" \
         -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;builds/$PREFIX-wifi-off/wifi_off.defaults"
+    mkdir -p "builds/$PREFIX-ota-off"
+    echo "CONFIG_RTK_OTA_ENABLE=n" >"builds/$PREFIX-ota-off/ota_off.defaults"
+    gate G3-idf-ota-off idf_build "$PREFIX-ota-off" \
+        -DSDKCONFIG="$ROOT/builds/$PREFIX-ota-off/sdkconfig" \
+        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;builds/$PREFIX-ota-off/ota_off.defaults"
     gate G3-idf-production idf_build "$PREFIX-production" \
         -DSDKCONFIG="$ROOT/builds/$PREFIX-production/sdkconfig" \
         -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;configs/production.defaults"

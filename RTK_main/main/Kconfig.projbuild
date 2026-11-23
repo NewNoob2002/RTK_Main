@@ -129,6 +129,19 @@ menu "RTK_main"
             Allow selecting Wi-Fi configuration mode at the next software restart.
             Disable to boot in Bluetooth mode and omit the radio console command.
 
+    config RTK_OTA_ENABLE
+        bool "Enable HTTP firmware uploads (ADR-0019)"
+        depends on RTK_WIFI_CONFIG_ENABLE
+        default y
+        help
+            Enable /ota and /ota/info in Wi-Fi configuration mode.
+            Application rollback and boot confirmation remain available without HTTP uploads.
+
+    config RTK_OTA_VALID_DELAY_S
+        int "Application confirmation delay after successful boot (seconds)"
+        range 10 600
+        default 30
+
     config RTK_WIFI_AP_PASSWORD
         string "Wi-Fi SoftAP WPA2-PSK password (8-63 chars)"
         depends on RTK_WIFI_CONFIG_ENABLE

@@ -3,6 +3,12 @@
 // 堆档位：禁止区；全部帧缓冲由 BootArena 仅在 kWifiConfig 模式下外供。
 #include "modules/web/WebModule.hpp"
 
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+#include "modules/ota/OtaRuntime.hpp"
+#include "modules/web/WebOtaTransfer.hpp"
+#include "rtos/EspStatus.hpp"
+#endif
+
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -293,7 +299,7 @@ bool WebModule::pollInitialSync(uint32_t nowMs) noexcept
             const auto sys = ctx().data.systemStatus.read();
             const web_cfg::HelloSnapshot hello{
                 .board = board::current().name,
-                .fw = kAppVersion,
+                .fw = appVersion(),
                 .btName = cstrView(sys.deviceName),
                 .console = kConsoleProfileName,
                 .factoryUnlocked = slot.unlocked,
@@ -379,6 +385,9 @@ void WebModule::scheduleReboot(RebootKind kind, std::string_view reasonText, uin
     pendingReboot_ = kind;
     rebootByeReason_ = reasonText;
     rebootRequestedMs_ = nowMs;
+    if (kind == RebootKind::kOta) {
+        return; // HTTP 已发回升级结果，无需改动 WebSocket bye 协议。
+    }
     rebootDrainDoneMs_ = 0U;
     idleRebootActSeq_ = idleActSeq;
     rebootTxCommitted_ = false;
@@ -403,7 +412,11 @@ void WebModule::commitPendingExit(uint32_t nowMs) noexcept
     }
     pendingExit_ = {};
     auto *client = findClient(request.fd, request.gen);
-    if (pendingReboot_ != RebootKind::kNone || !power::s_power_requests.claimRestart()) {
+    if (pendingReboot_ != RebootKind::kNone ||
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+        ota::uploadBusy() ||
+#endif
+        !power::s_power_requests.claimRestart()) {
         if (client != nullptr) {
             sendAck(*client, request.reqId, web::ErrorCode::kBusy);
         }
@@ -421,7 +434,11 @@ bool WebModule::tryAbortIdleReboot(uint32_t nowMs) noexcept
         return false;
     }
     const uint32_t staSnap = staState_.load(std::memory_order_acquire);
-    if (web_cfg::canCommitIdleExit(staSnap, idleRebootActSeq_)) {
+    if (web_cfg::canCommitIdleExit(staSnap, idleRebootActSeq_)
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+        && !ota::uploadBusy()
+#endif
+    ) {
         return false;
     }
     traceWeb(WebTrace::kIdleAbort, web_cfg::staStateCount(staSnap), web_cfg::staStateSeq(staSnap));
@@ -441,6 +458,17 @@ bool WebModule::pollPendingReboot(uint32_t nowMs) noexcept
     if (pendingReboot_ == RebootKind::kNone) {
         return false;
     }
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    if (pendingReboot_ == RebootKind::kOta) {
+        if (nowMs - rebootRequestedMs_ >= web_ota::kRebootMs) {
+            traceWeb(WebTrace::kRebootCommit, static_cast<uint32_t>(pendingReboot_), 0U);
+            esp_restart();
+        }
+        static_cast<void>(pollPendingDeliveries());
+        static_cast<void>(pollRxFrame(nowMs));
+        return true;
+    }
+#endif
     if (pendingReboot_ == RebootKind::kIdle && !power::s_power_requests.canScheduleRestart()) {
         pendingReboot_ = RebootKind::kNone;
         for (auto &slot : clients_) {
@@ -671,6 +699,13 @@ bool WebModule::pollRxFrame(uint32_t nowMs) noexcept
         sendAck(*client, parsedReq_.id, parseErr);
         return true;
     }
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    if ((parsedReq_.type == web::RequestType::kSet || parsedReq_.type == web::RequestType::kCmd) &&
+        ota::uploadBusy()) {
+        sendAck(*client, parsedReq_.id, web::ErrorCode::kBusy);
+        return true;
+    }
+#endif
     if (inflight_.ticket.seq != 0U) {
         sendAck(*client, parsedReq_.id, web::ErrorCode::kBusy);
         return true;
@@ -732,6 +767,30 @@ void WebModule::pollStatusPush(uint32_t nowMs, bool forceNow) noexcept
     }
 }
 
+bool WebModule::pollIdleExit(uint32_t nowMs) noexcept
+{
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    if (ota::uploadBusy()) {
+        return false;
+    }
+    if (otaIdleReset_.exchange(false, std::memory_order_acq_rel)) {
+        nowMs = rtos::nowMs();
+        idleTimer_.start(nowMs, static_cast<uint32_t>(CONFIG_RTK_WIFI_IDLE_EXIT_S) * kMsPerSecond);
+    }
+#endif
+    if (pendingReboot_ != RebootKind::kNone || pendingExit_.fd >= 0) {
+        return false;
+    }
+    const uint32_t staSnap = staState_.load(std::memory_order_acquire);
+    const uint32_t actSeq = web_cfg::staStateSeq(staSnap);
+    if (!idleTimer_.tick(web_cfg::staStateCount(staSnap), actSeq, nowMs)) {
+        return false;
+    }
+    traceWeb(WebTrace::kIdleTrigger, static_cast<uint32_t>(CONFIG_RTK_WIFI_IDLE_EXIT_S), actSeq);
+    scheduleReboot(RebootKind::kIdle, "idle", nowMs, actSeq);
+    return true;
+}
+
 bool WebModule::poll(uint32_t nowMs) noexcept
 {
     if (!initialized_) {
@@ -752,6 +811,14 @@ bool WebModule::poll(uint32_t nowMs) noexcept
     if (!txMailbox_.empty() && !txWorkQueued_.load(std::memory_order_acquire)) {
         scheduleTxDrain();
     }
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    if (pendingReboot_ == RebootKind::kNone &&
+        otaRebootRequested_.exchange(false, std::memory_order_acq_rel)) {
+        // 从观察到应答完成后开始计时，同一轮检查也使用这个时刻。
+        nowMs = rtos::nowMs();
+        scheduleReboot(RebootKind::kOta, {}, nowMs);
+    }
+#endif
     if (pollPendingReboot(nowMs)) {
         return false;
     }
@@ -767,14 +834,7 @@ bool WebModule::poll(uint32_t nowMs) noexcept
     const bool rxConsumed = pollRxFrame(nowMs);
     pollStatusPush(nowMs, false);
 
-    const uint32_t staSnap = staState_.load(std::memory_order_acquire);
-    const uint32_t staCount = web_cfg::staStateCount(staSnap);
-    const uint32_t actSeq = web_cfg::staStateSeq(staSnap);
-    if (pendingReboot_ == RebootKind::kNone && pendingExit_.fd < 0 &&
-        idleTimer_.tick(staCount, actSeq, nowMs)) {
-        traceWeb(WebTrace::kIdleTrigger, static_cast<uint32_t>(CONFIG_RTK_WIFI_IDLE_EXIT_S),
-                 actSeq);
-        scheduleReboot(RebootKind::kIdle, "idle", nowMs, actSeq);
+    if (pollIdleExit(nowMs)) {
         return false;
     }
     return dnsMore || deliveryPending || syncMore || capsPending ||

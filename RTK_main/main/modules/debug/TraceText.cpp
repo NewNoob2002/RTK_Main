@@ -162,6 +162,10 @@ constexpr std::array<TraceField, 2U> kWebDnsErr = {
     {{"op", TraceValue::kDecA}, {"err", TraceValue::kDecB}}};
 #endif
 
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+constexpr std::array<TraceField, 1U> kOtaWrite = {{{"bytes", TraceValue::kDecA}}};
+#endif
+
 constexpr std::array<TraceField, 2U> kPowerKeyShort = {
     {{"count", TraceValue::kDecA}, {"held_ms", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 2U> kPowerKeyLong = {
@@ -184,7 +188,14 @@ constexpr size_t kPortalTraceCount = 1U;
 #else
 constexpr size_t kPortalTraceCount = 0U;
 #endif
-constexpr std::array<TraceText, kBaseTraceCount + kGnssTraceCount + kPortalTraceCount> kTable = {{
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+constexpr size_t kOtaTraceCount = 1U;
+#else
+constexpr size_t kOtaTraceCount = 0U;
+#endif
+constexpr size_t kTraceCount =
+    kBaseTraceCount + kGnssTraceCount + kPortalTraceCount + kOtaTraceCount;
+constexpr std::array<TraceText, kTraceCount> kTable = {{
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kOpen),
      "session {h} opened as {role} ({why})", std::span<const TraceField>(kLinkOpen)},
     {fw::TraceCat::kLink, static_cast<uint8_t>(core::LinkTrace::kClose),
@@ -345,6 +356,10 @@ constexpr std::array<TraceText, kBaseTraceCount + kGnssTraceCount + kPortalTrace
 #if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
     {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kDnsErr),
      "<web> dns socket error op={op} errno={err}", std::span<const TraceField>(kWebDnsErr)},
+#endif
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    {fw::TraceCat::kSys, static_cast<uint8_t>(WebTrace::kOtaWrite), "<ota> wrote {bytes} B",
+     std::span<const TraceField>(kOtaWrite)},
 #endif
     {fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyShort),
      "<power> key short count={count} held={held_ms} ms",

@@ -4,6 +4,10 @@
 // 实时路径（HTTP/WS 回调、TX 排空、Wi-Fi 事件）仅用 fw::trace，禁格式化日志。
 #include "modules/web/WebModule.hpp"
 
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+#include "modules/ota/OtaRuntime.hpp"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -53,7 +57,11 @@ constexpr uint32_t kMinIdleExitS = 60U;
 constexpr uint32_t kMaxIdleExitS = 3600U;
 constexpr uint8_t kMaxStations = 2U;
 constexpr uint16_t kMaxHttpSockets = 3U;
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+constexpr uint16_t kBaseUriHandlers = 5U; // /, /favicon.ico, /ws, /ota/info, /ota
+#else
 constexpr uint16_t kBaseUriHandlers = 3U; // /, /favicon.ico, /ws
+#endif
 constexpr uint16_t kUriHandlerMargin = 2U;
 constexpr uint32_t kMsPerSecond = 1000U;
 
@@ -293,6 +301,20 @@ esp_err_t configureApIpAndDhcp(esp_netif_t *netif) noexcept
 }
 
 #if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
+/**
+ * @brief 复用 kLink 独占的 Web 工作帧作为 UDP DNS 缓冲
+ * @param frame: kLink 工作帧，已由启动池绑定
+ * @retval 固定长度 DNS 写入视图
+ * @note 仅 kLink 调用，待发送的 Web 帧已经复制到信箱，不与 DNS 共用。
+ */
+[[nodiscard]] std::span<uint8_t> dnsStorage(web_cfg::WebFrame &frame) noexcept
+{
+    static_assert(web_cfg::kDnsMaxPacketBytes <= web::kMaxFrameBytes);
+    // uint8_t 在 ESP32 上是 unsigned char，可逐字节访问帧存储。
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    return {reinterpret_cast<uint8_t *>(frame.data.data()), web_cfg::kDnsMaxPacketBytes};
+}
+
 /**
  * @brief 校验 HTTP 请求的 Host 头是否为规范地址 192.168.10.12 或 192.168.10.12:80
  * @param req: HTTP 请求对象
@@ -731,43 +753,43 @@ fw::Result WebModule::startHttpd() noexcept
     if (err != ESP_OK) {
         return failInit("httpd_start", err);
     }
-    const httpd_uri_t rootUri{
-        .uri = "/",
-        .method = HTTP_GET,
-        .handler = &WebModule::handleRootGet,
-        .user_ctx = this,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr,
-        .ws_post_handshake_cb = nullptr,
+    const std::array handlers{
+        httpd_uri_t{.uri = "/",
+                    .method = HTTP_GET,
+                    .handler = &WebModule::handleRootGet,
+                    .user_ctx = this,
+                    .is_websocket = false,
+                    .handle_ws_control_frames = false,
+                    .supported_subprotocol = nullptr,
+                    .ws_post_handshake_cb = nullptr},
+        httpd_uri_t{.uri = "/favicon.ico",
+                    .method = HTTP_GET,
+                    .handler = &WebModule::handleFaviconGet,
+                    .user_ctx = this,
+                    .is_websocket = false,
+                    .handle_ws_control_frames = false,
+                    .supported_subprotocol = nullptr,
+                    .ws_post_handshake_cb = nullptr},
+        httpd_uri_t{.uri = "/ws",
+                    .method = HTTP_GET,
+                    .handler = &WebModule::handleWs,
+                    .user_ctx = this,
+                    .is_websocket = true,
+                    .handle_ws_control_frames = false,
+                    .supported_subprotocol = nullptr,
+                    .ws_post_handshake_cb = &WebModule::handleWsPostHandshake},
     };
-    const httpd_uri_t faviconUri{
-        .uri = "/favicon.ico",
-        .method = HTTP_GET,
-        .handler = &WebModule::handleFaviconGet,
-        .user_ctx = this,
-        .is_websocket = false,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr,
-        .ws_post_handshake_cb = nullptr,
-    };
-    const httpd_uri_t wsUri{
-        .uri = "/ws",
-        .method = HTTP_GET,
-        .handler = &WebModule::handleWs,
-        .user_ctx = this,
-        .is_websocket = true,
-        .handle_ws_control_frames = false,
-        .supported_subprotocol = nullptr,
-        .ws_post_handshake_cb = &WebModule::handleWsPostHandshake,
-    };
-    err = httpd_register_uri_handler(httpd_, &rootUri);
-    if (err == ESP_OK) {
-        err = httpd_register_uri_handler(httpd_, &faviconUri);
+    for (const auto &handler : handlers) {
+        err = httpd_register_uri_handler(httpd_, &handler);
+        if (err != ESP_OK) {
+            return failInit("URI register", err);
+        }
     }
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
     if (err == ESP_OK) {
-        err = httpd_register_uri_handler(httpd_, &wsUri);
+        err = registerOtaHandlers();
     }
+#endif
 #if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
     if (err == ESP_OK) {
         err = registerCaptivePortalHandlers(httpd_, this, &WebModule::handleCaptiveRedirect,
@@ -846,12 +868,14 @@ bool WebModule::pollDns(uint32_t nowMs) noexcept
         }
         return false;
     }
+    const auto dnsRx = dnsStorage(*klinkRxFrame_);
+    const auto dnsTx = dnsStorage(*klinkEncodeFrame_);
     size_t handled = 0U;
     while (handled < kMaxDnsPacketsPerPoll) {
         sockaddr_in peer{};
         iovec iov{};
-        iov.iov_base = dnsRxBuf_.data();
-        iov.iov_len = dnsRxBuf_.size();
+        iov.iov_base = dnsRx.data();
+        iov.iov_len = dnsRx.size();
         msghdr msg{};
         msg.msg_name = &peer;
         msg.msg_namelen = sizeof(peer);
@@ -873,9 +897,9 @@ bool WebModule::pollDns(uint32_t nowMs) noexcept
         if (((msg.msg_flags & MSG_TRUNC) != 0) || (rxLen == 0)) {
             continue;
         }
-        // rxLen > 0 且 <= dnsRxBuf_.size()（512），转 size_t 无损。
-        const auto req = std::span<const uint8_t>{dnsRxBuf_.data(), static_cast<size_t>(rxLen)};
-        const size_t replyLen = web_cfg::buildDnsReply(req, kApIpv4, dnsTxBuf_);
+        // rxLen > 0 且 <= dnsRx.size()（512），转 size_t 无损。
+        const auto req = std::span<const uint8_t>{dnsRx.data(), static_cast<size_t>(rxLen)};
+        const size_t replyLen = web_cfg::buildDnsReply(req, kApIpv4, dnsTx);
         if (replyLen == 0U) {
             continue;
         }
@@ -883,7 +907,7 @@ bool WebModule::pollDns(uint32_t nowMs) noexcept
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         const auto *peerAddr = reinterpret_cast<const sockaddr *>(&peer);
         const ssize_t txLen =
-            lwip_sendto(dnsSock_, dnsTxBuf_.data(), replyLen, 0, peerAddr, msg.msg_namelen);
+            lwip_sendto(dnsSock_, dnsTx.data(), replyLen, 0, peerAddr, msg.msg_namelen);
         if (txLen < 0) {
             traceWeb(WebTrace::kDnsErr, kDnsErrOpTx, static_cast<uint32_t>(errno));
         }
@@ -977,6 +1001,9 @@ void WebModule::unbindStorage() noexcept
     httpdTxFrame_ = nullptr;
     klinkRxFrame_ = nullptr;
     klinkEncodeFrame_ = nullptr;
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    otaBuffer_ = {};
+#endif
     storageBound_ = false;
 }
 
@@ -992,6 +1019,10 @@ void WebModule::resetRuntimeState() noexcept
     powerPauseRequested_.store(false, std::memory_order_relaxed);
     powerPaused_.store(false, std::memory_order_relaxed);
     powerModeQueued_.store(false, std::memory_order_relaxed);
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    otaIdleReset_.store(false, std::memory_order_relaxed);
+    otaRebootRequested_.store(false, std::memory_order_relaxed);
+#endif
     powerModeAttempted_ = false;
     txEnqueuedSeq_.store(0U, std::memory_order_relaxed);
     txCompletedSeq_.store(0U, std::memory_order_relaxed);
@@ -1047,6 +1078,11 @@ fw::Result WebModule::init() noexcept
     if ((context_ == nullptr) || !storageBound_ || (ctx().radioMode != RadioMode::kWifiConfig)) {
         return fw::Result::kInvalidState;
     }
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    if (otaBuffer_.empty()) {
+        return fw::Result::kInvalidState;
+    }
+#endif
     const auto sys = ctx().data.systemStatus.read();
     const std::string_view ssid{sys.deviceName.data(), std::strlen(sys.deviceName.data())};
     if (ssid.empty()) {
@@ -1086,6 +1122,11 @@ void WebModule::setPowerPaused(bool paused) noexcept
 
 bool WebModule::powerPauseDone() const noexcept
 {
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    if (ota::uploadBusy()) {
+        return false;
+    }
+#endif
     return powerPaused_.load(std::memory_order_acquire) &&
            !powerModeQueued_.load(std::memory_order_acquire);
 }

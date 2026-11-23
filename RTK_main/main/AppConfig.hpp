@@ -1,5 +1,5 @@
 // 应用全局配置常量、模块/执行器编号与策略查询（合并原 app_version.hpp 与 app_ids.hpp 全局部分）。
-// 只含常量、枚举与 constexpr 策略函数，无运行期状态；被各模块与组合根包含，线程/ISR 安全。
+// 常量与策略供各模块和组合根使用。固件版本读取只读镜像描述符，见 appVersion()。
 #pragma once
 
 #include <cstddef>
@@ -16,7 +16,16 @@
 
 namespace app {
 
-inline constexpr std::string_view kAppVersion = "6.1.0-dev";
+#if defined(ESP_PLATFORM)
+/** @brief 读取运行镜像的固件版本。 @retval 静态描述符中的版本视图。 @note 任意任务调用，非 ISR。 */
+[[nodiscard]] std::string_view appVersion() noexcept;
+#else
+/** @brief 提供无 IDF 描述符的主机版本替身。 @retval 固定的测试版本。 @note 纯函数。 */
+[[nodiscard]] constexpr std::string_view appVersion() noexcept
+{
+    return "host-test";
+}
+#endif
 
 inline constexpr uint32_t kCommandTimeoutMs = 1000;
 inline constexpr uint32_t kTickPeriodMs = 100;

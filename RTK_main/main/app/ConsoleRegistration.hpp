@@ -53,6 +53,7 @@ using namespace std::string_view_literals;
         repl ? "freset"sv : kDisabled,
         dev ? "power"sv : kDisabled,
         dev && wifiConfigEnabled ? "radio"sv : kDisabled,
+        dev ? "ota"sv : kDisabled,
     };
 }
 
@@ -81,6 +82,7 @@ using namespace std::string_view_literals;
         repl ? "factory"sv : kDisabled,
         dev ? "power"sv : kDisabled,
         dev && wifiConfigEnabled ? "radio"sv : kDisabled,
+        dev ? "ota"sv : kDisabled,
     };
 }
 

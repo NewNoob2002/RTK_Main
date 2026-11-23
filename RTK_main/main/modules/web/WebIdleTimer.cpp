@@ -8,7 +8,7 @@ namespace app::web_cfg {
  * @brief 启动空闲回落计时（从当前时刻起无终端连接满 timeoutMs 后到期）
  * @param nowMs: 当前单调时钟（ms）
  * @param timeoutMs: 空闲超时时长（ms）；0 表示不触发超时
- * @note 仅 kLink 任务在模块启动时调用，不阻塞。
+ * @note 启动任务或 kLink 独占调用；重新开始时清除旧空闲时长，不阻塞。
  */
 void WebIdleTimer::start(uint32_t nowMs, uint32_t timeoutMs) noexcept
 {

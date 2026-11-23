@@ -1,3 +1,4 @@
 # 自有目标文件堆符号白名单（G7b 门禁，docs/CODING-STYLE.md）。
 # 格式：<仓库相对源文件路径> # <档位与理由>
 components/rtos/BootAlloc.cpp # 第2档（启动期一次性内部8-bit堆分配与回滚，BootArena::seal()后禁止再分配）
+main/modules/web/WebOta.cpp # 第3档（ESP-IDF esp_ota_begin 间接分配单个 OTA 会话，失败报 flash；end/abort 回收，自有代码不分配）

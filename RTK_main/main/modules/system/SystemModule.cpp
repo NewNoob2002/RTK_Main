@@ -8,6 +8,9 @@
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "SppServer.h"
+#if defined(ESP_PLATFORM)
+#include "modules/ota/OtaRuntime.hpp"
+#endif
 
 namespace app {
 namespace {
@@ -105,6 +108,9 @@ void SystemModule::prepare() noexcept
 
 bool SystemModule::poll(uint32_t /*nowMs*/) noexcept
 {
+#if defined(ESP_PLATFORM)
+    ota::pollConfirmation();
+#endif
     /* 先更新系统状态，再发布执行器统计，保持原主题写入顺序。 */
     status_.linkRunning = (ctx().linkExecutor != nullptr) && ctx().linkExecutor->running() &&
                           ctx().linkExecutor->moduleOk(id(ModuleKind::kBtLink));

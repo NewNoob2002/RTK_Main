@@ -798,7 +798,7 @@ fw::Result BtLinkModule::init() noexcept
     deviceService.info().product.assign(board::productName(ctx().boardProfile));
     deviceService.info().sn.assign(system.sn.data());
     last_config_rev_ = ctx().data.configRev.load(std::memory_order_acquire);
-    deviceService.info().fwVer.assign(kAppVersion);
+    deviceService.info().fwVer.assign(appVersion());
     deviceService.setSatTrackSurveyHook(&core::services::PhoneCompatService::handleSurveySatTrack,
                                         &phone_compat_);
     auto &configService = config_service_.emplace();
