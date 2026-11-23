@@ -3,6 +3,7 @@
 #include "modules/bt_link/BtLinkModule.hpp"
 #include "modules/bt_link/BtLinkModulePrivate.hpp"
 #include "AppContext.hpp"
+#include "app/PowerRequests.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -195,15 +196,46 @@ void BtLinkModule::sessionRecord(core::SessionHandle handle, const core::BtAddr 
             handle & kHandleDisplayMask);
 }
 
+void BtLinkModule::initLinkManager() noexcept
+{
+    const auto link = ctx().data.linkStatus.read();
+    link_manager_.init(link.policy, std::span{link.whitelist}.first(link.whitelistCount));
+    core::bindPairWindow(link_manager_, &pair_window_);
+    pair_window_.bindWhitelistAdmission(&admitWhitelistChange, this);
+}
+
+bool BtLinkModule::admitWhitelistChange(void *context) noexcept
+{
+    if (!power::s_power_requests.beginSetting()) {
+        return false;
+    }
+    // 由本模块绑定 this，kLink 在同轮交给 Storage 后结束登记。
+    auto &self = *static_cast<BtLinkModule *>(context);
+    ++self.whitelistAdmissions_;
+    return true;
+}
+
 void BtLinkModule::collectWhitelistDirty() noexcept
 {
     if (linkService().consumeWhitelistDirty()) {
         ctx().storage.markWhitelistDirty(link_manager_.whitelist(), rtos::nowMs());
     }
+    while (whitelistAdmissions_ != 0U) {
+        --whitelistAdmissions_;
+        power::s_power_requests.endSetting();
+    }
 }
 
 void BtLinkModule::handleOpen(const spp_server_evt_t &evt, uint32_t nowMs) noexcept
 {
+    if (powerPaused_) {
+        const auto err = spp_server_disconnect(evt.handle);
+        if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+            FW_LOGW(fw::TraceCat::kLink, "power BT late open disconnect failed: %s",
+                    esp_err_to_name(err));
+        }
+        return;
+    }
     core::BtAddr addr{};
     for (size_t i = 0; i < core::kAddrLen; ++i) {
         addr.bytes[i] = evt.addr[i];

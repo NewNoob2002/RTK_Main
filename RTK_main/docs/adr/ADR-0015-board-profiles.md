@@ -103,9 +103,9 @@ P2 无保持脚。GPIO4（`TELL_MCU_KEY`）经 Q16 模拟按键按下，电源�
 | 18 | PWR_KEY_DETEC | 输入 | 按键（V2.7 `key_pin`，INPUT_PULLUP），B2 |
 | 34 | BAT_V_ADC | ADC1 输入 | 电池电压（V2.7 ×2 分压），后续 |
 | 27 | VBUS_DET_ESP32 | 输入 | USB 供电检测，后续 |
-| 39 | USB_Detec | 输入 | USB 检测，后续 |
-| 2 | PWR_CHG | 输入 | 充电状态（V2.7 INPUT_PULLUP），后续 |
-| 21 / 22 | I2C SDA / SCL | I2C | SGM41513 充电芯片 0x1A、SH1106 OLED 0x3C，后续 |
+| 39 | USB_Detec | 输入 | SGM41513 nPG（v1.41 实板测得插拔均为 0 V 且固件读高，不可用，B2 禁用并改走 I2C 0x1A） |
+| 2 | PWR_CHG | 输入 | 充电状态 STAT（低有效，R237 10k 上拉），B2（I2C 故障退化） |
+| 21 / 22 | I2C SDA / SCL | I2C | SGM41513 充电芯片 0x1A（B2：USB 在位与充电参数）、SH1106 OLED 0x3C（后续） |
 | 32 / 33 | ESP32_UART_RX2 / TX2 | UART | EC600U/Air600 4G 模块，后续 |
 | 26 | 4G_PWREN | 输出 | 4G 使能（B1 置低） |
 | 13 / 15 / 23 | BEEP / MOTOR / LED_POWER_ON | 输出 | B1 置安全电平；驱动后续 |

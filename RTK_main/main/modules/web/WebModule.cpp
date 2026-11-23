@@ -14,6 +14,7 @@
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
+#include "app/PowerRequests.hpp"
 #include "app/ConsoleProfile.hpp"
 #include "app/SettingsBackend.hpp"
 #include "def/GnssSubDef.hpp"
@@ -371,7 +372,8 @@ void WebModule::broadcastConfig() noexcept
 void WebModule::scheduleReboot(RebootKind kind, std::string_view reasonText, uint32_t nowMs,
                                uint32_t idleActSeq) noexcept
 {
-    if (pendingReboot_ != RebootKind::kNone) {
+    if (pendingReboot_ != RebootKind::kNone ||
+        (kind == RebootKind::kIdle && !power::s_power_requests.canScheduleRestart())) {
         return;
     }
     pendingReboot_ = kind;
@@ -391,6 +393,26 @@ void WebModule::scheduleReboot(RebootKind kind, std::string_view reasonText, uin
         rebootWaitTxSeq_ = txEnqueuedSeq_.load(std::memory_order_acquire);
         rebootTxCommitted_ = true;
     }
+}
+
+void WebModule::commitPendingExit(uint32_t nowMs) noexcept
+{
+    const auto request = pendingExit_;
+    if (request.fd < 0) {
+        return;
+    }
+    pendingExit_ = {};
+    auto *client = findClient(request.fd, request.gen);
+    if (pendingReboot_ != RebootKind::kNone || !power::s_power_requests.claimRestart()) {
+        if (client != nullptr) {
+            sendAck(*client, request.reqId, web::ErrorCode::kBusy);
+        }
+        return;
+    }
+    if (client != nullptr) {
+        sendAck(*client, request.reqId, web::ErrorCode::kNone);
+    }
+    scheduleReboot(RebootKind::kExit, "exit", nowMs);
 }
 
 bool WebModule::tryAbortIdleReboot(uint32_t nowMs) noexcept
@@ -419,6 +441,13 @@ bool WebModule::pollPendingReboot(uint32_t nowMs) noexcept
     if (pendingReboot_ == RebootKind::kNone) {
         return false;
     }
+    if (pendingReboot_ == RebootKind::kIdle && !power::s_power_requests.canScheduleRestart()) {
+        pendingReboot_ = RebootKind::kNone;
+        for (auto &slot : clients_) {
+            slot.pendingBye = false;
+        }
+        return false;
+    }
     if (tryAbortIdleReboot(nowMs)) {
         return false;
     }
@@ -443,7 +472,8 @@ bool WebModule::pollPendingReboot(uint32_t nowMs) noexcept
     if (!graceDone && (elapsed < kRebootMaxWaitMs)) {
         return true;
     }
-    if (tryAbortIdleReboot(nowMs)) {
+    if (tryAbortIdleReboot(nowMs) ||
+        (pendingReboot_ == RebootKind::kIdle && !power::s_power_requests.claimRestart())) {
         return false;
     }
     if (pendingReboot_ == RebootKind::kFreset) {
@@ -477,6 +507,10 @@ void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32
         return;
     }
     if (req.name == "exit") {
+        if (pendingExit_.fd >= 0 || !power::s_power_requests.canScheduleRestart()) {
+            sendAck(client, req.id, web::ErrorCode::kBusy);
+            return;
+        }
 #if RTK_GNSS_ENABLED
         if (ctx().data.ggaGatePersist.load(std::memory_order_acquire) !=
             data::GgaGatePersist::kClean) {
@@ -486,8 +520,7 @@ void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32
             return;
         }
 #endif
-        sendAck(client, req.id, web::ErrorCode::kNone);
-        scheduleReboot(RebootKind::kExit, "exit", nowMs);
+        pendingExit_ = {.fd = client.fd, .gen = client.gen, .reqId = req.id};
         return;
     }
     if (req.name == "freset") {
@@ -495,7 +528,7 @@ void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32
             sendAck(client, req.id, web::ErrorCode::kLocked);
             return;
         }
-        postMaintenance(client, req.id, settings::Owner::kStorage, StorageModule::kEraseUser,
+        postMaintenance(client, req.id, settings::Owner::kStorage, StorageModule::kEraseUserForWeb,
                         RequestKind::kFreset, nowMs);
         return;
     }
@@ -544,6 +577,14 @@ void WebModule::pollInflight(uint32_t nowMs) noexcept
     if (request.ticket.seq == 0U) {
         return;
     }
+    if (request.kind == RequestKind::kExit && !power::s_power_requests.canScheduleRestart()) {
+        ctx().settings.cancel(request.ticket);
+        inflight_ = {};
+        if (auto *client = findClient(request.fd, request.gen); client != nullptr) {
+            sendAck(*client, request.reqId, web::ErrorCode::kBusy);
+        }
+        return;
+    }
     fw::CommandResult result{};
     const auto state = ctx().settings.poll(request.ticket, result);
     auto error = web::fromResult(result.status);
@@ -564,15 +605,17 @@ void WebModule::pollInflight(uint32_t nowMs) noexcept
         error = web::ErrorCode::kFailed;
     }
     inflight_ = {};
+    if (request.kind == RequestKind::kExit && error == web::ErrorCode::kNone) {
+        pendingExit_ = {.fd = request.fd, .gen = request.gen, .reqId = request.reqId};
+        return;
+    }
     if (auto *client = findClient(request.fd, request.gen); client != nullptr) {
         sendAck(*client, request.reqId, error);
     }
     if (error != web::ErrorCode::kNone) {
         return;
     }
-    if (request.kind == RequestKind::kExit) {
-        scheduleReboot(RebootKind::kExit, "exit", nowMs);
-    } else if (request.kind == RequestKind::kFreset) {
+    if (request.kind == RequestKind::kFreset) {
         scheduleReboot(RebootKind::kFreset, "freset", nowMs);
     } else if (request.kind == RequestKind::kSet &&
                request.ticket.owner == settings::Owner::kStorage) {
@@ -694,6 +737,12 @@ bool WebModule::poll(uint32_t nowMs) noexcept
     if (!initialized_) {
         return false;
     }
+    commitPendingExit(nowMs);
+    schedulePowerMode();
+    if (powerPauseRequested_.load(std::memory_order_acquire) ||
+        powerPaused_.load(std::memory_order_acquire)) {
+        return false;
+    }
 #if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
     const bool dnsMore = pollDns(nowMs);
 #else
@@ -721,7 +770,8 @@ bool WebModule::poll(uint32_t nowMs) noexcept
     const uint32_t staSnap = staState_.load(std::memory_order_acquire);
     const uint32_t staCount = web_cfg::staStateCount(staSnap);
     const uint32_t actSeq = web_cfg::staStateSeq(staSnap);
-    if ((pendingReboot_ == RebootKind::kNone) && idleTimer_.tick(staCount, actSeq, nowMs)) {
+    if (pendingReboot_ == RebootKind::kNone && pendingExit_.fd < 0 &&
+        idleTimer_.tick(staCount, actSeq, nowMs)) {
         traceWeb(WebTrace::kIdleTrigger, static_cast<uint32_t>(CONFIG_RTK_WIFI_IDLE_EXIT_S),
                  actSeq);
         scheduleReboot(RebootKind::kIdle, "idle", nowMs, actSeq);

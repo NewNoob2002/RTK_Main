@@ -119,6 +119,23 @@ public:
     /** @brief 安排延迟 >=200 ms 的恢复出厂或重启（0x1E）。 @param factoryReset: 是否擦除用户 NVS。 @param reboot: 是否重启。 @param nowMs: 当前时钟。 @retval true 已安排。 @note 仅 kLink。 */
     [[nodiscard]] bool schedulePhoneReset(bool factoryReset, bool reboot, uint32_t nowMs) noexcept;
 
+    /** @brief 暂停或恢复蓝牙接入并断开已存在的连接。 @param paused: 是否静默。 @note 仅 kLink，非 ISR。 */
+    void setPowerPaused(bool paused) noexcept;
+
+    /** @brief 查询已登记连接是否都已关闭。 @retval true 已无 SPP 会话。 @note 仅 kLink，非 ISR。 */
+    [[nodiscard]] bool powerPauseDone() const noexcept;
+
+    /**
+     * @brief 查询是否仍有在途的手机设置异步凭据（供关机 kSave 阶段等待完成）
+     * @retval true 有在途设置凭据
+     * @retval false 无在途设置凭据
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool hasPendingSettings() const noexcept
+    {
+        return hasPendingTicket(false);
+    }
+
 private:
     enum class PendingReset : uint8_t {
         kNone = 0,
@@ -287,6 +304,12 @@ private:
      * @note 仅启动期或 kLink 串行路径，非 ISR；不分配堆。
      */
     void collectWhitelistDirty() noexcept;
+
+    /** @brief 恢复链路策略和白名单，绑定配对与写入准入。 @note 仅启动，非 ISR。 */
+    void initLinkManager() noexcept;
+
+    /** @brief 登记协议白名单写入至交给 Storage。 @param context: 当前模块实例。 @retval true 已获准。 @note 仅 kLink。 */
+    [[nodiscard]] static bool admitWhitelistChange(void *context) noexcept;
     /**
      * @brief 处理一条 SPP 事件（按类型分发）
      * @param evt: SPP 事件
@@ -527,6 +550,7 @@ private:
     DemuxStats retired_demux_{};
     core::LinkManager link_manager_{};
     core::PairWindow pair_window_{};
+    unsigned whitelistAdmissions_ = 0U;
     portMUX_TYPE pair_mux_{};
 
     /** @brief 处理控制台开窗请求。 @param cmd: 窗口参数。 @param result: 操作结果。 @note 仅 kLink。 */
@@ -558,6 +582,14 @@ private:
     mutable settings::Ticket ppp_ticket_{};
     mutable settings::Ticket sat_ticket_{};
     mutable settings::Ticket snpn_ticket_{};
+    bool powerPaused_ = false;
+    /** @brief 按请求投递或轮询扫描模式，失败时限频重试。 @param nowMs: 单调时钟。 @note 仅 kLink。 */
+    void applyPowerScanMode(uint32_t nowMs) noexcept;
+
+    bool scanSubmittedPaused_ = false;
+    bool scanPending_ = false;
+    bool scanFailed_ = false;
+    uint32_t scanFailedMs_ = 0U;
     PendingReset pending_reset_ = PendingReset::kNone;
     uint32_t pending_reset_at_ms_ = 0U;
     uint32_t last_config_rev_ = 0U;

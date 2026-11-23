@@ -46,7 +46,8 @@ AppContext &self() noexcept
  */
 [[nodiscard]] bool allocWebBootFrames(BootBuffers &out) noexcept
 {
-    if (self().radioMode != RadioMode::kWifiConfig) {
+    if ((self().bootMode != board::BootMode::kNormal) ||
+        (self().radioMode != RadioMode::kWifiConfig)) {
         return true;
     }
     return fw::isOk(self().bootArena.allocArray<web_cfg::WebFrame>(
@@ -56,7 +57,7 @@ AppContext &self() noexcept
 
 } // namespace
 
-// NOLINTBEGIN(readability-function-size): ADR-0013 §2.4，保留线性流程或平铺分派，理由见契约。
+// NOLINTBEGIN(readability-function-size, readability-function-cognitive-complexity): ADR-0013 §2.4，按固定 owner 顺序线性分配。
 bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) noexcept
 {
     if (!fw::isOk(self().bootArena.open(ops))) {
@@ -74,7 +75,8 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
 
     constexpr size_t kStackAlign = 16U;
     constexpr size_t kBufAlign = 4U;
-    const bool bluetooth = self().radioMode == RadioMode::kBluetooth;
+    const bool normal = self().bootMode == board::BootMode::kNormal;
+    const bool bluetooth = normal && (self().radioMode == RadioMode::kBluetooth);
     const auto allocSpp = [bluetooth](const char *tag, size_t size, std::span<uint8_t> &buf) {
         return !bluetooth ||
                fw::isOk(self().bootArena.allocArray<uint8_t>(tag, size, buf, kBufAlign));
@@ -86,9 +88,9 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
         return failAlloc("task.link");
     }
 #if RTK_GNSS_ENABLED
-    if (!fw::isOk(self().bootArena.allocArray<StackType_t>(
-            "task.io", AppContext::kIoStackBytes / sizeof(StackType_t), out.ioStack,
-            kStackAlign))) {
+    if (normal && !fw::isOk(self().bootArena.allocArray<StackType_t>(
+                      "task.io", AppContext::kIoStackBytes / sizeof(StackType_t), out.ioStack,
+                      kStackAlign))) {
         return failAlloc("task.io");
     }
 #endif
@@ -121,12 +123,12 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
     }
 #endif
 #if RTK_GNSS_ENABLED
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("gnss.demux", GnssModule::kDemuxBufBytes,
-                                                       out.gnssDemux, kBufAlign))) {
+    if (normal && !fw::isOk(self().bootArena.allocArray<uint8_t>(
+                      "gnss.demux", GnssModule::kDemuxBufBytes, out.gnssDemux, kBufAlign))) {
         return failAlloc("gnss.demux");
     }
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("rtcm.pipe", kRtcmPipeBytes, out.rtcmPipe,
-                                                       kBufAlign))) {
+    if (normal && !fw::isOk(self().bootArena.allocArray<uint8_t>("rtcm.pipe", kRtcmPipeBytes,
+                                                                 out.rtcmPipe, kBufAlign))) {
         return failAlloc("rtcm.pipe");
     }
 #endif
@@ -143,12 +145,12 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
         return failAlloc("spp.tx.merge");
     }
 #if RTK_GNSS_ENABLED
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("gnss.app_ring", kGnssAppRingBytes,
-                                                       out.gnssAppRing, kBufAlign))) {
+    if (normal && !fw::isOk(self().bootArena.allocArray<uint8_t>("gnss.app_ring", kGnssAppRingBytes,
+                                                                 out.gnssAppRing, kBufAlign))) {
         return failAlloc("gnss.app_ring");
     }
-    if (!fw::isOk(self().bootArena.allocArray<uint8_t>("gnss.latest", data::kGnssLatestTotalBytes,
-                                                       out.gnssLatest, kBufAlign))) {
+    if (normal && !fw::isOk(self().bootArena.allocArray<uint8_t>(
+                      "gnss.latest", data::kGnssLatestTotalBytes, out.gnssLatest, kBufAlign))) {
         return failAlloc("gnss.latest");
     }
 #endif
@@ -159,7 +161,7 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
 #endif
     return true;
 }
-// NOLINTEND(readability-function-size)
+// NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
 
 const char *bindBootBuffers(const BootBuffers &bufs) noexcept
 {
@@ -180,18 +182,20 @@ const char *bindBootBuffers(const BootBuffers &bufs) noexcept
         .worker_stack = bufs.sppWorkerStack.data(),
         .worker_stack_bytes = bufs.sppWorkerStack.size_bytes(),
     };
-    if (self().radioMode == RadioMode::kBluetooth && spp_server_bind_storage(&storage) != ESP_OK) {
+    const bool normal = self().bootMode == board::BootMode::kNormal;
+    if (normal && (self().radioMode == RadioMode::kBluetooth) &&
+        (spp_server_bind_storage(&storage) != ESP_OK)) {
         return boot_reason::kBindSpp;
     }
 #if RTK_GNSS_ENABLED
-    if (!fw::isOk(self().data.initGnssBuffers(bufs.gnssAppRing, bufs.gnssLatest)) ||
-        !fw::isOk(self().rtcmPipe.bindStorage(bufs.rtcmPipe)) ||
-        !fw::isOk(self().gnss.bindStorage(bufs.gnssDemux))) {
+    if (normal && (!fw::isOk(self().data.initGnssBuffers(bufs.gnssAppRing, bufs.gnssLatest)) ||
+                   !fw::isOk(self().rtcmPipe.bindStorage(bufs.rtcmPipe)) ||
+                   !fw::isOk(self().gnss.bindStorage(bufs.gnssDemux)))) {
         return boot_reason::kBindGnss;
     }
 #endif
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    if ((self().radioMode == RadioMode::kWifiConfig) &&
+    if (normal && (self().radioMode == RadioMode::kWifiConfig) &&
         !fw::isOk(self().web.bindStorage(bufs.webFrames))) {
         return boot_reason::kBindWeb;
     }
@@ -201,8 +205,9 @@ const char *bindBootBuffers(const BootBuffers &bufs) noexcept
 
 void rollbackBootBindings(BootBuffers &bufs, const char *reason) noexcept
 {
+    const bool normal = self().bootMode == board::BootMode::kNormal;
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    if (self().radioMode == RadioMode::kWifiConfig) {
+    if (normal && (self().radioMode == RadioMode::kWifiConfig)) {
         self().web.unbindStorage();
     }
 #endif
@@ -210,12 +215,15 @@ void rollbackBootBindings(BootBuffers &bufs, const char *reason) noexcept
     self().debug.unbindStorage();
 #endif
 #if RTK_GNSS_ENABLED
-    self().gnss.unbindStorage();
-    self().rtcmPipe.unbindStorage();
-    self().data.unbindGnssBuffers();
+    if (normal) {
+        self().gnss.unbindStorage();
+        self().rtcmPipe.unbindStorage();
+        self().data.unbindGnssBuffers();
+    }
 #endif
-    const esp_err_t unbound =
-        self().radioMode == RadioMode::kBluetooth ? spp_server_unbind_storage() : ESP_OK;
+    const esp_err_t unbound = (normal && (self().radioMode == RadioMode::kBluetooth))
+                                  ? spp_server_unbind_storage()
+                                  : ESP_OK;
     bufs = {};
     if (unbound != ESP_OK) {
         // 若约束被破坏、C worker 已存在，保留全部块，绝不释放它可能使用的栈/缓冲。

@@ -29,6 +29,7 @@ typedef enum {
     FAKE_GATE_INIT = 0,
     FAKE_GATE_START,
     FAKE_GATE_DISCONNECT,
+    FAKE_GATE_SCAN,
     FAKE_GATE_COUNT,
 } fake_gate_t;
 

@@ -18,6 +18,9 @@ struct StoreGroup;
 /** 存储模块（kLink 执行器）：SN 与白名单的 NVS 持久化与重试。 */
 class StorageModule final {
 public:
+    // 关门后排在已受理的设置命令之后，供电源模块确认 kLink 队列进度。
+    static constexpr uint8_t kSaveFence = 253U;
+    static constexpr uint8_t kEraseUserForWeb = 252U;
     static constexpr uint8_t kEraseUser = 1U;
     static constexpr uint8_t kEraseFactory = 2U;
     constexpr StorageModule() noexcept = default;
@@ -75,6 +78,33 @@ public:
      * @note 仅 kLink；跳过去抖同步调用 poll，可等待 NVS，非 ISR。
      */
     [[nodiscard]] esp_err_t flushWhitelist(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 查询是否仍有待落盘的白名单或手机去抖 Blob
+     * @retval true 至少一项延迟写尚未完成
+     * @retval false 全部延迟写已落盘
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool hasPendingWrites() const noexcept;
+
+    /**
+     * @brief 让现有待写项在下次正常轮询立即尝试一次
+     * @note 仅 kLink 在关机保存阶段进入时调用，非 ISR。
+     */
+    void expeditePendingWrites() noexcept;
+
+    /** @brief 恢复正常去抖，保留已建立的失败退避。 @note 仅 kLink，非 ISR。 */
+    void finishPowerSave() noexcept
+    {
+        powerSave_ = false;
+    }
+
+    /**
+     * @brief 格式化尚未落盘的项名列表供关机超时告警日志输出
+     * @param[out] out: 输出字符缓冲（以 NUL 结尾）
+     * @note 仅 kLink 调用，不阻塞、不分配堆，非 ISR。
+     */
+    void formatPendingSummary(std::span<char> out) const noexcept;
 
     /**
      * @brief 逐个加载键表（blob 与标量分派给上面的单键函数）
@@ -331,6 +361,7 @@ private:
     AppContext *context_ = nullptr;
     bool initialized_ = false;
     bool pending_ = false;
+    bool powerSave_ = false;
     bool attempted_ = false;
     uint32_t changed_ms_ = 0;
     uint32_t attempt_ms_ = 0;

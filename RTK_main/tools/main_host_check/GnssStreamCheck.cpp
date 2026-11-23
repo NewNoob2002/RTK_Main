@@ -575,6 +575,13 @@ void spp_server_set_rx_wake_hook(spp_server_rx_wake_fn, void *)
 
 void spp_server_set_pair_query(spp_server_pair_query_t) {}
 
+/** @brief 模拟 GAP 投递结果。 @param paused: 目标扫描模式。 @retval SDK 投递结果。 */
+extern "C" esp_err_t spp_server_scan_pause(bool paused)
+{
+    static_cast<void>(paused);
+    return ESP_OK;
+}
+
 esp_err_t spp_server_disconnect(uint32_t)
 {
     return ESP_OK;

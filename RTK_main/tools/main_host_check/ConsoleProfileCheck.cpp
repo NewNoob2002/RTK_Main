@@ -16,16 +16,16 @@ using app::console_registration::isSafe;
 using app::console_registration::verbGroupNames;
 using namespace std::string_view_literals;
 
-constexpr std::array kDevCommands{"status"sv, "log"sv,     "sys"sv,    "bt"sv,
-                                  "alarm"sv,  "config"sv,  "rtcm"sv,   "gnss"sv,
-                                  "debug"sv,  "factory"sv, "freset"sv, "radio"sv};
+constexpr std::array kDevCommands{"status"sv, "log"sv,   "sys"sv,  "bt"sv,    "alarm"sv,
+                                  "config"sv, "rtcm"sv,  "gnss"sv, "debug"sv, "factory"sv,
+                                  "freset"sv, "power"sv, "radio"sv};
 constexpr std::array kProdCommands{"status"sv, "log"sv,     "sys"sv,
                                    "config"sv, "factory"sv, "freset"sv};
-constexpr std::array kDevGroups{"status"sv, "log"sv, "sys"sv,     "rtcm"sv, "gnss"sv,
-                                "debug"sv,  "bt"sv,  "factory"sv, "radio"sv};
+constexpr std::array kDevGroups{"status"sv, "log"sv, "sys"sv,     "rtcm"sv,  "gnss"sv,
+                                "debug"sv,  "bt"sv,  "factory"sv, "power"sv, "radio"sv};
 constexpr std::array kProdGroups{"status"sv, "log"sv, "sys"sv, "factory"sv};
-constexpr std::array kDevGroupsWithoutGnssOrTrace{"status"sv, "log"sv,     "sys"sv,  "rtcm"sv,
-                                                  "bt"sv,     "factory"sv, "radio"sv};
+constexpr std::array kDevGroupsWithoutGnssOrTrace{"status"sv, "log"sv,     "sys"sv,   "rtcm"sv,
+                                                  "bt"sv,     "factory"sv, "power"sv, "radio"sv};
 constexpr std::array kSafe{"status"sv, "log"sv, "sys"sv, "config"sv, "radio"sv};
 constexpr std::array<std::string_view, 0U> kNone{};
 
@@ -73,7 +73,7 @@ static_assert(std::ranges::equal(verbGroupNames(ConsoleProfile::kDev, true, true
 static_assert(
     std::ranges::equal(commandNames(ConsoleProfile::kDev, false, false, true) | kRegistered,
                        std::array{"status"sv, "log"sv, "sys"sv, "bt"sv, "alarm"sv, "config"sv,
-                                  "rtcm"sv, "factory"sv, "freset"sv, "radio"sv}));
+                                  "rtcm"sv, "factory"sv, "freset"sv, "power"sv, "radio"sv}));
 
 } // namespace
 

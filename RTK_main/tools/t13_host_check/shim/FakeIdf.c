@@ -44,6 +44,7 @@ static fake_gate_state_t s_gates[FAKE_GATE_COUNT] = {
     {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0},
     {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0},
     {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0},
+    {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0},
 };
 
 typedef struct {
@@ -958,10 +959,13 @@ esp_err_t esp_bt_gap_set_device_name(const char *name)
 
 esp_err_t esp_bt_gap_set_scan_mode(esp_bt_connection_mode_t c_mode, esp_bt_discovery_mode_t d_mode)
 {
-    (void)c_mode;
-    (void)d_mode;
     fake_note_blocking_api();
-    fake_trace_add("set_scan_mode");
+    fake_gate_enter(FAKE_GATE_SCAN);
+    if (c_mode == ESP_BT_NON_CONNECTABLE && d_mode == ESP_BT_NON_DISCOVERABLE) {
+        fake_trace_add("pause_scan_mode");
+    } else {
+        fake_trace_add("set_scan_mode");
+    }
     return ESP_OK;
 }
 

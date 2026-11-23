@@ -31,6 +31,16 @@ void spp_server_set_pair_query(spp_server_pair_query_t query);
  */
 bool spp_server_pair_decide(bool accept);
 
+/**
+ * @brief 登记或轮询 GAP 扫描模式请求，由 worker 执行 SDK 投递。
+ * @param paused: true 关闭可发现和可连接，false 恢复。
+ * @retval ESP_ERR_NOT_FINISHED 已登记或等待 worker。
+ * @retval ESP_OK SDK 已接收请求，射频状态需由实板验证。
+ * @retval 其他 驱动未就绪或 SDK 拒绝投递。
+ * @note 仅 kLink 调用，非阻塞，非 ISR。
+ */
+esp_err_t spp_server_scan_pause(bool paused);
+
 #ifdef __cplusplus
 }
 #endif

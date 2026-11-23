@@ -12,6 +12,7 @@
 #include "core/CommandRouter.hpp"
 #include "core/Reply.hpp"
 #include "core/Types.hpp"
+#include "../private_include/PairWindow.hpp"
 #include "proto/AlarmCodec.hpp"
 #include "proto/Frame.hpp"
 
@@ -115,6 +116,9 @@ DispatchResult handlePair(LinkManager &link, const proto::FrameView &frame, uint
             return replyOk(reply, frame.msgId, frame.type);
         }
         if (action == kPairActionClear) {
+            if (!admitWhitelistWrite(link)) {
+                return replyFail(reply, frame.msgId, frame.type);
+            }
             link.whitelistClear();
             reply.whitelistChanged = true;
             return replyOk(reply, frame.msgId, frame.type);

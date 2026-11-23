@@ -12,12 +12,56 @@
 #include "freertos/task.h"
 
 #include "AppContext.hpp"
+#include "app/PowerRequests.hpp"
+#include "def/DebugDef.hpp"
+#include "def/GnssDef.hpp"
+#include "def/GnssSubDef.hpp"
+#include "def/LinkDef.hpp"
+#include "modules/gnss/GnssMaintenance.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
 #include "rtos/EspStatus.hpp"
 #include "settings/Service.hpp"
 
 namespace app {
+namespace {
+
+/** @brief 识别原始控制台命令中的持久化操作。 @param module: 目标模块。 @param cmd: 待提交命令。 @retval true 需设置准入。 @note 仅控制台。 */
+[[nodiscard]] bool persistsSettings(ModuleKind module, const fw::Command &cmd) noexcept
+{
+    switch (module) {
+    case ModuleKind::kBtLink:
+        return cmd.verb == verb(LinkVerb::kWhitelistClear) ||
+               cmd.verb == verb(LinkVerb::kWhitelistAdd) ||
+               cmd.verb == verb(LinkVerb::kWhitelistDel);
+    case ModuleKind::kDebug:
+        return cmd.verb == static_cast<uint8_t>(DebugVerb::kSave);
+    case ModuleKind::kGnss:
+        return cmd.verb == static_cast<uint8_t>(GnssVerb::kSetRate) ||
+               cmd.verb == static_cast<uint8_t>(GnssSubVerb::kSetOut) ||
+               cmd.verb == static_cast<uint8_t>(GnssSubVerb::kSetGgaGate) ||
+               cmd.verb == static_cast<uint8_t>(GnssSubVerb::kSetBase) ||
+               cmd.verb == static_cast<uint8_t>(GnssSubVerb::kMode) ||
+               cmd.verb == static_cast<uint8_t>(GnssMaintenanceVerb::kBaud) ||
+               cmd.verb == static_cast<uint8_t>(GnssMaintenanceVerb::kFactoryReset) ||
+               cmd.verb == static_cast<uint8_t>(GnssMaintenanceVerb::kSave);
+    default:
+        return false;
+    }
+}
+
+/** @brief 登记持久化请求至入队完成。 @param executor: 目标执行器。 @param command: 待执行命令。 @param[out] ticket: 入队凭据。 @retval 投递结果。 @note 仅控制台，非 ISR。 */
+[[nodiscard]] fw::Result postPersistent(rtos::Executor &executor, const fw::Command &command,
+                                        rtos::Ticket &ticket) noexcept
+{
+    const power::SettingAdmission admission;
+    if (!admission.admitted()) {
+        return fw::Result::kBusy;
+    }
+    return executor.post(command, rtos::Caller::kConsole, ticket);
+}
+
+} // namespace
 
 bool requireBluetooth() noexcept
 {
@@ -100,6 +144,26 @@ bool submitRawTo(rtos::Executor &executor, ModuleKind module, const char *downMs
 {
     if (!executor.running() || !executor.moduleOk(id(module))) {
         (void)cli::fail("%s", downMsg != nullptr ? downMsg : "executor not running");
+        return false;
+    }
+    if (persistsSettings(module, command)) {
+        rtos::Ticket ticket{};
+        const auto posted = postPersistent(executor, command, ticket);
+        if (!fw::isOk(posted)) {
+            static_cast<void>(cli::fail("%s", fw::toString(posted)));
+            return false;
+        }
+        const uint32_t startMs = rtos::nowMs();
+        auto state = executor.poll(ticket, out);
+        while (state == rtos::PollState::kPending && rtos::nowMs() - startMs < kCommandTimeoutMs) {
+            vTaskDelay(1U);
+            state = executor.poll(ticket, out);
+        }
+        if (state == rtos::PollState::kDone) {
+            return true;
+        }
+        executor.cancel(ticket);
+        static_cast<void>(cli::fail("no response"));
         return false;
     }
     if (executor.call(command, out, kCommandTimeoutMs) != fw::Result::kOk) {

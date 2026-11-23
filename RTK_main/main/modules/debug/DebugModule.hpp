@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -280,7 +281,15 @@ public:
         return log_ring_.used();
     }
 
+    /** @brief 检查输出队列和消费者是否已交付日志。 @retval true 日志均已交给输出端。 @note 任意任务，非 ISR。 */
+    [[nodiscard]] bool logOutputIdle() const noexcept
+    {
+        // pop 和 used 取同一把环锁，读到空环后再确认消费者序号。
+        return log_ring_.used() == 0U && (logOutputSeq_.load(std::memory_order_acquire) & 1U) == 0U;
+    }
+
 private:
+    friend struct ModuleTestAccess;
     /**
      * @brief 等待启动屏障后进入唯一输出循环
      * @param arg: DebugModule 实例，空指针时直接结束任务
@@ -351,6 +360,7 @@ private:
     fw::TraceRing ring_{};
     portMUX_TYPE ring_mux_{};
     fw::LogRing log_ring_{};
+    std::atomic<uint32_t> logOutputSeq_{0U}; // trace_out 单写，奇数表示尚未交给输出端。
     rtos::BootTask task_{};
     bool installed_ = false;
     bool log_attached_ = false;

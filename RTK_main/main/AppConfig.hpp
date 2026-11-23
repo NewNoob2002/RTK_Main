@@ -55,6 +55,12 @@ inline constexpr bool kGnssStaticObsEnabled = false;
 #endif
 inline constexpr size_t kGnssObsReservedBytes = 16384U;
 
+#if defined(CONFIG_RTK_POWER_OFF_PRESS_MS)
+inline constexpr uint32_t kPowerOffPressMs = static_cast<uint32_t>(CONFIG_RTK_POWER_OFF_PRESS_MS);
+#else
+inline constexpr uint32_t kPowerOffPressMs = 2500U;
+#endif
+
 /** 模块编号（注册清单使用）；枚举顺序即 ID，勿插入或重排。 */
 enum class ModuleKind : uint8_t {
     kBtLink,
@@ -64,7 +70,8 @@ enum class ModuleKind : uint8_t {
     kSystemMode,
     kDebug,
     kGnss,
-    kWeb
+    kWeb,
+    kPower
 };
 /** 执行器编号；链路与 GNSS IO 分别绑核运行。 */
 enum class ExecKind : uint8_t { kLink, kIo };

@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "AppConfig.hpp"
+#include "board/PowerLogic.hpp"
 #include "NvsStore.h"
 #include "rtos/ExecTrace.hpp"
 
@@ -34,6 +35,17 @@ enum class WebTrace : uint8_t {
     kRebootCommit = 9, // a=kind, b=reason
     kDnsErr = 10,      // a=op(1=rx,2=tx), b=errno
 };
+
+/** kSys 电源按键与关机状态机实时追踪事件码（与 WebTrace 共享 kSys，码段从 32 起）。 */
+enum class PowerTrace : uint8_t {
+    kKeyShort = 32,          // a=short_count, b=held_ms
+    kKeyLong = 33,           // a=long_count, b=boot_mode
+    kShutdownStage = 34,     // a=stage, b=reason
+    kShutdownAbort = 35,     // a=reason, b=elapsed_ms
+    kBtScanSubmitError = 36, // a=esp_err_t
+};
+static_assert(static_cast<uint8_t>(PowerTrace::kKeyShort) > static_cast<uint8_t>(WebTrace::kDnsErr),
+              "PowerTrace codes must not overlap WebTrace");
 
 /** 系统模块命令动词。 */
 enum class SystemVerb : uint8_t { kPublish };
@@ -64,6 +76,24 @@ enum class Mode : uint8_t { kNormal };
 struct SystemMode {
     Mode mode = Mode::kNormal;
     uint32_t sinceMs = 0;
+};
+
+/** 电源按键与关机管理状态快照（kLink 更新，console 只读）。 */
+struct PowerSnapshot {
+    bool active = false;
+    bool keyPressed = false;
+    bool u3On = false;
+    bool usbPresent = false;
+    bool charging = false;
+    board::UsbSource usbSource = board::UsbSource::kNone;
+    bool chargerOk = false;
+    uint8_t chargerReg08 = 0U;
+    board::BootMode bootMode = board::BootMode::kNormal;
+    board::PowerOnReason powerOn = board::PowerOnReason::kUnknown;
+    board::ShutdownStage shutdownStage = board::ShutdownStage::kIdle;
+    board::ShutdownReason lastShutdown = board::ShutdownReason::kNone;
+    uint32_t shortPresses = 0U;
+    uint32_t longPresses = 0U;
 };
 
 } // namespace app

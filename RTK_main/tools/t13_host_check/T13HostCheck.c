@@ -781,6 +781,32 @@ static spp_server_pair_policy_t test_pair_policy(const uint8_t *addr)
     return atomic_load_explicit(&s_pair_policy, memory_order_relaxed);
 }
 
+/** @brief SPP worker 的 GAP 调用阻塞时，提交方仍可查询和更改目标。 */
+static void sc_scan_pause_worker(void)
+{
+    bring_up();
+    fake_gate_arm(FAKE_GATE_SCAN);
+    CHECK(spp_server_scan_pause(true) == ESP_ERR_NOT_FINISHED);
+    CHECK(fake_gate_wait_entered(FAKE_GATE_SCAN, 2000U));
+    CHECK(spp_server_scan_pause(true) == ESP_ERR_NOT_FINISHED);
+    CHECK(spp_server_scan_pause(false) == ESP_ERR_NOT_FINISHED);
+    fake_gate_release(FAKE_GATE_SCAN);
+
+    esp_err_t status = ESP_ERR_NOT_FINISHED;
+    for (unsigned wait_ms = 0U; wait_ms < 1000U && status == ESP_ERR_NOT_FINISHED; ++wait_ms) {
+        fake_sleep_ms(1U);
+        status = spp_server_scan_pause(false);
+    }
+    CHECK(status == ESP_OK);
+    CHECK(!fake_blocking_api_from_btc());
+    const int count = fake_trace_count();
+    CHECK(count >= 2);
+    if (count >= 2) {
+        CHECK(strcmp(fake_trace_at(count - 2), "pause_scan_mode") == 0);
+        CHECK(strcmp(fake_trace_at(count - 1), "set_scan_mode") == 0);
+    }
+}
+
 static void sc_gap_pairing_window(void)
 {
     const uint8_t other[SPP_SERVER_ADDR_LEN] = {0xa1U};
@@ -1214,6 +1240,7 @@ static const scenario_t s_scenarios[] = {
     {"unknown_handle_errors", sc_unknown_handle_errors},
     {"gap_replies_from_task", sc_gap_replies_from_task},
     {"gap_pairing_window", sc_gap_pairing_window},
+    {"scan_pause_worker", sc_scan_pause_worker},
 };
 
 int main(int argc, char **argv)

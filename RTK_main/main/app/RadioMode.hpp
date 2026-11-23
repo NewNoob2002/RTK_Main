@@ -5,12 +5,14 @@
 #include <cstdint>
 #include <optional>
 
+#include "board/PowerLogic.hpp"
+
 namespace app {
 
 /** kWifiConfig 中释放 BTDM 内存后，本次启动禁止调用任何 esp_bt_* 控制器或设备 API。 */
 enum class RadioMode : uint8_t { kBluetooth, kWifiConfig };
 enum class RadioReason : uint8_t { kConsole, kPhone, kWebExit, kIdle, kUi };
-enum class ModuleEnable : uint8_t { kAlways, kBtOnly, kWifiOnly };
+enum class ModuleEnable : uint8_t { kAlways, kNormalOnly, kBtOnly, kWifiOnly };
 
 struct RadioSelection {
     RadioMode mode = RadioMode::kBluetooth;
@@ -18,7 +20,30 @@ struct RadioSelection {
 };
 
 /**
- * @brief 判断启动模式是否启用该模块
+ * @brief 判断启动运行档与射频模式是否启用该模块
+ * @param bootMode: 本次启动运行档（正常或充电待机）
+ * @param mode: 启动选定的射频模式
+ * @param enable: 模块登记的启用条件
+ * @retval true 模块应装配并运行
+ * @retval false 跳过此模块
+ * @note 纯查询，线程和 ISR 安全。
+ */
+[[nodiscard]] constexpr bool moduleEnabled(board::BootMode bootMode, RadioMode mode,
+                                           ModuleEnable enable) noexcept
+{
+    if (enable == ModuleEnable::kAlways) {
+        return true;
+    }
+    if (bootMode != board::BootMode::kNormal) {
+        return false;
+    }
+    return enable == ModuleEnable::kNormalOnly ||
+           (mode == RadioMode::kBluetooth && enable == ModuleEnable::kBtOnly) ||
+           (mode == RadioMode::kWifiConfig && enable == ModuleEnable::kWifiOnly);
+}
+
+/**
+ * @brief 判断正常启动下射频模式是否启用该模块
  * @param mode: 启动选定的射频模式
  * @param enable: 模块登记的启用条件
  * @retval true 模块应装配并运行
@@ -27,9 +52,7 @@ struct RadioSelection {
  */
 [[nodiscard]] constexpr bool moduleEnabled(RadioMode mode, ModuleEnable enable) noexcept
 {
-    return enable == ModuleEnable::kAlways ||
-           (mode == RadioMode::kBluetooth && enable == ModuleEnable::kBtOnly) ||
-           (mode == RadioMode::kWifiConfig && enable == ModuleEnable::kWifiOnly);
+    return moduleEnabled(board::BootMode::kNormal, mode, enable);
 }
 
 /**

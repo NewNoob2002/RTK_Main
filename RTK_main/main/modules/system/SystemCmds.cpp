@@ -29,6 +29,7 @@
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
+#include "app/PowerRequests.hpp"
 #include "cli/Out.hpp"
 #include "fw/Trace.hpp"
 #include "modules/rtcm/RtcmModule.hpp"
@@ -318,6 +319,9 @@ int cmdSysReboot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 {
     if (argc != 1) {
         return cli::fail("usage: sys reboot");
+    }
+    if (!power::s_power_requests.claimRestart()) {
+        return cli::fail("power action already in progress");
     }
     // 立即输出 OK（进 UART TX 环形缓冲），等待 100 ms 让中断发完再复位；esp_restart 不返回，trampoline 不会重复打印。
     cli::outPrintf("OK\n");

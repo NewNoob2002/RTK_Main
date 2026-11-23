@@ -89,6 +89,12 @@ public:
      */
     void stopBoot() noexcept;
 
+    /** @brief 更新关机期 Web 暂停请求。 @param paused: 是否静默。 @note 仅 kLink，非阻塞。 */
+    void setPowerPaused(bool paused) noexcept;
+
+    /** @brief 查询 Web 是否已静默。 @retval true SoftAP 已关闭。 @note 仅 kLink，非阻塞。 */
+    [[nodiscard]] bool powerPauseDone() const noexcept;
+
     /**
      * @brief kLink 非阻塞轮询：消费控制/请求邮箱、推进 GNSS 异步命令、1 Hz 状态推送与空闲回落
      * @param nowMs: 当前单调时间（ms）
@@ -97,6 +103,17 @@ public:
      * @note 仅 kLink 任务调用，不阻塞、不分配堆，非 ISR；实时路径仅用 fw::trace。
      */
     [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 查询是否仍有在途的网页设置异步请求（供关机 kSave 阶段等待完成）
+     * @retval true 有在途设置凭据
+     * @retval false 无在途设置凭据
+     * @note 仅 kLink 任务调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool hasPendingSettings() const noexcept
+    {
+        return inflight_.ticket.seq != 0U;
+    }
 
 private:
     enum class SyncStage : uint8_t {
@@ -129,6 +146,12 @@ private:
     };
 
     enum class RequestKind : uint8_t { kSet, kSave, kExit, kFreset };
+
+    struct ExitRequest {
+        int fd = -1;
+        uint32_t gen = 0U;
+        uint16_t reqId = 0U;
+    };
 
     struct InflightRequest {
         settings::Ticket ticket{};
@@ -504,6 +527,9 @@ private:
     void scheduleReboot(RebootKind kind, std::string_view reasonText, uint32_t nowMs,
                         uint32_t idleActSeq = 0U) noexcept;
 
+    /** @brief 仲裁排定的主动退出，先取得重启权再确认。 @param nowMs: 单调时钟。 @note 仅 kLink。 */
+    void commitPendingExit(uint32_t nowMs) noexcept;
+
     /**
      * @brief 复核空闲重启条件；若期间终端重连或活动序号前进则中止本次空闲重启
      * @param nowMs: 当前单调时间（ms）
@@ -523,6 +549,21 @@ private:
     [[nodiscard]] bool pollPendingReboot(uint32_t nowMs) noexcept;
 
     AppContext *context_ = nullptr;
+    /**
+     * @brief 在 httpd 任务切换 SoftAP，保留服务器供关机失败恢复
+     * @param arg: WebModule 实例
+     * @note 仅 httpd 线程，可在 Wi-Fi SDK 中阻塞。
+     */
+    static void onPowerModeWork(void *arg) noexcept;
+
+    /** @brief 按需投递 SoftAP 切换请求。 @note 仅 kLink，非阻塞。 */
+    void schedulePowerMode() noexcept;
+
+    std::atomic<bool> powerPauseRequested_{false};
+    std::atomic<bool> powerPaused_{false};
+    std::atomic<bool> powerModeQueued_{false};
+    uint32_t powerModeAttemptMs_ = 0U;
+    bool powerModeAttempted_ = false;
     bool initialized_ = false;
     bool wifiStarted_ = false;
     bool wifiInited_ = false;
@@ -568,6 +609,7 @@ private:
     bool ggaSampleValid_ = false;
     web_cfg::WebIdleTimer idleTimer_{};
     RebootKind pendingReboot_ = RebootKind::kNone;
+    ExitRequest pendingExit_{}; // 留到下一轮与关机仲裁。
     std::string_view rebootByeReason_{};
     uint32_t rebootRequestedMs_ = 0U;
     uint32_t rebootWaitTxSeq_ = 0U;

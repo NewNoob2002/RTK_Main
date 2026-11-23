@@ -93,6 +93,8 @@ struct AppContext {
     settings::Service settings{};
     rtos::BootArena bootArena{};
     BootConfig bootConfig{};
+    board::BootMode bootMode = board::BootMode::kNormal; // 启动任务在 power 步骤写入，随后只读。
+    board::PowerOnReason powerOnReason = board::PowerOnReason::kUnknown; // 启动任务写入，随后只读。
     RadioMode radioMode = RadioMode::kBluetooth; // 启动任务在绑定上下文前写入，随后只读。
     std::optional<RadioReason> radioReason{};
     const board::Profile *boardProfile = nullptr; // 启动任务发布，之后只读。
@@ -123,8 +125,8 @@ struct AppContext {
     // 执行器本体含冻结非零默认成员（next_seq_/stats_mux_），由 AppMain.cpp 独立定义并以指针绑定，避免拖入 .data。
     rtos::Executor *linkExecutor = nullptr;
     ExecutorControlStorage<kModuleCount> linkStorage{};
-#if RTK_GNSS_ENABLED
     rtos::Executor *ioExecutor = nullptr;
+#if RTK_GNSS_ENABLED
     ExecutorControlStorage<kModuleCount> ioStorage{};
     RtcmPipe rtcmPipe{};
 #endif
@@ -138,7 +140,7 @@ struct AppContext {
     {
 // X-macro 批量绑定成员上下文指针，避免手写遗漏。
 #define MODULE_DEF(type, member, name, kind, executor, period, enable)                             \
-    if (moduleEnabled(radioMode, ModuleEnable::enable)) {                                          \
+    if (moduleEnabled(bootMode, radioMode, ModuleEnable::enable)) {                                \
         (member).bindContext(*this);                                                               \
     }
 #include "module_list.inc"

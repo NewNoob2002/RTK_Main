@@ -33,6 +33,23 @@ bool AppContext::awaitBoot(BootTask, bool) noexcept
 // 仅测试接线可访问模块私有状态，保留原场景的逐字段断言。
 struct ModuleTestAccess {
     static constexpr size_t kRxBudgetBytes = BtLinkModule::kRxBudgetBytes;
+    /** @brief 检查三个手机直写入口各自拒绝关门后的设置。 @param nowMs: 单调时钟。 @retval true 至少一项被受理。 */
+    static bool phoneBlobWrites(uint32_t nowMs) noexcept
+    {
+        auto &link = appContext().bt_link;
+        const bool ntrip = BtLinkModule::onSetNtrip(&link, {}, nowMs);
+        const bool json = BtLinkModule::onSetJsonServer(&link, {}, nowMs);
+        const bool tb = BtLinkModule::onSetThingsboard(&link, {}, nowMs);
+        return ntrip || json || tb;
+    }
+
+    /** @brief 逐条交付日志，通过输出替身检查 pop 与交付的边界。 @retval true 已输出。 */
+    static bool pumpLogs() noexcept
+    {
+        std::array<char, DebugModule::kLineBytes> line{};
+        return appContext().debug.pumpEvents(line.data(), line.size());
+    }
+
     static auto &manager() noexcept
     {
         return appContext().bt_link.link_manager_;

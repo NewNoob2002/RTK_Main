@@ -6,6 +6,60 @@
 
 #include "SppServerPriv.h"
 
+typedef enum {
+    SPP_SERVER_SCAN_IDLE,
+    SPP_SERVER_SCAN_PENDING,
+    SPP_SERVER_SCAN_DONE,
+} spp_server_scan_state_t;
+
+static struct {
+    spp_server_scan_state_t state;
+    bool paused;
+    esp_err_t result;
+} s_scan;
+
+esp_err_t spp_server_scan_pause(bool paused)
+{
+    esp_err_t result = ESP_ERR_INVALID_STATE;
+    bool wake = false;
+    taskENTER_CRITICAL(&s_spp_mux);
+    if (s_spp.initialized) {
+        result = ESP_ERR_NOT_FINISHED;
+        if ((s_scan.state == SPP_SERVER_SCAN_DONE) && (s_scan.paused == paused)) {
+            result = s_scan.result;
+            s_scan.state = SPP_SERVER_SCAN_IDLE;
+        } else if (s_scan.state != SPP_SERVER_SCAN_PENDING) {
+            s_scan.paused = paused;
+            s_scan.state = SPP_SERVER_SCAN_PENDING;
+            wake = true;
+        }
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+    if (wake) {
+        spp_server_tx_wake();
+    }
+    return result;
+}
+
+/** @brief 让 worker 调用可能等待 BTC 的 GAP API。 @note 仅 SPP worker，非 ISR。 */
+static void spp_server_scan_process(void)
+{
+    taskENTER_CRITICAL(&s_spp_mux);
+    const bool pending = s_scan.state == SPP_SERVER_SCAN_PENDING;
+    const bool paused = s_scan.paused;
+    taskEXIT_CRITICAL(&s_spp_mux);
+    if (!pending) {
+        return;
+    }
+    const esp_err_t result =
+        esp_bt_gap_set_scan_mode(paused ? ESP_BT_NON_CONNECTABLE : ESP_BT_CONNECTABLE,
+                                 paused ? ESP_BT_NON_DISCOVERABLE : ESP_BT_GENERAL_DISCOVERABLE);
+    taskENTER_CRITICAL(&s_spp_mux);
+    s_scan.result = result;
+    s_scan.state = SPP_SERVER_SCAN_DONE;
+    taskEXIT_CRITICAL(&s_spp_mux);
+}
+
 spp_server_inflight_t *spp_server_oldest_locked(uint8_t slot, bool pending_only)
 {
     spp_server_inflight_t *oldest = NULL;
@@ -123,6 +177,7 @@ void spp_server_worker(void *arg)
         }
         spp_server_ctrl_process();
         spp_server_disconnect_process();
+        spp_server_scan_process();
         (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(SPP_SERVER_CTRL_RETRY_MS));
     }
 }

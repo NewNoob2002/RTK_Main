@@ -14,6 +14,14 @@ menu "RTK_main"
             bool "Force P2 v1.41 (bench only)"
     endchoice
 
+    config RTK_POWER_OFF_PRESS_MS
+        int "Power key long-press threshold (ms)"
+        range 1000 10000
+        default 2500
+        help
+            P2 电源按键长按关机与充电待机长按开机的判定阈值（ms）。
+            依据 P2 原理图注释默认 2500 ms。
+
     choice RTK_LINK_POLICY
         prompt "SPP link policy"
         default RTK_LINK_POLICY_CONCURRENT

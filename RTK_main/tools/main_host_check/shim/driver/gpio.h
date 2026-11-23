@@ -6,6 +6,7 @@
 #include "esp_err.h"
 
 using gpio_num_t = int;
+inline constexpr int GPIO_MODE_INPUT = 0;
 inline constexpr int GPIO_MODE_OUTPUT = 1;
 inline constexpr int GPIO_PULLUP_DISABLE = 0;
 inline constexpr int GPIO_PULLDOWN_DISABLE = 0;
@@ -19,5 +20,6 @@ struct gpio_config_t {
     int intr_type;
 };
 
+int gpio_get_level(gpio_num_t gpio);
 esp_err_t gpio_set_level(gpio_num_t gpio, uint32_t level);
 esp_err_t gpio_config(const gpio_config_t *config);

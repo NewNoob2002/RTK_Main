@@ -142,7 +142,9 @@ bool DebugModule::pumpEvents(char *line, size_t cap) noexcept
             fw::LogHeader hdr{};
             std::array<uint8_t, fw::kLogHexMax> payload{};
             size_t copied = 0U;
+            logOutputSeq_.fetch_add(1U, std::memory_order_relaxed);
             if (!log_ring_.pop(hdr, payload, copied)) {
+                logOutputSeq_.fetch_add(1U, std::memory_order_release);
                 break;
             }
             const std::span<const uint8_t> view{payload.data(), copied};
@@ -151,6 +153,7 @@ bool DebugModule::pumpEvents(char *line, size_t cap) noexcept
             } else {
                 printLogText(hdr, view, out.data(), out.size());
             }
+            logOutputSeq_.fetch_add(1U, std::memory_order_release);
         }
         printed = true;
     }

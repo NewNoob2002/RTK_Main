@@ -51,6 +51,7 @@ using namespace std::string_view_literals;
         dev && traceEnabled ? "debug"sv : kDisabled,
         repl ? "factory"sv : kDisabled,
         repl ? "freset"sv : kDisabled,
+        dev ? "power"sv : kDisabled,
         dev && wifiConfigEnabled ? "radio"sv : kDisabled,
     };
 }
@@ -78,6 +79,7 @@ using namespace std::string_view_literals;
         dev && traceEnabled ? "debug"sv : kDisabled,
         dev ? "bt"sv : kDisabled,
         repl ? "factory"sv : kDisabled,
+        dev ? "power"sv : kDisabled,
         dev && wifiConfigEnabled ? "radio"sv : kDisabled,
     };
 }

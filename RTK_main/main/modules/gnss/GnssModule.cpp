@@ -289,6 +289,17 @@ void GnssModule::wait(uint32_t maxMs) noexcept
     }
 }
 
+void GnssModule::publishPendingNvs() noexcept
+{
+    const bool baudPending = baud_deferred_ || baud_save_in_flight_ ||
+                             (active_maintenance_ == ::gnss::Maintenance::kBaud &&
+                              (controller().state() == ::gnss::State::kMaintenance ||
+                               controller().stats().maintenanceSeq != completed_maintenance_seq_));
+    const bool pendingNvs = (pending_apply_ != PendingApply::kNone) || (ppp_ticket_seq_ != 0U) ||
+                            (sat_ticket_seq_ != 0U) || gga_gate_save_pending_ || baudPending;
+    ctx().data.gnssPendingNvs.store(pendingNvs, std::memory_order_release);
+}
+
 /** @brief 推进 GNSS 状态机与数据通路。 @param nowMs: 单调时钟。 @retval true UART 或管道可能仍有积压。 */
 bool GnssModule::poll(uint32_t nowMs) noexcept
 {
@@ -297,6 +308,7 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     }
     tickGgaGateSave(nowMs, false);
     if (pollPppAndSat(nowMs)) {
+        ctx().data.gnssPendingNvs.store(true, std::memory_order_release);
         const bool hadFullRx = (last_rx_bytes_ == kUartReadChunkBytes);
         last_rx_bytes_ = 0U;
         return hadFullRx;
@@ -305,6 +317,7 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     tickPendingApply(nowMs);
     tickMaintenance(nowMs);
     pollWorkMode(nowMs);
+    publishPendingNvs();
     const bool txProgress = pumpRtcmPipe();
 
     const auto curState = controller().state();
