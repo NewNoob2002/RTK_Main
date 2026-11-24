@@ -851,6 +851,48 @@ static void sc_gap_pairing_window(void)
     CHECK(!fake_blocking_api_from_btc());
 }
 
+/**
+ * @brief  前面控制槽释放后，后到事件进入更靠前的槽，仍按到达顺序先处理先到事件
+ * @note   用 FAKE_GATE_DISCONNECT 确定性暂停 worker，在 BTC 线程中构造
+ *         ctrl[0]=REJECT(0x33) -> ctrl[1]=CFM(s_bda) -> CLOSE(0x33) 释放 ctrl[0] ->
+ *         ctrl[0]=PIN(other)，再放行 worker，验证先到的 CFM 占住配对窗口、后到的 PIN 被拒。
+ */
+static void sc_gap_pairing_order_after_slot_free(void)
+{
+    const uint8_t other[SPP_SERVER_ADDR_LEN] = {0xa1U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U};
+
+    spp_server_set_pair_query(&test_pair_policy);
+    bring_up();
+    open_session(0x11U);
+    open_session(0x22U);
+
+    /* 暂停 worker，确保控制表槽位布局完全构造好之前不消费任何控制项。 */
+    fake_gate_arm(FAKE_GATE_DISCONNECT);
+    CHECK(spp_server_disconnect(0x11U) == ESP_OK);
+    CHECK(fake_gate_wait_entered(FAKE_GATE_DISCONNECT, 2000U));
+
+    /* 两槽已满，0x33 拒绝项占住 ctrl[0]；随后先到的 CFM(s_bda) 落入 ctrl[1]。 */
+    fake_emit_srv_open(0x33U, s_bda);
+    atomic_store_explicit(&s_pair_policy, SPP_SERVER_PAIR_CONFIRM, memory_order_relaxed);
+    fake_emit_gap_cfm_req(s_bda);
+    /* 同步 CLOSE(0x33) 在 BTC FIFO 中排在 CFM 之后：返回时 CFM 已在 ctrl[1] 且 ctrl[0] 已空。 */
+    fake_emit_close(0x33U);
+    /* 后到的 PIN(other) 进入刚释放的 ctrl[0]；用未知句柄的同步 CLOSE 作为 BTC 屏障。 */
+    fake_emit_gap_pin_req(other);
+    fake_emit_close(0x99U);
+
+    fake_gate_release(FAKE_GATE_DISCONNECT);
+    CHECK(fake_wait_pin_reply(1, 2000U));
+    CHECK(!fake_last_gap_accept());
+    CHECK(memcmp(fake_last_gap_reply_bda(), other, SPP_SERVER_ADDR_LEN) == 0);
+    CHECK(fake_ssp_confirm_count() == 0);
+    CHECK(spp_server_pair_decide(true));
+    CHECK(fake_wait_ssp_confirm(1, 2000U));
+    CHECK(fake_last_gap_accept());
+    CHECK(memcmp(fake_last_gap_reply_bda(), s_bda, SPP_SERVER_ADDR_LEN) == 0);
+    CHECK(!fake_blocking_api_from_btc());
+}
+
 /* 数据突发与未 poll 的重连不能让生命周期积压无界；跨槽严格按回调顺序交付。 */
 static void sc_lifecycle_burst_churn(void)
 {
@@ -1240,6 +1282,7 @@ static const scenario_t s_scenarios[] = {
     {"unknown_handle_errors", sc_unknown_handle_errors},
     {"gap_replies_from_task", sc_gap_replies_from_task},
     {"gap_pairing_window", sc_gap_pairing_window},
+    {"gap_pairing_order_after_slot_free", sc_gap_pairing_order_after_slot_free},
     {"scan_pause_worker", sc_scan_pause_worker},
 };
 

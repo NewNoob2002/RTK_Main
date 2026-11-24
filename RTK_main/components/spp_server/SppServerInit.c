@@ -82,6 +82,7 @@ static esp_err_t spp_server_objects_create(void)
     taskENTER_CRITICAL(&s_spp_mux);
     memset(s_spp.sessions, 0, sizeof(s_spp.sessions));
     memset(s_spp.ctrl, 0, sizeof(s_spp.ctrl));
+    s_spp.ctrl_seq = 0U;
     s_spp.evt_dropped = 0U;
     memset(s_spp.inflight, 0, sizeof(s_spp.inflight));
     memset(&s_spp.stream, 0, sizeof(s_spp.stream));

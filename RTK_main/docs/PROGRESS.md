@@ -52,7 +52,7 @@
 - B3：REG02/REG03 写入需在 CM680 P2 v1.41（有 SGM41513）补测；<10% 低电关机未实测；新 F9P 板 I2C 只见 0x3C，充电芯片位置待原理图确认。
 - U1：室外 + 基站下，接收差分期间修改截止角/星座，确认 RTK Fixed 不中断（未测）；接入差分后计划外 NMEA 计数 `ign=4` 原文未抓。
 - U2：室外有星时确认 GGA 经纬度 7 位小数；SVNUMBERING 下真实卫星 `nmea.bad=0`；5 Hz 四星座 RTK + RTCM 满载下 VALSET 不超时、SPP 吞吐正常（均未测）。RU2-02：改频率时 rate/out 两键分开保存，部分失败会让 NVS 频率与周期不一致，待改为一次原子保存。
-- 门禁：`G2b-t13_host_check-asan` 在全量并发负载下偶发超时（`t13_disconnect_reuse_across_slots`、`t13_gap_pairing_window`），单独重跑通过；待开卡放宽时序。
+- 门禁：`G2b-t13_host_check-asan` 的 `t13_disconnect_reuse_across_slots` 在高负载下偶发失败（测试同步竞态：`fake_wait_disconnect_returns` 早于 worker `spp_server_ctrl_settle_locked` 结算，见 `docs/reports/T13F-pairing-order.md`），单独重跑通过；待另开卡修正测试同步。
 - B2：固件卡死时 10 s 硬关断 NOT_RUN；3V3/GPIO4/U3 波形未用仪表测；SGM41513 REG00–REG0B 位核对、`senseOnMv` 与硬关断时长校准、注入类项（按键毛刺、U3 30 s 未掉电回退、BT 拥塞、NVS 错误）未测；BT 关机时 SPP CLOSE 日志晚于 `device powered down` 约 0.49 s。
 - HB：关闭 Wi-Fi 的构建最小空闲堆 80,776 B，低于 81,920 B 预算，用户已接受（该构建不发布）。
 - 多张实现卡（C1–C4、P1、N1、G-baud*、Q1 门控、W1）的报告只有实现方结论 NOT_RUN，此后的整机 HIL 没有逐卡单独记录。
