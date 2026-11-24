@@ -19,6 +19,25 @@ import urllib.request
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_FRAME_BYTES = 1024
+OTA_HDR_BYTES = 288
+OTA_IMG_MAGIC = 0xE9
+OTA_CHIP_ID_ESP32 = 0x0000
+OTA_DESC_MAGIC = 0xABCD5432
+OTA_DEFAULT_MAX = 0x1E0000  # partitions.csv ota_0/ota_1 大小
+OTA_RECV_TIMEOUT_S = 30.0
+OTA_TOTAL_TIMEOUT_S = 150.0
+OTA_DRAIN_TIMEOUT_S = 0.25
+OTA_ERR_HTTP: dict[str, int] = {
+    "busy": 409,
+    "state": 409,
+    "length": 411,
+    "too_large": 413,
+    "bad_image": 400,
+    "validate": 400,
+    "timeout": 408,
+    "flash": 500,
+    "aborted": 503,
+}
 MAC_RE = re.compile(r"([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
 SN_RE = re.compile(r"[0-9A-Za-z-]{1,16}")
 
@@ -47,11 +66,58 @@ CAPTIVE_PROBE_PATHS = (
 )
 
 
+def parse_esp_app_header(data: bytes) -> tuple[str, bytes] | None:
+    """解析 ESP-IDF 镜像头与 esp_app_desc_t，返回 (version, project_name_bytes) 或 None。"""
+    if len(data) < OTA_HDR_BYTES or data[0] != OTA_IMG_MAGIC:
+        return None
+    (chip_id,) = struct.unpack_from("<H", data, 12)
+    if chip_id != OTA_CHIP_ID_ESP32:
+        return None
+    (magic_word,) = struct.unpack_from("<I", data, 32)
+    if magic_word != OTA_DESC_MAGIC:
+        return None
+    ver_bytes = data[48:80].split(b"\x00", 1)[0]
+    proj_bytes = data[80:112].split(b"\x00", 1)[0]
+    version = ver_bytes.decode("utf-8", errors="replace")
+    return version, proj_bytes
+
+
+def build_mock_firmware(
+    version: str,
+    project: str = "rtk_main",
+    total_size: int = 4096,
+    img_magic: int = OTA_IMG_MAGIC,
+    desc_magic: int = OTA_DESC_MAGIC,
+    chip_id: int = OTA_CHIP_ID_ESP32,
+    raw_version: bytes | None = None,
+    raw_project: bytes | None = None,
+) -> bytes:
+    """构造带合法或指定畸形 esp_app_desc_t 头的测试固件字节串。"""
+    size = max(total_size, OTA_HDR_BYTES)
+    buf = bytearray(size)
+    buf[0] = img_magic & 0xFF
+    struct.pack_into("<H", buf, 12, chip_id & 0xFFFF)
+    struct.pack_into("<I", buf, 32, desc_magic & 0xFFFFFFFF)
+    ver_b = (raw_version if raw_version is not None else version.encode("utf-8"))[:32]
+    proj_b = (raw_project if raw_project is not None else project.encode("utf-8"))[:32]
+    buf[48 : 48 + len(ver_b)] = ver_b
+    buf[80 : 80 + len(proj_b)] = proj_b
+    return bytes(buf[:total_size])
+
+
 class MockState:
     """Shared mutable device state for the mock server."""
 
-    def __init__(self, unlock_token: str = "123456", no_const: bool = False,
-                 caps_cm680: bool = False) -> None:
+    def __init__(
+        self,
+        unlock_token: str = "123456",
+        no_const: bool = False,
+        caps_cm680: bool = False,
+        ota_err: str | None = None,
+        ota_slow_kbps: float = 0.0,
+        ota_max: int = OTA_DEFAULT_MAX,
+        no_ota: bool = False,
+    ) -> None:
         self.lock = threading.Lock()
         self.unlock_token = unlock_token
         self.no_const = no_const or caps_cm680
@@ -61,6 +127,25 @@ class MockState:
         self.gnss_none: bool = False
         self.wl_version: int = 0
         self.start_time = time.monotonic()
+        self.ota_running: str = "0.1.0-mock"
+        self.ota_project: str = "rtk_main"
+        self.ota_part: str = "ota_0"
+        self.ota_state: str = "valid"
+        self.ota_other: str | None = None
+        self.ota_max: int = ota_max
+        self.ota_busy: bool = False
+        self.ota_rebooting: bool = False
+        self.ota_pending_ver: str | None = None
+        self.ota_pending_part: str | None = None
+        self.ota_reboot_timer: threading.Timer | None = None
+        self.ota_err: str | None = ota_err
+        self.ota_slow_kbps: float = ota_slow_kbps
+        self.ota_reboot_ms: int = 1500
+        self.ota_recv_timeout_s: float = OTA_RECV_TIMEOUT_S
+        self.ota_total_timeout_s: float = OTA_TOTAL_TIMEOUT_S
+        self.ota_drain_timeout_s: float = OTA_DRAIN_TIMEOUT_S
+        self.no_ota: bool = no_ota
+        self.ws_clients: set[socket.socket] = set()
         self.whitelist = ["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"]
         self.config: dict[str, object] = {
             "gnss.rate": 10,
@@ -114,6 +199,45 @@ class MockState:
         if not self.no_const:
             result.update({key: [0, 1] for key in CONST_KEYS})
         return result
+
+    def ota_info(self) -> dict[str, object]:
+        """构造 GET /ota/info 应答对象（调用方须持锁）。"""
+        return {
+            "running": self.ota_running,
+            "project": self.ota_project,
+            "part": self.ota_part,
+            "state": "pending_verify" if self.ota_err == "state" else self.ota_state,
+            "other": self.ota_other,
+            "max": self.ota_max,
+            "busy": self.ota_busy,
+        }
+
+    def complete_ota_reboot(self) -> None:
+        """在唯一一次重启回调中原子切换运行槽快照、释放 busy 并断开所有活跃 WS。"""
+        with self.lock:
+            if not self.ota_rebooting:
+                return
+            self.ota_other = self.ota_running
+            self.ota_running = "" if self.ota_pending_ver is None else self.ota_pending_ver
+            if self.ota_pending_part is not None:
+                self.ota_part = self.ota_pending_part
+            self.ota_state = "valid"
+            self.ota_pending_ver = None
+            self.ota_pending_part = None
+            self.ota_rebooting = False
+            self.ota_busy = False
+            self.ota_reboot_timer = None
+            clients = list(self.ws_clients)
+            self.ws_clients.clear()
+        for cli in clients:
+            try:
+                cli.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                cli.close()
+            except OSError:
+                pass
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -227,10 +351,87 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _send_json(self, status: int, obj: dict, close: bool = False) -> None:
+        body = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if close:
+            self.close_connection = True
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        if close:
+            self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
+    def _read_body_chunk(self, want: int, idle_timeout_s: float) -> tuple[bytes, bool]:
+        """在空闲时限内读取一段请求体，返回 (chunk, timed_out)。"""
+        old_timeout = self.connection.gettimeout()
+        deadline = time.monotonic() + idle_timeout_s
+        try:
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                return b"", True
+            self.connection.settimeout(rem)
+            try:
+                return self.rfile.read1(want), False
+            except TimeoutError:
+                return b"", True
+        finally:
+            try:
+                self.connection.settimeout(old_timeout)
+            except OSError:
+                pass
+
+    def _drain_small_body(
+        self, remaining: int, limit: int = 256 * 1024, timeout_s: float | None = None
+    ) -> bool:
+        """限时排空小体积拒绝请求体；超时或过大立即放弃，由调用方关闭连接。"""
+        if remaining <= 0:
+            return True
+        if remaining > limit:
+            return False
+        if timeout_s is None:
+            timeout_s = self.state.ota_drain_timeout_s
+        old_timeout = self.connection.gettimeout()
+        deadline = time.monotonic() + timeout_s
+        left = remaining
+        try:
+            while left > 0:
+                rem = deadline - time.monotonic()
+                if rem <= 0:
+                    return False
+                self.connection.settimeout(rem)
+                try:
+                    chunk = self.rfile.read1(min(4096, left))
+                except (TimeoutError, OSError):
+                    return False
+                if not chunk:
+                    return False
+                left -= len(chunk)
+            return True
+        finally:
+            try:
+                self.connection.settimeout(old_timeout)
+            except OSError:
+                pass
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/ws":
             self._handle_ws()
+            return
+        if path == "/ota/info":
+            with self.state.lock:
+                if self.state.no_ota:
+                    self.send_response(404, "Not Found")
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                info = self.state.ota_info()
+            self._send_json(200, info)
             return
         if path == "/favicon.ico":
             self.send_response(204, "No Content")
@@ -271,6 +472,165 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path != "/ota" or self.state.no_ota:
+            self.send_response(404, "Not Found")
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self._handle_ota_post()
+
+    def _handle_ota_post(self) -> None:
+        cl_hdr = self.headers.get("Content-Length")
+        parsed_cl: int | None = None
+        if cl_hdr is not None:
+            try:
+                parsed_cl = int(cl_hdr.strip())
+            except ValueError:
+                parsed_cl = -1
+
+        already_busy = False
+        with self.state.lock:
+            if self.state.ota_busy or self.state.ota_rebooting:
+                already_busy = True
+            else:
+                self.state.ota_busy = True
+                forced_err = self.state.ota_err
+                cur_state = self.state.ota_state
+                ota_max = self.state.ota_max
+                ota_project_bytes = self.state.ota_project.encode("utf-8")
+                slow_kbps = self.state.ota_slow_kbps
+                reboot_ms = self.state.ota_reboot_ms
+                recv_timeout_s = self.state.ota_recv_timeout_s
+                total_timeout_s = self.state.ota_total_timeout_s
+                total_deadline = time.monotonic() + total_timeout_s
+        if already_busy:
+            drained = self._drain_small_body(parsed_cl or 0)
+            try:
+                self._send_json(OTA_ERR_HTTP["busy"], {"ok": False, "err": "busy"}, close=not drained)
+            except OSError:
+                self.close_connection = True
+            return
+
+        remaining = parsed_cl if (parsed_cl is not None and parsed_cl > 0) else 0
+        owns_busy = True
+
+        def release_busy() -> None:
+            nonlocal owns_busy
+            if owns_busy:
+                with self.state.lock:
+                    self.state.ota_busy = False
+                owns_busy = False
+
+        try:
+            def fail(code: str, rem: int, drain: bool = True) -> None:
+                release_busy()
+                drained = self._drain_small_body(rem) if drain else False
+                try:
+                    self._send_json(OTA_ERR_HTTP[code], {"ok": False, "err": code}, close=not drained)
+                except OSError:
+                    self.close_connection = True
+
+            if forced_err in ("busy", "state", "length", "too_large"):
+                fail(forced_err, remaining)
+                return
+            if cur_state == "pending_verify":
+                fail("state", remaining)
+                return
+            if parsed_cl is None or parsed_cl <= 0:
+                fail("length", 0, drain=False)
+                return
+            if parsed_cl > ota_max:
+                fail("too_large", remaining)
+                return
+            if parsed_cl <= OTA_HDR_BYTES:
+                fail("bad_image", remaining)
+                return
+
+            hdr = bytearray()
+            received = 0
+            new_ver = ""
+            header_checked = False
+            chunk_sz = 4096
+            if slow_kbps > 0:
+                chunk_sz = min(4096, max(512, int(slow_kbps * 1024.0 / 10.0)))
+            t0 = time.monotonic()
+
+            while received < parsed_cl:
+                total_rem = total_deadline - time.monotonic()
+                if total_rem <= 0:
+                    fail("timeout", 0, drain=False)
+                    return
+                want = min(chunk_sz, parsed_cl - received)
+                try:
+                    chunk, timed_out = self._read_body_chunk(want, min(recv_timeout_s, total_rem))
+                except OSError:
+                    fail("aborted", 0, drain=False)
+                    return
+                if timed_out:
+                    fail("timeout", 0, drain=False)
+                    return
+                if not chunk:
+                    fail("aborted", 0, drain=False)
+                    return
+                received += len(chunk)
+                if time.monotonic() >= total_deadline:
+                    fail("timeout", 0, drain=False)
+                    return
+                if not header_checked:
+                    need = OTA_HDR_BYTES - len(hdr)
+                    hdr.extend(chunk[:need])
+                    if len(hdr) >= OTA_HDR_BYTES:
+                        header_checked = True
+                        if forced_err == "bad_image":
+                            fail("bad_image", parsed_cl - received)
+                            return
+                        parsed = parse_esp_app_header(bytes(hdr))
+                        if parsed is None or parsed[1] != ota_project_bytes:
+                            fail("bad_image", parsed_cl - received)
+                            return
+                        new_ver = parsed[0]
+                if slow_kbps > 0:
+                    elapsed = time.monotonic() - t0
+                    expected = received / (slow_kbps * 1024.0)
+                    if expected > elapsed:
+                        sleep_s = expected - elapsed
+                        rem_after = total_deadline - time.monotonic()
+                        if rem_after <= 0:
+                            fail("timeout", 0, drain=False)
+                            return
+                        if sleep_s >= rem_after:
+                            time.sleep(rem_after)
+                            fail("timeout", 0, drain=False)
+                            return
+                        time.sleep(sleep_s)
+
+            if forced_err in ("validate", "timeout", "flash", "aborted"):
+                fail(forced_err, 0, drain=True)
+                return
+
+            with self.state.lock:
+                next_part = "ota_1" if self.state.ota_part == "ota_0" else "ota_0"
+                self.state.ota_pending_ver = new_ver
+                self.state.ota_pending_part = next_part
+                self.state.ota_rebooting = True
+                # 重启窗口保持 ota_busy=True，所有权移交给重启定时器
+                owns_busy = False
+                timer = threading.Timer(reboot_ms / 1000.0, self.state.complete_ota_reboot)
+                timer.daemon = True
+                self.state.ota_reboot_timer = timer
+
+            try:
+                self._send_json(200, {"ok": True, "ver": new_ver, "reboot_ms": reboot_ms})
+            except OSError:
+                self.close_connection = True
+            finally:
+                timer.start()
+        finally:
+            release_busy()
+
     def _handle_ws(self) -> None:
         self.close_connection = True
         key = self.headers.get("Sec-WebSocket-Key")
@@ -291,51 +651,59 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         send_lock = threading.Lock()
         stop_ev = threading.Event()
         unlocked = False
+        t_thread: threading.Thread | None = None
 
         with self.state.lock:
+            self.state.ws_clients.add(sock)
             hello = {
                 "t": "hello",
                 "caps": self.state.caps(),
                 "proto": 1,
                 "board": "P2",
-                "fw": "0.1.0-mock",
+                "fw": self.state.ota_running,
                 "bt_name": "P2-A1B2",
                 "console": "dev",
                 "factory": unlocked,
             }
             cfg = {"t": "config", **self.state.config}
             wl = list(self.state.whitelist)
-
-        ws_send_json(sock, send_lock, hello)
-        ws_send_json(sock, send_lock, cfg)
-        with self.state.lock:
             last_wl_ver = self.state.wl_version
-        self._send_status(sock, send_lock, 0, include_bt=wl)
-
-        def ticker() -> None:
-            nonlocal last_wl_ver
-            tick = 1
-            while not stop_ev.wait(1.0):
-                try:
-                    bt_wl = None
-                    with self.state.lock:
-                        if self.state.wl_version != last_wl_ver:
-                            last_wl_ver = self.state.wl_version
-                            bt_wl = list(self.state.whitelist)
-                    self._send_status(sock, send_lock, tick, include_bt=bt_wl)
-                    tick += 1
-                except OSError:
-                    break
-
-        t_thread = threading.Thread(target=ticker, daemon=True)
-        t_thread.start()
 
         try:
+            try:
+                ws_send_json(sock, send_lock, hello)
+                ws_send_json(sock, send_lock, cfg)
+                self._send_status(sock, send_lock, 0, include_bt=wl)
+            except OSError:
+                return
+
+            def ticker() -> None:
+                nonlocal last_wl_ver
+                tick = 1
+                while not stop_ev.wait(1.0):
+                    try:
+                        bt_wl = None
+                        with self.state.lock:
+                            if self.state.wl_version != last_wl_ver:
+                                last_wl_ver = self.state.wl_version
+                                bt_wl = list(self.state.whitelist)
+                        self._send_status(sock, send_lock, tick, include_bt=bt_wl)
+                        tick += 1
+                    except OSError:
+                        break
+
+            th = threading.Thread(target=ticker, daemon=True)
+            th.start()
+            t_thread = th
+
             while not stop_ev.is_set():
                 try:
                     opcode, payload = ws_read_frame(sock, require_mask=True)
                 except ValueError:
-                    ws_send_close(sock, send_lock, 1009)
+                    try:
+                        ws_send_close(sock, send_lock, 1009)
+                    except OSError:
+                        pass
                     break
                 except (EOFError, OSError):
                     break
@@ -343,20 +711,29 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                 if opcode == 0x8:
                     break
                 if opcode == 0x9:
-                    with send_lock:
-                        ws_write_frame(sock, 0xA, payload, mask=False)
+                    try:
+                        with send_lock:
+                            ws_write_frame(sock, 0xA, payload, mask=False)
+                    except OSError:
+                        break
                     continue
                 if opcode != 0x1:
                     continue
 
-                unlocked, should_close = self._on_text(
-                    sock, send_lock, payload, unlocked
-                )
+                try:
+                    unlocked, should_close = self._on_text(
+                        sock, send_lock, payload, unlocked
+                    )
+                except OSError:
+                    break
                 if should_close:
                     break
         finally:
+            with self.state.lock:
+                self.state.ws_clients.discard(sock)
             stop_ev.set()
-            t_thread.join(timeout=0.5)
+            if t_thread is not None:
+                t_thread.join(timeout=0.5)
 
     def _send_status(
         self,
@@ -448,17 +825,17 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
             )
             return unlocked, False
 
-        with self.state.lock:
-            forced = self.state.force_err
-        if forced is not None:
-            ws_send_json(
-                sock, send_lock, {"t": "ack", "id": rid, "ok": False, "err": forced}
-            )
-            return unlocked, False
-
         if rtype == "unlock":
             tok = req["token"]
-            if tok == self.state.unlock_token:
+            with self.state.lock:
+                forced = self.state.force_err
+                ok_tok = forced is None and tok == self.state.unlock_token
+            if forced is not None:
+                ws_send_json(
+                    sock, send_lock, {"t": "ack", "id": rid, "ok": False, "err": forced}
+                )
+                return unlocked, False
+            if ok_tok:
                 ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
                 return True, False
             ws_send_json(
@@ -468,30 +845,32 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
 
         if rtype == "cmd":
             name = req["name"]
-            if name == "save":
-                ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-                return unlocked, False
-            if name == "exit":
-                ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-                ws_send_json(sock, send_lock, {"t": "bye", "reason": "exit"})
-                return unlocked, True
-            if name == "freset":
-                if not unlocked:
-                    ws_send_json(
-                        sock,
-                        send_lock,
-                        {"t": "ack", "id": rid, "ok": False, "err": "locked"},
-                    )
-                    return unlocked, False
-                ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-                ws_send_json(sock, send_lock, {"t": "bye", "reason": "freset"})
-                return unlocked, True
-            ws_send_json(
-                sock,
-                send_lock,
-                {"t": "ack", "id": rid, "ok": False, "err": "unsupported"},
-            )
-            return unlocked, False
+            bye_msg: dict | None = None
+            should_close = False
+            with self.state.lock:
+                if self.state.ota_busy or self.state.ota_rebooting:
+                    ack_msg = {"t": "ack", "id": rid, "ok": False, "err": "busy"}
+                elif self.state.force_err is not None:
+                    ack_msg = {"t": "ack", "id": rid, "ok": False, "err": self.state.force_err}
+                elif name == "save":
+                    ack_msg = {"t": "ack", "id": rid, "ok": True}
+                elif name == "exit":
+                    ack_msg = {"t": "ack", "id": rid, "ok": True}
+                    bye_msg = {"t": "bye", "reason": "exit"}
+                    should_close = True
+                elif name == "freset":
+                    if not unlocked:
+                        ack_msg = {"t": "ack", "id": rid, "ok": False, "err": "locked"}
+                    else:
+                        ack_msg = {"t": "ack", "id": rid, "ok": True}
+                        bye_msg = {"t": "bye", "reason": "freset"}
+                        should_close = True
+                else:
+                    ack_msg = {"t": "ack", "id": rid, "ok": False, "err": "unsupported"}
+            ws_send_json(sock, send_lock, ack_msg)
+            if bye_msg is not None:
+                ws_send_json(sock, send_lock, bye_msg)
+            return unlocked, should_close
 
         if rtype == "set":
             key = req.get("key", "")
@@ -519,176 +898,112 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         val: str,
         unlocked: bool,
     ) -> bool:
+        out_msgs: list[dict] = []
+        send_bt_wl: list[str] | None = None
+
         with self.state.lock:
-            drop_key = self.state.drop_ack_key
-        if drop_key is not None and key == drop_key:
-            return False
-
-        if key == "gnss.rate":
-            if val not in {str(v) for v in self.state.caps().get(key, [])}:
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
+            if self.state.ota_busy or self.state.ota_rebooting:
+                out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "busy"})
+            elif self.state.force_err is not None:
+                out_msgs.append(
+                    {"t": "ack", "id": rid, "ok": False, "err": self.state.force_err}
                 )
+            elif self.state.drop_ack_key is not None and key == self.state.drop_ack_key:
                 return False
-            with self.state.lock:
-                self.state.config[key] = int(val)
-                cfg = {"t": "config", **self.state.config}
-            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-            ws_send_json(sock, send_lock, cfg)
-            ws_send_json(sock, send_lock, {"t": "caps", "caps": self.state.caps()})
-            return False
-
-        if key in NMEA_KEYS:
-            if val not in {str(v) for v in self.state.caps().get(key, [])}:
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
-                )
-                return False
-            with self.state.lock:
-                self.state.config[key] = int(val)
-                cfg = {"t": "config", **self.state.config}
-            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-            ws_send_json(sock, send_lock, cfg)
-            return False
-
-        if key == "gnss.gga_gate.enabled":
-            if val not in VALID_BOOL:
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
-                )
-                return False
-            with self.state.lock:
-                gate = dict(self.state.config["gga_gate"])
-                gate["enabled"] = val == "1"
-                self.state.config["gga_gate"] = gate
-                cfg = {"t": "config", **self.state.config}
-            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-            ws_send_json(sock, send_lock, cfg)
-            return False
-
-        if key == "gnss.gga_gate.min_sats":
-            if not re.fullmatch(r"0|[1-9][0-9]*", val) or int(val) > 40:
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
-                )
-                return False
-            with self.state.lock:
-                gate = dict(self.state.config["gga_gate"])
-                gate["min_sats"] = int(val)
-                self.state.config["gga_gate"] = gate
-                cfg = {"t": "config", **self.state.config}
-            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-            ws_send_json(sock, send_lock, cfg)
-            return False
-
-        if key in CONST_KEYS:
-            if self.state.no_const:
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "unsupported"},
-                )
-                return False
-            if val not in VALID_BOOL:
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
-                )
-                return False
-            with self.state.lock:
-                self.state.config[key] = int(val)
-                cfg = {"t": "config", **self.state.config}
-            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-            ws_send_json(sock, send_lock, cfg)
-            return False
-
-        if key == "bt.pair_next":
-            if val not in VALID_BOOL:
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
-                )
-                return False
-            with self.state.lock:
-                self.state.config[key] = int(val)
-                cfg = {"t": "config", **self.state.config}
-            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-            ws_send_json(sock, send_lock, cfg)
-            return False
-
-        if key in ("bt.wl.add", "bt.wl.del"):
-            if not MAC_RE.fullmatch(val):
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
-                )
-                return False
-            mac = val.upper()
-            with self.state.lock:
-                if key == "bt.wl.add":
-                    new_wl = (
-                        self.state.whitelist + [mac]
-                        if mac not in self.state.whitelist
-                        else list(self.state.whitelist)
-                    )
-                    probe = json.dumps(
-                        {"t": "status", "bt": {"whitelist": new_wl}},
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                    if len(probe) > MAX_FRAME_BYTES:
-                        ws_send_json(
-                            sock,
-                            send_lock,
-                            {"t": "ack", "id": rid, "ok": False, "err": "failed"},
-                        )
-                        return False
-                    self.state.whitelist = new_wl
+            elif key == "gnss.rate":
+                if val not in {str(v) for v in self.state.caps().get(key, [])}:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
                 else:
-                    self.state.whitelist = [m for m in self.state.whitelist if m != mac]
-                wl = list(self.state.whitelist)
-                self.state.wl_version += 1
-                cfg = {"t": "config", **self.state.config}
-            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-            ws_send_json(sock, send_lock, cfg)
-            self._send_status(sock, send_lock, 0, include_bt=wl)
-            return False
+                    self.state.config[key] = int(val)
+                    out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                    out_msgs.append({"t": "config", **self.state.config})
+                    out_msgs.append({"t": "caps", "caps": self.state.caps()})
+            elif key in NMEA_KEYS:
+                if val not in {str(v) for v in self.state.caps().get(key, [])}:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
+                else:
+                    self.state.config[key] = int(val)
+                    out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                    out_msgs.append({"t": "config", **self.state.config})
+            elif key == "gnss.gga_gate.enabled":
+                if val not in VALID_BOOL:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
+                else:
+                    gate = dict(self.state.config["gga_gate"])
+                    gate["enabled"] = val == "1"
+                    self.state.config["gga_gate"] = gate
+                    out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                    out_msgs.append({"t": "config", **self.state.config})
+            elif key == "gnss.gga_gate.min_sats":
+                if not re.fullmatch(r"0|[1-9][0-9]*", val) or int(val) > 40:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
+                else:
+                    gate = dict(self.state.config["gga_gate"])
+                    gate["min_sats"] = int(val)
+                    self.state.config["gga_gate"] = gate
+                    out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                    out_msgs.append({"t": "config", **self.state.config})
+            elif key in CONST_KEYS:
+                if self.state.no_const:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "unsupported"})
+                elif val not in VALID_BOOL:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
+                else:
+                    self.state.config[key] = int(val)
+                    out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                    out_msgs.append({"t": "config", **self.state.config})
+            elif key == "bt.pair_next":
+                if val not in VALID_BOOL:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
+                else:
+                    self.state.config[key] = int(val)
+                    out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                    out_msgs.append({"t": "config", **self.state.config})
+            elif key in ("bt.wl.add", "bt.wl.del"):
+                if not MAC_RE.fullmatch(val):
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
+                else:
+                    mac = val.upper()
+                    if key == "bt.wl.add":
+                        new_wl = (
+                            self.state.whitelist + [mac]
+                            if mac not in self.state.whitelist
+                            else list(self.state.whitelist)
+                        )
+                        probe = json.dumps(
+                            {"t": "status", "bt": {"whitelist": new_wl}},
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                        if len(probe) > MAX_FRAME_BYTES:
+                            out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "failed"})
+                        else:
+                            self.state.whitelist = new_wl
+                            send_bt_wl = list(self.state.whitelist)
+                            self.state.wl_version += 1
+                            out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                            out_msgs.append({"t": "config", **self.state.config})
+                    else:
+                        self.state.whitelist = [m for m in self.state.whitelist if m != mac]
+                        send_bt_wl = list(self.state.whitelist)
+                        self.state.wl_version += 1
+                        out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                        out_msgs.append({"t": "config", **self.state.config})
+            elif key == "factory.sn":
+                if not unlocked:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "locked"})
+                elif not SN_RE.fullmatch(val):
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
+                else:
+                    self.state.config[key] = val
+                    out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                    out_msgs.append({"t": "config", **self.state.config})
+            else:
+                out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "unknown_key"})
 
-        if key == "factory.sn":
-            if not unlocked:
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "locked"},
-                )
-                return False
-            if not SN_RE.fullmatch(val):
-                ws_send_json(
-                    sock,
-                    send_lock,
-                    {"t": "ack", "id": rid, "ok": False, "err": "bad_value"},
-                )
-                return False
-            with self.state.lock:
-                self.state.config[key] = val
-                cfg = {"t": "config", **self.state.config}
-            ws_send_json(sock, send_lock, {"t": "ack", "id": rid, "ok": True})
-            ws_send_json(sock, send_lock, cfg)
-            return False
-
-        ws_send_json(
-            sock, send_lock, {"t": "ack", "id": rid, "ok": False, "err": "unknown_key"}
-        )
+        for msg in out_msgs:
+            ws_send_json(sock, send_lock, msg)
+        if send_bt_wl is not None:
+            self._send_status(sock, send_lock, 0, include_bt=send_bt_wl)
         return False
 
 
@@ -726,8 +1041,13 @@ class _WsClient:
         assert expected.encode("ascii") in hdr, f"Bad Sec-WebSocket-Accept: {hdr!r}"
         self._buf.extend(rest)
 
-    def _read_exact(self, n: int) -> bytes:
+    def _read_exact(self, n: int, deadline: float | None = None) -> bytes:
         while len(self._buf) < n:
+            if deadline is not None:
+                rem = deadline - time.monotonic()
+                if rem <= 0:
+                    raise TimeoutError("WS read deadline exceeded")
+                self.sock.settimeout(rem)
             chunk = self.sock.recv(n - len(self._buf))
             if not chunk:
                 raise EOFError("socket closed")
@@ -742,16 +1062,16 @@ class _WsClient:
     def send_json(self, obj: dict) -> None:
         self.send_text(json.dumps(obj, separators=(",", ":")))
 
-    def recv_next(self) -> tuple[int, bytes]:
-        hdr = self._read_exact(2)
+    def recv_next(self, deadline: float | None = None) -> tuple[int, bytes]:
+        hdr = self._read_exact(2, deadline=deadline)
         b0, b1 = hdr[0], hdr[1]
         opcode = b0 & 0x0F
         length = b1 & 0x7F
         if length == 126:
-            (length,) = struct.unpack("!H", self._read_exact(2))
+            (length,) = struct.unpack("!H", self._read_exact(2, deadline=deadline))
         elif length == 127:
-            (length,) = struct.unpack("!Q", self._read_exact(8))
-        payload = self._read_exact(length) if length > 0 else b""
+            (length,) = struct.unpack("!Q", self._read_exact(8, deadline=deadline))
+        payload = self._read_exact(length, deadline=deadline) if length > 0 else b""
         return opcode, payload
 
     def recv_until(self, t_name: str) -> dict:
@@ -765,6 +1085,22 @@ class _WsClient:
 
     def close(self) -> None:
         self.sock.close()
+
+
+def _wait_ws_closed(client: _WsClient, timeout_s: float) -> bool:
+    """在绝对截止时间内等待 WS 客户端收到关闭帧或 EOF；持续收到普通帧超时后返回 False。"""
+    deadline = time.monotonic() + timeout_s
+    try:
+        while True:
+            if time.monotonic() >= deadline:
+                return False
+            op, _pl = client.recv_next(deadline=deadline)
+            if op == 0x8:
+                return True
+    except TimeoutError:
+        return False
+    except (EOFError, ConnectionError):
+        return True
 
 
 def resolve_canonical_host(bind_host: str, actual_port: int, canonical_host: str | None) -> str:
@@ -1002,9 +1338,429 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
             raise AssertionError("Expected close frame 1009 for too_long")
         c2.close()
 
-        print("SELFTEST PASS: HTTP, WS handshake, §6 examples, all §5 error codes, bye, 1009")
+        # 8. OTA endpoints (ADR-0019 §2.3)
+        def http_req(
+            method: str,
+            path: str,
+            body: bytes | None = None,
+            headers: dict[str, str] | None = None,
+        ) -> tuple[int, str, bytes]:
+            hc = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
+            try:
+                hc.request(method, path, body=body, headers=headers or {})
+                r = hc.getresponse()
+                return r.status, r.getheader("Content-Type") or "", r.read()
+            finally:
+                hc.close()
+
+        # 8a. GET /ota/info contract
+        st_code, ctype, raw_body = http_req("GET", "/ota/info")
+        assert st_code == 200 and "application/json" in ctype
+        info = json.loads(raw_body.decode("utf-8"))
+        assert info == {
+            "running": "0.1.0-mock",
+            "project": "rtk_main",
+            "part": "ota_0",
+            "state": "valid",
+            "other": None,
+            "max": OTA_DEFAULT_MAX,
+            "busy": False,
+        }, f"Unexpected /ota/info: {info}"
+
+        valid_bin = build_mock_firmware("6.2.0-test", "rtk_main", total_size=4096)
+
+        # 8b. Missing Content-Length (raw HTTP) and Content-Length: 0 -> 411 length
+        raw_sock = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+        try:
+            raw_sock.sendall(
+                b"POST /ota HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/octet-stream\r\nConnection: close\r\n\r\n"
+            )
+            raw_resp = b""
+            while True:
+                chunk = raw_sock.recv(4096)
+                if not chunk:
+                    break
+                raw_resp += chunk
+        finally:
+            raw_sock.close()
+        assert b" 411 " in raw_resp.split(b"\r\n", 1)[0]
+        assert json.loads(raw_resp.split(b"\r\n\r\n", 1)[1].decode("utf-8")) == {
+            "ok": False,
+            "err": "length",
+        }
+
+        st_code, ctype, raw_body = http_req(
+            "POST", "/ota", body=b"", headers={"Content-Type": "application/octet-stream", "Content-Length": "0"}
+        )
+        assert st_code == 411 and "application/json" in ctype
+        assert json.loads(raw_body.decode("utf-8")) == {"ok": False, "err": "length"}
+
+        # 8c. too_large (> max) -> 413 too_large
+        with state.lock:
+            state.ota_max = 2048
+        st_code, ctype, raw_body = http_req(
+            "POST", "/ota", body=valid_bin, headers={"Content-Type": "application/octet-stream"}
+        )
+        assert st_code == 413 and "application/json" in ctype
+        assert json.loads(raw_body.decode("utf-8")) == {"ok": False, "err": "too_large"}
+        with state.lock:
+            state.ota_max = OTA_DEFAULT_MAX
+
+        # 8d. bad_image: wrong byte 0, wrong chip_id (ESP32-S3), wrong desc magic, wrong project_name, BOM+project, <= 288 B
+        assert parse_esp_app_header(valid_bin[: OTA_HDR_BYTES - 1]) is None
+        parsed_32 = parse_esp_app_header(
+            build_mock_firmware("", total_size=1024, raw_version=b"V" * 32, raw_project=b"P" * 32)
+        )
+        assert parsed_32 == ("V" * 32, b"P" * 32), f"32 B no-NUL parse mismatch: {parsed_32!r}"
+        parsed_inv = parse_esp_app_header(
+            build_mock_firmware("", total_size=1024, raw_version=b"\xff1.2.3", raw_project=b"rtk_main")
+        )
+        assert parsed_inv == ("\ufffd1.2.3", b"rtk_main"), f"invalid UTF-8 mismatch: {parsed_inv!r}"
+        for raw_ver, want_ver in (
+            (b"v1\xe2\x82", "v1\ufffd"),
+            (b"\xe2\x82A", "\ufffdA"),
+            (b"\xf0\x9f\x98", "\ufffd"),
+            (b"\xf0\x9f.1", "\ufffd.1"),
+            (b"\xf0\x9f\xe2\x82\xac", "\ufffd\u20ac"),
+        ):
+            parsed_trunc = parse_esp_app_header(
+                build_mock_firmware("", total_size=1024, raw_version=raw_ver, raw_project=b"rtk_main")
+            )
+            assert parsed_trunc == (want_ver, b"rtk_main"), (
+                f"truncated UTF-8 mismatch for {raw_ver!r}: {parsed_trunc!r}"
+            )
+
+        for bad_blob in (
+            build_mock_firmware("6.2.0", "rtk_main", total_size=1024, img_magic=0x00),
+            build_mock_firmware("6.2.0", "rtk_main", total_size=1024, chip_id=0x0009),
+            build_mock_firmware("6.2.0", "rtk_main", total_size=1024, desc_magic=0x12345678),
+            build_mock_firmware("6.2.0", "other_proj", total_size=1024),
+            build_mock_firmware("6.2.0", total_size=1024, raw_project=b"\xef\xbb\xbf" + b"rtk_main"),
+            build_mock_firmware("6.2.0", "rtk_main", total_size=OTA_HDR_BYTES),
+        ):
+            st_code, ctype, raw_body = http_req(
+                "POST", "/ota", body=bad_blob, headers={"Content-Type": "application/octet-stream"}
+            )
+            assert st_code == 400 and "application/json" in ctype
+            assert json.loads(raw_body.decode("utf-8")) == {"ok": False, "err": "bad_image"}
+
+        # 8d-2. Oversized incomplete body (only 1 B sent) -> prompt 413 + no busy blockage
+        with state.lock:
+            state.ota_max = 2048
+        s_over = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+        try:
+            t_over0 = time.monotonic()
+            s_over.sendall(
+                b"POST /ota HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/octet-stream\r\n"
+                b"Content-Length: 4096\r\n\r\n\xe9"
+            )
+            over_resp = b""
+            while True:
+                ch = s_over.recv(4096)
+                if not ch:
+                    break
+                over_resp += ch
+            t_over = time.monotonic() - t_over0
+        finally:
+            s_over.close()
+        assert t_over < 1.5, f"Incomplete 413 took too long: {t_over:.2f}s"
+        assert b" 413 " in over_resp.split(b"\r\n", 1)[0], f"Expected 413, got {over_resp!r}"
+        assert json.loads(over_resp.split(b"\r\n\r\n", 1)[1].decode("utf-8")) == {
+            "ok": False,
+            "err": "too_large",
+        }
+        with state.lock:
+            state.ota_max = OTA_DEFAULT_MAX
+            assert not state.ota_busy
+
+        # 8d-3. Real receive stall after valid 288 B -> 408 timeout + busy released
+        with state.lock:
+            state.ota_recv_timeout_s = 0.35
+        s_stall = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+        try:
+            stall_hdr = (
+                b"POST /ota HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/octet-stream\r\n"
+                b"Content-Length: 4096\r\n\r\n"
+            )
+            s_stall.sendall(stall_hdr + valid_bin[:OTA_HDR_BYTES])
+            # Confirm busy is True while stalled
+            deadline_b = time.monotonic() + 1.0
+            saw_busy = False
+            while time.monotonic() < deadline_b:
+                _, _, rb_chk = http_req("GET", "/ota/info")
+                if json.loads(rb_chk.decode("utf-8"))["busy"]:
+                    saw_busy = True
+                    break
+                time.sleep(0.01)
+            assert saw_busy, "Expected busy=True while receive stalled"
+            stall_resp = b""
+            while True:
+                ch = s_stall.recv(4096)
+                if not ch:
+                    break
+                stall_resp += ch
+        finally:
+            s_stall.close()
+            with state.lock:
+                state.ota_recv_timeout_s = OTA_RECV_TIMEOUT_S
+        assert b" 408 " in stall_resp.split(b"\r\n", 1)[0], f"Expected 408, got {stall_resp!r}"
+        assert json.loads(stall_resp.split(b"\r\n\r\n", 1)[1].decode("utf-8")) == {
+            "ok": False,
+            "err": "timeout",
+        }
+        _, _, rb_post_to = http_req("GET", "/ota/info")
+        assert json.loads(rb_post_to.decode("utf-8"))["busy"] is False
+
+        # 8d-4. Steady trickle (< recv timeout per chunk) exceeding total deadline -> 408 timeout
+        with state.lock:
+            state.ota_recv_timeout_s = 2.0
+            state.ota_total_timeout_s = 0.45
+        s_trickle = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+        try:
+            trickle_hdr = (
+                b"POST /ota HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/octet-stream\r\n"
+                b"Content-Length: 4096\r\n\r\n"
+            )
+            s_trickle.sendall(trickle_hdr + valid_bin[:OTA_HDR_BYTES])
+            sent_off = OTA_HDR_BYTES
+            for _ in range(8):
+                time.sleep(0.08)
+                try:
+                    s_trickle.sendall(valid_bin[sent_off : sent_off + 64])
+                    sent_off += 64
+                except OSError:
+                    break
+            trickle_resp = b""
+            while True:
+                ch = s_trickle.recv(4096)
+                if not ch:
+                    break
+                trickle_resp += ch
+        finally:
+            s_trickle.close()
+            with state.lock:
+                state.ota_recv_timeout_s = OTA_RECV_TIMEOUT_S
+                state.ota_total_timeout_s = OTA_TOTAL_TIMEOUT_S
+        assert b" 408 " in trickle_resp.split(b"\r\n", 1)[0], f"Expected 408, got {trickle_resp!r}"
+        assert json.loads(trickle_resp.split(b"\r\n\r\n", 1)[1].decode("utf-8")) == {
+            "ok": False,
+            "err": "timeout",
+        }
+        _, _, rb_post_trickle = http_req("GET", "/ota/info")
+        assert json.loads(rb_post_trickle.decode("utf-8"))["busy"] is False
+
+        # 8e. Every --ota-err code maps to exact HTTP status + JSON
+        for err_code, http_status in OTA_ERR_HTTP.items():
+            with state.lock:
+                state.ota_err = err_code
+            if err_code == "state":
+                sc_i, _, rb_i = http_req("GET", "/ota/info")
+                assert sc_i == 200 and json.loads(rb_i.decode("utf-8"))["state"] == "pending_verify"
+            st_code, ctype, raw_body = http_req(
+                "POST", "/ota", body=valid_bin, headers={"Content-Type": "application/octet-stream"}
+            )
+            assert st_code == http_status, f"{err_code}: expected {http_status}, got {st_code}"
+            assert "application/json" in ctype
+            assert json.loads(raw_body.decode("utf-8")) == {"ok": False, "err": err_code}
+        with state.lock:
+            state.ota_err = None
+
+        # 8f. Slow upload throttle + concurrent busy (HTTP & WS set/cmd) + reboot window atomicity + WS EOF disconnect
+        slow_bin = build_mock_firmware("6.2.0-test", "rtk_main", total_size=8192)
+        with state.lock:
+            state.ota_slow_kbps = 32.0
+            state.ota_reboot_ms = 250
+        c3 = _WsClient("127.0.0.1", port)
+        c3.recv_until("hello")
+        c3.recv_until("config")
+        c3.recv_until("status")
+
+        upload_res: dict[str, object] = {}
+
+        def _do_upload() -> None:
+            t_start = time.monotonic()
+            upload_res["resp"] = http_req(
+                "POST", "/ota", body=slow_bin, headers={"Content-Type": "application/octet-stream"}
+            )
+            upload_res["elapsed"] = time.monotonic() - t_start
+
+        up_th = threading.Thread(target=_do_upload)
+        up_th.start()
+        # Wait until upload is active
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with state.lock:
+                if state.ota_busy:
+                    break
+            time.sleep(0.01)
+        assert state.ota_busy, "Expected ota_busy during slow upload"
+        # Concurrent WS set & cmd -> busy (and config untouched); concurrent POST /ota -> 409 busy
+        c3.send_json({"t": "set", "id": 40, "key": "gnss.rate", "value": "5"})
+        assert c3.recv_until("ack") == {"t": "ack", "id": 40, "ok": False, "err": "busy"}
+        c3.send_json({"t": "cmd", "id": 41, "name": "exit"})
+        assert c3.recv_until("ack") == {"t": "ack", "id": 41, "ok": False, "err": "busy"}
+        with state.lock:
+            assert state.config["gnss.rate"] == 10, "WS set mutated config while ota_busy"
+        sc_busy, _, rb_busy = http_req(
+            "POST", "/ota", body=valid_bin, headers={"Content-Type": "application/octet-stream"}
+        )
+        assert sc_busy == 409 and json.loads(rb_busy.decode("utf-8")) == {"ok": False, "err": "busy"}
+
+        up_th.join(timeout=5.0)
+        assert not up_th.is_alive()
+        st_code, ctype, raw_body = upload_res["resp"]  # type: ignore[misc]
+        assert st_code == 200 and "application/json" in ctype
+        assert json.loads(raw_body.decode("utf-8")) == {
+            "ok": True,
+            "ver": "6.2.0-test",
+            "reboot_ms": 250,
+        }
+        assert float(upload_res["elapsed"]) >= 0.15, f"Slow throttle too fast: {upload_res['elapsed']}"
+
+        # Immediately after 200 (before reboot completes): running/other/part must NOT switch yet, busy=True, 2nd POST -> 409 busy
+        st_pre, _, rb_pre = http_req("GET", "/ota/info")
+        assert st_pre == 200
+        info_pre = json.loads(rb_pre.decode("utf-8"))
+        assert info_pre["running"] == "0.1.0-mock", f"Switched before reboot: {info_pre}"
+        assert info_pre["other"] is None, f"other switched before reboot: {info_pre}"
+        assert info_pre["part"] == "ota_0", f"part switched before reboot: {info_pre}"
+        assert info_pre["busy"] is True, f"Expected busy=True in reboot window: {info_pre}"
+        sc_win, _, rb_win = http_req(
+            "POST", "/ota", body=valid_bin, headers={"Content-Type": "application/octet-stream"}
+        )
+        assert sc_win == 409 and json.loads(rb_win.decode("utf-8")) == {"ok": False, "err": "busy"}
+
+        # Verify simulated reboot disconnects active WS client via EOF or close frame within absolute deadline
+        try:
+            ws_closed = _wait_ws_closed(c3, timeout_s=2.0)
+        finally:
+            c3.close()
+        assert ws_closed, "Expected mock reboot to close active WS connection (EOF/close within absolute deadline)"
+
+        # Regression check: _wait_ws_closed must fail within absolute deadline even when status frames keep arriving
+        class _SpamWsClient:
+            def recv_next(self, deadline: float | None = None) -> tuple[int, bytes]:
+                time.sleep(0.04)
+                return 0x1, b'{"t":"status"}'
+
+        t_spam0 = time.monotonic()
+        assert not _wait_ws_closed(_SpamWsClient(), timeout_s=0.18), (  # type: ignore[arg-type]
+            "Expected _wait_ws_closed to return False when status frames keep arriving past absolute deadline"
+        )
+        t_spam = time.monotonic() - t_spam0
+        assert t_spam < 0.8, f"_wait_ws_closed exceeded absolute deadline bound: {t_spam:.2f}s"
+
+        # Regression check: BrokenPipeError during initial WS snapshot send must clean up ws_clients without leaking fileno()==-1
+        orig_send_status = Handler._send_status
+        injected_fail = {"armed": True}
+
+        def _fail_first_status(
+            self_h: MockHandler,
+            sock_h: socket.socket,
+            send_lock_h: threading.Lock,
+            tick_h: int,
+            include_bt: list[str] | None,
+        ) -> None:
+            if tick_h == 0 and injected_fail["armed"]:
+                injected_fail["armed"] = False
+                raise BrokenPipeError("injected initial status failure")
+            orig_send_status(self_h, sock_h, send_lock_h, tick_h, include_bt)
+
+        Handler._send_status = _fail_first_status  # type: ignore[method-assign]
+        try:
+            c_fail = _WsClient("127.0.0.1", port)
+            try:
+                assert _wait_ws_closed(c_fail, timeout_s=1.5), (
+                    "Expected WS connection to close after initial status send failure"
+                )
+            finally:
+                c_fail.close()
+        finally:
+            Handler._send_status = orig_send_status  # type: ignore[method-assign]
+        deadline_ws_clean = time.monotonic() + 1.0
+        while time.monotonic() < deadline_ws_clean:
+            with state.lock:
+                if not state.ws_clients:
+                    break
+            time.sleep(0.01)
+        with state.lock:
+            assert not state.ws_clients, (
+                f"Leaked ws_clients after initial send failure: {[s.fileno() for s in state.ws_clients]}"
+            )
+
+        # Verify /ota/info updated atomically after reboot
+        st_code, _, raw_body = http_req("GET", "/ota/info")
+        assert st_code == 200
+        info_after = json.loads(raw_body.decode("utf-8"))
+        assert info_after["running"] == "6.2.0-test"
+        assert info_after["other"] == "0.1.0-mock"
+        assert info_after["part"] == "ota_1"
+        assert info_after["busy"] is False
+
+        # 8f-2. Empty version consistency (POST ver="" == post-reboot GET running="") & response send failure still reboots
+        with state.lock:
+            state.ota_slow_kbps = 0.0
+            state.ota_reboot_ms = 80
+        empty_ver_bin = build_mock_firmware("", "rtk_main", total_size=1024)
+        st_ev, _, rb_ev = http_req(
+            "POST", "/ota", body=empty_ver_bin, headers={"Content-Type": "application/octet-stream"}
+        )
+        assert st_ev == 200 and json.loads(rb_ev.decode("utf-8")) == {
+            "ok": True,
+            "ver": "",
+            "reboot_ms": 80,
+        }
+        deadline_r = time.monotonic() + 1.5
+        while time.monotonic() < deadline_r:
+            _, _, rb_r = http_req("GET", "/ota/info")
+            info_ev = json.loads(rb_r.decode("utf-8"))
+            if not info_ev["busy"]:
+                break
+            time.sleep(0.02)
+        assert info_ev["busy"] is False
+        assert info_ev["running"] == "", f"Empty version mismatch: {info_ev}"
+        assert info_ev["other"] == "6.2.0-test"
+        assert info_ev["part"] == "ota_0"
+
+        # Client closes socket right after sending full valid body -> reboot still runs and releases busy
+        s_drop = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+        drop_bin = build_mock_firmware("6.3.0-drop", "rtk_main", total_size=1024)
+        s_drop.sendall(
+            (
+                f"POST /ota HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                f"Content-Type: application/octet-stream\r\n"
+                f"Content-Length: {len(drop_bin)}\r\n\r\n"
+            ).encode("ascii")
+            + drop_bin
+        )
+        s_drop.close()
+        deadline_d = time.monotonic() + 1.5
+        while time.monotonic() < deadline_d:
+            _, _, rb_d = http_req("GET", "/ota/info")
+            info_d = json.loads(rb_d.decode("utf-8"))
+            if info_d["running"] == "6.3.0-drop" and not info_d["busy"]:
+                break
+            time.sleep(0.02)
+        assert info_d["running"] == "6.3.0-drop" and info_d["busy"] is False and info_d["part"] == "ota_1"
+
+        # 8g. --no-ota returns 404 on /ota/info
+        with state.lock:
+            state.no_ota = True
+        st_code, _, _ = http_req("GET", "/ota/info")
+        assert st_code == 404
+
+        print("SELFTEST PASS: HTTP, WS handshake, §6 examples, all §5 error codes, bye, 1009, OTA §2.3")
         return 0
     finally:
+        with state.lock:
+            t = state.ota_reboot_timer
+            state.ota_reboot_timer = None
+        if t is not None:
+            t.cancel()
         srv.shutdown()
         srv.server_close()
 
@@ -1039,14 +1795,48 @@ def main() -> int:
         default=None,
         help="强制门户 302 目标规范 Host（默认使用绑定地址与实际端口，0.0.0.0 回退为 127.0.0.1）",
     )
+    parser.add_argument(
+        "--ota-err",
+        default=None,
+        choices=list(OTA_ERR_HTTP.keys()),
+        help="Inject specified OTA error code on POST /ota",
+    )
+    parser.add_argument(
+        "--ota-slow-kbps",
+        type=float,
+        default=0.0,
+        help="Throttle POST /ota body read speed in KB/s (0 = unlimited)",
+    )
+    parser.add_argument(
+        "--ota-max",
+        type=int,
+        default=OTA_DEFAULT_MAX,
+        help="Target OTA partition max size in bytes (default 1966080)",
+    )
+    parser.add_argument(
+        "--no-ota",
+        action="store_true",
+        help="Return 404 for /ota/info and /ota (simulate legacy firmware)",
+    )
     args = parser.parse_args()
+    if args.ota_slow_kbps < 0:
+        parser.error("--ota-slow-kbps must be >= 0")
+    if args.ota_max <= 0:
+        parser.error("--ota-max must be > 0")
 
     ui_dir = repo_root / "main" / "web" / "ui"
     if args.selftest:
         return run_selftest(ui_dir, args.caps_cm680)
 
-    state = MockState(unlock_token=args.unlock_token, no_const=args.no_const,
-                      caps_cm680=args.caps_cm680)
+    state = MockState(
+        unlock_token=args.unlock_token,
+        no_const=args.no_const,
+        caps_cm680=args.caps_cm680,
+        ota_err=args.ota_err,
+        ota_slow_kbps=args.ota_slow_kbps,
+        ota_max=args.ota_max,
+        no_ota=args.no_ota,
+    )
     state.force_err = args.force_err
     state.drop_ack_key = args.drop_ack
     state.gnss_none = args.gnss_none
@@ -1060,7 +1850,7 @@ def main() -> int:
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     actual_port = srv.server_address[1]
     Handler.canonical_host = resolve_canonical_host(args.host, actual_port, args.canonical_host)
-    print(f"Serving {ui_dir} at http://{args.host}:{actual_port}/ (ws://.../ws)")
+    print(f"Serving {ui_dir} at http://{args.host}:{actual_port}/ (ws://.../ws)", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

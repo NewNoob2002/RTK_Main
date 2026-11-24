@@ -26,6 +26,7 @@
 #include "board/BoardProfile.hpp"
 #include "board/BoardStartup.hpp"
 #include "core/Types.hpp"
+#include "modules/ota/OtaRuntime.hpp"
 #include "support/ConsoleSupport.hpp"
 #include "support/ResetReason.hpp"
 
@@ -119,9 +120,9 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
     (void)ctx;
     const esp_reset_reason_t reason = esp_reset_reason();
     const char *name = app::resetReasonName(reason);
-    // 版本串短于 int 上限，精度转换安全。
-    FW_LOGI(fw::TraceCat::kSys, "RTK_main %.*s", static_cast<int>(app::kAppVersion.size()),
-            app::kAppVersion.data());
+    const auto version = app::appVersion();
+    // 版本字段最多 32 B，精度转换无损。
+    FW_LOGI(fw::TraceCat::kSys, "RTK_main %.*s", static_cast<int>(version.size()), version.data());
     FW_LOGI(fw::TraceCat::kSys, "board %s, console profile %s", app::board::current().name,
             app::kConsoleProfileName);
     if ((reason == ESP_RST_PANIC) || (reason == ESP_RST_INT_WDT) || (reason == ESP_RST_TASK_WDT) ||
@@ -436,6 +437,7 @@ void handleDegrade(
     app::BootCtx &ctx, // NOLINT(misc-const-correctness): 由 BootStep::onDegrade 签名固定
     const char *reason) noexcept
 {
+    app::ota::bootFailed();
     app::AppContext &self = app::appContext();
     if (reason != nullptr) {
         // SEALED 后仍保留首个原因；未封存的分配器同样留住原因供 sys info 显示。
@@ -572,6 +574,7 @@ void AppContext::boot() noexcept
         printBootTable(executed);
     }
     attachDebugLog();
+    ota::bootReady();
     if constexpr (kConsoleProfile != ConsoleProfile::kNone) {
         runConsole(); // 最后一步：摘要之后才出现提示符
     }

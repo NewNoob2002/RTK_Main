@@ -2,6 +2,7 @@
 // 覆盖 Revision A 全部项：WS post-handshake 握手、/favicon.ico 204、global_user_ctx 空释放、
 // httpd_stop 失败保句柄、fd 复用代号隔离、ctrl 槽位预留、分片/超长关闭码、初始 config 先于请求 ack、
 // TX 背压与队列重调、GNSS 超时取消背压、退出 GGA 门控持久化确认、空闲重启重连取消。
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <csetjmp>
@@ -11,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "esp_err.h"
@@ -33,6 +35,11 @@
 #include "def/StorageDef.hpp"
 #include "modules/web/WebModule.hpp"
 #include "rtos/EspStatus.hpp"
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+#include "esp_image_format.h"
+#include "modules/ota/OtaRuntime.hpp"
+#include "modules/web/WebOtaTransfer.hpp"
+#endif
 
 // 嵌入页面符号替身（与 CMake EMBED_FILES 一致）。
 asm(".section .rodata\n"
@@ -127,6 +134,40 @@ bool s_lastWasRestart = false;
 app::AppContext s_ctx{};
 rtos::Executor s_ioExec{};
 std::array<app::web_cfg::WebFrame, app::WebModule::kTotalFrames> s_webFrames{};
+
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+struct MockOtaState {
+    std::span<const char> body{};
+    void (*onReceive)() = nullptr;
+    int received = 0;
+    int aborted = 0;
+    size_t written = 0U;
+    const esp_partition_t *bootPartition = nullptr;
+    bool otherReadable = true;
+    esp_ota_img_states_t otherState = ESP_OTA_IMG_VALID;
+    esp_err_t otherStateErr = ESP_OK;
+    bool backpressure = false;
+    long receiveWaitS = 5L;
+    std::string wireReply{};
+};
+
+MockOtaState s_ota{};
+constexpr esp_partition_t kRunningSlot{.address = 0x20000U, .size = 0x1E0000U, .label = "ota_0"};
+constexpr esp_partition_t kOtherSlot{.address = 0x200000U, .size = 0x1E0000U, .label = "ota_1"};
+alignas(esp_app_desc_t) std::array<std::byte, app::web_ota::kBufferBytes + 1U> s_otaBuffer{};
+#endif
+
+/** @brief 为测试服务绑定正常启动提供的工作区。 */
+void bindWebStorage()
+{
+    assert(fw::isOk(s_ctx.web.bindStorage(s_webFrames)));
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    const auto scratch = std::span{s_otaBuffer};
+    assert(s_ctx.web.bindOtaStorage(scratch.last(app::web_ota::kBufferBytes)) ==
+           fw::Status::kInvalidArg);
+    assert(fw::isOk(s_ctx.web.bindOtaStorage(scratch.first(app::web_ota::kBufferBytes))));
+#endif
+}
 
 const httpd_uri_t *findUri(std::string_view path)
 {
@@ -223,6 +264,11 @@ void resetHarness()
 {
     app::power::s_power_requests.releaseAction();
     s_httpd = MockHttpdState{};
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    s_ota = {};
+    app::ota::clearOtherSlotDirty();
+    s_ctx.bootPhase.store(app::BootPhase::kRunning, std::memory_order_relaxed);
+#endif
     s_nowMs = 1000U;
     s_mockSn = "B5F2";
     s_mockPairNext = false;
@@ -246,7 +292,7 @@ void resetHarness()
     s_ctx.ioExecutor = &s_ioExec;
     app::bindSettings(s_ctx);
     s_ctx.web.bindContext(s_ctx);
-    assert(fw::isOk(s_ctx.web.bindStorage(s_webFrames)));
+    bindWebStorage();
     assert(fw::isOk(s_ctx.web.init()));
 }
 
@@ -503,8 +549,135 @@ int httpd_req_to_sockfd(httpd_req_t *r)
     return r->sockfd;
 }
 
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+/** @brief 模拟本次 HTTP 接收并触发注入事件。 @param buf: 输出数据。 @param len: 最大字节数。 @retval 字节数或 HTTPD_SOCK_ERR_TIMEOUT。 */
+int httpd_req_recv(httpd_req_t *, char *buf, size_t len)
+{
+    ++s_ota.received;
+    if (s_ota.body.empty() && s_ota.onReceive != nullptr) {
+        const auto event = std::exchange(s_ota.onReceive, nullptr);
+        event();
+        s_nowMs += static_cast<uint32_t>(s_ota.receiveWaitS * 1000L);
+        return HTTPD_SOCK_ERR_TIMEOUT;
+    }
+    const auto part = s_ota.body.first(std::min(len, s_ota.body.size()));
+    if (!part.empty()) {
+        std::ranges::copy(part, buf);
+    }
+    s_ota.body = s_ota.body.subspan(part.size());
+    return static_cast<int>(part.size());
+}
+
+/** @brief 提供测试运行镜像描述符。 @retval 静态描述符。 */
+const esp_app_desc_t *esp_app_get_description()
+{
+    static constexpr esp_app_desc_t kDescription{
+        .magic_word = ESP_APP_DESC_MAGIC_WORD,
+        .unused_prefix = {},
+        .version = "host-test",
+        .project_name = "rtk_main",
+        .unused_suffix = {},
+    };
+    return &kDescription;
+}
+
+/** @brief 返回测试运行槽。 @retval 第一槽。 */
+const esp_partition_t *esp_ota_get_running_partition()
+{
+    return &kRunningSlot;
+}
+
+/** @brief 返回更新槽。 @retval 第二槽。 */
+const esp_partition_t *esp_ota_get_next_update_partition(const esp_partition_t *)
+{
+    return &kOtherSlot;
+}
+
+/** @brief 模拟运行槽与另一槽状态。 @param part: 查询分区。 @param state: 输出状态。 @retval ESP_OK 已返回，或返回注入错误。 */
+esp_err_t esp_ota_get_state_partition(const esp_partition_t *part, esp_ota_img_states_t *state)
+{
+    if (part == &kOtherSlot) {
+        if (s_ota.otherStateErr != ESP_OK) {
+            return s_ota.otherStateErr;
+        }
+        *state = s_ota.otherState;
+        return ESP_OK;
+    }
+    *state = ESP_OTA_IMG_VALID;
+    return ESP_OK;
+}
+
+/** @brief 模拟另一槽描述符。 @param desc: 输出描述符。 @retval ESP_OK 已读取。 @retval ESP_ERR_NOT_FOUND 模拟无镜像。 */
+esp_err_t esp_ota_get_partition_description(const esp_partition_t *, esp_app_desc_t *desc)
+{
+    if (!s_ota.otherReadable) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    *desc = *esp_app_get_description();
+    std::memcpy(desc->version, "6.0", sizeof("6.0"));
+    return ESP_OK;
+}
+
+/** @brief 验证 OTA 以顺序写入模式开启。 @param partition: 写入槽。 @param size: 开启模式。 @param handle: 输出测试句柄。 @retval ESP_OK 已开启。 */
+esp_err_t esp_ota_begin(const esp_partition_t *partition, size_t size, esp_ota_handle_t *handle)
+{
+    assert(partition == &kOtherSlot && size == OTA_WITH_SEQUENTIAL_WRITES);
+    *handle = 1U;
+    return ESP_OK;
+}
+
+/** @brief 记录写入字节数。 @param handle: 测试句柄。 @param size: 数据量。 @retval ESP_OK 已写入。 */
+esp_err_t esp_ota_write(esp_ota_handle_t handle, const void *, size_t size)
+{
+    assert(handle == 1U);
+    s_ota.written += size;
+    return ESP_OK;
+}
+
+/** @brief 模拟写入结束。 @param handle: 测试句柄。 @retval ESP_OK 校验通过。 */
+esp_err_t esp_ota_end(esp_ota_handle_t handle)
+{
+    assert(handle == 1U);
+    return ESP_OK;
+}
+
+/** @brief 记录失败清理。 @param handle: 测试句柄。 @retval ESP_OK 已释放。 @retval ESP_ERR_NOT_FOUND 尚未创建。 */
+esp_err_t esp_ota_abort(esp_ota_handle_t handle)
+{
+    ++s_ota.aborted;
+    return handle == 0U ? ESP_ERR_NOT_FOUND : ESP_OK;
+}
+
+/** @brief 记下提交的启动槽。 @param partition: 新启动槽。 @retval ESP_OK 已提交。 */
+esp_err_t esp_ota_set_boot_partition(const esp_partition_t *partition)
+{
+    s_ota.bootPartition = partition;
+    return ESP_OK;
+}
+
+/** @brief 模拟实际镜像长度。 @param pos: 声明范围。 @param image: 输出镜像长度。 @retval ESP_OK 读取成功。 */
+esp_err_t esp_image_get_metadata(const esp_partition_pos_t *pos, esp_image_metadata_t *image)
+{
+    assert(pos->size == s_ota.written);
+    image->image_len = pos->size;
+    return ESP_OK;
+}
+#endif
+
+/** @brief 取得 HTTP 头替身中的字段。 @param r: HTTP 请求。 @param field: 字段名。 @retval 字段值，缺失时为空指针。 */
+[[nodiscard]] static const char *requestHeader(const httpd_req_t &r, std::string_view field)
+{
+    if (field == "Host") {
+        return r.host;
+    }
+    if (field == "Content-Length") {
+        return r.content_length;
+    }
+    return field == "Content-Type" ? r.content_type : nullptr;
+}
+
 /**
- * @brief 读取请求头字段长度（当前支持 Host）
+ * @brief 读取请求头字段长度
  * @param r: HTTP 请求对象
  * @param field: 请求头字段名
  * @retval 字段值字节长度；未找到返回 0
@@ -515,14 +688,12 @@ size_t httpd_req_get_hdr_value_len(httpd_req_t *r, const char *field)
     if ((r == nullptr) || (field == nullptr)) {
         return 0U;
     }
-    if ((std::strcmp(field, "Host") == 0) && (r->host != nullptr)) {
-        return std::strlen(r->host);
-    }
-    return 0U;
+    const char *value = requestHeader(*r, field);
+    return value != nullptr ? std::strlen(value) : 0U;
 }
 
 /**
- * @brief 读取请求头字段值字符串（当前支持 Host）
+ * @brief 读取请求头字段值字符串
  * @param r: HTTP 请求对象
  * @param field: 请求头字段名
  * @param[out] val: 输出缓冲
@@ -538,17 +709,16 @@ esp_err_t httpd_req_get_hdr_value_str(httpd_req_t *r, const char *field, char *v
     if ((r == nullptr) || (field == nullptr) || (val == nullptr) || (val_size == 0U)) {
         return ESP_ERR_INVALID_ARG;
     }
-    if ((std::strcmp(field, "Host") != 0) || (r->host == nullptr)) {
+    const char *value = requestHeader(*r, field);
+    if (value == nullptr) {
         return ESP_ERR_NOT_FOUND;
     }
-    const size_t len = std::strlen(r->host);
-    if ((len + 1U) > val_size) {
-        std::memcpy(val, r->host, val_size - 1U);
-        val[val_size - 1U] = '\0';
-        return ESP_FAIL;
-    }
-    std::memcpy(val, r->host, len + 1U);
-    return ESP_OK;
+    const size_t len = std::strlen(value);
+    const size_t copied = std::min(len, val_size - 1U);
+    std::memcpy(val, value, copied);
+    val[copied] = '\0';
+    // 模拟 IDF 6.1 的边界行为，len == val_size 时截断但仍报成功。
+    return len > val_size ? ESP_FAIL : ESP_OK;
 }
 
 /**
@@ -660,11 +830,42 @@ int lwip_socket(int /*domain*/, int /*type*/, int /*protocol*/)
  * @retval 0 始终成功
  * @note 主机测试桩。
  */
-int lwip_setsockopt(int /*s*/, int /*level*/, int /*optname*/, const void * /*optval*/,
-                    socklen_t /*optlen*/)
+int lwip_setsockopt(int /*s*/, int /*level*/, int optname, const void *optval, socklen_t optlen)
 {
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    if (optname == SO_RCVTIMEO) {
+        assert(optlen == sizeof(timeval));
+        s_ota.receiveWaitS = static_cast<const timeval *>(optval)->tv_sec;
+    }
+#else
+    static_cast<void>(optname);
+    static_cast<void>(optval);
+    static_cast<void>(optlen);
+#endif
     return 0;
 }
+
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+/** @brief 返回模拟的接收等待选项。 @param optname: 选项名。 @param optval: 输出值。 @param optlen: 输出容量。 @retval 0 已读取。 */
+int lwip_getsockopt(int, int, int optname, void *optval, socklen_t *optlen)
+{
+    assert(optname == SO_RCVTIMEO && *optlen == sizeof(timeval));
+    *static_cast<timeval *>(optval) = {.tv_sec = s_ota.receiveWaitS, .tv_usec = 0};
+    return 0;
+}
+
+/** @brief 记录原始 HTTP 回包或模拟发送窗口已满。 @param dataptr: 数据。 @param size: 长度。 @param flags: 发送标志。 @retval 完整发送的字节数，或 -1。 */
+ssize_t lwip_send(int, const void *dataptr, size_t size, int flags)
+{
+    assert(flags == MSG_DONTWAIT);
+    if (s_ota.backpressure) {
+        errno = EWOULDBLOCK;
+        return -1;
+    }
+    s_ota.wireReply.assign(static_cast<const char *>(dataptr), size);
+    return static_cast<ssize_t>(size);
+}
+#endif
 
 /**
  * @brief 模拟设置 lwIP 套接字非阻塞标志（支持故障注入）
@@ -1375,9 +1576,9 @@ void testCaptivePortal()
     assert(std::string_view{static_cast<const char *>(s_httpd.captivePortalUriPtr)} ==
            "http://192.168.10.12/");
 
-    // 2. max_uri_handlers 留 2 个余量（3 基础 + 7 探测 + 2 = 12），且 404 处理器已注册。
-    assert(s_httpd.uris.size() == 10U);
-    assert(s_httpd.config.max_uri_handlers == 12U);
+    // 2. 3 基础 + 2 OTA + 7 探测，另留 2 个余量。
+    assert(s_httpd.uris.size() == 12U);
+    assert(s_httpd.config.max_uri_handlers == 14U);
     assert(s_httpd.err404Handler != nullptr);
 
     // 3. 全部 7 个系统探测路径均回 302 Found + Location + Cache-Control: no-store + 空体。
@@ -1517,7 +1718,7 @@ void testCaptivePortal()
     s_ctx.web.unbindStorage();
 
     // 重新 bindStorage + init 验证关停后可再次完整启动。
-    assert(fw::isOk(s_ctx.web.bindStorage(s_webFrames)));
+    bindWebStorage();
     assert(fw::isOk(s_ctx.web.init()));
     assert(s_httpd.dnsOpen);
     s_ctx.web.stopBoot();
@@ -1530,7 +1731,7 @@ void testCaptivePortal()
         s_httpd.failDnsSocket = (mode == 0);
         s_httpd.failDnsFcntl = (mode == 1);
         s_httpd.failDnsBind = (mode == 2);
-        assert(fw::isOk(s_ctx.web.bindStorage(s_webFrames)));
+        bindWebStorage();
         assert(fw::isOk(s_ctx.web.init()));
         assert(!s_httpd.dnsOpen);
         assert(s_httpd.running && (s_httpd.dhcpsOptionCalls == 1) &&
@@ -1544,6 +1745,7 @@ void testCaptivePortal()
     assert((s_httpd.dnsSocketCalls == 0) && !s_httpd.dnsOpen);
     assert(s_httpd.uris.size() == 3U);
     assert(s_httpd.config.max_uri_handlers == 5U);
+    assert(findUri("/ota") == nullptr && findUri("/ota/info") == nullptr);
     assert(s_httpd.err404Handler == nullptr);
     assert(findUri("/generate_204") == nullptr);
 
@@ -1563,6 +1765,261 @@ void testCaptivePortal()
 #endif
 }
 
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+/** @brief 通过注册路由发起测试 POST。 @param contentType: 原始媒体类型头。 @retval HTTP 回调返回值。 */
+[[nodiscard]] esp_err_t postOta(const char *contentType = "application/octet-stream")
+{
+    const auto *uri = findUri("/ota");
+    assert(uri != nullptr && uri->method == HTTP_POST);
+    httpd_req_t req{};
+    req.handle = &s_httpd;
+    req.user_ctx = uri->user_ctx;
+    req.sockfd = 1001;
+    req.method = HTTP_POST;
+    req.content_type = contentType;
+    req.content_length = "289";
+    req.content_len = app::web_ota::kHeaderBytes + 1U;
+    return uri->handler(&req);
+}
+
+/** @brief 生成仅供主机替身读取的镜像头及一个正文数据字节。 @retval 测试字节数组。 */
+[[nodiscard]] auto otaImage()
+{
+    std::array<char, app::web_ota::kHeaderBytes + 1U> image{};
+    image.front() = static_cast<char>(app::web_ota::kImageMagic);
+    const auto offset = app::web_ota::kAppDescOffset;
+    const std::array magic{'\x32', '\x54', static_cast<char>(0xcd), static_cast<char>(0xab)};
+    std::ranges::copy(magic, std::span{image}.subspan(offset).begin());
+    std::memcpy(std::span{image}.subspan(app::web_ota::kVersionOffset).data(), "6.2", 3U);
+    std::memcpy(std::span{image}.subspan(app::web_ota::kProjectOffset).data(), "rtk_main", 8U);
+    return image;
+}
+
+/** @brief 验证 GET 字节协议及 POST 媒体类型边界。 */
+void testOtaHttpContract()
+{
+    resetHarness();
+    const auto *uri = findUri("/ota/info");
+    assert(uri != nullptr && uri->method == HTTP_GET);
+    httpd_req_t req{};
+    req.handle = &s_httpd;
+    req.user_ctx = uri->user_ctx;
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespStatus == "200 OK" && s_httpd.lastRespType == "application/json");
+    assert(
+        s_httpd.lastRespBody ==
+        R"({"running":"host-test","project":"rtk_main","part":"ota_0","state":"valid","other":"6.0","max":1966080,"busy":false})");
+    s_ota.otherReadable = false;
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);
+
+    assert(postOta("application/octet-streamX") == ESP_FAIL);
+    assert(s_ota.received == 0 && s_ota.wireReply.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+    assert(s_ota.wireReply.ends_with("\r\n\r\n"
+                                     R"({"ok":false,"err":"bad_image"})"));
+
+    // 空正文在进入接收后模拟 EOF，区分媒体类型是否已获准。
+    simulateWifiEvent(WIFI_EVENT_AP_STACONNECTED);
+    assert(postOta("\tAPPLICATION/Octet-Stream \t; charset=binary") == ESP_FAIL);
+    assert(s_ota.received == 1);
+    assert(s_ota.wireReply ==
+           "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+           "Content-Length: 28\r\nConnection: close\r\n\r\n"
+           R"({"ok":false,"err":"aborted"})");
+    assert(postOta("application/octet-stream \t") == ESP_FAIL);
+    assert(s_ota.received == 2);
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
+/** @brief 验证 OTA 忙状态暂停空闲回落、拒绝 WS 变更，关机等待清理。 */
+void testOtaQuiesceAndWebBusy()
+{
+    resetHarness();
+    assert(simulateIdfV61WsHandshake(1004) == ESP_OK);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    s_httpd.sent.clear();
+
+    const auto image = otaImage();
+    s_ota.body = std::span{image}.first(app::web_ota::kHeaderBytes);
+    s_ota.onReceive = [] {
+        assert(app::ota::uploadBusy() && s_ota.written == app::web_ota::kHeaderBytes);
+        s_nowMs += 300000U; // 无站点且越过 idle 门槛。
+        assert(simulateWsFrame(1004, HTTPD_WS_TYPE_TEXT, true,
+                               R"({"t":"set","id":51,"key":"gnss.rate","value":"5"})") == ESP_OK);
+        assert(simulateWsFrame(1004, HTTPD_WS_TYPE_TEXT, true,
+                               R"({"t":"cmd","id":52,"name":"exit"})") == ESP_OK);
+        static_cast<void>(s_ctx.web.poll(s_nowMs));
+        static_cast<void>(s_ctx.web.poll(s_nowMs));
+        runPendingWork();
+    };
+    assert(postOta() == ESP_FAIL);
+    for (const auto &sent : s_httpd.sent) {
+        assert(sent.payload != R"({"t":"bye","reason":"idle"})");
+    }
+    assert(std::ranges::any_of(s_httpd.sent, [](const auto &sent) {
+        return sent.payload == R"({"t":"ack","id":51,"ok":false,"err":"busy"})";
+    }));
+    assert(std::ranges::any_of(s_httpd.sent, [](const auto &sent) {
+        return sent.payload == R"({"t":"ack","id":52,"ok":false,"err":"busy"})";
+    }));
+    // 消费失败回执，确认 idle 从本轮起重新计时。
+    s_httpd.sent.clear();
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(std::ranges::none_of(s_httpd.sent, [](const auto &sent) {
+        return sent.payload == R"({"t":"bye","reason":"idle"})";
+    }));
+
+    simulateWifiEvent(WIFI_EVENT_AP_STACONNECTED);
+    s_ota = {};
+    s_ota.body = std::span{image}.first(app::web_ota::kHeaderBytes);
+    s_ota.onReceive = [] {
+        assert(app::ota::uploadBusy() && s_ota.receiveWaitS == 1);
+        assert(app::power::s_power_requests.requestShutdown(app::board::BootMode::kNormal,
+                                                            app::board::ShutdownReason::kKey));
+        s_ctx.web.setPowerPaused(true);
+        assert(!s_ctx.web.powerPauseDone() && s_httpd.wifiMode == WIFI_MODE_AP);
+    };
+    s_ota.backpressure = true;
+    const auto before = s_nowMs;
+    assert(postOta() == ESP_ERR_HTTPD_RESP_SEND);
+    assert(s_nowMs - before == 1000U && s_ota.aborted == 1 && s_ota.bootPartition == nullptr &&
+           s_ota.wireReply.empty() && !app::ota::uploadBusy() && !s_ctx.web.powerPauseDone());
+    runPendingWork();
+    assert(s_ctx.web.powerPauseDone() && s_httpd.wifiMode == WIFI_MODE_NULL);
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+
+    resetHarness();
+    simulateWifiEvent(WIFI_EVENT_AP_STACONNECTED);
+    s_ota.onReceive = [] { simulateWifiEvent(WIFI_EVENT_AP_STADISCONNECTED); };
+    s_ota.backpressure = true;
+    assert(postOta() == ESP_FAIL && s_ota.aborted == 1 && s_ota.wireReply.empty());
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+
+    // 若上次的 OTA idle 标志残留，首轮 poll 会覆盖新服务的初始计时。
+    resetHarness();
+    assert(simulateIdfV61WsHandshake(1004) == ESP_OK);
+    s_nowMs += 300000U;
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(std::ranges::any_of(s_httpd.sent, [](const auto &sent) {
+        return sent.payload == R"({"t":"bye","reason":"idle"})";
+    }));
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
+/** @brief 验证 OTA 成功后 1500 ms 直接重启，以及服务重启清除待处理标志。 */
+void testOtaReboot()
+{
+    resetHarness();
+    const auto image = otaImage();
+    s_ota.body = image;
+    assert(postOta() == ESP_OK && s_ota.bootPartition == &kOtherSlot && s_ota.receiveWaitS == 5);
+    assert(s_httpd.lastRespBody == R"({"ok":true,"ver":"6.2","reboot_ms":1500})");
+    assert(app::ota::uploadBusy());
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    s_nowMs += 1499U;
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    assert(s_rebootCalls == 0);
+    s_catchReboot = true;
+    if (setjmp(s_rebootJmp) == 0) {
+        ++s_nowMs;
+        static_cast<void>(s_ctx.web.poll(s_nowMs));
+        assert(false && "expected esp_restart");
+    }
+    s_catchReboot = false;
+    assert(s_rebootCalls == 1 && s_lastWasRestart);
+    app::ota::endOperation();
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+
+    resetHarness();
+    s_ota.body = image;
+    assert(postOta() == ESP_OK);
+    // 停止时尚未由 kLink 消费 httpd 的重启请求。
+    app::ota::endOperation();
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+    resetHarness();
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    s_nowMs += 1500U;
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    assert(s_rebootCalls == 0);
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
+/** @brief 验证 F-OTHER 另一槽版本抑制规则与 F-CONC 150 s 总时限清理。 */
+void testOtaOtherSlotAndTotalTimeout()
+{
+    resetHarness();
+    const auto *uri = findUri("/ota/info");
+    assert(uri != nullptr);
+    httpd_req_t req{};
+    req.handle = &s_httpd;
+    req.user_ctx = uri->user_ctx;
+    esp_app_desc_t desc{};
+
+    // 1. 另一槽状态为 UNDEFINED 时，即使描述符可读也抑制版本显示。
+    s_ota.otherReadable = true;
+    s_ota.otherState = ESP_OTA_IMG_UNDEFINED;
+    assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);
+
+    // 2. 另一槽状态查询失败时同样抑制版本显示。
+    s_ota.otherState = ESP_OTA_IMG_VALID;
+    s_ota.otherStateErr = ESP_ERR_NOT_FOUND;
+    assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);
+    s_ota.otherStateErr = ESP_OK;
+
+    // 3. 另一槽有效且干净时正常报告版本。
+    assert(app::ota::otherSlotVersion(&kOtherSlot, desc) == std::string_view{"6.0"});
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":"6.0")") != std::string::npos);
+
+    // 4. 上传进入 esp_ota_begin 后中止：即使另一槽 otadata 仍为 VALID 且头可读，RAM 脏标志仍抑制版本。
+    const auto image = otaImage();
+    s_ota.body = std::span{image}.first(app::web_ota::kHeaderBytes);
+    assert(postOta() == ESP_FAIL && s_ota.aborted == 1 && !app::ota::uploadBusy());
+    assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);
+
+    // 5. F-CONC：正文阶段总耗时达到 150 s 返回 408 timeout 并清理句柄与忙标志。
+    s_ota.aborted = 0;
+    s_ota.written = 0U;
+    s_ota.wireReply.clear();
+    s_ota.body = std::span{image}.first(app::web_ota::kHeaderBytes);
+    s_ota.onReceive = [] { s_nowMs += app::web_ota::kTotalTimeoutMs; };
+    assert(postOta() == ESP_FAIL && s_ota.aborted == 1 && !app::ota::uploadBusy());
+    assert(s_ota.wireReply.starts_with("HTTP/1.1 408 Request Timeout\r\n"));
+    assert(s_ota.wireReply.ends_with("\r\n\r\n"
+                                     R"({"ok":false,"err":"timeout"})"));
+    assert(std::string_view{app::ota::lastUpload()} == "timeout");
+    assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
+
+    // 6. 后续上传成功提交后清除脏标志，恢复另一槽版本报告。
+    s_ota.body = image;
+    s_ota.written = 0U;
+    assert(postOta() == ESP_OK && s_ota.bootPartition == &kOtherSlot);
+    assert(app::ota::otherSlotVersion(&kOtherSlot, desc) == std::string_view{"6.0"});
+    assert(uri->handler(&req) == ESP_OK);
+    assert(s_httpd.lastRespBody.find(R"("other":"6.0")") != std::string::npos);
+
+    app::ota::endOperation();
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+#endif
+
 } // namespace
 
 /**
@@ -1579,6 +2036,12 @@ int main()
     testShutdownArbitrationAndSoftApResume();
     testCapsUpdates();
     testCaptivePortal();
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    testOtaHttpContract();
+    testOtaQuiesceAndWebBusy();
+    testOtaReboot();
+    testOtaOtherSlotAndTotalTimeout();
+#endif
     std::puts("PASS web_module_check");
     return 0;
 }

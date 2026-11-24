@@ -18,6 +18,7 @@
 #include "app/PowerRequests.hpp"
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
+#include "modules/ota/OtaCmds.hpp"
 #include "rtos/EspStatus.hpp"
 
 namespace {
@@ -264,6 +265,7 @@ bool registerCommandTables() noexcept
         kEnabled("freset") ? &factoryResetCmds : nullptr,
         kEnabled("power") ? &powerCmds : nullptr,
         kEnabled("radio") ? &radioCmds : nullptr,
+        kEnabled("ota") ? &otaCmds : nullptr,
     };
     // 命令表地址在 init 后不可变；handler 经 phase 原子门控。
     size_t used = 0U;
@@ -307,6 +309,7 @@ bool registerVerbGroups() noexcept
         kGroup("factory", "production settings (hidden, needs unlock)", &factoryVerbs),
         kGroup("power", "power key status and clean shutdown", &powerVerbs),
         kGroup("radio", "radio mode and restart", &radioVerbs),
+        kGroup("ota", "application OTA and rollback", &otaVerbs),
     };
     for (const auto &group : kVerbGroups) {
         if (group.verbs == nullptr) {

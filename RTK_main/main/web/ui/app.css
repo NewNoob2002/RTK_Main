@@ -40,7 +40,7 @@ button,input,select{font:inherit;color:inherit}
 .bad .dot{background:var(--bad)}
 @keyframes pulse{50%{opacity:.3}}
 
-.banner{max-width:1120px;margin:12px auto 0;padding:12px 14px;border-radius:var(--rs);background:var(--sub);border:1px solid var(--warn);color:var(--text);font-size:14px;margin-left:16px;margin-right:16px}
+.banner{width:calc(100% - 32px);max-width:1088px;margin:12px auto 0;padding:12px 14px;border-radius:var(--rs);background:var(--sub);border:1px solid var(--warn);color:var(--text);font-size:14px}
 
 /* 布局：手机单列，≥900px 两列 */
 .grid{max-width:1120px;margin:0 auto;padding:12px 16px 24px;display:grid;gap:12px}
@@ -136,6 +136,18 @@ select:disabled,.in:disabled{opacity:.5}
 
 /* 离线时整页只读 */
 body.offline .grid{opacity:.55;pointer-events:none}
+
+/* 固件升级 */
+.ota-file{width:100%;margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:var(--rs);background:var(--sub);font-size:13.5px;cursor:pointer}
+.ota-file:disabled{opacity:.5;cursor:default}
+.ota-msg{margin:8px 0 0;font-size:13.5px;overflow-wrap:anywhere}
+.ota-msg.ok{color:var(--ok)}
+.ota-msg.warn{color:var(--warn)}
+.ota-msg.bad{color:var(--bad)}
+.prog{margin-top:10px}
+.prog-bar{height:8px;border-radius:4px;background:var(--sub);border:1px solid var(--line);overflow:hidden}
+.prog-fill{height:100%;width:0;background:var(--acc);transition:width .12s linear}
+.prog-txt{display:flex;justify-content:space-between;margin-top:4px;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
 
 /* Toast */
 .toasts{position:fixed;left:16px;right:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:9;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}

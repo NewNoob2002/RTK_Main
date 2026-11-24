@@ -1,7 +1,9 @@
 # RTK_main 默认配置（冻结输入）。来源：E1-5.4/sdkconfig 中已在硬件上验证的项 + IDF v6.1 bt_spp_acceptor 示例。
 CONFIG_IDF_TARGET="esp32"
-CONFIG_ESP32_REV_MIN_3_1=y
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# 最低芯片版本取产品中最旧的芯片：带 F9P 的 P2 实测 ESP32-D0WD v1.0（esptool chip-id，2026-11-23）。
+CONFIG_ESP32_REV_MIN_1=y
+# 带 F9P 的 P2 为 4 MB flash（2026-11-23 上电实测 "Detected size(4096k)"）；8 MB 板子用 4 MB 头同样可启动。
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # 崩溃转储（ADR-0014 §2.1）：格式和校验沿用 ESP-IDF 缺省。
@@ -61,13 +63,15 @@ CONFIG_ESP_CONSOLE_UART_BAUDRATE=2000000
 CONFIG_RTK_CONSOLE_UART_BAUD=2000000
 CONFIG_RTK_CONSOLE_UART_TX_BUF=8192
 
-# 性能（2026-11-12 用户批准，T3 实测后调整）：芯片额定 240 MHz；Fudan 8 MB flash 支持 80 MHz QIO；
-# app 槽 3 MB（ADR-0014 §2.1），-O2 镜像仍有充足余量。QIO 若在某批板子上启动失败，退回 DIO（保留 80 MHz）。
+# 性能（2026-11-12 用户批准，T3 实测后调整）：芯片额定 240 MHz；Fudan flash 支持 80 MHz QIO；
+# app 槽 1.875 MB（ADR-0014 §2.1，2026-11-23 起），-O2 镜像约 1.52 MB，余量约 23%。QIO 若在某批板子上启动失败，退回 DIO（保留 80 MHz）。
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+# 网页 OTA 应用回滚（ADR-0019 §2.5）：新镜像首次启动为 pending_verify，未确认即回退旧槽；需串口刷新 bootloader 才生效
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # C++（ADR-0002，T2）：与 IDF v6.1 默认值一致，显式写出以免被改动（CPP-001/002）
 CONFIG_COMPILER_CXX_EXCEPTIONS=n

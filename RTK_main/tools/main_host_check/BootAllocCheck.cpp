@@ -31,6 +31,10 @@
 // 同一组合根的真实 owner 计划与绑定/回滚逻辑（R8a 拆分为 app/ 下的 TU 后直接链接，不再整文件包含）。
 #include "app/App.hpp"
 #include "app/BootBuffers.hpp"
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+#include "app/BootReasons.hpp"
+#include "modules/web/WebOtaTransfer.hpp"
+#endif
 
 namespace {
 bool s_task_create_fail = false;
@@ -267,6 +271,9 @@ void testProductionAllocationPlan() noexcept
     auto ops = makeOps(probe);
     app::BootBuffers buffers{};
     CHECK(app::allocateBootBuffers(buffers, &ops));
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    CHECK(buffers.webOta.empty());
+#endif
     const auto entries = app::s_app.bootArena.entries();
     const size_t owners = entries.size();
     std::array<const char *, rtos::BootArena::kMaxEntries> names{};
@@ -324,7 +331,7 @@ void testProductionAllocationPlan() noexcept
 }
 
 /**
- * @brief 验证 Wi-Fi 配置模式跳过 SPP 缓冲并保留 GNSS 所需的存储
+ * @brief 验证 Wi-Fi 模式分配、绑定和回滚 OTA 工作区，充电待机跳过分配
  * @note 单线程主机测试，非 ISR。
  */
 void testWifiAllocationPlan() noexcept
@@ -334,17 +341,57 @@ void testWifiAllocationPlan() noexcept
     auto ops = makeOps(ctx);
     app::BootBuffers buffers{};
     CHECK(app::allocateBootBuffers(buffers, &ops));
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    size_t otaIndex = 0U;
+#endif
     for (const auto &entry : app::s_app.bootArena.entries()) {
         const std::string_view tag{entry.tag};
         CHECK(!tag.starts_with("spp.") && tag != "task.spp_worker");
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+        if (tag != "web.ota") {
+            ++otaIndex;
+        } else {
+            CHECK(entry.ptr == buffers.webOta.data() && entry.bytes == app::web_ota::kBufferBytes);
+        }
+#endif
     }
 #if RTK_GNSS_ENABLED
     CHECK(!buffers.gnssDemux.empty() && !buffers.rtcmPipe.empty());
 #endif
     CHECK(app::bindBootBuffers(buffers) == nullptr);
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    CHECK(otaIndex + 1U == app::s_app.bootArena.count());
+    CHECK(buffers.webOta.size_bytes() == app::web_ota::kBufferBytes);
+#endif
     app::rollbackBootBindings(buffers, "test:wifi");
     CHECK(ctx.liveAllocs == 0U);
     resetTestArena();
+
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    ctx = {.failOnCall = otaIndex};
+    CHECK(!app::allocateBootBuffers(buffers, &ops));
+    CHECK(std::string_view{app::s_app.bootArena.reason()} == "boot_alloc:web.ota");
+    CHECK(buffers.webFrames.empty() && buffers.webOta.empty() && ctx.liveAllocs == 0U);
+    resetTestArena();
+
+    ctx = {};
+    CHECK(app::allocateBootBuffers(buffers, &ops));
+    auto invalid = buffers;
+    invalid.webOta = invalid.webOta.first(1U);
+    const auto *failure = app::bindBootBuffers(invalid);
+    CHECK(failure != nullptr && std::string_view{failure} == app::boot_reason::kBindWebOta);
+    app::rollbackBootBindings(buffers, app::boot_reason::kBindWebOta);
+    CHECK(buffers.webFrames.empty() && buffers.webOta.empty() && ctx.liveAllocs == 0U);
+    resetTestArena();
+
+    app::s_app.bootMode = app::board::BootMode::kChargeStandby;
+    CHECK(app::allocateBootBuffers(buffers, &ops));
+    CHECK(buffers.webFrames.empty() && buffers.webOta.empty());
+    app::rollbackBootBindings(buffers, "test:standby");
+    CHECK(ctx.liveAllocs == 0U);
+    resetTestArena();
+    app::s_app.bootMode = app::board::BootMode::kNormal;
+#endif
     app::s_app.radioMode = app::RadioMode::kBluetooth;
 }
 

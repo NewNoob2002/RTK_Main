@@ -19,6 +19,9 @@
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
 #include "modules/web/WebModule.hpp"
 #endif
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+#include "modules/web/WebOtaTransfer.hpp"
+#endif
 #include "SppServerStorage.h"
 
 namespace app {
@@ -158,6 +161,12 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
     if (!allocWebBootFrames(out)) {
         return failAlloc("web.frames");
     }
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+    if (!out.webFrames.empty() && !fw::isOk(self().bootArena.allocArray<std::byte>(
+                                      "web.ota", web_ota::kBufferBytes, out.webOta, kBufAlign))) {
+        return failAlloc("web.ota");
+    }
+#endif
 #endif
     return true;
 }
@@ -195,9 +204,15 @@ const char *bindBootBuffers(const BootBuffers &bufs) noexcept
     }
 #endif
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    if (normal && (self().radioMode == RadioMode::kWifiConfig) &&
-        !fw::isOk(self().web.bindStorage(bufs.webFrames))) {
-        return boot_reason::kBindWeb;
+    if (normal && self().radioMode == RadioMode::kWifiConfig) {
+        if (!fw::isOk(self().web.bindStorage(bufs.webFrames))) {
+            return boot_reason::kBindWeb;
+        }
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
+        if (!fw::isOk(self().web.bindOtaStorage(bufs.webOta))) {
+            return boot_reason::kBindWebOta;
+        }
+#endif
     }
 #endif
     return nullptr;
