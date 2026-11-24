@@ -661,9 +661,14 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         FW_LOGI(fw::TraceCat::kSys, "<power> usb=%u src=%s", next.usbPresent ? 1U : 0U,
                 board::usbSourceName(next.usbSource));
     }
+    const bool shutdownStageChanged = !force && (next.shutdownStage != lastSnapshot_.shutdownStage);
     if (force || !snapshotEqual(next, lastSnapshot_)) {
         lastSnapshot_ = next;
         ctx().data.powerStatus.write(next);
+        // 必须在 powerStatus 写入完成后再唤醒 UI，避免多核/抢占下 OLED 读到旧关机阶段（ROL1-03）。
+        if (shutdownStageChanged) {
+            ctx().data.uiEvents.notifyWake();
+        }
     }
 }
 
@@ -689,6 +694,7 @@ bool PowerModule::poll(uint32_t nowMs) noexcept
         ++shortPresses_;
         fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyShort), 0U,
                   shortPresses_, keySm_.lastHoldMs());
+        ctx().data.uiEvents.notifyShortKey();
         break;
     case board::KeyEvent::kLongHold:
         ++longPresses_;

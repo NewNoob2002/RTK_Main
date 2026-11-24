@@ -26,6 +26,7 @@ void DataCenter::init() noexcept
     systemStatus.bindLock(lock);
     systemMode.bindLock(lock);
     powerStatus.bindLock(lock);
+    oledStatus.bindLock(lock);
     rtcmReset.bindLock(lock);
     gnssPppEnabled.bindLock(lock);
     gnssSatTrack.bindLock(lock);

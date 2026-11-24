@@ -44,6 +44,12 @@ constexpr std::array kProfiles{
                         .addr = 0x1AU,
                         .reg02 = 0x34U,
                         .reg03 = 0xAAU},
+            .oled = {.i2cPort = 0,
+                     .sdaGpio = 21,
+                     .sclGpio = 22,
+                     .powerGpio = 12,
+                     .addr = 0x3CU,
+                     .rotated180 = true},
             .safeOutputs = kP2SafeOutputs,
             .features = kP2Features},
     Profile{

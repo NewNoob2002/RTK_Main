@@ -23,6 +23,7 @@ add_subdirectory(${PROJ_ROOT}/components/settings settings_build)
 include_directories(${PROJ_ROOT}/components/settings/include)
 add_subdirectory(${PROJ_ROOT}/components/gnss gnss_build)
 add_subdirectory(${PROJ_ROOT}/components/web_proto web_proto_build)
+add_subdirectory(${PROJ_ROOT}/components/third_party third_party_build)
 add_library(main_pure STATIC
     ${PROJ_ROOT}/components/device_proto/DevProtoFrame.c
     ${PROJ_ROOT}/components/device_proto/DevProtoAlarm.c
@@ -89,7 +90,7 @@ foreach(policy concurrent preempt)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
-    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_no_reopen power_fence_timeout power_log_drain power_low_battery power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
+    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_short_key_ui power_no_reopen power_fence_timeout power_log_drain power_low_battery power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
         power_battery_read_failure power_low_battery_unknown_usb power_low_battery_standby
         power_battery_median power_battery_freshness
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
@@ -262,6 +263,8 @@ foreach(features on gnss_off trace_off all_off)
         ${PROJ_ROOT}/main/app/BootBuffers.cpp
         ${PROJ_ROOT}/main/app/BootSteps.cpp
         ${PROJ_ROOT}/main/app/ConsoleSetup.cpp
+        ${PROJ_ROOT}/main/board/BoardCurrent.cpp
+        ${PROJ_ROOT}/main/board/BoardProfile.cpp
         ${PROJ_ROOT}/components/rtos/BootAlloc.cpp
         ${PROJ_ROOT}/main/data/AppData.cpp
         ${PROJ_ROOT}/main/data/GnssAppRing.cpp
@@ -286,7 +289,7 @@ foreach(features on gnss_off trace_off all_off)
     # 与产品 Kconfig 默认值一致；公共 C 头在未跑 Kconfig 时的兼容回退为 2 KiB，不能冒充产品的 4 KiB RX。
     target_compile_definitions(${boot_target} PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096 CONFIG_RTK_BT_SPP_RX_BUF_SIZE=4096)
     if(features STREQUAL "on" OR features STREQUAL "trace_off")
-        target_compile_definitions(${boot_target} PRIVATE CONFIG_RTK_GNSS_ENABLE=1)
+        target_compile_definitions(${boot_target} PRIVATE CONFIG_RTK_GNSS_ENABLE=1 CONFIG_RTK_GNSS_PORT=2)
     endif()
     if(features STREQUAL "on")
         target_sources(${boot_target} PRIVATE
@@ -359,6 +362,7 @@ target_compile_options(power_logic_check PRIVATE -fno-exceptions -fno-rtti -Wall
 add_test(NAME power_logic_check COMMAND power_logic_check)
 
 add_executable(charger_check ChargerCheck.cpp
+    ${PROJ_ROOT}/main/board/I2cBus.cpp
     ${PROJ_ROOT}/main/board/Charger.cpp ${PROJ_ROOT}/main/board/PowerLogic.cpp)
 target_include_directories(charger_check PRIVATE shim ../t13_host_check/shim/inc
     ${PROJ_ROOT}/main ${PROJ_ROOT}/components/rtos/include)
@@ -367,6 +371,43 @@ target_compile_options(charger_check PRIVATE -fno-exceptions -fno-rtti -Wall -We
 target_link_libraries(charger_check PRIVATE main_pure)
 foreach(scenario absent online mismatch02 mismatch03 readback02_high_bits init_timeout scan_errors)
     add_test(NAME charger_${scenario} COMMAND charger_check ${scenario})
+endforeach()
+
+add_executable(oled_ui_check OledUiCheck.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledUi.cpp
+    ${PROJ_ROOT}/main/board/PowerLogic.cpp)
+target_include_directories(oled_ui_check PRIVATE
+    ${PROJ_ROOT}/main
+    ${PROJ_ROOT}/components/app_fw/include
+    ${PROJ_ROOT}/components/gnss/include
+    ${PROJ_ROOT}/components/stream_demux/include
+    ${PROJ_ROOT}/components/link_core/include)
+target_compile_options(oled_ui_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
+    -Wimplicit-fallthrough -Wswitch-default -Wundef)
+target_link_libraries(oled_ui_check PRIVATE main_pure third_party_wououi)
+add_test(NAME oled_ui_check COMMAND oled_ui_check)
+
+add_executable(oled_driver_check OledDriverCheck.cpp
+    ${PROJ_ROOT}/main/board/I2cBus.cpp
+    ${PROJ_ROOT}/main/board/Charger.cpp
+    ${PROJ_ROOT}/main/board/Sh1106.cpp
+    ${PROJ_ROOT}/main/board/PowerLogic.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledUi.cpp)
+target_include_directories(oled_driver_check BEFORE PRIVATE shim)
+target_include_directories(oled_driver_check PRIVATE ../t13_host_check/shim/inc
+    ${PROJ_ROOT}/main
+    ${PROJ_ROOT}/components/rtos/include
+    ${PROJ_ROOT}/components/app_fw/include
+    ${PROJ_ROOT}/components/gnss/include
+    ${PROJ_ROOT}/components/stream_demux/include
+    ${PROJ_ROOT}/components/link_core/include)
+target_compile_options(oled_driver_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+target_link_libraries(oled_driver_check PRIVATE main_pure third_party_wououi)
+foreach(scenario shared_both_online oled_absent_charger_ok charger_absent_oled_ok page_error_retry
+    timeout_abort_reset_backoff wake_fail_recovers init_cfg_fail_cleanup)
+    add_test(NAME oled_driver_${scenario} COMMAND oled_driver_check ${scenario})
 endforeach()
 
 add_executable(web_server_check WebServerCheck.cpp

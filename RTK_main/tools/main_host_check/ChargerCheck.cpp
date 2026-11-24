@@ -224,6 +224,28 @@ esp_err_t i2c_master_bus_add_device(i2c_master_bus_handle_t bus, const i2c_devic
 }
 
 /**
+ * @brief 模拟卸载 I2C 从设备句柄（供共享 I2cBus.cpp 链接）
+ * @param handle: 待卸载设备句柄
+ * @retval ESP_OK 已卸载
+ */
+esp_err_t i2c_master_bus_rm_device(i2c_master_dev_handle_t handle)
+{
+    CHECK(handle == &s_device && s_mutex->held);
+    return ESP_OK;
+}
+
+/**
+ * @brief 模拟复位共享 I2C 总线（供共享 I2cBus.cpp 链接）
+ * @param bus_handle: 模拟总线句柄
+ * @retval ESP_OK 已复位
+ */
+esp_err_t i2c_master_bus_reset(i2c_master_bus_handle_t bus_handle)
+{
+    CHECK(bus_handle == &s_bus && s_mutex->held);
+    return ESP_OK;
+}
+
+/**
  * @brief 记录充电芯片寄存器写入
  * @param dev: 模拟设备句柄
  * @param tx: 寄存器及写入值

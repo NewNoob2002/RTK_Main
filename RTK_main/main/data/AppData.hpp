@@ -24,6 +24,7 @@
 #include "def/GnssSubDef.hpp"
 #endif
 #include "def/LinkDef.hpp"
+#include "def/OledDef.hpp"
 #include "def/RtcmDef.hpp"
 #include "def/StorageDef.hpp"
 #include "def/SystemDef.hpp"
@@ -151,6 +152,8 @@ struct DataCenter {
     fw::Slot<SystemStatus> systemStatus{};
     fw::Slot<SystemMode> systemMode{};
     fw::Slot<PowerSnapshot> powerStatus{};
+    fw::Slot<OledStatus> oledStatus{};
+    UiEventBus uiEvents{};
     fw::Slot<uint32_t> rtcmReset{};
     fw::Slot<std::optional<bool>> gnssPppEnabled{};               // 启动恢复或设置成功后写入。
     fw::Slot<std::optional<core::SatTrackConfig>> gnssSatTrack{}; // 启动恢复或设置成功后写入。

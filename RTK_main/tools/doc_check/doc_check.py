@@ -32,6 +32,12 @@ SCAN_DIRS = ("components", "main")
 SRC_SUFFIX = (".c", ".cpp", ".h", ".hpp", ".inc")
 HDR_SUFFIX = (".h", ".hpp", ".inc")
 SKIP_PARTS = ("/test/", "/reference/", "/_template/")
+# 经核验的第三方上游源码目录前缀（只豁免具体上游子目录，避免后续自有胶水代码静默绕过门禁，ROL1-07）。
+VENDORED_PREFIXES = ("components/third_party/wououi/",)
+
+
+def is_skipped_path(rel):
+    return any(s in "/" + rel for s in SKIP_PARTS) or rel.startswith(VENDORED_PREFIXES)
 
 DOC_END = re.compile(r"\*/\s*$")
 PARAM_TAG = re.compile(r"@param(?:\[[a-z,]+\])?\s+([A-Za-z_]\w*)")
@@ -223,7 +229,7 @@ def all_sources():
     for d in SCAN_DIRS:
         for p in (ROOT / d).rglob("*"):
             rel = str(p.relative_to(ROOT))
-            if p.is_file() and p.suffix in SRC_SUFFIX and not any(s in "/" + rel for s in SKIP_PARTS):
+            if p.is_file() and p.suffix in SRC_SUFFIX and not is_skipped_path(rel):
                 out.append(rel)
     return sorted(out)
 
@@ -248,7 +254,7 @@ def changed_lines(base):
                                capture_output=True, text=True, check=False).stdout.split()
     for u in untracked:
         res[u].update(range(1, len(lines_of(u)) + 1))
-    return {p: v for p, v in res.items() if p.endswith(SRC_SUFFIX) and not any(s in "/" + p for s in SKIP_PARTS)}
+    return {p: v for p, v in res.items() if p.endswith(SRC_SUFFIX) and not is_skipped_path(p)}
 
 
 def main():

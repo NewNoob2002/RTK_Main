@@ -60,6 +60,15 @@ struct ChargerPins {
     uint8_t reg03 = 0U; // REG03 预充/终止电流目标值
 };
 
+struct OledPins {
+    int i2cPort = -1; // -1 表示本板无 OLED，不初始化 I2C/GPIO
+    int sdaGpio = -1;
+    int sclGpio = -1;
+    int powerGpio = -1;      // 电源使能脚（P2: GPIO12 高有效，启动绑定脚仅运行期驱动）
+    uint8_t addr = 0U;       // 7-bit I2C 地址（P2: SH1106 = 0x3C）
+    bool rotated180 = false; // true 表示面板倒装 180°（SH1106: 0xA0 + 0xC0）
+};
+
 struct Profile {
     BoardId id = BoardId::kUnknown;
     const char *name = "unknown";
@@ -72,9 +81,24 @@ struct Profile {
     PowerHold powerHold{};
     PowerKey powerKey{};
     ChargerPins charger{};
+    OledPins oled{};
     std::span<const SafeOutput> safeOutputs{};
     uint8_t features = 0U;
 };
+
+/**
+ * @brief 判断板级配置是否包含指定外设特性位
+ * @param profile: 已识别的板级配置
+ * @param feature: 外设特性位枚举
+ * @retval true 该板型具备该特性
+ * @retval false 该板型不具备该特性
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] constexpr bool hasFeature(const Profile &profile, Feature feature) noexcept
+{
+    // Feature 底层类型为 uint8_t 位掩码，转换为 uint8_t 按位与无损。
+    return (profile.features & static_cast<uint8_t>(feature)) != 0U;
+}
 
 /**
  * @brief 取得板级配置对应的产品短名（未识别时回退为 `"RTK"`）

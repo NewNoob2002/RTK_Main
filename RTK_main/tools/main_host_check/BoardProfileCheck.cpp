@@ -76,6 +76,8 @@ void checkProfiles() noexcept
         CHECK(e1->powerKey.keyDetectGpio == -1 && e1->powerKey.usbDetectGpio == -1 &&
               e1->powerKey.chgStatGpio == -1);
         CHECK(e1->charger.i2cPort == -1 && e1->charger.sdaGpio == -1 && e1->charger.sclGpio == -1);
+        CHECK(e1->oled.i2cPort == -1 && e1->oled.powerGpio == -1 &&
+              !hasFeature(*e1, Feature::kOled));
     }
     const Profile *p2 = byId(BoardId::kP2V141);
     CHECK(p2 != nullptr);
@@ -92,6 +94,9 @@ void checkProfiles() noexcept
     CHECK(p2->powerKey.keyActiveLow && !p2->powerKey.usbActiveLow && p2->powerKey.chgActiveLow);
     CHECK(p2->charger.i2cPort == 0 && p2->charger.sdaGpio == 21 && p2->charger.sclGpio == 22);
     CHECK(p2->charger.addr == 0x1AU && p2->charger.reg02 == 0x34U && p2->charger.reg03 == 0xAAU);
+    CHECK(hasFeature(*p2, Feature::kOled));
+    CHECK(p2->oled.i2cPort == 0 && p2->oled.sdaGpio == 21 && p2->oled.sclGpio == 22);
+    CHECK(p2->oled.powerGpio == 12 && p2->oled.addr == 0x3CU && p2->oled.rotated180);
     constexpr std::array kOutputs{SafeOutput{13, true}, SafeOutput{15, false},
                                   SafeOutput{23, false}, SafeOutput{26, false},
                                   SafeOutput{4, false}};

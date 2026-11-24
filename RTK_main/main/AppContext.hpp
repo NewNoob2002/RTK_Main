@@ -62,6 +62,7 @@ enum class BootTask : uint8_t {
     kLink = 1U << 0U,  ///< link 执行器任务
     kIo = 1U << 1U,    ///< io 执行器任务（GNSS）
     kTrace = 1U << 2U, ///< trace_out 任务
+    kOled = 1U << 3U,  ///< oled 低优先级显示刷新任务
 };
 
 /**

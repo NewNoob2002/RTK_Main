@@ -16,7 +16,7 @@ namespace {
 constexpr uint32_t kWatchdogStopBit = 0x80000000U;
 static_assert((kWatchdogStopBit &
                (app::taskBit(app::BootTask::kLink) | app::taskBit(app::BootTask::kIo) |
-                app::taskBit(app::BootTask::kTrace))) == 0U,
+                app::taskBit(app::BootTask::kTrace) | app::taskBit(app::BootTask::kOled))) == 0U,
               "看门狗诊断位不得与任务位重叠");
 
 } // namespace
