@@ -239,3 +239,10 @@ protected:
 1. **0x0D 保持现状**（同 ADR-0011 Q3）：32 B COM 查询、SET 不回；持久化只走控制台 `gnss out` / `gnss rate`。
 2. **“不支持”用 `02 02` 告知**（§2.5），不改协议、不在 0x02 加字段。
 3. **不做 `RTK_GNSS_FIXED_DRIVER`**：只靠 NVS 提示 + 探测选驱动。
+
+## U1 补记（2026-11-24，ZED-F9P）
+
+- 实板：P2 v1.41 + ZED-F9P HPG 1.12 已上板验证（`docs/reports/U1-f9p-driver.md` §10）。
+- 板卡 SN：`UBX-SEC-UNIQID` 解析结果经 `AppData::gnssBoardSn` 旁路送到 0x01 @64，不进冻结的 `ProbeResult`。
+- 配置时序：NMEA 静默步为非致命降级步；VALSET 超时/NAK 后有 300 ms 重同步窗（丢弃迟到 ACK/NAK）；星座变更后等 600 ms 信号稳定期；配置写入只在 RTCM 帧边界发出。
+- 已知缺口：u-blox 驱动未实现 `navRatesHz()`/`outputPeriodsMs()`，F9P 上 `gnss.rate`、`gnss.out.*` 不可改（后续卡 U2）。

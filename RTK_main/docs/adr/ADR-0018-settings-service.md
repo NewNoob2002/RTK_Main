@@ -105,6 +105,7 @@ fw::Result call(cmd, result, timeoutMs);                                        
 - 网页协议 v1 **增量**：`hello` 增加 `caps` 对象（键 → 允许值数组或 `{min,max}`）；`gnss.rate` 改变后若输出域变化，
   设备再推一帧 `caps`。不在 `caps` 中的键网页隐藏；旧页面忽略未知字段，兼容。
 - 手机协议：查询类报文（如 0x06 星座）按同一 `caps` 回答；App 侧显示由 App 团队决定。
+- U1 增补：`gnss.cutoff`（0–90 整数，与 0x06 共用 `kVerbGnssSetSatTrack`，载荷 1 B）；`GnssCaps::constMask` 第 7 位表示“GPS 必须开”（ZED-F9P），此时省略 `gnss.const.gps` 并拒绝置 0。`gnss.cutoff` 暂用 `KeyId::kCount + 1`，下次修订冻结的 `Types.hpp` 时正式加入 `KeyId`。
 
 ### 2.5 控制台可选
 
