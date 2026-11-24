@@ -250,10 +250,14 @@ void GnssModule::cmdPatchOutput(const fw::Command &cmd, uint32_t nowMs,
         const auto periods =
             controller().receiver().outputPeriodsMs(outputCapabilityMsg(msg), model);
         const uint32_t period = core::services::GnssService::intervalToPeriodMs(interval);
-        const uint32_t fixPeriod = kMsPerSecond / std::max(ensureRoverCfg().rateHz, uint8_t{1U});
+        const uint8_t curRate = ensureRoverCfg().rateHz;
+        const uint32_t fixPeriod = kMsPerSecond / std::max(curRate, uint8_t{1U});
         const bool gsvDisabled = msg == ::gnss::OutputMsg::kSatsInfo && !ensureRoverCfg().gsv;
-        if ((period != 0U && (period < fixPeriod || gsvDisabled)) ||
-            std::ranges::find(periods, period) == periods.end()) {
+        const bool invalidPeriod =
+            (period != 0U) &&
+            (gsvDisabled || ((model == ::gnss::Model::kZedF9p) ? !isF9pPeriodValid(period, curRate)
+                                                               : (period < fixPeriod)));
+        if (invalidPeriod || std::ranges::find(periods, period) == periods.end()) {
             result.status = fw::Result::kInvalidArg;
             return;
         }
@@ -351,13 +355,24 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
     if (st != ::gnss::State::kRunning && st != ::gnss::State::kMaintenance) {
         // 与 kSetOut 一致：kOff/kPowerUp/kProbing/kFailed 无运行中接收机，直接落盘，下次配置按新频率执行。
         const uint8_t prevRate = ensureRoverCfg().rateHz;
+        const data::GnssOutConfig prevOut = out_cfg_;
         ensureRoverCfg().rateHz = cmd.args[0];
-        const fw::Result saveRes = ctx().storage.saveKeys(
+        const bool outAligned = (controller().detected().probe.model == ::gnss::Model::kZedF9p) &&
+                                alignF9pOutputConfig(cmd.args[0]);
+        fw::Result saveRes = ctx().storage.saveKeys(
             std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kRateKeyIndex, 1U>());
+        if (fw::isOk(saveRes) && outAligned) {
+            saveRes = ctx().storage.saveKeys(
+                std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
+        }
         if (!fw::isOk(saveRes)) {
             ensureRoverCfg().rateHz = prevRate;
+            out_cfg_ = prevOut;
             result.status = saveRes;
             return;
+        }
+        if (outAligned) {
+            ctx().data.gnssOutCfg.write(out_cfg_);
         }
         controller().setOutputPlan(makePlan());
         last_apply_ = GnssApply::kOk;
@@ -369,7 +384,12 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
     }
     // 两阶段提交（ADR-0012 §2.4）：先暂存并重配，成功后才写 NVS；失败由 tickPendingApply 回滚。
     pending_prev_rate_ = ensureRoverCfg().rateHz;
+    pending_prev_out_ = out_cfg_;
+    pending_rate_out_aligned_ = false;
     ensureRoverCfg().rateHz = cmd.args[0];
+    if (controller().detected().probe.model == ::gnss::Model::kZedF9p) {
+        pending_rate_out_aligned_ = alignF9pOutputConfig(cmd.args[0]);
+    }
     pending_apply_ = PendingApply::kRate;
     apply_deferred_ = controller().state() == ::gnss::State::kMaintenance;
     if (!apply_deferred_) {

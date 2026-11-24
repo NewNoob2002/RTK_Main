@@ -10,6 +10,7 @@
 #include "../../test/fixtures/Cm680Version.hpp"
 
 #include "AppContext.hpp"
+#include "app/SettingsBackend.hpp"
 #include "board/BoardProfile.hpp"
 #include "def/GnssSubDef.hpp"
 #include "driver/gpio.h"
@@ -59,7 +60,7 @@ constinit app::AppContext s_dispatchContext{};
 constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
 constinit std::array<app::AppContext, 16U> s_targetBaudContexts{};
-constinit std::array<app::AppContext, 3U> s_f9pContexts{};
+constinit std::array<app::AppContext, 6U> s_f9pContexts{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -97,6 +98,15 @@ unsigned s_f9pSatValsets = 0U;
 std::string s_f9pTxLog;
 std::array<uint8_t, 128U> s_lastF9pSatValset{};
 size_t s_lastF9pSatValsetLen = 0U;
+bool s_f9pNakGgaMsgout = false;
+bool s_f9pNakHighPrecPort = false;
+uint16_t s_f9pLastRateMeasMs = 0U;
+unsigned s_f9pRateMeasWrites = 0U;
+uint8_t s_f9pLastGgaEpochs = 0xFFU;
+unsigned s_f9pGgaWrites = 0U;
+uint8_t s_f9pLastGsvEpochs = 0xFFU;
+unsigned s_f9pGsvWrites = 0U;
+unsigned s_f9pHighPrecNaks = 0U;
 
 /** @brief 构造完整 UBX 帧并追加到模拟串口接收缓冲。 @param cls: 类别。 @param id: 编号。 @param payload: 载荷。 */
 void pushUbxRx(uint8_t cls, uint8_t id, std::span<const uint8_t> payload)
@@ -120,6 +130,48 @@ void pushF9pMonVer(std::string_view fw)
     fwExt += fw;
     std::memcpy(payload.data() + 70U, fwExt.data(), std::min(fwExt.size(), size_t{29U}));
     pushUbxRx(0x0AU, 0x04U, payload);
+}
+
+/** @brief 读取 VALSET 帧内指定键的小端值（1/2/4 字节）。 @param raw: 完整 UBX 帧。 @param targetKey: 目标键。 @param[out] outVal: 输出值。 @retval true 命中；false 未包含。 */
+bool findValsetKeyValue(std::span<const uint8_t> raw, uint32_t targetKey, uint32_t &outVal)
+{
+    if (!gnss::ublox::isValsetFrame(raw)) {
+        return false;
+    }
+    const size_t end = raw.size() - 2U;
+    size_t pos = 10U;
+    while (pos + 4U <= end) {
+        const uint32_t key = static_cast<uint32_t>(raw[pos]) |
+                             (static_cast<uint32_t>(raw[pos + 1U]) << 8U) |
+                             (static_cast<uint32_t>(raw[pos + 2U]) << 16U) |
+                             (static_cast<uint32_t>(raw[pos + 3U]) << 24U);
+        const uint32_t sizeCode = (key >> 28U) & 0x07U;
+        size_t width = 0U;
+        if (sizeCode == 1U || sizeCode == 2U) {
+            width = 1U;
+        } else if (sizeCode == 3U) {
+            width = 2U;
+        } else if (sizeCode == 4U) {
+            width = 4U;
+        } else if (sizeCode == 5U) {
+            width = 8U;
+        } else {
+            return false;
+        }
+        if (pos + 4U + width > end) {
+            return false;
+        }
+        if (key == targetKey && width <= 4U) {
+            uint32_t val = 0U;
+            for (size_t i = 0U; i < width; ++i) {
+                val |= static_cast<uint32_t>(raw[pos + 4U + i]) << (8U * i);
+            }
+            outVal = val;
+            return true;
+        }
+        pos += 4U + width;
+    }
+    return false;
 }
 
 /** @brief 处理 F9P 模拟模式下的串口下行字节流（记录原始字节、响应 MON-VER/SEC-UNIQID/VALSET）。 @param bytes: 写入字节。 */
@@ -152,6 +204,33 @@ void handleF9pUartWrite(std::string_view bytes)
                 (static_cast<uint32_t>(raw[16]) << 16U) | (static_cast<uint32_t>(raw[17]) << 24U);
             return;
         }
+        constexpr std::array<uint8_t, 2U> kAckPayload{0x06U, 0x8AU};
+        if (s_f9pNakHighPrecPort) {
+            uint32_t dummy = 0U;
+            if (findValsetKeyValue(raw, 0x10930006U, dummy) ||
+                findValsetKeyValue(raw, 0x20930007U, dummy)) {
+                ++s_f9pHighPrecNaks;
+                pushUbxRx(0x05U, 0x00U, kAckPayload);
+                return;
+            }
+        }
+        if (s_f9pNakGgaMsgout && (keyCount == 1U) && (keys[0] == 0x209100BBU)) {
+            pushUbxRx(0x05U, 0x00U, kAckPayload);
+            return;
+        }
+        uint32_t val = 0U;
+        if (findValsetKeyValue(raw, 0x30210001U, val)) {
+            s_f9pLastRateMeasMs = static_cast<uint16_t>(val);
+            ++s_f9pRateMeasWrites;
+        }
+        if ((keyCount == 1U) && findValsetKeyValue(raw, 0x209100BBU, val)) {
+            s_f9pLastGgaEpochs = static_cast<uint8_t>(val);
+            ++s_f9pGgaWrites;
+        }
+        if ((keyCount == 1U) && findValsetKeyValue(raw, 0x209100C5U, val)) {
+            s_f9pLastGsvEpochs = static_cast<uint8_t>(val);
+            ++s_f9pGsvWrites;
+        }
         const bool isSat = (keyCount > 0U) && (keys[0] == 0x201100A4U);
         if (isSat) {
             ++s_f9pSatValsets;
@@ -161,7 +240,6 @@ void handleF9pUartWrite(std::string_view bytes)
                 return;
             }
         }
-        constexpr std::array<uint8_t, 2U> kAckPayload{0x06U, 0x8AU};
         pushUbxRx(0x05U, 0x01U, kAckPayload);
     }
 }
@@ -1536,13 +1614,23 @@ void testGnssSettingsBusAndGgaPersist()
 /** @brief 在 P2 板上以模拟 F9P 接收机启动 GnssModule 并推进至 kRunning。 */
 static void bootF9pModule(size_t slot, nvs_handle_t nvs, std::span<uint8_t> demux,
                           std::span<uint8_t> pipe, std::string_view fw,
-                          std::optional<core::SatTrackConfig> presetSat = std::nullopt)
+                          std::optional<core::SatTrackConfig> presetSat = std::nullopt,
+                          uint8_t presetRate = 1U, bool nakHighPrec = false)
 {
     s_f9pMode = true;
     s_f9pFw = fw;
     s_f9pDropSatAck = false;
     s_f9pRecordTx = false;
     s_f9pFailNextWrite = false;
+    s_f9pNakGgaMsgout = false;
+    s_f9pNakHighPrecPort = nakHighPrec;
+    s_f9pLastRateMeasMs = 0U;
+    s_f9pRateMeasWrites = 0U;
+    s_f9pLastGgaEpochs = 0xFFU;
+    s_f9pGgaWrites = 0U;
+    s_f9pLastGsvEpochs = 0xFFU;
+    s_f9pGsvWrites = 0U;
+    s_f9pHighPrecNaks = 0U;
     s_f9pSatValsets = 0U;
     s_f9pTxLog.clear();
     s_lastF9pSatValsetLen = 0U;
@@ -1559,7 +1647,7 @@ static void bootF9pModule(size_t slot, nvs_handle_t nvs, std::span<uint8_t> demu
     CHECK(nvs_set_u32(nvs, "cache_baud", 115200U) == ESP_OK);
     CHECK(nvs_set_u8(nvs, "family", static_cast<uint8_t>(gnss::Family::kUblox)) == ESP_OK);
     CHECK(nvs_set_u8(nvs, "model", static_cast<uint8_t>(gnss::Model::kZedF9p)) == ESP_OK);
-    CHECK(nvs_set_u8(nvs, "rate", 1U) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "rate", presetRate) == ESP_OK);
     CHECK(s_context->storage.loadKeys(app::gnss_store::kConfigKeys).failed == 0U);
     CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
     s_context->bootConfig.gnssBaud = 115200U;
@@ -1883,6 +1971,190 @@ static void verifyF9pSeqWriteFailClearsTracker(rtos::Executor &executor)
     CHECK(s_context->data.gnssSatTrack.read()->cutoffDeg == 19U);
 }
 
+/** @brief U2 端到端回归：F9P caps、gnss.out.gsv=0、1->5 Hz 500 ms 周期对齐持久化、频率回滚恢复 CFG-RATE-MEAS、改频不重放星座与 HPG 1.12 高精度 NAK 降级。 */
+static void verifyF9pRateOutputAndRollback(nvs_handle_t nvs, std::span<uint8_t> demux,
+                                           std::span<uint8_t> pipe)
+{
+    // 预置默认 gnss/out 与 1 Hz，启动 F9P（slot 3）。
+    auto initOut = app::data::GnssOutConfig::defaults();
+    std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> blob{};
+    size_t blobLen = 0U;
+    CHECK(fw::isOk(initOut.encode(blob, blobLen)));
+    CHECK(nvs_set_blob(nvs, "out", blob.data(), blobLen) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "gsv", 1U) == ESP_OK);
+    CHECK(nvs_commit(nvs) == ESP_OK);
+
+    bootF9pModule(3U, nvs, demux, pipe, "HPG 1.32", std::nullopt, 1U, false);
+    // 1. caps 含 gnss.rate={1,2,5} 与 5 条 gnss.out.*（1 Hz 下 GGA/GST/RMC={0,1000}, GSA={0,1000}, GSV={0,1000,5000}）。
+    const auto caps1 = s_context->data.gnssCaps.read();
+    CHECK(caps1.valid && caps1.navRateHz == 1U && caps1.navRateCount == 3U);
+    CHECK(caps1.navRatesHz[0] == 1U && caps1.navRatesHz[1] == 2U && caps1.navRatesHz[2] == 5U);
+    constexpr auto kDomGga = static_cast<size_t>(settings::OutKeyIndex::kGga);
+    constexpr auto kDomGsa = static_cast<size_t>(settings::OutKeyIndex::kGsa);
+    constexpr auto kDomGsv = static_cast<size_t>(settings::OutKeyIndex::kGsv);
+    CHECK(caps1.outPeriods[kDomGga].supported && caps1.outPeriods[kDomGga].count == 2U &&
+          caps1.outPeriods[kDomGga].values[0] == 0U &&
+          caps1.outPeriods[kDomGga].values[1] == 1000U);
+    CHECK(caps1.outPeriods[kDomGsa].supported && caps1.outPeriods[kDomGsa].count == 2U &&
+          caps1.outPeriods[kDomGsa].values[1] == 1000U);
+    CHECK(caps1.outPeriods[kDomGsv].supported && caps1.outPeriods[kDomGsv].count == 3U &&
+          caps1.outPeriods[kDomGsv].values[1] == 1000U &&
+          caps1.outPeriods[kDomGsv].values[2] == 5000U);
+
+    rtos::Executor executor{};
+    app::ExecutorControlStorage<4U> control{};
+    std::array<StackType_t, 256U> stack{};
+    const auto execId = app::id(app::ExecKind::kIo);
+    const auto target = app::id(app::ModuleKind::kGnss);
+    fw::ModuleOps ops{};
+    ops.onCommand = [](void *self, const fw::Command &cmd, fw::CommandResult &out) noexcept {
+        static_cast<app::GnssModule *>(self)->onCommand(cmd, out);
+    };
+    const std::array modules{fw::Module{
+        .name = "gnss", .id = target, .executor = execId, .self = &s_context->gnss, .ops = &ops}};
+    CHECK(fw::isOk(executor.init({.name = "io", .id = execId, .priority = 9U}, modules,
+                                 app::viewOf(control, stack))));
+    s_context->ioExecutor = &executor;
+    rtos::ExecutorTestAccess::bind(executor, &control.tcb);
+    app::bindSettings(*s_context);
+
+    auto runSetting = [&](std::string_view key, std::string_view val, settings::Caller caller,
+                          uint32_t waitMs) -> fw::Result {
+        settings::Ticket t{};
+        const auto err = s_context->settings.set(key, val, caller, t);
+        CHECK(err == settings::Error::kOk);
+        rtos::ExecutorTestAccess::drain(executor);
+        advance(waitMs);
+        fw::CommandResult r{};
+        CHECK(s_context->settings.poll(t, r) == settings::PollState::kDone);
+        return r.status;
+    };
+
+    // 2. config set gnss.out.gsv 0 成功并下发 VALSET（0x209100C5=0），再恢复为 5000 ms。
+    settings::Value got{};
+    CHECK(s_context->settings.get("gnss.out.gsv", got) && got.number == 5000);
+    const unsigned gsvWritesBefore = s_f9pGsvWrites;
+    CHECK(fw::isOk(runSetting("gnss.out.gsv", "0", settings::Caller::kConsole, 600U)));
+    CHECK(s_f9pGsvWrites > gsvWritesBefore && s_f9pLastGsvEpochs == 0U);
+    CHECK(s_context->settings.get("gnss.out.gsv", got) && got.number == 0);
+    CHECK(fw::isOk(runSetting("gnss.out.gsv", "5000", settings::Caller::kConsole, 600U)));
+    CHECK(s_f9pLastGsvEpochs == 5U);
+
+    // 3. 记录调频前星座重放次数；切到 2 Hz 设 GGA=500 ms，再切 5 Hz -> 500 ms 对齐为 1000 ms 并持久化，不触发星座 VALSET。
+    const unsigned satBefore = s_f9pSatValsets;
+    CHECK(fw::isOk(runSetting("gnss.rate", "2", settings::Caller::kConsole, 800U)));
+    CHECK(s_f9pLastRateMeasMs == 500U);
+    CHECK(s_f9pSatValsets == satBefore);
+    CHECK(fw::isOk(runSetting("gnss.out.gga", "500", settings::Caller::kWeb, 600U)));
+    CHECK(s_f9pLastGgaEpochs == 1U);
+    CHECK(s_context->settings.get("gnss.out.gga", got) && got.number == 500);
+
+    CHECK(fw::isOk(runSetting("gnss.rate", "5", settings::Caller::kConsole, 800U)));
+    CHECK(s_f9pLastRateMeasMs == 200U);
+    CHECK(s_f9pLastGgaEpochs == 5U);  // 1000 ms @ 5 Hz -> epochs=5
+    CHECK(s_f9pLastGsvEpochs == 25U); // 5000 ms @ 5 Hz -> epochs=25
+    CHECK(s_f9pSatValsets == satBefore);
+    const auto caps5 = s_context->data.gnssCaps.read();
+    CHECK(caps5.navRateHz == 5U && caps5.outPeriods[kDomGga].count == 3U &&
+          caps5.outPeriods[kDomGga].values[0] == 0U &&
+          caps5.outPeriods[kDomGga].values[1] == 200U &&
+          caps5.outPeriods[kDomGga].values[2] == 1000U);
+    CHECK(s_context->settings.get("gnss.out.gga", got) && got.number == 1000);
+    // NVS gnss/out 已持久化对齐后的 1000 ms（interval=-1）。
+    std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> nvsBlob{};
+    size_t nvsLen = nvsBlob.size();
+    CHECK(nvs_get_blob(nvs, "out", nvsBlob.data(), &nvsLen) == ESP_OK);
+    app::data::GnssOutConfig persistedOut{};
+    CHECK(fw::isOk(app::data::GnssOutConfig::decode(nvsBlob, persistedOut)));
+    CHECK(persistedOut.intervals[static_cast<size_t>(gnss::OutputMsg::kGga)] == -1);
+    // 5 Hz 下拒绝 500 ms（settings 服务与直接命令入口双门控）。
+    settings::Ticket badTicket{};
+    CHECK(s_context->settings.set("gnss.out.gga", "500", settings::Caller::kWeb, badTicket) ==
+          settings::Error::kBadValue);
+    fw::Command direct500{.target = target,
+                          .verb = static_cast<uint8_t>(app::GnssSubVerb::kPatchOutput),
+                          .argLen = 2U};
+    direct500.args[0] = static_cast<uint8_t>(gnss::OutputMsg::kGga);
+    direct500.args[1] = 2U; // 500 ms
+    rtos::Ticket tDirect{};
+    CHECK(fw::isOk(executor.post(direct500, rtos::Caller::kConsole, tDirect)));
+    rtos::ExecutorTestAccess::drain(executor);
+    fw::CommandResult directRes{};
+    CHECK(executor.poll(tDirect, directRes) == rtos::PollState::kDone);
+    CHECK(directRes.status == fw::Result::kInvalidArg);
+
+    // 4. 1 Hz 含显式 500 ms（经 gnss setout 写入）切 5 Hz -> 500 ms 对齐为 1000 ms 并持久化。
+    CHECK(fw::isOk(runSetting("gnss.rate", "1", settings::Caller::kConsole, 800U)));
+    CHECK(s_f9pLastRateMeasMs == 1000U);
+    auto out500 = s_context->data.gnssOutCfg.read();
+    CHECK(fw::isOk(out500.applyInterval(static_cast<size_t>(gnss::OutputMsg::kRmc), 2))); // 500 ms
+    fw::Command setOut500{.target = target,
+                          .verb = static_cast<uint8_t>(app::GnssSubVerb::kSetOut)};
+    size_t setOutLen = 0U;
+    CHECK(fw::isOk(out500.encode(setOut500.args, setOutLen)));
+    setOut500.argLen = static_cast<uint8_t>(setOutLen);
+    rtos::Ticket tSetOut{};
+    CHECK(fw::isOk(executor.post(setOut500, rtos::Caller::kConsole, tSetOut)));
+    rtos::ExecutorTestAccess::drain(executor);
+    advance(800U);
+    CHECK(fw::isOk(runSetting("gnss.rate", "5", settings::Caller::kConsole, 800U)));
+    nvsLen = nvsBlob.size();
+    CHECK(nvs_get_blob(nvs, "out", nvsBlob.data(), &nvsLen) == ESP_OK);
+    CHECK(fw::isOk(app::data::GnssOutConfig::decode(nvsBlob, persistedOut)));
+    CHECK(persistedOut.intervals[static_cast<size_t>(gnss::OutputMsg::kRmc)] == -1);
+    CHECK(s_f9pSatValsets == satBefore);
+
+    // 5. 频率变更失败回滚：5 Hz -> 1 Hz 时 CFG-RATE-MEAS=1000 已 ACK，但 GGA MSGOUT NAK 触发回滚，
+    //    必须重发 CFG-RATE-MEAS=200 恢复旧频率且不触发星座重放。
+    s_f9pNakGgaMsgout = true;
+    settings::Ticket rollbackTicket{};
+    CHECK(s_context->settings.set("gnss.rate", "1", settings::Caller::kConsole, rollbackTicket) ==
+          settings::Error::kOk);
+    rtos::ExecutorTestAccess::drain(executor);
+    advance(400U);
+    CHECK(s_f9pLastRateMeasMs == 1000U); // 新频率已写入接收机
+    // 等待 GGA NAK 重试耗尽进入回滚；放开 GGA NAK 让回滚重配顺利完成。
+    advance(2500U);
+    fw::CommandResult rbRes{};
+    CHECK(s_context->settings.poll(rollbackTicket, rbRes) == settings::PollState::kDone);
+    CHECK(!fw::isOk(rbRes.status));
+    s_f9pNakGgaMsgout = false;
+    advance(1200U);
+    CHECK(s_f9pLastRateMeasMs == 200U); // 回滚已恢复旧 CFG-RATE-MEAS=200
+    uint8_t nvsRate = 0U;
+    CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 5U);
+    CHECK(s_f9pSatValsets == satBefore);
+
+    rtos::ExecutorTestAccess::bind(executor, nullptr);
+    s_context->ioExecutor = nullptr;
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 6. 冷启动 restoreOutputPeriods：NVS 预存 rate=5 + GGA=500 ms -> 启动对齐为 1000 ms 并写回 NVS。
+    auto badBootOut = app::data::GnssOutConfig::defaults();
+    CHECK(fw::isOk(badBootOut.applyInterval(static_cast<size_t>(gnss::OutputMsg::kGga), 2)));
+    CHECK(fw::isOk(badBootOut.encode(blob, blobLen)));
+    CHECK(nvs_set_blob(nvs, "out", blob.data(), blobLen) == ESP_OK);
+    CHECK(nvs_commit(nvs) == ESP_OK);
+    bootF9pModule(4U, nvs, demux, pipe, "HPG 1.32", std::nullopt, 5U, false);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    CHECK(
+        s_context->data.gnssStatus.read().rxPeriodMs[static_cast<size_t>(gnss::OutputMsg::kGga)] ==
+        1000U);
+    nvsLen = nvsBlob.size();
+    CHECK(nvs_get_blob(nvs, "out", nvsBlob.data(), &nvsLen) == ESP_OK);
+    CHECK(fw::isOk(app::data::GnssOutConfig::decode(nvsBlob, persistedOut)));
+    CHECK(persistedOut.intervals[static_cast<size_t>(gnss::OutputMsg::kGga)] == -1);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 7. HPG 1.12 NMEA 高精度 VALSET NAK 降级：非致命回退至 3 键基础配置，正常进入 kRunning。
+    bootF9pModule(5U, nvs, demux, pipe, "HPG 1.12", std::nullopt, 1U, true);
+    CHECK(s_f9pHighPrecNaks >= 1U);
+    CHECK(s_f9pLastRateMeasMs == 1000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    CHECK(s_context->data.gnssCaps.read().valid);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+}
+
 /** @brief F9P 端到端主机回归：覆盖 RU1-02/03/04/06/07/08（能力、强制 GPS 重放、稳定期、回滚、RTCM 帧边界与零溢出）。 */
 void testGnssF9pEndToEnd()
 {
@@ -1936,6 +2208,7 @@ void testGnssF9pEndToEnd()
     s_context->ioExecutor = nullptr;
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     verifyF9pLegacyGps0FailedReplay(nvs, demux, pipe);
+    verifyF9pRateOutputAndRollback(nvs, demux, pipe);
     s_f9pMode = false;
     nvs_close(nvs);
 }

@@ -32,6 +32,11 @@ public:
     [[nodiscard]] std::string_view name() const noexcept override;
     [[nodiscard]] std::span<const demux::Decoder *const> decoders() const noexcept override;
     [[nodiscard]] uint32_t caps(Model model) const noexcept override;
+    /** ZED-F9P 支持的定位频率集合（1/2/5 Hz；四星座 RTK 依 HPG 1.12 手册上限 8 Hz）。 */
+    [[nodiscard]] std::span<const uint8_t> navRatesHz(Model model) const noexcept override;
+    /** ZED-F9P 各 NMEA 语句支持的静态周期集合（ms，0=关闭；受整倍导航历元约束）。 */
+    [[nodiscard]] std::span<const uint16_t> outputPeriodsMs(OutputMsg msg,
+                                                            Model model) const noexcept override;
     [[nodiscard]] bool buildProbe(CmdBuf &out) const noexcept override;
     [[nodiscard]] bool matchProbe(const demux::Decoder &dec, std::span<const uint8_t> frame,
                                   ProbeResult &out) const noexcept override;

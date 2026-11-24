@@ -9,6 +9,7 @@
 
 #include "demux/decoders/Ubx.hpp"
 #include "gnss/Controller.hpp"
+#include "gnss/NmeaParser.hpp"
 #include "gnss/drivers/UbloxReceiver.hpp"
 #include "PppSequence.hpp"
 #include "UbloxExt.hpp"
@@ -312,12 +313,13 @@ static void testMatchReply()
                                                                 std::span<const uint8_t>())));
 }
 
+/** @brief 验证 ZED-F9P 能力位（含 kRtcmIn|kBase，移除与 4 星座 RTK 上限不符的 kRate20Hz）。 */
 static void testCaps()
 {
-    TEST_ASSERT_BITS(gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz,
-                     gnss::cap::kRtcmIn | gnss::cap::kBase | gnss::cap::kRate20Hz,
+    TEST_ASSERT_BITS(gnss::cap::kRtcmIn | gnss::cap::kBase, gnss::cap::kRtcmIn | gnss::cap::kBase,
                      ubloxDrv().caps(gnss::Model::kZedF9p));
-    TEST_ASSERT_BITS(gnss::cap::kHeading, 0U, ubloxDrv().caps(gnss::Model::kZedF9p));
+    TEST_ASSERT_BITS(gnss::cap::kRate20Hz | gnss::cap::kHeading, 0U,
+                     ubloxDrv().caps(gnss::Model::kZedF9p));
     // 单型号驱动：forModel 对任何型号都返回自身（ADR-0012 §2.8）。
     TEST_ASSERT_TRUE(&ubloxDrv().forModel(gnss::Model::kZedF9p) == &ubloxDrv());
     TEST_ASSERT_TRUE(&ubloxDrv().forModel(gnss::Model::kUm982) == &ubloxDrv());
@@ -357,11 +359,15 @@ static void testGoldenReplies()
                              static_cast<uint32_t>(bad));
 }
 
+/** @brief 黄金能力位比对：保留 GoldenUblox.inc 不变，声明 U2 刻意去除 ZED-F9P 的 kRate20Hz。 */
 static void testGoldenCaps()
 {
-    const size_t bad = golden_check::capsMismatch(ubloxDrv(), golden_Ublox::kCaps);
-    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(golden_check::kAllMatch),
-                             static_cast<uint32_t>(bad));
+    for (const auto &item : golden_Ublox::kCaps) {
+        const auto model = static_cast<gnss::Model>(item.model);
+        const uint32_t expected =
+            (model == gnss::Model::kZedF9p) ? (item.caps & ~gnss::cap::kRate20Hz) : item.caps;
+        TEST_ASSERT_EQUAL_UINT32(expected, ubloxDrv().forModel(model).caps(model));
+    }
 }
 
 /** @brief C2 一次性命令的字节级合约。 */
@@ -408,7 +414,7 @@ static void testMaintenanceCommands()
     TEST_ASSERT_EQUAL_HEX8_ARRAY(kRecovery.data(), recovery.data.data(), kRecovery.size());
 }
 
-/** @brief 默认接线口在 UART2 时，基础与输出脚本都使用 UART2 键。 */
+/** @brief 默认接线口在 UART2 时，基础与输出脚本都使用 UART2 键，且含 NMEA 高精度两键。 */
 static void testConfiguredOutputPort()
 {
     const auto &driver = ubloxDrv();
@@ -418,7 +424,9 @@ static void testConfiguredOutputPort()
     TEST_ASSERT_TRUE(driver.roverStep(0U, gnss::Model::kZedF9p, cfg, step));
     TEST_ASSERT_TRUE(hasItem(step.cmd, 0x10750004U, 1U, 1));
     TEST_ASSERT_TRUE(hasItem(step.cmd, 0x10760002U, 1U, 1));
-    TEST_ASSERT_EQUAL_HEX8(0x01U, step.cmd.view()[7U]); // RAM only.
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x10930006U, 1U, 1)); // CFG-NMEA-HIGHPREC = 1
+    TEST_ASSERT_TRUE(hasItem(step.cmd, 0x20930007U, 1U, 1)); // CFG-NMEA-SVNUMBERING = 1
+    TEST_ASSERT_EQUAL_HEX8(0x01U, step.cmd.view()[7U]);      // RAM only.
     TEST_ASSERT_FALSE(hasItem(step.cmd, 0x10740002U, 1U, 1));
 
     // 第 1 步静默同样落到 UART2 + RAM 层。
@@ -1078,6 +1086,273 @@ static void testSecUniqIdPollAndParse()
     TEST_ASSERT_EQUAL_size_t(0U, gnss::ublox::parseSecUniqId(wrongId, sn));
 }
 
+/** @brief 验证 ZED-F9P 覆写的 navRatesHz 与 outputPeriodsMs 值集及非 F9P 空集。 */
+static void testF9pNavRatesAndOutputPeriods()
+{
+    const auto &driver = ubloxDrv();
+    const auto rates = driver.navRatesHz(gnss::Model::kZedF9p);
+    TEST_ASSERT_EQUAL_size_t(3U, rates.size());
+    TEST_ASSERT_EQUAL_UINT8(1U, rates[0]);
+    TEST_ASSERT_EQUAL_UINT8(2U, rates[1]);
+    TEST_ASSERT_EQUAL_UINT8(5U, rates[2]);
+    TEST_ASSERT_TRUE(driver.navRatesHz(gnss::Model::kUnknown).empty());
+    TEST_ASSERT_TRUE(driver.navRatesHz(gnss::Model::kUm980).empty());
+
+    for (const auto msg : {gnss::OutputMsg::kGga, gnss::OutputMsg::kGst, gnss::OutputMsg::kRmc}) {
+        const auto periods = driver.outputPeriodsMs(msg, gnss::Model::kZedF9p);
+        TEST_ASSERT_EQUAL_size_t(4U, periods.size());
+        TEST_ASSERT_EQUAL_UINT16(0U, periods[0]);
+        TEST_ASSERT_EQUAL_UINT16(200U, periods[1]);
+        TEST_ASSERT_EQUAL_UINT16(500U, periods[2]);
+        TEST_ASSERT_EQUAL_UINT16(1000U, periods[3]);
+    }
+    const auto gsa = driver.outputPeriodsMs(gnss::OutputMsg::kGsa, gnss::Model::kZedF9p);
+    TEST_ASSERT_EQUAL_size_t(2U, gsa.size());
+    TEST_ASSERT_EQUAL_UINT16(0U, gsa[0]);
+    TEST_ASSERT_EQUAL_UINT16(1000U, gsa[1]);
+
+    const auto gsv = driver.outputPeriodsMs(gnss::OutputMsg::kGsv, gnss::Model::kZedF9p);
+    TEST_ASSERT_EQUAL_size_t(3U, gsv.size());
+    TEST_ASSERT_EQUAL_UINT16(0U, gsv[0]);
+    TEST_ASSERT_EQUAL_UINT16(1000U, gsv[1]);
+    TEST_ASSERT_EQUAL_UINT16(5000U, gsv[2]);
+
+    TEST_ASSERT_TRUE(
+        driver.outputPeriodsMs(gnss::OutputMsg::kSatsInfo, gnss::Model::kZedF9p).empty());
+    TEST_ASSERT_TRUE(
+        driver.outputPeriodsMs(gnss::OutputMsg::kHeading, gnss::Model::kZedF9p).empty());
+    TEST_ASSERT_TRUE(driver.outputPeriodsMs(gnss::OutputMsg::kGga, gnss::Model::kUnknown).empty());
+}
+
+/** @brief 验证 buildOutput 严格执行整倍导航历元规则（1..255），拒绝静默取整。 */
+static void testBuildOutputStrictMultiple()
+{
+    const auto &driver = ubloxDrv();
+    gnss::OutputPlan plan{};
+    plan.useConfiguredPort = true;
+    plan.port = 1U;
+    gnss::CmdBuf cmd{};
+
+    // 5 Hz（Tnav=200 ms）下 500 ms 非整数倍，必须拒绝而非静默取整为 600 ms。
+    plan.rateHz = 5U;
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kInvalidArg),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kGga, 500U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kInvalidArg),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kGga, 100U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kInvalidArg),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kGga, 51200U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kGga, 51000U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(hasItem(cmd, 0x209100BBU, 255U, 1U));
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kGsv, 5000U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(hasItem(cmd, 0x209100C5U, 25U, 1U));
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kGga, 0U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(hasItem(cmd, 0x209100BBU, 0U, 1U));
+
+    // 2 Hz（Tnav=500 ms）下 200 ms 非整数倍，1 Hz（Tnav=1000 ms）下 500 ms 非整数倍。
+    plan.rateHz = 2U;
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kInvalidArg),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kRmc, 200U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kOk),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kRmc, 500U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+    TEST_ASSERT_TRUE(hasItem(cmd, 0x209100ACU, 1U, 1U));
+
+    plan.rateHz = 1U;
+    TEST_ASSERT_EQUAL(static_cast<int>(fw::Status::kInvalidArg),
+                      static_cast<int>(driver.buildOutput(gnss::OutputMsg::kGst, 500U,
+                                                          gnss::Model::kZedF9p, plan, cmd)));
+}
+
+/** @brief 字节级验证 cmdConfigurePort 含 CFG-NMEA-HIGHPREC=1 与 CFG-NMEA-SVNUMBERING=1。 */
+static void testConfiguredPortNmeaHighPrecBytes()
+{
+    const auto &driver = ubloxDrv();
+    gnss::RoverConfig cfg{};
+    cfg.useConfiguredPort = true;
+    cfg.port = 1U;
+    cfg.rateHz = 5U;
+    gnss::ConfigStep step{};
+    TEST_ASSERT_TRUE(driver.roverStep(0U, gnss::Model::kZedF9p, cfg, step));
+
+    Bytes items{};
+    pushU32(items, 0x30210001U);
+    pushU16(items, 200U); // 5 Hz -> 200 ms
+    pushU32(items, 0x10730004U);
+    items.push_back(1U); // CFG-UART1INPROT-RTCM3X = 1
+    pushU32(items, 0x10740002U);
+    items.push_back(1U); // CFG-UART1OUTPROT-NMEA = 1
+    pushU32(items, 0x10930006U);
+    items.push_back(1U); // CFG-NMEA-HIGHPREC = 1
+    pushU32(items, 0x20930007U);
+    items.push_back(1U); // CFG-NMEA-SVNUMBERING = 1
+    const Bytes expected = makeValsetFrame(0x01U, items);
+    TEST_ASSERT_EQUAL_size_t(expected.size(), step.cmd.len);
+    TEST_ASSERT_TRUE(cmdEquals(step.cmd, expected));
+    TEST_ASSERT_TRUE(gnss::ublox::validUbxChecksum(step.cmd.view()));
+}
+
+/** @brief 验证 HPG 1.12 对含高精度键的串口配置 VALSET 返回 NAK 时降级为 3 键基础配置且非致命。 */
+static void testF9pControllerPortConfigNakFallback()
+{
+    gnss::Controller ctrl{};
+    const std::array<const gnss::Receiver *, 1> drv{&ubloxDrv()};
+    const std::array<uint32_t, 1> bauds{115200U};
+    gnss::RoverConfig cfg{};
+    cfg.useConfiguredPort = true;
+    cfg.port = 1U;
+    cfg.rateHz = 5U;
+    gnss::OutputPlan plan{};
+    plan.useConfiguredPort = true;
+    plan.port = 1U;
+    plan.rateHz = 5U;
+    plan.periodMs[static_cast<size_t>(gnss::OutputMsg::kGga)] = 200U;
+    gnss::Timing timing{};
+    timing.powerOffMs = 0U;
+    timing.bootMs = 0U;
+    timing.stepRetries = 1U;
+    TEST_ASSERT_TRUE(ctrl.init(drv, bauds, cfg, plan, gnss::Hint{}, timing));
+    uint32_t now = 10U;
+    ctrl.start(now);
+
+    const Bytes probeReply = monVer("ZED-F9P", "HPG 1.12");
+    const Bytes ack = makeFrame(0x05U, 0x01U, Bytes{0x06U, 0x8AU});
+    const Bytes nak = makeFrame(0x05U, 0x00U, Bytes{0x06U, 0x8AU});
+    bool sawFiveKey = false;
+    bool sawThreeKeyFallback = false;
+
+    for (unsigned iter = 0U; iter < 60U && ctrl.state() != gnss::State::kRunning; ++iter) {
+        const gnss::Action act = ctrl.poll(now);
+        if (act.kind == gnss::Action::Kind::kWrite) {
+            if (ctrl.state() == gnss::State::kProbing) {
+                ctrl.onFrame(demux::ubx::kDecoder, probeReply, now + 5U);
+            } else if (gnss::ublox::isValsetFrame(act.bytes)) {
+                std::array<uint32_t, gnss::ublox::kMaxExtractedValsetKeys> keys{};
+                const size_t n = gnss::ublox::extractValsetKeys(act.bytes, keys);
+                bool hasHighPrec = false;
+                for (size_t i = 0U; i < n; ++i) {
+                    if (keys[i] == 0x10930006U || keys[i] == 0x20930007U) {
+                        hasHighPrec = true;
+                    }
+                }
+                if (hasHighPrec) {
+                    sawFiveKey = true;
+                    ctrl.onFrame(demux::ubx::kDecoder, nak, now + 5U);
+                } else {
+                    if (n == 3U && keys[0] == 0x30210001U) {
+                        sawThreeKeyFallback = true;
+                    }
+                    ctrl.onFrame(demux::ubx::kDecoder, ack, now + 5U);
+                }
+            }
+        }
+        now += 20U;
+    }
+    TEST_ASSERT_TRUE(sawFiveKey);
+    TEST_ASSERT_TRUE(sawThreeKeyFallback);
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kRunning), static_cast<int>(ctrl.state()));
+    TEST_ASSERT_EQUAL_UINT32(0U, ctrl.stats().failures);
+}
+
+/** @brief 5 键与降级 3 键端口 VALSET 都被 NAK 时，重试次数有界并进入 kFailed（不得无限循环）。 */
+static void testF9pControllerPortConfigFallbackNakFails()
+{
+    gnss::Controller ctrl{};
+    const std::array<const gnss::Receiver *, 1> drv{&ubloxDrv()};
+    const std::array<uint32_t, 1> bauds{115200U};
+    gnss::RoverConfig cfg{};
+    cfg.useConfiguredPort = true;
+    cfg.port = 1U;
+    cfg.rateHz = 5U;
+    gnss::OutputPlan plan{};
+    plan.useConfiguredPort = true;
+    plan.port = 1U;
+    plan.rateHz = 5U;
+    plan.periodMs[static_cast<size_t>(gnss::OutputMsg::kGga)] = 200U;
+    gnss::Timing timing{};
+    timing.powerOffMs = 0U;
+    timing.bootMs = 0U;
+    timing.stepRetries = 1U;
+    TEST_ASSERT_TRUE(ctrl.init(drv, bauds, cfg, plan, gnss::Hint{}, timing));
+    uint32_t now = 10U;
+    ctrl.start(now);
+
+    const Bytes probeReply = monVer("ZED-F9P", "HPG 1.12");
+    const Bytes ack = makeFrame(0x05U, 0x01U, Bytes{0x06U, 0x8AU});
+    const Bytes nak = makeFrame(0x05U, 0x00U, Bytes{0x06U, 0x8AU});
+    unsigned portNaks = 0U;
+
+    for (unsigned iter = 0U; iter < 400U && ctrl.state() != gnss::State::kFailed &&
+                             ctrl.state() != gnss::State::kRunning;
+         ++iter) {
+        const gnss::Action act = ctrl.poll(now);
+        if (act.kind == gnss::Action::Kind::kWrite) {
+            if (ctrl.state() == gnss::State::kProbing) {
+                ctrl.onFrame(demux::ubx::kDecoder, probeReply, now + 5U);
+            } else if (gnss::ublox::isValsetFrame(act.bytes)) {
+                std::array<uint32_t, gnss::ublox::kMaxExtractedValsetKeys> keys{};
+                const size_t n = gnss::ublox::extractValsetKeys(act.bytes, keys);
+                bool portCfg = false;
+                for (size_t i = 0U; i < n; ++i) {
+                    if (keys[i] == 0x30210001U || keys[i] == 0x10930006U) {
+                        portCfg = true;
+                    }
+                }
+                if (portCfg) {
+                    ++portNaks;
+                    ctrl.onFrame(demux::ubx::kDecoder, nak, now + 5U);
+                } else {
+                    ctrl.onFrame(demux::ubx::kDecoder, ack, now + 5U);
+                }
+            }
+        }
+        now += 20U;
+    }
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::State::kFailed), static_cast<int>(ctrl.state()));
+    TEST_ASSERT_TRUE(portNaks <= 4U);
+}
+
+/** @brief 验证 7 位小数高精度 NMEA GGA 帧长在解析器上限内且经纬度/高程精确解析。 */
+static void testNmeaHighPrec7DecimalGgaParse()
+{
+    // 92 字节高精度 GGA（7 位小数经纬度 + 3 位小数高程），带正确 XOR 校验。
+    constexpr std::string_view kBody =
+        "GNGGA,123519.00,4807.0381234,N,12345.6789012,W,4,12,0.55,1234.567,M,-123.456,M,1.2,0000";
+    uint8_t x = 0U;
+    for (const char ch : kBody) {
+        x ^= static_cast<uint8_t>(ch);
+    }
+    char sentence[128]{};
+    const int len =
+        std::snprintf(sentence, sizeof(sentence), "$%.*s*%02X\r\n", static_cast<int>(kBody.size()),
+                      kBody.data(), static_cast<unsigned>(x));
+    TEST_ASSERT_TRUE(len > 82 && len < 256);
+
+    gnss::NmeaParser parser{};
+    const auto span = std::span<const uint8_t>{reinterpret_cast<const uint8_t *>(sentence),
+                                               static_cast<size_t>(len)};
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::NmeaResult::kFix),
+                      static_cast<int>(parser.feed(span, 1000U)));
+    TEST_ASSERT_TRUE(parser.fix().valid);
+    TEST_ASSERT_EQUAL(static_cast<int>(gnss::FixQuality::kRtkFixed),
+                      static_cast<int>(parser.fix().quality));
+    TEST_ASSERT_EQUAL_INT32(1234567, parser.fix().altMm);
+    TEST_ASSERT_EQUAL_INT32(-123456, parser.fix().geoidMm);
+    // 48 + 7.0381234/60 = 48.11730205666... -> 48117302057 (1e-9 deg)
+    TEST_ASSERT_INT64_WITHIN(1LL, 48117302057LL, parser.fix().latE9);
+    // -(123 + 45.6789012/60) = -123.76131502 -> -123761315020 (1e-9 deg)
+    TEST_ASSERT_INT64_WITHIN(1LL, -123761315020LL, parser.fix().lonE9);
+}
+
 int main(int, char **)
 {
     UNITY_BEGIN();
@@ -1105,5 +1380,11 @@ int main(int, char **)
     RUN_TEST(testF9pModeValsetRetryResync);
     RUN_TEST(testMonVerEdgeCases);
     RUN_TEST(testSecUniqIdPollAndParse);
+    RUN_TEST(testF9pNavRatesAndOutputPeriods);
+    RUN_TEST(testBuildOutputStrictMultiple);
+    RUN_TEST(testConfiguredPortNmeaHighPrecBytes);
+    RUN_TEST(testF9pControllerPortConfigNakFallback);
+    RUN_TEST(testF9pControllerPortConfigFallbackNakFails);
+    RUN_TEST(testNmeaHighPrec7DecimalGgaParse);
     return UNITY_END();
 }

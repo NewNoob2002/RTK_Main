@@ -143,6 +143,21 @@ void stepFletcher(uint8_t byte, uint8_t &ckA, uint8_t &ckB) noexcept;
 [[nodiscard]] bool isSilenceNmeaValset(std::span<const uint8_t> frame) noexcept;
 
 /**
+ * @brief 检测含 NMEA 高精度扩展键的端口配置 VALSET，并构造去掉这两键的 3 键降级帧。
+ * @param frame: 被接收机 NAK 的完整 UBX-CFG-VALSET 帧。
+ * @param[out] out: 成功时写入保留原配置层与基础键的降级 VALSET 帧。
+ * @retval true 原帧含 CFG-NMEA-HIGHPREC/SVNUMBERING 且已生成降级帧；false 非此类帧或编码失败。
+ */
+[[nodiscard]] bool buildPortConfigFallbackValset(std::span<const uint8_t> frame,
+                                                 CmdBuf &out) noexcept;
+
+/**
+ * @brief 判断键集合中是否包含 NMEA 高精度扩展键（CFG-NMEA-HIGHPREC 或 CFG-NMEA-SVNUMBERING）。
+ * @param keys: VALSET 键 ID 列表。
+ * @retval true 包含至少一个高精度扩展键；false 不包含。
+ */
+[[nodiscard]] bool containsNmeaHighPrecKeys(std::span<const uint32_t> keys) noexcept;
+/**
  * @brief 解析 MON-VER 中的 F9P HPG 固件版本号（如 "HPG 1.32" -> 132）。
  * @param fwVersion: MON-VER FWVER 文本（允许定长缓冲内含尾 NUL）。
  * @param[out] versionOut: 解析成功时输出 major * 100 + minor。

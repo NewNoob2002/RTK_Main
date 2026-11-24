@@ -270,6 +270,64 @@ bool isSilenceNmeaValset(std::span<const uint8_t> frame) noexcept
     return true;
 }
 
+bool buildPortConfigFallbackValset(std::span<const uint8_t> frame, CmdBuf &out) noexcept
+{
+    if (!isValsetFrame(frame)) {
+        return false;
+    }
+    const size_t end = frame.size() - kCrcBytes;
+    size_t pos = kPayloadOffset + kValsetHeadBytes;
+    const uint8_t layer = frame[kPayloadOffset + 1U];
+    std::array<uint8_t, kValsetPayloadMax> payload{};
+    ValsetWriter writer{payload};
+    if (!writer.begin(layer)) {
+        return false;
+    }
+    bool sawHighPrec = false;
+    bool sawRateMeas = false;
+    while (pos < end) {
+        if ((pos + kKeyIdBytes) > end) {
+            return false;
+        }
+        const uint32_t key =
+            static_cast<uint32_t>(frame[pos]) |
+            (static_cast<uint32_t>(frame[pos + 1U]) << kShift1Byte) |
+            (static_cast<uint32_t>(frame[pos + kReservedOffset1]) << kShift2Bytes) |
+            (static_cast<uint32_t>(frame[pos + kReservedOffset2]) << kShift3Bytes);
+        const size_t valueLen = keyValueBytes(key);
+        if ((valueLen == 0U) || ((pos + kKeyIdBytes + valueLen) > end)) {
+            return false;
+        }
+        if ((key == kKeyNmeaHighprec) || (key == kKeyNmeaSvNumbering)) {
+            sawHighPrec = true;
+        } else {
+            if (key == kKeyRateMeas) {
+                sawRateMeas = true;
+            }
+            for (size_t i = 0U; i < (kKeyIdBytes + valueLen); ++i) {
+                if (!writer.u8(frame[pos + i])) {
+                    return false;
+                }
+            }
+        }
+        pos += kKeyIdBytes + valueLen;
+    }
+    if (!sawHighPrec || !sawRateMeas) {
+        return false;
+    }
+    return encodeUbxFrame(out, kClsCfg, kIdCfgValset, writer.view());
+}
+
+bool containsNmeaHighPrecKeys(std::span<const uint32_t> keys) noexcept
+{
+    for (const uint32_t key : keys) {
+        if ((key == kKeyNmeaHighprec) || (key == kKeyNmeaSvNumbering)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool parseF9pHpgVersion(std::string_view fwVersion, uint16_t &versionOut) noexcept
 {
     const std::string_view clean = trimAtNul(fwVersion);

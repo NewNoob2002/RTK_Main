@@ -181,6 +181,50 @@ uint16_t navPeriodMs(const RoverConfig &cfg) noexcept
     const auto period = static_cast<uint16_t>(ublox::kDefaultPeriodMs / rate);
     return period == 0U ? ublox::kDefaultPeriodMs : period;
 }
+
+/**
+ * @brief 严格校验输出周期与导航历元的整倍关系并换算 CFG-MSGOUT 历元数（0 或 1..255）。
+ * @param periodMs: 期望输出周期（ms，0 表示关闭）。
+ * @param rateHz: 导航频率（Hz，0 按 1 Hz 处理）。
+ * @param useConfiguredPort: true 为实板端口路径；false 为历史黄金向量兼容路径。
+ * @param[out] epochsOut: 合法时写入每历元分频值（0..255）。
+ * @retval true 周期合法并已写入 epochsOut；false 非整数倍或超出 U1 上限。
+ */
+bool computeMsgoutEpochs(uint32_t periodMs, uint8_t rateHz, bool useConfiguredPort,
+                         uint8_t &epochsOut) noexcept
+{
+    if (periodMs == 0U) {
+        epochsOut = 0U;
+        return true;
+    }
+    const uint32_t rate = (rateHz == 0U) ? ublox::kMinRateHz : static_cast<uint32_t>(rateHz);
+    const uint32_t navPeriod = ublox::kMsPerSecond / rate;
+    if (navPeriod == 0U) {
+        return false;
+    }
+    uint32_t epochs = 0U;
+    if ((ublox::kMsPerSecond % rate) == 0U) {
+        if ((periodMs % navPeriod) != 0U) {
+            return false;
+        }
+        epochs = periodMs / navPeriod;
+    } else if (!useConfiguredPort && (periodMs == navPeriod)) {
+        // 历史黄金向量含 rateHz=3（Tnav=333 ms），useConfiguredPort=false 路径保留等价比对。
+        epochs = 1U;
+    } else if (!useConfiguredPort &&
+               (((static_cast<uint64_t>(periodMs) * rate) % ublox::kMsPerSecond) == 0ULL)) {
+        epochs =
+            static_cast<uint32_t>((static_cast<uint64_t>(periodMs) * rate) / ublox::kMsPerSecond);
+    } else {
+        return false;
+    }
+    if ((epochs == 0U) || (epochs > ublox::kMaxEpochsPerEpoch)) {
+        return false;
+    }
+    // 已校验 epochs 落在 1..255，窄化到 uint8_t 安全。
+    epochsOut = static_cast<uint8_t>(epochs);
+    return true;
+}
 } // namespace
 
 namespace detail {
@@ -224,10 +268,37 @@ std::span<const demux::Decoder *const> UbloxReceiver::decoders() const noexcept
 
 uint32_t UbloxReceiver::caps(Model model) const noexcept
 {
-    if (model == Model::kZedF9p) {
-        return cap::kRtcmIn | cap::kBase | cap::kRate20Hz;
-    }
+    // ZED-F9P 四星座 RTK 上限依 HPG 1.12 手册为 8 Hz（HPG 1.32 为 7 Hz），不置 kRate20Hz。
+    static_cast<void>(model);
     return cap::kRtcmIn | cap::kBase;
+}
+
+std::span<const uint8_t> UbloxReceiver::navRatesHz(Model model) const noexcept
+{
+    static constexpr std::array<uint8_t, 3U> kRates{1U, 2U, 5U};
+    return model == Model::kZedF9p ? std::span<const uint8_t>{kRates} : std::span<const uint8_t>{};
+}
+
+std::span<const uint16_t> UbloxReceiver::outputPeriodsMs(OutputMsg msg, Model model) const noexcept
+{
+    static constexpr std::array<uint16_t, 4U> kTimed{0U, 200U, 500U, 1000U};
+    static constexpr std::array<uint16_t, 2U> kSecond{0U, 1000U};
+    static constexpr std::array<uint16_t, 3U> kGsv{0U, 1000U, 5000U};
+    if (model != Model::kZedF9p) {
+        return {};
+    }
+    switch (msg) {
+    case OutputMsg::kGga:
+    case OutputMsg::kGst:
+    case OutputMsg::kRmc:
+        return kTimed;
+    case OutputMsg::kGsa:
+        return kSecond;
+    case OutputMsg::kGsv:
+        return kGsv;
+    default:
+        return {};
+    }
 }
 
 bool UbloxReceiver::buildProbe(CmdBuf &out) const noexcept
@@ -372,26 +443,15 @@ fw::Status UbloxReceiver::buildOutput(OutputMsg msg, uint32_t periodMs, Model mo
         return fw::Status::kInvalidArg;
     }
 
-    // 值 = 每历元次数：round(periodMs * rateHz / 1000)，0 关闭；算下来为 0 时按 1（最慢 1 历元一次）。
-    const uint32_t rate =
-        (plan.rateHz == 0U) ? ublox::kMinRateHz : static_cast<uint32_t>(plan.rateHz);
-    uint32_t epochs = 0U;
-    if (periodMs != 0U) {
-        // periodMs 最大 128000、rate 最大 20，乘积 2.56e6 在 uint32_t 内，无需 64 位。
-        const uint32_t scaled = (periodMs * rate) + ublox::kHalfSecondMs;
-        epochs = scaled / ublox::kMsPerSecond;
-        if (epochs == 0U) {
-            epochs = 1U;
-        }
-        if (epochs > ublox::kMaxEpochsPerEpoch) {
-            return fw::Status::kInvalidArg; // 键类型是 U1，超出可表示范围视为不可实现参数
-        }
+    uint8_t value = 0U;
+    if (!computeMsgoutEpochs(periodMs, plan.rateHz, plan.useConfiguredPort, value)) {
+        out.clear();
+        return fw::Status::kInvalidArg;
     }
     // UBX-22008968 §6.9.14：这些 NMEA UART2 项的 ID 紧随对应 UART1 项。
     if (plan.useConfiguredPort && plan.port == 2U) {
         ++key;
     }
-    const auto value = static_cast<uint8_t>(epochs); // 上面已验证 U1 上限。
     const bool built = plan.useConfiguredPort ? cmdValsetU1(out, ublox::kLayerRam, key, value)
                                               : cmdValsetMsgout(out, key, value);
     if (!built) {

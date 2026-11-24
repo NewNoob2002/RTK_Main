@@ -357,6 +357,43 @@ void testPhoneCallerPermissionsAndEncoding()
     TEST_ASSERT_EQUAL_UINT8(32U, st.lastCmd.argLen);
 }
 
+/**
+ * @brief  校验 ZED-F9P 5 Hz 能力域：拒绝 10 Hz、拒绝 500 ms 非整倍周期，放行 0/200/1000 与 GSV=0
+ */
+void testF9pFiveHzDomainValidation()
+{
+    MockBackendState st{};
+    st.caps.valid = true;
+    st.caps.navRateHz = 5U;
+    st.caps.navRatesHz = {1U, 2U, 5U};
+    st.caps.navRateCount = 3U;
+    const settings::PeriodDomain f9p5Hz{{0U, 200U, 1000U}, 3U, true};
+    st.caps.outPeriods[static_cast<size_t>(settings::OutKeyIndex::kGga)] = f9p5Hz;
+    st.caps.outPeriods[static_cast<size_t>(settings::OutKeyIndex::kGsa)] = {{0U, 1000U}, 2U, true};
+    st.caps.outPeriods[static_cast<size_t>(settings::OutKeyIndex::kGsv)] = {
+        {0U, 1000U, 5000U}, 3U, true};
+    st.caps.outPeriods[static_cast<size_t>(settings::OutKeyIndex::kGst)] = f9p5Hz;
+    st.caps.outPeriods[static_cast<size_t>(settings::OutKeyIndex::kRmc)] = f9p5Hz;
+    settings::Service svc{};
+    bindMock(st, svc);
+
+    settings::Ticket t{};
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(svc.set("gnss.rate", "10", settings::Caller::kConsole, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(svc.set("gnss.out.gga", "500", settings::Caller::kWeb, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("gnss.out.gga", "200", settings::Caller::kWeb, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("gnss.out.gga", "1000", settings::Caller::kWeb, t)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(svc.set("gnss.out.gsv", "0", settings::Caller::kConsole, t)));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbGnssSetOut, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(2U, st.lastCmd.argLen);
+    TEST_ASSERT_EQUAL_UINT8(0U, st.lastCmd.args[1]);
+}
+
 } // namespace
 
 /** @brief Unity 每用例前置钩子。 */
@@ -376,5 +413,6 @@ int main()
     RUN_TEST(testValidationEncodingAndErrors);
     RUN_TEST(testGetDomainAndForEach);
     RUN_TEST(testPhoneCallerPermissionsAndEncoding);
+    RUN_TEST(testF9pFiveHzDomainValidation);
     return UNITY_END();
 }
