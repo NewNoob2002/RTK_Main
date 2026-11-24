@@ -8,7 +8,7 @@
   - 旧 P2 `../../P2_V3.1_IDF/main/user_src/user_f9p.c`（P2 板上 F9P 实际用的口、波特率与输出集）；
   - u-blox F9 HPG 接口说明（UBX-CFG-VALSET/VALGET 帧格式、CFG-SIGNAL/CFG-MSGOUT/CFG-NAVSPG 键）。SparkFun 与本卡冲突时以 u-blox 文档为准并在报告说明。
 - 基线：main `1b01eef`。分支 `feat/u1-f9p`，工作树 `../RTK_Main-u1`（仓库根），构建前缀 `builds/u1-*`。
-- 执行者：AGY。评审：Codex（gpt）。执行者不提交、不烧录、不连串口；HIL 由 Architect 做。
+- 执行者：Codex（neon，`agy-cli/gemini-4-neon`）。评审：Codex（gpt）。执行者不提交、不烧录、不连串口；HIL 由 Architect 做。
 
 ## 1 范围
 

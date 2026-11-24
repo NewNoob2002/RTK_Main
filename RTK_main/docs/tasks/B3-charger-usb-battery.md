@@ -9,7 +9,7 @@
   `../include/xyz_iic.h`、`xyz_iic.c`（400 kHz、内部上拉）、`main/main.c:110-220`、`main/user_include/user_gpio.h:21`（GPIO27）。
   原理图 `docs/hardware/P2/schematic/p2v1.41.pdf`。
 - 基线：main `1b01eef`。分支 `feat/b3-charger`，工作树 `../RTK_Main-b3`（仓库根），构建前缀 `builds/b3-*`。
-- 执行者：Codex（gpt）。评审：AGY。执行者不提交、不烧录、不连串口；HIL 由 Architect 做。
+- 执行者：Codex（gpt）。评审：Codex（neon）。执行者不提交、不烧录、不连串口；HIL 由 Architect 做。
 
 ## 1 范围
 
