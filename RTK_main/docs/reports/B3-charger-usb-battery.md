@@ -112,3 +112,18 @@ ESP-IDF 全新配置时报告了已有的跨组件私有 include 目录 CMake �
 - 最终执行 `ASAN_OPTIONS=detect_leaks=0 bash tools/ci/run_gates.sh --prefix b3 --base 84025fd`，43 PASS / 0 FAIL。普通和 ASan/UBSan 的 `main_host_check` 均为 122/122，`doc_check` 检查 31 个函数、0 个不合格。汇总见 `builds/b3-review-gates.log`，逐项日志见 `builds/b3-logs/`。
 - 首轮全量验证 41 PASS / 2 FAIL。G5b 的探测函数复杂度和局部常量命名问题已修正。既有 `t13_gap_pairing_window` 在首轮 ASan/UBSan 中失败，随后单项复跑通过，第二轮全量 ASan/UBSan 通过 45/45。首轮与单项复跑日志见 `builds/b3-review-gates-first.log`、`builds/b3-review-tidy-first.log`、`builds/b3-review-t13-asan-first.log` 和 `builds/b3-review-t13-asan-retry.log`。
 - 实板 HIL 为 NOT_RUN，验收步骤见 §6。
+
+## 8. 实板 HIL（Architect，2026-11-24）
+
+板子：带 F9P 的新 P2 v1.41，ESP32-D0WD v1.0，`/dev/ttyACM1`，固件 `builds/b3h-idf`（5c0db44）。
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| `power i2c scan` | 只有 `0x3C`（OLED），0x1A 不在总线上 | 控制台输出 |
+| 芯片缺席时的日志 | PASS：开机一行 `W: charger: no ack at 0x1A, i2c path disabled`，之后不再报错 | 开机日志 |
+| GPIO27 USB 检测 | PASS：两轮插拔，`usb=0/1 src=gpio` 立即上报（122.35/138.76 s，344.14/381.89 s） | `<power>` 日志 |
+| 电池 ADC | PASS：拔 USB 后固件 3970 mV、万用表 3.94 V，误差 +30 mV（0.8%）；充电中读数 4046–4060 mV 被充电抬高，属预期 | `power` 输出 |
+| BT 0x03 电量 | PASS：App 显示 89%（充电）/82%（拔 USB）与固件一致 | 手机 App |
+| 插拔 USB 不误触发关机 | PASS | `shutdown stage=idle` |
+| REG02/REG03 写入 | NOT_RUN：新板无充电芯片，需在 CM680 P2 v1.41 上补测 | — |
+| 低电量 <10% 关机 | NOT_RUN：电池约 85%，由主机测试覆盖 | — |
