@@ -37,11 +37,12 @@
 | B3 充电芯片探测、GPIO27 USB 检测、电池 ADC、低电关机 | 已合入 main（2026-11-24）。新 F9P P2 v1.41 HIL 通过：GPIO27 插拔、电池 ADC +30 mV、App 电量一致、无芯片时只报一行 W（报告 `docs/reports/B3-charger-usb-battery.md` §8） |
 | U1 ZED-F9P 驱动（VALSET、NMEA 静默、星座/截止角、RTCM 帧边界下发） | 已合入 main（2026-11-24）。P2 v1.41 + ZED-F9P HPG 1.12 HIL：探测/SN、无计划外 NMEA、控制台/手机 0x06/网页改星座与截止角并掉电保持、三入口拒绝关 GPS 均通过；RTK 固定解保持未测（报告 `docs/reports/U1-f9p-driver.md` §10） |
 | U2 ZED-F9P 定位频率/输出周期、NMEA 高精度 | 已合入 main（2026-11-24）。F9P 1/2/5 Hz + 整数倍周期规则（控制台/设置/网页/驱动四处），改频率周期自动对齐并持久化，回滚恢复 CFG-RATE-MEAS，不重放星座；HIGHPREC/SVNUMBERING 带 3 键 NAK 降级。室内 HIL 通过；室外项未测（报告 `docs/reports/U2-ublox-rate.md` §8） |
+| OL1 SH1106 OLED（共享 I2C0、WouoUI graph/font 子集、只读状态页、短按翻页、关机提示） | 已合入 main（2026-11-24）。P2 v1.41 HIL：显示方向、开机页→状态页、短按翻页、关机提示均正常，`i2c_errors=0`，oled 栈 HWM 1,088/3,072 B。用户反馈关机提示一闪而过、开机无过渡、页面单调 → OL2 |
 | O1–O3 网页 OTA | 已合入 main（2026-11-24）。P2 v1.41 HIL 通过：升级 ~35 s、30 s 自动确认、错误码、并发 150 s 408、中止后 other=null、断 Wi-Fi、上传中长按电源键中止 |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | 未立项，需新 ADR，必须走 ADR-0018 的服务与总线 |
-| P2 OLED + 按键菜单入口 | 以后再做（ADR-0017 §7） |
+| P2 OLED 表盘与子菜单（OL2） | 进行中：表盘 + 子菜单、开机自检、关机进度、30 fps 动画；按键方案 A（短按下一项、双击进入/返回） |
 
 ## 3. 待补的硬件验证（HIL）
 
