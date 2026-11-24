@@ -53,21 +53,23 @@ settings::Error validateWithCaps(const char *key, const settings::GnssCaps &caps
 }
 
 /**
- * @brief  校验注册表形状：20 项、键名唯一、KeyId 与下标一致、未知键返回空
+ * @brief  校验注册表形状：21 项（含 gnss.cutoff）、键名唯一、keyAt 映射一致、未知键返回空
  */
 void testRegistryShape()
 {
     const auto table = settings::keyTable();
-    TEST_ASSERT_EQUAL_size_t(20U, table.size());
+    TEST_ASSERT_EQUAL_size_t(21U, table.size());
     for (size_t i = 0U; i < table.size(); ++i) {
-        TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(i), static_cast<uint8_t>(table[i].id));
+        if (i < static_cast<size_t>(settings::KeyId::kCount)) {
+            TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(i), static_cast<uint8_t>(table[i].id));
+        }
         TEST_ASSERT_NOT_NULL(table[i].domain);
-        const bool constellation = table[i].name.starts_with("gnss.const.");
-        TEST_ASSERT_EQUAL(constellation, table[i].encode == nullptr);
+        TEST_ASSERT_NOT_NULL(table[i].encode);
         TEST_ASSERT_EQUAL_PTR(&table[i], settings::findKey(table[i].name));
         TEST_ASSERT_EQUAL_PTR(&table[i], settings::keyAt(table[i].id));
         for (size_t j = i + 1U; j < table.size(); ++j) {
             TEST_ASSERT_TRUE(table[i].name != table[j].name);
+            TEST_ASSERT_TRUE(table[i].id != table[j].id);
         }
     }
     TEST_ASSERT_NULL(settings::findKey("gnss.rate2"));
@@ -300,6 +302,72 @@ void testPhoneAndSatTrackKeys()
     }
 }
 
+/**
+ * @brief  校验 RU1-02/03/08：F9P 必开 GPS、按固件掩码 SBAS、gnss.cutoff 0..90 与 gnss.sat_track 权限不变
+ */
+void testF9pCapsAndCutoffKey()
+{
+    constexpr uint8_t kGpsRequiredBit = 1U << 7U;
+    settings::GnssCaps f9p112{};
+    f9p112.valid = true;
+    f9p112.constMask = kGpsRequiredBit | settings::const_bit::kBds | settings::const_bit::kGlo |
+                       settings::const_bit::kGal;
+    settings::GnssCaps f9p132 = f9p112;
+    f9p132.constMask |= settings::const_bit::kSbas;
+
+    // gnss.cutoff 允许 0..90 且全来源可写，编码 1 字节角度；gnss.sat_track 权限不变（kPhoneAndLocal）
+    const settings::KeySpec *cutoffSpec = settings::findKey("gnss.cutoff");
+    const settings::KeySpec *satSpec = settings::findKey("gnss.sat_track");
+    TEST_ASSERT_NOT_NULL(cutoffSpec);
+    TEST_ASSERT_NOT_NULL(satSpec);
+    TEST_ASSERT_EQUAL_UINT8(settings::access::kStandardAll, cutoffSpec->access);
+    TEST_ASSERT_EQUAL_UINT8(settings::access::kPhoneAndLocal, satSpec->access);
+    settings::Domain dom{};
+    cutoffSpec->domain(f9p112, true, dom);
+    TEST_ASSERT_TRUE(dom.supported);
+    TEST_ASSERT_EQUAL_INT32(0, dom.minValue);
+    TEST_ASSERT_EQUAL_INT32(90, dom.maxValue);
+
+    settings::CanonicalValue parsed{};
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("gnss.cutoff", f9p112, "0", parsed)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("gnss.cutoff", f9p112, "90", parsed)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(validateWithCaps("gnss.cutoff", f9p112, "-1", parsed)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(validateWithCaps("gnss.cutoff", f9p112, "91", parsed)));
+
+    // F9P GPS 不可关闭（gnss.const.gps 不可用，sat_track 关 GPS 拒绝）
+    const settings::KeySpec *gpsSpec = settings::findKey("gnss.const.gps");
+    TEST_ASSERT_NOT_NULL(gpsSpec);
+    gpsSpec->domain(f9p112, true, dom);
+    TEST_ASSERT_FALSE(dom.supported);
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kBadValue),
+        static_cast<int>(validateWithCaps("gnss.sat_track", f9p112, "15,0,1,1,1,0", parsed)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(validateWithCaps("gnss.sat_track", f9p112, "15,1,0,1,1,0", parsed)));
+
+    // HPG 1.12 拒绝 SBAS=1，HPG 1.32 接受 SBAS=1
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kBadValue),
+        static_cast<int>(validateWithCaps("gnss.sat_track", f9p112, "15,1,1,1,1,1", parsed)));
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(validateWithCaps("gnss.sat_track", f9p132, "15,1,1,1,1,1", parsed)));
+
+    // UM98x 行为不变：允许 GPS=0
+    settings::GnssCaps um98x{};
+    um98x.valid = true;
+    um98x.constMask = settings::const_bit::kGps | settings::const_bit::kBds |
+                      settings::const_bit::kGlo | settings::const_bit::kGal;
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(settings::Error::kOk),
+        static_cast<int>(validateWithCaps("gnss.sat_track", um98x, "15,0,1,1,1,0", parsed)));
+}
+
 } // namespace
 
 /** @brief Unity 每用例前置钩子。 */
@@ -320,5 +388,6 @@ int main()
     RUN_TEST(testBoolRangeMacSnAndFailurePreservation);
     RUN_TEST(testPeriodMsToInterval);
     RUN_TEST(testPhoneAndSatTrackKeys);
+    RUN_TEST(testF9pCapsAndCutoffKey);
     return UNITY_END();
 }

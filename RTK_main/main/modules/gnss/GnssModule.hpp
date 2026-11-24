@@ -13,6 +13,7 @@
 #include "modules/gnss/GnssBaseConfig.hpp"
 #include "modules/gnss/GnssMaintenance.hpp"
 #include "modules/gnss/GnssWorkMode.hpp"
+#include "modules/gnss/RtcmTxFramer.hpp"
 #include "cli/Console.hpp"
 #include "data/GnssOutput.hpp"
 #include "def/GnssDef.hpp"
@@ -24,6 +25,7 @@
 #include "GgaQualityGate.hpp"
 #include "PhoneCompatService.hpp"
 #include "PppSequence.hpp"
+#include "UbloxExt.hpp"
 
 namespace app {
 struct AppContext;
@@ -487,16 +489,54 @@ private:
     /**
      * @brief  把控制器下发的一条 UART 写动作落到串口，并记录探测/配置进度
      * @param  act: 控制器动作（kind 必为 kWrite）
-     * @note   仅 kIo 调用；写失败只记日志，不改状态机。
+     * @param  nowMs: 本轮单调时钟（毫秒）
+     * @note   仅 kIo 调用；调用前由 pollController 保证 RTCM 帧边界。
      */
-    void applyWriteAction(const ::gnss::Action &act) noexcept;
+    void applyWriteAction(const ::gnss::Action &act, uint32_t nowMs) noexcept;
     /**
      * @brief  状态迁移的副作用：探测结果、步进计数与输出计划重算
      * @param  prev: 迁移前状态
      * @param  cur: 迁移后状态
+     * @param  nowMs: 本轮单调时钟（毫秒）
      * @note   仅 kIo 调用；只在 prev != cur 时调用一次。
      */
-    void onControllerStateChanged(::gnss::State prev, ::gnss::State cur) noexcept;
+    void onControllerStateChanged(::gnss::State prev, ::gnss::State cur, uint32_t nowMs) noexcept;
+    /**
+     * @brief  记录最近发出的 UBX-CFG-VALSET 在途事务，供后续 ACK/NAK/超时跟踪与键 ID 告警
+     * @param  bytes: 刚写入串口的命令帧字节
+     * @param  nowMs: 发送时刻单调时钟（ms）
+     * @param  timeoutMs: 应答超时（ms）
+     * @param  expectReply: 是否等待应答（切波特率为 false）
+     * @note   仅 kIo 调用；非 VALSET 帧忽略，不分配堆、不阻塞。
+     */
+    void recordValsetTx(std::span<const uint8_t> bytes, uint32_t nowMs, uint32_t timeoutMs,
+                        bool expectReply) noexcept;
+    /**
+     * @brief  处理 UBX 诊断与序列号帧（VALSET ACK/NAK 键日志与 SEC-UNIQID 板卡序列号）
+     * @param  frame: 已校验的 UBX 完整帧字节
+     * @param  nowMs: 当前单调时钟（ms）
+     * @note   仅 kIo 调用；不分配堆、不阻塞。
+     */
+    void handleUbxFrame(std::span<const uint8_t> frame, uint32_t nowMs) noexcept;
+    /**
+     * @brief  低频冷路径告警日志：格式化在途 VALSET 键列表（独立栈帧避免污染高频 RX 路径）
+     * @param  kind: 事件标签（"NAK" 或 "timeout"）
+     * @param  keys: 对应的配置键列表
+     * @note   仅 kIo 调用；不分配堆。
+     */
+    [[gnu::noinline]] static void logValsetIssue(const char *kind,
+                                                 std::span<const uint32_t> keys) noexcept;
+    /**
+     * @brief  ZED-F9P 进入运行态后非阻塞轮询一次 UBX-SEC-UNIQID（读不到留空不报错）
+     * @param  nowMs: 本轮单调时钟（毫秒）
+     * @note   仅 kIo 调用；不分配堆，发送失败静默忽略。
+     */
+    void pollUbloxBoardSn(uint32_t nowMs) noexcept;
+    /**
+     * @brief  进入上电或探测态时复位重探相关临时状态（序列号、VALSET 键表与工作模式）
+     * @note   仅 kIo 调用；不分配堆、不阻塞。
+     */
+    void resetOnReprobe() noexcept;
     /**
      * @brief 登记基础解码器与各驱动私有解码器（顺序即探测优先级）
      * @param receivers: 编译期启用的接收机实例表（可为空表）
@@ -535,11 +575,24 @@ private:
                          bool busy) noexcept;
     /**
      * @brief  把 RTCM 管道中的待发字节写到 GNSS UART
-     * @retval true 管道仍有积压
-     * @retval false 已排空或写失败（失败时丢弃积压并记 W 级日志）
+     * @param  stopAtFrameBoundary: true 时仅补完当前未完 RTCM3 帧即停止，便于插入配置命令
+     * @retval true 管道仍有进展
+     * @retval false 已排空、已对齐边界或写失败（失败时丢弃积压并记 W 级日志）
      * @note   仅 kIo 调用，非阻塞。
      */
-    [[nodiscard]] bool pumpRtcmPipe() noexcept;
+    [[nodiscard]] bool pumpRtcmPipe(bool stopAtFrameBoundary = false) noexcept;
+    /** @brief 丢弃未发 RTCM 块并清空管道与帧边界跟踪器。 */
+    void discardRtcmPipe() noexcept;
+    /** @brief 处理 RTCM 串口写错误：丢弃残余字节、复位边界跟踪并记录诊断。 @param written: 错误码。 @param st: 控制器状态。 */
+    void handleRtcmWriteError(int written, ::gnss::State st) noexcept;
+    /**
+     * @brief  在发送配置帧前确保已补完当前在途 RTCM3 帧（管道空超时 200 ms 后保护性复位边界）
+     * @param  nowMs: 当前单调时钟（ms）
+     * @retval true 已位于完整 RTCM3 帧边界，可写配置帧
+     * @retval false 当前 RTCM3 帧尚未发完，留待下轮继续
+     * @note   仅 kIo 调用，非阻塞。
+     */
+    [[nodiscard]] bool ensureRtcmFrameBoundary(uint32_t nowMs) noexcept;
     /**
      * @brief 发布 GNSS 控制器、UART、分流器与 RTCM 管道快照
      * @param nowMs: 当前单调时间（毫秒）
@@ -730,9 +783,10 @@ private:
     /**
      * @brief 把一个控制器动作落到 UART（上电/改波特率/下发报文）
      * @param act: 控制器给出的动作
+     * @param nowMs: 本轮单调时钟（毫秒）
      * @note 在模块任务里调用，阻塞在 UART 写队列上，非 ISR
      */
-    void applyAction(const ::gnss::Action &act) noexcept;
+    void applyAction(const ::gnss::Action &act, uint32_t nowMs) noexcept;
     /**
      * @brief 读回收尾（ADR-0012 §2.7）：控制器回 kRunning 并推进 readbackSeq 后发布一次结论
      * @note 在模块任务里调用，非阻塞
@@ -740,8 +794,9 @@ private:
     void finishReadbackIfDone() noexcept;
     /**
      * @brief  把控制器状态变化与探测结果记为 I 级日志并更新快照
+     * @param  nowMs: 本轮单调时钟（毫秒）
      */
-    void updateControllerStatus() noexcept;
+    void updateControllerStatus(uint32_t nowMs) noexcept;
     /**
      * @brief 卸载已安装 UART 后返回初始化错误
      * @param original: 最初的初始化错误
@@ -797,6 +852,12 @@ private:
     /** @brief 结束星座配置脚本并按结果落盘与结单。 @param status: 执行结果。 @note 仅 kIo，成功请求可写 NVS。 */
     void finishSatTrack(fw::Result status) noexcept;
 
+    /** @brief NVS 落盘失败后尽最大努力向接收机回写旧卫星快照。 @retval true 已启动回滚序列。 */
+    [[nodiscard]] bool startSatRollback() noexcept;
+
+    /** @brief 按当前检测型号与固件版本计算设置层 constMask。 @param model: 接收机型号。 @retval 星座能力掩码。 */
+    [[nodiscard]] uint8_t computeConstMask(::gnss::Model model) const noexcept;
+
     /** @brief 触发上电或重配置后的 PPP/星座重放。 @note 仅 kIo。 */
     void startPendingReplay() noexcept;
 
@@ -830,8 +891,12 @@ private:
     /** @brief 发布当前型号和定位频率对应的取值域。 @note 仅 kIo。 */
     void publishCaps() noexcept;
 
-    /** @brief 写一条配置脚本命令到 GNSS UART。 @param tx: 待发字节。 @retval true 全部写入成功。 @note 仅 kIo。 */
-    [[nodiscard]] bool writeSeqTx(std::span<const uint8_t> tx) noexcept;
+    /** @brief 写一条配置脚本命令到 GNSS UART。 @param tx: 待发字节。 @param nowMs: 发送时钟。 @param timeoutMs: 应答超时。 @retval true 全部写入成功。 @note 仅 kIo。 */
+    [[nodiscard]] bool writeSeqTx(std::span<const uint8_t> tx, uint32_t nowMs,
+                                  uint32_t timeoutMs) noexcept;
+
+    /** @brief 查询当前探测到的 F9P 固件版本是否支持 SBAS 键控制（HPG >= 1.13）。 @retval true 支持。 @note 仅 kIo。 */
+    [[nodiscard]] bool f9pIncludeSbas() const noexcept;
 
     /** @brief 查询配置通道是否空闲。 @retval true PPP 或星座脚本可启动。 @note 仅 kIo。 */
     [[nodiscard]] bool canStartSeq() noexcept;
@@ -878,7 +943,15 @@ private:
     ::gnss::SatMaskSequence sat_seq_{};
     uint32_t sat_ticket_seq_ = 0U;
     core::SatTrackConfig sat_target_cfg_{};
+    core::SatTrackConfig sat_prev_cfg_{};
     bool sat_replay_ = false;
+    bool sat_rollback_in_flight_ = false;
+    bool sat_replay_forced_gps_ = false;
+    ::gnss::ublox::ValsetTracker valset_tracker_{};
+    RtcmTxFramer rtcm_framer_{};
+    bool rtcm_frame_stall_armed_ = false;
+    uint32_t rtcm_frame_stall_ms_ = 0U;
+    bool uniqid_polled_ = false;
 
     ::gnss::Maintenance active_maintenance_ = ::gnss::Maintenance::kSave;
     uint32_t completed_maintenance_seq_ = 0U;

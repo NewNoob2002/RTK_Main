@@ -154,7 +154,51 @@ uint8_t formatHexUpper(std::span<const uint8_t> bytes, std::span<char> out) noex
     return static_cast<uint8_t>(pos);
 }
 
-/** @brief 读取手机/星座扩展键的当前快照（gnss.ppp/gnss.sat_track/phone.height/phone.sn_pn）。 @param data: 共享主题。 @param key: 键编号。 @param[out] out: 输出值。 @retval 是否命中并成功填充。 */
+/**
+ * @brief 读取单星座开关设置（gnss.const.gps/bds/glo/gal）当前值。
+ * @param data: 共享主题。
+ * @param key: 星座设置键编号。
+ * @param[out] out: 成功时填充布尔值；失败时不保证内容。
+ * @retval true 当前硬件支持该星座并已输出值。
+ * @retval false 当前硬件不支持该星座或键号不匹配。
+ */
+bool getConstSetting(const data::DataCenter &data, KeyId key, Value &out) noexcept
+{
+    const auto caps = data.gnssCaps.read();
+    if (!caps.enabled || !caps.valid) {
+        return false;
+    }
+    const auto cfg = data.gnssSatTrack.read().value_or(core::SatTrackConfig::defaults());
+    uint8_t bit = 0U;
+    uint8_t flag = 0U;
+    switch (key) {
+    case KeyId::kGnssConstGps:
+        bit = settings::const_bit::kGps;
+        flag = cfg.gps;
+        break;
+    case KeyId::kGnssConstBds:
+        bit = settings::const_bit::kBds;
+        flag = cfg.bds;
+        break;
+    case KeyId::kGnssConstGlo:
+        bit = settings::const_bit::kGlo;
+        flag = cfg.glo;
+        break;
+    case KeyId::kGnssConstGal:
+        bit = settings::const_bit::kGal;
+        flag = cfg.gal;
+        break;
+    default:
+        return false;
+    }
+    if ((caps.constMask & bit) == 0U) {
+        return false;
+    }
+    out = {.kind = ValueKind::kBool, .boolVal = (flag != 0U)};
+    return true;
+}
+
+/** @brief 读取手机/星座扩展键的当前快照（gnss.ppp/gnss.sat_track/gnss.cutoff/phone.height/phone.sn_pn）。 @param data: 共享主题。 @param key: 键编号。 @param[out] out: 输出值。 @retval 是否命中并成功填充。 */
 bool getExtendedSetting(const data::DataCenter &data, KeyId key, Value &out) noexcept
 {
     switch (key) {
@@ -200,8 +244,19 @@ bool getExtendedSetting(const data::DataCenter &data, KeyId key, Value &out) noe
         return true;
     }
     default:
-        return false;
+        break;
     }
+    const settings::KeySpec *const spec = settings::keyAt(key);
+    if ((spec != nullptr) && (spec->name == "gnss.cutoff")) {
+        const auto caps = data.gnssCaps.read();
+        if (!caps.enabled || !caps.valid || (caps.constMask == 0U)) {
+            return false;
+        }
+        const auto cfg = data.gnssSatTrack.read().value_or(core::SatTrackConfig::defaults());
+        out = {.kind = ValueKind::kInt, .number = static_cast<int32_t>(cfg.cutoffDeg)};
+        return true;
+    }
+    return false;
 }
 
 /** @brief 从已发布快照读取当前配置值。 @param ctx: 后端。 @param key: 键编号。 @param[out] out: 值。 @retval 是否提供该值。 */
@@ -239,6 +294,11 @@ bool getSetting(void *ctx, KeyId key, Value &out) noexcept
     case KeyId::kPhoneHeight:
     case KeyId::kPhoneSnPn:
         return getExtendedSetting(data, key, out);
+    case KeyId::kGnssConstGps:
+    case KeyId::kGnssConstBds:
+    case KeyId::kGnssConstGlo:
+    case KeyId::kGnssConstGal:
+        return getConstSetting(data, key, out);
     default:
         break;
     }
@@ -247,7 +307,7 @@ bool getSetting(void *ctx, KeyId key, Value &out) noexcept
                                    gnss::OutputMsg::kSatsInfo, gnss::OutputMsg::kGst,
                                    gnss::OutputMsg::kRmc};
     if (key < KeyId::kGnssOutGga || key > KeyId::kGnssOutRmc) {
-        return false;
+        return getExtendedSetting(data, key, out);
     }
     const size_t index = static_cast<size_t>(key) - static_cast<size_t>(KeyId::kGnssOutGga);
     // 协议间隔最多 128 秒，能无损表示为 int32_t。

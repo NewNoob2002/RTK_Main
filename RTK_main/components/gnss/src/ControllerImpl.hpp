@@ -174,6 +174,9 @@ struct ControllerImpl {
      */
     static void markReply(Controller &self, Ack reply) noexcept
     {
+        if (self.reply_ok_ || self.reply_nack_) {
+            return;
+        }
         if (reply == Ack::kAck) {
             self.reply_ok_ = true;
         } else if (reply == Ack::kNack) {
@@ -196,8 +199,17 @@ struct ControllerImpl {
     static Round configAwait(Controller &self, uint32_t nowMs, Action &out) noexcept;
     static Round configNoReply(Controller &self, uint32_t nowMs, Action &out) noexcept;
     static Round configSwitchBaud(Controller &self, uint32_t nowMs, Action &out) noexcept;
+    static Round configResync(Controller &self, uint32_t nowMs, Action &out) noexcept;
     static Round outputSend(Controller &self, uint32_t nowMs, Action &out) noexcept;
     static Round outputAwait(Controller &self, uint32_t nowMs, Action &out) noexcept;
+    static Round outputResync(Controller &self, uint32_t nowMs, Action &out) noexcept;
+
+    /**
+     * @brief 判断当前配置步骤是否为可降级跳过的 F9P NMEA 静默步骤（RU1-01）。
+     * @param self: 控制器。
+     * @retval true F9P 12 键静默 VALSET；false 其他关键步骤。
+     */
+    [[nodiscard]] static bool isNonfatalSilenceStep(const Controller &self) noexcept;
 
     /**
      * @brief 按当前状态分派一轮。
@@ -238,6 +250,14 @@ struct ControllerImpl {
      * @retval action: 若进入下一步或重试则返回待发送动作，否则为空。
      */
     static Action handleModeAck(Controller &self, uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 处理维护阶段的等应答与模式 VALSET 重同步窗口。
+     * @param self: 控制器。
+     * @param nowMs: 当前时间。
+     * @retval action: 窗口结束后需要发送的动作，否则为空。
+     */
+    static Action pollMaintenanceAwaitAck(Controller &self, uint32_t nowMs) noexcept;
 };
 
 namespace detail {

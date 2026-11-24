@@ -54,6 +54,7 @@ void testBaseKeysAndCommandDispatch();
 void testGnssTargetBaudPolicy();
 void testGgaGateNvsAndModuleFlow();
 void testGnssSettingsBusAndGgaPersist();
+void testGnssF9pEndToEnd();
 
 namespace {
 
@@ -571,5 +572,6 @@ int main()
     testGnssTargetBaudPolicy();
     testGgaGateNvsAndModuleFlow();
     testGnssSettingsBusAndGgaPersist();
+    testGnssF9pEndToEnd();
     return 0;
 }

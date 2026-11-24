@@ -626,6 +626,74 @@ void testWifiControl()
                      core::DispatchResult::kDenied);
 }
 
+/** @brief 覆盖 RU1-02/03：F9P 手机 0x06 强制开启 GPS 与按固件掩码 SBAS（HPG 1.12 拒绝/遮蔽、1.13+ 允许）。 */
+void testF9pSatMaskCapsAndSbasGate()
+{
+    RouterFixture f{};
+    const uint8_t f9p112Caps =
+        core::kSatCapGpsRequired | core::kSatCapBds | core::kSatCapGlo | core::kSatCapGal;
+    const uint8_t f9p132Caps = static_cast<uint8_t>(f9p112Caps | core::kSatCapSbas);
+    f.store.sat = {.cutoffDeg = 15U, .gps = 0U, .glo = 0U, .bds = 1U, .gal = 1U, .sbas = 1U};
+
+    // HPG 1.12：query 强制报 gps=1、遮蔽不支持的 sbas=0；保留原存储不被改写
+    f.store.satCapsMask = f9p112Caps;
+    std::array<uint8_t, 12U> expected112{};
+    expected112[1U] = 15U;
+    expected112[4U] = 1U;
+    expected112[5U] = 0U;
+    expected112[6U] = 1U;
+    expected112[7U] = 1U;
+    expected112[8U] = 0U;
+    f.expectReply(kSurvey, kSatTrack, kQuery, {}, kQueryRes, expected112);
+
+    // HPG 1.12：set gps=0 或 sbas=1 均被拒（02 02）且不下发到底层
+    auto gpsOff = expected112;
+    gpsOff[4U] = 0U;
+    f.expectReply(kSurvey, kSatTrack, kSet, gpsOff, kSetRes, kFail);
+    auto sbasOn = expected112;
+    sbasOn[8U] = 1U;
+    f.expectReply(kSurvey, kSatTrack, kSet, sbasOn, kSetRes, kFail);
+    TEST_ASSERT_EQUAL_UINT(0U, f.store.satRequests);
+
+    // HPG 1.12：set gps=1, sbas=0 允许发起延迟写
+    auto valid112 = expected112;
+    valid112[1U] = 20U;
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(core::DispatchResult::kDeferred),
+        static_cast<int>(f.router.handle(
+            core::Role::kPhone,
+            {.msgId = kSatTrack, .sender = kSurvey, .type = kSet, .payload = valid112}, 10U,
+            f.reply)));
+    TEST_ASSERT_EQUAL_UINT(1U, f.store.satRequests);
+    TEST_ASSERT_EQUAL_UINT8(20U, f.store.sat.cutoffDeg);
+    TEST_ASSERT_EQUAL_UINT8(1U, f.store.sat.gps);
+
+    // HPG 1.32：含 kSatCapSbas，query 保留 sbas=1，set 仍拒 gps=0 但接受 sbas=1
+    RouterFixture f132{};
+    f132.store.satCapsMask = f9p132Caps;
+    f132.store.sat = {.cutoffDeg = 15U, .gps = 1U, .glo = 1U, .bds = 1U, .gal = 1U, .sbas = 1U};
+    std::array<uint8_t, 12U> expected132{};
+    expected132[1U] = 15U;
+    expected132[4U] = 1U;
+    expected132[5U] = 1U;
+    expected132[6U] = 1U;
+    expected132[7U] = 1U;
+    expected132[8U] = 1U;
+    f132.expectReply(kSurvey, kSatTrack, kQuery, {}, kQueryRes, expected132);
+    auto gpsOff132 = expected132;
+    gpsOff132[4U] = 0U;
+    f132.expectReply(kSurvey, kSatTrack, kSet, gpsOff132, kSetRes, kFail);
+    TEST_ASSERT_EQUAL_UINT(0U, f132.store.satRequests);
+    TEST_ASSERT_EQUAL(
+        static_cast<int>(core::DispatchResult::kDeferred),
+        static_cast<int>(f132.router.handle(
+            core::Role::kPhone,
+            {.msgId = kSatTrack, .sender = kSurvey, .type = kSet, .payload = expected132}, 20U,
+            f132.reply)));
+    TEST_ASSERT_EQUAL_UINT(1U, f132.store.satRequests);
+    TEST_ASSERT_EQUAL_UINT8(1U, f132.store.sat.sbas);
+}
+
 /** @brief 执行手机兼容路由与延迟应答主机测试。 @retval Unity 结果。 */
 int main()
 {
@@ -635,5 +703,6 @@ int main()
     RUN_TEST(testDualAppMessagesAndPppGate);
     RUN_TEST(testDeferredRepliesAndDisconnectCancel);
     RUN_TEST(testWifiControl);
+    RUN_TEST(testF9pSatMaskCapsAndSbasGate);
     return UNITY_END();
 }

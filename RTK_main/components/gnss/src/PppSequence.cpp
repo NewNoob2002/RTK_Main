@@ -5,6 +5,7 @@
 #include <array>
 
 #include "../src/AsciiCmd.hpp"
+#include "UbloxExt.hpp"
 
 namespace gnss {
 namespace {
@@ -46,8 +47,8 @@ bool supportsSatMask(Model model) noexcept
     case Model::kUm981:
     case Model::kUm982:
     case Model::kCm680:
-        return true;
     case Model::kZedF9p:
+        return true;
     case Model::kK803:
     case Model::kUnknown:
     default:
@@ -101,16 +102,29 @@ void PppSequence::onFrame(const Receiver &receiver, const demux::Decoder &decode
     }
 }
 
-/** @brief 启动 0x06 截止角与星座脚本。 @param cfg: 合法配置。 @retval true 已启动；false 截止角越界。 */
-bool SatMaskSequence::start(const SatMaskConfig &cfg) noexcept
+/**
+ * @brief 开始 0x06 截止角/星座脚本。
+ * @param cfg: 合法的截止角与星座配置。
+ * @param model: 当前接收机型号。
+ * @param includeSbas: F9P 是否包含 CFG-SIGNAL-SBAS_ENA 键。
+ * @retval true 已启动脚本；false 参数非法、F9P 关闭 GPS 或型号不支持。
+ */
+bool SatMaskSequence::start(const SatMaskConfig &cfg, Model model, bool includeSbas) noexcept
 {
-    if (cfg.cutoffDeg > SatMaskConfig::kMaxCutoffDeg) {
-        active_ = false;
+    if ((cfg.cutoffDeg > SatMaskConfig::kMaxCutoffDeg) || !supportsSatMask(model)) {
+        phase_ = Phase::kIdle;
+        return false;
+    }
+    if ((model == Model::kZedF9p) && !cfg.gps) {
+        phase_ = Phase::kIdle;
         return false;
     }
     cfg_ = cfg;
+    model_ = model;
+    include_sbas_ = includeSbas;
     step_ = 0U;
-    active_ = true;
+    phase_ = Phase::kSend;
+    pending_result_ = fw::Result::kOk;
     sent_.clear();
     ack_ = Ack::kNone;
     return true;
@@ -119,6 +133,9 @@ bool SatMaskSequence::start(const SatMaskConfig &cfg) noexcept
 bool SatMaskSequence::buildCurrentStep() noexcept
 {
     sent_.clear();
+    if (model_ == Model::kZedF9p) {
+        return (step_ == 0U) && ublox::buildSatTrackValset(sent_, cfg_, include_sbas_);
+    }
     switch (step_) {
     case kStepCutoff:
         return sent_.append("MASK ") && ascii::appendUint(sent_, cfg_.cutoffDeg) &&
@@ -138,41 +155,95 @@ bool SatMaskSequence::buildCurrentStep() noexcept
     }
 }
 
+/**
+ * @brief 推进 kAwaitAck 阶段：等待应答、失败转重同步或推进到下一步/稳定期。
+ * @param nowMs: 当前单调时钟。
+ * @param[out] advanceToSend: 需立即构造并发送下一步时置 true。
+ * @retval nullopt 仍在等待或进入稳定/重同步/下一步；结果则序列已结束。
+ */
+std::optional<fw::Result> SatMaskSequence::pollAwaitAck(uint32_t nowMs,
+                                                        bool &advanceToSend) noexcept
+{
+    advanceToSend = false;
+    if ((ack_ == Ack::kNone) && ((nowMs - sent_ms_) < kReplyMs)) {
+        return std::nullopt;
+    }
+    if (ack_ != Ack::kAck) {
+        const fw::Result err = (ack_ == Ack::kNack) ? fw::Result::kIoError : fw::Result::kTimeout;
+        if ((model_ == Model::kZedF9p) && (err == fw::Result::kTimeout)) {
+            phase_ = Phase::kResync;
+            phase_ms_ = nowMs;
+            pending_result_ = err;
+            return std::nullopt;
+        }
+        phase_ = Phase::kIdle;
+        return err;
+    }
+    ++step_;
+    if (step_ >= totalSteps()) {
+        if (model_ == Model::kZedF9p) {
+            phase_ = Phase::kSettle;
+            phase_ms_ = nowMs;
+            return std::nullopt;
+        }
+        phase_ = Phase::kIdle;
+        return fw::Result::kOk;
+    }
+    phase_ = Phase::kSend;
+    advanceToSend = true;
+    return std::nullopt;
+}
+
 std::optional<fw::Result> SatMaskSequence::poll(uint32_t nowMs,
                                                 std::span<const uint8_t> &tx) noexcept
 {
     tx = {};
-    if (!active_) {
+    if (phase_ == Phase::kIdle) {
         return fw::Result::kInvalidState;
     }
-    if (!sent_.view().empty()) {
-        if ((ack_ == Ack::kNone) && ((nowMs - sent_ms_) < kReplyMs)) {
+    if (phase_ == Phase::kSettle) {
+        if ((nowMs - phase_ms_) < kF9pSignalSettleMs) {
             return std::nullopt;
         }
-        if (ack_ != Ack::kAck) {
-            active_ = false;
-            return (ack_ == Ack::kNack) ? fw::Result::kIoError : fw::Result::kTimeout;
+        phase_ = Phase::kIdle;
+        return fw::Result::kOk;
+    }
+    if (phase_ == Phase::kResync) {
+        if ((nowMs - phase_ms_) < kF9pResyncMs) {
+            return std::nullopt;
         }
-        ++step_;
-        if (step_ >= kStepCount) {
-            active_ = false;
-            return fw::Result::kOk;
+        phase_ = Phase::kIdle;
+        return pending_result_;
+    }
+    if (phase_ == Phase::kAwaitAck) {
+        bool advanceToSend = false;
+        const auto done = pollAwaitAck(nowMs, advanceToSend);
+        if (!advanceToSend) {
+            return done;
         }
     }
     if (!buildCurrentStep()) {
-        active_ = false;
+        phase_ = Phase::kIdle;
         return fw::Result::kNoSpace;
     }
     sent_ms_ = nowMs;
     ack_ = Ack::kNone;
+    phase_ = Phase::kAwaitAck;
     tx = sent_.view();
     return std::nullopt;
 }
 
+/**
+ * @brief 记录当前命令的匹配应答。
+ * @param receiver: 当前接收机驱动。
+ * @param decoder: 帧来源解码器。
+ * @param frame: 已校验的接收机帧。
+ * @param nowMs: 接收时钟。
+ */
 void SatMaskSequence::onFrame(const Receiver &receiver, const demux::Decoder &decoder,
                               std::span<const uint8_t> frame, uint32_t nowMs) noexcept
 {
-    if (active_ && !sent_.view().empty() && (ack_ == Ack::kNone) &&
+    if ((phase_ == Phase::kAwaitAck) && !sent_.view().empty() && (ack_ == Ack::kNone) &&
         ((nowMs - sent_ms_) < kReplyMs)) {
         ack_ = receiver.classifyReply(decoder, frame, sent_.view());
     }

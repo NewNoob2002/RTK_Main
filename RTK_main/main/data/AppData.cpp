@@ -35,6 +35,7 @@ void DataCenter::init() noexcept
     gnssLatestGsv.bindLock(lock);
     ioExecStats.bindLock(lock);
     gnssStatus.bindLock(lock);
+    gnssBoardSn.bindLock(lock);
     gnssFix.bindLock(lock);
     gnssSats.bindLock(lock);
     gnssOutCfg.bindLock(lock);

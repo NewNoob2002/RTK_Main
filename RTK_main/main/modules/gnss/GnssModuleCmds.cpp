@@ -298,6 +298,8 @@ void GnssModule::abortPendingSettings() noexcept
     if (sat_seq_.active()) {
         sat_seq_ = {};
     }
+    sat_rollback_in_flight_ = false;
+    sat_replay_forced_gps_ = false;
     completeSetting(sat_ticket_seq_, fw::Result::kInvalidState);
 }
 

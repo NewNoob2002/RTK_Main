@@ -8,6 +8,7 @@
 #include <span>
 
 #include "gnss/NullReceiver.hpp"
+#include "UbloxExt.hpp"
 
 namespace gnss {
 namespace {
@@ -15,8 +16,23 @@ namespace {
 using detail::kReadbackIdleMs;
 using detail::reached;
 
+constexpr uint8_t kCfgPhaseResyncRetry = 3U;
+constexpr uint8_t kCfgPhaseResyncAdvance = 4U;
+constexpr uint8_t kOutPhaseResyncRetry = 2U;
+constexpr uint8_t kOutPhaseResyncAdvance = 3U;
+
 } // namespace
 
+/**
+ * @brief 判断当前配置步骤是否为可降级跳过的 F9P NMEA 静默步骤（RU1-01）。
+ * @param self: 控制器。
+ * @retval true F9P 12 键静默 VALSET；false 其他关键步骤。
+ */
+bool ControllerImpl::isNonfatalSilenceStep(const Controller &self) noexcept
+{
+    return (self.detected().probe.model == Model::kZedF9p) &&
+           ublox::isSilenceNmeaValset(self.step_.cmd.view());
+}
 /**
  * @brief kConfiguring：按 phase 分派发送命令 / 等应答 / 切波特率。
  * @param self: 控制器。
@@ -40,6 +56,9 @@ ControllerImpl::Round ControllerImpl::onConfiguring(Controller &self, uint32_t n
                                    : configNoReply(self, nowMs, out);
     case 2:
         return configSwitchBaud(self, nowMs, out);
+    case kCfgPhaseResyncRetry:
+    case kCfgPhaseResyncAdvance:
+        return configResync(self, nowMs, out);
     default:
         return Round::kDone;
     }
@@ -86,13 +105,24 @@ ControllerImpl::Round ControllerImpl::configAwait(Controller &self, uint32_t now
                                                   Action &out) noexcept
 {
     static_cast<void>(out);
+    const bool isValset = ublox::isValsetFrame(self.step_.cmd.view());
+    const bool nonfatal = isNonfatalSilenceStep(self);
     if (self.reply_ok_ || self.reply_nack_) {
         const bool ok = self.reply_ok_ && !self.reply_nack_;
         self.waiting_reply_ = false;
         if (!ok) {
             ++self.stats_.stepNacks;
+            if (nonfatal) {
+                advanceStep(self);
+                return Round::kAgain;
+            }
             if (self.step_tries_ < self.timing_.stepRetries) {
                 ++self.step_tries_;
+                if (isValset) {
+                    armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
+                    self.phase_ = kCfgPhaseResyncRetry;
+                    return Round::kDone;
+                }
                 self.phase_ = 0;
                 return Round::kAgain;
             }
@@ -111,12 +141,45 @@ ControllerImpl::Round ControllerImpl::configAwait(Controller &self, uint32_t now
     }
     ++self.stats_.stepTimeouts;
     self.waiting_reply_ = false;
+    if (nonfatal) {
+        armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
+        self.phase_ = kCfgPhaseResyncAdvance;
+        return Round::kDone;
+    }
     if (self.step_tries_ < self.timing_.stepRetries) {
         ++self.step_tries_;
+        if (isValset) {
+            armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
+            self.phase_ = kCfgPhaseResyncRetry;
+            return Round::kDone;
+        }
         self.phase_ = 0;
         return Round::kAgain;
     }
     enterFailed(self, nowMs);
+    return Round::kAgain;
+}
+
+/**
+ * @brief 配置阶段 300 ms VALSET 重同步等待：期间丢弃迟到 ACK/NAK，结束后重试或推进下一步。
+ * @param self: 控制器。
+ * @param nowMs: 当前时间。
+ * @param out: 输出动作（本状态不使用）。
+ * @retval kAgain: 重同步完成，需重新分派。
+ * @retval kDone: 仍在重同步窗口内。
+ */
+ControllerImpl::Round ControllerImpl::configResync(Controller &self, uint32_t nowMs,
+                                                   Action &out) noexcept
+{
+    static_cast<void>(out);
+    if (!reached(nowMs, self.deadline_ms_)) {
+        return Round::kDone;
+    }
+    if (self.phase_ == kCfgPhaseResyncAdvance) {
+        advanceStep(self);
+    } else {
+        self.phase_ = 0;
+    }
     return Round::kAgain;
 }
 
@@ -176,6 +239,9 @@ ControllerImpl::Round ControllerImpl::onOutput(Controller &self, uint32_t nowMs,
     }
     if (self.phase_ == 1) {
         return outputAwait(self, nowMs, out);
+    }
+    if ((self.phase_ == kOutPhaseResyncRetry) || (self.phase_ == kOutPhaseResyncAdvance)) {
+        return outputResync(self, nowMs, out);
     }
     return outputSend(self, nowMs, out);
 }
@@ -245,6 +311,7 @@ ControllerImpl::Round ControllerImpl::outputAwait(Controller &self, uint32_t now
 {
     static_cast<void>(out);
     const uint32_t bit = 1U << static_cast<uint32_t>(self.output_index_);
+    const bool isValset = ublox::isValsetFrame(self.output_cmd_.view());
     if (self.reply_ok_ || self.reply_nack_) {
         const bool ok = self.reply_ok_ && !self.reply_nack_;
         self.waiting_reply_ = false;
@@ -255,6 +322,11 @@ ControllerImpl::Round ControllerImpl::outputAwait(Controller &self, uint32_t now
             self.stats_.appliedMask |= bit;
         } else if (self.step_tries_ < self.timing_.stepRetries) {
             ++self.step_tries_;
+            if (isValset) {
+                armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
+                self.phase_ = kOutPhaseResyncRetry;
+                return Round::kDone;
+            }
             self.phase_ = 0;
             return Round::kAgain;
         } else {
@@ -271,11 +343,44 @@ ControllerImpl::Round ControllerImpl::outputAwait(Controller &self, uint32_t now
     self.waiting_reply_ = false;
     if (self.step_tries_ < self.timing_.stepRetries) {
         ++self.step_tries_;
+        if (isValset) {
+            armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
+            self.phase_ = kOutPhaseResyncRetry;
+            return Round::kDone;
+        }
         self.phase_ = 0;
         return Round::kAgain;
     }
     self.stats_.failedMask |= bit;
+    if (isValset) {
+        armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
+        self.phase_ = kOutPhaseResyncAdvance;
+        return Round::kDone;
+    }
     advanceOutput(self);
+    return Round::kAgain;
+}
+
+/**
+ * @brief 输出阶段 300 ms VALSET 重同步等待：期间丢弃迟到 ACK/NAK，结束后重试或推进下一项。
+ * @param self: 控制器。
+ * @param nowMs: 当前时间。
+ * @param out: 输出动作（本状态不使用）。
+ * @retval kAgain: 重同步完成，需重新分派。
+ * @retval kDone: 仍在重同步窗口内。
+ */
+ControllerImpl::Round ControllerImpl::outputResync(Controller &self, uint32_t nowMs,
+                                                   Action &out) noexcept
+{
+    static_cast<void>(out);
+    if (!reached(nowMs, self.deadline_ms_)) {
+        return Round::kDone;
+    }
+    if (self.phase_ == kOutPhaseResyncAdvance) {
+        advanceOutput(self);
+    } else {
+        self.phase_ = 0;
+    }
     return Round::kAgain;
 }
 

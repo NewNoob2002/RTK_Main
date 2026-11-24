@@ -20,6 +20,7 @@
 #include "def/GnssSubDef.hpp"
 #include "demux/decoders/Nmea.hpp"
 #include "demux/decoders/Rtcm3.hpp"
+#include "demux/decoders/Ubx.hpp"
 #include "demux/decoders/UnicoreHash.hpp"
 #include "fw/Status.hpp"
 #include "fw/Log.hpp"
@@ -168,6 +169,34 @@ void GnssModule::publishAppFrame(const demux::Decoder &decoder, std::span<const 
     }
 }
 
+void GnssModule::logValsetIssue(const char *kind, std::span<const uint32_t> keys) noexcept
+{
+    constexpr size_t kKeysTextBytes = 64U;
+    std::array<char, kKeysTextBytes> keysText{};
+    static_cast<void>(::gnss::ublox::formatValsetKeys(keys, keysText));
+    FW_LOGW(fw::TraceCat::kGnss, "<ubx> VALSET %s (n=%lu keys=%s)", kind,
+            static_cast<unsigned long>(keys.size()), keysText.data());
+}
+
+void GnssModule::handleUbxFrame(std::span<const uint8_t> frame, uint32_t nowMs) noexcept
+{
+    std::span<const uint32_t> keys{};
+    const auto reply = valset_tracker_.onFrame(frame, nowMs, keys);
+    if (reply == ::gnss::ublox::ValsetReplyKind::kNak) {
+        logValsetIssue("NAK", keys);
+        return;
+    }
+    if ((reply == ::gnss::ublox::ValsetReplyKind::kAck) ||
+        (reply == ::gnss::ublox::ValsetReplyKind::kUnmatched)) {
+        return;
+    }
+    std::array<char, 16U> sn{};
+    if (::gnss::ublox::parseSecUniqId(frame, sn) > 0U) {
+        ctx().data.gnssBoardSn.write(sn);
+        FW_LOGI(fw::TraceCat::kGnss, "<ubx> boardSn %s", sn.data());
+    }
+}
+
 /** @brief 分发接收机帧。 @param decoder: 帧来源。 @param frame: 已校验的帧。 @note 仅 kIo。 */
 void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint8_t> frame) noexcept
 {
@@ -197,6 +226,8 @@ void GnssModule::handleFrame(const demux::Decoder &decoder, std::span<const uint
         }
     } else if (&decoder == &demux::rtcm3::kDecoder) {
         handleRxRtcmFrame(frame);
+    } else if (&decoder == &demux::ubx::kDecoder) {
+        handleUbxFrame(frame, now);
     }
     // ADR-0011 §5：6 类可订阅语句同步更新 6 KiB 最新帧缓存与 App 扇出环。
     publishAppFrame(decoder, frame, now);

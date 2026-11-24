@@ -303,10 +303,12 @@ size_t buildConfigFrame(const settings::Service &service, std::span<char> out) n
         }
         ok = !gateOpen || writer.endNested();
         if (ok) {
-            // v1 将配对开关编码为整数，设置服务中的值使用布尔类型。
-            ok = spec.id == settings::KeyId::kBtPairNext
-                     ? writer.writeInt(spec.name, value.boolVal ? 1 : 0)
-                     : writeSetting(writer, spec.name, value);
+            // v1 将配对与星座开关编码为整数（0/1），设置服务中的值使用布尔类型。
+            const bool boolAsInt = (spec.id == settings::KeyId::kBtPairNext) ||
+                                   ((spec.id >= settings::KeyId::kGnssConstGps) &&
+                                    (spec.id <= settings::KeyId::kGnssConstGal));
+            ok = boolAsInt ? writer.writeInt(spec.name, value.boolVal ? 1 : 0)
+                           : writeSetting(writer, spec.name, value);
         }
         gateOpen = false;
     });

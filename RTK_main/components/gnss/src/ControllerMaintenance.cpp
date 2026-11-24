@@ -2,11 +2,14 @@
 // 仅控制器所属任务调用。无阻塞、无分配，只生成 UART 动作。
 #include "ControllerImpl.hpp"
 
+#include "UbloxExt.hpp"
+
 namespace gnss {
 namespace {
 
 constexpr uint32_t kBaudSettleMs = 100U;
 constexpr uint32_t kMaintenanceProbeMs = 700U;
+constexpr uint8_t kModePhaseResyncRetry = 1U;
 
 } // namespace
 
@@ -41,6 +44,7 @@ bool Controller::requestMode(const ModeRequest &req) noexcept
     }
     maintenance_old_baud_ = host_baud_;
     maintenance_phase_ = MaintenancePhase::kSend;
+    phase_ = 0U;
     reply_ok_ = false;
     reply_nack_ = false;
     probe_hit_ = false;
@@ -81,6 +85,7 @@ bool Controller::beginMaintenance(Maintenance kind, uint32_t baud) noexcept
     }
     maintenance_old_baud_ = host_baud_;
     maintenance_phase_ = MaintenancePhase::kSend;
+    phase_ = 0U;
     reply_ok_ = false;
     reply_nack_ = false;
     probe_hit_ = false;
@@ -93,6 +98,7 @@ void Controller::finishMaintenance(MaintenanceResult result) noexcept
     stats_.maintenance = pending_maintenance_;
     stats_.maintenanceResult = result;
     ++stats_.maintenanceSeq;
+    phase_ = 0U;
     state_ = State::kRunning;
 }
 
@@ -140,15 +146,7 @@ Action Controller::pollMaintenance(uint32_t nowMs) noexcept
         ControllerImpl::armDeadline(*this, nowMs, timing_.bootMs);
         break;
     case MaintenancePhase::kAwaitAck:
-        if (reply_nack_ || reply_ok_ || detail::reached(nowMs, deadline_ms_)) {
-            if (pending_maintenance_ == Maintenance::kMode) {
-                return ControllerImpl::handleModeAck(*this, nowMs);
-            }
-            finishMaintenance(
-                reply_nack_ ? MaintenanceResult::kNack
-                            : (reply_ok_ ? MaintenanceResult::kOk : MaintenanceResult::kTimeout));
-        }
-        break;
+        return ControllerImpl::pollMaintenanceAwaitAck(*this, nowMs);
     case MaintenancePhase::kSwitch:
         if (reply_nack_) {
             finishMaintenance(MaintenanceResult::kNack);
@@ -197,7 +195,7 @@ Action Controller::pollMaintenanceProbe(uint32_t nowMs) noexcept
 void Controller::onMaintenanceFrame(const demux::Decoder &dec,
                                     std::span<const uint8_t> frame) noexcept
 {
-    if (maintenance_phase_ == MaintenancePhase::kAwaitAck ||
+    if ((maintenance_phase_ == MaintenancePhase::kAwaitAck && phase_ == 0U) ||
         maintenance_phase_ == MaintenancePhase::kSwitch) {
         ControllerImpl::markReply(*this, receiver().classifyReply(dec, frame, step_.cmd.view()));
     } else if (maintenance_phase_ == MaintenancePhase::kAwaitProbe) {
@@ -205,6 +203,30 @@ void Controller::onMaintenanceFrame(const demux::Decoder &dec,
         probe_hit_ = probe_hit_ || (receiver().matchProbe(dec, frame, result) &&
                                     result.model == detected_.probe.model);
     }
+}
+
+Action ControllerImpl::pollMaintenanceAwaitAck(Controller &self, uint32_t nowMs) noexcept
+{
+    if ((self.pending_maintenance_ == Maintenance::kMode) &&
+        (self.phase_ == kModePhaseResyncRetry)) {
+        if (detail::reached(nowMs, self.deadline_ms_)) {
+            self.phase_ = 0U;
+            self.maintenance_phase_ = Controller::MaintenancePhase::kSend;
+            self.reply_ok_ = false;
+            self.reply_nack_ = false;
+            return self.pollMaintenance(nowMs);
+        }
+        return {};
+    }
+    if (self.reply_nack_ || self.reply_ok_ || detail::reached(nowMs, self.deadline_ms_)) {
+        if (self.pending_maintenance_ == Maintenance::kMode) {
+            return handleModeAck(self, nowMs);
+        }
+        self.finishMaintenance(self.reply_nack_ ? MaintenanceResult::kNack
+                                                : (self.reply_ok_ ? MaintenanceResult::kOk
+                                                                  : MaintenanceResult::kTimeout));
+    }
+    return {};
 }
 
 /**
@@ -224,9 +246,14 @@ Action ControllerImpl::handleModeAck(Controller &self, uint32_t nowMs) noexcept
         }
         if (self.mode_step_tries_ < self.timing_.stepRetries) {
             ++self.mode_step_tries_;
-            self.maintenance_phase_ = Controller::MaintenancePhase::kSend;
             self.reply_ok_ = false;
             self.reply_nack_ = false;
+            if (ublox::isValsetFrame(self.step_.cmd.view())) {
+                ControllerImpl::armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
+                self.phase_ = kModePhaseResyncRetry;
+                return {};
+            }
+            self.maintenance_phase_ = Controller::MaintenancePhase::kSend;
             return self.pollMaintenance(nowMs);
         }
         self.finishMaintenance(self.reply_nack_ ? MaintenanceResult::kNack

@@ -39,6 +39,36 @@ using detail::addUniqueDecoder;
 using detail::toResult;
 using detail::traceGnssSub;
 
+namespace {
+
+enum class RtcmTxGate : uint8_t { kAllow, kHold, kDiscard };
+
+/**
+ * @brief 判定当前控制器状态是否允许 RTCM3 下发、暂存或丢弃。
+ * @param st: 控制器状态。
+ * @param maint: 当前维护操作类型。
+ * @param baseBlocksRx: 基站模式是否禁止接收 RTCM。
+ * @param finishMidFrame: 是否正在收尾已发出一半的 RTCM3 帧。
+ * @retval kAllow 允许写串口；kHold 保留缓冲不发；kDiscard 丢弃管道。
+ */
+RtcmTxGate classifyRtcmTxGate(::gnss::State st, ::gnss::Maintenance maint, bool baseBlocksRx,
+                              bool finishMidFrame) noexcept
+{
+    if ((st == ::gnss::State::kMaintenance) && (maint != ::gnss::Maintenance::kSave) &&
+        !finishMidFrame) {
+        return RtcmTxGate::kHold; // 切速与复位期间保留待发数据，避免旧波特率字节混入维护命令。
+    }
+    const bool allowMidFrameDrain =
+        finishMidFrame && ((st == ::gnss::State::kOutput) || (st == ::gnss::State::kReadback));
+    const bool allowTx =
+        !baseBlocksRx && ((st == ::gnss::State::kRunning) || (st == ::gnss::State::kConfiguring) ||
+                          (st == ::gnss::State::kProbing) || (st == ::gnss::State::kMaintenance) ||
+                          allowMidFrameDrain);
+    return allowTx ? RtcmTxGate::kAllow : RtcmTxGate::kDiscard;
+}
+
+} // namespace
+
 fw::Result GnssModule::initObjects() noexcept
 {
     sink_.emplace(this);
@@ -306,19 +336,28 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     if (!initialized_) {
         return false;
     }
-    tickGgaGateSave(nowMs, false);
-    if (pollPppAndSat(nowMs)) {
-        ctx().data.gnssPendingNvs.store(true, std::memory_order_release);
-        const bool hadFullRx = (last_rx_bytes_ == kUartReadChunkBytes);
-        last_rx_bytes_ = 0U;
-        return hadFullRx;
+    std::span<const uint32_t> timedOutKeys{};
+    if (valset_tracker_.pollTimeout(nowMs, timedOutKeys)) {
+        logValsetIssue("timeout", timedOutKeys);
     }
-    pollController(nowMs);
-    tickPendingApply(nowMs);
-    tickMaintenance(nowMs);
-    pollWorkMode(nowMs);
+    tickGgaGateSave(nowMs, false);
+    const bool seqBusy = pollPppAndSat(nowMs);
+    const bool ctrlReady = !seqBusy && ensureRtcmFrameBoundary(nowMs);
+    if (ctrlReady) {
+        pollController(nowMs);
+        tickPendingApply(nowMs);
+        tickMaintenance(nowMs);
+        pollWorkMode(nowMs);
+    }
+    if (ctrlReady && !uniqid_polled_ && (controller().state() == ::gnss::State::kRunning)) {
+        pollUbloxBoardSn(nowMs);
+    }
     publishPendingNvs();
-    const bool txProgress = pumpRtcmPipe();
+    const bool ctrlNeedsBoundary = (controller().state() != ::gnss::State::kRunning) ||
+                                   (pending_apply_ != PendingApply::kNone);
+    const bool stopAtBoundary = (sat_seq_.needsTx() || ppp_seq_.needsTx() || ctrlNeedsBoundary) &&
+                                !rtcm_framer_.atFrameBoundary();
+    const bool txProgress = pumpRtcmPipe(stopAtBoundary);
 
     const auto curState = controller().state();
     if ((curState != last_published_state_) || ((nowMs - last_status_ms_) >= kStatusPeriodMs)) {
@@ -334,23 +373,80 @@ bool GnssModule::poll(uint32_t nowMs) noexcept
     return hadFullRx || (allowTx && txProgress && hasMoreTx);
 }
 
-bool GnssModule::pumpRtcmPipe() noexcept
+bool GnssModule::ensureRtcmFrameBoundary(uint32_t nowMs) noexcept
+{
+    constexpr uint32_t kRtcmFrameStallMs = 200U;
+    while (!rtcm_framer_.atFrameBoundary()) {
+        const bool progressed = pumpRtcmPipe(true);
+        if (rtcm_framer_.atFrameBoundary()) {
+            rtcm_frame_stall_armed_ = false;
+            return true;
+        }
+        if (progressed) {
+            rtcm_frame_stall_armed_ = false;
+            continue;
+        }
+        if ((rtcm_tx_len_ > rtcm_tx_off_) || (ctx().rtcmPipe.available() > 0U)) {
+            rtcm_frame_stall_armed_ = false;
+            return false;
+        }
+        if (!rtcm_frame_stall_armed_) {
+            rtcm_frame_stall_armed_ = true;
+            rtcm_frame_stall_ms_ = nowMs;
+            return false;
+        }
+        if ((nowMs - rtcm_frame_stall_ms_) >= kRtcmFrameStallMs) {
+            rtcm_framer_.reset();
+            rtcm_frame_stall_armed_ = false;
+            return true;
+        }
+        return false;
+    }
+    rtcm_frame_stall_armed_ = false;
+    return true;
+}
+
+void GnssModule::discardRtcmPipe() noexcept
+{
+    if (rtcm_tx_len_ > rtcm_tx_off_) {
+        ctx().rtcmPipe.noteDiscarded(rtcm_tx_len_ - rtcm_tx_off_);
+        rtcm_tx_len_ = 0U;
+        rtcm_tx_off_ = 0U;
+    }
+    ctx().rtcmPipe.discard();
+    rtcm_framer_.reset();
+    rtcm_frame_stall_armed_ = false;
+}
+
+void GnssModule::handleRtcmWriteError(int written, ::gnss::State st) noexcept
+{
+    const size_t lost = rtcm_tx_len_ - rtcm_tx_off_;
+    rtcm_tx_off_ = 0U;
+    rtcm_tx_len_ = 0U;
+    rtcm_framer_.reset();
+    rtcm_frame_stall_armed_ = false;
+    ctx().rtcmPipe.noteWriteError(lost);
+    traceGnss(GnssTrace::kState, static_cast<uint32_t>(st),
+              static_cast<uint32_t>(fw::Result::kIoError));
+    FW_LOGW(fw::TraceCat::kGnss, "<rtcm> UART write error (%d), dropped %lu pending bytes", written,
+            static_cast<unsigned long>(lost));
+}
+
+bool GnssModule::pumpRtcmPipe(bool stopAtFrameBoundary) noexcept
 {
     const auto st = controller().state();
-    if (st == ::gnss::State::kMaintenance && active_maintenance_ != ::gnss::Maintenance::kSave) {
-        return false; // 切速与复位期间保留待发数据，避免旧波特率字节混入维护命令。
-    }
+    const bool finishMidFrame = stopAtFrameBoundary && !rtcm_framer_.atFrameBoundary();
     const bool baseBlocksRx = work_mode_.has_value() && work_mode_->isBaseActive();
-    const bool allowTx =
-        !baseBlocksRx && ((st == ::gnss::State::kRunning) || (st == ::gnss::State::kConfiguring) ||
-                          (st == ::gnss::State::kProbing) || (st == ::gnss::State::kMaintenance));
-    if (!allowTx) {
-        if (rtcm_tx_len_ > rtcm_tx_off_) {
-            ctx().rtcmPipe.noteDiscarded(rtcm_tx_len_ - rtcm_tx_off_);
-            rtcm_tx_len_ = 0U;
-            rtcm_tx_off_ = 0U;
-        }
-        ctx().rtcmPipe.discard();
+    const RtcmTxGate gate =
+        classifyRtcmTxGate(st, active_maintenance_, baseBlocksRx, finishMidFrame);
+    if (gate == RtcmTxGate::kHold) {
+        return false;
+    }
+    if (gate == RtcmTxGate::kDiscard) {
+        discardRtcmPipe();
+        return false;
+    }
+    if (stopAtFrameBoundary && rtcm_framer_.atFrameBoundary()) {
         return false;
     }
     if (rtcm_tx_off_ >= rtcm_tx_len_) {
@@ -362,11 +458,20 @@ bool GnssModule::pumpRtcmPipe() noexcept
         return false;
     }
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
-    const auto pending =
+    auto pending =
         std::span<const uint8_t>{rtcm_tx_buf_}.subspan(rtcm_tx_off_, rtcm_tx_len_ - rtcm_tx_off_);
+    if (stopAtFrameBoundary) {
+        const size_t finishBytes = rtcm_framer_.bytesToFinishCurrentFrame(pending);
+        if (finishBytes == 0U) {
+            return false;
+        }
+        pending = pending.first(finishBytes);
+    }
     const int written = uart_write_bytes(port, pending.data(), pending.size());
     if (written > 0) {
         const auto bytes = static_cast<size_t>(written);
+        rtcm_framer_.onBytesWritten(pending.first(bytes));
+        rtcm_frame_stall_armed_ = false;
         rtcm_tx_off_ += bytes;
         if (rtcm_tx_off_ >= rtcm_tx_len_) {
             rtcm_tx_off_ = 0U;
@@ -382,14 +487,7 @@ bool GnssModule::pumpRtcmPipe() noexcept
         ctx().rtcmPipe.setPending(rtcm_tx_len_ - rtcm_tx_off_, true);
         return false;
     }
-    const size_t lost = rtcm_tx_len_ - rtcm_tx_off_;
-    rtcm_tx_off_ = 0U;
-    rtcm_tx_len_ = 0U;
-    ctx().rtcmPipe.noteWriteError(lost);
-    traceGnss(GnssTrace::kState, static_cast<uint32_t>(st),
-              static_cast<uint32_t>(fw::Result::kIoError));
-    FW_LOGW(fw::TraceCat::kGnss, "<rtcm> UART write error (%d), dropped %lu pending bytes", written,
-            static_cast<unsigned long>(lost));
+    handleRtcmWriteError(written, st);
     return false;
 }
 

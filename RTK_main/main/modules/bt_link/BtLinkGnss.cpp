@@ -110,6 +110,17 @@ void BtLinkModule::syncGnssInfo(uint32_t nowMs) noexcept
             applyGnssStreamMask();
         }
     }
+
+    uint32_t snVer = 0U;
+    const auto boardSn = ctx().data.gnssBoardSn.read(snVer);
+    if (snVer != gnss_sn_version_) {
+        gnss_sn_version_ = snVer;
+        size_t snLen = 0U;
+        while ((snLen < boardSn.size()) && (boardSn[snLen] != '\0')) {
+            ++snLen;
+        }
+        deviceInfo.boardSn.assign(std::string_view{boardSn.data(), snLen});
+    }
 }
 
 uint32_t BtLinkModule::effectiveSupportedMask() const noexcept

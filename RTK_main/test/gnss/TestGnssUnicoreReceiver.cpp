@@ -811,7 +811,7 @@ static void testSupportsPpp()
     TEST_ASSERT_TRUE(gnss::supportsSatMask(gnss::Model::kUm981));
     TEST_ASSERT_TRUE(gnss::supportsSatMask(gnss::Model::kUm982));
     TEST_ASSERT_TRUE(gnss::supportsSatMask(gnss::Model::kCm680));
-    TEST_ASSERT_FALSE(gnss::supportsSatMask(gnss::Model::kZedF9p));
+    TEST_ASSERT_TRUE(gnss::supportsSatMask(gnss::Model::kZedF9p));
     TEST_ASSERT_FALSE(gnss::supportsSatMask(gnss::Model::kK803));
     TEST_ASSERT_FALSE(gnss::supportsSatMask(gnss::Model::kUnknown));
 }
