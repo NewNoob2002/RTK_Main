@@ -268,3 +268,18 @@ ASAN_OPTIONS=detect_leaks=0 bash tools/ci/run_gates.sh --prefix u2 --base 84025f
 3. **RTCM 差分固定解与帧边界验证**：
    - 手机通过蓝牙向设备转发 RTCM3 差分流（连接可用基站/CORS），在持续 RTCM 流期间通过网页修改 `gnss.cutoff` 或定位频率；
    - 确认 F9P UART1 正常收敛并保持 RTK Fixed 固定解，无 RTCM 帧切碎、丢字节或管道溢出；如遇连续 VALSET NAK，检查 `kIo` 任务栈高水位余量。
+
+## 10. 实板 HIL（Architect，2026-11-24）
+
+板子：P2 v1.41 + ZED-F9P，ESP32-D0WD v1.0，`/dev/ttyACM1`，固件 `builds/u2-idf`（ce72ed9），室内（0 星）。
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 探测 | PASS：`ZED-F9P`、`HPG 1.12`、boardSn `3F41CA671D`、115200→460800，`ctrl steps=7 nacks=0 to=0` | 开机日志、`gnss` |
+| 计划外 NMEA | PASS：两次开机共约 2 min `ign=0`（无 GLL/VTG/TXT）；GSV 按计划 5000 ms 输出。接入差分后 `ign` 升到 4，未抓原文（疑为 TXT） | `gnss` 计数 |
+| 截止角/星座（控制台） | PASS：4 次修改每次单条 52 B VALSET（`uart tx` 差值），无 NAK；重启后 cutoff/GLO 保持并重放一次 | `config get`、`uart tx` |
+| 关 GPS | PASS：控制台 `ERR unsupported`；手机 0x06 关 GPS 后重新查询仍为开；网页 `set gnss.const.gps 0` → `unsupported` | 控制台/手机/WS |
+| 手机 0x06 | PASS：查询显示 cutoff 15、GLO 开；关北斗后固件 `gnss.const.bds=0`，`uart tx − pipe written` 多 52 B | 用户 + 控制台 |
+| 网页 | PASS：`caps["gnss.cutoff"]={min:0,max:90}`，`gnss.const.gps` 不在 caps 中；`set gnss.cutoff 12` ok 且 config 回推 12；`91` → `bad_value` | `wsprobe.mjs` |
+| RTCM 透传 | PARTIAL：手机转发约 150 KB RTCM，`pipe drop=0`、`demux resyncs=0`，其间配置修改正常；室内无星，RTK Fixed 保持未验证 | `gnss` |
+| F9P 输出周期/定位频率 | 既有缺口（非 U1 引入）：u-blox 驱动未实现 `navRatesHz()`/`outputPeriodsMs()`，`gnss.out.*`、`gnss.rate` 在 caps 中缺失，`config set gnss.out.gsv 0` → `unsupported` | `Receiver.cpp:13-22` |
