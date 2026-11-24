@@ -21,6 +21,7 @@ inline constexpr uint8_t kSatCapBds = 1U << 1U;
 inline constexpr uint8_t kSatCapGlo = 1U << 2U;
 inline constexpr uint8_t kSatCapGal = 1U << 3U;
 inline constexpr uint8_t kSatCapSbas = 1U << 4U;
+inline constexpr uint8_t kSatCapGpsRequired = 1U << 7U;
 inline constexpr uint8_t kSatCapAll =
     static_cast<uint8_t>(static_cast<unsigned>(kSatCapGps) | static_cast<unsigned>(kSatCapBds) |
                          static_cast<unsigned>(kSatCapGlo) | static_cast<unsigned>(kSatCapGal) |

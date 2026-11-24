@@ -160,6 +160,8 @@ struct DataCenter {
     ZeroInitSlot<LatestGsv> gnssLatestGsv{}; // 0x0A Nav GSV 最近单句缓存。
     fw::Slot<rtos::ExecStats> ioExecStats{};
     fw::Slot<GnssStatus> gnssStatus{};
+    fw::Slot<std::array<char, 16U>>
+        gnssBoardSn{}; // GNSS 板卡序列号（UBX-SEC-UNIQID，kIo 写，kLink 读）
     ZeroInitSlot<gnss::Fix> gnssFix{};
     ZeroInitSlot<gnss::SatTable> gnssSats{};
     fw::Slot<GnssOutConfig> gnssOutCfg{};

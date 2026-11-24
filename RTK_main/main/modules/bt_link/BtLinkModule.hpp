@@ -604,6 +604,7 @@ private:
                   "gnss::Fix must be trivially destructible");
     uint32_t gnss_fix_version_ = 0;
     uint32_t gnss_status_version_ = 0;
+    uint32_t gnss_sn_version_ = 0U;
     std::optional<::gnss::Fix> cached_gnss_fix_{};
     uint32_t base_rtcm_tx_drop_ = 0U;
     uint32_t base_rtcm_ring_drop_base_ = 0U;

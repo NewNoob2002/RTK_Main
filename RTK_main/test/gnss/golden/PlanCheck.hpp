@@ -195,14 +195,27 @@ inline constexpr uint8_t kUbxSync1 = 0xB5U;
 inline constexpr uint8_t kUbxSync2 = 0x62U;
 inline constexpr uint8_t kUbxClsCfg = 0x06U;
 inline constexpr uint8_t kUbxIdValset = 0x8AU;
-inline constexpr uint8_t kUbxPayloadOffset = 6U; // 同步 2 + 类 + ID + 长度 2
-inline constexpr size_t kUbxIdOffset = 3U;       // 帧内 ID 字节位置
-inline constexpr uint8_t kValsetHeadBytes = 3U;  // version + layers + reserved
+inline constexpr uint8_t kUbxPayloadOffset = 6U;      // 同步 2 + 类 + ID + 长度 2
+inline constexpr size_t kUbxIdOffset = 3U;            // 帧内 ID 字节位置
+inline constexpr uint8_t kLegacyValsetHeadBytes = 3U; // 历史黄金向量的 3 字节头
+inline constexpr uint8_t kValsetHeadBytes = 4U;       // HPG 1.32 4 字节头
 inline constexpr size_t kCrcBytes = 2U;
 inline constexpr size_t kKeyBytes = 4U;
 inline constexpr uint8_t kSizeShift = 28U;
 inline constexpr uint8_t kSizeMask = 0x07U;
-inline constexpr uint32_t kKeyGsvUart1 = 0x209100C3U;
+inline constexpr uint32_t kLegacyKeyGsaUart1 = 0x209100BFU;
+inline constexpr uint32_t kLegacyKeyGsvUart1 = 0x209100C3U;
+inline constexpr uint32_t kKeyGsaUart1 = 0x209100C0U;
+inline constexpr uint32_t kKeyGsvUart1 = 0x209100C5U;
+inline constexpr std::array<uint32_t, 7U> kSilencedExtraNmeaUart1Keys{
+    0x209100CAU, // GLL
+    0x209100B1U, // VTG
+    0x209100D9U, // ZDA
+    0x209100B6U, // GNS
+    0x209100A7U, // DTM
+    0x209100CFU, // GRS
+    0x209100DEU, // GBS
+};
 inline constexpr uint8_t kUbxWidthOneBit = 1U;
 inline constexpr uint8_t kUbxWidthOneByte = 2U;
 inline constexpr uint8_t kUbxWidthTwoBytes = 3U;
@@ -224,18 +237,30 @@ inline size_t valueWidth(uint8_t code) noexcept
     }
 }
 
-/** 从一帧 CFG-VALSET 里取出所有 (key, value) 对；返回对数，0 表示不是合法 VALSET。 */
+/**
+ * @brief 从一帧 CFG-VALSET 取出全部 (key, value) 对。
+ * @param frame: 完整 UBX 帧。
+ * @param[out] out: 输出键值对数组。
+ * @param headBytes: VALSET 载荷头长度（新驱动为 4，历史黄金向量为 3）。
+ * @retval 提取到的键值对数；0 表示非法 VALSET 或越界。
+ */
 inline size_t valsetPairs(std::span<const uint8_t> frame,
-                          std::array<std::pair<uint32_t, uint32_t>, 8> &out) noexcept
+                          std::array<std::pair<uint32_t, uint32_t>, 16> &out,
+                          size_t headBytes = kValsetHeadBytes) noexcept
 {
-    if ((frame.size() < (static_cast<size_t>(kUbxPayloadOffset) + kCrcBytes)) ||
+    if ((frame.size() < (static_cast<size_t>(kUbxPayloadOffset) + headBytes + kCrcBytes)) ||
         (frame[0] != kUbxSync1) || (frame[1] != kUbxSync2) || (frame[2] != kUbxClsCfg) ||
         (frame[kUbxIdOffset] != kUbxIdValset)) {
         return 0U;
     }
+    if ((headBytes == kValsetHeadBytes) &&
+        ((frame[kUbxPayloadOffset] != 0U) || (frame[kUbxPayloadOffset + 2U] != 0U) ||
+         (frame[kUbxPayloadOffset + 3U] != 0U))) {
+        return 0U;
+    }
     const size_t body = frame.size() - static_cast<size_t>(kUbxPayloadOffset) - kCrcBytes;
     const size_t end = static_cast<size_t>(kUbxPayloadOffset) + body;
-    size_t pos = static_cast<size_t>(kUbxPayloadOffset) + static_cast<size_t>(kValsetHeadBytes);
+    size_t pos = static_cast<size_t>(kUbxPayloadOffset) + headBytes;
     size_t count = 0U;
     while ((pos + kKeyBytes) <= end) {
         uint32_t key = 0U;
@@ -288,15 +313,56 @@ inline bool pairSetEqual(std::span<const std::pair<uint32_t, uint32_t>> lhs,
     return matched == lhs.size();
 }
 
-/** 把若干 VALSET 帧展开成 (key, value) 集合（同一 key 后写的生效，未出现的 key 等价于 0）。 */
+/**
+ * @brief 检查集合中是否存在 (key, expectedVal) 项。
+ * @param pairs: 键值对切片。
+ * @param key: 键 ID。
+ * @param expectedVal: 期望值。
+ * @retval true 命中；false 不存在或值不同。
+ */
+inline bool hasPair(std::span<const std::pair<uint32_t, uint32_t>> pairs, uint32_t key,
+                    uint32_t expectedVal) noexcept
+{
+    for (const auto &item : pairs) {
+        if ((item.first == key) && (item.second == expectedVal)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief 将集合中指定旧键重映射到新键（用于兼容历史黄金向量中的错误键 ID）。
+ * @param pairs: 键值对切片。
+ * @param oldKey: 旧键 ID。
+ * @param newKey: 新键 ID。
+ */
+inline void remapKey(std::span<std::pair<uint32_t, uint32_t>> pairs, uint32_t oldKey,
+                     uint32_t newKey) noexcept
+{
+    for (auto &item : pairs) {
+        if (item.first == oldKey) {
+            item.first = newKey;
+        }
+    }
+}
+
+/**
+ * @brief 把若干 VALSET 帧展开成 (key, value) 集合（同一 key 后写的生效）。
+ * @param frames: VALSET 帧列表。
+ * @param[out] pairs: 合并后的键值对数组。
+ * @param[out] count: 合并后的有效条数。
+ * @param headBytes: VALSET 载荷头字节数（4 或 3）。
+ * @retval true 全部帧合法并已合并；false 存在非法帧或溢出。
+ */
 inline bool mergeValsets(std::span<const std::span<const uint8_t>> frames,
-                         std::array<std::pair<uint32_t, uint32_t>, 16> &pairs,
-                         size_t &count) noexcept
+                         std::array<std::pair<uint32_t, uint32_t>, 32> &pairs, size_t &count,
+                         size_t headBytes = kValsetHeadBytes) noexcept
 {
     count = 0U;
     for (const auto frame : frames) {
-        std::array<std::pair<uint32_t, uint32_t>, 8> local{};
-        const size_t n = valsetPairs(frame, local);
+        std::array<std::pair<uint32_t, uint32_t>, 16> local{};
+        const size_t n = valsetPairs(frame, local, headBytes);
         if (n == 0U) {
             return false;
         }
@@ -321,7 +387,13 @@ inline bool mergeValsets(std::span<const std::span<const uint8_t>> frames,
     return true;
 }
 
-/** u-blox：把两侧的 VALSET 全部展开成对集合后比较。 */
+/**
+ * @brief u-blox：把新驱动（4 字节头+静默 12 句+修正 GSA/GSV）与历史黄金向量按语义集合比对。
+ * @param receiver: 被测 u-blox 驱动。
+ * @param cases: 黄金用例表。
+ * @param steps: 黄金步骤字节表。
+ * @retval kAllMatch 全部匹配；否则返回首个不匹配的用例下标。
+ */
 inline size_t ubxPlanMismatch(const gnss::Receiver &receiver,
                               std::span<const golden::RoverCase> cases,
                               std::span<const golden::Step> steps) noexcept
@@ -333,14 +405,14 @@ inline size_t ubxPlanMismatch(const gnss::Receiver &receiver,
             (commands.count > commands.kMaxCommands)) {
             return c;
         }
-        std::array<std::pair<uint32_t, uint32_t>, 16> got{};
+        std::array<std::pair<uint32_t, uint32_t>, 32> got{};
         size_t gotCount = 0U;
         if (!mergeValsets(
                 std::span<const std::span<const uint8_t>>{commands.views.data(), commands.count},
-                got, gotCount)) {
+                got, gotCount, kValsetHeadBytes)) {
             return c;
         }
-        std::array<std::pair<uint32_t, uint32_t>, 16> want{};
+        std::array<std::pair<uint32_t, uint32_t>, 32> want{};
         size_t wantCount = 0U;
         std::array<std::span<const uint8_t>, CommandSet::kMaxCommands> wantViews{};
         const size_t count = static_cast<size_t>(item.stepCount);
@@ -348,15 +420,27 @@ inline size_t ubxPlanMismatch(const gnss::Receiver &receiver,
             wantViews[i] = steps[static_cast<size_t>(item.stepFirst) + i].bytes.view();
         }
         if (!mergeValsets(std::span<const std::span<const uint8_t>>{wantViews.data(), count}, want,
-                          wantCount)) {
+                          wantCount, kLegacyValsetHeadBytes)) {
             return c;
         }
+        // U1 显式静默 7 条计划外标准 NMEA 语句（历史黄金向量未发这 7 键）：断言新驱动全写 0 后剔除。
+        for (const uint32_t extraKey : kSilencedExtraNmeaUart1Keys) {
+            if (!hasPair(std::span<const std::pair<uint32_t, uint32_t>>{got.data(), gotCount},
+                         extraKey, 0U)) {
+                return c;
+            }
+            gotCount =
+                dropKey(std::span<std::pair<uint32_t, uint32_t>>{got.data(), gotCount}, extraKey);
+        }
+        // 历史黄金向量把 GSA_UART1 误写成 0x209100BF（GSA_I2C），U1 已修正为 0x209100C0。
+        remapKey(std::span<std::pair<uint32_t, uint32_t>>{want.data(), wantCount},
+                 kLegacyKeyGsaUart1, kKeyGsaUart1);
         // GSV 的历元数由输出计划周期换算（周期 1 s × 频率），基线固定写 1；这是 ADR-0012 §2.4 期望的行为差异，
-        // 其余键仍逐对比较（未出现等价于 0）。
+        // 历史基线误写 GSV 为 0x209100C3（GSA_SPI），U1 已修正为 0x209100C5。
         gotCount =
             dropKey(std::span<std::pair<uint32_t, uint32_t>>{got.data(), gotCount}, kKeyGsvUart1);
-        wantCount =
-            dropKey(std::span<std::pair<uint32_t, uint32_t>>{want.data(), wantCount}, kKeyGsvUart1);
+        wantCount = dropKey(std::span<std::pair<uint32_t, uint32_t>>{want.data(), wantCount},
+                            kLegacyKeyGsvUart1);
         if (!pairSetEqual(std::span<const std::pair<uint32_t, uint32_t>>{got.data(), gotCount},
                           std::span<const std::pair<uint32_t, uint32_t>>{want.data(), wantCount})) {
             return c;

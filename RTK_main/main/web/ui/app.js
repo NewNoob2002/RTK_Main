@@ -250,7 +250,9 @@
       { type: "group", cls: "cols", items: ["gga", "gsa", "gsv", "gst", "rmc"].map(outField) },
       { type: "heading", text: "Constellations", prefix: "gnss.const." },
       { type: "group", cls: "cols",
-        items: [constField("gps", "GPS"), constField("bds", "BeiDou"), constField("glo", "GLONASS"), constField("gal", "Galileo")] }
+        items: [constField("gps", "GPS"), constField("bds", "BeiDou"), constField("glo", "GLONASS"), constField("gal", "Galileo")] },
+      { type: "heading", text: "Elevation mask", prefix: "gnss.cutoff" },
+      { type: "stepper", key: "gnss.cutoff", label: "Elevation mask", hint: "0–90°", min: 0, max: 90 }
     ] },
     { id: "gate", col: "a", title: "GGA quality gate", icon: "gate", badge: gateBadge, items: [
       { type: "switch", key: "gnss.gga_gate.enabled", label: "Enable gate", hint: "Hold GGA to the phone and NTRIP caster while there is no fix or too few satellites" },

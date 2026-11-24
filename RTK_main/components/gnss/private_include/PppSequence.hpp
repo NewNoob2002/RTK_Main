@@ -43,6 +43,13 @@ public:
         return !commands_.empty();
     }
 
+    /** @brief 查询下一轮 poll 是否准备向串口写入命令（供 RTCM 帧边界门控）。 @retval true 待发命令。 */
+    [[nodiscard]] bool needsTx() const noexcept
+    {
+        return active() &&
+               (sent_.view().empty() || ((ack_ == Ack::kAck) && (commands_.size() > 1U)));
+    }
+
     /**
      * @brief 推进脚本，最多发出一条命令。
      * @param nowMs: 当前单调时钟。
@@ -83,19 +90,67 @@ struct SatMaskConfig {
     bool sbas = false;
 };
 
-/** 串行执行 Unicore 截止角与星座开关脚本并逐条核对回显。 */
+/** 串行执行 Unicore（ASCII）或 ZED-F9P（UBX-CFG-VALSET）截止角与星座开关脚本。 */
 class SatMaskSequence final {
 public:
     static constexpr uint32_t kReplyMs = 1000U;
+    static constexpr uint32_t kF9pSignalSettleMs = 600U;
+    static constexpr uint32_t kF9pResyncMs = 300U;
     static constexpr size_t kStepCount = 6U;
+    static constexpr size_t kF9pStepCount = 1U;
 
-    /** @brief 开始 0x06 截止角/星座脚本。 @param cfg: 合法的截止角与星座配置。 @retval true 已启动。 @retval false 截止角越界。 */
-    [[nodiscard]] bool start(const SatMaskConfig &cfg) noexcept;
+    /**
+     * @brief 开始 0x06 截止角/星座脚本。
+     * @param cfg: 合法的截止角与星座配置。
+     * @param model: 当前接收机型号（默认 kUm980 保持既有调用兼容）。
+     * @param includeSbas: F9P 是否在 VALSET 中携带 CFG-SIGNAL-SBAS_ENA（HPG >= 1.13）。
+     * @retval true: 已启动脚本。
+     * @retval false: 截止角越界、F9P 关闭 GPS 或型号不支持。
+     */
+    [[nodiscard]] bool start(const SatMaskConfig &cfg, Model model = Model::kUm980,
+                             bool includeSbas = true) noexcept;
 
     /** @brief 查询脚本是否正在执行。 @retval true 仍在执行。 */
     [[nodiscard]] bool active() const noexcept
     {
-        return active_;
+        return phase_ != Phase::kIdle;
+    }
+
+    /** @brief 查询下一轮 poll 是否需要向串口发送命令帧（供 RTCM 帧边界门控）。 @retval true 待发命令。 */
+    [[nodiscard]] bool needsTx() const noexcept
+    {
+        return (phase_ == Phase::kSend) || ((phase_ == Phase::kAwaitAck) && (ack_ == Ack::kAck) &&
+                                            ((step_ + 1U) < totalSteps()));
+    }
+
+    /** @brief 查询是否处于 F9P CFG-SIGNAL 变更后的非阻塞稳定期。 @retval true 正在 600 ms 稳定等待。 */
+    [[nodiscard]] bool settling() const noexcept
+    {
+        return phase_ == Phase::kSettle;
+    }
+
+    /** @brief 查询是否处于超时后的 300 ms 重同步期。 @retval true 正在丢弃迟到应答。 */
+    [[nodiscard]] bool resyncing() const noexcept
+    {
+        return phase_ == Phase::kResync;
+    }
+
+    /**
+     * @brief 返回最近一次已发送命令的只读视图（用于 NAK 诊断日志）。
+     * @retval 已发送帧字节视图；空闲时为空。
+     */
+    [[nodiscard]] std::span<const uint8_t> lastSent() const noexcept
+    {
+        return sent_.view();
+    }
+
+    /**
+     * @brief 返回当前型号对应的总步骤数。
+     * @retval 1（ZED-F9P 单帧原子 VALSET）或 6（Unicore ASCII）。
+     */
+    [[nodiscard]] size_t totalSteps() const noexcept
+    {
+        return (model_ == Model::kZedF9p) ? kF9pStepCount : kStepCount;
     }
 
     /**
@@ -119,14 +174,35 @@ public:
                  std::span<const uint8_t> frame, uint32_t nowMs) noexcept;
 
 private:
+    enum class Phase : uint8_t {
+        kIdle = 0U,
+        kSend,
+        kAwaitAck,
+        kSettle,
+        kResync,
+    };
+
     /** @brief 按当前步骤下标构造命令到 sent_。 @retval true 已生成命令。 */
     [[nodiscard]] bool buildCurrentStep() noexcept;
 
+    /**
+     * @brief 推进 kAwaitAck 阶段：等待应答、失败转重同步或推进到下一步/稳定期。
+     * @param nowMs: 当前单调时钟。
+     * @param[out] advanceToSend: 需立即构造并发送下一步时置 true。
+     * @retval nullopt 仍在等待或转入发送/稳定/重同步；结果则序列已结束。
+     */
+    [[nodiscard]] std::optional<fw::Result> pollAwaitAck(uint32_t nowMs,
+                                                         bool &advanceToSend) noexcept;
+
     SatMaskConfig cfg_{};
+    Model model_ = Model::kUnknown;
+    bool include_sbas_ = false;
     size_t step_ = 0U;
-    bool active_ = false;
+    Phase phase_ = Phase::kIdle;
     CmdBuf sent_{};
     uint32_t sent_ms_ = 0U;
+    uint32_t phase_ms_ = 0U;
+    fw::Result pending_result_ = fw::Result::kOk;
     Ack ack_ = Ack::kNone;
 };
 

@@ -274,7 +274,7 @@ void testGetDomainAndForEach()
 
     size_t count = 0U;
     svc.forEach([&count](const settings::KeySpec &) { ++count; });
-    TEST_ASSERT_EQUAL_size_t(20U, count);
+    TEST_ASSERT_EQUAL_size_t(21U, count);
 }
 
 /**
@@ -316,6 +316,30 @@ void testPhoneCallerPermissionsAndEncoding()
     TEST_ASSERT_EQUAL_UINT8(settings::kVerbGnssSetSatTrack, st.lastCmd.verb);
     TEST_ASSERT_EQUAL_UINT8(6U, st.lastCmd.argLen);
     TEST_ASSERT_EQUAL_UINT8(12U, st.lastCmd.args[0]);
+
+    // 网页可写单星座键 gnss.const.*（编码为 2 字节 {constBit, 0/1} 复用 kVerbGnssSetSatTrack）。
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("gnss.const.glo", "0", settings::Caller::kWeb, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kGnss), static_cast<int>(st.lastOwner));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbGnssSetSatTrack, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(2U, st.lastCmd.argLen);
+    TEST_ASSERT_EQUAL_UINT8(settings::const_bit::kGlo, st.lastCmd.args[0]);
+    TEST_ASSERT_EQUAL_UINT8(0U, st.lastCmd.args[1]);
+
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("gnss.const.gps", "1", settings::Caller::kWeb, t)));
+    TEST_ASSERT_EQUAL_UINT8(settings::const_bit::kGps, st.lastCmd.args[0]);
+    TEST_ASSERT_EQUAL_UINT8(1U, st.lastCmd.args[1]);
+
+    // RU1-08：网页可写 gnss.cutoff（0..90），编码为 1 字节角度并复用 kVerbGnssSetSatTrack。
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("gnss.cutoff", "20", settings::Caller::kWeb, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kGnss), static_cast<int>(st.lastOwner));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbGnssSetSatTrack, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(1U, st.lastCmd.argLen);
+    TEST_ASSERT_EQUAL_UINT8(20U, st.lastCmd.args[0]);
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(svc.set("gnss.cutoff", "91", settings::Caller::kWeb, t)));
 
     TEST_ASSERT_EQUAL(
         static_cast<int>(settings::Error::kOk),

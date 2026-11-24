@@ -13,6 +13,7 @@
 #include "../AsciiCmd.hpp"
 #include "../DriverInstances.hpp" // 单例声明（保证定义与 extern 声明一致）
 #include "../FrameTag.hpp"
+#include "UbloxExt.hpp"
 #include "UbloxWire.hpp"
 
 namespace gnss {
@@ -58,6 +59,26 @@ bool extText(std::span<const uint8_t> ext, std::string_view prefix,
 }
 
 /**
+ * @brief 判定 MON-VER 的 MOD= 后缀是否为 ZED-F9P（允许 -XX 变体后缀，排除 ZED-F9P2/ZED-F9R）。
+ * @param tail: 去掉 "MOD=" 后的扩展字段字节。
+ * @retval true: 型号为 ZED-F9P。
+ * @retval false: 其他型号。
+ */
+bool isZedF9pModel(std::span<const uint8_t> tail) noexcept
+{
+    constexpr std::string_view kModel = "ZED-F9P";
+    if (!ascii::startsWith(tail, kModel)) {
+        return false;
+    }
+    if (tail.size() == kModel.size()) {
+        return true;
+    }
+    const uint8_t next = tail[kModel.size()];
+    return (next == 0U) || (next == static_cast<uint8_t>(' ')) ||
+           (next == static_cast<uint8_t>('-'));
+}
+
+/**
  * @brief 扫描 MON-VER 载荷的扩展项，取型号与固件版本。
  * @param payload: MON-VER 载荷（长度 >= 40）。
  * @param out: 输出，型号与固件文本。
@@ -73,7 +94,7 @@ bool readMonVer(std::span<const uint8_t> payload, ProbeResult &out) noexcept
         const std::span<const uint8_t> ext = payload.subspan(off, ublox::kMonVerExtBytes);
         std::span<const uint8_t> tail{};
         if (extText(ext, "MOD=", tail)) {
-            if (!ascii::quotedStartsWith(tail, "ZED-F9P")) {
+            if (!isZedF9pModel(tail)) {
                 return false;
             }
             haveModel = true;
@@ -83,6 +104,9 @@ bool readMonVer(std::span<const uint8_t> payload, ProbeResult &out) noexcept
     }
     if (!haveModel) {
         return false;
+    }
+    if (result.fwVersion[0] == '\0') {
+        copyText(payload.first(ublox::kMonVerSwBytes), result.fwVersion);
     }
     result.model = Model::kZedF9p;
     out = result;
@@ -118,6 +142,26 @@ bool always(const RoverConfig &cfg) noexcept
 bool portBaudEnabled(const RoverConfig &cfg) noexcept
 {
     return cfg.portBaud != 0U;
+}
+
+/**
+ * @brief 流动站静默步骤：显式关闭目标 UART 上全部 12 条标准 NMEA 语句。
+ * @param cfg: 流动站配置（决定端口与 RAM / RAM|BBR 层）。
+ * @param[out] out: 输出配置步骤（失败时不保证字段有效）。
+ * @retval true: 已构造静默 VALSET 步骤。
+ * @retval false: 端口非法或命令缓冲不足。
+ */
+bool stepSilenceNmea(const RoverConfig &cfg, ConfigStep &out) noexcept
+{
+    const uint8_t port = cfg.useConfiguredPort ? cfg.port : 1U;
+    const uint8_t layer = cfg.useConfiguredPort ? ublox::kLayerRam : ublox::kLayerRamBbr;
+    if (!ublox::buildSilenceNmeaValset(out.cmd, layer, port)) {
+        return false;
+    }
+    out.expectReply = true;
+    out.timeoutMs = ublox::kConfigTimeoutMs;
+    out.switchBaud = 0U;
+    return true;
 }
 
 /**
@@ -195,7 +239,8 @@ bool UbloxReceiver::matchProbe(const demux::Decoder &dec, std::span<const uint8_
                                ProbeResult &out) const noexcept
 {
     if ((&dec != &demux::ubx::kDecoder) ||
-        (frame.size() < (ublox::kHeaderBytes + ublox::kCrcBytes))) {
+        (frame.size() < (ublox::kHeaderBytes + ublox::kCrcBytes)) ||
+        !ublox::validUbxChecksum(frame)) {
         return false;
     }
     if ((frame[ublox::kClsOffset] != ublox::kClsMon) ||
@@ -215,7 +260,7 @@ bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
 {
     static_cast<void>(model); // ZED-F9P 单型号，脚本与型号无关
     // 表放在成员函数作用域内：步骤回调要调 protected 的 cmd_*，匿名命名空间的自由函数没有访问权。
-    static constexpr std::array<ScriptStep, 2> kRoverScript{{
+    static constexpr std::array<ScriptStep, 3> kRoverScript{{
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
              const uint16_t periodMs = navPeriodMs(c);
              if (!(c.useConfiguredPort ? cmdConfigurePort(o.cmd, periodMs, c.port)
@@ -228,6 +273,7 @@ bool UbloxReceiver::roverStep(size_t index, Model model, const RoverConfig &cfg,
              return true;
          },
          &always},
+        {&stepSilenceNmea, &always},
         {[](const RoverConfig &c, ConfigStep &o) noexcept {
              if (c.useConfiguredPort) {
                  return detail::kZedF9pReceiver.baudStep(c.port, c.portBaud, o);

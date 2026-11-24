@@ -756,11 +756,40 @@ void fillSatTrackQueryPayload(const PhoneCompatOps &ops, uint8_t capsMask,
         payload[kSatOfsSbas] = cfg.sbas;
         return;
     }
-    payload[kSatOfsGps] = ((capsMask & kSatCapGps) != 0U) ? cfg.gps : 0U;
+    const bool gpsRequired = (capsMask & kSatCapGpsRequired) != 0U;
+    payload[kSatOfsGps] = gpsRequired ? 1U : (((capsMask & kSatCapGps) != 0U) ? cfg.gps : 0U);
     payload[kSatOfsGlo] = ((capsMask & kSatCapGlo) != 0U) ? cfg.glo : 0U;
     payload[kSatOfsBds] = ((capsMask & kSatCapBds) != 0U) ? cfg.bds : 0U;
     payload[kSatOfsGal] = ((capsMask & kSatCapGal) != 0U) ? cfg.gal : 0U;
     payload[kSatOfsSbas] = ((capsMask & kSatCapSbas) != 0U) ? cfg.sbas : 0U;
+}
+
+/**
+ * @brief 校验 0x06 卫星配置请求是否满足当前接收机能力掩码（含 F9P 强制 GPS 与 SBAS 门控）。
+ * @param cfg: 手机请求配置。
+ * @param capsMask: 接收机星座能力位图。
+ * @retval true 允许下发；false 违反强制 GPS 或尝试启用不支持星座。
+ */
+bool satConfigAllowedByCaps(const SatTrackConfig &cfg, uint8_t capsMask) noexcept
+{
+    if (capsMask == 0U) {
+        return false;
+    }
+    const bool gpsRequired = (capsMask & kSatCapGpsRequired) != 0U;
+    if (gpsRequired) {
+        if (cfg.gps == 0U) {
+            return false;
+        }
+    } else if ((cfg.gps != 0U) && ((capsMask & kSatCapGps) == 0U)) {
+        return false;
+    }
+    if (((cfg.glo != 0U) && ((capsMask & kSatCapGlo) == 0U)) ||
+        ((cfg.bds != 0U) && ((capsMask & kSatCapBds) == 0U)) ||
+        ((cfg.gal != 0U) && ((capsMask & kSatCapGal) == 0U)) ||
+        ((cfg.sbas != 0U) && ((capsMask & kSatCapSbas) == 0U))) {
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -790,8 +819,8 @@ DispatchResult PhoneCompatService::handleSurveySatTrack(void *self, const proto:
         .gal = frame.payload[kSatOfsGal],
         .sbas = frame.payload[kSatOfsSbas],
     };
-    if (!validSatTrackConfig(cfg) || service.satWaiting || (ops.startSatConfig == nullptr) ||
-        !ops.startSatConfig(ops.ctx, cfg)) {
+    if (!validSatTrackConfig(cfg) || !satConfigAllowedByCaps(cfg, capsMask) || service.satWaiting ||
+        (ops.startSatConfig == nullptr) || !ops.startSatConfig(ops.ctx, cfg)) {
         return build(frame, proto::msg_type::kSetRes, kFail, reply);
     }
     service.satWaiting = true;

@@ -99,3 +99,6 @@ target_include_directories(test_gnss_gga_gate PRIVATE ${PROJ_ROOT}/components/gn
 if(RTK_GNSS_DRV_UNICORE)
     target_include_directories(test_gnss_unicore_receiver PRIVATE ${PROJ_ROOT}/components/gnss/private_include)
 endif()
+if(RTK_GNSS_DRV_UBLOX)
+    target_include_directories(test_gnss_ublox_receiver PRIVATE ${PROJ_ROOT}/components/gnss/private_include)
+endif()

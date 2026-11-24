@@ -34,6 +34,22 @@
 namespace app {
 namespace {
 constexpr uint32_t kMsPerSecond = 1000U;
+constexpr uint8_t kConstBitGpsRequired = 1U << 7U;
+constexpr uint32_t kUbloxConfigTimeoutMs = 500U;
+constexpr uint32_t kUbloxUart1BaudKey = 0x40520001U;
+constexpr uint32_t kUbloxUart2BaudKey = 0x40530001U;
+
+/**
+ * @brief 判断一帧 VALSET 是否为无应答的 UART 波特率切换命令。
+ * @param bytes: 完整 UBX 帧字节。
+ * @retval true 单键 UART1/UART2 波特率 VALSET；false 其他 VALSET。
+ */
+bool isBaudSwitchValset(std::span<const uint8_t> bytes) noexcept
+{
+    std::array<uint32_t, 2U> keys{};
+    const size_t count = ::gnss::ublox::extractValsetKeys(bytes, keys);
+    return (count == 1U) && ((keys[0U] == kUbloxUart1BaudKey) || (keys[0U] == kUbloxUart2BaudKey));
+}
 } // namespace
 
 using detail::kMaxActionsPerPoll;
@@ -42,25 +58,28 @@ using detail::toResult;
 
 void GnssModule::pollController(uint32_t nowMs) noexcept
 {
+    if (!rtcm_framer_.atFrameBoundary() && !ensureRtcmFrameBoundary(nowMs)) {
+        return;
+    }
     const uint32_t maintenanceSeq = controller().stats().maintenanceSeq;
     for (size_t iter = 0U; iter < kMaxActionsPerPoll; ++iter) {
         const ::gnss::Action act = controller().poll(nowMs);
         if (act.kind == ::gnss::Action::Kind::kNone) {
             break;
         }
-        applyAction(act);
+        applyAction(act, nowMs);
         if (controller().stats().maintenanceSeq != maintenanceSeq) {
             break;
         }
     }
-    updateControllerStatus();
+    updateControllerStatus(nowMs);
     if (controller().stats().maintenanceSeq != completed_maintenance_seq_) {
         completeMaintenance(nowMs);
     }
     finishReadbackIfDone();
 }
 
-void GnssModule::applyAction(const ::gnss::Action &act) noexcept
+void GnssModule::applyAction(const ::gnss::Action &act, uint32_t nowMs) noexcept
 {
     switch (act.kind) {
     case ::gnss::Action::Kind::kPower: {
@@ -87,12 +106,12 @@ void GnssModule::applyAction(const ::gnss::Action &act) noexcept
             FW_LOGI(fw::TraceCat::kGnss, "<uart> baud %lu (was %lu)",
                     static_cast<unsigned long>(act.baud), static_cast<unsigned long>(oldBaud));
         } else {
-            controller().maintenanceIoFailed(rtos::nowMs());
+            controller().maintenanceIoFailed(nowMs);
         }
         break;
     }
     case ::gnss::Action::Kind::kWrite:
-        applyWriteAction(act);
+        applyWriteAction(act, nowMs);
         break;
     case ::gnss::Action::Kind::kNone:
     default:
@@ -111,8 +130,8 @@ void GnssModule::finishReadbackIfDone() noexcept
     publishReadback(readback_lines_, readback_len_, true, readback_truncated_, false);
 }
 
-/** @brief 发布控制器迁移诊断并标记待重放设置。 @note 仅 kIo。 */
-void GnssModule::updateControllerStatus() noexcept
+/** @brief 发布控制器迁移诊断并标记待重放设置。 @param nowMs: 本轮单调时钟（毫秒）。 @note 仅 kIo。 */
+void GnssModule::updateControllerStatus(uint32_t nowMs) noexcept
 {
     const auto curStats = controller().stats();
     if (curStats.stepNacks > prev_ctrl_stats_.stepNacks) {
@@ -131,7 +150,7 @@ void GnssModule::updateControllerStatus() noexcept
                   static_cast<uint32_t>(last_state_));
         FW_LOGI(fw::TraceCat::kGnss, "<sm> state %s -> %s", ::gnss::stateName(last_state_),
                 ::gnss::stateName(curState));
-        onControllerStateChanged(last_state_, curState);
+        onControllerStateChanged(last_state_, curState, nowMs);
         last_state_ = curState;
     }
     prev_ctrl_stats_ = curStats;
@@ -309,6 +328,25 @@ fw::Result GnssModule::applyBaud(uint32_t baud) noexcept
     return fw::Result::kOk;
 }
 
+uint8_t GnssModule::computeConstMask(::gnss::Model model) const noexcept
+{
+    if (!::gnss::supportsSatMask(model)) {
+        return 0U;
+    }
+    if (model == ::gnss::Model::kZedF9p) {
+        // F9P 强制要求 GPS 开启（不可由网页/手机关闭），SBAS 仅 HPG >= 1.13 支持。
+        uint8_t mask = static_cast<uint8_t>(kConstBitGpsRequired | settings::const_bit::kBds |
+                                            settings::const_bit::kGlo | settings::const_bit::kGal);
+        if (f9pIncludeSbas()) {
+            mask = static_cast<uint8_t>(mask | settings::const_bit::kSbas);
+        }
+        return mask;
+    }
+    return static_cast<uint8_t>(settings::const_bit::kGps | settings::const_bit::kBds |
+                                settings::const_bit::kGlo | settings::const_bit::kGal |
+                                settings::const_bit::kSbas);
+}
+
 void GnssModule::publishCaps() noexcept
 {
     const auto model = controller().detected().probe.model;
@@ -341,12 +379,7 @@ void GnssModule::publishCaps() noexcept
             domain.supported = domain.count != 0U;
         }
         caps.pppSupported = ::gnss::supportsPpp(model);
-        caps.constMask =
-            ::gnss::supportsSatMask(model)
-                ? static_cast<uint8_t>(settings::const_bit::kGps | settings::const_bit::kBds |
-                                       settings::const_bit::kGlo | settings::const_bit::kGal |
-                                       settings::const_bit::kSbas)
-                : 0U;
+        caps.constMask = computeConstMask(model);
     }
     if (!caps.sameCaps(ctx().data.gnssCaps.read())) {
         ctx().data.gnssCaps.write(caps);
@@ -464,15 +497,21 @@ void GnssModule::restoreOutputPeriods() noexcept
     return plan;
 }
 
-void GnssModule::applyWriteAction(const ::gnss::Action &act) noexcept
+void GnssModule::applyWriteAction(const ::gnss::Action &act, uint32_t nowMs) noexcept
 {
     const auto port = static_cast<uart_port_t>(CONFIG_RTK_GNSS_UART_NUM);
     const int written = uart_write_bytes(port, act.bytes.data(), act.bytes.size());
     if (written > 0) {
         uart_tx_bytes_ += static_cast<uint32_t>(written);
     }
-    if (written < 0 || static_cast<size_t>(written) != act.bytes.size()) {
-        controller().maintenanceIoFailed(rtos::nowMs());
+    const bool ok = (written >= 0) && (static_cast<size_t>(written) == act.bytes.size());
+    if (ok) {
+        recordValsetTx(act.bytes, nowMs, kUbloxConfigTimeoutMs, !isBaudSwitchValset(act.bytes));
+    } else {
+        if (::gnss::ublox::isValsetFrame(act.bytes)) {
+            valset_tracker_.reset();
+        }
+        controller().maintenanceIoFailed(nowMs);
     }
     // 控制器下发的命令：探测阶段标 <probe>，其余标 <cfg>，方向固定写 TX（ADR-0009 §2.12）；
     // 全可打印 ASCII 保留原文 "..."，二进制 UBX 输出前 16 字节十六进制摘要。
@@ -503,7 +542,43 @@ void GnssModule::applyWriteAction(const ::gnss::Action &act) noexcept
     }
 }
 
-void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur) noexcept
+void GnssModule::recordValsetTx(std::span<const uint8_t> bytes, uint32_t nowMs, uint32_t timeoutMs,
+                                bool expectReply) noexcept
+{
+    valset_tracker_.onTx(bytes, nowMs, timeoutMs, expectReply);
+}
+
+void GnssModule::pollUbloxBoardSn(uint32_t nowMs) noexcept
+{
+    if (uniqid_polled_ || (controller().detected().probe.model != ::gnss::Model::kZedF9p)) {
+        return;
+    }
+    if (!ensureRtcmFrameBoundary(nowMs)) {
+        return;
+    }
+    uniqid_polled_ = true;
+    ::gnss::CmdBuf pollCmd{};
+    if (::gnss::ublox::buildPollSecUniqId(pollCmd)) {
+        static_cast<void>(writeSeqTx(pollCmd.view(), nowMs, 0U));
+    }
+}
+
+void GnssModule::resetOnReprobe() noexcept
+{
+    uniqid_polled_ = false;
+    valset_tracker_.reset();
+    rtcm_framer_.reset();
+    rtcm_frame_stall_armed_ = false;
+    ctx().data.gnssBoardSn.write({});
+    if (work_mode_.has_value()) {
+        auto &wm = *work_mode_;
+        wm.onControllerReprobe();
+        ctx().data.gnssWorkMode.write(wm.status());
+    }
+}
+
+void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur,
+                                          uint32_t nowMs) noexcept
 {
     if ((prev == ::gnss::State::kProbing) && (cur == ::gnss::State::kConfiguring)) {
         const auto det = controller().detected();
@@ -526,6 +601,7 @@ void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur)
         persistProbeHint();
         // 型号与 caps 已知，输出计划按支持的语句位重算一次（ADR-0012 §2.4）。
         controller().setOutputPlan(makePlan());
+        pollUbloxBoardSn(nowMs);
     } else if ((prev == ::gnss::State::kRunning) && (cur == ::gnss::State::kProbing)) {
         const auto curStats = controller().stats();
         if (!manual_reprobe_ && (curStats.reprobes > prev_ctrl_stats_.reprobes)) {
@@ -536,11 +612,8 @@ void GnssModule::onControllerStateChanged(::gnss::State prev, ::gnss::State cur)
     } else {
         // 其余迁移（断电/失败/读回）没有额外副作用。
     }
-    if (((cur == ::gnss::State::kPowerUp) || (cur == ::gnss::State::kProbing)) &&
-        work_mode_.has_value()) {
-        auto &wm = *work_mode_;
-        wm.onControllerReprobe();
-        ctx().data.gnssWorkMode.write(wm.status());
+    if ((cur == ::gnss::State::kPowerUp) || (cur == ::gnss::State::kProbing)) {
+        resetOnReprobe();
     }
 }
 

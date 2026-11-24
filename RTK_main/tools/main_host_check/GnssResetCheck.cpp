@@ -20,6 +20,8 @@
 #include "modules/storage/StoreKeys.hpp"
 #include "modules/storage/StoreWriteGate.hpp"
 #include "rtos/EspStatus.hpp"
+#include "settings/Types.hpp"
+#include "UbloxExt.hpp"
 
 extern "C" {
 #include "nvs.h"
@@ -57,6 +59,7 @@ constinit app::AppContext s_dispatchContext{};
 constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
 constinit std::array<app::AppContext, 16U> s_targetBaudContexts{};
+constinit std::array<app::AppContext, 3U> s_f9pContexts{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -85,6 +88,93 @@ uint32_t s_lastBaudFailTarget = 0U;
 uint32_t s_lastBaudFailResult = 0U;
 nvs_handle_t s_nvs = 0U;
 std::string s_rx;
+bool s_f9pMode = false;
+std::string_view s_f9pFw = "HPG 1.32";
+bool s_f9pDropSatAck = false;
+bool s_f9pRecordTx = false;
+bool s_f9pFailNextWrite = false;
+unsigned s_f9pSatValsets = 0U;
+std::string s_f9pTxLog;
+std::array<uint8_t, 128U> s_lastF9pSatValset{};
+size_t s_lastF9pSatValsetLen = 0U;
+
+/** @brief 构造完整 UBX 帧并追加到模拟串口接收缓冲。 @param cls: 类别。 @param id: 编号。 @param payload: 载荷。 */
+void pushUbxRx(uint8_t cls, uint8_t id, std::span<const uint8_t> payload)
+{
+    gnss::CmdBuf frame{};
+    if (!gnss::ublox::encodeUbxFrame(frame, cls, id, payload)) {
+        std::abort();
+    }
+    const auto bytes = frame.view();
+    s_rx.append(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+}
+
+/** @brief 生成并注入 F9P MON-VER 响应帧。 @param fw: FWVER 文本。 */
+void pushF9pMonVer(std::string_view fw)
+{
+    std::array<uint8_t, 100U> payload{};
+    std::memcpy(payload.data(), "EXT CORE 1.00", 13U);
+    std::memcpy(payload.data() + 30U, "00190000", 8U);
+    std::memcpy(payload.data() + 40U, "MOD=ZED-F9P", 11U);
+    std::string fwExt = "FWVER=";
+    fwExt += fw;
+    std::memcpy(payload.data() + 70U, fwExt.data(), std::min(fwExt.size(), size_t{29U}));
+    pushUbxRx(0x0AU, 0x04U, payload);
+}
+
+/** @brief 处理 F9P 模拟模式下的串口下行字节流（记录原始字节、响应 MON-VER/SEC-UNIQID/VALSET）。 @param bytes: 写入字节。 */
+void handleF9pUartWrite(std::string_view bytes)
+{
+    if (s_f9pRecordTx) {
+        s_f9pTxLog.append(bytes.data(), bytes.size());
+    }
+    const auto raw =
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size()};
+    if ((raw.size() == 8U) && (raw[0] == 0xB5U) && (raw[1] == 0x62U)) {
+        if ((raw[2] == 0x0AU) && (raw[3] == 0x04U)) {
+            pushF9pMonVer(s_f9pFw);
+            return;
+        }
+        if ((raw[2] == 0x27U) && (raw[3] == 0x03U)) {
+            constexpr std::array<uint8_t, 9U> kUniq{0x01U, 0x00U, 0x00U, 0x00U, 0xA1U,
+                                                    0x0BU, 0xC2U, 0x3DU, 0x4EU};
+            pushUbxRx(0x27U, 0x03U, kUniq);
+            return;
+        }
+    }
+    if ((raw.size() >= 12U) && (raw[0] == 0xB5U) && (raw[1] == 0x62U) && (raw[2] == 0x06U) &&
+        (raw[3] == 0x8AU)) {
+        std::array<uint32_t, gnss::ublox::kMaxExtractedValsetKeys> keys{};
+        const size_t keyCount = gnss::ublox::extractValsetKeys(raw, keys);
+        if ((keyCount > 0U) && (keys[0] == 0x40520001U) && (raw.size() >= 20U)) {
+            s_receiverBaud =
+                static_cast<uint32_t>(raw[14]) | (static_cast<uint32_t>(raw[15]) << 8U) |
+                (static_cast<uint32_t>(raw[16]) << 16U) | (static_cast<uint32_t>(raw[17]) << 24U);
+            return;
+        }
+        const bool isSat = (keyCount > 0U) && (keys[0] == 0x201100A4U);
+        if (isSat) {
+            ++s_f9pSatValsets;
+            s_lastF9pSatValsetLen = std::min(raw.size(), s_lastF9pSatValset.size());
+            std::memcpy(s_lastF9pSatValset.data(), raw.data(), s_lastF9pSatValsetLen);
+            if (s_f9pDropSatAck) {
+                return;
+            }
+        }
+        constexpr std::array<uint8_t, 2U> kAckPayload{0x06U, 0x8AU};
+        pushUbxRx(0x05U, 0x01U, kAckPayload);
+    }
+}
+
+/** @brief 生成定长 RTCM3 帧字节串（0xD3 + 10 位长度 + 载荷 + 3 字节 CRC 占位）。 @param payloadLen: 载荷字节数。 @retval 完整帧。 */
+std::string makeRtcm3Frame(size_t payloadLen)
+{
+    std::string out(3U + payloadLen + 3U, '\x55');
+    out[0] = static_cast<char>(0xD3U);
+    out[1] = static_cast<char>((payloadLen >> 8U) & 0x03U);
+    out[2] = static_cast<char>(payloadLen & 0xFFU);
+    return out;
+}
 
 /** @brief 捕获测试期间发出的 GNSS 切速失败 trace 事件。 @param ctx: 未使用。 @param ev: 追踪事件。 @note 单线程主机测试。 */
 void captureBaudTrace(void *ctx, const fw::TraceEvent &ev) noexcept
@@ -261,6 +351,14 @@ int uart_write_bytes(uart_port_t, const void *raw, size_t len)
 {
     const std::string_view bytes{static_cast<const char *>(raw), len};
     if (s_hostBaud != s_receiverBaud || s_now < s_readyAt) {
+        return static_cast<int>(len);
+    }
+    if (s_f9pMode) {
+        if (s_f9pFailNextWrite) {
+            s_f9pFailNextWrite = false;
+            return -1;
+        }
+        handleF9pUartWrite(bytes);
         return static_cast<int>(len);
     }
     const std::string_view baudDefault = s_p2 ? "CONFIG COM1 115200\r\n" : "CONFIG COM2 115200\r\n";
@@ -1432,5 +1530,412 @@ void testGnssSettingsBusAndGgaPersist()
     CHECK(s_context->data.gnssRateHz.load(std::memory_order_acquire) == 10U);
     CHECK((nvs_get_u8(nvs, "rate", &storedRate) == ESP_OK) && (storedRate == 10U));
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
+    nvs_close(nvs);
+}
+
+/** @brief 在 P2 板上以模拟 F9P 接收机启动 GnssModule 并推进至 kRunning。 */
+static void bootF9pModule(size_t slot, nvs_handle_t nvs, std::span<uint8_t> demux,
+                          std::span<uint8_t> pipe, std::string_view fw,
+                          std::optional<core::SatTrackConfig> presetSat = std::nullopt)
+{
+    s_f9pMode = true;
+    s_f9pFw = fw;
+    s_f9pDropSatAck = false;
+    s_f9pRecordTx = false;
+    s_f9pFailNextWrite = false;
+    s_f9pSatValsets = 0U;
+    s_f9pTxLog.clear();
+    s_lastF9pSatValsetLen = 0U;
+    s_rx.clear();
+    s_readyAt = 0U;
+    s_receiverBaud = 115200U;
+    s_p2 = true;
+    s_context = &s_f9pContexts[slot];
+    s_context->bindContexts();
+    s_context->data.gnssLatestGsv.bindLock({});
+    CHECK(fw::isOk(s_context->gnss.bindStorage(demux)));
+    CHECK(fw::isOk(s_context->rtcmPipe.bindStorage(pipe)));
+    CHECK(nvs_set_u32(nvs, "baud", 115200U) == ESP_OK);
+    CHECK(nvs_set_u32(nvs, "cache_baud", 115200U) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "family", static_cast<uint8_t>(gnss::Family::kUblox)) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "model", static_cast<uint8_t>(gnss::Model::kZedF9p)) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "rate", 1U) == ESP_OK);
+    CHECK(s_context->storage.loadKeys(app::gnss_store::kConfigKeys).failed == 0U);
+    CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
+    s_context->bootConfig.gnssBaud = 115200U;
+    s_context->bootConfig.userNvsReady = true;
+    s_context->boardProfile = app::board::byId(app::board::BoardId::kP2V141);
+    CHECK(s_context->boardProfile != nullptr);
+    if (presetSat.has_value()) {
+        s_context->data.gnssSatTrack.write(*presetSat);
+    }
+    CHECK(fw::isOk(s_context->gnss.init()));
+    CHECK(fw::isOk(s_context->gnss.start()));
+    advance(3000U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+}
+
+/** @brief 验证 F9P 600 ms 稳定期、快速连发 kBusy 与 NVS 写入失败自动回滚（RU1-02/04/06/08）。 */
+static void verifyF9pSettleBusyAndRollback(rtos::Executor &executor)
+{
+    const auto target = app::id(app::ModuleKind::kGnss);
+    auto postCmd = [&](const fw::Command &cmd) {
+        rtos::Ticket t{};
+        CHECK(fw::isOk(executor.post(cmd, rtos::Caller::kWeb, t)));
+        rtos::ExecutorTestAccess::drain(executor);
+        return t;
+    };
+    fw::CommandResult res{};
+
+    // RU1-02：F9P 拒绝 gnss.const.gps 与 gps=0，且不写串口
+    const unsigned valsetsBefore = s_f9pSatValsets;
+    fw::Command gpsPatch{.target = target,
+                         .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack),
+                         .argLen = 2U};
+    gpsPatch.args[0] = settings::const_bit::kGps;
+    gpsPatch.args[1] = 0U;
+    CHECK(executor.poll(postCmd(gpsPatch), res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kNotSupported);
+    CHECK(s_f9pSatValsets == valsetsBefore);
+
+    // RU1-04/08：1 字节 gnss.cutoff=20 下发后 ACK 立即到达，但须在 600 ms 稳定期内保持 kPending 且拒连发
+    fw::Command cutoffCmd{.target = target,
+                          .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack),
+                          .argLen = 1U};
+    cutoffCmd.args[0] = 20U;
+    const auto t1 = postCmd(cutoffCmd);
+    advance(60U);
+    CHECK(executor.poll(t1, res) == rtos::PollState::kPending);
+    // 稳定期内快速连发新请求必须立即回 kBusy
+    cutoffCmd.args[0] = 25U;
+    CHECK(executor.poll(postCmd(cutoffCmd), res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kBusy);
+    advance(620U);
+    CHECK(executor.poll(t1, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kOk);
+    CHECK(s_context->data.gnssSatTrack.read()->cutoffDeg == 20U);
+
+    // RU1-06：NVS 写盘失败时尽最大努力回写旧快照（cutoff=20）并向调用方报 kIoError
+    nvs_shim_set_write_fail(ESP_FAIL);
+    const unsigned beforeFail = s_f9pSatValsets;
+    cutoffCmd.args[0] = 35U;
+    const auto tFail = postCmd(cutoffCmd);
+    advance(1500U);
+    nvs_shim_set_write_fail(ESP_OK);
+    CHECK(executor.poll(tFail, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kIoError);
+    // 发生 2 次写（新值 35 + 回滚旧值 20），且末帧 MINELEV 为 20、快照仍为 20
+    CHECK(s_f9pSatValsets == beforeFail + 2U);
+    CHECK((s_lastF9pSatValsetLen > 14U) && (s_lastF9pSatValset[14U] == 20U));
+    CHECK(s_context->data.gnssSatTrack.read()->cutoffDeg == 20U);
+}
+
+/** @brief 验证 F9P 跨 512 B 块 RTCM3 帧边界插入 UBX 与超时/重同步期零溢出排空（RU1-07）。 */
+static void verifyF9pRtcmFramingAndDrain(rtos::Executor &executor)
+{
+    const auto target = app::id(app::ModuleKind::kGnss);
+    // 600 B 的 RTCM3 帧跨过 512 B 块边界：先排空首块 512 B（帧未结束），再发起 F9P 卫星命令
+    const std::string rtcm600 = makeRtcm3Frame(594U);
+    CHECK(rtcm600.size() == 600U);
+    s_f9pTxLog.clear();
+    s_f9pRecordTx = true;
+    CHECK(s_context->rtcmPipe.push(std::span<const uint8_t>{
+        reinterpret_cast<const uint8_t *>(rtcm600.data()), rtcm600.size()}));
+    // 单次 poll 只写 1 块 512 B，此时处于 RTCM3 帧中部
+    static_cast<void>(s_context->gnss.poll(s_now));
+    CHECK(s_f9pTxLog.size() == 512U);
+    // 发起 F9P 截止角修改，下一次 poll 必须先发完剩余 88 B RTCM3 再在偏移 600 插入 UBX VALSET
+    fw::Command cutoffCmd{.target = target,
+                          .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack),
+                          .argLen = 1U};
+    cutoffCmd.args[0] = 30U;
+    rtos::Ticket tBoundary{};
+    CHECK(fw::isOk(executor.post(cutoffCmd, rtos::Caller::kWeb, tBoundary)));
+    rtos::ExecutorTestAccess::drain(executor);
+    advance(700U);
+    fw::CommandResult res{};
+    CHECK(executor.poll(tBoundary, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kOk);
+    CHECK(s_f9pTxLog.size() > 602U);
+    CHECK(std::memcmp(s_f9pTxLog.data(), rtcm600.data(), 600U) == 0);
+    CHECK((static_cast<uint8_t>(s_f9pTxLog[600U]) == 0xB5U) &&
+          (static_cast<uint8_t>(s_f9pTxLog[601U]) == 0x62U));
+    s_f9pRecordTx = false;
+
+    // 满载管道在 1000 ms 超时 + 300 ms 重同步期间持续排空，总写入 > 4096 B 仍零溢出
+    s_f9pDropSatAck = true;
+    const uint32_t droppedBefore = s_context->rtcmPipe.stats().droppedBytes;
+    const uint32_t writtenBefore = s_context->rtcmPipe.stats().writtenBytes;
+    cutoffCmd.args[0] = 15U;
+    rtos::Ticket tTimeout{};
+    CHECK(fw::isOk(executor.post(cutoffCmd, rtos::Caller::kWeb, tTimeout)));
+    rtos::ExecutorTestAccess::drain(executor);
+    const std::string rtcm400 = makeRtcm3Frame(394U);
+    for (unsigned step = 0U; step < 75U; ++step) {
+        if (step < 14U) {
+            CHECK(s_context->rtcmPipe.push(std::span<const uint8_t>{
+                reinterpret_cast<const uint8_t *>(rtcm400.data()), rtcm400.size()}));
+        }
+        advance(20U);
+    }
+    s_f9pDropSatAck = false;
+    CHECK(executor.poll(tTimeout, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kTimeout);
+    CHECK(s_context->rtcmPipe.stats().droppedBytes == droppedBefore);
+    CHECK((s_context->rtcmPipe.stats().writtenBytes - writtenBefore) >= 5600U);
+}
+
+/** @brief 验证遗留 gps=0 NVS blob 在重放失败后，6 字节 gps=0 仍拒但 1/2 字节补丁归一化 GPS=1 恢复（NRU1-02）。 */
+static void verifyF9pLegacyGps0FailedReplay(nvs_handle_t nvs, std::span<uint8_t> demux,
+                                            std::span<uint8_t> pipe)
+{
+    const core::SatTrackConfig legacyBlob{
+        .cutoffDeg = 12U, .gps = 0U, .glo = 1U, .bds = 1U, .gal = 1U, .sbas = 0U};
+    const auto encodedLegacy = core::encodeSatTrackConfig(legacyBlob);
+    CHECK(app::store::writeBlob(app::store::kPhoneSatCfgKey, encodedLegacy) == ESP_OK);
+    // 启动期间丢弃卫星 VALSET ACK，使冷启重放超时失败，gnssSatTrack 保持 gps=0。
+    s_f9pMode = true;
+    s_f9pFw = "HPG 1.32";
+    s_f9pDropSatAck = true;
+    s_f9pRecordTx = false;
+    s_f9pFailNextWrite = false;
+    s_f9pSatValsets = 0U;
+    s_f9pTxLog.clear();
+    s_lastF9pSatValsetLen = 0U;
+    s_rx.clear();
+    s_readyAt = 0U;
+    s_receiverBaud = 115200U;
+    s_p2 = true;
+    s_context = &s_f9pContexts[2U];
+    s_context->bindContexts();
+    s_context->data.gnssLatestGsv.bindLock({});
+    CHECK(fw::isOk(s_context->gnss.bindStorage(demux)));
+    CHECK(fw::isOk(s_context->rtcmPipe.bindStorage(pipe)));
+    CHECK(nvs_set_u32(nvs, "baud", 115200U) == ESP_OK);
+    CHECK(nvs_set_u32(nvs, "cache_baud", 115200U) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "family", static_cast<uint8_t>(gnss::Family::kUblox)) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "model", static_cast<uint8_t>(gnss::Model::kZedF9p)) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "rate", 1U) == ESP_OK);
+    CHECK(s_context->storage.loadKeys(app::gnss_store::kConfigKeys).failed == 0U);
+    CHECK(s_context->storage.loadKeys(app::gnss_store::kCacheKeys).failed == 0U);
+    s_context->bootConfig.gnssBaud = 115200U;
+    s_context->bootConfig.userNvsReady = true;
+    s_context->boardProfile = app::board::byId(app::board::BoardId::kP2V141);
+    s_context->data.gnssSatTrack.write(legacyBlob);
+    CHECK(fw::isOk(s_context->gnss.init()));
+    CHECK(fw::isOk(s_context->gnss.start()));
+    advance(4500U);
+    CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
+    CHECK(s_f9pSatValsets >= 1U);
+    // 重放失败后 RAM 快照仍为 gps=0。
+    CHECK(s_context->data.gnssSatTrack.read()->gps == 0U);
+    s_f9pDropSatAck = false;
+
+    rtos::Executor executor{};
+    app::ExecutorControlStorage<4U> control{};
+    std::array<StackType_t, 256U> stack{};
+    const auto execId = app::id(app::ExecKind::kIo);
+    const auto target = app::id(app::ModuleKind::kGnss);
+    fw::ModuleOps ops{};
+    ops.onCommand = [](void *self, const fw::Command &cmd, fw::CommandResult &out) noexcept {
+        static_cast<app::GnssModule *>(self)->onCommand(cmd, out);
+    };
+    const std::array modules{fw::Module{
+        .name = "gnss", .id = target, .executor = execId, .self = &s_context->gnss, .ops = &ops}};
+    CHECK(fw::isOk(executor.init({.name = "io", .id = execId, .priority = 9U}, modules,
+                                 app::viewOf(control, stack))));
+    s_context->ioExecutor = &executor;
+    rtos::ExecutorTestAccess::bind(executor, &control.tcb);
+    auto postCmd = [&](const fw::Command &cmd) {
+        rtos::Ticket t{};
+        CHECK(fw::isOk(executor.post(cmd, rtos::Caller::kWeb, t)));
+        rtos::ExecutorTestAccess::drain(executor);
+        return t;
+    };
+    fw::CommandResult res{};
+
+    // 1. 6 字节全量请求含 gps=0 仍必须被拒（kInvalidArg）。
+    fw::Command fullGps0{.target = target,
+                         .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack),
+                         .argLen = static_cast<uint8_t>(encodedLegacy.size())};
+    std::memcpy(fullGps0.args.data(), encodedLegacy.data(), encodedLegacy.size());
+    CHECK(executor.poll(postCmd(fullGps0), res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kInvalidArg);
+
+    // 2. 1 字节 cutoff 补丁在 gps=0 遗留态下归一化 gps=1 并成功落盘，不得锁死网页配置。
+    fw::Command cutoffCmd{.target = target,
+                          .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack),
+                          .argLen = 1U};
+    cutoffCmd.args[0] = 22U;
+    const auto tCutoff = postCmd(cutoffCmd);
+    advance(700U);
+    CHECK(executor.poll(tCutoff, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kOk);
+    const auto afterCutoff = s_context->data.gnssSatTrack.read();
+    CHECK(afterCutoff.has_value() && (afterCutoff->cutoffDeg == 22U) && (afterCutoff->gps == 1U));
+
+    // 3. 2 字节非 GPS 星座补丁在 gps=0 遗留态下同样归一化 gps=1 并成功落盘。
+    s_context->data.gnssSatTrack.write(legacyBlob);
+    fw::Command bdsPatch{.target = target,
+                         .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack),
+                         .argLen = 2U};
+    bdsPatch.args[0] = settings::const_bit::kBds;
+    bdsPatch.args[1] = 0U;
+    const auto tBds = postCmd(bdsPatch);
+    advance(700U);
+    CHECK(executor.poll(tBds, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kOk);
+    const auto afterBds = s_context->data.gnssSatTrack.read();
+    CHECK(afterBds.has_value() && (afterBds->bds == 0U) && (afterBds->gps == 1U));
+
+    rtos::ExecutorTestAccess::bind(executor, nullptr);
+    s_context->ioExecutor = nullptr;
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+}
+
+/** @brief 验证拆包 RTCM3 帧未到帧尾时控制器写操作必须延后至帧尾或 200 ms stall（NRU1-03）。 */
+static void verifyF9pControllerWriteRtcmSplitFrame(rtos::Executor &executor)
+{
+    const auto target = app::id(app::ModuleKind::kGnss);
+    const std::string rtcm200 = makeRtcm3Frame(194U);
+    CHECK(rtcm200.size() == 200U);
+    s_f9pTxLog.clear();
+    s_f9pRecordTx = true;
+
+    // 先仅推送前 80 B（RTCM3 帧拆包，后 120 B 尚未到达）。
+    CHECK(s_context->rtcmPipe.push(
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t *>(rtcm200.data()), 80U}));
+    static_cast<void>(s_context->gnss.poll(s_now));
+    CHECK(s_f9pTxLog.size() == 80U);
+
+    // 发起会触发控制器写（kConfiguring VALSET）的速率切换，帧尾未到前禁止插写 UBX。
+    fw::Command rateCmd{
+        .target = target, .verb = static_cast<uint8_t>(app::GnssVerb::kSetRate), .argLen = 1U};
+    rateCmd.args[0] = 5U;
+    rtos::Ticket tRate{};
+    CHECK(fw::isOk(executor.post(rateCmd, rtos::Caller::kWeb, tRate)));
+    rtos::ExecutorTestAccess::drain(executor);
+    advance(60U);
+    CHECK(s_f9pTxLog.size() == 80U);
+
+    // 推送剩余 120 B 完成该 RTCM3 帧：控制器 UBX 写必须在精确偏移 200 处开始。
+    CHECK(s_context->rtcmPipe.push(
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t *>(rtcm200.data()) + 80U, 120U}));
+    advance(600U);
+    fw::CommandResult res{};
+    CHECK(executor.poll(tRate, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kOk);
+    CHECK(s_f9pTxLog.size() > 202U);
+    CHECK(std::memcmp(s_f9pTxLog.data(), rtcm200.data(), 200U) == 0);
+    CHECK((static_cast<uint8_t>(s_f9pTxLog[200U]) == 0xB5U) &&
+          (static_cast<uint8_t>(s_f9pTxLog[201U]) == 0x62U));
+    // 等待重配后触发的 sat_replay_ 稳定期结束，避免下一条 kSetRate 命中 kBusy。
+    advance(700U);
+
+    // 验证 200 ms stall 兜底：半帧后永不补齐后半段，200 ms 内不插写，超过 200 ms 自动推进不死锁。
+    s_f9pTxLog.clear();
+    CHECK(s_context->rtcmPipe.push(
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t *>(rtcm200.data()), 40U}));
+    static_cast<void>(s_context->gnss.poll(s_now));
+    CHECK(s_f9pTxLog.size() == 40U);
+    rateCmd.args[0] = 1U;
+    rtos::Ticket tStall{};
+    CHECK(fw::isOk(executor.post(rateCmd, rtos::Caller::kWeb, tStall)));
+    rtos::ExecutorTestAccess::drain(executor);
+    advance(100U);
+    CHECK(s_f9pTxLog.size() == 40U);
+    advance(800U);
+    CHECK(executor.poll(tStall, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kOk);
+    CHECK((s_f9pTxLog.size() > 42U) && (static_cast<uint8_t>(s_f9pTxLog[40U]) == 0xB5U) &&
+          (static_cast<uint8_t>(s_f9pTxLog[41U]) == 0x62U));
+    s_f9pRecordTx = false;
+    advance(700U);
+}
+
+/** @brief 验证 writeSeqTx 串口写失败时立即清理 ValsetTracker，不触发 1 s 假超时与 300 ms resync 阻塞（NRU1-04）。 */
+static void verifyF9pSeqWriteFailClearsTracker(rtos::Executor &executor)
+{
+    const auto target = app::id(app::ModuleKind::kGnss);
+    fw::Command cutoffCmd{.target = target,
+                          .verb = static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack),
+                          .argLen = 1U};
+    cutoffCmd.args[0] = 18U;
+    s_f9pFailNextWrite = true;
+    rtos::Ticket tFail{};
+    CHECK(fw::isOk(executor.post(cutoffCmd, rtos::Caller::kWeb, tFail)));
+    rtos::ExecutorTestAccess::drain(executor);
+    advance(40U);
+    fw::CommandResult res{};
+    CHECK(executor.poll(tFail, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kIoError);
+
+    // 越过 1000 ms 进入若残留 in_flight_ 会触发的 300 ms resync 窗口，新请求仍必须立刻被受理。
+    advance(1050U);
+    cutoffCmd.args[0] = 19U;
+    rtos::Ticket tNext{};
+    CHECK(fw::isOk(executor.post(cutoffCmd, rtos::Caller::kWeb, tNext)));
+    rtos::ExecutorTestAccess::drain(executor);
+    CHECK(executor.poll(tNext, res) == rtos::PollState::kPending);
+    advance(700U);
+    CHECK(executor.poll(tNext, res) == rtos::PollState::kDone);
+    CHECK(res.status == fw::Result::kOk);
+    CHECK(s_context->data.gnssSatTrack.read()->cutoffDeg == 19U);
+}
+
+/** @brief F9P 端到端主机回归：覆盖 RU1-02/03/04/06/07/08（能力、强制 GPS 重放、稳定期、回滚、RTCM 帧边界与零溢出）。 */
+void testGnssF9pEndToEnd()
+{
+    std::array<uint8_t, app::GnssModule::kDemuxBufBytes> demux{};
+    std::array<uint8_t, app::kRtcmPipeBytes> pipe{};
+    nvs_handle_t nvs = 0U;
+    CHECK(nvs_open("gnss", NVS_READWRITE, &nvs) == ESP_OK);
+    s_nvs = nvs;
+
+    // 场景 1：HPG 1.12 预存旧 gps=0 blob -> 能力隐藏 GPS 与 SBAS，重放强制 GPS=1 且不发 SBAS 键
+    const core::SatTrackConfig legacyBlob{
+        .cutoffDeg = 12U, .gps = 0U, .glo = 1U, .bds = 1U, .gal = 1U, .sbas = 1U};
+    const auto encodedLegacy = core::encodeSatTrackConfig(legacyBlob);
+    CHECK(app::store::writeBlob(app::store::kPhoneSatCfgKey, encodedLegacy) == ESP_OK);
+    bootF9pModule(0U, nvs, demux, pipe, "HPG 1.12", legacyBlob);
+    const auto caps112 = s_context->data.gnssCaps.read();
+    CHECK(caps112.valid && ((caps112.constMask & settings::const_bit::kGps) == 0U));
+    CHECK((caps112.constMask & settings::const_bit::kSbas) == 0U);
+    CHECK((caps112.constMask & (1U << 7U)) != 0U);
+    CHECK(s_f9pSatValsets >= 1U);
+    std::array<uint32_t, gnss::ublox::kMaxExtractedValsetKeys> replayKeys{};
+    CHECK(gnss::ublox::extractValsetKeys(std::span{s_lastF9pSatValset}.first(s_lastF9pSatValsetLen),
+                                         replayKeys) == 8U);
+    CHECK(s_context->data.gnssSatTrack.read()->gps == 1U);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
+    // 场景 2：HPG 1.32 暴露 SBAS，验证稳定期/连发/回滚/RTCM 帧边界/超时满载排空
+    bootF9pModule(1U, nvs, demux, pipe, "HPG 1.32");
+    const auto caps132 = s_context->data.gnssCaps.read();
+    CHECK((caps132.constMask & settings::const_bit::kSbas) != 0U);
+    rtos::Executor executor{};
+    app::ExecutorControlStorage<4U> control{};
+    std::array<StackType_t, 256U> stack{};
+    const auto execId = app::id(app::ExecKind::kIo);
+    const auto target = app::id(app::ModuleKind::kGnss);
+    fw::ModuleOps ops{};
+    ops.onCommand = [](void *self, const fw::Command &cmd, fw::CommandResult &out) noexcept {
+        static_cast<app::GnssModule *>(self)->onCommand(cmd, out);
+    };
+    const std::array modules{fw::Module{
+        .name = "gnss", .id = target, .executor = execId, .self = &s_context->gnss, .ops = &ops}};
+    CHECK(fw::isOk(executor.init({.name = "io", .id = execId, .priority = 9U}, modules,
+                                 app::viewOf(control, stack))));
+    s_context->ioExecutor = &executor;
+    rtos::ExecutorTestAccess::bind(executor, &control.tcb);
+    verifyF9pSettleBusyAndRollback(executor);
+    verifyF9pRtcmFramingAndDrain(executor);
+    verifyF9pControllerWriteRtcmSplitFrame(executor);
+    verifyF9pSeqWriteFailClearsTracker(executor);
+    rtos::ExecutorTestAccess::bind(executor, nullptr);
+    s_context->ioExecutor = nullptr;
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+    verifyF9pLegacyGps0FailedReplay(nvs, demux, pipe);
+    s_f9pMode = false;
     nvs_close(nvs);
 }

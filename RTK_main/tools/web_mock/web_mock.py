@@ -167,6 +167,7 @@ class MockState:
                     "gnss.const.bds": 1,
                     "gnss.const.glo": 1,
                     "gnss.const.gal": 1,
+                    "gnss.cutoff": 15,
                 }
             )
 
@@ -198,6 +199,7 @@ class MockState:
             result[key] = [0, *(p for p in candidates if p >= min_period)]
         if not self.no_const:
             result.update({key: [0, 1] for key in CONST_KEYS})
+            result["gnss.cutoff"] = {"min": 0, "max": 90}
         return result
 
     def ota_info(self) -> dict[str, object]:
@@ -947,6 +949,15 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                 if self.state.no_const:
                     out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "unsupported"})
                 elif val not in VALID_BOOL:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
+                else:
+                    self.state.config[key] = int(val)
+                    out_msgs.append({"t": "ack", "id": rid, "ok": True})
+                    out_msgs.append({"t": "config", **self.state.config})
+            elif key == "gnss.cutoff":
+                if self.state.no_const:
+                    out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "unsupported"})
+                elif not re.fullmatch(r"0|[1-9][0-9]*", val) or int(val) > 90:
                     out_msgs.append({"t": "ack", "id": rid, "ok": False, "err": "bad_value"})
                 else:
                     self.state.config[key] = int(val)

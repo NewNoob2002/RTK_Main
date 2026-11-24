@@ -10,171 +10,11 @@
 #include <span>
 #include <string_view>
 
+#include "UbloxExt.hpp"
 #include "UbloxWire.hpp"
 
 namespace gnss {
 namespace {
-
-/** 载荷写入器：定长缓冲 + 写点下标（不用指针算术，越界即失败）。 */
-struct Writer {
-    std::span<uint8_t> buf{};
-    size_t pos = 0;
-
-    /**
-     * @brief 追加 1 字节。
-     * @param v: 待写值。
-     * @retval true: 写入成功。
-     * @retval false: 空间不足。
-     */
-    bool u8(uint8_t v) noexcept
-    {
-        if (pos >= buf.size()) {
-            return false;
-        }
-        buf[pos] = v;
-        ++pos;
-        return true;
-    }
-
-    /**
-     * @brief 追加 2 字节（小端）。
-     * @param v: 待写值。
-     * @retval true: 写入成功。
-     * @retval false: 空间不足。
-     */
-    bool u16(uint16_t v) noexcept
-    {
-        const auto value = static_cast<uint32_t>(v);
-        return u8(static_cast<uint8_t>(value & ublox::kByteMask)) &&
-               u8(static_cast<uint8_t>((value >> ublox::kShift1Byte) & ublox::kByteMask));
-    }
-
-    /**
-     * @brief 追加 4 字节（小端）。
-     * @param v: 待写值。
-     * @retval true: 写入成功。
-     * @retval false: 空间不足。
-     */
-    bool u32(uint32_t v) noexcept
-    {
-        return u8(static_cast<uint8_t>(v & ublox::kByteMask)) &&
-               u8(static_cast<uint8_t>((v >> ublox::kShift1Byte) & ublox::kByteMask)) &&
-               u8(static_cast<uint8_t>((v >> ublox::kShift2Bytes) & ublox::kByteMask)) &&
-               u8(static_cast<uint8_t>((v >> ublox::kShift3Bytes) & ublox::kByteMask));
-    }
-
-    /**
-     * @brief 已写入的字节视图。
-     * @retval view: 指向内部缓冲前 pos 字节的只读视图（缓冲失效前有效）。
-     */
-    std::span<const uint8_t> view() const noexcept
-    {
-        return buf.first(pos);
-    }
-};
-
-/**
- * @brief 累积 UBX Fletcher 校验（命令库与应答判定共用，放在文件内）。
- * @param byte: 新字节。
- * @param ckA: 入参与输出，校验字节 A。
- * @param ckB: 入参与输出，校验字节 B。
- */
-void fletcher(uint8_t byte, uint8_t &ckA, uint8_t &ckB) noexcept
-{
-    ckA = static_cast<uint8_t>(ckA + byte);
-    ckB = static_cast<uint8_t>(ckB + ckA);
-}
-
-/**
- * @brief 写 CFG-VALSET 公共前缀（version=0，layer=RAM|BBR）。
- * @param writer: 载荷写入器。
- * @retval true: 写入成功。
- * @retval false: 空间不足。
- */
-bool beginValset(Writer &writer) noexcept
-{
-    return writer.u8(ublox::kVersetVersion) && writer.u8(ublox::kLayerRamBbr) && writer.u8(0x00) &&
-           (writer.pos == ublox::kValsetHeadBytes);
-}
-
-/**
- * @brief 写入 HPG 1.32 的四字节 CFG-VALSET v0 头。
- * @param writer: 载荷写入器。
- * @param layers: 目标层位图。
- * @retval true 已写入；false 缓冲不足。
- */
-bool beginValset(Writer &writer, uint8_t layers) noexcept
-{
-    return writer.u8(ublox::kVersetVersion) && writer.u8(layers) && writer.u16(0U);
-}
-
-/**
- * @brief 追加一个 U1 键值项（键 4 字节 + 值 1 字节）。
- * @param writer: 载荷写入器。
- * @param key: 配置键。
- * @param value: 值。
- * @retval true: 写入成功。
- * @retval false: 空间不足。
- */
-bool addU1Item(Writer &writer, uint32_t key, uint8_t value) noexcept
-{
-    const size_t start = writer.pos;
-    return writer.u32(key) && writer.u8(value) && ((writer.pos - start) == ublox::kU1ItemBytes);
-}
-
-/**
- * @brief 追加一个 U2 键值项（键 4 字节 + 值 2 字节）。
- * @param writer: 载荷写入器。
- * @param key: 配置键。
- * @param value: 值。
- * @retval true: 写入成功。
- * @retval false: 空间不足。
- */
-bool addU2Item(Writer &writer, uint32_t key, uint16_t value) noexcept
-{
-    const size_t start = writer.pos;
-    return writer.u32(key) && writer.u16(value) && ((writer.pos - start) == ublox::kU2ItemBytes);
-}
-
-/**
- * @brief 追加一个 U4 键值项（键 4 字节 + 值 4 字节）。
- * @param writer: 载荷写入器。
- * @param key: 配置键。
- * @param value: 值。
- * @retval true: 写入成功。
- * @retval false: 空间不足。
- */
-bool addU4Item(Writer &writer, uint32_t key, uint32_t value) noexcept
-{
-    const size_t start = writer.pos;
-    return writer.u32(key) && writer.u32(value) && ((writer.pos - start) == ublox::kU4ItemBytes);
-}
-
-/**
- * @brief 追加一个 I1 键值项（键 4 字节 + 有符号 1 字节）。
- * @param writer: 载荷写入器。
- * @param key: 配置键。
- * @param value: 有符号值。
- * @retval true: 写入成功。
- * @retval false: 空间不足。
- */
-bool addI1Item(Writer &writer, uint32_t key, int8_t value) noexcept
-{
-    return addU1Item(writer, key, static_cast<uint8_t>(value));
-}
-
-/**
- * @brief 追加一个 I4 键值项（键 4 字节 + 有符号 4 字节）。
- * @param writer: 载荷写入器。
- * @param key: 配置键。
- * @param value: 有符号值。
- * @retval true: 写入成功。
- * @retval false: 空间不足。
- */
-bool addI4Item(Writer &writer, uint32_t key, int32_t value) noexcept
-{
-    return addU4Item(writer, key, static_cast<uint32_t>(value));
-}
 
 constexpr uint8_t kTmodeDisabled = 0U;
 constexpr uint8_t kTmodeSurveyIn = 1U;
@@ -240,27 +80,7 @@ uint8_t rtcmPeriodToEpochs(uint32_t periodMs, uint8_t navRateHz) noexcept
 bool UbloxReceiver::cmdBuildFrame(CmdBuf &out, uint8_t cls, uint8_t id,
                                   std::span<const uint8_t> payload) noexcept
 {
-    if (payload.size() > ublox::kMaxPayload) {
-        return false;
-    }
-    const std::array<uint8_t, ublox::kHeaderBytes> header{
-        ublox::kSync1,
-        ublox::kSync2,
-        cls,
-        id,
-        static_cast<uint8_t>(payload.size() & ublox::kByteMask),
-        static_cast<uint8_t>((payload.size() >> ublox::kShift1Byte) & ublox::kByteMask)};
-    uint8_t ckA = 0;
-    uint8_t ckB = 0;
-    for (size_t i = ublox::kSyncBytes; i < header.size(); ++i) {
-        fletcher(header[i], ckA, ckB);
-    }
-    for (const uint8_t b : payload) {
-        fletcher(b, ckA, ckB);
-    }
-    const std::array<uint8_t, ublox::kCrcBytes> checksum{ckA, ckB};
-    out.clear();
-    return out.append(header) && out.append(payload) && out.append(checksum);
+    return ublox::encodeUbxFrame(out, cls, id, payload);
 }
 
 /**
@@ -273,10 +93,10 @@ bool UbloxReceiver::cmdBuildFrame(CmdBuf &out, uint8_t cls, uint8_t id,
 bool UbloxReceiver::cmdConfigureReceiver(CmdBuf &out, uint16_t periodMs) noexcept
 {
     std::array<uint8_t, ublox::kValsetPayloadMax> payload{};
-    Writer writer{payload};
-    if (!beginValset(writer) || !addU2Item(writer, ublox::kKeyRateMeas, periodMs) ||
-        !addU1Item(writer, ublox::kKeyUart1InprotRtcm3x, 1U) ||
-        !addU1Item(writer, ublox::kKeyUart1OutprotNmea, 1U)) {
+    ublox::ValsetWriter writer{payload};
+    if (!writer.begin(ublox::kLayerRamBbr) || !writer.addU2(ublox::kKeyRateMeas, periodMs) ||
+        !writer.addU1(ublox::kKeyUart1InprotRtcm3x, 1U) ||
+        !writer.addU1(ublox::kKeyUart1OutprotNmea, 1U)) {
         return false;
     }
     return cmdBuildFrame(out, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
@@ -301,10 +121,9 @@ bool UbloxReceiver::cmdConfigurePort(CmdBuf &out, uint16_t periodMs, uint8_t por
     const uint32_t rtcmKey = port == 2U ? kUart2RtcmInput : ublox::kKeyUart1InprotRtcm3x;
     const uint32_t nmeaKey = port == 2U ? kUart2NmeaOutput : ublox::kKeyUart1OutprotNmea;
     std::array<uint8_t, ublox::kValsetPayloadMax> payload{};
-    Writer writer{payload};
-    return beginValset(writer, ublox::kLayerRam) &&
-           addU2Item(writer, ublox::kKeyRateMeas, periodMs) && addU1Item(writer, rtcmKey, 1U) &&
-           addU1Item(writer, nmeaKey, 1U) &&
+    ublox::ValsetWriter writer{payload};
+    return writer.begin(ublox::kLayerRam) && writer.addU2(ublox::kKeyRateMeas, periodMs) &&
+           writer.addU1(rtcmKey, 1U) && writer.addU1(nmeaKey, 1U) &&
            cmdBuildFrame(out, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
 }
 
@@ -318,8 +137,8 @@ bool UbloxReceiver::cmdConfigurePort(CmdBuf &out, uint16_t periodMs, uint8_t por
 bool UbloxReceiver::cmdSetBaudrate(CmdBuf &out, uint32_t baud) noexcept
 {
     std::array<uint8_t, ublox::kValsetPayloadMax> payload{};
-    Writer writer{payload};
-    if (!beginValset(writer) || !addU4Item(writer, ublox::kKeyUart1Baudrate, baud)) {
+    ublox::ValsetWriter writer{payload};
+    if (!writer.begin(ublox::kLayerRamBbr) || !writer.addU4(ublox::kKeyUart1Baudrate, baud)) {
         return false;
     }
     return cmdBuildFrame(out, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
@@ -335,12 +154,7 @@ bool UbloxReceiver::cmdSetBaudrate(CmdBuf &out, uint32_t baud) noexcept
  */
 bool UbloxReceiver::cmdValsetMsgout(CmdBuf &out, uint32_t key, uint8_t epochs) noexcept
 {
-    std::array<uint8_t, ublox::kMsgoutPayloadMax> payload{};
-    Writer writer{payload};
-    if (!beginValset(writer) || !addU1Item(writer, key, epochs)) {
-        return false;
-    }
-    return cmdBuildFrame(out, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
+    return cmdValsetU1(out, ublox::kLayerRamBbr, key, epochs);
 }
 
 /**
@@ -354,8 +168,8 @@ bool UbloxReceiver::cmdValsetMsgout(CmdBuf &out, uint32_t key, uint8_t epochs) n
 bool UbloxReceiver::cmdValsetU1(CmdBuf &out, uint8_t layer, uint32_t key, uint8_t value) noexcept
 {
     std::array<uint8_t, ublox::kMsgoutPayloadMax> payload{};
-    Writer writer{payload};
-    return beginValset(writer, layer) && addU1Item(writer, key, value) &&
+    ublox::ValsetWriter writer{payload};
+    return writer.begin(layer) && writer.addU1(key, value) &&
            cmdBuildFrame(out, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
 }
 
@@ -480,10 +294,10 @@ bool UbloxReceiver::baudStep(uint8_t port, uint32_t baud, ConfigStep &out) const
     }
     out = ConfigStep{.expectReply = false, .switchBaud = baud};
     std::array<uint8_t, ublox::kValsetPayloadMax> payload{};
-    Writer writer{payload};
+    ublox::ValsetWriter writer{payload};
     const uint32_t key = port == 1U ? ublox::kKeyUart1Baudrate : kUart2Baud;
     // 切速只改 RAM 层，接收机持久化由手动保存触发。
-    return beginValset(writer, ublox::kLayerRam) && addU4Item(writer, key, baud) &&
+    return writer.begin(ublox::kLayerRam) && writer.addU4(key, baud) &&
            cmdBuildFrame(out.cmd, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
 }
 
@@ -496,13 +310,12 @@ bool UbloxReceiver::baudStep(uint8_t port, uint32_t baud, ConfigStep &out) const
  * @retval true: 写入成功。
  * @retval false: 载荷空间不足。
  */
-static bool fillRtcmMsgoutPayload(Writer &writer, const ModeRequest &req, uint8_t port,
+static bool fillRtcmMsgoutPayload(ublox::ValsetWriter &writer, const ModeRequest &req, uint8_t port,
                                   bool enable) noexcept
 {
     const uint32_t outprotKey =
         (port == 2U) ? ublox::kKeyUart2OutprotRtcm3x : ublox::kKeyUart1OutprotRtcm3x;
-    if (!beginValset(writer, ublox::kLayerRam) ||
-        !addU1Item(writer, outprotKey, enable ? 1U : 0U)) {
+    if (!writer.begin(ublox::kLayerRam) || !writer.addU1(outprotKey, enable ? 1U : 0U)) {
         return false;
     }
     for (size_t i = 0U; i < kBaseRtcmCount; ++i) {
@@ -514,7 +327,7 @@ static bool fillRtcmMsgoutPayload(Writer &writer, const ModeRequest &req, uint8_
             ++key;
         }
         const uint8_t epochs = enable ? rtcmPeriodToEpochs(req.rtcmPeriodMs[i], req.navRateHz) : 0U;
-        if (!addU1Item(writer, key, epochs)) {
+        if (!writer.addU1(key, epochs)) {
             return false;
         }
     }
@@ -528,7 +341,7 @@ static bool fillRtcmMsgoutPayload(Writer &writer, const ModeRequest &req, uint8_
  * @retval true: 写入成功。
  * @retval false: 载荷空间不足。
  */
-static bool fillTmodeFixedPayload(Writer &writer, const ModeRequest &req) noexcept
+static bool fillTmodeFixedPayload(ublox::ValsetWriter &writer, const ModeRequest &req) noexcept
 {
     const auto latE7 = static_cast<int32_t>(req.fixLatE9 / kE9PerE7);
     const auto latHp = static_cast<int8_t>(req.fixLatE9 % kE9PerE7);
@@ -536,16 +349,13 @@ static bool fillTmodeFixedPayload(Writer &writer, const ModeRequest &req) noexce
     const auto lonHp = static_cast<int8_t>(req.fixLonE9 % kE9PerE7);
     const int32_t heightCm = req.fixHeightMm / kMmPerCm;
     const auto heightHp = static_cast<int8_t>((req.fixHeightMm % kMmPerCm) * k01MmPerMm);
-    return beginValset(writer, ublox::kLayerRam) &&
-           addU1Item(writer, ublox::kKeyTmodeMode, kTmodeFixed) &&
-           addU1Item(writer, ublox::kKeyTmodePosType, kTmodePosLlh) &&
-           addI4Item(writer, ublox::kKeyTmodeLat, latE7) &&
-           addI1Item(writer, ublox::kKeyTmodeLatHp, latHp) &&
-           addI4Item(writer, ublox::kKeyTmodeLon, lonE7) &&
-           addI1Item(writer, ublox::kKeyTmodeLonHp, lonHp) &&
-           addI4Item(writer, ublox::kKeyTmodeHeight, heightCm) &&
-           addI1Item(writer, ublox::kKeyTmodeHeightHp, heightHp) &&
-           addU4Item(writer, ublox::kKeyTmodeFixedPosAcc, kFixedPosAcc01Mm);
+    return writer.begin(ublox::kLayerRam) && writer.addU1(ublox::kKeyTmodeMode, kTmodeFixed) &&
+           writer.addU1(ublox::kKeyTmodePosType, kTmodePosLlh) &&
+           writer.addI4(ublox::kKeyTmodeLat, latE7) && writer.addI1(ublox::kKeyTmodeLatHp, latHp) &&
+           writer.addI4(ublox::kKeyTmodeLon, lonE7) && writer.addI1(ublox::kKeyTmodeLonHp, lonHp) &&
+           writer.addI4(ublox::kKeyTmodeHeight, heightCm) &&
+           writer.addI1(ublox::kKeyTmodeHeightHp, heightHp) &&
+           writer.addU4(ublox::kKeyTmodeFixedPosAcc, kFixedPosAcc01Mm);
 }
 
 bool UbloxReceiver::modeStep(const ModeRequest &req, uint8_t idx, ConfigStep &out) const noexcept
@@ -555,14 +365,14 @@ bool UbloxReceiver::modeStep(const ModeRequest &req, uint8_t idx, ConfigStep &ou
         return false;
     }
     std::array<uint8_t, ublox::kValsetPayloadMax> payload{};
-    Writer writer{payload};
+    ublox::ValsetWriter writer{payload};
     bool ok = false;
     switch (req.action) {
     case ModeAction::kRover:
     case ModeAction::kBasePrep:
         if (idx == 0U) {
-            ok = beginValset(writer, ublox::kLayerRam) &&
-                 addU1Item(writer, ublox::kKeyTmodeMode, kTmodeDisabled);
+            ok = writer.begin(ublox::kLayerRam) &&
+                 writer.addU1(ublox::kKeyTmodeMode, kTmodeDisabled);
         } else if (idx == 1U) {
             ok = fillRtcmMsgoutPayload(writer, req, port, req.action == ModeAction::kBasePrep);
         }
@@ -570,10 +380,10 @@ bool UbloxReceiver::modeStep(const ModeRequest &req, uint8_t idx, ConfigStep &ou
     case ModeAction::kBaseSurvey:
         if ((idx == 0U) && (req.surveySeconds != 0U)) {
             const uint32_t acc01Mm = static_cast<uint32_t>(req.surveyAccCm) * kCmTo01Mm;
-            ok = beginValset(writer, ublox::kLayerRam) &&
-                 addU1Item(writer, ublox::kKeyTmodeMode, kTmodeSurveyIn) &&
-                 addU4Item(writer, ublox::kKeyTmodeSvinMinDur, req.surveySeconds) &&
-                 addU4Item(writer, ublox::kKeyTmodeSvinAccLimit, acc01Mm);
+            ok = writer.begin(ublox::kLayerRam) &&
+                 writer.addU1(ublox::kKeyTmodeMode, kTmodeSurveyIn) &&
+                 writer.addU4(ublox::kKeyTmodeSvinMinDur, req.surveySeconds) &&
+                 writer.addU4(ublox::kKeyTmodeSvinAccLimit, acc01Mm);
         }
         break;
     case ModeAction::kBaseFixed:

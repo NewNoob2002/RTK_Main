@@ -47,7 +47,8 @@
 |---|---|---|---|
 | `gnss.rate` | `1` `2` `5` `10` `20` | `GnssVerb::kSetRate` | |
 | `gnss.out.gga` `gnss.out.gsa` `gnss.out.gsv` `gnss.out.gst` `gnss.out.rmc` | 周期毫秒：`0`(关) `50` `100` `200` `500` `1000` | `GnssSubVerb::kSetOut` | 接收机不支持的组合由模块拒绝 |
-| `gnss.const.gps` `gnss.const.bds` `gnss.const.glo` `gnss.const.gal` | `0` `1` | W0 验证 CM680 `mask` 后新增动词 | W0 不通过则 v1 不提供 |
+| `gnss.const.gps` `gnss.const.bds` `gnss.const.glo` `gnss.const.gal` | `0` `1` | `kVerbGnssSetSatTrack` 2 B 补丁 | U1 接通 UM98x/CM680/ZED-F9P，保存到 NVS；ZED-F9P 必须开 GPS，`caps`/`config` 省略 `gnss.const.gps`，`set` 回 `unsupported` |
+| `gnss.cutoff` | `0`–`90` 十进制整数（度） | `kVerbGnssSetSatTrack` 1 B 补丁（U1） | 截止仰角，默认 `15`，`caps` 形如 `{"min":0,"max":90}`，保存到 NVS；越界回 `bad_value` |
 | `bt.wl.add` `bt.wl.del` | MAC `AA:BB:CC:DD:EE:FF` | `LinkVerb::kWhitelistAdd/Del` | 只写不读，结果见 `status.bt.whitelist` |
 | `bt.pair_next` | `0` `1` | 新：下次蓝牙启动时开配对窗口 | W5 定实现 |
 | `factory.sn` | 1–16 个 `[0-9A-Za-z-]` | 同控制台 `factory sn` | 需解锁 |

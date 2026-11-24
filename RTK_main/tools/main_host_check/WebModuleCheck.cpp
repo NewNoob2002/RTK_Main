@@ -34,6 +34,8 @@
 #include "driver/gpio.h"
 #include "def/StorageDef.hpp"
 #include "modules/web/WebModule.hpp"
+#include "def/GnssSubDef.hpp"
+#include "settings/Registry.hpp"
 #include "rtos/EspStatus.hpp"
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
 #include "esp_image_format.h"
@@ -1099,6 +1101,26 @@ fw::Status fromEspErr(esp_err_t err) noexcept
     }
     return fw::Status::kIoError;
 }
+
+/** 以测试线程模拟 kIo，手动推进真实执行器队列。 */
+struct ExecutorTestAccess {
+    /** @brief 绑定测试线程为执行器所有者。 @param exec: 测试执行器。 @param owner: 测试 TCB。 */
+    static void bind(Executor &exec, TaskHandle_t owner) noexcept
+    {
+        exec.task_ = owner;
+        fake_current_task = owner;
+    }
+
+    /** @brief 消费本轮排队命令。 @param exec: 测试执行器。 */
+    static void drain(Executor &exec) noexcept
+    {
+        fw::Command cmd{};
+        uint32_t count = 0U;
+        while (xQueueReceive(exec.cmd_q_, &cmd, 0) == pdTRUE) {
+            exec.processCommand(cmd, count);
+        }
+    }
+};
 } // namespace rtos
 
 namespace app {
@@ -1551,6 +1573,102 @@ void testCapsUpdates()
     static_cast<void>(s_ctx.web.poll(s_nowMs));
     runPendingWork();
     assert(s_httpd.sent.empty());
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
+/** @brief 验证真实 SettingsBackend 下 gnss.cutoff 的 get/hello/config/set 端到端链路（NRU1-01）。 */
+void testGnssCutoffRealBackend()
+{
+    resetHarness();
+    const settings::KeySpec *const cutoffSpec = settings::findKey("gnss.cutoff");
+    assert(cutoffSpec != nullptr);
+
+    // 能力未就绪前，真实 SettingsBackend::getSetting 必须拒绝读取 gnss.cutoff。
+    s_ctx.data.gnssCaps.write({});
+    settings::Value val{};
+    assert(!s_ctx.settings.get(cutoffSpec->id, val));
+
+    // 挂接真实 rtos::Executor 接收 SettingsBackend 派发的 kVerbGnssSetSatTrack 1 字节截止角补丁。
+    struct DummyGnss {
+        fw::Command lastCmd{};
+        unsigned calls = 0U;
+    } dummyGnss{};
+    rtos::Executor ioExec{};
+    app::ExecutorControlStorage<4U> control{};
+    std::array<StackType_t, 256U> stack{};
+    const auto execId = app::id(app::ExecKind::kIo);
+    const auto target = app::id(app::ModuleKind::kGnss);
+    fw::ModuleOps ops{};
+    ops.onCommand = [](void *self, const fw::Command &cmd, fw::CommandResult &out) noexcept {
+        auto *state = static_cast<DummyGnss *>(self);
+        state->lastCmd = cmd;
+        ++state->calls;
+        if ((cmd.verb == static_cast<uint8_t>(app::GnssSubVerb::kApplySatTrack)) &&
+            (cmd.argLen == 1U)) {
+            auto cfg = s_ctx.data.gnssSatTrack.read().value_or(core::SatTrackConfig::defaults());
+            cfg.cutoffDeg = cmd.args[0];
+            s_ctx.data.gnssSatTrack.write(cfg);
+            s_ctx.data.configRev.fetch_add(1U, std::memory_order_release);
+            out.status = fw::Result::kOk;
+            return;
+        }
+        out.status = fw::Result::kInvalidArg;
+    };
+    const std::array modules{fw::Module{
+        .name = "gnss", .id = target, .executor = execId, .self = &dummyGnss, .ops = &ops}};
+    assert(fw::isOk(ioExec.init({.name = "io", .id = execId, .priority = 9U}, modules,
+                                app::viewOf(control, stack))));
+    s_ctx.ioExecutor = &ioExec;
+    rtos::ExecutorTestAccess::bind(ioExec, &control.tcb);
+
+    // 填充 F9P 能力与当前快照（cutoff=12°）。
+    settings::GnssCaps caps{.valid = true, .enabled = true};
+    caps.constMask = static_cast<uint8_t>(settings::const_bit::kBds | settings::const_bit::kGlo |
+                                          settings::const_bit::kGal | (1U << 7U));
+    s_ctx.data.gnssCaps.write(caps);
+    core::SatTrackConfig initSat = core::SatTrackConfig::defaults();
+    initSat.cutoffDeg = 12U;
+    s_ctx.data.gnssSatTrack.write(initSat);
+
+    // 1. 直接经真实 SettingsBackend 读取 gnss.cutoff。
+    assert(s_ctx.settings.get(cutoffSpec->id, val));
+    assert((val.kind == settings::ValueKind::kInt) && (val.number == 12));
+
+    // 2. WS 握手后 hello.caps 与初始 config 帧必须同时携带 gnss.cutoff。
+    assert(simulateIdfV61WsHandshake(1006) == ESP_OK);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.size() >= 2U);
+    assert(s_httpd.sent[0].payload.find(R"("gnss.cutoff":{"min":0,"max":90})") !=
+           std::string::npos);
+    assert(s_httpd.sent[1].payload.find(R"("gnss.cutoff":12)") != std::string::npos);
+
+    // 3. 经 WS set 修改 gnss.cutoff=25，走真实 SettingsBackend 派发、更新并回推 config。
+    s_httpd.sent.clear();
+    assert(simulateWsFrame(1006, HTTPD_WS_TYPE_TEXT, true,
+                           R"({"t":"set","id":42,"key":"gnss.cutoff","value":"25"})") == ESP_OK);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    rtos::ExecutorTestAccess::drain(ioExec);
+    static_cast<void>(s_ctx.web.poll(s_nowMs + 10U));
+    runPendingWork();
+    assert((dummyGnss.calls == 1U) && (dummyGnss.lastCmd.argLen == 1U) &&
+           (dummyGnss.lastCmd.args[0] == 25U));
+    assert(s_ctx.settings.get(cutoffSpec->id, val) && (val.number == 25));
+    bool sawAckOk = false;
+    bool sawUpdatedConfig = false;
+    for (const auto &frame : s_httpd.sent) {
+        if (frame.payload == R"({"t":"ack","id":42,"ok":true})") {
+            sawAckOk = true;
+        }
+        if (frame.payload.find(R"("gnss.cutoff":25)") != std::string::npos) {
+            sawUpdatedConfig = true;
+        }
+    }
+    assert(sawAckOk && sawUpdatedConfig);
+
+    rtos::ExecutorTestAccess::bind(ioExec, nullptr);
+    s_ctx.ioExecutor = &s_ioExec;
     s_ctx.web.stopBoot();
     s_ctx.web.unbindStorage();
 }
@@ -2056,6 +2174,7 @@ int main()
     testIdleAbortAndExitGgaGate();
     testShutdownArbitrationAndSoftApResume();
     testCapsUpdates();
+    testGnssCutoffRealBackend();
     testCaptivePortal();
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
     testOtaHttpContract();

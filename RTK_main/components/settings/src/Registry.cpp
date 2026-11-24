@@ -25,6 +25,8 @@ constexpr size_t kAppIdxGsv = 1U;
 constexpr size_t kAppIdxGst = 3U;
 constexpr size_t kAppIdxRmc = 4U;
 constexpr size_t kAppIdxGsa = 5U;
+constexpr uint8_t kConstBitGpsRequired = 1U << 7U;
+constexpr KeyId kKeyIdGnssCutoff = static_cast<KeyId>(static_cast<uint8_t>(KeyId::kCount) + 1U);
 
 constexpr uint8_t kMinPrintableAscii = 0x20U;
 constexpr uint8_t kMinVisibleAscii = 0x21U;
@@ -294,6 +296,44 @@ bool parseFixedHex(std::string_view text, std::span<uint8_t> dst) noexcept
  * @retval Error::kOk       校验通过
  * @retval Error::kBadValue 格式错误、越界或尝试开启硬件不支持的星座
  */
+/**
+ * @brief  校验 5 个星座开关位是否符合硬件能力掩码与 F9P GPS 必开约束
+ * @param  mask: 星座能力位图（含 kConstBitGpsRequired）
+ * @param  fields: 已解析的 6 项字段（[1..5] 为 GPS/GLO/BDS/GAL/SBAS）
+ * @retval true 全部合法；false 越界、关闭必开 GPS 或开启硬件不支持的星座
+ */
+bool validateSatFlags(uint8_t mask, const std::array<int32_t, kSatTrackBytes> &fields) noexcept
+{
+    const bool gpsRequired = (mask & kConstBitGpsRequired) != 0U;
+    constexpr std::array<uint8_t, 5U> kBits{
+        const_bit::kGps, const_bit::kGlo, const_bit::kBds, const_bit::kGal, const_bit::kSbas,
+    };
+    for (size_t idx = 0U; idx < kBits.size(); ++idx) {
+        const int32_t flag = fields[idx + 1U];
+        if ((flag != 0) && (flag != 1)) {
+            return false;
+        }
+        if ((idx == 0U) && gpsRequired) {
+            if (flag == 0) {
+                return false;
+            }
+            continue;
+        }
+        if ((flag == 1) && ((mask & kBits[idx]) == 0U)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief  校验 0x06 截止角与星座字符串
+ * @param  dom: 含能力掩码的取值域
+ * @param  text: 6 段逗号分隔十进制文本
+ * @param[out] out: 成功时写入 6 字节规范值；失败保持原内容
+ * @retval Error::kOk       校验通过
+ * @retval Error::kBadValue 格式错误、越界或尝试开启硬件不支持的星座
+ */
 Error validateSatTrack(const Domain &dom, std::string_view text, CanonicalValue &out) noexcept
 {
     std::array<int32_t, kSatTrackBytes> fields{};
@@ -312,20 +352,8 @@ Error validateSatTrack(const Domain &dom, std::string_view text, CanonicalValue 
             rest.remove_prefix(sep + 1U);
         }
     }
-    if ((fields[0] < 0) || (fields[0] > kSatCutoffMaxDeg)) {
+    if ((fields[0] < 0) || (fields[0] > kSatCutoffMaxDeg) || !validateSatFlags(dom.mask, fields)) {
         return Error::kBadValue;
-    }
-    constexpr std::array<uint8_t, 5U> kBits{
-        const_bit::kGps, const_bit::kGlo, const_bit::kBds, const_bit::kGal, const_bit::kSbas,
-    };
-    for (size_t i = 0U; i < kBits.size(); ++i) {
-        const int32_t flag = fields[i + 1U];
-        if ((flag != 0) && (flag != 1)) {
-            return Error::kBadValue;
-        }
-        if ((flag == 1) && ((dom.mask & kBits[i]) == 0U)) {
-            return Error::kBadValue;
-        }
     }
     out.bytes.fill(0U);
     for (size_t i = 0U; i < kSatTrackBytes; ++i) {
@@ -477,7 +505,7 @@ void domainGgaGateMinSats(const GnssCaps &caps, bool gnssEnabled, Domain &out) n
 }
 
 /**
- * @brief  按星座能力位生成 `gnss.const.*` 的动态取值域（v1 暂不支持，返回 supported=false）
+ * @brief  按星座能力位生成 `gnss.const.*` 的动态取值域（由接收机能力掩码 constMask 决定）
  * @tparam Bit: const_bit 位掩码
  * @param  caps:        当前 GNSS 能力快照
  * @param  gnssEnabled: 固件是否启用 GNSS
@@ -556,6 +584,20 @@ void domainGnssSatTrack(const GnssCaps &caps, bool gnssEnabled, Domain &out) noe
     out = Domain{.kind = KeyKind::kSatTrack,
                  .supported = supported,
                  .mask = supported ? caps.constMask : uint8_t{0U},
+                 .minValue = 0,
+                 .maxValue = kSatCutoffMaxDeg};
+}
+
+/**
+ * @brief  生成 `gnss.cutoff`（截止仰角 0..90°）的动态取值域
+ * @param  caps:        当前 GNSS 能力快照
+ * @param  gnssEnabled: 固件是否启用 GNSS
+ * @param[out] out:     取值域输出
+ */
+void domainGnssCutoff(const GnssCaps &caps, bool gnssEnabled, Domain &out) noexcept
+{
+    out = Domain{.kind = KeyKind::kIntRange,
+                 .supported = gnssEnabled && caps.valid && (caps.constMask != 0U),
                  .minValue = 0,
                  .maxValue = kSatCutoffMaxDeg};
 }
@@ -750,6 +792,44 @@ bool encodeGnssPpp(const CanonicalValue &val, fw::Command &cmd) noexcept
 }
 
 /**
+ * @brief  编码单星座开关 `gnss.const.*` → `kVerbGnssSetSatTrack`（2 字节：{constBit, 0/1}）
+ * @tparam Bit: 星座掩码位（const_bit::kGps/kBds/kGlo/kGal）
+ * @param  val: 0/1 布尔整数
+ * @param[out] cmd: 输出命令
+ * @retval true  编码成功
+ * @retval false 参数类型错误
+ */
+template <uint8_t Bit> bool encodeGnssConst(const CanonicalValue &val, fw::Command &cmd) noexcept
+{
+    if (val.kind != CanonicalKind::kInt) {
+        return false;
+    }
+    cmd.verb = kVerbGnssSetSatTrack;
+    cmd.argLen = 2U;
+    cmd.args[0] = Bit;
+    cmd.args[1] = (val.number != 0) ? 1U : 0U;
+    return true;
+}
+
+/**
+ * @brief  编码 `gnss.cutoff` → `GnssSubVerb::kSetSatTrack`（1 字节截止角补丁 0..90°）
+ * @param  val: 规范整数（0..90）
+ * @param[out] cmd: 输出命令
+ * @retval true  编码成功
+ * @retval false 参数类型或范围错误
+ */
+bool encodeGnssCutoff(const CanonicalValue &val, fw::Command &cmd) noexcept
+{
+    if ((val.kind != CanonicalKind::kInt) || (val.number < 0) || (val.number > kSatCutoffMaxDeg)) {
+        return false;
+    }
+    cmd.verb = kVerbGnssSetSatTrack;
+    cmd.argLen = 1U;
+    cmd.args[0] = static_cast<uint8_t>(val.number);
+    return true;
+}
+
+/**
  * @brief  编码定长字节类规范值到命令参数
  * @tparam Verb: 目标模块动词
  * @tparam ExpectedBytes: 期望字节长度
@@ -771,8 +851,8 @@ bool encodeFixedBytes(const CanonicalValue &val, fw::Command &cmd) noexcept
     return true;
 }
 
-/** 全部已登记设置键的编译期注册表（下标与 KeyId 一一对应）。 */
-constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount)> kRegistry{{
+/** 全部已登记设置键的编译期注册表（前 kCount 项与 KeyId 一一对应，其后为扩展键）。 */
+constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount) + 1U> kRegistry{{
     {KeyId::kGnssRate, "gnss.rate", KeyKind::kEnum, Owner::kGnss, kVerbGnssSetRate, &encodeGnssRate,
      &domainGnssRate, PersistKind::kNvs, access::kStandardAll, true},
     {KeyId::kGnssOutGga, "gnss.out.gga", KeyKind::kEnum, Owner::kGnss, kVerbGnssSetOut,
@@ -796,14 +876,18 @@ constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount)> kRegistry{{
     {KeyId::kGnssGgaGateMinSats, "gnss.gga_gate.min_sats", KeyKind::kIntRange, Owner::kGnss,
      kVerbGnssSetGgaGate, &encodeGgaGateMinSats, &domainGgaGateMinSats, PersistKind::kNvs,
      access::kStandardAll, true},
-    {KeyId::kGnssConstGps, "gnss.const.gps", KeyKind::kBool, Owner::kGnss, 0U, nullptr,
-     &domainGnssConst<const_bit::kGps>, PersistKind::kReceiverSave, access::kStandardAll, true},
-    {KeyId::kGnssConstBds, "gnss.const.bds", KeyKind::kBool, Owner::kGnss, 0U, nullptr,
-     &domainGnssConst<const_bit::kBds>, PersistKind::kReceiverSave, access::kStandardAll, true},
-    {KeyId::kGnssConstGlo, "gnss.const.glo", KeyKind::kBool, Owner::kGnss, 0U, nullptr,
-     &domainGnssConst<const_bit::kGlo>, PersistKind::kReceiverSave, access::kStandardAll, true},
-    {KeyId::kGnssConstGal, "gnss.const.gal", KeyKind::kBool, Owner::kGnss, 0U, nullptr,
-     &domainGnssConst<const_bit::kGal>, PersistKind::kReceiverSave, access::kStandardAll, true},
+    {KeyId::kGnssConstGps, "gnss.const.gps", KeyKind::kBool, Owner::kGnss, kVerbGnssSetSatTrack,
+     &encodeGnssConst<const_bit::kGps>, &domainGnssConst<const_bit::kGps>, PersistKind::kNvs,
+     access::kStandardAll, true},
+    {KeyId::kGnssConstBds, "gnss.const.bds", KeyKind::kBool, Owner::kGnss, kVerbGnssSetSatTrack,
+     &encodeGnssConst<const_bit::kBds>, &domainGnssConst<const_bit::kBds>, PersistKind::kNvs,
+     access::kStandardAll, true},
+    {KeyId::kGnssConstGlo, "gnss.const.glo", KeyKind::kBool, Owner::kGnss, kVerbGnssSetSatTrack,
+     &encodeGnssConst<const_bit::kGlo>, &domainGnssConst<const_bit::kGlo>, PersistKind::kNvs,
+     access::kStandardAll, true},
+    {KeyId::kGnssConstGal, "gnss.const.gal", KeyKind::kBool, Owner::kGnss, kVerbGnssSetSatTrack,
+     &encodeGnssConst<const_bit::kGal>, &domainGnssConst<const_bit::kGal>, PersistKind::kNvs,
+     access::kStandardAll, true},
     {KeyId::kBtWlAdd, "bt.wl.add", KeyKind::kMac, Owner::kStorage, kVerbStorageWhitelistAdd,
      &encodeStorageMac<kVerbStorageWhitelistAdd>, &domainStaticMac, PersistKind::kNvs,
      access::kLocalOnly, false},
@@ -826,6 +910,8 @@ constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount)> kRegistry{{
     {KeyId::kPhoneSnPn, "phone.sn_pn", KeyKind::kSnPn, Owner::kStorage, kVerbStorageSetSnPn,
      &encodeFixedBytes<kVerbStorageSetSnPn, kSnPnBytes>, &domainStaticSnPn, PersistKind::kNvs,
      access::kPhoneInternal, true},
+    {kKeyIdGnssCutoff, "gnss.cutoff", KeyKind::kIntRange, Owner::kGnss, kVerbGnssSetSatTrack,
+     &encodeGnssCutoff, &domainGnssCutoff, PersistKind::kNvs, access::kStandardAll, true},
 }};
 
 } // namespace
@@ -847,11 +933,19 @@ const KeySpec *findKey(std::string_view name) noexcept
 
 const KeySpec *keyAt(KeyId id) noexcept
 {
-    const auto idx = static_cast<size_t>(id);
-    if (idx >= kRegistry.size()) {
+    if (id == KeyId::kCount) {
         return nullptr;
     }
-    return &kRegistry[idx];
+    const auto idx = static_cast<size_t>(id);
+    if ((idx < kRegistry.size()) && (kRegistry[idx].id == id)) {
+        return &kRegistry[idx];
+    }
+    for (const KeySpec &spec : kRegistry) {
+        if (spec.id == id) {
+            return &spec;
+        }
+    }
+    return nullptr;
 }
 
 Error validateValue(const KeySpec &spec, const Domain &dom, std::string_view text,

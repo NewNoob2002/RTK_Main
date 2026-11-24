@@ -189,6 +189,75 @@ void testJsonFramesAndDiff()
         std::string_view(buf.data(), cfgLen) ==
         R"({"t":"config","gnss.rate":10,"gnss.out.gsv":5000,"gga_gate":{"enabled":true,"min_sats":12},"bt.pair_next":1})");
 
+    // 当 constMask 支持星座开关时，hello.caps 与 config 均输出 gnss.const.*（0/1 整数编码）。
+    settings::GnssCaps constCaps = caps;
+    constCaps.constMask = settings::const_bit::kGps | settings::const_bit::kBds |
+                          settings::const_bit::kGlo | settings::const_bit::kGal;
+    settings::Service constService{};
+    constService.bindBackend(
+        {.ctx = &constCaps, .get = [](void *, settings::KeyId id, settings::Value &out) noexcept {
+             switch (id) {
+             case settings::KeyId::kGnssConstGps:
+                 out = {.kind = settings::ValueKind::kBool, .boolVal = true};
+                 return true;
+             case settings::KeyId::kGnssConstGlo:
+                 out = {.kind = settings::ValueKind::kBool, .boolVal = false};
+                 return true;
+             default:
+                 return false;
+             }
+         }});
+    const size_t constHelloLen = buildHelloFrame({.board = "P2",
+                                                  .fw = "6.1.0-dev",
+                                                  .btName = "P2-B5F2",
+                                                  .console = "dev",
+                                                  .factoryUnlocked = false},
+                                                 constService, constCaps, true, buf);
+    const std::string_view constHello(buf.data(), constHelloLen);
+    assert(constHello.find(R"("gnss.const.gps":[0,1])") != std::string_view::npos);
+    assert(constHello.find(R"("gnss.const.bds":[0,1])") != std::string_view::npos);
+    assert(constHello.find(R"("gnss.const.glo":[0,1])") != std::string_view::npos);
+    assert(constHello.find(R"("gnss.const.gal":[0,1])") != std::string_view::npos);
+    const size_t constCfgLen = buildConfigFrame(constService, buf);
+    assert(std::string_view(buf.data(), constCfgLen) ==
+           R"({"t":"config","gnss.const.gps":1,"gnss.const.glo":0})");
+
+    // RU1-02/08：F9P 能力掩码隐藏 gnss.const.gps，但暴露 gnss.const.bds/glo/gal 与 gnss.cutoff（0..90）。
+    constexpr uint8_t kGpsRequiredBit = 1U << 7U;
+    settings::GnssCaps f9pCaps = caps;
+    f9pCaps.constMask = kGpsRequiredBit | settings::const_bit::kBds | settings::const_bit::kGlo |
+                        settings::const_bit::kGal;
+    const settings::KeySpec *const cutoffSpec = settings::findKey("gnss.cutoff");
+    assert(cutoffSpec != nullptr);
+    const settings::KeyId cutoffId = cutoffSpec->id;
+    settings::Service f9pService{};
+    f9pService.bindBackend(
+        {.ctx = const_cast<settings::KeyId *>(&cutoffId),
+         .get = [](void *ctx, settings::KeyId id, settings::Value &out) noexcept {
+             if (id == *static_cast<const settings::KeyId *>(ctx)) {
+                 out = {.kind = settings::ValueKind::kInt, .number = 25};
+                 return true;
+             }
+             if (id == settings::KeyId::kGnssConstBds) {
+                 out = {.kind = settings::ValueKind::kBool, .boolVal = true};
+                 return true;
+             }
+             return false;
+         }});
+    const size_t f9pHelloLen = buildHelloFrame({.board = "P2",
+                                                .fw = "6.1.0-dev",
+                                                .btName = "P2-B5F2",
+                                                .console = "dev",
+                                                .factoryUnlocked = false},
+                                               f9pService, f9pCaps, true, buf);
+    const std::string_view f9pHello(buf.data(), f9pHelloLen);
+    assert(f9pHello.find("gnss.const.gps") == std::string_view::npos);
+    assert(f9pHello.find(R"("gnss.const.bds":[0,1])") != std::string_view::npos);
+    assert(f9pHello.find(R"("gnss.cutoff":{"min":0,"max":90})") != std::string_view::npos);
+    const size_t f9pCfgLen = buildConfigFrame(f9pService, buf);
+    assert(std::string_view(buf.data(), f9pCfgLen) ==
+           R"({"t":"config","gnss.const.bds":1,"gnss.cutoff":25})");
+
     // status 全量 + 差分（只发变化组）+ 可选字段省略
     StatusSnapshot s1{};
     s1.dev = {.uptimeS = 42, .heapFree = 65536, .heapMin = 50000, .reset = "software"};
