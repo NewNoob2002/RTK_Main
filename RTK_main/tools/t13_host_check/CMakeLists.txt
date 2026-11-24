@@ -91,7 +91,7 @@ set(T13_SCENARIOS
     write_stale_failure_ignored
     write_chunk_budget_shared
     unknown_handle_errors
-    gap_replies_from_task gap_pairing_window scan_pause_worker)
+    gap_replies_from_task gap_pairing_window gap_pairing_order_after_slot_free scan_pause_worker)
 
 foreach(scenario IN LISTS T13_SCENARIOS)
     add_test(NAME "t13_${scenario}" COMMAND t13_host_check "${scenario}")

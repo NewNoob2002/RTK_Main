@@ -153,6 +153,7 @@ typedef struct {
     bool submitted;
     bool attempted;
     TickType_t attempt;
+    uint32_t seq; /* 单调递增到达序号，供 worker 按到达顺序取项 */
     spp_server_ctrl_type_t type;
     uint32_t handle; /* REJECT：会话句柄；CFM_REQ：数字比较码（000000..999999） */
     uint8_t bda[SPP_SERVER_ADDR_LEN];
@@ -179,6 +180,7 @@ typedef struct {
     StaticEventGroup_t evt_group_struct;
     spp_server_rtos_t rtos;
     spp_server_ctrl_t ctrl[SPP_SERVER_CTRL_MAX];
+    uint32_t ctrl_seq; /* 控制表单调递增到达序号计数（允许无符号回绕） */
     StaticTask_t worker_tcb;
     spp_server_storage_t storage;
     bool storage_bound;
@@ -324,8 +326,8 @@ bool spp_server_ctrl_add(spp_server_ctrl_type_t type, uint32_t handle, const uin
 void spp_server_ctrl_drop_reject(uint32_t handle);
 
 /**
- * @brief  发送任务侧的控制命令处理：取一条、按类型下发、结算
- * @note  只在发送任务上下文调用，一次处理一条；PIN/CFM 应答与 REJECT 断开都在这里执行
+ * @brief  发送任务侧的控制命令处理：按到达顺序取出、按类型下发并结算
+ * @note  只在发送任务上下文调用，每轮至多处理 SPP_SERVER_CTRL_MAX 条；PIN/CFM 应答与 REJECT 断开都在这里执行
  */
 void spp_server_ctrl_process(void);
 

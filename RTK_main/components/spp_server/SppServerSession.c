@@ -248,6 +248,7 @@ bool spp_server_ctrl_add(spp_server_ctrl_type_t type, uint32_t handle, const uin
             if (s_spp.ctrl[slot].closed) {
                 s_spp.ctrl[slot].closed = false;
                 s_spp.ctrl[slot].rearmed = true;
+                s_spp.ctrl[slot].seq = ++s_spp.ctrl_seq;
             }
             added = true;
             break;
@@ -259,6 +260,7 @@ bool spp_server_ctrl_add(spp_server_ctrl_type_t type, uint32_t handle, const uin
     if (!added && (free_slot < SPP_SERVER_CTRL_MAX)) {
         const uint32_t slot = free_slot;
         memset(&s_spp.ctrl[slot], 0, sizeof(s_spp.ctrl[slot]));
+        s_spp.ctrl[slot].seq = ++s_spp.ctrl_seq;
         s_spp.ctrl[slot].type = type;
         s_spp.ctrl[slot].handle = handle;
         for (uint32_t byte = 0U; byte < SPP_SERVER_ADDR_LEN; byte++) {
@@ -406,34 +408,70 @@ static bool spp_server_pair_take(spp_server_ctrl_request_t *req, bool *accept)
 }
 
 /**
- * @brief  从会话取出待投递的控制请求并标记在途
- * @param  slot: 会话槽位下标
- * @param[out] req: 取出的请求
- * @param  now: 当前时钟节拍（用于超时判定）
- * @retval true 取到请求；false 无事可做
+ * @brief  判断控制序号 lhs 是否早于 rhs（uint32 回绕安全）
+ * @param  lhs: 待比较序号
+ * @param  rhs: 基准序号
+ * @retval true lhs 严格早于 rhs；false 相等或晚于 rhs
+ * @note   纯函数；控制表同时在途项至多 SPP_SERVER_CTRL_MAX(=4)，差值远小于 2^31。
+ */
+static bool spp_server_ctrl_seq_before(uint32_t lhs, uint32_t rhs)
+{
+    return (lhs - rhs) > (UINT32_MAX / 2U);
+}
+
+/**
+ * @brief  判断控制表槽位当前是否可被 worker 取走投递
+ * @param  slot: 控制表槽位下标
+ * @param  now: 当前时钟节拍（用于 REJECT 重试退避判定）
+ * @retval true 当前可投递；false 空槽、已投递、正在投递或处于重试退避期
  * @note   需持 s_spp_mux。
  */
-static bool spp_server_ctrl_claim_locked(uint32_t slot, spp_server_ctrl_request_t *req,
-                                         TickType_t now)
+static bool spp_server_ctrl_ready_locked(uint32_t slot, TickType_t now)
 {
-    const bool has = s_spp.ctrl[slot].in_use && !s_spp.ctrl[slot].submitted &&
-                     (!s_spp.ctrl[slot].attempted || ((now - s_spp.ctrl[slot].attempt) >=
-                                                      pdMS_TO_TICKS(SPP_SERVER_CTRL_RETRY_MS)));
-    if (!has) {
+    return s_spp.ctrl[slot].in_use && !s_spp.ctrl[slot].submitted && !s_spp.ctrl[slot].submitting &&
+           (!s_spp.ctrl[slot].attempted ||
+            ((now - s_spp.ctrl[slot].attempt) >= pdMS_TO_TICKS(SPP_SERVER_CTRL_RETRY_MS)));
+}
+
+/**
+ * @brief  从控制表取出到达序号最小（最早到达）的待投递请求并标记在途
+ * @param[out] out_slot: 命中槽位下标；返回 false 时不修改
+ * @param[out] req: 取出的请求；返回 false 时不修改
+ * @param  now: 当前时钟节拍（用于超时判定）
+ * @retval true 取到请求；false 无可投递请求
+ * @note   需持 s_spp_mux。
+ */
+static bool spp_server_ctrl_claim_oldest_locked(uint32_t *out_slot, spp_server_ctrl_request_t *req,
+                                                TickType_t now)
+{
+    uint32_t best = SPP_SERVER_CTRL_MAX;
+
+    for (uint32_t idx = 0U; idx < SPP_SERVER_CTRL_MAX; idx++) {
+        if (!spp_server_ctrl_ready_locked(idx, now)) {
+            continue;
+        }
+        if ((best == SPP_SERVER_CTRL_MAX) ||
+            spp_server_ctrl_seq_before(s_spp.ctrl[idx].seq, s_spp.ctrl[best].seq)) {
+            best = idx;
+        }
+    }
+    if (best == SPP_SERVER_CTRL_MAX) {
         return false;
     }
-    req->type = s_spp.ctrl[slot].type;
-    req->handle = s_spp.ctrl[slot].handle;
+
+    *out_slot = best;
+    req->type = s_spp.ctrl[best].type;
+    req->handle = s_spp.ctrl[best].handle;
     for (uint32_t byte = 0U; byte < SPP_SERVER_ADDR_LEN; byte++) {
-        req->bda[byte] = s_spp.ctrl[slot].bda[byte];
+        req->bda[byte] = s_spp.ctrl[best].bda[byte];
     }
     if (req->type == SPP_SERVER_CTRL_REJECT) {
         /* REJECT 保留在表中直到确认断开，便于 worker 重试。 */
-        s_spp.ctrl[slot].submitting = true;
-        s_spp.ctrl[slot].attempted = true;
-        s_spp.ctrl[slot].attempt = now;
+        s_spp.ctrl[best].submitting = true;
+        s_spp.ctrl[best].attempted = true;
+        s_spp.ctrl[best].attempt = now;
     } else {
-        s_spp.ctrl[slot].in_use = false;
+        s_spp.ctrl[best].in_use = false;
     }
     return true;
 }
@@ -564,21 +602,23 @@ static void spp_server_pair_process_pending(void)
 }
 
 /**
- * @brief  每轮处理所有会话待投递的控制请求
- * @note   发送任务上下文；锁内取请求，锁外投递与追踪，只有 REJECT 需锁内结算。
+ * @brief  每轮按到达顺序处理控制表中待投递的请求
+ * @note   发送任务上下文；每轮至多处理 SPP_SERVER_CTRL_MAX 条，锁内取最早到达项，锁外投递与追踪，
+ *         只有 REJECT 需锁内结算。
  */
 void spp_server_ctrl_process(void)
 {
     spp_server_pair_process_pending();
-    for (uint32_t slot = 0U; slot < SPP_SERVER_CTRL_MAX; slot++) {
+    for (uint32_t step = 0U; step < SPP_SERVER_CTRL_MAX; step++) {
+        uint32_t slot = SPP_SERVER_CTRL_MAX;
         spp_server_ctrl_request_t req = {0};
         const TickType_t now = xTaskGetTickCount();
 
         taskENTER_CRITICAL(&s_spp_mux);
-        const bool has = spp_server_ctrl_claim_locked(slot, &req, now);
+        const bool has = spp_server_ctrl_claim_oldest_locked(&slot, &req, now);
         taskEXIT_CRITICAL(&s_spp_mux);
         if (!has) {
-            continue;
+            break;
         }
 
         const esp_err_t err = spp_server_ctrl_authorize(&req);
