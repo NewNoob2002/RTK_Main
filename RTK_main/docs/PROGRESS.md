@@ -36,6 +36,7 @@
 | --- | --- |
 | B3 充电芯片探测、GPIO27 USB 检测、电池 ADC、低电关机 | 已合入 main（2026-11-24）。新 F9P P2 v1.41 HIL 通过：GPIO27 插拔、电池 ADC +30 mV、App 电量一致、无芯片时只报一行 W（报告 `docs/reports/B3-charger-usb-battery.md` §8） |
 | U1 ZED-F9P 驱动（VALSET、NMEA 静默、星座/截止角、RTCM 帧边界下发） | 已合入 main（2026-11-24）。P2 v1.41 + ZED-F9P HPG 1.12 HIL：探测/SN、无计划外 NMEA、控制台/手机 0x06/网页改星座与截止角并掉电保持、三入口拒绝关 GPS 均通过；RTK 固定解保持未测（报告 `docs/reports/U1-f9p-driver.md` §10） |
+| U2 ZED-F9P 定位频率/输出周期、NMEA 高精度 | 已合入 main（2026-11-24）。F9P 1/2/5 Hz + 整数倍周期规则（控制台/设置/网页/驱动四处），改频率周期自动对齐并持久化，回滚恢复 CFG-RATE-MEAS，不重放星座；HIGHPREC/SVNUMBERING 带 3 键 NAK 降级。室内 HIL 通过；室外项未测（报告 `docs/reports/U2-ublox-rate.md` §8） |
 | O1–O3 网页 OTA | 已合入 main（2026-11-24）。P2 v1.41 HIL 通过：升级 ~35 s、30 s 自动确认、错误码、并发 150 s 408、中止后 other=null、断 Wi-Fi、上传中长按电源键中止 |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
@@ -50,6 +51,7 @@
 - B1：E1 强制档与未知 ID 路径未测。
 - B3：REG02/REG03 写入需在 CM680 P2 v1.41（有 SGM41513）补测；<10% 低电关机未实测；新 F9P 板 I2C 只见 0x3C，充电芯片位置待原理图确认。
 - U1：室外 + 基站下，接收差分期间修改截止角/星座，确认 RTK Fixed 不中断（未测）；接入差分后计划外 NMEA 计数 `ign=4` 原文未抓。
+- U2：室外有星时确认 GGA 经纬度 7 位小数；SVNUMBERING 下真实卫星 `nmea.bad=0`；5 Hz 四星座 RTK + RTCM 满载下 VALSET 不超时、SPP 吞吐正常（均未测）。RU2-02：改频率时 rate/out 两键分开保存，部分失败会让 NVS 频率与周期不一致，待改为一次原子保存。
 - 门禁：`G2b-t13_host_check-asan` 在全量并发负载下偶发超时（`t13_disconnect_reuse_across_slots`、`t13_gap_pairing_window`），单独重跑通过；待开卡放宽时序。
 - B2：固件卡死时 10 s 硬关断 NOT_RUN；3V3/GPIO4/U3 波形未用仪表测；SGM41513 REG00–REG0B 位核对、`senseOnMv` 与硬关断时长校准、注入类项（按键毛刺、U3 30 s 未掉电回退、BT 拥塞、NVS 错误）未测；BT 关机时 SPP CLOSE 日志晚于 `device powered down` 约 0.49 s。
 - HB：关闭 Wi-Fi 的构建最小空闲堆 80,776 B，低于 81,920 B 预算，用户已接受（该构建不发布）。
