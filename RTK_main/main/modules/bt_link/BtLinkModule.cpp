@@ -44,6 +44,23 @@ constexpr size_t kSatTrackTextBuf = 24U;
 constexpr uint8_t kHexNibbleMask = 0x0FU;
 constexpr unsigned kHexHighShift = 4U;
 
+/**
+ * @brief 从板级配置与系统身份填充手机设备信息
+ * @param profile: 启动时识别的板型，nullptr 表示未知
+ * @param sn: 当前系统序列号
+ * @param[out] info: 写入产品名、硬件版本、固件版本与序列号
+ * @note 仅启动任务调用，不阻塞，非 ISR。
+ */
+void setDeviceIdentity(const board::Profile *profile, std::string_view sn,
+                       core::DeviceInfo &info) noexcept
+{
+    info.product.assign(board::productName(profile));
+    info.hwVer.assign(profile != nullptr ? profile->hardwareVersion
+                                         : board::Profile{}.hardwareVersion);
+    info.sn.assign(sn);
+    info.fwVer.assign(appVersion());
+}
+
 /** @brief 解析单个十六进制字符。 @param ch: ASCII 字符。 @param[out] out: 0..15。 @retval true 合法。 */
 bool parseHexNibble(char ch, uint8_t &out) noexcept
 {
@@ -795,10 +812,8 @@ fw::Result BtLinkModule::init() noexcept
     initLinkManager();
     auto &alarm = alarm_.emplace();
     auto &deviceService = device_service_.emplace();
-    deviceService.info().product.assign(board::productName(ctx().boardProfile));
-    deviceService.info().sn.assign(system.sn.data());
+    setDeviceIdentity(ctx().boardProfile, system.sn.data(), deviceService.info());
     last_config_rev_ = ctx().data.configRev.load(std::memory_order_acquire);
-    deviceService.info().fwVer.assign(appVersion());
     deviceService.setSatTrackSurveyHook(&core::services::PhoneCompatService::handleSurveySatTrack,
                                         &phone_compat_);
     auto &configService = config_service_.emplace();
@@ -915,6 +930,12 @@ bool BtLinkModule::poll(uint32_t /*nowMs*/) noexcept
     /* 先消费复位、SN 变更和白名单变化，再按真实时钟推进 tick。 */
     applyRtcmReset();
     syncDeviceSn();
+    if (device_service_.has_value()) {
+        auto &device = device_service_->info();
+        const auto power = ctx().data.powerStatus.read();
+        device.batteryPct = power.batteryPct;
+        device.onBattery = !power.usbPresent;
+    }
     collectWhitelistDirty();
     const uint32_t now = rtos::nowMs();
     applyPowerScanMode(now);

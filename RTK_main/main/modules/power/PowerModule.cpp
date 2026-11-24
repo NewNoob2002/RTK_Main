@@ -1,8 +1,9 @@
-// 电源按键与关机管理模块实现（kLink 执行器，B2）。
-// init 仅启动任务调用；poll 仅 kLink 调用，非阻塞；requestShutdown 任意任务安全。
+// 电源按键与关机管理模块实现（kLink 执行器）。
+// init 仅启动任务调用，可等待首组 ADC 样本；poll 仅 kLink 调用；requestShutdown 任意任务安全。
 // 堆档位：禁止区；本文件不分配堆。
 #include "modules/power/PowerModule.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cinttypes>
@@ -11,12 +12,15 @@
 #include "driver/uart.h"
 #include "esp_err.h"
 #include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
 #include "app/PowerRequests.hpp"
 #include "def/GnssSubDef.hpp"
+#include "board/BatteryAdc.hpp"
 #include "board/BoardProfile.hpp"
 #include "board/BoardStartup.hpp"
 #include "board/Charger.hpp"
@@ -33,6 +37,9 @@ constexpr uint32_t kQuiesceMaxWaitMs = 150U;    // ms，日志排空等待上限
 constexpr uint32_t kWifiQuiesceWaitMs = 5500U;  // ms，覆盖 HTTP socket 默认 5 s 超时
 constexpr uint32_t kRestartWaitMs = 150U;       // ms，异步日志和 UART 排空上限
 constexpr uint32_t kChargerPollPeriodMs = 200U; // ms，运行期 SGM41513 I2C 采样周期
+constexpr uint32_t kBatteryPeriodMs = 1000U;    // ms，组间最短等待时间
+constexpr uint32_t kBootBatterySpacingMs = 5U;  // ms，旧 P2 首组组内采样间隔
+constexpr uint32_t kBatteryFreshMs = 2000U;     // ms，超期旧读数不用于低电关机
 
 /**
  * @brief 配置单个输入 GPIO（无内部上下拉，关中断）
@@ -137,6 +144,7 @@ constexpr uint32_t kChargerPollPeriodMs = 200U; // ms，运行期 SGM41513 I2C �
            (lhs.u3On == rhs.u3On) && (lhs.usbPresent == rhs.usbPresent) &&
            (lhs.charging == rhs.charging) && (lhs.usbSource == rhs.usbSource) &&
            (lhs.chargerOk == rhs.chargerOk) && (lhs.chargerReg08 == rhs.chargerReg08) &&
+           (lhs.batteryMv == rhs.batteryMv) && (lhs.batteryPct == rhs.batteryPct) &&
            (lhs.bootMode == rhs.bootMode) && (lhs.powerOn == rhs.powerOn) &&
            (lhs.shutdownStage == rhs.shutdownStage) && (lhs.lastShutdown == rhs.lastShutdown) &&
            (lhs.shortPresses == rhs.shortPresses) && (lhs.longPresses == rhs.longPresses);
@@ -158,16 +166,29 @@ bool requestShutdown(board::ShutdownReason reason) noexcept
 bool PowerModule::configureInputPins() noexcept
 {
     const auto &profile = board::current();
-    const std::array pins{profile.powerKey.keyDetectGpio, profile.powerHold.senseGpio,
-                          profile.powerKey.usbDetectGpio, profile.powerKey.chgStatGpio};
-    for (const int pin : pins) {
-        const esp_err_t err = configPlainInput(pin);
-        if (err != ESP_OK) {
-            FW_LOGE(fw::TraceCat::kSys, "power input GPIO%d config failed: %s", pin,
-                    esp_err_to_name(err));
+    const auto configure = [](int pin, bool required) noexcept {
+        if (pin < 0) {
             return false;
         }
+        const esp_err_t err = configPlainInput(pin);
+        if (err == ESP_OK) {
+            return true;
+        }
+        if (required) {
+            FW_LOGE(fw::TraceCat::kSys, "power input GPIO%d config failed: %s", pin,
+                    esp_err_to_name(err));
+        } else {
+            FW_LOGW(fw::TraceCat::kSys, "power input GPIO%d unavailable: %s", pin,
+                    esp_err_to_name(err));
+        }
+        return false;
+    };
+    if (!configure(profile.powerKey.keyDetectGpio, true) ||
+        !configure(profile.powerHold.senseGpio, true)) {
+        return false;
     }
+    usbGpioAvailable_ = configure(profile.powerKey.usbDetectGpio, false);
+    statGpioAvailable_ = configure(profile.powerKey.chgStatGpio, false);
     return true;
 }
 
@@ -196,20 +217,34 @@ fw::Result PowerModule::init() noexcept
     chargerRetry_ = false;
     lastChargerStatus_ = board::ChargerInputStatus{};
     active_ = true;
-    const PinLevels pins = samplePins(0U, true);
+    initBattery(profile.batteryAdcGpio);
+    const PinLevels pins = samplePins(rtos::nowMs(), true);
     publishSnapshot(pins, true);
-    FW_LOGI(fw::TraceCat::kSys, "power module ready mode=%s power_on=%s press_ms=%" PRIu32,
-            board::bootModeName(ctx().bootMode), board::powerOnReasonName(ctx().powerOnReason),
-            kPowerOffPressMs);
+    // 在线与否由启动探测决定；GPIO27 可用时无需额外读 REG08。
+    const char *const charger = board::charger::isReady() ? "ok" : "absent";
+    if (batteryPct_ == board::kBatteryPctUnknown) {
+        FW_LOGI(fw::TraceCat::kSys, "charger=%s usb=%u src=%s bat=n/a n/a", charger,
+                pins.usbPresent ? 1U : 0U, board::usbSourceName(pins.usbSource));
+    } else {
+        FW_LOGI(fw::TraceCat::kSys, "charger=%s usb=%u src=%s bat=%" PRIu32 "mV %u%%", charger,
+                pins.usbPresent ? 1U : 0U, board::usbSourceName(pins.usbSource), batteryMv_,
+                static_cast<unsigned>(batteryPct_));
+    }
     return fw::Result::kOk;
 }
 
 PowerModule::PinLevels PowerModule::samplePins(uint32_t nowMs, bool forceChargerRead) noexcept
 {
     const auto &profile = board::current();
-    const bool charging =
-        readPinActive(profile.powerKey.chgStatGpio, profile.powerKey.chgActiveLow);
-    if ((profile.charger.i2cPort >= 0) &&
+    const auto gpioUsb = usbGpioAvailable_
+                             ? std::optional{readPinActive(profile.powerKey.usbDetectGpio,
+                                                           profile.powerKey.usbActiveLow)}
+                             : std::nullopt;
+    const auto stat = statGpioAvailable_
+                          ? std::optional{readPinActive(profile.powerKey.chgStatGpio,
+                                                        profile.powerKey.chgActiveLow)}
+                          : std::nullopt;
+    if (!gpioUsb.has_value() && board::charger::isReady() &&
         (forceChargerRead || (shutdownSm_.stage() != board::ShutdownStage::kQuiesce &&
                               (chargerRetry_ || !chargerSampled_ ||
                                nowMs - lastChargerPollMs_ >= kChargerPollPeriodMs)))) {
@@ -220,20 +255,101 @@ PowerModule::PinLevels PowerModule::samplePins(uint32_t nowMs, bool forceCharger
             chargerSampled_ = true;
         }
     }
-    const board::UsbDetection usb =
-        board::decideUsbPresent(lastChargerStatus_, charging, profile.powerKey.chgStatGpio >= 0);
+    const board::UsbDetection usb = board::decideUsbPresent(gpioUsb, lastChargerStatus_, stat);
     const bool fresh =
         chargerSampled_ && !chargerRetry_ && nowMs - lastChargerPollMs_ < kChargerPollPeriodMs;
     return PinLevels{
         .keyPressed = readPinActive(profile.powerKey.keyDetectGpio, profile.powerKey.keyActiveLow),
         .u3On = readPinActive(profile.powerHold.senseGpio, false),
         .usbPresent = usb.present,
-        .usbKnown = fresh && (lastChargerStatus_.ok || usb.present),
-        .charging = charging,
+        // STAT 高也可能是充满；REG08 缓存遇到争用时不能用于断电决策。
+        .usbKnown = gpioUsb.has_value() || (fresh && lastChargerStatus_.ok) ||
+                    (usb.source == board::UsbSource::kStat && usb.present),
+        .charging = stat.value_or(false),
         .usbSource = usb.source,
         .chargerOk = lastChargerStatus_.ok,
         .chargerReg08 = lastChargerStatus_.rawReg08,
     };
+}
+
+void PowerModule::initBattery(int gpio) noexcept
+{
+    batterySampleCount_ = 0U;
+    lastBatterySampleMs_ = 0U;
+    batteryMv_ = 0U;
+    batteryPct_ = board::kBatteryPctUnknown;
+    lowBattery_ = {};
+    const auto status = board::initBatteryAdc(gpio);
+    batteryAdcReady_ = fw::isOk(status);
+    if (!batteryAdcReady_) {
+        if (status != fw::Status::kNotFound) {
+            FW_LOGW(fw::TraceCat::kSys, "<battery> ADC init failed (%s)", fw::toString(status));
+        }
+        return;
+    }
+    for (size_t i = 0U; i < kBatterySamples; ++i) {
+        const auto sample = takeBatterySample(rtos::nowMs());
+        if (!fw::isOk(sample)) {
+            FW_LOGW(fw::TraceCat::kSys, "<battery> first sample failed (%s)", fw::toString(sample));
+            break;
+        }
+        if (i + 1U < kBatterySamples) {
+            vTaskDelay(pdMS_TO_TICKS(kBootBatterySpacingMs));
+        }
+    }
+    lastBatteryBatchMs_ = rtos::nowMs();
+}
+
+fw::Status PowerModule::takeBatterySample(uint32_t nowMs) noexcept
+{
+    const auto status = board::readBatteryAdcMv(batterySamples_[batterySampleCount_]);
+    if (!fw::isOk(status)) {
+        batterySampleCount_ = 0U;
+        batteryMv_ = 0U;
+        batteryPct_ = board::kBatteryPctUnknown;
+        return status;
+    }
+    lastBatterySampleMs_ = nowMs;
+    if (++batterySampleCount_ == kBatterySamples) {
+        // 中值抑制短时负载尖峰，采样间隔避免在同一尖峰内完成整组转换。
+        std::sort(batterySamples_.begin(), batterySamples_.end());
+        batteryMv_ =
+            (batterySamples_[kBatterySamples / 2U - 1U] + batterySamples_[kBatterySamples / 2U]) /
+            2U;
+        batteryPct_ = board::batteryPercent(batteryMv_);
+        batterySampleCount_ = 0U;
+    }
+    return fw::Status::kOk;
+}
+
+void PowerModule::pollBattery(uint32_t nowMs, const PinLevels &pins) noexcept
+{
+    if (!batteryAdcReady_) {
+        return;
+    }
+    // 在本轮采样前检查间隔，避免将轮询中断跨过的时间计入连续低电。
+    const bool fresh = nowMs - lastBatterySampleMs_ < kBatteryFreshMs;
+    if (nowMs - lastBatteryBatchMs_ >= kBatteryPeriodMs) {
+        const bool wasValid = batteryPct_ != board::kBatteryPctUnknown;
+        const auto status = takeBatterySample(nowMs);
+        if (batterySampleCount_ == 0U) {
+            lastBatteryBatchMs_ = nowMs;
+        }
+        if (!fw::isOk(status) && wasValid) {
+            FW_LOGW(fw::TraceCat::kSys, "<battery> ADC sample lost (%s)", fw::toString(status));
+        }
+    }
+    const bool onBattery = pins.usbKnown && !pins.usbPresent;
+    if (ctx().bootMode != board::BootMode::kNormal ||
+        !power::s_power_requests.canScheduleRestart()) {
+        lowBattery_ = {};
+        return;
+    }
+    if (lowBattery_.isDue(nowMs, onBattery && fresh, batteryPct_) &&
+        power::requestShutdown(board::ShutdownReason::kLowBattery)) {
+        FW_LOGW(fw::TraceCat::kSys, "<battery> low battery shutdown at %" PRIu32 " mV", batteryMv_);
+        lowBattery_ = {};
+    }
 }
 
 void PowerModule::setKeyDrive(bool high) noexcept
@@ -531,6 +647,8 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         .usbSource = pins.usbSource,
         .chargerOk = pins.chargerOk,
         .chargerReg08 = pins.chargerReg08,
+        .batteryPct = batteryPct_,
+        .batteryMv = batteryMv_,
         .bootMode = ctx().bootMode,
         .powerOn = ctx().powerOnReason,
         .shutdownStage = shutdownSm_.stage(),
@@ -538,6 +656,11 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         .shortPresses = shortPresses_,
         .longPresses = longPresses_,
     };
+    if (!force && (next.usbPresent != lastSnapshot_.usbPresent ||
+                   next.usbSource != lastSnapshot_.usbSource)) {
+        FW_LOGI(fw::TraceCat::kSys, "<power> usb=%u src=%s", next.usbPresent ? 1U : 0U,
+                board::usbSourceName(next.usbSource));
+    }
     if (force || !snapshotEqual(next, lastSnapshot_)) {
         lastSnapshot_ = next;
         ctx().data.powerStatus.write(next);
@@ -580,6 +703,7 @@ bool PowerModule::poll(uint32_t nowMs) noexcept
         break;
     }
 
+    pollBattery(nowMs, pins);
     if (ctx().bootMode == board::BootMode::kChargeStandby) {
         handleChargeStandbyPowerOn(rtos::nowMs(), event == board::KeyEvent::kLongHold, pins.u3On);
     } else {

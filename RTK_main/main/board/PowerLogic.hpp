@@ -38,7 +38,7 @@ enum class KeyEvent : uint8_t {
     kLongHold,
 };
 
-/** 关机请求来源（预留 kLowBattery 与 kPhone）。 */
+/** 关机请求来源（含低电关机，kPhone 预留）。 */
 enum class ShutdownReason : uint8_t {
     kNone = 0,
     kKey,
@@ -67,14 +67,12 @@ inline constexpr uint32_t kShutdownCutTimeoutMs = 30000U; // ms，断电超时�
 
 // SGM41513 寄存器与位定义（BQ25601 兼容映射，待实板 `power charger` dump 核对）。
 inline constexpr uint8_t kSgmReg00 = 0x00U;
-inline constexpr uint8_t kSgmReg02 = 0x02U;  // [5:0] ICHG 充电电流（V2.7 置 51，保留 [7:6]）
-inline constexpr uint8_t kSgmReg03 = 0x03U;  // [7:4] IPRECHG，[3:0] ITERM（V2.7 置 0xF8）
+inline constexpr uint8_t kSgmReg02 = 0x02U;  // [5:0] ICHG 充电电流
+inline constexpr uint8_t kSgmReg03 = 0x03U;  // [7:4] IPRECHG，[3:0] ITERM
 inline constexpr uint8_t kSgmReg08 = 0x08U;  // [7:5] VBUS_STAT，[4:3] CHRG_STAT，[2] PG_STAT
 inline constexpr uint8_t kSgmReg0A = 0x0AU;  // [7] VBUS_GD
 inline constexpr uint8_t kSgmRegCount = 12U; // REG00..REG0B 共 12 个寄存器
 
-inline constexpr uint8_t kSgmReg02PreserveMask = 0xC0U;
-inline constexpr uint8_t kSgmReg02IchgMask = 0x3FU;
 inline constexpr uint8_t kSgmReg08VbusShift = 5U;
 inline constexpr uint8_t kSgmReg08VbusMask = 0x07U;
 inline constexpr uint8_t kSgmReg08ChrgShift = 3U;
@@ -82,11 +80,12 @@ inline constexpr uint8_t kSgmReg08ChrgMask = 0x03U;
 inline constexpr uint8_t kSgmReg08PgBit = 1U << 2U;
 inline constexpr uint8_t kSgmReg0AVbusGdBit = 1U << 7U;
 
-/** USB 在位检测来源（i2c 优先，失败退化到 GPIO2 STAT，无硬件时为 none）。 */
+/** USB 在位检测来源（GPIO27 → I2C REG08 → GPIO2 STAT）。 */
 enum class UsbSource : uint8_t {
     kNone = 0,
     kI2c,
     kStat,
+    kGpio,
 };
 
 /** SGM41513 REG08 解码后的输入电源与充电状态。 */
@@ -98,7 +97,7 @@ struct ChargerInputStatus {
     uint8_t rawReg08 = 0U;
 };
 
-/** 综合 I2C 与 STAT 退化后的 USB 在位判定结果。 */
+/** USB 在位判定结果。 */
 struct UsbDetection {
     bool present = false;
     UsbSource source = UsbSource::kNone;
@@ -107,7 +106,7 @@ struct UsbDetection {
 /**
  * @brief 取得 USB 检测来源的可读短名
  * @param source: 检测来源枚举
- * @retval 静态短名（i2c / stat / none）
+ * @retval 静态短名（gpio / i2c / stat / none）
  * @note 纯函数，线程/ISR 安全。
  */
 [[nodiscard]] const char *usbSourceName(UsbSource source) noexcept;
@@ -130,28 +129,44 @@ struct UsbDetection {
 void updateChargerSample(ChargerInputStatus &last, fw::Status status, uint8_t raw) noexcept;
 
 /**
- * @brief 按 V2.7 语义计算 SGM41513 REG02 目标值（保留高 2 位，写入低 6 位 ICHG 编码）
- * @param currentVal: 当前 REG02 读回值
- * @param ichgCode: 目标低 6 位充电电流编码（V2.7 为 51）
- * @retval 掩码合并后的 REG02 写入值
- * @note 纯函数，线程/ISR 安全。
+ * @brief 依 GPIO27、SGM41513 REG08、GPIO2 STAT 的顺序判定 USB 在位
+ * @param gpioPresent: GPIO27 的在位读数；未配置或配置失败时为 nullopt
+ * @param i2cStatus: 在线充电芯片的 REG08 样本
+ * @param statActive: STAT 低有效；未配置或配置失败时为 nullopt
+ * @retval 在位标志及其来源
+ * @note 纯函数，线程/ISR 安全。STAT 高无法区分无 USB 与充满。
  */
-[[nodiscard]] constexpr uint8_t maskSgmReg02(uint8_t currentVal, uint8_t ichgCode) noexcept
-{
-    return static_cast<uint8_t>((currentVal & kSgmReg02PreserveMask) |
-                                (ichgCode & kSgmReg02IchgMask));
-}
+[[nodiscard]] UsbDetection decideUsbPresent(std::optional<bool> gpioPresent,
+                                            const ChargerInputStatus &i2cStatus,
+                                            std::optional<bool> statActive) noexcept;
+
+inline constexpr uint8_t kBatteryPctUnknown = 0xFFU;
 
 /**
- * @brief 综合 SGM41513 I2C 状态与 STAT(GPIO2) 退化路径判定 USB 是否在位
- * @param i2cStatus: I2C 读取 REG08 的解码结果
- * @param statActive: STAT(GPIO2 PWR_CHG) 是否处于充电有效态（低电平）
- * @param hasStatPin: 板级是否配置了 STAT 检测脚
- * @retval 包含在位标志与来源（i2c / stat / none）的结果
- * @note 纯函数，线程/ISR 安全。已知限制：I2C 故障且电池充满（STAT 高）时退化路径无法检测到 USB。
+ * @brief 按旧 P2 电芯电压表作分段线性插值
+ * @param mv: 校准及还原分压后的电池电压（mV）
+ * @retval 0..100 的整数百分比，向下取整
+ * @note 纯函数，可跨任务或从 ISR 调用。
  */
-[[nodiscard]] UsbDetection decideUsbPresent(const ChargerInputStatus &i2cStatus, bool statActive,
-                                            bool hasStatPin = true) noexcept;
+[[nodiscard]] uint8_t batteryPercent(uint32_t mv) noexcept;
+
+/** 由 kLink 持有的低电持续计时器。 */
+class LowBatteryTimer final {
+public:
+    /**
+     * @brief 判断电池供电且低于 10% 是否已持续至少 30 s
+     * @param nowMs: 当前单调时间（ms）
+     * @param onBattery: 已可靠确认 USB 不在位
+     * @param pct: 电量百分比，未知时用 kBatteryPctUnknown
+     * @retval true 低电持续时间已达阈值
+     * @retval false 条件未满足；供电变化或电量恢复/未知会清除计时
+     * @note 由调用方串行调用，不阻塞，支持 uint32_t 时钟回绕。
+     */
+    [[nodiscard]] bool isDue(uint32_t nowMs, bool onBattery, uint8_t pct) noexcept;
+
+private:
+    std::optional<uint32_t> sinceMs_{};
+};
 
 /**
  * @brief 取得启动运行档的可读短名
@@ -188,7 +203,7 @@ void updateChargerSample(ChargerInputStatus &last, fw::Status status, uint8_t ra
 /**
  * @brief 按 GPIO25（U3 OUT）与 USB 在位状态决定 P2 启动分支
  * @param senseHigh: 拉 GPIO4 前 GPIO25 是否已高于保持阈值
- * @param usbPresent: USB 输入电源是否在位（SGM41513 REG08 优先，失败退化到 STAT）
+ * @param usbPresent: USB 输入电源是否在位（依次采用 GPIO27、在线 REG08、STAT）
  * @retval kHoldConfirm GPIO25 已高，按键开机并确认保持
  * @retval kChargeStandby GPIO25 为低且 USB 在位，进入充电待机
  * @retval kHoldRecoverWarn GPIO25 为低且无 USB，异常恢复并补按保持

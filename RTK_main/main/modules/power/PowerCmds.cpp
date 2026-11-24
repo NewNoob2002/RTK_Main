@@ -1,4 +1,4 @@
-// 电源模块控制台命令组（DEV 档，B2）：`power status`、`power off` 与 `power charger`。
+// 电源模块控制台命令组（DEV 档）：电源状态、关机、充电寄存器与 I2C 诊断。
 // 仅在 console REPL 任务调用，非 ISR；不分配堆。
 // 堆档位：禁止区；本文件不分配堆。
 #include "modules/power/PowerModule.hpp"
@@ -16,7 +16,7 @@ namespace app {
 namespace {
 
 /**
- * @brief 显示电源引脚电平、开机原因、按键计数与关机状态
+ * @brief 显示电源引脚、电池、开机原因、按键计数与关机状态
  * @param argc: 参数个数（含动词）
  * @retval 0 已输出状态
  * @retval 非零 参数错误
@@ -38,6 +38,12 @@ int cmdPowerStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::printKv("pins", "key=%u u3_on=%u usb=%u chg=%u usb_src=%s", snap.keyPressed ? 1U : 0U,
                  snap.u3On ? 1U : 0U, snap.usbPresent ? 1U : 0U, snap.charging ? 1U : 0U,
                  board::usbSourceName(snap.usbSource));
+    if (snap.batteryPct == board::kBatteryPctUnknown) {
+        cli::printKv("battery", "bat_mv=n/a bat_pct=n/a");
+    } else {
+        cli::printKv("battery", "bat_mv=%" PRIu32 " bat_pct=%u", snap.batteryMv,
+                     static_cast<unsigned>(snap.batteryPct));
+    }
     if (snap.chargerOk) {
         cli::printKv("charger", "reg08=0x%02X", static_cast<unsigned>(snap.chargerReg08));
     } else {
@@ -87,6 +93,49 @@ int cmdPowerCharger(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 }
 
 /**
+ * @brief 扫描 I2C0 的应答地址
+ * @param argc: 参数个数（含 scan 动词）
+ * @retval 0 已列出全部应答地址
+ * @retval 非零 参数错误或无法完成探测
+ * @note 仅 DEV console REPL 任务；探测每地址最多 10 ms，非 ISR。
+ */
+int cmdPowerI2cScan(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+{
+    if (argc != 1) {
+        return cli::fail("usage: power i2c scan");
+    }
+    std::array<uint8_t, board::charger::kScanAddressCount> addresses{};
+    size_t count = 0U;
+    const auto status = board::charger::scan(addresses, count);
+    cli::printSection("I2C0");
+    for (size_t i = 0U; i < count; ++i) {
+        cli::outPrintf("  0x%02X\n", static_cast<unsigned>(addresses[i]));
+    }
+    if (!fw::isOk(status)) {
+        return cli::fail("I2C scan failed: %s", fw::toString(status));
+    }
+    return 0;
+}
+
+constexpr std::array<cli::Verb, 1U> kI2cVerbs{{
+    {"scan", nullptr, "scan for responding addresses on I2C0", &cmdPowerI2cScan},
+}};
+
+/**
+ * @brief 分派 I2C 诊断子命令
+ * @param ctx: 控制台上下文
+ * @param argc: 参数个数
+ * @param argv: 参数数组
+ * @retval 0 子命令成功
+ * @retval 非零 参数或执行错误
+ * @note 仅 DEV console REPL 任务，非 ISR。
+ */
+int cmdPowerI2c(void *ctx, int argc, char **argv) noexcept
+{
+    return cli::dispatch(kI2cVerbs, ctx, argc, argv);
+}
+
+/**
  * @brief 通过电源管理发起控制台软关机请求
  * @param argc: 参数个数（含动词）
  * @retval 0 已受理关机请求
@@ -111,11 +160,12 @@ int cmdPowerOff(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-constexpr std::array<cli::Verb, 3U> kPowerVerbs{{
+constexpr std::array<cli::Verb, 4U> kPowerVerbs{{
     {"status", nullptr, "show power pins, boot reason, key counts and shutdown state",
      &cmdPowerStatus},
     {"off", nullptr, "request clean power shutdown (P2 only)", &cmdPowerOff},
     {"charger", nullptr, "dump SGM41513 registers REG00-REG0B (read-only)", &cmdPowerCharger},
+    {"i2c", "scan", "scan for responding addresses on I2C0", &cmdPowerI2c},
 }};
 
 /**
@@ -133,8 +183,9 @@ int cmdPower(void *ctx, int argc, char **argv) noexcept
 }
 
 constexpr std::array<cli::Cmd, 1U> kPowerCmds{{
-    {"power", "power [status|off|charger]: inspect power/charger state or request shutdown",
-     "[status|off|charger]", &cmdPower, nullptr},
+    {"power",
+     "power [status|off|charger|i2c scan]: inspect power/charger state or request shutdown",
+     "[status|off|charger|i2c scan]", &cmdPower, nullptr},
 }};
 
 } // namespace

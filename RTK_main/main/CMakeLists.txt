@@ -66,6 +66,7 @@ idf_component_register(
          "board/BoardProfile.cpp"
          "board/BoardStartup.cpp"
          "board/Charger.cpp"
+         "board/BatteryAdc.cpp"
          "board/PowerLogic.cpp"
          "data/AppData.cpp"
          "data/GnssAppRing.cpp"

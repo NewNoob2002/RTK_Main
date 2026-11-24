@@ -3,6 +3,7 @@
 // 堆档位：禁止区（驱动本身不分配堆；IDF i2c_new_master_bus 的一次性内部分配仅在启动期 init 发生）。
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -13,18 +14,18 @@
 namespace app::board::charger {
 
 /**
- * @brief 初始化 SGM41513 I2C 主机总线与设备句柄（幂等；i2cPort < 0 时返回 kNotFound）
+ * @brief 初始化 I2C 总线，探测到应答后添加 SGM41513（启动期幂等）
  * @param pins: 板级充电芯片 I2C 与参数配置
- * @retval kOk 已初始化或重复调用
- * @retval kNotFound 本板未配置充电芯片
+ * @retval kOk 设备已就绪（含就绪后的重复调用）
+ * @retval kNotFound 本板无充电配置、探测无应答，或总线已创建但设备未就绪时重复调用
  * @retval kInvalidArg 引脚或地址配置非法
- * @retval 其他 IDF I2C 初始化失败映射码
+ * @retval 其他 首次总线初始化、探测或添加设备失败的映射码
  * @note 启动任务调用，非 ISR，可短暂阻塞。
  */
 [[nodiscard]] fw::Status init(const ChargerPins &pins) noexcept;
 
 /**
- * @brief 查询 SGM41513 I2C 设备是否已完成初始化
+ * @brief 查询 SGM41513 是否应答启动探测且设备句柄就绪
  * @retval true 已就绪
  * @retval false 未初始化或初始化失败
  * @note 任意任务可调用，不阻塞，非 ISR。
@@ -44,19 +45,6 @@ namespace app::board::charger {
 [[nodiscard]] fw::Status readReg(uint8_t reg, uint8_t &value) noexcept;
 
 /**
- * @brief 读-改-写 SGM41513 寄存器指定掩码位（new = (cur & ~mask) | (value & mask)）
- * @param reg: 寄存器地址
- * @param mask: 需要覆盖的位掩码
- * @param value: 写入位值
- * @retval kOk 写入成功
- * @retval kInvalidState 驱动未初始化
- * @retval kTimeout I2C 传输超时
- * @retval 其他 IDF I2C 错误映射码
- * @note 任意任务可调用，互斥最多等待 20 ms，另加两次传输各最多 10 ms，非 ISR。
- */
-[[nodiscard]] fw::Status writeRegMasked(uint8_t reg, uint8_t mask, uint8_t value) noexcept;
-
-/**
  * @brief 读取并解码 REG08，互斥被占用时保留前次样本
  * @param[in,out] last: REG08 缓存；通信错误或未初始化时置为无效
  * @retval kOk 获得新样本
@@ -67,10 +55,11 @@ namespace app::board::charger {
 [[nodiscard]] fw::Status refreshInputStatus(ChargerInputStatus &last) noexcept;
 
 /**
- * @brief 移植 V2.7 充电参数：配置 REG02[5:0]=ichgCode（保留高 2 位）与 REG03=reg03
+ * @brief 保留 REG02 高两位并写入、校验其低六位；写入并校验 REG03 全字节
  * @param pins: 板级充电参数配置
- * @retval kOk 两个寄存器均写入成功
- * @retval 其他 读取或写入失败错误码（调用方仅记 W 日志，不阻断开机）
+ * @retval kOk 两个寄存器均写入成功且回读一致
+ * @retval kCorrupt 目标位回读不一致，已记录首个不一致的寄存器及字节
+ * @retval 其他 读取或写入失败错误码
  * @note 启动早期（正常开机与充电待机两条路径）调用，非 ISR。
  */
 [[nodiscard]] fw::Status applyChargeParams(const ChargerPins &pins) noexcept;
@@ -83,5 +72,22 @@ namespace app::board::charger {
  * @note 仅控制台诊断路径调用，每次读取单独持锁，非 ISR。
  */
 [[nodiscard]] fw::Status dumpRegs(std::span<uint8_t, kSgmRegCount> out) noexcept;
+
+inline constexpr uint8_t kScanFirstAddress = 0x08U;
+inline constexpr uint8_t kScanLastAddress = 0x77U;
+inline constexpr size_t kScanAddressCount = kScanLastAddress - kScanFirstAddress + 1U;
+
+/**
+ * @brief 用同一 I2C 总线扫描应答的 7 位地址；充电芯片离线时仍可手动诊断
+ * @param[out] addresses: 已应答的地址按升序写入前缀，失败时可为部分结果
+ * @param[out] count: 已写入的地址数
+ * @retval kOk 扫描完成
+ * @retval kInvalidState 总线未就绪
+ * @retval kBusy 未取得总线锁
+ * @retval 其他 探测超时或其他总线错误
+ * @note 仅 DEV 控制台调用；每地址单独持锁，锁等待最多 20 ms，探测超时 10 ms，非 ISR。
+ */
+[[nodiscard]] fw::Status scan(std::span<uint8_t, kScanAddressCount> addresses,
+                              size_t &count) noexcept;
 
 } // namespace app::board::charger
