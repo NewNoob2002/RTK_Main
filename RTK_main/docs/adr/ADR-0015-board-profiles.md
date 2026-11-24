@@ -55,6 +55,10 @@
 | `gnss` | UART 号、RX/TX GPIO、电源 GPIO（-1 = 无）、电源有效电平 |
 | `powerHold` | 方式 `kNone` / `kLatchGpio`（E1：GPIO 高电平保持） / `kKeyEmulate`（P2，见 §2.4）及参数 |
 | `safeOutputs` | 识别后立即置为安全（关闭）电平的输出脚与电平列表（≤ 8 项） |
+| `hardwareVersion` | 手机 0x01 `@24` 硬件版本字符串（B3：P2 `"V1.41"`，E1 `"V1.1.0"`） |
+| `batteryAdcGpio` | 电池电压 ADC1 脚，-1 = 无（B3：P2 GPIO34） |
+| `powerKey` | 按键、USB 检测、STAT 脚及有效电平（B2/B3） |
+| `charger` | I2C 端口/引脚/地址与 REG02[5:0]、REG03 目标值，`i2cPort=-1` = 无充电芯片（B2/B3） |
 | `features` | 位掩码：`kCellular`、`kOled`、`kImu`、`kCharger`、`kBeeper`、`kMotor`、`kLeds`（B1 只登记，不据此启停模块） |
 
 - 引脚类 Kconfig（`RTK_GNSS_RX_GPIO`、`RTK_GNSS_TX_GPIO`、`RTK_GNSS_POWER_GPIO`、`RTK_GNSS_POWER_ACTIVE_HIGH`）删除，
@@ -75,6 +79,8 @@ P2 无保持脚。GPIO4（`TELL_MCU_KEY`）经 Q16 模拟按键按下，电源�
 - ADC2 与 Wi-Fi 冲突；本固件不开 Wi-Fi，且读取只在启动早期，蓝牙启动前完成。
 - 关机（B2 实施，此处只定协议）：无 USB 供电时 GPIO4 高 2 s，然后高/低各 3.1 s 交替直至掉电（V2.7 `screen_power_off()`）；
   有 USB 供电时不能断电，改为关 4G（GPIO26 低）、复位 GNSS、进入充电显示。
+- B3 实施：有 USB 时关机请求改为重启进入 `charge_standby`（OLED 卡前无充电显示）。低电关机（无 USB、电量 <10% 持续 30 s）
+  复用 B2 关机仲裁，计时中插入 USB 取消。
 
 ### 2.5 P2 安全输出电平（识别成功后立即设置）
 
@@ -104,11 +110,11 @@ P2 无保持脚。GPIO4（`TELL_MCU_KEY`）经 Q16 模拟按键按下，电源�
 | 4 | TELL_MCU_KEY | 输出 | 电源保持 / 关机（B1 / B2） |
 | 25 | ON_OFF_ADC | ADC2 输入 | 电源通路检测（B1） |
 | 18 | PWR_KEY_DETEC | 输入 | 按键（V2.7 `key_pin`，INPUT_PULLUP），B2 |
-| 34 | BAT_V_ADC | ADC1 输入 | 电池电压（V2.7 ×2 分压），后续 |
-| 27 | VBUS_DET_ESP32 | 输入 | USB 供电检测，后续 |
+| 34 | BAT_V_ADC | ADC1 输入 | 电池电压，R217/R218 100k/100k ×2 分压，IDF 线性拟合校准（替代旧固件系数 1.12），B3；HIL：无 USB 时误差 +30 mV |
+| 27 | VBUS_DET_ESP32 | 输入 | USB 供电检测，高有效，无内部上下拉（R164/R165 100k/100k），B3 首选来源；HIL 插拔通过 |
 | 39 | USB_Detec | 输入 | SGM41513 nPG（v1.41 实板测得插拔均为 0 V 且固件读高，不可用，B2 禁用并改走 I2C 0x1A） |
-| 2 | PWR_CHG | 输入 | 充电状态 STAT（低有效，R237 10k 上拉），B2（I2C 故障退化） |
-| 21 / 22 | I2C SDA / SCL | I2C | SGM41513 充电芯片 0x1A（B2：USB 在位与充电参数）、SH1106 OLED 0x3C（后续） |
+| 2 | PWR_CHG | 输入 | 充电状态 STAT（低有效，R237 10k 上拉），B2；B3 起 USB 检测顺序 GPIO27 → I2C REG08 → STAT |
+| 21 / 22 | I2C SDA / SCL | I2C | SGM41513 充电芯片 0x1A（B3：启动探测，无应答打一行 W 后停用 I2C 路径；REG02 读改写保留 [7:6]、[5:0]=0x34 即 1980 mA，REG03=0xAA）、SH1106 OLED 0x3C（后续）。带 F9P 的新 v1.41 板扫描只见 0x3C，充电芯片位置待原理图确认 |
 | 32 / 33 | ESP32_UART_RX2 / TX2 | UART | EC600U/Air600 4G 模块，后续 |
 | 26 | 4G_PWREN | 输出 | 4G 使能（B1 置低） |
 | 13 / 15 / 23 | BEEP / MOTOR / LED_POWER_ON | 输出 | B1 置安全电平；驱动后续 |

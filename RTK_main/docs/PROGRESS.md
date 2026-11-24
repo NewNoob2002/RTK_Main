@@ -34,6 +34,7 @@
 
 | 项 | 状态 |
 | --- | --- |
+| B3 充电芯片探测、GPIO27 USB 检测、电池 ADC、低电关机 | 已合入 main（2026-11-24）。新 F9P P2 v1.41 HIL 通过：GPIO27 插拔、电池 ADC +30 mV、App 电量一致、无芯片时只报一行 W（报告 `docs/reports/B3-charger-usb-battery.md` §8） |
 | O1–O3 网页 OTA | 已合入 main（2026-11-24）。P2 v1.41 HIL 通过：升级 ~35 s、30 s 自动确认、错误码、并发 150 s 408、中止后 other=null、断 Wi-Fi、上传中长按电源键中止 |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
@@ -46,6 +47,7 @@
 - G-CM680：RTCM 注入未测；所有 RTCM 共用最后一个周期、`nmea bad` 每 5 s 加 1 的原因未查明、`unlog com1` 返回 ERROR。
 - W0：CM680 星座 MASK/UNMASK 未验证，`gnss.const.*` 暂不支持。
 - B1：E1 强制档与未知 ID 路径未测。
+- B3：REG02/REG03 写入需在 CM680 P2 v1.41（有 SGM41513）补测；<10% 低电关机未实测；新 F9P 板 I2C 只见 0x3C，充电芯片位置待原理图确认。
 - B2：固件卡死时 10 s 硬关断 NOT_RUN；3V3/GPIO4/U3 波形未用仪表测；SGM41513 REG00–REG0B 位核对、`senseOnMv` 与硬关断时长校准、注入类项（按键毛刺、U3 30 s 未掉电回退、BT 拥塞、NVS 错误）未测；BT 关机时 SPP CLOSE 日志晚于 `device powered down` 约 0.49 s。
 - HB：关闭 Wi-Fi 的构建最小空闲堆 80,776 B，低于 81,920 B 预算，用户已接受（该构建不发布）。
 - 多张实现卡（C1–C4、P1、N1、G-baud*、Q1 门控、W1）的报告只有实现方结论 NOT_RUN，此后的整机 HIL 没有逐卡单独记录。
