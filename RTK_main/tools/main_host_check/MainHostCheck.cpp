@@ -20,6 +20,7 @@ extern "C" {
 
 #include "AppTestAdapter.hpp"
 #include "app/PowerRequests.hpp"
+#include "board/BatteryAdc.hpp"
 #include "board/BoardProfile.hpp"
 #include "board/BoardStartup.hpp"
 #include "board/Charger.hpp"
@@ -96,6 +97,10 @@ bool s_use_host_task = false;
 std::array<int, 40U> s_gpioLevels{};
 unsigned s_gpio4Presses = 0U;
 bool s_chargerBusy = false;
+bool s_chargerReady = true;
+bool s_usbGpioConfigFails = false;
+bool s_batteryReadFails = false;
+uint32_t s_batteryMv = 0U;
 uint8_t s_chargerReg = app::board::kSgmReg08PgBit;
 unsigned s_chargerReads = 0U;
 esp_err_t s_scanResult = ESP_OK;
@@ -336,14 +341,19 @@ void setupPower(app::board::BootMode mode)
     ctx.boardProfile = board::byId(board::BoardId::kP2V141);
     ctx.bootMode = mode;
     s_gpioLevels[18] = 1;
+    s_gpioLevels[27] = (s_chargerReg & board::kSgmReg08PgBit) != 0U ? 1 : 0;
     CHECK(fw::isOk(ctx.power.init()));
 }
 
-/** @brief 按固定周期推进真实电源模块。 @param ticks: 轮数，每轮间隔 10 ms。 */
-void pollPower(unsigned ticks)
+/**
+ * @brief 按固定周期推进真实电源模块
+ * @param ticks: 轮数
+ * @param stepMs: 每轮间隔（ms）
+ */
+void pollPower(unsigned ticks, uint32_t stepMs = 10U)
 {
     for (unsigned n = 0U; n < ticks && s_restarts == 0U; ++n) {
-        s_clock += 10U;
+        s_clock += stepMs;
         static_cast<void>(app::appContext().power.poll(s_clock));
     }
 }
@@ -540,6 +550,7 @@ void powerBusyAtCut()
 {
     using namespace app;
     s_chargerReg = 0U;
+    s_usbGpioConfigFails = true;
     s_gpioLevels[2] = 1;
     s_gpioLevels[25] = 1;
     setupPower(board::BootMode::kNormal);
@@ -558,6 +569,154 @@ void powerBusyAtCut()
     CHECK(s_chargerReads == reads + 1U && appContext().data.powerStatus.read().usbPresent);
     pollPower(15U);
     CHECK(s_gpio4Presses == 0U && s_restarts == 1U);
+}
+
+/**
+ * @brief 查询手机 0x03 并校验供电来源与电量字节
+ * @param onBattery: 预期的电池供电标记
+ * @param batteryPct: 预期的电量字节
+ */
+void checkBatteryReport(uint8_t onBattery, uint8_t batteryPct)
+{
+    using namespace app;
+    const size_t index = s_write_calls;
+    append(0U, 0x03U, 0U, proto::msg_type::kQuery);
+    dirty(0U);
+    uint32_t tick = s_clock;
+    link_round(tick);
+    CHECK(s_write_calls == index + 1U);
+    proto::FrameParser parser{};
+    proto::FrameView reply{};
+    bool gotFrame = false;
+    for (size_t i = 0U; i < s_write_sizes[index]; ++i) {
+        if (parser.feed(s_write_bytes[index][i], reply) == proto::ParseResult::kFrame) {
+            gotFrame = true;
+        }
+    }
+    CHECK(gotFrame && reply.msgId == 0x03U && reply.payload.size() == 16U);
+    if (gotFrame && reply.payload.size() == 16U) {
+        CHECK(reply.payload[0] == onBattery && reply.payload[2] == batteryPct);
+    }
+}
+
+/** @brief 持续低电时插 USB 取消计时；拔出后重新计满并进入 B2 保存阶段。 */
+void powerLowBattery()
+{
+    using namespace app;
+    s_batteryMv = 3390U;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    const auto initial = ctx.data.powerStatus.read();
+    CHECK(initial.batteryMv == 3390U && initial.batteryPct == 5U);
+    CHECK(!initial.usbPresent && initial.usbSource == board::UsbSource::kGpio);
+    open(1U, kPhone);
+    checkBatteryReport(1U, 5U);
+    pollPower(2999U);
+    s_gpioLevels[27] = 1;
+    pollPower(3001U);
+    checkBatteryReport(0U, 5U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    s_gpioLevels[27] = 0;
+    pollPower(3000U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(2U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kSave);
+    CHECK(!power::s_power_requests.canScheduleRestart());
+    CHECK(s_chargerReads == 0U);
+}
+
+/** @brief 验证运行期 ADC 失败清空电量、上报 0xFF，恢复后重新计满 30 s。 */
+void powerBatteryReadFailure()
+{
+    using namespace app;
+    s_batteryMv = 3390U;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    open(1U, kPhone);
+    checkBatteryReport(1U, 5U);
+    pollPower(2900U);
+    s_batteryReadFails = true;
+    pollPower(130U);
+    const auto invalid = ctx.data.powerStatus.read();
+    CHECK(invalid.batteryMv == 0U && invalid.batteryPct == 0xFFU);
+    CHECK(invalid.shutdownStage == board::ShutdownStage::kIdle);
+    checkBatteryReport(1U, 0xFFU);
+
+    s_batteryReadFails = false;
+    for (unsigned i = 0U; i < 130U && ctx.data.powerStatus.read().batteryPct == 0xFFU; ++i) {
+        pollPower(1U);
+    }
+    CHECK(ctx.data.powerStatus.read().batteryPct == 5U);
+    pollPower(2999U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(2U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kSave);
+}
+
+/**
+ * @brief 验证 USB 未知或充电待机均可阻止持续低电关机
+ * @param mode: 正常模式测试 USB 未知，待机模式测试已知无 USB
+ */
+void powerLowBatteryInhibited(app::board::BootMode mode)
+{
+    using namespace app;
+    const bool unknownUsb = mode == board::BootMode::kNormal;
+    s_batteryMv = 3390U;
+    s_chargerReg = 0U;
+    s_chargerReady = !unknownUsb;
+    s_usbGpioConfigFails = unknownUsb;
+    s_gpioLevels[2] = 1;
+    s_gpioLevels[25] = 1;
+    setupPower(mode);
+    pollPower(3130U);
+    const auto snapshot = appContext().data.powerStatus.read();
+    CHECK(snapshot.batteryPct == 5U && !snapshot.usbPresent);
+    CHECK(snapshot.usbSource == (unknownUsb ? board::UsbSource::kStat : board::UsbSource::kGpio));
+    CHECK(snapshot.shutdownStage == board::ShutdownStage::kIdle);
+    CHECK(power::s_power_requests.shutdownReason() == board::ShutdownReason::kNone);
+    CHECK(s_chargerReads == 0U && s_restarts == 0U);
+}
+
+/** @brief 验证新电量使用 20 点中值，可忽略组内单次电压尖峰。 */
+void powerBatteryMedian()
+{
+    using namespace app;
+    s_batteryMv = 3390U;
+    setupPower(board::BootMode::kNormal);
+    auto &powerStatus = appContext().data.powerStatus;
+    CHECK(powerStatus.read().batteryMv == 3390U);
+    pollPower(99U);
+    s_batteryMv = 4400U;
+    pollPower(1U);
+    s_batteryMv = 3750U;
+    pollPower(18U);
+    CHECK(powerStatus.read().batteryMv == 3390U);
+    pollPower(1U);
+    const auto filtered = powerStatus.read();
+    CHECK(filtered.batteryMv == 3750U && filtered.batteryPct == 60U);
+}
+
+/** @brief 验证慢轮询的有效样本可维持低电计时，采样中断超期后重新起算。 */
+void powerBatteryFreshness()
+{
+    using namespace app;
+    s_batteryMv = 3390U;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    setupPower(board::BootMode::kNormal);
+    pollPower(116U, 250U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    // 两秒内无成功采样，即使本轮恢复 ADC，也要重新累积 30 s。
+    pollPower(1U, 2000U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(119U, 250U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(3U, 250U);
+    CHECK(appContext().data.powerStatus.read().shutdownStage == board::ShutdownStage::kSave);
 }
 
 /** @brief 验证保存截止先拦重试，扫描提交拥塞下仍断电，30 s 后恢复写和 BT。 */
@@ -2175,9 +2334,11 @@ void checkSystemPrepare()
  * @brief 验证 BtLinkModule::init() 将指定板型的产品名注入 0x0001 设备信息应答的 product 字段
  * @param profile: 待注入的板型配置指针，nullptr 表示 unknown
  * @param expected: 期望在 0x0001 应答偏移 0 处读到的产品短名
+ * @param hardwareVersion: 期望在偏移 24 处读到的硬件版本
  * @note 单线程主机测试，每进程调用一次，非 ISR。
  */
-void checkDevInfoProduct(const app::board::Profile *profile, std::string_view expected)
+void checkDevInfoProduct(const app::board::Profile *profile, std::string_view expected,
+                         std::string_view hardwareVersion)
 {
     using namespace app;
     s_write_calls = 0U;
@@ -2211,6 +2372,9 @@ void checkDevInfoProduct(const app::board::Profile *profile, std::string_view ex
             const size_t len = strnlen(raw.data(), raw.size());
             const std::string_view actual{raw.data(), len};
             CHECK(actual == expected);
+            constexpr size_t kHardwareVersionOffset = 24U; // 0x01 设备信息布局
+            std::memcpy(raw.data(), reply.payload.data() + kHardwareVersionOffset, raw.size());
+            CHECK(std::string_view(raw.data(), strnlen(raw.data(), raw.size())) == hardwareVersion);
         }
     }
 }
@@ -2223,7 +2387,7 @@ void deviceName()
 {
     checkDeviceNamePure();
     checkSystemPrepare();
-    checkDevInfoProduct(app::board::byId(app::board::BoardId::kP2V141), "P2");
+    checkDevInfoProduct(app::board::byId(app::board::BoardId::kP2V141), "P2", "V1.41");
 }
 
 } // namespace
@@ -2244,9 +2408,21 @@ esp_err_t gpio_set_level(gpio_num_t gpio, uint32_t level)
     return ESP_OK;
 }
 
-/** @brief 模拟成功配置 GPIO。 @retval ESP_OK 成功。 */
-esp_err_t gpio_config(const gpio_config_t *)
+/**
+ * @brief 模拟输入配置，允许注入 GPIO27 不可用
+ * @param config: 待配置的 GPIO 与模式
+ * @retval ESP_OK 成功
+ * @retval ESP_FAIL 注入 GPIO27 配置失败
+ */
+esp_err_t gpio_config(const gpio_config_t *config)
 {
+    if (config->pin_bit_mask == (1ULL << 27U)) {
+        CHECK(config->mode == GPIO_MODE_INPUT && config->pull_up_en == GPIO_PULLUP_DISABLE &&
+              config->pull_down_en == GPIO_PULLDOWN_DISABLE);
+        if (s_usbGpioConfigFails) {
+            return ESP_FAIL;
+        }
+    }
     return ESP_OK;
 }
 
@@ -2259,7 +2435,30 @@ fw::Status setSafeOutputLevels(const Profile &) noexcept
     return fw::Status::kOk;
 }
 
+/** @brief 本用例可启用虚拟 ADC。 @param gpio: 板级 ADC 输入。 @retval kOk 已启用。 @retval kNotFound 无模拟传感器。 */
+fw::Status initBatteryAdc(int gpio) noexcept
+{
+    CHECK(gpio == 34);
+    return s_batteryMv == 0U ? fw::Status::kNotFound : fw::Status::kOk;
+}
+
+/** @brief 获取模拟电池电压。 @param[out] mv: 成功时写入电池毫伏。 @retval kOk 成功。 @retval kIoError 注入读失败。 */
+fw::Status readBatteryAdcMv(uint32_t &mv) noexcept
+{
+    if (s_batteryReadFails) {
+        return fw::Status::kIoError;
+    }
+    mv = s_batteryMv;
+    return fw::Status::kOk;
+}
+
 namespace charger {
+
+/** @brief 模拟充电芯片就绪状态。 @retval true 已就绪。 @retval false 注入离线。 */
+bool isReady() noexcept
+{
+    return s_chargerReady;
+}
 
 /** @brief 提供 USB 在位的充电芯片样本。 @param[out] last: 成功样本。 */
 fw::Status refreshInputStatus(ChargerInputStatus &last) noexcept
@@ -2309,6 +2508,18 @@ int main(int argc, const char **raw_args)
         powerStandby();
     } else if (std::strcmp(argv[1], "power_log_drain") == 0) {
         powerLogDrain();
+    } else if (std::strcmp(argv[1], "power_low_battery") == 0) {
+        powerLowBattery();
+    } else if (std::strcmp(argv[1], "power_battery_read_failure") == 0) {
+        powerBatteryReadFailure();
+    } else if (std::strcmp(argv[1], "power_low_battery_unknown_usb") == 0) {
+        powerLowBatteryInhibited(app::board::BootMode::kNormal);
+    } else if (std::strcmp(argv[1], "power_low_battery_standby") == 0) {
+        powerLowBatteryInhibited(app::board::BootMode::kChargeStandby);
+    } else if (std::strcmp(argv[1], "power_battery_median") == 0) {
+        powerBatteryMedian();
+    } else if (std::strcmp(argv[1], "power_battery_freshness") == 0) {
+        powerBatteryFreshness();
     } else if (std::strcmp(argv[1], "power_busy_at_cut") == 0) {
         powerBusyAtCut();
     } else if (std::strcmp(argv[1], "power_timeout_recovery") == 0) {
@@ -2344,9 +2555,9 @@ int main(int argc, const char **raw_args)
     } else if (std::strcmp(argv[1], "device_name") == 0) {
         deviceName();
     } else if (std::strcmp(argv[1], "device_name_e1") == 0) {
-        checkDevInfoProduct(app::board::byId(app::board::BoardId::kE1DevKit), "E1");
+        checkDevInfoProduct(app::board::byId(app::board::BoardId::kE1DevKit), "E1", "V1.1.0");
     } else if (std::strcmp(argv[1], "device_name_unknown") == 0) {
-        checkDevInfoProduct(nullptr, "RTK");
+        checkDevInfoProduct(nullptr, "RTK", "UNKNOWN");
     } else if (std::strcmp(argv[1], "credit_window") == 0) {
         creditWindow();
     } else if (std::strcmp(argv[1], "rx_fairness") == 0) {

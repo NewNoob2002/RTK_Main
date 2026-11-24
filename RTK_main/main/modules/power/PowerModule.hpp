@@ -1,8 +1,9 @@
 // 电源按键与关机管理模块（kLink 执行器，B2）：按键消抖、关机请求与分阶段关机、充电待机开机。
-// init 仅启动任务调用；poll 仅 kLink 任务调用（非阻塞、不分配堆，非 ISR）；requestShutdown 任意任务安全。
+// init 仅启动任务调用；poll 仅 kLink 任务调用（I2C 单次传输最多等待 10 ms，不分配堆，非 ISR）；requestShutdown 任意任务安全。
 // 堆档位：禁止区；本文件不分配堆。
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <span>
 
@@ -53,7 +54,7 @@ public:
      * @retval fw::Result::kOk 初始化完成或本板型不启用
      * @retval fw::Result::kInvalidState 上下文未绑定
      * @retval fw::Result::kIoError GPIO 配置失败
-     * @note 仅启动前单线程调用，非 ISR，不分配堆。
+     * @note 仅启动前单线程调用；首次电池采样可等待，非 ISR。
      */
     [[nodiscard]] fw::Result init() noexcept;
 
@@ -88,21 +89,45 @@ private:
     }
 
     /**
-     * @brief 配置 P2 电源相关数字输入脚（GPIO18/25/2，均关内部上下拉）
-     * @retval true 全部引脚配置成功
-     * @retval false 任一引脚配置失败（已记 E 级日志）
+     * @brief 配置按键与 U3 检测输入，并独立记录 GPIO27/STAT 是否可用
+     * @retval true 两个必需输入配置成功
+     * @retval false 必需输入配置失败（已记 E 级日志）
      * @note 仅 init 调用，非 ISR。
      */
     [[nodiscard]] bool configureInputPins() noexcept;
 
     /**
-     * @brief 读取按键、U3 OUT、STAT 引脚并按 200 ms 节流刷新 SGM41513 I2C USB 在位状态
+     * @brief 读取按键、U3、STAT，并在 GPIO27 不可用时按 200 ms 节流刷新 REG08
      * @param nowMs: 当前单调时间（ms）
-     * @param forceChargerRead: true 时忽略 200 ms 节流立即读一次 I2C
+     * @param forceChargerRead: true 时需要 I2C 回退则忽略 200 ms 节流
      * @retval 本轮采样结果
-     * @note 仅 kLink 在 active_ 为真时调用，非 ISR。
+     * @note 仅启动任务或 kLink 调用，非 ISR。
      */
     [[nodiscard]] PinLevels samplePins(uint32_t nowMs, bool forceChargerRead) noexcept;
+
+    /**
+     * @brief 启动电池采样并读取第一组滤波结果，失败时允许电源模块继续工作
+     * @param gpio: 电池分压输入，未配置时为 -1
+     * @note 仅启动任务；组内采样间隔 5 ms，非 ISR。
+     */
+    void initBattery(int gpio) noexcept;
+
+    /**
+     * @brief 收集一个电池样本，成组时更新中值与百分比
+     * @param nowMs: 本次采样的单调时间（ms）
+     * @retval kOk 收到样本并更新时间；若本组收齐则更新电压和电量
+     * @retval 其他 ADC 错误，清除本组采样与发布值
+     * @note 启动任务或 kLink 串行调用，非 ISR。
+     */
+    [[nodiscard]] fw::Status takeBatterySample(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 用每轮至多一个样本更新电量，并经 B2 仲裁提交持续低电关机
+     * @param nowMs: 当前单调时间（ms）
+     * @param pins: 本轮 USB 在位和可用性
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    void pollBattery(uint32_t nowMs, const PinLevels &pins) noexcept;
 
     /**
      * @brief 在充电待机中逐轮确认保持并安排重启
@@ -219,6 +244,17 @@ private:
     bool chargerSampled_ = false;
     bool chargerRetry_ = false;
     board::ChargerInputStatus lastChargerStatus_{};
+    bool usbGpioAvailable_ = false;
+    bool statGpioAvailable_ = false;
+    bool batteryAdcReady_ = false;
+    static constexpr size_t kBatterySamples = 20U;
+    std::array<uint32_t, kBatterySamples> batterySamples_{};
+    size_t batterySampleCount_ = 0U;
+    uint32_t lastBatteryBatchMs_ = 0U;
+    uint32_t lastBatterySampleMs_ = 0U;
+    uint32_t batteryMv_ = 0U;
+    uint8_t batteryPct_ = board::kBatteryPctUnknown;
+    board::LowBatteryTimer lowBattery_{};
     PowerSnapshot lastSnapshot_{};
 };
 

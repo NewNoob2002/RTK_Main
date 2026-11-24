@@ -72,6 +72,7 @@ void checkProfiles() noexcept
     CHECK(std::string_view{productName(e1)} == "E1");
     if (e1 != nullptr) {
         CHECK(linkIdleWaitMs(e1->powerHold) == 20U);
+        CHECK(e1->batteryAdcGpio == -1 && std::string_view{e1->hardwareVersion} == "V1.1.0");
         CHECK(e1->powerKey.keyDetectGpio == -1 && e1->powerKey.usbDetectGpio == -1 &&
               e1->powerKey.chgStatGpio == -1);
         CHECK(e1->charger.i2cPort == -1 && e1->charger.sdaGpio == -1 && e1->charger.sclGpio == -1);
@@ -83,13 +84,14 @@ void checkProfiles() noexcept
     }
     CHECK(linkIdleWaitMs(p2->powerHold) == 10U);
     CHECK(std::string_view{p2->product} == "P2");
+    CHECK(p2->batteryAdcGpio == 34 && std::string_view{p2->hardwareVersion} == "V1.41");
     CHECK(std::string_view{productName(p2)} == "P2");
     CHECK(p2->gnss.receiverPort == 1U && p2->gnss.powerGpio == -1);
-    CHECK(p2->powerKey.keyDetectGpio == 18 && p2->powerKey.usbDetectGpio == -1 &&
+    CHECK(p2->powerKey.keyDetectGpio == 18 && p2->powerKey.usbDetectGpio == 27 &&
           p2->powerKey.chgStatGpio == 2);
-    CHECK(p2->powerKey.keyActiveLow && p2->powerKey.usbActiveLow && p2->powerKey.chgActiveLow);
+    CHECK(p2->powerKey.keyActiveLow && !p2->powerKey.usbActiveLow && p2->powerKey.chgActiveLow);
     CHECK(p2->charger.i2cPort == 0 && p2->charger.sdaGpio == 21 && p2->charger.sclGpio == 22);
-    CHECK(p2->charger.addr == 0x1AU && p2->charger.ichgCode == 51U && p2->charger.reg03 == 0xF8U);
+    CHECK(p2->charger.addr == 0x1AU && p2->charger.reg02 == 0x34U && p2->charger.reg03 == 0xAAU);
     constexpr std::array kOutputs{SafeOutput{13, true}, SafeOutput{15, false},
                                   SafeOutput{23, false}, SafeOutput{26, false},
                                   SafeOutput{4, false}};

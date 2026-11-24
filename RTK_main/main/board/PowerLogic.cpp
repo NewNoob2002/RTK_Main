@@ -2,6 +2,8 @@
 // 无 IDF/FreeRTOS 依赖，可在主机与目标固件共用；不阻塞、不分配堆。
 #include "board/PowerLogic.hpp"
 
+#include <array>
+
 namespace app::board {
 
 const char *bootModeName(BootMode mode) noexcept
@@ -69,6 +71,8 @@ const char *shutdownStageName(ShutdownStage stage) noexcept
 const char *usbSourceName(UsbSource source) noexcept
 {
     switch (source) {
+    case UsbSource::kGpio:
+        return "gpio";
     case UsbSource::kI2c:
         return "i2c";
     case UsbSource::kStat:
@@ -97,22 +101,60 @@ void updateChargerSample(ChargerInputStatus &last, fw::Status status, uint8_t ra
     }
 }
 
-UsbDetection decideUsbPresent(const ChargerInputStatus &i2cStatus, bool statActive,
-                              bool hasStatPin) noexcept
+UsbDetection decideUsbPresent(std::optional<bool> gpioPresent, const ChargerInputStatus &i2cStatus,
+                              std::optional<bool> statActive) noexcept
 {
+    if (gpioPresent.has_value()) {
+        return {*gpioPresent, UsbSource::kGpio};
+    }
     if (i2cStatus.ok) {
         return UsbDetection{
             .present = i2cStatus.powerGood || (i2cStatus.vbusStat != 0U),
             .source = UsbSource::kI2c,
         };
     }
-    if (hasStatPin) {
+    if (statActive.has_value()) {
         return UsbDetection{
-            .present = statActive,
+            .present = *statActive,
             .source = UsbSource::kStat,
         };
     }
     return UsbDetection{};
+}
+
+uint8_t batteryPercent(uint32_t mv) noexcept
+{
+    // P2_V3.1_IDF/main/user_src/user_battery.c:135-146，每个节点相差 10%。
+    constexpr std::array<uint32_t, 11> kVoltageMv{3340U, 3440U, 3540U, 3600U, 3630U, 3670U,
+                                                  3750U, 3860U, 3940U, 4050U, 4150U};
+    constexpr uint32_t kPercentStep = 10U;
+    constexpr uint8_t kFullBatteryPct = 100U;
+    if (mv <= kVoltageMv.front()) {
+        return 0U;
+    }
+    for (size_t i = 1U; i < kVoltageMv.size(); ++i) {
+        if (mv < kVoltageMv[i]) {
+            const uint32_t low = kVoltageMv[i - 1U];
+            // i-1 在 0..9，插值结果为 0..99，可安全窄化。
+            return static_cast<uint8_t>((i - 1U) * kPercentStep +
+                                        (mv - low) * kPercentStep / (kVoltageMv[i] - low));
+        }
+    }
+    return kFullBatteryPct;
+}
+
+bool LowBatteryTimer::isDue(uint32_t nowMs, bool onBattery, uint8_t pct) noexcept
+{
+    constexpr uint8_t kLowBatteryPct = 10U;
+    constexpr uint32_t kLowBatteryHoldMs = 30000U; // ms
+    if (!onBattery || pct >= kLowBatteryPct) {
+        sinceMs_.reset();
+        return false;
+    }
+    if (!sinceMs_.has_value()) {
+        sinceMs_ = nowMs;
+    }
+    return nowMs - *sinceMs_ >= kLowBatteryHoldMs;
 }
 
 PowerOnAction decidePowerOn(bool senseHigh, bool usbPresent) noexcept

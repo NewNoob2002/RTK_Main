@@ -89,7 +89,9 @@ foreach(policy concurrent preempt)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
-    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_no_reopen power_fence_timeout power_log_drain power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
+    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_no_reopen power_fence_timeout power_log_drain power_low_battery power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
+        power_battery_read_failure power_low_battery_unknown_usb power_low_battery_standby
+        power_battery_median power_battery_freshness
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window web_s2_storage_bt device_name device_name_e1 device_name_unknown)
@@ -354,6 +356,17 @@ target_compile_options(power_logic_check PRIVATE -fno-exceptions -fno-rtti -Wall
     -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
     -Wimplicit-fallthrough -Wswitch-default -Wundef)
 add_test(NAME power_logic_check COMMAND power_logic_check)
+
+add_executable(charger_check ChargerCheck.cpp
+    ${PROJ_ROOT}/main/board/Charger.cpp ${PROJ_ROOT}/main/board/PowerLogic.cpp)
+target_include_directories(charger_check PRIVATE shim ../t13_host_check/shim/inc
+    ${PROJ_ROOT}/main ${PROJ_ROOT}/components/rtos/include)
+target_compile_options(charger_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+target_link_libraries(charger_check PRIVATE main_pure)
+foreach(scenario absent online mismatch02 mismatch03 readback02_high_bits init_timeout scan_errors)
+    add_test(NAME charger_${scenario} COMMAND charger_check ${scenario})
+endforeach()
 
 add_executable(web_server_check WebServerCheck.cpp
     ${PROJ_ROOT}/main/modules/web/WebDns.cpp

@@ -347,14 +347,15 @@ void testCutPowerNulloptRecovery() noexcept
     CHECK(sm.step(5210U, true, true, true, false).driveKeyHigh);
 }
 
-/** @brief 验证冷启动 REG08 迟到、有界无 USB 和 U3 已高快速退出。 */
+/** @brief 验证冷启动 GPIO27 或 REG08 迟到、有界无 USB 和 U3 已高快速退出。 */
 void testBootUsbDelay() noexcept
 {
     uint32_t now = 0U;
     const auto clock = [&] { return now; };
     const auto wait = [&](uint32_t ms) { now += ms; };
     const auto readLateUsb = [&] {
-        return decideUsbPresent(decodeSgmReg08(now >= 240U ? kSgmReg08PgBit : 0U), false);
+        return decideUsbPresent(std::nullopt, decodeSgmReg08(now >= 240U ? kSgmReg08PgBit : 0U),
+                                false);
     };
     const auto first = readLateUsb();
     CHECK(!waitForBootUsb(true, first, clock, wait, readLateUsb).present);
@@ -364,52 +365,102 @@ void testBootUsbDelay() noexcept
     now = 0U;
     CHECK(!waitForBootUsb(false, first, clock, wait, [&] { return first; }).present);
     CHECK(now == kBootUsbDetectionMs);
+
+    now = 0U;
+    const auto readLateGpio = [&] {
+        return decideUsbPresent(now >= 60U, decodeSgmReg08(kSgmReg08PgBit), true);
+    };
+    const auto gpio = waitForBootUsb(false, readLateGpio(), clock, wait, readLateGpio);
+    CHECK(gpio.present && gpio.source == UsbSource::kGpio && now == 60U);
 }
 
-/** @brief 验证 SGM41513 USB 在位综合判定（I2C 优先 / STAT 退化）与 REG02 掩码计算。 */
-void testUsbPresentAndChargerMasks() noexcept
+/** @brief 验证 USB 在位来源优先级、REG08 解码与缓存。 */
+void testUsbPresentAndChargerCache() noexcept
 {
     // 1. REG08 解码与 I2C 在位判定。
     const ChargerInputStatus pgOnly = decodeSgmReg08(kSgmReg08PgBit);
     CHECK(pgOnly.ok && pgOnly.powerGood && pgOnly.vbusStat == 0U && pgOnly.chrgStat == 0U);
-    const UsbDetection dPg = decideUsbPresent(pgOnly, false, true);
+    const UsbDetection dPg = decideUsbPresent(std::nullopt, pgOnly, false);
     CHECK(dPg.present && dPg.source == UsbSource::kI2c);
 
     const ChargerInputStatus vbusOnly =
         decodeSgmReg08(static_cast<uint8_t>(1U << kSgmReg08VbusShift));
     CHECK(vbusOnly.ok && !vbusOnly.powerGood && vbusOnly.vbusStat == 1U);
-    const UsbDetection dVbus = decideUsbPresent(vbusOnly, false, true);
+    const UsbDetection dVbus = decideUsbPresent(std::nullopt, vbusOnly, false);
     CHECK(dVbus.present && dVbus.source == UsbSource::kI2c);
 
     const ChargerInputStatus noUsb = decodeSgmReg08(0x00U);
     CHECK(noUsb.ok && !noUsb.powerGood && noUsb.vbusStat == 0U);
     // I2C 成功且无输入电源时，不回退到 STAT。
-    const UsbDetection dNoneI2c = decideUsbPresent(noUsb, true, true);
+    const UsbDetection dNoneI2c = decideUsbPresent(std::nullopt, noUsb, true);
     CHECK(!dNoneI2c.present && dNoneI2c.source == UsbSource::kI2c);
 
     // 2. I2C 失败退化到 STAT(GPIO2)。
     constexpr ChargerInputStatus kI2cFail{};
-    const UsbDetection dStatLow = decideUsbPresent(kI2cFail, true, true);
+    const UsbDetection dStatLow = decideUsbPresent(std::nullopt, kI2cFail, true);
     CHECK(dStatLow.present && dStatLow.source == UsbSource::kStat);
-    const UsbDetection dStatHigh = decideUsbPresent(kI2cFail, false, true);
+    const UsbDetection dStatHigh = decideUsbPresent(std::nullopt, kI2cFail, false);
     CHECK(!dStatHigh.present && dStatHigh.source == UsbSource::kStat);
-    const UsbDetection dNoHardware = decideUsbPresent(kI2cFail, true, false);
+    const UsbDetection dNoHardware = decideUsbPresent(std::nullopt, kI2cFail, std::nullopt);
     CHECK(!dNoHardware.present && dNoHardware.source == UsbSource::kNone);
 
-    // 3. REG02 掩码计算（V2.7 充电参数）。
-    CHECK(maskSgmReg02(0xC0U, 51U) == static_cast<uint8_t>(0xC0U | 51U));
-    CHECK(maskSgmReg02(0x80U, 51U) == static_cast<uint8_t>(0x80U | 51U));
-    CHECK(maskSgmReg02(0x3FU, 51U) == 51U);
-    CHECK(maskSgmReg02(0xFFU, 0xFFU) == 0xFFU);
+    // GPIO 高低均覆盖 REG08 和 STAT；缺失 GPIO 再按后两路优先级判定。
+    for (const auto &i2c : {pgOnly, noUsb, kI2cFail}) {
+        for (const bool stat : {false, true}) {
+            const auto high = decideUsbPresent(true, i2c, stat);
+            const auto low = decideUsbPresent(false, i2c, stat);
+            CHECK(high.present && high.source == UsbSource::kGpio);
+            CHECK(!low.present && low.source == UsbSource::kGpio);
+            const auto missing = decideUsbPresent(std::nullopt, i2c, stat);
+            CHECK(missing.source == (i2c.ok ? UsbSource::kI2c : UsbSource::kStat));
+            CHECK(missing.present == (i2c.ok ? i2c.powerGood : stat));
+        }
+    }
     // 诊断占锁保留已有有效样本，通信故障则清除并走 STAT。
     auto cached = pgOnly;
     updateChargerSample(cached, fw::Status::kBusy, 0U);
-    CHECK(decideUsbPresent(cached, false).present);
+    CHECK(decideUsbPresent(std::nullopt, cached, false).present);
     CHECK(cached.rawReg08 == kSgmReg08PgBit);
     updateChargerSample(cached, fw::Status::kTimeout, 0U);
-    CHECK(!cached.ok && decideUsbPresent(cached, true).source == UsbSource::kStat);
+    CHECK(!cached.ok && decideUsbPresent(std::nullopt, cached, true).source == UsbSource::kStat);
     updateChargerSample(cached, fw::Status::kOk, 0U);
-    CHECK(cached.ok && !decideUsbPresent(cached, true).present);
+    CHECK(cached.ok && !decideUsbPresent(std::nullopt, cached, true).present);
+}
+
+/** @brief 验证旧曲线节点、边界、插值与全量程单调性。 */
+void testBatteryPercent() noexcept
+{
+    constexpr std::array<uint32_t, 11> kNodes{3340U, 3440U, 3540U, 3600U, 3630U, 3670U,
+                                              3750U, 3860U, 3940U, 4050U, 4150U};
+    for (size_t i = 0U; i < kNodes.size(); ++i) {
+        CHECK(batteryPercent(kNodes[i]) == i * 10U);
+    }
+    CHECK(batteryPercent(0U) == 0U);
+    CHECK(batteryPercent(3390U) == 5U);
+    CHECK(batteryPercent(3439U) == 9U);
+    CHECK(batteryPercent(4149U) == 99U);
+    CHECK(batteryPercent(UINT32_MAX) == 100U);
+    for (uint32_t mv = 3300U; mv < 4200U; ++mv) {
+        CHECK(batteryPercent(mv) <= batteryPercent(mv + 1U));
+    }
+}
+
+/** @brief 验证低电计时边界、USB 插入/样本失效复位及毫秒回绕。 */
+void testLowBatteryTimer() noexcept
+{
+    LowBatteryTimer timer{};
+    CHECK(!timer.isDue(0U, true, 9U));
+    CHECK(!timer.isDue(29999U, true, 9U));
+    CHECK(timer.isDue(30000U, true, 9U));
+    CHECK(!timer.isDue(30001U, false, 9U));
+    CHECK(!timer.isDue(60000U, true, 9U));
+    CHECK(!timer.isDue(90000U, true, 10U));
+    CHECK(!timer.isDue(90001U, true, 9U));
+    CHECK(!timer.isDue(120001U, true, kBatteryPctUnknown));
+    constexpr uint32_t kStart = UINT32_MAX - 10000U;
+    CHECK(!timer.isDue(kStart, true, 9U));
+    CHECK(!timer.isDue(kStart + 29999U, true, 9U));
+    CHECK(timer.isDue(kStart + 30000U, true, 9U));
 }
 
 } // namespace
@@ -432,6 +483,8 @@ int main()
     testShutdownNoUsb();
     testShutdownWithUsb();
     testChargeStandbyLongPressPowerOn();
-    testUsbPresentAndChargerMasks();
+    testUsbPresentAndChargerCache();
+    testBatteryPercent();
+    testLowBatteryTimer();
     return s_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

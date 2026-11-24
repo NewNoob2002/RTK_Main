@@ -55,15 +55,17 @@ struct ChargerPins {
     int i2cPort = -1; // -1 表示本板无 I2C 充电芯片，不初始化 I2C
     int sdaGpio = -1;
     int sclGpio = -1;
-    uint8_t addr = 0U;     // 7-bit I2C 地址（P2: SGM41513 = 0x1A）
-    uint8_t ichgCode = 0U; // REG02[5:0] 充电电流编码（V2.7: 51）
-    uint8_t reg03 = 0U;    // REG03 预充/终止电流目标值（V2.7: 0xF8）
+    uint8_t addr = 0U;  // 7-bit I2C 地址（P2: SGM41513 = 0x1A）
+    uint8_t reg02 = 0U; // REG02[5:0] 充电电流目标值，[7:6] 保留芯片原值
+    uint8_t reg03 = 0U; // REG03 预充/终止电流目标值
 };
 
 struct Profile {
     BoardId id = BoardId::kUnknown;
     const char *name = "unknown";
     const char *product = "RTK";
+    const char *hardwareVersion = "UNKNOWN";
+    int batteryAdcGpio = -1;
     uint32_t idMinMv = 0U;
     uint32_t idMaxMv = 0U;
     GnssPins gnss{};

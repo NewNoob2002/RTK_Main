@@ -1,7 +1,7 @@
 // P2 SGM41513 I2C 充电芯片驱动实现（ESP-IDF v6.1 driver/i2c_master.h）。
 // 100 kHz、超时 10 ms；静态互斥锁串行化启动任务、kLink 与 console 访问，非 ISR。
 // 寄存器位映射基于 BQ25601 兼容定义（待实板 `power charger` dump 核对）；
-// 充电参数来源：P2 V2.7 SGM41513.ino（REG02[5:0]=51，REG03=0xF8）。
+// 堆档位：启动期一次性；IDF 仅创建一条总线及至多一个设备，失败时跳过设备访问。
 #include "board/Charger.hpp"
 
 #include <array>
@@ -24,6 +24,7 @@ constexpr uint32_t kI2cFreqHz = 100000U;    // Hz，标准 100 kHz I2C
 constexpr int kI2cXferTimeoutMs = 10;       // ms，单次传输超时上限
 constexpr uint32_t kMutexWaitMs = 20U;      // ms，跨任务互斥等待上限
 constexpr uint8_t kI2cGlitchIgnoreCnt = 7U; // I2C 时钟周期毛刺滤波
+constexpr uint8_t kReg02IchgMask = 0x3FU;   // REG02[5:0] 充电电流
 
 struct ChargerState {
     i2c_master_bus_handle_t bus = nullptr;
@@ -116,34 +117,15 @@ private:
 }
 
 /**
- * @brief 释放已创建的 I2C 主机总线句柄（设备添加失败时的回滚辅助）
- * @note 仅 init 失败回滚路径调用，非 ISR。
+ * @brief 建立静态互斥与单条 I2C 总线，供设备及扫描共用
+ * @param pins: 已校验的板级 I2C 引脚配置
+ * @retval kOk 总线可用
+ * @retval kNoSpace 互斥或 SDK 总线资源不足
+ * @retval 其他 IDF 总线错误映射
+ * @note 仅启动任务调用，非 ISR。
  */
-void cleanupBus() noexcept
+[[nodiscard]] fw::Status createBus(const ChargerPins &pins) noexcept
 {
-    if (s_charger.bus == nullptr) {
-        return;
-    }
-    const esp_err_t delErr = i2c_del_master_bus(s_charger.bus);
-    if (delErr != ESP_OK) {
-        FW_LOGW(fw::TraceCat::kSys, "charger i2c bus cleanup failed: %s", esp_err_to_name(delErr));
-    }
-    s_charger.bus = nullptr;
-}
-
-} // namespace
-
-fw::Status init(const ChargerPins &pins) noexcept
-{
-    if (s_ready.load(std::memory_order_acquire)) {
-        return fw::Status::kOk;
-    }
-    if (pins.i2cPort < 0) {
-        return fw::Status::kNotFound;
-    }
-    if ((pins.sdaGpio < 0) || (pins.sclGpio < 0) || (pins.addr == 0U)) {
-        return fw::Status::kInvalidArg;
-    }
     if (s_charger.mutex == nullptr) {
         s_charger.mutex = xSemaphoreCreateMutexStatic(&s_charger.mutexBuf);
         if (s_charger.mutex == nullptr) {
@@ -151,7 +133,7 @@ fw::Status init(const ChargerPins &pins) noexcept
         }
     }
 
-    // 板上已有 4.7 kΩ 上拉（R66/R68），关闭内部弱上拉。
+    // 与旧 P2 一致，内部弱上拉与板上 R66/R68 (4.7 kΩ) 并联。
     // 引脚与 I2C 端口号来自板级静态表，枚举转换安全。
     i2c_master_bus_config_t busCfg{};
     busCfg.i2c_port = static_cast<i2c_port_num_t>(pins.i2cPort);
@@ -159,12 +141,70 @@ fw::Status init(const ChargerPins &pins) noexcept
     busCfg.scl_io_num = static_cast<gpio_num_t>(pins.sclGpio);
     busCfg.clk_source = I2C_CLK_SRC_DEFAULT;
     busCfg.glitch_ignore_cnt = kI2cGlitchIgnoreCnt;
-    busCfg.flags.enable_internal_pullup = 0U;
+    busCfg.flags.enable_internal_pullup = 1U;
 
-    esp_err_t err = i2c_new_master_bus(&busCfg, &s_charger.bus);
+    const esp_err_t err = i2c_new_master_bus(&busCfg, &s_charger.bus);
     if (err != ESP_OK) {
         FW_LOGW(fw::TraceCat::kSys, "charger i2c bus init failed: %s", esp_err_to_name(err));
         return rtos::fromEspErr(err);
+    }
+
+    return fw::Status::kOk;
+}
+
+/**
+ * @brief 探测充电芯片并区分无应答与总线故障
+ * @param addr: 板级充电芯片的 7 位 I2C 地址
+ * @retval kOk 收到应答
+ * @retval kNotFound 从设备无应答
+ * @retval kBusy 未取得总线锁
+ * @retval 其他 IDF 探测错误映射
+ * @note 仅启动任务在总线创建后调用，非 ISR。
+ */
+[[nodiscard]] fw::Status probeCharger(uint8_t addr) noexcept
+{
+    esp_err_t err = ESP_OK;
+    {
+        const BusGuard guard(s_charger.mutex);
+        if (!guard.locked()) {
+            return fw::Status::kBusy;
+        }
+        err = i2c_master_probe(s_charger.bus, addr, kI2cXferTimeoutMs);
+    }
+    // 探测失败时总线保留给 DEV 诊断，充电芯片保持离线直至下次启动。
+    if (err == ESP_ERR_NOT_FOUND) {
+        FW_LOGW(fw::TraceCat::kSys, "charger: no ack at 0x%02X, i2c path disabled",
+                static_cast<unsigned>(addr));
+        return fw::Status::kNotFound;
+    }
+    if (err != ESP_OK) {
+        FW_LOGW(fw::TraceCat::kSys, "charger: probe at 0x%02X failed: %s, i2c path disabled",
+                static_cast<unsigned>(addr), esp_err_to_name(err));
+        return rtos::fromEspErr(err);
+    }
+    return fw::Status::kOk;
+}
+
+} // namespace
+
+fw::Status init(const ChargerPins &pins) noexcept
+{
+    if (s_charger.bus != nullptr) {
+        return isReady() ? fw::Status::kOk : fw::Status::kNotFound;
+    }
+    if (pins.i2cPort < 0) {
+        return fw::Status::kNotFound;
+    }
+    if ((pins.sdaGpio < 0) || (pins.sclGpio < 0) || (pins.addr == 0U)) {
+        return fw::Status::kInvalidArg;
+    }
+    const auto busStatus = createBus(pins);
+    if (!fw::isOk(busStatus)) {
+        return busStatus;
+    }
+    const auto probeStatus = probeCharger(pins.addr);
+    if (!fw::isOk(probeStatus)) {
+        return probeStatus;
     }
 
     i2c_device_config_t devCfg{};
@@ -172,11 +212,10 @@ fw::Status init(const ChargerPins &pins) noexcept
     devCfg.device_address = pins.addr;
     devCfg.scl_speed_hz = kI2cFreqHz;
 
-    err = i2c_master_bus_add_device(s_charger.bus, &devCfg, &s_charger.dev);
+    const esp_err_t err = i2c_master_bus_add_device(s_charger.bus, &devCfg, &s_charger.dev);
     if (err != ESP_OK) {
         FW_LOGW(fw::TraceCat::kSys, "charger i2c add dev 0x%02X failed: %s",
                 static_cast<unsigned>(pins.addr), esp_err_to_name(err));
-        cleanupBus();
         return rtos::fromEspErr(err);
     }
 
@@ -199,24 +238,6 @@ fw::Status readReg(uint8_t reg, uint8_t &value) noexcept
         return fw::Status::kBusy;
     }
     return readRegLocked(reg, value);
-}
-
-fw::Status writeRegMasked(uint8_t reg, uint8_t mask, uint8_t value) noexcept
-{
-    if (!s_ready.load(std::memory_order_acquire)) {
-        return fw::Status::kInvalidState;
-    }
-    const BusGuard guard(s_charger.mutex);
-    if (!guard.locked()) {
-        return fw::Status::kBusy;
-    }
-    uint8_t cur = 0U;
-    const fw::Status readSt = readRegLocked(reg, cur);
-    if (!fw::isOk(readSt)) {
-        return readSt;
-    }
-    const auto next = static_cast<uint8_t>((cur & static_cast<uint8_t>(~mask)) | (value & mask));
-    return writeRegLocked(reg, next);
 }
 
 fw::Status refreshInputStatus(ChargerInputStatus &last) noexcept
@@ -244,20 +265,37 @@ fw::Status applyChargeParams(const ChargerPins &pins) noexcept
     if (!guard.locked()) {
         return fw::Status::kBusy;
     }
-    // 来源：P2 V2.7 SGM41513.ino Set_REG02_value() 与 Set_REG03_value()。
-    // 依据 SGM41513 数据手册第 39–40 页，REG02 的 ICHG 码 51 对应 1860 mA。
-    uint8_t reg02Cur = 0U;
-    fw::Status st = readRegLocked(kSgmReg02, reg02Cur);
-    if (!fw::isOk(st)) {
-        return st;
+    uint8_t currentReg02 = 0U;
+    const auto readStatus = readRegLocked(kSgmReg02, currentReg02);
+    if (!fw::isOk(readStatus)) {
+        return readStatus;
     }
-    st = writeRegLocked(kSgmReg02, maskSgmReg02(reg02Cur, pins.ichgCode));
-    if (!fw::isOk(st)) {
-        return st;
+    // 与旧 P2 一致，保留 BOOST_LIM、Q1_FULLON；掩码合并结果仍为一个字节。
+    const auto reg02 = static_cast<uint8_t>((currentReg02 & 0xC0U) | (pins.reg02 & kReg02IchgMask));
+    const std::array regs{kSgmReg02, kSgmReg03};
+    const std::array expected{reg02, pins.reg03};
+    constexpr std::array<uint8_t, 2U> kReadbackMasks{kReg02IchgMask, 0xFFU};
+    for (size_t i = 0U; i < regs.size(); ++i) {
+        const auto status = writeRegLocked(regs[i], expected[i]);
+        if (!fw::isOk(status)) {
+            return status;
+        }
     }
-    // REG03 的两个字段全覆盖，0xF8 对应预充 240 mA、终止 80 mA。
-    // 若这次写失败，REG02 已生效，返回错误供启动任务记录。
-    return writeRegLocked(kSgmReg03, pins.reg03);
+    for (size_t i = 0U; i < regs.size(); ++i) {
+        uint8_t actual = 0U;
+        const auto status = readRegLocked(regs[i], actual);
+        if (!fw::isOk(status)) {
+            return status;
+        }
+        if ((actual & kReadbackMasks[i]) != (expected[i] & kReadbackMasks[i])) {
+            FW_LOGW(fw::TraceCat::kSys,
+                    "charger: REG%02X readback mismatch expected=0x%02X actual=0x%02X",
+                    static_cast<unsigned>(regs[i]), static_cast<unsigned>(expected[i]),
+                    static_cast<unsigned>(actual));
+            return fw::Status::kCorrupt;
+        }
+    }
+    return fw::Status::kOk;
 }
 
 fw::Status dumpRegs(std::span<uint8_t, kSgmRegCount> out) noexcept
@@ -266,6 +304,27 @@ fw::Status dumpRegs(std::span<uint8_t, kSgmRegCount> out) noexcept
         const fw::Status st = readReg(reg, out[reg]);
         if (!fw::isOk(st)) {
             return st;
+        }
+    }
+    return fw::Status::kOk;
+}
+
+fw::Status scan(std::span<uint8_t, kScanAddressCount> addresses, size_t &count) noexcept
+{
+    count = 0U;
+    if (s_charger.bus == nullptr) {
+        return fw::Status::kInvalidState;
+    }
+    for (uint8_t addr = kScanFirstAddress; addr <= kScanLastAddress; ++addr) {
+        const BusGuard guard(s_charger.mutex);
+        if (!guard.locked()) {
+            return fw::Status::kBusy;
+        }
+        const auto err = i2c_master_probe(s_charger.bus, addr, kI2cXferTimeoutMs);
+        if (err == ESP_OK) {
+            addresses[count++] = addr;
+        } else if (err != ESP_ERR_NOT_FOUND) {
+            return rtos::fromEspErr(err);
         }
     }
     return fw::Status::kOk;

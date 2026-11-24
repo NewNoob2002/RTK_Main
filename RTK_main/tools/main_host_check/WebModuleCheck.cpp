@@ -1081,6 +1081,9 @@ esp_err_t gpio_config(const gpio_config_t *)
     return ESP_OK;
 }
 
+/** @brief 此替身未配置电池 ADC，无需等待首组采样。 */
+extern "C" void vTaskDelay(TickType_t /*ticks*/) {}
+
 namespace rtos {
 uint32_t nowMs() noexcept
 {
@@ -1149,7 +1152,25 @@ fw::Status setSafeOutputLevels(const Profile &) noexcept
     return fw::Status::kOk;
 }
 
+/** @brief 此用例不使用电池 ADC。 @retval kNotFound 无模拟传感器。 */
+fw::Status initBatteryAdc(int /*gpio*/) noexcept
+{
+    return fw::Status::kNotFound;
+}
+
+/** @brief 阻止在未初始化时读取 ADC。 @retval kInvalidState 无模拟传感器。 */
+fw::Status readBatteryAdcMv(uint32_t & /*mv*/) noexcept
+{
+    return fw::Status::kInvalidState;
+}
+
 namespace charger {
+
+/** @brief 模拟在线的充电芯片。 @retval true 始终在线。 */
+bool isReady() noexcept
+{
+    return true;
+}
 
 /** @brief 提供 USB 在位的有效样本。 @param[out] status: 样本缓存。 @retval kOk 成功。 */
 fw::Status refreshInputStatus(ChargerInputStatus &status) noexcept

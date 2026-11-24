@@ -53,9 +53,9 @@ struct ChargerPins;
 [[nodiscard]] fw::Status enablePowerHold(const PowerHold &hold) noexcept;
 
 /**
- * @brief 启动期电源分支与保持：P2 初始化 SGM41513 并写充电参数，再读 GPIO25 与 I2C/STAT 决定正常开机或充电待机
+ * @brief 启动期电源分支与保持：P2 探测并配置充电芯片，用 GPIO25 和 USB 在位判定正常开机或充电待机
  * @param hold: 板级电源保持配置
- * @param key: 板级按键与 STAT 引脚配置
+ * @param key: 板级 USB 与 STAT 检测引脚配置
  * @param chargerPins: 板级 I2C 充电芯片配置（i2cPort < 0 时跳过）
  * @param[out] bootMode: 本次启动运行档（正常或充电待机）
  * @param[out] reason: 本次启动的开机原因（key / charge / latch）
