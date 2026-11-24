@@ -76,7 +76,7 @@ idf_build() {
 
 fmt_check() {
     git ls-files --cached --others --exclude-standard -z -- '*.c' '*.cpp' '*.h' '*.hpp' |
-        grep -zv -e '^reference/' -e 'H2Vectors.h' |
+        grep -zv -e '^reference/' -e '^components/third_party/wououi/' -e 'H2Vectors.h' |
         while IFS= read -r -d '' file; do
             if [ -f "$file" ]; then
                 printf '%s\0' "$file"

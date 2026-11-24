@@ -43,6 +43,8 @@ struct BootBuffers {
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
     std::span<std::byte> webOta{};
 #endif
+    std::span<StackType_t> oledStack{};
+    std::span<uint8_t> oledFb{};
 };
 
 /**

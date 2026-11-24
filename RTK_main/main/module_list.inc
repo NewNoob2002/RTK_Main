@@ -11,6 +11,7 @@
 #if RTK_GNSS_ENABLED
 #include "modules/gnss/GnssModule.hpp"
 #endif
+#include "modules/oled/OledModule.hpp"
 #include "modules/power/PowerModule.hpp"
 #include "modules/rtcm/RtcmModule.hpp"
 #include "modules/storage/StorageModule.hpp"
@@ -26,6 +27,7 @@ MODULE_DEF(RtcmModule, rtcm, "rtcm", kRtcm, kLink, 0, kBtOnly)
 MODULE_DEF(StorageModule, storage, "storage", kStorage, kLink, 0, kAlways)
 MODULE_DEF(SystemModule, system, "system", kSystem, kLink, 0, kAlways)
 MODULE_DEF(PowerModule, power, "power", kPower, kLink, 10, kAlways)
+MODULE_DEF(OledModule, oled, "oled", kOled, kLink, 0, kAlways)
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
 MODULE_DEF(WebModule, web, "web", kWeb, kLink, 0, kWifiOnly)
 #endif

@@ -9,6 +9,8 @@
 #include "fw/Log.hpp"
 
 #include "AppContext.hpp"
+#include "board/BoardProfile.hpp"
+#include "modules/oled/OledModule.hpp"
 #if FW_TRACE_ENABLED
 // debug 模块只在开启跟踪时编译，且 kLogRingBytes 依赖 RTK_LOG_RING_BYTES（随 RTK_TRACE_ENABLE 裁剪）。
 #include "modules/debug/DebugModule.hpp"
@@ -80,6 +82,8 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
     constexpr size_t kBufAlign = 4U;
     const bool normal = self().bootMode == board::BootMode::kNormal;
     const bool bluetooth = normal && (self().radioMode == RadioMode::kBluetooth);
+    const bool hasOled = board::hasFeature(board::current(), board::Feature::kOled) &&
+                         (board::current().oled.i2cPort >= 0);
     const auto allocSpp = [bluetooth](const char *tag, size_t size, std::span<uint8_t> &buf) {
         return !bluetooth ||
                fw::isOk(self().bootArena.allocArray<uint8_t>(tag, size, buf, kBufAlign));
@@ -168,6 +172,15 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
     }
 #endif
 #endif
+    if (hasOled && !fw::isOk(self().bootArena.allocArray<StackType_t>(
+                       "task.oled", OledModule::kTaskStackBytes / sizeof(StackType_t),
+                       out.oledStack, kStackAlign))) {
+        return failAlloc("task.oled");
+    }
+    if (hasOled && !fw::isOk(self().bootArena.allocArray<uint8_t>(
+                       "oled.fb", OledModule::kFrameBufferBytes, out.oledFb, kBufAlign))) {
+        return failAlloc("oled.fb");
+    }
     return true;
 }
 // NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
@@ -215,12 +228,18 @@ const char *bindBootBuffers(const BootBuffers &bufs) noexcept
 #endif
     }
 #endif
+    if (board::hasFeature(board::current(), board::Feature::kOled) &&
+        (board::current().oled.i2cPort >= 0) &&
+        !fw::isOk(self().oled.bindStorage({bufs.oledStack, bufs.oledFb}))) {
+        return boot_reason::kBindOled;
+    }
     return nullptr;
 }
 
 void rollbackBootBindings(BootBuffers &bufs, const char *reason) noexcept
 {
     const bool normal = self().bootMode == board::BootMode::kNormal;
+    self().oled.unbindStorage();
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
     if (normal && (self().radioMode == RadioMode::kWifiConfig)) {
         self().web.unbindStorage();

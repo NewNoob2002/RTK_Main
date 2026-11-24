@@ -31,8 +31,9 @@
 // 同一组合根的真实 owner 计划与绑定/回滚逻辑（R8a 拆分为 app/ 下的 TU 后直接链接，不再整文件包含）。
 #include "app/App.hpp"
 #include "app/BootBuffers.hpp"
-#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
 #include "app/BootReasons.hpp"
+#include "board/BoardProfile.hpp"
+#if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
 #include "modules/web/WebOtaTransfer.hpp"
 #endif
 
@@ -395,6 +396,108 @@ void testWifiAllocationPlan() noexcept
     app::s_app.radioMode = app::RadioMode::kBluetooth;
 }
 
+/**
+ * @brief 验证 OLED 栈与 1 KB 帧缓冲仅在含 Feature::kOled 板型上从 BootArena 分配、绑定与回滚（ROL1-04）
+ * @note 单线程主机测试，非 ISR。
+ */
+void testOledBootAllocationPlan() noexcept
+{
+    // 1. E1 DevKit（无 Feature::kOled）：零 OLED BootArena 分配。
+    app::s_app.boardProfile = app::board::byId(app::board::BoardId::kE1DevKit);
+    CHECK(app::s_app.boardProfile != nullptr);
+    {
+        FaultAllocCtx ctx{};
+        const auto ops = makeOps(ctx);
+        app::BootBuffers buffers{};
+        CHECK(app::allocateBootBuffers(buffers, &ops));
+        CHECK(buffers.oledStack.empty() && buffers.oledFb.empty());
+        for (const auto &entry : app::s_app.bootArena.entries()) {
+            const std::string_view tag{entry.tag};
+            CHECK(tag != "task.oled" && tag != "oled.fb");
+        }
+        CHECK(app::bindBootBuffers(buffers) == nullptr);
+        app::rollbackBootBindings(buffers, "test:e1_no_oled");
+        CHECK(ctx.liveAllocs == 0U);
+        resetTestArena();
+    }
+
+    // 2. P2 v1.41（含 Feature::kOled）：正常与充电待机均分配 task.oled + oled.fb，故障注入与绑定失败零泄漏。
+    app::s_app.boardProfile = app::board::byId(app::board::BoardId::kP2V141);
+    CHECK(app::s_app.boardProfile != nullptr);
+    size_t oledStackIdx = SIZE_MAX;
+    size_t oledFbIdx = SIZE_MAX;
+    {
+        FaultAllocCtx ctx{};
+        const auto ops = makeOps(ctx);
+        app::BootBuffers buffers{};
+        CHECK(app::allocateBootBuffers(buffers, &ops));
+        CHECK(buffers.oledStack.size_bytes() == app::OledModule::kTaskStackBytes);
+        CHECK(buffers.oledFb.size_bytes() == app::OledModule::kFrameBufferBytes);
+        const auto entries = app::s_app.bootArena.entries();
+        for (size_t i = 0U; i < entries.size(); ++i) {
+            const std::string_view tag{entries[i].tag};
+            if (tag == "task.oled") {
+                oledStackIdx = i;
+                CHECK(entries[i].bytes == app::OledModule::kTaskStackBytes);
+                CHECK(entries[i].align == 16U);
+            } else if (tag == "oled.fb") {
+                oledFbIdx = i;
+                CHECK(entries[i].bytes == app::OledModule::kFrameBufferBytes);
+                CHECK(entries[i].align >= 4U);
+            }
+        }
+        CHECK(oledStackIdx != SIZE_MAX && oledFbIdx != SIZE_MAX);
+        CHECK(app::bindBootBuffers(buffers) == nullptr);
+        app::rollbackBootBindings(buffers, "test:p2_oled");
+        CHECK(ctx.liveAllocs == 0U);
+        resetTestArena();
+    }
+
+    // 故障注入：task.oled 与 oled.fb 失败均全量回滚。
+    for (const auto &[idx, expected] : std::array<std::pair<size_t, const char *>, 2U>{
+             {{oledStackIdx, "boot_alloc:task.oled"}, {oledFbIdx, "boot_alloc:oled.fb"}}}) {
+        FaultAllocCtx ctx{.failOnCall = idx};
+        const auto ops = makeOps(ctx);
+        app::BootBuffers buffers{};
+        CHECK(!app::allocateBootBuffers(buffers, &ops));
+        CHECK(std::string_view{app::s_app.bootArena.reason()} == expected);
+        CHECK(buffers.oledStack.empty() && buffers.oledFb.empty() && ctx.liveAllocs == 0U);
+        resetTestArena();
+    }
+
+    // 绑定失败：截断 oledFb 必须返回 bind:oled 并安全回滚。
+    {
+        FaultAllocCtx ctx{};
+        const auto ops = makeOps(ctx);
+        app::BootBuffers buffers{};
+        CHECK(app::allocateBootBuffers(buffers, &ops));
+        auto invalid = buffers;
+        invalid.oledFb = invalid.oledFb.first(16U);
+        const char *failure = app::bindBootBuffers(invalid);
+        CHECK(failure != nullptr && std::string_view{failure} == app::boot_reason::kBindOled);
+        app::rollbackBootBindings(buffers, failure);
+        CHECK(buffers.oledStack.empty() && buffers.oledFb.empty() && ctx.liveAllocs == 0U);
+        resetTestArena();
+    }
+
+    // 充电待机下 P2 仍分配 OLED 缓冲以展示充电画面。
+    app::s_app.bootMode = app::board::BootMode::kChargeStandby;
+    {
+        FaultAllocCtx ctx{};
+        const auto ops = makeOps(ctx);
+        app::BootBuffers buffers{};
+        CHECK(app::allocateBootBuffers(buffers, &ops));
+        CHECK(buffers.oledStack.size_bytes() == app::OledModule::kTaskStackBytes);
+        CHECK(buffers.oledFb.size_bytes() == app::OledModule::kFrameBufferBytes);
+        CHECK(app::bindBootBuffers(buffers) == nullptr);
+        app::rollbackBootBindings(buffers, "test:p2_standby_oled");
+        CHECK(ctx.liveAllocs == 0U);
+        resetTestArena();
+    }
+    app::s_app.bootMode = app::board::BootMode::kNormal;
+    app::s_app.boardProfile = nullptr;
+}
+
 void testBindingRollbackAndSealedLifetime() noexcept
 {
     constexpr size_t kStages = 1U + (FW_TRACE_ENABLED ? 1U : 0U) + (RTK_GNSS_ENABLED ? 3U : 0U);
@@ -668,6 +771,7 @@ int main()
     testArenaMaxEntriesAndFaultInjection();
     testProductionAllocationPlan();
     testWifiAllocationPlan();
+    testOledBootAllocationPlan();
     testBindingRollbackAndSealedLifetime();
     testConsoleGateAndTaskAdmission();
     testMemoryReport();

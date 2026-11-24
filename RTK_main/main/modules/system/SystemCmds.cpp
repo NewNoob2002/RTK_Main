@@ -284,6 +284,7 @@ int cmdSysTasks(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 #if FW_TRACE_ENABLED
     printTaskRow("trace_out", xTaskGetHandle("trace_out"));
 #endif
+    printTaskRow("oled", xTaskGetHandle("oled"));
     printTaskRow("console", xTaskGetCurrentTaskHandle());
     printTaskRow("idle0", xTaskGetIdleTaskHandleForCore(0));
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1

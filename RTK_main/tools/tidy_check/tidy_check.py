@@ -69,6 +69,8 @@ EXCLUDED = {
 OWNED_ROOTS = ("components", "main", "test/nvs_store")
 # 自有源文件中不参与产品构建的子目录段（组件内测试、生成物）。
 SKIP_SEGMENTS = ("test", "golden")
+# 经核验的第三方上游源码目录前缀（只豁免具体上游子目录，避免后续自有胶水代码静默绕过门禁，ROL1-07）。
+VENDORED_PREFIXES = ("components/third_party/wououi/",)
 
 # 冻结的 test/host/CMakeLists.txt 不编译 device_proto/DemuxFrame.cpp（该文件由 t13_host_check 目标链接），
 # 因此它在 host 编译数据库里没有条目；按 job 构造规则回落到 ESP 数据库（该文件属于 device_proto 组件，
@@ -83,11 +85,14 @@ def sources(*globs):
 
 
 def owned_sources():
-    """列举覆盖根下的 C/C++ 文件（组件内 test/ 与生成物除外）。"""
+    """列举覆盖根下的 C/C++ 文件（组件内 test/、生成物与已登记上游第三方子目录除外）。"""
     out = []
     for base in OWNED_ROOTS:
         for p in sorted((ROOT / base).rglob("*")):
             if p.suffix not in (".c", ".cpp") or not p.is_file():
+                continue
+            rel = p.relative_to(ROOT).as_posix()
+            if rel.startswith(VENDORED_PREFIXES):
                 continue
             if any(part in SKIP_SEGMENTS for part in p.relative_to(ROOT / base).parts[:-1]):
                 continue

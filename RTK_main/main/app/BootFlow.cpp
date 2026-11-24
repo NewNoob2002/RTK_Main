@@ -347,6 +347,18 @@ void markTraceLaunched(app::BootCtx &ctx) noexcept
 }
 
 /**
+ * @brief 在 OLED 低优先级刷新任务已创建时登记启动掩码
+ * @param ctx: 启动上下文，launched 可追加 oled 位
+ * @note 仅启动任务，非 ISR，不阻塞。
+ */
+void markOledLaunched(app::BootCtx &ctx) noexcept
+{
+    if (app::appContext().oled.taskRunning()) {
+        ctx.launched |= app::taskBit(app::BootTask::kOled);
+    }
+}
+
+/**
  * @brief  启动步骤：链路执行器初始化、启动并等待首批模块就绪
  * @param  ctx: 启动上下文（读写 launched/reason/stopRequired）
  * @retval kOk 成功；kFail 启动失败（需停机回滚）
@@ -358,6 +370,7 @@ app::BootResult stepLink(app::BootCtx &ctx) noexcept
     markTraceLaunched(ctx);
     const auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
     const char *error = app::startLink(bufs.linkStack, ctx.launched);
+    markOledLaunched(ctx);
     if (error == nullptr) {
         return app::BootResult::kOk;
     }
@@ -400,6 +413,7 @@ app::BootResult stepStarted(app::BootCtx &ctx) noexcept
     app::AppContext &self = app::appContext();
     ctx.stopRequired = true;
     markTraceLaunched(ctx);
+    markOledLaunched(ctx);
     if (!app::waitStarted(ctx.launched)) {
         ctx.stopRequired = true;
         ctx.reason = app::boot_reason::kTaskStartTimeout;

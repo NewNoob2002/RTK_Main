@@ -18,6 +18,7 @@
 #include "app/PowerRequests.hpp"
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
+#include "modules/oled/OledCmds.hpp"
 #include "modules/ota/OtaCmds.hpp"
 #include "rtos/EspStatus.hpp"
 
@@ -264,6 +265,7 @@ bool registerCommandTables() noexcept
         kEnabled("factory") ? &factoryCmds : nullptr,
         kEnabled("freset") ? &factoryResetCmds : nullptr,
         kEnabled("power") ? &powerCmds : nullptr,
+        kEnabled("oled") ? &oledCmds : nullptr,
         kEnabled("radio") ? &radioCmds : nullptr,
         kEnabled("ota") ? &otaCmds : nullptr,
     };
@@ -308,6 +310,7 @@ bool registerVerbGroups() noexcept
         kGroup("bt", "Bluetooth pairing and alarm trust", &btVerbs),
         kGroup("factory", "production settings (hidden, needs unlock)", &factoryVerbs),
         kGroup("power", "power key status and clean shutdown", &powerVerbs),
+        kGroup("oled", "OLED display status", &oledVerbs),
         kGroup("radio", "radio mode and restart", &radioVerbs),
         kGroup("ota", "application OTA and rollback", &otaVerbs),
     };

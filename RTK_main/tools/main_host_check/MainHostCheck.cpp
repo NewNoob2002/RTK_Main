@@ -384,6 +384,54 @@ void powerStandby()
     CHECK(s_restarts == 1U);
 }
 
+/** @brief 验证 PowerModule 短按经 UiEventBus 通知 UI，且关机阶段唤醒必在 powerStatus 发布之后（ROL1-03）。 */
+void powerShortKeyUi()
+{
+    using namespace app;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    struct WakeObserver {
+        AppContext *app = nullptr;
+        uint32_t wakes = 0U;
+        uint32_t sawAnnounceOnWake = 0U;
+        uint32_t sawCutPowerOnWake = 0U;
+        board::ShutdownStage lastStage = board::ShutdownStage::kIdle;
+    };
+    WakeObserver obs{.app = &ctx};
+    ctx.data.uiEvents.setWakeHook(
+        [](void *arg) noexcept {
+            // 测试观察者固定为 WakeObserver*。
+            auto &o = *static_cast<WakeObserver *>(arg);
+            ++o.wakes;
+            o.lastStage = o.app->data.powerStatus.read().shutdownStage;
+            if (o.lastStage == board::ShutdownStage::kAnnounce) {
+                ++o.sawAnnounceOnWake;
+            } else if (o.lastStage == board::ShutdownStage::kCutPower) {
+                ++o.sawCutPowerOnWake;
+            }
+        },
+        &obs);
+    // 初始先观测松开（GPIO18=1）以完成开机按住保护。
+    s_gpioLevels[18] = 1;
+    pollPower(4U);
+    CHECK(ctx.data.uiEvents.shortKeyCount() == 0U && obs.wakes == 0U);
+    // 按下 100 ms 后松开 -> 触发 KeyEvent::kShort。
+    s_gpioLevels[18] = 0;
+    pollPower(10U);
+    s_gpioLevels[18] = 1;
+    pollPower(4U);
+    CHECK(ctx.data.uiEvents.shortKeyCount() == 1U && obs.wakes == 1U);
+    CHECK(ctx.data.powerStatus.read().shortPresses == 1U);
+    // 发起关机 -> 唤醒回调执行瞬间 powerStatus.shutdownStage 必须已发布为 kAnnounce（不得为旧值 kIdle）。
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    pollPower(1U);
+    CHECK(obs.sawAnnounceOnWake == 1U);
+    // 推进至 kCutPower -> 唤醒瞬间 powerStatus.shutdownStage 必须已发布为 kCutPower。
+    pollPower(80U);
+    CHECK(obs.sawCutPowerOnWake == 1U);
+    ctx.data.uiEvents.setWakeHook(nullptr, nullptr);
+}
+
 struct ExecutorRound {
     std::binary_semaphore ready{0};
     std::binary_semaphore run{0};
@@ -2506,6 +2554,8 @@ int main(int argc, const char **raw_args)
         powerSaveBackoff();
     } else if (std::strcmp(argv[1], "power_standby") == 0) {
         powerStandby();
+    } else if (std::strcmp(argv[1], "power_short_key_ui") == 0) {
+        powerShortKeyUi();
     } else if (std::strcmp(argv[1], "power_log_drain") == 0) {
         powerLogDrain();
     } else if (std::strcmp(argv[1], "power_low_battery") == 0) {
