@@ -162,3 +162,19 @@ ASAN_OPTIONS=detect_leaks=0 bash tools/ci/run_gates.sh --prefix u3 --base 3bbd6d
 
 - RU2-01：降级 3 键端口 VALSET 再被 NAK 时不再清零重试计数，避免配置态无限循环；回归测试 `testF9pControllerPortConfigFallbackNakFails`（修复前失败，修复后通过）。详见 `docs/reports/U2-review.md`。
 - 复跑全量门禁 `--prefix u4 --base 3bbd6d2`：**43 passed, 0 failed**；`rtk_main.bin` 1,531,008 B。
+
+## 8. 实板 HIL（2026-11-24，P2 v1.41 + ZED-F9P HPG 1.12，室内无星）
+
+固件 `builds/u4-idf`（4ed2191），控制台 `/dev/ttyACM1`。
+
+| 项 | 结果 |
+| --- | --- |
+| 5 键端口 VALSET（含 HIGHPREC/SVNUMBERING，payload 30 B）在 HPG 1.12 上 | **ACK**，`nacks=0`，未走 3 键降级 |
+| `gnss rate 5` | CFG-RATE-MEAS=200 ms；GSA 自动对齐为 5 历元（1 s），GSV 25 历元（5 s）；全程 `nacks=0 fail=0` |
+| 改频率不重放星座 | 改频率只发 7 帧 VALSET（无 52 B 星座帧） |
+| 5 Hz 下非整数倍周期 | `gnss out gga 2` → `ERR invalid argument`；`config set gnss.out.gga 500` → `ERR bad value`；合法值 `gnss out gga 1/5`、`config set gnss.out.gga 200` 成功 |
+| `gnss rate 1` 回到 1 Hz | 200 ms 周期自动对齐到 1000 ms（W 日志 `aligned F9P output[0] from 200 to 1000 ms`），`config get gnss.out.gga=1000` |
+| NMEA 统计 | 5 Hz 约 20 s：`ign=0 bad=0` |
+
+未验证（需室外有星）：GGA 7 位小数；SVNUMBERING 在真实卫星下 `nmea.bad=0`；5 Hz 四星座 RTK + RTCM 满载下 VALSET 超时与 SPP 吞吐。
+附注（既有，不属 U2）：`gnss out show` 在 F9P 上仍列出 Unicore 专用的 `sats`（SATSINFO）为 on，实际 `unsupported` 位已正确置位，仅显示误导。
