@@ -18,6 +18,7 @@ using detail::reached;
 
 constexpr uint8_t kCfgPhaseResyncRetry = 3U;
 constexpr uint8_t kCfgPhaseResyncAdvance = 4U;
+constexpr uint8_t kCfgPhaseFallbackSend = 5U;
 constexpr uint8_t kOutPhaseResyncRetry = 2U;
 constexpr uint8_t kOutPhaseResyncAdvance = 3U;
 
@@ -59,6 +60,16 @@ ControllerImpl::Round ControllerImpl::onConfiguring(Controller &self, uint32_t n
     case kCfgPhaseResyncRetry:
     case kCfgPhaseResyncAdvance:
         return configResync(self, nowMs, out);
+    case kCfgPhaseFallbackSend: {
+        ++self.stats_.stepsSent;
+        self.waiting_reply_ = self.step_.expectReply;
+        self.reply_ok_ = false;
+        self.reply_nack_ = false;
+        armDeadline(self, nowMs, self.step_.timeoutMs);
+        self.phase_ = 1;
+        out = write(self.step_.cmd.view());
+        return Round::kDone;
+    }
     default:
         return Round::kDone;
     }
@@ -94,6 +105,30 @@ ControllerImpl::Round ControllerImpl::configSend(Controller &self, uint32_t nowM
 }
 
 /**
+ * @brief 配置步收到 NAK/超时后执行重试、重同步或进入失败态。
+ * @param self: 控制器。
+ * @param nowMs: 当前时间。
+ * @param isValset: 当前命令是否为 VALSET（需要 300 ms 重同步窗）。
+ * @retval kAgain/kDone 本轮分派结果。
+ */
+ControllerImpl::Round ControllerImpl::configRetryOrFail(Controller &self, uint32_t nowMs,
+                                                        bool isValset) noexcept
+{
+    if (self.step_tries_ < self.timing_.stepRetries) {
+        ++self.step_tries_;
+        if (isValset) {
+            armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
+            self.phase_ = kCfgPhaseResyncRetry;
+            return Round::kDone;
+        }
+        self.phase_ = 0;
+        return Round::kAgain;
+    }
+    enterFailed(self, nowMs);
+    return Round::kAgain;
+}
+
+/**
  * @brief 等配置应答：ACK/NAK/超时决定重试、切波特率或判失败。
  * @param self: 控制器。
  * @param nowMs: 当前时间。
@@ -116,18 +151,17 @@ ControllerImpl::Round ControllerImpl::configAwait(Controller &self, uint32_t now
                 advanceStep(self);
                 return Round::kAgain;
             }
-            if (self.step_tries_ < self.timing_.stepRetries) {
-                ++self.step_tries_;
-                if (isValset) {
-                    armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
-                    self.phase_ = kCfgPhaseResyncRetry;
-                    return Round::kDone;
-                }
-                self.phase_ = 0;
+            CmdBuf fallback{};
+            if ((self.detected_.probe.model == Model::kZedF9p) &&
+                ublox::buildPortConfigFallbackValset(self.step_.cmd.view(), fallback)) {
+                // HPG 1.12 若拒绝 CFG-NMEA-HIGHPREC/SVNUMBERING，降级为 3 键基础端口配置继续。
+                // 不清零 step_tries_：降级帧再被拒时经 configRetryOrFail 计数，重试会重新生成
+                // 5 键帧，清零会让 5 键 NAK → 降级 NAK → 重试无限循环。
+                self.step_.cmd = fallback;
+                self.phase_ = kCfgPhaseFallbackSend;
                 return Round::kAgain;
             }
-            enterFailed(self, nowMs);
-            return Round::kAgain;
+            return configRetryOrFail(self, nowMs, isValset);
         }
         if (self.step_.switchBaud != 0U) {
             self.phase_ = 2;
@@ -146,18 +180,7 @@ ControllerImpl::Round ControllerImpl::configAwait(Controller &self, uint32_t now
         self.phase_ = kCfgPhaseResyncAdvance;
         return Round::kDone;
     }
-    if (self.step_tries_ < self.timing_.stepRetries) {
-        ++self.step_tries_;
-        if (isValset) {
-            armDeadline(self, nowMs, ublox::kValsetResyncWindowMs);
-            self.phase_ = kCfgPhaseResyncRetry;
-            return Round::kDone;
-        }
-        self.phase_ = 0;
-        return Round::kAgain;
-    }
-    enterFailed(self, nowMs);
-    return Round::kAgain;
+    return configRetryOrFail(self, nowMs, isValset);
 }
 
 /**

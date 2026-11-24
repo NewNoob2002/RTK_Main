@@ -197,6 +197,14 @@ struct ControllerImpl {
     static Round probeAwait(Controller &self, uint32_t nowMs, Action &out) noexcept;
     static Round configSend(Controller &self, uint32_t nowMs, Action &out) noexcept;
     static Round configAwait(Controller &self, uint32_t nowMs, Action &out) noexcept;
+    /**
+     * @brief 配置步收到 NAK/超时后执行重试、重同步或进入失败态。
+     * @param self: 控制器。
+     * @param nowMs: 当前时间。
+     * @param isValset: 当前命令是否为 VALSET（需要 300 ms 重同步窗）。
+     * @retval kAgain/kDone 本轮分派结果。
+     */
+    static Round configRetryOrFail(Controller &self, uint32_t nowMs, bool isValset) noexcept;
     static Round configNoReply(Controller &self, uint32_t nowMs, Action &out) noexcept;
     static Round configSwitchBaud(Controller &self, uint32_t nowMs, Action &out) noexcept;
     static Round configResync(Controller &self, uint32_t nowMs, Action &out) noexcept;

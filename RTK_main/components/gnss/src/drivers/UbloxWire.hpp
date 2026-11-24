@@ -89,6 +89,9 @@ inline constexpr uint32_t kKeyMsgoutGbsUart1 = 0x209100DEU;     // CFG-MSGOUT-NM
 inline constexpr uint32_t kKeyUart1Baudrate = 0x40520001U;      // CFG-UART1-BAUDRATE, U4
 inline constexpr uint32_t kKeyUart1OutprotRtcm3x = 0x10740004U; // CFG-UART1OUTPROT-RTCM3X, L
 inline constexpr uint32_t kKeyUart2OutprotRtcm3x = 0x10760004U; // CFG-UART2OUTPROT-RTCM3X, L
+inline constexpr uint32_t kKeyNmeaHighprec = 0x10930006U; // CFG-NMEA-HIGHPREC, L (7位小数经纬度)
+inline constexpr uint32_t kKeyNmeaSvNumbering =
+    0x20930007U; // CFG-NMEA-SVNUMBERING, E1 (1=EXTENDED)
 
 // 流动站启动静默的 12 条标准 NMEA 语句（HPG 1.12+ 全部支持；UART2 = UART1 + 1，UBX-22008968 §6.9.14）
 inline constexpr std::array<uint32_t, 12U> kNmeaSilenceUart1Keys{

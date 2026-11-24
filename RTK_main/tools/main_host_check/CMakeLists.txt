@@ -160,6 +160,7 @@ add_test(NAME template_module COMMAND template_check template_module)
 add_executable(gnss_output_check GnssOutputCheck.cpp
     GnssResetCheck.cpp
     ${PROJ_ROOT}/components/rtos/Executor.cpp
+    ${PROJ_ROOT}/main/app/SettingsBackend.cpp
     ${PROJ_ROOT}/main/board/BoardCurrent.cpp
     ${PROJ_ROOT}/main/board/BoardProfile.cpp
     ${PROJ_ROOT}/main/data/GnssAppRing.cpp

@@ -27,6 +27,10 @@
 #include "PppSequence.hpp"
 #include "UbloxExt.hpp"
 
+namespace settings {
+struct PeriodDomain;
+} // namespace settings
+
 namespace app {
 struct AppContext;
 
@@ -887,6 +891,22 @@ private:
 
     /** @brief 恢复已保存的旧输出周期。 @note 仅 kIo。 */
     void restoreOutputPeriods() noexcept;
+    /** @brief 判断周期在给定定位频率下是否满足 F9P 整倍导航历元规则（0 或 1..255 倍 Tnav）。 @param periodMs: 语句周期（ms）。 @param rateHz: 定位频率（Hz）。 @retval true 合法；false 非法。 @note 纯函数，线程/ISR 安全。 */
+    [[nodiscard]] static bool isF9pPeriodValid(uint32_t periodMs, uint8_t rateHz) noexcept;
+    /** @brief 在升序候选周期表中查找 rateHz 下不小于 periodMs 的最近 F9P 合法整倍历元周期（找不到取最大合法值）。 @param periods: 候选周期表（ms）。 @param periodMs: 期望周期（ms）。 @param rateHz: 定位频率（Hz）。 @retval 对齐后的合法周期（ms）。 @note 纯函数，线程/ISR 安全。 */
+    [[nodiscard]] static uint16_t alignF9pPeriodMs(std::span<const uint16_t> periods,
+                                                   uint32_t periodMs, uint8_t rateHz) noexcept;
+
+    /** @brief 过滤并填充单条语句在当前型号/频率下的设置能力周期域。 @param model: 型号。 @param navRateHz: 生效定位频率。 @param minPeriod: 最小周期（ms）。 @param gsvDisabled: GSV 是否关闭。 @param periods: 静态周期表。 @param[out] domain: 输出周期域。 @note 纯函数，线程/ISR 安全。 */
+    static void fillOutputPeriodDomain(::gnss::Model model, uint8_t navRateHz, uint32_t minPeriod,
+                                       bool gsvDisabled, std::span<const uint16_t> periods,
+                                       settings::PeriodDomain &domain) noexcept;
+    /** @brief 将启动对齐后的 F9P 输出周期写回 NVS 并推进配置版本。 @note 仅 kIo，写 NVS 可阻塞。 */
+    void persistAlignedF9pOutput() noexcept;
+    /** @brief 恢复非 F9P 型号已保存的旧输出周期。 @note 仅 kIo。 */
+    void restoreLegacyOutputPeriods() noexcept;
+    /** @brief 将 F9P 显式输出周期对齐到 rateHz 下不小于原值的最近合法整倍历元周期（0 保持 0）。 @param rateHz: 目标定位频率（Hz）。 @retval true 至少有一项周期被修改；false 全部已合法。 @note 仅 kIo。 */
+    [[nodiscard]] bool alignF9pOutputConfig(uint8_t rateHz) noexcept;
 
     /** @brief 发布当前型号和定位频率对应的取值域。 @note 仅 kIo。 */
     void publishCaps() noexcept;
@@ -974,6 +994,7 @@ private:
     uint32_t apply_seq_ = 0U;
     data::GnssOutConfig pending_prev_out_{};
     uint8_t pending_prev_rate_ = 0U;
+    bool pending_rate_out_aligned_ = false;
     uint32_t pending_seq_ = 0U;
     uint32_t pending_deadline_ms_ = 0U;
     std::array<data::GnssPushGate, data::kGnssAppMsgCount> push_gates_{};

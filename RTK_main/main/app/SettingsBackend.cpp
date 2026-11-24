@@ -114,7 +114,7 @@ uint32_t currentPeriod(const data::DataCenter &data, gnss::OutputMsg msg) noexce
     auto config = data::GnssOutConfig::defaults();
 #if RTK_GNSS_ENABLED
     const auto status = data.gnssStatus.read();
-    if (status.model == gnss::Model::kCm680) {
+    if ((status.model == gnss::Model::kCm680) || (status.model == gnss::Model::kZedF9p)) {
         if (msg == gnss::OutputMsg::kSatsInfo) {
             constexpr auto kGsvDomain = static_cast<size_t>(settings::OutKeyIndex::kGsv);
             if (data.gnssCaps.read().outPeriods[kGsvDomain].count <= 1U) {

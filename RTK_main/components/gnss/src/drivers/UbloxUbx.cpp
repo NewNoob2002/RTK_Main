@@ -103,13 +103,13 @@ bool UbloxReceiver::cmdConfigureReceiver(CmdBuf &out, uint16_t periodMs) noexcep
 }
 
 /**
- * @brief 设置导航周期，并打开接线口的 RTCM3 输入和 NMEA 输出。
+ * @brief 设置导航周期、打开接线口 RTCM3 输入与 NMEA 输出，并启用 NMEA 高精度与扩展卫星编号。
  * @param out: 目标命令缓冲。
  * @param periodMs: 导航周期，毫秒。
  * @param port: 接线口号，UART1 或 UART2。
  * @retval true 已写入完整帧。
- * @retval false 命令缓冲不足。
- * @note 纯编码，可重入，ISR 安全。键见 UBX-22008968 §6.9.35–36。
+ * @retval false 命令缓冲不足或端口非法。
+ * @note 纯编码，可重入，ISR 安全。键见 UBX-22008968 §6.9.15、§6.9.35–36。
  */
 bool UbloxReceiver::cmdConfigurePort(CmdBuf &out, uint16_t periodMs, uint8_t port) noexcept
 {
@@ -124,6 +124,8 @@ bool UbloxReceiver::cmdConfigurePort(CmdBuf &out, uint16_t periodMs, uint8_t por
     ublox::ValsetWriter writer{payload};
     return writer.begin(ublox::kLayerRam) && writer.addU2(ublox::kKeyRateMeas, periodMs) &&
            writer.addU1(rtcmKey, 1U) && writer.addU1(nmeaKey, 1U) &&
+           writer.addU1(ublox::kKeyNmeaHighprec, 1U) &&
+           writer.addU1(ublox::kKeyNmeaSvNumbering, 1U) &&
            cmdBuildFrame(out, ublox::kClsCfg, ublox::kIdCfgValset, writer.view());
 }
 

@@ -184,6 +184,10 @@ void GnssModule::handleUbxFrame(std::span<const uint8_t> frame, uint32_t nowMs) 
     const auto reply = valset_tracker_.onFrame(frame, nowMs, keys);
     if (reply == ::gnss::ublox::ValsetReplyKind::kNak) {
         logValsetIssue("NAK", keys);
+        if (::gnss::ublox::containsNmeaHighPrecKeys(keys)) {
+            FW_LOGW(fw::TraceCat::kGnss,
+                    "<ubx> NMEA high-precision VALSET NAK, degrading to base port config");
+        }
         return;
     }
     if ((reply == ::gnss::ublox::ValsetReplyKind::kAck) ||

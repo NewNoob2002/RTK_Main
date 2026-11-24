@@ -50,6 +50,7 @@ bool isBaudSwitchValset(std::span<const uint8_t> bytes) noexcept
     const size_t count = ::gnss::ublox::extractValsetKeys(bytes, keys);
     return (count == 1U) && ((keys[0U] == kUbloxUart1BaudKey) || (keys[0U] == kUbloxUart2BaudKey));
 }
+
 } // namespace
 
 using detail::kMaxActionsPerPoll;
@@ -142,7 +143,7 @@ void GnssModule::updateControllerStatus(uint32_t nowMs) noexcept
     }
     const auto curState = controller().state();
     if (curState != last_state_) {
-        if (curState == ::gnss::State::kConfiguring) {
+        if ((last_state_ == ::gnss::State::kProbing) && (curState == ::gnss::State::kConfiguring)) {
             ppp_replay_ = true;
             sat_replay_ = true;
         }
@@ -235,19 +236,36 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
     }
     fw::Result saveRes = fw::Result::kIoError;
     if (landed && (stats.failedMask == 0U)) {
-        const size_t keyIndex = pending_apply_ == PendingApply::kRate ? gnss_store::kRateKeyIndex
-                                                                      : gnss_store::kOutKeyIndex;
-        saveRes = ctx().storage.saveKeys(std::span{gnss_store::kConfigKeys}.subspan(keyIndex, 1U));
+        if (pending_apply_ == PendingApply::kRate) {
+            saveRes = ctx().storage.saveKeys(
+                std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kRateKeyIndex, 1U>());
+            if (fw::isOk(saveRes) && pending_rate_out_aligned_) {
+                saveRes = ctx().storage.saveKeys(
+                    std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
+                if (fw::isOk(saveRes)) {
+                    ctx().data.gnssOutCfg.write(out_cfg_);
+                }
+            }
+        } else {
+            saveRes = ctx().storage.saveKeys(
+                std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
+        }
     }
     if (fw::isOk(saveRes)) {
         last_apply_ = GnssApply::kOk;
         pending_apply_ = PendingApply::kNone;
+        pending_rate_out_aligned_ = false;
         ++apply_seq_;
     } else {
-        // 有语句失败或超时：NVS 保持旧值，界面与计划一起回滚到变更前。
+        // 有语句失败或超时：NVS 保持旧值，界面与计划一起回滚到变更前；改频率回滚须重配 CFG-RATE-MEAS。
+        const bool wasRate = (pending_apply_ == PendingApply::kRate);
         restorePendingApply();
         controller().setOutputPlan(makePlan());
-        static_cast<void>(controller().requestOutput(controller().outputPlan(), nowMs));
+        if (wasRate) {
+            controller().requestReconfigure(nowMs);
+        } else {
+            static_cast<void>(controller().requestOutput(controller().outputPlan(), nowMs));
+        }
     }
     publishStatus(nowMs);
     if (fw::isOk(saveRes)) {
@@ -263,8 +281,13 @@ void GnssModule::restorePendingApply() noexcept
         ctx().data.gnssOutCfg.write(out_cfg_);
     } else {
         ensureRoverCfg().rateHz = pending_prev_rate_;
+        if (pending_rate_out_aligned_) {
+            out_cfg_ = pending_prev_out_;
+            ctx().data.gnssOutCfg.write(out_cfg_);
+        }
     }
     pending_apply_ = PendingApply::kNone;
+    pending_rate_out_aligned_ = false;
     apply_deferred_ = false;
     pending_seq_ = 0U;
     pending_deadline_ms_ = 0U;
@@ -367,16 +390,11 @@ void GnssModule::publishCaps() noexcept
                                        ::gnss::OutputMsg::kRmc};
         const uint32_t minPeriod = kMsPerSecond / std::max(caps.navRateHz, uint8_t{1U});
         for (size_t i = 0U; i < kMessages.size(); ++i) {
-            auto &domain = caps.outPeriods[i];
             const bool gsvDisabled =
                 kMessages[i] == ::gnss::OutputMsg::kGsv && !ensureRoverCfg().gsv;
-            for (const auto period : receiver.outputPeriodsMs(kMessages[i], model)) {
-                if ((period == 0U || (!gsvDisabled && period >= minPeriod)) &&
-                    domain.count < domain.values.size()) {
-                    domain.values[domain.count++] = period;
-                }
-            }
-            domain.supported = domain.count != 0U;
+            fillOutputPeriodDomain(model, caps.navRateHz, minPeriod, gsvDisabled,
+                                   receiver.outputPeriodsMs(kMessages[i], model),
+                                   caps.outPeriods[i]);
         }
         caps.pppSupported = ::gnss::supportsPpp(model);
         caps.constMask = computeConstMask(model);
@@ -437,7 +455,108 @@ void GnssModule::restoreSettingsForModel() noexcept
     return msg;
 }
 
-void GnssModule::restoreOutputPeriods() noexcept
+bool GnssModule::isF9pPeriodValid(uint32_t periodMs, uint8_t rateHz) noexcept
+{
+    constexpr uint32_t kMaxEpochs = 255U;
+    if (periodMs == 0U) {
+        return true;
+    }
+    const uint32_t hz = (rateHz == 0U) ? 1U : static_cast<uint32_t>(rateHz);
+    if ((kMsPerSecond % hz) != 0U) {
+        return false;
+    }
+    const uint32_t navPeriod = kMsPerSecond / hz;
+    return (periodMs >= navPeriod) && ((periodMs % navPeriod) == 0U) &&
+           ((periodMs / navPeriod) <= kMaxEpochs);
+}
+
+uint16_t GnssModule::alignF9pPeriodMs(std::span<const uint16_t> periods, uint32_t periodMs,
+                                      uint8_t rateHz) noexcept
+{
+    if (periodMs == 0U) {
+        return 0U;
+    }
+    uint16_t lastValid = 0U;
+    for (const uint16_t candidate : periods) {
+        if ((candidate == 0U) || !isF9pPeriodValid(candidate, rateHz)) {
+            continue;
+        }
+        lastValid = candidate;
+        if (candidate >= periodMs) {
+            return candidate;
+        }
+    }
+    return lastValid;
+}
+
+bool GnssModule::alignF9pOutputConfig(uint8_t rateHz) noexcept
+{
+    const auto model = controller().detected().probe.model;
+    const auto &receiver = controller().receiver();
+    bool changed = false;
+    for (size_t i = 0U; i < data::kGnssAppMsgCount; ++i) {
+        if ((out_cfg_.mask & (1U << i)) == 0U || data::followsFixRate(out_cfg_, i)) {
+            continue;
+        }
+        // App 语句下标与 OutputMsg 的前缀一致。
+        const auto msg = outputCapabilityMsg(static_cast<::gnss::OutputMsg>(i));
+        const auto periods = receiver.outputPeriodsMs(msg, model);
+        if (periods.empty()) {
+            continue;
+        }
+        const uint32_t period =
+            core::services::GnssService::intervalToPeriodMs(out_cfg_.intervals[i]);
+        const uint16_t aligned = alignF9pPeriodMs(periods, period, rateHz);
+        if (aligned == period) {
+            continue;
+        }
+        int8_t interval = 0;
+        if (!settings::periodMsToInterval(static_cast<int32_t>(aligned), interval)) {
+            interval = 0;
+        }
+        if (fw::isOk(out_cfg_.applyInterval(i, interval))) {
+            changed = true;
+            FW_LOGW(fw::TraceCat::kGnss, "<cfg> aligned F9P output[%u] from %lu to %lu ms",
+                    static_cast<unsigned>(i), static_cast<unsigned long>(period),
+                    static_cast<unsigned long>(
+                        core::services::GnssService::intervalToPeriodMs(interval)));
+        }
+    }
+    return changed;
+}
+
+void GnssModule::fillOutputPeriodDomain(::gnss::Model model, uint8_t navRateHz, uint32_t minPeriod,
+                                        bool gsvDisabled, std::span<const uint16_t> periods,
+                                        settings::PeriodDomain &domain) noexcept
+{
+    for (const auto period : periods) {
+        const bool allowed =
+            (period == 0U) ||
+            (!gsvDisabled && (model == ::gnss::Model::kZedF9p ? isF9pPeriodValid(period, navRateHz)
+                                                              : (period >= minPeriod)));
+        if (allowed && (domain.count < domain.values.size())) {
+            domain.values[domain.count++] = period;
+        }
+    }
+    domain.supported = domain.count != 0U;
+}
+
+void GnssModule::persistAlignedF9pOutput() noexcept
+{
+    if (ctx().bootConfig.safeDefaults || !ctx().bootConfig.userNvsReady) {
+        return;
+    }
+    const fw::Result saveRes = ctx().storage.saveKeys(
+        std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
+    if (fw::isOk(saveRes)) {
+        ctx().data.configRev.fetch_add(1U, std::memory_order_release);
+    } else {
+        FW_LOGW(fw::TraceCat::kGnss, "<cfg> persist aligned F9P output failed (%s)",
+                fw::toString(saveRes));
+    }
+}
+
+void GnssModule::restoreLegacyOutputPeriods() noexcept
 {
     const auto model = controller().detected().probe.model;
     const auto &receiver = controller().receiver();
@@ -470,6 +589,19 @@ void GnssModule::restoreOutputPeriods() noexcept
     ctx().data.gnssOutCfg.write(out_cfg_);
 }
 
+void GnssModule::restoreOutputPeriods() noexcept
+{
+    if (controller().detected().probe.model == ::gnss::Model::kZedF9p) {
+        const bool changed = alignF9pOutputConfig(ensureRoverCfg().rateHz);
+        ctx().data.gnssOutCfg.write(out_cfg_);
+        if (changed) {
+            persistAlignedF9pOutput();
+        }
+        return;
+    }
+    restoreLegacyOutputPeriods();
+}
+
 ::gnss::OutputPlan GnssModule::makePlan() noexcept
 {
     uint8_t rateHz = 0U;
@@ -492,6 +624,25 @@ void GnssModule::restoreOutputPeriods() noexcept
         // 自适应 GSA 的默认规则是 1 Hz。显式值仍由驱动校验。
         if (plan.periodMs[kGsa] != 0U && data::followsFixRate(out_cfg_, kGsa)) {
             plan.periodMs[kGsa] = kMsPerSecond;
+        }
+    } else if (model == ::gnss::Model::kZedF9p) {
+        const auto &receiver = controller().receiver();
+        constexpr auto kGsa = static_cast<size_t>(::gnss::OutputMsg::kGsa);
+        // 自适应 GSA 默认按 1 Hz 输出，避免高频下多系统 GSA 泛洪 SPP。
+        if (plan.periodMs[kGsa] != 0U && data::followsFixRate(out_cfg_, kGsa)) {
+            plan.periodMs[kGsa] = kMsPerSecond;
+        }
+        for (size_t i = 0U; i < plan.periodMs.size(); ++i) {
+            if (plan.periodMs[i] == 0U) {
+                continue;
+            }
+            // 下标与 OutputMsg 一致（0..kOutputMsgCount-1）。
+            const auto msg = outputCapabilityMsg(static_cast<::gnss::OutputMsg>(i));
+            const auto periods = receiver.outputPeriodsMs(msg, model);
+            if (periods.empty()) {
+                continue;
+            }
+            plan.periodMs[i] = alignF9pPeriodMs(periods, plan.periodMs[i], plan.rateHz);
         }
     }
     return plan;
