@@ -504,6 +504,11 @@ void ValsetTracker::enterResync(uint32_t nowMs) noexcept
     resync_until_ms_ = nowMs + kValsetResyncWindowMs;
 }
 
+/**
+ * @brief 查询是否仍在 300 ms 重同步窗口内。
+ * @param nowMs: 当前单调时钟（ms）。
+ * @retval true 仍在重同步窗口内；false 已结束或未处于重同步。
+ */
 bool ValsetTracker::resyncing(uint32_t nowMs) const noexcept
 {
     return resyncing_ && !timeReached(nowMs, resync_until_ms_);
@@ -524,6 +529,13 @@ bool ValsetTracker::pollTimeout(uint32_t nowMs, std::span<const uint32_t> &keysO
     return false;
 }
 
+/**
+ * @brief 处理收到的一帧 UBX，判定是否匹配当前在途 VALSET。
+ * @param frame: 已校验的完整 UBX 帧。
+ * @param nowMs: 当前单调时钟（ms）。
+ * @param[out] keysOut: 返回 kAck/kNak 时指向被匹配的在途键表，其余情况为空。
+ * @retval kNone 非 VALSET ACK/NAK；kAck/kNak 匹配在途命令；kUnmatched 空闲或重同步期迟到/重复应答。
+ */
 ValsetReplyKind ValsetTracker::onFrame(std::span<const uint8_t> frame, uint32_t nowMs,
                                        std::span<const uint32_t> &keysOut) noexcept
 {
