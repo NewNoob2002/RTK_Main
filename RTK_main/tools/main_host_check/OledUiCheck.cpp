@@ -1154,7 +1154,15 @@ void testHoldOverlayAndPowerOffConfirm() noexcept
     // 5. 单击确认（经双击窗口消歧后）提交 OledAction::kShutdownKey。
     dec = ui.step(16000U, {}, vm, true);
     CHECK(ui.renderState(16000U).modal == UiModal::kPowerOffConfirm);
-    dec = once(16100U);
+    // 按下当刻与窗口到期前 1 ms 都不得提前确认（等待双击消歧）。
+    const std::array<uint32_t, 1U> pressKey{16100U};
+    dec = ui.step(16100U, pressKey, vm);
+    CHECK(dec.action.action == OledAction::kNone &&
+          ui.renderState(16100U).modal == UiModal::kPowerOffConfirm);
+    dec = ui.step(16100U + kDoubleClickWindowMs - 1U, {}, vm);
+    CHECK(dec.action.action == OledAction::kNone &&
+          ui.renderState(16100U + kDoubleClickWindowMs - 1U).modal == UiModal::kPowerOffConfirm);
+    dec = ui.step(16100U + kDoubleClickWindowMs, {}, vm);
     CHECK(dec.action.action == OledAction::kShutdownKey &&
           ui.renderState(16100U + kDoubleClickWindowMs).modal == UiModal::kNone);
     // 双击同样确认。

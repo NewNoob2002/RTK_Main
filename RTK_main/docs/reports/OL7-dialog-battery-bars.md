@@ -41,3 +41,11 @@ DRAM 增量远低于 128 B 预算，IRAM 无增长，无运行期堆分配。
 
 - 真机 OLED 观感、充电动画节奏、电池曲线下的实际迟滞效果未经 HIL。
 - 迟滞门限（降 3 点/30 s、升 5 点/60 s）为卡片给定值，未用实测放电曲线校准。
+
+## 架构签收与评审修复（OL7-FIX）
+
+- 架构签收：`main/def/SystemDef.hpp` 的 `PowerSnapshot.batterySimSession` 授权偏离已由 Architect 评审后签收（评审 PASS）。
+- Nit #2：`BatteryBars::stepHysteresis` 升/降一格后按新 `latched_` 立即重新评估，条件仍成立则以当前 `nowMs` 重新武装计时，`nextWakeMs` 因此覆盖连续多格（5 格突降到 10%：30 s 降到 4、60 s 降到 3…）。原用例 `d` 的预期随之调整（降格后以降格时刻起算，60001 ms 降到 3），新增 `testBatteryBarsMultiStepDrop`（连降与对称连升）。
+- Nit #3：`OledRender.cpp` 两处函数注释改为 5 格电池图标。
+- Nit #4：`OledUiCheck` 关机弹窗单击用例补充按下当刻与 +299 ms 仍为 `kNone`、+300 ms 才 `kShutdownKey` 的断言。
+- 重跑：host 全量（普通，`ctest` 205/205）、`tools/ci/run_gates.sh --prefix ol7 --base 8c6ef0e` 43/43 PASS（含 ASan/UBSan、doc_check、clang-tidy、IDF 构建）。

@@ -252,29 +252,41 @@ void BatteryBars::update(uint32_t nowMs, const BatteryBarsInput &in) noexcept
 void BatteryBars::stepHysteresis(uint32_t nowMs, uint8_t pctIn) noexcept
 {
     const int pct = static_cast<int>(pctIn);
-    const int lower = (static_cast<int>(latched_) - 1) * static_cast<int>(kBatteryBarStepPct);
-    const int upper = static_cast<int>(latched_) * static_cast<int>(kBatteryBarStepPct);
-    const bool wantDown =
-        (latched_ > 1U) && (pct <= lower - static_cast<int>(kBatteryBarDownMarginPct));
-    const bool wantUp =
-        (latched_ < kBatteryBarsMax) && (pct >= upper + static_cast<int>(kBatteryBarUpMarginPct));
-    upArmed_ = upArmed_ && wantUp;
-    downArmed_ = downArmed_ && wantDown;
-    if (wantDown) {
-        if (!downArmed_) {
-            downArmed_ = true;
-            downSinceMs_ = nowMs;
-        } else if ((nowMs - downSinceMs_) >= kBatteryBarDownHoldMs) {
+    // 每次升降格后按新 latched_ 重新评估一轮（最多两轮）：条件仍成立则以 nowMs 重新武装计时，
+    // 使 nextWakeMs 能覆盖连续多格（如 5 格突降到 10%，每 30 s 降一格）。
+    for (int round = 0; round < 2; ++round) {
+        const int lower = (static_cast<int>(latched_) - 1) * static_cast<int>(kBatteryBarStepPct);
+        const int upper = static_cast<int>(latched_) * static_cast<int>(kBatteryBarStepPct);
+        const bool wantDown =
+            (latched_ > 1U) && (pct <= lower - static_cast<int>(kBatteryBarDownMarginPct));
+        const bool wantUp = (latched_ < kBatteryBarsMax) &&
+                            (pct >= upper + static_cast<int>(kBatteryBarUpMarginPct));
+        upArmed_ = upArmed_ && wantUp;
+        downArmed_ = downArmed_ && wantDown;
+        if (wantDown) {
+            if (!downArmed_) {
+                downArmed_ = true;
+                downSinceMs_ = nowMs;
+                return;
+            }
+            if ((nowMs - downSinceMs_) < kBatteryBarDownHoldMs) {
+                return;
+            }
             latched_ = static_cast<uint8_t>(latched_ - 1U); // wantDown 保证 latched_ > 1
             downArmed_ = false;
-        }
-    } else if (wantUp) {
-        if (!upArmed_) {
-            upArmed_ = true;
-            upSinceMs_ = nowMs;
-        } else if ((nowMs - upSinceMs_) >= kBatteryBarUpHoldMs) {
+        } else if (wantUp) {
+            if (!upArmed_) {
+                upArmed_ = true;
+                upSinceMs_ = nowMs;
+                return;
+            }
+            if ((nowMs - upSinceMs_) < kBatteryBarUpHoldMs) {
+                return;
+            }
             latched_ = static_cast<uint8_t>(latched_ + 1U); // wantUp 保证 latched_ < 5
             upArmed_ = false;
+        } else {
+            return;
         }
     }
 }

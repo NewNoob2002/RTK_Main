@@ -577,12 +577,14 @@ void testBatteryBarsDischargeHysteresis() noexcept
     CHECK(d.view(30000U).bars == 5U);
     d.update(30001U, barsIn(30U));
     CHECK(d.view(30001U).bars == 4U);
-    d.update(60000U, barsIn(30U)); // 降格后下一次采样重新开始计时
+    d.update(60000U, barsIn(30U)); // 降格后以降格时刻重新武装，差 1 ms 到期
     CHECK(d.view(60000U).bars == 4U);
-    d.update(89999U, barsIn(30U));
-    CHECK(d.view(89999U).bars == 4U);
+    d.update(60001U, barsIn(30U));
+    CHECK(d.view(60001U).bars == 3U);
     d.update(90000U, barsIn(30U));
     CHECK(d.view(90000U).bars == 3U);
+    d.update(90001U, barsIn(30U)); // 3 格下界 40，30 <= 37 继续降到 2
+    CHECK(d.view(90001U).bars == 2U);
     // 最低一格不再降。
     BatteryBars e{};
     e.update(0U, barsIn(30U));
@@ -708,6 +710,35 @@ void testBatteryBarsLowBlink() noexcept
     CHECK(!chg.view(500U).blinking && chg.view(500U).bars == 2U);
 }
 
+/** @brief OL7：5 格突降到 10% 时每 30 s 连降一格，nextWakeMs 覆盖整个多格序列。 */
+void testBatteryBarsMultiStepDrop() noexcept
+{
+    BatteryBars b{};
+    b.update(0U, barsIn(100U - 1U)); // 5 格
+    CHECK(b.view(0U).bars == 5U);
+    b.update(1000U, barsIn(10U)); // 开始计时（10% 不闪烁）
+    CHECK(b.nextWakeMs(1000U) == kBatteryBarDownHoldMs);
+    b.update(31000U - 1U, barsIn(10U));
+    CHECK(b.view(31000U - 1U).bars == 5U);
+    b.update(31000U, barsIn(10U)); // 降到 4，并以 31000 重新武装
+    CHECK(b.view(31000U).bars == 4U && b.nextWakeMs(31000U) == kBatteryBarDownHoldMs);
+    b.update(61000U - 1U, barsIn(10U));
+    CHECK(b.view(61000U - 1U).bars == 4U);
+    b.update(61000U, barsIn(10U)); // 3
+    CHECK(b.view(61000U).bars == 3U && b.nextWakeMs(61000U) == kBatteryBarDownHoldMs);
+    b.update(91000U, barsIn(10U)); // 2
+    CHECK(b.view(91000U).bars == 2U && b.nextWakeMs(91000U) == kBatteryBarDownHoldMs);
+    b.update(121000U, barsIn(10U)); // 1：已到 10% 所在格，不再降
+    CHECK(b.view(121000U).bars == 1U && b.nextWakeMs(121000U) == UINT32_MAX);
+    // 对称：1 格突升到 100%（满电前的非充电读数）每 60 s 连升一格。
+    BatteryBars u{};
+    u.update(0U, barsIn(10U));
+    u.update(1000U, barsIn(99U));
+    CHECK(u.nextWakeMs(1000U) == kBatteryBarUpHoldMs);
+    u.update(61000U, barsIn(99U));
+    CHECK(u.view(61000U).bars == 2U && u.nextWakeMs(61000U) == kBatteryBarUpHoldMs);
+}
+
 /** @brief OL7：power simbat 会话变化立即重新定格，跳过滞回与保持。 */
 void testBatteryBarsSimSession() noexcept
 {
@@ -751,6 +782,7 @@ int main()
     testBatteryBarsCharging();
     testBatteryBarsUnplugHold();
     testBatteryBarsLowBlink();
+    testBatteryBarsMultiStepDrop();
     testBatteryBarsSimSession();
     return s_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

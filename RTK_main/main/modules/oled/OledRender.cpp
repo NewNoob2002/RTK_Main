@@ -1266,7 +1266,7 @@ void renderSubDevice(Canvas &canvas, const UiRenderState &state, const ViewModel
 }
 
 /**
- * @brief 渲染电源子页（左主卡动态电池图标+滚动百分比，右列表：电压、充电状态、USB、Power off、Back）
+ * @brief 渲染电源子页（左主卡 5 格电池图标，右列表：电压、充电状态、USB、Power off、Back）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -1319,7 +1319,7 @@ void drawStandbyBattery(Canvas &canvas, const UiRenderState &state) noexcept
 }
 
 /**
- * @brief 渲染重做后的充电待机页（左侧大号电量滚动+流动电池条+状态/电压，右侧保持环+HOLD 2s ON，底行 FW/HW）
+ * @brief 渲染重做后的充电待机页（左侧大号 5 格电池图标+状态/电压，右侧保持环+HOLD 2s ON，底行 FW/HW）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
