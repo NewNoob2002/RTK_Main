@@ -132,7 +132,7 @@
 | 控制台 `power off` | PASS（自动） | `power off reason=console usb=0`，0.55 s 后 `device powered down` |
 | 低电 120 s：`simbat 5` 63 s 后 `off` 取消；重复 `off` 无副作用；再 `simbat 5` | PASS（自动） | 第二轮 120.03 s 触发 `low battery shutdown` / `reason=low_battery usb=0`；111 s 时仍 `stage=idle` |
 | 断电约 9 s 后串口出现 `E BOD: Brownout detector was triggered` | 正常（用户确认） | 电池通路关断后的欠压，非缺陷 |
-| 模拟低电期间 OLED 显示 | NOT_RUN | 待控制台注入后目视 |
+| 模拟低电期间 OLED 显示 | PASS（用户目视） | 串口打开复位一次后 `simbat 5` 显示 5%，100 s 后 `simbat off` 恢复 96%，期间未关机 |
 | 3 s 保存超时与逐项参与者名 | NOT_RUN | 控制台无阻塞保存手段，由主机测试覆盖 |
 ---
 
