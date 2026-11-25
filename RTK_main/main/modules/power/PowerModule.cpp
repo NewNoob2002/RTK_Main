@@ -172,7 +172,8 @@ constinit size_t s_extra_participant_count = 0U;
            (lhs.shutdownDegradedMask == rhs.shutdownDegradedMask) &&
            (lhs.shutdownDoneCount == rhs.shutdownDoneCount) &&
            (lhs.shutdownTotalCount == rhs.shutdownTotalCount) &&
-           (lhs.shortPresses == rhs.shortPresses) && (lhs.longPresses == rhs.longPresses);
+           (lhs.shortPresses == rhs.shortPresses) && (lhs.longPresses == rhs.longPresses) &&
+           (lhs.batterySimSession == rhs.batterySimSession);
 }
 
 } // namespace
@@ -1355,6 +1356,7 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         .shutdownTotalCount = counts.total,
         .shortPresses = shortPresses_,
         .longPresses = longPresses_,
+        .batterySimSession = simSession_,
     };
     if (!force && (next.usbPresent != lastSnapshot_.usbPresent ||
                    next.usbSource != lastSnapshot_.usbSource)) {

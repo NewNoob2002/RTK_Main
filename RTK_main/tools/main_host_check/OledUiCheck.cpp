@@ -714,8 +714,8 @@ void testRenderAllPagesAndDirtySkip() noexcept
     // 6. R2OL2-05：独立分区域断言卫星数与电量滚动（含方向差异与终值一致），任一路动画被删均会直接失败。
     constexpr size_t kSatColBegin = 10U;
     constexpr size_t kSatColEnd = 30U;
-    constexpr size_t kBatColBegin = 80U;
-    constexpr size_t kBatColEnd = 108U;
+    constexpr size_t kBatColBegin = 100U;
+    constexpr size_t kBatColEnd = 128U;
     ViewModel rollVm = makeHealthyVm();
     rollVm.satsUsed = 18U;
     rollVm.batteryPct = 72U;
@@ -745,29 +745,29 @@ void testRenderAllPagesAndDirtySkip() noexcept
     renderUi(satSt, rollVm, fbDir);
     CHECK(regionEqual(fb2, fbDir, 0U, kSatColBegin, kSatColEnd));
 
-    // 6b. 仅电量百分比滚动（85->72 递减 vs 60->72 递增）：电量区域中点 != 终帧、递减 != 递增、终帧 == 静态无滚帧，且卫星区域不受影响。
-    NumberRoll batDown{};
-    batDown.update(85, 0U);
-    batDown.update(72, 100U);
-    NumberRoll batUp{};
-    batUp.update(60, 0U);
-    batUp.update(72, 100U);
+    // 6b. OL7：电量只用 5 格表示，表头电量区域随格数变化；百分比数字不再绘制（同格数、不同百分比像素一致）。
     UiRenderState batSt{};
     batSt.page = OledPage::kDialplate;
-    batSt.batRoll = &batDown;
-    batSt.nowMs = 160U;
+    batSt.batBars = board::BatteryBarsView{.bars = 4U};
     renderUi(batSt, rollVm, fb);
-    batSt.nowMs = 350U;
+    batSt.batBars = board::BatteryBarsView{.bars = 2U};
     renderUi(batSt, rollVm, fb2);
     CHECK(!regionEqual(fb, fb2, 0U, kBatColBegin, kBatColEnd));
     CHECK(regionEqual(fb, fb2, 0U, kSatColBegin, kSatColEnd));
-    batSt.batRoll = &batUp;
-    batSt.nowMs = 160U;
+    batSt.batBars = board::BatteryBarsView{.bars = 4U};
+    ViewModel samePctBars = rollVm;
+    samePctBars.batteryPct = 61U;
+    renderUi(batSt, samePctBars, fbDir);
+    CHECK(std::memcmp(fb, fbDir, sizeof(ScreenBuff)) == 0);
+    // 低电闪烁熄灭相位少画最后一格；未知（0 格）仅画外框。
+    batSt.batBars = board::BatteryBarsView{.bars = 1U, .blinking = true, .blinkOff = true};
+    renderUi(batSt, rollVm, fb);
+    batSt.batBars = board::BatteryBarsView{.bars = 1U, .blinking = true, .blinkOff = false};
+    renderUi(batSt, rollVm, fb2);
+    CHECK(!regionEqual(fb, fb2, 0U, kBatColBegin, kBatColEnd));
+    batSt.batBars = board::BatteryBarsView{};
     renderUi(batSt, rollVm, fbDir);
-    CHECK(!regionEqual(fb, fbDir, 0U, kBatColBegin, kBatColEnd));
-    batSt.batRoll = nullptr;
-    renderUi(batSt, rollVm, fbDir);
-    CHECK(regionEqual(fb2, fbDir, 0U, kBatColBegin, kBatColEnd));
+    CHECK(regionEqual(fb, fbDir, 0U, kBatColBegin, kBatColEnd));
 
     // 7. ROL2-05 / R2OL2-06：kReadback 与 kRunning 一致；非运行态按枚举分别展示精准右侧文案（非笼统 GNSS WAIT）。
     ViewModel rbVm = makeHealthyVm();
@@ -908,7 +908,7 @@ void testTransitionRetainsStatusBar() noexcept
     state.page = OledPage::kSubPower;
     state.transition = &transition;
     state.nowMs = 1250U;
-    vm.batteryPct = 10U;
+    state.batBars = board::BatteryBarsView{.bars = 1U}; // 电量格变化（OL7 不再画百分比）
     CHECK(renderUi(state, vm, fb, true));
     CHECK(std::ranges::equal(fb[0], header));
     state.transition = nullptr;
@@ -1133,46 +1133,51 @@ void testHoldOverlayAndPowerOffConfirm() noexcept
     vm.pairing.requestDeadlineMs = 30000U;
     dec = ui.step(3200U, {}, vm);
     CHECK(ui.renderState(3200U).modal == UiModal::kPowerOffConfirm);
-    // 双击默认 Cancel 关闭关机弹窗，同一轮显示排队中的配对弹窗。
-    dec = twice(3600U);
-    CHECK(dec.action.action == OledAction::kNone && ui.renderState(3600U).modal == UiModal::kPair);
-    CHECK(ui.renderState(3600U).modalFocusX == 0);
+    // OL7：关机弹窗只有一个确认项；5 s 超时取消后同一轮显示排队中的配对弹窗，焦点不偏移。
+    dec = ui.step(7999U, {}, vm);
+    CHECK(ui.renderState(7999U).modal == UiModal::kPowerOffConfirm);
+    dec = ui.step(8000U, {}, vm);
+    CHECK(dec.action.action == OledAction::kNone && ui.renderState(8000U).modal == UiModal::kPair);
+    CHECK(ui.renderState(8000U).modalFocusX == 0);
     vm.pairing.id = 0U;
-    static_cast<void>(ui.step(3700U, {}, vm));
+    static_cast<void>(ui.step(8100U, {}, vm));
 
-    // 4. 5 s 倒计时超时自动取消。
-    dec = ui.step(4000U, {}, vm, true);
-    CHECK(ui.renderState(4000U).modal == UiModal::kPowerOffConfirm);
-    CHECK(ui.renderState(6000U).powerOffRemainMs == 3000U);
-    CHECK(once(6100U).action.action == OledAction::kNone); // 已选 OK 也应自动取消。
-    dec = ui.step(8999U, {}, vm);
-    CHECK(ui.renderState(8999U).modal == UiModal::kPowerOffConfirm);
-    dec = twice(9000U);
-    CHECK(ui.renderState(9000U).modal == UiModal::kNone && dec.action.action == OledAction::kNone);
-
-    // 5. 双击确认才提交 OledAction::kShutdownKey。
+    // 4. 5 s 倒计时超时自动取消，且不触发关机。
     dec = ui.step(10000U, {}, vm, true);
     CHECK(ui.renderState(10000U).modal == UiModal::kPowerOffConfirm);
-    CHECK(once(10100U).action.action == OledAction::kNone);
-    dec = twice(10800U);
+    CHECK(ui.renderState(12000U).powerOffRemainMs == 3000U);
+    dec = ui.step(14999U, {}, vm);
+    CHECK(ui.renderState(14999U).modal == UiModal::kPowerOffConfirm);
+    dec = ui.step(15000U, {}, vm);
+    CHECK(ui.renderState(15000U).modal == UiModal::kNone && dec.action.action == OledAction::kNone);
+
+    // 5. 单击确认（经双击窗口消歧后）提交 OledAction::kShutdownKey。
+    dec = ui.step(16000U, {}, vm, true);
+    CHECK(ui.renderState(16000U).modal == UiModal::kPowerOffConfirm);
+    dec = once(16100U);
     CHECK(dec.action.action == OledAction::kShutdownKey &&
-          ui.renderState(10800U).modal == UiModal::kNone);
+          ui.renderState(16100U + kDoubleClickWindowMs).modal == UiModal::kNone);
+    // 双击同样确认。
+    dec = ui.step(18000U, {}, vm, true);
+    CHECK(ui.renderState(18000U).modal == UiModal::kPowerOffConfirm);
+    dec = twice(18800U);
+    CHECK(dec.action.action == OledAction::kShutdownKey &&
+          ui.renderState(18800U).modal == UiModal::kNone);
 
     // 6. 电源子页 Power off 项（索引 3）双击同样进入 POWER OFF? 确认页。
     // 从 dock 0 单击 4 次选到 Power(4)，双击进入 kSubPower。
-    static_cast<void>(once(11000U));
-    static_cast<void>(once(11400U));
-    static_cast<void>(once(11800U));
-    static_cast<void>(once(12200U));
-    CHECK(twice(12700U).page == OledPage::kSubPower);
-    static_cast<void>(once(13200U));
-    static_cast<void>(once(13600U));
-    static_cast<void>(once(14000U));
+    static_cast<void>(once(21000U));
+    static_cast<void>(once(21400U));
+    static_cast<void>(once(21800U));
+    static_cast<void>(once(22200U));
+    CHECK(twice(22700U).page == OledPage::kSubPower);
+    static_cast<void>(once(23200U));
+    static_cast<void>(once(23600U));
+    static_cast<void>(once(24000U));
     CHECK(ui.subSelected() == 3U);
-    dec = twice(14500U);
-    CHECK(ui.renderState(14500U).modal == UiModal::kPowerOffConfirm);
-    CHECK(once(14600U).action.action == OledAction::kNone);
-    CHECK(twice(15300U).action.action == OledAction::kShutdownKey);
+    dec = twice(24500U);
+    CHECK(ui.renderState(24500U).modal == UiModal::kPowerOffConfirm);
+    CHECK(once(24600U).action.action == OledAction::kShutdownKey);
 }
 
 /** @brief 验证 OL4 充电待机页唤醒环进度、松开回落、<= 2 fps 充电动画与充满静止 0 写入。 */

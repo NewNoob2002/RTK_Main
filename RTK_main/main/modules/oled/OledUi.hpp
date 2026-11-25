@@ -115,6 +115,7 @@ struct ViewModel {
     std::array<SatSnrItem, kTopSnrBars> topSnr{};
     uint8_t topSnrCount = 0U;
     uint8_t batteryPct = board::kBatteryPctUnknown;
+    uint32_t batterySimSession = 0U; // power simbat 会话号，变化时电量格立即重新锁定
     uint32_t batteryMv = 0U;
     bool usbPresent = false;
     bool charging = false;
@@ -355,7 +356,7 @@ struct UiRenderState {
     const SystemCheckSm *checkSm = nullptr;
     const PageTransition *transition = nullptr;
     const NumberRoll *satsRoll = nullptr;
-    const NumberRoll *batRoll = nullptr;
+    board::BatteryBarsView batBars{}; // 电量格结论（0 格 = 未知，OL7）
 };
 
 /**
@@ -553,6 +554,13 @@ private:
                                                  bool animating) const noexcept;
 
     /**
+     * @brief 电量格状态机需要的下一次唤醒等待时长（充电填充/低电闪烁/迟滞计时）
+     * @param nowMs: 当前单调时间（ms）
+     * @retval 等待毫秒，无需唤醒时为 kWaitForEvent
+     */
+    [[nodiscard]] uint32_t barsWaitMs(uint32_t nowMs) const noexcept;
+
+    /**
      * @brief 处理统一可滚动列表子页（位置/通信/设备/电源）的单击滚动与双击确认
      * @param click: 点击类型
      * @param nowMs: 当前单调时间（ms）
@@ -633,7 +641,7 @@ private:
     FixedSpring modalFocusSpring_{};
     SquishAnim squish_{};
     NumberRoll satsRoll_{};
-    NumberRoll batRoll_{};
+    board::BatteryBars bars_{}; // 电量格迟滞/动画状态机（OL7，约 40 B）
 };
 
 /** 每页用 16 列一组的摘要定位脏列，在唯一帧缓冲上找出覆盖所有变化的区间。 */

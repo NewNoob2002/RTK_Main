@@ -503,6 +503,233 @@ void testLowBatteryTimer() noexcept
  * @retval EXIT_FAILURE 存在失败用例
  * @note 单线程主机测试，非 ISR。
  */
+/** @brief 构造一次电量格采样。 @param pct: 电量。 @param usb: USB 在位。 @param chg: 充电。 @param sess: simbat 会话。 @retval 采样。 */
+BatteryBarsInput barsIn(uint8_t pct, bool usb = false, bool chg = false,
+                        uint32_t sess = 0U) noexcept
+{
+    return BatteryBarsInput{.pct = pct, .usbPresent = usb, .charging = chg, .simSession = sess};
+}
+
+/** @brief OL7：首个有效样本直接定格，格边界 20/40/60/80，未知为 0 格。 */
+void testBatteryBarsLatchAndBoundaries() noexcept
+{
+    struct Case {
+        uint8_t pct;
+        uint8_t bars;
+    };
+    constexpr std::array<Case, 12U> kCases{{{0U, 1U},
+                                            {19U, 1U},
+                                            {20U, 2U},
+                                            {39U, 2U},
+                                            {40U, 3U},
+                                            {59U, 3U},
+                                            {60U, 4U},
+                                            {79U, 4U},
+                                            {80U, 5U},
+                                            {99U, 5U},
+                                            {100U, 5U},
+                                            {55U, 3U}}};
+    for (const auto &c : kCases) {
+        BatteryBars b{};
+        b.update(1000U, barsIn(c.pct));
+        CHECK(b.view(1000U).bars == c.bars);
+    }
+    BatteryBars unknown{};
+    unknown.update(0U, barsIn(kBatteryPctUnknown));
+    CHECK(unknown.view(0U).bars == 0U && !unknown.view(0U).blinking);
+    CHECK(unknown.nextWakeMs(0U) == UINT32_MAX);
+    // 未知后恢复有效样本：直接定格。
+    unknown.update(10U, barsIn(85U));
+    CHECK(unknown.view(10U).bars == 5U);
+}
+
+/** @brief OL7：放电降格需低于当前格下界 3 个百分点并持续 30 s（±1 ms 边界）。 */
+void testBatteryBarsDischargeHysteresis() noexcept
+{
+    BatteryBars b{};
+    b.update(0U, barsIn(65U)); // 4 格（60..79）
+    CHECK(b.view(0U).bars == 4U);
+    // 58 仍在 3 点范围内（下界 60，需 <=57）。
+    b.update(1000U, barsIn(58U));
+    b.update(40000U, barsIn(58U));
+    CHECK(b.view(40000U).bars == 4U);
+    // 57 开始计时，29999 ms 不降，30000 ms 降一格。
+    b.update(50000U, barsIn(57U));
+    b.update(79999U, barsIn(57U));
+    CHECK(b.view(79999U).bars == 4U);
+    b.update(80000U, barsIn(57U));
+    CHECK(b.view(80000U).bars == 3U);
+    // 中途回到范围内清除计时：再次低于需重新累计 30 s。
+    BatteryBars c{};
+    c.update(0U, barsIn(65U));
+    c.update(1000U, barsIn(50U));
+    c.update(20000U, barsIn(61U)); // 清除计时
+    c.update(21000U, barsIn(50U));
+    c.update(50999U, barsIn(50U));
+    CHECK(c.view(50999U).bars == 4U);
+    c.update(51000U, barsIn(50U));
+    CHECK(c.view(51000U).bars == 3U);
+    // 骤降多格时每 30 s 只降一格。
+    BatteryBars d{};
+    d.update(0U, barsIn(95U)); // 5 格
+    d.update(1U, barsIn(30U));
+    d.update(30000U, barsIn(30U));
+    CHECK(d.view(30000U).bars == 5U);
+    d.update(30001U, barsIn(30U));
+    CHECK(d.view(30001U).bars == 4U);
+    d.update(60000U, barsIn(30U)); // 降格后下一次采样重新开始计时
+    CHECK(d.view(60000U).bars == 4U);
+    d.update(89999U, barsIn(30U));
+    CHECK(d.view(89999U).bars == 4U);
+    d.update(90000U, barsIn(30U));
+    CHECK(d.view(90000U).bars == 3U);
+    // 最低一格不再降。
+    BatteryBars e{};
+    e.update(0U, barsIn(30U));
+    e.update(1U, barsIn(0U));
+    e.update(40000U, barsIn(0U));
+    e.update(80000U, barsIn(0U));
+    CHECK(e.view(80000U).bars == 1U);
+    // uint32_t 时钟回绕：计时跨越 0 仍按 30 s 判定。
+    BatteryBars w{};
+    const uint32_t t0 = UINT32_MAX - 9999U;
+    w.update(t0 - 1U, barsIn(65U));
+    w.update(t0, barsIn(50U));
+    w.update(t0 + 29999U, barsIn(50U));
+    CHECK(w.view(t0 + 29999U).bars == 4U);
+    w.update(t0 + 30000U, barsIn(50U));
+    CHECK(w.view(t0 + 30000U).bars == 3U);
+}
+
+/** @brief OL7：升格需高于当前格上界 5 个百分点并持续 60 s；短暂回弹不抬格。 */
+void testBatteryBarsRecoveryHysteresis() noexcept
+{
+    BatteryBars b{};
+    b.update(0U, barsIn(45U)); // 3 格（40..59）
+    // 上界 60：64 点仍在 5 点范围内，不升。
+    b.update(1000U, barsIn(64U));
+    b.update(200000U, barsIn(64U));
+    CHECK(b.view(200000U).bars == 3U);
+    // 65 开始计时：59999 ms 不升，60000 ms 升一格。
+    b.update(300000U, barsIn(65U));
+    b.update(359999U, barsIn(65U));
+    CHECK(b.view(359999U).bars == 3U);
+    b.update(360000U, barsIn(65U));
+    CHECK(b.view(360000U).bars == 4U);
+    // 短暂回弹（< 60 s）后回落：不升格；重新回弹需重新累计 60 s。
+    BatteryBars c{};
+    c.update(0U, barsIn(45U));
+    c.update(1000U, barsIn(70U));
+    c.update(30000U, barsIn(70U));
+    c.update(30001U, barsIn(50U)); // 清除计时
+    c.update(100000U, barsIn(70U));
+    c.update(159999U, barsIn(70U));
+    CHECK(c.view(159999U).bars == 3U);
+    c.update(160000U, barsIn(70U));
+    CHECK(c.view(160000U).bars == 4U);
+    // 最高一格不再升。
+    BatteryBars top{};
+    top.update(0U, barsIn(85U));
+    top.update(1U, barsIn(99U));
+    top.update(70000U, barsIn(99U));
+    CHECK(top.view(70000U).bars == 5U);
+}
+
+/** @brief OL7：充电循环填充、充电期间冻结格数、充满 5 格常亮。 */
+void testBatteryBarsCharging() noexcept
+{
+    BatteryBars b{};
+    b.update(0U, barsIn(45U, true, true)); // 3 格充电
+    // 3,4,5 循环，每 500 ms 一步。
+    CHECK(b.view(0U).bars == 3U);
+    CHECK(b.view(499U).bars == 3U);
+    CHECK(b.view(500U).bars == 4U);
+    CHECK(b.view(1000U).bars == 5U);
+    CHECK(b.view(1500U).bars == 3U);
+    CHECK(b.nextWakeMs(1100U) == 400U);
+    CHECK(!b.view(500U).blinking);
+    // 充电抬升读数（90）不改变起点格数，也不计升格：断充后保持期内仍为起点格。
+    b.update(2000U, barsIn(90U, true, true));
+    b.update(400000U, barsIn(90U, true, true));
+    CHECK(b.view(400000U).bars == 3U + (400000U / 500U) % 3U);
+    // 充满：5 格常亮，不再要求定时唤醒。
+    b.update(400500U, barsIn(100U, true, false));
+    CHECK(b.view(400500U).bars == 5U && b.view(401000U).bars == 5U);
+    CHECK(b.nextWakeMs(401000U) == UINT32_MAX);
+    // 满格时充电起点本身为 5：动画无需唤醒。
+    BatteryBars full{};
+    full.update(0U, barsIn(95U, true, true));
+    CHECK(full.view(0U).bars == 5U && full.view(700U).bars == 5U);
+    CHECK(full.nextWakeMs(0U) == UINT32_MAX);
+}
+
+/** @brief OL7：拔 USB 后保持原格数 60 s 再按新样本重新定格（跳过滞回）。 */
+void testBatteryBarsUnplugHold() noexcept
+{
+    BatteryBars b{};
+    b.update(0U, barsIn(95U, true, true)); // 充电中，5 格
+    b.update(1000U, barsIn(70U, true, true));
+    b.update(2000U, barsIn(70U, false, false)); // 拔出，充电抬升读数仍高
+    CHECK(b.view(2000U).bars == 5U);
+    b.update(61999U, barsIn(55U));
+    CHECK(b.view(61999U).bars == 5U);
+    CHECK(b.nextWakeMs(61999U) == 1U);
+    b.update(62000U, barsIn(55U)); // 保持期满：直接定格为 3 格，不经 30 s 迟滞
+    CHECK(b.view(62000U).bars == 3U);
+    // 保持期内重新插入：回到充电逻辑，不再按旧样本定格。
+    BatteryBars c{};
+    c.update(0U, barsIn(65U, true, true));
+    c.update(1000U, barsIn(65U));
+    c.update(2000U, barsIn(65U, true, true));
+    c.update(70000U, barsIn(65U, true, true));
+    CHECK(c.view(70000U).bars >= 4U);
+    // 保持期内低电 <10% 不闪烁（沿用旧格数展示）；期满后闪烁。
+    BatteryBars low{};
+    low.update(0U, barsIn(60U, true, true));
+    low.update(1000U, barsIn(5U));
+    CHECK(low.view(1000U).bars == 4U);
+}
+
+/** @brief OL7：<10% 最后一格 1 Hz 闪烁；未知不闪烁；10% 不闪烁。 */
+void testBatteryBarsLowBlink() noexcept
+{
+    BatteryBars b{};
+    b.update(0U, barsIn(9U));
+    CHECK(b.view(0U).bars == 1U && b.view(0U).blinking && !b.view(0U).blinkOff);
+    CHECK(b.view(500U).blinkOff);
+    CHECK(!b.view(1000U).blinkOff);
+    CHECK(b.nextWakeMs(100U) == 400U);
+    BatteryBars ten{};
+    ten.update(0U, barsIn(10U));
+    CHECK(!ten.view(0U).blinking && ten.nextWakeMs(0U) == UINT32_MAX);
+    // 低电时充电：显示循环填充动画而非闪烁。
+    BatteryBars chg{};
+    chg.update(0U, barsIn(5U, true, true));
+    CHECK(!chg.view(500U).blinking && chg.view(500U).bars == 2U);
+}
+
+/** @brief OL7：power simbat 会话变化立即重新定格，跳过滞回与保持。 */
+void testBatteryBarsSimSession() noexcept
+{
+    BatteryBars b{};
+    b.update(0U, barsIn(85U, false, false, 1U));
+    CHECK(b.view(0U).bars == 5U);
+    b.update(100U, barsIn(15U, false, false, 1U)); // 同会话：需 30 s
+    CHECK(b.view(100U).bars == 5U);
+    b.update(200U, barsIn(15U, false, false, 2U)); // 新会话：立即定格
+    CHECK(b.view(200U).bars == 1U);
+    // 拔出保持期内也被会话变化打断。
+    BatteryBars c{};
+    c.update(0U, barsIn(90U, true, true, 1U));
+    c.update(1000U, barsIn(90U, false, false, 1U));
+    c.update(2000U, barsIn(30U, false, false, 2U));
+    CHECK(c.view(2000U).bars == 2U);
+    // reset 后下一样本直接定格。
+    c.reset();
+    c.update(3000U, barsIn(65U));
+    CHECK(c.view(3000U).bars == 4U);
+}
+
 int main()
 {
     testBootBranch();
@@ -518,5 +745,12 @@ int main()
     testUsbPresentAndChargerCache();
     testBatteryPercent();
     testLowBatteryTimer();
+    testBatteryBarsLatchAndBoundaries();
+    testBatteryBarsDischargeHysteresis();
+    testBatteryBarsRecoveryHysteresis();
+    testBatteryBarsCharging();
+    testBatteryBarsUnplugHold();
+    testBatteryBarsLowBlink();
+    testBatteryBarsSimSession();
     return s_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

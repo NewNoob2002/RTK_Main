@@ -55,7 +55,7 @@
 | 开机画面 (`kSplash`) | 正常启动初始化完成，持续 1.5 s（短按可提前跳过） | 产品短名（`P2`）+ 固件版本（`RTK_FW_VERSION`） | `board::productName()`、`appVersion()` |
 | 状态页 (`kStatus`) | 开机画面结束或翻页 | 射频模式（BT 连接/等待、Wi-Fi AP）、电量 % 与充电标志、GNSS 状态/解状态/卫星数/hAcc | `radioMode`、`sessions`、`powerStatus`、`gnssStatus`、`gnssFix` |
 | 设备信息页 (`kDeviceInfo`) | 状态页短按翻页 | 产品板型、SN、硬件版本 `hwVer`、固件版本 `fwVer` | `board::current()`、`systemStatus`、`appVersion()` |
-| 充电待机页 (`kChargeStandby`) | `bootMode == kChargeStandby`（USB 供电开机） | 仅显示充电状态、电量 %、电压与进度条（短按不切至其他页） | `powerStatus` |
+| 充电待机页 (`kChargeStandby`) | `bootMode == kChargeStandby`（USB 供电开机） | 仅显示充电状态、5 格电量、电压与开机进度环（短按不切至其他页） | `powerStatus` |
 | 关机提示页 (`kShutdown`) | `shutdownStage != kIdle` | 关机提示（低电关机附加 `BATTERY LOW`），随后关面板并拉低 `GPIO12` | `powerStatus` |
 
 无 GNSS、无定位解或无电池 ADC/充电芯片时，统一显示 `--` / `n/a` 占位，不崩溃、不越界。
@@ -118,12 +118,12 @@
 ### 5.2 按键方案 A（单键消歧）
 
 - 物理按键仍由 `PowerModule` 内 `PowerKeySm` 采样（`kLink` 10 ms 周期），短按上限对齐 `600 ms`（`kKeyShortMaxMs`），按住状态与起点/阈值经 `UiEventBus` 无锁原子暴露给 OLED：
-  - **长按进度与防误触（正常模式）**：按住 ≥ 600 ms 起叠加长按进度浮层（600→2500 ms 线性填充）；2500 ms 前松开 150 ms 收缩收起，不产生短按、不关机。到达 2500 ms 时，OLED 在线仅投递长按到达事件进入 `POWER OFF?` 确认页（默认选中 `Cancel`，5 s 倒计时自动取消，选中 `OK` 后双击才经 `OledAction::kShutdownKey` 发起 `power::requestShutdown(kKey)`，期间配对弹窗排队）。无 OLED 或面板离线时保持长按 2.5 s 直接关机。
+  - **长按进度与防误触（正常模式）**：按住 ≥ 600 ms 起叠加长按进度浮层（600→2500 ms 线性填充）；2500 ms 前松开 150 ms 收缩收起，不产生短按、不关机。到达 2500 ms 时，OLED 在线仅投递长按到达事件进入 `POWER OFF?` 确认页（只有一个 `POWER OFF` 确认项，单击或双击均经 `OledAction::kShutdownKey` 发起 `power::requestShutdown(kKey)`，期间配对弹窗排队）。无 OLED 或面板离线时保持长按 2.5 s 直接关机。
   - **短按（< 600 ms 松开）**：向 `UiEventBus` 无锁 SPSC 时间戳队列投递消抖短按生产时刻并唤醒 `oled` 任务。
 - `OledAnim::ClickDetector` 在 OLED 任务内按消抖短按的**生产时间戳**完成短按/双击消歧（窗口常量 `kDoubleClickWindowMs = 300 ms`，先按序消费全部队列事件再判绝对截止，不受 OLED 刷屏忙期漂移影响）：
-  - **短按（`kSingle`）**：表盘下循环切换底部 5 个入口图标（`SATS/POS/COMM/DEVICE/POWER`），驱动 `FixedSpring` 弹簧选中框跟随；卫星子页切换“星座柱状图 / Top-8 CN0 条”；其余统一子页（位置/通信/设备/电源）在右侧可滚动列表行间循环（弹簧行间移动 ≤ 180 ms、平滑滚动）；确认弹窗内循环切换两个选项，焦点使用相同的定点弹簧和挤压反馈。
-  - **双击（`kDouble`）**：自检页跳过剩余展示滑入表盘；表盘下伴随选择框挤压/回弹（≤ 120 ms）展开进入子页（内容行 40 ms 错峰上移 6 px）；子页下执行选中动作（如 `Power off` 进入确认页、通信模式/配对切换）或由末尾左箭头 `Back` 收回返回表盘；确认弹窗内执行当前选中项。子页面无操作 `60 s`（`kSubpageIdleTimeoutMs`）自动收回回表盘。
-  - **确认弹窗（OL6）**。关机和切换到 Wi-Fi 使用 `Cancel` / `OK`，蓝牙配对使用 `Reject` / `Accept`。新弹窗默认选中安全项。关机和 Wi-Fi 的 `Cancel` 直接关闭，配对的 `Reject` 向 SPP 提交拒绝，30 s 未判定时由 SPP worker 拒绝。选框动画沿用 OL5 节拍，仅重绘选项区域，关机弹窗独立更新倒计时区域。
+  - **短按（`kSingle`）**：表盘下循环切换底部 5 个入口图标（`SATS/POS/COMM/DEVICE/POWER`），驱动 `FixedSpring` 弹簧选中框跟随；卫星子页切换“星座柱状图 / Top-8 CN0 条”；其余统一子页（位置/通信/设备/电源）在右侧可滚动列表行间循环（弹簧行间移动 ≤ 180 ms、平滑滚动）；Wi-Fi 切换与配对确认弹窗内循环切换两个选项，焦点使用相同的定点弹簧和挤压反馈；关机弹窗只有单个确认项，单击同样遵循双击消歧窗口后确认。
+  - **双击（`kDouble`）**：自检页跳过剩余展示滑入表盘；表盘下伴随选择框挤压/回弹（≤ 120 ms）展开进入子页（内容行 40 ms 错峰上移 6 px）；子页下执行选中动作（如 `Power off` 进入确认页、通信模式/配对切换）或由末尾左箭头 `Back` 收回返回表盘；Wi-Fi/配对确认弹窗内执行当前选中项，关机弹窗内双击等同单击，直接确认。子页面无操作 `60 s`（`kSubpageIdleTimeoutMs`）自动收回回表盘。
+  - **确认弹窗（OL6/OL7）**。切换到 Wi-Fi 使用 `Cancel` / `OK`，蓝牙配对使用 `Reject` / `Accept`，新弹窗默认选中安全项，Wi-Fi 的 `Cancel` 直接关闭。OL7 起关机弹窗只显示一个居中的 `POWER OFF` 确认项（选框固定、无焦点切换），取消只靠 5 s 倒计时超时或长按期间的既有路径；强制关机 8 s 保持不变。配对的 `Reject` 向 SPP 提交拒绝，30 s 未判定时由 SPP worker 拒绝。选框动画沿用 OL5 节拍，仅重绘选项区域，关机弹窗独立更新倒计时区域。
   - 发起每个脏页前检查单击绝对截止（`firstPressMs + 300 ms`）。若当前同步传输跨过截止，完成该页后立即回到 UI 状态机，下一页待重新渲染。状态机先消费队列中的生产时间戳，再判定到期单击。休眠前仍重算剩余窗口。
 ### 5.3 开机自检、表盘/子菜单与关机进度
 
@@ -131,9 +131,10 @@
   - 每项最短展示 `kMinStepMs = 200 ms`（≤ 300 ms），仅用于可读性，不阻塞任何模块初始化；充电芯片或未启用 GNSS 缺失显示 `-`（`kAbsent`）不算失败；失败项不阻塞，入表盘后状态栏常驻告警三角图标。
   - 最小只读快照增补：`PowerSnapshot` 新增 `batteryAdcReady`、`chargerPresent`、`shutdownDoneMask`；`DataCenter` 新增无锁原子 `wifiReady`（由 `WebModule` 写）。
 - **表盘、统一子页与充电待机（OL4）**：
-  - 表盘（`kDialplate`）：10 px 顶栏（卫星图标 + 滚动数、自检告警、解状态、BT/Wi-Fi 图标、充电闪电、滚动电量 % + 电池图形）+ 中部大号解状态（`Font_12_24`，状态切换带 180 ms 竖向滚动）与 GNSS UTC / 精度简报 + 选中入口名称标签 + 底部 5 个 16×16 入口图标与弹簧选中框。
+  - 表盘（`kDialplate`）：10 px 顶栏（卫星图标 + 滚动数、自检告警、解状态、BT/Wi-Fi 图标、充电闪电、5 格电池图形，OL7 起不再显示百分比数字）+ 中部大号解状态（`Font_12_24`，状态切换带 180 ms 竖向滚动）与 GNSS UTC / 精度简报 + 选中入口名称标签 + 底部 5 个 16×16 入口图标与弹簧选中框。
+  - **电量格数（OL7，`board::BatteryBars`）**：内部电量仍为 0..100，OLED 只显示 5 格（边界 20/40/60/80）。首个有效样本与 `power simbat` 会话变化直接定格；放电降一格需低于当前格下界 3 个百分点并持续 30 s，升一格需高于上界 5 个百分点并持续 60 s（锂电 3.6~3.9 V 平台区电压估算误差约 ±10~15 个百分点，负载压降/回弹需靠滞回吸收）；充电中冻结格数并循环填充到满格，充满 5 格常亮；拔 USB 后保持原格数 60 s（充电电压抬升约 100~200 mV）再按新样本直接重新定格；电量 < 10%（`kLowBatteryPct`）最后一格 1 Hz 闪烁；未知仅画外框。状态机内嵌于 `UiController`，不改变低电关机、手机心跳与 Web 的电量字段。
   - 统一子页：顶部沿用 10 px 状态栏；位置/通信/设备/电源采用左 `40×52` 主卡 + 右最多 3 行可滚动列表（图标 + 名称 + 右对齐值 + 滚动条 + 统一左箭头 `Back`）；卫星页保持 4 柱双段图与 `used/visible` 标题。电源页提供 `Power off` 项，双击进入 `POWER OFF?` 确认页。
-  - 充电待机（`kChargeStandby`）：左大号滚动电量 + 电池条（充电未满时 ≤ 2 fps 流动动画，充满停止恢复 0 写入）+ `CHG`/`FULL`/`USB` 与电压；右电源图标进度环（随按住时长实时填充，松开回落）+ `HOLD 2s ON`；底行 `FW` / `HW`。
+  - 充电待机（`kChargeStandby`）：左大号 5 格电池（充电未满时从当前格到满格 ≤ 2 fps 循环填充，充满 5 格常亮、停止恢复 0 写入）+ `CHG`/`FULL`/`USB` 与电压；右电源图标进度环（随按住时长实时填充，松开回落）+ `HOLD 2s ON`；底行 `FW` / `HW`。
 - **关机进度（`kShutdown`）**：
   - 首行展示关机原因（`LOW BATTERY` / `CONSOLE` / `KEY` / `PHONE` / `WEB`）与终态标签；进度环、阶段文案和三枚小图标勾选里程碑（保存 / 射频 / 断电）由 `PowerModule` 静态收尾参与者登记表派生并经 `PowerSnapshot::{shutdownStage, lastShutdown, shutdownDoneMask, shutdownDegradedMask, shutdownDoneCount, shutdownTotalCount}` 驱动。蓝牙收尾显示 `CLOSING SPP`，SPP 会话已断开且扫描关闭请求已提交时显示 `SCAN REQ OK`。该里程碑以 GAP 提交成功为准。SoftAP 模式在 AP 停用后显示 `AP MODE OFF`。保存超时（3 s）、无线收尾超时（BT 150 ms / SoftAP 5.5 s）或安全电平失败时，OLED 显示对应的 `SAVE TIMEOUT` / `RF TIMEOUT` / `SAFE IO ERR` 和叉号标记。低电、console、手机及预留 Web 来源不经确认页直接进入关机页。
   - **基线强制下电 / USB 重启兜底例外（既定策略）**：`PowerModule` / `ShutdownSm` 沿用基线 ADR-0015 策略——即使保存或射频等待超时、或安全电平配置报错，仍继续推进断电（无 USB）或 U3 关断后的 USB 重启，防止设备挂死不关机或电池过放；但不再伪造“全部完成”位，明确向用户展示降级文案。

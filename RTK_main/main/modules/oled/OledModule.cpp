@@ -130,6 +130,7 @@ void collectPowerStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.chargerPresent = pwr.chargerPresent;
     vm.chargerOk = pwr.chargerOk;
     vm.batteryPct = pwr.batteryPct;
+    vm.batterySimSession = pwr.batterySimSession;
     vm.batteryMv = pwr.batteryMv;
     vm.usbPresent = pwr.usbPresent;
     vm.charging = pwr.charging;
