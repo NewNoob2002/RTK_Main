@@ -1,6 +1,6 @@
 # ADR-0020：P2 OLED（SH1106）显示驱动与 WouoUI 只读状态页
 
-状态：**Proposed**（草稿，待 Architect 评审定稿）。由 OL1–OL6 任务卡实施，已合入 main（OL1 `2eb65ba`，OL2–OL6 `c2e9293`，2026-11-25 P2 v1.41 HIL 通过）；任务卡已清理，见 git 历史。
+状态：**已批准**（2026-11-25，用户批准）。由 OL1–OL6 任务卡实施，已合入 main（OL1 `2eb65ba`，OL2–OL6 `c2e9293`，2026-11-25 P2 v1.41 HIL 通过）；任务卡已清理，见 git 历史。
 关联：ADR-0008（代码组织与堆分级）、ADR-0009（日志通道与控制台）、ADR-0011（启动顺序与内存）、ADR-0015（板级识别与 `Feature::kOled`）、ADR-0016（控制台档位）、ADR-0017 §7（OLED 交互菜单延后）。
 硬件依据：`docs/hardware/P2/schematic/p2v1.41.pdf`、`docs/reports/P2-legacy-gap.md` §1.5/§2.2；旧实现参考（只读）：`P2_V3.1_IDF/main/src/xyz_oled.c`、`main/user_src/user_oled.c`。
 
