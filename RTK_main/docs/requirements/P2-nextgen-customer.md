@@ -45,3 +45,15 @@
 - MQTT 载荷上限：服务器 broker 与 EC600 `AT+QMTPUB` 单包长度上限需查实后再定分包方案。
 - 设备身份与授权（access token / X.509、配置归属锁定）。
 - TLS 端点（MQTTS/HTTPS/NTRIPS）与证书链、CA 更新通道。
+
+## 5. 旧版协议文档（参考基线）
+位置：`P2 手持式GNSS接收机项目/文档类/`（仓库外）。
+- `MQTT平台指令交互.doc`：自定义 MQTT（v3.1/3.1.1，ClientID+用户名+密码）；上行 `v1/devices/me/telemetry` `{"gga","warn_status","client_id"}`；下行 `v1/devices/<SN>` `{"params":{"warning":"1|2","warning_precision":"4.0"}}`；1 min 无下行自动报警。**无围栏下发、无应答、无 TLS。**
+- `P2本地电子围栏专用协议指令-20260707.docx`：蓝牙二进制 0x60（列表）/0x61（单围栏读写：名称16B+enable/led/beep/motor/warn_type/point_num+2B 保留+n×(lat,lon double)，记录长 24+16n，40 点=664 B）/0x62（手动打点 Set_Code 1–5）。
+- `P2 JSON交互协议说明书.doc`：TCP JSON（motor/beep/led/GGA/upload/GNSS/query_status/set_status）。
+- `ThingsBoard OTA升级 - 副本.docx`：ThingsBoard 标准 OTA 主题（`v2/fw/response/+/chunk/+`）。
+
+## 6. 协议制定分工（建议）
+- **固件侧起草设备端协议**（MQTT 主题/载荷/应答/错误码、围栏记录格式、分包与版本/CRC、BT 0x60–0x62 扩展）：受存储容量、EC600 单包上限、报警时延等设备约束决定。围栏 MQTT 载荷建议复用 0x61 二进制记录（扩展类型/报警模式字段），保证 BT 与 4G 同一数据模型。
+- **服务器/App 同事负责并评审**：围栏主数据归属与冲突策略、授权与设备身份、对客户的服务器 API 文档、App 编辑/配对/锁定流程。
+- 双方签字后写 ADR（4G/围栏），再排期实现。
