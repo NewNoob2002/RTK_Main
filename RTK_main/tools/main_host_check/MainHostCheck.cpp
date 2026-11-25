@@ -856,10 +856,11 @@ void powerShutdownDegradedMasks()
     s_safeOutputsStatus = fw::Status::kIoError;
 
     CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
-    // 推进 1.1 s 令 kSave 超时进入 kQuiesce。
-    pollPower(115U);
+    // 推进 3.15 s 令 kSave 超时进入 kQuiesce（kShutdownSaveTimeoutMs = 3000 ms）。
+    pollPower(315U);
     const PowerSnapshot qSnap = ctx.data.powerStatus.read();
     CHECK(qSnap.shutdownStage == board::ShutdownStage::kQuiesce);
+    CHECK((qSnap.shutdownTotalCount > 0U) && (qSnap.shutdownDoneCount < qSnap.shutdownTotalCount));
     CHECK((qSnap.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed)) ==
           0U);
     CHECK((qSnap.shutdownDoneMask &
@@ -901,6 +902,255 @@ void powerShutdownDegradedMasks()
     pollPower(4U);
     CHECK(s_restarts == 1U);
     s_safeOutputsStatus = fw::Status::kOk;
+}
+
+struct CapturedLogBuf {
+    std::array<char, 4096> data{};
+    size_t len = 0U;
+};
+
+CapturedLogBuf *s_capturedLog = nullptr;
+
+/**
+ * @brief 测试日志输出钩子，将 DebugModule 吐出的文本追加到静态缓冲。
+ * @param text: 日志片段指针
+ * @param len: 日志片段长度
+ */
+void captureLogSink(const char *text, size_t len) noexcept
+{
+    if ((s_capturedLog == nullptr) || (text == nullptr) || (len == 0U)) {
+        return;
+    }
+    const size_t avail = s_capturedLog->data.size() - 1U - s_capturedLog->len;
+    const size_t copyLen = (len < avail) ? len : avail;
+    if (copyLen > 0U) {
+        std::memcpy(s_capturedLog->data.data() + s_capturedLog->len, text, copyLen);
+        s_capturedLog->len += copyLen;
+        s_capturedLog->data[s_capturedLog->len] = '\0';
+    }
+}
+
+/** @brief 验证新增收尾参与者阻塞断电直到超时且超时日志列出名称，并校验全部 ShutdownReason trace 文案（PW1 A/C）。 */
+void powerParticipantBlocksAndTimeoutNames()
+{
+    using namespace app;
+    power::clearExtraShutdownParticipants();
+    // 注册边界校验：非法参数与重名必须被拒绝。
+    struct ParticipantState {
+        uint32_t beginCount = 0U;
+        bool done = false;
+    };
+    ParticipantState saveState{};
+    ParticipantState quiesceState{};
+    const auto onBegin = [](board::ShutdownStage /*stage*/, void *arg) noexcept {
+        // 由本测试显式绑定为 ParticipantState*。
+        ++static_cast<ParticipantState *>(arg)->beginCount;
+    };
+    const auto checkDone = [](void *arg) noexcept {
+        // 由本测试显式绑定为 ParticipantState*。
+        return static_cast<const ParticipantState *>(arg)->done;
+    };
+    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
+        .name = nullptr, .isDone = checkDone, .stage = board::ShutdownStage::kSave}));
+    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
+        .name = "", .isDone = checkDone, .stage = board::ShutdownStage::kSave}));
+    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
+        .name = "bad_null_fn", .isDone = nullptr, .stage = board::ShutdownStage::kSave}));
+    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
+        .name = "bad_stage", .isDone = checkDone, .stage = board::ShutdownStage::kIdle}));
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+        .name = "test_extra_save",
+        .begin = onBegin,
+        .isDone = checkDone,
+        .userCtx = &saveState,
+        .stage = board::ShutdownStage::kSave,
+    }));
+    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
+        .name = "test_extra_save",
+        .isDone = checkDone,
+        .stage = board::ShutdownStage::kSave,
+    }));
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+        .name = "test_extra_quiesce",
+        .begin = onBegin,
+        .isDone = checkDone,
+        .userCtx = &quiesceState,
+        .stage = board::ShutdownStage::kQuiesce,
+    }));
+
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    std::array<fw::TraceEvent, DebugModule::kRingEvents> trace{};
+    std::array<uint8_t, DebugModule::kLogRingBytes> log{};
+    std::array<StackType_t, DebugModule::kTaskStackBytes / sizeof(StackType_t)> stack{};
+    CHECK(fw::isOk(ctx.debug.bindStorage({trace, log, stack})));
+    CHECK(fw::isOk(ctx.debug.init()));
+    CHECK(fw::isOk(ctx.debug.attachLog()));
+
+    CapturedLogBuf captured{};
+    s_capturedLog = &captured;
+    cli::setOutSink(&captureLogSink, false);
+    s_gpioLevels[25] = 1;
+
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    // 2.95 s 未达 3 s 保存上限：未完成的 test_extra_save 必须阻塞进入 kQuiesce 与断电。
+    pollPower(295U);
+    const PowerSnapshot midSave = ctx.data.powerStatus.read();
+    CHECK(midSave.shutdownStage == board::ShutdownStage::kSave);
+    CHECK(saveState.beginCount == 1U);
+    CHECK((midSave.shutdownTotalCount > 0U) &&
+          (midSave.shutdownDoneCount < midSave.shutdownTotalCount));
+    CHECK((s_gpio4Presses == 0U) && (s_restarts == 0U));
+
+    // 跨过 3 s 保存上限（总 3.05 s，刚进入 kQuiesce 约 40 ms）：超时降级并列出未完成参与者名。
+    pollPower(10U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
+    CHECK((ctx.data.powerStatus.read().shutdownDegradedMask &
+           board::shutdownDegradedBit(board::ShutdownDegradedBit::kSaveTimeout)) != 0U);
+    CHECK(quiesceState.beginCount == 1U);
+    CHECK(ModuleTestAccess::pumpLogs());
+    const std::string_view saveLogs{captured.data.data(), captured.len};
+    CHECK(saveLogs.find("test_extra_save") != std::string_view::npos);
+
+    // 约 90 ms 仍未达 150 ms 静默上限：test_extra_quiesce 持续阻塞 kCutPower。
+    pollPower(5U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
+    CHECK(s_gpio4Presses == 0U);
+
+    // 跨过 150 ms 静默上限：超时降级进入 kCutPower，日志列出 test_extra_quiesce。
+    pollPower(10U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
+    CHECK(ModuleTestAccess::pumpLogs());
+    const std::string_view quiesceLogs{captured.data.data(), captured.len};
+    CHECK(quiesceLogs.find("test_extra_quiesce") != std::string_view::npos);
+
+    cli::setOutSink(nullptr, false);
+    s_capturedLog = nullptr;
+    power::clearExtraShutdownParticipants();
+
+    // 校验 trace 文本覆盖全部 ShutdownReason（含预留 kWeb）。
+    const std::array<std::pair<board::ShutdownReason, const char *>, 5U> reasons{{
+        {board::ShutdownReason::kKey, "reason=key"},
+        {board::ShutdownReason::kConsole, "reason=console"},
+        {board::ShutdownReason::kLowBattery, "reason=low_battery"},
+        {board::ShutdownReason::kPhone, "reason=phone"},
+        {board::ShutdownReason::kWeb, "reason=web"},
+    }};
+    std::array<char, 128> line{};
+    for (const auto &[reason, expected] : reasons) {
+        const fw::TraceEvent stageEv{
+            .cat = fw::TraceCat::kSys,
+            .code = static_cast<uint8_t>(PowerTrace::kShutdownStage),
+            .a = static_cast<uint32_t>(board::ShutdownStage::kSave),
+            .b = static_cast<uint32_t>(reason),
+        };
+        debug::formatEvent(stageEv, line.data(), line.size());
+        const std::string_view text{line.data()};
+        CHECK(text.find("stage=save") != std::string_view::npos);
+        CHECK(text.find(expected) != std::string_view::npos);
+
+        const fw::TraceEvent abortEv{
+            .cat = fw::TraceCat::kSys,
+            .code = static_cast<uint8_t>(PowerTrace::kShutdownAbort),
+            .a = static_cast<uint32_t>(reason),
+            .b = 30000U,
+        };
+        debug::formatEvent(abortEv, line.data(), line.size());
+        CHECK(std::string_view{line.data()}.find(expected) != std::string_view::npos);
+    }
+}
+
+/** @brief 验证电池终帧停留期间插入 USB 不复用电池终帧状态，仍完整等待 USB RESTARTING 终帧与 300 ms 停留（PW1 D）。 */
+void powerOledBatteryToUsbFinalFrame()
+{
+    using namespace app;
+    namespace b = board;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 0;
+    setupPower(b::BootMode::kNormal);
+    auto &ctx = appContext();
+    auto &events = ctx.data.uiEvents;
+    events.setOledActive(true);
+
+    CHECK(power::requestShutdown(b::ShutdownReason::kConsole));
+    pollPower(1U);
+    for (const auto stage :
+         {b::ShutdownStage::kAnnounce, b::ShutdownStage::kSave, b::ShutdownStage::kQuiesce}) {
+        CHECK(ctx.data.powerStatus.read().shutdownStage == stage);
+        pollPower(2U);
+        events.markShutdownStageFlushed(stage);
+        pollPower(1U, 1U);
+        pollPower(1U, b::kMinStageVisibleMs);
+    }
+    CHECK(ctx.data.powerStatus.read().shutdownStage == b::ShutdownStage::kCutPower);
+    CHECK(s_gpio4Presses == 0U && s_restarts == 0U);
+
+    // 电池路径终帧与 kCutPower 阶段已刷出，停留 250 ms（满足阶段可见但仍处 300 ms 电池终帧停留期）。
+    events.markShutdownStageFlushed(b::ShutdownStage::kCutPower);
+    events.markShutdownFinalFrameFlushed(false);
+    pollPower(1U, 1U);
+    pollPower(1U, b::kMinStageVisibleMs);
+    CHECK(s_gpio4Presses == 0U && s_restarts == 0U);
+
+    // 此时插入 USB 且 U3 掉电：进入 USB RESTARTING 路径，不得沿用电池终帧标志跳过 RESTARTING 帧。
+    s_gpioLevels[27] = 1;
+    s_gpioLevels[25] = 0;
+    pollPower(1U, 10U);
+    CHECK((ctx.data.powerStatus.read().shutdownDoneMask &
+           b::shutdownDoneBit(b::ShutdownDoneBit::kUsbOffReady)) != 0U);
+    CHECK(s_restarts == 0U);
+
+    // 等待 30 ms 日志排空后再推 20 ms：USB 终帧尚未刷出，即使已超过原电池终帧停留期限也不得重启。
+    pollPower(3U, 10U);
+    CHECK(s_restarts == 0U);
+    pollPower(2U, 10U);
+    CHECK(s_restarts == 0U);
+
+    // 刷出 USB RESTARTING 终帧后，必须完整停留 kShutdownFinalVisibleMs（300 ms）。
+    events.markShutdownFinalFrameFlushed(true);
+    pollPower(1U, 5U);
+    pollPower(1U, b::kShutdownFinalVisibleMs - 1U);
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 1U);
+    CHECK(s_restarts == 1U);
+}
+
+/** @brief 验证 HIL 模拟电量接口可触发低电关机且清除后恢复真实 ADC，不改产品默认阈值（PW1 HIL）。 */
+void powerSimBatteryLowShutdown()
+{
+    using namespace app;
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    s_batteryMv = 4150U;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 0;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    CHECK(ctx.data.powerStatus.read().batteryPct >= 90U);
+
+    // 注入 5% 模拟电量，未满 120 s 前不得关机。
+    power::setSimulatedBatteryPct(5U);
+    pollPower(1U, 100U);
+    CHECK(ctx.data.powerStatus.read().batteryPct == 5U);
+    pollPower(1198U, 100U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+
+    // 清除模拟后低电计时归零并恢复真实 ADC 高电量。
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    pollPower(120U, 10U);
+    CHECK(ctx.data.powerStatus.read().batteryPct >= 90U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kIdle);
+
+    // 再次注入 5% 并持续满 120 s：触发 kLowBattery 关机。
+    power::setSimulatedBatteryPct(5U);
+    pollPower(1200U, 100U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(2U, 100U);
+    const PowerSnapshot snap = ctx.data.powerStatus.read();
+    CHECK(snap.shutdownStage == board::ShutdownStage::kSave);
+    CHECK(snap.lastShutdown == board::ShutdownReason::kLowBattery);
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
 }
 
 struct ExecutorRound {
@@ -1014,7 +1264,7 @@ void powerNoReopen(bool timeout)
     CHECK(s_gpio4Presses == 0U && s_restarts == 0U);
 
     if (timeout) {
-        pollPower(100U);
+        pollPower(300U);
         CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
     }
     runExecutorRound(s_ioRound);
@@ -1132,21 +1382,21 @@ void powerLowBattery()
     CHECK(!initial.usbPresent && initial.usbSource == board::UsbSource::kGpio);
     open(1U, kPhone);
     checkBatteryReport(1U, 5U);
-    pollPower(2999U);
+    pollPower(1200U, 100U);
     s_gpioLevels[27] = 1;
-    pollPower(3001U);
+    pollPower(1205U, 100U);
     checkBatteryReport(0U, 5U);
     CHECK(power::s_power_requests.canScheduleRestart());
     s_gpioLevels[27] = 0;
-    pollPower(3000U);
+    pollPower(1200U, 100U);
     CHECK(power::s_power_requests.canScheduleRestart());
-    pollPower(2U);
+    pollPower(2U, 100U);
     CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kSave);
     CHECK(!power::s_power_requests.canScheduleRestart());
     CHECK(s_chargerReads == 0U);
 }
 
-/** @brief 验证运行期 ADC 失败清空电量、上报 0xFF，恢复后重新计满 30 s。 */
+/** @brief 验证运行期 ADC 失败清空电量、上报 0xFF，恢复后重新计满 120 s。 */
 void powerBatteryReadFailure()
 {
     using namespace app;
@@ -1157,7 +1407,7 @@ void powerBatteryReadFailure()
     auto &ctx = appContext();
     open(1U, kPhone);
     checkBatteryReport(1U, 5U);
-    pollPower(2900U);
+    pollPower(1190U, 100U);
     s_batteryReadFails = true;
     pollPower(130U);
     const auto invalid = ctx.data.powerStatus.read();
@@ -1170,9 +1420,9 @@ void powerBatteryReadFailure()
         pollPower(1U);
     }
     CHECK(ctx.data.powerStatus.read().batteryPct == 5U);
-    pollPower(2999U);
+    pollPower(1199U, 100U);
     CHECK(power::s_power_requests.canScheduleRestart());
-    pollPower(2U);
+    pollPower(2U, 100U);
     CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kSave);
 }
 
@@ -1191,7 +1441,7 @@ void powerLowBatteryInhibited(app::board::BootMode mode)
     s_gpioLevels[2] = 1;
     s_gpioLevels[25] = 1;
     setupPower(mode);
-    pollPower(3130U);
+    pollPower(1215U, 100U);
     const auto snapshot = appContext().data.powerStatus.read();
     CHECK(snapshot.batteryPct == 5U && !snapshot.usbPresent);
     CHECK(snapshot.usbSource == (unknownUsb ? board::UsbSource::kStat : board::UsbSource::kGpio));
@@ -1227,12 +1477,12 @@ void powerBatteryFreshness()
     s_chargerReg = 0U;
     s_gpioLevels[25] = 1;
     setupPower(board::BootMode::kNormal);
-    pollPower(116U, 250U);
+    pollPower(476U, 250U);
     CHECK(power::s_power_requests.canScheduleRestart());
-    // 两秒内无成功采样，即使本轮恢复 ADC，也要重新累积 30 s。
+    // 两秒内无成功采样，即使本轮恢复 ADC，也要重新累积 120 s。
     pollPower(1U, 2000U);
     CHECK(power::s_power_requests.canScheduleRestart());
-    pollPower(119U, 250U);
+    pollPower(479U, 250U);
     CHECK(power::s_power_requests.canScheduleRestart());
     pollPower(3U, 250U);
     CHECK(appContext().data.powerStatus.read().shutdownStage == board::ShutdownStage::kSave);
@@ -3090,6 +3340,12 @@ int main(int argc, const char **raw_args)
         powerOledUsbPreemptedWait(31U);
     } else if (std::strcmp(argv[1], "power_shutdown_degraded_masks") == 0) {
         powerShutdownDegradedMasks();
+    } else if (std::strcmp(argv[1], "power_participant_blocks_and_timeout_names") == 0) {
+        powerParticipantBlocksAndTimeoutNames();
+    } else if (std::strcmp(argv[1], "power_oled_battery_to_usb_final_frame") == 0) {
+        powerOledBatteryToUsbFinalFrame();
+    } else if (std::strcmp(argv[1], "power_sim_battery_low_shutdown") == 0) {
+        powerSimBatteryLowShutdown();
     } else if (std::strcmp(argv[1], "power_log_drain") == 0) {
         powerLogDrain();
     } else if (std::strcmp(argv[1], "power_low_battery") == 0) {

@@ -6,6 +6,7 @@
 #include <array>
 #include <cinttypes>
 #include <span>
+#include <string_view>
 
 #include "AppContext.hpp"
 #include "board/BoardProfile.hpp"
@@ -160,12 +161,46 @@ int cmdPowerOff(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     return 0;
 }
 
-constexpr std::array<cli::Verb, 4U> kPowerVerbs{{
+/**
+ * @brief 注入或取消台架低电模拟百分比（仅 DEV 档 HIL 验证，不改变产品默认值）
+ * @param argc: 参数个数（含动词）
+ * @param argv: 参数数组（<0-100|off>）
+ * @retval 0 已更新模拟电量状态
+ * @retval 非零 参数错误
+ * @note 仅 DEV console REPL 任务，不阻塞，非 ISR。
+ */
+int cmdPowerSimBat(void * /*ctx*/, int argc, char **argv) noexcept
+{
+    constexpr uint8_t kMaxBatPct = 100U;
+    if ((argc != 2) || (argv == nullptr)) {
+        return cli::fail("usage: power simbat <0-100|off>");
+    }
+    const std::span<char *const> args{argv, 2U};
+    if (args.back() == nullptr) {
+        return cli::fail("usage: power simbat <0-100|off>");
+    }
+    if (std::string_view{args.back()} == "off") {
+        power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+        cli::outPrintf("simulated battery cleared\n");
+        return 0;
+    }
+    uint8_t pct = 0U;
+    if (!cli::parseU8(args.back(), pct) || (pct > kMaxBatPct)) {
+        return cli::fail("usage: power simbat <0-100|off>");
+    }
+    power::setSimulatedBatteryPct(pct);
+    cli::outPrintf("simulated battery=%u%%\n", static_cast<unsigned>(pct));
+    return 0;
+}
+
+constexpr std::array<cli::Verb, 5U> kPowerVerbs{{
     {"status", nullptr, "show power pins, boot reason, key counts and shutdown state",
      &cmdPowerStatus},
     {"off", nullptr, "request clean power shutdown (P2 only)", &cmdPowerOff},
     {"charger", nullptr, "dump SGM41513 registers REG00-REG0B (read-only)", &cmdPowerCharger},
     {"i2c", "scan", "scan for responding addresses on I2C0", &cmdPowerI2c},
+    {"simbat", "<0-100|off>", "inject simulated battery percent for HIL low-battery test",
+     &cmdPowerSimBat},
 }};
 
 /**
@@ -184,8 +219,9 @@ int cmdPower(void *ctx, int argc, char **argv) noexcept
 
 constexpr std::array<cli::Cmd, 1U> kPowerCmds{{
     {"power",
-     "power [status|off|charger|i2c scan]: inspect power/charger state or request shutdown",
-     "[status|off|charger|i2c scan]", &cmdPower, nullptr},
+     "power [status|off|charger|i2c scan|simbat <0-100|off>]: inspect power/charger state or "
+     "request shutdown",
+     "[status|off|charger|i2c scan|simbat <0-100|off>]", &cmdPower, nullptr},
 }};
 
 } // namespace

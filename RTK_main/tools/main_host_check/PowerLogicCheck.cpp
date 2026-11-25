@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
 
 #include "board/PowerLogic.hpp"
 #include "app/PowerRequests.hpp"
@@ -152,36 +153,39 @@ void testShutdownNoUsb() noexcept
     CHECK(out.stage == ShutdownStage::kAnnounce && out.stageEntered && !out.driveKeyHigh);
 
     // 2. kSave
-    out = sm.step(110U, false, false, true, false);
+    constexpr uint32_t kSaveStart = 110U;
+    constexpr uint32_t kSaveTimeoutAt = kSaveStart + kShutdownSaveTimeoutMs;
+    out = sm.step(kSaveStart, false, false, true, false);
     CHECK(out.stage == ShutdownStage::kSave && out.stageEntered);
-    out = sm.step(1109U, false, false, true, false);
+    out = sm.step(kSaveTimeoutAt - 1U, false, false, true, false);
     CHECK(out.stage == ShutdownStage::kSave && !out.stageEntered && !out.saveTimedOut);
-    // 1000 ms 保存超时继续进 kQuiesce。
-    out = sm.step(1110U, false, false, true, false);
+    // 保存超时（kShutdownSaveTimeoutMs = 3000 ms）继续进 kQuiesce。
+    out = sm.step(kSaveTimeoutAt, false, false, true, false);
     CHECK(out.stage == ShutdownStage::kQuiesce && out.stageEntered && out.saveTimedOut);
 
     // 3. kQuiesce 等待日志排空。
-    out = sm.step(1150U, true, false, true, false);
+    out = sm.step(kSaveTimeoutAt + 40U, true, false, true, false);
     CHECK(out.stage == ShutdownStage::kQuiesce && !out.stageEntered);
-    out = sm.step(1200U, true, true, true, false);
+    constexpr uint32_t kCutStart = kSaveTimeoutAt + 90U;
+    out = sm.step(kCutStart, true, true, true, false);
     CHECK(out.stage == ShutdownStage::kCutPower && out.stageEntered && out.driveKeyHigh);
 
     // 4. kCutPower（无 USB）：2 s 高 -> 3.1 s 低 -> 3.1 s 高 -> 3.1 s 低。
-    out = sm.step(3199U, true, true, true, false);
+    out = sm.step(kCutStart + 1999U, true, true, true, false);
     CHECK(out.stage == ShutdownStage::kCutPower && out.driveKeyHigh);
-    out = sm.step(3200U, true, true, true, false);
+    out = sm.step(kCutStart + 2000U, true, true, true, false);
     CHECK(out.stage == ShutdownStage::kCutPower && !out.driveKeyHigh);
-    out = sm.step(6299U, true, true, true, false);
+    out = sm.step(kCutStart + 5099U, true, true, true, false);
     CHECK(!out.driveKeyHigh);
-    out = sm.step(6300U, true, true, true, false);
+    out = sm.step(kCutStart + 5100U, true, true, true, false);
     CHECK(out.driveKeyHigh);
-    out = sm.step(9400U, true, true, true, false);
+    out = sm.step(kCutStart + 8200U, true, true, true, false);
     CHECK(!out.driveKeyHigh);
 
-    // 30 s 超时回退：t = 1200 + 30000 = 31200。
-    out = sm.step(31199U, true, true, true, false);
+    // 30 s 超时回退：t = kCutStart + 30000。
+    out = sm.step(kCutStart + kShutdownCutTimeoutMs - 1U, true, true, true, false);
     CHECK(out.stage == ShutdownStage::kCutPower && !out.cutTimedOut);
-    out = sm.step(31200U, true, true, true, false);
+    out = sm.step(kCutStart + kShutdownCutTimeoutMs, true, true, true, false);
     CHECK(out.stage == ShutdownStage::kIdle && out.cutTimedOut && !out.driveKeyHigh &&
           !out.requestRestart);
     CHECK(!sm.active());
@@ -314,8 +318,9 @@ void testCutPowerBoundaries() noexcept
     CHECK(sm.request(ShutdownReason::kKey));
     static_cast<void>(sm.step(kStart, false, false, true, true));
     static_cast<void>(sm.step(kStart + 10U, false, false, true, true));
-    CHECK(sm.step(kStart + 1009U, false, false, true, true).stage == ShutdownStage::kSave);
-    CHECK(sm.step(kStart + 1010U, false, false, true, true).saveTimedOut);
+    CHECK(sm.step(kStart + 10U + kShutdownSaveTimeoutMs - 1U, false, false, true, true).stage ==
+          ShutdownStage::kSave);
+    CHECK(sm.step(kStart + 10U + kShutdownSaveTimeoutMs, false, false, true, true).saveTimedOut);
     const auto u3AlreadyOff = sm.step(1000U, true, true, false, true);
     CHECK(u3AlreadyOff.stageEntered && u3AlreadyOff.requestRestart && !u3AlreadyOff.driveKeyHigh);
 
@@ -471,17 +476,23 @@ void testLowBatteryTimer() noexcept
 {
     LowBatteryTimer timer{};
     CHECK(!timer.isDue(0U, true, 9U));
-    CHECK(!timer.isDue(29999U, true, 9U));
-    CHECK(timer.isDue(30000U, true, 9U));
-    CHECK(!timer.isDue(30001U, false, 9U));
-    CHECK(!timer.isDue(60000U, true, 9U));
-    CHECK(!timer.isDue(90000U, true, 10U));
-    CHECK(!timer.isDue(90001U, true, 9U));
-    CHECK(!timer.isDue(120001U, true, kBatteryPctUnknown));
+    CHECK(!timer.isDue(kLowBatteryHoldMs - 1U, true, 9U));
+    CHECK(timer.isDue(kLowBatteryHoldMs, true, 9U));
+    CHECK(!timer.isDue(kLowBatteryHoldMs + 1U, false, 9U));
+    CHECK(!timer.isDue(kLowBatteryHoldMs + 30000U, true, 9U));
+    CHECK(!timer.isDue(kLowBatteryHoldMs + 60000U, true, 10U));
+    CHECK(!timer.isDue(kLowBatteryHoldMs + 60001U, true, 9U));
+    CHECK(!timer.isDue(kLowBatteryHoldMs + 90001U, true, kBatteryPctUnknown));
     constexpr uint32_t kStart = UINT32_MAX - 10000U;
     CHECK(!timer.isDue(kStart, true, 9U));
-    CHECK(!timer.isDue(kStart + 29999U, true, 9U));
-    CHECK(timer.isDue(kStart + 30000U, true, 9U));
+    CHECK(!timer.isDue(kStart + kLowBatteryHoldMs - 1U, true, 9U));
+    CHECK(timer.isDue(kStart + kLowBatteryHoldMs, true, 9U));
+    // 自定义测试保持时长与 kWeb 关机来源名。
+    LowBatteryTimer custom{};
+    CHECK(!custom.isDue(100U, true, 9U, 5000U));
+    CHECK(!custom.isDue(5099U, true, 9U, 5000U));
+    CHECK(custom.isDue(5100U, true, 9U, 5000U));
+    CHECK(std::string_view{shutdownReasonName(ShutdownReason::kWeb)} == "web");
 }
 
 } // namespace

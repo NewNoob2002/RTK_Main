@@ -135,11 +135,11 @@
   - 统一子页：顶部沿用 10 px 状态栏；位置/通信/设备/电源采用左 `40×52` 主卡 + 右最多 3 行可滚动列表（图标 + 名称 + 右对齐值 + 滚动条 + 统一左箭头 `Back`）；卫星页保持 4 柱双段图与 `used/visible` 标题。电源页提供 `Power off` 项，双击进入 `POWER OFF?` 确认页。
   - 充电待机（`kChargeStandby`）：左大号滚动电量 + 电池条（充电未满时 ≤ 2 fps 流动动画，充满停止恢复 0 写入）+ `CHG`/`FULL`/`USB` 与电压；右电源图标进度环（随按住时长实时填充，松开回落）+ `HOLD 2s ON`；底行 `FW` / `HW`。
 - **关机进度（`kShutdown`）**：
-  - 首行展示关机原因（`LOW BATTERY` / `CONSOLE` / `KEY` / `PHONE`）与终态标签；进度环、阶段文案和三枚小图标勾选里程碑（保存 / 射频 / 断电）由 `PowerSnapshot::{shutdownStage, lastShutdown, shutdownDoneMask, shutdownDegradedMask}` 驱动。蓝牙收尾显示 `CLOSING SPP`，SPP 会话已断开且扫描关闭请求已提交时显示 `SCAN REQ OK`。该里程碑以 GAP 提交成功为准。SoftAP 模式在 AP 停用后显示 `AP MODE OFF`。保存超时（1 s）、无线收尾超时（BT 150 ms / SoftAP 5.5 s）或安全电平失败时，OLED 显示对应的 `SAVE TIMEOUT` / `RF TIMEOUT` / `SAFE IO ERR` 和叉号标记。低电、console 及手机来源不经确认页直接进入关机页。
+  - 首行展示关机原因（`LOW BATTERY` / `CONSOLE` / `KEY` / `PHONE` / `WEB`）与终态标签；进度环、阶段文案和三枚小图标勾选里程碑（保存 / 射频 / 断电）由 `PowerModule` 静态收尾参与者登记表派生并经 `PowerSnapshot::{shutdownStage, lastShutdown, shutdownDoneMask, shutdownDegradedMask, shutdownDoneCount, shutdownTotalCount}` 驱动。蓝牙收尾显示 `CLOSING SPP`，SPP 会话已断开且扫描关闭请求已提交时显示 `SCAN REQ OK`。该里程碑以 GAP 提交成功为准。SoftAP 模式在 AP 停用后显示 `AP MODE OFF`。保存超时（3 s）、无线收尾超时（BT 150 ms / SoftAP 5.5 s）或安全电平失败时，OLED 显示对应的 `SAVE TIMEOUT` / `RF TIMEOUT` / `SAFE IO ERR` 和叉号标记。低电、console、手机及预留 Web 来源不经确认页直接进入关机页。
   - **基线强制下电 / USB 重启兜底例外（既定策略）**：`PowerModule` / `ShutdownSm` 沿用基线 ADR-0015 策略——即使保存或射频等待超时、或安全电平配置报错，仍继续推进断电（无 USB）或 U3 关断后的 USB 重启，防止设备挂死不关机或电池过放；但不再伪造“全部完成”位，明确向用户展示降级文案。
   - **阶段停留**。OLED 在线时，告知、保存、静默和 USB 的断电进行中阶段在完整帧确认后至少停留 `kMinStageVisibleMs = 250 ms`。保存和静默仍须满足原收尾条件。中间阶段未收到刷出确认时，从阶段开始最多等待 100 ms 的刷屏宽限加 250 ms 停留。
   - **无 USB**。进入 `kCutPower` 发布 `kBatteryOffReady`，显示 `POWER OFF`。Power 观察到对应终帧刷出后至少停留 300 ms，再启动 GPIO4 首段高电平。100 ms 未确认终帧时记录超时，按原协议断电。无 OLED 时直接走断电脉冲。GPIO4 首段仍从实际拉高开始计时。
-  - **有 USB**。U3 关断后发布 `kUsbOffReady`，显示 `RESTARTING`。日志首次排空或达到原上限后锁存放行，并启动未确认终帧的 30 ms 绝对截止。终帧完成可通知 `kLink`，等待前后复核截止且每次最多相对等待 1 tick。确认后至少停留 300 ms 再重启，终帧超时或 OLED 离线时按原重启路径推进。两种终帧凭据独立。OLED 清退避后以 `kWritten` / `kSkipped` 确认完整终帧，错误时 2 ms 后补刷。
+  - **有 USB**。U3 关断后发布 `kUsbOffReady`，显示 `RESTARTING`。日志首次排空或达到原上限后锁存放行，并启动未确认终帧的 30 ms 绝对截止。终帧完成可通知 `kLink`，等待前后复核截止且每次最多相对等待 1 tick。确认后至少停留 300 ms 再重启，终帧超时或 OLED 离线时按原重启路径推进。两种终帧凭据以及 `PowerModule` 侧终帧就绪/停留状态各自独立，电池终帧停留期间插入 USB 不会跳过 `RESTARTING`。OLED 清退避后以 `kWritten` / `kSkipped` 确认完整终帧，错误时 2 ms 后补刷。
   - **30 s 超时回退**。回到 `kIdle` 时恢复表盘，`kShutdownAbort` 记录从进入 `kCutPower` 起经过的毫秒数。
 
 ### 5.4 帧率调度、控制台统计与预算增量

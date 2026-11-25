@@ -453,6 +453,16 @@ void testControllerNavigationAndShutdown() noexcept
     dec = ctrl.step(now + 180U, kNoKeys, vm);
     CHECK(dec.page == OledPage::kShutdown && dec.markShutdownFinalFrame);
     CHECK(ctrl.renderState(now + 180U).shutdownPct == 100U);
+    // PW1 A：由参与者完成数/总数派生的进度必须单调非降（15..92 线性映射），且终帧就绪到达 100%。
+    const uint8_t announcedOnly = board::shutdownDoneBit(board::ShutdownDoneBit::kAnnounced);
+    CHECK(shutdownTargetPercent(board::ShutdownStage::kSave, announcedOnly, 2U, 8U) == 34U);
+    CHECK(shutdownTargetPercent(board::ShutdownStage::kQuiesce, announcedOnly, 6U, 8U) == 72U);
+    CHECK(shutdownTargetPercent(board::ShutdownStage::kCutPower,
+                                board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady), 7U,
+                                8U) == 100U);
+    CHECK(shutdownTargetPercent(board::ShutdownStage::kCutPower,
+                                board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady),
+                                7U, 8U) == 100U);
 
     // 30 s 超时回退至 kIdle：恢复表盘。
     vm.shutdownStage = board::ShutdownStage::kIdle;
@@ -1267,6 +1277,12 @@ void testSubpageSpringSquishAndIdleTimeout() noexcept
     CHECK(std::string_view{shutdownReasonText(board::ShutdownReason::kLowBattery)} ==
           "LOW BATTERY");
     CHECK(std::string_view{shutdownReasonText(board::ShutdownReason::kPhone)} == "PHONE");
+    CHECK(std::string_view{shutdownReasonText(board::ShutdownReason::kWeb)} == "WEB");
+    ScreenBuff fbWeb{};
+    vm.shutdownStage = board::ShutdownStage::kSave;
+    vm.shutdownReason = board::ShutdownReason::kWeb;
+    renderPage(OledPage::kShutdown, vm, fbWeb);
+    CHECK(countLitBytes(fbWeb) > 40U);
     ScreenBuff fbKey{};
     ScreenBuff fbLow{};
     vm.shutdownStage = board::ShutdownStage::kSave;

@@ -21,12 +21,74 @@ namespace power {
 
 /**
  * @brief 线程安全发起关机请求（由 kLink 的 PowerModule 分阶段执行，不在调用方上下文断电）
- * @param reason: 关机原因（kKey / kConsole / kLowBattery / kPhone）
+ * @param reason: 关机原因（kKey / kConsole / kLowBattery / kPhone / kWeb）
  * @retval true 请求已受理
  * @retval false 充电待机、模块未启用、已有动作或原因为 kNone
  * @note 任意任务可调用，不阻塞、不分配堆，非 ISR。
  */
 [[nodiscard]] bool requestShutdown(board::ShutdownReason reason) noexcept;
+
+/** 关机收尾参与者里程碑归属（用于从参与者表派生 OLED 里程碑与降级状态）。 */
+enum class ShutdownMilestone : uint8_t {
+    kNone = 0,     ///< 通用参与者（计入参与者完成进度，不映射固定里程碑图标）
+    kSaveFence,    ///< kSave 阶段命令队列栅栏
+    kSaveFlush,    ///< kSave 阶段落盘项
+    kRadioQuiesce, ///< kQuiesce 阶段无线静默（BT/Wi-Fi）
+    kSafeGpio,     ///< kQuiesce 阶段外设安全电平
+    kOledFinal,    ///< kCutPower 阶段 OLED 终帧停留
+};
+
+/** 关机收尾参与者阶段入口回调。 */
+using ShutdownBeginFn = void (*)(board::ShutdownStage stage, void *userCtx) noexcept;
+/** 关机收尾参与者完成轮询回调。 */
+using ShutdownDoneFn = bool (*)(void *userCtx) noexcept;
+
+/** 静态关机收尾参与者条目（编译期数组或启动期一次性注册，无堆）。 */
+struct ShutdownParticipant {
+    const char *name = nullptr;
+    ShutdownBeginFn begin = nullptr;
+    ShutdownDoneFn isDone = nullptr;
+    void *userCtx = nullptr;
+    board::ShutdownStage stage = board::ShutdownStage::kSave;
+    ShutdownMilestone milestone = ShutdownMilestone::kNone;
+};
+inline constexpr size_t kMaxExtraShutdownParticipants = 4U;
+
+/**
+ * @brief 启动期一次性注册额外关机收尾参与者（静态槽位，无堆）
+ * @param participant: 参与者描述（name 非空且 isDone 非空，stage 为 kSave/kQuiesce/kCutPower）
+ * @retval true 注册成功
+ * @retval false 参数无效、名称重复或表已满
+ * @note 仅启动前或主机测试单线程调用，不分配堆，非 ISR。
+ */
+[[nodiscard]] bool registerShutdownParticipant(const ShutdownParticipant &participant) noexcept;
+
+/**
+ * @brief 清空启动期额外注册的关机收尾参与者（主机测试场景复位用）
+ * @note 仅启动前或主机测试单线程调用，不阻塞，非 ISR。
+ */
+void clearExtraShutdownParticipants() noexcept;
+
+/**
+ * @brief 取得启动期额外注册的关机收尾参与者只读视图
+ * @retval 当前已注册的额外参与者视图
+ * @note 只读，不分配堆，非 ISR。
+ */
+[[nodiscard]] std::span<const ShutdownParticipant> extraShutdownParticipants() noexcept;
+
+/**
+ * @brief 设置或清除 HIL 模拟电池百分比（kBatteryPctUnknown 表示关闭模拟、使用真实 ADC）
+ * @param pct: 模拟电量百分比（0..100），或 board::kBatteryPctUnknown 恢复真实读数
+ * @note 任意任务可调用，无锁原子，仅用于 DEV 档 HIL 低电关机验证。
+ */
+void setSimulatedBatteryPct(uint8_t pct) noexcept;
+
+/**
+ * @brief 读取当前 HIL 模拟电池百分比（kBatteryPctUnknown 表示未启用模拟）
+ * @retval 模拟电量百分比或 board::kBatteryPctUnknown
+ * @note 任意任务可调用，无锁原子，非 ISR。
+ */
+[[nodiscard]] uint8_t simulatedBatteryPct() noexcept;
 
 } // namespace power
 
@@ -123,6 +185,15 @@ private:
     [[nodiscard]] fw::Status takeBatterySample(uint32_t nowMs) noexcept;
 
     /**
+     * @brief 在未启用模拟电量时按周期采集真实电池 ADC 并判定样本新鲜度
+     * @param nowMs: 当前单调时间（ms）
+     * @param[out] fresh: 当前电量读数是否在新鲜窗口内
+     * @retval true ADC 就绪并已更新状态
+     * @retval false ADC 未就绪，本轮跳过低电判定
+     * @note 仅 kLink 在 pollBattery 中调用，非 ISR。
+     */
+    [[nodiscard]] bool pollBatteryAdc(uint32_t nowMs, bool &fresh) noexcept;
+    /**
      * @brief 用每轮至多一个样本更新电量，并经 B2 仲裁提交持续低电关机
      * @param nowMs: 当前单调时间（ms）
      * @param pins: 本轮 USB 在位和可用性
@@ -157,9 +228,58 @@ private:
      */
     [[nodiscard]] bool isLogDrained(uint32_t elapsed) const noexcept;
 
-    /** @brief 投递并轮询关门后的执行器队尾命令。 @note 仅 kLink，非阻塞。 */
-    void pollSaveFences() noexcept;
+    struct FinalFrameState {
+        std::optional<uint32_t> holdDeadlineMs{};
+        bool ready = false;
+    };
 
+    struct ParticipantCount {
+        uint8_t done = 0U;
+        uint8_t total = 0U;
+    };
+
+    struct ParticipantOps;
+    friend struct ParticipantOps;
+
+    /**
+     * @brief 投递并轮询单个执行器保存围栏
+     * @param link: true 检查 kLink（storage）围栏，false 检查 kIo（GNSS）围栏
+     * @retval true 对应围栏已到达
+     * @retval false 等待设置提交或围栏命令执行完成
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool pollSaveFence(bool link) noexcept;
+
+    /**
+     * @brief 触发指定关机阶段所有已登记参与者的 begin 动作
+     * @param stage: 刚进入的关机阶段
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    void beginStageParticipants(board::ShutdownStage stage) noexcept;
+
+    /**
+     * @brief 轮询指定关机阶段全部参与者并刷新完成位掩码
+     * @param stage: 当前关机阶段
+     * @param nowMs: 当前单调时间（ms）
+     * @retval true 该阶段全部参与者已完成（kQuiesce 含单项有界等待到期）
+     * @retval false 仍有参与者未完成且未到等待上限
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool pollStageParticipants(board::ShutdownStage stage, uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 记录指定关机阶段在超时/结束时仍未完成的参与者位
+     * @param stage: 超时或离开的关机阶段
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    void recordStageTimeouts(board::ShutdownStage stage) noexcept;
+
+    /**
+     * @brief 按参与者名称逐项记录超时降级告警日志
+     * @param stage: 发生超时的关机阶段
+     * @note 仅 kLink 在超时边沿调用一次，非 ISR。
+     */
+    void logStageTimeout(board::ShutdownStage stage) const noexcept;
     /**
      * @brief 推进关机状态机并执行当前阶段动作
      * @param nowMs: 当前单调时间（ms）
@@ -169,19 +289,12 @@ private:
     void stepShutdown(uint32_t nowMs, PinLevels &pins) noexcept;
 
     /**
-     * @brief 判断 kSave 阶段全部待落盘数据与在途设置是否已清空
-     * @retval true 可进入 kQuiesce
-     * @retval false 仍有延迟写或在途写入
+     * @brief 计算给定 kQuiesce 参与者的有界等待上限
+     * @param p: 参与者登记项
+     * @retval 该参与者的等待上限（ms）
      * @note 仅 kLink 调用，不阻塞，非 ISR。
      */
-    [[nodiscard]] bool isSaveComplete() const noexcept;
-
-    /**
-     * @brief 记录 kSave 超时时仍未完成的保存项告警日志
-     * @note 仅 kLink 在 kSave 超时边沿调用一次，非 ISR。
-     */
-    void logSaveTimeoutItems() const noexcept;
-
+    [[nodiscard]] uint32_t quiesceLimitMs(const power::ShutdownParticipant &p) const noexcept;
     /**
      * @brief 执行关机阶段刚进入时的一次性动作（日志、拦截写入、冲刷、静默或拉高 GPIO4）
      * @param nowMs: 当前单调时间（ms）
@@ -201,24 +314,11 @@ private:
     void handleShutdownCutPower(uint32_t nowMs, const board::ShutdownOutput &out) noexcept;
 
     /**
-     * @brief 执行 kQuiesce 进入动作：断蓝牙/停 Wi-Fi、外设回安全电平并打印关机日志
+     * @brief 进入 kQuiesce 前清理未达围栏并关闭保存窗口，再启动 kQuiesce 参与者
      * @param nowMs: 当前单调时间（ms）
      * @note 仅 kLink 调用，非 ISR。
      */
     void enterQuiesce(uint32_t nowMs) noexcept;
-
-    /** @brief 在静默期限到达时记录仍未停止的无线业务。 @note 仅 kLink。 */
-    void logQuiesceTimeout() noexcept;
-
-    /**
-     * @brief 判断 kQuiesce 日志冲刷等待是否完成
-     * @param nowMs: 当前单调时间（ms）
-     * @retval true 日志已排空或到达有界等待上限
-     * @retval false 继续等待输出任务排空日志
-     * @note 仅 kLink 调用，不阻塞，非 ISR。
-     */
-    [[nodiscard]] bool isQuiesceDone(uint32_t nowMs) const noexcept;
-
     /**
      * @brief 驱动 GPIO4（TELL_MCU_KEY）输出目标电平
      * @param high: true 拉高模拟按下，false 拉低释放
@@ -227,12 +327,30 @@ private:
     void setKeyDrive(bool high) noexcept;
 
     /**
-     * @brief 计算当前关机阶段的已完成里程碑位掩码（供 OLED 关机进度页只读消费）
+     * @brief 从参与者登记表统计关机收尾完成数与总数（供 OLED 进度条计算）
+     * @retval 已完成与总参与者计数；空闲态均为 0
+     * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] ParticipantCount computeShutdownCounts() const noexcept;
+
+    /**
+     * @brief 从参与者完成位推导关机里程碑掩码（供 OLED 关机进度页只读消费）
      * @param pins: 当前供电检测结果
      * @retval ShutdownDoneBit 组合掩码，空闲态为 0
      * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
      */
     [[nodiscard]] uint8_t computeShutdownDoneMask(const PinLevels &pins) const noexcept;
+
+    /**
+     * @brief 判断指定阶段（及可选里程碑）的已登记参与者是否全部完成
+     * @param stage: 关机阶段
+     * @param m: 里程碑过滤（kNone 表示匹配该阶段全部参与者）
+     * @retval true 至少存在一个匹配参与者且全部已完成
+     * @retval false 无匹配参与者或仍有未完成项
+     * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool allParticipantsDone(board::ShutdownStage stage,
+                                           power::ShutdownMilestone m) const noexcept;
 
     /**
      * @brief 计算当前关机阶段的降级结果位掩码（超时/外设安全电平失败，与完成位独立）
@@ -318,15 +436,14 @@ private:
     uint32_t oledWaitDeadlineMs_ = 0U;
     uint32_t stageEnteredMs_ = 0U;
     std::optional<uint32_t> stageOnScreenMs_{};
-    std::optional<uint32_t> finalHoldDeadlineMs_{};
-    bool finalFrameReady_ = false;
-    bool saveFencesDone_ = false;
-    bool saveFlushedDone_ = false;
-    bool saveTimedOut_ = false;
-    bool peripheralsSafeDone_ = false;
-    bool peripheralsSafeFailed_ = false;
-    bool radioQuiescedDone_ = false;
-    bool radioTimedOut_ = false;
+    FinalFrameState batteryFinalFrame_{};
+    FinalFrameState usbFinalFrame_{};
+    uint16_t participantDoneMask_ = 0U;
+    uint16_t participantTimedOutMask_ = 0U;
+    uint32_t shutdownNowMs_ = 0U;
+    bool safeGpioOk_ = false;
+    bool safeGpioEvaluated_ = false;
+    bool saveStageTimedOut_ = false;
     uint32_t shortPresses_ = 0U;
     uint32_t longPresses_ = 0U;
     uint32_t quiesceStartMs_ = 0U;

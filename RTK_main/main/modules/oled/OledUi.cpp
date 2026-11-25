@@ -374,7 +374,8 @@ UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexc
     const uint8_t finalBits = board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady) |
                               board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady);
     const bool final = (vm.shutdownDoneMask & finalBits) != 0U;
-    const uint8_t target = shutdownTargetPercent(vm.shutdownStage, vm.shutdownDoneMask);
+    const uint8_t target = shutdownTargetPercent(vm.shutdownStage, vm.shutdownDoneMask,
+                                                 vm.shutdownDoneCount, vm.shutdownTotalCount);
     if (final || (target <= shutdownPct_)) {
         shutdownPct_ = target;
     } else {
@@ -1238,12 +1239,26 @@ PostFlushDecision settleFrameWait(const UiDecision &dec, FlushOutcome outcome,
     return out;
 }
 
-uint8_t shutdownTargetPercent(board::ShutdownStage stage, uint8_t doneMask) noexcept
+uint8_t shutdownTargetPercent(board::ShutdownStage stage, uint8_t doneMask, uint8_t doneCount,
+                              uint8_t totalCount) noexcept
 {
+    if (stage == board::ShutdownStage::kIdle) {
+        return 0U;
+    }
     const uint8_t finalBits = board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady) |
                               board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady);
     if ((doneMask & finalBits) != 0U) {
         return kPctCutPowerDone;
+    }
+    if (totalCount > 0U) {
+        const uint8_t clampedDone = std::min(doneCount, totalCount);
+        constexpr uint32_t kParticipantSpan =
+            static_cast<uint32_t>(kPctCutPower) - static_cast<uint32_t>(kPctAnnounce);
+        const uint32_t scaled =
+            static_cast<uint32_t>(kPctAnnounce) +
+            ((static_cast<uint32_t>(clampedDone) * kParticipantSpan) / totalCount);
+        // scaled 落在 [kPctAnnounce, kPctCutPower]（15..92），窄化到 uint8_t 安全。
+        return static_cast<uint8_t>(scaled);
     }
     switch (stage) {
     case board::ShutdownStage::kAnnounce:
@@ -1336,6 +1351,8 @@ const char *shutdownReasonText(board::ShutdownReason reason) noexcept
         return "LOW BATTERY";
     case board::ShutdownReason::kPhone:
         return "PHONE";
+    case board::ShutdownReason::kWeb:
+        return "WEB";
     case board::ShutdownReason::kNone:
     default:
         return "SHUTDOWN";

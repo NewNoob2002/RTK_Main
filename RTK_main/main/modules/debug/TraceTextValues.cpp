@@ -9,6 +9,7 @@
 #include "AppConfig.hpp" // RTK_GNSS_ENABLED
 #include "SppServer.h"
 #include "core/TraceCodes.hpp"
+#include "board/PowerLogic.hpp"
 #include "TraceTextInternal.hpp"
 #if RTK_GNSS_ENABLED
 #include "def/GnssDef.hpp"
@@ -167,6 +168,58 @@ const char *gnssFamilyText(uint32_t value) noexcept
 }
 #endif
 
+/**
+ * @brief 把关机阶段枚举翻成文本
+ * @param value: 关机阶段数值
+ * @retval 静态文本，不为空
+ * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ */
+const char *shutdownStageText(uint32_t value) noexcept
+{
+    // 追踪事件字段仅承载 board::ShutdownStage 枚举值，转枚举匹配。
+    switch (static_cast<board::ShutdownStage>(value)) {
+    case board::ShutdownStage::kIdle:
+        return "idle";
+    case board::ShutdownStage::kAnnounce:
+        return "announce";
+    case board::ShutdownStage::kSave:
+        return "save";
+    case board::ShutdownStage::kQuiesce:
+        return "quiesce";
+    case board::ShutdownStage::kCutPower:
+        return "cut_power";
+    default:
+        return "?";
+    }
+}
+
+/**
+ * @brief 把关机原因枚举翻成文本（覆盖 kNone/kKey/kConsole/kLowBattery/kPhone/kWeb）
+ * @param value: 关机原因数值
+ * @retval 静态文本，不为空
+ * @note 仅 console REPL/模块任务路径，非 ISR；不分配堆。
+ */
+const char *shutdownReasonText(uint32_t value) noexcept
+{
+    // 追踪事件字段仅承载 board::ShutdownReason 枚举值，转枚举匹配。
+    switch (static_cast<board::ShutdownReason>(value)) {
+    case board::ShutdownReason::kNone:
+        return "none";
+    case board::ShutdownReason::kKey:
+        return "key";
+    case board::ShutdownReason::kConsole:
+        return "console";
+    case board::ShutdownReason::kLowBattery:
+        return "low_battery";
+    case board::ShutdownReason::kPhone:
+        return "phone";
+    case board::ShutdownReason::kWeb:
+        return "web";
+    default:
+        return "?";
+    }
+}
+
 } // namespace
 
 namespace detail {
@@ -228,6 +281,15 @@ void appendValue(char *out, size_t cap, size_t &pos, TraceValue value,
         break;
     case TraceValue::kSppCtrlA:
         append(out, cap, pos, "%s", sppCtrlText(ev.a));
+        break;
+    case TraceValue::kShutdownStageA:
+        append(out, cap, pos, "%s", shutdownStageText(ev.a));
+        break;
+    case TraceValue::kShutdownReasonA:
+        append(out, cap, pos, "%s", shutdownReasonText(ev.a));
+        break;
+    case TraceValue::kShutdownReasonB:
+        append(out, cap, pos, "%s", shutdownReasonText(ev.b));
         break;
     case TraceValue::kSession:
         append(out, cap, pos, "0x%04lx", static_cast<unsigned long>(ev.session));
