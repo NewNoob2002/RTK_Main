@@ -87,7 +87,7 @@ ADR-0018（设置服务：MQTT 远程配置是其调用方之一）、ADR-0015�
 | 24+16n | lat | double | 度，WGS-84 |
 | 32+16n | lon | double | 度，WGS-84 |
 
-> 注：新固件 `phone_protocol.md` 帧 payload ≤ 256 B，40 点记录超限；蓝牙侧下发大围栏需分片或放宽上限，另议。
+> 注：新固件 `phone_protocol.md` 帧 payload 现为 ≤ 256 B，40 点记录超限。2026-11-25 用户已批准随 WP-FENCE 将上限提高到约 1 KB（见 `docs/requirements/P2-nextgen-customer.md` §7），蓝牙侧不分片。
 
 ### 4.2 报警档案（按围栏类型，REQ-009/010）
 

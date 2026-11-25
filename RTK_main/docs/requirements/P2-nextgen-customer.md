@@ -57,3 +57,8 @@
 - **固件侧起草设备端协议**（MQTT 主题/载荷/应答/错误码、围栏记录格式、分包与版本/CRC、BT 0x60–0x62 扩展）：受存储容量、EC600 单包上限、报警时延等设备约束决定。围栏 MQTT 载荷建议复用 0x61 二进制记录（扩展类型/报警模式字段），保证 BT 与 4G 同一数据模型。
 - **服务器/App 同事负责并评审**：围栏主数据归属与冲突策略、授权与设备身份、对客户的服务器 API 文档、App 编辑/配对/锁定流程。
 - 双方签字后写 ADR（4G/围栏），再排期实现。
+
+## 7. 已定决策
+| 日期 | 决策 | 依据与约束 |
+| --- | --- | --- |
+| 2026-11-25 | 用户批准：蓝牙帧 payload 上限由 256 B 提高到约 1 KB（拟 `DEV_PROTO_MAX_PAYLOAD` = 1024），不在 BT 侧做围栏分片。 | 40 点围栏记录 24+16×40 = 664 B 超出现行 256 B（`components/device_proto/include/DevProtoFrame.h:19`、`proto/Frame.hpp:21` `kMaxPayload`）；长度字段为 u16，旧固件 `BT_RX_BUFF` 2048 B。随 WP-FENCE 实施：修改冻结头需同步 `docs/frozen.sha256` 与 `docs/protocol/phone_protocol.md`，实测各帧缓冲的 DRAM 增量并写入该工作包报告；当前不改代码。 |
