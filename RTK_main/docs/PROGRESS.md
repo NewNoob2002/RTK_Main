@@ -1,9 +1,9 @@
 # 开发进度与遗留事项
 
-截至 2026-11-23（`main`，另有未合入分支见末尾）。各系列的设计依据见 `docs/adr/`，验收标准见 `docs/acceptance.md`。
+截至 2026-11-25（`main`，另有未合入分支见末尾）。各系列的设计依据见 `docs/adr/`，验收标准见 `docs/acceptance.md`。
 
-已完成卡片的任务卡与实施报告已于 2026-11-23 清理出工作树。需要原文时用 `git log --all -- docs/tasks/<卡>.md`
-或 `git show d6db196:RTK_main/docs/reports/<卡>.md` 取回。仍被 ADR、工具或验收引用的报告保留在 `docs/reports/`。
+已完成卡片的任务卡与实施报告已清理出工作树（2026-11-23 一批，2026-11-25 B2–OL6 一批）。需要原文时用 `git log --all -- RTK_main/docs/tasks/<卡>.md`，
+或 `git show d6db196:RTK_main/docs/reports/<卡>.md`（第一批）、`git show 24f5ffc:RTK_main/docs/reports/<卡>.md`（第二批）取回。仍被 ADR、工具或验收引用的报告保留在 `docs/reports/`。
 
 ## 1. 已完成系列
 
@@ -29,20 +29,21 @@
 | H1、HB | 按构建计算堆预算，按官方文档调整 Wi-Fi/lwIP 内存 | 0017 | `37aafb4` |
 | SV1–SV3 | 执行器异步命令总线；设置服务；手机与控制台改走设置服务；0x28 手机进入网页配置 | 0018 | `1105c35`、`a74bf94`、`5bd560f`、`489e2f7` |
 | B2 | P2 电源键长按关机、关机序列（保存 → 静默 → 断电）、SGM41513 I2C USB 检测与充电待机；2026-11-23 P2 v1.41 主路径 HIL PASS（报告 `docs/reports/B2-power-key.md` §9） | 0015 | `612ff8a`、`65c2863`、合入 `00f73c2` |
+| B3 | 充电芯片探测、GPIO27 USB 检测、电池 ADC、低电关机；P2 v1.41 HIL 通过（报告 `docs/reports/B3-charger-usb-battery.md` §8） | 0015 | 合入 `d2d4f44` |
+| U1 | ZED-F9P 驱动：VALSET、NMEA 静默、星座/截止角、RTCM 帧边界下发；HIL 通过，RTK 固定解保持未测（报告 `docs/reports/U1-f9p-driver.md` §10） | 0012 | 合入 `56dd5ae` |
+| U2 | F9P 1/2/5 Hz 定位频率与整数倍输出周期、NMEA 高精度（3 键 NAK 降级）；室内 HIL 通过（报告 `docs/reports/U2-ublox-rate.md` §8） | 0012 | 合入 `d3a3e3a` |
+| T13F | 配对事件到达顺序修正（报告 `docs/reports/T13F-pairing-order.md`） | — | 合入 `ffc588b` |
+| O1–O3 | 网页 OTA：固件侧、上传页与 mock、HIL 修正与 fence 分区；HIL 通过（升级 ~35 s、30 s 自动确认、并发 408、断 Wi-Fi、长按电源键中止） | 0019 | `04c2f12`、`33a7a09`、`0f18f66`、合入 `1b01eef` |
+| OL1–OL6 | SH1106 OLED（共享 I2C0、WouoUI 子集）、开机自检/表盘/子页、真实关机进度、待机页、SDL2 模拟器、30 fps 节拍与局部刷新、两选项弹窗、COMM 页 SoftAP 信息；2026-11-25 P2 v1.41 + F9P HIL 通过（`oled bench 10` 30.0 fps / CPU 3.8% / i2c_errors 0；报告 `docs/reports/OL1-oled.md`、`OL2-oled-ui.md`） | 0020 | 合入 `2eb65ba`、`c2e9293` |
 
 ## 2. 进行中与未开始
 
 | 项 | 状态 |
 | --- | --- |
-| B3 充电芯片探测、GPIO27 USB 检测、电池 ADC、低电关机 | 已合入 main（2026-11-24）。新 F9P P2 v1.41 HIL 通过：GPIO27 插拔、电池 ADC +30 mV、App 电量一致、无芯片时只报一行 W（报告 `docs/reports/B3-charger-usb-battery.md` §8） |
-| U1 ZED-F9P 驱动（VALSET、NMEA 静默、星座/截止角、RTCM 帧边界下发） | 已合入 main（2026-11-24）。P2 v1.41 + ZED-F9P HPG 1.12 HIL：探测/SN、无计划外 NMEA、控制台/手机 0x06/网页改星座与截止角并掉电保持、三入口拒绝关 GPS 均通过；RTK 固定解保持未测（报告 `docs/reports/U1-f9p-driver.md` §10） |
-| U2 ZED-F9P 定位频率/输出周期、NMEA 高精度 | 已合入 main（2026-11-24）。F9P 1/2/5 Hz + 整数倍周期规则（控制台/设置/网页/驱动四处），改频率周期自动对齐并持久化，回滚恢复 CFG-RATE-MEAS，不重放星座；HIGHPREC/SVNUMBERING 带 3 键 NAK 降级。室内 HIL 通过；室外项未测（报告 `docs/reports/U2-ublox-rate.md` §8） |
-| OL1 SH1106 OLED（共享 I2C0、WouoUI graph/font 子集、只读状态页、短按翻页、关机提示） | 已合入 main（2026-11-24）。P2 v1.41 HIL：显示方向、开机页→状态页、短按翻页、关机提示均正常，`i2c_errors=0`，oled 栈 HWM 1,088/3,072 B。用户反馈关机提示一闪而过、开机无过渡、页面单调 → OL2 |
-| O1–O3 网页 OTA | 已合入 main（2026-11-24）。P2 v1.41 HIL 通过：升级 ~35 s、30 s 自动确认、错误码、并发 150 s 408、中止后 other=null、断 Wi-Fi、上传中长按电源键中止 |
+| PW1 关机参与者表 | 进行中，分支 `feat/pw1-shutdown`（工作树 `../RTK_Main-pw1`），任务卡 `docs/tasks/PW1-shutdown-participants.md` 在该分支 |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | 未立项，需新 ADR，必须走 ADR-0018 的服务与总线 |
-| OL2–OL6 OLED 表盘 UI（开机自检、真实关机进度与末帧等待、表盘+统一子页、长按确认关机、待机页、SDL2 模拟器、30 fps 绝对节拍+局部刷新、两选项弹窗、COMM 页 SoftAP 信息） | 已合入 main（2026-11-25）。P2 v1.41 + F9P HIL 通过：自检/表盘/子页、长按确认与关机页完整显示、待机开机环、无充电 IC 时按 GPIO27 显示 USB/BAT、BT→Wi-Fi 切换后屏幕恢复（I2C 9 SCL 恢复）、无定位时 OLED 显示 NO FIX 且网页不报精度、`oled bench 10` 30.0 fps / CPU 3.8% / 帧间隔最大 35 ms / i2c_errors 0 / 栈余量 784 B、弹窗单击切换双击确认、Wi-Fi COMM 显示 SSID/IP/客户端数。报告 `docs/reports/OL2-oled-ui.md`…`OL6-oled-dialog-wifi.md`；后续 PW1 关机参与者表 |
 
 ## 3. 待补的硬件验证（HIL）
 
@@ -57,3 +58,9 @@
 - B2：固件卡死时 10 s 硬关断 NOT_RUN；3V3/GPIO4/U3 波形未用仪表测；SGM41513 REG00–REG0B 位核对、`senseOnMv` 与硬关断时长校准、注入类项（按键毛刺、U3 30 s 未掉电回退、BT 拥塞、NVS 错误）未测；BT 关机时 SPP CLOSE 日志晚于 `device powered down` 约 0.49 s。
 - HB：关闭 Wi-Fi 的构建最小空闲堆 80,776 B，低于 81,920 B 预算，用户已接受（该构建不发布）。
 - 多张实现卡（C1–C4、P1、N1、G-baud*、Q1 门控、W1）的报告只有实现方结论 NOT_RUN，此后的整机 HIL 没有逐卡单独记录。
+
+## 4. 未合入分支
+
+- `feat/pw1-shutdown`：PW1 进行中（见 §2）。
+- `feat/w8-ui-agy`、`feat/w8-ui-codex`：W8 网页重做的两版落选候选（选用方案合入 `e0a3001`），存档。
+- `spike/w0-wifi-budget`：W0 Wi-Fi 内存预算试验代码，存档。

@@ -1,6 +1,6 @@
 # ADR-0020：P2 OLED（SH1106）显示驱动与 WouoUI 只读状态页
 
-状态：**Proposed**（草稿，待 Architect 评审定稿）。由任务卡 `docs/tasks/OL1-oled.md`（OL1）实施。
+状态：**Proposed**（草稿，待 Architect 评审定稿）。由 OL1–OL6 任务卡实施，已合入 main（OL1 `2eb65ba`，OL2–OL6 `c2e9293`，2026-11-25 P2 v1.41 HIL 通过）；任务卡已清理，见 git 历史。
 关联：ADR-0008（代码组织与堆分级）、ADR-0009（日志通道与控制台）、ADR-0011（启动顺序与内存）、ADR-0015（板级识别与 `Feature::kOled`）、ADR-0016（控制台档位）、ADR-0017 §7（OLED 交互菜单延后）。
 硬件依据：`docs/hardware/P2/schematic/p2v1.41.pdf`、`docs/reports/P2-legacy-gap.md` §1.5/§2.2；旧实现参考（只读）：`P2_V3.1_IDF/main/src/xyz_oled.c`、`main/user_src/user_oled.c`。
 
@@ -103,7 +103,7 @@
 
 ## 5 OL2 增补：表盘 UI 架构、按键方案与关机进度
 
-由任务卡 `docs/tasks/OL2-oled-ui.md`（OL2）实施，在 OL1 驱动与共享 I2C0 基础上升级为“开机自检 → 表盘 ↔ 四子菜单 + 真实进度关机页”架构，继续仅使用 WouoUI `graph/font` 子集（无新增第三方源文件、无浮点、无运行期堆）。
+由 OL2 任务卡实施（报告 `docs/reports/OL2-oled-ui.md`），在 OL1 驱动与共享 I2C0 基础上升级为“开机自检 → 表盘 ↔ 四子菜单 + 真实进度关机页”架构，继续仅使用 WouoUI `graph/font` 子集（无新增第三方源文件、无浮点、无运行期堆）。
 
 ### 5.1 UI 模块拆分
 

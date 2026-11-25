@@ -139,6 +139,8 @@ ID 窗口登记：
 
 | 卡 | 内容 | 状态 |
 | --- | --- | --- |
-| B1 | 配置表 + `identify` 步骤 + P2 电源保持 + 安全电平 + GNSS 引脚改读配置表 | 待实施 |
-| B2 | P2 按键与关机（§2.4 关机协议），卡 `docs/tasks/B2-power-key-shutdown.md` | 已实现，分支 `feat/b2-power-key`（`612ff8a`）；2026-11-23 主路径 HIL PASS，已合入 main（`00f73c2`） |
-| 后续 | 4G、OLED、充电/电池、蜂鸣器/马达/LED、IMU；引入按 `features` 启停模块 | 未开始 |
+| B1 | 配置表 + `identify` 步骤 + P2 电源保持 + 安全电平 + GNSS 引脚改读配置表 | 已合入 main（`a2deda2`） |
+| B2 | P2 按键与关机（§2.4 关机协议），任务卡已清理，见 git 历史；报告 `docs/reports/B2-power-key.md` | 已实现，分支 `feat/b2-power-key`（`612ff8a`）；2026-11-23 主路径 HIL PASS，已合入 main（`00f73c2`） |
+| B3 | 充电芯片探测、GPIO27 USB 检测、电池 ADC、低电关机 | 已合入 main（`d2d4f44`），报告 `docs/reports/B3-charger-usb-battery.md` |
+| OL1–OL6 | P2 OLED 显示与表盘 UI（ADR-0020） | 已合入 main（`2eb65ba`、`c2e9293`），2026-11-25 HIL 通过 |
+| 后续 | 4G、蜂鸣器/马达/LED、IMU；引入按 `features` 启停模块 | 未开始 |
