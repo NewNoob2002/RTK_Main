@@ -101,6 +101,7 @@ foreach(policy concurrent preempt)
         power_sim_battery_low_shutdown power_oled_usb_final_frame_stale_clock
         power_oled_battery_final_frame_stale_clock power_participant_four_slot_names
         power_sim_battery_boundary power_low_battery_real_zero_mv power_sim_battery_reinject
+        power_oled_usb_late_u3_final_frame_hold power_sim_battery_redundant_off
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window web_s2_storage_bt device_name device_name_e1 device_name_unknown)

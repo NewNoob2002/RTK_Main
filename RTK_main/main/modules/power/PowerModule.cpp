@@ -9,6 +9,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -187,11 +188,21 @@ bool requestShutdown(board::ShutdownReason reason) noexcept
 
 fw::Status registerShutdownParticipant(const ShutdownParticipant &entry) noexcept
 {
-    // kCutPower 由内部 OLED 双终帧有界流程独占：外部参与者不得延长断电窗口或绕过 30 s 兜底。
+    // kCutPower 由内部 OLED 双终帧有界流程独占：外部参与者不得延长断电窗口。
+    // 名字含控制字符（CR/LF 等）会在日志中消失或换行，造成与内置名无法区分，一律拒绝。
+    constexpr unsigned char kFirstPrintable = 0x20U; // 低于此值为 C0 控制字符
+    constexpr unsigned char kDelChar = 0x7FU;
+    const auto hasControlChar = [](std::string_view name) noexcept {
+        return std::any_of(name.begin(), name.end(), [](char c) noexcept {
+            const auto ch = static_cast<unsigned char>(c);
+            return (ch < kFirstPrintable) || (ch == kDelChar);
+        });
+    };
     if ((entry.name == nullptr) || (*entry.name == '\0') || (entry.isDone == nullptr) ||
         ((entry.stage != board::ShutdownStage::kSave) &&
          (entry.stage != board::ShutdownStage::kQuiesce)) ||
         (std::strlen(entry.name) > kMaxShutdownParticipantNameLen) ||
+        hasControlChar(std::string_view{entry.name}) ||
         PowerModule::isBuiltinParticipantName(entry.name)) {
         return fw::Status::kInvalidArg;
     }
@@ -227,6 +238,11 @@ void setSimulatedBatteryPct(uint8_t pct) noexcept
     uint32_t cur = s_sim_battery_word.load(std::memory_order_relaxed);
     uint32_t next = 0U;
     do {
+        if ((encoded == board::kBatteryPctUnknown) &&
+            ((cur & kSimPctMask) == board::kBatteryPctUnknown)) {
+            // 模拟本已关闭：重复清除保持幂等，不开启新会话，避免重置真实低电计时。
+            return;
+        }
         // 会话代号每次调用递增（24 位回绕），使「清除后立即重新注入」也可被消费者观察到。
         const uint32_t session = ((cur >> kSimSessionShift) + 1U) & 0xFFFFFFU;
         next = (session << kSimSessionShift) | encoded;
@@ -1420,14 +1436,9 @@ bool PowerModule::pollRestart(uint32_t nowMs) noexcept
         esp_restart();
 #endif
     };
-    // USB 重启路径不再经过 ShutdownSm::stepCutPower，这里独立兜底：自进入断电阶段 30 s 必须放行。
-    const bool cutExpired =
-        shutdownSm_.active() && (nowMs - cutStartMs_ >= board::kShutdownCutTimeoutMs);
-    if (cutExpired) {
-        FW_LOGW(fw::TraceCat::kSys, "power restart path exceeded 30 s, restarting anyway");
-    }
-    if (!shutdownSm_.active() || cutExpired ||
-        pollStageParticipants(board::ShutdownStage::kCutPower, nowMs)) {
+    // U3 已关断后沿用有界日志等待、终帧确认与 300 ms 停留；30 s 回退只属于 U3 未关断阶段（ADR-0015 §2.4），
+    // 不得在这里提前结束已确认的终帧停留。
+    if (!shutdownSm_.active() || pollStageParticipants(board::ShutdownStage::kCutPower, nowMs)) {
         doRestart();
     } else if (!usbFinalFrame_.holdDeadlineMs) {
         if (const TaskHandle_t self = xTaskGetCurrentTaskHandle(); self != nullptr) {

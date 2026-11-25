@@ -45,7 +45,7 @@
 - `tools/main_host_check/PowerLogicCheck.cpp`、`OledUiCheck.cpp`、`MainHostCheck.cpp`、`CMakeLists.txt`：
   - 更新既有测试以匹配 3 s 保存超时与 120 s 低电保持。
   - 新增并保留 `power_participant_blocks_and_timeout_names`（阻塞断电直到超时、超时日志列名、非法/重名/超长/内置同名/非 kSave·kQuiesce 阶段注册按 `fw::Status` 拒绝、全部 5 种 `ShutdownReason` trace 格式化）、`power_oled_battery_to_usb_final_frame`（电池终帧停留期间插 USB 仍完整等待 RESTARTING 终帧与 300 ms 停留）、`power_sim_battery_low_shutdown`（模拟低电注入、清除恢复真实 ADC 与 120 s 触发关机），并在 `OledUiCheck` 中补齐参与者计数进度派生与 `kWeb` OLED 渲染断言。
-  - 评审修复新增 6 组：`power_oled_usb_final_frame_stale_clock`、`power_oled_battery_final_frame_stale_clock`、`power_participant_four_slot_names`、`power_sim_battery_boundary`、`power_low_battery_real_zero_mv`、`power_sim_battery_reinject`，以及 `OledUiCheck` 的 kCutPower 92% 断言（详见第 5 节）。
+  - 评审修复新增 6 组：`power_oled_usb_final_frame_stale_clock`、`power_oled_battery_final_frame_stale_clock`、`power_participant_four_slot_names`、`power_sim_battery_boundary`、`power_low_battery_real_zero_mv`、`power_sim_battery_reinject`，复审新增 `power_oled_usb_late_u3_final_frame_hold`、`power_sim_battery_redundant_off`，以及 `OledUiCheck` 的 kCutPower 92% 断言（详见第 5 节）。
 
 ---
 
@@ -57,9 +57,9 @@
 
 | 指标 | 基线 `6b54fc4` | PW1 `builds/pw1-idf` | 增量 | 约束 |
 | --- | ---: | ---: | ---: | --- |
-| `rtk_main.bin` | 1,582,304 B | 1,585,200 B | **+2,896 B** | 应用分区余 19%（`0x5cfd0` B） |
-| Flash Code (`.text`) | 1,138,556 B | 1,140,764 B | **+2,208 B** | — |
-| Flash Data (`.rodata`/`.appdesc`/`.tdata`) | 274,556 B | 275,116 B | **+560 B** | 内置参与者表入 `.rodata` |
+| `rtk_main.bin` | 1,582,304 B | 1,585,232 B | **+2,928 B** | 应用分区余 19%（`0x5cfd0` B） |
+| Flash Code (`.text`) | 1,138,556 B | 1,140,848 B | **+2,292 B** | — |
+| Flash Data (`.rodata`/`.appdesc`/`.tdata`) | 274,556 B | 275,068 B | **+512 B** | 内置参与者表入 `.rodata` |
 | IRAM | 116,139 B | 116,139 B | **0 B** | **0 B（满足）** |
 | 静态 DRAM 合计 | 98,475 B | 98,611 B | **+136 B** | **≤ 256 B（满足）** |
 | — DRAM `.data` | 52,891 B | 53,019 B | +128 B | 4 槽额外参与者数组 + 模拟电量会话原子字 + 新增快照/模块状态 |
@@ -84,12 +84,12 @@
 
 ## 3. 门禁与测试结果
 
-在 `RTK_main` 下执行 `IDF_PATH=/home/gtc/esp/esp-idf-v6.1 PATH="/home/gtc/.espressif/python_env/idf6.1_py3.13_env/bin:$PATH" bash tools/ci/run_gates.sh --prefix pw1 --base 6b54fc4`，**43 passed, 0 failed**（评审修复后重跑；日志目录 `RTK_main/builds/pw1-logs/`）：
+在 `RTK_main` 下执行 `IDF_PATH=/home/gtc/esp/esp-idf-v6.1 PATH="/home/gtc/.espressif/python_env/idf6.1_py3.13_env/bin:$PATH" bash tools/ci/run_gates.sh --prefix pw1 --base 6b54fc4`，**43 passed, 0 failed**（复审修复后重跑；日志目录 `RTK_main/builds/pw1-logs/`）：
 
 | 门禁 | 结果 | 详情 |
 | --- | --- | --- |
 | `G1-frozen` | **PASS** | `sha256sum -c docs/frozen.sha256` 全部匹配 |
-| `G2-main_host_check` / `G2b-main_host_check-asan` | **PASS** | 201/201 通过（含首轮 3 组与评审修复新增 6 组 concurrent+preempt 场景及 OledUi/PowerLogic 新断言） |
+| `G2-main_host_check` / `G2b-main_host_check-asan` | **PASS** | 205/205 通过（含首轮 3 组、评审修复新增 6 组、复审新增 2 组 concurrent+preempt 场景及 OledUi/PowerLogic 新断言） |
 | `G2-t13_host_check` / `G2b-t13_host_check-asan` | **PASS** | 46/46 通过 |
 | 其余 12 组 `G2-*` / `G2b-*-asan`（host / app_fw / services / stream_demux / bt_reconnect / cli / gnss / gnss-all / nvs_store / web_proto / settings / ota） | **PASS** | 全部普通 + ASan/UBSan 通过 |
 | `G5-format` | **PASS** | `clang-format --style=file --dry-run --Werror` 零差异 |
@@ -126,7 +126,7 @@
 
 | 评审号 | 修复 | 回归测试 / 证据 |
 | --- | --- | --- |
-| Important 1 | `registerShutdownParticipant` 改返回 `fw::Status`；外部仅接受 `kSave` / `kQuiesce`，其余阶段 `kInvalidArg`；`kCutPower` 仅由内部有界 OLED 双终帧流程处理；`pollRestart` 增加自进入断电阶段 30 s（`kShutdownCutTimeoutMs`）兜底，USB 重启路径不绕过。 | `power_participant_blocks_and_timeout_names`：`kIdle/kAnnounce/kCutPower` 阶段登记返回 `kInvalidArg`。30 s 兜底为纵深防御，外部项不能再进入 kCutPower、内置项等待上限约 30 ms，故主机测试无法触达该分支（未验证，仅代码审查）。 |
+| Important 1 | `registerShutdownParticipant` 改返回 `fw::Status`；外部仅接受 `kSave` / `kQuiesce`，其余阶段 `kInvalidArg`；`kCutPower` 仅由内部有界 OLED 双终帧流程处理；USB 重启路径不再绕过 30 s 回退的原因是外部项已无法进入 kCutPower，而内置 OLED 终帧等待有界（约 30 ms 日志等待 + 终帧确认 + 300 ms 停留）。**复审修订**：首轮在 `pollRestart` 新增的“自进入断电阶段 30 s”兜底已删除——ADR 只规定 U3 未关断时的 30 s 回退（`ShutdownSm::stepCutPower`），U3 关断后的终帧确认与 300 ms 停留不得被提前结束。 | `power_participant_blocks_and_timeout_names`：`kIdle/kAnnounce/kCutPower` 阶段登记返回 `kInvalidArg`。复审回归：`power_oled_usb_late_u3_final_frame_hold`（29,900 ms 时 U3 关断，再确认 USB 终帧，停留满 300 ms 才重启，299 ms 不重启）。该用例与 `power_sim_battery_redundant_off` 在复审前提交 `5f70695` 上均失败（已在临时副本验证）。 |
 | Important 2 | `quiesceLimitMs` / `beginStageParticipants` 增加 `builtin` 判定：`kSafeGpio` 零等待与失败标记只绑定内置 `safe_gpio`，额外项按通用 150 ms 超时。 | `power_participant_four_slot_names`：内置 safe_gpio 失败（`kIoError`）时，额外 `kSafeGpio` 项未完成不被提前放行，quiesce 等满超时后才进入 `kCutPower`。 |
 | Important 3 + Nit 8 | 模拟电量改为单个原子字（低 8 位百分比 + 高 24 位会话代号，每次 `setSimulatedBatteryPct` 递增）；`pollBattery` 以会话变化复位低电计时并丢弃模拟读数；删除 `batteryMv_==0` 哨兵，成功的真实 0 mV 不再重置计时；清除后立即重注入不再合并两轮。 | `power_sim_battery_boundary`（119999 ms 不触发 / 120000 ms 触发）、`power_low_battery_real_zero_mv`、`power_sim_battery_reinject`。在首轮提交 `4d80bd0` 上验证：后两项失败、boundary 通过。 |
 | Important 4 | `finalFrameReady` 首次观察到终帧确认后重新读取 `rtos::nowMs()`，以该时间计算 300 ms 停留。 | `power_oled_usb_final_frame_stale_clock`（确认前 100 ms 的旧时间 poll，+249/+299 ms 不重启，+300 ms 重启）与 `power_oled_battery_final_frame_stale_clock`。 |
@@ -134,5 +134,13 @@
 | Nit 6 | 名字上限 `kMaxShutdownParticipantNameLen = 32`；拒绝与内置同名；超时日志逐项输出完整名字，移除定长拼接缓冲。 | `power_participant_four_slot_names`：4 个 32 字符名 + 第 5 个 `kNoSpace`，日志断言 pending 项完整名字可见、已完成项不出现；`power_participant_blocks_and_timeout_names` 覆盖 33 字符与内置同名拒绝。 |
 | Nit 7 | `shutdownTargetPercent` 在 `kCutPower` 未到终态时保持 92%。 | `OledUiCheck.cpp`：`kCutPower` 在 7/8、0/8、0/0 下均为 92，终态仍为 100。 |
 | Nit 9 | 第 4 节 HIL 第 1 项删除手机关机步骤，改为长按 / 控制台 / 低电三条路径。 | 文档变更。 |
+
+### 复审（PW1-rereview）追加修复
+
+| 复审号 | 修复 | 回归测试 / 证据 |
+| --- | --- | --- |
+| Important 1 | 删除 `pollRestart` 中自增的 U3 已关断后 30 s 兜底；仅保留 ADR 规定的 U3 未关断 30 s 回退，U3 关断后沿用有界日志等待、终帧确认与 300 ms 停留。 | `power_oled_usb_late_u3_final_frame_hold`；在 `5f70695` 失败。 |
+| Important 2 | `setSimulatedBatteryPct(kBatteryPctUnknown)` 在模拟本已关闭时幂等：CAS 循环内直接返回，不递增会话代号，不重置真实低电计时；真正的启用 / 退出 / 重注入仍各自递增会话。 | `power_sim_battery_redundant_off`：真实 5% 低电 119 s 时执行一次 `off`，超过 120 s 仍受理低电关机；在 `5f70695` 失败。 |
+| Nit | 登记名字拒绝控制字符（`< 0x20`，含 CR/LF，以及 `0x7F`），返回 `kInvalidArg`。 | `power_participant_blocks_and_timeout_names` 新增含 `\n` / `\r` / `\t` / `0x01` / `0x7F` 的名字拒绝断言；在 `5f70695` 失败（临时副本中该用例崩溃/失败）。 |
 
 约束复核：DRAM 增量相对 `6b54fc4` 为 **+136 B（≤ 256 B）**，IRAM **0 B**，无运行期堆；未修改冻结文件（`G1-frozen` PASS）。实板 HIL 仍为 `NOT_RUN`。

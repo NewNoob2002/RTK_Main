@@ -972,6 +972,13 @@ void powerParticipantBlocksAndTimeoutNames()
               .name = "name_that_is_exactly_33_chars_xxx",
               .isDone = checkDone,
               .stage = board::ShutdownStage::kSave}) == Status::kInvalidArg);
+    // 控制字符（CR/LF/TAB/DEL）会让日志中的名字与内置名无法区分，必须拒绝。
+    for (const char *badName :
+         {"storage_flush\n", "storage_flush\r", "bad\tname", "bad\x01name", "bad\x7f"}) {
+        CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+                  .name = badName, .isDone = checkDone, .stage = board::ShutdownStage::kSave}) ==
+              Status::kInvalidArg);
+    }
     CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
               .name = "safe_gpio", .isDone = checkDone, .stage = board::ShutdownStage::kQuiesce}) ==
           Status::kInvalidArg);
@@ -1415,6 +1422,67 @@ void powerSimBatteryReinject()
     pollPower(110U, 100U);
     CHECK(!power::s_power_requests.canScheduleRestart());
     power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+}
+
+/** @brief 验证 U3 在接近 30 s 时才关断，USB 终帧仍须满 300 ms 停留，不被 30 s 兜底提前放行（复审 Important 1）。 */
+void powerOledUsbLateU3FinalFrameHold()
+{
+    using namespace app;
+    namespace b = board;
+    s_chargerReg = b::kSgmReg08PgBit;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 1;
+    setupPower(b::BootMode::kNormal);
+    auto &ctx = appContext();
+    auto &events = ctx.data.uiEvents;
+    driveOledShutdownToCutPower();
+    events.markShutdownStageFlushed(b::ShutdownStage::kCutPower);
+    pollPower(1U, 1U);
+    pollPower(1U, b::kMinStageVisibleMs);
+    CHECK(s_gpio4Presses == 1U && s_gpioLevels[4] == 1);
+    const uint32_t cutMs = s_clock;
+    // U3 保持高到 cutStartMs_ + 29,900 ms（距 30 s 回退只剩 100 ms）。
+    pollPower(1U, 29900U - b::kMinStageVisibleMs - 1U);
+    CHECK(s_restarts == 0U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == b::ShutdownStage::kCutPower);
+    s_gpioLevels[25] = 0;
+    pollPower(1U, 10U);
+    CHECK((ctx.data.powerStatus.read().shutdownDoneMask &
+           b::shutdownDoneBit(b::ShutdownDoneBit::kUsbOffReady)) != 0U);
+    pollPower(3U, 10U); // 日志放行后进入终帧等待窗口
+    CHECK(s_restarts == 0U);
+    // 终帧确认发布时已越过 30 s：必须仍满 300 ms 停留才重启。
+    s_clock = cutMs + 30050U;
+    const uint32_t confirmMs = s_clock;
+    events.markShutdownFinalFrameFlushed(true);
+    static_cast<void>(appContext().power.poll(confirmMs));
+    pollPower(1U, 100U);
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 199U);
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 1U);
+    CHECK(s_restarts == 1U);
+}
+
+/** @brief 验证模拟已关闭时重复 `simbat off` 幂等，不重置真实低电计时（复审 Important 2）。 */
+void powerSimBatteryRedundantOff()
+{
+    using namespace app;
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    s_batteryMv = 3390U;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 0;
+    setupPower(board::BootMode::kNormal);
+    CHECK(appContext().data.powerStatus.read().batteryPct == 5U);
+    const auto before = power::simulatedBatterySession();
+    pollPower(1190U, 100U); // 119 s
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    CHECK(power::simulatedBatterySession().session == before.session);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(20U, 100U); // 超过 120 s
+    CHECK(!power::s_power_requests.canScheduleRestart());
+    CHECK(appContext().data.powerStatus.read().lastShutdown == board::ShutdownReason::kLowBattery);
 }
 
 struct ExecutorRound {
@@ -3622,6 +3690,10 @@ int main(int argc, const char **raw_args)
         powerLowBatteryRealZeroMv();
     } else if (std::strcmp(argv[1], "power_sim_battery_reinject") == 0) {
         powerSimBatteryReinject();
+    } else if (std::strcmp(argv[1], "power_oled_usb_late_u3_final_frame_hold") == 0) {
+        powerOledUsbLateU3FinalFrameHold();
+    } else if (std::strcmp(argv[1], "power_sim_battery_redundant_off") == 0) {
+        powerSimBatteryRedundantOff();
     } else if (std::strcmp(argv[1], "power_log_drain") == 0) {
         powerLogDrain();
     } else if (std::strcmp(argv[1], "power_low_battery") == 0) {

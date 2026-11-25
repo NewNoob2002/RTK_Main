@@ -59,10 +59,10 @@ inline constexpr size_t kMaxShutdownParticipantNameLen = 32U;
 
 /**
  * @brief 启动期一次性注册额外关机收尾参与者（静态槽位，无堆）
- * @param entry: 参与者描述（name 非空、不超过 kMaxShutdownParticipantNameLen 且不与内置名重名，
+ * @param entry: 参与者描述（name 非空、不超过 kMaxShutdownParticipantNameLen、不含控制字符且不与内置名重名，
  *        isDone 非空，stage 仅允许 kSave/kQuiesce）
  * @retval fw::Status::kOk 注册成功
- * @retval fw::Status::kInvalidArg 名称为空/过长/与内置重名、isDone 为空或阶段不是 kSave/kQuiesce
+ * @retval fw::Status::kInvalidArg 名称为空/过长/含控制字符/与内置重名、isDone 为空或阶段不是 kSave/kQuiesce
  * @retval fw::Status::kBusy 名称与已登记外部参与者重复
  * @retval fw::Status::kNoSpace 外部参与者表已满
  * @note kCutPower 阶段只由内部 OLED 双终帧有界流程管理，外部不得登记。
