@@ -34,3 +34,6 @@ add_test(NAME oled_sim_headless COMMAND oled_sim --headless
 add_test(NAME oled_sim_comm COMMAND oled_sim --headless
     --script "${CMAKE_CURRENT_SOURCE_DIR}/scripts/comm.txt"
     --golden "${CMAKE_CURRENT_SOURCE_DIR}/golden")
+add_test(NAME oled_sim_standby COMMAND oled_sim --headless --boot standby
+    --script "${CMAKE_CURRENT_SOURCE_DIR}/scripts/standby.txt"
+    --golden "${CMAKE_CURRENT_SOURCE_DIR}/golden")

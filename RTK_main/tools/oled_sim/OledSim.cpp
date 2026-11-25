@@ -32,6 +32,7 @@ struct Options {
     uint32_t slow = 1U;
     bool blue = false;
     bool headless = false;
+    bool bootStandby = false;
     fs::path script{};
     fs::path dump{};
     fs::path golden{};
@@ -43,31 +44,51 @@ struct Simulator {
     ScreenBuff frame{};
     std::vector<uint32_t> shortKeys{};
     uint32_t shutdownStartedMs = 0U;
+    board::ShutdownReason shutdownReason = board::ShutdownReason::kKey;
     bool shuttingDown = false;
+    bool longKeyPending = false;
 
     /** @brief 初始化真实 UI 和模拟屏的发送回调。 */
-    Simulator()
+    explicit Simulator(bool bootStandby = false)
     {
         WouoUI_GraphSetSendBuffFun(
             [](ScreenBuff fb) { std::memcpy(s_panel, fb, sizeof(s_panel)); });
-        setScene(2U);
-        controller.reset(board::BootMode::kNormal, 0U);
+        if (bootStandby) {
+            setScene(9U, 0U);
+        } else {
+            setScene(2U, 0U);
+            controller.reset(board::BootMode::kNormal, 0U);
+        }
     }
 
-    /** @brief 用编号 1–8 选择可重复的模拟硬件快照。 */
+    /** @brief 用编号 1–9 选择可重复的模拟硬件快照（9 为充电待机模式）。 */
     void setScene(unsigned scene, uint32_t nowMs = 0U)
     {
         model = {};
         sanitizeCopy("P2", model.product);
         sanitizeCopy("P2 V1.41", model.boardName);
         sanitizeCopy("V1.41", model.hwVer);
-        sanitizeCopy("OL3", model.fwVer);
+        sanitizeCopy("V3.1.0", model.fwVer);
         sanitizeCopy("P2000123", model.sn);
         sanitizeCopy("P2-P2000123", model.deviceName);
         sanitizeCopy("R4.10", model.gnssFwVer);
         model.powerActive = model.batteryAdcReady = model.nvsReady = true;
         model.btReady = model.chargerPresent = model.chargerOk = model.gnssEnabled = true;
         model.wifiSupported = true;
+        if (scene == 9U) {
+            model.bootMode = board::BootMode::kChargeStandby;
+            model.batteryPct = 76U;
+            model.batteryMv = 4020U;
+            model.usbPresent = true;
+            model.charging = true;
+            shuttingDown = false;
+            longKeyPending = false;
+            controller.reset(board::BootMode::kChargeStandby, nowMs);
+            return;
+        }
+        if (controller.page() == OledPage::kChargeStandby) {
+            controller.reset(board::BootMode::kNormal, nowMs);
+        }
         model.gnssState = scene == 8U ? gnss::State::kFailed : gnss::State::kRunning;
         model.gnssModel = gnss::Model::kUm980;
         model.fixValid = scene != 1U && scene != 8U;
@@ -93,7 +114,14 @@ struct Simulator {
             sanitizeCopy("Test Phone", model.pairing.name);
         }
         model.btSessions = scene == 5U ? 2U : 0U;
+        if (scene == 5U) {
+            sanitizeCopy("56:78:9A", model.btPeerLabel);
+        }
         if (model.fixValid) {
+            model.utcValid = true;
+            model.utcHour = 12U;
+            model.utcMinute = 34U;
+            model.utcSecond = 56U;
             model.latE9 = 37123456789LL;
             model.lonE9 = 127123456789LL;
             model.altMm = 12800;
@@ -112,11 +140,38 @@ struct Simulator {
         shuttingDown = false;
     }
 
-    /** @brief 产生一次已消抖的物理长按，驱动模拟关机阶段。 */
-    void shutdown(uint32_t nowMs)
+    /** @brief 开始模拟物理按键按住（用于 600..2500 ms 浮层与充电待机唤醒环）。 */
+    void keyDown(uint32_t nowMs)
+    {
+        model.keyHold.active = true;
+        model.keyHold.standbyConfirm = false;
+        model.keyHold.startMs = nowMs;
+        model.keyHold.thresholdMs = board::kDefaultLongPressMs;
+    }
+
+    /** @brief 结束模拟物理按键按住。 */
+    void keyUp()
+    {
+        model.keyHold.active = false;
+    }
+
+    /** @brief 模拟长按 2.5 s 到达：正常模式通知 UI 进入关机确认页，待机模式锁定满环。 */
+    void triggerLongKey()
+    {
+        model.keyHold.active = false;
+        if (model.bootMode == board::BootMode::kChargeStandby) {
+            model.keyHold.standbyConfirm = true;
+        } else {
+            longKeyPending = true;
+        }
+    }
+
+    /** @brief 进入模拟关机阶段序列。 */
+    void shutdown(uint32_t nowMs, board::ShutdownReason reason = board::ShutdownReason::kKey)
     {
         shuttingDown = true;
         shutdownStartedMs = nowMs;
+        shutdownReason = reason;
     }
 
     /** @brief 推进真实按键判定和渲染，经 WouoUI 回调写入页缓冲。 */
@@ -126,8 +181,9 @@ struct Simulator {
         if (shuttingDown) {
             updateShutdown(nowMs - shutdownStartedMs);
         }
-        const auto decision = controller.step(nowMs, shortKeys, model);
+        const auto decision = controller.step(nowMs, shortKeys, model, longKeyPending);
         shortKeys.clear();
+        longKeyPending = false;
         renderUi(controller.renderState(nowMs), model, frame);
         WouoUI_BuffSend();
         applyAction(decision.action.action, nowMs);
@@ -152,6 +208,9 @@ private:
         case OledAction::kPairReject:
             model.pairing.id = 0U;
             break;
+        case OledAction::kShutdownKey:
+            shutdown(nowMs, board::ShutdownReason::kKey);
+            break;
         case OledAction::kNone:
             break;
         }
@@ -162,7 +221,7 @@ private:
     {
         using board::ShutdownDoneBit;
         using board::ShutdownStage;
-        model.shutdownReason = board::ShutdownReason::kKey;
+        model.shutdownReason = shutdownReason;
         model.shutdownDoneMask = board::shutdownDoneBit(ShutdownDoneBit::kAnnounced);
         model.shutdownStage = ShutdownStage::kAnnounce;
         if (elapsed >= board::kMinStageVisibleMs) {
@@ -215,6 +274,8 @@ bool parseOptions(int argc, char **argv, Options &out)
             out.blue = value == "blue";
         } else if (arg == "--fps" && boundedNumber(value, out.fps, 120U)) {
         } else if (arg == "--slow" && boundedNumber(value, out.slow, 100U)) {
+        } else if (arg == "--boot" && (value == "normal" || value == "standby")) {
+            out.bootStandby = value == "standby";
         } else {
             return false;
         }
@@ -330,11 +391,25 @@ bool runScript(const Options &opts, Simulator &sim)
         renderedMs = at;
         if (verb == "short") {
             sim.shortKeys.push_back(at);
+        } else if (verb == "key_down") {
+            sim.keyDown(at);
+        } else if (verb == "key_up") {
+            sim.keyUp();
         } else if (verb == "long") {
-            sim.shutdown(at);
+            sim.triggerLongKey();
+        } else if (verb == "shutdown") {
+            auto reason = board::ShutdownReason::kKey;
+            if (arg == "console") {
+                reason = board::ShutdownReason::kConsole;
+            } else if (arg == "low_battery") {
+                reason = board::ShutdownReason::kLowBattery;
+            } else if (arg == "phone") {
+                reason = board::ShutdownReason::kPhone;
+            }
+            sim.shutdown(at, reason);
         } else if (verb == "scene") {
             uint32_t scene = 0U;
-            if (!boundedNumber(arg, scene, 8U)) {
+            if (!boundedNumber(arg, scene, 9U)) {
                 return false;
             }
             sim.setScene(scene, at);
@@ -360,8 +435,8 @@ struct Keyboard {
     /** @brief 更新按键并在阈值到达时通知模拟电源。 */
     void update(Simulator &sim, uint32_t realMs, uint32_t uiMs, const SDL_Event *event)
     {
-        if (pressed && !longFired && realMs - pressedAtMs >= 2500U) {
-            sim.shutdown(uiMs);
+        if (pressed && !longFired && realMs - pressedAtMs >= board::kDefaultLongPressMs) {
+            sim.triggerLongKey();
             longFired = true;
         }
         if (event == nullptr || (event->type != SDL_KEYDOWN && event->type != SDL_KEYUP)) {
@@ -373,11 +448,13 @@ struct Keyboard {
                 pressed = true;
                 longFired = false;
                 pressedAtMs = realMs;
-            } else if (key >= SDLK_1 && key <= SDLK_8) {
+                sim.keyDown(uiMs);
+            } else if (key >= SDLK_1 && key <= SDLK_9) {
                 sim.setScene(static_cast<unsigned>(key - SDLK_0), uiMs);
             }
         } else if (event->type == SDL_KEYUP && key == SDLK_SPACE && pressed) {
-            if (!longFired) {
+            sim.keyUp();
+            if (!longFired && (realMs - pressedAtMs) < board::kKeyShortMaxMs) {
                 sim.shortKeys.push_back(uiMs);
             }
             pressed = false;
@@ -459,8 +536,10 @@ int main(int argc, char **argv)
 {
     Options options{};
     if (!parseOptions(argc, argv, options)) {
-        std::cerr << "usage: oled_sim [--fps N] [--slow N] [--color blue|white]\n"
-                     "       oled_sim --headless --script FILE [--dump DIR] [--golden DIR]\n";
+        std::cerr << "usage: oled_sim [--boot normal|standby] [--fps N] [--slow N]"
+                     " [--color blue|white]\n"
+                     "       oled_sim --headless [--boot normal|standby] --script FILE"
+                     " [--dump DIR] [--golden DIR]\n";
         return 2;
     }
     if (!options.dump.empty()) {
@@ -471,7 +550,7 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    Simulator sim{};
+    Simulator sim{options.bootStandby};
     const bool ok = options.headless ? runScript(options, sim) : runWindow(options, sim);
     if (!ok) {
         std::cerr << "oled_sim failed: " << SDL_GetError() << '\n';

@@ -97,10 +97,13 @@ enum class ShutdownDegradedBit : uint8_t {
     return static_cast<uint8_t>(bit);
 }
 
-inline constexpr uint32_t kKeyPollPeriodMs = 10U;         // ms，按键轮询周期
-inline constexpr uint32_t kKeyDebounceMs = 30U;           // ms，按键消抖时间
-inline constexpr uint32_t kKeyShortMaxMs = 1000U;         // ms，短按上限（严格小于触发 kShort）
-inline constexpr uint32_t kDefaultLongPressMs = 2500U;    // ms，默认长按关机/开机阈值
+inline constexpr uint32_t kKeyPollPeriodMs = 10U;        // ms，按键轮询周期
+inline constexpr uint32_t kKeyDebounceMs = 30U;          // ms，按键消抖时间
+inline constexpr uint32_t kKeyShortMaxMs = 600U;         // ms，短按上限（与长按进度浮层起点对齐）
+inline constexpr uint32_t kKeyHoldOverlayStartMs = 600U; // ms，正常模式长按进度浮层起显时刻
+inline constexpr uint32_t kDefaultLongPressMs = 2500U;   // ms，默认长按关机/开机阈值
+inline constexpr uint32_t kForcePowerOffHoldMs =
+    8000U; // ms，OLED 卡死或未消费长按时持续按住的强制关机兜底阈值
 inline constexpr uint32_t kShutdownSaveTimeoutMs = 1000U; // ms，kSave 落盘等待上限
 inline constexpr uint32_t kShutdownCutInitHighMs = 2000U; // ms，无 USB 时首段 GPIO4 高电平
 inline constexpr uint32_t kShutdownCutToggleMs = 3100U;   // ms，无 USB 时高/低交替周期
@@ -351,6 +354,37 @@ public:
         return lastHoldMs_;
     }
 
+    /**
+     * @brief 查询当前是否处于已消抖按住且尚未触发长按的保持态
+     * @retval true 正在按住计数中（可用于 UI 进度条/环填充）
+     * @retval false 未按住、未解除开机保护或已触发过本次长按
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] bool holding() const noexcept
+    {
+        return pressing_ && !longFired_;
+    }
+
+    /**
+     * @brief 查询当前按压物理按下沿的单调起点时间（ms）
+     * @retval 按下起点（ms），仅在 holding() 或 pressed() 时有效
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] uint32_t pressStartMs() const noexcept
+    {
+        return pressStartMs_;
+    }
+
+    /**
+     * @brief 查询当前配置的长按触发阈值（ms）
+     * @retval 长按触发阈值（ms）
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] uint32_t longPressMs() const noexcept
+    {
+        return longPressMs_;
+    }
+
 private:
     uint32_t longPressMs_ = kDefaultLongPressMs;
     bool initialized_ = false;
@@ -386,6 +420,27 @@ public:
      */
     [[nodiscard]] StandbyWakeAction confirmStandbyHold(uint32_t nowMs, bool longPress,
                                                        bool senseHigh, uint32_t timeoutMs) noexcept;
+
+    /**
+     * @brief 查询当前是否正在驱动模拟按压并确认 U3 保持电平
+     * @retval true 待机开机保持确认进行中
+     * @retval false 空闲
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] bool active() const noexcept
+    {
+        return active_;
+    }
+
+    /**
+     * @brief 查询本次待机开机保持确认开始的起点单调时间（ms）
+     * @retval 确认起点（ms），仅在 active() 为 true 时有效
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] uint32_t startedMs() const noexcept
+    {
+        return startedMs_;
+    }
 
 private:
     uint32_t startedMs_ = 0U;

@@ -54,34 +54,53 @@ void testKeyStateMachine() noexcept
     CHECK(!sm.pressed());
     CHECK(sm.poll(60U, false) == KeyEvent::kNone);
 
-    // 短按（< 1000 ms）：t=100 按下，t=130 稳定按下，t=500 松开，t=530 稳定松开 -> kShort。
+    // 短按（< 600 ms）：t=100 按下，t=130 稳定按下，t=500 松开，t=530 稳定松开 -> kShort。
     CHECK(sm.poll(100U, true) == KeyEvent::kNone);
     CHECK(sm.poll(120U, true) == KeyEvent::kNone);
-    CHECK(!sm.pressed());
+    CHECK(!sm.pressed() && !sm.holding());
     CHECK(sm.poll(130U, true) == KeyEvent::kNone);
-    CHECK(sm.pressed());
+    CHECK(sm.pressed() && sm.holding() && sm.pressStartMs() == 100U && sm.longPressMs() == 2500U);
     CHECK(sm.poll(500U, false) == KeyEvent::kNone);
     CHECK(sm.poll(520U, false) == KeyEvent::kNone);
     CHECK(sm.poll(530U, false) == KeyEvent::kShort);
-    CHECK(!sm.pressed());
+    CHECK(!sm.pressed() && !sm.holding());
     CHECK(sm.lastHoldMs() == 400U);
 
-    // 中等按压（1000..2499 ms 松开）：不发 kShort 也不发 kLongHold。
-    CHECK(sm.poll(1000U, true) == KeyEvent::kNone);
-    CHECK(sm.poll(1030U, true) == KeyEvent::kNone);
-    CHECK(sm.poll(2500U, false) == KeyEvent::kNone);
-    CHECK(sm.poll(2530U, false) == KeyEvent::kNone);
+    // 599 ms 仍为短按，600 ms 起进入长按浮层区：600..2499 ms 松开不发 kShort 也不发 kLongHold。
+    CHECK(sm.poll(600U, true) == KeyEvent::kNone);
+    CHECK(sm.poll(630U, true) == KeyEvent::kNone);
+    CHECK(sm.holding() && sm.pressStartMs() == 600U);
+    CHECK(sm.poll(1199U, false) == KeyEvent::kNone);
+    CHECK(sm.poll(1229U, false) == KeyEvent::kShort);
+    CHECK(sm.lastHoldMs() == 599U);
 
-    // 刚好 2500 ms 触发一次 kLongHold，继续按住不重复触发，松开不发 kShort。
+    CHECK(sm.poll(1300U, true) == KeyEvent::kNone);
+    CHECK(sm.poll(1330U, true) == KeyEvent::kNone);
+    CHECK(sm.holding() && sm.pressStartMs() == 1300U);
+    CHECK(sm.poll(1900U, false) == KeyEvent::kNone);
+    CHECK(sm.poll(1930U, false) == KeyEvent::kNone);
+    CHECK(!sm.holding() && sm.lastHoldMs() == 600U);
+
+    // 中等按压（600..2499 ms 松开）：不发 kShort 也不发 kLongHold。
+    CHECK(sm.poll(2000U, true) == KeyEvent::kNone);
+    CHECK(sm.poll(2030U, true) == KeyEvent::kNone);
+    CHECK(sm.poll(2500U, false) == KeyEvent::kNone);
+    CHECK(sm.poll(2530U, false) == KeyEvent::kShort);
+    CHECK(sm.poll(2600U, true) == KeyEvent::kNone);
+    CHECK(sm.poll(2630U, true) == KeyEvent::kNone);
+    CHECK(sm.poll(2900U, false) == KeyEvent::kNone);
+    CHECK(sm.poll(2930U, false) == KeyEvent::kShort);
+    // 刚好 2500 ms 触发一次 kLongHold，holding() 随之复位，继续按住不重复触发，松开不发 kShort。
     CHECK(sm.poll(3000U, true) == KeyEvent::kNone);
     CHECK(sm.poll(3030U, true) == KeyEvent::kNone);
+    CHECK(sm.holding() && sm.pressStartMs() == 3000U);
     CHECK(sm.poll(5499U, true) == KeyEvent::kNone);
     CHECK(sm.poll(5500U, true) == KeyEvent::kLongHold);
+    CHECK(!sm.holding());
     CHECK(sm.poll(5510U, true) == KeyEvent::kNone);
     CHECK(sm.poll(8000U, true) == KeyEvent::kNone);
     CHECK(sm.poll(8100U, false) == KeyEvent::kNone);
     CHECK(sm.poll(8130U, false) == KeyEvent::kNone);
-
     // 启动时按键仍被按住：须先看到一次稳定松开，之前的按住不触发长按也不触发短按。
     PowerKeySm bootHeld{2500U};
     CHECK(bootHeld.poll(0U, true) == KeyEvent::kNone);
@@ -241,14 +260,16 @@ void testChargeStandbyLongPressPowerOn() noexcept
 {
     StandbyWakeSm wake{};
     constexpr uint32_t kTimeout = 5000U;
+    CHECK(!wake.active());
     CHECK(wake.confirmStandbyHold(0U, false, false, kTimeout) == StandbyWakeAction::kNone);
     CHECK(wake.confirmStandbyHold(2500U, true, true, kTimeout) == StandbyWakeAction::kPress);
+    CHECK(wake.active() && wake.startedMs() == 2500U);
     CHECK(wake.confirmStandbyHold(2510U, false, true, kTimeout) == StandbyWakeAction::kNone);
     CHECK(wake.confirmStandbyHold(2520U, false, false, kTimeout) == StandbyWakeAction::kNone);
     CHECK(wake.confirmStandbyHold(2530U, false, true, kTimeout) == StandbyWakeAction::kNone);
     CHECK(wake.confirmStandbyHold(2540U, false, true, kTimeout) == StandbyWakeAction::kNone);
     CHECK(wake.confirmStandbyHold(2550U, false, true, kTimeout) == StandbyWakeAction::kHeld);
-
+    CHECK(!wake.active());
     constexpr uint32_t kStart = 0xFFFFF000U;
     CHECK(wake.confirmStandbyHold(kStart, true, false, kTimeout) == StandbyWakeAction::kPress);
     CHECK(wake.confirmStandbyHold(kStart + kTimeout - 1U, false, false, kTimeout) ==

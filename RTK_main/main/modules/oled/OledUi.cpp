@@ -135,6 +135,7 @@ void SystemCheckSm::reset(uint32_t nowMs) noexcept
 {
     phase_ = CheckPhase::kLogo;
     items_.fill(CheckStatus::kPending);
+    itemResolvedMs_.fill(nowMs);
     activeIdx_ = 0U;
     phaseStartMs_ = nowMs;
     stepStartMs_ = nowMs;
@@ -218,6 +219,7 @@ bool SystemCheckSm::step(uint32_t nowMs, const ViewModel &vm) noexcept
             }
             stepResolved_ = true;
             stepResolvedMs_ = nowMs;
+            itemResolvedMs_[activeIdx_] = nowMs;
             if (st == CheckStatus::kFail) {
                 hasWarning_ = true;
             }
@@ -281,6 +283,28 @@ OledPage UiController::dockTargetPage(uint8_t idx) noexcept
     }
 }
 
+uint8_t UiController::subpageRowCount(OledPage page, const ViewModel &vm) noexcept
+{
+    constexpr uint8_t kSubFiveRows = 5U;
+    constexpr uint8_t kSubCommWifiRows = 3U;
+    constexpr uint8_t kSubCommBtRows = 4U;
+    switch (page) {
+    case OledPage::kSubPos:
+    case OledPage::kSubDevice:
+    case OledPage::kSubPower:
+        return kSubFiveRows;
+    case OledPage::kSubComm:
+        return (vm.radioMode == RadioMode::kWifiConfig) ? kSubCommWifiRows : kSubCommBtRows;
+    case OledPage::kSystemCheck:
+    case OledPage::kDialplate:
+    case OledPage::kSubSat:
+    case OledPage::kChargeStandby:
+    case OledPage::kShutdown:
+    default:
+        return 0U;
+    }
+}
+
 /**
  * @brief 按启动运行档复位 UI 控制器
  * @param bootMode: 正常启动或充电待机
@@ -290,18 +314,35 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
 {
     bootMode_ = bootMode;
     dockSelected_ = 0U;
-    commSelected_ = 0U;
+    subSelected_ = 0U;
+    subScrollTop_ = 0U;
     pairDecisionSent_ = false;
     satSubTab_ = 0U;
     shutdownPct_ = 0U;
     lastStepMs_ = nowMs;
+    lastActivityMs_ = nowMs;
     inShutdown_ = false;
     hasWarning_ = false;
+    wifiConfirm_ = false;
+    powerOffConfirm_ = false;
+    powerOffConfirmStartMs_ = 0U;
+    pairDialogId_ = 0U;
+    holdOverlayActive_ = false;
+    holdOverlayCollapsing_ = false;
+    holdOverlayDismissed_ = false;
+    holdProgressQ10_ = 0U;
+    holdCollapseStartMs_ = 0U;
+    standbyRingQ10_ = 0U;
+    heroPrevBadge_ = nullptr;
+    heroCurrBadge_ = nullptr;
+    heroChangeStartMs_ = nowMs;
+    heroRolling_ = false;
     click_.reset();
     transition_.clear();
-    wifiConfirm_ = false;
-    pairDialogId_ = 0U;
+    squish_.clear();
     dockSpring_.snap(dockSlotRect(0U).x);
+    subFocusSpring_.snap(0);
+    subScrollSpring_.snap(0);
     satsRoll_.reset();
     batRoll_.reset();
     if (bootMode_ == board::BootMode::kChargeStandby) {
@@ -318,8 +359,12 @@ UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexc
     UiDecision out{};
     click_.reset();
     transition_.clear();
+    squish_.clear();
     wifiConfirm_ = false;
+    powerOffConfirm_ = false;
     pairDialogId_ = 0U;
+    holdOverlayActive_ = false;
+    holdOverlayCollapsing_ = false;
     inShutdown_ = true;
     page_ = OledPage::kShutdown;
     out.page = page_;
@@ -341,42 +386,103 @@ UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexc
     return out;
 }
 
-void UiController::handleClick(ClickEvent click, uint32_t nowMs, const ViewModel &vm) noexcept
+UiDecision UiController::stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
+                                           const ViewModel &vm) noexcept
 {
-    if (click == ClickEvent::kNone) {
+    click_.reset();
+    page_ = OledPage::kChargeStandby;
+    if (vm.keyHold.standbyConfirm) {
+        standbyRingQ10_ = kEaseScale;
+    } else if (vm.keyHold.active) {
+        const uint32_t heldMs = nowMs - vm.keyHold.startMs;
+        const uint32_t thresh = std::max<uint32_t>(vm.keyHold.thresholdMs, 1U);
+        const uint32_t clamped = std::min(heldMs, thresh);
+        standbyRingQ10_ =
+            static_cast<uint16_t>((static_cast<uint64_t>(clamped) * kEaseScale) / thresh);
+    } else if (standbyRingQ10_ > 0U) {
+        const uint32_t decay =
+            static_cast<uint32_t>((static_cast<uint64_t>(dtMs) * kEaseScale) / kStandbyRingDecayMs);
+        const uint16_t stepAmt =
+            static_cast<uint16_t>(std::max<uint32_t>(decay, (dtMs > 0U) ? 1U : 0U));
+        standbyRingQ10_ =
+            (standbyRingQ10_ > stepAmt) ? static_cast<uint16_t>(standbyRingQ10_ - stepAmt) : 0U;
+    }
+
+    const bool fastAnim = batRoll_.active(nowMs) || vm.keyHold.active ||
+                          ((standbyRingQ10_ > 0U) && !vm.keyHold.standbyConfirm);
+    const bool chargeAnim = vm.charging && (vm.batteryPct != board::kBatteryPctUnknown) &&
+                            (vm.batteryPct < kMaxPercent);
+    uint32_t waitMs = kIdlePollPeriodMs;
+    if (fastAnim) {
+        waitMs = kAnimFramePeriodMs;
+    } else if (chargeAnim) {
+        const uint32_t phaseRem = kChargeAnimPeriodMs - (nowMs % kChargeAnimPeriodMs);
+        waitMs = (phaseRem == 0U) ? kChargeAnimPeriodMs : phaseRem;
+    }
+    return UiDecision{
+        .page = page_,
+        .animating = fastAnim,
+        .nextWaitMs = waitMs,
+    };
+}
+
+void UiController::enterPowerOffConfirm(uint32_t nowMs) noexcept
+{
+    powerOffConfirm_ = true;
+    powerOffConfirmStartMs_ = nowMs;
+    wifiConfirm_ = false;
+    pairDialogId_ = 0U;
+    pairDecisionSent_ = false;
+    holdOverlayActive_ = false;
+    holdOverlayCollapsing_ = false;
+    click_.reset();
+    transition_.clear();
+    lastActivityMs_ = nowMs;
+}
+
+void UiController::updateHoldOverlay(uint32_t nowMs, const ViewModel &vm,
+                                     bool longKeyArrived) noexcept
+{
+    if (longKeyArrived) {
+        holdOverlayDismissed_ = true;
+        enterPowerOffConfirm(nowMs);
         return;
     }
-    if (page_ == OledPage::kSystemCheck) {
-        if (click == ClickEvent::kDouble) {
-            checkSm_.skip(vm);
-            hasWarning_ = checkSm_.hasWarning();
-            page_ = OledPage::kDialplate;
-            dockSpring_.snap(dockSlotRect(dockSelected_).x);
-            transition_.start(TransitionKind::kSlideLeft, OledPage::kSystemCheck,
-                              OledPage::kDialplate, {}, nowMs);
+    if (powerOffConfirm_) {
+        if (!vm.keyHold.active) {
+            holdOverlayDismissed_ = false;
+        }
+        if ((nowMs - powerOffConfirmStartMs_) >= kPowerOffConfirmMs) {
+            powerOffConfirm_ = false;
+            click_.reset();
+            lastActivityMs_ = nowMs;
         }
         return;
     }
-    if (page_ == OledPage::kDialplate) {
-        if (click == ClickEvent::kSingle) {
-            dockSelected_ = static_cast<uint8_t>((dockSelected_ + 1U) % kDockItemCount);
-            dockSpring_.retarget(dockSlotRect(dockSelected_).x);
-        } else if (click == ClickEvent::kDouble) {
-            const OledPage target = dockTargetPage(dockSelected_);
-            satSubTab_ = 0U;
-            commSelected_ = 0U;
-            transition_.start(TransitionKind::kExpandFromIcon, OledPage::kDialplate, target,
-                              dockSlotRect(dockSelected_), nowMs);
-            page_ = target;
+    if (!vm.keyHold.active) {
+        holdOverlayDismissed_ = false;
+        if (holdOverlayActive_) {
+            holdOverlayActive_ = false;
+            holdOverlayCollapsing_ = true;
+            holdCollapseStartMs_ = nowMs;
         }
-        return;
+    } else if (!holdOverlayDismissed_) {
+        const uint32_t heldMs = nowMs - vm.keyHold.startMs;
+        if (heldMs >= board::kKeyHoldOverlayStartMs) {
+            const uint32_t thresh =
+                std::max<uint32_t>(vm.keyHold.thresholdMs, board::kKeyHoldOverlayStartMs + 1U);
+            const uint32_t span = thresh - board::kKeyHoldOverlayStartMs;
+            const uint32_t progMs = std::min(heldMs - board::kKeyHoldOverlayStartMs, span);
+            holdOverlayActive_ = true;
+            holdOverlayCollapsing_ = false;
+            holdProgressQ10_ =
+                static_cast<uint16_t>((static_cast<uint64_t>(progMs) * kEaseScale) / span);
+            lastActivityMs_ = nowMs;
+        }
     }
-    if (isSubmenuPage(page_)) {
-        if (click == ClickEvent::kDouble) {
-            leaveSubmenu(nowMs);
-        } else if ((click == ClickEvent::kSingle) && (page_ == OledPage::kSubSat)) {
-            satSubTab_ = static_cast<uint8_t>(satSubTab_ ^ 1U);
-        }
+    if (holdOverlayCollapsing_ && ((nowMs - holdCollapseStartMs_) >= kHoldCollapseMs)) {
+        holdOverlayCollapsing_ = false;
+        holdProgressQ10_ = 0U;
     }
 }
 
@@ -387,12 +493,72 @@ void UiController::leaveSubmenu(uint32_t nowMs) noexcept
     dockSpring_.snap(dockSlotRect(dockSelected_).x);
     transition_.start(TransitionKind::kCollapseToIcon, from, OledPage::kDialplate,
                       dockSlotRect(dockSelected_), nowMs);
+    lastActivityMs_ = nowMs;
 }
 
-OledActionRequest UiController::handleCommClick(ClickEvent click, uint32_t nowMs,
-                                                const ViewModel &vm) noexcept
+OledActionRequest UiController::handleSubListClick(ClickEvent click, uint32_t nowMs,
+                                                   const ViewModel &vm) noexcept
 {
-    if (click == ClickEvent::kNone) {
+    const uint8_t count = subpageRowCount(page_, vm);
+    if (count == 0U) {
+        return {};
+    }
+    const uint8_t backIdx = static_cast<uint8_t>(count - 1U);
+    if (click == ClickEvent::kSingle) {
+        subSelected_ = (subSelected_ < backIdx) ? static_cast<uint8_t>(subSelected_ + 1U) : 0U;
+        if (subSelected_ < subScrollTop_) {
+            subScrollTop_ = subSelected_;
+        } else if (subSelected_ >= static_cast<uint8_t>(subScrollTop_ + kSubVisibleRows)) {
+            subScrollTop_ = static_cast<uint8_t>(subSelected_ - kSubVisibleRows + 1U);
+        }
+        subFocusSpring_.retarget(static_cast<int16_t>(subSelected_ * kSubRowStepY));
+        subScrollSpring_.retarget(static_cast<int16_t>(subScrollTop_ * kSubRowStepY));
+        return {};
+    }
+    if (click != ClickEvent::kDouble) {
+        return {};
+    }
+    squish_.trigger(nowMs);
+    if (subSelected_ >= backIdx) {
+        leaveSubmenu(nowMs);
+        return {};
+    }
+    if (page_ == OledPage::kSubComm) {
+        const bool wifi = vm.radioMode == RadioMode::kWifiConfig;
+        if (subSelected_ == 0U) {
+            if (wifi) {
+                return {OledAction::kBluetooth};
+            }
+            wifiConfirm_ = vm.wifiSupported;
+        } else if (!wifi && (subSelected_ == 1U)) {
+            return {OledAction::kTogglePair};
+        }
+        return {};
+    }
+    if (page_ == OledPage::kSubPower) {
+        constexpr uint8_t kPowerOffRowIdx = 3U;
+        if (subSelected_ == kPowerOffRowIdx) {
+            enterPowerOffConfirm(nowMs);
+            return {};
+        }
+        leaveSubmenu(nowMs);
+        return {};
+    }
+    // 位置与设备页的只读信息行双击同样快捷返回表盘，Back 项也在上方统一处理。
+    leaveSubmenu(nowMs);
+    return {};
+}
+
+OledActionRequest UiController::handleModalClick(ClickEvent click, uint32_t nowMs,
+                                                 bool &handled) noexcept
+{
+    handled = true;
+    if (powerOffConfirm_) {
+        powerOffConfirm_ = false;
+        if (click == ClickEvent::kDouble) {
+            squish_.trigger(nowMs);
+            return {OledAction::kShutdownKey};
+        }
         return {};
     }
     if (pairDialogId_ != 0U) {
@@ -407,51 +573,105 @@ OledActionRequest UiController::handleCommClick(ClickEvent click, uint32_t nowMs
         wifiConfirm_ = false;
         return {click == ClickEvent::kDouble ? OledAction::kWifi : OledAction::kNone};
     }
-    const bool wifi = vm.radioMode == RadioMode::kWifiConfig;
-    const uint8_t back = wifi ? 1U : 2U;
+    handled = false;
+    return {};
+}
+
+void UiController::handleDialClick(ClickEvent click, uint32_t nowMs) noexcept
+{
     if (click == ClickEvent::kSingle) {
-        commSelected_ = commSelected_ < back ? static_cast<uint8_t>(commSelected_ + 1U) : 0U;
+        dockSelected_ = static_cast<uint8_t>((dockSelected_ + 1U) % kDockItemCount);
+        dockSpring_.retarget(dockSlotRect(dockSelected_).x);
+        return;
+    }
+    if (click == ClickEvent::kDouble) {
+        const OledPage target = dockTargetPage(dockSelected_);
+        satSubTab_ = 0U;
+        subSelected_ = 0U;
+        subScrollTop_ = 0U;
+        subFocusSpring_.snap(0);
+        subScrollSpring_.snap(0);
+        squish_.trigger(nowMs);
+        transition_.start(TransitionKind::kExpandFromIcon, OledPage::kDialplate, target,
+                          dockSlotRect(dockSelected_), nowMs);
+        page_ = target;
+    }
+}
+
+OledActionRequest UiController::dispatchClick(ClickEvent click, uint32_t nowMs,
+                                              const ViewModel &vm) noexcept
+{
+    if (click == ClickEvent::kNone) {
         return {};
     }
-    if (commSelected_ >= back) {
-        leaveSubmenu(nowMs);
-    } else if (commSelected_ == 1U) {
-        return {OledAction::kTogglePair};
-    } else if (wifi) {
-        return {OledAction::kBluetooth};
-    } else {
-        wifiConfirm_ = vm.wifiSupported;
+    lastActivityMs_ = nowMs;
+    bool modalHandled = false;
+    const OledActionRequest modalAct = handleModalClick(click, nowMs, modalHandled);
+    if (modalHandled) {
+        return modalAct;
     }
-    return {};
+    if (page_ == OledPage::kSystemCheck) {
+        if (click == ClickEvent::kDouble) {
+            checkSm_.skip(vm);
+            hasWarning_ = checkSm_.hasWarning();
+            page_ = OledPage::kDialplate;
+            dockSpring_.snap(dockSlotRect(dockSelected_).x);
+            transition_.start(TransitionKind::kSlideLeft, OledPage::kSystemCheck,
+                              OledPage::kDialplate, {}, nowMs);
+        }
+        return {};
+    }
+    if (page_ == OledPage::kDialplate) {
+        handleDialClick(click, nowMs);
+        return {};
+    }
+    if (page_ == OledPage::kSubSat) {
+        if (click == ClickEvent::kDouble) {
+            squish_.trigger(nowMs);
+            leaveSubmenu(nowMs);
+        } else if (click == ClickEvent::kSingle) {
+            satSubTab_ = static_cast<uint8_t>(satSubTab_ ^ 1U);
+        }
+        return {};
+    }
+    return isSubmenuPage(page_) ? handleSubListClick(click, nowMs, vm) : OledActionRequest{};
 }
 
 OledActionRequest UiController::handleInput(uint32_t nowMs, std::span<const uint32_t> times,
                                             const ViewModel &vm) noexcept
 {
-    // 配对截止最多相隔 30 s，差值符号在 uint32_t 回绕时仍有效。
-    const uint32_t id =
-        static_cast<int32_t>(vm.pairing.requestDeadlineMs - nowMs) > 0 ? vm.pairing.id : 0U;
-    if (id != pairDialogId_) {
-        pairDialogId_ = id;
-        pairDecisionSent_ = false;
-        click_.reset();
-        transition_.clear();
-        return {}; // 不把弹窗出现前的短按用于确认或拒绝。
-    }
-    const auto consume = [&](ClickEvent click) noexcept -> OledActionRequest {
-        if (pairDialogId_ != 0U || wifiConfirm_ || page_ == OledPage::kSubComm) {
-            return handleCommClick(click, nowMs, vm);
+    // 关机确认页优先级高于配对弹窗：确认页期间不抢占，确认取消后配对弹窗立即排队弹出。
+    if (!powerOffConfirm_) {
+        // 配对截止最多相隔 30 s，差值符号在 uint32_t 回绕时仍有效。
+        const uint32_t id =
+            static_cast<int32_t>(vm.pairing.requestDeadlineMs - nowMs) > 0 ? vm.pairing.id : 0U;
+        if (id != pairDialogId_) {
+            pairDialogId_ = id;
+            pairDecisionSent_ = false;
+            click_.reset();
+            transition_.clear();
+            lastActivityMs_ = nowMs;
+            return {}; // 不把弹窗出现前的短按用于确认或拒绝。
         }
-        handleClick(click, nowMs, vm);
-        return {};
-    };
+    }
+    // 防止无线模式异步切换导致子页选中项越界。
+    if (const uint8_t count = subpageRowCount(page_, vm); count > 0U && subSelected_ >= count) {
+        subSelected_ = static_cast<uint8_t>(count - 1U);
+        subScrollTop_ =
+            (count > kSubVisibleRows) ? static_cast<uint8_t>(count - kSubVisibleRows) : 0U;
+        subFocusSpring_.snap(static_cast<int16_t>(subSelected_ * kSubRowStepY));
+        subScrollSpring_.snap(static_cast<int16_t>(subScrollTop_ * kSubRowStepY));
+    }
+    if (!times.empty()) {
+        lastActivityMs_ = nowMs;
+    }
     for (const uint32_t pressMs : times) {
-        if (const auto action = consume(click_.onPress(pressMs));
+        if (const auto action = dispatchClick(click_.onPress(pressMs), nowMs, vm);
             action.action != OledAction::kNone) {
             return action;
         }
     }
-    return consume(click_.pollTimeout(nowMs));
+    return dispatchClick(click_.pollTimeout(nowMs), nowMs, vm);
 }
 
 UiDecision UiController::recoverFromShutdown() noexcept
@@ -460,6 +680,7 @@ UiDecision UiController::recoverFromShutdown() noexcept
     inShutdown_ = false;
     shutdownPct_ = 0U;
     click_.reset();
+    squish_.clear();
     page_ = (bootMode_ == board::BootMode::kChargeStandby) ? OledPage::kChargeStandby
                                                            : OledPage::kDialplate;
     dockSpring_.snap(dockSlotRect(dockSelected_).x);
@@ -468,12 +689,55 @@ UiDecision UiController::recoverFromShutdown() noexcept
     return out;
 }
 
+void UiController::updateHeroBadgeRoll(uint32_t nowMs, const ViewModel &vm) noexcept
+{
+    const char *const curBadge = dialHeroBadge(vm);
+    if (heroCurrBadge_ == nullptr) {
+        heroCurrBadge_ = curBadge;
+        heroPrevBadge_ = curBadge;
+        return;
+    }
+    if (curBadge != heroCurrBadge_) {
+        heroPrevBadge_ = heroCurrBadge_;
+        heroCurrBadge_ = curBadge;
+        heroChangeStartMs_ = nowMs;
+        heroRolling_ = true;
+    } else if (heroRolling_ && ((nowMs - heroChangeStartMs_) >= kNumberRollMs)) {
+        heroRolling_ = false;
+        heroPrevBadge_ = heroCurrBadge_;
+    }
+}
+
+UiDecision UiController::buildActiveDecision(uint32_t nowMs, const ViewModel &vm,
+                                             bool animating) const noexcept
+{
+    UiDecision out{};
+    out.page = page_;
+    out.animating = animating;
+    uint32_t waitMs = animating ? kAnimFramePeriodMs : kIdlePollPeriodMs;
+    if (!powerOffConfirm_ && vm.keyHold.active && !holdOverlayDismissed_ && !holdOverlayActive_) {
+        const uint32_t heldMs = nowMs - vm.keyHold.startMs;
+        if (heldMs < board::kKeyHoldOverlayStartMs) {
+            waitMs = std::min(waitMs, board::kKeyHoldOverlayStartMs - heldMs);
+        }
+    }
+    if (click_.pending()) {
+        out.hasClickDeadline = true;
+        out.clickDeadlineMs = click_.deadlineMs();
+        waitMs = std::min(waitMs, click_.remainingMs(nowMs));
+    }
+    out.nextWaitMs = waitMs;
+    return out;
+}
+
 UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
                                           const ViewModel &vm) noexcept
 {
-    if ((page_ == OledPage::kSystemCheck) && pairDialogId_ == 0U && checkSm_.step(nowMs, vm)) {
+    if ((page_ == OledPage::kSystemCheck) && (pairDialogId_ == 0U) && !powerOffConfirm_ &&
+        checkSm_.step(nowMs, vm)) {
         hasWarning_ = checkSm_.hasWarning();
         page_ = OledPage::kDialplate;
+        lastActivityMs_ = nowMs;
         dockSpring_.snap(dockSlotRect(dockSelected_).x);
         transition_.start(TransitionKind::kSlideLeft, OledPage::kSystemCheck, OledPage::kDialplate,
                           {}, nowMs);
@@ -482,27 +746,30 @@ UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
         (vm.gnssState == gnss::State::kFailed)) {
         hasWarning_ = true;
     }
-    dockSpring_.step(dtMs);
-    const bool transActive = transition_.pollActive(nowMs);
-    const bool springActive = (page_ == OledPage::kDialplate) && !dockSpring_.settled();
-    const bool checkAnim = (page_ == OledPage::kSystemCheck) && checkSm_.animating();
-    const bool rollAnim =
-        ((page_ == OledPage::kDialplate) && (satsRoll_.active(nowMs) || batRoll_.active(nowMs))) ||
-        ((page_ == OledPage::kSubSat) && satsRoll_.active(nowMs)) ||
-        ((page_ == OledPage::kSubPower) && batRoll_.active(nowMs));
+    updateHeroBadgeRoll(nowMs, vm);
 
-    UiDecision out{};
-    out.page = page_;
-    out.animating = transActive || springActive || checkAnim || rollAnim;
-    uint32_t waitMs = out.animating ? kAnimFramePeriodMs : kIdlePollPeriodMs;
-    if (click_.pending()) {
-        out.hasClickDeadline = true;
-        out.clickDeadlineMs = click_.deadlineMs();
-        const uint32_t rem = click_.remainingMs(nowMs);
-        waitMs = std::min(waitMs, rem);
+    const bool noModal = !wifiConfirm_ && !powerOffConfirm_ && (pairDialogId_ == 0U);
+    if (isSubmenuPage(page_) && noModal && !vm.keyHold.active && !holdOverlayActive_ &&
+        ((nowMs - lastActivityMs_) >= kSubpageIdleTimeoutMs)) {
+        leaveSubmenu(nowMs);
     }
-    out.nextWaitMs = waitMs;
-    return out;
+
+    dockSpring_.step(dtMs);
+    subFocusSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
+    subScrollSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
+
+    const bool subSpring =
+        isSubmenuPage(page_) && (!subFocusSpring_.settled() || !subScrollSpring_.settled());
+    const bool springActive =
+        ((page_ == OledPage::kDialplate) && !dockSpring_.settled()) || subSpring;
+    const bool rollNow = satsRoll_.active(nowMs) || batRoll_.active(nowMs);
+    const bool rollAnim = ((page_ == OledPage::kDialplate) && (rollNow || heroRolling_)) ||
+                          (isSubmenuPage(page_) && rollNow);
+    const bool animating =
+        transition_.pollActive(nowMs) || squish_.pollActive(nowMs) || springActive ||
+        ((page_ == OledPage::kSystemCheck) && checkSm_.animating()) || rollAnim ||
+        holdOverlayActive_ || holdOverlayCollapsing_ || powerOffConfirm_;
+    return buildActiveDecision(nowMs, vm, animating);
 }
 
 /**
@@ -510,10 +777,11 @@ UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
  * @param nowMs: 当前单调时间（ms）
  * @param shortKeyTimes: 本轮自 UiEventBus 弹出的消抖短按生产时间戳序列
  * @param vm: 当前只读视图模型
+ * @param longKeyArrived: 本轮是否收到长按 2.5 s 到达事件
  * @retval 本轮渲染页、USB 终帧通知、双击绝对截止与下一帧精确等待时长
  */
 UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKeyTimes,
-                              const ViewModel &vm) noexcept
+                              const ViewModel &vm, bool longKeyArrived) noexcept
 {
     const uint32_t dtMs = nowMs - lastStepMs_;
     lastStepMs_ = nowMs;
@@ -532,16 +800,10 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
         satsRoll_.update(vm.fixValid ? static_cast<int32_t>(vm.satsUsed) : 0, nowMs);
     }
     if (bootMode_ == board::BootMode::kChargeStandby) {
-        click_.reset();
-        page_ = OledPage::kChargeStandby;
-        const bool anim = batRoll_.active(nowMs);
-        return UiDecision{
-            .page = page_,
-            .animating = anim,
-            .nextWaitMs = anim ? kAnimFramePeriodMs : kIdlePollPeriodMs,
-        };
+        return stepChargeStandby(nowMs, dtMs, vm);
     }
 
+    updateHoldOverlay(nowMs, vm, longKeyArrived);
     // 必须先按生产顺序消费队列内全部消抖短按时间戳，再检查绝对截止，避免 OLED 刷屏延迟误拆双击（R2OL2-03）。
     const auto action = handleInput(nowMs, shortKeyTimes, vm);
     auto out = finishActiveStep(nowMs, dtMs, vm);
@@ -551,6 +813,19 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
 
 UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
 {
+    const UiModal modal =
+        powerOffConfirm_
+            ? UiModal::kPowerOffConfirm
+            : (pairDialogId_ != 0U ? UiModal::kPair
+                                   : (wifiConfirm_ ? UiModal::kWifiConfirm : UiModal::kNone));
+    const uint32_t confirmElapsed = powerOffConfirm_ ? (nowMs - powerOffConfirmStartMs_) : 0U;
+    const uint32_t confirmRemain = (powerOffConfirm_ && (confirmElapsed < kPowerOffConfirmMs))
+                                       ? (kPowerOffConfirmMs - confirmElapsed)
+                                       : 0U;
+    const uint16_t collapseQ10 =
+        holdOverlayCollapsing_ ? easeOutCubic(nowMs - holdCollapseStartMs_, kHoldCollapseMs) : 0U;
+    const uint16_t heroQ10 =
+        heroRolling_ ? easeOutCubic(nowMs - heroChangeStartMs_, kNumberRollMs) : kEaseScale;
     return UiRenderState{
         .page = page_,
         .dockSelected = dockSelected_,
@@ -558,9 +833,19 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         .satSubTab = satSubTab_,
         .hasCheckWarning = hasWarning_,
         .shutdownPct = shutdownPct_,
-        .commSelected = commSelected_,
-        .modal = pairDialogId_ != 0U ? UiModal::kPair
-                                     : (wifiConfirm_ ? UiModal::kWifiConfirm : UiModal::kNone),
+        .subSelected = subSelected_,
+        .subFocusY = subFocusSpring_.position(),
+        .subScrollY = subScrollSpring_.position(),
+        .squishInset = squish_.insetPx(nowMs),
+        .holdOverlayVisible = holdOverlayActive_ || holdOverlayCollapsing_,
+        .holdOverlayCollapsing = holdOverlayCollapsing_,
+        .holdProgressQ10 = holdProgressQ10_,
+        .holdCollapseQ10 = collapseQ10,
+        .powerOffRemainMs = confirmRemain,
+        .standbyRingQ10 = standbyRingQ10_,
+        .heroPrevBadge = heroPrevBadge_,
+        .heroRollQ10 = heroQ10,
+        .modal = modal,
         .nowMs = nowMs,
         .checkSm = &checkSm_,
         .transition = &transition_,
@@ -952,6 +1237,41 @@ const char *shutdownStageText(board::ShutdownStage stage, uint8_t doneMask, uint
     case board::ShutdownStage::kIdle:
     default:
         return "READY";
+    }
+}
+
+const char *shutdownReasonText(board::ShutdownReason reason) noexcept
+{
+    switch (reason) {
+    case board::ShutdownReason::kKey:
+        return "KEY";
+    case board::ShutdownReason::kConsole:
+        return "CONSOLE";
+    case board::ShutdownReason::kLowBattery:
+        return "LOW BATTERY";
+    case board::ShutdownReason::kPhone:
+        return "PHONE";
+    case board::ShutdownReason::kNone:
+    default:
+        return "SHUTDOWN";
+    }
+}
+
+const char *dockItemName(uint8_t idx) noexcept
+{
+    switch (idx) {
+    case kDockIdxSat:
+        return "SATS";
+    case kDockIdxPos:
+        return "POS";
+    case kDockIdxComm:
+        return "COMM";
+    case kDockIdxDevice:
+        return "DEVICE";
+    case kDockIdxPower:
+        return "POWER";
+    default:
+        return "";
     }
 }
 

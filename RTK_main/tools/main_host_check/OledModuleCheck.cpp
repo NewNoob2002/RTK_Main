@@ -96,6 +96,7 @@ constinit spp_server_pair_snapshot_t s_pair_snapshot{};
 constinit uint32_t s_decision_id = 0U;
 constinit bool s_decision_accept = false;
 constinit bool s_web_exit = false;
+constinit board::ShutdownReason s_shutdown_reason = board::ShutdownReason::kNone;
 constinit bool s_radio_switch = false;
 std::jmp_buf s_radio_jump{};
 
@@ -266,6 +267,9 @@ void runCommActions() noexcept
     static_cast<void>(s_app.oled.poll(nowMs()));
     CHECK(s_web_exit);
 
+    CHECK(events.submitAction({OledAction::kShutdownKey}));
+    static_cast<void>(s_app.oled.poll(nowMs()));
+    CHECK(s_shutdown_reason == board::ShutdownReason::kKey);
     s_app.radioMode = RadioMode::kBluetooth;
     CHECK(events.submitAction({OledAction::kWifi}));
     if (setjmp(s_radio_jump) == 0) {
@@ -400,6 +404,42 @@ void runClickPageDeadline(uint32_t secondAtMs) noexcept
     const auto expected = secondAtMs == 40299U ? OledPage::kSubSat : OledPage::kDialplate;
     CHECK(s_app.data.oledStatus.read().page == expected);
 }
+/**
+ * @brief 场景：验证 OLED 连续 4 次 I2C 刷屏失败进入离线态清除 kOledActive，恢复写出后重新置位
+ */
+void runOfflineClearsOledActive() noexcept
+{
+    setupOledModule();
+    s_app.data.uiEvents.setOledActive(true);
+    CHECK(s_app.data.uiEvents.oledActive());
+
+    // 制造帧变化并注入持续 I2C 失败；前 3 次 kError 尚未满 4 次，第 4 次 kError 清除 kOledActive。
+    s_fail_all_data = true;
+    auto pwr = s_app.data.powerStatus.read();
+    for (unsigned step = 0U; step < 20U; ++step) {
+        pwr.batteryPct = static_cast<uint8_t>(50U + (step % 40U));
+        s_app.data.powerStatus.write(pwr);
+        s_time_us += 200000LL;
+        static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
+        if (!s_app.data.uiEvents.oledActive()) {
+            break;
+        }
+    }
+    CHECK(!s_app.data.uiEvents.oledActive());
+
+    // I2C 恢复后跳过退避轮次并成功刷出一帧，kOledActive 应恢复为 true。
+    s_fail_all_data = false;
+    for (unsigned step = 0U; step < 10U; ++step) {
+        pwr.batteryPct = static_cast<uint8_t>(20U + step);
+        s_app.data.powerStatus.write(pwr);
+        s_time_us += 200000LL;
+        static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
+        if (s_app.data.uiEvents.oledActive()) {
+            break;
+        }
+    }
+    CHECK(s_app.data.uiEvents.oledActive());
+}
 
 } // namespace
 
@@ -426,6 +466,16 @@ void requestRadioMode(RadioMode mode, RadioReason reason) noexcept
     std::longjmp(s_radio_jump, 1);
 }
 
+namespace power {
+/** @brief 主机测试桩：记录 OLED 提交的按键关机原因。 @param reason: 关机原因。 @retval true 总是。 */
+
+bool requestShutdown(board::ShutdownReason reason) noexcept
+{
+    s_shutdown_reason = reason;
+    return true;
+}
+
+} // namespace power
 } // namespace app
 
 void spp_server_pair_snapshot(spp_server_pair_snapshot_t *out)
@@ -634,6 +684,8 @@ int main(int argc, char **argv)
         runClickPageDeadline(40299U);
     } else if (scenario == "click_page_deadline_300") {
         runClickPageDeadline(40300U);
+    } else if (scenario == "offline_clears_oled_active") {
+        runOfflineClearsOledActive();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return EXIT_FAILURE;

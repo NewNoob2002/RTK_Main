@@ -429,8 +429,20 @@ void powerShortKeyUi()
     pollPower(10U);
     s_gpioLevels[18] = 1;
     pollPower(4U);
-    CHECK(ctx.data.uiEvents.shortKeyCount() == 1U && obs.wakes == 1U);
+    CHECK(ctx.data.uiEvents.shortKeyCount() == 1U && obs.wakes >= 1U);
     CHECK(ctx.data.powerStatus.read().shortPresses == 1U);
+    // OLED 在线时：正常模式长按 2.5 s 仅通知 UI（longKeyCount 递增），不直接发起关机。
+    ctx.data.uiEvents.setOledActive(true);
+    s_gpioLevels[18] = 0;
+    pollPower(100U); // 1000 ms：应处于 holding 态
+    CHECK(ctx.data.uiEvents.readKeyHold().active);
+    pollPower(160U); // 2600 ms：越过 2500 ms 长按阈值
+    CHECK(ctx.data.uiEvents.longKeyCount() == 1U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kIdle);
+    s_gpioLevels[18] = 1;
+    pollPower(5U);
+    CHECK(!ctx.data.uiEvents.readKeyHold().active);
+    ctx.data.uiEvents.setOledActive(false);
     // 发起关机 -> 唤醒回调执行瞬间 powerStatus.shutdownStage 必须已发布为 kAnnounce（不得为旧值 kIdle）。
     CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
     pollPower(1U);
@@ -467,6 +479,80 @@ void powerShortKeyUi()
     ctx.data.uiEvents.setWakeHook(nullptr, nullptr);
 }
 
+/** @brief 验证无 OLED（oledActive=false）时正常模式长按 2.5 s 保持直接关机行为。 */
+void powerLongKeyNoOled()
+{
+    using namespace app;
+    setupPower(board::BootMode::kNormal);
+    s_gpioLevels[25] = 1;
+    auto &ctx = appContext();
+    ctx.data.uiEvents.setOledActive(false);
+    // 初始观测松开解除开机按住保护。
+    s_gpioLevels[18] = 1;
+    pollPower(4U);
+    // 长按 2.4 s 松开不关机、不发短按。
+    s_gpioLevels[18] = 0;
+    pollPower(240U);
+    CHECK(ctx.data.uiEvents.readKeyHold().active);
+    s_gpioLevels[18] = 1;
+    pollPower(5U);
+    CHECK(!ctx.data.uiEvents.readKeyHold().active);
+    CHECK(ctx.data.uiEvents.shortKeyCount() == 0U && ctx.data.uiEvents.longKeyCount() == 0U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kIdle);
+    // 长按满 2.5 s 且无 OLED：直接发起 kKey 关机。
+    s_gpioLevels[18] = 0;
+    pollPower(260U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage != board::ShutdownStage::kIdle);
+    CHECK(ctx.data.powerStatus.read().lastShutdown == board::ShutdownReason::kKey);
+}
+/** @brief 验证 OLED 在线但 UI 不消费长按事件时，持续按住 8 s 触发强制关机兜底。 */
+void powerForceOffFallback()
+{
+    using namespace app;
+    setupPower(board::BootMode::kNormal);
+    s_gpioLevels[25] = 1;
+    auto &ctx = appContext();
+    ctx.data.uiEvents.setOledActive(true);
+    s_gpioLevels[18] = 1;
+    pollPower(4U);
+    // 按住 2.5 s：投递长按给 UI，但不消费且不关机。
+    s_gpioLevels[18] = 0;
+    pollPower(260U);
+    CHECK(ctx.data.uiEvents.longKeyCount() == 1U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kIdle);
+    // 持续按住至 7.9 s：仍未达 8 s 兜底阈值。
+    pollPower(530U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kIdle);
+    // 达到 8.0 s（kForcePowerOffHoldMs）：不经 UI 直接触发 kKey 关机。
+    pollPower(20U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage != board::ShutdownStage::kIdle);
+    CHECK(ctx.data.powerStatus.read().lastShutdown == board::ShutdownReason::kKey);
+}
+
+/** @brief 验证 OLED 由在线转离线（清除 kOledActive）后，后续 2.5 s 长按直接走关机。 */
+void powerOledOfflineDirectShutdown()
+{
+    using namespace app;
+    setupPower(board::BootMode::kNormal);
+    s_gpioLevels[25] = 1;
+    auto &ctx = appContext();
+    ctx.data.uiEvents.setOledActive(true);
+    s_gpioLevels[18] = 1;
+    pollPower(4U);
+    // 在线时长按 2.5 s 仅通知 UI，松开不关机。
+    s_gpioLevels[18] = 0;
+    pollPower(260U);
+    CHECK(ctx.data.uiEvents.longKeyCount() == 1U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kIdle);
+    s_gpioLevels[18] = 1;
+    pollPower(5U);
+    // OLED 连续 I2C 失败进入离线态后清除 kOledActive，再次长按 2.5 s 直接关机。
+    ctx.data.uiEvents.setOledActive(false);
+    s_gpioLevels[18] = 0;
+    pollPower(260U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage != board::ShutdownStage::kIdle);
+    CHECK(ctx.data.powerStatus.read().lastShutdown == board::ShutdownReason::kKey);
+}
 /**
  * @brief 驱动电源模块完成正常关机前序阶段并触发 USB 关机 U3 掉电进入 restartPending
  * @param oledActive: 模拟 OLED 刷新任务是否在线
@@ -2944,6 +3030,12 @@ int main(int argc, const char **raw_args)
         powerStandby();
     } else if (std::strcmp(argv[1], "power_short_key_ui") == 0) {
         powerShortKeyUi();
+    } else if (std::strcmp(argv[1], "power_long_key_no_oled") == 0) {
+        powerLongKeyNoOled();
+    } else if (std::strcmp(argv[1], "power_force_off_fallback") == 0) {
+        powerForceOffFallback();
+    } else if (std::strcmp(argv[1], "power_oled_offline_direct_shutdown") == 0) {
+        powerOledOfflineDirectShutdown();
     } else if (std::strcmp(argv[1], "power_oled_usb_final_flush") == 0) {
         powerOledUsbFinalFlush();
     } else if (std::strcmp(argv[1], "power_oled_battery_final_flush") == 0) {

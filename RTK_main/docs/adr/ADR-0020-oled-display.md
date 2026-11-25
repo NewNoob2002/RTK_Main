@@ -116,24 +116,24 @@
 
 ### 5.2 按键方案 A（单键消歧）
 
-- 物理按键仍由 `PowerModule` 内 `PowerKeySm` 采样（`kLink` 10 ms 周期）：
-  - **长按 ≥ 2.5 s**：触发 `KeyEvent::kLongHold`，直接发起关机（或待机开机），松开不产生短按，绝不被双击消歧误判。
-  - **短按（< 1.0 s 松开）**：向 `UiEventBus` 无锁 SPSC 时间戳队列投递消抖短按生产时刻并唤醒 `oled` 任务。
+- 物理按键仍由 `PowerModule` 内 `PowerKeySm` 采样（`kLink` 10 ms 周期），短按上限对齐 `600 ms`（`kKeyShortMaxMs`），按住状态与起点/阈值经 `UiEventBus` 无锁原子暴露给 OLED：
+  - **长按进度与防误触（正常模式）**：按住 ≥ 600 ms 起叠加长按进度浮层（600→2500 ms 线性填充）；2500 ms 前松开 150 ms 收缩收起，不产生短按、不关机。到达 2500 ms 时，OLED 在线仅投递长按到达事件进入 `POWER OFF?` 确认页（`2x=OK  1x=CANCEL`，5 s 倒计时自动取消，双击经 `OledAction::kShutdownKey` 发起 `power::requestShutdown(kKey)`；期间配对弹窗排队低于确认页）。无 OLED 或面板离线时保持长按 2.5 s 直接关机。
+  - **短按（< 600 ms 松开）**：向 `UiEventBus` 无锁 SPSC 时间戳队列投递消抖短按生产时刻并唤醒 `oled` 任务。
 - `OledAnim::ClickDetector` 在 OLED 任务内按消抖短按的**生产时间戳**完成短按/双击消歧（窗口常量 `kDoubleClickWindowMs = 300 ms`，先按序消费全部队列事件再判绝对截止，不受 OLED 刷屏忙期漂移影响）：
-  - **短按（`kSingle`）**：表盘下循环切换底部 4 个入口图标（卫星/位置/设备/电源），驱动 `FixedSpring` 弹簧选中框跟随；卫星子菜单内切换“星座柱状图 / Top-8 CN0 条”两页。
-  - **双击（`kDouble`）**：自检页跳过剩余展示滑入表盘；表盘下展开进入当前选中子菜单（从图标矩形展开 ~300 ms）；任意子菜单下收回返回表盘。
+  - **短按（`kSingle`）**：表盘下循环切换底部 5 个入口图标（`SATS/POS/COMM/DEVICE/POWER`），驱动 `FixedSpring` 弹簧选中框跟随；卫星子页切换“星座柱状图 / Top-8 CN0 条”；其余统一子页（位置/通信/设备/电源）在右侧可滚动列表行间循环（弹簧行间移动 ≤ 180 ms、平滑滚动）；弹窗中为取消/拒绝。
+  - **双击（`kDouble`）**：自检页跳过剩余展示滑入表盘；表盘下伴随选择框挤压/回弹（≤ 120 ms）展开进入子页（内容行 40 ms 错峰上移 6 px）；子页下执行选中动作（如 `Power off` 进入确认页、通信模式/配对切换）或由末尾左箭头 `Back` 收回返回表盘；弹窗中为确认/接受。子页面无操作 `60 s`（`kSubpageIdleTimeoutMs`）自动收回回表盘。
   - 发起每个脏页前检查单击绝对截止（`firstPressMs + 300 ms`）。若当前同步传输跨过截止，完成该页后立即回到 UI 状态机，下一页待重新渲染。状态机先消费队列中的生产时间戳，再判定到期单击。休眠前仍重算剩余窗口。
-
 ### 5.3 开机自检、表盘/子菜单与关机进度
 
 - **开机自检（`kSystemCheck`）**：单色 Logo 逐列展开（450 ms + 200 ms 停留）→ 5 项非阻塞真实自检（电源/电池、NVS、蓝牙/Wi-Fi 射频、充电芯片、GNSS 探测含型号/固件）→ 滑动视差切入表盘（300 ms）。
   - 每项最短展示 `kMinStepMs = 200 ms`（≤ 300 ms），仅用于可读性，不阻塞任何模块初始化；充电芯片或未启用 GNSS 缺失显示 `-`（`kAbsent`）不算失败；失败项不阻塞，入表盘后状态栏常驻告警三角图标。
   - 最小只读快照增补：`PowerSnapshot` 新增 `batteryAdcReady`、`chargerPresent`、`shutdownDoneMask`；`DataCenter` 新增无锁原子 `wifiReady`（由 `WebModule` 写）。
-- **表盘与四子菜单**：
-  - 表盘（`kDialplate`）：顶栏（卫星图标 + 滚动数、自检告警图标、BT/Wi-Fi 图标、充电闪电、滚动电量 % + 电池图形）+ 中部大号解状态（`Font_12_24`：`NONE/SPS/DGPS/FLOAT/FIX/BASE/SVY`）与精度/可见星简报 + 底部 4 个 14×14 入口图标与弹簧选中框。
-  - 子菜单：`kSubSat`（GPS/BDS/GLO/GAL 可见/使用柱状图 + Top-8 CN0 载噪比条）、`kSubPos`（纯定点经纬高、HDOP、差分龄期）、`kSubDevice`（硬件/固件版本、SN、BT/AP 名、运行时长）、`kSubPower`（大号滚动电量、电压、进度条、充电状态、USB）。
+- **表盘、统一子页与充电待机（OL4）**：
+  - 表盘（`kDialplate`）：10 px 顶栏（卫星图标 + 滚动数、自检告警、解状态、BT/Wi-Fi 图标、充电闪电、滚动电量 % + 电池图形）+ 中部大号解状态（`Font_12_24`，状态切换带 180 ms 竖向滚动）与 GNSS UTC / 精度简报 + 选中入口名称标签 + 底部 5 个 16×16 入口图标与弹簧选中框。
+  - 统一子页：顶部沿用 10 px 状态栏；位置/通信/设备/电源采用左 `40×52` 主卡 + 右最多 3 行可滚动列表（图标 + 名称 + 右对齐值 + 滚动条 + 统一左箭头 `Back`）；卫星页保持 4 柱双段图与 `used/visible` 标题。电源页提供 `Power off` 项，双击进入 `POWER OFF?` 确认页。
+  - 充电待机（`kChargeStandby`）：左大号滚动电量 + 电池条（充电未满时 ≤ 2 fps 流动动画，充满停止恢复 0 写入）+ `CHG`/`FULL`/`USB` 与电压；右电源图标进度环（随按住时长实时填充，松开回落）+ `HOLD 2s ON`；底行 `FW` / `HW`。
 - **关机进度（`kShutdown`）**：
-  - 进度环、阶段文案和 `S/R/P` 里程碑由 `PowerSnapshot::{shutdownStage, shutdownDoneMask, shutdownDegradedMask}` 驱动。蓝牙收尾显示 `CLOSING SPP`，SPP 会话已断开且扫描关闭请求已提交时显示 `SCAN REQ OK` 与 `R:+`。该里程碑以 GAP 提交成功为准。SoftAP 模式在 AP 停用后显示 `AP MODE OFF` 与 `R:+`。保存超时（1 s）、无线收尾超时（BT 150 ms / SoftAP 5.5 s）或安全电平失败时，OLED 显示对应的 `SAVE TIMEOUT` / `RF TIMEOUT` / `SAFE IO ERR` 和 `!` 标记。
+  - 首行展示关机原因（`LOW BATTERY` / `CONSOLE` / `KEY` / `PHONE`）与终态标签；进度环、阶段文案和三枚小图标勾选里程碑（保存 / 射频 / 断电）由 `PowerSnapshot::{shutdownStage, lastShutdown, shutdownDoneMask, shutdownDegradedMask}` 驱动。蓝牙收尾显示 `CLOSING SPP`，SPP 会话已断开且扫描关闭请求已提交时显示 `SCAN REQ OK`。该里程碑以 GAP 提交成功为准。SoftAP 模式在 AP 停用后显示 `AP MODE OFF`。保存超时（1 s）、无线收尾超时（BT 150 ms / SoftAP 5.5 s）或安全电平失败时，OLED 显示对应的 `SAVE TIMEOUT` / `RF TIMEOUT` / `SAFE IO ERR` 和叉号标记。低电、console 及手机来源不经确认页直接进入关机页。
   - **基线强制下电 / USB 重启兜底例外（既定策略）**：`PowerModule` / `ShutdownSm` 沿用基线 ADR-0015 策略——即使保存或射频等待超时、或安全电平配置报错，仍继续推进断电（无 USB）或 U3 关断后的 USB 重启，防止设备挂死不关机或电池过放；但不再伪造“全部完成”位，明确向用户展示降级文案。
   - **阶段停留**。OLED 在线时，告知、保存、静默和 USB 的断电进行中阶段在完整帧确认后至少停留 `kMinStageVisibleMs = 250 ms`。保存和静默仍须满足原收尾条件。中间阶段未收到刷出确认时，从阶段开始最多等待 100 ms 的刷屏宽限加 250 ms 停留。
   - **无 USB**。进入 `kCutPower` 发布 `kBatteryOffReady`，显示 `POWER OFF`。Power 观察到对应终帧刷出后至少停留 300 ms，再启动 GPIO4 首段高电平。100 ms 未确认终帧时记录超时，按原协议断电。无 OLED 时直接走断电脉冲。GPIO4 首段仍从实际拉高开始计时。
@@ -142,5 +142,5 @@
 
 ### 5.4 帧率调度、控制台统计与预算增量
 
-- **帧率调度**。动画目标帧周期 33 ms，休眠前扣除本帧耗时并按单击绝对截止重算。静止时每 200 ms 检查一次，0 脏页时 0 写 I2C。SH1106 保持 400 kHz 和按页加解锁。每页超时传参预算为 8 ms，驱动分段等待与错误恢复可能超出，实板测最大持锁，见 §2.2。
+- **帧率调度**。动画目标帧周期 33 ms，休眠前扣除本帧耗时并按单击绝对截止重算。静止时每 200 ms 检查一次，0 脏页时 0 写 I2C（充电待机充电未满时的电池条流动动画例外，严格限 ≤ 2 fps，充满即停）。SH1106 保持 400 kHz 和按页加解锁。每页超时传参预算为 8 ms，驱动分段等待与错误恢复可能超出，实板测最大持锁，见 §2.2。
 - **预算增补**：框架状态 DRAM 静态增量 ≤ 1 KB（`UiController` 落 `.dram0.bss`）；Flash 增量主要来自新启用 `Font_12_24` 与自绘位图/渲染器，实测见 `docs/reports/OL2-oled-ui.md`；IRAM 增量 0 B。

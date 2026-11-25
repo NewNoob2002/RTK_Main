@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 
@@ -30,6 +31,11 @@ constexpr UBaseType_t kOledTaskPriority = 1U; // 低于 kLink(10)/kIo(9)/console
 constexpr BaseType_t kOledTaskCore = 1;       // 绑 Core 1，远离 Core 0 的 BT/Wi-Fi/GNSS/console
 constexpr uint32_t kFpsWindowMs = 1000U;      // ms，FPS 滑动采样窗口
 constexpr uint32_t kFpsScaleX10 = 10000U;     // frames * 10000 / elapsedMs = fps * 10
+constexpr uint32_t kMsPerSec = 1000U;
+constexpr uint32_t kSecPerMin = 60U;
+constexpr size_t kBdaSuffixByte0 = 3U;
+constexpr size_t kBdaSuffixByte1 = 4U;
+constexpr size_t kBdaSuffixByte2 = 5U;
 static_assert(sizeof(ScreenBuff) == OledModule::kFrameBufferBytes,
               "WouoUI ScreenBuff size must equal OledModule::kFrameBufferBytes");
 
@@ -148,7 +154,82 @@ void collectPowerStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.shutdownReason = pwr.lastShutdown;
     vm.shutdownDoneMask = pwr.shutdownDoneMask;
     vm.shutdownDegradedMask = pwr.shutdownDegradedMask;
+    vm.keyHold = app.data.uiEvents.readKeyHold();
 }
+
+/**
+ * @brief 收集通信与配对只读状态到视图模型
+ * @param app: 应用上下文（只读访问）
+ * @param sys: 已读取的系统状态快照
+ * @param[out] vm: 目标视图模型
+ * @note 仅 collectViewModel 调用，不访问硬件外设。
+ */
+void collectCommStatus(const AppContext &app, const SystemStatus &sys, oled::ViewModel &vm) noexcept
+{
+    vm.btReady = sys.btReady;
+    vm.wifiReady = app.data.wifiReady.load(std::memory_order_acquire);
+    vm.pairing = app.data.oledPairing.read();
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    vm.wifiSupported = true;
+    if (vm.wifiReady) {
+        const auto ssid = app.data.wifiSsid.read();
+        oled::sanitizeCopy(cstrView(ssid.data()), vm.wifiSsid);
+        vm.wifiClients = app.web.wifiStationCount();
+    }
+#endif
+
+    const Sessions sess = app.data.sessions.read();
+    // kMaxSessions == 2，窄化到 uint8_t 安全。
+    vm.btSessions = static_cast<uint8_t>(sess.count);
+    for (const auto &entry : sess.entries) {
+        if (entry.used) {
+            static_cast<void>(
+                std::snprintf(vm.btPeerLabel.data(), vm.btPeerLabel.size(), "%02X:%02X:%02X",
+                              static_cast<unsigned>(entry.addr.bytes[kBdaSuffixByte0]),
+                              static_cast<unsigned>(entry.addr.bytes[kBdaSuffixByte1]),
+                              static_cast<unsigned>(entry.addr.bytes[kBdaSuffixByte2])));
+            break;
+        }
+    }
+}
+
+#if RTK_GNSS_ENABLED
+/**
+ * @brief 收集 GNSS 定位、UTC 时间与工作模式只读状态到视图模型
+ * @param app: 应用上下文（只读访问）
+ * @param[out] vm: 目标视图模型
+ * @note 仅 collectViewModel 调用，不访问硬件外设。
+ */
+void collectGnssStatus(const AppContext &app, oled::ViewModel &vm) noexcept
+{
+    const GnssStatus gs = app.data.gnssStatus.read();
+    const gnss::Fix fix = app.data.gnssFix.read();
+    const GnssWorkModeStatus wm = app.data.gnssWorkMode.read();
+    vm.gnssEnabled = gs.enabled;
+    vm.gnssState = gs.state;
+    vm.gnssModel = gs.model;
+    oled::sanitizeCopy(cstrView(gs.fwVersion.data()), vm.gnssFwVer);
+    vm.fixValid = fix.valid;
+    vm.fixQuality = fix.quality;
+    vm.utcValid = (fix.utc.year != 0U) || (fix.utc.hour != 0U) || (fix.utc.minute != 0U) ||
+                  (fix.utc.ms != 0U) || (fix.valid && (fix.updateMs != 0U));
+    vm.utcHour = fix.utc.hour;
+    vm.utcMinute = fix.utc.minute;
+    vm.utcSecond = static_cast<uint8_t>((fix.utc.ms / kMsPerSec) % kSecPerMin);
+    vm.latE9 = fix.latE9;
+    vm.lonE9 = fix.lonE9;
+    vm.altMm = fix.altMm;
+    vm.satsUsed = fix.satsUsed;
+    vm.hdopX100 = fix.hdopX100;
+    vm.diffAgeDs = fix.diffAgeDs;
+    vm.hAccCm = fix.hAccCm;
+    vm.workModeActive = wm.active;
+    vm.workMode = wm.mode;
+    vm.workModeState = wm.state;
+    vm.workModeElapsedS = wm.elapsedS;
+    collectSatSummary(app, vm);
+}
+#endif
 
 /**
  * @brief 从 DataCenter 与 AppContext 只读快照收集当前 UI 视图模型
@@ -174,46 +255,11 @@ void collectPowerStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.bootMode = app.bootMode;
     vm.radioMode = app.radioMode;
     vm.nvsReady = app.bootConfig.userNvsReady && !app.bootConfig.safeDefaults;
-    vm.btReady = sys.btReady;
-    vm.wifiReady = app.data.wifiReady.load(std::memory_order_acquire);
-    vm.pairing = app.data.oledPairing.read();
-#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    vm.wifiSupported = true;
-    if (vm.wifiReady) {
-        const auto ssid = app.data.wifiSsid.read();
-        oled::sanitizeCopy(cstrView(ssid.data()), vm.wifiSsid);
-        vm.wifiClients = app.web.wifiStationCount();
-    }
-#endif
 
-    const Sessions sess = app.data.sessions.read();
-    // kMaxSessions == 2，窄化到 uint8_t 安全。
-    vm.btSessions = static_cast<uint8_t>(sess.count);
-
+    collectCommStatus(app, sys, vm);
     collectPowerStatus(app, vm);
-
 #if RTK_GNSS_ENABLED
-    const GnssStatus gs = app.data.gnssStatus.read();
-    const gnss::Fix fix = app.data.gnssFix.read();
-    const GnssWorkModeStatus wm = app.data.gnssWorkMode.read();
-    vm.gnssEnabled = gs.enabled;
-    vm.gnssState = gs.state;
-    vm.gnssModel = gs.model;
-    oled::sanitizeCopy(cstrView(gs.fwVersion.data()), vm.gnssFwVer);
-    vm.fixValid = fix.valid;
-    vm.fixQuality = fix.quality;
-    vm.latE9 = fix.latE9;
-    vm.lonE9 = fix.lonE9;
-    vm.altMm = fix.altMm;
-    vm.satsUsed = fix.satsUsed;
-    vm.hdopX100 = fix.hdopX100;
-    vm.diffAgeDs = fix.diffAgeDs;
-    vm.hAccCm = fix.hAccCm;
-    vm.workModeActive = wm.active;
-    vm.workMode = wm.mode;
-    vm.workModeState = wm.state;
-    vm.workModeElapsedS = wm.elapsedS;
-    collectSatSummary(app, vm);
+    collectGnssStatus(app, vm);
 #endif
 }
 
@@ -247,6 +293,9 @@ fw::Result OledModule::init() noexcept
     }
     enabled_ = false;
     present_ = false;
+    consecutiveFlushErrors_ = 0U;
+    panelOffline_ = false;
+    wasOledActive_ = false;
     fpsX10_ = 0U;
     fpsWindowStartMs_ = 0U;
     fpsWindowFrames_ = 0U;
@@ -285,6 +334,7 @@ fw::Result OledModule::init() noexcept
     const uint32_t now = rtos::nowMs();
     fpsWindowStartMs_ = now;
     context_->data.uiEvents.drainShortKeys();
+    context_->data.uiEvents.drainLongKeys();
     s_ui_ctrl.reset(context_->bootMode, now);
     static_cast<void>(refreshOnce(now, true));
     publishStatus(true);
@@ -333,7 +383,7 @@ void OledModule::taskEntry(void *arg) noexcept
         return;
     }
     s_oled_task_handle.store(xTaskGetCurrentTaskHandle(), std::memory_order_release);
-    self->context_->data.uiEvents.setOledActive(true);
+    self->context_->data.uiEvents.setOledActive(!self->panelOffline_);
     self->context_->data.uiEvents.setWakeHook(&OledModule::wakeFromBus, self);
     self->run();
 }
@@ -363,8 +413,13 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
            context_->data.uiEvents.popShortKey(shortKeys[shortKeyCount])) {
         ++shortKeyCount;
     }
-    const oled::UiDecision dec =
-        s_ui_ctrl.step(nowMs, std::span<const uint32_t>{shortKeys.data(), shortKeyCount}, vm);
+    bool longKeyArrived = false;
+    uint32_t longKeyMs = 0U;
+    while (context_->data.uiEvents.popLongKey(longKeyMs)) {
+        longKeyArrived = true;
+    }
+    const oled::UiDecision dec = s_ui_ctrl.step(
+        nowMs, std::span<const uint32_t>{shortKeys.data(), shortKeyCount}, vm, longKeyArrived);
     if (dec.action.action != OledAction::kNone) {
         static_cast<void>(context_->data.uiEvents.submitAction(dec.action));
     }
@@ -386,6 +441,7 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
     const int64_t i2cStartUs = esp_timer_get_time();
     WouoUI_BuffSend();
     const int64_t i2cEndUs = esp_timer_get_time();
+    updatePanelOnlineState();
 
     const uint32_t thisFrameUs =
         (i2cEndUs > frameStartUs) ? static_cast<uint32_t>(i2cEndUs - frameStartUs) : 0U;
@@ -394,6 +450,37 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
     acknowledgeShutdownFrame(context_->data.uiEvents, vm, post.markFinalFlushed);
     updateFrameStats(nowMs, thisFrameUs, i2cEndUs - i2cStartUs);
     return post.nextWaitMs;
+}
+void OledModule::updatePanelOnlineState() noexcept
+{
+    static_assert(kOfflineFlushErrors == board::Sh1106::kMaxErrorBackoffTicks,
+                  "OLED offline error threshold must match Sh1106 backoff ceiling");
+    if (s_last_flush == board::Sh1106FlushResult::kError) {
+        if (consecutiveFlushErrors_ < kOfflineFlushErrors) {
+            ++consecutiveFlushErrors_;
+        }
+        if ((consecutiveFlushErrors_ < kOfflineFlushErrors) || panelOffline_) {
+            return;
+        }
+        panelOffline_ = true;
+        wasOledActive_ = context_->data.uiEvents.oledActive();
+        context_->data.uiEvents.setOledActive(false);
+        FW_LOGW(fw::TraceCat::kSys, "<oled> panel offline after %u consecutive I2C errors",
+                static_cast<unsigned>(consecutiveFlushErrors_));
+        return;
+    }
+    if (s_last_flush != board::Sh1106FlushResult::kWritten) {
+        return;
+    }
+    consecutiveFlushErrors_ = 0U;
+    if (!panelOffline_) {
+        return;
+    }
+    panelOffline_ = false;
+    if (wasOledActive_) {
+        context_->data.uiEvents.setOledActive(true);
+    }
+    FW_LOGI(fw::TraceCat::kSys, "<oled> panel back online");
 }
 
 void OledModule::updateFrameStats(uint32_t nowMs, uint32_t frameUs, int64_t i2cUs) noexcept

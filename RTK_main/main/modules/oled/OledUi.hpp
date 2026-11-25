@@ -31,15 +31,21 @@ inline constexpr size_t kFwVerBufBytes = 20U;     // B，固件版本缓冲
 inline constexpr size_t kSnBufBytes = 24U;        // B，序列号缓冲
 inline constexpr size_t kDevNameBufBytes = 24U;   // B，蓝牙/Wi-Fi 广播名缓冲
 inline constexpr size_t kGnssFwBufBytes = 20U;    // B，GNSS 固件版本短串缓冲
+inline constexpr size_t kPeerLabelBufBytes = 16U; // B，已连蓝牙设备名/地址短串缓冲
 inline constexpr size_t kCheckItemCount = 5U;     // 自检项数：PWR/NVS/RF/CHG/GNSS
 inline constexpr size_t kDockItemCount = 5U;      // SAT/POS/COMM/DEV/PWR
 inline constexpr int16_t kDockStartX = 2;
 inline constexpr int16_t kDockStepX = 25;
-inline constexpr int16_t kDockY = 44;
+inline constexpr int16_t kDockY = 45;
 inline constexpr int16_t kDockW = 24;
 inline constexpr int16_t kDockH = 19;
-inline constexpr size_t kConstellationSlots = 4U; // 卫星子菜单主星座数：GPS/BDS/GLO/GAL
-inline constexpr size_t kTopSnrBars = 8U;         // 卫星子菜单 CN0 条数量
+inline constexpr size_t kConstellationSlots = 4U;     // 卫星子菜单主星座数：GPS/BDS/GLO/GAL
+inline constexpr size_t kTopSnrBars = 8U;             // 卫星子菜单 CN0 条数量
+inline constexpr uint8_t kSubVisibleRows = 3U;        // 统一子页右侧同时可见行数
+inline constexpr int16_t kSubRowStepY = 17;           // px，统一子页行步距（16 px 高 + 1 px 间距）
+inline constexpr uint32_t kPowerOffConfirmMs = 5000U; // ms，关机确认页倒计时上限
+inline constexpr uint32_t kSubpageIdleTimeoutMs = 60000U; // ms，子页面无操作自动回表盘时长
+inline constexpr uint32_t kCheckTickAnimMs = 150U;        // ms，开机自检单项打勾展开动画时长
 
 /** 单星座可见/参与解算卫星数摘要（避免在 ViewModel 中复制 512 B SatTable）。 */
 struct SatGroupStat {
@@ -65,6 +71,7 @@ struct ViewModel {
     std::array<char, kDevNameBufBytes> deviceName{};
     std::array<char, kDevNameBufBytes> wifiSsid{};
     std::array<char, kGnssFwBufBytes> gnssFwVer{};
+    std::array<char, kPeerLabelBufBytes> btPeerLabel{};
     uint32_t uptimeMs = 0U;
     board::BootMode bootMode = board::BootMode::kNormal;
     RadioMode radioMode = RadioMode::kBluetooth;
@@ -84,6 +91,10 @@ struct ViewModel {
     gnss::Model gnssModel = gnss::Model::kUnknown;
     bool fixValid = false;
     gnss::FixQuality fixQuality = gnss::FixQuality::kUnknown;
+    bool utcValid = false;
+    uint8_t utcHour = 0U;
+    uint8_t utcMinute = 0U;
+    uint8_t utcSecond = 0U;
     int64_t latE9 = 0;
     int64_t lonE9 = 0;
     int32_t altMm = 0;
@@ -108,6 +119,7 @@ struct ViewModel {
     board::ShutdownReason shutdownReason = board::ShutdownReason::kNone;
     uint8_t shutdownDoneMask = 0U;
     uint8_t shutdownDegradedMask = 0U;
+    KeyHoldSnapshot keyHold{};
 };
 
 /** 开机自检单项结论。 */
@@ -227,6 +239,17 @@ public:
     }
 
     /**
+     * @brief 查询指定自检项得出结论的单调时刻（用于逐项打勾展开动画）
+     * @param idx: 自检项下标（0..4）
+     * @retval 该项得出结论的单调时间（ms）
+     * @note 纯查询。
+     */
+    [[nodiscard]] uint32_t itemResolvedMs(size_t idx) const noexcept
+    {
+        return (idx < kCheckItemCount) ? itemResolvedMs_[idx] : 0U;
+    }
+
+    /**
      * @brief 查询自检页当前是否需要 30 fps 动画刷新
      * @retval true Logo 展开或 Pending 旋转动画期间
      * @retval false 已完成
@@ -251,6 +274,7 @@ private:
 
     CheckPhase phase_ = CheckPhase::kLogo;
     std::array<CheckStatus, kCheckItemCount> items_{};
+    std::array<uint32_t, kCheckItemCount> itemResolvedMs_{};
     size_t activeIdx_ = 0U;
     uint32_t phaseStartMs_ = 0U;
     uint32_t stepStartMs_ = 0U;
@@ -289,7 +313,7 @@ struct UiDecision {
     OledActionRequest action{};
 };
 
-enum class UiModal : uint8_t { kNone, kWifiConfirm, kPair };
+enum class UiModal : uint8_t { kNone, kWifiConfirm, kPair, kPowerOffConfirm };
 /** 供渲染器只读读取的完整 UI 瞬时渲染状态。 */
 struct UiRenderState {
     OledPage page = OledPage::kSystemCheck;
@@ -298,7 +322,18 @@ struct UiRenderState {
     uint8_t satSubTab = 0U;
     bool hasCheckWarning = false;
     uint8_t shutdownPct = 0U;
-    uint8_t commSelected = 0U;
+    uint8_t subSelected = 0U;
+    int16_t subFocusY = 0;
+    int16_t subScrollY = 0;
+    int16_t squishInset = 0;
+    bool holdOverlayVisible = false;
+    bool holdOverlayCollapsing = false;
+    uint16_t holdProgressQ10 = 0U;
+    uint16_t holdCollapseQ10 = 0U;
+    uint32_t powerOffRemainMs = 0U;
+    uint16_t standbyRingQ10 = 0U;
+    const char *heroPrevBadge = nullptr;
+    uint16_t heroRollQ10 = kEaseScale;
     UiModal modal = UiModal::kNone;
     uint32_t nowMs = 0U;
     const SystemCheckSm *checkSm = nullptr;
@@ -328,11 +363,12 @@ public:
      * @param nowMs: 当前单调时间（ms）
      * @param shortKeyTimes: 本轮自 UiEventBus 弹出的消抖短按生产时间戳序列（按生产顺序）
      * @param vm: 当前只读视图模型
+     * @param longKeyArrived: 本轮是否收到长按 2.5 s 到达事件（触发关机确认页）
      * @retval 本轮渲染页、USB 终帧通知、双击绝对截止与下一帧精确等待时长
      * @note 仅 OLED 任务或主机测试串行调用，不阻塞、不分配堆。
      */
     [[nodiscard]] UiDecision step(uint32_t nowMs, std::span<const uint32_t> shortKeyTimes,
-                                  const ViewModel &vm) noexcept;
+                                  const ViewModel &vm, bool longKeyArrived = false) noexcept;
     /**
      * @brief 构造供渲染器消费的只读渲染状态视图
      * @param nowMs: 当前单调时间（ms）
@@ -359,6 +395,16 @@ public:
     [[nodiscard]] uint8_t dockSelected() const noexcept
     {
         return dockSelected_;
+    }
+
+    /**
+     * @brief 查询当前子页选中列表行下标
+     * @retval 列表行下标（0 起）
+     * @note 纯查询。
+     */
+    [[nodiscard]] uint8_t subSelected() const noexcept
+    {
+        return subSelected_;
     }
 
     /**
@@ -400,40 +446,114 @@ private:
     [[nodiscard]] UiDecision finishActiveStep(uint32_t nowMs, uint32_t dtMs,
                                               const ViewModel &vm) noexcept;
     /**
-     * @brief 在正常交互页（自检/表盘/子菜单）消费已确认的单击或双击事件
-     * @param click: 消歧后的按键事件
+     * @brief 推进充电待机页的进度环、电池滚动与 <= 2 fps 充电动画调度
      * @param nowMs: 当前单调时间（ms）
+     * @param dtMs: 距上一轮步进经过的毫秒数
      * @param vm: 只读视图模型
+     * @retval 本轮充电待机页决策
      * @note 仅 step() 内部调用。
      */
-    void handleClick(ClickEvent click, uint32_t nowMs, const ViewModel &vm) noexcept;
+    [[nodiscard]] UiDecision stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
+                                               const ViewModel &vm) noexcept;
 
-    /** @brief 返回表盘并启动与进入对应的收回过渡。 @param nowMs: 当前时间。 */
+    /**
+     * @brief 更新正常模式长按进度浮层（600..2500 ms）与提前松开 150 ms 收起状态
+     * @param nowMs: 当前单调时间（ms）
+     * @param vm: 只读视图模型
+     * @param longKeyArrived: 本轮是否收到长按到达事件
+     * @note 仅 step() 内部调用。
+     */
+    void updateHoldOverlay(uint32_t nowMs, const ViewModel &vm, bool longKeyArrived) noexcept;
+
+    /**
+     * @brief 进入关机确认弹窗（POWER OFF?，5 s 自动取消，优先级高于配对弹窗）
+     * @param nowMs: 当前单调时间（ms）
+     * @note 仅 step() 内部调用。
+     */
+    void enterPowerOffConfirm(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 返回表盘并启动与进入对应的收回过渡
+     * @param nowMs: 当前时间（ms）
+     */
     void leaveSubmenu(uint32_t nowMs) noexcept;
 
     /**
-     * @brief 确认弹窗与通信菜单消费一个已判定的点击。
-     * @param click: 点击类型。
-     * @param nowMs: 当前单调时间。
-     * @param vm: 只读视图数据。
-     * @retval 要交给 kLink 的动作或空值。
+     * @brief 消费一个已判定的单击或双击事件（按优先级：关机确认 -> 配对 -> Wi-Fi 确认 -> 页面）
+     * @param click: 点击类型
+     * @param nowMs: 当前单调时间（ms）
+     * @param vm: 只读视图数据
+     * @retval 要交给 kLink 的动作或空值
      */
-    [[nodiscard]] OledActionRequest handleCommClick(ClickEvent click, uint32_t nowMs,
-                                                    const ViewModel &vm) noexcept;
+    [[nodiscard]] OledActionRequest dispatchClick(ClickEvent click, uint32_t nowMs,
+                                                  const ViewModel &vm) noexcept;
 
     /**
-     * @brief 对当前弹窗和页面消费按键，先处理已入队的生产时间戳。
-     * @param nowMs: 当前单调时间。
-     * @param times: 待处理的短按时间戳。
-     * @param vm: 只读视图数据。
-     * @retval 本轮提交的动作。
+     * @brief 优先消费当前激活弹窗（关机确认 / 配对 / Wi-Fi 确认）的点击
+     * @param click: 已判定的点击类型
+     * @param nowMs: 当前单调时间（ms）
+     * @param[out] handled: true 表示弹窗已消费该点击
+     * @retval 要提交给 kLink 的动作或空值
+     */
+    [[nodiscard]] OledActionRequest handleModalClick(ClickEvent click, uint32_t nowMs,
+                                                     bool &handled) noexcept;
+
+    /**
+     * @brief 消费表盘页的单击切入口与双击展开子页
+     * @param click: 已判定的点击类型
+     * @param nowMs: 当前单调时间（ms）
+     */
+    void handleDialClick(ClickEvent click, uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 更新表盘中部解状态徽章变化触发的 180 ms 竖向切换状态
+     * @param nowMs: 当前单调时间（ms）
+     * @param vm: 视图数据
+     */
+    void updateHeroBadgeRoll(uint32_t nowMs, const ViewModel &vm) noexcept;
+
+    /**
+     * @brief 依据活跃动画、长按 600 ms 起点与双击截止计算本轮精确休眠时长
+     * @param nowMs: 当前单调时间（ms）
+     * @param vm: 视图数据
+     * @param animating: 当前是否处于 30 fps 动画态
+     * @retval 完整的本轮 UiDecision
+     */
+    [[nodiscard]] UiDecision buildActiveDecision(uint32_t nowMs, const ViewModel &vm,
+                                                 bool animating) const noexcept;
+
+    /**
+     * @brief 处理统一可滚动列表子页（位置/通信/设备/电源）的单击滚动与双击确认
+     * @param click: 点击类型
+     * @param nowMs: 当前单调时间（ms）
+     * @param vm: 只读视图数据
+     * @retval 要交给 kLink 的动作或空值
+     */
+    [[nodiscard]] OledActionRequest handleSubListClick(ClickEvent click, uint32_t nowMs,
+                                                       const ViewModel &vm) noexcept;
+
+    /**
+     * @brief 对当前弹窗和页面消费按键，先处理已入队的生产时间戳
+     * @param nowMs: 当前单调时间（ms）
+     * @param times: 待处理的短按时间戳
+     * @param vm: 只读视图数据
+     * @retval 本轮提交的动作
      */
     [[nodiscard]] OledActionRequest handleInput(uint32_t nowMs, std::span<const uint32_t> times,
                                                 const ViewModel &vm) noexcept;
 
     /**
+     * @brief 取得指定统一列表子页的总行数（含末尾 Back 项）
+     * @param page: 当前页面枚举
+     * @param vm: 视图模型
+     * @retval 列表总行数，非列表页返回 0
+     * @note 纯函数。
+     */
+    [[nodiscard]] static uint8_t subpageRowCount(OledPage page, const ViewModel &vm) noexcept;
+
+    /**
      * @brief 计算表盘底部指定入口图标的屏幕矩形
-     * @param idx: 入口下标（0..3）
+     * @param idx: 入口下标（0..4）
      * @retval 对应图标槽位矩形
      * @note 纯函数。
      */
@@ -441,7 +561,7 @@ private:
 
     /**
      * @brief 将表盘入口下标映射为目标子菜单枚举
-     * @param idx: 入口下标（0..3）
+     * @param idx: 入口下标（0..4）
      * @retval 对应子菜单页面
      * @note 纯函数。
      */
@@ -453,16 +573,33 @@ private:
     uint8_t satSubTab_ = 0U;
     uint8_t shutdownPct_ = 0U;
     uint32_t lastStepMs_ = 0U;
+    uint32_t lastActivityMs_ = 0U;
     bool inShutdown_ = false;
     bool hasWarning_ = false;
-    uint8_t commSelected_ = 0U;
+    uint8_t subSelected_ = 0U;
+    uint8_t subScrollTop_ = 0U;
     bool wifiConfirm_ = false;
+    bool powerOffConfirm_ = false;
+    uint32_t powerOffConfirmStartMs_ = 0U;
     bool pairDecisionSent_ = false;
     uint32_t pairDialogId_ = 0U;
+    bool holdOverlayActive_ = false;
+    bool holdOverlayCollapsing_ = false;
+    bool holdOverlayDismissed_ = false;
+    uint16_t holdProgressQ10_ = 0U;
+    uint32_t holdCollapseStartMs_ = 0U;
+    uint16_t standbyRingQ10_ = 0U;
+    const char *heroPrevBadge_ = nullptr;
+    const char *heroCurrBadge_ = nullptr;
+    uint32_t heroChangeStartMs_ = 0U;
+    bool heroRolling_ = false;
     ClickDetector click_{};
     SystemCheckSm checkSm_{};
     PageTransition transition_{};
     FixedSpring dockSpring_{};
+    FixedSpring subFocusSpring_{};
+    FixedSpring subScrollSpring_{};
+    SquishAnim squish_{};
     NumberRoll satsRoll_{};
     NumberRoll batRoll_{};
 };
@@ -651,6 +788,22 @@ struct DialGnssDetail {
  */
 [[nodiscard]] const char *shutdownStageText(board::ShutdownStage stage, uint8_t doneMask,
                                             uint8_t degradedMask, RadioMode radioMode) noexcept;
+
+/**
+ * @brief 取得关机原因首行英文提示（LOW BATTERY / CONSOLE / KEY / PHONE）
+ * @param reason: 关机原因枚举
+ * @retval 静态只读原因字符串
+ * @note 纯函数。
+ */
+[[nodiscard]] const char *shutdownReasonText(board::ShutdownReason reason) noexcept;
+
+/**
+ * @brief 取得表盘底部入口的短名称标签（SAT / POS / COMM / DEV / PWR）
+ * @param idx: 入口索引（0..4）
+ * @retval 静态短名称字符串
+ * @note 纯函数。
+ */
+[[nodiscard]] const char *dockItemName(uint8_t idx) noexcept;
 
 /**
  * @brief 从 gnss::SatTable 提取紧凑的星座分布与 Top-8 CN0 摘要写入 ViewModel

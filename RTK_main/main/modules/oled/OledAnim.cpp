@@ -131,7 +131,7 @@ void FixedSpring::retarget(int16_t targetPx) noexcept
     moving_ = true;
 }
 
-void FixedSpring::step(uint32_t dtMs) noexcept
+void FixedSpring::step(uint32_t dtMs, int32_t stiffness, int32_t damping) noexcept
 {
     if (!moving_ || (dtMs == 0U)) {
         return;
@@ -143,9 +143,8 @@ void FixedSpring::step(uint32_t dtMs) noexcept
         const uint32_t sub = std::min(remaining, kSubStepMs);
         remaining -= sub;
         const int64_t errQ8 = static_cast<int64_t>(targetQ8_) - static_cast<int64_t>(posQ8_);
-        const int64_t accQ8 =
-            (errQ8 * kDefaultStiffness) - (static_cast<int64_t>(velQ8_) * kDefaultDamping);
-        // sub <= 16 ms，中间值采用 int64_t 避免溢出，单步速度/位置增量远小于 int32_t 范围。
+        const int64_t accQ8 = (errQ8 * stiffness) - (static_cast<int64_t>(velQ8_) * damping);
+        // sub <= 8 ms，中间值采用 int64_t 避免溢出，单步速度/位置增量远小于 int32_t 范围。
         const int64_t nextVel =
             static_cast<int64_t>(velQ8_) + ((accQ8 * static_cast<int64_t>(sub)) / kMsPerSec);
         const int64_t nextPos =
@@ -224,6 +223,46 @@ uint16_t NumberRoll::progressQ10(uint32_t nowMs) const noexcept
     return easeOutCubic(nowMs - startMs_, kNumberRollMs);
 }
 
+void SquishAnim::trigger(uint32_t nowMs) noexcept
+{
+    startMs_ = nowMs;
+    active_ = true;
+}
+
+void SquishAnim::clear() noexcept
+{
+    active_ = false;
+}
+
+bool SquishAnim::pollActive(uint32_t nowMs) noexcept
+{
+    if (!active_) {
+        return false;
+    }
+    if ((nowMs - startMs_) >= kSquishDurationMs) {
+        active_ = false;
+        return false;
+    }
+    return true;
+}
+
+int16_t SquishAnim::insetPx(uint32_t nowMs) const noexcept
+{
+    if (!active_) {
+        return 0;
+    }
+    const uint32_t elapsed = nowMs - startMs_;
+    if (elapsed >= kSquishDurationMs) {
+        return 0;
+    }
+    if (elapsed < kSquishPressMs) {
+        return lerpFixed(0, kSquishMaxPx, easeOutCubic(elapsed, kSquishPressMs));
+    }
+    const uint32_t reboundElapsed = elapsed - kSquishPressMs;
+    const uint32_t reboundDur = kSquishDurationMs - kSquishPressMs;
+    return lerpFixed(kSquishMaxPx, 0, easeOutCubic(reboundElapsed, reboundDur));
+}
+
 /**
  * @brief 启动一次页面过渡动画
  * @param newKind: 过渡类型
@@ -290,6 +329,22 @@ TransitionPose PageTransition::pose(uint32_t nowMs, Rect screen) const noexcept
     return {.viewport = {lerpFixed(iconRect.x, screen.x, p), lerpFixed(iconRect.y, screen.y, p),
                          lerpFixed(iconRect.w, screen.w, p), lerpFixed(iconRect.h, screen.h, p)},
             .contentOffsetY = lift};
+}
+
+int16_t PageTransition::rowOffsetY(uint32_t nowMs, uint8_t rowIdx) const noexcept
+{
+    if (kind == TransitionKind::kNone) {
+        return 0;
+    }
+    const uint32_t elapsed = std::min(nowMs - startMs, durationMs);
+    const uint32_t openMs =
+        kind == TransitionKind::kCollapseToIcon ? durationMs - elapsed : elapsed;
+    const uint32_t delayMs = (static_cast<uint32_t>(rowIdx) + 1U) * kContentStaggerMs;
+    if (openMs <= delayMs) {
+        return kTransitionContentLiftPx;
+    }
+    const uint32_t rowDur = (durationMs > delayMs) ? (durationMs - delayMs) : 1U;
+    return lerpFixed(kTransitionContentLiftPx, 0, easeInOutCubic(openMs - delayMs, rowDur));
 }
 
 } // namespace app::oled

@@ -775,7 +775,7 @@ void testRenderAllPagesAndDirtySkip() noexcept
     CHECK(std::string_view{dialGnssDetail(rbVm).bot} == "MAINT");
     renderUi(rbSt, rbVm, fb2);
     // 左侧徽章同为 "CFG"，右侧区域必须因 SET OUT vs MAINT 产生像素差异。
-    CHECK(!regionEqual(fb, fb2, 3U, 72U, 128U));
+    CHECK(!regionEqual(fb, fb2, 3U, 69U, 128U));
     rbVm.gnssState = gnss::State::kFailed;
     CHECK(std::string_view{dialGnssDetail(rbVm).bot} == "FAULT");
 
@@ -816,7 +816,12 @@ void testTransitionPose() noexcept
     slide.start(TransitionKind::kSlideLeft, OledPage::kSystemCheck, OledPage::kDialplate, {}, 0U);
     CHECK(open.durationMs == 420U);
     CHECK(open.pose(0U, screen).viewport == icon);
-    CHECK(open.pose(40U, screen).contentOffsetY == 5);
+    CHECK(open.pose(40U, screen).contentOffsetY == kTransitionContentLiftPx);
+    CHECK(open.rowOffsetY(0U, 0U) == kTransitionContentLiftPx);
+    CHECK(open.rowOffsetY(40U, 0U) == kTransitionContentLiftPx);
+    CHECK(open.rowOffsetY(80U, 1U) == kTransitionContentLiftPx);
+    CHECK(open.rowOffsetY(kPageTransitionMs, 2U) == 0);
+    CHECK(open.rowOffsetY(180U, 1U) == close.rowOffsetY(kPageTransitionMs - 180U, 1U));
     CHECK(open.pose(kPageTransitionMs, screen).viewport == screen);
     CHECK(open.pose(kPageTransitionMs, screen).contentOffsetY == 0);
     CHECK(open.progressQ10(kPageTransitionMs / 2U) == kEaseScale / 2U);
@@ -879,12 +884,13 @@ void testCommAndPairing() noexcept
     CHECK(reject.action == OledAction::kPairReject && reject.pairId == 42U);
     CHECK(ui.step(34000U, {}, vm).page == OledPage::kSubComm);
     CHECK(ui.renderState(34000U).modal == UiModal::kNone);
-
+    // OL4 通信页 BT 档共 4 项（Mode/Pair/Dev/Back），从 Pair(1) 需单击两次到达 Back(3)。
     static_cast<void>(once(34200U));
-    CHECK(twice(34700U).page == OledPage::kDialplate);
+    static_cast<void>(once(34600U));
+    CHECK(twice(35100U).page == OledPage::kDialplate);
     vm.radioMode = RadioMode::kWifiConfig;
-    CHECK(twice(35300U).page == OledPage::kSubComm);
-    CHECK(twice(35900U).action.action == OledAction::kBluetooth);
+    CHECK(twice(35700U).page == OledPage::kSubComm);
+    CHECK(twice(36300U).action.action == OledAction::kBluetooth);
 }
 
 /** @brief 验证 UiEventBus 短按时间戳队列、OLED 在线标志、关机凭据和 kLink 动作。 */
@@ -921,6 +927,215 @@ void testUiEventBus() noexcept
     const auto request = bus.takeAction();
     CHECK(request.action == OledAction::kPairAccept && request.pairId == 11U);
     CHECK(bus.takeAction().action == OledAction::kNone);
+    bus.notifyLongKey(3000U);
+    CHECK(bus.longKeyCount() == 1U);
+    CHECK(bus.popLongKey(ts) && ts == 3000U && !bus.popLongKey(ts));
+    bus.updateKeyHold(true, 4000U, 2500U, false);
+    const KeyHoldSnapshot holdSnap = bus.readKeyHold();
+    CHECK(holdSnap.active && !holdSnap.standbyConfirm && holdSnap.startMs == 4000U &&
+          holdSnap.thresholdMs == 2500U);
+    bus.updateKeyHold(false, 4000U, 2500U, true);
+    const KeyHoldSnapshot wakeSnap = bus.readKeyHold();
+    CHECK(!wakeSnap.active && wakeSnap.standbyConfirm);
+}
+
+/** @brief 验证 OL4 长按 600..2500 ms 进度浮层、提前松开收起、POWER OFF? 确认/取消/5 s 超时与配对排队。 */
+void testHoldOverlayAndPowerOffConfirm() noexcept
+{
+    ViewModel vm = makeHealthyVm();
+    UiController ui{};
+    ui.reset(board::BootMode::kNormal, 0U);
+    const auto twice = [&](uint32_t now) {
+        const std::array<uint32_t, 2U> keys{now - 80U, now};
+        return ui.step(now, keys, vm);
+    };
+    const auto once = [&](uint32_t press) {
+        const std::array<uint32_t, 1U> keys{press};
+        return ui.step(press + kDoubleClickWindowMs, keys, vm);
+    };
+    CHECK(twice(200U).page == OledPage::kDialplate);
+
+    // 1. 按住 < 600 ms：不显浮层，精准预约 600 ms 唤醒。
+    vm.keyHold = {.active = true, .standbyConfirm = false, .startMs = 1000U, .thresholdMs = 2500U};
+    auto dec = ui.step(1400U, {}, vm);
+    CHECK(!ui.renderState(1400U).holdOverlayVisible && dec.nextWaitMs <= 200U);
+    dec = ui.step(1550U, {}, vm);
+    CHECK(!ui.renderState(1550U).holdOverlayVisible && dec.nextWaitMs == 50U);
+
+    // 2. 按住 600..2499 ms：浮层线性填充，提前松开不关机且进入 150 ms 收起动画。
+    dec = ui.step(1600U, {}, vm);
+    CHECK(ui.renderState(1600U).holdOverlayVisible && ui.renderState(1600U).holdProgressQ10 == 0U);
+    dec = ui.step(2550U, {}, vm);
+    CHECK(ui.renderState(2550U).holdOverlayVisible &&
+          ui.renderState(2550U).holdProgressQ10 == 512U);
+    vm.keyHold.active = false;
+    dec = ui.step(2600U, {}, vm);
+    CHECK(dec.action.action == OledAction::kNone && ui.renderState(2600U).holdOverlayVisible &&
+          ui.renderState(2600U).holdOverlayCollapsing);
+    dec = ui.step(2750U, {}, vm);
+    CHECK(!ui.renderState(2750U).holdOverlayVisible &&
+          !ui.renderState(2750U).holdOverlayCollapsing);
+
+    // 3. 长按到达 2500 ms：进入 POWER OFF? 确认页而非直接关机；期间配对弹窗排队不抢占。
+    dec = ui.step(3000U, {}, vm, true);
+    CHECK(dec.action.action == OledAction::kNone &&
+          ui.renderState(3000U).modal == UiModal::kPowerOffConfirm);
+    vm.pairing.id = 88U;
+    vm.pairing.requestDeadlineMs = 30000U;
+    dec = ui.step(3200U, {}, vm);
+    CHECK(ui.renderState(3200U).modal == UiModal::kPowerOffConfirm);
+    // 单击取消确认页后，排队中的配对弹窗立即显示。
+    dec = once(3300U);
+    CHECK(dec.action.action == OledAction::kNone && ui.renderState(3600U).modal == UiModal::kNone);
+    dec = ui.step(3650U, {}, vm);
+    CHECK(ui.renderState(3650U).modal == UiModal::kPair);
+    vm.pairing.id = 0U;
+    static_cast<void>(ui.step(3700U, {}, vm));
+
+    // 4. 5 s 倒计时超时自动取消。
+    dec = ui.step(4000U, {}, vm, true);
+    CHECK(ui.renderState(4000U).modal == UiModal::kPowerOffConfirm);
+    CHECK(ui.renderState(6000U).powerOffRemainMs == 3000U);
+    dec = ui.step(8999U, {}, vm);
+    CHECK(ui.renderState(8999U).modal == UiModal::kPowerOffConfirm);
+    dec = ui.step(9000U, {}, vm);
+    CHECK(ui.renderState(9000U).modal == UiModal::kNone && dec.action.action == OledAction::kNone);
+
+    // 5. 双击确认才提交 OledAction::kShutdownKey。
+    dec = ui.step(10000U, {}, vm, true);
+    CHECK(ui.renderState(10000U).modal == UiModal::kPowerOffConfirm);
+    dec = twice(10300U);
+    CHECK(dec.action.action == OledAction::kShutdownKey &&
+          ui.renderState(10300U).modal == UiModal::kNone);
+
+    // 6. 电源子页 Power off 项（索引 3）双击同样进入 POWER OFF? 确认页。
+    // 从 dock 0 单击 4 次选到 Power(4)，双击进入 kSubPower。
+    static_cast<void>(once(11000U));
+    static_cast<void>(once(11400U));
+    static_cast<void>(once(11800U));
+    static_cast<void>(once(12200U));
+    CHECK(twice(12700U).page == OledPage::kSubPower);
+    static_cast<void>(once(13200U));
+    static_cast<void>(once(13600U));
+    static_cast<void>(once(14000U));
+    CHECK(ui.subSelected() == 3U);
+    dec = twice(14500U);
+    CHECK(ui.renderState(14500U).modal == UiModal::kPowerOffConfirm);
+    CHECK(twice(14800U).action.action == OledAction::kShutdownKey);
+}
+
+/** @brief 验证 OL4 充电待机页唤醒环进度、松开回落、<= 2 fps 充电动画与充满静止 0 写入。 */
+void testStandbyRingAndChargeAnim() noexcept
+{
+    ViewModel vm = makeHealthyVm();
+    vm.bootMode = board::BootMode::kChargeStandby;
+    vm.usbPresent = true;
+    vm.charging = true;
+    vm.batteryPct = 76U;
+    vm.batteryMv = 4020U;
+
+    UiController ui{};
+    ui.reset(board::BootMode::kChargeStandby, 0U);
+    auto dec = ui.step(0U, {}, vm);
+    CHECK(dec.page == OledPage::kChargeStandby && !dec.animating &&
+          dec.nextWaitMs == kChargeAnimPeriodMs);
+
+    // 充电中 500 ms 步进（<= 2 fps），帧内容有流动变化。
+    ScreenBuff fb0{};
+    ScreenBuff fb1{};
+    renderUi(ui.renderState(0U), vm, fb0);
+    dec = ui.step(500U, {}, vm);
+    CHECK(dec.nextWaitMs == kChargeAnimPeriodMs);
+    renderUi(ui.renderState(500U), vm, fb1);
+    CHECK(std::memcmp(fb0, fb1, sizeof(ScreenBuff)) != 0);
+
+    // 充满后停止动画，恢复 200 ms 静止轮询且 0 像素变化。
+    vm.batteryPct = 100U;
+    vm.charging = false;
+    static_cast<void>(ui.step(1000U, {}, vm));
+    dec = ui.step(1300U, {}, vm); // 等待 NumberRoll 完成
+    CHECK(!dec.animating && dec.nextWaitMs == kIdlePollPeriodMs);
+    renderUi(ui.renderState(1300U), vm, fb0);
+    renderUi(ui.renderState(1800U), vm, fb1);
+    CHECK(std::memcmp(fb0, fb1, sizeof(ScreenBuff)) == 0);
+
+    // 按住按键：待机唤醒环实时填充，松开后平滑回落至 0。
+    vm.keyHold = {.active = true, .standbyConfirm = false, .startMs = 2000U, .thresholdMs = 2500U};
+    dec = ui.step(3250U, {}, vm);
+    CHECK(dec.animating && dec.nextWaitMs == kAnimFramePeriodMs &&
+          ui.renderState(3250U).standbyRingQ10 == 512U);
+    renderUi(ui.renderState(3250U), vm, fb1);
+    CHECK(std::memcmp(fb0, fb1, sizeof(ScreenBuff)) != 0);
+
+    vm.keyHold.active = false;
+    for (uint32_t t = 3283U; t <= 3600U; t += 33U) {
+        dec = ui.step(t, {}, vm);
+    }
+    CHECK(ui.renderState(3600U).standbyRingQ10 == 0U && !dec.animating);
+}
+
+/** @brief 验证 OL4 行弹簧 <= 180 ms、挤压回弹 <= 120 ms、60 s 自动回表盘、关机原因文案与 UTC 显示。 */
+void testSubpageSpringSquishAndIdleTimeout() noexcept
+{
+    // 1. 行间弹簧（17 px）须在 <= 180 ms 内收敛吸附。
+    FixedSpring rowSpring{};
+    rowSpring.snap(0);
+    rowSpring.retarget(kSubRowStepY);
+    for (uint32_t t = 0U; t < 180U; t += 15U) {
+        rowSpring.step(15U, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
+    }
+    CHECK(rowSpring.settled() && rowSpring.position() == kSubRowStepY);
+
+    // 2. 挤压回弹反馈：收缩 2 px 且 <= 120 ms 复原。
+    SquishAnim sq{};
+    sq.trigger(1000U);
+    CHECK(sq.pollActive(1000U) && sq.insetPx(1045U) == kSquishMaxPx);
+    CHECK(sq.pollActive(1090U) && sq.insetPx(1090U) < kSquishMaxPx);
+    CHECK(!sq.pollActive(1120U) && sq.insetPx(1120U) == 0);
+
+    // 3. 子页无操作 60 s 自动回表盘。
+    ViewModel vm = makeHealthyVm();
+    vm.utcValid = true;
+    vm.utcHour = 8U;
+    vm.utcMinute = 30U;
+    vm.utcSecond = 45U;
+    UiController ui{};
+    ui.reset(board::BootMode::kNormal, 0U);
+    const std::array<uint32_t, 2U> skipKeys{100U, 180U};
+    CHECK(ui.step(180U, skipKeys, vm).page == OledPage::kDialplate);
+    const std::array<uint32_t, 2U> enterSat{1000U, 1080U};
+    CHECK(ui.step(1080U, enterSat, vm).page == OledPage::kSubSat);
+    CHECK(ui.step(1080U + kSubpageIdleTimeoutMs - 1U, {}, vm).page == OledPage::kSubSat);
+    CHECK(ui.step(1080U + kSubpageIdleTimeoutMs, {}, vm).page == OledPage::kDialplate);
+
+    // 4. 关机原因文案与不同原因帧差异。
+    CHECK(std::string_view{shutdownReasonText(board::ShutdownReason::kKey)} == "KEY");
+    CHECK(std::string_view{shutdownReasonText(board::ShutdownReason::kConsole)} == "CONSOLE");
+    CHECK(std::string_view{shutdownReasonText(board::ShutdownReason::kLowBattery)} ==
+          "LOW BATTERY");
+    CHECK(std::string_view{shutdownReasonText(board::ShutdownReason::kPhone)} == "PHONE");
+    ScreenBuff fbKey{};
+    ScreenBuff fbLow{};
+    vm.shutdownStage = board::ShutdownStage::kSave;
+    vm.shutdownReason = board::ShutdownReason::kKey;
+    renderPage(OledPage::kShutdown, vm, fbKey);
+    vm.shutdownReason = board::ShutdownReason::kLowBattery;
+    renderPage(OledPage::kShutdown, vm, fbLow);
+    CHECK(std::memcmp(fbKey, fbLow, sizeof(ScreenBuff)) != 0);
+
+    // 5. 表盘 UTC 显示差异与解状态切换滚动。
+    ScreenBuff fbNoUtc{};
+    ScreenBuff fbUtc{};
+    vm.shutdownStage = board::ShutdownStage::kIdle;
+    vm.utcValid = false;
+    renderPage(OledPage::kDialplate, vm, fbNoUtc);
+    vm.utcValid = true;
+    renderPage(OledPage::kDialplate, vm, fbUtc);
+    CHECK(std::memcmp(fbNoUtc, fbUtc, sizeof(ScreenBuff)) != 0);
+
+    // 6. 表盘入口名枚举完备性。
+    CHECK(std::string_view{dockItemName(0U)} == "SATS");
+    CHECK(std::string_view{dockItemName(4U)} == "POWER");
 }
 
 } // namespace
@@ -941,6 +1156,9 @@ int main()
     testTransitionPose();
     testCommAndPairing();
     testUiEventBus();
+    testHoldOverlayAndPowerOffConfirm();
+    testStandbyRingAndChargeAnim();
+    testSubpageSpringSquishAndIdleTimeout();
     if (s_failures != 0) {
         std::printf("oled_ui_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;

@@ -1,4 +1,4 @@
-# Exercises the confirm overlay and pairing while another page is open.
+# Exercises the confirm overlay, Wi-Fi/BT switching, and pairing while another page is open.
 0 scene 5
 3000 check dialplate
 3050 short

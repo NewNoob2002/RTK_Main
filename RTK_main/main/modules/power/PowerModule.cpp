@@ -207,6 +207,7 @@ fw::Result PowerModule::init() noexcept
         return fw::Result::kInvalidState;
     }
     keyDriveHigh_ = false;
+    forcePowerOffFired_ = false;
     restartPending_ = false;
     restartStartMs_ = 0U;
     restartLogReady_ = false;
@@ -226,6 +227,7 @@ fw::Result PowerModule::init() noexcept
         return fw::Result::kIoError;
     }
     keySm_.reset(kPowerOffPressMs);
+    ctx().data.uiEvents.updateKeyHold(false, 0U, keySm_.longPressMs(), false);
     chargerSampled_ = false;
     chargerRetry_ = false;
     lastChargerStatus_ = board::ChargerInputStatus{};
@@ -916,12 +918,27 @@ bool PowerModule::poll(uint32_t nowMs) noexcept
         fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyLong), 0U, longPresses_,
                   static_cast<uint32_t>(ctx().bootMode));
         if (ctx().bootMode == board::BootMode::kNormal) {
-            static_cast<void>(power::requestShutdown(board::ShutdownReason::kKey));
+            if (ctx().data.uiEvents.oledActive()) {
+                ctx().data.uiEvents.notifyLongKey(nowMs);
+            } else {
+                static_cast<void>(power::requestShutdown(board::ShutdownReason::kKey));
+            }
         }
         break;
     case board::KeyEvent::kNone:
     default:
         break;
+    }
+    if (!keySm_.armed() || !keySm_.pressed()) {
+        forcePowerOffFired_ = false;
+    } else if ((ctx().bootMode == board::BootMode::kNormal) && !forcePowerOffFired_ &&
+               pins.keyPressed &&
+               ((nowMs - keySm_.pressStartMs()) >= board::kForcePowerOffHoldMs)) {
+        forcePowerOffFired_ = true;
+        if (power::requestShutdown(board::ShutdownReason::kKey)) {
+            FW_LOGW(fw::TraceCat::kSys, "force power-off fallback after %" PRIu32 " ms key hold",
+                    nowMs - keySm_.pressStartMs());
+        }
     }
 
     pollBattery(nowMs, pins);
@@ -930,6 +947,8 @@ bool PowerModule::poll(uint32_t nowMs) noexcept
     } else {
         stepShutdown(rtos::nowMs(), pins);
     }
+    ctx().data.uiEvents.updateKeyHold(keySm_.holding(), keySm_.pressStartMs(), keySm_.longPressMs(),
+                                      standbyWake_.active());
     publishSnapshot(pins, false);
     return false;
 }

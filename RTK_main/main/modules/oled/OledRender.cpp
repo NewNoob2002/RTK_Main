@@ -1,4 +1,5 @@
-// OLED WouoUI 图形渲染器（OL2）：Logo 展开、自检列表、表盘、四子菜单、关机进度环与页面过渡动画。
+// OLED WouoUI 图形渲染器（OL4）：自检打勾动画、表盘 UTC/状态滚动/入口名、统一左主卡右列表子页、
+// 充电待机重做、长按进度浮层、关机确认弹窗、关机原因与图标里程碑、展开错峰过渡。
 // 仅 OLED 任务或主机测试单线程串行调用；无 IDF/硬件依赖，无浮点、不分配堆，非 ISR。
 // 堆档位：禁止区；本文件不分配堆。
 #include "modules/oled/OledUi.hpp"
@@ -18,22 +19,27 @@ constexpr char kMinPrintableAscii = ' ';
 constexpr char kMaxPrintableAscii = '~';
 constexpr uint8_t kMaxPercent = 100U;
 constexpr uint16_t kCmPerMeter = 100U;
+constexpr uint32_t kMsPerSec = 1000U;
+constexpr uint16_t kHdopScale = 100U;
+constexpr uint16_t kDiffAgeScale = 10U;
+constexpr int16_t kThreeDigits = 3;
 
-// 通用顶栏/布局像素常量。
+// 通用 10 px 顶栏与基础布局像素常量。
 constexpr int16_t kHeaderTextY = 1;
-constexpr int16_t kHeaderLineY = 11;
+constexpr int16_t kHeaderLineY = 10;
 constexpr int16_t kDockIconOffsetX = 4; // (24 - 16) / 2
-constexpr int16_t kDockIconY = 46;
+constexpr int16_t kDockIconY = 47;
 constexpr int16_t kDockIconSize = 16;
+constexpr int16_t kDockLabelY = 36;
 constexpr uint8_t kDockCornerR = 3U;
 constexpr int16_t kParallaxShiftPx = 42;
 constexpr size_t kRollBufBytes = 12U;
 constexpr size_t kShortBufBytes = 16U;
 constexpr size_t kGnssTagBufBytes = 13U;
 constexpr size_t kWaitBufBytes = 12U;
-constexpr size_t kSubSatHdrBufBytes = 16U;
+constexpr size_t kSubSatHdrBufBytes = 20U;
 
-// 电池图标与状态栏像素常量。
+// 10 px 状态栏像素常量（表盘与统一子页共用）。
 constexpr int16_t kBatBoxW = 16;
 constexpr int16_t kBatBoxH = 8;
 constexpr int16_t kBatTipX1 = 16;
@@ -43,22 +49,22 @@ constexpr int16_t kBatTipY1 = 5;
 constexpr uint32_t kBatFillMaxW = 12U;
 constexpr int16_t kBatFillH = 4;
 constexpr int16_t kStatusSatTextX = 10;
-constexpr int16_t kStatusWarnX = 28;
+constexpr int16_t kStatusWarnX = 23;
+constexpr int16_t kStatusFixMinX = 32;
+constexpr int16_t kStatusFixAreaW = 34;
+constexpr int16_t kStatusRadioX = 69;
+constexpr int16_t kStatusBoltX = 79;
+constexpr int16_t kBoltW = 5;
 constexpr int16_t kIcon7W = 7;
 constexpr int16_t kIcon8H = 8;
-constexpr int16_t kStatusWifiX = 44;
-constexpr int16_t kStatusWifiApX = 54;
-constexpr int16_t kStatusBtX = 46;
-constexpr int16_t kStatusBoltX = 76;
-constexpr int16_t kBoltW = 5;
-constexpr int16_t kStatusPctUnknownX = 84;
-constexpr int16_t kStatusPct3DigitX = 83;
-constexpr int16_t kStatusPct2DigitX = 89;
-constexpr int16_t kStatusPct1DigitX = 95;
+constexpr int16_t kStatusPctUnknownX = 91;
+constexpr int16_t kStatusPct3DigitX = 85;
+constexpr int16_t kStatusPct2DigitX = 91;
+constexpr int16_t kStatusPct1DigitX = 97;
 constexpr uint8_t kTwoDigitMin = 10U;
-constexpr int16_t kStatusBatIconX = 109;
+constexpr int16_t kStatusBatIconX = 110;
 
-// 自检页像素常量。
+// 开机自检页像素常量。
 constexpr uint8_t kLogoBoxR = 3U;
 constexpr int16_t kLogoTitleY = 10;
 constexpr int16_t kLogoLineX0 = 18;
@@ -67,13 +73,19 @@ constexpr int16_t kLogoLineY = 38;
 constexpr int16_t kLogoFwY = 44;
 constexpr int16_t kCheckFracX = 106;
 constexpr int16_t kCheckRowStartY = 13;
-constexpr int16_t kCheckRowStepY = 8;
+constexpr int16_t kCheckRowStepY = 10;
+constexpr size_t kCheckVisibleRows = 4U;
 constexpr int16_t kCheckLabelX = 4;
 constexpr int16_t kCheckGnssInfoX = 44;
 constexpr int16_t kCheckFailX = 82;
-constexpr int16_t kCheckWaitX = 96;
-constexpr int16_t kCheckIconX = 118;
-constexpr int16_t kCheckSpinX = 119;
+constexpr int16_t kCheckWaitX = 94;
+constexpr int16_t kCheckIconX = 116;
+constexpr int16_t kCheckSpinX = 117;
+constexpr int16_t kCheckScrollX = 126;
+constexpr int16_t kCheckScrollY0 = 13;
+constexpr int16_t kCheckScrollH = 38;
+constexpr int16_t kCheckScrollThumbH = 30;
+constexpr int16_t kCheckScrollShiftPx = 8;
 constexpr int16_t kCheckBarY = 55;
 constexpr int16_t kCheckBarW = 124;
 constexpr int16_t kCheckBarH = 7;
@@ -81,18 +93,68 @@ constexpr int16_t kCheckBarFillY = 57;
 constexpr int16_t kCheckBarFillH = 3;
 constexpr uint32_t kCheckBarFillMaxW = 120U;
 constexpr uint32_t kSpinStepMs = 100U;
-constexpr uint32_t kMsPerSec = 1000U;
 constexpr size_t kCheckIdxGnss = 4U;
 
-// 表盘与子菜单像素常量。
-constexpr int16_t kDialBadgeY = 15;
-constexpr int16_t kDialInfoX = 72;
-constexpr int16_t kDialInfoTopY = 17;
-constexpr int16_t kDialInfoBotY = 29;
-constexpr int16_t kSubSatTitleX = 11;
+// 表盘中部像素常量。
+constexpr int16_t kDialHeroX = 2;
+constexpr int16_t kDialHeroY = 12;
+constexpr int16_t kDialHeroW = 60;
+constexpr int16_t kDialHeroH = 24;
+constexpr int16_t kDialInfoMinX = 62;
+constexpr int16_t kDialRightEdgeX = 127;
+constexpr size_t kDialRightMaxChars = 11U;
+constexpr int16_t kDialInfoTopY = 13;
+constexpr int16_t kDialInfoBotY = 24;
+constexpr int16_t kDockPillY = 35;
+constexpr int16_t kDockPillH = 9;
+// 统一子页框架（左 40×52 主卡 + 右 3 行列表 + 3 px 滚动条）像素常量。
+constexpr int16_t kSubBodyY = 12;
+constexpr int16_t kSubCardX = 0;
+constexpr int16_t kSubCardW = 40;
+constexpr int16_t kSubCardH = 52;
+constexpr uint8_t kSubCardR = 3U;
+constexpr int16_t kSubCardIconX = 12;
+constexpr int16_t kSubCardIconY = 4;
+constexpr int16_t kSubCardVal1Y = 24;
+constexpr int16_t kSubCardVal2Y = 37;
+constexpr int16_t kSubListX = 42;
+constexpr int16_t kSubListW = 82;
+constexpr int16_t kSubListH = 52;
+constexpr int16_t kSubRowH = 16;
+constexpr int16_t kSubRowIconX = 3;
+constexpr int16_t kSubRowIconYOff = 4;
+constexpr int16_t kSubRowTextX = 11;
+constexpr int16_t kSubRowValRightX = 80;
+constexpr int16_t kSubScrollX = 125;
+constexpr int16_t kSubScrollTrackY0 = 13;
+constexpr int16_t kSubScrollTrackH = 50;
+constexpr int16_t kSubScrollThumbW = 3;
+constexpr int16_t kSubScrollMinThumbH = 10;
+constexpr int16_t kCardBatCapX = 17;
+constexpr int16_t kCardBatCapY = 4;
+constexpr int16_t kCardBatCapW = 6;
+constexpr int16_t kCardBatCapH = 2;
+constexpr int16_t kCardBatBodyX = 14;
+constexpr int16_t kCardBatBodyY = 6;
+constexpr int16_t kCardBatBodyW = 12;
+constexpr int16_t kCardBatBodyH = 14;
+constexpr uint32_t kCardBatFillMaxH = 10U;
+constexpr int16_t kCardBatFillX = 16;
+constexpr int16_t kCardBatFillBaseY = 18;
+constexpr int16_t kCardBatFillW = 8;
+constexpr size_t kSubRowLabelBytes = 12U;
+constexpr size_t kSubRowValBytes = 16U;
+constexpr size_t kSubPosRowCount = 5U;
+constexpr size_t kSubCommWifiRowCount = 3U;
+constexpr size_t kSubCommBtRowCount = 4U;
+constexpr size_t kSubDeviceRowCount = 5U;
+constexpr size_t kSubPowerRowCount = 5U;
+
+// 卫星子页像素常量。
+constexpr int16_t kSubSatTitleX = 10;
 constexpr int16_t kSubSatColStartX = 6;
 constexpr int16_t kSubSatColStepX = 31;
-constexpr int16_t kSubSatCountY = 14;
+constexpr int16_t kSubSatCountY = 13;
 constexpr int16_t kSubSatVisBarW = 14;
 constexpr int16_t kSubSatUsedBarOffX = 6;
 constexpr int16_t kSubSatUsedBarW = 10;
@@ -102,33 +164,46 @@ constexpr int16_t kSubSnrStartX = 4;
 constexpr int16_t kSubSnrStepX = 15;
 constexpr int16_t kSubSnrBarW = 10;
 constexpr int16_t kSubSnrLetterOffX = 3;
-constexpr int16_t kSubLine0Y = 15;
-constexpr int16_t kSubLine1Y = 27;
-constexpr int16_t kSubLine2Y = 39;
-constexpr int16_t kSubLine3Y = 51;
-constexpr int16_t kSubPwrUsbX = 86;
-constexpr int16_t kSubPwrVoltX = 74;
-constexpr int16_t kSubPwrVoltY = 20;
-constexpr int16_t kSubPwrBarY = 36;
-constexpr int16_t kSubPwrBarW = 112;
-constexpr int16_t kSubPwrBarH = 10;
-constexpr int16_t kSubPwrFillX = 10;
-constexpr int16_t kSubPwrFillY = 38;
-constexpr int16_t kSubPwrFillH = 6;
-constexpr uint32_t kSubPwrFillMaxW = 108U;
-constexpr int16_t kSubPwrChgY = 52;
 
-// 通信页菜单按显示行排列，确认弹窗为整屏描边。
-constexpr int16_t kCommTextX = 6;
-constexpr int16_t kCommStatusY = 13;
-constexpr int16_t kCommWifiClientsY = 23;
-constexpr int16_t kCommWifiModeY = 36;
-constexpr int16_t kCommWifiBackY = 49;
-constexpr int16_t kCommBtModeY = 26;
-constexpr int16_t kCommPairWindowY = 38;
-constexpr int16_t kCommBtBackY = 50;
-constexpr int16_t kCommItemH = 11;
-constexpr uint8_t kCommModalR = 3U;
+// 充电待机页像素常量（左侧大号电量 + 流动电池条，右侧保持进度环，底部 FW/HW）。
+constexpr int16_t kStandbyStatusY = 2;
+constexpr int16_t kStandbyVoltX = 30;
+constexpr int16_t kStandbyPctX = 2;
+constexpr int16_t kStandbyPctY = 13;
+constexpr int16_t kStandbyBarX = 2;
+constexpr int16_t kStandbyBarY = 39;
+constexpr int16_t kStandbyBarW = 62;
+constexpr int16_t kStandbyBarH = 9;
+constexpr int16_t kStandbyFillX = 4;
+constexpr int16_t kStandbyFillY = 41;
+constexpr int16_t kStandbyFillH = 5;
+constexpr uint32_t kStandbyFillMaxW = 58U;
+constexpr int16_t kStandbyRingCx = 98;
+constexpr int16_t kStandbyRingCy = 20;
+constexpr int16_t kStandbyHintX = 68;
+constexpr int16_t kStandbyHintY = 40;
+constexpr int16_t kStandbyFooterLineY = 52;
+constexpr int16_t kStandbyFooterTextY = 54;
+constexpr int16_t kStandbyUnknownPctOffX = 26;
+constexpr int16_t kStandbyPctSignOffY = 7;
+constexpr uint32_t kChargeStripeStepPx = 3U;
+constexpr int16_t kChargeStripePitchPx = 12;
+constexpr int16_t kChargePulseH = 3;
+
+// 关机页与弹窗/浮层像素常量。
+constexpr int16_t kRingCx = 26;
+constexpr int16_t kRingCy = 38;
+constexpr int16_t kRingDotSize = 3;
+constexpr int16_t kShutPctY = 34;
+constexpr int16_t kShutRightX = 50;
+constexpr int16_t kShutStageY = 17;
+constexpr int16_t kShutBarY = 30;
+constexpr int16_t kShutBarW = 74;
+constexpr int16_t kShutFillX = 52;
+constexpr int16_t kShutFillY = 32;
+constexpr uint32_t kShutFillMaxW = 70U;
+constexpr int16_t kShutStepsY = 44;
+constexpr uint8_t kModalCornerR = 3U;
 constexpr int16_t kWifiModalTitleY = 9;
 constexpr int16_t kWifiModalWarningY = 26;
 constexpr int16_t kWifiModalControlsY = 49;
@@ -136,32 +211,30 @@ constexpr int16_t kPairModalTitleY = 7;
 constexpr int16_t kPairModalPeerY = 18;
 constexpr int16_t kPairModalNumberY = 29;
 constexpr int16_t kPairModalControlsY = 51;
+constexpr int16_t kPwrModalTitleY = 10;
+constexpr int16_t kPwrModalHintY = 25;
+constexpr int16_t kPwrModalBarX = 12;
+constexpr int16_t kPwrModalBarY = 41;
+constexpr int16_t kPwrModalBarW = 84;
+constexpr int16_t kPwrModalBarH = 8;
+constexpr int16_t kPwrModalSecX = 101;
+constexpr int16_t kPwrModalTextOffX = 11;
+constexpr int16_t kShutPendingDotOffY = 3;
+constexpr int16_t kHoldBoxY = 10;
+constexpr int16_t kHoldBoxW = 116;
+constexpr int16_t kHoldBoxH = 44;
+constexpr int16_t kHoldCollapseMinW = 24;
+constexpr int16_t kHoldContentMinH = 28;
+constexpr int16_t kHoldTitleY = 6;
+constexpr int16_t kHoldIconY = 20;
 
-// 充电待机与关机页像素常量。
-constexpr int16_t kStandbyPctX = 14;
-constexpr int16_t kStandbyPctY = 17;
-constexpr int16_t kStandbyVoltX = 76;
-constexpr int16_t kStandbyVoltY = 21;
-constexpr int16_t kStandbyBarX = 14;
-constexpr int16_t kStandbyBarY = 39;
-constexpr int16_t kStandbyBarW = 100;
-constexpr int16_t kStandbyBarH = 10;
-constexpr int16_t kStandbyFillY = 41;
-constexpr int16_t kStandbyFillH = 6;
-constexpr uint32_t kStandbyFillMaxW = 96U;
-constexpr int16_t kStandbyHintY = 54;
-constexpr int16_t kRingCx = 24;
-constexpr int16_t kRingCy = 38;
-constexpr int16_t kRingDotSize = 3;
-constexpr int16_t kShutPctY = 34;
-constexpr int16_t kShutRightX = 48;
-constexpr int16_t kShutStageY = 20;
-constexpr int16_t kShutBarY = 34;
-constexpr int16_t kShutBarW = 76;
-constexpr int16_t kShutFillX = 50;
-constexpr int16_t kShutFillY = 36;
-constexpr uint32_t kShutFillMaxW = 72U;
-constexpr int16_t kShutStepsY = 48;
+/** 统一子页列表项描述（零堆定长结构）。 */
+struct SubListRow {
+    const uint8_t *icon7x8 = nullptr;
+    std::array<char, kSubRowLabelBytes> label{};
+    std::array<char, kSubRowValBytes> value{};
+    bool isBack = false;
+};
 
 /**
  * @brief 在 NUL 结尾字符数组中取得有效文本视图
@@ -244,25 +317,21 @@ void drawCentered(Canvas &canvas, int16_t y, const sFONT &font, std::string_view
  * @param x: 区域左上角 x
  * @param y: 区域左上角 y
  * @param font: 字体
- * @param roll: 数字滚动器指针（允许 nullptr）
- * @param fallbackValue: 无滚动器时显示的数值
- * @param suffix: 紧随数值的后缀（如 "%" 或 ""）
+ * @param roll: 对应 NumberRoll 状态（可为 nullptr 表示静态绘制）
+ * @param value: 当前显示数值
+ * @param suffix: 可选后缀（如 `"%"` 或空串）
  * @param nowMs: 当前单调时间（ms）
- * @note 纯整数定点计算，不分配堆。
+ * @note 纯定点，不分配堆。
  */
 void drawRollingValue(const Canvas &parent, int16_t x, int16_t y, const sFONT &font,
-                      const NumberRoll *roll, int32_t fallbackValue, std::string_view suffix,
+                      const NumberRoll *roll, int32_t value, std::string_view suffix,
                       uint32_t nowMs) noexcept
 {
     std::array<char, kRollBufBytes> curBuf{};
-    const int32_t curVal = (roll != nullptr) ? roll->current() : fallbackValue;
-    static_cast<void>(std::snprintf(curBuf.data(), curBuf.size(), "%d%.*s",
-                                    static_cast<int>(curVal), static_cast<int>(suffix.size()),
-                                    suffix.data()));
-
-    const int16_t clipH = static_cast<int16_t>(font.Height);
+    static_cast<void>(std::snprintf(curBuf.data(), curBuf.size(), "%d%.*s", static_cast<int>(value),
+                                    static_cast<int>(suffix.size()), suffix.data()));
     const uint16_t textW = WouoUI_GetStrWidth(curBuf.data(), font);
-    // 画布最大宽度不超过 128，窄化安全。
+    const int16_t clipH = static_cast<int16_t>(font.Height);
     const int16_t clipW = static_cast<int16_t>(std::min<uint16_t>(textW + font.Width, kWidth));
     Canvas clip{
         .start_x = static_cast<int16_t>(parent.start_x + x),
@@ -310,7 +379,6 @@ void drawBatteryIcon(Canvas &canvas, int16_t x, int16_t y, uint8_t pct) noexcept
         return;
     }
     const uint8_t clamped = std::min(pct, kMaxPercent);
-    // 内宽 12 px，clamped <= 100，乘法与窄化均安全。
     const auto fillW =
         static_cast<int16_t>((static_cast<uint32_t>(clamped) * kBatFillMaxW) / kMaxPercent);
     if (fillW > 0) {
@@ -320,11 +388,36 @@ void drawBatteryIcon(Canvas &canvas, int16_t x, int16_t y, uint8_t pct) noexcept
 }
 
 /**
- * @brief 绘制表盘顶部状态栏（卫星图标+数、自检告警、蓝牙/Wi-Fi、充电闪电、电量百分比与电池图标）
+ * @brief 绘制 32 点圆形进度环（半径 15 px，外圈未亮段用点状底轨表示）
+ * @param canvas: 目标画布
+ * @param cx: 圆心 x
+ * @param cy: 圆心 y
+ * @param progressQ10: 进度（0..1024）
+ * @note 供关机页和充电待机唤醒环共用。
+ */
+void drawProgressRing(Canvas &canvas, int16_t cx, int16_t cy, uint16_t progressQ10) noexcept
+{
+    const uint16_t clamped = std::min(progressQ10, kEaseScale);
+    const size_t litCount =
+        (static_cast<size_t>(clamped) * icons::kRingPts32.size()) / static_cast<size_t>(kEaseScale);
+    for (size_t i = 0U; i < icons::kRingPts32.size(); ++i) {
+        const int16_t px = static_cast<int16_t>(cx + icons::kRingPts32[i].dx);
+        const int16_t py = static_cast<int16_t>(cy + icons::kRingPts32[i].dy);
+        if (i < litCount) {
+            WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(px - 1),
+                                  static_cast<int16_t>(py - 1), kRingDotSize, kRingDotSize, 0U);
+        } else if ((i & 1U) == 0U) {
+            WouoUI_CanvasDrawPoint(&canvas, px, py);
+        }
+    }
+}
+
+/**
+ * @brief 绘制表盘与子页共用的顶部 10 px 状态栏（卫星数、告警、解状态、BT/Wi-Fi、充电闪电与电量）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
- * @note 仅 renderDialplate 调用。
+ * @note 不分配堆。
  */
 void drawStatusBar(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
@@ -342,15 +435,24 @@ void drawStatusBar(Canvas &canvas, const UiRenderState &state, const ViewModel &
                              icons::kWarn7x8.data(), 1U);
     }
 
+    // 中部解状态短词（与表盘和所有子页顶栏统一）。
+    const char *const badge = dialHeroBadge(vm);
+    const uint16_t bw = WouoUI_GetStrWidth(badge, Font_6_8);
+    const int16_t badgeX =
+        (bw < static_cast<uint16_t>(kStatusFixAreaW))
+            ? static_cast<int16_t>(kStatusFixMinX +
+                                   ((kStatusFixAreaW - static_cast<int16_t>(bw)) / 2))
+            : kStatusFixMinX;
+    drawText(canvas, badgeX, kHeaderTextY, Font_6_8, badge);
+
     // 射频状态图标：Wi-Fi 模式画 Wi-Fi 扇形，蓝牙模式区分已连接/待机。
     if (vm.radioMode == RadioMode::kWifiConfig) {
-        WouoUI_CanvasDrawBMP(&canvas, kStatusWifiX, kHeaderTextY, kIcon8H, kIcon8H,
+        WouoUI_CanvasDrawBMP(&canvas, kStatusRadioX, kHeaderTextY, kIcon8H, kIcon8H,
                              icons::kWifi8x8.data(), 1U);
-        drawText(canvas, kStatusWifiApX, kHeaderTextY, Font_6_8, "AP");
     } else if (vm.btReady) {
         const uint8_t *btBmp =
             (vm.btSessions > 0U) ? icons::kBtConn8x8.data() : icons::kBtWait8x8.data();
-        WouoUI_CanvasDrawBMP(&canvas, kStatusBtX, kHeaderTextY, kIcon8H, kIcon8H, btBmp, 1U);
+        WouoUI_CanvasDrawBMP(&canvas, kStatusRadioX, kHeaderTextY, kIcon8H, kIcon8H, btBmp, 1U);
     }
 
     if (vm.charging) {
@@ -402,22 +504,20 @@ void renderSystemCheckLogo(const Canvas &canvas, const SystemCheckSm *sm, uint32
 }
 
 /**
- * @brief 渲染自检列表单行（名称、GNSS 型号/固件、状态图标或 Pending 旋转动画）
+ * @brief 渲染自检列表单行（名称、GNSS 型号/固件、逐项打勾展开动画或 Pending 旋转动画）
  * @param canvas: 目标画布
  * @param idx: 自检项下标（0..4）
+ * @param rowY: 本行顶边像素 Y 坐标
  * @param label: 左侧名称
  * @param state: 渲染状态
  * @param vm: 视图数据
  * @note 仅 renderSystemCheck 调用。
  */
-void renderSystemCheckRow(Canvas &canvas, size_t idx, const char *label, const UiRenderState &state,
-                          const ViewModel &vm) noexcept
+void renderSystemCheckRow(Canvas &canvas, size_t idx, int16_t rowY, const char *label,
+                          const UiRenderState &state, const ViewModel &vm) noexcept
 {
     constexpr std::array<char, 4U> kSpinner{'|', '/', '-', '\\'};
     const SystemCheckSm *sm = state.checkSm;
-    // idx < 5，行坐标在 13..45，转 int16_t 安全。
-    const auto rowY =
-        static_cast<int16_t>(kCheckRowStartY + (static_cast<int16_t>(idx) * kCheckRowStepY));
     drawText(canvas, kCheckLabelX, rowY, Font_6_8, label);
 
     const CheckStatus st = sm->itemStatus(idx);
@@ -432,8 +532,17 @@ void renderSystemCheckRow(Canvas &canvas, size_t idx, const char *label, const U
             }
             drawText(canvas, kCheckGnssInfoX, rowY, Font_6_8, viewOf(gnssTag));
         }
-        WouoUI_CanvasDrawBMP(&canvas, kCheckIconX, rowY, kIcon7W, kIcon8H, icons::kCheck7x8.data(),
-                             1U);
+        // 逐项打勾左向右展开动画（150 ms）。
+        const uint32_t sinceOk = state.nowMs - sm->itemResolvedMs(idx);
+        const uint16_t tickProg = easeOutCubic(sinceOk, kCheckTickAnimMs);
+        const int16_t clipW = std::max<int16_t>(1, lerpFixed(1, kIcon7W, tickProg));
+        Canvas tickClip{
+            .start_x = static_cast<int16_t>(canvas.start_x + kCheckIconX),
+            .start_y = static_cast<int16_t>(canvas.start_y + rowY),
+            .w = clipW,
+            .h = kIcon8H,
+        };
+        WouoUI_CanvasDrawBMP(&tickClip, 0, 0, kIcon7W, kIcon8H, icons::kCheck7x8.data(), 1U);
         return;
     }
     if (st == CheckStatus::kFail) {
@@ -462,7 +571,7 @@ void renderSystemCheckRow(Canvas &canvas, size_t idx, const char *label, const U
 }
 
 /**
- * @brief 渲染开机自检页（Logo 逐列展开 -> 5 项实时状态列表与底部进度条）
+ * @brief 渲染开机自检页（Logo 逐列展开 -> 5 项逐项打勾列表与平滑进度条）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -491,20 +600,125 @@ void renderSystemCheck(Canvas &canvas, const UiRenderState &state, const ViewMod
         "PWR/BAT", "NVS",  (vm.radioMode == RadioMode::kWifiConfig) ? "WIFI AP" : "BT SPP",
         "CHARGER", "GNSS",
     };
-    for (size_t i = 0U; i < kCheckItemCount; ++i) {
-        renderSystemCheckRow(canvas, i, kNames[i], state, vm);
+    // 每屏最多显示 4 行（行距 10 px 避免 6×8 字体上下粘连），检查到第 5 项或完成时滚动显示后 4 项。
+    const size_t activeIdx =
+        (phase == CheckPhase::kChecking) ? sm->currentIndex() : (kCheckItemCount - 1U);
+    const size_t firstIdx =
+        (activeIdx >= kCheckVisibleRows) ? (kCheckItemCount - kCheckVisibleRows) : 0U;
+    for (size_t slot = 0U; slot < kCheckVisibleRows; ++slot) {
+        const size_t idx = firstIdx + slot;
+        const auto rowY =
+            static_cast<int16_t>(kCheckRowStartY + (static_cast<int16_t>(slot) * kCheckRowStepY));
+        renderSystemCheckRow(canvas, idx, rowY, kNames[idx], state, vm);
     }
-
+    for (int16_t y = kCheckScrollY0; y < (kCheckScrollY0 + kCheckScrollH);
+         y = static_cast<int16_t>(y + 2)) {
+        WouoUI_CanvasDrawPoint(&canvas, kCheckScrollX, y);
+    }
+    const auto thumbY =
+        static_cast<int16_t>(kCheckScrollY0 + ((firstIdx > 0U) ? kCheckScrollShiftPx : 0));
+    WouoUI_CanvasDrawRBox(&canvas, kCheckScrollX, thumbY, 2, kCheckScrollThumbH, 0U);
     WouoUI_CanvasDrawRBoxEmpty(&canvas, 2, kCheckBarY, kCheckBarW, kCheckBarH, 1U);
-    const auto fillW = static_cast<int16_t>((static_cast<uint32_t>(doneCount) * kCheckBarFillMaxW) /
-                                            kCheckItemCount);
+    uint32_t smoothUnits = static_cast<uint32_t>(doneCount) * kEaseScale;
+    if ((phase == CheckPhase::kChecking) && (sm->itemStatus(doneCount) != CheckStatus::kPending)) {
+        smoothUnits += easeOutCubic(state.nowMs - sm->itemResolvedMs(doneCount), kCheckTickAnimMs);
+    }
+    const auto fillW = static_cast<int16_t>((smoothUnits * kCheckBarFillMaxW) /
+                                            (kCheckItemCount * static_cast<uint32_t>(kEaseScale)));
     if (fillW > 0) {
         WouoUI_CanvasDrawRBox(&canvas, 4, kCheckBarFillY, fillW, kCheckBarFillH, 0U);
     }
 }
 
 /**
- * @brief 渲染主表盘（顶栏 + 中部大号解状态/精度 + 底部 4 图标入口与弹簧选中框）
+ * @brief 格式化表盘右侧卫星数摘要文本（`SAT used/vis` 或 `SAT used`）
+ * @param vm: 视图数据
+ * @param[out] out: 输出缓冲区
+ * @note 仅 formatDialGnssRight 调用，不分配堆。
+ */
+void formatDialSatLine(const ViewModel &vm, std::span<char> out) noexcept
+{
+    const unsigned used = vm.fixValid ? static_cast<unsigned>(vm.satsUsed) : 0U;
+    if (vm.satsVisible > 0U) {
+        static_cast<void>(std::snprintf(out.data(), out.size(), "SAT %u/%u", used,
+                                        static_cast<unsigned>(vm.satsVisible)));
+    } else {
+        static_cast<void>(std::snprintf(out.data(), out.size(), "SAT %u", used));
+    }
+}
+
+/**
+ * @brief 格式化表盘右侧双行摘要（GNSS 运行中分支：优先显示 UTC + 精度/卫星，否则精度 + 卫星）
+ * @param vm: 视图数据
+ * @param[out] topOut: 顶行输出缓冲区
+ * @param[out] botOut: 底行输出缓冲区
+ * @note 仅 formatDialRightInfo 调用，不分配堆。
+ */
+void formatDialGnssRight(const ViewModel &vm, std::span<char> topOut,
+                         std::span<char> botOut) noexcept
+{
+    if (vm.utcValid) {
+        static_cast<void>(std::snprintf(
+            topOut.data(), topOut.size(), "%02u:%02u:%02uZ", static_cast<unsigned>(vm.utcHour),
+            static_cast<unsigned>(vm.utcMinute), static_cast<unsigned>(vm.utcSecond)));
+        if (vm.hAccCm != gnss::kU16Unknown) {
+            const unsigned used = vm.fixValid ? static_cast<unsigned>(vm.satsUsed) : 0U;
+            if (vm.satsVisible > 0U) {
+                const int written = std::snprintf(botOut.data(), botOut.size(), "%u.%02um %u/%u",
+                                                  static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
+                                                  static_cast<unsigned>(vm.hAccCm % kCmPerMeter),
+                                                  used, static_cast<unsigned>(vm.satsVisible));
+                if ((written > 0) && (static_cast<size_t>(written) <= kDialRightMaxChars)) {
+                    return;
+                }
+            }
+            static_cast<void>(std::snprintf(botOut.data(), botOut.size(), "ACC %u.%02um",
+                                            static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
+                                            static_cast<unsigned>(vm.hAccCm % kCmPerMeter)));
+        } else if (vm.fixValid || (vm.satsVisible > 0U)) {
+            formatDialSatLine(vm, botOut);
+        } else {
+            sanitizeCopy("NO FIX", botOut);
+        }
+        return;
+    }
+    if (vm.hAccCm != gnss::kU16Unknown) {
+        static_cast<void>(std::snprintf(topOut.data(), topOut.size(), "%u.%02um",
+                                        static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
+                                        static_cast<unsigned>(vm.hAccCm % kCmPerMeter)));
+    } else {
+        sanitizeCopy(vm.fixValid ? "ACC --" : "NO FIX", topOut);
+    }
+    formatDialSatLine(vm, botOut);
+}
+
+/**
+ * @brief 格式化表盘右侧双行摘要文本
+ * @param vm: 视图数据
+ * @param[out] topOut: 顶行输出缓冲区
+ * @param[out] botOut: 底行输出缓冲区
+ * @note 仅 renderDialplate 调用，不分配堆。
+ */
+void formatDialRightInfo(const ViewModel &vm, std::span<char> topOut,
+                         std::span<char> botOut) noexcept
+{
+    if (vm.workModeActive && (vm.workMode != WorkModeKind::kRover)) {
+        static_cast<void>(std::snprintf(topOut.data(), topOut.size(), "%us",
+                                        static_cast<unsigned>(vm.workModeElapsedS)));
+        sanitizeCopy(vm.workModeState == WorkModeState::kBaseTx ? "TX RTCM" : "BASE", botOut);
+        return;
+    }
+    if (vm.gnssEnabled && isGnssRunningLike(vm.gnssState)) {
+        formatDialGnssRight(vm, topOut, botOut);
+        return;
+    }
+    const DialGnssDetail detail = dialGnssDetail(vm);
+    sanitizeCopy(detail.top, topOut);
+    sanitizeCopy(detail.bot, botOut);
+}
+
+/**
+ * @brief 渲染主表盘（10 px 状态栏 + 大号滚动解状态 + UTC/精度 + 选中入口名 + 5 图标弹簧底座）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -514,54 +728,272 @@ void renderDialplate(Canvas &canvas, const UiRenderState &state, const ViewModel
 {
     drawStatusBar(canvas, state, vm);
 
-    const char *badge = dialHeroBadge(vm);
-    drawText(canvas, 2, kDialBadgeY, Font_12_24, badge);
+    // 左侧大号解状态，支持状态切换 180 ms 竖向滚动切入。
+    const char *const badge = dialHeroBadge(vm);
+    Canvas heroClip{
+        .start_x = static_cast<int16_t>(canvas.start_x + kDialHeroX),
+        .start_y = static_cast<int16_t>(canvas.start_y + kDialHeroY),
+        .w = kDialHeroW,
+        .h = kDialHeroH,
+    };
+    if ((state.heroRollQ10 < kEaseScale) && (state.heroPrevBadge != nullptr)) {
+        const int16_t offset = lerpFixed(0, kDialHeroH, state.heroRollQ10);
+        drawText(heroClip, 0, static_cast<int16_t>(-offset), Font_12_24, state.heroPrevBadge);
+        drawText(heroClip, 0, static_cast<int16_t>(kDialHeroH - offset), Font_12_24, badge);
+    } else {
+        drawText(heroClip, 0, 0, Font_12_24, badge);
+    }
 
     std::array<char, kShortBufBytes> rightTop{};
     std::array<char, kShortBufBytes> rightBot{};
-    if (vm.workModeActive && (vm.workMode != WorkModeKind::kRover)) {
-        static_cast<void>(std::snprintf(rightTop.data(), rightTop.size(), "%us",
-                                        static_cast<unsigned>(vm.workModeElapsedS)));
-        sanitizeCopy(vm.workModeState == WorkModeState::kBaseTx ? "TX RTCM" : "BASE", rightBot);
-    } else if (vm.gnssEnabled && isGnssRunningLike(vm.gnssState)) {
-        if (vm.hAccCm != gnss::kU16Unknown) {
-            static_cast<void>(std::snprintf(rightTop.data(), rightTop.size(), "%u.%02um",
-                                            static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
-                                            static_cast<unsigned>(vm.hAccCm % kCmPerMeter)));
-        } else {
-            sanitizeCopy(vm.fixValid ? "ACC --" : "NO FIX", rightTop);
-        }
-        const unsigned used = vm.fixValid ? static_cast<unsigned>(vm.satsUsed) : 0U;
-        if (vm.satsVisible > 0U) {
-            static_cast<void>(std::snprintf(rightBot.data(), rightBot.size(), "SAT %u/%u", used,
-                                            static_cast<unsigned>(vm.satsVisible)));
-        } else {
-            static_cast<void>(std::snprintf(rightBot.data(), rightBot.size(), "SAT %u", used));
-        }
-    } else {
-        const DialGnssDetail detail = dialGnssDetail(vm);
-        sanitizeCopy(detail.top, rightTop);
-        sanitizeCopy(detail.bot, rightBot);
-    }
-    drawText(canvas, kDialInfoX, kDialInfoTopY, Font_6_8, viewOf(rightTop));
-    drawText(canvas, kDialInfoX, kDialInfoBotY, Font_6_8, viewOf(rightBot));
-
+    formatDialRightInfo(vm, rightTop, rightBot);
+    const int16_t topW = static_cast<int16_t>(WouoUI_GetStrWidth(rightTop.data(), Font_6_8));
+    const int16_t botW = static_cast<int16_t>(WouoUI_GetStrWidth(rightBot.data(), Font_6_8));
+    const int16_t topX =
+        std::max<int16_t>(kDialInfoMinX, static_cast<int16_t>(kDialRightEdgeX - topW));
+    const int16_t botX =
+        std::max<int16_t>(kDialInfoMinX, static_cast<int16_t>(kDialRightEdgeX - botW));
+    drawText(canvas, topX, kDialInfoTopY, Font_6_8, viewOf(rightTop));
+    drawText(canvas, botX, kDialInfoBotY, Font_6_8, viewOf(rightBot));
+    // 底部 dock 选中项上方反白胶囊标签，明确标识当前入口并跟随选中框中心。
+    const char *const dockName = dockItemName(state.dockSelected);
+    const int16_t nameW = static_cast<int16_t>(WouoUI_GetStrWidth(dockName, Font_6_8));
+    const int16_t pillW = static_cast<int16_t>(nameW + 4);
+    const int16_t centerX = static_cast<int16_t>(state.dockFocusX + (kDockW / 2));
+    const int16_t pillX = std::clamp<int16_t>(static_cast<int16_t>(centerX - (pillW / 2)), 0,
+                                              static_cast<int16_t>(kCanvasW - pillW));
+    WouoUI_CanvasDrawRBox(&canvas, pillX, kDockPillY, pillW, kDockPillH, 1U);
+    WouoUI_GraphSetPenColor(0U);
+    drawText(canvas, static_cast<int16_t>(pillX + 2), kDockLabelY, Font_6_8, dockName);
+    WouoUI_GraphSetPenColor(1U);
     const std::array<const uint8_t *, kDockItemCount> kDockIcons{
         icons::kDockSat16x16.data(), icons::kDockPos16x16.data(), icons::kDockComm16x16.data(),
         icons::kDockDev16x16.data(), icons::kDockPwr16x16.data(),
     };
     for (uint8_t i = 0U; i < kDockItemCount; ++i) {
-        // i < 5，坐标位于 6..106，转 int16_t 安全。
         const auto iconX = static_cast<int16_t>(
             kDockStartX + (static_cast<int16_t>(i) * kDockStepX) + kDockIconOffsetX);
         WouoUI_CanvasDrawBMP(&canvas, iconX, kDockIconY, kDockIconSize, kDockIconSize,
                              kDockIcons[i], 1U);
     }
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, state.dockFocusX, kDockY, kDockW, kDockH, kDockCornerR);
+    const int16_t inset = (state.page == OledPage::kDialplate) ? state.squishInset : 0;
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, static_cast<int16_t>(state.dockFocusX + inset),
+                               static_cast<int16_t>(kDockY + inset),
+                               static_cast<int16_t>(kDockW - (2 * inset)),
+                               static_cast<int16_t>(kDockH - (2 * inset)), kDockCornerR);
 }
 
 /**
- * @brief 渲染卫星子菜单子页 0（GPS/BDS/GLO/GAL 可见与参与解算柱状图）
+ * @brief 绘制统一子页左侧 40×52 主卡（圆角框 + 16×16 图标 + 关键值 + 辅助短词）
+ * @param canvas: 目标画布
+ * @param state: 渲染状态（提供错峰偏移与电池滚动）
+ * @param icon16x16: 16×16 图标（nullptr 表示改用动态电池图形）
+ * @param keyVal: 主关键值（居中，最多 6 字符）
+ * @param subVal: 次短词（居中，最多 6 字符）
+ * @param drawDynamicBat: true 时在图标区绘制带实时电量的 16×16 电池图形
+ * @param vm: 视图数据（供动态电池图形读取百分比与充电状态）
+ * @note 仅统一子页渲染函数调用。
+ */
+void drawSubMainCard(const Canvas &canvas, const UiRenderState &state, const uint8_t *icon16x16,
+                     std::string_view keyVal, std::string_view subVal, bool drawDynamicBat,
+                     const ViewModel &vm) noexcept
+{
+    const int16_t cardLift =
+        (state.transition != nullptr) ? state.transition->rowOffsetY(state.nowMs, 0U) : 0;
+    const Canvas cardClip{
+        .start_x = static_cast<int16_t>(canvas.start_x + kSubCardX),
+        .start_y = static_cast<int16_t>(canvas.start_y + kSubBodyY),
+        .w = kSubCardW,
+        .h = kSubCardH,
+    };
+    Canvas cardInner{
+        .start_x = cardClip.start_x,
+        .start_y = static_cast<int16_t>(cardClip.start_y + cardLift),
+        .w = kSubCardW,
+        .h = kSubCardH,
+    };
+    WouoUI_CanvasDrawRBoxEmpty(&cardInner, 0, 0, kSubCardW, kSubCardH, kSubCardR);
+    if (drawDynamicBat) {
+        // 16×16 动态垂直电池图形（顶部电极 + 内部电量填充）。
+        WouoUI_CanvasDrawRBox(&cardInner, kCardBatCapX, kCardBatCapY, kCardBatCapW, kCardBatCapH,
+                              0U);
+        WouoUI_CanvasDrawRBoxEmpty(&cardInner, kCardBatBodyX, kCardBatBodyY, kCardBatBodyW,
+                                   kCardBatBodyH, 1U);
+        if (vm.batteryPct != board::kBatteryPctUnknown) {
+            const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
+            const auto fillH = static_cast<int16_t>(
+                (static_cast<uint32_t>(clamped) * kCardBatFillMaxH) / kMaxPercent);
+            if (fillH > 0) {
+                WouoUI_CanvasDrawRBox(&cardInner, kCardBatFillX,
+                                      static_cast<int16_t>(kCardBatFillBaseY - fillH),
+                                      kCardBatFillW, fillH, 0U);
+            }
+        }
+    } else if (icon16x16 != nullptr) {
+        WouoUI_CanvasDrawBMP(&cardInner, kSubCardIconX, kSubCardIconY, kDockIconSize, kDockIconSize,
+                             icon16x16, 1U);
+    }
+
+    if (drawDynamicBat && (vm.batteryPct != board::kBatteryPctUnknown)) {
+        const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
+        std::array<char, 8U> tmp{};
+        static_cast<void>(
+            std::snprintf(tmp.data(), tmp.size(), "%u%%", static_cast<unsigned>(clamped)));
+        const int16_t tw = static_cast<int16_t>(WouoUI_GetStrWidth(tmp.data(), Font_6_8));
+        const int16_t tx = std::max<int16_t>(2, static_cast<int16_t>((kSubCardW - tw) / 2));
+        drawRollingValue(cardInner, tx, kSubCardVal1Y, Font_6_8, state.batRoll,
+                         static_cast<int32_t>(clamped), "%", state.nowMs);
+    } else {
+        drawCentered(cardInner, kSubCardVal1Y, Font_6_8, keyVal);
+    }
+    if (!subVal.empty()) {
+        drawCentered(cardInner, kSubCardVal2Y, Font_6_8, subVal);
+    }
+}
+
+/**
+ * @brief 在子页列表裁剪区中绘制单行条目（图标、名称、右对齐截断值或 Back）
+ * @param listClip: 列表裁剪画布
+ * @param row: 列表项数据
+ * @param rowY: 本行顶边相对 listClip 的 Y 偏移（px）
+ * @note 仅 drawSubList 调用，不分配堆。
+ */
+void drawSubRow(Canvas &listClip, const SubListRow &row, int16_t rowY) noexcept
+{
+    const int16_t contentY = static_cast<int16_t>(rowY + kSubRowIconYOff);
+    if (row.isBack) {
+        WouoUI_CanvasDrawBMP(&listClip, kSubRowIconX, contentY, kIcon7W, kIcon8H,
+                             icons::kRowBack7x8.data(), 1U);
+        drawText(listClip, kSubRowTextX, contentY, Font_6_8, "Back");
+        return;
+    }
+    if (row.icon7x8 != nullptr) {
+        WouoUI_CanvasDrawBMP(&listClip, kSubRowIconX, contentY, kIcon7W, kIcon8H, row.icon7x8, 1U);
+    }
+    const std::string_view lbl = viewOf(row.label);
+    const std::string_view val = viewOf(row.value);
+    int16_t minValX = kSubRowTextX;
+    if (!lbl.empty()) {
+        drawText(listClip, kSubRowTextX, contentY, Font_6_8, lbl);
+        const int16_t lblW = static_cast<int16_t>(WouoUI_GetStrWidth(row.label.data(), Font_6_8));
+        minValX = static_cast<int16_t>(kSubRowTextX + lblW + 2);
+    }
+    if (!val.empty()) {
+        const int16_t availW =
+            std::max<int16_t>(0, static_cast<int16_t>(kSubRowValRightX - minValX));
+        const size_t maxChars = static_cast<size_t>(availW / static_cast<int16_t>(Font_6_8.Width));
+        std::array<char, kSubRowValBytes> clipped{};
+        const size_t copyLen = std::min(val.size(), std::min(maxChars, clipped.size() - 1U));
+        sanitizeCopy(val.substr(0U, copyLen), clipped);
+        const int16_t valW = static_cast<int16_t>(WouoUI_GetStrWidth(clipped.data(), Font_6_8));
+        const int16_t valX =
+            std::max<int16_t>(minValX, static_cast<int16_t>(kSubRowValRightX - valW));
+        drawText(listClip, valX, contentY, Font_6_8, viewOf(clipped));
+    }
+}
+
+/**
+ * @brief 绘制统一子页右侧 3 px 滚动指示条
+ * @param canvas: 目标画布
+ * @param scrollY: 当前滚动像素偏移
+ * @param rowCount: 列表总行数（须大于 kSubVisibleRows）
+ * @note 仅 drawSubList 调用。
+ */
+void drawSubScrollbar(Canvas &canvas, int16_t scrollY, size_t rowCount) noexcept
+{
+    for (int16_t y = kSubScrollTrackY0; y < (kSubScrollTrackY0 + kSubScrollTrackH);
+         y = static_cast<int16_t>(y + 2)) {
+        WouoUI_CanvasDrawPoint(&canvas, static_cast<int16_t>(kSubScrollX + 1), y);
+    }
+    const int16_t thumbH = std::max<int16_t>(
+        kSubScrollMinThumbH, static_cast<int16_t>((kSubScrollTrackH * kSubVisibleRows) /
+                                                  static_cast<int16_t>(rowCount)));
+    const int16_t maxScrollPx =
+        static_cast<int16_t>((static_cast<int16_t>(rowCount) - kSubVisibleRows) * kSubRowStepY);
+    const int16_t clampedScroll = std::clamp<int16_t>(scrollY, 0, maxScrollPx);
+    const int16_t travel = static_cast<int16_t>(kSubScrollTrackH - thumbH);
+    const int16_t thumbY = static_cast<int16_t>(
+        kSubScrollTrackY0 +
+        ((maxScrollPx > 0) ? ((static_cast<int32_t>(travel) * clampedScroll) / maxScrollPx) : 0));
+    WouoUI_CanvasDrawRBox(&canvas, kSubScrollX, thumbY, kSubScrollThumbW, thumbH, 1U);
+}
+
+/**
+ * @brief 绘制统一子页右侧可滚动列表（最多 3 行可见 + 弹簧选择框 + 挤压反馈 + 滚动指示条）
+ * @param canvas: 目标画布
+ * @param state: 渲染状态
+ * @param rows: 列表项视图
+ * @note 仅统一子页渲染函数调用，不分配堆。
+ */
+void drawSubList(Canvas &canvas, const UiRenderState &state,
+                 std::span<const SubListRow> rows) noexcept
+{
+    Canvas listClip{
+        .start_x = static_cast<int16_t>(canvas.start_x + kSubListX),
+        .start_y = static_cast<int16_t>(canvas.start_y + kSubBodyY),
+        .w = kSubListW,
+        .h = kSubListH,
+    };
+
+    for (size_t i = 0U; i < rows.size(); ++i) {
+        const int16_t stagger =
+            (state.transition != nullptr)
+                ? state.transition->rowOffsetY(state.nowMs, static_cast<uint8_t>(i))
+                : 0;
+        const int16_t rowY = static_cast<int16_t>((static_cast<int16_t>(i) * kSubRowStepY) -
+                                                  state.subScrollY + stagger);
+        if ((rowY >= kSubListH) || ((rowY + kSubRowH) <= 0)) {
+            continue;
+        }
+        drawSubRow(listClip, rows[i], rowY);
+    }
+
+    // 弹簧跟随选中框 + 双击确认挤压反馈（收缩 2 px 后回弹）。
+    if (!rows.empty()) {
+        const int16_t selY = static_cast<int16_t>(state.subFocusY - state.subScrollY);
+        const int16_t inset = state.squishInset;
+        WouoUI_CanvasDrawRBoxEmpty(&listClip, inset, static_cast<int16_t>(selY + inset),
+                                   static_cast<int16_t>(kSubListW - (2 * inset)),
+                                   static_cast<int16_t>(kSubRowH - (2 * inset)), 2U);
+    }
+
+    if (rows.size() > kSubVisibleRows) {
+        drawSubScrollbar(canvas, state.subScrollY, rows.size());
+    }
+}
+
+/**
+ * @brief 构造单条普通子页列表行
+ * @param icon: 7×8 行图标
+ * @param label: 左侧名称（可为空）
+ * @param value: 右对齐值文本
+ * @retval 填充好的 SubListRow
+ * @note 纯辅助函数。
+ */
+[[nodiscard]] SubListRow makeRow(const uint8_t *icon, std::string_view label,
+                                 std::string_view value) noexcept
+{
+    SubListRow row{};
+    row.icon7x8 = icon;
+    sanitizeCopy(label, row.label);
+    sanitizeCopy(value, row.value);
+    return row;
+}
+
+/**
+ * @brief 构造统一的左箭头 Back 列表行
+ * @retval isBack=true 的 SubListRow
+ * @note 纯辅助函数。
+ */
+[[nodiscard]] SubListRow makeBackRow() noexcept
+{
+    SubListRow row{};
+    row.isBack = true;
+    return row;
+}
+
+/**
+ * @brief 渲染卫星子菜单子页 0（GPS/BDS/GLO/GAL 可见与参与解算两段柱状图）
  * @param canvas: 目标画布
  * @param vm: 视图数据
  * @note 仅 renderSubSat 调用。
@@ -570,7 +1002,7 @@ void renderSubSatSys(Canvas &canvas, const ViewModel &vm) noexcept
 {
     constexpr std::array<const char *, kConstellationSlots> kLabels{"GPS", "BDS", "GLO", "GAL"};
     constexpr int16_t kBarBottomY = 52;
-    constexpr int16_t kBarMaxH = 28;
+    constexpr int16_t kBarMaxH = 29;
     constexpr uint8_t kMaxScaleSats = 20U;
     for (size_t i = 0U; i < kConstellationSlots; ++i) {
         const auto colX =
@@ -645,7 +1077,7 @@ void renderSubSatCn0(Canvas &canvas, const ViewModel &vm) noexcept
 }
 
 /**
- * @brief 渲染卫星子菜单（顶栏 + 子页 0 星座柱状图 / 子页 1 Top-8 CN0 载噪比条）
+ * @brief 渲染卫星子菜单（10 px 标题行显示 used/visible + 4 柱星座图 / CN0 切换）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -674,76 +1106,152 @@ void renderSubSat(Canvas &canvas, const UiRenderState &state, const ViewModel &v
 }
 
 /**
- * @brief 渲染位置子菜单（经纬度、海拔、HDOP 与差分龄期，纯定点无浮点）
+ * @brief 渲染位置子页（左主卡解状态+精度，右列表：纬度、经度、高程、HDOP/AGE、Back）
  * @param canvas: 目标画布
+ * @param state: 渲染状态
  * @param vm: 视图数据
  * @note 不分配堆。
  */
-void renderSubPos(Canvas &canvas, const ViewModel &vm) noexcept
+void renderSubPos(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    drawText(canvas, 0, kHeaderTextY, Font_6_8, "POSITION");
-    const char *badge = dialHeroBadge(vm);
-    const uint16_t bw = WouoUI_GetStrWidth(badge, Font_6_8);
-    const int16_t bx = (bw < kWidth) ? static_cast<int16_t>(kWidth - bw) : int16_t{0};
-    drawText(canvas, bx, kHeaderTextY, Font_6_8, badge);
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
+    drawStatusBar(canvas, state, vm);
 
-    std::array<char, kMaxLineChars + 1U> val{};
-    std::array<char, kMaxLineChars + 1U> line{};
-    formatCoordE9(vm.latE9, 'N', 'S', vm.fixValid, val);
-    formatLabelValue("LAT:", viewOf(val), line);
-    drawText(canvas, 0, kSubLine0Y, Font_6_8, viewOf(line));
+    std::array<char, kShortBufBytes> accBuf{};
+    if (vm.fixValid && (vm.hAccCm != gnss::kU16Unknown)) {
+        static_cast<void>(std::snprintf(accBuf.data(), accBuf.size(), "%u.%02um",
+                                        static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
+                                        static_cast<unsigned>(vm.hAccCm % kCmPerMeter)));
+    } else {
+        sanitizeCopy("--", accBuf);
+    }
+    drawSubMainCard(canvas, state, icons::kDockPos16x16.data(), dialHeroBadge(vm), viewOf(accBuf),
+                    false, vm);
 
-    formatCoordE9(vm.lonE9, 'E', 'W', vm.fixValid, val);
-    formatLabelValue("LON:", viewOf(val), line);
-    drawText(canvas, 0, kSubLine1Y, Font_6_8, viewOf(line));
+    std::array<char, kShortBufBytes> latBuf{};
+    std::array<char, kShortBufBytes> lonBuf{};
+    std::array<char, kShortBufBytes> altBuf{};
+    std::array<char, kShortBufBytes> dopBuf{};
+    formatCoordE9(vm.latE9, 'N', 'S', vm.fixValid, latBuf);
+    formatCoordE9(vm.lonE9, 'E', 'W', vm.fixValid, lonBuf);
+    formatAltMm(vm.altMm, vm.fixValid, altBuf);
 
-    formatAltMm(vm.altMm, vm.fixValid, val);
-    formatLabelValue("ALT:", viewOf(val), line);
-    drawText(canvas, 0, kSubLine2Y, Font_6_8, viewOf(line));
+    std::array<char, 8U> hdopStr{};
+    std::array<char, 8U> ageStr{};
+    if (!vm.fixValid || (vm.hdopX100 == gnss::kU16Unknown)) {
+        sanitizeCopy("--", hdopStr);
+    } else {
+        static_cast<void>(std::snprintf(hdopStr.data(), hdopStr.size(), "%u.%02u",
+                                        static_cast<unsigned>(vm.hdopX100 / kHdopScale),
+                                        static_cast<unsigned>(vm.hdopX100 % kHdopScale)));
+    }
+    if (!vm.fixValid || (vm.diffAgeDs == gnss::kU16Unknown)) {
+        sanitizeCopy("--", ageStr);
+    } else {
+        static_cast<void>(std::snprintf(ageStr.data(), ageStr.size(), "%u.%us",
+                                        static_cast<unsigned>(vm.diffAgeDs / kDiffAgeScale),
+                                        static_cast<unsigned>(vm.diffAgeDs % kDiffAgeScale)));
+    }
+    static_cast<void>(
+        std::snprintf(dopBuf.data(), dopBuf.size(), "%s %s", hdopStr.data(), ageStr.data()));
 
-    formatHdopAge(vm.hdopX100, vm.diffAgeDs, vm.fixValid, line);
-    drawText(canvas, 0, kSubLine3Y, Font_6_8, viewOf(line));
+    std::array<SubListRow, kSubPosRowCount> rows{{
+        makeRow(icons::kRowLat7x8.data(), "", viewOf(latBuf)),
+        makeRow(icons::kRowLon7x8.data(), "", viewOf(lonBuf)),
+        makeRow(icons::kRowAlt7x8.data(), "ALT", viewOf(altBuf)),
+        makeRow(icons::kRowDop7x8.data(), "HA", viewOf(dopBuf)),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows);
 }
 
 /**
- * @brief 渲染设备信息子菜单（固件版本、SN、蓝牙/AP 名、运行时长）
+ * @brief 渲染通信子页（左主卡 BT/Wi-Fi 模式图标，右列表：模式切换、配对窗口、已连设备名、Back）
  * @param canvas: 目标画布
+ * @param state: 渲染状态
  * @param vm: 视图数据
  * @note 不分配堆。
  */
-void renderSubDevice(Canvas &canvas, const ViewModel &vm) noexcept
+void renderComm(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    drawText(canvas, 0, kHeaderTextY, Font_6_8, "DEVICE");
-    const std::string_view hw = viewOf(vm.hwVer);
-    if (!hw.empty()) {
-        std::array<char, kHwVerBufBytes> hwClean{};
-        sanitizeCopy(hw, hwClean);
-        const uint16_t w = WouoUI_GetStrWidth(hwClean.data(), Font_6_8);
-        const int16_t x = (w < kWidth) ? static_cast<int16_t>(kWidth - w) : int16_t{0};
-        drawText(canvas, x, kHeaderTextY, Font_6_8, viewOf(hwClean));
+    drawStatusBar(canvas, state, vm);
+
+    const bool wifi = vm.radioMode == RadioMode::kWifiConfig;
+    std::array<char, kShortBufBytes> subBuf{};
+    if (wifi) {
+        static_cast<void>(std::snprintf(subBuf.data(), subBuf.size(), "%u STA",
+                                        static_cast<unsigned>(vm.wifiClients)));
+        drawSubMainCard(canvas, state, icons::kCardWifi16x16.data(), "WIFI", viewOf(subBuf), false,
+                        vm);
+        const std::string_view ssid = vm.wifiReady ? viewOf(vm.wifiSsid) : std::string_view{"OFF"};
+        std::array<SubListRow, kSubCommWifiRowCount> rows{{
+            makeRow(icons::kRowRf7x8.data(), "Mode", "WF>BT"),
+            makeRow(icons::kRowPeer7x8.data(), "", ssid.empty() ? "--" : ssid),
+            makeBackRow(),
+        }};
+        drawSubList(canvas, state, rows);
+        return;
     }
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
 
-    std::array<char, kMaxLineChars + 1U> line{};
-    formatLabelValue("FW :", viewOf(vm.fwVer), line);
-    drawText(canvas, 0, kSubLine0Y, Font_6_8, viewOf(line));
+    static_cast<void>(std::snprintf(subBuf.data(), subBuf.size(), "%u CON",
+                                    static_cast<unsigned>(vm.btSessions)));
+    drawSubMainCard(canvas, state, icons::kCardBt16x16.data(), "BT", viewOf(subBuf), false, vm);
 
-    formatLabelValue("SN :", viewOf(vm.sn), line);
-    drawText(canvas, 0, kSubLine1Y, Font_6_8, viewOf(line));
+    std::array<char, kShortBufBytes> pairVal{};
+    const int32_t remaining = static_cast<int32_t>(vm.pairing.windowDeadlineMs - state.nowMs);
+    if (vm.pairing.windowOpen && (remaining > 0)) {
+        const unsigned seconds = (static_cast<uint32_t>(remaining) - 1U) / kMsPerSec + 1U;
+        static_cast<void>(std::snprintf(pairVal.data(), pairVal.size(), "%us", seconds));
+    } else {
+        sanitizeCopy("OPEN", pairVal);
+    }
+    const std::string_view peer = viewOf(vm.btPeerLabel);
+    const std::string_view peerText = (vm.btSessions > 0U)
+                                          ? (peer.empty() ? std::string_view{"LINK"} : peer)
+                                          : std::string_view{"NONE"};
 
-    const char *nameTag = (vm.radioMode == RadioMode::kWifiConfig) ? "AP :" : "BT :";
-    formatLabelValue(nameTag, viewOf(vm.deviceName), line);
-    drawText(canvas, 0, kSubLine2Y, Font_6_8, viewOf(line));
+    std::array<SubListRow, kSubCommBtRowCount> rows{{
+        makeRow(icons::kRowRf7x8.data(), "Mode", vm.wifiSupported ? "BT>WF" : "BT"),
+        makeRow(icons::kRowPair7x8.data(), "Pair", viewOf(pairVal)),
+        makeRow(icons::kRowPeer7x8.data(), "Dev", peerText),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows);
+}
+
+/**
+ * @brief 渲染设备子页（左主卡设备图标+型号，右列表：FW、SN、BT 名、运行时间、Back）
+ * @param canvas: 目标画布
+ * @param state: 渲染状态
+ * @param vm: 视图数据
+ * @note 不分配堆。
+ */
+void renderSubDevice(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+{
+    drawStatusBar(canvas, state, vm);
+
+    const std::string_view prod = viewOf(vm.product);
+    const std::string_view hw = viewOf(vm.hwVer);
+    drawSubMainCard(canvas, state, icons::kDockDev16x16.data(), prod.empty() ? "RTK" : prod,
+                    hw.empty() ? "--" : hw, false, vm);
 
     std::array<char, kShortBufBytes> upBuf{};
     formatUptime(vm.uptimeMs, upBuf);
-    formatLabelValue("UP :", viewOf(upBuf), line);
-    drawText(canvas, 0, kSubLine3Y, Font_6_8, viewOf(line));
+    const std::string_view fw = viewOf(vm.fwVer);
+    const std::string_view sn = viewOf(vm.sn);
+    const std::string_view dev = viewOf(vm.deviceName);
+
+    std::array<SubListRow, kSubDeviceRowCount> rows{{
+        makeRow(icons::kRowInfo7x8.data(), "FW", fw.empty() ? "--" : fw),
+        makeRow(icons::kRowInfo7x8.data(), "SN", sn.empty() ? "--" : sn),
+        makeRow(icons::kRowRf7x8.data(), "", dev.empty() ? "--" : dev),
+        makeRow(icons::kRowClock7x8.data(), "UP", viewOf(upBuf)),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows);
 }
 
 /**
- * @brief 渲染电源子菜单（电量滚动数字、电压、进度条、充电态与 USB 状态）
+ * @brief 渲染电源子页（左主卡动态电池图标+滚动百分比，右列表：电压、充电状态、USB、Power off、Back）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -751,88 +1259,147 @@ void renderSubDevice(Canvas &canvas, const ViewModel &vm) noexcept
  */
 void renderSubPower(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    drawText(canvas, 0, kHeaderTextY, Font_6_8, "POWER");
-    drawText(canvas, kSubPwrUsbX, kHeaderTextY, Font_6_8, vm.usbPresent ? "USB:ON" : "USB:--");
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
+    drawStatusBar(canvas, state, vm);
 
-    if (vm.batteryPct == board::kBatteryPctUnknown) {
-        drawText(canvas, 8, 16, Font_8_16, "--%");
-    } else {
-        drawRollingValue(canvas, 8, 16, Font_8_16, state.batRoll,
-                         static_cast<int32_t>(std::min(vm.batteryPct, kMaxPercent)), "%",
-                         state.nowMs);
-    }
+    const bool full =
+        (vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent);
+    const char *cardSub = vm.charging ? "CHG" : (full ? "FULL" : (vm.usbPresent ? "USB" : "BAT"));
+    drawSubMainCard(canvas, state, nullptr, "--%", cardSub, true, vm);
+
     std::array<char, kShortBufBytes> voltBuf{};
     formatBatteryVoltage(vm.batteryMv, voltBuf);
-    drawText(canvas, kSubPwrVoltX, kSubPwrVoltY, Font_6_8, viewOf(voltBuf));
+    const char *chgState =
+        vm.charging ? "CHARGING" : (full ? "FULL" : (vm.chargerPresent ? "IDLE" : "NO IC"));
 
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, 8, kSubPwrBarY, kSubPwrBarW, kSubPwrBarH, 2U);
-    if (vm.batteryPct != board::kBatteryPctUnknown) {
-        const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-        const auto fillW =
-            static_cast<int16_t>((static_cast<uint32_t>(clamped) * kSubPwrFillMaxW) / kMaxPercent);
-        if (fillW > 0) {
-            WouoUI_CanvasDrawRBox(&canvas, kSubPwrFillX, kSubPwrFillY, fillW, kSubPwrFillH, 1U);
-        }
-    }
-
-    const char *chgText =
-        vm.charging
-            ? "CHG:CHARGING"
-            : (((vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent))
-                   ? "CHG:FULL"
-                   : (vm.chargerPresent ? "CHG:IDLE" : "CHG:NO IC"));
-    drawText(canvas, 8, kSubPwrChgY, Font_6_8, chgText);
+    std::array<SubListRow, kSubPowerRowCount> rows{{
+        makeRow(icons::kRowVolt7x8.data(), "VOLT", viewOf(voltBuf)),
+        makeRow(icons::kRowBolt7x8.data(), "CHG", chgState),
+        makeRow(icons::kRowUsb7x8.data(), "USB", vm.usbPresent ? "ON" : "OFF"),
+        makeRow(icons::kRowPwr7x8.data(), "Power off", ">"),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows);
 }
 
 /**
- * @brief 渲染充电待机页（仅电量百分比、电压、进度条与长按开机提示）
+ * @brief 绘制充电待机页左侧大号电量百分比（含数字滚动）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
- * @note 不分配堆。
+ * @note 仅 renderChargeStandby 调用。
  */
-void renderChargeStandby(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+void drawStandbyPercent(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    const char *title =
-        vm.charging
-            ? "CHARGING"
-            : (((vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent))
-                   ? "BATTERY FULL"
-                   : "USB STANDBY");
-    drawCentered(canvas, kHeaderTextY, Font_6_8, title);
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
-
     if (vm.batteryPct == board::kBatteryPctUnknown) {
-        drawText(canvas, kStandbyPctX, kStandbyPctY, Font_8_16, "--%");
-    } else {
-        drawRollingValue(canvas, kStandbyPctX, kStandbyPctY, Font_8_16, state.batRoll,
-                         static_cast<int32_t>(std::min(vm.batteryPct, kMaxPercent)), "%",
-                         state.nowMs);
+        drawText(canvas, kStandbyPctX, kStandbyPctY, Font_12_24, "--");
+        drawText(canvas, static_cast<int16_t>(kStandbyPctX + kStandbyUnknownPctOffX),
+                 static_cast<int16_t>(kStandbyPctY + kStandbyPctSignOffY), Font_8_16, "%");
+        return;
     }
-    std::array<char, kShortBufBytes> voltBuf{};
-    formatBatteryVoltage(vm.batteryMv, voltBuf);
-    drawText(canvas, kStandbyVoltX, kStandbyVoltY, Font_6_8, viewOf(voltBuf));
-
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, kStandbyBarX, kStandbyBarY, kStandbyBarW, kStandbyBarH, 2U);
-    if (vm.batteryPct != board::kBatteryPctUnknown) {
-        const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-        const auto fillW =
-            static_cast<int16_t>((static_cast<uint32_t>(clamped) * kStandbyFillMaxW) / kMaxPercent);
-        if (fillW > 0) {
-            WouoUI_CanvasDrawRBox(&canvas, 16, kStandbyFillY, fillW, kStandbyFillH, 1U);
-        }
-    }
-    drawCentered(canvas, kStandbyHintY, Font_6_8, "HOLD KEY TO BOOT");
+    const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
+    drawRollingValue(canvas, kStandbyPctX, kStandbyPctY, Font_12_24, state.batRoll,
+                     static_cast<int32_t>(clamped), "", state.nowMs);
+    const int16_t digits = (clamped >= kMaxPercent)
+                               ? kThreeDigits
+                               : ((clamped >= kTwoDigitMin) ? int16_t{2} : int16_t{1});
+    const int16_t pctX =
+        static_cast<int16_t>(kStandbyPctX + (digits * static_cast<int16_t>(Font_12_24.Width)) + 2);
+    drawText(canvas, pctX, static_cast<int16_t>(kStandbyPctY + kStandbyPctSignOffY), Font_8_16,
+             "%");
 }
 
 /**
- * @brief 绘制关机收尾项状态行（S/R/P 分别区分已完成 +、超时/失败降级 ! 与未完成 .）
+ * @brief 绘制充电待机页左侧电池条（充电且未满时 <= 2 fps 缓慢流动，充满停止）
+ * @param canvas: 目标画布
+ * @param state: 渲染状态
+ * @param vm: 视图数据
+ * @param full: 是否已充满
+ * @note 仅 renderChargeStandby 调用。
+ */
+void drawStandbyBatteryBar(Canvas &canvas, const UiRenderState &state, const ViewModel &vm,
+                           bool full) noexcept
+{
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, kStandbyBarX, kStandbyBarY, kStandbyBarW, kStandbyBarH, 2U);
+    if (vm.batteryPct == board::kBatteryPctUnknown) {
+        return;
+    }
+    const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
+    const auto fillW =
+        static_cast<int16_t>((static_cast<uint32_t>(clamped) * kStandbyFillMaxW) / kMaxPercent);
+    if (fillW <= 0) {
+        return;
+    }
+    WouoUI_CanvasDrawRBox(&canvas, kStandbyFillX, kStandbyFillY, fillW, kStandbyFillH, 1U);
+    if (!vm.charging || full) {
+        return;
+    }
+    const uint32_t phase = (state.nowMs / kChargeAnimPeriodMs) % 4U;
+    WouoUI_GraphSetPenColor(0U);
+    for (int16_t sx = static_cast<int16_t>(phase * kChargeStripeStepPx); sx < fillW;
+         sx = static_cast<int16_t>(sx + kChargeStripePitchPx)) {
+        WouoUI_CanvasDrawLine_V(&canvas, static_cast<int16_t>(kStandbyFillX + sx), kStandbyFillY,
+                                static_cast<int16_t>(kStandbyFillY + kStandbyFillH - 1));
+    }
+    WouoUI_GraphSetPenColor(1U);
+    if ((fillW + 4) <= static_cast<int16_t>(kStandbyFillMaxW)) {
+        const int16_t pulseX =
+            static_cast<int16_t>(kStandbyFillX + fillW + 1 + static_cast<int16_t>(phase));
+        if ((pulseX + 2) <= (kStandbyFillX + static_cast<int16_t>(kStandbyFillMaxW))) {
+            WouoUI_CanvasDrawRBox(&canvas, pulseX, static_cast<int16_t>(kStandbyFillY + 1), 2,
+                                  kChargePulseH, 0U);
+        }
+    }
+}
+
+/**
+ * @brief 渲染重做后的充电待机页（左侧大号电量滚动+流动电池条+状态/电压，右侧保持环+HOLD 2s ON，底行 FW/HW）
+ * @param canvas: 目标画布
+ * @param state: 渲染状态
+ * @param vm: 视图数据
+ * @note 充电中动画 <= 2 fps，充满停止保持 0 写入。
+ */
+void renderChargeStandby(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+{
+    const bool full =
+        (vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent);
+    const char *statusWord =
+        vm.charging ? "CHG" : (full ? "FULL" : (vm.usbPresent ? "USB" : "BAT"));
+    drawText(canvas, kStandbyPctX, kStandbyStatusY, Font_6_8, statusWord);
+    if (vm.batteryMv > 0U) {
+        std::array<char, kShortBufBytes> voltBuf{};
+        formatBatteryVoltage(vm.batteryMv, voltBuf);
+        drawText(canvas, kStandbyVoltX, kStandbyStatusY, Font_6_8, viewOf(voltBuf));
+    }
+
+    drawStandbyPercent(canvas, state, vm);
+    drawStandbyBatteryBar(canvas, state, vm, full);
+
+    // 右侧电源图标 + 保持开机实时进度环 + HOLD 2s ON。
+    drawProgressRing(canvas, kStandbyRingCx, kStandbyRingCy, state.standbyRingQ10);
+    WouoUI_CanvasDrawBMP(&canvas, static_cast<int16_t>(kStandbyRingCx - 8),
+                         static_cast<int16_t>(kStandbyRingCy - 8), kDockIconSize, kDockIconSize,
+                         icons::kDockPwr16x16.data(), 1U);
+    drawText(canvas, kStandbyHintX, kStandbyHintY, Font_6_8, "HOLD 2s ON");
+
+    // 底部一行 FW / HW。
+    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kStandbyFooterLineY);
+    std::array<char, kMaxLineChars + 1U> footer{};
+    const std::string_view fw = viewOf(vm.fwVer);
+    const std::string_view hw = viewOf(vm.hwVer);
+    static_cast<void>(std::snprintf(
+        footer.data(), footer.size(), "FW %.*s  HW %.*s",
+        static_cast<int>(fw.empty() ? 2U : fw.size()), fw.empty() ? "--" : fw.data(),
+        static_cast<int>(hw.empty() ? 2U : hw.size()), hw.empty() ? "--" : hw.data()));
+    drawCentered(canvas, kStandbyFooterTextY, Font_6_8, viewOf(footer));
+}
+
+/**
+ * @brief 绘制关机收尾三个小图标勾选里程碑（保存 / 射频 / 外设断电）
  * @param canvas: 目标画布
  * @param vm: 视图数据
  * @note 仅 renderShutdown 调用。
  */
-void drawShutdownSteps(Canvas &canvas, const ViewModel &vm) noexcept
+void drawShutdownMilestones(Canvas &canvas, const ViewModel &vm) noexcept
 {
     const bool saveOk =
         (vm.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed)) != 0U;
@@ -851,16 +1418,38 @@ void drawShutdownSteps(Canvas &canvas, const ViewModel &vm) noexcept
          board::shutdownDegradedBit(board::ShutdownDegradedBit::kPeripheralsFailed)) != 0U;
     const bool cutOk =
         (vm.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kCutPower)) != 0U;
-    const char sMark = saveOk ? '+' : (saveDeg ? '!' : '.');
-    const char rMark = rfOk ? '+' : (rfDeg ? '!' : '.');
-    const char pMark = safeDeg ? '!' : ((safeOk && cutOk) ? '+' : '.');
-    std::array<char, kShortBufBytes> steps{};
-    static_cast<void>(
-        std::snprintf(steps.data(), steps.size(), "S:%c R:%c P:%c", sMark, rMark, pMark));
-    drawText(canvas, kShutRightX, kShutStepsY, Font_6_8, viewOf(steps));
+
+    struct Milestone {
+        const uint8_t *icon;
+        bool ok;
+        bool deg;
+    };
+    const std::array<Milestone, 3U> items{{
+        {icons::kRowSave7x8.data(), saveOk, saveDeg},
+        {icons::kRowRf7x8.data(), rfOk, rfDeg},
+        {icons::kRowPwr7x8.data(), safeOk && cutOk && !safeDeg, safeDeg},
+    }};
+    constexpr int16_t kStepW = 26;
+    for (size_t i = 0U; i < items.size(); ++i) {
+        const auto bx = static_cast<int16_t>(kShutRightX + (static_cast<int16_t>(i) * kStepW));
+        WouoUI_CanvasDrawBMP(&canvas, bx, kShutStepsY, kIcon7W, kIcon8H, items[i].icon, 1U);
+        const auto markX = static_cast<int16_t>(bx + 9);
+        if (items[i].deg) {
+            WouoUI_CanvasDrawBMP(&canvas, markX, kShutStepsY, kIcon7W, kIcon8H,
+                                 icons::kCross7x8.data(), 1U);
+        } else if (items[i].ok) {
+            WouoUI_CanvasDrawBMP(&canvas, markX, kShutStepsY, kIcon7W, kIcon8H,
+                                 icons::kCheck7x8.data(), 1U);
+        } else {
+            WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(markX + 2),
+                                  static_cast<int16_t>(kShutStepsY + kShutPendingDotOffY), 2, 2,
+                                  0U);
+        }
+    }
 }
+
 /**
- * @brief 渲染关机进度、断电终帧或 USB 重启终帧
+ * @brief 渲染关机页（首行原因 + 终态，左侧进度环，右侧阶段名、进度条与三图标勾选里程碑）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -873,26 +1462,23 @@ void renderShutdown(Canvas &canvas, const UiRenderState &state, const ViewModel 
     const bool batteryFinal =
         (vm.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady)) !=
         0U;
-    const char *title = usbFinal ? "RESTARTING" : (batteryFinal ? "POWER OFF" : "SHUTTING DOWN");
-    if (!usbFinal && !batteryFinal && vm.shutdownReason == board::ShutdownReason::kLowBattery) {
-        title = "BATTERY LOW!";
+    const char *const reasonStr = shutdownReasonText(vm.shutdownReason);
+    const char *const rightTag = usbFinal ? "RESTART" : (batteryFinal ? "POWER OFF" : "SHUTDOWN");
+    if (vm.shutdownReason == board::ShutdownReason::kNone) {
+        drawCentered(canvas, kHeaderTextY, Font_6_8, rightTag);
+    } else {
+        drawText(canvas, 1, kHeaderTextY, Font_6_8, reasonStr);
+        const uint16_t rw = WouoUI_GetStrWidth(rightTag, Font_6_8);
+        const int16_t rx = (rw < kWidth) ? static_cast<int16_t>(kWidth - 1 - rw) : int16_t{0};
+        drawText(canvas, rx, kHeaderTextY, Font_6_8, rightTag);
     }
-    drawCentered(canvas, kHeaderTextY, Font_6_8, title);
     WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
 
     const uint8_t pct = std::min(state.shutdownPct, kMaxPercent);
-    const size_t litCount =
-        (static_cast<size_t>(pct) * icons::kRingPts32.size()) / static_cast<size_t>(kMaxPercent);
-    for (size_t i = 0U; i < icons::kRingPts32.size(); ++i) {
-        const int16_t px = static_cast<int16_t>(kRingCx + icons::kRingPts32[i].dx);
-        const int16_t py = static_cast<int16_t>(kRingCy + icons::kRingPts32[i].dy);
-        if (i < litCount) {
-            WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(px - 1),
-                                  static_cast<int16_t>(py - 1), kRingDotSize, kRingDotSize, 0U);
-        } else if ((i & 1U) == 0U) {
-            WouoUI_CanvasDrawPoint(&canvas, px, py);
-        }
-    }
+    const uint16_t ringQ10 =
+        static_cast<uint16_t>((static_cast<uint32_t>(pct) * kEaseScale) / kMaxPercent);
+    drawProgressRing(canvas, kRingCx, kRingCy, ringQ10);
+
     std::array<char, 8U> pctBuf{};
     static_cast<void>(
         std::snprintf(pctBuf.data(), pctBuf.size(), "%u%%", static_cast<unsigned>(pct)));
@@ -910,72 +1496,46 @@ void renderShutdown(Canvas &canvas, const UiRenderState &state, const ViewModel 
         WouoUI_CanvasDrawRBox(&canvas, kShutFillX, kShutFillY, barW, 4, 0U);
     }
 
-    drawShutdownSteps(canvas, vm);
+    drawShutdownMilestones(canvas, vm);
 }
 
 /**
- * @brief 绘制一条通信菜单，描边标识选中项。
- * @param canvas: 目标画布。
- * @param y: 文本纵坐标。
- * @param text: 菜单项文字。
- * @param selected: 是否选中。
+ * @brief 绘制弹窗（关机确认 POWER OFF? / 配对确认 / Wi-Fi 切换确认）
+ * @param canvas: 目标画布
+ * @param state: 渲染状态
+ * @param vm: 视图数据
+ * @note 关机确认优先级高于配对弹窗。
  */
-void drawCommItem(Canvas &canvas, int16_t y, std::string_view text, bool selected) noexcept
+void renderModal(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    if (selected) {
-        WouoUI_CanvasDrawRBoxEmpty(&canvas, 2, static_cast<int16_t>(y - 2), kCanvasW - 4,
-                                   kCommItemH, 2U);
-    }
-    drawText(canvas, kCommTextX, y, Font_6_8, text);
-}
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, 1, 1, static_cast<int16_t>(kCanvasW - 2),
+                               static_cast<int16_t>(kCanvasH - 2), kModalCornerR);
+    if (state.modal == UiModal::kPowerOffConfirm) {
+        // 顶部图标 + POWER OFF?
+        constexpr int16_t kTitleGroupW = 7 + 4 + 60; // icon 7 + gap 4 + 10 chars * 6
+        const int16_t gx = static_cast<int16_t>((kCanvasW - kTitleGroupW) / 2);
+        WouoUI_CanvasDrawBMP(&canvas, gx, kPwrModalTitleY, kIcon7W, kIcon8H,
+                             icons::kRowPwr7x8.data(), 1U);
+        drawText(canvas, static_cast<int16_t>(gx + kPwrModalTextOffX), kPwrModalTitleY, Font_6_8,
+                 "POWER OFF?");
+        drawCentered(canvas, kPwrModalHintY, Font_6_8, "2x=OK  1x=CANCEL");
 
-/**
- * @brief 绘制当前射频、连接状态和可操作的通信菜单。
- * @param canvas: 目标画布。
- * @param state: 菜单选中位置与时钟。
- * @param vm: 连接与配对快照。
- */
-void renderComm(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
-{
-    drawCentered(canvas, kHeaderTextY, Font_6_8, "COMM");
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
-    std::array<char, kMaxLineChars + 1U> line{};
-    if (vm.radioMode == RadioMode::kWifiConfig) {
-        static_cast<void>(std::snprintf(line.data(), line.size(), "CLIENTS %u",
-                                        static_cast<unsigned>(vm.wifiClients)));
-        drawText(canvas, kCommTextX, kCommStatusY, Font_6_8,
-                 vm.wifiReady ? viewOf(vm.wifiSsid) : "AP OFFLINE");
-        drawText(canvas, kCommTextX, kCommWifiClientsY, Font_6_8, viewOf(line));
-        drawCommItem(canvas, kCommWifiModeY, "MODE: WIFI > BT", state.commSelected == 0U);
-        drawCommItem(canvas, kCommWifiBackY, "BACK", state.commSelected != 0U);
+        WouoUI_CanvasDrawRBoxEmpty(&canvas, kPwrModalBarX, kPwrModalBarY, kPwrModalBarW,
+                                   kPwrModalBarH, 2U);
+        const uint32_t rem = std::min(state.powerOffRemainMs, kPowerOffConfirmMs);
+        const auto fillW = static_cast<int16_t>((static_cast<uint64_t>(rem) * (kPwrModalBarW - 4)) /
+                                                kPowerOffConfirmMs);
+        if (fillW > 0) {
+            WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(kPwrModalBarX + 2),
+                                  static_cast<int16_t>(kPwrModalBarY + 2), fillW, 4, 0U);
+        }
+        const unsigned sec = (rem > 0U) ? (((rem - 1U) / kMsPerSec) + 1U) : 0U;
+        std::array<char, kShortBufBytes> secBuf{};
+        static_cast<void>(std::snprintf(secBuf.data(), secBuf.size(), "%us", sec));
+        drawText(canvas, kPwrModalSecX, kPwrModalBarY, Font_6_8, viewOf(secBuf));
         return;
     }
-    static_cast<void>(std::snprintf(line.data(), line.size(), "BT CONNECTED %u",
-                                    static_cast<unsigned>(vm.btSessions)));
-    drawText(canvas, kCommTextX, kCommStatusY, Font_6_8, viewOf(line));
-    drawCommItem(canvas, kCommBtModeY, vm.wifiSupported ? "MODE: BT > WIFI" : "MODE: BT",
-                 state.commSelected == 0U);
-    const int32_t remaining = static_cast<int32_t>(vm.pairing.windowDeadlineMs - state.nowMs);
-    if (vm.pairing.windowOpen && remaining > 0) {
-        const unsigned seconds = (static_cast<uint32_t>(remaining) - 1U) / kMsPerSec + 1U;
-        static_cast<void>(std::snprintf(line.data(), line.size(), "PAIR %us: CLOSE", seconds));
-    } else {
-        sanitizeCopy("PAIR WINDOW: OPEN", line);
-    }
-    drawCommItem(canvas, kCommPairWindowY, viewOf(line), state.commSelected == 1U);
-    drawCommItem(canvas, kCommBtBackY, "BACK", state.commSelected == 2U);
-}
-
-/**
- * @brief 绘制允许用户确认或取消的配对及 Wi-Fi 弹窗。
- * @param canvas: 目标画布。
- * @param modal: 当前弹窗类型。
- * @param vm: 待确认的快照。
- */
-void renderCommModal(Canvas &canvas, UiModal modal, const ViewModel &vm) noexcept
-{
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, 1, 1, kCanvasW - 2, kCanvasH - 2, kCommModalR);
-    if (modal == UiModal::kWifiConfirm) {
+    if (state.modal == UiModal::kWifiConfirm) {
         drawCentered(canvas, kWifiModalTitleY, Font_6_8, "SWITCH TO WIFI?");
         drawCentered(canvas, kWifiModalWarningY, Font_6_8, "BT WILL DISCONNECT");
         drawCentered(canvas, kWifiModalControlsY, Font_6_8, "1 CANCEL  2 CONFIRM");
@@ -995,6 +1555,49 @@ void renderCommModal(Canvas &canvas, UiModal modal, const ViewModel &vm) noexcep
         drawCentered(canvas, kPairModalNumberY, Font_8_16, viewOf(peer));
     }
     drawCentered(canvas, kPairModalControlsY, Font_6_8, "1 REJECT  2 ACCEPT");
+}
+
+/**
+ * @brief 在当前页面上方叠加长按关机进度浮层（600..2500 ms 线性填充，松开 150 ms 收缩收起）
+ * @param state: 渲染状态
+ * @note 仅 renderUi 调用，不分配堆。
+ */
+void renderHoldOverlay(const UiRenderState &state) noexcept
+{
+    int16_t h = kHoldBoxH;
+    int16_t w = kHoldBoxW;
+    if (state.holdOverlayCollapsing) {
+        h = lerpFixed(kHoldBoxH, 4, state.holdCollapseQ10);
+        w = lerpFixed(kHoldBoxW, kHoldCollapseMinW, state.holdCollapseQ10);
+    }
+    const int16_t x = static_cast<int16_t>((kCanvasW - w) / 2);
+    const int16_t y = static_cast<int16_t>(kHoldBoxY + ((kHoldBoxH - h) / 2));
+
+    Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
+    WouoUI_GraphSetPenColor(0U);
+    WouoUI_CanvasDrawRBox(&full, x, y, w, h, kModalCornerR);
+    WouoUI_GraphSetPenColor(1U);
+    WouoUI_CanvasDrawRBoxEmpty(&full, x, y, w, h, kModalCornerR);
+
+    if (h < kHoldContentMinH) {
+        return;
+    }
+    Canvas box{.start_x = x, .start_y = y, .w = w, .h = h};
+    drawCentered(box, kHoldTitleY, Font_6_8, "HOLD TO POWER OFF");
+    WouoUI_CanvasDrawBMP(&box, 8, kHoldIconY, kDockIconSize, kDockIconSize,
+                         icons::kDockPwr16x16.data(), 1U);
+    constexpr int16_t kBarX = 30;
+    constexpr int16_t kBarY = 24;
+    constexpr int16_t kBarW = 78;
+    constexpr int16_t kBarH = 8;
+    WouoUI_CanvasDrawRBoxEmpty(&box, kBarX, kBarY, kBarW, kBarH, 2U);
+    const auto fillW = static_cast<int16_t>(
+        (static_cast<uint32_t>(std::min(state.holdProgressQ10, kEaseScale)) * (kBarW - 4)) /
+        kEaseScale);
+    if (fillW > 0) {
+        WouoUI_CanvasDrawRBox(&box, static_cast<int16_t>(kBarX + 2),
+                              static_cast<int16_t>(kBarY + 2), fillW, 4, 0U);
+    }
 }
 
 /**
@@ -1019,13 +1622,13 @@ void renderPageInto(Canvas &canvas, OledPage page, const UiRenderState &state,
         renderSubSat(canvas, state, vm);
         break;
     case OledPage::kSubPos:
-        renderSubPos(canvas, vm);
+        renderSubPos(canvas, state, vm);
         break;
     case OledPage::kSubComm:
         renderComm(canvas, state, vm);
         break;
     case OledPage::kSubDevice:
-        renderSubDevice(canvas, vm);
+        renderSubDevice(canvas, state, vm);
         break;
     case OledPage::kSubPower:
         renderSubPower(canvas, state, vm);
@@ -1077,7 +1680,7 @@ void renderSlideLeft(const PageTransition &trans, const UiRenderState &state,
 }
 
 /**
- * @brief 渲染图标展开/收回过渡（从表盘图标矩形展开至全屏或反向收回）
+ * @brief 渲染图标展开/收回过渡（从表盘图标矩形展开至全屏或反向收回，子页内容错峰上移）
  * @param trans: 过渡动画状态
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -1097,13 +1700,15 @@ void renderIconMorph(const PageTransition &trans, const UiRenderState &state,
     WouoUI_CanvasDrawRBox(&full, x, y, w, h, 2U);
     WouoUI_GraphSetPenColor(1U);
 
-    Canvas subCanvas{.start_x = x,
-                     .start_y = static_cast<int16_t>(y + pose.contentOffsetY),
-                     .w = w,
-                     .h = static_cast<int16_t>(h - pose.contentOffsetY)};
     const OledPage subPage = expanding ? trans.toPage : trans.fromPage;
+    // 统一列表子页内部自带逐行 40 ms 错峰 6 px 上移，此处仅对卫星子页应用整体内容抬升。
+    const int16_t globalLift = (subPage == OledPage::kSubSat) ? pose.contentOffsetY : 0;
+    Canvas subCanvas{.start_x = x,
+                     .start_y = static_cast<int16_t>(y + globalLift),
+                     .w = w,
+                     .h = static_cast<int16_t>(h - globalLift)};
     renderPageInto(subCanvas, subPage, state, vm);
-    if (w < kCanvasW || h < kCanvasH) {
+    if ((w < kCanvasW) || (h < kCanvasH)) {
         WouoUI_CanvasDrawRBoxEmpty(&full, x, y, w, h, 2U);
     }
 }
@@ -1121,7 +1726,7 @@ void renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb) n
     const PageTransition *trans = state.transition;
     if (state.modal != UiModal::kNone) {
         Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
-        renderCommModal(full, state.modal, vm);
+        renderModal(full, state, vm);
     } else if ((trans != nullptr) && (trans->kind == TransitionKind::kSlideLeft)) {
         renderSlideLeft(*trans, state, vm);
     } else if ((trans != nullptr) && ((trans->kind == TransitionKind::kExpandFromIcon) ||
@@ -1130,6 +1735,10 @@ void renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb) n
     } else {
         Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
         renderPageInto(full, state.page, state, vm);
+    }
+
+    if (state.holdOverlayVisible) {
+        renderHoldOverlay(state);
     }
     // 解除栈局部画笔注册，避免 WouoUI 静态 p_cur_pen 悬垂（ROL1-06）。
     WouoUI_GraphSetPen(nullptr);

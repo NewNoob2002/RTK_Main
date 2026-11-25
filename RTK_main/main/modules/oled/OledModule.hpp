@@ -30,6 +30,8 @@ public:
     static constexpr size_t kTaskStackBytes = 3072U;   // B，静态任务栈（与 trace_out 一致）
     static constexpr size_t kFrameBufferBytes = 1024U; // B，8×128 单色帧缓冲（sizeof(ScreenBuff)）
     static constexpr uint32_t kRefreshPeriodMs = 200U; // ms，静止期上限 5 Hz（0 写 I2C）
+    static constexpr uint8_t kOfflineFlushErrors =
+        4U; // 连续 I2C 刷屏失败达此阈值判定面板离线并清除 kOledActive
 
     constexpr OledModule() noexcept = default;
     ~OledModule() = default;
@@ -153,6 +155,11 @@ private:
      * @param i2cUs: 发送耗时（µs）。
      */
     void updateFrameStats(uint32_t nowMs, uint32_t frameUs, int64_t i2cUs) noexcept;
+    /**
+     * @brief 依据最近一次刷屏结果维护面板在线状态，连续 I2C 失败进入离线时清除 kOledActive
+     * @note 仅 init 或 oled 任务调用，不阻塞，非 ISR。
+     */
+    void updatePanelOnlineState() noexcept;
 
     /**
      * @brief 在状态变化时发布 OLED 诊断快照到 DataCenter
@@ -167,6 +174,9 @@ private:
     rtos::BootTask task_{};
     bool enabled_ = false;
     bool present_ = false;
+    uint8_t consecutiveFlushErrors_ = 0U;
+    bool panelOffline_ = false;
+    bool wasOledActive_ = false;
     uint16_t fpsX10_ = 0U;
     uint32_t fpsWindowStartMs_ = 0U;
     uint32_t fpsWindowFrames_ = 0U;

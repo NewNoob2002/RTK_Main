@@ -8,6 +8,7 @@
 #include "SppServerPairing.h"
 #include "app/PowerRequests.hpp"
 #include "modules/bt_link/BtPairing.hpp"
+#include "modules/power/PowerModule.hpp"
 
 namespace app {
 
@@ -92,6 +93,9 @@ void OledModule::applyAction(OledActionRequest request, uint32_t nowMs) noexcept
             static_cast<void>(spp_server_pair_decide_for(
                 request.pairId, request.action == OledAction::kPairAccept));
         }
+        break;
+    case OledAction::kShutdownKey:
+        static_cast<void>(power::requestShutdown(board::ShutdownReason::kKey));
         break;
     case OledAction::kNone:
     default:

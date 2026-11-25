@@ -1,6 +1,7 @@
-# Milliseconds, command, optional argument.
+# OL4 full UI tour: boot -> dial -> sat/pos/comm/device/power -> hold -> confirm -> shutdown.
 0 check system_check
 150 shot boot
+1400 shot boot-check
 3000 check dialplate
 3000 shot dial
 3100 short
@@ -8,39 +9,67 @@
 3700 check sat
 3700 shot satellite
 3800 short
-3900 short
-4400 check dialplate
-4450 short
-4900 short
-5000 short
-5500 check pos
+4300 shot satellite-cn0
+4400 short
+4500 short
+5000 check dialplate
+5050 short
+5500 short
 5600 short
-5700 short
-6200 check dialplate
-6250 short
-6700 short
-6800 short
-7300 check comm
-7300 shot comm
+6100 check pos
+6100 shot pos
+6200 short
+6600 short
+7000 short
 7400 short
-7800 short
-8250 short
-8350 short
-8850 check dialplate
-8900 short
-9350 short
-9450 short
-9950 check device
-10050 short
-10150 short
-10650 check dialplate
-10700 short
+7950 shot pos-scrolled
+8050 short
+8150 short
+8650 check dialplate
+8700 short
+9150 short
+9250 short
+9750 check comm
+9750 shot comm
+9850 short
+10250 short
+10650 short
+11050 short
 11150 short
-11250 short
-11750 check power
-11850 short
-11950 short
-12450 check dialplate
-12500 long
-12650 check shutdown
-13550 shot shutdown
+11650 check dialplate
+11700 short
+12150 short
+12250 short
+12750 check device
+12750 shot device
+12850 short
+13250 short
+13650 short
+14050 short
+14600 shot device-scrolled
+14700 short
+14800 short
+15300 check dialplate
+15350 short
+15800 short
+15900 short
+16400 check power
+16400 shot power
+16500 short
+16900 short
+17300 short
+17850 shot power-scrolled
+17950 short
+18350 short
+18450 short
+18950 check dialplate
+19050 key_down
+20550 shot hold-overlay
+20750 key_up
+21050 check dialplate
+21150 long
+22150 shot power-off-confirm
+22250 short
+22350 short
+22500 check shutdown
+23400 shot shutdown

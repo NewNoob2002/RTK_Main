@@ -101,11 +101,30 @@ struct OledPairingStatus {
 };
 
 /** 由 OLED 提交给 kLink 的动作。 */
-enum class OledAction : uint8_t { kNone, kWifi, kBluetooth, kTogglePair, kPairAccept, kPairReject };
+enum class OledAction : uint8_t {
+    kNone,
+    kWifi,
+    kBluetooth,
+    kTogglePair,
+    kPairAccept,
+    kPairReject,
+    kShutdownKey,
+};
 
 struct OledActionRequest {
     OledAction action = OledAction::kNone;
     uint32_t pairId = 0U;
+};
+
+/** PowerModule 暴露给 OLED 的按键长按与待机唤醒进度只读快照（无锁原子更新）。 */
+struct KeyHoldSnapshot {
+    bool active = false;                               ///< 消抖后按键正处于有效按住计数态
+    bool standbyConfirm = false;                       ///< 充电待机长按已到达，正在确认 U3 保持
+    uint32_t startMs = 0U;                             ///< 物理按下沿单调时刻（ms）
+    uint32_t thresholdMs = board::kDefaultLongPressMs; ///< 长按触发阈值（ms）
+
+    /** @brief 比较两份按键保持快照是否一致。 */
+    [[nodiscard]] bool operator==(const KeyHoldSnapshot &) const noexcept = default;
 };
 
 /**
@@ -128,6 +147,8 @@ public:
     using WakeFn = void (*)(void *ctx) noexcept;
     static constexpr size_t kShortKeyQueueCap = 8U; // SPSC 短按时间戳队列容量（2 的幂）
     static constexpr size_t kShortKeyQueueMask = kShortKeyQueueCap - 1U;
+    static constexpr size_t kLongKeyQueueCap = 4U; // SPSC 长按到达时间戳队列容量（2 的幂）
+    static constexpr size_t kLongKeyQueueMask = kLongKeyQueueCap - 1U;
 
     constexpr UiEventBus() noexcept = default;
     ~UiEventBus() = default;
@@ -301,6 +322,123 @@ public:
     }
 
     /**
+     * @brief 投递一次长按阈值到达事件（附带产生时刻单调时间戳）并唤醒 UI 任务
+     * @param eventMs: 长按到达时刻（ms）
+     * @note 仅 kLink 的 PowerModule 单生产者调用；无锁 SPSC 队列，不阻塞、不分配堆，非 ISR。
+     */
+    void notifyLongKey(uint32_t eventMs = 0U) noexcept
+    {
+        const uint32_t writeIdx = longKeyWrite_.load(std::memory_order_relaxed);
+        const uint32_t readIdx = longKeyRead_.load(std::memory_order_acquire);
+        if ((writeIdx - readIdx) < kLongKeyQueueCap) {
+            longKeyTimes_[writeIdx & kLongKeyQueueMask] = eventMs;
+            longKeyWrite_.store(writeIdx + 1U, std::memory_order_release);
+        }
+        longKeyCount_.fetch_add(1U, std::memory_order_release);
+        notifyWake();
+    }
+
+    /**
+     * @brief 按生产顺序弹出一条未消费的长按到达时间戳
+     * @param[out] eventMsOut: 弹出的事件产生时刻（ms）
+     * @retval true 成功弹出一条事件
+     * @retval false 队列为空
+     * @note 仅 OLED 任务单消费者调用；无锁 SPSC 读，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool popLongKey(uint32_t &eventMsOut) noexcept
+    {
+        const uint32_t readIdx = longKeyRead_.load(std::memory_order_relaxed);
+        const uint32_t writeIdx = longKeyWrite_.load(std::memory_order_acquire);
+        if (readIdx == writeIdx) {
+            return false;
+        }
+        eventMsOut = longKeyTimes_[readIdx & kLongKeyQueueMask];
+        longKeyRead_.store(readIdx + 1U, std::memory_order_release);
+        return true;
+    }
+
+    /**
+     * @brief 清空当前队列中全部未消费的长按到达时间戳（用于 OLED 初始化丢弃启动期残余事件）
+     * @note 仅 OLED 单消费者调用，不阻塞，非 ISR。
+     */
+    void drainLongKeys() noexcept
+    {
+        const uint32_t writeIdx = longKeyWrite_.load(std::memory_order_acquire);
+        longKeyRead_.store(writeIdx, std::memory_order_release);
+    }
+
+    /**
+     * @brief 读取累计长按到达事件序号
+     * @retval 自启动以来的长按到达累计次数
+     * @note 任意任务可调用，无锁原子读，不阻塞。
+     */
+    [[nodiscard]] uint32_t longKeyCount() const noexcept
+    {
+        return longKeyCount_.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief 更新按键保持中、按下起点与长按阈值快照，状态边沿变化时唤醒 OLED 任务
+     * @param active: 消抖后按键是否正处于按住计数态
+     * @param startMs: 物理按下沿单调起点（ms）
+     * @param thresholdMs: 长按触发阈值（ms）
+     * @param standbyConfirm: 充电待机长按已到达、正在确认 U3 保持
+     * @note 仅 kLink 的 PowerModule 单生产者调用；无锁原子写，不阻塞、不分配堆，非 ISR。
+     */
+    void updateKeyHold(bool active, uint32_t startMs, uint32_t thresholdMs,
+                       bool standbyConfirm) noexcept
+    {
+        const uint32_t nextFlags =
+            (active ? kKeyHoldActiveBit : 0U) | (standbyConfirm ? kKeyHoldStandbyBit : 0U);
+        const uint32_t prevFlags = keyHoldFlags_.load(std::memory_order_relaxed);
+        const uint32_t prevStart = keyHoldStartMs_.load(std::memory_order_relaxed);
+        const uint32_t prevThreshold = keyHoldThresholdMs_.load(std::memory_order_relaxed);
+        if ((nextFlags == prevFlags) && (startMs == prevStart) && (thresholdMs == prevThreshold)) {
+            return;
+        }
+        const uint32_t seq = keyHoldSeq_.load(std::memory_order_relaxed);
+        keyHoldSeq_.store(seq + 1U, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_release);
+        keyHoldStartMs_.store(startMs, std::memory_order_relaxed);
+        keyHoldThresholdMs_.store(thresholdMs, std::memory_order_relaxed);
+        keyHoldFlags_.store(nextFlags, std::memory_order_relaxed);
+        keyHoldSeq_.store(seq + 2U, std::memory_order_release);
+        if (nextFlags != prevFlags) {
+            notifyWake();
+        }
+    }
+
+    /**
+     * @brief 无锁读取按键按住进度快照（一致拷贝，不阻塞）
+     * @retval 按键按住与待机保持快照
+     * @note 任意任务可调用，无锁原子读，不阻塞。
+     */
+    [[nodiscard]] KeyHoldSnapshot readKeyHold() const noexcept
+    {
+        constexpr unsigned kMaxRetries = 4U;
+        KeyHoldSnapshot out{};
+        for (unsigned attempt = 0U; attempt < kMaxRetries; ++attempt) {
+            const uint32_t seq1 = keyHoldSeq_.load(std::memory_order_acquire);
+            if ((seq1 & 1U) != 0U) {
+                continue;
+            }
+            const uint32_t flags = keyHoldFlags_.load(std::memory_order_relaxed);
+            const uint32_t startMs = keyHoldStartMs_.load(std::memory_order_relaxed);
+            const uint32_t thresholdMs = keyHoldThresholdMs_.load(std::memory_order_relaxed);
+            std::atomic_thread_fence(std::memory_order_acquire);
+            const uint32_t seq2 = keyHoldSeq_.load(std::memory_order_relaxed);
+            if (seq1 == seq2) {
+                out.active = (flags & kKeyHoldActiveBit) != 0U;
+                out.standbyConfirm = (flags & kKeyHoldStandbyBit) != 0U;
+                out.startMs = startMs;
+                out.thresholdMs = (thresholdMs == 0U) ? board::kDefaultLongPressMs : thresholdMs;
+                return out;
+            }
+        }
+        return out;
+    }
+
+    /**
      * @brief 唤醒 UI 任务以尽快响应关机等状态变化
      * @note 任意任务可调用；不阻塞、不分配堆，非 ISR。
      */
@@ -359,6 +497,9 @@ private:
         return 8U << static_cast<uint8_t>(stage);
     }
     static_assert((kShortKeyQueueCap & kShortKeyQueueMask) == 0U, "短按队列容量须为 2 的幂");
+    static constexpr uint32_t kKeyHoldActiveBit = 1U << 0U;
+    static constexpr uint32_t kKeyHoldStandbyBit = 1U << 1U;
+    static_assert((kLongKeyQueueCap & kLongKeyQueueMask) == 0U, "长按队列容量须为 2 的幂");
     static_assert(fw::kAtomicUsable<uint32_t>, "UI 事件原子须无锁");
     static_assert(fw::kAtomicUsable<WakeFn>, "UI 唤醒钩子指针原子须无锁");
 
@@ -366,6 +507,14 @@ private:
     std::atomic<uint32_t> shortKeyWrite_{0U};
     std::atomic<uint32_t> shortKeyRead_{0U};
     std::atomic<uint32_t> shortKeyCount_{0U};
+    std::array<uint32_t, kLongKeyQueueCap> longKeyTimes_{};
+    std::atomic<uint32_t> longKeyWrite_{0U};
+    std::atomic<uint32_t> longKeyRead_{0U};
+    std::atomic<uint32_t> longKeyCount_{0U};
+    std::atomic<uint32_t> keyHoldSeq_{0U};
+    std::atomic<uint32_t> keyHoldStartMs_{0U};
+    std::atomic<uint32_t> keyHoldThresholdMs_{0U};
+    std::atomic<uint32_t> keyHoldFlags_{0U};
     std::atomic<uint32_t> flags_{0U};
     std::atomic<WakeFn> wakeFn_{nullptr};
     void *wakeCtx_ = nullptr;

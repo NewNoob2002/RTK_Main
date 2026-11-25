@@ -12,9 +12,15 @@ namespace app::oled {
 inline constexpr uint16_t kEaseScale = 1024U;          // Q10 缓动进度满值（0..1024）
 inline constexpr uint32_t kDoubleClickWindowMs = 300U; // ms，短按/双击消歧窗口上限（<= 300 ms）
 inline constexpr uint32_t kPageTransitionMs = 420U;    // ms，页面切换/展开收回动画时长
-inline constexpr uint32_t kContentStaggerMs = 40U;     // ms，框体先动，随后内容上移
-inline constexpr int16_t kTransitionContentLiftPx = 5; // px，进入时内容的初始偏移
+inline constexpr uint32_t kContentStaggerMs = 40U;     // ms，框体先动，随后内容逐行错峰上移
+inline constexpr int16_t kTransitionContentLiftPx = 6; // px，进入时内容的初始垂直偏移
 inline constexpr uint32_t kNumberRollMs = 180U;        // ms，数字滚动切换时长
+inline constexpr uint32_t kSquishDurationMs = 120U;    // ms，双击确认选择框挤压/回弹总时长
+inline constexpr uint32_t kSquishPressMs = 45U;        // ms，挤压向内收缩时长
+inline constexpr int16_t kSquishMaxPx = 2;             // px，选择框向内挤压像素
+inline constexpr uint32_t kHoldCollapseMs = 150U;      // ms，长按未满松开时浮层收起时长
+inline constexpr uint32_t kChargeAnimPeriodMs = 500U;  // ms，充电待机流动动画周期（<= 2 fps）
+inline constexpr uint32_t kStandbyRingDecayMs = 240U;  // ms，待机松开后进度环满程回落时长
 inline constexpr uint32_t kAnimFramePeriodMs = 33U;    // ms，动画期目标帧周期（~30 fps）
 inline constexpr uint32_t kIdlePollPeriodMs = 200U;    // ms，静止期轮询周期（5 Hz，0 写 I2C）
 
@@ -120,10 +126,12 @@ private:
 class FixedSpring final {
 public:
     static constexpr int32_t kScale = 256;            // Q8：1 px = 256
-    static constexpr int32_t kDefaultStiffness = 220; // 刚度 k
-    static constexpr int32_t kDefaultDamping = 26;    // 阻尼 c（阻尼比约 0.88，轻快无过冲抖动）
+    static constexpr int32_t kDefaultStiffness = 220; // 刚度 k（表盘入口跟随）
+    static constexpr int32_t kDefaultDamping = 26;    // 阻尼 c（阻尼比约 0.88）
+    static constexpr int32_t kRowStiffness = 2800;    // 刚度 k（子页行间移动 165 ms <= 180 ms）
+    static constexpr int32_t kRowDamping = 94;        // 阻尼 c（阻尼比约 0.89，快速无过冲）
     static constexpr uint32_t kMaxStepMs = 64U;       // ms，单次 step 最大积分跨度
-    static constexpr uint32_t kSubStepMs = 16U;       // ms，稳定子步上限
+    static constexpr uint32_t kSubStepMs = 8U;        // ms，稳定子步上限
 
     constexpr FixedSpring() noexcept = default;
 
@@ -144,9 +152,12 @@ public:
     /**
      * @brief 按时间步进推进弹簧物理状态并在误差与速度低于阈值时吸附静止
      * @param dtMs: 距上次步进经过的毫秒数（0 忽略，>64 ms 钳制到 64 ms）
+     * @param stiffness: 弹簧刚度参数（默认 kDefaultStiffness）
+     * @param damping: 阻尼系数（默认 kDefaultDamping）
      * @note 纯整数定点计算，无浮点、不阻塞。
      */
-    void step(uint32_t dtMs) noexcept;
+    void step(uint32_t dtMs, int32_t stiffness = kDefaultStiffness,
+              int32_t damping = kDefaultDamping) noexcept;
 
     /**
      * @brief 读取当前四舍五入后的整像素位置
@@ -257,6 +268,46 @@ private:
     uint32_t startMs_ = 0U;
 };
 
+/** 双击确认瞬间的选择框“挤压/回弹”反馈动画（<= 120 ms，0 浮点、0 堆）。 */
+class SquishAnim final {
+public:
+    constexpr SquishAnim() noexcept = default;
+
+    /**
+     * @brief 触发一次挤压/回弹反馈
+     * @param nowMs: 当前单调时间（ms）
+     * @note 纯内存操作，不阻塞。
+     */
+    void trigger(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 立即清除挤压状态
+     * @note 纯内存操作，不阻塞。
+     */
+    void clear() noexcept;
+
+    /**
+     * @brief 检查挤压动画是否仍在播放（超时后自动熄灭）
+     * @param nowMs: 当前单调时间（ms）
+     * @retval true 动画进行中
+     * @retval false 已静止
+     * @note 每帧调用。
+     */
+    [[nodiscard]] bool pollActive(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 读取当前时刻选择框向内收缩像素数（0..kSquishMaxPx）
+     * @param nowMs: 当前单调时间（ms）
+     * @retval 当前收缩像素（0、1 或 2）
+     * @note 纯查询，无浮点。
+     */
+    [[nodiscard]] int16_t insetPx(uint32_t nowMs) const noexcept;
+
+private:
+    uint32_t startMs_ = 0U;
+    bool active_ = false;
+};
+
 /** 屏幕矩形（用于子菜单从图标展开与收回动画）。 */
 struct Rect {
     int16_t x = 0;
@@ -334,6 +385,15 @@ struct PageTransition {
      * @retval 本轮绘制使用的视口及偏移。
      */
     [[nodiscard]] TransitionPose pose(uint32_t nowMs, Rect screen) const noexcept;
+
+    /**
+     * @brief 计算子页中第 rowIdx 行的错峰垂直偏移（每行迟 40 ms，从 6 px 上移到 0）
+     * @param nowMs: 当前单调时间（ms）
+     * @param rowIdx: 行序号（0 起）
+     * @retval 该行当前附加的垂直偏移像素（0..kTransitionContentLiftPx）
+     * @note 纯查询，收回时自动按镜像时间回退。
+     */
+    [[nodiscard]] int16_t rowOffsetY(uint32_t nowMs, uint8_t rowIdx) const noexcept;
 };
 
 } // namespace app::oled

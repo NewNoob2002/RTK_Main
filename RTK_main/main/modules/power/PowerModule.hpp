@@ -295,6 +295,7 @@ private:
     AppContext *context_ = nullptr;
     bool active_ = false;
     bool keyDriveHigh_ = false;
+    bool forcePowerOffFired_ = false;
     board::PowerKeySm keySm_{};
     board::ShutdownSm shutdownSm_{};
     board::StandbyWakeSm standbyWake_{};
