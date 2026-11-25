@@ -12,6 +12,7 @@
 #include "cli/Console.hpp"
 #include "def/SystemDef.hpp"
 #include "fw/Result.hpp"
+#include "fw/Status.hpp"
 #include "rtos/Executor.hpp"
 
 namespace app {
@@ -53,15 +54,21 @@ struct ShutdownParticipant {
     ShutdownMilestone milestone = ShutdownMilestone::kNone;
 };
 inline constexpr size_t kMaxExtraShutdownParticipants = 4U;
+/** 外部参与者名称长度上限（不含结尾 0）；保证单条超时日志（kLogTextMax=160）可完整打印每个名字。 */
+inline constexpr size_t kMaxShutdownParticipantNameLen = 32U;
 
 /**
  * @brief 启动期一次性注册额外关机收尾参与者（静态槽位，无堆）
- * @param participant: 参与者描述（name 非空且 isDone 非空，stage 为 kSave/kQuiesce/kCutPower）
- * @retval true 注册成功
- * @retval false 参数无效、名称重复或表已满
- * @note 仅启动前或主机测试单线程调用，不分配堆，非 ISR。
+ * @param entry: 参与者描述（name 非空、不超过 kMaxShutdownParticipantNameLen 且不与内置名重名，
+ *        isDone 非空，stage 仅允许 kSave/kQuiesce）
+ * @retval fw::Status::kOk 注册成功
+ * @retval fw::Status::kInvalidArg 名称为空/过长/与内置重名、isDone 为空或阶段不是 kSave/kQuiesce
+ * @retval fw::Status::kBusy 名称与已登记外部参与者重复
+ * @retval fw::Status::kNoSpace 外部参与者表已满
+ * @note kCutPower 阶段只由内部 OLED 双终帧有界流程管理，外部不得登记。
+ *       仅启动前或主机测试单线程调用，不分配堆，非 ISR。
  */
-[[nodiscard]] bool registerShutdownParticipant(const ShutdownParticipant &participant) noexcept;
+[[nodiscard]] fw::Status registerShutdownParticipant(const ShutdownParticipant &entry) noexcept;
 
 /**
  * @brief 清空启动期额外注册的关机收尾参与者（主机测试场景复位用）
@@ -76,12 +83,26 @@ void clearExtraShutdownParticipants() noexcept;
  */
 [[nodiscard]] std::span<const ShutdownParticipant> extraShutdownParticipants() noexcept;
 
+/** 模拟电量会话快照：百分比与会话代号由同一原子字一并发布，读者不会看到撕裂的组合。 */
+struct SimBatterySession {
+    uint8_t pct = board::kBatteryPctUnknown; // 模拟百分比，kBatteryPctUnknown 表示未启用
+    uint32_t session = 0U;                   // 每次 setSimulatedBatteryPct 调用递增（24 位回绕）
+};
+
 /**
  * @brief 设置或清除 HIL 模拟电池百分比（kBatteryPctUnknown 表示关闭模拟、使用真实 ADC）
  * @param pct: 模拟电量百分比（0..100），或 board::kBatteryPctUnknown 恢复真实读数
- * @note 任意任务可调用，无锁原子，仅用于 DEV 档 HIL 低电关机验证。
+ * @note 任意任务可调用，无锁原子；每次调用都开启新会话，消费者据此区分「清除后重新注入」。
+ *       仅用于 DEV 档 HIL 低电关机验证。
  */
 void setSimulatedBatteryPct(uint8_t pct) noexcept;
+
+/**
+ * @brief 原子读取当前模拟电量会话（百分比 + 会话代号）
+ * @retval 当前会话快照；未启用模拟时 pct 为 board::kBatteryPctUnknown
+ * @note 任意任务可调用，无锁原子，非 ISR。
+ */
+[[nodiscard]] SimBatterySession simulatedBatterySession() noexcept;
 
 /**
  * @brief 读取当前 HIL 模拟电池百分比（kBatteryPctUnknown 表示未启用模拟）
@@ -128,6 +149,15 @@ public:
      * @note 仅 kLink 任务调用，I2C 单次传输最多等待 10 ms，非 ISR。
      */
     [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 判断名称是否与内置关机参与者重名
+     * @param name: 待检查名称（非空）
+     * @retval true 与内置表项同名
+     * @retval false 不与内置表项冲突
+     * @note 供外部登记校验使用，只读静态表，非 ISR。
+     */
+    [[nodiscard]] static bool isBuiltinParticipantName(const char *name) noexcept;
 
 private:
     struct PinLevels {
@@ -291,10 +321,12 @@ private:
     /**
      * @brief 计算给定 kQuiesce 参与者的有界等待上限
      * @param p: 参与者登记项
+     * @param builtin: true 为内置表项；仅内置 safe_gpio 的零等待/失败绑定适用
      * @retval 该参与者的等待上限（ms）
      * @note 仅 kLink 调用，不阻塞，非 ISR。
      */
-    [[nodiscard]] uint32_t quiesceLimitMs(const power::ShutdownParticipant &p) const noexcept;
+    [[nodiscard]] uint32_t quiesceLimitMs(const power::ShutdownParticipant &p,
+                                          bool builtin) const noexcept;
     /**
      * @brief 执行关机阶段刚进入时的一次性动作（日志、拦截写入、冲刷、静默或拉高 GPIO4）
      * @param nowMs: 当前单调时间（ms）
@@ -462,6 +494,8 @@ private:
     uint32_t lastBatterySampleMs_ = 0U;
     uint32_t batteryMv_ = 0U;
     uint8_t batteryPct_ = board::kBatteryPctUnknown;
+    uint32_t simSession_ = 0U; // 已消费的模拟电量会话代号
+    bool simActive_ = false;   // 上一轮读数是否来自模拟
     board::LowBatteryTimer lowBattery_{};
     PowerSnapshot lastSnapshot_{};
 };

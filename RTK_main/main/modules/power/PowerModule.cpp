@@ -49,36 +49,15 @@ constexpr uint32_t kBatteryFreshMs = 2000U;     // ms，超期旧读数不用于
 constinit std::atomic<TaskHandle_t> s_restart_task_handle{nullptr};
 static_assert(fw::kAtomicUsable<TaskHandle_t>, "电源重启唤醒任务句柄原子须无锁");
 
-constinit std::atomic<uint8_t> s_sim_battery_pct{board::kBatteryPctUnknown};
-static_assert(fw::kAtomicUsable<uint8_t>, "模拟电量原子须无锁");
+// 低 8 位 = 模拟百分比，高 24 位 = 会话代号；两者同一原子字发布，读者不会看到撕裂组合。
+constexpr uint32_t kSimPctMask = 0xFFU;
+constexpr uint32_t kSimSessionShift = 8U;
+constinit std::atomic<uint32_t> s_sim_battery_word{board::kBatteryPctUnknown};
+static_assert(fw::kAtomicUsable<uint32_t>, "模拟电量原子须无锁");
 
 constinit std::array<power::ShutdownParticipant, power::kMaxExtraShutdownParticipants>
     s_extra_participants{};
 constinit size_t s_extra_participant_count = 0U;
-
-/**
- * @brief 将参与者名称追加到逗号分隔的固定栈缓冲中
- * @param buf: 目标缓冲视图
- * @param[in,out] used: 当前已写入字节数（不含终止符）
- * @param name: 参与者名称（非空）
- * @note 仅 kLink 超时日志格式化调用，无堆分配，非 ISR。
- */
-void appendPendingName(std::span<char> buf, size_t &used, const char *name) noexcept
-{
-    if (buf.empty() || (name == nullptr) || ((used + 1U) >= buf.size())) {
-        return;
-    }
-    const char *const sep = used == 0U ? "" : ",";
-    const auto tail = buf.subspan(used);
-    const int written = std::snprintf(tail.data(), tail.size(), "%s%s", sep, name);
-    if (written <= 0) {
-        return;
-    }
-    const size_t avail = buf.size() - 1U - used;
-    // written > 0 已在上行校验，转无符号用于与剩余容量比较安全。
-    const auto step = static_cast<size_t>(written);
-    used += step < avail ? step : avail;
-}
 
 /**
  * @brief 配置单个输入 GPIO（无内部上下拉，关中断）
@@ -206,23 +185,28 @@ bool requestShutdown(board::ShutdownReason reason) noexcept
            s_power_requests.requestShutdown(app.bootMode, reason);
 }
 
-bool registerShutdownParticipant(const ShutdownParticipant &participant) noexcept
+fw::Status registerShutdownParticipant(const ShutdownParticipant &entry) noexcept
 {
-    if ((participant.name == nullptr) || (*participant.name == '\0') ||
-        (participant.isDone == nullptr) || (participant.stage == board::ShutdownStage::kIdle) ||
-        (participant.stage == board::ShutdownStage::kAnnounce) ||
-        (s_extra_participant_count >= kMaxExtraShutdownParticipants)) {
-        return false;
+    // kCutPower 由内部 OLED 双终帧有界流程独占：外部参与者不得延长断电窗口或绕过 30 s 兜底。
+    if ((entry.name == nullptr) || (*entry.name == '\0') || (entry.isDone == nullptr) ||
+        ((entry.stage != board::ShutdownStage::kSave) &&
+         (entry.stage != board::ShutdownStage::kQuiesce)) ||
+        (std::strlen(entry.name) > kMaxShutdownParticipantNameLen) ||
+        PowerModule::isBuiltinParticipantName(entry.name)) {
+        return fw::Status::kInvalidArg;
     }
     for (size_t i = 0U; i < s_extra_participant_count; ++i) {
         if ((s_extra_participants[i].name != nullptr) &&
-            (std::strcmp(s_extra_participants[i].name, participant.name) == 0)) {
-            return false;
+            (std::strcmp(s_extra_participants[i].name, entry.name) == 0)) {
+            return fw::Status::kBusy;
         }
     }
-    s_extra_participants[s_extra_participant_count] = participant;
+    if (s_extra_participant_count >= kMaxExtraShutdownParticipants) {
+        return fw::Status::kNoSpace;
+    }
+    s_extra_participants[s_extra_participant_count] = entry;
     ++s_extra_participant_count;
-    return true;
+    return fw::Status::kOk;
 }
 
 void clearExtraShutdownParticipants() noexcept
@@ -239,15 +223,29 @@ std::span<const ShutdownParticipant> extraShutdownParticipants() noexcept
 void setSimulatedBatteryPct(uint8_t pct) noexcept
 {
     constexpr uint8_t kMaxBatteryPct = 100U;
-    const uint8_t encoded = (pct <= kMaxBatteryPct) ? pct : board::kBatteryPctUnknown;
-    s_sim_battery_pct.store(encoded, std::memory_order_release);
+    const uint32_t encoded = (pct <= kMaxBatteryPct) ? pct : board::kBatteryPctUnknown;
+    uint32_t cur = s_sim_battery_word.load(std::memory_order_relaxed);
+    uint32_t next = 0U;
+    do {
+        // 会话代号每次调用递增（24 位回绕），使「清除后立即重新注入」也可被消费者观察到。
+        const uint32_t session = ((cur >> kSimSessionShift) + 1U) & 0xFFFFFFU;
+        next = (session << kSimSessionShift) | encoded;
+    } while (!s_sim_battery_word.compare_exchange_weak(cur, next, std::memory_order_acq_rel,
+                                                       std::memory_order_relaxed));
+}
+
+SimBatterySession simulatedBatterySession() noexcept
+{
+    constexpr uint8_t kMaxBatteryPct = 100U;
+    const uint32_t word = s_sim_battery_word.load(std::memory_order_acquire);
+    const auto raw = static_cast<uint8_t>(word & kSimPctMask);
+    return SimBatterySession{(raw <= kMaxBatteryPct) ? raw : board::kBatteryPctUnknown,
+                             word >> kSimSessionShift};
 }
 
 uint8_t simulatedBatteryPct() noexcept
 {
-    constexpr uint8_t kMaxBatteryPct = 100U;
-    const uint8_t raw = s_sim_battery_pct.load(std::memory_order_acquire);
-    return (raw <= kMaxBatteryPct) ? raw : board::kBatteryPctUnknown;
+    return simulatedBatterySession().pct;
 }
 } // namespace power
 
@@ -293,6 +291,8 @@ fw::Result PowerModule::init() noexcept
     oledWaitDeadlineMs_ = 0U;
     resetShutdownProgress();
     power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    simSession_ = power::simulatedBatterySession().session;
+    simActive_ = false;
     shortPresses_ = 0U;
     longPresses_ = 0U;
     shutdownSm_ = board::ShutdownSm{};
@@ -420,12 +420,6 @@ fw::Status PowerModule::takeBatterySample(uint32_t nowMs) noexcept
 
 bool PowerModule::pollBatteryAdc(uint32_t nowMs, bool &fresh) noexcept
 {
-    if ((batteryMv_ == 0U) && (batteryPct_ != board::kBatteryPctUnknown)) {
-        batteryPct_ = board::kBatteryPctUnknown;
-        batterySampleCount_ = 0U;
-        lastBatteryBatchMs_ = nowMs - kBatteryPeriodMs;
-        lowBattery_ = {};
-    }
     if (!batteryAdcReady_) {
         return false;
     }
@@ -446,10 +440,25 @@ bool PowerModule::pollBatteryAdc(uint32_t nowMs, bool &fresh) noexcept
 
 void PowerModule::pollBattery(uint32_t nowMs, const PinLevels &pins) noexcept
 {
-    const uint8_t simPct = power::simulatedBatteryPct();
+    const auto sim = power::simulatedBatterySession();
+    if (sim.session != simSession_) {
+        // 模拟会话变化（含「清除后立即重新注入」）：作废已累计的低电计时，避免两轮注入被合并。
+        simSession_ = sim.session;
+        lowBattery_ = {};
+        if (simActive_) {
+            // 模拟读数不得带入真实 ADC 路径：丢弃并让真实采样重新开始。
+            simActive_ = false;
+            batteryPct_ = board::kBatteryPctUnknown;
+            batteryMv_ = 0U;
+            batterySampleCount_ = 0U;
+            lastBatteryBatchMs_ = nowMs - kBatteryPeriodMs;
+            lastBatterySampleMs_ = nowMs - kBatteryFreshMs;
+        }
+    }
     bool fresh = false;
-    if (simPct != board::kBatteryPctUnknown) {
-        batteryPct_ = simPct;
+    if (sim.pct != board::kBatteryPctUnknown) {
+        simActive_ = true;
+        batteryPct_ = sim.pct;
         batteryMv_ = 0U;
         lastBatterySampleMs_ = nowMs;
         fresh = true;
@@ -840,6 +849,17 @@ struct PowerModule::ParticipantOps {
                   "关机参与者总数须适配 16 位状态掩码");
 };
 
+bool PowerModule::isBuiltinParticipantName(const char *name) noexcept
+{
+    if (name == nullptr) {
+        return false;
+    }
+    return std::any_of(ParticipantOps::kBuiltin.begin(), ParticipantOps::kBuiltin.end(),
+                       [name](const power::ShutdownParticipant &p) noexcept {
+                           return std::strcmp(p.name, name) == 0;
+                       });
+}
+
 bool PowerModule::pollSaveFence(bool link) noexcept
 {
     if (!power::s_power_requests.settingsSubmitted()) {
@@ -861,7 +881,8 @@ bool PowerModule::pollSaveFence(bool link) noexcept
     return ioFenceReached_;
 }
 
-uint32_t PowerModule::quiesceLimitMs(const power::ShutdownParticipant &p) const noexcept
+uint32_t PowerModule::quiesceLimitMs(const power::ShutdownParticipant &p,
+                                     bool builtin) const noexcept
 {
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
     if ((p.milestone == power::ShutdownMilestone::kRadioQuiesce) &&
@@ -869,8 +890,8 @@ uint32_t PowerModule::quiesceLimitMs(const power::ShutdownParticipant &p) const 
         return kWifiQuiesceWaitMs;
     }
 #endif
-    if ((p.milestone == power::ShutdownMilestone::kSafeGpio) && safeGpioEvaluated_) {
-        // 外设安全电平配置为同步执行，失败时不再额外空等日志排空上限。
+    if (builtin && (p.milestone == power::ShutdownMilestone::kSafeGpio) && safeGpioEvaluated_) {
+        // 仅内置 safe_gpio 是同步执行：失败时不再额外空等；外部参与者即使声明同里程碑也按通用上限等待。
         return 0U;
     }
     return kQuiesceMaxWaitMs;
@@ -879,14 +900,15 @@ uint32_t PowerModule::quiesceLimitMs(const power::ShutdownParticipant &p) const 
 void PowerModule::beginStageParticipants(board::ShutdownStage stage) noexcept
 {
     size_t idx = 0U;
-    const auto invoke = [this, stage, &idx](const power::ShutdownParticipant &p,
-                                            void *cbCtx) noexcept {
+    const auto invoke = [this, stage, &idx](const power::ShutdownParticipant &p, void *cbCtx,
+                                            bool builtin) noexcept {
         if (p.stage == stage) {
             if (p.begin != nullptr) {
                 p.begin(stage, cbCtx);
             }
-            if ((p.milestone == power::ShutdownMilestone::kSafeGpio) && safeGpioEvaluated_ &&
-                !safeGpioOk_) {
+            // safe_gpio 失败位只绑定内置表项；外部同里程碑参与者靠自己的 isDone/超时判定。
+            if (builtin && (p.milestone == power::ShutdownMilestone::kSafeGpio) &&
+                safeGpioEvaluated_ && !safeGpioOk_) {
                 // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
                 participantTimedOutMask_ =
                     static_cast<uint16_t>(participantTimedOutMask_ | (1U << idx));
@@ -895,10 +917,10 @@ void PowerModule::beginStageParticipants(board::ShutdownStage stage) noexcept
         ++idx;
     };
     for (const auto &p : ParticipantOps::kBuiltin) {
-        invoke(p, this);
+        invoke(p, this, true);
     }
     for (const auto &p : power::extraShutdownParticipants()) {
-        invoke(p, p.userCtx);
+        invoke(p, p.userCtx, false);
     }
 }
 
@@ -909,7 +931,8 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
     bool allSatisfied = true;
     size_t idx = 0U;
     const auto check = [this, stage, quiesceElapsed, &allSatisfied,
-                        &idx](const power::ShutdownParticipant &p, void *cbCtx) noexcept {
+                        &idx](const power::ShutdownParticipant &p, void *cbCtx,
+                              bool builtin) noexcept {
         if (p.stage == stage) {
             // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
             const auto bit = static_cast<uint16_t>(1U << idx);
@@ -919,7 +942,7 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
             } else {
                 participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
                 if (stage == board::ShutdownStage::kQuiesce) {
-                    if (quiesceElapsed < quiesceLimitMs(p)) {
+                    if (quiesceElapsed < quiesceLimitMs(p, builtin)) {
                         allSatisfied = false;
                     }
                 } else {
@@ -930,10 +953,10 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
         ++idx;
     };
     for (const auto &p : ParticipantOps::kBuiltin) {
-        check(p, this);
+        check(p, this, true);
     }
     for (const auto &p : power::extraShutdownParticipants()) {
-        check(p, p.userCtx);
+        check(p, p.userCtx, false);
     }
     return allSatisfied;
 }
@@ -961,42 +984,34 @@ void PowerModule::recordStageTimeouts(board::ShutdownStage stage) noexcept
 
 void PowerModule::logStageTimeout(board::ShutdownStage stage) const noexcept
 {
-    constexpr size_t kPendingBufBytes = 128U; // B，未完成参与者名称汇总缓冲
-    std::array<char, kPendingBufBytes> pendingNames{};
-    size_t used = 0U;
-    size_t idx = 0U;
-    const auto collect = [this, stage, &pendingNames, &used,
-                          &idx](const power::ShutdownParticipant &p) noexcept {
-        if (p.stage == stage) {
-            // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
-            const auto bit = static_cast<uint16_t>(1U << idx);
-            if ((participantTimedOutMask_ & bit) != 0U) {
-                appendPendingName(std::span<char>{pendingNames}, used, p.name);
-            }
-        }
-        ++idx;
-    };
-    for (const auto &p : ParticipantOps::kBuiltin) {
-        collect(p);
-    }
-    for (const auto &p : power::extraShutdownParticipants()) {
-        collect(p);
-    }
     if (stage == board::ShutdownStage::kSave) {
         constexpr size_t kPendingSummaryBytes = 96U; // B，待落盘项名摘要缓冲
         std::array<char, kPendingSummaryBytes> storageItems{};
         context_->storage.formatPendingSummary(storageItems);
         const uint32_t inflight = store::inFlightWrites();
         FW_LOGW(fw::TraceCat::kSys,
-                "power save timeout after %" PRIu32
-                " ms; pending=[%s] storage=%s nvs_inflight=%" PRIu32,
-                board::kShutdownSaveTimeoutMs, used > 0U ? pendingNames.data() : "none",
-                storageItems.data(), inflight);
-        return;
+                "power save timeout after %" PRIu32 " ms; storage=%s nvs_inflight=%" PRIu32,
+                board::kShutdownSaveTimeoutMs, storageItems.data(), inflight);
     }
-    if ((stage == board::ShutdownStage::kQuiesce) && (used > 0U)) {
-        FW_LOGW(fw::TraceCat::kSys, "power quiesce timeout after %" PRIu32 " ms; pending=[%s]",
-                shutdownNowMs_ - quiesceStartMs_, pendingNames.data());
+    size_t idx = 0U;
+    const char *const stageText = stage == board::ShutdownStage::kSave ? "save" : "quiesce";
+    const auto report = [this, stage, stageText,
+                         &idx](const power::ShutdownParticipant &p) noexcept {
+        if (p.stage == stage) {
+            // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+            const auto bit = static_cast<uint16_t>(1U << idx);
+            if ((participantTimedOutMask_ & bit) != 0U) {
+                // 每个超时参与者独占一行并完整打印名字（名字 ≤ 32 字符，不会被日志行截断）。
+                FW_LOGW(fw::TraceCat::kSys, "power %s timeout pending=%s", stageText, p.name);
+            }
+        }
+        ++idx;
+    };
+    for (const auto &p : ParticipantOps::kBuiltin) {
+        report(p);
+    }
+    for (const auto &p : power::extraShutdownParticipants()) {
+        report(p);
     }
 }
 
@@ -1371,6 +1386,8 @@ bool PowerModule::finalFrameReady(uint32_t nowMs, uint32_t flushDeadlineMs, bool
         return true;
     }
     if (!state.holdDeadlineMs && events.shutdownFinalFrameFlushed(usb)) {
+        // 首次观察到终帧确认后才取单调时间：入参 nowMs 可能早于确认事件，直接使用会缩短 300 ms 停留。
+        nowMs = rtos::nowMs();
         state.holdDeadlineMs = nowMs + board::kShutdownFinalVisibleMs;
     }
     const uint32_t deadline = state.holdDeadlineMs.value_or(flushDeadlineMs);
@@ -1403,7 +1420,14 @@ bool PowerModule::pollRestart(uint32_t nowMs) noexcept
         esp_restart();
 #endif
     };
-    if (!shutdownSm_.active() || pollStageParticipants(board::ShutdownStage::kCutPower, nowMs)) {
+    // USB 重启路径不再经过 ShutdownSm::stepCutPower，这里独立兜底：自进入断电阶段 30 s 必须放行。
+    const bool cutExpired =
+        shutdownSm_.active() && (nowMs - cutStartMs_ >= board::kShutdownCutTimeoutMs);
+    if (cutExpired) {
+        FW_LOGW(fw::TraceCat::kSys, "power restart path exceeded 30 s, restarting anyway");
+    }
+    if (!shutdownSm_.active() || cutExpired ||
+        pollStageParticipants(board::ShutdownStage::kCutPower, nowMs)) {
         doRestart();
     } else if (!usbFinalFrame_.holdDeadlineMs) {
         if (const TaskHandle_t self = xTaskGetCurrentTaskHandle(); self != nullptr) {

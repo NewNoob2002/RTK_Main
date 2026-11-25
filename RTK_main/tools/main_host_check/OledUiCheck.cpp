@@ -464,6 +464,11 @@ void testControllerNavigationAndShutdown() noexcept
                                 board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady),
                                 7U, 8U) == 100U);
 
+    // 评审 7：kCutPower 未到终态（终帧未就绪）时进度保持 92%，不得被未完成计数拉回 83%。
+    CHECK(shutdownTargetPercent(board::ShutdownStage::kCutPower, announcedOnly, 7U, 8U) == 92U);
+    CHECK(shutdownTargetPercent(board::ShutdownStage::kCutPower, announcedOnly, 0U, 8U) == 92U);
+    CHECK(shutdownTargetPercent(board::ShutdownStage::kCutPower, announcedOnly, 0U, 0U) == 92U);
+
     // 30 s 超时回退至 kIdle：恢复表盘。
     vm.shutdownStage = board::ShutdownStage::kIdle;
     vm.shutdownDoneMask = 0U;

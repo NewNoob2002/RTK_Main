@@ -1250,6 +1250,10 @@ uint8_t shutdownTargetPercent(board::ShutdownStage stage, uint8_t doneMask, uint
     if ((doneMask & finalBits) != 0U) {
         return kPctCutPowerDone;
     }
+    if (stage == board::ShutdownStage::kCutPower) {
+        // 断电阶段终帧未确认前固定停在 92%：参与者计数不含终帧项，按比例会让进度条回落（基线即为 92%）。
+        return kPctCutPower;
+    }
     if (totalCount > 0U) {
         const uint8_t clampedDone = std::min(doneCount, totalCount);
         constexpr uint32_t kParticipantSpan =

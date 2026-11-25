@@ -950,33 +950,54 @@ void powerParticipantBlocksAndTimeoutNames()
         // 由本测试显式绑定为 ParticipantState*。
         return static_cast<const ParticipantState *>(arg)->done;
     };
-    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
-        .name = nullptr, .isDone = checkDone, .stage = board::ShutdownStage::kSave}));
-    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
-        .name = "", .isDone = checkDone, .stage = board::ShutdownStage::kSave}));
-    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
-        .name = "bad_null_fn", .isDone = nullptr, .stage = board::ShutdownStage::kSave}));
-    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
-        .name = "bad_stage", .isDone = checkDone, .stage = board::ShutdownStage::kIdle}));
+    using fw::Status;
     CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
-        .name = "test_extra_save",
-        .begin = onBegin,
-        .isDone = checkDone,
-        .userCtx = &saveState,
-        .stage = board::ShutdownStage::kSave,
-    }));
-    CHECK(!power::registerShutdownParticipant(power::ShutdownParticipant{
-        .name = "test_extra_save",
-        .isDone = checkDone,
-        .stage = board::ShutdownStage::kSave,
-    }));
+              .name = nullptr, .isDone = checkDone, .stage = board::ShutdownStage::kSave}) ==
+          Status::kInvalidArg);
     CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
-        .name = "test_extra_quiesce",
-        .begin = onBegin,
-        .isDone = checkDone,
-        .userCtx = &quiesceState,
-        .stage = board::ShutdownStage::kQuiesce,
-    }));
+              .name = "", .isDone = checkDone, .stage = board::ShutdownStage::kSave}) ==
+          Status::kInvalidArg);
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "bad_null_fn", .isDone = nullptr, .stage = board::ShutdownStage::kSave}) ==
+          Status::kInvalidArg);
+    // 外部登记只接受 kSave / kQuiesce（评审 1）：其余阶段一律 kInvalidArg。
+    for (const auto badStage : {board::ShutdownStage::kIdle, board::ShutdownStage::kAnnounce,
+                                board::ShutdownStage::kCutPower}) {
+        CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+                  .name = "bad_stage", .isDone = checkDone, .stage = badStage}) ==
+              Status::kInvalidArg);
+    }
+    // 名字过长（33 字符）与内置同名（评审 6）必须拒绝。
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "name_that_is_exactly_33_chars_xxx",
+              .isDone = checkDone,
+              .stage = board::ShutdownStage::kSave}) == Status::kInvalidArg);
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "safe_gpio", .isDone = checkDone, .stage = board::ShutdownStage::kQuiesce}) ==
+          Status::kInvalidArg);
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "oled_final_usb",
+              .isDone = checkDone,
+              .stage = board::ShutdownStage::kQuiesce}) == Status::kInvalidArg);
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "test_extra_save",
+              .begin = onBegin,
+              .isDone = checkDone,
+              .userCtx = &saveState,
+              .stage = board::ShutdownStage::kSave,
+          }) == Status::kOk);
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "test_extra_save",
+              .isDone = checkDone,
+              .stage = board::ShutdownStage::kSave,
+          }) == Status::kBusy);
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "test_extra_quiesce",
+              .begin = onBegin,
+              .isDone = checkDone,
+              .userCtx = &quiesceState,
+              .stage = board::ShutdownStage::kQuiesce,
+          }) == Status::kOk);
 
     setupPower(board::BootMode::kNormal);
     auto &ctx = appContext();
@@ -1150,6 +1171,249 @@ void powerSimBatteryLowShutdown()
     const PowerSnapshot snap = ctx.data.powerStatus.read();
     CHECK(snap.shutdownStage == board::ShutdownStage::kSave);
     CHECK(snap.lastShutdown == board::ShutdownReason::kLowBattery);
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+}
+
+/** @brief 驱动 OLED 在线的真实电源模块走完 kAnnounce/kSave/kQuiesce，停在 kCutPower 入口。 */
+void driveOledShutdownToCutPower()
+{
+    using namespace app;
+    namespace b = board;
+    auto &ctx = appContext();
+    auto &events = ctx.data.uiEvents;
+    events.setOledActive(true);
+    CHECK(power::requestShutdown(b::ShutdownReason::kConsole));
+    pollPower(1U);
+    for (const auto stage :
+         {b::ShutdownStage::kAnnounce, b::ShutdownStage::kSave, b::ShutdownStage::kQuiesce}) {
+        CHECK(ctx.data.powerStatus.read().shutdownStage == stage);
+        pollPower(2U);
+        events.markShutdownStageFlushed(stage);
+        pollPower(1U, 1U);
+        pollPower(1U, b::kMinStageVisibleMs);
+    }
+    CHECK(ctx.data.powerStatus.read().shutdownStage == b::ShutdownStage::kCutPower);
+}
+
+/**
+ * @brief 验证 USB 终帧停留从确认被观察到之后才开始计时（评审 4，任务卡 D）。
+ * @note 模拟 kLink 取时后被抢占：poll 入参比确认事件早 100 ms，停留必须仍满 300 ms。
+ */
+void powerOledUsbFinalFrameStaleClock()
+{
+    using namespace app;
+    namespace b = board;
+    s_chargerReg = b::kSgmReg08PgBit;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 1;
+    setupPower(b::BootMode::kNormal);
+    auto &ctx = appContext();
+    auto &events = ctx.data.uiEvents;
+    driveOledShutdownToCutPower();
+    // USB 在位：GPIO4 动作由 U3 掉电后触发 USB 重启路径；先发 kCutPower 阶段确认。
+    events.markShutdownStageFlushed(b::ShutdownStage::kCutPower);
+    pollPower(1U, 1U);
+    pollPower(1U, b::kMinStageVisibleMs);
+    // GPIO4 动作先于 U3 关断：确认已拉高后才模拟 U3 掉电。
+    CHECK(s_gpio4Presses == 1U && s_gpioLevels[4] == 1);
+    s_gpioLevels[25] = 0;
+    pollPower(1U, 10U);
+    CHECK((ctx.data.powerStatus.read().shutdownDoneMask &
+           b::shutdownDoneBit(b::ShutdownDoneBit::kUsbOffReady)) != 0U);
+    // 等日志排空后进入等待 USB 终帧确认的有界窗口（30 ms），确认前不重启。
+    pollPower(3U, 10U);
+    CHECK(s_restarts == 0U);
+
+    // 先推进时钟 100 ms 模拟「取时后被抢占」，再发布确认，最后用旧时间调用 poll。
+    s_clock += 100U;
+    const uint32_t confirmMs = s_clock;
+    events.markShutdownFinalFrameFlushed(true);
+    static_cast<void>(appContext().power.poll(confirmMs - 100U));
+    CHECK(s_restarts == 0U);
+    // 以确认时刻为基准：+250 / +299 ms 不得重启，+300 ms 才允许。
+    s_clock = confirmMs + 249U;
+    static_cast<void>(appContext().power.poll(s_clock));
+    pollPower(1U, 1U);
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 49U);
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 1U);
+    CHECK(s_restarts == 1U);
+}
+
+/** @brief 验证电池终帧停留同样从确认被观察到之后才开始计时（评审 4）。 */
+void powerOledBatteryFinalFrameStaleClock()
+{
+    using namespace app;
+    namespace b = board;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 0;
+    setupPower(b::BootMode::kNormal);
+    auto &ctx = appContext();
+    auto &events = ctx.data.uiEvents;
+    driveOledShutdownToCutPower();
+    events.markShutdownStageFlushed(b::ShutdownStage::kCutPower);
+    pollPower(1U, 1U);
+    s_clock += 100U;
+    const uint32_t confirmMs = s_clock;
+    events.markShutdownFinalFrameFlushed(false);
+    static_cast<void>(appContext().power.poll(confirmMs - 100U));
+    // 确认后 299 ms 内不得驱动 GPIO4（电池路径断电动作由终帧握手放行）。
+    s_clock = confirmMs + 298U;
+    static_cast<void>(appContext().power.poll(s_clock));
+    pollPower(1U, 1U);
+    CHECK(s_gpio4Presses == 0U && s_gpioLevels[4] == 0);
+    pollPower(1U, 1U);
+    CHECK(s_gpio4Presses == 1U);
+}
+
+/** @brief 验证满 4 槽外部参与者（32 字符名）超时日志每个未完成名字完整可见；safe_gpio 失败不波及额外项（评审 2/6）。 */
+void powerParticipantFourSlotNames()
+{
+    using namespace app;
+    power::clearExtraShutdownParticipants();
+    struct SlotState {
+        bool done = false;
+    };
+    SlotState saveDone{true};
+    SlotState savePending{false};
+    SlotState quiesceDone{true};
+    SlotState quiescePending{false};
+    const auto checkDone = [](void *arg) noexcept {
+        // 由本测试显式绑定为 SlotState*。
+        return static_cast<const SlotState *>(arg)->done;
+    };
+    constexpr const char *kSaveDoneName = "slot1_save_done_xxxxxxxxxxxxxxxx";
+    constexpr const char *kSavePendingName = "slot2_save_pending_xxxxxxxxxxxxx";
+    constexpr const char *kQuiesceDoneName = "slot3_quiesce_done_xxxxxxxxxxxxx";
+    constexpr const char *kQuiescePendingName = "slot4_quiesce_pending_xxxxxxxxxx";
+    const auto reg = [&](const char *name, SlotState *state, board::ShutdownStage stage,
+                         power::ShutdownMilestone milestone) {
+        return power::registerShutdownParticipant(
+            power::ShutdownParticipant{.name = name,
+                                       .isDone = checkDone,
+                                       .userCtx = state,
+                                       .stage = stage,
+                                       .milestone = milestone});
+    };
+    CHECK(reg(kSaveDoneName, &saveDone, board::ShutdownStage::kSave,
+              power::ShutdownMilestone::kSaveFlush) == fw::Status::kOk);
+    CHECK(reg(kSavePendingName, &savePending, board::ShutdownStage::kSave,
+              power::ShutdownMilestone::kSaveFlush) == fw::Status::kOk);
+    CHECK(reg(kQuiesceDoneName, &quiesceDone, board::ShutdownStage::kQuiesce,
+              power::ShutdownMilestone::kSafeGpio) == fw::Status::kOk);
+    CHECK(reg(kQuiescePendingName, &quiescePending, board::ShutdownStage::kQuiesce,
+              power::ShutdownMilestone::kSafeGpio) == fw::Status::kOk);
+    CHECK(reg("slot5_overflow", &saveDone, board::ShutdownStage::kSave,
+              power::ShutdownMilestone::kNone) == fw::Status::kNoSpace);
+
+    s_safeOutputsStatus =
+        fw::Status::kIoError; // 内置 safe_gpio 失败：不得连带短路额外 kSafeGpio 项。
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    std::array<fw::TraceEvent, DebugModule::kRingEvents> trace{};
+    std::array<uint8_t, DebugModule::kLogRingBytes> log{};
+    std::array<StackType_t, DebugModule::kTaskStackBytes / sizeof(StackType_t)> stack{};
+    CHECK(fw::isOk(ctx.debug.bindStorage({trace, log, stack})));
+    CHECK(fw::isOk(ctx.debug.init()));
+    CHECK(fw::isOk(ctx.debug.attachLog()));
+    CapturedLogBuf captured{};
+    s_capturedLog = &captured;
+    cli::setOutSink(&captureLogSink, false);
+    s_gpioLevels[25] = 1;
+
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    pollPower(305U); // 超过 3 s 保存上限，刚进入 kQuiesce。
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
+    CHECK((ctx.data.powerStatus.read().shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed)) == 0U);
+    // 额外 kSafeGpio 项与内置失败无关：未完成时必须按 150 ms 通用超时等待，不能零等待放行。
+    pollPower(5U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kQuiesce);
+    pollPower(12U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
+    const PowerSnapshot snap = ctx.data.powerStatus.read();
+    CHECK((snap.shutdownDegradedMask &
+           board::shutdownDegradedBit(board::ShutdownDegradedBit::kPeripheralsFailed)) != 0U);
+    CHECK((snap.shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kPeripheralsSafe)) == 0U);
+
+    CHECK(ModuleTestAccess::pumpLogs());
+    const std::string_view logs{captured.data.data(), captured.len};
+    CHECK(logs.find(kSavePendingName) != std::string_view::npos);
+    CHECK(logs.find(kQuiescePendingName) != std::string_view::npos);
+    CHECK(logs.find("safe_gpio") != std::string_view::npos);
+    CHECK(logs.find(kSaveDoneName) == std::string_view::npos);
+    CHECK(logs.find(kQuiesceDoneName) == std::string_view::npos);
+
+    cli::setOutSink(nullptr, false);
+    s_capturedLog = nullptr;
+    power::clearExtraShutdownParticipants();
+    s_safeOutputsStatus = fw::Status::kOk;
+}
+
+/** @brief 验证模拟电量低电计时边界：119999 ms 不触发、120000 ms 触发（评审 3）。 */
+void powerSimBatteryBoundary()
+{
+    using namespace app;
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    s_batteryMv = 4150U;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 0;
+    setupPower(board::BootMode::kNormal);
+    power::setSimulatedBatteryPct(5U);
+    pollPower(1U, 100U); // 计时起点
+    pollPower(1U, 119999U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(1U, 1U);
+    CHECK(!power::s_power_requests.canScheduleRestart());
+    CHECK(appContext().data.powerStatus.read().lastShutdown == board::ShutdownReason::kLowBattery);
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+}
+
+/** @brief 验证真实 ADC 成功读到 0 mV 时低电计时不被重置（评审 3）。 */
+void powerLowBatteryRealZeroMv()
+{
+    using namespace app;
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    s_batteryMv = 3390U;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 0;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    CHECK(ctx.data.powerStatus.read().batteryPct == 5U);
+    pollPower(600U, 100U);
+    s_batteryMv = 0U; // 读取成功但电压为 0：不是模拟会话，计时必须继续累计。
+    pollPower(550U, 100U);
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(120U, 100U);
+    CHECK(!power::s_power_requests.canScheduleRestart());
+    CHECK(ctx.data.powerStatus.read().lastShutdown == board::ShutdownReason::kLowBattery);
+}
+
+/** @brief 验证两次模拟注入之间的「清除后立即重注入」不会合并低电计时（评审 8）。 */
+void powerSimBatteryReinject()
+{
+    using namespace app;
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    s_batteryMv = 4150U;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 0;
+    setupPower(board::BootMode::kNormal);
+    power::setSimulatedBatteryPct(5U);
+    pollPower(1100U, 100U); // 110 s
+    CHECK(power::s_power_requests.canScheduleRestart());
+    // 两次调用发生在同一个 poll 间隔内，消费者看不到中间的「未知」值，但会话代号必须变化。
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    power::setSimulatedBatteryPct(5U);
+    pollPower(1100U, 100U); // 若被合并，累计 220 s 早已关机；正确实现只从重注入后算起。
+    CHECK(power::s_power_requests.canScheduleRestart());
+    pollPower(110U, 100U);
+    CHECK(!power::s_power_requests.canScheduleRestart());
     power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
 }
 
@@ -3346,6 +3610,18 @@ int main(int argc, const char **raw_args)
         powerOledBatteryToUsbFinalFrame();
     } else if (std::strcmp(argv[1], "power_sim_battery_low_shutdown") == 0) {
         powerSimBatteryLowShutdown();
+    } else if (std::strcmp(argv[1], "power_oled_usb_final_frame_stale_clock") == 0) {
+        powerOledUsbFinalFrameStaleClock();
+    } else if (std::strcmp(argv[1], "power_oled_battery_final_frame_stale_clock") == 0) {
+        powerOledBatteryFinalFrameStaleClock();
+    } else if (std::strcmp(argv[1], "power_participant_four_slot_names") == 0) {
+        powerParticipantFourSlotNames();
+    } else if (std::strcmp(argv[1], "power_sim_battery_boundary") == 0) {
+        powerSimBatteryBoundary();
+    } else if (std::strcmp(argv[1], "power_low_battery_real_zero_mv") == 0) {
+        powerLowBatteryRealZeroMv();
+    } else if (std::strcmp(argv[1], "power_sim_battery_reinject") == 0) {
+        powerSimBatteryReinject();
     } else if (std::strcmp(argv[1], "power_log_drain") == 0) {
         powerLogDrain();
     } else if (std::strcmp(argv[1], "power_low_battery") == 0) {
