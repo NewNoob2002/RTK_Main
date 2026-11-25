@@ -243,7 +243,7 @@ void setSimulatedBatteryPct(uint8_t pct) noexcept
             // 模拟本已关闭：重复清除保持幂等，不开启新会话，避免重置真实低电计时。
             return;
         }
-        // 会话代号每次调用递增（24 位回绕），使「清除后立即重新注入」也可被消费者观察到。
+        // 其余调用（启用、改值、退出、重注入）均递增会话代号（24 位回绕），使「清除后立即重新注入」也可被消费者观察到。
         const uint32_t session = ((cur >> kSimSessionShift) + 1U) & 0xFFFFFFU;
         next = (session << kSimSessionShift) | encoded;
     } while (!s_sim_battery_word.compare_exchange_weak(cur, next, std::memory_order_acq_rel,

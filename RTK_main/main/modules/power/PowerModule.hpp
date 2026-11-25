@@ -86,13 +86,14 @@ void clearExtraShutdownParticipants() noexcept;
 /** 模拟电量会话快照：百分比与会话代号由同一原子字一并发布，读者不会看到撕裂的组合。 */
 struct SimBatterySession {
     uint8_t pct = board::kBatteryPctUnknown; // 模拟百分比，kBatteryPctUnknown 表示未启用
-    uint32_t session = 0U;                   // 每次 setSimulatedBatteryPct 调用递增（24 位回绕）
+    uint32_t session = 0U; // 每次实际状态变更递增（24 位回绕）；模拟已关闭时重复 off 不递增
 };
 
 /**
  * @brief 设置或清除 HIL 模拟电池百分比（kBatteryPctUnknown 表示关闭模拟、使用真实 ADC）
  * @param pct: 模拟电量百分比（0..100），或 board::kBatteryPctUnknown 恢复真实读数
- * @note 任意任务可调用，无锁原子；每次调用都开启新会话，消费者据此区分「清除后重新注入」。
+ * @note 任意任务可调用，无锁原子；启用、改值、退出与重注入各开启新会话，消费者据此区分「清除后重新注入」；
+ *       模拟本已关闭时再次传入 kBatteryPctUnknown 为幂等空操作，不递增会话代号。
  *       仅用于 DEV 档 HIL 低电关机验证。
  */
 void setSimulatedBatteryPct(uint8_t pct) noexcept;

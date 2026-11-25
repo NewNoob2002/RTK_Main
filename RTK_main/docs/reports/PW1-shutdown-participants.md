@@ -28,7 +28,7 @@
 - `main/Kconfig.projbuild`、`main/modules/power/PowerCmds.cpp`、`main/modules/power/PowerModule.cpp`：
   - HIL 低电测试支持（不改变产品默认值）：
     - Kconfig 新增 `CONFIG_RTK_LOW_BATTERY_HOLD_MS`（默认 `120000`，范围 `1000..300000`），允许测试构建缩短台架等待时长。
-    - DEV 档控制台新增 `power simbat <0-100|off>`，经无锁原子 `power::setSimulatedBatteryPct` 注入模拟电量；每次调用递增会话代号并与百分比一同原子发布；会话变化即复位低电计时、丢弃模拟读数并恢复真实 ADC 采集，真实 ADC 成功读到 0 mV 不再被误判为模拟。
+    - DEV 档控制台新增 `power simbat <0-100|off>`，经无锁原子 `power::setSimulatedBatteryPct` 注入模拟电量；每次实际状态变更（启用、改值、退出、重注入）递增会话代号并与百分比一同原子发布，模拟已关闭时重复 `off` 为幂等空操作、不递增代号；会话变化即复位低电计时、丢弃模拟读数并恢复真实 ADC 采集，真实 ADC 成功读到 0 mV 不再被误判为模拟。
 
 ### C. 关机来源扩展与文案补齐
 - `main/board/PowerLogic.hpp`、`main/board/PowerLogic.cpp`：新增预留枚举项 `ShutdownReason::kWeb`（无调用点，`shutdownReasonName` 返回 `"web"`）。
@@ -128,7 +128,7 @@
 | --- | --- | --- |
 | Important 1 | `registerShutdownParticipant` 改返回 `fw::Status`；外部仅接受 `kSave` / `kQuiesce`，其余阶段 `kInvalidArg`；`kCutPower` 仅由内部有界 OLED 双终帧流程处理；USB 重启路径不再绕过 30 s 回退的原因是外部项已无法进入 kCutPower，而内置 OLED 终帧等待有界（约 30 ms 日志等待 + 终帧确认 + 300 ms 停留）。**复审修订**：首轮在 `pollRestart` 新增的“自进入断电阶段 30 s”兜底已删除——ADR 只规定 U3 未关断时的 30 s 回退（`ShutdownSm::stepCutPower`），U3 关断后的终帧确认与 300 ms 停留不得被提前结束。 | `power_participant_blocks_and_timeout_names`：`kIdle/kAnnounce/kCutPower` 阶段登记返回 `kInvalidArg`。复审回归：`power_oled_usb_late_u3_final_frame_hold`（29,900 ms 时 U3 关断，再确认 USB 终帧，停留满 300 ms 才重启，299 ms 不重启）。该用例与 `power_sim_battery_redundant_off` 在复审前提交 `5f70695` 上均失败（已在临时副本验证）。 |
 | Important 2 | `quiesceLimitMs` / `beginStageParticipants` 增加 `builtin` 判定：`kSafeGpio` 零等待与失败标记只绑定内置 `safe_gpio`，额外项按通用 150 ms 超时。 | `power_participant_four_slot_names`：内置 safe_gpio 失败（`kIoError`）时，额外 `kSafeGpio` 项未完成不被提前放行，quiesce 等满超时后才进入 `kCutPower`。 |
-| Important 3 + Nit 8 | 模拟电量改为单个原子字（低 8 位百分比 + 高 24 位会话代号，每次 `setSimulatedBatteryPct` 递增）；`pollBattery` 以会话变化复位低电计时并丢弃模拟读数；删除 `batteryMv_==0` 哨兵，成功的真实 0 mV 不再重置计时；清除后立即重注入不再合并两轮。 | `power_sim_battery_boundary`（119999 ms 不触发 / 120000 ms 触发）、`power_low_battery_real_zero_mv`、`power_sim_battery_reinject`。在首轮提交 `4d80bd0` 上验证：后两项失败、boundary 通过。 |
+| Important 3 + Nit 8 | 模拟电量改为单个原子字（低 8 位百分比 + 高 24 位会话代号，启用 / 改值 / 退出 / 重注入时递增，模拟已关闭时重复 `off` 不递增）；`pollBattery` 以会话变化复位低电计时并丢弃模拟读数；删除 `batteryMv_==0` 哨兵，成功的真实 0 mV 不再重置计时；清除后立即重注入不再合并两轮。 | `power_sim_battery_boundary`（119999 ms 不触发 / 120000 ms 触发）、`power_low_battery_real_zero_mv`、`power_sim_battery_reinject`。在首轮提交 `4d80bd0` 上验证：后两项失败、boundary 通过。 |
 | Important 4 | `finalFrameReady` 首次观察到终帧确认后重新读取 `rtos::nowMs()`，以该时间计算 300 ms 停留。 | `power_oled_usb_final_frame_stale_clock`（确认前 100 ms 的旧时间 poll，+249/+299 ms 不重启，+300 ms 重启）与 `power_oled_battery_final_frame_stale_clock`。 |
 | Important 5 | 保留原行为场景，新增上述 stale-clock 用例，并按真实先后（GPIO4 动作 → U3 关断 → 终帧确认）驱动。 | **基线 `2f97736` 临时目录验证**：`git archive 2f97736` 解出副本，接入同一测试后，`power_oled_usb_final_frame_stale_clock` **失败**（`s_restarts == 0U` 两处），电池版在基线通过（基线电池路径本就重读时间，非回归点）。**故障注入**：将 `finalFrameReady` 中 USB 状态别名到电池状态后，`power_oled_battery_to_usb_final_frame` **失败**；stale-clock USB 用例未检出该注入（诚实记录：USB 状态独立性由原用例覆盖）。注入后已恢复源码。 |
 | Nit 6 | 名字上限 `kMaxShutdownParticipantNameLen = 32`；拒绝与内置同名；超时日志逐项输出完整名字，移除定长拼接缓冲。 | `power_participant_four_slot_names`：4 个 32 字符名 + 第 5 个 `kNoSpace`，日志断言 pending 项完整名字可见、已完成项不出现；`power_participant_blocks_and_timeout_names` 覆盖 33 字符与内置同名拒绝。 |
