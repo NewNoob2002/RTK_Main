@@ -120,6 +120,20 @@
 5. **硬件过放即时关机阈值测量（PW1 B 可选项，`NOT_RUN`）**：
    - 当前过放即时关机保持关闭（`PowerLogic.hpp` 留有 `TODO`）；需先在 P2 v1.41 实测 CM680 / F9P 欠压复位点与稳压跌落余量后，再决定是否启用即时关机阈值。
 
+
+### 4.1 实板结果（2026-11-25，P2 v1.41，`builds/pw1v-idf` @ `21fbabc`，DEV 档，电池供电 96%）
+
+| 项目 | 结果 | 证据 |
+| --- | --- | --- |
+| 长按关机：OL4 确认弹窗、进度环、`POWER OFF` 终帧 ≥ 300 ms | PASS（用户实测） | 目视 |
+| 8 s 强制关机兜底 | PASS（用户实测） | 目视 |
+| 电池终帧停留期插 USB → `RESTARTING` ≥ 300 ms → 充电待机 | PASS（用户实测） | 目视 |
+| USB 在位时关机 → `RESTARTING` → 重启不挂起 | PASS（用户实测） | 目视 |
+| 控制台 `power off` | PASS（自动） | `power off reason=console usb=0`，0.55 s 后 `device powered down` |
+| 低电 120 s：`simbat 5` 63 s 后 `off` 取消；重复 `off` 无副作用；再 `simbat 5` | PASS（自动） | 第二轮 120.03 s 触发 `low battery shutdown` / `reason=low_battery usb=0`；111 s 时仍 `stage=idle` |
+| 断电约 9 s 后串口出现 `E BOD: Brownout detector was triggered` | 正常（用户确认） | 电池通路关断后的欠压，非缺陷 |
+| 模拟低电期间 OLED 显示 | NOT_RUN | 待控制台注入后目视 |
+| 3 s 保存超时与逐项参与者名 | NOT_RUN | 控制台无阻塞保存手段，由主机测试覆盖 |
 ---
 
 ## 5. 评审修复对照（`feat/pw1-shutdown`，评审结论 FAIL → 修复后重跑门禁）
