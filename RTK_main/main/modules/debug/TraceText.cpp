@@ -171,10 +171,10 @@ constexpr std::array<TraceField, 2U> kPowerKeyShort = {
 constexpr std::array<TraceField, 2U> kPowerKeyLong = {
     {{"count", TraceValue::kDecA}, {"mode", TraceValue::kDecB}}};
 constexpr std::array<TraceField, 2U> kPowerStage = {
-    {{"stage", TraceValue::kDecA}, {"reason", TraceValue::kDecB}}};
+    {{"stage", TraceValue::kShutdownStageA}, {"reason", TraceValue::kShutdownReasonB}}};
 constexpr std::array<TraceField, 1U> kPowerBtScanError = {{{"err", TraceValue::kHexA}}};
 constexpr std::array<TraceField, 2U> kPowerAbort = {
-    {{"reason", TraceValue::kDecA}, {"elapsed_ms", TraceValue::kDecB}}};
+    {{"reason", TraceValue::kShutdownReasonA}, {"elapsed_ms", TraceValue::kDecB}}};
 
 // 每项 fields 用静态表中的 span，避免额外的可变数据。
 constexpr size_t kBaseTraceCount = 62U;

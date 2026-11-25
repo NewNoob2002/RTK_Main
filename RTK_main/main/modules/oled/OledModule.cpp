@@ -138,6 +138,8 @@ void collectPowerStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.shutdownReason = pwr.lastShutdown;
     vm.shutdownDoneMask = pwr.shutdownDoneMask;
     vm.shutdownDegradedMask = pwr.shutdownDegradedMask;
+    vm.shutdownDoneCount = pwr.shutdownDoneCount;
+    vm.shutdownTotalCount = pwr.shutdownTotalCount;
     vm.keyHold = app.data.uiEvents.readKeyHold();
     vm.rebootBanner = app.data.uiEvents.rebootBanner();
 }

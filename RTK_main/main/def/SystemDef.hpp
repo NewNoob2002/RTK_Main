@@ -100,6 +100,8 @@ struct PowerSnapshot {
     board::ShutdownReason lastShutdown = board::ShutdownReason::kNone;
     uint8_t shutdownDoneMask = 0U;
     uint8_t shutdownDegradedMask = 0U;
+    uint8_t shutdownDoneCount = 0U;
+    uint8_t shutdownTotalCount = 0U;
     uint32_t shortPresses = 0U;
     uint32_t longPresses = 0U;
 };

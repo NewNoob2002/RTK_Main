@@ -14,24 +14,27 @@ namespace app::debug {
 
 /** 字段取值的渲染方式；决定 a/b/session 如何变成文本。 */
 enum class TraceValue : uint8_t {
-    kDecA = 0,    // a 十进制
-    kHexA,        // a 十六进制
-    kDecB,        // b 十进制
-    kHexB,        // b 十六进制
-    kRoleA,       // a 作为 core::Role
-    kRoleB,       // b 作为 core::Role
-    kReasonA,     // a 作为 core::LinkReason
-    kReasonB,     // b 作为 core::LinkReason
-    kResultA,     // a 作为 fw::Result
-    kResultB,     // b 作为 fw::Result
-    kGnssStateA,  // a 作为 gnss::State
-    kGnssStateB,  // b 作为 gnss::State
-    kGnssFamilyA, // a 作为 gnss::Family
-    kGnssModelA,  // a 作为 gnss::Model
-    kSppStageA,   // a 作为 spp_server_trace_stage_t
-    kSppCtrlA,    // a 作为 spp_server_trace_ctrl_t
-    kSession,     // 事件会话号（4 位十六进制）
-    kNoValue,     // 只打印键名
+    kDecA = 0,        // a 十进制
+    kHexA,            // a 十六进制
+    kDecB,            // b 十进制
+    kHexB,            // b 十六进制
+    kRoleA,           // a 作为 core::Role
+    kRoleB,           // b 作为 core::Role
+    kReasonA,         // a 作为 core::LinkReason
+    kReasonB,         // b 作为 core::LinkReason
+    kResultA,         // a 作为 fw::Result
+    kResultB,         // b 作为 fw::Result
+    kGnssStateA,      // a 作为 gnss::State
+    kGnssStateB,      // b 作为 gnss::State
+    kGnssFamilyA,     // a 作为 gnss::Family
+    kGnssModelA,      // a 作为 gnss::Model
+    kSppStageA,       // a 作为 spp_server_trace_stage_t
+    kSppCtrlA,        // a 作为 spp_server_trace_ctrl_t
+    kShutdownStageA,  // a 作为 board::ShutdownStage
+    kShutdownReasonA, // a 作为 board::ShutdownReason
+    kShutdownReasonB, // b 作为 board::ShutdownReason
+    kSession,         // 事件会话号（4 位十六进制）
+    kNoValue,         // 只打印键名
 };
 
 /** 句子模板中的一个占位符，与 TraceText::sentence 里的 `{key}` 对应。 */

@@ -38,13 +38,14 @@ enum class KeyEvent : uint8_t {
     kLongHold,
 };
 
-/** 关机请求来源（含低电关机，kPhone 预留）。 */
+/** 关机请求来源（含低电关机，kPhone / kWeb 预留）。 */
 enum class ShutdownReason : uint8_t {
     kNone = 0,
     kKey,
     kConsole,
     kLowBattery,
     kPhone,
+    kWeb,
 };
 
 /** 关机序列阶段（严格按 kAnnounce -> kSave -> kQuiesce -> kCutPower 推进）。 */
@@ -81,7 +82,7 @@ enum class ShutdownDoneBit : uint8_t {
 
 /** 关机序列降级结果位掩码（超时/失败后仍按基线策略强制下电或 USB 重启兜底，供 OLED 独立展示降级文案）。 */
 enum class ShutdownDegradedBit : uint8_t {
-    kSaveTimeout = 1U << 0U,       ///< kSave 超时（1 s）仍有未落盘项或未到达栅栏
+    kSaveTimeout = 1U << 0U,       ///< kSave 超时（3 s）仍有未落盘项或未到达栅栏
     kPeripheralsFailed = 1U << 1U, ///< 外设安全电平配置返回错误
     kRadioTimeout = 1U << 2U,      ///< 蓝牙或 Wi-Fi SoftAP 静默断开超时
 };
@@ -104,7 +105,8 @@ inline constexpr uint32_t kKeyHoldOverlayStartMs = 600U; // ms，正常模式长
 inline constexpr uint32_t kDefaultLongPressMs = 2500U;   // ms，默认长按关机/开机阈值
 inline constexpr uint32_t kForcePowerOffHoldMs =
     8000U; // ms，OLED 卡死或未消费长按时持续按住的强制关机兜底阈值
-inline constexpr uint32_t kShutdownSaveTimeoutMs = 1000U; // ms，kSave 落盘等待上限
+// spiffs 上 NVS 大 blob 多页写耗时可能超过 1 s，落盘等待上限设为 3 s；30 s 断电兜底保持不变（PW1 §B）。
+inline constexpr uint32_t kShutdownSaveTimeoutMs = 3000U; // ms，kSave 落盘等待上限
 inline constexpr uint32_t kShutdownCutInitHighMs = 2000U; // ms，无 USB 时首段 GPIO4 高电平
 inline constexpr uint32_t kShutdownCutToggleMs = 3100U;   // ms，无 USB 时高/低交替周期
 inline constexpr uint32_t kShutdownCutTimeoutMs = 30000U; // ms，断电超时回退上限
@@ -188,6 +190,10 @@ void updateChargerSample(ChargerInputStatus &last, fw::Status status, uint8_t ra
                                             std::optional<bool> statActive) noexcept;
 
 inline constexpr uint8_t kBatteryPctUnknown = 0xFFU;
+inline constexpr uint8_t kLowBatteryPct = 10U;         // %，电池低电关机判定阈值
+inline constexpr uint32_t kLowBatteryHoldMs = 120000U; // ms，电池 <10% 连续 2 分钟触发低电关机
+// TODO(PW1-HIL): 电压低于硬件保护阈值时可立即触发低电关机（不等待 120 s）。
+// 来源：docs/tasks/PW1-shutdown-participants.md §B；需先在 CM680/F9P 实板测得保护截止电压与带载压降，实测前保持禁用。
 
 /**
  * @brief 按旧 P2 电芯电压表作分段线性插值
@@ -201,15 +207,17 @@ inline constexpr uint8_t kBatteryPctUnknown = 0xFFU;
 class LowBatteryTimer final {
 public:
     /**
-     * @brief 判断电池供电且低于 10% 是否已持续至少 30 s
+     * @brief 判断电池供电且低于 10% 是否已持续至少指定时长（默认 120 s）
      * @param nowMs: 当前单调时间（ms）
      * @param onBattery: 已可靠确认 USB 不在位
      * @param pct: 电量百分比，未知时用 kBatteryPctUnknown
+     * @param holdMs: 连续低电触发阈值（ms），默认产品值 kLowBatteryHoldMs（120000 ms）
      * @retval true 低电持续时间已达阈值
      * @retval false 条件未满足；供电变化或电量恢复/未知会清除计时
      * @note 由调用方串行调用，不阻塞，支持 uint32_t 时钟回绕。
      */
-    [[nodiscard]] bool isDue(uint32_t nowMs, bool onBattery, uint8_t pct) noexcept;
+    [[nodiscard]] bool isDue(uint32_t nowMs, bool onBattery, uint8_t pct,
+                             uint32_t holdMs = kLowBatteryHoldMs) noexcept;
 
 private:
     std::optional<uint32_t> sinceMs_{};
@@ -234,7 +242,7 @@ private:
 /**
  * @brief 取得关机请求原因的可读短名
  * @param reason: 关机原因
- * @retval 静态短名（none / key / console / low_battery / phone）
+ * @retval 静态短名（none / key / console / low_battery / phone / web）
  * @note 纯函数，线程/ISR 安全。
  */
 [[nodiscard]] const char *shutdownReasonName(ShutdownReason reason) noexcept;

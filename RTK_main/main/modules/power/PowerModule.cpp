@@ -7,6 +7,9 @@
 #include <array>
 #include <atomic>
 #include <cinttypes>
+#include <cstdio>
+#include <cstring>
+#include <string_view>
 
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -46,6 +49,16 @@ constexpr uint32_t kBatteryFreshMs = 2000U;     // ms，超期旧读数不用于
 
 constinit std::atomic<TaskHandle_t> s_restart_task_handle{nullptr};
 static_assert(fw::kAtomicUsable<TaskHandle_t>, "电源重启唤醒任务句柄原子须无锁");
+
+// 低 8 位 = 模拟百分比，高 24 位 = 会话代号；两者同一原子字发布，读者不会看到撕裂组合。
+constexpr uint32_t kSimPctMask = 0xFFU;
+constexpr uint32_t kSimSessionShift = 8U;
+constinit std::atomic<uint32_t> s_sim_battery_word{board::kBatteryPctUnknown};
+static_assert(fw::kAtomicUsable<uint32_t>, "模拟电量原子须无锁");
+
+constinit std::array<power::ShutdownParticipant, power::kMaxExtraShutdownParticipants>
+    s_extra_participants{};
+constinit size_t s_extra_participant_count = 0U;
 
 /**
  * @brief 配置单个输入 GPIO（无内部上下拉，关中断）
@@ -157,6 +170,8 @@ static_assert(fw::kAtomicUsable<TaskHandle_t>, "电源重启唤醒任务句柄�
            (lhs.lastShutdown == rhs.lastShutdown) &&
            (lhs.shutdownDoneMask == rhs.shutdownDoneMask) &&
            (lhs.shutdownDegradedMask == rhs.shutdownDegradedMask) &&
+           (lhs.shutdownDoneCount == rhs.shutdownDoneCount) &&
+           (lhs.shutdownTotalCount == rhs.shutdownTotalCount) &&
            (lhs.shortPresses == rhs.shortPresses) && (lhs.longPresses == rhs.longPresses);
 }
 
@@ -171,6 +186,83 @@ bool requestShutdown(board::ShutdownReason reason) noexcept
            s_power_requests.requestShutdown(app.bootMode, reason);
 }
 
+fw::Status registerShutdownParticipant(const ShutdownParticipant &entry) noexcept
+{
+    // kCutPower 由内部 OLED 双终帧有界流程独占：外部参与者不得延长断电窗口。
+    // 名字含控制字符（CR/LF 等）会在日志中消失或换行，造成与内置名无法区分，一律拒绝。
+    constexpr unsigned char kFirstPrintable = 0x20U; // 低于此值为 C0 控制字符
+    constexpr unsigned char kDelChar = 0x7FU;
+    const auto hasControlChar = [](std::string_view name) noexcept {
+        return std::any_of(name.begin(), name.end(), [](char c) noexcept {
+            const auto ch = static_cast<unsigned char>(c);
+            return (ch < kFirstPrintable) || (ch == kDelChar);
+        });
+    };
+    if ((entry.name == nullptr) || (*entry.name == '\0') || (entry.isDone == nullptr) ||
+        ((entry.stage != board::ShutdownStage::kSave) &&
+         (entry.stage != board::ShutdownStage::kQuiesce)) ||
+        (std::strlen(entry.name) > kMaxShutdownParticipantNameLen) ||
+        hasControlChar(std::string_view{entry.name}) ||
+        PowerModule::isBuiltinParticipantName(entry.name)) {
+        return fw::Status::kInvalidArg;
+    }
+    for (size_t i = 0U; i < s_extra_participant_count; ++i) {
+        if ((s_extra_participants[i].name != nullptr) &&
+            (std::strcmp(s_extra_participants[i].name, entry.name) == 0)) {
+            return fw::Status::kBusy;
+        }
+    }
+    if (s_extra_participant_count >= kMaxExtraShutdownParticipants) {
+        return fw::Status::kNoSpace;
+    }
+    s_extra_participants[s_extra_participant_count] = entry;
+    ++s_extra_participant_count;
+    return fw::Status::kOk;
+}
+
+void clearExtraShutdownParticipants() noexcept
+{
+    s_extra_participants = {};
+    s_extra_participant_count = 0U;
+}
+
+std::span<const ShutdownParticipant> extraShutdownParticipants() noexcept
+{
+    return {s_extra_participants.data(), s_extra_participant_count};
+}
+
+void setSimulatedBatteryPct(uint8_t pct) noexcept
+{
+    constexpr uint8_t kMaxBatteryPct = 100U;
+    const uint32_t encoded = (pct <= kMaxBatteryPct) ? pct : board::kBatteryPctUnknown;
+    uint32_t cur = s_sim_battery_word.load(std::memory_order_relaxed);
+    uint32_t next = 0U;
+    do {
+        if ((encoded == board::kBatteryPctUnknown) &&
+            ((cur & kSimPctMask) == board::kBatteryPctUnknown)) {
+            // 模拟本已关闭：重复清除保持幂等，不开启新会话，避免重置真实低电计时。
+            return;
+        }
+        // 其余调用（启用、改值、退出、重注入）均递增会话代号（24 位回绕），使「清除后立即重新注入」也可被消费者观察到。
+        const uint32_t session = ((cur >> kSimSessionShift) + 1U) & 0xFFFFFFU;
+        next = (session << kSimSessionShift) | encoded;
+    } while (!s_sim_battery_word.compare_exchange_weak(cur, next, std::memory_order_acq_rel,
+                                                       std::memory_order_relaxed));
+}
+
+SimBatterySession simulatedBatterySession() noexcept
+{
+    constexpr uint8_t kMaxBatteryPct = 100U;
+    const uint32_t word = s_sim_battery_word.load(std::memory_order_acquire);
+    const auto raw = static_cast<uint8_t>(word & kSimPctMask);
+    return SimBatterySession{(raw <= kMaxBatteryPct) ? raw : board::kBatteryPctUnknown,
+                             word >> kSimSessionShift};
+}
+
+uint8_t simulatedBatteryPct() noexcept
+{
+    return simulatedBatterySession().pct;
+}
 } // namespace power
 
 bool PowerModule::configureInputPins() noexcept
@@ -214,6 +306,9 @@ fw::Result PowerModule::init() noexcept
     restartLogReady_ = false;
     oledWaitDeadlineMs_ = 0U;
     resetShutdownProgress();
+    power::setSimulatedBatteryPct(board::kBatteryPctUnknown);
+    simSession_ = power::simulatedBatterySession().session;
+    simActive_ = false;
     shortPresses_ = 0U;
     longPresses_ = 0U;
     shutdownSm_ = board::ShutdownSm{};
@@ -339,13 +434,13 @@ fw::Status PowerModule::takeBatterySample(uint32_t nowMs) noexcept
     return fw::Status::kOk;
 }
 
-void PowerModule::pollBattery(uint32_t nowMs, const PinLevels &pins) noexcept
+bool PowerModule::pollBatteryAdc(uint32_t nowMs, bool &fresh) noexcept
 {
     if (!batteryAdcReady_) {
-        return;
+        return false;
     }
     // 在本轮采样前检查间隔，避免将轮询中断跨过的时间计入连续低电。
-    const bool fresh = nowMs - lastBatterySampleMs_ < kBatteryFreshMs;
+    fresh = nowMs - lastBatterySampleMs_ < kBatteryFreshMs;
     if (nowMs - lastBatteryBatchMs_ >= kBatteryPeriodMs) {
         const bool wasValid = batteryPct_ != board::kBatteryPctUnknown;
         const auto status = takeBatterySample(nowMs);
@@ -356,15 +451,52 @@ void PowerModule::pollBattery(uint32_t nowMs, const PinLevels &pins) noexcept
             FW_LOGW(fw::TraceCat::kSys, "<battery> ADC sample lost (%s)", fw::toString(status));
         }
     }
+    return true;
+}
+
+void PowerModule::pollBattery(uint32_t nowMs, const PinLevels &pins) noexcept
+{
+    const auto sim = power::simulatedBatterySession();
+    if (sim.session != simSession_) {
+        // 模拟会话变化（含「清除后立即重新注入」）：作废已累计的低电计时，避免两轮注入被合并。
+        simSession_ = sim.session;
+        lowBattery_ = {};
+        if (simActive_) {
+            // 模拟读数不得带入真实 ADC 路径：丢弃并让真实采样重新开始。
+            simActive_ = false;
+            batteryPct_ = board::kBatteryPctUnknown;
+            batteryMv_ = 0U;
+            batterySampleCount_ = 0U;
+            lastBatteryBatchMs_ = nowMs - kBatteryPeriodMs;
+            lastBatterySampleMs_ = nowMs - kBatteryFreshMs;
+        }
+    }
+    bool fresh = false;
+    if (sim.pct != board::kBatteryPctUnknown) {
+        simActive_ = true;
+        batteryPct_ = sim.pct;
+        batteryMv_ = 0U;
+        lastBatterySampleMs_ = nowMs;
+        fresh = true;
+    } else if (!pollBatteryAdc(nowMs, fresh)) {
+        return;
+    }
     const bool onBattery = pins.usbKnown && !pins.usbPresent;
     if (ctx().bootMode != board::BootMode::kNormal ||
         !power::s_power_requests.canScheduleRestart()) {
         lowBattery_ = {};
         return;
     }
-    if (lowBattery_.isDue(nowMs, onBattery && fresh, batteryPct_) &&
+    constexpr uint32_t kHoldMs =
+#if defined(CONFIG_RTK_LOW_BATTERY_HOLD_MS)
+        static_cast<uint32_t>(CONFIG_RTK_LOW_BATTERY_HOLD_MS);
+#else
+        board::kLowBatteryHoldMs;
+#endif
+    if (lowBattery_.isDue(nowMs, onBattery && fresh, batteryPct_, kHoldMs) &&
         power::requestShutdown(board::ShutdownReason::kLowBattery)) {
-        FW_LOGW(fw::TraceCat::kSys, "<battery> low battery shutdown at %" PRIu32 " mV", batteryMv_);
+        FW_LOGW(fw::TraceCat::kSys, "<battery> low battery shutdown at %" PRIu32 " mV (%u%%)",
+                batteryMv_, static_cast<unsigned>(batteryPct_));
         lowBattery_ = {};
     }
 }
@@ -433,14 +565,328 @@ bool PowerModule::isLogDrained(uint32_t elapsed) const noexcept
     return consoleUartDrained();
 }
 
-void PowerModule::pollSaveFences() noexcept
+struct PowerModule::ParticipantOps {
+    /**
+     * @brief 轮询 kLink（storage）保存围栏是否到达
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 围栏已到达
+     * @retval false 等待设置提交或围栏执行
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool storageFenceDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        return static_cast<PowerModule *>(userCtx)->pollSaveFence(true);
+    }
+
+    /**
+     * @brief 轮询 kIo（GNSS）冲刷围栏是否到达
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 围栏已到达
+     * @retval false 等待设置提交或围栏执行
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool gnssFenceDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        return static_cast<PowerModule *>(userCtx)->pollSaveFence(false);
+    }
+
+    /**
+     * @brief 开启断电保存窗口并加速延迟持久化队列落盘
+     * @param stage: 当前阶段（kSave）
+     * @param userCtx: PowerModule 实例指针
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static void storageFlushBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    {
+        static_cast<void>(stage);
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        auto *self = static_cast<PowerModule *>(userCtx);
+        store::startPowerSave(self->shutdownNowMs_);
+        self->ctx().storage.expeditePendingWrites();
+    }
+
+    /**
+     * @brief 检查延迟存储队列与在途 NVS 写入是否全部清空
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 无待写项且无在途 NVS 写入
+     * @retval false 仍有数据正在落盘
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool storageFlushDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        const auto *self = static_cast<const PowerModule *>(userCtx);
+        return !self->context_->storage.hasPendingWrites() && (store::inFlightWrites() == 0U);
+    }
+
+    /**
+     * @brief 检查蓝牙链路是否存在未提交设置
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 无待提交设置或当前不在蓝牙常规模式
+     * @retval false 仍有待提交蓝牙设置
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool btSettingsDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        const auto *self = static_cast<const PowerModule *>(userCtx);
+        return (self->context_->bootMode != board::BootMode::kNormal) ||
+               (self->context_->radioMode != RadioMode::kBluetooth) ||
+               !self->context_->bt_link.hasPendingSettings();
+    }
+
+    /**
+     * @brief 检查配网 Web 模块是否存在未提交设置
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 无待提交设置或配网未启用/非配网模式
+     * @retval false 仍有待提交 Web 设置
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool webSettingsDone(void *userCtx) noexcept
+    {
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        const auto *self = static_cast<const PowerModule *>(userCtx);
+        return (self->context_->bootMode != board::BootMode::kNormal) ||
+               (self->context_->radioMode != RadioMode::kWifiConfig) ||
+               !self->context_->web.hasPendingSettings();
+#else
+        static_cast<void>(userCtx);
+        return true;
+#endif
+    }
+
+    /**
+     * @brief 检查 GNSS 模块是否仍有挂起 NVS 保存请求
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 无挂起 NVS 保存或 GNSS 未启用
+     * @retval false 仍有 GNSS NVS 保存待完成
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool gnssNvsDone(void *userCtx) noexcept
+    {
+#if RTK_GNSS_ENABLED
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        const auto *self = static_cast<const PowerModule *>(userCtx);
+        return (self->context_->bootMode != board::BootMode::kNormal) ||
+               !self->context_->data.gnssPendingNvs.load(std::memory_order_acquire);
+#else
+        static_cast<void>(userCtx);
+        return true;
+#endif
+    }
+
+    /**
+     * @brief 请求当前启用的无线业务（BT/Wi-Fi）进入关机暂停态
+     * @param stage: 当前阶段（kQuiesce）
+     * @param userCtx: PowerModule 实例指针
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static void radioPauseBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    {
+        static_cast<void>(stage);
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        auto *self = static_cast<PowerModule *>(userCtx);
+        if (self->ctx().bootMode != board::BootMode::kNormal) {
+            return;
+        }
+        if (self->ctx().radioMode == RadioMode::kBluetooth) {
+            self->ctx().bt_link.setPowerPaused(true);
+        }
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+        if (self->ctx().radioMode == RadioMode::kWifiConfig) {
+            self->ctx().web.setPowerPaused(true);
+        }
+#endif
+    }
+
+    /**
+     * @brief 检查无线业务是否已完成关机静默
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 蓝牙/Wi-Fi 已暂停或无需静默
+     * @retval false 仍在等待无线断开/停用
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool radioPauseDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        return static_cast<const PowerModule *>(userCtx)->isRadioQuiesced();
+    }
+
+    /**
+     * @brief 将板级外设输出恢复到安全电平并记录结果
+     * @param stage: 当前阶段（kQuiesce）
+     * @param userCtx: PowerModule 实例指针
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static void safeGpioBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    {
+        static_cast<void>(stage);
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        auto *self = static_cast<PowerModule *>(userCtx);
+        const fw::Status safeStatus = board::setSafeOutputLevels(board::current());
+        self->safeGpioEvaluated_ = true;
+        self->safeGpioOk_ = fw::isOk(safeStatus);
+        if (!self->safeGpioOk_) {
+            FW_LOGW(fw::TraceCat::kSys, "power quiesce safe outputs failed (%s)",
+                    fw::toString(safeStatus));
+        }
+        self->keyDriveHigh_ = false;
+    }
+
+    /**
+     * @brief 检查板级外设安全电平配置是否成功
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 已成功置为安全电平
+     * @retval false 未执行或硬件配置失败
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool safeGpioDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        return static_cast<const PowerModule *>(userCtx)->safeGpioOk_;
+    }
+
+    /**
+     * @brief 打印关机完成日志以启动日志排空等待
+     * @param stage: 当前阶段（kQuiesce）
+     * @param userCtx: 未使用
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static void logDrainBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    {
+        static_cast<void>(stage);
+        static_cast<void>(userCtx);
+        FW_LOGI(fw::TraceCat::kSys, "device powered down");
+    }
+
+    /**
+     * @brief 检查异步日志输出任务与控制台 UART 是否已排空
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 日志与 UART 均已排空
+     * @retval false 仍有日志等待输出
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool logDrainDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        const auto *self = static_cast<const PowerModule *>(userCtx);
+        return self->isLogDrained(self->shutdownNowMs_ - self->quiesceStartMs_);
+    }
+
+    /**
+     * @brief 复位电池路径 OLED 终帧停留状态
+     * @param stage: 当前阶段（kCutPower）
+     * @param userCtx: PowerModule 实例指针
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static void oledFinalBatBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    {
+        static_cast<void>(stage);
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        static_cast<PowerModule *>(userCtx)->batteryFinalFrame_ = {};
+    }
+
+    /**
+     * @brief 检查电池路径 OLED 终帧是否刷出并停留满足时长
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 可放行断电（或当前处于 USB 重启路径）
+     * @retval false 仍在等待电池终帧刷出或停留
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool oledFinalBatDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        auto *self = static_cast<PowerModule *>(userCtx);
+        if (self->restartPending_) {
+            return true;
+        }
+        return self->finalFrameReady(self->shutdownNowMs_,
+                                     self->cutStartMs_ + board::kShutdownDisplayGraceMs, false);
+    }
+
+    /**
+     * @brief 复位 USB 路径 OLED 终帧停留状态
+     * @param stage: 当前阶段（kCutPower）
+     * @param userCtx: PowerModule 实例指针
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static void oledFinalUsbBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    {
+        static_cast<void>(stage);
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        static_cast<PowerModule *>(userCtx)->usbFinalFrame_ = {};
+    }
+
+    /**
+     * @brief 检查 USB 重启路径 OLED 终帧是否刷出并停留满足时长
+     * @param userCtx: PowerModule 实例指针
+     * @retval true 可放行重启（或尚未进入重启路径）
+     * @retval false 仍在等待 USB RESTARTING 终帧刷出或停留
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool oledFinalUsbDone(void *userCtx) noexcept
+    {
+        // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
+        auto *self = static_cast<PowerModule *>(userCtx);
+        if (!self->restartPending_) {
+            return true;
+        }
+        return self->finalFrameReady(self->shutdownNowMs_, self->oledWaitDeadlineMs_, true);
+    }
+
+    static constexpr std::array<power::ShutdownParticipant, 11U> kBuiltin{{
+        {"storage_fence", nullptr, &storageFenceDone, nullptr, board::ShutdownStage::kSave,
+         power::ShutdownMilestone::kSaveFence},
+        {"gnss_fence", nullptr, &gnssFenceDone, nullptr, board::ShutdownStage::kSave,
+         power::ShutdownMilestone::kSaveFence},
+        {"storage_flush", &storageFlushBegin, &storageFlushDone, nullptr,
+         board::ShutdownStage::kSave, power::ShutdownMilestone::kSaveFlush},
+        {"bt_settings", nullptr, &btSettingsDone, nullptr, board::ShutdownStage::kSave,
+         power::ShutdownMilestone::kSaveFlush},
+        {"web_settings", nullptr, &webSettingsDone, nullptr, board::ShutdownStage::kSave,
+         power::ShutdownMilestone::kSaveFlush},
+        {"gnss_nvs", nullptr, &gnssNvsDone, nullptr, board::ShutdownStage::kSave,
+         power::ShutdownMilestone::kSaveFlush},
+        {"radio_pause", &radioPauseBegin, &radioPauseDone, nullptr, board::ShutdownStage::kQuiesce,
+         power::ShutdownMilestone::kRadioQuiesce},
+        {"safe_gpio", &safeGpioBegin, &safeGpioDone, nullptr, board::ShutdownStage::kQuiesce,
+         power::ShutdownMilestone::kSafeGpio},
+        {"log_drain", &logDrainBegin, &logDrainDone, nullptr, board::ShutdownStage::kQuiesce,
+         power::ShutdownMilestone::kNone},
+        {"oled_final_bat", &oledFinalBatBegin, &oledFinalBatDone, nullptr,
+         board::ShutdownStage::kCutPower, power::ShutdownMilestone::kOledFinal},
+        {"oled_final_usb", &oledFinalUsbBegin, &oledFinalUsbDone, nullptr,
+         board::ShutdownStage::kCutPower, power::ShutdownMilestone::kOledFinal},
+    }};
+    static_assert(kBuiltin.size() + power::kMaxExtraShutdownParticipants <= 16U,
+                  "关机参与者总数须适配 16 位状态掩码");
+};
+
+bool PowerModule::isBuiltinParticipantName(const char *name) noexcept
+{
+    if (name == nullptr) {
+        return false;
+    }
+    return std::any_of(ParticipantOps::kBuiltin.begin(), ParticipantOps::kBuiltin.end(),
+                       [name](const power::ShutdownParticipant &p) noexcept {
+                           return std::strcmp(p.name, name) == 0;
+                       });
+}
+
+bool PowerModule::pollSaveFence(bool link) noexcept
 {
     if (!power::s_power_requests.settingsSubmitted()) {
-        return;
+        return false;
     }
-    if (!linkFenceReached_) {
-        linkFenceReached_ = reachedSaveFence(ctx().linkExecutor, ModuleKind::kStorage,
-                                             StorageModule::kSaveFence, linkFence_);
+    if (link) {
+        if (!linkFenceReached_) {
+            linkFenceReached_ = reachedSaveFence(ctx().linkExecutor, ModuleKind::kStorage,
+                                                 StorageModule::kSaveFence, linkFence_);
+        }
+        return linkFenceReached_;
     }
     if (!ioFenceReached_) {
         // 在已获准的 kIo 设置命令之后冲刷，即使该命令是在关门时才入队。
@@ -448,61 +894,141 @@ void PowerModule::pollSaveFences() noexcept
             reachedSaveFence(ctx().ioExecutor, ModuleKind::kGnss,
                              static_cast<uint8_t>(GnssSubVerb::kFlushGgaGate), ioFence_);
     }
+    return ioFenceReached_;
 }
 
-bool PowerModule::isSaveComplete() const noexcept
+uint32_t PowerModule::quiesceLimitMs(const power::ShutdownParticipant &p,
+                                     bool builtin) const noexcept
 {
-    if (!linkFenceReached_ || !ioFenceReached_ || context_->storage.hasPendingWrites()) {
-        return false;
-    }
-    if (store::inFlightWrites() != 0U) {
-        return false;
-    }
-    if ((context_->bootMode == board::BootMode::kNormal) &&
-        (context_->radioMode == RadioMode::kBluetooth) && context_->bt_link.hasPendingSettings()) {
-        return false;
-    }
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    if ((context_->bootMode == board::BootMode::kNormal) &&
-        (context_->radioMode == RadioMode::kWifiConfig) && context_->web.hasPendingSettings()) {
-        return false;
+    if ((p.milestone == power::ShutdownMilestone::kRadioQuiesce) &&
+        (context_->radioMode == RadioMode::kWifiConfig)) {
+        return kWifiQuiesceWaitMs;
     }
 #endif
-#if RTK_GNSS_ENABLED
-    if ((context_->bootMode == board::BootMode::kNormal) &&
-        context_->data.gnssPendingNvs.load(std::memory_order_acquire)) {
-        return false;
+    if (builtin && (p.milestone == power::ShutdownMilestone::kSafeGpio) && safeGpioEvaluated_) {
+        // 仅内置 safe_gpio 是同步执行：失败时不再额外空等；外部参与者即使声明同里程碑也按通用上限等待。
+        return 0U;
     }
-#endif
-    return true;
+    return kQuiesceMaxWaitMs;
 }
 
-void PowerModule::logSaveTimeoutItems() const noexcept
+void PowerModule::beginStageParticipants(board::ShutdownStage stage) noexcept
 {
-    constexpr size_t kPendingSummaryBytes = 96U; // B，待落盘项名摘要缓冲
-    std::array<char, kPendingSummaryBytes> storageItems{};
-    context_->storage.formatPendingSummary(storageItems);
-    const uint32_t inflight = store::inFlightWrites();
-    const bool btPending = (context_->bootMode == board::BootMode::kNormal) &&
-                           (context_->radioMode == RadioMode::kBluetooth) &&
-                           context_->bt_link.hasPendingSettings();
-    bool webPending = false;
-#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    webPending = (context_->bootMode == board::BootMode::kNormal) &&
-                 (context_->radioMode == RadioMode::kWifiConfig) &&
-                 context_->web.hasPendingSettings();
-#endif
-    bool gnssPending = false;
-#if RTK_GNSS_ENABLED
-    gnssPending = (context_->bootMode == board::BootMode::kNormal) &&
-                  context_->data.gnssPendingNvs.load(std::memory_order_acquire);
-#endif
-    FW_LOGW(fw::TraceCat::kSys,
-            "power save timeout after %" PRIu32 " ms; pending storage=%s nvs_inflight=%" PRIu32
-            " bt=%u web=%u gnss=%u settings_queue=%u",
-            board::kShutdownSaveTimeoutMs, storageItems.data(), inflight, btPending ? 1U : 0U,
-            webPending ? 1U : 0U, gnssPending ? 1U : 0U,
-            linkFenceReached_ && ioFenceReached_ ? 0U : 1U);
+    size_t idx = 0U;
+    const auto invoke = [this, stage, &idx](const power::ShutdownParticipant &p, void *cbCtx,
+                                            bool builtin) noexcept {
+        if (p.stage == stage) {
+            if (p.begin != nullptr) {
+                p.begin(stage, cbCtx);
+            }
+            // safe_gpio 失败位只绑定内置表项；外部同里程碑参与者靠自己的 isDone/超时判定。
+            if (builtin && (p.milestone == power::ShutdownMilestone::kSafeGpio) &&
+                safeGpioEvaluated_ && !safeGpioOk_) {
+                // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+                participantTimedOutMask_ =
+                    static_cast<uint16_t>(participantTimedOutMask_ | (1U << idx));
+            }
+        }
+        ++idx;
+    };
+    for (const auto &p : ParticipantOps::kBuiltin) {
+        invoke(p, this, true);
+    }
+    for (const auto &p : power::extraShutdownParticipants()) {
+        invoke(p, p.userCtx, false);
+    }
+}
+
+bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t nowMs) noexcept
+{
+    shutdownNowMs_ = nowMs;
+    const uint32_t quiesceElapsed = nowMs - quiesceStartMs_;
+    bool allSatisfied = true;
+    size_t idx = 0U;
+    const auto check = [this, stage, quiesceElapsed, &allSatisfied,
+                        &idx](const power::ShutdownParticipant &p, void *cbCtx,
+                              bool builtin) noexcept {
+        if (p.stage == stage) {
+            // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+            const auto bit = static_cast<uint16_t>(1U << idx);
+            const bool done = (p.isDone == nullptr) || p.isDone(cbCtx);
+            if (done) {
+                participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ | bit);
+            } else {
+                participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
+                if (stage == board::ShutdownStage::kQuiesce) {
+                    if (quiesceElapsed < quiesceLimitMs(p, builtin)) {
+                        allSatisfied = false;
+                    }
+                } else {
+                    allSatisfied = false;
+                }
+            }
+        }
+        ++idx;
+    };
+    for (const auto &p : ParticipantOps::kBuiltin) {
+        check(p, this, true);
+    }
+    for (const auto &p : power::extraShutdownParticipants()) {
+        check(p, p.userCtx, false);
+    }
+    return allSatisfied;
+}
+
+void PowerModule::recordStageTimeouts(board::ShutdownStage stage) noexcept
+{
+    size_t idx = 0U;
+    const auto mark = [this, stage, &idx](const power::ShutdownParticipant &p) noexcept {
+        if (p.stage == stage) {
+            // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+            const auto bit = static_cast<uint16_t>(1U << idx);
+            if ((participantDoneMask_ & bit) == 0U) {
+                participantTimedOutMask_ = static_cast<uint16_t>(participantTimedOutMask_ | bit);
+            }
+        }
+        ++idx;
+    };
+    for (const auto &p : ParticipantOps::kBuiltin) {
+        mark(p);
+    }
+    for (const auto &p : power::extraShutdownParticipants()) {
+        mark(p);
+    }
+}
+
+void PowerModule::logStageTimeout(board::ShutdownStage stage) const noexcept
+{
+    if (stage == board::ShutdownStage::kSave) {
+        constexpr size_t kPendingSummaryBytes = 96U; // B，待落盘项名摘要缓冲
+        std::array<char, kPendingSummaryBytes> storageItems{};
+        context_->storage.formatPendingSummary(storageItems);
+        const uint32_t inflight = store::inFlightWrites();
+        FW_LOGW(fw::TraceCat::kSys,
+                "power save timeout after %" PRIu32 " ms; storage=%s nvs_inflight=%" PRIu32,
+                board::kShutdownSaveTimeoutMs, storageItems.data(), inflight);
+    }
+    size_t idx = 0U;
+    const char *const stageText = stage == board::ShutdownStage::kSave ? "save" : "quiesce";
+    const auto report = [this, stage, stageText,
+                         &idx](const power::ShutdownParticipant &p) noexcept {
+        if (p.stage == stage) {
+            // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+            const auto bit = static_cast<uint16_t>(1U << idx);
+            if ((participantTimedOutMask_ & bit) != 0U) {
+                // 每个超时参与者独占一行并完整打印名字（名字 ≤ 32 字符，不会被日志行截断）。
+                FW_LOGW(fw::TraceCat::kSys, "power %s timeout pending=%s", stageText, p.name);
+            }
+        }
+        ++idx;
+    };
+    for (const auto &p : ParticipantOps::kBuiltin) {
+        report(p);
+    }
+    for (const auto &p : power::extraShutdownParticipants()) {
+        report(p);
+    }
 }
 
 void PowerModule::enterQuiesce(uint32_t nowMs) noexcept
@@ -518,54 +1044,9 @@ void PowerModule::enterQuiesce(uint32_t nowMs) noexcept
     store::pausePowerSave();
     ctx().storage.finishPowerSave();
     quiesceStartMs_ = nowMs;
-    if (ctx().bootMode == board::BootMode::kNormal) {
-        if (ctx().radioMode == RadioMode::kBluetooth) {
-            ctx().bt_link.setPowerPaused(true);
-        }
-#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-        if (ctx().radioMode == RadioMode::kWifiConfig) {
-            ctx().web.setPowerPaused(true);
-        }
-#endif
-    }
-    const fw::Status safeStatus = board::setSafeOutputLevels(board::current());
-    if (fw::isOk(safeStatus)) {
-        peripheralsSafeDone_ = true;
-    } else {
-        peripheralsSafeFailed_ = true;
-        FW_LOGW(fw::TraceCat::kSys, "power quiesce safe outputs failed (%s)",
-                fw::toString(safeStatus));
-    }
-    keyDriveHigh_ = false;
-    FW_LOGI(fw::TraceCat::kSys, "device powered down");
-}
-
-bool PowerModule::isQuiesceDone(uint32_t nowMs) const noexcept
-{
-    const uint32_t elapsed = nowMs - quiesceStartMs_;
-    if (context_->radioMode == RadioMode::kBluetooth && !context_->bt_link.powerPauseDone() &&
-        elapsed < kQuiesceMaxWaitMs) {
-        return false;
-    }
-#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    if (context_->radioMode == RadioMode::kWifiConfig && !context_->web.powerPauseDone() &&
-        elapsed < kWifiQuiesceWaitMs) {
-        return false;
-    }
-#endif
-    return elapsed >= kQuiesceMaxWaitMs || isLogDrained(elapsed);
-}
-
-void PowerModule::logQuiesceTimeout() noexcept
-{
-#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
-    if (ctx().radioMode == RadioMode::kWifiConfig && !ctx().web.powerPauseDone()) {
-        FW_LOGW(fw::TraceCat::kSys, "power SoftAP quiesce timed out");
-    }
-#endif
-    if (ctx().radioMode == RadioMode::kBluetooth && !ctx().bt_link.powerPauseDone()) {
-        FW_LOGW(fw::TraceCat::kSys, "power BT disconnect timed out");
-    }
+    shutdownNowMs_ = nowMs;
+    beginStageParticipants(board::ShutdownStage::kQuiesce);
+    static_cast<void>(pollStageParticipants(board::ShutdownStage::kQuiesce, nowMs));
 }
 
 void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins,
@@ -573,6 +1054,7 @@ void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins
 {
     stageEnteredMs_ = nowMs;
     stageOnScreenMs_.reset();
+    shutdownNowMs_ = nowMs;
     fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kShutdownStage), 0U,
               static_cast<uint32_t>(out.stage), static_cast<uint32_t>(shutdownSm_.reason()));
     switch (out.stage) {
@@ -585,21 +1067,19 @@ void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins
         ctx().data.uiEvents.resetShutdownFinalFrame();
         break;
     case board::ShutdownStage::kSave:
-        store::startPowerSave(nowMs);
-        ctx().storage.expeditePendingWrites();
+        beginStageParticipants(board::ShutdownStage::kSave);
         break;
     case board::ShutdownStage::kQuiesce:
         if (out.saveTimedOut) {
-            saveTimedOut_ = true;
-            logSaveTimeoutItems();
-        } else {
-            saveFencesDone_ = true;
-            saveFlushedDone_ = true;
+            saveStageTimedOut_ = true;
+            recordStageTimeouts(board::ShutdownStage::kSave);
+            logStageTimeout(board::ShutdownStage::kSave);
         }
         enterQuiesce(nowMs);
         break;
     case board::ShutdownStage::kCutPower:
         cutStartMs_ = nowMs;
+        beginStageParticipants(board::ShutdownStage::kCutPower);
         break;
     case board::ShutdownStage::kIdle:
     default:
@@ -641,8 +1121,7 @@ void PowerModule::handleShutdownCutPower(uint32_t nowMs, const board::ShutdownOu
         restartStartMs_ = nowMs;
         restartLogReady_ = false;
         oledWaitDeadlineMs_ = 0U;
-        finalHoldDeadlineMs_.reset();
-        finalFrameReady_ = false;
+        usbFinalFrame_ = {};
     }
 }
 
@@ -652,42 +1131,30 @@ void PowerModule::stepShutdown(uint32_t nowMs, PinLevels &pins) noexcept
         return;
     }
 
+    shutdownNowMs_ = nowMs;
     const auto stage = shutdownSm_.stage();
-    if (stage == board::ShutdownStage::kSave) {
-        pollSaveFences();
-        if (linkFenceReached_ && ioFenceReached_) {
-            saveFencesDone_ = true;
-        }
-    }
-    const bool saveDone = stage == board::ShutdownStage::kSave && isSaveComplete();
-    if (saveDone) {
-        saveFlushedDone_ = true;
-    }
-    if ((stage == board::ShutdownStage::kQuiesce) && isRadioQuiesced()) {
-        radioQuiescedDone_ = true;
-    }
+    const bool saveDone = (stage == board::ShutdownStage::kSave) &&
+                          pollStageParticipants(board::ShutdownStage::kSave, nowMs);
     const bool stageVisible = shutdownStageVisible(nowMs, stage);
+    const bool quiesceReady = (stage == board::ShutdownStage::kQuiesce) &&
+                              pollStageParticipants(board::ShutdownStage::kQuiesce, nowMs);
     const bool quiesceDone =
-        stage == board::ShutdownStage::kQuiesce && stageVisible && isQuiesceDone(nowMs);
+        (stage == board::ShutdownStage::kQuiesce) && stageVisible && quiesceReady;
     if (quiesceDone) {
-        if (isRadioQuiesced()) {
-            radioQuiescedDone_ = true;
-        } else {
-            radioTimedOut_ = true;
-        }
-        logQuiesceTimeout();
+        recordStageTimeouts(board::ShutdownStage::kQuiesce);
+        logStageTimeout(board::ShutdownStage::kQuiesce);
         pins = samplePins(nowMs, true);
         // 刷新 REG08 与 UART 排空均在 GPIO4 首沿开始计时之前。
         nowMs = rtos::nowMs();
+        shutdownNowMs_ = nowMs;
     }
     const auto usb =
         pins.u3On || pins.usbKnown ? std::optional<bool>{pins.usbPresent} : std::nullopt;
     const bool cutReady =
         !ctx().data.uiEvents.oledActive() ||
-        (stage == board::ShutdownStage::kCutPower &&
-         (pins.usbPresent
-              ? stageVisible
-              : finalFrameReady(nowMs, cutStartMs_ + board::kShutdownDisplayGraceMs, false)));
+        ((stage == board::ShutdownStage::kCutPower) &&
+         (pins.usbPresent ? stageVisible
+                          : pollStageParticipants(board::ShutdownStage::kCutPower, nowMs)));
     const auto out =
         shutdownSm_.step(nowMs, saveDone, quiesceDone, pins.u3On, usb, stageVisible, cutReady);
     if (out.stageEntered) {
@@ -698,15 +1165,13 @@ void PowerModule::stepShutdown(uint32_t nowMs, PinLevels &pins) noexcept
 
 void PowerModule::resetShutdownProgress() noexcept
 {
-    finalHoldDeadlineMs_.reset();
-    finalFrameReady_ = false;
-    saveFencesDone_ = false;
-    saveFlushedDone_ = false;
-    saveTimedOut_ = false;
-    peripheralsSafeDone_ = false;
-    peripheralsSafeFailed_ = false;
-    radioQuiescedDone_ = false;
-    radioTimedOut_ = false;
+    batteryFinalFrame_ = {};
+    usbFinalFrame_ = {};
+    participantDoneMask_ = 0U;
+    participantTimedOutMask_ = 0U;
+    safeGpioOk_ = false;
+    safeGpioEvaluated_ = false;
+    saveStageTimedOut_ = false;
 }
 
 bool PowerModule::isRadioQuiesced() const noexcept
@@ -725,6 +1190,59 @@ bool PowerModule::isRadioQuiesced() const noexcept
     return true;
 }
 
+PowerModule::ParticipantCount PowerModule::computeShutdownCounts() const noexcept
+{
+    if (shutdownSm_.stage() == board::ShutdownStage::kIdle) {
+        return {};
+    }
+    ParticipantCount counts{};
+    size_t idx = 0U;
+    const auto tally = [this, &counts, &idx](const power::ShutdownParticipant &p) noexcept {
+        if ((p.stage == board::ShutdownStage::kSave) ||
+            (p.stage == board::ShutdownStage::kQuiesce)) {
+            ++counts.total;
+            // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+            const auto bit = static_cast<uint16_t>(1U << idx);
+            if ((participantDoneMask_ & bit) != 0U) {
+                ++counts.done;
+            }
+        }
+        ++idx;
+    };
+    for (const auto &p : ParticipantOps::kBuiltin) {
+        tally(p);
+    }
+    for (const auto &p : power::extraShutdownParticipants()) {
+        tally(p);
+    }
+    return counts;
+}
+
+bool PowerModule::allParticipantsDone(board::ShutdownStage stage,
+                                      power::ShutdownMilestone m) const noexcept
+{
+    bool found = false;
+    bool allDone = true;
+    size_t idx = 0U;
+    const auto inspect = [this, stage, m, &found, &allDone,
+                          &idx](const power::ShutdownParticipant &p) noexcept {
+        if ((p.stage == stage) && ((m == power::ShutdownMilestone::kNone) || (p.milestone == m))) {
+            found = true;
+            // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+            const bool done = (participantDoneMask_ & static_cast<uint16_t>(1U << idx)) != 0U;
+            allDone = allDone && done;
+        }
+        ++idx;
+    };
+    for (const auto &p : ParticipantOps::kBuiltin) {
+        inspect(p);
+    }
+    for (const auto &p : power::extraShutdownParticipants()) {
+        inspect(p);
+    }
+    return found && allDone;
+}
+
 uint8_t PowerModule::computeShutdownDoneMask(const PinLevels &pins) const noexcept
 {
     const auto stage = shutdownSm_.stage();
@@ -732,16 +1250,17 @@ uint8_t PowerModule::computeShutdownDoneMask(const PinLevels &pins) const noexce
         return 0U;
     }
     uint8_t mask = board::shutdownDoneBit(board::ShutdownDoneBit::kAnnounced);
-    if (saveFencesDone_) {
+    if (allParticipantsDone(board::ShutdownStage::kSave, power::ShutdownMilestone::kSaveFence)) {
         mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFences);
     }
-    if (saveFlushedDone_) {
+    if (allParticipantsDone(board::ShutdownStage::kSave, power::ShutdownMilestone::kNone)) {
         mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed);
     }
-    if (peripheralsSafeDone_) {
+    if (allParticipantsDone(board::ShutdownStage::kQuiesce, power::ShutdownMilestone::kSafeGpio)) {
         mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kPeripheralsSafe);
     }
-    if (radioQuiescedDone_) {
+    if (allParticipantsDone(board::ShutdownStage::kQuiesce,
+                            power::ShutdownMilestone::kRadioQuiesce)) {
         mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced);
     }
     if (stage == board::ShutdownStage::kCutPower) {
@@ -760,15 +1279,29 @@ uint8_t PowerModule::computeShutdownDegradedMask() const noexcept
     if (shutdownSm_.stage() == board::ShutdownStage::kIdle) {
         return 0U;
     }
-    uint8_t mask = 0U;
-    if (saveTimedOut_) {
-        mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kSaveTimeout);
+    uint8_t mask = saveStageTimedOut_
+                       ? board::shutdownDegradedBit(board::ShutdownDegradedBit::kSaveTimeout)
+                       : 0U;
+    size_t idx = 0U;
+    const auto inspect = [this, &mask, &idx](const power::ShutdownParticipant &p) noexcept {
+        // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+        const bool failed = (participantTimedOutMask_ & static_cast<uint16_t>(1U << idx)) != 0U;
+        if (failed) {
+            if (p.stage == board::ShutdownStage::kSave) {
+                mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kSaveTimeout);
+            } else if (p.milestone == power::ShutdownMilestone::kSafeGpio) {
+                mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kPeripheralsFailed);
+            } else if (p.milestone == power::ShutdownMilestone::kRadioQuiesce) {
+                mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kRadioTimeout);
+            }
+        }
+        ++idx;
+    };
+    for (const auto &p : ParticipantOps::kBuiltin) {
+        inspect(p);
     }
-    if (peripheralsSafeFailed_) {
-        mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kPeripheralsFailed);
-    }
-    if (radioTimedOut_) {
-        mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kRadioTimeout);
+    for (const auto &p : power::extraShutdownParticipants()) {
+        inspect(p);
     }
     return mask;
 }
@@ -798,6 +1331,7 @@ void PowerModule::waitOledFinalFrame(TaskHandle_t self) noexcept
 }
 void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
 {
+    const ParticipantCount counts = computeShutdownCounts();
     const PowerSnapshot next{
         .active = active_,
         .keyPressed = pins.keyPressed,
@@ -817,6 +1351,8 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         .lastShutdown = shutdownSm_.lastReason(),
         .shutdownDoneMask = computeShutdownDoneMask(pins),
         .shutdownDegradedMask = computeShutdownDegradedMask(),
+        .shutdownDoneCount = counts.done,
+        .shutdownTotalCount = counts.total,
         .shortPresses = shortPresses_,
         .longPresses = longPresses_,
     };
@@ -828,7 +1364,9 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
     const bool shutdownProgressChanged =
         !force && ((next.shutdownStage != lastSnapshot_.shutdownStage) ||
                    (next.shutdownDoneMask != lastSnapshot_.shutdownDoneMask) ||
-                   (next.shutdownDegradedMask != lastSnapshot_.shutdownDegradedMask));
+                   (next.shutdownDegradedMask != lastSnapshot_.shutdownDegradedMask) ||
+                   (next.shutdownDoneCount != lastSnapshot_.shutdownDoneCount) ||
+                   (next.shutdownTotalCount != lastSnapshot_.shutdownTotalCount));
     const bool powerSupplyChanged = !force && ((next.usbPresent != lastSnapshot_.usbPresent) ||
                                                (next.charging != lastSnapshot_.charging));
     if (force || !snapshotEqual(next, lastSnapshot_)) {
@@ -858,24 +1396,28 @@ bool PowerModule::shutdownStageVisible(uint32_t nowMs, board::ShutdownStage stag
 
 bool PowerModule::finalFrameReady(uint32_t nowMs, uint32_t flushDeadlineMs, bool usb) noexcept
 {
+    FinalFrameState &state = usb ? usbFinalFrame_ : batteryFinalFrame_;
     const auto &events = ctx().data.uiEvents;
-    if (finalFrameReady_ || !events.oledActive()) {
+    if (state.ready || !events.oledActive()) {
         return true;
     }
-    if (!finalHoldDeadlineMs_ && events.shutdownFinalFrameFlushed(usb)) {
-        finalHoldDeadlineMs_ = nowMs + board::kShutdownFinalVisibleMs;
+    if (!state.holdDeadlineMs && events.shutdownFinalFrameFlushed(usb)) {
+        // 首次观察到终帧确认后才取单调时间：入参 nowMs 可能早于确认事件，直接使用会缩短 300 ms 停留。
+        nowMs = rtos::nowMs();
+        state.holdDeadlineMs = nowMs + board::kShutdownFinalVisibleMs;
     }
-    const uint32_t deadline = finalHoldDeadlineMs_.value_or(flushDeadlineMs);
+    const uint32_t deadline = state.holdDeadlineMs.value_or(flushDeadlineMs);
     // 两个等待窗口都远小于半个 uint32_t 周期，差值符号可用于回绕截止判断。
-    finalFrameReady_ = static_cast<int32_t>(nowMs - deadline) >= 0;
-    if (finalFrameReady_ && !finalHoldDeadlineMs_) {
+    state.ready = static_cast<int32_t>(nowMs - deadline) >= 0;
+    if (state.ready && !state.holdDeadlineMs) {
         FW_LOGW(fw::TraceCat::kSys, "shutdown OLED final frame timed out");
     }
-    return finalFrameReady_;
+    return state.ready;
 }
 
 bool PowerModule::pollRestart(uint32_t nowMs) noexcept
 {
+    shutdownNowMs_ = nowMs;
     const uint32_t elapsed = nowMs - restartStartMs_;
     if (!restartLogReady_) {
         if (elapsed < kRestartWaitMs && !isLogDrained(elapsed)) {
@@ -894,12 +1436,14 @@ bool PowerModule::pollRestart(uint32_t nowMs) noexcept
         esp_restart();
 #endif
     };
-    if (!shutdownSm_.active() || finalFrameReady(nowMs, oledWaitDeadlineMs_, true)) {
+    // U3 已关断后沿用有界日志等待、终帧确认与 300 ms 停留；30 s 回退只属于 U3 未关断阶段（ADR-0015 §2.4），
+    // 不得在这里提前结束已确认的终帧停留。
+    if (!shutdownSm_.active() || pollStageParticipants(board::ShutdownStage::kCutPower, nowMs)) {
         doRestart();
-    } else if (!finalHoldDeadlineMs_) {
+    } else if (!usbFinalFrame_.holdDeadlineMs) {
         if (const TaskHandle_t self = xTaskGetCurrentTaskHandle(); self != nullptr) {
             waitOledFinalFrame(self);
-            if (finalFrameReady(rtos::nowMs(), oledWaitDeadlineMs_, true)) {
+            if (pollStageParticipants(board::ShutdownStage::kCutPower, rtos::nowMs())) {
                 doRestart();
             }
         }

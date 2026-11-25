@@ -22,6 +22,14 @@ menu "RTK_main"
             P2 电源按键长按关机与充电待机长按开机的判定阈值（ms）。
             依据 P2 原理图注释默认 2500 ms。
 
+    config RTK_LOW_BATTERY_HOLD_MS
+        int "Low battery continuous hold threshold (ms)"
+        range 1000 300000
+        default 120000
+        help
+            电池电量低于 10% 时连续保持该时长后触发自动低电关机（ms，PW1）。
+            产品默认 120000 ms（2 分钟）；仅台架 HIL 测试可调小，产品固件保持默认。
+
     choice RTK_LINK_POLICY
         prompt "SPP link policy"
         default RTK_LINK_POLICY_CONCURRENT

@@ -123,6 +123,8 @@ struct ViewModel {
     board::ShutdownReason shutdownReason = board::ShutdownReason::kNone;
     uint8_t shutdownDoneMask = 0U;
     uint8_t shutdownDegradedMask = 0U;
+    uint8_t shutdownDoneCount = 0U;
+    uint8_t shutdownTotalCount = 0U;
     KeyHoldSnapshot keyHold{};
     RebootBanner rebootBanner = RebootBanner::kNone;
 };
@@ -825,13 +827,17 @@ struct DialGnssDetail {
                                                 uint32_t postFlushNowMs) noexcept;
 
 /**
- * @brief 按关机阶段与完成掩码计算目标关机进度百分比（0..100）
+ * @brief 按关机参与者表完成数（优先）或阶段完成掩码计算目标关机进度百分比（0..100）
  * @param stage: 关机阶段
- * @param doneMask: ShutdownDoneBit 组合掩码
+ * @param doneMask: ShutdownDoneBit 组合掩码（终态判定与无参与者计数时的回退）
+ * @param doneCount: 参与者表已完成项数（totalCount > 0 时生效）
+ * @param totalCount: 参与者表总项数（0 表示回退到 doneMask 分段进度）
  * @retval 目标进度百分比（0..100）
  * @note 纯函数。
  */
-[[nodiscard]] uint8_t shutdownTargetPercent(board::ShutdownStage stage, uint8_t doneMask) noexcept;
+[[nodiscard]] uint8_t shutdownTargetPercent(board::ShutdownStage stage, uint8_t doneMask,
+                                            uint8_t doneCount = 0U,
+                                            uint8_t totalCount = 0U) noexcept;
 
 /**
  * @brief 按关机阶段、真实完成掩码与降级掩码取得当前阶段简短英文提示
@@ -846,7 +852,7 @@ struct DialGnssDetail {
                                             uint8_t degradedMask, RadioMode radioMode) noexcept;
 
 /**
- * @brief 取得关机原因首行英文提示（LOW BATTERY / CONSOLE / KEY / PHONE）
+ * @brief 取得关机原因首行英文提示（LOW BATTERY / CONSOLE / KEY / PHONE / WEB）
  * @param reason: 关机原因枚举
  * @retval 静态只读原因字符串
  * @note 纯函数。

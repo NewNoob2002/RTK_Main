@@ -2015,7 +2015,8 @@ void renderPage(OledPage page, const ViewModel &vm, ScreenBuff &fb) noexcept
     UiRenderState st{};
     st.page = page;
     st.dockFocusX = kDockStartX;
-    st.shutdownPct = shutdownTargetPercent(vm.shutdownStage, vm.shutdownDoneMask);
+    st.shutdownPct = shutdownTargetPercent(vm.shutdownStage, vm.shutdownDoneMask,
+                                           vm.shutdownDoneCount, vm.shutdownTotalCount);
     static_cast<void>(renderUi(st, vm, fb));
 }
 

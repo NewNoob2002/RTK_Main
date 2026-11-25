@@ -44,6 +44,8 @@ const char *shutdownReasonName(ShutdownReason reason) noexcept
         return "low_battery";
     case ShutdownReason::kPhone:
         return "phone";
+    case ShutdownReason::kWeb:
+        return "web";
     case ShutdownReason::kNone:
     default:
         return "none";
@@ -143,10 +145,8 @@ uint8_t batteryPercent(uint32_t mv) noexcept
     return kFullBatteryPct;
 }
 
-bool LowBatteryTimer::isDue(uint32_t nowMs, bool onBattery, uint8_t pct) noexcept
+bool LowBatteryTimer::isDue(uint32_t nowMs, bool onBattery, uint8_t pct, uint32_t holdMs) noexcept
 {
-    constexpr uint8_t kLowBatteryPct = 10U;
-    constexpr uint32_t kLowBatteryHoldMs = 30000U; // ms
     if (!onBattery || pct >= kLowBatteryPct) {
         sinceMs_.reset();
         return false;
@@ -154,7 +154,7 @@ bool LowBatteryTimer::isDue(uint32_t nowMs, bool onBattery, uint8_t pct) noexcep
     if (!sinceMs_.has_value()) {
         sinceMs_ = nowMs;
     }
-    return nowMs - *sinceMs_ >= kLowBatteryHoldMs;
+    return nowMs - *sinceMs_ >= holdMs;
 }
 
 PowerOnAction decidePowerOn(bool senseHigh, bool usbPresent) noexcept
