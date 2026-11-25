@@ -35,12 +35,13 @@
 | T13F | 配对事件到达顺序修正（报告 `docs/reports/T13F-pairing-order.md`） | — | 合入 `ffc588b` |
 | O1–O3 | 网页 OTA：固件侧、上传页与 mock、HIL 修正与 fence 分区；HIL 通过（升级 ~35 s、30 s 自动确认、并发 408、断 Wi-Fi、长按电源键中止） | 0019 | `04c2f12`、`33a7a09`、`0f18f66`、合入 `1b01eef` |
 | OL1–OL6 | SH1106 OLED（共享 I2C0、WouoUI 子集）、开机自检/表盘/子页、真实关机进度、待机页、SDL2 模拟器、30 fps 节拍与局部刷新、两选项弹窗、COMM 页 SoftAP 信息；2026-11-25 P2 v1.41 + F9P HIL 通过（`oled bench 10` 30.0 fps / CPU 3.8% / i2c_errors 0；报告 `docs/reports/OL1-oled.md`、`OL2-oled-ui.md`） | 0020 | 合入 `2eb65ba`、`c2e9293` |
+| PW1 | 关机参与者登记表（kSave/kQuiesce 外部登记）、保存超时 3 s、低电保持 120 s、`ShutdownReason::kWeb` 预留、电池/USB 终帧拆分、`power simbat` 低电 HIL 注入；DRAM +136 B / IRAM 0；2026-11-25 P2 v1.41 HIL 通过（长按/8 s 强制/控制台/低电 120 s/终帧插 USB/USB 在位关机；报告 `docs/reports/PW1-shutdown-participants.md` §4.1） | 0015、0020 | 合入 `7874dcd` |
 
 ## 2. 进行中与未开始
 
 | 项 | 状态 |
 | --- | --- |
-| PW1 关机参与者表 | 未开始，待后续分派 |
+| OL7 关机弹窗单选项 + 电量格数显示 | 待写卡分派（用户 2026-11-25 批准） |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | 未立项，需新 ADR，必须走 ADR-0018 的服务与总线 |
@@ -51,7 +52,7 @@
 - G-CM680：RTCM 注入未测；所有 RTCM 共用最后一个周期、`nmea bad` 每 5 s 加 1 的原因未查明、`unlog com1` 返回 ERROR。
 - W0：CM680 星座 MASK/UNMASK 未验证，`gnss.const.*` 暂不支持。
 - B1：E1 强制档与未知 ID 路径未测。
-- B3：REG02/REG03 写入需在 CM680 P2 v1.41（有 SGM41513）补测；<10% 低电关机未实测；新 F9P 板 I2C 只见 0x3C，充电芯片位置待原理图确认。
+- B3：REG02/REG03 写入需在 CM680 P2 v1.41（有 SGM41513）补测；<10% 低电关机已由 PW1 `simbat` 注入实测（真实 ADC 低电链路仍未测）；新 F9P 板 I2C 只见 0x3C，充电芯片位置待原理图确认。
 - U1：室外 + 基站下，接收差分期间修改截止角/星座，确认 RTK Fixed 不中断（未测）；接入差分后计划外 NMEA 计数 `ign=4` 原文未抓。
 - U2：室外有星时确认 GGA 经纬度 7 位小数；SVNUMBERING 下真实卫星 `nmea.bad=0`；5 Hz 四星座 RTK + RTCM 满载下 VALSET 不超时、SPP 吞吐正常（均未测）。RU2-02：改频率时 rate/out 两键分开保存，部分失败会让 NVS 频率与周期不一致，待改为一次原子保存。
 - 门禁：`G2b-t13_host_check-asan` 的 `t13_disconnect_reuse_across_slots` 在高负载下偶发失败（测试同步竞态：`fake_wait_disconnect_returns` 早于 worker `spp_server_ctrl_settle_locked` 结算，见 `docs/reports/T13F-pairing-order.md`），单独重跑通过；待另开卡修正测试同步。
