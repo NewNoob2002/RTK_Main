@@ -9,12 +9,11 @@
 namespace app::oled {
 namespace {
 
-constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
-constexpr uint64_t kFnvPrime = 1099511628211ULL;
+constexpr uint32_t kFnvOffsetBasis = 2166136261U;
+constexpr uint32_t kFnvPrime = 16777619U;
 constexpr char kMinPrintableAscii = ' ';
 constexpr char kMaxPrintableAscii = '~';
 constexpr uint8_t kMaxPercent = 100U;
-constexpr uint8_t kAllPagesMask = 0xFFU;
 constexpr uint32_t kMvPerVolt = 1000U;
 constexpr uint32_t kMvPerCentiVolt = 10U;
 constexpr int64_t kE9Scale = 1000000000LL;
@@ -386,7 +385,7 @@ UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexc
     out.markShutdownFinalFrame = final;
     out.markRebootFinalFrame = (vm.rebootBanner != RebootBanner::kNone);
     out.animating = (shutdownPct_ < target);
-    out.nextWaitMs = out.animating ? kAnimFramePeriodMs : kIdlePollPeriodMs;
+    out.nextWaitMs = out.animating ? kAnimFramePeriodMs : kWaitForEvent;
     return out;
 }
 
@@ -419,7 +418,7 @@ UiDecision UiController::stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
     const bool chargeAnim = isEffectiveCharging(vm) &&
                             (vm.batteryPct != board::kBatteryPctUnknown) &&
                             (vm.batteryPct < kMaxPercent);
-    uint32_t waitMs = kIdlePollPeriodMs;
+    uint32_t waitMs = kWaitForEvent;
     if (fastAnim) {
         waitMs = kAnimFramePeriodMs;
     } else if (chargeAnim) {
@@ -693,7 +692,7 @@ UiDecision UiController::recoverFromShutdown() noexcept
                                                            : OledPage::kDialplate;
     dockSpring_.snap(dockSlotRect(dockSelected_).x);
     out.page = page_;
-    out.nextWaitMs = kIdlePollPeriodMs;
+    out.nextWaitMs = kWaitForEvent;
     return out;
 }
 
@@ -722,12 +721,22 @@ UiDecision UiController::buildActiveDecision(uint32_t nowMs, const ViewModel &vm
     UiDecision out{};
     out.page = page_;
     out.animating = animating;
-    uint32_t waitMs = animating ? kAnimFramePeriodMs : kIdlePollPeriodMs;
+    uint32_t waitMs = animating ? kAnimFramePeriodMs : kWaitForEvent;
     if (!powerOffConfirm_ && vm.keyHold.active && !holdOverlayDismissed_ && !holdOverlayActive_) {
         const uint32_t heldMs = nowMs - vm.keyHold.startMs;
         if (heldMs < board::kKeyHoldOverlayStartMs) {
             waitMs = std::min(waitMs, board::kKeyHoldOverlayStartMs - heldMs);
         }
+    }
+    if (isSubmenuPage(page_) && !wifiConfirm_ && !powerOffConfirm_ && pairDialogId_ == 0U &&
+        !vm.keyHold.active && !holdOverlayActive_) {
+        waitMs = std::min(waitMs, remainingMs(nowMs, lastActivityMs_ + kSubpageIdleTimeoutMs));
+    }
+    if (page_ == OledPage::kSubDevice || (page_ == OledPage::kSubComm && vm.pairing.windowOpen)) {
+        waitMs = std::min(waitMs, kMsPerSec - (nowMs % kMsPerSec));
+    }
+    if (pairDialogId_ != 0U) {
+        waitMs = std::min(waitMs, remainingMs(nowMs, vm.pairing.requestDeadlineMs));
     }
     if (click_.pending()) {
         out.hasClickDeadline = true;
@@ -824,7 +833,7 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
             .page = page_,
             .markRebootFinalFrame = true,
             .animating = false,
-            .nextWaitMs = kIdlePollPeriodMs,
+            .nextWaitMs = kWaitForEvent,
         };
     }
     updateHoldOverlay(nowMs, vm, longKeyArrived);
@@ -892,41 +901,32 @@ void FrameTracker::invalidatePage(uint8_t page) noexcept
     }
 }
 
-uint8_t FrameTracker::computeDirtyMask(const ScreenBuff &fb,
-                                       std::array<uint64_t, kPages> &hashesOut,
-                                       bool forceFull) const noexcept
+FrameTracker::Columns FrameTracker::dirtyColumns(uint8_t page,
+                                                 std::span<const uint8_t, kWidth> data,
+                                                 PageHashes &hashes, bool forceFull) const noexcept
 {
-    uint8_t dirty = 0U;
-    for (size_t page = 0U; page < kPages; ++page) {
-        hashesOut[page] = fnv1a64(std::span<const uint8_t>{fb[page]});
-        // page < 8，位运算结果在 uint8_t 范围内。
-        const auto bit = static_cast<uint8_t>(1U << page);
-        const bool known = (validMask_ & bit) != 0U;
-        if (forceFull || !known || (committedHashes_[page] != hashesOut[page])) {
-            dirty |= bit;
+    Columns dirty{};
+    for (size_t block = 0U; block < hashes.size(); ++block) {
+        uint32_t hash = kFnvOffsetBasis;
+        for (const uint8_t value : data.subspan(block * kBlockWidth, kBlockWidth)) {
+            hash = (hash ^ value) * kFnvPrime;
+        }
+        hashes[block] = hash;
+        if (hash != committedHashes_[page][block]) {
+            if (dirty.end == 0U) {
+                dirty.first = block * kBlockWidth;
+            }
+            dirty.end = (block + 1U) * kBlockWidth;
         }
     }
-    return forceFull ? kAllPagesMask : dirty;
+    return (forceFull || (validMask_ & (1U << page)) == 0U) ? Columns{0U, kWidth} : dirty;
 }
 
-void FrameTracker::commitPage(uint8_t page, uint64_t hash) noexcept
+void FrameTracker::commitPage(uint8_t page, const PageHashes &hashes) noexcept
 {
-    if (page >= kPages) {
-        return;
-    }
-    committedHashes_[page] = hash;
+    committedHashes_[page] = hashes;
     // page < 8，位掩码转换安全。
     validMask_ |= static_cast<uint8_t>(1U << page);
-}
-
-uint64_t fnv1a64(std::span<const uint8_t> bytes) noexcept
-{
-    uint64_t hash = kFnvOffsetBasis;
-    for (const uint8_t byte : bytes) {
-        hash ^= static_cast<uint64_t>(byte);
-        hash *= kFnvPrime;
-    }
-    return hash;
 }
 
 void sanitizeCopy(std::string_view src, std::span<char> dst) noexcept
@@ -1167,8 +1167,8 @@ DialGnssDetail dialGnssDetail(const ViewModel &vm) noexcept
     }
 }
 
-PostFlushDecision settleFrameWait(const UiDecision &dec, FlushOutcome outcome, uint32_t frameUs,
-                                  uint32_t postFlushNowMs) noexcept
+PostFlushDecision settleFrameWait(const UiDecision &dec, FlushOutcome outcome,
+                                  uint32_t frameStartMs, uint32_t postFlushNowMs) noexcept
 {
     if (outcome == FlushOutcome::kInterrupted) {
         return PostFlushDecision{.nextWaitMs = 0U};
@@ -1183,15 +1183,13 @@ PostFlushDecision settleFrameWait(const UiDecision &dec, FlushOutcome outcome, u
             return out;
         }
     }
-    uint32_t waitMs = dec.nextWaitMs;
-    if (dec.animating) {
-        const uint32_t spentMs = frameUs / kMsPerSec;
-        waitMs = (waitMs > spentMs) ? (waitMs - spentMs) : 1U;
+    uint32_t waitMs = kWaitForEvent;
+    if (dec.nextWaitMs != kWaitForEvent &&
+        (!dec.animating || dec.nextWaitMs != kAnimFramePeriodMs)) {
+        waitMs = remainingMs(postFlushNowMs, frameStartMs + dec.nextWaitMs);
     }
     if (dec.hasClickDeadline) {
-        const int32_t rem = static_cast<int32_t>(dec.clickDeadlineMs - postFlushNowMs);
-        const uint32_t clickWait = (rem <= 0) ? 0U : static_cast<uint32_t>(rem);
-        waitMs = std::min(waitMs, clickWait);
+        waitMs = std::min(waitMs, remainingMs(postFlushNowMs, dec.clickDeadlineMs));
     }
     out.nextWaitMs = waitMs;
     return out;
@@ -1319,7 +1317,7 @@ const char *dockItemName(uint8_t idx) noexcept
     }
 }
 
-void summarizeSatTable(const gnss::SatTable &table, ViewModel &vm) noexcept
+void summarizeSatTable(const gnss::SatTable &table, ViewModel &vm, bool detail) noexcept
 {
     vm.satGroups = {};
     vm.topSnr = {};
@@ -1327,6 +1325,9 @@ void summarizeSatTable(const gnss::SatTable &table, ViewModel &vm) noexcept
     const size_t total = std::min<size_t>(table.count, gnss::kMaxSats);
     // total <= 63，窄化到 uint8_t 安全。
     vm.satsVisible = static_cast<uint8_t>(total);
+    if (!detail) {
+        return;
+    }
 
     for (size_t i = 0U; i < total; ++i) {
         const gnss::SatInfo &sat = table.sats[i];

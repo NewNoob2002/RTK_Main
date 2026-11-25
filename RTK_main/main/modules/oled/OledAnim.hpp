@@ -22,7 +22,6 @@ inline constexpr uint32_t kHoldCollapseMs = 150U;      // ms，长按未满松�
 inline constexpr uint32_t kChargeAnimPeriodMs = 500U;  // ms，充电待机流动动画周期（<= 2 fps）
 inline constexpr uint32_t kStandbyRingDecayMs = 240U;  // ms，待机松开后进度环满程回落时长
 inline constexpr uint32_t kAnimFramePeriodMs = 33U;    // ms，动画期目标帧周期（~30 fps）
-inline constexpr uint32_t kIdlePollPeriodMs = 200U;    // ms，静止期轮询周期（5 Hz，0 写 I2C）
 
 /** 短按/双击消歧输出事件（长按由 PowerKeySm 独立处理，不经本消歧器）。 */
 enum class ClickEvent : uint8_t {

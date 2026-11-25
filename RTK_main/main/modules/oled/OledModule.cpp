@@ -30,8 +30,6 @@ namespace {
 
 constexpr UBaseType_t kOledTaskPriority = 1U; // 低于 kLink(10)/kIo(9)/console(2)，绝不抢占业务
 constexpr BaseType_t kOledTaskCore = 1;       // 绑 Core 1，远离 Core 0 的 BT/Wi-Fi/GNSS/console
-constexpr uint32_t kFpsWindowMs = 1000U;      // ms，FPS 滑动采样窗口
-constexpr uint32_t kFpsScaleX10 = 10000U;     // frames * 10000 / elapsedMs = fps * 10
 constexpr uint32_t kMsPerSec = 1000U;
 constexpr uint32_t kSecPerMin = 60U;
 constexpr size_t kBdaSuffixByte0 = 3U;
@@ -48,6 +46,7 @@ constinit board::Sh1106FlushResult s_last_flush{};
 constinit bool s_force_next_flush = false;
 constinit std::optional<uint32_t> s_flush_deadline_ms{};
 constinit std::atomic<TaskHandle_t> s_oled_task_handle{nullptr};
+constinit portMUX_TYPE s_perf_mux = portMUX_INITIALIZER_UNLOCKED;
 static_assert(fw::kAtomicUsable<TaskHandle_t>, "OLED 任务句柄原子须无锁");
 
 /**
@@ -91,27 +90,6 @@ void sendBufferHal(ScreenBuff fb) noexcept
 }
 
 /**
- * @brief 比较两份 OLED 状态快照是否完全一致
- * @param lhs: 快照 A
- * @param rhs: 快照 B
- * @retval true 全部字段相等
- * @retval false 存在字段变化
- * @note 纯比较，不阻塞。
- */
-[[nodiscard]] bool statusEqual(const OledStatus &lhs, const OledStatus &rhs) noexcept
-{
-    return (lhs.enabled == rhs.enabled) && (lhs.present == rhs.present) &&
-           (lhs.poweredOff == rhs.poweredOff) && (lhs.page == rhs.page) &&
-           (lhs.fpsX10 == rhs.fpsX10) && (lhs.lastDirtyPages == rhs.lastDirtyPages) &&
-           (lhs.framesFlushed == rhs.framesFlushed) && (lhs.framesSkipped == rhs.framesSkipped) &&
-           (lhs.totalDirtyPages == rhs.totalDirtyPages) && (lhs.lastI2cUs == rhs.lastI2cUs) &&
-           (lhs.maxI2cUs == rhs.maxI2cUs) && (lhs.lastFrameUs == rhs.lastFrameUs) &&
-           (lhs.maxFrameUs == rhs.maxFrameUs) && (lhs.i2cErrors == rhs.i2cErrors) &&
-           (lhs.initStage == rhs.initStage) && (lhs.initStatus == rhs.initStatus) &&
-           (lhs.initAttempts == rhs.initAttempts);
-}
-
-/**
  * @brief 将定长 C 字符串（可能未满）转为视图
  * @param str: C 字符串指针，可为 nullptr
  * @retval 字符串视图，nullptr 返回空视图
@@ -126,13 +104,15 @@ void sendBufferHal(ScreenBuff fb) noexcept
 /**
  * @brief 在独立栈帧中读取 512 B 卫星表并汇总到 ViewModel，返回后即释放局部栈空间
  * @param app: 应用上下文（只读）
- * @param[out] vm: 目标视图模型
+ * @param[out] vm: 目标视图模型。
+ * @param detail: 是否汇总卫星图表数据。
  * @note 仅 init 或 oled 任务调用，不分配堆，非 ISR。
  */
-[[gnu::noinline]] void collectSatSummary(const AppContext &app, oled::ViewModel &vm) noexcept
+[[gnu::noinline]] void collectSatSummary(const AppContext &app, oled::ViewModel &vm,
+                                         bool detail) noexcept
 {
     const gnss::SatTable table = app.data.gnssSats.read();
-    oled::summarizeSatTable(table, vm);
+    oled::summarizeSatTable(table, vm, detail);
 }
 #endif
 
@@ -231,7 +211,6 @@ void collectGnssStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.workMode = wm.mode;
     vm.workModeState = wm.state;
     vm.workModeElapsedS = wm.elapsedS;
-    collectSatSummary(app, vm);
 }
 #endif
 
@@ -279,13 +258,65 @@ void acknowledgeShutdownFrame(UiEventBus &events, const oled::ViewModel &vm,
     if (markFinalFlushed) {
         const bool usb = (vm.shutdownDoneMask &
                           board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) != 0U;
-        events.markShutdownFinalFrameFlushed(usb);
+        if (!events.shutdownFinalFrameFlushed(usb)) {
+            events.markShutdownFinalFrameFlushed(usb);
+        }
     }
     if (vm.shutdownStage != board::ShutdownStage::kIdle &&
         (s_last_flush == board::Sh1106FlushResult::kWritten ||
          s_last_flush == board::Sh1106FlushResult::kSkipped)) {
         events.markShutdownStageFlushed(vm.shutdownStage);
     }
+}
+
+/**
+ * @brief 按生产时间戳处理待消费的按键，推进 UI 并投递确认动作。
+ * @param events: 任务间 UI 事件通道。
+ * @param nowMs: 当前单调时间。
+ * @param vm: 本轮状态快照。
+ * @retval 下一步渲染与等待决策。
+ */
+[[nodiscard]] oled::UiDecision processUiInput(UiEventBus &events, uint32_t nowMs,
+                                              const oled::ViewModel &vm) noexcept
+{
+    std::array<uint32_t, UiEventBus::kShortKeyQueueCap> shortKeys{};
+    size_t shortKeyCount = 0U;
+    while ((shortKeyCount < shortKeys.size()) && events.popShortKey(shortKeys[shortKeyCount])) {
+        ++shortKeyCount;
+    }
+    bool longKeyArrived = false;
+    uint32_t longKeyMs = 0U;
+    while (events.popLongKey(longKeyMs)) {
+        longKeyArrived = true;
+    }
+    const oled::UiDecision dec = s_ui_ctrl.step(
+        nowMs, std::span<const uint32_t>{shortKeys.data(), shortKeyCount}, vm, longKeyArrived);
+    if (dec.action.action != OledAction::kNone) {
+        static_cast<void>(events.submitAction(dec.action));
+    }
+
+    return dec;
+}
+
+/** 任务通知等待的结果，区分管线立即重跑与真正的事件/超时。 */
+struct TaskWake {
+    bool woke = false;
+    bool notified = false;
+};
+
+/**
+ * @brief 按绝对时刻已计算好的相对毫秒数等待 OLED 任务通知。
+ * @param waitMs: 等待时长，kWaitForEvent 表示永久等待。
+ * @retval 是否从等待返回及是否收到任务通知。
+ */
+[[nodiscard]] TaskWake waitForWake(uint32_t waitMs) noexcept
+{
+    const TickType_t ticks =
+        waitMs == oled::kWaitForEvent
+            ? portMAX_DELAY
+            : std::max<TickType_t>((waitMs != 0U) ? 1U : 0U, pdMS_TO_TICKS(waitMs));
+    const bool notified = ulTaskNotifyTake(pdTRUE, ticks) != 0U;
+    return {.woke = ticks != 0U || notified, .notified = notified};
 }
 
 } // namespace
@@ -320,7 +351,7 @@ bool OledModule::tryInitPanel(uint32_t nowMs, bool initialBoot) noexcept
     present_.store(true, std::memory_order_release);
     panelOffline_ = false;
     consecutiveFlushErrors_ = 0U;
-    fpsWindowStartMs_ = nowMs;
+    statusBarValid_ = false;
     WouoUI_GraphSetSendBuffFun(&sendBufferHal);
     context_->data.uiEvents.drainShortKeys();
     context_->data.uiEvents.drainLongKeys();
@@ -348,15 +379,21 @@ fw::Result OledModule::init() noexcept
     initStatus_ = fw::Status::kOk;
     initAttempts_ = 0U;
     lastInitAttemptMs_ = 0U;
-    fpsX10_ = 0U;
-    fpsWindowStartMs_ = 0U;
-    fpsWindowFrames_ = 0U;
     framesFlushed_ = 0U;
     framesSkipped_ = 0U;
     lastI2cUs_ = 0U;
     maxI2cUs_ = 0U;
     lastFrameUs_ = 0U;
     maxFrameUs_ = 0U;
+    lastRenderUs_ = 0U;
+    maxRenderUs_ = 0U;
+    lastWriteMs_ = 0U;
+    lastIntervalMs_ = 0U;
+    maxIntervalMs_ = 0U;
+    sampleIoUs_ = 0U;
+    animating_ = false;
+    statusBarValid_ = false;
+    perf_ = {};
     lastPublished_ = {};
 
     const auto &profile = board::current();
@@ -379,7 +416,7 @@ fw::Result OledModule::init() noexcept
     enabled_ = true;
     const uint32_t now = rtos::nowMs();
     if (tryInitPanel(now, true)) {
-        static_cast<void>(refreshOnce(now, true));
+        static_cast<void>(refreshOnce(rtos::nowMs(), true));
     }
     publishStatus(true);
     return fw::Result::kOk;
@@ -437,17 +474,133 @@ void OledModule::taskEntry(void *arg) noexcept
     self->run();
 }
 
+oled::PerfTotals OledModule::recentPerf() const noexcept
+{
+    taskENTER_CRITICAL(&s_perf_mux);
+    const auto snapshot = perf_;
+    taskEXIT_CRITICAL(&s_perf_mux);
+    return snapshot.recent(rtos::nowMs());
+}
+
+fw::Status OledModule::requestBench(uint32_t seconds) noexcept
+{
+    if (seconds == 0U || seconds > kMaxBenchSeconds) {
+        return fw::Status::kInvalidArg;
+    }
+    if (s_oled_task_handle.load(std::memory_order_acquire) == nullptr ||
+        !context_->data.uiEvents.oledActive() || context_->bootMode != board::BootMode::kNormal ||
+        context_->data.uiEvents.rebootBanner() != RebootBanner::kNone ||
+        context_->data.powerStatus.read().shutdownStage != board::ShutdownStage::kIdle) {
+        return fw::Status::kInvalidState;
+    }
+    uint32_t pending = 0U;
+    if (!benchDurationMs_.compare_exchange_strong(
+            pending, seconds * kMsPerSec, std::memory_order_release, std::memory_order_relaxed)) {
+        return fw::Status::kBusy;
+    }
+    wakeFromBus(this);
+    return fw::Status::kOk;
+}
+
+bool OledModule::benchResult(oled::BenchStats &result) const noexcept
+{
+    if (benchDurationMs_.load(std::memory_order_acquire) != 0U) {
+        return false;
+    }
+    // console 串行提交与读取，OLED 发布结束后到下一次请求前不再写 bench_。
+    result = bench_;
+    return true;
+}
+
+bool OledModule::updateBench(uint32_t nowMs) noexcept
+{
+    const uint32_t duration = benchDurationMs_.load(std::memory_order_acquire);
+    if (duration == 0U) {
+        return false;
+    }
+    if (!benchActive_) {
+        bench_ = {};
+        bench_.i2cErrors = s_panel.i2cErrors();
+        benchStartMs_ = nowMs;
+        benchActive_ = true;
+    }
+    const bool interrupted =
+        context_->data.uiEvents.rebootBanner() != RebootBanner::kNone ||
+        context_->data.powerStatus.read().shutdownStage != board::ShutdownStage::kIdle;
+    if (!interrupted && nowMs - benchStartMs_ < duration) {
+        return true;
+    }
+    bench_.interrupted = interrupted;
+    bench_.elapsedMs = nowMs - benchStartMs_;
+    bench_.i2cErrors = s_panel.i2cErrors() - bench_.i2cErrors;
+    benchActive_ = false;
+    benchDurationMs_.store(0U, std::memory_order_release);
+    return false;
+}
+
+void OledModule::recordCycle(uint32_t nowMs, int64_t startUs, bool written, bool woke,
+                             bool rendered) noexcept
+{
+    // 墙钟工作量扣除 I2C 和锁阻塞，保留摘要、封包及轮询等任务开销。
+    const auto elapsedUs = static_cast<uint32_t>(esp_timer_get_time() - startUs);
+    const uint32_t workUs = rendered ? elapsedUs - std::min(elapsedUs, sampleIoUs_) : elapsedUs;
+    taskENTER_CRITICAL(&s_perf_mux);
+    perf_.record(nowMs, workUs, written, woke);
+    taskEXIT_CRITICAL(&s_perf_mux);
+    if (benchActive_) {
+        bench_.record(nowMs, workUs, rendered ? lastRenderUs_ : 0U,
+                      rendered ? s_panel.lastTxBytes() : 0U, written, woke);
+    }
+}
+
 void OledModule::run() noexcept
 {
+    oled::FramePacer pacer{};
+    TaskWake wake{};
+    uint32_t controlWait = 0U;
+    uint32_t controlDeadlineMs = rtos::nowMs();
     while (true) {
-        const uint32_t waitMs = refreshOnce(rtos::nowMs(), false);
-        publishStatus(false);
-        if (waitMs == 0U) {
-            static_cast<void>(ulTaskNotifyTake(pdTRUE, 0U));
-            continue;
+        const int64_t workStartUs = esp_timer_get_time();
+        const uint32_t nowMs = rtos::nowMs();
+        const bool wasBench = benchActive_;
+        const bool bench = updateBench(nowMs);
+        const uint32_t frameWait = pacer.waitMs(nowMs);
+        const bool paced = frameWait != oled::kWaitForEvent;
+        const bool controlDue =
+            controlWait != oled::kWaitForEvent && oled::remainingMs(nowMs, controlDeadlineMs) == 0U;
+        const bool urgent =
+            wake.notified &&
+            (context_->data.uiEvents.rebootBanner() != RebootBanner::kNone ||
+             context_->data.powerStatus.read().shutdownStage != board::ShutdownStage::kIdle);
+        const bool frameDue = frameWait == 0U || urgent;
+        const bool process =
+            controlDue || frameDue || (!paced && (wake.notified || wasBench != bench));
+        const bool draw = !paced || frameDue;
+        const uint32_t prevFrames = framesFlushed_;
+        if (process) {
+            controlWait = refreshOnce(nowMs, false, draw);
+            const uint32_t endMs = rtos::nowMs();
+            controlDeadlineMs = endMs + controlWait;
+            if (draw) {
+                if (animating_ || bench) {
+                    pacer.advance(nowMs, endMs);
+                } else {
+                    pacer = {};
+                }
+                publishStatus(false);
+            }
         }
-        const TickType_t waitTicks = pdMS_TO_TICKS(waitMs);
-        static_cast<void>(ulTaskNotifyTake(pdTRUE, waitTicks == 0U ? 1U : waitTicks));
+        const uint32_t endMs = rtos::nowMs();
+        const uint32_t controlRemaining = controlWait == oled::kWaitForEvent
+                                              ? controlWait
+                                              : oled::remainingMs(endMs, controlDeadlineMs);
+        uint32_t waitMs = std::min(pacer.waitMs(endMs), controlRemaining);
+        if (bench) {
+            const uint32_t duration = benchDurationMs_.load(std::memory_order_relaxed);
+            waitMs = std::min(waitMs, oled::remainingMs(endMs, benchStartMs_ + duration));
+        }
+        recordCycle(nowMs, workStartUs, prevFrames != framesFlushed_, wake.woke, process && draw);
+        wake = waitForWake(waitMs);
     }
 }
 
@@ -455,22 +608,22 @@ uint32_t OledModule::handleBackgroundInitRetry(uint32_t nowMs) noexcept
 {
     if ((nowMs - lastInitAttemptMs_) >= kInitRetryPeriodMs) {
         if (tryInitPanel(nowMs, false)) {
-            return refreshOnce(nowMs, true);
+            return refreshOnce(rtos::nowMs(), true);
         }
     }
-    return kRefreshPeriodMs;
+    return oled::remainingMs(rtos::nowMs(), lastInitAttemptMs_ + kInitRetryPeriodMs);
 }
 
 uint32_t OledModule::handleRebootQuiesce(uint32_t nowMs, RebootBanner banner) noexcept
 {
     if (rebootQuiesced_) {
-        return kRefreshPeriodMs;
+        return oled::kWaitForEvent;
     }
     if (!present_.load(std::memory_order_acquire) || s_panel.poweredOff() ||
         (s_active_fb == nullptr) || (banner == RebootBanner::kKeepFrame)) {
         rebootQuiesced_ = true;
         context_->data.uiEvents.markRebootQuiesced();
-        return kRefreshPeriodMs;
+        return oled::kWaitForEvent;
     }
 
     const int64_t frameStartUs = esp_timer_get_time();
@@ -478,7 +631,10 @@ uint32_t OledModule::handleRebootQuiesce(uint32_t nowMs, RebootBanner banner) no
     collectViewModel(*context_, nowMs, vm);
     static_cast<void>(s_ui_ctrl.step(nowMs, {}, vm, false));
     const oled::UiRenderState rstate = s_ui_ctrl.renderState(nowMs);
-    oled::renderUi(rstate, vm, *s_active_fb);
+    const int64_t renderStartUs = esp_timer_get_time();
+    static_cast<void>(oled::renderUi(rstate, vm, *s_active_fb));
+    statusBarValid_ = false;
+    lastRenderUs_ = static_cast<uint32_t>(esp_timer_get_time() - renderStartUs);
     s_force_next_flush = false;
     s_flush_deadline_ms.reset();
     s_panel.clearBackoff();
@@ -493,13 +649,55 @@ uint32_t OledModule::handleRebootQuiesce(uint32_t nowMs, RebootBanner banner) no
         (s_last_flush == board::Sh1106FlushResult::kSkipped)) {
         rebootQuiesced_ = true;
         context_->data.uiEvents.markRebootQuiesced();
-        return kRefreshPeriodMs;
+        return oled::kWaitForEvent;
     }
     return oled::kShutdownFinalRetryMs;
 }
 
-uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
+void OledModule::drawFrame(uint32_t nowMs, oled::ViewModel &vm) noexcept
 {
+    oled::UiRenderState rstate = s_ui_ctrl.renderState(nowMs);
+    oled::PageTransition benchTransition{};
+    if (benchActive_) {
+        constexpr uint8_t kPowerDock = static_cast<uint8_t>(oled::kDockItemCount - 1U);
+        constexpr int16_t kFocusX = oled::kDockStartX + kPowerDock * oled::kDockStepX;
+        constexpr oled::Rect kIcon{kFocusX, oled::kDockY, oled::kDockW, oled::kDockH};
+        const uint32_t elapsed = nowMs - benchStartMs_;
+        const uint32_t segment = elapsed / oled::kPageTransitionMs;
+        const bool opening = (segment & 1U) == 0U;
+        benchTransition.start(opening ? oled::TransitionKind::kExpandFromIcon
+                                      : oled::TransitionKind::kCollapseToIcon,
+                              opening ? OledPage::kDialplate : OledPage::kSubPower,
+                              opening ? OledPage::kSubPower : OledPage::kDialplate, kIcon,
+                              benchStartMs_ + segment * oled::kPageTransitionMs);
+        rstate = oled::UiRenderState{.page = benchTransition.toPage,
+                                     .dockSelected = kPowerDock,
+                                     .dockFocusX = kFocusX,
+                                     .nowMs = nowMs,
+                                     .transition = &benchTransition};
+    }
+#if RTK_GNSS_ENABLED
+    const auto *transition = rstate.transition;
+    const bool transitioning =
+        transition != nullptr && transition->kind != oled::TransitionKind::kNone;
+    const bool satellitePage = rstate.page == OledPage::kSubSat ||
+                               (transitioning && transition->fromPage == OledPage::kSubSat);
+    if (satellitePage || rstate.page == OledPage::kDialplate || transitioning) {
+        collectSatSummary(*context_, vm, satellitePage);
+    }
+#endif
+    const int64_t renderStartUs = esp_timer_get_time();
+    statusBarValid_ = oled::renderUi(rstate, vm, *s_active_fb, statusBarValid_);
+    lastRenderUs_ = static_cast<uint32_t>(esp_timer_get_time() - renderStartUs);
+}
+
+uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull, bool renderFrame) noexcept
+{
+    if (renderFrame) {
+        animating_ = false;
+        lastRenderUs_ = 0U;
+        sampleIoUs_ = 0U;
+    }
     const RebootBanner banner = context_->data.uiEvents.rebootBanner();
     if (banner != RebootBanner::kNone) {
         return handleRebootQuiesce(nowMs, banner);
@@ -512,29 +710,18 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
     const int64_t frameStartUs = esp_timer_get_time();
     oled::ViewModel vm{};
     collectViewModel(*context_, nowMs, vm);
-    std::array<uint32_t, UiEventBus::kShortKeyQueueCap> shortKeys{};
-    size_t shortKeyCount = 0U;
-    while ((shortKeyCount < shortKeys.size()) &&
-           context_->data.uiEvents.popShortKey(shortKeys[shortKeyCount])) {
-        ++shortKeyCount;
-    }
-    bool longKeyArrived = false;
-    uint32_t longKeyMs = 0U;
-    while (context_->data.uiEvents.popLongKey(longKeyMs)) {
-        longKeyArrived = true;
-    }
-    const oled::UiDecision dec = s_ui_ctrl.step(
-        nowMs, std::span<const uint32_t>{shortKeys.data(), shortKeyCount}, vm, longKeyArrived);
-    if (dec.action.action != OledAction::kNone) {
-        static_cast<void>(context_->data.uiEvents.submitAction(dec.action));
-    }
+    const auto dec = processUiInput(context_->data.uiEvents, nowMs, vm);
 
+    if (!renderFrame) {
+        return oled::settleFrameWait(dec, oled::FlushOutcome::kDisabled, nowMs, rtos::nowMs())
+            .nextWaitMs;
+    }
     if (s_panel.poweredOff() || (s_active_fb == nullptr)) {
         return dec.nextWaitMs;
     }
 
-    const oled::UiRenderState rstate = s_ui_ctrl.renderState(nowMs);
-    oled::renderUi(rstate, vm, *s_active_fb);
+    animating_ = dec.animating;
+    drawFrame(nowMs, vm);
     s_force_next_flush = forceFull;
     if (dec.hasClickDeadline) {
         s_flush_deadline_ms = dec.clickDeadlineMs;
@@ -551,9 +738,13 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
     const uint32_t thisFrameUs =
         (i2cEndUs > frameStartUs) ? static_cast<uint32_t>(i2cEndUs - frameStartUs) : 0U;
     const oled::PostFlushDecision post =
-        oled::settleFrameWait(dec, toFlushOutcome(s_last_flush), thisFrameUs, rtos::nowMs());
+        oled::settleFrameWait(dec, toFlushOutcome(s_last_flush), nowMs, rtos::nowMs());
     acknowledgeShutdownFrame(context_->data.uiEvents, vm, post.markFinalFlushed);
     updateFrameStats(nowMs, thisFrameUs, i2cEndUs - i2cStartUs);
+    if (s_last_flush == board::Sh1106FlushResult::kError ||
+        s_last_flush == board::Sh1106FlushResult::kBackoff) {
+        return std::min(post.nextWaitMs, kRetryPeriodMs);
+    }
     return post.nextWaitMs;
 }
 void OledModule::updatePanelOnlineState() noexcept
@@ -570,8 +761,10 @@ void OledModule::updatePanelOnlineState() noexcept
         panelOffline_ = true;
         wasOledActive_ = context_->data.uiEvents.oledActive();
         context_->data.uiEvents.setOledActive(false);
-        FW_LOGW(fw::TraceCat::kSys, "<oled> panel offline after %u consecutive I2C errors",
-                static_cast<unsigned>(consecutiveFlushErrors_));
+        if (!benchActive_) {
+            FW_LOGW(fw::TraceCat::kSys, "<oled> panel offline after %u consecutive I2C errors",
+                    static_cast<unsigned>(consecutiveFlushErrors_));
+        }
         return;
     }
     if (s_last_flush != board::Sh1106FlushResult::kWritten) {
@@ -585,14 +778,22 @@ void OledModule::updatePanelOnlineState() noexcept
     if (wasOledActive_) {
         context_->data.uiEvents.setOledActive(true);
     }
-    FW_LOGI(fw::TraceCat::kSys, "<oled> panel back online");
+    if (!benchActive_) {
+        FW_LOGI(fw::TraceCat::kSys, "<oled> panel back online");
+    }
 }
 
 void OledModule::updateFrameStats(uint32_t nowMs, uint32_t frameUs, int64_t i2cUs) noexcept
 {
+    sampleIoUs_ = s_panel.lastIoUs();
+    maxRenderUs_ = std::max(maxRenderUs_, lastRenderUs_);
     if (s_last_flush == board::Sh1106FlushResult::kWritten) {
+        if (framesFlushed_ != 0U && nowMs - lastWriteMs_ < oled::kPerfWindowMs) {
+            lastIntervalMs_ = nowMs - lastWriteMs_;
+            maxIntervalMs_ = std::max(maxIntervalMs_, lastIntervalMs_);
+        }
+        lastWriteMs_ = nowMs;
         ++framesFlushed_;
-        ++fpsWindowFrames_;
         // 单帧耗时 < 1 s，微秒差值转为 uint32_t 无损。
         lastI2cUs_ = (i2cUs > 0) ? static_cast<uint32_t>(i2cUs) : 0U;
         lastFrameUs_ = frameUs;
@@ -600,15 +801,6 @@ void OledModule::updateFrameStats(uint32_t nowMs, uint32_t frameUs, int64_t i2cU
         maxFrameUs_ = std::max(maxFrameUs_, lastFrameUs_);
     } else if (s_last_flush == board::Sh1106FlushResult::kSkipped) {
         ++framesSkipped_;
-    }
-
-    const uint32_t fpsElapsed = nowMs - fpsWindowStartMs_;
-    if (fpsElapsed >= kFpsWindowMs) {
-        // 1 s 内帧数 <= 60，fpsX10 <= 600，窄化到 uint16_t 安全。
-        const uint32_t rateX10 = (fpsWindowFrames_ * kFpsScaleX10) / fpsElapsed;
-        fpsX10_ = static_cast<uint16_t>(std::min<uint32_t>(rateX10, UINT16_MAX));
-        fpsWindowStartMs_ = nowMs;
-        fpsWindowFrames_ = 0U;
     }
 }
 
@@ -619,7 +811,7 @@ void OledModule::publishStatus(bool force) noexcept
         .present = present_.load(std::memory_order_acquire),
         .poweredOff = s_panel.poweredOff(),
         .page = s_ui_ctrl.page(),
-        .fpsX10 = fpsX10_,
+        .lastTxBytes = s_panel.lastTxBytes(),
         .lastDirtyPages = s_panel.lastDirtyPages(),
         .framesFlushed = framesFlushed_,
         .framesSkipped = framesSkipped_,
@@ -628,12 +820,16 @@ void OledModule::publishStatus(bool force) noexcept
         .maxI2cUs = maxI2cUs_,
         .lastFrameUs = lastFrameUs_,
         .maxFrameUs = maxFrameUs_,
+        .lastRenderUs = lastRenderUs_,
+        .maxRenderUs = maxRenderUs_,
+        .lastIntervalMs = lastIntervalMs_,
+        .maxIntervalMs = maxIntervalMs_,
         .i2cErrors = s_panel.i2cErrors(),
         .initStage = initStage_,
         .initStatus = initStatus_,
         .initAttempts = initAttempts_,
     };
-    if (force || !statusEqual(next, lastPublished_)) {
+    if (force || next != lastPublished_) {
         lastPublished_ = next;
         context_->data.oledStatus.write(next);
     }

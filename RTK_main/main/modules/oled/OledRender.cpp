@@ -735,8 +735,6 @@ void formatDialRightInfo(const ViewModel &vm, std::span<char> topOut,
  */
 void renderDialplate(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    drawStatusBar(canvas, state, vm);
-
     // 左侧大号解状态，支持状态切换 180 ms 竖向滚动切入。
     const char *const badge = dialHeroBadge(vm);
     Canvas heroClip{
@@ -1090,13 +1088,13 @@ void renderSubSatCn0(Canvas &canvas, const ViewModel &vm) noexcept
 }
 
 /**
- * @brief 渲染卫星子菜单（10 px 标题行显示 used/visible + 4 柱星座图 / CN0 切换）
+ * @brief 绘制卫星子菜单的状态栏，显示 used/visible 与当前图表。
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
  * @note 不分配堆。
  */
-void renderSubSat(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+void drawSatHeader(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
     WouoUI_CanvasDrawBMP(&canvas, 0, kHeaderTextY, kIcon8H, kIcon8H, icons::kSat8x8.data(), 1U);
     drawText(canvas, kSubSatTitleX, kHeaderTextY, Font_6_8,
@@ -1110,7 +1108,16 @@ void renderSubSat(Canvas &canvas, const UiRenderState &state, const ViewModel &v
     const int16_t rx = (rw < kWidth) ? static_cast<int16_t>(kWidth - rw) : int16_t{0};
     drawText(canvas, rx, kHeaderTextY, Font_6_8, viewOf(hdrRight));
     WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
+}
 
+/**
+ * @brief 绘制卫星子菜单内容区。
+ * @param canvas: 目标画布。
+ * @param state: 渲染状态。
+ * @param vm: 视图数据。
+ */
+void renderSubSat(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+{
     if (state.satSubTab == 0U) {
         renderSubSatSys(canvas, vm);
     } else {
@@ -1127,8 +1134,6 @@ void renderSubSat(Canvas &canvas, const UiRenderState &state, const ViewModel &v
  */
 void renderSubPos(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    drawStatusBar(canvas, state, vm);
-
     std::array<char, kShortBufBytes> accBuf{};
     if (!formatHorizontalAcc(vm.fixValid, vm.hAccCm, accBuf)) {
         sanitizeCopy("--", accBuf);
@@ -1182,8 +1187,6 @@ void renderSubPos(Canvas &canvas, const UiRenderState &state, const ViewModel &v
  */
 void renderComm(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    drawStatusBar(canvas, state, vm);
-
     const bool wifi = vm.radioMode == RadioMode::kWifiConfig;
     std::array<char, kShortBufBytes> subBuf{};
     if (wifi) {
@@ -1236,8 +1239,6 @@ void renderComm(Canvas &canvas, const UiRenderState &state, const ViewModel &vm)
  */
 void renderSubDevice(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    drawStatusBar(canvas, state, vm);
-
     const std::string_view prod = viewOf(vm.product);
     const std::string_view hw = viewOf(vm.hwVer);
     drawSubMainCard(canvas, state, icons::kDockDev16x16.data(), prod.empty() ? "RTK" : prod,
@@ -1268,8 +1269,6 @@ void renderSubDevice(Canvas &canvas, const UiRenderState &state, const ViewModel
  */
 void renderSubPower(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    drawStatusBar(canvas, state, vm);
-
     const bool full =
         (vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent);
     const bool effChg = isEffectiveCharging(vm);
@@ -1702,14 +1701,15 @@ void renderPageInto(Canvas &canvas, OledPage page, const UiRenderState &state,
 }
 
 /**
- * @brief 渲染滑动视差过渡（旧页左移 1/3 视差，新页从右侧完整滑入）
- * @param trans: 过渡动画状态
- * @param state: 渲染状态
- * @param vm: 视图数据
+ * @brief 渲染开机滑动视差过渡（旧页左移 1/3 视差，新页从右侧滑入）。
+ * @param trans: 过渡动画状态。
+ * @param state: 渲染状态。
+ * @param vm: 视图数据。
+ * @param fb: 当前帧缓冲。
  * @note 仅 renderUi 调用。
  */
-void renderSlideLeft(const PageTransition &trans, const UiRenderState &state,
-                     const ViewModel &vm) noexcept
+void renderSlideLeft(const PageTransition &trans, const UiRenderState &state, const ViewModel &vm,
+                     ScreenBuff &fb) noexcept
 {
     const uint16_t prog = trans.progressQ10(state.nowMs);
     const auto pose = trans.pose(state.nowMs, {0, 0, kCanvasW, kCanvasH});
@@ -1719,11 +1719,12 @@ void renderSlideLeft(const PageTransition &trans, const UiRenderState &state,
     Canvas oldCanvas{.start_x = oldX, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
     renderPageInto(oldCanvas, trans.fromPage, state, vm);
 
-    // 清空新页覆盖区（黑画笔）再切回白画笔绘制新页，避免旧页残影透出。
+    // 新页覆盖整个列高，以页内连续清零代替逐像素填充。
+    for (auto &page : fb) {
+        // newX 由屏宽插值限定在 0..kWidth。
+        std::ranges::fill(std::span{page}.subspan(static_cast<size_t>(newX)), 0U);
+    }
     Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
-    WouoUI_GraphSetPenColor(0U);
-    WouoUI_CanvasDrawRBox(&full, newX, 0, static_cast<int16_t>(kCanvasW - newX), kCanvasH, 0U);
-    WouoUI_GraphSetPenColor(1U);
     if (newX > 0) {
         WouoUI_CanvasDrawLine_V(&full, newX, 0, static_cast<int16_t>(kCanvasH - 1));
     }
@@ -1732,72 +1733,133 @@ void renderSlideLeft(const PageTransition &trans, const UiRenderState &state,
                      .start_y = pose.contentOffsetY,
                      .w = kCanvasW,
                      .h = static_cast<int16_t>(kCanvasH - pose.contentOffsetY)};
+    drawStatusBar(newCanvas, state, vm);
     renderPageInto(newCanvas, trans.toPage, state, vm);
 }
 
+constexpr size_t kRowsPerPage = 8U;
+constexpr size_t kHeaderTailPage = kSubBodyY / kRowsPerPage;
+constexpr uint8_t kHeaderTailMask = (1U << (kSubBodyY % kRowsPerPage)) - 1U;
+constexpr unsigned kBodyHeadMask = 0xFFU ^ kHeaderTailMask;
+
 /**
- * @brief 渲染图标展开/收回过渡（从表盘图标矩形展开至全屏或反向收回，子页内容错峰上移）
- * @param trans: 过渡动画状态
- * @param state: 渲染状态
- * @param vm: 视图数据
- * @note 仅 renderUi 调用。
+ * @brief 将状态栏下方清空，保留顶栏跨页的像素位。
+ * @param fb: 当前帧缓冲。
  */
-void renderIconMorph(const PageTransition &trans, const UiRenderState &state,
-                     const ViewModel &vm) noexcept
+void clearBody(ScreenBuff &fb) noexcept
 {
-    const bool expanding = (trans.kind == TransitionKind::kExpandFromIcon);
-    const auto pose = trans.pose(state.nowMs, {0, 0, kCanvasW, kCanvasH});
-    const auto [x, y, w, h] = pose.viewport;
+    for (auto &value : fb[kHeaderTailPage]) {
+        value &= kHeaderTailMask;
+    }
+    for (auto &page : std::span{fb}.subspan(kHeaderTailPage + 1U)) {
+        std::ranges::fill(page, 0U);
+    }
+}
 
-    Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
-    renderPageInto(full, OledPage::kDialplate, state, vm);
+/**
+ * @brief 在原地将内容下移，在状态栏之下进行裁剪。
+ * @param fb: 已渲染的帧缓冲。
+ * @param rows: 下移像素行数。
+ */
+void shiftBodyDown(ScreenBuff &fb, size_t rows) noexcept
+{
+    const size_t wholePages = rows / kRowsPerPage;
+    const size_t bits = rows % kRowsPerPage;
+    for (size_t dest = kPages - 1U; dest >= kHeaderTailPage; --dest) {
+        for (size_t x = 0U; x < kWidth; ++x) {
+            unsigned content = 0U;
+            if (dest >= kHeaderTailPage + wholePages) {
+                const size_t src = dest - wholePages;
+                const unsigned low =
+                    src == kHeaderTailPage ? fb[src][x] & kBodyHeadMask : fb[src][x];
+                content = low << bits;
+                if (bits != 0U && src > kHeaderTailPage) {
+                    const unsigned high = src - 1U == kHeaderTailPage
+                                              ? fb[src - 1U][x] & kBodyHeadMask
+                                              : fb[src - 1U][x];
+                    content |= high >> (kRowsPerPage - bits);
+                }
+            }
+            if (dest == kHeaderTailPage) {
+                content |= fb[dest][x] & kHeaderTailMask;
+            }
+            // 位移可能跨页，当前页只保留低 8 位。
+            fb[dest][x] = static_cast<uint8_t>(content);
+        }
+    }
+}
 
-    WouoUI_GraphSetPenColor(0U);
-    WouoUI_CanvasDrawRBox(&full, x, y, w, h, 2U);
-    WouoUI_GraphSetPenColor(1U);
-
-    const OledPage subPage = expanding ? trans.toPage : trans.fromPage;
-    // 统一列表子页内部自带逐行 40 ms 错峰 6 px 上移，此处仅对卫星子页应用整体内容抬升。
-    const int16_t globalLift = (subPage == OledPage::kSubSat) ? pose.contentOffsetY : 0;
-    Canvas subCanvas{.start_x = x,
-                     .start_y = static_cast<int16_t>(y + globalLift),
-                     .w = w,
-                     .h = static_cast<int16_t>(h - globalLift)};
-    renderPageInto(subCanvas, subPage, state, vm);
-    if ((w < kCanvasW) || (h < kCanvasH)) {
-        WouoUI_CanvasDrawRBoxEmpty(&full, x, y, w, h, 2U);
+/**
+ * @brief 从底部收起旧内容，再推入新内容，每帧只绘制当前可见页。
+ * @param canvas: 内容绘图所用的全屏坐标系。
+ * @param trans: 转场状态。
+ * @param state: 渲染状态。
+ * @param vm: 视图数据。
+ * @param fb: 唯一帧缓冲，顶部 12 行在转场期间保留。
+ */
+void renderIconMorph(Canvas &canvas, const PageTransition &trans, const UiRenderState &state,
+                     const ViewModel &vm, ScreenBuff &fb) noexcept
+{
+    const uint32_t half = trans.durationMs / 2U;
+    const uint32_t elapsed = std::min(state.nowMs - trans.startMs, trans.durationMs);
+    const bool entering = elapsed >= half;
+    const uint32_t distance = entering ? trans.durationMs - elapsed : elapsed;
+    const size_t rows = (kHeight - kSubBodyY) * distance / std::max<uint32_t>(half, 1U);
+    if (rows < kHeight - kSubBodyY) {
+        renderPageInto(canvas, entering ? trans.toPage : trans.fromPage, state, vm);
+        if (rows != 0U) {
+            shiftBodyDown(fb, rows);
+        }
     }
 }
 
 } // namespace
 
-void renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb) noexcept
+bool renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb,
+              bool previousStatusBar) noexcept
 {
     Pen pen{.color_mode = PEN_MODE_NORMAL, .color = PEN_COLOR_WHITE, .rev_color_flag = false};
     WouoUI_GraphSetBuff(&fb);
     WouoUI_GraphSetPen(&pen);
     WouoUI_GraphSetPenColor(1U);
-    WouoUI_BuffClear();
-
     const PageTransition *trans = state.transition;
     const bool showRebootOverlay = (state.rebootBanner != RebootBanner::kNone) &&
                                    (state.rebootBanner != RebootBanner::kKeepFrame) &&
                                    (state.page != OledPage::kChargeStandby) &&
                                    (state.page != OledPage::kShutdown);
+    const bool slide = trans != nullptr && trans->kind == TransitionKind::kSlideLeft;
+    const bool showStatusBar =
+        !showRebootOverlay && state.modal == UiModal::kNone && !slide &&
+        (state.page >= OledPage::kDialplate && state.page <= OledPage::kSubPower);
+    const bool morph = showStatusBar && trans != nullptr &&
+                       (trans->kind == TransitionKind::kExpandFromIcon ||
+                        trans->kind == TransitionKind::kCollapseToIcon);
+    const bool retainStatusBar = morph && previousStatusBar;
+    if (retainStatusBar) {
+        clearBody(fb);
+    } else {
+        WouoUI_BuffClear();
+    }
+    Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
     if (showRebootOverlay) {
-        Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
         renderRebootBanner(full, state.rebootBanner);
     } else if (state.modal != UiModal::kNone) {
-        Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
         renderModal(full, state, vm);
-    } else if ((trans != nullptr) && (trans->kind == TransitionKind::kSlideLeft)) {
-        renderSlideLeft(*trans, state, vm);
-    } else if ((trans != nullptr) && ((trans->kind == TransitionKind::kExpandFromIcon) ||
-                                      (trans->kind == TransitionKind::kCollapseToIcon))) {
-        renderIconMorph(*trans, state, vm);
+    } else if (slide) {
+        renderSlideLeft(*trans, state, vm, fb);
     } else {
-        Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
-        renderPageInto(full, state.page, state, vm);
+        if (showStatusBar && !retainStatusBar) {
+            if (state.page == OledPage::kSubSat) {
+                drawSatHeader(full, state, vm);
+            } else {
+                drawStatusBar(full, state, vm);
+            }
+        }
+        if (morph) {
+            renderIconMorph(full, *trans, state, vm, fb);
+        } else {
+            renderPageInto(full, state.page, state, vm);
+        }
     }
 
     if (state.holdOverlayVisible) {
@@ -1805,6 +1867,7 @@ void renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb) n
     }
     // 解除栈局部画笔注册，避免 WouoUI 静态 p_cur_pen 悬垂（ROL1-06）。
     WouoUI_GraphSetPen(nullptr);
+    return showStatusBar && !state.holdOverlayVisible;
 }
 
 void renderPage(OledPage page, const ViewModel &vm, ScreenBuff &fb) noexcept
@@ -1813,7 +1876,7 @@ void renderPage(OledPage page, const ViewModel &vm, ScreenBuff &fb) noexcept
     st.page = page;
     st.dockFocusX = kDockStartX;
     st.shutdownPct = shutdownTargetPercent(vm.shutdownStage, vm.shutdownDoneMask);
-    renderUi(st, vm, fb);
+    static_cast<void>(renderUi(st, vm, fb));
 }
 
 void formatDialRightSummary(const ViewModel &vm, std::span<char> topOut,

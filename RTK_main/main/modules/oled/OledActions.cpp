@@ -14,8 +14,11 @@ namespace app {
 
 bool OledModule::poll(uint32_t nowMs) noexcept
 {
-    if (!present_.load(std::memory_order_acquire) ||
-        context_->bootMode != board::BootMode::kNormal) {
+    if (!present_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    notifyDisplayData(nowMs);
+    if (context_->bootMode != board::BootMode::kNormal) {
         return false;
     }
     const auto request = context_->data.uiEvents.takeAction();
@@ -26,6 +29,40 @@ bool OledModule::poll(uint32_t nowMs) noexcept
         publishPairing(nowMs);
     }
     return false;
+}
+
+void OledModule::notifyDisplayData(uint32_t nowMs) noexcept
+{
+    constexpr uint32_t kDataIntervalMs = 200U;
+    if ((nowMs - lastDataCheckMs_) < kDataIntervalMs) {
+        return;
+    }
+    lastDataCheckMs_ = nowMs;
+
+    auto &data = context_->data;
+    DisplayVersions versions{};
+    static_cast<void>(data.powerStatus.read(versions.power));
+    if (context_->bootMode == board::BootMode::kNormal) {
+        static_cast<void>(data.systemStatus.read(versions.system));
+        static_cast<void>(data.sessions.read(versions.bluetooth));
+#if RTK_GNSS_ENABLED
+        static_cast<void>(data.gnssFix.read(versions.gnssFix));
+        static_cast<void>(data.gnssSats.read(versions.gnssSats));
+        static_cast<void>(data.gnssWorkMode.read(versions.gnssMode));
+        const auto status = data.gnssStatus.read();
+        // 仅比较 UI 消费的状态，串口计数或内部控制统计更新不需要唤醒。
+        versions.gnssState =
+            (static_cast<uint32_t>(status.state) << 1U) | (status.enabled ? 1U : 0U);
+#endif
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+        const bool ready = data.wifiReady.load(std::memory_order_acquire);
+        versions.wifi = ready ? (1U + context_->web.wifiStationCount()) : 0U;
+#endif
+    }
+    if (versions != displayVersions_) {
+        displayVersions_ = versions;
+        data.uiEvents.notifyWake();
+    }
 }
 
 void OledModule::publishPairing(uint32_t nowMs) noexcept

@@ -205,7 +205,8 @@ web_cfg::StatusSnapshot WebModule::sampleStatus(uint32_t nowMs) noexcept
         snap.gnss.sats = static_cast<int32_t>(fix.satsUsed);
         snap.gnss.hasSats = true;
     }
-    if (fix.hAccCm != ::gnss::kU16Unknown) {
+    // F9P 无定位时 GST 仍输出巨大标准差（解析器饱和为 65534 cm），仅有效定位时才上报精度。
+    if (fix.valid && (fix.hAccCm != ::gnss::kU16Unknown)) {
         snap.gnss.haccMm = static_cast<int32_t>(fix.hAccCm) * kMmPerCm;
         snap.gnss.hasHacc = true;
     }

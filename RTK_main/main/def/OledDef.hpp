@@ -119,19 +119,26 @@ struct OledStatus {
     bool present = false;    // SH1106 探测成功并完成初始化
     bool poweredOff = false; // 面板及 GPIO12 已断电
     OledPage page = OledPage::kSystemCheck;
-    uint16_t fpsX10 = 0U;                           // 最近 1 s 窗口实际刷屏帧率 × 10（静止为 0）
-    uint8_t lastDirtyPages = 0U;                    // 最近一次写出帧的脏页数（0..8）
-    uint32_t framesFlushed = 0U;                    // 实际写出到 I2C 的帧数
-    uint32_t framesSkipped = 0U;                    // 内容未变跳过的空闲帧数
-    uint32_t totalDirtyPages = 0U;                  // 累计写出的脏页总数
-    uint32_t lastI2cUs = 0U;                        // 最近一次写出帧的 I2C 耗时（us）
-    uint32_t maxI2cUs = 0U;                         // 历史最大单帧 I2C 耗时（us）
-    uint32_t lastFrameUs = 0U;                      // 最近一次写出帧的渲染+I2C 总耗时（us）
-    uint32_t maxFrameUs = 0U;                       // 历史最大单帧总耗时（us）
+    uint16_t lastTxBytes = 0U;     // 最近一轮成功传输的 I2C 字节数
+    uint8_t lastDirtyPages = 0U;   // 最近一次写出帧的脏页数（0..8）
+    uint32_t framesFlushed = 0U;   // 实际写出到 I2C 的帧数
+    uint32_t framesSkipped = 0U;   // 内容未变跳过的空闲帧数
+    uint32_t totalDirtyPages = 0U; // 累计写出的脏页总数
+    uint32_t lastI2cUs = 0U;       // 最近一次写出帧的 I2C 耗时（us）
+    uint32_t maxI2cUs = 0U;        // 历史最大单帧 I2C 耗时（us）
+    uint32_t lastFrameUs = 0U;     // 最近一次写出帧的渲染+I2C 总耗时（us）
+    uint32_t maxFrameUs = 0U;      // 历史最大单帧总耗时（us）
+    uint32_t lastRenderUs = 0U;    // 最近一次渲染墙钟时间（µs）
+    uint32_t maxRenderUs = 0U;
+    uint32_t lastIntervalMs = 0U; // 同一活动段内成功写屏的起点间隔
+    uint32_t maxIntervalMs = 0U;
     uint32_t i2cErrors = 0U;                        // 累计 I2C 传输失败次数
     OledInitStage initStage = OledInitStage::kNone; ///< 最近一次初始化所处阶段
     fw::Status initStatus = fw::Status::kOk;        ///< 最近一次初始化返回状态码
     uint32_t initAttempts = 0U;                     ///< 累计初始化尝试次数（含后台重试）
+
+    /** @brief 比较两份 OLED 状态快照。 */
+    [[nodiscard]] bool operator==(const OledStatus &) const noexcept = default;
 };
 
 /** UiEventBus 原子状态标志位（CODING-STYLE 规则 3）。 */

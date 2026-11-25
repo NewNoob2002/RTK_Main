@@ -348,32 +348,32 @@ void testControllerNavigationAndShutdown() noexcept
     CHECK(ctrl.page() == OledPage::kDialplate);
     CHECK(dec.animating && dec.nextWaitMs == kAnimFramePeriodMs);
 
-    // 300 ms 过渡结束后静止：animating=false，nextWaitMs=200 ms。
+    // 过渡结束后静止：animating=false，进入事件等待。
     now += kPageTransitionMs + 33U;
     dec = ctrl.step(now, kNoKeys, vm);
-    CHECK(!dec.animating && dec.nextWaitMs == kIdlePollPeriodMs);
+    CHECK(!dec.animating && dec.nextWaitMs == kWaitForEvent);
 
-    // 短按一次：等待双击窗口时记录绝对截止并缩短 nextWaitMs（250 ms 后剩余 50 ms < 200 ms，ROL2-02/R2OL2-03），
+    // 短按一次：等待双击窗口时记录绝对截止并缩短 nextWaitMs（250 ms 后剩余 50 ms，ROL2-02/R2OL2-03），
     // 满 300 ms 确认单击后选中框切换至入口 1（弹簧激活 33 ms）。
     const uint32_t pressAt = now + 10U;
     const auto k1 = oneKey(pressAt);
     dec = ctrl.step(pressAt, k1, vm);
     CHECK(ctrl.dockSelected() == 0U && !dec.animating && dec.hasClickDeadline &&
           dec.clickDeadlineMs == (pressAt + kDoubleClickWindowMs) &&
-          dec.nextWaitMs == kIdlePollPeriodMs);
+          dec.nextWaitMs == kDoubleClickWindowMs);
     dec = ctrl.step(pressAt + 250U, kNoKeys, vm);
     CHECK(ctrl.dockSelected() == 0U && !dec.animating && dec.hasClickDeadline &&
           dec.nextWaitMs == 50U);
     dec = ctrl.step(pressAt + kDoubleClickWindowMs, kNoKeys, vm);
     CHECK(ctrl.dockSelected() == 1U && dec.animating && !dec.hasClickDeadline &&
           dec.nextWaitMs == kAnimFramePeriodMs);
-    // 弹簧收敛后回到静止 200 ms。
+    // 弹簧收敛后回到静止等待。
     now += 10U + kDoubleClickWindowMs;
     for (unsigned i = 0U; i < 20U; ++i) {
         now += kAnimFramePeriodMs;
         dec = ctrl.step(now, kNoKeys, vm);
     }
-    CHECK(!dec.animating && dec.nextWaitMs == kIdlePollPeriodMs);
+    CHECK(!dec.animating && dec.nextWaitMs == kWaitForEvent);
 
     // R2OL2-03：OLED 正忙滞后消费场景——两次按压间隔 299 ms（now 与 now+299），
     // 第二次晚 16 ms（now+315）才被消费，仍须判为双击进入位置子菜单（kSubPos）。
@@ -480,7 +480,7 @@ void testControllerNavigationAndShutdown() noexcept
         .page = OledPage::kShutdown,
         .markShutdownFinalFrame = true,
         .animating = false,
-        .nextWaitMs = kIdlePollPeriodMs,
+        .nextWaitMs = kWaitForEvent,
     };
     const PostFlushDecision onErr = settleFrameWait(finalDec, FlushOutcome::kError, 8000U, 1000U);
     CHECK(!onErr.markFinalFlushed && onErr.nextWaitMs == kShutdownFinalRetryMs);
@@ -489,21 +489,23 @@ void testControllerNavigationAndShutdown() noexcept
     CHECK(!onBackoff.markFinalFlushed && onBackoff.nextWaitMs == kShutdownFinalRetryMs);
     const PostFlushDecision onDisabled =
         settleFrameWait(finalDec, FlushOutcome::kDisabled, 1000U, 1000U);
-    CHECK(!onDisabled.markFinalFlushed && onDisabled.nextWaitMs == kIdlePollPeriodMs);
+    CHECK(!onDisabled.markFinalFlushed && onDisabled.nextWaitMs == kWaitForEvent);
     const PostFlushDecision onWritten =
         settleFrameWait(finalDec, FlushOutcome::kWritten, 18000U, 1000U);
-    CHECK(onWritten.markFinalFlushed && onWritten.nextWaitMs == kIdlePollPeriodMs);
+    CHECK(onWritten.markFinalFlushed && onWritten.nextWaitMs == kWaitForEvent);
     const PostFlushDecision onSkipped =
         settleFrameWait(finalDec, FlushOutcome::kSkipped, 1000U, 1000U);
-    CHECK(onSkipped.markFinalFlushed && onSkipped.nextWaitMs == kIdlePollPeriodMs);
+    CHECK(onSkipped.markFinalFlushed && onSkipped.nextWaitMs == kWaitForEvent);
     UiDecision animDec{
         .page = OledPage::kDialplate,
         .markShutdownFinalFrame = false,
         .animating = true,
         .nextWaitMs = kAnimFramePeriodMs,
     };
-    CHECK(settleFrameWait(animDec, FlushOutcome::kWritten, 12000U, 1000U).nextWaitMs == 21U);
-    CHECK(settleFrameWait(animDec, FlushOutcome::kWritten, 50000U, 1000U).nextWaitMs == 1U);
+    CHECK(settleFrameWait(animDec, FlushOutcome::kWritten, 988U, 1000U).nextWaitMs ==
+          kWaitForEvent);
+    CHECK(settleFrameWait(animDec, FlushOutcome::kWritten, 950U, 1000U).nextWaitMs ==
+          kWaitForEvent);
 
     // R2OL2-03：空闲帧休眠前按双击绝对截止重算剩余时间（t=1250 决定睡 50 ms，刷屏耗 20 ms 到 t=1270 -> 仅睡 30 ms；超期到 1305 -> 睡 0 ms）。
     UiDecision idleClickDec{
@@ -514,8 +516,8 @@ void testControllerNavigationAndShutdown() noexcept
         .clickDeadlineMs = 1300U,
         .nextWaitMs = 50U,
     };
-    CHECK(settleFrameWait(idleClickDec, FlushOutcome::kWritten, 20000U, 1270U).nextWaitMs == 30U);
-    CHECK(settleFrameWait(idleClickDec, FlushOutcome::kWritten, 55000U, 1305U).nextWaitMs == 0U);
+    CHECK(settleFrameWait(idleClickDec, FlushOutcome::kWritten, 1250U, 1270U).nextWaitMs == 30U);
+    CHECK(settleFrameWait(idleClickDec, FlushOutcome::kWritten, 1250U, 1305U).nextWaitMs == 0U);
 }
 
 /** @brief 验证新增纯整数格式化函数（经纬高、HDOP/差分龄期、运行时长、解状态徽章与卫星摘要）。 */
@@ -592,7 +594,7 @@ void testRenderAllPagesAndDirtySkip() noexcept
     ScreenBuff fb{};
     ScreenBuff fb2{};
     FrameTracker tracker{};
-    std::array<uint64_t, kPages> hashes{};
+    FrameTracker::PageHashes hashes{};
 
     // 1. 全部 8 种页面静止渲染非空。
     for (const OledPage page : {OledPage::kSystemCheck, OledPage::kDialplate, OledPage::kSubSat,
@@ -634,19 +636,21 @@ void testRenderAllPagesAndDirtySkip() noexcept
     st.page = OledPage::kDialplate;
     st.dockFocusX = 2;
     renderUi(st, vm, fb);
-    uint8_t dirty = tracker.computeDirtyMask(fb, hashes, false);
-    CHECK(dirty == 0xFFU);
-    for (uint8_t p = 0U; p < kPages; ++p) {
-        tracker.commitPage(p, hashes[p]);
+    for (uint8_t page = 0U; page < kPages; ++page) {
+        const auto cols = tracker.dirtyColumns(page, fb[page], hashes);
+        CHECK(cols.first == 0U && cols.end == kWidth);
+        tracker.commitPage(page, hashes);
     }
     renderUi(st, vm, fb);
-    CHECK(tracker.computeDirtyMask(fb, hashes, false) == 0x00U);
+    for (uint8_t page = 0U; page < kPages; ++page) {
+        CHECK(tracker.dirtyColumns(page, fb[page], hashes).end == 0U);
+    }
 
-    // 仅改变顶栏卫星数 -> 只脏顶部受影响页，底部页保持干净。
+    // 变化的卫星数须被顶部页列组覆盖。
     vm.satsUsed = 22U;
     renderUi(st, vm, fb);
-    dirty = tracker.computeDirtyMask(fb, hashes, false);
-    CHECK(dirty != 0x00U && dirty != 0xFFU);
+    CHECK(tracker.dirtyColumns(0U, fb[0], hashes).end != 0U);
+    CHECK(tracker.dirtyColumns(7U, fb[7], hashes).end == 0U);
 
     // 5. ROL2-02：覆盖活跃 SystemCheckSm（kChecking 含 kOk/kFail/kAbsent/kPending+waitS>=1s 与 kSummary 含 GNSS 型号固件）。
     ViewModel chkVm = makeHealthyVm();
@@ -841,6 +845,60 @@ void testTransitionPose() noexcept
         prev = pose.viewport;
         lastSlide = nextSlide;
     }
+}
+
+/** @brief 验证绝对节拍、整数时间回绕、超时跳帧及 2 秒性能统计。 */
+void testPacingAndPerf() noexcept
+{
+    FramePacer pacer{};
+    CHECK(pacer.waitMs(1000U) == kWaitForEvent);
+    pacer.advance(1000U, 1012U);
+    CHECK(pacer.waitMs(1012U) == 22U);
+    CHECK(pacer.waitMs(1020U) == 14U);
+    pacer.advance(1020U, 1021U);
+    CHECK(pacer.waitMs(1021U) == 13U);
+    pacer.advance(1034U, 1059U);
+    CHECK(pacer.waitMs(1059U) == 8U);
+    pacer.advance(1067U, 1112U);
+    CHECK(pacer.waitMs(1112U) == 22U);
+
+    FramePacer wrap{};
+    wrap.advance(UINT32_MAX - 10U, UINT32_MAX - 3U);
+    CHECK(wrap.waitMs(0U) == 23U);
+    CHECK(wrap.waitMs(23U) == 0U);
+
+    PerfWindow perf{};
+    for (uint32_t i = 0U; i < 60U; ++i) {
+        perf.record(1000U + (i * 100U / 3U), 2500U, true, true);
+    }
+    const auto sample = perf.recent(2999U);
+    CHECK(sample.fpsX10(kPerfWindowMs) == 300U);
+    CHECK(sample.wakeupsX10(kPerfWindowMs) == 300U);
+    CHECK(sample.cpuX10(kPerfWindowMs) == 75U);
+    CHECK(perf.recent(5000U).frames == 0U);
+}
+
+/** @brief 顶栏像素在转场中复用，即使此时电池变化也只修改内容区。 */
+void testTransitionRetainsStatusBar() noexcept
+{
+    auto vm = makeHealthyVm();
+    ScreenBuff fb{};
+    UiRenderState state{.page = OledPage::kDialplate};
+    CHECK(renderUi(state, vm, fb));
+    std::array<uint8_t, kWidth> header{};
+    std::ranges::copy(fb[0], header.begin());
+    PageTransition transition{};
+    transition.start(TransitionKind::kExpandFromIcon, OledPage::kDialplate, OledPage::kSubPower, {},
+                     1000U);
+    state.page = OledPage::kSubPower;
+    state.transition = &transition;
+    state.nowMs = 1250U;
+    vm.batteryPct = 10U;
+    CHECK(renderUi(state, vm, fb, true));
+    CHECK(std::ranges::equal(fb[0], header));
+    state.transition = nullptr;
+    CHECK(renderUi(state, vm, fb, true));
+    CHECK(!std::ranges::equal(fb[0], header));
 }
 
 /** @brief 验证通信操作、配对弹窗的局部状态和返回页。 */
@@ -1054,7 +1112,7 @@ void testStandbyRingAndChargeAnim() noexcept
     vm.charging = false;
     static_cast<void>(ui.step(1000U, {}, vm));
     dec = ui.step(1300U, {}, vm); // 等待 NumberRoll 完成
-    CHECK(!dec.animating && dec.nextWaitMs == kIdlePollPeriodMs);
+    CHECK(!dec.animating && dec.nextWaitMs == kWaitForEvent);
     renderUi(ui.renderState(1300U), vm, fb0);
     renderUi(ui.renderState(1800U), vm, fb1);
     CHECK(std::memcmp(fb0, fb1, sizeof(ScreenBuff)) == 0);
@@ -1314,6 +1372,8 @@ int main()
     testFormattingAndSatSummary();
     testRenderAllPagesAndDirtySkip();
     testTransitionPose();
+    testPacingAndPerf();
+    testTransitionRetainsStatusBar();
     testCommAndPairing();
     testUiEventBus();
     testHoldOverlayAndPowerOffConfirm();

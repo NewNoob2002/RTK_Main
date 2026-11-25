@@ -66,8 +66,8 @@ constinit int64_t s_cmd_delay_us = 200LL;
 constinit int64_t s_data_delay_us = 3100LL;
 constinit int64_t s_lock_acquire_us = 0LL;
 constinit int64_t s_max_lock_hold_us = 0LL;
-constinit int s_last_cmd_timeout_ms = 0;
-constinit int s_last_data_timeout_ms = 0;
+constinit int s_last_page_timeout_ms = 0;
+constinit size_t s_last_column = 0U;
 constinit bool s_force_lock_busy = false;
 constinit bool s_fail_data_consumes_timeout = false;
 constinit unsigned s_oled_probe_fail_count = 0U;
@@ -134,6 +134,7 @@ void runSharedBothOnline() noexcept
     CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
     CHECK(panel.lastDirtyPages() == 8U && panel.totalDirtyPages() == 8U);
     CHECK(s_oled_data_pages - beforeFirst == 8U);
+    CHECK(panel.lastTxBytes() == 8U * Sh1106::kPageTxBytes);
     // 每页单独加解锁，至少 8 次独立锁周期。
     CHECK(s_lock_acquires - locksBeforeFirst == 8U);
     CHECK(s_lock_acquires == s_lock_releases);
@@ -144,12 +145,28 @@ void runSharedBothOnline() noexcept
     CHECK(panel.lastDirtyPages() == 0U && panel.totalDirtyPages() == 8U);
     CHECK(s_oled_tx_count == txBeforeIdle);
 
-    // 仅改第 5 页 1 字节 -> 只写 1 页。
-    fb[5][10] ^= 0xFFU;
-    const unsigned pagesBeforeDelta = s_oled_data_pages;
+    // 表盘卫星数的个位数变化，只写顶栏受影响的列组。
+    vm.gnssEnabled = true;
+    vm.gnssState = gnss::State::kRunning;
+    vm.fixValid = true;
+    vm.utcValid = true; // UTC 有效且无 visible 数据时，右侧摘要保持不变。
+    vm.satsUsed = 21U;
+    app::oled::renderPage(app::OledPage::kDialplate, vm, fb);
     CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
-    CHECK(panel.lastDirtyPages() == 1U && panel.totalDirtyPages() == 9U);
-    CHECK(s_oled_data_pages - pagesBeforeDelta == 1U);
+    vm.satsUsed = 22U;
+    app::oled::renderPage(app::OledPage::kDialplate, vm, fb);
+    const unsigned txBeforeDigit = s_oled_tx_count;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(panel.lastDirtyPages() == 1U && s_oled_tx_count - txBeforeDigit == 1U);
+    CHECK(panel.lastTxBytes() <= 32U + Sh1106::kPageHeaderBytes);
+    std::printf("single digit: %u bytes, one I2C transaction\n",
+                static_cast<unsigned>(panel.lastTxBytes()));
+
+    // 验证非零高半字节的列地址也包含 2 列偏移。
+    fb[5][55] ^= 0xFFU;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(panel.lastTxBytes() == 16U + Sh1106::kPageHeaderBytes);
+    CHECK(s_last_column == 48U + Sh1106::kColumnOffset);
 
     // 关机关闭面板并拉低 GPIO12。
     panel.powerOff();
@@ -248,14 +265,14 @@ void runTimeoutAbortResetBackoff() noexcept
     s_fail_all_data = true;
     const unsigned txBeforeFirst = s_oled_tx_count;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
-    // 第 0 页失败立即退出：仅 1 次页定位命令 + 1 次数据发送 = 2 次 TX，并复位总线 1 次。
-    CHECK(s_oled_tx_count - txBeforeFirst == 2U);
+    // 第 0 页失败立即退出：合并的一笔事务，释锁后复位总线一次。
+    CHECK(s_oled_tx_count - txBeforeFirst == 1U);
     CHECK(panel.i2cErrors() == 1U && s_bus_resets == 1U);
 
     // 首次错误后下轮允许立即重试；第 2 次连续失败进入 2 轮退避。
     const unsigned txBeforeSecond = s_oled_tx_count;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
-    CHECK(s_oled_tx_count - txBeforeSecond == 2U);
+    CHECK(s_oled_tx_count - txBeforeSecond == 1U);
     CHECK(panel.i2cErrors() == 2U && s_bus_resets == 2U);
 
     // 退避 2 轮期间必须返回独立 kBackoff（非 kSkipped），且零 I2C 事务、零额外总线复位（R2OL2-05）。
@@ -303,38 +320,29 @@ void runPageLockBudget() noexcept
     fb[0][0] = 0x11U;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
 
-    // 1. 命令用去 5 ms：数据段只拿到剩余 3 ms 超时。
+    // 合并页事务只传一次 8 ms 超时，成功写一页只经历一个锁周期。
     s_max_lock_hold_us = 0LL;
     s_cmd_delay_us = 5000LL;
     s_data_delay_us = 2000LL;
     fb[0][0] = 0x22U;
+    const unsigned locksBeforePage = s_lock_acquires;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
-    CHECK(s_last_cmd_timeout_ms == static_cast<int>(Sh1106::kPageTimeoutBudgetMs));
-    CHECK(s_last_data_timeout_ms == 3);
+    CHECK(s_last_page_timeout_ms == static_cast<int>(Sh1106::kPageTimeoutBudgetMs));
+    CHECK(s_lock_acquires - locksBeforePage == 1U);
     CHECK(s_max_lock_hold_us == 7000LL);
 
-    // 2. 命令耗尽全部 8 ms 预算（剩余 < 1 ms）：绝不得再发数据段，释锁后触发总线复位。
-    const unsigned pagesBeforeExhaust = s_oled_data_pages;
-    const unsigned resetsBeforeExhaust = s_bus_resets;
-    s_cmd_delay_us = 8000LL;
-    s_data_delay_us = 1000LL;
-    fb[1][0] = 0x33U;
-    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
-    CHECK(s_oled_data_pages == pagesBeforeExhaust);
-    CHECK(s_bus_resets == resetsBeforeExhaust + 1U);
-    CHECK(s_lock_acquires == s_lock_releases);
-
-    // 3. 命令用去 2 ms，数据替身用尽传入的 6 ms 后报超时，触发总线复位。
-    panel.clearBackoff();
+    // IDF 替身用尽页预算后报超时，释锁后复位，下次可重发失败页。
     s_max_lock_hold_us = 0LL;
-    s_cmd_delay_us = 2000LL;
     s_fail_all_data = true;
     s_fail_data_consumes_timeout = true;
-    const unsigned resetsBeforeDataTimeout = s_bus_resets;
+    const unsigned resetsBeforeTimeout = s_bus_resets;
+    const unsigned pagesBeforeTimeout = s_oled_data_pages;
+    fb[1][0] = 0x33U;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
-    CHECK(s_last_data_timeout_ms == 6);
+    CHECK(s_last_page_timeout_ms == static_cast<int>(Sh1106::kPageTimeoutBudgetMs));
     CHECK(s_max_lock_hold_us == 8000LL);
-    CHECK(s_bus_resets == resetsBeforeDataTimeout + 1U);
+    CHECK(s_oled_data_pages == pagesBeforeTimeout);
+    CHECK(s_bus_resets == resetsBeforeTimeout + 1U);
     s_fail_all_data = false;
     s_fail_data_consumes_timeout = false;
 
@@ -369,7 +377,7 @@ void runInternalTimeoutRecovery() noexcept
     const unsigned resetsBefore = s_bus_resets;
     const unsigned writtenBefore = s_oled_data_pages;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
-    CHECK(s_last_data_timeout_ms == 6);
+    CHECK(s_last_page_timeout_ms == static_cast<int>(Sh1106::kPageTimeoutBudgetMs));
     CHECK(s_oled_data_pages == writtenBefore);
     CHECK(s_bus_resets == resetsBefore + 1U);
     CHECK(s_lock_acquires == s_lock_releases);
@@ -593,12 +601,6 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *tx, si
     CHECK(timeoutMs > 0 && static_cast<uint32_t>(timeoutMs) <= Sh1106::kPageTimeoutBudgetMs);
     ++s_oled_tx_count;
     if (tx[0] == 0x00U) {
-        if ((count == 4U) && ((tx[1] & 0xF8U) == 0xB0U)) {
-            CHECK(tx[2] == 0x02U && tx[3] == 0x10U); // SH1106 列偏移 2
-            s_last_page_cmd = static_cast<uint8_t>(tx[1] & 0x07U);
-            s_last_cmd_timeout_ms = timeoutMs;
-            s_time_us += s_cmd_delay_us;
-        }
         if (count >= 20U) {
             if (s_fail_init_cmd_once) {
                 s_fail_init_cmd_once = false;
@@ -617,21 +619,30 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *tx, si
         }
         return ESP_OK;
     }
-    if (tx[0] == 0x40U) {
-        CHECK(count == 129U);
-        s_last_data_timeout_ms = timeoutMs;
+    if (tx[0] == 0x80U) {
+        CHECK(count > Sh1106::kPageHeaderBytes && count <= Sh1106::kPageTxBytes);
+        CHECK((tx[1] & 0xF8U) == 0xB0U && tx[2] == 0x80U && tx[4] == 0x80U &&
+              (tx[3] & 0xF0U) == 0U && (tx[5] & 0xF0U) == 0x10U && tx[6] == 0x40U);
+        s_last_page_cmd = static_cast<uint8_t>(tx[1] & 0x07U);
+        s_last_column = ((tx[5] & 0x0FU) << 4U) | tx[3];
+        CHECK(s_last_column >= Sh1106::kColumnOffset &&
+              s_last_column - Sh1106::kColumnOffset + count - Sh1106::kPageHeaderBytes <=
+                  app::oled::kWidth);
+        s_last_page_timeout_ms = timeoutMs;
         if (s_fail_all_data) {
             if (s_fail_data_consumes_timeout) {
                 s_time_us += static_cast<int64_t>(timeoutMs) * 1000LL;
             }
             return s_data_error;
         }
-        s_panel_first_byte.at(s_last_page_cmd) = tx[1];
+        if (s_last_column == Sh1106::kColumnOffset) {
+            s_panel_first_byte.at(s_last_page_cmd) = tx[Sh1106::kPageHeaderBytes];
+        }
         if ((s_fail_page_once >= 0) && (static_cast<int>(s_last_page_cmd) == s_fail_page_once)) {
             s_fail_page_once = -1;
             return ESP_ERR_TIMEOUT;
         }
-        s_time_us += s_data_delay_us;
+        s_time_us += s_cmd_delay_us + s_data_delay_us;
         ++s_oled_data_pages;
         return ESP_OK;
     }

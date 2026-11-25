@@ -17,6 +17,7 @@
 #include "gnss/Controller.hpp"
 #include "gnss/Types.hpp"
 #include "modules/oled/OledAnim.hpp"
+#include "modules/oled/OledPerf.hpp"
 
 namespace app::oled {
 
@@ -297,7 +298,7 @@ enum class FlushOutcome : uint8_t {
 /** 刷屏后调度结论：是否允许置位 USB 关机终帧完成标志及下一轮精确等待时长。 */
 struct PostFlushDecision {
     bool markFinalFlushed = false;
-    uint32_t nextWaitMs = kIdlePollPeriodMs;
+    uint32_t nextWaitMs = kWaitForEvent;
 };
 
 inline constexpr uint32_t kShutdownFinalRetryMs =
@@ -311,7 +312,7 @@ struct UiDecision {
     bool animating = false;              // 当前处于动画帧调度（33 ms）
     bool hasClickDeadline = false;       // 存在待判双击窗口绝对截止
     uint32_t clickDeadlineMs = 0U;       // 待判双击窗口绝对截止时刻（ms）
-    uint32_t nextWaitMs = kIdlePollPeriodMs;
+    uint32_t nextWaitMs = kWaitForEvent;
     OledActionRequest action{};
 };
 
@@ -608,59 +609,47 @@ private:
     NumberRoll batRoll_{};
 };
 
-/**
- * 8 页 64-bit FNV-1a 摘要跟踪器：仅占用 72 B 状态（省去第二份 1 KB 帧缓冲），
- * 精确识别“内容未变不刷新”及按页增量写出。
- */
+/** 每页用 16 列一组的摘要定位脏列，在唯一帧缓冲上找出覆盖所有变化的区间。 */
 class FrameTracker final {
 public:
-    constexpr FrameTracker() noexcept = default;
+    static constexpr size_t kBlockWidth = 16U;
+    static_assert(kWidth % kBlockWidth == 0U);
+    using PageHashes = std::array<uint32_t, kWidth / kBlockWidth>;
 
-    /**
-     * @brief 清除已缓存摘要，使下一帧强制写出全部 8 页
-     * @note 初始化或面板恢复上电时调用，不阻塞。
-     */
+    /** 页内半开区间 [first, end)，空区间表示整页已在屏上。 */
+    struct Columns {
+        size_t first = 0U;
+        size_t end = 0U;
+    };
+
+    /** @brief 清除全部已提交摘要，下一次必须完整重写。 */
     void invalidate() noexcept;
 
-    /**
-     * @brief 使传输失败页的摘要失效，面板可能已接收部分数据
-     * @param page: 页编号（0..7）
-     * @note OLED 任务串行调用，不阻塞。
-     */
+    /** @brief 使失败页失效。 @param page: 页号（0..7）。 */
     void invalidatePage(uint8_t page) noexcept;
 
     /**
-     * @brief 计算与已提交画面相比发生变化的页位掩码（bit0..bit7 对应 page 0..7）
-     * @param fb: 当前 8×128 帧缓冲
-     * @param[out] hashesOut: 输出本帧 8 页的 64-bit FNV-1a 摘要
-     * @param forceFull: true 时强制返回 0xFF
-     * @retval 脏页位掩码；0 表示整帧内容完全未变，无需写 I2C
-     * @note 纯计算，不阻塞。
+     * @brief 比较一页的列组摘要，返回覆盖首末变化列组的范围。
+     * @param page: 页号（0..7）。
+     * @param data: 本页 128 列数据。
+     * @param[out] hashes: 本页当前摘要。
+     * @param forceFull: 是否强制整页。
+     * @retval 需要送出的列范围。
      */
-    [[nodiscard]] uint8_t computeDirtyMask(const ScreenBuff &fb,
-                                           std::array<uint64_t, kPages> &hashesOut,
-                                           bool forceFull = false) const noexcept;
+    [[nodiscard]] Columns dirtyColumns(uint8_t page, std::span<const uint8_t, kWidth> data,
+                                       PageHashes &hashes, bool forceFull = false) const noexcept;
 
     /**
-     * @brief 记录单个页成功写入面板后的摘要（仅在该页 I2C 传输成功后调用）
-     * @param page: 页编号（0..7）
-     * @param hash: 该页对应的 64-bit 摘要
-     * @note 传输失败时调用 invalidatePage()。
+     * @brief 仅在整段发送成功后提交该页摘要。
+     * @param page: 页号（0..7）。
+     * @param hashes: 本页已发送或未变化的列组摘要。
      */
-    void commitPage(uint8_t page, uint64_t hash) noexcept;
+    void commitPage(uint8_t page, const PageHashes &hashes) noexcept;
 
 private:
-    std::array<uint64_t, kPages> committedHashes_{};
+    std::array<PageHashes, kPages> committedHashes_{};
     uint8_t validMask_ = 0U;
 };
-
-/**
- * @brief 计算单页 128 字节数据的 64-bit FNV-1a 摘要
- * @param bytes: 单页字节视图
- * @retval 64-bit 摘要值
- * @note 纯函数，线程/ISR 安全。
- */
-[[nodiscard]] uint64_t fnv1a64(std::span<const uint8_t> bytes) noexcept;
 
 /**
  * @brief 将文本安全拷贝并截断到定长字符缓冲，非可打印 ASCII 字符替换为 '?'
@@ -801,13 +790,14 @@ struct DialGnssDetail {
  * @brief 根据本轮 UI 决策、实际刷屏结果与刷屏后当前时间计算终帧通知与精确休眠时长
  * @param dec: 本轮 UiController::step() 决策
  * @param outcome: 底层 SH1106 刷屏结论
- * @param frameUs: 本帧渲染+I2C 总耗时（us）
+ * @param frameStartMs: 本轮开始时刻（ms），用于计算非动画 UI 截止。
  * @param postFlushNowMs: 刷屏结束后进入休眠前的单调时刻（ms，用于按双击绝对截止重算剩余时间）
  * @retval 终帧置位判定与下轮等待时长（ms；0 表示双击截止已到应立即处理）
  * @note 纯函数，不阻塞；仅在 outcome 为 kWritten/kSkipped 时允许标记终帧完成，kError/kBackoff 则缩短至 2 ms 重试。
  */
 [[nodiscard]] PostFlushDecision settleFrameWait(const UiDecision &dec, FlushOutcome outcome,
-                                                uint32_t frameUs, uint32_t postFlushNowMs) noexcept;
+                                                uint32_t frameStartMs,
+                                                uint32_t postFlushNowMs) noexcept;
 
 /**
  * @brief 按关机阶段与完成掩码计算目标关机进度百分比（0..100）
@@ -849,10 +839,11 @@ struct DialGnssDetail {
 /**
  * @brief 从 gnss::SatTable 提取紧凑的星座分布与 Top-8 CN0 摘要写入 ViewModel
  * @param table: 卫星表快照
- * @param[out] vm: 目标视图模型（更新 satsVisible / satGroups / topSnr / topSnrCount）
+ * @param[out] vm: 目标视图模型（更新 satsVisible / satGroups / topSnr / topSnrCount）。
+ * @param detail: 卫星子页面需要柱图和信噪比排序时为 true。
  * @note 零堆分配，在独立栈帧调用避免撑大渲染栈。
  */
-void summarizeSatTable(const gnss::SatTable &table, ViewModel &vm) noexcept;
+void summarizeSatTable(const gnss::SatTable &table, ViewModel &vm, bool detail = true) noexcept;
 
 /**
  * @brief 使用 WouoUI 图形引擎将当前 UI 状态（含页面过渡与动效）渲染到 1 KB 帧缓冲
@@ -860,8 +851,11 @@ void summarizeSatTable(const gnss::SatTable &table, ViewModel &vm) noexcept;
  * @param vm: 视图数据快照
  * @param[out] fb: 8×128 单色帧缓冲（由调用方静态持有）
  * @note 单线程调用（OLED 任务或主机测试）；不访问硬件、不分配堆，非 ISR。
+ * @param previousStatusBar: 同一缓冲中含上一帧完整状态栏时可在内容转场中复用。
+ * @retval 当前帧含可复用状态栏。
  */
-void renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb) noexcept;
+bool renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb,
+              bool previousStatusBar = false) noexcept;
 
 /**
  * @brief 兼容接口：以静止状态直接渲染指定单页到 1 KB 帧缓冲（供驱动测试与快速渲染使用）

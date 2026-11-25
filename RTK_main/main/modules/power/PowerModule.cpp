@@ -281,7 +281,8 @@ PowerModule::PinLevels PowerModule::samplePins(uint32_t nowMs, bool forceCharger
         // STAT 高也可能是充满；REG08 缓存遇到争用时不能用于断电决策。
         .usbKnown = gpioUsb.has_value() || (fresh && lastChargerStatus_.ok) ||
                     (usb.source == board::UsbSource::kStat && usb.present),
-        .charging = stat.value_or(false),
+        // 无充电 IC 的板（F9P 板）STAT GPIO2 悬空可读成有效电平；无 USB 输入时不可能充电。
+        .charging = stat.value_or(false) && usb.present,
         .usbSource = usb.source,
         .chargerOk = lastChargerStatus_.ok,
         .chargerReg08 = lastChargerStatus_.rawReg08,

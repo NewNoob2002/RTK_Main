@@ -33,7 +33,7 @@
 - 新增 `main/board/I2cBus.hpp/.cpp`（命名空间 `app::board::i2c`）作为板级 I2C0 单一总线所有者：
   - `ensureInit(port, sda, scl)` 幂等创建一次 `i2c_new_master_bus`（保持 `enable_internal_pullup=1`、`glitch_ignore_cnt=7`）与一把静态 FreeRTOS 互斥锁（`xSemaphoreCreateMutexStatic`，具备优先级继承）。
   - `Charger`（100 kHz，`0x1A`）与 `Sh1106`（400 kHz，`0x3C`）各自调用 `i2c_master_bus_add_device` 挂载在同一总线句柄上；ESP-IDF `i2c_master` 按设备句柄切换时钟速率。
-  - OLED 按页获取和释放共享互斥锁。每页超时传参预算为 **8 ms**（`kPageTimeoutBudgetMs`）。页地址命令先使用该值，数据段使用扣减命令已耗时间后的剩余整毫秒。剩余不足 1 ms 时跳过数据段并按超时恢复。ESP-IDF 同步驱动对分段等待重复使用入参，错误恢复也可能延长持锁，最大时长以实板测量为准。`ESP_ERR_TIMEOUT` 与 `ESP_ERR_INVALID_RESPONSE` 均在释放页锁后尝试 `i2c::resetBus()`。失败页摘要失效，下一次刷新可重写该页。连续失败执行有界退避。Charger 保持 0 tick 尝试加锁。
+  - OLED 按页获取和释放共享互斥锁。页地址、列地址与脏列像素用 SH1106 的 Co 控制位在一次同步 I2C 事务中发送，传参预算为 **8 ms**（`kPageTimeoutBudgetMs`）。ESP-IDF 同步驱动内部等待及错误恢复仍可能延长持锁，最大时长以实板测量为准。`ESP_ERR_TIMEOUT` 与 `ESP_ERR_INVALID_RESPONSE` 在释放页锁后尝试 `i2c::resetBus()`，传输失败页摘要失效，下一次可完整重写该页。Charger 保持 0 tick 尝试加锁。
   - `Charger` 既有 B3 行为（启动探测 `0x1A`、无芯片只报一行 W、REG02 读改写/REG03 校验、`power i2c scan`）完全不变。
 
 ### 2.3 模块归属、任务调度与刷新策略
@@ -42,8 +42,9 @@
 - **独立低优先级任务**：仅在面板探测成功时由 `OledModule::start()` 创建静态任务 `"oled"`（并登记到 `sys tasks` 供 `stack_hwm` 观测）：
   - 核心：**Core 1**（远离 Core 0 上的 Bluedroid/Wi-Fi/GNSS-IO/Console），优先级：**1**（严格低于 `kLink` 的优先级 10，随时让位于链路与按键轮询）。
   - 栈与帧缓冲：**3072 B** 任务栈（`task.oled`）与 **1024 B** 帧缓冲（`oled.fb`）均按 ADR-0011 §7 经 `BootArena` 在 `allocateBootBuffers()` 启动期一次性分配并绑定，**仅当板型具备 `Feature::kOled` 时分配**（E1 等无 OLED 板型与 console-only 降级启动零占用）；驱动与总线控制块全部全零初值落入 `.dram0.bss`。
-  - 刷新率：**≤ 5 Hz**（`ulTaskNotifyTake(..., pdMS_TO_TICKS(waitMs))`），收到短按或关机事件可立即唤醒，减少交互延迟；`kCutPower` 期间按精确剩余毫秒数唤醒，避免错过 USB 关机重启前干净断电。
-  - **空闲不写 I2C**：帧缓冲为唯一一份 1 KB 外供 `ScreenBuff[8][128]`；每页计算 64-bit FNV-1a 摘要（共 64 B 状态，省去第二份 1 KB 对比缓冲），仅当页内容变化时才写该页 I2C，静止画面 I2C 写入为 0。
+  - 刷新以事件驱动。活动期使用 34/33/33 ms 的绝对节拍（每 100 ms 3 帧），跳过已错过的槽。按键、关机与数据变化可唤醒 OLED，按键提前唤醒沿用已排定的节拍与单击截止。关机、重启和 I2C 恢复各按原有紧急性或有界退避安排。
+  - **空闲不写 I2C**。唯一 1 KB 外供帧缓冲为 `ScreenBuff[8][128]`。每页保留 8 个 16 列组的 32-bit FNV-1a 摘要，按首末变化列组计算连续传输范围。未变化的页跳过，首次刷新及失败后对相应页完整发送。
+
 
 ### 2.4 页面清单与只读数据来源
 
@@ -142,5 +143,6 @@
 
 ### 5.4 帧率调度、控制台统计与预算增量
 
-- **帧率调度**。动画目标帧周期 33 ms，休眠前扣除本帧耗时并按单击绝对截止重算。静止时每 200 ms 检查一次，0 脏页时 0 写 I2C（充电待机充电未满时的电池条流动动画例外，严格限 ≤ 2 fps，充满即停）。SH1106 保持 400 kHz 和按页加解锁。每页超时传参预算为 8 ms，驱动分段等待与错误恢复可能超出，实板测最大持锁，见 §2.2。
+- **帧率调度**。OL5 将动画、滚动和进度环接入 30 fps 绝对节拍，充电待机的电池条仍在 500 ms 相位边界变化。静止期等通知，有限的 UI 截止独立计时。子页转场仅下移与推入状态栏下的内容区，顶栏复用上一帧。每页单次事务仍使用 400 kHz、8 ms 超时传参，见 §2.2。
+- **测量**。`oled` 显示最近 2 s 写屏帧率和实际唤醒数，以及刷出间隔、事务字节数、渲染耗时和单核 CPU 占用估算。`oled bench <seconds>` 重复表盘与电源子页转场，按整段采样并暂停 OLED 自身日志。
 - **预算增补**：框架状态 DRAM 静态增量 ≤ 1 KB（`UiController` 落 `.dram0.bss`）；Flash 增量主要来自新启用 `Font_12_24` 与自绘位图/渲染器，实测见 `docs/reports/OL2-oled-ui.md`；IRAM 增量 0 B。

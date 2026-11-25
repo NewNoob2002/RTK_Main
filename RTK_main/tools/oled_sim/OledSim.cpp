@@ -42,6 +42,7 @@ struct Simulator {
     ViewModel model{};
     UiController controller{};
     ScreenBuff frame{};
+    bool statusBarValid = false;
     std::vector<uint32_t> shortKeys{};
     uint32_t shutdownStartedMs = 0U;
     board::ShutdownReason shutdownReason = board::ShutdownReason::kKey;
@@ -184,7 +185,7 @@ struct Simulator {
         const auto decision = controller.step(nowMs, shortKeys, model, longKeyPending);
         shortKeys.clear();
         longKeyPending = false;
-        renderUi(controller.renderState(nowMs), model, frame);
+        statusBarValid = renderUi(controller.renderState(nowMs), model, frame, statusBarValid);
         WouoUI_BuffSend();
         applyAction(decision.action.action, nowMs);
     }

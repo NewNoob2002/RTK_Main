@@ -102,6 +102,20 @@ constinit bool s_web_exit = false;
 constinit board::ShutdownReason s_shutdown_reason = board::ShutdownReason::kNone;
 constinit bool s_radio_switch = false;
 std::jmp_buf s_radio_jump{};
+std::jmp_buf s_bench_jump{};
+constinit TaskFunction_t s_oled_entry = nullptr;
+constinit void *s_oled_arg = nullptr;
+constinit TaskHandle_t s_fake_task = nullptr;
+constinit bool s_bench_scenario = false;
+constinit bool s_bench_requested = false;
+constinit bool s_bench_early_event = false;
+constinit bool s_notify_pending = false;
+constinit uint32_t s_bench_first_wait = 0U;
+constinit uint32_t s_bench_followup_wait = 0U;
+constinit unsigned s_pages_before_bench = 0U;
+constinit unsigned s_bytes_before_bench = 0U;
+constinit unsigned s_oled_bytes = 0U;
+constinit BenchStats s_bench_result{};
 
 constinit std::array<StackType_t, OledModule::kTaskStackBytes / sizeof(StackType_t)> s_oled_stack{};
 constinit std::array<uint8_t, OledModule::kFrameBufferBytes> s_oled_fb{};
@@ -384,20 +398,17 @@ void runClickPageDeadline(uint32_t secondAtMs) noexcept
     s_time_us = 40000000LL;
     s_app.data.uiEvents.notifyShortKey(nowMs());
     uint32_t waitMs = ModuleTestAccess::refresh(s_app.oled, nowMs());
-    CHECK(waitMs == 200U);
-    s_time_us += static_cast<int64_t>(waitMs) * 1000LL;
+    CHECK(waitMs == kDoubleClickWindowMs);
     auto snapshot = s_app.data.powerStatus.read();
     snapshot.batteryPct = 20U;
     s_app.data.powerStatus.write(snapshot);
     s_page_data_delay_us = 3000LL;
-    for (unsigned frame = 0U; frame < 3U; ++frame) {
-        waitMs = ModuleTestAccess::refresh(s_app.oled, nowMs());
-        s_time_us += static_cast<int64_t>(waitMs) * 1000LL;
-    }
+    // 将下一帧放到单击截止前 1 ms，并强制多页发送以验证页间中断。
+    s_time_us = 40299000LL;
     CHECK(nowMs() == 40299U);
     const unsigned pagesBeforeDeadline = s_oled_data_pages;
     s_short_key_during_page = secondAtMs;
-    CHECK(ModuleTestAccess::refresh(s_app.oled, nowMs()) == 0U);
+    CHECK(ModuleTestAccess::refresh(s_app.oled, nowMs(), true) == 0U);
     CHECK(!s_short_key_during_page.has_value());
     CHECK(s_oled_data_pages - pagesBeforeDeadline == 1U);
     CHECK(nowMs() == 40302U);
@@ -566,6 +577,46 @@ bool spp_server_pair_decide_for(uint32_t id, bool accept)
     return true;
 }
 
+/** @brief 用虚拟 400 kHz 时钟执行真实任务循环、bench 握手及空闲休眠。 */
+void runBenchAndEventWait() noexcept
+{
+    setupOledModule();
+    // 启动时已在表盘且无动画，让第一次阻塞确定为纯事件等待。
+    s_app.data.uiEvents.notifyShortKey(2000U);
+    s_app.data.uiEvents.notifyShortKey(2090U);
+    s_time_us = 2100000LL;
+    static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
+    s_time_us = 3000000LL;
+    static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
+
+    s_bench_scenario = true;
+    CHECK(s_app.oled.start() == fw::Result::kOk);
+    CHECK(s_oled_entry != nullptr);
+    if (setjmp(s_bench_jump) == 0) {
+        s_oled_entry(s_oled_arg);
+        CHECK(false);
+    }
+
+    CHECK(s_bench_first_wait > 5U);
+    CHECK(s_bench_followup_wait == s_bench_first_wait - 5U);
+    CHECK(s_bench_result.elapsedMs >= 1000U && s_bench_result.elapsedMs <= 1035U);
+    CHECK(s_bench_result.totals.frames >= 28U && s_bench_result.totals.frames <= 30U);
+    CHECK(s_bench_result.totals.wakeups > s_bench_result.totals.frames);
+    CHECK(s_bench_result.totals.fpsX10(s_bench_result.elapsedMs) >= 270U);
+    CHECK(s_bench_result.maxIntervalMs >= 33U && s_bench_result.maxIntervalMs <= 68U);
+    CHECK(s_bench_result.bytes > 0U && s_bench_result.i2cErrors == 0U);
+    CHECK(s_oled_bytes - s_bytes_before_bench > s_bench_result.bytes); // 恢复实际 UI 的发送不计入。
+    CHECK(!s_bench_result.interrupted);
+    s_time_us += 2250000LL;
+    CHECK(s_app.oled.recentPerf().frames == 0U);
+    std::printf("bench: %u ms, %u written frames, %u wakes, %u bytes, max interval %u ms\n",
+                static_cast<unsigned>(s_bench_result.elapsedMs),
+                static_cast<unsigned>(s_bench_result.totals.frames),
+                static_cast<unsigned>(s_bench_result.totals.wakeups),
+                static_cast<unsigned>(s_bench_result.bytes),
+                static_cast<unsigned>(s_bench_result.maxIntervalMs));
+}
+
 namespace rtos {
 
 uint32_t nowMs() noexcept
@@ -629,21 +680,61 @@ void vTaskDelete(TaskHandle_t /*task*/) {}
 
 TaskHandle_t xTaskGetCurrentTaskHandle(void)
 {
-    return nullptr;
+    return s_fake_task;
 }
 
-void xTaskNotifyGive(TaskHandle_t /*task*/) {}
-
-uint32_t ulTaskNotifyTake(BaseType_t /*clearOnExit*/, TickType_t /*ticks*/)
+void xTaskNotifyGive(TaskHandle_t /*task*/)
 {
+    s_notify_pending = true;
+}
+
+uint32_t ulTaskNotifyTake(BaseType_t /*clearOnExit*/, TickType_t ticks)
+{
+    if (!s_bench_scenario) {
+        return 0U;
+    }
+    if (s_notify_pending) {
+        s_notify_pending = false;
+        return 1U;
+    }
+    if (ticks == portMAX_DELAY) {
+        if (!s_bench_requested) {
+            CHECK(s_app.oled.requestBench(1U) == fw::Status::kOk);
+            CHECK(s_app.oled.requestBench(1U) == fw::Status::kBusy);
+            CHECK(!s_app.oled.benchResult(s_bench_result));
+            s_bench_requested = true;
+            s_notify_pending = false;
+            s_pages_before_bench = s_oled_data_pages;
+            s_bytes_before_bench = s_oled_bytes;
+            return 1U;
+        }
+        CHECK(s_app.oled.benchResult(s_bench_result));
+        std::longjmp(s_bench_jump, 1);
+    }
+    if (s_bench_requested && !s_bench_early_event && ticks > 5U) {
+        s_bench_first_wait = ticks;
+        s_pages_before_bench = s_oled_data_pages;
+        s_bench_early_event = true;
+        s_time_us += 5000LL;
+        return 1U;
+    }
+    if (s_bench_early_event && s_bench_followup_wait == 0U) {
+        s_bench_followup_wait = ticks;
+        CHECK(s_oled_data_pages == s_pages_before_bench);
+    }
+    s_time_us += static_cast<int64_t>(ticks) * 1000LL;
     return 0U;
 }
 
-TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t /*fn*/, const char * /*name*/,
-                                           uint32_t /*stackDepth*/, void * /*arg*/,
-                                           UBaseType_t /*prio*/, StackType_t * /*stack*/,
-                                           StaticTask_t *tcb, BaseType_t /*core*/)
+TaskHandle_t xTaskCreateStaticPinnedToCore(TaskFunction_t fn, const char * /*name*/,
+                                           uint32_t /*stackDepth*/, void *arg, UBaseType_t prio,
+                                           StackType_t * /*stack*/, StaticTask_t *tcb,
+                                           BaseType_t core)
 {
+    CHECK(prio == 1U && core == 1);
+    s_oled_entry = fn;
+    s_oled_arg = arg;
+    s_fake_task = tcb;
     return tcb;
 }
 void fake_crit_enter(void) {}
@@ -712,13 +803,11 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *tx, si
     }
     ++s_oled_tx_count;
     if (tx[0] == 0x00U) {
-        if ((count == 4U) && ((tx[1] & 0xF8U) == 0xB0U)) {
-            s_last_page_cmd = static_cast<uint8_t>(tx[1] & 0x07U);
-        }
         return ESP_OK;
     }
-    if (tx[0] == 0x40U) {
-        CHECK(count == 129U);
+    if (tx[0] == 0x80U) {
+        CHECK(count > 7U && count <= 135U && tx[6] == 0x40U);
+        s_last_page_cmd = static_cast<uint8_t>(tx[1] & 0x07U);
         if (s_fail_all_data) {
             return ESP_ERR_TIMEOUT;
         }
@@ -726,7 +815,10 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *tx, si
             s_fail_page_once = -1;
             return ESP_ERR_TIMEOUT;
         }
-        s_time_us += s_page_data_delay_us;
+        constexpr int64_t kUsPerByteAt400kHz = 23LL; // 9 位含 ACK，22.5 µs 向上取整。
+        s_time_us += s_bench_scenario ? (static_cast<int64_t>(count) + 1LL) * kUsPerByteAt400kHz
+                                      : s_page_data_delay_us;
+        s_oled_bytes += static_cast<unsigned>(count);
         if (s_short_key_during_page.has_value() && nowMs() >= *s_short_key_during_page) {
             s_app.data.uiEvents.notifyShortKey(*s_short_key_during_page);
             s_short_key_during_page.reset();
@@ -777,6 +869,8 @@ int main(int argc, char **argv)
         runBackgroundInitRetry();
     } else if (scenario == "reboot_banner_quiesce") {
         runRebootBannerQuiesce();
+    } else if (scenario == "bench_and_event_wait") {
+        runBenchAndEventWait();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return EXIT_FAILURE;

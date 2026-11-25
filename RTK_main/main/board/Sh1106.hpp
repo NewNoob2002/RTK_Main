@@ -37,7 +37,8 @@ public:
     static constexpr int kI2cXferTimeoutMs = 8;          // ms，单次配置/关屏命令超时上限
     static constexpr uint32_t kPowerSettleMs = 100U;     // ms，SH1106 上电稳定延时
     static constexpr uint8_t kColumnOffset = 2U;         // SH1106 132 列 RAM 居中偏移
-    static constexpr size_t kPageTxBytes = 1U + 128U;    // 控制字节 0x40 + 128 列像素
+    static constexpr size_t kPageHeaderBytes = 7U;       // 三组命令控制字节 + 末尾数据控制字节
+    static constexpr size_t kPageTxBytes = kPageHeaderBytes + oled::kWidth;
     static constexpr uint8_t kMaxErrorBackoffTicks = 4U; // 连续失败最大退避轮数（5 Hz 下约 1 s）
     constexpr Sh1106() noexcept = default;
     ~Sh1106() = default;
@@ -128,6 +129,18 @@ public:
         return lastDirtyPages_;
     }
 
+    /** @brief 查询最近一轮成功写入量。 @retval 事务字节数，含控制与命令字节。 */
+    [[nodiscard]] uint16_t lastTxBytes() const noexcept
+    {
+        return lastTxBytes_;
+    }
+
+    /** @brief 查询最近一轮同步 I2C 及互斥锁等待。 @retval 墙钟耗时（µs）。 */
+    [[nodiscard]] uint32_t lastIoUs() const noexcept
+    {
+        return lastIoUs_;
+    }
+
     /**
      * @brief 取得累计写出的脏页总数
      * @retval 累计脏页数
@@ -194,16 +207,17 @@ private:
     [[nodiscard]] fw::Status configurePanel() noexcept;
 
     /**
-     * @brief 写出单个 128 字节显示页（内部获取并释放一次 I2C 总线锁）
+     * @brief 写出单个显示页的连续列区间（内部获取并释放一次 I2C 总线锁）
      * @param page: 页索引（0..7）
-     * @param data: 128 字节列数据
+     * @param first: 页内首列（0..127）。
+     * @param data: 要写出的连续列数据。
      * @retval kOk 写出成功
      * @retval kBusy 获取总线锁超时
      * @retval 其他 I2C 错误映射码
      * @note 仅 flush/configurePanel 调用，非 ISR。
      */
-    [[nodiscard]] fw::Status writePage(uint8_t page,
-                                       std::span<const uint8_t, oled::kWidth> data) noexcept;
+    [[nodiscard]] fw::Status writePage(uint8_t page, size_t first,
+                                       std::span<const uint8_t> data) noexcept;
 
     /**
      * @brief 释放旧锁后处理传输结果，超时或 IDF 的非正常响应触发总线复位
@@ -230,6 +244,8 @@ private:
     uint8_t consecutiveErrors_ = 0U;
     uint8_t backoffSkips_ = 0U;
     uint8_t lastDirtyPages_ = 0U;
+    uint16_t lastTxBytes_ = 0U;
+    uint32_t lastIoUs_ = 0U;
     uint32_t totalDirtyPages_ = 0U;
     uint32_t i2cErrors_ = 0U;
     OledInitStage lastInitStage_ = OledInitStage::kNone;

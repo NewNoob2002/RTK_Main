@@ -11,11 +11,15 @@
 #include "def/OledDef.hpp"
 #include "fw/Result.hpp"
 #include "fw/Status.hpp"
+#include "modules/oled/OledPerf.hpp"
 #include "rtos/BootTask.hpp"
 
 namespace app {
 struct AppContext;
 struct ModuleTestAccess;
+namespace oled {
+struct ViewModel;
+}
 
 /** OLED 显示模块：仅在板型含 Feature::kOled 且 0x3C 应答时创建低优先级刷新任务。 */
 class OledModule final {
@@ -30,7 +34,8 @@ public:
 
     static constexpr size_t kTaskStackBytes = 3072U;   // B，静态任务栈（与 trace_out 一致）
     static constexpr size_t kFrameBufferBytes = 1024U; // B，8×128 单色帧缓冲（sizeof(ScreenBuff)）
-    static constexpr uint32_t kRefreshPeriodMs = 200U; // ms，静止期上限 5 Hz（0 写 I2C）
+    static constexpr uint32_t kRetryPeriodMs = 200U;   // ms，运行期刷屏失败后的重试间隔
+    static constexpr uint32_t kMaxBenchSeconds = 60U;
     static constexpr uint8_t kOfflineFlushErrors =
         4U; // 连续 I2C 刷屏失败达此阈值判定面板离线并清除 kOledActive
     static constexpr uint32_t kInitRetryPeriodMs =
@@ -116,7 +121,56 @@ public:
         return task_.running();
     }
 
+    /** @brief 读取滚动性能窗口。 @retval 最近 2 秒统计。 @note 可跨任务调用，非 ISR。 */
+    [[nodiscard]] oled::PerfTotals recentPerf() const noexcept;
+
+    /**
+     * @brief 通知 OLED 任务执行一次自动转场测试。
+     * @param seconds: 测试秒数（1..60）。
+     * @retval 请求提交结果，忙时保持原任务。
+     * @note 仅 console 调用，非 ISR，不阻塞。
+     */
+    [[nodiscard]] fw::Status requestBench(uint32_t seconds) noexcept;
+
+    /**
+     * @brief 读取已完成的 bench 结果。
+     * @param[out] result: 已完成测试的统计。
+     * @retval false 测试仍在进行，true 已取得结果。
+     * @note 仅已成功提交请求的 console 调用，非 ISR，不阻塞。
+     */
+    [[nodiscard]] bool benchResult(oled::BenchStats &result) const noexcept;
+
 private:
+    /**
+     * @brief 记录一轮 OLED 任务工作，分离同步总线等待。
+     * @param nowMs: 本轮起始时刻。
+     * @param startUs: 本轮开始的微秒时间戳。
+     * @param written: 是否成功写出一帧。
+     * @param woke: 是否从任务等待中返回。
+     * @param rendered: 是否进入实际渲染路径。
+     */
+    void recordCycle(uint32_t nowMs, int64_t startUs, bool written, bool woke,
+                     bool rendered) noexcept;
+
+    /**
+     * @brief 在唯一的帧缓冲绘制当前页面或 bench 转场。
+     * @param nowMs: 当前时刻。
+     * @param vm: 本帧输入模型，可补录当前页所需卫星信息。
+     * @note OLED 任务或启动任务串行调用。
+     */
+    void drawFrame(uint32_t nowMs, oled::ViewModel &vm) noexcept;
+
+    /** @brief 在 kLink 汇合状态槽变更，限制普通数据唤醒至 5 Hz。 @param nowMs: 当前时间。 */
+    void notifyDisplayData(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 推进 bench 请求与结束回执。
+     * @param nowMs: 当前时刻。
+     * @retval 是否需要绘制 bench 转场。
+     * @note 仅 OLED 任务，关机或软件重启优先。
+     */
+    [[nodiscard]] bool updateBench(uint32_t nowMs) noexcept;
+
     /** @brief 发布当前配对窗口和待确认请求。 @param nowMs: 当前单调时间。 @note 仅 kLink。 */
     void publishPairing(uint32_t nowMs) noexcept;
 
@@ -138,7 +192,7 @@ private:
 
     /**
      * @brief OLED 低优先级刷新任务主循环
-     * @note 仅 oled 任务执行，动画期 33 ms，静止期 200 ms（0 写 I2C），非 ISR。
+     * @note 仅 oled 任务执行，活动期绝对节拍，静止期等待事件，非 ISR。
      */
     void run() noexcept;
 
@@ -146,10 +200,12 @@ private:
      * @brief 采集只读快照、推进状态机、经 WouoUI 渲染并按脏页刷屏，同时记录性能统计
      * @param nowMs: 当前单调时间（ms）
      * @param forceFull: true 时强制全 8 页写出
+     * @param renderFrame: true 时允许在本轮节拍槽内绘制。
      * @retval 下一轮刷新等待时间（ms）
      * @note 仅 init 或 oled 任务串行调用，非 ISR。
      */
-    [[nodiscard]] uint32_t refreshOnce(uint32_t nowMs, bool forceFull) noexcept;
+    [[nodiscard]] uint32_t refreshOnce(uint32_t nowMs, bool forceFull,
+                                       bool renderFrame = true) noexcept;
 
     /**
      * @brief 尝试初始化 SH1106 并记录阶段/状态与尝试次数，成功时初始化 WouoUI 与状态机
@@ -212,15 +268,39 @@ private:
     fw::Status initStatus_ = fw::Status::kOk;
     uint32_t initAttempts_ = 0U;
     uint32_t lastInitAttemptMs_ = 0U;
-    uint16_t fpsX10_ = 0U;
-    uint32_t fpsWindowStartMs_ = 0U;
-    uint32_t fpsWindowFrames_ = 0U;
     uint32_t framesFlushed_ = 0U;
     uint32_t framesSkipped_ = 0U;
     uint32_t lastI2cUs_ = 0U;
     uint32_t maxI2cUs_ = 0U;
     uint32_t lastFrameUs_ = 0U;
     uint32_t maxFrameUs_ = 0U;
+    uint32_t lastRenderUs_ = 0U;
+    uint32_t maxRenderUs_ = 0U;
+    uint32_t lastWriteMs_ = 0U;
+    uint32_t lastIntervalMs_ = 0U;
+    uint32_t maxIntervalMs_ = 0U;
+    uint32_t sampleIoUs_ = 0U;
+    bool animating_ = false;
+    bool statusBarValid_ = false;
+    uint32_t lastDataCheckMs_ = 0U;
+    struct DisplayVersions {
+        uint32_t power = 0U;
+        uint32_t system = 0U;
+        uint32_t bluetooth = 0U;
+        uint32_t gnssFix = 0U;
+        uint32_t gnssSats = 0U;
+        uint32_t gnssMode = 0U;
+        uint32_t gnssState = 0U;
+        uint32_t wifi = 0U;
+
+        /** @brief 比较 OLED 数据源的版本和显示状态。 @retval 是否一致。 */
+        [[nodiscard]] bool operator==(const DisplayVersions &) const noexcept = default;
+    } displayVersions_{};
+    oled::PerfWindow perf_{};
+    std::atomic<uint32_t> benchDurationMs_{0U};
+    oled::BenchStats bench_{};
+    uint32_t benchStartMs_ = 0U;
+    bool benchActive_ = false;
     OledStatus lastPublished_{};
 };
 

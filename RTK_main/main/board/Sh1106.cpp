@@ -21,13 +21,13 @@ namespace {
 // SH1106 控制字节与初始化寄存器命令常量（依据 SH1106 数据手册与旧 P2 xyz_oled.c:339-384）。
 constexpr uint8_t kCtrlCmd = 0x00U;
 constexpr uint8_t kCtrlData = 0x40U;
+constexpr uint8_t kCtrlContinueCmd = 0x80U; // Co=1、D/C=0，单命令后还有控制字节
 constexpr uint8_t kCmdDisplayOff = 0xAEU;
 constexpr uint8_t kCmdDisplayOn = 0xAFU;
 constexpr uint8_t kCmdDcDcCtrl = 0xADU;
 constexpr uint8_t kCmdDcDcOff = 0x8AU;
 constexpr uint8_t kCmdDcDcOn = 0x8BU;
 constexpr uint8_t kCmdPageBase = 0xB0U;
-constexpr uint8_t kPageIndexMask = 0x07U;
 constexpr uint8_t kNibbleMask = 0x0FU;
 constexpr uint8_t kColHighBase = 0x10U;
 constexpr uint8_t kCmdColLow = Sh1106::kColumnOffset & kNibbleMask;
@@ -153,40 +153,39 @@ fw::Status Sh1106::drivePowerPin(bool high) noexcept
     return fw::Status::kOk;
 }
 
-fw::Status Sh1106::writePage(uint8_t page, std::span<const uint8_t, oled::kWidth> data) noexcept
+fw::Status Sh1106::writePage(uint8_t page, size_t first, std::span<const uint8_t> data) noexcept
 {
-    // page < 8，与 kCmdPageBase (0xB0) 按位或结果仍在 1 字节内。
-    const std::array<uint8_t, 4U> pageCmd{
-        kCtrlCmd, static_cast<uint8_t>(kCmdPageBase | (page & kPageIndexMask)), kCmdColLow,
-        kCmdColHigh};
-    pageTxBuf_[0] = kCtrlData;
-    const auto payload = std::span{pageTxBuf_}.subspan(1U);
+    // 页号 < 8，首列加屏幕偏移后 < 132。
+    const size_t column = first + kColumnOffset;
+    const std::array<uint8_t, kPageHeaderBytes> header{
+        kCtrlContinueCmd, static_cast<uint8_t>(kCmdPageBase | page),
+        kCtrlContinueCmd, static_cast<uint8_t>(column & kNibbleMask),
+        kCtrlContinueCmd, static_cast<uint8_t>(kColHighBase | (column >> 4U)),
+        kCtrlData};
+    std::memcpy(pageTxBuf_.data(), header.data(), header.size());
+    const auto payload = std::span{pageTxBuf_}.subspan(kPageHeaderBytes);
     std::memcpy(payload.data(), data.data(), data.size());
+    const size_t bytes = header.size() + data.size();
 
+    const int64_t ioStartUs = esp_timer_get_time();
     esp_err_t err = ESP_OK;
+    bool locked = false;
     {
         const i2c::BusLock guard;
-        if (!guard.locked()) {
-            return fw::Status::kBusy;
+        locked = guard.locked();
+        if (locked) {
+            err = i2c_master_transmit(dev_, pageTxBuf_.data(), bytes,
+                                      static_cast<int>(kPageTimeoutBudgetMs));
         }
-        constexpr int64_t kUsPerMs = 1000LL;
-        constexpr int64_t kBudgetUs = static_cast<int64_t>(kPageTimeoutBudgetMs) * kUsPerMs;
-        const int64_t lockStartUs = esp_timer_get_time();
-        err = i2c_master_transmit(dev_, pageCmd.data(), pageCmd.size(),
-                                  static_cast<int>(kPageTimeoutBudgetMs));
-        if (err == ESP_OK) {
-            const int64_t afterCmdUs = esp_timer_get_time();
-            const int64_t elapsedUs = (afterCmdUs > lockStartUs) ? (afterCmdUs - lockStartUs) : 0LL;
-            const int64_t remUs = kBudgetUs - elapsedUs;
-            if (remUs < kUsPerMs) {
-                // 剩余预算不足 1 ms，避免向 IDF 传入零超时。
-                err = ESP_ERR_TIMEOUT;
-            } else {
-                const int dataTimeoutMs = static_cast<int>(remUs / kUsPerMs);
-                err =
-                    i2c_master_transmit(dev_, pageTxBuf_.data(), pageTxBuf_.size(), dataTimeoutMs);
-            }
-        }
+    }
+    // 单页阻塞等待有界，最多 8 页累计，差值在 uint32_t 微秒范围内。
+    lastIoUs_ += static_cast<uint32_t>(esp_timer_get_time() - ioStartUs);
+    if (!locked) {
+        return fw::Status::kBusy;
+    }
+    if (err == ESP_OK) {
+        // 一轮最多 8 × 135 字节。
+        lastTxBytes_ += static_cast<uint16_t>(bytes);
     }
     return finishTransfer(err);
 }
@@ -222,7 +221,7 @@ fw::Status Sh1106::configurePanel() noexcept
     // 开显示前清空 8 页显存，避免上电花屏。
     constexpr std::array<uint8_t, oled::kWidth> kZeroPage{};
     for (uint8_t page = 0U; page < oled::kPages; ++page) {
-        const fw::Status st = writePage(page, kZeroPage);
+        const fw::Status st = writePage(page, 0U, kZeroPage);
         if (!fw::isOk(st)) {
             return st;
         }
@@ -257,6 +256,8 @@ void Sh1106::resetForInit(const OledPins &pins) noexcept
     consecutiveErrors_ = 0U;
     backoffSkips_ = 0U;
     lastDirtyPages_ = 0U;
+    lastTxBytes_ = 0U;
+    lastIoUs_ = 0U;
     totalDirtyPages_ = 0U;
     i2cErrors_ = 0U;
     lastInitStage_ = OledInitStage::kNone;
@@ -356,6 +357,8 @@ Sh1106FlushResult Sh1106::flush(const ScreenBuff &fb, bool forceFull,
                                 std::optional<uint32_t> deadlineMs) noexcept
 {
     lastDirtyPages_ = 0U;
+    lastTxBytes_ = 0U;
+    lastIoUs_ = 0U;
     if (!present_ || poweredOff_ || (dev_ == nullptr)) {
         return Sh1106FlushResult::kDisabled;
     }
@@ -366,22 +369,20 @@ Sh1106FlushResult Sh1106::flush(const ScreenBuff &fb, bool forceFull,
         return Sh1106FlushResult::kBackoff;
     }
 
-    std::array<uint64_t, oled::kPages> hashes{};
-    const uint8_t dirtyMask = tracker_.computeDirtyMask(fb, hashes, forceFull);
-    if (dirtyMask == 0U) {
-        return Sh1106FlushResult::kSkipped;
-    }
-
     for (uint8_t page = 0U; page < oled::kPages; ++page) {
-        if ((dirtyMask & static_cast<uint8_t>(1U << page)) == 0U) {
+        const std::span<const uint8_t, oled::kWidth> data{fb[page]};
+        oled::FrameTracker::PageHashes hashes{};
+        const auto dirty = tracker_.dirtyColumns(page, data, hashes, forceFull);
+        if (dirty.first == dirty.end) {
             continue;
         }
         if (deadlineMs.has_value() && static_cast<int32_t>(rtos::nowMs() - *deadlineMs) >= 0) {
             return Sh1106FlushResult::kInterrupted;
         }
-        const fw::Status st = writePage(page, std::span<const uint8_t, oled::kWidth>{fb[page]});
+        const fw::Status st =
+            writePage(page, dirty.first, data.subspan(dirty.first, dirty.end - dirty.first));
         if (fw::isOk(st)) {
-            tracker_.commitPage(page, hashes[page]);
+            tracker_.commitPage(page, hashes);
             ++lastDirtyPages_;
             ++totalDirtyPages_;
             continue;
@@ -400,6 +401,9 @@ Sh1106FlushResult Sh1106::flush(const ScreenBuff &fb, bool forceFull,
             backoffSkips_ = (rawSkips < kMaxErrorBackoffTicks) ? rawSkips : kMaxErrorBackoffTicks;
         }
         return Sh1106FlushResult::kError;
+    }
+    if (lastDirtyPages_ == 0U) {
+        return Sh1106FlushResult::kSkipped;
     }
     consecutiveErrors_ = 0U;
     backoffSkips_ = 0U;
