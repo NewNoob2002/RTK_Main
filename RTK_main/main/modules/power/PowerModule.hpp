@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include "board/PowerLogic.hpp"
@@ -218,10 +219,11 @@ private:
 
     /**
      * @brief 计算当前关机阶段的已完成里程碑位掩码（供 OLED 关机进度页只读消费）
+     * @param pins: 当前供电检测结果
      * @retval ShutdownDoneBit 组合掩码，空闲态为 0
      * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
      */
-    [[nodiscard]] uint8_t computeShutdownDoneMask() const noexcept;
+    [[nodiscard]] uint8_t computeShutdownDoneMask(const PinLevels &pins) const noexcept;
 
     /**
      * @brief 计算当前关机阶段的降级结果位掩码（超时/外设安全电平失败，与完成位独立）
@@ -252,6 +254,30 @@ private:
     void waitOledFinalFrame(TaskHandle_t self) noexcept;
 
     /**
+     * @brief 确认当前阶段已显示足够久，屏幕故障时按有界等待降级
+     * @param nowMs: 当前单调时间
+     * @param stage: 正在呈现的阶段
+     * @retval 是否可继续推进
+     */
+    [[nodiscard]] bool shutdownStageVisible(uint32_t nowMs, board::ShutdownStage stage) noexcept;
+
+    /**
+     * @brief 确认终帧已停留足够久或刷出截止已到
+     * @param nowMs: 当前单调时间
+     * @param flushDeadlineMs: 最晚等到终帧写出的绝对时间
+     * @param usb: true 检查 USB 重启终帧，false 检查电池断电终帧
+     * @retval 是否放行断电或重启
+     */
+    [[nodiscard]] bool finalFrameReady(uint32_t nowMs, uint32_t flushDeadlineMs, bool usb) noexcept;
+
+    /**
+     * @brief 推进日志排空及 USB 终帧停留，条件满足后重启
+     * @param nowMs: 当前单调时间
+     * @retval 执行器无需加速轮询
+     */
+    [[nodiscard]] bool pollRestart(uint32_t nowMs) noexcept;
+
+    /**
      * @brief 供 UiEventBus 终帧刷出后调用的非阻塞重启唤醒钩子
      * @param ctx: 未使用
      * @note 由 OLED 任务调用，不阻塞，非 ISR。
@@ -280,6 +306,10 @@ private:
     uint32_t restartStartMs_ = 0U;
     bool restartLogReady_ = false;
     uint32_t oledWaitDeadlineMs_ = 0U;
+    uint32_t stageEnteredMs_ = 0U;
+    std::optional<uint32_t> stageOnScreenMs_{};
+    std::optional<uint32_t> finalHoldDeadlineMs_{};
+    bool finalFrameReady_ = false;
     bool saveFencesDone_ = false;
     bool saveFlushedDone_ = false;
     bool saveTimedOut_ = false;

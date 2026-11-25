@@ -1488,6 +1488,37 @@ void testIdleAbortAndExitGgaGate()
     s_ctx.web.unbindStorage();
 }
 
+/** @brief OLED 退出共用 Web bye 排空和 BT 重启，并保留持久化前置检查。 */
+void testOledExit()
+{
+    resetHarness();
+    assert(simulateIdfV61WsHandshake(1004) == ESP_OK);
+    simulateWifiEvent(WIFI_EVENT_AP_STACONNECTED);
+    assert(s_ctx.web.wifiStationCount() == 1U);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    s_httpd.sent.clear();
+    s_ctx.data.ggaGatePersist.store(app::data::GgaGatePersist::kFailed, std::memory_order_release);
+    assert(!s_ctx.web.requestOledExit(s_nowMs)); // 替身未启动 Io 执行器，不能冲刷。
+    s_ctx.data.ggaGatePersist.store(app::data::GgaGatePersist::kClean, std::memory_order_release);
+    assert(s_ctx.web.requestOledExit(s_nowMs));
+    assert(!s_ctx.web.requestOledExit(s_nowMs));
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.back().payload == R"({"t":"bye","reason":"exit"})");
+    assert(s_rebootCalls == 0);
+    s_catchReboot = true;
+    if (setjmp(s_rebootJmp) == 0) {
+        s_nowMs += 1000U;
+        static_cast<void>(s_ctx.web.poll(s_nowMs));
+        assert(false && "expected OLED exit to switch to Bluetooth");
+    }
+    s_catchReboot = false;
+    assert(s_rebootCalls == 1 && s_lastRadioMode == app::RadioMode::kBluetooth);
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
 /** @brief 关机屏蔽 Web exit，HTTP 任务静默 SoftAP 并在关机回退后恢复。 */
 void testShutdownArbitrationAndSoftApResume()
 {
@@ -2178,6 +2209,7 @@ int main()
     testFramingAndConfigBeforeAck();
     testSessionGenAndBackpressure();
     testIdleAbortAndExitGgaGate();
+    testOledExit();
     testShutdownArbitrationAndSoftApResume();
     testCapsUpdates();
     testGnssCutoffRealBackend();

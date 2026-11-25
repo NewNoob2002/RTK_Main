@@ -95,6 +95,7 @@ foreach(policy concurrent preempt)
         power_battery_read_failure power_low_battery_unknown_usb power_low_battery_standby
         power_battery_median power_battery_freshness power_oled_usb_preempt_before_deadline
         power_oled_usb_preempt_across_deadline
+        power_oled_battery_final_flush power_oled_battery_final_timeout
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window web_s2_storage_bt device_name device_name_e1 device_name_unknown)
@@ -427,7 +428,8 @@ add_executable(oled_module_check OledModuleCheck.cpp
     ${PROJ_ROOT}/main/modules/oled/OledAnim.cpp
     ${PROJ_ROOT}/main/modules/oled/OledUi.cpp
     ${PROJ_ROOT}/main/modules/oled/OledRender.cpp
-    ${PROJ_ROOT}/main/modules/oled/OledModule.cpp)
+    ${PROJ_ROOT}/main/modules/oled/OledModule.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledActions.cpp)
 target_include_directories(oled_module_check BEFORE PRIVATE shim web_shim)
 target_include_directories(oled_module_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/main
@@ -445,7 +447,7 @@ target_compile_options(oled_module_check PRIVATE -fno-exceptions -fno-rtti -Wall
     -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 target_link_libraries(oled_module_check PRIVATE main_pure third_party_wououi gnss)
 foreach(scenario final_frame_orchestration busy_click_299_300_and_deadline_sleep
-    click_page_deadline_299 click_page_deadline_300)
+    click_page_deadline_299 click_page_deadline_300 battery_final_frame comm_actions)
     add_test(NAME oled_module_${scenario} COMMAND oled_module_check ${scenario})
 endforeach()
 
@@ -539,3 +541,12 @@ foreach(portal_mode on off)
     target_link_libraries(${web_target} PRIVATE main_pure settings web_proto gnss main_rtos)
     add_test(NAME ${web_target} COMMAND ${web_target})
 endforeach()
+
+# SDL2 是外供主机依赖。具备 SDL2 的主机门禁同时运行无窗口 UI 验收。
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(OLED_SIM_SDL2 QUIET sdl2)
+    if(OLED_SIM_SDL2_FOUND)
+        add_subdirectory(../oled_sim oled_sim_build)
+    endif()
+endif()

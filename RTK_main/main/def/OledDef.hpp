@@ -8,15 +8,17 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "board/PowerLogic.hpp"
 #include "fw/Atomic.hpp"
 namespace app {
 
-/** OLED 当前显示页面（OL2：自检、表盘、四子菜单、充电待机、关机进度）。 */
+/** OLED 当前显示页面。 */
 enum class OledPage : uint8_t {
     kSystemCheck = 0,
     kDialplate,
     kSubSat,
     kSubPos,
+    kSubComm,
     kSubDevice,
     kSubPower,
     kChargeStandby,
@@ -26,7 +28,7 @@ enum class OledPage : uint8_t {
 /**
  * @brief 取得 OLED 页面枚举的简短诊断名
  * @param page: OLED 页面枚举值
- * @retval 静态短名（system_check/dialplate/sat/pos/device/power/charge_standby/shutdown）
+ * @retval 供诊断和主机仿真使用的静态短名
  * @note 纯函数，线程/ISR 安全。
  */
 [[nodiscard]] constexpr const char *oledPageName(OledPage page) noexcept
@@ -40,6 +42,8 @@ enum class OledPage : uint8_t {
         return "sat";
     case OledPage::kSubPos:
         return "pos";
+    case OledPage::kSubComm:
+        return "comm";
     case OledPage::kSubDevice:
         return "device";
     case OledPage::kSubPower:
@@ -75,6 +79,33 @@ struct OledStatus {
 enum class UiBusFlag : uint8_t {
     kOledActive = 1U << 0U,           ///< OLED 刷新任务已启动在线
     kShutdownFinalFlushed = 1U << 1U, ///< USB 关机终帧（已关机/充电中）已刷出到 I2C
+    kBatteryFinalFlushed = 1U << 2U,  ///< 电池关机终帧已刷出
+};
+
+/** kLink 发布的蓝牙确认请求和窗口截止。id 为零时没有确认请求。 */
+struct OledPairingStatus {
+    static constexpr size_t kNameBytes = 17U;
+    static constexpr size_t kSuffixBytes = 3U;
+
+    uint32_t windowDeadlineMs = 0U;
+    uint32_t requestDeadlineMs = 0U;
+    uint32_t id = 0U;
+    uint32_t number = 0U;
+    std::array<char, kNameBytes> name{};
+    std::array<uint8_t, kSuffixBytes> suffix{};
+    bool windowOpen = false;
+    bool hasNumber = false;
+
+    /** @brief 判断新快照是否需要刷新。 */
+    [[nodiscard]] bool operator==(const OledPairingStatus &) const noexcept = default;
+};
+
+/** 由 OLED 提交给 kLink 的动作。 */
+enum class OledAction : uint8_t { kNone, kWifi, kBluetooth, kTogglePair, kPairAccept, kPairReject };
+
+struct OledActionRequest {
+    OledAction action = OledAction::kNone;
+    uint32_t pairId = 0U;
 };
 
 /**
@@ -164,38 +195,63 @@ public:
     }
 
     /**
-     * @brief 清除 USB 关机终帧已刷出标志（发起新关机或 30 s 超时取消时调用）
+     * @brief 清除关机阶段和终帧的刷出凭据
      * @note 仅 PowerModule 调用；无锁原子写，不阻塞，非 ISR。
      */
     void resetShutdownFinalFrame() noexcept
     {
-        static_cast<void>(flags_.fetch_and(~uiBusFlagBit(UiBusFlag::kShutdownFinalFlushed),
-                                           std::memory_order_release));
+        static_cast<void>(
+            flags_.fetch_and(uiBusFlagBit(UiBusFlag::kOledActive), std::memory_order_release));
     }
 
     /**
-     * @brief 标记 USB 关机终帧（已关机/充电中）已刷出到 SH1106 并立即唤醒等待重启的任务
+     * @brief 标记一次完整的中间阶段帧已刷出
+     * @param stage: 已发送的快照阶段
+     * @note OLED 任务调用，不阻塞。
+     */
+    void markShutdownStageFlushed(board::ShutdownStage stage) noexcept
+    {
+        static_cast<void>(flags_.fetch_or(shutdownStageFlag(stage), std::memory_order_release));
+    }
+
+    /**
+     * @brief 查询该中间阶段是否已显示过完整帧
+     * @param stage: 待检查的关机阶段
+     * @retval 是否已刷出
+     * @note PowerModule 调用，不阻塞。
+     */
+    [[nodiscard]] bool shutdownStageFlushed(board::ShutdownStage stage) const noexcept
+    {
+        return (flags_.load(std::memory_order_acquire) & shutdownStageFlag(stage)) != 0U;
+    }
+
+    /**
+     * @brief 标记关机终帧已刷出到 SH1106，USB 路径唤醒等待重启的任务
+     * @param usb: true 为 USB 重启终帧，false 为电池断电终帧
      * @note 仅 OLED 刷新任务在 I2C 刷出成功后调用；无锁原子写，不阻塞，非 ISR。
      */
-    void markShutdownFinalFrameFlushed() noexcept
+    void markShutdownFinalFrameFlushed(bool usb = true) noexcept
     {
-        static_cast<void>(flags_.fetch_or(uiBusFlagBit(UiBusFlag::kShutdownFinalFlushed),
-                                          std::memory_order_release));
-        if (const WakeFn fn = restartWakeFn_.load(std::memory_order_acquire); fn != nullptr) {
-            fn(restartWakeCtx_);
+        const auto flag = usb ? UiBusFlag::kShutdownFinalFlushed : UiBusFlag::kBatteryFinalFlushed;
+        static_cast<void>(flags_.fetch_or(uiBusFlagBit(flag), std::memory_order_release));
+        if (usb) {
+            if (const WakeFn fn = restartWakeFn_.load(std::memory_order_acquire); fn != nullptr) {
+                fn(restartWakeCtx_);
+            }
         }
     }
 
     /**
-     * @brief 查询 USB 关机终帧是否已刷出到面板
-     * @retval true 已刷出，PowerModule 可立即继续重启
+     * @brief 查询对应的关机终帧是否已刷出到面板
+     * @param usb: true 为 USB 重启终帧，false 为电池断电终帧
+     * @retval true 已刷出
      * @retval false 尚未刷出
      * @note 任意任务可调用，无锁原子读，不阻塞。
      */
-    [[nodiscard]] bool shutdownFinalFrameFlushed() const noexcept
+    [[nodiscard]] bool shutdownFinalFrameFlushed(bool usb = true) const noexcept
     {
-        return (flags_.load(std::memory_order_acquire) &
-                uiBusFlagBit(UiBusFlag::kShutdownFinalFlushed)) != 0U;
+        const auto flag = usb ? UiBusFlag::kShutdownFinalFlushed : UiBusFlag::kBatteryFinalFlushed;
+        return (flags_.load(std::memory_order_acquire) & uiBusFlagBit(flag)) != 0U;
     }
 
     /**
@@ -265,7 +321,43 @@ public:
         return shortKeyCount_.load(std::memory_order_acquire);
     }
 
+    /**
+     * @brief 把用户确认的动作交给 kLink。
+     * @param request: 动作及请求序号。
+     * @retval 是否成功入队。
+     * @note 仅 OLED 生产者调用，不阻塞。
+     */
+    [[nodiscard]] bool submitAction(OledActionRequest request) noexcept
+    {
+        if (actionPending_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        action_ = request;
+        actionPending_.store(true, std::memory_order_release);
+        return true;
+    }
+
+    /** @brief 取走 OLED 动作。 @retval 无动作时返回空值。 @note 仅 kLink 消费者调用。 */
+    [[nodiscard]] OledActionRequest takeAction() noexcept
+    {
+        if (!actionPending_.load(std::memory_order_acquire)) {
+            return {};
+        }
+        const auto request = action_;
+        actionPending_.store(false, std::memory_order_release);
+        return request;
+    }
+
 private:
+    /**
+     * @brief 映射关机阶段到 UiBusFlag 之后的独立位
+     * @param stage: 关机阶段枚举
+     * @retval 对应掩码
+     */
+    [[nodiscard]] static constexpr uint32_t shutdownStageFlag(board::ShutdownStage stage) noexcept
+    {
+        return 8U << static_cast<uint8_t>(stage);
+    }
     static_assert((kShortKeyQueueCap & kShortKeyQueueMask) == 0U, "短按队列容量须为 2 的幂");
     static_assert(fw::kAtomicUsable<uint32_t>, "UI 事件原子须无锁");
     static_assert(fw::kAtomicUsable<WakeFn>, "UI 唤醒钩子指针原子须无锁");
@@ -279,6 +371,8 @@ private:
     void *wakeCtx_ = nullptr;
     std::atomic<WakeFn> restartWakeFn_{nullptr};
     void *restartWakeCtx_ = nullptr;
+    OledActionRequest action_{};
+    std::atomic<bool> actionPending_{false};
 };
 
 } // namespace app

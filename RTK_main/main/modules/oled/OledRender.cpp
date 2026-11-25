@@ -18,19 +18,13 @@ constexpr char kMinPrintableAscii = ' ';
 constexpr char kMaxPrintableAscii = '~';
 constexpr uint8_t kMaxPercent = 100U;
 constexpr uint16_t kCmPerMeter = 100U;
-constexpr uint16_t kExpandRevealHalf = kEaseScale / 2U;
 
 // 通用顶栏/布局像素常量。
 constexpr int16_t kHeaderTextY = 1;
 constexpr int16_t kHeaderLineY = 11;
-constexpr int16_t kDockStartX = 2;
-constexpr int16_t kDockStepX = 32;
-constexpr int16_t kDockIconOffsetX = 7; // (28 - 14) / 2
-constexpr int16_t kDockY = 44;
-constexpr int16_t kDockW = 28;
-constexpr int16_t kDockH = 19;
+constexpr int16_t kDockIconOffsetX = 4; // (24 - 16) / 2
 constexpr int16_t kDockIconY = 46;
-constexpr int16_t kDockIconSize = 14;
+constexpr int16_t kDockIconSize = 16;
 constexpr uint8_t kDockCornerR = 3U;
 constexpr int16_t kParallaxShiftPx = 42;
 constexpr size_t kRollBufBytes = 12U;
@@ -123,6 +117,25 @@ constexpr int16_t kSubPwrFillY = 38;
 constexpr int16_t kSubPwrFillH = 6;
 constexpr uint32_t kSubPwrFillMaxW = 108U;
 constexpr int16_t kSubPwrChgY = 52;
+
+// 通信页菜单按显示行排列，确认弹窗为整屏描边。
+constexpr int16_t kCommTextX = 6;
+constexpr int16_t kCommStatusY = 13;
+constexpr int16_t kCommWifiClientsY = 23;
+constexpr int16_t kCommWifiModeY = 36;
+constexpr int16_t kCommWifiBackY = 49;
+constexpr int16_t kCommBtModeY = 26;
+constexpr int16_t kCommPairWindowY = 38;
+constexpr int16_t kCommBtBackY = 50;
+constexpr int16_t kCommItemH = 11;
+constexpr uint8_t kCommModalR = 3U;
+constexpr int16_t kWifiModalTitleY = 9;
+constexpr int16_t kWifiModalWarningY = 26;
+constexpr int16_t kWifiModalControlsY = 49;
+constexpr int16_t kPairModalTitleY = 7;
+constexpr int16_t kPairModalPeerY = 18;
+constexpr int16_t kPairModalNumberY = 29;
+constexpr int16_t kPairModalControlsY = 51;
 
 // 充电待机与关机页像素常量。
 constexpr int16_t kStandbyPctX = 14;
@@ -534,22 +547,17 @@ void renderDialplate(Canvas &canvas, const UiRenderState &state, const ViewModel
     drawText(canvas, kDialInfoX, kDialInfoBotY, Font_6_8, viewOf(rightBot));
 
     const std::array<const uint8_t *, kDockItemCount> kDockIcons{
-        icons::kDockSat14x14.data(),
-        icons::kDockPos14x14.data(),
-        icons::kDockDev14x14.data(),
-        icons::kDockPwr14x14.data(),
+        icons::kDockSat16x16.data(), icons::kDockPos16x16.data(), icons::kDockComm16x16.data(),
+        icons::kDockDev16x16.data(), icons::kDockPwr16x16.data(),
     };
     for (uint8_t i = 0U; i < kDockItemCount; ++i) {
-        // i < 4，坐标位于 9..105，转 int16_t 安全。
+        // i < 5，坐标位于 6..106，转 int16_t 安全。
         const auto iconX = static_cast<int16_t>(
             kDockStartX + (static_cast<int16_t>(i) * kDockStepX) + kDockIconOffsetX);
         WouoUI_CanvasDrawBMP(&canvas, iconX, kDockIconY, kDockIconSize, kDockIconSize,
                              kDockIcons[i], 1U);
     }
     WouoUI_CanvasDrawRBoxEmpty(&canvas, state.dockFocusX, kDockY, kDockW, kDockH, kDockCornerR);
-    WouoUI_CanvasDrawBoxRightAngle(
-        &canvas, static_cast<int16_t>(state.dockFocusX + 1), static_cast<int16_t>(kDockY + 1),
-        static_cast<int16_t>(kDockW - 2), static_cast<int16_t>(kDockH - 2), kDockCornerR);
 }
 
 /**
@@ -852,7 +860,7 @@ void drawShutdownSteps(Canvas &canvas, const ViewModel &vm) noexcept
     drawText(canvas, kShutRightX, kShutStepsY, Font_6_8, viewOf(steps));
 }
 /**
- * @brief 渲染关机进度页（左侧定点圆环进度 + 右侧阶段文案、进度条与 USB 终帧文案）
+ * @brief 渲染关机进度、断电终帧或 USB 重启终帧
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -862,10 +870,13 @@ void renderShutdown(Canvas &canvas, const UiRenderState &state, const ViewModel 
 {
     const bool usbFinal =
         (vm.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) != 0U;
-    const char *title =
-        usbFinal ? "POWERED OFF"
-                 : ((vm.shutdownReason == board::ShutdownReason::kLowBattery) ? "BATTERY LOW!"
-                                                                              : "SHUTTING DOWN");
+    const bool batteryFinal =
+        (vm.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady)) !=
+        0U;
+    const char *title = usbFinal ? "RESTARTING" : (batteryFinal ? "POWER OFF" : "SHUTTING DOWN");
+    if (!usbFinal && !batteryFinal && vm.shutdownReason == board::ShutdownReason::kLowBattery) {
+        title = "BATTERY LOW!";
+    }
     drawCentered(canvas, kHeaderTextY, Font_6_8, title);
     WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
 
@@ -903,6 +914,90 @@ void renderShutdown(Canvas &canvas, const UiRenderState &state, const ViewModel 
 }
 
 /**
+ * @brief 绘制一条通信菜单，描边标识选中项。
+ * @param canvas: 目标画布。
+ * @param y: 文本纵坐标。
+ * @param text: 菜单项文字。
+ * @param selected: 是否选中。
+ */
+void drawCommItem(Canvas &canvas, int16_t y, std::string_view text, bool selected) noexcept
+{
+    if (selected) {
+        WouoUI_CanvasDrawRBoxEmpty(&canvas, 2, static_cast<int16_t>(y - 2), kCanvasW - 4,
+                                   kCommItemH, 2U);
+    }
+    drawText(canvas, kCommTextX, y, Font_6_8, text);
+}
+
+/**
+ * @brief 绘制当前射频、连接状态和可操作的通信菜单。
+ * @param canvas: 目标画布。
+ * @param state: 菜单选中位置与时钟。
+ * @param vm: 连接与配对快照。
+ */
+void renderComm(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+{
+    drawCentered(canvas, kHeaderTextY, Font_6_8, "COMM");
+    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
+    std::array<char, kMaxLineChars + 1U> line{};
+    if (vm.radioMode == RadioMode::kWifiConfig) {
+        static_cast<void>(std::snprintf(line.data(), line.size(), "CLIENTS %u",
+                                        static_cast<unsigned>(vm.wifiClients)));
+        drawText(canvas, kCommTextX, kCommStatusY, Font_6_8,
+                 vm.wifiReady ? viewOf(vm.wifiSsid) : "AP OFFLINE");
+        drawText(canvas, kCommTextX, kCommWifiClientsY, Font_6_8, viewOf(line));
+        drawCommItem(canvas, kCommWifiModeY, "MODE: WIFI > BT", state.commSelected == 0U);
+        drawCommItem(canvas, kCommWifiBackY, "BACK", state.commSelected != 0U);
+        return;
+    }
+    static_cast<void>(std::snprintf(line.data(), line.size(), "BT CONNECTED %u",
+                                    static_cast<unsigned>(vm.btSessions)));
+    drawText(canvas, kCommTextX, kCommStatusY, Font_6_8, viewOf(line));
+    drawCommItem(canvas, kCommBtModeY, vm.wifiSupported ? "MODE: BT > WIFI" : "MODE: BT",
+                 state.commSelected == 0U);
+    const int32_t remaining = static_cast<int32_t>(vm.pairing.windowDeadlineMs - state.nowMs);
+    if (vm.pairing.windowOpen && remaining > 0) {
+        const unsigned seconds = (static_cast<uint32_t>(remaining) - 1U) / kMsPerSec + 1U;
+        static_cast<void>(std::snprintf(line.data(), line.size(), "PAIR %us: CLOSE", seconds));
+    } else {
+        sanitizeCopy("PAIR WINDOW: OPEN", line);
+    }
+    drawCommItem(canvas, kCommPairWindowY, viewOf(line), state.commSelected == 1U);
+    drawCommItem(canvas, kCommBtBackY, "BACK", state.commSelected == 2U);
+}
+
+/**
+ * @brief 绘制允许用户确认或取消的配对及 Wi-Fi 弹窗。
+ * @param canvas: 目标画布。
+ * @param modal: 当前弹窗类型。
+ * @param vm: 待确认的快照。
+ */
+void renderCommModal(Canvas &canvas, UiModal modal, const ViewModel &vm) noexcept
+{
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, 1, 1, kCanvasW - 2, kCanvasH - 2, kCommModalR);
+    if (modal == UiModal::kWifiConfirm) {
+        drawCentered(canvas, kWifiModalTitleY, Font_6_8, "SWITCH TO WIFI?");
+        drawCentered(canvas, kWifiModalWarningY, Font_6_8, "BT WILL DISCONNECT");
+        drawCentered(canvas, kWifiModalControlsY, Font_6_8, "1 CANCEL  2 CONFIRM");
+        return;
+    }
+    drawCentered(canvas, kPairModalTitleY, Font_6_8, "PAIR REQUEST");
+    const auto &pair = vm.pairing;
+    std::array<char, kShortBufBytes> peer{};
+    static_cast<void>(std::snprintf(
+        peer.data(), peer.size(), "%02X:%02X:%02X", static_cast<unsigned>(pair.suffix[0]),
+        static_cast<unsigned>(pair.suffix[1]), static_cast<unsigned>(pair.suffix[2])));
+    drawCentered(canvas, kPairModalPeerY, Font_6_8,
+                 pair.name[0] != '\0' ? viewOf(pair.name) : viewOf(peer));
+    if (pair.hasNumber) {
+        static_cast<void>(
+            std::snprintf(peer.data(), peer.size(), "%06u", static_cast<unsigned>(pair.number)));
+        drawCentered(canvas, kPairModalNumberY, Font_8_16, viewOf(peer));
+    }
+    drawCentered(canvas, kPairModalControlsY, Font_6_8, "1 REJECT  2 ACCEPT");
+}
+
+/**
  * @brief 将指定页面绘制到任意偏移与剪裁画布
  * @param canvas: 目标画布
  * @param page: 目标页面枚举
@@ -925,6 +1020,9 @@ void renderPageInto(Canvas &canvas, OledPage page, const UiRenderState &state,
         break;
     case OledPage::kSubPos:
         renderSubPos(canvas, vm);
+        break;
+    case OledPage::kSubComm:
+        renderComm(canvas, state, vm);
         break;
     case OledPage::kSubDevice:
         renderSubDevice(canvas, vm);
@@ -955,7 +1053,8 @@ void renderSlideLeft(const PageTransition &trans, const UiRenderState &state,
                      const ViewModel &vm) noexcept
 {
     const uint16_t prog = trans.progressQ10(state.nowMs);
-    const int16_t newX = lerpFixed(kCanvasW, 0, prog);
+    const auto pose = trans.pose(state.nowMs, {0, 0, kCanvasW, kCanvasH});
+    const int16_t newX = pose.viewport.x;
     const int16_t oldX = lerpFixed(0, -kParallaxShiftPx, prog);
 
     Canvas oldCanvas{.start_x = oldX, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
@@ -970,7 +1069,10 @@ void renderSlideLeft(const PageTransition &trans, const UiRenderState &state,
         WouoUI_CanvasDrawLine_V(&full, newX, 0, static_cast<int16_t>(kCanvasH - 1));
     }
 
-    Canvas newCanvas{.start_x = newX, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
+    Canvas newCanvas{.start_x = newX,
+                     .start_y = pose.contentOffsetY,
+                     .w = kCanvasW,
+                     .h = static_cast<int16_t>(kCanvasH - pose.contentOffsetY)};
     renderPageInto(newCanvas, trans.toPage, state, vm);
 }
 
@@ -985,27 +1087,25 @@ void renderIconMorph(const PageTransition &trans, const UiRenderState &state,
                      const ViewModel &vm) noexcept
 {
     const bool expanding = (trans.kind == TransitionKind::kExpandFromIcon);
-    const uint16_t rawProg = trans.progressQ10(state.nowMs);
-    const uint16_t openProg = expanding ? rawProg : static_cast<uint16_t>(kEaseScale - rawProg);
+    const auto pose = trans.pose(state.nowMs, {0, 0, kCanvasW, kCanvasH});
+    const auto [x, y, w, h] = pose.viewport;
 
     Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
     renderPageInto(full, OledPage::kDialplate, state, vm);
-
-    const int16_t x = lerpFixed(trans.iconRect.x, 0, openProg);
-    const int16_t y = lerpFixed(trans.iconRect.y, 0, openProg);
-    const int16_t w = lerpFixed(trans.iconRect.w, kCanvasW, openProg);
-    const int16_t h = lerpFixed(trans.iconRect.h, kCanvasH, openProg);
 
     WouoUI_GraphSetPenColor(0U);
     WouoUI_CanvasDrawRBox(&full, x, y, w, h, 2U);
     WouoUI_GraphSetPenColor(1U);
 
-    if (openProg >= kExpandRevealHalf) {
-        Canvas subCanvas{.start_x = x, .start_y = y, .w = w, .h = h};
-        const OledPage subPage = expanding ? trans.toPage : trans.fromPage;
-        renderPageInto(subCanvas, subPage, state, vm);
+    Canvas subCanvas{.start_x = x,
+                     .start_y = static_cast<int16_t>(y + pose.contentOffsetY),
+                     .w = w,
+                     .h = static_cast<int16_t>(h - pose.contentOffsetY)};
+    const OledPage subPage = expanding ? trans.toPage : trans.fromPage;
+    renderPageInto(subCanvas, subPage, state, vm);
+    if (w < kCanvasW || h < kCanvasH) {
+        WouoUI_CanvasDrawRBoxEmpty(&full, x, y, w, h, 2U);
     }
-    WouoUI_CanvasDrawRBoxEmpty(&full, x, y, w, h, 2U);
 }
 
 } // namespace
@@ -1019,7 +1119,10 @@ void renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb) n
     WouoUI_BuffClear();
 
     const PageTransition *trans = state.transition;
-    if ((trans != nullptr) && (trans->kind == TransitionKind::kSlideLeft)) {
+    if (state.modal != UiModal::kNone) {
+        Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
+        renderCommModal(full, state.modal, vm);
+    } else if ((trans != nullptr) && (trans->kind == TransitionKind::kSlideLeft)) {
         renderSlideLeft(*trans, state, vm);
     } else if ((trans != nullptr) && ((trans->kind == TransitionKind::kExpandFromIcon) ||
                                       (trans->kind == TransitionKind::kCollapseToIcon))) {

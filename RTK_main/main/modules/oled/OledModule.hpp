@@ -97,6 +97,9 @@ public:
      */
     [[nodiscard]] fw::Result start() noexcept;
 
+    /** @brief 在 kLink 发布配对快照并执行 OLED 动作。 @param nowMs: 当前单调时间。 @retval 无积压。 */
+    [[nodiscard]] bool poll(uint32_t nowMs) noexcept;
+
     /**
      * @brief 查询低优先级 OLED 刷新任务是否已创建
      * @retval true 已创建
@@ -109,6 +112,11 @@ public:
     }
 
 private:
+    /** @brief 发布当前配对窗口和待确认请求。 @param nowMs: 当前单调时间。 @note 仅 kLink。 */
+    void publishPairing(uint32_t nowMs) noexcept;
+
+    /** @brief 分派确认后的动作。 @param request: UI 请求。 @param nowMs: 当前单调时间。 @note 仅 kLink。 */
+    void applyAction(OledActionRequest request, uint32_t nowMs) noexcept;
     /**
      * @brief OLED 静态任务入口函数
      * @param arg: OledModule 实例指针
@@ -137,6 +145,14 @@ private:
      * @note 仅 init 或 oled 任务串行调用，非 ISR。
      */
     [[nodiscard]] uint32_t refreshOnce(uint32_t nowMs, bool forceFull) noexcept;
+
+    /**
+     * @brief 记入本次刷屏结果、耗时与 FPS 采样。
+     * @param nowMs: 本轮刷新起始的单调时间（ms）。
+     * @param frameUs: 采集快照到发送完成的耗时（µs）。
+     * @param i2cUs: 发送耗时（µs）。
+     */
+    void updateFrameStats(uint32_t nowMs, uint32_t frameUs, int64_t i2cUs) noexcept;
 
     /**
      * @brief 在状态变化时发布 OLED 诊断快照到 DataCenter

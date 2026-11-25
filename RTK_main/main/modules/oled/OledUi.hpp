@@ -32,7 +32,12 @@ inline constexpr size_t kSnBufBytes = 24U;        // B，序列号缓冲
 inline constexpr size_t kDevNameBufBytes = 24U;   // B，蓝牙/Wi-Fi 广播名缓冲
 inline constexpr size_t kGnssFwBufBytes = 20U;    // B，GNSS 固件版本短串缓冲
 inline constexpr size_t kCheckItemCount = 5U;     // 自检项数：PWR/NVS/RF/CHG/GNSS
-inline constexpr size_t kDockItemCount = 4U;      // 表盘入口数：SAT/POS/DEV/PWR
+inline constexpr size_t kDockItemCount = 5U;      // SAT/POS/COMM/DEV/PWR
+inline constexpr int16_t kDockStartX = 2;
+inline constexpr int16_t kDockStepX = 25;
+inline constexpr int16_t kDockY = 44;
+inline constexpr int16_t kDockW = 24;
+inline constexpr int16_t kDockH = 19;
 inline constexpr size_t kConstellationSlots = 4U; // 卫星子菜单主星座数：GPS/BDS/GLO/GAL
 inline constexpr size_t kTopSnrBars = 8U;         // 卫星子菜单 CN0 条数量
 
@@ -58,6 +63,7 @@ struct ViewModel {
     std::array<char, kFwVerBufBytes> fwVer{};
     std::array<char, kSnBufBytes> sn{};
     std::array<char, kDevNameBufBytes> deviceName{};
+    std::array<char, kDevNameBufBytes> wifiSsid{};
     std::array<char, kGnssFwBufBytes> gnssFwVer{};
     uint32_t uptimeMs = 0U;
     board::BootMode bootMode = board::BootMode::kNormal;
@@ -65,6 +71,9 @@ struct ViewModel {
     bool nvsReady = false;
     bool btReady = false;
     bool wifiReady = false;
+    bool wifiSupported = false;
+    uint8_t wifiClients = 0U;
+    OledPairingStatus pairing{};
     uint8_t btSessions = 0U;
     bool powerActive = false;
     bool batteryAdcReady = false;
@@ -277,7 +286,10 @@ struct UiDecision {
     bool hasClickDeadline = false;       // 存在待判双击窗口绝对截止
     uint32_t clickDeadlineMs = 0U;       // 待判双击窗口绝对截止时刻（ms）
     uint32_t nextWaitMs = kIdlePollPeriodMs;
+    OledActionRequest action{};
 };
+
+enum class UiModal : uint8_t { kNone, kWifiConfirm, kPair };
 /** 供渲染器只读读取的完整 UI 瞬时渲染状态。 */
 struct UiRenderState {
     OledPage page = OledPage::kSystemCheck;
@@ -286,6 +298,8 @@ struct UiRenderState {
     uint8_t satSubTab = 0U;
     bool hasCheckWarning = false;
     uint8_t shutdownPct = 0U;
+    uint8_t commSelected = 0U;
+    UiModal modal = UiModal::kNone;
     uint32_t nowMs = 0U;
     const SystemCheckSm *checkSm = nullptr;
     const PageTransition *transition = nullptr;
@@ -394,6 +408,29 @@ private:
      */
     void handleClick(ClickEvent click, uint32_t nowMs, const ViewModel &vm) noexcept;
 
+    /** @brief 返回表盘并启动与进入对应的收回过渡。 @param nowMs: 当前时间。 */
+    void leaveSubmenu(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 确认弹窗与通信菜单消费一个已判定的点击。
+     * @param click: 点击类型。
+     * @param nowMs: 当前单调时间。
+     * @param vm: 只读视图数据。
+     * @retval 要交给 kLink 的动作或空值。
+     */
+    [[nodiscard]] OledActionRequest handleCommClick(ClickEvent click, uint32_t nowMs,
+                                                    const ViewModel &vm) noexcept;
+
+    /**
+     * @brief 对当前弹窗和页面消费按键，先处理已入队的生产时间戳。
+     * @param nowMs: 当前单调时间。
+     * @param times: 待处理的短按时间戳。
+     * @param vm: 只读视图数据。
+     * @retval 本轮提交的动作。
+     */
+    [[nodiscard]] OledActionRequest handleInput(uint32_t nowMs, std::span<const uint32_t> times,
+                                                const ViewModel &vm) noexcept;
+
     /**
      * @brief 计算表盘底部指定入口图标的屏幕矩形
      * @param idx: 入口下标（0..3）
@@ -418,6 +455,10 @@ private:
     uint32_t lastStepMs_ = 0U;
     bool inShutdown_ = false;
     bool hasWarning_ = false;
+    uint8_t commSelected_ = 0U;
+    bool wifiConfirm_ = false;
+    bool pairDecisionSent_ = false;
+    uint32_t pairDialogId_ = 0U;
     ClickDetector click_{};
     SystemCheckSm checkSm_{};
     PageTransition transition_{};

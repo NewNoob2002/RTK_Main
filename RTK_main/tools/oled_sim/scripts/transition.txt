@@ -1,0 +1,13 @@
+# Open and close the furthest dock item at the default 33 ms frame interval.
+0 scene 2
+3000 check dialplate
+3050 short
+3450 short
+3850 short
+4250 short
+4700 short
+4800 short
+5220 check power
+5500 short
+5600 short
+6020 check dialplate

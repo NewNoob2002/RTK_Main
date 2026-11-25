@@ -15,6 +15,25 @@ constexpr int32_t kMsPerSec = 1000;
 constexpr int32_t kHalfScale = FixedSpring::kScale / 2;
 constexpr uint32_t kEaseCubeShift = 20U; // 1024^3 >> 20 == 1024
 
+/**
+ * @brief Q10 三次缓入缓出，上半段镜像下半段，保证整数对称。
+ * @param elapsed: 已经过的时间（ms）。
+ * @param duration: 动画总时长（ms）。
+ * @retval 0..1024 的进度。
+ */
+[[nodiscard]] uint16_t easeInOutCubic(uint32_t elapsed, uint32_t duration) noexcept
+{
+    if (elapsed >= duration) {
+        return kEaseScale;
+    }
+    const uint32_t mirrorMs = std::min(elapsed, duration - elapsed);
+    const uint32_t t =
+        static_cast<uint32_t>(static_cast<uint64_t>(mirrorMs) * kEaseScale / duration);
+    // t <= 512，4*t^3 在 uint32_t 范围内，进度 <= 1024。
+    const uint32_t half = (4U * t * t * t) >> kEaseCubeShift;
+    return static_cast<uint16_t>(elapsed > duration / 2U ? kEaseScale - half : half);
+}
+
 } // namespace
 
 void ClickDetector::reset() noexcept
@@ -247,7 +266,30 @@ uint16_t PageTransition::progressQ10(uint32_t nowMs) const noexcept
     if (kind == TransitionKind::kNone) {
         return kEaseScale;
     }
-    return easeOutCubic(nowMs - startMs, durationMs);
+    return easeInOutCubic(nowMs - startMs, durationMs);
+}
+
+TransitionPose PageTransition::pose(uint32_t nowMs, Rect screen) const noexcept
+{
+    if (kind == TransitionKind::kNone) {
+        return {.viewport = screen};
+    }
+    const uint32_t elapsed = std::min(nowMs - startMs, durationMs);
+    const uint32_t openMs =
+        kind == TransitionKind::kCollapseToIcon ? durationMs - elapsed : elapsed;
+    const uint16_t p = easeInOutCubic(openMs, durationMs);
+    const uint32_t contentMs = openMs > kContentStaggerMs ? openMs - kContentStaggerMs : 0U;
+    const uint32_t contentDuration =
+        durationMs > kContentStaggerMs ? durationMs - kContentStaggerMs : 0U;
+    const int16_t lift =
+        lerpFixed(kTransitionContentLiftPx, 0, easeInOutCubic(contentMs, contentDuration));
+    if (kind == TransitionKind::kSlideLeft) {
+        return {.viewport = {lerpFixed(screen.w, screen.x, p), screen.y, screen.w, screen.h},
+                .contentOffsetY = lift};
+    }
+    return {.viewport = {lerpFixed(iconRect.x, screen.x, p), lerpFixed(iconRect.y, screen.y, p),
+                         lerpFixed(iconRect.w, screen.w, p), lerpFixed(iconRect.h, screen.h, p)},
+            .contentOffsetY = lift};
 }
 
 } // namespace app::oled

@@ -43,6 +43,7 @@ typedef enum {
     ESP_BT_GAP_AUTH_CMPL_EVT = 0,
     ESP_BT_GAP_PIN_REQ_EVT,
     ESP_BT_GAP_CFM_REQ_EVT,
+    ESP_BT_GAP_READ_REMOTE_NAME_EVT,
     ESP_BT_GAP_MODE_CHG_EVT,
 } esp_bt_gap_cb_event_t;
 
@@ -62,6 +63,11 @@ typedef union {
         uint32_t num_val;
     } cfm_req;
     struct {
+        esp_bd_addr_t bda;
+        esp_bt_status_t stat;
+        uint8_t rmt_name[249];
+    } read_rmt_name;
+    struct {
         uint32_t mode;
     } mode_chg;
 } esp_bt_gap_cb_param_t;
@@ -78,3 +84,5 @@ esp_err_t esp_bt_gap_pin_reply(esp_bd_addr_t bd_addr, bool accept, uint8_t pin_c
                                esp_bt_pin_code_t pin_code);
 esp_err_t esp_bt_gap_ssp_confirm_reply(esp_bd_addr_t bd_addr, bool accept);
 esp_err_t esp_bt_gap_remove_bond_device(esp_bd_addr_t bd_addr);
+
+esp_err_t esp_bt_gap_read_remote_name(esp_bd_addr_t remote_bda);

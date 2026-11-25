@@ -28,12 +28,6 @@ constexpr uint32_t kSecPerMin = 60U;
 constexpr uint32_t kSecPerHour = 3600U;
 constexpr uint32_t kSecPerDay = 86400U;
 
-// 表盘底部 4 个图标槽位几何常量（128 px / 4 = 32 px 步距，槽宽 28、高 19）。
-constexpr int16_t kDockStartX = 2;
-constexpr int16_t kDockStepX = 32;
-constexpr int16_t kDockY = 44;
-constexpr int16_t kDockW = 28;
-constexpr int16_t kDockH = 19;
 constexpr size_t kSlotGps = 0U;
 constexpr size_t kSlotBeidou = 1U;
 constexpr size_t kSlotGlonass = 2U;
@@ -45,8 +39,9 @@ constexpr size_t kCheckIdxCharger = 3U;
 constexpr size_t kCheckIdxGnss = 4U;
 constexpr uint8_t kDockIdxSat = 0U;
 constexpr uint8_t kDockIdxPos = 1U;
-constexpr uint8_t kDockIdxDevice = 2U;
-constexpr uint8_t kDockIdxPower = 3U;
+constexpr uint8_t kDockIdxComm = 2U;
+constexpr uint8_t kDockIdxDevice = 3U;
+constexpr uint8_t kDockIdxPower = 4U;
 
 // 关机进度条目标步进百分比（与真实阶段和 fence 一一对应）。
 constexpr uint8_t kPctAnnounce = 15U;
@@ -119,14 +114,15 @@ constexpr uint8_t kShutdownStepPerTick = 5U;
 /**
  * @brief 判断指定页面是否为可双击返回表盘的子菜单
  * @param page: 页面枚举
- * @retval true 四个子菜单之一
+ * @retval true 处于子菜单
  * @retval false 非子菜单
  * @note 纯函数。
  */
 [[nodiscard]] bool isSubmenuPage(OledPage page) noexcept
 {
     return (page == OledPage::kSubSat) || (page == OledPage::kSubPos) ||
-           (page == OledPage::kSubDevice) || (page == OledPage::kSubPower);
+           (page == OledPage::kSubComm) || (page == OledPage::kSubDevice) ||
+           (page == OledPage::kSubPower);
 }
 
 } // namespace
@@ -262,7 +258,7 @@ uint16_t SystemCheckSm::logoRevealQ10(uint32_t nowMs) const noexcept
 Rect UiController::dockSlotRect(uint8_t idx) noexcept
 {
     const uint8_t clamped = (idx < kDockItemCount) ? idx : 0U;
-    // clamped <= 3，计算结果在 2..98，转 int16_t 安全。
+    // clamped <= 4，计算结果在 2..102，转 int16_t 安全。
     const auto x = static_cast<int16_t>(kDockStartX + (static_cast<int16_t>(clamped) * kDockStepX));
     return Rect{.x = x, .y = kDockY, .w = kDockW, .h = kDockH};
 }
@@ -274,6 +270,8 @@ OledPage UiController::dockTargetPage(uint8_t idx) noexcept
         return OledPage::kSubSat;
     case kDockIdxPos:
         return OledPage::kSubPos;
+    case kDockIdxComm:
+        return OledPage::kSubComm;
     case kDockIdxDevice:
         return OledPage::kSubDevice;
     case kDockIdxPower:
@@ -292,6 +290,8 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
 {
     bootMode_ = bootMode;
     dockSelected_ = 0U;
+    commSelected_ = 0U;
+    pairDecisionSent_ = false;
     satSubTab_ = 0U;
     shutdownPct_ = 0U;
     lastStepMs_ = nowMs;
@@ -299,6 +299,8 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
     hasWarning_ = false;
     click_.reset();
     transition_.clear();
+    wifiConfirm_ = false;
+    pairDialogId_ = 0U;
     dockSpring_.snap(dockSlotRect(0U).x);
     satsRoll_.reset();
     batRoll_.reset();
@@ -316,22 +318,24 @@ UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexc
     UiDecision out{};
     click_.reset();
     transition_.clear();
+    wifiConfirm_ = false;
+    pairDialogId_ = 0U;
     inShutdown_ = true;
     page_ = OledPage::kShutdown;
     out.page = page_;
 
-    const bool usbFinal =
-        (vm.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) != 0U;
+    const uint8_t finalBits = board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady) |
+                              board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady);
+    const bool final = (vm.shutdownDoneMask & finalBits) != 0U;
     const uint8_t target = shutdownTargetPercent(vm.shutdownStage, vm.shutdownDoneMask);
-    if (usbFinal || (target <= shutdownPct_)) {
+    if (final || (target <= shutdownPct_)) {
         shutdownPct_ = target;
     } else {
         const uint8_t stepAmt = static_cast<uint8_t>(
             std::min<unsigned>(kShutdownStepPerTick, static_cast<unsigned>(target - shutdownPct_)));
         shutdownPct_ = static_cast<uint8_t>(shutdownPct_ + stepAmt);
     }
-    // 无 USB 路径保持亮屏直至硬件断电；USB 路径在全部完成进入 kUsbOffReady 后立即标记刷出终帧。
-    out.markShutdownFinalFrame = usbFinal;
+    out.markShutdownFinalFrame = final;
     out.animating = (shutdownPct_ < target);
     out.nextWaitMs = out.animating ? kAnimFramePeriodMs : kIdlePollPeriodMs;
     return out;
@@ -360,6 +364,7 @@ void UiController::handleClick(ClickEvent click, uint32_t nowMs, const ViewModel
         } else if (click == ClickEvent::kDouble) {
             const OledPage target = dockTargetPage(dockSelected_);
             satSubTab_ = 0U;
+            commSelected_ = 0U;
             transition_.start(TransitionKind::kExpandFromIcon, OledPage::kDialplate, target,
                               dockSlotRect(dockSelected_), nowMs);
             page_ = target;
@@ -368,15 +373,85 @@ void UiController::handleClick(ClickEvent click, uint32_t nowMs, const ViewModel
     }
     if (isSubmenuPage(page_)) {
         if (click == ClickEvent::kDouble) {
-            const OledPage from = page_;
-            page_ = OledPage::kDialplate;
-            dockSpring_.snap(dockSlotRect(dockSelected_).x);
-            transition_.start(TransitionKind::kCollapseToIcon, from, OledPage::kDialplate,
-                              dockSlotRect(dockSelected_), nowMs);
+            leaveSubmenu(nowMs);
         } else if ((click == ClickEvent::kSingle) && (page_ == OledPage::kSubSat)) {
             satSubTab_ = static_cast<uint8_t>(satSubTab_ ^ 1U);
         }
     }
+}
+
+void UiController::leaveSubmenu(uint32_t nowMs) noexcept
+{
+    const OledPage from = page_;
+    page_ = OledPage::kDialplate;
+    dockSpring_.snap(dockSlotRect(dockSelected_).x);
+    transition_.start(TransitionKind::kCollapseToIcon, from, OledPage::kDialplate,
+                      dockSlotRect(dockSelected_), nowMs);
+}
+
+OledActionRequest UiController::handleCommClick(ClickEvent click, uint32_t nowMs,
+                                                const ViewModel &vm) noexcept
+{
+    if (click == ClickEvent::kNone) {
+        return {};
+    }
+    if (pairDialogId_ != 0U) {
+        if (pairDecisionSent_) {
+            return {};
+        }
+        pairDecisionSent_ = true;
+        return {click == ClickEvent::kDouble ? OledAction::kPairAccept : OledAction::kPairReject,
+                pairDialogId_};
+    }
+    if (wifiConfirm_) {
+        wifiConfirm_ = false;
+        return {click == ClickEvent::kDouble ? OledAction::kWifi : OledAction::kNone};
+    }
+    const bool wifi = vm.radioMode == RadioMode::kWifiConfig;
+    const uint8_t back = wifi ? 1U : 2U;
+    if (click == ClickEvent::kSingle) {
+        commSelected_ = commSelected_ < back ? static_cast<uint8_t>(commSelected_ + 1U) : 0U;
+        return {};
+    }
+    if (commSelected_ >= back) {
+        leaveSubmenu(nowMs);
+    } else if (commSelected_ == 1U) {
+        return {OledAction::kTogglePair};
+    } else if (wifi) {
+        return {OledAction::kBluetooth};
+    } else {
+        wifiConfirm_ = vm.wifiSupported;
+    }
+    return {};
+}
+
+OledActionRequest UiController::handleInput(uint32_t nowMs, std::span<const uint32_t> times,
+                                            const ViewModel &vm) noexcept
+{
+    // 配对截止最多相隔 30 s，差值符号在 uint32_t 回绕时仍有效。
+    const uint32_t id =
+        static_cast<int32_t>(vm.pairing.requestDeadlineMs - nowMs) > 0 ? vm.pairing.id : 0U;
+    if (id != pairDialogId_) {
+        pairDialogId_ = id;
+        pairDecisionSent_ = false;
+        click_.reset();
+        transition_.clear();
+        return {}; // 不把弹窗出现前的短按用于确认或拒绝。
+    }
+    const auto consume = [&](ClickEvent click) noexcept -> OledActionRequest {
+        if (pairDialogId_ != 0U || wifiConfirm_ || page_ == OledPage::kSubComm) {
+            return handleCommClick(click, nowMs, vm);
+        }
+        handleClick(click, nowMs, vm);
+        return {};
+    };
+    for (const uint32_t pressMs : times) {
+        if (const auto action = consume(click_.onPress(pressMs));
+            action.action != OledAction::kNone) {
+            return action;
+        }
+    }
+    return consume(click_.pollTimeout(nowMs));
 }
 
 UiDecision UiController::recoverFromShutdown() noexcept
@@ -396,7 +471,7 @@ UiDecision UiController::recoverFromShutdown() noexcept
 UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
                                           const ViewModel &vm) noexcept
 {
-    if ((page_ == OledPage::kSystemCheck) && checkSm_.step(nowMs, vm)) {
+    if ((page_ == OledPage::kSystemCheck) && pairDialogId_ == 0U && checkSm_.step(nowMs, vm)) {
         hasWarning_ = checkSm_.hasWarning();
         page_ = OledPage::kDialplate;
         dockSpring_.snap(dockSlotRect(dockSelected_).x);
@@ -468,11 +543,10 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
     }
 
     // 必须先按生产顺序消费队列内全部消抖短按时间戳，再检查绝对截止，避免 OLED 刷屏延迟误拆双击（R2OL2-03）。
-    for (const uint32_t pressMs : shortKeyTimes) {
-        handleClick(click_.onPress(pressMs), nowMs, vm);
-    }
-    handleClick(click_.pollTimeout(nowMs), nowMs, vm);
-    return finishActiveStep(nowMs, dtMs, vm);
+    const auto action = handleInput(nowMs, shortKeyTimes, vm);
+    auto out = finishActiveStep(nowMs, dtMs, vm);
+    out.action = action;
+    return out;
 }
 
 UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
@@ -484,6 +558,9 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         .satSubTab = satSubTab_,
         .hasCheckWarning = hasWarning_,
         .shutdownPct = shutdownPct_,
+        .commSelected = commSelected_,
+        .modal = pairDialogId_ != 0U ? UiModal::kPair
+                                     : (wifiConfirm_ ? UiModal::kWifiConfirm : UiModal::kNone),
         .nowMs = nowMs,
         .checkSm = &checkSm_,
         .transition = &transition_,
@@ -793,7 +870,9 @@ PostFlushDecision settleFrameWait(const UiDecision &dec, FlushOutcome outcome, u
 
 uint8_t shutdownTargetPercent(board::ShutdownStage stage, uint8_t doneMask) noexcept
 {
-    if ((doneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) != 0U) {
+    const uint8_t finalBits = board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady) |
+                              board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady);
+    if ((doneMask & finalBits) != 0U) {
         return kPctCutPowerDone;
     }
     switch (stage) {
@@ -847,10 +926,11 @@ const char *shutdownStageText(board::ShutdownStage stage, uint8_t doneMask, uint
         if (const char *deg = degradedText(); deg != nullptr) {
             return deg;
         }
-        return "CHARGING...";
+        return "CHARGE STBY";
     }
     switch (stage) {
     case board::ShutdownStage::kAnnounce:
+        return "PREPARING";
     case board::ShutdownStage::kSave:
         return "SAVING CFG";
     case board::ShutdownStage::kQuiesce:

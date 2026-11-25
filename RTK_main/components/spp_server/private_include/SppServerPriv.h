@@ -316,6 +316,8 @@ void spp_server_session_set_congested(uint32_t handle, bool congested);
  *        已被取走并关闭的 REJECT 会重挂（rearmed）
  */
 bool spp_server_ctrl_add(spp_server_ctrl_type_t type, uint32_t handle, const uint8_t *bda);
+/** @brief GAP 回调复制当前待确认设备的名称。 @param bda: 地址。 @param name: SDK 固定容量名字。 */
+void spp_server_pair_remote_name(const uint8_t *bda, const uint8_t *name);
 
 /**
  * @brief  撤销某句柄待发送的 REJECT 命令

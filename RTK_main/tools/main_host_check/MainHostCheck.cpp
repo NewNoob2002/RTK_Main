@@ -444,7 +444,7 @@ void powerShortKeyUi()
            board::shutdownDoneBit(board::ShutdownDoneBit::kCutPower)) != 0U);
     // USB 路径 + OLED 在线：U3 翻转前全程保持 s_restarts == 0（不清零，R2OL2-05）；
     // U3 掉电后先发布 kUsbOffReady，越过 30 ms 日志排空点后再过 20 ms（共 50 ms）仍被拦住，
-    // OLED 标记终帧刷出后在 30 ms 额外上限之前（+25 ms）立刻重启（ROL2-01/ROL2-02）。
+    // OLED 标记终帧刷出后，为用户保留 300 ms 停留。
     CHECK(s_restarts == 0U);
     ctx.data.uiEvents.setOledActive(true);
     s_gpioLevels[27] = 1; // USB 在位
@@ -458,7 +458,10 @@ void powerShortKeyUi()
     pollPower(2U); // +50 ms（日志排空后 +20 ms < 30 ms 上限）：仍不得重启
     CHECK(s_restarts == 0U);
     ctx.data.uiEvents.markShutdownFinalFrameFlushed();
-    pollPower(1U, 5U); // +55 ms（日志排空后 +25 ms < 30 ms 上限）：因终帧置位立刻重启
+    pollPower(1U, 5U); // +55 ms：观察刷出并开始停留
+    pollPower(1U, board::kShutdownFinalVisibleMs - 1U);
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 1U);
     CHECK(s_restarts == 1U);
     ctx.data.uiEvents.setOledActive(false);
     ctx.data.uiEvents.setWakeHook(nullptr, nullptr);
@@ -477,7 +480,7 @@ void driveToUsbCutRestart(bool oledActive)
     auto &ctx = appContext();
     ctx.data.uiEvents.setOledActive(oledActive);
     CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
-    pollPower(85U);
+    pollPower(160U);
     CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
     // R2OL2-05：绝不清零 s_restarts，在 U3 翻转前显式断言未发生过误重启。
     CHECK(s_restarts == 0U);
@@ -489,7 +492,58 @@ void driveToUsbCutRestart(bool oledActive)
     CHECK(s_restarts == 0U);
 }
 
-/** @brief 验证 USB 关机 + OLED 在线：日志排空后拦住重启，标记终帧刷出后在上限内立刻重启（ROL2-01/02）。 */
+/**
+ * @brief 验证关机各阶段从确认刷出算起停留，电池断电等待终帧或走超时兜底
+ * @param flush: 是否模拟电池终帧写出成功
+ */
+void powerBatteryDisplayShutdown(bool flush)
+{
+    using namespace app;
+    namespace b = board;
+    s_chargerReg = 0U;
+    s_gpioLevels[25] = 1;
+    setupPower(b::BootMode::kNormal);
+    auto &ctx = appContext();
+    auto &events = ctx.data.uiEvents;
+    events.setOledActive(true);
+    CHECK(power::requestShutdown(b::ShutdownReason::kConsole));
+    pollPower(1U);
+    for (const auto stage :
+         {b::ShutdownStage::kAnnounce, b::ShutdownStage::kSave, b::ShutdownStage::kQuiesce}) {
+        CHECK(ctx.data.powerStatus.read().shutdownStage == stage);
+        pollPower(2U);
+        events.markShutdownStageFlushed(stage);
+        pollPower(1U, 1U);
+        pollPower(1U, b::kMinStageVisibleMs - 1U);
+        CHECK(ctx.data.powerStatus.read().shutdownStage == stage);
+        CHECK(s_gpio4Presses == 0U);
+        pollPower(1U, 1U);
+    }
+    const auto snapshot = ctx.data.powerStatus.read();
+    CHECK(snapshot.shutdownStage == b::ShutdownStage::kCutPower);
+    CHECK((snapshot.shutdownDoneMask & b::shutdownDoneBit(b::ShutdownDoneBit::kBatteryOffReady)) !=
+          0U);
+    CHECK(s_gpio4Presses == 0U);
+    events.markShutdownFinalFrameFlushed(true); // USB 凭据不能放行电池路径。
+    if (flush) {
+        pollPower(1U, 40U);
+        CHECK(s_gpio4Presses == 0U);
+        events.markShutdownFinalFrameFlushed(false);
+        pollPower(1U, 1U);
+        pollPower(1U, b::kShutdownFinalVisibleMs - 1U);
+    } else {
+        pollPower(1U, b::kShutdownDisplayGraceMs - 1U);
+    }
+    CHECK(s_gpio4Presses == 0U);
+    pollPower(1U, 1U);
+    CHECK(s_gpio4Presses == 1U && s_gpioLevels[4] == 1 && s_restarts == 0U);
+    pollPower(1U, b::kShutdownCutInitHighMs - 1U);
+    CHECK(s_gpioLevels[4] == 1);
+    pollPower(1U, 1U);
+    CHECK(s_gpioLevels[4] == 0);
+}
+
+/** @brief 验证 USB 关机 + OLED 在线：日志排空后等待终帧，刷出后再停留 300 ms。 */
 void powerOledUsbFinalFlush()
 {
     driveToUsbCutRestart(true);
@@ -499,7 +553,10 @@ void powerOledUsbFinalFlush()
     pollPower(2U, 10U); // 日志排空后 +20 ms：OLED 尚未刷完终帧，不得重启
     CHECK(s_restarts == 0U);
     ctx.data.uiEvents.markShutdownFinalFrameFlushed();
-    pollPower(1U, 5U); // 日志排空后 +25 ms（< 30 ms 上限）：终帧置位后立刻重启
+    pollPower(1U, 5U); // 观察终帧已写出
+    pollPower(1U, app::board::kShutdownFinalVisibleMs - 1U);
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 1U);
     CHECK(s_restarts == 1U);
     ctx.data.uiEvents.setOledActive(false);
 }
@@ -527,7 +584,7 @@ void powerOledUsbAbsentNoWait()
     CHECK(s_restarts == 1U);
 }
 
-/** @brief 验证 OLED 在日志排空前已刷出终帧：在 30 ms 日志排空点 0 额外等待立即重启（ROL2-01/02）。 */
+/** @brief 验证 OLED 在日志排空前已刷出终帧：日志放行后进入终帧停留。 */
 void powerOledUsbAlreadyFlushed()
 {
     driveToUsbCutRestart(true);
@@ -537,7 +594,10 @@ void powerOledUsbAlreadyFlushed()
     ctx.data.uiEvents.markShutdownFinalFrameFlushed();
     pollPower(1U, 10U); // +20 ms：仍等日志排空
     CHECK(s_restarts == 0U);
-    pollPower(1U, 10U); // +30 ms：日志排空且终帧已就绪，0 ms 额外等待立即重启
+    pollPower(1U, 10U); // +30 ms：日志放行并观察终帧
+    pollPower(1U, app::board::kShutdownFinalVisibleMs - 1U);
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 1U);
     CHECK(s_restarts == 1U);
     ctx.data.uiEvents.setOledActive(false);
 }
@@ -559,7 +619,7 @@ void powerOledUsbLogRebusy()
     s_gpioLevels[25] = 1;
     ctx.data.uiEvents.setOledActive(true);
     CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
-    pollPower(100U);
+    pollPower(160U);
     CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
     CHECK(s_restarts == 0U);
 
@@ -630,11 +690,14 @@ void powerOledUsbNonalignedWake(bool wakeByFlush)
         ctx.data.uiEvents.markShutdownFinalFrameFlushed();
     }
     arg.finished.acquire();
-    CHECK(s_restarts == 1U);
     if (wakeByFlush) {
+        CHECK(s_restarts == 0U);
+        pollPower(31U);
+        CHECK(s_restarts == 1U);
         // 由终帧完成钩子直接唤醒，明显短于 30 ms 截止上限。
         CHECK(arg.elapsedWallMs < 25U);
     } else {
+        CHECK(s_restarts == 1U);
         // 由 30 ms 截止 tick 直接唤醒并重启，无需等到下一个 11 ms 轮询点（+66 ms）。
         CHECK(arg.elapsedWallMs >= 25U && arg.elapsedWallMs <= 80U);
     }
@@ -2883,6 +2946,10 @@ int main(int argc, const char **raw_args)
         powerShortKeyUi();
     } else if (std::strcmp(argv[1], "power_oled_usb_final_flush") == 0) {
         powerOledUsbFinalFlush();
+    } else if (std::strcmp(argv[1], "power_oled_battery_final_flush") == 0) {
+        powerBatteryDisplayShutdown(true);
+    } else if (std::strcmp(argv[1], "power_oled_battery_final_timeout") == 0) {
+        powerBatteryDisplayShutdown(false);
     } else if (std::strcmp(argv[1], "power_oled_usb_final_timeout") == 0) {
         powerOledUsbFinalTimeout();
     } else if (std::strcmp(argv[1], "power_oled_usb_absent_no_wait") == 0) {

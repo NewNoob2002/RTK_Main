@@ -2,6 +2,7 @@
 // I2cBus.cpp + OledUi/Anim/Render，在 I2C 与虚拟时钟替身下验证终帧编排（连续错/退避/补写/顺序/零脏页）
 // 及 OLED 正忙时的 299/300 ms 生产时间双击判定与绝对截止休眠重算。
 #include <array>
+#include <csetjmp>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +10,8 @@
 #include <string_view>
 
 #include "AppContext.hpp"
+#include "SppServerPairing.h"
+#include "app/PowerRequests.hpp"
 #include "board/BoardProfile.hpp"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -89,6 +92,12 @@ constinit uint8_t s_last_page_cmd = 0xFFU;
 constinit unsigned s_oled_data_pages = 0U;
 constinit unsigned s_oled_tx_count = 0U;
 constinit unsigned s_restart_wakes = 0U;
+constinit spp_server_pair_snapshot_t s_pair_snapshot{};
+constinit uint32_t s_decision_id = 0U;
+constinit bool s_decision_accept = false;
+constinit bool s_web_exit = false;
+constinit bool s_radio_switch = false;
+std::jmp_buf s_radio_jump{};
 
 constinit std::array<StackType_t, OledModule::kTaskStackBytes / sizeof(StackType_t)> s_oled_stack{};
 constinit std::array<uint8_t, OledModule::kFrameBufferBytes> s_oled_fb{};
@@ -161,7 +170,7 @@ void setupOledModule() noexcept
 /**
  * @brief 场景 1：验证真实 OledModule USB 关机终帧编排（连续错->退避->清退避补写->先写后通知->零脏页，R2OL2-05）
  */
-void runFinalFrameOrchestration() noexcept
+void runFinalFrameOrchestration(bool usb) noexcept
 {
     setupOledModule();
     s_app.data.uiEvents.setRestartWakeHook([](void * /*ctx*/) noexcept { ++s_restart_wakes; },
@@ -189,21 +198,22 @@ void runFinalFrameOrchestration() noexcept
     s_fail_all_data = false;
     s_fail_page_once = 4;
     pwr.shutdownStage = board::ShutdownStage::kCutPower;
-    pwr.shutdownDoneMask =
-        static_cast<uint8_t>(board::shutdownDoneBit(board::ShutdownDoneBit::kAnnounced) |
-                             board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFences) |
-                             board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed) |
-                             board::shutdownDoneBit(board::ShutdownDoneBit::kPeripheralsSafe) |
-                             board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced) |
-                             board::shutdownDoneBit(board::ShutdownDoneBit::kCutPower) |
-                             board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady));
+    pwr.shutdownDoneMask = static_cast<uint8_t>(
+        board::shutdownDoneBit(board::ShutdownDoneBit::kAnnounced) |
+        board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFences) |
+        board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed) |
+        board::shutdownDoneBit(board::ShutdownDoneBit::kPeripheralsSafe) |
+        board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced) |
+        board::shutdownDoneBit(board::ShutdownDoneBit::kCutPower) |
+        board::shutdownDoneBit(usb ? board::ShutdownDoneBit::kUsbOffReady
+                                   : board::ShutdownDoneBit::kBatteryOffReady));
     s_app.data.powerStatus.write(pwr);
 
     const unsigned pagesBeforeFinalErr = s_oled_data_pages;
     s_time_us += 10000LL;
     const uint32_t waitOnErr = ModuleTestAccess::refresh(s_app.oled, nowMs());
     CHECK(s_oled_data_pages - pagesBeforeFinalErr == 4U);
-    CHECK(!s_app.data.uiEvents.shutdownFinalFrameFlushed());
+    CHECK(!s_app.data.uiEvents.shutdownFinalFrameFlushed(usb));
     CHECK(s_restart_wakes == 0U);
     CHECK(waitOnErr == kShutdownFinalRetryMs);
 
@@ -215,16 +225,54 @@ void runFinalFrameOrchestration() noexcept
     static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
     s_assert_not_flushed_during_tx = false;
     CHECK(s_oled_data_pages - pagesBeforeFinalOk == 4U);
-    CHECK(s_app.data.uiEvents.shutdownFinalFrameFlushed());
-    CHECK(s_restart_wakes == 1U);
+    CHECK(s_app.data.uiEvents.shutdownFinalFrameFlushed(usb));
+    CHECK(!s_app.data.uiEvents.shutdownFinalFrameFlushed(!usb));
+    CHECK(s_restart_wakes == (usb ? 1U : 0U));
 
     // 4. 零脏页复刷：画面已完全一致（kSkipped），0 I2C 写出且继续保持终帧完成。
     const unsigned txBeforeIdle = s_oled_tx_count;
     s_time_us += 10000LL;
     static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
     CHECK(s_oled_tx_count == txBeforeIdle);
-    CHECK(s_app.data.uiEvents.shutdownFinalFrameFlushed());
+    CHECK(s_app.data.uiEvents.shutdownFinalFrameFlushed(usb));
     s_app.data.uiEvents.setRestartWakeHook(nullptr, nullptr);
+}
+
+/** @brief 驱动实际 kLink 桥接，验证默认确认开窗、请求序号和两种射频路线。 */
+void runCommActions() noexcept
+{
+    setupOledModule();
+    auto &events = s_app.data.uiEvents;
+    CHECK(events.submitAction({OledAction::kTogglePair}));
+    static_cast<void>(s_app.oled.poll(nowMs()));
+    CHECK(s_app.bt_link.pairStatus(nowMs()).confirm);
+    CHECK(s_app.data.oledPairing.read().windowOpen);
+    s_pair_snapshot = {.id = 73U,
+                       .remaining_ms = 15000U,
+                       .number = 382475U,
+                       .bda = {0x00U, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U},
+                       .name = "OL3 Peer",
+                       .has_number = true};
+    static_cast<void>(s_app.oled.poll(nowMs()));
+    const auto pair = s_app.data.oledPairing.read();
+    CHECK(pair.id == 73U && pair.suffix[0] == 0x03U && pair.hasNumber && pair.number == 382475U);
+    CHECK(events.submitAction({OledAction::kPairAccept, pair.id}));
+    static_cast<void>(s_app.oled.poll(nowMs()));
+    CHECK(s_decision_id == 73U && s_decision_accept);
+
+    s_app.radioMode = RadioMode::kWifiConfig;
+    s_app.data.wifiReady.store(true);
+    CHECK(events.submitAction({OledAction::kBluetooth}));
+    static_cast<void>(s_app.oled.poll(nowMs()));
+    CHECK(s_web_exit);
+
+    s_app.radioMode = RadioMode::kBluetooth;
+    CHECK(events.submitAction({OledAction::kWifi}));
+    if (setjmp(s_radio_jump) == 0) {
+        static_cast<void>(s_app.oled.poll(nowMs()));
+        CHECK(false);
+    }
+    CHECK(s_radio_switch);
 }
 
 /**
@@ -354,6 +402,44 @@ void runClickPageDeadline(uint32_t secondAtMs) noexcept
 }
 
 } // namespace
+
+namespace app {
+
+void BtLinkModule::onCommand(const fw::Command &cmd, fw::CommandResult &result) noexcept
+{
+    CHECK(cmd.verb == verb(LinkVerb::kPair) && cmd.argLen == 3U && cmd.args[2] == 1U);
+    core::openPairWindow(pair_window_, rtos::nowMs(), core::kPairWindowMs, true);
+    result.status = fw::Result::kOk;
+}
+
+bool WebModule::requestOledExit(uint32_t /*nowMs*/) noexcept
+{
+    s_web_exit = true;
+    return true;
+}
+
+void requestRadioMode(RadioMode mode, RadioReason reason) noexcept
+{
+    CHECK(mode == RadioMode::kWifiConfig && reason == RadioReason::kUi);
+    CHECK(!power::s_power_requests.canScheduleRestart());
+    s_radio_switch = true;
+    std::longjmp(s_radio_jump, 1);
+}
+
+} // namespace app
+
+void spp_server_pair_snapshot(spp_server_pair_snapshot_t *out)
+{
+    *out = s_pair_snapshot;
+}
+
+bool spp_server_pair_decide_for(uint32_t id, bool accept)
+{
+    s_decision_id = id;
+    s_decision_accept = accept;
+    s_pair_snapshot = {};
+    return true;
+}
 
 namespace rtos {
 
@@ -488,7 +574,8 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *tx, si
 {
     CHECK(dev == &s_oled_dev && s_mutex->held && count > 0U && timeoutMs > 0);
     if (s_assert_not_flushed_during_tx) {
-        CHECK(!s_app.data.uiEvents.shutdownFinalFrameFlushed());
+        CHECK(!s_app.data.uiEvents.shutdownFinalFrameFlushed() &&
+              !s_app.data.uiEvents.shutdownFinalFrameFlushed(false));
     }
     ++s_oled_tx_count;
     if (tx[0] == 0x00U) {
@@ -536,7 +623,11 @@ int main(int argc, char **argv)
         [](void *, const fw::LogHeader &, std::span<const uint8_t>) noexcept {}, nullptr,
         &rtos::nowMs)));
     if (scenario == "final_frame_orchestration") {
-        runFinalFrameOrchestration();
+        runFinalFrameOrchestration(true);
+    } else if (scenario == "battery_final_frame") {
+        runFinalFrameOrchestration(false);
+    } else if (scenario == "comm_actions") {
+        runCommActions();
     } else if (scenario == "busy_click_299_300_and_deadline_sleep") {
         runBusyClickAndDeadlineSleep();
     } else if (scenario == "click_page_deadline_299") {

@@ -63,6 +63,8 @@ void fake_emit_data(uint32_t handle, const uint8_t *data, uint16_t len);
 /* GAP 事件由独立假 BTC 线程投递；应答计数/bda 用于验证“不在回调线程里应答”。 */
 void fake_emit_gap_pin_req(const uint8_t bda[6]);
 void fake_emit_gap_cfm_req(const uint8_t bda[6]);
+/** @brief 模拟设备名称查询返回。 @param bda: 对端地址。 @param name: 名称。 */
+void fake_emit_gap_remote_name(const uint8_t bda[6], const char *name);
 void fake_emit_gap_auth_cmpl(const uint8_t bda[6]);
 int fake_pin_reply_count(void);
 bool fake_last_gap_accept(void);

@@ -567,6 +567,8 @@ void PowerModule::logQuiesceTimeout() noexcept
 void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins,
                                            const board::ShutdownOutput &out) noexcept
 {
+    stageEnteredMs_ = nowMs;
+    stageOnScreenMs_.reset();
     fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kShutdownStage), 0U,
               static_cast<uint32_t>(out.stage), static_cast<uint32_t>(shutdownSm_.reason()));
     switch (out.stage) {
@@ -635,6 +637,8 @@ void PowerModule::handleShutdownCutPower(uint32_t nowMs, const board::ShutdownOu
         restartStartMs_ = nowMs;
         restartLogReady_ = false;
         oledWaitDeadlineMs_ = 0U;
+        finalHoldDeadlineMs_.reset();
+        finalFrameReady_ = false;
     }
 }
 
@@ -658,7 +662,9 @@ void PowerModule::stepShutdown(uint32_t nowMs, PinLevels &pins) noexcept
     if ((stage == board::ShutdownStage::kQuiesce) && isRadioQuiesced()) {
         radioQuiescedDone_ = true;
     }
-    const bool quiesceDone = stage == board::ShutdownStage::kQuiesce && isQuiesceDone(nowMs);
+    const bool stageVisible = shutdownStageVisible(nowMs, stage);
+    const bool quiesceDone =
+        stage == board::ShutdownStage::kQuiesce && stageVisible && isQuiesceDone(nowMs);
     if (quiesceDone) {
         if (isRadioQuiesced()) {
             radioQuiescedDone_ = true;
@@ -672,7 +678,14 @@ void PowerModule::stepShutdown(uint32_t nowMs, PinLevels &pins) noexcept
     }
     const auto usb =
         pins.u3On || pins.usbKnown ? std::optional<bool>{pins.usbPresent} : std::nullopt;
-    const auto out = shutdownSm_.step(nowMs, saveDone, quiesceDone, pins.u3On, usb);
+    const bool cutReady =
+        !ctx().data.uiEvents.oledActive() ||
+        (stage == board::ShutdownStage::kCutPower &&
+         (pins.usbPresent
+              ? stageVisible
+              : finalFrameReady(nowMs, cutStartMs_ + board::kShutdownDisplayGraceMs, false)));
+    const auto out =
+        shutdownSm_.step(nowMs, saveDone, quiesceDone, pins.u3On, usb, stageVisible, cutReady);
     if (out.stageEntered) {
         handleShutdownStageEntry(nowMs, pins, out);
     }
@@ -681,6 +694,8 @@ void PowerModule::stepShutdown(uint32_t nowMs, PinLevels &pins) noexcept
 
 void PowerModule::resetShutdownProgress() noexcept
 {
+    finalHoldDeadlineMs_.reset();
+    finalFrameReady_ = false;
     saveFencesDone_ = false;
     saveFlushedDone_ = false;
     saveTimedOut_ = false;
@@ -706,7 +721,7 @@ bool PowerModule::isRadioQuiesced() const noexcept
     return true;
 }
 
-uint8_t PowerModule::computeShutdownDoneMask() const noexcept
+uint8_t PowerModule::computeShutdownDoneMask(const PinLevels &pins) const noexcept
 {
     const auto stage = shutdownSm_.stage();
     if (stage == board::ShutdownStage::kIdle) {
@@ -729,6 +744,8 @@ uint8_t PowerModule::computeShutdownDoneMask() const noexcept
         mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kCutPower);
         if (restartPending_) {
             mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady);
+        } else if (!pins.usbPresent && (pins.usbKnown || pins.u3On)) {
+            mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady);
         }
     }
     return mask;
@@ -794,7 +811,7 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         .powerOn = ctx().powerOnReason,
         .shutdownStage = shutdownSm_.stage(),
         .lastShutdown = shutdownSm_.lastReason(),
-        .shutdownDoneMask = computeShutdownDoneMask(),
+        .shutdownDoneMask = computeShutdownDoneMask(pins),
         .shutdownDegradedMask = computeShutdownDegradedMask(),
         .shortPresses = shortPresses_,
         .longPresses = longPresses_,
@@ -818,32 +835,69 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
     }
 }
 
+bool PowerModule::shutdownStageVisible(uint32_t nowMs, board::ShutdownStage stage) noexcept
+{
+    const auto &events = ctx().data.uiEvents;
+    if (!events.oledActive()) {
+        return true;
+    }
+    if (!stageOnScreenMs_ && events.shutdownStageFlushed(stage)) {
+        stageOnScreenMs_ = nowMs;
+    }
+    if (stageOnScreenMs_) {
+        return nowMs - *stageOnScreenMs_ >= board::kMinStageVisibleMs;
+    }
+    return nowMs - stageEnteredMs_ >= board::kShutdownDisplayGraceMs + board::kMinStageVisibleMs;
+}
+
+bool PowerModule::finalFrameReady(uint32_t nowMs, uint32_t flushDeadlineMs, bool usb) noexcept
+{
+    const auto &events = ctx().data.uiEvents;
+    if (finalFrameReady_ || !events.oledActive()) {
+        return true;
+    }
+    if (!finalHoldDeadlineMs_ && events.shutdownFinalFrameFlushed(usb)) {
+        finalHoldDeadlineMs_ = nowMs + board::kShutdownFinalVisibleMs;
+    }
+    const uint32_t deadline = finalHoldDeadlineMs_.value_or(flushDeadlineMs);
+    // 两个等待窗口都远小于半个 uint32_t 周期，差值符号可用于回绕截止判断。
+    finalFrameReady_ = static_cast<int32_t>(nowMs - deadline) >= 0;
+    if (finalFrameReady_ && !finalHoldDeadlineMs_) {
+        FW_LOGW(fw::TraceCat::kSys, "shutdown OLED final frame timed out");
+    }
+    return finalFrameReady_;
+}
+
+bool PowerModule::pollRestart(uint32_t nowMs) noexcept
+{
+    const uint32_t elapsed = nowMs - restartStartMs_;
+    if (!restartLogReady_) {
+        if (elapsed < kRestartWaitMs && !isLogDrained(elapsed)) {
+            return false;
+        }
+        restartLogReady_ = true;
+        oledWaitDeadlineMs_ = nowMs + kOledFinalFlushMaxMs;
+    }
+    if (!shutdownSm_.active() || finalFrameReady(nowMs, oledWaitDeadlineMs_, true)) {
+        esp_restart();
+    } else if (!finalHoldDeadlineMs_) {
+        if (const TaskHandle_t self = xTaskGetCurrentTaskHandle(); self != nullptr) {
+            waitOledFinalFrame(self);
+            if (finalFrameReady(rtos::nowMs(), oledWaitDeadlineMs_, true)) {
+                esp_restart();
+            }
+        }
+    }
+    return false;
+}
+
 bool PowerModule::poll(uint32_t nowMs) noexcept
 {
     if (!active_) {
         return false;
     }
     if (restartPending_) {
-        const uint32_t elapsed = nowMs - restartStartMs_;
-        if (!restartLogReady_) {
-            if (elapsed < kRestartWaitMs && !isLogDrained(elapsed)) {
-                return false;
-            }
-            restartLogReady_ = true;
-            oledWaitDeadlineMs_ = nowMs + kOledFinalFlushMaxMs;
-        }
-        const bool waitOled = shutdownSm_.active() && ctx().data.uiEvents.oledActive() &&
-                              !ctx().data.uiEvents.shutdownFinalFrameFlushed();
-        if (!waitOled || (static_cast<int32_t>(nowMs - oledWaitDeadlineMs_) >= 0)) {
-            esp_restart();
-            return false;
-        }
-        if (const TaskHandle_t self = xTaskGetCurrentTaskHandle(); self != nullptr) {
-            waitOledFinalFrame(self);
-            esp_restart();
-            return false;
-        }
-        return true;
+        return pollRestart(nowMs);
     }
     const bool cutSenseFell = shutdownSm_.stage() == board::ShutdownStage::kCutPower &&
                               lastSnapshot_.u3On &&

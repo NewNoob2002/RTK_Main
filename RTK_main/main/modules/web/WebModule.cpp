@@ -404,10 +404,37 @@ void WebModule::scheduleReboot(RebootKind kind, std::string_view reasonText, uin
     }
 }
 
+bool WebModule::requestOledExit([[maybe_unused]] uint32_t nowMs) noexcept
+{
+    if (!initialized_ || pendingExit_.fd >= 0 || pendingExit_.local ||
+        pendingReboot_ != RebootKind::kNone || inflight_.ticket.seq != 0U ||
+        !power::s_power_requests.canScheduleRestart()) {
+        return false;
+    }
+#if RTK_GNSS_ENABLED
+    if (ctx().data.ggaGatePersist.load(std::memory_order_acquire) != data::GgaGatePersist::kClean) {
+        const fw::Command cmd{.verb = static_cast<uint8_t>(GnssSubVerb::kFlushGgaGate)};
+        settings::Ticket ticket{};
+        if (!fw::isOk(postSettingCommand(&ctx(), settings::Owner::kGnss, cmd,
+                                         settings::Caller::kWeb, ticket))) {
+            return false;
+        }
+        inflight_ = {.ticket = ticket,
+                     .fd = -1,
+                     .startedMs = nowMs,
+                     .kind = RequestKind::kExit,
+                     .local = true};
+        return true;
+    }
+#endif
+    pendingExit_.local = true;
+    return true;
+}
+
 void WebModule::commitPendingExit(uint32_t nowMs) noexcept
 {
     const auto request = pendingExit_;
-    if (request.fd < 0) {
+    if (request.fd < 0 && !request.local) {
         return;
     }
     pendingExit_ = {};
@@ -535,7 +562,8 @@ void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32
         return;
     }
     if (req.name == "exit") {
-        if (pendingExit_.fd >= 0 || !power::s_power_requests.canScheduleRestart()) {
+        if (pendingExit_.fd >= 0 || pendingExit_.local ||
+            !power::s_power_requests.canScheduleRestart()) {
             sendAck(client, req.id, web::ErrorCode::kBusy);
             return;
         }
@@ -634,7 +662,8 @@ void WebModule::pollInflight(uint32_t nowMs) noexcept
     }
     inflight_ = {};
     if (request.kind == RequestKind::kExit && error == web::ErrorCode::kNone) {
-        pendingExit_ = {.fd = request.fd, .gen = request.gen, .reqId = request.reqId};
+        pendingExit_ = {
+            .fd = request.fd, .gen = request.gen, .reqId = request.reqId, .local = request.local};
         return;
     }
     if (auto *client = findClient(request.fd, request.gen); client != nullptr) {

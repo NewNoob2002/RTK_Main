@@ -31,6 +31,29 @@ void spp_server_set_pair_query(spp_server_pair_query_t query);
  */
 bool spp_server_pair_decide(bool accept);
 
+#define SPP_SERVER_PAIR_NAME_BYTES (17U)
+
+/** 携带请求序号的只读确认快照，id 为零表示无待确认请求。 */
+typedef struct {
+    uint32_t id;
+    uint32_t remaining_ms;
+    uint32_t number;
+    uint8_t bda[SPP_SERVER_ADDR_LEN];
+    char name[SPP_SERVER_PAIR_NAME_BYTES];
+    bool has_number;
+} spp_server_pair_snapshot_t;
+
+/** @brief 读取尚未决定的请求。 @param out: 快照输出。 @note 任务上下文，短临界区。 */
+void spp_server_pair_snapshot(spp_server_pair_snapshot_t *out);
+
+/**
+ * @brief 处理指定的待确认请求，拒绝已换代的请求序号。
+ * @param id: 快照请求序号，必须非零。
+ * @param accept: 接受或拒绝。
+ * @retval 是否成功提交。
+ */
+bool spp_server_pair_decide_for(uint32_t id, bool accept);
+
 /**
  * @brief 登记或轮询 GAP 扫描模式请求，由 worker 执行 SDK 投递。
  * @param paused: true 关闭可发现和可连接，false 恢复。

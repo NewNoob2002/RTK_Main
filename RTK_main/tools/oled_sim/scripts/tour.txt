@@ -1,0 +1,46 @@
+# Milliseconds, command, optional argument.
+0 check system_check
+150 shot boot
+3000 check dialplate
+3000 shot dial
+3100 short
+3200 short
+3700 check sat
+3700 shot satellite
+3800 short
+3900 short
+4400 check dialplate
+4450 short
+4900 short
+5000 short
+5500 check pos
+5600 short
+5700 short
+6200 check dialplate
+6250 short
+6700 short
+6800 short
+7300 check comm
+7300 shot comm
+7400 short
+7800 short
+8250 short
+8350 short
+8850 check dialplate
+8900 short
+9350 short
+9450 short
+9950 check device
+10050 short
+10150 short
+10650 check dialplate
+10700 short
+11150 short
+11250 short
+11750 check power
+11850 short
+11950 short
+12450 check dialplate
+12500 long
+12650 check shutdown
+13550 shot shutdown

@@ -128,6 +128,29 @@ void sendBufferHal(ScreenBuff fb) noexcept
 #endif
 
 /**
+ * @brief 读取供电状态及本次关机进度。
+ * @param app: 应用上下文（只读访问）。
+ * @param[out] vm: 目标视图模型。
+ */
+void collectPowerStatus(const AppContext &app, oled::ViewModel &vm) noexcept
+{
+    const PowerSnapshot pwr = app.data.powerStatus.read();
+    vm.powerActive = pwr.active;
+    vm.batteryAdcReady = pwr.batteryAdcReady;
+    vm.chargerPresent = pwr.chargerPresent;
+    vm.chargerOk = pwr.chargerOk;
+    vm.batteryPct = pwr.batteryPct;
+    vm.batteryMv = pwr.batteryMv;
+    vm.usbPresent = pwr.usbPresent;
+    vm.charging = pwr.charging;
+    vm.usbSource = pwr.usbSource;
+    vm.shutdownStage = pwr.shutdownStage;
+    vm.shutdownReason = pwr.lastShutdown;
+    vm.shutdownDoneMask = pwr.shutdownDoneMask;
+    vm.shutdownDegradedMask = pwr.shutdownDegradedMask;
+}
+
+/**
  * @brief 从 DataCenter 与 AppContext 只读快照收集当前 UI 视图模型
  * @param app: 应用上下文（只读访问）
  * @param nowMs: 当前单调时间（ms）
@@ -153,25 +176,21 @@ void sendBufferHal(ScreenBuff fb) noexcept
     vm.nvsReady = app.bootConfig.userNvsReady && !app.bootConfig.safeDefaults;
     vm.btReady = sys.btReady;
     vm.wifiReady = app.data.wifiReady.load(std::memory_order_acquire);
+    vm.pairing = app.data.oledPairing.read();
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    vm.wifiSupported = true;
+    if (vm.wifiReady) {
+        const auto ssid = app.data.wifiSsid.read();
+        oled::sanitizeCopy(cstrView(ssid.data()), vm.wifiSsid);
+        vm.wifiClients = app.web.wifiStationCount();
+    }
+#endif
 
     const Sessions sess = app.data.sessions.read();
     // kMaxSessions == 2，窄化到 uint8_t 安全。
     vm.btSessions = static_cast<uint8_t>(sess.count);
 
-    const PowerSnapshot pwr = app.data.powerStatus.read();
-    vm.powerActive = pwr.active;
-    vm.batteryAdcReady = pwr.batteryAdcReady;
-    vm.chargerPresent = pwr.chargerPresent;
-    vm.chargerOk = pwr.chargerOk;
-    vm.batteryPct = pwr.batteryPct;
-    vm.batteryMv = pwr.batteryMv;
-    vm.usbPresent = pwr.usbPresent;
-    vm.charging = pwr.charging;
-    vm.usbSource = pwr.usbSource;
-    vm.shutdownStage = pwr.shutdownStage;
-    vm.shutdownReason = pwr.lastShutdown;
-    vm.shutdownDoneMask = pwr.shutdownDoneMask;
-    vm.shutdownDegradedMask = pwr.shutdownDegradedMask;
+    collectPowerStatus(app, vm);
 
 #if RTK_GNSS_ENABLED
     const GnssStatus gs = app.data.gnssStatus.read();
@@ -196,6 +215,27 @@ void sendBufferHal(ScreenBuff fb) noexcept
     vm.workModeElapsedS = wm.elapsedS;
     collectSatSummary(app, vm);
 #endif
+}
+
+/**
+ * @brief 凭完整帧的传输结果确认关机进度或终帧。
+ * @param events: OLED 与 Power 的事件通道。
+ * @param vm: 已渲染的快照。
+ * @param markFinalFlushed: 本帧是否为已成功刷出的终帧。
+ */
+void acknowledgeShutdownFrame(UiEventBus &events, const oled::ViewModel &vm,
+                              bool markFinalFlushed) noexcept
+{
+    if (markFinalFlushed) {
+        const bool usb = (vm.shutdownDoneMask &
+                          board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) != 0U;
+        events.markShutdownFinalFrameFlushed(usb);
+    }
+    if (vm.shutdownStage != board::ShutdownStage::kIdle &&
+        (s_last_flush == board::Sh1106FlushResult::kWritten ||
+         s_last_flush == board::Sh1106FlushResult::kSkipped)) {
+        events.markShutdownStageFlushed(vm.shutdownStage);
+    }
 }
 
 } // namespace
@@ -325,6 +365,9 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
     }
     const oled::UiDecision dec =
         s_ui_ctrl.step(nowMs, std::span<const uint32_t>{shortKeys.data(), shortKeyCount}, vm);
+    if (dec.action.action != OledAction::kNone) {
+        static_cast<void>(context_->data.uiEvents.submitAction(dec.action));
+    }
 
     if (s_panel.poweredOff() || (s_active_fb == nullptr)) {
         return dec.nextWaitMs;
@@ -348,15 +391,19 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
         (i2cEndUs > frameStartUs) ? static_cast<uint32_t>(i2cEndUs - frameStartUs) : 0U;
     const oled::PostFlushDecision post =
         oled::settleFrameWait(dec, toFlushOutcome(s_last_flush), thisFrameUs, rtos::nowMs());
-    if (post.markFinalFlushed) {
-        context_->data.uiEvents.markShutdownFinalFrameFlushed();
-    }
+    acknowledgeShutdownFrame(context_->data.uiEvents, vm, post.markFinalFlushed);
+    updateFrameStats(nowMs, thisFrameUs, i2cEndUs - i2cStartUs);
+    return post.nextWaitMs;
+}
+
+void OledModule::updateFrameStats(uint32_t nowMs, uint32_t frameUs, int64_t i2cUs) noexcept
+{
     if (s_last_flush == board::Sh1106FlushResult::kWritten) {
         ++framesFlushed_;
         ++fpsWindowFrames_;
         // 单帧耗时 < 1 s，微秒差值转为 uint32_t 无损。
-        lastI2cUs_ = (i2cEndUs > i2cStartUs) ? static_cast<uint32_t>(i2cEndUs - i2cStartUs) : 0U;
-        lastFrameUs_ = thisFrameUs;
+        lastI2cUs_ = (i2cUs > 0) ? static_cast<uint32_t>(i2cUs) : 0U;
+        lastFrameUs_ = frameUs;
         maxI2cUs_ = std::max(maxI2cUs_, lastI2cUs_);
         maxFrameUs_ = std::max(maxFrameUs_, lastFrameUs_);
     } else if (s_last_flush == board::Sh1106FlushResult::kSkipped) {
@@ -371,8 +418,6 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
         fpsWindowStartMs_ = nowMs;
         fpsWindowFrames_ = 0U;
     }
-
-    return post.nextWaitMs;
 }
 
 void OledModule::publishStatus(bool force) noexcept

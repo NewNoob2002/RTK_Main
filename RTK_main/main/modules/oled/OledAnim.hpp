@@ -11,7 +11,9 @@ namespace app::oled {
 
 inline constexpr uint16_t kEaseScale = 1024U;          // Q10 缓动进度满值（0..1024）
 inline constexpr uint32_t kDoubleClickWindowMs = 300U; // ms，短按/双击消歧窗口上限（<= 300 ms）
-inline constexpr uint32_t kPageTransitionMs = 300U;    // ms，页面切换/展开收回动画时长
+inline constexpr uint32_t kPageTransitionMs = 420U;    // ms，页面切换/展开收回动画时长
+inline constexpr uint32_t kContentStaggerMs = 40U;     // ms，框体先动，随后内容上移
+inline constexpr int16_t kTransitionContentLiftPx = 5; // px，进入时内容的初始偏移
 inline constexpr uint32_t kNumberRollMs = 180U;        // ms，数字滚动切换时长
 inline constexpr uint32_t kAnimFramePeriodMs = 33U;    // ms，动画期目标帧周期（~30 fps）
 inline constexpr uint32_t kIdlePollPeriodMs = 200U;    // ms，静止期轮询周期（5 Hz，0 写 I2C）
@@ -261,6 +263,15 @@ struct Rect {
     int16_t y = 0;
     int16_t w = 0;
     int16_t h = 0;
+
+    /** @brief 比较屏幕矩形。 */
+    [[nodiscard]] bool operator==(const Rect &) const noexcept = default;
+};
+
+/** 由同一个绝对动画时钟驱动的视口和内容偏移。 */
+struct TransitionPose {
+    Rect viewport{};
+    int16_t contentOffsetY = 0;
 };
 
 /** 页面切换动画类型。 */
@@ -271,7 +282,7 @@ enum class TransitionKind : uint8_t {
     kCollapseToIcon, // 从子菜单收回至表盘选中图标
 };
 
-/** 页面切换过渡动画状态（~300 ms 定点 ease-out cubic）。 */
+/** 页面切换过渡动画状态（定点 ease-in-out cubic）。 */
 struct PageTransition {
     TransitionKind kind = TransitionKind::kNone;
     OledPage fromPage = OledPage::kSystemCheck;
@@ -309,12 +320,20 @@ struct PageTransition {
     [[nodiscard]] bool pollActive(uint32_t nowMs) noexcept;
 
     /**
-     * @brief 计算当前过渡的 ease-out cubic Q10 进度（0..1024）
+     * @brief 计算当前过渡的 ease-in-out cubic Q10 进度（0..1024）
      * @param nowMs: 当前单调时间（ms）
      * @retval 当前 Q10 缓动进度
      * @note 纯查询，无浮点。
      */
     [[nodiscard]] uint16_t progressQ10(uint32_t nowMs) const noexcept;
+
+    /**
+     * @brief 计算新页视口与内容垂直偏移，收回与展开对应镜像时刻。
+     * @param nowMs: 当前单调时间（ms）。
+     * @param screen: 展开后的完整屏幕矩形。
+     * @retval 本轮绘制使用的视口及偏移。
+     */
+    [[nodiscard]] TransitionPose pose(uint32_t nowMs, Rect screen) const noexcept;
 };
 
 } // namespace app::oled

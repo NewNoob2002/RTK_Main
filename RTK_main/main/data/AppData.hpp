@@ -154,6 +154,8 @@ struct DataCenter {
     fw::Slot<PowerSnapshot> powerStatus{};
     fw::Slot<OledStatus> oledStatus{};
     UiEventBus uiEvents{};
+    fw::Slot<OledPairingStatus> oledPairing{};
+    fw::Slot<decltype(SystemStatus::deviceName)> wifiSsid{};
     std::atomic<bool> wifiReady{false}; // Wi-Fi SoftAP 就绪只读标志（WebModule 写，OLED 自检读）
     static_assert(fw::kAtomicUsable<bool>, "Wi-Fi 就绪标志原子须无锁");
     fw::Slot<uint32_t> rtcmReset{};

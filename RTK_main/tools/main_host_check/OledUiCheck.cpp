@@ -801,7 +801,93 @@ void testRenderAllPagesAndDirtySkip() noexcept
     CHECK(std::memcmp(fb, fb2, sizeof(ScreenBuff)) != 0);
 }
 
-/** @brief 验证 UiEventBus 短按时间戳队列、OLED 在线标志、USB 关机终帧原子握手与重启唤醒钩子。 */
+/** @brief 验证 33 ms 采样的缓动步长及展开、收回的镜像几何。 */
+void testTransitionPose() noexcept
+{
+    constexpr Rect screen{0, 0, 128, 64};
+    constexpr Rect icon{102, 44, 24, 19};
+    PageTransition open{};
+    PageTransition close{};
+    PageTransition slide{};
+    open.start(TransitionKind::kExpandFromIcon, OledPage::kDialplate, OledPage::kSubPower, icon,
+               0U);
+    close.start(TransitionKind::kCollapseToIcon, OledPage::kSubPower, OledPage::kDialplate, icon,
+                0U);
+    slide.start(TransitionKind::kSlideLeft, OledPage::kSystemCheck, OledPage::kDialplate, {}, 0U);
+    CHECK(open.durationMs == 420U);
+    CHECK(open.pose(0U, screen).viewport == icon);
+    CHECK(open.pose(40U, screen).contentOffsetY == 5);
+    CHECK(open.pose(kPageTransitionMs, screen).viewport == screen);
+    CHECK(open.pose(kPageTransitionMs, screen).contentOffsetY == 0);
+    CHECK(open.progressQ10(kPageTransitionMs / 2U) == kEaseScale / 2U);
+    CHECK(open.progressQ10(40U) < 8U);
+    auto prev = icon;
+    int16_t lastSlide = screen.w;
+    for (uint32_t at = 0U; at <= kPageTransitionMs + kAnimFramePeriodMs; at += kAnimFramePeriodMs) {
+        const uint32_t time = std::min(at, kPageTransitionMs);
+        const auto pose = open.pose(time, screen);
+        const auto reverse = close.pose(kPageTransitionMs - time, screen);
+        CHECK(pose.viewport == reverse.viewport && pose.contentOffsetY == reverse.contentOffsetY);
+        CHECK(pose.viewport.x <= prev.x && prev.x - pose.viewport.x <= 32);
+        CHECK(pose.viewport.y <= prev.y && prev.y - pose.viewport.y <= 16);
+        CHECK(pose.viewport.w >= prev.w && pose.viewport.w - prev.w <= 32);
+        const int16_t nextSlide = slide.pose(time, screen).viewport.x;
+        CHECK(nextSlide <= lastSlide && lastSlide - nextSlide <= 32);
+        prev = pose.viewport;
+        lastSlide = nextSlide;
+    }
+}
+
+/** @brief 验证通信操作、配对弹窗的局部状态和返回页。 */
+void testCommAndPairing() noexcept
+{
+    auto vm = makeHealthyVm();
+    vm.wifiSupported = true;
+    UiController ui{};
+    ui.reset(board::BootMode::kNormal, 0U);
+    const auto twice = [&](uint32_t now) {
+        const std::array<uint32_t, 2U> keys{now - 100U, now};
+        return ui.step(now, keys, vm);
+    };
+    const auto once = [&](uint32_t press) {
+        const std::array<uint32_t, 1U> keys{press};
+        return ui.step(press + kDoubleClickWindowMs, keys, vm);
+    };
+    CHECK(twice(200U).page == OledPage::kDialplate);
+    static_cast<void>(once(1000U));
+    static_cast<void>(once(1400U));
+    CHECK(twice(1900U).page == OledPage::kSubComm);
+    CHECK(twice(2500U).action.action == OledAction::kNone);
+    CHECK(ui.renderState(2500U).modal == UiModal::kWifiConfirm);
+    CHECK(once(2600U).action.action == OledAction::kNone);
+    CHECK(ui.renderState(2900U).modal == UiModal::kNone);
+    CHECK(twice(3100U).action.action == OledAction::kNone);
+    CHECK(twice(3400U).action.action == OledAction::kWifi);
+
+    static_cast<void>(once(3500U));
+    CHECK(twice(4000U).action.action == OledAction::kTogglePair);
+    vm.pairing.id = 41U;
+    vm.pairing.requestDeadlineMs = 34000U;
+    CHECK(twice(4200U).action.action == OledAction::kNone);
+    CHECK(ui.renderState(4200U).modal == UiModal::kPair);
+    const auto accept = twice(4400U).action;
+    CHECK(accept.action == OledAction::kPairAccept && accept.pairId == 41U);
+    CHECK(twice(4600U).action.action == OledAction::kNone);
+    vm.pairing.id = 42U;
+    CHECK(ui.step(4700U, {}, vm).action.action == OledAction::kNone);
+    const auto reject = once(4800U).action;
+    CHECK(reject.action == OledAction::kPairReject && reject.pairId == 42U);
+    CHECK(ui.step(34000U, {}, vm).page == OledPage::kSubComm);
+    CHECK(ui.renderState(34000U).modal == UiModal::kNone);
+
+    static_cast<void>(once(34200U));
+    CHECK(twice(34700U).page == OledPage::kDialplate);
+    vm.radioMode = RadioMode::kWifiConfig;
+    CHECK(twice(35300U).page == OledPage::kSubComm);
+    CHECK(twice(35900U).action.action == OledAction::kBluetooth);
+}
+
+/** @brief 验证 UiEventBus 短按时间戳队列、OLED 在线标志、关机凭据和 kLink 动作。 */
 void testUiEventBus() noexcept
 {
     UiEventBus bus{};
@@ -830,6 +916,11 @@ void testUiEventBus() noexcept
     bus.setRestartWakeHook(nullptr, nullptr);
     bus.setOledActive(false);
     CHECK(!bus.oledActive());
+    CHECK(bus.submitAction({OledAction::kPairAccept, 11U}));
+    CHECK(!bus.submitAction({OledAction::kPairReject, 12U}));
+    const auto request = bus.takeAction();
+    CHECK(request.action == OledAction::kPairAccept && request.pairId == 11U);
+    CHECK(bus.takeAction().action == OledAction::kNone);
 }
 
 } // namespace
@@ -847,6 +938,8 @@ int main()
     testControllerNavigationAndShutdown();
     testFormattingAndSatSummary();
     testRenderAllPagesAndDirtySkip();
+    testTransitionPose();
+    testCommAndPairing();
     testUiEventBus();
     if (s_failures != 0) {
         std::printf("oled_ui_check: %d failure(s)\n", s_failures);

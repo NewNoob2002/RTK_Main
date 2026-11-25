@@ -65,6 +65,7 @@ enum class ShutdownDoneBit : uint8_t {
     kPeripheralsSafe = 1U << 4U, ///< 外设输出已置安全电平
     kCutPower = 1U << 5U,        ///< 已进入断电动作阶段（kCutPower）
     kUsbOffReady = 1U << 6U,     ///< USB 路径 U3 已关断，等待最后一帧刷出后重启
+    kBatteryOffReady = 1U << 7U, ///< 电池路径可准备终帧，断电动作由 OLED 握手放行
 };
 
 /**
@@ -104,6 +105,9 @@ inline constexpr uint32_t kShutdownSaveTimeoutMs = 1000U; // ms，kSave 落盘�
 inline constexpr uint32_t kShutdownCutInitHighMs = 2000U; // ms，无 USB 时首段 GPIO4 高电平
 inline constexpr uint32_t kShutdownCutToggleMs = 3100U;   // ms，无 USB 时高/低交替周期
 inline constexpr uint32_t kShutdownCutTimeoutMs = 30000U; // ms，断电超时回退上限
+inline constexpr uint32_t kMinStageVisibleMs = 250U;      // ms，短阶段留出肉眼识别时间
+inline constexpr uint32_t kShutdownDisplayGraceMs = 100U; // ms，容纳在途帧和一次完整刷屏
+inline constexpr uint32_t kShutdownFinalVisibleMs = 300U; // ms，终帧确认后留给用户阅读
 
 // SGM41513 寄存器与位定义（BQ25601 兼容映射，待实板 `power charger` dump 核对）。
 inline constexpr uint8_t kSgmReg00 = 0x00U;
@@ -423,11 +427,14 @@ public:
      * @param quiesceDone: kQuiesce 阶段外设静默与日志冲刷是否已完成
      * @param senseHigh: GPIO25（U3 OUT）当前数字电平是否为高
      * @param usbPresent: USB 输入电源当前是否在位，缺少有效样本时为 nullopt
+     * @param stageVisible: 中间阶段是否可离开
+     * @param cutReady: 是否允许开始 GPIO4 断电动作
      * @retval 本轮阶段、边沿标志及 GPIO4/重启控制输出
      * @note 由持有者串行调用，不阻塞、不分配堆。
      */
     [[nodiscard]] ShutdownOutput step(uint32_t nowMs, bool saveDone, bool quiesceDone,
-                                      bool senseHigh, std::optional<bool> usbPresent) noexcept;
+                                      bool senseHigh, std::optional<bool> usbPresent,
+                                      bool stageVisible = true, bool cutReady = true) noexcept;
 
     /**
      * @brief 查询是否正在执行关机序列
@@ -476,11 +483,13 @@ private:
      * @param nowMs: 当前单调时间（ms）
      * @param senseHigh: GPIO25 当前是否为高
      * @param usbPresent: USB 当前是否在位，缺少有效样本时为 nullopt
+     * @param cutReady: 是否允许开始 GPIO4 断电动作
      * @retval 本轮输出动作
      * @note 仅 step() 在 kCutPower 阶段调用。
      */
     [[nodiscard]] ShutdownOutput stepCutPower(uint32_t nowMs, bool senseHigh,
-                                              std::optional<bool> usbPresent) noexcept;
+                                              std::optional<bool> usbPresent,
+                                              bool cutReady) noexcept;
 
     ShutdownStage stage_ = ShutdownStage::kIdle;
     ShutdownReason reason_ = ShutdownReason::kNone;
