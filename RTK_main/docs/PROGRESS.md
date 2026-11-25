@@ -42,7 +42,7 @@
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | 未立项，需新 ADR，必须走 ADR-0018 的服务与总线 |
-| P2 OLED 表盘与子菜单（OL2） | 进行中：表盘 + 子菜单、开机自检、关机进度、30 fps 动画；按键方案 A（短按下一项、双击进入/返回） |
+| OL2–OL6 OLED 表盘 UI（开机自检、真实关机进度与末帧等待、表盘+统一子页、长按确认关机、待机页、SDL2 模拟器、30 fps 绝对节拍+局部刷新、两选项弹窗、COMM 页 SoftAP 信息） | 已合入 main（2026-11-25）。P2 v1.41 + F9P HIL 通过：自检/表盘/子页、长按确认与关机页完整显示、待机开机环、无充电 IC 时按 GPIO27 显示 USB/BAT、BT→Wi-Fi 切换后屏幕恢复（I2C 9 SCL 恢复）、无定位时 OLED 显示 NO FIX 且网页不报精度、`oled bench 10` 30.0 fps / CPU 3.8% / 帧间隔最大 35 ms / i2c_errors 0 / 栈余量 784 B、弹窗单击切换双击确认、Wi-Fi COMM 显示 SSID/IP/客户端数。报告 `docs/reports/OL2-oled-ui.md`…`OL6-oled-dialog-wifi.md`；后续 PW1 关机参与者表 |
 
 ## 3. 待补的硬件验证（HIL）
 
