@@ -1,0 +1,12 @@
+# Exercises redesigned charging standby page, 2 fps charging flow, hold-to-wake ring fill and release fallback.
+0 check charge_standby
+0 shot standby
+500 shot standby-flow
+1000 key_down
+2500 shot standby-hold
+2600 key_up
+3000 shot standby-released
+3500 key_down
+6000 long
+6200 key_up
+6600 shot standby-starting

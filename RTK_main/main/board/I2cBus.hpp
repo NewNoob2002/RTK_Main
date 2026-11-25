@@ -21,6 +21,7 @@ inline constexpr int kDefaultScanTimeoutMs = 10;     // ms，扫描单地址探�
 inline constexpr uint8_t kScanFirstAddress = 0x08U;
 inline constexpr uint8_t kScanLastAddress = 0x77U;
 inline constexpr size_t kScanAddressCount = kScanLastAddress - kScanFirstAddress + 1U;
+inline constexpr unsigned kProbeRecoveryRetries = 2U; // 探测总线故障时复位并重试次数（总计 3 次）
 
 /** 共享 I2C 总线的静态互斥锁 RAII 守卫，确保跨任务（kLink/oled/console）事务串行化。 */
 class BusLock final {
@@ -55,6 +56,16 @@ private:
     SemaphoreHandle_t handle_ = nullptr;
     bool locked_ = false;
 };
+
+/**
+ * @brief 总线建链前检查 SDA 电平；若被从机拉低则以开漏 GPIO 发出最多 9 个 SCL 脉冲与 STOP 释放总线
+ * @param sdaGpio: SDA 引脚编号
+ * @param sclGpio: SCL 引脚编号
+ * @retval true SDA 处于高电平（原本空闲或恢复成功）
+ * @retval false 恢复脉冲后 SDA 仍为低电平
+ * @note 仅启动期 i2c_new_master_bus 之前调用，不分配堆，非 ISR。
+ */
+[[nodiscard]] bool recoverBusPins(int sdaGpio, int sclGpio) noexcept;
 
 /**
  * @brief 幂等创建板级共享 I2C 主总线与静态互斥锁（全生命周期仅创建一次）

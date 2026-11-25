@@ -178,6 +178,12 @@ void spp_server_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param
         }
         break;
 
+    case ESP_BT_GAP_READ_REMOTE_NAME_EVT:
+        if (param->read_rmt_name.stat == ESP_BT_STATUS_SUCCESS) {
+            spp_server_pair_remote_name(param->read_rmt_name.bda, param->read_rmt_name.rmt_name);
+        }
+        break;
+
     default:
         /* 其余事件（含 ESP_BT_GAP_MODE_CHG_EVT）无需处理。 */
         break;

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include "board/PowerLogic.hpp"
@@ -130,6 +131,15 @@ private:
     void pollBattery(uint32_t nowMs, const PinLevels &pins) noexcept;
 
     /**
+     * @brief 分发按键短/长按事件并处理 8 s 强制关机兜底
+     * @param nowMs: 当前单调时间（ms）
+     * @param event: 本轮按键状态机事件
+     * @param keyPressed: 当前物理按键是否处于按下状态
+     * @note 仅 kLink 在 poll 中调用，非阻塞，非 ISR。
+     */
+    void handleKeyPoll(uint32_t nowMs, board::KeyEvent event, bool keyPressed) noexcept;
+
+    /**
      * @brief 在充电待机中逐轮确认保持并安排重启
      * @param nowMs: 当前单调时间（ms）
      * @param longPress: 本轮是否达到长按阈值
@@ -217,6 +227,73 @@ private:
     void setKeyDrive(bool high) noexcept;
 
     /**
+     * @brief 计算当前关机阶段的已完成里程碑位掩码（供 OLED 关机进度页只读消费）
+     * @param pins: 当前供电检测结果
+     * @retval ShutdownDoneBit 组合掩码，空闲态为 0
+     * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] uint8_t computeShutdownDoneMask(const PinLevels &pins) const noexcept;
+
+    /**
+     * @brief 计算当前关机阶段的降级结果位掩码（超时/外设安全电平失败，与完成位独立）
+     * @retval ShutdownDegradedBit 组合掩码，无降级或空闲态为 0
+     * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] uint8_t computeShutdownDegradedMask() const noexcept;
+
+    /**
+     * @brief 判断应用层无线业务是否已完成关机收尾
+     * @retval true SPP 已断开且扫描关闭请求已提交，或 SoftAP 已停用，或无需收尾
+     * @retval false 本模式的应用层收尾仍在进行
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool isRadioQuiesced() const noexcept;
+
+    /**
+     * @brief 复位单次关机周期的真实完成位与降级位记录
+     * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
+     */
+    void resetShutdownProgress() noexcept;
+
+    /**
+     * @brief 在真实 FreeRTOS 任务上下文中等待 OLED USB 终帧完成通知或到达绝对 30 ms 截止
+     * @param self: 当前任务句柄（非空）
+     * @note 仅 USB 关机重启前最后一步调用，每次相对等待最多一 tick，非 ISR。
+     */
+    void waitOledFinalFrame(TaskHandle_t self) noexcept;
+
+    /**
+     * @brief 确认当前阶段已显示足够久，屏幕故障时按有界等待降级
+     * @param nowMs: 当前单调时间
+     * @param stage: 正在呈现的阶段
+     * @retval 是否可继续推进
+     */
+    [[nodiscard]] bool shutdownStageVisible(uint32_t nowMs, board::ShutdownStage stage) noexcept;
+
+    /**
+     * @brief 确认终帧已停留足够久或刷出截止已到
+     * @param nowMs: 当前单调时间
+     * @param flushDeadlineMs: 最晚等到终帧写出的绝对时间
+     * @param usb: true 检查 USB 重启终帧，false 检查电池断电终帧
+     * @retval 是否放行断电或重启
+     */
+    [[nodiscard]] bool finalFrameReady(uint32_t nowMs, uint32_t flushDeadlineMs, bool usb) noexcept;
+
+    /**
+     * @brief 推进日志排空及 USB 终帧停留，条件满足后重启
+     * @param nowMs: 当前单调时间
+     * @retval 执行器无需加速轮询
+     */
+    [[nodiscard]] bool pollRestart(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 供 UiEventBus 终帧刷出后调用的非阻塞重启唤醒钩子
+     * @param ctx: 未使用
+     * @note 由 OLED 任务调用，不阻塞，非 ISR。
+     */
+    static void wakeRestartWait(void *ctx) noexcept;
+
+    /**
      * @brief 在状态变化时发布电源快照到 DataCenter
      * @param pins: 本轮采样电平
      * @param force: true 强制写入（init 时使用）
@@ -227,6 +304,7 @@ private:
     AppContext *context_ = nullptr;
     bool active_ = false;
     bool keyDriveHigh_ = false;
+    bool forcePowerOffFired_ = false;
     board::PowerKeySm keySm_{};
     board::ShutdownSm shutdownSm_{};
     board::StandbyWakeSm standbyWake_{};
@@ -236,6 +314,19 @@ private:
     bool ioFenceReached_ = false;
     bool restartPending_ = false;
     uint32_t restartStartMs_ = 0U;
+    bool restartLogReady_ = false;
+    uint32_t oledWaitDeadlineMs_ = 0U;
+    uint32_t stageEnteredMs_ = 0U;
+    std::optional<uint32_t> stageOnScreenMs_{};
+    std::optional<uint32_t> finalHoldDeadlineMs_{};
+    bool finalFrameReady_ = false;
+    bool saveFencesDone_ = false;
+    bool saveFlushedDone_ = false;
+    bool saveTimedOut_ = false;
+    bool peripheralsSafeDone_ = false;
+    bool peripheralsSafeFailed_ = false;
+    bool radioQuiescedDone_ = false;
+    bool radioTimedOut_ = false;
     uint32_t shortPresses_ = 0U;
     uint32_t longPresses_ = 0U;
     uint32_t quiesceStartMs_ = 0U;

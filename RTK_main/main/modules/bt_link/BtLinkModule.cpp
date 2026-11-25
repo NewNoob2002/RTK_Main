@@ -672,7 +672,11 @@ void BtLinkModule::pollPhoneReset(uint32_t nowMs) noexcept
         FW_LOGI(fw::TraceCat::kSys, "Phone reboot requested, restarting");
         break;
     }
+#if defined(ESP_PLATFORM)
+    app::restartWithOledQuiesce(app::RebootBanner::kRebooting);
+#else
     esp_restart();
+#endif
 }
 
 void BtLinkModule::publishLinkStatus(uint32_t nowMs) noexcept

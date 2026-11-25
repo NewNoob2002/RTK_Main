@@ -272,7 +272,8 @@ bool ShutdownSm::request(ShutdownReason reason) noexcept
 }
 
 ShutdownOutput ShutdownSm::step(uint32_t nowMs, bool saveDone, bool quiesceDone, bool senseHigh,
-                                std::optional<bool> usbPresent) noexcept
+                                std::optional<bool> usbPresent, bool stageVisible,
+                                bool cutReady) noexcept
 {
     switch (stage_) {
     case ShutdownStage::kIdle:
@@ -283,13 +284,16 @@ ShutdownOutput ShutdownSm::step(uint32_t nowMs, bool saveDone, bool quiesceDone,
             stageStartMs_ = nowMs;
             return ShutdownOutput{.stage = ShutdownStage::kAnnounce, .stageEntered = true};
         }
+        if (!stageVisible) {
+            return ShutdownOutput{.stage = ShutdownStage::kAnnounce};
+        }
         stage_ = ShutdownStage::kSave;
         stageEntered_ = true;
         stageStartMs_ = nowMs;
         return ShutdownOutput{.stage = ShutdownStage::kSave, .stageEntered = true};
     case ShutdownStage::kSave: {
         const bool timedOut = !saveDone && ((nowMs - stageStartMs_) >= kShutdownSaveTimeoutMs);
-        if (!saveDone && !timedOut) {
+        if (!stageVisible || (!saveDone && !timedOut)) {
             return ShutdownOutput{.stage = ShutdownStage::kSave};
         }
         stage_ = ShutdownStage::kQuiesce;
@@ -302,7 +306,7 @@ ShutdownOutput ShutdownSm::step(uint32_t nowMs, bool saveDone, bool quiesceDone,
         };
     }
     case ShutdownStage::kQuiesce: {
-        if (!quiesceDone) {
+        if (!stageVisible || !quiesceDone) {
             return ShutdownOutput{.stage = ShutdownStage::kQuiesce};
         }
         stage_ = ShutdownStage::kCutPower;
@@ -312,12 +316,12 @@ ShutdownOutput ShutdownSm::step(uint32_t nowMs, bool saveDone, bool quiesceDone,
         cutFirstHigh_ = true;
         cutHigh_ = true;
         cutUsbPresent_ = usbPresent.value_or(false);
-        auto out = stepCutPower(nowMs, senseHigh, usbPresent);
+        auto out = stepCutPower(nowMs, senseHigh, usbPresent, cutReady);
         out.stageEntered = true;
         return out;
     }
     case ShutdownStage::kCutPower:
-        return stepCutPower(nowMs, senseHigh, usbPresent);
+        return stepCutPower(nowMs, senseHigh, usbPresent, cutReady);
     default:
         stage_ = ShutdownStage::kIdle;
         reason_ = ShutdownReason::kNone;
@@ -326,7 +330,7 @@ ShutdownOutput ShutdownSm::step(uint32_t nowMs, bool saveDone, bool quiesceDone,
 }
 
 ShutdownOutput ShutdownSm::stepCutPower(uint32_t nowMs, bool senseHigh,
-                                        std::optional<bool> usbPresent) noexcept
+                                        std::optional<bool> usbPresent, bool cutReady) noexcept
 {
     if ((nowMs - stageStartMs_) >= kShutdownCutTimeoutMs) {
         stage_ = ShutdownStage::kIdle;
@@ -336,7 +340,7 @@ ShutdownOutput ShutdownSm::stepCutPower(uint32_t nowMs, bool senseHigh,
         return ShutdownOutput{.stage = ShutdownStage::kIdle, .cutTimedOut = true};
     }
 
-    if (!usbPresent.has_value()) {
+    if (!cutReady || !usbPresent.has_value()) {
         cutFirstHigh_ = true;
         cutToggleStartMs_ = nowMs;
         cutHigh_ = false;

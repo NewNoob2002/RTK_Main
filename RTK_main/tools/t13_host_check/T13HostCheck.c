@@ -824,12 +824,23 @@ static void sc_gap_pairing_window(void)
     fake_emit_gap_pin_req(other);
     CHECK(fake_wait_pin_reply(3, 2000U) && !fake_last_gap_accept());
     CHECK(fake_ssp_confirm_count() == 0);
-    CHECK(spp_server_pair_decide(true));
+    spp_server_pair_snapshot_t first;
+    fake_emit_gap_remote_name(s_bda, "OL3 Peer");
+    spp_server_pair_snapshot(&first);
+    CHECK(first.id != 0U && first.remaining_ms == 30000U);
+    CHECK(first.has_number && first.number == 123456U);
+    CHECK(memcmp(first.bda, s_bda, SPP_SERVER_ADDR_LEN) == 0);
+    CHECK(strcmp(first.name, "OL3 Peer") == 0);
+    CHECK(spp_server_pair_decide_for(first.id, true));
     CHECK(fake_wait_ssp_confirm(1, 2000U) && fake_last_gap_accept());
 
     fake_emit_gap_cfm_req(s_bda);
     fake_emit_gap_pin_req(other);
     CHECK(fake_wait_pin_reply(4, 2000U) && !fake_last_gap_accept());
+    spp_server_pair_snapshot_t second;
+    spp_server_pair_snapshot(&second);
+    CHECK(second.id != 0U && second.id != first.id && second.name[0] == '\0');
+    CHECK(!spp_server_pair_decide_for(first.id, true));
     CHECK(spp_server_pair_decide(false));
     CHECK(fake_wait_ssp_confirm(2, 2000U) && !fake_last_gap_accept());
 
@@ -839,6 +850,8 @@ static void sc_gap_pairing_window(void)
     fake_advance_ticks(30000U);
     CHECK(fake_wait_ssp_confirm(3, 2000U) && !fake_last_gap_accept());
     CHECK(!spp_server_pair_decide(true));
+    spp_server_pair_snapshot(&second);
+    CHECK(second.id == 0U);
 
     /* Just Works 由栈自动确认、不经 CFM：窗口外新绑定在 AUTH_CMPL 后删除；窗口内与白名单保留。 */
     atomic_store_explicit(&s_pair_policy, SPP_SERVER_PAIR_DENY, memory_order_relaxed);

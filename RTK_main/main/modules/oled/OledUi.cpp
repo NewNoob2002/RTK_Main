@@ -1,4 +1,4 @@
-// OLED 只读页面状态机、纯整数格式化与 WouoUI 帧缓冲渲染实现（ADR-0020）。
+// OLED 自检状态机、表盘/子菜单/关机控制器、纯整数格式化与卫星摘要实现（OL2）。
 // 仅 OLED 任务或主机测试串行调用；无 IDF/硬件依赖，不分配堆，非 ISR。
 // 堆档位：禁止区；本文件不分配堆。
 #include "modules/oled/OledUi.hpp"
@@ -9,434 +9,926 @@
 namespace app::oled {
 namespace {
 
-constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
-constexpr uint64_t kFnvPrime = 1099511628211ULL;
+constexpr uint32_t kFnvOffsetBasis = 2166136261U;
+constexpr uint32_t kFnvPrime = 16777619U;
 constexpr char kMinPrintableAscii = ' ';
 constexpr char kMaxPrintableAscii = '~';
-constexpr int16_t kCanvasW = static_cast<int16_t>(kWidth);
-constexpr int16_t kCanvasH = static_cast<int16_t>(kHeight);
 constexpr uint8_t kMaxPercent = 100U;
 constexpr uint32_t kMvPerVolt = 1000U;
 constexpr uint32_t kMvPerCentiVolt = 10U;
+constexpr int64_t kE9Scale = 1000000000LL;
+constexpr int64_t kE9ToMicroDeg = 1000LL; // 1e-9 度 -> 1e-6 度（保留 6 位小数）
+constexpr int32_t kMmPerMeter = 1000;
+constexpr int32_t kMmPerCentiMeter = 10;
 constexpr uint16_t kCmPerMeter = 100U;
+constexpr uint16_t kMaxDisplayAccCm = 9999U; // cm，>= 99.99 m（含 65534 饱和值）显示 ">99m"
+constexpr uint16_t kHdopScale = 100U;
+constexpr uint16_t kDiffAgeScale = 10U;
+constexpr uint32_t kMsPerSec = 1000U;
+constexpr uint32_t kSecPerMin = 60U;
+constexpr uint32_t kSecPerHour = 3600U;
+constexpr uint32_t kSecPerDay = 86400U;
 
-// 128x64 布局常量（单位：px），避免散落魔数并保证各页对齐一致。
-constexpr int16_t kSplashFramePad = 2;
-constexpr int16_t kSplashFrameInset = 4;
-constexpr uint8_t kFrameRadius = 3U;
-constexpr int16_t kSplashTitleY = 12;
-constexpr int16_t kSplashRuleMargin = 16;
-constexpr int16_t kSplashRuleY = 33;
-constexpr int16_t kSplashVerY = 42;
+constexpr size_t kSlotGps = 0U;
+constexpr size_t kSlotBeidou = 1U;
+constexpr size_t kSlotGlonass = 2U;
+constexpr size_t kSlotGalileo = 3U;
+constexpr size_t kCheckIdxPower = 0U;
+constexpr size_t kCheckIdxNvs = 1U;
+constexpr size_t kCheckIdxRadio = 2U;
+constexpr size_t kCheckIdxCharger = 3U;
+constexpr size_t kCheckIdxGnss = 4U;
+constexpr uint8_t kDockIdxSat = 0U;
+constexpr uint8_t kDockIdxPos = 1U;
+constexpr uint8_t kDockIdxComm = 2U;
+constexpr uint8_t kDockIdxDevice = 3U;
+constexpr uint8_t kDockIdxPower = 4U;
 
-constexpr int16_t kHeaderTextY = 1;
-constexpr int16_t kHeaderLineY = 11;
-constexpr int16_t kRow1Y = 16;
-constexpr int16_t kRow2Y = 28;
-constexpr int16_t kRow3Y = 40;
-constexpr int16_t kRow4Y = 52;
-constexpr int16_t kFooterTextY = 55;
-constexpr int16_t kFooterHintX = 68;
-constexpr int16_t kPageNumRightX = 108;
-
-constexpr int16_t kStandbyPctX = 14;
-constexpr int16_t kStandbyPctY = 17;
-constexpr int16_t kStandbyVoltX = 76;
-constexpr int16_t kStandbyVoltY = 21;
-constexpr int16_t kBarX = 14;
-constexpr int16_t kBarY = 39;
-constexpr int16_t kBarW = 100;
-constexpr int16_t kBarH = 10;
-constexpr uint8_t kBarRadius = 2U;
-constexpr int16_t kBarInnerPad = 2;
-constexpr int16_t kBarInnerH = 6;
-constexpr uint32_t kBarInnerMaxW = 96U;
-constexpr int16_t kStandbyHintY = 54;
-
-constexpr int16_t kShutdownBoxX = 4;
-constexpr int16_t kShutdownBoxY = 6;
-constexpr int16_t kShutdownBoxW = kCanvasW - 8;
-constexpr int16_t kShutdownBoxH = kCanvasH - 12;
-constexpr int16_t kShutdownLowY = 18;
-constexpr int16_t kShutdownSubY = 34;
-constexpr int16_t kShutdownMidY = 26;
-constexpr uint8_t kAllPagesMask = 0xFFU;
+// 关机进度条目标步进百分比（与真实阶段和 fence 一一对应）。
+constexpr uint8_t kPctAnnounce = 15U;
+constexpr uint8_t kPctSaveStart = 30U;
+constexpr uint8_t kPctSaveFences = 45U;
+constexpr uint8_t kPctSaveDone = 55U;
+constexpr uint8_t kPctQuiesceStart = 65U;
+constexpr uint8_t kPctRadioDone = 80U;
+constexpr uint8_t kPctCutPower = 92U;
+constexpr uint8_t kPctCutPowerDone = 100U;
+constexpr uint8_t kShutdownStepPerTick = 5U;
 
 /**
- * @brief 在 NUL 结尾字符数组中取得有效文本视图
- * @param buf: 字符数组
- * @retval 不含末尾 NUL 的字符串视图
- * @note 纯函数，防止缺少 NUL 时越界。
- */
-[[nodiscard]] std::string_view viewOf(std::span<const char> buf) noexcept
-{
-    size_t len = 0U;
-    while ((len < buf.size()) && (buf[len] != '\0')) {
-        ++len;
-    }
-    return {buf.data(), len};
-}
-
-/**
- * @brief 将可打印 ASCII 字符串转为无符号字节数组供 WouoUI 绘制（避免 reinterpret_cast）
- * @param src: 源文本
- * @param[out] out: NUL 结尾的无符号字节缓冲
- * @note 纯函数，越界字符替换为 '?' 防止字体表越界访问。
- */
-void toWouoBytes(std::string_view src, std::span<uint8_t> out) noexcept
-{
-    if (out.empty()) {
-        return;
-    }
-    const size_t maxChars = out.size() - 1U;
-    const size_t count = std::min(src.size(), maxChars);
-    for (size_t i = 0U; i < count; ++i) {
-        const char ch = src[i];
-        const char safe = ((ch >= kMinPrintableAscii) && (ch <= kMaxPrintableAscii)) ? ch : '?';
-        // safe 限定在 0x20..0x7E，转为 uint8_t 无符号损失。
-        out[i] = static_cast<uint8_t>(safe);
-    }
-    out[count] = 0U;
-}
-
-/**
- * @brief 按指定坐标绘制单行文本
- * @param canvas: 目标画布
- * @param x: 起始 x 坐标
- * @param y: 起始 y 坐标
- * @param font: WouoUI 字体描述
- * @param text: 待绘制文本
- * @note 仅 renderPage 内部调用，不分配堆。
- */
-void drawText(Canvas &canvas, int16_t x, int16_t y, const sFONT &font,
-              std::string_view text) noexcept
-{
-    std::array<uint8_t, kMaxLineChars + 1U> bytes{};
-    toWouoBytes(text, bytes);
-    WouoUI_CanvasDrawStr(&canvas, x, y, font, bytes.data());
-}
-
-/**
- * @brief 在画布水平居中位置绘制单行文本
- * @param canvas: 目标画布
- * @param y: 起始 y 坐标
- * @param font: WouoUI 字体描述
- * @param text: 待绘制文本
- * @note 仅 renderPage 内部调用，不分配堆。
- */
-void drawCentered(Canvas &canvas, int16_t y, const sFONT &font, std::string_view text) noexcept
-{
-    std::array<char, kMaxLineChars + 1U> clean{};
-    sanitizeCopy(text, clean);
-    const uint16_t width = WouoUI_GetStrWidth(clean.data(), font);
-    // width < kWidth (128)，差值右移一位结果在 0..63，转为 int16_t 安全。
-    const int16_t x = (width < kWidth) ? static_cast<int16_t>((kWidth - width) / 2U) : 0;
-    drawText(canvas, x, y, font, viewOf(clean));
-}
-
-/**
- * @brief 取得 GNSS 状态的短名
- * @param enabled: GNSS 是否启用
- * @param state: GNSS 控制器状态
- * @retval 静态短名
+ * @brief 将卫星星座枚举映射为柱状图槽位下标（0:GPS 1:BDS 2:GLO 3:GAL，其他返回 kConstellationSlots）
+ * @param sys: 星座枚举
+ * @retval 槽位下标或越界哨兵
  * @note 纯函数。
  */
-[[nodiscard]] const char *gnssStateShort(bool enabled, gnss::State state) noexcept
+[[nodiscard]] size_t constellationSlot(gnss::Constellation sys) noexcept
 {
-    if (!enabled) {
-        return "OFF";
-    }
-    switch (state) {
-    case gnss::State::kOff:
-        return "OFF";
-    case gnss::State::kProbing:
-        return "PROBE";
-    case gnss::State::kConfiguring:
-        return "CFG";
-    case gnss::State::kRunning:
-        return "RUN";
-    case gnss::State::kFailed:
-        return "FAIL";
+    switch (sys) {
+    case gnss::Constellation::kGps:
+        return kSlotGps;
+    case gnss::Constellation::kBeidou:
+        return kSlotBeidou;
+    case gnss::Constellation::kGlonass:
+        return kSlotGlonass;
+    case gnss::Constellation::kGalileo:
+        return kSlotGalileo;
+    case gnss::Constellation::kQzss:
+    case gnss::Constellation::kNavic:
+    case gnss::Constellation::kSbas:
+    case gnss::Constellation::kOther:
+    case gnss::Constellation::kCount:
     default:
-        return "UNK";
+        return kConstellationSlots;
     }
 }
 
 /**
- * @brief 取得 GGA 定位质量的短名
- * @param fixValid: GGA 解是否有效
- * @param quality: GGA 质量枚举
- * @retval 静态短名
+ * @brief 将卫星星座枚举映射为单字母缩写（G/C/R/E/J/I/S/O）
+ * @param sys: 星座枚举
+ * @retval 单字母缩写
  * @note 纯函数。
  */
-[[nodiscard]] const char *fixQualityShort(bool fixValid, gnss::FixQuality quality) noexcept
+[[nodiscard]] char constellationLetter(gnss::Constellation sys) noexcept
 {
-    if (!fixValid) {
-        return quality == gnss::FixQuality::kUnknown ? "--" : "NONE";
-    }
-    switch (quality) {
-    case gnss::FixQuality::kSingle:
-        return "SINGLE";
-    case gnss::FixQuality::kDgps:
-        return "DGPS";
-    case gnss::FixQuality::kPps:
-        return "PPS";
-    case gnss::FixQuality::kRtkFixed:
-        return "FIXED";
-    case gnss::FixQuality::kRtkFloat:
-        return "FLOAT";
-    case gnss::FixQuality::kDeadReckoning:
-        return "DR";
-    case gnss::FixQuality::kManual:
-        return "MANUAL";
-    case gnss::FixQuality::kSimulator:
-        return "SIM";
-    case gnss::FixQuality::kInvalid:
-        return "NONE";
-    case gnss::FixQuality::kUnknown:
+    switch (sys) {
+    case gnss::Constellation::kGps:
+        return 'G';
+    case gnss::Constellation::kBeidou:
+        return 'C';
+    case gnss::Constellation::kGlonass:
+        return 'R';
+    case gnss::Constellation::kGalileo:
+        return 'E';
+    case gnss::Constellation::kQzss:
+        return 'J';
+    case gnss::Constellation::kNavic:
+        return 'I';
+    case gnss::Constellation::kSbas:
+        return 'S';
+    case gnss::Constellation::kOther:
+    case gnss::Constellation::kCount:
     default:
-        return "--";
+        return 'O';
     }
 }
 
 /**
- * @brief 渲染开机画面（产品短名 + 固件版本）
- * @param canvas: 全屏画布
- * @param vm: 视图数据
- * @note 仅 renderPage 调用。
+ * @brief 判断指定页面是否为可双击返回表盘的子菜单
+ * @param page: 页面枚举
+ * @retval true 处于子菜单
+ * @retval false 非子菜单
+ * @note 纯函数。
  */
-void renderSplash(Canvas &canvas, const ViewModel &vm) noexcept
+[[nodiscard]] bool isSubmenuPage(OledPage page) noexcept
 {
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, kSplashFramePad, kSplashFramePad,
-                               static_cast<int16_t>(kCanvasW - kSplashFrameInset),
-                               static_cast<int16_t>(kCanvasH - kSplashFrameInset), kFrameRadius);
-    const std::string_view prod = viewOf(vm.product);
-    const std::string_view fw = viewOf(vm.fwVer);
-    drawCentered(canvas, kSplashTitleY, Font_8_16, prod.empty() ? "RTK" : prod);
-    WouoUI_CanvasDrawLine_H(&canvas, kSplashRuleMargin,
-                            static_cast<int16_t>(kCanvasW - kSplashRuleMargin - 1), kSplashRuleY);
-    drawCentered(canvas, kSplashVerY, Font_6_8, fw.empty() ? "UNKNOWN" : fw);
-}
-
-/**
- * @brief 渲染只读状态页（射频模式、电量/充电、GNSS 状态/解/卫星数）
- * @param canvas: 全屏画布
- * @param vm: 视图数据
- * @note 仅 renderPage 调用。
- */
-void renderStatus(Canvas &canvas, const ViewModel &vm) noexcept
-{
-    std::array<char, 16U> radio{};
-    std::array<char, 16U> bat{};
-    formatRadioShort(vm.radioMode, vm.btReady, vm.btSessions, radio);
-    formatBatteryShort(vm.batteryPct, vm.usbPresent, vm.charging, bat);
-
-    drawText(canvas, 0, kHeaderTextY, Font_6_8, viewOf(radio));
-    const uint16_t batW = WouoUI_GetStrWidth(bat.data(), Font_6_8);
-    // batW < kWidth 时右对齐偏移在 0..127，转为 int16_t 安全。
-    const int16_t batX = (batW < kWidth) ? static_cast<int16_t>(kWidth - batW) : 0;
-    drawText(canvas, batX, kHeaderTextY, Font_6_8, viewOf(bat));
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
-
-    std::array<char, kMaxLineChars + 1U> line{};
-    formatGnssStateLine(vm.gnssEnabled, vm.gnssState, line);
-    drawText(canvas, 0, kRow1Y, Font_6_8, viewOf(line));
-
-    formatFixLine(vm.gnssEnabled, vm.gnssState, vm.fixValid, vm.fixQuality, line);
-    drawText(canvas, 0, kRow2Y, Font_6_8, viewOf(line));
-
-    formatSatsAccLine(vm.gnssEnabled, vm.gnssState, vm.fixValid, vm.satsUsed, vm.hAccCm, line);
-    drawText(canvas, 0, kRow3Y, Font_6_8, viewOf(line));
-
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kRow4Y);
-    drawText(canvas, 0, kFooterTextY, Font_6_8, "1/2");
-    drawText(canvas, kFooterHintX, kFooterTextY, Font_6_8, "KEY:NEXT");
-}
-
-/**
- * @brief 渲染只读设备信息页（板型、SN、硬件版本、固件版本）
- * @param canvas: 全屏画布
- * @param vm: 视图数据
- * @note 仅 renderPage 调用。
- */
-void renderDeviceInfo(Canvas &canvas, const ViewModel &vm) noexcept
-{
-    drawText(canvas, 0, kHeaderTextY, Font_6_8, "DEVICE INFO");
-    drawText(canvas, kPageNumRightX, kHeaderTextY, Font_6_8, "2/2");
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
-
-    std::array<char, kMaxLineChars + 1U> line{};
-    formatLabelValue("DEV:", viewOf(vm.boardName), line);
-    drawText(canvas, 0, kRow1Y, Font_6_8, viewOf(line));
-
-    formatLabelValue("SN :", viewOf(vm.sn), line);
-    drawText(canvas, 0, kRow2Y, Font_6_8, viewOf(line));
-
-    formatLabelValue("HW :", viewOf(vm.hwVer), line);
-    drawText(canvas, 0, kRow3Y, Font_6_8, viewOf(line));
-
-    formatLabelValue("FW :", viewOf(vm.fwVer), line);
-    drawText(canvas, 0, kRow4Y, Font_6_8, viewOf(line));
-}
-
-/**
- * @brief 渲染充电待机页（仅电量百分比、电压、充电态与进度条）
- * @param canvas: 全屏画布
- * @param vm: 视图数据
- * @note 仅 renderPage 调用。
- */
-void renderChargeStandby(Canvas &canvas, const ViewModel &vm) noexcept
-{
-    const char *title =
-        vm.charging
-            ? "CHARGING"
-            : (((vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent))
-                   ? "BATTERY FULL"
-                   : "USB STANDBY");
-    drawCentered(canvas, kHeaderTextY, Font_6_8, title);
-    WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
-
-    std::array<char, 16U> pctBuf{};
-    if (vm.batteryPct == board::kBatteryPctUnknown) {
-        sanitizeCopy("--%", pctBuf);
-    } else {
-        const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-        static_cast<void>(
-            std::snprintf(pctBuf.data(), pctBuf.size(), "%u%%", static_cast<unsigned>(clamped)));
-    }
-    std::array<char, 16U> voltBuf{};
-    formatBatteryVoltage(vm.batteryMv, voltBuf);
-
-    drawText(canvas, kStandbyPctX, kStandbyPctY, Font_8_16, viewOf(pctBuf));
-    drawText(canvas, kStandbyVoltX, kStandbyVoltY, Font_6_8, viewOf(voltBuf));
-
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, kBarX, kBarY, kBarW, kBarH, kBarRadius);
-    if (vm.batteryPct != board::kBatteryPctUnknown) {
-        const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-        // 内框最大宽度 96 px，clamped <= 100，乘法和窄化均安全。
-        const auto fillW = static_cast<int16_t>((static_cast<uint32_t>(clamped) * kBarInnerMaxW) /
-                                                static_cast<uint32_t>(kMaxPercent));
-        if (fillW > 0) {
-            WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(kBarX + kBarInnerPad),
-                                  static_cast<int16_t>(kBarY + kBarInnerPad), fillW, kBarInnerH,
-                                  1U);
-        }
-    }
-    drawCentered(canvas, kStandbyHintY, Font_6_8, "HOLD KEY TO BOOT");
-}
-
-/**
- * @brief 渲染关机提示页（低电关机附加 BATTERY LOW 行）
- * @param canvas: 全屏画布
- * @param vm: 视图数据
- * @note 仅 renderPage 调用。
- */
-void renderShutdown(Canvas &canvas, const ViewModel &vm) noexcept
-{
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, kShutdownBoxX, kShutdownBoxY, kShutdownBoxW, kShutdownBoxH,
-                               kFrameRadius);
-    if (vm.shutdownReason == board::ShutdownReason::kLowBattery) {
-        drawCentered(canvas, kShutdownLowY, Font_6_8, "BATTERY LOW");
-        drawCentered(canvas, kShutdownSubY, Font_6_8, "Shutting down...");
-    } else {
-        drawCentered(canvas, kShutdownMidY, Font_6_8, "Shutting down...");
-    }
+    return (page == OledPage::kSubSat) || (page == OledPage::kSubPos) ||
+           (page == OledPage::kSubComm) || (page == OledPage::kSubDevice) ||
+           (page == OledPage::kSubPower);
 }
 
 } // namespace
 
-void PageSm::reset(board::BootMode bootMode, uint32_t nowMs, uint32_t initialShortKeys) noexcept
+/**
+ * @brief 复位开机自检状态机至 Logo 展开阶段
+ * @param nowMs: 当前单调时间（ms）
+ */
+void SystemCheckSm::reset(uint32_t nowMs) noexcept
+{
+    phase_ = CheckPhase::kLogo;
+    items_.fill(CheckStatus::kPending);
+    itemResolvedMs_.fill(nowMs);
+    activeIdx_ = 0U;
+    phaseStartMs_ = nowMs;
+    stepStartMs_ = nowMs;
+    stepResolvedMs_ = nowMs;
+    stepResolved_ = false;
+    hasWarning_ = false;
+}
+
+CheckStatus SystemCheckSm::evaluateItem(size_t idx, const ViewModel &vm,
+                                        uint32_t elapsedMs) noexcept
+{
+    switch (idx) {
+    case kCheckIdxPower: // 电源/电池
+        return (vm.powerActive && vm.batteryAdcReady) ? CheckStatus::kOk : CheckStatus::kFail;
+    case kCheckIdxNvs: // 存储 NVS
+        return vm.nvsReady ? CheckStatus::kOk : CheckStatus::kFail;
+    case kCheckIdxRadio: // 蓝牙或 Wi-Fi 射频
+        if (vm.radioMode == RadioMode::kWifiConfig) {
+            return vm.wifiReady ? CheckStatus::kOk : CheckStatus::kFail;
+        }
+        return vm.btReady ? CheckStatus::kOk : CheckStatus::kFail;
+    case kCheckIdxCharger: // 充电芯片（无芯片显示 "-" 不算失败）
+        return (vm.chargerPresent || vm.chargerOk) ? CheckStatus::kOk : CheckStatus::kAbsent;
+    case kCheckIdxGnss: // GNSS 探测（型号/固件）
+        if (!vm.gnssEnabled) {
+            return CheckStatus::kAbsent;
+        }
+        if (isGnssRunningLike(vm.gnssState)) {
+            return CheckStatus::kOk;
+        }
+        if (vm.gnssState == gnss::State::kFailed) {
+            return CheckStatus::kFail;
+        }
+        if (elapsedMs >= kGnssWaitCapMs) {
+            return CheckStatus::kFail;
+        }
+        return CheckStatus::kPending;
+    default:
+        return CheckStatus::kFail;
+    }
+}
+
+void SystemCheckSm::skip(const ViewModel &vm) noexcept
+{
+    for (size_t i = 0U; i < kCheckItemCount; ++i) {
+        if (items_[i] == CheckStatus::kPending) {
+            items_[i] = evaluateItem(i, vm, 0U);
+        }
+        if (items_[i] == CheckStatus::kFail) {
+            hasWarning_ = true;
+        }
+    }
+    phase_ = CheckPhase::kDone;
+}
+
+/**
+ * @brief 按当前只读快照推进自检一步（非阻塞）
+ * @param nowMs: 当前单调时间（ms）
+ * @param vm: 当前只读视图模型
+ * @retval true 本轮刚进入 kDone
+ * @retval false 仍在进行或此前已完成
+ */
+bool SystemCheckSm::step(uint32_t nowMs, const ViewModel &vm) noexcept
+{
+    switch (phase_) {
+    case CheckPhase::kLogo:
+        if ((nowMs - phaseStartMs_) >= (kLogoRevealMs + kLogoHoldMs)) {
+            phase_ = CheckPhase::kChecking;
+            activeIdx_ = 0U;
+            stepStartMs_ = nowMs;
+            stepResolved_ = false;
+        }
+        return false;
+    case CheckPhase::kChecking: {
+        const uint32_t elapsed = nowMs - stepStartMs_;
+        if (!stepResolved_) {
+            const CheckStatus st = evaluateItem(activeIdx_, vm, elapsed);
+            items_[activeIdx_] = st;
+            if (st == CheckStatus::kPending) {
+                return false;
+            }
+            stepResolved_ = true;
+            stepResolvedMs_ = nowMs;
+            itemResolvedMs_[activeIdx_] = nowMs;
+            if (st == CheckStatus::kFail) {
+                hasWarning_ = true;
+            }
+        }
+        if ((elapsed < kMinStepMs) || ((nowMs - stepResolvedMs_) < kResultHoldMs)) {
+            return false;
+        }
+        ++activeIdx_;
+        if (activeIdx_ >= kCheckItemCount) {
+            phase_ = CheckPhase::kSummary;
+            phaseStartMs_ = nowMs;
+            return false;
+        }
+        stepStartMs_ = nowMs;
+        stepResolved_ = false;
+        return false;
+    }
+    case CheckPhase::kSummary:
+        if ((nowMs - phaseStartMs_) >= kSummaryHoldMs) {
+            phase_ = CheckPhase::kDone;
+            return true;
+        }
+        return false;
+    case CheckPhase::kDone:
+    default:
+        return false;
+    }
+}
+
+uint16_t SystemCheckSm::logoRevealQ10(uint32_t nowMs) const noexcept
+{
+    if (phase_ != CheckPhase::kLogo) {
+        return kEaseScale;
+    }
+    return easeOutCubic(nowMs - phaseStartMs_, kLogoRevealMs);
+}
+
+Rect UiController::dockSlotRect(uint8_t idx) noexcept
+{
+    const uint8_t clamped = (idx < kDockItemCount) ? idx : 0U;
+    // clamped <= 4，计算结果在 2..102，转 int16_t 安全。
+    const auto x = static_cast<int16_t>(kDockStartX + (static_cast<int16_t>(clamped) * kDockStepX));
+    return Rect{.x = x, .y = kDockY, .w = kDockW, .h = kDockH};
+}
+
+OledPage UiController::dockTargetPage(uint8_t idx) noexcept
+{
+    switch (idx) {
+    case kDockIdxSat:
+        return OledPage::kSubSat;
+    case kDockIdxPos:
+        return OledPage::kSubPos;
+    case kDockIdxComm:
+        return OledPage::kSubComm;
+    case kDockIdxDevice:
+        return OledPage::kSubDevice;
+    case kDockIdxPower:
+        return OledPage::kSubPower;
+    default:
+        return OledPage::kSubSat;
+    }
+}
+
+uint8_t UiController::subpageRowCount(OledPage page, const ViewModel &vm) noexcept
+{
+    constexpr uint8_t kSubFiveRows = 5U;
+    constexpr uint8_t kSubCommBtRows = 4U;
+    switch (page) {
+    case OledPage::kSubPos:
+    case OledPage::kSubDevice:
+    case OledPage::kSubPower:
+        return kSubFiveRows;
+    case OledPage::kSubComm:
+        return (vm.radioMode == RadioMode::kWifiConfig) ? kSubCommWifiRows : kSubCommBtRows;
+    case OledPage::kSystemCheck:
+    case OledPage::kDialplate:
+    case OledPage::kSubSat:
+    case OledPage::kChargeStandby:
+    case OledPage::kShutdown:
+    default:
+        return 0U;
+    }
+}
+
+/**
+ * @brief 按启动运行档复位 UI 控制器
+ * @param bootMode: 正常启动或充电待机
+ * @param nowMs: 当前单调时间（ms）
+ */
+void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
 {
     bootMode_ = bootMode;
-    splashStartMs_ = nowMs;
-    lastShortKeys_ = initialShortKeys;
-    shutdownNoticeSinceMs_ = 0U;
-    wakeFailedAtMs_ = 0U;
+    dockSelected_ = 0U;
+    subSelected_ = 0U;
+    subScrollTop_ = 0U;
+    pairDecisionSent_ = false;
+    satSubTab_ = 0U;
+    shutdownPct_ = 0U;
+    lastStepMs_ = nowMs;
+    lastActivityMs_ = nowMs;
     inShutdown_ = false;
-    poweredOff_ = false;
-    wakeRetryActive_ = false;
-    page_ = (bootMode_ == board::BootMode::kChargeStandby) ? OledPage::kChargeStandby
-                                                           : OledPage::kSplash;
-}
-
-void PageSm::onWakeFailed(uint32_t nowMs) noexcept
-{
-    poweredOff_ = true;
-    wakeRetryActive_ = true;
-    wakeFailedAtMs_ = nowMs;
-}
-
-PageDecision PageSm::stepShutdown(uint32_t nowMs, board::ShutdownStage shutdownStage) noexcept
-{
-    PageDecision out{};
-    wakeRetryActive_ = false;
-    if (!inShutdown_) {
-        inShutdown_ = true;
-        shutdownNoticeSinceMs_ = nowMs;
-    }
-    page_ = OledPage::kShutdown;
-    out.page = page_;
-    if ((shutdownStage == board::ShutdownStage::kCutPower) && !poweredOff_) {
-        const uint32_t elapsed = nowMs - shutdownNoticeSinceMs_;
-        if (elapsed >= kShutdownNoticeMinMs) {
-            poweredOff_ = true;
-            out.shouldPowerOff = true;
-        } else {
-            out.nextWaitMs = kShutdownNoticeMinMs - elapsed;
-        }
-    }
-    return out;
-}
-
-PageDecision PageSm::step(uint32_t nowMs, uint32_t shortKeyCount,
-                          board::ShutdownStage shutdownStage) noexcept
-{
-    const uint32_t shortDelta = shortKeyCount - lastShortKeys_;
-    lastShortKeys_ = shortKeyCount;
-
-    if (shutdownStage != board::ShutdownStage::kIdle) {
-        return stepShutdown(nowMs, shutdownStage);
-    }
-
-    PageDecision out{};
-    if (inShutdown_) {
-        inShutdown_ = false;
-        wakeRetryActive_ = false;
-        if (poweredOff_) {
-            poweredOff_ = false;
-            out.shouldWake = true;
-        }
-        page_ = (bootMode_ == board::BootMode::kChargeStandby) ? OledPage::kChargeStandby
-                                                               : OledPage::kStatus;
-        out.page = page_;
-        return out;
-    }
-
-    if (wakeRetryActive_ && poweredOff_ && ((nowMs - wakeFailedAtMs_) >= kWakeRetryBackoffMs)) {
-        poweredOff_ = false;
-        wakeRetryActive_ = false;
-        out.shouldWake = true;
-    }
-
+    hasWarning_ = false;
+    wifiConfirm_ = false;
+    powerOffConfirm_ = false;
+    powerOffConfirmStartMs_ = 0U;
+    pairDialogId_ = 0U;
+    holdOverlayActive_ = false;
+    holdOverlayCollapsing_ = false;
+    holdOverlayDismissed_ = false;
+    holdProgressQ10_ = 0U;
+    holdCollapseStartMs_ = 0U;
+    standbyRingQ10_ = 0U;
+    heroPrevBadge_ = nullptr;
+    heroCurrBadge_ = nullptr;
+    heroChangeStartMs_ = nowMs;
+    heroRolling_ = false;
+    rebootBanner_ = RebootBanner::kNone;
+    click_.reset();
+    transition_.clear();
+    squish_.clear();
+    dockSpring_.snap(dockSlotRect(0U).x);
+    subFocusSpring_.snap(0);
+    subScrollSpring_.snap(0);
+    modalFocusSpring_.snap(0);
+    satsRoll_.reset();
+    batRoll_.reset();
     if (bootMode_ == board::BootMode::kChargeStandby) {
         page_ = OledPage::kChargeStandby;
-        out.page = page_;
-        return out;
+    } else {
+        page_ = OledPage::kSystemCheck;
+        checkSm_.reset(nowMs);
+    }
+}
+
+UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexcept
+{
+    static_cast<void>(nowMs);
+    UiDecision out{};
+    click_.reset();
+    transition_.clear();
+    squish_.clear();
+    wifiConfirm_ = false;
+    powerOffConfirm_ = false;
+    pairDialogId_ = 0U;
+    holdOverlayActive_ = false;
+    holdOverlayCollapsing_ = false;
+    inShutdown_ = true;
+    page_ = OledPage::kShutdown;
+    out.page = page_;
+
+    const uint8_t finalBits = board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady) |
+                              board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady);
+    const bool final = (vm.shutdownDoneMask & finalBits) != 0U;
+    const uint8_t target = shutdownTargetPercent(vm.shutdownStage, vm.shutdownDoneMask);
+    if (final || (target <= shutdownPct_)) {
+        shutdownPct_ = target;
+    } else {
+        const uint8_t stepAmt = static_cast<uint8_t>(
+            std::min<unsigned>(kShutdownStepPerTick, static_cast<unsigned>(target - shutdownPct_)));
+        shutdownPct_ = static_cast<uint8_t>(shutdownPct_ + stepAmt);
+    }
+    out.markShutdownFinalFrame = final;
+    out.markRebootFinalFrame = (vm.rebootBanner != RebootBanner::kNone);
+    out.animating = (shutdownPct_ < target);
+    out.nextWaitMs = out.animating ? kAnimFramePeriodMs : kWaitForEvent;
+    return out;
+}
+
+UiDecision UiController::stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
+                                           const ViewModel &vm) noexcept
+{
+    click_.reset();
+    page_ = OledPage::kChargeStandby;
+    const bool confirmed =
+        vm.keyHold.standbyConfirm || (vm.rebootBanner == RebootBanner::kStarting);
+    if (confirmed) {
+        standbyRingQ10_ = kEaseScale;
+    } else if (vm.keyHold.active) {
+        const uint32_t heldMs = nowMs - vm.keyHold.startMs;
+        const uint32_t thresh = std::max<uint32_t>(vm.keyHold.thresholdMs, 1U);
+        const uint32_t clamped = std::min(heldMs, thresh);
+        standbyRingQ10_ =
+            static_cast<uint16_t>((static_cast<uint64_t>(clamped) * kEaseScale) / thresh);
+    } else if (standbyRingQ10_ > 0U) {
+        const uint32_t decay =
+            static_cast<uint32_t>((static_cast<uint64_t>(dtMs) * kEaseScale) / kStandbyRingDecayMs);
+        const uint16_t stepAmt =
+            static_cast<uint16_t>(std::max<uint32_t>(decay, (dtMs > 0U) ? 1U : 0U));
+        standbyRingQ10_ =
+            (standbyRingQ10_ > stepAmt) ? static_cast<uint16_t>(standbyRingQ10_ - stepAmt) : 0U;
     }
 
-    uint32_t remainingPresses = shortDelta;
-    if ((page_ == OledPage::kSplash) &&
-        ((remainingPresses > 0U) || ((nowMs - splashStartMs_) >= kSplashDurationMs))) {
-        page_ = OledPage::kStatus;
-        if (remainingPresses > 0U) {
-            --remainingPresses;
+    const bool fastAnim =
+        batRoll_.active(nowMs) || vm.keyHold.active || ((standbyRingQ10_ > 0U) && !confirmed);
+    const bool chargeAnim = isEffectiveCharging(vm) &&
+                            (vm.batteryPct != board::kBatteryPctUnknown) &&
+                            (vm.batteryPct < kMaxPercent);
+    uint32_t waitMs = kWaitForEvent;
+    if (fastAnim) {
+        waitMs = kAnimFramePeriodMs;
+    } else if (chargeAnim) {
+        const uint32_t phaseRem = kChargeAnimPeriodMs - (nowMs % kChargeAnimPeriodMs);
+        waitMs = (phaseRem == 0U) ? kChargeAnimPeriodMs : phaseRem;
+    }
+    return UiDecision{
+        .page = page_,
+        .markRebootFinalFrame = (vm.rebootBanner != RebootBanner::kNone),
+        .animating = fastAnim,
+        .nextWaitMs = waitMs,
+    };
+}
+
+void UiController::enterPowerOffConfirm(uint32_t nowMs) noexcept
+{
+    powerOffConfirm_ = true;
+    resetModalFocus();
+    powerOffConfirmStartMs_ = nowMs;
+    wifiConfirm_ = false;
+    pairDialogId_ = 0U;
+    pairDecisionSent_ = false;
+    holdOverlayActive_ = false;
+    holdOverlayCollapsing_ = false;
+    click_.reset();
+    transition_.clear();
+    lastActivityMs_ = nowMs;
+}
+
+void UiController::updateHoldOverlay(uint32_t nowMs, const ViewModel &vm,
+                                     bool longKeyArrived) noexcept
+{
+    if (longKeyArrived) {
+        holdOverlayDismissed_ = true;
+        enterPowerOffConfirm(nowMs);
+        return;
+    }
+    if (powerOffConfirm_) {
+        if (!vm.keyHold.active) {
+            holdOverlayDismissed_ = false;
+        }
+        if ((nowMs - powerOffConfirmStartMs_) >= kPowerOffConfirmMs) {
+            powerOffConfirm_ = false;
+            click_.reset();
+            lastActivityMs_ = nowMs;
+        }
+        return;
+    }
+    if (!vm.keyHold.active) {
+        holdOverlayDismissed_ = false;
+        if (holdOverlayActive_) {
+            holdOverlayActive_ = false;
+            holdOverlayCollapsing_ = true;
+            holdCollapseStartMs_ = nowMs;
+        }
+    } else if (!holdOverlayDismissed_) {
+        const uint32_t heldMs = nowMs - vm.keyHold.startMs;
+        if (heldMs >= board::kKeyHoldOverlayStartMs) {
+            const uint32_t thresh =
+                std::max<uint32_t>(vm.keyHold.thresholdMs, board::kKeyHoldOverlayStartMs + 1U);
+            const uint32_t span = thresh - board::kKeyHoldOverlayStartMs;
+            const uint32_t progMs = std::min(heldMs - board::kKeyHoldOverlayStartMs, span);
+            holdOverlayActive_ = true;
+            holdOverlayCollapsing_ = false;
+            holdProgressQ10_ =
+                static_cast<uint16_t>((static_cast<uint64_t>(progMs) * kEaseScale) / span);
+            lastActivityMs_ = nowMs;
         }
     }
-    if ((remainingPresses & 1U) != 0U) {
-        page_ = (page_ == OledPage::kStatus) ? OledPage::kDeviceInfo : OledPage::kStatus;
+    if (holdOverlayCollapsing_ && ((nowMs - holdCollapseStartMs_) >= kHoldCollapseMs)) {
+        holdOverlayCollapsing_ = false;
+        holdProgressQ10_ = 0U;
     }
+}
+
+void UiController::leaveSubmenu(uint32_t nowMs) noexcept
+{
+    const OledPage from = page_;
+    page_ = OledPage::kDialplate;
+    dockSpring_.snap(dockSlotRect(dockSelected_).x);
+    transition_.start(TransitionKind::kCollapseToIcon, from, OledPage::kDialplate,
+                      dockSlotRect(dockSelected_), nowMs);
+    lastActivityMs_ = nowMs;
+}
+
+OledActionRequest UiController::handleSubListClick(ClickEvent click, uint32_t nowMs,
+                                                   const ViewModel &vm) noexcept
+{
+    const uint8_t count = subpageRowCount(page_, vm);
+    if (count == 0U) {
+        return {};
+    }
+    const uint8_t backIdx = static_cast<uint8_t>(count - 1U);
+    if (click == ClickEvent::kSingle) {
+        subSelected_ = (subSelected_ < backIdx) ? static_cast<uint8_t>(subSelected_ + 1U) : 0U;
+        if (subSelected_ < subScrollTop_) {
+            subScrollTop_ = subSelected_;
+        } else if (subSelected_ >= static_cast<uint8_t>(subScrollTop_ + kSubVisibleRows)) {
+            subScrollTop_ = static_cast<uint8_t>(subSelected_ - kSubVisibleRows + 1U);
+        }
+        subFocusSpring_.retarget(static_cast<int16_t>(subSelected_ * kSubRowStepY));
+        subScrollSpring_.retarget(static_cast<int16_t>(subScrollTop_ * kSubRowStepY));
+        return {};
+    }
+    if (click != ClickEvent::kDouble) {
+        return {};
+    }
+    squish_.trigger(nowMs);
+    if (subSelected_ >= backIdx) {
+        leaveSubmenu(nowMs);
+        return {};
+    }
+    if (page_ == OledPage::kSubComm) {
+        const bool wifi = vm.radioMode == RadioMode::kWifiConfig;
+        if (subSelected_ == 0U) {
+            if (wifi) {
+                return {OledAction::kBluetooth};
+            }
+            if (vm.wifiSupported) {
+                wifiConfirm_ = true;
+                resetModalFocus();
+                transition_.clear();
+            }
+        } else if (!wifi && (subSelected_ == 1U)) {
+            return {OledAction::kTogglePair};
+        }
+        return {};
+    }
+    if (page_ == OledPage::kSubPower) {
+        constexpr uint8_t kPowerOffRowIdx = 3U;
+        if (subSelected_ == kPowerOffRowIdx) {
+            enterPowerOffConfirm(nowMs);
+            return {};
+        }
+        leaveSubmenu(nowMs);
+        return {};
+    }
+    // 位置与设备页的只读信息行双击同样快捷返回表盘，Back 项也在上方统一处理。
+    leaveSubmenu(nowMs);
+    return {};
+}
+
+UiModal UiController::visibleModal() const noexcept
+{
+    if (powerOffConfirm_) {
+        return UiModal::kPowerOffConfirm;
+    }
+    if (pairDialogId_ != 0U && !pairDecisionSent_) {
+        return UiModal::kPair;
+    }
+    return wifiConfirm_ ? UiModal::kWifiConfirm : UiModal::kNone;
+}
+
+void UiController::resetModalFocus() noexcept
+{
+    modalFocusSpring_.snap(0);
+    squish_.clear();
+}
+
+OledActionRequest UiController::handleModalClick(UiModal modal, ClickEvent click,
+                                                 uint32_t nowMs) noexcept
+{
+    const bool accept = modalFocusSpring_.target() == kModalOptionStepX;
+    if (click == ClickEvent::kSingle) {
+        modalFocusSpring_.retarget(accept ? 0 : kModalOptionStepX);
+        squish_.trigger(nowMs);
+        return {};
+    }
+    click_.reset();
+    resetModalFocus();
+    switch (modal) {
+    case UiModal::kPowerOffConfirm:
+        powerOffConfirm_ = false;
+        return {accept ? OledAction::kShutdownKey : OledAction::kNone};
+    case UiModal::kPair:
+        pairDecisionSent_ = true;
+        return {accept ? OledAction::kPairAccept : OledAction::kPairReject, pairDialogId_};
+    case UiModal::kWifiConfirm:
+        wifiConfirm_ = false;
+        return {accept ? OledAction::kWifi : OledAction::kNone};
+    case UiModal::kNone:
+    default:
+        return {};
+    }
+}
+
+void UiController::handleDialClick(ClickEvent click, uint32_t nowMs) noexcept
+{
+    if (click == ClickEvent::kSingle) {
+        dockSelected_ = static_cast<uint8_t>((dockSelected_ + 1U) % kDockItemCount);
+        dockSpring_.retarget(dockSlotRect(dockSelected_).x);
+        return;
+    }
+    if (click == ClickEvent::kDouble) {
+        const OledPage target = dockTargetPage(dockSelected_);
+        satSubTab_ = 0U;
+        subSelected_ = 0U;
+        subScrollTop_ = 0U;
+        subFocusSpring_.snap(0);
+        subScrollSpring_.snap(0);
+        squish_.trigger(nowMs);
+        transition_.start(TransitionKind::kExpandFromIcon, OledPage::kDialplate, target,
+                          dockSlotRect(dockSelected_), nowMs);
+        page_ = target;
+    }
+}
+
+OledActionRequest UiController::dispatchClick(ClickEvent click, uint32_t nowMs,
+                                              const ViewModel &vm) noexcept
+{
+    if (click == ClickEvent::kNone) {
+        return {};
+    }
+    lastActivityMs_ = nowMs;
+    if (!powerOffConfirm_ && pairDialogId_ != 0U && pairDecisionSent_) {
+        return {}; // 等待配对判定出队，防止点击落到恢复中的页面。
+    }
+    if (const UiModal modal = visibleModal(); modal != UiModal::kNone) {
+        return handleModalClick(modal, click, nowMs);
+    }
+    if (page_ == OledPage::kSystemCheck) {
+        if (click == ClickEvent::kDouble) {
+            checkSm_.skip(vm);
+            hasWarning_ = checkSm_.hasWarning();
+            page_ = OledPage::kDialplate;
+            dockSpring_.snap(dockSlotRect(dockSelected_).x);
+            transition_.start(TransitionKind::kSlideLeft, OledPage::kSystemCheck,
+                              OledPage::kDialplate, {}, nowMs);
+        }
+        return {};
+    }
+    if (page_ == OledPage::kDialplate) {
+        handleDialClick(click, nowMs);
+        return {};
+    }
+    if (page_ == OledPage::kSubSat) {
+        if (click == ClickEvent::kDouble) {
+            squish_.trigger(nowMs);
+            leaveSubmenu(nowMs);
+        } else if (click == ClickEvent::kSingle) {
+            satSubTab_ = static_cast<uint8_t>(satSubTab_ ^ 1U);
+        }
+        return {};
+    }
+    return isSubmenuPage(page_) ? handleSubListClick(click, nowMs, vm) : OledActionRequest{};
+}
+
+bool UiController::updatePairPrompt(uint32_t nowMs, const ViewModel &vm) noexcept
+{
+    if (powerOffConfirm_) {
+        return false;
+    }
+    const uint32_t id = remainingMs(nowMs, vm.pairing.requestDeadlineMs) != 0U ? vm.pairing.id : 0U;
+    if (id == pairDialogId_) {
+        return false;
+    }
+    pairDialogId_ = id;
+    pairDecisionSent_ = false;
+    resetModalFocus();
+    click_.reset();
+    transition_.clear();
+    lastActivityMs_ = nowMs;
+    return true;
+}
+
+OledActionRequest UiController::handleInput(uint32_t nowMs, std::span<const uint32_t> times,
+                                            const ViewModel &vm) noexcept
+{
+    if (updatePairPrompt(nowMs, vm)) {
+        return {}; // 不把弹窗出现前的短按用于确认或拒绝。
+    }
+    // 防止无线模式异步切换导致子页选中项越界。
+    if (const uint8_t count = subpageRowCount(page_, vm); count > 0U && subSelected_ >= count) {
+        subSelected_ = static_cast<uint8_t>(count - 1U);
+        subScrollTop_ =
+            (count > kSubVisibleRows) ? static_cast<uint8_t>(count - kSubVisibleRows) : 0U;
+        subFocusSpring_.snap(static_cast<int16_t>(subSelected_ * kSubRowStepY));
+        subScrollSpring_.snap(static_cast<int16_t>(subScrollTop_ * kSubRowStepY));
+    }
+    if (!times.empty()) {
+        lastActivityMs_ = nowMs;
+    }
+    for (const uint32_t pressMs : times) {
+        const UiModal before = visibleModal();
+        if (const auto action = dispatchClick(click_.onPress(pressMs), nowMs, vm);
+            action.action != OledAction::kNone || before != visibleModal()) {
+            return action;
+        }
+    }
+    return dispatchClick(click_.pollTimeout(nowMs), nowMs, vm);
+}
+
+UiDecision UiController::recoverFromShutdown() noexcept
+{
+    UiDecision out{};
+    inShutdown_ = false;
+    shutdownPct_ = 0U;
+    click_.reset();
+    squish_.clear();
+    page_ = (bootMode_ == board::BootMode::kChargeStandby) ? OledPage::kChargeStandby
+                                                           : OledPage::kDialplate;
+    dockSpring_.snap(dockSlotRect(dockSelected_).x);
     out.page = page_;
+    out.nextWaitMs = kWaitForEvent;
     return out;
+}
+
+void UiController::updateHeroBadgeRoll(uint32_t nowMs, const ViewModel &vm) noexcept
+{
+    const char *const curBadge = dialHeroBadge(vm);
+    if (heroCurrBadge_ == nullptr) {
+        heroCurrBadge_ = curBadge;
+        heroPrevBadge_ = curBadge;
+        return;
+    }
+    if (curBadge != heroCurrBadge_) {
+        heroPrevBadge_ = heroCurrBadge_;
+        heroCurrBadge_ = curBadge;
+        heroChangeStartMs_ = nowMs;
+        heroRolling_ = true;
+    } else if (heroRolling_ && ((nowMs - heroChangeStartMs_) >= kNumberRollMs)) {
+        heroRolling_ = false;
+        heroPrevBadge_ = heroCurrBadge_;
+    }
+}
+
+UiDecision UiController::buildActiveDecision(uint32_t nowMs, const ViewModel &vm,
+                                             bool animating) const noexcept
+{
+    UiDecision out{};
+    out.page = page_;
+    out.animating = animating;
+    uint32_t waitMs = animating ? kAnimFramePeriodMs : kWaitForEvent;
+    if (!powerOffConfirm_ && vm.keyHold.active && !holdOverlayDismissed_ && !holdOverlayActive_) {
+        const uint32_t heldMs = nowMs - vm.keyHold.startMs;
+        if (heldMs < board::kKeyHoldOverlayStartMs) {
+            waitMs = std::min(waitMs, board::kKeyHoldOverlayStartMs - heldMs);
+        }
+    }
+    if (isSubmenuPage(page_) && !wifiConfirm_ && !powerOffConfirm_ && pairDialogId_ == 0U &&
+        !vm.keyHold.active && !holdOverlayActive_) {
+        waitMs = std::min(waitMs, remainingMs(nowMs, lastActivityMs_ + kSubpageIdleTimeoutMs));
+    }
+    if (page_ == OledPage::kSubDevice || (page_ == OledPage::kSubComm && vm.pairing.windowOpen)) {
+        waitMs = std::min(waitMs, kMsPerSec - (nowMs % kMsPerSec));
+    }
+    if (powerOffConfirm_) {
+        waitMs = std::min(waitMs, remainingMs(nowMs, powerOffConfirmStartMs_ + kPowerOffConfirmMs));
+    } else if (pairDialogId_ != 0U) {
+        waitMs = std::min(waitMs, remainingMs(nowMs, vm.pairing.requestDeadlineMs));
+    }
+    if (click_.pending()) {
+        out.hasClickDeadline = true;
+        out.clickDeadlineMs = click_.deadlineMs();
+        waitMs = std::min(waitMs, click_.remainingMs(nowMs));
+    }
+    out.nextWaitMs = waitMs;
+    return out;
+}
+
+UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
+                                          const ViewModel &vm) noexcept
+{
+    if ((page_ == OledPage::kSystemCheck) && (pairDialogId_ == 0U) && !powerOffConfirm_ &&
+        checkSm_.step(nowMs, vm)) {
+        hasWarning_ = checkSm_.hasWarning();
+        page_ = OledPage::kDialplate;
+        lastActivityMs_ = nowMs;
+        dockSpring_.snap(dockSlotRect(dockSelected_).x);
+        transition_.start(TransitionKind::kSlideLeft, OledPage::kSystemCheck, OledPage::kDialplate,
+                          {}, nowMs);
+    }
+    if ((page_ != OledPage::kSystemCheck) && vm.gnssEnabled &&
+        (vm.gnssState == gnss::State::kFailed)) {
+        hasWarning_ = true;
+    }
+    updateHeroBadgeRoll(nowMs, vm);
+
+    const bool noModal = !wifiConfirm_ && !powerOffConfirm_ && (pairDialogId_ == 0U);
+    if (isSubmenuPage(page_) && noModal && !vm.keyHold.active && !holdOverlayActive_ &&
+        ((nowMs - lastActivityMs_) >= kSubpageIdleTimeoutMs)) {
+        leaveSubmenu(nowMs);
+    }
+
+    if (!noModal) {
+        const bool modalAnimating = !modalFocusSpring_.settled() || squish_.pollActive(nowMs) ||
+                                    holdOverlayActive_ || holdOverlayCollapsing_ ||
+                                    powerOffConfirm_;
+        return buildActiveDecision(nowMs, vm, modalAnimating);
+    }
+
+    dockSpring_.step(dtMs);
+    subFocusSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
+    subScrollSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
+
+    const bool subSpring =
+        isSubmenuPage(page_) && (!subFocusSpring_.settled() || !subScrollSpring_.settled());
+    const bool springActive =
+        ((page_ == OledPage::kDialplate) && !dockSpring_.settled()) || subSpring;
+    const bool rollNow = satsRoll_.active(nowMs) || batRoll_.active(nowMs);
+    const bool rollAnim = ((page_ == OledPage::kDialplate) && (rollNow || heroRolling_)) ||
+                          (isSubmenuPage(page_) && rollNow);
+    const bool animating = transition_.pollActive(nowMs) || squish_.pollActive(nowMs) ||
+                           springActive ||
+                           ((page_ == OledPage::kSystemCheck) && checkSm_.animating()) ||
+                           rollAnim || holdOverlayActive_ || holdOverlayCollapsing_;
+    return buildActiveDecision(nowMs, vm, animating);
+}
+
+/**
+ * @brief 推进一轮 UI 状态机、按生产时间戳消歧双击、动画物理与帧周期调度
+ * @param nowMs: 当前单调时间（ms）
+ * @param shortKeyTimes: 本轮自 UiEventBus 弹出的消抖短按生产时间戳序列
+ * @param vm: 当前只读视图模型
+ * @param longKeyArrived: 本轮是否收到长按 2.5 s 到达事件
+ * @retval 本轮渲染页、USB 终帧通知、双击绝对截止与下一帧精确等待时长
+ */
+UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKeyTimes,
+                              const ViewModel &vm, bool longKeyArrived) noexcept
+{
+    const uint32_t dtMs = nowMs - lastStepMs_;
+    lastStepMs_ = nowMs;
+    rebootBanner_ = vm.rebootBanner;
+
+    if (vm.shutdownStage != board::ShutdownStage::kIdle) {
+        return stepShutdown(nowMs, vm);
+    }
+    if (inShutdown_) {
+        return recoverFromShutdown();
+    }
+
+    if (vm.batteryPct != board::kBatteryPctUnknown) {
+        batRoll_.update(static_cast<int32_t>(std::min(vm.batteryPct, kMaxPercent)), nowMs);
+    }
+    if (vm.gnssEnabled && isGnssRunningLike(vm.gnssState)) {
+        satsRoll_.update(vm.fixValid ? static_cast<int32_t>(vm.satsUsed) : 0, nowMs);
+    }
+    if (bootMode_ == board::BootMode::kChargeStandby) {
+        return stepChargeStandby(nowMs, dtMs, vm);
+    }
+    if (vm.rebootBanner != RebootBanner::kNone) {
+        click_.reset();
+        transition_.clear();
+        squish_.clear();
+        wifiConfirm_ = false;
+        powerOffConfirm_ = false;
+        pairDialogId_ = 0U;
+        holdOverlayActive_ = false;
+        holdOverlayCollapsing_ = false;
+        return UiDecision{
+            .page = page_,
+            .markRebootFinalFrame = true,
+            .animating = false,
+            .nextWaitMs = kWaitForEvent,
+        };
+    }
+    const bool wasPowerOffConfirm = powerOffConfirm_;
+    updateHoldOverlay(nowMs, vm, longKeyArrived);
+    if (wasPowerOffConfirm != powerOffConfirm_ || longKeyArrived) {
+        shortKeyTimes = {}; // 弹窗切换时丢弃旧上下文的待处理短按。
+    }
+    // 必须先按生产顺序消费队列内全部消抖短按时间戳，再检查绝对截止，避免 OLED 刷屏延迟误拆双击（R2OL2-03）。
+    modalFocusSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
+    const auto action = handleInput(nowMs, shortKeyTimes, vm);
+    if (wasPowerOffConfirm && !powerOffConfirm_ && action.action == OledAction::kNone) {
+        static_cast<void>(updatePairPrompt(nowMs, vm)); // 取消后立即显示已排队的配对请求。
+    }
+    auto out = finishActiveStep(nowMs, dtMs, vm);
+    out.action = action;
+    return out;
+}
+
+UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
+{
+    const uint32_t confirmElapsed = powerOffConfirm_ ? (nowMs - powerOffConfirmStartMs_) : 0U;
+    const uint32_t confirmRemain = (powerOffConfirm_ && (confirmElapsed < kPowerOffConfirmMs))
+                                       ? (kPowerOffConfirmMs - confirmElapsed)
+                                       : 0U;
+    const uint16_t collapseQ10 =
+        holdOverlayCollapsing_ ? easeOutCubic(nowMs - holdCollapseStartMs_, kHoldCollapseMs) : 0U;
+    const uint16_t heroQ10 =
+        heroRolling_ ? easeOutCubic(nowMs - heroChangeStartMs_, kNumberRollMs) : kEaseScale;
+    return UiRenderState{
+        .page = page_,
+        .dockSelected = dockSelected_,
+        .dockFocusX = dockSpring_.position(),
+        .satSubTab = satSubTab_,
+        .hasCheckWarning = hasWarning_,
+        .shutdownPct = shutdownPct_,
+        .subSelected = subSelected_,
+        .subFocusY = subFocusSpring_.position(),
+        .subScrollY = subScrollSpring_.position(),
+        .squishInset = squish_.insetPx(nowMs),
+        .holdOverlayVisible = holdOverlayActive_ || holdOverlayCollapsing_,
+        .holdOverlayCollapsing = holdOverlayCollapsing_,
+        .holdProgressQ10 = holdProgressQ10_,
+        .holdCollapseQ10 = collapseQ10,
+        .powerOffRemainMs = confirmRemain,
+        .standbyRingQ10 = standbyRingQ10_,
+        .heroPrevBadge = heroPrevBadge_,
+        .heroRollQ10 = heroQ10,
+        .modal = visibleModal(),
+        .modalFocusX = modalFocusSpring_.position(),
+        .rebootBanner = rebootBanner_,
+        .nowMs = nowMs,
+        .checkSm = &checkSm_,
+        .transition = &transition_,
+        .satsRoll = &satsRoll_,
+        .batRoll = &batRoll_,
+    };
 }
 
 void FrameTracker::invalidate() noexcept
@@ -444,41 +936,40 @@ void FrameTracker::invalidate() noexcept
     validMask_ = 0U;
 }
 
-uint8_t FrameTracker::computeDirtyMask(const ScreenBuff &fb,
-                                       std::array<uint64_t, kPages> &hashesOut,
-                                       bool forceFull) const noexcept
+void FrameTracker::invalidatePage(uint8_t page) noexcept
 {
-    uint8_t dirty = 0U;
-    for (size_t page = 0U; page < kPages; ++page) {
-        hashesOut[page] = fnv1a64(std::span<const uint8_t>{fb[page]});
-        // page < 8，位运算结果在 uint8_t 范围内。
-        const auto bit = static_cast<uint8_t>(1U << page);
-        const bool known = (validMask_ & bit) != 0U;
-        if (forceFull || !known || (committedHashes_[page] != hashesOut[page])) {
-            dirty |= bit;
+    if (page < kPages) {
+        // 页号小于 8，反码只保留低 8 位对应的页有效位。
+        validMask_ &= static_cast<uint8_t>(~(1U << page));
+    }
+}
+
+FrameTracker::Columns FrameTracker::dirtyColumns(uint8_t page,
+                                                 std::span<const uint8_t, kWidth> data,
+                                                 PageHashes &hashes, bool forceFull) const noexcept
+{
+    Columns dirty{};
+    for (size_t block = 0U; block < hashes.size(); ++block) {
+        uint32_t hash = kFnvOffsetBasis;
+        for (const uint8_t value : data.subspan(block * kBlockWidth, kBlockWidth)) {
+            hash = (hash ^ value) * kFnvPrime;
+        }
+        hashes[block] = hash;
+        if (hash != committedHashes_[page][block]) {
+            if (dirty.end == 0U) {
+                dirty.first = block * kBlockWidth;
+            }
+            dirty.end = (block + 1U) * kBlockWidth;
         }
     }
-    return forceFull ? kAllPagesMask : dirty;
+    return (forceFull || (validMask_ & (1U << page)) == 0U) ? Columns{0U, kWidth} : dirty;
 }
 
-void FrameTracker::commitPage(uint8_t page, uint64_t hash) noexcept
+void FrameTracker::commitPage(uint8_t page, const PageHashes &hashes) noexcept
 {
-    if (page >= kPages) {
-        return;
-    }
-    committedHashes_[page] = hash;
+    committedHashes_[page] = hashes;
     // page < 8，位掩码转换安全。
     validMask_ |= static_cast<uint8_t>(1U << page);
-}
-
-uint64_t fnv1a64(std::span<const uint8_t> bytes) noexcept
-{
-    uint64_t hash = kFnvOffsetBasis;
-    for (const uint8_t byte : bytes) {
-        hash ^= static_cast<uint64_t>(byte);
-        hash *= kFnvPrime;
-    }
-    return hash;
 }
 
 void sanitizeCopy(std::string_view src, std::span<char> dst) noexcept
@@ -519,35 +1010,6 @@ void formatLabelValue(std::string_view label, std::string_view value, std::span<
     out[pos] = '\0';
 }
 
-void formatRadioShort(RadioMode mode, bool btReady, uint8_t btSessions,
-                      std::span<char> out) noexcept
-{
-    if (mode == RadioMode::kWifiConfig) {
-        sanitizeCopy("WIFI:AP", out);
-        return;
-    }
-    if (!btReady) {
-        sanitizeCopy("BT:OFF", out);
-        return;
-    }
-    sanitizeCopy(btSessions > 0U ? "BT:CONN" : "BT:WAIT", out);
-}
-
-void formatBatteryShort(uint8_t pct, bool usbPresent, bool charging, std::span<char> out) noexcept
-{
-    if (out.empty()) {
-        return;
-    }
-    const char *suffix = charging ? "+" : (usbPresent ? "U" : "");
-    if (pct == board::kBatteryPctUnknown) {
-        static_cast<void>(std::snprintf(out.data(), out.size(), "--%%%s", suffix));
-        return;
-    }
-    const uint8_t clamped = std::min(pct, kMaxPercent);
-    static_cast<void>(
-        std::snprintf(out.data(), out.size(), "%u%%%s", static_cast<unsigned>(clamped), suffix));
-}
-
 void formatBatteryVoltage(uint32_t mv, std::span<char> out) noexcept
 {
     if (out.empty()) {
@@ -563,72 +1025,386 @@ void formatBatteryVoltage(uint32_t mv, std::span<char> out) noexcept
                                     static_cast<unsigned>(volts), static_cast<unsigned>(centi)));
 }
 
-void formatGnssStateLine(bool enabled, gnss::State state, std::span<char> out) noexcept
+bool formatHorizontalAcc(bool fixValid, uint16_t hAccCm, std::span<char> out) noexcept
 {
-    formatLabelValue("GNSS:", gnssStateShort(enabled, state), out);
-}
-
-void formatFixLine(bool enabled, gnss::State state, bool fixValid, gnss::FixQuality quality,
-                   std::span<char> out) noexcept
-{
-    if (!enabled || (state != gnss::State::kRunning)) {
-        formatLabelValue("FIX :", "--", out);
-        return;
+    if (out.empty()) {
+        return false;
     }
-    formatLabelValue("FIX :", fixQualityShort(fixValid, quality), out);
+    if (!fixValid || (hAccCm == gnss::kU16Unknown)) {
+        out[0] = '\0';
+        return false;
+    }
+    if (hAccCm >= kMaxDisplayAccCm) {
+        sanitizeCopy(">99m", out);
+        return true;
+    }
+    static_cast<void>(std::snprintf(out.data(), out.size(), "%u.%02um",
+                                    static_cast<unsigned>(hAccCm / kCmPerMeter),
+                                    static_cast<unsigned>(hAccCm % kCmPerMeter)));
+    return true;
 }
 
-void formatSatsAccLine(bool enabled, gnss::State state, bool fixValid, uint8_t satsUsed,
-                       uint16_t hAccCm, std::span<char> out) noexcept
+void formatCoordE9(int64_t degE9, char posHemisphere, char negHemisphere, bool valid,
+                   std::span<char> out) noexcept
 {
     if (out.empty()) {
         return;
     }
-    if (!enabled || (state != gnss::State::kRunning)) {
-        sanitizeCopy("SAT : --", out);
+    if (!valid) {
+        sanitizeCopy("--.------", out);
         return;
     }
-    const unsigned sats = fixValid ? static_cast<unsigned>(satsUsed) : 0U;
-    if (hAccCm == gnss::kU16Unknown) {
-        static_cast<void>(std::snprintf(out.data(), out.size(), "SAT : %u", sats));
-        return;
-    }
-    const unsigned meters = static_cast<unsigned>(hAccCm / kCmPerMeter);
-    const unsigned cm = static_cast<unsigned>(hAccCm % kCmPerMeter);
-    static_cast<void>(std::snprintf(out.data(), out.size(), "SAT : %u %u.%02um", sats, meters, cm));
+    const bool neg = degE9 < 0;
+    const uint64_t mag = neg ? (0ULL - static_cast<uint64_t>(degE9)) : static_cast<uint64_t>(degE9);
+    const uint64_t deg = mag / static_cast<uint64_t>(kE9Scale);
+    const uint64_t fracMicro =
+        (mag % static_cast<uint64_t>(kE9Scale)) / static_cast<uint64_t>(kE9ToMicroDeg);
+    const char hemi = neg ? negHemisphere : posHemisphere;
+    static_cast<void>(std::snprintf(out.data(), out.size(), "%u.%06u%c", static_cast<unsigned>(deg),
+                                    static_cast<unsigned>(fracMicro), hemi));
 }
 
-void renderPage(OledPage page, const ViewModel &vm, ScreenBuff &fb) noexcept
+void formatAltMm(int32_t altMm, bool valid, std::span<char> out) noexcept
 {
-    Pen pen{.color_mode = PEN_MODE_NORMAL, .color = PEN_COLOR_WHITE, .rev_color_flag = false};
-    WouoUI_GraphSetBuff(&fb);
-    WouoUI_GraphSetPen(&pen);
-    WouoUI_GraphSetPenColor(1U);
-    WouoUI_BuffClear();
+    if (out.empty()) {
+        return;
+    }
+    if (!valid) {
+        sanitizeCopy("--.--m", out);
+        return;
+    }
+    const bool neg = altMm < 0;
+    const uint32_t mag =
+        neg ? static_cast<uint32_t>(-static_cast<int64_t>(altMm)) : static_cast<uint32_t>(altMm);
+    const uint32_t meters = mag / static_cast<uint32_t>(kMmPerMeter);
+    const uint32_t cm =
+        (mag % static_cast<uint32_t>(kMmPerMeter)) / static_cast<uint32_t>(kMmPerCentiMeter);
+    static_cast<void>(std::snprintf(out.data(), out.size(), "%s%u.%02um", neg ? "-" : "",
+                                    static_cast<unsigned>(meters), static_cast<unsigned>(cm)));
+}
 
-    Canvas canvas{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
-    switch (page) {
-    case OledPage::kSplash:
-        renderSplash(canvas, vm);
-        break;
-    case OledPage::kStatus:
-        renderStatus(canvas, vm);
-        break;
-    case OledPage::kDeviceInfo:
-        renderDeviceInfo(canvas, vm);
-        break;
-    case OledPage::kChargeStandby:
-        renderChargeStandby(canvas, vm);
-        break;
-    case OledPage::kShutdown:
-        renderShutdown(canvas, vm);
+void formatHdopAge(uint16_t hdopX100, uint16_t diffAgeDs, bool valid, std::span<char> out) noexcept
+{
+    if (out.empty()) {
+        return;
+    }
+    std::array<char, 8U> hdopBuf{};
+    std::array<char, 8U> ageBuf{};
+    if (!valid || (hdopX100 == gnss::kU16Unknown)) {
+        sanitizeCopy("--", hdopBuf);
+    } else {
+        static_cast<void>(std::snprintf(hdopBuf.data(), hdopBuf.size(), "%u.%02u",
+                                        static_cast<unsigned>(hdopX100 / kHdopScale),
+                                        static_cast<unsigned>(hdopX100 % kHdopScale)));
+    }
+    if (!valid || (diffAgeDs == gnss::kU16Unknown)) {
+        sanitizeCopy("--", ageBuf);
+    } else {
+        static_cast<void>(std::snprintf(ageBuf.data(), ageBuf.size(), "%u.%us",
+                                        static_cast<unsigned>(diffAgeDs / kDiffAgeScale),
+                                        static_cast<unsigned>(diffAgeDs % kDiffAgeScale)));
+    }
+    static_cast<void>(
+        std::snprintf(out.data(), out.size(), "HDOP %s AGE %s", hdopBuf.data(), ageBuf.data()));
+}
+
+void formatUptime(uint32_t uptimeMs, std::span<char> out) noexcept
+{
+    if (out.empty()) {
+        return;
+    }
+    const uint32_t totalSec = uptimeMs / kMsPerSec;
+    const uint32_t days = totalSec / kSecPerDay;
+    const uint32_t remDay = totalSec % kSecPerDay;
+    const uint32_t hours = remDay / kSecPerHour;
+    const uint32_t mins = (remDay % kSecPerHour) / kSecPerMin;
+    const uint32_t secs = remDay % kSecPerMin;
+    if (days > 0U) {
+        static_cast<void>(std::snprintf(out.data(), out.size(), "%ud %02u:%02u",
+                                        static_cast<unsigned>(days), static_cast<unsigned>(hours),
+                                        static_cast<unsigned>(mins)));
+        return;
+    }
+    static_cast<void>(std::snprintf(out.data(), out.size(), "%02u:%02u:%02u",
+                                    static_cast<unsigned>(hours), static_cast<unsigned>(mins),
+                                    static_cast<unsigned>(secs)));
+}
+
+const char *dialHeroBadge(const ViewModel &vm) noexcept
+{
+    if (!vm.gnssEnabled) {
+        return "OFF";
+    }
+    switch (vm.gnssState) {
+    case gnss::State::kOff:
+        return "OFF";
+    case gnss::State::kPowerUp:
+        return "BOOT";
+    case gnss::State::kProbing:
+        return "PROBE";
+    case gnss::State::kConfiguring:
+    case gnss::State::kOutput:
+    case gnss::State::kMaintenance:
+        return "CFG";
+    case gnss::State::kFailed:
+        return "FAIL";
+    case gnss::State::kRunning:
+    case gnss::State::kReadback:
         break;
     default:
-        renderStatus(canvas, vm);
-        break;
+        return "OFF";
     }
-    // 解除栈局部画笔注册，避免 WouoUI 静态 p_cur_pen 悬垂（ROL1-06）。
-    WouoUI_GraphSetPen(nullptr);
+    if (vm.workModeActive && (vm.workMode != WorkModeKind::kRover)) {
+        return (vm.workModeState == WorkModeState::kSurvey) ? "SVY" : "BASE";
+    }
+    if (!vm.fixValid) {
+        return "NONE";
+    }
+    switch (vm.fixQuality) {
+    case gnss::FixQuality::kSingle:
+        return "SPS";
+    case gnss::FixQuality::kDgps:
+    case gnss::FixQuality::kPps:
+        return "DGPS";
+    case gnss::FixQuality::kRtkFloat:
+        return "FLOAT";
+    case gnss::FixQuality::kRtkFixed:
+        return "FIX";
+    case gnss::FixQuality::kDeadReckoning:
+        return "DR";
+    case gnss::FixQuality::kManual:
+        return "BASE";
+    case gnss::FixQuality::kSimulator:
+        return "SIM";
+    case gnss::FixQuality::kInvalid:
+    case gnss::FixQuality::kUnknown:
+    default:
+        return "NONE";
+    }
+}
+
+DialGnssDetail dialGnssDetail(const ViewModel &vm) noexcept
+{
+    if (!vm.gnssEnabled) {
+        return DialGnssDetail{.top = "GNSS", .bot = "DISABLED"};
+    }
+    switch (vm.gnssState) {
+    case gnss::State::kOff:
+        return DialGnssDetail{.top = "GNSS", .bot = "DISABLED"};
+    case gnss::State::kPowerUp:
+        return DialGnssDetail{.top = "GNSS", .bot = "POWER UP"};
+    case gnss::State::kProbing:
+        return DialGnssDetail{.top = "GNSS", .bot = "PROBING"};
+    case gnss::State::kConfiguring:
+        return DialGnssDetail{.top = "GNSS", .bot = "CONFIG"};
+    case gnss::State::kOutput:
+        return DialGnssDetail{.top = "GNSS", .bot = "SET OUT"};
+    case gnss::State::kMaintenance:
+        return DialGnssDetail{.top = "GNSS", .bot = "MAINT"};
+    case gnss::State::kFailed:
+        return DialGnssDetail{.top = "GNSS", .bot = "FAULT"};
+    case gnss::State::kRunning:
+    case gnss::State::kReadback:
+    default:
+        return DialGnssDetail{.top = "GNSS", .bot = "READY"};
+    }
+}
+
+PostFlushDecision settleFrameWait(const UiDecision &dec, FlushOutcome outcome,
+                                  uint32_t frameStartMs, uint32_t postFlushNowMs) noexcept
+{
+    if (outcome == FlushOutcome::kInterrupted) {
+        return PostFlushDecision{.nextWaitMs = 0U};
+    }
+    PostFlushDecision out{};
+    if (dec.markShutdownFinalFrame) {
+        if ((outcome == FlushOutcome::kWritten) || (outcome == FlushOutcome::kSkipped)) {
+            out.markFinalFlushed = true;
+        } else if ((outcome == FlushOutcome::kError) || (outcome == FlushOutcome::kBackoff)) {
+            out.markFinalFlushed = false;
+            out.nextWaitMs = kShutdownFinalRetryMs;
+            return out;
+        }
+    }
+    uint32_t waitMs = kWaitForEvent;
+    if (dec.nextWaitMs != kWaitForEvent &&
+        (!dec.animating || dec.nextWaitMs != kAnimFramePeriodMs)) {
+        waitMs = remainingMs(postFlushNowMs, frameStartMs + dec.nextWaitMs);
+    }
+    if (dec.hasClickDeadline) {
+        waitMs = std::min(waitMs, remainingMs(postFlushNowMs, dec.clickDeadlineMs));
+    }
+    out.nextWaitMs = waitMs;
+    return out;
+}
+
+uint8_t shutdownTargetPercent(board::ShutdownStage stage, uint8_t doneMask) noexcept
+{
+    const uint8_t finalBits = board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady) |
+                              board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady);
+    if ((doneMask & finalBits) != 0U) {
+        return kPctCutPowerDone;
+    }
+    switch (stage) {
+    case board::ShutdownStage::kAnnounce:
+        return kPctAnnounce;
+    case board::ShutdownStage::kSave:
+        if ((doneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed)) != 0U) {
+            return kPctSaveDone;
+        }
+        if ((doneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFences)) != 0U) {
+            return kPctSaveFences;
+        }
+        return kPctSaveStart;
+    case board::ShutdownStage::kQuiesce:
+        if ((doneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced)) != 0U) {
+            return kPctRadioDone;
+        }
+        return kPctQuiesceStart;
+    case board::ShutdownStage::kCutPower:
+        return kPctCutPower;
+    case board::ShutdownStage::kIdle:
+    default:
+        return 0U;
+    }
+}
+
+const char *shutdownStageText(board::ShutdownStage stage, uint8_t doneMask, uint8_t degradedMask,
+                              RadioMode radioMode) noexcept
+{
+    const bool saveTimeout =
+        (degradedMask & board::shutdownDegradedBit(board::ShutdownDegradedBit::kSaveTimeout)) != 0U;
+    const bool radioTimeout =
+        (degradedMask & board::shutdownDegradedBit(board::ShutdownDegradedBit::kRadioTimeout)) !=
+        0U;
+    const bool safeFailed =
+        (degradedMask &
+         board::shutdownDegradedBit(board::ShutdownDegradedBit::kPeripheralsFailed)) != 0U;
+    const auto degradedText = [&]() noexcept -> const char * {
+        if (saveTimeout) {
+            return "SAVE TIMEOUT";
+        }
+        if (radioTimeout) {
+            return "RF TIMEOUT";
+        }
+        if (safeFailed) {
+            return "SAFE IO ERR";
+        }
+        return nullptr;
+    };
+    if ((doneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) != 0U) {
+        if (const char *deg = degradedText(); deg != nullptr) {
+            return deg;
+        }
+        return "CHARGE STBY";
+    }
+    switch (stage) {
+    case board::ShutdownStage::kAnnounce:
+        return "PREPARING";
+    case board::ShutdownStage::kSave:
+        return "SAVING CFG";
+    case board::ShutdownStage::kQuiesce:
+        if (safeFailed) {
+            return "SAFE IO ERR";
+        }
+        if (saveTimeout) {
+            return "SAVE TIMEOUT";
+        }
+        if ((doneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced)) != 0U) {
+            return radioMode == RadioMode::kBluetooth ? "SCAN REQ OK" : "AP MODE OFF";
+        }
+        return radioMode == RadioMode::kBluetooth ? "CLOSING SPP" : "CLOSING AP";
+    case board::ShutdownStage::kCutPower:
+        if (const char *deg = degradedText(); deg != nullptr) {
+            return deg;
+        }
+        return "CUTTING PWR";
+    case board::ShutdownStage::kIdle:
+    default:
+        return "READY";
+    }
+}
+
+const char *shutdownReasonText(board::ShutdownReason reason) noexcept
+{
+    switch (reason) {
+    case board::ShutdownReason::kKey:
+        return "KEY";
+    case board::ShutdownReason::kConsole:
+        return "CONSOLE";
+    case board::ShutdownReason::kLowBattery:
+        return "LOW BATTERY";
+    case board::ShutdownReason::kPhone:
+        return "PHONE";
+    case board::ShutdownReason::kNone:
+    default:
+        return "SHUTDOWN";
+    }
+}
+
+const char *dockItemName(uint8_t idx) noexcept
+{
+    switch (idx) {
+    case kDockIdxSat:
+        return "SATS";
+    case kDockIdxPos:
+        return "POS";
+    case kDockIdxComm:
+        return "COMM";
+    case kDockIdxDevice:
+        return "DEVICE";
+    case kDockIdxPower:
+        return "POWER";
+    default:
+        return "";
+    }
+}
+
+void summarizeSatTable(const gnss::SatTable &table, ViewModel &vm, bool detail) noexcept
+{
+    vm.satGroups = {};
+    vm.topSnr = {};
+    vm.topSnrCount = 0U;
+    const size_t total = std::min<size_t>(table.count, gnss::kMaxSats);
+    // total <= 63，窄化到 uint8_t 安全。
+    vm.satsVisible = static_cast<uint8_t>(total);
+    if (!detail) {
+        return;
+    }
+
+    for (size_t i = 0U; i < total; ++i) {
+        const gnss::SatInfo &sat = table.sats[i];
+        const size_t slot = constellationSlot(sat.system);
+        if (slot < kConstellationSlots) {
+            ++vm.satGroups[slot].visible;
+            if (sat.used) {
+                ++vm.satGroups[slot].used;
+            }
+        }
+        if (sat.snrDbhz == 0U) {
+            continue;
+        }
+        const SatSnrItem cand{
+            .sysLetter = constellationLetter(sat.system),
+            .prn = sat.prn,
+            .snrDbhz = sat.snrDbhz,
+            .used = sat.used,
+        };
+        // 按 SNR 降序插入前 8 槽（零堆分配）。
+        size_t pos = vm.topSnrCount;
+        while ((pos > 0U) && (vm.topSnr[pos - 1U].snrDbhz < cand.snrDbhz)) {
+            if (pos < kTopSnrBars) {
+                vm.topSnr[pos] = vm.topSnr[pos - 1U];
+            }
+            --pos;
+        }
+        if (pos < kTopSnrBars) {
+            vm.topSnr[pos] = cand;
+            if (vm.topSnrCount < kTopSnrBars) {
+                ++vm.topSnrCount;
+            }
+        }
+    }
 }
 
 } // namespace app::oled

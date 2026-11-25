@@ -1,0 +1,31 @@
+# Exercises the confirm overlay, Wi-Fi/BT switching, and pairing while another page is open.
+0 scene 5
+3000 check dialplate
+3050 short
+3450 short
+3900 short
+4000 short
+4500 check comm
+4600 short
+4700 short
+4800 shot wifi-confirm
+4900 short
+5000 short
+5300 check comm
+5400 short
+5500 short
+5600 short
+6200 shot wifi-confirm-ok
+6300 short
+6400 short
+6600 shot wifi
+6800 short
+6900 short
+7100 shot bluetooth
+7200 scene 7
+7300 shot pair
+7400 short
+7900 shot pair-accept
+8000 short
+8100 short
+8250 check comm

@@ -80,7 +80,7 @@ struct SystemMode {
     uint32_t sinceMs = 0;
 };
 
-/** 电源按键与关机管理状态快照（kLink 更新，console 与蓝牙读取）。 */
+/** 电源按键与关机管理状态快照（kLink 更新，console、蓝牙与 OLED 只读）。 */
 struct PowerSnapshot {
     bool active = false;
     bool keyPressed = false;
@@ -88,6 +88,8 @@ struct PowerSnapshot {
     bool usbPresent = false;
     bool charging = false;
     board::UsbSource usbSource = board::UsbSource::kNone;
+    bool batteryAdcReady = false;
+    bool chargerPresent = false;
     bool chargerOk = false;
     uint8_t chargerReg08 = 0U;
     uint8_t batteryPct = board::kBatteryPctUnknown;
@@ -96,6 +98,8 @@ struct PowerSnapshot {
     board::PowerOnReason powerOn = board::PowerOnReason::kUnknown;
     board::ShutdownStage shutdownStage = board::ShutdownStage::kIdle;
     board::ShutdownReason lastShutdown = board::ShutdownReason::kNone;
+    uint8_t shutdownDoneMask = 0U;
+    uint8_t shutdownDegradedMask = 0U;
     uint32_t shortPresses = 0U;
     uint32_t longPresses = 0U;
 };

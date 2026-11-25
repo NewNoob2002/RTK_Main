@@ -264,7 +264,7 @@ void printTaskRow(const char *label, TaskHandle_t handle) noexcept
 }
 
 /**
- * @brief 打印任务栈余量
+ * @brief 打印任务栈余量及 OLED 单核 CPU 占用估算。
  * @param argc: 命令参数个数（含动词）
  * @retval 0 命令成功
  * @retval 非零 参数、状态、提交或执行失败，已输出 ERR
@@ -284,7 +284,13 @@ int cmdSysTasks(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
 #if FW_TRACE_ENABLED
     printTaskRow("trace_out", xTaskGetHandle("trace_out"));
 #endif
-    printTaskRow("oled", xTaskGetHandle("oled"));
+    const auto oledTask = xTaskGetHandle("oled");
+    printTaskRow("oled", oledTask);
+    if (oledTask != nullptr) {
+        constexpr uint32_t kTenths = 10U;
+        const uint32_t cpu = appContext().oled.recentPerf().cpuX10(oled::kPerfWindowMs);
+        cli::printKv("oled_cpu_pct", "%" PRIu32 ".%" PRIu32, cpu / kTenths, cpu % kTenths);
+    }
     printTaskRow("console", xTaskGetCurrentTaskHandle());
     printTaskRow("idle0", xTaskGetIdleTaskHandleForCore(0));
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
@@ -328,7 +334,11 @@ int cmdSysReboot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     // 立即输出 OK（进 UART TX 环形缓冲），等待 100 ms 让中断发完再复位；esp_restart 不返回，trampoline 不会重复打印。
     cli::outPrintf("OK\n");
     vTaskDelay(pdMS_TO_TICKS(kRebootDelayMs));
+#if defined(ESP_PLATFORM)
+    restartWithOledQuiesce(RebootBanner::kRebooting);
+#else
     esp_restart();
+#endif
     return 0;
 }
 

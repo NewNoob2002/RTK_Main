@@ -100,6 +100,22 @@ public:
     /** @brief 查询 Web 是否已静默。 @retval true OTA 已停止且 SoftAP 已关闭。 @retval false 仍在暂停。 @note 仅 kLink，非阻塞。 */
     [[nodiscard]] bool powerPauseDone() const noexcept;
 
+    /** @brief 读取 SoftAP 关联终端数。 @retval 0..15。 @note 任意任务，无锁。 */
+    [[nodiscard]] uint8_t wifiStationCount() const noexcept
+    {
+        // staStateCount 只取低 4 位。
+        return static_cast<uint8_t>(
+            web_cfg::staStateCount(staState_.load(std::memory_order_acquire)));
+    }
+
+    /**
+     * @brief 从实体 UI 请求退出配置模式，进入网页退出共用的冲刷及重启队列。
+     * @param nowMs: 当前单调时间。
+     * @retval 是否接收请求。
+     * @note 仅 kLink，非阻塞。
+     */
+    [[nodiscard]] bool requestOledExit(uint32_t nowMs) noexcept;
+
     /**
      * @brief kLink 非阻塞轮询：消费控制/请求邮箱、推进 GNSS 异步命令、1 Hz 状态推送与空闲回落
      * @param nowMs: 当前单调时间（ms）
@@ -156,6 +172,7 @@ private:
         int fd = -1;
         uint32_t gen = 0U;
         uint16_t reqId = 0U;
+        bool local = false;
     };
 
     struct InflightRequest {
@@ -165,6 +182,7 @@ private:
         uint16_t reqId = 0U;
         uint32_t startedMs = 0U;
         RequestKind kind = RequestKind::kSet;
+        bool local = false;
     };
 
     enum class RebootKind : uint8_t {

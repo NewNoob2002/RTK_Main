@@ -102,19 +102,7 @@ int cmdAlarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
  */
 int setPairing(uint32_t seconds, bool confirm = false) noexcept
 {
-    fw::Command cmd{};
-    cmd.target = id(ModuleKind::kBtLink);
-    cmd.verb = verb(seconds == 0U ? LinkVerb::kPairClose : LinkVerb::kPair);
-    if (seconds != 0U) {
-        constexpr size_t kArgsBytes = 3U;
-        constexpr size_t kModeIndex = 2U;
-        constexpr uint32_t kByteMask = 0xffU;
-        constexpr unsigned kByteBits = 8U;
-        cmd.args[0] = static_cast<uint8_t>(seconds & kByteMask);
-        cmd.args[1] = static_cast<uint8_t>(seconds >> kByteBits); // 最大 600 秒。
-        cmd.args[kModeIndex] = confirm ? 1U : 0U;
-        cmd.argLen = kArgsBytes;
-    }
+    const auto cmd = makePairingCommand(seconds, confirm);
     if (!submit(cmd, "pair")) {
         return cli::kCmdFail;
     }

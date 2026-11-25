@@ -3,8 +3,16 @@
 #include "app/RadioMode.hpp"
 
 #if defined(ESP_PLATFORM)
+#include <algorithm>
+
+#include "AppContext.hpp"
+#include "board/I2cBus.hpp"
 #include "esp_attr.h"
 #include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "fw/Log.hpp"
+#include "rtos/EspStatus.hpp"
 #include "sdkconfig.h"
 #endif
 
@@ -103,12 +111,46 @@ RadioSelection consumeRadioRecord(volatile uint32_t &record, bool softwareReset)
 }
 
 #if defined(ESP_PLATFORM)
+void restartWithOledQuiesce(RebootBanner banner) noexcept
+{
+    constexpr uint32_t kFlushWaitMaxMs = 200U;
+    constexpr uint32_t kVisibleHoldMs = 100U;
+    constexpr uint32_t kTotalCapMs = 300U;
+    auto &events = appContext().data.uiEvents;
+    const RebootBanner effective =
+        (banner == RebootBanner::kNone) ? RebootBanner::kKeepFrame : banner;
+    events.requestRebootBanner(effective);
+    if (events.oledActive()) {
+        const uint32_t startMs = rtos::nowMs();
+        const uint32_t waitDeadline = startMs + kFlushWaitMaxMs;
+        while (!events.rebootQuiesced() && static_cast<int32_t>(rtos::nowMs() - waitDeadline) < 0) {
+            vTaskDelay(1U);
+        }
+        if (!events.rebootQuiesced()) {
+            FW_LOGW(fw::TraceCat::kSys, "<oled> reboot transition wait timed out");
+        } else if (effective != RebootBanner::kKeepFrame) {
+            const uint32_t elapsed = rtos::nowMs() - startMs;
+            if (elapsed < kTotalCapMs) {
+                const uint32_t holdMs = std::min(kVisibleHoldMs, kTotalCapMs - elapsed);
+                const TickType_t ticks = pdMS_TO_TICKS(holdMs);
+                vTaskDelay(ticks == 0U ? 1U : ticks);
+            }
+        }
+    }
+    // 持共享 I2C 互斥锁跨过 esp_restart，确保任意核心此时都不处于 I2C 事务中。
+    const board::i2c::BusLock i2cGuard(pdMS_TO_TICKS(board::i2c::kDefaultMutexWaitMs));
+    static_cast<void>(i2cGuard);
+    esp_restart();
+}
+
 void requestRadioMode([[maybe_unused]] RadioMode mode, [[maybe_unused]] RadioReason reason) noexcept
 {
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE)
     s_radio_record = encodeRadioRecord(mode, reason);
 #endif
-    esp_restart();
+    const RebootBanner banner = (mode == RadioMode::kWifiConfig) ? RebootBanner::kSwitchingWifi
+                                                                 : RebootBanner::kSwitchingBt;
+    restartWithOledQuiesce(banner);
 }
 
 RadioSelection consumeRadioRequest() noexcept

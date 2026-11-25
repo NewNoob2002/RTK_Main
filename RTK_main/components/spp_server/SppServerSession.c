@@ -309,9 +309,11 @@ typedef struct {
     bool active;
     bool decided;
     bool accept;
+    char name[SPP_SERVER_PAIR_NAME_BYTES];
 } spp_server_pair_pending_t;
 
 static spp_server_pair_pending_t s_pair_pending;
+static uint32_t s_pair_serial;
 static spp_server_pair_query_t s_pair_query;
 
 void spp_server_set_pair_query(spp_server_pair_query_t query)
@@ -319,11 +321,18 @@ void spp_server_set_pair_query(spp_server_pair_query_t query)
     s_pair_query = query;
 }
 
-bool spp_server_pair_decide(bool accept)
+/**
+ * @brief 原子检查待确认请求并提交决定；id 为 0 供既有控制台命令使用。
+ * @param id: 已知的请求序号或 0。
+ * @param accept: 接受或拒绝。
+ * @retval 是否已提交。
+ */
+static bool spp_server_pair_commit(uint32_t id, bool accept)
 {
     const TickType_t now = xTaskGetTickCount();
     taskENTER_CRITICAL(&s_spp_mux);
     const bool ready = s_pair_pending.active && !s_pair_pending.decided &&
+                       (id == 0U || id == s_pair_serial) &&
                        now - s_pair_pending.start < pdMS_TO_TICKS(SPP_SERVER_PAIR_CONFIRM_MS);
     if (ready) {
         s_pair_pending.decided = true;
@@ -334,6 +343,44 @@ bool spp_server_pair_decide(bool accept)
         spp_server_tx_wake();
     }
     return ready;
+}
+
+bool spp_server_pair_decide(bool accept)
+{
+    return spp_server_pair_commit(0U, accept);
+}
+
+bool spp_server_pair_decide_for(uint32_t id, bool accept)
+{
+    return id != 0U && spp_server_pair_commit(id, accept);
+}
+
+void spp_server_pair_snapshot(spp_server_pair_snapshot_t *out)
+{
+    const TickType_t now = xTaskGetTickCount();
+    const TickType_t limit = pdMS_TO_TICKS(SPP_SERVER_PAIR_CONFIRM_MS);
+    *out = (spp_server_pair_snapshot_t){0};
+    taskENTER_CRITICAL(&s_spp_mux);
+    const TickType_t elapsed = now - s_pair_pending.start;
+    if (s_pair_pending.active && !s_pair_pending.decided && elapsed < limit) {
+        out->id = s_pair_serial;
+        out->remaining_ms = pdTICKS_TO_MS(limit - elapsed);
+        out->has_number = s_pair_pending.req.type == SPP_SERVER_CTRL_CFM_REQ;
+        out->number = out->has_number ? s_pair_pending.req.handle : 0U;
+        memcpy(out->bda, s_pair_pending.req.bda, sizeof(out->bda));
+        memcpy(out->name, s_pair_pending.name, sizeof(out->name));
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
+}
+
+void spp_server_pair_remote_name(const uint8_t *bda, const uint8_t *name)
+{
+    taskENTER_CRITICAL(&s_spp_mux);
+    if (s_pair_pending.active && memcmp(bda, s_pair_pending.req.bda, SPP_SERVER_ADDR_LEN) == 0) {
+        memcpy(s_pair_pending.name, name, sizeof(s_pair_pending.name) - 1U);
+        s_pair_pending.name[sizeof(s_pair_pending.name) - 1U] = '\0';
+    }
+    taskEXIT_CRITICAL(&s_spp_mux);
 }
 
 /**
@@ -373,8 +420,19 @@ static bool spp_server_pair_hold(const spp_server_ctrl_request_t *req)
     const bool free_slot = !s_pair_pending.active;
     if (free_slot) {
         s_pair_pending = (spp_server_pair_pending_t){.req = *req, .start = now, .active = true};
+        ++s_pair_serial;
+        if (s_pair_serial == 0U) {
+            ++s_pair_serial;
+        }
     }
     taskEXIT_CRITICAL(&s_spp_mux);
+    if (free_slot) {
+        esp_bd_addr_t peer;
+        memcpy(peer, req->bda, sizeof(peer));
+        if (esp_bt_gap_read_remote_name(peer) != ESP_OK) {
+            FW_CLOGD(FW_LOG_CAT_SPP, "pair peer name unavailable");
+        }
+    }
     return free_slot;
 }
 

@@ -59,6 +59,19 @@ void traceWeb(WebTrace code, uint32_t a, uint32_t b) noexcept
 }
 
 /**
+ * @brief 触发软件重启（ESP 平台先通知 OLED 刷过渡页并静默 I2C）
+ * @note 仅 WebModule 重启提交路径调用（ESP 平台不返回，主机测试桩可返回），非 ISR。
+ */
+void commitRebootNow() noexcept
+{
+#if defined(ESP_PLATFORM)
+    restartWithOledQuiesce(RebootBanner::kRebooting);
+#else
+    esp_restart();
+#endif
+}
+
+/**
  * @brief 将 uint32_t 字节数安全钳制到 int32_t 范围供 JSON 输出
  * @param value: 无符号 32 位数值
  * @retval 钳制后的 int32_t 数值
@@ -192,7 +205,8 @@ web_cfg::StatusSnapshot WebModule::sampleStatus(uint32_t nowMs) noexcept
         snap.gnss.sats = static_cast<int32_t>(fix.satsUsed);
         snap.gnss.hasSats = true;
     }
-    if (fix.hAccCm != ::gnss::kU16Unknown) {
+    // F9P 无定位时 GST 仍输出巨大标准差（解析器饱和为 65534 cm），仅有效定位时才上报精度。
+    if (fix.valid && (fix.hAccCm != ::gnss::kU16Unknown)) {
         snap.gnss.haccMm = static_cast<int32_t>(fix.hAccCm) * kMmPerCm;
         snap.gnss.hasHacc = true;
     }
@@ -404,10 +418,37 @@ void WebModule::scheduleReboot(RebootKind kind, std::string_view reasonText, uin
     }
 }
 
+bool WebModule::requestOledExit([[maybe_unused]] uint32_t nowMs) noexcept
+{
+    if (!initialized_ || pendingExit_.fd >= 0 || pendingExit_.local ||
+        pendingReboot_ != RebootKind::kNone || inflight_.ticket.seq != 0U ||
+        !power::s_power_requests.canScheduleRestart()) {
+        return false;
+    }
+#if RTK_GNSS_ENABLED
+    if (ctx().data.ggaGatePersist.load(std::memory_order_acquire) != data::GgaGatePersist::kClean) {
+        const fw::Command cmd{.verb = static_cast<uint8_t>(GnssSubVerb::kFlushGgaGate)};
+        settings::Ticket ticket{};
+        if (!fw::isOk(postSettingCommand(&ctx(), settings::Owner::kGnss, cmd,
+                                         settings::Caller::kWeb, ticket))) {
+            return false;
+        }
+        inflight_ = {.ticket = ticket,
+                     .fd = -1,
+                     .startedMs = nowMs,
+                     .kind = RequestKind::kExit,
+                     .local = true};
+        return true;
+    }
+#endif
+    pendingExit_.local = true;
+    return true;
+}
+
 void WebModule::commitPendingExit(uint32_t nowMs) noexcept
 {
     const auto request = pendingExit_;
-    if (request.fd < 0) {
+    if (request.fd < 0 && !request.local) {
         return;
     }
     pendingExit_ = {};
@@ -462,7 +503,7 @@ bool WebModule::pollPendingReboot(uint32_t nowMs) noexcept
     if (pendingReboot_ == RebootKind::kOta) {
         if (nowMs - rebootRequestedMs_ >= web_ota::kRebootMs) {
             traceWeb(WebTrace::kRebootCommit, static_cast<uint32_t>(pendingReboot_), 0U);
-            esp_restart();
+            commitRebootNow();
         }
         static_cast<void>(pollPendingDeliveries());
         static_cast<void>(pollRxFrame(nowMs));
@@ -506,7 +547,7 @@ bool WebModule::pollPendingReboot(uint32_t nowMs) noexcept
     }
     if (pendingReboot_ == RebootKind::kFreset) {
         traceWeb(WebTrace::kRebootCommit, static_cast<uint32_t>(pendingReboot_), 0U);
-        esp_restart();
+        commitRebootNow();
     }
     const RadioReason reason =
         (pendingReboot_ == RebootKind::kIdle) ? RadioReason::kIdle : RadioReason::kWebExit;
@@ -535,7 +576,8 @@ void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32
         return;
     }
     if (req.name == "exit") {
-        if (pendingExit_.fd >= 0 || !power::s_power_requests.canScheduleRestart()) {
+        if (pendingExit_.fd >= 0 || pendingExit_.local ||
+            !power::s_power_requests.canScheduleRestart()) {
             sendAck(client, req.id, web::ErrorCode::kBusy);
             return;
         }
@@ -634,7 +676,8 @@ void WebModule::pollInflight(uint32_t nowMs) noexcept
     }
     inflight_ = {};
     if (request.kind == RequestKind::kExit && error == web::ErrorCode::kNone) {
-        pendingExit_ = {.fd = request.fd, .gen = request.gen, .reqId = request.reqId};
+        pendingExit_ = {
+            .fd = request.fd, .gen = request.gen, .reqId = request.reqId, .local = request.local};
         return;
     }
     if (auto *client = findClient(request.fd, request.gen); client != nullptr) {

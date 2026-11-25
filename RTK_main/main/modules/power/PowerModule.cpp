@@ -19,11 +19,13 @@
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
 #include "app/PowerRequests.hpp"
+#include "app/RadioMode.hpp"
 #include "def/GnssSubDef.hpp"
 #include "board/BatteryAdc.hpp"
 #include "board/BoardProfile.hpp"
 #include "board/BoardStartup.hpp"
 #include "board/Charger.hpp"
+#include "fw/Atomic.hpp"
 #include "fw/Log.hpp"
 #include "fw/Trace.hpp"
 #include "modules/storage/StoreWriteGate.hpp"
@@ -36,10 +38,14 @@ constexpr uint32_t kQuiesceMinWaitMs = 30U;     // ms，给 trace_out 一次唤�
 constexpr uint32_t kQuiesceMaxWaitMs = 150U;    // ms，日志排空等待上限
 constexpr uint32_t kWifiQuiesceWaitMs = 5500U;  // ms，覆盖 HTTP socket 默认 5 s 超时
 constexpr uint32_t kRestartWaitMs = 150U;       // ms，异步日志和 UART 排空上限
+constexpr uint32_t kOledFinalFlushMaxMs = 30U;  // ms，USB 关机终帧 I2C 刷出等待上限（OL2）
 constexpr uint32_t kChargerPollPeriodMs = 200U; // ms，运行期 SGM41513 I2C 采样周期
 constexpr uint32_t kBatteryPeriodMs = 1000U;    // ms，组间最短等待时间
 constexpr uint32_t kBootBatterySpacingMs = 5U;  // ms，旧 P2 首组组内采样间隔
 constexpr uint32_t kBatteryFreshMs = 2000U;     // ms，超期旧读数不用于低电关机
+
+constinit std::atomic<TaskHandle_t> s_restart_task_handle{nullptr};
+static_assert(fw::kAtomicUsable<TaskHandle_t>, "电源重启唤醒任务句柄原子须无锁");
 
 /**
  * @brief 配置单个输入 GPIO（无内部上下拉，关中断）
@@ -143,10 +149,14 @@ constexpr uint32_t kBatteryFreshMs = 2000U;     // ms，超期旧读数不用于
     return (lhs.active == rhs.active) && (lhs.keyPressed == rhs.keyPressed) &&
            (lhs.u3On == rhs.u3On) && (lhs.usbPresent == rhs.usbPresent) &&
            (lhs.charging == rhs.charging) && (lhs.usbSource == rhs.usbSource) &&
-           (lhs.chargerOk == rhs.chargerOk) && (lhs.chargerReg08 == rhs.chargerReg08) &&
-           (lhs.batteryMv == rhs.batteryMv) && (lhs.batteryPct == rhs.batteryPct) &&
-           (lhs.bootMode == rhs.bootMode) && (lhs.powerOn == rhs.powerOn) &&
-           (lhs.shutdownStage == rhs.shutdownStage) && (lhs.lastShutdown == rhs.lastShutdown) &&
+           (lhs.batteryAdcReady == rhs.batteryAdcReady) &&
+           (lhs.chargerPresent == rhs.chargerPresent) && (lhs.chargerOk == rhs.chargerOk) &&
+           (lhs.chargerReg08 == rhs.chargerReg08) && (lhs.batteryMv == rhs.batteryMv) &&
+           (lhs.batteryPct == rhs.batteryPct) && (lhs.bootMode == rhs.bootMode) &&
+           (lhs.powerOn == rhs.powerOn) && (lhs.shutdownStage == rhs.shutdownStage) &&
+           (lhs.lastShutdown == rhs.lastShutdown) &&
+           (lhs.shutdownDoneMask == rhs.shutdownDoneMask) &&
+           (lhs.shutdownDegradedMask == rhs.shutdownDegradedMask) &&
            (lhs.shortPresses == rhs.shortPresses) && (lhs.longPresses == rhs.longPresses);
 }
 
@@ -198,10 +208,15 @@ fw::Result PowerModule::init() noexcept
         return fw::Result::kInvalidState;
     }
     keyDriveHigh_ = false;
+    forcePowerOffFired_ = false;
+    restartPending_ = false;
+    restartStartMs_ = 0U;
+    restartLogReady_ = false;
+    oledWaitDeadlineMs_ = 0U;
+    resetShutdownProgress();
     shortPresses_ = 0U;
     longPresses_ = 0U;
     shutdownSm_ = board::ShutdownSm{};
-
     const auto &profile = board::current();
     if (profile.powerHold.kind != board::HoldKind::kKeyEmulate) {
         active_ = false;
@@ -213,6 +228,7 @@ fw::Result PowerModule::init() noexcept
         return fw::Result::kIoError;
     }
     keySm_.reset(kPowerOffPressMs);
+    ctx().data.uiEvents.updateKeyHold(false, 0U, keySm_.longPressMs(), false);
     chargerSampled_ = false;
     chargerRetry_ = false;
     lastChargerStatus_ = board::ChargerInputStatus{};
@@ -265,7 +281,8 @@ PowerModule::PinLevels PowerModule::samplePins(uint32_t nowMs, bool forceCharger
         // STAT 高也可能是充满；REG08 缓存遇到争用时不能用于断电决策。
         .usbKnown = gpioUsb.has_value() || (fresh && lastChargerStatus_.ok) ||
                     (usb.source == board::UsbSource::kStat && usb.present),
-        .charging = stat.value_or(false),
+        // 无充电 IC 的板（F9P 板）STAT GPIO2 悬空可读成有效电平；无 USB 输入时不可能充电。
+        .charging = stat.value_or(false) && usb.present,
         .usbSource = usb.source,
         .chargerOk = lastChargerStatus_.ok,
         .chargerReg08 = lastChargerStatus_.rawReg08,
@@ -390,6 +407,8 @@ void PowerModule::handleChargeStandbyPowerOn(uint32_t nowMs, bool longPress,
         FW_LOGI(fw::TraceCat::kSys, "power hold ok (digital), restarting from charge standby");
         restartPending_ = true;
         restartStartMs_ = nowMs;
+        restartLogReady_ = false;
+        oledWaitDeadlineMs_ = 0U;
         break;
     case board::StandbyWakeAction::kTimeout:
         setKeyDrive(false);
@@ -510,7 +529,10 @@ void PowerModule::enterQuiesce(uint32_t nowMs) noexcept
 #endif
     }
     const fw::Status safeStatus = board::setSafeOutputLevels(board::current());
-    if (!fw::isOk(safeStatus)) {
+    if (fw::isOk(safeStatus)) {
+        peripheralsSafeDone_ = true;
+    } else {
+        peripheralsSafeFailed_ = true;
         FW_LOGW(fw::TraceCat::kSys, "power quiesce safe outputs failed (%s)",
                 fw::toString(safeStatus));
     }
@@ -549,6 +571,8 @@ void PowerModule::logQuiesceTimeout() noexcept
 void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins,
                                            const board::ShutdownOutput &out) noexcept
 {
+    stageEnteredMs_ = nowMs;
+    stageOnScreenMs_.reset();
     fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kShutdownStage), 0U,
               static_cast<uint32_t>(out.stage), static_cast<uint32_t>(shutdownSm_.reason()));
     switch (out.stage) {
@@ -557,6 +581,8 @@ void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins
                 board::shutdownReasonName(shutdownSm_.reason()), pins.usbPresent ? 1U : 0U);
         linkFenceReached_ = false;
         ioFenceReached_ = false;
+        resetShutdownProgress();
+        ctx().data.uiEvents.resetShutdownFinalFrame();
         break;
     case board::ShutdownStage::kSave:
         store::startPowerSave(nowMs);
@@ -564,7 +590,11 @@ void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins
         break;
     case board::ShutdownStage::kQuiesce:
         if (out.saveTimedOut) {
+            saveTimedOut_ = true;
             logSaveTimeoutItems();
+        } else {
+            saveFencesDone_ = true;
+            saveFlushedDone_ = true;
         }
         enterQuiesce(nowMs);
         break;
@@ -593,6 +623,10 @@ void PowerModule::handleShutdownCutPower(uint32_t nowMs, const board::ShutdownOu
         }
 #endif
         store::resumePowerSave();
+        resetShutdownProgress();
+        restartPending_ = false;
+        restartLogReady_ = false;
+        ctx().data.uiEvents.resetShutdownFinalFrame();
         power::s_power_requests.releaseAction();
         return;
     }
@@ -605,6 +639,10 @@ void PowerModule::handleShutdownCutPower(uint32_t nowMs, const board::ShutdownOu
         FW_LOGI(fw::TraceCat::kSys, "power off u3 down with usb, restarting");
         restartPending_ = true;
         restartStartMs_ = nowMs;
+        restartLogReady_ = false;
+        oledWaitDeadlineMs_ = 0U;
+        finalHoldDeadlineMs_.reset();
+        finalFrameReady_ = false;
     }
 }
 
@@ -617,25 +655,147 @@ void PowerModule::stepShutdown(uint32_t nowMs, PinLevels &pins) noexcept
     const auto stage = shutdownSm_.stage();
     if (stage == board::ShutdownStage::kSave) {
         pollSaveFences();
+        if (linkFenceReached_ && ioFenceReached_) {
+            saveFencesDone_ = true;
+        }
     }
     const bool saveDone = stage == board::ShutdownStage::kSave && isSaveComplete();
-    const bool quiesceDone = stage == board::ShutdownStage::kQuiesce && isQuiesceDone(nowMs);
+    if (saveDone) {
+        saveFlushedDone_ = true;
+    }
+    if ((stage == board::ShutdownStage::kQuiesce) && isRadioQuiesced()) {
+        radioQuiescedDone_ = true;
+    }
+    const bool stageVisible = shutdownStageVisible(nowMs, stage);
+    const bool quiesceDone =
+        stage == board::ShutdownStage::kQuiesce && stageVisible && isQuiesceDone(nowMs);
     if (quiesceDone) {
+        if (isRadioQuiesced()) {
+            radioQuiescedDone_ = true;
+        } else {
+            radioTimedOut_ = true;
+        }
         logQuiesceTimeout();
         pins = samplePins(nowMs, true);
         // 刷新 REG08 与 UART 排空均在 GPIO4 首沿开始计时之前。
         nowMs = rtos::nowMs();
     }
-    // U3 已低时不能用陈旧的无 USB 判定重新按下按键。
     const auto usb =
         pins.u3On || pins.usbKnown ? std::optional<bool>{pins.usbPresent} : std::nullopt;
-    const auto out = shutdownSm_.step(nowMs, saveDone, quiesceDone, pins.u3On, usb);
+    const bool cutReady =
+        !ctx().data.uiEvents.oledActive() ||
+        (stage == board::ShutdownStage::kCutPower &&
+         (pins.usbPresent
+              ? stageVisible
+              : finalFrameReady(nowMs, cutStartMs_ + board::kShutdownDisplayGraceMs, false)));
+    const auto out =
+        shutdownSm_.step(nowMs, saveDone, quiesceDone, pins.u3On, usb, stageVisible, cutReady);
     if (out.stageEntered) {
         handleShutdownStageEntry(nowMs, pins, out);
     }
     handleShutdownCutPower(nowMs, out);
 }
 
+void PowerModule::resetShutdownProgress() noexcept
+{
+    finalHoldDeadlineMs_.reset();
+    finalFrameReady_ = false;
+    saveFencesDone_ = false;
+    saveFlushedDone_ = false;
+    saveTimedOut_ = false;
+    peripheralsSafeDone_ = false;
+    peripheralsSafeFailed_ = false;
+    radioQuiescedDone_ = false;
+    radioTimedOut_ = false;
+}
+
+bool PowerModule::isRadioQuiesced() const noexcept
+{
+    if (context_->bootMode != board::BootMode::kNormal) {
+        return true;
+    }
+    if (context_->radioMode == RadioMode::kBluetooth) {
+        return context_->bt_link.powerPauseDone();
+    }
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    if (context_->radioMode == RadioMode::kWifiConfig) {
+        return context_->web.powerPauseDone();
+    }
+#endif
+    return true;
+}
+
+uint8_t PowerModule::computeShutdownDoneMask(const PinLevels &pins) const noexcept
+{
+    const auto stage = shutdownSm_.stage();
+    if (stage == board::ShutdownStage::kIdle) {
+        return 0U;
+    }
+    uint8_t mask = board::shutdownDoneBit(board::ShutdownDoneBit::kAnnounced);
+    if (saveFencesDone_) {
+        mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFences);
+    }
+    if (saveFlushedDone_) {
+        mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed);
+    }
+    if (peripheralsSafeDone_) {
+        mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kPeripheralsSafe);
+    }
+    if (radioQuiescedDone_) {
+        mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced);
+    }
+    if (stage == board::ShutdownStage::kCutPower) {
+        mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kCutPower);
+        if (restartPending_) {
+            mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady);
+        } else if (!pins.usbPresent && (pins.usbKnown || pins.u3On)) {
+            mask |= board::shutdownDoneBit(board::ShutdownDoneBit::kBatteryOffReady);
+        }
+    }
+    return mask;
+}
+
+uint8_t PowerModule::computeShutdownDegradedMask() const noexcept
+{
+    if (shutdownSm_.stage() == board::ShutdownStage::kIdle) {
+        return 0U;
+    }
+    uint8_t mask = 0U;
+    if (saveTimedOut_) {
+        mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kSaveTimeout);
+    }
+    if (peripheralsSafeFailed_) {
+        mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kPeripheralsFailed);
+    }
+    if (radioTimedOut_) {
+        mask |= board::shutdownDegradedBit(board::ShutdownDegradedBit::kRadioTimeout);
+    }
+    return mask;
+}
+
+void PowerModule::wakeRestartWait(void * /*ctx*/) noexcept
+{
+    if (const TaskHandle_t handle = s_restart_task_handle.load(std::memory_order_acquire);
+        handle != nullptr) {
+        static_cast<void>(xTaskNotifyGive(handle));
+    }
+}
+
+void PowerModule::waitOledFinalFrame(TaskHandle_t self) noexcept
+{
+    s_restart_task_handle.store(self, std::memory_order_release);
+    ctx().data.uiEvents.setRestartWakeHook(&PowerModule::wakeRestartWait, nullptr);
+    while (!ctx().data.uiEvents.shutdownFinalFrameFlushed()) {
+        const uint32_t curMs = rtos::nowMs();
+        if (static_cast<int32_t>(curMs - oledWaitDeadlineMs_) >= 0) {
+            break;
+        }
+        // 读时钟和进入相对等待之间可能被抢占。只等一 tick，恢复后重新核对绝对截止。
+        static_cast<void>(ulTaskNotifyTake(pdTRUE, 1U));
+    }
+    ctx().data.uiEvents.setRestartWakeHook(nullptr, nullptr);
+    s_restart_task_handle.store(nullptr, std::memory_order_release);
+}
 void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
 {
     const PowerSnapshot next{
@@ -645,6 +805,8 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         .usbPresent = pins.usbPresent,
         .charging = pins.charging,
         .usbSource = pins.usbSource,
+        .batteryAdcReady = batteryAdcReady_,
+        .chargerPresent = board::charger::isReady(),
         .chargerOk = pins.chargerOk,
         .chargerReg08 = pins.chargerReg08,
         .batteryPct = batteryPct_,
@@ -653,6 +815,8 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         .powerOn = ctx().powerOnReason,
         .shutdownStage = shutdownSm_.stage(),
         .lastShutdown = shutdownSm_.lastReason(),
+        .shutdownDoneMask = computeShutdownDoneMask(pins),
+        .shutdownDegradedMask = computeShutdownDegradedMask(),
         .shortPresses = shortPresses_,
         .longPresses = longPresses_,
     };
@@ -661,14 +825,128 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         FW_LOGI(fw::TraceCat::kSys, "<power> usb=%u src=%s", next.usbPresent ? 1U : 0U,
                 board::usbSourceName(next.usbSource));
     }
-    const bool shutdownStageChanged = !force && (next.shutdownStage != lastSnapshot_.shutdownStage);
+    const bool shutdownProgressChanged =
+        !force && ((next.shutdownStage != lastSnapshot_.shutdownStage) ||
+                   (next.shutdownDoneMask != lastSnapshot_.shutdownDoneMask) ||
+                   (next.shutdownDegradedMask != lastSnapshot_.shutdownDegradedMask));
+    const bool powerSupplyChanged = !force && ((next.usbPresent != lastSnapshot_.usbPresent) ||
+                                               (next.charging != lastSnapshot_.charging));
     if (force || !snapshotEqual(next, lastSnapshot_)) {
         lastSnapshot_ = next;
         ctx().data.powerStatus.write(next);
-        // 必须在 powerStatus 写入完成后再唤醒 UI，避免多核/抢占下 OLED 读到旧关机阶段（ROL1-03）。
-        if (shutdownStageChanged) {
+        // 必须在 powerStatus 写入完成后再唤醒 UI，避免多核/抢占下 OLED 读到旧关机/供电状态（ROL1-03）。
+        if (shutdownProgressChanged || powerSupplyChanged) {
             ctx().data.uiEvents.notifyWake();
         }
+    }
+}
+
+bool PowerModule::shutdownStageVisible(uint32_t nowMs, board::ShutdownStage stage) noexcept
+{
+    const auto &events = ctx().data.uiEvents;
+    if (!events.oledActive()) {
+        return true;
+    }
+    if (!stageOnScreenMs_ && events.shutdownStageFlushed(stage)) {
+        stageOnScreenMs_ = nowMs;
+    }
+    if (stageOnScreenMs_) {
+        return nowMs - *stageOnScreenMs_ >= board::kMinStageVisibleMs;
+    }
+    return nowMs - stageEnteredMs_ >= board::kShutdownDisplayGraceMs + board::kMinStageVisibleMs;
+}
+
+bool PowerModule::finalFrameReady(uint32_t nowMs, uint32_t flushDeadlineMs, bool usb) noexcept
+{
+    const auto &events = ctx().data.uiEvents;
+    if (finalFrameReady_ || !events.oledActive()) {
+        return true;
+    }
+    if (!finalHoldDeadlineMs_ && events.shutdownFinalFrameFlushed(usb)) {
+        finalHoldDeadlineMs_ = nowMs + board::kShutdownFinalVisibleMs;
+    }
+    const uint32_t deadline = finalHoldDeadlineMs_.value_or(flushDeadlineMs);
+    // 两个等待窗口都远小于半个 uint32_t 周期，差值符号可用于回绕截止判断。
+    finalFrameReady_ = static_cast<int32_t>(nowMs - deadline) >= 0;
+    if (finalFrameReady_ && !finalHoldDeadlineMs_) {
+        FW_LOGW(fw::TraceCat::kSys, "shutdown OLED final frame timed out");
+    }
+    return finalFrameReady_;
+}
+
+bool PowerModule::pollRestart(uint32_t nowMs) noexcept
+{
+    const uint32_t elapsed = nowMs - restartStartMs_;
+    if (!restartLogReady_) {
+        if (elapsed < kRestartWaitMs && !isLogDrained(elapsed)) {
+            return false;
+        }
+        restartLogReady_ = true;
+        oledWaitDeadlineMs_ = nowMs + kOledFinalFlushMaxMs;
+    }
+    const RebootBanner restartBanner =
+        shutdownSm_.active() ? RebootBanner::kKeepFrame : RebootBanner::kStarting;
+    const auto doRestart = [restartBanner]() noexcept {
+#if defined(ESP_PLATFORM)
+        restartWithOledQuiesce(restartBanner);
+#else
+        static_cast<void>(restartBanner);
+        esp_restart();
+#endif
+    };
+    if (!shutdownSm_.active() || finalFrameReady(nowMs, oledWaitDeadlineMs_, true)) {
+        doRestart();
+    } else if (!finalHoldDeadlineMs_) {
+        if (const TaskHandle_t self = xTaskGetCurrentTaskHandle(); self != nullptr) {
+            waitOledFinalFrame(self);
+            if (finalFrameReady(rtos::nowMs(), oledWaitDeadlineMs_, true)) {
+                doRestart();
+            }
+        }
+    }
+    return false;
+}
+
+void PowerModule::handleKeyPoll(uint32_t nowMs, board::KeyEvent event, bool keyPressed) noexcept
+{
+    switch (event) {
+    case board::KeyEvent::kShort:
+        ++shortPresses_;
+        fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyShort), 0U,
+                  shortPresses_, keySm_.lastHoldMs());
+        ctx().data.uiEvents.notifyShortKey(nowMs);
+        break;
+    case board::KeyEvent::kLongHold:
+        ++longPresses_;
+        fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyLong), 0U, longPresses_,
+                  static_cast<uint32_t>(ctx().bootMode));
+        if (ctx().bootMode == board::BootMode::kNormal) {
+            if (ctx().data.uiEvents.oledActive()) {
+                ctx().data.uiEvents.notifyLongKey(nowMs);
+            } else {
+                static_cast<void>(power::requestShutdown(board::ShutdownReason::kKey));
+            }
+        }
+        break;
+    case board::KeyEvent::kNone:
+    default:
+        break;
+    }
+    if (!keySm_.armed() || !keySm_.pressed()) {
+        forcePowerOffFired_ = false;
+        return;
+    }
+    if ((ctx().bootMode != board::BootMode::kNormal) || forcePowerOffFired_ || !keyPressed) {
+        return;
+    }
+    const uint32_t holdMs = nowMs - keySm_.pressStartMs();
+    if (holdMs < board::kForcePowerOffHoldMs) {
+        return;
+    }
+    forcePowerOffFired_ = true;
+    if (power::requestShutdown(board::ShutdownReason::kKey)) {
+        FW_LOGW(fw::TraceCat::kSys, "force power-off fallback after %" PRIu32 " ms key hold",
+                holdMs);
     }
 }
 
@@ -678,36 +956,14 @@ bool PowerModule::poll(uint32_t nowMs) noexcept
         return false;
     }
     if (restartPending_) {
-        const uint32_t elapsed = nowMs - restartStartMs_;
-        if (elapsed >= kRestartWaitMs || isLogDrained(elapsed)) {
-            esp_restart();
-        }
-        return false;
+        return pollRestart(nowMs);
     }
     const bool cutSenseFell = shutdownSm_.stage() == board::ShutdownStage::kCutPower &&
                               lastSnapshot_.u3On &&
                               !readPinActive(board::current().powerHold.senseGpio, false);
     PinLevels pins = samplePins(nowMs, cutSenseFell);
     const auto event = keySm_.poll(nowMs, pins.keyPressed);
-    switch (event) {
-    case board::KeyEvent::kShort:
-        ++shortPresses_;
-        fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyShort), 0U,
-                  shortPresses_, keySm_.lastHoldMs());
-        ctx().data.uiEvents.notifyShortKey();
-        break;
-    case board::KeyEvent::kLongHold:
-        ++longPresses_;
-        fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kKeyLong), 0U, longPresses_,
-                  static_cast<uint32_t>(ctx().bootMode));
-        if (ctx().bootMode == board::BootMode::kNormal) {
-            static_cast<void>(power::requestShutdown(board::ShutdownReason::kKey));
-        }
-        break;
-    case board::KeyEvent::kNone:
-    default:
-        break;
-    }
+    handleKeyPoll(nowMs, event, pins.keyPressed);
 
     pollBattery(nowMs, pins);
     if (ctx().bootMode == board::BootMode::kChargeStandby) {
@@ -715,6 +971,11 @@ bool PowerModule::poll(uint32_t nowMs) noexcept
     } else {
         stepShutdown(rtos::nowMs(), pins);
     }
+    const bool standbyLocked =
+        standbyWake_.active() ||
+        ((ctx().bootMode == board::BootMode::kChargeStandby) && restartPending_);
+    ctx().data.uiEvents.updateKeyHold(keySm_.holding(), keySm_.pressStartMs(), keySm_.longPressMs(),
+                                      standbyLocked);
     publishSnapshot(pins, false);
     return false;
 }

@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "board/PowerLogic.hpp"
+#include "def/OledDef.hpp"
 
 namespace app {
 
@@ -108,6 +109,15 @@ struct RadioSelection {
  * @note 仅任务调用，非 ISR，调用者须串行化重启请求。构建关闭本功能时重启采用蓝牙。
  */
 [[noreturn]] void requestRadioMode(RadioMode mode, RadioReason reason) noexcept;
+
+#if defined(ESP_PLATFORM)
+/**
+ * @brief 通知 OLED 显示重启/切换提示并等待刷帧与 I2C 静默（<= 300 ms），持 I2C 锁执行 esp_restart
+ * @param banner: 重启前 OLED 过渡提示类型；kKeepFrame 表示保留当前终帧仅静默 I2C
+ * @note 仅任务调用，非 ISR，调用者须串行化重启请求。
+ */
+[[noreturn]] void restartWithOledQuiesce(RebootBanner banner) noexcept;
+#endif
 
 /**
  * @brief 消费 RTC 内存中的一次性请求。功能关闭时也清除记录，并返回默认蓝牙选择。

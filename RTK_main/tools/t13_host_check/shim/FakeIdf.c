@@ -804,7 +804,18 @@ void fake_emit_gap_cfm_req(const uint8_t bda[6])
 
     memset(&param, 0, sizeof(param));
     memcpy(param.cfm_req.bda, bda, sizeof(esp_bd_addr_t));
+    param.cfm_req.num_val = 123456U;
     fake_dispatch_gap(ESP_BT_GAP_CFM_REQ_EVT, &param, false);
+}
+
+void fake_emit_gap_remote_name(const uint8_t bda[6], const char *name)
+{
+    esp_bt_gap_cb_param_t param = {0};
+    memcpy(param.read_rmt_name.bda, bda, sizeof(esp_bd_addr_t));
+    param.read_rmt_name.stat = ESP_BT_STATUS_SUCCESS;
+    (void)snprintf((char *)param.read_rmt_name.rmt_name, sizeof(param.read_rmt_name.rmt_name), "%s",
+                   name);
+    fake_dispatch_gap(ESP_BT_GAP_READ_REMOTE_NAME_EVT, &param, true);
 }
 
 void fake_emit_gap_auth_cmpl(const uint8_t bda[6])
@@ -1250,4 +1261,10 @@ bool fake_wait_disconnect_returns(int count, uint32_t timeout_ms)
     ok = (s_disconnect_return_count >= count);
     pthread_mutex_unlock(&s_lock);
     return ok;
+}
+
+esp_err_t esp_bt_gap_read_remote_name(esp_bd_addr_t remote_bda)
+{
+    (void)remote_bda;
+    return ESP_OK;
 }

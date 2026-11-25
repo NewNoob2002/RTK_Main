@@ -120,6 +120,7 @@ struct MockHttpdState {
 
 MockHttpdState s_httpd{};
 uint32_t s_nowMs = 1000U;
+uint32_t s_apIpv4 = 0U;
 bool s_powerKeyDriven = false;
 std::string s_mockSn = "B5F2";
 bool s_mockPairNext = false;
@@ -272,6 +273,7 @@ void resetHarness()
     s_ctx.bootPhase.store(app::BootPhase::kRunning, std::memory_order_relaxed);
 #endif
     s_nowMs = 1000U;
+    s_apIpv4 = 0U;
     s_mockSn = "B5F2";
     s_mockPairNext = false;
     s_mockStorageResult = fw::Result::kOk;
@@ -296,6 +298,13 @@ void resetHarness()
     s_ctx.web.bindContext(s_ctx);
     bindWebStorage();
     assert(fw::isOk(s_ctx.web.init()));
+    assert(s_ctx.data.wifiReady.load(std::memory_order_acquire));
+    const auto ap = s_ctx.data.wifiAp.read();
+    assert(ap.ssid == sys.deviceName);
+    const auto [first, second, third, fourth] = ap.ipv4;
+    esp_ip4_addr_t expected{};
+    esp_netif_set_ip4_addr(&expected, first, second, third, fourth);
+    assert(expected.addr != 0U && expected.addr == s_apIpv4);
 }
 
 } // namespace
@@ -314,6 +323,12 @@ const char *esp_err_to_name(esp_err_t err)
 int64_t esp_timer_get_time(void)
 {
     return static_cast<int64_t>(s_nowMs) * 1000LL;
+}
+
+/** @brief 主机测试桩：单线程网页回归无当前 FreeRTOS 任务句柄。 @retval nullptr 总是。 */
+TaskHandle_t xTaskGetCurrentTaskHandle(void)
+{
+    return nullptr;
 }
 
 esp_reset_reason_t esp_reset_reason(void)
@@ -359,12 +374,13 @@ esp_err_t esp_netif_dhcps_stop(esp_netif_t * /*esp_netif*/)
 /**
  * @brief 模拟设置 SoftAP 静态 IP
  * @param esp_netif: 网络接口句柄（未使用）
- * @param info: IP 信息（未使用）
+ * @param info: 暂存测试用配置地址。
  * @retval ESP_OK 始终成功
  * @note 主机测试桩。
  */
-esp_err_t esp_netif_set_ip_info(esp_netif_t * /*esp_netif*/, const esp_netif_ip_info_t * /*info*/)
+esp_err_t esp_netif_set_ip_info(esp_netif_t * /*esp_netif*/, const esp_netif_ip_info_t *info)
 {
+    s_apIpv4 = info->ip.addr;
     return ESP_OK;
 }
 
@@ -1482,6 +1498,37 @@ void testIdleAbortAndExitGgaGate()
     s_ctx.web.unbindStorage();
 }
 
+/** @brief OLED 退出共用 Web bye 排空和 BT 重启，并保留持久化前置检查。 */
+void testOledExit()
+{
+    resetHarness();
+    assert(simulateIdfV61WsHandshake(1004) == ESP_OK);
+    simulateWifiEvent(WIFI_EVENT_AP_STACONNECTED);
+    assert(s_ctx.web.wifiStationCount() == 1U);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    s_httpd.sent.clear();
+    s_ctx.data.ggaGatePersist.store(app::data::GgaGatePersist::kFailed, std::memory_order_release);
+    assert(!s_ctx.web.requestOledExit(s_nowMs)); // 替身未启动 Io 执行器，不能冲刷。
+    s_ctx.data.ggaGatePersist.store(app::data::GgaGatePersist::kClean, std::memory_order_release);
+    assert(s_ctx.web.requestOledExit(s_nowMs));
+    assert(!s_ctx.web.requestOledExit(s_nowMs));
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.back().payload == R"({"t":"bye","reason":"exit"})");
+    assert(s_rebootCalls == 0);
+    s_catchReboot = true;
+    if (setjmp(s_rebootJmp) == 0) {
+        s_nowMs += 1000U;
+        static_cast<void>(s_ctx.web.poll(s_nowMs));
+        assert(false && "expected OLED exit to switch to Bluetooth");
+    }
+    s_catchReboot = false;
+    assert(s_rebootCalls == 1 && s_lastRadioMode == app::RadioMode::kBluetooth);
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
 /** @brief 关机屏蔽 Web exit，HTTP 任务静默 SoftAP 并在关机回退后恢复。 */
 void testShutdownArbitrationAndSoftApResume()
 {
@@ -2172,6 +2219,7 @@ int main()
     testFramingAndConfigBeforeAck();
     testSessionGenAndBackpressure();
     testIdleAbortAndExitGgaGate();
+    testOledExit();
     testShutdownArbitrationAndSoftApResume();
     testCapsUpdates();
     testGnssCutoffRealBackend();

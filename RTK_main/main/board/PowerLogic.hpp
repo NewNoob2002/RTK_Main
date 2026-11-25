@@ -56,14 +56,61 @@ enum class ShutdownStage : uint8_t {
     kCutPower,
 };
 
-inline constexpr uint32_t kKeyPollPeriodMs = 10U;         // ms，按键轮询周期
-inline constexpr uint32_t kKeyDebounceMs = 30U;           // ms，按键消抖时间
-inline constexpr uint32_t kKeyShortMaxMs = 1000U;         // ms，短按上限（严格小于触发 kShort）
-inline constexpr uint32_t kDefaultLongPressMs = 2500U;    // ms，默认长按关机/开机阈值
+/** 关机序列已完成里程碑位掩码（CODING-STYLE 规则 3，供 OLED 关机进度页只读消费）。 */
+enum class ShutdownDoneBit : uint8_t {
+    kAnnounced = 1U << 0U,       ///< 已进入关机流程（kAnnounce）
+    kSaveFences = 1U << 1U,      ///< kLink / kIo 队尾保存栅栏已到达
+    kSaveFlushed = 1U << 2U,     ///< NVS 延迟写与在途设置已落盘（进入 kQuiesce）
+    kRadioQuiesced = 1U << 3U,   ///< SPP 已断开且扫描关闭请求已提交，或 SoftAP 已停用
+    kPeripheralsSafe = 1U << 4U, ///< 外设输出已置安全电平
+    kCutPower = 1U << 5U,        ///< 已进入断电动作阶段（kCutPower）
+    kUsbOffReady = 1U << 6U,     ///< USB 路径 U3 已关断，等待最后一帧刷出后重启
+    kBatteryOffReady = 1U << 7U, ///< 电池路径可准备终帧，断电动作由 OLED 握手放行
+};
+
+/**
+ * @brief 取得关机完成里程碑位对应的 uint8_t 掩码
+ * @param bit: 关机里程碑位枚举
+ * @retval 对应位掩码
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] constexpr uint8_t shutdownDoneBit(ShutdownDoneBit bit) noexcept
+{
+    return static_cast<uint8_t>(bit);
+}
+
+/** 关机序列降级结果位掩码（超时/失败后仍按基线策略强制下电或 USB 重启兜底，供 OLED 独立展示降级文案）。 */
+enum class ShutdownDegradedBit : uint8_t {
+    kSaveTimeout = 1U << 0U,       ///< kSave 超时（1 s）仍有未落盘项或未到达栅栏
+    kPeripheralsFailed = 1U << 1U, ///< 外设安全电平配置返回错误
+    kRadioTimeout = 1U << 2U,      ///< 蓝牙或 Wi-Fi SoftAP 静默断开超时
+};
+
+/**
+ * @brief 取得关机降级结果位对应的 uint8_t 掩码
+ * @param bit: 关机降级结果位枚举
+ * @retval 对应位掩码
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] constexpr uint8_t shutdownDegradedBit(ShutdownDegradedBit bit) noexcept
+{
+    return static_cast<uint8_t>(bit);
+}
+
+inline constexpr uint32_t kKeyPollPeriodMs = 10U;        // ms，按键轮询周期
+inline constexpr uint32_t kKeyDebounceMs = 30U;          // ms，按键消抖时间
+inline constexpr uint32_t kKeyShortMaxMs = 600U;         // ms，短按上限（与长按进度浮层起点对齐）
+inline constexpr uint32_t kKeyHoldOverlayStartMs = 600U; // ms，正常模式长按进度浮层起显时刻
+inline constexpr uint32_t kDefaultLongPressMs = 2500U;   // ms，默认长按关机/开机阈值
+inline constexpr uint32_t kForcePowerOffHoldMs =
+    8000U; // ms，OLED 卡死或未消费长按时持续按住的强制关机兜底阈值
 inline constexpr uint32_t kShutdownSaveTimeoutMs = 1000U; // ms，kSave 落盘等待上限
 inline constexpr uint32_t kShutdownCutInitHighMs = 2000U; // ms，无 USB 时首段 GPIO4 高电平
 inline constexpr uint32_t kShutdownCutToggleMs = 3100U;   // ms，无 USB 时高/低交替周期
 inline constexpr uint32_t kShutdownCutTimeoutMs = 30000U; // ms，断电超时回退上限
+inline constexpr uint32_t kMinStageVisibleMs = 250U;      // ms，短阶段留出肉眼识别时间
+inline constexpr uint32_t kShutdownDisplayGraceMs = 100U; // ms，容纳在途帧和一次完整刷屏
+inline constexpr uint32_t kShutdownFinalVisibleMs = 300U; // ms，终帧确认后留给用户阅读
 
 // SGM41513 寄存器与位定义（BQ25601 兼容映射，待实板 `power charger` dump 核对）。
 inline constexpr uint8_t kSgmReg00 = 0x00U;
@@ -307,6 +354,37 @@ public:
         return lastHoldMs_;
     }
 
+    /**
+     * @brief 查询当前是否处于已消抖按住且尚未触发长按的保持态
+     * @retval true 正在按住计数中（可用于 UI 进度条/环填充）
+     * @retval false 未按住、未解除开机保护或已触发过本次长按
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] bool holding() const noexcept
+    {
+        return pressing_ && !longFired_;
+    }
+
+    /**
+     * @brief 查询当前按压物理按下沿的单调起点时间（ms）
+     * @retval 按下起点（ms），仅在 holding() 或 pressed() 时有效
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] uint32_t pressStartMs() const noexcept
+    {
+        return pressStartMs_;
+    }
+
+    /**
+     * @brief 查询当前配置的长按触发阈值（ms）
+     * @retval 长按触发阈值（ms）
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] uint32_t longPressMs() const noexcept
+    {
+        return longPressMs_;
+    }
+
 private:
     uint32_t longPressMs_ = kDefaultLongPressMs;
     bool initialized_ = false;
@@ -342,6 +420,27 @@ public:
      */
     [[nodiscard]] StandbyWakeAction confirmStandbyHold(uint32_t nowMs, bool longPress,
                                                        bool senseHigh, uint32_t timeoutMs) noexcept;
+
+    /**
+     * @brief 查询当前是否正在驱动模拟按压并确认 U3 保持电平
+     * @retval true 待机开机保持确认进行中
+     * @retval false 空闲
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] bool active() const noexcept
+    {
+        return active_;
+    }
+
+    /**
+     * @brief 查询本次待机开机保持确认开始的起点单调时间（ms）
+     * @retval 确认起点（ms），仅在 active() 为 true 时有效
+     * @note 只读查询，不阻塞。
+     */
+    [[nodiscard]] uint32_t startedMs() const noexcept
+    {
+        return startedMs_;
+    }
 
 private:
     uint32_t startedMs_ = 0U;
@@ -383,11 +482,14 @@ public:
      * @param quiesceDone: kQuiesce 阶段外设静默与日志冲刷是否已完成
      * @param senseHigh: GPIO25（U3 OUT）当前数字电平是否为高
      * @param usbPresent: USB 输入电源当前是否在位，缺少有效样本时为 nullopt
+     * @param stageVisible: 中间阶段是否可离开
+     * @param cutReady: 是否允许开始 GPIO4 断电动作
      * @retval 本轮阶段、边沿标志及 GPIO4/重启控制输出
      * @note 由持有者串行调用，不阻塞、不分配堆。
      */
     [[nodiscard]] ShutdownOutput step(uint32_t nowMs, bool saveDone, bool quiesceDone,
-                                      bool senseHigh, std::optional<bool> usbPresent) noexcept;
+                                      bool senseHigh, std::optional<bool> usbPresent,
+                                      bool stageVisible = true, bool cutReady = true) noexcept;
 
     /**
      * @brief 查询是否正在执行关机序列
@@ -436,11 +538,13 @@ private:
      * @param nowMs: 当前单调时间（ms）
      * @param senseHigh: GPIO25 当前是否为高
      * @param usbPresent: USB 当前是否在位，缺少有效样本时为 nullopt
+     * @param cutReady: 是否允许开始 GPIO4 断电动作
      * @retval 本轮输出动作
      * @note 仅 step() 在 kCutPower 阶段调用。
      */
     [[nodiscard]] ShutdownOutput stepCutPower(uint32_t nowMs, bool senseHigh,
-                                              std::optional<bool> usbPresent) noexcept;
+                                              std::optional<bool> usbPresent,
+                                              bool cutReady) noexcept;
 
     ShutdownStage stage_ = ShutdownStage::kIdle;
     ShutdownReason reason_ = ShutdownReason::kNone;

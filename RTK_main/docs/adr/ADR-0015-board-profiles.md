@@ -81,6 +81,8 @@ P2 无保持脚。GPIO4（`TELL_MCU_KEY`）经 Q16 模拟按键按下，电源�
   有 USB 供电时不能断电，改为关 4G（GPIO26 低）、复位 GNSS、进入充电显示。
 - B3 实施：有 USB 时关机请求改为重启进入 `charge_standby`（OLED 卡前无充电显示）。低电关机（无 USB、电量 <10% 持续 30 s）
   复用 B2 关机仲裁，计时中插入 USB 取消。
+- OL3 在 OLED 在线时等待各中间阶段完整刷出后停留 250 ms。电池路径先刷 `POWER OFF`，确认后再停留 300 ms，才启动 GPIO4 断电脉冲。若进入断电阶段后 100 ms 未确认终帧，记录超时并按原协议断电。USB 路径在 U3 关断后刷 `RESTARTING`，确认后停留至少 300 ms 再重启。U3 未断开的 30 s 回退计时仍从进入断电阶段开始。终帧截止与显示细节见 ADR-0020 §5.3。
+- OL4 防误触与按住进度：物理短按上限与长按浮层起显时刻统一为 `600 ms`（`kKeyShortMaxMs = 600`），600–2500 ms 期间松开不触发短按亦不关机；`PowerModule` 通过 `UiEventBus` 无锁原子向 OLED 暴露按住状态、按下起点与长按阈值（以及待机 `StandbyWakeSm` 确认态）。OLED 在线时，正常模式长按 2.5 s 仅向 UI 投递长按到达事件，由 `POWER OFF?` 确认页双击后经 `OledAction::kShutdownKey` 调用 `power::requestShutdown(kKey)`；为防止 OLED 任务卡死或未消费长按导致无法关机，正常模式持续按住达到 `kForcePowerOffHoldMs = 8000 ms` 时 `PowerModule` 不经 UI 直接调用 `power::requestShutdown(kKey)` 强制兜底。无 OLED（`Feature::kOled` 关闭）或运行期 OLED 连续 4 次 I2C 刷屏失败进入离线态清除 `kOledActive` 后，长按 2.5 s 直接发起关机（面板恢复写出后重新置位）。低电、console 及手机来源仍不经确认页直接关机。
 
 ### 2.5 P2 安全输出电平（识别成功后立即设置）
 
