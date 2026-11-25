@@ -40,7 +40,7 @@
 
 | 项 | 状态 |
 | --- | --- |
-| PW1 关机参与者表 | 进行中，分支 `feat/pw1-shutdown`（工作树 `../RTK_Main-pw1`），任务卡 `docs/tasks/PW1-shutdown-participants.md` 在该分支 |
+| PW1 关机参与者表 | 未开始，待后续分派 |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | 未立项，需新 ADR，必须走 ADR-0018 的服务与总线 |
@@ -61,6 +61,5 @@
 
 ## 4. 未合入分支
 
-- `feat/pw1-shutdown`：PW1 进行中（见 §2）。
 - `feat/w8-ui-agy`、`feat/w8-ui-codex`：W8 网页重做的两版落选候选（选用方案合入 `e0a3001`），存档。
 - `spike/w0-wifi-budget`：W0 Wi-Fi 内存预算试验代码，存档。
