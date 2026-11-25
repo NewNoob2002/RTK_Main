@@ -6,3 +6,7 @@
 2500 shot standby-hold
 2600 key_up
 3000 shot standby-released
+3500 key_down
+6000 long
+6200 key_up
+6600 shot standby-starting

@@ -384,12 +384,40 @@ void powerStandby()
     s_gpioLevels[18] = 0;
     pollPower(251U);
     CHECK(s_gpioLevels[4] == 1 && s_gpio4Presses == 2U);
+    CHECK(appContext().data.uiEvents.readKeyHold().standbyConfirm);
     s_gpioLevels[25] = 1;
     pollPower(3U);
     CHECK(s_gpioLevels[4] == 0 && s_restarts == 0U);
     CHECK(!power::s_power_requests.claimRestart());
+    // 触发重启后松开物理按键，standbyConfirm 必须保持 true（防止待机唤醒环回退）。
+    s_gpioLevels[18] = 1;
+    pollPower(1U);
+    CHECK(appContext().data.uiEvents.readKeyHold().standbyConfirm);
     pollPower(15U);
     CHECK(s_restarts == 1U);
+}
+
+/** @brief 验证无充电芯片时插拔 USB（GPIO27 变化）更新快照并立即唤醒 OLED 任务。 */
+void powerUsbChangeWakesUi()
+{
+    using namespace app;
+    s_chargerReady = false;
+    setupPower(board::BootMode::kNormal);
+    s_gpioLevels[25] = 1;
+    s_gpioLevels[27] = 0;
+    auto &ctx = appContext();
+    pollPower(2U);
+    CHECK(!ctx.data.powerStatus.read().usbPresent && !ctx.data.powerStatus.read().chargerPresent);
+    unsigned wakes = 0U;
+    ctx.data.uiEvents.setWakeHook([](void *arg) noexcept { ++(*static_cast<unsigned *>(arg)); },
+                                  &wakes);
+    s_gpioLevels[27] = 1;
+    pollPower(1U);
+    CHECK(ctx.data.powerStatus.read().usbPresent && wakes == 1U);
+    s_gpioLevels[27] = 0;
+    pollPower(1U);
+    CHECK(!ctx.data.powerStatus.read().usbPresent && wakes == 2U);
+    ctx.data.uiEvents.setWakeHook(nullptr, nullptr);
 }
 
 /** @brief 验证 PowerModule 短按经 UiEventBus 通知 UI，且关机阶段唤醒必在 powerStatus 发布之后（ROL1-03）。 */
@@ -3036,6 +3064,8 @@ int main(int argc, const char **raw_args)
         powerForceOffFallback();
     } else if (std::strcmp(argv[1], "power_oled_offline_direct_shutdown") == 0) {
         powerOledOfflineDirectShutdown();
+    } else if (std::strcmp(argv[1], "power_usb_change_wakes_ui") == 0) {
+        powerUsbChangeWakesUi();
     } else if (std::strcmp(argv[1], "power_oled_usb_final_flush") == 0) {
         powerOledUsbFinalFlush();
     } else if (std::strcmp(argv[1], "power_oled_battery_final_flush") == 0) {

@@ -92,6 +92,9 @@ constinit uint8_t s_last_page_cmd = 0xFFU;
 constinit unsigned s_oled_data_pages = 0U;
 constinit unsigned s_oled_tx_count = 0U;
 constinit unsigned s_restart_wakes = 0U;
+constinit bool s_oled_probe_ok = true;
+constinit esp_err_t s_oled_probe_err = ESP_ERR_TIMEOUT;
+constinit unsigned s_error_logs = 0U;
 constinit spp_server_pair_snapshot_t s_pair_snapshot{};
 constinit uint32_t s_decision_id = 0U;
 constinit bool s_decision_accept = false;
@@ -441,6 +444,78 @@ void runOfflineClearsOledActive() noexcept
     CHECK(s_app.data.uiEvents.oledActive());
 }
 
+/**
+ * @brief 场景：启动探测失败记录失败原因并打 E 日志，后台周期重试成功恢复在线
+ */
+void runBackgroundInitRetry() noexcept
+{
+    s_oled_probe_ok = false;
+    s_oled_probe_err = ESP_ERR_TIMEOUT;
+    s_app.data.init();
+    s_app.boardProfile = board::byId(board::BoardId::kP2V141);
+    s_app.bootMode = board::BootMode::kNormal;
+    s_app.radioMode = RadioMode::kWifiConfig;
+    s_app.data.wifiReady.store(true);
+    s_app.bootConfig.userNvsReady = true;
+    s_app.bootConfig.safeDefaults = false;
+    s_app.oled.bindContext(s_app);
+    CHECK(s_app.oled.bindStorage({s_oled_stack, s_oled_fb}) == fw::Status::kOk);
+    CHECK(s_app.oled.init() == fw::Result::kOk);
+
+    OledStatus st = s_app.data.oledStatus.read();
+    CHECK(st.enabled && !st.present && st.initStage == OledInitStage::kProbe &&
+          st.initStatus == fw::Status::kTimeout && st.initAttempts == 1U);
+    CHECK(s_error_logs >= 1U && !s_app.data.uiEvents.oledActive());
+    // 即使首检失败，start() 仍启动后台任务以定期重试。
+    CHECK(s_app.oled.start() == fw::Result::kOk && s_app.oled.taskRunning());
+
+    // 未满重试周期不重探。
+    s_time_us += 1000000LL;
+    static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
+    ModuleTestAccess::publish(s_app.oled, true);
+    CHECK(!s_app.data.oledStatus.read().present && s_app.data.oledStatus.read().initAttempts == 1U);
+
+    // 满 2 s 且面板恢复应答 -> 后台重试成功并置位 oledActive、首帧刷出。
+    s_oled_probe_ok = true;
+    s_time_us += static_cast<int64_t>(OledModule::kInitRetryPeriodMs) * 1000LL;
+    const unsigned pagesBefore = s_oled_data_pages;
+    static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
+    ModuleTestAccess::publish(s_app.oled, true);
+    st = s_app.data.oledStatus.read();
+    CHECK(st.present && st.initStage == OledInitStage::kOk && st.initStatus == fw::Status::kOk &&
+          st.initAttempts == 2U);
+    CHECK(s_app.data.uiEvents.oledActive() && (s_oled_data_pages > pagesBefore));
+}
+
+/**
+ * @brief 场景：软件重启过渡帧（SWITCHING WI-FI）刷出后置位 rebootQuiesced 并停止一切后续 I2C 传输
+ */
+void runRebootBannerQuiesce() noexcept
+{
+    setupOledModule();
+    s_app.data.uiEvents.setRestartWakeHook([](void * /*ctx*/) noexcept { ++s_restart_wakes; },
+                                           nullptr);
+    s_app.data.uiEvents.requestRebootBanner(RebootBanner::kSwitchingWifi);
+    CHECK(!s_app.data.uiEvents.rebootQuiesced());
+
+    const unsigned pagesBefore = s_oled_data_pages;
+    s_time_us += 50000LL;
+    static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
+    CHECK(s_oled_data_pages > pagesBefore);
+    CHECK(s_app.data.uiEvents.rebootQuiesced() && s_restart_wakes == 1U);
+
+    // 静默后即使数据变化也不再发起任何 I2C 写操作。
+    const unsigned txAfterQuiesce = s_oled_tx_count;
+    auto pwr = s_app.data.powerStatus.read();
+    pwr.batteryPct = 12U;
+    s_app.data.powerStatus.write(pwr);
+    s_time_us += 50000LL;
+    static_cast<void>(ModuleTestAccess::refresh(s_app.oled, nowMs()));
+    CHECK(s_oled_tx_count == txAfterQuiesce);
+    s_app.data.uiEvents.setRestartWakeHook(nullptr, nullptr);
+    s_app.data.uiEvents.clearRebootBanner();
+}
+
 } // namespace
 
 namespace app {
@@ -576,6 +651,11 @@ void fake_crit_enter(void) {}
 void fake_crit_exit(void) {}
 
 } // extern "C"
+int gpio_get_level(gpio_num_t /*gpio*/)
+{
+    return 1;
+}
+
 esp_err_t gpio_set_level(gpio_num_t /*gpio*/, uint32_t /*level*/)
 {
     return ESP_OK;
@@ -596,7 +676,10 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t * /*config*/,
 esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus, uint16_t address, int /*timeoutMs*/)
 {
     CHECK(bus == &s_bus && s_mutex->held);
-    return (address == 0x3CU) ? ESP_OK : ESP_ERR_NOT_FOUND;
+    if (address != 0x3CU) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    return s_oled_probe_ok ? ESP_OK : s_oled_probe_err;
 }
 
 esp_err_t i2c_master_bus_add_device(i2c_master_bus_handle_t bus, const i2c_device_config_t *config,
@@ -670,8 +753,12 @@ int main(int argc, char **argv)
     CHECK(argc == 2);
     const std::string_view scenario{argv[1]};
     CHECK(fw::isOk(fw::logInstallDirect(
-        [](void *, const fw::LogHeader &, std::span<const uint8_t>) noexcept {}, nullptr,
-        &rtos::nowMs)));
+        [](void *, const fw::LogHeader &hdr, std::span<const uint8_t>) noexcept {
+            if (hdr.level == fw::LogLevel::kError) {
+                ++s_error_logs;
+            }
+        },
+        nullptr, &rtos::nowMs)));
     if (scenario == "final_frame_orchestration") {
         runFinalFrameOrchestration(true);
     } else if (scenario == "battery_final_frame") {
@@ -686,6 +773,10 @@ int main(int argc, char **argv)
         runClickPageDeadline(40300U);
     } else if (scenario == "offline_clears_oled_active") {
         runOfflineClearsOledActive();
+    } else if (scenario == "background_init_retry") {
+        runBackgroundInitRetry();
+    } else if (scenario == "reboot_banner_quiesce") {
+        runRebootBannerQuiesce();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return EXIT_FAILURE;

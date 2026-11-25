@@ -59,6 +59,19 @@ void traceWeb(WebTrace code, uint32_t a, uint32_t b) noexcept
 }
 
 /**
+ * @brief 触发软件重启（ESP 平台先通知 OLED 刷过渡页并静默 I2C）
+ * @note 仅 WebModule 重启提交路径调用（ESP 平台不返回，主机测试桩可返回），非 ISR。
+ */
+void commitRebootNow() noexcept
+{
+#if defined(ESP_PLATFORM)
+    restartWithOledQuiesce(RebootBanner::kRebooting);
+#else
+    esp_restart();
+#endif
+}
+
+/**
  * @brief 将 uint32_t 字节数安全钳制到 int32_t 范围供 JSON 输出
  * @param value: 无符号 32 位数值
  * @retval 钳制后的 int32_t 数值
@@ -489,7 +502,7 @@ bool WebModule::pollPendingReboot(uint32_t nowMs) noexcept
     if (pendingReboot_ == RebootKind::kOta) {
         if (nowMs - rebootRequestedMs_ >= web_ota::kRebootMs) {
             traceWeb(WebTrace::kRebootCommit, static_cast<uint32_t>(pendingReboot_), 0U);
-            esp_restart();
+            commitRebootNow();
         }
         static_cast<void>(pollPendingDeliveries());
         static_cast<void>(pollRxFrame(nowMs));
@@ -533,7 +546,7 @@ bool WebModule::pollPendingReboot(uint32_t nowMs) noexcept
     }
     if (pendingReboot_ == RebootKind::kFreset) {
         traceWeb(WebTrace::kRebootCommit, static_cast<uint32_t>(pendingReboot_), 0U);
-        esp_restart();
+        commitRebootNow();
     }
     const RadioReason reason =
         (pendingReboot_ == RebootKind::kIdle) ? RadioReason::kIdle : RadioReason::kWebExit;

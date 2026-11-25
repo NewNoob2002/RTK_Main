@@ -18,7 +18,6 @@ constexpr int16_t kCanvasH = static_cast<int16_t>(kHeight);
 constexpr char kMinPrintableAscii = ' ';
 constexpr char kMaxPrintableAscii = '~';
 constexpr uint8_t kMaxPercent = 100U;
-constexpr uint16_t kCmPerMeter = 100U;
 constexpr uint32_t kMsPerSec = 1000U;
 constexpr uint16_t kHdopScale = 100U;
 constexpr uint16_t kDiffAgeScale = 10U;
@@ -142,6 +141,8 @@ constexpr uint32_t kCardBatFillMaxH = 10U;
 constexpr int16_t kCardBatFillX = 16;
 constexpr int16_t kCardBatFillBaseY = 18;
 constexpr int16_t kCardBatFillW = 8;
+constexpr int16_t kCardUsbIconX = 30;
+constexpr int16_t kCardUsbIconY = 9;
 constexpr size_t kSubRowLabelBytes = 12U;
 constexpr size_t kSubRowValBytes = 16U;
 constexpr size_t kSubPosRowCount = 5U;
@@ -182,6 +183,7 @@ constexpr int16_t kStandbyRingCx = 98;
 constexpr int16_t kStandbyRingCy = 20;
 constexpr int16_t kStandbyHintX = 68;
 constexpr int16_t kStandbyHintY = 40;
+constexpr int16_t kStandbyStartingX = 74;
 constexpr int16_t kStandbyFooterLineY = 52;
 constexpr int16_t kStandbyFooterTextY = 54;
 constexpr int16_t kStandbyUnknownPctOffX = 26;
@@ -213,6 +215,9 @@ constexpr int16_t kPairModalNumberY = 29;
 constexpr int16_t kPairModalControlsY = 51;
 constexpr int16_t kPwrModalTitleY = 10;
 constexpr int16_t kPwrModalHintY = 25;
+constexpr int16_t kRebootIconY = 8;
+constexpr int16_t kRebootTitleY = 30;
+constexpr int16_t kRebootSubY = 46;
 constexpr int16_t kPwrModalBarX = 12;
 constexpr int16_t kPwrModalBarY = 41;
 constexpr int16_t kPwrModalBarW = 84;
@@ -455,9 +460,12 @@ void drawStatusBar(Canvas &canvas, const UiRenderState &state, const ViewModel &
         WouoUI_CanvasDrawBMP(&canvas, kStatusRadioX, kHeaderTextY, kIcon8H, kIcon8H, btBmp, 1U);
     }
 
-    if (vm.charging) {
+    if (isEffectiveCharging(vm)) {
         WouoUI_CanvasDrawBMP(&canvas, kStatusBoltX, kHeaderTextY, kBoltW, kIcon8H,
                              icons::kBolt5x8.data(), 1U);
+    } else if (vm.usbPresent) {
+        WouoUI_CanvasDrawBMP(&canvas, kStatusBoltX, kHeaderTextY, kBoltW, kIcon8H,
+                             icons::kPlug5x8.data(), 1U);
     }
     if (vm.batteryPct == board::kBatteryPctUnknown) {
         drawText(canvas, kStatusPctUnknownX, kHeaderTextY, Font_6_8, "--%");
@@ -657,35 +665,36 @@ void formatDialSatLine(const ViewModel &vm, std::span<char> out) noexcept
 void formatDialGnssRight(const ViewModel &vm, std::span<char> topOut,
                          std::span<char> botOut) noexcept
 {
+    std::array<char, kShortBufBytes> accBuf{};
+    const bool hasAcc = formatHorizontalAcc(vm.fixValid, vm.hAccCm, accBuf);
     if (vm.utcValid) {
         static_cast<void>(std::snprintf(
             topOut.data(), topOut.size(), "%02u:%02u:%02uZ", static_cast<unsigned>(vm.utcHour),
             static_cast<unsigned>(vm.utcMinute), static_cast<unsigned>(vm.utcSecond)));
-        if (vm.hAccCm != gnss::kU16Unknown) {
-            const unsigned used = vm.fixValid ? static_cast<unsigned>(vm.satsUsed) : 0U;
+        if (hasAcc) {
+            const unsigned used = static_cast<unsigned>(vm.satsUsed);
             if (vm.satsVisible > 0U) {
-                const int written = std::snprintf(botOut.data(), botOut.size(), "%u.%02um %u/%u",
-                                                  static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
-                                                  static_cast<unsigned>(vm.hAccCm % kCmPerMeter),
-                                                  used, static_cast<unsigned>(vm.satsVisible));
+                const int written =
+                    std::snprintf(botOut.data(), botOut.size(), "%s %u/%u", accBuf.data(), used,
+                                  static_cast<unsigned>(vm.satsVisible));
                 if ((written > 0) && (static_cast<size_t>(written) <= kDialRightMaxChars)) {
                     return;
                 }
             }
-            static_cast<void>(std::snprintf(botOut.data(), botOut.size(), "ACC %u.%02um",
-                                            static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
-                                            static_cast<unsigned>(vm.hAccCm % kCmPerMeter)));
-        } else if (vm.fixValid || (vm.satsVisible > 0U)) {
-            formatDialSatLine(vm, botOut);
+            static_cast<void>(std::snprintf(botOut.data(), botOut.size(), "ACC %s", accBuf.data()));
+        } else if (vm.fixValid) {
+            if (vm.satsVisible > 0U) {
+                formatDialSatLine(vm, botOut);
+            } else {
+                sanitizeCopy("ACC --", botOut);
+            }
         } else {
             sanitizeCopy("NO FIX", botOut);
         }
         return;
     }
-    if (vm.hAccCm != gnss::kU16Unknown) {
-        static_cast<void>(std::snprintf(topOut.data(), topOut.size(), "%u.%02um",
-                                        static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
-                                        static_cast<unsigned>(vm.hAccCm % kCmPerMeter)));
+    if (hasAcc) {
+        sanitizeCopy(viewOf(accBuf), topOut);
     } else {
         sanitizeCopy(vm.fixValid ? "ACC --" : "NO FIX", topOut);
     }
@@ -828,6 +837,10 @@ void drawSubMainCard(const Canvas &canvas, const UiRenderState &state, const uin
                                       static_cast<int16_t>(kCardBatFillBaseY - fillH),
                                       kCardBatFillW, fillH, 0U);
             }
+        }
+        if (vm.usbPresent) {
+            WouoUI_CanvasDrawBMP(&cardInner, kCardUsbIconX, kCardUsbIconY, kBoltW, kIcon8H,
+                                 icons::kPlug5x8.data(), 1U);
         }
     } else if (icon16x16 != nullptr) {
         WouoUI_CanvasDrawBMP(&cardInner, kSubCardIconX, kSubCardIconY, kDockIconSize, kDockIconSize,
@@ -1117,11 +1130,7 @@ void renderSubPos(Canvas &canvas, const UiRenderState &state, const ViewModel &v
     drawStatusBar(canvas, state, vm);
 
     std::array<char, kShortBufBytes> accBuf{};
-    if (vm.fixValid && (vm.hAccCm != gnss::kU16Unknown)) {
-        static_cast<void>(std::snprintf(accBuf.data(), accBuf.size(), "%u.%02um",
-                                        static_cast<unsigned>(vm.hAccCm / kCmPerMeter),
-                                        static_cast<unsigned>(vm.hAccCm % kCmPerMeter)));
-    } else {
+    if (!formatHorizontalAcc(vm.fixValid, vm.hAccCm, accBuf)) {
         sanitizeCopy("--", accBuf);
     }
     drawSubMainCard(canvas, state, icons::kDockPos16x16.data(), dialHeroBadge(vm), viewOf(accBuf),
@@ -1263,14 +1272,20 @@ void renderSubPower(Canvas &canvas, const UiRenderState &state, const ViewModel 
 
     const bool full =
         (vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent);
-    const char *cardSub = vm.charging ? "CHG" : (full ? "FULL" : (vm.usbPresent ? "USB" : "BAT"));
+    const bool effChg = isEffectiveCharging(vm);
+    const char *cardSub = effChg ? "CHG" : (full ? "FULL" : (vm.usbPresent ? "USB" : "BAT"));
     drawSubMainCard(canvas, state, nullptr, "--%", cardSub, true, vm);
 
     std::array<char, kShortBufBytes> voltBuf{};
     formatBatteryVoltage(vm.batteryMv, voltBuf);
-    const char *chgState =
-        vm.charging ? "CHARGING" : (full ? "FULL" : (vm.chargerPresent ? "IDLE" : "NO IC"));
-
+    const char *chgState = "NO IC";
+    if (vm.charging) {
+        chgState = "CHARGING";
+    } else if (!vm.chargerPresent) {
+        chgState = vm.usbPresent ? (full ? "USB FULL" : "USB PWR") : "NO IC";
+    } else {
+        chgState = full ? "FULL" : "IDLE";
+    }
     std::array<SubListRow, kSubPowerRowCount> rows{{
         makeRow(icons::kRowVolt7x8.data(), "VOLT", viewOf(voltBuf)),
         makeRow(icons::kRowBolt7x8.data(), "CHG", chgState),
@@ -1330,7 +1345,7 @@ void drawStandbyBatteryBar(Canvas &canvas, const UiRenderState &state, const Vie
         return;
     }
     WouoUI_CanvasDrawRBox(&canvas, kStandbyFillX, kStandbyFillY, fillW, kStandbyFillH, 1U);
-    if (!vm.charging || full) {
+    if (!isEffectiveCharging(vm) || full) {
         return;
     }
     const uint32_t phase = (state.nowMs / kChargeAnimPeriodMs) % 4U;
@@ -1363,7 +1378,7 @@ void renderChargeStandby(Canvas &canvas, const UiRenderState &state, const ViewM
     const bool full =
         (vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent);
     const char *statusWord =
-        vm.charging ? "CHG" : (full ? "FULL" : (vm.usbPresent ? "USB" : "BAT"));
+        isEffectiveCharging(vm) ? "CHG" : (full ? "FULL" : (vm.usbPresent ? "USB" : "BAT"));
     drawText(canvas, kStandbyPctX, kStandbyStatusY, Font_6_8, statusWord);
     if (vm.batteryMv > 0U) {
         std::array<char, kShortBufBytes> voltBuf{};
@@ -1379,7 +1394,11 @@ void renderChargeStandby(Canvas &canvas, const UiRenderState &state, const ViewM
     WouoUI_CanvasDrawBMP(&canvas, static_cast<int16_t>(kStandbyRingCx - 8),
                          static_cast<int16_t>(kStandbyRingCy - 8), kDockIconSize, kDockIconSize,
                          icons::kDockPwr16x16.data(), 1U);
-    drawText(canvas, kStandbyHintX, kStandbyHintY, Font_6_8, "HOLD 2s ON");
+    if (vm.keyHold.standbyConfirm || (state.rebootBanner == RebootBanner::kStarting)) {
+        drawText(canvas, kStandbyStartingX, kStandbyHintY, Font_6_8, "STARTING");
+    } else {
+        drawText(canvas, kStandbyHintX, kStandbyHintY, Font_6_8, "HOLD 2s ON");
+    }
 
     // 底部一行 FW / HW。
     WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kStandbyFooterLineY);
@@ -1558,6 +1577,43 @@ void renderModal(Canvas &canvas, const UiRenderState &state, const ViewModel &vm
 }
 
 /**
+ * @brief 渲染软件重启/射频切换过渡提示帧（重启前刷出并静默 I2C，避免中断事务）
+ * @param canvas: 目标画布
+ * @param banner: 过渡提示类型
+ * @note 不分配堆。
+ */
+void renderRebootBanner(Canvas &canvas, RebootBanner banner) noexcept
+{
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, 1, 1, static_cast<int16_t>(kCanvasW - 2),
+                               static_cast<int16_t>(kCanvasH - 2), kModalCornerR);
+    const uint8_t *icon = icons::kDockPwr16x16.data();
+    const char *title = "REBOOTING...";
+    switch (banner) {
+    case RebootBanner::kSwitchingWifi:
+        icon = icons::kCardWifi16x16.data();
+        title = "SWITCHING WI-FI";
+        break;
+    case RebootBanner::kSwitchingBt:
+        icon = icons::kCardBt16x16.data();
+        title = "SWITCHING BT";
+        break;
+    case RebootBanner::kStarting:
+        icon = icons::kDockPwr16x16.data();
+        title = "STARTING...";
+        break;
+    case RebootBanner::kRebooting:
+    case RebootBanner::kKeepFrame:
+    case RebootBanner::kNone:
+    default:
+        break;
+    }
+    WouoUI_CanvasDrawBMP(&canvas, static_cast<int16_t>((kCanvasW - kDockIconSize) / 2),
+                         kRebootIconY, kDockIconSize, kDockIconSize, icon, 1U);
+    drawCentered(canvas, kRebootTitleY, Font_6_8, title);
+    drawCentered(canvas, kRebootSubY, Font_6_8, "PLEASE WAIT");
+}
+
+/**
  * @brief 在当前页面上方叠加长按关机进度浮层（600..2500 ms 线性填充，松开 150 ms 收缩收起）
  * @param state: 渲染状态
  * @note 仅 renderUi 调用，不分配堆。
@@ -1724,7 +1780,14 @@ void renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb) n
     WouoUI_BuffClear();
 
     const PageTransition *trans = state.transition;
-    if (state.modal != UiModal::kNone) {
+    const bool showRebootOverlay = (state.rebootBanner != RebootBanner::kNone) &&
+                                   (state.rebootBanner != RebootBanner::kKeepFrame) &&
+                                   (state.page != OledPage::kChargeStandby) &&
+                                   (state.page != OledPage::kShutdown);
+    if (showRebootOverlay) {
+        Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
+        renderRebootBanner(full, state.rebootBanner);
+    } else if (state.modal != UiModal::kNone) {
         Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
         renderModal(full, state, vm);
     } else if ((trans != nullptr) && (trans->kind == TransitionKind::kSlideLeft)) {
@@ -1751,6 +1814,12 @@ void renderPage(OledPage page, const ViewModel &vm, ScreenBuff &fb) noexcept
     st.dockFocusX = kDockStartX;
     st.shutdownPct = shutdownTargetPercent(vm.shutdownStage, vm.shutdownDoneMask);
     renderUi(st, vm, fb);
+}
+
+void formatDialRightSummary(const ViewModel &vm, std::span<char> topOut,
+                            std::span<char> botOut) noexcept
+{
+    formatDialRightInfo(vm, topOut, botOut);
 }
 
 } // namespace app::oled

@@ -92,3 +92,38 @@ ASAN_OPTIONS=detect_leaks=0 bash tools/ci/run_gates.sh --prefix ol11 --base 75f3
 - OLED 任务实板栈高水位（HWM）。
 
 工作区已保留全部改动；未执行 `git commit`、`git stash`、烧录或串口访问。
+
+## OL4-HIL 上板修复（基于 `79afdcd`）
+
+针对 P2 实板上板 HIL 暴露的 4 项问题完成根因修复与主机回归验证：
+
+| # | 问题与根因 | 修复内容 | 验证 |
+| --- | --- | --- | --- |
+| 1 | **充电待机唤醒回弹**：`PowerModule::handleChargeStandbyPowerOn` 确认保持进入 `restartPending_` 后，`standbyWake_.active()` 变为 `false`，`UiController::stepChargeStandby` 触发衰减分支，唤醒环满圈后又回退至 ~50% 再重启。 | `PowerModule::poll` 在 `kChargeStandby && restartPending_` 时继续向 `uiEvents.updateKeyHold` 传入 `standbyConfirm=true`；`UiController` 进入确认锁定态后保持环 100% 满圈并显示 `STARTING` 直至重启（不受按键松开回落影响）。 | `OledUiCheck`、`MainHostCheck` + `standby-starting.png`（24 帧 Golden 全过） |
+| 2 | **无充电芯片板状态栏不显示充电图标**：当前测试板无充电 IC（0x1A 无应答），原状态栏仅在 `vm.charging` 时画闪电。 | `OledDef` 区分外接 USB 与电池电源，`OledRender` 顶部状态栏在 `vm.usbPresent && !chargerPresent` 时显示 USB 插头图标，充电 IC 在线且充电中保留闪电图标；电源子页同步显示 `USB` / `CHG` / `BAT`；`PowerModule::publishSnapshot` 在 `usbPresent` 边沿变化时主动触发 `uiEvents.notifyWake()` 立即刷新屏幕。 | `OledUiCheck`、`MainHostCheck` |
+| 3 | **切 Wi-Fi 重启后黑屏（I2C 锁死 + 静默初始化失败 + 软重启未静默）**：软重启切射频时未向 OLED 刷过渡帧并静默 I2C，可能截断事务致 SH1106/SDA 卡低；`I2cBus` 缺少 SDA 卡低 9 SCL 脉冲 + STOP 恢复；`Sh1106` 探测失败未记录阶段且无后台恢复。 | ① `I2cBus` 在 `ensureInit`/`resetBus` 检测 SDA 为低时手动发 9 个 SCL 脉冲 + STOP 释放总线，`probe` 对超时/NACK 执行 ≥2 次复位重试；② `Sh1106` 记录失败阶段与错误码并在首次失败打印 `W` 日志，`oled` CLI 新增 `init` 阶段/错误/重试次数输出，`OledModule` 任务在面板离线时后台周期重试恢复（不阻塞启动）；③ 新增 `RadioMode::restartWithOledQuiesce`，在射频切换/Web 退出/OTA/恢复出厂/`sys reboot` 等软重启路径先让 OLED 刷出过渡帧（如 `SWITCHING WI-FI` / `SWITCHING BT` / `REBOOTING`）并在 ≤300 ms 预算内静默 I2C 后再 `esp_restart()`；④ Wi-Fi 模式正常执行自检后进入表盘。 | `ChargerCheck`、`OledDriverCheck`、`OledModuleCheck`、`OledUiCheck` |
+| 4 | **F9P 无定位时精度显示 `655.34m`**：F9P 无定位时 GST 仍输出极大标准差，解析层饱和为 `65534 cm`；UI 未按 `vm.fixValid` 门控且未上限钳制。 | 仅在 UI 渲染层修复（不改解析器语义）：`OledRender` 的表盘右侧、位置子页及所有 `hAccCm` 显示点仅在 `vm.fixValid` 时输出精度，无定位显示 `NO FIX` / `ACC --`；`hAccCm >= 9999`（含饱和值 `65534`）统一显示 `>99m`。 | `OledUiCheck`（覆盖 `fixValid=false+65534`、`fixValid=true+65534`、`fixValid=true+2`） |
+
+![充电待机唤醒确认（满圈锁定 + STARTING）](ol4/standby-starting.png)
+
+### OL4-HIL 门禁与体积（`ol12`，相对基线 `75f3c43`）
+
+**PASS：43 passed, 0 failed。**
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 bash tools/ci/run_gates.sh --prefix ol12 --base 75f3c43
+```
+
+- **主机与 ASan/UBSan**：全部 14 组普通 + 14 组 ASan/UBSan 通过，其中 `main_host_check` 为 **181/181**（新增充电待机 `STARTING` 锁定、USB 插头指示与拔插唤醒、I2C 9-SCL 恢复与 `probe` 复位重试、OLED 离线后台恢复、软重启 OLED 过渡页与静默握手、F9P 无定位/`>99m` 精度显示回归，以及 `standby-starting.pbm` 纳入 24 帧 Golden 比对）。
+- **静态检查与固件构建**：`G1-frozen`、`G5-format`、`G6-doc_check`（122 个改动函数 0 不合格）、`G5b-tidy`（159 个源文件 0 条发现）、`G7b-runtime`（0 堆分配）、`G7c-no-cli-deps` 及 7 个 ESP-IDF 配置 + 2 个 `rtk_pure` 目标（`esp32`/`esp32c3`）全部通过。[全量门禁日志](../../builds/ol12-logs/ol4-hil-gates.log) · [ol12 size 统计](../../builds/ol12-logs/ol12-idf-size.log)
+
+| 指标 | 基线 `75f3c43`（B） | OL4-HIL `ol12`（B） | 增量（B） | 约束 |
+| --- | ---: | ---: | ---: | --- |
+| `rtk_main.bin` | 1,564,864 | 1,576,048 | +11,184 | 报告 |
+| DRAM（`.data` + `.bss`） | 97,803 | 97,995 | +192 | ≤ 1,024 B（PASS） |
+| IRAM | 116,139 | 116,139 | 0 | 0 B（PASS） |
+| Flash 指令（`.text`） | 1,122,276 | 1,132,828 | +10,552 | 报告 |
+| Flash 数据（`.rodata` 等） | 273,708 | 274,252 | +544 | 报告 |
+| 运行时堆分配 | 0 | 0 | 0 | 0 B（PASS） |
+
+- **待上板复验（`NOT_RUN`）**：实板充电待机长按唤醒视觉无回弹、无充电 IC 实板插拔 USB 状态栏切换、反复切 Wi-Fi/BT 软重启 I2C 不黑屏及 F9P 实机无定位精度显示。

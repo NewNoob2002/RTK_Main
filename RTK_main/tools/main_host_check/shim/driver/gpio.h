@@ -9,6 +9,8 @@ using gpio_num_t = int;
 inline constexpr int GPIO_MODE_INPUT = 0;
 inline constexpr int GPIO_MODE_OUTPUT = 1;
 inline constexpr int GPIO_PULLUP_DISABLE = 0;
+inline constexpr int GPIO_MODE_INPUT_OUTPUT_OD = 2;
+inline constexpr int GPIO_PULLUP_ENABLE = 1;
 inline constexpr int GPIO_PULLDOWN_DISABLE = 0;
 inline constexpr int GPIO_INTR_DISABLE = 0;
 

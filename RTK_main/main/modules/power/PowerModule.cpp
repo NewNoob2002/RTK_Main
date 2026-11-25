@@ -19,6 +19,7 @@
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
 #include "app/PowerRequests.hpp"
+#include "app/RadioMode.hpp"
 #include "def/GnssSubDef.hpp"
 #include "board/BatteryAdc.hpp"
 #include "board/BoardProfile.hpp"
@@ -827,11 +828,13 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         !force && ((next.shutdownStage != lastSnapshot_.shutdownStage) ||
                    (next.shutdownDoneMask != lastSnapshot_.shutdownDoneMask) ||
                    (next.shutdownDegradedMask != lastSnapshot_.shutdownDegradedMask));
+    const bool powerSupplyChanged = !force && ((next.usbPresent != lastSnapshot_.usbPresent) ||
+                                               (next.charging != lastSnapshot_.charging));
     if (force || !snapshotEqual(next, lastSnapshot_)) {
         lastSnapshot_ = next;
         ctx().data.powerStatus.write(next);
-        // 必须在 powerStatus 写入完成后再唤醒 UI，避免多核/抢占下 OLED 读到旧关机阶段（ROL1-03）。
-        if (shutdownProgressChanged) {
+        // 必须在 powerStatus 写入完成后再唤醒 UI，避免多核/抢占下 OLED 读到旧关机/供电状态（ROL1-03）。
+        if (shutdownProgressChanged || powerSupplyChanged) {
             ctx().data.uiEvents.notifyWake();
         }
     }
@@ -880,32 +883,31 @@ bool PowerModule::pollRestart(uint32_t nowMs) noexcept
         restartLogReady_ = true;
         oledWaitDeadlineMs_ = nowMs + kOledFinalFlushMaxMs;
     }
-    if (!shutdownSm_.active() || finalFrameReady(nowMs, oledWaitDeadlineMs_, true)) {
+    const RebootBanner restartBanner =
+        shutdownSm_.active() ? RebootBanner::kKeepFrame : RebootBanner::kStarting;
+    const auto doRestart = [restartBanner]() noexcept {
+#if defined(ESP_PLATFORM)
+        restartWithOledQuiesce(restartBanner);
+#else
+        static_cast<void>(restartBanner);
         esp_restart();
+#endif
+    };
+    if (!shutdownSm_.active() || finalFrameReady(nowMs, oledWaitDeadlineMs_, true)) {
+        doRestart();
     } else if (!finalHoldDeadlineMs_) {
         if (const TaskHandle_t self = xTaskGetCurrentTaskHandle(); self != nullptr) {
             waitOledFinalFrame(self);
             if (finalFrameReady(rtos::nowMs(), oledWaitDeadlineMs_, true)) {
-                esp_restart();
+                doRestart();
             }
         }
     }
     return false;
 }
 
-bool PowerModule::poll(uint32_t nowMs) noexcept
+void PowerModule::handleKeyPoll(uint32_t nowMs, board::KeyEvent event, bool keyPressed) noexcept
 {
-    if (!active_) {
-        return false;
-    }
-    if (restartPending_) {
-        return pollRestart(nowMs);
-    }
-    const bool cutSenseFell = shutdownSm_.stage() == board::ShutdownStage::kCutPower &&
-                              lastSnapshot_.u3On &&
-                              !readPinActive(board::current().powerHold.senseGpio, false);
-    PinLevels pins = samplePins(nowMs, cutSenseFell);
-    const auto event = keySm_.poll(nowMs, pins.keyPressed);
     switch (event) {
     case board::KeyEvent::kShort:
         ++shortPresses_;
@@ -931,15 +933,36 @@ bool PowerModule::poll(uint32_t nowMs) noexcept
     }
     if (!keySm_.armed() || !keySm_.pressed()) {
         forcePowerOffFired_ = false;
-    } else if ((ctx().bootMode == board::BootMode::kNormal) && !forcePowerOffFired_ &&
-               pins.keyPressed &&
-               ((nowMs - keySm_.pressStartMs()) >= board::kForcePowerOffHoldMs)) {
-        forcePowerOffFired_ = true;
-        if (power::requestShutdown(board::ShutdownReason::kKey)) {
-            FW_LOGW(fw::TraceCat::kSys, "force power-off fallback after %" PRIu32 " ms key hold",
-                    nowMs - keySm_.pressStartMs());
-        }
+        return;
     }
+    if ((ctx().bootMode != board::BootMode::kNormal) || forcePowerOffFired_ || !keyPressed) {
+        return;
+    }
+    const uint32_t holdMs = nowMs - keySm_.pressStartMs();
+    if (holdMs < board::kForcePowerOffHoldMs) {
+        return;
+    }
+    forcePowerOffFired_ = true;
+    if (power::requestShutdown(board::ShutdownReason::kKey)) {
+        FW_LOGW(fw::TraceCat::kSys, "force power-off fallback after %" PRIu32 " ms key hold",
+                holdMs);
+    }
+}
+
+bool PowerModule::poll(uint32_t nowMs) noexcept
+{
+    if (!active_) {
+        return false;
+    }
+    if (restartPending_) {
+        return pollRestart(nowMs);
+    }
+    const bool cutSenseFell = shutdownSm_.stage() == board::ShutdownStage::kCutPower &&
+                              lastSnapshot_.u3On &&
+                              !readPinActive(board::current().powerHold.senseGpio, false);
+    PinLevels pins = samplePins(nowMs, cutSenseFell);
+    const auto event = keySm_.poll(nowMs, pins.keyPressed);
+    handleKeyPoll(nowMs, event, pins.keyPressed);
 
     pollBattery(nowMs, pins);
     if (ctx().bootMode == board::BootMode::kChargeStandby) {
@@ -947,8 +970,11 @@ bool PowerModule::poll(uint32_t nowMs) noexcept
     } else {
         stepShutdown(rtos::nowMs(), pins);
     }
+    const bool standbyLocked =
+        standbyWake_.active() ||
+        ((ctx().bootMode == board::BootMode::kChargeStandby) && restartPending_);
     ctx().data.uiEvents.updateKeyHold(keySm_.holding(), keySm_.pressStartMs(), keySm_.longPressMs(),
-                                      standbyWake_.active());
+                                      standbyLocked);
     publishSnapshot(pins, false);
     return false;
 }

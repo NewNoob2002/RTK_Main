@@ -1072,6 +1072,23 @@ void testStandbyRingAndChargeAnim() noexcept
         dec = ui.step(t, {}, vm);
     }
     CHECK(ui.renderState(3600U).standbyRingQ10 == 0U && !dec.animating);
+
+    // HIL-1: 长按触发待机开机确认（standbyConfirm=true）后即使松开物理按键，环锁定 100% 不回退且显示 STARTING。
+    vm.keyHold = {.active = false, .standbyConfirm = true, .startMs = 2000U, .thresholdMs = 2500U};
+    ScreenBuff fbHold{};
+    ScreenBuff fbStarting{};
+    vm.keyHold.standbyConfirm = false;
+    vm.keyHold.active = true;
+    static_cast<void>(ui.step(4500U, {}, vm));
+    renderUi(ui.renderState(4500U), vm, fbHold);
+    vm.keyHold.active = false;
+    vm.keyHold.standbyConfirm = true;
+    for (uint32_t t = 4533U; t <= 4900U; t += 33U) {
+        dec = ui.step(t, {}, vm);
+        CHECK(ui.renderState(t).standbyRingQ10 == kEaseScale);
+    }
+    renderUi(ui.renderState(4900U), vm, fbStarting);
+    CHECK(std::memcmp(fbHold, fbStarting, sizeof(ScreenBuff)) != 0);
 }
 
 /** @brief 验证 OL4 行弹簧 <= 180 ms、挤压回弹 <= 120 ms、60 s 自动回表盘、关机原因文案与 UTC 显示。 */
@@ -1138,6 +1155,149 @@ void testSubpageSpringSquishAndIdleTimeout() noexcept
     CHECK(std::string_view{dockItemName(4U)} == "POWER");
 }
 
+/** @brief 验证 HIL-2：无充电芯片时 USB 插拔变化状态栏图标、电源页主卡插头/CHG 文案与待机页流动动画。 */
+void testNoChargerUsbIndicator() noexcept
+{
+    ViewModel vm = makeHealthyVm();
+    vm.chargerPresent = false;
+    vm.chargerOk = false;
+    vm.charging = false;
+    vm.batteryPct = 78U;
+
+    ScreenBuff fbBat{};
+    ScreenBuff fbUsb{};
+    ScreenBuff fbUsbFull{};
+    vm.usbPresent = false;
+    CHECK(!isEffectiveCharging(vm));
+    renderPage(OledPage::kDialplate, vm, fbBat);
+    vm.usbPresent = true;
+    CHECK(isEffectiveCharging(vm));
+    renderPage(OledPage::kDialplate, vm, fbUsb);
+    // 状态栏充电/USB 图标位（page 0, x=79..83）在 USB 插入后必须变化。
+    CHECK(!regionEqual(fbBat, fbUsb, 0U, 79U, 84U));
+    vm.batteryPct = 100U;
+    CHECK(!isEffectiveCharging(vm));
+    renderPage(OledPage::kDialplate, vm, fbUsbFull);
+    CHECK(!regionEqual(fbBat, fbUsbFull, 0U, 79U, 84U));
+    CHECK(!regionEqual(fbUsb, fbUsbFull, 0U, 79U, 84U));
+
+    // 电源子页：无充电芯片但 USB 在位时主卡显示 USB 插头且 CHG 文案区别于无 USB。
+    vm.batteryPct = 78U;
+    ScreenBuff pwrBat{};
+    ScreenBuff pwrUsb{};
+    vm.usbPresent = false;
+    renderPage(OledPage::kSubPower, vm, pwrBat);
+    vm.usbPresent = true;
+    renderPage(OledPage::kSubPower, vm, pwrUsb);
+    CHECK(std::memcmp(pwrBat, pwrUsb, sizeof(ScreenBuff)) != 0);
+
+    // 充电待机页：无充电芯片但 USB 在位且未满电，仍启用 <=2 fps 流动动画。
+    vm.bootMode = board::BootMode::kChargeStandby;
+    UiController standbyUi{};
+    standbyUi.reset(board::BootMode::kChargeStandby, 0U);
+    ScreenBuff sb0{};
+    ScreenBuff sb1{};
+    static_cast<void>(standbyUi.step(0U, {}, vm));
+    renderUi(standbyUi.renderState(0U), vm, sb0);
+    static_cast<void>(standbyUi.step(500U, {}, vm));
+    renderUi(standbyUi.renderState(500U), vm, sb1);
+    CHECK(std::memcmp(sb0, sb1, sizeof(ScreenBuff)) != 0);
+}
+
+/** @brief 验证 HIL-3c/d：软件重启切换过渡页渲染与 Wi-Fi 模式正常走完自检进入表盘。 */
+void testRebootBannerAndWifiSelfTest() noexcept
+{
+    ViewModel vm = makeHealthyVm();
+    vm.radioMode = RadioMode::kWifiConfig;
+    vm.btReady = false;
+    vm.wifiReady = true;
+    sanitizeCopy("P2-P2000123", vm.wifiSsid);
+
+    UiController ui{};
+    ui.reset(board::BootMode::kNormal, 0U);
+    UiDecision dec{};
+    for (uint32_t t = 0U; t <= 4000U; t += 100U) {
+        dec = ui.step(t, {}, vm);
+        if (dec.page == OledPage::kDialplate) {
+            break;
+        }
+    }
+    CHECK(dec.page == OledPage::kDialplate && !ui.renderState(4000U).hasCheckWarning);
+
+    ScreenBuff fbDial{};
+    ScreenBuff fbSwitch{};
+    renderUi(ui.renderState(4000U), vm, fbDial);
+    vm.rebootBanner = RebootBanner::kSwitchingWifi;
+    dec = ui.step(4100U, {}, vm);
+    CHECK(dec.markRebootFinalFrame);
+    renderUi(ui.renderState(4100U), vm, fbSwitch);
+    CHECK(std::memcmp(fbDial, fbSwitch, sizeof(ScreenBuff)) != 0);
+    CHECK(countLitBytes(fbSwitch) > 0U);
+}
+
+/** @brief 验证 HIL-4：F9P 无定位饱和 65534 cm 不显示 655，有效定位 >=99.99 m 显示 >99m，2 cm 显示 0.02m。 */
+void testHorizontalAccFormatting() noexcept
+{
+    std::array<char, 16U> acc{};
+    CHECK(!formatHorizontalAcc(false, 65534U, acc) && acc[0] == '\0');
+    CHECK(!formatHorizontalAcc(true, gnss::kU16Unknown, acc) && acc[0] == '\0');
+    CHECK(formatHorizontalAcc(true, 65534U, acc) && std::string_view{acc.data()} == ">99m");
+    CHECK(formatHorizontalAcc(true, 9999U, acc) && std::string_view{acc.data()} == ">99m");
+    CHECK(formatHorizontalAcc(true, 9998U, acc) && std::string_view{acc.data()} == "99.98m");
+    CHECK(formatHorizontalAcc(true, 2U, acc) && std::string_view{acc.data()} == "0.02m");
+
+    ViewModel vm = makeHealthyVm();
+    std::array<char, 20U> top{};
+    std::array<char, 20U> bot{};
+
+    // 无定位 + 65534 饱和值（带 UTC 与不带 UTC 两种情况）：绝不出现 "655"，显示 NO FIX。
+    vm.fixValid = false;
+    vm.hAccCm = 65534U;
+    vm.utcValid = true;
+    vm.utcHour = 12U;
+    vm.utcMinute = 34U;
+    vm.utcSecond = 56U;
+    formatDialRightSummary(vm, top, bot);
+    CHECK(std::string_view{top.data()}.find("655") == std::string_view::npos);
+    CHECK(std::string_view{bot.data()} == "NO FIX");
+
+    vm.utcValid = false;
+    formatDialRightSummary(vm, top, bot);
+    CHECK(std::string_view{top.data()} == "NO FIX");
+    CHECK(std::string_view{bot.data()}.find("655") == std::string_view::npos);
+
+    // 渲染核对：无定位 65534 与 kU16Unknown 渲染逐像素一致（表盘与位置页）。
+    ScreenBuff dialSat{};
+    ScreenBuff dialUnk{};
+    ScreenBuff posSat{};
+    ScreenBuff posUnk{};
+    renderPage(OledPage::kDialplate, vm, dialSat);
+    renderPage(OledPage::kSubPos, vm, posSat);
+    vm.hAccCm = gnss::kU16Unknown;
+    renderPage(OledPage::kDialplate, vm, dialUnk);
+    renderPage(OledPage::kSubPos, vm, posUnk);
+    CHECK(std::memcmp(dialSat, dialUnk, sizeof(ScreenBuff)) == 0);
+    CHECK(std::memcmp(posSat, posUnk, sizeof(ScreenBuff)) == 0);
+
+    // 有效定位 + 65534 -> ">99m"；有效定位 + 2 -> "0.02m"。
+    vm.fixValid = true;
+    vm.hAccCm = 65534U;
+    vm.utcValid = false;
+    formatDialRightSummary(vm, top, bot);
+    CHECK(std::string_view{top.data()} == ">99m");
+    vm.utcValid = true;
+    formatDialRightSummary(vm, top, bot);
+    CHECK(std::string_view{bot.data()}.find(">99m") != std::string_view::npos);
+
+    vm.hAccCm = 2U;
+    vm.utcValid = false;
+    formatDialRightSummary(vm, top, bot);
+    CHECK(std::string_view{top.data()} == "0.02m");
+    vm.utcValid = true;
+    formatDialRightSummary(vm, top, bot);
+    CHECK(std::string_view{bot.data()}.find("0.02m") != std::string_view::npos);
+}
+
 } // namespace
 
 /**
@@ -1159,6 +1319,9 @@ int main()
     testHoldOverlayAndPowerOffConfirm();
     testStandbyRingAndChargeAnim();
     testSubpageSpringSquishAndIdleTimeout();
+    testNoChargerUsbIndicator();
+    testRebootBannerAndWifiSelfTest();
+    testHorizontalAccFormatting();
     if (s_failures != 0) {
         std::printf("oled_ui_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;

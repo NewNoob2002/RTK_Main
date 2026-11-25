@@ -328,7 +328,11 @@ int cmdSysReboot(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     // 立即输出 OK（进 UART TX 环形缓冲），等待 100 ms 让中断发完再复位；esp_restart 不返回，trampoline 不会重复打印。
     cli::outPrintf("OK\n");
     vTaskDelay(pdMS_TO_TICKS(kRebootDelayMs));
+#if defined(ESP_PLATFORM)
+    restartWithOledQuiesce(RebootBanner::kRebooting);
+#else
     esp_restart();
+#endif
     return 0;
 }
 

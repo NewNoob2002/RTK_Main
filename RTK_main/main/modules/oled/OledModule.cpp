@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cinttypes>
 #include <cstring>
 #include <optional>
 
@@ -105,7 +106,9 @@ void sendBufferHal(ScreenBuff fb) noexcept
            (lhs.framesFlushed == rhs.framesFlushed) && (lhs.framesSkipped == rhs.framesSkipped) &&
            (lhs.totalDirtyPages == rhs.totalDirtyPages) && (lhs.lastI2cUs == rhs.lastI2cUs) &&
            (lhs.maxI2cUs == rhs.maxI2cUs) && (lhs.lastFrameUs == rhs.lastFrameUs) &&
-           (lhs.maxFrameUs == rhs.maxFrameUs) && (lhs.i2cErrors == rhs.i2cErrors);
+           (lhs.maxFrameUs == rhs.maxFrameUs) && (lhs.i2cErrors == rhs.i2cErrors) &&
+           (lhs.initStage == rhs.initStage) && (lhs.initStatus == rhs.initStatus) &&
+           (lhs.initAttempts == rhs.initAttempts);
 }
 
 /**
@@ -155,6 +158,7 @@ void collectPowerStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.shutdownDoneMask = pwr.shutdownDoneMask;
     vm.shutdownDegradedMask = pwr.shutdownDegradedMask;
     vm.keyHold = app.data.uiEvents.readKeyHold();
+    vm.rebootBanner = app.data.uiEvents.rebootBanner();
 }
 
 /**
@@ -286,16 +290,64 @@ void acknowledgeShutdownFrame(UiEventBus &events, const oled::ViewModel &vm,
 
 } // namespace
 
+bool OledModule::tryInitPanel(uint32_t nowMs, bool initialBoot) noexcept
+{
+    const auto &profile = board::current();
+    const OledInitStage prevStage = initStage_;
+    const fw::Status prevStatus = initStatus_;
+    ++initAttempts_;
+    lastInitAttemptMs_ = nowMs;
+
+    const fw::Status st = s_panel.init(profile.oled, !initialBoot);
+    initStage_ = s_panel.lastInitStage();
+    initStatus_ = s_panel.lastInitStatus();
+    if (!fw::isOk(st)) {
+        s_active_fb = nullptr;
+        present_.store(false, std::memory_order_release);
+        if (initialBoot) {
+            FW_LOGE(fw::TraceCat::kSys,
+                    "<oled> init failed at %s (%s), background retry every %" PRIu32 " ms",
+                    oledInitStageName(initStage_), fw::toString(initStatus_), kInitRetryPeriodMs);
+        } else if ((initStage_ != prevStage) || (initStatus_ != prevStatus)) {
+            FW_LOGW(fw::TraceCat::kSys, "<oled> background retry #%" PRIu32 " failed at %s (%s)",
+                    initAttempts_, oledInitStageName(initStage_), fw::toString(initStatus_));
+        }
+        return false;
+    }
+
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): BootArena 外供的 1 KB 零初始化 uint8_t 缓冲与 ScreenBuff(uint8_t[8][128]) 布局完全一致。
+    s_active_fb = reinterpret_cast<ScreenBuff *>(storage_.frameBuffer.data());
+    present_.store(true, std::memory_order_release);
+    panelOffline_ = false;
+    consecutiveFlushErrors_ = 0U;
+    fpsWindowStartMs_ = nowMs;
+    WouoUI_GraphSetSendBuffFun(&sendBufferHal);
+    context_->data.uiEvents.drainShortKeys();
+    context_->data.uiEvents.drainLongKeys();
+    s_ui_ctrl.reset(context_->bootMode, nowMs);
+    if (!initialBoot) {
+        context_->data.uiEvents.setOledActive(true);
+        FW_LOGI(fw::TraceCat::kSys, "<oled> SH1106 recovered in background (attempt %" PRIu32 ")",
+                initAttempts_);
+    }
+    return true;
+}
+
 fw::Result OledModule::init() noexcept
 {
     if (context_ == nullptr) {
         return fw::Result::kInvalidState;
     }
     enabled_ = false;
-    present_ = false;
+    present_.store(false, std::memory_order_release);
     consecutiveFlushErrors_ = 0U;
     panelOffline_ = false;
     wasOledActive_ = false;
+    rebootQuiesced_ = false;
+    initStage_ = OledInitStage::kNone;
+    initStatus_ = fw::Status::kOk;
+    initAttempts_ = 0U;
+    lastInitAttemptMs_ = 0U;
     fpsX10_ = 0U;
     fpsWindowStartMs_ = 0U;
     fpsWindowFrames_ = 0U;
@@ -310,40 +362,36 @@ fw::Result OledModule::init() noexcept
     const auto &profile = board::current();
     if (!board::hasFeature(profile, board::Feature::kOled) || (profile.oled.i2cPort < 0)) {
         s_active_fb = nullptr;
+        initStage_ = OledInitStage::kDisabled;
+        initStatus_ = fw::Status::kNotFound;
         publishStatus(true);
         return fw::Result::kOk;
     }
     if (!storageBound_) {
         s_active_fb = nullptr;
+        initStage_ = OledInitStage::kStorage;
+        initStatus_ = fw::Status::kInvalidState;
+        FW_LOGE(fw::TraceCat::kSys, "<oled> storage not bound, display disabled");
         publishStatus(true);
         return fw::Result::kInvalidState;
     }
 
     enabled_ = true;
-    const fw::Status st = s_panel.init(profile.oled);
-    if (!fw::isOk(st)) {
-        s_active_fb = nullptr;
-        publishStatus(true);
-        return fw::Result::kOk;
-    }
-
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): BootArena 外供的 1 KB 零初始化 uint8_t 缓冲与 ScreenBuff(uint8_t[8][128]) 布局完全一致。
-    s_active_fb = reinterpret_cast<ScreenBuff *>(storage_.frameBuffer.data());
-    present_ = true;
-    WouoUI_GraphSetSendBuffFun(&sendBufferHal);
     const uint32_t now = rtos::nowMs();
-    fpsWindowStartMs_ = now;
-    context_->data.uiEvents.drainShortKeys();
-    context_->data.uiEvents.drainLongKeys();
-    s_ui_ctrl.reset(context_->bootMode, now);
-    static_cast<void>(refreshOnce(now, true));
+    if (tryInitPanel(now, true)) {
+        static_cast<void>(refreshOnce(now, true));
+    }
     publishStatus(true);
     return fw::Result::kOk;
 }
 
+/**
+ * @brief 面板启用时创建低优先级静态刷新任务（含离线后台恢复）
+ * @retval fw::Result::kOk 任务已启动或面板未启用；其他见 OledModule.hpp 声明
+ */
 fw::Result OledModule::start() noexcept
 {
-    if (!present_) {
+    if (!enabled_) {
         return fw::Result::kOk;
     }
     if (!storageBound_) {
@@ -383,7 +431,8 @@ void OledModule::taskEntry(void *arg) noexcept
         return;
     }
     s_oled_task_handle.store(xTaskGetCurrentTaskHandle(), std::memory_order_release);
-    self->context_->data.uiEvents.setOledActive(!self->panelOffline_);
+    self->context_->data.uiEvents.setOledActive(self->present_.load(std::memory_order_acquire) &&
+                                                !self->panelOffline_);
     self->context_->data.uiEvents.setWakeHook(&OledModule::wakeFromBus, self);
     self->run();
 }
@@ -402,8 +451,64 @@ void OledModule::run() noexcept
     }
 }
 
+uint32_t OledModule::handleBackgroundInitRetry(uint32_t nowMs) noexcept
+{
+    if ((nowMs - lastInitAttemptMs_) >= kInitRetryPeriodMs) {
+        if (tryInitPanel(nowMs, false)) {
+            return refreshOnce(nowMs, true);
+        }
+    }
+    return kRefreshPeriodMs;
+}
+
+uint32_t OledModule::handleRebootQuiesce(uint32_t nowMs, RebootBanner banner) noexcept
+{
+    if (rebootQuiesced_) {
+        return kRefreshPeriodMs;
+    }
+    if (!present_.load(std::memory_order_acquire) || s_panel.poweredOff() ||
+        (s_active_fb == nullptr) || (banner == RebootBanner::kKeepFrame)) {
+        rebootQuiesced_ = true;
+        context_->data.uiEvents.markRebootQuiesced();
+        return kRefreshPeriodMs;
+    }
+
+    const int64_t frameStartUs = esp_timer_get_time();
+    oled::ViewModel vm{};
+    collectViewModel(*context_, nowMs, vm);
+    static_cast<void>(s_ui_ctrl.step(nowMs, {}, vm, false));
+    const oled::UiRenderState rstate = s_ui_ctrl.renderState(nowMs);
+    oled::renderUi(rstate, vm, *s_active_fb);
+    s_force_next_flush = false;
+    s_flush_deadline_ms.reset();
+    s_panel.clearBackoff();
+
+    const int64_t i2cStartUs = esp_timer_get_time();
+    WouoUI_BuffSend();
+    const int64_t i2cEndUs = esp_timer_get_time();
+    const uint32_t thisFrameUs =
+        (i2cEndUs > frameStartUs) ? static_cast<uint32_t>(i2cEndUs - frameStartUs) : 0U;
+    updateFrameStats(nowMs, thisFrameUs, i2cEndUs - i2cStartUs);
+    if ((s_last_flush == board::Sh1106FlushResult::kWritten) ||
+        (s_last_flush == board::Sh1106FlushResult::kSkipped)) {
+        rebootQuiesced_ = true;
+        context_->data.uiEvents.markRebootQuiesced();
+        return kRefreshPeriodMs;
+    }
+    return oled::kShutdownFinalRetryMs;
+}
+
 uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
 {
+    const RebootBanner banner = context_->data.uiEvents.rebootBanner();
+    if (banner != RebootBanner::kNone) {
+        return handleRebootQuiesce(nowMs, banner);
+    }
+    rebootQuiesced_ = false;
+    if (!present_.load(std::memory_order_acquire)) {
+        return handleBackgroundInitRetry(nowMs);
+    }
+
     const int64_t frameStartUs = esp_timer_get_time();
     oled::ViewModel vm{};
     collectViewModel(*context_, nowMs, vm);
@@ -511,7 +616,7 @@ void OledModule::publishStatus(bool force) noexcept
 {
     const OledStatus next{
         .enabled = enabled_,
-        .present = present_,
+        .present = present_.load(std::memory_order_acquire),
         .poweredOff = s_panel.poweredOff(),
         .page = s_ui_ctrl.page(),
         .fpsX10 = fpsX10_,
@@ -524,6 +629,9 @@ void OledModule::publishStatus(bool force) noexcept
         .lastFrameUs = lastFrameUs_,
         .maxFrameUs = maxFrameUs_,
         .i2cErrors = s_panel.i2cErrors(),
+        .initStage = initStage_,
+        .initStatus = initStatus_,
+        .initAttempts = initAttempts_,
     };
     if (force || !statusEqual(next, lastPublished_)) {
         lastPublished_ = next;

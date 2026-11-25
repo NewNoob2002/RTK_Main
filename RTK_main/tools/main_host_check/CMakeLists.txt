@@ -96,7 +96,7 @@ foreach(policy concurrent preempt)
         power_battery_median power_battery_freshness power_oled_usb_preempt_before_deadline
         power_oled_usb_preempt_across_deadline
         power_oled_battery_final_flush power_oled_battery_final_timeout power_long_key_no_oled
-        power_force_off_fallback power_oled_offline_direct_shutdown
+        power_force_off_fallback power_oled_offline_direct_shutdown power_usb_change_wakes_ui
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window web_s2_storage_bt device_name device_name_e1 device_name_unknown)
@@ -373,7 +373,7 @@ target_include_directories(charger_check PRIVATE shim ../t13_host_check/shim/inc
 target_compile_options(charger_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
     -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 target_link_libraries(charger_check PRIVATE main_pure)
-foreach(scenario absent online mismatch02 mismatch03 readback02_high_bits init_timeout scan_errors)
+foreach(scenario absent online mismatch02 mismatch03 readback02_high_bits init_timeout scan_errors recovery_retry)
     add_test(NAME charger_${scenario} COMMAND charger_check ${scenario})
 endforeach()
 
@@ -415,7 +415,7 @@ target_compile_options(oled_driver_check PRIVATE -fno-exceptions -fno-rtti -Wall
 target_link_libraries(oled_driver_check PRIVATE main_pure third_party_wououi gnss)
 foreach(scenario shared_both_online oled_absent_charger_ok charger_absent_oled_ok page_error_retry
     timeout_abort_reset_backoff page_lock_budget wake_fail_recovers init_cfg_fail_cleanup
-    internal_timeout_recovery partial_page_revert)
+    internal_timeout_recovery partial_page_revert sda_recovery_and_probe_retry)
     add_test(NAME oled_driver_${scenario} COMMAND oled_driver_check ${scenario})
 endforeach()
 
@@ -449,7 +449,7 @@ target_compile_options(oled_module_check PRIVATE -fno-exceptions -fno-rtti -Wall
 target_link_libraries(oled_module_check PRIVATE main_pure third_party_wououi gnss)
 foreach(scenario final_frame_orchestration busy_click_299_300_and_deadline_sleep
     click_page_deadline_299 click_page_deadline_300 battery_final_frame comm_actions
-    offline_clears_oled_active)
+    offline_clears_oled_active background_init_retry reboot_banner_quiesce)
     add_test(NAME oled_module_${scenario} COMMAND oled_module_check ${scenario})
 endforeach()
 

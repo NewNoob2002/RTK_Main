@@ -70,6 +70,12 @@ constinit int s_last_cmd_timeout_ms = 0;
 constinit int s_last_data_timeout_ms = 0;
 constinit bool s_force_lock_busy = false;
 constinit bool s_fail_data_consumes_timeout = false;
+constinit unsigned s_oled_probe_fail_count = 0U;
+constinit esp_err_t s_oled_probe_fail_err = ESP_ERR_TIMEOUT;
+constinit unsigned s_oled_probes = 0U;
+constinit unsigned s_sda_low_pulses = 0U;
+constinit unsigned s_scl_pulses = 0U;
+constinit int s_scl_level = 1;
 
 /**
  * @brief 验证断言并在失败时中止
@@ -168,9 +174,11 @@ void runOledAbsentChargerOk() noexcept
     Sh1106 panel{};
     CHECK(panel.init(kOledPins) == Status::kNotFound);
     CHECK(!panel.present() && s_gpio12_level == 0);
+    CHECK(panel.lastInitStage() == app::OledInitStage::kProbe &&
+          panel.lastInitStatus() == Status::kNotFound);
+    CHECK(s_oled_probes == 3U && s_bus_resets == 2U);
     CHECK(s_bus_creates == 1U && s_devices_added == 1U && s_warnings == 1U);
     CHECK(charger::isReady() && charger::applyChargeParams(kChargerPins) == Status::kOk);
-
     ScreenBuff fb{};
     CHECK(panel.flush(fb) == Sh1106FlushResult::kDisabled);
 }
@@ -189,6 +197,20 @@ void runChargerAbsentOledOk() noexcept
     ScreenBuff fb{};
     fb[0][0] = 0xAAU;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+}
+
+/** @brief 验证 SDA 卡低 9 脉冲恢复与 SH1106 首次探测超时复位重试后成功初始化。 */
+void runSdaRecoveryAndProbeRetry() noexcept
+{
+    s_sda_low_pulses = 5U;
+    s_oled_probe_fail_count = 2U;
+    s_oled_probe_fail_err = ESP_ERR_TIMEOUT;
+    Sh1106 panel{};
+    CHECK(panel.init(kOledPins) == Status::kOk);
+    CHECK(panel.present() && panel.lastInitStage() == app::OledInitStage::kOk &&
+          panel.lastInitStatus() == Status::kOk);
+    CHECK(s_scl_pulses >= 5U && s_sda_low_pulses == 0U);
+    CHECK(s_oled_probes == 3U && s_bus_resets == 2U);
 }
 
 /** @brief 单页超时立即中止剩余页、复位总线，并在下次刷新仅重传未提交页（ROL1-02）。 */
@@ -460,17 +482,43 @@ void vTaskDelay(TickType_t ticks)
     ++s_delay_calls;
 }
 
+int gpio_get_level(gpio_num_t gpio)
+{
+    if (gpio == 21) {
+        return (s_sda_low_pulses > 0U) ? 0 : 1;
+    }
+    return 1;
+}
+
 esp_err_t gpio_set_level(gpio_num_t gpio, uint32_t level)
 {
-    CHECK(gpio == 12);
-    s_gpio12_level = static_cast<int>(level);
+    if (gpio == 12) {
+        s_gpio12_level = static_cast<int>(level);
+        return ESP_OK;
+    }
+    if (gpio == 22) {
+        if ((s_scl_level == 0) && (level != 0U)) {
+            ++s_scl_pulses;
+            if (s_sda_low_pulses > 0U) {
+                --s_sda_low_pulses;
+            }
+        }
+        s_scl_level = static_cast<int>(level);
+        return ESP_OK;
+    }
+    CHECK(gpio == 21);
     return ESP_OK;
 }
 
 esp_err_t gpio_config(const gpio_config_t *config)
 {
-    CHECK(config->pin_bit_mask == (1ULL << 12U) && config->mode == GPIO_MODE_OUTPUT);
-    s_gpio12_configured = true;
+    if (config->pin_bit_mask == (1ULL << 12U)) {
+        CHECK(config->mode == GPIO_MODE_OUTPUT);
+        s_gpio12_configured = true;
+        return ESP_OK;
+    }
+    CHECK(config->pin_bit_mask == ((1ULL << 21U) | (1ULL << 22U)) &&
+          config->mode == GPIO_MODE_INPUT_OUTPUT_OD);
     return ESP_OK;
 }
 
@@ -490,6 +538,10 @@ esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus, uint16_t address, int /*
         return s_charger_present ? ESP_OK : ESP_ERR_NOT_FOUND;
     }
     if (address == 0x3CU) {
+        ++s_oled_probes;
+        if (s_oled_probes <= s_oled_probe_fail_count) {
+            return s_oled_probe_fail_err;
+        }
         return s_oled_present ? ESP_OK : ESP_ERR_NOT_FOUND;
     }
     return ESP_ERR_NOT_FOUND;
@@ -660,6 +712,8 @@ int main(int argc, char **argv)
         runWakeFailRecovers();
     } else if (scenario == "init_cfg_fail_cleanup") {
         runInitCfgFailCleanup();
+    } else if (scenario == "sda_recovery_and_probe_retry") {
+        runSdaRecoveryAndProbeRetry();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return EXIT_FAILURE;

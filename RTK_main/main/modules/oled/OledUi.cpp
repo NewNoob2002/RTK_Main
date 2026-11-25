@@ -21,6 +21,8 @@ constexpr int64_t kE9Scale = 1000000000LL;
 constexpr int64_t kE9ToMicroDeg = 1000LL; // 1e-9 度 -> 1e-6 度（保留 6 位小数）
 constexpr int32_t kMmPerMeter = 1000;
 constexpr int32_t kMmPerCentiMeter = 10;
+constexpr uint16_t kCmPerMeter = 100U;
+constexpr uint16_t kMaxDisplayAccCm = 9999U; // cm，>= 99.99 m（含 65534 饱和值）显示 ">99m"
 constexpr uint16_t kHdopScale = 100U;
 constexpr uint16_t kDiffAgeScale = 10U;
 constexpr uint32_t kMsPerSec = 1000U;
@@ -337,6 +339,7 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
     heroCurrBadge_ = nullptr;
     heroChangeStartMs_ = nowMs;
     heroRolling_ = false;
+    rebootBanner_ = RebootBanner::kNone;
     click_.reset();
     transition_.clear();
     squish_.clear();
@@ -381,6 +384,7 @@ UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexc
         shutdownPct_ = static_cast<uint8_t>(shutdownPct_ + stepAmt);
     }
     out.markShutdownFinalFrame = final;
+    out.markRebootFinalFrame = (vm.rebootBanner != RebootBanner::kNone);
     out.animating = (shutdownPct_ < target);
     out.nextWaitMs = out.animating ? kAnimFramePeriodMs : kIdlePollPeriodMs;
     return out;
@@ -391,7 +395,9 @@ UiDecision UiController::stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
 {
     click_.reset();
     page_ = OledPage::kChargeStandby;
-    if (vm.keyHold.standbyConfirm) {
+    const bool confirmed =
+        vm.keyHold.standbyConfirm || (vm.rebootBanner == RebootBanner::kStarting);
+    if (confirmed) {
         standbyRingQ10_ = kEaseScale;
     } else if (vm.keyHold.active) {
         const uint32_t heldMs = nowMs - vm.keyHold.startMs;
@@ -408,9 +414,10 @@ UiDecision UiController::stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
             (standbyRingQ10_ > stepAmt) ? static_cast<uint16_t>(standbyRingQ10_ - stepAmt) : 0U;
     }
 
-    const bool fastAnim = batRoll_.active(nowMs) || vm.keyHold.active ||
-                          ((standbyRingQ10_ > 0U) && !vm.keyHold.standbyConfirm);
-    const bool chargeAnim = vm.charging && (vm.batteryPct != board::kBatteryPctUnknown) &&
+    const bool fastAnim =
+        batRoll_.active(nowMs) || vm.keyHold.active || ((standbyRingQ10_ > 0U) && !confirmed);
+    const bool chargeAnim = isEffectiveCharging(vm) &&
+                            (vm.batteryPct != board::kBatteryPctUnknown) &&
                             (vm.batteryPct < kMaxPercent);
     uint32_t waitMs = kIdlePollPeriodMs;
     if (fastAnim) {
@@ -421,6 +428,7 @@ UiDecision UiController::stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
     }
     return UiDecision{
         .page = page_,
+        .markRebootFinalFrame = (vm.rebootBanner != RebootBanner::kNone),
         .animating = fastAnim,
         .nextWaitMs = waitMs,
     };
@@ -785,6 +793,7 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
 {
     const uint32_t dtMs = nowMs - lastStepMs_;
     lastStepMs_ = nowMs;
+    rebootBanner_ = vm.rebootBanner;
 
     if (vm.shutdownStage != board::ShutdownStage::kIdle) {
         return stepShutdown(nowMs, vm);
@@ -802,7 +811,22 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
     if (bootMode_ == board::BootMode::kChargeStandby) {
         return stepChargeStandby(nowMs, dtMs, vm);
     }
-
+    if (vm.rebootBanner != RebootBanner::kNone) {
+        click_.reset();
+        transition_.clear();
+        squish_.clear();
+        wifiConfirm_ = false;
+        powerOffConfirm_ = false;
+        pairDialogId_ = 0U;
+        holdOverlayActive_ = false;
+        holdOverlayCollapsing_ = false;
+        return UiDecision{
+            .page = page_,
+            .markRebootFinalFrame = true,
+            .animating = false,
+            .nextWaitMs = kIdlePollPeriodMs,
+        };
+    }
     updateHoldOverlay(nowMs, vm, longKeyArrived);
     // 必须先按生产顺序消费队列内全部消抖短按时间戳，再检查绝对截止，避免 OLED 刷屏延迟误拆双击（R2OL2-03）。
     const auto action = handleInput(nowMs, shortKeyTimes, vm);
@@ -846,6 +870,7 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         .heroPrevBadge = heroPrevBadge_,
         .heroRollQ10 = heroQ10,
         .modal = modal,
+        .rebootBanner = rebootBanner_,
         .nowMs = nowMs,
         .checkSm = &checkSm_,
         .transition = &transition_,
@@ -955,6 +980,25 @@ void formatBatteryVoltage(uint32_t mv, std::span<char> out) noexcept
     const uint32_t centi = (mv % kMvPerVolt) / kMvPerCentiVolt;
     static_cast<void>(std::snprintf(out.data(), out.size(), "%u.%02uV",
                                     static_cast<unsigned>(volts), static_cast<unsigned>(centi)));
+}
+
+bool formatHorizontalAcc(bool fixValid, uint16_t hAccCm, std::span<char> out) noexcept
+{
+    if (out.empty()) {
+        return false;
+    }
+    if (!fixValid || (hAccCm == gnss::kU16Unknown)) {
+        out[0] = '\0';
+        return false;
+    }
+    if (hAccCm >= kMaxDisplayAccCm) {
+        sanitizeCopy(">99m", out);
+        return true;
+    }
+    static_cast<void>(std::snprintf(out.data(), out.size(), "%u.%02um",
+                                    static_cast<unsigned>(hAccCm / kCmPerMeter),
+                                    static_cast<unsigned>(hAccCm % kCmPerMeter)));
+    return true;
 }
 
 void formatCoordE9(int64_t degE9, char posHemisphere, char negHemisphere, bool valid,

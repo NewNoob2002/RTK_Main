@@ -120,6 +120,7 @@ struct ViewModel {
     uint8_t shutdownDoneMask = 0U;
     uint8_t shutdownDegradedMask = 0U;
     KeyHoldSnapshot keyHold{};
+    RebootBanner rebootBanner = RebootBanner::kNone;
 };
 
 /** 开机自检单项结论。 */
@@ -306,6 +307,7 @@ inline constexpr uint32_t kShutdownFinalRetryMs =
 struct UiDecision {
     OledPage page = OledPage::kSystemCheck;
     bool markShutdownFinalFrame = false; // USB 关机终帧待刷出 I2C，刷出成功后通知 PowerModule
+    bool markRebootFinalFrame = false;   // 软件重启过渡帧待刷出并静默 I2C
     bool animating = false;              // 当前处于动画帧调度（33 ms）
     bool hasClickDeadline = false;       // 存在待判双击窗口绝对截止
     uint32_t clickDeadlineMs = 0U;       // 待判双击窗口绝对截止时刻（ms）
@@ -335,6 +337,7 @@ struct UiRenderState {
     const char *heroPrevBadge = nullptr;
     uint16_t heroRollQ10 = kEaseScale;
     UiModal modal = UiModal::kNone;
+    RebootBanner rebootBanner = RebootBanner::kNone;
     uint32_t nowMs = 0U;
     const SystemCheckSm *checkSm = nullptr;
     const PageTransition *transition = nullptr;
@@ -593,6 +596,7 @@ private:
     const char *heroCurrBadge_ = nullptr;
     uint32_t heroChangeStartMs_ = 0U;
     bool heroRolling_ = false;
+    RebootBanner rebootBanner_ = RebootBanner::kNone;
     ClickDetector click_{};
     SystemCheckSm checkSm_{};
     PageTransition transition_{};
@@ -682,6 +686,43 @@ void formatLabelValue(std::string_view label, std::string_view value, std::span<
  * @note 纯整数定点运算，不使用浮点。
  */
 void formatBatteryVoltage(uint32_t mv, std::span<char> out) noexcept;
+
+/**
+ * @brief 判断当前是否应按“充电中”态渲染（有充电芯片看 IC 状态，无充电芯片按 USB 在位且未满电）
+ * @param vm: 视图模型
+ * @retval true 应显示充电闪电与充电流动动画
+ * @retval false 非充电态（满电或仅电池）
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] constexpr bool isEffectiveCharging(const ViewModel &vm) noexcept
+{
+    constexpr uint8_t kFullBatteryPct = 100U;
+    const bool full =
+        (vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kFullBatteryPct);
+    return vm.charging || (!vm.chargerPresent && vm.usbPresent && !full);
+}
+
+/**
+ * @brief 格式化水平精度（仅 fixValid 且已知时输出；>=99.99 m 显示 ">99m"，无定位返回 false）
+ * @param fixValid: 当前定位解是否有效
+ * @param hAccCm: 水平精度估计（cm，未知为 gnss::kU16Unknown）
+ * @param[out] out: 输出 NUL 结尾缓冲
+ * @retval true 已写入有效精度文本
+ * @retval false 无定位或精度未知（out 置空串）
+ * @note 纯整数运算，不分配堆。
+ */
+[[nodiscard]] bool formatHorizontalAcc(bool fixValid, uint16_t hAccCm,
+                                       std::span<char> out) noexcept;
+
+/**
+ * @brief 格式化表盘右侧双行摘要（供渲染器与主机测试共用，确保无定位不显示饱和精度）
+ * @param vm: 视图数据
+ * @param[out] topOut: 顶行输出缓冲
+ * @param[out] botOut: 底行输出缓冲
+ * @note 纯函数，不分配堆。
+ */
+void formatDialRightSummary(const ViewModel &vm, std::span<char> topOut,
+                            std::span<char> botOut) noexcept;
 
 /**
  * @brief 格式化 1e-9 度定点经纬度（如 `"31.230415N"` 或 `"121.473701E"`，无浮点）

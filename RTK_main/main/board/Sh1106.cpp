@@ -68,6 +68,54 @@ void sleepMs(uint32_t ms) noexcept
     vTaskDelay(ticks == 0U ? 1U : ticks);
 }
 
+/**
+ * @brief 探测指定 7-bit I2C 地址，NACK 时额外执行总线复位重试
+ * @param addr: 7-bit 设备地址
+ * @param timeoutMs: 单次探测超时（ms）
+ * @param[out] rawErr: 末次底层 IDF 错误码
+ * @retval kOk 探测成功；其他为失败错误码
+ * @note 仅 Sh1106::probeAndAttach 调用，非 ISR。
+ */
+fw::Status probeAddrWithRecovery(uint8_t addr, int timeoutMs, esp_err_t &rawErr) noexcept
+{
+    fw::Status status = fw::Status::kNotFound;
+    // i2c::probe 对超时/总线故障已内置复位重试；此处额外对 NACK 执行 >=2 次复位重试。
+    for (unsigned attempt = 0U; attempt <= i2c::kProbeRecoveryRetries; ++attempt) {
+        status = i2c::probe(addr, timeoutMs, rawErr);
+        if (fw::isOk(status)) {
+            return status;
+        }
+        if ((status != fw::Status::kNotFound) || (attempt >= i2c::kProbeRecoveryRetries)) {
+            break;
+        }
+        static_cast<void>(i2c::resetBus());
+    }
+    return status;
+}
+
+/**
+ * @brief 输出 OLED 初始化阶段失败告警（后台静默重试时跳过）
+ * @param stage: 失败阶段
+ * @param status: 错误码
+ * @param addr: 7-bit I2C 地址
+ * @param powerGpio: 电源使能脚号
+ * @param rawErr: 探测失败时的底层 IDF 错误码
+ * @param quiet: true 时抑制告警
+ * @note 仅初始化失败路径调用，非 ISR。
+ */
+void logInitFailure(OledInitStage stage, fw::Status status, uint8_t addr, int powerGpio,
+                    esp_err_t rawErr, bool quiet) noexcept
+{
+    if (quiet) {
+        return;
+    }
+    const char *detail =
+        (stage == OledInitStage::kProbe) ? esp_err_to_name(rawErr) : fw::toString(status);
+    FW_LOGW(fw::TraceCat::kSys,
+            "<oled> init failed at %s (0x%02X, pwr GPIO%d): %s, display disabled",
+            oledInitStageName(stage), static_cast<unsigned>(addr), powerGpio, detail);
+}
+
 } // namespace
 
 fw::Status Sh1106::finishTransfer(esp_err_t err) noexcept
@@ -192,36 +240,11 @@ fw::Status Sh1106::configurePanel() noexcept
     return finishTransfer(err);
 }
 
-fw::Status Sh1106::probeAndAttach() noexcept
+void Sh1106::resetForInit(const OledPins &pins) noexcept
 {
-    const fw::Status busStatus = i2c::ensureInit(i2cPort_, sdaGpio_, sclGpio_);
-    if (!fw::isOk(busStatus)) {
-        FW_LOGW(fw::TraceCat::kSys, "<oled> i2c bus unavailable (%s), display disabled",
-                fw::toString(busStatus));
-        return busStatus;
+    if (dev_ != nullptr) {
+        static_cast<void>(i2c::removeDevice(dev_));
     }
-
-    esp_err_t rawErr = ESP_OK;
-    const fw::Status probeStatus = i2c::probe(addr_, kI2cXferTimeoutMs, rawErr);
-    if (!fw::isOk(probeStatus)) {
-        FW_LOGW(fw::TraceCat::kSys,
-                probeStatus == fw::Status::kNotFound
-                    ? "<oled> no ack at 0x%02X, display disabled"
-                    : "<oled> probe at 0x%02X failed (%s), display disabled",
-                static_cast<unsigned>(addr_), esp_err_to_name(rawErr));
-        return probeStatus;
-    }
-
-    const fw::Status addStatus = i2c::addDevice(addr_, kI2cFreqHz, dev_);
-    if (!fw::isOk(addStatus)) {
-        FW_LOGW(fw::TraceCat::kSys, "<oled> add dev 0x%02X failed (%s), display disabled",
-                static_cast<unsigned>(addr_), fw::toString(addStatus));
-    }
-    return addStatus;
-}
-
-fw::Status Sh1106::init(const OledPins &pins) noexcept
-{
     hasPowerGpio_ = pins.powerGpio >= 0;
     powerGpio_ = hasPowerGpio_ ? pins.powerGpio : 0;
     i2cPort_ = (pins.i2cPort >= 0) ? pins.i2cPort : 0;
@@ -236,39 +259,82 @@ fw::Status Sh1106::init(const OledPins &pins) noexcept
     lastDirtyPages_ = 0U;
     totalDirtyPages_ = 0U;
     i2cErrors_ = 0U;
+    lastInitStage_ = OledInitStage::kNone;
+    lastInitStatus_ = fw::Status::kOk;
     tracker_.invalidate();
+}
 
+fw::Status Sh1106::probeAndAttach(bool quiet) noexcept
+{
+    const fw::Status busStatus = i2c::ensureInit(i2cPort_, sdaGpio_, sclGpio_);
+    if (!fw::isOk(busStatus)) {
+        lastInitStage_ = OledInitStage::kI2cBus;
+        lastInitStatus_ = busStatus;
+        logInitFailure(lastInitStage_, busStatus, addr_, powerGpio_, ESP_OK, quiet);
+        return busStatus;
+    }
+
+    esp_err_t rawErr = ESP_OK;
+    const fw::Status probeStatus = probeAddrWithRecovery(addr_, kI2cXferTimeoutMs, rawErr);
+    if (!fw::isOk(probeStatus)) {
+        lastInitStage_ = OledInitStage::kProbe;
+        lastInitStatus_ = probeStatus;
+        logInitFailure(lastInitStage_, probeStatus, addr_, powerGpio_, rawErr, quiet);
+        return probeStatus;
+    }
+
+    const fw::Status addStatus = i2c::addDevice(addr_, kI2cFreqHz, dev_);
+    if (!fw::isOk(addStatus)) {
+        lastInitStage_ = OledInitStage::kAddDevice;
+        lastInitStatus_ = addStatus;
+        logInitFailure(lastInitStage_, addStatus, addr_, powerGpio_, ESP_OK, quiet);
+    }
+    return addStatus;
+}
+
+/**
+ * @brief 使能 OLED 电源脚、探测 0x3C（失败自动复位重试）并初始化 SH1106
+ * @param pins: 板级 OLED 引脚、地址与旋转配置
+ * @param quiet: true 时抑制常规失败告警日志（用于后台周期重试，避免刷屏）
+ * @retval kOk 面板初始化完成并已亮屏；其他见 Sh1106.hpp 声明
+ */
+fw::Status Sh1106::init(const OledPins &pins, bool quiet) noexcept
+{
+    resetForInit(pins);
     if (pins.i2cPort < 0) {
+        lastInitStage_ = OledInitStage::kDisabled;
+        lastInitStatus_ = fw::Status::kNotFound;
         return fw::Status::kNotFound;
     }
     if ((pins.sdaGpio < 0) || (pins.sclGpio < 0) || (pins.addr == 0U)) {
+        lastInitStage_ = OledInitStage::kDisabled;
+        lastInitStatus_ = fw::Status::kInvalidArg;
         return fw::Status::kInvalidArg;
     }
     if (const fw::Status pwr = drivePowerPin(true); !fw::isOk(pwr)) {
-        FW_LOGW(fw::TraceCat::kSys, "<oled> power GPIO%d failed (%s), display disabled",
-                pins.powerGpio, fw::toString(pwr));
+        lastInitStage_ = OledInitStage::kPowerPin;
+        lastInitStatus_ = pwr;
+        logInitFailure(lastInitStage_, pwr, addr_, pins.powerGpio, ESP_OK, quiet);
         return pwr;
     }
     if (hasPowerGpio_) {
         sleepMs(kPowerSettleMs);
     }
-
-    const fw::Status attachStatus = probeAndAttach();
-    if (!fw::isOk(attachStatus)) {
+    if (const fw::Status attachStatus = probeAndAttach(quiet); !fw::isOk(attachStatus)) {
         static_cast<void>(drivePowerPin(false));
         return attachStatus;
     }
-
-    const fw::Status cfgStatus = configurePanel();
-    if (!fw::isOk(cfgStatus)) {
+    if (const fw::Status cfgStatus = configurePanel(); !fw::isOk(cfgStatus)) {
         static_cast<void>(i2c::removeDevice(dev_));
         static_cast<void>(drivePowerPin(false));
-        FW_LOGW(fw::TraceCat::kSys, "<oled> panel init failed (%s), display disabled",
-                fw::toString(cfgStatus));
+        lastInitStage_ = OledInitStage::kConfigure;
+        lastInitStatus_ = cfgStatus;
+        logInitFailure(lastInitStage_, cfgStatus, addr_, pins.powerGpio, ESP_OK, quiet);
         return cfgStatus;
     }
-
     present_ = true;
+    lastInitStage_ = OledInitStage::kOk;
+    lastInitStatus_ = fw::Status::kOk;
     FW_LOGI(fw::TraceCat::kSys, "<oled> SH1106 ready at 0x%02X (400 kHz, pwr GPIO%d)",
             static_cast<unsigned>(pins.addr), pins.powerGpio);
     return fw::Status::kOk;

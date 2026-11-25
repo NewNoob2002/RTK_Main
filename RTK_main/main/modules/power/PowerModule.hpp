@@ -131,6 +131,15 @@ private:
     void pollBattery(uint32_t nowMs, const PinLevels &pins) noexcept;
 
     /**
+     * @brief 分发按键短/长按事件并处理 8 s 强制关机兜底
+     * @param nowMs: 当前单调时间（ms）
+     * @param event: 本轮按键状态机事件
+     * @param keyPressed: 当前物理按键是否处于按下状态
+     * @note 仅 kLink 在 poll 中调用，非阻塞，非 ISR。
+     */
+    void handleKeyPoll(uint32_t nowMs, board::KeyEvent event, bool keyPressed) noexcept;
+
+    /**
      * @brief 在充电待机中逐轮确认保持并安排重启
      * @param nowMs: 当前单调时间（ms）
      * @param longPress: 本轮是否达到长按阈值

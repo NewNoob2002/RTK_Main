@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <span>
 
@@ -32,6 +33,8 @@ public:
     static constexpr uint32_t kRefreshPeriodMs = 200U; // ms，静止期上限 5 Hz（0 写 I2C）
     static constexpr uint8_t kOfflineFlushErrors =
         4U; // 连续 I2C 刷屏失败达此阈值判定面板离线并清除 kOledActive
+    static constexpr uint32_t kInitRetryPeriodMs =
+        2000U; // ms，启动探测失败后后台重试 SH1106 初始化的周期
 
     constexpr OledModule() noexcept = default;
     ~OledModule() = default;
@@ -60,7 +63,7 @@ public:
      */
     [[nodiscard]] fw::Status bindStorage(const StorageView &storage) noexcept
     {
-        if (task_.running() || present_) {
+        if (task_.running() || present_.load(std::memory_order_acquire)) {
             return fw::Status::kInvalidState;
         }
         if ((storage.taskStack.size_bytes() < kTaskStackBytes) ||
@@ -149,6 +152,33 @@ private:
     [[nodiscard]] uint32_t refreshOnce(uint32_t nowMs, bool forceFull) noexcept;
 
     /**
+     * @brief 尝试初始化 SH1106 并记录阶段/状态与尝试次数，成功时初始化 WouoUI 与状态机
+     * @param nowMs: 当前单调时间（ms）
+     * @param initialBoot: true 表示启动期首次尝试，false 表示后台周期重试
+     * @retval true 面板初始化成功并就绪
+     * @retval false 初始化失败，已更新诊断状态
+     * @note 仅 init 或 oled 任务调用，非 ISR。
+     */
+    [[nodiscard]] bool tryInitPanel(uint32_t nowMs, bool initialBoot) noexcept;
+
+    /**
+     * @brief 面板未就绪时按周期在后台重试初始化（不阻塞启动与其他业务任务）
+     * @param nowMs: 当前单调时间（ms）
+     * @retval 下一轮等待时间（ms）
+     * @note 仅 oled 任务调用，非 ISR。
+     */
+    [[nodiscard]] uint32_t handleBackgroundInitRetry(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief 响应软件重启过渡提示：刷出过渡帧（或保持当前终帧）后静默 I2C 并置位回执
+     * @param nowMs: 当前单调时间（ms）
+     * @param banner: 非 kNone 的过渡提示类型
+     * @retval 下一轮等待时间（ms）
+     * @note 仅 oled 任务调用，非 ISR。
+     */
+    [[nodiscard]] uint32_t handleRebootQuiesce(uint32_t nowMs, RebootBanner banner) noexcept;
+
+    /**
      * @brief 记入本次刷屏结果、耗时与 FPS 采样。
      * @param nowMs: 本轮刷新起始的单调时间（ms）。
      * @param frameUs: 采集快照到发送完成的耗时（µs）。
@@ -173,10 +203,15 @@ private:
     bool storageBound_ = false;
     rtos::BootTask task_{};
     bool enabled_ = false;
-    bool present_ = false;
+    std::atomic<bool> present_{false};
     uint8_t consecutiveFlushErrors_ = 0U;
     bool panelOffline_ = false;
     bool wasOledActive_ = false;
+    bool rebootQuiesced_ = false;
+    OledInitStage initStage_ = OledInitStage::kNone;
+    fw::Status initStatus_ = fw::Status::kOk;
+    uint32_t initAttempts_ = 0U;
+    uint32_t lastInitAttemptMs_ = 0U;
     uint16_t fpsX10_ = 0U;
     uint32_t fpsWindowStartMs_ = 0U;
     uint32_t fpsWindowFrames_ = 0U;

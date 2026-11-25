@@ -10,6 +10,7 @@
 
 #include "AppContext.hpp"
 #include "app/PowerRequests.hpp"
+#include "app/RadioMode.hpp"
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
 #include "modules/system/SystemCmdsPrivate.hpp"
@@ -53,7 +54,11 @@ int runReset(bool factory) noexcept
     FW_LOGI(fw::TraceCat::kStore, "Factory reset done, restarting");
     cli::outPrintf("OK\n");
     vTaskDelay(pdMS_TO_TICKS(detail::kRebootDelayMs));
+#if defined(ESP_PLATFORM)
+    restartWithOledQuiesce(RebootBanner::kRebooting);
+#else
     esp_restart();
+#endif
     return 0;
 }
 

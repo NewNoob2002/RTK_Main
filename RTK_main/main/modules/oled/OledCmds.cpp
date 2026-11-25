@@ -9,6 +9,7 @@
 #include "AppContext.hpp"
 #include "cli/Out.hpp"
 #include "def/OledDef.hpp"
+#include "fw/Status.hpp"
 
 namespace app {
 namespace {
@@ -32,6 +33,8 @@ int cmdOledStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::printKv("enabled", "%s", st.enabled ? "yes" : "no");
     cli::printKv("present", "%s", st.present ? "yes" : "no");
     cli::printKv("powered_off", "%s", st.poweredOff ? "yes" : "no");
+    cli::printKv("init", "%s (%s, attempts=%" PRIu32 ")", oledInitStageName(st.initStage),
+                 fw::toString(st.initStatus), st.initAttempts);
     cli::printKv("page", "%s", oledPageName(st.page));
     cli::printKv("fps", "%u.%u", static_cast<unsigned>(st.fpsX10 / kFpsDivisor),
                  static_cast<unsigned>(st.fpsX10 % kFpsDivisor));

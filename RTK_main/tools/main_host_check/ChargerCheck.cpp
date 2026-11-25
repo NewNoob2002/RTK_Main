@@ -29,6 +29,11 @@ constinit bool s_absent = false;
 constinit uint8_t s_mismatch_reg = 0U;
 constinit uint8_t s_readback_xor = 0U;
 constinit uint16_t s_timeout_addr = 0U;
+constinit unsigned s_timeout_count = 0U;
+constinit unsigned s_bus_resets = 0U;
+constinit unsigned s_sda_low_pulses_left = 0U;
+constinit unsigned s_scl_toggles = 0U;
+constinit int s_scl_level = 1;
 constinit unsigned s_lock_releases = 0U;
 constinit unsigned s_bus_creates = 0U;
 constinit unsigned s_added = 0U;
@@ -37,6 +42,7 @@ constinit unsigned s_reads = 0U;
 constinit unsigned s_writes = 0U;
 constinit std::array<uint8_t, kSgmRegCount> s_registers{};
 constinit std::string_view s_expected_warning{};
+constinit bool s_allow_extra_warnings = false;
 constinit unsigned s_warnings = 0U;
 
 /**
@@ -62,9 +68,11 @@ void check(bool ok, const char *expression, int line)
 void checkWarning(void *, const fw::LogHeader &hdr, std::span<const uint8_t> payload) noexcept
 {
     CHECK(hdr.level == fw::LogLevel::kWarn && hdr.cat == fw::TraceCat::kSys);
-    // 日志文本以字节存储，char 可读取其对象表示。
-    CHECK(std::string_view(reinterpret_cast<const char *>(payload.data()), payload.size()) ==
-          s_expected_warning);
+    if (!s_allow_extra_warnings) {
+        // 日志文本以字节存储，char 可读取其对象表示。
+        CHECK(std::string_view(reinterpret_cast<const char *>(payload.data()), payload.size()) ==
+              s_expected_warning);
+    }
     ++s_warnings;
 }
 
@@ -114,9 +122,21 @@ void checkInitTimeout()
     s_timeout_addr = kPins.addr;
     CHECK(charger::init(kPins) == Status::kTimeout);
     CHECK(charger::init(kPins) == Status::kNotFound);
-    CHECK(!charger::isReady() && s_probes == 1U && s_added == 0U);
+    CHECK(!charger::isReady() && s_probes == 3U && s_bus_resets == 2U && s_added == 0U);
     CHECK(charger::applyChargeParams(kPins) == Status::kInvalidState);
     CHECK(s_reads == 0U && s_writes == 0U);
+}
+
+/** @brief 验证 SDA 卡低时 9 脉冲恢复后建链成功，且首次探测超时在复位重试后恢复在线。 */
+void checkRecoveryAndProbeRetry()
+{
+    s_sda_low_pulses_left = 4U;
+    s_timeout_addr = kPins.addr;
+    s_timeout_count = 2U;
+    s_allow_extra_warnings = true;
+    CHECK(charger::init(kPins) == Status::kOk && charger::isReady());
+    CHECK(s_scl_toggles >= 4U && s_sda_low_pulses_left == 0U);
+    CHECK(s_bus_creates == 1U && s_probes == 3U && s_bus_resets == 2U && s_added == 1U);
 }
 
 /** @brief 验证扫描争用不探测，超时立即退出并保留已探测前缀。 */
@@ -167,6 +187,37 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t semaphore)
     return pdTRUE;
 }
 
+/** @brief 模拟 GPIO 读取（验证 SDA 卡低恢复脉冲）。 @param gpio: 引脚号。 @retval 电平值。 */
+int gpio_get_level(gpio_num_t gpio)
+{
+    if (gpio == 21) {
+        return s_sda_low_pulses_left > 0U ? 0 : 1;
+    }
+    return 1;
+}
+
+/** @brief 模拟 GPIO 写电平并记录 SCL 恢复脉冲。 @param gpio: 引脚号。 @param level: 电平。 @retval ESP_OK。 */
+esp_err_t gpio_set_level(gpio_num_t gpio, uint32_t level)
+{
+    if (gpio == 22) {
+        if ((s_scl_level == 0) && (level != 0U)) {
+            ++s_scl_toggles;
+            if (s_sda_low_pulses_left > 0U) {
+                --s_sda_low_pulses_left;
+            }
+        }
+        s_scl_level = static_cast<int>(level);
+    }
+    return ESP_OK;
+}
+
+/** @brief 模拟 GPIO 配置。 @param config: 引脚配置。 @retval ESP_OK。 */
+esp_err_t gpio_config(const gpio_config_t *config)
+{
+    CHECK(config != nullptr);
+    return ESP_OK;
+}
+
 /**
  * @brief 校验 I2C0 引脚和内部上拉配置
  * @param config: 总线配置
@@ -194,14 +245,19 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t *config, i2c_master_b
 esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus, uint16_t address, int timeoutMs)
 {
     CHECK(bus == &s_bus && s_mutex->held && timeoutMs == 10);
-    if (s_probes == 0U) {
+    if (s_probes == 0U || (address == 0x1AU && s_timeout_addr == 0x1AU)) {
         CHECK(address == 0x1AU);
     } else {
         CHECK(address == 0x08U + (s_probes - 1U) && address <= 0x77U);
     }
     ++s_probes;
     if (address == s_timeout_addr) {
-        return ESP_ERR_TIMEOUT;
+        if (s_timeout_count == 0U) {
+            return ESP_ERR_TIMEOUT;
+        }
+        if (s_probes <= s_timeout_count) {
+            return ESP_ERR_TIMEOUT;
+        }
     }
     return (address == 0x1AU && !s_absent) || address == 0x3CU ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
@@ -216,7 +272,7 @@ esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus, uint16_t address, int ti
 esp_err_t i2c_master_bus_add_device(i2c_master_bus_handle_t bus, const i2c_device_config_t *config,
                                     i2c_master_dev_handle_t *out)
 {
-    CHECK(bus == &s_bus && s_probes == 1U && !s_absent);
+    CHECK(bus == &s_bus && s_probes >= 1U && !s_absent);
     CHECK(config->device_address == 0x1AU && config->scl_speed_hz == 100000U);
     ++s_added;
     *out = &s_device;
@@ -242,6 +298,7 @@ esp_err_t i2c_master_bus_rm_device(i2c_master_dev_handle_t handle)
 esp_err_t i2c_master_bus_reset(i2c_master_bus_handle_t bus_handle)
 {
     CHECK(bus_handle == &s_bus && s_mutex->held);
+    ++s_bus_resets;
     return ESP_OK;
 }
 
@@ -325,6 +382,8 @@ int main(int argc, char **argv)
         checkInitTimeout();
     } else if (mode == "scan_errors") {
         checkScanErrors();
+    } else if (mode == "recovery_retry") {
+        checkRecoveryAndProbeRetry();
     } else {
         if (mode == "mismatch02") {
             s_mismatch_reg = kSgmReg02;
@@ -342,6 +401,10 @@ int main(int argc, char **argv)
         }
         checkOnline();
     }
-    CHECK(s_warnings == (s_expected_warning.empty() ? 0U : 1U));
+    if (!s_allow_extra_warnings) {
+        CHECK(s_warnings == (s_expected_warning.empty() ? 0U : 1U));
+    } else {
+        CHECK(s_warnings >= 1U);
+    }
     return 0;
 }

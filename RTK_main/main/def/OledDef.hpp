@@ -10,6 +10,7 @@
 
 #include "board/PowerLogic.hpp"
 #include "fw/Atomic.hpp"
+#include "fw/Status.hpp"
 namespace app {
 
 /** OLED 当前显示页面。 */
@@ -57,22 +58,80 @@ enum class OledPage : uint8_t {
     }
 }
 
+/** OLED 初始化阶段（供失败诊断与 `oled status` 输出）。 */
+enum class OledInitStage : uint8_t {
+    kNone = 0,
+    kDisabled,
+    kStorage,
+    kPowerPin,
+    kI2cBus,
+    kProbe,
+    kAddDevice,
+    kConfigure,
+    kOk,
+};
+
+/**
+ * @brief 取得 OLED 初始化阶段的可读短名
+ * @param stage: 初始化阶段枚举
+ * @retval 静态短名
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] constexpr const char *oledInitStageName(OledInitStage stage) noexcept
+{
+    switch (stage) {
+    case OledInitStage::kNone:
+        return "none";
+    case OledInitStage::kDisabled:
+        return "disabled";
+    case OledInitStage::kStorage:
+        return "storage";
+    case OledInitStage::kPowerPin:
+        return "power_pin";
+    case OledInitStage::kI2cBus:
+        return "i2c_bus";
+    case OledInitStage::kProbe:
+        return "probe";
+    case OledInitStage::kAddDevice:
+        return "add_device";
+    case OledInitStage::kConfigure:
+        return "configure";
+    case OledInitStage::kOk:
+        return "ok";
+    default:
+        return "unknown";
+    }
+}
+
+/** 软件重启前 OLED 过渡提示类型（由重启方发起，OLED 刷出后静默 I2C 并回执）。 */
+enum class RebootBanner : uint8_t {
+    kNone = 0,
+    kKeepFrame,     ///< 保持当前终帧画面，仅静默后续 I2C 传输
+    kRebooting,     ///< 通用软件重启（REBOOTING...）
+    kSwitchingWifi, ///< 切换至 Wi-Fi 配置模式（SWITCHING WI-FI）
+    kSwitchingBt,   ///< 切换至蓝牙模式（SWITCHING BT）
+    kStarting,      ///< 充电待机开机重启（STARTING）
+};
+
 /** OLED 状态快照（oled 任务写，console `oled` 命令读）。 */
 struct OledStatus {
     bool enabled = false;    // 板型具备 Feature::kOled
     bool present = false;    // SH1106 探测成功并完成初始化
     bool poweredOff = false; // 面板及 GPIO12 已断电
     OledPage page = OledPage::kSystemCheck;
-    uint16_t fpsX10 = 0U;          // 最近 1 s 窗口实际刷屏帧率 × 10（静止为 0）
-    uint8_t lastDirtyPages = 0U;   // 最近一次写出帧的脏页数（0..8）
-    uint32_t framesFlushed = 0U;   // 实际写出到 I2C 的帧数
-    uint32_t framesSkipped = 0U;   // 内容未变跳过的空闲帧数
-    uint32_t totalDirtyPages = 0U; // 累计写出的脏页总数
-    uint32_t lastI2cUs = 0U;       // 最近一次写出帧的 I2C 耗时（us）
-    uint32_t maxI2cUs = 0U;        // 历史最大单帧 I2C 耗时（us）
-    uint32_t lastFrameUs = 0U;     // 最近一次写出帧的渲染+I2C 总耗时（us）
-    uint32_t maxFrameUs = 0U;      // 历史最大单帧总耗时（us）
-    uint32_t i2cErrors = 0U;       // 累计 I2C 传输失败次数
+    uint16_t fpsX10 = 0U;                           // 最近 1 s 窗口实际刷屏帧率 × 10（静止为 0）
+    uint8_t lastDirtyPages = 0U;                    // 最近一次写出帧的脏页数（0..8）
+    uint32_t framesFlushed = 0U;                    // 实际写出到 I2C 的帧数
+    uint32_t framesSkipped = 0U;                    // 内容未变跳过的空闲帧数
+    uint32_t totalDirtyPages = 0U;                  // 累计写出的脏页总数
+    uint32_t lastI2cUs = 0U;                        // 最近一次写出帧的 I2C 耗时（us）
+    uint32_t maxI2cUs = 0U;                         // 历史最大单帧 I2C 耗时（us）
+    uint32_t lastFrameUs = 0U;                      // 最近一次写出帧的渲染+I2C 总耗时（us）
+    uint32_t maxFrameUs = 0U;                       // 历史最大单帧总耗时（us）
+    uint32_t i2cErrors = 0U;                        // 累计 I2C 传输失败次数
+    OledInitStage initStage = OledInitStage::kNone; ///< 最近一次初始化所处阶段
+    fw::Status initStatus = fw::Status::kOk;        ///< 最近一次初始化返回状态码
+    uint32_t initAttempts = 0U;                     ///< 累计初始化尝试次数（含后台重试）
 };
 
 /** UiEventBus 原子状态标志位（CODING-STYLE 规则 3）。 */
@@ -486,6 +545,67 @@ public:
         return request;
     }
 
+    /**
+     * @brief 请求 OLED 显示软件重启/射频切换过渡提示并静默 I2C，同时唤醒 OLED 任务
+     * @param banner: 过渡提示类型；kNone 表示清除
+     * @note 任意任务可调用，无锁原子写，不阻塞、不分配堆，非 ISR。
+     */
+    void requestRebootBanner(RebootBanner banner) noexcept
+    {
+        rebootQuiesced_.store(false, std::memory_order_release);
+        rebootBanner_.store(static_cast<uint8_t>(banner), std::memory_order_release);
+        if (banner != RebootBanner::kNone) {
+            notifyWake();
+        }
+    }
+
+    /**
+     * @brief 读取当前待执行的软件重启过渡提示类型
+     * @retval 当前过渡提示枚举，非重启态为 kNone
+     * @note 任意任务可调用，无锁原子读，不阻塞。
+     */
+    [[nodiscard]] RebootBanner rebootBanner() const noexcept
+    {
+        const uint8_t raw = rebootBanner_.load(std::memory_order_acquire);
+        if (raw > static_cast<uint8_t>(RebootBanner::kStarting)) {
+            return RebootBanner::kNone;
+        }
+        return static_cast<RebootBanner>(raw);
+    }
+
+    /**
+     * @brief 标记 OLED 已刷出重启过渡帧并停止后续 I2C 传输，同时唤醒等待重启的任务
+     * @note 仅 OLED 刷新任务调用；无锁原子写，不阻塞，非 ISR。
+     */
+    void markRebootQuiesced() noexcept
+    {
+        rebootQuiesced_.store(true, std::memory_order_release);
+        if (const WakeFn fn = restartWakeFn_.load(std::memory_order_acquire); fn != nullptr) {
+            fn(restartWakeCtx_);
+        }
+    }
+
+    /**
+     * @brief 查询 OLED 是否已完成重启过渡帧刷出并静默 I2C
+     * @retval true 已静默，可安全执行 esp_restart
+     * @retval false 尚未完成
+     * @note 任意任务可调用，无锁原子读，不阻塞。
+     */
+    [[nodiscard]] bool rebootQuiesced() const noexcept
+    {
+        return rebootQuiesced_.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief 清除重启过渡提示与静默凭据（供主机测试复用实例）
+     * @note 非 ISR，不阻塞。
+     */
+    void clearRebootBanner() noexcept
+    {
+        rebootBanner_.store(0U, std::memory_order_release);
+        rebootQuiesced_.store(false, std::memory_order_release);
+    }
+
 private:
     /**
      * @brief 映射关机阶段到 UiBusFlag 之后的独立位
@@ -522,6 +642,8 @@ private:
     void *restartWakeCtx_ = nullptr;
     OledActionRequest action_{};
     std::atomic<bool> actionPending_{false};
+    std::atomic<uint8_t> rebootBanner_{0U};
+    std::atomic<bool> rebootQuiesced_{false};
 };
 
 } // namespace app

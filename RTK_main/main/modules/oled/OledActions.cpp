@@ -14,7 +14,8 @@ namespace app {
 
 bool OledModule::poll(uint32_t nowMs) noexcept
 {
-    if (!present_ || context_->bootMode != board::BootMode::kNormal) {
+    if (!present_.load(std::memory_order_acquire) ||
+        context_->bootMode != board::BootMode::kNormal) {
         return false;
     }
     const auto request = context_->data.uiEvents.takeAction();

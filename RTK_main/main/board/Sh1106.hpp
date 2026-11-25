@@ -47,15 +47,16 @@ public:
     Sh1106 &operator=(Sh1106 &&) = delete;
 
     /**
-     * @brief 使能 OLED 电源脚、探测 0x3C 并初始化 SH1106（无应答仅报一行 W 并断电禁用）
+     * @brief 使能 OLED 电源脚、探测 0x3C（失败自动复位重试）并初始化 SH1106
      * @param pins: 板级 OLED 引脚、地址与旋转配置
+     * @param quiet: true 时抑制常规失败告警日志（用于后台周期重试，避免刷屏）
      * @retval kOk 面板初始化完成并已亮屏
      * @retval kNotFound 本板无 OLED 配置或 0x3C 无应答
      * @retval kInvalidArg 引脚或地址配置非法
      * @retval 其他 总线或初始化序列失败错误码
-     * @note 仅启动任务调用；含 100 ms 上电延时，非 ISR。
+     * @note 仅启动任务或 OLED 后台重试调用；含 100 ms 上电延时，非 ISR。
      */
-    [[nodiscard]] fw::Status init(const OledPins &pins) noexcept;
+    [[nodiscard]] fw::Status init(const OledPins &pins, bool quiet = false) noexcept;
 
     [[nodiscard]] Sh1106FlushResult
     flush(const ScreenBuff &fb, bool forceFull = false,
@@ -137,6 +138,26 @@ public:
         return totalDirtyPages_;
     }
 
+    /**
+     * @brief 取得最近一次 init() 所到达的阶段（供 `oled status` 诊断失败原因）
+     * @retval 初始化阶段枚举
+     * @note 纯查询，非 ISR。
+     */
+    [[nodiscard]] OledInitStage lastInitStage() const noexcept
+    {
+        return lastInitStage_;
+    }
+
+    /**
+     * @brief 取得最近一次 init() 的框架状态码
+     * @retval 初始化返回码
+     * @note 纯查询，非 ISR。
+     */
+    [[nodiscard]] fw::Status lastInitStatus() const noexcept
+    {
+        return lastInitStatus_;
+    }
+
 private:
     /**
      * @brief 配置并驱动 OLED 电源使能脚
@@ -148,13 +169,21 @@ private:
     [[nodiscard]] fw::Status drivePowerPin(bool high) noexcept;
 
     /**
-     * @brief 探测 SH1106 地址并向共享总线挂载设备句柄
+     * @brief 复位运行时状态并加载新的引脚配置
+     * @param pins: 板级 OLED 引脚、地址与旋转配置
+     * @note 仅 init 开头调用，非 ISR。
+     */
+    void resetForInit(const OledPins &pins) noexcept;
+
+    /**
+     * @brief 探测 SH1106 地址（失败时执行总线复位并重试 ≥2 次）并挂载设备句柄
+     * @param quiet: true 时不输出告警日志
      * @retval kOk 探测应答并成功挂载设备
-     * @retval kNotFound 0x3C 无应答（已记一行 W）
-     * @retval 其他 总线或挂载失败（已记一行 W）
+     * @retval kNotFound 0x3C 无应答
+     * @retval 其他 总线或挂载失败
      * @note 仅 init 调用，非 ISR。
      */
-    [[nodiscard]] fw::Status probeAndAttach() noexcept;
+    [[nodiscard]] fw::Status probeAndAttach(bool quiet) noexcept;
 
     /**
      * @brief 发送 SH1106 初始化命令序列、清屏并开显示
@@ -203,6 +232,8 @@ private:
     uint8_t lastDirtyPages_ = 0U;
     uint32_t totalDirtyPages_ = 0U;
     uint32_t i2cErrors_ = 0U;
+    OledInitStage lastInitStage_ = OledInitStage::kNone;
+    fw::Status lastInitStatus_ = fw::Status::kOk;
 };
 
 } // namespace app::board

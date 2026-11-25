@@ -40,6 +40,11 @@ inline constexpr std::array<uint8_t, 5U> kBolt5x8 = {
     0x18U, 0x1CU, 0x7EU, 0x38U, 0x18U,
 };
 
+/** 5x8 USB 供电插头图标（无充电芯片或满电外接供电时于电量旁/电源主卡显示）。 */
+inline constexpr std::array<uint8_t, 5U> kPlug5x8 = {
+    0x1CU, 0x3FU, 0xFCU, 0x3FU, 0x1CU,
+};
+
 /** 7x8 自检通过勾选图标（✓）。 */
 inline constexpr std::array<uint8_t, 7U> kCheck7x8 = {
     0x10U, 0x20U, 0x40U, 0x20U, 0x10U, 0x08U, 0x04U,
