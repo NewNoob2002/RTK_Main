@@ -11,6 +11,7 @@
 #include "board/Sh1106.hpp"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "esp_timer.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "fw/Log.hpp"
@@ -42,6 +43,7 @@ constinit bool s_oled_present = true;
 constinit int s_fail_page_once = -1;
 constinit bool s_fail_init_cmd_once = false;
 constinit bool s_fail_all_data = false;
+constinit esp_err_t s_data_error = ESP_ERR_TIMEOUT;
 constinit unsigned s_bus_creates = 0U;
 constinit unsigned s_bus_resets = 0U;
 constinit unsigned s_devices_added = 0U;
@@ -57,7 +59,17 @@ constinit bool s_gpio12_configured = false;
 constinit bool s_saw_init_rotated = false;
 constinit bool s_saw_power_off_cmds = false;
 constinit uint8_t s_last_page_cmd = 0xFFU;
+constinit std::array<uint8_t, app::oled::kPages> s_panel_first_byte{};
 constinit std::array<uint8_t, kSgmRegCount> s_charger_regs{};
+constinit int64_t s_time_us = 1000000LL;
+constinit int64_t s_cmd_delay_us = 200LL;
+constinit int64_t s_data_delay_us = 3100LL;
+constinit int64_t s_lock_acquire_us = 0LL;
+constinit int64_t s_max_lock_hold_us = 0LL;
+constinit int s_last_cmd_timeout_ms = 0;
+constinit int s_last_data_timeout_ms = 0;
+constinit bool s_force_lock_busy = false;
+constinit bool s_fail_data_consumes_timeout = false;
 
 /**
  * @brief 验证断言并在失败时中止
@@ -109,11 +121,12 @@ void runSharedBothOnline() noexcept
     app::oled::ViewModel vm{};
     app::oled::sanitizeCopy("P2", vm.product);
     app::oled::sanitizeCopy("V3.1.0", vm.fwVer);
-    app::oled::renderPage(app::OledPage::kSplash, vm, fb);
+    app::oled::renderPage(app::OledPage::kSystemCheck, vm, fb);
 
     const unsigned beforeFirst = s_oled_data_pages;
     const unsigned locksBeforeFirst = s_lock_acquires;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(panel.lastDirtyPages() == 8U && panel.totalDirtyPages() == 8U);
     CHECK(s_oled_data_pages - beforeFirst == 8U);
     // 每页单独加解锁，至少 8 次独立锁周期。
     CHECK(s_lock_acquires - locksBeforeFirst == 8U);
@@ -122,12 +135,14 @@ void runSharedBothOnline() noexcept
     // 内容未变 -> 零 I2C 写出。
     const unsigned txBeforeIdle = s_oled_tx_count;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kSkipped);
+    CHECK(panel.lastDirtyPages() == 0U && panel.totalDirtyPages() == 8U);
     CHECK(s_oled_tx_count == txBeforeIdle);
 
     // 仅改第 5 页 1 字节 -> 只写 1 页。
     fb[5][10] ^= 0xFFU;
     const unsigned pagesBeforeDelta = s_oled_data_pages;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(panel.lastDirtyPages() == 1U && panel.totalDirtyPages() == 9U);
     CHECK(s_oled_data_pages - pagesBeforeDelta == 1U);
 
     // 关机关闭面板并拉低 GPIO12。
@@ -221,19 +236,148 @@ void runTimeoutAbortResetBackoff() noexcept
     CHECK(s_oled_tx_count - txBeforeSecond == 2U);
     CHECK(panel.i2cErrors() == 2U && s_bus_resets == 2U);
 
-    // 退避 2 轮期间必须零 I2C 事务、零额外总线复位。
+    // 退避 2 轮期间必须返回独立 kBackoff（非 kSkipped），且零 I2C 事务、零额外总线复位（R2OL2-05）。
     const unsigned txBeforeBackoff = s_oled_tx_count;
-    CHECK(panel.flush(fb) == Sh1106FlushResult::kSkipped);
-    CHECK(panel.flush(fb) == Sh1106FlushResult::kSkipped);
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kBackoff);
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kBackoff);
     CHECK(s_oled_tx_count == txBeforeBackoff && s_bus_resets == 2U);
 
-    // 恢复后第 3 轮自动重新刷出全部 8 页，随后恢复空闲跳过。
+    // 紧急路径（USB 关机终帧）：第 3 次失败进入 4 轮退避，先验证退避生效（返回 kBackoff），
+    // 调用 clearBackoff() 后必须立即解除剩余退避并在当轮补刷成功（ROL2-03/R2OL2-05）。
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kBackoff);
+    s_fail_all_data = false;
+    panel.clearBackoff();
+    const unsigned pagesBeforeUrgent = s_oled_data_pages;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(s_oled_data_pages - pagesBeforeUrgent == 8U);
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kSkipped);
+    // 重新制造退避并验证普通路径自动恢复流程保持不变。
+    fb[0][0] ^= 0xFFU;
+    s_fail_all_data = true;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kBackoff);
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kBackoff);
+    // 恢复后第 3 轮自动重新刷出脏页，随后恢复空闲跳过。
     s_fail_all_data = false;
     const unsigned pagesBeforeRecover = s_oled_data_pages;
     CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
-    CHECK(s_oled_data_pages - pagesBeforeRecover == 8U);
+    CHECK(s_oled_data_pages - pagesBeforeRecover == 1U);
     CHECK(panel.flush(fb) == Sh1106FlushResult::kSkipped);
     CHECK(s_lock_acquires == s_lock_releases);
+}
+
+/** @brief 验证单页取锁到释放统一 8 ms 预算：命令迟到缩减数据超时、命令耗尽跳过数据并复位、数据超时与锁争用（R2OL2-04）。 */
+void runPageLockBudget() noexcept
+{
+    s_charger_regs[kSgmReg02] = 0xC0U;
+    s_charger_regs[kSgmReg03] = 0xF8U;
+    CHECK(charger::init(kChargerPins) == Status::kOk);
+
+    Sh1106 panel{};
+    CHECK(panel.init(kOledPins) == Status::kOk);
+    ScreenBuff fb{};
+    fb[0][0] = 0x11U;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+
+    // 1. 命令用去 5 ms：数据段只拿到剩余 3 ms 超时。
+    s_max_lock_hold_us = 0LL;
+    s_cmd_delay_us = 5000LL;
+    s_data_delay_us = 2000LL;
+    fb[0][0] = 0x22U;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(s_last_cmd_timeout_ms == static_cast<int>(Sh1106::kPageTimeoutBudgetMs));
+    CHECK(s_last_data_timeout_ms == 3);
+    CHECK(s_max_lock_hold_us == 7000LL);
+
+    // 2. 命令耗尽全部 8 ms 预算（剩余 < 1 ms）：绝不得再发数据段，释锁后触发总线复位。
+    const unsigned pagesBeforeExhaust = s_oled_data_pages;
+    const unsigned resetsBeforeExhaust = s_bus_resets;
+    s_cmd_delay_us = 8000LL;
+    s_data_delay_us = 1000LL;
+    fb[1][0] = 0x33U;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
+    CHECK(s_oled_data_pages == pagesBeforeExhaust);
+    CHECK(s_bus_resets == resetsBeforeExhaust + 1U);
+    CHECK(s_lock_acquires == s_lock_releases);
+
+    // 3. 命令用去 2 ms，数据替身用尽传入的 6 ms 后报超时，触发总线复位。
+    panel.clearBackoff();
+    s_max_lock_hold_us = 0LL;
+    s_cmd_delay_us = 2000LL;
+    s_fail_all_data = true;
+    s_fail_data_consumes_timeout = true;
+    const unsigned resetsBeforeDataTimeout = s_bus_resets;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
+    CHECK(s_last_data_timeout_ms == 6);
+    CHECK(s_max_lock_hold_us == 8000LL);
+    CHECK(s_bus_resets == resetsBeforeDataTimeout + 1U);
+    s_fail_all_data = false;
+    s_fail_data_consumes_timeout = false;
+
+    // 4. 锁争用：共享总线锁被占用时 SH1106 返回 kError（不误触发总线复位），Charger 0-tick 返回 kBusy。
+    panel.clearBackoff();
+    s_cmd_delay_us = 200LL;
+    s_data_delay_us = 3100LL;
+    s_force_lock_busy = true;
+    const unsigned resetsBeforeBusy = s_bus_resets;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
+    CHECK(s_bus_resets == resetsBeforeBusy);
+    ChargerInputStatus st{};
+    CHECK(charger::refreshInputStatus(st) == Status::kBusy);
+    s_force_lock_busy = false;
+
+    // 恢复后可补刷脏页。
+    panel.clearBackoff();
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(s_lock_acquires == s_lock_releases);
+}
+
+/** @brief 模拟 IDF 内部分段等待后以 INVALID_RESPONSE 返回，验证释放页锁并复位总线。 */
+void runInternalTimeoutRecovery() noexcept
+{
+    Sh1106 panel{};
+    CHECK(panel.init(kOledPins) == Status::kOk);
+    ScreenBuff fb{};
+    s_cmd_delay_us = 2000LL;
+    s_fail_all_data = true;
+    s_fail_data_consumes_timeout = true;
+    s_data_error = ESP_ERR_INVALID_RESPONSE;
+    const unsigned resetsBefore = s_bus_resets;
+    const unsigned writtenBefore = s_oled_data_pages;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
+    CHECK(s_last_data_timeout_ms == 6);
+    CHECK(s_oled_data_pages == writtenBefore);
+    CHECK(s_bus_resets == resetsBefore + 1U);
+    CHECK(s_lock_acquires == s_lock_releases);
+
+    s_fail_all_data = false;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+}
+
+/** @brief 模拟部分字节到达面板后报错，目标恢复旧内容时仅重写失败的页。 */
+void runPartialPageRevert() noexcept
+{
+    Sh1106 panel{};
+    CHECK(panel.init(kOledPins) == Status::kOk);
+    constexpr uint8_t kPage = 2U;
+    ScreenBuff fb{};
+    fb[kPage][0] = 0xAAU;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(s_panel_first_byte[kPage] == 0xAAU);
+
+    s_fail_page_once = kPage;
+    fb[kPage][0] = 0x55U;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kError);
+    CHECK(s_panel_first_byte[kPage] == 0x55U);
+
+    const unsigned writtenBefore = s_oled_data_pages;
+    fb[kPage][0] = 0xAAU;
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kWritten);
+    CHECK(s_oled_data_pages == writtenBefore + 1U);
+    CHECK(s_panel_first_byte[kPage] == 0xAAU);
+    CHECK(panel.flush(fb) == Sh1106FlushResult::kSkipped);
 }
 
 /** @brief wakeFromPowerOff() 失败时必须拉低 GPIO12 保持断电态，后续重试可恢复点亮（ROL1-01）。 */
@@ -281,13 +425,19 @@ SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *storage)
     return storage;
 }
 
+int64_t esp_timer_get_time(void)
+{
+    return s_time_us;
+}
+
 BaseType_t xSemaphoreTake(SemaphoreHandle_t semaphore, TickType_t /*ticks*/)
 {
     CHECK(semaphore == s_mutex);
-    if (semaphore->held) {
+    if (semaphore->held || s_force_lock_busy) {
         return pdFALSE;
     }
     semaphore->held = true;
+    s_lock_acquire_us = s_time_us;
     ++s_lock_acquires;
     return pdTRUE;
 }
@@ -295,6 +445,10 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t semaphore, TickType_t /*ticks*/)
 BaseType_t xSemaphoreGive(SemaphoreHandle_t semaphore)
 {
     CHECK(semaphore == s_mutex && semaphore->held);
+    const int64_t heldUs = s_time_us - s_lock_acquire_us;
+    if (heldUs > s_max_lock_hold_us) {
+        s_max_lock_hold_us = heldUs;
+    }
     semaphore->held = false;
     ++s_lock_releases;
     return pdTRUE;
@@ -383,13 +537,15 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *tx, si
         return ESP_OK;
     }
     CHECK(dev == &s_oled_dev);
-    // 校验 SH1106 单次传输超时严格受控（2 * timeoutMs < 20 ms 互斥等待上限，ROL1-02）。
-    CHECK(timeoutMs > 0 && (2U * static_cast<uint32_t>(timeoutMs)) < i2c::kDefaultMutexWaitMs);
+    // 只检查 IDF 超时传参值，替身耗时由各场景独立控制。
+    CHECK(timeoutMs > 0 && static_cast<uint32_t>(timeoutMs) <= Sh1106::kPageTimeoutBudgetMs);
     ++s_oled_tx_count;
     if (tx[0] == 0x00U) {
         if ((count == 4U) && ((tx[1] & 0xF8U) == 0xB0U)) {
             CHECK(tx[2] == 0x02U && tx[3] == 0x10U); // SH1106 列偏移 2
             s_last_page_cmd = static_cast<uint8_t>(tx[1] & 0x07U);
+            s_last_cmd_timeout_ms = timeoutMs;
+            s_time_us += s_cmd_delay_us;
         }
         if (count >= 20U) {
             if (s_fail_init_cmd_once) {
@@ -411,13 +567,19 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *tx, si
     }
     if (tx[0] == 0x40U) {
         CHECK(count == 129U);
+        s_last_data_timeout_ms = timeoutMs;
         if (s_fail_all_data) {
-            return ESP_ERR_TIMEOUT;
+            if (s_fail_data_consumes_timeout) {
+                s_time_us += static_cast<int64_t>(timeoutMs) * 1000LL;
+            }
+            return s_data_error;
         }
+        s_panel_first_byte.at(s_last_page_cmd) = tx[1];
         if ((s_fail_page_once >= 0) && (static_cast<int>(s_last_page_cmd) == s_fail_page_once)) {
             s_fail_page_once = -1;
             return ESP_ERR_TIMEOUT;
         }
+        s_time_us += s_data_delay_us;
         ++s_oled_data_pages;
         return ESP_OK;
     }
@@ -445,6 +607,11 @@ const char *esp_err_to_name(esp_err_t err)
 }
 
 namespace rtos {
+
+uint32_t nowMs() noexcept
+{
+    return static_cast<uint32_t>(s_time_us / 1000LL);
+}
 
 fw::Status fromEspErr(esp_err_t err) noexcept
 {
@@ -483,6 +650,12 @@ int main(int argc, char **argv)
         runPageErrorRetry();
     } else if (scenario == "timeout_abort_reset_backoff") {
         runTimeoutAbortResetBackoff();
+    } else if (scenario == "page_lock_budget") {
+        runPageLockBudget();
+    } else if (scenario == "internal_timeout_recovery") {
+        runInternalTimeoutRecovery();
+    } else if (scenario == "partial_page_revert") {
+        runPartialPageRevert();
     } else if (scenario == "wake_fail_recovers") {
         runWakeFailRecovers();
     } else if (scenario == "init_cfg_fail_cleanup") {

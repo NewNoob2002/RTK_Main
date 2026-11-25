@@ -87,12 +87,14 @@ foreach(policy concurrent preempt)
     target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096
         CONFIG_RTK_CONSOLE_UART_NUM=0 CONFIG_RTK_CONSOLE_UART_BAUD=2000000)
     target_link_libraries(main_${policy} PRIVATE main_pure main_rtos main_nvs_shim settings)
+    target_link_options(main_${policy} PRIVATE -Wl,--wrap=ulTaskNotifyTake)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
-    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_short_key_ui power_no_reopen power_fence_timeout power_log_drain power_low_battery power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
+    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_short_key_ui power_oled_usb_final_flush power_oled_usb_final_timeout power_oled_usb_absent_no_wait power_oled_usb_already_flushed power_oled_usb_log_rebusy power_oled_usb_wake_on_flush power_oled_usb_wake_on_deadline power_shutdown_degraded_masks power_no_reopen power_fence_timeout power_log_drain power_low_battery power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
         power_battery_read_failure power_low_battery_unknown_usb power_low_battery_standby
-        power_battery_median power_battery_freshness
+        power_battery_median power_battery_freshness power_oled_usb_preempt_before_deadline
+        power_oled_usb_preempt_across_deadline
             rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window web_s2_storage_bt device_name device_name_e1 device_name_unknown)
@@ -374,7 +376,9 @@ foreach(scenario absent online mismatch02 mismatch03 readback02_high_bits init_t
 endforeach()
 
 add_executable(oled_ui_check OledUiCheck.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledAnim.cpp
     ${PROJ_ROOT}/main/modules/oled/OledUi.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledRender.cpp
     ${PROJ_ROOT}/main/board/PowerLogic.cpp)
 target_include_directories(oled_ui_check PRIVATE
     ${PROJ_ROOT}/main
@@ -385,7 +389,7 @@ target_include_directories(oled_ui_check PRIVATE
 target_compile_options(oled_ui_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
     -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
     -Wimplicit-fallthrough -Wswitch-default -Wundef)
-target_link_libraries(oled_ui_check PRIVATE main_pure third_party_wououi)
+target_link_libraries(oled_ui_check PRIVATE main_pure third_party_wououi gnss)
 add_test(NAME oled_ui_check COMMAND oled_ui_check)
 
 add_executable(oled_driver_check OledDriverCheck.cpp
@@ -393,8 +397,10 @@ add_executable(oled_driver_check OledDriverCheck.cpp
     ${PROJ_ROOT}/main/board/Charger.cpp
     ${PROJ_ROOT}/main/board/Sh1106.cpp
     ${PROJ_ROOT}/main/board/PowerLogic.cpp
-    ${PROJ_ROOT}/main/modules/oled/OledUi.cpp)
-target_include_directories(oled_driver_check BEFORE PRIVATE shim)
+    ${PROJ_ROOT}/main/modules/oled/OledAnim.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledUi.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledRender.cpp)
+target_include_directories(oled_driver_check BEFORE PRIVATE shim web_shim)
 target_include_directories(oled_driver_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/main
     ${PROJ_ROOT}/components/rtos/include
@@ -404,10 +410,43 @@ target_include_directories(oled_driver_check PRIVATE ../t13_host_check/shim/inc
     ${PROJ_ROOT}/components/link_core/include)
 target_compile_options(oled_driver_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
     -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
-target_link_libraries(oled_driver_check PRIVATE main_pure third_party_wououi)
+target_link_libraries(oled_driver_check PRIVATE main_pure third_party_wououi gnss)
 foreach(scenario shared_both_online oled_absent_charger_ok charger_absent_oled_ok page_error_retry
-    timeout_abort_reset_backoff wake_fail_recovers init_cfg_fail_cleanup)
+    timeout_abort_reset_backoff page_lock_budget wake_fail_recovers init_cfg_fail_cleanup
+    internal_timeout_recovery partial_page_revert)
     add_test(NAME oled_driver_${scenario} COMMAND oled_driver_check ${scenario})
+endforeach()
+
+add_executable(oled_module_check OledModuleCheck.cpp
+    ${PROJ_ROOT}/main/board/BoardProfile.cpp
+    ${PROJ_ROOT}/main/board/BoardCurrent.cpp
+    ${PROJ_ROOT}/main/board/I2cBus.cpp
+    ${PROJ_ROOT}/main/board/Sh1106.cpp
+    ${PROJ_ROOT}/main/board/PowerLogic.cpp
+    ${PROJ_ROOT}/main/data/AppData.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledAnim.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledUi.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledRender.cpp
+    ${PROJ_ROOT}/main/modules/oled/OledModule.cpp)
+target_include_directories(oled_module_check BEFORE PRIVATE shim web_shim)
+target_include_directories(oled_module_check PRIVATE ../t13_host_check/shim/inc
+    ${PROJ_ROOT}/main
+    ${PROJ_ROOT}/components/rtos/include
+    ${PROJ_ROOT}/components/app_fw/include
+    ${PROJ_ROOT}/components/spp_server/include
+    ${PROJ_ROOT}/components/nvs_store/include
+    ${PROJ_ROOT}/components/cli/include
+    ${PROJ_ROOT}/components/gnss/include
+    ${PROJ_ROOT}/components/stream_demux/include
+    ${PROJ_ROOT}/components/link_core/include
+    ${PROJ_ROOT}/components/web_proto/include)
+target_compile_definitions(oled_module_check PRIVATE CONFIG_RTK_LOG_RING_BYTES=4096)
+target_compile_options(oled_module_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
+target_link_libraries(oled_module_check PRIVATE main_pure third_party_wououi gnss)
+foreach(scenario final_frame_orchestration busy_click_299_300_and_deadline_sleep
+    click_page_deadline_299 click_page_deadline_300)
+    add_test(NAME oled_module_${scenario} COMMAND oled_module_check ${scenario})
 endforeach()
 
 add_executable(web_server_check WebServerCheck.cpp

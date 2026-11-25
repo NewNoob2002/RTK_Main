@@ -1,12 +1,15 @@
-// P2 OLED 显示模块实现（ADR-0020）：WouoUI HAL 桥接、低优先级刷新任务与只读快照采集。
-// init 仅启动任务调用；run 仅 oled 低优先级任务调用（Core 1, prio 1, <= 5 Hz）；不阻塞 kLink，非 ISR。
+// P2 OLED 显示模块实现（ADR-0020 / OL2）：WouoUI HAL 桥接、30 fps 动画/静止 0 写调度与性能统计。
+// init 仅启动任务调用；run 仅 oled 低优先级任务调用（Core 1, prio 1）；不阻塞 kLink，非 ISR。
 // 堆档位：启动期一次性（任务栈与 1 KB 帧缓冲由 BootArena 仅在含 Feature::kOled 板型上外供；本文件静态状态全零落 .bss）。
 #include "modules/oled/OledModule.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <optional>
 
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -25,15 +28,18 @@ namespace {
 
 constexpr UBaseType_t kOledTaskPriority = 1U; // 低于 kLink(10)/kIo(9)/console(2)，绝不抢占业务
 constexpr BaseType_t kOledTaskCore = 1;       // 绑 Core 1，远离 Core 0 的 BT/Wi-Fi/GNSS/console
+constexpr uint32_t kFpsWindowMs = 1000U;      // ms，FPS 滑动采样窗口
+constexpr uint32_t kFpsScaleX10 = 10000U;     // frames * 10000 / elapsedMs = fps * 10
 static_assert(sizeof(ScreenBuff) == OledModule::kFrameBufferBytes,
               "WouoUI ScreenBuff size must equal OledModule::kFrameBufferBytes");
 
 // 单实例全零静态状态（均落 .dram0.bss）；任务栈与 1 KB 帧缓冲由 BootArena 按 Feature::kOled 外供。
 constinit ScreenBuff *s_active_fb = nullptr;
 constinit board::Sh1106 s_panel{};
-constinit oled::PageSm s_page_sm{};
+constinit oled::UiController s_ui_ctrl{};
 constinit board::Sh1106FlushResult s_last_flush{};
 constinit bool s_force_next_flush = false;
+constinit std::optional<uint32_t> s_flush_deadline_ms{};
 constinit std::atomic<TaskHandle_t> s_oled_task_handle{nullptr};
 static_assert(fw::kAtomicUsable<TaskHandle_t>, "OLED 任务句柄原子须无锁");
 
@@ -44,15 +50,37 @@ static_assert(fw::kAtomicUsable<TaskHandle_t>, "OLED 任务句柄原子须无锁
  */
 void sendBufferHal(ScreenBuff fb) noexcept
 {
-    // WouoUI 仅绑定唯一外供缓冲 s_active_fb，避免数组形参退化后的指针强转。
     static_cast<void>(fb);
-    if (s_active_fb == nullptr) {
-        s_last_flush = board::Sh1106FlushResult::kDisabled;
-        s_force_next_flush = false;
-        return;
-    }
-    s_last_flush = s_panel.flush(*s_active_fb, s_force_next_flush);
+    s_last_flush = s_active_fb != nullptr
+                       ? s_panel.flush(*s_active_fb, s_force_next_flush, s_flush_deadline_ms)
+                       : board::Sh1106FlushResult::kDisabled;
     s_force_next_flush = false;
+    s_flush_deadline_ms.reset();
+}
+
+/**
+ * @brief 将 SH1106 底层刷屏结果映射为纯逻辑 FlushOutcome 枚举
+ * @param res: SH1106 刷屏结论
+ * @retval 对应纯逻辑 FlushOutcome
+ * @note 纯函数。
+ */
+[[nodiscard]] oled::FlushOutcome toFlushOutcome(board::Sh1106FlushResult res) noexcept
+{
+    switch (res) {
+    case board::Sh1106FlushResult::kWritten:
+        return oled::FlushOutcome::kWritten;
+    case board::Sh1106FlushResult::kSkipped:
+        return oled::FlushOutcome::kSkipped;
+    case board::Sh1106FlushResult::kBackoff:
+        return oled::FlushOutcome::kBackoff;
+    case board::Sh1106FlushResult::kInterrupted:
+        return oled::FlushOutcome::kInterrupted;
+    case board::Sh1106FlushResult::kError:
+        return oled::FlushOutcome::kError;
+    case board::Sh1106FlushResult::kDisabled:
+    default:
+        return oled::FlushOutcome::kDisabled;
+    }
 }
 
 /**
@@ -67,8 +95,11 @@ void sendBufferHal(ScreenBuff fb) noexcept
 {
     return (lhs.enabled == rhs.enabled) && (lhs.present == rhs.present) &&
            (lhs.poweredOff == rhs.poweredOff) && (lhs.page == rhs.page) &&
+           (lhs.fpsX10 == rhs.fpsX10) && (lhs.lastDirtyPages == rhs.lastDirtyPages) &&
            (lhs.framesFlushed == rhs.framesFlushed) && (lhs.framesSkipped == rhs.framesSkipped) &&
-           (lhs.i2cErrors == rhs.i2cErrors);
+           (lhs.totalDirtyPages == rhs.totalDirtyPages) && (lhs.lastI2cUs == rhs.lastI2cUs) &&
+           (lhs.maxI2cUs == rhs.maxI2cUs) && (lhs.lastFrameUs == rhs.lastFrameUs) &&
+           (lhs.maxFrameUs == rhs.maxFrameUs) && (lhs.i2cErrors == rhs.i2cErrors);
 }
 
 /**
@@ -82,15 +113,32 @@ void sendBufferHal(ScreenBuff fb) noexcept
     return (str != nullptr) ? std::string_view{str} : std::string_view{};
 }
 
+#if RTK_GNSS_ENABLED
+/**
+ * @brief 在独立栈帧中读取 512 B 卫星表并汇总到 ViewModel，返回后即释放局部栈空间
+ * @param app: 应用上下文（只读）
+ * @param[out] vm: 目标视图模型
+ * @note 仅 init 或 oled 任务调用，不分配堆，非 ISR。
+ */
+[[gnu::noinline]] void collectSatSummary(const AppContext &app, oled::ViewModel &vm) noexcept
+{
+    const gnss::SatTable table = app.data.gnssSats.read();
+    oled::summarizeSatTable(table, vm);
+}
+#endif
+
 /**
  * @brief 从 DataCenter 与 AppContext 只读快照收集当前 UI 视图模型
  * @param app: 应用上下文（只读访问）
- * @retval 填充好的纯值视图模型
- * @note 仅 init 或 oled 任务调用；只读现有数据槽，不写任何其他模块状态，非 ISR。
+ * @param nowMs: 当前单调时间（ms）
+ * @param[out] vm: 目标视图模型
+ * @note 仅 init 或 oled 任务调用；只读现有数据槽，不调用任何外设驱动，非 ISR；禁止内联以释放临时快照栈帧。
  */
-[[nodiscard]] oled::ViewModel collectViewModel(const AppContext &app) noexcept
+[[gnu::noinline]] void collectViewModel(const AppContext &app, uint32_t nowMs,
+                                        oled::ViewModel &vm) noexcept
 {
-    oled::ViewModel vm{};
+    vm = {};
+    vm.uptimeMs = nowMs;
     const auto &profile = board::current();
     oled::sanitizeCopy(cstrView(board::productName(&profile)), vm.product);
     oled::sanitizeCopy(cstrView(profile.name), vm.boardName);
@@ -99,33 +147,55 @@ void sendBufferHal(ScreenBuff fb) noexcept
 
     const SystemStatus sys = app.data.systemStatus.read();
     oled::sanitizeCopy(cstrView(sys.sn.data()), vm.sn);
+    oled::sanitizeCopy(cstrView(sys.deviceName.data()), vm.deviceName);
     vm.bootMode = app.bootMode;
     vm.radioMode = app.radioMode;
+    vm.nvsReady = app.bootConfig.userNvsReady && !app.bootConfig.safeDefaults;
     vm.btReady = sys.btReady;
+    vm.wifiReady = app.data.wifiReady.load(std::memory_order_acquire);
 
     const Sessions sess = app.data.sessions.read();
     // kMaxSessions == 2，窄化到 uint8_t 安全。
     vm.btSessions = static_cast<uint8_t>(sess.count);
 
     const PowerSnapshot pwr = app.data.powerStatus.read();
+    vm.powerActive = pwr.active;
+    vm.batteryAdcReady = pwr.batteryAdcReady;
+    vm.chargerPresent = pwr.chargerPresent;
+    vm.chargerOk = pwr.chargerOk;
     vm.batteryPct = pwr.batteryPct;
     vm.batteryMv = pwr.batteryMv;
     vm.usbPresent = pwr.usbPresent;
     vm.charging = pwr.charging;
+    vm.usbSource = pwr.usbSource;
     vm.shutdownStage = pwr.shutdownStage;
     vm.shutdownReason = pwr.lastShutdown;
+    vm.shutdownDoneMask = pwr.shutdownDoneMask;
+    vm.shutdownDegradedMask = pwr.shutdownDegradedMask;
 
 #if RTK_GNSS_ENABLED
     const GnssStatus gs = app.data.gnssStatus.read();
     const gnss::Fix fix = app.data.gnssFix.read();
+    const GnssWorkModeStatus wm = app.data.gnssWorkMode.read();
     vm.gnssEnabled = gs.enabled;
     vm.gnssState = gs.state;
+    vm.gnssModel = gs.model;
+    oled::sanitizeCopy(cstrView(gs.fwVersion.data()), vm.gnssFwVer);
     vm.fixValid = fix.valid;
     vm.fixQuality = fix.quality;
+    vm.latE9 = fix.latE9;
+    vm.lonE9 = fix.lonE9;
+    vm.altMm = fix.altMm;
     vm.satsUsed = fix.satsUsed;
+    vm.hdopX100 = fix.hdopX100;
+    vm.diffAgeDs = fix.diffAgeDs;
     vm.hAccCm = fix.hAccCm;
+    vm.workModeActive = wm.active;
+    vm.workMode = wm.mode;
+    vm.workModeState = wm.state;
+    vm.workModeElapsedS = wm.elapsedS;
+    collectSatSummary(app, vm);
 #endif
-    return vm;
 }
 
 } // namespace
@@ -137,8 +207,15 @@ fw::Result OledModule::init() noexcept
     }
     enabled_ = false;
     present_ = false;
+    fpsX10_ = 0U;
+    fpsWindowStartMs_ = 0U;
+    fpsWindowFrames_ = 0U;
     framesFlushed_ = 0U;
     framesSkipped_ = 0U;
+    lastI2cUs_ = 0U;
+    maxI2cUs_ = 0U;
+    lastFrameUs_ = 0U;
+    maxFrameUs_ = 0U;
     lastPublished_ = {};
 
     const auto &profile = board::current();
@@ -156,7 +233,6 @@ fw::Result OledModule::init() noexcept
     enabled_ = true;
     const fw::Status st = s_panel.init(profile.oled);
     if (!fw::isOk(st)) {
-        // 面板无应答或初始化失败仅记录一行 W（已由 Sh1106::init 输出），不影响其他模块启动。
         s_active_fb = nullptr;
         publishStatus(true);
         return fw::Result::kOk;
@@ -166,8 +242,11 @@ fw::Result OledModule::init() noexcept
     s_active_fb = reinterpret_cast<ScreenBuff *>(storage_.frameBuffer.data());
     present_ = true;
     WouoUI_GraphSetSendBuffFun(&sendBufferHal);
-    s_page_sm.reset(context_->bootMode, rtos::nowMs(), context_->data.uiEvents.shortKeyCount());
-    static_cast<void>(refreshOnce(rtos::nowMs(), true));
+    const uint32_t now = rtos::nowMs();
+    fpsWindowStartMs_ = now;
+    context_->data.uiEvents.drainShortKeys();
+    s_ui_ctrl.reset(context_->bootMode, now);
+    static_cast<void>(refreshOnce(now, true));
     publishStatus(true);
     return fw::Result::kOk;
 }
@@ -214,6 +293,7 @@ void OledModule::taskEntry(void *arg) noexcept
         return;
     }
     s_oled_task_handle.store(xTaskGetCurrentTaskHandle(), std::memory_order_release);
+    self->context_->data.uiEvents.setOledActive(true);
     self->context_->data.uiEvents.setWakeHook(&OledModule::wakeFromBus, self);
     self->run();
 }
@@ -223,6 +303,10 @@ void OledModule::run() noexcept
     while (true) {
         const uint32_t waitMs = refreshOnce(rtos::nowMs(), false);
         publishStatus(false);
+        if (waitMs == 0U) {
+            static_cast<void>(ulTaskNotifyTake(pdTRUE, 0U));
+            continue;
+        }
         const TickType_t waitTicks = pdMS_TO_TICKS(waitMs);
         static_cast<void>(ulTaskNotifyTake(pdTRUE, waitTicks == 0U ? 1U : waitTicks));
     }
@@ -230,45 +314,65 @@ void OledModule::run() noexcept
 
 uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull) noexcept
 {
-    const oled::ViewModel vm = collectViewModel(*context_);
-    const oled::PageDecision dec =
-        s_page_sm.step(nowMs, context_->data.uiEvents.shortKeyCount(), vm.shutdownStage);
-    const uint32_t nextWaitMs = ((dec.nextWaitMs != 0U) && (dec.nextWaitMs < kRefreshPeriodMs))
-                                    ? dec.nextWaitMs
-                                    : kRefreshPeriodMs;
+    const int64_t frameStartUs = esp_timer_get_time();
+    oled::ViewModel vm{};
+    collectViewModel(*context_, nowMs, vm);
+    std::array<uint32_t, UiEventBus::kShortKeyQueueCap> shortKeys{};
+    size_t shortKeyCount = 0U;
+    while ((shortKeyCount < shortKeys.size()) &&
+           context_->data.uiEvents.popShortKey(shortKeys[shortKeyCount])) {
+        ++shortKeyCount;
+    }
+    const oled::UiDecision dec =
+        s_ui_ctrl.step(nowMs, std::span<const uint32_t>{shortKeys.data(), shortKeyCount}, vm);
 
-    if (dec.shouldWake) {
-        if (fw::isOk(s_panel.wakeFromPowerOff())) {
-            forceFull = true;
-        } else {
-            s_page_sm.onWakeFailed(nowMs);
-        }
-    }
-    if (dec.shouldPowerOff) {
-        s_panel.powerOff();
-        return kRefreshPeriodMs;
-    }
     if (s_panel.poweredOff() || (s_active_fb == nullptr)) {
-        return nextWaitMs;
+        return dec.nextWaitMs;
     }
 
-    oled::renderPage(dec.page, vm, *s_active_fb);
+    const oled::UiRenderState rstate = s_ui_ctrl.renderState(nowMs);
+    oled::renderUi(rstate, vm, *s_active_fb);
     s_force_next_flush = forceFull;
-    WouoUI_BuffSend();
-
-    switch (s_last_flush) {
-    case board::Sh1106FlushResult::kWritten:
-        ++framesFlushed_;
-        break;
-    case board::Sh1106FlushResult::kSkipped:
-        ++framesSkipped_;
-        break;
-    case board::Sh1106FlushResult::kError:
-    case board::Sh1106FlushResult::kDisabled:
-    default:
-        break;
+    if (dec.hasClickDeadline) {
+        s_flush_deadline_ms = dec.clickDeadlineMs;
     }
-    return nextWaitMs;
+    if (dec.markShutdownFinalFrame) {
+        s_panel.clearBackoff();
+    }
+
+    const int64_t i2cStartUs = esp_timer_get_time();
+    WouoUI_BuffSend();
+    const int64_t i2cEndUs = esp_timer_get_time();
+
+    const uint32_t thisFrameUs =
+        (i2cEndUs > frameStartUs) ? static_cast<uint32_t>(i2cEndUs - frameStartUs) : 0U;
+    const oled::PostFlushDecision post =
+        oled::settleFrameWait(dec, toFlushOutcome(s_last_flush), thisFrameUs, rtos::nowMs());
+    if (post.markFinalFlushed) {
+        context_->data.uiEvents.markShutdownFinalFrameFlushed();
+    }
+    if (s_last_flush == board::Sh1106FlushResult::kWritten) {
+        ++framesFlushed_;
+        ++fpsWindowFrames_;
+        // 单帧耗时 < 1 s，微秒差值转为 uint32_t 无损。
+        lastI2cUs_ = (i2cEndUs > i2cStartUs) ? static_cast<uint32_t>(i2cEndUs - i2cStartUs) : 0U;
+        lastFrameUs_ = thisFrameUs;
+        maxI2cUs_ = std::max(maxI2cUs_, lastI2cUs_);
+        maxFrameUs_ = std::max(maxFrameUs_, lastFrameUs_);
+    } else if (s_last_flush == board::Sh1106FlushResult::kSkipped) {
+        ++framesSkipped_;
+    }
+
+    const uint32_t fpsElapsed = nowMs - fpsWindowStartMs_;
+    if (fpsElapsed >= kFpsWindowMs) {
+        // 1 s 内帧数 <= 60，fpsX10 <= 600，窄化到 uint16_t 安全。
+        const uint32_t rateX10 = (fpsWindowFrames_ * kFpsScaleX10) / fpsElapsed;
+        fpsX10_ = static_cast<uint16_t>(std::min<uint32_t>(rateX10, UINT16_MAX));
+        fpsWindowStartMs_ = nowMs;
+        fpsWindowFrames_ = 0U;
+    }
+
+    return post.nextWaitMs;
 }
 
 void OledModule::publishStatus(bool force) noexcept
@@ -277,9 +381,16 @@ void OledModule::publishStatus(bool force) noexcept
         .enabled = enabled_,
         .present = present_,
         .poweredOff = s_panel.poweredOff(),
-        .page = s_page_sm.page(),
+        .page = s_ui_ctrl.page(),
+        .fpsX10 = fpsX10_,
+        .lastDirtyPages = s_panel.lastDirtyPages(),
         .framesFlushed = framesFlushed_,
         .framesSkipped = framesSkipped_,
+        .totalDirtyPages = s_panel.totalDirtyPages(),
+        .lastI2cUs = lastI2cUs_,
+        .maxI2cUs = maxI2cUs_,
+        .lastFrameUs = lastFrameUs_,
+        .maxFrameUs = maxFrameUs_,
         .i2cErrors = s_panel.i2cErrors(),
     };
     if (force || !statusEqual(next, lastPublished_)) {

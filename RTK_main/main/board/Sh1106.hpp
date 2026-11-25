@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 #include "driver/i2c_master.h"
 
@@ -19,8 +20,10 @@ namespace app::board {
 enum class Sh1106FlushResult : uint8_t {
     kDisabled = 0, // 面板不存在或已关机断电（全零默认初值，落 .bss）
     kWritten,      // 至少写出一个脏页且全部成功
-    kSkipped,      // 8 页内容均未变化或处于错误退避期，零 I2C 事务
-    kError,        // 写出失败（已中止本轮剩余页并累加错误计数，未更新失败页摘要）
+    kSkipped,      // 8 页内容均未变化，零 I2C 事务（画面已完整落屏）
+    kBackoff,      // 处于连续错误退避期，本轮未发起 I2C 传输（未确认落屏）
+    kInterrupted,  // 到达帧截止，未提交的脏页留待下一轮渲染
+    kError,        // 写出失败，失败页摘要失效
 };
 
 /**
@@ -29,14 +32,13 @@ enum class Sh1106FlushResult : uint8_t {
  */
 class Sh1106 final {
 public:
-    static constexpr uint32_t kI2cFreqHz = 400000U; // Hz，SH1106 400 kHz 快速模式
-    static constexpr int kI2cXferTimeoutMs =
-        8; // ms，单页 130 B @ 400 kHz 约 3 ms；双次 < 20 ms 互斥等待
+    static constexpr uint32_t kI2cFreqHz = 400000U;      // Hz，SH1106 400 kHz 快速模式
+    static constexpr uint32_t kPageTimeoutBudgetMs = 8U; // ms，单页命令与数据共用超时传参预算
+    static constexpr int kI2cXferTimeoutMs = 8;          // ms，单次配置/关屏命令超时上限
     static constexpr uint32_t kPowerSettleMs = 100U;     // ms，SH1106 上电稳定延时
     static constexpr uint8_t kColumnOffset = 2U;         // SH1106 132 列 RAM 居中偏移
     static constexpr size_t kPageTxBytes = 1U + 128U;    // 控制字节 0x40 + 128 列像素
     static constexpr uint8_t kMaxErrorBackoffTicks = 4U; // 连续失败最大退避轮数（5 Hz 下约 1 s）
-
     constexpr Sh1106() noexcept = default;
     ~Sh1106() = default;
     Sh1106(const Sh1106 &) = delete;
@@ -55,17 +57,18 @@ public:
      */
     [[nodiscard]] fw::Status init(const OledPins &pins) noexcept;
 
+    [[nodiscard]] Sh1106FlushResult
+    flush(const ScreenBuff &fb, bool forceFull = false,
+          std::optional<uint32_t> deadlineMs = std::nullopt) noexcept;
+
     /**
-     * @brief 按页对比摘要，仅将发生变化的页经 I2C 写出到 SH1106（每页独立加解锁）
-     * @param fb: 8×128 单色帧缓冲（WouoUI ScreenBuff）
-     * @param forceFull: true 时跳过摘要对比，强制写出全部 8 页
-     * @retval kWritten 至少写出一页且无错误
-     * @retval kSkipped 内容完全未变，未发起任何 I2C 写操作
-     * @retval kError 至少一页写失败
-     * @retval kDisabled 面板未就绪或已断电
-     * @note 仅 OLED 任务调用，每页最多阻塞约 3 ms + 锁等待，非 ISR。
+     * @brief 清除连续错误退避计数，供 USB 关机终帧在 30 ms 窗口内立即补刷
+     * @note 仅 OLED 任务调用，不阻塞，非 ISR。
      */
-    [[nodiscard]] Sh1106FlushResult flush(const ScreenBuff &fb, bool forceFull = false) noexcept;
+    void clearBackoff() noexcept
+    {
+        backoffSkips_ = 0U;
+    }
 
     /**
      * @brief 关机前关闭 SH1106 显示与电荷泵并拉低电源脚（GPIO12）
@@ -114,6 +117,26 @@ public:
         return i2cErrors_;
     }
 
+    /**
+     * @brief 取得最近一次 flush() 实际写出的脏页数（0..8）
+     * @retval 最近一帧脏页数
+     * @note 纯查询，非 ISR。
+     */
+    [[nodiscard]] uint8_t lastDirtyPages() const noexcept
+    {
+        return lastDirtyPages_;
+    }
+
+    /**
+     * @brief 取得累计写出的脏页总数
+     * @retval 累计脏页数
+     * @note 纯查询，非 ISR。
+     */
+    [[nodiscard]] uint32_t totalDirtyPages() const noexcept
+    {
+        return totalDirtyPages_;
+    }
+
 private:
     /**
      * @brief 配置并驱动 OLED 电源使能脚
@@ -154,11 +177,12 @@ private:
                                        std::span<const uint8_t, oled::kWidth> data) noexcept;
 
     /**
-     * @brief 传输超时且释放旧锁后复位共享 I2C 总线，避免 SDA 卡死
-     * @param status: 刚完成事务的状态码，仅 kTimeout 时触发复位
+     * @brief 释放旧锁后处理传输结果，超时或 IDF 的非正常响应触发总线复位
+     * @param err: IDF 同步事务返回码
+     * @retval 映射后的框架错误码
      * @note 调用方不得持有 i2c::BusLock，非 ISR。
      */
-    static void recoverBusOnTimeout(fw::Status status) noexcept;
+    [[nodiscard]] static fw::Status finishTransfer(esp_err_t err) noexcept;
 
     // 全部成员全零默认初值，确保静态实例 s_panel 落入 .dram0.bss（ROL1-04）。
     int i2cPort_ = 0;
@@ -176,6 +200,8 @@ private:
     bool poweredOff_ = false;
     uint8_t consecutiveErrors_ = 0U;
     uint8_t backoffSkips_ = 0U;
+    uint8_t lastDirtyPages_ = 0U;
+    uint32_t totalDirtyPages_ = 0U;
     uint32_t i2cErrors_ = 0U;
 };
 

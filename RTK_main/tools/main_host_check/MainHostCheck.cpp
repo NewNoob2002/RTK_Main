@@ -53,6 +53,13 @@ bool factoryUnlocked() noexcept
 // 测试向量、故障注入时刻与协议原始数值直接对照断言；不用于产品逻辑。
 namespace {
 std::atomic<uint32_t> s_clock{100U};
+thread_local const std::chrono::steady_clock::time_point *s_wall_clock_start = nullptr;
+
+struct PowerWaitClock {
+    uint32_t firstGapMs = 0U;
+    unsigned waits = 0U;
+};
+thread_local PowerWaitClock *s_power_wait_clock = nullptr;
 uint32_t s_write_delay = 0U;
 std::array<size_t, 2> s_tx_used{};
 std::array<bool, 2> s_tx_reserved{};
@@ -71,7 +78,7 @@ esp_err_t s_nvs_init_result = ESP_OK;
 unsigned s_nvs_init_calls = 0U;
 unsigned s_user_erases = 0U;
 unsigned s_factory_erases = 0U;
-unsigned s_restarts = 0U;
+std::atomic<unsigned> s_restarts{0U};
 esp_err_t s_erase_result = ESP_OK;
 std::array<uint8_t, core::kAddrLen> s_bt_mac{0x10U, 0x20U, 0x30U, 0x40U, 0xB5U, 0xF2U};
 esp_err_t s_bt_mac_result = ESP_OK;
@@ -99,6 +106,7 @@ unsigned s_gpio4Presses = 0U;
 bool s_chargerBusy = false;
 bool s_chargerReady = true;
 bool s_usbGpioConfigFails = false;
+fw::Status s_safeOutputsStatus = fw::Status::kOk;
 bool s_batteryReadFails = false;
 uint32_t s_batteryMv = 0U;
 uint8_t s_chargerReg = app::board::kSgmReg08PgBit;
@@ -389,6 +397,7 @@ void powerShortKeyUi()
 {
     using namespace app;
     setupPower(board::BootMode::kNormal);
+    s_gpioLevels[25] = 1; // U3 上电保持中，直到测试显式模拟 U3 关断
     auto &ctx = appContext();
     struct WakeObserver {
         AppContext *app = nullptr;
@@ -426,10 +435,295 @@ void powerShortKeyUi()
     CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
     pollPower(1U);
     CHECK(obs.sawAnnounceOnWake == 1U);
+    CHECK(ctx.data.powerStatus.read().shutdownDoneMask ==
+          board::shutdownDoneBit(board::ShutdownDoneBit::kAnnounced));
     // 推进至 kCutPower -> 唤醒瞬间 powerStatus.shutdownStage 必须已发布为 kCutPower。
     pollPower(80U);
     CHECK(obs.sawCutPowerOnWake == 1U);
+    CHECK((ctx.data.powerStatus.read().shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kCutPower)) != 0U);
+    // USB 路径 + OLED 在线：U3 翻转前全程保持 s_restarts == 0（不清零，R2OL2-05）；
+    // U3 掉电后先发布 kUsbOffReady，越过 30 ms 日志排空点后再过 20 ms（共 50 ms）仍被拦住，
+    // OLED 标记终帧刷出后在 30 ms 额外上限之前（+25 ms）立刻重启（ROL2-01/ROL2-02）。
+    CHECK(s_restarts == 0U);
+    ctx.data.uiEvents.setOledActive(true);
+    s_gpioLevels[27] = 1; // USB 在位
+    s_gpioLevels[25] = 0; // U3 关断
+    pollPower(1U);
+    CHECK((ctx.data.powerStatus.read().shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) != 0U);
+    CHECK(s_restarts == 0U);
+    pollPower(3U); // +30 ms：日志排空点到达，锁存日志放行并开始计 OLED 30 ms 绝对截止
+    CHECK(s_restarts == 0U);
+    pollPower(2U); // +50 ms（日志排空后 +20 ms < 30 ms 上限）：仍不得重启
+    CHECK(s_restarts == 0U);
+    ctx.data.uiEvents.markShutdownFinalFrameFlushed();
+    pollPower(1U, 5U); // +55 ms（日志排空后 +25 ms < 30 ms 上限）：因终帧置位立刻重启
+    CHECK(s_restarts == 1U);
+    ctx.data.uiEvents.setOledActive(false);
     ctx.data.uiEvents.setWakeHook(nullptr, nullptr);
+}
+
+/**
+ * @brief 驱动电源模块完成正常关机前序阶段并触发 USB 关机 U3 掉电进入 restartPending
+ * @param oledActive: 模拟 OLED 刷新任务是否在线
+ */
+void driveToUsbCutRestart(bool oledActive)
+{
+    using namespace app;
+    CHECK(s_restarts == 0U);
+    setupPower(board::BootMode::kNormal);
+    s_gpioLevels[25] = 1; // U3 上电保持中
+    auto &ctx = appContext();
+    ctx.data.uiEvents.setOledActive(oledActive);
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    pollPower(85U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
+    // R2OL2-05：绝不清零 s_restarts，在 U3 翻转前显式断言未发生过误重启。
+    CHECK(s_restarts == 0U);
+    s_gpioLevels[27] = 1; // USB 在位
+    s_gpioLevels[25] = 0; // U3 关断
+    pollPower(1U);
+    CHECK((ctx.data.powerStatus.read().shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) != 0U);
+    CHECK(s_restarts == 0U);
+}
+
+/** @brief 验证 USB 关机 + OLED 在线：日志排空后拦住重启，标记终帧刷出后在上限内立刻重启（ROL2-01/02）。 */
+void powerOledUsbFinalFlush()
+{
+    driveToUsbCutRestart(true);
+    auto &ctx = app::appContext();
+    pollPower(3U, 10U); // +30 ms 日志排空点
+    CHECK(s_restarts == 0U);
+    pollPower(2U, 10U); // 日志排空后 +20 ms：OLED 尚未刷完终帧，不得重启
+    CHECK(s_restarts == 0U);
+    ctx.data.uiEvents.markShutdownFinalFrameFlushed();
+    pollPower(1U, 5U); // 日志排空后 +25 ms（< 30 ms 上限）：终帧置位后立刻重启
+    CHECK(s_restarts == 1U);
+    ctx.data.uiEvents.setOledActive(false);
+}
+
+/** @brief 验证 USB 关机 + OLED 终帧永不置位：日志排空后严格等满 30 ms 额外上限才兜底重启（ROL2-01/02）。 */
+void powerOledUsbFinalTimeout()
+{
+    driveToUsbCutRestart(true);
+    pollPower(3U, 10U); // +30 ms 日志排空点，启动 30 ms OLED 上限计时
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 29U); // 日志排空后 +29 ms：尚未满 30 ms 上限，不得重启
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 1U); // 日志排空后恰好 +30 ms：触发超时兜底重启
+    CHECK(s_restarts == 1U);
+    app::appContext().data.uiEvents.setOledActive(false);
+}
+
+/** @brief 验证无 OLED 板型 USB 关机：在 30 ms 日志排空点 0 额外等待立即重启（ROL2-01/02）。 */
+void powerOledUsbAbsentNoWait()
+{
+    driveToUsbCutRestart(false);
+    pollPower(2U, 10U); // +20 ms：日志最小等待尚未满足
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 10U); // +30 ms：日志排空即刻重启（0 ms 额外等待）
+    CHECK(s_restarts == 1U);
+}
+
+/** @brief 验证 OLED 在日志排空前已刷出终帧：在 30 ms 日志排空点 0 额外等待立即重启（ROL2-01/02）。 */
+void powerOledUsbAlreadyFlushed()
+{
+    driveToUsbCutRestart(true);
+    auto &ctx = app::appContext();
+    pollPower(1U, 10U); // +10 ms：OLED 已提前刷完终帧
+    CHECK(s_restarts == 0U);
+    ctx.data.uiEvents.markShutdownFinalFrameFlushed();
+    pollPower(1U, 10U); // +20 ms：仍等日志排空
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 10U); // +30 ms：日志排空且终帧已就绪，0 ms 额外等待立即重启
+    CHECK(s_restarts == 1U);
+    ctx.data.uiEvents.setOledActive(false);
+}
+
+/** @brief 验证首次日志排空锁存后即便日志环重新变忙，仍在 +30 ms 绝对截止重启而非拖到 +150 ms（R2OL2-01）。 */
+void powerOledUsbLogRebusy()
+{
+    using namespace app;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    auto &debug = ctx.debug;
+    std::array<fw::TraceEvent, DebugModule::kRingEvents> trace{};
+    std::array<uint8_t, DebugModule::kLogRingBytes> log{};
+    std::array<StackType_t, DebugModule::kTaskStackBytes / sizeof(StackType_t)> stack{};
+    CHECK(fw::isOk(debug.bindStorage({trace, log, stack})));
+    CHECK(fw::isOk(debug.init()));
+    CHECK(fw::isOk(debug.attachLog()));
+
+    s_gpioLevels[25] = 1;
+    ctx.data.uiEvents.setOledActive(true);
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    pollPower(100U);
+    CHECK(ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kCutPower);
+    CHECK(s_restarts == 0U);
+
+    s_gpioLevels[27] = 1;
+    s_gpioLevels[25] = 0;
+    pollPower(1U);
+    CHECK(s_restarts == 0U);
+    // 排空日志并推进至 +30 ms：首次排空锁存放行，开启 30 ms OLED 截止计时。
+    while (ModuleTestAccess::pumpLogs()) {
+    }
+    CHECK(debug.logOutputIdle());
+    pollPower(3U, 10U); // +30 ms
+    CHECK(s_restarts == 0U);
+
+    // 注入新日志令日志环重新变忙（!logOutputIdle()）：不得推翻已锁存的放行状态。
+    FW_LOGI(fw::TraceCat::kSys, "late log during oled final flush");
+    CHECK(!debug.logOutputIdle());
+    pollPower(1U, 29U); // +59 ms（+29 ms）
+    CHECK(s_restarts == 0U);
+    pollPower(1U, 1U); // +60 ms（+30 ms）：绝对截止触发重启，而非拖到 +150 ms
+    CHECK(s_restarts == 1U);
+    ctx.data.uiEvents.setOledActive(false);
+}
+
+/**
+ * @brief 验证非整除 11 ms 轮询与真实任务唤醒：终帧完成事件或精确 30 ms 截止直接唤醒重启路径（R2OL2-01）
+ * @param wakeByFlush: true 验证终帧完成即时唤醒；false 验证 30 ms 绝对截止唤醒（无需 +66 ms 轮询）
+ */
+void powerOledUsbNonalignedWake(bool wakeByFlush)
+{
+    using namespace app;
+    driveToUsbCutRestart(true);
+    auto &ctx = appContext();
+    // 按 11 ms 非整除序列推进至 +22 ms（尚未到达 30 ms 日志最小窗口）。
+    pollPower(2U, 11U);
+    CHECK(s_restarts == 0U);
+
+    struct WakeTaskArg {
+        AppContext *app = nullptr;
+        std::binary_semaphore entered{0};
+        std::binary_semaphore finished{0};
+        uint32_t elapsedWallMs = 0U;
+    };
+    static StaticTask_t s_wakeTcb{};
+    static std::array<StackType_t, 64U> s_wakeStack{};
+    WakeTaskArg arg{.app = &ctx};
+    const TaskHandle_t handle = xTaskCreateStaticPinnedToCore(
+        [](void *raw) {
+            auto &a = *static_cast<WakeTaskArg *>(raw);
+            const auto t0 = std::chrono::steady_clock::now();
+            s_wall_clock_start = &t0;
+            a.entered.release();
+            s_clock += 11U; // +33 ms 非整除轮询点：锁存放行并在真实任务中进入 waitOledFinalFrame
+            static_cast<void>(a.app->power.poll(s_clock));
+            s_wall_clock_start = nullptr;
+            const auto t1 = std::chrono::steady_clock::now();
+            a.elapsedWallMs = static_cast<uint32_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+            a.finished.release();
+        },
+        "pwr_wake", static_cast<uint32_t>(s_wakeStack.size()), &arg, 10U, s_wakeStack.data(),
+        &s_wakeTcb, 1);
+    CHECK(handle != nullptr);
+    arg.entered.acquire();
+    if (wakeByFlush) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(s_restarts == 0U);
+        ctx.data.uiEvents.markShutdownFinalFrameFlushed();
+    }
+    arg.finished.acquire();
+    CHECK(s_restarts == 1U);
+    if (wakeByFlush) {
+        // 由终帧完成钩子直接唤醒，明显短于 30 ms 截止上限。
+        CHECK(arg.elapsedWallMs < 25U);
+    } else {
+        // 由 30 ms 截止 tick 直接唤醒并重启，无需等到下一个 11 ms 轮询点（+66 ms）。
+        CHECK(arg.elapsedWallMs >= 25U && arg.elapsedWallMs <= 80U);
+    }
+    ctx.data.uiEvents.setOledActive(false);
+}
+
+/**
+ * @brief 模拟从读取截止时钟到进入 RTOS 相对等待之间被抢占
+ * @param gapMs: 首次等待前流逝的时间，覆盖未到期和已过期两种恢复场景
+ */
+void powerOledUsbPreemptedWait(uint32_t gapMs)
+{
+    driveToUsbCutRestart(true);
+    pollPower(2U, 11U);
+    s_clock += 11U;
+    const uint32_t gateMs = s_clock;
+    PowerWaitClock clock{.firstGapMs = gapMs};
+    s_use_host_task = true;
+    s_power_wait_clock = &clock;
+    static_cast<void>(app::appContext().power.poll(gateMs));
+    s_power_wait_clock = nullptr;
+    s_use_host_task = false;
+
+    const uint32_t elapsed = s_clock - gateMs;
+    CHECK(clock.waits > 0U);
+    CHECK(elapsed >= std::max(30U, gapMs));
+    CHECK(elapsed <= std::max(30U, gapMs) + 1U);
+    CHECK(s_restarts == 1U);
+}
+
+/** @brief 验证保存超时、射频静默超时与安全输出电平失败不伪造完成位，独立暴露降级掩码并沿用基线兜底重启（R2OL2-02）。 */
+void powerShutdownDegradedMasks()
+{
+    using namespace app;
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    s_gpioLevels[25] = 1;
+    // 1. 注入保存失败（待写 NVS 不清）、BT 连接不响应暂停、外设安全输出失败。
+    ctx.storage.markWhitelistDirty(std::array{kAlarm}, s_clock);
+    s_store_result = ESP_FAIL;
+    open(1U, kPhone);
+    s_safeOutputsStatus = fw::Status::kIoError;
+
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    // 推进 1.1 s 令 kSave 超时进入 kQuiesce。
+    pollPower(115U);
+    const PowerSnapshot qSnap = ctx.data.powerStatus.read();
+    CHECK(qSnap.shutdownStage == board::ShutdownStage::kQuiesce);
+    CHECK((qSnap.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed)) ==
+          0U);
+    CHECK((qSnap.shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kPeripheralsSafe)) == 0U);
+    CHECK((qSnap.shutdownDegradedMask &
+           board::shutdownDegradedBit(board::ShutdownDegradedBit::kSaveTimeout)) != 0U);
+    CHECK((qSnap.shutdownDegradedMask &
+           board::shutdownDegradedBit(board::ShutdownDegradedBit::kPeripheralsFailed)) != 0U);
+
+    // 推进 200 ms 令 BT 静默超时进入 kCutPower：射频完成位必须仍为 0，降级位含 kRadioTimeout。
+    pollPower(20U);
+    const PowerSnapshot cSnap = ctx.data.powerStatus.read();
+    CHECK(cSnap.shutdownStage == board::ShutdownStage::kCutPower);
+    CHECK((cSnap.shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced)) == 0U);
+    CHECK((cSnap.shutdownDegradedMask &
+           board::shutdownDegradedBit(board::ShutdownDegradedBit::kRadioTimeout)) != 0U);
+    CHECK(s_restarts == 0U);
+
+    // USB 在位且 U3 关断：完成位仍不含失败项、降级位保留，并按基线策略执行 USB 兜底重启。
+    s_gpioLevels[27] = 1;
+    s_gpioLevels[25] = 0;
+    pollPower(1U);
+    const PowerSnapshot uSnap = ctx.data.powerStatus.read();
+    CHECK((uSnap.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady)) !=
+          0U);
+    CHECK((uSnap.shutdownDoneMask & board::shutdownDoneBit(board::ShutdownDoneBit::kSaveFlushed)) ==
+          0U);
+    CHECK((uSnap.shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kPeripheralsSafe)) == 0U);
+    CHECK((uSnap.shutdownDoneMask &
+           board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced)) == 0U);
+    CHECK((uSnap.shutdownDegradedMask &
+           board::shutdownDegradedBit(board::ShutdownDegradedBit::kSaveTimeout)) != 0U);
+    CHECK((uSnap.shutdownDegradedMask &
+           board::shutdownDegradedBit(board::ShutdownDegradedBit::kPeripheralsFailed)) != 0U);
+    CHECK((uSnap.shutdownDegradedMask &
+           board::shutdownDegradedBit(board::ShutdownDegradedBit::kRadioTimeout)) != 0U);
+    pollPower(4U);
+    CHECK(s_restarts == 1U);
+    s_safeOutputsStatus = fw::Status::kOk;
 }
 
 struct ExecutorRound {
@@ -772,6 +1066,16 @@ void powerTimeoutRecovery()
 {
     using namespace app;
     setupPower(board::BootMode::kNormal);
+    uint32_t traceElapsed = 0U;
+    const auto traceShutdownAbort = [](void *data, const fw::TraceEvent &event) noexcept {
+        if (event.cat == fw::TraceCat::kSys &&
+            event.code == static_cast<uint8_t>(PowerTrace::kShutdownAbort)) {
+            // traceInstall 原样转发本场景提供的 uint32_t 指针。
+            *static_cast<uint32_t *>(data) = event.b;
+        }
+    };
+    CHECK(fw::isOk(fw::traceInstall(traceShutdownAbort, &traceElapsed, &rtos::nowMs)));
+    fw::traceSetMask(fw::traceBit(fw::TraceCat::kSys));
     auto &ctx = appContext();
     s_gpioLevels[25] = 1;
     s_scanResult = ESP_ERR_NOT_FINISHED;
@@ -803,6 +1107,7 @@ void powerTimeoutRecovery()
     pollPower(1U);
     CHECK(s_gpioLevels[4] == 0 &&
           ctx.data.powerStatus.read().shutdownStage == board::ShutdownStage::kIdle);
+    CHECK(traceElapsed == board::kShutdownCutTimeoutMs);
     CHECK(s_restarts == 0U && power::s_power_requests.canScheduleRestart());
     s_scanResult = ESP_OK;
     static_cast<void>(ctx.bt_link.poll(s_clock));
@@ -1270,13 +1575,33 @@ void lifecycleApplication()
 namespace rtos {
 uint32_t nowMs() noexcept
 {
-    return s_clock;
+    const auto elapsed = s_wall_clock_start == nullptr
+                             ? 0
+                             : std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - *s_wall_clock_start)
+                                   .count();
+    return s_clock + static_cast<uint32_t>(elapsed);
 }
 fw::Status fromEspErr(esp_err_t err) noexcept
 {
     return (err == ESP_OK) ? fw::Status::kOk : fw::Status::kTimeout;
 }
 } // namespace rtos
+
+extern "C" uint32_t __real_ulTaskNotifyTake(BaseType_t clearOnExit, TickType_t ticks);
+
+/** @brief 在真实主机替身等待前注入可控的抢占间隙，事件通知用例仍走原替身。 */
+extern "C" uint32_t __wrap_ulTaskNotifyTake(BaseType_t clearOnExit, TickType_t ticks)
+{
+    if (s_power_wait_clock == nullptr) {
+        return __real_ulTaskNotifyTake(clearOnExit, ticks);
+    }
+    if (s_power_wait_clock->waits++ == 0U) {
+        s_clock += s_power_wait_clock->firstGapMs;
+    }
+    s_clock += ticks;
+    return 0U;
+}
 
 extern "C" {
 void fake_log(const char *, const char *, const char *, ...) {}
@@ -2480,7 +2805,7 @@ namespace app::board {
 fw::Status setSafeOutputLevels(const Profile &) noexcept
 {
     s_gpioLevels[4] = 0;
-    return fw::Status::kOk;
+    return s_safeOutputsStatus;
 }
 
 /** @brief 本用例可启用虚拟 ADC。 @param gpio: 板级 ADC 输入。 @retval kOk 已启用。 @retval kNotFound 无模拟传感器。 */
@@ -2556,6 +2881,26 @@ int main(int argc, const char **raw_args)
         powerStandby();
     } else if (std::strcmp(argv[1], "power_short_key_ui") == 0) {
         powerShortKeyUi();
+    } else if (std::strcmp(argv[1], "power_oled_usb_final_flush") == 0) {
+        powerOledUsbFinalFlush();
+    } else if (std::strcmp(argv[1], "power_oled_usb_final_timeout") == 0) {
+        powerOledUsbFinalTimeout();
+    } else if (std::strcmp(argv[1], "power_oled_usb_absent_no_wait") == 0) {
+        powerOledUsbAbsentNoWait();
+    } else if (std::strcmp(argv[1], "power_oled_usb_already_flushed") == 0) {
+        powerOledUsbAlreadyFlushed();
+    } else if (std::strcmp(argv[1], "power_oled_usb_log_rebusy") == 0) {
+        powerOledUsbLogRebusy();
+    } else if (std::strcmp(argv[1], "power_oled_usb_wake_on_flush") == 0) {
+        powerOledUsbNonalignedWake(true);
+    } else if (std::strcmp(argv[1], "power_oled_usb_wake_on_deadline") == 0) {
+        powerOledUsbNonalignedWake(false);
+    } else if (std::strcmp(argv[1], "power_oled_usb_preempt_before_deadline") == 0) {
+        powerOledUsbPreemptedWait(5U);
+    } else if (std::strcmp(argv[1], "power_oled_usb_preempt_across_deadline") == 0) {
+        powerOledUsbPreemptedWait(31U);
+    } else if (std::strcmp(argv[1], "power_shutdown_degraded_masks") == 0) {
+        powerShutdownDegradedMasks();
     } else if (std::strcmp(argv[1], "power_log_drain") == 0) {
         powerLogDrain();
     } else if (std::strcmp(argv[1], "power_low_battery") == 0) {

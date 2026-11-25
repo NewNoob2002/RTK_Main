@@ -217,6 +217,48 @@ private:
     void setKeyDrive(bool high) noexcept;
 
     /**
+     * @brief 计算当前关机阶段的已完成里程碑位掩码（供 OLED 关机进度页只读消费）
+     * @retval ShutdownDoneBit 组合掩码，空闲态为 0
+     * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] uint8_t computeShutdownDoneMask() const noexcept;
+
+    /**
+     * @brief 计算当前关机阶段的降级结果位掩码（超时/外设安全电平失败，与完成位独立）
+     * @retval ShutdownDegradedBit 组合掩码，无降级或空闲态为 0
+     * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] uint8_t computeShutdownDegradedMask() const noexcept;
+
+    /**
+     * @brief 判断应用层无线业务是否已完成关机收尾
+     * @retval true SPP 已断开且扫描关闭请求已提交，或 SoftAP 已停用，或无需收尾
+     * @retval false 本模式的应用层收尾仍在进行
+     * @note 仅 kLink 调用，不阻塞，非 ISR。
+     */
+    [[nodiscard]] bool isRadioQuiesced() const noexcept;
+
+    /**
+     * @brief 复位单次关机周期的真实完成位与降级位记录
+     * @note 仅 init 或 kLink 调用，不阻塞，非 ISR。
+     */
+    void resetShutdownProgress() noexcept;
+
+    /**
+     * @brief 在真实 FreeRTOS 任务上下文中等待 OLED USB 终帧完成通知或到达绝对 30 ms 截止
+     * @param self: 当前任务句柄（非空）
+     * @note 仅 USB 关机重启前最后一步调用，每次相对等待最多一 tick，非 ISR。
+     */
+    void waitOledFinalFrame(TaskHandle_t self) noexcept;
+
+    /**
+     * @brief 供 UiEventBus 终帧刷出后调用的非阻塞重启唤醒钩子
+     * @param ctx: 未使用
+     * @note 由 OLED 任务调用，不阻塞，非 ISR。
+     */
+    static void wakeRestartWait(void *ctx) noexcept;
+
+    /**
      * @brief 在状态变化时发布电源快照到 DataCenter
      * @param pins: 本轮采样电平
      * @param force: true 强制写入（init 时使用）
@@ -236,6 +278,15 @@ private:
     bool ioFenceReached_ = false;
     bool restartPending_ = false;
     uint32_t restartStartMs_ = 0U;
+    bool restartLogReady_ = false;
+    uint32_t oledWaitDeadlineMs_ = 0U;
+    bool saveFencesDone_ = false;
+    bool saveFlushedDone_ = false;
+    bool saveTimedOut_ = false;
+    bool peripheralsSafeDone_ = false;
+    bool peripheralsSafeFailed_ = false;
+    bool radioQuiescedDone_ = false;
+    bool radioTimedOut_ = false;
     uint32_t shortPresses_ = 0U;
     uint32_t longPresses_ = 0U;
     uint32_t quiesceStartMs_ = 0U;

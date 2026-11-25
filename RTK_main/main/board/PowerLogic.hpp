@@ -56,6 +56,46 @@ enum class ShutdownStage : uint8_t {
     kCutPower,
 };
 
+/** 关机序列已完成里程碑位掩码（CODING-STYLE 规则 3，供 OLED 关机进度页只读消费）。 */
+enum class ShutdownDoneBit : uint8_t {
+    kAnnounced = 1U << 0U,       ///< 已进入关机流程（kAnnounce）
+    kSaveFences = 1U << 1U,      ///< kLink / kIo 队尾保存栅栏已到达
+    kSaveFlushed = 1U << 2U,     ///< NVS 延迟写与在途设置已落盘（进入 kQuiesce）
+    kRadioQuiesced = 1U << 3U,   ///< SPP 已断开且扫描关闭请求已提交，或 SoftAP 已停用
+    kPeripheralsSafe = 1U << 4U, ///< 外设输出已置安全电平
+    kCutPower = 1U << 5U,        ///< 已进入断电动作阶段（kCutPower）
+    kUsbOffReady = 1U << 6U,     ///< USB 路径 U3 已关断，等待最后一帧刷出后重启
+};
+
+/**
+ * @brief 取得关机完成里程碑位对应的 uint8_t 掩码
+ * @param bit: 关机里程碑位枚举
+ * @retval 对应位掩码
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] constexpr uint8_t shutdownDoneBit(ShutdownDoneBit bit) noexcept
+{
+    return static_cast<uint8_t>(bit);
+}
+
+/** 关机序列降级结果位掩码（超时/失败后仍按基线策略强制下电或 USB 重启兜底，供 OLED 独立展示降级文案）。 */
+enum class ShutdownDegradedBit : uint8_t {
+    kSaveTimeout = 1U << 0U,       ///< kSave 超时（1 s）仍有未落盘项或未到达栅栏
+    kPeripheralsFailed = 1U << 1U, ///< 外设安全电平配置返回错误
+    kRadioTimeout = 1U << 2U,      ///< 蓝牙或 Wi-Fi SoftAP 静默断开超时
+};
+
+/**
+ * @brief 取得关机降级结果位对应的 uint8_t 掩码
+ * @param bit: 关机降级结果位枚举
+ * @retval 对应位掩码
+ * @note 纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] constexpr uint8_t shutdownDegradedBit(ShutdownDegradedBit bit) noexcept
+{
+    return static_cast<uint8_t>(bit);
+}
+
 inline constexpr uint32_t kKeyPollPeriodMs = 10U;         // ms，按键轮询周期
 inline constexpr uint32_t kKeyDebounceMs = 30U;           // ms，按键消抖时间
 inline constexpr uint32_t kKeyShortMaxMs = 1000U;         // ms，短按上限（严格小于触发 kShort）

@@ -316,6 +316,12 @@ int64_t esp_timer_get_time(void)
     return static_cast<int64_t>(s_nowMs) * 1000LL;
 }
 
+/** @brief 主机测试桩：单线程网页回归无当前 FreeRTOS 任务句柄。 @retval nullptr 总是。 */
+TaskHandle_t xTaskGetCurrentTaskHandle(void)
+{
+    return nullptr;
+}
+
 esp_reset_reason_t esp_reset_reason(void)
 {
     return ESP_RST_POWERON;

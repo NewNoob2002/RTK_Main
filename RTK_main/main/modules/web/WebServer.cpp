@@ -1101,6 +1101,7 @@ fw::Result WebModule::init() noexcept
 #endif
     idleTimer_.start(now, static_cast<uint32_t>(CONFIG_RTK_WIFI_IDLE_EXIT_S) * kMsPerSecond);
     initialized_ = true;
+    ctx().data.wifiReady.store(true, std::memory_order_release);
 #if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
     const char *const portalState = dnsOpen_ ? "on" : "degraded";
 #else
@@ -1174,6 +1175,9 @@ void WebModule::stopBoot() noexcept
     teardownServer();
     if (httpd_ == nullptr) {
         initialized_ = false;
+        if (context_ != nullptr) {
+            ctx().data.wifiReady.store(false, std::memory_order_release);
+        }
     }
 }
 
