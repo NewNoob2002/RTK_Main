@@ -146,7 +146,6 @@ constexpr int16_t kCardUsbIconY = 9;
 constexpr size_t kSubRowLabelBytes = 12U;
 constexpr size_t kSubRowValBytes = 16U;
 constexpr size_t kSubPosRowCount = 5U;
-constexpr size_t kSubCommWifiRowCount = 3U;
 constexpr size_t kSubCommBtRowCount = 4U;
 constexpr size_t kSubDeviceRowCount = 5U;
 constexpr size_t kSubPowerRowCount = 5U;
@@ -208,22 +207,30 @@ constexpr int16_t kShutStepsY = 44;
 constexpr uint8_t kModalCornerR = 3U;
 constexpr int16_t kWifiModalTitleY = 9;
 constexpr int16_t kWifiModalWarningY = 26;
-constexpr int16_t kWifiModalControlsY = 49;
 constexpr int16_t kPairModalTitleY = 7;
 constexpr int16_t kPairModalPeerY = 18;
 constexpr int16_t kPairModalNumberY = 29;
-constexpr int16_t kPairModalControlsY = 51;
 constexpr int16_t kPwrModalTitleY = 10;
-constexpr int16_t kPwrModalHintY = 25;
 constexpr int16_t kRebootIconY = 8;
 constexpr int16_t kRebootTitleY = 30;
 constexpr int16_t kRebootSubY = 46;
 constexpr int16_t kPwrModalBarX = 12;
-constexpr int16_t kPwrModalBarY = 41;
+constexpr int16_t kPwrModalBarY = 32;
 constexpr int16_t kPwrModalBarW = 84;
 constexpr int16_t kPwrModalBarH = 8;
 constexpr int16_t kPwrModalSecX = 101;
 constexpr int16_t kPwrModalTextOffX = 11;
+constexpr size_t kModalInsideX = 4U;
+constexpr int16_t kModalButtonX = 11;
+constexpr int16_t kModalButtonY = 48;
+constexpr int16_t kModalButtonW = 50;
+constexpr int16_t kModalButtonH = 12;
+constexpr int16_t kModalButtonLabelY = kModalButtonY + 2;
+constexpr size_t kModalButtonPage = 6U;
+constexpr size_t kModalButtonTailPage = 7U;
+constexpr size_t kModalTimerPage = 4U;
+constexpr uint8_t kModalButtonTailKeep = 0xF0U;
+constexpr uint8_t kModalClearPage = 0U;
 constexpr int16_t kShutPendingDotOffY = 3;
 constexpr int16_t kHoldBoxY = 10;
 constexpr int16_t kHoldBoxW = 116;
@@ -883,7 +890,8 @@ void drawSubRow(Canvas &listClip, const SubListRow &row, int16_t rowY) noexcept
     }
     const std::string_view lbl = viewOf(row.label);
     const std::string_view val = viewOf(row.value);
-    int16_t minValX = kSubRowTextX;
+    constexpr int16_t kUnlabelledValueX = 2; // 13 个 Font_6_8 字符可完整放入右侧列表。
+    int16_t minValX = (lbl.empty() && row.icon7x8 == nullptr) ? kUnlabelledValueX : kSubRowTextX;
     if (!lbl.empty()) {
         drawText(listClip, kSubRowTextX, contentY, Font_6_8, lbl);
         const int16_t lblW = static_cast<int16_t>(WouoUI_GetStrWidth(row.label.data(), Font_6_8));
@@ -1179,31 +1187,50 @@ void renderSubPos(Canvas &canvas, const UiRenderState &state, const ViewModel &v
 }
 
 /**
- * @brief 渲染通信子页（左主卡 BT/Wi-Fi 模式图标，右列表：模式切换、配对窗口、已连设备名、Back）
- * @param canvas: 目标画布
- * @param state: 渲染状态
- * @param vm: 视图数据
- * @note 不分配堆。
+ * @brief 绘制 Wi-Fi 模式 COMM 左卡与右列表，地址行使用完整列表宽度。
+ * @param canvas: 目标画布。
+ * @param state: 渲染状态。
+ * @param vm: 已发布的 SoftAP 数据与客户端数。
+ */
+void renderCommWifi(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+{
+    std::array<char, kShortBufBytes> clients{};
+    static_cast<void>(std::snprintf(clients.data(), clients.size(), "%u STA",
+                                    static_cast<unsigned>(vm.wifiClients)));
+    drawSubMainCard(canvas, state, icons::kCardWifi16x16.data(), "WIFI", viewOf(clients), false,
+                    vm);
+    const auto ssid = vm.wifiReady ? viewOf(vm.wifiSsid) : std::string_view{"OFF"};
+    std::array<char, kSubRowValBytes> ip{};
+    if (vm.wifiReady) {
+        const auto [first, second, third, fourth] = vm.wifiIpv4;
+        static_cast<void>(std::snprintf(ip.data(), ip.size(), "%u.%u.%u.%u",
+                                        static_cast<unsigned>(first), static_cast<unsigned>(second),
+                                        static_cast<unsigned>(third),
+                                        static_cast<unsigned>(fourth)));
+    }
+    const auto ipView = viewOf(ip);
+    const std::array<SubListRow, kSubCommWifiRows> rows{{
+        makeRow(icons::kRowRf7x8.data(), "Mode", "WF>BT"),
+        makeRow(icons::kRowPeer7x8.data(), "", ssid.empty() ? "--" : ssid),
+        makeRow(nullptr, "", ipView.empty() ? "--" : ipView),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows);
+}
+
+/**
+ * @brief 渲染通信子页，按当前射频模式选择列表。
+ * @param canvas: 目标画布。
+ * @param state: 渲染状态。
+ * @param vm: 视图数据。
  */
 void renderComm(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
-    const bool wifi = vm.radioMode == RadioMode::kWifiConfig;
-    std::array<char, kShortBufBytes> subBuf{};
-    if (wifi) {
-        static_cast<void>(std::snprintf(subBuf.data(), subBuf.size(), "%u STA",
-                                        static_cast<unsigned>(vm.wifiClients)));
-        drawSubMainCard(canvas, state, icons::kCardWifi16x16.data(), "WIFI", viewOf(subBuf), false,
-                        vm);
-        const std::string_view ssid = vm.wifiReady ? viewOf(vm.wifiSsid) : std::string_view{"OFF"};
-        std::array<SubListRow, kSubCommWifiRowCount> rows{{
-            makeRow(icons::kRowRf7x8.data(), "Mode", "WF>BT"),
-            makeRow(icons::kRowPeer7x8.data(), "", ssid.empty() ? "--" : ssid),
-            makeBackRow(),
-        }};
-        drawSubList(canvas, state, rows);
+    if (vm.radioMode == RadioMode::kWifiConfig) {
+        renderCommWifi(canvas, state, vm);
         return;
     }
-
+    std::array<char, kShortBufBytes> subBuf{};
     static_cast<void>(std::snprintf(subBuf.data(), subBuf.size(), "%u CON",
                                     static_cast<unsigned>(vm.btSessions)));
     drawSubMainCard(canvas, state, icons::kCardBt16x16.data(), "BT", viewOf(subBuf), false, vm);
@@ -1518,49 +1545,13 @@ void renderShutdown(Canvas &canvas, const UiRenderState &state, const ViewModel 
 }
 
 /**
- * @brief 绘制弹窗（关机确认 POWER OFF? / 配对确认 / Wi-Fi 切换确认）
- * @param canvas: 目标画布
- * @param state: 渲染状态
- * @param vm: 视图数据
- * @note 关机确认优先级高于配对弹窗。
+ * @brief 绘制蓝牙配对标题、设备与数字校验码。
+ * @param canvas: 目标画布。
+ * @param pair: 当前配对快照。
  */
-void renderModal(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+void drawPairPrompt(Canvas &canvas, const OledPairingStatus &pair) noexcept
 {
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, 1, 1, static_cast<int16_t>(kCanvasW - 2),
-                               static_cast<int16_t>(kCanvasH - 2), kModalCornerR);
-    if (state.modal == UiModal::kPowerOffConfirm) {
-        // 顶部图标 + POWER OFF?
-        constexpr int16_t kTitleGroupW = 7 + 4 + 60; // icon 7 + gap 4 + 10 chars * 6
-        const int16_t gx = static_cast<int16_t>((kCanvasW - kTitleGroupW) / 2);
-        WouoUI_CanvasDrawBMP(&canvas, gx, kPwrModalTitleY, kIcon7W, kIcon8H,
-                             icons::kRowPwr7x8.data(), 1U);
-        drawText(canvas, static_cast<int16_t>(gx + kPwrModalTextOffX), kPwrModalTitleY, Font_6_8,
-                 "POWER OFF?");
-        drawCentered(canvas, kPwrModalHintY, Font_6_8, "2x=OK  1x=CANCEL");
-
-        WouoUI_CanvasDrawRBoxEmpty(&canvas, kPwrModalBarX, kPwrModalBarY, kPwrModalBarW,
-                                   kPwrModalBarH, 2U);
-        const uint32_t rem = std::min(state.powerOffRemainMs, kPowerOffConfirmMs);
-        const auto fillW = static_cast<int16_t>((static_cast<uint64_t>(rem) * (kPwrModalBarW - 4)) /
-                                                kPowerOffConfirmMs);
-        if (fillW > 0) {
-            WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(kPwrModalBarX + 2),
-                                  static_cast<int16_t>(kPwrModalBarY + 2), fillW, 4, 0U);
-        }
-        const unsigned sec = (rem > 0U) ? (((rem - 1U) / kMsPerSec) + 1U) : 0U;
-        std::array<char, kShortBufBytes> secBuf{};
-        static_cast<void>(std::snprintf(secBuf.data(), secBuf.size(), "%us", sec));
-        drawText(canvas, kPwrModalSecX, kPwrModalBarY, Font_6_8, viewOf(secBuf));
-        return;
-    }
-    if (state.modal == UiModal::kWifiConfirm) {
-        drawCentered(canvas, kWifiModalTitleY, Font_6_8, "SWITCH TO WIFI?");
-        drawCentered(canvas, kWifiModalWarningY, Font_6_8, "BT WILL DISCONNECT");
-        drawCentered(canvas, kWifiModalControlsY, Font_6_8, "1 CANCEL  2 CONFIRM");
-        return;
-    }
     drawCentered(canvas, kPairModalTitleY, Font_6_8, "PAIR REQUEST");
-    const auto &pair = vm.pairing;
     std::array<char, kShortBufBytes> peer{};
     static_cast<void>(std::snprintf(
         peer.data(), peer.size(), "%02X:%02X:%02X", static_cast<unsigned>(pair.suffix[0]),
@@ -1572,7 +1563,138 @@ void renderModal(Canvas &canvas, const UiRenderState &state, const ViewModel &vm
             std::snprintf(peer.data(), peer.size(), "%06u", static_cast<unsigned>(pair.number)));
         drawCentered(canvas, kPairModalNumberY, Font_8_16, viewOf(peer));
     }
-    drawCentered(canvas, kPairModalControlsY, Font_6_8, "1 REJECT  2 ACCEPT");
+}
+
+/**
+ * @brief 画出静态弹窗边框和提示。
+ * @param canvas: 目标画布。
+ * @param modal: 弹窗类型。
+ * @param pair: 配对信息，用于配对类型。
+ */
+void drawModalPrompt(Canvas &canvas, UiModal modal, const OledPairingStatus &pair) noexcept
+{
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, 1, 1, static_cast<int16_t>(kCanvasW - 2),
+                               static_cast<int16_t>(kCanvasH - 2), kModalCornerR);
+    switch (modal) {
+    case UiModal::kPowerOffConfirm: {
+        constexpr int16_t kTitleGroupW = 7 + 4 + 60; // icon 7 + gap 4 + 10 chars * 6
+        const int16_t gx = static_cast<int16_t>((kCanvasW - kTitleGroupW) / 2);
+        WouoUI_CanvasDrawBMP(&canvas, gx, kPwrModalTitleY, kIcon7W, kIcon8H,
+                             icons::kRowPwr7x8.data(), 1U);
+        drawText(canvas, static_cast<int16_t>(gx + kPwrModalTextOffX), kPwrModalTitleY, Font_6_8,
+                 "POWER OFF?");
+        break;
+    }
+    case UiModal::kWifiConfirm:
+        drawCentered(canvas, kWifiModalTitleY, Font_6_8, "SWITCH TO WIFI?");
+        drawCentered(canvas, kWifiModalWarningY, Font_6_8, "BT WILL DISCONNECT");
+        break;
+    case UiModal::kPair:
+        drawPairPrompt(canvas, pair);
+        break;
+    case UiModal::kNone:
+    default:
+        break;
+    }
+}
+
+/**
+ * @brief 清空一个弹窗页内指定的像素行，保留外框。
+ * @param page: 128 列页缓冲。
+ * @param keepMask: 每列应保留的像素位。
+ */
+void clearModalPage(std::span<uint8_t, kWidth> page, uint8_t keepMask) noexcept
+{
+    for (auto &byte : page.subspan(kModalInsideX, kWidth - 2U * kModalInsideX)) {
+        byte &= keepMask;
+    }
+}
+
+/**
+ * @brief 在选项区画出两个标签及随焦点移动的弹簧选择框。
+ * @param canvas: 目标画布。
+ * @param state: 弹窗类型、焦点像素与挤压量。
+ */
+void drawModalChoices(Canvas &canvas, const UiRenderState &state) noexcept
+{
+    const bool pairing = state.modal == UiModal::kPair;
+    Canvas label = canvas;
+    label.start_x = kModalButtonX;
+    label.w = kModalButtonW;
+    drawCentered(label, kModalButtonLabelY, Font_6_8, pairing ? "Reject" : "Cancel");
+    label.start_x += kModalOptionStepX;
+    drawCentered(label, kModalButtonLabelY, Font_6_8, pairing ? "Accept" : "OK");
+    const int16_t inset = state.squishInset;
+    const int16_t x = static_cast<int16_t>(kModalButtonX + state.modalFocusX + inset);
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, x, static_cast<int16_t>(kModalButtonY + inset),
+                               static_cast<int16_t>(kModalButtonW - 2 * inset),
+                               static_cast<int16_t>(kModalButtonH - 2 * inset), kModalCornerR);
+}
+
+/**
+ * @brief 绘制关机确认剩余时间的进度条和秒数。
+ * @param canvas: 目标画布。
+ * @param remainMs: 关机确认剩余时间。
+ */
+void drawPowerConfirmTimer(Canvas &canvas, uint32_t remainMs) noexcept
+{
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, kPwrModalBarX, kPwrModalBarY, kPwrModalBarW, kPwrModalBarH,
+                               2U);
+    const uint32_t rem = std::min(remainMs, kPowerOffConfirmMs);
+    const auto fillW = static_cast<int16_t>(rem * (kPwrModalBarW - 4) / kPowerOffConfirmMs);
+    if (fillW > 0) {
+        WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(kPwrModalBarX + 2),
+                              static_cast<int16_t>(kPwrModalBarY + 2), fillW, 4, 0U);
+    }
+    std::array<char, kShortBufBytes> label{};
+    const unsigned seconds = (rem + kMsPerSec - 1U) / kMsPerSec;
+    static_cast<void>(std::snprintf(label.data(), label.size(), "%us", seconds));
+    drawText(canvas, kPwrModalSecX, kPwrModalBarY, Font_6_8, viewOf(label));
+}
+
+/**
+ * @brief 判断配对弹窗标题区是否需要重绘。
+ * @param a: 上次渲染的配对快照。
+ * @param b: 当前配对快照。
+ * @retval true 显示所需字段相同。
+ */
+[[nodiscard]] bool samePairPrompt(const OledPairingStatus &a, const OledPairingStatus &b) noexcept
+{
+    return a.id == b.id && a.name == b.name && a.suffix == b.suffix && a.hasNumber == b.hasNumber &&
+           a.number == b.number;
+}
+
+/**
+ * @brief 复用弹窗静态区，仅重绘变化的选项页与关机倒计时页。
+ * @param canvas: 目标画布。
+ * @param state: 渲染状态。
+ * @param pair: 当前配对快照。
+ * @param fb: 唯一帧缓冲，缓存对应此帧。
+ * @param previous: 同一缓冲的弹窗缓存，可为空。
+ */
+void renderModal(Canvas &canvas, const UiRenderState &state, const OledPairingStatus &pair,
+                 ScreenBuff &fb, ModalFrame *previous) noexcept
+{
+    const bool reuse = previous != nullptr && previous->modal == state.modal &&
+                       (state.modal != UiModal::kPair || samePairPrompt(previous->pairing, pair));
+    if (reuse) {
+        clearModalPage(fb[kModalButtonPage], kModalClearPage);
+        clearModalPage(fb[kModalButtonTailPage], kModalButtonTailKeep);
+    } else {
+        WouoUI_BuffClear();
+        drawModalPrompt(canvas, state.modal, pair);
+    }
+    if (state.modal == UiModal::kPowerOffConfirm) {
+        clearModalPage(fb[kModalTimerPage], kModalClearPage);
+        drawPowerConfirmTimer(canvas, state.powerOffRemainMs);
+    }
+    drawModalChoices(canvas, state);
+    if (previous != nullptr) {
+        previous->modal = state.modal;
+        if (state.modal == UiModal::kPair) {
+            previous->pairing = pair;
+        }
+    }
 }
 
 /**
@@ -1813,57 +1935,75 @@ void renderIconMorph(Canvas &canvas, const PageTransition &trans, const UiRender
     }
 }
 
+/**
+ * @brief 绘制非弹窗页面及页面切换，子页转场复用状态栏。
+ * @param canvas: 全屏画布。
+ * @param state: 渲染状态。
+ * @param vm: 视图数据。
+ * @param fb: 当前帧缓冲。
+ * @param previousStatusBar: 同一缓冲保有可用的状态栏。
+ * @retval 当前帧包含状态栏。
+ */
+[[nodiscard]] bool renderBaseUi(Canvas &canvas, const UiRenderState &state, const ViewModel &vm,
+                                ScreenBuff &fb, bool previousStatusBar) noexcept
+{
+    const auto *trans = state.transition;
+    if (trans != nullptr && trans->kind == TransitionKind::kSlideLeft) {
+        WouoUI_BuffClear();
+        renderSlideLeft(*trans, state, vm, fb);
+        return false;
+    }
+    const bool showStatusBar =
+        state.page >= OledPage::kDialplate && state.page <= OledPage::kSubPower;
+    const bool morph = showStatusBar && trans != nullptr &&
+                       (trans->kind == TransitionKind::kExpandFromIcon ||
+                        trans->kind == TransitionKind::kCollapseToIcon);
+    if (morph && previousStatusBar) {
+        clearBody(fb);
+    } else {
+        WouoUI_BuffClear();
+        if (showStatusBar) {
+            (state.page == OledPage::kSubSat ? drawSatHeader : drawStatusBar)(canvas, state, vm);
+        }
+    }
+    if (morph) {
+        renderIconMorph(canvas, *trans, state, vm, fb);
+    } else {
+        renderPageInto(canvas, state.page, state, vm);
+    }
+    return showStatusBar;
+}
+
 } // namespace
 
 bool renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb,
-              bool previousStatusBar) noexcept
+              bool previousStatusBar, ModalFrame *modalFrame) noexcept
 {
     Pen pen{.color_mode = PEN_MODE_NORMAL, .color = PEN_COLOR_WHITE, .rev_color_flag = false};
     WouoUI_GraphSetBuff(&fb);
     WouoUI_GraphSetPen(&pen);
     WouoUI_GraphSetPenColor(1U);
-    const PageTransition *trans = state.transition;
     const bool showRebootOverlay = (state.rebootBanner != RebootBanner::kNone) &&
                                    (state.rebootBanner != RebootBanner::kKeepFrame) &&
                                    (state.page != OledPage::kChargeStandby) &&
                                    (state.page != OledPage::kShutdown);
-    const bool slide = trans != nullptr && trans->kind == TransitionKind::kSlideLeft;
-    const bool showStatusBar =
-        !showRebootOverlay && state.modal == UiModal::kNone && !slide &&
-        (state.page >= OledPage::kDialplate && state.page <= OledPage::kSubPower);
-    const bool morph = showStatusBar && trans != nullptr &&
-                       (trans->kind == TransitionKind::kExpandFromIcon ||
-                        trans->kind == TransitionKind::kCollapseToIcon);
-    const bool retainStatusBar = morph && previousStatusBar;
-    if (retainStatusBar) {
-        clearBody(fb);
-    } else {
-        WouoUI_BuffClear();
-    }
+    const bool showModal = !showRebootOverlay && state.modal != UiModal::kNone;
     Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
+    bool showStatusBar = false;
     if (showRebootOverlay) {
+        WouoUI_BuffClear();
         renderRebootBanner(full, state.rebootBanner);
-    } else if (state.modal != UiModal::kNone) {
-        renderModal(full, state, vm);
-    } else if (slide) {
-        renderSlideLeft(*trans, state, vm, fb);
+    } else if (showModal) {
+        renderModal(full, state, vm.pairing, fb, modalFrame);
     } else {
-        if (showStatusBar && !retainStatusBar) {
-            if (state.page == OledPage::kSubSat) {
-                drawSatHeader(full, state, vm);
-            } else {
-                drawStatusBar(full, state, vm);
-            }
-        }
-        if (morph) {
-            renderIconMorph(full, *trans, state, vm, fb);
-        } else {
-            renderPageInto(full, state.page, state, vm);
-        }
+        showStatusBar = renderBaseUi(full, state, vm, fb, previousStatusBar);
     }
 
     if (state.holdOverlayVisible) {
         renderHoldOverlay(state);
+    }
+    if (modalFrame != nullptr && (!showModal || state.holdOverlayVisible)) {
+        modalFrame->modal = UiModal::kNone;
     }
     // 解除栈局部画笔注册，避免 WouoUI 静态 p_cur_pen 悬垂（ROL1-06）。
     WouoUI_GraphSetPen(nullptr);

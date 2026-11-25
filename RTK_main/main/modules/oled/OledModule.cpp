@@ -42,6 +42,7 @@ static_assert(sizeof(ScreenBuff) == OledModule::kFrameBufferBytes,
 constinit ScreenBuff *s_active_fb = nullptr;
 constinit board::Sh1106 s_panel{};
 constinit oled::UiController s_ui_ctrl{};
+constinit oled::ModalFrame s_modal_frame{};
 constinit board::Sh1106FlushResult s_last_flush{};
 constinit bool s_force_next_flush = false;
 constinit std::optional<uint32_t> s_flush_deadline_ms{};
@@ -151,13 +152,16 @@ void collectPowerStatus(const AppContext &app, oled::ViewModel &vm) noexcept
 void collectCommStatus(const AppContext &app, const SystemStatus &sys, oled::ViewModel &vm) noexcept
 {
     vm.btReady = sys.btReady;
-    vm.wifiReady = app.data.wifiReady.load(std::memory_order_acquire);
+    vm.wifiReady = vm.radioMode == RadioMode::kWifiConfig &&
+                   app.data.wifiReady.load(std::memory_order_acquire);
     vm.pairing = app.data.oledPairing.read();
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
     vm.wifiSupported = true;
     if (vm.wifiReady) {
-        const auto ssid = app.data.wifiSsid.read();
-        oled::sanitizeCopy(cstrView(ssid.data()), vm.wifiSsid);
+        const auto ap = app.data.wifiAp.read();
+        const std::string_view ssid{ap.ssid.data(), ap.ssid.size()};
+        oled::sanitizeCopy(ssid.substr(0U, ssid.find('\0')), vm.wifiSsid);
+        vm.wifiIpv4 = ap.ipv4;
         vm.wifiClients = app.web.wifiStationCount();
     }
 #endif
@@ -213,38 +217,6 @@ void collectGnssStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.workModeElapsedS = wm.elapsedS;
 }
 #endif
-
-/**
- * @brief 从 DataCenter 与 AppContext 只读快照收集当前 UI 视图模型
- * @param app: 应用上下文（只读访问）
- * @param nowMs: 当前单调时间（ms）
- * @param[out] vm: 目标视图模型
- * @note 仅 init 或 oled 任务调用；只读现有数据槽，不调用任何外设驱动，非 ISR；禁止内联以释放临时快照栈帧。
- */
-[[gnu::noinline]] void collectViewModel(const AppContext &app, uint32_t nowMs,
-                                        oled::ViewModel &vm) noexcept
-{
-    vm = {};
-    vm.uptimeMs = nowMs;
-    const auto &profile = board::current();
-    oled::sanitizeCopy(cstrView(board::productName(&profile)), vm.product);
-    oled::sanitizeCopy(cstrView(profile.name), vm.boardName);
-    oled::sanitizeCopy(cstrView(profile.hardwareVersion), vm.hwVer);
-    oled::sanitizeCopy(appVersion(), vm.fwVer);
-
-    const SystemStatus sys = app.data.systemStatus.read();
-    oled::sanitizeCopy(cstrView(sys.sn.data()), vm.sn);
-    oled::sanitizeCopy(cstrView(sys.deviceName.data()), vm.deviceName);
-    vm.bootMode = app.bootMode;
-    vm.radioMode = app.radioMode;
-    vm.nvsReady = app.bootConfig.userNvsReady && !app.bootConfig.safeDefaults;
-
-    collectCommStatus(app, sys, vm);
-    collectPowerStatus(app, vm);
-#if RTK_GNSS_ENABLED
-    collectGnssStatus(app, vm);
-#endif
-}
 
 /**
  * @brief 凭完整帧的传输结果确认关机进度或终帧。
@@ -321,6 +293,32 @@ struct TaskWake {
 
 } // namespace
 
+[[gnu::noinline]] void OledModule::collectViewModel(uint32_t nowMs,
+                                                    oled::ViewModel &vm) const noexcept
+{
+    const auto &app = *context_;
+    vm = {};
+    vm.uptimeMs = nowMs;
+    const auto &profile = board::current();
+    oled::sanitizeCopy(cstrView(board::productName(&profile)), vm.product);
+    oled::sanitizeCopy(cstrView(profile.name), vm.boardName);
+    oled::sanitizeCopy(cstrView(profile.hardwareVersion), vm.hwVer);
+    oled::sanitizeCopy(appVersion(), vm.fwVer);
+
+    const SystemStatus sys = app.data.systemStatus.read();
+    oled::sanitizeCopy(cstrView(sys.sn.data()), vm.sn);
+    oled::sanitizeCopy(cstrView(sys.deviceName.data()), vm.deviceName);
+    vm.bootMode = app.bootMode;
+    vm.radioMode = app.radioMode;
+    vm.nvsReady = app.bootConfig.userNvsReady && !app.bootConfig.safeDefaults;
+
+    collectCommStatus(app, sys, vm);
+    collectPowerStatus(app, vm);
+#if RTK_GNSS_ENABLED
+    collectGnssStatus(app, vm);
+#endif
+}
+
 bool OledModule::tryInitPanel(uint32_t nowMs, bool initialBoot) noexcept
 {
     const auto &profile = board::current();
@@ -352,6 +350,7 @@ bool OledModule::tryInitPanel(uint32_t nowMs, bool initialBoot) noexcept
     panelOffline_ = false;
     consecutiveFlushErrors_ = 0U;
     statusBarValid_ = false;
+    s_modal_frame = {};
     WouoUI_GraphSetSendBuffFun(&sendBufferHal);
     context_->data.uiEvents.drainShortKeys();
     context_->data.uiEvents.drainLongKeys();
@@ -393,6 +392,7 @@ fw::Result OledModule::init() noexcept
     sampleIoUs_ = 0U;
     animating_ = false;
     statusBarValid_ = false;
+    s_modal_frame = {};
     perf_ = {};
     lastPublished_ = {};
 
@@ -628,12 +628,13 @@ uint32_t OledModule::handleRebootQuiesce(uint32_t nowMs, RebootBanner banner) no
 
     const int64_t frameStartUs = esp_timer_get_time();
     oled::ViewModel vm{};
-    collectViewModel(*context_, nowMs, vm);
+    collectViewModel(nowMs, vm);
     static_cast<void>(s_ui_ctrl.step(nowMs, {}, vm, false));
     const oled::UiRenderState rstate = s_ui_ctrl.renderState(nowMs);
     const int64_t renderStartUs = esp_timer_get_time();
     static_cast<void>(oled::renderUi(rstate, vm, *s_active_fb));
     statusBarValid_ = false;
+    s_modal_frame = {};
     lastRenderUs_ = static_cast<uint32_t>(esp_timer_get_time() - renderStartUs);
     s_force_next_flush = false;
     s_flush_deadline_ms.reset();
@@ -687,7 +688,7 @@ void OledModule::drawFrame(uint32_t nowMs, oled::ViewModel &vm) noexcept
     }
 #endif
     const int64_t renderStartUs = esp_timer_get_time();
-    statusBarValid_ = oled::renderUi(rstate, vm, *s_active_fb, statusBarValid_);
+    statusBarValid_ = oled::renderUi(rstate, vm, *s_active_fb, statusBarValid_, &s_modal_frame);
     lastRenderUs_ = static_cast<uint32_t>(esp_timer_get_time() - renderStartUs);
 }
 
@@ -709,7 +710,7 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull, bool renderFram
 
     const int64_t frameStartUs = esp_timer_get_time();
     oled::ViewModel vm{};
-    collectViewModel(*context_, nowMs, vm);
+    collectViewModel(nowMs, vm);
     const auto dec = processUiInput(context_->data.uiEvents, nowMs, vm);
 
     if (!renderFrame) {

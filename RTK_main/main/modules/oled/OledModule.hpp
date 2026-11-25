@@ -153,6 +153,14 @@ private:
                      bool rendered) noexcept;
 
     /**
+     * @brief 从只读应用快照收集 UI 视图模型。
+     * @param nowMs: 当前单调时间（ms）。
+     * @param[out] vm: 目标视图模型。
+     * @note 仅启动或 OLED 任务调用，非 ISR。禁止内联以释放临时快照栈帧。
+     */
+    void collectViewModel(uint32_t nowMs, oled::ViewModel &vm) const noexcept;
+
+    /**
      * @brief 在唯一的帧缓冲绘制当前页面或 bench 转场。
      * @param nowMs: 当前时刻。
      * @param vm: 本帧输入模型，可补录当前页所需卫星信息。

@@ -120,6 +120,7 @@ struct MockHttpdState {
 
 MockHttpdState s_httpd{};
 uint32_t s_nowMs = 1000U;
+uint32_t s_apIpv4 = 0U;
 bool s_powerKeyDriven = false;
 std::string s_mockSn = "B5F2";
 bool s_mockPairNext = false;
@@ -272,6 +273,7 @@ void resetHarness()
     s_ctx.bootPhase.store(app::BootPhase::kRunning, std::memory_order_relaxed);
 #endif
     s_nowMs = 1000U;
+    s_apIpv4 = 0U;
     s_mockSn = "B5F2";
     s_mockPairNext = false;
     s_mockStorageResult = fw::Result::kOk;
@@ -296,6 +298,13 @@ void resetHarness()
     s_ctx.web.bindContext(s_ctx);
     bindWebStorage();
     assert(fw::isOk(s_ctx.web.init()));
+    assert(s_ctx.data.wifiReady.load(std::memory_order_acquire));
+    const auto ap = s_ctx.data.wifiAp.read();
+    assert(ap.ssid == sys.deviceName);
+    const auto [first, second, third, fourth] = ap.ipv4;
+    esp_ip4_addr_t expected{};
+    esp_netif_set_ip4_addr(&expected, first, second, third, fourth);
+    assert(expected.addr != 0U && expected.addr == s_apIpv4);
 }
 
 } // namespace
@@ -365,12 +374,13 @@ esp_err_t esp_netif_dhcps_stop(esp_netif_t * /*esp_netif*/)
 /**
  * @brief 模拟设置 SoftAP 静态 IP
  * @param esp_netif: 网络接口句柄（未使用）
- * @param info: IP 信息（未使用）
+ * @param info: 暂存测试用配置地址。
  * @retval ESP_OK 始终成功
  * @note 主机测试桩。
  */
-esp_err_t esp_netif_set_ip_info(esp_netif_t * /*esp_netif*/, const esp_netif_ip_info_t * /*info*/)
+esp_err_t esp_netif_set_ip_info(esp_netif_t * /*esp_netif*/, const esp_netif_ip_info_t *info)
 {
+    s_apIpv4 = info->ip.addr;
     return ESP_OK;
 }
 

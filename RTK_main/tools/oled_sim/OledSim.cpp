@@ -43,6 +43,7 @@ struct Simulator {
     UiController controller{};
     ScreenBuff frame{};
     bool statusBarValid = false;
+    ModalFrame modalFrame{};
     std::vector<uint32_t> shortKeys{};
     uint32_t shutdownStartedMs = 0U;
     board::ShutdownReason shutdownReason = board::ShutdownReason::kKey;
@@ -102,7 +103,8 @@ struct Simulator {
             model.radioMode = RadioMode::kWifiConfig;
             model.wifiReady = true;
             model.wifiClients = 2U;
-            sanitizeCopy("P2-P2000123", model.wifiSsid);
+            sanitizeCopy("P2-85EE", model.wifiSsid);
+            model.wifiIpv4 = {192U, 168U, 10U, 12U};
         }
         if (scene == 7U) {
             model.pairing = {.windowDeadlineMs = nowMs + 60000U,
@@ -185,7 +187,8 @@ struct Simulator {
         const auto decision = controller.step(nowMs, shortKeys, model, longKeyPending);
         shortKeys.clear();
         longKeyPending = false;
-        statusBarValid = renderUi(controller.renderState(nowMs), model, frame, statusBarValid);
+        statusBarValid =
+            renderUi(controller.renderState(nowMs), model, frame, statusBarValid, &modalFrame);
         WouoUI_BuffSend();
         applyAction(decision.action.action, nowMs);
     }

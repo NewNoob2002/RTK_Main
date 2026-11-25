@@ -61,6 +61,14 @@ struct ModuleTestAccess {
         return oled.refreshOnce(nowMs, forceFull);
     }
 
+    /** @brief 读取 OLED 的实际 ViewModel。 @param oled: 模块。 @param nowMs: 当前时间。 @retval 最新视图。 */
+    [[nodiscard]] static oled::ViewModel view(OledModule &oled, uint32_t nowMs) noexcept
+    {
+        oled::ViewModel vm{};
+        oled.collectViewModel(nowMs, vm);
+        return vm;
+    }
+
     /**
      * @brief 调用真实 OledModule::publishStatus 发布快照
      * @param oled: 目标 OledModule 实例
@@ -577,6 +585,36 @@ bool spp_server_pair_decide_for(uint32_t id, bool accept)
     return true;
 }
 
+/** @brief 验证 SoftAP 就绪快照进入 Wi-Fi 视图，BT 与未就绪时隐藏地址和 SSID。 */
+void runWifiViewModel() noexcept
+{
+    setupOledModule();
+    auto sys = s_app.data.systemStatus.read();
+    sanitizeCopy("P2-85EE", sys.deviceName);
+    s_app.data.systemStatus.write(sys);
+    constexpr std::array<uint8_t, 4U> kTestIp{192U, 168U, 10U, 12U};
+    s_app.data.wifiAp.write({sys.deviceName, kTestIp});
+    s_app.data.wifiReady.store(true, std::memory_order_release);
+
+    const auto bt = ModuleTestAccess::view(s_app.oled, nowMs());
+    CHECK(!bt.wifiReady && bt.wifiSsid.front() == '\0' && bt.wifiIpv4.front() == 0U);
+    s_app.radioMode = RadioMode::kWifiConfig;
+    const auto wifi = ModuleTestAccess::view(s_app.oled, nowMs());
+    CHECK(wifi.wifiReady && std::string_view{wifi.wifiSsid.data()} == "P2-85EE");
+    CHECK(wifi.wifiIpv4 == kTestIp);
+
+    auto ap = s_app.data.wifiAp.read();
+    ap.ssid.fill('A');
+    ap.ssid.front() = '\t';
+    s_app.data.wifiAp.write(ap);
+    const auto bounded = ModuleTestAccess::view(s_app.oled, nowMs());
+    CHECK(bounded.wifiSsid.front() == '?' && bounded.wifiSsid.back() == '\0');
+
+    s_app.data.wifiReady.store(false, std::memory_order_release);
+    const auto stopped = ModuleTestAccess::view(s_app.oled, nowMs());
+    CHECK(!stopped.wifiReady && stopped.wifiSsid.front() == '\0' && stopped.wifiIpv4.front() == 0U);
+}
+
 /** @brief 用虚拟 400 kHz 时钟执行真实任务循环、bench 握手及空闲休眠。 */
 void runBenchAndEventWait() noexcept
 {
@@ -871,6 +909,8 @@ int main(int argc, char **argv)
         runRebootBannerQuiesce();
     } else if (scenario == "bench_and_event_wait") {
         runBenchAndEventWait();
+    } else if (scenario == "wifi_view_model") {
+        runWifiViewModel();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return EXIT_FAILURE;

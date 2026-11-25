@@ -70,6 +70,8 @@
 21150 long
 22150 shot power-off-confirm
 22250 short
-22350 short
-22500 check shutdown
-23400 shot shutdown
+22750 shot power-off-confirm-ok
+22850 short
+22950 short
+23100 check shutdown
+24000 shot shutdown

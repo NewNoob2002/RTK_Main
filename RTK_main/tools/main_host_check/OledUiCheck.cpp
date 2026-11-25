@@ -922,33 +922,109 @@ void testCommAndPairing() noexcept
     CHECK(twice(1900U).page == OledPage::kSubComm);
     CHECK(twice(2500U).action.action == OledAction::kNone);
     CHECK(ui.renderState(2500U).modal == UiModal::kWifiConfirm);
-    CHECK(once(2600U).action.action == OledAction::kNone);
-    CHECK(ui.renderState(2900U).modal == UiModal::kNone);
-    CHECK(twice(3100U).action.action == OledAction::kNone);
-    CHECK(twice(3400U).action.action == OledAction::kWifi);
+    CHECK(ui.renderState(2500U).modalFocusX == 0);
 
-    static_cast<void>(once(3500U));
-    CHECK(twice(4000U).action.action == OledAction::kTogglePair);
+    // 三次单击依次选择 OK、Cancel、OK，第四次回到 Cancel。静止时待单击或双击通知。
+    for (uint32_t i = 0U; i < 4U; ++i) {
+        const uint32_t press = 2600U + i * 600U;
+        const uint32_t changeMs = press + kDoubleClickWindowMs;
+        const auto selection = once(press);
+        CHECK(selection.animating && selection.action.action == OledAction::kNone);
+        const auto moving = ui.step(changeMs + kAnimFramePeriodMs, {}, vm);
+        const auto pos = ui.renderState(changeMs + kAnimFramePeriodMs).modalFocusX;
+        CHECK(moving.animating && pos > 0 && pos < kModalOptionStepX);
+        for (uint32_t t = changeMs + 2U * kAnimFramePeriodMs; t <= changeMs + 264U;
+             t += kAnimFramePeriodMs) {
+            static_cast<void>(ui.step(t, {}, vm));
+        }
+        const auto settled = ui.step(changeMs + 280U, {}, vm);
+        CHECK(ui.renderState(changeMs + 280U).modal == UiModal::kWifiConfirm);
+        CHECK(ui.renderState(changeMs + 280U).modalFocusX ==
+              ((i & 1U) == 0U ? kModalOptionStepX : 0));
+        CHECK(!settled.animating);
+    }
+    CHECK(twice(5200U).action.action == OledAction::kNone);
+    CHECK(ui.renderState(5200U).modal == UiModal::kNone);
+    CHECK(twice(5500U).action.action == OledAction::kNone);
+    CHECK(once(5600U).action.action == OledAction::kNone);
+    CHECK(twice(6200U).action.action == OledAction::kWifi);
+    CHECK(ui.renderState(6200U).modal == UiModal::kNone);
+
+    static_cast<void>(once(6300U));
+    CHECK(twice(6800U).action.action == OledAction::kTogglePair);
     vm.pairing.id = 41U;
-    vm.pairing.requestDeadlineMs = 34000U;
-    CHECK(twice(4200U).action.action == OledAction::kNone);
-    CHECK(ui.renderState(4200U).modal == UiModal::kPair);
-    const auto accept = twice(4400U).action;
+    vm.pairing.requestDeadlineMs = 37000U;
+    CHECK(twice(7000U).action.action == OledAction::kNone);
+    CHECK(ui.renderState(7000U).modal == UiModal::kPair);
+    CHECK(ui.renderState(7000U).modalFocusX == 0);
+    CHECK(once(7100U).action.action == OledAction::kNone);
+    const auto accept = twice(7700U).action;
     CHECK(accept.action == OledAction::kPairAccept && accept.pairId == 41U);
-    CHECK(twice(4600U).action.action == OledAction::kNone);
+    CHECK(ui.renderState(7700U).modal == UiModal::kNone);
+    CHECK(twice(8000U).action.action == OledAction::kNone);
     vm.pairing.id = 42U;
-    CHECK(ui.step(4700U, {}, vm).action.action == OledAction::kNone);
-    const auto reject = once(4800U).action;
+    CHECK(ui.step(8100U, {}, vm).action.action == OledAction::kNone);
+    const auto reject = twice(8400U).action;
     CHECK(reject.action == OledAction::kPairReject && reject.pairId == 42U);
-    CHECK(ui.step(34000U, {}, vm).page == OledPage::kSubComm);
-    CHECK(ui.renderState(34000U).modal == UiModal::kNone);
-    // OL4 通信页 BT 档共 4 项（Mode/Pair/Dev/Back），从 Pair(1) 需单击两次到达 Back(3)。
-    static_cast<void>(once(34200U));
-    static_cast<void>(once(34600U));
-    CHECK(twice(35100U).page == OledPage::kDialplate);
+    CHECK(ui.renderState(8400U).modal == UiModal::kNone);
+
+    // 选中 Accept 也不能越过配对绝对截止，底层 SPP worker 按超时拒绝。
+    vm.pairing.id = 43U;
+    vm.pairing.requestDeadlineMs = 39000U;
+    CHECK(ui.step(9000U, {}, vm).action.action == OledAction::kNone);
+    CHECK(once(9200U).action.action == OledAction::kNone);
+    for (uint32_t t = 9533U; t < 9800U; t += kAnimFramePeriodMs) {
+        static_cast<void>(ui.step(t, {}, vm));
+    }
+    CHECK(ui.step(38999U, {}, vm).nextWaitMs == 1U);
+    CHECK(ui.renderState(38999U).modalFocusX == kModalOptionStepX);
+    CHECK(twice(39000U).action.action == OledAction::kNone);
+    CHECK(ui.renderState(39000U).modal == UiModal::kNone);
+
+    // BT 保持 4 项。Wi-Fi 展示 SSID 与地址，Back 仍可达，Mode 动作保持现有语义。
+    static_cast<void>(once(39200U));
+    static_cast<void>(once(39600U));
+    CHECK(twice(40100U).page == OledPage::kDialplate);
     vm.radioMode = RadioMode::kWifiConfig;
-    CHECK(twice(35700U).page == OledPage::kSubComm);
-    CHECK(twice(36300U).action.action == OledAction::kBluetooth);
+    CHECK(twice(40700U).page == OledPage::kSubComm);
+    CHECK(twice(41300U).action.action == OledAction::kBluetooth);
+    for (uint32_t i = 0U; i < 3U; ++i) {
+        static_cast<void>(once(41400U + i * 400U));
+        CHECK(ui.subSelected() == i + 1U);
+    }
+    CHECK(twice(42700U).page == OledPage::kDialplate);
+}
+
+/** @brief 验证弹窗选中框只改变底部按钮页，配对名称晚到时重绘提示区。 */
+void testModalDirtyPages() noexcept
+{
+    auto vm = makeHealthyVm();
+    vm.pairing.id = 7U;
+    vm.pairing.hasNumber = true;
+    vm.pairing.number = 123456U;
+    sanitizeCopy("Phone", vm.pairing.name);
+    UiRenderState state{.modal = UiModal::kPair};
+    ScreenBuff fb{};
+    ModalFrame history{};
+    renderUi(state, vm, fb, false, &history);
+    FrameTracker tracker{};
+    FrameTracker::PageHashes hashes{};
+    for (uint8_t page = 0U; page < kPages; ++page) {
+        static_cast<void>(tracker.dirtyColumns(page, fb[page], hashes));
+        tracker.commitPage(page, hashes);
+    }
+    state.modalFocusX = kModalOptionStepX;
+    vm.pairing.requestDeadlineMs += 100U;
+    renderUi(state, vm, fb, false, &history);
+    constexpr uint8_t kFirstChoicesPage = 6U;
+    for (uint8_t page = 0U; page < kFirstChoicesPage; ++page) {
+        CHECK(tracker.dirtyColumns(page, fb[page], hashes).end == 0U);
+    }
+    CHECK(tracker.dirtyColumns(kFirstChoicesPage, fb[kFirstChoicesPage], hashes).end != 0U);
+    sanitizeCopy("New Name", vm.pairing.name);
+    renderUi(state, vm, fb, false, &history);
+    constexpr uint8_t kPairNamePage = 2U;
+    CHECK(tracker.dirtyColumns(kPairNamePage, fb[kPairNamePage], hashes).end != 0U);
 }
 
 /** @brief 验证 UiEventBus 短按时间戳队列、OLED 在线标志、关机凭据和 kLink 动作。 */
@@ -1042,11 +1118,10 @@ void testHoldOverlayAndPowerOffConfirm() noexcept
     vm.pairing.requestDeadlineMs = 30000U;
     dec = ui.step(3200U, {}, vm);
     CHECK(ui.renderState(3200U).modal == UiModal::kPowerOffConfirm);
-    // 单击取消确认页后，排队中的配对弹窗立即显示。
-    dec = once(3300U);
-    CHECK(dec.action.action == OledAction::kNone && ui.renderState(3600U).modal == UiModal::kNone);
-    dec = ui.step(3650U, {}, vm);
-    CHECK(ui.renderState(3650U).modal == UiModal::kPair);
+    // 双击默认 Cancel 关闭关机弹窗，同一轮显示排队中的配对弹窗。
+    dec = twice(3600U);
+    CHECK(dec.action.action == OledAction::kNone && ui.renderState(3600U).modal == UiModal::kPair);
+    CHECK(ui.renderState(3600U).modalFocusX == 0);
     vm.pairing.id = 0U;
     static_cast<void>(ui.step(3700U, {}, vm));
 
@@ -1054,17 +1129,19 @@ void testHoldOverlayAndPowerOffConfirm() noexcept
     dec = ui.step(4000U, {}, vm, true);
     CHECK(ui.renderState(4000U).modal == UiModal::kPowerOffConfirm);
     CHECK(ui.renderState(6000U).powerOffRemainMs == 3000U);
+    CHECK(once(6100U).action.action == OledAction::kNone); // 已选 OK 也应自动取消。
     dec = ui.step(8999U, {}, vm);
     CHECK(ui.renderState(8999U).modal == UiModal::kPowerOffConfirm);
-    dec = ui.step(9000U, {}, vm);
+    dec = twice(9000U);
     CHECK(ui.renderState(9000U).modal == UiModal::kNone && dec.action.action == OledAction::kNone);
 
     // 5. 双击确认才提交 OledAction::kShutdownKey。
     dec = ui.step(10000U, {}, vm, true);
     CHECK(ui.renderState(10000U).modal == UiModal::kPowerOffConfirm);
-    dec = twice(10300U);
+    CHECK(once(10100U).action.action == OledAction::kNone);
+    dec = twice(10800U);
     CHECK(dec.action.action == OledAction::kShutdownKey &&
-          ui.renderState(10300U).modal == UiModal::kNone);
+          ui.renderState(10800U).modal == UiModal::kNone);
 
     // 6. 电源子页 Power off 项（索引 3）双击同样进入 POWER OFF? 确认页。
     // 从 dock 0 单击 4 次选到 Power(4)，双击进入 kSubPower。
@@ -1079,7 +1156,8 @@ void testHoldOverlayAndPowerOffConfirm() noexcept
     CHECK(ui.subSelected() == 3U);
     dec = twice(14500U);
     CHECK(ui.renderState(14500U).modal == UiModal::kPowerOffConfirm);
-    CHECK(twice(14800U).action.action == OledAction::kShutdownKey);
+    CHECK(once(14600U).action.action == OledAction::kNone);
+    CHECK(twice(15300U).action.action == OledAction::kShutdownKey);
 }
 
 /** @brief 验证 OL4 充电待机页唤醒环进度、松开回落、<= 2 fps 充电动画与充满静止 0 写入。 */
@@ -1375,6 +1453,7 @@ int main()
     testPacingAndPerf();
     testTransitionRetainsStatusBar();
     testCommAndPairing();
+    testModalDirtyPages();
     testUiEventBus();
     testHoldOverlayAndPowerOffConfirm();
     testStandbyRingAndChargeAnim();

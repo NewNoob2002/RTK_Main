@@ -66,15 +66,11 @@ constexpr uint16_t kUriHandlerMargin = 2U;
 constexpr uint32_t kMsPerSecond = 1000U;
 
 // SoftAP 固定地址 192.168.10.12/24（用户 2026-11-19 指定，网关同址）。
-constexpr uint8_t kApIpA = 192U;
-constexpr uint8_t kApIpB = 168U;
-constexpr uint8_t kApIpC = 10U;
-constexpr uint8_t kApIpD = 12U;
+constexpr std::array<uint8_t, 4U> kApIpv4{192U, 168U, 10U, 12U};
 constexpr uint8_t kApMaskHigh = 255U;
 constexpr uint8_t kApMaskLow = 0U;
 
 #if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
-constexpr std::array<uint8_t, 4U> kApIpv4 = {kApIpA, kApIpB, kApIpC, kApIpD};
 constexpr std::string_view kApHost = "192.168.10.12";
 constexpr std::string_view kApHostPort80 = "192.168.10.12:80";
 constexpr const char *kCaptivePortalUrl = "http://192.168.10.12/";
@@ -283,8 +279,9 @@ esp_err_t configureApIpAndDhcp(esp_netif_t *netif) noexcept
         return err;
     }
     esp_netif_ip_info_t ipInfo{};
-    esp_netif_set_ip4_addr(&ipInfo.ip, kApIpA, kApIpB, kApIpC, kApIpD);
-    esp_netif_set_ip4_addr(&ipInfo.gw, kApIpA, kApIpB, kApIpC, kApIpD);
+    const auto [first, second, third, fourth] = kApIpv4;
+    esp_netif_set_ip4_addr(&ipInfo.ip, first, second, third, fourth);
+    ipInfo.gw = ipInfo.ip;
     esp_netif_set_ip4_addr(&ipInfo.netmask, kApMaskHigh, kApMaskHigh, kApMaskHigh, kApMaskLow);
     err = esp_netif_set_ip_info(netif, &ipInfo);
     if (err != ESP_OK) {
@@ -1101,7 +1098,7 @@ fw::Result WebModule::init() noexcept
 #endif
     idleTimer_.start(now, static_cast<uint32_t>(CONFIG_RTK_WIFI_IDLE_EXIT_S) * kMsPerSecond);
     initialized_ = true;
-    ctx().data.wifiSsid.write(sys.deviceName);
+    ctx().data.wifiAp.write({sys.deviceName, kApIpv4});
     ctx().data.wifiReady.store(true, std::memory_order_release);
 #if defined(CONFIG_RTK_WIFI_CAPTIVE_PORTAL) && CONFIG_RTK_WIFI_CAPTIVE_PORTAL
     const char *const portalState = dnsOpen_ ? "on" : "degraded";

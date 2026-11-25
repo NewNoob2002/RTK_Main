@@ -10,17 +10,22 @@
 4700 short
 4800 shot wifi-confirm
 4900 short
+5000 short
 5300 check comm
 5400 short
 5500 short
 5600 short
-5700 short
-5850 shot wifi
-6000 short
-6100 short
-6300 shot bluetooth
-6400 scene 7
-6500 shot pair
-6600 short
-6700 short
-6800 check comm
+6200 shot wifi-confirm-ok
+6300 short
+6400 short
+6600 shot wifi
+6800 short
+6900 short
+7100 shot bluetooth
+7200 scene 7
+7300 shot pair
+7400 short
+7900 shot pair-accept
+8000 short
+8100 short
+8250 check comm

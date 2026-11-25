@@ -113,6 +113,12 @@ enum class GgaGatePersist : uint32_t {
     kFailed = 2U,
 };
 
+/** Web 完成 SoftAP 启动后发布的只读标识，用于 OLED COMM 页。 */
+struct WifiApSnapshot {
+    std::array<char, kDeviceNameBuf> ssid{};
+    std::array<uint8_t, 4U> ipv4{};
+};
+
 /** 跨任务共享的主题集合；init() 绑定同一把锁后各 Slot 支持跨任务读写，非 ISR。 */
 struct DataCenter {
     /**
@@ -155,7 +161,7 @@ struct DataCenter {
     fw::Slot<OledStatus> oledStatus{};
     UiEventBus uiEvents{};
     fw::Slot<OledPairingStatus> oledPairing{};
-    fw::Slot<decltype(SystemStatus::deviceName)> wifiSsid{};
+    fw::Slot<WifiApSnapshot> wifiAp{};
     std::atomic<bool> wifiReady{false}; // Wi-Fi SoftAP 就绪只读标志（WebModule 写，OLED 自检读）
     static_assert(fw::kAtomicUsable<bool>, "Wi-Fi 就绪标志原子须无锁");
     fw::Slot<uint32_t> rtcmReset{};

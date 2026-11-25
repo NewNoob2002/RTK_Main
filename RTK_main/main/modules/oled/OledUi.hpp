@@ -40,11 +40,13 @@ inline constexpr int16_t kDockStepX = 25;
 inline constexpr int16_t kDockY = 45;
 inline constexpr int16_t kDockW = 24;
 inline constexpr int16_t kDockH = 19;
-inline constexpr size_t kConstellationSlots = 4U;     // 卫星子菜单主星座数：GPS/BDS/GLO/GAL
-inline constexpr size_t kTopSnrBars = 8U;             // 卫星子菜单 CN0 条数量
-inline constexpr uint8_t kSubVisibleRows = 3U;        // 统一子页右侧同时可见行数
-inline constexpr int16_t kSubRowStepY = 17;           // px，统一子页行步距（16 px 高 + 1 px 间距）
-inline constexpr uint32_t kPowerOffConfirmMs = 5000U; // ms，关机确认页倒计时上限
+inline constexpr size_t kConstellationSlots = 4U; // 卫星子菜单主星座数：GPS/BDS/GLO/GAL
+inline constexpr size_t kTopSnrBars = 8U;         // 卫星子菜单 CN0 条数量
+inline constexpr uint8_t kSubVisibleRows = 3U;    // 统一子页右侧同时可见行数
+inline constexpr int16_t kSubRowStepY = 17;       // px，统一子页行步距（16 px 高 + 1 px 间距）
+inline constexpr int16_t kModalOptionStepX = 56;  // px，安全项到确认项的水平距离
+inline constexpr uint8_t kSubCommWifiRows = 4U;
+inline constexpr uint32_t kPowerOffConfirmMs = 5000U;     // ms，关机确认页倒计时上限
 inline constexpr uint32_t kSubpageIdleTimeoutMs = 60000U; // ms，子页面无操作自动回表盘时长
 inline constexpr uint32_t kCheckTickAnimMs = 150U;        // ms，开机自检单项打勾展开动画时长
 
@@ -71,6 +73,7 @@ struct ViewModel {
     std::array<char, kSnBufBytes> sn{};
     std::array<char, kDevNameBufBytes> deviceName{};
     std::array<char, kDevNameBufBytes> wifiSsid{};
+    std::array<uint8_t, 4U> wifiIpv4{};
     std::array<char, kGnssFwBufBytes> gnssFwVer{};
     std::array<char, kPeerLabelBufBytes> btPeerLabel{};
     uint32_t uptimeMs = 0U;
@@ -317,6 +320,12 @@ struct UiDecision {
 };
 
 enum class UiModal : uint8_t { kNone, kWifiConfirm, kPair, kPowerOffConfirm };
+
+/** 单帧缓冲内已绘制的弹窗内容，供局部刷新复用。 */
+struct ModalFrame {
+    UiModal modal = UiModal::kNone;
+    OledPairingStatus pairing{};
+};
 /** 供渲染器只读读取的完整 UI 瞬时渲染状态。 */
 struct UiRenderState {
     OledPage page = OledPage::kSystemCheck;
@@ -338,6 +347,7 @@ struct UiRenderState {
     const char *heroPrevBadge = nullptr;
     uint16_t heroRollQ10 = kEaseScale;
     UiModal modal = UiModal::kNone;
+    int16_t modalFocusX = 0;
     RebootBanner rebootBanner = RebootBanner::kNone;
     uint32_t nowMs = 0U;
     const SystemCheckSm *checkSm = nullptr;
@@ -493,14 +503,28 @@ private:
                                                   const ViewModel &vm) noexcept;
 
     /**
-     * @brief 优先消费当前激活弹窗（关机确认 / 配对 / Wi-Fi 确认）的点击
-     * @param click: 已判定的点击类型
-     * @param nowMs: 当前单调时间（ms）
-     * @param[out] handled: true 表示弹窗已消费该点击
-     * @retval 要提交给 kLink 的动作或空值
+     * @brief 同步配对请求与绝对截止，关机确认期间保持排队。
+     * @param nowMs: 当前单调时间。
+     * @param vm: 本轮视图数据。
+     * @retval true 发生弹窗上下文变更。
      */
-    [[nodiscard]] OledActionRequest handleModalClick(ClickEvent click, uint32_t nowMs,
-                                                     bool &handled) noexcept;
+    [[nodiscard]] bool updatePairPrompt(uint32_t nowMs, const ViewModel &vm) noexcept;
+
+    /** @brief 查询当前可见弹窗。 @retval 按关机、配对、Wi-Fi 优先排列的可见类型。 */
+    [[nodiscard]] UiModal visibleModal() const noexcept;
+
+    /** @brief 弹窗焦点复位到安全项，清除上一弹窗的挤压反馈。 */
+    void resetModalFocus() noexcept;
+
+    /**
+     * @brief 单击移动焦点，双击执行该弹窗当前选中的选项。
+     * @param modal: 当前可见确认弹窗。
+     * @param click: 已判定的点击类型。
+     * @param nowMs: 当前单调时间（ms）。
+     * @retval 交给 kLink 的动作，或直接关闭时的空动作。
+     */
+    [[nodiscard]] OledActionRequest handleModalClick(UiModal modal, ClickEvent click,
+                                                     uint32_t nowMs) noexcept;
 
     /**
      * @brief 消费表盘页的单击切入口与双击展开子页
@@ -604,6 +628,7 @@ private:
     FixedSpring dockSpring_{};
     FixedSpring subFocusSpring_{};
     FixedSpring subScrollSpring_{};
+    FixedSpring modalFocusSpring_{};
     SquishAnim squish_{};
     NumberRoll satsRoll_{};
     NumberRoll batRoll_{};
@@ -852,10 +877,11 @@ void summarizeSatTable(const gnss::SatTable &table, ViewModel &vm, bool detail =
  * @param[out] fb: 8×128 单色帧缓冲（由调用方静态持有）
  * @note 单线程调用（OLED 任务或主机测试）；不访问硬件、不分配堆，非 ISR。
  * @param previousStatusBar: 同一缓冲中含上一帧完整状态栏时可在内容转场中复用。
+ * @param modalFrame: 同一缓冲上一次渲染的弹窗，可为空，切换缓冲时应清除。
  * @retval 当前帧含可复用状态栏。
  */
 bool renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb,
-              bool previousStatusBar = false) noexcept;
+              bool previousStatusBar = false, ModalFrame *modalFrame = nullptr) noexcept;
 
 /**
  * @brief 兼容接口：以静止状态直接渲染指定单页到 1 KB 帧缓冲（供驱动测试与快速渲染使用）

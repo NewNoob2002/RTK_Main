@@ -287,7 +287,6 @@ OledPage UiController::dockTargetPage(uint8_t idx) noexcept
 uint8_t UiController::subpageRowCount(OledPage page, const ViewModel &vm) noexcept
 {
     constexpr uint8_t kSubFiveRows = 5U;
-    constexpr uint8_t kSubCommWifiRows = 3U;
     constexpr uint8_t kSubCommBtRows = 4U;
     switch (page) {
     case OledPage::kSubPos:
@@ -345,6 +344,7 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
     dockSpring_.snap(dockSlotRect(0U).x);
     subFocusSpring_.snap(0);
     subScrollSpring_.snap(0);
+    modalFocusSpring_.snap(0);
     satsRoll_.reset();
     batRoll_.reset();
     if (bootMode_ == board::BootMode::kChargeStandby) {
@@ -436,6 +436,7 @@ UiDecision UiController::stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
 void UiController::enterPowerOffConfirm(uint32_t nowMs) noexcept
 {
     powerOffConfirm_ = true;
+    resetModalFocus();
     powerOffConfirmStartMs_ = nowMs;
     wifiConfirm_ = false;
     pairDialogId_ = 0U;
@@ -536,7 +537,11 @@ OledActionRequest UiController::handleSubListClick(ClickEvent click, uint32_t no
             if (wifi) {
                 return {OledAction::kBluetooth};
             }
-            wifiConfirm_ = vm.wifiSupported;
+            if (vm.wifiSupported) {
+                wifiConfirm_ = true;
+                resetModalFocus();
+                transition_.clear();
+            }
         } else if (!wifi && (subSelected_ == 1U)) {
             return {OledAction::kTogglePair};
         }
@@ -556,32 +561,48 @@ OledActionRequest UiController::handleSubListClick(ClickEvent click, uint32_t no
     return {};
 }
 
-OledActionRequest UiController::handleModalClick(ClickEvent click, uint32_t nowMs,
-                                                 bool &handled) noexcept
+UiModal UiController::visibleModal() const noexcept
 {
-    handled = true;
     if (powerOffConfirm_) {
-        powerOffConfirm_ = false;
-        if (click == ClickEvent::kDouble) {
-            squish_.trigger(nowMs);
-            return {OledAction::kShutdownKey};
-        }
+        return UiModal::kPowerOffConfirm;
+    }
+    if (pairDialogId_ != 0U && !pairDecisionSent_) {
+        return UiModal::kPair;
+    }
+    return wifiConfirm_ ? UiModal::kWifiConfirm : UiModal::kNone;
+}
+
+void UiController::resetModalFocus() noexcept
+{
+    modalFocusSpring_.snap(0);
+    squish_.clear();
+}
+
+OledActionRequest UiController::handleModalClick(UiModal modal, ClickEvent click,
+                                                 uint32_t nowMs) noexcept
+{
+    const bool accept = modalFocusSpring_.target() == kModalOptionStepX;
+    if (click == ClickEvent::kSingle) {
+        modalFocusSpring_.retarget(accept ? 0 : kModalOptionStepX);
+        squish_.trigger(nowMs);
         return {};
     }
-    if (pairDialogId_ != 0U) {
-        if (pairDecisionSent_) {
-            return {};
-        }
+    click_.reset();
+    resetModalFocus();
+    switch (modal) {
+    case UiModal::kPowerOffConfirm:
+        powerOffConfirm_ = false;
+        return {accept ? OledAction::kShutdownKey : OledAction::kNone};
+    case UiModal::kPair:
         pairDecisionSent_ = true;
-        return {click == ClickEvent::kDouble ? OledAction::kPairAccept : OledAction::kPairReject,
-                pairDialogId_};
-    }
-    if (wifiConfirm_) {
+        return {accept ? OledAction::kPairAccept : OledAction::kPairReject, pairDialogId_};
+    case UiModal::kWifiConfirm:
         wifiConfirm_ = false;
-        return {click == ClickEvent::kDouble ? OledAction::kWifi : OledAction::kNone};
+        return {accept ? OledAction::kWifi : OledAction::kNone};
+    case UiModal::kNone:
+    default:
+        return {};
     }
-    handled = false;
-    return {};
 }
 
 void UiController::handleDialClick(ClickEvent click, uint32_t nowMs) noexcept
@@ -612,10 +633,11 @@ OledActionRequest UiController::dispatchClick(ClickEvent click, uint32_t nowMs,
         return {};
     }
     lastActivityMs_ = nowMs;
-    bool modalHandled = false;
-    const OledActionRequest modalAct = handleModalClick(click, nowMs, modalHandled);
-    if (modalHandled) {
-        return modalAct;
+    if (!powerOffConfirm_ && pairDialogId_ != 0U && pairDecisionSent_) {
+        return {}; // 等待配对判定出队，防止点击落到恢复中的页面。
+    }
+    if (const UiModal modal = visibleModal(); modal != UiModal::kNone) {
+        return handleModalClick(modal, click, nowMs);
     }
     if (page_ == OledPage::kSystemCheck) {
         if (click == ClickEvent::kDouble) {
@@ -644,22 +666,29 @@ OledActionRequest UiController::dispatchClick(ClickEvent click, uint32_t nowMs,
     return isSubmenuPage(page_) ? handleSubListClick(click, nowMs, vm) : OledActionRequest{};
 }
 
+bool UiController::updatePairPrompt(uint32_t nowMs, const ViewModel &vm) noexcept
+{
+    if (powerOffConfirm_) {
+        return false;
+    }
+    const uint32_t id = remainingMs(nowMs, vm.pairing.requestDeadlineMs) != 0U ? vm.pairing.id : 0U;
+    if (id == pairDialogId_) {
+        return false;
+    }
+    pairDialogId_ = id;
+    pairDecisionSent_ = false;
+    resetModalFocus();
+    click_.reset();
+    transition_.clear();
+    lastActivityMs_ = nowMs;
+    return true;
+}
+
 OledActionRequest UiController::handleInput(uint32_t nowMs, std::span<const uint32_t> times,
                                             const ViewModel &vm) noexcept
 {
-    // 关机确认页优先级高于配对弹窗：确认页期间不抢占，确认取消后配对弹窗立即排队弹出。
-    if (!powerOffConfirm_) {
-        // 配对截止最多相隔 30 s，差值符号在 uint32_t 回绕时仍有效。
-        const uint32_t id =
-            static_cast<int32_t>(vm.pairing.requestDeadlineMs - nowMs) > 0 ? vm.pairing.id : 0U;
-        if (id != pairDialogId_) {
-            pairDialogId_ = id;
-            pairDecisionSent_ = false;
-            click_.reset();
-            transition_.clear();
-            lastActivityMs_ = nowMs;
-            return {}; // 不把弹窗出现前的短按用于确认或拒绝。
-        }
+    if (updatePairPrompt(nowMs, vm)) {
+        return {}; // 不把弹窗出现前的短按用于确认或拒绝。
     }
     // 防止无线模式异步切换导致子页选中项越界。
     if (const uint8_t count = subpageRowCount(page_, vm); count > 0U && subSelected_ >= count) {
@@ -673,8 +702,9 @@ OledActionRequest UiController::handleInput(uint32_t nowMs, std::span<const uint
         lastActivityMs_ = nowMs;
     }
     for (const uint32_t pressMs : times) {
+        const UiModal before = visibleModal();
         if (const auto action = dispatchClick(click_.onPress(pressMs), nowMs, vm);
-            action.action != OledAction::kNone) {
+            action.action != OledAction::kNone || before != visibleModal()) {
             return action;
         }
     }
@@ -735,7 +765,9 @@ UiDecision UiController::buildActiveDecision(uint32_t nowMs, const ViewModel &vm
     if (page_ == OledPage::kSubDevice || (page_ == OledPage::kSubComm && vm.pairing.windowOpen)) {
         waitMs = std::min(waitMs, kMsPerSec - (nowMs % kMsPerSec));
     }
-    if (pairDialogId_ != 0U) {
+    if (powerOffConfirm_) {
+        waitMs = std::min(waitMs, remainingMs(nowMs, powerOffConfirmStartMs_ + kPowerOffConfirmMs));
+    } else if (pairDialogId_ != 0U) {
         waitMs = std::min(waitMs, remainingMs(nowMs, vm.pairing.requestDeadlineMs));
     }
     if (click_.pending()) {
@@ -771,6 +803,13 @@ UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
         leaveSubmenu(nowMs);
     }
 
+    if (!noModal) {
+        const bool modalAnimating = !modalFocusSpring_.settled() || squish_.pollActive(nowMs) ||
+                                    holdOverlayActive_ || holdOverlayCollapsing_ ||
+                                    powerOffConfirm_;
+        return buildActiveDecision(nowMs, vm, modalAnimating);
+    }
+
     dockSpring_.step(dtMs);
     subFocusSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
     subScrollSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
@@ -782,10 +821,10 @@ UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
     const bool rollNow = satsRoll_.active(nowMs) || batRoll_.active(nowMs);
     const bool rollAnim = ((page_ == OledPage::kDialplate) && (rollNow || heroRolling_)) ||
                           (isSubmenuPage(page_) && rollNow);
-    const bool animating =
-        transition_.pollActive(nowMs) || squish_.pollActive(nowMs) || springActive ||
-        ((page_ == OledPage::kSystemCheck) && checkSm_.animating()) || rollAnim ||
-        holdOverlayActive_ || holdOverlayCollapsing_ || powerOffConfirm_;
+    const bool animating = transition_.pollActive(nowMs) || squish_.pollActive(nowMs) ||
+                           springActive ||
+                           ((page_ == OledPage::kSystemCheck) && checkSm_.animating()) ||
+                           rollAnim || holdOverlayActive_ || holdOverlayCollapsing_;
     return buildActiveDecision(nowMs, vm, animating);
 }
 
@@ -836,9 +875,17 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
             .nextWaitMs = kWaitForEvent,
         };
     }
+    const bool wasPowerOffConfirm = powerOffConfirm_;
     updateHoldOverlay(nowMs, vm, longKeyArrived);
+    if (wasPowerOffConfirm != powerOffConfirm_ || longKeyArrived) {
+        shortKeyTimes = {}; // 弹窗切换时丢弃旧上下文的待处理短按。
+    }
     // 必须先按生产顺序消费队列内全部消抖短按时间戳，再检查绝对截止，避免 OLED 刷屏延迟误拆双击（R2OL2-03）。
+    modalFocusSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
     const auto action = handleInput(nowMs, shortKeyTimes, vm);
+    if (wasPowerOffConfirm && !powerOffConfirm_ && action.action == OledAction::kNone) {
+        static_cast<void>(updatePairPrompt(nowMs, vm)); // 取消后立即显示已排队的配对请求。
+    }
     auto out = finishActiveStep(nowMs, dtMs, vm);
     out.action = action;
     return out;
@@ -846,11 +893,6 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
 
 UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
 {
-    const UiModal modal =
-        powerOffConfirm_
-            ? UiModal::kPowerOffConfirm
-            : (pairDialogId_ != 0U ? UiModal::kPair
-                                   : (wifiConfirm_ ? UiModal::kWifiConfirm : UiModal::kNone));
     const uint32_t confirmElapsed = powerOffConfirm_ ? (nowMs - powerOffConfirmStartMs_) : 0U;
     const uint32_t confirmRemain = (powerOffConfirm_ && (confirmElapsed < kPowerOffConfirmMs))
                                        ? (kPowerOffConfirmMs - confirmElapsed)
@@ -878,7 +920,8 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         .standbyRingQ10 = standbyRingQ10_,
         .heroPrevBadge = heroPrevBadge_,
         .heroRollQ10 = heroQ10,
-        .modal = modal,
+        .modal = visibleModal(),
+        .modalFocusX = modalFocusSpring_.position(),
         .rebootBanner = rebootBanner_,
         .nowMs = nowMs,
         .checkSm = &checkSm_,

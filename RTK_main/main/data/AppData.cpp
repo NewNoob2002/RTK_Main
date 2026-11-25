@@ -28,7 +28,7 @@ void DataCenter::init() noexcept
     powerStatus.bindLock(lock);
     oledStatus.bindLock(lock);
     oledPairing.bindLock(lock);
-    wifiSsid.bindLock(lock);
+    wifiAp.bindLock(lock);
     rtcmReset.bindLock(lock);
     gnssPppEnabled.bindLock(lock);
     gnssSatTrack.bindLock(lock);
