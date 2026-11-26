@@ -62,3 +62,6 @@
 | 日期 | 决策 | 依据与约束 |
 | --- | --- | --- |
 | 2026-11-25 | 用户批准：蓝牙帧 payload 上限由 256 B 提高到约 1 KB（拟 `DEV_PROTO_MAX_PAYLOAD` = 1024），不在 BT 侧做围栏分片。 | 40 点围栏记录 24+16×40 = 664 B 超出现行 256 B（`components/device_proto/include/DevProtoFrame.h:19`、`proto/Frame.hpp:21` `kMaxPayload`）；长度字段为 u16，旧固件 `BT_RX_BUFF` 2048 B。随 WP-FENCE 实施：修改冻结头需同步 `docs/frozen.sha256` 与 `docs/protocol/phone_protocol.md`，实测各帧缓冲的 DRAM 增量并写入该工作包报告；当前不改代码。 |
+| 2026-11-26 | 用户选定生产 SN 方案 b：SN 为空或出厂默认值时手机 `0x08` 可写；已有有效 SN 后 `0x08` 返回“已锁定”，改写需工厂密钥解锁（调试控制台或 Web 工厂页）。后续 App 增加注册码，未注册只读。 | 现状 `0x08` 无鉴权（`main/modules/bt_link/BtLinkModule.cpp:448` `onStartSnPn`）；满足 ADR-0016 Q1 的非控制台产线写入通道。 |
+| 2026-11-26 | 用户批准报警默认表（WP-ALARM）：进栏快 100/100 ms 声光振同步；出栏慢 500/500 ms；精度丢失每 3 s 两短声、LED 常亮、无振动；低电 <10% 每 30 s 一短声；开机一短、关机一长（保留）。每围栏 `led/beep/motor` 开关与 `warn_type`/报警配置按此表；节奏由独立定时器产生，不再绑 GGA。 | REQ-010/021/022。蜂鸣器 YS-SBZ9650DYB05 经 P-MOS SI2333DS 高边开关（BEEP_POWER），若为有源（自激）器件则音调固定，“≥2 种声音”以节奏区分；PWM 调音需确认器件类型，必要时改无源蜂鸣器（硬件）。 |
+| 2026-11-26 | 旧 App 兼容：客户使用配套 nav App（`app-release.apk`）。V3.1 仅在连接方**不是** nav App 时（`bt_connect_type != Connect_Nav_APP`，`P2_V3.1_IDF/main/user_src/user_gnss.c:377`）把原始 NMEA（含 ZDA 0.2 Hz、VTG/GLL 1 Hz）转发到蓝牙；nav App 经 0x04 查询取 GGA。故 ZDA/VTG/GLL 只影响第三方测量软件。 | 是否补输出待定。 |
