@@ -38,6 +38,7 @@
 | PW1 | 关机参与者登记表（kSave/kQuiesce 外部登记）、保存超时 3 s、低电保持 120 s、`ShutdownReason::kWeb` 预留、电池/USB 终帧拆分、`power simbat` 低电 HIL 注入；DRAM +136 B / IRAM 0；2026-11-25 P2 v1.41 HIL 通过（长按/8 s 强制/控制台/低电 120 s/终帧插 USB/USB 在位关机；报告 `docs/reports/PW1-shutdown-participants.md` §4.1） | 0015、0020 | 合入 `7874dcd` |
 | OL7 | 关机确认弹窗单选项（单击/双击确认、5 s 超时取消，Wi-Fi/配对仍两选项）、OLED 5 格电量（降 3 点/30 s、升 5 点/60 s 滞回、充电循环填充、拔 USB 保持 60 s、<10% 闪烁、simbat 立即重定格）；`PowerSnapshot` 增 `batterySimSession`；DRAM +8 B / IRAM 0；2026-11-26 P2 v1.41 HIL 通过（报告 `docs/reports/OL7-dialog-battery-bars.md`；滞回门限未经实测放电曲线校准） | 0020 | 合入 `a1a78e9` |
 | MT1 | RU2-02 改频率 out 保存失败补偿写回旧 rate（补偿失败记 FW_LOGE、启动 F9P 对齐自愈）；t13 disconnect 测试同步修正（钩子原子安装，TSan 45/46，余 `t13_init_start_timeout` 既有 `s_spp` 竞争）；DRAM 0 / IRAM 0 / flash +288 B；2026-11-26 P2 v1.41 HIL：`gnss rate 5` 重启后保持 5 Hz、`gnss rate 1` 恢复（报告 `docs/reports/MT1-rate-save-t13-sync.md`） | 0014 | 合入 `b9a5ec4` |
+| MW1 | WiFi 模式堆诊断（`status.dev` 增 largest/internal；`diag`/`diag.tasks` 只读命令，单帧 ≤1024 B 超出截断标记）+ 回收（`esp_bt_mem_release` BTDM、web 帧池 16→10、UART TX 8192→2048；`rtcm.pipe` 保留供后续 4G/NTRIP/STA）；DRAM +48 B / IRAM 0；2026-11-26 整机 HIL：WiFi free 43,576→78,700 B（+35,124），min 25,524→73,956 B，largest 40,960→73,728 B（报告 `docs/reports/MW1-wifi-heap-diag.md`） | 0018 | 合入 `7e0765f` |
 
 ## 2. 进行中与未开始
 
