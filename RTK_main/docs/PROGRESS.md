@@ -46,7 +46,7 @@
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | ADR-0021 已批准（2026-11-26）：N1 驱动+链路 → N2 NTRIP+RTCM 来源仲裁 → N3 MQTT（预留）；N1 未开工 |
-| 分区统一与旧配置迁移 | ADR-0022。C6 已合并（02083f5），完成分区统一、双实例 NVS 与网页手动切槽。C7 按 2026-11-26 修订仅迁移 SN/PN，`tools/ci/run_gates.sh --prefix c7 --base fec6ce8` 门禁 43/43。C7 真机升级与恢复出厂验收待执行，见 `docs/reports/C7-legacy-eeprom-migration.md`。 |
+| 分区统一与旧配置迁移 | ADR-0022。C6 已合并（02083f5），完成分区统一、双实例 NVS 与网页手动切槽。C7 按 2026-11-26 修订仅迁移 SN/PN，`tools/ci/run_gates.sh --prefix c7 --base fec6ce8` 门禁 43/43。C7 已合并（ce429a9），HIL 通过：Arduino bootloader + V3.1（2560 B 旧 blob）网页 OTA 后迁移 2 字段、二次启动与 `freset` 不再迁移，见 `docs/reports/C7-legacy-eeprom-migration.md`。已知旧固件问题（仅记录，暂不修）：V3.1 网页 OTA 进度条按时间推进，约 48 s 无条件重启，上传慢于约 33 KB/s 会截断（`P2_V3.1_IDF/main/user_src/user_oled.c:440-535`）。 |
 
 ## 3. 待补的硬件验证（HIL）
 
