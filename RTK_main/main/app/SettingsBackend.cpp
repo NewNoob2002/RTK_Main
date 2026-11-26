@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "def/GnssSubDef.hpp"
+#include "def/NetDef.hpp"
 #include "app/PowerRequests.hpp"
 
 #include "AppContext.hpp"
@@ -37,6 +38,11 @@ static_assert(settings::kGgaGateFlagEnabled == kGgaGateFlagEnabled);
 static_assert(settings::kGgaGateFlagMinSats == kGgaGateFlagMinSats);
 static_assert(settings::kGgaGateCmdArgLen == kGgaGateCmdArgLen);
 #endif
+static_assert(settings::kVerbNetSetEnable == verb(NetVerb::kSetEnable));
+static_assert(settings::kVerbNetSetApn == verb(NetVerb::kSetApn));
+static_assert(settings::kVerbNetSetUser == verb(NetVerb::kSetUser));
+static_assert(settings::kVerbNetSetPass == verb(NetVerb::kSetPass));
+static_assert(settings::kNetTextMaxBytes == kNetTextMaxChars);
 static_assert(static_cast<uint8_t>(Caller::kConsole) ==
               static_cast<uint8_t>(rtos::Caller::kConsole));
 static_assert(static_cast<uint8_t>(Caller::kWeb) == static_cast<uint8_t>(rtos::Caller::kWeb));
@@ -62,6 +68,9 @@ rtos::Executor *executorFor(const AppContext &ctx, Owner owner) noexcept
         return ctx.ioExecutor;
     }
 #endif
+    if (owner == Owner::kNet) {
+        return ctx.netExecutor;
+    }
     return nullptr;
 }
 
@@ -346,7 +355,9 @@ fw::Result postSettingCommand(void *ctx, Owner owner, const fw::Command &cmd, Ca
         return fw::Result::kNotSupported;
     }
     auto queued = cmd;
-    queued.target = id(owner == Owner::kStorage ? ModuleKind::kStorage : ModuleKind::kGnss);
+    queued.target = id(owner == Owner::kStorage ? ModuleKind::kStorage
+                       : owner == Owner::kNet   ? ModuleKind::kNet
+                                                : ModuleKind::kGnss);
     rtos::Ticket ticket{};
     // 上面的静态断言保证调用方枚举的对应关系。
     const auto result = executor->post(queued, static_cast<rtos::Caller>(caller), ticket);

@@ -234,7 +234,7 @@ void testIdentifyFailure() noexcept
 #include "app/BootStepList.inc"
     };
 #undef BOOT_STEP
-    CHECK(steps.size() == 16U);
+    CHECK(steps.size() == 17U);
     CHECK(std::string_view{steps[0].name} == "identify");
     CHECK(std::string_view{steps[1].name} == "power");
     CHECK(std::string_view{steps[2].name} == "banner");

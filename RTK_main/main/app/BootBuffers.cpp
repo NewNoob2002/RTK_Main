@@ -84,6 +84,8 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
     const bool bluetooth = normal && (self().radioMode == RadioMode::kBluetooth);
     const bool hasOled = board::hasFeature(board::current(), board::Feature::kOled) &&
                          (board::current().oled.i2cPort >= 0);
+    const bool hasNet = normal && board::hasFeature(board::current(), board::Feature::kCellular) &&
+                        (board::current().cellular.uart >= 0);
     const auto allocSpp = [bluetooth](const char *tag, size_t size, std::span<uint8_t> &buf) {
         return !bluetooth ||
                fw::isOk(self().bootArena.allocArray<uint8_t>(tag, size, buf, kBufAlign));
@@ -101,6 +103,11 @@ bool allocateBootBuffers(BootBuffers &out, const rtos::BootAllocatorOps *ops) no
         return failAlloc("task.io");
     }
 #endif
+    if (hasNet && !fw::isOk(self().bootArena.allocArray<StackType_t>(
+                      "task.net", AppContext::kNetStackBytes / sizeof(StackType_t), out.netStack,
+                      kStackAlign))) {
+        return failAlloc("task.net");
+    }
     if (bluetooth && !fw::isOk(self().bootArena.allocArray<StackType_t>(
                          "task.spp_worker", SPP_SERVER_WORKER_STACK_BYTES / sizeof(StackType_t),
                          out.sppWorkerStack, kStackAlign))) {

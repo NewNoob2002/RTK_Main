@@ -438,6 +438,11 @@ fw::Status setSafeOutputLevels(const Profile &profile) noexcept
 {
     fw::Status status = fw::Status::kOk;
     for (const SafeOutput &output : profile.safeOutputs) {
+        // 4G PWREN 由 NetModule 的 PW1 参与者在优雅关机（QPOWD）完成后自行拉低；这里若提前置低
+        // 会在 AT+QPOWD 写入 flash 期间硬掉电（ADR-0021 §2.9）。整板断电由 kCutPower 保证。
+        if (hasFeature(profile, Feature::kCellular) && output.gpio == profile.cellular.pwrenGpio) {
+            continue;
+        }
         // 引脚已在启动识别阶段经 setSafeOutputs 配为输出，仅刷新电平避免重复 gpio_config 告警。
         const esp_err_t err =
             gpio_set_level(static_cast<gpio_num_t>(output.gpio), output.high ? 1U : 0U);

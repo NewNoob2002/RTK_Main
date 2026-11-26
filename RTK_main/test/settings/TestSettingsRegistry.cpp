@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include "settings/Registry.hpp"
@@ -53,12 +54,12 @@ settings::Error validateWithCaps(const char *key, const settings::GnssCaps &caps
 }
 
 /**
- * @brief  校验注册表形状：21 项（含 gnss.cutoff）、键名唯一、keyAt 映射一致、未知键返回空
+ * @brief  校验注册表形状：25 项（含 net.* 与 gnss.cutoff）、键名唯一、keyAt 映射一致、未知键返回空
  */
 void testRegistryShape()
 {
     const auto table = settings::keyTable();
-    TEST_ASSERT_EQUAL_size_t(21U, table.size());
+    TEST_ASSERT_EQUAL_size_t(25U, table.size());
     for (size_t i = 0U; i < table.size(); ++i) {
         if (i < static_cast<size_t>(settings::KeyId::kCount)) {
             TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(i), static_cast<uint8_t>(table[i].id));
@@ -368,6 +369,58 @@ void testF9pCapsAndCutoffKey()
         static_cast<int>(validateWithCaps("gnss.sat_track", um98x, "15,0,1,1,1,0", parsed)));
 }
 
+/**
+ * @brief  校验 4G 键（ADR-0021 §2.7）：文本边界、可见字符、编码动词、权限与密码只写
+ */
+void testNetKeys()
+{
+    settings::CanonicalValue out{};
+    const settings::GnssCaps caps{};
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("net.enable", caps, "1", out)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(validateWithCaps("net.enable", caps, "2", out)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("net.apn", caps, "cmnet", out)));
+    TEST_ASSERT_EQUAL_UINT8(5U, out.size);
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("net.apn", caps, "", out))); // 空串 = 清除
+    TEST_ASSERT_EQUAL_UINT8(0U, out.size);
+    const std::string max31(31U, 'a');
+    const std::string over32(32U, 'a');
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("net.user", caps, max31, out)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(validateWithCaps("net.user", caps, over32, out)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(validateWithCaps("net.pass", caps, "a b", out)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kBadValue),
+                      static_cast<int>(validateWithCaps("net.pass", caps, "a\tb", out)));
+
+    // 编码：动词与参数。
+    fw::Command cmd{};
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(validateWithCaps("net.pass", caps, "secret", out)));
+    const settings::KeySpec *pass = settings::findKey("net.pass");
+    TEST_ASSERT_NOT_NULL(pass);
+    TEST_ASSERT_TRUE(pass->encode(out, cmd));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbNetSetPass, cmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(6U, cmd.argLen);
+    TEST_ASSERT_EQUAL_MEMORY("secret", cmd.args.data(), 6U);
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kNet), static_cast<int>(pass->owner));
+    TEST_ASSERT_FALSE(pass->readable); // 密码只写
+
+    // 权限：仅 console/internal，不对网页、手机、MQTT 开放。
+    for (const char *name : {"net.enable", "net.apn", "net.user", "net.pass"}) {
+        const settings::KeySpec *spec = settings::findKey(name);
+        TEST_ASSERT_NOT_NULL(spec);
+        TEST_ASSERT_EQUAL_UINT8(settings::access::kConsoleInternal, spec->access);
+        TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kNet), static_cast<int>(spec->owner));
+    }
+    TEST_ASSERT_TRUE(settings::findKey("net.enable")->readable);
+    TEST_ASSERT_TRUE(settings::findKey("net.apn")->readable);
+}
+
 } // namespace
 
 /** @brief Unity 每用例前置钩子。 */
@@ -389,5 +442,6 @@ int main()
     RUN_TEST(testPeriodMsToInterval);
     RUN_TEST(testPhoneAndSatTrackKeys);
     RUN_TEST(testF9pCapsAndCutoffKey);
+    RUN_TEST(testNetKeys);
     return UNITY_END();
 }

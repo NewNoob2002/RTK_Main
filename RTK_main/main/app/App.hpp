@@ -101,6 +101,16 @@ void runConsole() noexcept;
 #endif
 
 /**
+ * @brief 启动 4G 联网执行器（kNet）；仅 Feature::kCellular 板型的正常启动调用，成功返回 nullptr。
+ * @param netStack: 外供 kNet 任务栈，须活到重启
+ * @param launched: 已创建任务位掩码，任务创建成功即追加 net 位
+ * @retval nullptr 启动成功
+ * @retval 非空 初始化、关机参与者登记、任务创建或模块启动失败原因
+ * @note 仅启动任务；等待屏障可阻塞至 5 s，非 ISR。
+ */
+[[nodiscard]] const char *startNet(std::span<StackType_t> netStack, uint32_t &launched) noexcept;
+
+/**
  * @brief 等待指定任务到达启动屏障
  * @param bits: 要等待的任务位掩码
  * @retval true 指定任务全部到达

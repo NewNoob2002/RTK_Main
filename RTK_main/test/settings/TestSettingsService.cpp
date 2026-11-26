@@ -274,7 +274,39 @@ void testGetDomainAndForEach()
 
     size_t count = 0U;
     svc.forEach([&count](const settings::KeySpec &) { ++count; });
-    TEST_ASSERT_EQUAL_size_t(21U, count);
+    TEST_ASSERT_EQUAL_size_t(25U, count);
+}
+
+/**
+ * @brief  校验 4G 键经 Service 的权限与投递：console 可写并投递到 kNet，网页/手机/MQTT 一律 kLocked，
+ *         net.pass 只写（get 失败）
+ */
+void testNetKeysPermissionsAndPost()
+{
+    MockBackendState st{};
+    st.caps = makeCm680Caps();
+    settings::Service svc{};
+    bindMock(st, svc);
+    settings::Ticket t{};
+    for (const char *name : {"net.enable", "net.apn", "net.user", "net.pass"}) {
+        for (const settings::Caller who :
+             {settings::Caller::kWeb, settings::Caller::kPhone, settings::Caller::kMqtt}) {
+            TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kLocked),
+                              static_cast<int>(svc.set(name, "1", who, t)));
+        }
+    }
+    TEST_ASSERT_EQUAL_INT(0, st.postCalls);
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("net.apn", "cmnet", settings::Caller::kConsole, t)));
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kNet), static_cast<int>(t.owner));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbNetSetApn, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(5U, st.lastCmd.argLen);
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
+                      static_cast<int>(svc.set("net.enable", "1", settings::Caller::kInternal, t)));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbNetSetEnable, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(1U, st.lastCmd.args[0]);
+    settings::Value v{};
+    TEST_ASSERT_FALSE(svc.get("net.pass", v));
 }
 
 /**
@@ -410,6 +442,7 @@ int main()
 {
     UNITY_BEGIN();
     RUN_TEST(testPermissionsAndFactoryLock);
+    RUN_TEST(testNetKeysPermissionsAndPost);
     RUN_TEST(testValidationEncodingAndErrors);
     RUN_TEST(testGetDomainAndForEach);
     RUN_TEST(testPhoneCallerPermissionsAndEncoding);

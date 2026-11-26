@@ -37,15 +37,16 @@
 namespace app {
 namespace {
 
-constexpr uint32_t kQuiesceMinWaitMs = 30U;     // ms，给 trace_out 一次唤醒窗口
-constexpr uint32_t kQuiesceMaxWaitMs = 150U;    // ms，日志排空等待上限
-constexpr uint32_t kWifiQuiesceWaitMs = 5500U;  // ms，覆盖 HTTP socket 默认 5 s 超时
-constexpr uint32_t kRestartWaitMs = 150U;       // ms，异步日志和 UART 排空上限
-constexpr uint32_t kOledFinalFlushMaxMs = 30U;  // ms，USB 关机终帧 I2C 刷出等待上限（OL2）
-constexpr uint32_t kChargerPollPeriodMs = 200U; // ms，运行期 SGM41513 I2C 采样周期
-constexpr uint32_t kBatteryPeriodMs = 1000U;    // ms，组间最短等待时间
-constexpr uint32_t kBootBatterySpacingMs = 5U;  // ms，旧 P2 首组组内采样间隔
-constexpr uint32_t kBatteryFreshMs = 2000U;     // ms，超期旧读数不用于低电关机
+constexpr uint32_t kQuiesceMinWaitMs = 30U;      // ms，给 trace_out 一次唤醒窗口
+constexpr uint32_t kQuiesceMaxWaitMs = 150U;     // ms，日志排空等待上限
+constexpr uint32_t kNetQuiesceMaxWaitMs = 2000U; // ms，4G 优雅关机总上限（ADR-0021 §2.9）
+constexpr uint32_t kWifiQuiesceWaitMs = 5500U;   // ms，覆盖 HTTP socket 默认 5 s 超时
+constexpr uint32_t kRestartWaitMs = 150U;        // ms，异步日志和 UART 排空上限
+constexpr uint32_t kOledFinalFlushMaxMs = 30U;   // ms，USB 关机终帧 I2C 刷出等待上限（OL2）
+constexpr uint32_t kChargerPollPeriodMs = 200U;  // ms，运行期 SGM41513 I2C 采样周期
+constexpr uint32_t kBatteryPeriodMs = 1000U;     // ms，组间最短等待时间
+constexpr uint32_t kBootBatterySpacingMs = 5U;   // ms，旧 P2 首组组内采样间隔
+constexpr uint32_t kBatteryFreshMs = 2000U;      // ms，超期旧读数不用于低电关机
 
 constinit std::atomic<TaskHandle_t> s_restart_task_handle{nullptr};
 static_assert(fw::kAtomicUsable<TaskHandle_t>, "电源重启唤醒任务句柄原子须无锁");
@@ -910,6 +911,9 @@ uint32_t PowerModule::quiesceLimitMs(const power::ShutdownParticipant &p,
     if (builtin && (p.milestone == power::ShutdownMilestone::kSafeGpio) && safeGpioEvaluated_) {
         // 仅内置 safe_gpio 是同步执行：失败时不再额外空等；外部参与者即使声明同里程碑也按通用上限等待。
         return 0U;
+    }
+    if (p.milestone == power::ShutdownMilestone::kNetPower) {
+        return kNetQuiesceMaxWaitMs;
     }
     return kQuiesceMaxWaitMs;
 }

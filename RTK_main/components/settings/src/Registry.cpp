@@ -264,6 +264,30 @@ Error validateSn(std::string_view text, CanonicalValue &out) noexcept
 }
 
 /**
+ * @brief  校验 4G 文本键（0–31 个可见 ASCII 0x21..0x7E，允许为空以清除）
+ * @param  text:    文本输入
+ * @param[out] out: 成功时写入字符字节串；失败保持原内容
+ * @retval Error::kOk       通过
+ * @retval Error::kBadValue 超长或含空格/控制字符/非 ASCII
+ */
+Error validateText(std::string_view text, CanonicalValue &out) noexcept
+{
+    if (text.size() > kNetTextMaxBytes) {
+        return Error::kBadValue;
+    }
+    for (const char ch : text) {
+        if (!isVisibleAscii(static_cast<uint8_t>(ch))) {
+            return Error::kBadValue;
+        }
+    }
+    out.bytes.fill(0U);
+    std::copy_n(text.begin(), text.size(), out.bytes.begin());
+    out.kind = CanonicalKind::kBytes;
+    out.size = static_cast<uint8_t>(text.size()); // 已限制 ≤ 31
+    return Error::kOk;
+}
+
+/**
  * @brief  解析定长十六进制文本到目标字节切片（大小写不敏感）
  * @param  text: 十六进制文本（长度须等于 2 * dst.size()）
  * @param[out] dst: 目标字节切片
@@ -561,6 +585,22 @@ void domainStaticSn(const GnssCaps &caps, bool gnssEnabled, Domain &out) noexcep
 }
 
 /**
+ * @brief  生成静态文本键（`net.apn`/`net.user`/`net.pass`）取值域
+ * @param  caps:        未使用
+ * @param  gnssEnabled: 未使用
+ * @param[out] out:     取值域输出
+ */
+void domainStaticText(const GnssCaps &caps, bool gnssEnabled, Domain &out) noexcept
+{
+    static_cast<void>(caps);
+    static_cast<void>(gnssEnabled);
+    out = Domain{.kind = KeyKind::kText,
+                 .supported = true,
+                 .minValue = 0,
+                 .maxValue = static_cast<int32_t>(kNetTextMaxBytes)};
+}
+
+/**
  * @brief  生成 `gnss.ppp` 的动态取值域（由接收机型号能力决定，CM680 不支持）
  * @param  caps:        当前 GNSS 能力快照
  * @param  gnssEnabled: 固件是否启用 GNSS
@@ -774,6 +814,44 @@ bool encodeFactorySn(const CanonicalValue &val, fw::Command &cmd) noexcept
 }
 
 /**
+ * @brief  编码 `net.enable` → `NetVerb::kSetEnable`
+ * @param  val: 0/1 布尔整数
+ * @param[out] cmd: 输出命令
+ * @retval true  编码成功
+ * @retval false 参数类型错误
+ */
+bool encodeNetEnable(const CanonicalValue &val, fw::Command &cmd) noexcept
+{
+    if (val.kind != CanonicalKind::kInt) {
+        return false;
+    }
+    cmd.verb = kVerbNetSetEnable;
+    cmd.argLen = 1U;
+    cmd.args[0] = (val.number != 0) ? 1U : 0U;
+    return true;
+}
+
+/**
+ * @brief  编码 4G 文本键（长度 0..31 字节，空串表示清除）
+ * @tparam Verb 目标命令动词（kVerbNetSetApn/User/Pass）
+ * @param  val: 字符字节串
+ * @param[out] cmd: 输出命令
+ * @retval true  编码成功
+ * @retval false 类型错误或超长
+ */
+template <uint8_t Verb> bool encodeNetText(const CanonicalValue &val, fw::Command &cmd) noexcept
+{
+    if (val.kind != CanonicalKind::kBytes || val.size > kNetTextMaxBytes ||
+        val.size > cmd.args.size()) {
+        return false;
+    }
+    cmd.verb = Verb;
+    cmd.argLen = val.size;
+    std::copy_n(val.bytes.begin(), val.size, cmd.args.begin());
+    return true;
+}
+
+/**
  * @brief  编码 `gnss.ppp` → `GnssSubVerb::kApplyPpp`（1 字节 0/1）
  * @param  val: 0/1 布尔整数
  * @param[out] cmd: 输出命令
@@ -910,6 +988,17 @@ constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount) + 1U> kRegistry
     {KeyId::kPhoneSnPn, "phone.sn_pn", KeyKind::kSnPn, Owner::kStorage, kVerbStorageSetSnPn,
      &encodeFixedBytes<kVerbStorageSetSnPn, kSnPnBytes>, &domainStaticSnPn, PersistKind::kNvs,
      access::kPhoneInternal, true},
+    {KeyId::kNetEnable, "net.enable", KeyKind::kBool, Owner::kNet, kVerbNetSetEnable,
+     &encodeNetEnable, &domainStaticBool, PersistKind::kNvs, access::kConsoleInternal, true},
+    {KeyId::kNetApn, "net.apn", KeyKind::kText, Owner::kNet, kVerbNetSetApn,
+     &encodeNetText<kVerbNetSetApn>, &domainStaticText, PersistKind::kNvs, access::kConsoleInternal,
+     true},
+    {KeyId::kNetUser, "net.user", KeyKind::kText, Owner::kNet, kVerbNetSetUser,
+     &encodeNetText<kVerbNetSetUser>, &domainStaticText, PersistKind::kNvs,
+     access::kConsoleInternal, true},
+    {KeyId::kNetPass, "net.pass", KeyKind::kText, Owner::kNet, kVerbNetSetPass,
+     &encodeNetText<kVerbNetSetPass>, &domainStaticText, PersistKind::kNvs,
+     access::kConsoleInternal, false}, // 密码只写：get 恒失败，控制台只显示掩码
     {kKeyIdGnssCutoff, "gnss.cutoff", KeyKind::kIntRange, Owner::kGnss, kVerbGnssSetSatTrack,
      &encodeGnssCutoff, &domainGnssCutoff, PersistKind::kNvs, access::kStandardAll, true},
 }};
@@ -971,6 +1060,8 @@ Error validateValue(const KeySpec &spec, const Domain &dom, std::string_view tex
         return validateHeight(text, out);
     case KeyKind::kSnPn:
         return validateSnPn(text, out);
+    case KeyKind::kText:
+        return validateText(text, out);
     default:
         return Error::kBadValue;
     }

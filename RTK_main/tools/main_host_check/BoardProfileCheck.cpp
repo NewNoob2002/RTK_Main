@@ -51,6 +51,19 @@ void checkProfiles() noexcept
                 }
             }
         }
+        // 4G 引脚仅 kCellular 板型填写；PWREN 必须是 P2 安全输出（上电前低电平，模块断电）。
+        if (hasFeature(profile, Feature::kCellular)) {
+            CHECK(profile.cellular.uart == 1 && profile.cellular.rxGpio == 32);
+            CHECK(profile.cellular.txGpio == 33 && profile.cellular.pwrenGpio == 26);
+            bool pwrenSafeLow = false;
+            for (const SafeOutput &output : profile.safeOutputs) {
+                pwrenSafeLow =
+                    pwrenSafeLow || (output.gpio == profile.cellular.pwrenGpio && !output.high);
+            }
+            CHECK(pwrenSafeLow);
+        } else {
+            CHECK(profile.cellular.uart < 0 && profile.cellular.pwrenGpio < 0);
+        }
         CHECK(profile.safeOutputs.size() <= 8U);
         for (const SafeOutput &output : profile.safeOutputs) {
             CHECK(output.gpio >= 0 && output.gpio < 34);

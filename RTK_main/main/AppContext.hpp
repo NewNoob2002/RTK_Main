@@ -63,6 +63,7 @@ enum class BootTask : uint8_t {
     kIo = 1U << 1U,    ///< io 执行器任务（GNSS）
     kTrace = 1U << 2U, ///< trace_out 任务
     kOled = 1U << 3U,  ///< oled 低优先级显示刷新任务
+    kNet = 1U << 4U,   ///< net 执行器任务（4G，仅 Feature::kCellular 板型）
 };
 
 /**
@@ -80,6 +81,8 @@ enum class BootTask : uint8_t {
 /** 固件唯一上下文：拥有 BootArena、DataCenter、全部模块实例与执行器控制存储；全零静态初值落入 .bss。 */
 struct AppContext {
     static constexpr size_t kLinkStackBytes = 4096;
+    static constexpr size_t kNetStackBytes =
+        4096; // B，kNet 执行器静态栈（ADR-0021 §2.2，N1 以高水位复核）
 #if RTK_GNSS_ENABLED
     static constexpr size_t kIoStackBytes = 4096;
 #endif
@@ -127,6 +130,8 @@ struct AppContext {
     rtos::Executor *linkExecutor = nullptr;
     ExecutorControlStorage<kModuleCount> linkStorage{};
     rtos::Executor *ioExecutor = nullptr;
+    rtos::Executor *netExecutor = nullptr; // 仅 Feature::kCellular 板型在 startNet 后非空
+    ExecutorControlStorage<kModuleCount> netStorage{};
 #if RTK_GNSS_ENABLED
     ExecutorControlStorage<kModuleCount> ioStorage{};
     RtcmPipe rtcmPipe{};

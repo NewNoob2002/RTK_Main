@@ -36,6 +36,7 @@ enum class ShutdownMilestone : uint8_t {
     kSaveFlush,    ///< kSave 阶段落盘项
     kRadioQuiesce, ///< kQuiesce 阶段无线静默（BT/Wi-Fi）
     kSafeGpio,     ///< kQuiesce 阶段外设安全电平
+    kNetPower,     ///< kQuiesce 阶段 4G 模块优雅关机（QPOWD，限时 2 s，ADR-0021 §2.9）
     kOledFinal,    ///< kCutPower 阶段 OLED 终帧停留
 };
 

@@ -49,15 +49,15 @@ consteval auto enabledNames(app::board::BootMode bootMode, RadioMode mode) noexc
 }
 
 static_assert(enabledNames(app::board::BootMode::kNormal, RadioMode::kBluetooth) ==
-              std::array<std::string_view, 9U>{"bt_link", "rtcm", "storage", "system", "power",
-                                               "oled", "gnss", "debug"});
+              std::array<std::string_view, 10U>{"bt_link", "rtcm", "storage", "system", "power",
+                                                "oled", "gnss", "net", "debug"});
 static_assert(enabledNames(app::board::BootMode::kNormal, RadioMode::kWifiConfig) ==
-              std::array<std::string_view, 9U>{"storage", "system", "power", "oled", "web", "gnss",
-                                               "debug"});
+              std::array<std::string_view, 10U>{"storage", "system", "power", "oled", "web", "gnss",
+                                                "net", "debug"});
 static_assert(enabledNames(app::board::BootMode::kChargeStandby, RadioMode::kBluetooth) ==
-              std::array<std::string_view, 9U>{"storage", "system", "power", "oled", "debug"});
+              std::array<std::string_view, 10U>{"storage", "system", "power", "oled", "debug"});
 static_assert(enabledNames(app::board::BootMode::kChargeStandby, RadioMode::kWifiConfig) ==
-              std::array<std::string_view, 9U>{"storage", "system", "power", "oled", "debug"});
+              std::array<std::string_view, 10U>{"storage", "system", "power", "oled", "debug"});
 static_assert(!app::moduleEnabled(RadioMode::kBluetooth, ModuleEnable::kWifiOnly));
 static_assert(app::moduleEnabled(RadioMode::kWifiConfig, ModuleEnable::kWifiOnly));
 static_assert(!app::moduleEnabled(app::board::BootMode::kChargeStandby, RadioMode::kBluetooth,

@@ -29,11 +29,16 @@ inline constexpr const char *kLinkModuleStart = "link_module_start";
 inline constexpr const char *kIoInit = "io_init";
 inline constexpr const char *kIoTaskStart = "io_task_start";
 inline constexpr const char *kIoModuleStart = "io_module_start";
+inline constexpr const char *kNetInit = "net_init";
+inline constexpr const char *kNetTaskStart = "net_task_start";
+inline constexpr const char *kNetModuleStart = "net_module_start";
+inline constexpr const char *kNetShutdownReg = "net_shutdown_reg";
 
 // 失败停机（Executors::stopBootTasks）
 inline constexpr const char *kStopTaskTimeout = "stop:task_timeout";
 inline constexpr const char *kStopGnss = "stop:gnss";
 inline constexpr const char *kStopSpp = "stop:spp";
+inline constexpr const char *kStopNet = "stop:net";
 
 // 故障注入（RTK_BOOT_FAULT_STEP）：实际原因为 kFaultPrefix + 步骤名，写缓冲失败时用回退值。
 inline constexpr const char *kFaultPrefix = "fault:";

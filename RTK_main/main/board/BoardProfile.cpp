@@ -50,6 +50,7 @@ constexpr std::array kProfiles{
                      .powerGpio = 12,
                      .addr = 0x3CU,
                      .rotated180 = true},
+            .cellular = {.uart = 1, .rxGpio = 32, .txGpio = 33, .pwrenGpio = 26},
             .safeOutputs = kP2SafeOutputs,
             .features = kP2Features},
     Profile{

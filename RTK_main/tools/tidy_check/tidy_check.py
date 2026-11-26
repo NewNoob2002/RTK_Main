@@ -246,6 +246,7 @@ def main():
                          "components/app_fw/src/*.cpp", "components/bt_reconnect/src/*.cpp",
                          "components/web_proto/src/*.cpp",
                          "components/settings/src/*.cpp",
+                         "components/cellular/src/*.cpp",
                          "components/stream_demux/src/**/*.cpp"):
             add(p, p.suffix == ".c")
         # gnss：test/gnss 全驱动数据库，包含 IDF 未启用的 ComNav。
