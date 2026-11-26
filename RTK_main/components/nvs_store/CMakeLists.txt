@@ -2,7 +2,7 @@
 # IDF 宏会触发 -Wold-style-cast/-Wconversion/-Wundef，本组件只开 AGENTS.md 规定的 C 告警组。
 idf_component_register(
     SRCS "NvsStore.c"
-    INCLUDE_DIRS "include"
+    INCLUDE_DIRS "include" "boot_include"
     REQUIRES nvs_flash log app_fw)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

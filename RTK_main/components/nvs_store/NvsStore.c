@@ -8,6 +8,7 @@
 #include "nvs_flash.h"
 
 #include "NvsStore.h"
+#include "NvsStoreBoot.h"
 
 #define NVS_STORE_NS       "rtk"
 #define NVS_STORE_KEY_SN   "sn"
@@ -17,10 +18,16 @@
 #define NVS_STORE_ID_BYTES (NVS_STORE_SN_MAX + 1U)
 
 static nvs_store_boot_scratch_fn s_boot_scratch;
+static nvs_store_boot_migration_fn s_boot_migration;
 
 void nvs_store_set_boot_scratch(nvs_store_boot_scratch_fn with_scratch)
 {
     s_boot_scratch = with_scratch;
+}
+
+void nvs_store_set_boot_migration(nvs_store_boot_migration_fn migrate)
+{
+    s_boot_migration = migrate;
 }
 
 /** @brief 判断 NVS 初始化错误是否须擦除重试。
@@ -204,10 +211,7 @@ static void nvs_store_reconcile_id(bool sn)
     }
 }
 
-/** @brief 保护系统擦除前还能只读访问的数据。
- * @param[out] blob: 启动期临时缓冲。 @param[in,out] len: 容量，成功时为 blob 长度。
- * @retval 读取结果。 @note 可阻塞，非 ISR。 */
-static esp_err_t nvs_store_read_eeprom(uint8_t *blob, size_t *len)
+esp_err_t nvs_store_read_legacy_eeprom(uint8_t *blob, size_t *len)
 {
     nvs_handle_t handle = 0;
     esp_err_t err = nvs_open(NVS_STORE_EEPROM, NVS_READONLY, &handle);
@@ -248,7 +252,7 @@ static esp_err_t nvs_store_recover_system(uint8_t *blob, size_t capacity)
     size_t sn_len = sizeof(sn);
     size_t pn_len = sizeof(pn);
     const esp_err_t saved_blob =
-        blob != NULL ? nvs_store_read_eeprom(blob, &blob_len) : ESP_ERR_NO_MEM;
+        blob != NULL ? nvs_store_read_legacy_eeprom(blob, &blob_len) : ESP_ERR_NO_MEM;
     const esp_err_t saved_sn = nvs_store_read_id(NVS_STORE_SYSTEM_PARTITION,
                                                  NVS_STORE_BACKUP_NAMESPACE, true, sn, &sn_len);
     const esp_err_t saved_pn = nvs_store_read_id(NVS_STORE_SYSTEM_PARTITION,
@@ -310,7 +314,9 @@ static esp_err_t nvs_store_init_cfg(void)
 esp_err_t nvs_store_init(void)
 {
     const nvs_store_boot_scratch_fn with_scratch = s_boot_scratch;
+    const nvs_store_boot_migration_fn migrate = s_boot_migration;
     s_boot_scratch = NULL;
+    s_boot_migration = NULL;
     esp_err_t system = nvs_flash_init();
     if (nvs_store_needs_erase(system)) {
         system = with_scratch != NULL ? with_scratch(nvs_store_recover_system)
@@ -326,6 +332,9 @@ esp_err_t nvs_store_init(void)
     if (system == ESP_OK && cfg == ESP_OK) {
         nvs_store_reconcile_id(true);
         nvs_store_reconcile_id(false);
+        if (migrate != NULL) {
+            migrate(with_scratch);
+        }
     }
     return cfg;
 }
