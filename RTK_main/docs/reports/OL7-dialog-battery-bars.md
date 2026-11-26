@@ -24,7 +24,7 @@
 | `tools/ci/run_gates.sh --prefix ol7 --base 8c6ef0e`（43 项：全部 host 套件普通 + ASan/UBSan、G5 format、G6 doc_check、G3 七种 IDF 配置构建、G3b、G5b clang-tidy、G7b、G7c） | PASS（43/43；首轮 doc_check、tidy 失败，已拆出 `stepHysteresis` 并补注释后重跑通过） |
 | `sha256sum -c docs/frozen.sha256` | PASS |
 | oled_sim headless/comm/standby golden（ctest 在 G2 内） | PASS |
-| 烧录 / 串口 / 真机 HIL | NOT_RUN（任务禁止） |
+| 烧录 / 串口 / 真机 HIL | PASS（2026-11-26 架构烧录 `d098132`，用户实测，见下节） |
 
 ## 资源对比（`idf.py size`，基线 `01af210` vs 本分支）
 
@@ -49,3 +49,16 @@ DRAM 增量远低于 128 B 预算，IRAM 无增长，无运行期堆分配。
 - Nit #3：`OledRender.cpp` 两处函数注释改为 5 格电池图标。
 - Nit #4：`OledUiCheck` 关机弹窗单击用例补充按下当刻与 +299 ms 仍为 `kNone`、+300 ms 才 `kShutdownKey` 的断言。
 - 重跑：host 全量（普通，`ctest` 205/205）、`tools/ci/run_gates.sh --prefix ol7 --base 8c6ef0e` 43/43 PASS（含 ASan/UBSan、doc_check、clang-tidy、IDF 构建）。
+
+## 实板 HIL（2026-11-26，P2 v1.41，`builds/ol7v-idf` @ `d098132`，DEV 档）
+
+| 项目 | 结果 |
+| --- | --- |
+| 关机弹窗仅 `POWER OFF` 单项 + 5 s 倒计时；单击/双击确认关机；5 s 不操作取消 | PASS（用户实测） |
+| 8 s 强制关机兜底 | PASS（用户实测；用户决定维持 8 s，不改 10 s） |
+| Wi-Fi 切换与配对弹窗仍两选项 | PASS（用户实测） |
+| 各页去掉百分比、5 格图标；`simbat 50/25/5/off` 立即重定格，5% 末格闪烁 | PASS（用户目视，期间未触发低电关机） |
+| 充电循环填充、拔 USB 60 s 保持后重定格 | PASS（用户实测） |
+| 降 3 点/30 s、升 5 点/60 s 滞回门限的真实放电曲线验证 | NOT_RUN（需长时间放电记录） |
+
+按键沿用自研 `board::KeyStateMachine`（10 ms 轮询、30 ms 消抖），松手即复位强制关机计时；用户同意暂不引入 `espressif/button`。
