@@ -83,6 +83,27 @@ void wakeQueue(void *queue) noexcept
 
 } // namespace
 
+namespace {
+
+/**
+ * @brief 设置 PWREN 电平并记录失败
+ * @param gpio: 板级表给出的 PWREN 引脚号（已核实为输出）
+ * @param on: true=高电平
+ * @retval true gpio_set_level 成功
+ * @note 线程安全（单次 GPIO 写）；不分配堆，非 ISR。
+ */
+bool setPwren(int gpio, bool on) noexcept
+{
+    const esp_err_t err = gpio_set_level(static_cast<gpio_num_t>(gpio), on ? 1U : 0U);
+    if (err != ESP_OK) {
+        FW_LOGE(fw::TraceCat::kSys, "net: PWREN %s failed err=%d", on ? "high" : "low",
+                static_cast<int>(err));
+    }
+    return err == ESP_OK;
+}
+
+} // namespace
+
 /**
  * @brief LinkFsm 电源钩子：拉高/拉低 PWREN 并清 UART 输入
  * @param ctx: 回调上下文指针
@@ -95,11 +116,10 @@ void NetModule::powerHook(void *ctx, bool on) noexcept
     const auto *self = static_cast<const NetModule *>(ctx);
     if (self->pwrenGpio_ >= 0) {
         // 引脚号来自板级表，已核实为输出 GPIO；on 对应高电平（PWRKEY 已硬件接地）。
-        const esp_err_t err =
-            gpio_set_level(static_cast<gpio_num_t>(self->pwrenGpio_), on ? 1U : 0U);
-        if (err != ESP_OK) {
-            FW_LOGE(fw::TraceCat::kSys, "net: PWREN %s failed err=%d", on ? "high" : "low",
-                    static_cast<int>(err));
+        const bool ok = setPwren(self->pwrenGpio_, on);
+        if ((self->rt_ != nullptr) && !on) {
+            // 断电 GPIO 失败：记录故障，FSM 进入 Off 也不得上报“已断电”，由 kNet/PW1 重试硬切（r3 I5）。
+            self->rt_->pwrenFault.store(!ok, std::memory_order_release);
         }
     }
     if (self->rt_ != nullptr && self->rt_->uartInstalled) {
@@ -129,12 +149,13 @@ bool NetModule::baudHook(void *ctx, uint32_t baud) noexcept
 }
 
 /**
- * @brief AtEngine 写钩子：把字节写入 UART，并有界等待发送完成
+ * @brief AtEngine 写钩子：非阻塞写 UART，整次调用受“固定预算 + 线上时间”约束
  * @param ctx: 回调上下文指针
  * @param bytes: 待写字节
- * @retval true 全部写入且在 kWriteTimeoutMs 内发送完成
- * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。TX 环形缓冲为 0，uart_write_bytes 只阻塞到
- *       字节进入硬件 FIFO（无流控，随波特率有界），随后 uart_wait_tx_done 以超时兜底。
+ * @retval true 全部写入且在预算内发送完成；超时或部分发送返回 false（引擎按写失败处理并重新同步）
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。TX 环形缓冲为 0 时 uart_write_bytes 会以
+ *       portMAX_DELAY 等待 TX 锁与 FIFO 信号量（IDF v6.1 esp_driver_uart/src/uart.c:1646,1673），
+ *       故改用只填空闲 FIFO 的 uart_tx_chars 循环，预算 = kWriteBaseMs + 字节数×10 位/波特率。
  */
 bool NetModule::writeHook(void *ctx, std::span<const uint8_t> bytes) noexcept
 {
@@ -143,11 +164,36 @@ bool NetModule::writeHook(void *ctx, std::span<const uint8_t> bytes) noexcept
         return false;
     }
     const auto port = static_cast<uart_port_t>(self->uartPort_);
-    const int n = uart_write_bytes(port, bytes.data(), bytes.size());
-    if ((n < 0) || (static_cast<size_t>(n) != bytes.size())) {
+    uint32_t baud = 0U;
+    if ((uart_get_baudrate(port, &baud) != ESP_OK) || (baud == 0U)) {
+        baud = cellular::kPolicy.bootBaud;
+    }
+    const uint64_t bits = static_cast<uint64_t>(bytes.size()) * 10ULL * 1000ULL;
+    const auto wireMs = static_cast<uint32_t>((bits + baud - 1U) / baud) + 1U;
+    const TickType_t budget = pdMS_TO_TICKS(kWriteBaseMs + wireMs) + 1U;
+    const TickType_t start = xTaskGetTickCount();
+    size_t sent = 0U;
+    while (sent < bytes.size()) {
+        // IDF API 取 const char*：以只读字节视图转换。
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+        const auto *chunk = reinterpret_cast<const char *>(bytes.subspan(sent).data());
+        const int n = uart_tx_chars(port, chunk, static_cast<uint32_t>(bytes.size() - sent));
+        if (n < 0) {
+            return false;
+        }
+        sent += static_cast<size_t>(n);
+        if (sent < bytes.size()) {
+            if ((xTaskGetTickCount() - start) >= budget) {
+                return false; // 部分发送：线上字节不可信，引擎随后超时并重新同步
+            }
+            vTaskDelay(1);
+        }
+    }
+    const TickType_t elapsed = xTaskGetTickCount() - start;
+    if (elapsed >= budget) {
         return false;
     }
-    return uart_wait_tx_done(port, pdMS_TO_TICKS(kWriteTimeoutMs)) == ESP_OK;
+    return uart_wait_tx_done(port, budget - elapsed) == ESP_OK;
 }
 
 /**
@@ -222,19 +268,21 @@ void NetModule::atDoneThunk(void *ctx, const cellular::AtResponse &rsp) noexcept
 }
 
 /**
- * @brief 关机参与者 begin：记录 PW1 起点并置位关机请求，唤醒 kNet
+ * @brief 关机参与者 begin：记录 PW1 传入的绝对截止时刻并置位关机请求，唤醒 kNet
  * @param stage: 关机阶段（本模块不区分，统一在 kQuiesce 处理）
+ * @param deadlineMs: PW1 对本参与者的绝对截止时刻（rtos::nowMs 时基，0 表示未指定）
  * @param ctx: NetModule 实例指针
  * @note 由 PowerModule 任务调用，仅写原子量与投递唤醒事件；非 ISR，不分配堆，不阻塞。
  */
-void NetModule::shutdownBegin(board::ShutdownStage stage, void *ctx) noexcept
+void NetModule::shutdownBegin(board::ShutdownStage stage, uint32_t deadlineMs, void *ctx) noexcept
 {
     static_cast<void>(stage);
     const auto *self = static_cast<NetModule *>(ctx);
     if (self->rt_ == nullptr) {
         return;
     }
-    self->rt_->shutdownStartMs.store(rtos::nowMs(), std::memory_order_release);
+    self->rt_->shutdownDeadline.store((deadlineMs != 0U) ? deadlineMs : 1U,
+                                      std::memory_order_release);
     self->rt_->shutdownReq.store(true, std::memory_order_release);
     wakeQueue(self->rt_->uartQueue); // kNet 可能正阻塞在长超时上：让它立刻起步，沿用同一截止时刻
 }
@@ -262,8 +310,12 @@ void NetModule::shutdownTimeout(void *ctx) noexcept
     if (self->rt_ == nullptr) {
         return;
     }
-    FW_LOGW(fw::TraceCat::kSys, "net: PW1 timeout, hard-cut PWREN");
+    if (!self->rt_->forceCutReq.exchange(true, std::memory_order_acq_rel)) {
+        FW_LOGW(fw::TraceCat::kSys, "net: PW1 timeout, hard-cut PWREN");
+    }
+    // PW1 在参与者未完成期间每个周期重复调用：GPIO 写失败时下个周期自然重试。
     if (self->cutPower()) {
+        self->rt_->pwrenFault.store(false, std::memory_order_release);
         self->rt_->shutdownDone.store(true, std::memory_order_release);
     }
 }
@@ -498,11 +550,10 @@ void NetModule::serviceShutdown(uint32_t nowMs) noexcept
     Runtime &rt = *rt_;
     if (!rt.shutdownStarted && rt.shutdownReq.load(std::memory_order_acquire)) {
         rt.shutdownStarted = true;
-        // 沿用 PW1 起点的同一绝对截止时刻，kNet 晚起步也不重新计 2 s（0 保留为“未指定”）。
-        uint32_t deadline =
-            rt.shutdownStartMs.load(std::memory_order_acquire) + cellular::kShutdownTotalMs;
+        // 使用 PW1 传入的同一绝对截止时刻（kNet 晚起步也不重新计 2 s）；缺省时才从现在起算。
+        uint32_t deadline = rt.shutdownDeadline.load(std::memory_order_acquire);
         if (deadline == 0U) {
-            deadline = 1U;
+            deadline = nowMs + cellular::kShutdownTotalMs;
         }
         rt.shutdownDeadlineMs = deadline;
         rt.fsm.beginShutdown(nowMs, deadline);
@@ -510,15 +561,38 @@ void NetModule::serviceShutdown(uint32_t nowMs) noexcept
     if (!rt.shutdownStarted || rt.shutdownDone.load(std::memory_order_acquire)) {
         return;
     }
-    if (rt.fsm.shutdownDone()) {
-        rt.shutdownDone.store(true, std::memory_order_release);
-    } else if (static_cast<int32_t>(nowMs - rt.shutdownDeadlineMs) >= 0) {
-        // FSM 到点仍未完成（钩子被拖慢/任务饥饿）：板型受控硬切，成功后才上报完成。
+    const bool fsmDone = rt.fsm.shutdownDone();
+    const bool pastDeadline = static_cast<int32_t>(nowMs - rt.shutdownDeadlineMs) >= 0;
+    const bool fault = rt.pwrenFault.load(std::memory_order_acquire);
+    // FSM 正常收尾但最后一次拉低 PWREN 的 GPIO 调用失败：不得上报完成，立即重试硬切；
+    // FSM 到点仍未完成（钩子被拖慢/任务饥饿）：板型受控硬切。成功后才上报完成。
+    const bool needCut =
+        fsmDone ? fault : (pastDeadline || rt.forceCutReq.load(std::memory_order_acquire));
+    if (needCut) {
         if (cutPower()) {
+            rt.pwrenFault.store(false, std::memory_order_release);
             rt.shutdownDone.store(true, std::memory_order_release);
         }
+    } else if (fsmDone) {
+        rt.shutdownDone.store(true, std::memory_order_release);
     }
 }
+
+namespace {
+
+/**
+ * @brief 判断链路相位是否允许调试 AT
+ * @param phase: 当前链路相位
+ * @retval true 同步完成之后（SimCheck/Register/PdpUp/Ready）；不含上/断电与同步中
+ * @note 纯函数，线程/ISR 安全。
+ */
+bool diagPhaseAllowed(cellular::Phase phase) noexcept
+{
+    return (phase == cellular::Phase::kSimCheck) || (phase == cellular::Phase::kRegister) ||
+           (phase == cellular::Phase::kPdpUp) || (phase == cellular::Phase::kReady);
+}
+
+} // namespace
 
 /**
  * @brief 把控制台 AT 邮箱中的命令提交给引擎
@@ -530,11 +604,13 @@ void NetModule::serviceAtMailbox(uint32_t nowMs) noexcept
     Runtime &rt = *rt_;
     std::string_view text;
     uint32_t token = 0U;
-    if (!rt.mailbox.take(text, token)) {
+    std::string_view prefix;
+    if (!rt.mailbox.take(text, token, prefix)) {
         return;
     }
-    if (rt.shutdownStarted) {
-        // 关机开始前提交、开始后才取走的命令：不再发往模块，直接以 ABORTED 结算。
+    if (rt.shutdownStarted || rt.shutdownReq.load(std::memory_order_acquire) ||
+        !diagPhaseAllowed(rt.fsm.phase())) {
+        // 提交后模块已进入关机/断电重启/同步等相位：不再发往模块，直接以 ABORTED 结算（r3 I7）。
         cellular::AtResponse rsp;
         rsp.result = cellular::AtResult::kAborted;
         rsp.nowMs = nowMs;
@@ -549,6 +625,7 @@ void NetModule::serviceAtMailbox(uint32_t nowMs) noexcept
     cmd.onDone = &NetModule::atDoneThunk;
     cmd.ctx = this;
     cmd.token = token;
+    cmd.matchPrefix = prefix; // 同前缀 URC 与应答行按命令推导的前缀归属（裁决 r3 I2）
     if (!rt.engine.submit(cmd, nowMs)) {
         rt.mailbox.untake(); // 队列满：下一轮重试
     }
@@ -565,7 +642,7 @@ fw::Status NetModule::submitAt(std::string_view text) noexcept
     // 只读 kNet 发布的原子镜像，不碰 FSM 的非原子成员。
     const auto phase =
         static_cast<cellular::Phase>(rt_->phaseMirror.load(std::memory_order_acquire));
-    if (phase == cellular::Phase::kOff || phase == cellular::Phase::kPowerCycle) {
+    if (!diagPhaseAllowed(phase)) {
         return fw::Status::kInvalidState;
     }
     const fw::Status status = rt_->mailbox.submit(text);

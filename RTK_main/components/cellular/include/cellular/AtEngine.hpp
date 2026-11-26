@@ -59,6 +59,10 @@ struct AtCommand final {
     size_t rawMax = 0U;                     // rawPrefix 声明长度的上限（请求长度）；超限判协议错误
     AtMatchFn match = nullptr; // URC 前缀行的“是否为本命令应答”判定（如 +CEREG? 的 <n>,<stat>）
     uint32_t token = 0U;       // 上层自定义标识，随 AtResponse 回传并可由 frontToken() 读取
+    std::string_view
+        matchPrefix{}; // 非空（≤kMatchPrefixBytes）：以该前缀开头的 URC 前缀行归本命令应答
+    bool quietFirst =
+        false; // true：发出前先等通道静默 kQuietMs（模块刚上电/波特率探测时隔离启动噪声）
 };
 
 /** 端口配置：写出钩子与 URC 前缀表。 */
@@ -96,6 +100,12 @@ public:
     static constexpr size_t kMaxPayload = 512U;
     /** 重新同步握手的单次等待上限（ms）。 */
     static constexpr uint32_t kProbeTimeoutMs = 1000U;
+    /** 重新同步前要求接收通道连续静默的时长（ms）；静默期内到达的字节全部丢弃。 */
+    static constexpr uint32_t kQuietMs = 300U;
+    /** 静默等待的总上限（ms）；持续有噪声则按一次握手超时计。 */
+    static constexpr uint32_t kQuietMaxMs = 2000U;
+    /** AtCommand::matchPrefix 的容量。 */
+    static constexpr size_t kMatchPrefixBytes = 16U;
 
     constexpr AtEngine() noexcept = default;
     ~AtEngine() = default;
@@ -160,7 +170,8 @@ public:
     /**
      * @brief  通知引擎串口接收端丢过字节（驱动 FIFO/环形缓冲溢出）
      * @param  nowMs: 当前 tick 毫秒
-     * @note   正在读原始数据时立即以 kError 终止该命令；其余情况标记待重新同步。
+     * @note   命令在途（读原始数据或等待应答）时立即以 kError 终止该命令并标记待重新同步，
+     *         握手/静默期间重新开始静默计时；空闲时不处理。
      */
     void onRxLost(uint32_t nowMs) noexcept;
 
@@ -175,13 +186,13 @@ public:
     }
 
     /**
-     * @brief  是否处于待重新同步或同步握手中
+     * @brief  是否处于待重新同步、静默等待或同步握手中（通道应答不可信）
      * @retval true 旧响应隔离中
      * @note   纯查询。
      */
     [[nodiscard]] bool resyncing() const noexcept
     {
-        return resync_ || (state_ == State::kProbe);
+        return resync_ || (state_ == State::kProbe) || (state_ == State::kQuiet);
     }
 
     /**
@@ -249,7 +260,8 @@ private:
         kWaitResponse,
         kWaitPrompt,
         kRaw,
-        kProbe, // 重新同步握手：已发 AT+CMEE?，丢弃旧响应直到 +CMEE: 行及其 OK
+        kProbe, // 重新同步握手：已发只读探针，丢弃旧响应直到其独有应答行及随后的 OK
+        kQuiet, // 等待接收通道静默 kQuietMs：期间所有字节丢弃，静默后发探针（或直接发命令）
     };
 
     /** 队列槽：命令文本副本与回调。 */
@@ -266,9 +278,14 @@ private:
         size_t rawMax = 0U;
         AtMatchFn match = nullptr;
         uint32_t token = 0U;
+        std::array<char, kMatchPrefixBytes> prefix{};
+        uint8_t prefixLen = 0U;
+        bool quietFirst = false;
     };
 
     void startFront(uint32_t nowMs) noexcept;
+    void enterQuiet(uint32_t nowMs, bool thenProbe) noexcept;
+    void sendFront(uint32_t nowMs) noexcept;
     void sendProbe(uint32_t nowMs) noexcept;
     void expire(uint32_t nowMs) noexcept;
     void handleProbeLine(std::string_view line, uint32_t nowMs) noexcept;
@@ -297,6 +314,10 @@ private:
     bool resyncEnabled_ = false;
     bool resync_ = false;
     bool probeSeen_ = false;
+    bool probeAlt_ = true;        // 交替使用两条前缀互异的只读探针，避免被迟到的同形应答冒充
+    bool quietThenProbe_ = false; // kQuiet 结束后：true 发探针，false 直接发队首命令
+    bool quietDone_ = false;      // 队首命令已完成静默等待（quietFirst 只等一次）
+    uint32_t lastRxMs_ = 0U;      // 最近一次收到字节（或丢字节通知）的时间
     AtStats stats_{};
 };
 

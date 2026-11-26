@@ -279,6 +279,7 @@ private:
     void pollPowerCycle(uint32_t nowMs) noexcept;
     void startPowerOn(uint32_t nowMs) noexcept;
     void notifyAllClosed() noexcept;
+    void clearStaleClose() noexcept;
 
     void pollOff(uint32_t nowMs) noexcept;
     void pollSync(uint32_t nowMs) noexcept;
@@ -370,6 +371,7 @@ private:
     uint32_t regLostMs_ = 0U;      // Ready 阶段注册丢失起点
     uint16_t droppedRecv_ = 0U;
     bool startAllowed_ = true;
+    bool quietNext_ = false; // 下一次 submitOp 的命令发出前先等通道静默（AtCommand::quietFirst）
     std::array<char, 128> cmdBuf_{};
 };
 

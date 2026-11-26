@@ -939,13 +939,17 @@ void powerParticipantBlocksAndTimeoutNames()
     struct ParticipantState {
         uint32_t beginCount = 0U;
         uint32_t timeoutCount = 0U;
+        uint32_t deadlineMs = 0U;
         bool done = false;
     };
     ParticipantState saveState{};
     ParticipantState quiesceState{};
-    const auto onBegin = [](board::ShutdownStage /*stage*/, void *arg) noexcept {
+    const auto onBegin = [](board::ShutdownStage /*stage*/, uint32_t deadlineMs,
+                            void *arg) noexcept {
         // 由本测试显式绑定为 ParticipantState*。
-        ++static_cast<ParticipantState *>(arg)->beginCount;
+        auto *state = static_cast<ParticipantState *>(arg);
+        ++state->beginCount;
+        state->deadlineMs = deadlineMs;
     };
     const auto checkDone = [](void *arg) noexcept {
         // 由本测试显式绑定为 ParticipantState*。
@@ -1060,7 +1064,10 @@ void powerParticipantBlocksAndTimeoutNames()
     CHECK(ModuleTestAccess::pumpLogs());
     const std::string_view quiesceLogs{captured.data.data(), captured.len};
     CHECK(quiesceLogs.find("test_extra_quiesce") != std::string_view::npos);
-    CHECK(saveState.timeoutCount == 1U && quiesceState.timeoutCount == 1U); // 各恰一次
+    // 保存阶段恰一次；静默阶段到点即调用并按轮重试（r3 I5：兜底不依赖 quiesceDone/OLED 时序）。
+    CHECK(saveState.timeoutCount == 1U && quiesceState.timeoutCount >= 1U);
+    // PW1 把同一个绝对截止时刻传给参与者：静默阶段非 0（= PW1 起点 + 150 ms），保存阶段无截止。
+    CHECK(quiesceState.deadlineMs != 0U && saveState.deadlineMs == 0U);
 
     cli::setOutSink(nullptr, false);
     s_capturedLog = nullptr;

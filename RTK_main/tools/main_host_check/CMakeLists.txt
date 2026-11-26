@@ -569,4 +569,5 @@ target_include_directories(net_logic_check PRIVATE ${PROJ_ROOT}/main
 target_compile_options(net_logic_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
     -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
     -Wimplicit-fallthrough -Wswitch-default -Wundef)
+target_link_libraries(net_logic_check PRIVATE Threads::Threads)
 add_test(NAME net_logic_check COMMAND net_logic_check)

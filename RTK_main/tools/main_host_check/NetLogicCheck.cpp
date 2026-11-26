@@ -1,7 +1,11 @@
-// 4G 联网纯逻辑回归（N1 复审 #7/#8/#9/#13）：控制台 AT 邮箱的拒绝表/归属/过期结算与低电量门控迟滞。
+// 4G 联网纯逻辑回归（N1 复审 #7/#8/#9/#13，r3 I2/I7/I8）：控制台 AT 邮箱的白名单/归属/过期结算/并发
+// 取消与完成竞态、应答前缀推导，以及低电量门控迟滞。
 // 主机可测：NetMailbox/NetPowerGate 无 IDF 依赖。
 #include <cstdio>
+#include <array>
+#include <atomic>
 #include <cstdlib>
+#include <thread>
 #include <string>
 #include <string_view>
 
@@ -33,39 +37,99 @@ AtResponse done(uint32_t token, AtResult result = AtResult::kOk, int32_t code = 
 
 void testForbiddenList()
 {
-    // 允许：普通查询/设置。
-    CHECK(!NetMailbox::forbidden("AT"));
-    CHECK(!NetMailbox::forbidden("AT+CSQ"));
-    CHECK(!NetMailbox::forbidden("at+cfun?"));
-    CHECK(!NetMailbox::forbidden("AT+CFUN=1"));
-    CHECK(!NetMailbox::forbidden("AT+CFUN=0"));
-    CHECK(!NetMailbox::forbidden("AT+CFUN=4"));
-    CHECK(!NetMailbox::forbidden("AT+QIOPEN=1,0,\"TCP\",\"1.2.3.4\",80,0,0"));
-    // 拒绝：非 AT、回显、波特率、模式切换、APN 配置（含凭据）。
-    CHECK(NetMailbox::forbidden(""));
-    CHECK(NetMailbox::forbidden("A"));
-    CHECK(NetMailbox::forbidden("HELLO"));
-    CHECK(NetMailbox::forbidden("ATE0"));
-    CHECK(NetMailbox::forbidden("ate1"));
-    CHECK(NetMailbox::forbidden("AT+IPR=9600"));
-    CHECK(NetMailbox::forbidden("AT+IPR?"));
-    CHECK(NetMailbox::forbidden("AT+QISWTMD=1,1,2"));
-    CHECK(NetMailbox::forbidden("AT+QICSGP=1"));
-    CHECK(NetMailbox::forbidden("AT+QICSGP=1,1,\"apn\",\"user\",\"pass\",1"));
+    // 白名单（含大小写不敏感）：已批准的诊断命令。
+    for (const char *ok : {"AT",
+                           "ATI",
+                           "AT+QGMR",
+                           "AT+GSN",
+                           "AT+QCCID",
+                           "AT+CSQ",
+                           "AT+CREG?",
+                           "AT+CEREG?",
+                           "AT+CGREG?",
+                           "AT+COPS?",
+                           "AT+CPIN?",
+                           "AT+QNWINFO",
+                           "AT+QENG=\"servingcell\"",
+                           "AT+CGDCONT?",
+                           "AT+QIACT?",
+                           "AT+QISTATE?",
+                           "at+cfun?",
+                           "AT+CFUN=0",
+                           "AT+CFUN=1",
+                           "AT+CFUN=4",
+                           "at+csq"}) {
+        if (NetMailbox::forbidden(ok)) {
+            std::fprintf(stderr, "whitelist rejected: %s\n", ok);
+            std::abort();
+        }
+    }
+    // 未识别/危险命令一律拒绝（I8）：复位、关机、AT+CMEE 改模式、波特率、APN/凭据、数据提示符、QIOPEN。
+    for (const char *bad : {"",
+                            "A",
+                            "HELLO",
+                            "ATE0",
+                            "ate1",
+                            "AT+IPR=9600",
+                            "AT+IPR?",
+                            "AT+QISWTMD=1,1,2",
+                            "AT+QICSGP=1",
+                            "AT+QICSGP=1,1,\"apn\",\"user\",\"pass\",1",
+                            "AT+CFUN=1,1",
+                            "AT+CFUN=2",
+                            "AT+CFUN=",
+                            "AT+CFUN=1,0",
+                            "AT+QPOWD=1",
+                            "AT+QPOWD=0",
+                            "AT+CMEE=2",
+                            "AT+CMEE?",
+                            "AT+CSQ=1",
+                            "AT+CPIN=\"1234\"",
+                            "AT+COPS=0",
+                            "AT+CGDCONT=1,\"IP\",\"apn\"",
+                            "AT+QIACT=1",
+                            "AT+QIDEACT=1",
+                            "AT+QISEND=0,10",
+                            "AT+QISENDEX=0,\"AB\"",
+                            "AT+CMGS=\"123\"",
+                            "AT+QIOPEN=1,0,\"TCP\",\"1.2.3.4\",80,0,0",
+                            "AT+QIOPEN=1,0,\"TCP\",\"1.2.3.4\",80,0,1",
+                            "AT+QENG=\"neighbourcell\"",
+                            "AT+QGMR=1",
+                            "ATD123;",
+                            "ATH",
+                            "AT&F",
+                            "AT+CRESET",
+                            "AT+QRST=1"}) {
+        if (!NetMailbox::forbidden(bad)) {
+            std::fprintf(stderr, "whitelist accepted: %s\n", bad);
+            std::abort();
+        }
+    }
     // 拒绝：命令串联与控制字符。
     CHECK(NetMailbox::forbidden("AT+CSQ;+IPR=9600"));
     CHECK(NetMailbox::forbidden("AT+CSQ\r"));
     CHECK(NetMailbox::forbidden("AT+CSQ\n+IPR=1"));
-    // 拒绝：CFUN 其它模式（0/1/4 之外），含无参数形式。
-    CHECK(NetMailbox::forbidden("AT+CFUN=2"));
-    CHECK(NetMailbox::forbidden("AT+CFUN="));
-    // 拒绝：进入数据提示符的命令（裸发数据不经 payload 通道）。
-    CHECK(NetMailbox::forbidden("AT+QISEND=0,10"));
-    CHECK(NetMailbox::forbidden("AT+QISENDEX=0,\"AB\""));
-    CHECK(NetMailbox::forbidden("AT+CMGS=\"123\""));
-    // 拒绝：QIOPEN 透传/直吐（access_mode≠0）。
-    CHECK(NetMailbox::forbidden("AT+QIOPEN=1,0,\"TCP\",\"1.2.3.4\",80,0,1"));
-    CHECK(NetMailbox::forbidden("AT+QIOPEN=1,0,\"TCP\",\"1.2.3.4\",80,0,2"));
+    CHECK(NetMailbox::forbidden("AT+CSQ\x01"));
+}
+
+void testReplyPrefix()
+{
+    std::array<char, 16> buf{};
+    CHECK(NetMailbox::replyPrefix("AT+CPIN?", buf) == "+CPIN:");
+    CHECK(NetMailbox::replyPrefix("at+cereg?", buf) == "+CEREG:");
+    CHECK(NetMailbox::replyPrefix("AT+CFUN=1", buf) == "+CFUN:");
+    CHECK(NetMailbox::replyPrefix("AT+QENG=\"servingcell\"", buf) == "+QENG:");
+    CHECK(NetMailbox::replyPrefix("AT", buf).empty());
+    CHECK(NetMailbox::replyPrefix("ATI", buf).empty());
+    // take() 把推导出的前缀交给引擎（同前缀 URC 与应答行的归属依据）。
+    NetMailbox box;
+    CHECK(box.submit("AT+CEREG?") == fw::Status::kOk);
+    std::string_view cmd;
+    std::string_view prefix;
+    uint32_t token = 0U;
+    CHECK(box.take(cmd, token, prefix));
+    CHECK(prefix == "+CEREG:");
 }
 
 void testMailboxLifecycle()
@@ -76,8 +140,9 @@ void testMailboxLifecycle()
     CHECK(box.state() == NetMailbox::State::kPending);
     CHECK(box.submit("AT") == fw::Status::kBusy); // 未释放不得覆盖
     std::string_view cmd;
+    std::string_view prefix;
     uint32_t token = 0U;
-    CHECK(box.take(cmd, token));
+    CHECK(box.take(cmd, token, prefix));
     CHECK(cmd == "AT+CSQ");
     CHECK(token != 0U);
     CHECK(box.state() == NetMailbox::State::kRunning);
@@ -91,7 +156,7 @@ void testMailboxLifecycle()
     CHECK(box.state() == NetMailbox::State::kIdle);
     // 失败终结：响应里追加结果文本。
     CHECK(box.submit("AT+CPIN?") == fw::Status::kOk);
-    CHECK(box.take(cmd, token));
+    CHECK(box.take(cmd, token, prefix));
     box.onDone(done(token, AtResult::kCmeError, 10));
     CHECK(box.state() == NetMailbox::State::kDone);
     const std::string failed(box.response(ok));
@@ -104,17 +169,18 @@ void testMailboxStaleToken()
 {
     NetMailbox box;
     std::string_view cmd;
+    std::string_view prefix;
     uint32_t first = 0U;
     uint32_t second = 0U;
     CHECK(box.submit("AT+CSQ") == fw::Status::kOk);
-    CHECK(box.take(cmd, first));
-    box.release(); // REPL 超时放弃：kRunning 只标记放弃，缓冲不得复用
-    CHECK(box.state() == NetMailbox::State::kRunning);
+    CHECK(box.take(cmd, first, prefix));
+    box.release(); // REPL 超时放弃：kRunning 改为 kAbandoned，缓冲不得复用
+    CHECK(box.state() == NetMailbox::State::kAbandoned);
     CHECK(box.submit("AT+CREG?") == fw::Status::kBusy);
     box.onDone(done(first, AtResult::kTimeout)); // 旧请求终结 → 回空闲
     CHECK(box.state() == NetMailbox::State::kIdle);
     CHECK(box.submit("AT+CREG?") == fw::Status::kOk);
-    CHECK(box.take(cmd, second));
+    CHECK(box.take(cmd, second, prefix));
     CHECK(second != first);
     // 迟到的旧回调（同一个旧 token）既不能结算新请求，也不能污染新响应。
     box.onDone(done(first, AtResult::kOk));
@@ -131,13 +197,14 @@ void testMailboxUntakeAndRedaction()
 {
     NetMailbox box;
     std::string_view cmd;
+    std::string_view prefix;
     uint32_t token = 0U;
     CHECK(box.submit("AT+QIACT?") == fw::Status::kOk);
-    CHECK(box.take(cmd, token));
+    CHECK(box.take(cmd, token, prefix));
     box.untake(); // 引擎队列满：退回 kPending
     CHECK(box.state() == NetMailbox::State::kPending);
     uint32_t again = 0U;
-    CHECK(box.take(cmd, again));
+    CHECK(box.take(cmd, again, prefix));
     box.onLine("+QICSGP: 1,1,\"apn\",\"user\",\"secret\",1"); // 凭据行必须脱敏
     box.onDone(done(again));
     bool ok = false;
@@ -149,6 +216,60 @@ void testMailboxUntakeAndRedaction()
     CHECK(box.submit("AT") == fw::Status::kOk);
     box.release();
     CHECK(box.state() == NetMailbox::State::kIdle);
+}
+
+/**
+ * I7：REPL 的放弃（release）与 kNet 的完成（onDone）竞态——两线程交替 20 万轮，
+ * 任何时刻都不得残留 Done/卡死 Busy；旧实现（abandon 标志 + 非原子结算）会在此处残留 Done。
+ */
+void testMailboxCancelCompleteRace()
+{
+    NetMailbox box;
+    std::atomic<bool> stop{false};
+    std::atomic<uint32_t> processed{0U};
+    std::thread net([&box, &stop, &processed]() {
+        std::string_view cmd;
+        std::string_view prefix;
+        uint32_t token = 0U;
+        for (;;) {
+            if (box.take(cmd, token, prefix)) {
+                box.onLine("+CSQ: 20,99");
+                box.onDone(done(token));
+                processed.fetch_add(1U, std::memory_order_relaxed);
+            } else if (stop.load(std::memory_order_acquire)) {
+                return;
+            }
+        }
+    });
+    constexpr uint32_t kRounds = 200000U;
+    uint32_t stuck = 0U;
+    for (uint32_t i = 0U; i < kRounds; ++i) {
+        uint64_t spins = 0U;
+        while (box.submit("AT+CSQ") != fw::Status::kOk) {
+            if (++spins > 200000000ULL) {
+                stuck = i + 1U; // 残留 Done/Abandoned 永不回收：永久 Busy
+                break;
+            }
+        }
+        if (stuck != 0U) {
+            break;
+        }
+        // 交替“等到完成”与“立刻放弃”，让放弃落在 Running 的各个时刻。
+        if ((i & 1U) == 0U) {
+            for (uint32_t w = 0U; w < (i % 97U); ++w) {
+                if (box.state() == NetMailbox::State::kDone) {
+                    break;
+                }
+            }
+        }
+        box.release();
+    }
+    stop.store(true, std::memory_order_release);
+    net.join();
+    CHECK(stuck == 0U);
+    // 线程结束后邮箱必须可复用（无残留 Done/Abandoned）。
+    const NetMailbox::State end = box.state();
+    CHECK((end == NetMailbox::State::kIdle) || (end == NetMailbox::State::kPending));
 }
 
 void testPowerGate()
@@ -191,6 +312,8 @@ void testPowerGate()
 int main()
 {
     testForbiddenList();
+    testReplyPrefix();
+    testMailboxCancelCompleteRace();
     testMailboxLifecycle();
     testMailboxStaleToken();
     testMailboxUntakeAndRedaction();

@@ -299,19 +299,23 @@ void testLateTerminatorDoesNotCompleteNextCommand()
     TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CSQ", 300U), 0U));
     h.engine.poll(300U);
     TEST_ASSERT_EQUAL(AtResult::kTimeout, h.done[0].result);
-    // 下一条命令排队后，先发重新同步握手而不是命令本身。
+    // 下一条命令排队后：先等通道静默 kQuietMs，再发重新同步握手，而不是立刻发命令。
     h.tx.clear();
     TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+GSN", 300U), 310U));
-    TEST_ASSERT_EQUAL_STRING("AT+CMEE?\r", h.tx.c_str());
-    // 旧命令迟到的应答与终结行：丢弃，不归属新命令。
+    TEST_ASSERT_EQUAL_STRING("", h.tx.c_str());
+    // 旧命令迟到的应答与终结行：丢弃（并刷新静默计时），不归属新命令。
     feedStr(h, "+CSQ: 20,0\r\nOK\r\n", 320U);
     TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
     TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(h.lines.size()));
     TEST_ASSERT_TRUE(h.engine.stats().stale >= 1U);
+    h.engine.poll(619U);
+    TEST_ASSERT_EQUAL_STRING("", h.tx.c_str()); // 距最后一个字节未满 300 ms
+    h.engine.poll(620U);
+    TEST_ASSERT_EQUAL_STRING("AT+CMEE?\r", h.tx.c_str());
     // 握手完成后才发出新命令，其应答只归新命令。
-    feedStr(h, "+CMEE: 2\r\nOK\r\n", 330U);
+    feedStr(h, "+CMEE: 2\r\nOK\r\n", 630U);
     TEST_ASSERT_EQUAL_STRING("AT+CMEE?\rAT+GSN\r", h.tx.c_str());
-    feedStr(h, "860000000000001\r\nOK\r\n", 340U);
+    feedStr(h, "860000000000001\r\nOK\r\n", 640U);
     TEST_ASSERT_EQUAL_UINT32(2U, static_cast<uint32_t>(h.done.size()));
     TEST_ASSERT_EQUAL(AtResult::kOk, h.done[1].result);
     TEST_ASSERT_EQUAL_UINT32(1U, h.engine.stats().resyncs);
@@ -327,7 +331,56 @@ void testCancelInflightNeedsResync()
     TEST_ASSERT_TRUE(h.engine.resyncing());
     h.tx.clear();
     TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT", 300U), 20U));
+    TEST_ASSERT_EQUAL_STRING("", h.tx.c_str());
+    h.engine.poll(320U);
     TEST_ASSERT_EQUAL_STRING("AT+CMEE?\r", h.tx.c_str());
+}
+
+// I1：探针超时后，迟到的上一轮探针应答不得被下一轮探针（交替为 AT+CSCS?）误认为自己的应答。
+void testAlternatingProbeRejectsLateSameShapeReply()
+{
+    Harness h;
+    setupHarness(h);
+    h.engine.setResyncEnabled(true);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CSQ", 100U), 0U));
+    h.engine.poll(100U);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+GSN", 300U), 110U));
+    h.engine.poll(410U);
+    TEST_ASSERT_EQUAL_STRING("AT+CMEE?\r", h.tx.c_str() + h.tx.find("AT+CMEE?"));
+    h.engine.poll(1410U); // 第一轮探针无应答：超时后重新静默
+    h.engine.poll(1710U);
+    TEST_ASSERT_TRUE(h.tx.find("AT+CSCS?\r") != std::string::npos);
+    // 第一轮探针迟到的应答：属于 +CMEE:，不是本轮 +CSCS:，不得完成握手。
+    feedStr(h, "+CMEE: 2\r\nOK\r\n", 1720U);
+    TEST_ASSERT_TRUE(h.tx.find("AT+GSN") == std::string::npos);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
+}
+
+// I2：命令自带的精确前缀把同前缀 URC 行识别为本命令应答。
+void testMatchPrefixOwnsReplyLine()
+{
+    Harness h;
+    setupHarness(h);
+    AtCommand cmd = makeCmd(h, "AT+CGREG?");
+    cmd.matchPrefix = "+CGREG:";
+    TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
+    feedStr(h, "+CGREG: 0,1\r\nOK\r\n", 5U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.lines.size()));
+    TEST_ASSERT_EQUAL(AtResult::kOk, h.done[0].result);
+}
+
+// I3：行模式（等待应答）下丢字节：立即以错误结束当前命令，不再等一个孤立的 OK。
+void testRxLostInLineModeFailsCommand()
+{
+    Harness h;
+    setupHarness(h);
+    h.engine.setResyncEnabled(true);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CSQ", 5000U), 0U));
+    feedStr(h, "+CSQ: 2", 10U);
+    h.engine.onRxLost(20U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL(AtResult::kError, h.done[0].result);
+    TEST_ASSERT_TRUE(h.engine.resyncing());
 }
 
 void testRawLengthOverRequestIsProtocolError()
@@ -409,6 +462,9 @@ int main()
     RUN_TEST(testDeadlineBoundaryUsesRxTimestamp);
     RUN_TEST(testLateTerminatorDoesNotCompleteNextCommand);
     RUN_TEST(testCancelInflightNeedsResync);
+    RUN_TEST(testAlternatingProbeRejectsLateSameShapeReply);
+    RUN_TEST(testMatchPrefixOwnsReplyLine);
+    RUN_TEST(testRxLostInLineModeFailsCommand);
     RUN_TEST(testRawLengthOverRequestIsProtocolError);
     RUN_TEST(testRawLengthTrailingJunkRejected);
     RUN_TEST(testRxLostDuringRawAbortsCommand);

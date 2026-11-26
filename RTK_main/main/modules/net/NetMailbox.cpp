@@ -11,11 +11,8 @@
 namespace app {
 namespace {
 
-constexpr size_t kResultTextBytes = 32U;            // "CME ERROR <code>" 的上限
-constexpr unsigned char kAsciiDel = 0x7FU;          // ASCII DEL 控制字符
-constexpr std::string_view kCfunName = "+CFUN";     // 功能级别命令名
-constexpr std::string_view kQiopenName = "+QIOPEN"; // 打开 socket 命令名
-constexpr size_t kQiopenAccessModeIndex = 6U;       // QIOPEN 第 7 个参数 <access_mode>（0 起）
+constexpr unsigned char kAsciiDel = 0x7FU; // ASCII DEL 控制字符
+constexpr size_t kResultTextBytes = 32U;   // "CME ERROR <code>" 的上限
 
 /**
  * @brief 大小写不敏感前缀判断
@@ -53,62 +50,6 @@ std::string_view trim(std::string_view text) noexcept
 }
 
 /**
- * @brief 取逗号分隔的第 index 个字段（0 起，已 trim）
- * @param args: 参数串
- * @param index: 字段序号
- * @param out: 输出字段视图
- * @retval true 字段存在；false 不存在
- */
-bool fieldAt(std::string_view args, size_t index, std::string_view &out) noexcept
-{
-    size_t start = 0U;
-    for (size_t i = 0U; i < index; ++i) {
-        const size_t comma = args.find(',', start);
-        if (comma == std::string_view::npos) {
-            return false;
-        }
-        start = comma + 1U;
-    }
-    const size_t end = args.find(',', start);
-    const size_t len = (end == std::string_view::npos) ? std::string_view::npos : (end - start);
-    out = trim(cellular::subview(args, start, len));
-    return true;
-}
-
-/**
- * @brief 命令名之后紧跟的参数部分（跳过 '='）
- * @param rest: 去掉 "AT" 后的命令文本
- * @param nameLen: 命令名长度
- * @retval 参数视图
- */
-std::string_view argsAfter(std::string_view rest, size_t nameLen) noexcept
-{
-    rest.remove_prefix(nameLen);
-    if (!rest.empty() && (rest.front() == '=')) {
-        rest.remove_prefix(1U);
-    }
-    return rest;
-}
-
-/**
- * @brief 判断命令名精确匹配：以 name 开头且其后不是字母数字/下划线
- * @param rest: 去掉 "AT" 后的命令文本
- * @param name: 命令名（大写）
- * @retval true 精确匹配
- */
-bool isCmd(std::string_view rest, std::string_view name) noexcept
-{
-    if (!startsWithNoCase(rest, name)) {
-        return false;
-    }
-    if (rest.size() == name.size()) {
-        return true;
-    }
-    const char next = rest[name.size()];
-    return !std::isalnum(static_cast<unsigned char>(next)) && (next != '_');
-}
-
-/**
  * @brief 追加一行到响应缓冲（结尾补 '\n'；缓冲满截断）
  * @param buf: 响应缓冲
  * @param used: 已用字节数
@@ -136,53 +77,60 @@ size_t appendLine(std::span<char> buf, size_t used, std::string_view text) noexc
 bool NetMailbox::forbidden(std::string_view text) noexcept
 {
     text = trim(text);
-    if (text.size() < 2U) {
-        return true;
-    }
     for (const char c : text) {
         const auto u = static_cast<unsigned char>(c);
-        if ((u < 0x20U) || (u == kAsciiDel) || (c == ';')) {
-            return true; // 控制字符与命令串联
+        if ((u < 0x20U) || (u >= kAsciiDel) || (c == ';')) {
+            return true; // 控制字符、非 ASCII 与命令串联
         }
     }
-    if (!startsWithNoCase(text, "AT")) {
-        return true;
+    // 白名单：只放行已批准的只读诊断命令及单参数 CFUN 故障注入（裁决 r3 I8）。
+    // 整串大小写不敏感精确匹配；其余一律拒绝（含 AT+CMEE?/AT+CSCS?，它们是 AtEngine 重同步探针，
+    // 调试入口不得发出同形命令，否则迟到应答可冒充探针）。
+    static constexpr std::array<std::string_view, 20U> kAllowed{"AT",
+                                                                "ATI",
+                                                                "AT+QGMR",
+                                                                "AT+GSN",
+                                                                "AT+QCCID",
+                                                                "AT+CSQ",
+                                                                "AT+CREG?",
+                                                                "AT+CEREG?",
+                                                                "AT+CGREG?",
+                                                                "AT+COPS?",
+                                                                "AT+CPIN?",
+                                                                "AT+QNWINFO",
+                                                                "AT+QENG=\"SERVINGCELL\"",
+                                                                "AT+CGDCONT?",
+                                                                "AT+QIACT?",
+                                                                "AT+QISTATE?",
+                                                                "AT+CFUN?",
+                                                                "AT+CFUN=0",
+                                                                "AT+CFUN=1",
+                                                                "AT+CFUN=4"};
+    return std::none_of(kAllowed.begin(), kAllowed.end(), [text](std::string_view name) {
+        return (text.size() == name.size()) && startsWithNoCase(text, name);
+    });
+}
+
+std::string_view NetMailbox::replyPrefix(std::string_view text, std::span<char> out) noexcept
+{
+    text = trim(text);
+    // "AT+XXX..." → "+XXX:"；无 '+' 的基础命令（AT/ATI）没有带前缀的应答行。
+    if ((text.size() < 4U) || !startsWithNoCase(text, "AT+")) {
+        return {};
     }
-    const std::string_view rest = cellular::subview(text, 2U, std::string_view::npos);
-    if (!rest.empty() && (std::toupper(static_cast<unsigned char>(rest.front())) == 'E')) {
-        return true; // ATE0/ATE1：回显约定由驱动管理
+    text.remove_prefix(2U);
+    size_t n = 0U;
+    while ((n < text.size()) && (text[n] != '?') && (text[n] != '=')) {
+        ++n;
     }
-    if (isCmd(rest, "+IPR") || isCmd(rest, "+QISWTMD") || isCmd(rest, "+QICSGP")) {
-        return true;
+    if (n + 1U > out.size()) {
+        return {};
     }
-    if (isCmd(rest, kCfunName)) {
-        std::string_view mode;
-        if (rest.size() > kCfunName.size() && rest[kCfunName.size()] == '?') {
-            return false;
-        }
-        if (!fieldAt(argsAfter(rest, kCfunName.size()), 0U, mode)) {
-            return true;
-        }
-        return (mode != "0") && (mode != "1") && (mode != "4");
+    for (size_t i = 0U; i < n; ++i) {
+        out[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[i])));
     }
-    // 会进入“等待数据”的命令：提示符数据阶段不经 AtEngine 的 payload 通道，禁止裸发。
-    static constexpr std::array<std::string_view, 8U> kDataCmds{
-        "+QISEND",   "+QISENDEX", "+QSSLSEND", "+QHTTPPOST",
-        "+QHTTPPUT", "+QFTPPUT",  "+CMGS",     "+QMTPUB"};
-    for (const std::string_view name : kDataCmds) {
-        if (isCmd(rest, name)) {
-            return true;
-        }
-    }
-    if (isCmd(rest, kQiopenName)) {
-        // AT+QIOPEN=<ctx>,<connectID>,<type>,<host>,<port>[,<local>[,<access_mode>]]：access_mode≠0 为透传/直吐
-        std::string_view mode;
-        if (fieldAt(argsAfter(rest, kQiopenName.size()), kQiopenAccessModeIndex, mode) &&
-            !mode.empty() && (mode != "0")) {
-            return true;
-        }
-    }
-    return false;
+    out[n] = ':';
+    return {out.data(), n + 1U};
 }
 
 fw::Status NetMailbox::submit(std::string_view text) noexcept
@@ -198,12 +146,11 @@ fw::Status NetMailbox::submit(std::string_view text) noexcept
     }
     std::memcpy(cmd_.data(), text.data(), text.size());
     cmdLen_ = text.size();
-    abandon_.store(false, std::memory_order_relaxed);
     state_.store(static_cast<uint8_t>(State::kPending), std::memory_order_release);
     return fw::Status::kOk;
 }
 
-bool NetMailbox::take(std::string_view &cmd, uint32_t &token) noexcept
+bool NetMailbox::take(std::string_view &cmd, uint32_t &token, std::string_view &prefix) noexcept
 {
     uint8_t expected = static_cast<uint8_t>(State::kPending);
     if (!state_.compare_exchange_strong(expected, static_cast<uint8_t>(State::kRunning),
@@ -219,6 +166,7 @@ bool NetMailbox::take(std::string_view &cmd, uint32_t &token) noexcept
     rsp_.fill('\0');
     ok_ = false;
     cmd = std::string_view(cmd_.data(), cmdLen_);
+    prefix = replyPrefix(cmd, std::span<char>(prefix_));
     token = token_;
     return true;
 }
@@ -243,7 +191,7 @@ void NetMailbox::onLine(std::string_view line) noexcept
 
 void NetMailbox::onDone(const cellular::AtResponse &rsp) noexcept
 {
-    if ((rsp.token != token_) || (state() != State::kRunning)) {
+    if ((rsp.token != token_) || (state() == State::kIdle) || (state() == State::kDone)) {
         return; // 过期回调：不属于当前请求
     }
     ok_ = (rsp.result == cellular::AtResult::kOk);
@@ -263,30 +211,29 @@ void NetMailbox::onDone(const cellular::AtResponse &rsp) noexcept
         rspLen_ = appendLine(std::span<char>(rsp_), rspLen_,
                              std::string_view(text.data(), ::strnlen(text.data(), text.size())));
     }
-    if (abandon_.exchange(false, std::memory_order_acq_rel)) {
+    // 唯一的完成边沿：Running→Done；若控制台已放弃（Abandoned）则回收为 Idle。
+    uint8_t expected = static_cast<uint8_t>(State::kRunning);
+    if (!state_.compare_exchange_strong(expected, static_cast<uint8_t>(State::kDone),
+                                        std::memory_order_acq_rel)) {
         state_.store(static_cast<uint8_t>(State::kIdle), std::memory_order_release);
-        return;
     }
-    state_.store(static_cast<uint8_t>(State::kDone), std::memory_order_release);
 }
 
 void NetMailbox::release() noexcept
 {
     uint8_t s = state_.load(std::memory_order_acquire);
-    if (s == static_cast<uint8_t>(State::kDone) || s == static_cast<uint8_t>(State::kPending)) {
-        if (state_.compare_exchange_strong(s, static_cast<uint8_t>(State::kIdle),
-                                           std::memory_order_acq_rel)) {
-            return;
+    while (true) {
+        uint8_t next = 0U;
+        if ((s == static_cast<uint8_t>(State::kDone)) ||
+            (s == static_cast<uint8_t>(State::kPending))) {
+            next = static_cast<uint8_t>(State::kIdle);
+        } else if (s == static_cast<uint8_t>(State::kRunning)) {
+            next = static_cast<uint8_t>(State::kAbandoned); // kNet 在命令终结时回收
+        } else {
+            return; // Idle/Filling/Abandoned：无事可做
         }
-        s = state_.load(std::memory_order_acquire);
-    }
-    if (s == static_cast<uint8_t>(State::kRunning)) {
-        abandon_.store(true, std::memory_order_release);
-        // 标记放弃的瞬间 kNet 可能刚好写完 kDone：回读补偿，避免 kDone 无人释放。
-        s = static_cast<uint8_t>(State::kDone);
-        if (state_.compare_exchange_strong(s, static_cast<uint8_t>(State::kIdle),
-                                           std::memory_order_acq_rel)) {
-            abandon_.store(false, std::memory_order_release);
+        if (state_.compare_exchange_weak(s, next, std::memory_order_acq_rel)) {
+            return;
         }
     }
 }

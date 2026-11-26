@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 #include "cellular/AtEngine.hpp"
@@ -20,11 +21,12 @@ class NetMailbox final {
 public:
     /** 邮箱状态；kDone 时响应可读，读完须 release()。 */
     enum class State : uint8_t {
-        kIdle = 0, ///< 空闲，可提交
-        kFilling,  ///< 提交方正在写命令文本
-        kPending,  ///< 已提交，等待 kNet 取走
-        kRunning,  ///< 已交给 AT 引擎，等待终结
-        kDone,     ///< 已完成，响应可读
+        kIdle = 0,  ///< 空闲，可提交
+        kFilling,   ///< 提交方正在写命令文本
+        kPending,   ///< 已提交，等待 kNet 取走
+        kRunning,   ///< 已交给 AT 引擎，等待终结
+        kDone,      ///< 已完成，响应可读
+        kAbandoned, ///< 控制台已放弃仍在引擎中的请求；kNet 终结时回收为 kIdle（缓冲此前不复用）
     };
 
     constexpr NetMailbox() noexcept = default;
@@ -37,8 +39,9 @@ public:
     /**
      * @brief 判断 AT 命令是否被禁止
      * @param text: AT 命令文本（已去前导空格）
-     * @retval true 禁止：含 ';'/控制字符、不以 AT 开头、ATE*、IPR/QISWTMD/QICSGP（查询与设置）、
-     *              CFUN 除 0/1/4 外、裸数据提示命令（QISEND 等）、QIOPEN access_mode≠0
+     * @retval true 禁止：含 ';'/控制字符/非 ASCII，或不在白名单内（白名单：AT、ATI、AT+QGMR、AT+GSN、
+     *              AT+QCCID、AT+CSQ、AT+CREG?/CEREG?/CGREG?、AT+COPS?、AT+CPIN?、AT+QNWINFO、
+     *              AT+QENG="servingcell"、AT+CGDCONT?、AT+QIACT?、AT+QISTATE?、AT+CFUN?、AT+CFUN=0|1|4）
      * @note 纯函数，大小写不敏感，线程/ISR 安全。
      */
     [[nodiscard]] static bool forbidden(std::string_view text) noexcept;
@@ -57,10 +60,22 @@ public:
      * @brief 取走待处理命令（kNet 任务）：kPending → kRunning 并分配请求 token
      * @param[out] cmd: 命令文本视图（指向邮箱内部缓冲，kRunning 期间稳定）
      * @param[out] token: 本次请求 token，须随 AtCommand 提交并在 onDone 核对
+     * @param[out] prefix: 应答行前缀（指向邮箱内部缓冲），须随 AtCommand::matchPrefix 提交
      * @retval true 已取走
      * @retval false 无待处理命令
      */
-    [[nodiscard]] bool take(std::string_view &cmd, uint32_t &token) noexcept;
+    [[nodiscard]] bool take(std::string_view &cmd, uint32_t &token,
+                            std::string_view &prefix) noexcept;
+
+    /**
+     * @brief 由命令文本推导其应答行前缀："AT+XXX…" → "+XXX:"（大写）
+     * @param text: 命令文本
+     * @param out: 前缀存放缓冲
+     * @retval 前缀视图；基础命令（AT/ATI）或缓冲不足返回空
+     * @note 纯函数；引擎用它把与 URC 同前缀的应答行归给本命令（裁决 r3 I2）。
+     */
+    [[nodiscard]] static std::string_view replyPrefix(std::string_view text,
+                                                      std::span<char> out) noexcept;
 
     /**
      * @brief 引擎拒收时退回 kPending，下一轮重试（kNet 任务）
@@ -102,14 +117,14 @@ public:
 
     /**
      * @brief 释放邮箱（console 任务）
-     * @note kDone/kPending 立即回 kIdle；kRunning 只标记放弃，由 kNet 在命令终结时回 kIdle，
-     *       因此旧请求终结前缓冲绝不被复用。
+     * @note kDone/kPending 立即回 kIdle；kRunning 以 CAS 改为 kAbandoned，由 kNet 在命令终结时
+     *       回 kIdle，因此旧请求终结前缓冲绝不被复用；Done 只由 Running→Done 的 CAS 产生。
      */
     void release() noexcept;
 
 private:
     std::atomic<uint8_t> state_{static_cast<uint8_t>(State::kIdle)};
-    std::atomic<bool> abandon_{false};
+    std::array<char, 16> prefix_{};
     std::array<char, kNetAtCmdBytes> cmd_{};
     std::array<char, kNetAtRspBytes> rsp_{};
     size_t cmdLen_ = 0U;

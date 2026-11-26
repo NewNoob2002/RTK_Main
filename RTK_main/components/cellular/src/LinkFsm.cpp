@@ -196,11 +196,16 @@ bool LinkFsm::submitOp(Op op, std::string_view text, uint32_t timeoutMs, uint32_
     cmd.onLine = &LinkFsm::thunkLine;
     cmd.onDone = &LinkFsm::thunkDone;
     cmd.ctx = this;
+    cmd.quietFirst = quietNext_;
+    quietNext_ = false;
     // 查询应答与同前缀 URC 按行形状区分（+CEREG?/+CREG? 的 <n>,<stat>；+CPIN 本身无歧义）。
     if ((op == Op::kCereg) || (op == Op::kCreg) || (op == Op::kHealthCereg)) {
         cmd.match = &isRegQueryLine;
+        cmd.matchPrefix =
+            (op == Op::kCreg) ? std::string_view{"+CREG:"} : std::string_view{"+CEREG:"};
     } else if ((op == Op::kCpin) || (op == Op::kHealthCpin)) {
         cmd.match = &isCpinLine;
+        cmd.matchPrefix = "+CPIN:";
     }
     // 先登记 op 再提交：写失败等同步路径不会在 submit 内回调完成，但保持登记在前更稳妥。
     const Op previous = op_;
@@ -354,9 +359,16 @@ void LinkFsm::onOpLine(std::string_view line) noexcept
         }
         break;
     case Op::kCpin:
-    case Op::kHealthCpin:
-        gotSim_ = parseCpin(line, pendingSim_) || gotSim_;
+    case Op::kHealthCpin: {
+        // 同一次查询期间出现的 +CPIN 行（应答或同前缀 URC）以“最坏状态”为准：
+        // 非 READY 不会被其后到达的 READY 覆盖，也不会因查询超时/出错而丢失。
+        SimStatus seen = SimStatus::kUnknown;
+        if (parseCpin(line, seen) && (!gotSim_ || (seen != SimStatus::kReady))) {
+            pendingSim_ = seen;
+            gotSim_ = true;
+        }
         break;
+    }
     case Op::kCereg:
     case Op::kCreg:
     case Op::kHealthCereg:
@@ -419,7 +431,7 @@ void LinkFsm::onOpDone(const AtResponse &rsp) noexcept
         if (rsp.result == AtResult::kCmeError) {
             sim = simFromCmeCode(rsp.errorCode);
             have = true;
-        } else if (ok && gotSim_) {
+        } else if (gotSim_ && (ok || (pendingSim_ != SimStatus::kReady))) {
             sim = pendingSim_;
             have = true;
         }
@@ -559,6 +571,17 @@ void LinkFsm::notifyAllClosed() noexcept
 }
 
 /**
+ * @brief 清除全部槽位的“重开前须先 QICLOSE”标记（模块断电后 socket 不存在）
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+void LinkFsm::clearStaleClose() noexcept
+{
+    for (Conn &conn : conns_) {
+        conn.closeFirst = false;
+    }
+}
+
+/**
  * @brief 断开模块电源并复位相关状态
  * @param nowMs: 当前毫秒时间戳
  * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
@@ -619,6 +642,7 @@ void LinkFsm::enterL3(uint32_t nowMs, bool manual) noexcept
     }
     clearOps();
     notifyAllClosed();
+    clearStaleClose(); // 断电后模块侧 socket 全部消失
     cutPower(nowMs);
     simWasBad_ = false;
     regLost_ = false;
@@ -784,9 +808,13 @@ void LinkFsm::startStop(uint32_t nowMs, uint32_t deadlineMs) noexcept
     shutStep_ = ShutStep::kClose;
     shutCloseId_ = 0U;
     poweredDownSeen_ = false;
-    engine_->reset(nowMs);            // 丢弃在途的巡检/连接命令，让关机序列立即得到串口
-    engine_->setResyncEnabled(false); // 关机总预算有限：不做握手隔离，QICLOSE/QPOWD 直接发
+    // 在途的巡检/连接命令：令牌作废（其结果不再推进状态），但不取消引擎里的命令——
+    // 等它自然完成或超时后再发 QICLOSE/QPOWD，避免其迟到应答冒充关机命令的 OK。
     clearOps();
+    // 通道已处于重新同步/静默等待 = 应答不可信：按“AT 无响应”处理，直接断电（裁决 r3 I1）。
+    if (engine_->resyncing()) {
+        finishStop(nowMs);
+    }
 }
 
 /**
@@ -801,6 +829,7 @@ void LinkFsm::finishStop(uint32_t nowMs) noexcept
     clearOps();
     snap_.pdpUp = false;
     notifyAllClosed();
+    clearStaleClose();
     for (Conn &conn : conns_) {
         if (conn.state == ConnState::kWantOpen) {
             conn.state = ConnState::kIdle;
@@ -809,6 +838,7 @@ void LinkFsm::finishStop(uint32_t nowMs) noexcept
     enterPhase(Phase::kOff, nowMs);
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity): 关机步骤状态机按 ADR-0021 §2.9 平铺，拆分会割裂“截止/通道不可信/等待在途命令”的优先顺序，主机测试逐路径覆盖。
 /**
  * @brief 轮询关机流程
  * @param nowMs: 当前毫秒时间戳
@@ -819,6 +849,13 @@ void LinkFsm::pollShutdown(uint32_t nowMs) noexcept
     if (reached(nowMs, shutDeadlineMs_)) {
         finishStop(nowMs); // 绝对截止（与 PW1 同一时刻）：无论 QPOWD 进展如何，到点直接断电
         return;
+    }
+    if (engine_->resyncing() || engine_->dead()) {
+        finishStop(nowMs); // 关机命令超时/丢字节：通道不可信，不再等 QPOWD 的 OK，直接断电
+        return;
+    }
+    if (engine_->busy() && !opPending_) {
+        return; // 作废的在途命令尚未完成：等其应答/超时后再发关机序列
     }
     switch (shutStep_) {
     case ShutStep::kClose: {
@@ -860,6 +897,8 @@ void LinkFsm::pollShutdown(uint32_t nowMs) noexcept
     }
 }
 
+// NOLINTEND(readability-function-cognitive-complexity)
+
 /**
  * @brief 轮询 Off 阶段（等待使能）
  * @param nowMs: 当前毫秒时间戳
@@ -884,8 +923,14 @@ void LinkFsm::pollOff(uint32_t nowMs) noexcept
  */
 void LinkFsm::pollPowerCycle(uint32_t nowMs) noexcept
 {
-    if (reached(nowMs, cycleEndMs_)) {
+    if (!reached(nowMs, cycleEndMs_)) {
+        return;
+    }
+    if (enabled_ && powerAllowed_ && startAllowed_ && !latched_ && !shuttingDown_) {
         startPowerOn(nowMs);
+    } else {
+        // 冷却期间被低电/配网/关机锁定：回到 Off 等待放行，不得再拉高 PWREN（裁决 r3 I6）。
+        enterPhase(Phase::kOff, nowMs);
     }
 }
 
@@ -900,6 +945,7 @@ void LinkFsm::submitSyncStep(uint32_t nowMs) noexcept
     switch (syncStep_) {
     case SyncStep::kAt:
     case SyncStep::kAtVerify:
+        quietNext_ = true; // 上电/换波特率后的探测：先等通道静默，避免把启动噪声当应答
         sent = submitOp(Op::kAt, "AT", at_timeout::kSync, nowMs);
         break;
     case SyncStep::kAte0:
@@ -1143,6 +1189,12 @@ void LinkFsm::onPdpDone(const AtResponse &rsp) noexcept
     }
     switch (pdpStep_) {
     case PdpStep::kDeact:
+        if (ok) {
+            // QIDEACT 成功会关闭模块侧全部 socket：此前未确认关闭的槽位此后才可重用（裁决 r3 I4）。
+            for (Conn &conn : conns_) {
+                conn.closeFirst = false;
+            }
+        }
         pdpStep_ = fieldView(cfg_.apn).empty() ? PdpStep::kQuery : PdpStep::kCfg;
         break;
     case PdpStep::kCfg:
@@ -1345,7 +1397,12 @@ void LinkFsm::onConnDone(const AtResponse &rsp) noexcept
         }
         break;
     case ConnOp::kCloseStale:
-        conn.closeFirst = false; // 无论结果：已尽力释放该槽，随后正常重开
+        if (ok) {
+            conn.closeFirst = false;
+        } else {
+            // QICLOSE 未确认：不得在该槽位上重开（模块侧可能仍占用），升级 L2（QIDEACT 关闭全部 socket）。
+            enterL2(rsp.nowMs, true);
+        }
         break;
     case ConnOp::kRead:
         if (!ok || (connReadBytes_ == 0U)) {
@@ -1660,7 +1717,11 @@ uint32_t LinkFsm::msToNextWork(uint32_t nowMs) const noexcept
         if (regLost_) {
             next = std::min(next, remaining(nowMs, regLostMs_ + kPolicy.registerTimeoutMs));
         }
+        // pollConns 在连接命令在途时整体不处理：此时任何槽位都不应缩短等待（完成回调会唤醒）。
         for (const Conn &conn : conns_) {
+            if (connBusy_) {
+                break;
+            }
             const bool isOpen = (conn.state == ConnState::kOpen);
             const bool opening = (conn.state == ConnState::kOpening);
             // 只为“当前就能执行”的连接操作缩短等待：无主槽位的 recv/关闭请求不得让执行器空转。

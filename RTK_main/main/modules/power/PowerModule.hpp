@@ -41,7 +41,8 @@ enum class ShutdownMilestone : uint8_t {
 };
 
 /** 关机收尾参与者阶段入口回调。 */
-using ShutdownBeginFn = void (*)(board::ShutdownStage stage, void *userCtx) noexcept;
+using ShutdownBeginFn = void (*)(board::ShutdownStage stage, uint32_t deadlineMs,
+                                 void *userCtx) noexcept;
 /** 关机收尾参与者完成轮询回调。 */
 using ShutdownDoneFn = bool (*)(void *userCtx) noexcept;
 /** 关机收尾参与者超时回调：该阶段有界等待到期且参与者仍未完成时调用一次（kLink 任务，须有界、不阻塞）。 */

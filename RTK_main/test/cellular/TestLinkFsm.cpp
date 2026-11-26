@@ -48,6 +48,7 @@ struct Sim final {
     int qiopenErr = 0;
     bool autoUrcOpen = true; // QIOPEN OK 后自动给 +QIOPEN URC
     std::string rxData;      // 模块侧待读数据
+    std::string cpinPre;     // 非空：AT+CPIN? 应答里先插入的额外 +CPIN: 行（模拟同前缀 URC 混入）
     std::string dropPrefix;  // 非空：丢弃（不应答）下一条以此开头的命令，之后自动清空
 
     // 主机侧观测。
@@ -136,7 +137,7 @@ void handleCommand(Sim &s, const std::string &cmd)
         if (s.simAbsent) {
             respondErr(s, cmd, "+CME ERROR: 10");
         } else {
-            respondOk(s, cmd, "+CPIN: READY");
+            respondOk(s, cmd, s.cpinPre + "+CPIN: READY");
         }
     } else if (cmd == "AT+CEREG?") {
         respondOk(s, cmd, "+CEREG: 0," + std::to_string(s.regStat));
@@ -1045,6 +1046,68 @@ void testQiopenResultTimeoutClosesSlotBeforeReopen()
     TEST_ASSERT_TRUE(secondOpen > close);
 }
 
+// r3 I2：同一次 +CPIN? 期间出现的非 READY +CPIN: 行（URC 混入）不得被其后的 READY 覆盖。
+void testCpinNonReadyUrcNotOverwrittenByReady()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.cpinPre = "+CPIN: SIM PIN\r\n";
+    TEST_ASSERT_TRUE(runUntil(s, 40000U, [&s]() { return s.fsm.phase() == Phase::kSimCheck; }));
+    TEST_ASSERT_EQUAL(SimStatus::kPinRequired, s.fsm.snapshot(s.now).sim);
+}
+
+// r3 I4：QICLOSE 未确认（超时）→ 不得在同一槽位重开，升级 L2（QIDEACT）后才可重用。
+void testUnconfirmedQicloseEscalatesL2BeforeReopen()
+{
+    Sim s;
+    setup(s);
+    s.autoUrcOpen = false;
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.openConn(1U, "host", 1883U));
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return !s.events.empty(); }));
+    s.autoUrcOpen = true;
+    s.dropPrefix = "AT+QICLOSE=1"; // 清理用的 QICLOSE 得不到应答
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return countCmds(s, "AT+QIOPEN=") >= 2U; }));
+    const int close = indexOfCmd(s, "AT+QICLOSE=1");
+    const int deact = indexOfCmd(s, "AT+QIDEACT=1");
+    const int secondOpen = indexOfCmd(s, "AT+QIOPEN=", 1U);
+    TEST_ASSERT_TRUE(close >= 0);
+    TEST_ASSERT_TRUE(deact > close);
+    TEST_ASSERT_TRUE(secondOpen > deact);
+}
+
+// r3 I6：L3 断电冷却期间被低电/配网锁定，冷却结束不得再次上电。
+void testPowerCycleCooldownRechecksGate()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.requestReset(s.now));
+    s.fsm.setStartAllowed(false);
+    const size_t n = s.power.size();
+    runFor(s, 30000U);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(n), static_cast<uint32_t>(s.power.size()));
+    TEST_ASSERT_EQUAL(Phase::kOff, s.fsm.phase());
+    s.fsm.setStartAllowed(true);
+    TEST_ASSERT_TRUE(runUntil(s, 5000U, [&s, n]() { return s.power.size() > n; }));
+}
+
+// r3 I1：关机时通道已处于重新同步（应答不可信）→ 不发 QPOWD，直接断电。
+void testShutdownWhileResyncingCutsWithoutQpowd()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.silent = true;
+    TEST_ASSERT_TRUE(runUntil(s, 60000U, [&s]() { return s.engine.resyncing(); }));
+    s.fsm.beginShutdown(s.now);
+    runFor(s, 100U);
+    TEST_ASSERT_TRUE(s.fsm.shutdownDone());
+    TEST_ASSERT_FALSE(s.power.back().on);
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(countCmds(s, "AT+QPOWD")));
+}
+
 void testRegistrationLostFor180sEscalatesL3()
 {
     Sim s;
@@ -1199,6 +1262,10 @@ int main()
     RUN_TEST(testConfigTruncatesOverlongFields);
     RUN_TEST(testLateReplyAfterTimeoutNotAttributedToNextOp);
     RUN_TEST(testQiopenResultTimeoutClosesSlotBeforeReopen);
+    RUN_TEST(testCpinNonReadyUrcNotOverwrittenByReady);
+    RUN_TEST(testUnconfirmedQicloseEscalatesL2BeforeReopen);
+    RUN_TEST(testPowerCycleCooldownRechecksGate);
+    RUN_TEST(testShutdownWhileResyncingCutsWithoutQpowd);
     RUN_TEST(testRegistrationLostFor180sEscalatesL3);
     RUN_TEST(testStartAllowedOnlyBlocksNewPowerOn);
     RUN_TEST(testShutdownUsesSharedAbsoluteDeadline);

@@ -126,6 +126,20 @@ void maskIccid(const std::array<char, cellular::kIccidBytes> &iccid,
 }
 
 /**
+ * @brief 连接槽状态名
+ * @param state: ConnSnapshot::state（LinkFsm::ConnState 数值）
+ * @retval 状态名字符串（静态）
+ * @note 纯函数，线程/ISR 安全。
+ */
+const char *connStateName(uint8_t state) noexcept
+{
+    // 与 cellular::LinkFsm::ConnState 数值顺序一致。
+    static constexpr std::array<const char *, 6U> kNames{"idle", "want_open", "opening",
+                                                         "open", "backoff",   "closing"};
+    return (state < kNames.size()) ? kNames[state] : "?";
+}
+
+/**
  * @brief 显示 4G 链路状态（所有档位）；ICCID 打码，APN 之外的凭据不输出
  * @param argc: 参数个数（含动词）
  * @retval 0 已输出状态
@@ -172,6 +186,14 @@ int cmdNetStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     cli::printKv("recovery", "level=L%u count=%u backoff_ms=%" PRIu32,
                  static_cast<unsigned>(snap.level), static_cast<unsigned>(snap.recoveryCount),
                  snap.backoffRemainingMs);
+    for (size_t i = 0U; i < snap.conn.size(); ++i) {
+        std::array<char, 8U> key{};
+        static_cast<void>(snprintf(key.data(), key.size(), "conn%u", static_cast<unsigned>(i)));
+        cli::printKv(key.data(), "state=%s fails=%u remain_ms=%" PRIu32,
+                     connStateName(snap.conn[i].state), static_cast<unsigned>(snap.conn[i].fails),
+                     snap.conn[i].backoffRemainingMs);
+    }
+    cli::printKv("recv_dropped", "%u", static_cast<unsigned>(snap.droppedRecv));
     return 0;
 }
 

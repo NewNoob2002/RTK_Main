@@ -600,7 +600,8 @@ struct PowerModule::ParticipantOps {
      * @param userCtx: PowerModule 实例指针
      * @note 仅 kLink 调用，非 ISR。
      */
-    static void storageFlushBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    static void storageFlushBegin(board::ShutdownStage stage, uint32_t /*deadlineMs*/,
+                                  void *userCtx) noexcept
     {
         static_cast<void>(stage);
         // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
@@ -686,7 +687,8 @@ struct PowerModule::ParticipantOps {
      * @param userCtx: PowerModule 实例指针
      * @note 仅 kLink 调用，非 ISR。
      */
-    static void radioPauseBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    static void radioPauseBegin(board::ShutdownStage stage, uint32_t /*deadlineMs*/,
+                                void *userCtx) noexcept
     {
         static_cast<void>(stage);
         // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
@@ -723,7 +725,8 @@ struct PowerModule::ParticipantOps {
      * @param userCtx: PowerModule 实例指针
      * @note 仅 kLink 调用，非 ISR。
      */
-    static void safeGpioBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    static void safeGpioBegin(board::ShutdownStage stage, uint32_t /*deadlineMs*/,
+                              void *userCtx) noexcept
     {
         static_cast<void>(stage);
         // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
@@ -757,7 +760,8 @@ struct PowerModule::ParticipantOps {
      * @param userCtx: 未使用
      * @note 仅 kLink 调用，非 ISR。
      */
-    static void logDrainBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    static void logDrainBegin(board::ShutdownStage stage, uint32_t /*deadlineMs*/,
+                              void *userCtx) noexcept
     {
         static_cast<void>(stage);
         static_cast<void>(userCtx);
@@ -784,7 +788,8 @@ struct PowerModule::ParticipantOps {
      * @param userCtx: PowerModule 实例指针
      * @note 仅 kLink 调用，非 ISR。
      */
-    static void oledFinalBatBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    static void oledFinalBatBegin(board::ShutdownStage stage, uint32_t /*deadlineMs*/,
+                                  void *userCtx) noexcept
     {
         static_cast<void>(stage);
         // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
@@ -815,7 +820,8 @@ struct PowerModule::ParticipantOps {
      * @param userCtx: PowerModule 实例指针
      * @note 仅 kLink 调用，非 ISR。
      */
-    static void oledFinalUsbBegin(board::ShutdownStage stage, void *userCtx) noexcept
+    static void oledFinalUsbBegin(board::ShutdownStage stage, uint32_t /*deadlineMs*/,
+                                  void *userCtx) noexcept
     {
         static_cast<void>(stage);
         // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
@@ -925,7 +931,11 @@ void PowerModule::beginStageParticipants(board::ShutdownStage stage) noexcept
                                             bool builtin) noexcept {
         if (p.stage == stage) {
             if (p.begin != nullptr) {
-                p.begin(stage, cbCtx);
+                // kQuiesce 的绝对截止时刻 = PW1 起点 + 该参与者上限；参与者与 PW1 共用同一时刻（0=未指定）。
+                const uint32_t deadline = (stage == board::ShutdownStage::kQuiesce)
+                                              ? (quiesceStartMs_ + quiesceLimitMs(p, builtin))
+                                              : 0U;
+                p.begin(stage, deadline, cbCtx);
             }
             // safe_gpio 失败位只绑定内置表项；外部同里程碑参与者靠自己的 isDone/超时判定。
             if (builtin && (p.milestone == power::ShutdownMilestone::kSafeGpio) &&
@@ -965,6 +975,9 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
                 if (stage == board::ShutdownStage::kQuiesce) {
                     if (quiesceElapsed < quiesceLimitMs(p, builtin)) {
                         allSatisfied = false;
+                    } else if (!builtin && (p.onTimeout != nullptr)) {
+                        // 到点未完成：立即兜底（不等 OLED 可见时间/其它参与者）；失败则每轮重试到 isDone。
+                        p.onTimeout(cbCtx);
                     }
                 } else {
                     allSatisfied = false;
@@ -1002,7 +1015,8 @@ void PowerModule::recordStageTimeouts(board::ShutdownStage stage) noexcept
         const auto bit = static_cast<uint16_t>(1U << (idx));
         const bool timedOut = (p.stage == stage) && ((participantDoneMask_ & bit) == 0U);
         mark(p);
-        if (timedOut && (p.onTimeout != nullptr)) {
+        // kQuiesce 的兜底已在 pollStageParticipants 到点时执行（并按轮重试），此处不重复调用。
+        if (timedOut && (p.onTimeout != nullptr) && (stage != board::ShutdownStage::kQuiesce)) {
             p.onTimeout(p.userCtx); // 兜底动作（如 4G 硬切 PWREN）：有界、不阻塞
         }
     }

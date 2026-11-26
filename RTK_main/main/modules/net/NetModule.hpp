@@ -41,8 +41,9 @@ public:
     static constexpr uint32_t kUartTxBufBytes = 0U;
     static constexpr int kUartQueueLen = 16;           // UART 事件队列深度
     static constexpr uint32_t kPublishPeriodMs = 500U; // ms，DataCenter 快照发布周期
-    static constexpr uint32_t kWriteTimeoutMs = 50U;   // ms，写 UART 后等待发送完成的上限
-    static constexpr size_t kRxChunkBytes = 128U;      // B，单次读 UART 的块大小
+    static constexpr uint32_t kWriteBaseMs =
+        5U; // ms，单次写 UART 的固定预算（叠加按波特率估算的线上时间）
+    static constexpr size_t kRxChunkBytes = 128U; // B，单次读 UART 的块大小
 
     using AtState = NetMailbox::State;
 
@@ -67,7 +68,9 @@ public:
         // 跨任务原子量：kLink（PW1）写 shutdownReq/StartMs，kNet 写 shutdownDone/phaseMirror。
         std::atomic<bool> shutdownReq{false};
         std::atomic<bool> shutdownDone{false};
-        std::atomic<uint32_t> shutdownStartMs{0U};
+        std::atomic<uint32_t> shutdownDeadline{0U}; // PW1 传入的绝对截止时刻（0=未指定）
+        std::atomic<bool> pwrenFault{false};        // 最近一次拉低 PWREN 的 GPIO 调用失败
+        std::atomic<bool> forceCutReq{false}; // PW1 硬切请求（onTimeout 由 PowerModule 任务置位）
         std::atomic<uint8_t> phaseMirror{static_cast<uint8_t>(cellular::Phase::kOff)};
     };
 
@@ -232,7 +235,7 @@ private:
     static void connSendDone(void *ctx, uint8_t id, bool ok) noexcept;
     static void atLineThunk(void *ctx, std::string_view line) noexcept;
     static void atDoneThunk(void *ctx, const cellular::AtResponse &rsp) noexcept;
-    static void shutdownBegin(board::ShutdownStage stage, void *ctx) noexcept;
+    static void shutdownBegin(board::ShutdownStage stage, uint32_t deadlineMs, void *ctx) noexcept;
     static bool shutdownIsDone(void *ctx) noexcept;
     static void shutdownTimeout(void *ctx) noexcept;
 

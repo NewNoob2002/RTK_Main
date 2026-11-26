@@ -2,6 +2,7 @@
 #include "cellular/AtEngine.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
 #include "cellular/AtParse.hpp"
@@ -15,10 +16,17 @@ constexpr std::string_view kCmeError = "+CME ERROR:";
 constexpr std::string_view kCmsError = "+CMS ERROR:";
 constexpr std::string_view kSendOk = "SEND OK";
 constexpr std::string_view kSendFail = "SEND FAIL";
-// 重新同步握手：带独有应答形状（+CMEE: <n> 再 OK），迟到的旧终结行无法冒充。
-constexpr std::string_view kProbeCmd = "AT+CMEE?\r";
-constexpr std::string_view kProbeEcho = "AT+CMEE?";
-constexpr std::string_view kProbeLine = "+CMEE:";
+// 重新同步握手：带独有应答形状（前缀行再 OK），迟到的旧终结行无法冒充。
+// 两条只读探针交替使用：上一轮超时后迟到的同形应答不会被下一轮误认为自己的应答。
+struct Probe final {
+    std::string_view cmd;
+    std::string_view echo;
+    std::string_view line;
+};
+constexpr std::array<Probe, 2> kProbes{{
+    {"AT+CMEE?\r", "AT+CMEE?", "+CMEE:"},
+    {"AT+CSCS?\r", "AT+CSCS?", "+CSCS:"},
+}};
 
 /**
  * @brief  tick 回绕安全的“已到期”判断
@@ -65,6 +73,9 @@ bool AtEngine::submit(const AtCommand &cmd, uint32_t nowMs) noexcept
     slot.rawMax = cmd.rawMax;
     slot.match = cmd.match;
     slot.token = cmd.token;
+    slot.prefixLen = static_cast<uint8_t>(std::min(cmd.matchPrefix.size(), kMatchPrefixBytes));
+    std::copy_n(cmd.matchPrefix.begin(), slot.prefixLen, slot.prefix.begin());
+    slot.quietFirst = cmd.quietFirst;
     ++count_;
     if ((count_ == 1U) && (state_ == State::kIdle)) {
         startFront(nowMs);
@@ -83,10 +94,42 @@ void AtEngine::startFront(uint32_t nowMs) noexcept
         return;
     }
     if (resync_) {
-        sendProbe(nowMs);
+        enterQuiet(nowMs, true);
         return;
     }
+    if (queue_[head_].quietFirst && !quietDone_) {
+        enterQuiet(nowMs, false);
+        return;
+    }
+    sendFront(nowMs);
+}
+
+/**
+ * @brief 进入静默等待：丢弃所有到达的字节，直到通道连续静默 kQuietMs
+ * @param nowMs: 当前毫秒时间戳
+ * @param thenProbe: true 静默后发重新同步探针；false 静默后直接发队首命令
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+void AtEngine::enterQuiet(uint32_t nowMs, bool thenProbe) noexcept
+{
+    state_ = State::kQuiet;
+    quietThenProbe_ = thenProbe;
+    lastRxMs_ = nowMs;
+    deadlineMs_ = nowMs + kQuietMaxMs;
+    lineLen_ = 0U;
+    overflow_ = false;
+    skipSpace_ = false;
+}
+
+/**
+ * @brief 写出队首命令并起算超时（调用时状态为 kIdle 或刚结束静默）
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+void AtEngine::sendFront(uint32_t nowMs) noexcept
+{
     const Slot &slot = queue_[head_];
+    quietDone_ = false;
     deadlineMs_ = nowMs + slot.timeoutMs;
     state_ = slot.payload.empty() ? State::kWaitResponse : State::kWaitPrompt;
     lineLen_ = 0U;
@@ -109,6 +152,8 @@ void AtEngine::startFront(uint32_t nowMs) noexcept
  */
 void AtEngine::sendProbe(uint32_t nowMs) noexcept
 {
+    probeAlt_ = !probeAlt_;
+    const Probe &probe = kProbes[probeAlt_ ? 1U : 0U];
     deadlineMs_ = nowMs + kProbeTimeoutMs;
     state_ = State::kProbe;
     probeSeen_ = false;
@@ -116,8 +161,8 @@ void AtEngine::sendProbe(uint32_t nowMs) noexcept
     overflow_ = false;
     skipSpace_ = false;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): 静态字符串按字节只读视图
-    const std::span<const uint8_t> bytes{reinterpret_cast<const uint8_t *>(kProbeCmd.data()),
-                                         kProbeCmd.size()};
+    const std::span<const uint8_t> bytes{reinterpret_cast<const uint8_t *>(probe.cmd.data()),
+                                         probe.cmd.size()};
     if ((port_.write == nullptr) || !port_.write(port_.ctx, bytes)) {
         ++stats_.writeFails;
         deadlineMs_ = nowMs;
@@ -132,7 +177,8 @@ void AtEngine::sendProbe(uint32_t nowMs) noexcept
  */
 void AtEngine::handleProbeLine(std::string_view line, uint32_t nowMs) noexcept
 {
-    if (line.starts_with(kProbeLine)) {
+    const Probe &probe = kProbes[probeAlt_ ? 1U : 0U];
+    if (line.starts_with(probe.line)) {
         probeSeen_ = true;
         return;
     }
@@ -148,7 +194,7 @@ void AtEngine::handleProbeLine(std::string_view line, uint32_t nowMs) noexcept
         dispatchUrc(line);
         return;
     }
-    if (line != kProbeEcho) {
+    if (line != probe.echo) {
         ++stats_.stale;
     }
 }
@@ -160,10 +206,24 @@ void AtEngine::handleProbeLine(std::string_view line, uint32_t nowMs) noexcept
  */
 void AtEngine::expire(uint32_t nowMs) noexcept
 {
-    if ((count_ == 0U) || (state_ == State::kIdle) || !reached(nowMs, deadlineMs_)) {
+    if ((count_ == 0U) || (state_ == State::kIdle)) {
         return;
     }
-    if (state_ == State::kProbe) {
+    if ((state_ == State::kQuiet) && reached(nowMs, lastRxMs_ + kQuietMs)) {
+        // 通道已静默：发探针（旧响应已被丢弃），或对 quietFirst 命令直接发出。
+        if (quietThenProbe_) {
+            sendProbe(nowMs);
+        } else {
+            quietDone_ = true;
+            state_ = State::kIdle;
+            sendFront(nowMs);
+        }
+        return;
+    }
+    if (!reached(nowMs, deadlineMs_)) {
+        return;
+    }
+    if ((state_ == State::kProbe) || (state_ == State::kQuiet)) {
         ++stats_.timeouts;
         ++timeouts_;
         state_ = State::kIdle;
@@ -256,6 +316,7 @@ void AtEngine::reset(uint32_t nowMs) noexcept
     rawRemaining_ = 0U;
     timeouts_ = 0U;
     dead_ = false;
+    quietDone_ = false;
 }
 
 void AtEngine::poll(uint32_t nowMs) noexcept
@@ -276,13 +337,23 @@ void AtEngine::onRxLost(uint32_t nowMs) noexcept
     if (lineLen_ != 0U) {
         overflow_ = true; // 半行内容不可信：丢弃到下一个换行
     }
-    if (state_ == State::kRaw) {
-        resync_ = true;
+    lastRxMs_ = nowMs;
+    switch (state_) {
+    case State::kRaw:
+    case State::kWaitResponse:
+    case State::kWaitPrompt:
+        // 丢了字节后，在途命令的应答已不完整：立即失败（不再等一个孤立的 OK），并隔离后续旧响应。
+        resync_ = resyncEnabled_;
         finish(AtResult::kError, 0, nowMs);
-        return;
-    }
-    if (resyncEnabled_ && (count_ != 0U) && (state_ != State::kIdle)) {
+        break;
+    case State::kProbe:
         resync_ = true;
+        enterQuiet(nowMs, true);
+        break;
+    case State::kQuiet:
+    case State::kIdle:
+    default:
+        break;
     }
 }
 
@@ -291,16 +362,32 @@ uint32_t AtEngine::msToDeadline(uint32_t nowMs) const noexcept
     if ((count_ == 0U) || (state_ == State::kIdle)) {
         return std::numeric_limits<uint32_t>::max();
     }
-    if (reached(nowMs, deadlineMs_)) {
+    uint32_t due = deadlineMs_;
+    if (state_ == State::kQuiet) {
+        const uint32_t quietEnd = lastRxMs_ + kQuietMs;
+        if (static_cast<int32_t>(quietEnd - due) < 0) {
+            due = quietEnd;
+        }
+    }
+    if (reached(nowMs, due)) {
         return 0U;
     }
-    return deadlineMs_ - nowMs;
+    return due - nowMs;
 }
 
 void AtEngine::feed(std::span<const uint8_t> bytes, uint32_t nowMs) noexcept
 {
     // 以时间戳而非调用顺序判超时：截止之后才到的字节属于迟到响应，不得完成该命令。
     expire(nowMs);
+    if (!bytes.empty()) {
+        lastRxMs_ = nowMs;
+    }
+    if (state_ == State::kQuiet) {
+        if (!bytes.empty()) {
+            ++stats_.stale;
+        }
+        return; // 静默等待：旧响应一律丢弃，到达的字节同时刷新静默计时
+    }
     size_t index = 0U;
     while (index < bytes.size()) {
         if (state_ == State::kRaw) {
@@ -400,6 +487,10 @@ bool AtEngine::belongsToFront(std::string_view line) const noexcept
         return false;
     }
     const Slot &slot = queue_[head_];
+    if ((slot.prefixLen != 0U) &&
+        line.starts_with(std::string_view{slot.prefix.data(), slot.prefixLen})) {
+        return true;
+    }
     return (slot.match != nullptr) && slot.match(line);
 }
 
