@@ -105,3 +105,22 @@ P2 v1.41 的正常 Wi-Fi 模式 BootArena 请求量，按 `BootBuffers.cpp` 和�
 - `PASS` `idf.py -B builds/mw1-idf size`。修订后 Flash Code 1,146,796 B、Flash Data 276,156 B、OTA `.bin` 1,592,576 B，分别比评审前 A+B 增加 292 B、16 B 和 320 B。IRAM 116,139 B、链接 DRAM 98,675 B。日志为 `builds/mw1-logs/mw1-idf.fix-size.log`。
 - `PASS` `git diff --check`。
 - `NOT_RUN` Important 2 的 UART TX 2,048 B 实机验证。待按 HIL 第 5 步在 Wi-Fi 和蓝牙模式验证长输出的字节完整性、早期直写阻塞及 trace/log 丢弃计数。整机 OTA、堆对比及三客户端负载也待实机验证。
+
+## HIL 记录（2026-11-26）
+
+整机 P2 v1.41 + CM680，WiFi 模式，PC 经热点连接，`ws://192.168.10.12/ws` 读取 `status`/`diag`/`diag.tasks`。用户 WiFi OTA 上传，无串口。
+
+| 项目 | 基线 `8454efc`（uptime 528 s） | A-only 诊断（uptime 106 s） | A+B `1817b9f`（uptime 68 s） | A+B 相对 A-only |
+| --- | ---: | ---: | ---: | ---: |
+| 8bit free | 41,996 | 43,576 | 78,700 | +35,124 |
+| 8bit min | 29,436 | 25,524 | 73,956 | +48,432 |
+| largest | — | 40,960 | 73,728 | +32,768 |
+| internal free | — | 58,068 | 93,192 | +35,124 |
+| internal min | — | 39,984 | 88,416 | +48,432 |
+| arena actual | — | 61,440 | 55,296 | −6,144 |
+| web.frames actual | — | 17,408 | 11,264 | −6,144 |
+
+- `rtcm.pipe` 4,096 B 在 WiFi 模式保留。达到卡目标（free +≥25 KB）。
+- 任务余栈最紧：ipc1 500 B、wifi 832 B（A-only 1,024 B）、oled 928 B；其余 ≥976 B。
+- 30 KB 缺口归因：A-only 已分配 185,536 B/405 块 = BootArena 61,440 + 非 arena 任务栈约 29 KB + TCB 约 5 KB + WiFi 静态 RX 6×约 1.6 KB + 未细分约 80 KB（WiFi/lwIP 驱动、httpd、NVS、UART 驱动等）；属静态估算偏乐观，非泄漏。细分需 heap trace，未纳入本卡。
+- UART TX 2,048 B：F9P 开发板（UART0 接入）`status all` 2,186 B 单次突发、`sys tasks`、`help`、`debug list` 完整且以 `OK` 结束，log ring dropped=0 lost=0。未覆盖：trace 突发（板空闲无 trace 事件）。
