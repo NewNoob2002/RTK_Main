@@ -2254,9 +2254,10 @@ static void verifyF9pRateOutputAndRollback(nvs_handle_t nvs, std::span<uint8_t> 
 }
 
 /**
- * @brief MT1 RU2-02：非运行态（kPowerUp，型号已被探测清空）直接落盘路径：rate 单键保存，out 不被改写；
- *        rate 写失败时 RAM 与 NVS 都回到旧值。F9P 型号在非运行态不可达（start/requestReprobe 清空 detected_），
- *        out 联动与补偿由运行态两阶段路径覆盖（见 verifyF9pRateOutputAndRollback 5b/5c）。
+ * @brief MT1 RU2-02：非运行态（kReset 后 kPowerUp，型号已被 start() 清空）直接落盘路径：rate 单键保存，
+ *        out 不被改写；rate 写失败时 RAM 与 NVS 都回到旧值。本用例处于型号未知态，不触发 F9P 的 out 联动；
+ *        若控制器在 kOff/kFailed 仍保留 F9P 型号，该分支同样走共用的 persistRateWithOut，
+ *        其 out 失败补偿由运行态两阶段路径覆盖（见 verifyF9pRateOutputAndRollback 5b/5c）。
  * @param nvs: 测试用 NVS 句柄。
  * @param demux: 分流器缓冲。
  * @param pipe: 管道缓冲。
@@ -2289,6 +2290,10 @@ static void verifyNonRunningRateSave(nvs_handle_t nvs, std::span<uint8_t> demux,
     CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 1U);
     readOutBlob(nvs, nowBlob);
     CHECK(nowBlob == oldBlob);
+    // RAM 已回滚：storage 绑定从 RAM rover_cfg_ 取值，把 rate 键再存一次，NVS 必须仍是旧值 1。
+    CHECK(fw::isOk(s_context->storage.saveKeys(
+        std::span{app::gnss_store::kConfigKeys}.subspan<app::gnss_store::kRateKeyIndex, 1U>())));
+    CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 1U);
 
     CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kSetRate), rate5).status));
     CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 5U);

@@ -285,9 +285,14 @@ static void fake_trace_add(const char *name)
 
 /* ---------------- 用例控制接口 ---------------- */
 
+static void disconnect_settle_hook(void);
+
 void fake_reset(void)
 {
     ensure_cond();
+    /* 先于后续线程创建安装钩子；同时丢弃本线程遗留的未结算标记。 */
+    s_disconnect_settle_pending = false;
+    fake_crit_exit_hook_install(disconnect_settle_hook);
     pthread_mutex_lock(&s_lock);
     s_init_mode = FAKE_STAGE_OK;
     s_start_mode = FAKE_STAGE_OK;
@@ -1237,7 +1242,6 @@ esp_err_t esp_spp_disconnect(uint32_t handle)
         fake_sleep_ms(block_ms);
     }
     s_disconnect_settle_pending = true;
-    fake_crit_exit_hook = disconnect_settle_hook;
     return result;
 }
 

@@ -20,13 +20,19 @@ void fake_crit_enter(void)
 
 /* 临界区退出钩子：FakeIdf 用它把 esp_spp_disconnect “返回”的可见时刻推迟到调用线程
  * 完成随后第一段结算临界区之后（MT1，原因见 FakeIdf.c 的 esp_spp_disconnect）。 */
-void (*fake_crit_exit_hook)(void) = NULL;
+static _Atomic(void (*)(void)) s_crit_exit_hook = NULL;
+
+void fake_crit_exit_hook_install(void (*hook)(void))
+{
+    atomic_store_explicit(&s_crit_exit_hook, hook, memory_order_release);
+}
 
 void fake_crit_exit(void)
 {
     pthread_mutex_unlock(&s_crit);
-    if (fake_crit_exit_hook != NULL) {
-        fake_crit_exit_hook();
+    void (*hook)(void) = atomic_load_explicit(&s_crit_exit_hook, memory_order_acquire);
+    if (hook != NULL) {
+        hook();
     }
 }
 
