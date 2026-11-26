@@ -24,7 +24,7 @@
 | 模块 | EC600U（Quectel AT 指令集：`QICSGP/QIACT/QIOPEN/QIRD/QISEND/QMT*/QSSLCFG`） | 用户确认、原理图 |
 | UART | ESP32 `UART_NUM_1`，RX=`GPIO32`、TX=`GPIO33`，8N1，无硬件流控；上电默认 115200，`AT+IPR` 切到 460800（旧固件同） | `GSM.ino:7-10`；UART0=控制台，UART2=GNSS（`CONFIG_RTK_GNSS_UART_NUM=2`） |
 | 电源 | `GPIO26`=`4G_PWREN` 高有效；关机/USB 在位关机路径置低（ADR-0015 §2） | `GPIO.ino:24-27`、`P2_V2.7.ino:142` |
-| PWRKEY / RESET_N / NET_STATUS / RI / DTR | 原理图出现在模块侧；旧固件 V2.7 与 V3.1 IDF 均只控制 `GSM_PWREN`=GPIO26，无任何 PWRKEY/RESET/NET_STATUS/RI/DTR 的 GPIO 定义或操作（Q1 已核对，见 §5） | **按“未接 ESP32”设计**：唯一硬复位手段是 PWREN 断电重上；模块 PWREN 上电后自启动（旧固件上电后不打 PWRKEY 即可通 AT） |
+| PWRKEY / RESET_N / NET_STATUS / RI / DTR | 原理图出现在模块侧；旧固件 V2.7 与 V3.1 IDF 均只控制 `GSM_PWREN`=GPIO26，无任何 PWRKEY/RESET/NET_STATUS/RI/DTR 的 GPIO 定义或操作（Q1 已核对，见 §5） | **未接 ESP32（原理图确认）**：PWRKEY 经 R214 1 kΩ 接地自动开机，RESET_N/NET_STATUS/RI/DTR 悬空；唯一硬复位手段是 PWREN 断电重上 |
 | 峰值电流 | 2 A（原理图备注） | 电池低电量 + 发射峰值可能引发掉压，N1 HIL 必测 |
 
 - 使用已有的 `Feature::kCellular`（`main/board/BoardProfile.hpp:13`），仅 P2 v1.41 profile 带此特性。**无此特性的板型（E1 DevKit 把 GPIO26 用作电源保持，`BoardProfile.cpp:61`）绝不初始化 4G 模块、不触碰 GPIO26 与 UART1。**
@@ -130,7 +130,7 @@ Off ─(net.enable && 允许上电)→ PowerOn ─RDY/AT OK→ Sync ─→ SimCh
 
 ## 5 风险与待确认
 
-1. **Q1 PWRKEY/RESET_N 是否接 ESP32 — 已核对旧固件（2026-11-26）**：V3.1 IDF（`P2_V3.1_IDF/main/user_include/user_ec600.h:8` `GSM_PWREN 26`；`user_src/user_gpio.c:18-28` 初始化置低、自检马达 500 ms 后置高；`user_src/user_gsm.c:10-19` `uart_init(UART_NUM_1,115200,…,TX=33,RX=32)` + RX 缓冲 4 KB、延时 1 s 后 `EC600_baudrate_init(460800)` 在 460800/9600/115200 间轮询发 `AT+IPR` 最多 40 次×100 ms）与 V2.7 一致，均无 PWRKEY/RESET 控制；关机路径的 `GSM_PWREN` 置低与 `AT+QPOWD` 在 `user_src/user_key.c:149-151` 被注释掉。结论：N1 按仅 PWREN 实现，L3 = 断电重上；上电到 AT 可用时间、断电最短保持时间在 HIL 实测；原理图上 PWRKEY 是否硬件拉低自启仍建议硬件同事确认，但不阻塞 N1。
+1. **Q1 PWRKEY/RESET_N 是否接 ESP32 — 已核对旧固件（2026-11-26）**：V3.1 IDF（`P2_V3.1_IDF/main/user_include/user_ec600.h:8` `GSM_PWREN 26`；`user_src/user_gpio.c:18-28` 初始化置低、自检马达 500 ms 后置高；`user_src/user_gsm.c:10-19` `uart_init(UART_NUM_1,115200,…,TX=33,RX=32)` + RX 缓冲 4 KB、延时 1 s 后 `EC600_baudrate_init(460800)` 在 460800/9600/115200 间轮询发 `AT+IPR` 最多 40 次×100 ms）与 V2.7 一致，均无 PWRKEY/RESET 控制；关机路径的 `GSM_PWREN` 置低与 `AT+QPOWD` 在 `user_src/user_key.c:149-151` 被注释掉。结论：N1 按仅 PWREN 实现，L3 = 断电重上；上电到 AT 可用时间、断电最短保持时间在 HIL 实测；原理图 `p2v1.41.pdf` 第 8 页（U38A EC600U）已核对：pin 74 `PWRKEY` 经 R214 1 kΩ 直接接地（上电即自动开机），pin 75 `RESET_N`、pin 53 `NET_STATUS`、pin 40 `MAIN_RI`、pin 39 `MAIN_DTR` 均悬空未引出；pin 76 `VDD_EXT` 输出 `VCC_1V8` 给电平转换；VBAT 经 Q6 SI2333DS（P-MOS）+ Q7 2N7002 由 `4G_PWREN` 控制（高有效，R109 1 kΩ 下拉，ESP32 未上电时默认断电）。因此模块无法软开关机/硬复位，只能 `AT+QPOWD` 或断 PWREN。
 2. **Q2 460800 波特率稳定性**：电平转换（1V8↔3V3）下高波特率误码需 HIL 统计；不稳则固定 115200（NTRIP 1 Hz RTCM 约 1–2 KB/s，115200 足够）。
 3. **Q3 峰值 2 A 与掉压**：低电量 + 注网发射峰值可能触发 BOD 或 SGM41513 限流，N1 HIL 用 `simbat` 之外的真实低电量测试。
 4. **Q4 Wi-Fi 配置模式下 4G 断电**：默认断电换堆余量，若用户需要网页配置时 4G 继续收 NTRIP，需 N1 实测堆后再定。
