@@ -75,4 +75,17 @@ IDF 6.1 `components/nvs_flash/include/nvs_flash.h:94`、`src/nvs_api.cpp:98` 和
 | `python3 tools/web_mock/web_mock.py --selftest` 与 `node tools/web_mock/e2e_ota_ui.mjs` | **PASS**。验证切槽应答、待重启时忙、未提供 OTA 时 404，并覆盖另一槽版本、空槽禁用、两次点击及成功反馈。 |
 | IDF 分区表、镜像头与 Linux flash 仿真 | **PASS**。二进制对照、Flash 参数、实例条目见上。复审修复后在 IDF 6.1 Linux flash 仿真注入 `NEW_VERSION_FOUND`，确认两个命名空间都返回 `ESP_ERR_NVS_NOT_INITIALIZED`，擦除后 blob 缺失、输出 E、SN/PN 由 cfg 回填。`builds/c6-logs/nvs-sdk-cold.log`。 |
 | `tools/t13_host_check` 单独用 `-fsanitize=thread -g -O1` 构建，并各跑一次 `ctest --output-on-failure` | 基线与 C6 都是 **45 PASS / 1 FAIL**。`t13_init_start_timeout` 两处既有数据竞争相同，均报告 `SppServerInit.c:41`、`SppServerInit.c:53`，日志见 `builds/c6-logs/tsan{,-baseline}.log`。 |
-| HIL | **NOT_RUN**。由 Architect 与用户验证 Arduino/IDF 旧 bootloader 识别 IDF 6.1 app、网页切回旧槽、旧固件再次读取系统 NVS、设备上两实例条目及射频配置清空。 |
+| HIL | **PASS（部分）**，2026-11-26 P2 v1.41 真机，见下节。 |
+
+## HIL（2026-11-26，P2 v1.41，ZED-F9P，/dev/ttyACM0）
+
+| 步骤 | 结果 |
+|---|---|
+| 1 新板直刷 | PASS。`erase-flash` 后按 `flash_args` 烧录（bootloader、分区表、otadata、app0）。启动显示 `NVS nvs: 630 entries`、`NVS spiffs: 4032 entries`，cfg 区挂载。`gnss.cutoff 20` 重启后保留；`factory sn P25K30001` 后 `freset yes`，SN 保留，`gnss.cutoff` 回到 15。 |
+| 2 旧固件网页 OTA | PASS。烧录 Arduino `P2_V2.7.ino.{bootloader,partitions,bin}`（串口 460800 报 `Software_version: V2.5.0.1.T2`），用户经 `192.168.4.1/upload` 上传 `P2_V6.0.0.0.bin`。新固件在旧 bootloader 下从 `app1` 启动，`other app0 state=valid version=esp-idf: v4.4.7`、`rollback_possible yes`，无 E 级日志，系统 NVS 未擦除（179/630）。旧固件 NVS 页头版本字节实测 `0xfe`，与 IDF 6.1 相同。新固件运行并重启两次后整个系统 NVS 区逐字节不变。 |
+| 3 网页切回旧槽 | PASS。新固件网页 OTA 页“切换到另一槽”确认后重启，串口 460800 报 `Software_version: V2.5.0.1.T2`。 |
+
+说明与遗留：
+- 本板先整片擦除，旧固件生成的 `eeprom/eeprom`（2280 B）几乎全为 0xFF；用户网页修改的设置未出现在 blob 中。C7 主机测试的对照样本须取自保留出厂配置的外场或产线设备。
+- 应用日志 `spi_flash: flash io: qio`，镜像头为 DIO，在旧 bootloader 下运行正常。
+- 未做：V3.1 IDF bootloader 冒烟（无该线完整镜像）；`freset` 后 `bt_config`/`nvs.net80211` 条目清空未逐项读出核对。
