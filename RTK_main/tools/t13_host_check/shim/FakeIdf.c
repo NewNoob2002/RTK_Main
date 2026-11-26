@@ -93,6 +93,8 @@ static bool s_overlap;
 static uint32_t s_disconnect[FAKE_CALLS_MAX];
 static int s_disconnect_count;
 static int s_disconnect_return_count;
+/* 当前线程的 esp_spp_disconnect 已返回、但驱动尚未完成结算（见 esp_spp_disconnect）。 */
+static __thread bool s_disconnect_settle_pending;
 static esp_err_t s_disconnect_result;
 static const char *s_trace[FAKE_TRACE_MAX];
 static int s_trace_count;
@@ -283,9 +285,14 @@ static void fake_trace_add(const char *name)
 
 /* ---------------- 用例控制接口 ---------------- */
 
+static void disconnect_settle_hook(void);
+
 void fake_reset(void)
 {
     ensure_cond();
+    /* 先于后续线程创建安装钩子；同时丢弃本线程遗留的未结算标记。 */
+    s_disconnect_settle_pending = false;
+    fake_crit_exit_hook_install(disconnect_settle_hook);
     pthread_mutex_lock(&s_lock);
     s_init_mode = FAKE_STAGE_OK;
     s_start_mode = FAKE_STAGE_OK;
@@ -1195,6 +1202,25 @@ esp_err_t esp_spp_write(uint32_t handle, int len, uint8_t *p_data)
     return ESP_OK;
 }
 
+/* 钩子：调用线程（驱动 worker）退出随后第一段临界区——即驱动在 esp_spp_disconnect 返回后做的结算
+ * （清 submitting / disconnect_submitting，见 SppServerWorker.c、SppServerSession.c）——之后，
+ * 才让用例看到“disconnect 已返回”。 */
+static void disconnect_settle_hook(void)
+{
+    if (!s_disconnect_settle_pending) {
+        return;
+    }
+    s_disconnect_settle_pending = false;
+    pthread_mutex_lock(&s_lock);
+    ++s_disconnect_return_count;
+    pthread_cond_broadcast(&s_cond);
+    pthread_mutex_unlock(&s_lock);
+}
+
+/* MT1：返回计数不在函数返回时递增，而是等调用线程完成结算临界区后再递增。
+ * 否则用例在 fake_wait_disconnect_returns 刚满足时就注入 CLOSE/OPEN，会与 worker 尚未执行的
+ * spp_server_ctrl_settle_locked 竞争（ctrl[].submitting 仍为 true，OPEN 被拒绝）；这是用例同步缺陷，
+ * 不是驱动缺陷（T13F-pairing-order §3）。调用方（worker）返回后必然进入一次结算临界区。 */
 esp_err_t esp_spp_disconnect(uint32_t handle)
 {
     uint32_t block_ms = 0U;
@@ -1215,10 +1241,7 @@ esp_err_t esp_spp_disconnect(uint32_t handle)
         /* 模拟 btc_transfer_context 阻塞在 BTC 队列上（OSI_THREAD_MAX_TIMEOUT）。 */
         fake_sleep_ms(block_ms);
     }
-    pthread_mutex_lock(&s_lock);
-    ++s_disconnect_return_count;
-    pthread_cond_broadcast(&s_cond);
-    pthread_mutex_unlock(&s_lock);
+    s_disconnect_settle_pending = true;
     return result;
 }
 

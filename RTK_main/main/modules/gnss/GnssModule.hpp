@@ -877,6 +877,16 @@ private:
     /** @brief 回滚未落盘的输出配置。 @note 仅 kIo，重配由调用方触发。 */
     void restorePendingApply() noexcept;
 
+    /**
+     * @brief 持久化改频结果：先写 rate，F9P 联动对齐时再写 out；out 失败则补偿写回旧 rate。
+     * @param prevRate: 变更前的频率（Hz），补偿写入使用。
+     * @param outAligned: 本次是否联动改写了 out_cfg_（仅 ZED-F9P）。
+     * @retval kOk 全部落盘；其余为首个失败项的错误码，此时 RAM rateHz 已置回 prevRate。
+     * @note 仅 kIo。两个键不是事务写入：补偿写入失败只记 FW_LOGE，NVS 残留“新 rate + 旧 out”，
+     *       由下次启动 restoreOutputPeriods 的 F9P 对齐自愈；调用方仍须回滚 out_cfg_ 与计划。
+     */
+    [[nodiscard]] fw::Result persistRateWithOut(uint8_t prevRate, bool outAligned) noexcept;
+
     /** @brief 重探或复位前恢复配置并结单。 @note 仅 kIo。 */
     void abortPendingSettings() noexcept;
 

@@ -15,6 +15,7 @@
 #include "def/GnssSubDef.hpp"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "fw/Log.hpp"
 #include "fw/Trace.hpp"
 #include "modules/gnss/GnssCmdPack.hpp"
 #include "modules/gnss/GnssKeys.hpp"
@@ -60,7 +61,7 @@ constinit app::AppContext s_dispatchContext{};
 constinit app::AppContext s_pppContext{};
 constinit app::AppContext s_dispatchCmdContext{};
 constinit std::array<app::AppContext, 16U> s_targetBaudContexts{};
-constinit std::array<app::AppContext, 6U> s_f9pContexts{};
+constinit std::array<app::AppContext, 8U> s_f9pContexts{};
 constinit app::AppContext *s_context = &s_initialContext;
 uint32_t s_now = 0;
 uint32_t s_hostBaud = 0;
@@ -1971,6 +1972,37 @@ static void verifyF9pSeqWriteFailClearsTracker(rtos::Executor &executor)
     CHECK(s_context->data.gnssSatTrack.read()->cutoffDeg == 19U);
 }
 
+/** @brief 捕获 kGnss 类 E 级日志中含“rate compensation failed”的条数（MT1 补偿写入失败分支观测）。 */
+static unsigned s_rateCompFailLogs = 0U;
+
+/**
+ * @brief 直写日志 sink：统计 GNSS 改频补偿写入失败日志。
+ * @param hdr: 记录头。
+ * @param payload: 文本正文。
+ * @note 单线程主机测试。
+ */
+static void captureGnssLog(void * /*ctx*/, const fw::LogHeader &hdr,
+                           std::span<const uint8_t> payload) noexcept
+{
+    const std::string_view text{reinterpret_cast<const char *>(payload.data()), payload.size()};
+    if (hdr.cat == fw::TraceCat::kGnss && hdr.level == fw::LogLevel::kError &&
+        text.find("rate compensation failed") != std::string_view::npos) {
+        ++s_rateCompFailLogs;
+    }
+}
+
+/** @brief 步骤 5c 留下的 NVS 残留（新 rate + 旧 out），供步骤 6b 冷启动自愈验证。 */
+static std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> s_mixedResidueOut{};
+static uint8_t s_mixedResidueRate = 0U;
+
+/** @brief 读取 NVS gnss/out 原始 blob。 @param nvs: 句柄。 @param[out] blob: 输出。 */
+static void readOutBlob(nvs_handle_t nvs,
+                        std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> &blob)
+{
+    size_t len = blob.size();
+    CHECK(nvs_get_blob(nvs, "out", blob.data(), &len) == ESP_OK && len == blob.size());
+}
+
 /** @brief U2 端到端回归：F9P caps、gnss.out.gsv=0、1->5 Hz 500 ms 周期对齐持久化、频率回滚恢复 CFG-RATE-MEAS、改频不重放星座与 HPG 1.12 高精度 NAK 降级。 */
 static void verifyF9pRateOutputAndRollback(nvs_handle_t nvs, std::span<uint8_t> demux,
                                            std::span<uint8_t> pipe)
@@ -2125,6 +2157,58 @@ static void verifyF9pRateOutputAndRollback(nvs_handle_t nvs, std::span<uint8_t> 
     CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 5U);
     CHECK(s_f9pSatValsets == satBefore);
 
+    // 5b. MT1 RU2-02：运行中改频（两阶段）时 out 键写失败，NVS rate 必须补偿写回旧值，不留“新 rate + 旧 out”。
+    CHECK(fw::isOk(runSetting("gnss.rate", "1", settings::Caller::kConsole, 800U)));
+    auto outMixed = s_context->data.gnssOutCfg.read();
+    CHECK(
+        fw::isOk(outMixed.applyInterval(static_cast<size_t>(gnss::OutputMsg::kRmc), 2))); // 500 ms
+    fw::Command setOutMixed{.target = target,
+                            .verb = static_cast<uint8_t>(app::GnssSubVerb::kSetOut)};
+    size_t setOutMixedLen = 0U;
+    CHECK(fw::isOk(outMixed.encode(setOutMixed.args, setOutMixedLen)));
+    setOutMixed.argLen = static_cast<uint8_t>(setOutMixedLen);
+    rtos::Ticket tSetOutMixed{};
+    CHECK(fw::isOk(executor.post(setOutMixed, rtos::Caller::kConsole, tSetOutMixed)));
+    rtos::ExecutorTestAccess::drain(executor);
+    advance(800U);
+    std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> oldOutBlob{};
+    readOutBlob(nvs, oldOutBlob);
+    CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 1U);
+    const auto oldOutRam = s_context->data.gnssOutCfg.read();
+    const unsigned compLogsBefore = s_rateCompFailLogs;
+    const uint32_t applySeqBefore = s_context->data.gnssStatus.read().applySeq;
+
+    nvs_shim_add_key_fail("out", ESP_FAIL, 0U);
+    CHECK(!fw::isOk(runSetting("gnss.rate", "5", settings::Caller::kConsole, 800U)));
+    nvs_shim_clear_key_fail();
+    advance(1200U); // 回滚重配 CFG-RATE-MEAS
+    const auto afterFail = s_context->data.gnssStatus.read();
+    CHECK(afterFail.lastApply == app::GnssApply::kRestored && afterFail.applySeq != applySeqBefore);
+    CHECK(s_context->settings.get("gnss.rate", got) && got.number == 1);
+    CHECK(s_context->data.gnssOutCfg.read().intervals == oldOutRam.intervals);
+    CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 1U); // 补偿写回旧 rate
+    std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> nowOutBlob{};
+    readOutBlob(nvs, nowOutBlob);
+    CHECK(nowOutBlob == oldOutBlob);
+    CHECK(s_rateCompFailLogs == compLogsBefore); // 补偿成功不记 E
+    CHECK(s_f9pLastRateMeasMs == 1000U);
+
+    // 5c. 补偿写入也失败：返回原始 out 错误，记 E 日志，NVS 残留新 rate（由下次启动对齐自愈，见步骤 6/6b）。
+    nvs_shim_add_key_fail("out", ESP_FAIL, 0U);
+    nvs_shim_add_key_fail("rate", ESP_FAIL, 1U); // 第一次（新 rate）成功，补偿写入失败
+    CHECK(!fw::isOk(runSetting("gnss.rate", "5", settings::Caller::kConsole, 800U)));
+    nvs_shim_clear_key_fail();
+    advance(1200U);
+    CHECK(s_rateCompFailLogs == compLogsBefore + 1U);
+    CHECK(s_context->data.gnssStatus.read().lastApply == app::GnssApply::kRestored);
+    CHECK(s_context->settings.get("gnss.rate", got) && got.number == 1); // RAM 仍回滚
+    CHECK(s_context->data.gnssOutCfg.read().intervals == oldOutRam.intervals);
+    CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 5U); // 残留：新 rate + 旧 out
+    readOutBlob(nvs, nowOutBlob);
+    CHECK(nowOutBlob == oldOutBlob);
+    s_mixedResidueOut = oldOutBlob;
+    s_mixedResidueRate = nvsRate;
+
     rtos::ExecutorTestAccess::bind(executor, nullptr);
     s_context->ioExecutor = nullptr;
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
@@ -2146,6 +2230,20 @@ static void verifyF9pRateOutputAndRollback(nvs_handle_t nvs, std::span<uint8_t> 
     CHECK(persistedOut.intervals[static_cast<size_t>(gnss::OutputMsg::kGga)] == -1);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
 
+    // 6b. MT1：步骤 5c 的真实残留（rate=5 + RMC=500 ms）冷启动同样被 restoreOutputPeriods 对齐并写回 out。
+    CHECK(s_mixedResidueRate == 5U);
+    CHECK(nvs_set_blob(nvs, "out", s_mixedResidueOut.data(), s_mixedResidueOut.size()) == ESP_OK);
+    CHECK(nvs_commit(nvs) == ESP_OK);
+    bootF9pModule(6U, nvs, demux, pipe, "HPG 1.32", std::nullopt, s_mixedResidueRate, false);
+    CHECK(
+        s_context->data.gnssStatus.read().rxPeriodMs[static_cast<size_t>(gnss::OutputMsg::kRmc)] ==
+        1000U);
+    nvsLen = nvsBlob.size();
+    CHECK(nvs_get_blob(nvs, "out", nvsBlob.data(), &nvsLen) == ESP_OK);
+    CHECK(fw::isOk(app::data::GnssOutConfig::decode(nvsBlob, persistedOut)));
+    CHECK(persistedOut.intervals[static_cast<size_t>(gnss::OutputMsg::kRmc)] == -1);
+    CHECK(fw::isOk(s_context->gnss.stopBoot()));
+
     // 7. HPG 1.12 NMEA 高精度 VALSET NAK 降级：非致命回退至 3 键基础配置，正常进入 kRunning。
     bootF9pModule(5U, nvs, demux, pipe, "HPG 1.12", std::nullopt, 1U, true);
     CHECK(s_f9pHighPrecNaks >= 1U);
@@ -2153,6 +2251,54 @@ static void verifyF9pRateOutputAndRollback(nvs_handle_t nvs, std::span<uint8_t> 
     CHECK(s_context->data.gnssStatus.read().state == gnss::State::kRunning);
     CHECK(s_context->data.gnssCaps.read().valid);
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
+}
+
+/**
+ * @brief MT1 RU2-02：非运行态（kReset 后 kPowerUp，型号已被 start() 清空）直接落盘路径：rate 单键保存，
+ *        out 不被改写；rate 写失败时 RAM 与 NVS 都回到旧值。本用例处于型号未知态，不触发 F9P 的 out 联动；
+ *        若控制器在 kOff/kFailed 仍保留 F9P 型号，该分支同样走共用的 persistRateWithOut，
+ *        其 out 失败补偿由运行态两阶段路径覆盖（见 verifyF9pRateOutputAndRollback 5b/5c）。
+ * @param nvs: 测试用 NVS 句柄。
+ * @param demux: 分流器缓冲。
+ * @param pipe: 管道缓冲。
+ */
+static void verifyNonRunningRateSave(nvs_handle_t nvs, std::span<uint8_t> demux,
+                                     std::span<uint8_t> pipe)
+{
+    auto initOut = app::data::GnssOutConfig::defaults();
+    CHECK(fw::isOk(initOut.applyInterval(static_cast<size_t>(gnss::OutputMsg::kRmc), 2))); // 500 ms
+    std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> oldBlob{};
+    size_t blobLen = 0U;
+    CHECK(fw::isOk(initOut.encode(oldBlob, blobLen)));
+    CHECK(nvs_set_blob(nvs, "out", oldBlob.data(), blobLen) == ESP_OK);
+    CHECK(nvs_set_u8(nvs, "rate", 1U) == ESP_OK);
+    CHECK(nvs_commit(nvs) == ESP_OK);
+    bootF9pModule(7U, nvs, demux, pipe, "HPG 1.32", std::nullopt, 1U, false);
+
+    readOutBlob(nvs, oldBlob); // 启动自愈可能已对齐并落盘 out，以启动后的 NVS 为基线
+    // kReset 后控制器重新上电：state 为 kPowerUp（非运行、非瞬态），型号已清空。
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kReset)).status));
+    const auto st = s_context->data.gnssStatus.read().state;
+    CHECK(st != gnss::State::kRunning && st != gnss::State::kMaintenance);
+    const std::array<uint8_t, 1U> rate5{5U};
+    uint8_t nvsRate = 0U;
+    std::array<uint8_t, app::data::GnssOutConfig::kBlobBytes> nowBlob{};
+
+    nvs_shim_add_key_fail("rate", ESP_FAIL, 0U);
+    CHECK(!fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kSetRate), rate5).status));
+    nvs_shim_clear_key_fail();
+    CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 1U);
+    readOutBlob(nvs, nowBlob);
+    CHECK(nowBlob == oldBlob);
+    // RAM 已回滚：storage 绑定从 RAM rover_cfg_ 取值，把 rate 键再存一次，NVS 必须仍是旧值 1。
+    CHECK(fw::isOk(s_context->storage.saveKeys(
+        std::span{app::gnss_store::kConfigKeys}.subspan<app::gnss_store::kRateKeyIndex, 1U>())));
+    CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 1U);
+
+    CHECK(fw::isOk(command(static_cast<uint8_t>(app::GnssVerb::kSetRate), rate5).status));
+    CHECK(nvs_get_u8(nvs, "rate", &nvsRate) == ESP_OK && nvsRate == 5U);
+    readOutBlob(nvs, nowBlob);
+    CHECK(nowBlob == oldBlob); // 型号未知时不对齐 out，NVS out 保持不变
 }
 
 /** @brief F9P 端到端主机回归：覆盖 RU1-02/03/04/06/07/08（能力、强制 GPS 重放、稳定期、回滚、RTCM 帧边界与零溢出）。 */
@@ -2163,6 +2309,8 @@ void testGnssF9pEndToEnd()
     nvs_handle_t nvs = 0U;
     CHECK(nvs_open("gnss", NVS_READWRITE, &nvs) == ESP_OK);
     s_nvs = nvs;
+    // 进程内只能安装一次直写 sink；用于观测改频补偿写入失败的 E 级日志。
+    CHECK(fw::isOk(fw::logInstallDirect(&captureGnssLog, nullptr, []() noexcept { return 0U; })));
 
     // 场景 1：HPG 1.12 预存旧 gps=0 blob -> 能力隐藏 GPS 与 SBAS，重放强制 GPS=1 且不发 SBAS 键
     const core::SatTrackConfig legacyBlob{
@@ -2209,6 +2357,7 @@ void testGnssF9pEndToEnd()
     CHECK(fw::isOk(s_context->gnss.stopBoot()));
     verifyF9pLegacyGps0FailedReplay(nvs, demux, pipe);
     verifyF9pRateOutputAndRollback(nvs, demux, pipe);
+    verifyNonRunningRateSave(nvs, demux, pipe);
     s_f9pMode = false;
     nvs_close(nvs);
 }

@@ -81,6 +81,8 @@ typedef struct {
 
 void fake_crit_enter(void);
 void fake_crit_exit(void);
+/* 安装临界区退出后（已解锁）调用的可选钩子（原子发布，可在任意线程调用），仅供 host 替身之间同步使用。 */
+void fake_crit_exit_hook_install(void (*hook)(void));
 
 #define taskENTER_CRITICAL(mux) ((void)(mux), fake_crit_enter())
 #define taskEXIT_CRITICAL(mux)  ((void)(mux), fake_crit_exit())
