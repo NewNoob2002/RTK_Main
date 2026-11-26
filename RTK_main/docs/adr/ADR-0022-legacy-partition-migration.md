@@ -85,14 +85,19 @@
 
 **第一阶段（C7）迁移，新固件已有对应键：**
 
+> 2026-11-26 修订（用户决定）：C7 **只迁移 SN、PN**。星座、NMEA 频率、截止角、SBAS、JSON 服务器、ThingsBoard
+> 不迁移，升级后用新固件默认值，由用户在 nav App 重新配置。原因：旧固件对 0/0xFF 的语义与新键不一致
+> （F9P 线频率 0 实为“保持 1 Hz 输出”，星座全 0 实为“从未配置”），迁移易造成升级后无输出；这些都不是生产配置。
+> 下表除 SN/PN 两行外仅作旧地址记录。
+
 | 旧字段 | 地址/宽度 | 新键 | 换算与校验 |
 | --- | --- | --- | --- |
 | SN | 200 / 16 | `fac/sn` + `facbk/sn` | 可见 ASCII；与 `factory.sn` 同一校验 |
 | PN | 216 / 16 | `fac/pn` + `facbk/pn`（现 `rtk/pn` 迁入 `fac`） | 原文保存，不解析（§2.7） |
-| GPS/BDS/GLO/GAL 开关 | 300–303 / 各 1 | `gnss.const.gps/bds/glo/gal` | 0/1；其他值未设置 |
-| GGA/GSA/GSV/GST/RMC 频率 | 304–308 / 各 1 | `gnss.out.gga/gsa/gsv/gst/rmc` | 旧值：正数 = Hz，0 = 关（旧固件把负值当 0）。换算为周期 ms = 1000/Hz；按当前 `gnss.rate` 对齐，不能整除的取最近合法值并计入“非法” |
-| 截止高度角 | 310 / int32 | `gnss.cutoff` | 1–90；旧固件 ≤0 用 15 |
-| SBAS | 314 / 1 | 卫星设置的 sbas 位（0x24 路径 `rtk/sat_cfg`） | 0/1；F9P 无 SBAS 能力时按能力掩码清零 |
+| GPS/BDS/GLO/GAL 开关 | 300–303 / 各 1 | `gnss.const.gps/bds/glo/gal` | ~~0/1；其他值未设置~~ 不迁移（2026-11-26 修订） |
+| GGA/GSA/GSV/GST/RMC 频率 | 304–308 / 各 1 | `gnss.out.gga/gsa/gsv/gst/rmc` | ~~旧值：正数 = Hz，0 = 关（旧固件把负值当 0）。换算为周期 ms = 1000/Hz；按当前 `gnss.rate` 对齐，不能整除的取最近合法值并计入“非法”~~ 不迁移（2026-11-26 修订） |
+| 截止高度角 | 310 / int32 | `gnss.cutoff` | ~~1–90；旧固件 ≤0 用 15~~ 不迁移（2026-11-26 修订） |
+| SBAS | 314 / 1 | 卫星设置的 sbas 位（0x24 路径 `rtk/sat_cfg`） | ~~0/1；F9P 无 SBAS 能力时按能力掩码清零~~ 不迁移（2026-11-26 修订） |
 
 **第二阶段，随对应功能迁移（同一份 blob 再解析，`mig` 下各自记 `mig/net`、`mig/fence` 等标记）：**
 
@@ -101,8 +106,8 @@
 | APN、APN 用户名、APN 密码 | 0/32、32/16、48/16 | `net.apn`、`net.apn_user`、`net.apn_pass`（ADR-0021 新增） | 4G N1 |
 | 内置 NTRIP 开关 | 444 / 1 | `ntrip.enabled` | 4G N2 |
 | NTRIP 域名、端口、用户名、密码、挂载点、IP | 64/32、96/int32、100/16、116/16、132/16、445/16 | `ntrip.host`、`ntrip.port`、`ntrip.user`、`ntrip.pass`、`ntrip.mount`（域名为空时用 IP 作 host） | 4G N2；同时取代 `rtk/ntrip_cfg` 原始帧 |
-| JSON 服务器地址、端口 | 320/32、352/int32 | 原样存 `rtk/json_srv` | 现在即可（C7），功能按 ADR-0021 只预留 |
-| ThingsBoard 开关、client_id、用户名、密码、主机、端口 | 356/1、360/16、376/16、392/16、408/32、440/int32 | 原样存 `rtk/tb_cfg` | 现在即可（C7），以后由 N3 MQTT 取代 |
+| JSON 服务器地址、端口 | 320/32、352/int32 | 原样存 `rtk/json_srv` | ~~现在即可（C7），功能按 ADR-0021 只预留~~ 不迁移（2026-11-26 修订） |
+| ThingsBoard 开关、client_id、用户名、密码、主机、端口 | 356/1、360/16、376/16、392/16、408/32、440/int32 | 原样存 `rtk/tb_cfg` | ~~现在即可（C7），以后由 N3 MQTT 取代~~ 不迁移（2026-11-26 修订） |
 | 围栏：数量、存在表 | 512 / 1、513+i / 1 | `fence/*` | WP-FENCE |
 | 围栏 i（i<5）：id | 2228+i / 1 | 同上 | WP-FENCE |
 | 名称、启用、告警类型、LED、蜂鸣、马达、顶点数 | 518+342i / 16，534–539+342i / 各 1 | 同上；`fence_type` 旧数据无，取默认 | WP-FENCE |
@@ -150,15 +155,14 @@
 | 卡 | 内容 | 依赖 |
 | --- | --- | --- |
 | C6 | 统一分区表；cfg NVS 实例（`nvs_store` 双实例 API）；现有键迁到 cfg 区；SN/PN 双副本；擦除策略；`freset`/`factory erase` 按命名空间；`nvs_get_stats` 记录；网页手动切槽 `POST /ota/rollback`（+ 调试用 `ota rollback`） | — |
-| C7 | §2.4 迁移框架 + §2.5 第一阶段字段 + JSON/ThingsBoard 原始帧；V2.7/V3.1 真机 blob 金样主机测试 | C6 |
+| C7 | §2.4 迁移框架 + §2.5 SN/PN（2026-11-26 修订）；V2.7/V3.1 真机 blob 金样主机测试 | C6 |
 | 后续 | 第二阶段字段随 4G N1/N2、WP-FENCE 迁移 | C7 |
 
 HIL（C7 验收，以 Arduino V2.x 线为主；V3.1 IDF 线外场没有，只做一次 bootloader 引导冒烟）：
 
-1. 整片烧录旧固件（Arduino V2.7 的 `P2_V2.7.ino.bootloader.bin` + 分区表 + app）；用旧 App 写 SN/PN、星座、频率、截止角、
-   NTRIP、ThingsBoard、围栏。
+1. 整片烧录旧固件（Arduino V2.7 的 `P2_V2.7.ino.bootloader.bin` + 分区表 + app）；用旧 App 写 SN/PN（其余字段不迁移，可不写）。
 2. 串口读出 0x9000 nvs 存档（作为主机测试金样）。
-3. 用旧固件自身的网页 OTA 写入新固件 → 重启：确认旧 bootloader 能引导、`Legacy config migrated` 计数正确、`config get` 各键值与旧配置一致、
+3. 用旧固件自身的网页 OTA 写入新固件 → 重启：确认旧 bootloader 能引导、`Legacy config migrated` 计数正确、`Legacy config migrated: 2 fields` 且 `factory`/`config get` 读到的 SN/PN 与旧值一致、其余键为新固件默认值、
    SN/PN 两副本一致、蓝牙绑定保留。
 4. 新固件网页 OTA 到另一版本新固件，确认 otadata 切换正常；再切回旧固件槽，确认旧固件启动且配置仍在、NVS 未被整片擦除。
 5. `freset` 后确认 `fac`/`facbk`/`mig`/旧 blob 保留、用户配置回默认、不会再次迁移。
@@ -179,5 +183,5 @@ HIL（C7 验收，以 Arduino V2.x 线为主；V3.1 IDF 线外场没有，只做
 
 1. 外场设备是否有 V3.x IDF 线 → **全部是 V2.x Arduino 线**。迁移与 HIL 以 Arduino bootloader + V2.7 blob（2280 B）为主；2560 B 长度仍接受。
 2. 外场 OTA 入口 → **网页 OTA**。蓝牙 OTA 不作为升级路径验证。
-3. JSON/ThingsBoard 原始帧 → **第一阶段（C7）就迁**。
+3. JSON/ThingsBoard 原始帧 → **第一阶段（C7）就迁**。（2026-11-26 用户改为不迁移，见 §2.5 修订。）
 4. 手动切槽 → **增加**。发布版关闭终端控制台，Type-C 也未接 ESP32 串口，因此做成网页按钮（§2.6），控制台命令只作调试。

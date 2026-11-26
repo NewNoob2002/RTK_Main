@@ -5,11 +5,22 @@
 
 #include "esp_err.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void fake_nvs_fail_init(bool cfg, esp_err_t error);
 void fake_nvs_fail_write(bool cfg, esp_err_t error);
+void fake_nvs_fail_key_write(const char *key);
+void fake_nvs_fail_key_commit(const char *key);
+void fake_nvs_corrupt_key_read(const char *key);
 void fake_nvs_fail_delete(void);
 unsigned fake_nvs_erases(bool cfg);
 unsigned fake_nvs_writes(void);
 unsigned fake_nvs_warnings(void);
 unsigned fake_nvs_errors(void);
 unsigned fake_nvs_eeprom_loss_logs(void);
+
+#ifdef __cplusplus
+}
+#endif

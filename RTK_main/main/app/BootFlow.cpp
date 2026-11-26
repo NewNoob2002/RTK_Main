@@ -21,6 +21,7 @@
 
 #include "app/BootBuffers.hpp"
 #include "NvsStore.h"
+#include "NvsStoreBoot.h"
 #include "app/BootReport.hpp"
 #include "app/BootReasons.hpp"
 #include "app/ConsoleProfile.hpp"
@@ -28,6 +29,7 @@
 #include "board/BoardStartup.hpp"
 #include "core/Types.hpp"
 #include "modules/ota/OtaRuntime.hpp"
+#include "modules/storage/LegacyMigration.hpp"
 #include "support/ConsoleSupport.hpp"
 #include "support/ResetReason.hpp"
 
@@ -177,6 +179,7 @@ app::BootResult stepEarlyConfig(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
     nvs_store_set_boot_scratch(&withNvsBootScratch);
+    nvs_store_set_boot_migration(&app::store::migrateLegacyEeprom);
     app::loadEarlyConfig(app::appContext());
     return app::BootResult::kOk;
 }
