@@ -12,6 +12,6 @@ target_include_directories(nvs_store_test PRIVATE .
 target_compile_options(nvs_store_test PRIVATE -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes)
 enable_testing()
 foreach(scenario both missing_cfg missing_system different corrupt cfg_recovery system_recovery
-                 system_unreadable legacy_pn write_failure freset factory_erase whitelist)
+                 system_recovery_new_version legacy_pn write_failure freset factory_erase whitelist)
     add_test(NAME nvs_store_${scenario} COMMAND nvs_store_test ${scenario})
 endforeach()

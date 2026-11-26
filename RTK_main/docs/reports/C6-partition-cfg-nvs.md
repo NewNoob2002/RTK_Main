@@ -51,7 +51,7 @@ IDF 6.1 `components/nvs_flash/include/nvs_flash.h:94`、`src/nvs_api.cpp:98` 和
 
 仿真读回保留的 SN、PN 与 EEPROM 原始字节。样本没有启用 PHY、Wi-Fi、蓝牙或 GNSS，设备实际占用随使用状态而变化。探针源和日志分别在 `builds/c6-nvs-sdk-src`、`builds/c6-logs/nvs-sdk-stats.log`。
 
-系统和 cfg 只擦各自分区。系统异常时启动分配器最多临时借出 2560 B，恢复完成即释放。IDF 冷启动初始化失败时可能尚未登记系统实例，公共只读 API 此时也会失败。E 日志分别记录三个备份结果，继续按任务卡擦除并从 cfg 补回身份；这一情况下旧 EEPROM 可能丢失。正常启动保持旧 EEPROM 原始数据，旧内容迁移由 C7 负责。cfg 异常后从系统备份补回出厂身份。双写先备份再提交 cfg，主副本写失败时尝试恢复原备份，启动比对时以 cfg 为准。PN 旧键只在双副本已就绪后删除，可重试清理。
+系统和 cfg 只擦各自分区。系统异常时启动分配器最多临时借出 2560 B，恢复完成即释放。IDF 6.1 的 `NVSPartitionManager::init_custom()` 仅在初始化成功后登记实例。冷启动时系统 NVS 初始化失败，`nvs_open` 和 `nvs_open_from_partition` 返回 `ESP_ERR_NVS_NOT_INITIALIZED`，旧 EEPROM 与系统 SN/PN 备份均无法拷出。系统 NVS 擦除成功后，E 日志明确记录旧 EEPROM 已丢失且 C7 迁移将跳过，系统 SN/PN 由 cfg 回填。旧固件 IDF 4.4.7 与 IDF 6.1 使用相同的 NVS 页格式版本，正常 OTA 升级不会触发此路径，只有页满或损坏等分区异常才会触发。正常启动保持旧 EEPROM 原始数据，旧内容迁移由 C7 负责。cfg 异常后从系统备份补回出厂身份。双写先备份再提交 cfg，主副本写失败时尝试恢复原备份，启动比对时以 cfg 为准。PN 旧键只在双副本已就绪后删除，可重试清理。
 
 ## 资源
 
@@ -59,20 +59,20 @@ IDF 6.1 `components/nvs_flash/include/nvs_flash.h:94`、`src/nvs_api.cpp:98` 和
 | --- | ---: | ---: | ---: |
 | 静态 DRAM | 98,619 B | 98,619 B | 0 B |
 | IRAM | 116,139 B | 116,139 B | 0 B |
-| Flash code | 1,141,440 B | 1,142,992 B | +1,552 B |
-| Flash data | 275,164 B | 275,500 B | +336 B |
-| `rtk_main.bin` | 1,586,176 B | 1,588,064 B | +1,888 B |
+| Flash code | 1,141,440 B | 1,143,244 B | +1,804 B |
+| Flash data | 275,164 B | 275,580 B | +416 B |
+| `rtk_main.bin` | 1,586,176 B | 1,588,400 B | +2,224 B |
 
-每个 app 槽为 `0x1E0000`（1,966,080 B），C6 镜像余量 `0x5C4A0`（378,016 B，约 19.2%）。运行期自有代码新增堆分配 0，IDF 的 NVS API 仍管理其内部句柄和缓存。Xtensa `-fstack-usage` 检查中，借用启动缓冲的函数使用 928 B 栈，系统恢复函数使用 112 B 栈，2560 B 的 EEPROM 缓冲由现有启动分配器管理。日志见 `builds/c6-logs/size{,-baseline}.log`，静态栈数据见 `builds/c6-stack`。
+每个 app 槽为 `0x1E0000`（1,966,080 B），C6 镜像余量 `0x5C350`（377,680 B，约 19.2%）。运行期自有代码新增堆分配 0，IDF 的 NVS API 仍管理其内部句柄和缓存。Xtensa `-fstack-usage` 检查中，借用启动缓冲的函数使用 928 B 栈，系统恢复函数使用 112 B 栈，2560 B 的 EEPROM 缓冲由现有启动分配器管理。日志见 `builds/c6-logs/size-review-fix.log` 和 `builds/c6-logs/size-baseline.log`，静态栈数据见 `builds/c6-stack`。
 
 ## 验证
 
 | 执行项 | 结果 |
 | --- | --- |
-| `tools/ci/run_gates.sh --prefix c6 --base 7393202` | **PASS 43/43**。按任务卡导出 `IDF_PATH` 和 `IDF_PYTHON_ENV_PATH`，同时将已缓存的 lizard 1.26.1 加入 PATH。在沙箱外运行，保留 LeakSanitizer 和 ASan/UBSan。首轮沙箱内 LeakSanitizer 因 ptrace 失败。最终日志为 `builds/c6-logs/summary.log`。 |
-| `test/nvs_store` 普通及 ASan/UBSan | **两种构建均 PASS 13/13**。基线以 `rtk/sn` 单次迁移和分区隔离为主。C6 检查双副本齐全、分别缺失、不一致告警、损坏、两侧异常擦除、系统只读备份成功与不可读降级、PN 搬迁及删除失败重试、写失败补偿、两级恢复与白名单归属。 |
+| `tools/ci/run_gates.sh --prefix c6 --base 7393202` | **PASS 43/43**。按任务卡导出 `IDF_PATH` 和 `IDF_PYTHON_ENV_PATH`，同时将已缓存的 lizard 1.26.1 加入 PATH。在沙箱外运行，保留 LeakSanitizer 和 ASan/UBSan。首轮沙箱内 LeakSanitizer 因 ptrace 失败。复审修复后重跑仍为 43/43，日志为 `builds/c6-logs/summary-review-fix.log`。 |
+| `test/nvs_store` 普通及 ASan/UBSan | **两种构建均 PASS 13/13**。基线以 `rtk/sn` 单次迁移和分区隔离为主。C6 检查双副本齐全、分别缺失、不一致告警、损坏、两侧异常擦除、系统遇 `NO_FREE_PAGES` 或 `NEW_VERSION_FOUND` 时旧 blob 丢失、输出 E 并从 cfg 回填身份、PN 搬迁及删除失败重试、写失败补偿、两级恢复与白名单归属。 |
 | `tools/main_host_check` 普通及 ASan/UBSan | **两种构建均 PASS 205/205**。新增实际 HTTP handler 的成功、忙、无合法镜像、未提交脏槽、完整校验失败和 SDK 写失败，验证成功回执后重启。基线只有 OTA 上传和自动回滚相关检查。 |
 | `python3 tools/web_mock/web_mock.py --selftest` 与 `node tools/web_mock/e2e_ota_ui.mjs` | **PASS**。验证切槽应答、待重启时忙、未提供 OTA 时 404，并覆盖另一槽版本、空槽禁用、两次点击及成功反馈。 |
-| IDF 分区表、镜像头与 Linux flash 仿真 | **PASS**。二进制对照、Flash 参数、实例条目见上。 |
+| IDF 分区表、镜像头与 Linux flash 仿真 | **PASS**。二进制对照、Flash 参数、实例条目见上。复审修复后在 IDF 6.1 Linux flash 仿真注入 `NEW_VERSION_FOUND`，确认两个命名空间都返回 `ESP_ERR_NVS_NOT_INITIALIZED`，擦除后 blob 缺失、输出 E、SN/PN 由 cfg 回填。`builds/c6-logs/nvs-sdk-cold.log`。 |
 | `tools/t13_host_check` 单独用 `-fsanitize=thread -g -O1` 构建，并各跑一次 `ctest --output-on-failure` | 基线与 C6 都是 **45 PASS / 1 FAIL**。`t13_init_start_timeout` 两处既有数据竞争相同，均报告 `SppServerInit.c:41`、`SppServerInit.c:53`，日志见 `builds/c6-logs/tsan{,-baseline}.log`。 |
 | HIL | **NOT_RUN**。由 Architect 与用户验证 Arduino/IDF 旧 bootloader 识别 IDF 6.1 app、网页切回旧槽、旧固件再次读取系统 NVS、设备上两实例条目及射频配置清空。 |

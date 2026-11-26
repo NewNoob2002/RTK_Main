@@ -257,6 +257,12 @@ static esp_err_t nvs_store_recover_system(uint8_t *blob, size_t capacity)
              esp_err_to_name(saved_blob), esp_err_to_name(saved_sn), esp_err_to_name(saved_pn));
     esp_err_t err = nvs_flash_erase();
     if (err == ESP_OK) {
+        if (saved_blob != ESP_OK) {
+            FW_CLOGE(
+                FW_LOG_CAT_STORE,
+                "Legacy EEPROM lost after system NVS erase (%s). C7 migration will be skipped.",
+                esp_err_to_name(saved_blob));
+        }
         err = nvs_flash_init();
     }
     if (err == ESP_OK) {

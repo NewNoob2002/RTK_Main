@@ -28,7 +28,6 @@ typedef struct {
 typedef struct {
     bool ready;
     esp_err_t init_error;
-    bool readable_on_error;
     esp_err_t write_error;
     unsigned erases;
     nvs_fake_namespace_t spaces[NVS_FAKE_NAMESPACES];
@@ -40,12 +39,14 @@ static bool s_fail_delete;
 static unsigned s_writes;
 static unsigned s_warnings;
 static unsigned s_errors;
+static unsigned s_eeprom_loss_logs;
 
-/** @brief 为指定分区注入一次初始化错误，指定失败后能否只读访问。 */
-void fake_nvs_fail_init(bool cfg, esp_err_t error, bool readable)
+/** @brief 模拟保留 Flash 内容的冷启动，并为指定分区注入一次初始化错误。 */
+void fake_nvs_fail_init(bool cfg, esp_err_t error)
 {
+    s_partitions[false].ready = false;
+    s_partitions[true].ready = false;
     s_partitions[cfg].init_error = error;
-    s_partitions[cfg].readable_on_error = readable;
 }
 
 /** @brief 为指定分区注入一次 set 错误。 */
@@ -167,13 +168,20 @@ unsigned fake_nvs_errors(void)
     return s_errors;
 }
 
+/** @brief 统计明确报告 EEPROM 丢失和跳过 C7 迁移的错误日志。 */
+unsigned fake_nvs_eeprom_loss_logs(void)
+{
+    return s_eeprom_loss_logs;
+}
+
 /** @brief 初始化内存分区，消费一次性错误。 */
 static esp_err_t init(bool cfg)
 {
     nvs_fake_partition_t *part = &s_partitions[cfg];
     const esp_err_t result = part->init_error;
     part->init_error = ESP_OK;
-    part->ready = result == ESP_OK || part->readable_on_error;
+    /* IDF 冷启动时只登记初始化成功的实例。 */
+    part->ready = result == ESP_OK;
     return result;
 }
 
@@ -228,7 +236,7 @@ esp_err_t nvs_open_from_partition(const char *partition, const char *name, nvs_o
     }
     nvs_fake_partition_t *part = &s_partitions[cfg];
     if (!part->ready) {
-        return ESP_ERR_NVS_NOT_INITIALIZED;
+        return s_partitions[!cfg].ready ? ESP_ERR_NVS_PART_NOT_FOUND : ESP_ERR_NVS_NOT_INITIALIZED;
     }
     size_t free_slot = NVS_FAKE_NAMESPACES;
     for (size_t i = 0; i < NVS_FAKE_NAMESPACES; ++i) {
@@ -328,11 +336,14 @@ const char *esp_err_to_name(esp_err_t err)
 
 void fw_log_c(int level, int cat, const char *fmt, ...)
 {
-    (void)fmt;
     if (cat == FW_LOG_CAT_STORE && level == FW_LOG_LEVEL_WARN) {
         ++s_warnings;
     }
     if (cat == FW_LOG_CAT_STORE && level == FW_LOG_LEVEL_ERROR) {
         ++s_errors;
+        if (strstr(fmt, "Legacy EEPROM lost") != NULL &&
+            strstr(fmt, "C7 migration will be skipped") != NULL) {
+            ++s_eeprom_loss_logs;
+        }
     }
 }

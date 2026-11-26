@@ -131,24 +131,25 @@ static esp_err_t with_scratch(nvs_store_recover_fn recover)
     return recover(blob, sizeof(blob));
 }
 
-/** @brief 不同初始化失败分别擦各自实例，并记录无法读取 EEPROM 的降级。 */
-static void test_recovery(bool cfg, bool readable)
+/** @brief 冷启动初始化失败只擦本实例，用另一侧修复身份。 */
+static void test_recovery(bool cfg, esp_err_t init_error)
 {
-    uint8_t eeprom[2560] = {0xDE, 0xAD};
+    uint8_t eeprom[NVS_STORE_EEPROM_MAX] = {0xDE, 0xAD};
     eeprom[sizeof(eeprom) - 1U] = 0x5AU;
-    seed_identity(!cfg && !readable, "SERIAL", k_pn);
+    seed_identity(!cfg, "SERIAL", k_pn);
+    seed_identity(cfg, "STALE", k_other_pn);
     seed_blob(k_cfg, "rtk", "marker", k_pn, 1U);
     seed_blob(k_system, "phy", "marker", k_pn, 1U);
     seed_blob(k_system, "eeprom", "eeprom", eeprom, sizeof(eeprom));
     nvs_store_set_boot_scratch(with_scratch);
-    fake_nvs_fail_init(cfg, cfg ? ESP_ERR_NVS_NEW_VERSION_FOUND : ESP_ERR_NVS_NO_FREE_PAGES,
-                       readable);
+    fake_nvs_fail_init(cfg, init_error);
     CHECK(nvs_store_init() == ESP_OK);
     CHECK(fake_nvs_erases(cfg) == 1U && fake_nvs_erases(!cfg) == 0U && fake_nvs_errors() > 0U);
+    CHECK(fake_nvs_eeprom_loss_logs() == (cfg ? 0U : 1U));
     expect_identity("SERIAL", k_pn);
     expect_blob(k_cfg, "rtk", "marker", cfg ? NULL : k_pn, 1U);
     expect_blob(k_system, "phy", "marker", cfg ? k_pn : NULL, 1U);
-    expect_blob(k_system, "eeprom", "eeprom", cfg || readable ? eeprom : NULL, sizeof(eeprom));
+    expect_blob(k_system, "eeprom", "eeprom", cfg ? eeprom : NULL, sizeof(eeprom));
 }
 
 /** @brief 跨启动完成 PN 搬迁，删除失败时保留旧键并在重试时不覆盖权威副本。 */
@@ -240,9 +241,11 @@ int main(int argc, char **argv)
     CHECK(nvs_store_init() == ESP_OK);
     const char *name = argv[1];
     if (strcmp(name, "cfg_recovery") == 0) {
-        test_recovery(true, false);
-    } else if (strcmp(name, "system_recovery") == 0 || strcmp(name, "system_unreadable") == 0) {
-        test_recovery(false, strcmp(name, "system_recovery") == 0);
+        test_recovery(true, ESP_ERR_NVS_NEW_VERSION_FOUND);
+    } else if (strcmp(name, "system_recovery") == 0) {
+        test_recovery(false, ESP_ERR_NVS_NO_FREE_PAGES);
+    } else if (strcmp(name, "system_recovery_new_version") == 0) {
+        test_recovery(false, ESP_ERR_NVS_NEW_VERSION_FOUND);
     } else if (strcmp(name, "legacy_pn") == 0) {
         test_legacy_pn();
     } else if (strcmp(name, "write_failure") == 0) {
