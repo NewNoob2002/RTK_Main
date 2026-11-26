@@ -359,12 +359,7 @@ void GnssModule::cmdSetRate(const fw::Command &cmd, uint32_t nowMs,
         ensureRoverCfg().rateHz = cmd.args[0];
         const bool outAligned = (controller().detected().probe.model == ::gnss::Model::kZedF9p) &&
                                 alignF9pOutputConfig(cmd.args[0]);
-        fw::Result saveRes = ctx().storage.saveKeys(
-            std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kRateKeyIndex, 1U>());
-        if (fw::isOk(saveRes) && outAligned) {
-            saveRes = ctx().storage.saveKeys(
-                std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
-        }
+        const fw::Result saveRes = persistRateWithOut(prevRate, outAligned);
         if (!fw::isOk(saveRes)) {
             ensureRoverCfg().rateHz = prevRate;
             out_cfg_ = prevOut;

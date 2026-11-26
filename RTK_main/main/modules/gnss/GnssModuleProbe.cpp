@@ -237,14 +237,9 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
     fw::Result saveRes = fw::Result::kIoError;
     if (landed && (stats.failedMask == 0U)) {
         if (pending_apply_ == PendingApply::kRate) {
-            saveRes = ctx().storage.saveKeys(
-                std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kRateKeyIndex, 1U>());
+            saveRes = persistRateWithOut(pending_prev_rate_, pending_rate_out_aligned_);
             if (fw::isOk(saveRes) && pending_rate_out_aligned_) {
-                saveRes = ctx().storage.saveKeys(
-                    std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
-                if (fw::isOk(saveRes)) {
-                    ctx().data.gnssOutCfg.write(out_cfg_);
-                }
+                ctx().data.gnssOutCfg.write(out_cfg_);
             }
         } else {
             saveRes = ctx().storage.saveKeys(
@@ -272,6 +267,36 @@ void GnssModule::tickPendingApply(uint32_t nowMs) noexcept
         ctx().data.configRev.fetch_add(1U, std::memory_order_release);
     }
     completeSetting(applyTicketSeq_, saveRes);
+}
+
+fw::Result GnssModule::persistRateWithOut(uint8_t prevRate, bool outAligned) noexcept
+{
+    const auto kRateKeys =
+        std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kRateKeyIndex, 1U>();
+    fw::Result res = ctx().storage.saveKeys(kRateKeys);
+    if (!fw::isOk(res) || !outAligned) {
+        if (!fw::isOk(res)) {
+            ensureRoverCfg().rateHz = prevRate;
+        }
+        return res;
+    }
+    res = ctx().storage.saveKeys(
+        std::span{gnss_store::kConfigKeys}.subspan<gnss_store::kOutKeyIndex, 1U>());
+    if (fw::isOk(res)) {
+        return res;
+    }
+    // out 写失败而 rate 已落盘：把旧 rate 写回，避免 NVS 留下“新 rate + 旧 out”。
+    const uint8_t newRate = ensureRoverCfg().rateHz;
+    ensureRoverCfg().rateHz = prevRate;
+    const fw::Result comp = ctx().storage.saveKeys(kRateKeys);
+    if (!fw::isOk(comp)) {
+        FW_LOGE(fw::TraceCat::kGnss,
+                "<cfg> rate %u->%u: out save failed (%s), rate compensation failed (%s); "
+                "boot will realign F9P output",
+                static_cast<unsigned>(prevRate), static_cast<unsigned>(newRate), fw::toString(res),
+                fw::toString(comp));
+    }
+    return res;
 }
 
 void GnssModule::restorePendingApply() noexcept

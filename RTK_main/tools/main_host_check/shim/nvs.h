@@ -44,3 +44,7 @@ esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *value, 
 
 /* 主机测试故障注入：非 ESP_OK 时使后续 NVS 写入/提交返回该错误。 */
 void nvs_shim_set_write_fail(esp_err_t err);
+/** @brief 追加按键注入写失败规则（最多 2 条）：key 的前 pass_count 次写入成功，之后返回 err。 */
+void nvs_shim_add_key_fail(const char *key, esp_err_t err, unsigned pass_count);
+/** @brief 清除全部按键注入规则。 */
+void nvs_shim_clear_key_fail(void);

@@ -23,11 +23,58 @@ static char s_ns_names[SHIM_NVS_MAX_NS][SHIM_NVS_NAME_MAX];
 static int s_ns_used[SHIM_NVS_MAX_NS];
 static shim_nvs_entry_t s_entries[SHIM_NVS_MAX_NS][SHIM_NVS_MAX_ENTRIES];
 static esp_err_t s_write_fail = ESP_OK;
+/* 按键注入：每条规则对 key 的前 pass 次写入放行，之后返回 err。 */
+#define SHIM_NVS_KEY_RULES 2
+static struct {
+    char key[SHIM_NVS_NAME_MAX];
+    esp_err_t err;
+    unsigned pass;
+} s_key_rules[SHIM_NVS_KEY_RULES];
 
 /** @brief 主机测试注入 NVS 写失败（ESP_OK 恢复正常写入）。 */
 void nvs_shim_set_write_fail(esp_err_t err)
 {
     s_write_fail = err;
+}
+
+static int copy_name(char *out, const char *in);
+
+/** @brief 主机测试清除全部按键注入规则。 */
+void nvs_shim_clear_key_fail(void)
+{
+    memset(s_key_rules, 0, sizeof(s_key_rules));
+}
+
+/** @brief 主机测试追加按键注入规则：key 的前 pass_count 次写入成功，之后返回 err；规则槽已满时忽略。 */
+void nvs_shim_add_key_fail(const char *key, esp_err_t err, unsigned pass_count)
+{
+    for (int i = 0; i < SHIM_NVS_KEY_RULES; ++i) {
+        if ((s_key_rules[i].err == ESP_OK) && (key != NULL) && (err != ESP_OK) &&
+            copy_name(s_key_rules[i].key, key)) {
+            s_key_rules[i].err = err;
+            s_key_rules[i].pass = pass_count;
+            return;
+        }
+    }
+}
+
+/** @brief 命中按键注入时返回错误码，否则 ESP_OK；先放行 pass 次。 */
+static esp_err_t key_fail_check(const char *key)
+{
+    if (key == NULL) {
+        return ESP_OK;
+    }
+    for (int i = 0; i < SHIM_NVS_KEY_RULES; ++i) {
+        if ((s_key_rules[i].err == ESP_OK) || (strcmp(key, s_key_rules[i].key) != 0)) {
+            continue;
+        }
+        if (s_key_rules[i].pass > 0U) {
+            --s_key_rules[i].pass;
+            return ESP_OK;
+        }
+        return s_key_rules[i].err;
+    }
+    return ESP_OK;
 }
 
 /** @brief 提供启动日志用的主机替身统计。 */
@@ -193,6 +240,10 @@ esp_err_t nvs_set_u8(nvs_handle_t handle, const char *key, uint8_t value)
     if (s_write_fail != ESP_OK) {
         return s_write_fail;
     }
+    const esp_err_t key_err = key_fail_check(key);
+    if (key_err != ESP_OK) {
+        return key_err;
+    }
     return write_value(handle, key, (uint32_t)value);
 }
 
@@ -201,6 +252,10 @@ esp_err_t nvs_set_u16(nvs_handle_t handle, const char *key, uint16_t value)
     if (s_write_fail != ESP_OK) {
         return s_write_fail;
     }
+    const esp_err_t key_err = key_fail_check(key);
+    if (key_err != ESP_OK) {
+        return key_err;
+    }
     return write_value(handle, key, (uint32_t)value);
 }
 
@@ -208,6 +263,10 @@ esp_err_t nvs_set_u32(nvs_handle_t handle, const char *key, uint32_t value)
 {
     if (s_write_fail != ESP_OK) {
         return s_write_fail;
+    }
+    const esp_err_t key_err = key_fail_check(key);
+    if (key_err != ESP_OK) {
+        return key_err;
     }
     return write_value(handle, key, value);
 }
@@ -239,6 +298,10 @@ esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *value, 
     const int index = ns_index(handle);
     if ((index < 0) || (key == NULL) || (value == NULL) || (length > SHIM_NVS_BLOB_MAX)) {
         return ESP_ERR_INVALID_ARG;
+    }
+    const esp_err_t key_err = key_fail_check(key);
+    if (key_err != ESP_OK) {
+        return key_err;
     }
     shim_nvs_entry_t *entry = find_entry(handle, key);
     if (entry == NULL) {

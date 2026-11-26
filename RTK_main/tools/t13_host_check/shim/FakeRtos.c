@@ -18,9 +18,16 @@ void fake_crit_enter(void)
     pthread_mutex_lock(&s_crit);
 }
 
+/* 临界区退出钩子：FakeIdf 用它把 esp_spp_disconnect “返回”的可见时刻推迟到调用线程
+ * 完成随后第一段结算临界区之后（MT1，原因见 FakeIdf.c 的 esp_spp_disconnect）。 */
+void (*fake_crit_exit_hook)(void) = NULL;
+
 void fake_crit_exit(void)
 {
     pthread_mutex_unlock(&s_crit);
+    if (fake_crit_exit_hook != NULL) {
+        fake_crit_exit_hook();
+    }
 }
 
 static void fake_cond_init(pthread_cond_t *cond)

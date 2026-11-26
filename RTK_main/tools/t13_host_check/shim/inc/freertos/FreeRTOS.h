@@ -81,6 +81,8 @@ typedef struct {
 
 void fake_crit_enter(void);
 void fake_crit_exit(void);
+/* 临界区退出后（已解锁）调用的可选钩子，仅供 host 替身之间同步使用。 */
+extern void (*fake_crit_exit_hook)(void);
 
 #define taskENTER_CRITICAL(mux) ((void)(mux), fake_crit_enter())
 #define taskEXIT_CRITICAL(mux)  ((void)(mux), fake_crit_exit())
