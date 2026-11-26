@@ -18,7 +18,8 @@ namespace cellular {
 /** 链路对硬件的钩子（由 NetModule 提供，主机测试用假实现）。 */
 struct LinkHooks final {
     void *ctx = nullptr;
-    void (*setPower)(void *ctx, bool on) noexcept = nullptr;      // 控制 PWREN（GPIO26）
+    bool (*setPower)(void *ctx,
+                     bool on) noexcept = nullptr; // 控制 PWREN（GPIO26），返回 GPIO 是否成功
     bool (*setBaud)(void *ctx, uint32_t baud) noexcept = nullptr; // 切换 UART1 波特率
 };
 
@@ -147,6 +148,14 @@ public:
     void onUrc(std::string_view line, uint32_t nowMs) noexcept;
 
     /**
+     * @brief  调试通道（控制台 AT）应答行旁路：非 READY 的 +CPIN: 同步给 FSM 的 SIM 状态
+     * @param  line: 应答整行
+     * @note   仅 kNet 任务；在引擎行回调内调用，故只记录，由下一次 poll 处理（避免回调内重置引擎）。
+     *         READY 不在此处理（由 FSM 自己的查询确认）。
+     */
+    void onDiagLine(std::string_view line) noexcept;
+
+    /**
      * @brief  距下一次需要运行 poll 的毫秒数（供 kNet 计算队列等待超时）
      * @param  nowMs: 当前 tick 毫秒
      * @retval 毫秒，0 表示立即；无定时需求返回 UINT32_MAX
@@ -271,7 +280,9 @@ private:
     void enterL3(uint32_t nowMs, bool manual = false) noexcept;
     void enterL2(uint32_t nowMs, bool deactivate) noexcept;
     void enterReady(uint32_t nowMs) noexcept;
-    void cutPower(uint32_t nowMs) noexcept;
+    bool cutPower(uint32_t nowMs) noexcept;
+    void enterPowerFault(uint32_t nowMs) noexcept;
+    void pollPowerFault(uint32_t nowMs) noexcept;
     void startStop(uint32_t nowMs, uint32_t deadlineMs) noexcept;
     void finishStop(uint32_t nowMs) noexcept;
     void handleModuleRestart(uint32_t nowMs) noexcept;
@@ -290,6 +301,7 @@ private:
     void pollRegister(uint32_t nowMs) noexcept;
     void pollPdp(uint32_t nowMs) noexcept;
     void onPdpDone(const AtResponse &rsp) noexcept;
+    void failPdpRecovery(uint32_t nowMs) noexcept;
     void pollReady(uint32_t nowMs) noexcept;
     void pollConns(uint32_t nowMs) noexcept;
     void pollShutdown(uint32_t nowMs) noexcept;
@@ -339,6 +351,8 @@ private:
     bool regQueriedCreg_ = false;
     bool poweredDownSeen_ = false;
     bool pdpForceDeact_ = false;
+    SimStatus diagSim_ = SimStatus::kUnknown; // 调试通道看到的非 READY SIM 状态，待 poll 处理
+    bool deactFailed_ = false;                // 强制 QIDEACT 失败：之后 QIACT? 仍在线即恢复失败
     bool bootBaudSwapped_ = false;
     bool ipSeen_ = false;
     uint32_t curBaud_ = 0U;

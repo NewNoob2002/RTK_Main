@@ -56,6 +56,8 @@ const char *phaseName(cellular::Phase phase) noexcept
         return "pdp_up";
     case cellular::Phase::kReady:
         return "ready";
+    case cellular::Phase::kPowerFault:
+        return "power_fault";
     }
     return "?";
 }

@@ -1068,6 +1068,16 @@ void powerParticipantBlocksAndTimeoutNames()
     CHECK(saveState.timeoutCount == 1U && quiesceState.timeoutCount >= 1U);
     // PW1 把同一个绝对截止时刻传给参与者：静默阶段非 0（= PW1 起点 + 150 ms），保存阶段无截止。
     CHECK(quiesceState.deadlineMs != 0U && saveState.deadlineMs == 0U);
+    // r4 R5：PW1 进入 kCutPower 后，kQuiesce 兜底每轮继续重试直到 isDone（总窗口不延长）。
+    const unsigned before = quiesceState.timeoutCount;
+    pollPower(1U);
+    CHECK(quiesceState.timeoutCount == before + 1U);
+    pollPower(1U);
+    CHECK(quiesceState.timeoutCount == before + 2U);
+    quiesceState.done = true; // 兜底成功：之后不再调用
+    const unsigned settled = quiesceState.timeoutCount;
+    pollPower(2U);
+    CHECK(quiesceState.timeoutCount == settled);
 
     cli::setOutSink(nullptr, false);
     s_capturedLog = nullptr;

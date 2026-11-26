@@ -52,6 +52,7 @@ struct Policy final {
     uint8_t deadTimeouts = 3U;                  // AT 连续无响应判通道失效
     uint32_t bootBaud = 115200U;                // EC600U 出厂波特率
     uint32_t fastBaud = 460800U;                // AT+IPR 目标波特率
+    uint32_t maxPayloadWireMs = 15U; // 单次数据写（QISEND 载荷）线上时间上限；512 B@460800≈11 ms
 };
 
 /** 全局唯一策略实例。 */

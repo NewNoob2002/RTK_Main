@@ -2,7 +2,7 @@
 
 - **任务卡**：`docs/tasks/N1-cellular-link.md`；设计依据 `docs/adr/ADR-0021-cellular-ec600u.md`（已批准）
 - **分支 / 基线**：`feat/n1-cellular`（门禁基线 `32a0dd7`），未合并 main、未 push
-- **提交**：首轮 `d3800af`；第二轮 `4667b54`；本报告对应第三轮修复提交（复审 I1–I10、N1–N3 全部处理，按 Architect 第 3 轮裁决 `N1-decisions-r3.md`）
+- **提交**：首轮 `d3800af`；第二轮 `4667b54`；第三轮 `398b240`；本报告对应第四轮修复提交（复审 R1–R8 与 Nit 全部处理，按 Architect 第 4 轮裁决 `N1-decisions-r4.md`）
 - **Profile**：`esp-idf`，C++20，严格告警 + `-Werror`，零异常/RTTI，运行期零堆分配
 - **门禁**：`tools/ci/run_gates.sh --prefix n1 --base 32a0dd7`，结果见 §3
 - **未执行**：板上 HIL（由 Architect 与用户执行，步骤见 §8）；任务栈高水位与启动后堆余量未实测（见 §4、§5）
@@ -66,7 +66,7 @@
 
 ## 3. 门禁结果
 
-`tools/ci/run_gates.sh --prefix n1 --base 32a0dd7` 第三轮最终一次运行：**44 通过 / 1 失败**，唯一失败项为 **G1-frozen（仅 `components/settings/include/settings/Types.hpp`，预期，见 §2）**。G2/G2b（含 `cellular`、`settings`、`main_host_check` 的 ASan/UBSan）、G5-format、G6-doc_check、G3 全部 IDF 配置组合、G3b、G5b-tidy、G7b-runtime、G7c 均通过；`rtk_main.bin` 1 625 696 B。
+`tools/ci/run_gates.sh --prefix n1 --base 32a0dd7` 第四轮最终一次运行：**44 通过 / 1 失败**，唯一失败项为 **G1-frozen（仅 `components/settings/include/settings/Types.hpp`，预期，见 §2）**。G2/G2b（含 `cellular`、`settings`、`main_host_check` 的 ASan/UBSan）、G5-format、G6-doc_check、G3 全部 IDF 配置组合、G3b、G5b-tidy、G7b-runtime、G7c 均通过；`rtk_main.bin` 1 626 656 B。
 
 ### 3.1 GATES_RESULT
 
@@ -91,11 +91,11 @@ FAIL G1-frozen            (Types.hpp 预期)
 | --- | --- | --- | --- | --- |
 | DRAM（静态） | 98 803 | 102 467 | 99 219 | **+416 B**（禁用态预算 ≤ 1 KB ✔；首轮 +3 664 B） |
 | IRAM | 116 139 | 116 139 | 116 139 | 0 ✔ |
-| Flash Code | 1 149 284 | 1 168 444 | 1 175 044 | +25 760 B |
-| Flash Data | 276 348 | 279 132 | 280 524 | +4 176 B |
-| `rtk_main.bin` | 1 595 376 | 1 620 960 | 1 625 696（分区剩余 17%） | +30 320 B |
+| Flash Code | 1 149 284 | 1 168 444 | 1 175 972 | +26 688 B |
+| Flash Data | 276 348 | 279 132 | 280 556 | +4 208 B |
+| `rtk_main.bin` | 1 595 376 | 1 620 960 | 1 626 656（分区剩余 17%） | +31 280 B |
 
-> Flash 代码+数据合计 +29.9 KB 超过任务卡“Flash ≤ 25 KB”上限（首轮 +21.9 KB）。增量来自复审要求的重同步/令牌/邮箱过滤/PW1 硬切/按槽快照，请 Architect 裁决是否放宽该上限；本轮未做体积削减。
+> Flash 代码+数据合计 +30.9 KB 超过任务卡“Flash ≤ 25 KB”上限（首轮 +21.9 KB）。增量来自复审要求的重同步/令牌/邮箱过滤/PW1 硬切/按槽快照，请 Architect 裁决是否放宽该上限；本轮未做体积削减。
 
 **禁用态（`net.enable=0`、E1、配网模式）**：静态 DRAM 仅 +416 B（`s_app` 由首轮 30 536 B 降到 27 440 B 范围内，4G 运行态不再静态驻留）；不安装 UART1、不分配栈/块、不创建 kNet 执行器；GPIO26 不被触碰（`NetModule::init` 因 `rt_==nullptr` 直接返回）。
 
@@ -175,6 +175,18 @@ kNet 栈 4096 B。最深调用链为 `poll → LinkFsm::poll → AtEngine::submi
 17. **I10 回归与证据**：新用例（`TestAtEngine` 4 项、`TestLinkFsm` 4 项）在 `4667b54` 的临时 worktree 上**行为级失败**（该提交的 `AtCommand` 无 `matchPrefix` 字段，已仅注释掉测试里设置该字段的一行后编译）：`testLateTerminatorDoesNotCompleteNextCommand`、`testCancelInflightNeedsResync`、`testAlternatingProbeRejectsLateSameShapeReply`、`testRxLostInLineModeFailsCommand`、`testCpinNonReadyUrcNotOverwrittenByReady`、`testUnconfirmedQicloseEscalatesL2BeforeReopen`、`testPowerCycleCooldownRechecksGate`、`testShutdownWhileResyncingCutsWithoutQpowd`。主机 PW1 用例改为断言 `deadlineMs` 传递与“到点即调用、按轮重试”；邮箱用例含 CAS 竞态与白名单。**仍未覆盖（主机无法替代，转 HIL）**：真实 NetModule→GPIO 失败路径、UART 写预算、真实 `settings.get` 读回（见 §8 第 11–12 步）。
 18. **N1** `net status` 现逐槽输出 `conn<i>: state/fails/remain_ms` 与 `recv_dropped`；`msToNextWork` 在连接命令在途时不再被其它槽缩短，仅按当前可处理的槽计算。**N2** `config set net.enable` 成功后输出“重启生效”提示。**N3** 已撤回四份无关测试向量的格式重排（相对 `32a0dd7` 无差异）。
 
+**第四轮（R1–R8、Nit）处理摘要与新增偏离/说明**：
+
+19. **R1 静默边界**：同一次 `feed()` 读到的字节先刷新 `lastRxMs_` 并被丢弃，之后才允许结束静默；探针阶段丢字节/溢出按一次失败计入死亡阈值，不会无限重新静默。
+20. **R2 断电清理**：新增 `AtEngine::powerDown()`（全部命令以 `kAborted` 结算，清除重同步/静默/探针/分帧/原始数据状态）；任何进入 Off 的路径（硬切、`QPOWD` 完成、PowerCycle）都调用它，并冲洗 UART 接收缓冲，下次上电从干净引擎开始。
+21. **R3 注册应答归属**：注册应答须**前缀完全一致且形状合法（≥2 个字段）**才归属在途查询；单字段 `+CEREG:` 仍是 URC；其它前缀行不影响查询。调试邮箱的 `AT+CPIN?` 得到非 READY 的 `+CPIN:` 行时经 `LinkFsm::onDiagLine` 更新 FSM 的 SIM 状态。
+22. **R4 PDP 释放**：L2 仅在旧 PDP 确认释放后完成；`QIDEACT` 失败且 `QIACT?` 仍显示承载激活 ⇒ 记恢复失败（退避增长，连续 `qiactFailToL3` 次升 L3），**绝不进入 Ready**。
+23. **R5 电源故障**：`LinkHooks::setPower` 现返回 `bool`；仅当 `gpio_set_level(PWREN,0)==ESP_OK` 才进入 Off，否则进入 `Phase::kPowerFault`（`net status` 显示 `power_fault`），每 100 ms 重试，期间 `shutdownDone` 为 false。PW1：`kQuiesce` 兜底在到点后每轮重试，**进入 `kCutPower` 后仍每轮重试**（新增 `PowerModule::retryQuiesceFallbacks()`，独立于 OLED 终帧门控，否则无 OLED 时该重试不会执行——这是新回归用例在实现中暴露的真实缺陷），重试持续到 `isDone` 或 PW1 既有上限，**不延长**既有窗口。§7 第 12 项关于“失败后由 kNet 重试”的措辞以本项为准。
+24. **R6 邮箱拒绝**：引擎队列满时的 `NetMailbox::reject()`（取代 `untake()`）用 CAS：Running→Pending 失败且为 Abandoned 时转 Idle，不会把已放弃的请求退回 Pending；新增“take→release→reject ⇒ Idle”乱序回放用例。
+25. **R7 UART 写**：`writeHook` 在每次 FIFO 续写前检查截止；到期即停止并把通道标为不可信（走重新同步）。提交时按当前波特率估算负载线上时间（10 位/字节），超过 `kPolicy.maxPayloadWireMs`（15 ms，`components/cellular/include/cellular/Policy.hpp:55`）直接拒绝：460800 下 512 B ≈ 11 ms 可发，115200 下仅短命令；`QISEND` 仅在升到 460800 后使用。`uart_tx_chars` 内部的 `portMAX_DELAY` 取 TX 锁（`uart.c:1621,1630`）在“只有 kNet 一个写者”的前提下无争用，审查已接受。
+26. **R8 回归与证据**：新增用例 `TestAtEngine`：`testQuietBoundaryFeedDoesNotLeakStaleReply`、`testRxLostDuringProbeCountsTowardsDead`、`testPowerDownSettlesAndClearsResync`、`testRegReplyNeedsPrefixAndShape`（并把 `testMatchPrefixOwnsReplyLine` 改用真实的 `+CEREG:`，原 `+CGREG` 不在 URC 表中是空转）；`TestLinkFsm`：`testDeactFailureWithBearerActiveNeverReady`、`testPowerFaultRetriesUntilCutSucceeds`、`testDiagCpinNotInsertedDrivesSimState`、`testPayloadWireTimeBudget`；`NetLogicCheck`：邮箱乱序 reject；`MainHostCheck`：PW1 进入 `kCutPower` 后每轮重试 + `isDone` 后停止；`GnssResetCheck`：经真实 `SettingsBackend` 读回 `net.*`（密码仅 `***`/空）。
+    **在 `398b240` 上的实际验证**（临时 worktree，仅加最小桩让依赖新 API 的测试可编译：空实现 `AtEngine::powerDown`、`Phase::kPowerFault`、空实现 `LinkFsm::onDiagLine`、`setPower` 返回类型改 `bool`、`NetMailbox::reject()→untake()`；验证后删除 worktree）：`test_at_engine` 4/26 失败（静默边界 `Expected '' Was 'AT\r'`、探针丢字节、`powerDown` `Expected 3 Was 1`、注册形状 `Expected 2 Was 0`）；`test_link_fsm` 4/55 失败（R4、R5、诊断 CPIN、负载线上时间）；`net_logic_check` 在 `NetLogicCheck.cpp:225` 的 `kIdle` 检查处中止（R6）；`main_concurrent/main_preempt_power_participant_blocks_and_timeout_names` 在 `MainHostCheck.cpp:1074/1076` 失败（PW1 每轮重试）。`GnssResetCheck` 的设置读回检查在 `398b240` 上**通过**（读回路径此前已正确），它是防回归守卫，不是失败型回归，特此说明。无桩时依赖新 API 的用例为编译失败（编译级证据）。
+
 ---
 
 ## 8. HIL 步骤（P2 v1.41 + 串口 + 已开通 SIM；由 Architect 与用户执行）
@@ -186,14 +198,15 @@ idf.py -B builds/n1-idf build flash monitor        # dev 档位，串口控制�
 
 1. 首次启动（`net.enable` 默认 0）：日志无 `net: ready`；`net status` 显示 `disabled; set net.enable=1 and reboot`；万用表确认 GPIO26 低；`net power on` 提示需启用并重启。
 2. `config set net.apn <APN>`（及 `net.user`/`net.pass`）→ `config set net.enable 1`；`config get net.pass` 应得 `***`；`net status` 显示 `restart pending`；**重启**。启动日志应出现 `net: ready uart1 tx=33 rx=32 pwren=GPIO26 en=1`。记录：上电→AT 可用→Ready 的时间；`net status` 应见 IMEI、ICCID（部分打码）、CSQ、注册、PDP。
-3. `net at ATI`、`net at AT+QGMR`：记录型号与固件（ADR-0021 Q5）；验证 `net at ATE1`、`net at AT+IPR=9600`、`net at AT+QISWTMD=1`、`net at AT+QICSGP=1`、`net at AT+CFUN=1,1`、`net at AT+QPOWD=1`、`net at AT+CMEE?` 与含 `;` 的命令被拒绝；文本类 CME ERROR 分类的验证：**拔出 SIM 后**执行 `net at AT+CPIN?`，应得到真实的 `+CME ERROR: SIM not inserted`（CMEE=2 文本）并被分类为 SIM 缺失。
+3. `net at ATI`、`net at AT+QGMR`：记录型号与固件（ADR-0021 Q5）；验证 `net at ATE1`、`net at AT+IPR=9600`、`net at AT+QISWTMD=1`、`net at AT+QICSGP=1`、`net at AT+CFUN=1,1`、`net at AT+QPOWD=1`、`net at AT+CMEE?` 与含 `;` 的命令被拒绝；文本类 CME ERROR 分类的验证：**拔出 SIM 后**执行 `net at AT+CPIN?`，应得到数值形式的 `+CME ERROR: 10`（本驱动使用 `CMEE=1`，例如 `CME ERROR 10`，不是文本形式），并被分类为 SIM 缺失；记录实际应答原文以确认模块的 CMEE 设置。
 4. 注册丢失：拔天线观察注册丢失→L2/L3；**先恢复天线→应回到 L2 重试并最终 Ready**；Ready 中注册丢失持续 180 s 应进入 L3。
-5. SIM：**拔 SIM → 状态应进入 SimCheck 并显示 SIM 异常（此时不会立即进入 L3）→ 再插回 SIM**，应恢复到 Ready；如需验证 L3，则拔 SIM 后保持不插，等待 SimCheck 超时由 FSM 升级到 L3（PWREN 低 ≥ 2 s，退避 30 s 起），随后插回 SIM 观察重上电后恢复到 Ready。
+5. SIM（两条路径分别验证）：(a) **拔 SIM → 进入 SimCheck 并显示 SIM 异常（不会立即 L3）→ 在 L3 之前插回 SIM → 状态变为 READY 并恢复到 Ready**；(b) **拔 SIM 并保持不插 → SimCheck 超时后升级 L3（PWREN 低 ≥ 2 s，退避 30 s 起）→ 重上电后仍无 SIM，状态保持 SIM 异常 → 此时再插回 SIM，下一次上电周期应恢复到 Ready**。
 6. 460800 稳定性（Q2）：Ready 连续 ≥ 30 min，观察 `net:` 日志无通道失效/溢出。
 7. 关机：`power off`（或长按），逻辑分析仪量 GPIO26 下降沿相对触发的时间，应 ≤ 2 s 且收到 `POWERED DOWN`；USB 在位关机与低电关机同样验证；人为让模块无响应时，应在 PW1 截止时刻看到硬切 PWREN（日志 `PW1 timeout, hard-cut PWREN`）。
 8. 发射峰值与低电（Q3）：电池放至 ~15% 并保持注册，观察是否掉压/复位；**在线时降到 <10% 模块应保持**，此时断电重启或 `net reset` 后 <10% 应不再上电。
 9. 堆与栈：启动后 `sys heap`（free/min）与 `sys tasks`（kNet 栈高水位），回填 §4 与 §5；与 `net.enable=0` 启动的堆对比得出启用成本。
 10. 低电门控与冷却：已 Ready 时把电池拉到 <10% 后执行 `net reset`，PWREN 低 ≥ 2 s 之后**不得**再次拉高（`net status` 显示被低电门控）；电量回到 ≥15% 后应自动上电。
 11. PW1 硬切与 GPIO 失败（若有条件，用调试构建注入 `gpio_set_level` 失败，或 `power off` 时断开模块串口）：到点应记录 `PW1 timeout, hard-cut PWREN` 并按轮重试；GPIO 失败时不得上报关机完成。
+12a. UART 部分写与轮次预算：在 115200 与 460800 两个波特率下，用 `net at` 发长命令（≥ 200 字符，注意白名单；或临时调试构建发 `QISEND` 512 B 负载）并在发送中途拉低模块 CTS/断开 TX 线，用逻辑分析仪以“第一个字节起始沿”到“写调用返回/日志 `net: write timeout`”为计时区间：应 ≤ 5 ms + 字节数×10/波特率 + 1 ms（上限 460800 下 512 B ≈ 16 ms）；超时后日志应出现通道不可信/重新同步，随后命令不被旧应答误认；115200 下 > 15 ms 线上时间的负载应在提交时被拒绝（`kPolicy.maxPayloadWireMs`）。
 12. 设置读回：`config get net.apn/net.user` 与手机/web 通道对 `net.*` 返回 locked；`config get net.pass` 为 `***`。
 13. 回归：`net.enable 0` 后重启，确认 GPIO26 低、`net status` 为 disabled；E1-5.4 启动日志无 `net:` 行、GPIO26 仍为电源保持；配网模式（Wi-Fi 配置）下 4G 不启动。

@@ -225,7 +225,7 @@ public:
     }
 
 private:
-    static void powerHook(void *ctx, bool on) noexcept;
+    [[nodiscard]] static bool powerHook(void *ctx, bool on) noexcept;
     static bool baudHook(void *ctx, uint32_t baud) noexcept;
     static bool writeHook(void *ctx, std::span<const uint8_t> bytes) noexcept;
     static void urcHook(void *ctx, std::string_view line) noexcept;

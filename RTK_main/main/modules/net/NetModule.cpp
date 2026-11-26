@@ -108,24 +108,28 @@ bool setPwren(int gpio, bool on) noexcept
  * @brief LinkFsm 电源钩子：拉高/拉低 PWREN 并清 UART 输入
  * @param ctx: 回调上下文指针
  * @param on: true=上电，false=断电
- * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。gpio_set_level 失败只能记录错误
- *       （钩子无返回值）：上电失败由 FSM 的探测超时/恢复阶梯兜底。
+ * @retval true GPIO 写成功（或板上无 PWREN 脚）；false gpio_set_level 失败
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。断电失败时 FSM 进入 kPowerFault 周期重试，
+ *       不得宣告已断电；上电失败由 FSM 的探测超时/恢复阶梯兜底。
  */
-void NetModule::powerHook(void *ctx, bool on) noexcept
+bool NetModule::powerHook(void *ctx, bool on) noexcept
 {
     const auto *self = static_cast<const NetModule *>(ctx);
+    bool ok = true;
     if (self->pwrenGpio_ >= 0) {
         // 引脚号来自板级表，已核实为输出 GPIO；on 对应高电平（PWRKEY 已硬件接地）。
-        const bool ok = setPwren(self->pwrenGpio_, on);
+        ok = setPwren(self->pwrenGpio_, on);
         if ((self->rt_ != nullptr) && !on) {
-            // 断电 GPIO 失败：记录故障，FSM 进入 Off 也不得上报“已断电”，由 kNet/PW1 重试硬切（r3 I5）。
+            // 断电 GPIO 失败：FSM 进入 kPowerFault 重试，PW1 另走 onTimeout 硬切（r3 I5 / r4 R5）。
             self->rt_->pwrenFault.store(!ok, std::memory_order_release);
         }
     }
     if (self->rt_ != nullptr && self->rt_->uartInstalled) {
+        // 断电/上电边界都丢弃 UART 接收残留，旧模块的字节不得进入下一轮会话（r4 R2）。
         static_cast<void>(uart_flush_input(static_cast<uart_port_t>(self->uartPort_)));
     }
-    FW_LOGI(fw::TraceCat::kSys, "net: PWREN %s", on ? "high" : "low");
+    FW_LOGI(fw::TraceCat::kSys, "net: PWREN %s%s", on ? "high" : "low", ok ? "" : " FAILED");
+    return ok;
 }
 
 /**
@@ -174,6 +178,10 @@ bool NetModule::writeHook(void *ctx, std::span<const uint8_t> bytes) noexcept
     const TickType_t start = xTaskGetTickCount();
     size_t sent = 0U;
     while (sent < bytes.size()) {
+        // 每次续写 FIFO 前先查截止：到期即停（r4 R7），返回 false 后引擎按写失败重新同步。
+        if ((sent > 0U) && ((xTaskGetTickCount() - start) >= budget)) {
+            return false;
+        }
         // IDF API 取 const char*：以只读字节视图转换。
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         const auto *chunk = reinterpret_cast<const char *>(bytes.subspan(sent).data());
@@ -183,9 +191,6 @@ bool NetModule::writeHook(void *ctx, std::span<const uint8_t> bytes) noexcept
         }
         sent += static_cast<size_t>(n);
         if (sent < bytes.size()) {
-            if ((xTaskGetTickCount() - start) >= budget) {
-                return false; // 部分发送：线上字节不可信，引擎随后超时并重新同步
-            }
             vTaskDelay(1);
         }
     }
@@ -253,7 +258,9 @@ void NetModule::connSendDone(void * /*ctx*/, uint8_t /*id*/, bool /*ok*/) noexce
  */
 void NetModule::atLineThunk(void *ctx, std::string_view line) noexcept
 {
-    static_cast<NetModule *>(ctx)->rt_->mailbox.onLine(line);
+    const auto *self = static_cast<const NetModule *>(ctx);
+    self->rt_->mailbox.onLine(line);
+    self->rt_->fsm.onDiagLine(line);
 }
 
 /**
@@ -572,6 +579,11 @@ void NetModule::serviceShutdown(uint32_t nowMs) noexcept
         if (cutPower()) {
             rt.pwrenFault.store(false, std::memory_order_release);
             rt.shutdownDone.store(true, std::memory_order_release);
+            // 硬切成功后同样结算引擎在途命令并清空接收残留，下次上电从干净状态开始（r4 R2）。
+            rt.engine.powerDown(nowMs);
+            if (rt.uartInstalled) {
+                static_cast<void>(uart_flush_input(static_cast<uart_port_t>(uartPort_)));
+            }
         }
     } else if (fsmDone) {
         rt.shutdownDone.store(true, std::memory_order_release);
@@ -627,7 +639,7 @@ void NetModule::serviceAtMailbox(uint32_t nowMs) noexcept
     cmd.token = token;
     cmd.matchPrefix = prefix; // 同前缀 URC 与应答行按命令推导的前缀归属（裁决 r3 I2）
     if (!rt.engine.submit(cmd, nowMs)) {
-        rt.mailbox.untake(); // 队列满：下一轮重试
+        rt.mailbox.reject(); // 队列满：按 CAS 退回 kPending 或回收已被取消的请求
     }
 }
 

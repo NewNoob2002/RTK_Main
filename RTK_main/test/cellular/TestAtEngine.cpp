@@ -361,10 +361,10 @@ void testMatchPrefixOwnsReplyLine()
 {
     Harness h;
     setupHarness(h);
-    AtCommand cmd = makeCmd(h, "AT+CGREG?");
-    cmd.matchPrefix = "+CGREG:";
+    AtCommand cmd = makeCmd(h, "AT+CEREG?");
+    cmd.matchPrefix = "+CEREG:";
     TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
-    feedStr(h, "+CGREG: 0,1\r\nOK\r\n", 5U);
+    feedStr(h, "+CEREG: 0,1\r\nOK\r\n", 5U);
     TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.lines.size()));
     TEST_ASSERT_EQUAL(AtResult::kOk, h.done[0].result);
 }
@@ -439,6 +439,92 @@ void testCmeErrorTextCode()
     TEST_ASSERT_EQUAL_INT32(10, h.done[0].errorCode);
 }
 
+// r4 R1：静默已满的同一次 feed 若带着旧响应，旧响应必须被丢弃且重新计静默，不得落到刚发出的新命令上。
+void testQuietBoundaryFeedDoesNotLeakStaleReply()
+{
+    Harness h;
+    setupHarness(h);
+    AtCommand cmd = makeCmd(h, "AT", 300U);
+    cmd.quietFirst = true;
+    TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
+    TEST_ASSERT_EQUAL_STRING("", h.tx.c_str());
+    // 静默期（300 ms）早已满足，但本次 feed 同时带来旧响应：先丢弃并刷新静默计时。
+    feedStr(h, "+CSQ: 20,0\r\nOK\r\n", 400U);
+    TEST_ASSERT_EQUAL_STRING("", h.tx.c_str());
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(h.done.size()));
+    h.engine.poll(699U);
+    TEST_ASSERT_EQUAL_STRING("", h.tx.c_str());
+    h.engine.poll(700U);
+    TEST_ASSERT_EQUAL_STRING("AT\r", h.tx.c_str());
+    feedStr(h, "OK\r\n", 710U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL(AtResult::kOk, h.done[0].result);
+}
+
+// r4 R1：同步握手期间丢字节计入无响应阈值，到阈值判通道失效，不无限重进静默。
+void testRxLostDuringProbeCountsTowardsDead()
+{
+    Harness h;
+    setupHarness(h);
+    h.engine.setResyncEnabled(true);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CSQ", 100U), 0U));
+    h.engine.poll(100U); // 第 1 次无响应
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+GSN", 300U), 110U));
+    h.engine.poll(410U); // 静默结束，发探针
+    TEST_ASSERT_TRUE(h.tx.find("AT+CMEE?\r") != std::string::npos);
+    h.engine.onRxLost(420U); // 第 2 次
+    TEST_ASSERT_FALSE(h.engine.dead());
+    h.engine.poll(720U);
+    TEST_ASSERT_TRUE(h.tx.find("AT+CSCS?\r") != std::string::npos);
+    h.engine.onRxLost(730U); // 第 3 次 → 失效
+    TEST_ASSERT_TRUE(h.engine.dead());
+    TEST_ASSERT_FALSE(h.engine.busy());
+}
+
+// r4 R2：断电后队列以 kAborted 收尾，重新同步/静默/失效标记全部清除，下次上电从干净状态开始。
+void testPowerDownSettlesAndClearsResync()
+{
+    Harness h;
+    setupHarness(h);
+    h.engine.setResyncEnabled(true);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CSQ", 100U), 0U));
+    h.engine.poll(100U);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+GSN", 300U), 110U));
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+QCCID", 300U), 111U));
+    TEST_ASSERT_TRUE(h.engine.resyncing());
+    h.engine.powerDown(200U);
+    TEST_ASSERT_EQUAL_UINT32(3U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL(AtResult::kAborted, h.done[1].result);
+    TEST_ASSERT_EQUAL(AtResult::kAborted, h.done[2].result);
+    TEST_ASSERT_FALSE(h.engine.resyncing());
+    TEST_ASSERT_FALSE(h.engine.busy());
+    TEST_ASSERT_FALSE(h.engine.dead());
+    // 下一条命令直接发出，不再走静默/探针。
+    h.tx.clear();
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT", 300U), 300U));
+    TEST_ASSERT_EQUAL_STRING("AT\r", h.tx.c_str());
+}
+
+// r4 R3：前缀 + 形状同时给出时必须同时满足：异前缀行、单字段 URC 都不是应答。
+void testRegReplyNeedsPrefixAndShape()
+{
+    Harness h;
+    setupHarness(h);
+    AtCommand cmd = makeCmd(h, "AT+CEREG?");
+    cmd.matchPrefix = "+CEREG:";
+    cmd.match = &cellular::isRegQueryLine;
+    TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
+    feedStr(h, "+CREG: 2,1\r\n", 1U);        // 异前缀、形状合格：仍是 URC
+    feedStr(h, "+CEREG: 5\r\n", 2U);         // 同前缀、单字段：URC
+    feedStr(h, "+CEREG: 2,1\r\nOK\r\n", 3U); // 同前缀、两字段：应答
+    TEST_ASSERT_EQUAL_UINT32(2U, static_cast<uint32_t>(h.urcs.size()));
+    TEST_ASSERT_EQUAL_STRING("+CREG: 2,1", h.urcs[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("+CEREG: 5", h.urcs[1].c_str());
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.lines.size()));
+    TEST_ASSERT_EQUAL_STRING("+CEREG: 2,1", h.lines[0].c_str());
+    TEST_ASSERT_EQUAL(AtResult::kOk, h.done[0].result);
+}
+
 } // namespace
 
 extern "C" void setUp(void) {}
@@ -469,5 +555,9 @@ int main()
     RUN_TEST(testRawLengthTrailingJunkRejected);
     RUN_TEST(testRxLostDuringRawAbortsCommand);
     RUN_TEST(testCmeErrorTextCode);
+    RUN_TEST(testQuietBoundaryFeedDoesNotLeakStaleReply);
+    RUN_TEST(testRxLostDuringProbeCountsTowardsDead);
+    RUN_TEST(testPowerDownSettlesAndClearsResync);
+    RUN_TEST(testRegReplyNeedsPrefixAndShape);
     return UNITY_END();
 }

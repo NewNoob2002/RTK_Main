@@ -319,6 +319,24 @@ void AtEngine::reset(uint32_t nowMs) noexcept
     quietDone_ = false;
 }
 
+void AtEngine::powerDown(uint32_t nowMs) noexcept
+{
+    abortAll(nowMs);
+    count_ = 0U;
+    head_ = 0U;
+    state_ = State::kIdle;
+    lineLen_ = 0U;
+    overflow_ = false;
+    skipSpace_ = false;
+    rawRemaining_ = 0U;
+    timeouts_ = 0U;
+    dead_ = false;
+    resync_ = false; // 断电后模块侧不会再有旧响应：下次上电从干净状态开始
+    quietDone_ = false;
+    quietThenProbe_ = false;
+    probeSeen_ = false;
+}
+
 void AtEngine::poll(uint32_t nowMs) noexcept
 {
     if (count_ == 0U) {
@@ -347,8 +365,17 @@ void AtEngine::onRxLost(uint32_t nowMs) noexcept
         finish(AtResult::kError, 0, nowMs);
         break;
     case State::kProbe:
+        // 握手期间丢字节 = 本次握手失败：计入无响应阈值，到阈值即判通道失效，不无限重进静默（r4 R1）。
         resync_ = true;
-        enterQuiet(nowMs, true);
+        ++stats_.timeouts;
+        ++timeouts_;
+        if (timeouts_ >= deadThreshold_) {
+            state_ = State::kIdle;
+            dead_ = true;
+            abortAll(nowMs);
+        } else {
+            enterQuiet(nowMs, true);
+        }
         break;
     case State::kQuiet:
     case State::kIdle:
@@ -377,6 +404,14 @@ uint32_t AtEngine::msToDeadline(uint32_t nowMs) const noexcept
 
 void AtEngine::feed(std::span<const uint8_t> bytes, uint32_t nowMs) noexcept
 {
+    // 静默期内本次读到的字节先刷新静默计时并整体丢弃，之后才允许 expire 判静默结束：
+    // 否则“静默已满 + 本次同时带着旧响应”会让旧响应落到刚发出的新命令上（r4 R1）。
+    if (!bytes.empty() && (state_ == State::kQuiet)) {
+        lastRxMs_ = nowMs;
+        ++stats_.stale;
+        expire(nowMs);
+        return;
+    }
     // 以时间戳而非调用顺序判超时：截止之后才到的字节属于迟到响应，不得完成该命令。
     expire(nowMs);
     if (!bytes.empty()) {
@@ -386,7 +421,7 @@ void AtEngine::feed(std::span<const uint8_t> bytes, uint32_t nowMs) noexcept
         if (!bytes.empty()) {
             ++stats_.stale;
         }
-        return; // 静默等待：旧响应一律丢弃，到达的字节同时刷新静默计时
+        return;
     }
     size_t index = 0U;
     while (index < bytes.size()) {
@@ -487,11 +522,16 @@ bool AtEngine::belongsToFront(std::string_view line) const noexcept
         return false;
     }
     const Slot &slot = queue_[head_];
-    if ((slot.prefixLen != 0U) &&
-        line.starts_with(std::string_view{slot.prefix.data(), slot.prefixLen})) {
-        return true;
+    const bool hasPrefix = slot.prefixLen != 0U;
+    const bool hasShape = slot.match != nullptr;
+    if (!hasPrefix && !hasShape) {
+        return false;
     }
-    return (slot.match != nullptr) && slot.match(line);
+    // 前缀与形状同时给出时必须同时满足：异前缀行（如 CEREG? 期间的 +CREG）与单字段 URC 都不是应答（r4 R3）。
+    const bool prefixOk =
+        !hasPrefix || line.starts_with(std::string_view{slot.prefix.data(), slot.prefixLen});
+    const bool shapeOk = !hasShape || slot.match(line);
+    return prefixOk && shapeOk;
 }
 
 /**

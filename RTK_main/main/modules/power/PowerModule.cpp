@@ -995,6 +995,18 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
     return allSatisfied;
 }
 
+void PowerModule::retryQuiesceFallbacks() noexcept
+{
+    // kQuiesce 兜底（如 4G 硬切 PWREN）首次失败后 PW1 已进入 kCutPower：每轮继续重试直到参与者 isDone。
+    // 独立于 OLED 终帧门控（无 OLED/USB 在位时 cutReady 不会轮询 kCutPower 参与者）；总窗口不延长（r4 R5）。
+    for (const auto &p : power::extraShutdownParticipants()) {
+        if ((p.stage == board::ShutdownStage::kQuiesce) && (p.onTimeout != nullptr) &&
+            (p.isDone != nullptr) && !p.isDone(p.userCtx)) {
+            p.onTimeout(p.userCtx);
+        }
+    }
+}
+
 void PowerModule::recordStageTimeouts(board::ShutdownStage stage) noexcept
 {
     size_t idx = 0U;
@@ -1157,6 +1169,9 @@ void PowerModule::stepShutdown(uint32_t nowMs, PinLevels &pins) noexcept
 
     shutdownNowMs_ = nowMs;
     const auto stage = shutdownSm_.stage();
+    if (stage == board::ShutdownStage::kCutPower) {
+        retryQuiesceFallbacks();
+    }
     const bool saveDone = (stage == board::ShutdownStage::kSave) &&
                           pollStageParticipants(board::ShutdownStage::kSave, nowMs);
     const bool stageVisible = shutdownStageVisible(nowMs, stage);

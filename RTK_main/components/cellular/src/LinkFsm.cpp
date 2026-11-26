@@ -14,6 +14,7 @@ constexpr uint32_t kPowerOnSettleMs = 500U;
 constexpr uint32_t kBaudSwitchSettleMs = 100U;
 constexpr uint32_t kBaudSwitchExtendMs = 5000U;
 constexpr uint32_t kShutdownPollMs = 20U;
+constexpr uint32_t kPowerFaultRetryMs = 100U; // PWREN 拉低失败后的重试间隔
 constexpr uint32_t kCloseTimeoutMs = 300U;
 constexpr uint8_t kImeiMinLen = 14U;
 constexpr uint8_t kHealthSeqCpin = 3U; // 巡检序列第三步：CPIN?
@@ -527,6 +528,7 @@ void LinkFsm::enterPhase(Phase phase, uint32_t nowMs) noexcept
         pdpStep_ = pdpForceDeact_ ? PdpStep::kDeact
                                   : (fieldView(cfg_.apn).empty() ? PdpStep::kQuery : PdpStep::kCfg);
         pdpForceDeact_ = false;
+        deactFailed_ = false;
         ipSeen_ = false;
     }
 }
@@ -584,15 +586,50 @@ void LinkFsm::clearStaleClose() noexcept
 /**
  * @brief 断开模块电源并复位相关状态
  * @param nowMs: 当前毫秒时间戳
+ * @retval true PWREN 已确认拉低（进入 Off）
+ * @retval false 写 GPIO 失败（进入 PowerFault 由调用方重试）
  * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
  */
-void LinkFsm::cutPower(uint32_t nowMs) noexcept
+bool LinkFsm::cutPower(uint32_t nowMs) noexcept
 {
-    if (hooks_.setPower != nullptr) {
-        hooks_.setPower(hooks_.ctx, false);
+    if (engine_ != nullptr) {
+        engine_->powerDown(nowMs); // 断电即结算全部在途/排队命令并清空接收状态（r4 R2）
     }
-    offSinceValid_ = true;
-    offSinceMs_ = nowMs;
+    const bool ok = (hooks_.setPower == nullptr) || hooks_.setPower(hooks_.ctx, false);
+    if (ok) {
+        offSinceValid_ = true;
+        offSinceMs_ = nowMs;
+    }
+    return ok;
+}
+
+/**
+ * @brief 进入电源故障阶段：PWREN 拉低失败，周期重试直到 GPIO 成功（r4 R5）
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。此阶段不算断电完成（shutdownDone 为 false）。
+ */
+void LinkFsm::enterPowerFault(uint32_t nowMs) noexcept
+{
+    snap_.pdpUp = false;
+    enterPhase(Phase::kPowerFault, nowMs);
+    nextMs_ = nowMs + kPowerFaultRetryMs;
+}
+
+/**
+ * @brief 轮询电源故障阶段：重试拉低 PWREN，成功后转 Off
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+void LinkFsm::pollPowerFault(uint32_t nowMs) noexcept
+{
+    if (!reached(nowMs, nextMs_)) {
+        return;
+    }
+    if (cutPower(nowMs)) {
+        enterPhase(Phase::kOff, nowMs);
+    } else {
+        nextMs_ = nowMs + kPowerFaultRetryMs;
+    }
 }
 
 /**
@@ -603,7 +640,7 @@ void LinkFsm::cutPower(uint32_t nowMs) noexcept
 void LinkFsm::startPowerOn(uint32_t nowMs) noexcept
 {
     if (hooks_.setPower != nullptr) {
-        hooks_.setPower(hooks_.ctx, true);
+        static_cast<void>(hooks_.setPower(hooks_.ctx, true));
     }
     powerOnMs_ = nowMs;
     syncDeadlineMs_ = nowMs + kPolicy.syncWindowMs;
@@ -643,7 +680,7 @@ void LinkFsm::enterL3(uint32_t nowMs, bool manual) noexcept
     clearOps();
     notifyAllClosed();
     clearStaleClose(); // 断电后模块侧 socket 全部消失
-    cutPower(nowMs);
+    const bool cut = cutPower(nowMs);
     simWasBad_ = false;
     regLost_ = false;
     pdpForceDeact_ = false;
@@ -653,6 +690,10 @@ void LinkFsm::enterL3(uint32_t nowMs, bool manual) noexcept
     snap_.reg = RegStatus::kUnknown;
     snap_.sim = SimStatus::kUnknown;
     snap_.csq = kCsqUnknown;
+    if (!cut) {
+        enterPowerFault(nowMs);
+        return;
+    }
     enterPhase(Phase::kPowerCycle, nowMs);
     cycleEndMs_ = nowMs + hold;
 }
@@ -726,7 +767,8 @@ void LinkFsm::handleModuleRestart(uint32_t nowMs) noexcept
 
 bool LinkFsm::requestReset(uint32_t nowMs) noexcept
 {
-    if ((phase_ == Phase::kOff) || (phase_ == Phase::kPowerCycle) || shuttingDown_) {
+    if ((phase_ == Phase::kOff) || (phase_ == Phase::kPowerCycle) ||
+        (phase_ == Phase::kPowerFault) || shuttingDown_) {
         return false;
     }
     enterL3(nowMs, true);
@@ -766,6 +808,14 @@ void LinkFsm::onSimState(SimStatus sim, uint32_t nowMs) noexcept
     }
 }
 
+void LinkFsm::onDiagLine(std::string_view line) noexcept
+{
+    SimStatus sim = SimStatus::kUnknown;
+    if (parseCpin(line, sim) && (sim != SimStatus::kReady) && (sim != SimStatus::kUnknown)) {
+        diagSim_ = sim;
+    }
+}
+
 void LinkFsm::beginShutdown(uint32_t nowMs, uint32_t deadlineMs) noexcept
 {
     latched_ = true;
@@ -788,9 +838,15 @@ void LinkFsm::startStop(uint32_t nowMs, uint32_t deadlineMs) noexcept
     if (shuttingDown_) {
         return;
     }
+    if (phase_ == Phase::kPowerFault) {
+        return; // 已在重试拉低 PWREN
+    }
     if ((phase_ == Phase::kOff) || (phase_ == Phase::kPowerCycle)) {
-        cutPower(nowMs);
-        enterPhase(Phase::kOff, nowMs);
+        if (cutPower(nowMs)) {
+            enterPhase(Phase::kOff, nowMs);
+        } else {
+            enterPowerFault(nowMs);
+        }
         return;
     }
     // 模块尚未起来或 AT 通道已失效：没有可发的关机命令，直接断电。
@@ -824,7 +880,7 @@ void LinkFsm::startStop(uint32_t nowMs, uint32_t deadlineMs) noexcept
  */
 void LinkFsm::finishStop(uint32_t nowMs) noexcept
 {
-    cutPower(nowMs);
+    const bool cut = cutPower(nowMs);
     shuttingDown_ = false;
     clearOps();
     snap_.pdpUp = false;
@@ -835,7 +891,11 @@ void LinkFsm::finishStop(uint32_t nowMs) noexcept
             conn.state = ConnState::kIdle;
         }
     }
-    enterPhase(Phase::kOff, nowMs);
+    if (cut) {
+        enterPhase(Phase::kOff, nowMs);
+    } else {
+        enterPowerFault(nowMs); // GPIO 失败不得宣告关机完成（r4 R5）
+    }
 }
 
 // NOLINTBEGIN(readability-function-cognitive-complexity): 关机步骤状态机按 ADR-0021 §2.9 平铺，拆分会割裂“截止/通道不可信/等待在途命令”的优先顺序，主机测试逐路径覆盖。
@@ -1194,6 +1254,8 @@ void LinkFsm::onPdpDone(const AtResponse &rsp) noexcept
             for (Conn &conn : conns_) {
                 conn.closeFirst = false;
             }
+        } else {
+            deactFailed_ = true; // 旧承载释放未确认：之后查询仍见在线则按恢复失败处理（r4 R4）
         }
         pdpStep_ = fieldView(cfg_.apn).empty() ? PdpStep::kQuery : PdpStep::kCfg;
         break;
@@ -1206,7 +1268,13 @@ void LinkFsm::onPdpDone(const AtResponse &rsp) noexcept
         break;
     case PdpStep::kQuery:
         if (ok && ipSeen_) {
-            enterReady(now);
+            if (deactFailed_) {
+                // QIDEACT 失败且承载仍在线：L2 重建未完成，不得宣告 Ready；退避递增并累计升级计数。
+                deactFailed_ = false;
+                failPdpRecovery(now);
+            } else {
+                enterReady(now);
+            }
         } else {
             pdpStep_ = PdpStep::kActivate;
         }
@@ -1216,17 +1284,27 @@ void LinkFsm::onPdpDone(const AtResponse &rsp) noexcept
             enterReady(now);
             break;
         }
-        if (pdpFails_ < std::numeric_limits<uint8_t>::max()) {
-            ++pdpFails_;
-        }
-        if (pdpFails_ >= kPolicy.qiactFailToL3) {
-            enterL3(now);
-        } else {
-            enterL2(now, true);
-        }
+        failPdpRecovery(now);
         break;
     default:
         break;
+    }
+}
+
+/**
+ * @brief PDP 恢复失败：累计失败次数，到阈值升级 L3，否则以递增退避重进 L2
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+void LinkFsm::failPdpRecovery(uint32_t nowMs) noexcept
+{
+    if (pdpFails_ < std::numeric_limits<uint8_t>::max()) {
+        ++pdpFails_;
+    }
+    if (pdpFails_ >= kPolicy.qiactFailToL3) {
+        enterL3(nowMs);
+    } else {
+        enterL2(nowMs, true);
     }
 }
 
@@ -1517,6 +1595,14 @@ bool LinkFsm::sendConn(uint8_t id, std::span<const uint8_t> payload, uint32_t no
         payload.empty() || (payload.size() > kSendChunkBytes)) {
         return false;
     }
+    // 载荷字节时间（10 bit/字节）超过写预算则拒绝：QISEND 只允许在已切到 460800 后，
+    // 115200 阶段只发短命令，避免单次写阻塞 kNet 超过轮预算（r4 R7）。
+    const uint64_t wireMs =
+        (static_cast<uint64_t>(payload.size()) * 10ULL * 1000ULL + curBaud_ - 1U) /
+        ((curBaud_ == 0U) ? 1U : curBaud_);
+    if ((curBaud_ == 0U) || (wireMs > kPolicy.maxPayloadWireMs)) {
+        return false;
+    }
     Writer w{cmdBuf_.data(), cmdBuf_.size()};
     w.str("AT+QISEND=");
     w.num(id);
@@ -1633,9 +1719,22 @@ void LinkFsm::onUrc(std::string_view line, uint32_t nowMs) noexcept
 }
 // NOLINTEND(readability-function-size, readability-function-cognitive-complexity)
 
+// NOLINTNEXTLINE(readability-function-size): ADR-0021 §2.5 轮询按阶段平铺（超时/退避/巡检/断电），拆分会割裂恢复表，主机测试逐路径覆盖。
 void LinkFsm::poll(uint32_t nowMs) noexcept
 {
     if (engine_ == nullptr) {
+        return;
+    }
+    if (diagSim_ != SimStatus::kUnknown) {
+        const SimStatus sim = diagSim_;
+        diagSim_ = SimStatus::kUnknown;
+        if ((phase_ != Phase::kOff) && (phase_ != Phase::kPowerFault) &&
+            (phase_ != Phase::kPowerCycle) && !shuttingDown_) {
+            onSimState(sim, nowMs); // 调试查询看到卡异常：与 FSM 自己的查询同样处理（r4 R3）
+        }
+    }
+    if (phase_ == Phase::kPowerFault) {
+        pollPowerFault(nowMs);
         return;
     }
     if (phase_ == Phase::kOff) {
@@ -1699,6 +1798,8 @@ uint32_t LinkFsm::msToNextWork(uint32_t nowMs) const noexcept
         return (enabled_ && powerAllowed_ && startAllowed_ && !latched_)
                    ? (offSinceValid_ ? remaining(nowMs, offSinceMs_ + kPolicy.powerOffMinMs) : 0U)
                    : kForever;
+    case Phase::kPowerFault:
+        return remaining(nowMs, nextMs_);
     case Phase::kPowerCycle:
         return remaining(nowMs, cycleEndMs_);
     case Phase::kRegister:

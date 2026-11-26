@@ -79,8 +79,10 @@ public:
 
     /**
      * @brief 引擎拒收时退回 kPending，下一轮重试（kNet 任务）
+     * @note  Running→Pending 的 CAS 失败且当前为 kAbandoned（提交方已取消）时回收为 kIdle，
+     *        否则邮箱会永久卡在 kAbandoned。
      */
-    void untake() noexcept;
+    void reject() noexcept;
 
     /**
      * @brief 追加一条响应行（kNet 任务）；凭据行脱敏

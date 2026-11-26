@@ -32,6 +32,7 @@ struct Sim final {
     uint32_t now = 0U;
 
     // 模块侧状态与故障开关。
+    int powerOffFailures = 0; // >0：接下来的断电钩子返回失败（模拟 gpio_set_level 出错）
     bool powered = false;
     uint32_t poweredAtMs = 0U;
     uint32_t bootDelayMs = 0U;
@@ -40,6 +41,7 @@ struct Sim final {
     bool silent = false;
     bool echo = true;
     bool iprFail = false;
+    bool deactFails = false; // true：QIDEACT 返回 ERROR 且承载仍在线
     bool simAbsent = false;
     int regStat = 1;
     int qiactFails = 0;
@@ -156,8 +158,12 @@ void handleCommand(Sim &s, const std::string &cmd)
             respondOk(s, cmd);
         }
     } else if (cmd == "AT+QIDEACT=1") {
-        s.ipActive = false;
-        respondOk(s, cmd);
+        if (s.deactFails) {
+            respondErr(s, cmd, "ERROR");
+        } else {
+            s.ipActive = false;
+            respondOk(s, cmd);
+        }
     } else if (cmd == "AT+CSQ") {
         respondOk(s, cmd, "+CSQ: 21,99");
     } else if (cmd.rfind("AT+QIOPEN=", 0) == 0) {
@@ -230,9 +236,13 @@ void urcHook(void *ctx, std::string_view line) noexcept
 }
 
 /** PWREN 钩子。 */
-void powerHook(void *ctx, bool on) noexcept
+bool powerHook(void *ctx, bool on) noexcept
 {
     auto *s = static_cast<Sim *>(ctx);
+    if (!on && s->powerOffFailures > 0) {
+        --s->powerOffFailures; // 故障注入：gpio_set_level 失败
+        return false;
+    }
     s->power.push_back({s->now, on});
     s->outq.clear();
     s->inbuf.clear();
@@ -248,6 +258,7 @@ void powerHook(void *ctx, bool on) noexcept
     } else {
         s->powered = false;
     }
+    return true;
 }
 
 /** 波特率钩子。 */
@@ -1108,6 +1119,73 @@ void testShutdownWhileResyncingCutsWithoutQpowd()
     TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(countCmds(s, "AT+QPOWD")));
 }
 
+// r4 R4：QIDEACT 失败且承载仍在线 → L2 重建不得宣告 Ready，累计失败后升级 L3。
+void testDeactFailureWithBearerActiveNeverReady()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.deactFails = true;
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    runFor(s, 50U);
+    bool sawReady = false;
+    TEST_ASSERT_TRUE(runUntil(s, 600000U, [&s, &sawReady]() {
+        sawReady = sawReady || (s.fsm.phase() == Phase::kReady);
+        return powerOffCount(s) == 1U;
+    }));
+    TEST_ASSERT_FALSE(sawReady);
+    TEST_ASSERT_TRUE(countCmds(s, "AT+QIDEACT=1") >= 2U);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+}
+
+// r4 R5：PWREN 拉低失败时不进入 Off/不算关机完成，进入 kPowerFault 周期重试，成功后才完成。
+void testPowerFaultRetriesUntilCutSucceeds()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.powerOffFailures = 1000;
+    s.fsm.beginShutdown(s.now);
+    TEST_ASSERT_TRUE(runUntil(s, 5000U, [&s]() { return s.fsm.phase() == Phase::kPowerFault; }));
+    runFor(s, 1000U);
+    TEST_ASSERT_EQUAL(Phase::kPowerFault, s.fsm.phase());
+    TEST_ASSERT_FALSE(s.fsm.shutdownDone());
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(powerOffCount(s)));
+    s.powerOffFailures = 0;
+    TEST_ASSERT_TRUE(runUntil(s, 1000U, [&s]() { return s.fsm.shutdownDone(); }));
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(powerOffCount(s)));
+}
+
+// r4 R3：调试通道（net at）看到的非 READY +CPIN 行同样驱动 FSM 的 SIM 状态。
+void testDiagCpinNotInsertedDrivesSimState()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.fsm.onDiagLine("+CPIN: NOT INSERTED");
+    s.fsm.onDiagLine("+CPIN: READY"); // READY 不得覆盖已看到的异常
+    runFor(s, 100U);
+    TEST_ASSERT_TRUE(s.fsm.phase() != Phase::kReady);
+    TEST_ASSERT_EQUAL(SimStatus::kAbsent, s.fsm.snapshot(s.now).sim);
+}
+
+// r4 R7：载荷线上时间超过写预算的 QISEND 被拒绝：115200 只允许短载荷，460800 允许 512 B。
+void testPayloadWireTimeBudget()
+{
+    Sim lo;
+    setup(lo);
+    lo.iprFail = true; // 保持 115200
+    TEST_ASSERT_TRUE(toConnOpen(lo));
+    std::array<uint8_t, 512> big{};
+    std::array<uint8_t, 64> small{};
+    TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, big, lo.now));
+    TEST_ASSERT_TRUE(lo.fsm.sendConn(0U, small, lo.now));
+    Sim hi;
+    setup(hi);
+    TEST_ASSERT_TRUE(toConnOpen(hi));
+    TEST_ASSERT_TRUE(hi.fsm.sendConn(0U, big, hi.now));
+}
+
 void testRegistrationLostFor180sEscalatesL3()
 {
     Sim s;
@@ -1266,6 +1344,10 @@ int main()
     RUN_TEST(testUnconfirmedQicloseEscalatesL2BeforeReopen);
     RUN_TEST(testPowerCycleCooldownRechecksGate);
     RUN_TEST(testShutdownWhileResyncingCutsWithoutQpowd);
+    RUN_TEST(testDeactFailureWithBearerActiveNeverReady);
+    RUN_TEST(testPowerFaultRetriesUntilCutSucceeds);
+    RUN_TEST(testDiagCpinNotInsertedDrivesSimState);
+    RUN_TEST(testPayloadWireTimeBudget);
     RUN_TEST(testRegistrationLostFor180sEscalatesL3);
     RUN_TEST(testStartAllowedOnlyBlocksNewPowerOn);
     RUN_TEST(testShutdownUsesSharedAbsoluteDeadline);

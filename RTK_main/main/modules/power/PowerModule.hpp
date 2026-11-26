@@ -304,6 +304,12 @@ private:
     [[nodiscard]] bool pollStageParticipants(board::ShutdownStage stage, uint32_t nowMs) noexcept;
 
     /**
+     * @brief kCutPower 阶段每轮重试仍未完成的 kQuiesce 参与者超时兜底（如 4G 硬切 PWREN 失败后）
+     * @note 仅 kLink 调用，不阻塞，非 ISR；不延长既有 kCutPower 有界流程。
+     */
+    void retryQuiesceFallbacks() noexcept;
+
+    /**
      * @brief 记录指定关机阶段在超时/结束时仍未完成的参与者位
      * @param stage: 超时或离开的关机阶段
      * @note 仅 kLink 调用，不阻塞，非 ISR。

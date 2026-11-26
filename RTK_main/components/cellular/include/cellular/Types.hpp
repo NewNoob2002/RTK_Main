@@ -18,6 +18,7 @@ enum class Phase : uint8_t {
     kRegister,
     kPdpUp,
     kReady,
+    kPowerFault, ///< PWREN 拉低失败，周期重试中（不视为已断电）
 };
 
 /** SIM 卡状态（来自 AT+CPIN?）。 */

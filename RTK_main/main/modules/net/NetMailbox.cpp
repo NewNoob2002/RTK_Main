@@ -171,11 +171,18 @@ bool NetMailbox::take(std::string_view &cmd, uint32_t &token, std::string_view &
     return true;
 }
 
-void NetMailbox::untake() noexcept
+void NetMailbox::reject() noexcept
 {
     uint8_t expected = static_cast<uint8_t>(State::kRunning);
-    static_cast<void>(state_.compare_exchange_strong(
-        expected, static_cast<uint8_t>(State::kPending), std::memory_order_acq_rel));
+    if (state_.compare_exchange_strong(expected, static_cast<uint8_t>(State::kPending),
+                                       std::memory_order_acq_rel)) {
+        return;
+    }
+    // Running→Pending 失败：提交方已在取走与退回之间取消（kAbandoned），由此处统一回收为 kIdle，
+    // 否则邮箱永久卡在 kAbandoned（r4 R6）。
+    expected = static_cast<uint8_t>(State::kAbandoned);
+    static_cast<void>(state_.compare_exchange_strong(expected, static_cast<uint8_t>(State::kIdle),
+                                                     std::memory_order_acq_rel));
 }
 
 void NetMailbox::onLine(std::string_view line) noexcept

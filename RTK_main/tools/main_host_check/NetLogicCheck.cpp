@@ -201,7 +201,7 @@ void testMailboxUntakeAndRedaction()
     uint32_t token = 0U;
     CHECK(box.submit("AT+QIACT?") == fw::Status::kOk);
     CHECK(box.take(cmd, token, prefix));
-    box.untake(); // 引擎队列满：退回 kPending
+    box.reject(); // 引擎队列满：退回 kPending
     CHECK(box.state() == NetMailbox::State::kPending);
     uint32_t again = 0U;
     CHECK(box.take(cmd, again, prefix));
@@ -216,6 +216,15 @@ void testMailboxUntakeAndRedaction()
     CHECK(box.submit("AT") == fw::Status::kOk);
     box.release();
     CHECK(box.state() == NetMailbox::State::kIdle);
+    // r4 R6：REPL 在命令已取走（Running）时放弃，随后引擎队列满触发 reject()：
+    // 状态须收敛到 Idle，不得把已放弃的请求退回 Pending（旧实现无条件 store(kPending)）。
+    CHECK(box.submit("AT+CSQ") == fw::Status::kOk);
+    CHECK(box.take(cmd, token, prefix));
+    box.release();
+    box.reject();
+    CHECK(box.state() == NetMailbox::State::kIdle);
+    CHECK(box.submit("AT") == fw::Status::kOk); // 之后可立即复用
+    box.release();
 }
 
 /**

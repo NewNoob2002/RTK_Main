@@ -154,6 +154,14 @@ public:
     void reset(uint32_t nowMs) noexcept;
 
     /**
+     * @brief  模块断电：取消并结算全部在途/排队命令，清除分帧、待同步、失效与静默状态
+     * @param  nowMs: 当前 tick 毫秒
+     * @note   仅 kNet 任务；所有回调以 kAborted 结算（令牌随之失效）；断电后不会再有旧响应，
+     *         故同时清除 resync 标记，下次上电从干净状态开始。非 ISR，不分配堆。
+     */
+    void powerDown(uint32_t nowMs) noexcept;
+
+    /**
      * @brief  启用/关闭“超时或取消后重新同步”
      * @param  enable: true 时，命令超时、本地取消在途命令、原始数据越界或串口丢字节后，
      *                 下一条命令发出前先做 AT+CMEE? 握手并丢弃握手完成前收到的旧响应
