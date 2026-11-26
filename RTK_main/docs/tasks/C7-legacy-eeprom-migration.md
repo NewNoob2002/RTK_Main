@@ -46,7 +46,7 @@ worktree `../RTK_Main-c7`。前置 C6 已合并（`02083f5`）：双 NVS 实例�
 不预期修改冻结文件。若必须改 `components/nvs_store/include/NvsStore.h`，先停下在报告写 NOT_DECIDED 并说明理由，不得自行改 `docs/frozen.sha256`。
 
 ## 验收与约束
-- 全量门禁 `tools/ci/run_gates.sh --prefix c7 --base <本卡提交>` 全通过（ASan/TSan 现状不退化，已知 s_spp 竞态除外）；环境：
+- 全量门禁 `tools/ci/run_gates.sh --prefix c7 --base c2bfbca` 全通过（ASan/TSan 现状不退化，已知 s_spp 竞态除外）；环境：
   `export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env`。
 - DRAM 增量 ≤ 128 B，IRAM 0，无运行期堆；flash 增量记录；启动耗时增量记录（迁移那次与之后各次）。
 - 授权修改：`components/nvs_store/*`（不含冻结头）、`main/modules/storage/*`、`main/app/BootFlow.cpp`（仅插入迁移步骤）、`components/settings/*`（仅暴露现有校验，不改语义）、
