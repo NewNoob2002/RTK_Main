@@ -94,10 +94,10 @@
 | --- | --- | --- | --- |
 | SN | 200 / 16 | `fac/sn` + `facbk/sn` | 可见 ASCII；与 `factory.sn` 同一校验 |
 | PN | 216 / 16 | `fac/pn` + `facbk/pn`（现 `rtk/pn` 迁入 `fac`） | 原文保存，不解析（§2.7） |
-| GPS/BDS/GLO/GAL 开关 | 300–303 / 各 1 | `gnss.const.gps/bds/glo/gal` | 0/1；其他值未设置 |
-| GGA/GSA/GSV/GST/RMC 频率 | 304–308 / 各 1 | `gnss.out.gga/gsa/gsv/gst/rmc` | 旧值：正数 = Hz，0 = 关（旧固件把负值当 0）。换算为周期 ms = 1000/Hz；按当前 `gnss.rate` 对齐，不能整除的取最近合法值并计入“非法” |
-| 截止高度角 | 310 / int32 | `gnss.cutoff` | 1–90；旧固件 ≤0 用 15 |
-| SBAS | 314 / 1 | 卫星设置的 sbas 位（0x24 路径 `rtk/sat_cfg`） | 0/1；F9P 无 SBAS 能力时按能力掩码清零 |
+| GPS/BDS/GLO/GAL 开关 | 300–303 / 各 1 | `gnss.const.gps/bds/glo/gal` | ~~0/1；其他值未设置~~ 不迁移（2026-11-26 修订） |
+| GGA/GSA/GSV/GST/RMC 频率 | 304–308 / 各 1 | `gnss.out.gga/gsa/gsv/gst/rmc` | ~~旧值：正数 = Hz，0 = 关（旧固件把负值当 0）。换算为周期 ms = 1000/Hz；按当前 `gnss.rate` 对齐，不能整除的取最近合法值并计入“非法”~~ 不迁移（2026-11-26 修订） |
+| 截止高度角 | 310 / int32 | `gnss.cutoff` | ~~1–90；旧固件 ≤0 用 15~~ 不迁移（2026-11-26 修订） |
+| SBAS | 314 / 1 | 卫星设置的 sbas 位（0x24 路径 `rtk/sat_cfg`） | ~~0/1；F9P 无 SBAS 能力时按能力掩码清零~~ 不迁移（2026-11-26 修订） |
 
 **第二阶段，随对应功能迁移（同一份 blob 再解析，`mig` 下各自记 `mig/net`、`mig/fence` 等标记）：**
 
@@ -106,8 +106,8 @@
 | APN、APN 用户名、APN 密码 | 0/32、32/16、48/16 | `net.apn`、`net.apn_user`、`net.apn_pass`（ADR-0021 新增） | 4G N1 |
 | 内置 NTRIP 开关 | 444 / 1 | `ntrip.enabled` | 4G N2 |
 | NTRIP 域名、端口、用户名、密码、挂载点、IP | 64/32、96/int32、100/16、116/16、132/16、445/16 | `ntrip.host`、`ntrip.port`、`ntrip.user`、`ntrip.pass`、`ntrip.mount`（域名为空时用 IP 作 host） | 4G N2；同时取代 `rtk/ntrip_cfg` 原始帧 |
-| JSON 服务器地址、端口 | 320/32、352/int32 | 原样存 `rtk/json_srv` | 现在即可（C7），功能按 ADR-0021 只预留 |
-| ThingsBoard 开关、client_id、用户名、密码、主机、端口 | 356/1、360/16、376/16、392/16、408/32、440/int32 | 原样存 `rtk/tb_cfg` | 现在即可（C7），以后由 N3 MQTT 取代 |
+| JSON 服务器地址、端口 | 320/32、352/int32 | 原样存 `rtk/json_srv` | ~~现在即可（C7），功能按 ADR-0021 只预留~~ 不迁移（2026-11-26 修订） |
+| ThingsBoard 开关、client_id、用户名、密码、主机、端口 | 356/1、360/16、376/16、392/16、408/32、440/int32 | 原样存 `rtk/tb_cfg` | ~~现在即可（C7），以后由 N3 MQTT 取代~~ 不迁移（2026-11-26 修订） |
 | 围栏：数量、存在表 | 512 / 1、513+i / 1 | `fence/*` | WP-FENCE |
 | 围栏 i（i<5）：id | 2228+i / 1 | 同上 | WP-FENCE |
 | 名称、启用、告警类型、LED、蜂鸣、马达、顶点数 | 518+342i / 16，534–539+342i / 各 1 | 同上；`fence_type` 旧数据无，取默认 | WP-FENCE |
@@ -162,7 +162,7 @@ HIL（C7 验收，以 Arduino V2.x 线为主；V3.1 IDF 线外场没有，只做
 
 1. 整片烧录旧固件（Arduino V2.7 的 `P2_V2.7.ino.bootloader.bin` + 分区表 + app）；用旧 App 写 SN/PN（其余字段不迁移，可不写）。
 2. 串口读出 0x9000 nvs 存档（作为主机测试金样）。
-3. 用旧固件自身的网页 OTA 写入新固件 → 重启：确认旧 bootloader 能引导、`Legacy config migrated` 计数正确、`config get` 各键值与旧配置一致、
+3. 用旧固件自身的网页 OTA 写入新固件 → 重启：确认旧 bootloader 能引导、`Legacy config migrated` 计数正确、`Legacy config migrated: 2 fields` 且 `factory`/`config get` 读到的 SN/PN 与旧值一致、其余键为新固件默认值、
    SN/PN 两副本一致、蓝牙绑定保留。
 4. 新固件网页 OTA 到另一版本新固件，确认 otadata 切换正常；再切回旧固件槽，确认旧固件启动且配置仍在、NVS 未被整片擦除。
 5. `freset` 后确认 `fac`/`facbk`/`mig`/旧 blob 保留、用户配置回默认、不会再次迁移。
