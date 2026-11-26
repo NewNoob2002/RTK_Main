@@ -1,6 +1,6 @@
 # ADR-0022：分区表与旧固件统一、旧 EEPROM 配置迁移
 
-状态：**草案**（2026-11-26，待用户审批）。修订 ADR-0014 §2.1（分区表）、§2.2（数据归属）、§2.7（恢复出厂）、§3（后果）。
+状态：**草案**（2026-11-26；§6 Q1–Q4 用户已答复，待审批）。修订 ADR-0014 §2.1（分区表）、§2.2（数据归属）、§2.7（恢复出厂）、§3（后果）。
 关联：ADR-0014（运行期配置）、ADR-0019（网页 OTA 与回滚）、ADR-0021（4G，APN/NTRIP 键）、`docs/requirements/P2-nextgen-customer.md`（围栏 WP-FENCE）、
 `docs/reports/P2-legacy-gap.md` §持久化存储。
 
@@ -111,7 +111,7 @@
 
 ### 2.6 升级路径与 bootloader
 
-- 外场旧板：用旧固件自己的网页上传（V2.7 `Form.ino`、V3.1 `/upload`）或蓝牙 OTA 写新固件到另一个 app 槽 → 重启进入新固件 → §2.4 迁移。
+- 外场旧板（全部是 V2.x Arduino 线，§6 Q1）：用旧固件自己的**网页 OTA**（V2.7 `Form.ino`，§6 Q2）写新固件到另一个 app 槽 → 重启进入新固件 → §2.4 迁移。
   bootloader **不更新**（运行期改写 bootloader 掉电即变砖，见 §5）。
 - 因此新 app 要能被 Arduino（IDF 4.4.7）和 IDF 5.5.5 两种旧 bootloader 引导，必须真机验证（§4 HIL）：
   1. 镜像头 flash 参数一致（4MB/DIO/80m；新固件 sdkconfig 选 QIO，实际镜像头写的是 DIO，C6 确认）；
@@ -119,7 +119,8 @@
   3. 旧 bootloader 的 otadata 格式与 IDF 6.1 `esp_ota_*` 互认（新固件之后的 OTA、回刷旧槽都要能切换）。
 - **回滚能力取决于 bootloader**：Arduino bootloader 未开 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`，首次从旧固件升到新固件、以及之后
   新固件之间的 OTA 都**没有自动回滚**；ADR-0019 §2.5 的“确认有效/回滚”只在串口整片烧录了新 bootloader 的板子上生效。
-  补救：新固件网页 OTA 保留“手动切回另一槽”（`ota rollback` 控制台命令/网页按钮），C6 评估是否新增。
+  补救（§6 Q4）：新增“手动切回另一槽”。发布版关闭终端控制台，且 Type-C 未接 ESP32 串口，客户用不到控制台，所以**主入口是 Wi-Fi 配置网页的按钮**
+  （ADR-0019 OTA 页，`POST /ota/rollback`，另一槽有合法镜像时才可用，二次确认后设为启动分区并重启）；`ota rollback` 控制台命令仅供开发/产线调试。
 - 新出厂板串口整片烧录新 bootloader + 统一分区表 + 新 app，具备回滚。
 - 回刷旧固件：旧固件读到的仍是未改动的旧 blob，可正常启动。需验证 IDF 6.1 写过的系统 NVS 页在 IDF 4.4.7 / 5.5.1 的 `nvs_flash_init`
   下**不触发** `NEW_VERSION_FOUND`（否则旧固件会整片擦 NVS，旧配置和蓝牙绑定都丢）。
@@ -146,16 +147,16 @@
 
 | 卡 | 内容 | 依赖 |
 | --- | --- | --- |
-| C6 | 统一分区表；cfg NVS 实例（`nvs_store` 双实例 API）；现有键迁到 cfg 区；SN/PN 双副本；擦除策略；`freset`/`factory erase` 按命名空间；`nvs_get_stats` 记录；评估 `ota rollback` | — |
+| C6 | 统一分区表；cfg NVS 实例（`nvs_store` 双实例 API）；现有键迁到 cfg 区；SN/PN 双副本；擦除策略；`freset`/`factory erase` 按命名空间；`nvs_get_stats` 记录；网页手动切槽 `POST /ota/rollback`（+ 调试用 `ota rollback`） | — |
 | C7 | §2.4 迁移框架 + §2.5 第一阶段字段 + JSON/ThingsBoard 原始帧；V2.7/V3.1 真机 blob 金样主机测试 | C6 |
 | 后续 | 第二阶段字段随 4G N1/N2、WP-FENCE 迁移 | C7 |
 
-HIL（C7 验收，两条旧固件线各一轮）：
+HIL（C7 验收，以 Arduino V2.x 线为主；V3.1 IDF 线外场没有，只做一次 bootloader 引导冒烟）：
 
-1. 整片烧录旧固件（Arduino V2.7 的 `P2_V2.7.ino.bootloader.bin` + 分区表 + app；V3.1 同理）；用旧 App 写 SN/PN、星座、频率、截止角、
+1. 整片烧录旧固件（Arduino V2.7 的 `P2_V2.7.ino.bootloader.bin` + 分区表 + app）；用旧 App 写 SN/PN、星座、频率、截止角、
    NTRIP、ThingsBoard、围栏。
 2. 串口读出 0x9000 nvs 存档（作为主机测试金样）。
-3. 用旧固件自身的网页/蓝牙 OTA 写入新固件 → 重启：确认旧 bootloader 能引导、`Legacy config migrated` 计数正确、`config get` 各键值与旧配置一致、
+3. 用旧固件自身的网页 OTA 写入新固件 → 重启：确认旧 bootloader 能引导、`Legacy config migrated` 计数正确、`config get` 各键值与旧配置一致、
    SN/PN 两副本一致、蓝牙绑定保留。
 4. 新固件网页 OTA 到另一版本新固件，确认 otadata 切换正常；再切回旧固件槽，确认旧固件启动且配置仍在、NVS 未被整片擦除。
 5. `freset` 后确认 `fac`/`facbk`/`mig`/旧 blob 保留、用户配置回默认、不会再次迁移。
@@ -172,7 +173,9 @@ HIL（C7 验收，两条旧固件线各一轮）：
 
 ## 6 开放问题
 
-1. 外场设备是否全部是 V2.x Arduino 线，还是也有 V3.x IDF 线（客户报 2.4.0.9；`P2_V2.7/build` 下还有 `P2_V3.5.0.1.T2.bin`，需确认其来源与分区表）。
-2. 旧 App 的 OTA 入口（网页 `/upload` 与蓝牙 OTA）哪个是外场实际在用，HIL 以哪条为主。
-3. 第一阶段是否把 JSON/ThingsBoard 原始帧也迁（本草案：迁，成本低，便于以后 N3 取用）。
-4. `ota rollback` 手动切槽是否需要（Arduino bootloader 板子没有自动回滚）。
+用户 2026-11-26 答复：
+
+1. 外场设备是否有 V3.x IDF 线 → **全部是 V2.x Arduino 线**。迁移与 HIL 以 Arduino bootloader + V2.7 blob（2280 B）为主；2560 B 长度仍接受。
+2. 外场 OTA 入口 → **网页 OTA**。蓝牙 OTA 不作为升级路径验证。
+3. JSON/ThingsBoard 原始帧 → **第一阶段（C7）就迁**。
+4. 手动切槽 → **增加**。发布版关闭终端控制台，Type-C 也未接 ESP32 串口，因此做成网页按钮（§2.6），控制台命令只作调试。
