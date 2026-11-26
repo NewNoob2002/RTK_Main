@@ -150,6 +150,68 @@ static esp_err_t nvs_store_write_both(bool sn, const void *value)
     return err;
 }
 
+/**
+ * @brief 按键名查询身份是否存在，兼容其它 NVS 类型。
+ * @param partition: 实例标签。 @param ns: 命名空间。 @param sn: true 为 SN。
+ * @retval ESP_OK 已存在；其他为缺失或读取错误。
+ */
+static esp_err_t nvs_store_find_identity(const char *partition, const char *ns, bool sn)
+{
+    nvs_handle_t handle = 0U;
+    esp_err_t err = nvs_open_from_partition(partition, ns, NVS_READONLY, &handle);
+    if (err == ESP_OK) {
+        err = nvs_find_key(handle, sn ? NVS_STORE_KEY_SN : NVS_STORE_KEY_PN, NULL);
+        nvs_close(handle);
+    }
+    return err;
+}
+
+/**
+ * @brief 直接读指定实例中的身份副本并比对写入值。
+ * @param partition: 实例标签。 @param ns: 命名空间。 @param sn: true 为 SN。
+ * @param value: 写入值。 @param len: 写入字节数，SN 含 NUL。
+ * @retval ESP_OK 验证通过；其他为读取错误或数据不一致。
+ */
+static esp_err_t nvs_store_verify_identity(const char *partition, const char *ns, bool sn,
+                                           const void *value, size_t len)
+{
+    uint8_t actual[NVS_STORE_ID_BYTES];
+    size_t actual_len = sizeof(actual);
+    const esp_err_t err = nvs_store_read_id(partition, ns, sn, actual, &actual_len);
+    if (err == ESP_OK && (actual_len != len || memcmp(actual, value, len) != 0)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return err;
+}
+
+esp_err_t nvs_store_migrate_identity(bool sn, const void *value, size_t len, bool *written)
+{
+    if (value == NULL || written == NULL || !nvs_store_valid_id(sn, value, len)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *written = false;
+    esp_err_t err =
+        nvs_store_find_identity(NVS_STORE_CFG_PARTITION, NVS_STORE_FACTORY_NAMESPACE, sn);
+    if (err != ESP_ERR_NVS_NOT_FOUND) {
+        return err;
+    }
+    err = nvs_store_find_identity(NVS_STORE_SYSTEM_PARTITION, NVS_STORE_BACKUP_NAMESPACE, sn);
+    if (err != ESP_ERR_NVS_NOT_FOUND) {
+        return err;
+    }
+    err = nvs_store_write_both(sn, value);
+    if (err == ESP_OK) {
+        err = nvs_store_verify_identity(NVS_STORE_CFG_PARTITION, NVS_STORE_FACTORY_NAMESPACE, sn,
+                                        value, len);
+    }
+    if (err == ESP_OK) {
+        err = nvs_store_verify_identity(NVS_STORE_SYSTEM_PARTITION, NVS_STORE_BACKUP_NAMESPACE, sn,
+                                        value, len);
+    }
+    *written = err == ESP_OK;
+    return err;
+}
+
 /** @brief 删除已由双副本接管的旧 PN。
  * @retval ESP_OK 已删除或不存在；其他为 NVS 错误。 @note 仅启动期，可阻塞，非 ISR。 */
 static esp_err_t nvs_store_remove_legacy_pn(void)

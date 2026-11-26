@@ -46,7 +46,7 @@
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | ADR-0021 已批准（2026-11-26）：N1 驱动+链路 → N2 NTRIP+RTCM 来源仲裁 → N3 MQTT（预留）；N1 未开工 |
-| 分区统一与旧配置迁移 | ADR-0022。C6 已合并（02083f5），完成分区统一、双实例 NVS 与网页手动切槽。C7 已在实现分支完成旧 EEPROM 第一阶段迁移，门禁 43/43。C7 真机升级与恢复出厂验收待执行，见 `docs/reports/C7-legacy-eeprom-migration.md`。 |
+| 分区统一与旧配置迁移 | ADR-0022。C6 已合并（02083f5），完成分区统一、双实例 NVS 与网页手动切槽。C7 按 2026-11-26 修订仅迁移 SN/PN，`tools/ci/run_gates.sh --prefix c7 --base fec6ce8` 门禁 43/43。C7 真机升级与恢复出厂验收待执行，见 `docs/reports/C7-legacy-eeprom-migration.md`。 |
 
 ## 3. 待补的硬件验证（HIL）
 

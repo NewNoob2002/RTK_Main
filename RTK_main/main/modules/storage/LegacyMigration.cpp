@@ -6,12 +6,11 @@
 #include <array>
 #include <cstring>
 #include <span>
+#include <string_view>
 
 #include "NvsStoreBoot.h"
 #include "fw/Log.hpp"
-#include "modules/gnss/GnssModulePrivate.hpp"
-#include "modules/storage/LegacyEeprom.hpp"
-#include "modules/storage/StoreKeys.hpp"
+#include "settings/Registry.hpp"
 
 namespace app::store {
 namespace {
@@ -19,18 +18,23 @@ namespace {
 constexpr const char *kDone = "done";
 constexpr const char *kSrcLen = "src_len";
 constexpr const char *kStats = "stats";
-constexpr fw::StoreKey kRateKey{.ns = "gnss",
-                                .key = "rate",
-                                .type = fw::StoreType::kU8,
-                                .maxSize = 1U,
-                                .min = 1,
-                                .max = 20,
-                                .help = "GNSS position output rate (Hz)"};
-constexpr fw::StoreKey kOutputKey{.ns = "gnss",
-                                  .key = "out",
-                                  .type = fw::StoreType::kBlob,
-                                  .maxSize = data::GnssOutConfig::kBlobBytes,
-                                  .help = "GNSS receiver and app output configuration"};
+constexpr size_t kV27EepromBytes = 2280U;
+constexpr size_t kV31EepromBytes = NVS_STORE_EEPROM_MAX;
+constexpr uint8_t kErasedByte = 0xFFU;
+constexpr uint8_t kAsciiDelete = 0x7FU;
+
+struct IdentityField {
+    size_t offset;
+    size_t width;
+    bool sn;
+};
+
+// ADR-0022 §2.5 修订：V2.7 和 V3.1 共享 SN/PN 地址。
+constexpr std::array<IdentityField, 2U> kIdentityFields{{
+    {200U, NVS_STORE_SN_MAX, true},
+    {216U, NVS_STORE_PN_BYTES, false},
+}};
+static_assert(NVS_STORE_PN_BYTES <= NVS_STORE_SN_MAX + 1U);
 
 struct Counts {
     unsigned migrated = 0U;
@@ -38,159 +42,96 @@ struct Counts {
     unsigned invalid = 0U;
 };
 
+/** @brief 检查源长度。 @param len: blob 字节数。 @retval true 支持的旧固件长度。 */
+bool legacyEepromLength(size_t len) noexcept
+{
+    return len == kV27EepromBytes || len == kV31EepromBytes;
+}
+
 /**
- * @brief 查找任意类型的键，避免把类型不匹配当成缺失。
- * @param partition: NVS 实例标签。 @param ns: 命名空间。 @param key: 键名。
+ * @brief 查找任意类型的迁移完成标记。
  * @retval ESP_OK 已存在；其他为缺失或后端错误。
  */
-esp_err_t findStoredKey(const char *partition, const char *ns, const char *key) noexcept
+esp_err_t findDoneMarker() noexcept
 {
     nvs_handle_t handle = 0U;
-    auto err = nvs_open_from_partition(partition, ns, NVS_READONLY, &handle);
+    auto err = nvs_store_open_cfg(NVS_STORE_MIG_NAMESPACE, NVS_READONLY, &handle);
     if (err == ESP_OK) {
-        err = nvs_find_key(handle, key, nullptr);
+        err = nvs_find_key(handle, kDone, nullptr);
         nvs_close(handle);
     }
     return err;
 }
 
 /**
- * @brief 直接从指定实例读回身份字段并比较原始数据。
- * @param partition: NVS 实例标签。 @param ns: 命名空间。 @param sn: true 读取字符串 SN。
- * @param expected: 完整写入字节，SN 包含末尾 NUL。
- * @retval ESP_OK 验证通过；其他为读取失败或数据不匹配。
+ * @brief 提取到首个 NUL 为止；空串、全擦除或含控制字符按未设置。
+ * @param bytes: 源身份字段。
+ * @retval 指向源缓冲的文本视图，未设置时为空。
  */
-esp_err_t verifyIdentity(const char *partition, const char *ns, bool sn,
-                         std::span<const uint8_t> expected) noexcept
+std::string_view readText(std::span<const uint8_t> bytes) noexcept
 {
-    nvs_handle_t handle = 0U;
-    auto err = nvs_open_from_partition(partition, ns, NVS_READONLY, &handle);
-    if (err != ESP_OK) {
-        return err;
+    const auto text = std::span{bytes.begin(), std::ranges::find(bytes, 0U)};
+    if (std::ranges::all_of(text, [](uint8_t byte) { return byte == kErasedByte; }) ||
+        std::ranges::any_of(text,
+                            [](uint8_t byte) { return byte < ' ' || byte == kAsciiDelete; })) {
+        return {};
     }
-    std::array<char, NVS_STORE_SN_MAX + 1U> raw{};
-    size_t len = raw.size();
-    err = sn ? nvs_get_str(handle, "sn", raw.data(), &len)
-             : nvs_get_blob(handle, "pn", raw.data(), &len);
-    nvs_close(handle);
-    if (err == ESP_OK &&
-        (len != expected.size() || std::memcmp(raw.data(), expected.data(), len) != 0)) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    return err;
-}
-
-/**
- * @brief 仅在身份两副本均不存在时调用 C6 双写，再逐份读回。
- * @param sn: true 迁移 SN，false 迁移 PN。 @param fields: 已校验的规范字段。
- * @param[in,out] counts: 源字段迁移统计。 @retval ESP_OK 成功或跳过；其他为失败。
- */
-esp_err_t migrateIdentity(bool sn, const LegacyFields &fields, Counts &counts) noexcept
-{
-    if ((sn && fields.sn.front() == '\0') || (!sn && fields.pn.front() == 0U)) {
-        return ESP_OK;
-    }
-    const char *key = sn ? "sn" : "pn";
-    const auto cfg = findStoredKey(NVS_STORE_CFG_PARTITION, NVS_STORE_FACTORY_NAMESPACE, key);
-    const auto backup = findStoredKey(NVS_STORE_SYSTEM_PARTITION, NVS_STORE_BACKUP_NAMESPACE, key);
-    if (cfg != ESP_OK && cfg != ESP_ERR_NVS_NOT_FOUND) {
-        return cfg;
-    }
-    if (backup != ESP_OK && backup != ESP_ERR_NVS_NOT_FOUND) {
-        return backup;
-    }
-    if (cfg == ESP_OK || backup == ESP_OK) {
-        // C6 在本钩子前完成副本修复；已存在的身份优先于旧 EEPROM。
-        ++counts.skipped;
-        return ESP_OK;
-    }
-    auto err = sn ? nvs_store_set_sn(fields.sn.data()) : nvs_store_set_pn(fields.pn.data());
-    if (err != ESP_OK) {
-        return err;
-    }
-    // char 可用无符号字节查看，SN 经 Registry 验证并带有 NUL。
+    // char 可以读取字节缓冲的对象表示，长度已限制在字段内。
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    const auto *snBytes = reinterpret_cast<const uint8_t *>(fields.sn.data());
-    const auto expected = sn ? std::span{snBytes, std::strlen(fields.sn.data()) + 1U}
-                             : std::span<const uint8_t>{fields.pn};
-    err = verifyIdentity(NVS_STORE_CFG_PARTITION, NVS_STORE_FACTORY_NAMESPACE, sn, expected);
-    if (err == ESP_OK) {
-        err = verifyIdentity(NVS_STORE_SYSTEM_PARTITION, NVS_STORE_BACKUP_NAMESPACE, sn, expected);
-    }
-    if (err == ESP_OK) {
-        ++counts.migrated;
-    }
-    return err;
+    return {reinterpret_cast<const char *>(text.data()), text.size()};
 }
 
 /**
- * @brief 目标键缺失时提交已校验的帧，然后独立读回并按字节比较。
- * @param key: 固件已有的定长 blob 定义。 @param value: 已编码的帧。
- * @param count: 该帧包含的有效源字段数。 @param[in,out] counts: 迁移统计。
- * @retval ESP_OK 成功或跳过；其他为写入或校验失败。
+ * @brief SN 使用 factory.sn 校验，PN 检查 C6 接口要求的可打印 ASCII。
+ * @param sn: true 为 SN。 @param text: 非空的旧身份文本。
+ * @retval true 可迁移。
  */
-esp_err_t migrateBlob(const fw::StoreKey &key, std::span<const uint8_t> value, uint8_t count,
-                      Counts &counts) noexcept
+bool validIdentity(bool sn, std::string_view text) noexcept
 {
-    if (count == 0U) {
-        return ESP_OK;
+    if (!sn) {
+        return std::ranges::all_of(text, [](char ch) { return ch >= ' ' && ch <= '~'; });
     }
-    // 本文件调用的四个 StoreKey 的名称均为 NUL 结尾的字面量。
-    // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
-    auto err = findStoredKey(NVS_STORE_CFG_PARTITION, key.ns.data(), key.key.data());
-    if (err == ESP_OK) {
-        counts.skipped += count;
-        return ESP_OK;
-    }
-    if (err != ESP_ERR_NVS_NOT_FOUND) {
-        return err;
-    }
-    err = writeBlob(key, value);
-    if (err != ESP_OK) {
-        return err;
-    }
-    std::array<uint8_t, kMaxBlobKeyBytes> readback{};
-    size_t len = 0U;
-    err = readBlob(key, readback, len);
-    if (err == ESP_OK && !std::ranges::equal(value, std::span{readback}.first(len))) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (err == ESP_OK) {
-        counts.migrated += count;
-    }
-    return err;
+    const auto &spec = *settings::keyAt(settings::KeyId::kFactorySn);
+    settings::Domain domain{};
+    spec.domain({}, false, domain);
+    settings::CanonicalValue value{};
+    return settings::validateValue(spec, domain, text, value) == settings::Error::kOk;
 }
 
 /**
- * @brief 逐个迁移身份和帧；第一个失败立即终止。
- * @param fields: 已校验的规范字段。 @param[in,out] counts: 迁移统计。
- * @retval ESP_OK 所有候选键已处理；其他为首个错误。
+ * @brief 迁移两个身份字段，首个 NVS 错误立即返回。
+ * @param blob: 长度已确认的 EEPROM。 @param[out] counts: 本轮字段统计。
+ * @retval ESP_OK 两字段均已处理；其他为 NVS 错误。
  */
-esp_err_t migrateFields(const LegacyFields &fields, Counts &counts) noexcept
+esp_err_t migrateFields(std::span<const uint8_t> blob, Counts &counts) noexcept
 {
-    std::array<uint8_t, data::GnssOutConfig::kBlobBytes> output{};
-    size_t len = 0U;
-    if (!fw::isOk(fields.output.encode(output, len))) {
-        return ESP_ERR_INVALID_ARG;
+    for (const auto &field : kIdentityFields) {
+        const auto text = readText(blob.subspan(field.offset, field.width));
+        if (text.empty()) {
+            ++counts.skipped;
+            continue;
+        }
+        if (!validIdentity(field.sn, text)) {
+            ++counts.invalid;
+            continue;
+        }
+
+        // 地址表限制了 text 长度。SN 补终止符，PN 补零到定长。
+        std::array<char, NVS_STORE_SN_MAX + 1U> value{};
+        std::memcpy(value.data(), text.data(), text.size());
+        const size_t size = field.sn ? text.size() + 1U : field.width;
+        bool written = false;
+        const auto err = nvs_store_migrate_identity(field.sn, value.data(), size, &written);
+        if (err != ESP_OK) {
+            return err;
+        }
+        if (written) {
+            ++counts.migrated;
+        } else {
+            ++counts.skipped;
+        }
     }
-    const auto sat = core::encodeSatTrackConfig(fields.satellite);
-    auto err = migrateIdentity(true, fields, counts);
-    if (err == ESP_OK) {
-        err = migrateIdentity(false, fields, counts);
-    }
-    if (err == ESP_OK) {
-        err = migrateBlob(kPhoneSatCfgKey, sat, fields.satelliteCount, counts);
-    }
-    if (err == ESP_OK) {
-        err = migrateBlob(kOutputKey, std::span{output}.first(len), fields.outputCount, counts);
-    }
-    if (err == ESP_OK) {
-        err = migrateBlob(kPhoneJsonSrvKey, fields.json, fields.jsonCount, counts);
-    }
-    if (err == ESP_OK) {
-        err = migrateBlob(kPhoneTbKey, fields.thingsboard, fields.thingsboardCount, counts);
-    }
-    return err;
+    return ESP_OK;
 }
 
 /**
@@ -200,7 +141,7 @@ esp_err_t migrateFields(const LegacyFields &fields, Counts &counts) noexcept
  */
 esp_err_t saveMigrationStats(nvs_handle_t handle, uint16_t len, const Counts &counts) noexcept
 {
-    // 两种长度均小于 UINT16_MAX；单项计数最多为迁移表的 21 个源字段。
+    // 两种长度均小于 UINT16_MAX；单项计数最多为 2。
     const std::array stats{static_cast<uint8_t>(counts.migrated),
                            static_cast<uint8_t>(counts.skipped),
                            static_cast<uint8_t>(counts.invalid)};
@@ -292,26 +233,8 @@ esp_err_t migrateWithScratch(uint8_t *buffer, size_t capacity) noexcept
     if (!legacyEepromLength(len)) {
         return ESP_ERR_INVALID_SIZE;
     }
-#if defined(CONFIG_RTK_GNSS_RATE_HZ)
-    constexpr uint8_t kDefaultRate = CONFIG_RTK_GNSS_RATE_HZ;
-#else
-    constexpr uint8_t kDefaultRate = 1U;
-#endif
-    uint32_t savedRate = 0U;
-    const auto rateResult = readValue(kRateKey, savedRate);
-    if (rateResult != ESP_OK && rateResult != ESP_ERR_NVS_NOT_FOUND &&
-        rateResult != ESP_ERR_NVS_TYPE_MISMATCH) {
-        return rateResult;
-    }
-    // kRateKey 是 u8，readValue 成功时缩窄无损。
-    const auto rate = static_cast<uint8_t>(savedRate);
-    const auto fields =
-        decodeLegacyEeprom({buffer, len}, detail::isValidRateHz(rate) ? rate : kDefaultRate);
-    if (!fields.has_value()) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    Counts counts{.skipped = fields->skipped, .invalid = fields->invalid};
-    auto migration = migrateFields(*fields, counts);
+    Counts counts{};
+    auto migration = migrateFields({buffer, len}, counts);
     if (migration == ESP_OK) {
         // 已确认 len 为 2280 或 2560，转换无损。
         migration = finishMigration("v1", static_cast<uint16_t>(len), &counts);
@@ -329,7 +252,7 @@ esp_err_t migrateWithScratch(uint8_t *buffer, size_t capacity) noexcept
  */
 esp_err_t runMigration(nvs_store_boot_scratch_fn withScratch) noexcept
 {
-    const auto done = findStoredKey(NVS_STORE_CFG_PARTITION, NVS_STORE_MIG_NAMESPACE, kDone);
+    const auto done = findDoneMarker();
     if (done != ESP_ERR_NVS_NOT_FOUND) {
         return done;
     }

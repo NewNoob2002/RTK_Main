@@ -21,26 +21,16 @@ endforeach()
 add_executable(legacy_eeprom_test TestLegacyMigration.cpp FakeNvs.c
     "${root}/components/nvs_store/NvsStore.c"
     "${root}/components/settings/src/Registry.cpp"
-    "${root}/components/device_proto/Bytes.cpp"
-    "${root}/main/data/GnssOutput.cpp"
-    "${root}/main/modules/storage/LegacyEeprom.cpp"
-    "${root}/main/modules/storage/LegacyMigration.cpp"
-    "${root}/main/modules/storage/StoreKeys.cpp")
+    "${root}/main/modules/storage/LegacyMigration.cpp")
 target_include_directories(legacy_eeprom_test PRIVATE .
     "${root}/main" "${root}/components/nvs_store/include" "${root}/components/nvs_store/boot_include"
-    "${root}/components/app_fw/include" "${root}/components/device_proto/include"
-    "${root}/components/settings/include" "${root}/components/rtos/include"
-    "${root}/components/link_core/include" "${root}/components/link_core/private_include"
-    "${root}/components/spp_server/include" "${root}/components/stream_demux/include"
-    "${root}/components/gnss/include" "${root}/components/cli/include"
-    "${root}/tools/main_host_check/shim" "${root}/tools/t13_host_check/shim/inc")
+    "${root}/components/app_fw/include" "${root}/components/settings/include"
+    "${root}/tools/t13_host_check/shim/inc")
 target_compile_options(legacy_eeprom_test PRIVATE -Wall -Wextra -Werror -Wshadow
-    -ffunction-sections -fdata-sections
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti>
     $<$<COMPILE_LANGUAGE:C>:-Wstrict-prototypes>)
-# 仅保留迁移使用的 StoreKeys 和 GnssOutput 路径。
-target_link_options(legacy_eeprom_test PRIVATE -Wl,--gc-sections)
-foreach(scenario none bad_len bad_len_large unset golden fields boundaries preserve
+foreach(scenario none bad_len bad_len_large unset golden v31 boundaries invalid control_text
+                 preserve existing_type
                  write_failure readback_failure marker_failure scratch_failure freset)
     add_test(NAME legacy_eeprom_${scenario} COMMAND legacy_eeprom_test ${scenario}
         "${root}/test/fixtures/legacy_eeprom/v27_snpn.bin")

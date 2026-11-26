@@ -9,7 +9,7 @@
 #include "nvs_flash.h"
 #include "NvsStore.h"
 
-enum { NVS_FAKE_KEYS = 6, NVS_FAKE_BLOB_BYTES = 2561, NVS_FAKE_KEY_BYTES = 16 };
+enum { NVS_FAKE_KEYS = 4, NVS_FAKE_BLOB_BYTES = 2561, NVS_FAKE_KEY_BYTES = 16 };
 
 typedef struct {
     char key[NVS_FAKE_KEY_BYTES];
@@ -355,17 +355,6 @@ esp_err_t nvs_get_u16(nvs_handle_t handle, const char *key, uint16_t *out)
 esp_err_t nvs_set_u16(nvs_handle_t handle, const char *key, uint16_t value)
 {
     return save_entry(handle, key, NVS_TYPE_U16, &value, sizeof(value));
-}
-
-esp_err_t nvs_get_u32(nvs_handle_t handle, const char *key, uint32_t *out)
-{
-    size_t len = sizeof(*out);
-    return read_entry(handle, key, NVS_TYPE_U32, out, &len);
-}
-
-esp_err_t nvs_set_u32(nvs_handle_t handle, const char *key, uint32_t value)
-{
-    return save_entry(handle, key, NVS_TYPE_U32, &value, sizeof(value));
 }
 
 esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *out, size_t *len)

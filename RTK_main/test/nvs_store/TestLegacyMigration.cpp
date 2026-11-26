@@ -1,10 +1,9 @@
-// 用真实启动迁移、Registry 和 StoreKeys 对照旧 EEPROM 样本及 NVS 故障路径。
+// 用真实启动迁移、Registry 和 C6 双副本接口 对照旧 EEPROM 样本及 NVS 故障路径。
 // 单进程单线程，每个 CTest 场景从空 NVS 开始。
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstdio>
-#include <cstring>
 #include <source_location>
 #include <span>
 #include <string_view>
@@ -12,17 +11,15 @@
 #include "FakeNvs.h"
 #include "NvsStoreBoot.h"
 #include "fw/Log.hpp"
-#include "modules/storage/LegacyEeprom.hpp"
 #include "modules/storage/LegacyMigration.hpp"
-#include "rtos/EspStatus.hpp"
 
-// 下列偏移、宽度与期望字节独立引用 ADR 和手机协议，避免复制被测常量造成漏检。
+// 下列偏移、宽度与期望字节独立引用 ADR，避免复制被测常量造成漏检。
 // NOLINTBEGIN(readability-magic-numbers)
 namespace {
 
-using app::store::decodeLegacyEeprom;
 using app::store::migrateLegacyEeprom;
 using Blob = std::array<uint8_t, 2280>;
+using Pn = std::array<uint8_t, NVS_STORE_PN_BYTES>;
 
 unsigned s_scratch_calls = 0;
 unsigned s_summary_logs = 0;
@@ -36,16 +33,6 @@ void check(bool passed, std::source_location where = std::source_location::curre
         std::fprintf(stderr, "%s:%u: check failed\n", where.file_name(), where.line());
         std::abort();
     }
-}
-
-/** @brief 解码一个合法长度的样本，确保每条检查访问的是实际解码结果。 */
-app::store::LegacyFields decode(const Blob &blob, uint8_t rate)
-{
-    const auto fields = decodeLegacyEeprom(blob, rate);
-    if (!fields) {
-        std::abort();
-    }
-    return *fields;
 }
 
 /** @brief 提供测试用启动缓冲，可模拟分配失败。 */
@@ -83,22 +70,6 @@ void seed(std::span<const uint8_t> blob)
     check(nvs_set_blob(handle, "eeprom", blob.data(), blob.size()) == ESP_OK);
     check(nvs_commit(handle) == ESP_OK);
     nvs_close(handle);
-}
-
-/** @brief 按旧 EEPROM 小端格式设置一个 32 位字段。 */
-void setLe32(std::span<uint8_t> blob, size_t offset, uint32_t value)
-{
-    for (auto &byte : blob.subspan(offset, 4U)) {
-        byte = static_cast<uint8_t>(value & 0xFFU);
-        value >>= 8U;
-    }
-}
-
-/** @brief 向擦除态或样本 blob 注入以 NUL 结尾的文本。 */
-void setText(std::span<uint8_t> blob, size_t offset, std::string_view text)
-{
-    std::memcpy(blob.subspan(offset).data(), text.data(), text.size());
-    blob[offset + text.size()] = 0U;
 }
 
 /** @brief 加载任务随附的真机原始 blob。 */
@@ -159,7 +130,7 @@ void expectStats(uint16_t sourceLen, std::array<uint8_t, 3> expected)
 }
 
 /** @brief 分别读两个底层 NVS 实例，确认身份完全相同。 */
-void expectIdentity(std::string_view sn, const core::PhonePn &pn)
+void expectIdentity(std::string_view sn, const Pn &pn)
 {
     for (const bool system : {false, true}) {
         const char *partition = system ? NVS_STORE_SYSTEM_PARTITION : NVS_STORE_CFG_PARTITION;
@@ -174,142 +145,93 @@ void expectIdentity(std::string_view sn, const core::PhonePn &pn)
     }
 }
 
-constexpr core::PhonePn kGoldenPn{'1', '3', '2', '2', '1', '5', '0', '3', '0', '1', '0', '3', '2'};
+constexpr Pn kGoldenPn{'1', '3', '2', '2', '1', '5', '0', '3', '0', '1', '0', '3', '2'};
 
-/** @brief 构造覆盖所有字段的合成样本，基于真机样本按 §2.5 打补丁。 */
-Blob patched(Blob blob)
-{
-    std::ranges::copy(std::array<uint8_t, 9>{0, 1, 0, 1, 2, 3, 1, 0x80, 5},
-                      std::span{blob}.subspan(300U).begin());
-    setLe32(blob, 310U, 90U);
-    blob[314U] = 1U;
-    setText(blob, 320U, "json.example");
-    setLe32(blob, 352U, 0x1234U);
-    blob[356U] = 1U;
-    setText(blob, 360U, "client-id");
-    setText(blob, 376U, "test-user");
-    setText(blob, 392U, "test-pass");
-    setText(blob, 408U, "broker.example");
-    setLe32(blob, 440U, 0xFFFFU);
-    return blob;
-}
-
-/** @brief 校验合成 2560 B 的字段、帧与 round-trip 写入。 */
-void checkFields(const Blob &golden)
+/** @brief 以真机样本扩展到 2560 B，确认 V3.1 长度分支及源字节保留。 */
+void checkV31(const Blob &golden)
 {
     std::array<uint8_t, 2560> v31{};
     v31.fill(0xFFU);
-    std::ranges::copy(patched(golden), v31.begin());
+    std::ranges::copy(golden, v31.begin());
     seed(v31);
-    const auto gnss = open(NVS_STORE_CFG_PARTITION, "gnss", NVS_READWRITE);
-    check(nvs_set_u8(gnss, "rate", 5U) == ESP_OK);
-    nvs_close(gnss);
     boot();
     expectDone("v1");
-    expectStats(2560U, {21U, 0U, 2U});
+    expectStats(2560U, {2U, 0U, 0U});
     expectIdentity("202061126", kGoldenPn);
-    // 2 Hz -> 500 ms，与 5 Hz 不整除，距 200 ms 比距 1000 ms 更近。
-    // GSA 3 Hz -> 1000 ms；GSV 1 Hz -> SATSINFO/GSV 共用 -1；GST 为负值关闭。
-    constexpr std::array<uint8_t, 8> kOutput{1, 0x37, 5, 0xFF, 1, 0, 5, 0xFF};
-    constexpr std::array<uint8_t, 6> kSatellite{90, 0, 0, 1, 1, 1};
-    expectBlob(NVS_STORE_CFG_PARTITION, "gnss", "out", kOutput);
-    expectBlob(NVS_STORE_CFG_PARTITION, "rtk", "sat_cfg", kSatellite);
-    std::array<uint8_t, 42> json{};
-    setText(json, 0U, "json.example");
-    setLe32(json, 32U, 0x1234U);
-    expectBlob(NVS_STORE_CFG_PARTITION, "rtk", "json_srv", json);
-    std::array<uint8_t, 86> tb{};
-    tb[0] = 1U;
-    setText(tb, 2U, "client-id");
-    setText(tb, 18U, "test-user");
-    setText(tb, 34U, "test-pass");
-    setText(tb, 50U, "broker.example");
-    setLe32(tb, 82U, 0xFFFFU);
-    expectBlob(NVS_STORE_CFG_PARTITION, "rtk", "tb_cfg", tb);
     expectBlob(NVS_STORE_SYSTEM_PARTITION, "eeprom", "eeprom", v31);
 }
 
-/** @brief 对照有符号频率、截止角、定长文本及真实协议边界。 */
+/** @brief SN/PN 满宽时保留 16 字节，SN 的字符串终止符在目标中追加。 */
 void checkBoundaries()
 {
     Blob blob{};
     blob.fill(0xFFU);
-    check(!decodeLegacyEeprom(std::span{blob}.first(2279U), 1U));
-    check(!decodeLegacyEeprom(blob, 0U));
-    check(!decodeLegacyEeprom(blob, 3U));
-    const auto putSwitches = [&blob](uint8_t value) {
-        constexpr std::array<size_t, 6> kSwitches{300, 301, 302, 303, 314, 356};
-        for (const auto offset : kSwitches) {
-            blob[offset] = value;
-        }
-    };
-    putSwitches(2U);
-    setLe32(blob, 310U, 91U);
-    setText(blob, 200U, "a b");  // SN 空格不通过 factory.sn。
-    blob[216] = 0x80U;           // PN 非 ASCII。
-    setText(blob, 320U, "x\ny"); // 所有旧文本的控制字符视为未设置。
-    setText(blob, 360U, "x\ty");
-    setText(blob, 376U, "x\ry");
-    setText(blob, 392U, "x\x7Fy");
-    setText(blob, 408U, "");
-    auto fields = decode(blob, 1U);
-    check(fields.skipped == 18U && fields.invalid == 3U);
-    check(fields.satellite == core::SatTrackConfig::defaults());
-
-    // 16 和 32 字节定长字段都可能没有 NUL，下一字段不得被访问。
-    std::fill_n(std::span{blob}.subspan(200U).begin(), 16U, 'S');
-    std::fill_n(std::span{blob}.subspan(216U).begin(), 16U, 'P');
-    std::fill_n(std::span{blob}.subspan(320U).begin(), 32U, 'J');
-    std::fill_n(std::span{blob}.subspan(360U).begin(), 16U, 'C');
-    std::fill_n(std::span{blob}.subspan(376U).begin(), 16U, 'U');
-    std::fill_n(std::span{blob}.subspan(392U).begin(), 16U, 'P');
-    std::fill_n(std::span{blob}.subspan(408U).begin(), 32U, 'H');
-    setLe32(blob, 352U, 0U);
-    setLe32(blob, 440U, 0x80000000U);
-    putSwitches(0U);
-    setLe32(blob, 310U, 1U);
-    std::fill_n(std::span{blob}.subspan(304U).begin(), 5U, uint8_t{127U});
-    fields = decode(blob, 20U);
-    check(fields.skipped == 0U && fields.invalid == 5U);
-    check(std::string_view(fields.sn.data()) == "SSSSSSSSSSSSSSSS");
-    check(std::ranges::all_of(fields.pn, [](uint8_t c) { return c == 'P'; }));
-    check((fields.satellite == core::SatTrackConfig{1U, 0U, 0U, 0U, 0U, 0U}));
-    check((fields.output.intervals == std::array<int8_t, 6>{20, -1, 1, 20, 20, -1}));
-    check(fields.json.front() == 'J' && fields.json[31] == 'J' && fields.json[32] == 0U);
-    check(fields.thingsboard[17] == 'C' && fields.thingsboard[33] == 'U');
-    check(fields.thingsboard[49] == 'P' && fields.thingsboard[81] == 'H');
-    check(fields.thingsboard.back() == 0x80U);
-    setLe32(blob, 310U, 0U);
-    check(decode(blob, 1U).satellite.cutoffDeg == 15U);
-    setLe32(blob, 310U, 0x80000000U);
-    check(decode(blob, 1U).satellite.cutoffDeg == 15U);
-}
-
-/** @brief 预存 cfg 键及出厂身份，验证树上原值优先，包括异类型键。 */
-void checkPreserve(const Blob &golden)
-{
-    seed(patched(golden));
-    constexpr core::PhonePn kNewPn{'N', 'E', 'W'};
-    check(nvs_store_set_sn("NEW-SN") == ESP_OK);
-    check(nvs_store_set_pn(kNewPn.data()) == ESP_OK);
-    const auto rtk = open(NVS_STORE_CFG_PARTITION, "rtk", NVS_READWRITE);
-    check(nvs_set_u8(rtk, "sat_cfg", 4U) == ESP_OK);
-    constexpr core::PhoneJsonServerConfig kExistingJson{'n', 'e', 'w'};
-    check(nvs_set_blob(rtk, "json_srv", kExistingJson.data(), kExistingJson.size()) == ESP_OK);
-    check(nvs_set_u8(rtk, "tb_cfg", 6U) == ESP_OK);
-    const auto gnss = open(NVS_STORE_CFG_PARTITION, "gnss", NVS_READWRITE);
-    check(nvs_set_u8(gnss, "out", 7U) == ESP_OK);
+    std::ranges::fill(std::span{blob}.subspan(200U, 16U), 'S');
+    std::ranges::fill(std::span{blob}.subspan(216U, 16U), 'P');
+    Pn pn{};
+    pn.fill('P');
+    seed(blob);
     boot();
     expectDone("v1");
-    expectStats(2280U, {0U, 21U, 3U});
+    expectStats(2280U, {2U, 0U, 0U});
+    expectIdentity("SSSSSSSSSSSSSSSS", pn);
+}
+
+/** @brief 验证非法身份与未设置的控制字符或空串计数。 */
+void checkText(std::string_view scenario)
+{
+    Blob blob{};
+    blob.fill(0xFFU);
+    if (scenario == "invalid") {
+        std::ranges::copy(std::string_view{"a b"}, std::span{blob}.subspan(200U).begin());
+        blob[203U] = 0U;
+        blob[216U] = 0x80U;
+    } else {
+        blob[200U] = '\n';
+        blob[216U] = 0U;
+    }
+    seed(blob);
+    boot();
+    expectDone("v1");
+    if (scenario == "invalid") {
+        expectStats(2280U, {0U, 0U, 2U});
+    } else {
+        expectStats(2280U, {0U, 2U, 0U});
+    }
+    expectMissing(NVS_STORE_FACTORY_NAMESPACE, "sn");
+    expectMissing(NVS_STORE_FACTORY_NAMESPACE, "pn");
+}
+
+/** @brief 预存出厂身份，验证原值优先。 */
+void checkPreserve(const Blob &golden)
+{
+    seed(golden);
+    constexpr Pn kNewPn{'N', 'E', 'W'};
+    check(nvs_store_set_sn("NEW-SN") == ESP_OK);
+    check(nvs_store_set_pn(kNewPn.data()) == ESP_OK);
+    boot();
+    expectDone("v1");
+    expectStats(2280U, {0U, 2U, 0U});
     expectIdentity("NEW-SN", kNewPn);
+}
+
+/** @brief cfg 中存在异类型 SN 时保留原键，并继续迁移 PN。 */
+void checkExistingType(const Blob &golden)
+{
+    seed(golden);
+    auto handle = open(NVS_STORE_CFG_PARTITION, NVS_STORE_FACTORY_NAMESPACE, NVS_READWRITE);
+    check(nvs_set_u8(handle, "sn", 9U) == ESP_OK);
+    check(nvs_commit(handle) == ESP_OK);
+    nvs_close(handle);
+    boot();
+    expectDone("v1");
+    expectStats(2280U, {1U, 1U, 0U});
+    handle = open(NVS_STORE_CFG_PARTITION, NVS_STORE_FACTORY_NAMESPACE, NVS_READONLY);
     uint8_t value = 0U;
-    check(nvs_get_u8(rtk, "sat_cfg", &value) == ESP_OK && value == 4U);
-    expectBlob(NVS_STORE_CFG_PARTITION, "rtk", "json_srv", kExistingJson);
-    check(nvs_get_u8(rtk, "tb_cfg", &value) == ESP_OK && value == 6U);
-    check(nvs_get_u8(gnss, "out", &value) == ESP_OK && value == 7U);
-    nvs_close(rtk);
-    nvs_close(gnss);
+    check(nvs_get_u8(handle, "sn", &value) == ESP_OK && value == 9U);
+    nvs_close(handle);
+    expectBlob(NVS_STORE_CFG_PARTITION, NVS_STORE_FACTORY_NAMESPACE, "pn", kGoldenPn);
+    expectBlob(NVS_STORE_SYSTEM_PARTITION, NVS_STORE_BACKUP_NAMESPACE, "pn", kGoldenPn);
 }
 
 /** @brief 完成标记存在时即使源仍存在也不申请缓冲或重写。 */
@@ -324,36 +246,35 @@ void expectNoRepeat()
 /** @brief 校验中途写入、读回、标记提交、分配失败均可重试。 */
 void checkFailure(std::string_view scenario, const Blob &golden)
 {
-    seed(patched(golden));
+    seed(golden);
+    std::array<uint8_t, 3> expected{0U, 2U, 0U};
     if (scenario == "write_failure") {
-        fake_nvs_fail_key_write("json_srv");
+        fake_nvs_fail_key_write("pn");
+        expected = {1U, 1U, 0U};
     } else if (scenario == "readback_failure") {
-        fake_nvs_corrupt_key_read("json_srv");
+        fake_nvs_corrupt_key_read("pn");
     } else if (scenario == "marker_failure") {
         fake_nvs_fail_key_commit("done");
     } else {
         s_scratch_fails = true;
+        expected = {2U, 0U, 0U};
     }
     boot();
-    expectMissing("mig", "done");
+    expectMissing(NVS_STORE_MIG_NAMESPACE, "done");
     check(s_summary_logs == 0U);
-    if (scenario != "scratch_failure") {
-        expectIdentity("202061126", kGoldenPn);
-        const auto handle = open(NVS_STORE_CFG_PARTITION, "gnss", NVS_READWRITE);
-        check(nvs_set_u8(handle, "out", 42U) == ESP_OK);
-        nvs_close(handle);
+    if (scenario == "write_failure") {
+        std::array<char, NVS_STORE_SN_MAX + 1U> sn{};
+        check(nvs_store_get_sn(sn.data(), sn.size()) == ESP_OK);
+        check(std::string_view{sn.data()} == "202061126");
+        expectMissing(NVS_STORE_FACTORY_NAMESPACE, "pn");
+        check(nvs_store_set_sn("UPDATED") == ESP_OK);
     }
     s_scratch_fails = false;
     boot();
     expectDone("v1");
+    expectStats(2280U, expected);
     check(s_summary_logs == 1U && s_scratch_calls == 2U);
-    expectIdentity("202061126", kGoldenPn);
-    if (scenario != "scratch_failure") {
-        const auto handle = open(NVS_STORE_CFG_PARTITION, "gnss", NVS_READONLY);
-        uint8_t value = 0U;
-        check(nvs_get_u8(handle, "out", &value) == ESP_OK && value == 42U);
-        nvs_close(handle);
-    }
+    expectIdentity(scenario == "write_failure" ? "UPDATED" : "202061126", kGoldenPn);
     expectNoRepeat();
 }
 
@@ -373,14 +294,35 @@ void checkEmpty(std::string_view scenario)
         seed(std::span{empty}.first(2280U));
         boot();
         expectDone("v1");
-        expectStats(2280U, {0U, 21U, 0U});
+        expectStats(2280U, {0U, 2U, 0U});
     }
     check(s_scratch_calls == (scenario == "unset" ? 1U : 0U));
-    expectMissing("fac", "sn");
-    expectMissing("rtk", "sat_cfg");
-    expectMissing("rtk", "json_srv");
-    expectMissing("rtk", "tb_cfg");
-    expectMissing("gnss", "out");
+    expectMissing(NVS_STORE_FACTORY_NAMESPACE, "sn");
+    expectMissing(NVS_STORE_FACTORY_NAMESPACE, "pn");
+    expectNoRepeat();
+}
+
+/** @brief 金样验证以及恢复出厂后保留迁移标记和身份的验证。 */
+void checkGolden(const Blob &golden, bool reset)
+{
+    seed(golden);
+    boot();
+    expectDone("v1");
+    expectStats(2280U, {2U, 0U, 0U});
+    expectIdentity("202061126", kGoldenPn);
+    expectBlob(NVS_STORE_SYSTEM_PARTITION, "eeprom", "eeprom", golden);
+    if (reset) {
+        const auto handle = open(NVS_STORE_CFG_PARTITION, "rtk", NVS_READWRITE);
+        check(nvs_set_u8(handle, "pair_next", 1U) == ESP_OK);
+        check(nvs_commit(handle) == ESP_OK);
+        nvs_close(handle);
+        check(nvs_store_erase_user() == ESP_OK);
+        expectNoRepeat();
+        expectDone("v1");
+        expectIdentity("202061126", kGoldenPn);
+        expectBlob(NVS_STORE_SYSTEM_PARTITION, "eeprom", "eeprom", golden);
+        expectMissing("rtk", "pair_next");
+    }
     expectNoRepeat();
 }
 
@@ -398,12 +340,6 @@ void logLine(LogLevel, TraceCat cat, const char *fmt, ...) noexcept
 
 } // namespace fw
 
-/** @brief 提供 StoreKeys 写入许可中未启用的关机计时后端。 */
-uint32_t rtos::nowMs() noexcept
-{
-    return 0U;
-}
-
 /** @brief 每个场景独立运行以隔离 NVS 替身状态。 */
 // NOLINTNEXTLINE(misc-const-correctness): main 的标准签名。
 int main(int argc, char **argv)
@@ -415,33 +351,21 @@ int main(int argc, char **argv)
         checkEmpty(scenario);
     } else if (scenario == "boundaries") {
         checkBoundaries();
+    } else if (scenario == "invalid" || scenario == "control_text") {
+        checkText(scenario);
     } else {
         const auto golden = loadGolden(args[2U]);
-        if (scenario == "fields") {
-            checkFields(golden);
+        if (scenario == "v31") {
+            checkV31(golden);
         } else if (scenario == "preserve") {
             checkPreserve(golden);
+        } else if (scenario == "existing_type") {
+            checkExistingType(golden);
         } else if (scenario.ends_with("_failure")) {
             checkFailure(scenario, golden);
         } else {
             check(scenario == "golden" || scenario == "freset");
-            seed(golden);
-            boot();
-            expectDone("v1");
-            expectStats(2280U, {13U, 8U, 0U});
-            expectIdentity("202061126", kGoldenPn);
-            expectBlob(NVS_STORE_SYSTEM_PARTITION, "eeprom", "eeprom", golden);
-            if (scenario == "freset") {
-                check(nvs_store_erase_user() == ESP_OK);
-                expectNoRepeat();
-                expectDone("v1");
-                expectIdentity("202061126", kGoldenPn);
-                expectBlob(NVS_STORE_SYSTEM_PARTITION, "eeprom", "eeprom", golden);
-                expectMissing("gnss", "out");
-                expectMissing("rtk", "sat_cfg");
-                expectMissing("rtk", "tb_cfg");
-            }
-            expectNoRepeat();
+            checkGolden(golden, scenario == "freset");
         }
     }
 }

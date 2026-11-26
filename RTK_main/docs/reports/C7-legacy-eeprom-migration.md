@@ -1,82 +1,63 @@
-# C7 · 旧 EEPROM 配置迁移
+# C7 · 旧 EEPROM 的 SN/PN 迁移
 
-实现分支为 `feat/c7-migration`，门禁和资源基线为发令指定的 `fec6ce8`。验证档位为 ESP32 / ESP-IDF v6.1，C++20 T2。依据 [C7 任务卡](../tasks/C7-legacy-eeprom-migration.md) 和 [ADR-0022 §2.4、§2.5、§4](../adr/ADR-0022-legacy-partition-migration.md)。
+实现分支为 `feat/c7-migration`，门禁与资源基线为 `fec6ce8`。验证平台为 ESP32 / ESP-IDF v6.1，应用代码按 C++20 T2。迁移范围以已在本分支的 `5f04f9f`（2026-11-26 用户决定）为准。[ADR-0022 §2.4、§2.5、§4](../adr/ADR-0022-legacy-partition-migration.md)
 
-## 改动清单
+原任务卡还要求迁移星座、NMEA 频率、截止角、SBAS、JSON 服务器、ThingsBoard，并记录两个手机帧的布局。ADR 修订取消了这些项目及对应测试。升级后这些功能沿用新固件已有配置或默认值，需要调整时由用户在 nav App 重新配置。V3.1 长度分支仍以合成样本验证。[原 C7 任务卡](../tasks/C7-legacy-eeprom-migration.md)
+
+## 改动与迁移流程
 
 | 路径 | 改动 |
 | --- | --- |
-| `main/modules/storage/LegacyEeprom.{hpp,cpp}` | 纯 C++ 解码器。V2.7 和 V3.1 共用只读地址表。选在应用存储层，以便共用 Settings Registry、GNSS 输出编码和手机兼容帧类型。 |
-| `main/modules/storage/LegacyMigration.{hpp,cpp}` | 检查旧键和完成标记，借用启动缓冲，按目标键提交并读回，最后写 `mig/done`。现有目标键优先，键的存在性检查与其 NVS 类型无关。 |
-| `components/nvs_store/{NvsStore.c,CMakeLists.txt,boot_include/NvsStoreBoot.h}`、`main/app/BootFlow.cpp` | 在 `stepEarlyConfig` 注册一次性钩子。两个实例均初始化成功且 C6 已比对身份副本后运行，早于启动计数及用户配置读取。迁移用既有 C6 scratch 提供者和系统 EEPROM 只读路径。 |
-| `test/nvs_store/` | 在既有 G2/G2b 套件加入真实迁移路径的 C++ 测试和定向 NVS 故障注入。 |
-| `docs/PROGRESS.md`、本报告 | 记录实现与验证状态。G1 已验证冻结清单，包括既有 `NvsStore.h`。 |
+| `main/modules/storage/LegacyMigration.{hpp,cpp}` | 沿用启动迁移和提交框架，只从 EEPROM 解析 SN/PN。删除此前的 `LegacyEeprom.{hpp,cpp}`、其余字段的地址、编码和测试依赖。 |
+| `main/app/BootFlow.cpp`、`components/nvs_store/{NvsStore.c,boot_include/NvsStoreBoot.h}` | `stepEarlyConfig` 注册一次性钩子。两个实例就绪且 C6 已比对身份副本后、读取用户配置前运行。迁移复用 C6 的身份键名、命名空间、双写、读取和启动缓冲。 |
+| `test/nvs_store/` | 删除已取消字段的用例与替身接口，保留并扩展身份迁移及重试覆盖。 |
+| `docs/PROGRESS.md`、本报告 | 同步范围、门禁基线和资源测量。 |
 
-有效长度为 2280 或 2560 B。源缺失与长度异常分别提交 `none`、`bad_len`，两者和已有 `done` 路径均无需借缓冲。迁移完成写 `mig/src_len`（u16）和 `mig/stats`（按迁移、跳过、非法排列的 3 个 u8），验证后提交 `mig/done = v1`。统计以旧字段为单位，SN/PN 的两个副本各合计为一个源字段。同一目标 blob 内的有效字段一起写入或跳过。频率取整同时计迁移和非法，遇已有目标键时则同时计跳过和非法。中途失败保留本轮成功提交的键供下次启动跳过，因此重试后的统计反映完成标记提交当轮的处理结果。系统 NVS 的 `eeprom/eeprom` 保留原始字节。
+已有 `mig/done` 时直接跳过。系统 NVS 缺少 `eeprom/eeprom` 时提交 `none`，长度既非 2280 B 也非 2560 B 时提交 `bad_len`。这三条路径无需借用缓冲。有效长度使用 C6 启动缓冲读取全 blob。任一身份目标键已存在时保留该身份。新值写入两实例并逐份读回，随后提交和校验 `mig/src_len`（u16）与 `mig/stats`（迁移、跳过、非法，各 1 字节），最后提交 `mig/done = v1`。中途失败由下一次启动重试。旧 blob 始终以只读方式访问。`freset` 保留身份、`mig` 和旧 blob，后续启动跳过迁移。
+
+**重试计数口径**。日志和 `mig/stats` 记录最终提交标记那一轮的字段处理结果。一轮中未设置和已有目标键均计入 `skipped`。例如首轮写入 SN 后 PN 写失败，次轮正常完成会记录 `1 migrated / 1 skipped / 0 invalid`，累计实际导入了两个字段。保留这一本轮口径，因为已有键也可能来自产线或用户修改，现有键值无法证明它是上一轮迁移写入的。测试还在两轮之间更新 SN，确认重试保留新值。无故障的 V2.7 金样期望为 `2 / 0 / 0`。
 
 ## 字段映射
 
-| 旧字段 | 偏移 / 宽度（B） | 目标 | 校验与编码 | 覆盖 |
+| 旧字段 | 偏移 / 宽度（B） | 目标键 | 校验与编码 | 覆盖 |
 | --- | --- | --- | --- | --- |
-| SN | 200 / 16 | `fac/sn`、`facbk/sn` | `factory.sn` 的 Registry 校验，1–16 字节、ASCII 0x21–0x7E，C6 双写并分别回读。 | V2.7 真机金样、合成边界 |
-| PN | 216 / 16 | `fac/pn`、`facbk/pn` | C6 接受的可打印 ASCII，原文保留，NUL 后零填充成 16 字节。 | V2.7 真机金样、合成边界 |
-| GPS / BDS / GLO / GAL | 300–303 / 各 1 | `gnss.const.*` → `rtk/sat_cfg` | 接受 0/1，其余值按未设置。按现有 6 B 编码和 Registry 校验。 | 合成覆盖，金样为旧默认 |
-| GGA / GSA / GSV / GST / RMC | 304–308 / 各 1 | `gnss.out.*` → `gnss/out` | 旧有符号字节。`0xFF` 为未设置，0 与其他负值关闭。正值选最接近 `1000/Hz` 的可编码且与定位周期整除的正周期，同距取较长值。GSA/GSV 最短正周期为 1000 ms，GSV 用固件现有 SATSINFO/GSV 共享周期。 | 合成覆盖，金样为旧默认 |
-| 截止角 | 310 / 4，int32 LE | `gnss.cutoff` → `rtk/sat_cfg` | 1–90 度。≤0 按未设置，沿用默认 15 度。>90 计非法。 | 合成覆盖 |
-| SBAS | 314 / 1 | `rtk/sat_cfg` 最后一字节 | 接受 0/1，未设置沿用默认关。启动迁移早于接收机探测，先保存旧设置。探测后沿用 Survey 0x06 的能力掩码，F9P 无 SBAS 支持时查询值清零，重放跳过 SBAS 命令。 | 合成覆盖，既有 F9P HPG 1.12/1.13+ 主机回归 |
-| JSON 地址、端口 | 320 / 32、352 / 4 | `rtk/json_srv` | 保留有值的旧地址及 4 B LE 端口，按下表零填充未设置字节。 | 合成覆盖 |
-| TB 开关、client ID、用户、密码、主机、端口 | 356 / 1、360 / 16、376 / 16、392 / 16、408 / 32、440 / 4 | `rtk/tb_cfg` | 开关接受 0/1，字符串和端口原始字段按下表定位。 | 合成覆盖，金样为旧默认 |
+| SN | 200 / 16 | `fac/sn`、`facbk/sn` | 复用 `factory.sn` 的 Registry 校验。有效文本为 1–16 字节、ASCII 0x21–0x7E，保存为 NVS 字符串。 | V2.7 真机、V3.1 合成、满宽和非法值 |
+| PN | 216 / 16 | `fac/pn`、`facbk/pn` | 按 C6 的定长接口接受可打印 ASCII，原文保留到首个 NUL，末尾补零至 16 字节。 | V2.7 真机、V3.1 合成、满宽和非法值 |
 
-字符串读取到字段宽度或首个 NUL。空串、全擦除字节、包含 ASCII 控制字符或 DEL 的文本按未设置。合成载荷保留完整的 16/32 字节定长文本边界。端口的 `0xFFFFFFFF` 是未设置，其余值原样保留 4 B，包括零和最高位，符合预留帧的原始数据语义。
+两版共用只读偏移表。空串、全擦除字节、包含 ASCII 控制字符或 DEL 的文本按未设置处理。
 
-固件实际将星座、截止角和 SBAS 共存于 `rtk/sat_cfg`，顺序是截止角、GPS、GLO、BDS、GAL、SBAS。任务卡的 0x24 在现有手机代码中对应天线高，卫星设置使用 Survey 0x06。输出共存于 8 B `gnss/out`，保留默认 HEADINGA，并使用现有 `periodMsToInterval` 与 `GnssOutConfig` 编码。对尚未探测到的接收机，按已保存的合法 `gnss/rate` 或固件缺省值对齐，具体型号的周期收敛由已有 GNSS 启动路径处理。
+## 资源与启动测量
 
-## JSON / ThingsBoard 手机载荷
-
-V2.7 `meaasge.ino:497–566` 与 V3.1 `main/user_src/user_bt_message.c:559–628` 的 Nav 布局相同。V3.1 `main/user_src/user_eeprom.c:62–71,194–201` 确认了持久化字段。现行 `PhoneCompatService.cpp` 令 JSON SET 至少带 38 B，复制到零初始化的 42 B。ThingsBoard SET 复制完整的 86 B。两个 QUERY 返回相同定长的存储载荷。
-
-| 帧 | 载荷偏移 / 宽度（B） | 字段 | 宽度处理 |
-| --- | --- | --- | --- |
-| 0x32 / 42 B | 0 / 32、32 / 4 | 地址、LE 端口 | 等宽。地址首个 NUL 后填零，端口逐字节保留。 |
-| 0x32 / 42 B | 36 / 1、37 / 1、38 / 4 | enable、status、保留 | EEPROM 没有对应持久化字段，全部填零。 |
-| 0x33 / 86 B | 0 / 1、1 / 1 | enable、status | enable 等宽，旧运行状态 status 填零。 |
-| 0x33 / 86 B | 2 / 16、18 / 16、34 / 16、50 / 32、82 / 4 | client ID、用户、密码、主机、LE 端口 | 等宽。文本首个 NUL 后填零，满宽文本保留全部字节，端口逐字节保留。 |
-
-持久化源字段与帧内字段等宽，无截断。某帧完全未设置时省略该 NVS 键。两帧仍为 ADR-0021 的存储预留，APN、NTRIP、围栏由后续卡迁移。
-
-## 资源和启动测量
-
-| ESP32 默认构建 / B | `fec6ce8` | C7 | 增量 |
+| ESP32 默认构建 / B | `fec6ce8` | SN/PN 版 C7 | 对基线增量 |
 | --- | ---: | ---: | ---: |
 | 静态 DRAM | 98,619 | 98,627 | +8 |
 | IRAM | 116,139 | 116,139 | 0 |
-| Flash code | 1,143,244 | 1,146,988 | +3,744 |
-| Flash data | 275,580 | 276,124 | +544 |
-| `rtk_main.bin` | 1,588,400 | 1,592,688 | +4,288 |
+| Flash code | 1,143,244 | 1,144,724 | +1,480 |
+| Flash data | 275,580 | 275,820 | +240 |
+| `rtk_main.bin` | 1,588,400 | 1,590,112 | +1,712 |
 
-每槽剩余 373,392 B。基线从 `fec6ce8` 归档到 C7 的构建目录并用相同工具链重建，大小日志为 `builds/c7-logs/{baseline,current}.size.log`。G7b 通过，自有运行期代码新增堆分配为 0。迁移首启临时借用 2560 B 的 C6 BootArena scratch，回调返回后释放。
+`idf.py size` 对照同一工具链重建的基线，日志见 `builds/c7-logs/{baseline,current}.size.log`。相比返工前的 `def6761`，镜像减少 2,576 B，每槽剩余 375,968 B。G7b 通过。自有运行期代码新增堆分配为 0，首启迁移临时借用 2560 B 的 C6 BootArena scratch，回调返回后释放。
 
-实际 Xtensa 编译参数增加 `-fstack-usage -fcallgraph-info=su` 后，`withNvsBootScratch` 为 928 B，迁移入口 64 B，迁移回调 272 B，纯解码 592 B。由 `app_main` 至卫星 Registry 校验入口的已统计栈帧合计 2800 B（`builds/c7-stack/*.su`），此小计不含 SDK 任务入口或库内部。主任务配置栈为 3584 B。设备栈高水位为 **NOT_RUN**。
+Xtensa `-fstack-usage -fcallgraph-info=su` 测得 scratch 提供者 928 B、迁移入口 64 B、迁移回调 80 B、字段处理 288 B。从 `app_main` 到 SN 的 Registry 校验入口，已统计栈帧合计 2304 B，记录见 `builds/c7-fix-stack/*.su`。此小计未计入 SDK 任务入口和库内部栈。主任务配置栈为 3584 B，设备高水位 **NOT_RUN**。
 
-Linux 主机用内存 NVS 和 2500 次样本测量 init 到迁移返回，首次对照中位 180 ns、执行迁移 1539 ns（+1359 ns），后续对照 161 ns、命中 done 163 ns（+2 ns）。构建为 MinSizeRel，结果在 `builds/c7-logs/host-timings.log`。设备 Flash I/O 和日志时延需以同一设备的基线、首次迁移和后续重启 `earlyConfig.tookMs` 对照，设备时间增量为 **NOT_RUN**。
+Linux MinSizeRel 构建用内存 NVS 与 V2.7 金样执行 2500 次对照。初始化对照与首次迁移的中位时间分别为 149 ns、738 ns（+589 ns），后续初始化对照与命中 `done` 分别为 152 ns、173 ns（+21 ns）。日志见 `builds/c7-logs/host-timings.log`。设备 `earlyConfig.tookMs` 的首次与后续增量 **NOT_RUN**。
 
 ## 测试结果
 
 | 检查 | 结果 |
 | --- | --- |
-| `tools/ci/run_gates.sh --prefix c7 --base fec6ce8` | **PASS 43/43**。使用任务指定的 `IDF_PATH` 与 `IDF_PYTHON_ENV_PATH`，保留 ASan/UBSan 和 LeakSanitizer。包括 G1 冻结、G3/G3b 所有目标构建、G5/G5b/G6 和 G7b/G7c。日志 `builds/c7-logs/summary.log`。 |
-| G2/G2b `test/nvs_store` | **PASS 26/26**，两种构建分别执行，含 13 个已有 C6 场景和 13 个新增场景。覆盖新板、两种不支持长度、全未设置、2280 B 金样、2560 B 合成、字段边界、现有值优先、写入和读回故障、标记提交失败、缓冲不足、重启幂等和 `freset`。同时验证 SN/PN 双副本与旧 EEPROM 字节保留。 |
-| 修复前后对照 | `git cat-file -e c81f172:RTK_main/main/modules/storage/LegacyMigration.hpp` 证实基线缺少迁移入口，`NvsStoreBoot.h` 同样不存在。C7 新用例如上通过。 |
-| TSan `tools/t13_host_check` | 基线与 C7 均为 **45 PASS / 1 FAIL（既有）**。均只在 `t13_init_start_timeout` 报告 `s_spp` 竞态（`SppServerInit.c:41,53`），无新增失败。日志 `builds/c7-logs/tsan-{baseline,current}.log`。 |
-| V3.1 真机金样、V3.1 旧 bootloader 冒烟 | **NOT_RUN**。任务未提供该线设备，2560 B 分支用同地址的合成样本验证。 |
-| 20 KB NVS 原区端到端解析 | **NOT_RUN**。使用任务提供的独立 2280 B 真机 blob，经系统 NVS 替身覆盖启动迁移。 |
+| `tools/ci/run_gates.sh --prefix c7 --base fec6ce8` | **PASS 43/43**。使用指定的 `IDF_PATH` 和 `IDF_PYTHON_ENV_PATH`，启用 ASan/UBSan 与 LeakSanitizer。门禁日志为 `builds/c7-logs/summary.log`。 |
+| G2/G2b `test/nvs_store` | 普通与 ASan/UBSan 各 **PASS 29/29**，含 13 个 C6 和 16 个 C7 用例。覆盖新板、异常长度、全未设置、金样、2560 B 合成版本、SN/PN 满宽和非法值、同类型和异类型已有键、写入和读回故障、标记提交失败、缓冲不足、重启幂等、旧 blob 保留和 `freset`。 |
+| 修复前后对照 | `c81f172` 无迁移入口。返工前的 `def6761` 对 V2.7 SN/PN 金样记录了 `13 / 8 / 0`，新测试验证只统计 SN/PN 时为 `2 / 0 / 0`。 |
+| TSan `tools/t13_host_check` | 初版基线和 C7 均为 **45 PASS / 1 FAIL（既有）**，仅 `t13_init_start_timeout` 报 `s_spp` 竞态。返工未涉及该套件及生产依赖。 |
+| V3.1 真机金样、V3.1 bootloader 冒烟、20 KB NVS 整区端到端解析 | **NOT_RUN**。V3.1 使用扩展至 2560 B 的合成样本，V2.7 使用任务提供的 2280 B 真机 blob，均通过系统 NVS 替身验证。 |
 
 ## HIL 由 Architect 与用户执行
 
 | ADR-0022 §4 | 本卡结果 |
 | --- | --- |
-| 1. 准备 Arduino V2.7 旧 bootloader、分区表和应用，在旧 App 设置各字段。 | **NOT_RUN** |
-| 2. 读出系统 NVS 整区，对照完整旧配置金样。 | **NOT_RUN** |
-| 3. 旧网页 OTA 后验证引导、迁移计数、各键、SN/PN 双副本和蓝牙绑定。 | **NOT_RUN** |
-| 4. 新固件网页 OTA 与切回旧槽，验证 otadata、旧配置和系统 NVS 保留。 | **NOT_RUN** |
-| 5. `freset` 后核对用户默认值、身份与迁移状态保留，以及后续启动跳过迁移。 | **NOT_RUN**，主机回归已覆盖。 |
+| 1. 准备 Arduino V2.7 旧 bootloader、分区表及应用，在旧 App 写 SN/PN。 | **NOT_RUN** |
+| 2. 读出系统 NVS 整区，对照 SN/PN。 | **NOT_RUN** |
+| 3. 旧网页 OTA 后确认引导、迁移计数、身份双副本和蓝牙绑定。 | **NOT_RUN** |
+| 4. 新网页 OTA 和切回旧槽，验证 otadata、旧配置和系统 NVS 保留。 | **NOT_RUN** |
+| 5. `freset` 后核对用户配置回默认、身份和迁移状态保留，并确认启动跳过迁移。 | **NOT_RUN**，主机回归已覆盖。 |
