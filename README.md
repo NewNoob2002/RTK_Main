@@ -113,7 +113,7 @@ cmake -S test/host -B builds/qa-host && cmake --build builds/qa-host && ctest --
 | --- | --- |
 | `RTK_main/AGENTS.md` | 工程事实、组件依赖、冻结文件、命令、代理协作规则 |
 | `RTK_main/docs/PROGRESS.md` | 已完成系列、进行中项目、待补 HIL |
-| `RTK_main/docs/adr/` | 架构决定记录 ADR-0002～0021（ADR-0001 在 `reference/c-v1/`） |
+| `RTK_main/docs/adr/` | 架构决定记录 ADR-0002～0022（ADR-0001 在 `reference/c-v1/`） |
 | `RTK_main/docs/CODING-STYLE.md` | 编码规范 |
 | `RTK_main/docs/acceptance.md` | 门禁与 HIL 验收标准 |
 | `RTK_main/docs/protocol/` | 手机、报警器、测量协议 |
