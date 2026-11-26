@@ -36,12 +36,12 @@
 | O1–O3 | 网页 OTA：固件侧、上传页与 mock、HIL 修正与 fence 分区；HIL 通过（升级 ~35 s、30 s 自动确认、并发 408、断 Wi-Fi、长按电源键中止） | 0019 | `04c2f12`、`33a7a09`、`0f18f66`、合入 `1b01eef` |
 | OL1–OL6 | SH1106 OLED（共享 I2C0、WouoUI 子集）、开机自检/表盘/子页、真实关机进度、待机页、SDL2 模拟器、30 fps 节拍与局部刷新、两选项弹窗、COMM 页 SoftAP 信息；2026-11-25 P2 v1.41 + F9P HIL 通过（`oled bench 10` 30.0 fps / CPU 3.8% / i2c_errors 0；报告 `docs/reports/OL1-oled.md`、`OL2-oled-ui.md`） | 0020 | 合入 `2eb65ba`、`c2e9293` |
 | PW1 | 关机参与者登记表（kSave/kQuiesce 外部登记）、保存超时 3 s、低电保持 120 s、`ShutdownReason::kWeb` 预留、电池/USB 终帧拆分、`power simbat` 低电 HIL 注入；DRAM +136 B / IRAM 0；2026-11-25 P2 v1.41 HIL 通过（长按/8 s 强制/控制台/低电 120 s/终帧插 USB/USB 在位关机；报告 `docs/reports/PW1-shutdown-participants.md` §4.1） | 0015、0020 | 合入 `7874dcd` |
+| OL7 | 关机确认弹窗单选项（单击/双击确认、5 s 超时取消，Wi-Fi/配对仍两选项）、OLED 5 格电量（降 3 点/30 s、升 5 点/60 s 滞回、充电循环填充、拔 USB 保持 60 s、<10% 闪烁、simbat 立即重定格）；`PowerSnapshot` 增 `batterySimSession`；DRAM +8 B / IRAM 0；2026-11-26 P2 v1.41 HIL 通过（报告 `docs/reports/OL7-dialog-battery-bars.md`；滞回门限未经实测放电曲线校准） | 0020 | 合入 `a1a78e9` |
 
 ## 2. 进行中与未开始
 
 | 项 | 状态 |
 | --- | --- |
-| OL7 关机弹窗单选项 + 电量格数显示 | 已分派（卡 `docs/tasks/OL7-dialog-battery-bars.md`，分支 `feat/ol7-dialog-battery`） |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
 | 4G | 未立项，需新 ADR，必须走 ADR-0018 的服务与总线 |
