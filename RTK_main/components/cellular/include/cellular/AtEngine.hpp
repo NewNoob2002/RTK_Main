@@ -325,6 +325,7 @@ private:
     bool probeAlt_ = true;        // 交替使用两条前缀互异的只读探针，避免被迟到的同形应答冒充
     bool quietThenProbe_ = false; // kQuiet 结束后：true 发探针，false 直接发队首命令
     bool quietDone_ = false;      // 队首命令已完成静默等待（quietFirst 只等一次）
+    uint32_t txSeq_ = 0U;         // 每次向模块发出命令/探针递增：feed 据此丢弃同批旧字节（r5 F1）
     uint32_t lastRxMs_ = 0U;      // 最近一次收到字节（或丢字节通知）的时间
     AtStats stats_{};
 };

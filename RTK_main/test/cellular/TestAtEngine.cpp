@@ -525,6 +525,37 @@ void testRegReplyNeedsPrefixAndShape()
     TEST_ASSERT_EQUAL(AtResult::kOk, h.done[0].result);
 }
 
+// r5 F1：命令完成后同一 RX 块的剩余字节是旧数据，不得完成紧接着发出的下一条命令。
+void testSameChunkTailNotDeliveredToNextCommand()
+{
+    Harness h;
+    setupHarness(h);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CSQ", 1000U), 0U));
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+GSN", 1000U), 0U));
+    // 一次 feed：第一条的 OK 之后紧跟旧数据 "\r\nOK\r\n"，它在 AT+GSN 发出之前就已到达。
+    feedStr(h, "+CSQ: 20,0\r\nOK\r\nOK\r\n", 10U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL_STRING("AT+CSQ\rAT+GSN\r", h.tx.c_str());
+    // 第二条只能由发出之后读入的字节完成。
+    feedStr(h, "861234\r\nOK\r\n", 20U);
+    TEST_ASSERT_EQUAL_UINT32(2U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL(AtResult::kOk, h.done[1].result);
+    TEST_ASSERT_EQUAL_UINT32(1U, h.engine.stats().stale);
+}
+
+// r5 F3：单字段/缺 n 的注册行（如 "+CEREG: ,3"）不是查询应答形状，不得被 isRegQueryLine 接受。
+void testRegQueryShapeRequiresNAndStat()
+{
+    TEST_ASSERT_TRUE(cellular::isRegQueryLine("+CEREG: 2,1"));
+    TEST_ASSERT_TRUE(cellular::isRegQueryLine("+CGREG: 0,5"));
+    TEST_ASSERT_FALSE(cellular::isRegQueryLine("+CEREG: ,3"));
+    TEST_ASSERT_FALSE(cellular::isRegQueryLine("+CEREG: 1"));
+    TEST_ASSERT_FALSE(cellular::isRegQueryLine("+CREG: \"1\""));
+    cellular::RegStatus reg = cellular::RegStatus::kUnknown;
+    TEST_ASSERT_FALSE(cellular::parseReg("+CEREG: ,3", reg));
+    TEST_ASSERT_EQUAL(cellular::RegStatus::kUnknown, reg);
+}
+
 } // namespace
 
 extern "C" void setUp(void) {}
@@ -559,5 +590,7 @@ int main()
     RUN_TEST(testRxLostDuringProbeCountsTowardsDead);
     RUN_TEST(testPowerDownSettlesAndClearsResync);
     RUN_TEST(testRegReplyNeedsPrefixAndShape);
+    RUN_TEST(testSameChunkTailNotDeliveredToNextCommand);
+    RUN_TEST(testRegQueryShapeRequiresNAndStat);
     return UNITY_END();
 }

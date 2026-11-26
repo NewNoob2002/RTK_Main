@@ -70,6 +70,8 @@ public:
         std::atomic<bool> shutdownDone{false};
         std::atomic<uint32_t> shutdownDeadline{0U}; // PW1 传入的绝对截止时刻（0=未指定）
         std::atomic<bool> pwrenFault{false};        // 最近一次拉低 PWREN 的 GPIO 调用失败
+        std::atomic<bool> cutCleanupPending{
+            false}; // PW1 硬切已成功：kNet 须在消费任何 RX 前先做断电清理（r5 F2）
         std::atomic<bool> forceCutReq{false}; // PW1 硬切请求（onTimeout 由 PowerModule 任务置位）
         std::atomic<uint8_t> phaseMirror{static_cast<uint8_t>(cellular::Phase::kOff)};
     };
@@ -245,6 +247,7 @@ private:
     [[nodiscard]] bool cutPower() const noexcept;
     void applyConfig() noexcept;
     void updatePolicy(uint32_t nowMs) noexcept;
+    void serviceCutCleanup(uint32_t nowMs) noexcept;
     void serviceShutdown(uint32_t nowMs) noexcept;
     void serviceAtMailbox(uint32_t nowMs) noexcept;
     [[nodiscard]] bool drainUart(uint32_t nowMs) noexcept;

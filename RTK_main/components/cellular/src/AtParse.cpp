@@ -112,6 +112,20 @@ bool parseCsq(std::string_view line, uint8_t &csq) noexcept
     return true;
 }
 
+/**
+ * @brief 判断注册行参数是否具备查询应答形状 <n>,<stat>（r5 F3：n 与 stat 均为非空纯数字）
+ * @param args: 冒号之后的参数文本
+ * @retval true n、stat 两个字段都存在且为纯数字
+ */
+bool hasRegQueryShape(std::string_view args) noexcept
+{
+    int32_t tmp = 0;
+    const std::string_view first = fieldAt(args, 0U);
+    const std::string_view second = fieldAt(args, 1U);
+    return !first.empty() && parseInt(first, tmp) && !second.empty() && (second.front() != '"') &&
+           parseInt(second, tmp);
+}
+
 bool parseReg(std::string_view line, RegStatus &reg) noexcept
 {
     if (!line.starts_with("+CEREG:") && !line.starts_with("+CREG:") &&
@@ -119,10 +133,8 @@ bool parseReg(std::string_view line, RegStatus &reg) noexcept
         return false;
     }
     const std::string_view args = argsOf(line);
-    const std::string_view second = fieldAt(args, 1U);
-    int32_t tmp = 0;
-    // 第二字段为纯数字 → 查询应答 <n>,<stat>；否则（缺失或带引号的 tac/ci）→ URC <stat>[,...]。
-    const bool isQuery = !second.empty() && (second.front() != '"') && parseInt(second, tmp);
+    // n、stat 均为纯数字 → 查询应答 <n>,<stat>；否则（缺失或带引号的 tac/ci）→ URC <stat>[,...]。
+    const bool isQuery = hasRegQueryShape(args);
     int32_t stat = 0;
     if (!parseInt(fieldAt(args, isQuery ? 1U : 0U), stat) || (stat < 0) || (stat > kMaxRegStat)) {
         return false;
@@ -203,9 +215,7 @@ bool isRegQueryLine(std::string_view line) noexcept
         !line.starts_with("+CGREG:")) {
         return false;
     }
-    const std::string_view second = fieldAt(argsOf(line), 1U);
-    int32_t tmp = 0;
-    return !second.empty() && (second.front() != '"') && parseInt(second, tmp);
+    return hasRegQueryShape(argsOf(line));
 }
 
 bool isCpinLine(std::string_view line) noexcept

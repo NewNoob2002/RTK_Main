@@ -130,6 +130,7 @@ void AtEngine::sendFront(uint32_t nowMs) noexcept
 {
     const Slot &slot = queue_[head_];
     quietDone_ = false;
+    ++txSeq_;
     deadlineMs_ = nowMs + slot.timeoutMs;
     state_ = slot.payload.empty() ? State::kWaitResponse : State::kWaitPrompt;
     lineLen_ = 0U;
@@ -153,6 +154,7 @@ void AtEngine::sendFront(uint32_t nowMs) noexcept
 void AtEngine::sendProbe(uint32_t nowMs) noexcept
 {
     probeAlt_ = !probeAlt_;
+    ++txSeq_;
     const Probe &probe = kProbes[probeAlt_ ? 1U : 0U];
     deadlineMs_ = nowMs + kProbeTimeoutMs;
     state_ = State::kProbe;
@@ -443,8 +445,17 @@ void AtEngine::feed(std::span<const uint8_t> bytes, uint32_t nowMs) noexcept
             }
             continue;
         }
+        const uint32_t seqBefore = txSeq_;
         onByte(bytes[index], nowMs);
         ++index;
+        if (txSeq_ != seqBefore) {
+            // 本字节完成了上一条命令并立即发出了下一条：同一 RX 块的剩余字节在发出之前就已到达，
+            // 属于旧数据，必须丢弃，不得交给新命令（r5 F1）。
+            if (index < bytes.size()) {
+                ++stats_.stale;
+            }
+            break;
+        }
     }
 }
 

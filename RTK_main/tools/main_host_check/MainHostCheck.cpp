@@ -944,6 +944,9 @@ void powerParticipantBlocksAndTimeoutNames()
     };
     ParticipantState saveState{};
     ParticipantState quiesceState{};
+    ParticipantState
+        netState{}; // 4G 里程碑参与者：2000 ms 上限，用于断言 PW1 传入的精确截止（r5 F7）
+    netState.done = true;
     const auto onBegin = [](board::ShutdownStage /*stage*/, uint32_t deadlineMs,
                             void *arg) noexcept {
         // 由本测试显式绑定为 ParticipantState*。
@@ -1017,6 +1020,16 @@ void powerParticipantBlocksAndTimeoutNames()
               .onTimeout = onTimeout,
           }) == Status::kOk);
 
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "test_net_power",
+              .begin = onBegin,
+              .isDone = checkDone,
+              .userCtx = &netState,
+              .stage = board::ShutdownStage::kQuiesce,
+              .milestone = power::ShutdownMilestone::kNetPower,
+              .onTimeout = onTimeout,
+          }) == Status::kOk);
+
     setupPower(board::BootMode::kNormal);
     auto &ctx = appContext();
     std::array<fw::TraceEvent, DebugModule::kRingEvents> trace{};
@@ -1068,6 +1081,10 @@ void powerParticipantBlocksAndTimeoutNames()
     CHECK(saveState.timeoutCount == 1U && quiesceState.timeoutCount >= 1U);
     // PW1 把同一个绝对截止时刻传给参与者：静默阶段非 0（= PW1 起点 + 150 ms），保存阶段无截止。
     CHECK(quiesceState.deadlineMs != 0U && saveState.deadlineMs == 0U);
+    // r5 F7：Net 参与者的截止 = PW1 起点 + 2000 ms，通用参与者 = PW1 起点 + 150 ms：两者差恰为 1850 ms，
+    // 说明同一个 PW1 起点被用于各自的绝对截止（精确相等，而非“非 0”）。
+    CHECK(netState.beginCount == 1U);
+    CHECK((netState.deadlineMs - quiesceState.deadlineMs) == 1850U);
     // r4 R5：PW1 进入 kCutPower 后，kQuiesce 兜底每轮继续重试直到 isDone（总窗口不延长）。
     const unsigned before = quiesceState.timeoutCount;
     pollPower(1U);

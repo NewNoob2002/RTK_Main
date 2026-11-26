@@ -281,7 +281,18 @@ private:
     void enterL2(uint32_t nowMs, bool deactivate) noexcept;
     void enterReady(uint32_t nowMs) noexcept;
     bool cutPower(uint32_t nowMs) noexcept;
-    void enterPowerFault(uint32_t nowMs) noexcept;
+    void enterPowerFault(uint32_t nowMs, bool resumeCycle = false) noexcept;
+    /**
+     * @brief  阶段是否属于“模块已上电并完成同步”的在线阶段（不依赖枚举顺序，r5 F5）
+     * @param  p: 待判定的阶段
+     * @retval true 为 SimCheck/Register/PdpUp/Ready 之一
+     * @note   纯函数，仅 kNet 任务调用。
+     */
+    [[nodiscard]] static constexpr bool isOnlinePhase(Phase p) noexcept
+    {
+        return (p == Phase::kSimCheck) || (p == Phase::kRegister) || (p == Phase::kPdpUp) ||
+               (p == Phase::kReady);
+    }
     void pollPowerFault(uint32_t nowMs) noexcept;
     void startStop(uint32_t nowMs, uint32_t deadlineMs) noexcept;
     void finishStop(uint32_t nowMs) noexcept;
@@ -352,7 +363,7 @@ private:
     bool poweredDownSeen_ = false;
     bool pdpForceDeact_ = false;
     SimStatus diagSim_ = SimStatus::kUnknown; // 调试通道看到的非 READY SIM 状态，待 poll 处理
-    bool deactFailed_ = false;                // 强制 QIDEACT 失败：之后 QIACT? 仍在线即恢复失败
+    bool deactRan_ = false; // 本轮 L2 已执行 QIDEACT：之后 QIACT? 仍在线即恢复失败
     bool bootBaudSwapped_ = false;
     bool ipSeen_ = false;
     uint32_t curBaud_ = 0U;
@@ -360,8 +371,10 @@ private:
     RegStatus pendingReg_ = RegStatus::kUnknown;
     bool gotSim_ = false;
     bool gotReg_ = false;
-    uint8_t healthSeq_ = 0U; // 0 空闲；1 CSQ；2 CEREG?；3 CPIN?
-    bool latched_ = false;   // PW1 关机后禁止再上电
+    uint8_t healthSeq_ = 0U;        // 0 空闲；1 CSQ；2 CEREG?；3 CPIN?
+    bool latched_ = false;          // PW1 关机后禁止再上电
+    bool faultResumeCycle_ = false; // PowerFault 恢复后进入 L3 冷却（而非 Off）
+    uint32_t cycleHoldMs_ = 0U;     // L3 原冷却时长：GPIO 重试成功后低电平仍须保持这么久
     bool offSinceValid_ = false;
     uint32_t offSinceMs_ = 0U;
     uint32_t waitDownMs_ = 0U;
@@ -390,8 +403,8 @@ private:
 };
 
 /** AtEngine 需要分流为 URC 的行前缀表（ADR-0021 §2.4）。 */
-inline constexpr std::array<std::string_view, 10> kUrcPrefixes{
-    "+QIURC:", "+QIOPEN:", "+QMTSTAT:", "+QMTRECV:",    "+CEREG:",
-    "+CREG:",  "+CPIN:",   "RDY",       "POWERED DOWN", "+QMTOPEN:"};
+inline constexpr std::array<std::string_view, 11> kUrcPrefixes{
+    "+QIURC:", "+QIOPEN:", "+QMTSTAT:", "+QMTRECV:",    "+CEREG:",  "+CREG:",
+    "+CGREG:", "+CPIN:",   "RDY",       "POWERED DOWN", "+QMTOPEN:"};
 
 } // namespace cellular

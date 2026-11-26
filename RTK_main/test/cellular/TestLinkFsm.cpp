@@ -41,7 +41,8 @@ struct Sim final {
     bool silent = false;
     bool echo = true;
     bool iprFail = false;
-    bool deactFails = false; // true：QIDEACT 返回 ERROR 且承载仍在线
+    bool deactFails = false;       // true：QIDEACT 返回 ERROR 且承载仍在线
+    bool deactKeepsBearer = false; // true：QIDEACT 返回 OK 但 QIACT? 仍显示 context 在线（r5 F4）
     bool simAbsent = false;
     int regStat = 1;
     int qiactFails = 0;
@@ -161,7 +162,7 @@ void handleCommand(Sim &s, const std::string &cmd)
         if (s.deactFails) {
             respondErr(s, cmd, "ERROR");
         } else {
-            s.ipActive = false;
+            s.ipActive = s.deactKeepsBearer;
             respondOk(s, cmd);
         }
     } else if (cmd == "AT+CSQ") {
@@ -1156,6 +1157,46 @@ void testPowerFaultRetriesUntilCutSucceeds()
     TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(powerOffCount(s)));
 }
 
+// r5 F4：QIDEACT 返回 OK 但 QIACT? 仍显示 context 在线，不得宣告 Ready，按 L2 失败累计并最终升 L3。
+void testDeactOkButBearerStillActiveNeverReady()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.deactKeepsBearer = true;
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    runFor(s, 50U);
+    bool sawReady = false;
+    TEST_ASSERT_TRUE(runUntil(s, 600000U, [&s, &sawReady]() {
+        sawReady = sawReady || (s.fsm.phase() == Phase::kReady);
+        return powerOffCount(s) == 1U;
+    }));
+    TEST_ASSERT_FALSE(sawReady);
+    TEST_ASSERT_TRUE(countCmds(s, "AT+QIDEACT=1") >= 2U);
+}
+
+// r5 F5：L3 断电 GPIO 失败进入 power-fault：RDY 等上电类 URC 被忽略（相位检查不依赖枚举顺序）；
+// 冷却截止在首次尝试拉低时保存，GPIO 重试成功后仍满足原冷却时间才再上电。
+void testPowerFaultIgnoresRdyAndKeepsCooldown()
+{
+    Sim s;
+    setup(s);
+    s.silent = true;           // 同步窗口超时 → 非人工 L3（首次冷却 30 s）
+    s.powerOffFailures = 1000; // 断电 GPIO 一直失败
+    TEST_ASSERT_TRUE(runUntil(s, 30000U, [&s]() { return s.fsm.phase() == Phase::kPowerFault; }));
+    const uint32_t firstTry = s.now;
+    schedule(s, "\r\nRDY\r\n", 10U);
+    runFor(s, 12000U);
+    TEST_ASSERT_EQUAL(Phase::kPowerFault, s.fsm.phase()); // RDY 不得把 power-fault 拉回 Sync
+    s.powerOffFailures = 0;
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return s.power.size() >= 3U; }));
+    TEST_ASSERT_FALSE(s.power[1U].on);
+    TEST_ASSERT_TRUE(s.power[2U].on);
+    // 冷却时长在首次尝试时保存：PWREN 实际在 GPIO 重试成功时才拉低，此后低电平仍须保持完整 30 s。
+    TEST_ASSERT_TRUE((s.power[2U].t - s.power[1U].t) >= 30000U);
+    TEST_ASSERT_TRUE(s.power[1U].t > firstTry); // 断电确实发生在 power-fault 重试成功之后
+}
+
 // r4 R3：调试通道（net at）看到的非 READY +CPIN 行同样驱动 FSM 的 SIM 状态。
 void testDiagCpinNotInsertedDrivesSimState()
 {
@@ -1179,7 +1220,7 @@ void testPayloadWireTimeBudget()
     std::array<uint8_t, 512> big{};
     std::array<uint8_t, 64> small{};
     TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, big, lo.now));
-    TEST_ASSERT_TRUE(lo.fsm.sendConn(0U, small, lo.now));
+    TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, small, lo.now)); // r5 F6：115200 阶段禁止 QISEND
     Sim hi;
     setup(hi);
     TEST_ASSERT_TRUE(toConnOpen(hi));
@@ -1346,6 +1387,8 @@ int main()
     RUN_TEST(testShutdownWhileResyncingCutsWithoutQpowd);
     RUN_TEST(testDeactFailureWithBearerActiveNeverReady);
     RUN_TEST(testPowerFaultRetriesUntilCutSucceeds);
+    RUN_TEST(testDeactOkButBearerStillActiveNeverReady);
+    RUN_TEST(testPowerFaultIgnoresRdyAndKeepsCooldown);
     RUN_TEST(testDiagCpinNotInsertedDrivesSimState);
     RUN_TEST(testPayloadWireTimeBudget);
     RUN_TEST(testRegistrationLostFor180sEscalatesL3);

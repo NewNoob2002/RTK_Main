@@ -516,7 +516,7 @@ void LinkFsm::enterPhase(Phase phase, uint32_t nowMs) noexcept
     snap_.phase = phase;
     if (engine_ != nullptr) {
         // 同步阶段（波特率探测）不做握手隔离；之后任何命令超时/取消都必须先重新同步。
-        engine_->setResyncEnabled(phase >= Phase::kSimCheck);
+        engine_->setResyncEnabled(isOnlinePhase(phase));
     }
     phaseStartMs_ = nowMs;
     nextMs_ = nowMs;
@@ -528,7 +528,7 @@ void LinkFsm::enterPhase(Phase phase, uint32_t nowMs) noexcept
         pdpStep_ = pdpForceDeact_ ? PdpStep::kDeact
                                   : (fieldView(cfg_.apn).empty() ? PdpStep::kQuery : PdpStep::kCfg);
         pdpForceDeact_ = false;
-        deactFailed_ = false;
+        deactRan_ = false;
         ipSeen_ = false;
     }
 }
@@ -606,10 +606,12 @@ bool LinkFsm::cutPower(uint32_t nowMs) noexcept
 /**
  * @brief 进入电源故障阶段：PWREN 拉低失败，周期重试直到 GPIO 成功（r4 R5）
  * @param nowMs: 当前毫秒时间戳
+ * @param resumeCycle: true 表示来自 L3：GPIO 成功后转入 PowerCycle，并按首次尝试时保存的冷却时长 cycleHoldMs_ 保持低电平（r5 F5）
  * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。此阶段不算断电完成（shutdownDone 为 false）。
  */
-void LinkFsm::enterPowerFault(uint32_t nowMs) noexcept
+void LinkFsm::enterPowerFault(uint32_t nowMs, bool resumeCycle) noexcept
 {
+    faultResumeCycle_ = resumeCycle;
     snap_.pdpUp = false;
     enterPhase(Phase::kPowerFault, nowMs);
     nextMs_ = nowMs + kPowerFaultRetryMs;
@@ -626,7 +628,14 @@ void LinkFsm::pollPowerFault(uint32_t nowMs) noexcept
         return;
     }
     if (cutPower(nowMs)) {
-        enterPhase(Phase::kOff, nowMs);
+        if (faultResumeCycle_) {
+            faultResumeCycle_ = false;
+            // 冷却时长在首次尝试拉低时已保存；PWREN 实际在此刻才拉低，低电平按原冷却时长保持（r5 F5）。
+            cycleEndMs_ = nowMs + cycleHoldMs_;
+            enterPhase(Phase::kPowerCycle, nowMs);
+        } else {
+            enterPhase(Phase::kOff, nowMs);
+        }
     } else {
         nextMs_ = nowMs + kPowerFaultRetryMs;
     }
@@ -679,7 +688,9 @@ void LinkFsm::enterL3(uint32_t nowMs, bool manual) noexcept
     }
     clearOps();
     notifyAllClosed();
-    clearStaleClose(); // 断电后模块侧 socket 全部消失
+    clearStaleClose();   // 断电后模块侧 socket 全部消失
+    cycleHoldMs_ = hold; // 首次尝试拉低时即保存冷却时长（GPIO 失败重试成功后仍按此保持，r5 F5）
+    cycleEndMs_ = nowMs + hold;
     const bool cut = cutPower(nowMs);
     simWasBad_ = false;
     regLost_ = false;
@@ -691,11 +702,10 @@ void LinkFsm::enterL3(uint32_t nowMs, bool manual) noexcept
     snap_.sim = SimStatus::kUnknown;
     snap_.csq = kCsqUnknown;
     if (!cut) {
-        enterPowerFault(nowMs);
+        enterPowerFault(nowMs, true);
         return;
     }
     enterPhase(Phase::kPowerCycle, nowMs);
-    cycleEndMs_ = nowMs + hold;
 }
 
 /**
@@ -1254,9 +1264,10 @@ void LinkFsm::onPdpDone(const AtResponse &rsp) noexcept
             for (Conn &conn : conns_) {
                 conn.closeFirst = false;
             }
-        } else {
-            deactFailed_ = true; // 旧承载释放未确认：之后查询仍见在线则按恢复失败处理（r4 R4）
         }
+        // 无论 QIDEACT 成败：之后 QIACT? 仍见该 context 在线即说明承载未真正释放，按恢复失败处理
+        // （r4 R4 失败路径；r5 F4 补 QIDEACT OK 但承载仍在线）。
+        deactRan_ = true;
         pdpStep_ = fieldView(cfg_.apn).empty() ? PdpStep::kQuery : PdpStep::kCfg;
         break;
     case PdpStep::kCfg:
@@ -1268,9 +1279,9 @@ void LinkFsm::onPdpDone(const AtResponse &rsp) noexcept
         break;
     case PdpStep::kQuery:
         if (ok && ipSeen_) {
-            if (deactFailed_) {
-                // QIDEACT 失败且承载仍在线：L2 重建未完成，不得宣告 Ready；退避递增并累计升级计数。
-                deactFailed_ = false;
+            if (deactRan_) {
+                // QIDEACT 之后承载仍在线：L2 重建未完成，不得宣告 Ready；退避递增并累计升级计数。
+                deactRan_ = false;
                 failPdpRecovery(now);
             } else {
                 enterReady(now);
@@ -1595,8 +1606,11 @@ bool LinkFsm::sendConn(uint8_t id, std::span<const uint8_t> payload, uint32_t no
         payload.empty() || (payload.size() > kSendChunkBytes)) {
         return false;
     }
-    // 载荷字节时间（10 bit/字节）超过写预算则拒绝：QISEND 只允许在已切到 460800 后，
-    // 115200 阶段只发短命令，避免单次写阻塞 kNet 超过轮预算（r4 R7）。
+    // QISEND 只允许在已切到 460800 之后（115200 阶段一律拒绝，r5 F6）；并且载荷字节时间
+    // （10 bit/字节）不得超过单次写预算，避免单次写阻塞 kNet 超过轮预算（r4 R7）。
+    if (curBaud_ < kPolicy.fastBaud) {
+        return false;
+    }
     const uint64_t wireMs =
         (static_cast<uint64_t>(payload.size()) * 10ULL * 1000ULL + curBaud_ - 1U) /
         ((curBaud_ == 0U) ? 1U : curBaud_);
@@ -1635,21 +1649,24 @@ void LinkFsm::onUrc(std::string_view line, uint32_t nowMs) noexcept
         poweredDownSeen_ = true;
         return;
     }
+    if (phase_ == Phase::kPowerFault) {
+        return; // 电源故障中 PWREN 未确认拉低：RDY/CPIN/注册等上电类 URC 一律忽略（r5 F5）
+    }
     if (line.starts_with("RDY")) {
         // 模块自行重启（掉电重上电/看门狗）：回到同步阶段重新初始化。
-        if (!shuttingDown_ && (phase_ >= Phase::kSimCheck)) {
+        if (!shuttingDown_ && isOnlinePhase(phase_)) {
             handleModuleRestart(nowMs);
         }
         return;
     }
     if (line.starts_with("+CPIN:")) {
         SimStatus sim = SimStatus::kUnknown;
-        if (parseCpin(line, sim) && (phase_ >= Phase::kSimCheck)) {
+        if (parseCpin(line, sim) && isOnlinePhase(phase_)) {
             onSimState(sim, nowMs);
         }
         return;
     }
-    if (line.starts_with("+CEREG:") || line.starts_with("+CREG:")) {
+    if (line.starts_with("+CEREG:") || line.starts_with("+CREG:") || line.starts_with("+CGREG:")) {
         if (isRegQueryLine(line)) {
             return; // <n>,<stat> 形状是 CEREG? 的应答，漏到 URC 路径说明是迟到的旧应答，不能当实时状态
         }

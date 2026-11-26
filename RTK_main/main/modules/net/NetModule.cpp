@@ -18,6 +18,7 @@
 #include "AppConfig.hpp"
 #include "AppContext.hpp"
 #include "board/BoardProfile.hpp"
+#include "cellular/AtParse.hpp"
 #include "cellular/Policy.hpp"
 #include "def/NetDef.hpp"
 #include "fw/Log.hpp"
@@ -178,8 +179,9 @@ bool NetModule::writeHook(void *ctx, std::span<const uint8_t> bytes) noexcept
     const TickType_t start = xTaskGetTickCount();
     size_t sent = 0U;
     while (sent < bytes.size()) {
-        // 每次续写 FIFO 前先查截止：到期即停（r4 R7），返回 false 后引擎按写失败重新同步。
-        if ((sent > 0U) && ((xTaskGetTickCount() - start) >= budget)) {
+        // 每次写 FIFO 前（含首次与零进展后的重试）都先查截止：到期即停（r4 R7/r5 F6），
+        // 返回 false 后引擎按写失败标记通道不可信并重新同步。
+        if ((xTaskGetTickCount() - start) >= budget) {
             return false;
         }
         // IDF API 取 const char*：以只读字节视图转换。
@@ -323,6 +325,8 @@ void NetModule::shutdownTimeout(void *ctx) noexcept
     // PW1 在参与者未完成期间每个周期重复调用：GPIO 写失败时下个周期自然重试。
     if (self->cutPower()) {
         self->rt_->pwrenFault.store(false, std::memory_order_release);
+        // 先置清理标志再宣告完成：kNet 下一轮在 drainUart 之前结算引擎/邮箱并丢弃残留 RX（r5 F2）。
+        self->rt_->cutCleanupPending.store(true, std::memory_order_release);
         self->rt_->shutdownDone.store(true, std::memory_order_release);
     }
 }
@@ -548,6 +552,28 @@ void NetModule::updatePolicy(uint32_t nowMs) noexcept
 }
 
 /**
+ * @brief PW1 onTimeout 硬切 PWREN 成功后的清理：结算引擎/邮箱并丢弃 UART 残留
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，须先于 drainUart/任何 RX 消费；与 FSM 断电同等清理：
+ *       engine.powerDown 以 kAborted 结算在途/排队命令（邮箱经完成回调以 ABORTED 结算），再 uart_flush_input。
+ *       PowerModule 线程只能置标志，不得碰引擎（r5 F2）。
+ */
+void NetModule::serviceCutCleanup(uint32_t nowMs) noexcept
+{
+    Runtime &rt = *rt_;
+    if (!rt.cutCleanupPending.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    rt.engine.powerDown(nowMs);
+    if (rt.uartInstalled) {
+        static_cast<void>(uart_flush_input(static_cast<uart_port_t>(uartPort_)));
+        if (rt.uartQueue != nullptr) {
+            xQueueReset(static_cast<QueueHandle_t>(rt.uartQueue));
+        }
+    }
+}
+
+/**
  * @brief 处理关机请求并上报完成；到 PW1 截止时刻仍未完成则硬切 PWREN
  * @param nowMs: 当前毫秒时间戳
  * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
@@ -638,6 +664,9 @@ void NetModule::serviceAtMailbox(uint32_t nowMs) noexcept
     cmd.ctx = this;
     cmd.token = token;
     cmd.matchPrefix = prefix; // 同前缀 URC 与应答行按命令推导的前缀归属（裁决 r3 I2）
+    if ((prefix == "+CEREG:") || (prefix == "+CREG:") || (prefix == "+CGREG:")) {
+        cmd.match = &cellular::isRegQueryLine; // 与 FSM 同一规则：前缀 AND 查询形状（r5 F3）
+    }
     if (!rt.engine.submit(cmd, nowMs)) {
         rt.mailbox.reject(); // 队列满：按 CAS 退回 kPending 或回收已被取消的请求
     }
@@ -750,6 +779,7 @@ bool NetModule::poll(uint32_t nowMs) noexcept
     }
     Runtime &rt = *rt_;
     updatePolicy(nowMs);
+    serviceCutCleanup(nowMs);
     serviceShutdown(nowMs);
     serviceAtMailbox(nowMs);
     const bool backlog = drainUart(nowMs);

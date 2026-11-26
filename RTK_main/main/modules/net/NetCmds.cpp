@@ -57,7 +57,7 @@ const char *phaseName(cellular::Phase phase) noexcept
     case cellular::Phase::kReady:
         return "ready";
     case cellular::Phase::kPowerFault:
-        return "power_fault";
+        return "power-fault"; // 裁决 r5：与报告统一拼写
     }
     return "?";
 }
