@@ -264,6 +264,7 @@
         ["Board", () => dash(hello.board)], ["Firmware", () => dash(hello.fw)], ["Serial number", () => dash(cfgVal("factory.sn"))],
         ["Bluetooth name", () => dash(hello.bt_name)], ["Uptime", () => fmtUptime(status.dev.uptime_s)],
         ["Free memory", () => kb(status.dev.heap_free) + (typeof status.dev.heap_min === "number" ? " (min " + kb(status.dev.heap_min) + ")" : "")],
+        ["Largest free block", () => kb(status.dev.heap_largest)],
         ["Last reset", () => dash(status.dev.reset)]] }
     ] },
     { id: "bt", col: "b", title: "Bluetooth", icon: "bt", badge: btBadge, items: [

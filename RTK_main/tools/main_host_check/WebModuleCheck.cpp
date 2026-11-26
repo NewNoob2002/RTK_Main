@@ -17,11 +17,13 @@
 
 #include "esp_err.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "freertos/freertos_debug.h"
 #include "lwip/sockets.h"
 #include "sdkconfig.h"
 
@@ -33,10 +35,12 @@
 #include "board/Charger.hpp"
 #include "driver/gpio.h"
 #include "def/StorageDef.hpp"
+#include "modules/web/WebDiagnostics.hpp"
 #include "modules/web/WebModule.hpp"
 #include "def/GnssSubDef.hpp"
 #include "settings/Registry.hpp"
 #include "rtos/EspStatus.hpp"
+#include "web_proto/Writer.hpp"
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
 #include "esp_image_format.h"
 #include "modules/ota/OtaRuntime.hpp"
@@ -310,8 +314,104 @@ void resetHarness()
 
 } // namespace
 
+namespace {
+StaticTask_t s_diagTask{};
+std::array<StackType_t, 4096U> s_diagStack{};
+bool s_diagSchedulerSuspended = false;
+constexpr size_t kMaxDiagNumber = 2147483647U;
+bool s_diagMaxHeapValues = false;
+} // namespace
+
+/** @brief 模拟内部空闲堆。 @param caps: 请求的能力掩码。 @retval 固定测试值。 */
+size_t heap_caps_get_free_size(uint32_t caps)
+{
+    assert(caps == MALLOC_CAP_INTERNAL);
+    return 79000U;
+}
+
+/** @brief 模拟内部空闲堆最低值。 @param caps: 请求的能力掩码。 @retval 固定测试值。 */
+size_t heap_caps_get_minimum_free_size(uint32_t caps)
+{
+    assert(caps == MALLOC_CAP_INTERNAL);
+    return 50000U;
+}
+
+/** @brief 模拟 8 位堆最大空闲块。 @param caps: 请求的能力掩码。 @retval 固定测试值。 */
+size_t heap_caps_get_largest_free_block(uint32_t caps)
+{
+    assert(caps == MALLOC_CAP_8BIT);
+    return 32768U;
+}
+
+/** @brief 模拟两种能力堆的快照。 @param info: 统计输出。 @param caps: 请求的能力掩码。 */
+void heap_caps_get_info(multi_heap_info_t *info, uint32_t caps)
+{
+    assert(caps == MALLOC_CAP_8BIT || caps == MALLOC_CAP_INTERNAL);
+    if (s_diagMaxHeapValues) {
+        *info = {kMaxDiagNumber, kMaxDiagNumber, kMaxDiagNumber, kMaxDiagNumber,
+                 kMaxDiagNumber, kMaxDiagNumber, kMaxDiagNumber};
+        return;
+    }
+    *info = {.total_free_bytes = caps == MALLOC_CAP_8BIT ? 80000U : 79000U,
+             .total_allocated_bytes = 130000U,
+             .largest_free_block = 32768U,
+             .minimum_free_bytes = 50000U,
+             .allocated_blocks = 10U,
+             .free_blocks = 2U,
+             .total_blocks = 12U};
+}
+
+/** @brief 模拟任务统计。 @retval 两个任务，仅 link 在诊断固定表中。 */
+UBaseType_t uxTaskGetNumberOfTasks()
+{
+    return 2U;
+}
+
+/** @brief 查找 link 任务。 @param name: 任务名。 @retval link 句柄或空。 */
+TaskHandle_t xTaskGetHandle(const char *name)
+{
+    return std::string_view{name} == "link" ? &s_diagTask : nullptr;
+}
+
+/** @brief 返回模拟栈低地址。 @param task: link 句柄。 @retval 栈低地址。 */
+StackType_t *xTaskGetStackStart(TaskHandle_t task)
+{
+    assert(task == &s_diagTask && s_diagSchedulerSuspended);
+    return s_diagStack.data();
+}
+
+/** @brief 标记快照期间暂停调度。 */
+void vTaskSuspendAll()
+{
+    assert(!s_diagSchedulerSuspended);
+    s_diagSchedulerSuspended = true;
+}
+
+/** @brief 恢复调度。 @retval pdFALSE 无需切换任务。 */
+BaseType_t xTaskResumeAll()
+{
+    assert(s_diagSchedulerSuspended);
+    s_diagSchedulerSuspended = false;
+    return pdFALSE;
+}
+
+/** @brief 模拟任务快照。 @param task: link 句柄。 @param snapshot: 快照输出。 @retval pdTRUE 成功。 */
+BaseType_t vTaskGetSnapshot(TaskHandle_t task, TaskSnapshot_t *snapshot)
+{
+    assert(task == &s_diagTask && s_diagSchedulerSuspended);
+    snapshot->pxEndOfStack = &s_diagStack.back();
+    return pdTRUE;
+}
+
 // ---- ESP-IDF C 桩实现 ----
 extern "C" {
+
+/** @brief 模拟 link 历史最小余栈。 @param task: link 句柄。 @retval 固定余栈字节数。 */
+UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t task)
+{
+    assert(task == &s_diagTask && s_diagSchedulerSuspended);
+    return 2048U;
+}
 
 esp_event_base_t const WIFI_EVENT = "WIFI_EVENT";
 static int s_dummyNetif = 0;
@@ -1414,6 +1514,162 @@ void testSessionGenAndBackpressure()
     s_ctx.web.unbindStorage();
 }
 
+/** @brief 验证 10 帧池的 RX 满载、TX 控制帧预留和三客户端轮换，并校验按需诊断。 */
+void testHeapDiagnosticsAndFrameReserve()
+{
+    resetHarness();
+    constexpr std::array kFds{1011, 1012, 1013};
+    static_assert(app::WebModule::kTotalFrames == 10U);
+    for (const int fd : kFds) {
+        assert(simulateIdfV61WsHandshake(fd) == ESP_OK);
+        static_cast<void>(s_ctx.web.poll(s_nowMs));
+        runPendingWork();
+        const auto &frame = s_httpd.sent.back();
+        assert(frame.fd == fd &&
+               frame.payload.find(
+                   R"("heap_largest":32768,"heap_int_free":79000,"heap_int_min":50000)") !=
+                   std::string::npos);
+    }
+    s_httpd.sent.clear();
+    s_nowMs += app::WebModule::kStatusPeriodMs;
+    static_cast<void>(s_ctx.web.poll(s_nowMs)); // 只占两槽，第三个客户端留待下一轮。
+    assert(simulateWsFrame(kFds[0], HTTPD_WS_TYPE_TEXT, true,
+                           R"({"t":"unlock","id":1,"token":"123456"})") == ESP_OK);
+    assert(simulateWsFrame(kFds[1], HTTPD_WS_TYPE_TEXT, true,
+                           R"({"t":"unlock","id":2,"token":"123456"})") == ESP_OK);
+    assert(simulateWsFrame(kFds[2], HTTPD_WS_TYPE_TEXT, true,
+                           R"({"t":"cmd","id":3,"name":"diag"})") == ESP_OK);
+    assert(s_httpd.sent.size() == 1U &&
+           s_httpd.sent[0].payload == R"({"t":"ack","id":3,"ok":false,"err":"busy"})");
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.size() == 5U);
+    assert(s_httpd.sent[1].fd == kFds[0] && s_httpd.sent[2].fd == kFds[1]);
+    assert(s_httpd.sent[3].payload == R"({"t":"ack","id":1,"ok":true})");
+    assert(s_httpd.sent[4].payload == R"({"t":"ack","id":2,"ok":true})");
+
+    s_httpd.sent.clear();
+    s_nowMs += app::WebModule::kStatusPeriodMs;
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.size() == 2U && s_httpd.sent[0].fd == kFds[2]);
+
+    s_httpd.sent.clear();
+    assert(simulateWsFrame(kFds[2], HTTPD_WS_TYPE_TEXT, true,
+                           R"({"t":"cmd","id":3,"name":"diag"})") == ESP_OK);
+    assert(simulateWsFrame(kFds[2], HTTPD_WS_TYPE_TEXT, true,
+                           R"({"t":"cmd","id":4,"name":"diag.tasks"})") == ESP_OK);
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    static_cast<void>(s_ctx.web.poll(s_nowMs));
+    runPendingWork();
+    assert(s_httpd.sent.size() == 2U && s_httpd.sent[0].fd == kFds[2] &&
+           s_httpd.sent[1].fd == kFds[2]);
+    assert(s_httpd.sent[0].payload.starts_with(R"({"t":"diag","id":3,"heap_8bit":{"free":80000,)"));
+    assert(s_httpd.sent[0].payload.find(R"("heap_internal":{"free":79000,)") != std::string::npos);
+    assert(s_httpd.sent[0].payload.ends_with(R"("arena":{"req":0,"actual":0}})"));
+    assert(
+        s_httpd.sent[1].payload ==
+        R"({"t":"diag.tasks","id":4,"task_count":2,"tasks":{"link":{"stack":4096,"hwm":2048}}})");
+    assert(!s_diagSchedulerSuspended);
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
+/** @brief 验证 Wi-Fi 典型 13 至 15 个台账条目完整输出，即使堆字段达最大位宽。 */
+void testCompleteDiagArena()
+{
+    constexpr std::array kEntries{
+        rtos::BootAllocEntry{.tag = "task.link", .bytes = 4096U, .actualBytes = 4100U},
+        rtos::BootAllocEntry{.tag = "task.io", .bytes = 4096U, .actualBytes = 4100U},
+        rtos::BootAllocEntry{.tag = "task.trace_out", .bytes = 3072U, .actualBytes = 3076U},
+        rtos::BootAllocEntry{.tag = "trace.ring", .bytes = 4096U, .actualBytes = 4100U},
+        rtos::BootAllocEntry{.tag = "log.ring", .bytes = 4096U, .actualBytes = 4100U},
+        rtos::BootAllocEntry{.tag = "gnss.demux", .bytes = 4096U, .actualBytes = 4100U},
+        rtos::BootAllocEntry{.tag = "rtcm.pipe", .bytes = 4096U, .actualBytes = 4100U},
+        rtos::BootAllocEntry{.tag = "gnss.app_ring", .bytes = 4096U, .actualBytes = 4100U},
+        rtos::BootAllocEntry{.tag = "gnss.latest", .bytes = 6144U, .actualBytes = 6148U},
+        rtos::BootAllocEntry{.tag = "web.frames", .bytes = 10360U, .actualBytes = 10364U},
+        rtos::BootAllocEntry{.tag = "web.ota", .bytes = 2048U, .actualBytes = 2052U},
+        rtos::BootAllocEntry{.tag = "task.oled", .bytes = 3072U, .actualBytes = 3076U},
+        rtos::BootAllocEntry{.tag = "oled.fb", .bytes = 1024U, .actualBytes = 1028U},
+        rtos::BootAllocEntry{.tag = "extra.buffer", .bytes = 1024U, .actualBytes = 1028U},
+        rtos::BootAllocEntry{.tag = "extra.task", .bytes = 2048U, .actualBytes = 2052U},
+    };
+    std::array<char, web::kMaxJsonBytes> out{};
+    s_diagMaxHeapValues = true;
+    for (const size_t count : {13U, 14U, 15U}) {
+        const auto entries = std::span{kEntries}.first(count);
+        size_t total = 0U;
+        size_t actual = 0U;
+        std::string members;
+        for (const auto &entry : entries) {
+            total += entry.bytes;
+            actual += entry.actualBytes;
+            members += std::string{",\""} + entry.tag + R"(":{"req":)" +
+                       std::to_string(entry.bytes) + R"(,"actual":)" +
+                       std::to_string(entry.actualBytes) + "}";
+        }
+        const size_t len =
+            app::web_cfg::buildDiagFrame(65535U, "diag", {entries, total, actual}, out);
+        assert(len > 0U && len <= out.size());
+        const std::string_view frame{out.data(), len};
+        assert(frame.starts_with(R"({"t":"diag","id":65535,"heap_8bit":{"free":2147483647,)"));
+        assert(frame.find(R"("heap_internal":{"free":2147483647,)") != std::string::npos);
+        assert(frame.ends_with(R"("arena":{"req":)" + std::to_string(total) + R"(,"actual":)" +
+                               std::to_string(actual) + members + "}}"));
+    }
+    s_diagMaxHeapValues = false;
+}
+
+/** @brief 验证满 32 条台账及最大数字位宽时，单帧保留总量、最长完整前缀和截断标记。 */
+void testTruncatedDiagArena()
+{
+    constexpr size_t kCount = rtos::BootArena::kMaxEntries;
+    std::array<std::string, kCount> tags{};
+    std::array<rtos::BootAllocEntry, kCount> entries{};
+    for (size_t i = 0U; i < kCount; ++i) {
+        tags[i] = "boot.partition." + std::to_string(i);
+        if (i == 0U) {
+            tags[i] += "\x01\"\\";
+        }
+        entries[i] = {
+            .tag = tags[i].c_str(), .bytes = kMaxDiagNumber, .actualBytes = kMaxDiagNumber};
+    }
+    std::array<char, web::kMaxJsonBytes + 1U> out{};
+    const size_t total = kMaxDiagNumber * kCount;
+    s_diagMaxHeapValues = true;
+    const size_t len = app::web_cfg::buildDiagFrame(65535U, "diag", {entries, total, total}, out);
+    s_diagMaxHeapValues = false;
+    assert(len > 0U && len <= web::kMaxJsonBytes && out.back() == '\0');
+
+    constexpr std::string_view kHeap =
+        R"({"free":2147483647,"allocated":2147483647,"min":2147483647,"largest":2147483647,)"
+        R"("free_blocks":2147483647,"allocated_blocks":2147483647,"total_blocks":2147483647})";
+    constexpr std::string_view kEntryValues = R"(":{"req":2147483647,"actual":2147483647})";
+    constexpr std::string_view kEnd = R"(},"truncated":true})";
+    std::string expected = R"({"t":"diag","id":65535,"heap_8bit":)";
+    expected.append(kHeap)
+        .append(R"(,"heap_internal":)")
+        .append(kHeap)
+        .append(R"(,"arena":{"req":2147483647,"actual":2147483647)");
+    size_t included = 0U;
+    for (const auto &tag : tags) {
+        const std::string_view escapedTag =
+            included == 0U ? R"(boot.partition.0\u0001\"\\)" : std::string_view{tag};
+        std::string member = ",\"";
+        member.append(escapedTag).append(kEntryValues);
+        if (expected.size() + member.size() + kEnd.size() > web::kMaxJsonBytes) {
+            break;
+        }
+        expected.append(member);
+        ++included;
+    }
+    assert(included > 0U && included < kCount);
+    expected.append(kEnd);
+    assert((std::string_view{out.data(), len} == expected));
+}
+
 /** @brief 4. 验证空闲回落排定后终端重连取消重启（P2 #8）与退出前 GGA 持久化门控（P1 #4）。 */
 void testIdleAbortAndExitGgaGate()
 {
@@ -1448,23 +1704,22 @@ void testIdleAbortAndExitGgaGate()
            s_httpd.sent[0].payload == R"({"t":"ack","id":20,"ok":false,"err":"failed"})");
     assert(s_rebootCalls == 0);
 
-    // 2b. TX 邮箱满时背压不得丢弃 ack：连续塞满 8 槽后发第 9 条请求，排空后再 poll 必达（P2 #5）。
+    // 2b. 填满 TX 邮箱后再发请求；排空后下一轮必须补发暂存的 ACK（P2 #5）。
     s_httpd.sent.clear();
-    for (int i = 0; i < 8; ++i) {
+    for (size_t i = 0; i < app::WebModule::kTxMailboxCap; ++i) {
         std::string req =
             R"({"t":"unlock","id":)" + std::to_string(30 + i) + R"(,"token":"123456"})";
         assert(simulateWsFrame(1004, HTTPD_WS_TYPE_TEXT, true, req) == ESP_OK);
         static_cast<void>(s_ctx.web.poll(s_nowMs));
     }
-    // 此时 TX 邮箱（8 槽）已满；再送第 9 条请求，ack 会暂存在 pendingAck 中不丢失。
     assert(simulateWsFrame(1004, HTTPD_WS_TYPE_TEXT, true,
                            R"({"t":"unlock","id":38,"token":"123456"})") == ESP_OK);
     static_cast<void>(s_ctx.web.poll(s_nowMs));
     runPendingWork();
-    assert(s_httpd.sent.size() == 8U);
+    assert(s_httpd.sent.size() == app::WebModule::kTxMailboxCap);
     static_cast<void>(s_ctx.web.poll(s_nowMs));
     runPendingWork();
-    assert((s_httpd.sent.size() == 9U) &&
+    assert((s_httpd.sent.size() == app::WebModule::kTxMailboxCap + 1U) &&
            (s_httpd.sent.back().payload == R"({"t":"ack","id":38,"ok":true})"));
 
     // 3. GGA 门控已持久化（kClean）→ cmd exit 回 ack ok + bye{reason:"exit"}，
@@ -2270,6 +2525,9 @@ int main()
     testHandshakeFaviconAndStopLifecycle();
     testFramingAndConfigBeforeAck();
     testSessionGenAndBackpressure();
+    testHeapDiagnosticsAndFrameReserve();
+    testCompleteDiagArena();
+    testTruncatedDiagArena();
     testIdleAbortAndExitGgaGate();
     testOledExit();
     testShutdownArbitrationAndSoftApResume();

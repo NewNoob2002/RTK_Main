@@ -1,5 +1,6 @@
 // 解析浏览器请求帧：单层 JSON 对象、固定字段、无堆（docs/web/ws-protocol.md §3）。
 // parseRequest 由网页模块任务调用；不阻塞，非 ISR 安全；本文件不分配堆。
+// 按需诊断复用 cmd 的 name 字段（diag / diag.tasks），由业务层分派。
 #include "web_proto/Request.hpp"
 
 namespace web {

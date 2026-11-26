@@ -34,6 +34,9 @@ struct DevWebStatus {
     int32_t uptimeS = 0;
     int32_t heapFree = 0;
     int32_t heapMin = 0;
+    int32_t heapLargest = 0;
+    int32_t heapIntFree = 0;
+    int32_t heapIntMin = 0;
     std::string_view reset{};
 
     friend constexpr bool operator==(const DevWebStatus &, const DevWebStatus &) = default;
