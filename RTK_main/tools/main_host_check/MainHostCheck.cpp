@@ -938,6 +938,7 @@ void powerParticipantBlocksAndTimeoutNames()
     // 注册边界校验：非法参数与重名必须被拒绝。
     struct ParticipantState {
         uint32_t beginCount = 0U;
+        uint32_t timeoutCount = 0U;
         bool done = false;
     };
     ParticipantState saveState{};
@@ -949,6 +950,10 @@ void powerParticipantBlocksAndTimeoutNames()
     const auto checkDone = [](void *arg) noexcept {
         // 由本测试显式绑定为 ParticipantState*。
         return static_cast<const ParticipantState *>(arg)->done;
+    };
+    const auto onTimeout = [](void *arg) noexcept {
+        // 由本测试显式绑定为 ParticipantState*。
+        ++static_cast<ParticipantState *>(arg)->timeoutCount;
     };
     using fw::Status;
     CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
@@ -992,6 +997,7 @@ void powerParticipantBlocksAndTimeoutNames()
               .isDone = checkDone,
               .userCtx = &saveState,
               .stage = board::ShutdownStage::kSave,
+              .onTimeout = onTimeout,
           }) == Status::kOk);
     CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
               .name = "test_extra_save",
@@ -1004,6 +1010,7 @@ void powerParticipantBlocksAndTimeoutNames()
               .isDone = checkDone,
               .userCtx = &quiesceState,
               .stage = board::ShutdownStage::kQuiesce,
+              .onTimeout = onTimeout,
           }) == Status::kOk);
 
     setupPower(board::BootMode::kNormal);
@@ -1039,6 +1046,8 @@ void powerParticipantBlocksAndTimeoutNames()
     CHECK(ModuleTestAccess::pumpLogs());
     const std::string_view saveLogs{captured.data.data(), captured.len};
     CHECK(saveLogs.find("test_extra_save") != std::string_view::npos);
+    // 超时兜底回调（4G 硬切 PWREN 的入口）：保存阶段超时恰调用一次，静默阶段尚未到限。
+    CHECK(saveState.timeoutCount == 1U && quiesceState.timeoutCount == 0U);
 
     // 约 90 ms 仍未达 150 ms 静默上限：test_extra_quiesce 持续阻塞 kCutPower。
     pollPower(5U);
@@ -1051,6 +1060,7 @@ void powerParticipantBlocksAndTimeoutNames()
     CHECK(ModuleTestAccess::pumpLogs());
     const std::string_view quiesceLogs{captured.data.data(), captured.len};
     CHECK(quiesceLogs.find("test_extra_quiesce") != std::string_view::npos);
+    CHECK(saveState.timeoutCount == 1U && quiesceState.timeoutCount == 1U); // 各恰一次
 
     cli::setOutSink(nullptr, false);
     s_capturedLog = nullptr;
@@ -3360,6 +3370,108 @@ void webS2StorageBt()
     CHECK(btWl2.size() == 3U && btWl2[0] == kOtherAlarm);
 }
 
+/** @brief 构造一条 net.* 存储命令（文本类带 payload，使能带单字节）。 */
+fw::Command makeNetCmd(app::StorageVerb verbId, std::string_view text, uint8_t enable = 0U)
+{
+    fw::Command cmd{};
+    cmd.target = app::id(app::ModuleKind::kStorage);
+    cmd.verb = app::verb(verbId);
+    if (verbId == app::StorageVerb::kSetNetEnable) {
+        cmd.argLen = 1U;
+        cmd.args[0] = enable;
+    } else {
+        const size_t len = std::min(text.size(), cmd.args.size());
+        cmd.argLen = static_cast<uint8_t>(len);
+        std::copy_n(text.begin(), len, cmd.args.begin());
+    }
+    return cmd;
+}
+
+/**
+ * @brief 验证 net.* 持久化（N1 复审 #10/#12/#13）：NVS 成功为提交点、失败不改视图与 configRev、读回与重启生效
+ * @note 单线程主机测试，非 ISR。
+ */
+void netSettingsPersistence()
+{
+    using namespace app;
+    auto &context = appContext();
+    context.data.init();
+    loadEarlyConfig(context);
+    context.boardProfile = board::byId(board::BoardId::kP2V141);
+    context.bootConfig.userNvsReady = true;
+    context.bootConfig.safeDefaults = false;
+    ModuleTestAccess::resetStorageForReboot();
+    CHECK(fw::isOk(context.storage.init()));
+    auto view = context.data.netConfig.read();
+    CHECK(view.available && !view.enable && !view.passSet && !view.restartPending);
+
+    const uint32_t rev0 = context.data.configRev.load(std::memory_order_acquire);
+    fw::CommandResult res{};
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetApn, "cmnet"), res);
+    CHECK(fw::isOk(res.status));
+    view = context.data.netConfig.read();
+    CHECK(std::string_view{view.apn.data()} == "cmnet" && view.restartPending);
+    CHECK(context.data.configRev.load(std::memory_order_acquire) == rev0 + 1U);
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetUser, "u1"), res);
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetPass, "secret"), res);
+    CHECK(fw::isOk(res.status));
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetEnable, {}, 1U), res);
+    CHECK(fw::isOk(res.status));
+    view = context.data.netConfig.read();
+    CHECK(view.enable && view.passSet && std::string_view{view.user.data()} == "u1");
+
+    // 非法输入：引号、反斜杠、超长、使能值越界 → kInvalidArg，视图与 configRev 不变。
+    const uint32_t rev1 = context.data.configRev.load(std::memory_order_acquire);
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetApn, "a\"b"), res);
+    CHECK(res.status == fw::Result::kInvalidArg);
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetApn, "a\\b"), res);
+    CHECK(res.status == fw::Result::kInvalidArg);
+    context.storage.onCommand(
+        makeNetCmd(StorageVerb::kSetNetApn, "0123456789012345678901234567890123456789"), res);
+    CHECK(res.status == fw::Result::kInvalidArg);
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetEnable, {}, 2U), res);
+    CHECK(res.status == fw::Result::kInvalidArg);
+    CHECK(context.data.configRev.load(std::memory_order_acquire) == rev1);
+    CHECK(std::string_view{context.data.netConfig.read().apn.data()} == "cmnet");
+
+    // NVS 写失败：返回 kIoError，RAM 视图保持旧值，configRev 不递增（先提交后发布）。
+    // 文本键走 blob 写（按键注入），使能键走 u8 写（全局注入）。
+    nvs_shim_add_key_fail("apn", ESP_FAIL, 0U);
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetApn, "other"), res);
+    CHECK(res.status == fw::Result::kIoError);
+    nvs_shim_clear_key_fail();
+    nvs_shim_set_write_fail(ESP_FAIL);
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetEnable, {}, 0U), res);
+    CHECK(res.status == fw::Result::kIoError);
+    nvs_shim_set_write_fail(ESP_OK);
+    view = context.data.netConfig.read();
+    CHECK(std::string_view{view.apn.data()} == "cmnet" && view.enable);
+    CHECK(context.data.configRev.load(std::memory_order_acquire) == rev1);
+
+    // 清空密码 → passSet=false；safeDefaults/NVS 未就绪 → kInvalidState；无 kCellular 板 → kNotSupported。
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetPass, {}), res);
+    CHECK(fw::isOk(res.status) && !context.data.netConfig.read().passSet);
+    context.bootConfig.safeDefaults = true;
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetApn, "x"), res);
+    CHECK(res.status == fw::Result::kInvalidState);
+    context.bootConfig.safeDefaults = false;
+    context.boardProfile = board::byId(board::BoardId::kE1DevKit);
+    context.storage.onCommand(makeNetCmd(StorageVerb::kSetNetApn, "x"), res);
+    CHECK(res.status == fw::Result::kNotSupported);
+    context.boardProfile = board::byId(board::BoardId::kP2V141);
+
+    // 启动期读取：新一轮启动读回已持久化值，restartPending 清零；BootConfig 读到 enable。
+    ModuleTestAccess::resetStorageForReboot();
+    context.data.init();
+    loadEarlyConfig(context);
+    CHECK(context.bootConfig.netEnable);
+    CHECK(fw::isOk(context.storage.init()));
+    view = context.data.netConfig.read();
+    CHECK(view.enable && !view.passSet && !view.restartPending);
+    CHECK(std::string_view{view.apn.data()} == "cmnet" &&
+          std::string_view{view.user.data()} == "u1");
+}
+
 /**
  * @brief 验证 buildDeviceName 与 deriveSnFromMac 的 P2/E1/unknown、空值、换行与超长边界
  * @note 单线程主机测试，非 ISR。
@@ -3726,6 +3838,8 @@ int main(int argc, const char **raw_args)
         storageStartup();
     } else if (std::strcmp(argv[1], "phone_nvs_readback") == 0) {
         phoneNvsReadback();
+    } else if (std::strcmp(argv[1], "net_settings_persistence") == 0) {
+        netSettingsPersistence();
     } else if (std::strcmp(argv[1], "early_config_0") == 0) {
         earlyConfig(0U, true);
     } else if (std::strcmp(argv[1], "early_config_2") == 0) {

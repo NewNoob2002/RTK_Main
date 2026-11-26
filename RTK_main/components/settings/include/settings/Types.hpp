@@ -51,11 +51,11 @@ inline constexpr uint8_t kVerbStorageWhitelistDel = 4U;
 inline constexpr uint8_t kVerbStorageSetPairNext = 5U;
 inline constexpr uint8_t kVerbStorageSetHeight = 6U;
 inline constexpr uint8_t kVerbStorageSetSnPn = 7U;
-/** 4G 链路（kNet）配置动词（由 main 侧 static_assert 保证与 NetVerb 一致，ADR-0021 §2.7）。 */
-inline constexpr uint8_t kVerbNetSetEnable = 0U;
-inline constexpr uint8_t kVerbNetSetApn = 1U;
-inline constexpr uint8_t kVerbNetSetUser = 2U;
-inline constexpr uint8_t kVerbNetSetPass = 3U;
+/** 4G 配置动词：由 kStorage 持久化（与 main 的 StorageVerb 一致，SettingsBackend 以 static_assert 保证）。 */
+inline constexpr uint8_t kVerbStorageSetNetEnable = 8U;
+inline constexpr uint8_t kVerbStorageSetNetApn = 9U;
+inline constexpr uint8_t kVerbStorageSetNetUser = 10U;
+inline constexpr uint8_t kVerbStorageSetNetPass = 11U;
 /** 4G 文本键（APN/用户名/密码）最大字符数；加 1 个终止位后仍 ≤ fw::kCommandArgBytes。 */
 inline constexpr size_t kNetTextMaxBytes = 31U;
 
@@ -78,7 +78,6 @@ enum class Owner : uint8_t {
     kNone = 0,
     kGnss,
     kStorage,
-    kNet, // 4G 蜂窝链路（ADR-0021），命令投递到 kNet 执行器
 };
 
 /** 异步设置凭据；seq == 0 或 slot == kInvalidSlot 表示无效。 */
@@ -166,11 +165,13 @@ enum class KeyId : uint8_t {
     kGnssSatTrack,
     kPhoneHeight,
     kPhoneSnPn,
-    kNetEnable,
-    kNetApn,
-    kNetUser,
-    kNetPass,
     kCount,
+    // 已发布编号不得移动：kCount(20) 保留，21 为 gnss.cutoff（Registry 内部常量）。
+    // 4G 键只能追加在其后，显式取值保证既有 KeyId 数值（含 gnss.cutoff=21）不变。
+    kNetEnable = 22,
+    kNetApn = 23,
+    kNetUser = 24,
+    kNetPass = 25,
 };
 
 /** GNSS 输出能力表下标（对应 5 条网页 NMEA 输出键）。 */

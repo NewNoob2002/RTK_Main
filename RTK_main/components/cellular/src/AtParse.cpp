@@ -1,6 +1,7 @@
 // AT 响应行解析辅助实现。纯函数，不分配堆。
 #include "cellular/AtParse.hpp"
 
+#include <array>
 #include <limits>
 
 namespace cellular {
@@ -50,7 +51,7 @@ bool parseInt(std::string_view text, int32_t &out) noexcept
     size_t digits = 0U;
     for (const char ch : text) {
         if ((ch < '0') || (ch > '9')) {
-            break;
+            return false; // 整个字段必须是数字：拒绝 "12abc"、"1 2" 等尾部杂字符
         }
         acc = (acc * kDecimalBase) + (ch - '0');
         ++digits;
@@ -165,6 +166,51 @@ bool parseCpin(std::string_view line, SimStatus &sim) noexcept
         sim = SimStatus::kError;
     }
     return true;
+}
+
+int32_t cmeCodeFromText(std::string_view text) noexcept
+{
+    text = trim(text);
+    struct Entry final {
+        std::string_view text;
+        int32_t code;
+    };
+    static constexpr std::array<Entry, 12> kTable{{
+        {"operation not allowed", 3},
+        {"operation not supported", 4},
+        {"SIM not inserted", kCmeNotInserted},
+        {"SIM PIN required", kCmePinRequired},
+        {"SIM PUK required", kCmePukRequired},
+        {"SIM failure", 13},
+        {"SIM busy", 14},
+        {"SIM wrong", 15},
+        {"incorrect password", kCmeIncorrectPin},
+        {"SIM PIN2 required", kCmePin2Required},
+        {"SIM PUK2 required", kCmePuk2Required},
+        {"unknown", 100},
+    }};
+    for (const Entry &e : kTable) {
+        if (text == e.text) {
+            return e.code;
+        }
+    }
+    return 0;
+}
+
+bool isRegQueryLine(std::string_view line) noexcept
+{
+    if (!line.starts_with("+CEREG:") && !line.starts_with("+CREG:") &&
+        !line.starts_with("+CGREG:")) {
+        return false;
+    }
+    const std::string_view second = fieldAt(argsOf(line), 1U);
+    int32_t tmp = 0;
+    return !second.empty() && (second.front() != '"') && parseInt(second, tmp);
+}
+
+bool isCpinLine(std::string_view line) noexcept
+{
+    return line.starts_with("+CPIN:");
 }
 
 SimStatus simFromCmeCode(int32_t code) noexcept

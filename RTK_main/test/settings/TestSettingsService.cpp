@@ -278,8 +278,7 @@ void testGetDomainAndForEach()
 }
 
 /**
- * @brief  校验 4G 键经 Service 的权限与投递：console 可写并投递到 kNet，网页/手机/MQTT 一律 kLocked，
- *         net.pass 只写（get 失败）
+ * @brief  校验 4G 键经 Service 的权限与投递：console 可写并投递到 kStorage，网页/手机/MQTT 一律 kLocked
  */
 void testNetKeysPermissionsAndPost()
 {
@@ -298,15 +297,14 @@ void testNetKeysPermissionsAndPost()
     TEST_ASSERT_EQUAL_INT(0, st.postCalls);
     TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
                       static_cast<int>(svc.set("net.apn", "cmnet", settings::Caller::kConsole, t)));
-    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kNet), static_cast<int>(t.owner));
-    TEST_ASSERT_EQUAL_UINT8(settings::kVerbNetSetApn, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kStorage), static_cast<int>(t.owner));
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbStorageSetNetApn, st.lastCmd.verb);
     TEST_ASSERT_EQUAL_UINT8(5U, st.lastCmd.argLen);
     TEST_ASSERT_EQUAL(static_cast<int>(settings::Error::kOk),
                       static_cast<int>(svc.set("net.enable", "1", settings::Caller::kInternal, t)));
-    TEST_ASSERT_EQUAL_UINT8(settings::kVerbNetSetEnable, st.lastCmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbStorageSetNetEnable, st.lastCmd.verb);
     TEST_ASSERT_EQUAL_UINT8(1U, st.lastCmd.args[0]);
-    settings::Value v{};
-    TEST_ASSERT_FALSE(svc.get("net.pass", v));
+    // net.* 读回由 SettingsBackend 实现（见 tools/main_host_check 的 NetSettingsCheck）。
 }
 
 /**

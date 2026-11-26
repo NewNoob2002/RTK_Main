@@ -445,7 +445,10 @@ app::BootResult stepNet(app::BootCtx &ctx) noexcept
         return app::BootResult::kSkipped;
     }
     const auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
-    const char *error = app::startNet(bufs.netStack, ctx.launched);
+    if (bufs.netStack.empty() || bufs.netBlock.empty()) {
+        return app::BootResult::kSkipped; // net.enable=0 或配网模式：不分配、不启动
+    }
+    const char *error = app::startNet(bufs.netStack, bufs.netBlock, ctx.launched);
     if (error == nullptr) {
         return app::BootResult::kOk;
     }

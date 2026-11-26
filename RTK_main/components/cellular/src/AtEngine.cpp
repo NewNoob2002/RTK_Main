@@ -15,6 +15,10 @@ constexpr std::string_view kCmeError = "+CME ERROR:";
 constexpr std::string_view kCmsError = "+CMS ERROR:";
 constexpr std::string_view kSendOk = "SEND OK";
 constexpr std::string_view kSendFail = "SEND FAIL";
+// 重新同步握手：带独有应答形状（+CMEE: <n> 再 OK），迟到的旧终结行无法冒充。
+constexpr std::string_view kProbeCmd = "AT+CMEE?\r";
+constexpr std::string_view kProbeEcho = "AT+CMEE?";
+constexpr std::string_view kProbeLine = "+CMEE:";
 
 /**
  * @brief  tick 回绕安全的“已到期”判断
@@ -58,6 +62,9 @@ bool AtEngine::submit(const AtCommand &cmd, uint32_t nowMs) noexcept
     slot.ctx = cmd.ctx;
     slot.payload = cmd.payload;
     slot.rawPrefix = cmd.rawPrefix;
+    slot.rawMax = cmd.rawMax;
+    slot.match = cmd.match;
+    slot.token = cmd.token;
     ++count_;
     if ((count_ == 1U) && (state_ == State::kIdle)) {
         startFront(nowMs);
@@ -75,6 +82,10 @@ void AtEngine::startFront(uint32_t nowMs) noexcept
     if ((count_ == 0U) || (state_ != State::kIdle)) {
         return;
     }
+    if (resync_) {
+        sendProbe(nowMs);
+        return;
+    }
     const Slot &slot = queue_[head_];
     deadlineMs_ = nowMs + slot.timeoutMs;
     state_ = slot.payload.empty() ? State::kWaitResponse : State::kWaitPrompt;
@@ -89,6 +100,82 @@ void AtEngine::startFront(uint32_t nowMs) noexcept
         // 写失败视作未发出：按超时处理，让上层通过无响应计数走恢复路径。
         deadlineMs_ = nowMs;
     }
+}
+
+/**
+ * @brief 发出重新同步握手 AT+CMEE?，期间丢弃旧响应
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+void AtEngine::sendProbe(uint32_t nowMs) noexcept
+{
+    deadlineMs_ = nowMs + kProbeTimeoutMs;
+    state_ = State::kProbe;
+    probeSeen_ = false;
+    lineLen_ = 0U;
+    overflow_ = false;
+    skipSpace_ = false;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): 静态字符串按字节只读视图
+    const std::span<const uint8_t> bytes{reinterpret_cast<const uint8_t *>(kProbeCmd.data()),
+                                         kProbeCmd.size()};
+    if ((port_.write == nullptr) || !port_.write(port_.ctx, bytes)) {
+        ++stats_.writeFails;
+        deadlineMs_ = nowMs;
+    }
+}
+
+/**
+ * @brief 处理重新同步握手期间收到的一行
+ * @param line: 一行文本（不含换行）
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+void AtEngine::handleProbeLine(std::string_view line, uint32_t nowMs) noexcept
+{
+    if (line.starts_with(kProbeLine)) {
+        probeSeen_ = true;
+        return;
+    }
+    if ((line == kOk) && probeSeen_) {
+        resync_ = false;
+        timeouts_ = 0U;
+        ++stats_.resyncs;
+        state_ = State::kIdle;
+        startFront(nowMs);
+        return;
+    }
+    if (isUrc(line)) {
+        dispatchUrc(line);
+        return;
+    }
+    if (line != kProbeEcho) {
+        ++stats_.stale;
+    }
+}
+
+/**
+ * @brief 以时间戳判定在途命令/握手是否已超时；超时先于其后喂入的字节生效
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+void AtEngine::expire(uint32_t nowMs) noexcept
+{
+    if ((count_ == 0U) || (state_ == State::kIdle) || !reached(nowMs, deadlineMs_)) {
+        return;
+    }
+    if (state_ == State::kProbe) {
+        ++stats_.timeouts;
+        ++timeouts_;
+        state_ = State::kIdle;
+        if (timeouts_ >= deadThreshold_) {
+            dead_ = true;
+            abortAll(nowMs);
+            return;
+        }
+        startFront(nowMs);
+        return;
+    }
+    finish(AtResult::kTimeout, 0, nowMs);
 }
 
 /**
@@ -120,8 +207,11 @@ void AtEngine::finish(AtResult result, int32_t code, uint32_t nowMs) noexcept
     } else if (result != AtResult::kAborted) {
         timeouts_ = 0U;
     }
+    if ((result == AtResult::kTimeout) && resyncEnabled_) {
+        resync_ = true; // 迟到的终结行可能随后到达：下一条命令前先握手隔离
+    }
     if (done.onDone != nullptr) {
-        done.onDone(done.ctx, AtResponse{result, code, nowMs});
+        done.onDone(done.ctx, AtResponse{result, code, nowMs, done.token});
     }
     if (dead_) {
         abortAll(nowMs);
@@ -146,14 +236,17 @@ void AtEngine::abortAll(uint32_t nowMs) noexcept
         --count_;
         state_ = State::kIdle;
         if (done.onDone != nullptr) {
-            done.onDone(done.ctx, AtResponse{AtResult::kAborted, 0, nowMs});
+            done.onDone(done.ctx, AtResponse{AtResult::kAborted, 0, nowMs, done.token});
         }
     }
 }
 
 void AtEngine::reset(uint32_t nowMs) noexcept
 {
+    const bool inflight = state_ != State::kIdle;
     abortAll(nowMs);
+    // 取消在途命令后其应答仍可能到达：保留/置位待同步标记，由下一条命令前的握手隔离。
+    resync_ = resyncEnabled_ && (inflight || resync_);
     count_ = 0U;
     head_ = 0U;
     state_ = State::kIdle;
@@ -174,8 +267,22 @@ void AtEngine::poll(uint32_t nowMs) noexcept
         startFront(nowMs);
         return;
     }
-    if (reached(nowMs, deadlineMs_)) {
-        finish(AtResult::kTimeout, 0, nowMs);
+    expire(nowMs);
+}
+
+void AtEngine::onRxLost(uint32_t nowMs) noexcept
+{
+    ++stats_.rxLost;
+    if (lineLen_ != 0U) {
+        overflow_ = true; // 半行内容不可信：丢弃到下一个换行
+    }
+    if (state_ == State::kRaw) {
+        resync_ = true;
+        finish(AtResult::kError, 0, nowMs);
+        return;
+    }
+    if (resyncEnabled_ && (count_ != 0U) && (state_ != State::kIdle)) {
+        resync_ = true;
     }
 }
 
@@ -192,9 +299,15 @@ uint32_t AtEngine::msToDeadline(uint32_t nowMs) const noexcept
 
 void AtEngine::feed(std::span<const uint8_t> bytes, uint32_t nowMs) noexcept
 {
+    // 以时间戳而非调用顺序判超时：截止之后才到的字节属于迟到响应，不得完成该命令。
+    expire(nowMs);
     size_t index = 0U;
     while (index < bytes.size()) {
         if (state_ == State::kRaw) {
+            if (count_ == 0U) {
+                state_ = State::kIdle;
+                continue;
+            }
             const size_t take = std::min(rawRemaining_, bytes.size() - index);
             const Slot &slot = queue_[head_];
             if (slot.onRaw != nullptr) {
@@ -276,23 +389,18 @@ bool AtEngine::isUrc(std::string_view line) const noexcept
 }
 
 /**
- * @brief 判断该行是否属于队首命令的响应
+ * @brief 判断 URC 前缀行是否属于队首命令的查询应答
  * @param line: 一行文本（不含换行）
- * @retval true 成功/条件成立
- * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ * @retval true 由命令自带的形状判定函数确认
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。命令未提供 match 时一律按 URC 处理。
  */
 bool AtEngine::belongsToFront(std::string_view line) const noexcept
 {
     if (count_ == 0U) {
         return false;
     }
-    const size_t colon = line.find(':');
-    if ((colon == std::string_view::npos) || (colon == 0U)) {
-        return false;
-    }
     const Slot &slot = queue_[head_];
-    const std::string_view cmd{slot.text.data(), slot.len};
-    return cmd.find(subview(line, 0U, colon)) != std::string_view::npos;
+    return (slot.match != nullptr) && slot.match(line);
 }
 
 /**
@@ -308,6 +416,7 @@ void AtEngine::dispatchUrc(std::string_view line) noexcept
     }
 }
 
+// NOLINTBEGIN(readability-function-size): 行分类按 ADR-0021 §2.3 顺序平铺（回显/终结/URC/原始长度），拆分会割裂归属规则，主机测试逐分支覆盖。
 /**
  * @brief 处理一行完整文本：URC 分流、响应行转发或终结行判定
  * @param line: 一行文本（不含换行）
@@ -325,16 +434,16 @@ void AtEngine::handleLine(std::string_view line, uint32_t nowMs) noexcept
         }
         return;
     }
+    if (state_ == State::kProbe) {
+        handleProbeLine(line, nowMs);
+        return;
+    }
     const Slot &slot = queue_[head_];
     // 回显：与在途命令文本完全一致的行直接丢弃（ATE1 状态下）。
     if (line == std::string_view{slot.text.data(), slot.len}) {
         return;
     }
-    if (line == kOk) {
-        finish(AtResult::kOk, 0, nowMs);
-        return;
-    }
-    if (line == kSendOk) {
+    if ((line == kOk) || (line == kSendOk)) {
         finish(AtResult::kOk, 0, nowMs);
         return;
     }
@@ -344,7 +453,10 @@ void AtEngine::handleLine(std::string_view line, uint32_t nowMs) noexcept
     }
     if (line.starts_with(kCmeError) || line.starts_with(kCmsError)) {
         int32_t code = 0;
-        static_cast<void>(parseInt(subview(line, line.find(':') + 1U), code));
+        const std::string_view detail = subview(line, line.find(':') + 1U);
+        if (!parseInt(detail, code)) {
+            code = cmeCodeFromText(detail); // +CMEE=2 的文本形式
+        }
         finish(AtResult::kCmeError, code, nowMs);
         return;
     }
@@ -357,12 +469,21 @@ void AtEngine::handleLine(std::string_view line, uint32_t nowMs) noexcept
     }
     if (!slot.rawPrefix.empty() && line.starts_with(slot.rawPrefix)) {
         int32_t rawLen = 0;
-        if (parseInt(subview(line, slot.rawPrefix.size()), rawLen) && (rawLen > 0)) {
+        if (!parseInt(subview(line, slot.rawPrefix.size()), rawLen) || (rawLen < 0) ||
+            (static_cast<size_t>(rawLen) > slot.rawMax)) {
+            // 长度字段非法或超过请求上限：帧边界不可信，终止命令并强制重新同步。
+            ++stats_.protocol;
+            resync_ = true;
+            finish(AtResult::kError, 0, nowMs);
+            return;
+        }
+        if (rawLen > 0) {
             // rawLen 已校验 > 0，转 size_t 无损。
             rawRemaining_ = static_cast<size_t>(rawLen);
             state_ = State::kRaw;
         }
     }
 }
+// NOLINTEND(readability-function-size)
 
 } // namespace cellular

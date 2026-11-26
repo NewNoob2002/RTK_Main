@@ -25,6 +25,7 @@ struct AtResponse final {
     AtResult result = AtResult::kAborted;
     int32_t errorCode = 0; // kCmeError 时为错误码，否则 0
     uint32_t nowMs = 0U;   // 完成时刻（引擎收到的 tick），供上层无需另存时间
+    uint32_t token = 0U;   // 提交时的 AtCommand::token 原样回传，供上层丢弃过期结果
 };
 
 /** 中间响应行回调（不含 CR/LF，不含终结行与 URC）。 */
@@ -35,6 +36,8 @@ using AtRawFn = void (*)(void *ctx, std::span<const uint8_t> chunk) noexcept;
 using AtDoneFn = void (*)(void *ctx, const AtResponse &rsp) noexcept;
 /** URC 回调：整行文本（不含 CR/LF）。 */
 using AtUrcFn = void (*)(void *ctx, std::string_view line) noexcept;
+/** URC 前缀行是否属于在途命令的查询应答（按行形状判定；null 表示一律当 URC）。 */
+using AtMatchFn = bool (*)(std::string_view line) noexcept;
 /** 串口写出钩子：写入成功返回 true。 */
 using AtWriteFn = bool (*)(void *ctx, std::span<const uint8_t> bytes) noexcept;
 
@@ -53,6 +56,9 @@ struct AtCommand final {
     void *ctx = nullptr;                    // 上述回调的用户上下文
     std::span<const uint8_t> payload{};     // 非空：收到 '>' 提示符后发送的定长数据（≤512 B）
     std::string_view rawPrefix{};           // 非空：该前缀行 "+QIRD: <n>" 之后紧随 n 字节原始数据
+    size_t rawMax = 0U;                     // rawPrefix 声明长度的上限（请求长度）；超限判协议错误
+    AtMatchFn match = nullptr; // URC 前缀行的“是否为本命令应答”判定（如 +CEREG? 的 <n>,<stat>）
+    uint32_t token = 0U;       // 上层自定义标识，随 AtResponse 回传并可由 frontToken() 读取
 };
 
 /** 端口配置：写出钩子与 URC 前缀表。 */
@@ -71,6 +77,10 @@ struct AtStats final {
     uint32_t overflow = 0U;   // 超长被丢弃的行
     uint32_t timeouts = 0U;   // 命令超时总次数
     uint32_t writeFails = 0U; // 写出失败次数
+    uint32_t stale = 0U;      // 重新同步期间丢弃的旧响应行
+    uint32_t resyncs = 0U;    // 完成的重新同步握手次数
+    uint32_t protocol = 0U;   // 原始数据长度越界/非法导致的协议错误
+    uint32_t rxLost = 0U;     // 上层报告的串口丢字节次数
 };
 
 /** AT 命令引擎。 */
@@ -84,6 +94,8 @@ public:
     static constexpr size_t kQueueDepth = 3U;
     /** 提示符数据与单次 QISEND 上限。 */
     static constexpr size_t kMaxPayload = 512U;
+    /** 重新同步握手的单次等待上限（ms）。 */
+    static constexpr uint32_t kProbeTimeoutMs = 1000U;
 
     constexpr AtEngine() noexcept = default;
     ~AtEngine() = default;
@@ -130,6 +142,47 @@ public:
      * @note   仅 kNet 任务；回调内不得再提交命令（提交会被下一次 reset 清除）。
      */
     void reset(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief  启用/关闭“超时或取消后重新同步”
+     * @param  enable: true 时，命令超时、本地取消在途命令、原始数据越界或串口丢字节后，
+     *                 下一条命令发出前先做 AT+CMEE? 握手并丢弃握手完成前收到的旧响应
+     * @note   同步阶段（模块刚上电、波特率探测）应关闭；关闭同时清除待同步标记。
+     */
+    void setResyncEnabled(bool enable) noexcept
+    {
+        resyncEnabled_ = enable;
+        if (!enable) {
+            resync_ = false;
+        }
+    }
+
+    /**
+     * @brief  通知引擎串口接收端丢过字节（驱动 FIFO/环形缓冲溢出）
+     * @param  nowMs: 当前 tick 毫秒
+     * @note   正在读原始数据时立即以 kError 终止该命令；其余情况标记待重新同步。
+     */
+    void onRxLost(uint32_t nowMs) noexcept;
+
+    /**
+     * @brief  队首命令的 AtCommand::token
+     * @retval token；队列空返回 0
+     * @note   纯查询；供行回调判断该行是否属于当前登记的操作。
+     */
+    [[nodiscard]] uint32_t frontToken() const noexcept
+    {
+        return (count_ == 0U) ? 0U : queue_[head_].token;
+    }
+
+    /**
+     * @brief  是否处于待重新同步或同步握手中
+     * @retval true 旧响应隔离中
+     * @note   纯查询。
+     */
+    [[nodiscard]] bool resyncing() const noexcept
+    {
+        return resync_ || (state_ == State::kProbe);
+    }
 
     /**
      * @brief  距在途命令超时的剩余毫秒
@@ -196,6 +249,7 @@ private:
         kWaitResponse,
         kWaitPrompt,
         kRaw,
+        kProbe, // 重新同步握手：已发 AT+CMEE?，丢弃旧响应直到 +CMEE: 行及其 OK
     };
 
     /** 队列槽：命令文本副本与回调。 */
@@ -209,9 +263,15 @@ private:
         void *ctx = nullptr;
         std::span<const uint8_t> payload{};
         std::string_view rawPrefix{};
+        size_t rawMax = 0U;
+        AtMatchFn match = nullptr;
+        uint32_t token = 0U;
     };
 
     void startFront(uint32_t nowMs) noexcept;
+    void sendProbe(uint32_t nowMs) noexcept;
+    void expire(uint32_t nowMs) noexcept;
+    void handleProbeLine(std::string_view line, uint32_t nowMs) noexcept;
     void finish(AtResult result, int32_t code, uint32_t nowMs) noexcept;
     void abortAll(uint32_t nowMs) noexcept;
     void onByte(uint8_t byte, uint32_t nowMs) noexcept;
@@ -234,6 +294,9 @@ private:
     uint8_t timeouts_ = 0U;
     uint8_t deadThreshold_ = kDefaultDeadThreshold;
     bool dead_ = false;
+    bool resyncEnabled_ = false;
+    bool resync_ = false;
+    bool probeSeen_ = false;
     AtStats stats_{};
 };
 

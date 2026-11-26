@@ -3,6 +3,7 @@
 //       模块表与配置表为静态只读存储。不分配堆。
 #include "app/App.hpp"
 #include "app/BootReasons.hpp"
+#include "app/NetBlock.hpp"
 #include "app/SettingsBackend.hpp"
 #include "board/BoardProfile.hpp"
 
@@ -101,7 +102,6 @@ constexpr rtos::ExecutorConfig kIoConfig{
 };
 #endif // RTK_GNSS_ENABLED
 // kNet 绑 core0、prio 8（低于 kIo 9 与 kLink 10）；阻塞在 UART1 事件队列，由 NetModule::wait 计算超时（ADR-0021 §2.2）。
-constinit rtos::Executor s_net_executor{};
 constexpr rtos::ExecutorConfig kNetConfig{
     .name = "net",
     .id = app::id(app::ExecKind::kNet),
@@ -174,7 +174,6 @@ namespace app {
 void bindExecutors() noexcept
 {
     s_app.linkExecutor = &s_link_executor;
-    s_app.netExecutor = &s_net_executor;
     bindSettings(s_app);
 #if RTK_GNSS_ENABLED
     s_app.ioExecutor = &s_io_executor;
@@ -234,10 +233,18 @@ const char *startIo(std::span<StackType_t> ioStack, uint32_t &launched) noexcept
 }
 #endif // RTK_GNSS_ENABLED
 
-const char *startNet(std::span<StackType_t> netStack, uint32_t &launched) noexcept
+const char *startNet(std::span<StackType_t> netStack, std::span<uint8_t> netBlockMem,
+                     uint32_t &launched) noexcept
 {
-    const auto initialized = s_app.netExecutor->init(kNetConfig, activeModules(),
-                                                     app::viewOf(s_app.netStorage, netStack));
+    NetBlock *block = constructNetBlock(netBlockMem);
+    if (block == nullptr || netStack.empty()) {
+        return boot_reason::kNetInit;
+    }
+    s_app.netBlock = block;
+    s_app.netExecutor = &block->executor;
+    s_app.net.bindRuntime(block->runtime);
+    const auto initialized =
+        s_app.netExecutor->init(kNetConfig, activeModules(), app::viewOf(block->storage, netStack));
     if (!fw::isOk(initialized) || !modulesReady(*s_app.netExecutor, kNetConfig.id)) {
         return boot_reason::kNetInit;
     }

@@ -16,6 +16,7 @@
 
 #include "AppContext.hpp"
 #include "app/ConsoleProfile.hpp"
+#include "board/BoardProfile.hpp"
 #include "cellular/Policy.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
@@ -140,15 +141,21 @@ int cmdNetStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     const NetConfigView cfg = self.data.netConfig.read();
     const cellular::LinkSnapshot snap = self.data.netStatus.read();
     cli::printSection("net");
+    cli::printKv("config", "enable=%u apn=\"%s\" user=%s pass=%s%s", cfg.enable ? 1U : 0U,
+                 cfg.apn.data(), cfg.user[0] != '\0' ? "set" : "empty",
+                 cfg.passSet ? "set" : "empty", cfg.restartPending ? " (restart pending)" : "");
     if (!self.net.present()) {
-        cli::printKv("present", "no (board without cellular)");
+        if (!board::hasFeature(board::current(), board::Feature::kCellular)) {
+            cli::printKv("present", "no (board without cellular)");
+        } else if (!cfg.enable) {
+            cli::printKv("present", "no (disabled; set net.enable=1 and reboot)");
+        } else {
+            cli::printKv("present", "no (not started; reboot to apply, or radio mode excludes 4G)");
+        }
         return 0;
     }
     std::array<char, cellular::kIccidBytes> masked{};
     maskIccid(snap.iccid, masked);
-    cli::printKv("config", "enable=%u apn=\"%s\" user=%s pass=%s", cfg.enable ? 1U : 0U,
-                 cfg.apn.data(), cfg.user[0] != '\0' ? "set" : "empty",
-                 cfg.passSet ? "set" : "empty");
     cli::printKv("phase", "%s", phaseName(snap.phase));
     cli::printKv("sim", "%s", simName(snap.sim));
     cli::printKv("imei", "%s", snap.imei[0] != '\0' ? snap.imei.data() : "n/a");
@@ -183,7 +190,7 @@ int postNet(NetVerb verbId, const char *what) noexcept
     } else {
         auto *executor = appContext().netExecutor;
         if (executor == nullptr || !appContext().net.present()) {
-            return cli::fail("%s: net module not running", what);
+            return cli::fail("%s: net module not running (set net.enable=1 and reboot)", what);
         }
         fw::Command command{};
         command.target = id(ModuleKind::kNet);
@@ -271,6 +278,39 @@ bool joinArgs(int argc, char *const *argv, std::array<char, kNetAtCmdBytes> &out
 }
 
 /**
+ * @brief AT 提交失败原因文本
+ * @param status: submitAt 的失败状态
+ * @retval 静态字符串
+ */
+const char *submitErrorText(fw::Status status) noexcept
+{
+    if (status == fw::Status::kBusy) {
+        return "busy";
+    }
+    return (status == fw::Status::kInvalidArg) ? "command rejected" : "module not powered";
+}
+
+/**
+ * @brief 轮询等待 AT 邮箱完成，超时则释放邮箱
+ * @param net: NetModule
+ * @retval true 已完成；false 超时（已 releaseAt）
+ * @note 仅 console REPL 任务，最长阻塞 kAtWaitMs，非 ISR。
+ */
+bool waitAtDone(NetModule &net) noexcept
+{
+    uint32_t waited = 0U;
+    while (net.atState() != NetModule::AtState::kDone) {
+        if (waited >= kAtWaitMs) {
+            net.releaseAt();
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(kAtPollMs));
+        waited += kAtPollMs;
+    }
+    return true;
+}
+
+/**
  * @brief net at <cmd>：DEV AT 透传（拒绝 ATE1/AT+IPR/AT+QISWTMD），打印模块应答
  * @param argc: 参数个数（含动词）
  * @param argv: 参数数组（<AT 命令...>，含引号的命令用 \" 转义）
@@ -288,7 +328,7 @@ int cmdNetAt(void * /*ctx*/, int argc, char **argv) noexcept
         }
         auto &net = appContext().net;
         if (!net.present()) {
-            return cli::fail("net at: net module not running");
+            return cli::fail("net at: net module not running (set net.enable=1 and reboot)");
         }
         std::array<char, kNetAtCmdBytes> text{};
         const std::span<char *> args(argv, static_cast<size_t>(argc));
@@ -298,37 +338,35 @@ int cmdNetAt(void * /*ctx*/, int argc, char **argv) noexcept
         }
         const fw::Status submitted = net.submitAt(text.data());
         if (!fw::isOk(submitted)) {
-            return cli::fail("net at: %s", submitted == fw::Status::kBusy ? "busy"
-                                           : submitted == fw::Status::kInvalidArg
-                                               ? "command rejected"
-                                               : "module not powered");
+            return cli::fail("net at: %s", submitErrorText(submitted));
         }
-        uint32_t waited = 0U;
-        while (net.atState() != NetModule::AtState::kDone) {
-            if (waited >= kAtWaitMs) {
-                net.releaseAt();
-                return cli::fail("net at: timeout");
-            }
-            vTaskDelay(pdMS_TO_TICKS(kAtPollMs));
-            waited += kAtPollMs;
+        if (!waitAtDone(net)) {
+            return cli::fail("net at: timeout");
         }
         bool ok = false;
         const std::string_view rsp = net.atResponse(ok);
-        cli::outPrintf("%.*s", static_cast<int>(rsp.size()), rsp.data());
+        if (!rsp.empty()) {
+            cli::outPrintf("%.*s", static_cast<int>(rsp.size()), rsp.data());
+        }
         net.releaseAt();
         return ok ? 0 : cli::fail("net at: module returned error");
     }
 }
 
-constexpr std::array<cli::Verb, 4U> kNetVerbs{{
-    {"status", nullptr, "show 4G link phase, SIM, signal, registration and recovery",
-     &cmdNetStatus},
+constexpr cli::Verb kNetStatusVerb{
+    "status", nullptr, "show 4G link phase, SIM, signal, registration and recovery", &cmdNetStatus};
+
+// DEV 档才含调试动词；PRODUCTION 档 help/usage 只暴露 status，避免公布不可用命令。
+constexpr std::array<cli::Verb, 4U> kNetVerbsDev{{
+    kNetStatusVerb,
     {"power", "<on|off>", "DEV: force 4G module power on, or graceful off and stay off",
      &cmdNetPower},
     {"reset", nullptr, "DEV: manual L3 module power-cycle", &cmdNetReset},
     {"at", "<AT cmd>",
-     "DEV: send AT command (ATE1/AT+IPR/AT+QISWTMD rejected; escape quotes as \\\")", &cmdNetAt},
+     "DEV: send AT command (echo/baud/mode/APN-profile/data commands rejected; escape quotes as \\\")",
+     &cmdNetAt},
 }};
+constexpr std::array<cli::Verb, 1U> kNetVerbsProd{{kNetStatusVerb}};
 
 /**
  * @brief 分派 net 子命令，缺省显示 net status
@@ -341,13 +379,17 @@ constexpr std::array<cli::Verb, 4U> kNetVerbs{{
  */
 int cmdNet(void *ctx, int argc, char **argv) noexcept
 {
-    return cli::dispatch(kNetVerbs, ctx, argc, argv, "status");
+    return cli::dispatch(netVerbs(), ctx, argc, argv, "status");
 }
 
 constexpr std::array<cli::Cmd, 1U> kNetCmds{{
     {"net",
-     "net [status|power <on|off>|reset|at <AT cmd>]: 4G link status (power/reset/at are DEV only)",
-     "[status|power <on|off>|reset|at <AT cmd>]", &cmdNet, nullptr},
+     kConsoleProfile == ConsoleProfile::kDev
+         ? "net [status|power <on|off>|reset|at <AT cmd>]: 4G link status and DEV tools"
+         : "net [status]: 4G link status",
+     kConsoleProfile == ConsoleProfile::kDev ? "[status|power <on|off>|reset|at <AT cmd>]"
+                                             : "[status]",
+     &cmdNet, nullptr},
 }};
 
 } // namespace
@@ -359,7 +401,11 @@ std::span<const cli::Cmd> netCmds() noexcept
 
 std::span<const cli::Verb> netVerbs() noexcept
 {
-    return kNetVerbs;
+    if constexpr (kConsoleProfile == ConsoleProfile::kDev) {
+        return kNetVerbsDev;
+    } else {
+        return kNetVerbsProd;
+    }
 }
 
 } // namespace app

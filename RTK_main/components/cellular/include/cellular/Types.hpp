@@ -56,6 +56,13 @@ inline constexpr size_t kIccidBytes = 21U;
 /** CSQ 未知/不可测值。 */
 inline constexpr uint8_t kCsqUnknown = 99U;
 
+/** 单个 socket 槽的 L1 状态（N1 无使用者时全为 kIdle）。 */
+struct ConnSnapshot final {
+    uint8_t state = 0U; // LinkFsm::ConnState 数值：0 空闲 1 待开 2 打开中 3 已打开 4 退避 5 关闭中
+    uint8_t fails = 0U; // 连续失败次数
+    uint32_t backoffRemainingMs = 0U; // 退避/打开等待剩余毫秒
+};
+
 /** 发布给 DataCenter 的 4G 状态快照（≤256 B，ADR-0021 §3）。 */
 struct LinkSnapshot final {
     Phase phase = Phase::kOff;
@@ -65,9 +72,11 @@ struct LinkSnapshot final {
     bool pdpUp = false;
     bool channelDead = false;
     uint8_t csq = kCsqUnknown;
-    uint16_t recoveryCount = 0U;      // 自上电以来的恢复动作总次数
-    uint32_t backoffRemainingMs = 0U; // 当前退避/断电保持剩余毫秒
-    uint32_t baud = 0U;               // 当前 UART 波特率
+    uint16_t recoveryCount = 0U;                 // 自上电以来的恢复动作总次数
+    uint32_t backoffRemainingMs = 0U;            // 当前退避/断电保持剩余毫秒
+    uint32_t baud = 0U;                          // 当前 UART 波特率
+    uint16_t droppedRecv = 0U;                   // 无主槽位 recv URC 丢弃次数
+    std::array<ConnSnapshot, kConnSlots> conn{}; // 逐槽 L1 快照
     std::array<char, kImeiBytes> imei{};
     std::array<char, kIccidBytes> iccid{};
 };

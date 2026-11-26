@@ -38,10 +38,10 @@ static_assert(settings::kGgaGateFlagEnabled == kGgaGateFlagEnabled);
 static_assert(settings::kGgaGateFlagMinSats == kGgaGateFlagMinSats);
 static_assert(settings::kGgaGateCmdArgLen == kGgaGateCmdArgLen);
 #endif
-static_assert(settings::kVerbNetSetEnable == verb(NetVerb::kSetEnable));
-static_assert(settings::kVerbNetSetApn == verb(NetVerb::kSetApn));
-static_assert(settings::kVerbNetSetUser == verb(NetVerb::kSetUser));
-static_assert(settings::kVerbNetSetPass == verb(NetVerb::kSetPass));
+static_assert(settings::kVerbStorageSetNetEnable == verb(StorageVerb::kSetNetEnable));
+static_assert(settings::kVerbStorageSetNetApn == verb(StorageVerb::kSetNetApn));
+static_assert(settings::kVerbStorageSetNetUser == verb(StorageVerb::kSetNetUser));
+static_assert(settings::kVerbStorageSetNetPass == verb(StorageVerb::kSetNetPass));
 static_assert(settings::kNetTextMaxBytes == kNetTextMaxChars);
 static_assert(static_cast<uint8_t>(Caller::kConsole) ==
               static_cast<uint8_t>(rtos::Caller::kConsole));
@@ -68,9 +68,6 @@ rtos::Executor *executorFor(const AppContext &ctx, Owner owner) noexcept
         return ctx.ioExecutor;
     }
 #endif
-    if (owner == Owner::kNet) {
-        return ctx.netExecutor;
-    }
     return nullptr;
 }
 
@@ -268,6 +265,47 @@ bool getExtendedSetting(const data::DataCenter &data, KeyId key, Value &out) noe
     return false;
 }
 
+/** @brief 把 C 字符数组按 NUL 截断写入文本值。 @param src: 源。 @param[out] out: 值。 */
+template <size_t N> void setText(const std::array<char, N> &src, Value &out) noexcept
+{
+    out = {.kind = ValueKind::kString};
+    const std::string_view view{src.data(), strnlen(src.data(), src.size())};
+    const size_t len = std::min(view.size(), out.text.size());
+    std::copy_n(view.begin(), len, out.text.begin());
+    out.textLen = static_cast<uint8_t>(len);
+}
+
+/**
+ * @brief 读 net.* 当前已保存值：enable/apn/user 来自 NVS 已提交快照；密码只回掩码
+ * @param data: 数据中心
+ * @param key: net.* 键
+ * @param[out] out: 值
+ * @retval 恒 true（板型不含 4G 时读回为空/关）
+ */
+bool getNetSetting(const data::DataCenter &data, KeyId key, Value &out) noexcept
+{
+    const NetConfigView view = data.netConfig.read();
+    switch (key) {
+    case KeyId::kNetEnable:
+        out = {.kind = ValueKind::kBool, .boolVal = view.enable};
+        return true;
+    case KeyId::kNetApn:
+        setText(view.apn, out);
+        return true;
+    case KeyId::kNetUser:
+        setText(view.user, out);
+        return true;
+    default: // kNetPass：明文永不回显，已设置返回 "***"，未设置返回空串
+        out = {.kind = ValueKind::kString};
+        if (view.passSet) {
+            constexpr std::string_view kMask = "***";
+            std::copy(kMask.begin(), kMask.end(), out.text.begin());
+            out.textLen = static_cast<uint8_t>(kMask.size());
+        }
+        return true;
+    }
+}
+
 /** @brief 从已发布快照读取当前配置值。 @param ctx: 后端。 @param key: 键编号。 @param[out] out: 值。 @retval 是否提供该值。 */
 bool getSetting(void *ctx, KeyId key, Value &out) noexcept
 {
@@ -298,6 +336,11 @@ bool getSetting(void *ctx, KeyId key, Value &out) noexcept
         out = data.settingsSn.read();
         out.kind = ValueKind::kString;
         return true;
+    case KeyId::kNetEnable:
+    case KeyId::kNetApn:
+    case KeyId::kNetUser:
+    case KeyId::kNetPass:
+        return getNetSetting(data, key, out);
     case KeyId::kGnssPpp:
     case KeyId::kGnssSatTrack:
     case KeyId::kPhoneHeight:
@@ -355,9 +398,7 @@ fw::Result postSettingCommand(void *ctx, Owner owner, const fw::Command &cmd, Ca
         return fw::Result::kNotSupported;
     }
     auto queued = cmd;
-    queued.target = id(owner == Owner::kStorage ? ModuleKind::kStorage
-                       : owner == Owner::kNet   ? ModuleKind::kNet
-                                                : ModuleKind::kGnss);
+    queued.target = id(owner == Owner::kStorage ? ModuleKind::kStorage : ModuleKind::kGnss);
     rtos::Ticket ticket{};
     // 上面的静态断言保证调用方枚举的对应关系。
     const auto result = executor->post(queued, static_cast<rtos::Caller>(caller), ticket);

@@ -317,7 +317,10 @@ bool registerVerbGroups() noexcept
         kGroup("oled", "OLED display status", &oledVerbs),
         kGroup("radio", "radio mode and restart", &radioVerbs),
         kGroup("ota", "application OTA and rollback", &otaVerbs),
-        kGroup("net", "4G link status and DEV power/at tools", &netVerbs),
+        kGroup("net",
+               kConsoleProfile == ConsoleProfile::kDev ? "4G link status and DEV power/at tools"
+                                                       : "4G link status",
+               &netVerbs),
     };
     for (const auto &group : kVerbGroups) {
         if (group.verbs == nullptr) {

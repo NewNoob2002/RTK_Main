@@ -86,6 +86,9 @@ inline constexpr uint32_t kPoweredDownWait = 1500U; // AT+QPOWD=1 后等 POWERED
 inline constexpr uint32_t kDebugDefault = 5000U;    // 控制台 net at 默认超时
 } // namespace at_timeout
 
+/** 优雅关机总预算（PW1 kQuiesce 与 kNet 共用同一绝对截止）：QICLOSE → QPOWD → 等 POWERED DOWN。 */
+inline constexpr uint32_t kShutdownTotalMs = 2000U;
+
 /** 单次读取块与发送块上限（ADR-0021 §2.4）。 */
 inline constexpr uint16_t kReadChunkBytes = 1024U;
 inline constexpr uint16_t kSendChunkBytes = 512U;

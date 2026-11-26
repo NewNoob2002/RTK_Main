@@ -11,23 +11,24 @@
 
 namespace app {
 
-/** net.* 设置的只读视图（kNet 写、kLink/Web/控制台读）；密码不进入视图，只暴露是否已设置。 */
+/**
+ * net.* 设置的只读视图（kStorage 写、控制台/设置后端读）；密码不进入视图，只暴露是否已设置。
+ * 内容是 NVS 已提交值；4G 模块只在启动时读取一次，故 restartPending 表示“已保存但需重启才生效”。
+ */
 struct NetConfigView {
     bool enable = false;
     bool passSet = false;
+    bool restartPending = false; // 保存后的值与本次启动使用的值不同
+    bool available = false;      // 板型含 kCellular（否则 net.* 写被拒绝）
     std::array<char, cellular::LinkConfig::kFieldBytes> apn{};
     std::array<char, cellular::LinkConfig::kFieldBytes> user{};
 };
 
-/** NetModule 命令 verb（与 settings::kVerbNet* 数值一致，见 SettingsBackend 的 static_assert）。 */
+/** NetModule 命令 verb（仅 DEV 控制台；net.* 配置由 StorageModule 持久化，不经 kNet）。 */
 enum class NetVerb : uint8_t {
-    kSetEnable = 0U,
-    kSetApn = 1U,
-    kSetUser = 2U,
-    kSetPass = 3U,
-    kPowerOn = 4U,  // DEV：net power on（强制上电，忽略 net.enable，仍受低电量/配网约束）
-    kPowerOff = 5U, // DEV：net power off（优雅关机并保持关闭）
-    kReset = 6U,    // DEV：net reset（手动 L3）
+    kPowerOn = 0U,  // DEV：net power on（强制上电，仍受低电量/配网/已分配约束）
+    kPowerOff = 1U, // DEV：net power off（优雅关机并保持关闭）
+    kReset = 2U,    // DEV：net reset（手动 L3）
 };
 
 /**

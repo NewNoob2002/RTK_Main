@@ -44,6 +44,8 @@ enum class ShutdownMilestone : uint8_t {
 using ShutdownBeginFn = void (*)(board::ShutdownStage stage, void *userCtx) noexcept;
 /** 关机收尾参与者完成轮询回调。 */
 using ShutdownDoneFn = bool (*)(void *userCtx) noexcept;
+/** 关机收尾参与者超时回调：该阶段有界等待到期且参与者仍未完成时调用一次（kLink 任务，须有界、不阻塞）。 */
+using ShutdownTimeoutFn = void (*)(void *userCtx) noexcept;
 
 /** 静态关机收尾参与者条目（编译期数组或启动期一次性注册，无堆）。 */
 struct ShutdownParticipant {
@@ -53,6 +55,7 @@ struct ShutdownParticipant {
     void *userCtx = nullptr;
     board::ShutdownStage stage = board::ShutdownStage::kSave;
     ShutdownMilestone milestone = ShutdownMilestone::kNone;
+    ShutdownTimeoutFn onTimeout = nullptr; ///< 可空：超时兜底（如 4G 模块硬切 PWREN）
 };
 inline constexpr size_t kMaxExtraShutdownParticipants = 4U;
 /** 外部参与者名称长度上限（不含结尾 0）；保证单条超时日志（kLogTextMax=160）可完整打印每个名字。 */

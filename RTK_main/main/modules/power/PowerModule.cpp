@@ -999,7 +999,12 @@ void PowerModule::recordStageTimeouts(board::ShutdownStage stage) noexcept
         mark(p);
     }
     for (const auto &p : power::extraShutdownParticipants()) {
+        const auto bit = static_cast<uint16_t>(1U << (idx));
+        const bool timedOut = (p.stage == stage) && ((participantDoneMask_ & bit) == 0U);
         mark(p);
+        if (timedOut && (p.onTimeout != nullptr)) {
+            p.onTimeout(p.userCtx); // 兜底动作（如 4G 硬切 PWREN）：有界、不阻塞
+        }
     }
 }
 

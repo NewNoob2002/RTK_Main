@@ -54,6 +54,22 @@ settings::Error validateWithCaps(const char *key, const settings::GnssCaps &caps
 }
 
 /**
+ * @brief  已发布 KeyId 数值冻结：新增键只能追加，gnss.cutoff 固定为 21（与 N1 前的固件/协议一致）
+ */
+void testPublishedKeyIdsStable()
+{
+    TEST_ASSERT_EQUAL_UINT8(20U, static_cast<uint8_t>(settings::KeyId::kCount));
+    const settings::KeySpec *cutoff = settings::findKey("gnss.cutoff");
+    TEST_ASSERT_NOT_NULL(cutoff);
+    TEST_ASSERT_EQUAL_UINT8(21U, static_cast<uint8_t>(cutoff->id));
+    TEST_ASSERT_EQUAL_UINT8(19U, static_cast<uint8_t>(settings::findKey("phone.sn_pn")->id));
+    TEST_ASSERT_EQUAL_UINT8(22U, static_cast<uint8_t>(settings::findKey("net.enable")->id));
+    TEST_ASSERT_EQUAL_UINT8(23U, static_cast<uint8_t>(settings::findKey("net.apn")->id));
+    TEST_ASSERT_EQUAL_UINT8(24U, static_cast<uint8_t>(settings::findKey("net.user")->id));
+    TEST_ASSERT_EQUAL_UINT8(25U, static_cast<uint8_t>(settings::findKey("net.pass")->id));
+}
+
+/**
  * @brief  校验注册表形状：25 项（含 net.* 与 gnss.cutoff）、键名唯一、keyAt 映射一致、未知键返回空
  */
 void testRegistryShape()
@@ -404,18 +420,19 @@ void testNetKeys()
     const settings::KeySpec *pass = settings::findKey("net.pass");
     TEST_ASSERT_NOT_NULL(pass);
     TEST_ASSERT_TRUE(pass->encode(out, cmd));
-    TEST_ASSERT_EQUAL_UINT8(settings::kVerbNetSetPass, cmd.verb);
+    TEST_ASSERT_EQUAL_UINT8(settings::kVerbStorageSetNetPass, cmd.verb);
     TEST_ASSERT_EQUAL_UINT8(6U, cmd.argLen);
     TEST_ASSERT_EQUAL_MEMORY("secret", cmd.args.data(), 6U);
-    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kNet), static_cast<int>(pass->owner));
-    TEST_ASSERT_FALSE(pass->readable); // 密码只写
+    TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kStorage), static_cast<int>(pass->owner));
+    TEST_ASSERT_TRUE(pass->readable); // 读回由后端返回掩码，不返回明文
 
     // 权限：仅 console/internal，不对网页、手机、MQTT 开放。
     for (const char *name : {"net.enable", "net.apn", "net.user", "net.pass"}) {
         const settings::KeySpec *spec = settings::findKey(name);
         TEST_ASSERT_NOT_NULL(spec);
         TEST_ASSERT_EQUAL_UINT8(settings::access::kConsoleInternal, spec->access);
-        TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kNet), static_cast<int>(spec->owner));
+        TEST_ASSERT_EQUAL(static_cast<int>(settings::Owner::kStorage),
+                          static_cast<int>(spec->owner));
     }
     TEST_ASSERT_TRUE(settings::findKey("net.enable")->readable);
     TEST_ASSERT_TRUE(settings::findKey("net.apn")->readable);
@@ -437,6 +454,7 @@ int main()
 {
     UNITY_BEGIN();
     RUN_TEST(testRegistryShape);
+    RUN_TEST(testPublishedKeyIdsStable);
     RUN_TEST(testEnumAndDynamicDomains);
     RUN_TEST(testBoolRangeMacSnAndFailurePreservation);
     RUN_TEST(testPeriodMsToInterval);

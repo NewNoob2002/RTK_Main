@@ -65,7 +65,7 @@ foreach(policy concurrent preempt)
         ${PROJ_ROOT}/main/board/BoardProfile.cpp ${PROJ_ROOT}/main/board/BoardCurrent.cpp
         ${PROJ_ROOT}/main/board/PowerLogic.cpp ${PROJ_ROOT}/main/modules/power/PowerModule.cpp
         ${PROJ_ROOT}/main/data/AppData.cpp ${PROJ_ROOT}/main/app/BootConfig.cpp
-        ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
+        ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/net/NetStore.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
         ${PROJ_ROOT}/main/modules/storage/ConfigCmds.cpp ${PROJ_ROOT}/main/support/ConsoleSupport.cpp
         ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
         ${PROJ_ROOT}/main/modules/system/FactoryReset.cpp
@@ -104,7 +104,7 @@ foreach(policy concurrent preempt)
         power_oled_battery_final_frame_stale_clock power_participant_four_slot_names
         power_sim_battery_boundary power_low_battery_real_zero_mv power_sim_battery_reinject
         power_oled_usb_late_u3_final_frame_hold power_sim_battery_redundant_off
-            rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
+            rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback net_settings_persistence
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window web_s2_storage_bt device_name device_name_e1 device_name_unknown)
         add_test(NAME main_${policy}_${scenario} COMMAND main_${policy} ${scenario})
@@ -140,6 +140,7 @@ foreach(scenario multi_producer_post concurrent_call cancel_stress)
 endforeach()
 
 add_executable(template_check TemplateCheck.cpp
+    ${PROJ_ROOT}/main/board/BoardCurrent.cpp ${PROJ_ROOT}/main/board/BoardProfile.cpp
     ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
     ${PROJ_ROOT}/main/modules/_template/TemplateModule.cpp
     ${PROJ_ROOT}/main/modules/_template/TemplateCmds.cpp
@@ -152,7 +153,7 @@ add_executable(template_check TemplateCheck.cpp
     ${PROJ_ROOT}/main/modules/bt_link/BtLinkModule.cpp ${PROJ_ROOT}/main/modules/bt_link/BtLinkSessions.cpp ${PROJ_ROOT}/main/modules/bt_link/BtLinkGnss.cpp
     ${PROJ_ROOT}/main/modules/rtcm/RtcmModule.cpp
     ${PROJ_ROOT}/main/modules/rtcm/RtcmForwarder.cpp
-    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
+    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/net/NetStore.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
     ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/DebugModuleLog.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp ${PROJ_ROOT}/main/modules/debug/TraceTextValues.cpp
     ${PROJ_ROOT}/main/modules/debug/DebugCmds.cpp
     ${PROJ_ROOT}/components/spp_server/SppTransport.cpp)
@@ -219,7 +220,7 @@ add_executable(gnss_stream_check GnssStreamCheck.cpp
     ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssBaseConfig.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleStore.cpp
-    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp
+    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/net/NetStore.cpp
     ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp
     ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
     ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp
@@ -560,3 +561,12 @@ if(PkgConfig_FOUND)
         add_subdirectory(../oled_sim oled_sim_build)
     endif()
 endif()
+
+# 4G 纯逻辑（控制台 AT 邮箱 / 低电量门控，N1 复审 #7/#8/#9/#13）。
+add_executable(net_logic_check NetLogicCheck.cpp ${PROJ_ROOT}/main/modules/net/NetMailbox.cpp)
+target_include_directories(net_logic_check PRIVATE ${PROJ_ROOT}/main
+    ${PROJ_ROOT}/components/app_fw/include ${PROJ_ROOT}/components/cellular/include)
+target_compile_options(net_logic_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
+    -Wimplicit-fallthrough -Wswitch-default -Wundef)
+add_test(NAME net_logic_check COMMAND net_logic_check)

@@ -13,7 +13,6 @@ constexpr uint32_t kForever = std::numeric_limits<uint32_t>::max();
 constexpr uint32_t kPowerOnSettleMs = 500U;
 constexpr uint32_t kBaudSwitchSettleMs = 100U;
 constexpr uint32_t kBaudSwitchExtendMs = 5000U;
-constexpr uint32_t kShutdownTotalMs = 2000U;
 constexpr uint32_t kShutdownPollMs = 20U;
 constexpr uint32_t kCloseTimeoutMs = 300U;
 constexpr uint8_t kImeiMinLen = 14U;
@@ -197,16 +196,85 @@ bool LinkFsm::submitOp(Op op, std::string_view text, uint32_t timeoutMs, uint32_
     cmd.onLine = &LinkFsm::thunkLine;
     cmd.onDone = &LinkFsm::thunkDone;
     cmd.ctx = this;
+    // 查询应答与同前缀 URC 按行形状区分（+CEREG?/+CREG? 的 <n>,<stat>；+CPIN 本身无歧义）。
+    if ((op == Op::kCereg) || (op == Op::kCreg) || (op == Op::kHealthCereg)) {
+        cmd.match = &isRegQueryLine;
+    } else if ((op == Op::kCpin) || (op == Op::kHealthCpin)) {
+        cmd.match = &isCpinLine;
+    }
     // 先登记 op 再提交：写失败等同步路径不会在 submit 内回调完成，但保持登记在前更稳妥。
     const Op previous = op_;
+    const uint32_t previousToken = opToken_;
+    cmd.token = nextToken();
     op_ = op;
     opPending_ = true;
+    opToken_ = cmd.token;
     if (!engine_->submit(cmd, nowMs)) {
         op_ = previous;
         opPending_ = false;
+        opToken_ = previousToken;
         return false;
     }
     return true;
+}
+
+/**
+ * @brief 生成下一个非零提交 token（过期应答丢弃用）
+ * @retval 非零 token
+ * @note 仅 kNet 执行器任务调用，非 ISR。
+ */
+uint32_t LinkFsm::nextToken() noexcept
+{
+    ++opSeq_;
+    if (opSeq_ == 0U) {
+        ++opSeq_;
+    }
+    return opSeq_;
+}
+
+/**
+ * @brief 提交一条连接类命令并登记其 token
+ * @param cmd: 已填好文本/回调的命令（本函数写入 token）
+ * @param nowMs: 当前毫秒时间戳
+ * @retval true 已入队
+ * @note 仅 kNet 执行器任务调用，非 ISR；失败时不改 connToken_。
+ */
+bool LinkFsm::submitConnCmd(AtCommand &cmd, uint32_t nowMs) noexcept
+{
+    const uint32_t previous = connToken_;
+    cmd.token = nextToken();
+    connToken_ = cmd.token;
+    if (!engine_->submit(cmd, nowMs)) {
+        connToken_ = previous;
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief 取消引擎中属于本 FSM 的在途命令并丢弃其登记
+ * @param nowMs: 当前毫秒时间戳
+ * @note 之后到达的旧应答由 AtEngine 重新同步握手隔离；仅 kNet 执行器任务调用，非 ISR。
+ */
+void LinkFsm::abortInflight(uint32_t nowMs) noexcept
+{
+    if ((engine_ != nullptr) && (opPending_ || connBusy_)) {
+        engine_->reset(nowMs);
+    }
+    clearOps();
+}
+
+/**
+ * @brief 记录 Ready 阶段首次丢失注册的时刻（只记第一次，用于 180 s 升级 L3）
+ * @param nowMs: 当前毫秒时间戳
+ * @note 仅 kNet 执行器任务调用，非 ISR。
+ */
+void LinkFsm::markRegLost(uint32_t nowMs) noexcept
+{
+    if (!regLost_) {
+        regLost_ = true;
+        regLostMs_ = nowMs;
+    }
 }
 
 /**
@@ -228,7 +296,10 @@ void LinkFsm::thunkDone(void *ctx, const AtResponse &rsp) noexcept
  */
 void LinkFsm::thunkLine(void *ctx, std::string_view line) noexcept
 {
-    static_cast<LinkFsm *>(ctx)->onOpLine(line);
+    auto *self = static_cast<LinkFsm *>(ctx);
+    if (self->engine_->frontToken() == self->opToken_) { // 过期命令的行不得写入当前操作状态
+        self->onOpLine(line);
+    }
 }
 
 /**
@@ -251,7 +322,7 @@ void LinkFsm::thunkConnDone(void *ctx, const AtResponse &rsp) noexcept
 void LinkFsm::thunkRaw(void *ctx, std::span<const uint8_t> chunk) noexcept
 {
     auto *self = static_cast<LinkFsm *>(ctx);
-    if (self->connOpId_ < kConnSlots) {
+    if ((self->connOpId_ < kConnSlots) && (self->engine_->frontToken() == self->connToken_)) {
         self->connReadBytes_ += chunk.size();
         self->conns_[self->connOpId_].fails = 0U; // 收到数据即清 L1 退避
         if (self->events_.onData != nullptr) {
@@ -321,6 +392,9 @@ void LinkFsm::onOpLine(std::string_view line) noexcept
  */
 void LinkFsm::onOpDone(const AtResponse &rsp) noexcept
 {
+    if (rsp.token != opToken_) {
+        return; // 过期完成（命令提交后已发生 L2/L3/SIM 丢失等恢复）：不得推进当前阶段
+    }
     opPending_ = false;
     const Op op = op_;
     op_ = Op::kNone;
@@ -384,7 +458,7 @@ void LinkFsm::onOpDone(const AtResponse &rsp) noexcept
         if (haveReg) {
             snap_.reg = pendingReg_;
             if (!isRegistered(pendingReg_)) {
-                regLost_ = true;
+                markRegLost(now);
             } else if (regLost_) {
                 regLost_ = false;
                 enterL2(now, true);
@@ -427,6 +501,10 @@ void LinkFsm::enterPhase(Phase phase, uint32_t nowMs) noexcept
 {
     phase_ = phase;
     snap_.phase = phase;
+    if (engine_ != nullptr) {
+        // 同步阶段（波特率探测）不做握手隔离；之后任何命令超时/取消都必须先重新同步。
+        engine_->setResyncEnabled(phase >= Phase::kSimCheck);
+    }
     phaseStartMs_ = nowMs;
     nextMs_ = nowMs;
     if (phase == Phase::kRegister) {
@@ -449,6 +527,8 @@ void LinkFsm::clearOps() noexcept
 {
     op_ = Op::kNone;
     opPending_ = false;
+    opToken_ = 0U;
+    connToken_ = 0U;
     connBusy_ = false;
     connOp_ = ConnOp::kNone;
     healthSeq_ = 0U;
@@ -563,6 +643,7 @@ void LinkFsm::enterL2(uint32_t nowMs, bool deactivate) noexcept
 {
     snap_.level = RecoveryLevel::kL2Bearer;
     ++snap_.recoveryCount;
+    abortInflight(nowMs); // 在途的 QIACT/巡检/连接命令的结果不得再推进新一轮 PDP 流程
     if (l2Count_ < std::numeric_limits<uint8_t>::max()) {
         ++l2Count_;
     }
@@ -661,20 +742,24 @@ void LinkFsm::onSimState(SimStatus sim, uint32_t nowMs) noexcept
     }
 }
 
-void LinkFsm::beginShutdown(uint32_t nowMs) noexcept
+void LinkFsm::beginShutdown(uint32_t nowMs, uint32_t deadlineMs) noexcept
 {
     latched_ = true;
+    const uint32_t deadline = (deadlineMs != 0U) ? deadlineMs : (nowMs + kShutdownTotalMs);
     if (!shuttingDown_) {
-        startStop(nowMs);
+        startStop(nowMs, deadline);
+    } else if (static_cast<int32_t>(deadline - shutDeadlineMs_) < 0) {
+        shutDeadlineMs_ = deadline; // 已在关机：PW1 截止更早时以 PW1 为准
     }
 }
 
 /**
  * @brief 开始优雅关机/停止流程
  * @param nowMs: 当前毫秒时间戳
+ * @param deadlineMs: 关机绝对截止时间戳（毫秒，同 nowMs 时基）
  * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
  */
-void LinkFsm::startStop(uint32_t nowMs) noexcept
+void LinkFsm::startStop(uint32_t nowMs, uint32_t deadlineMs) noexcept
 {
     if (shuttingDown_) {
         return;
@@ -695,10 +780,12 @@ void LinkFsm::startStop(uint32_t nowMs) noexcept
     }
     shuttingDown_ = true;
     shutStartMs_ = nowMs;
+    shutDeadlineMs_ = deadlineMs;
     shutStep_ = ShutStep::kClose;
     shutCloseId_ = 0U;
     poweredDownSeen_ = false;
-    engine_->reset(nowMs); // 丢弃在途的巡检/连接命令，让关机序列立即得到串口
+    engine_->reset(nowMs);            // 丢弃在途的巡检/连接命令，让关机序列立即得到串口
+    engine_->setResyncEnabled(false); // 关机总预算有限：不做握手隔离，QICLOSE/QPOWD 直接发
     clearOps();
 }
 
@@ -729,8 +816,8 @@ void LinkFsm::finishStop(uint32_t nowMs) noexcept
  */
 void LinkFsm::pollShutdown(uint32_t nowMs) noexcept
 {
-    if (reached(nowMs, shutStartMs_ + kShutdownTotalMs)) {
-        finishStop(nowMs); // 总预算 ≤2 s：无论 QPOWD 进展如何，到点直接断电
+    if (reached(nowMs, shutDeadlineMs_)) {
+        finishStop(nowMs); // 绝对截止（与 PW1 同一时刻）：无论 QPOWD 进展如何，到点直接断电
         return;
     }
     switch (shutStep_) {
@@ -780,7 +867,7 @@ void LinkFsm::pollShutdown(uint32_t nowMs) noexcept
  */
 void LinkFsm::pollOff(uint32_t nowMs) noexcept
 {
-    if (!enabled_ || !powerAllowed_ || latched_ || shuttingDown_) {
+    if (!enabled_ || !powerAllowed_ || !startAllowed_ || latched_ || shuttingDown_) {
         return;
     }
     // 断电后至少保持 powerOffMinMs 再上电，避免模块未完全放电。
@@ -1098,6 +1185,10 @@ void LinkFsm::onPdpDone(const AtResponse &rsp) noexcept
  */
 void LinkFsm::pollReady(uint32_t nowMs) noexcept
 {
+    if (regLost_ && reached(nowMs, regLostMs_ + kPolicy.registerTimeoutMs)) {
+        enterL3(nowMs); // 注册丢失超过 180 s 仍未恢复：与 Register 阶段同级，升级整机复位
+        return;
+    }
     if ((healthSeq_ == 0U) && reached(nowMs, healthDueMs_)) {
         healthSeq_ = 1U;
     }
@@ -1147,7 +1238,7 @@ void LinkFsm::pollConns(uint32_t nowMs) noexcept
             w.num(id);
             cmd.text = w.view();
             cmd.timeoutMs = at_timeout::kQiclose;
-            if (w.ok && engine_->submit(cmd, nowMs)) {
+            if (w.ok && submitConnCmd(cmd, nowMs)) {
                 connBusy_ = true;
                 connOp_ = ConnOp::kClose;
                 connOpId_ = id;
@@ -1159,6 +1250,20 @@ void LinkFsm::pollConns(uint32_t nowMs) noexcept
         if ((conn.state == ConnState::kBackoff) && reached(nowMs, conn.dueMs)) {
             conn.state = ConnState::kWantOpen;
         }
+        if ((conn.state == ConnState::kWantOpen) && conn.closeFirst && reached(nowMs, conn.dueMs)) {
+            // 上次 QIOPEN 结果 URC 超时，模块侧该槽可能仍在连接：先关闭再重开，避免占用/竞态。
+            w.str("AT+QICLOSE=");
+            w.num(id);
+            cmd.text = w.view();
+            cmd.timeoutMs = at_timeout::kQiclose;
+            if (w.ok && submitConnCmd(cmd, nowMs)) {
+                connBusy_ = true;
+                connOp_ = ConnOp::kCloseStale;
+                connOpId_ = id;
+                return;
+            }
+            continue;
+        }
         if ((conn.state == ConnState::kWantOpen) && reached(nowMs, conn.dueMs)) {
             w.str("AT+QIOPEN=1,");
             w.num(id);
@@ -1169,7 +1274,7 @@ void LinkFsm::pollConns(uint32_t nowMs) noexcept
             w.str(",0,0"); // local_port=0, access_mode=0（缓冲模式，ADR-0021 §2.4）
             cmd.text = w.view();
             cmd.timeoutMs = at_timeout::kMedium;
-            if (w.ok && engine_->submit(cmd, nowMs)) {
+            if (w.ok && submitConnCmd(cmd, nowMs)) {
                 connBusy_ = true;
                 connOp_ = ConnOp::kOpen;
                 connOpId_ = id;
@@ -1181,6 +1286,7 @@ void LinkFsm::pollConns(uint32_t nowMs) noexcept
         }
         if ((conn.state == ConnState::kOpening) && reached(nowMs, conn.dueMs)) {
             connFailed(id, nowMs);
+            conn.closeFirst = true; // connFailed 之后：重开前必须先 QICLOSE（见 kWantOpen 分支）
             return;
         }
         if (conn.recvPending && (conn.state == ConnState::kOpen)) {
@@ -1192,7 +1298,8 @@ void LinkFsm::pollConns(uint32_t nowMs) noexcept
             cmd.timeoutMs = at_timeout::kMedium;
             cmd.onRaw = &LinkFsm::thunkRaw;
             cmd.rawPrefix = "+QIRD:";
-            if (w.ok && engine_->submit(cmd, nowMs)) {
+            cmd.rawMax = kReadChunkBytes; // 声明长度超过请求长度即协议错误，防止多读/越界
+            if (w.ok && submitConnCmd(cmd, nowMs)) {
                 connBusy_ = true;
                 connOp_ = ConnOp::kRead;
                 connOpId_ = id;
@@ -1211,6 +1318,9 @@ void LinkFsm::pollConns(uint32_t nowMs) noexcept
  */
 void LinkFsm::onConnDone(const AtResponse &rsp) noexcept
 {
+    if (rsp.token != connToken_) {
+        return; // 过期完成：该连接命令已被恢复流程取消，结果不得套用到当前槽状态
+    }
     connBusy_ = false;
     const ConnOp op = connOp_;
     connOp_ = ConnOp::kNone;
@@ -1233,6 +1343,9 @@ void LinkFsm::onConnDone(const AtResponse &rsp) noexcept
         if (events_.onClosed != nullptr) {
             events_.onClosed(events_.ctx, id);
         }
+        break;
+    case ConnOp::kCloseStale:
+        conn.closeFirst = false; // 无论结果：已尽力释放该槽，随后正常重开
         break;
     case ConnOp::kRead:
         if (!ok || (connReadBytes_ == 0U)) {
@@ -1313,6 +1426,7 @@ bool LinkFsm::openConn(uint8_t id, std::string_view host, uint16_t port) noexcep
     conn.dueMs = 0U;
     conn.recvPending = false;
     conn.wantClose = false;
+    conn.closeFirst = false;
     conn.state = ConnState::kWantOpen;
     return true;
 }
@@ -1357,7 +1471,7 @@ bool LinkFsm::sendConn(uint8_t id, std::span<const uint8_t> payload, uint32_t no
     cmd.onDone = &LinkFsm::thunkConnDone;
     cmd.ctx = this;
     cmd.payload = payload;
-    if (!w.ok || !engine_->submit(cmd, nowMs)) {
+    if (!w.ok || !submitConnCmd(cmd, nowMs)) {
         return false;
     }
     connBusy_ = true;
@@ -1393,16 +1507,23 @@ void LinkFsm::onUrc(std::string_view line, uint32_t nowMs) noexcept
         return;
     }
     if (line.starts_with("+CEREG:") || line.starts_with("+CREG:")) {
+        if (isRegQueryLine(line)) {
+            return; // <n>,<stat> 形状是 CEREG? 的应答，漏到 URC 路径说明是迟到的旧应答，不能当实时状态
+        }
         RegStatus reg = RegStatus::kUnknown;
         if (!parseReg(line, reg)) {
             return;
         }
         snap_.reg = reg;
+        if (opPending_ &&
+            ((op_ == Op::kCereg) || (op_ == Op::kCreg) || (op_ == Op::kHealthCereg))) {
+            gotReg_ = false; // 在途查询的应答已被更新的 URC 取代：本轮查询结果作废，下轮重查
+        }
         if ((phase_ == Phase::kRegister) && isRegistered(reg)) {
             enterPhase(Phase::kPdpUp, nowMs);
         } else if (phase_ == Phase::kReady) {
             if (!isRegistered(reg)) {
-                regLost_ = true;
+                markRegLost(nowMs);
             } else if (regLost_) {
                 regLost_ = false;
                 enterL2(nowMs, true);
@@ -1444,7 +1565,11 @@ void LinkFsm::onUrc(std::string_view line, uint32_t nowMs) noexcept
             if (kind == "closed") {
                 connLost(slot, nowMs);
             } else if (kind == "recv") {
-                conns_[slot].recvPending = true;
+                if (conns_[slot].state == ConnState::kOpen) {
+                    conns_[slot].recvPending = true;
+                } else if (droppedRecv_ < std::numeric_limits<uint16_t>::max()) {
+                    ++droppedRecv_; // 无主槽位（未打开/已关闭）的 recv 通知：丢弃并计数，避免空转
+                }
             }
         }
     }
@@ -1465,7 +1590,7 @@ void LinkFsm::poll(uint32_t nowMs) noexcept
         return;
     }
     if (!enabled_ || !powerAllowed_ || latched_) {
-        startStop(nowMs);
+        startStop(nowMs, nowMs + kShutdownTotalMs);
         return;
     }
     if (engine_->dead() && (phase_ != Phase::kSync) && (phase_ != Phase::kPowerOn) &&
@@ -1514,7 +1639,7 @@ uint32_t LinkFsm::msToNextWork(uint32_t nowMs) const noexcept
     }
     switch (phase_) {
     case Phase::kOff:
-        return (enabled_ && powerAllowed_ && !latched_)
+        return (enabled_ && powerAllowed_ && startAllowed_ && !latched_)
                    ? (offSinceValid_ ? remaining(nowMs, offSinceMs_ + kPolicy.powerOffMinMs) : 0U)
                    : kForever;
     case Phase::kPowerCycle:
@@ -1532,14 +1657,19 @@ uint32_t LinkFsm::msToNextWork(uint32_t nowMs) const noexcept
         return opPending_ ? kForever : remaining(nowMs, nextMs_);
     case Phase::kReady: {
         uint32_t next = (healthSeq_ == 0U) ? remaining(nowMs, healthDueMs_) : 0U;
+        if (regLost_) {
+            next = std::min(next, remaining(nowMs, regLostMs_ + kPolicy.registerTimeoutMs));
+        }
         for (const Conn &conn : conns_) {
-            if (!connBusy_ &&
-                (conn.wantClose || conn.recvPending || (conn.state == ConnState::kWantOpen))) {
-                next = std::min(next, remaining(nowMs, conn.dueMs));
-                if (conn.wantClose || conn.recvPending) {
-                    next = 0U;
-                }
-            } else if ((conn.state == ConnState::kBackoff) || (conn.state == ConnState::kOpening)) {
+            const bool isOpen = (conn.state == ConnState::kOpen);
+            const bool opening = (conn.state == ConnState::kOpening);
+            // 只为“当前就能执行”的连接操作缩短等待：无主槽位的 recv/关闭请求不得让执行器空转。
+            const bool runnable =
+                (conn.wantClose && (isOpen || opening)) || (conn.recvPending && isOpen);
+            if (!connBusy_ && runnable) {
+                next = 0U;
+            } else if ((!connBusy_ && (conn.state == ConnState::kWantOpen)) ||
+                       (conn.state == ConnState::kBackoff) || opening) {
                 next = std::min(next, remaining(nowMs, conn.dueMs));
             }
         }
@@ -1556,6 +1686,17 @@ LinkSnapshot LinkFsm::snapshot(uint32_t nowMs) const noexcept
     LinkSnapshot out = snap_;
     out.channelDead = out.channelDead || ((engine_ != nullptr) && engine_->dead());
     out.backoffRemainingMs = 0U;
+    out.droppedRecv = droppedRecv_;
+    for (uint8_t id = 0U; id < kConnSlots; ++id) {
+        const Conn &conn = conns_[id];
+        ConnSnapshot &slot = out.conn[id];
+        slot.state = static_cast<uint8_t>(conn.state);
+        slot.fails = conn.fails;
+        const bool timed = (conn.state == ConnState::kBackoff) ||
+                           (conn.state == ConnState::kOpening) ||
+                           (conn.state == ConnState::kWantOpen);
+        slot.backoffRemainingMs = timed ? remaining(nowMs, conn.dueMs) : 0U;
+    }
     if (phase_ == Phase::kPowerCycle) {
         out.backoffRemainingMs = remaining(nowMs, cycleEndMs_);
     } else if ((phase_ == Phase::kPdpUp) && !opPending_) {

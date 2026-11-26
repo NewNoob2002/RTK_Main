@@ -48,6 +48,7 @@ struct Sim final {
     int qiopenErr = 0;
     bool autoUrcOpen = true; // QIOPEN OK 后自动给 +QIOPEN URC
     std::string rxData;      // 模块侧待读数据
+    std::string dropPrefix;  // 非空：丢弃（不应答）下一条以此开头的命令，之后自动清空
 
     // 主机侧观测。
     uint32_t hostBaud = 115200U;
@@ -107,6 +108,10 @@ void handleCommand(Sim &s, const std::string &cmd)
 {
     s.cmds.push_back(cmd);
     s.cmdTimes.push_back(s.now);
+    if (!s.dropPrefix.empty() && cmd.rfind(s.dropPrefix, 0) == 0) {
+        s.dropPrefix.clear();
+        return;
+    }
     if (cmd == "AT") {
         respondOk(s, cmd);
     } else if (cmd == "ATE0") {
@@ -114,6 +119,8 @@ void handleCommand(Sim &s, const std::string &cmd)
         s.echo = false;
     } else if (cmd == "AT+CMEE=2") {
         respondOk(s, cmd);
+    } else if (cmd == "AT+CMEE?") {
+        respondOk(s, cmd, "+CMEE: 2");
     } else if (cmd == "AT+IPR=460800") {
         if (s.iprFail) {
             respondErr(s, cmd, "ERROR");
@@ -1000,6 +1007,149 @@ void testConfigTruncatesOverlongFields()
         s.cmds[static_cast<size_t>(apn)].c_str());
 }
 
+void testLateReplyAfterTimeoutNotAttributedToNextOp()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    runFor(s, 1000U); // 首次巡检完成
+    // 下一次巡检的 CSQ 被模块吞掉 → 超时；迟到的旧应答恰好长得像 CEREG? 查询结果。
+    s.dropPrefix = "AT+CSQ";
+    const size_t csqBefore = countCmds(s, "AT+CSQ");
+    TEST_ASSERT_TRUE(runUntil(s, 40000U, [&]() { return countCmds(s, "AT+CSQ") > csqBefore; }));
+    runFor(s, 300U + 20U);
+    schedule(s, "\r\n+CEREG: 0,2\r\nOK\r\n", 0U);
+    runFor(s, 3000U);
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase());
+    TEST_ASSERT_EQUAL(RegStatus::kHome, s.fsm.snapshot(s.now).reg);
+    runFor(s, 70000U);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kNone, s.fsm.snapshot(s.now).level);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+}
+
+void testQiopenResultTimeoutClosesSlotBeforeReopen()
+{
+    Sim s;
+    setup(s);
+    s.autoUrcOpen = false; // 模块接受 QIOPEN 但永不给结果 URC
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.openConn(1U, "host", 1883U));
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return !s.events.empty(); }));
+    TEST_ASSERT_EQUAL_STRING("open1:0", s.events.back().c_str());
+    s.autoUrcOpen = true;
+    TEST_ASSERT_TRUE(runUntil(s, 70000U, [&s]() { return countCmds(s, "AT+QIOPEN=") >= 2U; }));
+    const int firstOpen = indexOfCmd(s, "AT+QIOPEN=");
+    const int close = indexOfCmd(s, "AT+QICLOSE=1");
+    const int secondOpen = indexOfCmd(s, "AT+QIOPEN=", 1U);
+    TEST_ASSERT_TRUE(close > firstOpen);
+    TEST_ASSERT_TRUE(secondOpen > close);
+}
+
+void testRegistrationLostFor180sEscalatesL3()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    runFor(s, 1000U);
+    s.regStat = 2; // 持续搜网，不恢复
+    TEST_ASSERT_TRUE(
+        runUntil(s, 40000U, [&s]() { return s.fsm.snapshot(s.now).reg == RegStatus::kSearching; }));
+    const uint32_t lostAt = s.now;
+    TEST_ASSERT_TRUE(runUntil(s, 300000U, [&s]() { return powerOffCount(s) >= 1U; }));
+    TEST_ASSERT_TRUE((s.now - lostAt) >= 150000U);
+    TEST_ASSERT_TRUE((s.now - lostAt) <= 215000U);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+}
+
+void testStartAllowedOnlyBlocksNewPowerOn()
+{
+    Sim s;
+    setup(s);
+    s.fsm.setStartAllowed(false); // 低电量迟滞：不允许新上电
+    runFor(s, 30000U);
+    TEST_ASSERT_TRUE(s.power.empty());
+    s.fsm.setStartAllowed(true);
+    TEST_ASSERT_TRUE(toReady(s));
+    // 已在线的模块不因“不允许新上电”被断电（交给低电关机流程）。
+    s.fsm.setStartAllowed(false);
+    runFor(s, 60000U);
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase());
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(countCmds(s, "AT+QPOWD")));
+}
+
+void testShutdownUsesSharedAbsoluteDeadline()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.silent = true; // 模块不应答：只能靠截止时刻断电
+    const uint32_t t0 = s.now;
+    // PW1 在 t0 起算 2 s；kNet 晚 1.2 s 才开始关机，必须沿用同一截止时刻。
+    runFor(s, 1200U);
+    s.fsm.beginShutdown(s.now, t0 + 2000U);
+    TEST_ASSERT_TRUE(runUntil(s, 2500U, [&s]() { return s.fsm.shutdownDone(); }));
+    TEST_ASSERT_TRUE((s.now - t0) <= 2050U);
+    TEST_ASSERT_FALSE(s.power.back().on);
+}
+
+void testShutdownPastDeadlineCutsImmediately()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.fsm.beginShutdown(s.now, s.now - 5U);
+    runFor(s, 40U);
+    TEST_ASSERT_TRUE(s.fsm.shutdownDone());
+    TEST_ASSERT_FALSE(s.power.back().on);
+}
+
+void testIdleSlotRecvUrcDroppedNotSpinning()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    runFor(s, 1000U);
+    const size_t qirdBefore = countCmds(s, "AT+QIRD=");
+    schedule(s, "\r\n+QIURC: \"recv\",1\r\n", 10U);
+    runFor(s, 200U);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(qirdBefore),
+                             static_cast<uint32_t>(countCmds(s, "AT+QIRD=")));
+    TEST_ASSERT_EQUAL_UINT16(1U, s.fsm.snapshot(s.now).droppedRecv);
+    TEST_ASSERT_TRUE(s.fsm.msToNextWork(s.now) > 0U);
+}
+
+void testPerSlotSnapshotReflectsEachConn()
+{
+    Sim s;
+    setup(s);
+    s.autoUrcOpen = false;
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.openConn(0U, "a", 1U));
+    s.qiopenErr = 552;
+    TEST_ASSERT_TRUE(s.fsm.openConn(2U, "b", 2U));
+    runFor(s, 500U);
+    const cellular::LinkSnapshot snap = s.fsm.snapshot(s.now);
+    TEST_ASSERT_EQUAL_UINT8(2U, snap.conn[0].state); // Opening
+    TEST_ASSERT_EQUAL_UINT8(0U, snap.conn[1].state); // Idle
+    TEST_ASSERT_TRUE(snap.conn[2].state == 2U || snap.conn[2].state == 4U);
+}
+
+void testOversizedRawReadRejectedAndRecovers()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toConnOpen(s));
+    s.rxData.assign(cellular::kReadChunkBytes + 1U, 'x'); // 模块给出比请求更多的数据
+    schedule(s, "\r\n+QIURC: \"recv\",0\r\n", 10U);
+    runFor(s, 500U);
+    TEST_ASSERT_TRUE(s.rxCollected.size() <= cellular::kReadChunkBytes);
+    s.rxData.clear();
+    runFor(s, 5000U);
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase());
+    TEST_ASSERT_TRUE(s.fsm.connOpen(0U));
+}
+
 } // namespace
 
 void setUp() {}
@@ -1047,5 +1197,14 @@ int main()
     RUN_TEST(testDisableAtRuntimeStopsModule);
     RUN_TEST(testMsToNextWorkIsBoundedWhenReady);
     RUN_TEST(testConfigTruncatesOverlongFields);
+    RUN_TEST(testLateReplyAfterTimeoutNotAttributedToNextOp);
+    RUN_TEST(testQiopenResultTimeoutClosesSlotBeforeReopen);
+    RUN_TEST(testRegistrationLostFor180sEscalatesL3);
+    RUN_TEST(testStartAllowedOnlyBlocksNewPowerOn);
+    RUN_TEST(testShutdownUsesSharedAbsoluteDeadline);
+    RUN_TEST(testShutdownPastDeadlineCutsImmediately);
+    RUN_TEST(testIdleSlotRecvUrcDroppedNotSpinning);
+    RUN_TEST(testPerSlotSnapshotReflectsEachConn);
+    RUN_TEST(testOversizedRawReadRejectedAndRecovers);
     return UNITY_END();
 }

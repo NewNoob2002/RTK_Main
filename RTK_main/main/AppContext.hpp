@@ -25,6 +25,8 @@ namespace board {
 struct Profile;
 }
 
+struct NetBlock; // 4G 运行态块，见 app/NetBlock.hpp
+
 /** 执行器非栈控制块存储（TCB、命令静态队列与异步完成表）；任务栈由启动期 boot_alloc 外供（ADR-0011 §7）。 */
 template <size_t QueueDepth> struct ExecutorControlStorage {
     static_assert(QueueDepth > 0U, "queue depth must be > 0");
@@ -130,8 +132,8 @@ struct AppContext {
     rtos::Executor *linkExecutor = nullptr;
     ExecutorControlStorage<kModuleCount> linkStorage{};
     rtos::Executor *ioExecutor = nullptr;
-    rtos::Executor *netExecutor = nullptr; // 仅 Feature::kCellular 板型在 startNet 后非空
-    ExecutorControlStorage<kModuleCount> netStorage{};
+    rtos::Executor *netExecutor = nullptr; // 指向 netBlock 内执行器；仅 4G 启用时在 startNet 后非空
+    NetBlock *netBlock = nullptr; // 启动期 boot_alloc 分配（net.enable=1 时），禁用时零静态 RAM
 #if RTK_GNSS_ENABLED
     ExecutorControlStorage<kModuleCount> ioStorage{};
     RtcmPipe rtcmPipe{};

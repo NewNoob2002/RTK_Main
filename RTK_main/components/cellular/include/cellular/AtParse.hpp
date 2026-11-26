@@ -32,11 +32,11 @@ namespace cellular {
 }
 
 /**
- * @brief  解析文本开头的十进制整数（允许前导空格与负号，遇非数字停止）
+ * @brief  解析完整十进制整数字段（允许首尾空格与前导负号，其余字符必须是数字）
  * @param  text: 输入文本
  * @param[out] out: 成功时写入数值；失败不修改
  * @retval true  解析到至少一位数字且未溢出 int32
- * @retval false 无数字或溢出
+ * @retval false 无数字、含尾部杂字符或溢出
  * @note   纯函数，线程/ISR 安全。
  */
 [[nodiscard]] bool parseInt(std::string_view text, int32_t &out) noexcept;
@@ -98,6 +98,30 @@ namespace cellular {
  * @note   纯函数，线程/ISR 安全。
  */
 [[nodiscard]] bool parseCpin(std::string_view line, SimStatus &sim) noexcept;
+
+/**
+ * @brief  把 +CMEE=2 的文本错误描述映射为数值码（如 "SIM not inserted" → 10）
+ * @param  text: "+CME ERROR:" 冒号之后的文本
+ * @retval 数值码；未知文本返回 0
+ * @note   纯函数，线程/ISR 安全。
+ */
+[[nodiscard]] int32_t cmeCodeFromText(std::string_view text) noexcept;
+
+/**
+ * @brief  判断 +CEREG/+CREG/+CGREG 行是否为查询应答形状（<n>,<stat>[,...]，第二字段为纯数字）
+ * @param  line: 响应行
+ * @retval true  查询应答；false 为 URC 形状或非注册行
+ * @note   纯函数，线程/ISR 安全；作为 AtCommand::match 使用。
+ */
+[[nodiscard]] bool isRegQueryLine(std::string_view line) noexcept;
+
+/**
+ * @brief  判断是否为 "+CPIN:" 行（查询应答与异步事件形状相同，查询在途时归属查询，后到者覆盖前者）
+ * @param  line: 响应行
+ * @retval true 前缀匹配
+ * @note   纯函数，线程/ISR 安全；作为 AtCommand::match 使用。
+ */
+[[nodiscard]] bool isCpinLine(std::string_view line) noexcept;
 
 /**
  * @brief  把 +CME ERROR 码映射为 SIM 状态（10=未插卡，11/12/…=需 PIN/PUK，其余=异常）

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "cellular/AtEngine.hpp"
+#include "cellular/AtParse.hpp"
 #include "cellular/LinkFsm.hpp"
 #include "unity.h"
 
@@ -137,7 +138,9 @@ void testQueryResponseNotTreatedAsUrc()
 {
     Harness h;
     setupHarness(h);
-    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CPIN?"), 0U));
+    AtCommand cmd = makeCmd(h, "AT+CPIN?");
+    cmd.match = &cellular::isCpinLine;
+    TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
     feedStr(h, "+CPIN: READY\r\nOK\r\n", 1U);
     TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(h.urcs.size()));
     TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.lines.size()));
@@ -184,6 +187,7 @@ void testFixedLengthRawRead()
     setupHarness(h);
     AtCommand cmd = makeCmd(h, "AT+QIRD=0,1024");
     cmd.rawPrefix = "+QIRD:";
+    cmd.rawMax = 1024U;
     TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
     // 原始数据含 CR/LF/"OK" 字样，必须按长度读取，不被分帧误吞；且数据分多块到达。
     feedStr(h, "+QIRD: 8\r\nab\r\nOK", 1U);
@@ -258,6 +262,130 @@ void testTickWrapTimeout()
     TEST_ASSERT_EQUAL(AtResult::kTimeout, h.done[0].result);
 }
 
+void testSamePrefixUrcNotTakenAsQueryReply()
+{
+    Harness h;
+    setupHarness(h);
+    AtCommand cmd = makeCmd(h, "AT+CEREG?");
+    cmd.match = &cellular::isRegQueryLine;
+    TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
+    // 同前缀的 URC 形状（单字段）必须走 URC 通道，不能当作查询应答。
+    feedStr(h, "+CEREG: 5\r\n+CEREG: 2,1,\"1A2B\"\r\nOK\r\n", 1U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.urcs.size()));
+    TEST_ASSERT_EQUAL_STRING("+CEREG: 5", h.urcs[0].c_str());
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.lines.size()));
+    TEST_ASSERT_EQUAL_STRING("+CEREG: 2,1,\"1A2B\"", h.lines[0].c_str());
+}
+
+void testDeadlineBoundaryUsesRxTimestamp()
+{
+    Harness h;
+    setupHarness(h);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT", 300U), 0U));
+    // 截止时刻及之后到达的字节属于迟到：先超时，不得成功。
+    feedStr(h, "OK\r\n", 300U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL(AtResult::kTimeout, h.done[0].result);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT", 300U), 400U));
+    feedStr(h, "OK\r\n", 699U);
+    TEST_ASSERT_EQUAL(AtResult::kOk, h.done[1].result);
+}
+
+void testLateTerminatorDoesNotCompleteNextCommand()
+{
+    Harness h;
+    setupHarness(h);
+    h.engine.setResyncEnabled(true);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CSQ", 300U), 0U));
+    h.engine.poll(300U);
+    TEST_ASSERT_EQUAL(AtResult::kTimeout, h.done[0].result);
+    // 下一条命令排队后，先发重新同步握手而不是命令本身。
+    h.tx.clear();
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+GSN", 300U), 310U));
+    TEST_ASSERT_EQUAL_STRING("AT+CMEE?\r", h.tx.c_str());
+    // 旧命令迟到的应答与终结行：丢弃，不归属新命令。
+    feedStr(h, "+CSQ: 20,0\r\nOK\r\n", 320U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(h.lines.size()));
+    TEST_ASSERT_TRUE(h.engine.stats().stale >= 1U);
+    // 握手完成后才发出新命令，其应答只归新命令。
+    feedStr(h, "+CMEE: 2\r\nOK\r\n", 330U);
+    TEST_ASSERT_EQUAL_STRING("AT+CMEE?\rAT+GSN\r", h.tx.c_str());
+    feedStr(h, "860000000000001\r\nOK\r\n", 340U);
+    TEST_ASSERT_EQUAL_UINT32(2U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL(AtResult::kOk, h.done[1].result);
+    TEST_ASSERT_EQUAL_UINT32(1U, h.engine.stats().resyncs);
+}
+
+void testCancelInflightNeedsResync()
+{
+    Harness h;
+    setupHarness(h);
+    h.engine.setResyncEnabled(true);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CSQ", 300U), 0U));
+    h.engine.reset(10U); // 本地取消在途命令
+    TEST_ASSERT_TRUE(h.engine.resyncing());
+    h.tx.clear();
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT", 300U), 20U));
+    TEST_ASSERT_EQUAL_STRING("AT+CMEE?\r", h.tx.c_str());
+}
+
+void testRawLengthOverRequestIsProtocolError()
+{
+    Harness h;
+    setupHarness(h);
+    h.engine.setResyncEnabled(true);
+    AtCommand cmd = makeCmd(h, "AT+QIRD=0,1024");
+    cmd.rawPrefix = "+QIRD:";
+    cmd.rawMax = 1024U;
+    TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
+    feedStr(h, "+QIRD: 1025\r\n", 1U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL(AtResult::kError, h.done[0].result);
+    TEST_ASSERT_EQUAL_UINT32(1U, h.engine.stats().protocol);
+    TEST_ASSERT_TRUE(h.raw.empty());
+    TEST_ASSERT_TRUE(h.engine.resyncing());
+}
+
+void testRawLengthTrailingJunkRejected()
+{
+    Harness h;
+    setupHarness(h);
+    AtCommand cmd = makeCmd(h, "AT+QIRD=0,1024");
+    cmd.rawPrefix = "+QIRD:";
+    cmd.rawMax = 1024U;
+    TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
+    feedStr(h, "+QIRD: 8abc\r\n", 1U);
+    TEST_ASSERT_EQUAL(AtResult::kError, h.done[0].result);
+    TEST_ASSERT_TRUE(h.raw.empty());
+}
+
+void testRxLostDuringRawAbortsCommand()
+{
+    Harness h;
+    setupHarness(h);
+    h.engine.setResyncEnabled(true);
+    AtCommand cmd = makeCmd(h, "AT+QIRD=0,16");
+    cmd.rawPrefix = "+QIRD:";
+    cmd.rawMax = 16U;
+    TEST_ASSERT_TRUE(h.engine.submit(cmd, 0U));
+    feedStr(h, "+QIRD: 8\r\nab", 1U);
+    h.engine.onRxLost(2U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(h.done.size()));
+    TEST_ASSERT_EQUAL(AtResult::kError, h.done[0].result);
+    TEST_ASSERT_TRUE(h.engine.resyncing());
+}
+
+void testCmeErrorTextCode()
+{
+    Harness h;
+    setupHarness(h);
+    TEST_ASSERT_TRUE(h.engine.submit(makeCmd(h, "AT+CPIN?"), 0U));
+    feedStr(h, "+CME ERROR: SIM not inserted\r\n", 1U);
+    TEST_ASSERT_EQUAL(AtResult::kCmeError, h.done[0].result);
+    TEST_ASSERT_EQUAL_INT32(10, h.done[0].errorCode);
+}
+
 } // namespace
 
 extern "C" void setUp(void) {}
@@ -277,5 +405,13 @@ int main()
     RUN_TEST(testWriteFailureTimesOut);
     RUN_TEST(testOverlongLineDropped);
     RUN_TEST(testTickWrapTimeout);
+    RUN_TEST(testSamePrefixUrcNotTakenAsQueryReply);
+    RUN_TEST(testDeadlineBoundaryUsesRxTimestamp);
+    RUN_TEST(testLateTerminatorDoesNotCompleteNextCommand);
+    RUN_TEST(testCancelInflightNeedsResync);
+    RUN_TEST(testRawLengthOverRequestIsProtocolError);
+    RUN_TEST(testRawLengthTrailingJunkRejected);
+    RUN_TEST(testRxLostDuringRawAbortsCommand);
+    RUN_TEST(testCmeErrorTextCode);
     return UNITY_END();
 }

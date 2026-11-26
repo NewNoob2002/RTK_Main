@@ -25,7 +25,8 @@ struct BootBuffers {
     std::span<uint8_t> gnssAppRing{};
     std::span<uint8_t> gnssLatest{};
 #endif
-    std::span<StackType_t> netStack{}; // 仅 Feature::kCellular 板型的正常启动
+    std::span<StackType_t> netStack{}; // 仅 4G 启用时分配
+    std::span<uint8_t> netBlock{};     // NetBlock 内存，与 netStack 同条件
     std::span<StackType_t> sppWorkerStack{};
     std::span<uint8_t> sppRx0{};
     std::span<uint8_t> sppRx1{};

@@ -18,6 +18,10 @@ enum class StorageVerb : uint8_t {
     kSetPairNext = 5U,
     kSetHeight = 6U,
     kSetSnPn = 7U,
+    kSetNetEnable = 8U, // 4G 配置（ADR-0021）：仅 Feature::kCellular 板型，写 NVS 后重启生效
+    kSetNetApn = 9U,
+    kSetNetUser = 10U,
+    kSetNetPass = 11U,
 };
 
 /** kStore 追踪事件码（ADR-0009）；结果是 fw::Result 的数值，控制台按表解释。 */

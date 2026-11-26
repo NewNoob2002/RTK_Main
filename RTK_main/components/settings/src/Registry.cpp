@@ -814,7 +814,7 @@ bool encodeFactorySn(const CanonicalValue &val, fw::Command &cmd) noexcept
 }
 
 /**
- * @brief  编码 `net.enable` → `NetVerb::kSetEnable`
+ * @brief  编码 `net.enable` → `StorageVerb::kSetNetEnable`
  * @param  val: 0/1 布尔整数
  * @param[out] cmd: 输出命令
  * @retval true  编码成功
@@ -825,7 +825,7 @@ bool encodeNetEnable(const CanonicalValue &val, fw::Command &cmd) noexcept
     if (val.kind != CanonicalKind::kInt) {
         return false;
     }
-    cmd.verb = kVerbNetSetEnable;
+    cmd.verb = kVerbStorageSetNetEnable;
     cmd.argLen = 1U;
     cmd.args[0] = (val.number != 0) ? 1U : 0U;
     return true;
@@ -833,7 +833,7 @@ bool encodeNetEnable(const CanonicalValue &val, fw::Command &cmd) noexcept
 
 /**
  * @brief  编码 4G 文本键（长度 0..31 字节，空串表示清除）
- * @tparam Verb 目标命令动词（kVerbNetSetApn/User/Pass）
+ * @tparam Verb 目标命令动词（kVerbStorageSetNetApn/User/Pass）
  * @param  val: 字符字节串
  * @param[out] cmd: 输出命令
  * @retval true  编码成功
@@ -930,7 +930,7 @@ bool encodeFixedBytes(const CanonicalValue &val, fw::Command &cmd) noexcept
 }
 
 /** 全部已登记设置键的编译期注册表（前 kCount 项与 KeyId 一一对应，其后为扩展键）。 */
-constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount) + 1U> kRegistry{{
+constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount) + 5U> kRegistry{{
     {KeyId::kGnssRate, "gnss.rate", KeyKind::kEnum, Owner::kGnss, kVerbGnssSetRate, &encodeGnssRate,
      &domainGnssRate, PersistKind::kNvs, access::kStandardAll, true},
     {KeyId::kGnssOutGga, "gnss.out.gga", KeyKind::kEnum, Owner::kGnss, kVerbGnssSetOut,
@@ -988,19 +988,19 @@ constexpr std::array<KeySpec, static_cast<size_t>(KeyId::kCount) + 1U> kRegistry
     {KeyId::kPhoneSnPn, "phone.sn_pn", KeyKind::kSnPn, Owner::kStorage, kVerbStorageSetSnPn,
      &encodeFixedBytes<kVerbStorageSetSnPn, kSnPnBytes>, &domainStaticSnPn, PersistKind::kNvs,
      access::kPhoneInternal, true},
-    {KeyId::kNetEnable, "net.enable", KeyKind::kBool, Owner::kNet, kVerbNetSetEnable,
-     &encodeNetEnable, &domainStaticBool, PersistKind::kNvs, access::kConsoleInternal, true},
-    {KeyId::kNetApn, "net.apn", KeyKind::kText, Owner::kNet, kVerbNetSetApn,
-     &encodeNetText<kVerbNetSetApn>, &domainStaticText, PersistKind::kNvs, access::kConsoleInternal,
-     true},
-    {KeyId::kNetUser, "net.user", KeyKind::kText, Owner::kNet, kVerbNetSetUser,
-     &encodeNetText<kVerbNetSetUser>, &domainStaticText, PersistKind::kNvs,
-     access::kConsoleInternal, true},
-    {KeyId::kNetPass, "net.pass", KeyKind::kText, Owner::kNet, kVerbNetSetPass,
-     &encodeNetText<kVerbNetSetPass>, &domainStaticText, PersistKind::kNvs,
-     access::kConsoleInternal, false}, // 密码只写：get 恒失败，控制台只显示掩码
     {kKeyIdGnssCutoff, "gnss.cutoff", KeyKind::kIntRange, Owner::kGnss, kVerbGnssSetSatTrack,
      &encodeGnssCutoff, &domainGnssCutoff, PersistKind::kNvs, access::kStandardAll, true},
+    {KeyId::kNetEnable, "net.enable", KeyKind::kBool, Owner::kStorage, kVerbStorageSetNetEnable,
+     &encodeNetEnable, &domainStaticBool, PersistKind::kNvs, access::kConsoleInternal, true},
+    {KeyId::kNetApn, "net.apn", KeyKind::kText, Owner::kStorage, kVerbStorageSetNetApn,
+     &encodeNetText<kVerbStorageSetNetApn>, &domainStaticText, PersistKind::kNvs,
+     access::kConsoleInternal, true},
+    {KeyId::kNetUser, "net.user", KeyKind::kText, Owner::kStorage, kVerbStorageSetNetUser,
+     &encodeNetText<kVerbStorageSetNetUser>, &domainStaticText, PersistKind::kNvs,
+     access::kConsoleInternal, true},
+    {KeyId::kNetPass, "net.pass", KeyKind::kText, Owner::kStorage, kVerbStorageSetNetPass,
+     &encodeNetText<kVerbStorageSetNetPass>, &domainStaticText, PersistKind::kNvs,
+     access::kConsoleInternal, true}, // 密码读回恒为掩码（后端不回显明文）
 }};
 
 } // namespace

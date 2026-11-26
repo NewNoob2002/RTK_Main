@@ -94,11 +94,23 @@ public:
     }
 
     /**
+     * @brief  是否允许“新上电”（低电量迟滞）；只拦 Off→上电，不影响已在线的模块
+     * @param  allowed: false 时 Off 阶段不上电；在线模块保持，直到 PW1 低电关机流程
+     * @note   仅 kNet 任务。
+     */
+    void setStartAllowed(bool allowed) noexcept
+    {
+        startAllowed_ = allowed;
+    }
+
+    /**
      * @brief  开始关机序列：QICLOSE → AT+QPOWD=1 → 等 POWERED DOWN → 拉低 PWREN，总计 ≤2 s
      * @param  nowMs: 当前 tick 毫秒
+     * @param  deadlineMs: PW1 给出的绝对截止时刻；0 表示以 nowMs + 2 s 为准。kNet 晚于 PW1 起步时
+     *                     必须沿用同一截止时刻，不得重新计 2 s
      * @note   PW1 kQuiesce 参与者调用（经 kNet 任务）；AT 通道失效或模块未起来则直接断电。
      */
-    void beginShutdown(uint32_t nowMs) noexcept;
+    void beginShutdown(uint32_t nowMs, uint32_t deadlineMs = 0U) noexcept;
 
     /**
      * @brief  关机序列是否已完成（PWREN 已拉低）
@@ -238,6 +250,7 @@ private:
         std::array<char, kHostBytes> host{};
         uint16_t port = 0U;
         uint8_t fails = 0U;       // 连续失败次数
+        bool closeFirst = false;  // QIOPEN 结果超时：重开前先 QICLOSE 该槽
         uint32_t dueMs = 0U;      // kBackoff 到期 / kOpening 超时
         bool recvPending = false; // 收到 recv URC 待读
         bool wantClose = false;
@@ -259,7 +272,7 @@ private:
     void enterL2(uint32_t nowMs, bool deactivate) noexcept;
     void enterReady(uint32_t nowMs) noexcept;
     void cutPower(uint32_t nowMs) noexcept;
-    void startStop(uint32_t nowMs) noexcept;
+    void startStop(uint32_t nowMs, uint32_t deadlineMs) noexcept;
     void finishStop(uint32_t nowMs) noexcept;
     void handleModuleRestart(uint32_t nowMs) noexcept;
     void clearOps() noexcept;
@@ -284,6 +297,10 @@ private:
     void connLost(uint8_t id, uint32_t nowMs) noexcept;
     [[nodiscard]] bool engineBusy() const noexcept;
     void queryRegisterNow(uint32_t nowMs, Op op) noexcept;
+    void abortInflight(uint32_t nowMs) noexcept;
+    void markRegLost(uint32_t nowMs) noexcept;
+    [[nodiscard]] bool submitConnCmd(AtCommand &cmd, uint32_t nowMs) noexcept;
+    [[nodiscard]] uint32_t nextToken() noexcept;
 
     AtEngine *engine_ = nullptr;
     LinkHooks hooks_{};
@@ -337,8 +354,22 @@ private:
     std::array<Conn, kConnSlots> conns_{};
     bool connBusy_ = false;
     uint8_t connOpId_ = 0U;
-    enum class ConnOp : uint8_t { kNone = 0, kOpen, kClose, kRead, kSend } connOp_ = ConnOp::kNone;
+    enum class ConnOp : uint8_t {
+        kNone = 0,
+        kOpen,
+        kClose,
+        kRead,
+        kSend,
+        kCloseStale
+    } connOp_ = ConnOp::kNone;
     size_t connReadBytes_ = 0U;
+    uint32_t opSeq_ = 0U;          // 提交序号，单调递增（0 保留为“无”）
+    uint32_t opToken_ = 0U;        // 当前登记的 FSM 操作 token；与回包 token 不符即过期
+    uint32_t connToken_ = 0U;      // 当前登记的连接操作 token
+    uint32_t shutDeadlineMs_ = 0U; // 关机绝对截止时刻（PW1 与 kNet 共用）
+    uint32_t regLostMs_ = 0U;      // Ready 阶段注册丢失起点
+    uint16_t droppedRecv_ = 0U;
+    bool startAllowed_ = true;
     std::array<char, 128> cmdBuf_{};
 };
 
