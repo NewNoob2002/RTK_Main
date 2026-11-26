@@ -39,6 +39,7 @@
   };
   const OTA_ERR = {
     busy: "Receiver is busy or shutting down, try again later",
+    no_valid_other: "The other slot has no bootable firmware",
     state: "New firmware is not confirmed yet, try again about 30 s after boot",
     length: "Request has no length or the file is empty",
     too_large: "Firmware is larger than the partition limit",
@@ -641,7 +642,8 @@
     };
     const uploadBtn = confirmBtn("Upload and update", "pri", () => startUpload(), "Tap again to confirm: replaces current firmware");
     const tip = h("p", { class: "hint", text: "This replaces the current firmware. Keep the receiver powered and stay on its Wi-Fi until it restarts." });
-    const panel = h("div", { hidden: true }, [infoKv, fileInp, cmpLine, sameHint, progBox, errLine, uploadBtn, tip]);
+    const rollbackBtn = confirmBtn("Switch to the other version", "danger", () => startRollback(), "Tap again to confirm: switch firmware");
+    const panel = h("div", { hidden: true }, [infoKv, fileInp, cmpLine, sameHint, progBox, errLine, uploadBtn, tip, rollbackBtn]);
 
     fileInp.addEventListener("change", () => {
       pickSeq += 1;
@@ -688,13 +690,13 @@
       reader.readAsArrayBuffer(file.slice(0, OTA_HDR_BYTES));
     });
 
-    function finishUpload(ok, msg) {
+    function finishUpload(ok, msg, showProgress = true) {
       otaUploading = false;
       if (ok) {
         otaDone = true;
         leaving = true;
         clearTimeout(retryTimer);
-        setProg(100, "100% · Update complete", fmtSize(selectedFile ? selectedFile.size : 0));
+        if (showProgress) setProg(100, "100% · Update complete", fmtSize(selectedFile ? selectedFile.size : 0));
         setMsg(errLine, msg, "ok");
         banner(msg);
         toast(msg, "ok");
@@ -789,6 +791,31 @@
       xhr.send(file);
     }
 
+    function startRollback() {
+      if (!otaInfo || otaInfo.other == null || otaInfo.busy || otaUploading || otaDone || leaving || wsPending()) return;
+      clearTimeout(retryTimer);
+      otaUploading = true;
+      setMsg(errLine, "", "");
+      refresh();
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/ota/rollback", true);
+      xhr.timeout = 15000;
+      xhr.onload = () => {
+        let res = null;
+        try { res = JSON.parse(xhr.responseText); } catch (_e) { /* 非 JSON 应答 */ }
+        if (xhr.status === 200 && res && res.ok === true) {
+          finishUpload(true, "Switching to " + (res.ver || "the other firmware") + ". The receiver is restarting", false);
+          return;
+        }
+        const code = res && res.err;
+        finishUpload(false, OTA_ERR[code] || ("Firmware switch failed (HTTP " + xhr.status + ")"), false);
+        if (code === "no_valid_other" || code === "busy") fetchOtaInfo();
+      };
+      xhr.onerror = xhr.ontimeout = () => finishUpload(false, "No reply to the firmware switch. Check the receiver", false);
+      xhr.send();
+    }
+
     views.push(() => {
       if (otaStatus === "ready" && otaInfo) {
         note.hidden = true;
@@ -802,6 +829,8 @@
       fileInp.disabled = locked;
       uploadBtn.disabled = locked || !fileValid || wsPending();
       if (uploadBtn.disabled) uploadBtn._reset();
+      rollbackBtn.disabled = locked || !otaInfo || otaInfo.other == null || otaInfo.busy || wsPending();
+      if (rollbackBtn.disabled) rollbackBtn._reset();
     });
     return h("div", null, [note, panel]);
   };

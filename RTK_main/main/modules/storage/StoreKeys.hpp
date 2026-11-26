@@ -37,7 +37,7 @@ inline constexpr fw::StoreKey kPhoneSatCfgKey{
     .help = "Cutoff angle and GNSS constellation mask",
 };
 inline constexpr fw::StoreKey kPhonePnKey{
-    .ns = "rtk",
+    .ns = "fac",
     .key = "pn",
     .type = fw::StoreType::kBlob,
     .maxSize = 16U,

@@ -11,10 +11,10 @@ include_directories("${PROJ_ROOT}/components/link_core/private_include"
                     "${PROJ_ROOT}/components/gnss/private_include")
 find_package(Threads REQUIRED)
 add_library(main_rtos STATIC ../t13_host_check/shim/FakeRtos.c)
-# NvsShim.c: storage 模块的通用键表直接用 nvs.h（冻结的 NvsStore.h 无整数 API）。
+# 通用键读写与身份持久化的主机替身。
 # 单独成库：它是 C 代码，不能继承 C++ 专用告警（-fno-rtti/-Wnon-virtual-dtor）。
 add_library(main_nvs_shim STATIC shim/NvsShim.c)
-target_include_directories(main_nvs_shim PUBLIC shim)
+target_include_directories(main_nvs_shim PUBLIC shim PRIVATE ${PROJ_ROOT}/components/nvs_store/include)
 target_include_directories(main_rtos PUBLIC ../t13_host_check/shim/inc)
 target_link_libraries(main_rtos PUBLIC Threads::Threads)
 add_subdirectory(${PROJ_ROOT}/components/stream_demux stream_demux_build)

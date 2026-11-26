@@ -20,7 +20,7 @@ namespace {
 
 /**
  * @brief 执行已确认的擦除。
- * @param factory: 是否擦除出厂分区。
+ * @param factory: 是否清空两份出厂数据。
  * @retval 0 成功；非零为已输出 ERR。
  * @note 仅 console，可以等待执行器与控制台排空。
  */
@@ -78,11 +78,13 @@ int confirmFactoryReset(int argc, char **argv, bool factory) noexcept
 {
     const char *usage = factory ? "factory erase yes" : "freset yes";
     if (argc == 1) {
-        cli::outPrintf("Clears user settings, GNSS cache, alarm whitelist and Bluetooth bonds.\n");
+        cli::outPrintf(
+            "Clears user settings, GNSS cache, alarm whitelist, Bluetooth bonds and Wi-Fi settings.\n");
         cli::outPrintf(
             "%s\n",
-            factory ? "Also clears factory NVS. Keeps PHY data, core dump and receiver settings."
-                    : "Keeps factory NVS, PHY data, core dump and receiver settings.");
+            factory
+                ? "Also clears factory settings. Keeps legacy EEPROM, migration state, PHY and core dump."
+                : "Keeps factory settings, legacy EEPROM, migration state, PHY and core dump.");
         cli::outPrintf("Confirm with '%s'.\n", usage);
         return 0;
     }

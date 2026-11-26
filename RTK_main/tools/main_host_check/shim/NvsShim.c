@@ -1,12 +1,12 @@
 // host 替身：NVS 整数键的内存实现（仅 main_host_check / template_check 链接用）。
 // 非线程安全：测试场景按单线程顺序调用，够用；不参与固件。
 
-#include "nvs.h"
+#include "NvsStore.h"
 
 #include <string.h>
 
 #define SHIM_NVS_MAX_ENTRIES 32
-#define SHIM_NVS_MAX_NS      4
+#define SHIM_NVS_MAX_NS      6
 #define SHIM_NVS_NAME_MAX    16
 #define SHIM_NVS_BLOB_MAX    128
 
@@ -325,4 +325,41 @@ esp_err_t nvs_set_blob(nvs_handle_t handle, const char *key, const void *value, 
         memcpy(entry->blob, value, length);
     }
     return ESP_OK;
+}
+
+/** @brief 主机通用键测试仅模拟 cfg 实例；双实例隔离另由 test/nvs_store 验证。 */
+esp_err_t nvs_store_open_cfg(const char *name, nvs_open_mode_t mode, nvs_handle_t *handle)
+{
+    return nvs_open(name, mode, handle);
+}
+
+/** @brief 从主机 cfg 替身读定长 PN。 */
+esp_err_t nvs_store_get_pn(uint8_t out[NVS_STORE_PN_BYTES])
+{
+    nvs_handle_t handle = 0;
+    esp_err_t error = nvs_store_open_cfg(NVS_STORE_FACTORY_NAMESPACE, NVS_READONLY, &handle);
+    if (error == ESP_OK) {
+        size_t len = NVS_STORE_PN_BYTES;
+        error = nvs_get_blob(handle, "pn", out, &len);
+        if (error == ESP_OK && len != NVS_STORE_PN_BYTES) {
+            error = ESP_ERR_INVALID_SIZE;
+        }
+        nvs_close(handle);
+    }
+    return error;
+}
+
+/** @brief 写定长 PN，保留主机测试的写故障注入。 */
+esp_err_t nvs_store_set_pn(const uint8_t pn[NVS_STORE_PN_BYTES])
+{
+    nvs_handle_t handle = 0;
+    esp_err_t error = nvs_store_open_cfg(NVS_STORE_FACTORY_NAMESPACE, NVS_READWRITE, &handle);
+    if (error == ESP_OK) {
+        error = nvs_set_blob(handle, "pn", pn, NVS_STORE_PN_BYTES);
+        if (error == ESP_OK) {
+            error = nvs_commit(handle);
+        }
+        nvs_close(handle);
+    }
+    return error;
 }

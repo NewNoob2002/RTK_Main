@@ -39,9 +39,10 @@ ADR-0015（P2 电源管理与关机序列）、ADR-0011（启动内存池）。
 |---|---|---|
 | `GET /ota/info` | — | `200`，JSON：`{"running":"<ver>","project":"rtk_main","part":"ota_0","state":"valid","other":"<ver>"\|null,"max":1966080,"busy":false}` |
 | `POST /ota` | 体为原始 `.bin`（`Content-Type: application/octet-stream`，必须有 `Content-Length`；**不用 multipart**） | 见下表 |
+| `POST /ota/rollback` | 无请求体（ADR-0022 §2.6，沿用 OTA 页鉴权） | 沿用上传 JSON，`ver` 为目标槽版本。忙时 `409 busy`，另一槽无合法镜像或本次写入尚未提交时 `409 no_valid_other`，写启动槽失败时 `500 flash`。有合法描述符时 `GET /ota/info` 的 `other` 也显示没有 otadata 状态的旧槽版本。 |
 
-- `state` 取 `esp_ota_img_states_t` 的小写名去前缀：`new`/`pending_verify`/`valid`/`invalid`/`aborted`/`undefined`；`other` 为另一个 app 槽
-  `esp_ota_get_partition_description` 的 `version`，读不到、该槽状态为 `undefined` 或查询失败、或本次启动已对该槽 `esp_ota_begin` 但未成功提交时为 `null`（控制台 `ota status` 显示 `-`；2026-11-23 HIL F-OTHER 修订）；`max` 为下一个更新分区的字节数。
+- `state` 取 `esp_ota_img_states_t` 的小写名去前缀：`new`/`pending_verify`/`valid`/`invalid`/`aborted`/`undefined`。`other` 为另一个 app 槽
+  经 `esp_ota_get_partition_description` 读取的 `version`，有合法描述符时也显示无 otadata 状态的旧槽版本（ADR-0022 §2.6）。另一槽不存在、描述符读取失败或本次启动对该槽 `esp_ota_begin` 后未成功提交时，`other` 为 `null`（控制台 `ota status` 显示 `-`）。`max` 为下一个更新分区的字节数。
 - `POST /ota` 应答一律 `Content-Type: application/json`，体为 `{"ok":true,"ver":"<新版本>","reboot_ms":1500}` 或 `{"ok":false,"err":"<码>"}`：
 
 | HTTP | `err` | 含义 |

@@ -1,67 +1,94 @@
-// NVS 持久化：出厂分区 fac/sn 保存设备 SN，用户分区 rtk/alarm_wl 保存报警器白名单。
-// 仅由启动流程与存储执行器任务串行调用，二者不并发；不可在 ISR 中调用；nvs_* 调用会阻塞。
-// 不分配堆（读白名单用固定 24 字节栈缓冲）。冻结接口（ADR-0003）。
+// ADR-0022 持久化接口：cfg 用户配置、白名单与 cfg/系统 NVS 双副本。
+// 仅启动或任务上下文，NVS 调用可阻塞，不可在 ISR 中调用。
 #pragma once
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "esp_err.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#include "nvs.h"
+
 #define NVS_STORE_SN_MAX            (16U) /* 不含结尾 0 */
 #define NVS_STORE_ALARM_MAX         (4U)
 #define NVS_STORE_ADDR_LEN          (6U)
-#define NVS_STORE_FACTORY_PARTITION "nvs_fac"
+#define NVS_STORE_SYSTEM_PARTITION  "nvs"
+#define NVS_STORE_CFG_PARTITION     "spiffs"
+#define NVS_STORE_BACKUP_NAMESPACE  "facbk"
+#define NVS_STORE_NET_NAMESPACE     "net"
+#define NVS_STORE_NTRIP_NAMESPACE   "ntrip"
+#define NVS_STORE_FENCE_NAMESPACE   "fence"
+#define NVS_STORE_MIG_NAMESPACE     "mig"
+#define NVS_STORE_PN_BYTES          (16U)
 #define NVS_STORE_FACTORY_NAMESPACE "fac"
 #define NVS_STORE_KEY_REG           "reg"
 #define NVS_STORE_REG_MAX           (64U) /* 注册码预留槽位容量（字节） */
 
+#define NVS_STORE_EEPROM_MAX (2560U)
+
+typedef esp_err_t (*nvs_store_recover_fn)(uint8_t *buffer, size_t size);
+typedef esp_err_t (*nvs_store_boot_scratch_fn)(nvs_store_recover_fn recover);
+
 /**
- * @brief  初始化用户与出厂 NVS，尝试迁移旧 SN；只对用户分区执行擦除重试
- * @retval ESP_OK 用户分区初始化成功；出厂分区状态另行查询
- * @retval ESP_ERR_NVS_NO_FREE_PAGES 擦除或重试后仍无空页
- * @retval ESP_ERR_NVS_NEW_VERSION_FOUND 擦除或重试后版本仍不符
- * @retval 其他 nvs_flash_erase/nvs_flash_init 的错误码（已记 E 级日志）
- * @note   只在启动期单线程调用；非 ISR，会阻塞；用户分区擦除会清空该分区数据。
+ * @brief 登记本次启动异常恢复的临时缓冲提供者，由下一次 init 消费。
+ * @param with_scratch: 立即调用 recover 并在其返回后回收缓冲的函数；分配失败时仍以 NULL、0 调用。
+ * @note 仅启动任务调用，可选，非 ISR。
+ */
+void nvs_store_set_boot_scratch(nvs_store_boot_scratch_fn with_scratch);
+
+/**
+ * @brief 初始化系统与 cfg 实例，处理特定初始化错误并修复身份双副本。
+ * @retval ESP_OK cfg 初始化成功；系统实例失败单独记 E。
+ * @retval 其他 cfg 初始化或擦除错误。
+ * @note 每次启动仅由启动任务执行一次；可阻塞，非 ISR。
  */
 esp_err_t nvs_store_init(void);
 
 /**
- * @brief  查询出厂分区最近一次初始化结果
- * @retval true 出厂分区可用
- * @retval false 未初始化或初始化失败
- * @note   启动线程在 init 后读取，后续任务只读；不阻塞，非 ISR。
+ * @brief 按 cfg 分区标签打开一个命名空间。
+ * @param name: NVS 命名空间。
+ * @param mode: 只读或读写模式。
+ * @param[out] handle: 成功时由调用方关闭的句柄。
+ * @retval NVS 打开结果。
+ * @note 任意任务，可阻塞，非 ISR。
  */
-bool nvs_store_factory_available(void);
+esp_err_t nvs_store_open_cfg(const char *name, nvs_open_mode_t mode, nvs_handle_t *handle);
 
 /**
- * @brief  读取 fac/sn；出厂分区不可用或迁移待重试时读旧的 rtk/sn
- * @param[out] out: 成功时为 0 结尾字符串；失败时有可写字节则清零 out[0]
- * @param  out_size: out 的字节容量，必须 ≥ NVS_STORE_SN_MAX + 1
- * @retval ESP_OK 读到长度 1..NVS_STORE_SN_MAX 的 SN
- * @retval ESP_ERR_INVALID_ARG out 为 NULL 或 out_size 过小
- * @retval ESP_ERR_NVS_NOT_FOUND 命名空间或 "sn" 键不存在
- * @retval ESP_ERR_INVALID_SIZE 存储值为空串、超过 NVS_STORE_SN_MAX，或长于 out_size（长度不符时已清空 out）
- * @retval 其他 nvs_open/nvs_get_str 错误码
- * @note   非 ISR 安全；nvs 调用会阻塞；不分配堆
+ * @brief 优先读取 cfg SN，缺失或不可读时尝试系统副本。
+ * @param[out] out: 以 NUL 结尾的字符缓冲，失败时清空。
+ * @param out_size: 缓冲容量，至少 NVS_STORE_SN_MAX + 1 字节。
+ * @retval ESP_OK 已读取；其他为参数或 NVS 错误。
+ * @note 任务上下文，可阻塞，非 ISR。
  */
 esp_err_t nvs_store_get_sn(char *out, size_t out_size);
 
 /**
- * @brief  写入出厂分区 fac/sn，覆盖旧值
- * @param  sn: 非空 0 结尾字符串，长度 1..NVS_STORE_SN_MAX
- * @retval ESP_OK 已写入并 commit
- * @retval ESP_ERR_INVALID_ARG sn 为 NULL、空串或超长
- * @retval ESP_ERR_INVALID_STATE 出厂分区不可用
- * @retval 其他 NVS 打开、写入或提交错误码
- * @note   非 ISR 安全；nvs 调用与 commit 会阻塞；不分配堆
+ * @brief 写入并提交两份 SN，cfg 为权威副本。
+ * @param sn: 长度 1..NVS_STORE_SN_MAX 的 NUL 结尾字符串。
+ * @retval ESP_OK 两份均已提交；其他为参数或 NVS 错误。
+ * @note 由存储任务串行调用，可阻塞，非 ISR。
  */
 esp_err_t nvs_store_set_sn(const char *sn);
+
+/**
+ * @brief 优先读取 cfg PN，缺失或不可读时尝试系统副本。
+ * @param[out] out: 16 字节定长 PN 缓冲。
+ * @retval ESP_OK 已读取；其他为参数或 NVS 错误。
+ * @note 任务上下文，可阻塞，非 ISR。
+ */
+esp_err_t nvs_store_get_pn(uint8_t out[NVS_STORE_PN_BYTES]);
+
+/**
+ * @brief 写入并提交两份 PN，保留定长字段的原始字节。
+ * @param pn: 16 字节定长 PN。
+ * @retval ESP_OK 两份均已提交；其他为参数或 NVS 错误。
+ * @note 由存储任务串行调用，可阻塞，非 ISR。
+ */
+esp_err_t nvs_store_set_pn(const uint8_t pn[NVS_STORE_PN_BYTES]);
 
 /**
  * @brief  读取报警器白名单，每项为 6 字节地址
@@ -88,14 +115,14 @@ esp_err_t nvs_store_get_alarms(uint8_t (*addrs)[NVS_STORE_ADDR_LEN], size_t max,
 esp_err_t nvs_store_set_alarms(const uint8_t (*addrs)[NVS_STORE_ADDR_LEN], size_t count);
 
 /**
- * @brief 擦除用户 NVS 分区。
+ * @brief 清空 cfg 用户命名空间和系统 NVS 的蓝牙、Wi-Fi 配置。
  * @retval ESP_OK 擦除完成；其他为底层错误码。
  * @note 仅在持久化写入已停止的任务上下文调用，可阻塞，非 ISR。成功后重启。
  */
 esp_err_t nvs_store_erase_user(void);
 
 /**
- * @brief 擦除出厂 NVS 分区。
+ * @brief 清空 cfg 的 fac 与系统 NVS 的 facbk 命名空间。
  * @retval ESP_OK 擦除完成；其他为底层错误码。
  * @note 仅在持久化写入已停止的任务上下文调用，可阻塞，非 ISR。成功后重启。
  */

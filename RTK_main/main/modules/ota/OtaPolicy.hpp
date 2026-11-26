@@ -34,17 +34,4 @@ enum class RollbackAction : uint8_t { kNone, kConfirm, kInvalidate };
     return nowMs - readyMs >= delayMs ? RollbackAction::kConfirm : RollbackAction::kNone;
 }
 
-/**
- * @brief 判定另一应用槽的镜像版本是否可信、可对外报告
- * @param stateDefined: 槽状态查询成功且非 ESP_OTA_IMG_UNDEFINED
- * @param uploadDirty: 本次启动期间是否已向该槽开始写入且尚未成功提交
- * @retval true 可读取并对外报告该槽版本
- * @retval false 须抑制版本显示（HTTP 返回 null，控制台显示 "-"）
- * @note 纯函数，任意任务或 ISR 可调用。
- */
-[[nodiscard]] constexpr bool otherSlotVersionReadable(bool stateDefined, bool uploadDirty) noexcept
-{
-    return stateDefined && !uploadDirty;
-}
-
 } // namespace app::ota

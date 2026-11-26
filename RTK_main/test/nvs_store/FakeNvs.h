@@ -3,21 +3,13 @@
 
 #include <stdbool.h>
 
-typedef enum {
-    FAKE_NVS_OK,
-    FAKE_NVS_WRITE,
-    FAKE_NVS_COMMIT,
-    FAKE_NVS_MISMATCH,
-    FAKE_NVS_DELETE,
-    FAKE_NVS_FACTORY_INIT,
-    FAKE_NVS_USER_INIT,
-    FAKE_NVS_DIRTY_READ,
-    FAKE_NVS_ERASE,
-} fake_nvs_fault_t;
+#include "esp_err.h"
 
-void fake_nvs_inject(fake_nvs_fault_t fault);
-void fake_nvs_seed(bool factory, const char *sn);
-bool fake_nvs_has_sn(bool factory, const char *sn);
-unsigned fake_nvs_user_erases(void);
-unsigned fake_nvs_migrations(void);
+void fake_nvs_fail_init(bool cfg, esp_err_t error);
+void fake_nvs_fail_write(bool cfg, esp_err_t error);
+void fake_nvs_fail_delete(void);
+unsigned fake_nvs_erases(bool cfg);
+unsigned fake_nvs_writes(void);
 unsigned fake_nvs_warnings(void);
+unsigned fake_nvs_errors(void);
+unsigned fake_nvs_eeprom_loss_logs(void);

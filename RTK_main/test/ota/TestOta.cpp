@@ -10,7 +10,6 @@
 namespace {
 
 using app::ota::BootOutcome;
-using app::ota::otherSlotVersionReadable;
 using app::ota::RollbackAction;
 using app::ota::rollbackAction;
 using app::web_ota::checkHeader;
@@ -55,10 +54,6 @@ static_assert(rollbackAction(true, BootOutcome::kReady, kNearWrapMs, 29988U, kVa
               RollbackAction::kNone);
 static_assert(rollbackAction(true, BootOutcome::kReady, kNearWrapMs, 29989U, kValidDelayMs) ==
               RollbackAction::kConfirm);
-static_assert(otherSlotVersionReadable(true, false));
-static_assert(!otherSlotVersionReadable(false, false));
-static_assert(!otherSlotVersionReadable(true, true));
-static_assert(!otherSlotVersionReadable(false, true));
 static_assert(kTotalTimeoutMs == 150000U);
 static_assert(!elapsedAtLeast(kNearWrapMs, kNearWrapMs + kTotalTimeoutMs - 1U, kTotalTimeoutMs));
 static_assert(elapsedAtLeast(kNearWrapMs, kNearWrapMs + kTotalTimeoutMs, kTotalTimeoutMs));

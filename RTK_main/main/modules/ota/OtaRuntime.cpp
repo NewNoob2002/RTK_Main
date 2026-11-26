@@ -5,6 +5,7 @@
 #include <atomic>
 
 #include "AppConfig.hpp"
+#include "app/PowerRequests.hpp"
 #include "fw/Atomic.hpp"
 #include "fw/Log.hpp"
 #include "modules/ota/OtaPolicy.hpp"
@@ -74,9 +75,7 @@ std::optional<std::string_view> otherSlotVersion(const esp_partition_t *part,
     if (part == nullptr) {
         return std::nullopt;
     }
-    const bool stateDefined = partitionState(part) != ESP_OTA_IMG_UNDEFINED;
-    const bool dirty = s_other_slot_dirty.load(std::memory_order_acquire);
-    if (!otherSlotVersionReadable(stateDefined, dirty) ||
+    if (s_other_slot_dirty.load(std::memory_order_acquire) ||
         esp_ota_get_partition_description(part, &desc) != ESP_OK) {
         return std::nullopt;
     }
@@ -94,9 +93,41 @@ void endOperation() noexcept
     s_operation.store(Operation::kIdle, std::memory_order_release);
 }
 
-bool uploadBusy() noexcept
+bool transferBusy() noexcept
 {
-    return s_operation.load(std::memory_order_acquire) == Operation::kUpload;
+    const auto op = s_operation.load(std::memory_order_acquire);
+    return op == Operation::kUpload || op == Operation::kRollback;
+}
+
+SwitchResult switchToOther(esp_app_desc_t &desc) noexcept
+{
+    if (!beginOperation(Operation::kRollback)) {
+        return SwitchResult::kBusy;
+    }
+    if (!power::s_power_requests.claimRestart()) {
+        endOperation();
+        return SwitchResult::kBusy;
+    }
+
+    const auto *running = esp_ota_get_running_partition();
+    const auto *other = running != nullptr ? esp_ota_get_next_update_partition(running) : nullptr;
+    SwitchResult result = SwitchResult::kNoValidOther;
+    if (other != nullptr && other->address != running->address &&
+        otherSlotVersion(other, desc).has_value()) {
+        // SDK 在写入 otadata 前验证整个目标镜像；允许旧固件的项目名与状态。
+        const esp_err_t error = esp_ota_set_boot_partition(other);
+        if (error == ESP_OK) {
+            return SwitchResult::kOk;
+        }
+        if (error != ESP_ERR_OTA_VALIDATE_FAILED) {
+            FW_LOGE(fw::TraceCat::kSys, "<ota> set other boot slot failed: %s",
+                    esp_err_to_name(error));
+            result = SwitchResult::kFlash;
+        }
+    }
+    power::s_power_requests.releaseAction();
+    endOperation();
+    return result;
 }
 
 void rememberUpload(const char *result) noexcept

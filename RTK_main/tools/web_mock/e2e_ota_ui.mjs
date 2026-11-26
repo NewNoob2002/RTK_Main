@@ -541,7 +541,7 @@ async function runTests() {
       const otaCardNoTd = envNoTd.ids["col-b"].children.find((c) => c.id === "card-ota");
       await waitUntil(() => otaCard.textContent.includes("0.1.0-mock") && otaCardNoTd.textContent.includes("0.1.0-mock"), 3000, "info loaded");
       const dds = otaCard.querySelectorAll("dd").map((d) => d.textContent);
-      assert(dds[0] === "0.1.0-mock" && dds[1] === "ota_0" && dds[2].includes("valid") && dds[3] === "None", `bad initial kv: ${JSON.stringify(dds)}`);
+      assert(dds[0] === "0.1.0-mock" && dds[1] === "app0" && dds[2].includes("valid") && dds[3] === "None", `bad initial kv: ${JSON.stringify(dds)}`);
 
       const fileInp = otaCard.querySelector("input");
       const uploadBtn = otaCard.querySelector("button");
@@ -866,6 +866,43 @@ async function runTests() {
     assert(rule.includes("margin:12px auto 0"), `banner auto margin missing: ${rule}`);
     assert(!rule.includes("margin-left") && !rule.includes("margin-right"), `banner still overrides left/right margin: ${rule}`);
     console.log("PASS 8: .banner CSS aligned to 1088px centered card content width with 16px narrow gutter");
+  }
+
+  currentCase = "9_manual_slot_switch";
+  {
+    const m = await startMock([]);
+    const uploadEnv = createDomEnv(m.port);
+    let rollbackEnv;
+    try {
+      const otaCard = uploadEnv.ids["col-b"].children.find((c) => c.id === "card-ota");
+      const [uploadBtn, inactiveRollback] = otaCard.querySelectorAll("button");
+      await waitUntil(() => otaCard.textContent.includes("0.1.0-mock"), 3000, "initial info");
+      assert(inactiveRollback.disabled, "switch must be disabled when the other slot is empty");
+      const fileInp = otaCard.querySelector("input");
+      fileInp.files = [makeFakeFile(buildBin("6.2.0", "rtk_main", 4096))];
+      fileInp.dispatch("change");
+      await waitUntil(() => !uploadBtn.disabled, 1000, "file valid");
+      uploadBtn.click();
+      uploadBtn.click();
+      await waitUntil(() => otaCard.textContent.includes("Update complete"), 3000, "upload success");
+      await sleep(1700);
+
+      rollbackEnv = createDomEnv(m.port);
+      const rollbackCard = rollbackEnv.ids["col-b"].children.find((c) => c.id === "card-ota");
+      const rollbackBtn = rollbackCard.querySelectorAll("button")[1];
+      await waitUntil(() => !rollbackBtn.disabled && rollbackCard.textContent.includes("0.1.0-mock"), 3000, "other slot ready");
+      rollbackBtn.click();
+      assert(rollbackBtn.textContent.includes("Tap again to confirm"), "first click only arms switch");
+      assert(!rollbackEnv.xhrInstances.some((x) => x.url === "/ota/rollback"), "first click sent a POST");
+      rollbackBtn.click();
+      await waitUntil(() => rollbackCard.textContent.includes("Switching to 0.1.0-mock"), 3000, "switch success");
+      assert(rollbackBtn.disabled && rollbackCard.querySelector(".prog").hidden, "switch awaits reboot without upload progress");
+      console.log("PASS 9: Other slot version, disabled when empty, double confirmation, switch and reboot feedback");
+    } finally {
+      uploadEnv.cleanup();
+      if (rollbackEnv) rollbackEnv.cleanup();
+      await stopMock(m.proc);
+    }
   }
 
   console.log("ALL E2E UI TESTS PASSED");
