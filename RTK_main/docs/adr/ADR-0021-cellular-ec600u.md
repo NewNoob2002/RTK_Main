@@ -1,6 +1,6 @@
 # ADR-0021：P2 4G（EC600U）网络层：AT 驱动、链路管理、NTRIP 与 RTCM 来源仲裁
 
-状态：**草案**（2026-11-26，待用户审批）。
+状态：**已批准**（2026-11-26，用户批准）。
 关联：ADR-0008（代码组织与堆分级）、ADR-0011（启动顺序与内存）、ADR-0015（P2 板级：4G UART 32/33、GPIO26 使能）、ADR-0016（控制台档位）、ADR-0018（设置服务；§2.6 4G 约束、Q3 预留 `kNet`）、ADR-0020（OLED 状态页）。
 需求依据：`docs/requirements/P2-nextgen-customer.md`（REQ-006 断网自动恢复、REQ-017 无定位不发 GGA）；协议草案 `docs/protocol/mqtt_fence_protocol.md`（§9 待服务器/App 确认，§10 实现边界）。
 硬件依据：`docs/hardware/P2/schematic/p2v1.41.pdf`（EC600U、`4G_PWREN`、`4G_UART_TX1/RX1` 1V8↔3V3 电平转换、备注“4G 峰值 2A”“去除多余的 4G 电路复位”）。
