@@ -12,9 +12,16 @@
 | `sdkconfig.defaults` | UART0 TX 从 8,192 B 降到 2,048 B。 |
 | `tools/main_host_check/{BootAllocCheck,WebModuleCheck,WebServerCheck}.cpp`、`CMakeLists.txt`、`web_shim/esp_heap_caps.h`、`web_shim/freertos/freertos_debug.h` | 覆盖新增状态字段的差分、诊断请求和回包、帧池满载、控制帧预留、三客户端轮换及 Wi-Fi 的 RTCM 管道。 |
 
-显式请求将完整堆统计、台账遍历和任务栈填充区扫描移出周期推送。两种诊断各回一帧，保留 1,024 B 帧限制。任务表上限 16 个已知 Wi-Fi 常驻任务名，当前存在的条目用 `uxTaskGetStackHighWaterMark` 采样。栈容量来自 IDF 对齐后栈首尾。短命任务（如启动任务 `main`）或未列名的 SDK 新任务可能只反映在 `task_count` 中。暂停调度只覆盖指定任务的快照读取，句柄寿命由 Wi-Fi 启停顺序保证。
+显式请求将完整堆统计、台账遍历和任务栈填充区扫描移出周期推送。`diag` 和 `diag.tasks` 均为无需解锁的只读请求，各回一帧，保留 1,024 B 上限。任务表上限 16 个已知 Wi-Fi 常驻任务名，当前存在的条目用 `uxTaskGetStackHighWaterMark` 采样。栈容量来自 IDF 对齐后栈首尾。短命任务（如启动任务 `main`）或未列名的 SDK 新任务可能只反映在 `task_count` 中。
 
 4 个 TX 槽中预留 2 个供 ACK 和后续 config/bye，周期状态和诊断成功帧共用另外 2 个槽。积压时已有控制帧暂存与重调路径继续生效，各客户端轮换使用周期状态配额。RX 满时返回同 ID 的 `busy`。
+
+### `11e1a5d` 评审修订
+
+- Important 1 在 `WebDiagnostics.cpp`、`WebDiagnostics.hpp` 和 `WebModule.cpp` 保留单帧契约。完整诊断超过 1,024 B 时，响应仍含两组堆统计和完整台账总量，保留登记顺序中能装下的最长完整条目前缀，并在根对象写入 `"truncated":true`。选截断可继续使用一次请求、一个同 ID 回包和一个诊断 TX 槽，控制帧预留及背压协议可直接复用。编码使用一次堆采样和一个 `JsonWriter`，溢出时按实际转义后的长度对条目数做二分查找。
+- `WebModuleCheck.cpp` 覆盖以 P2 Wi-Fi 台账为样本的 13、14、15 条完整回包，以及含 32 条、10 位堆及台账数值、5 位请求 ID 和需转义标签的满台账。满台账测试逐字节比较 JSON，验证帧长、完整总量、最长前缀及截断标记。
+- Nit 1 在同一个本核调度暂停区完成任务快照、栈起点和最小余栈读取。ESP-IDF v6.1 的 `vTaskGetSnapshot` 文档要求暂停调度，`xTaskGetStackStart` 和 `uxTaskGetStackHighWaterMark` 的实现只读 TCB 或扫描填充区，可以在暂停区内调用。另一核仍可运行，启动回滚在 `Executors.cpp::stopBootTasks` 等待 kLink 停稳后才拆除 httpd/wifi。Host 桩断言三次读取均在暂停区内。
+- Nit 3 在 `docs/web/ws-protocol.md` 明确两条诊断无需解锁且只读，同时记录可选的截断标记。
 
 ## 蓝牙和 UART 源码核对
 
@@ -25,7 +32,7 @@
 
 ## 资源对比
 
-`idf.py size` 和 `.bin` 大小，单位 B。同一构建档的 A-only 镜像用于在整机上建立带诊断的回收前基线。
+以下为评审前的 `idf.py size` 和 `.bin` 大小，单位 B。同一构建档的 A-only 镜像用于在整机上建立带诊断的回收前基线。
 
 | 项目 | `8dedf5a` | A-only | A+B | A+B 相对基线 |
 | --- | ---: | ---: | ---: | ---: |
@@ -62,7 +69,7 @@ P2 v1.41 的正常 Wi-Fi 模式 BootArena 请求量，按 `BootBuffers.cpp` 和�
 ## HIL 步骤
 
 1. 使用同一 P2 v1.41 + CM680、同一客户端和网页负载。由用户通过 Wi-Fi OTA 页面上传 `builds/mw1-diag-before/rtk_main.bin`，重连设备热点，确认 `GET /ota/info` 的运行槽通过验证。已有基线固件时可先记录旧 `status.dev`。
-2. 进入 `http://192.168.10.12/`，用一个 WebSocket 采集连续 60 s 的状态。待 `hello/config/status` 后逐条发送下列诊断请求，收到同 ID 的成功帧后再发下一条。遇到 `busy` 时待 TX 排空后重试。记录各任务的栈和余栈、BootArena 每项 `req/actual`、两个能力堆组和 `status.dev` 的对应数据。
+2. 进入 `http://192.168.10.12/`，用一个 WebSocket 采集连续 60 s 的状态。待 `hello/config/status` 后逐条发送下列诊断请求，收到同 ID 的成功帧后再发下一条。遇到 `busy` 时待 TX 排空后重试。记录各任务的栈和余栈、BootArena 的总量及返回条目的 `req/actual`、`truncated` 标记、两个能力堆组和 `status.dev` 的对应数据。
 
    ```js
    const ws = new WebSocket("ws://192.168.10.12/ws");
@@ -78,9 +85,9 @@ P2 v1.41 的正常 Wi-Fi 模式 BootArena 请求量，按 `BootBuffers.cpp` 和�
 
 3. OTA 上传 `builds/mw1-idf/rtk_main.bin`，同条件重复采集。比较相同稳态时段 `heap_free`（目标至少 +25 KB）、`heap_min`、`heap_largest`、`heap_int_free`、`heap_int_min`、任务余栈和台账。确认 `web.frames.req=10360`、`rtcm.pipe.req=4096`，检查 `task_count` 与 `tasks` 条目的差异。
 4. 通过三条 WS 连接确认握手和状态轮换。用 `tools/hil/web_load.py --host 192.168.10.12 --duration 60` 另跑负载，检查设置应答和断开后恢复。执行网页退出并验证重启后 SPP 恢复连接。同机 OTA 前后保留浏览器样本与 `/ota/info` 结果。
-5. UART 字节级验证在另有 UART0 接入的开发板进行。两版分别连续执行 `sys tasks`，用 `debug trace on all` 产生持续 `trace_out` 输出，捕获超过 2 KiB 的输出并检查整行、命令末尾 `OK`、阻塞时长及 `debug list` 的上游环丢弃计数。整机的 Type-C 无 UART0。
+5. UART 字节级验证在另有 UART0 接入的开发板进行。Wi-Fi 和蓝牙模式均使用 2,048 B TX 环。两版分别连续执行 `sys tasks`，用 `debug trace on all` 产生持续 `trace_out` 输出，捕获超过 2 KiB 的输出并检查整行、命令末尾 `OK`、阻塞时长及 `debug list` 的上游环丢弃计数。另捕获启动早期或 Debug 任务未就绪时的直写日志，测量 link/io 调用任务的阻塞。整机的 Type-C 无 UART0。
 
-## 验证记录
+## 评审前验证记录
 
 - `FAIL` 完整门禁 `tools/ci/run_gates.sh --prefix mw1 --base 8dedf5a` 共 42 项 PASS、1 项 FAIL，见 `builds/mw1-logs/final-gates.log`。G1 唯一差异是任务明确要求的 `sdkconfig.defaults` TX 缓冲值。按 AGENTS.md，`docs/frozen.sha256` 由 Architect 验收后重算。
 - `PASS` G2/G2b 的 14 组普通主机和 14 组 ASan/UBSan 测试，其中 `main_host_check` 两个变体各通过 205 项。初次沙箱运行遇到 LeakSanitizer 的线程检查错误，最终在沙箱外运行并保留泄漏检测。
@@ -90,3 +97,11 @@ P2 v1.41 的正常 Wi-Fi 模式 BootArena 请求量，按 `BootBuffers.cpp` 和�
 - `PASS` 最终 `idf.py -B builds/mw1-idf size`，日志为 `builds/mw1-logs/mw1-idf.size.log`。
 - `PASS` `node --check main/web/ui/app.js`、Python `ast.parse` 检查 Web mock、`python3 -I tools/hil/web_load.py --selftest`、`git diff --check`。
 - `NOT_RUN` 整机 OTA/HIL、串口捕获。当前无整机诊断样本。
+
+## 评审修订验证记录
+
+- `PASS` 门禁 `tools/ci/run_gates.sh --prefix mw1 --base 8dedf5a` 共 43 项通过，0 项失败。环境为本机 ESP-IDF v6.1、Python 3.13 和离线工具缓存，日志为 `builds/mw1-logs/mw1-fix-gates.log`。初次沙箱运行的 LeakSanitizer 线程检查和 lizard 缓存读取失败，完整重跑经自动审批在沙箱外执行，保留泄漏检测。
+- `PASS` `main_host_check` 普通及 ASan/UBSan 各通过 205 项，含门户开、关两种 Web 回归。G3/G3b 目标固件构建无警告，G5b 对 162 个文件检查无发现，G1 冻结校验和 G7b 堆分配检查均通过。
+- `PASS` `idf.py -B builds/mw1-idf size`。修订后 Flash Code 1,146,796 B、Flash Data 276,156 B、OTA `.bin` 1,592,576 B，分别比评审前 A+B 增加 292 B、16 B 和 320 B。IRAM 116,139 B、链接 DRAM 98,675 B。日志为 `builds/mw1-logs/mw1-idf.fix-size.log`。
+- `PASS` `git diff --check`。
+- `NOT_RUN` Important 2 的 UART TX 2,048 B 实机验证。待按 HIL 第 5 步在 Wi-Fi 和蓝牙模式验证长输出的字节完整性、早期直写阻塞及 trace/log 丢弃计数。整机 OTA、堆对比及三客户端负载也待实机验证。

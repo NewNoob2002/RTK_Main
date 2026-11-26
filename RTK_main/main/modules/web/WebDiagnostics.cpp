@@ -36,14 +36,13 @@ int32_t diagNumber(size_t bytes) noexcept
  * @brief 写入一种能力堆的统计；两种能力口径可重叠。
  * @param writer: 已打开的诊断帧。
  * @param name: 能力堆组名。
- * @param caps: heap_caps 分配能力掩码。
+ * @param info: 该能力堆的采样值。
  * @retval true 写入成功。
  * @retval false 帧缓冲不足。
  */
-bool writeHeapInfo(web::JsonWriter &writer, std::string_view name, uint32_t caps) noexcept
+bool writeHeapInfo(web::JsonWriter &writer, std::string_view name,
+                   const multi_heap_info_t &info) noexcept
 {
-    multi_heap_info_t info{};
-    heap_caps_get_info(&info, caps);
     return writer.beginNested(name) && writer.writeInt("free", diagNumber(info.total_free_bytes)) &&
            writer.writeInt("allocated", diagNumber(info.total_allocated_bytes)) &&
            writer.writeInt("min", diagNumber(info.minimum_free_bytes)) &&
@@ -54,19 +53,20 @@ bool writeHeapInfo(web::JsonWriter &writer, std::string_view name, uint32_t caps
 }
 
 /**
- * @brief 写入已封存的台账及其各分区的请求量和实际块大小。
+ * @brief 写入完整台账总量及指定前缀中各分区的请求量和实际块大小。
  * @param writer: 已打开的诊断帧。
- * @param arena: 已封存的 BootArena。
+ * @param arena: 已封存的 BootArena 台账视图。
+ * @param count: 写入的台账条数，不超过台账大小。
  * @retval true 写入成功。
  * @retval false 帧缓冲不足。
  */
-bool writeArenaInfo(web::JsonWriter &writer, const rtos::BootArena &arena) noexcept
+bool writeArenaInfo(web::JsonWriter &writer, BootArenaView arena, size_t count) noexcept
 {
-    if (!writer.beginNested("arena") || !writer.writeInt("req", diagNumber(arena.totalBytes())) ||
-        !writer.writeInt("actual", diagNumber(arena.totalActualBytes()))) {
+    if (!writer.beginNested("arena") || !writer.writeInt("req", diagNumber(arena.totalBytes)) ||
+        !writer.writeInt("actual", diagNumber(arena.totalActualBytes))) {
         return false;
     }
-    for (const auto &entry : arena.entries()) {
+    for (const auto &entry : arena.entries.first(count)) {
         if (!writer.beginNested(entry.tag) || !writer.writeInt("req", diagNumber(entry.bytes)) ||
             !writer.writeInt("actual", diagNumber(entry.actualBytes)) || !writer.endNested()) {
             return false;
@@ -93,12 +93,14 @@ bool writeTaskInfo(web::JsonWriter &writer) noexcept
             continue;
         }
         TaskSnapshot_t snapshot{};
-        // IDF 的单任务快照要求暂停本核调度；表内句柄的寿命由 Wi-Fi 启停顺序保证。
+        // IDF 要求暂停本核调度后读取快照，另一核仍可运行。启动回滚等 kLink 停稳后才
+        // 拆除 httpd/wifi，和 kLink 的 diag.tasks 串行，保证表内句柄在读取期间有效。
         vTaskSuspendAll();
         const BaseType_t captured = vTaskGetSnapshot(handle, &snapshot);
+        const StackType_t *base = captured == pdTRUE ? xTaskGetStackStart(handle) : nullptr;
+        const auto highWaterMark = base != nullptr ? uxTaskGetStackHighWaterMark(handle) : 0U;
         static_cast<void>(xTaskResumeAll());
-        const StackType_t *base = xTaskGetStackStart(handle);
-        if (captured != pdTRUE || base == nullptr || snapshot.pxEndOfStack == nullptr) {
+        if (base == nullptr || snapshot.pxEndOfStack == nullptr) {
             return false;
         }
         // 两个指针属于同一任务栈；IDF 栈顶经对齐，口径为可用范围（含末元素）。
@@ -106,8 +108,7 @@ bool writeTaskInfo(web::JsonWriter &writer) noexcept
         if (depth <= 0 || !writer.beginNested(name) ||
             !writer.writeInt("stack",
                              diagNumber(static_cast<size_t>(depth) * sizeof(StackType_t))) ||
-            !writer.writeInt("hwm", diagNumber(uxTaskGetStackHighWaterMark(handle))) ||
-            !writer.endNested()) {
+            !writer.writeInt("hwm", diagNumber(highWaterMark)) || !writer.endNested()) {
             return false;
         }
     }
@@ -123,19 +124,49 @@ void sampleHeapStatus(DevWebStatus &dev) noexcept
     dev.heapIntMin = diagNumber(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
 }
 
-size_t buildDiagFrame(uint16_t id, std::string_view name, const rtos::BootArena &arena,
+size_t buildDiagFrame(uint16_t id, std::string_view name, BootArenaView arena,
                       std::span<char> out) noexcept
 {
     web::JsonWriter writer{};
-    if (!writer.beginObject() || !writer.writeString("t", name) || !writer.writeInt("id", id)) {
-        return 0U;
+    if (name == "diag.tasks") {
+        const bool ok = writer.beginObject() && writer.writeString("t", name) &&
+                        writer.writeInt("id", id) && writeTaskInfo(writer) && writer.endObject();
+        return ok ? writer.finish(out) : 0U;
     }
-    const bool ok = name == "diag.tasks"
-                        ? writeTaskInfo(writer)
-                        : writeHeapInfo(writer, "heap_8bit", MALLOC_CAP_8BIT) &&
-                              writeHeapInfo(writer, "heap_internal", MALLOC_CAP_INTERNAL) &&
-                              writeArenaInfo(writer, arena);
-    return (ok && writer.endObject()) ? writer.finish(out) : 0U;
+
+    multi_heap_info_t heap8Bit{};
+    multi_heap_info_t heapInternal{};
+    heap_caps_get_info(&heap8Bit, MALLOC_CAP_8BIT);
+    heap_caps_get_info(&heapInternal, MALLOC_CAP_INTERNAL);
+    const auto encode = [&](size_t count) noexcept {
+        writer.clear();
+        const bool ok = writer.beginObject() && writer.writeString("t", name) &&
+                        writer.writeInt("id", id) && writeHeapInfo(writer, "heap_8bit", heap8Bit) &&
+                        writeHeapInfo(writer, "heap_internal", heapInternal) &&
+                        writeArenaInfo(writer, arena, count) &&
+                        (count == arena.entries.size() || writer.writeBool("truncated", true)) &&
+                        writer.endObject();
+        return ok ? writer.finish(out) : 0U;
+    };
+
+    size_t len = encode(arena.entries.size());
+    if (len != 0U) {
+        return len;
+    }
+    // 用真实编码长度二分查找可容纳的最长前缀（含标记）。失败的编码不改写已完成的帧。
+    size_t first = 0U;
+    size_t last = arena.entries.size();
+    while (first < last) {
+        const size_t count = first + (last - first) / 2U;
+        const size_t candidateLen = encode(count);
+        if (candidateLen == 0U) {
+            last = count;
+        } else {
+            len = candidateLen;
+            first = count + 1U;
+        }
+    }
+    return len;
 }
 
 } // namespace app::web_cfg

@@ -20,7 +20,7 @@
 | `caps` | 能力或有效周期变化后 | `caps`（完整替换上一份能力对象） |
 | `config` | `hello` 之后、任一 `set` 成功之后 | 见 §4 全部可改键的当前值（扁平：`"gnss.rate":10`）；例外：Q1 门控为嵌套对象 `"gga_gate":{"enabled":false,"min_sats":8}` |
 | `status` | 每 1 s；只带有变化的组 | `dev:{uptime_s,heap_free,heap_min,heap_largest,heap_int_free,heap_int_min,reset}`、`gnss:{state,model,fw,fix,sats,hacc_mm,hz}`、`bt:{whitelist:[...]}` |
-| `diag` | 请求 `cmd diag` 成功 | `id`（回显）、`heap_8bit`、`heap_internal`、`arena` |
+| `diag` | 请求 `cmd diag` 成功 | `id`（回显）、`heap_8bit`、`heap_internal`、`arena`、`truncated`（有省略时为 `true`） |
 | `diag.tasks` | 请求 `cmd diag.tasks` 成功 | `id`（回显）、`task_count`、`tasks` |
 | `ack` | 普通命令应答或诊断失败 | `id`（回显）、`ok`、失败时 `err`（§5） |
 | `bye` | 设备即将重启 | `reason`（`exit`/`idle`/`freset`） |
@@ -37,6 +37,7 @@
 
 `diag` 提供 `MALLOC_CAP_8BIT` 和 `MALLOC_CAP_INTERNAL` 两种能力堆视图，两者可能重叠。各视图的 `free`、`allocated`、`min`、`largest` 以字节计，另有 `free_blocks`、`allocated_blocks`、`total_blocks`。
 `arena` 提供总量 `req`、`actual`，并按分区标签给出相同两项，单位为字节。实际块大小包含分配器对齐取整。
+超过 1024 B 时，响应保留两个堆组和完整台账的 `req`、`actual` 总量，按登记顺序保留尽可能多的完整分区条目，并在根对象标记 `"truncated":true`。完整回包省略该字段。
 
 `diag.tasks` 以任务名为键，每条含 `stack`（IDF 对齐后的有效栈字节数）和 `hwm`（启动以来最小余栈字节数）。
 `tasks` 仅列当前存在的 Wi-Fi 常驻任务，`task_count` 为 FreeRTOS 任务总数，含可能尚未回收的退出任务。两个请求各回一帧，均受 1024 B 上限约束。
@@ -47,7 +48,7 @@
 |---|---|---|
 | `set` | `id`、`key`、`value`（字符串） | 改一个键；一次只处理一条，`ack` 之后再发下一条 |
 | `cmd` | `id`、`name` | `save`（GNSS 配置写模块 flash）、`exit`（回蓝牙模式重启）、`freset`（需解锁） |
-| `cmd` | `id`、`name` | `diag`（堆和 BootArena）、`diag.tasks`（任务栈）。只读，逐条等待同 ID 应答。发送背压时收到 `ack` / `busy` |
+| `cmd` | `id`、`name` | `diag`（堆和 BootArena）、`diag.tasks`（任务栈）。只读，无需解锁，逐条等待同 ID 应答。发送背压时收到 `ack` / `busy` |
 | `unlock` | `id`、`token` | 工厂解锁，口令与控制台 `factory unlock` 相同；连接断开即失效 |
 
 `id`：1..65535 的整数，浏览器自增。

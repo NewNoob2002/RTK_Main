@@ -632,7 +632,10 @@ void WebModule::sendDiag(ClientSlot &client, const web::Request &req) noexcept
         return;
     }
     auto &encodeBuf = klinkEncodeFrame_->data;
-    const size_t len = web_cfg::buildDiagFrame(req.id, req.name, ctx().bootArena, encodeBuf);
+    const auto &arena = ctx().bootArena;
+    const size_t len = web_cfg::buildDiagFrame(
+        req.id, req.name, {arena.entries(), arena.totalBytes(), arena.totalActualBytes()},
+        encodeBuf);
     if (len == 0U) {
         sendAck(client, req.id, web::ErrorCode::kFailed);
     } else if (!enqueueTx(client.fd, client.gen, std::span<const char>{encodeBuf}.first(len))) {
