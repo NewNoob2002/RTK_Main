@@ -1210,21 +1210,24 @@ void testDiagCpinNotInsertedDrivesSimState()
     TEST_ASSERT_EQUAL(SimStatus::kAbsent, s.fsm.snapshot(s.now).sim);
 }
 
-// r4 R7：载荷线上时间超过写预算的 QISEND 被拒绝：115200 只允许短载荷，460800 允许 512 B。
+// r5 F6 终裁：115200 一律拒绝 QISEND；460800 下单次载荷上限 256 B（≈5.6 ms 线上），257 B 起拒绝。
 void testPayloadWireTimeBudget()
 {
     Sim lo;
     setup(lo);
     lo.iprFail = true; // 保持 115200
     TEST_ASSERT_TRUE(toConnOpen(lo));
-    std::array<uint8_t, 512> big{};
+    std::array<uint8_t, 257> big{};
     std::array<uint8_t, 64> small{};
+    std::array<uint8_t, 256> maxChunk{};
     TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, big, lo.now));
+    TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, maxChunk, lo.now));
     TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, small, lo.now)); // r5 F6：115200 阶段禁止 QISEND
     Sim hi;
     setup(hi);
     TEST_ASSERT_TRUE(toConnOpen(hi));
-    TEST_ASSERT_TRUE(hi.fsm.sendConn(0U, big, hi.now));
+    TEST_ASSERT_FALSE(hi.fsm.sendConn(0U, big, hi.now)); // 257 B 超过上限
+    TEST_ASSERT_TRUE(hi.fsm.sendConn(0U, maxChunk, hi.now));
 }
 
 void testRegistrationLostFor180sEscalatesL3()

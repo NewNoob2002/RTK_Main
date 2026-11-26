@@ -1606,22 +1606,16 @@ bool LinkFsm::sendConn(uint8_t id, std::span<const uint8_t> payload, uint32_t no
         payload.empty() || (payload.size() > kSendChunkBytes)) {
         return false;
     }
-    // QISEND 只允许在已切到 460800 之后（115200 阶段一律拒绝，r5 F6）；并且载荷字节时间
-    // （10 bit/字节）不得超过单次写预算，避免单次写阻塞 kNet 超过轮预算（r4 R7）。
+    // QISEND 只允许在已切到 460800 之后（115200 阶段一律拒绝）。单次载荷上限 kSendChunkBytes=256 B
+    // （460800 下线上约 5.6 ms，保证 kNet 轮内余量；r5 F6 终裁：不把剩余量传入接口，靠固定上限保证）。
     if (curBaud_ < kPolicy.fastBaud) {
-        return false;
-    }
-    const uint64_t wireMs =
-        (static_cast<uint64_t>(payload.size()) * 10ULL * 1000ULL + curBaud_ - 1U) /
-        ((curBaud_ == 0U) ? 1U : curBaud_);
-    if ((curBaud_ == 0U) || (wireMs > kPolicy.maxPayloadWireMs)) {
         return false;
     }
     Writer w{cmdBuf_.data(), cmdBuf_.size()};
     w.str("AT+QISEND=");
     w.num(id);
     w.str(",");
-    w.num(static_cast<uint32_t>(payload.size())); // ≤512，无损
+    w.num(static_cast<uint32_t>(payload.size())); // ≤256，无损
     AtCommand cmd;
     cmd.text = w.view();
     cmd.timeoutMs = at_timeout::kQisend;

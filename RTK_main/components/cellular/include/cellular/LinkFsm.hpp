@@ -204,7 +204,7 @@ public:
     /**
      * @brief  通过已打开连接发送数据（AT+QISEND + '>' + 定长数据）
      * @param  id:      连接槽 0–2
-     * @param  payload: 数据（≤512 B），内存须保持到 onSendDone
+     * @param  payload: 数据（≤256 B），内存须保持到 onSendDone
      * @param  nowMs:   当前 tick 毫秒
      * @retval true  已提交
      * @retval false 未打开、正忙、过长或引擎队列满
