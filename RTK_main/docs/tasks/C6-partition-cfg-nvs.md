@@ -44,7 +44,7 @@
 （仅在受影响小节加“由 ADR-0022 取代”标注，不改原文），并同步 `docs/frozen.sha256` 对应行。其他冻结文件不得改动。
 
 ## 验收与约束
-- 全量门禁 `tools/ci/run_gates.sh --prefix c6 --base <本卡提交>` 全通过（含 ASan/TSan 现状不退化）；环境：
+- 全量门禁 `tools/ci/run_gates.sh --prefix c6 --base 7393202` 全通过（含 ASan/TSan 现状不退化）；环境：
   `export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env`。
 - 主机测试（`test/nvs_store` 假件扩展为多分区）：双副本四种情况（都有/缺 cfg/缺系统/不一致）、两侧擦除恢复、`rtk/pn`→`fac/pn` 搬迁幂等、
   freset 保留清单、factory erase、`/ota/rollback` 三种应答。修复前后对照写报告。
