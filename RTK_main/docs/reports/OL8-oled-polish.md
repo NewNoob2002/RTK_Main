@@ -74,9 +74,9 @@ idf.py -B builds/ol8-idf size
 
 基线与变更尺寸日志为 `builds/ol8-baseline/build.log` 与 `builds/ol8-logs/size.log`。新增自有代码无堆分配。Xtensa 函数入口栈帧中，`refreshOnce` 为 496 → 656 B，`collectViewModel` 为 672 → 816 B，`renderUi` 为 144 → 160 B，`handleOtaPost` 为 496 → 528 B。记录在对应构建目录的 `stack-entries.log`。运行期栈高水位列入 HIL。
 
-## 待 HIL
+## HIL
 
-整机 P2 v1.41 + CM680 无可用串口，以下为 **NOT_RUN**。
+2026-11-26 用户整机（P2 v1.41 + CM680，网页 OTA 升级 `P2_V6.0.0.5.bin` = `4ea1ec0` console 档）目测 4 项全部 **PASS**：① BT→Wi‑Fi 复位 Logo 顺滑；② 网页 OTA 进度/校验/成功重启；③ 错误镜像或断网显示失败并 3 s 回页；④ Wi‑Fi 页 SSID 完整滚动。整机无串口，下列定量项（帧间隔、Wi‑Fi 可用耗时增量、栈余量）**未测**，保留供后续有串口时补测：
 
 1. 冷启动 BT 与 BT→Wi‑Fi 复位分别记录 Logo 帧间隔、I2C flush 和刷新任务调度。确认 Wi‑Fi 最大间隔不超过实测正常节拍的两倍。分别记录复位到 SoftAP 可见、关联成功及网页首个业务响应的耗时，验证增量 ≤ 500 ms。
 2. 用网页上传合法镜像，验证接收、校验、成功及重启。分别拔网、上传错误镜像，确认失败原因和 3 s 回页。上传期间试短按、双击、8 s 保持强制关机，核对 PW1 页面与 USB 终帧。
