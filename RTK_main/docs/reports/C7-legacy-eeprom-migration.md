@@ -56,8 +56,13 @@ Linux MinSizeRel 构建用内存 NVS 与 V2.7 金样执行 2500 次对照。初�
 
 | ADR-0022 §4 | 本卡结果 |
 | --- | --- |
-| 1. 准备 Arduino V2.7 旧 bootloader、分区表及应用，在旧 App 写 SN/PN。 | **NOT_RUN** |
-| 2. 读出系统 NVS 整区，对照 SN/PN。 | **NOT_RUN** |
-| 3. 旧网页 OTA 后确认引导、迁移计数、身份双副本和蓝牙绑定。 | **NOT_RUN** |
-| 4. 新网页 OTA 和切回旧槽，验证 otadata、旧配置和系统 NVS 保留。 | **NOT_RUN** |
-| 5. `freset` 后核对用户配置回默认、身份和迁移状态保留，并确认启动跳过迁移。 | **NOT_RUN**，主机回归已覆盖。 |
+| 1. 准备 Arduino V2.7 旧 bootloader、分区表及应用，在旧 App 写 SN/PN。 | **PASS**（2026-11-26，P2 v1.41 拆机板）：Arduino bootloader + 分区表保留；V2.7 写入 SN `202061126` / PN `1322150301032`；按用户要求（客户先升 V3.1）擦除两个 app 槽与 otadata 后烧 V3.1 `P2_V3.0.1.9`（IDF v5.5.5）到 app0。 |
+| 2. 读出系统 NVS 整区，对照 SN/PN。 | **PASS**：V3.1 启动后 `eeprom/eeprom` 由 2280 B 扩为 **2560 B**，前 2280 B 与 V2.7 逐字节相同，尾部 280 B 全 0xFF；偏移 200/216 为 SN/PN。 |
+| 3. 旧网页 OTA 后确认引导、迁移计数、身份双副本和蓝牙绑定。 | **PASS**：从 PC（wlan0，−32 dBm）上传 `/upload`，48.7 s、32.6 KB/s，V3.1 `Web OTA upload success`，引导 app1；恢复 V3.1 时期系统 NVS（无 facbk）并擦 spiffs 后首启 `Legacy config migrated: 2 fields, 0 skipped, 0 invalid`；`SN loaded: 202061126`、蓝牙名 `P2-202061126`；`phone.sn_pn` 为 SN/PN 原文；系统 NVS 有 `facbk/sn`、`facbk/pn`，旧 blob 保留；31.4 s `<ota> confirmed running image`，otadata 序号 2 状态 VALID。第二次启动无迁移行。 |
+| 4. 新网页 OTA 和切回旧槽，验证 otadata、旧配置和系统 NVS 保留。 | C6 已 PASS；本卡未重复。 |
+| 5. `freset` 后核对用户配置回默认、身份和迁移状态保留，并确认启动跳过迁移。 | **PASS**：`freset yes` 重启后无迁移行，SN/PN 不变，系统 NVS 仍有 `eeprom/eeprom`、`facbk/sn`、`facbk/pn`。 |
+
+HIL 发现（不属于 C7）：
+- V3.1 网页 OTA 进度条按时间推进（`P2_V3.1_IDF/main/user_src/user_oled.c:440-535`，每秒有数据即 +2），到 100 后 2 s 无条件 `Mechine_Restart()`，不等 `esp_ota_end`/`set_boot`。用户首次从其他终端上传约 5 KB/s，约 48 s 被重启截断（app1 只写入 239,393 B）。PC 上传 29.6–32.6 KB/s 刚好够用、余量为零；建议 V3.1 发布前改为按字节进度并在 `set_boot` 成功后重启。
+- 新固件首启 30 s 内复位（例如打开串口）会被 bootloader 回滚（otadata 状态 4 ABORTED），属预期回滚保护；HIL 需先开串口再 OTA。
+- 回滚那次首启已写入 facbk，之后首启只会 `2 skipped`；外场重复 OTA 同理，结果正确。
