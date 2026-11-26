@@ -631,6 +631,9 @@ private:
     /** @brief 同步接收并写入镜像。 @param req: HTTP 请求。 @retval ESP_OK 已成功应答。 @retval 其他 HTTPD 关闭连接。 @note 仅 httpd，可阻塞。 */
     [[nodiscard]] static esp_err_t handleOtaPost(httpd_req_t *req) noexcept;
 
+    /** @brief 验证并提交另一启动槽，回执后请求重启。 @param req: HTTP 请求。 @retval HTTPD 发送结果。 @note 仅 httpd，可阻塞。 */
+    [[nodiscard]] static esp_err_t handleOtaRollback(httpd_req_t *req) noexcept;
+
     std::span<std::byte> otaBuffer_{};            // httpd 独占，由启动任务绑定。
     std::atomic<bool> otaIdleReset_{false};       // 一次完整上传可能发生在相邻两轮 kLink 之间。
     std::atomic<bool> otaRebootRequested_{false}; // httpd 在发送应答之后发布。

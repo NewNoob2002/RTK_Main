@@ -6,9 +6,9 @@
 
 #include "AppConfig.hpp"
 #include "app/PowerRequests.hpp"
+#include "app/RadioMode.hpp"
 #include "cli/Out.hpp"
 #include "driver/uart.h"
-#include "esp_system.h"
 #include "fw/Log.hpp"
 #include "modules/ota/OtaRuntime.hpp"
 
@@ -76,11 +76,33 @@ int cmdOtaValid(void *, int argc, char **) noexcept
 }
 
 /**
- * @brief 仅当 IDF 已成功判无效并进入 esp_restart 时发送命令成功回执
- * @note 在请求回滚的控制台任务执行。UART 驱动仍有效，可等待 TX；非 ISR。
+ * @brief 用户确认后切换至合法的另一槽，回执后重启。
+ * @param argc: 参数数（含动词）。 @param argv: 参数。
+ * @retval 0 显示确认提示或完成回执；非零为参数、忙或切槽失败。
+ * @note 仅控制台任务，可等待 Flash 和 UART，非 ISR。
  */
-void replyBeforeRollback() noexcept
+int cmdOtaRollback(void *, int argc, char **argv) noexcept
 {
+    if (argc == 1) {
+        cli::outPrintf("Confirm switching to the other firmware with 'ota rollback yes'.\n");
+        return 0;
+    }
+    if (argc != 2 || argv == nullptr || std::string_view{std::span{argv, 2U}[1]} != "yes") {
+        return cli::fail("usage: ota rollback [yes]");
+    }
+    esp_app_desc_t desc{};
+    switch (ota::switchToOther(desc)) {
+    case ota::SwitchResult::kBusy:
+        return cli::fail("ota busy");
+    case ota::SwitchResult::kNoValidOther:
+        return cli::fail("ota rollback no_valid_other");
+    case ota::SwitchResult::kFlash:
+        return cli::fail("ota rollback flash");
+    case ota::SwitchResult::kOk:
+        break;
+    default:
+        return cli::fail("ota rollback failed");
+    }
     constexpr uint32_t kDrainMs = 500U;
     // Kconfig 限定 0..2，转换后的端口由控制台在启动期初始化。
     constexpr auto kPort = static_cast<uart_port_t>(CONFIG_RTK_CONSOLE_UART_NUM);
@@ -89,48 +111,14 @@ void replyBeforeRollback() noexcept
     if (err != ESP_OK) {
         FW_LOGW(fw::TraceCat::kSys, "<ota> rollback reply drain failed: %s", esp_err_to_name(err));
     }
-}
-
-/**
- * @brief 标记运行镜像无效并重启
- * @param argc: 参数数（含动词）
- * @retval 非零 参数错误、忙或回滚失败；成功重启
- * @note 仅控制台任务，持有重启和 OTA 操作权后才允许操作。
- */
-int cmdOtaRollback(void *, int argc, char **) noexcept
-{
-    if (argc != 1) {
-        return cli::fail("usage: ota rollback");
-    }
-    if (!ota::beginOperation(ota::Operation::kRollback)) {
-        return cli::fail("ota busy");
-    }
-    if (!power::s_power_requests.claimRestart()) {
-        ota::endOperation();
-        return cli::fail("power action already in progress");
-    }
-    const auto registration = esp_register_shutdown_handler(&replyBeforeRollback);
-    if (registration != ESP_OK) {
-        power::s_power_requests.releaseAction();
-        ota::endOperation();
-        return cli::fail("ota rollback %s", esp_err_to_name(registration));
-    }
-
-    const auto status = ota::invalidateAndReboot();
-    const auto cleanup = esp_unregister_shutdown_handler(&replyBeforeRollback);
-    if (cleanup != ESP_OK) {
-        FW_LOGW(fw::TraceCat::kSys, "<ota> unregister rollback reply: %s",
-                esp_err_to_name(cleanup));
-    }
-    power::s_power_requests.releaseAction();
-    ota::endOperation();
-    return cli::fail("ota rollback %s", fw::toString(status));
+    restartWithOledQuiesce(RebootBanner::kRebooting);
+    return 0;
 }
 
 constexpr std::array kOtaVerbs{
     cli::Verb{"status", nullptr, "show app slot and last upload state", &cmdOtaStatus},
     cli::Verb{"valid", nullptr, "confirm running app", &cmdOtaValid},
-    cli::Verb{"rollback", nullptr, "invalidate running app and reboot", &cmdOtaRollback},
+    cli::Verb{"rollback", "[yes]", "switch to the other firmware and reboot", &cmdOtaRollback},
 };
 
 /**

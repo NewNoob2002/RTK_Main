@@ -455,7 +455,7 @@ void WebModule::commitPendingExit(uint32_t nowMs) noexcept
     auto *client = findClient(request.fd, request.gen);
     if (pendingReboot_ != RebootKind::kNone ||
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
-        ota::uploadBusy() ||
+        ota::transferBusy() ||
 #endif
         !power::s_power_requests.claimRestart()) {
         if (client != nullptr) {
@@ -477,7 +477,7 @@ bool WebModule::tryAbortIdleReboot(uint32_t nowMs) noexcept
     const uint32_t staSnap = staState_.load(std::memory_order_acquire);
     if (web_cfg::canCommitIdleExit(staSnap, idleRebootActSeq_)
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
-        && !ota::uploadBusy()
+        && !ota::transferBusy()
 #endif
     ) {
         return false;
@@ -744,7 +744,7 @@ bool WebModule::pollRxFrame(uint32_t nowMs) noexcept
     }
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
     if ((parsedReq_.type == web::RequestType::kSet || parsedReq_.type == web::RequestType::kCmd) &&
-        ota::uploadBusy()) {
+        ota::transferBusy()) {
         sendAck(*client, parsedReq_.id, web::ErrorCode::kBusy);
         return true;
     }
@@ -813,7 +813,7 @@ void WebModule::pollStatusPush(uint32_t nowMs, bool forceNow) noexcept
 bool WebModule::pollIdleExit(uint32_t nowMs) noexcept
 {
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
-    if (ota::uploadBusy()) {
+    if (ota::transferBusy()) {
         return false;
     }
     if (otaIdleReset_.exchange(false, std::memory_order_acq_rel)) {

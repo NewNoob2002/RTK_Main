@@ -11,8 +11,7 @@ target_include_directories(nvs_store_test PRIVATE .
     "${root}/tools/t13_host_check/shim/inc")
 target_compile_options(nvs_store_test PRIVATE -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes)
 enable_testing()
-foreach(scenario success write_failure verify_mismatch delete_failure factory_unavailable
-                 clear_output erase_isolation existing_factory factory_override commit_failure
-                 erase_user erase_factory)
+foreach(scenario both missing_cfg missing_system different corrupt cfg_recovery system_recovery
+                 system_unreadable legacy_pn write_failure freset factory_erase whitelist)
     add_test(NAME nvs_store_${scenario} COMMAND nvs_store_test ${scenario})
 endforeach()

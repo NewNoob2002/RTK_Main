@@ -23,7 +23,7 @@ OTA_HDR_BYTES = 288
 OTA_IMG_MAGIC = 0xE9
 OTA_CHIP_ID_ESP32 = 0x0000
 OTA_DESC_MAGIC = 0xABCD5432
-OTA_DEFAULT_MAX = 0x1E0000  # partitions.csv ota_0/ota_1 大小
+OTA_DEFAULT_MAX = 0x1E0000  # partitions.csv app0/app1 大小
 OTA_RECV_TIMEOUT_S = 30.0
 OTA_TOTAL_TIMEOUT_S = 150.0
 OTA_DRAIN_TIMEOUT_S = 0.25
@@ -129,7 +129,7 @@ class MockState:
         self.start_time = time.monotonic()
         self.ota_running: str = "0.1.0-mock"
         self.ota_project: str = "rtk_main"
-        self.ota_part: str = "ota_0"
+        self.ota_part: str = "app0"
         self.ota_state: str = "valid"
         self.ota_other: str | None = None
         self.ota_max: int = ota_max
@@ -476,13 +476,47 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path != "/ota" or self.state.no_ota:
+        if path not in ("/ota", "/ota/rollback") or self.state.no_ota:
             self.send_response(404, "Not Found")
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
-        self._handle_ota_post()
+        if path == "/ota/rollback":
+            self._handle_ota_rollback()
+        else:
+            self._handle_ota_post()
+
+    def _schedule_ota_reboot(self, version: str) -> threading.Timer:
+        """取得忙状态后登记目标槽。调用方持锁并在 HTTP 应答后启动定时器。"""
+        self.state.ota_pending_ver = version
+        self.state.ota_pending_part = "app1" if self.state.ota_part == "app0" else "app0"
+        self.state.ota_rebooting = True
+        self.state.ota_busy = True
+        timer = threading.Timer(self.state.ota_reboot_ms / 1000.0, self.state.complete_ota_reboot)
+        timer.daemon = True
+        self.state.ota_reboot_timer = timer
+        return timer
+
+    def _handle_ota_rollback(self) -> None:
+        timer = None
+        with self.state.lock:
+            version = self.state.ota_other
+            if self.state.ota_busy or self.state.ota_rebooting or self.state.ota_err == "busy":
+                error = "busy"
+            elif version is None:
+                error = "no_valid_other"
+            else:
+                error = None
+                timer = self._schedule_ota_reboot(version)
+        if error is not None:
+            self._send_json(409, {"ok": False, "err": error})
+            return
+        try:
+            self._send_json(200, {"ok": True, "ver": version, "reboot_ms": self.state.ota_reboot_ms})
+        finally:
+            if timer is not None:
+                timer.start()
 
     def _handle_ota_post(self) -> None:
         cl_hdr = self.headers.get("Content-Length")
@@ -594,6 +628,8 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                             fail("bad_image", parsed_cl - received)
                             return
                         new_ver = parsed[0]
+                        with self.state.lock:
+                            self.state.ota_other = None
                 if slow_kbps > 0:
                     elapsed = time.monotonic() - t0
                     expected = received / (slow_kbps * 1024.0)
@@ -614,15 +650,9 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             with self.state.lock:
-                next_part = "ota_1" if self.state.ota_part == "ota_0" else "ota_0"
-                self.state.ota_pending_ver = new_ver
-                self.state.ota_pending_part = next_part
-                self.state.ota_rebooting = True
-                # 重启窗口保持 ota_busy=True，所有权移交给重启定时器
+                # 重启窗口保持 ota_busy，所有权交给重启定时器。
+                timer = self._schedule_ota_reboot(new_ver)
                 owns_busy = False
-                timer = threading.Timer(reboot_ms / 1000.0, self.state.complete_ota_reboot)
-                timer.daemon = True
-                self.state.ota_reboot_timer = timer
 
             try:
                 self._send_json(200, {"ok": True, "ver": new_ver, "reboot_ms": reboot_ms})
@@ -1371,12 +1401,15 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
         assert info == {
             "running": "0.1.0-mock",
             "project": "rtk_main",
-            "part": "ota_0",
+            "part": "app0",
             "state": "valid",
             "other": None,
             "max": OTA_DEFAULT_MAX,
             "busy": False,
         }, f"Unexpected /ota/info: {info}"
+
+        sc_rollback, _, rb_rollback = http_req("POST", "/ota/rollback")
+        assert sc_rollback == 409 and json.loads(rb_rollback) == {"ok": False, "err": "no_valid_other"}
 
         valid_bin = build_mock_firmware("6.2.0-test", "rtk_main", total_size=4096)
 
@@ -1621,6 +1654,9 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
         )
         assert sc_busy == 409 and json.loads(rb_busy.decode("utf-8")) == {"ok": False, "err": "busy"}
 
+        sc_rollback, _, rb_rollback = http_req("POST", "/ota/rollback")
+        assert sc_rollback == 409 and json.loads(rb_rollback) == {"ok": False, "err": "busy"}
+
         up_th.join(timeout=5.0)
         assert not up_th.is_alive()
         st_code, ctype, raw_body = upload_res["resp"]  # type: ignore[misc]
@@ -1638,7 +1674,7 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
         info_pre = json.loads(rb_pre.decode("utf-8"))
         assert info_pre["running"] == "0.1.0-mock", f"Switched before reboot: {info_pre}"
         assert info_pre["other"] is None, f"other switched before reboot: {info_pre}"
-        assert info_pre["part"] == "ota_0", f"part switched before reboot: {info_pre}"
+        assert info_pre["part"] == "app0", f"part switched before reboot: {info_pre}"
         assert info_pre["busy"] is True, f"Expected busy=True in reboot window: {info_pre}"
         sc_win, _, rb_win = http_req(
             "POST", "/ota", body=valid_bin, headers={"Content-Type": "application/octet-stream"}
@@ -1709,7 +1745,7 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
         info_after = json.loads(raw_body.decode("utf-8"))
         assert info_after["running"] == "6.2.0-test"
         assert info_after["other"] == "0.1.0-mock"
-        assert info_after["part"] == "ota_1"
+        assert info_after["part"] == "app1"
         assert info_after["busy"] is False
 
         # 8f-2. Empty version consistency (POST ver="" == post-reboot GET running="") & response send failure still reboots
@@ -1735,7 +1771,7 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
         assert info_ev["busy"] is False
         assert info_ev["running"] == "", f"Empty version mismatch: {info_ev}"
         assert info_ev["other"] == "6.2.0-test"
-        assert info_ev["part"] == "ota_0"
+        assert info_ev["part"] == "app0"
 
         # Client closes socket right after sending full valid body -> reboot still runs and releases busy
         s_drop = socket.create_connection(("127.0.0.1", port), timeout=5.0)
@@ -1756,12 +1792,28 @@ def run_selftest(ui_dir: pathlib.Path, caps_cm680: bool = False) -> int:
             if info_d["running"] == "6.3.0-drop" and not info_d["busy"]:
                 break
             time.sleep(0.02)
-        assert info_d["running"] == "6.3.0-drop" and info_d["busy"] is False and info_d["part"] == "ota_1"
+        assert info_d["running"] == "6.3.0-drop" and info_d["busy"] is False and info_d["part"] == "app1"
+
+        # 手动切槽允许回到带空版本字段的合法旧槽。
+        sc_rollback, ctype, rb_rollback = http_req("POST", "/ota/rollback")
+        assert sc_rollback == 200 and "application/json" in ctype
+        assert json.loads(rb_rollback) == {"ok": True, "ver": "", "reboot_ms": 80}
+        deadline_rollback = time.monotonic() + 1.5
+        while time.monotonic() < deadline_rollback:
+            _, _, rb_info = http_req("GET", "/ota/info")
+            rollback_info = json.loads(rb_info)
+            if not rollback_info["busy"]:
+                break
+            time.sleep(0.02)
+        assert rollback_info["running"] == "" and rollback_info["part"] == "app0"
+        assert rollback_info["other"] == "6.3.0-drop" and not rollback_info["busy"]
 
         # 8g. --no-ota returns 404 on /ota/info
         with state.lock:
             state.no_ota = True
         st_code, _, _ = http_req("GET", "/ota/info")
+        assert st_code == 404
+        st_code, _, _ = http_req("POST", "/ota/rollback")
         assert st_code == 404
 
         print("SELFTEST PASS: HTTP, WS handshake, §6 examples, all §5 error codes, bye, 1009, OTA §2.3")

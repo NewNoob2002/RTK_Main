@@ -22,6 +22,7 @@ esp_err_t nvs_open_from_partition(const char *partition, const char *name, nvs_o
                                   nvs_handle_t *out);
 void nvs_close(nvs_handle_t handle);
 esp_err_t nvs_commit(nvs_handle_t handle);
+esp_err_t nvs_erase_all(nvs_handle_t handle);
 esp_err_t nvs_erase_key(nvs_handle_t handle, const char *key);
 esp_err_t nvs_get_str(nvs_handle_t handle, const char *key, char *out, size_t *len);
 esp_err_t nvs_set_str(nvs_handle_t handle, const char *key, const char *value);

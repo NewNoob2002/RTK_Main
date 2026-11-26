@@ -40,21 +40,16 @@ constexpr bool kBootVerbose = false;
  */
 void logNvsUsage() noexcept
 {
-    nvs_stats_t user{};
-    nvs_stats_t factory{};
-    const auto userErr = nvs_get_stats(nullptr, &user);
-    const auto factoryErr = nvs_get_stats(NVS_STORE_FACTORY_PARTITION, &factory);
-    if (userErr == ESP_OK && factoryErr == ESP_OK) {
-        FW_LOGI(fw::TraceCat::kStore, "NVS used %zu of %zu entries (nvs), %zu of %zu (nvs_fac)",
-                user.used_entries, user.total_entries, factory.used_entries, factory.total_entries);
-    } else if (userErr == ESP_OK) {
-        FW_LOGI(fw::TraceCat::kStore, "NVS used %zu of %zu entries (nvs), unavailable (nvs_fac)",
-                user.used_entries, user.total_entries);
-    } else if (factoryErr == ESP_OK) {
-        FW_LOGI(fw::TraceCat::kStore, "NVS unavailable (nvs), used %zu of %zu entries (nvs_fac)",
-                factory.used_entries, factory.total_entries);
-    } else {
-        FW_LOGI(fw::TraceCat::kStore, "NVS usage unavailable (nvs and nvs_fac)");
+    for (const char *partition : {NVS_STORE_SYSTEM_PARTITION, NVS_STORE_CFG_PARTITION}) {
+        nvs_stats_t stats{};
+        const auto err = nvs_get_stats(partition, &stats);
+        if (err == ESP_OK) {
+            FW_LOGI(fw::TraceCat::kStore, "NVS %s: used %zu of %zu entries", partition,
+                    stats.used_entries, stats.total_entries);
+        } else {
+            FW_LOGW(fw::TraceCat::kStore, "NVS %s usage unavailable: %s", partition,
+                    esp_err_to_name(err));
+        }
     }
 }
 
@@ -284,6 +279,13 @@ fw::Result StorageModule::init() noexcept
     retry_ms_ = kRetryInitialMs;
     logNvsUsage();
     loadSn();
+    if (!ctx().bootConfig.userNvsReady || ctx().bootConfig.safeDefaults) {
+        // 出厂 PN 和 SN 一样可在用户配置降级时从系统备份读取。
+        const esp_err_t pn = nvs_store_get_pn(phone_pn_.data());
+        if (pn != ESP_OK) {
+            phone_pn_.fill(0U);
+        }
+    }
     if (ctx().bootConfig.userNvsReady) {
         loadWhitelist();
     }
@@ -946,7 +948,7 @@ void StorageModule::eraseForReset(const fw::Command &cmd, fw::CommandResult &res
         result.status = fw::Result::kBusy;
         return;
     }
-    // IDF 擦除时关闭该分区的所有句柄并卸载分区，Bluedroid 无法在重启前再写回绑定。
+    // 写入门关闭后逐个清空用户命名空间，保留出厂数据和迁移状态。
     esp_err_t error = nvs_store_erase_user();
     if (error == ESP_OK && cmd.verb == kEraseFactory) {
         error = nvs_store_erase_factory();

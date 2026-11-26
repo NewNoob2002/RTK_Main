@@ -13,6 +13,7 @@
 namespace app::ota {
 
 enum class Operation : uint8_t { kIdle, kUpload, kConfirm, kRollback };
+enum class SwitchResult : uint8_t { kOk, kBusy, kNoValidOther, kFlash };
 
 /** @brief 取定长 app 描述符字段。 @param field: 原始字段。 @retval 截至首个 NUL 的视图。 @note 不阻塞。 */
 [[nodiscard]] std::string_view imageText(std::span<const char> field) noexcept;
@@ -30,7 +31,7 @@ void markOtherSlotDirty() noexcept;
 void clearOtherSlotDirty() noexcept;
 
 /**
- * @brief 读取另一应用槽的可信版本号；状态未定义、查询失败或本次启动写入未完成时返回空
+ * @brief 读取另一应用槽的可信版本号；查询失败或本次启动写入未完成时返回空
  * @param part: 另一应用槽指针，可空
  * @param[out] desc: 调用方提供的描述符缓冲；返回非空时其 version 字段有效
  * @retval 指向 desc.version 的版本视图；不可信或不可读时返回 std::nullopt
@@ -45,8 +46,16 @@ void clearOtherSlotDirty() noexcept;
 /** @brief 释放 OTA 状态修改权。 @note 仅当前所有者调用，不阻塞。 */
 void endOperation() noexcept;
 
-/** @brief 查询是否正在上传或已成功待重启。 @retval true 上传门关闭。 @retval false 无上传。 @note 不阻塞。 */
-[[nodiscard]] bool uploadBusy() noexcept;
+/** @brief 查询上传或手动切槽是否在进行或已提交待重启。 @retval true OTA 会话占用。 @retval false 无此类操作。 @note 不阻塞。 */
+[[nodiscard]] bool transferBusy() noexcept;
+
+/**
+ * @brief 验证另一槽并设置为启动槽，成功时保留 OTA 与重启权供调用端回执后重启。
+ * @param[out] desc: 成功时填充目标镜像描述符。
+ * @retval kOk 已设启动槽；其他表示忙、无合法镜像或写失败，均释放已获取的操作权。
+ * @note HTTP 或控制台任务，可等待 Flash，非 ISR。
+ */
+[[nodiscard]] SwitchResult switchToOther(esp_app_desc_t &desc) noexcept;
 
 /** @brief 保存最近上传结果。 @param result: 生命周期覆盖本次启动的静态字符串。 @note httpd 调用，不阻塞。 */
 void rememberUpload(const char *result) noexcept;

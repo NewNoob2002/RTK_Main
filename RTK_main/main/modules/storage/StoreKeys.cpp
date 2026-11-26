@@ -15,12 +15,6 @@
 #include "modules/storage/StorageModule.hpp"
 #include "modules/storage/StoreWriteGate.hpp"
 
-/* NvsStore.h（冻结）没有整数键 API，这里直接使用 nvs.h。
- * 主机替身头不带 C++ 链接守卫，因此显式声明 C 链接；IDF 的 nvs.h 自带 extern "C"，嵌套无害。 */
-extern "C" {
-#include "nvs.h"
-}
-
 namespace app::store {
 
 namespace {
@@ -105,7 +99,7 @@ esp_err_t readValue(const fw::StoreKey &key, uint32_t &value) noexcept
         return ESP_ERR_INVALID_ARG;
     }
     nvs_handle_t handle = 0;
-    esp_err_t error = nvs_open(ns.data(), NVS_READONLY, &handle);
+    esp_err_t error = nvs_store_open_cfg(ns.data(), NVS_READONLY, &handle);
     if (error != ESP_OK) {
         return error;
     }
@@ -136,7 +130,7 @@ esp_err_t writeValue(const fw::StoreKey &key, uint32_t value) noexcept
         return ESP_ERR_INVALID_ARG;
     }
     nvs_handle_t handle = 0;
-    esp_err_t error = nvs_open(ns.data(), NVS_READWRITE, &handle);
+    esp_err_t error = nvs_store_open_cfg(ns.data(), NVS_READWRITE, &handle);
     if (error != ESP_OK) {
         return error;
     }
@@ -164,8 +158,18 @@ esp_err_t readBlob(const fw::StoreKey &key, std::span<uint8_t> out, size_t &len)
     if (!blobNamesOf(key, ns, name) || (out.size() < key.maxSize)) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (key.ns == kPhonePnKey.ns && key.key == kPhonePnKey.key) {
+        if (out.size() < NVS_STORE_PN_BYTES) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        const auto error = nvs_store_get_pn(out.data());
+        if (error == ESP_OK) {
+            len = NVS_STORE_PN_BYTES;
+        }
+        return error;
+    }
     nvs_handle_t handle = 0;
-    esp_err_t error = nvs_open(ns.data(), NVS_READONLY, &handle);
+    esp_err_t error = nvs_store_open_cfg(ns.data(), NVS_READONLY, &handle);
     if (error != ESP_OK) {
         return error;
     }
@@ -189,8 +193,12 @@ esp_err_t writeBlob(const fw::StoreKey &key, std::span<const uint8_t> data) noex
     if (!blobNamesOf(key, ns, name) || data.empty() || (data.size() > key.maxSize)) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (key.ns == kPhonePnKey.ns && key.key == kPhonePnKey.key) {
+        return data.size() == NVS_STORE_PN_BYTES ? nvs_store_set_pn(data.data())
+                                                 : ESP_ERR_INVALID_SIZE;
+    }
     nvs_handle_t handle = 0;
-    esp_err_t error = nvs_open(ns.data(), NVS_READWRITE, &handle);
+    esp_err_t error = nvs_store_open_cfg(ns.data(), NVS_READWRITE, &handle);
     if (error != ESP_OK) {
         return error;
     }

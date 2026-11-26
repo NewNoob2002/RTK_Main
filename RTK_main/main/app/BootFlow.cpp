@@ -20,6 +20,7 @@
 #include "esp_timer.h"
 
 #include "app/BootBuffers.hpp"
+#include "NvsStore.h"
 #include "app/BootReport.hpp"
 #include "app/BootReasons.hpp"
 #include "app/ConsoleProfile.hpp"
@@ -144,6 +145,30 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
 }
 
 /**
+ * @brief 为系统 NVS 异常恢复临时借用启动分配器，并在恢复返回后回收。
+ * @param recover: 负责只读备份、擦除并恢复的回调。
+ * @retval 系统 NVS 恢复的结果；无法分配时回调仍执行降级恢复。
+ * @note 仅启动任务，避免把 2560 B 放到 IDF 的 3584 B main 任务栈。
+ */
+esp_err_t withNvsBootScratch(nvs_store_recover_fn recover) noexcept
+{
+    rtos::BootArena scratch;
+    if (!fw::isOk(scratch.open())) {
+        return recover(nullptr, 0U);
+    }
+    std::span<uint8_t> bytes{};
+    const auto alloc = scratch.allocArray("nvs.recovery", NVS_STORE_EEPROM_MAX, bytes);
+    const esp_err_t result =
+        fw::isOk(alloc) ? recover(bytes.data(), bytes.size()) : recover(nullptr, 0U);
+    const auto released = scratch.abort(nullptr);
+    if (!fw::isOk(released)) {
+        FW_LOGE(fw::TraceCat::kStore, "NVS startup scratch release failed: %s",
+                fw::toString(released));
+    }
+    return result;
+}
+
+/**
  * @brief 在分配前应用早期 NVS 配置并记录启动尝试。
  * @param ctx: 启动步骤上下文，本步不修改。
  * @retval kOk 总是，存储不可用时继续使用缺省。
@@ -151,6 +176,7 @@ app::BootResult stepBanner(app::BootCtx &ctx) noexcept
 app::BootResult stepEarlyConfig(app::BootCtx &ctx) noexcept
 {
     (void)ctx;
+    nvs_store_set_boot_scratch(&withNvsBootScratch);
     app::loadEarlyConfig(app::appContext());
     return app::BootResult::kOk;
 }

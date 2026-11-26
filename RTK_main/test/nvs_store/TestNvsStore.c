@@ -1,12 +1,10 @@
-// 回归真实 nvs_store 的双分区启动与 SN 迁移。
+// 真实 nvs_store 在双实例内存替身上的故障与保留策略回归。
 // 每个场景由 CTest 启动一个新进程，只在主机单线程运行。
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "FakeNvs.h"
-#include "nvs_flash.h"
 #include "NvsStore.h"
 
 #define CHECK(condition)                                                                           \
@@ -17,163 +15,244 @@
         }                                                                                          \
     } while (0)
 
-static const char k_legacy[] = "LEGACY123";
-static const char k_factory[] = "FACTORY88";
+static const uint8_t k_pn[NVS_STORE_PN_BYTES] = "0015190311111";
+static const uint8_t k_other_pn[NVS_STORE_PN_BYTES] = "0015150300000";
+static const char *const k_cfg = NVS_STORE_CFG_PARTITION;
+static const char *const k_system = NVS_STORE_SYSTEM_PARTITION;
+static const char *const k_fac = NVS_STORE_FACTORY_NAMESPACE;
+static const char *const k_backup = NVS_STORE_BACKUP_NAMESPACE;
 
-/** @brief 核对组件读出的有效 SN。 */
-static void expect_sn(const char *expected)
+/** @brief 以读写模式为测试预填命名空间。 */
+static nvs_handle_t seed_handle(const char *partition, const char *ns)
 {
-    char out[NVS_STORE_SN_MAX + 1U] = {0};
-    CHECK(nvs_store_get_sn(out, sizeof(out)) == ESP_OK);
-    CHECK(strcmp(out, expected) == 0);
+    nvs_handle_t handle = 0;
+    CHECK(nvs_open_from_partition(partition, ns, NVS_READWRITE, &handle) == ESP_OK);
+    return handle;
 }
 
-/** @brief 校验迁移、白名单跨启动保留及第二次启动的幂等性。 */
-static void test_success(void)
+/** @brief 在任一分区预填原始 blob。 */
+static void seed_blob(const char *partition, const char *ns, const char *key, const void *bytes,
+                      size_t len)
 {
-    CHECK(nvs_flash_init() == ESP_OK);
+    const nvs_handle_t handle = seed_handle(partition, ns);
+    CHECK(nvs_set_blob(handle, key, bytes, len) == ESP_OK);
+    CHECK(nvs_commit(handle) == ESP_OK);
+    nvs_close(handle);
+}
+
+/** @brief 在任一分区读回或确认缺失。 */
+static void expect_blob(const char *partition, const char *ns, const char *key,
+                        const void *expected, size_t len)
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open_from_partition(partition, ns, NVS_READONLY, &handle);
+    size_t size = 0;
+    if (err == ESP_OK) {
+        err = nvs_get_blob(handle, key, NULL, &size);
+    }
+    if (expected != NULL) {
+        uint8_t bytes[2560];
+        CHECK(err == ESP_OK && size == len && size <= sizeof(bytes));
+        CHECK(nvs_get_blob(handle, key, bytes, &size) == ESP_OK);
+        CHECK(memcmp(bytes, expected, len) == 0);
+    } else {
+        CHECK(err == ESP_ERR_NVS_NOT_FOUND);
+    }
+    if (handle != 0U) {
+        nvs_close(handle);
+    }
+}
+
+/** @brief 预填某个身份副本。 */
+static void seed_identity(bool cfg, const char *sn, const uint8_t *pn)
+{
+    const nvs_handle_t handle = seed_handle(cfg ? k_cfg : k_system, cfg ? k_fac : k_backup);
+    CHECK(nvs_set_str(handle, "sn", sn) == ESP_OK);
+    CHECK(nvs_set_blob(handle, "pn", pn, NVS_STORE_PN_BYTES) == ESP_OK);
+    CHECK(nvs_commit(handle) == ESP_OK);
+    nvs_close(handle);
+}
+
+/** @brief 检查两个实例的 SN/PN 实际存储与主入口读取。 */
+static void expect_identity(const char *sn, const uint8_t *pn)
+{
+    for (unsigned cfg = 0; cfg < 2U; ++cfg) {
+        const char *partition = cfg ? k_cfg : k_system;
+        const char *ns = cfg ? k_fac : k_backup;
+        nvs_handle_t handle = 0;
+        char text[NVS_STORE_SN_MAX + 1U] = {0};
+        size_t len = sizeof(text);
+        CHECK(nvs_open_from_partition(partition, ns, NVS_READONLY, &handle) == ESP_OK);
+        const esp_err_t err = nvs_get_str(handle, "sn", text, &len);
+        CHECK(sn != NULL ? err == ESP_OK && strcmp(text, sn) == 0 : err == ESP_ERR_NVS_NOT_FOUND);
+        nvs_close(handle);
+        expect_blob(partition, ns, "pn", pn, NVS_STORE_PN_BYTES);
+    }
+    char sn_text[NVS_STORE_SN_MAX + 1U] = {0};
+    uint8_t pn_bytes[NVS_STORE_PN_BYTES] = {0};
+    const esp_err_t sn_err = nvs_store_get_sn(sn_text, sizeof(sn_text));
+    const esp_err_t pn_err = nvs_store_get_pn(pn_bytes);
+    CHECK(sn != NULL ? sn_err == ESP_OK && strcmp(sn_text, sn) == 0
+                     : sn_err == ESP_ERR_NVS_NOT_FOUND && sn_text[0] == '\0');
+    CHECK(pn != NULL ? pn_err == ESP_OK && memcmp(pn_bytes, pn, sizeof(pn_bytes)) == 0
+                     : pn_err == ESP_ERR_NVS_NOT_FOUND);
+}
+
+/** @brief 覆盖已有、缺失、损坏与不一致，且相同值不重复写。 */
+static void test_copies(const char *scenario)
+{
+    if (strcmp(scenario, "missing_cfg") != 0) {
+        seed_identity(true, "CFG", k_pn);
+    }
+    if (strcmp(scenario, "missing_system") != 0) {
+        const bool different = strcmp(scenario, "different") == 0;
+        seed_identity(false, different ? "BACKUP" : "CFG", different ? k_other_pn : k_pn);
+    }
+    if (strcmp(scenario, "corrupt") == 0) {
+        seed_blob(k_cfg, k_fac, "sn", k_other_pn, sizeof(k_other_pn));
+        seed_blob(k_system, k_backup, "pn", k_other_pn, 1U);
+    }
+    CHECK(nvs_store_init() == ESP_OK);
+    expect_identity("CFG", k_pn);
+    CHECK(fake_nvs_warnings() == (strcmp(scenario, "different") == 0 ? 2U : 0U));
+    const unsigned writes = fake_nvs_writes();
+    CHECK(nvs_store_init() == ESP_OK);
+    CHECK(fake_nvs_writes() == writes);
+
+    CHECK(nvs_store_set_sn("NEW") == ESP_OK);
+    CHECK(nvs_store_set_pn(k_other_pn) == ESP_OK);
+    expect_identity("NEW", k_other_pn);
+}
+
+/** @brief 主机提供启动用的临时恢复缓冲。 */
+static esp_err_t with_scratch(nvs_store_recover_fn recover)
+{
+    uint8_t blob[NVS_STORE_EEPROM_MAX];
+    return recover(blob, sizeof(blob));
+}
+
+/** @brief 不同初始化失败分别擦各自实例，并记录无法读取 EEPROM 的降级。 */
+static void test_recovery(bool cfg, bool readable)
+{
+    uint8_t eeprom[2560] = {0xDE, 0xAD};
+    eeprom[sizeof(eeprom) - 1U] = 0x5AU;
+    seed_identity(!cfg && !readable, "SERIAL", k_pn);
+    seed_blob(k_cfg, "rtk", "marker", k_pn, 1U);
+    seed_blob(k_system, "phy", "marker", k_pn, 1U);
+    seed_blob(k_system, "eeprom", "eeprom", eeprom, sizeof(eeprom));
+    nvs_store_set_boot_scratch(with_scratch);
+    fake_nvs_fail_init(cfg, cfg ? ESP_ERR_NVS_NEW_VERSION_FOUND : ESP_ERR_NVS_NO_FREE_PAGES,
+                       readable);
+    CHECK(nvs_store_init() == ESP_OK);
+    CHECK(fake_nvs_erases(cfg) == 1U && fake_nvs_erases(!cfg) == 0U && fake_nvs_errors() > 0U);
+    expect_identity("SERIAL", k_pn);
+    expect_blob(k_cfg, "rtk", "marker", cfg ? NULL : k_pn, 1U);
+    expect_blob(k_system, "phy", "marker", cfg ? k_pn : NULL, 1U);
+    expect_blob(k_system, "eeprom", "eeprom", cfg || readable ? eeprom : NULL, sizeof(eeprom));
+}
+
+/** @brief 跨启动完成 PN 搬迁，删除失败时保留旧键并在重试时不覆盖权威副本。 */
+static void test_legacy_pn(void)
+{
+    seed_blob(k_cfg, "rtk", "pn", k_pn, sizeof(k_pn));
+    fake_nvs_fail_write(true, ESP_ERR_NO_MEM);
+    CHECK(nvs_store_init() == ESP_OK);
+    expect_blob(k_cfg, "rtk", "pn", k_pn, sizeof(k_pn));
+    expect_blob(k_system, k_backup, "pn", NULL, 0U);
+    fake_nvs_fail_delete();
+    CHECK(nvs_store_init() == ESP_OK);
+    expect_identity(NULL, k_pn);
+    expect_blob(k_cfg, "rtk", "pn", k_pn, sizeof(k_pn));
+    CHECK(nvs_store_set_pn(k_other_pn) == ESP_OK);
+    const unsigned writes = fake_nvs_writes();
+    CHECK(nvs_store_init() == ESP_OK);
+    CHECK(fake_nvs_writes() == writes);
+    expect_blob(k_cfg, "rtk", "pn", NULL, 0U);
+    expect_identity(NULL, k_other_pn);
+}
+
+/** @brief 双写主副本失败时维持旧值，备份先失败时不写主副本。 */
+static void test_failed_write(void)
+{
+    seed_identity(true, "OLD", k_pn);
+    seed_identity(false, "OLD", k_pn);
+    fake_nvs_fail_write(true, ESP_ERR_NO_MEM);
+    CHECK(nvs_store_set_sn("NEW") == ESP_ERR_NO_MEM);
+    fake_nvs_fail_write(false, ESP_ERR_NO_MEM);
+    CHECK(nvs_store_set_pn(k_other_pn) == ESP_ERR_NO_MEM);
+    expect_identity("OLD", k_pn);
+    char out[] = "invalid";
+    CHECK(nvs_store_get_sn(out, sizeof(out)) == ESP_ERR_INVALID_ARG && out[0] == '\0');
+}
+
+/** @brief 核对用户与出厂擦除范围，两个 NVS 实例都保持挂载。 */
+static void test_reset(bool factory)
+{
+    const char *const user[] = {"gnss", "rtk", "link", "dbg", "boot", "net", "ntrip", "fence"};
+    const char *const radio[] = {"bt_config.conf", "bt_config", "nvs.net80211"};
+    seed_identity(true, "KEEP", k_pn);
+    seed_identity(false, "KEEP", k_pn);
+    seed_blob(k_cfg, k_fac, "reg", k_pn, 1U);
+    seed_blob(k_cfg, "mig", "done", k_pn, 1U);
+    seed_blob(k_system, "phy", "marker", k_pn, 1U);
+    seed_blob(k_system, "eeprom", "eeprom", k_pn, sizeof(k_pn));
+    for (size_t i = 0; i < sizeof(user) / sizeof(user[0]); ++i) {
+        seed_blob(k_cfg, user[i], "marker", k_pn, 1U);
+    }
+    for (size_t i = 0; i < sizeof(radio) / sizeof(radio[0]); ++i) {
+        seed_blob(k_system, radio[i], "marker", k_pn, 1U);
+    }
+    CHECK(nvs_store_erase_user() == ESP_OK);
+    if (factory) {
+        CHECK(nvs_store_erase_factory() == ESP_OK);
+    }
+    CHECK(nvs_store_init() == ESP_OK);
+    CHECK(fake_nvs_erases(true) == 0U && fake_nvs_erases(false) == 0U);
+    for (size_t i = 0; i < sizeof(user) / sizeof(user[0]); ++i) {
+        expect_blob(k_cfg, user[i], "marker", NULL, 0U);
+    }
+    for (size_t i = 0; i < sizeof(radio) / sizeof(radio[0]); ++i) {
+        expect_blob(k_system, radio[i], "marker", NULL, 0U);
+    }
+    expect_identity(factory ? NULL : "KEEP", factory ? NULL : k_pn);
+    expect_blob(k_cfg, k_fac, "reg", factory ? NULL : k_pn, 1U);
+    expect_blob(k_cfg, "mig", "done", k_pn, 1U);
+    expect_blob(k_system, "phy", "marker", k_pn, 1U);
+    expect_blob(k_system, "eeprom", "eeprom", k_pn, sizeof(k_pn));
+}
+
+/** @brief 验证白名单仍用 cfg 的 rtk 命名空间。 */
+static void test_whitelist(void)
+{
     const uint8_t addr[][NVS_STORE_ADDR_LEN] = {{1U, 2U}};
+    uint8_t out[1][NVS_STORE_ADDR_LEN] = {0};
+    size_t count = 0;
     CHECK(nvs_store_set_alarms(addr, 1U) == ESP_OK);
-    fake_nvs_seed(false, k_legacy);
-
-    CHECK(nvs_store_init() == ESP_OK);
-    CHECK(nvs_store_factory_available());
-    expect_sn(k_legacy);
-    CHECK(fake_nvs_has_sn(true, k_legacy));
-    CHECK(fake_nvs_has_sn(false, NULL));
-    CHECK(fake_nvs_migrations() == 1U);
-
-    CHECK(nvs_store_init() == ESP_OK);
-    expect_sn(k_legacy);
-    CHECK(fake_nvs_migrations() == 1U);
-    uint8_t saved[1][NVS_STORE_ADDR_LEN] = {0};
-    size_t count = 0U;
-    CHECK(nvs_store_get_alarms(saved, 1U, &count) == ESP_OK);
-    CHECK(count == 1U && memcmp(addr[0], saved[0], sizeof(saved[0])) == 0);
-}
-
-/** @brief 故障时保留旧键，下次启动可完成。 */
-static void test_retry(fake_nvs_fault_t fault)
-{
-    fake_nvs_seed(false, k_legacy);
-    fake_nvs_inject(fault);
-    CHECK(nvs_store_init() == ESP_OK);
-    CHECK(nvs_store_factory_available());
-    CHECK(fake_nvs_has_sn(false, k_legacy));
-    CHECK(fake_nvs_migrations() == 0U && fake_nvs_warnings() == 1U);
-    expect_sn(k_legacy);
-
-    CHECK(nvs_store_init() == ESP_OK);
-    expect_sn(k_legacy);
-    CHECK(fake_nvs_has_sn(true, k_legacy) && fake_nvs_has_sn(false, NULL));
-    CHECK(fake_nvs_migrations() == 1U);
-}
-
-/** @brief 出厂初始化失败时回退读取，出厂写入明确失败。 */
-static void test_unavailable(void)
-{
-    fake_nvs_seed(false, k_legacy);
-    fake_nvs_seed(true, k_factory);
-    fake_nvs_inject(FAKE_NVS_FACTORY_INIT);
-    CHECK(nvs_store_init() == ESP_OK);
-    CHECK(!nvs_store_factory_available() && fake_nvs_user_erases() == 0U);
-    expect_sn(k_legacy);
-    CHECK(nvs_store_set_sn(k_legacy) == ESP_ERR_INVALID_STATE);
-    CHECK(fake_nvs_has_sn(true, k_factory));
-}
-
-/** @brief 参数非法与后端弄脏输出后返回错误时都清零可写的首字节。 */
-static void test_clear_output(void)
-{
-    fake_nvs_seed(true, k_factory);
-    CHECK(nvs_store_init() == ESP_OK);
-    char out[NVS_STORE_SN_MAX + 1U] = "dirty";
-    CHECK(nvs_store_get_sn(out, 1U) == ESP_ERR_INVALID_ARG && out[0] == '\0');
-    fake_nvs_inject(FAKE_NVS_DIRTY_READ);
-    CHECK(nvs_store_get_sn(out, sizeof(out)) == ESP_FAIL && out[0] == '\0');
-}
-
-/** @brief 用户分区擦除重试不影响出厂 SN。 */
-static void test_erase_isolation(void)
-{
-    fake_nvs_seed(false, k_legacy);
-    fake_nvs_seed(true, k_factory);
-    fake_nvs_inject(FAKE_NVS_USER_INIT);
-    CHECK(nvs_store_init() == ESP_OK && fake_nvs_user_erases() == 1U);
-    CHECK(fake_nvs_has_sn(false, NULL));
-    expect_sn(k_factory);
-}
-
-/** @brief 正常出厂 SN 优先于旧键，写入只改出厂分区。 */
-static void test_existing_factory(void)
-{
-    fake_nvs_seed(false, k_legacy);
-    fake_nvs_seed(true, k_factory);
-    CHECK(nvs_store_init() == ESP_OK);
-    expect_sn(k_factory);
-    CHECK(fake_nvs_migrations() == 0U);
-    CHECK(nvs_store_set_sn("NEW8") == ESP_OK);
-    CHECK(fake_nvs_has_sn(false, k_legacy) && fake_nvs_has_sn(true, "NEW8"));
-}
-
-/** @brief 出厂显式写入后不再重试旧 SN 的迁移。 */
-static void test_override(void)
-{
-    fake_nvs_seed(false, k_legacy);
-    fake_nvs_inject(FAKE_NVS_DELETE);
-    CHECK(nvs_store_init() == ESP_OK);
-    CHECK(nvs_store_set_sn(k_factory) == ESP_OK);
-    CHECK(nvs_store_init() == ESP_OK);
-    expect_sn(k_factory);
-    CHECK(fake_nvs_has_sn(false, k_legacy));
-}
-
-/** @brief CTest 场景入口。 */
-static void test_explicit_erase(bool factory)
-{
-    fake_nvs_seed(true, k_factory);
-    CHECK(nvs_store_init() == ESP_OK);
-    fake_nvs_seed(false, k_legacy);
-    esp_err_t (*const erase)(void) = factory ? nvs_store_erase_factory : nvs_store_erase_user;
-    fake_nvs_inject(FAKE_NVS_ERASE);
-    CHECK(erase() == ESP_FAIL);
-    CHECK(fake_nvs_has_sn(true, k_factory) && fake_nvs_has_sn(false, k_legacy));
-    CHECK(erase() == ESP_OK);
-    CHECK(fake_nvs_has_sn(true, factory ? NULL : k_factory));
-    CHECK(fake_nvs_has_sn(false, factory ? k_legacy : NULL));
+    CHECK(nvs_store_get_alarms(out, 1U, &count) == ESP_OK);
+    CHECK(count == 1U && memcmp(out[0], addr[0], sizeof(out[0])) == 0);
+    expect_blob(k_system, "rtk", "alarm_wl", NULL, 0U);
 }
 
 /** @brief CTest 场景入口。 */
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
+    CHECK(nvs_store_init() == ESP_OK);
     const char *name = argv[1];
-    if (strcmp(name, "success") == 0) {
-        test_success();
+    if (strcmp(name, "cfg_recovery") == 0) {
+        test_recovery(true, false);
+    } else if (strcmp(name, "system_recovery") == 0 || strcmp(name, "system_unreadable") == 0) {
+        test_recovery(false, strcmp(name, "system_recovery") == 0);
+    } else if (strcmp(name, "legacy_pn") == 0) {
+        test_legacy_pn();
     } else if (strcmp(name, "write_failure") == 0) {
-        test_retry(FAKE_NVS_WRITE);
-    } else if (strcmp(name, "verify_mismatch") == 0) {
-        test_retry(FAKE_NVS_MISMATCH);
-    } else if (strcmp(name, "delete_failure") == 0) {
-        test_retry(FAKE_NVS_DELETE);
-    } else if (strcmp(name, "factory_unavailable") == 0) {
-        test_unavailable();
-    } else if (strcmp(name, "clear_output") == 0) {
-        test_clear_output();
-    } else if (strcmp(name, "erase_isolation") == 0) {
-        test_erase_isolation();
-    } else if (strcmp(name, "existing_factory") == 0) {
-        test_existing_factory();
-    } else if (strcmp(name, "factory_override") == 0) {
-        test_override();
-    } else if (strcmp(name, "commit_failure") == 0) {
-        test_retry(FAKE_NVS_COMMIT);
-    } else if (strcmp(name, "erase_user") == 0) {
-        test_explicit_erase(false);
-    } else if (strcmp(name, "erase_factory") == 0) {
-        test_explicit_erase(true);
+        test_failed_write();
+    } else if (strcmp(name, "freset") == 0 || strcmp(name, "factory_erase") == 0) {
+        test_reset(strcmp(name, "factory_erase") == 0);
+    } else if (strcmp(name, "whitelist") == 0) {
+        test_whitelist();
     } else {
-        return EXIT_FAILURE;
+        test_copies(name);
     }
     return EXIT_SUCCESS;
 }

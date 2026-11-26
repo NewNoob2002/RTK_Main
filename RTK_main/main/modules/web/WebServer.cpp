@@ -58,7 +58,7 @@ constexpr uint32_t kMaxIdleExitS = 3600U;
 constexpr uint8_t kMaxStations = 2U;
 constexpr uint16_t kMaxHttpSockets = 3U;
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
-constexpr uint16_t kBaseUriHandlers = 5U; // /, /favicon.ico, /ws, /ota/info, /ota
+constexpr uint16_t kBaseUriHandlers = 6U; // /, /favicon.ico, /ws, /ota/info, /ota, /ota/rollback
 #else
 constexpr uint16_t kBaseUriHandlers = 3U; // /, /favicon.ico, /ws
 #endif
@@ -1122,7 +1122,7 @@ void WebModule::setPowerPaused(bool paused) noexcept
 bool WebModule::powerPauseDone() const noexcept
 {
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
-    if (ota::uploadBusy()) {
+    if (ota::transferBusy()) {
         return false;
     }
 #endif

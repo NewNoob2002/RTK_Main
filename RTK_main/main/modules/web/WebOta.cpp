@@ -402,7 +402,7 @@ private:
                              .state = ota::stateName(ota::partitionState(&running)),
                              .other = otherVersion,
                              .max = other != nullptr ? other->size : 0U,
-                             .busy = ota::uploadBusy()},
+                             .busy = ota::transferBusy()},
                             out);
     desc->~esp_app_desc_t();
     return len;
@@ -440,8 +440,14 @@ esp_err_t WebModule::registerOtaHandlers() noexcept
     upload.uri = "/ota";
     upload.method = HTTP_POST;
     upload.handler = &WebModule::handleOtaPost;
-    const esp_err_t err = httpd_register_uri_handler(httpd_, &info);
-    return err == ESP_OK ? httpd_register_uri_handler(httpd_, &upload) : err;
+    auto rollback = upload;
+    rollback.uri = "/ota/rollback";
+    rollback.handler = &WebModule::handleOtaRollback;
+    esp_err_t err = httpd_register_uri_handler(httpd_, &info);
+    if (err == ESP_OK) {
+        err = httpd_register_uri_handler(httpd_, &upload);
+    }
+    return err == ESP_OK ? httpd_register_uri_handler(httpd_, &rollback) : err;
 }
 
 esp_err_t WebModule::handleOtaInfo(httpd_req_t *req) noexcept
@@ -499,6 +505,37 @@ esp_err_t WebModule::handleOtaPost(httpd_req_t *req) noexcept
         ota::endOperation();
     }
     return sent;
+}
+
+esp_err_t WebModule::handleOtaRollback(httpd_req_t *req) noexcept
+{
+    // user_ctx 原样指向注册时的 WebModule。
+    auto &self = *static_cast<WebModule *>(req->user_ctx);
+    if (self.ctx().bootPhase.load(std::memory_order_acquire) != BootPhase::kRunning ||
+        self.powerPauseRequested_.load(std::memory_order_acquire)) {
+        const auto busy = replyFor(UploadCode::kBusy);
+        return sendJson(req, busy.status, busy.body);
+    }
+    esp_app_desc_t desc{};
+    switch (ota::switchToOther(desc)) {
+    case ota::SwitchResult::kBusy: {
+        const auto busy = replyFor(UploadCode::kBusy);
+        return sendJson(req, busy.status, busy.body);
+    }
+    case ota::SwitchResult::kNoValidOther:
+        return sendJson(req, "409 Conflict", R"({"ok":false,"err":"no_valid_other"})");
+    case ota::SwitchResult::kOk: {
+        auto &out = self.httpdTxFrame_->data;
+        const auto len = web_ota::renderSuccess(ota::imageText(desc.version), out);
+        const auto sent = len != 0U ? sendJson(req, kStatusOk, {out.data(), len}) : ESP_FAIL;
+        // 提交已成功，连接中断也沿用上传的延迟重启流程。
+        self.otaRebootRequested_.store(true, std::memory_order_release);
+        return sent;
+    }
+    case ota::SwitchResult::kFlash:
+    default:
+        return sendJson(req, kFlashReply.status, kFlashReply.body);
+    }
 }
 
 } // namespace app

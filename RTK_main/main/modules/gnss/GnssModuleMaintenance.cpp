@@ -5,9 +5,7 @@
 #include <bit>
 #include <span>
 
-extern "C" {
-#include "nvs.h"
-}
+#include "NvsStore.h"
 #include "AppContext.hpp"
 #include "fw/Log.hpp"
 #include "modules/gnss/GnssKeys.hpp"
@@ -70,7 +68,7 @@ fw::Result clearCacheAndUserBaud() noexcept
         return fw::Result::kBusy;
     }
     nvs_handle_t handle = 0U;
-    esp_err_t error = nvs_open("gnss", NVS_READWRITE, &handle);
+    esp_err_t error = nvs_store_open_cfg("gnss", NVS_READWRITE, &handle);
     if (error != ESP_OK) {
         return fw::Result::kIoError;
     }
