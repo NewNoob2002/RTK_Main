@@ -9,6 +9,8 @@
 #include <span>
 #include <string_view>
 
+#include "def/OtaDef.hpp"
+
 namespace app::web_ota {
 
 inline constexpr size_t kBufferBytes = 2048U; // B，启动期外供
@@ -24,19 +26,6 @@ inline constexpr uint32_t kTimeoutMs = 30000U;
 // 低于浏览器端 OTA_TOTAL_MS=180000（main/web/ui/app.js），保证 408 能在客户端超时前送达。
 inline constexpr uint32_t kTotalTimeoutMs = 150000U;
 inline constexpr uint32_t kRebootMs = 1500U;
-
-enum class UploadCode : uint8_t {
-    kOk,
-    kBusy,
-    kState,
-    kLength,
-    kTooLarge,
-    kBadImage,
-    kValidate,
-    kTimeout,
-    kFlash,
-    kAborted,
-};
 
 struct ReceiveResult {
     size_t bytes = 0U;

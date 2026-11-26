@@ -27,6 +27,7 @@ void DataCenter::init() noexcept
     systemMode.bindLock(lock);
     powerStatus.bindLock(lock);
     oledStatus.bindLock(lock);
+    otaProgress.bindLock(lock);
     oledPairing.bindLock(lock);
     wifiAp.bindLock(lock);
     rtcmReset.bindLock(lock);

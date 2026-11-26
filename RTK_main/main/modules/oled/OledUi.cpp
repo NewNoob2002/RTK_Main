@@ -289,9 +289,10 @@ uint8_t UiController::subpageRowCount(OledPage page, const ViewModel &vm) noexce
     constexpr uint8_t kSubCommBtRows = 4U;
     switch (page) {
     case OledPage::kSubPos:
-    case OledPage::kSubDevice:
     case OledPage::kSubPower:
         return kSubFiveRows;
+    case OledPage::kSubDevice:
+        return kSubDeviceRows;
     case OledPage::kSubComm:
         return (vm.radioMode == RadioMode::kWifiConfig) ? kSubCommWifiRows : kSubCommBtRows;
     case OledPage::kSystemCheck:
@@ -316,11 +317,13 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
     subSelected_ = 0U;
     subScrollTop_ = 0U;
     pairDecisionSent_ = false;
+    suppressedPairId_ = 0U;
     satSubTab_ = 0U;
     shutdownPct_ = 0U;
     lastStepMs_ = nowMs;
     lastActivityMs_ = nowMs;
     inShutdown_ = false;
+    otaVisible_ = false;
     hasWarning_ = false;
     wifiConfirm_ = false;
     powerOffConfirm_ = false;
@@ -354,10 +357,8 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
     }
 }
 
-UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexcept
+void UiController::dismissOverlays() noexcept
 {
-    static_cast<void>(nowMs);
-    UiDecision out{};
     click_.reset();
     transition_.clear();
     squish_.clear();
@@ -366,6 +367,15 @@ UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexc
     pairDialogId_ = 0U;
     holdOverlayActive_ = false;
     holdOverlayCollapsing_ = false;
+    holdOverlayDismissed_ = false;
+}
+
+UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexcept
+{
+    static_cast<void>(nowMs);
+    UiDecision out{};
+    dismissOverlays();
+    otaVisible_ = false;
     inShutdown_ = true;
     page_ = OledPage::kShutdown;
     out.page = page_;
@@ -671,7 +681,9 @@ bool UiController::updatePairPrompt(uint32_t nowMs, const ViewModel &vm) noexcep
     if (powerOffConfirm_) {
         return false;
     }
-    const uint32_t id = remainingMs(nowMs, vm.pairing.requestDeadlineMs) != 0U ? vm.pairing.id : 0U;
+    const bool available = vm.pairing.id != suppressedPairId_ &&
+                           remainingMs(nowMs, vm.pairing.requestDeadlineMs) != 0U;
+    const uint32_t id = available ? vm.pairing.id : 0U;
     if (id == pairDialogId_) {
         return false;
     }
@@ -834,6 +846,29 @@ UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
     return buildActiveDecision(nowMs, vm, animating);
 }
 
+std::optional<UiDecision> UiController::stepOta(uint32_t nowMs, const ViewModel &vm) noexcept
+{
+    const auto &ota = vm.otaProgress;
+    using web_ota::OtaPhase;
+    const uint32_t failureAge = nowMs - ota.changedMs;
+    const bool showFailure =
+        ota.phase == OtaPhase::kFailed && failureAge < web_ota::OtaProgress::kFailureVisibleMs;
+    if (ota.phase != OtaPhase::kReceiving && ota.phase != OtaPhase::kVerifying &&
+        ota.phase != OtaPhase::kSuccess && !showFailure) {
+        return std::nullopt;
+    }
+    dismissOverlays();
+    suppressedPairId_ = vm.pairing.id; // 已覆盖的请求由蓝牙端按原超时处理。
+    holdOverlayDismissed_ = vm.keyHold.active;
+    otaVisible_ = true;
+    return UiDecision{
+        .page = OledPage::kOta,
+        .markRebootFinalFrame = vm.rebootBanner != RebootBanner::kNone,
+        .nextWaitMs =
+            showFailure ? web_ota::OtaProgress::kFailureVisibleMs - failureAge : kWaitForEvent,
+    };
+}
+
 /**
  * @brief 推进一轮 UI 状态机、按生产时间戳消歧双击、动画物理与帧周期调度
  * @param nowMs: 当前单调时间（ms）
@@ -866,19 +901,20 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
     if (bootMode_ == board::BootMode::kChargeStandby) {
         return stepChargeStandby(nowMs, dtMs, vm);
     }
+    if (const auto ota = stepOta(nowMs, vm); ota.has_value()) {
+        return *ota;
+    }
+    if (otaVisible_) {
+        otaVisible_ = false;
+        lastActivityMs_ = nowMs; // 恢复原页面，重新计时并丢弃覆盖期间排队的按键。
+        shortKeyTimes = {};
+        longKeyArrived = false;
+    }
     if (vm.rebootBanner != RebootBanner::kNone) {
-        click_.reset();
-        transition_.clear();
-        squish_.clear();
-        wifiConfirm_ = false;
-        powerOffConfirm_ = false;
-        pairDialogId_ = 0U;
-        holdOverlayActive_ = false;
-        holdOverlayCollapsing_ = false;
+        dismissOverlays();
         return UiDecision{
             .page = page_,
             .markRebootFinalFrame = true,
-            .animating = false,
             .nextWaitMs = kWaitForEvent,
         };
     }
@@ -909,7 +945,7 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
     const uint16_t heroQ10 =
         heroRolling_ ? easeOutCubic(nowMs - heroChangeStartMs_, kNumberRollMs) : kEaseScale;
     return UiRenderState{
-        .page = page_,
+        .page = page(),
         .dockSelected = dockSelected_,
         .dockFocusX = dockSpring_.position(),
         .satSubTab = satSubTab_,

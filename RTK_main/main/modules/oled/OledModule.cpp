@@ -43,6 +43,7 @@ constinit ScreenBuff *s_active_fb = nullptr;
 constinit board::Sh1106 s_panel{};
 constinit oled::UiController s_ui_ctrl{};
 constinit oled::ModalFrame s_modal_frame{};
+constinit oled::Marquee s_marquee{};
 constinit board::Sh1106FlushResult s_last_flush{};
 constinit bool s_force_next_flush = false;
 constinit std::optional<uint32_t> s_flush_deadline_ms{};
@@ -310,6 +311,12 @@ struct TaskWake {
 
     const SystemStatus sys = app.data.systemStatus.read();
     oled::sanitizeCopy(cstrView(sys.sn.data()), vm.sn);
+    const auto pn = app.data.phonePn.read();
+    static_assert(std::tuple_size_v<decltype(vm.pn)> == core::kPhonePnBytes + 1U);
+    // char 可读定长 PN 的对象表示；先定位 NUL，不读取字段之外的字节。
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): 字节型 PN 的有界文本视图。
+    const std::string_view pnText{reinterpret_cast<const char *>(pn.data()), pn.size()};
+    oled::sanitizeCopy(pnText.substr(0U, pnText.find('\0')), vm.pn);
     oled::sanitizeCopy(cstrView(sys.deviceName.data()), vm.deviceName);
     vm.bootMode = app.bootMode;
     vm.radioMode = app.radioMode;
@@ -317,6 +324,7 @@ struct TaskWake {
 
     collectCommStatus(app, sys, vm);
     collectPowerStatus(app, vm);
+    vm.otaProgress = app.data.otaProgress.read();
 #if RTK_GNSS_ENABLED
     collectGnssStatus(app, vm);
 #endif
@@ -354,6 +362,7 @@ bool OledModule::tryInitPanel(uint32_t nowMs, bool initialBoot) noexcept
     consecutiveFlushErrors_ = 0U;
     statusBarValid_ = false;
     s_modal_frame = {};
+    s_marquee = {};
     WouoUI_GraphSetSendBuffFun(&sendBufferHal);
     context_->data.uiEvents.drainShortKeys();
     context_->data.uiEvents.drainLongKeys();
@@ -418,7 +427,8 @@ fw::Result OledModule::init() noexcept
 
     enabled_ = true;
     const uint32_t now = rtos::nowMs();
-    if (tryInitPanel(now, true)) {
+    // Wi-Fi 同步初始化仍在启动屏障之前。此处只探测面板，让首帧与动画时钟一起移交刷新任务。
+    if (tryInitPanel(now, true) && context_->radioMode != RadioMode::kWifiConfig) {
         static_cast<void>(refreshOnce(rtos::nowMs(), true));
     }
     publishStatus(true);
@@ -469,6 +479,9 @@ void OledModule::taskEntry(void *arg) noexcept
     if (!self->context_->awaitBoot(BootTask::kOled, false)) {
         vTaskDelete(nullptr);
         return;
+    }
+    if (self->context_->radioMode == RadioMode::kWifiConfig) {
+        s_ui_ctrl.reset(self->context_->bootMode, rtos::nowMs());
     }
     s_oled_task_handle.store(xTaskGetCurrentTaskHandle(), std::memory_order_release);
     self->context_->data.uiEvents.setOledActive(self->present_.load(std::memory_order_acquire) &&
@@ -690,6 +703,7 @@ void OledModule::drawFrame(uint32_t nowMs, oled::ViewModel &vm) noexcept
         collectSatSummary(*context_, vm, satellitePage);
     }
 #endif
+    rstate.marquee = &s_marquee;
     const int64_t renderStartUs = esp_timer_get_time();
     statusBarValid_ = oled::renderUi(rstate, vm, *s_active_fb, statusBarValid_, &s_modal_frame);
     lastRenderUs_ = static_cast<uint32_t>(esp_timer_get_time() - renderStartUs);
@@ -714,18 +728,20 @@ uint32_t OledModule::refreshOnce(uint32_t nowMs, bool forceFull, bool renderFram
     const int64_t frameStartUs = esp_timer_get_time();
     oled::ViewModel vm{};
     collectViewModel(nowMs, vm);
-    const auto dec = processUiInput(context_->data.uiEvents, nowMs, vm);
+    auto dec = processUiInput(context_->data.uiEvents, nowMs, vm);
 
     if (!renderFrame) {
         return oled::settleFrameWait(dec, oled::FlushOutcome::kDisabled, nowMs, rtos::nowMs())
             .nextWaitMs;
     }
     if (s_panel.poweredOff() || (s_active_fb == nullptr)) {
+        s_marquee = {};
         return dec.nextWaitMs;
     }
 
-    animating_ = dec.animating;
     drawFrame(nowMs, vm);
+    animating_ = dec.animating || s_marquee.moving();
+    dec.nextWaitMs = std::min(dec.nextWaitMs, s_marquee.waitMs());
     s_force_next_flush = forceFull;
     if (dec.hasClickDeadline) {
         s_flush_deadline_ms = dec.clickDeadlineMs;

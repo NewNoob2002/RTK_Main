@@ -1468,6 +1468,104 @@ void testHorizontalAccFormatting() noexcept
     CHECK(std::string_view{bot.data()}.find("0.02m") != std::string_view::npos);
 }
 
+/** @brief 验证 OTA 覆盖弹窗、丢弃手势、失败回原页，且关机终帧优先。 */
+void testOtaPage()
+{
+    using web_ota::OtaPhase;
+    using web_ota::UploadCode;
+    UiController ctrl{};
+    auto vm = makeHealthyVm();
+    ctrl.reset(board::BootMode::kNormal, 0U);
+    const std::array<uint32_t, 2U> skip{100U, 200U};
+    CHECK(ctrl.step(200U, skip, vm).page == OledPage::kDialplate);
+    static_cast<void>(ctrl.step(500U, {}, vm, true));
+    CHECK(ctrl.renderState(500U).modal == UiModal::kPowerOffConfirm);
+
+    vm.otaProgress = {.receivedBytes = 200U,
+                      .totalBytes = 400U,
+                      .changedMs = 600U,
+                      .phase = OtaPhase::kReceiving};
+    const std::array<uint32_t, 2U> clicks{610U, 700U};
+    const auto receiving = ctrl.step(700U, clicks, vm, true);
+    CHECK(receiving.page == OledPage::kOta && receiving.action.action == OledAction::kNone);
+    CHECK(!receiving.hasClickDeadline && !receiving.animating);
+    CHECK(ctrl.renderState(700U).modal == UiModal::kNone);
+    CHECK(ctrl.dockSelected() == 0U && vm.otaProgress.percent() == 50U);
+
+    vm.otaProgress.phase = OtaPhase::kVerifying;
+    CHECK(ctrl.step(900U, {}, vm).page == OledPage::kOta);
+    vm.otaProgress = {.changedMs = 1000U, .phase = OtaPhase::kFailed, .code = UploadCode::kTimeout};
+    CHECK(ctrl.step(1000U, {}, vm).nextWaitMs == 3000U);
+    CHECK(ctrl.step(3999U, {}, vm).nextWaitMs == 1U);
+    CHECK(ctrl.step(4000U, clicks, vm, true).page == OledPage::kDialplate);
+    CHECK(ctrl.dockSelected() == 0U && ctrl.renderState(4000U).modal == UiModal::kNone);
+
+    vm.otaProgress.phase = OtaPhase::kSuccess;
+    ScreenBuff success{};
+    ScreenBuff reboot{};
+    CHECK(ctrl.step(5000U, {}, vm).page == OledPage::kOta);
+    renderUi(ctrl.renderState(5000U), vm, success);
+    vm.rebootBanner = RebootBanner::kRebooting;
+    CHECK(ctrl.step(6500U, {}, vm).markRebootFinalFrame);
+    renderUi(ctrl.renderState(6500U), vm, reboot);
+    CHECK(std::memcmp(success, reboot, sizeof(ScreenBuff)) == 0);
+    vm.shutdownStage = board::ShutdownStage::kCutPower;
+    vm.shutdownDoneMask = board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady);
+    const auto shutdown = ctrl.step(6501U, {}, vm);
+    CHECK(shutdown.page == OledPage::kShutdown && shutdown.markShutdownFinalFrame);
+}
+
+/** @brief 验证跑马灯停留、位移、回绕和可见字段的唯一像素裁剪范围。 */
+void testMarquee()
+{
+    CHECK(marqueeMotion(0, 1400U).waitMs == kWaitForEvent);
+    CHECK(marqueeMotion(30, 999U).offset == 0 && marqueeMotion(30, 999U).waitMs == 1U);
+    CHECK(marqueeMotion(30, 1000U).moving && marqueeMotion(30, 1500U).offset == 15);
+    CHECK(marqueeMotion(30, 2000U).offset == 30 && !marqueeMotion(30, 2000U).moving);
+    CHECK(marqueeMotion(30, 2999U).offset == 30 && marqueeMotion(30, 2999U).waitMs == 1U);
+    CHECK(marqueeMotion(30, 3000U).offset == 0 && marqueeMotion(30, 3000U).waitMs == 1000U);
+    CHECK(marqueeMotion(1, 1034U).offset == 1);
+
+    Marquee marquee{};
+    UiRenderState state{.page = OledPage::kSubComm, .marquee = &marquee};
+    auto vm = makeHealthyVm();
+    vm.radioMode = RadioMode::kWifiConfig;
+    vm.wifiReady = true;
+    vm.wifiIpv4 = {192U, 168U, 10U, 12U};
+    sanitizeCopy("P2-1826M0056", vm.wifiSsid);
+    ScreenBuff head{};
+    ScreenBuff tail{};
+    renderUi(state, vm, head);
+    CHECK(marquee.waitMs() == 1000U && !marquee.moving());
+    state.nowMs = 1200U; // 实际 SSID 72 px，图标右侧只有 69 px，现已到末端。
+    renderUi(state, vm, tail);
+    CHECK(marquee.waitMs() == 900U && !marquee.moving());
+    CHECK(std::memcmp(head, tail, sizeof(ScreenBuff)) != 0);
+    // 唯一变化应在 SSID 的值框内，排除左侧图标、选中框、IP 及滚动条。
+    for (size_t page = 0U; page < kPages; ++page) {
+        for (size_t col = 0U; col < kWidth; ++col) {
+            if (page < 4U || page > 5U || col < 53U || col >= 122U) {
+                CHECK(head[page][col] == tail[page][col]);
+            }
+        }
+    }
+    state.nowMs = 2100U;
+    renderUi(state, vm, tail);
+    CHECK(std::memcmp(head, tail, sizeof(ScreenBuff)) == 0);
+
+    state.subScrollY = 40; // SSID 文本区域滚出列表后，无动画唤醒。
+    renderUi(state, vm, tail);
+    CHECK(marquee.waitMs() == kWaitForEvent && !marquee.moving());
+    state.subScrollY = 0;
+    state.nowMs = 4000U;
+    renderUi(state, vm, tail);
+    CHECK(marquee.waitMs() == 1000U && std::memcmp(head, tail, sizeof(ScreenBuff)) == 0);
+
+    sanitizeCopy("P2-85EE", vm.wifiSsid);
+    renderUi(state, vm, tail);
+    CHECK(marquee.waitMs() == kWaitForEvent && !marquee.moving());
+}
+
 } // namespace
 
 /**
@@ -1495,6 +1593,8 @@ int main()
     testNoChargerUsbIndicator();
     testRebootBannerAndWifiSelfTest();
     testHorizontalAccFormatting();
+    testOtaPage();
+    testMarquee();
     if (s_failures != 0) {
         std::printf("oled_ui_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;

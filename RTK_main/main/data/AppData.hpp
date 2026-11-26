@@ -25,6 +25,7 @@
 #endif
 #include "def/LinkDef.hpp"
 #include "def/OledDef.hpp"
+#include "def/OtaDef.hpp"
 #include "def/RtcmDef.hpp"
 #include "def/StorageDef.hpp"
 #include "def/SystemDef.hpp"
@@ -159,6 +160,7 @@ struct DataCenter {
     fw::Slot<SystemMode> systemMode{};
     fw::Slot<PowerSnapshot> powerStatus{};
     fw::Slot<OledStatus> oledStatus{};
+    fw::Slot<web_ota::OtaProgress> otaProgress{}; // httpd 单写，OLED 只读。
     UiEventBus uiEvents{};
     fw::Slot<OledPairingStatus> oledPairing{};
     fw::Slot<WifiApSnapshot> wifiAp{};

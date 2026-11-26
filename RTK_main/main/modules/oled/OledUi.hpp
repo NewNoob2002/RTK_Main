@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -14,9 +15,11 @@
 #include "board/PowerLogic.hpp"
 #include "def/GnssSubDef.hpp"
 #include "def/OledDef.hpp"
+#include "def/OtaDef.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/Types.hpp"
 #include "modules/oled/OledAnim.hpp"
+#include "modules/oled/OledMarquee.hpp"
 #include "modules/oled/OledPerf.hpp"
 
 namespace app::oled {
@@ -24,17 +27,17 @@ namespace app::oled {
 inline constexpr size_t kWidth = 128U;
 inline constexpr size_t kHeight = 64U;
 inline constexpr size_t kPages = 8U;
-inline constexpr size_t kMaxLineChars = 21U;      // 128 px / 6 px (Font_6_8) = 21 字符
-inline constexpr size_t kProductBufBytes = 16U;   // B，产品短名缓冲
-inline constexpr size_t kBoardNameBufBytes = 24U; // B，板型显示名缓冲
-inline constexpr size_t kHwVerBufBytes = 16U;     // B，硬件版本缓冲
-inline constexpr size_t kFwVerBufBytes = 20U;     // B，固件版本缓冲
-inline constexpr size_t kSnBufBytes = 24U;        // B，序列号缓冲
-inline constexpr size_t kDevNameBufBytes = 24U;   // B，蓝牙/Wi-Fi 广播名缓冲
-inline constexpr size_t kGnssFwBufBytes = 20U;    // B，GNSS 固件版本短串缓冲
-inline constexpr size_t kPeerLabelBufBytes = 16U; // B，已连蓝牙设备名/地址短串缓冲
-inline constexpr size_t kCheckItemCount = 5U;     // 自检项数：PWR/NVS/RF/CHG/GNSS
-inline constexpr size_t kDockItemCount = 5U;      // SAT/POS/COMM/DEV/PWR
+inline constexpr size_t kMaxLineChars = 21U;                 // 128 px / 6 px (Font_6_8) = 21 字符
+inline constexpr size_t kProductBufBytes = 16U;              // B，产品短名缓冲
+inline constexpr size_t kBoardNameBufBytes = 24U;            // B，板型显示名缓冲
+inline constexpr size_t kHwVerBufBytes = 16U;                // B，硬件版本缓冲
+inline constexpr size_t kFwVerBufBytes = 33U;                // B，固件版本缓冲
+inline constexpr size_t kSnBufBytes = 24U;                   // B，序列号缓冲
+inline constexpr size_t kDevNameBufBytes = 32U;              // B，蓝牙/Wi-Fi 广播名缓冲
+inline constexpr size_t kGnssFwBufBytes = gnss::kVersionLen; // B，GNSS 固件版本短串缓冲
+inline constexpr size_t kPeerLabelBufBytes = 16U;            // B，已连蓝牙设备名/地址短串缓冲
+inline constexpr size_t kCheckItemCount = 5U;                // 自检项数：PWR/NVS/RF/CHG/GNSS
+inline constexpr size_t kDockItemCount = 5U;                 // SAT/POS/COMM/DEV/PWR
 inline constexpr int16_t kDockStartX = 2;
 inline constexpr int16_t kDockStepX = 25;
 inline constexpr int16_t kDockY = 45;
@@ -46,6 +49,8 @@ inline constexpr uint8_t kSubVisibleRows = 3U;    // 统一子页右侧同时可
 inline constexpr int16_t kSubRowStepY = 17;       // px，统一子页行步距（16 px 高 + 1 px 间距）
 inline constexpr int16_t kModalOptionStepX = 56;  // px，安全项到确认项的水平距离
 inline constexpr uint8_t kSubCommWifiRows = 4U;
+inline constexpr uint8_t kSubDeviceRows = 6U;
+inline constexpr size_t kPnBufBytes = 17U;
 inline constexpr uint32_t kPowerOffConfirmMs = 5000U;     // ms，关机确认页倒计时上限
 inline constexpr uint32_t kSubpageIdleTimeoutMs = 60000U; // ms，子页面无操作自动回表盘时长
 inline constexpr uint32_t kCheckTickAnimMs = 150U;        // ms，开机自检单项打勾展开动画时长
@@ -71,8 +76,9 @@ struct ViewModel {
     std::array<char, kHwVerBufBytes> hwVer{};
     std::array<char, kFwVerBufBytes> fwVer{};
     std::array<char, kSnBufBytes> sn{};
+    std::array<char, kPnBufBytes> pn{};
     std::array<char, kDevNameBufBytes> deviceName{};
-    std::array<char, kDevNameBufBytes> wifiSsid{};
+    std::array<char, kDevNameBufBytes + 1U> wifiSsid{};
     std::array<uint8_t, 4U> wifiIpv4{};
     std::array<char, kGnssFwBufBytes> gnssFwVer{};
     std::array<char, kPeerLabelBufBytes> btPeerLabel{};
@@ -126,6 +132,7 @@ struct ViewModel {
     uint8_t shutdownDegradedMask = 0U;
     uint8_t shutdownDoneCount = 0U;
     uint8_t shutdownTotalCount = 0U;
+    web_ota::OtaProgress otaProgress{};
     KeyHoldSnapshot keyHold{};
     RebootBanner rebootBanner = RebootBanner::kNone;
 };
@@ -356,6 +363,7 @@ struct UiRenderState {
     const SystemCheckSm *checkSm = nullptr;
     const PageTransition *transition = nullptr;
     const NumberRoll *satsRoll = nullptr;
+    Marquee *marquee = nullptr;       // 可选，持有本次画面各字段的滚动状态。
     board::BatteryBarsView batBars{}; // 电量格结论（0 格 = 未知，OL7）
 };
 
@@ -401,7 +409,7 @@ public:
      */
     [[nodiscard]] OledPage page() const noexcept
     {
-        return page_;
+        return otaVisible_ ? OledPage::kOta : page_;
     }
 
     /**
@@ -436,6 +444,18 @@ public:
     }
 
 private:
+    /**
+     * @brief 显示当前上传页面、关闭被覆盖的弹窗。
+     * @param nowMs: 当前单调毫秒。
+     * @param vm: 本帧快照。
+     * @retval OTA 覆盖当前页的决定；当前没有 OTA 提示时返回空值。
+     * @note 仅 OLED 任务。
+     */
+    [[nodiscard]] std::optional<UiDecision> stepOta(uint32_t nowMs, const ViewModel &vm) noexcept;
+
+    /** @brief 关闭被全屏提示覆盖的弹窗与交互。 @note 仅 OLED 任务。 */
+    void dismissOverlays() noexcept;
+
     /**
      * @brief 处理非空闲关机阶段的进度推进与 USB 终帧判定（无 USB 不再主动关屏）
      * @param nowMs: 当前单调时间（ms）
@@ -613,6 +633,7 @@ private:
     uint32_t lastStepMs_ = 0U;
     uint32_t lastActivityMs_ = 0U;
     bool inShutdown_ = false;
+    bool otaVisible_ = false;
     bool hasWarning_ = false;
     uint8_t subSelected_ = 0U;
     uint8_t subScrollTop_ = 0U;
@@ -621,6 +642,7 @@ private:
     uint32_t powerOffConfirmStartMs_ = 0U;
     bool pairDecisionSent_ = false;
     uint32_t pairDialogId_ = 0U;
+    uint32_t suppressedPairId_ = 0U;
     bool holdOverlayActive_ = false;
     bool holdOverlayCollapsing_ = false;
     bool holdOverlayDismissed_ = false;

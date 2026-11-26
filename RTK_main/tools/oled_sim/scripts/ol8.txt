@@ -1,0 +1,30 @@
+# Wi-Fi 子页的长 SSID、OTA 覆盖、失败回页及成功。
+0 scene 10
+3000 check dialplate
+3050 short
+3450 short
+3900 short
+4000 short
+4500 check comm
+4500 shot ssid-start
+5500 shot ssid-end
+6700 shot ssid-loop
+6800 ota receiving
+6800 check ota
+6850 shot ota-receiving
+6900 short
+7000 short
+7050 long
+7100 check ota
+7200 ota verifying
+7200 shot ota-verifying
+7500 ota failed
+7500 shot ota-failed
+10499 check ota
+10500 check comm
+10600 ota receiving
+10700 ota verifying
+10900 ota success
+10900 shot ota-success
+11000 shutdown
+11000 check shutdown
