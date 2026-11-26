@@ -1,7 +1,7 @@
 # N1 — 4G EC600U 驱动与链路状态机（ADR-0021 第一期）
 
 - 分支/工作树：`feat/n1-cellular`，`../RTK_Main-n1`，基线为本卡提交
-- 门禁：`tools/ci/run_gates.sh --prefix n1 --base <本卡提交>`（需 `export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env`）
+- 门禁：`tools/ci/run_gates.sh --prefix n1 --base 32a0dd7`（需 `export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env`）
 - 报告：`docs/reports/N1-cellular-link.md`；完成时输出 `N1-FINISHED`
 - 设计依据：**`docs/adr/ADR-0021-cellular-ec600u.md`（已批准）**，本卡只列范围与验收，细节以 ADR 为准；冲突时先在报告中写明，不自行改 ADR。
 
