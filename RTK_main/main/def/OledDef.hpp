@@ -24,6 +24,7 @@ enum class OledPage : uint8_t {
     kSubPower,
     kChargeStandby,
     kShutdown,
+    kOta,
 };
 
 /**
@@ -53,6 +54,8 @@ enum class OledPage : uint8_t {
         return "charge_standby";
     case OledPage::kShutdown:
         return "shutdown";
+    case OledPage::kOta:
+        return "ota";
     default:
         return "unknown";
     }

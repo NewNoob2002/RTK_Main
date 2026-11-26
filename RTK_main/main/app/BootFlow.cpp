@@ -447,13 +447,20 @@ app::BootResult stepStarted(app::BootCtx &ctx) noexcept
         ctx.reason = app::boot_reason::kTaskStartTimeout;
         return app::BootResult::kFail;
     }
+    const bool wifiBoot = self.radioMode == app::RadioMode::kWifiConfig;
+    if (wifiBoot) {
+        // SoftAP 已启动，先完成最后一次启动期 NVS 写入，再放行 Logo 的计时与刷新。
+        app::clearBootFailures(self.bootConfig);
+    }
     if (self.bootPhase.load(std::memory_order_acquire) != app::BootPhase::kStarting) {
         // 消费者在看门狗路径放弃了放行等待；不再进入 kRunning，按停机处理。
         ctx.stopRequired = true;
         return app::BootResult::kFail;
     }
     self.bootPhase.store(app::BootPhase::kRunning, std::memory_order_release);
-    app::clearBootFailures(self.bootConfig);
+    if (!wifiBoot) {
+        app::clearBootFailures(self.bootConfig);
+    }
     return app::BootResult::kOk;
 }
 // NOLINTEND(misc-const-correctness)

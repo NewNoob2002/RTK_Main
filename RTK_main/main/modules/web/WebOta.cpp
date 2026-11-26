@@ -1,5 +1,5 @@
 // 网页 OTA 路由与 ESP-IDF 顺序写入适配（ADR-0019）。
-// 仅 httpd 任务同步处理请求，可等待接收和 Flash；跨任务只经原子状态交互，非 ISR。
+// 仅 httpd 任务同步处理请求，可等待接收和 Flash；跨任务经共享快照与原子状态交互，非 ISR。
 // 堆档位：非实时限量；自有代码无分配，esp_ota_begin 持有单个 SDK OTA 会话。
 #include "modules/web/WebModule.hpp"
 
@@ -27,6 +27,8 @@ namespace {
 
 using web_ota::kFlashReply;
 using web_ota::kStatusOk;
+using web_ota::OtaPhase;
+using web_ota::OtaProgress;
 using web_ota::OtaReply;
 using web_ota::replyFor;
 using web_ota::TransferResult;
@@ -161,11 +163,13 @@ public:
      * @param pause: kLink 关机标志
      * @param stations: SoftAP 站点快照
      * @param hadStation: 准入时已观测到至少一个站点
+     * @param data: OTA 进度的共享快照和 OLED 唤醒通道
      * @note 仅 httpd 构造，原子量由静态 WebModule 持有。
      */
     constexpr OtaUploadIo(httpd_req_t *req, const std::atomic<bool> &pause,
-                          const std::atomic<uint32_t> &stations, bool hadStation) noexcept
-        : req_(req), pause_(&pause), stations_(&stations), hadStation_(hadStation)
+                          const std::atomic<uint32_t> &stations, bool hadStation,
+                          data::DataCenter &data) noexcept
+        : req_(req), pause_(&pause), stations_(&stations), hadStation_(hadStation), data_(&data)
     {}
 
     /** @brief 获取下一更新槽。 @retval SDK 槽指针，无槽时为 nullptr。 @note 仅 httpd。 */
@@ -174,11 +178,35 @@ public:
         return esp_ota_get_next_update_partition(nullptr);
     }
 
-    /** @brief 接收一段数据。 @param dst: 外供写入视图。 @retval 实际接收字节数或超时/断开状态。 */
-    [[nodiscard]] web_ota::ReceiveResult receive(std::span<char> dst) const noexcept
+    /** @brief 发布通过前置检查的上传起点。 @param length: 目标槽内的镜像字节数。 @note 仅 httpd。 */
+    void startProgress(size_t length) noexcept
     {
+        // 已检查目标槽长度，安全转为 uint32_t。
+        progress_.totalBytes = static_cast<uint32_t>(length);
+        publishProgress(OtaPhase::kReceiving, nowMs());
+    }
+
+    /** @brief 发布准入请求的终态。 @param code: 传输或准入后检查的结果。 @note 仅 httpd。 */
+    void finishProgress(UploadCode code) noexcept
+    {
+        progress_.code = code;
+        publishProgress(code == UploadCode::kOk ? OtaPhase::kSuccess : OtaPhase::kFailed, nowMs());
+    }
+
+    /** @brief 接收一段数据。 @param dst: 外供写入视图。 @retval 实际接收字节数或超时/断开状态。 */
+    [[nodiscard]] web_ota::ReceiveResult receive(std::span<char> dst) noexcept
+    {
+        constexpr uint32_t kProgressPeriodMs = 200U;
         const int n = httpd_req_recv(req_, dst.data(), dst.size());
-        // 仅正值是实际接收长度，且不超过请求缓冲。
+        // SDK 正值是实际接收长度，单块及累计字节都不超过已校验的镜像长度。
+        if (n > 0) {
+            progress_.receivedBytes += static_cast<uint32_t>(n);
+            const uint32_t now = nowMs();
+            if (progress_.percent() != publishedPercent_ ||
+                now - progress_.changedMs >= kProgressPeriodMs) {
+                publishProgress(OtaPhase::kReceiving, now);
+            }
+        }
         return {n > 0 ? static_cast<size_t>(n) : 0U, n == HTTPD_SOCK_ERR_TIMEOUT};
     }
 
@@ -231,8 +259,9 @@ public:
     }
 
     /** @brief 校验完整镜像并消费句柄。 @param length: 实际收到的字节数。 @retval kOk 完整。 @retval kValidate 镜像校验失败。 @retval kFlash SDK 失败。 */
-    [[nodiscard]] UploadCode end(size_t length) const noexcept
+    [[nodiscard]] UploadCode end(size_t length) noexcept
     {
+        publishProgress(OtaPhase::kVerifying, nowMs());
         const esp_err_t err = esp_ota_end(handle_);
         if (err != ESP_OK) {
             return err == ESP_ERR_OTA_VALIDATE_FAILED ? UploadCode::kValidate : UploadCode::kFlash;
@@ -271,10 +300,28 @@ public:
     }
 
 private:
+    /**
+     * @brief 提交一致快照后唤醒 OLED。
+     * @param phase: 本次阶段
+     * @param now: 当前单调毫秒
+     * @note 仅 httpd，Slot 锁释放后通知。
+     */
+    void publishProgress(OtaPhase phase, uint32_t now) noexcept
+    {
+        progress_.phase = phase;
+        progress_.changedMs = now;
+        publishedPercent_ = progress_.percent();
+        data_->otaProgress.write(progress_);
+        data_->uiEvents.notifyWake();
+    }
+
     httpd_req_t *req_;
     const std::atomic<bool> *pause_;
     const std::atomic<uint32_t> *stations_;
     bool hadStation_;
+    data::DataCenter *data_;
+    OtaProgress progress_{};
+    uint32_t publishedPercent_ = 0U;
     const esp_partition_t *part_ = nullptr;
     esp_ota_handle_t handle_ = 0U;
 };
@@ -319,6 +366,7 @@ private:
         lwip_setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof(wait)) != 0) {
         return {.code = UploadCode::kFlash};
     }
+    io.startProgress(req->content_len);
     const auto result =
         web_ota::transfer(io, buffer, req->content_len,
                           ota::imageText(esp_app_get_description()->project_name), startMs);
@@ -470,7 +518,7 @@ esp_err_t WebModule::handleOtaPost(httpd_req_t *req) noexcept
     auto &self = *static_cast<WebModule *>(req->user_ctx);
     const bool hadStation =
         web_cfg::staStateCount(self.staState_.load(std::memory_order_acquire)) != 0U;
-    OtaUploadIo io{req, self.powerPauseRequested_, self.staState_, hadStation};
+    OtaUploadIo io{req, self.powerPauseRequested_, self.staState_, hadStation, self.ctx().data};
     auto &out = self.httpdTxFrame_->data;
     const uint32_t startMs = io.nowMs();
     const auto length = declaredLength(req, out);
@@ -490,6 +538,7 @@ esp_err_t WebModule::handleOtaPost(httpd_req_t *req) noexcept
     }
     const auto reply = replyFor(result.code);
     if (admitted) {
+        io.finishProgress(result.code);
         ota::rememberUpload(reply.code);
     }
     FW_LOGI(fw::TraceCat::kSys, "<ota> upload ended result=%s bytes=%zu elapsed=%lu ms", reply.code,

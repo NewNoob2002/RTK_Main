@@ -33,7 +33,7 @@ constexpr uint8_t kDockCornerR = 3U;
 constexpr int16_t kParallaxShiftPx = 42;
 constexpr size_t kRollBufBytes = 12U;
 constexpr size_t kShortBufBytes = 16U;
-constexpr size_t kGnssTagBufBytes = 13U;
+constexpr size_t kGnssTagBufBytes = kGnssFwBufBytes + 16U;
 constexpr size_t kWaitBufBytes = 12U;
 constexpr size_t kSubSatHdrBufBytes = 20U;
 
@@ -97,8 +97,7 @@ constexpr int16_t kDialHeroY = 12;
 constexpr int16_t kDialHeroW = 60;
 constexpr int16_t kDialHeroH = 24;
 constexpr int16_t kDialInfoMinX = 62;
-constexpr int16_t kDialRightEdgeX = 127;
-constexpr size_t kDialRightMaxChars = 11U;
+constexpr int16_t kDialRightEdgeX = kCanvasW;
 constexpr int16_t kDialInfoTopY = 13;
 constexpr int16_t kDialInfoBotY = 24;
 constexpr int16_t kDockPillY = 35;
@@ -140,11 +139,10 @@ constexpr int16_t kCardBatSegStepY = 2;
 constexpr int16_t kCardBatFillW = 8;
 constexpr int16_t kCardUsbIconX = 30;
 constexpr int16_t kCardUsbIconY = 9;
-constexpr size_t kSubRowLabelBytes = 12U;
-constexpr size_t kSubRowValBytes = 16U;
+constexpr size_t kIpv4TextBytes = 16U;
 constexpr size_t kSubPosRowCount = 5U;
 constexpr size_t kSubCommBtRowCount = 4U;
-constexpr size_t kSubDeviceRowCount = 5U;
+static_assert(kSubDeviceRows <= kMarqueeRowCount);
 constexpr size_t kSubPowerRowCount = 5U;
 
 // 卫星子页像素常量。
@@ -241,8 +239,8 @@ constexpr int16_t kHoldIconY = 20;
 /** 统一子页列表项描述（零堆定长结构）。 */
 struct SubListRow {
     const uint8_t *icon7x8 = nullptr;
-    std::array<char, kSubRowLabelBytes> label{};
-    std::array<char, kSubRowValBytes> value{};
+    std::string_view label{};
+    std::string_view value{};
     bool isBack = false;
 };
 
@@ -295,7 +293,8 @@ void toWouoBytes(std::string_view src, std::span<uint8_t> out) noexcept
 void drawText(Canvas &canvas, int16_t x, int16_t y, const sFONT &font,
               std::string_view text) noexcept
 {
-    std::array<uint8_t, kMaxLineChars + 1U> bytes{};
+    // 最多绘制一屏和左右各一列部分可见字符。
+    std::array<uint8_t, kMaxLineChars + 2U + 1U> bytes{};
     toWouoBytes(text, bytes);
     WouoUI_CanvasDrawStr(&canvas, x, y, font, bytes.data());
 }
@@ -310,15 +309,56 @@ void drawText(Canvas &canvas, int16_t x, int16_t y, const sFONT &font,
  */
 void drawCentered(Canvas &canvas, int16_t y, const sFONT &font, std::string_view text) noexcept
 {
-    std::array<char, kMaxLineChars + 1U> clean{};
-    sanitizeCopy(text, clean);
-    const uint16_t width = WouoUI_GetStrWidth(clean.data(), font);
+    const size_t width = text.size() * font.Width;
     // width < canvas.w 时差值一半位于 0..63，转 int16_t 安全。
     const int16_t x = (static_cast<int32_t>(width) < canvas.w)
                           ? static_cast<int16_t>(
                                 (static_cast<int32_t>(canvas.w) - static_cast<int32_t>(width)) / 2)
                           : int16_t{0};
-    drawText(canvas, x, y, font, viewOf(clean));
+    drawText(canvas, x, y, font, text);
+}
+
+enum class TextAlign : uint8_t { kLeft, kCenter, kRight };
+
+/**
+ * @brief 在指定像素框绘制单行文字，超宽时按可见时间水平滚动。
+ * @param parent: 父画布，文字框需与其相交。
+ * @param box: 相对父画布的文本框，宽高为像素数，纵向可部分可见。
+ * @param font: 单行字体。
+ * @param text: 完整文本。
+ * @param state: 帧时刻及滚动状态。
+ * @param field: 同一页面内唯一的字段。
+ * @param align: 可完整显示时的对齐方式。
+ * @note 只绘制当前可见字形，WouoUI 负责逐像素裁剪。
+ */
+void drawMarquee(const Canvas &parent, Rect box, const sFONT &font, std::string_view text,
+                 const UiRenderState &state, MarqueeField field, TextAlign align) noexcept
+{
+    const auto top = std::max<int16_t>(box.y, 0);
+    const auto bottom = std::min<int16_t>(static_cast<int16_t>(box.y + box.h), parent.h);
+    if (text.empty() || box.w <= 0 || bottom <= top) {
+        return;
+    }
+    // 文本来源均为有界字段，最宽小于 1 Ki 像素。
+    const auto spare = static_cast<int16_t>(box.w - static_cast<int16_t>(text.size() * font.Width));
+    int16_t x = 0;
+    if (spare >= 0) {
+        x = align == TextAlign::kCenter ? static_cast<int16_t>(spare / 2)
+                                        : (align == TextAlign::kRight ? spare : int16_t{0});
+    } else if (state.marquee != nullptr) {
+        const auto shift =
+            state.marquee->offset(field, text, static_cast<int16_t>(-spare), state.nowMs);
+        // shift 非负且小于全文像素宽，跳过的完整字形在文本范围内。
+        text.remove_prefix(static_cast<size_t>(shift / font.Width));
+        x = static_cast<int16_t>(-(shift % font.Width));
+    }
+    Canvas clip{
+        .start_x = static_cast<int16_t>(parent.start_x + box.x),
+        .start_y = static_cast<int16_t>(parent.start_y + top),
+        .w = static_cast<int16_t>(box.w - 1), // WouoUI 的横向裁剪包含右端坐标。
+        .h = static_cast<int16_t>(bottom - top),
+    };
+    drawText(clip, x, static_cast<int16_t>(box.y - top), font, text);
 }
 
 /**
@@ -538,7 +578,8 @@ void renderSystemCheckRow(Canvas &canvas, size_t idx, int16_t rowY, const char *
             } else {
                 sanitizeCopy(gnss::modelName(vm.gnssModel), gnssTag);
             }
-            drawText(canvas, kCheckGnssInfoX, rowY, Font_6_8, viewOf(gnssTag));
+            drawMarquee(canvas, {kCheckGnssInfoX, rowY, kCheckIconX - kCheckGnssInfoX - 1, kIcon8H},
+                        Font_6_8, viewOf(gnssTag), state, MarqueeField::kPrimary, TextAlign::kLeft);
         }
         // 逐项打勾左向右展开动画（150 ms）。
         const uint32_t sinceOk = state.nowMs - sm->itemResolvedMs(idx);
@@ -674,12 +715,10 @@ void formatDialGnssRight(const ViewModel &vm, std::span<char> topOut,
         if (hasAcc) {
             const unsigned used = static_cast<unsigned>(vm.satsUsed);
             if (vm.satsVisible > 0U) {
-                const int written =
-                    std::snprintf(botOut.data(), botOut.size(), "%s %u/%u", accBuf.data(), used,
-                                  static_cast<unsigned>(vm.satsVisible));
-                if ((written > 0) && (static_cast<size_t>(written) <= kDialRightMaxChars)) {
-                    return;
-                }
+                static_cast<void>(std::snprintf(botOut.data(), botOut.size(), "%s %u/%u",
+                                                accBuf.data(), used,
+                                                static_cast<unsigned>(vm.satsVisible)));
+                return;
             }
             static_cast<void>(std::snprintf(botOut.data(), botOut.size(), "ACC %s", accBuf.data()));
         } else if (vm.fixValid) {
@@ -754,14 +793,11 @@ void renderDialplate(Canvas &canvas, const UiRenderState &state, const ViewModel
     std::array<char, kShortBufBytes> rightTop{};
     std::array<char, kShortBufBytes> rightBot{};
     formatDialRightInfo(vm, rightTop, rightBot);
-    const int16_t topW = static_cast<int16_t>(WouoUI_GetStrWidth(rightTop.data(), Font_6_8));
-    const int16_t botW = static_cast<int16_t>(WouoUI_GetStrWidth(rightBot.data(), Font_6_8));
-    const int16_t topX =
-        std::max<int16_t>(kDialInfoMinX, static_cast<int16_t>(kDialRightEdgeX - topW));
-    const int16_t botX =
-        std::max<int16_t>(kDialInfoMinX, static_cast<int16_t>(kDialRightEdgeX - botW));
-    drawText(canvas, topX, kDialInfoTopY, Font_6_8, viewOf(rightTop));
-    drawText(canvas, botX, kDialInfoBotY, Font_6_8, viewOf(rightBot));
+    constexpr int16_t kInfoWidth = kDialRightEdgeX - kDialInfoMinX;
+    drawMarquee(canvas, {kDialInfoMinX, kDialInfoTopY, kInfoWidth, kIcon8H}, Font_6_8,
+                viewOf(rightTop), state, MarqueeField::kPrimary, TextAlign::kRight);
+    drawMarquee(canvas, {kDialInfoMinX, kDialInfoBotY, kInfoWidth, kIcon8H}, Font_6_8,
+                viewOf(rightBot), state, MarqueeField::kSecondary, TextAlign::kRight);
     // 底部 dock 选中项上方反白胶囊标签，明确标识当前入口并跟随选中框中心。
     const char *const dockName = dockItemName(state.dockSelected);
     const int16_t nameW = static_cast<int16_t>(WouoUI_GetStrWidth(dockName, Font_6_8));
@@ -841,20 +877,23 @@ void drawSubMainCard(const Canvas &canvas, const UiRenderState &state, const uin
                              icon16x16, 1U);
     }
 
-    drawCentered(cardInner, kSubCardVal1Y, Font_6_8, keyVal);
-    if (!subVal.empty()) {
-        drawCentered(cardInner, kSubCardVal2Y, Font_6_8, subVal);
-    }
+    drawMarquee(cardInner, {2, kSubCardVal1Y, kSubCardW - 4, kIcon8H}, Font_6_8, keyVal, state,
+                MarqueeField::kCardPrimary, TextAlign::kCenter);
+    drawMarquee(cardInner, {2, kSubCardVal2Y, kSubCardW - 4, kIcon8H}, Font_6_8, subVal, state,
+                MarqueeField::kCardSecondary, TextAlign::kCenter);
 }
 
 /**
- * @brief 在子页列表裁剪区中绘制单行条目（图标、名称、右对齐截断值或 Back）
+ * @brief 在子页列表裁剪区中绘制单行条目（图标、名称、右对齐或滚动值或 Back）
  * @param listClip: 列表裁剪画布
  * @param row: 列表项数据
  * @param rowY: 本行顶边相对 listClip 的 Y 偏移（px）
+ * @param state: 帧时刻及滚动状态
+ * @param field: 本行滚动字段
  * @note 仅 drawSubList 调用，不分配堆。
  */
-void drawSubRow(Canvas &listClip, const SubListRow &row, int16_t rowY) noexcept
+void drawSubRow(Canvas &listClip, const SubListRow &row, int16_t rowY, const UiRenderState &state,
+                MarqueeField field) noexcept
 {
     const int16_t contentY = static_cast<int16_t>(rowY + kSubRowIconYOff);
     if (row.isBack) {
@@ -866,27 +905,21 @@ void drawSubRow(Canvas &listClip, const SubListRow &row, int16_t rowY) noexcept
     if (row.icon7x8 != nullptr) {
         WouoUI_CanvasDrawBMP(&listClip, kSubRowIconX, contentY, kIcon7W, kIcon8H, row.icon7x8, 1U);
     }
-    const std::string_view lbl = viewOf(row.label);
-    const std::string_view val = viewOf(row.value);
-    constexpr int16_t kUnlabelledValueX = 2; // 13 个 Font_6_8 字符可完整放入右侧列表。
-    int16_t minValX = (lbl.empty() && row.icon7x8 == nullptr) ? kUnlabelledValueX : kSubRowTextX;
-    if (!lbl.empty()) {
-        drawText(listClip, kSubRowTextX, contentY, Font_6_8, lbl);
-        const int16_t lblW = static_cast<int16_t>(WouoUI_GetStrWidth(row.label.data(), Font_6_8));
-        minValX = static_cast<int16_t>(kSubRowTextX + lblW + 2);
+    constexpr int16_t kUnlabelledValueX = 2;
+    int16_t minValX = row.icon7x8 == nullptr ? kUnlabelledValueX : kSubRowTextX;
+    if (!row.label.empty()) {
+        drawText(listClip, kSubRowTextX, contentY, Font_6_8, row.label);
+        // 标签均为固定短词，像素宽可收窄到 int16_t。
+        const auto labelWidth = static_cast<int16_t>(row.label.size() * Font_6_8.Width);
+        minValX = static_cast<int16_t>(kSubRowTextX + labelWidth + 2);
     }
-    if (!val.empty()) {
-        const int16_t availW =
-            std::max<int16_t>(0, static_cast<int16_t>(kSubRowValRightX - minValX));
-        const size_t maxChars = static_cast<size_t>(availW / static_cast<int16_t>(Font_6_8.Width));
-        std::array<char, kSubRowValBytes> clipped{};
-        const size_t copyLen = std::min(val.size(), std::min(maxChars, clipped.size() - 1U));
-        sanitizeCopy(val.substr(0U, copyLen), clipped);
-        const int16_t valW = static_cast<int16_t>(WouoUI_GetStrWidth(clipped.data(), Font_6_8));
-        const int16_t valX =
-            std::max<int16_t>(minValX, static_cast<int16_t>(kSubRowValRightX - valW));
-        drawText(listClip, valX, contentY, Font_6_8, viewOf(clipped));
-    }
+    // 挤压期间的边线内移，文字框也避开这两列。
+    minValX = std::max<int16_t>(minValX, static_cast<int16_t>(1 + state.squishInset));
+    const auto right = std::min<int16_t>(kSubRowValRightX,
+                                         static_cast<int16_t>(kSubListW - state.squishInset - 1));
+    const auto width = static_cast<int16_t>(right - minValX);
+    drawMarquee(listClip, {minValX, contentY, width, kIcon8H}, Font_6_8, row.value, state, field,
+                TextAlign::kRight);
 }
 
 /**
@@ -942,7 +975,8 @@ void drawSubList(Canvas &canvas, const UiRenderState &state,
         if ((rowY >= kSubListH) || ((rowY + kSubRowH) <= 0)) {
             continue;
         }
-        drawSubRow(listClip, rows[i], rowY);
+        // 统一列表最多 kMarqueeRowCount 行，前六个字段索引用于行值。
+        drawSubRow(listClip, rows[i], rowY, state, static_cast<MarqueeField>(i));
     }
 
     // 弹簧跟随选中框 + 双击确认挤压反馈（收缩 2 px 后回弹）。
@@ -970,11 +1004,7 @@ void drawSubList(Canvas &canvas, const UiRenderState &state,
 [[nodiscard]] SubListRow makeRow(const uint8_t *icon, std::string_view label,
                                  std::string_view value) noexcept
 {
-    SubListRow row{};
-    row.icon7x8 = icon;
-    sanitizeCopy(label, row.label);
-    sanitizeCopy(value, row.value);
-    return row;
+    return {.icon7x8 = icon, .label = label, .value = value};
 }
 
 /**
@@ -1178,7 +1208,7 @@ void renderCommWifi(Canvas &canvas, const UiRenderState &state, const ViewModel 
     drawSubMainCard(canvas, state, icons::kCardWifi16x16.data(), "WIFI", viewOf(clients), false,
                     vm);
     const auto ssid = vm.wifiReady ? viewOf(vm.wifiSsid) : std::string_view{"OFF"};
-    std::array<char, kSubRowValBytes> ip{};
+    std::array<char, kIpv4TextBytes> ip{};
     if (vm.wifiReady) {
         const auto [first, second, third, fourth] = vm.wifiIpv4;
         static_cast<void>(std::snprintf(ip.data(), ip.size(), "%u.%u.%u.%u",
@@ -1236,7 +1266,7 @@ void renderComm(Canvas &canvas, const UiRenderState &state, const ViewModel &vm)
 }
 
 /**
- * @brief 渲染设备子页（左主卡设备图标+型号，右列表：FW、SN、BT 名、运行时间、Back）
+ * @brief 渲染设备子页（左主卡设备图标+型号，右列表：FW、SN、PN、设备名、运行时间、Back）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -1253,11 +1283,13 @@ void renderSubDevice(Canvas &canvas, const UiRenderState &state, const ViewModel
     formatUptime(vm.uptimeMs, upBuf);
     const std::string_view fw = viewOf(vm.fwVer);
     const std::string_view sn = viewOf(vm.sn);
+    const std::string_view pn = viewOf(vm.pn);
     const std::string_view dev = viewOf(vm.deviceName);
 
-    std::array<SubListRow, kSubDeviceRowCount> rows{{
+    std::array<SubListRow, kSubDeviceRows> rows{{
         makeRow(icons::kRowInfo7x8.data(), "FW", fw.empty() ? "--" : fw),
         makeRow(icons::kRowInfo7x8.data(), "SN", sn.empty() ? "--" : sn),
+        makeRow(icons::kRowInfo7x8.data(), "PN", pn.empty() ? "--" : pn),
         makeRow(icons::kRowRf7x8.data(), "", dev.empty() ? "--" : dev),
         makeRow(icons::kRowClock7x8.data(), "UP", viewOf(upBuf)),
         makeBackRow(),
@@ -1353,14 +1385,15 @@ void renderChargeStandby(Canvas &canvas, const UiRenderState &state, const ViewM
 
     // 底部一行 FW / HW。
     WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kStandbyFooterLineY);
-    std::array<char, kMaxLineChars + 1U> footer{};
+    std::array<char, kFwVerBufBytes + kHwVerBufBytes + 8U> footer{};
     const std::string_view fw = viewOf(vm.fwVer);
     const std::string_view hw = viewOf(vm.hwVer);
     static_cast<void>(std::snprintf(
         footer.data(), footer.size(), "FW %.*s  HW %.*s",
         static_cast<int>(fw.empty() ? 2U : fw.size()), fw.empty() ? "--" : fw.data(),
         static_cast<int>(hw.empty() ? 2U : hw.size()), hw.empty() ? "--" : hw.data()));
-    drawCentered(canvas, kStandbyFooterTextY, Font_6_8, viewOf(footer));
+    drawMarquee(canvas, {0, kStandbyFooterTextY, kCanvasW, kIcon8H}, Font_6_8, viewOf(footer),
+                state, MarqueeField::kPrimary, TextAlign::kCenter);
 }
 
 /**
@@ -1473,16 +1506,19 @@ void renderShutdown(Canvas &canvas, const UiRenderState &state, const ViewModel 
  * @brief 绘制蓝牙配对标题、设备与数字校验码。
  * @param canvas: 目标画布。
  * @param pair: 当前配对快照。
+ * @param state: 帧时刻及滚动状态。
  */
-void drawPairPrompt(Canvas &canvas, const OledPairingStatus &pair) noexcept
+void drawPairPrompt(Canvas &canvas, const OledPairingStatus &pair,
+                    const UiRenderState &state) noexcept
 {
     drawCentered(canvas, kPairModalTitleY, Font_6_8, "PAIR REQUEST");
     std::array<char, kShortBufBytes> peer{};
     static_cast<void>(std::snprintf(
         peer.data(), peer.size(), "%02X:%02X:%02X", static_cast<unsigned>(pair.suffix[0]),
         static_cast<unsigned>(pair.suffix[1]), static_cast<unsigned>(pair.suffix[2])));
-    drawCentered(canvas, kPairModalPeerY, Font_6_8,
-                 pair.name[0] != '\0' ? viewOf(pair.name) : viewOf(peer));
+    drawMarquee(canvas, {4, kPairModalPeerY, kCanvasW - 8, kIcon8H}, Font_6_8,
+                pair.name[0] != '\0' ? viewOf(pair.name) : viewOf(peer), state,
+                MarqueeField::kPrimary, TextAlign::kCenter);
     if (pair.hasNumber) {
         static_cast<void>(
             std::snprintf(peer.data(), peer.size(), "%06u", static_cast<unsigned>(pair.number)));
@@ -1493,14 +1529,15 @@ void drawPairPrompt(Canvas &canvas, const OledPairingStatus &pair) noexcept
 /**
  * @brief 画出静态弹窗边框和提示。
  * @param canvas: 目标画布。
- * @param modal: 弹窗类型。
+ * @param state: 弹窗类型及滚动状态。
  * @param pair: 配对信息，用于配对类型。
  */
-void drawModalPrompt(Canvas &canvas, UiModal modal, const OledPairingStatus &pair) noexcept
+void drawModalPrompt(Canvas &canvas, const UiRenderState &state,
+                     const OledPairingStatus &pair) noexcept
 {
     WouoUI_CanvasDrawRBoxEmpty(&canvas, 1, 1, static_cast<int16_t>(kCanvasW - 2),
                                static_cast<int16_t>(kCanvasH - 2), kModalCornerR);
-    switch (modal) {
+    switch (state.modal) {
     case UiModal::kPowerOffConfirm: {
         constexpr int16_t kTitleGroupW = 7 + 4 + 60; // icon 7 + gap 4 + 10 chars * 6
         const int16_t gx = static_cast<int16_t>((kCanvasW - kTitleGroupW) / 2);
@@ -1512,10 +1549,11 @@ void drawModalPrompt(Canvas &canvas, UiModal modal, const OledPairingStatus &pai
     }
     case UiModal::kWifiConfirm:
         drawCentered(canvas, kWifiModalTitleY, Font_6_8, "SWITCH TO WIFI?");
-        drawCentered(canvas, kWifiModalWarningY, Font_6_8, "BT WILL DISCONNECT");
+        drawMarquee(canvas, {4, kWifiModalWarningY, kCanvasW - 8, kIcon8H}, Font_6_8,
+                    "BT WILL DISCONNECT", state, MarqueeField::kPrimary, TextAlign::kCenter);
         break;
     case UiModal::kPair:
-        drawPairPrompt(canvas, pair);
+        drawPairPrompt(canvas, pair, state);
         break;
     case UiModal::kNone:
     default:
@@ -1610,14 +1648,16 @@ void drawPowerConfirmTimer(Canvas &canvas, uint32_t remainMs) noexcept
 void renderModal(Canvas &canvas, const UiRenderState &state, const OledPairingStatus &pair,
                  ScreenBuff &fb, ModalFrame *previous) noexcept
 {
-    const bool reuse = previous != nullptr && previous->modal == state.modal &&
+    const bool scrollingPair =
+        state.modal == UiModal::kPair && viewOf(pair.name).size() * Font_6_8.Width > kWidth - 8U;
+    const bool reuse = !scrollingPair && previous != nullptr && previous->modal == state.modal &&
                        (state.modal != UiModal::kPair || samePairPrompt(previous->pairing, pair));
     if (reuse) {
         clearModalPage(fb[kModalButtonPage], kModalClearPage);
         clearModalPage(fb[kModalButtonTailPage], kModalButtonTailKeep);
     } else {
         WouoUI_BuffClear();
-        drawModalPrompt(canvas, state.modal, pair);
+        drawModalPrompt(canvas, state, pair);
     }
     if (state.modal == UiModal::kPowerOffConfirm) {
         clearModalPage(fb[kModalTimerPage], kModalClearPage);
@@ -1713,6 +1753,94 @@ void renderHoldOverlay(const UiRenderState &state) noexcept
 }
 
 /**
+ * @brief 将 OTA 失败原因映射到一行 OLED 文本。
+ * @param code: 网页 OTA 结果
+ * @retval 固定短词
+ * @note 纯函数。
+ */
+[[nodiscard]] const char *otaFailureText(web_ota::UploadCode code) noexcept
+{
+    using web_ota::UploadCode;
+    switch (code) {
+    case UploadCode::kBusy:
+        return "BUSY";
+    case UploadCode::kState:
+        return "SLOT NOT READY";
+    case UploadCode::kLength:
+        return "BAD LENGTH";
+    case UploadCode::kTooLarge:
+        return "IMAGE TOO LARGE";
+    case UploadCode::kBadImage:
+        return "BAD IMAGE";
+    case UploadCode::kValidate:
+        return "INVALID IMAGE";
+    case UploadCode::kTimeout:
+        return "TIMEOUT";
+    case UploadCode::kFlash:
+        return "FLASH ERROR";
+    case UploadCode::kAborted:
+        return "INTERRUPTED";
+    case UploadCode::kOk:
+    default:
+        return "UNKNOWN";
+    }
+}
+
+/**
+ * @brief 绘制 OTA 接收、校验、成功或失败全屏页。
+ * @param canvas: 目标画布
+ * @param progress: httpd 发布的进度快照
+ * @note OLED 渲染任务或主机模拟器调用，不分配堆。
+ */
+void renderOta(Canvas &canvas, const web_ota::OtaProgress &progress) noexcept
+{
+    using web_ota::OtaPhase;
+    constexpr int16_t kResultTitleY = 13;
+    constexpr int16_t kResultBodyY = 38;
+    constexpr std::string_view kWarning = "DO NOT POWER OFF";
+    if (progress.phase == OtaPhase::kSuccess) {
+        drawCentered(canvas, kResultTitleY, Font_8_16, "OTA OK");
+        drawCentered(canvas, kResultBodyY, Font_6_8, "REBOOTING...");
+        return;
+    }
+    if (progress.phase == OtaPhase::kFailed) {
+        drawCentered(canvas, kResultTitleY, Font_8_16, "OTA FAILED");
+        drawCentered(canvas, kResultBodyY, Font_6_8, otaFailureText(progress.code));
+        return;
+    }
+    if (progress.phase == OtaPhase::kVerifying) {
+        constexpr int16_t kVerifyTitleY = 15;
+        constexpr int16_t kVerifyWarningY = 45;
+        drawCentered(canvas, kVerifyTitleY, Font_8_16, "VERIFYING");
+        drawCentered(canvas, kVerifyWarningY, Font_6_8, kWarning);
+        return;
+    }
+    constexpr int16_t kReceiveTitleY = 3;
+    constexpr int16_t kReceiveNumbersY = 36;
+    constexpr int16_t kReceiveWarningY = 51;
+    constexpr Rect kBar{9, 23, 110, 9};
+    constexpr int16_t kBarPadding = 2;
+    constexpr uint32_t kBytesPerKb = 1024U;
+    const auto pct = progress.percent();
+    drawCentered(canvas, kReceiveTitleY, Font_8_16, "OTA UPDATING");
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, kBar.x, kBar.y, kBar.w, kBar.h, kBarPadding);
+    // pct 最多 100，填充宽度不超过进度条内部。
+    const auto fill = static_cast<int16_t>(pct * (kBar.w - 2 * kBarPadding) / kMaxPercent);
+    if (fill > 0) {
+        WouoUI_CanvasDrawRBox(&canvas, kBar.x + kBarPadding, kBar.y + kBarPadding, fill,
+                              kBar.h - 2 * kBarPadding, 0U);
+    }
+    constexpr size_t kProgressTextBytes = 32U;
+    std::array<char, kProgressTextBytes> text{};
+    static_cast<void>(std::snprintf(text.data(), text.size(), "%u%%  %u/%u KB",
+                                    static_cast<unsigned>(pct),
+                                    static_cast<unsigned>(progress.receivedBytes / kBytesPerKb),
+                                    static_cast<unsigned>(progress.totalBytes / kBytesPerKb)));
+    drawCentered(canvas, kReceiveNumbersY, Font_6_8, viewOf(text));
+    drawCentered(canvas, kReceiveWarningY, Font_6_8, kWarning);
+}
+
+/**
  * @brief 将指定页面绘制到任意偏移与剪裁画布
  * @param canvas: 目标画布
  * @param page: 目标页面枚举
@@ -1747,6 +1875,9 @@ void renderPageInto(Canvas &canvas, OledPage page, const UiRenderState &state,
         break;
     case OledPage::kChargeStandby:
         renderChargeStandby(canvas, state, vm);
+        break;
+    case OledPage::kOta:
+        renderOta(canvas, vm.otaProgress);
         break;
     case OledPage::kShutdown:
         renderShutdown(canvas, state, vm);
@@ -1918,12 +2049,20 @@ bool renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb,
     WouoUI_GraphSetBuff(&fb);
     WouoUI_GraphSetPen(&pen);
     WouoUI_GraphSetPenColor(1U);
-    const bool showRebootOverlay = (state.rebootBanner != RebootBanner::kNone) &&
+    const bool showOtaSuccess =
+        state.page == OledPage::kOta && vm.otaProgress.phase == web_ota::OtaPhase::kSuccess;
+    const bool showRebootOverlay = !showOtaSuccess && (state.rebootBanner != RebootBanner::kNone) &&
                                    (state.rebootBanner != RebootBanner::kKeepFrame) &&
                                    (state.page != OledPage::kChargeStandby) &&
                                    (state.page != OledPage::kShutdown);
     const bool showModal = !showRebootOverlay && state.modal != UiModal::kNone;
     Canvas full{.start_x = 0, .start_y = 0, .w = kCanvasW, .h = kCanvasH};
+    if (state.marquee != nullptr) {
+        const bool stationaryPage =
+            state.transition == nullptr || state.transition->kind == TransitionKind::kNone;
+        state.marquee->begin(state.page, stationaryPage && !state.holdOverlayVisible &&
+                                             state.rebootBanner == RebootBanner::kNone);
+    }
     bool showStatusBar = false;
     if (showRebootOverlay) {
         WouoUI_BuffClear();
@@ -1939,6 +2078,9 @@ bool renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb,
     }
     if (modalFrame != nullptr && (!showModal || state.holdOverlayVisible)) {
         modalFrame->modal = UiModal::kNone;
+    }
+    if (state.marquee != nullptr) {
+        state.marquee->finish();
     }
     // 解除栈局部画笔注册，避免 WouoUI 静态 p_cur_pen 悬垂（ROL1-06）。
     WouoUI_GraphSetPen(nullptr);

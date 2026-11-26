@@ -147,6 +147,9 @@ struct MockOtaState {
     std::span<const char> body{};
     void (*onReceive)() = nullptr;
     int received = 0;
+    size_t receiveChunkBytes = SIZE_MAX;
+    uint32_t receiveStepMs = 0U;
+    std::vector<app::web_ota::OtaProgress> snapshots{};
     int aborted = 0;
     size_t written = 0U;
     const esp_partition_t *bootPartition = nullptr;
@@ -679,7 +682,8 @@ int httpd_req_recv(httpd_req_t *, char *buf, size_t len)
         s_nowMs += static_cast<uint32_t>(s_ota.receiveWaitS * 1000L);
         return HTTPD_SOCK_ERR_TIMEOUT;
     }
-    const auto part = s_ota.body.first(std::min(len, s_ota.body.size()));
+    s_nowMs += s_ota.receiveStepMs;
+    const auto part = s_ota.body.first(std::min({len, s_ota.body.size(), s_ota.receiveChunkBytes}));
     if (!part.empty()) {
         std::ranges::copy(part, buf);
     }
@@ -2258,6 +2262,9 @@ void testOtaHttpContract()
     assert(s_httpd.lastRespBody.find(R"("other":null)") != std::string::npos);
 
     assert(postOta("application/octet-streamX") == ESP_FAIL);
+    const auto badImage = s_ctx.data.otaProgress.read();
+    assert(badImage.phase == app::web_ota::OtaPhase::kFailed &&
+           badImage.code == app::web_ota::UploadCode::kBadImage && badImage.receivedBytes == 0U);
     assert(s_ota.received == 0 && s_ota.wireReply.starts_with("HTTP/1.1 400 Bad Request\r\n"));
     assert(s_ota.wireReply.ends_with("\r\n\r\n"
                                      R"({"ok":false,"err":"bad_image"})"));
@@ -2341,6 +2348,9 @@ void testOtaQuiesceAndWebBusy()
     s_ota.onReceive = [] { simulateWifiEvent(WIFI_EVENT_AP_STADISCONNECTED); };
     s_ota.backpressure = true;
     assert(postOta() == ESP_FAIL && s_ota.aborted == 1 && s_ota.wireReply.empty());
+    const auto interrupted = s_ctx.data.otaProgress.read();
+    assert(interrupted.phase == app::web_ota::OtaPhase::kFailed &&
+           interrupted.code == app::web_ota::UploadCode::kAborted);
     s_ctx.web.stopBoot();
     s_ctx.web.unbindStorage();
 
@@ -2394,6 +2404,43 @@ void testOtaReboot()
     s_nowMs += 1500U;
     static_cast<void>(s_ctx.web.poll(s_nowMs));
     assert(s_rebootCalls == 0);
+    s_ctx.web.stopBoot();
+    s_ctx.web.unbindStorage();
+}
+
+/** @brief 经真实 HTTP 回调核对快照顺序、一致字节数及 1%/200ms 限流。 */
+void testOtaProgress()
+{
+    using app::web_ota::OtaPhase;
+    resetHarness();
+    s_ctx.data.uiEvents.setWakeHook(
+        [](void *) noexcept { s_ota.snapshots.push_back(s_ctx.data.otaProgress.read()); }, nullptr);
+    const auto image = otaImage();
+    s_ota.body = image;
+    s_ota.receiveChunkBytes = 1U;
+    s_ota.receiveStepMs = 100U;
+    assert(postOta() == ESP_OK);
+    s_ctx.data.uiEvents.setWakeHook(nullptr, nullptr);
+
+    const auto &frames = s_ota.snapshots;
+    assert(frames.size() > 4U && frames.size() < image.size());
+    assert(frames.front().phase == OtaPhase::kReceiving && frames.front().receivedBytes == 0U &&
+           frames.front().totalBytes == image.size());
+    assert(frames[1].receivedBytes == 2U && frames[1].percent() == 0U &&
+           frames[1].changedMs - frames.front().changedMs == 200U);
+    assert(frames[2].receivedBytes == 3U && frames[2].percent() == 1U);
+    for (size_t i = 1U; i < frames.size() - 2U; ++i) {
+        const auto &previous = frames[i - 1U];
+        const auto &current = frames[i];
+        assert(current.phase == OtaPhase::kReceiving && current.totalBytes == image.size());
+        assert(current.receivedBytes > previous.receivedBytes);
+        assert(current.percent() > previous.percent() ||
+               current.changedMs - previous.changedMs >= 200U);
+    }
+    const auto &verifying = frames[frames.size() - 2U];
+    assert(verifying.phase == OtaPhase::kVerifying && verifying.receivedBytes == image.size());
+    assert(frames.back().phase == OtaPhase::kSuccess && frames.back().percent() == 100U);
+    app::ota::endOperation();
     s_ctx.web.stopBoot();
     s_ctx.web.unbindStorage();
 }
@@ -2497,6 +2544,10 @@ void testOtaOtherSlotAndTotalTimeout()
     assert(s_ota.wireReply.ends_with("\r\n\r\n"
                                      R"({"ok":false,"err":"timeout"})"));
     assert(std::string_view{app::ota::lastUpload()} == "timeout");
+    const auto timeout = s_ctx.data.otaProgress.read();
+    assert(timeout.phase == app::web_ota::OtaPhase::kFailed &&
+           timeout.code == app::web_ota::UploadCode::kTimeout &&
+           timeout.receivedBytes == app::web_ota::kHeaderBytes);
     assert(!app::ota::otherSlotVersion(&kOtherSlot, desc).has_value());
 
     // 6. 后续上传成功提交后清除脏标志，恢复另一槽版本报告。
@@ -2538,6 +2589,7 @@ int main()
     testOtaHttpContract();
     testOtaQuiesceAndWebBusy();
     testOtaReboot();
+    testOtaProgress();
     testOtaRollback();
     testOtaOtherSlotAndTotalTimeout();
 #endif

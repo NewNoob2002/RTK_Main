@@ -111,6 +111,9 @@ constinit board::ShutdownReason s_shutdown_reason = board::ShutdownReason::kNone
 constinit bool s_radio_switch = false;
 std::jmp_buf s_radio_jump{};
 std::jmp_buf s_bench_jump{};
+std::jmp_buf s_logo_jump{};
+constinit uint32_t s_logo_stop_ms = 0U;
+constinit uint32_t s_logo_wakes = 0U;
 constinit TaskFunction_t s_oled_entry = nullptr;
 constinit void *s_oled_arg = nullptr;
 constinit TaskHandle_t s_fake_task = nullptr;
@@ -154,13 +157,14 @@ uint32_t nowMs() noexcept
 
 /**
  * @brief 初始化测试用 P2 v1.41 上下文并完成真实 OledModule::init()
+ * @param radioMode: 启动射频模式
  */
-void setupOledModule() noexcept
+void setupOledModule(RadioMode radioMode = RadioMode::kBluetooth) noexcept
 {
     s_app.data.init();
     s_app.boardProfile = board::byId(board::BoardId::kP2V141);
     s_app.bootMode = board::BootMode::kNormal;
-    s_app.radioMode = RadioMode::kBluetooth;
+    s_app.radioMode = radioMode;
     s_app.bootConfig.userNvsReady = true;
     s_app.bootConfig.safeDefaults = false;
 
@@ -609,6 +613,7 @@ void runWifiViewModel() noexcept
     s_app.data.wifiAp.write(ap);
     const auto bounded = ModuleTestAccess::view(s_app.oled, nowMs());
     CHECK(bounded.wifiSsid.front() == '?' && bounded.wifiSsid.back() == '\0');
+    CHECK(std::string_view{bounded.wifiSsid.data()}.size() == ap.ssid.size());
 
     s_app.data.wifiReady.store(false, std::memory_order_release);
     const auto stopped = ModuleTestAccess::view(s_app.oled, nowMs());
@@ -653,6 +658,38 @@ void runBenchAndEventWait() noexcept
                 static_cast<unsigned>(s_bench_result.totals.wakeups),
                 static_cast<unsigned>(s_bench_result.bytes),
                 static_cast<unsigned>(s_bench_result.maxIntervalMs));
+}
+
+/** @brief 在虚拟 I2C 总线与启动屏障间运行真实 Logo 任务，采样刷帧间隔。 */
+void runStartupLogo(RadioMode mode) noexcept
+{
+    // 非零表示启动采样；模拟 I2C 事务按 400 kHz 计费。
+    s_logo_stop_ms = UINT32_MAX;
+    const uint32_t probeMs = nowMs();
+    setupOledModule(mode);
+    const auto before = s_app.data.oledStatus.read();
+    if (mode == RadioMode::kWifiConfig) {
+        s_time_us += 150000LL;
+    }
+    const uint32_t releaseMs = nowMs();
+    // 基线从面板探测起计时；延后首帧的实现从屏障放行起计时。
+    const uint32_t epoch = before.framesFlushed == 0U ? releaseMs : probeMs;
+    s_logo_stop_ms = epoch + SystemCheckSm::kLogoRevealMs;
+    CHECK(s_app.oled.start() == fw::Result::kOk);
+    if (setjmp(s_logo_jump) == 0) {
+        s_oled_entry(s_oled_arg);
+        CHECK(false);
+    }
+    const auto after = s_app.data.oledStatus.read();
+    std::printf("%s: early=%u release_after_epoch=%u ms written=%u wakes=%u max_interval=%u ms "
+                "max_flush=%u us\n",
+                mode == RadioMode::kWifiConfig ? "WiFi" : "BT", before.framesFlushed,
+                releaseMs - epoch, after.framesFlushed, s_logo_wakes, after.maxIntervalMs,
+                after.maxI2cUs);
+    std::fflush(stdout);
+    CHECK(after.maxIntervalMs <= 68U);
+    CHECK(after.framesFlushed >= 4U && s_logo_wakes >= 8U);
+    CHECK(before.framesFlushed == (mode == RadioMode::kWifiConfig ? 0U : 1U));
 }
 
 namespace rtos {
@@ -728,6 +765,15 @@ void xTaskNotifyGive(TaskHandle_t /*task*/)
 
 uint32_t ulTaskNotifyTake(BaseType_t /*clearOnExit*/, TickType_t ticks)
 {
+    if (s_logo_stop_ms != 0U) {
+        ++s_logo_wakes;
+        CHECK(ticks != portMAX_DELAY);
+        if (nowMs() + ticks >= s_logo_stop_ms) {
+            std::longjmp(s_logo_jump, 1);
+        }
+        s_time_us += static_cast<int64_t>(ticks) * 1000LL;
+        return 0U;
+    }
     if (!s_bench_scenario) {
         return 0U;
     }
@@ -854,8 +900,9 @@ esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *tx, si
             return ESP_ERR_TIMEOUT;
         }
         constexpr int64_t kUsPerByteAt400kHz = 23LL; // 9 位含 ACK，22.5 µs 向上取整。
-        s_time_us += s_bench_scenario ? (static_cast<int64_t>(count) + 1LL) * kUsPerByteAt400kHz
-                                      : s_page_data_delay_us;
+        s_time_us += (s_bench_scenario || s_logo_stop_ms != 0U)
+                         ? (static_cast<int64_t>(count) + 1LL) * kUsPerByteAt400kHz
+                         : s_page_data_delay_us;
         s_oled_bytes += static_cast<unsigned>(count);
         if (s_short_key_during_page.has_value() && nowMs() >= *s_short_key_during_page) {
             s_app.data.uiEvents.notifyShortKey(*s_short_key_during_page);
@@ -909,6 +956,10 @@ int main(int argc, char **argv)
         runRebootBannerQuiesce();
     } else if (scenario == "bench_and_event_wait") {
         runBenchAndEventWait();
+    } else if (scenario == "wifi_logo") {
+        runStartupLogo(RadioMode::kWifiConfig);
+    } else if (scenario == "bt_logo") {
+        runStartupLogo(RadioMode::kBluetooth);
     } else if (scenario == "wifi_view_model") {
         runWifiViewModel();
     } else {

@@ -44,6 +44,7 @@ struct Simulator {
     ScreenBuff frame{};
     bool statusBarValid = false;
     ModalFrame modalFrame{};
+    Marquee marquee{};
     std::vector<uint32_t> shortKeys{};
     uint32_t shutdownStartedMs = 0U;
     board::ShutdownReason shutdownReason = board::ShutdownReason::kKey;
@@ -63,7 +64,7 @@ struct Simulator {
         }
     }
 
-    /** @brief 用编号 1–9 选择可重复的模拟硬件快照（9 为充电待机模式）。 */
+    /** @brief 用编号 1–10 选择可重复的模拟硬件快照（9 为充电待机，10 为长 SSID）。 */
     void setScene(unsigned scene, uint32_t nowMs = 0U)
     {
         model = {};
@@ -99,11 +100,11 @@ struct Simulator {
         model.batteryPct = scene == 4U ? 8U : 78U;
         model.batteryMv = scene == 4U ? 3380U : 3980U;
         model.usbPresent = model.charging = scene == 3U;
-        if (scene == 6U) {
+        if (scene == 6U || scene == 10U) {
             model.radioMode = RadioMode::kWifiConfig;
             model.wifiReady = true;
             model.wifiClients = 2U;
-            sanitizeCopy("P2-85EE", model.wifiSsid);
+            sanitizeCopy(scene == 10U ? "P2-1826M0056" : "P2-85EE", model.wifiSsid);
             model.wifiIpv4 = {192U, 168U, 10U, 12U};
         }
         if (scene == 7U) {
@@ -187,8 +188,9 @@ struct Simulator {
         const auto decision = controller.step(nowMs, shortKeys, model, longKeyPending);
         shortKeys.clear();
         longKeyPending = false;
-        statusBarValid =
-            renderUi(controller.renderState(nowMs), model, frame, statusBarValid, &modalFrame);
+        auto state = controller.renderState(nowMs);
+        state.marquee = &marquee;
+        statusBarValid = renderUi(state, model, frame, statusBarValid, &modalFrame);
         WouoUI_BuffSend();
         applyAction(decision.action.action, nowMs);
     }
@@ -341,6 +343,32 @@ bool checkFrame(const Options &opts, const Simulator &sim, std::string_view verb
     return file && std::string(std::istreambuf_iterator<char>(file), {}) == bytes;
 }
 
+/** @brief 按脚本设置 OTA 显示快照。 @retval true 阶段有效。 */
+bool setOta(Simulator &sim, std::string_view phase, uint32_t nowMs)
+{
+    using web_ota::OtaPhase;
+    using web_ota::UploadCode;
+    auto &ota = sim.model.otaProgress;
+    ota.changedMs = nowMs;
+    ota.code = UploadCode::kOk;
+    if (phase == "receiving") {
+        ota.phase = OtaPhase::kReceiving;
+        ota.receivedBytes = 624U * 1024U;
+        ota.totalBytes = 1536U * 1024U;
+    } else if (phase == "verifying") {
+        ota.phase = OtaPhase::kVerifying;
+        ota.receivedBytes = ota.totalBytes;
+    } else if (phase == "failed") {
+        ota.phase = OtaPhase::kFailed;
+        ota.code = UploadCode::kTimeout;
+    } else if (phase == "success") {
+        ota.phase = OtaPhase::kSuccess;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 /** @brief 按脚本时间推进固定间隔的真实 UI 帧。 */
 bool runScript(const Options &opts, Simulator &sim)
 {
@@ -413,10 +441,14 @@ bool runScript(const Options &opts, Simulator &sim)
             sim.shutdown(at, reason);
         } else if (verb == "scene") {
             uint32_t scene = 0U;
-            if (!boundedNumber(arg, scene, 9U)) {
+            if (!boundedNumber(arg, scene, 10U)) {
                 return false;
             }
             sim.setScene(scene, at);
+        } else if (verb == "ota") {
+            if (!setOta(sim, arg, at)) {
+                return false;
+            }
         } else if (verb != "check" && verb != "shot") {
             return false;
         }

@@ -1,7 +1,7 @@
 # OL8 — OLED 打磨：WiFi 启动 Logo 卡顿、网页 OTA 进度、超长文本滚动
 
 - 分支/工作树：`feat/ol8-oled-polish`，`../RTK_Main-ol8`，基线为本卡提交
-- 门禁：`tools/ci/run_gates.sh --prefix ol8 --base c67424a`（需 `export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env`）
+- 门禁：`tools/ci/run_gates.sh --prefix ol8 --base c189c80`（需 `export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env`）
 - 报告：`docs/reports/OL8-oled-polish.md`；完成时输出 `OL8-FINISHED`
 - 来源：用户 2026-11-26 三条反馈（整机 P2 v1.41 + CM680）
 
