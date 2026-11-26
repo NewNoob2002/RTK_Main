@@ -827,7 +827,9 @@ static void sc_gap_pairing_window(void)
     spp_server_pair_snapshot_t first;
     fake_emit_gap_remote_name(s_bda, "OL3 Peer");
     spp_server_pair_snapshot(&first);
-    CHECK(first.id != 0U && first.remaining_ms == 30000U);
+    /* 假 tick 跟随真实 CLOCK_MONOTONIC，登记到快照之间可能已过数毫秒（ASan/CI 更慢），
+     * 只断言剩余时间落在窗口内且未明显流逝。 */
+    CHECK(first.id != 0U && first.remaining_ms <= 30000U && first.remaining_ms > 28000U);
     CHECK(first.has_number && first.number == 123456U);
     CHECK(memcmp(first.bda, s_bda, SPP_SERVER_ADDR_LEN) == 0);
     CHECK(strcmp(first.name, "OL3 Peer") == 0);
