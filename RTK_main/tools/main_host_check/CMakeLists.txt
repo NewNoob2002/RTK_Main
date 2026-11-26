@@ -502,6 +502,7 @@ foreach(portal_mode on off)
         ${web_ota_src}
         ${PROJ_ROOT}/main/modules/web/WebServer.cpp
         ${PROJ_ROOT}/main/modules/web/WebModule.cpp
+        ${PROJ_ROOT}/main/modules/web/WebDiagnostics.cpp
         ${PROJ_ROOT}/main/modules/web/WebLogic.cpp
         ${PROJ_ROOT}/main/modules/web/WebIdleTimer.cpp
         ${PROJ_ROOT}/main/data/AppData.cpp

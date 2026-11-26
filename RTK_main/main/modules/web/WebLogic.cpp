@@ -70,6 +70,9 @@ bool writeDevGroup(web::JsonWriter &writer, const DevWebStatus &dev) noexcept
 {
     return writer.beginNested("dev") && writer.writeInt("uptime_s", dev.uptimeS) &&
            writer.writeInt("heap_free", dev.heapFree) && writer.writeInt("heap_min", dev.heapMin) &&
+           writer.writeInt("heap_largest", dev.heapLargest) &&
+           writer.writeInt("heap_int_free", dev.heapIntFree) &&
+           writer.writeInt("heap_int_min", dev.heapIntMin) &&
            writer.writeString("reset", dev.reset) && writer.endNested();
 }
 

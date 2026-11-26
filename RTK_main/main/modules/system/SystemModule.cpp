@@ -79,7 +79,7 @@ void SystemModule::fillIdentity() noexcept
 
 void SystemModule::startBt() noexcept
 {
-    if (status_.deviceName.front() == '\0') {
+    if (ctx().radioMode != RadioMode::kBluetooth || status_.deviceName.front() == '\0') {
         return;
     }
     FW_LOGI(fw::TraceCat::kSys, "sn=%s bt_name=%s policy=%s", status_.sn.data(),

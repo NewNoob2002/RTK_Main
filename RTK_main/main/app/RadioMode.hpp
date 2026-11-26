@@ -10,7 +10,7 @@
 
 namespace app {
 
-/** kWifiConfig 中释放 BTDM 内存后，本次启动禁止调用任何 esp_bt_* 控制器或设备 API。 */
+/** kWifiConfig 中释放 BTDM 内存后，本次启动禁止调用蓝牙栈 API（含控制器、Bluedroid、SPP）。 */
 enum class RadioMode : uint8_t { kBluetooth, kWifiConfig };
 enum class RadioReason : uint8_t { kConsole, kPhone, kWebExit, kIdle, kUi };
 enum class ModuleEnable : uint8_t { kAlways, kNormalOnly, kBtOnly, kWifiOnly };

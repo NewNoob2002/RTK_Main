@@ -33,9 +33,9 @@ struct AppContext;
 class WebModule final {
 public:
     static constexpr size_t kMaxWsClients = 3U;
-    static constexpr size_t kRxMailboxCap = 4U;
-    static constexpr size_t kTxMailboxCap = 8U;
-    static constexpr size_t kTxReservedCtrlSlots = 4U;
+    static constexpr size_t kRxMailboxCap = 2U;
+    static constexpr size_t kTxMailboxCap = 4U;
+    static constexpr size_t kTxReservedCtrlSlots = 2U; // 为 ACK 与后续 config/bye 留槽。
     static constexpr size_t kScratchFrames = 4U;
     static constexpr size_t kTotalFrames = kRxMailboxCap + kTxMailboxCap + kScratchFrames;
     static constexpr size_t kCtrlMailboxCap = 16U;
@@ -486,6 +486,9 @@ private:
      */
     void handleCmdReq(ClientSlot &client, const web::Request &req, uint32_t nowMs) noexcept;
 
+    /** @brief 应答只读内存诊断。 @param client: 请求会话。 @param req: 已解析请求。 @note 仅 kLink，非 ISR。 */
+    void sendDiag(ClientSlot &client, const web::Request &req) noexcept;
+
     /**
      * @brief 处理已解析的 `set` 请求
      * @param client: 请求来源客户端槽位
@@ -653,6 +656,7 @@ private:
     InflightRequest inflight_{};
     uint32_t configVersion_ = 0U;
     uint32_t lastStatusMs_ = 0U;
+    size_t nextStatusClient_ = 0U;
     uint32_t lastGgaCount_ = 0U;
     uint32_t lastGgaSampleMs_ = 0U;
     bool ggaSampleValid_ = false;

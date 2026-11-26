@@ -342,6 +342,9 @@ void testWifiAllocationPlan() noexcept
     auto ops = makeOps(ctx);
     app::BootBuffers buffers{};
     CHECK(app::allocateBootBuffers(buffers, &ops));
+#if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE) && CONFIG_RTK_WIFI_CONFIG_ENABLE
+    CHECK(buffers.webFrames.size() == 10U);
+#endif
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
     size_t otaIndex = 0U;
 #endif
@@ -357,7 +360,7 @@ void testWifiAllocationPlan() noexcept
 #endif
     }
 #if RTK_GNSS_ENABLED
-    CHECK(!buffers.gnssDemux.empty() && !buffers.rtcmPipe.empty());
+    CHECK(!buffers.gnssDemux.empty() && buffers.rtcmPipe.size() == app::kRtcmPipeBytes);
 #endif
     CHECK(app::bindBootBuffers(buffers) == nullptr);
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE

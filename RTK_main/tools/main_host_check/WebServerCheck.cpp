@@ -260,7 +260,13 @@ void testJsonFramesAndDiff()
 
     // status 全量 + 差分（只发变化组）+ 可选字段省略
     StatusSnapshot s1{};
-    s1.dev = {.uptimeS = 42, .heapFree = 65536, .heapMin = 50000, .reset = "software"};
+    s1.dev = {.uptimeS = 42,
+              .heapFree = 65536,
+              .heapMin = 50000,
+              .heapLargest = 32768,
+              .heapIntFree = 64000,
+              .heapIntMin = 48000,
+              .reset = "software"};
     s1.gnss.state = "running";
     std::memcpy(s1.gnss.model.data(), "CM680", 6U);
     s1.gnss.hasModel = true;
@@ -279,18 +285,18 @@ void testJsonFramesAndDiff()
     const size_t fullLen = buildStatusFrame(s1, nullptr, buf);
     assert(
         std::string_view(buf.data(), fullLen) ==
-        R"({"t":"status","dev":{"uptime_s":42,"heap_free":65536,"heap_min":50000,"reset":"software"},"gnss":{"state":"running","model":"CM680","fw":"1.2.3","fix":"fixed","sats":24,"hacc_mm":14,"hz":10},"bt":{"whitelist":["AA:BB:CC:DD:EE:01"]}})");
+        R"({"t":"status","dev":{"uptime_s":42,"heap_free":65536,"heap_min":50000,"heap_largest":32768,"heap_int_free":64000,"heap_int_min":48000,"reset":"software"},"gnss":{"state":"running","model":"CM680","fw":"1.2.3","fix":"fixed","sats":24,"hacc_mm":14,"hz":10},"bt":{"whitelist":["AA:BB:CC:DD:EE:01"]}})");
 
     // 无变化返回 0。
     assert(buildStatusFrame(s1, &s1, buf) == 0U);
 
-    // 仅 dev 变化 -> 只发 dev。
+    // 仅新增诊断字段变化 -> 也要推送 dev。
     StatusSnapshot s2 = s1;
-    s2.dev.uptimeS = 43;
+    s2.dev.heapLargest = 32000;
     const size_t devOnly = buildStatusFrame(s2, &s1, buf);
     assert(
         std::string_view(buf.data(), devOnly) ==
-        R"({"t":"status","dev":{"uptime_s":43,"heap_free":65536,"heap_min":50000,"reset":"software"}})");
+        R"({"t":"status","dev":{"uptime_s":42,"heap_free":65536,"heap_min":50000,"heap_largest":32000,"heap_int_free":64000,"heap_int_min":48000,"reset":"software"}})");
 
     // 仅 bt 变化 -> 只发 bt。
     StatusSnapshot s3 = s2;

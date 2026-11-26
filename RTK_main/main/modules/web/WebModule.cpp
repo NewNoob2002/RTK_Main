@@ -3,6 +3,8 @@
 // 堆档位：禁止区；全部帧缓冲由 BootArena 仅在 kWifiConfig 模式下外供。
 #include "modules/web/WebModule.hpp"
 
+#include "modules/web/WebDiagnostics.hpp"
+
 #if defined(CONFIG_RTK_OTA_ENABLE) && CONFIG_RTK_OTA_ENABLE
 #include "modules/ota/OtaRuntime.hpp"
 #include "modules/web/WebOtaTransfer.hpp"
@@ -82,6 +84,26 @@ int32_t clampToI32(uint32_t value) noexcept
     constexpr uint32_t kMaxI32 = static_cast<uint32_t>(std::numeric_limits<int32_t>::max());
     // 钳制在 [0, INT32_MAX] 后转有符号无损。
     return static_cast<int32_t>(std::min(value, kMaxI32));
+}
+
+/**
+ * @brief 采样设备运行时间、堆及复位原因。
+ * @param sys: 已发布的系统状态。
+ * @retval 设备状态分组。
+ * @note 仅 kLink，不分配堆，非 ISR。
+ */
+web_cfg::DevWebStatus sampleDevStatus(const SystemStatus &sys) noexcept
+{
+    const int64_t upSec = esp_timer_get_time() / kUsPerSecond;
+    // 单次运行秒数远小于 INT32_MAX（约 68 年），转换安全。
+    web_cfg::DevWebStatus dev{
+        .uptimeS = (upSec > 0) ? static_cast<int32_t>(upSec) : 0,
+        .heapFree = clampToI32(sys.freeHeap),
+        .heapMin = clampToI32(sys.minFreeHeap),
+        .reset = resetReasonName(esp_reset_reason()),
+    };
+    web_cfg::sampleHeapStatus(dev);
+    return dev;
 }
 
 /**
@@ -175,13 +197,7 @@ void WebModule::drainCtrlEvents() noexcept
 web_cfg::StatusSnapshot WebModule::sampleStatus(uint32_t nowMs) noexcept
 {
     web_cfg::StatusSnapshot snap{};
-    const auto sys = ctx().data.systemStatus.read();
-    const int64_t upSec = esp_timer_get_time() / kUsPerSecond;
-    // 单次运行秒数远小于 INT32_MAX（约 68 年），转换安全。
-    snap.dev.uptimeS = (upSec > 0) ? static_cast<int32_t>(upSec) : 0;
-    snap.dev.heapFree = clampToI32(sys.freeHeap);
-    snap.dev.heapMin = clampToI32(sys.minFreeHeap);
-    snap.dev.reset = resetReasonName(esp_reset_reason());
+    snap.dev = sampleDevStatus(ctx().data.systemStatus.read());
 
     const auto link = ctx().data.linkStatus.read();
     snap.bt.whitelistCount = std::min(link.whitelistCount, kMaxAlarms);
@@ -569,6 +585,10 @@ void WebModule::handleUnlockReq(ClientSlot &client, const web::Request &req) noe
 
 void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32_t nowMs) noexcept
 {
+    if (req.name == "diag" || req.name == "diag.tasks") {
+        sendDiag(client, req);
+        return;
+    }
     if (req.name == "save") {
         postMaintenance(client, req.id, settings::Owner::kGnss,
                         static_cast<uint8_t>(GnssSubVerb::kSaveReceiver), RequestKind::kSave,
@@ -603,6 +623,21 @@ void WebModule::handleCmdReq(ClientSlot &client, const web::Request &req, uint32
         return;
     }
     sendAck(client, req.id, web::ErrorCode::kUnsupported);
+}
+
+void WebModule::sendDiag(ClientSlot &client, const web::Request &req) noexcept
+{
+    if (txMailbox_.freeSlots() <= kTxReservedCtrlSlots) {
+        sendAck(client, req.id, web::ErrorCode::kBusy);
+        return;
+    }
+    auto &encodeBuf = klinkEncodeFrame_->data;
+    const size_t len = web_cfg::buildDiagFrame(req.id, req.name, ctx().bootArena, encodeBuf);
+    if (len == 0U) {
+        sendAck(client, req.id, web::ErrorCode::kFailed);
+    } else if (!enqueueTx(client.fd, client.gen, std::span<const char>{encodeBuf}.first(len))) {
+        sendAck(client, req.id, web::ErrorCode::kBusy);
+    }
 }
 
 void WebModule::handleSetReq(ClientSlot &client, const web::Request &req, uint32_t nowMs) noexcept
@@ -790,12 +825,16 @@ void WebModule::pollStatusPush(uint32_t nowMs, bool forceNow) noexcept
     }
     const auto cur = sampleStatus(nowMs);
     auto &encodeBuf = klinkEncodeFrame_->data;
-    for (auto &slot : clients_) {
+    const size_t first = nextStatusClient_;
+    for (size_t offset = 0U; offset < clients_.size(); ++offset) {
+        const size_t index = (first + offset) % clients_.size();
+        auto &slot = clients_[index];
         if (!slot.active || (slot.syncStage != SyncStage::kReady)) {
             continue;
         }
         // 为 ack/config/bye 预留发送槽位，防止 1 Hz 状态推送挤占必达响应。
         if (txMailbox_.freeSlots() <= kTxReservedCtrlSlots) {
+            nextStatusClient_ = index; // 下次从本轮未能推送的客户端开始。
             break;
         }
         const web_cfg::StatusSnapshot *prev = slot.hasLastStatus ? &slot.lastStatus : nullptr;

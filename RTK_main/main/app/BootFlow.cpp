@@ -190,7 +190,7 @@ app::BootResult stepEarlyConfig(app::BootCtx &ctx) noexcept
  * @retval kOk 已选择启动模式
  * @retval kFail BTDM 内存释放失败，进入降级路径
  * @note 仅启动任务，非 ISR，在绑定和初始化蓝牙之前调用。
- * @note kWifiConfig 中释放 BTDM 内存后，本次启动禁止调用任何 esp_bt_* 控制器或设备 API。
+ * @note kWifiConfig 释放控制器和 Bluedroid 后，本次启动禁止调用蓝牙栈 API。
  */
 app::BootResult stepRadio(app::BootCtx &ctx) noexcept
 {
@@ -207,10 +207,9 @@ app::BootResult stepRadio(app::BootCtx &ctx) noexcept
             app::radioReasonName(selection.reason));
 #if defined(CONFIG_RTK_WIFI_CONFIG_ENABLE)
     if (selection.mode == app::RadioMode::kWifiConfig) {
-        const esp_err_t error = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+        const esp_err_t error = esp_bt_mem_release(ESP_BT_MODE_BTDM);
         if (error != ESP_OK) {
-            FW_LOGE(fw::TraceCat::kSys, "release BTDM controller failed: %s",
-                    esp_err_to_name(error));
+            FW_LOGE(fw::TraceCat::kSys, "release BTDM memory failed: %s", esp_err_to_name(error));
             ctx.reason = app::boot_reason::kReleaseBtMemory;
             return app::BootResult::kFail;
         }

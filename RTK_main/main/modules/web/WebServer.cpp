@@ -1025,6 +1025,7 @@ void WebModule::resetRuntimeState() noexcept
     txCompletedSeq_.store(0U, std::memory_order_relaxed);
     clients_.fill(ClientSlot{});
     inflight_ = InflightRequest{};
+    nextStatusClient_ = 0U;
     pendingExit_ = {};
     pendingReboot_ = RebootKind::kNone;
     rebootTxCommitted_ = false;
