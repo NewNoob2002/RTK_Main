@@ -2,6 +2,7 @@
 // 无 IDF/FreeRTOS 依赖，可在主机与目标固件共用；不阻塞、不分配堆。
 #include "board/PowerLogic.hpp"
 
+#include <algorithm>
 #include <array>
 
 namespace app::board {
@@ -155,6 +156,197 @@ bool LowBatteryTimer::isDue(uint32_t nowMs, bool onBattery, uint8_t pct, uint32_
         sinceMs_ = nowMs;
     }
     return nowMs - *sinceMs_ >= holdMs;
+}
+
+namespace {
+
+/** @brief 把百分比映射为 1..5 格（边界 20/40/60/80，100% 为 5 格）。 @param pct: 0..100。 @retval 格数。 */
+[[nodiscard]] uint8_t barsFromPct(uint8_t pct) noexcept
+{
+    const uint8_t bars =
+        static_cast<uint8_t>(pct / kBatteryBarStepPct + 1U); // pct<=255，结果 <=13，不溢出
+    return bars > kBatteryBarsMax ? kBatteryBarsMax : bars;
+}
+
+} // namespace
+
+void BatteryBars::reset() noexcept
+{
+    *this = BatteryBars{};
+}
+
+/**
+ * @brief 按样本直接定格格数并清除迟滞/保持状态
+ * @param pct: 有效电量 0..100
+ * @note 纯内存操作。
+ */
+void BatteryBars::latch(uint8_t pct) noexcept
+{
+    latched_ = barsFromPct(pct);
+    clearTimers();
+    holdActive_ = false;
+}
+
+/** @brief 清除升降格计时 @note 纯内存操作。 */
+void BatteryBars::clearTimers() noexcept
+{
+    downArmed_ = false;
+    upArmed_ = false;
+}
+
+void BatteryBars::update(uint32_t nowMs, const BatteryBarsInput &in) noexcept
+{
+    const bool sessionChanged = seen_ && (in.simSession != session_);
+    const bool unplugged = seen_ && usbPrev_ && !in.usbPresent;
+    seen_ = true;
+    session_ = in.simSession;
+    usbPrev_ = in.usbPresent;
+
+    const bool valid = in.pct != kBatteryPctUnknown;
+    pct_ = in.pct;
+    full_ = valid && in.pct >= kBatteryBarFullPct;
+    charging_ = valid && in.charging && in.usbPresent && !full_;
+    if (!valid) {
+        latched_ = 0U;
+        clearTimers();
+        holdActive_ = false;
+        return;
+    }
+    if (latched_ == 0U || sessionChanged) {
+        latch(in.pct);
+        return;
+    }
+    if (unplugged) {
+        holdActive_ = true;
+        holdSinceMs_ = nowMs;
+        clearTimers();
+    }
+    if (holdActive_) {
+        if (in.usbPresent) {
+            holdActive_ = false; // 保持期内重新插入：回到充电/滞回逻辑
+        } else if ((nowMs - holdSinceMs_) >= kBatteryBarUnplugHoldMs) {
+            latch(in.pct);
+            return;
+        } else {
+            return;
+        }
+    }
+    if (full_) {
+        latched_ = kBatteryBarsMax;
+        clearTimers();
+        return;
+    }
+    if (charging_) {
+        clearTimers(); // 充电电压抬升读数，冻结格数
+        return;
+    }
+    stepHysteresis(nowMs, in.pct);
+}
+
+/**
+ * @brief 放电/回弹滞回：持续低于下界降一格、持续高于上界升一格
+ * @param nowMs: 当前单调时间（ms）
+ * @param pctIn: 有效电量 0..100
+ * @note 纯内存操作；调用方保证已定格（latched_ >= 1）。
+ */
+void BatteryBars::stepHysteresis(uint32_t nowMs, uint8_t pctIn) noexcept
+{
+    const int pct = static_cast<int>(pctIn);
+    // 每次升降格后按新 latched_ 重新评估一轮（最多两轮）：条件仍成立则以 nowMs 重新武装计时，
+    // 使 nextWakeMs 能覆盖连续多格（如 5 格突降到 10%，每 30 s 降一格）。
+    for (int round = 0; round < 2; ++round) {
+        const int lower = (static_cast<int>(latched_) - 1) * static_cast<int>(kBatteryBarStepPct);
+        const int upper = static_cast<int>(latched_) * static_cast<int>(kBatteryBarStepPct);
+        const bool wantDown =
+            (latched_ > 1U) && (pct <= lower - static_cast<int>(kBatteryBarDownMarginPct));
+        const bool wantUp = (latched_ < kBatteryBarsMax) &&
+                            (pct >= upper + static_cast<int>(kBatteryBarUpMarginPct));
+        upArmed_ = upArmed_ && wantUp;
+        downArmed_ = downArmed_ && wantDown;
+        if (wantDown) {
+            if (!downArmed_) {
+                downArmed_ = true;
+                downSinceMs_ = nowMs;
+                return;
+            }
+            if ((nowMs - downSinceMs_) < kBatteryBarDownHoldMs) {
+                return;
+            }
+            latched_ = static_cast<uint8_t>(latched_ - 1U); // wantDown 保证 latched_ > 1
+            downArmed_ = false;
+        } else if (wantUp) {
+            if (!upArmed_) {
+                upArmed_ = true;
+                upSinceMs_ = nowMs;
+                return;
+            }
+            if ((nowMs - upSinceMs_) < kBatteryBarUpHoldMs) {
+                return;
+            }
+            latched_ = static_cast<uint8_t>(latched_ + 1U); // wantUp 保证 latched_ < 5
+            upArmed_ = false;
+        } else {
+            return;
+        }
+    }
+}
+
+BatteryBarsView BatteryBars::view(uint32_t nowMs) const noexcept
+{
+    BatteryBarsView out{};
+    if (latched_ == 0U) {
+        return out;
+    }
+    out.bars = latched_;
+    if (full_) {
+        out.bars = kBatteryBarsMax;
+        return out;
+    }
+    if (charging_ && !holdActive_) {
+        const uint32_t steps = static_cast<uint32_t>(kBatteryBarsMax - latched_) + 1U;
+        out.bars = static_cast<uint8_t>(latched_ + (nowMs / kBatteryBarChargeStepMs) % steps);
+        return out;
+    }
+    if (pct_ < kLowBatteryPct) {
+        out.blinking = true;
+        out.blinkOff = ((nowMs / kBatteryBarBlinkHalfMs) & 1U) != 0U;
+    }
+    return out;
+}
+
+uint32_t BatteryBars::nextWakeMs(uint32_t nowMs) const noexcept
+{
+    uint32_t wake = UINT32_MAX;
+    const auto remain = [nowMs](uint32_t startMs, uint32_t holdMs) noexcept {
+        const uint32_t elapsed = nowMs - startMs;
+        return elapsed >= holdMs ? 0U : holdMs - elapsed;
+    };
+    const auto phase = [nowMs](uint32_t periodMs) noexcept {
+        return periodMs - (nowMs % periodMs);
+    };
+    if (latched_ == 0U) {
+        return wake;
+    }
+    if (holdActive_) {
+        wake = remain(holdSinceMs_, kBatteryBarUnplugHoldMs);
+    }
+    if (downArmed_) {
+        wake = std::min(wake, remain(downSinceMs_, kBatteryBarDownHoldMs));
+    }
+    if (upArmed_) {
+        wake = std::min(wake, remain(upSinceMs_, kBatteryBarUpHoldMs));
+    }
+    if (full_) {
+        return wake;
+    }
+    if (charging_ && !holdActive_) {
+        if (latched_ < kBatteryBarsMax) {
+            wake = std::min(wake, phase(kBatteryBarChargeStepMs));
+        }
+    } else if (pct_ < kLowBatteryPct) {
+        wake = std::min(wake, phase(kBatteryBarBlinkHalfMs));
+    }
+    return wake;
 }
 
 PowerOnAction decidePowerOn(bool senseHigh, bool usbPresent) noexcept

@@ -223,6 +223,92 @@ private:
     std::optional<uint32_t> sinceMs_{};
 };
 
+// ---- OL7 电量格数（5 格，滞回抑制电压抖动） ----
+inline constexpr uint8_t kBatteryBarsMax = 5U;      // 格，满格数；0 表示尚无有效样本
+inline constexpr uint8_t kBatteryBarStepPct = 20U;  // %，每格宽度，格边界 20/40/60/80
+inline constexpr uint8_t kBatteryBarFullPct = 100U; // %，满电判定（与 OLED 既有 full 判定一致）
+// 锂电 3.6~3.9 V 平台区电压-电量曲线平坦，电压表估算百分比误差约 ±10~15 个百分点；
+// 负载瞬态压降/回弹可达数十 mV。滞回幅度取 3/5 个百分点并配合持续时间，避免格数随负载来回跳。
+inline constexpr uint8_t kBatteryBarDownMarginPct = 3U;   // %，低于当前格下界多少才开始计降格
+inline constexpr uint8_t kBatteryBarUpMarginPct = 5U;     // %，高于当前格上界多少才开始计升格
+inline constexpr uint32_t kBatteryBarDownHoldMs = 30000U; // ms，降格需持续时间
+inline constexpr uint32_t kBatteryBarUpHoldMs =
+    60000U; // ms，升格需持续时间（电压回弹更慢，需更久）
+// 充电时 ADC 读数含充电电压抬升（约 +100~200 mV，折合数十个百分点），拔出 USB 后需等其回落再采样。
+inline constexpr uint32_t kBatteryBarUnplugHoldMs = 60000U; // ms，拔 USB 后保持原格数时长
+inline constexpr uint32_t kBatteryBarChargeStepMs = 500U;   // ms，充电填充动画每步时长（<= 2 fps）
+inline constexpr uint32_t kBatteryBarBlinkHalfMs = 500U;    // ms，低电闪烁半周期（1 Hz）
+
+/** BatteryBars 的单次输入采样。 */
+struct BatteryBarsInput {
+    uint8_t pct = kBatteryPctUnknown; // 0..100，未知为 kBatteryPctUnknown
+    bool usbPresent = false;          // USB 输入在位
+    bool charging = false;            // 有效充电态（充电芯片报告或无芯片时 USB 在位且未满）
+    uint32_t simSession = 0U;         // power simbat 会话号；变化即立即重新定格
+};
+
+/** BatteryBars 的显示结论。 */
+struct BatteryBarsView {
+    uint8_t bars = 0U;     // 0..5；0 表示无有效样本（应画未知图标）
+    bool blinking = false; // 低电闪烁生效
+    bool blinkOff = false; // 闪烁处于熄灭相位：最后一格应隐藏
+};
+
+/**
+ * 电量格数状态机：把 0..100 的电量百分比转为 1..5 格并以滞回/保持抑制抖动。
+ * 纯值类型，无堆分配；由调用方串行驱动（OLED 任务），时钟支持 uint32_t 回绕。
+ */
+class BatteryBars final {
+public:
+    constexpr BatteryBars() noexcept = default;
+
+    /** @brief 清除全部状态，下一有效样本直接定格。 @note 纯内存操作。 */
+    void reset() noexcept;
+
+    /**
+     * @brief 喂入最新采样并推进定格/滞回/拔 USB 保持状态
+     * @param nowMs: 当前单调时间（ms）
+     * @param in: 本次采样
+     * @note 由调用方串行调用，不阻塞。首个有效样本、simbat 会话变化、拔 USB 保持期满均直接按新样本定格（跳过滞回）。
+     */
+    void update(uint32_t nowMs, const BatteryBarsInput &in) noexcept;
+
+    /**
+     * @brief 取得 nowMs 时刻的显示格数与闪烁标志
+     * @param nowMs: 当前单调时间（ms）
+     * @retval 显示结论；充电中返回从当前格到满格的循环填充帧，充满返回 5 格常亮
+     * @note 纯查询，不修改状态。
+     */
+    [[nodiscard]] BatteryBarsView view(uint32_t nowMs) const noexcept;
+
+    /**
+     * @brief 计算下一次需要重绘/重评估的最短等待
+     * @param nowMs: 当前单调时间（ms）
+     * @retval 毫秒数；UINT32_MAX 表示无需定时唤醒
+     * @note 覆盖充电动画相位、低电闪烁相位、降/升格计时与拔 USB 保持期满。
+     */
+    [[nodiscard]] uint32_t nextWakeMs(uint32_t nowMs) const noexcept;
+
+private:
+    void latch(uint8_t pct) noexcept;
+    void clearTimers() noexcept;
+    void stepHysteresis(uint32_t nowMs, uint8_t pctIn) noexcept;
+
+    uint8_t latched_ = 0U; // 已定格格数 1..5，0 = 无有效样本
+    uint8_t pct_ = kBatteryPctUnknown;
+    uint32_t session_ = 0U;
+    uint32_t downSinceMs_ = 0U;
+    uint32_t upSinceMs_ = 0U;
+    uint32_t holdSinceMs_ = 0U;
+    bool seen_ = false; // 已见过输入（session_/usbPrev_ 有效）
+    bool usbPrev_ = false;
+    bool full_ = false;
+    bool charging_ = false;
+    bool downArmed_ = false;
+    bool upArmed_ = false;
+    bool holdActive_ = false;
+};
+
 /**
  * @brief 取得启动运行档的可读短名
  * @param mode: 启动运行档

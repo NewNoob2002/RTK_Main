@@ -69,8 +69,6 @@
 21050 check dialplate
 21150 long
 22150 shot power-off-confirm
-22250 short
-22750 shot power-off-confirm-ok
 22850 short
 22950 short
 23100 check shutdown

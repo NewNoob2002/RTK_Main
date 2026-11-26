@@ -21,7 +21,6 @@ constexpr uint8_t kMaxPercent = 100U;
 constexpr uint32_t kMsPerSec = 1000U;
 constexpr uint16_t kHdopScale = 100U;
 constexpr uint16_t kDiffAgeScale = 10U;
-constexpr int16_t kThreeDigits = 3;
 
 // 通用 10 px 顶栏与基础布局像素常量。
 constexpr int16_t kHeaderTextY = 1;
@@ -39,13 +38,16 @@ constexpr size_t kWaitBufBytes = 12U;
 constexpr size_t kSubSatHdrBufBytes = 20U;
 
 // 10 px 状态栏像素常量（表盘与统一子页共用）。
-constexpr int16_t kBatBoxW = 16;
+constexpr int16_t kBatBoxW = 23;
 constexpr int16_t kBatBoxH = 8;
-constexpr int16_t kBatTipX1 = 16;
-constexpr int16_t kBatTipX2 = 17;
+constexpr int16_t kBatTipX1 = 23;
+constexpr int16_t kBatTipX2 = 24;
 constexpr int16_t kBatTipY0 = 2;
 constexpr int16_t kBatTipY1 = 5;
-constexpr uint32_t kBatFillMaxW = 12U;
+constexpr int16_t kBatSegX0 = 2;    // 第一格左缘（相对图标 x）
+constexpr int16_t kBatSegStepX = 4; // 格距：格宽 3 + 间隙 1
+constexpr int16_t kBatSegW = 3;
+constexpr int16_t kBatSegY = 2;
 constexpr int16_t kBatFillH = 4;
 constexpr int16_t kStatusSatTextX = 10;
 constexpr int16_t kStatusWarnX = 23;
@@ -56,12 +58,7 @@ constexpr int16_t kStatusBoltX = 79;
 constexpr int16_t kBoltW = 5;
 constexpr int16_t kIcon7W = 7;
 constexpr int16_t kIcon8H = 8;
-constexpr int16_t kStatusPctUnknownX = 91;
-constexpr int16_t kStatusPct3DigitX = 85;
-constexpr int16_t kStatusPct2DigitX = 91;
-constexpr int16_t kStatusPct1DigitX = 97;
-constexpr uint8_t kTwoDigitMin = 10U;
-constexpr int16_t kStatusBatIconX = 110;
+constexpr int16_t kStatusBatIconX = 103; // 图标宽 25（含正极凸起），右缘贴 128 列边界
 
 // 开机自检页像素常量。
 constexpr uint8_t kLogoBoxR = 3U;
@@ -137,9 +134,9 @@ constexpr int16_t kCardBatBodyX = 14;
 constexpr int16_t kCardBatBodyY = 6;
 constexpr int16_t kCardBatBodyW = 12;
 constexpr int16_t kCardBatBodyH = 14;
-constexpr uint32_t kCardBatFillMaxH = 10U;
 constexpr int16_t kCardBatFillX = 16;
-constexpr int16_t kCardBatFillBaseY = 18;
+constexpr int16_t kCardBatFillBaseY = 17; // 最低一格的行 y（相对卡片），自下而上每格步距 2 px
+constexpr int16_t kCardBatSegStepY = 2;
 constexpr int16_t kCardBatFillW = 8;
 constexpr int16_t kCardUsbIconX = 30;
 constexpr int16_t kCardUsbIconY = 9;
@@ -165,19 +162,23 @@ constexpr int16_t kSubSnrStepX = 15;
 constexpr int16_t kSubSnrBarW = 10;
 constexpr int16_t kSubSnrLetterOffX = 3;
 
-// 充电待机页像素常量（左侧大号电量 + 流动电池条，右侧保持进度环，底部 FW/HW）。
+// 充电待机页像素常量（左侧大号 5 格电池，右侧保持进度环，底部 FW/HW）。
 constexpr int16_t kStandbyStatusY = 2;
 constexpr int16_t kStandbyVoltX = 30;
-constexpr int16_t kStandbyPctX = 2;
-constexpr int16_t kStandbyPctY = 13;
-constexpr int16_t kStandbyBarX = 2;
-constexpr int16_t kStandbyBarY = 39;
-constexpr int16_t kStandbyBarW = 62;
-constexpr int16_t kStandbyBarH = 9;
-constexpr int16_t kStandbyFillX = 4;
-constexpr int16_t kStandbyFillY = 41;
-constexpr int16_t kStandbyFillH = 5;
-constexpr uint32_t kStandbyFillMaxW = 58U;
+constexpr int16_t kStandbyStatusX = 2;
+constexpr int16_t kStandbyBatX = 2;
+constexpr int16_t kStandbyBatY = 14;
+constexpr int16_t kStandbyBatW = 58;
+constexpr int16_t kStandbyBatH = 34;
+constexpr int16_t kStandbyBatTipX = 60;
+constexpr int16_t kStandbyBatTipY = 25;
+constexpr int16_t kStandbyBatTipW = 3;
+constexpr int16_t kStandbyBatTipH = 12;
+constexpr int16_t kStandbySegX0 = 5;
+constexpr int16_t kStandbySegStepX = 11; // 格宽 9 + 间隙 2
+constexpr int16_t kStandbySegW = 9;
+constexpr int16_t kStandbySegY = 18;
+constexpr int16_t kStandbySegH = 26;
 constexpr int16_t kStandbyRingCx = 98;
 constexpr int16_t kStandbyRingCy = 20;
 constexpr int16_t kStandbyHintX = 68;
@@ -185,11 +186,6 @@ constexpr int16_t kStandbyHintY = 40;
 constexpr int16_t kStandbyStartingX = 74;
 constexpr int16_t kStandbyFooterLineY = 52;
 constexpr int16_t kStandbyFooterTextY = 54;
-constexpr int16_t kStandbyUnknownPctOffX = 26;
-constexpr int16_t kStandbyPctSignOffY = 7;
-constexpr uint32_t kChargeStripeStepPx = 3U;
-constexpr int16_t kChargeStripePitchPx = 12;
-constexpr int16_t kChargePulseH = 3;
 
 // 关机页与弹窗/浮层像素常量。
 constexpr int16_t kRingCx = 26;
@@ -225,6 +221,8 @@ constexpr int16_t kModalButtonX = 11;
 constexpr int16_t kModalButtonY = 48;
 constexpr int16_t kModalButtonW = 50;
 constexpr int16_t kModalButtonH = 12;
+constexpr int16_t kModalSingleButtonW = 70; // 单选项按钮宽度，容纳 "POWER OFF"（9 字 × 6 px）
+constexpr int16_t kModalSingleButtonX = (kCanvasW - kModalSingleButtonW) / 2;
 constexpr int16_t kModalButtonLabelY = kModalButtonY + 2;
 constexpr size_t kModalButtonPage = 6U;
 constexpr size_t kModalButtonTailPage = 7U;
@@ -371,14 +369,25 @@ void drawRollingValue(const Canvas &parent, int16_t x, int16_t y, const sFONT &f
 }
 
 /**
- * @brief 绘制 18x8 单色电池图形图标（含右端正极凸起与内部填充条）
+ * @brief 取得实际应点亮的格数（低电闪烁熄灭相位少画最后一格）
+ * @param bars: 电量格结论
+ * @retval 0..5 点亮格数
+ */
+[[nodiscard]] uint8_t visibleBars(const board::BatteryBarsView &bars) noexcept
+{
+    return (bars.blinkOff && bars.bars > 0U) ? static_cast<uint8_t>(bars.bars - 1U) : bars.bars;
+}
+
+/**
+ * @brief 绘制 25x8 单色电池图标（含右端正极凸起），内部按 5 格显示电量
  * @param canvas: 目标画布
  * @param x: 左上角 x
  * @param y: 左上角 y
- * @param pct: 电量百分比（0..100 或 kBatteryPctUnknown）
- * @note 不分配堆。
+ * @param bars: 电量格结论（bars==0 表示未知，仅画外框）
+ * @note 不分配堆。低电闪烁熄灭相位隐藏最后一格。
  */
-void drawBatteryIcon(Canvas &canvas, int16_t x, int16_t y, uint8_t pct) noexcept
+void drawBatteryIcon(Canvas &canvas, int16_t x, int16_t y,
+                     const board::BatteryBarsView &bars) noexcept
 {
     WouoUI_CanvasDrawRBoxEmpty(&canvas, x, y, kBatBoxW, kBatBoxH, 1U);
     WouoUI_CanvasDrawLine_V(&canvas, static_cast<int16_t>(x + kBatTipX1),
@@ -387,15 +396,10 @@ void drawBatteryIcon(Canvas &canvas, int16_t x, int16_t y, uint8_t pct) noexcept
     WouoUI_CanvasDrawLine_V(&canvas, static_cast<int16_t>(x + kBatTipX2),
                             static_cast<int16_t>(y + kBatTipY0),
                             static_cast<int16_t>(y + kBatTipY1));
-    if (pct == board::kBatteryPctUnknown) {
-        return;
-    }
-    const uint8_t clamped = std::min(pct, kMaxPercent);
-    const auto fillW =
-        static_cast<int16_t>((static_cast<uint32_t>(clamped) * kBatFillMaxW) / kMaxPercent);
-    if (fillW > 0) {
-        WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(x + 2), static_cast<int16_t>(y + 2),
-                              fillW, kBatFillH, 0U);
+    const uint8_t lit = visibleBars(bars);
+    for (uint8_t i = 0U; i < lit; ++i) {
+        WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(x + kBatSegX0 + (i * kBatSegStepX)),
+                              static_cast<int16_t>(y + kBatSegY), kBatSegW, kBatFillH, 0U);
     }
 }
 
@@ -474,18 +478,7 @@ void drawStatusBar(Canvas &canvas, const UiRenderState &state, const ViewModel &
         WouoUI_CanvasDrawBMP(&canvas, kStatusBoltX, kHeaderTextY, kBoltW, kIcon8H,
                              icons::kPlug5x8.data(), 1U);
     }
-    if (vm.batteryPct == board::kBatteryPctUnknown) {
-        drawText(canvas, kStatusPctUnknownX, kHeaderTextY, Font_6_8, "--%");
-    } else {
-        const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-        const int16_t pctX =
-            (clamped >= kMaxPercent)
-                ? kStatusPct3DigitX
-                : ((clamped >= kTwoDigitMin) ? kStatusPct2DigitX : kStatusPct1DigitX);
-        drawRollingValue(canvas, pctX, kHeaderTextY, Font_6_8, state.batRoll,
-                         static_cast<int32_t>(clamped), "%", state.nowMs);
-    }
-    drawBatteryIcon(canvas, kStatusBatIconX, kHeaderTextY, vm.batteryPct);
+    drawBatteryIcon(canvas, kStatusBatIconX, kHeaderTextY, state.batBars);
     WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
 }
 
@@ -804,8 +797,8 @@ void renderDialplate(Canvas &canvas, const UiRenderState &state, const ViewModel
  * @param icon16x16: 16×16 图标（nullptr 表示改用动态电池图形）
  * @param keyVal: 主关键值（居中，最多 6 字符）
  * @param subVal: 次短词（居中，最多 6 字符）
- * @param drawDynamicBat: true 时在图标区绘制带实时电量的 16×16 电池图形
- * @param vm: 视图数据（供动态电池图形读取百分比与充电状态）
+ * @param drawDynamicBat: true 时在图标区绘制 5 格电量的 16×16 电池图形
+ * @param vm: 视图数据（供动态电池图形读取 USB 在位状态）
  * @note 仅统一子页渲染函数调用。
  */
 void drawSubMainCard(const Canvas &canvas, const UiRenderState &state, const uint8_t *icon16x16,
@@ -833,15 +826,11 @@ void drawSubMainCard(const Canvas &canvas, const UiRenderState &state, const uin
                               0U);
         WouoUI_CanvasDrawRBoxEmpty(&cardInner, kCardBatBodyX, kCardBatBodyY, kCardBatBodyW,
                                    kCardBatBodyH, 1U);
-        if (vm.batteryPct != board::kBatteryPctUnknown) {
-            const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-            const auto fillH = static_cast<int16_t>(
-                (static_cast<uint32_t>(clamped) * kCardBatFillMaxH) / kMaxPercent);
-            if (fillH > 0) {
-                WouoUI_CanvasDrawRBox(&cardInner, kCardBatFillX,
-                                      static_cast<int16_t>(kCardBatFillBaseY - fillH),
-                                      kCardBatFillW, fillH, 0U);
-            }
+        const uint8_t lit = visibleBars(state.batBars);
+        for (uint8_t i = 0U; i < lit; ++i) {
+            WouoUI_CanvasDrawRBox(&cardInner, kCardBatFillX,
+                                  static_cast<int16_t>(kCardBatFillBaseY - (i * kCardBatSegStepY)),
+                                  kCardBatFillW, 1, 0U);
         }
         if (vm.usbPresent) {
             WouoUI_CanvasDrawBMP(&cardInner, kCardUsbIconX, kCardUsbIconY, kBoltW, kIcon8H,
@@ -852,18 +841,7 @@ void drawSubMainCard(const Canvas &canvas, const UiRenderState &state, const uin
                              icon16x16, 1U);
     }
 
-    if (drawDynamicBat && (vm.batteryPct != board::kBatteryPctUnknown)) {
-        const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-        std::array<char, 8U> tmp{};
-        static_cast<void>(
-            std::snprintf(tmp.data(), tmp.size(), "%u%%", static_cast<unsigned>(clamped)));
-        const int16_t tw = static_cast<int16_t>(WouoUI_GetStrWidth(tmp.data(), Font_6_8));
-        const int16_t tx = std::max<int16_t>(2, static_cast<int16_t>((kSubCardW - tw) / 2));
-        drawRollingValue(cardInner, tx, kSubCardVal1Y, Font_6_8, state.batRoll,
-                         static_cast<int32_t>(clamped), "%", state.nowMs);
-    } else {
-        drawCentered(cardInner, kSubCardVal1Y, Font_6_8, keyVal);
-    }
+    drawCentered(cardInner, kSubCardVal1Y, Font_6_8, keyVal);
     if (!subVal.empty()) {
         drawCentered(cardInner, kSubCardVal2Y, Font_6_8, subVal);
     }
@@ -1288,7 +1266,7 @@ void renderSubDevice(Canvas &canvas, const UiRenderState &state, const ViewModel
 }
 
 /**
- * @brief 渲染电源子页（左主卡动态电池图标+滚动百分比，右列表：电压、充电状态、USB、Power off、Back）
+ * @brief 渲染电源子页（左主卡 5 格电池图标，右列表：电压、充电状态、USB、Power off、Back）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -1300,10 +1278,10 @@ void renderSubPower(Canvas &canvas, const UiRenderState &state, const ViewModel 
         (vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent);
     const bool effChg = isEffectiveCharging(vm);
     const char *cardSub = effChg ? "CHG" : (full ? "FULL" : (vm.usbPresent ? "USB" : "BAT"));
-    drawSubMainCard(canvas, state, nullptr, "--%", cardSub, true, vm);
-
     std::array<char, kShortBufBytes> voltBuf{};
     formatBatteryVoltage(vm.batteryMv, voltBuf);
+    // 主卡：16×16 电池 5 格 + 状态词 + 电压（不显示百分比数字，OL7）。
+    drawSubMainCard(canvas, state, nullptr, cardSub, viewOf(voltBuf), true, vm);
     const char *chgState = "NO IC";
     if (vm.charging) {
         chgState = "CHARGING";
@@ -1323,77 +1301,25 @@ void renderSubPower(Canvas &canvas, const UiRenderState &state, const ViewModel 
 }
 
 /**
- * @brief 绘制充电待机页左侧大号电量百分比（含数字滚动）
+ * @brief 绘制充电待机页左侧大号 5 格电池（充电时格数循环填充，充满常亮，低电闪烁）
  * @param canvas: 目标画布
  * @param state: 渲染状态
- * @param vm: 视图数据
- * @note 仅 renderChargeStandby 调用。
+ * @note 仅 renderChargeStandby 调用，不分配堆。
  */
-void drawStandbyPercent(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+void drawStandbyBattery(Canvas &canvas, const UiRenderState &state) noexcept
 {
-    if (vm.batteryPct == board::kBatteryPctUnknown) {
-        drawText(canvas, kStandbyPctX, kStandbyPctY, Font_12_24, "--");
-        drawText(canvas, static_cast<int16_t>(kStandbyPctX + kStandbyUnknownPctOffX),
-                 static_cast<int16_t>(kStandbyPctY + kStandbyPctSignOffY), Font_8_16, "%");
-        return;
-    }
-    const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-    drawRollingValue(canvas, kStandbyPctX, kStandbyPctY, Font_12_24, state.batRoll,
-                     static_cast<int32_t>(clamped), "", state.nowMs);
-    const int16_t digits = (clamped >= kMaxPercent)
-                               ? kThreeDigits
-                               : ((clamped >= kTwoDigitMin) ? int16_t{2} : int16_t{1});
-    const int16_t pctX =
-        static_cast<int16_t>(kStandbyPctX + (digits * static_cast<int16_t>(Font_12_24.Width)) + 2);
-    drawText(canvas, pctX, static_cast<int16_t>(kStandbyPctY + kStandbyPctSignOffY), Font_8_16,
-             "%");
-}
-
-/**
- * @brief 绘制充电待机页左侧电池条（充电且未满时 <= 2 fps 缓慢流动，充满停止）
- * @param canvas: 目标画布
- * @param state: 渲染状态
- * @param vm: 视图数据
- * @param full: 是否已充满
- * @note 仅 renderChargeStandby 调用。
- */
-void drawStandbyBatteryBar(Canvas &canvas, const UiRenderState &state, const ViewModel &vm,
-                           bool full) noexcept
-{
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, kStandbyBarX, kStandbyBarY, kStandbyBarW, kStandbyBarH, 2U);
-    if (vm.batteryPct == board::kBatteryPctUnknown) {
-        return;
-    }
-    const uint8_t clamped = std::min(vm.batteryPct, kMaxPercent);
-    const auto fillW =
-        static_cast<int16_t>((static_cast<uint32_t>(clamped) * kStandbyFillMaxW) / kMaxPercent);
-    if (fillW <= 0) {
-        return;
-    }
-    WouoUI_CanvasDrawRBox(&canvas, kStandbyFillX, kStandbyFillY, fillW, kStandbyFillH, 1U);
-    if (!isEffectiveCharging(vm) || full) {
-        return;
-    }
-    const uint32_t phase = (state.nowMs / kChargeAnimPeriodMs) % 4U;
-    WouoUI_GraphSetPenColor(0U);
-    for (int16_t sx = static_cast<int16_t>(phase * kChargeStripeStepPx); sx < fillW;
-         sx = static_cast<int16_t>(sx + kChargeStripePitchPx)) {
-        WouoUI_CanvasDrawLine_V(&canvas, static_cast<int16_t>(kStandbyFillX + sx), kStandbyFillY,
-                                static_cast<int16_t>(kStandbyFillY + kStandbyFillH - 1));
-    }
-    WouoUI_GraphSetPenColor(1U);
-    if ((fillW + 4) <= static_cast<int16_t>(kStandbyFillMaxW)) {
-        const int16_t pulseX =
-            static_cast<int16_t>(kStandbyFillX + fillW + 1 + static_cast<int16_t>(phase));
-        if ((pulseX + 2) <= (kStandbyFillX + static_cast<int16_t>(kStandbyFillMaxW))) {
-            WouoUI_CanvasDrawRBox(&canvas, pulseX, static_cast<int16_t>(kStandbyFillY + 1), 2,
-                                  kChargePulseH, 0U);
-        }
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, kStandbyBatX, kStandbyBatY, kStandbyBatW, kStandbyBatH, 2U);
+    WouoUI_CanvasDrawRBox(&canvas, kStandbyBatTipX, kStandbyBatTipY, kStandbyBatTipW,
+                          kStandbyBatTipH, 0U);
+    const uint8_t lit = visibleBars(state.batBars);
+    for (uint8_t i = 0U; i < lit; ++i) {
+        WouoUI_CanvasDrawRBox(&canvas, static_cast<int16_t>(kStandbySegX0 + (i * kStandbySegStepX)),
+                              kStandbySegY, kStandbySegW, kStandbySegH, 1U);
     }
 }
 
 /**
- * @brief 渲染重做后的充电待机页（左侧大号电量滚动+流动电池条+状态/电压，右侧保持环+HOLD 2s ON，底行 FW/HW）
+ * @brief 渲染重做后的充电待机页（左侧大号 5 格电池图标+状态/电压，右侧保持环+HOLD 2s ON，底行 FW/HW）
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -1405,15 +1331,14 @@ void renderChargeStandby(Canvas &canvas, const UiRenderState &state, const ViewM
         (vm.batteryPct != board::kBatteryPctUnknown) && (vm.batteryPct >= kMaxPercent);
     const char *statusWord =
         isEffectiveCharging(vm) ? "CHG" : (full ? "FULL" : (vm.usbPresent ? "USB" : "BAT"));
-    drawText(canvas, kStandbyPctX, kStandbyStatusY, Font_6_8, statusWord);
+    drawText(canvas, kStandbyStatusX, kStandbyStatusY, Font_6_8, statusWord);
     if (vm.batteryMv > 0U) {
         std::array<char, kShortBufBytes> voltBuf{};
         formatBatteryVoltage(vm.batteryMv, voltBuf);
         drawText(canvas, kStandbyVoltX, kStandbyStatusY, Font_6_8, viewOf(voltBuf));
     }
 
-    drawStandbyPercent(canvas, state, vm);
-    drawStandbyBatteryBar(canvas, state, vm, full);
+    drawStandbyBattery(canvas, state);
 
     // 右侧电源图标 + 保持开机实时进度环 + HOLD 2s ON。
     drawProgressRing(canvas, kStandbyRingCx, kStandbyRingCy, state.standbyRingQ10);
@@ -1611,12 +1536,22 @@ void clearModalPage(std::span<uint8_t, kWidth> page, uint8_t keepMask) noexcept
 }
 
 /**
- * @brief 在选项区画出两个标签及随焦点移动的弹簧选择框。
+ * @brief 在选项区画出选项标签及选择框（关机弹窗为单个固定选项，其余为两项随焦点弹簧移动）。
  * @param canvas: 目标画布。
  * @param state: 弹窗类型、焦点像素与挤压量。
  */
 void drawModalChoices(Canvas &canvas, const UiRenderState &state) noexcept
 {
+    if (state.modal == UiModal::kPowerOffConfirm) {
+        // OL7：只有一个居中的确认项，选择框固定不动。
+        Canvas single = canvas;
+        single.start_x = kModalSingleButtonX;
+        single.w = kModalSingleButtonW;
+        drawCentered(single, kModalButtonLabelY, Font_6_8, "POWER OFF");
+        WouoUI_CanvasDrawRBoxEmpty(&canvas, kModalSingleButtonX, kModalButtonY, kModalSingleButtonW,
+                                   kModalButtonH, kModalCornerR);
+        return;
+    }
     const bool pairing = state.modal == UiModal::kPair;
     Canvas label = canvas;
     label.start_x = kModalButtonX;

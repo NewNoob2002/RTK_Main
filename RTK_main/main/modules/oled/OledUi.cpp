@@ -13,7 +13,6 @@ constexpr uint32_t kFnvOffsetBasis = 2166136261U;
 constexpr uint32_t kFnvPrime = 16777619U;
 constexpr char kMinPrintableAscii = ' ';
 constexpr char kMaxPrintableAscii = '~';
-constexpr uint8_t kMaxPercent = 100U;
 constexpr uint32_t kMvPerVolt = 1000U;
 constexpr uint32_t kMvPerCentiVolt = 10U;
 constexpr int64_t kE9Scale = 1000000000LL;
@@ -346,7 +345,7 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
     subScrollSpring_.snap(0);
     modalFocusSpring_.snap(0);
     satsRoll_.reset();
-    batRoll_.reset();
+    bars_.reset();
     if (bootMode_ == board::BootMode::kChargeStandby) {
         page_ = OledPage::kChargeStandby;
     } else {
@@ -414,17 +413,13 @@ UiDecision UiController::stepChargeStandby(uint32_t nowMs, uint32_t dtMs,
             (standbyRingQ10_ > stepAmt) ? static_cast<uint16_t>(standbyRingQ10_ - stepAmt) : 0U;
     }
 
-    const bool fastAnim =
-        batRoll_.active(nowMs) || vm.keyHold.active || ((standbyRingQ10_ > 0U) && !confirmed);
-    const bool chargeAnim = isEffectiveCharging(vm) &&
-                            (vm.batteryPct != board::kBatteryPctUnknown) &&
-                            (vm.batteryPct < kMaxPercent);
+    const bool fastAnim = vm.keyHold.active || ((standbyRingQ10_ > 0U) && !confirmed);
     uint32_t waitMs = kWaitForEvent;
     if (fastAnim) {
         waitMs = kAnimFramePeriodMs;
-    } else if (chargeAnim) {
-        const uint32_t phaseRem = kChargeAnimPeriodMs - (nowMs % kChargeAnimPeriodMs);
-        waitMs = (phaseRem == 0U) ? kChargeAnimPeriodMs : phaseRem;
+    } else {
+        // 充电填充 / 低电闪烁 / 迟滞计时都是低帧率节拍，由电量格状态机给出下一次唤醒。
+        waitMs = barsWaitMs(nowMs);
     }
     return UiDecision{
         .page = page_,
@@ -582,6 +577,13 @@ void UiController::resetModalFocus() noexcept
 OledActionRequest UiController::handleModalClick(UiModal modal, ClickEvent click,
                                                  uint32_t nowMs) noexcept
 {
+    if (modal == UiModal::kPowerOffConfirm) {
+        // OL7：关机弹窗只有一个确认项，单击或双击都确认；取消只靠 5 s 超时。
+        click_.reset();
+        resetModalFocus();
+        powerOffConfirm_ = false;
+        return {OledAction::kShutdownKey};
+    }
     const bool accept = modalFocusSpring_.target() == kModalOptionStepX;
     if (click == ClickEvent::kSingle) {
         modalFocusSpring_.retarget(accept ? 0 : kModalOptionStepX);
@@ -591,9 +593,6 @@ OledActionRequest UiController::handleModalClick(UiModal modal, ClickEvent click
     click_.reset();
     resetModalFocus();
     switch (modal) {
-    case UiModal::kPowerOffConfirm:
-        powerOffConfirm_ = false;
-        return {accept ? OledAction::kShutdownKey : OledAction::kNone};
     case UiModal::kPair:
         pairDecisionSent_ = true;
         return {accept ? OledAction::kPairAccept : OledAction::kPairReject, pairDialogId_};
@@ -746,13 +745,19 @@ void UiController::updateHeroBadgeRoll(uint32_t nowMs, const ViewModel &vm) noex
     }
 }
 
+uint32_t UiController::barsWaitMs(uint32_t nowMs) const noexcept
+{
+    const uint32_t wake = bars_.nextWakeMs(nowMs);
+    return (wake == UINT32_MAX) ? kWaitForEvent : std::max<uint32_t>(wake, 1U);
+}
+
 UiDecision UiController::buildActiveDecision(uint32_t nowMs, const ViewModel &vm,
                                              bool animating) const noexcept
 {
     UiDecision out{};
     out.page = page_;
     out.animating = animating;
-    uint32_t waitMs = animating ? kAnimFramePeriodMs : kWaitForEvent;
+    uint32_t waitMs = animating ? kAnimFramePeriodMs : barsWaitMs(nowMs);
     if (!powerOffConfirm_ && vm.keyHold.active && !holdOverlayDismissed_ && !holdOverlayActive_) {
         const uint32_t heldMs = nowMs - vm.keyHold.startMs;
         if (heldMs < board::kKeyHoldOverlayStartMs) {
@@ -819,7 +824,7 @@ UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
         isSubmenuPage(page_) && (!subFocusSpring_.settled() || !subScrollSpring_.settled());
     const bool springActive =
         ((page_ == OledPage::kDialplate) && !dockSpring_.settled()) || subSpring;
-    const bool rollNow = satsRoll_.active(nowMs) || batRoll_.active(nowMs);
+    const bool rollNow = satsRoll_.active(nowMs);
     const bool rollAnim = ((page_ == OledPage::kDialplate) && (rollNow || heroRolling_)) ||
                           (isSubmenuPage(page_) && rollNow);
     const bool animating = transition_.pollActive(nowMs) || squish_.pollActive(nowMs) ||
@@ -851,9 +856,10 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
         return recoverFromShutdown();
     }
 
-    if (vm.batteryPct != board::kBatteryPctUnknown) {
-        batRoll_.update(static_cast<int32_t>(std::min(vm.batteryPct, kMaxPercent)), nowMs);
-    }
+    bars_.update(nowMs, board::BatteryBarsInput{.pct = vm.batteryPct,
+                                                .usbPresent = vm.usbPresent,
+                                                .charging = isEffectiveCharging(vm),
+                                                .simSession = vm.batterySimSession});
     if (vm.gnssEnabled && isGnssRunningLike(vm.gnssState)) {
         satsRoll_.update(vm.fixValid ? static_cast<int32_t>(vm.satsUsed) : 0, nowMs);
     }
@@ -928,7 +934,7 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         .checkSm = &checkSm_,
         .transition = &transition_,
         .satsRoll = &satsRoll_,
-        .batRoll = &batRoll_,
+        .batBars = bars_.view(nowMs),
     };
 }
 
