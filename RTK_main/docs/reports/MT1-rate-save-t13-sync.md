@@ -43,7 +43,7 @@
 | 资源 | `idf.py size`：IRAM、.data、.bss 与基线构建（`../../RTK_Main/.../mainv-idf`，同 2ae43a9）完全一致，DRAM 增量 0 B，IRAM 增量 0；镜像 +288 B（flash；rtk_main.bin 1586176 B 对基线构建 1585888 B）；无运行期堆 |
 | TSan（`-fsanitize=thread -g -O1` 构建 `tools/t13_host_check`） | 46 项中 45 PASS、无 `fake_crit_exit_hook` 相关报告；`t13_init_start_timeout` 报 `s_spp` 数据竞争（`SppServerInit.c:41` 与 `SppServerWorker.c:126`），在基线 `2ae43a9` 同样构建下完全相同地失败，为既有问题，未在本卡处理 |
 | ASan t13 | 46/46 PASS；`disconnect_reuse_across_slots` 1000 次 `-P 64` 0 失败 |
-| 真机/串口/烧录 | NOT_RUN（任务禁止） |
+| 真机/串口/烧录 | 实现阶段 NOT_RUN（任务禁止）；验收 2026-11-26 P2 v1.41（ZED-F9P）：`gnss rate 5` 后 `gnss.out.gga=200`，复位后 12 s 内 gga=41 条（5 Hz 保持）、`gnss.out.gga=200`；`gnss rate 1` 恢复 `gnss.out.gga=1000` |
 
 ## 偏离与未解决
 

@@ -37,6 +37,7 @@
 | OL1–OL6 | SH1106 OLED（共享 I2C0、WouoUI 子集）、开机自检/表盘/子页、真实关机进度、待机页、SDL2 模拟器、30 fps 节拍与局部刷新、两选项弹窗、COMM 页 SoftAP 信息；2026-11-25 P2 v1.41 + F9P HIL 通过（`oled bench 10` 30.0 fps / CPU 3.8% / i2c_errors 0；报告 `docs/reports/OL1-oled.md`、`OL2-oled-ui.md`） | 0020 | 合入 `2eb65ba`、`c2e9293` |
 | PW1 | 关机参与者登记表（kSave/kQuiesce 外部登记）、保存超时 3 s、低电保持 120 s、`ShutdownReason::kWeb` 预留、电池/USB 终帧拆分、`power simbat` 低电 HIL 注入；DRAM +136 B / IRAM 0；2026-11-25 P2 v1.41 HIL 通过（长按/8 s 强制/控制台/低电 120 s/终帧插 USB/USB 在位关机；报告 `docs/reports/PW1-shutdown-participants.md` §4.1） | 0015、0020 | 合入 `7874dcd` |
 | OL7 | 关机确认弹窗单选项（单击/双击确认、5 s 超时取消，Wi-Fi/配对仍两选项）、OLED 5 格电量（降 3 点/30 s、升 5 点/60 s 滞回、充电循环填充、拔 USB 保持 60 s、<10% 闪烁、simbat 立即重定格）；`PowerSnapshot` 增 `batterySimSession`；DRAM +8 B / IRAM 0；2026-11-26 P2 v1.41 HIL 通过（报告 `docs/reports/OL7-dialog-battery-bars.md`；滞回门限未经实测放电曲线校准） | 0020 | 合入 `a1a78e9` |
+| MT1 | RU2-02 改频率 out 保存失败补偿写回旧 rate（补偿失败记 FW_LOGE、启动 F9P 对齐自愈）；t13 disconnect 测试同步修正（钩子原子安装，TSan 45/46，余 `t13_init_start_timeout` 既有 `s_spp` 竞争）；DRAM 0 / IRAM 0 / flash +288 B；2026-11-26 P2 v1.41 HIL：`gnss rate 5` 重启后保持 5 Hz、`gnss rate 1` 恢复（报告 `docs/reports/MT1-rate-save-t13-sync.md`） | 0014 | 合入 `b9a5ec4` |
 
 ## 2. 进行中与未开始
 
@@ -54,7 +55,7 @@
 - B1：E1 强制档与未知 ID 路径未测。
 - B3：REG02/REG03 写入需在 CM680 P2 v1.41（有 SGM41513）补测；<10% 低电关机已由 PW1 `simbat` 注入实测（真实 ADC 低电链路仍未测）；新 F9P 板 I2C 只见 0x3C，充电芯片位置待原理图确认。
 - U1：室外 + 基站下，接收差分期间修改截止角/星座，确认 RTK Fixed 不中断（未测）；接入差分后计划外 NMEA 计数 `ign=4` 原文未抓。
-- U2：室外有星时确认 GGA 经纬度 7 位小数；SVNUMBERING 下真实卫星 `nmea.bad=0`；5 Hz 四星座 RTK + RTCM 满载下 VALSET 不超时、SPP 吞吐正常（均未测）。RU2-02（MT1 已处理）：改频率时 rate/out 两键仍分开保存，但 out 保存失败会补偿写回旧 rate，补偿也失败则记 FW_LOGE 并靠启动时 F9P 输出对齐自愈；host 测试已覆盖，真机未测。
+- U2：室外有星时确认 GGA 经纬度 7 位小数；SVNUMBERING 下真实卫星 `nmea.bad=0`；5 Hz 四星座 RTK + RTCM 满载下 VALSET 不超时、SPP 吞吐正常（均未测）。RU2-02（MT1 已处理）：改频率时 rate/out 两键仍分开保存，但 out 保存失败会补偿写回旧 rate，补偿也失败则记 FW_LOGE 并靠启动时 F9P 输出对齐自愈；host 测试已覆盖；正常保存路径 2026-11-26 真机通过，故障注入路径真机不可测。
 - 门禁：`G2b-t13_host_check-asan` 的 `t13_disconnect_reuse_across_slots` 在高负载下偶发失败（测试同步竞态：`fake_wait_disconnect_returns` 早于 worker `spp_server_ctrl_settle_locked` 结算，见 `docs/reports/T13F-pairing-order.md`），单独重跑通过；MT1 已修正测试同步（shim 把 disconnect “已返回”推迟到 worker 结算之后），修复前 300 次中 2 次失败，修复后 1000 次 0 失败。
 - B2：固件卡死时 10 s 硬关断 NOT_RUN；3V3/GPIO4/U3 波形未用仪表测；SGM41513 REG00–REG0B 位核对、`senseOnMv` 与硬关断时长校准、注入类项（按键毛刺、U3 30 s 未掉电回退、BT 拥塞、NVS 错误）未测；BT 关机时 SPP CLOSE 日志晚于 `device powered down` 约 0.49 s。
 - HB：关闭 Wi-Fi 的构建最小空闲堆 80,776 B，低于 81,920 B 预算，用户已接受（该构建不发布）。
