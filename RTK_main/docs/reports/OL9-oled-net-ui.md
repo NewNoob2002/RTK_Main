@@ -129,3 +129,11 @@ tools/ci/run_gates.sh --prefix ol9w --base 54b01b6
 用 `idf.py -B builds/ol9w-idf size` 及两版 ELF 对照，DRAM 仍为 99,451 B，IRAM 仍为 116,139 B，固件从 1,633,936 B 增至 1,635,136 B。位图符号各占 72 B 并位于 Flash，资源日志在 `builds/ol9-alarm-resources/`。
 
 `stepAlarm` 的 Xtensa 栈帧仍为 48 B，`renderState` 从 32 B 增至 48 B，`renderPageInto` 从 448 B 降至 400 B。主机反汇编估算告警文字绘制路径从 `taskEntry` 到 WouoUI 写入帧缓冲合计 1,872 B 静态栈帧，3,072 B 配额下该路径约余 1,200 B。设备任务整体高水位及硬件验证 **NOT_RUN**，实板验收仍需确认 `oled` 的 `stack_hwm` ≥ 528 B。本轮未改冻结文件、未访问串口或烧录。
+
+## HIL 结果（2026-11-27，P2 v1.41 F9P 测试板 + EC600U + 电信 SIM，构建 5772ab6 + 合入 N1 99e2878）
+- 状态栏：首轮反馈 BT 与 4G 间空隙大、4G 标识与电池重叠、充电图标未贴电池 → 用户选固定槽位方案，06f348b 重排；复测 PASS（无重叠、USB 拔插不位移）。
+- 步骤 4 告警：首轮纯文字 PASS（确认后回原页与选中项）；用户要求加图标与闪烁 → 5772ab6；复测 enter/leave/precision/lowbat 四类图标、闪烁、30 s 停闪、确认返回全部 PASS。
+- 步骤 5：告警四类与 NET 浏览后 `sys tasks` oled stack_hwm = 656 B（≥528 B）PASS。
+- 步骤 1–2（信号格、NET 详情）、定位/设备页：用户确认 PASS；天线拔插降档在测试板天线座故障下未单独验证。
+- 步骤 3（无蜂窝板型）：无此板型，以主机导航与金图为证据。
+- 备注：围栏告警 250 ms 为完整周期（125 ms 翻转），用户接受。
