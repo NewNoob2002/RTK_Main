@@ -970,6 +970,44 @@ void PowerModule::beginStageParticipants(board::ShutdownStage stage) noexcept
     }
 }
 
+/**
+ * @brief 轮询内置 log_drain：在 kNetPower 参与者收尾后才开始，并自开始时刻起算排空上限
+ * @param p: log_drain 参与者表项
+ * @param idx: 其在完成位掩码中的序号
+ * @param longSeen: kQuiesce 是否存在 kNetPower 参与者
+ * @param longPending: kNetPower 参与者是否仍在等待（未完成且未到限）
+ * @param stage: 当前阶段（kQuiesce）
+ * @param nowMs: 当前时刻（ms）
+ * @retval true log_drain 已完成或已到排空上限（不再阻塞静默阶段）
+ * @retval false 尚未开始或仍在排空
+ * @note 仅 kLink 调用，非 ISR；无 kNetPower 参与者时起点取 quiesceStartMs_，与旧行为一致。
+ */
+bool PowerModule::pollLogDrain(const power::ShutdownParticipant &p, size_t idx, bool longSeen,
+                               bool longPending, board::ShutdownStage stage,
+                               uint32_t nowMs) noexcept
+{
+    // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+    const auto bit = static_cast<uint16_t>(1U << idx);
+    if (!logDrainStarted_ && !longPending) {
+        logDrainStarted_ = true;
+        logDrainStartMs_ = longSeen ? nowMs : quiesceStartMs_;
+        if (p.begin != nullptr) {
+            p.begin(stage, logDrainStartMs_ + quiesceLimitMs(p, true), this);
+        }
+    }
+    if (!logDrainStarted_) {
+        // 未开始前不视为超时（recordStageTimeouts 只在 allSatisfied 后调用），但阻塞放行。
+        participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
+        return false;
+    }
+    if (p.isDone(this)) {
+        participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ | bit);
+        return true;
+    }
+    participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
+    return (nowMs - logDrainStartMs_) >= quiesceLimitMs(p, true);
+}
+
 bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t nowMs) noexcept
 {
     shutdownNowMs_ = nowMs;
@@ -1026,28 +1064,9 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
         check(p, p.userCtx, false);
     }
     if (logDrain != nullptr) {
-        // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
-        const auto bit = static_cast<uint16_t>(1U << logDrainIdx);
-        // kNetPower 参与者均完成或到限后才开始 log_drain；无长参与者时与旧行为一致（自静默起点起算）。
-        if (!logDrainStarted_ && !longPending) {
-            logDrainStarted_ = true;
-            logDrainStartMs_ = longSeen ? nowMs : quiesceStartMs_;
-            if (logDrain->begin != nullptr) {
-                logDrain->begin(stage, logDrainStartMs_ + quiesceLimitMs(*logDrain, true), this);
-            }
-        }
-        if (!logDrainStarted_) {
-            // 未开始前不视为超时（recordStageTimeouts 只在 allSatisfied 后调用），但阻塞放行。
-            participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
-            allSatisfied = false;
-        } else if (logDrain->isDone(this)) {
-            participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ | bit);
-        } else {
-            participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
-            if ((nowMs - logDrainStartMs_) < quiesceLimitMs(*logDrain, true)) {
-                allSatisfied = false;
-            }
-        }
+        const bool satisfied =
+            pollLogDrain(*logDrain, logDrainIdx, longSeen, longPending, stage, nowMs);
+        allSatisfied = allSatisfied && satisfied;
     }
     return allSatisfied;
 }

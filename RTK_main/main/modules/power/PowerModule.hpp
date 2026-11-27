@@ -302,6 +302,10 @@ private:
      * @note 仅 kLink 调用，不阻塞，非 ISR。
      */
     [[nodiscard]] bool pollStageParticipants(board::ShutdownStage stage, uint32_t nowMs) noexcept;
+    /// 轮询内置 log_drain（延后到 kNetPower 参与者收尾后开始）；返回是否不再阻塞静默阶段。
+    [[nodiscard]] bool pollLogDrain(const power::ShutdownParticipant &p, size_t idx, bool longSeen,
+                                    bool longPending, board::ShutdownStage stage,
+                                    uint32_t nowMs) noexcept;
 
     /**
      * @brief kCutPower 阶段每轮重试仍未完成的 kQuiesce 参与者超时兜底（如 4G 硬切 PWREN 失败后）
