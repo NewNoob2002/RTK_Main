@@ -129,22 +129,27 @@ int cmdOledBench(void * /*ctx*/, int argc, char **argv) noexcept
 /**
  * @brief 发布 OL9 测试告警，验证全屏显示与按键确认。
  * @param argc: 参数个数（含动词）。
+ * @param argv: 可选的测试告警类型。
  * @retval 0 事件已发布；非零为参数错误或 OLED 不在位。
  * @note 仅 DEV console REPL 调用，是测试告警批次的唯一写者。
  */
-int cmdOledAlarm(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
+int cmdOledAlarm(void * /*ctx*/, int argc, char **argv) noexcept
 {
-    if (argc != 1) {
-        return cli::fail("usage: oled alarm");
+    constexpr const char *kUsage = "usage: oled alarm [enter|leave|precision|lowbat]";
+    if (argc < 1 || argc > 2) {
+        return cli::fail("%s", kUsage);
+    }
+    // argc 已限定为 1 或 2。
+    const std::span<char *const> args{argv, static_cast<size_t>(argc)};
+    auto sample = oled::makeTestAlarm(args.size() == 1U ? "enter" : args.back());
+    if (sample.pending == 0U) {
+        return cli::fail("%s", kUsage);
     }
     auto &data = appContext().data;
     if (!data.oledStatus.read().present) {
         return cli::fail("OLED not present");
     }
-    oled::AlarmSnapshot sample{};
     sample.sequence = data.oledAlarm.read().sequence + 1U;
-    sample.pending = oled::alarmBit(oled::AlarmKind::kFenceEnter);
-    oled::sanitizeCopy("TEST FENCE", sample.fenceEnterName);
     data.oledAlarm.write(sample);
     data.uiEvents.notifyWake();
     return 0;
@@ -154,7 +159,7 @@ constexpr std::array<cli::Verb, 3U> kOledVerbs{{
     {"status", nullptr, "show OLED state, fps, frame/I2C timings, dirty pages and errors",
      &cmdOledStatus},
     {"bench", "<seconds>", "run repeated OLED page transitions", &cmdOledBench},
-    {"alarm", nullptr, "display an OLED test alarm", &cmdOledAlarm},
+    {"alarm", "[enter|leave|precision|lowbat]", "display an OLED test alarm", &cmdOledAlarm},
 }};
 
 /**
@@ -172,8 +177,8 @@ int cmdOled(void *ctx, int argc, char **argv) noexcept
 }
 
 constexpr std::array<cli::Cmd, 1U> kOledCmds{{
-    {"oled", "oled [status|bench <seconds>|alarm]: OLED diagnostics",
-     "[status|bench <seconds>|alarm]", &cmdOled, nullptr},
+    {"oled", "oled [status|bench <seconds>|alarm [type]]: OLED diagnostics",
+     "[status|bench <seconds>|alarm [type]]", &cmdOled, nullptr},
 }};
 
 } // namespace

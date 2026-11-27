@@ -10,6 +10,7 @@
 #include "board/PowerLogic.hpp"
 #include "def/NetStatusText.hpp"
 #include "modules/oled/OledAnim.hpp"
+#include "modules/oled/OledIcons.hpp"
 #include "modules/oled/OledUi.hpp"
 
 namespace {
@@ -1953,6 +1954,128 @@ void testAlarmSuppressesPairing() noexcept
     CHECK(ctrl.renderState(800U).modal == UiModal::kPair);
 }
 
+/** @brief 对比实际帧中选用的告警位图、标题反色和外框相位。 */
+void testAlarmIcons() noexcept
+{
+    using enum AlarmKind;
+    struct IconCase {
+        AlarmKind kind;
+        const icons::AlarmBitmap &bitmap;
+    };
+    const std::array cases{
+        IconCase{kFenceEnter, icons::kAlarmFenceEnter},
+        IconCase{kFenceExit, icons::kAlarmFenceExit},
+        IconCase{kPrecisionLost, icons::kAlarmPrecisionLost},
+        IconCase{kLowBattery, icons::kAlarmLowBattery},
+        IconCase{kNetwork, icons::kAlarmGeneric},
+        IconCase{static_cast<AlarmKind>(255U), icons::kAlarmGeneric},
+    };
+    auto vm = makeHealthyVm();
+    ScreenBuff lit{}, normal{}, steady{};
+    for (const auto &entry : cases) {
+        UiRenderState state{.page = OledPage::kAlarm,
+                            .alarm = entry.kind,
+                            .alarmFlashing = true,
+                            .alarmHighlighted = true};
+        renderUi(state, vm, lit);
+        state.alarmHighlighted = false;
+        renderUi(state, vm, normal);
+        state.alarmFlashing = false;
+        renderUi(state, vm, steady);
+        CHECK((lit[0][1] & 0x02U) != 0U && (normal[0][1] & 0x02U) == 0U);
+        CHECK((lit[7][0] & 0x80U) != 0U && (normal[7][0] & 0x80U) == 0U);
+        CHECK((steady[7][0] & 0x80U) != 0U);
+        constexpr size_t kIconSide = 24U;
+        for (size_t y = 0U; y < kIconSide; ++y) {
+            for (size_t x = 0U; x < kIconSide; ++x) {
+                const bool expected =
+                    (entry.bitmap[(y / 8U) * kIconSide + x] & (1U << (y % 8U))) != 0U;
+                const size_t yOnScreen = y + 30U;
+                const auto mask = 1U << (yOnScreen % 8U);
+                for (const auto *frame : {&lit, &normal, &steady}) {
+                    CHECK((((*frame)[yOnScreen / 8U][x + 7U] & mask) != 0U) == expected);
+                }
+            }
+        }
+    }
+}
+
+/** @brief 验证各告警全周期、30 s 停闪、同类型新批次重新闪烁和时钟回绕。 */
+void testAlarmFlashTiming() noexcept
+{
+    using enum AlarmKind;
+    constexpr uint32_t kStart = UINT32_MAX - 240U;
+    constexpr uint32_t kBlinkEnd = 30000U;
+    for (const auto kind : {kFenceEnter, kFenceExit, kPrecisionLost, kLowBattery, kNetwork}) {
+        auto vm = makeHealthyVm();
+        AlarmSnapshot alarm{.sequence = 1U, .pending = alarmBit(kind)};
+        vm.alarm = &alarm;
+        UiController ctrl{};
+        ctrl.reset(board::BootMode::kNormal, kStart - 1U);
+        const uint32_t period = (kind == kFenceEnter || kind == kFenceExit) ? 250U : 500U;
+        const auto checkPhase = [&ctrl, &vm, kind](uint32_t elapsed, bool highlighted) {
+            const auto tick = kStart + elapsed;
+            const auto out = ctrl.step(tick, {}, vm);
+            CHECK(out.page == OledPage::kAlarm && out.animating);
+            CHECK(out.nextWaitMs == kAnimFramePeriodMs);
+            const auto state = ctrl.renderState(tick);
+            CHECK(state.alarm == kind && state.alarmFlashing);
+            CHECK(state.alarmHighlighted == highlighted);
+        };
+        checkPhase(0U, true);
+        checkPhase(period / 2U - 1U, true);
+        checkPhase(period / 2U, false);
+        checkPhase(period - 1U, false);
+        checkPhase(period, true);
+        checkPhase(kBlinkEnd - 1U, false);
+
+        const auto end = ctrl.step(kStart + kBlinkEnd, {}, vm);
+        CHECK(end.page == OledPage::kAlarm && !end.animating && end.nextWaitMs == kWaitForEvent);
+        const auto steady = ctrl.renderState(kStart + kBlinkEnd);
+        CHECK(!steady.alarmFlashing && !steady.alarmHighlighted);
+        CHECK(!ctrl.step(kStart + 1U, {}, vm).animating); // 同一告警到期后回绕也不重启。
+        ++alarm.sequence;
+        checkPhase(2U, true);
+    }
+}
+
+/** @brief 校验 DEV 四种告警输入，并验证停闪后确认回到原子页与选中项。 */
+void testAlarmTestSourceAndReturn() noexcept
+{
+    using enum AlarmKind;
+    auto alarm = makeTestAlarm("enter");
+    CHECK(alarm.pending == alarmBit(kFenceEnter));
+    CHECK(std::string_view{alarm.fenceEnterName.data()} == "TEST FENCE");
+    alarm = makeTestAlarm("leave");
+    CHECK(alarm.pending == alarmBit(kFenceExit));
+    CHECK(std::string_view{alarm.fenceExitName.data()} == "TEST FENCE");
+    CHECK(makeTestAlarm("precision").pending == alarmBit(kPrecisionLost));
+    CHECK(makeTestAlarm("lowbat").pending == alarmBit(kLowBattery));
+    CHECK(makeTestAlarm("invalid").pending == 0U);
+
+    auto vm = makeHealthyVm();
+    UiController ctrl{};
+    ctrl.reset(board::BootMode::kNormal, 0U);
+    const std::array<uint32_t, 2U> skip{100U, 200U};
+    CHECK(ctrl.step(200U, skip, vm).page == OledPage::kDialplate);
+    const std::array<uint32_t, 1U> select{500U};
+    static_cast<void>(ctrl.step(800U, select, vm));
+    const std::array<uint32_t, 2U> enterPos{1000U, 1100U};
+    CHECK(ctrl.step(1100U, enterPos, vm).page == OledPage::kSubPos);
+    const std::array<uint32_t, 1U> nextRow{1600U};
+    static_cast<void>(ctrl.step(1900U, nextRow, vm));
+    CHECK(ctrl.dockSelected() == 1U && ctrl.renderState(1900U).subSelected == 1U);
+
+    alarm.sequence = 1U;
+    vm.alarm = &alarm;
+    CHECK(ctrl.step(2100U, {}, vm).page == OledPage::kAlarm);
+    CHECK(!ctrl.step(32100U, {}, vm).animating);
+    const std::array<uint32_t, 1U> ack{32200U};
+    const auto out = ctrl.step(32200U, ack, vm);
+    CHECK(out.page == OledPage::kSubPos && out.action.action == OledAction::kNone);
+    CHECK(ctrl.dockSelected() == 1U && ctrl.renderState(32200U).subSelected == 1U);
+}
+
 /** @brief 验证跑马灯停留、位移、回绕和可见字段的唯一像素裁剪范围。 */
 void testMarquee()
 {
@@ -2042,6 +2165,9 @@ int main()
     testIccidMask();
     testAlarmPage();
     testAlarmSuppressesPairing();
+    testAlarmIcons();
+    testAlarmFlashTiming();
+    testAlarmTestSourceAndReturn();
     if (s_failures != 0) {
         std::printf("oled_ui_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;

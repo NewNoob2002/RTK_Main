@@ -28,6 +28,23 @@ struct AlarmSnapshot {
 
 inline constexpr AlarmSnapshot kNoAlarm{};
 
+// WP-ALARM 的蜂鸣器、LED 和马达应复用此节奏表。
+inline constexpr uint32_t kAlarmFlashDurationMs = 30000U;
+inline constexpr uint32_t kFenceAlarmPeriodMs = 250U;
+inline constexpr uint32_t kOtherAlarmPeriodMs = 500U;
+
+/**
+ * @brief 查询告警提示的一次完整亮暗周期。
+ * @param kind: 告警类型。
+ * @retval 毫秒数。
+ * @note 纯函数，可跨任务使用。
+ */
+[[nodiscard]] constexpr uint32_t alarmFlashPeriodMs(AlarmKind kind) noexcept
+{
+    return (kind == AlarmKind::kFenceEnter || kind == AlarmKind::kFenceExit) ? kFenceAlarmPeriodMs
+                                                                             : kOtherAlarmPeriodMs;
+}
+
 /**
  * @brief 取告警类型对应的批次位。
  * @param kind: 告警类型。

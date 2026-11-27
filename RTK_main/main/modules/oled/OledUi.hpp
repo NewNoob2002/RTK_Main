@@ -411,6 +411,8 @@ struct UiRenderState {
     Marquee *marquee = nullptr; // 可选，持有本次画面各字段的滚动状态。
     uint8_t cellularBars = 0U;
     AlarmKind alarm = AlarmKind::kNone;
+    bool alarmFlashing = false;
+    bool alarmHighlighted = false;
     board::BatteryBarsView batBars{}; // 电量格结论（0 格 = 未知，OL7）
 };
 
@@ -723,7 +725,10 @@ private:
     SignalBars cellularBars_{};
     uint32_t alarmSequence_ = 0U;
     unsigned acknowledgedAlarms_ = 0U;
+    uint32_t alarmShownMs_ = 0U;
     AlarmKind alarmVisible_ = AlarmKind::kNone;
+    AlarmKind timedAlarm_ = AlarmKind::kNone; // 上层抢占期间保留原来的计时。
+    bool alarmFlashing_ = false;
     bool hasWarning_ = false;
     uint8_t subSelected_ = 0U;
     uint8_t subScrollTop_ = 0U;
@@ -805,6 +810,14 @@ private:
  * @note 纯函数，防止 WouoUI 字体查表越界，不分配堆。
  */
 void sanitizeCopy(std::string_view src, std::span<char> dst) noexcept;
+
+/**
+ * @brief 构造 DEV 控制台和模拟器共用的测试告警。
+ * @param type: enter、leave、precision 或 lowbat。
+ * @retval 测试告警快照，类型无效时 pending 为零。
+ * @note 纯函数，可跨任务使用。
+ */
+[[nodiscard]] AlarmSnapshot makeTestAlarm(std::string_view type) noexcept;
 
 /**
  * @brief 格式化标签+值行（如 `"SN  : P2001"`），超长按缓冲容量安全截断

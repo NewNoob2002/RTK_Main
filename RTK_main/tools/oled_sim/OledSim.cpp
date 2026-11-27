@@ -40,6 +40,7 @@ struct Options {
 
 struct Simulator {
     ViewModel model{};
+    AlarmSnapshot alarm{};
     UiController controller{};
     ScreenBuff frame{};
     bool statusBarValid = false;
@@ -454,6 +455,14 @@ bool runScript(const Options &opts, Simulator &sim)
             if (!setOta(sim, arg, at)) {
                 return false;
             }
+        } else if (verb == "alarm") {
+            auto sample = makeTestAlarm(arg.empty() ? "enter" : arg);
+            if (sample.pending == 0U) {
+                return false;
+            }
+            sample.sequence = sim.alarm.sequence + 1U;
+            sim.alarm = sample;
+            sim.model.alarm = &sim.alarm;
         } else if (verb != "check" && verb != "shot") {
             return false;
         }

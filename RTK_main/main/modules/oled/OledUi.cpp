@@ -334,6 +334,8 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
     cellularDock_ = false;
     cellularBars_ = {};
     alarmVisible_ = AlarmKind::kNone;
+    timedAlarm_ = AlarmKind::kNone;
+    alarmFlashing_ = false;
     alarmSequence_ = 0U;
     acknowledgedAlarms_ = 0U;
     hasWarning_ = false;
@@ -934,9 +936,19 @@ std::optional<UiDecision> UiController::stepAlarm(uint32_t nowMs, std::span<cons
         keys = {};
     }
     if (alarmVisible_ == AlarmKind::kNone) {
+        timedAlarm_ = AlarmKind::kNone;
         return std::nullopt;
     }
-    return UiDecision{.page = OledPage::kAlarm};
+    if (newBatch || alarmVisible_ != timedAlarm_) {
+        timedAlarm_ = alarmVisible_;
+        alarmShownMs_ = nowMs;
+        alarmFlashing_ = true;
+    }
+    // 到期后保持稳态，避免同一告警在单调计时回绕后重新闪烁。
+    alarmFlashing_ = alarmFlashing_ && (nowMs - alarmShownMs_) < kAlarmFlashDurationMs;
+    return UiDecision{.page = OledPage::kAlarm,
+                      .animating = alarmFlashing_,
+                      .nextWaitMs = alarmFlashing_ ? kAnimFramePeriodMs : kWaitForEvent};
 }
 
 std::optional<UiDecision> UiController::stepOta(uint32_t nowMs, const ViewModel &vm) noexcept
@@ -1055,6 +1067,10 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         holdOverlayCollapsing_ ? easeOutCubic(nowMs - holdCollapseStartMs_, kHoldCollapseMs) : 0U;
     const uint16_t heroQ10 =
         heroRolling_ ? easeOutCubic(nowMs - heroChangeStartMs_, kNumberRollMs) : kEaseScale;
+    const uint32_t alarmElapsed = nowMs - alarmShownMs_;
+    const uint32_t alarmPeriod = alarmFlashPeriodMs(alarmVisible_);
+    const bool alarmFlashing =
+        alarmVisible_ != AlarmKind::kNone && alarmFlashing_ && alarmElapsed < kAlarmFlashDurationMs;
     return UiRenderState{
         .page = page(),
         .dockSelected = dockSelected_,
@@ -1084,6 +1100,8 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         .satsRoll = &satsRoll_,
         .cellularBars = cellularBars_.shown,
         .alarm = alarmVisible_,
+        .alarmFlashing = alarmFlashing,
+        .alarmHighlighted = alarmFlashing && (alarmElapsed % alarmPeriod) < alarmPeriod / 2U,
         .batBars = bars_.view(nowMs),
     };
 }
@@ -1141,6 +1159,23 @@ void sanitizeCopy(std::string_view src, std::span<char> dst) noexcept
         dst[i] = ((ch >= kMinPrintableAscii) && (ch <= kMaxPrintableAscii)) ? ch : '?';
     }
     dst[count] = '\0';
+}
+
+AlarmSnapshot makeTestAlarm(std::string_view type) noexcept
+{
+    AlarmSnapshot sample{};
+    if (type == "enter") {
+        sample.pending = alarmBit(AlarmKind::kFenceEnter);
+        sanitizeCopy("TEST FENCE", sample.fenceEnterName);
+    } else if (type == "leave") {
+        sample.pending = alarmBit(AlarmKind::kFenceExit);
+        sanitizeCopy("TEST FENCE", sample.fenceExitName);
+    } else if (type == "precision") {
+        sample.pending = alarmBit(AlarmKind::kPrecisionLost);
+    } else if (type == "lowbat") {
+        sample.pending = alarmBit(AlarmKind::kLowBattery);
+    }
+    return sample;
 }
 
 void formatLabelValue(std::string_view label, std::string_view value, std::span<char> out) noexcept

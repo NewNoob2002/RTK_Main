@@ -67,14 +67,14 @@ tools/ci/run_gates.sh --prefix ol9 --base 54b01b6
 
 - 全屏告警期间隐藏长按进度环，并暂停底层页面的弹簧和转场动画。确认后恢复页面交互并重置子页空闲计时。
 - 面板熄屏后保持熄屏，充电待机保留原画面。接入真实告警源时再确定唤屏和待机显示策略。
-- DataCenter 发布的 CSQ 每次变化都会唤醒 OLED，实际绘帧仍受帧节流约束。板上可测量抖动时的唤醒率。DEV 命令 `oled alarm` 注入围栏进入，其余告警类型及多类型仲裁由主机测试覆盖。
+- DataCenter 发布的 CSQ 每次变化都会唤醒 OLED，实际绘帧仍受帧节流约束。板上可测量抖动时的唤醒率。多类型告警仲裁由主机测试覆盖。
 
 ## HIL 步骤（由用户执行）
 
 1. 在带 OLED、SIM 和蜂窝能力的板型上启用 `net.enable` 并重启。对照 `net status` 观察上电/搜网轮显、无 SIM 或 SIM 异常的 `x`、注册后信号格及 PDP 建立后的 `4G`。按 N1 的实验室步骤断开及恢复天线，核对首次有效信号和降档即时显示，以及后续升档取连续 10 s 窗口内的最小格数。
 2. 单击选择 NET，双击进入。依次进入 4G、NTRIP、MQTT 详情，单击滚动至末行，双击返回摘要。核对 ICCID 与 `net status` 掩码一致，运营商无数据时及 N2/N3 占位行显示 `--`。关闭 `net.enable`，检查状态栏蜂窝区留空且 NET 仍可浏览。
 3. 在具备 OLED 且无蜂窝能力的板型上单击轮询 Dock，核对顺序 SAT、POS、COMM、DEV、PWR 及首尾回绕。缺少该板型时以主机导航及表盘基准帧作为现有证据。
-4. 在 DEV 档正常运行时执行 `oled alarm`，检查全屏 `FENCE ENTER` 与 `TEST FENCE`。短按确认后应回到此前页面，且选中项未被这次按键改变。再次执行可显示下一批测试告警。
+4. 在 DEV 档进入一个带选中项的子页，依次执行 `oled alarm`（默认 `enter`）、`oled alarm leave`、`oled alarm precision`、`oled alarm lowbat`。核对标题、左侧图标、右侧围栏名或详情及确认提示。围栏告警应以 250 ms 为完整周期，其余为 500 ms，标题和外框同步切换。任选一项等待 30 s，确认画面保持显示且停止闪烁。短按确认后应回到原子页和原选中项。
 5. 完成 NET 列表滚动、长文本跑马灯和告警确认后执行 `sys tasks`，记录 `oled` 的 `stack_hwm` 并核对至少 528 B。定位页核对龄期与 `phone` 信息，设备页核对上次关机原因和可用的故障名称。
 
 ## HIL 顶栏修订（基线 `042c202`）
@@ -116,3 +116,16 @@ tools/ci/run_gates.sh --prefix ol9w --base 54b01b6
 本轮变更范围以 `042c202` 为起点。此前合入 N1 时带入了 `components/cellular/include/cellular/LinkFsm.hpp` 和 `Policy.hpp` 的修改，本轮没有触及这些头或其它冻结文件。`docs/frozen.sha256` 原样保留。
 
 修改后顶栏的板上 HIL 与 OLED 任务栈高水位为 **NOT_RUN**。板上可复测 USB 拔插、4G 搜网至 PDP、SIM 故障、关闭蜂窝及两套射频槽位，记录 `sys tasks` 中 `oled` 的 `stack_hwm` 是否至少为 528 B。本轮未访问串口或烧录。
+
+## 全屏告警图标与闪烁（基线 `06f348b`）
+
+- `OledIcons.hpp` 增加五枚各 72 B 的 24×24 单色 Flash 位图。围栏进入和离开使用相反箭头，精度丢失使用带叉号的准星，低电使用空电池，网络及未知类型使用感叹号。
+- `OledRender.cpp` 绘制反色标题条、闪烁外框和左右分栏。右侧长围栏名沿用跑马灯，确认提示分为两行 `press to` 和 `confirm`。
+- `OledAlarm.hpp` 集中定义 250/500 ms 完整周期和 30 s 上限，供后续 WP-ALARM 复用。`OledUi.hpp/.cpp` 在现有 30 fps 调度下切换亮暗相位。到期后退出闪烁刷新，保留告警至确认。已显示的告警被 OTA 或关机抢占时仍按原起点计时。
+- `OledCmds.cpp` 接受四种 DEV 注入参数，默认 `enter`。模拟器复用测试快照构造，新加 `scripts/alarm.txt` 及六张金图。主机测试核对图标像素、亮暗相位、跨回绕计时、30 s 停闪与确认后选中项恢复。
+
+普通和 ASan/UBSan 的 `main_host_check` 各通过 215 个用例。任务卡门禁 `tools/ci/run_gates.sh --prefix ol9w --base 54b01b6` **45 PASS / 0 FAIL**，日志在 `builds/ol9w-gates.log` 与 `builds/ol9w-logs/`。
+
+用 `idf.py -B builds/ol9w-idf size` 及两版 ELF 对照，DRAM 仍为 99,451 B，IRAM 仍为 116,139 B，固件从 1,633,936 B 增至 1,635,136 B。位图符号各占 72 B 并位于 Flash，资源日志在 `builds/ol9-alarm-resources/`。
+
+`stepAlarm` 的 Xtensa 栈帧仍为 48 B，`renderState` 从 32 B 增至 48 B，`renderPageInto` 从 448 B 降至 400 B。主机反汇编估算告警文字绘制路径从 `taskEntry` 到 WouoUI 写入帧缓冲合计 1,872 B 静态栈帧，3,072 B 配额下该路径约余 1,200 B。设备任务整体高水位及硬件验证 **NOT_RUN**，实板验收仍需确认 `oled` 的 `stack_hwm` ≥ 528 B。本轮未改冻结文件、未访问串口或烧录。

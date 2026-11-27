@@ -2069,28 +2069,76 @@ void renderNetMqtt(Canvas &canvas, const UiRenderState &state, const NetView &ne
     drawSubList(canvas, state, rows, true);
 }
 
+struct AlarmContent {
+    const char *title = "ALARM";
+    const icons::AlarmBitmap *icon = &icons::kAlarmGeneric;
+    std::string_view detail = "--";
+};
+
 /**
- * @brief 绘制当前告警名称、围栏名与确认指引。
- * @param canvas: 目标画布。
- * @param state: 已仲裁的当前告警。
+ * @brief 选取告警标题、图标及内容。
+ * @param kind: 告警类型。
  * @param alarm: 告警批次与围栏名称。
- * @note 仅渲染线程调用。
+ * @retval 当前告警的静态图标与文本视图。
+ * @note 纯函数，不分配堆。
+ */
+[[nodiscard]] AlarmContent alarmContent(AlarmKind kind, const AlarmSnapshot &alarm) noexcept
+{
+    switch (kind) {
+    case AlarmKind::kFenceEnter:
+        return {"FENCE ENTER", &icons::kAlarmFenceEnter, viewOf(alarm.fenceEnterName)};
+    case AlarmKind::kFenceExit:
+        return {"FENCE LEAVE", &icons::kAlarmFenceExit, viewOf(alarm.fenceExitName)};
+    case AlarmKind::kPrecisionLost:
+        return {"PRECISION LOST", &icons::kAlarmPrecisionLost, "No precise fix"};
+    case AlarmKind::kLowBattery:
+        return {"LOW BATTERY", &icons::kAlarmLowBattery, "Connect USB"};
+    case AlarmKind::kNetwork:
+        return {"NETWORK ALERT", &icons::kAlarmGeneric, "Check network"};
+    case AlarmKind::kNone:
+    default:
+        return {};
+    }
+}
+
+/**
+ * @brief 绘制全屏告警，顶部标题条与外框同步闪烁，正文保持可读。
+ * @param canvas: 目标画布。
+ * @param state: 当前告警和闪烁相位。
+ * @param alarm: 告警批次与围栏名称。
+ * @note 仅渲染线程调用，不分配堆。
  */
 void renderAlarm(Canvas &canvas, const UiRenderState &state, const AlarmSnapshot &alarm) noexcept
 {
-    constexpr std::array kTitles{"ALARM",          "NETWORK ALERT", "LOW BATTERY",
-                                 "PRECISION LOST", "FENCE EXIT",    "FENCE ENTER"};
-    const auto index = static_cast<size_t>(state.alarm);
-    constexpr int16_t kTitleY = 8;
-    constexpr int16_t kNameY = 30;
-    constexpr int16_t kConfirmY = 51;
-    drawCentered(canvas, kTitleY, Font_8_16, kTitles[index]);
-    const auto name = state.alarm == AlarmKind::kFenceEnter  ? viewOf(alarm.fenceEnterName)
-                      : state.alarm == AlarmKind::kFenceExit ? viewOf(alarm.fenceExitName)
-                                                             : std::string_view{};
-    drawMarquee(canvas, {0, kNameY, kCanvasW, kIcon8H}, Font_6_8, name, state,
-                MarqueeField::kPrimary, TextAlign::kCenter);
-    drawCentered(canvas, kConfirmY, Font_6_8, "PRESS TO ACK");
+    constexpr int16_t kTitleH = 20;
+    constexpr int16_t kTitleY = 3;
+    constexpr int16_t kIconX = 7;
+    constexpr int16_t kIconY = 30;
+    constexpr int16_t kDetailX = 36;
+    constexpr int16_t kDetailY = 30;
+    constexpr int16_t kDetailW = kCanvasW - kDetailX - 3;
+    constexpr int16_t kPromptFirstY = 44;
+    constexpr int16_t kPromptSecondY = 53;
+    const auto content = alarmContent(state.alarm, alarm);
+
+    if (!state.alarmFlashing || state.alarmHighlighted) {
+        WouoUI_CanvasDrawRBoxEmpty(&canvas, 0, 0, kCanvasW, kCanvasH, 0U);
+    }
+    WouoUI_CanvasDrawLine_H(&canvas, 1, kCanvasW - 2, kTitleH);
+    if (state.alarmHighlighted) {
+        WouoUI_CanvasDrawRBox(&canvas, 1, 1, kCanvasW - 2, kTitleH - 1, 0U);
+        WouoUI_GraphSetPenColor(0U);
+    }
+    drawCentered(canvas, kTitleY, Font_8_16, content.title);
+    WouoUI_GraphSetPenColor(1U);
+
+    WouoUI_CanvasDrawBMP(&canvas, kIconX, kIconY, icons::kAlarmIconSize, icons::kAlarmIconSize,
+                         content.icon->data(), 1U);
+    drawMarquee(canvas, {kDetailX, kDetailY, kDetailW, kIcon8H}, Font_6_8,
+                content.detail.empty() ? "--" : content.detail, state, MarqueeField::kPrimary,
+                TextAlign::kLeft);
+    drawText(canvas, kDetailX, kPromptFirstY, Font_6_8, "press to");
+    drawText(canvas, kDetailX, kPromptSecondY, Font_6_8, "confirm");
 }
 
 /**
