@@ -40,6 +40,8 @@
 | MT1 | RU2-02 改频率 out 保存失败补偿写回旧 rate（补偿失败记 FW_LOGE、启动 F9P 对齐自愈）；t13 disconnect 测试同步修正（钩子原子安装，TSan 45/46，余 `t13_init_start_timeout` 既有 `s_spp` 竞争）；DRAM 0 / IRAM 0 / flash +288 B；2026-11-26 P2 v1.41 HIL：`gnss rate 5` 重启后保持 5 Hz、`gnss rate 1` 恢复（报告 `docs/reports/MT1-rate-save-t13-sync.md`） | 0014 | 合入 `b9a5ec4` |
 | SP1 | SPP init 失败路径 `spp_server_objects_delete()` 会话/控制表复位移入 `s_spp_mux`，rx 流锁内摘下锁外删除；TSan t13 46/46 0 报告（基线 c349747 `t13_init_start_timeout` 失败）；DRAM 0（报告 `docs/reports/SP1-spp-init-fail-race.md`） | 0018 | 合入 `a9768f0` |
 | MW1 | WiFi 模式堆诊断（`status.dev` 增 largest/internal；`diag`/`diag.tasks` 只读命令，单帧 ≤1024 B 超出截断标记）+ 回收（`esp_bt_mem_release` BTDM、web 帧池 16→10、UART TX 8192→2048；`rtcm.pipe` 保留供后续 4G/NTRIP/STA）；DRAM +48 B / IRAM 0；2026-11-26 整机 HIL：WiFi free 43,576→78,700 B（+35,124），min 25,524→73,956 B，largest 40,960→73,728 B（报告 `docs/reports/MW1-wifi-heap-diag.md`） | 0018 | 合入 `7e0765f` |
+| N1 | EC600U 驱动 + 链路状态机（L1/L2/L3 恢复、无卡 60→300 s 退避上电、低电门控 <10% 不上电/≥15% 恢复、PW1 net_power 参与者 + log_drain 延后）；`net.*` 设置（默认关闭、改后重启生效）；4G 启用成本 ~10.9 KB 堆、min 48,636 B；2026-11-27 HIL PASS（步骤 3/5/6/7/9/10，1 h 堆 36 min 后持平）；待办：天线拔插（测试板天线座疑故障）、真实低电 ~15% 发射峰值（报告 `docs/reports/N1-cellular-link.md`） | 0018/0021 | 合入 `47772e5` |
+| OL9 | OLED 网络 UI：状态栏固定槽位（4G 信号格+标识+上下行箭头预留、充电贴电池）、NET 入口与 4G/NTRIP/MQTT 详情、全屏告警层（4 类 24×24 图标、围栏 250 ms/其余 500 ms 闪烁 30 s 停闪）、定位页 RTCM 龄期/来源、设备页上次关机原因；DRAM +184 B / IRAM 0；oled stack_hwm 560 B（≥528）；2026-11-27 HIL PASS（报告 `docs/reports/OL9-oled-net-ui.md`） | 0018 | 合入 `a12cedb` |
 | OL8 | OLED 打磨：Wi‑Fi 模式启动跳过 init 首帧、启动屏障后重置 UI（主机模型 Logo 最大间隔 175→66 ms）；网页 OTA 全屏进度/校验/成功/失败页（httpd 单写者快照，失败 3 s 回页，OTA 中按键屏蔽，PW1 关机页优先）；超框文本跑马灯（SSID/IP/设备名/SN/PN/版本）；DRAM +128 B / IRAM 0；2026-11-26 整机 HIL 目测 4 项通过，定量帧间隔/Wi‑Fi 耗时未测（报告 `docs/reports/OL8-oled-polish.md`） | 0020 | 合入 `eaa1904` |
 
 ## 2. 进行中与未开始
@@ -48,7 +50,7 @@
 | --- | --- |
 | C5b smartBase | 用户 2026-11-18 暂停 |
 | C5c 其他输出去向 | 未开始，等用户确定去向种类 |
-| 4G | ADR-0021 已批准（2026-11-26）：N1 驱动+链路 → N2 NTRIP+RTCM 来源仲裁 → N3 MQTT（预留）；N1 未开工 |
+| 4G | ADR-0021 已批准（2026-11-26）：N1 驱动+链路（已合入 `47772e5`）→ N2 NTRIP+RTCM 来源仲裁 → N3 MQTT（预留）；下一步 N2 |
 | 分区统一与旧配置迁移 | ADR-0022。C6 已合并（02083f5），完成分区统一、双实例 NVS 与网页手动切槽。C7 按 2026-11-26 修订仅迁移 SN/PN，`tools/ci/run_gates.sh --prefix c7 --base fec6ce8` 门禁 43/43。C7 已合并（ce429a9），HIL 通过：Arduino bootloader + V3.1（2560 B 旧 blob）网页 OTA 后迁移 2 字段、二次启动与 `freset` 不再迁移，见 `docs/reports/C7-legacy-eeprom-migration.md`。已知旧固件问题（仅记录，暂不修）：V3.1 网页 OTA 进度条按时间推进，约 48 s 无条件重启，上传慢于约 33 KB/s 会截断（`P2_V3.1_IDF/main/user_src/user_oled.c:440-535`）。 |
 
 ## 3. 待补的硬件验证（HIL）
