@@ -29,3 +29,6 @@
 8000 short
 8100 short
 8250 check comm
+8400 scene 11
+8500 check comm
+8500 shot comm-4g-charging

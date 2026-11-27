@@ -64,7 +64,7 @@ struct Simulator {
         }
     }
 
-    /** @brief 用编号 1–10 选择可重复的模拟硬件快照（9 为充电待机，10 为长 SSID）。 */
+    /** @brief 选择可重复的模拟硬件快照，11 为可见 4G 与 USB 充电。 */
     void setScene(unsigned scene, uint32_t nowMs = 0U)
     {
         model = {};
@@ -99,7 +99,12 @@ struct Simulator {
             model.fixValid ? gnss::FixQuality::kRtkFixed : gnss::FixQuality::kUnknown;
         model.batteryPct = scene == 4U ? 8U : 78U;
         model.batteryMv = scene == 4U ? 3380U : 3980U;
-        model.usbPresent = model.charging = scene == 3U;
+        model.usbPresent = model.charging = scene == 3U || scene == 11U;
+        if (scene == 11U) {
+            model.net.phase = cellular::Phase::kReady;
+            model.net.csq = 23U;
+            model.net.supported = model.net.enabled = model.net.pdpUp = true;
+        }
         if (scene == 6U || scene == 10U) {
             model.radioMode = RadioMode::kWifiConfig;
             model.wifiReady = true;
@@ -441,7 +446,7 @@ bool runScript(const Options &opts, Simulator &sim)
             sim.shutdown(at, reason);
         } else if (verb == "scene") {
             uint32_t scene = 0U;
-            if (!boundedNumber(arg, scene, 10U)) {
+            if (!boundedNumber(arg, scene, 11U)) {
                 return false;
             }
             sim.setScene(scene, at);

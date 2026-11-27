@@ -31,7 +31,6 @@ constexpr int16_t kDockIconSize = 16;
 constexpr int16_t kDockLabelY = 36;
 constexpr uint8_t kDockCornerR = 3U;
 constexpr int16_t kParallaxShiftPx = 42;
-constexpr size_t kRollBufBytes = 12U;
 constexpr size_t kShortBufBytes = 16U;
 constexpr size_t kGnssTagBufBytes = kGnssFwBufBytes + 16U;
 constexpr size_t kWaitBufBytes = 12U;
@@ -50,15 +49,19 @@ constexpr int16_t kBatSegW = 3;
 constexpr int16_t kBatSegY = 2;
 constexpr int16_t kBatFillH = 4;
 constexpr int16_t kStatusSatTextX = 10;
+constexpr int16_t kStatusSatTextW = 12;
 constexpr int16_t kStatusWarnX = 23;
 constexpr int16_t kStatusFixMinX = 32;
-constexpr int16_t kStatusFixAreaW = 34;
-constexpr int16_t kStatusRadioX = 69;
-constexpr int16_t kStatusBoltX = 79;
+constexpr int16_t kStatusFixAreaW = 32;
+constexpr int16_t kStatusRadioWithCellularX = 64;
+constexpr int16_t kStatusRadioWithoutCellularX = 86;
+constexpr int16_t kStatusCellularBarsX = 74;
+constexpr int16_t kStatusCellularTagX = 86;
+constexpr int16_t kStatusBoltX = 95;
 constexpr int16_t kBoltW = 5;
 constexpr int16_t kIcon7W = 7;
 constexpr int16_t kIcon8H = 8;
-constexpr int16_t kStatusBatIconX = 103; // 图标宽 25（含正极凸起），右缘贴 128 列边界
+constexpr int16_t kStatusBatIconX = 102; // 102–126（含正极凸起），最后一列留空。
 
 // 开机自检页像素常量。
 constexpr uint8_t kLogoBoxR = 3U;
@@ -361,50 +364,80 @@ void drawMarquee(const Canvas &parent, Rect box, const sFONT &font, std::string_
 }
 
 /**
- * @brief 使用滚动剪裁画布绘制带竖向切入动画的整数文本（静止时直接输出）
- * @param parent: 父画布
- * @param x: 区域左上角 x
- * @param y: 区域左上角 y
- * @param font: 字体
- * @param roll: 对应 NumberRoll 状态（可为 nullptr 表示静态绘制）
- * @param value: 当前显示数值
- * @param suffix: 可选后缀（如 `"%"` 或空串）
- * @param nowMs: 当前单调时间（ms）
- * @note 纯定点，不分配堆。
+ * @brief 在固定卫星数字槽内绘制一帧计数。三位数用 3×5 数字保留完整数值。
+ * @param clip: 数字槽画布。
+ * @param y: 当前滚动帧相对数字槽顶部的偏移。
+ * @param value: 卫星数，范围 0–255。
+ * @note 仅渲染线程调用，不分配堆。
  */
-void drawRollingValue(const Canvas &parent, int16_t x, int16_t y, const sFONT &font,
-                      const NumberRoll *roll, int32_t value, std::string_view suffix,
-                      uint32_t nowMs) noexcept
+void drawStatusSatNumber(Canvas &clip, int16_t y, uint8_t value) noexcept
 {
-    std::array<char, kRollBufBytes> curBuf{};
-    static_cast<void>(std::snprintf(curBuf.data(), curBuf.size(), "%d%.*s", static_cast<int>(value),
-                                    static_cast<int>(suffix.size()), suffix.data()));
-    const uint16_t textW = WouoUI_GetStrWidth(curBuf.data(), font);
-    const int16_t clipH = static_cast<int16_t>(font.Height);
-    const int16_t clipW = static_cast<int16_t>(std::min<uint16_t>(textW + font.Width, kWidth));
-    Canvas clip{
-        .start_x = static_cast<int16_t>(parent.start_x + x),
-        .start_y = static_cast<int16_t>(parent.start_y + y),
-        .w = clipW,
-        .h = clipH,
-    };
-
-    if ((roll == nullptr) || !roll->active(nowMs)) {
-        drawText(clip, 0, 0, font, viewOf(curBuf));
+    constexpr unsigned kHundreds = 100U;
+    if (value < kHundreds) {
+        constexpr size_t kTwoDigitTextBytes = 3U;
+        std::array<char, kTwoDigitTextBytes> text{};
+        static_cast<void>(
+            std::snprintf(text.data(), text.size(), "%u", static_cast<unsigned>(value)));
+        drawText(clip, 0, y, Font_6_8, viewOf(text));
         return;
     }
 
-    std::array<char, kRollBufBytes> prevBuf{};
-    static_cast<void>(std::snprintf(prevBuf.data(), prevBuf.size(), "%d%.*s",
-                                    static_cast<int>(roll->previous()),
-                                    static_cast<int>(suffix.size()), suffix.data()));
-    const uint16_t prog = roll->progressQ10(nowMs);
-    const int16_t offset = lerpFixed(0, clipH, prog);
+    constexpr int16_t kDigitW = 3;
+    constexpr int16_t kDigitH = 5;
+    constexpr unsigned kDecimal = 10U;
+    // 3×5 数字按列存放，三位数使用 3×3 + 2 个间隔共 11 列。
+    static constexpr std::array<std::array<uint8_t, kDigitW>, kDecimal> kDigits{{
+        {0x1FU, 0x11U, 0x1FU},
+        {0x12U, 0x1FU, 0x10U},
+        {0x1DU, 0x15U, 0x17U},
+        {0x15U, 0x15U, 0x1FU},
+        {0x07U, 0x04U, 0x1FU},
+        {0x17U, 0x15U, 0x1DU},
+        {0x1FU, 0x15U, 0x1DU},
+        {0x01U, 0x01U, 0x1FU},
+        {0x1FU, 0x15U, 0x1FU},
+        {0x17U, 0x15U, 0x1FU},
+    }};
+    int16_t x = 0;
+    for (const unsigned divisor : {kHundreds, kDecimal, 1U}) {
+        const auto digit = (value / divisor) % kDecimal;
+        WouoUI_CanvasDrawBMP(&clip, x, static_cast<int16_t>(y + 1), kDigitW, kDigitH,
+                             kDigits[digit].data(), 1U);
+        x += kDigitW + 1;
+    }
+}
+
+/**
+ * @brief 在 10–21 列绘制卫星数或未知占位，裁剪滚动过程中的新旧数字。
+ * @param canvas: 状态栏所在画布。
+ * @param state: 计数滚动状态。
+ * @param vm: GNSS 状态与当前计数。
+ * @note 仅渲染线程调用，不分配堆。
+ */
+void drawStatusSatCount(const Canvas &canvas, const UiRenderState &state,
+                        const ViewModel &vm) noexcept
+{
+    Canvas clip{.start_x = static_cast<int16_t>(canvas.start_x + kStatusSatTextX),
+                .start_y = static_cast<int16_t>(canvas.start_y + kHeaderTextY),
+                .w = kStatusSatTextW - 1, // WouoUI 横向裁剪含右端列。
+                .h = kIcon8H};
+    if (!vm.gnssEnabled || !isGnssRunningLike(vm.gnssState)) {
+        drawText(clip, 0, 0, Font_6_8, "--");
+        return;
+    }
+    const uint8_t value = vm.fixValid ? vm.satsUsed : 0U;
+    const auto *roll = state.satsRoll;
+    if (roll == nullptr || !roll->active(state.nowMs)) {
+        drawStatusSatNumber(clip, 0, value);
+        return;
+    }
+    const int16_t offset = lerpFixed(0, kIcon8H, roll->progressQ10(state.nowMs));
     const int16_t prevY = roll->increasing() ? static_cast<int16_t>(-offset) : offset;
-    const int16_t curY = roll->increasing() ? static_cast<int16_t>(clipH - offset)
-                                            : static_cast<int16_t>(offset - clipH);
-    drawText(clip, 0, prevY, font, viewOf(prevBuf));
-    drawText(clip, 0, curY, font, viewOf(curBuf));
+    const int16_t curY = roll->increasing() ? static_cast<int16_t>(kIcon8H - offset)
+                                            : static_cast<int16_t>(offset - kIcon8H);
+    // NumberRoll 的卫星计数来源为 uint8_t。
+    drawStatusSatNumber(clip, prevY, static_cast<uint8_t>(roll->previous()));
+    drawStatusSatNumber(clip, curY, value);
 }
 
 /**
@@ -468,7 +501,8 @@ void drawProgressRing(Canvas &canvas, int16_t cx, int16_t cy, uint16_t progressQ
 }
 
 /**
- * @brief 在 84–102 列绘制蜂窝格、SIM 错误或 4G 标识。
+ * @brief 在 74–84 列绘制底边对齐的蜂窝格，在 86–92 列绘制 SIM 错误或 4G。
+ *        每格宽 2 列、隔 1 列；会话箭头位于标识上方第 0–3 行。
  * @param canvas: 目标画布。
  * @param state: 信号格和动画时刻。
  * @param net: 蜂窝快照。
@@ -480,38 +514,45 @@ void drawCellularIcon(Canvas &canvas, const UiRenderState &state, const NetView 
     if (icon == CellularIcon::kHidden) {
         return;
     }
-    constexpr int16_t kBarsX = 84;
-    constexpr int16_t kTagX = 96;
-    constexpr int16_t kBarWidth = 3;
+    constexpr int16_t kBarWidth = 2;
+    constexpr int16_t kBarStepX = kBarWidth + 1;
+    constexpr int16_t kMinBarHeight = 3;
     constexpr int16_t kGlyphW = 3;
     constexpr int16_t kCrossH = 3;
     constexpr int16_t k4gW = 7;
     constexpr int16_t k4gH = 5;
     constexpr int16_t kBarBottom = 9;
     const auto active = (state.nowMs / kSignalSearchFrameMs) % kSignalBarCount;
+    const bool registered = icon == CellularIcon::kSignal || icon == CellularIcon::kPdp;
     for (uint8_t i = 0U; i < kSignalBarCount; ++i) {
-        const auto x = static_cast<int16_t>(kBarsX + i * kBarWidth);
-        const auto h = std::max(kBarWidth, static_cast<int16_t>(2 + i * 2));
+        const auto x = static_cast<int16_t>(kStatusCellularBarsX + i * kBarStepX);
+        const auto h = std::max(kMinBarHeight, static_cast<int16_t>(2 + i * 2));
         const auto y = static_cast<int16_t>(kBarBottom - h);
-        const bool lit = icon == CellularIcon::kSearching ? i == active : i < state.cellularBars;
+        const bool lit =
+            icon == CellularIcon::kSearching ? i == active : registered && i < state.cellularBars;
         if (lit) {
             WouoUI_CanvasDrawRBox(&canvas, x, y, kBarWidth, h, 0U);
         } else {
-            WouoUI_CanvasDrawRBoxEmpty(&canvas, x, y, kBarWidth, h, 0U);
+            // 两列画闭合轮廓会变成满格，留空右列中部便于区分未点亮的格。
+            WouoUI_CanvasDrawLine_V(&canvas, x, y, kBarBottom - 1);
+            WouoUI_CanvasDrawPoint(&canvas, static_cast<int16_t>(x + 1), y);
+            WouoUI_CanvasDrawPoint(&canvas, static_cast<int16_t>(x + 1), kBarBottom - 1);
         }
     }
     constexpr std::array<uint8_t, 7U> k4g{0x0EU, 0x08U, 0x1FU, 0U, 0x1FU, 0x11U, 0x1DU};
     constexpr std::array<uint8_t, 3U> kCross{0x05U, 0x02U, 0x05U};
     constexpr int16_t kTagY = 4;
-    constexpr int16_t kArrowRight = 100;
+    constexpr int16_t kArrowRight = kStatusCellularTagX + k4gW - kGlyphW;
     if (icon == CellularIcon::kSimError) {
-        WouoUI_CanvasDrawBMP(&canvas, kTagX, kTagY, kGlyphW, kCrossH, kCross.data(), 1U);
+        WouoUI_CanvasDrawBMP(&canvas, kStatusCellularTagX, kTagY, kGlyphW, kCrossH, kCross.data(),
+                             1U);
     } else if (icon == CellularIcon::kPdp) {
-        WouoUI_CanvasDrawBMP(&canvas, kTagX, kTagY, k4gW, k4gH, k4g.data(), 1U);
+        WouoUI_CanvasDrawBMP(&canvas, kStatusCellularTagX, kTagY, k4gW, k4gH, k4g.data(), 1U);
         constexpr std::array<uint8_t, 3U> kTxArrow{0x02U, 0x0FU, 0x02U};
         constexpr std::array<uint8_t, 3U> kRxArrow{0x04U, 0x0FU, 0x04U};
         if (net.mqttConnected) {
-            WouoUI_CanvasDrawBMP(&canvas, kTagX, 0, kGlyphW, kTagY, kTxArrow.data(), 1U);
+            WouoUI_CanvasDrawBMP(&canvas, kStatusCellularTagX, 0, kGlyphW, kTagY, kTxArrow.data(),
+                                 1U);
         }
         if (net.ntripConnected) {
             WouoUI_CanvasDrawBMP(&canvas, kArrowRight, 0, kGlyphW, kTagY, kRxArrow.data(), 1U);
@@ -520,7 +561,9 @@ void drawCellularIcon(Canvas &canvas, const UiRenderState &state, const NetView 
 }
 
 /**
- * @brief 绘制表盘与子页共用的顶部 10 px 状态栏（卫星数、告警、解状态、BT/Wi-Fi、充电闪电与电量）
+ * @brief 绘制表盘与统一子页共用的固定状态栏。
+ *        卫星 0–7、计数 10–21、告警 23–29、解状态 32–63。蜂窝可见时 BT/Wi-Fi
+ *        位于 64–71，隐藏时使用 86–93。USB 槽 95–99，电池 102–126。
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -529,45 +572,39 @@ void drawCellularIcon(Canvas &canvas, const UiRenderState &state, const NetView 
 void drawStatusBar(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
     WouoUI_CanvasDrawBMP(&canvas, 0, kHeaderTextY, kIcon8H, kIcon8H, icons::kSat8x8.data(), 1U);
-    if (vm.gnssEnabled && isGnssRunningLike(vm.gnssState)) {
-        const int32_t sats = vm.fixValid ? static_cast<int32_t>(vm.satsUsed) : 0;
-        drawRollingValue(canvas, kStatusSatTextX, kHeaderTextY, Font_6_8, state.satsRoll, sats, "",
-                         state.nowMs);
-    } else {
-        drawText(canvas, kStatusSatTextX, kHeaderTextY, Font_6_8, "--");
-    }
+    drawStatusSatCount(canvas, state, vm);
 
     if (state.hasCheckWarning) {
         WouoUI_CanvasDrawBMP(&canvas, kStatusWarnX, kHeaderTextY, kIcon7W, kIcon8H,
                              icons::kWarn7x8.data(), 1U);
     }
 
-    // 中部解状态短词（与表盘和所有子页顶栏统一）。
     const char *const badge = dialHeroBadge(vm);
-    const uint16_t bw = WouoUI_GetStrWidth(badge, Font_6_8);
-    const int16_t badgeX =
-        (bw < static_cast<uint16_t>(kStatusFixAreaW))
-            ? static_cast<int16_t>(kStatusFixMinX +
-                                   ((kStatusFixAreaW - static_cast<int16_t>(bw)) / 2))
-            : kStatusFixMinX;
-    drawText(canvas, badgeX, kHeaderTextY, Font_6_8, badge);
+    const auto badgeW = static_cast<int16_t>(WouoUI_GetStrWidth(badge, Font_6_8));
+    const auto badgeX = static_cast<int16_t>(std::max(0, (kStatusFixAreaW - badgeW) / 2));
+    Canvas fixSlot{.start_x = static_cast<int16_t>(canvas.start_x + kStatusFixMinX),
+                   .start_y = canvas.start_y,
+                   .w = kStatusFixAreaW - 2, // x63 留空，横向裁剪含右端列。
+                   .h = canvas.h};
+    drawText(fixSlot, badgeX, kHeaderTextY, Font_6_8, badge);
 
+    const int16_t radioX = cellularIcon(vm.net) == CellularIcon::kHidden
+                               ? kStatusRadioWithoutCellularX
+                               : kStatusRadioWithCellularX;
     // 射频状态图标：Wi-Fi 模式画 Wi-Fi 扇形，蓝牙模式区分已连接/待机。
     if (vm.radioMode == RadioMode::kWifiConfig) {
-        WouoUI_CanvasDrawBMP(&canvas, kStatusRadioX, kHeaderTextY, kIcon8H, kIcon8H,
+        WouoUI_CanvasDrawBMP(&canvas, radioX, kHeaderTextY, kIcon8H, kIcon8H,
                              icons::kWifi8x8.data(), 1U);
     } else if (vm.btReady) {
         const uint8_t *btBmp =
             (vm.btSessions > 0U) ? icons::kBtConn8x8.data() : icons::kBtWait8x8.data();
-        WouoUI_CanvasDrawBMP(&canvas, kStatusRadioX, kHeaderTextY, kIcon8H, kIcon8H, btBmp, 1U);
+        WouoUI_CanvasDrawBMP(&canvas, radioX, kHeaderTextY, kIcon8H, kIcon8H, btBmp, 1U);
     }
 
-    if (isEffectiveCharging(vm)) {
-        WouoUI_CanvasDrawBMP(&canvas, kStatusBoltX, kHeaderTextY, kBoltW, kIcon8H,
-                             icons::kBolt5x8.data(), 1U);
-    } else if (vm.usbPresent) {
-        WouoUI_CanvasDrawBMP(&canvas, kStatusBoltX, kHeaderTextY, kBoltW, kIcon8H,
-                             icons::kPlug5x8.data(), 1U);
+    if (vm.usbPresent) {
+        const auto &usbIcon = isEffectiveCharging(vm) ? icons::kBolt5x8 : icons::kPlug5x8;
+        WouoUI_CanvasDrawBMP(&canvas, kStatusBoltX, kHeaderTextY, kBoltW, kIcon8H, usbIcon.data(),
+                             1U);
     }
     drawCellularIcon(canvas, state, vm.net);
     drawBatteryIcon(canvas, kStatusBatIconX, kHeaderTextY, state.batBars);
@@ -1180,7 +1217,7 @@ void renderSubSatCn0(Canvas &canvas, const ViewModel &vm) noexcept
 void drawSatHeader(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
     WouoUI_CanvasDrawBMP(&canvas, 0, kHeaderTextY, kIcon8H, kIcon8H, icons::kSat8x8.data(), 1U);
-    const bool cellular = cellularIcon(vm.net) != CellularIcon::kHidden;
+    const bool cellular = vm.net.supported;
     const bool sys = state.satSubTab == 0U;
     const char *title = cellular ? (sys ? "SYS" : "CN0") : (sys ? "SATS SYS" : "SATS CN0");
     drawText(canvas, kSubSatTitleX, kHeaderTextY, Font_6_8, title);
@@ -1188,7 +1225,8 @@ void drawSatHeader(Canvas &canvas, const UiRenderState &state, const ViewModel &
     const auto used = vm.fixValid ? static_cast<unsigned>(vm.satsUsed) : 0U;
     const auto visible = static_cast<unsigned>(vm.satsVisible);
     if (cellular) {
-        constexpr int16_t kSatCountX = 34;
+        // 255/255 最宽 42 px，留出 72–73 列再开始蜂窝格。
+        constexpr int16_t kSatCountX = 30;
         constexpr int16_t kSatTabX = 110;
         static_cast<void>(std::snprintf(hdrRight.data(), hdrRight.size(), "%u/%u", used, visible));
         drawText(canvas, kSatCountX, kHeaderTextY, Font_6_8, viewOf(hdrRight));

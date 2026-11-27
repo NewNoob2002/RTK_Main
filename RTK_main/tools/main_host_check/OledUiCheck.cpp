@@ -1344,13 +1344,13 @@ void testNoChargerUsbIndicator() noexcept
     vm.usbPresent = true;
     CHECK(isEffectiveCharging(vm));
     renderPage(OledPage::kDialplate, vm, fbUsb);
-    // 状态栏充电/USB 图标位（page 0, x=79..83）在 USB 插入后必须变化。
-    CHECK(!regionEqual(fbBat, fbUsb, 0U, 79U, 84U));
+    // 状态栏充电/USB 图标位（page 0, x=95..99）在 USB 插入后必须变化。
+    CHECK(!regionEqual(fbBat, fbUsb, 0U, 95U, 100U));
     vm.batteryPct = 100U;
     CHECK(!isEffectiveCharging(vm));
     renderPage(OledPage::kDialplate, vm, fbUsbFull);
-    CHECK(!regionEqual(fbBat, fbUsbFull, 0U, 79U, 84U));
-    CHECK(!regionEqual(fbUsb, fbUsbFull, 0U, 79U, 84U));
+    CHECK(!regionEqual(fbBat, fbUsbFull, 0U, 95U, 100U));
+    CHECK(!regionEqual(fbUsb, fbUsbFull, 0U, 95U, 100U));
 
     // 电源子页：无充电芯片但 USB 在位时主卡显示 USB 插头且 CHG 文案区别于无 USB。
     vm.batteryPct = 78U;
@@ -1583,9 +1583,9 @@ void testCellularIcon() noexcept
     renderUi(state, vm, search);
     state.nowMs = kSignalSearchFrameMs;
     renderUi(state, vm, next);
-    CHECK(!regionEqual(search, next, 0U, 84U, 96U));
-    CHECK(regionEqual(hidden, search, 0U, 0U, 84U));
-    CHECK(regionEqual(hidden, search, 0U, 103U, kWidth));
+    CHECK(!regionEqual(search, next, 0U, 74U, 85U));
+    CHECK(regionEqual(hidden, search, 0U, 0U, 64U));
+    CHECK(regionEqual(hidden, search, 0U, 94U, kWidth));
 
     net.sim = SimStatus::kReady;
     net.reg = cellular::RegStatus::kHome;
@@ -1593,26 +1593,217 @@ void testCellularIcon() noexcept
     state.cellularBars = 3U;
     CHECK(cellularIcon(net) == CellularIcon::kSignal);
     renderUi(state, vm, signal);
-    CHECK(regionEqual(signal, hidden, 0U, 96U, 103U));
+    CHECK(regionEqual(signal, search, 0U, 86U, 93U));
     net.phase = Phase::kReady;
     net.pdpUp = true;
     CHECK(cellularIcon(net) == CellularIcon::kPdp);
     renderUi(state, vm, pdp);
-    CHECK(!regionEqual(signal, pdp, 0U, 96U, 103U));
+    CHECK(!regionEqual(signal, pdp, 0U, 86U, 93U));
     net.ntripConnected = true;
     net.mqttConnected = true;
     renderUi(state, vm, arrows);
-    CHECK(!regionEqual(pdp, arrows, 0U, 96U, 103U));
+    CHECK(!regionEqual(pdp, arrows, 0U, 86U, 93U));
     for (const auto sim : {SimStatus::kAbsent, SimStatus::kPinRequired, SimStatus::kError}) {
         net.sim = sim;
         CHECK(cellularIcon(net) == CellularIcon::kSimError);
     }
     state.cellularBars = 0U;
     renderUi(state, vm, simError);
-    CHECK(!regionEqual(simError, hidden, 0U, 96U, 103U));
+    CHECK(!regionEqual(simError, signal, 0U, 86U, 93U));
     net.sim = SimStatus::kReady;
     net.phase = Phase::kPowerFault;
     CHECK(cellularIcon(net) == CellularIcon::kFault);
+}
+
+/** @brief 取单列状态栏像素，含 y=8/9，排除 y=10 分隔线。 */
+unsigned statusColumn(const ScreenBuff &fb, size_t x) noexcept
+{
+    return fb[0][x] | ((fb[1][x] & 0x03U) << 8U);
+}
+
+struct StatusSlot {
+    size_t first;
+    size_t last;
+};
+
+/** @brief 逐列证明槽位不相交，槽位外全黑，而且每个槽位内都有墨点。 */
+void checkStatusSlots(const ScreenBuff &fb, std::span<const StatusSlot> slots) noexcept
+{
+    for (size_t x = 0U; x < kWidth; ++x) {
+        size_t owners = 0U;
+        for (const auto &slot : slots) {
+            if (x >= slot.first && x <= slot.last) {
+                ++owners;
+            }
+        }
+        CHECK(owners <= 1U);
+        if (owners == 0U) {
+            CHECK(statusColumn(fb, x) == 0U);
+        }
+    }
+    for (const auto &slot : slots) {
+        unsigned pixels = 0U;
+        for (size_t x = slot.first; x <= slot.last; ++x) {
+            pixels |= statusColumn(fb, x);
+        }
+        CHECK(pixels != 0U);
+    }
+}
+
+/** @brief 验证槽位外逐列保持不变，以及指定槽位确实变化。 */
+void checkStatusChange(const ScreenBuff &before, const ScreenBuff &after, StatusSlot slot) noexcept
+{
+    bool changed = false;
+    for (size_t x = 0U; x < kWidth; ++x) {
+        const bool equal = statusColumn(before, x) == statusColumn(after, x);
+        if (x < slot.first || x > slot.last) {
+            CHECK(equal);
+        } else {
+            changed = changed || !equal;
+        }
+    }
+    CHECK(changed);
+}
+
+/** @brief 验证两种顶栏槽位、4G 四格几何以及 USB、搜网、隐藏与射频切换的列范围。 */
+void testStatusBarSlots() noexcept
+{
+    auto vm = makeHealthyVm();
+    vm.fixQuality = gnss::FixQuality::kRtkFloat;
+    vm.charging = true;
+    vm.net.supported = true;
+    vm.net.enabled = true;
+    vm.net.phase = cellular::Phase::kReady;
+    vm.net.pdpUp = true;
+    vm.net.ntripConnected = true;
+    vm.net.mqttConnected = true;
+    UiRenderState state{.page = OledPage::kDialplate,
+                        .hasCheckWarning = true,
+                        .cellularBars = 4U,
+                        .batBars = {.bars = 5U}};
+    ScreenBuff full{}, frame{}, hidden{};
+    CHECK(renderUi(state, vm, full));
+    constexpr std::array<StatusSlot, 12U> kCellularSlots{{
+        {0U, 7U},
+        {10U, 21U},
+        {23U, 29U},
+        {32U, 62U},
+        {64U, 71U},
+        {74U, 75U},
+        {77U, 78U},
+        {80U, 81U},
+        {83U, 84U},
+        {86U, 92U},
+        {95U, 99U},
+        {102U, 126U},
+    }};
+    checkStatusSlots(full, kCellularSlots);
+    CHECK(statusColumn(full, 102U) != 0U && statusColumn(full, 126U) != 0U);
+    constexpr std::array kBarMasks{0x1C0U, 0x1E0U, 0x1F8U, 0x1FEU}; // 3/4/6/8 px，底边 y=8。
+    for (size_t i = 0U; i < kBarMasks.size(); ++i) {
+        const size_t x = 74U + 3U * i;
+        CHECK(statusColumn(full, x) == kBarMasks[i]);
+        CHECK(statusColumn(full, x + 1U) == kBarMasks[i]);
+    }
+    CHECK((statusColumn(full, 87U) & 0x0FU) == 0x0FU);
+    CHECK((statusColumn(full, 91U) & 0x0FU) == 0x0FU);
+    CHECK(statusColumn(full, 89U) == 0U); // 4G 字形及两个独立箭头中间有空列。
+
+    vm.usbPresent = false; // 即使充电位仍为真，USB 槽也必须立即清空。
+    CHECK(renderUi(state, vm, frame));
+    checkStatusChange(full, frame, {95U, 99U});
+    for (size_t x = 95U; x <= 99U; ++x) {
+        CHECK(statusColumn(frame, x) == 0U);
+    }
+    vm.usbPresent = true;
+    vm.charging = false;
+    CHECK(renderUi(state, vm, frame));
+    checkStatusChange(full, frame, {95U, 99U});
+    vm.charging = true;
+
+    vm.net.phase = cellular::Phase::kRegister;
+    vm.net.pdpUp = false;
+    CHECK(renderUi(state, vm, frame));
+    checkStatusChange(full, frame, {74U, 92U});
+    vm.net.enabled = false;
+    CHECK(renderUi(state, vm, hidden));
+    checkStatusChange(full, hidden, {64U, 93U});
+    constexpr std::array<StatusSlot, 7U> kHiddenSlots{{
+        {0U, 7U},
+        {10U, 21U},
+        {23U, 29U},
+        {32U, 62U},
+        {86U, 93U},
+        {95U, 99U},
+        {102U, 126U},
+    }};
+    checkStatusSlots(hidden, kHiddenSlots);
+    for (size_t i = 0U; i < 8U; ++i) {
+        CHECK(statusColumn(full, 64U + i) == statusColumn(hidden, 86U + i));
+    }
+    vm.net.enabled = true;
+    vm.net.phase = cellular::Phase::kOff;
+    CHECK(renderUi(state, vm, frame));
+    CHECK(std::memcmp(hidden, frame, sizeof(frame)) == 0);
+    vm.net.supported = false;
+    vm.net.phase = cellular::Phase::kReady;
+    CHECK(renderUi(state, vm, frame));
+    CHECK(std::memcmp(hidden[0], frame[0], sizeof(frame[0])) == 0);
+
+    vm.radioMode = RadioMode::kWifiConfig;
+    CHECK(renderUi(state, vm, frame));
+    checkStatusChange(hidden, frame, {86U, 93U});
+    vm.net.supported = true;
+    vm.net.pdpUp = true;
+    CHECK(renderUi(state, vm, frame));
+    checkStatusChange(full, frame, {64U, 71U});
+}
+
+/** @brief 验证最长短词居中、三位计数与滚动裁剪、蜂窝板卫星图表的计数边界。 */
+void testStatusBarText() noexcept
+{
+    CHECK(WouoUI_GetStrWidth("PROBE", Font_6_8) == 30U);
+    CHECK(WouoUI_GetStrWidth("FLOAT", Font_6_8) == 30U);
+    auto vm = makeHealthyVm();
+    vm.fixQuality = gnss::FixQuality::kRtkFloat;
+    vm.satsUsed = 99U;
+    UiRenderState state{.page = OledPage::kDialplate, .hasCheckWarning = true};
+    ScreenBuff initial{}, frame{};
+    CHECK(renderUi(state, vm, initial));
+    CHECK(statusColumn(initial, 33U) == 0U); // 字框从 x33 开始，字体每字首列留白。
+    CHECK(statusColumn(initial, 34U) != 0U && statusColumn(initial, 62U) != 0U);
+    CHECK(statusColumn(initial, 63U) == 0U);
+
+    NumberRoll roll{};
+    roll.update(99, 0U);
+    roll.update(255, 100U);
+    vm.satsUsed = 255U;
+    state.satsRoll = &roll;
+    for (const uint32_t now : {100U, 133U, 166U, 200U, 500U}) {
+        state.nowMs = now;
+        CHECK(renderUi(state, vm, frame));
+        for (size_t x = 0U; x < kWidth; ++x) {
+            if (x < 10U || x > 21U) {
+                CHECK(statusColumn(frame, x) == statusColumn(initial, x));
+            }
+        }
+    }
+    for (const size_t x : {10U, 14U, 18U}) {
+        CHECK(statusColumn(frame, x) != 0U && statusColumn(frame, x + 2U) != 0U);
+        CHECK(statusColumn(frame, x + 3U) == 0U);
+    }
+
+    state.page = OledPage::kSubSat;
+    vm.satsVisible = 255U;
+    vm.net.supported = true;
+    vm.net.enabled = true;
+    vm.net.phase = cellular::Phase::kReady;
+    vm.net.pdpUp = true;
+    CHECK(renderUi(state, vm, initial));
+    CHECK(statusColumn(initial, 72U) == 0U && statusColumn(initial, 73U) == 0U);
+    vm.net.enabled = false;
+    CHECK(renderUi(state, vm, frame));
+    checkStatusChange(initial, frame, {74U, 92U});
 }
 
 /** @brief 验证两个板型的 Dock 步距、回绕，以及 NET 三个详情都能进出。 */
@@ -1845,6 +2036,8 @@ int main()
     testSignalBars();
     testSignalBarsFluctuation();
     testCellularIcon();
+    testStatusBarSlots();
+    testStatusBarText();
     testNetNavigation();
     testIccidMask();
     testAlarmPage();

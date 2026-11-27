@@ -76,3 +76,43 @@ tools/ci/run_gates.sh --prefix ol9 --base 54b01b6
 3. 在具备 OLED 且无蜂窝能力的板型上单击轮询 Dock，核对顺序 SAT、POS、COMM、DEV、PWR 及首尾回绕。缺少该板型时以主机导航及表盘基准帧作为现有证据。
 4. 在 DEV 档正常运行时执行 `oled alarm`，检查全屏 `FENCE ENTER` 与 `TEST FENCE`。短按确认后应回到此前页面，且选中项未被这次按键改变。再次执行可显示下一批测试告警。
 5. 完成 NET 列表滚动、长文本跑马灯和告警确认后执行 `sys tasks`，记录 `oled` 的 `stack_hwm` 并核对至少 528 B。定位页核对龄期与 `phone` 信息，设备页核对上次关机原因和可用的故障名称。
+
+## HIL 顶栏修订（基线 `042c202`）
+
+依据 HIL 反馈，`OledRender.cpp` 的共用顶栏采用两套固定列坐标，范围含首尾列。
+
+| 内容 | 蜂窝图标可见 | 非蜂窝板或蜂窝图标隐藏 |
+|---|---|---|
+| 卫星 / 数字 / 告警 / 解状态 | 0–7 / 10–21 / 23–29 / 32–63 | 同左 |
+| BT / Wi-Fi | 64–71 | 86–93 |
+| 4G 信号格 | 74–75、77–78、80–81、83–84 | — |
+| 4G 标识及会话箭头 | 86–92，箭头在第 0–3 行 | — |
+| 充电 / USB 插头 | 95–99 | 同左 |
+| 电池 | 102–126 | 同左 |
+
+最长解状态短词 `PROBE`、`FLOAT` 均为 30 px，在 32 px 槽内居中，x63 保留为空列。三位卫星数使用 3×5 数字，以保留完整计数及滚动。四格信号高 3、4、6、8 px，底边对齐第 8 行，两列宽的未点亮格留空右列中部以区别满格。USB 未插时电源图标槽留空。蜂窝图标可见与隐藏状态之间切换时，仅 BT/Wi-Fi 使用相应的另一固定槽。蜂窝板的卫星图表专用顶栏保留 x30–71 给 used/visible 计数，避免最高三位计数进入信号格。
+
+`OledUiCheck.cpp` 逐列检查两个布局的槽位与间隙，验证信号格高度、箭头范围、USB 拔插与蜂窝状态切换范围、三位数字滚动和卫星图表计数。模拟器脚本新增蜂窝与充电同时显示的 `comm-4g-charging.pbm`，原有 14 张金图仅改动顶部 10 行。
+
+定点回归将当前 `OledUiCheck.cpp` 与 `042c202` 的渲染器组合构建，旧渲染器未通过新槽位断言，日志在 `builds/ol9w-logs/status-host-before.log`。修订后的 OLED 定点测试及四套模拟器金图测试均通过。
+
+```sh
+export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env
+tools/ci/run_gates.sh --prefix ol9w --base 54b01b6
+```
+
+完整门禁 **45 PASS / 0 FAIL**，包含冻结校验、普通与 ASan/UBSan 主机测试、无告警固件构建、clang-format、clang-tidy、函数文档及运行期分配门禁。普通与 ASan/UBSan 的 `main_host_check` 各通过 214 个用例。门禁总日志在 `builds/ol9w-gates.log`，逐项日志在 `builds/ol9w-logs/`。
+
+用 `git archive` 提取 `042c202` 并构建 `builds/ol9w-baseline`。`idf.py -B builds/ol9w-idf size` 及两份 ELF 的节与栈帧对照记录在 `builds/ol9w-resources/`。
+
+| 项目 | `042c202` | 顶栏修订后 | 增量 |
+|---|---:|---:|---:|
+| DRAM `.data` + `.bss` | 99,451 B | 99,451 B | 0 B |
+| IRAM 代码及向量 | 116,139 B | 116,139 B | 0 B |
+| 固件二进制 | 1,633,856 B | 1,633,936 B | +80 B |
+
+`refreshOnce`、`drawFrame`、`renderUi`、`renderPageInto` 的 Xtensa 栈帧仍为 736、144、160、448 B。`drawStatusBar` 从 112 B 降到 80 B，新增数字绘制入口为 64 B，`drawSatHeader` 从 96 B 增到 112 B。
+
+本轮变更范围以 `042c202` 为起点。此前合入 N1 时带入了 `components/cellular/include/cellular/LinkFsm.hpp` 和 `Policy.hpp` 的修改，本轮没有触及这些头或其它冻结文件。`docs/frozen.sha256` 原样保留。
+
+修改后顶栏的板上 HIL 与 OLED 任务栈高水位为 **NOT_RUN**。板上可复测 USB 拔插、4G 搜网至 PDP、SIM 故障、关闭蜂窝及两套射频槽位，记录 `sys tasks` 中 `oled` 的 `stack_hwm` 是否至少为 528 B。本轮未访问串口或烧录。
