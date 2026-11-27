@@ -68,7 +68,10 @@ Off ─(net.enable && 允许上电)→ PowerOn ─RDY/AT OK→ Sync ─→ SimCh
 | L1 连接级 | socket `closed` URC、NTRIP 30 s 无数据、`QIOPEN` 失败 | 只重开该连接 | 2 s→4 s→…→60 s 封顶；成功收到数据后清零 |
 | L2 承载级 | `+QIURC: "pdpdeact"`、L1 连续 5 次失败、注册丢失后恢复 | `QIDEACT`→`QIACT`，再重开所有已启用连接 | 10 s→…→120 s |
 | L3 模块级 | AT 通道失效、SIM 异常后恢复、`QIACT` 连续 3 次失败、注册超时 180 s | 断电重启模块（PWREN 低 ≥ 2 s） | 30 s→…→300 s |
+| SimCheck 无卡 | SimCheck 内 SIM 确认异常（非 READY、非 unknown：无卡/PIN/错误）持续 60 s | 整机断电重启（PWREN 低 ≥ 2 s，沿用 L3 断电路径与低电门控；不增 L3 计数、不锁存） | 60 s→120 s→240 s→300 s 封顶；见到 READY 清零；独立计数，不与 L1/L2/L3 混用 |
 
+- **无卡恢复（HIL N1 step 5 失败后修订，2026-11-27 用户决定）**：EC600U 只在上电时探测 SIM，插回后不会自行重新读卡，故 SimCheck 不再无限等待：SIM 异常持续达到上表时长即整机断电重启，上电后读到 READY 则继续注册。该计时只在 SimCheck 内、`powerAllowed`/`startAllowed` 允许时有效（低电时模块本就被关断，不会被它拉起）。
+- **L2 先查卡**：承载掉线进入 L2 后，重试前先即时发 `AT+CPIN?`（L2 退避留给其后的 `QIDEACT`）；非 READY 直接转 SimCheck，不做徒劳的 L2；掉线后快照的 SIM/注册置 unknown，重新查询前不得保持陈旧的 ready/home。
 - 健康巡检：Ready 状态每 30 s 查 `AT+CSQ` 与 `AT+CEREG?`（顺带确认 AT 通道活着），结果发布到 DataCenter。
 - APN：`net.apn` 为空时不发 `QICSGP`，用模块/运营商自动 APN；非空时 `AT+QICSGP=1,1,"apn","user","pass",<auth>`。
 - 所有退避与超时常量集中在一个 `constexpr` 表，主机测试逐级覆盖。

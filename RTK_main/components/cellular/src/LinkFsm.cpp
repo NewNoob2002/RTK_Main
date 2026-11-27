@@ -444,6 +444,11 @@ void LinkFsm::onOpDone(const AtResponse &rsp) noexcept
         if (have) {
             onSimState(sim, now);
         }
+        if ((op == Op::kCpin) && (phase_ == Phase::kPdpUp) && (pdpStep_ == PdpStep::kCpin)) {
+            // 卡仍在（或查询无结论：不阻塞恢复，通道失效另由 dead 判据升级）：继续 L2 退避后的 QIDEACT。
+            pdpStep_ = PdpStep::kDeact;
+            nextMs_ = pdpDueMs_;
+        }
         break;
     }
     case Op::kCereg:
@@ -475,6 +480,7 @@ void LinkFsm::onOpDone(const AtResponse &rsp) noexcept
             } else if (regLost_) {
                 regLost_ = false;
                 enterL2(now, true);
+                snap_.reg = pendingReg_; // 刚确认已注册：L2 清除陈旧状态时不得连带抹掉
             }
         }
         break;
@@ -525,7 +531,8 @@ void LinkFsm::enterPhase(Phase phase, uint32_t nowMs) noexcept
         regQueriedCreg_ = false;
         gotReg_ = false;
     } else if (phase == Phase::kPdpUp) {
-        pdpStep_ = pdpForceDeact_ ? PdpStep::kDeact
+        // L2 重建（pdpForceDeact_）先即时查 SIM：卡已拔则直接转 SimCheck，不做徒劳的 QIDEACT/QIACT。
+        pdpStep_ = pdpForceDeact_ ? PdpStep::kCpin
                                   : (fieldView(cfg_.apn).empty() ? PdpStep::kQuery : PdpStep::kCfg);
         pdpForceDeact_ = false;
         deactRan_ = false;
@@ -655,6 +662,7 @@ void LinkFsm::startPowerOn(uint32_t nowMs) noexcept
     syncDeadlineMs_ = nowMs + kPolicy.syncWindowMs;
     syncStep_ = SyncStep::kAt;
     syncFails_ = 0U;
+    simBadValid_ = false; // 每次上电重新读卡：无卡计时从新一轮 SimCheck 起算
     curBaud_ = kPolicy.bootBaud;
     snap_.baud = curBaud_;
     if (hooks_.setBaud != nullptr) {
@@ -723,10 +731,18 @@ void LinkFsm::enterL2(uint32_t nowMs, bool deactivate) noexcept
         ++l2Count_;
     }
     snap_.pdpUp = false;
+    snap_.sim =
+        SimStatus::kUnknown; // 承载掉线后卡/注册状态未知：重新查询前不得保持陈旧的 ready/home
+    snap_.reg = RegStatus::kUnknown;
     notifyAllClosed();
     pdpForceDeact_ = deactivate;
     enterPhase(Phase::kPdpUp, nowMs);
-    nextMs_ = nowMs + backoffMs(kPolicy.l2, static_cast<uint8_t>(l2Count_ - 1U));
+    const uint32_t due = nowMs + backoffMs(kPolicy.l2, static_cast<uint8_t>(l2Count_ - 1U));
+    if (deactivate) {
+        pdpDueMs_ = due; // kCpin 步骤即时执行，退避留给其后的 QIDEACT
+    } else {
+        nextMs_ = due;
+    }
 }
 
 /**
@@ -767,6 +783,7 @@ void LinkFsm::handleModuleRestart(uint32_t nowMs) noexcept
     snap_.pdpUp = false;
     snap_.reg = RegStatus::kUnknown;
     snap_.sim = SimStatus::kUnknown;
+    simBadValid_ = false;
     simWasBad_ = false;
     regLost_ = false;
     syncStep_ = SyncStep::kAt;
@@ -795,6 +812,8 @@ void LinkFsm::onSimState(SimStatus sim, uint32_t nowMs) noexcept
 {
     snap_.sim = sim;
     if (sim == SimStatus::kReady) {
+        noSimCycles_ = 0U; // 见到 READY：无卡退避归零
+        simBadValid_ = false;
         if (simWasBad_) {
             simWasBad_ = false;
             enterL3(nowMs); // SIM 异常后恢复：模块需重启才能重新读卡
@@ -808,6 +827,7 @@ void LinkFsm::onSimState(SimStatus sim, uint32_t nowMs) noexcept
     simWasBad_ = true;
     if ((phase_ == Phase::kRegister) || (phase_ == Phase::kPdpUp) || (phase_ == Phase::kReady)) {
         snap_.pdpUp = false;
+        snap_.reg = RegStatus::kUnknown; // 卡已异常：注册状态不再可信
         notifyAllClosed();
         clearOps();
         if (engine_ != nullptr) {
@@ -816,6 +836,20 @@ void LinkFsm::onSimState(SimStatus sim, uint32_t nowMs) noexcept
         enterPhase(Phase::kSimCheck, nowMs);
         nextMs_ = nowMs + kPolicy.simPollMs;
     }
+    if ((phase_ == Phase::kSimCheck) && (sim != SimStatus::kUnknown) && !simBadValid_) {
+        simBadValid_ = true; // 确认异常（无卡/PIN/错误）才开始无卡计时；unknown 不算
+        simBadSinceMs_ = nowMs;
+    }
+}
+
+/**
+ * @brief 当前无卡断电等待时长（SimCheck 内 SIM 持续异常达到该时长即整机断电重启）
+ * @retval 毫秒：60→120→240→300 s 封顶，随 noSimCycles_ 递增
+ * @note 仅 kNet 执行器任务调用，非 ISR；不分配堆。
+ */
+uint32_t LinkFsm::noSimHoldMs() const noexcept
+{
+    return backoffMs(kPolicy.noSim, noSimCycles_);
 }
 
 void LinkFsm::onDiagLine(std::string_view line) noexcept
@@ -1171,6 +1205,16 @@ void LinkFsm::pollSync(uint32_t nowMs) noexcept
  */
 void LinkFsm::pollSim(uint32_t nowMs) noexcept
 {
+    if (simBadValid_ && reached(nowMs, simBadSinceMs_ + noSimHoldMs())) {
+        // EC600U 只在上电时读卡：SIM 持续异常（无卡/PIN/错误）不会自行恢复，整机断电重启重新读卡。
+        // 使用人工 L3 路径：只保证最短断电时间，不进入 l3Count_ 升级、不置 latched_；低电/配网
+        // 由 poll() 入口的 powerAllowed_ 与 pollPowerCycle 的放行条件兜底。
+        if (noSimCycles_ < std::numeric_limits<uint8_t>::max()) {
+            ++noSimCycles_;
+        }
+        enterL3(nowMs, true);
+        return;
+    }
     if (opPending_ || !reached(nowMs, nextMs_)) {
         return;
     }
@@ -1213,6 +1257,10 @@ void LinkFsm::pollPdp(uint32_t nowMs) noexcept
     }
     bool sent = false;
     switch (pdpStep_) {
+    case PdpStep::kCpin:
+        gotSim_ = false;
+        sent = submitOp(Op::kCpin, "AT+CPIN?", at_timeout::kMedium, nowMs);
+        break;
     case PdpStep::kDeact:
         sent = submitOp(Op::kQideact, "AT+QIDEACT=1", at_timeout::kQideact, nowMs);
         break;
@@ -1681,6 +1729,7 @@ void LinkFsm::onUrc(std::string_view line, uint32_t nowMs) noexcept
             } else if (regLost_) {
                 regLost_ = false;
                 enterL2(nowMs, true);
+                snap_.reg = reg; // 刚确认已注册：L2 清除陈旧状态时不得连带抹掉
             }
         }
         return;
@@ -1819,9 +1868,15 @@ uint32_t LinkFsm::msToNextWork(uint32_t nowMs) const noexcept
         }
         return std::min(remaining(nowMs, nextMs_),
                         remaining(nowMs, regStartMs_ + kPolicy.registerTimeoutMs));
+    case Phase::kSimCheck:
+        if (opPending_) {
+            return kForever;
+        }
+        return simBadValid_ ? std::min(remaining(nowMs, nextMs_),
+                                       remaining(nowMs, simBadSinceMs_ + noSimHoldMs()))
+                            : remaining(nowMs, nextMs_);
     case Phase::kPowerOn:
     case Phase::kSync:
-    case Phase::kSimCheck:
     case Phase::kPdpUp:
         return opPending_ ? kForever : remaining(nowMs, nextMs_);
     case Phase::kReady: {
@@ -1872,8 +1927,9 @@ LinkSnapshot LinkFsm::snapshot(uint32_t nowMs) const noexcept
     }
     if (phase_ == Phase::kPowerCycle) {
         out.backoffRemainingMs = remaining(nowMs, cycleEndMs_);
-    } else if ((phase_ == Phase::kPdpUp) && !opPending_) {
-        out.backoffRemainingMs = remaining(nowMs, nextMs_);
+    } else if ((phase_ == Phase::kPdpUp) && (!opPending_ || (pdpStep_ == PdpStep::kCpin))) {
+        out.backoffRemainingMs =
+            remaining(nowMs, (pdpStep_ == PdpStep::kCpin) ? pdpDueMs_ : nextMs_);
     }
     return out;
 }

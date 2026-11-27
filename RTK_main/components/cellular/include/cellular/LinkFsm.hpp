@@ -248,7 +248,7 @@ private:
     /** Sync 阶段的初始化链步骤。 */
     enum class SyncStep : uint8_t { kAt = 0, kAte0, kCmee, kIpr, kAtVerify, kGsn, kQccid, kDone };
     /** PdpUp 阶段步骤。 */
-    enum class PdpStep : uint8_t { kDeact = 0, kCfg, kQuery, kActivate };
+    enum class PdpStep : uint8_t { kDeact = 0, kCfg, kQuery, kActivate, kCpin };
     /** 关机序列步骤。 */
     enum class ShutStep : uint8_t { kClose = 0, kQpowd, kWaitDown };
     /** socket 槽状态。 */
@@ -317,6 +317,7 @@ private:
     void pollConns(uint32_t nowMs) noexcept;
     void pollShutdown(uint32_t nowMs) noexcept;
     void onSimState(SimStatus sim, uint32_t nowMs) noexcept;
+    [[nodiscard]] uint32_t noSimHoldMs() const noexcept;
     void connFailed(uint8_t id, uint32_t nowMs) noexcept;
     void connLost(uint8_t id, uint32_t nowMs) noexcept;
     [[nodiscard]] bool engineBusy() const noexcept;
@@ -396,6 +397,10 @@ private:
     uint32_t connToken_ = 0U;      // 当前登记的连接操作 token
     uint32_t shutDeadlineMs_ = 0U; // 关机绝对截止时刻（PW1 与 kNet 共用）
     uint32_t regLostMs_ = 0U;      // Ready 阶段注册丢失起点
+    uint32_t simBadSinceMs_ = 0U;  // SimCheck 内 SIM 首次确认异常的时刻（simBadValid_ 为真时有效）
+    uint32_t pdpDueMs_ = 0U;       // L2 退避到期：kCpin 步骤先即时查卡，之后 QIDEACT 等到此刻
+    uint8_t noSimCycles_ = 0U;     // 无卡整机断电次数（退避指数；见到 READY 清零；不计入 l3Count_）
+    bool simBadValid_ = false;
     uint16_t droppedRecv_ = 0U;
     bool startAllowed_ = true;
     bool quietNext_ = false; // 下一次 submitOp 的命令发出前先等通道静默（AtCommand::quietFirst）

@@ -52,6 +52,8 @@ struct Policy final {
     uint8_t deadTimeouts = 3U;                  // AT 连续无响应判通道失效
     uint32_t bootBaud = 115200U;                // EC600U 出厂波特率
     uint32_t fastBaud = 460800U;                // AT+IPR 目标波特率
+    // 无卡（SimCheck 内 SIM 确认异常）持续多久后整机断电：60→120→240→300 s 封顶
+    BackoffPolicy noSim{60000U, 300000U};
 };
 
 /** 全局唯一策略实例。 */
