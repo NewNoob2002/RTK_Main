@@ -57,6 +57,12 @@ constexpr auto kWifiModules =
     makeModules<app::board::BootMode::kNormal, app::RadioMode::kWifiConfig>();
 constexpr auto kChargeStandbyModules =
     makeModules<app::board::BootMode::kChargeStandby, app::RadioMode::kBluetooth>();
+// Executor::init 以整张模块表校验 kExecMaxModules，超限时所有执行器 init 失败（N1 HIL：BT 模式 9 个模块
+// 导致 link_init 失败、只剩控制台）。在编译期拦截，避免主机测试使用不同模块表时漏检。
+static_assert(kBtModules.size() <= rtos::kExecMaxModules, "BT 模块表超过 kExecMaxModules");
+static_assert(kWifiModules.size() <= rtos::kExecMaxModules, "Wi-Fi 模块表超过 kExecMaxModules");
+static_assert(kChargeStandbyModules.size() <= rtos::kExecMaxModules,
+              "充电待机模块表超过 kExecMaxModules");
 
 /**
  * @brief 取得本次启动交给执行器的模块表

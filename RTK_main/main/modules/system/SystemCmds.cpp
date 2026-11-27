@@ -281,6 +281,7 @@ int cmdSysTasks(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     printTaskRow("io", xTaskGetHandle("io"));
 #endif
     printTaskRow("spp_worker", xTaskGetHandle("spp_worker"));
+    printTaskRow("net", xTaskGetHandle("net")); // 仅 4G 启用时存在（ADR-0021 §2.2）
 #if FW_TRACE_ENABLED
     printTaskRow("trace_out", xTaskGetHandle("trace_out"));
 #endif
