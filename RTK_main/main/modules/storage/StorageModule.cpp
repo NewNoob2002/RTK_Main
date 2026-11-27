@@ -855,6 +855,7 @@ void StorageModule::setNetCmd(const fw::Command &cmd, fw::CommandResult &result)
         result.status = fw::Result::kInvalidState;
         return;
     }
+    const bool wasEnabled = net_view_.enable;
     const auto verbId = static_cast<StorageVerb>(cmd.verb);
     if (verbId == StorageVerb::kSetNetEnable) {
         if (cmd.argLen != 1U || cmd.args[0] > 1U) {
@@ -895,6 +896,9 @@ void StorageModule::setNetCmd(const fw::Command &cmd, fw::CommandResult &result)
     }
     net_view_.restartPending = true;
     ctx().data.netConfig.write(net_view_);
+    if (wasEnabled != net_view_.enable) {
+        ctx().data.uiEvents.notifyWake();
+    }
     result.status = fw::Result::kOk;
 }
 

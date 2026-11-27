@@ -715,6 +715,22 @@ bool NetModule::drainUart(uint32_t nowMs) noexcept
     return count == rt.rxChunk.size(); // 读满一块说明还有积压
 }
 
+/**
+ * @brief 判断蜂窝快照的显示字段是否变化。
+ * @param last: 上一快照。
+ * @param next: 本轮快照。
+ * @retval OLED 需要刷新。
+ * @note 纯函数，可跨任务调用。
+ */
+[[nodiscard]] static bool displayChanged(const cellular::LinkSnapshot &last,
+                                         const cellular::LinkSnapshot &next) noexcept
+{
+    return last.phase != next.phase || last.sim != next.sim || last.reg != next.reg ||
+           last.csq != next.csq || last.pdpUp != next.pdpUp || last.level != next.level ||
+           last.recoveryCount != next.recoveryCount || last.imei != next.imei ||
+           last.iccid != next.iccid;
+}
+
 void NetModule::publishStatus(uint32_t nowMs) noexcept
 {
     Runtime &rt = *rt_;
@@ -728,7 +744,12 @@ void NetModule::publishStatus(uint32_t nowMs) noexcept
         return;
     }
     const cellular::LinkSnapshot snap = rt.fsm.snapshot(nowMs);
-    context_->data.netStatus.write(snap);
+    auto &data = context_->data;
+    const bool wakeOled = phaseChanged || displayChanged(data.netStatus.read(), snap);
+    data.netStatus.write(snap);
+    if (wakeOled) {
+        data.uiEvents.notifyWake();
+    }
     if (phaseChanged) {
         FW_LOGI(fw::TraceCat::kSys, "net: phase %u->%u sim=%u reg=%u L%u csq=%u",
                 static_cast<unsigned>(rt.lastPhase), static_cast<unsigned>(phase),

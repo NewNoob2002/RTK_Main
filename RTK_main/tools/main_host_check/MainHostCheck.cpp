@@ -874,6 +874,9 @@ void powerShutdownDegradedMasks()
     pollPower(20U);
     const PowerSnapshot cSnap = ctx.data.powerStatus.read();
     CHECK(cSnap.shutdownStage == board::ShutdownStage::kCutPower);
+    CHECK(cSnap.lastShutdown == board::ShutdownReason::kConsole);
+    CHECK(cSnap.lastShutdownFault != nullptr &&
+          std::string_view{cSnap.lastShutdownFault} == "radio_pause");
     CHECK((cSnap.shutdownDoneMask &
            board::shutdownDoneBit(board::ShutdownDoneBit::kRadioQuiesced)) == 0U);
     CHECK((cSnap.shutdownDegradedMask &
