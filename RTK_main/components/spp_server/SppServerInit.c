@@ -33,10 +33,16 @@
 /**
  * @brief  回收会话槽、控制表、事件队列与事件组，发送任务保留给下次 init 复用
  * @note  只在 init 的失败/停止路径调用：此时没有会话，SPP/Bluedroid 已关闭，不会再进回调；
- *        静态对象的内存来自组合根外供缓冲，这里只复位状态与删除 RTOS 对象，不释放堆
+ *        静态对象的内存来自组合根外供缓冲，这里只复位状态与删除 RTOS 对象，不释放堆；
+ *        worker 任务仍存活，会话/控制表复位在 s_spp_mux 内完成，rx 流在锁内摘下、锁外删除
  */
 static void spp_server_objects_delete(void)
 {
+    StreamBufferHandle_t rx_old[SPP_SERVER_MAX_SESSIONS] = {NULL};
+
+    /* worker 仍存活并在 s_spp_mux 下读 sessions[]/ctrl[]，复位必须在同一把锁内；
+     * rx 句柄只在锁内摘下，vStreamBufferDelete 放到锁外（临界区内不得调用 RTOS 删除 API）。 */
+    taskENTER_CRITICAL(&s_spp_mux);
     for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
         s_spp.sessions[idx].in_use = false;
         s_spp.sessions[idx].reserving = false;
@@ -44,20 +50,22 @@ static void spp_server_objects_delete(void)
         s_spp.sessions[idx].reply.used = 0U;
         s_spp.sessions[idx].reply.reserved = 0U;
         s_spp.sessions[idx].handle = 0U;
-        if (s_spp.sessions[idx].rx != NULL) {
-            vStreamBufferDelete(s_spp.sessions[idx].rx);
-            s_spp.sessions[idx].rx = NULL;
-        }
+        rx_old[idx] = s_spp.sessions[idx].rx;
+        s_spp.sessions[idx].rx = NULL;
     }
     for (uint32_t slot = 0U; slot < SPP_SERVER_CTRL_MAX; slot++) {
         s_spp.ctrl[slot].in_use = false;
         s_spp.ctrl[slot].handle = 0U;
     }
-    taskENTER_CRITICAL(&s_spp_mux);
     memset(s_spp.inflight, 0, sizeof(s_spp.inflight));
     s_spp.stream_owner = 0U;
     s_spp.tx_stats.inflight = 0U;
     taskEXIT_CRITICAL(&s_spp_mux);
+    for (uint32_t idx = 0U; idx < SPP_SERVER_MAX_SESSIONS; idx++) {
+        if (rx_old[idx] != NULL) {
+            vStreamBufferDelete(rx_old[idx]);
+        }
+    }
     if (s_spp.rtos.evt_queue != NULL) {
         vQueueDelete(s_spp.rtos.evt_queue);
         s_spp.rtos.evt_queue = NULL;
