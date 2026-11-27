@@ -104,6 +104,7 @@ struct PowerSnapshot {
     uint8_t shutdownTotalCount = 0U;
     uint32_t shortPresses = 0U;
     uint32_t longPresses = 0U;
+    const char *lastShutdownFault = nullptr; // 关机参与者静态名称，或断电失败。
     uint32_t batterySimSession = 0U; // power simbat 会话号（OL7：OLED 电量格据此立即重新定格）
 };
 

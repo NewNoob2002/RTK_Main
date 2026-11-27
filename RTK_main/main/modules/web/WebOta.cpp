@@ -25,10 +25,9 @@
 namespace app {
 namespace {
 
+using ota::OtaPhase;
 using web_ota::kFlashReply;
 using web_ota::kStatusOk;
-using web_ota::OtaPhase;
-using web_ota::OtaProgress;
 using web_ota::OtaReply;
 using web_ota::replyFor;
 using web_ota::TransferResult;
@@ -320,7 +319,7 @@ private:
     const std::atomic<uint32_t> *stations_;
     bool hadStation_;
     data::DataCenter *data_;
-    OtaProgress progress_{};
+    ota::Progress progress_{.source = ota::Source::kWeb};
     uint32_t publishedPercent_ = 0U;
     const esp_partition_t *part_ = nullptr;
     esp_ota_handle_t handle_ = 0U;

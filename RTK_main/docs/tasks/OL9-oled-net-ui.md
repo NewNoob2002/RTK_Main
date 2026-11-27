@@ -1,8 +1,8 @@
 # OL9 OLED 网络信息与预留界面
 
-- 分支 / 工作树：`feat/ol9-net-ui`，`../RTK_Main-ol9`，基于 N1 合并后的 main（N1 提供 `netStatus` 槽，main/data/AppData.hpp）
+- 分支 / 工作树：`feat/ol9-net-ui`，`../RTK_Main-ol9`，基于 feat/n1-cellular@54b01b6（N1 代码已完成、仅剩 HIL；N1 合并后 rebase 到 main）
 - 报告：`docs/reports/OL9-oled-net-ui.md`；完成后最后一行单独输出 `OL9-FINISHED`
-- 门禁：`export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env && tools/ci/run_gates.sh --prefix ol9 --base <N1 合并提交>`
+- 门禁：`export IDF_PATH=$HOME/esp/esp-idf-v6.1 IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf6.1_py3.13_env && tools/ci/run_gates.sh --prefix ol9 --base 54b01b6`
 - 用户决定（2026-11-27）：信号图标方案同意；网络信息单独开 NET 入口；预留项只做 1、2、3、6。
 
 ## 范围

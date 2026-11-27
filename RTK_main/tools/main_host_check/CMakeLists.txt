@@ -457,7 +457,7 @@ target_compile_options(oled_module_check PRIVATE -fno-exceptions -fno-rtti -Wall
 target_link_libraries(oled_module_check PRIVATE main_pure third_party_wououi gnss)
 foreach(scenario final_frame_orchestration busy_click_299_300_and_deadline_sleep
     click_page_deadline_299 click_page_deadline_300 battery_final_frame comm_actions
-    offline_clears_oled_active background_init_retry reboot_banner_quiesce bench_and_event_wait wifi_view_model wifi_logo bt_logo)
+    offline_clears_oled_active background_init_retry reboot_banner_quiesce bench_and_event_wait wifi_view_model net_view_model wifi_logo bt_logo)
     add_test(NAME oled_module_${scenario} COMMAND oled_module_check ${scenario})
 endforeach()
 

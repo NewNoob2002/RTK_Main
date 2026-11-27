@@ -71,7 +71,7 @@ inline constexpr size_t kMaxShutdownParticipantNameLen = 32U;
  * @retval fw::Status::kBusy 名称与已登记外部参与者重复
  * @retval fw::Status::kNoSpace 外部参与者表已满
  * @note kCutPower 阶段只由内部 OLED 双终帧有界流程管理，外部不得登记。
- *       仅启动前或主机测试单线程调用，不分配堆，非 ISR。
+ *       名称须在固件运行期间有效。仅启动前或主机测试单线程调用，不分配堆，非 ISR。
  */
 [[nodiscard]] fw::Status registerShutdownParticipant(const ShutdownParticipant &entry) noexcept;
 
@@ -498,6 +498,7 @@ private:
     FinalFrameState usbFinalFrame_{};
     uint16_t participantDoneMask_ = 0U;
     uint16_t participantTimedOutMask_ = 0U;
+    const char *lastShutdownFault_ = nullptr;
     uint32_t shutdownNowMs_ = 0U;
     bool safeGpioOk_ = false;
     bool safeGpioEvaluated_ = false;

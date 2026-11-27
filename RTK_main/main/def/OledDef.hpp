@@ -25,6 +25,11 @@ enum class OledPage : uint8_t {
     kChargeStandby,
     kShutdown,
     kOta,
+    kSubNet,
+    kNetCellular,
+    kNetNtrip,
+    kNetMqtt,
+    kAlarm,
 };
 
 /**
@@ -56,6 +61,16 @@ enum class OledPage : uint8_t {
         return "shutdown";
     case OledPage::kOta:
         return "ota";
+    case OledPage::kSubNet:
+        return "net";
+    case OledPage::kNetCellular:
+        return "net_4g";
+    case OledPage::kNetNtrip:
+        return "net_ntrip";
+    case OledPage::kNetMqtt:
+        return "net_mqtt";
+    case OledPage::kAlarm:
+        return "alarm";
     default:
         return "unknown";
     }

@@ -42,6 +42,7 @@ constexpr uint8_t kDockIdxPos = 1U;
 constexpr uint8_t kDockIdxComm = 2U;
 constexpr uint8_t kDockIdxDevice = 3U;
 constexpr uint8_t kDockIdxPower = 4U;
+constexpr uint8_t kDockIdxNet = kDockItemCount;
 
 // 关机进度条目标步进百分比（与真实阶段和 fence 一一对应）。
 constexpr uint8_t kPctAnnounce = 15U;
@@ -120,9 +121,7 @@ constexpr uint8_t kShutdownStepPerTick = 5U;
  */
 [[nodiscard]] bool isSubmenuPage(OledPage page) noexcept
 {
-    return (page == OledPage::kSubSat) || (page == OledPage::kSubPos) ||
-           (page == OledPage::kSubComm) || (page == OledPage::kSubDevice) ||
-           (page == OledPage::kSubPower);
+    return (page >= OledPage::kSubSat && page <= OledPage::kSubPower) || isNetPage(page);
 }
 
 } // namespace
@@ -257,12 +256,9 @@ uint16_t SystemCheckSm::logoRevealQ10(uint32_t nowMs) const noexcept
     return easeOutCubic(nowMs - phaseStartMs_, kLogoRevealMs);
 }
 
-Rect UiController::dockSlotRect(uint8_t idx) noexcept
+Rect UiController::dockSlotRect(uint8_t idx) const noexcept
 {
-    const uint8_t clamped = (idx < kDockItemCount) ? idx : 0U;
-    // clamped <= 4，计算结果在 2..102，转 int16_t 安全。
-    const auto x = static_cast<int16_t>(kDockStartX + (static_cast<int16_t>(clamped) * kDockStepX));
-    return Rect{.x = x, .y = kDockY, .w = kDockW, .h = kDockH};
+    return dockRect(idx, cellularDock_);
 }
 
 OledPage UiController::dockTargetPage(uint8_t idx) noexcept
@@ -278,6 +274,8 @@ OledPage UiController::dockTargetPage(uint8_t idx) noexcept
         return OledPage::kSubDevice;
     case kDockIdxPower:
         return OledPage::kSubPower;
+    case kDockIdxNet:
+        return OledPage::kSubNet;
     default:
         return OledPage::kSubSat;
     }
@@ -289,10 +287,19 @@ uint8_t UiController::subpageRowCount(OledPage page, const ViewModel &vm) noexce
     constexpr uint8_t kSubCommBtRows = 4U;
     switch (page) {
     case OledPage::kSubPos:
+        return kSubPosRows;
     case OledPage::kSubPower:
         return kSubFiveRows;
     case OledPage::kSubDevice:
         return kSubDeviceRows;
+    case OledPage::kSubNet:
+        return kSubNetRows;
+    case OledPage::kNetCellular:
+        return kNetCellularRows;
+    case OledPage::kNetNtrip:
+        return kNetNtripRows;
+    case OledPage::kNetMqtt:
+        return kNetMqttRows;
     case OledPage::kSubComm:
         return (vm.radioMode == RadioMode::kWifiConfig) ? kSubCommWifiRows : kSubCommBtRows;
     case OledPage::kSystemCheck:
@@ -324,6 +331,13 @@ void UiController::reset(board::BootMode bootMode, uint32_t nowMs) noexcept
     lastActivityMs_ = nowMs;
     inShutdown_ = false;
     otaVisible_ = false;
+    cellularDock_ = false;
+    cellularBars_ = {};
+    alarmVisible_ = AlarmKind::kNone;
+    timedAlarm_ = AlarmKind::kNone;
+    alarmFlashing_ = false;
+    alarmSequence_ = 0U;
+    acknowledgedAlarms_ = 0U;
     hasWarning_ = false;
     wifiConfirm_ = false;
     powerOffConfirm_ = false;
@@ -376,6 +390,7 @@ UiDecision UiController::stepShutdown(uint32_t nowMs, const ViewModel &vm) noexc
     UiDecision out{};
     dismissOverlays();
     otaVisible_ = false;
+    alarmVisible_ = AlarmKind::kNone;
     inShutdown_ = true;
     page_ = OledPage::kShutdown;
     out.page = page_;
@@ -533,6 +548,10 @@ OledActionRequest UiController::handleSubListClick(ClickEvent click, uint32_t no
         return {};
     }
     squish_.trigger(nowMs);
+    if (isNetPage(page_)) {
+        activateNetRow(nowMs);
+        return {};
+    }
     if (subSelected_ >= backIdx) {
         leaveSubmenu(nowMs);
         return {};
@@ -565,6 +584,34 @@ OledActionRequest UiController::handleSubListClick(ClickEvent click, uint32_t no
     // 位置与设备页的只读信息行双击同样快捷返回表盘，Back 项也在上方统一处理。
     leaveSubmenu(nowMs);
     return {};
+}
+
+void UiController::resetSubList(uint8_t selected) noexcept
+{
+    subSelected_ = selected;
+    subScrollTop_ = 0U;
+    subFocusSpring_.snap(static_cast<int16_t>(selected * kSubRowStepY));
+    subScrollSpring_.snap(0);
+}
+
+void UiController::activateNetRow(uint32_t nowMs) noexcept
+{
+    constexpr std::array kDetails{OledPage::kNetCellular, OledPage::kNetNtrip, OledPage::kNetMqtt};
+    if (page_ == OledPage::kSubNet) {
+        if (subSelected_ >= kDetails.size()) {
+            leaveSubmenu(nowMs);
+            return;
+        }
+        page_ = kDetails[subSelected_];
+        resetSubList();
+    } else {
+        // 三个详情枚举连续，返回摘要时恢复原选中行。
+        const auto selected = static_cast<uint8_t>(static_cast<unsigned>(page_) -
+                                                   static_cast<unsigned>(kDetails.front()));
+        page_ = OledPage::kSubNet;
+        resetSubList(selected);
+    }
+    transition_.clear();
 }
 
 UiModal UiController::visibleModal() const noexcept
@@ -618,17 +665,15 @@ OledActionRequest UiController::handleModalClick(UiModal modal, ClickEvent click
 void UiController::handleDialClick(ClickEvent click, uint32_t nowMs) noexcept
 {
     if (click == ClickEvent::kSingle) {
-        dockSelected_ = static_cast<uint8_t>((dockSelected_ + 1U) % kDockItemCount);
+        const auto count = cellularDock_ ? kCellularDockItemCount : kDockItemCount;
+        dockSelected_ = static_cast<uint8_t>((dockSelected_ + 1U) % count);
         dockSpring_.retarget(dockSlotRect(dockSelected_).x);
         return;
     }
     if (click == ClickEvent::kDouble) {
         const OledPage target = dockTargetPage(dockSelected_);
         satSubTab_ = 0U;
-        subSelected_ = 0U;
-        subScrollTop_ = 0U;
-        subFocusSpring_.snap(0);
-        subScrollSpring_.snap(0);
+        resetSubList();
         squish_.trigger(nowMs);
         transition_.start(TransitionKind::kExpandFromIcon, OledPage::kDialplate, target,
                           dockSlotRect(dockSelected_), nowMs);
@@ -723,9 +768,8 @@ OledActionRequest UiController::handleInput(uint32_t nowMs, std::span<const uint
     return dispatchClick(click_.pollTimeout(nowMs), nowMs, vm);
 }
 
-UiDecision UiController::recoverFromShutdown() noexcept
+void UiController::recoverFromShutdown() noexcept
 {
-    UiDecision out{};
     inShutdown_ = false;
     shutdownPct_ = 0U;
     click_.reset();
@@ -733,9 +777,6 @@ UiDecision UiController::recoverFromShutdown() noexcept
     page_ = (bootMode_ == board::BootMode::kChargeStandby) ? OledPage::kChargeStandby
                                                            : OledPage::kDialplate;
     dockSpring_.snap(dockSlotRect(dockSelected_).x);
-    out.page = page_;
-    out.nextWaitMs = kWaitForEvent;
-    return out;
 }
 
 void UiController::updateHeroBadgeRoll(uint32_t nowMs, const ViewModel &vm) noexcept
@@ -770,6 +811,9 @@ UiDecision UiController::buildActiveDecision(uint32_t nowMs, const ViewModel &vm
     out.page = page_;
     out.animating = animating;
     uint32_t waitMs = animating ? kAnimFramePeriodMs : barsWaitMs(nowMs);
+    if (page_ != OledPage::kSystemCheck) {
+        waitMs = std::min(waitMs, cellularWaitMs(nowMs, vm.net));
+    }
     if (!powerOffConfirm_ && vm.keyHold.active && !holdOverlayDismissed_ && !holdOverlayActive_) {
         const uint32_t heldMs = nowMs - vm.keyHold.startMs;
         if (heldMs < board::kKeyHoldOverlayStartMs) {
@@ -846,13 +890,74 @@ UiDecision UiController::finishActiveStep(uint32_t nowMs, uint32_t dtMs,
     return buildActiveDecision(nowMs, vm, animating);
 }
 
+uint32_t UiController::cellularWaitMs(uint32_t nowMs, const NetView &net) const noexcept
+{
+    if (cellularIcon(net) == CellularIcon::kSearching) {
+        return kSignalSearchFrameMs - (nowMs % kSignalSearchFrameMs);
+    }
+    if (cellularBars_.shown < cellularBars_.candidate) {
+        return remainingMs(nowMs, cellularBars_.sinceMs + kSignalRiseMs);
+    }
+    return kWaitForEvent;
+}
+
+/**
+ * @brief 确认当前告警，保留同批次其余待处理告警。
+ * @param nowMs: 单调毫秒。
+ * @param[in,out] keys: 本帧收到的短按；覆盖变化或确认时丢弃。
+ * @param vm: 当前告警批次与配对请求快照。
+ * @retval 全屏告警决策，无告警时返回空值。
+ * @note 仅 OLED 任务。
+ */
+std::optional<UiDecision> UiController::stepAlarm(uint32_t nowMs, std::span<const uint32_t> &keys,
+                                                  const ViewModel &vm) noexcept
+{
+    const auto &alarm = *vm.alarm;
+    const bool newBatch = alarm.sequence != alarmSequence_;
+    if (newBatch) {
+        alarmSequence_ = alarm.sequence;
+        acknowledgedAlarms_ = 0U;
+    }
+    const auto next = highestAlarm(alarm.pending & ~acknowledgedAlarms_);
+    if (next != AlarmKind::kNone) {
+        suppressedPairId_ = vm.pairing.id; // 告警覆盖期间的请求由蓝牙端按原超时处理。
+    }
+    if (newBatch || next != alarmVisible_) {
+        if (next != AlarmKind::kNone || alarmVisible_ != AlarmKind::kNone) {
+            keys = {};
+            dismissOverlays();
+        }
+        alarmVisible_ = next;
+    }
+    if (alarmVisible_ != AlarmKind::kNone && !keys.empty()) {
+        acknowledgedAlarms_ |= alarmBit(alarmVisible_);
+        alarmVisible_ = highestAlarm(alarm.pending & ~acknowledgedAlarms_);
+        lastActivityMs_ = nowMs;
+        keys = {};
+    }
+    if (alarmVisible_ == AlarmKind::kNone) {
+        timedAlarm_ = AlarmKind::kNone;
+        return std::nullopt;
+    }
+    if (newBatch || alarmVisible_ != timedAlarm_) {
+        timedAlarm_ = alarmVisible_;
+        alarmShownMs_ = nowMs;
+        alarmFlashing_ = true;
+    }
+    // 到期后保持稳态，避免同一告警在单调计时回绕后重新闪烁。
+    alarmFlashing_ = alarmFlashing_ && (nowMs - alarmShownMs_) < kAlarmFlashDurationMs;
+    return UiDecision{.page = OledPage::kAlarm,
+                      .animating = alarmFlashing_,
+                      .nextWaitMs = alarmFlashing_ ? kAnimFramePeriodMs : kWaitForEvent};
+}
+
 std::optional<UiDecision> UiController::stepOta(uint32_t nowMs, const ViewModel &vm) noexcept
 {
     const auto &ota = vm.otaProgress;
-    using web_ota::OtaPhase;
+    using ota::OtaPhase;
     const uint32_t failureAge = nowMs - ota.changedMs;
     const bool showFailure =
-        ota.phase == OtaPhase::kFailed && failureAge < web_ota::OtaProgress::kFailureVisibleMs;
+        ota.phase == OtaPhase::kFailed && failureAge < ota::Progress::kFailureVisibleMs;
     if (ota.phase != OtaPhase::kReceiving && ota.phase != OtaPhase::kVerifying &&
         ota.phase != OtaPhase::kSuccess && !showFailure) {
         return std::nullopt;
@@ -861,11 +966,11 @@ std::optional<UiDecision> UiController::stepOta(uint32_t nowMs, const ViewModel 
     suppressedPairId_ = vm.pairing.id; // 已覆盖的请求由蓝牙端按原超时处理。
     holdOverlayDismissed_ = vm.keyHold.active;
     otaVisible_ = true;
+    alarmVisible_ = AlarmKind::kNone;
     return UiDecision{
         .page = OledPage::kOta,
         .markRebootFinalFrame = vm.rebootBanner != RebootBanner::kNone,
-        .nextWaitMs =
-            showFailure ? web_ota::OtaProgress::kFailureVisibleMs - failureAge : kWaitForEvent,
+        .nextWaitMs = showFailure ? ota::Progress::kFailureVisibleMs - failureAge : kWaitForEvent,
     };
 }
 
@@ -883,12 +988,18 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
     const uint32_t dtMs = nowMs - lastStepMs_;
     lastStepMs_ = nowMs;
     rebootBanner_ = vm.rebootBanner;
+    cellularDock_ = vm.net.supported;
+    const auto icon = cellularIcon(vm.net);
+    const bool hasSignal = icon == CellularIcon::kSignal || icon == CellularIcon::kPdp;
+    cellularBars_ = updateSignalBars(cellularBars_, hasSignal ? csqBars(vm.net.csq) : 0U, nowMs);
 
     if (vm.shutdownStage != board::ShutdownStage::kIdle) {
         return stepShutdown(nowMs, vm);
     }
     if (inShutdown_) {
-        return recoverFromShutdown();
+        recoverFromShutdown();
+        shortKeyTimes = {};
+        longKeyArrived = false;
     }
 
     bars_.update(nowMs, board::BatteryBarsInput{.pct = vm.batteryPct,
@@ -911,6 +1022,7 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
         longKeyArrived = false;
     }
     if (vm.rebootBanner != RebootBanner::kNone) {
+        alarmVisible_ = AlarmKind::kNone;
         dismissOverlays();
         return UiDecision{
             .page = page_,
@@ -918,14 +1030,25 @@ UiDecision UiController::step(uint32_t nowMs, std::span<const uint32_t> shortKey
             .nextWaitMs = kWaitForEvent,
         };
     }
+    return stepActive(nowMs, dtMs, shortKeyTimes, vm, longKeyArrived);
+}
+
+UiDecision UiController::stepActive(uint32_t nowMs, uint32_t dtMs, std::span<const uint32_t> keys,
+                                    const ViewModel &vm, bool longKeyArrived) noexcept
+{
     const bool wasPowerOffConfirm = powerOffConfirm_;
     updateHoldOverlay(nowMs, vm, longKeyArrived);
     if (wasPowerOffConfirm != powerOffConfirm_ || longKeyArrived) {
-        shortKeyTimes = {}; // 弹窗切换时丢弃旧上下文的待处理短按。
+        keys = {}; // 弹窗切换时丢弃旧上下文的待处理短按。
+    }
+    if (powerOffConfirm_) {
+        alarmVisible_ = AlarmKind::kNone;
+    } else if (const auto alarm = stepAlarm(nowMs, keys, vm); alarm.has_value()) {
+        return *alarm;
     }
     // 必须先按生产顺序消费队列内全部消抖短按时间戳，再检查绝对截止，避免 OLED 刷屏延迟误拆双击（R2OL2-03）。
     modalFocusSpring_.step(dtMs, FixedSpring::kRowStiffness, FixedSpring::kRowDamping);
-    const auto action = handleInput(nowMs, shortKeyTimes, vm);
+    const auto action = handleInput(nowMs, keys, vm);
     if (wasPowerOffConfirm && !powerOffConfirm_ && action.action == OledAction::kNone) {
         static_cast<void>(updatePairPrompt(nowMs, vm)); // 取消后立即显示已排队的配对请求。
     }
@@ -944,6 +1067,10 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         holdOverlayCollapsing_ ? easeOutCubic(nowMs - holdCollapseStartMs_, kHoldCollapseMs) : 0U;
     const uint16_t heroQ10 =
         heroRolling_ ? easeOutCubic(nowMs - heroChangeStartMs_, kNumberRollMs) : kEaseScale;
+    const uint32_t alarmElapsed = nowMs - alarmShownMs_;
+    const uint32_t alarmPeriod = alarmFlashPeriodMs(alarmVisible_);
+    const bool alarmFlashing =
+        alarmVisible_ != AlarmKind::kNone && alarmFlashing_ && alarmElapsed < kAlarmFlashDurationMs;
     return UiRenderState{
         .page = page(),
         .dockSelected = dockSelected_,
@@ -955,7 +1082,8 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         .subFocusY = subFocusSpring_.position(),
         .subScrollY = subScrollSpring_.position(),
         .squishInset = squish_.insetPx(nowMs),
-        .holdOverlayVisible = holdOverlayActive_ || holdOverlayCollapsing_,
+        .holdOverlayVisible =
+            alarmVisible_ == AlarmKind::kNone && (holdOverlayActive_ || holdOverlayCollapsing_),
         .holdOverlayCollapsing = holdOverlayCollapsing_,
         .holdProgressQ10 = holdProgressQ10_,
         .holdCollapseQ10 = collapseQ10,
@@ -970,6 +1098,10 @@ UiRenderState UiController::renderState(uint32_t nowMs) const noexcept
         .checkSm = &checkSm_,
         .transition = &transition_,
         .satsRoll = &satsRoll_,
+        .cellularBars = cellularBars_.shown,
+        .alarm = alarmVisible_,
+        .alarmFlashing = alarmFlashing,
+        .alarmHighlighted = alarmFlashing && (alarmElapsed % alarmPeriod) < alarmPeriod / 2U,
         .batBars = bars_.view(nowMs),
     };
 }
@@ -1027,6 +1159,23 @@ void sanitizeCopy(std::string_view src, std::span<char> dst) noexcept
         dst[i] = ((ch >= kMinPrintableAscii) && (ch <= kMaxPrintableAscii)) ? ch : '?';
     }
     dst[count] = '\0';
+}
+
+AlarmSnapshot makeTestAlarm(std::string_view type) noexcept
+{
+    AlarmSnapshot sample{};
+    if (type == "enter") {
+        sample.pending = alarmBit(AlarmKind::kFenceEnter);
+        sanitizeCopy("TEST FENCE", sample.fenceEnterName);
+    } else if (type == "leave") {
+        sample.pending = alarmBit(AlarmKind::kFenceExit);
+        sanitizeCopy("TEST FENCE", sample.fenceExitName);
+    } else if (type == "precision") {
+        sample.pending = alarmBit(AlarmKind::kPrecisionLost);
+    } else if (type == "lowbat") {
+        sample.pending = alarmBit(AlarmKind::kLowBattery);
+    }
+    return sample;
 }
 
 void formatLabelValue(std::string_view label, std::string_view value, std::span<char> out) noexcept
@@ -1418,6 +1567,8 @@ const char *dockItemName(uint8_t idx) noexcept
         return "DEVICE";
     case kDockIdxPower:
         return "POWER";
+    case kDockIdxNet:
+        return "NET";
     default:
         return "";
     }

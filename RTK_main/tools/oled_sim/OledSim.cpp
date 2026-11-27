@@ -40,6 +40,7 @@ struct Options {
 
 struct Simulator {
     ViewModel model{};
+    AlarmSnapshot alarm{};
     UiController controller{};
     ScreenBuff frame{};
     bool statusBarValid = false;
@@ -64,7 +65,7 @@ struct Simulator {
         }
     }
 
-    /** @brief 用编号 1–10 选择可重复的模拟硬件快照（9 为充电待机，10 为长 SSID）。 */
+    /** @brief 选择可重复的模拟硬件快照，11 为可见 4G 与 USB 充电。 */
     void setScene(unsigned scene, uint32_t nowMs = 0U)
     {
         model = {};
@@ -99,7 +100,12 @@ struct Simulator {
             model.fixValid ? gnss::FixQuality::kRtkFixed : gnss::FixQuality::kUnknown;
         model.batteryPct = scene == 4U ? 8U : 78U;
         model.batteryMv = scene == 4U ? 3380U : 3980U;
-        model.usbPresent = model.charging = scene == 3U;
+        model.usbPresent = model.charging = scene == 3U || scene == 11U;
+        if (scene == 11U) {
+            model.net.phase = cellular::Phase::kReady;
+            model.net.csq = 23U;
+            model.net.supported = model.net.enabled = model.net.pdpUp = true;
+        }
         if (scene == 6U || scene == 10U) {
             model.radioMode = RadioMode::kWifiConfig;
             model.wifiReady = true;
@@ -346,7 +352,7 @@ bool checkFrame(const Options &opts, const Simulator &sim, std::string_view verb
 /** @brief 按脚本设置 OTA 显示快照。 @retval true 阶段有效。 */
 bool setOta(Simulator &sim, std::string_view phase, uint32_t nowMs)
 {
-    using web_ota::OtaPhase;
+    using ota::OtaPhase;
     using web_ota::UploadCode;
     auto &ota = sim.model.otaProgress;
     ota.changedMs = nowMs;
@@ -441,7 +447,7 @@ bool runScript(const Options &opts, Simulator &sim)
             sim.shutdown(at, reason);
         } else if (verb == "scene") {
             uint32_t scene = 0U;
-            if (!boundedNumber(arg, scene, 10U)) {
+            if (!boundedNumber(arg, scene, 11U)) {
                 return false;
             }
             sim.setScene(scene, at);
@@ -449,6 +455,14 @@ bool runScript(const Options &opts, Simulator &sim)
             if (!setOta(sim, arg, at)) {
                 return false;
             }
+        } else if (verb == "alarm") {
+            auto sample = makeTestAlarm(arg.empty() ? "enter" : arg);
+            if (sample.pending == 0U) {
+                return false;
+            }
+            sample.sequence = sim.alarm.sequence + 1U;
+            sim.alarm = sample;
+            sim.model.alarm = &sim.alarm;
         } else if (verb != "check" && verb != "shot") {
             return false;
         }

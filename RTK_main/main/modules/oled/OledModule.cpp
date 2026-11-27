@@ -20,6 +20,7 @@
 #include "WouoUI_graph.h"
 #include "board/BoardProfile.hpp"
 #include "board/Sh1106.hpp"
+#include "def/NetStatusText.hpp"
 #include "fw/Atomic.hpp"
 #include "fw/Log.hpp"
 #include "modules/oled/OledUi.hpp"
@@ -43,6 +44,8 @@ constinit ScreenBuff *s_active_fb = nullptr;
 constinit board::Sh1106 s_panel{};
 constinit oled::UiController s_ui_ctrl{};
 constinit oled::ModalFrame s_modal_frame{};
+// OLED 单任务独占整帧快照，名称缓冲从刷新热路径栈帧移到静态 DRAM。
+constinit oled::AlarmSnapshot s_alarm_snapshot{};
 constinit oled::Marquee s_marquee{};
 constinit board::Sh1106FlushResult s_last_flush{};
 constinit bool s_force_next_flush = false;
@@ -138,6 +141,7 @@ void collectPowerStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.usbSource = pwr.usbSource;
     vm.shutdownStage = pwr.shutdownStage;
     vm.shutdownReason = pwr.lastShutdown;
+    vm.shutdownFault = pwr.lastShutdownFault;
     vm.shutdownDoneMask = pwr.shutdownDoneMask;
     vm.shutdownDegradedMask = pwr.shutdownDegradedMask;
     vm.shutdownDoneCount = pwr.shutdownDoneCount;
@@ -185,6 +189,42 @@ void collectCommStatus(const AppContext &app, const SystemStatus &sys, oled::Vie
     }
 }
 
+/**
+ * @brief 读取最新已保存的蜂窝开关，独立栈帧避免与链路快照叠加。
+ * @param data: DataCenter。
+ * @retval net.enable 的值。
+ * @note 仅 OLED 任务，读取快照时短暂持锁。
+ */
+[[nodiscard, gnu::noinline]] bool cellularEnabled(const data::DataCenter &data) noexcept
+{
+    return data.netConfig.read().enable;
+}
+
+/**
+ * @brief 从 DataCenter 提取 OLED 所需蜂窝字段，并在组装阶段掩码 ICCID。
+ * @param data: DataCenter。
+ * @param[out] net: 初始为空的蜂窝视图。
+ * @note 仅 OLED 任务，读取快照时短暂持锁。
+ */
+[[gnu::noinline]] void collectNetStatus(const data::DataCenter &data, oled::NetView &net) noexcept
+{
+    net.supported = board::hasFeature(board::current(), board::Feature::kCellular);
+    if (!net.supported || !cellularEnabled(data)) {
+        return;
+    }
+    const auto snap = data.netStatus.read();
+    net.enabled = true;
+    net.phase = snap.phase;
+    net.sim = snap.sim;
+    net.reg = snap.reg;
+    net.recoveryLevel = snap.level;
+    net.recoveryCount = snap.recoveryCount;
+    net.csq = snap.csq;
+    net.pdpUp = snap.pdpUp;
+    net.imei = snap.imei;
+    net_status::maskIccid(snap.iccid, net.maskedIccid);
+}
+
 #if RTK_GNSS_ENABLED
 /**
  * @brief 收集 GNSS 定位、UTC 时间与工作模式只读状态到视图模型
@@ -214,6 +254,9 @@ void collectGnssStatus(const AppContext &app, oled::ViewModel &vm) noexcept
     vm.satsUsed = fix.satsUsed;
     vm.hdopX100 = fix.hdopX100;
     vm.diffAgeDs = fix.diffAgeDs;
+    if (fix.valid && fix.diffAgeDs != gnss::kU16Unknown) {
+        vm.diffSource = oled::DiffSource::kPhone; // N1 仅手机 RTCM 路径。
+    }
     vm.hAccCm = fix.hAccCm;
     vm.workModeActive = wm.active;
     vm.workMode = wm.mode;
@@ -301,7 +344,6 @@ struct TaskWake {
                                                     oled::ViewModel &vm) const noexcept
 {
     const auto &app = *context_;
-    vm = {};
     vm.uptimeMs = nowMs;
     const auto &profile = board::current();
     oled::sanitizeCopy(cstrView(board::productName(&profile)), vm.product);
@@ -324,6 +366,9 @@ struct TaskWake {
 
     collectCommStatus(app, sys, vm);
     collectPowerStatus(app, vm);
+    collectNetStatus(app.data, vm.net);
+    s_alarm_snapshot = app.data.oledAlarm.read();
+    vm.alarm = &s_alarm_snapshot;
     vm.otaProgress = app.data.otaProgress.read();
 #if RTK_GNSS_ENABLED
     collectGnssStatus(app, vm);
@@ -671,28 +716,41 @@ uint32_t OledModule::handleRebootQuiesce(uint32_t nowMs, RebootBanner banner) no
     return oled::kShutdownFinalRetryMs;
 }
 
+/**
+ * @brief 构造测试循环的渲染状态，直接写入当前帧，避免额外的状态副本。
+ * @param nowMs: 当前单调毫秒。
+ * @param startMs: bench 起点。
+ * @param cellular: 是否使用蜂窝 Dock。
+ * @param[out] transition: 由调用者持有的转场状态，须覆盖当前帧。
+ * @retval 当前 bench 画面的状态。
+ * @note 仅 OLED 任务调用。
+ */
+[[nodiscard]] static oled::UiRenderState benchRenderState(uint32_t nowMs, uint32_t startMs,
+                                                          bool cellular,
+                                                          oled::PageTransition &transition) noexcept
+{
+    constexpr uint8_t kPowerDock = oled::kDockItemCount - 1U;
+    const auto icon = oled::dockRect(kPowerDock, cellular);
+    const uint32_t segment = (nowMs - startMs) / oled::kPageTransitionMs;
+    const bool opening = (segment & 1U) == 0U;
+    transition.start(opening ? oled::TransitionKind::kExpandFromIcon
+                             : oled::TransitionKind::kCollapseToIcon,
+                     opening ? OledPage::kDialplate : OledPage::kSubPower,
+                     opening ? OledPage::kSubPower : OledPage::kDialplate, icon,
+                     startMs + segment * oled::kPageTransitionMs);
+    return {.page = transition.toPage,
+            .dockSelected = kPowerDock,
+            .dockFocusX = icon.x,
+            .nowMs = nowMs,
+            .transition = &transition};
+}
+
 void OledModule::drawFrame(uint32_t nowMs, oled::ViewModel &vm) noexcept
 {
-    oled::UiRenderState rstate = s_ui_ctrl.renderState(nowMs);
     oled::PageTransition benchTransition{};
-    if (benchActive_) {
-        constexpr uint8_t kPowerDock = static_cast<uint8_t>(oled::kDockItemCount - 1U);
-        constexpr int16_t kFocusX = oled::kDockStartX + kPowerDock * oled::kDockStepX;
-        constexpr oled::Rect kIcon{kFocusX, oled::kDockY, oled::kDockW, oled::kDockH};
-        const uint32_t elapsed = nowMs - benchStartMs_;
-        const uint32_t segment = elapsed / oled::kPageTransitionMs;
-        const bool opening = (segment & 1U) == 0U;
-        benchTransition.start(opening ? oled::TransitionKind::kExpandFromIcon
-                                      : oled::TransitionKind::kCollapseToIcon,
-                              opening ? OledPage::kDialplate : OledPage::kSubPower,
-                              opening ? OledPage::kSubPower : OledPage::kDialplate, kIcon,
-                              benchStartMs_ + segment * oled::kPageTransitionMs);
-        rstate = oled::UiRenderState{.page = benchTransition.toPage,
-                                     .dockSelected = kPowerDock,
-                                     .dockFocusX = kFocusX,
-                                     .nowMs = nowMs,
-                                     .transition = &benchTransition};
-    }
+    oled::UiRenderState rstate =
+        benchActive_ ? benchRenderState(nowMs, benchStartMs_, vm.net.supported, benchTransition)
+                     : s_ui_ctrl.renderState(nowMs);
 #if RTK_GNSS_ENABLED
     const auto *transition = rstate.transition;
     const bool transitioning =

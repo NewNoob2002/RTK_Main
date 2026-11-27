@@ -20,6 +20,7 @@
 #include "cellular/Policy.hpp"
 #include "cli/Console.hpp"
 #include "cli/Out.hpp"
+#include "def/NetStatusText.hpp"
 #include "support/ConsoleSupport.hpp"
 
 namespace app {
@@ -28,105 +29,6 @@ namespace {
 constexpr uint32_t kAtPollMs = 20U; // ms，AT 响应轮询间隔
 constexpr uint32_t kAtWaitMs =
     cellular::at_timeout::kDebugDefault + 1000U; // ms，含 kNet 取走与应答余量
-constexpr size_t kIccidShowHead = 6U;            // ICCID 明文保留的头部位数
-constexpr size_t kIccidShowTail = 4U;            // ICCID 明文保留的尾部位数
-
-/**
- * @brief 阶段名
- * @param phase: 链路阶段
- * @retval 静态字符串
- * @note 纯函数，线程/ISR 安全。
- */
-const char *phaseName(cellular::Phase phase) noexcept
-{
-    switch (phase) {
-    case cellular::Phase::kOff:
-        return "off";
-    case cellular::Phase::kPowerCycle:
-        return "power_cycle";
-    case cellular::Phase::kPowerOn:
-        return "power_on";
-    case cellular::Phase::kSync:
-        return "sync";
-    case cellular::Phase::kSimCheck:
-        return "sim_check";
-    case cellular::Phase::kRegister:
-        return "register";
-    case cellular::Phase::kPdpUp:
-        return "pdp_up";
-    case cellular::Phase::kReady:
-        return "ready";
-    case cellular::Phase::kPowerFault:
-        return "power-fault"; // 裁决 r5：与报告统一拼写
-    }
-    return "?";
-}
-
-/**
- * @brief SIM 状态名
- * @param sim: SIM 状态
- * @retval 静态字符串
- * @note 纯函数，线程/ISR 安全。
- */
-const char *simName(cellular::SimStatus sim) noexcept
-{
-    switch (sim) {
-    case cellular::SimStatus::kUnknown:
-        return "unknown";
-    case cellular::SimStatus::kReady:
-        return "ready";
-    case cellular::SimStatus::kAbsent:
-        return "absent";
-    case cellular::SimStatus::kPinRequired:
-        return "pin_required";
-    case cellular::SimStatus::kError:
-        return "error";
-    }
-    return "?";
-}
-
-/**
- * @brief 注册状态名
- * @param reg: 注册状态
- * @retval 静态字符串
- * @note 纯函数，线程/ISR 安全。
- */
-const char *regName(cellular::RegStatus reg) noexcept
-{
-    switch (reg) {
-    case cellular::RegStatus::kUnknown:
-        return "unknown";
-    case cellular::RegStatus::kNotRegistered:
-        return "not_registered";
-    case cellular::RegStatus::kSearching:
-        return "searching";
-    case cellular::RegStatus::kDenied:
-        return "denied";
-    case cellular::RegStatus::kHome:
-        return "home";
-    case cellular::RegStatus::kRoaming:
-        return "roaming";
-    }
-    return "?";
-}
-
-/**
- * @brief 把 ICCID 中段打码（保留头 6 位与尾 4 位），避免日志泄露完整卡号
- * @param iccid: 以 0 结尾的 ICCID 文本
- * @param[out] out: 打码结果缓冲（以 0 结尾）
- * @note 纯函数，线程/ISR 安全。
- */
-void maskIccid(const std::array<char, cellular::kIccidBytes> &iccid,
-               std::array<char, cellular::kIccidBytes> &out) noexcept
-{
-    out.fill('\0');
-    const size_t len = ::strnlen(iccid.data(), iccid.size());
-    for (size_t i = 0U; i < len; ++i) {
-        const bool keep = (i < kIccidShowHead) || (i + kIccidShowTail >= len);
-        out[i] = keep ? iccid[i] : '*';
-    }
-}
-
 /**
  * @brief 连接槽状态名
  * @param state: ConnSnapshot::state（LinkFsm::ConnState 数值）
@@ -171,9 +73,9 @@ int cmdNetStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
         return 0;
     }
     std::array<char, cellular::kIccidBytes> masked{};
-    maskIccid(snap.iccid, masked);
-    cli::printKv("phase", "%s", phaseName(snap.phase));
-    cli::printKv("sim", "%s", simName(snap.sim));
+    net_status::maskIccid(snap.iccid, masked);
+    cli::printKv("phase", "%s", net_status::phaseName(snap.phase));
+    cli::printKv("sim", "%s", net_status::simName(snap.sim));
     cli::printKv("imei", "%s", snap.imei[0] != '\0' ? snap.imei.data() : "n/a");
     cli::printKv("iccid", "%s", masked[0] != '\0' ? masked.data() : "n/a");
     if (snap.csq == cellular::kCsqUnknown) {
@@ -181,7 +83,7 @@ int cmdNetStatus(void * /*ctx*/, int argc, char ** /*argv*/) noexcept
     } else {
         cli::printKv("csq", "%u", static_cast<unsigned>(snap.csq));
     }
-    cli::printKv("reg", "%s", regName(snap.reg));
+    cli::printKv("reg", "%s", net_status::regName(snap.reg));
     cli::printKv("pdp", "%s", snap.pdpUp ? "up" : "down");
     cli::printKv("link", "baud=%" PRIu32 " channel=%s", snap.baud,
                  snap.channelDead ? "dead" : "ok");

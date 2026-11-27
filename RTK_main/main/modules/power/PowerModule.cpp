@@ -174,6 +174,7 @@ constinit size_t s_extra_participant_count = 0U;
            (lhs.shutdownDoneCount == rhs.shutdownDoneCount) &&
            (lhs.shutdownTotalCount == rhs.shutdownTotalCount) &&
            (lhs.shortPresses == rhs.shortPresses) && (lhs.longPresses == rhs.longPresses) &&
+           (lhs.lastShutdownFault == rhs.lastShutdownFault) &&
            (lhs.batterySimSession == rhs.batterySimSession);
 }
 
@@ -1097,12 +1098,17 @@ void PowerModule::retryQuiesceFallbacks() noexcept
 void PowerModule::recordStageTimeouts(board::ShutdownStage stage) noexcept
 {
     size_t idx = 0U;
-    const auto mark = [this, stage, &idx](const power::ShutdownParticipant &p) noexcept {
+    const char *stageFault = nullptr;
+    const auto mark = [this, stage, &idx,
+                       &stageFault](const power::ShutdownParticipant &p) noexcept {
         if (p.stage == stage) {
             // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
             const auto bit = static_cast<uint16_t>(1U << idx);
             if ((participantDoneMask_ & bit) == 0U) {
                 participantTimedOutMask_ = static_cast<uint16_t>(participantTimedOutMask_ | bit);
+            }
+            if (stageFault == nullptr && (participantTimedOutMask_ & bit) != 0U) {
+                stageFault = p.name;
             }
         }
         ++idx;
@@ -1118,6 +1124,9 @@ void PowerModule::recordStageTimeouts(board::ShutdownStage stage) noexcept
         if (timedOut && (p.onTimeout != nullptr) && (stage != board::ShutdownStage::kQuiesce)) {
             p.onTimeout(p.userCtx); // 兜底动作（如 4G 硬切 PWREN）：有界、不阻塞
         }
+    }
+    if (stageFault != nullptr) {
+        lastShutdownFault_ = stageFault;
     }
 }
 
@@ -1189,6 +1198,7 @@ void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins
         linkFenceReached_ = false;
         ioFenceReached_ = false;
         resetShutdownProgress();
+        lastShutdownFault_ = nullptr;
         ctx().data.uiEvents.resetShutdownFinalFrame();
         break;
     case board::ShutdownStage::kSave:
@@ -1215,6 +1225,9 @@ void PowerModule::handleShutdownStageEntry(uint32_t nowMs, const PinLevels &pins
 void PowerModule::handleShutdownCutPower(uint32_t nowMs, const board::ShutdownOutput &out) noexcept
 {
     if (out.cutTimedOut) {
+        if (lastShutdownFault_ == nullptr) {
+            lastShutdownFault_ = "cut_power";
+        }
         setKeyDrive(false);
         FW_LOGE(fw::TraceCat::kSys, "power off timeout after 30 s, aborting");
         fw::trace(fw::TraceCat::kSys, static_cast<uint8_t>(PowerTrace::kShutdownAbort), 0U,
@@ -1483,6 +1496,7 @@ void PowerModule::publishSnapshot(const PinLevels &pins, bool force) noexcept
         .shutdownTotalCount = counts.total,
         .shortPresses = shortPresses_,
         .longPresses = longPresses_,
+        .lastShutdownFault = lastShutdownFault_,
         .batterySimSession = simSession_,
     };
     if (!force && (next.usbPresent != lastSnapshot_.usbPresent ||

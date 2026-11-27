@@ -49,7 +49,7 @@ struct MarqueeMotion {
             .moving = true};
 }
 
-inline constexpr size_t kMarqueeRowCount = 6U;
+inline constexpr size_t kMarqueeRowCount = 8U;
 enum class MarqueeField : uint8_t {
     kCardPrimary = kMarqueeRowCount,
     kCardSecondary,

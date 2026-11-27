@@ -25,7 +25,8 @@ add_executable(oled_sim OledSim.cpp
 target_compile_features(oled_sim PRIVATE cxx_std_20)
 target_compile_options(oled_sim PRIVATE -Wall -Wextra -Werror -Wshadow)
 target_include_directories(oled_sim PRIVATE
-    "${RTK_ROOT}/main" "${RTK_ROOT}/components/link_core/include")
+    "${RTK_ROOT}/main" "${RTK_ROOT}/components/link_core/include"
+    "${RTK_ROOT}/components/cellular/include")
 target_link_libraries(oled_sim PRIVATE PkgConfig::SDL2 third_party_wououi gnss)
 
 add_test(NAME oled_sim_headless COMMAND oled_sim --headless
@@ -40,4 +41,8 @@ add_test(NAME oled_sim_standby COMMAND oled_sim --headless --boot standby
 
 add_test(NAME oled_sim_ol8 COMMAND oled_sim --headless
     --script "${CMAKE_CURRENT_SOURCE_DIR}/scripts/ol8.txt"
+    --golden "${CMAKE_CURRENT_SOURCE_DIR}/golden")
+
+add_test(NAME oled_sim_alarm COMMAND oled_sim --headless
+    --script "${CMAKE_CURRENT_SOURCE_DIR}/scripts/alarm.txt"
     --golden "${CMAKE_CURRENT_SOURCE_DIR}/golden")

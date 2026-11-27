@@ -1,0 +1,20 @@
+# 全屏告警四种图标，围栏告警的亮/暗相位和超时稳态。
+3000 check dialplate
+3100 alarm
+3100 check alarm
+3100 shot alarm-enter-highlight
+3225 shot alarm-enter-normal
+3300 short
+3300 check dialplate
+3400 alarm leave
+3400 shot alarm-leave-highlight
+3500 short
+3600 alarm precision
+3600 shot alarm-precision-highlight
+3700 short
+3800 alarm lowbat
+3800 shot alarm-lowbat-highlight
+33800 check alarm
+33800 shot alarm-lowbat-steady
+33900 short
+33900 check dialplate
