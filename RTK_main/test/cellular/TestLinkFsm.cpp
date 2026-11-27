@@ -1337,6 +1337,112 @@ void testOversizedRawReadRejectedAndRecovers()
 
 } // namespace
 
+/** 等到快照 SIM 为 kAbsent（SimCheck 内确认无卡）。 */
+bool toSimAbsent(Sim &s, uint32_t limitMs)
+{
+    return runUntil(s, limitMs, [&s]() { return s.fsm.snapshot(s.now).sim == SimStatus::kAbsent; });
+}
+
+// HIL 失败 N1 step 5：无卡持续 60 s 即整机断电，之后 120/240/300 s 封顶，见到 READY 后归零。
+void testNoSimPowerCyclesWithBackoffAndResetsOnReady()
+{
+    Sim s;
+    setup(s);
+    s.simAbsent = true;
+    const uint32_t expectMs[] = {60000U, 120000U, 240000U, 300000U, 300000U};
+    for (size_t i = 0U; i < 5U; ++i) {
+        TEST_ASSERT_TRUE(toSimAbsent(s, 30000U));
+        const uint32_t badAt = s.now;
+        TEST_ASSERT_TRUE(
+            runUntil(s, expectMs[i] + 2000U, [&s, i]() { return powerOffCount(s) == (i + 1U); }));
+        const uint32_t offAt = s.power.back().t;
+        TEST_ASSERT_TRUE((offAt - badAt) >= expectMs[i] - 100U);
+        TEST_ASSERT_TRUE((offAt - badAt) <= expectMs[i] + 1500U);
+        TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+        // 无卡断电只保持 powerOffMinMs，不套用 L3 的 30/60/120/300 s 退避，也不锁存。
+        TEST_ASSERT_TRUE(runUntil(s, 10000U, [&s]() { return s.power.back().on; }));
+        TEST_ASSERT_TRUE((s.power.back().t - offAt) >= 2000U);
+        TEST_ASSERT_TRUE((s.power.back().t - offAt) <= 3500U);
+    }
+    // 重新插卡：下一次上电读到 READY → 回到 Ready，无卡退避归零。
+    s.simAbsent = false;
+    TEST_ASSERT_TRUE(toReady(s, 400000U));
+    s.simAbsent = true;
+    schedule(s, "\r\n+CPIN: NOT READY\r\n", 10U);
+    TEST_ASSERT_TRUE(runUntil(s, 500U, [&s]() { return s.fsm.phase() == Phase::kSimCheck; }));
+    const size_t before = powerOffCount(s);
+    const uint32_t badAt = s.now;
+    TEST_ASSERT_TRUE(runUntil(s, 63000U, [&s, before]() { return powerOffCount(s) > before; }));
+    TEST_ASSERT_TRUE((s.power.back().t - badAt) >= 59000U);
+    TEST_ASSERT_TRUE((s.power.back().t - badAt) <= 62000U);
+}
+
+// 无卡断电与普通 L3 互不混用：之后真正的 L3 仍从 30 s 起步。
+void testNoSimCycleDoesNotPolluteL3Backoff()
+{
+    Sim s;
+    setup(s);
+    s.simAbsent = true;
+    TEST_ASSERT_TRUE(runUntil(s, 70000U, [&s]() { return powerOffCount(s) == 1U; }));
+    s.simAbsent = false;
+    TEST_ASSERT_TRUE(toReady(s, 60000U));
+    s.qiactFails = 3;
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    const size_t before = powerOffCount(s);
+    TEST_ASSERT_TRUE(runUntil(s, 120000U, [&s, before]() { return powerOffCount(s) > before; }));
+    const uint32_t offAt = s.power.back().t;
+    TEST_ASSERT_TRUE(runUntil(s, 40000U, [&s]() { return s.power.back().on; }));
+    TEST_ASSERT_TRUE((s.power.back().t - offAt) >= 29900U);
+    TEST_ASSERT_TRUE((s.power.back().t - offAt) <= 31500U);
+}
+
+// 低电（powerAllowed 假）：无卡计时不得把模块再拉起来。
+void testNoSimCycleRespectsPowerGates()
+{
+    Sim s;
+    setup(s);
+    s.simAbsent = true;
+    TEST_ASSERT_TRUE(toSimAbsent(s, 30000U));
+    s.fsm.setPowerAllowed(false);
+    runFor(s, 400000U);
+    TEST_ASSERT_EQUAL(Phase::kOff, s.fsm.phase());
+    TEST_ASSERT_FALSE(s.power.back().on);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size() - powerOffCount(s)));
+    // startAllowed 假：到点断电后不再上电，放开后才重新上电。
+    Sim t;
+    setup(t);
+    t.simAbsent = true;
+    TEST_ASSERT_TRUE(toSimAbsent(t, 30000U));
+    t.fsm.setStartAllowed(false);
+    TEST_ASSERT_TRUE(runUntil(t, 70000U, [&t]() { return powerOffCount(t) == 1U; }));
+    runFor(t, 30000U);
+    TEST_ASSERT_FALSE(t.power.back().on);
+    t.simAbsent = false;
+    t.fsm.setStartAllowed(true);
+    TEST_ASSERT_TRUE(toReady(t, 20000U));
+}
+
+// PDP 掉线后重试前先查卡：卡已拔直接进 SimCheck，不做徒劳的 QIDEACT，快照不得停留在 ready/home。
+void testPdpDropWithSimGoneGoesStraightToSimCheck()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_EQUAL(SimStatus::kReady, s.fsm.snapshot(s.now).sim);
+    s.simAbsent = true; // 没有 SIM URC：只靠 PDP 掉线触发恢复
+    const size_t deactBefore = countCmds(s, "AT+QIDEACT=1");
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    TEST_ASSERT_TRUE(runUntil(s, 200U, [&s]() { return s.fsm.phase() == Phase::kPdpUp; }));
+    const cellular::LinkSnapshot dropped = s.fsm.snapshot(s.now);
+    TEST_ASSERT_EQUAL(SimStatus::kUnknown, dropped.sim);
+    TEST_ASSERT_EQUAL(RegStatus::kUnknown, dropped.reg);
+    TEST_ASSERT_FALSE(dropped.pdpUp);
+    TEST_ASSERT_TRUE(runUntil(s, 1000U, [&s]() { return s.fsm.phase() == Phase::kSimCheck; }));
+    TEST_ASSERT_EQUAL(SimStatus::kAbsent, s.fsm.snapshot(s.now).sim);
+    TEST_ASSERT_EQUAL_UINT32(deactBefore, static_cast<uint32_t>(countCmds(s, "AT+QIDEACT=1")));
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size())); // 未立即断电
+}
+
 void setUp() {}
 
 void tearDown() {}
@@ -1401,5 +1507,9 @@ int main()
     RUN_TEST(testIdleSlotRecvUrcDroppedNotSpinning);
     RUN_TEST(testPerSlotSnapshotReflectsEachConn);
     RUN_TEST(testOversizedRawReadRejectedAndRecovers);
+    RUN_TEST(testNoSimPowerCyclesWithBackoffAndResetsOnReady);
+    RUN_TEST(testNoSimCycleDoesNotPolluteL3Backoff);
+    RUN_TEST(testNoSimCycleRespectsPowerGates);
+    RUN_TEST(testPdpDropWithSimGoneGoesStraightToSimCheck);
     return UNITY_END();
 }

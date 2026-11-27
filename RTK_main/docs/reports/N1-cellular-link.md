@@ -142,6 +142,7 @@ kNet 栈 4096 B。最深调用链为 `poll → LinkFsm::poll → AtEngine::submi
 | L1 连接 | 单连接失败 | 2 s 起翻倍，封顶 60 s；连续 5 次升 L2 |
 | L2 承载 | `QIACT` 失败、`pdpdeact` | 10 s 起翻倍，封顶 120 s；`QIACT` 连续 3 次失败升 L3 |
 | L3 模块 | AT 无响应（3 次）、SIM 异常、注册超时 180 s、**Ready 中注册丢失持续 180 s**、手动 `net reset` | PWREN 低 ≥ 2 s 后重上电；30/60/120/300 s，之后保持 300 s |
+| SimCheck 无卡 | SIM 确认异常（无卡/PIN/错误，非 unknown）持续 60 s | PWREN 低 ≥ 2 s 后重上电；60/120/240/300 s 封顶，见到 READY 清零；独立计数，不计 L3、不锁存 |
 
 其他：同步窗口 10 s、重试 500 ms、连续 3 次失败换另一波特率探测；SIM/注册轮询 2 s；Ready 巡检 30 s；启动 115200，`AT+IPR` 切 460800。
 
@@ -222,7 +223,9 @@ idf.py -B builds/n1-idf build flash monitor        # dev 档位，串口控制�
 2. `config set net.apn <APN>`（及 `net.user`/`net.pass`）→ `config set net.enable 1`；`config get net.pass` 应得 `***`；`net status` 显示 `restart pending`；**重启**。启动日志应出现 `net: ready uart1 tx=33 rx=32 pwren=GPIO26 en=1`。记录：上电→AT 可用→Ready 的时间；`net status` 应见 IMEI、ICCID（部分打码）、CSQ、注册、PDP。
 3. `net at ATI`、`net at AT+QGMR`：记录型号与固件（ADR-0021 Q5）；验证 `net at ATE1`、`net at AT+IPR=9600`、`net at AT+QISWTMD=1`、`net at AT+QICSGP=1`、`net at AT+CFUN=1,1`、`net at AT+QPOWD=1`、`net at AT+CMEE?` 与含 `;` 的命令被拒绝；CME ERROR 分类验证：本驱动在同步阶段执行 `AT+CMEE=2`，模块应答为**文本形式**。**拔出 SIM 后**执行 `net at AT+CPIN?`，控制台应显示 `CME ERROR 10`（邮箱按文本码映射为数值 10；若模块实际回数值形式 `+CME ERROR: 10`，同样应显示 `CME ERROR 10`），并被分类为 SIM 缺失；请记录控制台显示的应答。
 4. 注册丢失：拔天线观察注册丢失→L2/L3；**先恢复天线→应回到 L2 重试并最终 Ready**；Ready 中注册丢失持续 180 s 应进入 L3。
-5. SIM：拔 SIM → `net status` 进入 SimCheck 并显示 SIM 异常，**SimCheck 持续等待（不因超时而 L3，PWREN 保持高）**；等待若干分钟后**插回 SIM** → 识别 `+CPIN: READY` → FSM 走 L3（PWREN 低 ≥ 2 s，首次退避 30 s）→ 重上电后恢复到 Ready。记录每一步的 `net status` 相位与时间。
+5. SIM：拔 SIM（Ready 状态）→ 至多 1 次 CPIN 查询内 `net status` 进入 SimCheck 并显示 SIM 异常（absent），PWREN 保持高；**异常持续 60 s 后整机断电重启（PWREN 低 ≥ 2 s）**，仍无卡则按 60/120/240/300 s 退避重复断电；**插回 SIM** 后下一次上电读到 `+CPIN: READY` → Ready。PDP 掉线（含拔卡引发）时 L2 重试前先查 `AT+CPIN?`，非 READY 直接进 SimCheck，`net status` 的 sim/reg 在重新查询前为 unknown，不得停留 ready/home。记录每一步的 `net status` 相位与时间。
+   - **HIL 失败记录（2026-11-27）**：旧实现拔卡后 117 s PdpUp 的 L2 phase 7→6 反复，L2 重试不复查 CPIN，`net status` 仍显示 sim ready/reg home；升 L3 断电后进入 sim_check/absent，之后插回 SIM 但 EC600U 仅在上电时探测 SIM，SimCheck 无限等待且 PWREN 保持高，永不恢复。
+   - **修复**：SimCheck 无卡 60 s 起整机断电重启（60/120/240/300 s 封顶，见 READY 清零，独立于 L1/L2/L3 计数且不锁存）；L2 重试前先查卡；掉线后快照 sim/reg 置 unknown。主机测试 `testNoSimPowerCyclesWithBackoffAndResetsOnReady`、`testNoSimCycleDoesNotPolluteL3Backoff`、`testNoSimCycleRespectsPowerGates`、`testPdpDropWithSimGoneGoesStraightToSimCheck`（在 54b01b6 上均失败，修复后通过）。**需重新 HIL 验证本步。**
 6. 460800 稳定性（Q2）：Ready 连续 ≥ 30 min，观察 `net:` 日志无通道失效/溢出。
 7. 关机：`power off`（或长按），逻辑分析仪量 GPIO26 下降沿相对触发的时间，应 ≤ 2 s 且收到 `POWERED DOWN`；日志顺序应为：4G 优雅关机完成日志 → `device powered down`，且**不得**出现 `power quiesce timeout pending=log_drain`；USB 在位关机与低电关机同样验证；人为让模块无响应时，应在 PW1 截止时刻看到硬切 PWREN（日志 `PW1 timeout, hard-cut PWREN`）。
 8. 发射峰值与低电（Q3）：电池放至 ~15% 并保持注册，观察是否掉压/复位；**在线时降到 <10% 模块应保持**，此时断电重启或 `net reset` 后 <10% 应不再上电。
