@@ -200,6 +200,12 @@ kNet 栈 4096 B。最深调用链为 `poll → LinkFsm::poll → AtEngine::submi
     - **F7**：`MainHostCheck` 参与者在 `begin` 内记录当时主机时钟 `beginClockMs`（即 PW1 `poll` 的 `nowMs`），断言绝对等式：通用 `deadlineMs == beginClockMs + 150`，`kNetPower` 参与者 `deadlineMs == beginClockMs + 2000`，且两者起点相同；不再用两截止之差。**注入验证**：临时把 `PowerModule::beginStageParticipants` 的截止改为 `quiesceStartMs_ + 17U + limit`（两截止同加 17 ms），`main_concurrent/main_preempt_power_participant_blocks_and_timeout_names` 两项**失败**（差值断言在此偏移下仍会成立，绝对等式失效）；还原后 211/211 通过。
     - **Nit**：HIL 第 3 步删去 `net at ATE0`（白名单拒绝）；第 5 步改为 SimCheck 持续等待 → 插回识别 READY → L3 → Ready；第 12a 步删去板上 200 字符命令与 `net: write timeout` 日志（实际 CLI 最长 95 字符、邮箱拒绝 200 字符，且该日志无生产调用点），改为仅主机测试覆盖；HIL 侧**没有**现成的“写调用入口→返回”或“整轮入口→退出”计时点，故整轮 20 ms 判据**未覆盖**，如需覆盖须另加诊断计时（本任务不做）。
 
+36. **HIL 缺陷：关机日志排空误报超时**（`power quiesce timeout pending=log_drain`）：
+    - **根因**：内置 `log_drain` 在 kQuiesce 起点就打印 `device powered down` 并以 150 ms 上限起算；4G 参与者（`kNetPower`，上限 2000 ms）在完成轮才打印断电收尾日志，日志环重新变脏，而此时 `log_drain` 早已过 150 ms，被判超时，且 `device powered down` 早于 4G 断电日志。
+    - **修复**（`main/modules/power/PowerModule.{hpp,cpp}`）：新增 `logDrainStartMs_`/`logDrainStarted_`（`enterQuiesce` 复位）。存在 `kNetPower` 参与者时，`log_drain` 的 `begin`（打印 `device powered down`）延后到该参与者完成或到其自身上限之后，`logDrainDone` 与 150 ms 上限均自 `logDrainStartMs_` 起算，未开始前不计超时；无 `kNetPower` 参与者时 `logDrainStartMs_ = quiesceStartMs_`，时序与原来一致（30 ms 最小等待、150 ms 上限不变）。
+    - **与任务卡的偏离**：任务卡要求“其它所有 kQuiesce 参与者”收尾后才开始；实际只串行等待 `kNetPower`。原因：通用 150 ms 参与者（含 WifiConfig 等待）与 `log_drain` 同窗口，若串行等待，既有用例（`power_participant_blocks_and_timeout_names`、`power_timeout_recovery`、`web_module_check` 等）的 kCutPower 时间点后移 ≥ 30 ms，无 4G 时关机变慢，违背“无 4G 时序不变”。
+    - **回归**：`MainHostCheck` 新增场景 `power_log_drain_after_long_net`（`tools/main_host_check/CMakeLists.txt` 同步登记）：注册约 1800 ms 完成且完成轮打日志的 `kNetPower` 参与者，每 10 ms 泵日志；断言无 `timeout pending=log_drain`、`device powered down` 晚于参与者完成日志、总耗时 < 保存上限 3000 ms + 2500 ms。**在修复前的 `c23e07a` 的 `PowerModule` 上该用例失败**（`poweredDownPos > markerPos`），修复后通过；其余 211 项主机用例不变（213/213 通过）。
+
 **第五轮回归证据**（`4fbeb23` 的临时 worktree 上只覆盖三份测试文件后实际运行，验证后已删除；本轮测试用到的接口 `4fbeb23` 均已具备，无需桩）：`test_at_engine` 28 项中 **2 项失败**（`testSameChunkTailNotDeliveredToNextCommand` `Expected 1 Was 2`、`testRegQueryShapeRequiresNAndStat` `Expected FALSE Was TRUE`）；`test_link_fsm` 57 项中 **3 项失败**（`testDeactOkButBearerStillActiveNeverReady`、`testPowerFaultIgnoresRdyAndKeepsCooldown`、`testPayloadWireTimeBudget`）；`main_host_check` 相关用例在 `4fbeb23` 通过（F7，见上）。当前树：`test_at_engine` 28/28、`test_link_fsm` 57/57、`main_host_check` 211/211。审查者复现脚本在当前树上：`hard-stop`、`short-qisend`、`deact-ok-active`、`fault-rdy`、`fault-l3-hold`、`buffered-extra-terminator` 全部 exit=0；`probe_net`（用当前 `NetModule.cpp` 重新生成方法片段、桩补 `xQueueReset`，并按 `NetModule::poll` 的顺序在 `drainUart` 之前调用 `serviceCutCleanup`）：`uart-zero`、`diag-reg`、`diag-cpin`、`diag-cgreg`、`diag-foreign`、`pw1-hard-cut` 全部 exit=0。
 **未能主机回归的项**：F2 与 F6 的 `writeHook` 部分在仅 IDF 编译的 `NetModule.cpp` 内，主机测试构建不含该文件，无法加入常规回归，只由审查者脚本（片段提取）与 G3-idf 编译验证，并列入 HIL。
 
@@ -218,7 +224,7 @@ idf.py -B builds/n1-idf build flash monitor        # dev 档位，串口控制�
 4. 注册丢失：拔天线观察注册丢失→L2/L3；**先恢复天线→应回到 L2 重试并最终 Ready**；Ready 中注册丢失持续 180 s 应进入 L3。
 5. SIM：拔 SIM → `net status` 进入 SimCheck 并显示 SIM 异常，**SimCheck 持续等待（不因超时而 L3，PWREN 保持高）**；等待若干分钟后**插回 SIM** → 识别 `+CPIN: READY` → FSM 走 L3（PWREN 低 ≥ 2 s，首次退避 30 s）→ 重上电后恢复到 Ready。记录每一步的 `net status` 相位与时间。
 6. 460800 稳定性（Q2）：Ready 连续 ≥ 30 min，观察 `net:` 日志无通道失效/溢出。
-7. 关机：`power off`（或长按），逻辑分析仪量 GPIO26 下降沿相对触发的时间，应 ≤ 2 s 且收到 `POWERED DOWN`；USB 在位关机与低电关机同样验证；人为让模块无响应时，应在 PW1 截止时刻看到硬切 PWREN（日志 `PW1 timeout, hard-cut PWREN`）。
+7. 关机：`power off`（或长按），逻辑分析仪量 GPIO26 下降沿相对触发的时间，应 ≤ 2 s 且收到 `POWERED DOWN`；日志顺序应为：4G 优雅关机完成日志 → `device powered down`，且**不得**出现 `power quiesce timeout pending=log_drain`；USB 在位关机与低电关机同样验证；人为让模块无响应时，应在 PW1 截止时刻看到硬切 PWREN（日志 `PW1 timeout, hard-cut PWREN`）。
 8. 发射峰值与低电（Q3）：电池放至 ~15% 并保持注册，观察是否掉压/复位；**在线时降到 <10% 模块应保持**，此时断电重启或 `net reset` 后 <10% 应不再上电。
 9. 堆与栈：启动后 `sys heap`（free/min）与 `sys tasks`（kNet 栈高水位），回填 §4 与 §5；与 `net.enable=0` 启动的堆对比得出启用成本。
 10. 低电门控与冷却：已 Ready 时把电池拉到 <10% 后执行 `net reset`，PWREN 低 ≥ 2 s 之后**不得**再次拉高（`net status` 显示被低电门控）；电量回到 ≥15% 后应自动上电。

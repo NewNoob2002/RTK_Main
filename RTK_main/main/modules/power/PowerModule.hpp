@@ -491,6 +491,9 @@ private:
     uint32_t shortPresses_ = 0U;
     uint32_t longPresses_ = 0U;
     uint32_t quiesceStartMs_ = 0U;
+    /// log_drain 实际开始时刻（ms）：其它 kQuiesce 参与者均完成或到达各自上限后才置位，enterQuiesce 复位。
+    uint32_t logDrainStartMs_ = 0U;
+    bool logDrainStarted_ = false;
     uint32_t cutStartMs_ = 0U;
     uint32_t lastChargerPollMs_ = 0U;
     bool chargerSampled_ = false;

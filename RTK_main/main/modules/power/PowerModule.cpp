@@ -755,10 +755,23 @@ struct PowerModule::ParticipantOps {
     }
 
     /**
+     * @brief 判断参与者是否为内置 log_drain
+     * @param p: 参与者表项
+     * @retval true 是 log_drain（其 begin/截止延后到其它 kQuiesce 参与者收尾之后）
+     * @retval false 其它参与者
+     * @note 仅 kLink 调用，非 ISR。
+     */
+    static bool isLogDrain(const power::ShutdownParticipant &p) noexcept
+    {
+        return p.isDone == &logDrainDone;
+    }
+
+    /**
      * @brief 打印关机完成日志以启动日志排空等待
      * @param stage: 当前阶段（kQuiesce）
      * @param userCtx: 未使用
-     * @note 仅 kLink 调用，非 ISR。
+     * @note 仅 kLink 调用，非 ISR；由 pollStageParticipants 在其它 kQuiesce 参与者收尾后调用，
+     *       使 "device powered down" 晚于 4G 断电等收尾日志。
      */
     static void logDrainBegin(board::ShutdownStage stage, uint32_t /*deadlineMs*/,
                               void *userCtx) noexcept
@@ -773,13 +786,13 @@ struct PowerModule::ParticipantOps {
      * @param userCtx: PowerModule 实例指针
      * @retval true 日志与 UART 均已排空
      * @retval false 仍有日志等待输出
-     * @note 仅 kLink 调用，非 ISR。
+     * @note 仅 kLink 调用，非 ISR；排空计时自 logDrainStartMs_ 起算（未开始前不会被调用）。
      */
     static bool logDrainDone(void *userCtx) noexcept
     {
         // 内置参与者表仅由 PowerModule 传入 this，恢复指针安全。
         const auto *self = static_cast<const PowerModule *>(userCtx);
-        return self->isLogDrained(self->shutdownNowMs_ - self->quiesceStartMs_);
+        return self->isLogDrained(self->shutdownNowMs_ - self->logDrainStartMs_);
     }
 
     /**
@@ -930,7 +943,9 @@ void PowerModule::beginStageParticipants(board::ShutdownStage stage) noexcept
     const auto invoke = [this, stage, &idx](const power::ShutdownParticipant &p, void *cbCtx,
                                             bool builtin) noexcept {
         if (p.stage == stage) {
-            if (p.begin != nullptr) {
+            // log_drain 的 begin（打印 "device powered down"）延后到 pollStageParticipants：
+            // 须等其它 kQuiesce 参与者（如 4G 优雅关机）收尾后再启动，避免过早起算 150 ms 上限。
+            if ((p.begin != nullptr) && !(builtin && ParticipantOps::isLogDrain(p))) {
                 // kQuiesce 的绝对截止时刻 = PW1 起点 + 该参与者上限；参与者与 PW1 共用同一时刻（0=未指定）。
                 const uint32_t deadline = (stage == board::ShutdownStage::kQuiesce)
                                               ? (quiesceStartMs_ + quiesceLimitMs(p, builtin))
@@ -961,13 +976,30 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
     const uint32_t quiesceElapsed = nowMs - quiesceStartMs_;
     bool allSatisfied = true;
     size_t idx = 0U;
-    const auto check = [this, stage, quiesceElapsed, &allSatisfied,
-                        &idx](const power::ShutdownParticipant &p, void *cbCtx,
-                              bool builtin) noexcept {
+    // log_drain 延后处理：记录其表项与位序号，待其它参与者判定完再决定是否开始。
+    const power::ShutdownParticipant *logDrain = nullptr;
+    size_t logDrainIdx = 0U;
+    // 4G 里程碑（kNetPower，上限 2000 ms，完成时才打断电日志）参与者：是否存在、是否仍在等待。
+    // 其余参与者与 log_drain 同窗口，不必串行等待，避免无 4G 时静默阶段被拉长。
+    bool longSeen = false;
+    bool longPending = false;
+    const auto check = [this, stage, quiesceElapsed, &allSatisfied, &idx, &logDrain, &logDrainIdx,
+                        &longSeen, &longPending](const power::ShutdownParticipant &p, void *cbCtx,
+                                                 bool builtin) noexcept {
         if (p.stage == stage) {
+            if ((stage == board::ShutdownStage::kQuiesce) && builtin &&
+                ParticipantOps::isLogDrain(p)) {
+                logDrain = &p;
+                logDrainIdx = idx;
+                ++idx;
+                return;
+            }
             // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
             const auto bit = static_cast<uint16_t>(1U << idx);
             const bool done = (p.isDone == nullptr) || p.isDone(cbCtx);
+            const bool isLong = (stage == board::ShutdownStage::kQuiesce) &&
+                                (p.milestone == power::ShutdownMilestone::kNetPower);
+            longSeen = longSeen || isLong;
             if (done) {
                 participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ | bit);
             } else {
@@ -975,6 +1007,7 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
                 if (stage == board::ShutdownStage::kQuiesce) {
                     if (quiesceElapsed < quiesceLimitMs(p, builtin)) {
                         allSatisfied = false;
+                        longPending = longPending || isLong;
                     } else if (!builtin && (p.onTimeout != nullptr)) {
                         // 到点未完成：立即兜底（不等 OLED 可见时间/其它参与者）；失败则每轮重试到 isDone。
                         p.onTimeout(cbCtx);
@@ -991,6 +1024,30 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
     }
     for (const auto &p : power::extraShutdownParticipants()) {
         check(p, p.userCtx, false);
+    }
+    if (logDrain != nullptr) {
+        // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+        const auto bit = static_cast<uint16_t>(1U << logDrainIdx);
+        // kNetPower 参与者均完成或到限后才开始 log_drain；无长参与者时与旧行为一致（自静默起点起算）。
+        if (!logDrainStarted_ && !longPending) {
+            logDrainStarted_ = true;
+            logDrainStartMs_ = longSeen ? nowMs : quiesceStartMs_;
+            if (logDrain->begin != nullptr) {
+                logDrain->begin(stage, logDrainStartMs_ + quiesceLimitMs(*logDrain, true), this);
+            }
+        }
+        if (!logDrainStarted_) {
+            // 未开始前不视为超时（recordStageTimeouts 只在 allSatisfied 后调用），但阻塞放行。
+            participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
+            allSatisfied = false;
+        } else if (logDrain->isDone(this)) {
+            participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ | bit);
+        } else {
+            participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
+            if ((nowMs - logDrainStartMs_) < quiesceLimitMs(*logDrain, true)) {
+                allSatisfied = false;
+            }
+        }
     }
     return allSatisfied;
 }
@@ -1080,6 +1137,8 @@ void PowerModule::enterQuiesce(uint32_t nowMs) noexcept
     store::pausePowerSave();
     ctx().storage.finishPowerSave();
     quiesceStartMs_ = nowMs;
+    logDrainStartMs_ = nowMs;
+    logDrainStarted_ = false;
     shutdownNowMs_ = nowMs;
     beginStageParticipants(board::ShutdownStage::kQuiesce);
     static_cast<void>(pollStageParticipants(board::ShutdownStage::kQuiesce, nowMs));

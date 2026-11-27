@@ -1695,6 +1695,83 @@ void powerLogDrain()
     CHECK(s_restarts == 1U);
 }
 
+/**
+ * @brief 回归：4G 长收尾（约 2000 ms 且完成轮才打日志）不得让 log_drain 误报超时（N1 HIL）。
+ * @note log_drain 须在其它 kQuiesce 参与者完成后才开始并起算 150 ms；
+ *       "device powered down" 必须晚于长参与者的完成日志，总耗时不超过 PW1 原上限。
+ */
+void powerLogDrainAfterLongNetQuiesce()
+{
+    using namespace app;
+    power::clearExtraShutdownParticipants();
+    struct LongState {
+        uint32_t beginClockMs = 0U;
+        bool logged = false;
+    };
+    static LongState state{};
+    state = LongState{};
+    const auto onBegin = [](board::ShutdownStage /*stage*/, uint32_t /*deadlineMs*/,
+                            void *arg) noexcept {
+        // 由本测试显式绑定为 LongState*。
+        static_cast<LongState *>(arg)->beginClockMs = s_clock.load();
+    };
+    const auto checkDone = [](void *arg) noexcept {
+        // 由本测试显式绑定为 LongState*。
+        auto *st = static_cast<LongState *>(arg);
+        if ((s_clock.load() - st->beginClockMs) < 1800U) {
+            return false;
+        }
+        if (!st->logged) {
+            st->logged = true; // 完成轮才产出日志，模拟 4G 断电收尾日志
+            FW_LOGI(fw::TraceCat::kSys, "net power done marker");
+        }
+        return true;
+    };
+    CHECK(power::registerShutdownParticipant(power::ShutdownParticipant{
+              .name = "test_net_long",
+              .begin = onBegin,
+              .isDone = checkDone,
+              .userCtx = &state,
+              .stage = board::ShutdownStage::kQuiesce,
+              .milestone = power::ShutdownMilestone::kNetPower,
+          }) == fw::Status::kOk);
+
+    setupPower(board::BootMode::kNormal);
+    auto &ctx = appContext();
+    std::array<fw::TraceEvent, DebugModule::kRingEvents> trace{};
+    std::array<uint8_t, DebugModule::kLogRingBytes> log{};
+    std::array<StackType_t, DebugModule::kTaskStackBytes / sizeof(StackType_t)> stack{};
+    CHECK(fw::isOk(ctx.debug.bindStorage({trace, log, stack})));
+    CHECK(fw::isOk(ctx.debug.init()));
+    CHECK(fw::isOk(ctx.debug.attachLog()));
+    CapturedLogBuf captured{};
+    s_capturedLog = &captured;
+    cli::setOutSink(&captureLogSink, false);
+    s_gpioLevels[25] = 1;
+
+    CHECK(power::requestShutdown(board::ShutdownReason::kConsole));
+    const uint32_t startMs = s_clock.load();
+    // 每个 10 ms 轮后泵日志，模拟日志任务正常排空；到 PW1 断电（kCutPower 后 GPIO4 动作或重启）为止。
+    for (uint32_t i = 0U; i < 600U && s_restarts == 0U && s_gpio4Presses == 0U; ++i) {
+        pollPower(1U);
+        (void)ModuleTestAccess::pumpLogs();
+    }
+    const uint32_t totalMs = s_clock.load() - startMs;
+    (void)ModuleTestAccess::pumpLogs();
+    const std::string_view logs{captured.data.data(), captured.len};
+    CHECK(state.logged);
+    CHECK(logs.find("timeout pending=log_drain") == std::string_view::npos);
+    const size_t markerPos = logs.find("net power done marker");
+    const size_t poweredDownPos = logs.find("device powered down");
+    CHECK(markerPos != std::string_view::npos && poweredDownPos != std::string_view::npos);
+    CHECK(poweredDownPos > markerPos);
+    // 总时长不超过原 PW1 上限：保存 3 s + 静默（净 2 s + 150 ms 排空）+ 余量。
+    CHECK(totalMs < (board::kShutdownSaveTimeoutMs + 2500U));
+    cli::setOutSink(nullptr, false);
+    s_capturedLog = nullptr;
+    power::clearExtraShutdownParticipants();
+}
+
 /** @brief 复现切断入口 REG08 争用，检查下一轮重试且无 GPIO4 高沿。 */
 void powerBusyAtCut()
 {
@@ -3847,6 +3924,8 @@ int main(int argc, const char **raw_args)
         powerSimBatteryRedundantOff();
     } else if (std::strcmp(argv[1], "power_log_drain") == 0) {
         powerLogDrain();
+    } else if (std::strcmp(argv[1], "power_log_drain_after_long_net") == 0) {
+        powerLogDrainAfterLongNetQuiesce();
     } else if (std::strcmp(argv[1], "power_low_battery") == 0) {
         powerLowBattery();
     } else if (std::strcmp(argv[1], "power_battery_read_failure") == 0) {
