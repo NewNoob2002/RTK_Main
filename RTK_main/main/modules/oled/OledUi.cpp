@@ -903,19 +903,23 @@ uint32_t UiController::cellularWaitMs(uint32_t nowMs, const NetView &net) const 
  * @brief 确认当前告警，保留同批次其余待处理告警。
  * @param nowMs: 单调毫秒。
  * @param[in,out] keys: 本帧收到的短按；覆盖变化或确认时丢弃。
- * @param alarm: 当前告警批次。
+ * @param vm: 当前告警批次与配对请求快照。
  * @retval 全屏告警决策，无告警时返回空值。
  * @note 仅 OLED 任务。
  */
 std::optional<UiDecision> UiController::stepAlarm(uint32_t nowMs, std::span<const uint32_t> &keys,
-                                                  const AlarmSnapshot &alarm) noexcept
+                                                  const ViewModel &vm) noexcept
 {
+    const auto &alarm = *vm.alarm;
     const bool newBatch = alarm.sequence != alarmSequence_;
     if (newBatch) {
         alarmSequence_ = alarm.sequence;
         acknowledgedAlarms_ = 0U;
     }
     const auto next = highestAlarm(alarm.pending & ~acknowledgedAlarms_);
+    if (next != AlarmKind::kNone) {
+        suppressedPairId_ = vm.pairing.id; // 告警覆盖期间的请求由蓝牙端按原超时处理。
+    }
     if (newBatch || next != alarmVisible_) {
         if (next != AlarmKind::kNone || alarmVisible_ != AlarmKind::kNone) {
             keys = {};
@@ -1027,7 +1031,7 @@ UiDecision UiController::stepActive(uint32_t nowMs, uint32_t dtMs, std::span<con
     }
     if (powerOffConfirm_) {
         alarmVisible_ = AlarmKind::kNone;
-    } else if (const auto alarm = stepAlarm(nowMs, keys, *vm.alarm); alarm.has_value()) {
+    } else if (const auto alarm = stepAlarm(nowMs, keys, vm); alarm.has_value()) {
         return *alarm;
     }
     // 必须先按生产顺序消费队列内全部消抖短按时间戳，再检查绝对截止，避免 OLED 刷屏延迟误拆双击（R2OL2-03）。

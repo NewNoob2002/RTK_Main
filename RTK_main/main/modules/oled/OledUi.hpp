@@ -616,7 +616,7 @@ private:
     void activateNetRow(uint32_t nowMs) noexcept;
 
     [[nodiscard]] std::optional<UiDecision>
-    stepAlarm(uint32_t nowMs, std::span<const uint32_t> &keys, const AlarmSnapshot &alarm) noexcept;
+    stepAlarm(uint32_t nowMs, std::span<const uint32_t> &keys, const ViewModel &vm) noexcept;
 
     /**
      * @brief 处理普通页面的告警、弹窗、按键与动画。

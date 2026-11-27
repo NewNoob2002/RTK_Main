@@ -1516,7 +1516,7 @@ void testOtaPage()
     CHECK(shutdown.page == OledPage::kShutdown && shutdown.markShutdownFinalFrame);
 }
 
-/** @brief 验证 CSQ 边界、连续升格、立即降格、候选被打断及毫秒回绕。 */
+/** @brief 验证 CSQ 边界、首次即时显示、升降格、未知恢复和毫秒回绕。 */
 void testSignalBars() noexcept
 {
     CHECK(csqBars(0U) == 1U && csqBars(9U) == 1U);
@@ -1525,16 +1525,38 @@ void testSignalBars() noexcept
     CHECK(csqBars(20U) == 4U && csqBars(31U) == 4U);
     CHECK(csqBars(99U) == 0U && csqBars(255U) == 0U);
     constexpr uint32_t kStart = UINT32_MAX - 100U;
-    auto bars = updateSignalBars({}, 2U, kStart);
-    CHECK(updateSignalBars(bars, 2U, kStart + 9999U).shown == 0U);
-    bars = updateSignalBars(bars, 2U, kStart + 10000U);
+    auto bars = updateSignalBars({}, 2U, kStart - 1U);
     CHECK(bars.shown == 2U);
-    bars = updateSignalBars(bars, 4U, 15000U);
-    bars = updateSignalBars(bars, 3U, 24999U);
-    CHECK(updateSignalBars(bars, 3U, 25000U).shown == 2U);
-    CHECK(updateSignalBars(bars, 3U, 34999U).shown == 3U);
-    bars = updateSignalBars(bars, 1U, 25001U);
-    CHECK(bars.shown == 1U && updateSignalBars(bars, 0U, 25002U).shown == 0U);
+    bars = updateSignalBars(bars, 4U, kStart);
+    CHECK(updateSignalBars(bars, 4U, kStart + 9999U).shown == 2U);
+    bars = updateSignalBars(bars, 4U, kStart + 10000U);
+    CHECK(bars.shown == 4U);
+    bars = updateSignalBars(bars, 1U, 15000U);
+    CHECK(bars.shown == 1U);
+    bars = updateSignalBars(bars, csqBars(99U), 15001U);
+    CHECK(bars.shown == 0U);
+    CHECK(updateSignalBars(bars, 3U, 15002U).shown == 3U);
+}
+
+/** @brief 验证高位抖动按窗口最小值升格，回落至当前格数时结束窗口。 */
+void testSignalBarsFluctuation() noexcept
+{
+    auto bars = updateSignalBars({}, 2U, 0U);
+    bars = updateSignalBars(bars, 4U, 1000U);
+    bars = updateSignalBars(bars, 3U, 2000U);
+    bars = updateSignalBars(bars, 4U, 6000U);
+    bars = updateSignalBars(bars, 3U, 9000U);
+    bars = updateSignalBars(bars, 4U, 10999U);
+    CHECK(bars.shown == 2U);
+    bars = updateSignalBars(bars, 4U, 11000U);
+    CHECK(bars.shown == 3U && bars.candidate == 4U && bars.sinceMs == 11000U);
+    CHECK(updateSignalBars(bars, 4U, 20999U).shown == 3U);
+    CHECK(updateSignalBars(bars, 4U, 21000U).shown == 4U);
+
+    auto interrupted = updateSignalBars(bars, 3U, 20000U);
+    interrupted = updateSignalBars(interrupted, 4U, 20001U);
+    CHECK(updateSignalBars(interrupted, 4U, 21000U).shown == 3U);
+    CHECK(updateSignalBars(interrupted, 4U, 30001U).shown == 4U);
 }
 
 /** @brief 验证蜂窝图标选择，以及状态栏 4G、搜索帧、未来箭头只占预留区域。 */
@@ -1705,6 +1727,41 @@ void testAlarmPage() noexcept
     CHECK(ctrl.step(3000U, {}, vm).page == OledPage::kAlarm);
 }
 
+/** @brief 验证告警覆盖旧配对弹窗，也抑制告警期间抵达的配对请求。 */
+void testAlarmSuppressesPairing() noexcept
+{
+    auto vm = makeHealthyVm();
+    UiController ctrl{};
+    ctrl.reset(board::BootMode::kNormal, 0U);
+    const std::array<uint32_t, 2U> skip{100U, 200U};
+    CHECK(ctrl.step(200U, skip, vm).page == OledPage::kDialplate);
+    vm.pairing.id = 41U;
+    vm.pairing.requestDeadlineMs = 5000U;
+    static_cast<void>(ctrl.step(300U, {}, vm));
+    CHECK(ctrl.renderState(300U).modal == UiModal::kPair);
+
+    AlarmSnapshot alarm{.sequence = 1U, .pending = alarmBit(AlarmKind::kNetwork)};
+    vm.alarm = &alarm;
+    CHECK(ctrl.step(400U, {}, vm).page == OledPage::kAlarm);
+    CHECK(ctrl.renderState(400U).modal == UiModal::kNone);
+    const auto confirm = [&ctrl, &vm](uint32_t nowMs) {
+        const std::array key{nowMs};
+        const auto out = ctrl.step(nowMs, key, vm);
+        CHECK(out.page == OledPage::kDialplate && out.action.action == OledAction::kNone);
+        CHECK(ctrl.renderState(nowMs).modal == UiModal::kNone);
+    };
+    confirm(500U);
+
+    ++alarm.sequence;
+    CHECK(ctrl.step(600U, {}, vm).page == OledPage::kAlarm);
+    vm.pairing.id = 42U;
+    confirm(700U); // 在确认告警的同一轮读到新请求，确认键仍专属于告警。
+
+    vm.pairing.id = 43U;
+    static_cast<void>(ctrl.step(800U, {}, vm));
+    CHECK(ctrl.renderState(800U).modal == UiModal::kPair);
+}
+
 /** @brief 验证跑马灯停留、位移、回绕和可见字段的唯一像素裁剪范围。 */
 void testMarquee()
 {
@@ -1786,10 +1843,12 @@ int main()
     testOtaPage();
     testMarquee();
     testSignalBars();
+    testSignalBarsFluctuation();
     testCellularIcon();
     testNetNavigation();
     testIccidMask();
     testAlarmPage();
+    testAlarmSuppressesPairing();
     if (s_failures != 0) {
         std::printf("oled_ui_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;

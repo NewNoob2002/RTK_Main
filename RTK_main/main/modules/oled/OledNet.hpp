@@ -54,11 +54,11 @@ inline constexpr uint32_t kSignalSearchFrameMs = 250U;
 struct SignalBars {
     uint32_t sinceMs = 0U;
     uint8_t shown = 0U;
-    uint8_t candidate = 0U;
+    uint8_t candidate = 0U; // 升格窗口内的最小值；等于 shown 时无窗口。
 };
 
 /**
- * @brief 推进信号格数，升格候选连续保持十秒才显示，降格即时生效。
+ * @brief 首次有效信号与降格即时生效，后续升格使用连续十秒内的最小格数。
  * @param previous: 上一次迟滞状态。
  * @param target: 本次映射候选格数。
  * @param nowMs: 单调毫秒，允许回绕。
@@ -68,14 +68,16 @@ struct SignalBars {
 [[nodiscard]] constexpr SignalBars updateSignalBars(SignalBars previous, uint8_t target,
                                                     uint32_t nowMs) noexcept
 {
-    if (target <= previous.shown) {
+    if (previous.shown == 0U || target <= previous.shown) {
         return {.shown = target, .candidate = target};
     }
-    if (target != previous.candidate) {
+    if (previous.candidate == previous.shown) {
         return {.sinceMs = nowMs, .shown = previous.shown, .candidate = target};
     }
+    previous.candidate = std::min(previous.candidate, target);
     if ((nowMs - previous.sinceMs) >= kSignalRiseMs) {
-        previous.shown = target;
+        // 当前采样若仍高于新显示值，从此刻开始下一轮升格窗口。
+        return {.sinceMs = nowMs, .shown = previous.candidate, .candidate = target};
     }
     return previous;
 }
