@@ -51,6 +51,13 @@ inline constexpr uint8_t kVerbStorageWhitelistDel = 4U;
 inline constexpr uint8_t kVerbStorageSetPairNext = 5U;
 inline constexpr uint8_t kVerbStorageSetHeight = 6U;
 inline constexpr uint8_t kVerbStorageSetSnPn = 7U;
+/** 4G 配置动词：由 kStorage 持久化（与 main 的 StorageVerb 一致，SettingsBackend 以 static_assert 保证）。 */
+inline constexpr uint8_t kVerbStorageSetNetEnable = 8U;
+inline constexpr uint8_t kVerbStorageSetNetApn = 9U;
+inline constexpr uint8_t kVerbStorageSetNetUser = 10U;
+inline constexpr uint8_t kVerbStorageSetNetPass = 11U;
+/** 4G 文本键（APN/用户名/密码）最大字符数；加 1 个终止位后仍 ≤ fw::kCommandArgBytes。 */
+inline constexpr size_t kNetTextMaxBytes = 31U;
 
 /** GGA 质量门控子命令标志位（与 app::kGgaGateFlag* 一致）。 */
 inline constexpr uint8_t kGgaGateFlagEnabled = 1U << 0U;
@@ -110,6 +117,7 @@ enum class KeyKind : uint8_t {
     kSatTrack, // "<cutoffDeg>,<gps>,<glo>,<bds>,<gal>,<sbas>"
     kHeight,   // 16 位十六进制（8 B 小端 IEEE 754 binary64，0..10 m）
     kSnPn,     // 64 位十六进制（16 B SN + 16 B PN）
+    kText,     // 0..31 个可见 ASCII（0x21..0x7E）文本，允许为空（用于 APN/用户名/密码）
 };
 
 /** 持久化策略（ADR-0018 §2.3）。 */
@@ -131,6 +139,8 @@ inline constexpr uint8_t kStandardAll = 0x0FU;   // console, web, phone, interna
 inline constexpr uint8_t kLocalOnly = 0x0BU;     // console, web, internal
 inline constexpr uint8_t kPhoneAndLocal = 0x0DU; // console, phone, internal（非网页键）
 inline constexpr uint8_t kPhoneInternal = 0x0CU; // phone, internal
+inline constexpr uint8_t kConsoleInternal =
+    0x09U; // console, internal（不对网页/手机/MQTT 开放，如 4G 配置）
 } // namespace access
 
 /** 注册表中全部已知设置键的固定编号（顺序即网页与注册表遍历顺序）。 */
@@ -156,6 +166,12 @@ enum class KeyId : uint8_t {
     kPhoneHeight,
     kPhoneSnPn,
     kCount,
+    // 已发布编号不得移动：kCount(20) 保留，21 为 gnss.cutoff（Registry 内部常量）。
+    // 4G 键只能追加在其后，显式取值保证既有 KeyId 数值（含 gnss.cutoff=21）不变。
+    kNetEnable = 22,
+    kNetApn = 23,
+    kNetUser = 24,
+    kNetPass = 25,
 };
 
 /** GNSS 输出能力表下标（对应 5 条网页 NMEA 输出键）。 */

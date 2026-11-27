@@ -26,6 +26,7 @@ struct BootConfig {
     uint8_t previousFailures = 0U;
     bool safeDefaults = false;
     bool userNvsReady = false;
+    bool netEnable = false; // net.enable 早期值：仅此为真才分配 4G 栈/UART（ADR-0021 §2.1）
 };
 
 /** @brief 初始化 NVS、记录本次启动并应用早期配置。 @param app: 当前应用上下文。 @note 仅启动任务，可阻塞，非 ISR。 */

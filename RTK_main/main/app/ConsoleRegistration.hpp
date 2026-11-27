@@ -55,6 +55,7 @@ using namespace std::string_view_literals;
         dev ? "oled"sv : kDisabled,
         dev && wifiConfigEnabled ? "radio"sv : kDisabled,
         dev ? "ota"sv : kDisabled,
+        repl ? "net"sv : kDisabled,
     };
 }
 
@@ -85,6 +86,7 @@ using namespace std::string_view_literals;
         dev ? "oled"sv : kDisabled,
         dev && wifiConfigEnabled ? "radio"sv : kDisabled,
         dev ? "ota"sv : kDisabled,
+        repl ? "net"sv : kDisabled,
     };
 }
 

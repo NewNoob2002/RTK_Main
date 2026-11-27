@@ -26,7 +26,8 @@ inline constexpr int32_t kDetailDeferred = std::numeric_limits<int32_t>::min();
 
 namespace rtos {
 
-inline constexpr size_t kExecMaxModules = 8;
+// 模块表整表上限；N1 加入 net 后 BT 模式为 9 个，留出围栏/告警模块余量。每执行器多 20 B（ok_/last_poll_ms_）。
+inline constexpr size_t kExecMaxModules = 12;
 inline constexpr size_t kMaxPending = 8;
 inline constexpr uint8_t kInvalidSlot = std::numeric_limits<uint8_t>::max();
 inline constexpr uint32_t kExecIdleWaitMs = 20;

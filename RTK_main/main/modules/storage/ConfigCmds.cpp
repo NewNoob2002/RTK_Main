@@ -8,6 +8,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <string_view>
 
@@ -253,6 +254,9 @@ int cmdConfigSet(std::span<char *const> args) noexcept
     if (!submitSetting(args[kKeyArgIndex], args[kValArgIndex], factoryUnlocked(), kSettingTimeoutMs,
                        result, err)) {
         return cli::fail("%s", settingsErrorText(err));
+    }
+    if (std::strcmp(args[kKeyArgIndex], "net.enable") == 0) {
+        cli::outPrintf("OK net.enable saved; takes effect after reboot (restart pending)\n");
     }
     return 0;
 }

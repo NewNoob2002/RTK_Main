@@ -81,10 +81,11 @@ enum class ModuleKind : uint8_t {
     kGnss,
     kWeb,
     kPower,
-    kOled
+    kOled,
+    kNet
 };
 /** 执行器编号；链路与 GNSS IO 分别绑核运行。 */
-enum class ExecKind : uint8_t { kLink, kIo };
+enum class ExecKind : uint8_t { kLink, kIo, kNet };
 
 /**
  * @brief 读取模块或执行器的数值编号

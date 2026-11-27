@@ -18,6 +18,7 @@ extern "C" {
 #include "modules/debug/DebugKeys.hpp"
 #if RTK_GNSS_ENABLED
 #include "modules/gnss/GnssKeys.hpp"
+#include "modules/net/NetStore.hpp"
 #endif
 
 namespace app {
@@ -118,6 +119,7 @@ void readEarlyKeys(BootConfig &config) noexcept
     readEarlyValue(debug::kKeys[debug::kIdxLogLevel], config.logLevels, counts);
     // dbg/report 的上限为 3600 秒，转换无损。
     config.reportSeconds = static_cast<uint16_t>(seconds);
+    config.netEnable = net_store::loadEnable();
 #if RTK_GNSS_ENABLED
     readEarlyValue(gnss_store::kConfigKeys.back(), config.gnssBaud, config.baudCounts,
                    [](uint32_t baud) noexcept {

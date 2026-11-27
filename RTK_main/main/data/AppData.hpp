@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include "fw/Atomic.hpp"
+#include "cellular/Types.hpp"
 #include "settings/Types.hpp"
 #include "fw/FanoutRing.hpp"
 #include "fw/Command.hpp"
@@ -24,6 +25,7 @@
 #include "def/GnssSubDef.hpp"
 #endif
 #include "def/LinkDef.hpp"
+#include "def/NetDef.hpp"
 #include "def/OledDef.hpp"
 #include "def/OtaDef.hpp"
 #include "def/RtcmDef.hpp"
@@ -160,6 +162,8 @@ struct DataCenter {
     fw::Slot<SystemMode> systemMode{};
     fw::Slot<PowerSnapshot> powerStatus{};
     fw::Slot<OledStatus> oledStatus{};
+    fw::Slot<cellular::LinkSnapshot> netStatus{}; // 4G 链路快照（kNet 单写）
+    fw::Slot<NetConfigView> netConfig{}; // net.* 设置只读视图（kStorage 单写，密码不入视图）
     fw::Slot<web_ota::OtaProgress> otaProgress{}; // httpd 单写，OLED 只读。
     UiEventBus uiEvents{};
     fw::Slot<OledPairingStatus> oledPairing{};

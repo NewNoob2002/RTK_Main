@@ -3,6 +3,7 @@
 //       模块表与配置表为静态只读存储。不分配堆。
 #include "app/App.hpp"
 #include "app/BootReasons.hpp"
+#include "app/NetBlock.hpp"
 #include "app/SettingsBackend.hpp"
 #include "board/BoardProfile.hpp"
 
@@ -56,6 +57,12 @@ constexpr auto kWifiModules =
     makeModules<app::board::BootMode::kNormal, app::RadioMode::kWifiConfig>();
 constexpr auto kChargeStandbyModules =
     makeModules<app::board::BootMode::kChargeStandby, app::RadioMode::kBluetooth>();
+// Executor::init 以整张模块表校验 kExecMaxModules，超限时所有执行器 init 失败（N1 HIL：BT 模式 9 个模块
+// 导致 link_init 失败、只剩控制台）。在编译期拦截，避免主机测试使用不同模块表时漏检。
+static_assert(kBtModules.size() <= rtos::kExecMaxModules, "BT 模块表超过 kExecMaxModules");
+static_assert(kWifiModules.size() <= rtos::kExecMaxModules, "Wi-Fi 模块表超过 kExecMaxModules");
+static_assert(kChargeStandbyModules.size() <= rtos::kExecMaxModules,
+              "充电待机模块表超过 kExecMaxModules");
 
 /**
  * @brief 取得本次启动交给执行器的模块表
@@ -100,6 +107,26 @@ constexpr rtos::ExecutorConfig kIoConfig{
     .waitCtx = nullptr,
 };
 #endif // RTK_GNSS_ENABLED
+// kNet 绑 core0、prio 8（低于 kIo 9 与 kLink 10）；阻塞在 UART1 事件队列，由 NetModule::wait 计算超时（ADR-0021 §2.2）。
+constexpr rtos::ExecutorConfig kNetConfig{
+    .name = "net",
+    .id = app::id(app::ExecKind::kNet),
+    .priority = 8,
+    .core = 0,
+    .idleWaitMs = 50,
+    .roundBudgetMs = 20,
+    .yieldTicks = 1,
+    .watchdog = true,
+    .wait =
+        [](void * /*ctx*/, uint32_t maxMs) noexcept {
+            if (!app::s_app.awaitBoot(app::BootTask::kNet, true)) {
+                vTaskDelete(nullptr);
+                return;
+            }
+            app::s_app.net.wait(maxMs);
+        },
+    .waitCtx = nullptr,
+};
 // 链路绑 core1，BT worker/控制台在 core0；每轮至少让出 1 tick 给 IDLE1。
 constexpr rtos::ExecutorConfig kLinkConfig{
     .name = "link",
@@ -212,6 +239,34 @@ const char *startIo(std::span<StackType_t> ioStack, uint32_t &launched) noexcept
 }
 #endif // RTK_GNSS_ENABLED
 
+const char *startNet(std::span<StackType_t> netStack, std::span<uint8_t> netBlockMem,
+                     uint32_t &launched) noexcept
+{
+    NetBlock *block = constructNetBlock(netBlockMem);
+    if (block == nullptr || netStack.empty()) {
+        return boot_reason::kNetInit;
+    }
+    s_app.netBlock = block;
+    s_app.netExecutor = &block->executor;
+    s_app.net.bindRuntime(block->runtime);
+    const auto initialized =
+        s_app.netExecutor->init(kNetConfig, activeModules(), app::viewOf(block->storage, netStack));
+    if (!fw::isOk(initialized) || !modulesReady(*s_app.netExecutor, kNetConfig.id)) {
+        return boot_reason::kNetInit;
+    }
+    if (!fw::isOk(s_app.net.registerShutdown())) {
+        return boot_reason::kNetShutdownReg;
+    }
+    if (!fw::isOk(s_app.netExecutor->start())) {
+        return boot_reason::kNetTaskStart;
+    }
+    launched |= taskBit(BootTask::kNet);
+    if (!waitStarted(taskBit(BootTask::kNet)) || !modulesReady(*s_app.netExecutor, kNetConfig.id)) {
+        return boot_reason::kNetModuleStart;
+    }
+    return nullptr;
+}
+
 void stopBootTasks(uint32_t launched) noexcept
 {
     s_app.bootPhase.store(app::BootPhase::kStopping, std::memory_order_release);
@@ -231,6 +286,9 @@ void stopBootTasks(uint32_t launched) noexcept
         s_app.bootArena.setDegradedReason(boot_reason::kStopGnss);
     }
 #endif
+    if (normal && s_app.net.present() && !fw::isOk(s_app.net.stopBoot())) {
+        s_app.bootArena.setDegradedReason(boot_reason::kStopNet);
+    }
     if (normal && (s_app.radioMode == RadioMode::kBluetooth) &&
         (spp_server_stop_boot() != ESP_OK)) {
         s_app.bootArena.setDegradedReason(boot_reason::kStopSpp);

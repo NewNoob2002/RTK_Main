@@ -8,9 +8,11 @@
 #include <cinttypes>
 #include <cstring>
 #include <string_view>
+#include "board/BoardProfile.hpp"
 #include "def/StorageDef.hpp"
 #include "fw/Log.hpp"
 #include "fw/Tlog.hpp"
+#include "modules/net/NetStore.hpp"
 #include "modules/storage/StoreCatalog.hpp"
 #include "modules/storage/StoreKeys.hpp"
 #include "modules/storage/StoreWriteGate.hpp"
@@ -298,6 +300,7 @@ fw::Result StorageModule::init() noexcept
     publishSettingsSn();
     ctx().data.phoneHeight.write(phone_height_);
     ctx().data.phonePn.write(phone_pn_);
+    publishNetConfig();
     initialized_ = true;
     status_.btPairNext = bt_pair_next_;
     ctx().data.storeStatus.write(status_);
@@ -818,6 +821,83 @@ void StorageModule::setHeightCmd(const fw::Command &cmd, fw::CommandResult &resu
     result.status = fw::Result::kOk;
 }
 
+/**
+ * @brief 由当前 NVS 配置重建并发布 net.* 视图到 DataCenter
+ * @note 仅 kStorage 执行器任务（含 init）调用；不分配堆。
+ */
+void StorageModule::publishNetConfig() noexcept
+{
+    net_view_ = NetConfigView{};
+    if (!board::hasFeature(board::current(), board::Feature::kCellular)) {
+        ctx().data.netConfig.write(net_view_);
+        return;
+    }
+    net_view_.available = true;
+    if (ctx().bootConfig.userNvsReady && !ctx().bootConfig.safeDefaults) {
+        net_store::Saved saved;
+        net_store::load(saved);
+        net_view_.enable = saved.enable;
+        net_view_.passSet = saved.pass[0] != '\0';
+        net_view_.apn = saved.apn;
+        net_view_.user = saved.user;
+    }
+    ctx().data.netConfig.write(net_view_);
+}
+
+void StorageModule::setNetCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept
+{
+    if (!board::hasFeature(board::current(), board::Feature::kCellular)) {
+        result.status = fw::Result::kNotSupported;
+        return;
+    }
+    const auto &boot = ctx().bootConfig;
+    if (!boot.userNvsReady || boot.safeDefaults) {
+        result.status = fw::Result::kInvalidState;
+        return;
+    }
+    const auto verbId = static_cast<StorageVerb>(cmd.verb);
+    if (verbId == StorageVerb::kSetNetEnable) {
+        if (cmd.argLen != 1U || cmd.args[0] > 1U) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+        const bool enable = cmd.args[0] != 0U;
+        // 先提交 NVS，成功后才更新视图并递增 configRev；失败时 RAM 视图保持旧值。
+        if (net_store::saveEnable(enable) != ESP_OK) {
+            result.status = fw::Result::kIoError;
+            return;
+        }
+        net_view_.enable = enable;
+    } else {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): 命令参数字节按文本只读视图
+        const std::string_view text(reinterpret_cast<const char *>(cmd.args.data()),
+                                    std::min<size_t>(cmd.argLen, cmd.args.size()));
+        if (!net_store::validText(text)) {
+            result.status = fw::Result::kInvalidArg;
+            return;
+        }
+        const auto key = (verbId == StorageVerb::kSetNetApn)    ? net_store::TextKey::kApn
+                         : (verbId == StorageVerb::kSetNetUser) ? net_store::TextKey::kUser
+                                                                : net_store::TextKey::kPass;
+        if (net_store::saveText(key, text) != ESP_OK) {
+            result.status = fw::Result::kIoError;
+            return;
+        }
+        net_store::Field field{};
+        std::copy(text.begin(), text.end(), field.begin());
+        if (key == net_store::TextKey::kApn) {
+            net_view_.apn = field;
+        } else if (key == net_store::TextKey::kUser) {
+            net_view_.user = field;
+        } else {
+            net_view_.passSet = !text.empty();
+        }
+    }
+    net_view_.restartPending = true;
+    ctx().data.netConfig.write(net_view_);
+    result.status = fw::Result::kOk;
+}
+
 void StorageModule::setSnPnCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept
 {
     if (cmd.argLen != core::kPhoneSnPnBytes) {
@@ -929,6 +1009,12 @@ void StorageModule::onCommand(const fw::Command &cmd, fw::CommandResult &result)
     case StorageVerb::kSetSnPn:
         setSnPnCmd(cmd, result);
         return;
+    case StorageVerb::kSetNetEnable:
+    case StorageVerb::kSetNetApn:
+    case StorageVerb::kSetNetUser:
+    case StorageVerb::kSetNetPass:
+        setNetCmd(cmd, result);
+        break;
     default:
         result.status = fw::Result::kInvalidArg;
         break;

@@ -36,13 +36,17 @@ enum class ShutdownMilestone : uint8_t {
     kSaveFlush,    ///< kSave 阶段落盘项
     kRadioQuiesce, ///< kQuiesce 阶段无线静默（BT/Wi-Fi）
     kSafeGpio,     ///< kQuiesce 阶段外设安全电平
+    kNetPower,     ///< kQuiesce 阶段 4G 模块优雅关机（QPOWD，限时 2 s，ADR-0021 §2.9）
     kOledFinal,    ///< kCutPower 阶段 OLED 终帧停留
 };
 
 /** 关机收尾参与者阶段入口回调。 */
-using ShutdownBeginFn = void (*)(board::ShutdownStage stage, void *userCtx) noexcept;
+using ShutdownBeginFn = void (*)(board::ShutdownStage stage, uint32_t deadlineMs,
+                                 void *userCtx) noexcept;
 /** 关机收尾参与者完成轮询回调。 */
 using ShutdownDoneFn = bool (*)(void *userCtx) noexcept;
+/** 关机收尾参与者超时回调：该阶段有界等待到期且参与者仍未完成时调用一次（kLink 任务，须有界、不阻塞）。 */
+using ShutdownTimeoutFn = void (*)(void *userCtx) noexcept;
 
 /** 静态关机收尾参与者条目（编译期数组或启动期一次性注册，无堆）。 */
 struct ShutdownParticipant {
@@ -52,6 +56,7 @@ struct ShutdownParticipant {
     void *userCtx = nullptr;
     board::ShutdownStage stage = board::ShutdownStage::kSave;
     ShutdownMilestone milestone = ShutdownMilestone::kNone;
+    ShutdownTimeoutFn onTimeout = nullptr; ///< 可空：超时兜底（如 4G 模块硬切 PWREN）
 };
 inline constexpr size_t kMaxExtraShutdownParticipants = 4U;
 /** 外部参与者名称长度上限（不含结尾 0）；保证单条超时日志（kLogTextMax=160）可完整打印每个名字。 */
@@ -297,6 +302,26 @@ private:
      * @note 仅 kLink 调用，不阻塞，非 ISR。
      */
     [[nodiscard]] bool pollStageParticipants(board::ShutdownStage stage, uint32_t nowMs) noexcept;
+    /// pollStageParticipants 的汇总状态：allSatisfied 及 kNetPower 参与者的存在/等待标志。
+    struct PollState {
+        bool allSatisfied = true;
+        bool longSeen = false;
+        bool longPending = false;
+    };
+    /// 判定单个非 log_drain 参与者（见 PowerModule.cpp）。
+    void pollOneParticipant(const power::ShutdownParticipant &p, void *cbCtx, bool builtin,
+                            board::ShutdownStage stage, uint32_t quiesceElapsed, size_t idx,
+                            PollState &st) noexcept;
+    /// 轮询内置 log_drain（延后到 kNetPower 参与者收尾后开始）；返回是否不再阻塞静默阶段。
+    [[nodiscard]] bool pollLogDrain(const power::ShutdownParticipant &p, size_t idx, bool longSeen,
+                                    bool longPending, board::ShutdownStage stage,
+                                    uint32_t nowMs) noexcept;
+
+    /**
+     * @brief kCutPower 阶段每轮重试仍未完成的 kQuiesce 参与者超时兜底（如 4G 硬切 PWREN 失败后）
+     * @note 仅 kLink 调用，不阻塞，非 ISR；不延长既有 kCutPower 有界流程。
+     */
+    void retryQuiesceFallbacks() noexcept;
 
     /**
      * @brief 记录指定关机阶段在超时/结束时仍未完成的参与者位
@@ -480,6 +505,9 @@ private:
     uint32_t shortPresses_ = 0U;
     uint32_t longPresses_ = 0U;
     uint32_t quiesceStartMs_ = 0U;
+    /// log_drain 实际开始时刻（ms）：其它 kQuiesce 参与者均完成或到达各自上限后才置位，enterQuiesce 复位。
+    uint32_t logDrainStartMs_ = 0U;
+    bool logDrainStarted_ = false;
     uint32_t cutStartMs_ = 0U;
     uint32_t lastChargerPollMs_ = 0U;
     bool chargerSampled_ = false;

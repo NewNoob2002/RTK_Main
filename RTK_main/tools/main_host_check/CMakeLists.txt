@@ -21,6 +21,8 @@ add_subdirectory(${PROJ_ROOT}/components/stream_demux stream_demux_build)
 add_subdirectory(${PROJ_ROOT}/components/app_fw app_fw_build)
 add_subdirectory(${PROJ_ROOT}/components/settings settings_build)
 include_directories(${PROJ_ROOT}/components/settings/include)
+add_subdirectory(${PROJ_ROOT}/components/cellular cellular_build)
+include_directories(${PROJ_ROOT}/components/cellular/include)
 add_subdirectory(${PROJ_ROOT}/components/gnss gnss_build)
 add_subdirectory(${PROJ_ROOT}/components/web_proto web_proto_build)
 add_subdirectory(${PROJ_ROOT}/components/third_party third_party_build)
@@ -63,7 +65,7 @@ foreach(policy concurrent preempt)
         ${PROJ_ROOT}/main/board/BoardProfile.cpp ${PROJ_ROOT}/main/board/BoardCurrent.cpp
         ${PROJ_ROOT}/main/board/PowerLogic.cpp ${PROJ_ROOT}/main/modules/power/PowerModule.cpp
         ${PROJ_ROOT}/main/data/AppData.cpp ${PROJ_ROOT}/main/app/BootConfig.cpp
-        ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
+        ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/net/NetStore.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
         ${PROJ_ROOT}/main/modules/storage/ConfigCmds.cpp ${PROJ_ROOT}/main/support/ConsoleSupport.cpp
         ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
         ${PROJ_ROOT}/main/modules/system/FactoryReset.cpp
@@ -91,7 +93,7 @@ foreach(policy concurrent preempt)
     if(policy STREQUAL "preempt")
         target_compile_definitions(main_${policy} PRIVATE CONFIG_RTK_LINK_POLICY_PHONE_PREEMPT=1)
     endif()
-    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_short_key_ui power_oled_usb_final_flush power_oled_usb_final_timeout power_oled_usb_absent_no_wait power_oled_usb_already_flushed power_oled_usb_log_rebusy power_oled_usb_wake_on_flush power_oled_usb_wake_on_deadline power_shutdown_degraded_masks power_no_reopen power_fence_timeout power_log_drain power_low_battery power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
+    foreach(scenario policy_failure debug_cat_names credit_window save_recovery storage_backoff power_save_backoff power_standby power_short_key_ui power_oled_usb_final_flush power_oled_usb_final_timeout power_oled_usb_absent_no_wait power_oled_usb_already_flushed power_oled_usb_log_rebusy power_oled_usb_wake_on_flush power_oled_usb_wake_on_deadline power_shutdown_degraded_masks power_no_reopen power_fence_timeout power_log_drain power_log_drain_after_long_net power_low_battery power_busy_at_cut power_phone_whitelist_closed power_phone_whitelist_admitted power_timeout_recovery power_bt_pause rx_fairness rx_fast_partial rx_tick_budget rx_wake_level_recheck rx_512_partial_and_pause_isolation rtcm_pipe_direct_and_io_stats lifecycle_application
         power_battery_read_failure power_low_battery_unknown_usb power_low_battery_standby
         power_battery_median power_battery_freshness power_oled_usb_preempt_before_deadline
         power_oled_usb_preempt_across_deadline
@@ -102,7 +104,7 @@ foreach(policy concurrent preempt)
         power_oled_battery_final_frame_stale_clock power_participant_four_slot_names
         power_sim_battery_boundary power_low_battery_real_zero_mv power_sim_battery_reinject
         power_oled_usb_late_u3_final_frame_hold power_sim_battery_redundant_off
-            rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback
+            rtcm_mix rtcm_roles rtcm_replay_budget rtcm_reset_lifecycle rtcm_byte_budget storage_startup phone_nvs_readback net_settings_persistence
             early_config_0 early_config_2 early_config_3 early_config_nvs_failure
             factory_reset pairing_window web_s2_storage_bt device_name device_name_e1 device_name_unknown)
         add_test(NAME main_${policy}_${scenario} COMMAND main_${policy} ${scenario})
@@ -138,6 +140,7 @@ foreach(scenario multi_producer_post concurrent_call cancel_stress)
 endforeach()
 
 add_executable(template_check TemplateCheck.cpp
+    ${PROJ_ROOT}/main/board/BoardCurrent.cpp ${PROJ_ROOT}/main/board/BoardProfile.cpp
     ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
     ${PROJ_ROOT}/main/modules/_template/TemplateModule.cpp
     ${PROJ_ROOT}/main/modules/_template/TemplateCmds.cpp
@@ -150,7 +153,7 @@ add_executable(template_check TemplateCheck.cpp
     ${PROJ_ROOT}/main/modules/bt_link/BtLinkModule.cpp ${PROJ_ROOT}/main/modules/bt_link/BtLinkSessions.cpp ${PROJ_ROOT}/main/modules/bt_link/BtLinkGnss.cpp
     ${PROJ_ROOT}/main/modules/rtcm/RtcmModule.cpp
     ${PROJ_ROOT}/main/modules/rtcm/RtcmForwarder.cpp
-    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
+    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/net/NetStore.cpp ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
     ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp ${PROJ_ROOT}/main/modules/debug/DebugModuleLog.cpp ${PROJ_ROOT}/main/modules/debug/TraceText.cpp ${PROJ_ROOT}/main/modules/debug/TraceTextValues.cpp
     ${PROJ_ROOT}/main/modules/debug/DebugCmds.cpp
     ${PROJ_ROOT}/components/spp_server/SppTransport.cpp)
@@ -217,7 +220,7 @@ add_executable(gnss_stream_check GnssStreamCheck.cpp
     ${PROJ_ROOT}/main/modules/bt_link/BtPairing.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssBaseConfig.cpp
     ${PROJ_ROOT}/main/modules/gnss/GnssModuleStore.cpp
-    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp
+    ${PROJ_ROOT}/main/modules/storage/StorageModule.cpp ${PROJ_ROOT}/main/modules/net/NetStore.cpp
     ${PROJ_ROOT}/main/modules/storage/StoreKeys.cpp
     ${PROJ_ROOT}/main/modules/storage/StoreCatalog.cpp
     ${PROJ_ROOT}/main/modules/debug/DebugModule.cpp
@@ -558,3 +561,13 @@ if(PkgConfig_FOUND)
         add_subdirectory(../oled_sim oled_sim_build)
     endif()
 endif()
+
+# 4G 纯逻辑（控制台 AT 邮箱 / 低电量门控，N1 复审 #7/#8/#9/#13）。
+add_executable(net_logic_check NetLogicCheck.cpp ${PROJ_ROOT}/main/modules/net/NetMailbox.cpp)
+target_include_directories(net_logic_check PRIVATE ${PROJ_ROOT}/main
+    ${PROJ_ROOT}/components/app_fw/include ${PROJ_ROOT}/components/cellular/include)
+target_compile_options(net_logic_check PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra -Werror
+    -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor -Woverloaded-virtual
+    -Wimplicit-fallthrough -Wswitch-default -Wundef)
+target_link_libraries(net_logic_check PRIVATE Threads::Threads)
+add_test(NAME net_logic_check COMMAND net_logic_check)

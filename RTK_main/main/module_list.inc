@@ -11,6 +11,7 @@
 #if RTK_GNSS_ENABLED
 #include "modules/gnss/GnssModule.hpp"
 #endif
+#include "modules/net/NetModule.hpp"
 #include "modules/oled/OledModule.hpp"
 #include "modules/power/PowerModule.hpp"
 #include "modules/rtcm/RtcmModule.hpp"
@@ -34,6 +35,8 @@ MODULE_DEF(WebModule, web, "web", kWeb, kLink, 0, kWifiOnly)
 #if RTK_GNSS_ENABLED
 MODULE_DEF(GnssModule, gnss, "gnss", kGnss, kIo, 0, kNormalOnly)
 #endif
+// net 仅 Feature::kCellular 板型的 kNet 执行器内工作；其他板型不创建执行器、不调用其 init（ADR-0021 §2.2）。
+MODULE_DEF(NetModule, net, "net", kNet, kNet, 0, kNormalOnly)
 // debug 必须在 link 执行器内：追踪环由它的输出任务独占读取，命令也在这里改状态。
 // 追踪关闭（CONFIG_RTK_TRACE_ENABLE=n）时不登记（ADR-0009 §2.6）；FW_TRACE_ENABLED 由上方 fw/Trace.hpp 定义。
 #if FW_TRACE_ENABLED

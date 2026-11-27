@@ -1,0 +1,1515 @@
+// 4G 链路 FSM 黑盒测试（ADR-0021 §2.5/§2.9）：用假 EC600U 应答器驱动 AtEngine + LinkFsm，
+// 覆盖 Off→Ready 全路径、L1/L2/L3 触发与退避上限、SIM/注册异常、通道失效、关机序列与上电门控。
+// 时间由测试推进（10 ms 一步），不依赖真实时钟。
+
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "cellular/AtEngine.hpp"
+#include "cellular/LinkFsm.hpp"
+#include "unity.h"
+
+namespace {
+
+using cellular::AtEngine;
+using cellular::LinkFsm;
+using cellular::Phase;
+using cellular::RecoveryLevel;
+using cellular::RegStatus;
+using cellular::SimStatus;
+
+constexpr uint32_t kStepMs = 10U;
+constexpr uint32_t kRespondMs = 10U; // 假模块应答延迟
+
+/** 假 EC600U：按命令文本应答，可配置故障。 */
+struct Sim final {
+    AtEngine engine;
+    LinkFsm fsm;
+    uint32_t now = 0U;
+
+    // 模块侧状态与故障开关。
+    int powerOffFailures = 0; // >0：接下来的断电钩子返回失败（模拟 gpio_set_level 出错）
+    bool powered = false;
+    uint32_t poweredAtMs = 0U;
+    uint32_t bootDelayMs = 0U;
+    uint32_t moduleBaud = 115200U;
+    bool resetBaudOnPower = true;
+    bool silent = false;
+    bool echo = true;
+    bool iprFail = false;
+    bool deactFails = false;       // true：QIDEACT 返回 ERROR 且承载仍在线
+    bool deactKeepsBearer = false; // true：QIDEACT 返回 OK 但 QIACT? 仍显示 context 在线（r5 F4）
+    bool simAbsent = false;
+    int regStat = 1;
+    int qiactFails = 0;
+    bool ipActive = false;
+    bool poweredDownUrc = true;
+    int qiopenErr = 0;
+    bool autoUrcOpen = true; // QIOPEN OK 后自动给 +QIOPEN URC
+    std::string rxData;      // 模块侧待读数据
+    std::string cpinPre;     // 非空：AT+CPIN? 应答里先插入的额外 +CPIN: 行（模拟同前缀 URC 混入）
+    std::string dropPrefix;  // 非空：丢弃（不应答）下一条以此开头的命令，之后自动清空
+
+    // 主机侧观测。
+    uint32_t hostBaud = 115200U;
+    std::string inbuf;
+    size_t payloadWait = 0U;
+    std::string payloadGot;
+    std::vector<std::string> payloads;
+    std::vector<std::string> cmds;
+    std::vector<uint32_t> cmdTimes;
+    struct PowerEv final {
+        uint32_t t;
+        bool on;
+    };
+    std::vector<PowerEv> power;
+    std::vector<uint32_t> baudCalls;
+    std::vector<std::string> events;
+    std::string rxCollected;
+
+    struct Out final {
+        uint32_t due;
+        std::string text;
+        bool powerDown;
+    };
+    std::vector<Out> outq;
+};
+
+/** 排队一段模块输出。 */
+void schedule(Sim &s, const std::string &text, uint32_t delayMs, bool powerDown = false)
+{
+    s.outq.push_back({s.now + delayMs, text, powerDown});
+}
+
+/** 一条命令的应答（含回显与结尾 OK）。 */
+void respondOk(Sim &s, const std::string &cmd, const std::string &body = "")
+{
+    std::string out;
+    if (s.echo) {
+        out += cmd + "\r";
+    }
+    out += "\r\n" + body + "\r\nOK\r\n";
+    schedule(s, out, kRespondMs);
+}
+
+/** 一条命令的 ERROR 类应答。 */
+void respondErr(Sim &s, const std::string &cmd, const std::string &err)
+{
+    std::string out;
+    if (s.echo) {
+        out += cmd + "\r";
+    }
+    out += "\r\n" + err + "\r\n";
+    schedule(s, out, kRespondMs);
+}
+
+/** 假模块处理一条完整命令行。 */
+void handleCommand(Sim &s, const std::string &cmd)
+{
+    s.cmds.push_back(cmd);
+    s.cmdTimes.push_back(s.now);
+    if (!s.dropPrefix.empty() && cmd.rfind(s.dropPrefix, 0) == 0) {
+        s.dropPrefix.clear();
+        return;
+    }
+    if (cmd == "AT") {
+        respondOk(s, cmd);
+    } else if (cmd == "ATE0") {
+        respondOk(s, cmd);
+        s.echo = false;
+    } else if (cmd == "AT+CMEE=2") {
+        respondOk(s, cmd);
+    } else if (cmd == "AT+CMEE?") {
+        respondOk(s, cmd, "+CMEE: 2");
+    } else if (cmd == "AT+IPR=460800") {
+        if (s.iprFail) {
+            respondErr(s, cmd, "ERROR");
+        } else {
+            respondOk(s, cmd);
+            s.moduleBaud = 460800U;
+        }
+    } else if (cmd == "AT+GSN") {
+        respondOk(s, cmd, "860000000000001");
+    } else if (cmd == "AT+QCCID") {
+        respondOk(s, cmd, "+QCCID: 89860000000000000001");
+    } else if (cmd == "AT+CPIN?") {
+        if (s.simAbsent) {
+            respondErr(s, cmd, "+CME ERROR: 10");
+        } else {
+            respondOk(s, cmd, s.cpinPre + "+CPIN: READY");
+        }
+    } else if (cmd == "AT+CEREG?") {
+        respondOk(s, cmd, "+CEREG: 0," + std::to_string(s.regStat));
+    } else if (cmd == "AT+CREG?") {
+        respondOk(s, cmd, "+CREG: 0," + std::to_string(s.regStat));
+    } else if (cmd.rfind("AT+QICSGP=", 0) == 0) {
+        respondOk(s, cmd);
+    } else if (cmd == "AT+QIACT?") {
+        respondOk(s, cmd, s.ipActive ? "+QIACT: 1,1,1,\"10.0.0.2\"" : "");
+    } else if (cmd == "AT+QIACT=1") {
+        if (s.qiactFails > 0) {
+            --s.qiactFails;
+            respondErr(s, cmd, "ERROR");
+        } else {
+            s.ipActive = true;
+            respondOk(s, cmd);
+        }
+    } else if (cmd == "AT+QIDEACT=1") {
+        if (s.deactFails) {
+            respondErr(s, cmd, "ERROR");
+        } else {
+            s.ipActive = s.deactKeepsBearer;
+            respondOk(s, cmd);
+        }
+    } else if (cmd == "AT+CSQ") {
+        respondOk(s, cmd, "+CSQ: 21,99");
+    } else if (cmd.rfind("AT+QIOPEN=", 0) == 0) {
+        respondOk(s, cmd);
+        if (s.autoUrcOpen) {
+            const int id = cmd[10] == '1' ? (cmd[12] - '0') : 0; // "AT+QIOPEN=1,<id>,..."
+            schedule(s,
+                     "\r\n+QIOPEN: " + std::to_string(id) + "," + std::to_string(s.qiopenErr) +
+                         "\r\n",
+                     100U);
+        }
+    } else if (cmd.rfind("AT+QICLOSE=", 0) == 0) {
+        respondOk(s, cmd);
+    } else if (cmd.rfind("AT+QIRD=", 0) == 0) {
+        if (s.rxData.empty()) {
+            respondOk(s, cmd, "+QIRD: 0");
+        } else {
+            std::string body = "+QIRD: " + std::to_string(s.rxData.size()) + "\r\n" + s.rxData;
+            s.rxData.clear();
+            respondOk(s, cmd, body);
+        }
+    } else if (cmd.rfind("AT+QISEND=", 0) == 0) {
+        s.payloadWait = static_cast<size_t>(std::stoul(cmd.substr(cmd.find(',') + 1U)));
+        s.payloadGot.clear();
+        schedule(s, "\r\n> ", kRespondMs);
+    } else if (cmd == "AT+QPOWD=1") {
+        respondOk(s, cmd);
+        if (s.poweredDownUrc) {
+            schedule(s, "\r\nPOWERED DOWN\r\n", 300U, true);
+        }
+    } else {
+        respondErr(s, cmd, "ERROR");
+    }
+}
+
+/** 引擎写钩子：模块只在上电、启动完成、波特率一致且非静默时处理。 */
+bool writeHook(void *ctx, std::span<const uint8_t> bytes) noexcept
+{
+    auto *s = static_cast<Sim *>(ctx);
+    const bool alive = s->powered && !s->silent && ((s->now - s->poweredAtMs) >= s->bootDelayMs) &&
+                       (s->hostBaud == s->moduleBaud);
+    if (!alive) {
+        return true;
+    }
+    for (const uint8_t b : bytes) {
+        if (s->payloadWait > 0U) {
+            s->payloadGot.push_back(static_cast<char>(b));
+            if (--s->payloadWait == 0U) {
+                s->payloads.push_back(s->payloadGot);
+                schedule(*s, "\r\nSEND OK\r\n", kRespondMs);
+            }
+        } else if (b == '\r') {
+            if (!s->inbuf.empty()) {
+                const std::string cmd = s->inbuf;
+                s->inbuf.clear();
+                handleCommand(*s, cmd);
+            }
+        } else if (b != '\n') {
+            s->inbuf.push_back(static_cast<char>(b));
+        }
+    }
+    return true;
+}
+
+/** URC 钩子：转给 FSM。 */
+void urcHook(void *ctx, std::string_view line) noexcept
+{
+    auto *s = static_cast<Sim *>(ctx);
+    s->fsm.onUrc(line, s->now);
+}
+
+/** PWREN 钩子。 */
+bool powerHook(void *ctx, bool on) noexcept
+{
+    auto *s = static_cast<Sim *>(ctx);
+    if (!on && s->powerOffFailures > 0) {
+        --s->powerOffFailures; // 故障注入：gpio_set_level 失败
+        return false;
+    }
+    s->power.push_back({s->now, on});
+    s->outq.clear();
+    s->inbuf.clear();
+    s->payloadWait = 0U;
+    if (on) {
+        s->powered = true;
+        s->poweredAtMs = s->now;
+        s->echo = true;
+        s->ipActive = false;
+        if (s->resetBaudOnPower) {
+            s->moduleBaud = 115200U;
+        }
+    } else {
+        s->powered = false;
+    }
+    return true;
+}
+
+/** 波特率钩子。 */
+bool baudHook(void *ctx, uint32_t baud) noexcept
+{
+    auto *s = static_cast<Sim *>(ctx);
+    s->hostBaud = baud;
+    s->baudCalls.push_back(baud);
+    return true;
+}
+
+void onOpened(void *ctx, uint8_t id, bool ok) noexcept
+{
+    static_cast<Sim *>(ctx)->events.push_back("open" + std::to_string(id) + (ok ? ":1" : ":0"));
+}
+
+void onClosed(void *ctx, uint8_t id) noexcept
+{
+    static_cast<Sim *>(ctx)->events.push_back("closed" + std::to_string(id));
+}
+
+void onData(void *ctx, uint8_t id, std::span<const uint8_t> data) noexcept
+{
+    static_cast<void>(id);
+    static_cast<Sim *>(ctx)->rxCollected.append(reinterpret_cast<const char *>(data.data()),
+                                                data.size());
+}
+
+void onSendDone(void *ctx, uint8_t id, bool ok) noexcept
+{
+    static_cast<Sim *>(ctx)->events.push_back("sent" + std::to_string(id) + (ok ? ":1" : ":0"));
+}
+
+/** 初始化仿真：绑定引擎与 FSM，使能并允许上电。 */
+void setup(Sim &s)
+{
+    cellular::AtPort port;
+    port.ctx = &s;
+    port.write = &writeHook;
+    port.onUrc = &urcHook;
+    port.urcPrefixes = std::span<const std::string_view>(cellular::kUrcPrefixes);
+    s.engine.bind(port);
+    s.engine.setDeadThreshold(cellular::kPolicy.deadTimeouts);
+    cellular::LinkHooks hooks;
+    hooks.ctx = &s;
+    hooks.setPower = &powerHook;
+    hooks.setBaud = &baudHook;
+    cellular::ConnEvents ev;
+    ev.ctx = &s;
+    ev.onOpened = &onOpened;
+    ev.onClosed = &onClosed;
+    ev.onData = &onData;
+    ev.onSendDone = &onSendDone;
+    s.fsm.bind(s.engine, hooks, ev);
+    s.fsm.setEnabled(true);
+    s.fsm.setPowerAllowed(true);
+}
+
+/** 推进一步：投递到期输出、引擎与 FSM 轮询。 */
+void step(Sim &s)
+{
+    s.now += kStepMs;
+    for (size_t i = 0U; i < s.outq.size();) {
+        if (static_cast<int32_t>(s.now - s.outq[i].due) >= 0) {
+            const Sim::Out out = s.outq[i];
+            s.outq.erase(s.outq.begin() + static_cast<std::ptrdiff_t>(i));
+            if (out.powerDown) {
+                s.powered = false;
+            }
+            s.engine.feed(std::span<const uint8_t>(
+                              reinterpret_cast<const uint8_t *>(out.text.data()), out.text.size()),
+                          s.now);
+        } else {
+            ++i;
+        }
+    }
+    s.engine.poll(s.now);
+    s.fsm.poll(s.now);
+}
+
+/** 推进指定毫秒。 */
+void runFor(Sim &s, uint32_t ms)
+{
+    const uint32_t end = s.now + ms;
+    while (static_cast<int32_t>(end - s.now) > 0) {
+        step(s);
+    }
+}
+
+/** 推进直到条件成立或超时。 */
+template <typename F> bool runUntil(Sim &s, uint32_t limitMs, F pred)
+{
+    const uint32_t end = s.now + limitMs;
+    while (!pred()) {
+        if (static_cast<int32_t>(end - s.now) <= 0) {
+            return false;
+        }
+        step(s);
+    }
+    return true;
+}
+
+/** 统计以 prefix 开头的命令条数。 */
+size_t countCmds(const Sim &s, std::string_view prefix)
+{
+    size_t n = 0U;
+    for (const std::string &c : s.cmds) {
+        if (std::string_view{c}.starts_with(prefix)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+/** 取第 nth 条以 prefix 开头命令的下标，没有返回 -1。 */
+int indexOfCmd(const Sim &s, std::string_view prefix, size_t nth = 0U)
+{
+    size_t seen = 0U;
+    for (size_t i = 0U; i < s.cmds.size(); ++i) {
+        if (std::string_view{s.cmds[i]}.starts_with(prefix)) {
+            if (seen == nth) {
+                return static_cast<int>(i);
+            }
+            ++seen;
+        }
+    }
+    return -1;
+}
+
+/** 计 PWREN 拉低次数。 */
+size_t powerOffCount(const Sim &s)
+{
+    size_t n = 0U;
+    for (const auto &ev : s.power) {
+        if (!ev.on) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+/** 跑到 Ready。 */
+bool toReady(Sim &s, uint32_t limitMs = 20000U)
+{
+    return runUntil(s, limitMs, [&s]() { return s.fsm.phase() == Phase::kReady; });
+}
+
+/** 跑到 Ready 且打开连接 0（URC 已回）。 */
+bool toConnOpen(Sim &s)
+{
+    if (!toReady(s)) {
+        return false;
+    }
+    if (!s.fsm.openConn(0U, "ntrip.example.com", 2101U)) {
+        return false;
+    }
+    return runUntil(s, 2000U, [&s]() { return s.fsm.connOpen(0U); });
+}
+
+void testBackoffTables()
+{
+    using cellular::backoffMs;
+    using cellular::kPolicy;
+    const std::array<uint32_t, 7> l1{2000U, 4000U, 8000U, 16000U, 32000U, 60000U, 60000U};
+    for (size_t i = 0U; i < l1.size(); ++i) {
+        TEST_ASSERT_EQUAL_UINT32(l1[i], backoffMs(kPolicy.l1, static_cast<uint8_t>(i)));
+    }
+    const std::array<uint32_t, 6> l2{10000U, 20000U, 40000U, 80000U, 120000U, 120000U};
+    for (size_t i = 0U; i < l2.size(); ++i) {
+        TEST_ASSERT_EQUAL_UINT32(l2[i], backoffMs(kPolicy.l2, static_cast<uint8_t>(i)));
+    }
+    const std::array<uint32_t, 6> l3{30000U, 60000U, 120000U, 300000U, 300000U, 300000U};
+    for (size_t i = 0U; i < l3.size(); ++i) {
+        TEST_ASSERT_EQUAL_UINT32(l3[i], cellular::l3BackoffMs(static_cast<uint8_t>(i)));
+    }
+    TEST_ASSERT_EQUAL_UINT32(300000U, cellular::l3BackoffMs(255U));
+}
+
+void testHappyPathToReady()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    const std::array<const char *, 11> expect{
+        "AT",       "ATE0",     "AT+CMEE=2", "AT+IPR=460800", "AT",        "AT+GSN",
+        "AT+QCCID", "AT+CPIN?", "AT+CEREG?", "AT+QIACT?",     "AT+QIACT=1"};
+    for (size_t i = 0U; i < expect.size(); ++i) {
+        TEST_ASSERT_TRUE(i < s.cmds.size());
+        TEST_ASSERT_EQUAL_STRING(expect[i], s.cmds[i].c_str());
+    }
+    TEST_ASSERT_EQUAL_INT(-1, indexOfCmd(s, "AT+QICSGP")); // APN 为空：不下发
+    const cellular::LinkSnapshot snap = s.fsm.snapshot(s.now);
+    TEST_ASSERT_EQUAL(Phase::kReady, snap.phase);
+    TEST_ASSERT_EQUAL(SimStatus::kReady, snap.sim);
+    TEST_ASSERT_EQUAL(RegStatus::kHome, snap.reg);
+    TEST_ASSERT_TRUE(snap.pdpUp);
+    TEST_ASSERT_EQUAL_UINT32(460800U, snap.baud);
+    TEST_ASSERT_EQUAL_STRING("860000000000001", snap.imei.data());
+    TEST_ASSERT_EQUAL_STRING("89860000000000000001", snap.iccid.data());
+    TEST_ASSERT_EQUAL(RecoveryLevel::kNone, snap.level);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+}
+
+void testApnConfigCommand()
+{
+    Sim s;
+    setup(s);
+    s.fsm.setConfig("cmnet", "u", "p", 1U);
+    TEST_ASSERT_TRUE(toReady(s));
+    const int apn = indexOfCmd(s, "AT+QICSGP=");
+    TEST_ASSERT_TRUE(apn > 0);
+    TEST_ASSERT_EQUAL_STRING("AT+QICSGP=1,1,\"cmnet\",\"u\",\"p\",1",
+                             s.cmds[static_cast<size_t>(apn)].c_str());
+    TEST_ASSERT_TRUE(apn > indexOfCmd(s, "AT+CEREG?"));
+    TEST_ASSERT_TRUE(apn < indexOfCmd(s, "AT+QIACT?"));
+}
+
+void testIprFailureStaysAtBootBaud()
+{
+    Sim s;
+    setup(s);
+    s.iprFail = true;
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_EQUAL_UINT32(115200U, s.fsm.snapshot(s.now).baud);
+    for (const uint32_t b : s.baudCalls) {
+        TEST_ASSERT_NOT_EQUAL(460800U, b);
+    }
+}
+
+void testModuleAlreadyFastBaudSwapsProbe()
+{
+    Sim s;
+    setup(s);
+    s.moduleBaud = 460800U;
+    s.resetBaudOnPower = false;
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_EQUAL_INT(-1, indexOfCmd(s, "AT+IPR")); // 已在 460800：无需再切
+    TEST_ASSERT_EQUAL_UINT32(460800U, s.fsm.snapshot(s.now).baud);
+}
+
+void testSlowBootStillSyncsWithinWindow()
+{
+    Sim s;
+    setup(s);
+    s.bootDelayMs = 4000U;
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size())); // 窗口内同步成功，没有 L3
+    TEST_ASSERT_TRUE(countCmds(s, "AT") > 3U);
+}
+
+void testSyncWindowTimeoutEscalatesL3WithCappedBackoff()
+{
+    Sim s;
+    setup(s);
+    s.silent = true;
+    // 连续 5 次 L3：保持时间 30/60/120/300/300 s（≥ 2 s 下限）。
+    TEST_ASSERT_TRUE(runUntil(s, 1000000U, [&s]() { return s.power.size() >= 11U; }));
+    const std::array<uint32_t, 5> hold{30000U, 60000U, 120000U, 300000U, 300000U};
+    for (size_t i = 0U; i < hold.size(); ++i) {
+        const uint32_t offAt = s.power[1U + (2U * i)].t;
+        const uint32_t onAt = s.power[2U + (2U * i)].t;
+        TEST_ASSERT_FALSE(s.power[1U + (2U * i)].on);
+        TEST_ASSERT_TRUE(s.power[2U + (2U * i)].on);
+        TEST_ASSERT_TRUE((onAt - offAt) >= hold[i]);
+        TEST_ASSERT_TRUE((onAt - offAt) <= (hold[i] + 50U));
+    }
+    // 每次窗口约 10 s（含最后一条命令的 300 ms 超时），不早于 10 s。
+    TEST_ASSERT_TRUE((s.power[1].t - s.power[0].t) >= 10000U);
+    TEST_ASSERT_TRUE((s.power[1].t - s.power[0].t) <= 11000U);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+    TEST_ASSERT_TRUE(s.fsm.snapshot(s.now).recoveryCount >= 5U);
+}
+
+void testPowerCycleBackoffVisibleInSnapshot()
+{
+    Sim s;
+    setup(s);
+    s.silent = true;
+    TEST_ASSERT_TRUE(runUntil(s, 20000U, [&s]() { return s.fsm.phase() == Phase::kPowerCycle; }));
+    const cellular::LinkSnapshot snap = s.fsm.snapshot(s.now);
+    TEST_ASSERT_TRUE(snap.backoffRemainingMs > 29000U);
+    TEST_ASSERT_TRUE(snap.backoffRemainingMs <= 30000U);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, snap.level);
+    TEST_ASSERT_EQUAL_UINT32(1U, snap.recoveryCount);
+}
+
+void testSimAbsentStaysInSimCheckThenRecoveryIsL3()
+{
+    Sim s;
+    setup(s);
+    s.simAbsent = true;
+    runFor(s, 40000U);
+    TEST_ASSERT_EQUAL(Phase::kSimCheck, s.fsm.phase()); // 无卡不触发恢复
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+    TEST_ASSERT_EQUAL(SimStatus::kAbsent, s.fsm.snapshot(s.now).sim);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kNone, s.fsm.snapshot(s.now).level);
+    // 插卡：模块需整机重启才能重新读卡 → L3，随后到 Ready。
+    s.simAbsent = false;
+    TEST_ASSERT_TRUE(runUntil(s, 5000U, [&s]() { return powerOffCount(s) == 1U; }));
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+    TEST_ASSERT_TRUE(toReady(s, 60000U));
+}
+
+void testRegisterTimeoutIs180sThenL3()
+{
+    Sim s;
+    setup(s);
+    s.regStat = 2; // 搜网中，永不注册
+    TEST_ASSERT_TRUE(runUntil(s, 20000U, [&s]() { return s.fsm.phase() == Phase::kRegister; }));
+    const uint32_t regAt = s.now;
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return powerOffCount(s) == 1U; }));
+    const uint32_t offAt = s.power[1].t;
+    TEST_ASSERT_TRUE((offAt - regAt) >= 179990U);
+    TEST_ASSERT_TRUE((offAt - regAt) <= 180100U);
+    TEST_ASSERT_EQUAL(RegStatus::kUnknown, s.fsm.snapshot(s.now).reg);
+}
+
+void testCregFallbackWhenCeregNotRegistered()
+{
+    Sim s;
+    setup(s);
+    s.regStat = 5; // 漫游
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_EQUAL(RegStatus::kRoaming, s.fsm.snapshot(s.now).reg);
+    s.cmds.clear();
+    Sim t;
+    setup(t);
+    t.regStat = 3; // 拒绝
+    runFor(t, 5000U);
+    TEST_ASSERT_TRUE(countCmds(t, "AT+CREG?") > 0U); // CEREG 未注册时补查 CREG
+    TEST_ASSERT_EQUAL(Phase::kRegister, t.fsm.phase());
+}
+
+void testQiactFailureL2ThenSuccess()
+{
+    Sim s;
+    setup(s);
+    s.qiactFails = 2;
+    TEST_ASSERT_TRUE(runUntil(
+        s, 20000U, [&s]() { return s.fsm.snapshot(s.now).level == RecoveryLevel::kL2Bearer; }));
+    const uint32_t firstFail = s.now;
+    const cellular::LinkSnapshot snap = s.fsm.snapshot(s.now);
+    TEST_ASSERT_EQUAL(Phase::kPdpUp, snap.phase);
+    TEST_ASSERT_TRUE(snap.backoffRemainingMs > 9000U);
+    TEST_ASSERT_TRUE(snap.backoffRemainingMs <= 10000U);
+    TEST_ASSERT_TRUE(toReady(s, 120000U));
+    TEST_ASSERT_TRUE((s.now - firstFail) >= 10000U + 20000U); // 10 s、20 s 两级退避
+    TEST_ASSERT_EQUAL_UINT32(2U, s.fsm.snapshot(s.now).recoveryCount);
+    TEST_ASSERT_EQUAL_UINT32(2U, static_cast<uint32_t>(countCmds(s, "AT+QIDEACT=1")));
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size())); // 未升级 L3
+}
+
+void testQiactThreeConsecutiveFailuresEscalateL3()
+{
+    Sim s;
+    setup(s);
+    s.qiactFails = 3;
+    TEST_ASSERT_TRUE(runUntil(s, 120000U, [&s]() { return powerOffCount(s) == 1U; }));
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+    TEST_ASSERT_EQUAL_UINT32(3U, static_cast<uint32_t>(countCmds(s, "AT+QIACT=1")));
+    // L3 之后重新上电并成功到 Ready。
+    TEST_ASSERT_TRUE(toReady(s, 120000U));
+}
+
+void testPdpDeactUrcTriggersL2WithBackoff()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    TEST_ASSERT_TRUE(runUntil(s, 200U, [&s]() { return s.fsm.phase() == Phase::kPdpUp; }));
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL2Bearer, s.fsm.snapshot(s.now).level);
+    const uint32_t urcAt = s.now;
+    TEST_ASSERT_TRUE(toReady(s, 30000U));
+    TEST_ASSERT_TRUE((s.now - urcAt) >= 10000U);
+    TEST_ASSERT_TRUE(countCmds(s, "AT+QIDEACT=1") >= 1U);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+}
+
+void testRegistrationLostThenRecoveredIsL2()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.regStat = 2;
+    TEST_ASSERT_TRUE(
+        runUntil(s, 40000U, [&s]() { return s.fsm.snapshot(s.now).reg == RegStatus::kSearching; }));
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase()); // 仅掉网：不立即动作
+    s.regStat = 1;
+    TEST_ASSERT_TRUE(runUntil(s, 40000U, [&s]() { return s.fsm.phase() == Phase::kPdpUp; }));
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL2Bearer, s.fsm.snapshot(s.now).level);
+    TEST_ASSERT_TRUE(toReady(s, 60000U));
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+}
+
+void testRegistrationUrcLostThenRecoveredIsL2()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    runFor(s, 1000U); // 等进入 Ready 后的首次巡检（CSQ/CEREG?/CPIN?）完成，避免其应答覆盖注入的 URC
+    schedule(s, "\r\n+CEREG: 2\r\n", 10U);
+    runFor(s, 100U);
+    TEST_ASSERT_EQUAL(RegStatus::kSearching, s.fsm.snapshot(s.now).reg);
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase());
+    schedule(s, "\r\n+CEREG: 1\r\n", 10U);
+    runFor(s, 100U);
+    TEST_ASSERT_EQUAL(Phase::kPdpUp, s.fsm.phase());
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL2Bearer, s.fsm.snapshot(s.now).level);
+}
+
+void testChannelDeadEscalatesL3AndRecovers()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.silent = true;
+    TEST_ASSERT_TRUE(runUntil(s, 60000U, [&s]() { return powerOffCount(s) == 1U; }));
+    TEST_ASSERT_TRUE(s.fsm.snapshot(s.now).channelDead);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+    s.silent = false;
+    TEST_ASSERT_TRUE(toReady(s, 120000U));
+    TEST_ASSERT_FALSE(s.fsm.snapshot(s.now).channelDead);
+}
+
+void testHealthCheckEvery30s()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    const uint32_t readyAt = s.now;
+    runFor(s, 95000U);
+    TEST_ASSERT_EQUAL_UINT32(
+        4U, static_cast<uint32_t>(countCmds(s, "AT+CSQ"))); // 进入 Ready 立即一次，之后每 30 s
+    TEST_ASSERT_TRUE(countCmds(s, "AT+CPIN?") >= 4U);
+    TEST_ASSERT_EQUAL_UINT8(21U, s.fsm.snapshot(s.now).csq);
+    const int second = indexOfCmd(s, "AT+CSQ", 1U);
+    TEST_ASSERT_TRUE(second > 0);
+    TEST_ASSERT_TRUE((s.cmdTimes[static_cast<size_t>(second)] - readyAt) >= 30000U);
+    TEST_ASSERT_TRUE((s.cmdTimes[static_cast<size_t>(second)] - readyAt) < 31000U);
+}
+
+void testSimRemovedInReadyReturnsToSimCheckThenL3()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.simAbsent = true;
+    schedule(s, "\r\n+CPIN: NOT READY\r\n", 10U);
+    TEST_ASSERT_TRUE(runUntil(s, 500U, [&s]() { return s.fsm.phase() == Phase::kSimCheck; }));
+    TEST_ASSERT_FALSE(s.fsm.snapshot(s.now).pdpUp);
+    runFor(s, 6000U);
+    TEST_ASSERT_EQUAL(Phase::kSimCheck, s.fsm.phase());
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+    s.simAbsent = false;
+    TEST_ASSERT_TRUE(runUntil(s, 5000U, [&s]() { return powerOffCount(s) == 1U; }));
+}
+
+void testSimRemovedDetectedByHealthCheck()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.simAbsent = true; // 没有 URC：靠 Ready 巡检里的 AT+CPIN? 发现
+    TEST_ASSERT_TRUE(runUntil(s, 40000U, [&s]() { return s.fsm.phase() == Phase::kSimCheck; }));
+    TEST_ASSERT_EQUAL(SimStatus::kAbsent, s.fsm.snapshot(s.now).sim);
+}
+
+void testRdyUrcResyncs()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    schedule(s, "\r\nRDY\r\n", 10U);
+    TEST_ASSERT_TRUE(runUntil(s, 200U, [&s]() { return s.fsm.phase() == Phase::kSync; }));
+    TEST_ASSERT_TRUE(toReady(s, 20000U));
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+}
+
+void testManualResetUsesMinimumHold()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_FALSE(s.fsm.requestReset(s.now)); // 未上电不可复位
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.requestReset(s.now));
+    TEST_ASSERT_EQUAL(Phase::kPowerCycle, s.fsm.phase());
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+    TEST_ASSERT_TRUE(toReady(s, 20000U));
+    const uint32_t gap = s.power[2].t - s.power[1].t;
+    TEST_ASSERT_TRUE(gap >= 2000U);
+    TEST_ASSERT_TRUE(gap < 2100U);
+}
+
+void testConnOpenRecvSendFlow()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toConnOpen(s));
+    TEST_ASSERT_TRUE(indexOfCmd(s, "AT+QIOPEN=1,0,\"TCP\",\"ntrip.example.com\",2101,0,0") >= 0);
+    TEST_ASSERT_EQUAL_STRING("open0:1", s.events.back().c_str());
+    // 收到数据：recv URC → QIRD 读到空为止（chunk 1024）。
+    s.rxData = "hello";
+    schedule(s, "\r\n+QIURC: \"recv\",0\r\n", 10U);
+    runFor(s, 500U);
+    TEST_ASSERT_EQUAL_STRING("hello", s.rxCollected.c_str());
+    TEST_ASSERT_EQUAL_UINT32(2U, static_cast<uint32_t>(countCmds(s, "AT+QIRD=0,1024")));
+    // 发送：QISEND + '>' + 定长数据。
+    const std::array<uint8_t, 3> data{'a', 'b', 'c'};
+    TEST_ASSERT_TRUE(s.fsm.sendConn(0U, data, s.now));
+    TEST_ASSERT_FALSE(s.fsm.sendConn(0U, data, s.now)); // 在途：拒绝重入
+    runFor(s, 200U);
+    TEST_ASSERT_TRUE(indexOfCmd(s, "AT+QISEND=0,3") >= 0);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.payloads.size()));
+    TEST_ASSERT_EQUAL_STRING("abc", s.payloads[0].c_str());
+    TEST_ASSERT_EQUAL_STRING("sent0:1", s.events.back().c_str());
+    // 参数校验。
+    TEST_ASSERT_FALSE(s.fsm.sendConn(1U, data, s.now)); // 槽未打开
+    TEST_ASSERT_FALSE(s.fsm.sendConn(3U, data, s.now)); // 越界
+    std::array<uint8_t, 513> big{};
+    TEST_ASSERT_FALSE(s.fsm.sendConn(0U, big, s.now));
+    TEST_ASSERT_FALSE(s.fsm.openConn(0U, "x", 1U)); // 槽占用
+    TEST_ASSERT_FALSE(s.fsm.openConn(3U, "x", 1U));
+}
+
+void testConnClosedUrcBackoffsThenEscalatesL2()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toConnOpen(s));
+    s.events.clear();
+    // 不收数据地反复被远端关闭：2/4/8/16 s 退避，第 5 次连续失败升级 L2。
+    const std::array<uint32_t, 4> gap{2000U, 4000U, 8000U, 16000U};
+    for (size_t i = 0U; i < gap.size(); ++i) {
+        schedule(s, "\r\n+QIURC: \"closed\",0\r\n", 10U);
+        runFor(s, 100U);
+        TEST_ASSERT_FALSE(s.fsm.connOpen(0U));
+        TEST_ASSERT_EQUAL(RecoveryLevel::kL1Conn, s.fsm.snapshot(s.now).level);
+        const size_t before = countCmds(s, "AT+QIOPEN=");
+        const uint32_t closedAt = s.now - 100U + 10U;
+        TEST_ASSERT_TRUE(
+            runUntil(s, gap[i] + 500U, [&]() { return countCmds(s, "AT+QIOPEN=") > before; }));
+        const uint32_t reopenAt = s.cmdTimes.back();
+        TEST_ASSERT_TRUE((reopenAt - closedAt) >= gap[i]);
+        TEST_ASSERT_TRUE((reopenAt - closedAt) <= (gap[i] + 80U));
+        TEST_ASSERT_TRUE(runUntil(s, 1000U, [&s]() { return s.fsm.connOpen(0U); }));
+    }
+    schedule(s, "\r\n+QIURC: \"closed\",0\r\n", 10U);
+    TEST_ASSERT_TRUE(runUntil(s, 200U, [&s]() { return s.fsm.phase() == Phase::kPdpUp; }));
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL2Bearer, s.fsm.snapshot(s.now).level);
+    // L2 恢复后自动重开已登记连接。
+    TEST_ASSERT_TRUE(toReady(s, 60000U));
+    TEST_ASSERT_TRUE(runUntil(s, 3000U, [&s]() { return s.fsm.connOpen(0U); }));
+    // closed 回调只通知一次、不会额外报 open 失败。
+    for (const std::string &e : s.events) {
+        TEST_ASSERT_TRUE(e != "open0:0");
+    }
+}
+
+void testConnDataResetsL1Backoff()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toConnOpen(s));
+    schedule(s, "\r\n+QIURC: \"closed\",0\r\n", 10U);
+    runFor(s, 100U);
+    TEST_ASSERT_TRUE(runUntil(s, 3000U, [&s]() { return s.fsm.connOpen(0U); }));
+    s.rxData = "x";
+    schedule(s, "\r\n+QIURC: \"recv\",0\r\n", 10U); // 收到数据：失败计数清零
+    runFor(s, 300U);
+    const size_t before = countCmds(s, "AT+QIOPEN=");
+    schedule(s, "\r\n+QIURC: \"closed\",0\r\n", 10U);
+    const uint32_t t0 = s.now;
+    TEST_ASSERT_TRUE(runUntil(s, 2600U, [&]() { return countCmds(s, "AT+QIOPEN=") > before; }));
+    TEST_ASSERT_TRUE((s.cmdTimes.back() - t0) < 2200U); // 仍是首级 2 s，而不是 4 s
+}
+
+void testConnOpenFailureUrcBacksOffL1()
+{
+    Sim s;
+    setup(s);
+    s.qiopenErr = 552;
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.openConn(2U, "host", 1883U));
+    TEST_ASSERT_TRUE(runUntil(s, 1000U, [&s]() { return !s.events.empty(); }));
+    TEST_ASSERT_EQUAL_STRING("open2:0", s.events.back().c_str());
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL1Conn, s.fsm.snapshot(s.now).level);
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase());
+    const size_t before = countCmds(s, "AT+QIOPEN=");
+    runFor(s, 1000U);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(before),
+                             static_cast<uint32_t>(countCmds(s, "AT+QIOPEN=")));
+    s.qiopenErr = 0;
+    TEST_ASSERT_TRUE(runUntil(s, 3000U, [&s]() { return s.fsm.connOpen(2U); }));
+}
+
+void testConnCloseRequest()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toConnOpen(s));
+    TEST_ASSERT_TRUE(s.fsm.closeConn(0U));
+    TEST_ASSERT_TRUE(runUntil(s, 1000U, [&s]() { return !s.fsm.connOpen(0U); }));
+    TEST_ASSERT_TRUE(indexOfCmd(s, "AT+QICLOSE=0") >= 0);
+    runFor(s, 10000U);
+    TEST_ASSERT_EQUAL_UINT32(
+        1U, static_cast<uint32_t>(countCmds(s, "AT+QIOPEN="))); // 主动关闭后不自动重开
+    TEST_ASSERT_FALSE(s.fsm.closeConn(3U));
+}
+
+void testShutdownNormalWithPoweredDownUrc()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toConnOpen(s));
+    const uint32_t t0 = s.now;
+    s.fsm.beginShutdown(t0);
+    TEST_ASSERT_TRUE(runUntil(s, 2500U, [&s]() { return s.fsm.shutdownDone(); }));
+    TEST_ASSERT_TRUE((s.now - t0) <= 2000U);
+    TEST_ASSERT_FALSE(s.power.back().on);
+    TEST_ASSERT_EQUAL(Phase::kOff, s.fsm.phase());
+    const int close = indexOfCmd(s, "AT+QICLOSE=0");
+    const int powd = indexOfCmd(s, "AT+QPOWD=1");
+    TEST_ASSERT_TRUE(close >= 0);
+    TEST_ASSERT_TRUE(powd > close);
+    // 关机后不再自动上电。
+    const size_t n = s.power.size();
+    runFor(s, 20000U);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(n), static_cast<uint32_t>(s.power.size()));
+}
+
+void testShutdownWithoutPoweredDownCutsWithin2s()
+{
+    Sim s;
+    setup(s);
+    s.poweredDownUrc = false;
+    TEST_ASSERT_TRUE(toReady(s));
+    const uint32_t t0 = s.now;
+    s.fsm.beginShutdown(t0);
+    TEST_ASSERT_TRUE(runUntil(s, 2500U, [&s]() { return s.fsm.shutdownDone(); }));
+    TEST_ASSERT_TRUE((s.now - t0) <= 2000U);
+    TEST_ASSERT_TRUE((s.now - t0) >= 1500U); // 等满 POWERED DOWN 窗口
+    TEST_ASSERT_FALSE(s.power.back().on);
+}
+
+void testShutdownWhenAtDeadCutsWithin2s()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toConnOpen(s));
+    s.silent = true;
+    const uint32_t t0 = s.now;
+    s.fsm.beginShutdown(t0);
+    TEST_ASSERT_TRUE(runUntil(s, 2500U, [&s]() { return s.fsm.shutdownDone(); }));
+    TEST_ASSERT_TRUE((s.now - t0) <= 2000U);
+    TEST_ASSERT_FALSE(s.power.back().on);
+}
+
+void testShutdownBeforeModuleUpCutsImmediately()
+{
+    Sim s;
+    setup(s);
+    s.bootDelayMs = 8000U;
+    runFor(s, 1500U);
+    TEST_ASSERT_EQUAL(Phase::kSync, s.fsm.phase());
+    s.fsm.beginShutdown(s.now);
+    TEST_ASSERT_TRUE(s.fsm.shutdownDone());
+    TEST_ASSERT_FALSE(s.power.back().on);
+}
+
+void testShutdownWhenOffOrCyclingIsImmediate()
+{
+    Sim s;
+    setup(s);
+    s.fsm.setEnabled(false);
+    TEST_ASSERT_TRUE(s.fsm.shutdownDone()); // 从未上电：天然完成
+    s.fsm.beginShutdown(s.now);
+    TEST_ASSERT_TRUE(s.fsm.shutdownDone());
+    runFor(s, 5000U);
+    for (const auto &ev : s.power) {
+        TEST_ASSERT_FALSE(ev.on); // 绝不上电
+    }
+}
+
+void testDisabledNeverPowers()
+{
+    Sim s;
+    setup(s);
+    s.fsm.setEnabled(false);
+    runFor(s, 30000U);
+    TEST_ASSERT_TRUE(s.power.empty());
+    TEST_ASSERT_EQUAL(Phase::kOff, s.fsm.phase());
+    TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, s.fsm.msToNextWork(s.now));
+}
+
+void testPowerNotAllowedNeverPowersThenAllows()
+{
+    Sim s;
+    setup(s);
+    s.fsm.setPowerAllowed(false); // 低电量 <10% 或 Wi-Fi 配网模式
+    runFor(s, 30000U);
+    TEST_ASSERT_TRUE(s.power.empty());
+    s.fsm.setPowerAllowed(true);
+    TEST_ASSERT_TRUE(toReady(s));
+}
+
+void testPowerRevokedGracefullyStopsThenRepowersAfterMinOff()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    const uint32_t t0 = s.now;
+    s.fsm.setPowerAllowed(false);
+    TEST_ASSERT_TRUE(runUntil(s, 2500U, [&s]() { return s.fsm.phase() == Phase::kOff; }));
+    TEST_ASSERT_TRUE((s.now - t0) <= 2000U);
+    TEST_ASSERT_TRUE(indexOfCmd(s, "AT+QPOWD=1") >= 0);
+    TEST_ASSERT_FALSE(s.power.back().on);
+    const uint32_t offAt = s.power.back().t;
+    s.fsm.setPowerAllowed(true);
+    TEST_ASSERT_TRUE(runUntil(s, 5000U, [&s]() { return s.power.back().on; }));
+    TEST_ASSERT_TRUE((s.power.back().t - offAt) >= 2000U); // 断电至少保持 2 s
+}
+
+void testDisableAtRuntimeStopsModule()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.fsm.setEnabled(false);
+    TEST_ASSERT_TRUE(runUntil(s, 2500U, [&s]() { return s.fsm.phase() == Phase::kOff; }));
+    runFor(s, 10000U);
+    TEST_ASSERT_FALSE(s.power.back().on);
+}
+
+void testMsToNextWorkIsBoundedWhenReady()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    runFor(s, 1000U);
+    const uint32_t wait = s.fsm.msToNextWork(s.now);
+    TEST_ASSERT_TRUE(wait <= 30000U);
+    TEST_ASSERT_TRUE(wait > 0U);
+}
+
+void testConfigTruncatesOverlongFields()
+{
+    Sim s;
+    setup(s);
+    const std::string longApn(60U, 'a');
+    s.fsm.setConfig(longApn, "", "", 0U);
+    TEST_ASSERT_TRUE(toReady(s));
+    const int apn = indexOfCmd(s, "AT+QICSGP=");
+    TEST_ASSERT_TRUE(apn >= 0);
+    // 截断到 31 字符，命令仍然完整。
+    TEST_ASSERT_EQUAL_STRING(
+        ("AT+QICSGP=1,1,\"" + std::string(31U, 'a') + "\",\"\",\"\",0").c_str(),
+        s.cmds[static_cast<size_t>(apn)].c_str());
+}
+
+void testLateReplyAfterTimeoutNotAttributedToNextOp()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    runFor(s, 1000U); // 首次巡检完成
+    // 下一次巡检的 CSQ 被模块吞掉 → 超时；迟到的旧应答恰好长得像 CEREG? 查询结果。
+    s.dropPrefix = "AT+CSQ";
+    const size_t csqBefore = countCmds(s, "AT+CSQ");
+    TEST_ASSERT_TRUE(runUntil(s, 40000U, [&]() { return countCmds(s, "AT+CSQ") > csqBefore; }));
+    runFor(s, 300U + 20U);
+    schedule(s, "\r\n+CEREG: 0,2\r\nOK\r\n", 0U);
+    runFor(s, 3000U);
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase());
+    TEST_ASSERT_EQUAL(RegStatus::kHome, s.fsm.snapshot(s.now).reg);
+    runFor(s, 70000U);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kNone, s.fsm.snapshot(s.now).level);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+}
+
+void testQiopenResultTimeoutClosesSlotBeforeReopen()
+{
+    Sim s;
+    setup(s);
+    s.autoUrcOpen = false; // 模块接受 QIOPEN 但永不给结果 URC
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.openConn(1U, "host", 1883U));
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return !s.events.empty(); }));
+    TEST_ASSERT_EQUAL_STRING("open1:0", s.events.back().c_str());
+    s.autoUrcOpen = true;
+    TEST_ASSERT_TRUE(runUntil(s, 70000U, [&s]() { return countCmds(s, "AT+QIOPEN=") >= 2U; }));
+    const int firstOpen = indexOfCmd(s, "AT+QIOPEN=");
+    const int close = indexOfCmd(s, "AT+QICLOSE=1");
+    const int secondOpen = indexOfCmd(s, "AT+QIOPEN=", 1U);
+    TEST_ASSERT_TRUE(close > firstOpen);
+    TEST_ASSERT_TRUE(secondOpen > close);
+}
+
+// r3 I2：同一次 +CPIN? 期间出现的非 READY +CPIN: 行（URC 混入）不得被其后的 READY 覆盖。
+void testCpinNonReadyUrcNotOverwrittenByReady()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.cpinPre = "+CPIN: SIM PIN\r\n";
+    TEST_ASSERT_TRUE(runUntil(s, 40000U, [&s]() { return s.fsm.phase() == Phase::kSimCheck; }));
+    TEST_ASSERT_EQUAL(SimStatus::kPinRequired, s.fsm.snapshot(s.now).sim);
+}
+
+// r3 I4：QICLOSE 未确认（超时）→ 不得在同一槽位重开，升级 L2（QIDEACT）后才可重用。
+void testUnconfirmedQicloseEscalatesL2BeforeReopen()
+{
+    Sim s;
+    setup(s);
+    s.autoUrcOpen = false;
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.openConn(1U, "host", 1883U));
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return !s.events.empty(); }));
+    s.autoUrcOpen = true;
+    s.dropPrefix = "AT+QICLOSE=1"; // 清理用的 QICLOSE 得不到应答
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return countCmds(s, "AT+QIOPEN=") >= 2U; }));
+    const int close = indexOfCmd(s, "AT+QICLOSE=1");
+    const int deact = indexOfCmd(s, "AT+QIDEACT=1");
+    const int secondOpen = indexOfCmd(s, "AT+QIOPEN=", 1U);
+    TEST_ASSERT_TRUE(close >= 0);
+    TEST_ASSERT_TRUE(deact > close);
+    TEST_ASSERT_TRUE(secondOpen > deact);
+}
+
+// r3 I6：L3 断电冷却期间被低电/配网锁定，冷却结束不得再次上电。
+void testPowerCycleCooldownRechecksGate()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.requestReset(s.now));
+    s.fsm.setStartAllowed(false);
+    const size_t n = s.power.size();
+    runFor(s, 30000U);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(n), static_cast<uint32_t>(s.power.size()));
+    TEST_ASSERT_EQUAL(Phase::kOff, s.fsm.phase());
+    s.fsm.setStartAllowed(true);
+    TEST_ASSERT_TRUE(runUntil(s, 5000U, [&s, n]() { return s.power.size() > n; }));
+}
+
+// r3 I1：关机时通道已处于重新同步（应答不可信）→ 不发 QPOWD，直接断电。
+void testShutdownWhileResyncingCutsWithoutQpowd()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.silent = true;
+    TEST_ASSERT_TRUE(runUntil(s, 60000U, [&s]() { return s.engine.resyncing(); }));
+    s.fsm.beginShutdown(s.now);
+    runFor(s, 100U);
+    TEST_ASSERT_TRUE(s.fsm.shutdownDone());
+    TEST_ASSERT_FALSE(s.power.back().on);
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(countCmds(s, "AT+QPOWD")));
+}
+
+// r4 R4：QIDEACT 失败且承载仍在线 → L2 重建不得宣告 Ready，累计失败后升级 L3。
+void testDeactFailureWithBearerActiveNeverReady()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.deactFails = true;
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    runFor(s, 50U);
+    bool sawReady = false;
+    TEST_ASSERT_TRUE(runUntil(s, 600000U, [&s, &sawReady]() {
+        sawReady = sawReady || (s.fsm.phase() == Phase::kReady);
+        return powerOffCount(s) == 1U;
+    }));
+    TEST_ASSERT_FALSE(sawReady);
+    TEST_ASSERT_TRUE(countCmds(s, "AT+QIDEACT=1") >= 2U);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+}
+
+// r4 R5：PWREN 拉低失败时不进入 Off/不算关机完成，进入 kPowerFault 周期重试，成功后才完成。
+void testPowerFaultRetriesUntilCutSucceeds()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.powerOffFailures = 1000;
+    s.fsm.beginShutdown(s.now);
+    TEST_ASSERT_TRUE(runUntil(s, 5000U, [&s]() { return s.fsm.phase() == Phase::kPowerFault; }));
+    runFor(s, 1000U);
+    TEST_ASSERT_EQUAL(Phase::kPowerFault, s.fsm.phase());
+    TEST_ASSERT_FALSE(s.fsm.shutdownDone());
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(powerOffCount(s)));
+    s.powerOffFailures = 0;
+    TEST_ASSERT_TRUE(runUntil(s, 1000U, [&s]() { return s.fsm.shutdownDone(); }));
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(powerOffCount(s)));
+}
+
+// r5 F4：QIDEACT 返回 OK 但 QIACT? 仍显示 context 在线，不得宣告 Ready，按 L2 失败累计并最终升 L3。
+void testDeactOkButBearerStillActiveNeverReady()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.deactKeepsBearer = true;
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    runFor(s, 50U);
+    bool sawReady = false;
+    TEST_ASSERT_TRUE(runUntil(s, 600000U, [&s, &sawReady]() {
+        sawReady = sawReady || (s.fsm.phase() == Phase::kReady);
+        return powerOffCount(s) == 1U;
+    }));
+    TEST_ASSERT_FALSE(sawReady);
+    TEST_ASSERT_TRUE(countCmds(s, "AT+QIDEACT=1") >= 2U);
+}
+
+// r5 F5：L3 断电 GPIO 失败进入 power-fault：RDY 等上电类 URC 被忽略（相位检查不依赖枚举顺序）；
+// 冷却截止在首次尝试拉低时保存，GPIO 重试成功后仍满足原冷却时间才再上电。
+void testPowerFaultIgnoresRdyAndKeepsCooldown()
+{
+    Sim s;
+    setup(s);
+    s.silent = true;           // 同步窗口超时 → 非人工 L3（首次冷却 30 s）
+    s.powerOffFailures = 1000; // 断电 GPIO 一直失败
+    TEST_ASSERT_TRUE(runUntil(s, 30000U, [&s]() { return s.fsm.phase() == Phase::kPowerFault; }));
+    const uint32_t firstTry = s.now;
+    schedule(s, "\r\nRDY\r\n", 10U);
+    runFor(s, 12000U);
+    TEST_ASSERT_EQUAL(Phase::kPowerFault, s.fsm.phase()); // RDY 不得把 power-fault 拉回 Sync
+    s.powerOffFailures = 0;
+    TEST_ASSERT_TRUE(runUntil(s, 200000U, [&s]() { return s.power.size() >= 3U; }));
+    TEST_ASSERT_FALSE(s.power[1U].on);
+    TEST_ASSERT_TRUE(s.power[2U].on);
+    // 冷却时长在首次尝试时保存：PWREN 实际在 GPIO 重试成功时才拉低，此后低电平仍须保持完整 30 s。
+    TEST_ASSERT_TRUE((s.power[2U].t - s.power[1U].t) >= 30000U);
+    TEST_ASSERT_TRUE(s.power[1U].t > firstTry); // 断电确实发生在 power-fault 重试成功之后
+}
+
+// r4 R3：调试通道（net at）看到的非 READY +CPIN 行同样驱动 FSM 的 SIM 状态。
+void testDiagCpinNotInsertedDrivesSimState()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.fsm.onDiagLine("+CPIN: NOT INSERTED");
+    s.fsm.onDiagLine("+CPIN: READY"); // READY 不得覆盖已看到的异常
+    runFor(s, 100U);
+    TEST_ASSERT_TRUE(s.fsm.phase() != Phase::kReady);
+    TEST_ASSERT_EQUAL(SimStatus::kAbsent, s.fsm.snapshot(s.now).sim);
+}
+
+// r5 F6 终裁：115200 一律拒绝 QISEND；460800 下单次载荷上限 256 B（≈5.6 ms 线上），257 B 起拒绝。
+void testPayloadWireTimeBudget()
+{
+    Sim lo;
+    setup(lo);
+    lo.iprFail = true; // 保持 115200
+    TEST_ASSERT_TRUE(toConnOpen(lo));
+    std::array<uint8_t, 257> big{};
+    std::array<uint8_t, 64> small{};
+    std::array<uint8_t, 256> maxChunk{};
+    TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, big, lo.now));
+    TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, maxChunk, lo.now));
+    TEST_ASSERT_FALSE(lo.fsm.sendConn(0U, small, lo.now)); // r5 F6：115200 阶段禁止 QISEND
+    Sim hi;
+    setup(hi);
+    TEST_ASSERT_TRUE(toConnOpen(hi));
+    TEST_ASSERT_FALSE(hi.fsm.sendConn(0U, big, hi.now)); // 257 B 超过上限
+    TEST_ASSERT_TRUE(hi.fsm.sendConn(0U, maxChunk, hi.now));
+}
+
+void testRegistrationLostFor180sEscalatesL3()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    runFor(s, 1000U);
+    s.regStat = 2; // 持续搜网，不恢复
+    TEST_ASSERT_TRUE(
+        runUntil(s, 40000U, [&s]() { return s.fsm.snapshot(s.now).reg == RegStatus::kSearching; }));
+    const uint32_t lostAt = s.now;
+    TEST_ASSERT_TRUE(runUntil(s, 300000U, [&s]() { return powerOffCount(s) >= 1U; }));
+    TEST_ASSERT_TRUE((s.now - lostAt) >= 150000U);
+    TEST_ASSERT_TRUE((s.now - lostAt) <= 215000U);
+    TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+}
+
+void testStartAllowedOnlyBlocksNewPowerOn()
+{
+    Sim s;
+    setup(s);
+    s.fsm.setStartAllowed(false); // 低电量迟滞：不允许新上电
+    runFor(s, 30000U);
+    TEST_ASSERT_TRUE(s.power.empty());
+    s.fsm.setStartAllowed(true);
+    TEST_ASSERT_TRUE(toReady(s));
+    // 已在线的模块不因“不允许新上电”被断电（交给低电关机流程）。
+    s.fsm.setStartAllowed(false);
+    runFor(s, 60000U);
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase());
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size()));
+    TEST_ASSERT_EQUAL_UINT32(0U, static_cast<uint32_t>(countCmds(s, "AT+QPOWD")));
+}
+
+void testShutdownUsesSharedAbsoluteDeadline()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.silent = true; // 模块不应答：只能靠截止时刻断电
+    const uint32_t t0 = s.now;
+    // PW1 在 t0 起算 2 s；kNet 晚 1.2 s 才开始关机，必须沿用同一截止时刻。
+    runFor(s, 1200U);
+    s.fsm.beginShutdown(s.now, t0 + 2000U);
+    TEST_ASSERT_TRUE(runUntil(s, 2500U, [&s]() { return s.fsm.shutdownDone(); }));
+    TEST_ASSERT_TRUE((s.now - t0) <= 2050U);
+    TEST_ASSERT_FALSE(s.power.back().on);
+}
+
+void testShutdownPastDeadlineCutsImmediately()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    s.fsm.beginShutdown(s.now, s.now - 5U);
+    runFor(s, 40U);
+    TEST_ASSERT_TRUE(s.fsm.shutdownDone());
+    TEST_ASSERT_FALSE(s.power.back().on);
+}
+
+void testIdleSlotRecvUrcDroppedNotSpinning()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    runFor(s, 1000U);
+    const size_t qirdBefore = countCmds(s, "AT+QIRD=");
+    schedule(s, "\r\n+QIURC: \"recv\",1\r\n", 10U);
+    runFor(s, 200U);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(qirdBefore),
+                             static_cast<uint32_t>(countCmds(s, "AT+QIRD=")));
+    TEST_ASSERT_EQUAL_UINT16(1U, s.fsm.snapshot(s.now).droppedRecv);
+    TEST_ASSERT_TRUE(s.fsm.msToNextWork(s.now) > 0U);
+}
+
+void testPerSlotSnapshotReflectsEachConn()
+{
+    Sim s;
+    setup(s);
+    s.autoUrcOpen = false;
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_TRUE(s.fsm.openConn(0U, "a", 1U));
+    s.qiopenErr = 552;
+    TEST_ASSERT_TRUE(s.fsm.openConn(2U, "b", 2U));
+    runFor(s, 500U);
+    const cellular::LinkSnapshot snap = s.fsm.snapshot(s.now);
+    TEST_ASSERT_EQUAL_UINT8(2U, snap.conn[0].state); // Opening
+    TEST_ASSERT_EQUAL_UINT8(0U, snap.conn[1].state); // Idle
+    TEST_ASSERT_TRUE(snap.conn[2].state == 2U || snap.conn[2].state == 4U);
+}
+
+void testOversizedRawReadRejectedAndRecovers()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toConnOpen(s));
+    s.rxData.assign(cellular::kReadChunkBytes + 1U, 'x'); // 模块给出比请求更多的数据
+    schedule(s, "\r\n+QIURC: \"recv\",0\r\n", 10U);
+    runFor(s, 500U);
+    TEST_ASSERT_TRUE(s.rxCollected.size() <= cellular::kReadChunkBytes);
+    s.rxData.clear();
+    runFor(s, 5000U);
+    TEST_ASSERT_EQUAL(Phase::kReady, s.fsm.phase());
+    TEST_ASSERT_TRUE(s.fsm.connOpen(0U));
+}
+
+} // namespace
+
+/** 等到快照 SIM 为 kAbsent（SimCheck 内确认无卡）。 */
+bool toSimAbsent(Sim &s, uint32_t limitMs)
+{
+    return runUntil(s, limitMs, [&s]() { return s.fsm.snapshot(s.now).sim == SimStatus::kAbsent; });
+}
+
+// HIL 失败 N1 step 5：无卡持续 60 s 即整机断电，之后 120/240/300 s 封顶，见到 READY 后归零。
+void testNoSimPowerCyclesWithBackoffAndResetsOnReady()
+{
+    Sim s;
+    setup(s);
+    s.simAbsent = true;
+    const uint32_t expectMs[] = {60000U, 120000U, 240000U, 300000U, 300000U};
+    for (size_t i = 0U; i < 5U; ++i) {
+        TEST_ASSERT_TRUE(toSimAbsent(s, 30000U));
+        const uint32_t badAt = s.now;
+        TEST_ASSERT_TRUE(
+            runUntil(s, expectMs[i] + 2000U, [&s, i]() { return powerOffCount(s) == (i + 1U); }));
+        const uint32_t offAt = s.power.back().t;
+        TEST_ASSERT_TRUE((offAt - badAt) >= expectMs[i] - 100U);
+        TEST_ASSERT_TRUE((offAt - badAt) <= expectMs[i] + 1500U);
+        TEST_ASSERT_EQUAL(RecoveryLevel::kL3Module, s.fsm.snapshot(s.now).level);
+        // 无卡断电只保持 powerOffMinMs，不套用 L3 的 30/60/120/300 s 退避，也不锁存。
+        TEST_ASSERT_TRUE(runUntil(s, 10000U, [&s]() { return s.power.back().on; }));
+        TEST_ASSERT_TRUE((s.power.back().t - offAt) >= 2000U);
+        TEST_ASSERT_TRUE((s.power.back().t - offAt) <= 3500U);
+    }
+    // 重新插卡：下一次上电读到 READY → 回到 Ready，无卡退避归零。
+    s.simAbsent = false;
+    TEST_ASSERT_TRUE(toReady(s, 400000U));
+    s.simAbsent = true;
+    schedule(s, "\r\n+CPIN: NOT READY\r\n", 10U);
+    TEST_ASSERT_TRUE(runUntil(s, 500U, [&s]() { return s.fsm.phase() == Phase::kSimCheck; }));
+    const size_t before = powerOffCount(s);
+    const uint32_t badAt = s.now;
+    TEST_ASSERT_TRUE(runUntil(s, 63000U, [&s, before]() { return powerOffCount(s) > before; }));
+    TEST_ASSERT_TRUE((s.power.back().t - badAt) >= 59000U);
+    TEST_ASSERT_TRUE((s.power.back().t - badAt) <= 62000U);
+}
+
+// 无卡断电与普通 L3 互不混用：之后真正的 L3 仍从 30 s 起步。
+void testNoSimCycleDoesNotPolluteL3Backoff()
+{
+    Sim s;
+    setup(s);
+    s.simAbsent = true;
+    TEST_ASSERT_TRUE(runUntil(s, 70000U, [&s]() { return powerOffCount(s) == 1U; }));
+    s.simAbsent = false;
+    TEST_ASSERT_TRUE(toReady(s, 60000U));
+    s.qiactFails = 3;
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    const size_t before = powerOffCount(s);
+    TEST_ASSERT_TRUE(runUntil(s, 120000U, [&s, before]() { return powerOffCount(s) > before; }));
+    const uint32_t offAt = s.power.back().t;
+    TEST_ASSERT_TRUE(runUntil(s, 40000U, [&s]() { return s.power.back().on; }));
+    TEST_ASSERT_TRUE((s.power.back().t - offAt) >= 29900U);
+    TEST_ASSERT_TRUE((s.power.back().t - offAt) <= 31500U);
+}
+
+// 低电（powerAllowed 假）：无卡计时不得把模块再拉起来。
+void testNoSimCycleRespectsPowerGates()
+{
+    Sim s;
+    setup(s);
+    s.simAbsent = true;
+    TEST_ASSERT_TRUE(toSimAbsent(s, 30000U));
+    s.fsm.setPowerAllowed(false);
+    runFor(s, 400000U);
+    TEST_ASSERT_EQUAL(Phase::kOff, s.fsm.phase());
+    TEST_ASSERT_FALSE(s.power.back().on);
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size() - powerOffCount(s)));
+    // startAllowed 假：到点断电后不再上电，放开后才重新上电。
+    Sim t;
+    setup(t);
+    t.simAbsent = true;
+    TEST_ASSERT_TRUE(toSimAbsent(t, 30000U));
+    t.fsm.setStartAllowed(false);
+    TEST_ASSERT_TRUE(runUntil(t, 70000U, [&t]() { return powerOffCount(t) == 1U; }));
+    runFor(t, 30000U);
+    TEST_ASSERT_FALSE(t.power.back().on);
+    t.simAbsent = false;
+    t.fsm.setStartAllowed(true);
+    TEST_ASSERT_TRUE(toReady(t, 20000U));
+}
+
+// PDP 掉线后重试前先查卡：卡已拔直接进 SimCheck，不做徒劳的 QIDEACT，快照不得停留在 ready/home。
+void testPdpDropWithSimGoneGoesStraightToSimCheck()
+{
+    Sim s;
+    setup(s);
+    TEST_ASSERT_TRUE(toReady(s));
+    TEST_ASSERT_EQUAL(SimStatus::kReady, s.fsm.snapshot(s.now).sim);
+    s.simAbsent = true; // 没有 SIM URC：只靠 PDP 掉线触发恢复
+    const size_t deactBefore = countCmds(s, "AT+QIDEACT=1");
+    schedule(s, "\r\n+QIURC: \"pdpdeact\",1\r\n", 10U);
+    TEST_ASSERT_TRUE(runUntil(s, 200U, [&s]() { return s.fsm.phase() == Phase::kPdpUp; }));
+    const cellular::LinkSnapshot dropped = s.fsm.snapshot(s.now);
+    TEST_ASSERT_EQUAL(SimStatus::kUnknown, dropped.sim);
+    TEST_ASSERT_EQUAL(RegStatus::kUnknown, dropped.reg);
+    TEST_ASSERT_FALSE(dropped.pdpUp);
+    TEST_ASSERT_TRUE(runUntil(s, 1000U, [&s]() { return s.fsm.phase() == Phase::kSimCheck; }));
+    TEST_ASSERT_EQUAL(SimStatus::kAbsent, s.fsm.snapshot(s.now).sim);
+    TEST_ASSERT_EQUAL_UINT32(deactBefore, static_cast<uint32_t>(countCmds(s, "AT+QIDEACT=1")));
+    TEST_ASSERT_EQUAL_UINT32(1U, static_cast<uint32_t>(s.power.size())); // 未立即断电
+}
+
+void setUp() {}
+
+void tearDown() {}
+
+int main()
+{
+    UNITY_BEGIN();
+    RUN_TEST(testBackoffTables);
+    RUN_TEST(testHappyPathToReady);
+    RUN_TEST(testApnConfigCommand);
+    RUN_TEST(testIprFailureStaysAtBootBaud);
+    RUN_TEST(testModuleAlreadyFastBaudSwapsProbe);
+    RUN_TEST(testSlowBootStillSyncsWithinWindow);
+    RUN_TEST(testSyncWindowTimeoutEscalatesL3WithCappedBackoff);
+    RUN_TEST(testPowerCycleBackoffVisibleInSnapshot);
+    RUN_TEST(testSimAbsentStaysInSimCheckThenRecoveryIsL3);
+    RUN_TEST(testRegisterTimeoutIs180sThenL3);
+    RUN_TEST(testCregFallbackWhenCeregNotRegistered);
+    RUN_TEST(testQiactFailureL2ThenSuccess);
+    RUN_TEST(testQiactThreeConsecutiveFailuresEscalateL3);
+    RUN_TEST(testPdpDeactUrcTriggersL2WithBackoff);
+    RUN_TEST(testRegistrationLostThenRecoveredIsL2);
+    RUN_TEST(testRegistrationUrcLostThenRecoveredIsL2);
+    RUN_TEST(testChannelDeadEscalatesL3AndRecovers);
+    RUN_TEST(testHealthCheckEvery30s);
+    RUN_TEST(testSimRemovedInReadyReturnsToSimCheckThenL3);
+    RUN_TEST(testSimRemovedDetectedByHealthCheck);
+    RUN_TEST(testRdyUrcResyncs);
+    RUN_TEST(testManualResetUsesMinimumHold);
+    RUN_TEST(testConnOpenRecvSendFlow);
+    RUN_TEST(testConnClosedUrcBackoffsThenEscalatesL2);
+    RUN_TEST(testConnDataResetsL1Backoff);
+    RUN_TEST(testConnOpenFailureUrcBacksOffL1);
+    RUN_TEST(testConnCloseRequest);
+    RUN_TEST(testShutdownNormalWithPoweredDownUrc);
+    RUN_TEST(testShutdownWithoutPoweredDownCutsWithin2s);
+    RUN_TEST(testShutdownWhenAtDeadCutsWithin2s);
+    RUN_TEST(testShutdownBeforeModuleUpCutsImmediately);
+    RUN_TEST(testShutdownWhenOffOrCyclingIsImmediate);
+    RUN_TEST(testDisabledNeverPowers);
+    RUN_TEST(testPowerNotAllowedNeverPowersThenAllows);
+    RUN_TEST(testPowerRevokedGracefullyStopsThenRepowersAfterMinOff);
+    RUN_TEST(testDisableAtRuntimeStopsModule);
+    RUN_TEST(testMsToNextWorkIsBoundedWhenReady);
+    RUN_TEST(testConfigTruncatesOverlongFields);
+    RUN_TEST(testLateReplyAfterTimeoutNotAttributedToNextOp);
+    RUN_TEST(testQiopenResultTimeoutClosesSlotBeforeReopen);
+    RUN_TEST(testCpinNonReadyUrcNotOverwrittenByReady);
+    RUN_TEST(testUnconfirmedQicloseEscalatesL2BeforeReopen);
+    RUN_TEST(testPowerCycleCooldownRechecksGate);
+    RUN_TEST(testShutdownWhileResyncingCutsWithoutQpowd);
+    RUN_TEST(testDeactFailureWithBearerActiveNeverReady);
+    RUN_TEST(testPowerFaultRetriesUntilCutSucceeds);
+    RUN_TEST(testDeactOkButBearerStillActiveNeverReady);
+    RUN_TEST(testPowerFaultIgnoresRdyAndKeepsCooldown);
+    RUN_TEST(testDiagCpinNotInsertedDrivesSimState);
+    RUN_TEST(testPayloadWireTimeBudget);
+    RUN_TEST(testRegistrationLostFor180sEscalatesL3);
+    RUN_TEST(testStartAllowedOnlyBlocksNewPowerOn);
+    RUN_TEST(testShutdownUsesSharedAbsoluteDeadline);
+    RUN_TEST(testShutdownPastDeadlineCutsImmediately);
+    RUN_TEST(testIdleSlotRecvUrcDroppedNotSpinning);
+    RUN_TEST(testPerSlotSnapshotReflectsEachConn);
+    RUN_TEST(testOversizedRawReadRejectedAndRecovers);
+    RUN_TEST(testNoSimPowerCyclesWithBackoffAndResetsOnReady);
+    RUN_TEST(testNoSimCycleDoesNotPolluteL3Backoff);
+    RUN_TEST(testNoSimCycleRespectsPowerGates);
+    RUN_TEST(testPdpDropWithSimGoneGoesStraightToSimCheck);
+    return UNITY_END();
+}

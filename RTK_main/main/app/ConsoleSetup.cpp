@@ -18,6 +18,7 @@
 #include "app/PowerRequests.hpp"
 #include "cli/Out.hpp"
 #include "fw/Log.hpp"
+#include "modules/net/NetModule.hpp"
 #include "modules/oled/OledCmds.hpp"
 #include "modules/ota/OtaCmds.hpp"
 #include "rtos/EspStatus.hpp"
@@ -237,6 +238,7 @@ bool appendGatedCommands(std::span<const cli::Cmd> table, std::span<const std::s
     return true;
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity): 每条命令表一个编译期开关三元式，新增命令即增加分支。
 /**
  * @brief 登记当前档位的命令，并把 handler 包进 phase 门控
  * @retval true 登记成功
@@ -268,6 +270,7 @@ bool registerCommandTables() noexcept
         kEnabled("oled") ? &oledCmds : nullptr,
         kEnabled("radio") ? &radioCmds : nullptr,
         kEnabled("ota") ? &otaCmds : nullptr,
+        kEnabled("net") ? &netCmds : nullptr,
     };
     // 命令表地址在 init 后不可变；handler 经 phase 原子门控。
     size_t used = 0U;
@@ -282,6 +285,7 @@ bool registerCommandTables() noexcept
     }
     return true;
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 /**
  * @brief 登记当前档位的动词组供 help / help <group> 展示
@@ -313,6 +317,10 @@ bool registerVerbGroups() noexcept
         kGroup("oled", "OLED display status", &oledVerbs),
         kGroup("radio", "radio mode and restart", &radioVerbs),
         kGroup("ota", "application OTA and rollback", &otaVerbs),
+        kGroup("net",
+               kConsoleProfile == ConsoleProfile::kDev ? "4G link status and DEV power/at tools"
+                                                       : "4G link status",
+               &netVerbs),
     };
     for (const auto &group : kVerbGroups) {
         if (group.verbs == nullptr) {

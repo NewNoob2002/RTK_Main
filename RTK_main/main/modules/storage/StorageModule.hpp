@@ -340,6 +340,15 @@ private:
      */
     void setSnPnCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept;
     /**
+     * @brief  处理 net.enable/apn/user/pass 设置（ADR-0021 §2.7）
+     * @param  cmd: kSetNetEnable/Apn/User/Pass 命令
+     * @param[out] result: 成功仅在 NVS 已提交后返回 kOk
+     * @note   仅 kLink，同步写 NVS 可阻塞，非 ISR；变更重启后生效，视图置 restartPending。
+     */
+    void setNetCmd(const fw::Command &cmd, fw::CommandResult &result) noexcept;
+    /** 启动期发布 net.* 只读视图（仅 kCellular 板型）。仅启动前单线程。 */
+    void publishNetConfig() noexcept;
+    /**
      * @brief  同步把当前内存白名单写入 NVS（供 S2 命令与去抖共享）
      * @retval ESP_OK 写入成功
      * @retval 其他 NVS 错误码
@@ -356,6 +365,8 @@ private:
     {
         return *context_;
     }
+
+    NetConfigView net_view_{}; // net.* 视图的 kLink 本地副本（单写者）
 
     static constexpr uint32_t kRetryInitialMs = 1000;
     AppContext *context_ = nullptr;

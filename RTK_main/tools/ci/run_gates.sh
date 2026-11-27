@@ -89,7 +89,7 @@ if [ "$ONLY_IDF" -eq 0 ]; then
 gate G1-frozen sha256sum -c --quiet docs/frozen.sha256
 
 HOST_DIRS=(test/host test/app_fw test/services test/stream_demux test/bt_reconnect test/cli
-    test/gnss test/nvs_store test/web_proto test/settings test/ota tools/main_host_check tools/t13_host_check)
+    test/gnss test/nvs_store test/web_proto test/settings test/ota test/cellular tools/main_host_check tools/t13_host_check)
 for d in "${HOST_DIRS[@]}"; do
     n=$(basename "$d")
     gate "G2-$n" host_suite "$d" "$PREFIX-$n"

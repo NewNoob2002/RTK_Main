@@ -2050,6 +2050,27 @@ static void verifyF9pRateOutputAndRollback(nvs_handle_t nvs, std::span<uint8_t> 
     rtos::ExecutorTestAccess::bind(executor, &control.tcb);
     app::bindSettings(*s_context);
 
+    // r4 R8：net.* 读回走真实 SettingsBackend：enable/apn/user 取自 NVS 已提交快照，密码只回掩码。
+    {
+        app::NetConfigView view{};
+        view.available = true;
+        view.enable = true;
+        view.passSet = true;
+        constexpr std::string_view kApn = "cmnet";
+        constexpr std::string_view kUser = "u1";
+        std::copy(kApn.begin(), kApn.end(), view.apn.begin());
+        std::copy(kUser.begin(), kUser.end(), view.user.begin());
+        s_context->data.netConfig.write(view);
+        settings::Value netVal{};
+        CHECK(s_context->settings.get("net.enable", netVal) && netVal.boolVal);
+        CHECK(s_context->settings.get("net.apn", netVal) && netVal.textView() == "cmnet");
+        CHECK(s_context->settings.get("net.user", netVal) && netVal.textView() == "u1");
+        CHECK(s_context->settings.get("net.pass", netVal) && netVal.textView() == "***");
+        view.passSet = false;
+        s_context->data.netConfig.write(view);
+        CHECK(s_context->settings.get("net.pass", netVal) && netVal.textView().empty());
+    }
+
     auto runSetting = [&](std::string_view key, std::string_view val, settings::Caller caller,
                           uint32_t waitMs) -> fw::Result {
         settings::Ticket t{};

@@ -432,6 +432,31 @@ app::BootResult stepIo(app::BootCtx &ctx) noexcept
 }
 
 /**
+ * @brief  启动步骤：4G 执行器（kNet）；仅 Feature::kCellular 板型的正常启动创建，其余记 kSkipped
+ * @param  ctx: 启动上下文（读写 launched/reason）
+ * @retval kOk 成功；kFail 启动失败；kSkipped 板型无 4G 或非正常启动
+ */
+app::BootResult stepNet(app::BootCtx &ctx) noexcept
+{
+    const auto &self = app::appContext();
+    if ((self.bootMode != app::board::BootMode::kNormal) ||
+        !app::board::hasFeature(app::board::current(), app::board::Feature::kCellular) ||
+        (app::board::current().cellular.uart < 0)) {
+        return app::BootResult::kSkipped;
+    }
+    const auto &bufs = *static_cast<app::BootBuffers *>(ctx.user);
+    if (bufs.netStack.empty() || bufs.netBlock.empty()) {
+        return app::BootResult::kSkipped; // net.enable=0 或配网模式：不分配、不启动
+    }
+    const char *error = app::startNet(bufs.netStack, bufs.netBlock, ctx.launched);
+    if (error == nullptr) {
+        return app::BootResult::kOk;
+    }
+    ctx.reason = error;
+    return app::BootResult::kFail;
+}
+
+/**
  * @brief  启动步骤：等待全部消费者到达启动屏障并放行
  * @param  ctx: 启动上下文（读写 reason/stopRequired）
  * @retval kOk 成功；kFail 屏障等待失败

@@ -69,6 +69,14 @@ struct OledPins {
     bool rotated180 = false; // true 表示面板倒装 180°（SH1106: 0xA0 + 0xC0）
 };
 
+/** 4G 模块（EC600U）引脚：PWREN 高有效，PWRKEY 板上固定拉低；uart<0 表示本板不使用。 */
+struct CellularPins {
+    int uart = -1;
+    int rxGpio = -1;
+    int txGpio = -1;
+    int pwrenGpio = -1;
+};
+
 struct Profile {
     BoardId id = BoardId::kUnknown;
     const char *name = "unknown";
@@ -82,6 +90,7 @@ struct Profile {
     PowerKey powerKey{};
     ChargerPins charger{};
     OledPins oled{};
+    CellularPins cellular{};
     std::span<const SafeOutput> safeOutputs{};
     uint8_t features = 0U;
 };
