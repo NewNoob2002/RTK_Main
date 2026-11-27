@@ -248,4 +248,8 @@ idf.py -B builds/n1-idf build flash monitor        # dev 档位，串口控制�
 | 6 460800 稳定 30 min | 54b01b6 | PASS：全程 Ready，csq 16–17，L0，recv_dropped 0，无 W/E；free 52,696→52,364 B（−64 B/5 min，main 无 4G 为 −32 B/5 min，另案调查） |
 | 7 关机顺序 | 54b01b6 | PASS（log_drain 修复后）：power off 22.013 → net 7->6 23.240 → PWREN low 23.383 → device powered down 23.388，无 timeout |
 | 9 堆/栈 | c23e07a | PASS：4G 启用成本 ~10.9 KB，free 51.4 KB，min 48,828 B（≥40,960），net stack_hwm 2368 B |
-| 8 低电 | — | 未执行 |
+| 8 低电（在线保持） | 99e2878 | PASS（模拟）：Ready 时 `power simbat 8`，模块保持在线直到 `net reset` |
+| 10 低电门控 | 99e2878 | PASS（模拟）：<10% 下 `net reset` → PWREN low 后停在 off（30 s 内不再上电）；`power simbat 20` 立即 PWREN high → 7 s 后 Ready |
+| 8 发射峰值/真实低电（Q3） | — | 未执行：用户决定先合并，待电池实际放至 ~15% 后在整机复测 |
+
+- 1 h 堆监测（2026-11-27，OL9 合入 N1 构建 5772ab6，BT+4G）：free 52,568→52,060 B，36 min 后持平（6 次读数不变），min 48,636 B 不变 → 判断为启动后稳定化而非泄漏；55 min 用户人为拔插 SIM，60 s 无卡上电循环后恢复，约 70 s。
