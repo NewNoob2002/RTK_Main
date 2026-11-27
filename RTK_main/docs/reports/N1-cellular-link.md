@@ -235,3 +235,17 @@ idf.py -B builds/n1-idf build flash monitor        # dev 档位，串口控制�
 12a. UART 写与轮次预算：**仅主机测试覆盖**（`TestAtEngine` 写失败 → 通道不可信 → 重新同步；`TestLinkFsm::testPayloadWireTimeBudget` 载荷 ≤ 256 B 且仅 460800 可发；审查者 `uart-zero` 复现脚本）。HIL 无对应步骤：板上没有写调用/整轮耗时的计时点，该项**未覆盖**。
 12. 设置读回：`config get net.apn/net.user` 与手机/web 通道对 `net.*` 返回 locked；`config get net.pass` 为 `***`。
 13. 回归：`net.enable 0` 后重启，确认 GPIO26 低、`net status` 为 disabled；E1-5.4 启动日志无 `net:` 行、GPIO26 仍为电源保持；配网模式（Wi-Fi 配置）下 4G 不启动。
+
+## 9. HIL 结果（2026-11-27，P2 v1.41 F9P 测试板 + EC600U `EC600UEUABR02A12M08_01.200.01.200` + 中国电信 5G 卡，APN `ctnet`）
+
+| 步骤 | 构建 | 结果 |
+|---|---|---|
+| 1–2 默认关闭/设置读回 | c23e07a | PASS：默认 disabled，`net.pass` 读回 `***` |
+| 3 启动与危险 AT 拒绝 | c23e07a | PASS：ATE1/IPR/QISWTMD/CFUN=1,1/QPOWD/CMEE?/`;` 均 rejected；~6.7 s Ready，csq 18，460800，L0 |
+| 4 天线 | 54b01b6 | 未定：拔天线日志无变化，疑测试板天线座故障，待整机复测 |
+| 5 SIM 拔插（首轮） | 54b01b6 | **FAIL**：拔卡后 L2 重试期间快照仍显示 `sim ready/reg home`；插回后 3 min 以上一直 `sim_check/absent`，整机重启才识别——EC600U 仅上电识别 SIM，SimCheck 原设计不重新上电 |
+| 5 SIM 拔插（修复 99e2878） | 99e2878 | **PASS**：62.5 s 掉线即查 CPIN → `sim_check/absent`（无陈旧状态）；122.5 s（无卡 60 s）上电循环；插回后 249.2 s 第二次上电循环（间隔 120 s 退避）→ 255.8 s `sim=1` → 257.9 s Ready，csq 17 |
+| 6 460800 稳定 30 min | 54b01b6 | PASS：全程 Ready，csq 16–17，L0，recv_dropped 0，无 W/E；free 52,696→52,364 B（−64 B/5 min，main 无 4G 为 −32 B/5 min，另案调查） |
+| 7 关机顺序 | 54b01b6 | PASS（log_drain 修复后）：power off 22.013 → net 7->6 23.240 → PWREN low 23.383 → device powered down 23.388，无 timeout |
+| 9 堆/栈 | c23e07a | PASS：4G 启用成本 ~10.9 KB，free 51.4 KB，min 48,828 B（≥40,960），net stack_hwm 2368 B |
+| 8 低电 | — | 未执行 |
