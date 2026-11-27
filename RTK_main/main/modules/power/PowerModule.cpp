@@ -1008,51 +1008,62 @@ bool PowerModule::pollLogDrain(const power::ShutdownParticipant &p, size_t idx, 
     return (nowMs - logDrainStartMs_) >= quiesceLimitMs(p, true);
 }
 
+/**
+ * @brief 判定单个非 log_drain 参与者并更新完成位与汇总状态
+ * @param p: 参与者表项（其 stage 已等于当前阶段）
+ * @param cbCtx: 传给 isDone/onTimeout 的上下文
+ * @param builtin: 是否内置参与者
+ * @param stage: 当前阶段
+ * @param quiesceElapsed: 自 kQuiesce 起点的耗时（ms）
+ * @param idx: 该参与者在完成位掩码中的序号
+ * @param st: 轮询汇总状态（allSatisfied 与 kNetPower 跟踪）
+ * @note 仅 kLink 调用，非 ISR；超时兜底回调在此到点即调用。
+ */
+void PowerModule::pollOneParticipant(const power::ShutdownParticipant &p, void *cbCtx, bool builtin,
+                                     board::ShutdownStage stage, uint32_t quiesceElapsed,
+                                     size_t idx, PollState &st) noexcept
+{
+    // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
+    const auto bit = static_cast<uint16_t>(1U << idx);
+    const bool isLong = (stage == board::ShutdownStage::kQuiesce) &&
+                        (p.milestone == power::ShutdownMilestone::kNetPower);
+    st.longSeen = st.longSeen || isLong;
+    if ((p.isDone == nullptr) || p.isDone(cbCtx)) {
+        participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ | bit);
+        return;
+    }
+    participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
+    if (stage != board::ShutdownStage::kQuiesce) {
+        st.allSatisfied = false;
+    } else if (quiesceElapsed < quiesceLimitMs(p, builtin)) {
+        st.allSatisfied = false;
+        st.longPending = st.longPending || isLong;
+    } else if (!builtin && (p.onTimeout != nullptr)) {
+        // 到点未完成：立即兜底（不等 OLED 可见时间/其它参与者）；失败则每轮重试到 isDone。
+        p.onTimeout(cbCtx);
+    }
+}
+
 bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t nowMs) noexcept
 {
     shutdownNowMs_ = nowMs;
     const uint32_t quiesceElapsed = nowMs - quiesceStartMs_;
-    bool allSatisfied = true;
+    PollState st{};
     size_t idx = 0U;
     // log_drain 延后处理：记录其表项与位序号，待其它参与者判定完再决定是否开始。
+    // 4G 里程碑（kNetPower，上限 2000 ms，完成时才打断电日志）之外的参与者与 log_drain 同窗口，
+    // 不必串行等待，避免无 4G 时静默阶段被拉长。
     const power::ShutdownParticipant *logDrain = nullptr;
     size_t logDrainIdx = 0U;
-    // 4G 里程碑（kNetPower，上限 2000 ms，完成时才打断电日志）参与者：是否存在、是否仍在等待。
-    // 其余参与者与 log_drain 同窗口，不必串行等待，避免无 4G 时静默阶段被拉长。
-    bool longSeen = false;
-    bool longPending = false;
-    const auto check = [this, stage, quiesceElapsed, &allSatisfied, &idx, &logDrain, &logDrainIdx,
-                        &longSeen, &longPending](const power::ShutdownParticipant &p, void *cbCtx,
-                                                 bool builtin) noexcept {
+    const auto check = [&](const power::ShutdownParticipant &p, void *cbCtx,
+                           bool builtin) noexcept {
         if (p.stage == stage) {
             if ((stage == board::ShutdownStage::kQuiesce) && builtin &&
                 ParticipantOps::isLogDrain(p)) {
                 logDrain = &p;
                 logDrainIdx = idx;
-                ++idx;
-                return;
-            }
-            // 静态断言已限制参与者总数 <= 16，位掩码窄化安全。
-            const auto bit = static_cast<uint16_t>(1U << idx);
-            const bool done = (p.isDone == nullptr) || p.isDone(cbCtx);
-            const bool isLong = (stage == board::ShutdownStage::kQuiesce) &&
-                                (p.milestone == power::ShutdownMilestone::kNetPower);
-            longSeen = longSeen || isLong;
-            if (done) {
-                participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ | bit);
             } else {
-                participantDoneMask_ = static_cast<uint16_t>(participantDoneMask_ & ~bit);
-                if (stage == board::ShutdownStage::kQuiesce) {
-                    if (quiesceElapsed < quiesceLimitMs(p, builtin)) {
-                        allSatisfied = false;
-                        longPending = longPending || isLong;
-                    } else if (!builtin && (p.onTimeout != nullptr)) {
-                        // 到点未完成：立即兜底（不等 OLED 可见时间/其它参与者）；失败则每轮重试到 isDone。
-                        p.onTimeout(cbCtx);
-                    }
-                } else {
-                    allSatisfied = false;
-                }
+                pollOneParticipant(p, cbCtx, builtin, stage, quiesceElapsed, idx, st);
             }
         }
         ++idx;
@@ -1065,10 +1076,10 @@ bool PowerModule::pollStageParticipants(board::ShutdownStage stage, uint32_t now
     }
     if (logDrain != nullptr) {
         const bool satisfied =
-            pollLogDrain(*logDrain, logDrainIdx, longSeen, longPending, stage, nowMs);
-        allSatisfied = allSatisfied && satisfied;
+            pollLogDrain(*logDrain, logDrainIdx, st.longSeen, st.longPending, stage, nowMs);
+        st.allSatisfied = st.allSatisfied && satisfied;
     }
-    return allSatisfied;
+    return st.allSatisfied;
 }
 
 void PowerModule::retryQuiesceFallbacks() noexcept

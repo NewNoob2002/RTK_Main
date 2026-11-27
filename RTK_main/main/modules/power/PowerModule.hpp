@@ -302,6 +302,16 @@ private:
      * @note 仅 kLink 调用，不阻塞，非 ISR。
      */
     [[nodiscard]] bool pollStageParticipants(board::ShutdownStage stage, uint32_t nowMs) noexcept;
+    /// pollStageParticipants 的汇总状态：allSatisfied 及 kNetPower 参与者的存在/等待标志。
+    struct PollState {
+        bool allSatisfied = true;
+        bool longSeen = false;
+        bool longPending = false;
+    };
+    /// 判定单个非 log_drain 参与者（见 PowerModule.cpp）。
+    void pollOneParticipant(const power::ShutdownParticipant &p, void *cbCtx, bool builtin,
+                            board::ShutdownStage stage, uint32_t quiesceElapsed, size_t idx,
+                            PollState &st) noexcept;
     /// 轮询内置 log_drain（延后到 kNetPower 参与者收尾后开始）；返回是否不再阻塞静默阶段。
     [[nodiscard]] bool pollLogDrain(const power::ShutdownParticipant &p, size_t idx, bool longSeen,
                                     bool longPending, board::ShutdownStage stage,
