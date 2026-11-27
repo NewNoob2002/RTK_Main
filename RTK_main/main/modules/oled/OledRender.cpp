@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdio>
 
+#include "def/NetStatusText.hpp"
 #include "modules/oled/OledIcons.hpp"
 
 namespace app::oled {
@@ -25,7 +26,6 @@ constexpr uint16_t kDiffAgeScale = 10U;
 // 通用 10 px 顶栏与基础布局像素常量。
 constexpr int16_t kHeaderTextY = 1;
 constexpr int16_t kHeaderLineY = 10;
-constexpr int16_t kDockIconOffsetX = 4; // (24 - 16) / 2
 constexpr int16_t kDockIconY = 47;
 constexpr int16_t kDockIconSize = 16;
 constexpr int16_t kDockLabelY = 36;
@@ -119,7 +119,7 @@ constexpr int16_t kSubRowH = 16;
 constexpr int16_t kSubRowIconX = 3;
 constexpr int16_t kSubRowIconYOff = 4;
 constexpr int16_t kSubRowTextX = 11;
-constexpr int16_t kSubRowValRightX = 80;
+constexpr int16_t kSubValueRightInset = 2;
 constexpr int16_t kSubScrollX = 125;
 constexpr int16_t kSubScrollTrackY0 = 13;
 constexpr int16_t kSubScrollTrackH = 50;
@@ -140,9 +140,9 @@ constexpr int16_t kCardBatFillW = 8;
 constexpr int16_t kCardUsbIconX = 30;
 constexpr int16_t kCardUsbIconY = 9;
 constexpr size_t kIpv4TextBytes = 16U;
-constexpr size_t kSubPosRowCount = 5U;
 constexpr size_t kSubCommBtRowCount = 4U;
-static_assert(kSubDeviceRows <= kMarqueeRowCount);
+static_assert(kSubDeviceRows - 1U <= kMarqueeRowCount);
+static_assert(kNetCellularRows - 1U <= kMarqueeRowCount);
 constexpr size_t kSubPowerRowCount = 5U;
 
 // 卫星子页像素常量。
@@ -239,9 +239,8 @@ constexpr int16_t kHoldIconY = 20;
 /** 统一子页列表项描述（零堆定长结构）。 */
 struct SubListRow {
     const uint8_t *icon7x8 = nullptr;
-    std::string_view label{};
+    const char *label = ""; // nullptr 保留给 Back；普通标签是静态文本。
     std::string_view value{};
-    bool isBack = false;
 };
 
 /**
@@ -469,6 +468,58 @@ void drawProgressRing(Canvas &canvas, int16_t cx, int16_t cy, uint16_t progressQ
 }
 
 /**
+ * @brief 在 84–102 列绘制蜂窝格、SIM 错误或 4G 标识。
+ * @param canvas: 目标画布。
+ * @param state: 信号格和动画时刻。
+ * @param net: 蜂窝快照。
+ * @note 仅 OLED 任务或主机测试渲染，不分配堆。
+ */
+void drawCellularIcon(Canvas &canvas, const UiRenderState &state, const NetView &net) noexcept
+{
+    const auto icon = cellularIcon(net);
+    if (icon == CellularIcon::kHidden) {
+        return;
+    }
+    constexpr int16_t kBarsX = 84;
+    constexpr int16_t kTagX = 96;
+    constexpr int16_t kBarWidth = 3;
+    constexpr int16_t kGlyphW = 3;
+    constexpr int16_t kCrossH = 3;
+    constexpr int16_t k4gW = 7;
+    constexpr int16_t k4gH = 5;
+    constexpr int16_t kBarBottom = 9;
+    const auto active = (state.nowMs / kSignalSearchFrameMs) % kSignalBarCount;
+    for (uint8_t i = 0U; i < kSignalBarCount; ++i) {
+        const auto x = static_cast<int16_t>(kBarsX + i * kBarWidth);
+        const auto h = std::max(kBarWidth, static_cast<int16_t>(2 + i * 2));
+        const auto y = static_cast<int16_t>(kBarBottom - h);
+        const bool lit = icon == CellularIcon::kSearching ? i == active : i < state.cellularBars;
+        if (lit) {
+            WouoUI_CanvasDrawRBox(&canvas, x, y, kBarWidth, h, 0U);
+        } else {
+            WouoUI_CanvasDrawRBoxEmpty(&canvas, x, y, kBarWidth, h, 0U);
+        }
+    }
+    constexpr std::array<uint8_t, 7U> k4g{0x0EU, 0x08U, 0x1FU, 0U, 0x1FU, 0x11U, 0x1DU};
+    constexpr std::array<uint8_t, 3U> kCross{0x05U, 0x02U, 0x05U};
+    constexpr int16_t kTagY = 4;
+    constexpr int16_t kArrowRight = 100;
+    if (icon == CellularIcon::kSimError) {
+        WouoUI_CanvasDrawBMP(&canvas, kTagX, kTagY, kGlyphW, kCrossH, kCross.data(), 1U);
+    } else if (icon == CellularIcon::kPdp) {
+        WouoUI_CanvasDrawBMP(&canvas, kTagX, kTagY, k4gW, k4gH, k4g.data(), 1U);
+        constexpr std::array<uint8_t, 3U> kTxArrow{0x02U, 0x0FU, 0x02U};
+        constexpr std::array<uint8_t, 3U> kRxArrow{0x04U, 0x0FU, 0x04U};
+        if (net.mqttConnected) {
+            WouoUI_CanvasDrawBMP(&canvas, kTagX, 0, kGlyphW, kTagY, kTxArrow.data(), 1U);
+        }
+        if (net.ntripConnected) {
+            WouoUI_CanvasDrawBMP(&canvas, kArrowRight, 0, kGlyphW, kTagY, kRxArrow.data(), 1U);
+        }
+    }
+}
+
+/**
  * @brief 绘制表盘与子页共用的顶部 10 px 状态栏（卫星数、告警、解状态、BT/Wi-Fi、充电闪电与电量）
  * @param canvas: 目标画布
  * @param state: 渲染状态
@@ -518,6 +569,7 @@ void drawStatusBar(Canvas &canvas, const UiRenderState &state, const ViewModel &
         WouoUI_CanvasDrawBMP(&canvas, kStatusBoltX, kHeaderTextY, kBoltW, kIcon8H,
                              icons::kPlug5x8.data(), 1U);
     }
+    drawCellularIcon(canvas, state, vm.net);
     drawBatteryIcon(canvas, kStatusBatIconX, kHeaderTextY, state.batBars);
     WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
 }
@@ -766,6 +818,45 @@ void formatDialRightInfo(const ViewModel &vm, std::span<char> topOut,
 }
 
 /**
+ * @brief 绘制底部 Dock 与跟随焦点的入口名。
+ * @param canvas: 目标画布。
+ * @param state: 选择框与动画状态。
+ * @param cellular: 是否增加 NET 入口。
+ * @note 仅渲染线程调用。
+ */
+void drawDock(Canvas &canvas, const UiRenderState &state, bool cellular) noexcept
+{
+    // 底部 dock 选中项上方反白胶囊标签，明确标识当前入口并跟随选中框中心。
+    const auto count = cellular ? kCellularDockItemCount : kDockItemCount;
+    const auto focus = dockRect(state.dockSelected, cellular);
+    const char *const dockName = dockItemName(state.dockSelected);
+    const int16_t nameW = static_cast<int16_t>(WouoUI_GetStrWidth(dockName, Font_6_8));
+    const int16_t pillW = static_cast<int16_t>(nameW + 4);
+    const int16_t centerX = static_cast<int16_t>(state.dockFocusX + (focus.w / 2));
+    const int16_t pillX = std::clamp<int16_t>(static_cast<int16_t>(centerX - (pillW / 2)), 0,
+                                              static_cast<int16_t>(kCanvasW - pillW));
+    WouoUI_CanvasDrawRBox(&canvas, pillX, kDockPillY, pillW, kDockPillH, 1U);
+    WouoUI_GraphSetPenColor(0U);
+    drawText(canvas, static_cast<int16_t>(pillX + 2), kDockLabelY, Font_6_8, dockName);
+    WouoUI_GraphSetPenColor(1U);
+    const std::array<const uint8_t *, kCellularDockItemCount> kDockIcons{
+        icons::kDockSat16x16.data(), icons::kDockPos16x16.data(), icons::kDockComm16x16.data(),
+        icons::kDockDev16x16.data(), icons::kDockPwr16x16.data(), icons::kDockNet16x16.data(),
+    };
+    for (uint8_t i = 0U; i < count; ++i) {
+        const auto slot = dockRect(i, cellular);
+        const auto iconX = static_cast<int16_t>(slot.x + (slot.w - kDockIconSize) / 2);
+        WouoUI_CanvasDrawBMP(&canvas, iconX, kDockIconY, kDockIconSize, kDockIconSize,
+                             kDockIcons[i], 1U);
+    }
+    const int16_t inset = (state.page == OledPage::kDialplate) ? state.squishInset : 0;
+    WouoUI_CanvasDrawRBoxEmpty(&canvas, static_cast<int16_t>(state.dockFocusX + inset),
+                               static_cast<int16_t>(kDockY + inset),
+                               static_cast<int16_t>(focus.w - (2 * inset)),
+                               static_cast<int16_t>(kDockH - (2 * inset)), kDockCornerR);
+}
+
+/**
  * @brief 渲染主表盘（10 px 状态栏 + 大号滚动解状态 + UTC/精度 + 选中入口名 + 5 图标弹簧底座）
  * @param canvas: 目标画布
  * @param state: 渲染状态
@@ -798,32 +889,7 @@ void renderDialplate(Canvas &canvas, const UiRenderState &state, const ViewModel
                 viewOf(rightTop), state, MarqueeField::kPrimary, TextAlign::kRight);
     drawMarquee(canvas, {kDialInfoMinX, kDialInfoBotY, kInfoWidth, kIcon8H}, Font_6_8,
                 viewOf(rightBot), state, MarqueeField::kSecondary, TextAlign::kRight);
-    // 底部 dock 选中项上方反白胶囊标签，明确标识当前入口并跟随选中框中心。
-    const char *const dockName = dockItemName(state.dockSelected);
-    const int16_t nameW = static_cast<int16_t>(WouoUI_GetStrWidth(dockName, Font_6_8));
-    const int16_t pillW = static_cast<int16_t>(nameW + 4);
-    const int16_t centerX = static_cast<int16_t>(state.dockFocusX + (kDockW / 2));
-    const int16_t pillX = std::clamp<int16_t>(static_cast<int16_t>(centerX - (pillW / 2)), 0,
-                                              static_cast<int16_t>(kCanvasW - pillW));
-    WouoUI_CanvasDrawRBox(&canvas, pillX, kDockPillY, pillW, kDockPillH, 1U);
-    WouoUI_GraphSetPenColor(0U);
-    drawText(canvas, static_cast<int16_t>(pillX + 2), kDockLabelY, Font_6_8, dockName);
-    WouoUI_GraphSetPenColor(1U);
-    const std::array<const uint8_t *, kDockItemCount> kDockIcons{
-        icons::kDockSat16x16.data(), icons::kDockPos16x16.data(), icons::kDockComm16x16.data(),
-        icons::kDockDev16x16.data(), icons::kDockPwr16x16.data(),
-    };
-    for (uint8_t i = 0U; i < kDockItemCount; ++i) {
-        const auto iconX = static_cast<int16_t>(
-            kDockStartX + (static_cast<int16_t>(i) * kDockStepX) + kDockIconOffsetX);
-        WouoUI_CanvasDrawBMP(&canvas, iconX, kDockIconY, kDockIconSize, kDockIconSize,
-                             kDockIcons[i], 1U);
-    }
-    const int16_t inset = (state.page == OledPage::kDialplate) ? state.squishInset : 0;
-    WouoUI_CanvasDrawRBoxEmpty(&canvas, static_cast<int16_t>(state.dockFocusX + inset),
-                               static_cast<int16_t>(kDockY + inset),
-                               static_cast<int16_t>(kDockW - (2 * inset)),
-                               static_cast<int16_t>(kDockH - (2 * inset)), kDockCornerR);
+    drawDock(canvas, state, vm.net.supported);
 }
 
 /**
@@ -896,7 +962,7 @@ void drawSubRow(Canvas &listClip, const SubListRow &row, int16_t rowY, const UiR
                 MarqueeField field) noexcept
 {
     const int16_t contentY = static_cast<int16_t>(rowY + kSubRowIconYOff);
-    if (row.isBack) {
+    if (row.label == nullptr) {
         WouoUI_CanvasDrawBMP(&listClip, kSubRowIconX, contentY, kIcon7W, kIcon8H,
                              icons::kRowBack7x8.data(), 1U);
         drawText(listClip, kSubRowTextX, contentY, Font_6_8, "Back");
@@ -907,16 +973,18 @@ void drawSubRow(Canvas &listClip, const SubListRow &row, int16_t rowY, const UiR
     }
     constexpr int16_t kUnlabelledValueX = 2;
     int16_t minValX = row.icon7x8 == nullptr ? kUnlabelledValueX : kSubRowTextX;
-    if (!row.label.empty()) {
-        drawText(listClip, kSubRowTextX, contentY, Font_6_8, row.label);
+    const int16_t labelX = listClip.w > kSubListW ? kUnlabelledValueX : kSubRowTextX;
+    const std::string_view label{row.label};
+    if (!label.empty()) {
+        drawText(listClip, labelX, contentY, Font_6_8, label);
         // 标签均为固定短词，像素宽可收窄到 int16_t。
-        const auto labelWidth = static_cast<int16_t>(row.label.size() * Font_6_8.Width);
-        minValX = static_cast<int16_t>(kSubRowTextX + labelWidth + 2);
+        const auto labelWidth = static_cast<int16_t>(label.size() * Font_6_8.Width);
+        minValX = static_cast<int16_t>(labelX + labelWidth + 2);
     }
     // 挤压期间的边线内移，文字框也避开这两列。
     minValX = std::max<int16_t>(minValX, static_cast<int16_t>(1 + state.squishInset));
-    const auto right = std::min<int16_t>(kSubRowValRightX,
-                                         static_cast<int16_t>(kSubListW - state.squishInset - 1));
+    const auto right = static_cast<int16_t>(
+        listClip.w - std::max(kSubValueRightInset, static_cast<int16_t>(state.squishInset + 1)));
     const auto width = static_cast<int16_t>(right - minValX);
     drawMarquee(listClip, {minValX, contentY, width, kIcon8H}, Font_6_8, row.value, state, field,
                 TextAlign::kRight);
@@ -953,15 +1021,16 @@ void drawSubScrollbar(Canvas &canvas, int16_t scrollY, size_t rowCount) noexcept
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param rows: 列表项视图
+ * @param wide: NET 页省略左侧主卡，列表扩展到状态栏下方全宽。
  * @note 仅统一子页渲染函数调用，不分配堆。
  */
-void drawSubList(Canvas &canvas, const UiRenderState &state,
-                 std::span<const SubListRow> rows) noexcept
+void drawSubList(Canvas &canvas, const UiRenderState &state, std::span<const SubListRow> rows,
+                 bool wide = false) noexcept
 {
     Canvas listClip{
-        .start_x = static_cast<int16_t>(canvas.start_x + kSubListX),
+        .start_x = static_cast<int16_t>(canvas.start_x + (wide ? 0 : kSubListX)),
         .start_y = static_cast<int16_t>(canvas.start_y + kSubBodyY),
-        .w = kSubListW,
+        .w = wide ? kSubScrollX : kSubListW,
         .h = kSubListH,
     };
 
@@ -975,7 +1044,7 @@ void drawSubList(Canvas &canvas, const UiRenderState &state,
         if ((rowY >= kSubListH) || ((rowY + kSubRowH) <= 0)) {
             continue;
         }
-        // 统一列表最多 kMarqueeRowCount 行，前六个字段索引用于行值。
+        // 有值的行使用各自的字段索引，Back 不占用跑马灯槽。
         drawSubRow(listClip, rows[i], rowY, state, static_cast<MarqueeField>(i));
     }
 
@@ -984,7 +1053,7 @@ void drawSubList(Canvas &canvas, const UiRenderState &state,
         const int16_t selY = static_cast<int16_t>(state.subFocusY - state.subScrollY);
         const int16_t inset = state.squishInset;
         WouoUI_CanvasDrawRBoxEmpty(&listClip, inset, static_cast<int16_t>(selY + inset),
-                                   static_cast<int16_t>(kSubListW - (2 * inset)),
+                                   static_cast<int16_t>(listClip.w - (2 * inset)),
                                    static_cast<int16_t>(kSubRowH - (2 * inset)), 2U);
     }
 
@@ -1001,7 +1070,7 @@ void drawSubList(Canvas &canvas, const UiRenderState &state,
  * @retval 填充好的 SubListRow
  * @note 纯辅助函数。
  */
-[[nodiscard]] SubListRow makeRow(const uint8_t *icon, std::string_view label,
+[[nodiscard]] SubListRow makeRow(const uint8_t *icon, const char *label,
                                  std::string_view value) noexcept
 {
     return {.icon7x8 = icon, .label = label, .value = value};
@@ -1009,14 +1078,12 @@ void drawSubList(Canvas &canvas, const UiRenderState &state,
 
 /**
  * @brief 构造统一的左箭头 Back 列表行
- * @retval isBack=true 的 SubListRow
+ * @retval label 为空指针的 Back 行
  * @note 纯辅助函数。
  */
 [[nodiscard]] SubListRow makeBackRow() noexcept
 {
-    SubListRow row{};
-    row.isBack = true;
-    return row;
+    return {.label = nullptr};
 }
 
 /**
@@ -1113,12 +1180,24 @@ void renderSubSatCn0(Canvas &canvas, const ViewModel &vm) noexcept
 void drawSatHeader(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
 {
     WouoUI_CanvasDrawBMP(&canvas, 0, kHeaderTextY, kIcon8H, kIcon8H, icons::kSat8x8.data(), 1U);
-    drawText(canvas, kSubSatTitleX, kHeaderTextY, Font_6_8,
-             (state.satSubTab == 0U) ? "SATS SYS" : "SATS CN0");
+    const bool cellular = cellularIcon(vm.net) != CellularIcon::kHidden;
+    const bool sys = state.satSubTab == 0U;
+    const char *title = cellular ? (sys ? "SYS" : "CN0") : (sys ? "SATS SYS" : "SATS CN0");
+    drawText(canvas, kSubSatTitleX, kHeaderTextY, Font_6_8, title);
     std::array<char, kSubSatHdrBufBytes> hdrRight{};
-    static_cast<void>(std::snprintf(hdrRight.data(), hdrRight.size(), "%u/%u %u/2",
-                                    vm.fixValid ? static_cast<unsigned>(vm.satsUsed) : 0U,
-                                    static_cast<unsigned>(vm.satsVisible),
+    const auto used = vm.fixValid ? static_cast<unsigned>(vm.satsUsed) : 0U;
+    const auto visible = static_cast<unsigned>(vm.satsVisible);
+    if (cellular) {
+        constexpr int16_t kSatCountX = 34;
+        constexpr int16_t kSatTabX = 110;
+        static_cast<void>(std::snprintf(hdrRight.data(), hdrRight.size(), "%u/%u", used, visible));
+        drawText(canvas, kSatCountX, kHeaderTextY, Font_6_8, viewOf(hdrRight));
+        drawCellularIcon(canvas, state, vm.net);
+        drawText(canvas, kSatTabX, kHeaderTextY, Font_6_8, sys ? "1/2" : "2/2");
+        WouoUI_CanvasDrawLine_H(&canvas, 0, static_cast<int16_t>(kCanvasW - 1), kHeaderLineY);
+        return;
+    }
+    static_cast<void>(std::snprintf(hdrRight.data(), hdrRight.size(), "%u/%u %u/2", used, visible,
                                     static_cast<unsigned>(state.satSubTab + 1U)));
     const uint16_t rw = WouoUI_GetStrWidth(hdrRight.data(), Font_6_8);
     const int16_t rx = (rw < kWidth) ? static_cast<int16_t>(kWidth - rw) : int16_t{0};
@@ -1142,13 +1221,14 @@ void renderSubSat(Canvas &canvas, const UiRenderState &state, const ViewModel &v
 }
 
 /**
- * @brief 渲染位置子页（左主卡解状态+精度，右列表：纬度、经度、高程、HDOP/AGE、Back）
+ * @brief 渲染位置子页，包含精度、坐标、差分龄期和来源。
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
- * @note 不分配堆。
+ * @note 内联使定位行缓冲与互斥页面共用栈帧；不分配堆。
  */
-void renderSubPos(Canvas &canvas, const UiRenderState &state, const ViewModel &vm) noexcept
+[[gnu::always_inline]] inline void renderSubPos(Canvas &canvas, const UiRenderState &state,
+                                                const ViewModel &vm) noexcept
 {
     std::array<char, kShortBufBytes> accBuf{};
     if (!formatHorizontalAcc(vm.fixValid, vm.hAccCm, accBuf)) {
@@ -1184,11 +1264,15 @@ void renderSubPos(Canvas &canvas, const UiRenderState &state, const ViewModel &v
     static_cast<void>(
         std::snprintf(dopBuf.data(), dopBuf.size(), "%s %s", hdopStr.data(), ageStr.data()));
 
-    std::array<SubListRow, kSubPosRowCount> rows{{
+    std::array<SubListRow, kSubPosRows> rows{{
         makeRow(icons::kRowLat7x8.data(), "", viewOf(latBuf)),
         makeRow(icons::kRowLon7x8.data(), "", viewOf(lonBuf)),
         makeRow(icons::kRowAlt7x8.data(), "ALT", viewOf(altBuf)),
         makeRow(icons::kRowDop7x8.data(), "HA", viewOf(dopBuf)),
+        makeRow(nullptr, "SRC",
+                vm.diffSource == DiffSource::kPhone   ? "phone"
+                : vm.diffSource == DiffSource::kNtrip ? "ntrip"
+                                                      : "--"),
         makeBackRow(),
     }};
     drawSubList(canvas, state, rows);
@@ -1266,7 +1350,7 @@ void renderComm(Canvas &canvas, const UiRenderState &state, const ViewModel &vm)
 }
 
 /**
- * @brief 渲染设备子页（左主卡设备图标+型号，右列表：FW、SN、PN、设备名、运行时间、Back）
+ * @brief 渲染设备子页，包含身份、运行时间和最近关机信息。
  * @param canvas: 目标画布
  * @param state: 渲染状态
  * @param vm: 视图数据
@@ -1292,6 +1376,11 @@ void renderSubDevice(Canvas &canvas, const UiRenderState &state, const ViewModel
         makeRow(icons::kRowInfo7x8.data(), "PN", pn.empty() ? "--" : pn),
         makeRow(icons::kRowRf7x8.data(), "", dev.empty() ? "--" : dev),
         makeRow(icons::kRowClock7x8.data(), "UP", viewOf(upBuf)),
+        makeRow(nullptr, "OFF",
+                vm.shutdownReason == board::ShutdownReason::kNone
+                    ? "--"
+                    : shutdownReasonText(vm.shutdownReason)),
+        makeRow(nullptr, "FAULT", vm.shutdownFault == nullptr ? "--" : vm.shutdownFault),
         makeBackRow(),
     }};
     drawSubList(canvas, state, rows);
@@ -1754,33 +1843,33 @@ void renderHoldOverlay(const UiRenderState &state) noexcept
 
 /**
  * @brief 将 OTA 失败原因映射到一行 OLED 文本。
- * @param code: 网页 OTA 结果
+ * @param code: OTA 结果
  * @retval 固定短词
  * @note 纯函数。
  */
-[[nodiscard]] const char *otaFailureText(web_ota::UploadCode code) noexcept
+[[nodiscard]] const char *otaFailureText(ota::ResultCode code) noexcept
 {
-    using web_ota::UploadCode;
+    using ota::ResultCode;
     switch (code) {
-    case UploadCode::kBusy:
+    case ResultCode::kBusy:
         return "BUSY";
-    case UploadCode::kState:
+    case ResultCode::kState:
         return "SLOT NOT READY";
-    case UploadCode::kLength:
+    case ResultCode::kLength:
         return "BAD LENGTH";
-    case UploadCode::kTooLarge:
+    case ResultCode::kTooLarge:
         return "IMAGE TOO LARGE";
-    case UploadCode::kBadImage:
+    case ResultCode::kBadImage:
         return "BAD IMAGE";
-    case UploadCode::kValidate:
+    case ResultCode::kValidate:
         return "INVALID IMAGE";
-    case UploadCode::kTimeout:
+    case ResultCode::kTimeout:
         return "TIMEOUT";
-    case UploadCode::kFlash:
+    case ResultCode::kFlash:
         return "FLASH ERROR";
-    case UploadCode::kAborted:
+    case ResultCode::kAborted:
         return "INTERRUPTED";
-    case UploadCode::kOk:
+    case ResultCode::kOk:
     default:
         return "UNKNOWN";
     }
@@ -1792,9 +1881,9 @@ void renderHoldOverlay(const UiRenderState &state) noexcept
  * @param progress: httpd 发布的进度快照
  * @note OLED 渲染任务或主机模拟器调用，不分配堆。
  */
-void renderOta(Canvas &canvas, const web_ota::OtaProgress &progress) noexcept
+void renderOta(Canvas &canvas, const ota::Progress &progress) noexcept
 {
-    using web_ota::OtaPhase;
+    using ota::OtaPhase;
     constexpr int16_t kResultTitleY = 13;
     constexpr int16_t kResultBodyY = 38;
     constexpr std::string_view kWarning = "DO NOT POWER OFF";
@@ -1841,6 +1930,132 @@ void renderOta(Canvas &canvas, const web_ota::OtaProgress &progress) noexcept
 }
 
 /**
+ * @brief 绘制 NET 一级摘要。
+ * @param canvas: 目标画布。
+ * @param state: 列表滚动和焦点。
+ * @param net: 蜂窝和会话状态。
+ * @note 仅渲染线程调用。
+ */
+void renderNetSummary(Canvas &canvas, const UiRenderState &state, const NetView &net) noexcept
+{
+    std::array<char, kMaxLineChars + 1U> summary{};
+    const char *phase = net.enabled ? net_status::phaseName(net.phase) : "off";
+    if (csqBars(net.csq) != 0U) {
+        static_cast<void>(std::snprintf(summary.data(), summary.size(), "%s CSQ%02u", phase,
+                                        static_cast<unsigned>(net.csq)));
+    } else {
+        static_cast<void>(std::snprintf(summary.data(), summary.size(), "%s CSQ--", phase));
+    }
+    const std::array<SubListRow, kSubNetRows> rows{{
+        makeRow(nullptr, "4G", viewOf(summary)),
+        makeRow(nullptr, "NTRIP", net.ntripConnected ? "UP" : "--"),
+        makeRow(nullptr, "MQTT", net.mqttConnected ? "UP" : "--"),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows, true);
+}
+
+/**
+ * @brief 绘制 4G 状态、SIM、承载与恢复信息。
+ * @param canvas: 目标画布。
+ * @param state: 列表滚动和焦点。
+ * @param net: 已掩码的蜂窝只读视图。
+ * @note 仅渲染线程调用。
+ */
+void renderNetCellular(Canvas &canvas, const UiRenderState &state, const NetView &net) noexcept
+{
+    std::array<char, kShortBufBytes> recovery{};
+    std::array<char, 4U> csq{};
+    static_cast<void>(std::snprintf(csq.data(), csq.size(), "%u", static_cast<unsigned>(net.csq)));
+    static_cast<void>(std::snprintf(recovery.data(), recovery.size(), "L%u / %u",
+                                    static_cast<unsigned>(net.recoveryLevel),
+                                    static_cast<unsigned>(net.recoveryCount)));
+    const auto imei = viewOf(net.imei);
+    const auto iccid = viewOf(net.maskedIccid);
+    const std::array<SubListRow, kNetCellularRows> rows{{
+        makeRow(nullptr, "4G STATE",
+                cellularIcon(net) == CellularIcon::kSimError ? net_status::simName(net.sim)
+                                                             : net_status::phaseName(net.phase)),
+        makeRow(nullptr, "CSQ", csqBars(net.csq) == 0U ? "--" : viewOf(csq)),
+        makeRow(nullptr, "REG", net_status::regName(net.reg)),
+        makeRow(nullptr, "PDP", net.pdpUp ? "UP" : "DOWN"),
+        makeRow(nullptr, "OPERATOR", "--"),
+        makeRow(nullptr, "IMEI", imei.empty() ? "--" : imei),
+        makeRow(nullptr, "ICCID", iccid.empty() ? "--" : iccid),
+        makeRow(nullptr, "RECOVERY", viewOf(recovery)),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows, true);
+}
+
+/**
+ * @brief 绘制 N2 尚未接入的 NTRIP 字段。
+ * @param canvas: 目标画布。
+ * @param state: 列表滚动和焦点。
+ * @param net: 预留会话连接状态。
+ * @note 仅渲染线程调用。
+ */
+void renderNetNtrip(Canvas &canvas, const UiRenderState &state, const NetView &net) noexcept
+{
+    const std::array<SubListRow, kNetNtripRows> rows{{
+        makeRow(nullptr, "NTRIP STATE", net.ntripConnected ? "UP" : "--"),
+        makeRow(nullptr, "SERVER:PORT", "--"),
+        makeRow(nullptr, "MOUNT", "--"),
+        makeRow(nullptr, "RTCM RX", "--"),
+        makeRow(nullptr, "AGE", "--"),
+        makeRow(nullptr, "GGA PERIOD", "--"),
+        makeRow(nullptr, "SOURCE", "--"),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows, true);
+}
+
+/**
+ * @brief 绘制 N3 尚未接入的 MQTT 字段。
+ * @param canvas: 目标画布。
+ * @param state: 列表滚动和焦点。
+ * @param net: 预留会话连接状态。
+ * @note 仅渲染线程调用。
+ */
+void renderNetMqtt(Canvas &canvas, const UiRenderState &state, const NetView &net) noexcept
+{
+    const std::array<SubListRow, kNetMqttRows> rows{{
+        makeRow(nullptr, "MQTT STATE", net.mqttConnected ? "UP" : "--"),
+        makeRow(nullptr, "SERVER", "--"),
+        makeRow(nullptr, "DEVICE ID", "--"),
+        makeRow(nullptr, "LAST TX", "--"),
+        makeRow(nullptr, "LAST RX", "--"),
+        makeRow(nullptr, "FENCE VER", "--"),
+        makeBackRow(),
+    }};
+    drawSubList(canvas, state, rows, true);
+}
+
+/**
+ * @brief 绘制当前告警名称、围栏名与确认指引。
+ * @param canvas: 目标画布。
+ * @param state: 已仲裁的当前告警。
+ * @param alarm: 告警批次与围栏名称。
+ * @note 仅渲染线程调用。
+ */
+void renderAlarm(Canvas &canvas, const UiRenderState &state, const AlarmSnapshot &alarm) noexcept
+{
+    constexpr std::array kTitles{"ALARM",          "NETWORK ALERT", "LOW BATTERY",
+                                 "PRECISION LOST", "FENCE EXIT",    "FENCE ENTER"};
+    const auto index = static_cast<size_t>(state.alarm);
+    constexpr int16_t kTitleY = 8;
+    constexpr int16_t kNameY = 30;
+    constexpr int16_t kConfirmY = 51;
+    drawCentered(canvas, kTitleY, Font_8_16, kTitles[index]);
+    const auto name = state.alarm == AlarmKind::kFenceEnter  ? viewOf(alarm.fenceEnterName)
+                      : state.alarm == AlarmKind::kFenceExit ? viewOf(alarm.fenceExitName)
+                                                             : std::string_view{};
+    drawMarquee(canvas, {0, kNameY, kCanvasW, kIcon8H}, Font_6_8, name, state,
+                MarqueeField::kPrimary, TextAlign::kCenter);
+    drawCentered(canvas, kConfirmY, Font_6_8, "PRESS TO ACK");
+}
+
+/**
  * @brief 将指定页面绘制到任意偏移与剪裁画布
  * @param canvas: 目标画布
  * @param page: 目标页面枚举
@@ -1875,6 +2090,21 @@ void renderPageInto(Canvas &canvas, OledPage page, const UiRenderState &state,
         break;
     case OledPage::kChargeStandby:
         renderChargeStandby(canvas, state, vm);
+        break;
+    case OledPage::kSubNet:
+        renderNetSummary(canvas, state, vm.net);
+        break;
+    case OledPage::kNetCellular:
+        renderNetCellular(canvas, state, vm.net);
+        break;
+    case OledPage::kNetNtrip:
+        renderNetNtrip(canvas, state, vm.net);
+        break;
+    case OledPage::kNetMqtt:
+        renderNetMqtt(canvas, state, vm.net);
+        break;
+    case OledPage::kAlarm:
+        renderAlarm(canvas, state, *vm.alarm);
         break;
     case OledPage::kOta:
         renderOta(canvas, vm.otaProgress);
@@ -2020,7 +2250,8 @@ void renderIconMorph(Canvas &canvas, const PageTransition &trans, const UiRender
         return false;
     }
     const bool showStatusBar =
-        state.page >= OledPage::kDialplate && state.page <= OledPage::kSubPower;
+        (state.page >= OledPage::kDialplate && state.page <= OledPage::kSubPower) ||
+        isNetPage(state.page);
     const bool morph = showStatusBar && trans != nullptr &&
                        (trans->kind == TransitionKind::kExpandFromIcon ||
                         trans->kind == TransitionKind::kCollapseToIcon);
@@ -2050,7 +2281,7 @@ bool renderUi(const UiRenderState &state, const ViewModel &vm, ScreenBuff &fb,
     WouoUI_GraphSetPen(&pen);
     WouoUI_GraphSetPenColor(1U);
     const bool showOtaSuccess =
-        state.page == OledPage::kOta && vm.otaProgress.phase == web_ota::OtaPhase::kSuccess;
+        state.page == OledPage::kOta && vm.otaProgress.phase == ota::OtaPhase::kSuccess;
     const bool showRebootOverlay = !showOtaSuccess && (state.rebootBanner != RebootBanner::kNone) &&
                                    (state.rebootBanner != RebootBanner::kKeepFrame) &&
                                    (state.page != OledPage::kChargeStandby) &&

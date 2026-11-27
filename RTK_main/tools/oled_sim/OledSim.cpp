@@ -346,7 +346,7 @@ bool checkFrame(const Options &opts, const Simulator &sim, std::string_view verb
 /** @brief 按脚本设置 OTA 显示快照。 @retval true 阶段有效。 */
 bool setOta(Simulator &sim, std::string_view phase, uint32_t nowMs)
 {
-    using web_ota::OtaPhase;
+    using ota::OtaPhase;
     using web_ota::UploadCode;
     auto &ota = sim.model.otaProgress;
     ota.changedMs = nowMs;

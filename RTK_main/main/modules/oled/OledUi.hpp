@@ -15,11 +15,13 @@
 #include "board/PowerLogic.hpp"
 #include "def/GnssSubDef.hpp"
 #include "def/OledDef.hpp"
+#include "def/OledAlarm.hpp"
 #include "def/OtaDef.hpp"
 #include "gnss/Controller.hpp"
 #include "gnss/Types.hpp"
 #include "modules/oled/OledAnim.hpp"
 #include "modules/oled/OledMarquee.hpp"
+#include "modules/oled/OledNet.hpp"
 #include "modules/oled/OledPerf.hpp"
 
 namespace app::oled {
@@ -37,19 +39,56 @@ inline constexpr size_t kDevNameBufBytes = 32U;              // B，蓝牙/Wi-Fi
 inline constexpr size_t kGnssFwBufBytes = gnss::kVersionLen; // B，GNSS 固件版本短串缓冲
 inline constexpr size_t kPeerLabelBufBytes = 16U;            // B，已连蓝牙设备名/地址短串缓冲
 inline constexpr size_t kCheckItemCount = 5U;                // 自检项数：PWR/NVS/RF/CHG/GNSS
-inline constexpr size_t kDockItemCount = 5U;                 // SAT/POS/COMM/DEV/PWR
+inline constexpr uint8_t kDockItemCount = 5U;                // SAT/POS/COMM/DEV/PWR
+inline constexpr uint8_t kCellularDockItemCount = kDockItemCount + 1U;
+inline constexpr int16_t kCellularDockStepX = 21;
+inline constexpr int16_t kCellularDockW = 19;
+inline constexpr uint8_t kSubNetRows = 4U; // 三项摘要和 Back
+inline constexpr uint8_t kNetCellularRows = 9U;
+inline constexpr uint8_t kNetNtripRows = 8U;
+inline constexpr uint8_t kNetMqttRows = 7U;
+inline constexpr uint8_t kSubPosRows = 6U;
 inline constexpr int16_t kDockStartX = 2;
 inline constexpr int16_t kDockStepX = 25;
 inline constexpr int16_t kDockY = 45;
 inline constexpr int16_t kDockW = 24;
 inline constexpr int16_t kDockH = 19;
+
+/**
+ * @brief 计算现有五项或蜂窝六项 Dock 的图标槽。
+ * @param idx: 图标下标，越界回到第一项。
+ * @param cellular: 板型有蜂窝功能。
+ * @retval 选中框坐标和尺寸。
+ * @note 纯函数，可跨任务调用。
+ */
+[[nodiscard]] constexpr Rect dockRect(uint8_t idx, bool cellular) noexcept
+{
+    const auto count = cellular ? kCellularDockItemCount : kDockItemCount;
+    const int16_t step = cellular ? kCellularDockStepX : kDockStepX;
+    const int16_t width = cellular ? kCellularDockW : kDockW;
+    // idx 最大为 5，槽位置始终在屏幕内。
+    const auto x =
+        static_cast<int16_t>(kDockStartX + static_cast<int16_t>(idx < count ? idx : 0U) * step);
+    return {.x = x, .y = kDockY, .w = width, .h = kDockH};
+}
+
+/**
+ * @brief 判断是否为 NET 摘要或任一详情页。
+ * @param page: 页面。
+ * @retval 是否使用 NET 列表导航。
+ * @note 纯函数，可跨任务调用。
+ */
+[[nodiscard]] constexpr bool isNetPage(OledPage page) noexcept
+{
+    return page >= OledPage::kSubNet && page <= OledPage::kNetMqtt;
+}
 inline constexpr size_t kConstellationSlots = 4U; // 卫星子菜单主星座数：GPS/BDS/GLO/GAL
 inline constexpr size_t kTopSnrBars = 8U;         // 卫星子菜单 CN0 条数量
 inline constexpr uint8_t kSubVisibleRows = 3U;    // 统一子页右侧同时可见行数
 inline constexpr int16_t kSubRowStepY = 17;       // px，统一子页行步距（16 px 高 + 1 px 间距）
 inline constexpr int16_t kModalOptionStepX = 56;  // px，安全项到确认项的水平距离
 inline constexpr uint8_t kSubCommWifiRows = 4U;
-inline constexpr uint8_t kSubDeviceRows = 6U;
+inline constexpr uint8_t kSubDeviceRows = 8U;
 inline constexpr size_t kPnBufBytes = 17U;
 inline constexpr uint32_t kPowerOffConfirmMs = 5000U;     // ms，关机确认页倒计时上限
 inline constexpr uint32_t kSubpageIdleTimeoutMs = 60000U; // ms，子页面无操作自动回表盘时长
@@ -69,7 +108,9 @@ struct SatSnrItem {
     bool used = false;
 };
 
-/** 从 DataCenter / AppContext 只读快照拼装的纯值视图模型。 */
+enum class DiffSource : uint8_t { kUnknown, kPhone, kNtrip };
+
+/** 从 DataCenter / AppContext 快照拼装的只读视图，借用的帧数据由 OLED 任务独占。 */
 struct ViewModel {
     std::array<char, kProductBufBytes> product{};
     std::array<char, kBoardNameBufBytes> boardName{};
@@ -112,6 +153,7 @@ struct ViewModel {
     uint8_t satsVisible = 0U;
     uint16_t hdopX100 = gnss::kU16Unknown;
     uint16_t diffAgeDs = gnss::kU16Unknown;
+    DiffSource diffSource = DiffSource::kUnknown;
     uint16_t hAccCm = gnss::kU16Unknown;
     bool workModeActive = false;
     WorkModeKind workMode = WorkModeKind::kRover;
@@ -132,7 +174,10 @@ struct ViewModel {
     uint8_t shutdownDegradedMask = 0U;
     uint8_t shutdownDoneCount = 0U;
     uint8_t shutdownTotalCount = 0U;
-    web_ota::OtaProgress otaProgress{};
+    const char *shutdownFault = nullptr; // 静态关机参与者名称
+    NetView net{};
+    const AlarmSnapshot *alarm = &kNoAlarm; // 当前帧有效，OLED 任务仅在下一次采集时覆盖。
+    ota::Progress otaProgress{};
     KeyHoldSnapshot keyHold{};
     RebootBanner rebootBanner = RebootBanner::kNone;
 };
@@ -363,7 +408,9 @@ struct UiRenderState {
     const SystemCheckSm *checkSm = nullptr;
     const PageTransition *transition = nullptr;
     const NumberRoll *satsRoll = nullptr;
-    Marquee *marquee = nullptr;       // 可选，持有本次画面各字段的滚动状态。
+    Marquee *marquee = nullptr; // 可选，持有本次画面各字段的滚动状态。
+    uint8_t cellularBars = 0U;
+    AlarmKind alarm = AlarmKind::kNone;
     board::BatteryBarsView batBars{}; // 电量格结论（0 格 = 未知，OL7）
 };
 
@@ -409,7 +456,10 @@ public:
      */
     [[nodiscard]] OledPage page() const noexcept
     {
-        return otaVisible_ ? OledPage::kOta : page_;
+        if (otaVisible_) {
+            return OledPage::kOta;
+        }
+        return alarmVisible_ != AlarmKind::kNone ? OledPage::kAlarm : page_;
     }
 
     /**
@@ -467,10 +517,9 @@ private:
 
     /**
      * @brief 从关机态退出（30 s 超时回退）时恢复页面
-     * @retval 本轮恢复决策
      * @note 仅 step() 内部调用。
      */
-    [[nodiscard]] UiDecision recoverFromShutdown() noexcept;
+    void recoverFromShutdown() noexcept;
 
     /**
      * @brief 推进自检与动画物理并计算下一帧等待时长
@@ -556,6 +605,42 @@ private:
      */
     void handleDialClick(ClickEvent click, uint32_t nowMs) noexcept;
 
+    /** @brief 复位列表焦点与滚动。 @param selected: 目标行。 @note 仅 OLED 任务。 */
+    void resetSubList(uint8_t selected = 0U) noexcept;
+
+    /**
+     * @brief 处理 NET 摘要与详情之间的双击导航。
+     * @param nowMs: 单调毫秒。
+     * @note 仅 OLED 任务。
+     */
+    void activateNetRow(uint32_t nowMs) noexcept;
+
+    [[nodiscard]] std::optional<UiDecision>
+    stepAlarm(uint32_t nowMs, std::span<const uint32_t> &keys, const AlarmSnapshot &alarm) noexcept;
+
+    /**
+     * @brief 处理普通页面的告警、弹窗、按键与动画。
+     * @param nowMs: 单调毫秒。
+     * @param dtMs: 与上一轮的时间差。
+     * @param keys: 本帧待处理短按。
+     * @param vm: 只读视图。
+     * @param longKeyArrived: 本轮是否收到长按。
+     * @retval 本帧画面与交互决定。
+     * @note 仅 OLED 任务。
+     */
+    [[nodiscard]] UiDecision stepActive(uint32_t nowMs, uint32_t dtMs,
+                                        std::span<const uint32_t> keys, const ViewModel &vm,
+                                        bool longKeyArrived) noexcept;
+
+    /**
+     * @brief 查询信号图标下一次需更新的时刻。
+     * @param nowMs: 单调毫秒。
+     * @param net: 蜂窝视图。
+     * @retval 相对等待毫秒数，静态图标可等事件。
+     * @note 仅 OLED 任务。
+     */
+    [[nodiscard]] uint32_t cellularWaitMs(uint32_t nowMs, const NetView &net) const noexcept;
+
     /**
      * @brief 更新表盘中部解状态徽章变化触发的 180 ms 竖向切换状态
      * @param nowMs: 当前单调时间（ms）
@@ -615,7 +700,7 @@ private:
      * @retval 对应图标槽位矩形
      * @note 纯函数。
      */
-    [[nodiscard]] static Rect dockSlotRect(uint8_t idx) noexcept;
+    [[nodiscard]] Rect dockSlotRect(uint8_t idx) const noexcept;
 
     /**
      * @brief 将表盘入口下标映射为目标子菜单枚举
@@ -634,6 +719,11 @@ private:
     uint32_t lastActivityMs_ = 0U;
     bool inShutdown_ = false;
     bool otaVisible_ = false;
+    bool cellularDock_ = false;
+    SignalBars cellularBars_{};
+    uint32_t alarmSequence_ = 0U;
+    unsigned acknowledgedAlarms_ = 0U;
+    AlarmKind alarmVisible_ = AlarmKind::kNone;
     bool hasWarning_ = false;
     uint8_t subSelected_ = 0U;
     uint8_t subScrollTop_ = 0U;

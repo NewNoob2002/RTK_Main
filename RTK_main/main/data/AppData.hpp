@@ -27,6 +27,7 @@
 #include "def/LinkDef.hpp"
 #include "def/NetDef.hpp"
 #include "def/OledDef.hpp"
+#include "def/OledAlarm.hpp"
 #include "def/OtaDef.hpp"
 #include "def/RtcmDef.hpp"
 #include "def/StorageDef.hpp"
@@ -163,8 +164,9 @@ struct DataCenter {
     fw::Slot<PowerSnapshot> powerStatus{};
     fw::Slot<OledStatus> oledStatus{};
     fw::Slot<cellular::LinkSnapshot> netStatus{}; // 4G 链路快照（kNet 单写）
-    fw::Slot<NetConfigView> netConfig{}; // net.* 设置只读视图（kStorage 单写，密码不入视图）
-    fw::Slot<web_ota::OtaProgress> otaProgress{}; // httpd 单写，OLED 只读。
+    fw::Slot<NetConfigView> netConfig{};       // net.* 设置只读视图（kStorage 单写，密码不入视图）
+    fw::Slot<oled::AlarmSnapshot> oledAlarm{}; // 告警源单写，OLED 只读。
+    fw::Slot<ota::Progress> otaProgress{};     // 当前 OTA 入口单写，OLED 只读。
     UiEventBus uiEvents{};
     fw::Slot<OledPairingStatus> oledPairing{};
     fw::Slot<WifiApSnapshot> wifiAp{};

@@ -25,7 +25,8 @@ add_executable(oled_sim OledSim.cpp
 target_compile_features(oled_sim PRIVATE cxx_std_20)
 target_compile_options(oled_sim PRIVATE -Wall -Wextra -Werror -Wshadow)
 target_include_directories(oled_sim PRIVATE
-    "${RTK_ROOT}/main" "${RTK_ROOT}/components/link_core/include")
+    "${RTK_ROOT}/main" "${RTK_ROOT}/components/link_core/include"
+    "${RTK_ROOT}/components/cellular/include")
 target_link_libraries(oled_sim PRIVATE PkgConfig::SDL2 third_party_wououi gnss)
 
 add_test(NAME oled_sim_headless COMMAND oled_sim --headless

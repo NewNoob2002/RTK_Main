@@ -1,12 +1,12 @@
-// Web OTA 结果以及由 httpd 发布、OLED 只读的进度快照。
+// OTA 通用结果与进度快照，由当前升级入口发布给 OLED。
 // 纯值类型，无 IDF 依赖，不分配堆。
 #pragma once
 
 #include <cstdint>
 
-namespace app::web_ota {
+namespace app::ota {
 
-enum class UploadCode : uint8_t {
+enum class ResultCode : uint8_t {
     kOk,
     kBusy,
     kState,
@@ -21,14 +21,17 @@ enum class UploadCode : uint8_t {
 
 enum class OtaPhase : uint8_t { kIdle, kReceiving, kVerifying, kSuccess, kFailed };
 
-struct OtaProgress {
+enum class Source : uint8_t { kNone, kWeb, kCellular };
+
+struct Progress {
     static constexpr uint32_t kFailureVisibleMs = 3000U;
 
     uint32_t receivedBytes = 0U;
     uint32_t totalBytes = 0U;
     uint32_t changedMs = 0U;
     OtaPhase phase = OtaPhase::kIdle;
-    UploadCode code = UploadCode::kOk;
+    ResultCode code = ResultCode::kOk;
+    Source source = Source::kNone;
 
     /** @brief 计算已收比例。 @retval 0–100，总长度未知时为 0。 @note 纯函数，可跨任务调用。 */
     [[nodiscard]] constexpr uint32_t percent() const noexcept
@@ -42,4 +45,8 @@ struct OtaProgress {
     }
 };
 
+} // namespace app::ota
+
+namespace app::web_ota {
+using UploadCode = ota::ResultCode;
 } // namespace app::web_ota

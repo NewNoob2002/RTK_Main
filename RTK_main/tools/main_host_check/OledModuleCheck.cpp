@@ -620,6 +620,43 @@ void runWifiViewModel() noexcept
     CHECK(!stopped.wifiReady && stopped.wifiSsid.front() == '\0' && stopped.wifiIpv4.front() == 0U);
 }
 
+/** @brief 验证真实 OledModule 经 DataCenter 采集板型、蜂窝快照与测试告警。 */
+void runNetViewModel() noexcept
+{
+    setupOledModule();
+    auto &data = s_app.data;
+    cellular::LinkSnapshot link{
+        .phase = cellular::Phase::kReady,
+        .sim = cellular::SimStatus::kReady,
+        .reg = cellular::RegStatus::kHome,
+        .level = cellular::RecoveryLevel::kL2Bearer,
+        .pdpUp = true,
+        .csq = 23U,
+        .recoveryCount = 2U,
+    };
+    sanitizeCopy("12345678901234567890", link.iccid);
+    data.netStatus.write(link);
+    const auto disabled = ModuleTestAccess::view(s_app.oled, nowMs());
+    CHECK(disabled.net.supported && !disabled.net.enabled && disabled.net.maskedIccid[0] == '\0');
+
+    auto config = data.netConfig.read();
+    config.enable = true;
+    data.netConfig.write(config);
+    AlarmSnapshot alarm{.sequence = 1U, .pending = alarmBit(AlarmKind::kFenceEnter)};
+    sanitizeCopy("TEST FENCE", alarm.fenceEnterName);
+    data.oledAlarm.write(alarm);
+    const auto view = ModuleTestAccess::view(s_app.oled, nowMs());
+    CHECK(view.net.enabled && view.net.phase == link.phase && view.net.csq == link.csq);
+    CHECK(view.net.reg == link.reg && view.net.pdpUp && view.net.recoveryCount == 2U);
+    CHECK(std::string_view{view.net.maskedIccid.data()} == "123456**********7890");
+    CHECK(!view.net.ntripConnected && !view.net.mqttConnected);
+    CHECK(view.alarm->pending == alarm.pending &&
+          std::string_view{view.alarm->fenceEnterName.data()} == "TEST FENCE");
+
+    s_app.boardProfile = board::byId(board::BoardId::kE1DevKit);
+    CHECK(!ModuleTestAccess::view(s_app.oled, nowMs()).net.supported);
+}
+
 /** @brief 用虚拟 400 kHz 时钟执行真实任务循环、bench 握手及空闲休眠。 */
 void runBenchAndEventWait() noexcept
 {
@@ -962,6 +999,8 @@ int main(int argc, char **argv)
         runStartupLogo(RadioMode::kBluetooth);
     } else if (scenario == "wifi_view_model") {
         runWifiViewModel();
+    } else if (scenario == "net_view_model") {
+        runNetViewModel();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return EXIT_FAILURE;

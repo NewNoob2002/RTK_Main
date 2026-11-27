@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "board/PowerLogic.hpp"
+#include "def/NetStatusText.hpp"
 #include "modules/oled/OledAnim.hpp"
 #include "modules/oled/OledUi.hpp"
 
@@ -1471,7 +1472,7 @@ void testHorizontalAccFormatting() noexcept
 /** @brief 验证 OTA 覆盖弹窗、丢弃手势、失败回原页，且关机终帧优先。 */
 void testOtaPage()
 {
-    using web_ota::OtaPhase;
+    using ota::OtaPhase;
     using web_ota::UploadCode;
     UiController ctrl{};
     auto vm = makeHealthyVm();
@@ -1513,6 +1514,195 @@ void testOtaPage()
     vm.shutdownDoneMask = board::shutdownDoneBit(board::ShutdownDoneBit::kUsbOffReady);
     const auto shutdown = ctrl.step(6501U, {}, vm);
     CHECK(shutdown.page == OledPage::kShutdown && shutdown.markShutdownFinalFrame);
+}
+
+/** @brief 验证 CSQ 边界、连续升格、立即降格、候选被打断及毫秒回绕。 */
+void testSignalBars() noexcept
+{
+    CHECK(csqBars(0U) == 1U && csqBars(9U) == 1U);
+    CHECK(csqBars(10U) == 2U && csqBars(14U) == 2U);
+    CHECK(csqBars(15U) == 3U && csqBars(19U) == 3U);
+    CHECK(csqBars(20U) == 4U && csqBars(31U) == 4U);
+    CHECK(csqBars(99U) == 0U && csqBars(255U) == 0U);
+    constexpr uint32_t kStart = UINT32_MAX - 100U;
+    auto bars = updateSignalBars({}, 2U, kStart);
+    CHECK(updateSignalBars(bars, 2U, kStart + 9999U).shown == 0U);
+    bars = updateSignalBars(bars, 2U, kStart + 10000U);
+    CHECK(bars.shown == 2U);
+    bars = updateSignalBars(bars, 4U, 15000U);
+    bars = updateSignalBars(bars, 3U, 24999U);
+    CHECK(updateSignalBars(bars, 3U, 25000U).shown == 2U);
+    CHECK(updateSignalBars(bars, 3U, 34999U).shown == 3U);
+    bars = updateSignalBars(bars, 1U, 25001U);
+    CHECK(bars.shown == 1U && updateSignalBars(bars, 0U, 25002U).shown == 0U);
+}
+
+/** @brief 验证蜂窝图标选择，以及状态栏 4G、搜索帧、未来箭头只占预留区域。 */
+void testCellularIcon() noexcept
+{
+    using cellular::Phase;
+    using cellular::SimStatus;
+    auto vm = makeHealthyVm();
+    auto &net = vm.net;
+    CHECK(cellularIcon(net) == CellularIcon::kHidden);
+    net.supported = true;
+    net.phase = Phase::kPowerOn;
+    CHECK(cellularIcon(net) == CellularIcon::kHidden);
+    UiRenderState state{.page = OledPage::kDialplate};
+    ScreenBuff hidden{}, search{}, next{}, signal{}, pdp{}, arrows{}, simError{};
+    renderUi(state, vm, hidden);
+
+    net.enabled = true;
+    for (const auto phase :
+         {Phase::kPowerCycle, Phase::kPowerOn, Phase::kSync, Phase::kSimCheck, Phase::kRegister}) {
+        net.phase = phase;
+        CHECK(cellularIcon(net) == CellularIcon::kSearching);
+    }
+    renderUi(state, vm, search);
+    state.nowMs = kSignalSearchFrameMs;
+    renderUi(state, vm, next);
+    CHECK(!regionEqual(search, next, 0U, 84U, 96U));
+    CHECK(regionEqual(hidden, search, 0U, 0U, 84U));
+    CHECK(regionEqual(hidden, search, 0U, 103U, kWidth));
+
+    net.sim = SimStatus::kReady;
+    net.reg = cellular::RegStatus::kHome;
+    net.phase = Phase::kPdpUp;
+    state.cellularBars = 3U;
+    CHECK(cellularIcon(net) == CellularIcon::kSignal);
+    renderUi(state, vm, signal);
+    CHECK(regionEqual(signal, hidden, 0U, 96U, 103U));
+    net.phase = Phase::kReady;
+    net.pdpUp = true;
+    CHECK(cellularIcon(net) == CellularIcon::kPdp);
+    renderUi(state, vm, pdp);
+    CHECK(!regionEqual(signal, pdp, 0U, 96U, 103U));
+    net.ntripConnected = true;
+    net.mqttConnected = true;
+    renderUi(state, vm, arrows);
+    CHECK(!regionEqual(pdp, arrows, 0U, 96U, 103U));
+    for (const auto sim : {SimStatus::kAbsent, SimStatus::kPinRequired, SimStatus::kError}) {
+        net.sim = sim;
+        CHECK(cellularIcon(net) == CellularIcon::kSimError);
+    }
+    state.cellularBars = 0U;
+    renderUi(state, vm, simError);
+    CHECK(!regionEqual(simError, hidden, 0U, 96U, 103U));
+    net.sim = SimStatus::kReady;
+    net.phase = Phase::kPowerFault;
+    CHECK(cellularIcon(net) == CellularIcon::kFault);
+}
+
+/** @brief 验证两个板型的 Dock 步距、回绕，以及 NET 三个详情都能进出。 */
+void testNetNavigation() noexcept
+{
+    auto vm = makeHealthyVm();
+    UiController ctrl{};
+    const auto enter = [&ctrl, &vm](uint32_t now) {
+        const std::array keys{now - 100U, now};
+        return ctrl.step(now, keys, vm).page;
+    };
+    const auto advance = [&ctrl, &vm](uint32_t now) {
+        const std::array keys{now - kDoubleClickWindowMs};
+        static_cast<void>(ctrl.step(now, keys, vm));
+    };
+    ctrl.reset(board::BootMode::kNormal, 0U);
+    CHECK(enter(200U) == OledPage::kDialplate);
+    uint32_t now = 1000U;
+    for (uint8_t index = 0U; index < kDockItemCount; ++index) {
+        CHECK(ctrl.dockSelected() == index);
+        CHECK(dockRect(index, false).x == 2 + index * 25 && dockRect(index, false).w == 24);
+        advance(now);
+        now += 500U;
+    }
+    CHECK(ctrl.dockSelected() == 0U);
+
+    // 有蜂窝硬件但 net.enable=0，仍可查看 NET。
+    vm.net.supported = true;
+    for (uint8_t index = 0U; index < kDockItemCount; ++index) {
+        advance(now);
+        now += 500U;
+    }
+    CHECK(ctrl.dockSelected() == kDockItemCount);
+    CHECK(enter(now) == OledPage::kSubNet);
+    for (const auto detail : {OledPage::kNetCellular, OledPage::kNetNtrip, OledPage::kNetMqtt}) {
+        now += 500U;
+        CHECK(enter(now) == detail);
+        ScreenBuff fb{};
+        renderUi(ctrl.renderState(now), vm, fb);
+        CHECK(countLitBytes(fb) > 0U);
+        now += 500U;
+        CHECK(enter(now) == OledPage::kSubNet);
+        now += 500U;
+        advance(now);
+    }
+    CHECK(enter(now + 500U) == OledPage::kDialplate);
+    advance(now + 1000U);
+    CHECK(ctrl.dockSelected() == 0U);
+}
+
+/** @brief 验证 ICCID 与控制台共用的掩码，包含空、短、最大长和未终止输入。 */
+void testIccidMask() noexcept
+{
+    std::array<char, cellular::kIccidBytes> input{};
+    std::array<char, cellular::kIccidBytes> masked{};
+    net_status::maskIccid(input, masked);
+    CHECK(masked.front() == '\0');
+    sanitizeCopy("1234567890", input);
+    net_status::maskIccid(input, masked);
+    CHECK(std::string_view{masked.data()} == "1234567890");
+    sanitizeCopy("12345678901234567890", input);
+    net_status::maskIccid(input, masked);
+    CHECK(std::string_view{masked.data()} == "123456**********7890");
+    input.fill('1');
+    net_status::maskIccid(input, masked);
+    CHECK(masked.back() == '\0' && std::string_view{masked.data()} == "111111**********1111");
+}
+
+/** @brief 验证告警优先级、同批次逐项确认、关机和 OTA 抢占及确认键消费。 */
+void testAlarmPage() noexcept
+{
+    using enum AlarmKind;
+    auto vm = makeHealthyVm();
+    UiController ctrl{};
+    ctrl.reset(board::BootMode::kNormal, 0U);
+    const std::array<uint32_t, 2U> skip{100U, 200U};
+    CHECK(ctrl.step(200U, skip, vm).page == OledPage::kDialplate);
+    AlarmSnapshot alarms{.sequence = 1U};
+    vm.alarm = &alarms;
+    alarms.pending = alarmBit(kNetwork) | alarmBit(kLowBattery) | alarmBit(kPrecisionLost) |
+                     alarmBit(kFenceExit) | alarmBit(kFenceEnter);
+    sanitizeCopy("TEST FENCE", alarms.fenceEnterName);
+    CHECK(ctrl.step(1000U, {}, vm).page == OledPage::kAlarm);
+    CHECK(ctrl.renderState(1000U).alarm == kFenceEnter);
+    ScreenBuff fb{};
+    renderUi(ctrl.renderState(1000U), vm, fb);
+    CHECK(countLitBytes(fb) > 0U);
+
+    vm.otaProgress.phase = ota::OtaPhase::kReceiving;
+    const std::array<uint32_t, 1U> coveredPress{1005U};
+    CHECK(ctrl.step(1010U, coveredPress, vm).page == OledPage::kOta);
+    vm.shutdownStage = board::ShutdownStage::kAnnounce;
+    CHECK(ctrl.step(1020U, {}, vm).page == OledPage::kShutdown);
+    vm.shutdownStage = board::ShutdownStage::kIdle;
+    CHECK(ctrl.step(1030U, {}, vm).page == OledPage::kOta);
+    vm.otaProgress = {};
+    CHECK(ctrl.step(1040U, {}, vm).page == OledPage::kAlarm);
+    CHECK(ctrl.renderState(1040U).alarm == kFenceEnter);
+
+    uint32_t now = 1100U;
+    for (const auto next : {kFenceExit, kPrecisionLost, kLowBattery, kNetwork, kNone}) {
+        const std::array press{now};
+        const auto out = ctrl.step(now, press, vm);
+        CHECK(out.page == (next == kNone ? OledPage::kDialplate : OledPage::kAlarm));
+        CHECK(out.action.action == OledAction::kNone && !out.hasClickDeadline);
+        CHECK(ctrl.renderState(now).alarm == next);
+        now += 100U;
+    }
+    CHECK(ctrl.step(2000U, {}, vm).page == OledPage::kDialplate);
+    CHECK(ctrl.dockSelected() == 0U);
+    ++alarms.sequence;
+    CHECK(ctrl.step(3000U, {}, vm).page == OledPage::kAlarm);
 }
 
 /** @brief 验证跑马灯停留、位移、回绕和可见字段的唯一像素裁剪范围。 */
@@ -1595,6 +1785,11 @@ int main()
     testHorizontalAccFormatting();
     testOtaPage();
     testMarquee();
+    testSignalBars();
+    testCellularIcon();
+    testNetNavigation();
+    testIccidMask();
+    testAlarmPage();
     if (s_failures != 0) {
         std::printf("oled_ui_check: %d failure(s)\n", s_failures);
         return EXIT_FAILURE;
